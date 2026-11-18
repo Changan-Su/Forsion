@@ -234,11 +234,11 @@ async function main() {
     const afterFont = await settled(main, (v) => v.font > 0)
     check('界面字体跟到主窗', baseline.font === 0 && afterFont.font > 0, JSON.stringify({ before: baseline.font, after: afterFont.font }))
 
-    await floating.locator('.settings-theme-behavior button[role="switch"]').first().click()
+    await floating.locator('[data-setting-anchor="smooth-caret"] button[role="switch"]').click()
     const afterCaret = await settled(main, (v) => v.caret !== baseline.caret)
     check('丝滑光标跟到主窗', afterCaret.caret !== baseline.caret, `${baseline.caret} -> ${afterCaret.caret}`)
 
-    await floating.locator('.settings-zoom-presets button').nth(2).click()
+    await floating.locator('[data-setting-anchor="ui-zoom"] .seg button').nth(2).click()
     const afterZoom = await settled(main, (v) => v.zoom === '1.2')
     check('界面缩放跟到主窗', baseline.zoom === '' && afterZoom.zoom === '1.2', `'${baseline.zoom}' -> '${afterZoom.zoom}'`)
     const largePanel = await panelFit(floating)

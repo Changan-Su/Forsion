@@ -121,18 +121,18 @@ async function main() {
     const sw = await win.evaluate(() => { const el = document.querySelector('.model-lib'); return el ? el.scrollWidth - el.clientWidth : -1 })
     check('T9 设置区无横向溢出', sw <= 0, 'overflow=' + sw + ' box=' + JSON.stringify(box))
     await win.locator('.settings-nav-list button').filter({ hasText: '外观' }).click()
-    await win.locator('.settings-theme-behavior').waitFor()
-    const raised = () => win.getByRole('button', { name: '立体', exact: true })
-    const flat = () => win.getByRole('button', { name: '扁平', exact: true })
+    await win.locator('.settings-theme-texture').waitFor()
+    const raised = () => win.getByRole('radio', { name: '立体', exact: true })
+    const flat = () => win.getByRole('radio', { name: '扁平', exact: true })
     const mainWindow = app.windows()[0]
     const readAppearance = (page) => page.evaluate(() => ({
       flat: document.documentElement.dataset.flat,
       saved: localStorage.getItem('forsion_theme_flat'),
       shadow: getComputedStyle(document.documentElement).getPropertyValue('--card-shadow').trim(),
     }))
-    check('T15 首次打开默认立体', await raised().getAttribute('aria-pressed') === 'true' &&
+    check('T15 首次打开默认立体', await raised().getAttribute('aria-checked') === 'true' &&
       (await readAppearance(win)).flat === '0' && (await readAppearance(win)).saved === null)
-    await win.locator('.settings-theme-behavior').scrollIntoViewIfNeeded()
+    await win.locator('.settings-theme-texture').scrollIntoViewIfNeeded()
     await win.waitForTimeout(250)
     await win.screenshot({ path: path.join(OUT, 'appearance-raised.png') })
     await flat().click()
@@ -144,7 +144,7 @@ async function main() {
     await win.reload({ waitUntil: 'domcontentloaded' })
     await win.locator('.settings-nav-list button').filter({ hasText: '外观' }).click()
     await flat().waitFor()
-    check('T17 重载设置浮窗保留扁平选择', await flat().getAttribute('aria-pressed') === 'true' &&
+    check('T17 重载设置浮窗保留扁平选择', await flat().getAttribute('aria-checked') === 'true' &&
       (await readAppearance(win)).flat === '1' && (await readAppearance(win)).shadow === 'none')
     await raised().click()
     await mainWindow.waitForFunction(() => document.documentElement.dataset.flat === '0')

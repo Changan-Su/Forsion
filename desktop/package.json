@@ -282,6 +282,7 @@
     "check:settingsui": "node scripts/settings-ui.check.cjs",
     "check:pluginhost": "node scripts/plugin-host-css.check.cjs",
     "check:settingsparts": "node scripts/settings-parts.shot.cjs",
+    "check:settings-lint": "vitest run frontend/src/components/settingsLint.test.ts",
     "check:agentmemory": "node scripts/agent-memory.check.cjs",
     "check:settingsmode": "node scripts/settings-mode.check.cjs",
     "check:settingspolish": "node scripts/settings-polish.check.cjs",

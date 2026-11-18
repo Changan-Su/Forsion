@@ -356,43 +356,87 @@ function Custom({ mount }: { mount: (el: HTMLElement) => void | (() => void) }) 
   return <div ref={ref} className="settings-parts-custom" />
 }
 
-function Item({ item, phone }: { item: PluginSettingsItem; phone: boolean }) {
+/* ── 宿主页面专用的扩展(2026-11-17 设置页规范 v1):插件拿不到,只有 `<SettingsPage host>` 认 ──
+ * - 行带 `anchor`(设置搜索 / 深链的落点)、`child`(依赖上一行的设置:缩进挂在它下面,父项关时调用方给 disabled,灰掉不藏);
+ * - `block`:清单外的一整块宿主 React 内容(选择卡网格、色卡轴、字体表),直接落在面板里、不进行清单;
+ * - 组带 `anchor`、`className`、React 图标与面板头按钮。
+ * 宿主页面也用这份描述写,就没有「哪块面板占多宽」这类手写排版可漏(设置页规范第 1 条)。 */
+export type HostSettingsItem =
+  | (PluginSettingsItem & { anchor?: string; child?: boolean })
+  | { type: 'block'; id: string; anchor?: string; node: ReactNode }
+export interface HostSettingsGroup extends Omit<PluginSettingsGroup, 'items' | 'icon'> {
+  icon?: string | ReactNode
+  anchor?: string
+  className?: string
+  /** 面板头右侧的宿主按钮(给了就不画 `actions`)。 */
+  headActions?: ReactNode
+  items: HostSettingsItem[]
+}
+export interface HostSettingsPageSchema { groups: HostSettingsGroup[] }
+
+type AnyItem = PluginSettingsItem | HostSettingsItem
+const hostOnly = (item: AnyItem, host: boolean): { anchor?: string; child?: boolean } =>
+  host ? { anchor: (item as { anchor?: string }).anchor, child: (item as { child?: boolean }).child } : {}
+
+function Item({ item, phone, host }: { item: AnyItem; phone: boolean; host: boolean }) {
   switch (item?.type) {
     case 'meters': return <Meters meters={arr(item.meters)} />
     case 'state': return item.state ? <PartState state={item.state} /> : null
     case 'custom': return <Custom mount={item.mount} />
-    case 'switch': case 'value': case 'button': case 'input': case 'segmented': case 'select': case 'choice': case 'stepper': case 'code':
+    case 'switch': case 'value': case 'button': case 'input': case 'segmented': case 'select': case 'choice': case 'stepper': case 'code': {
+      const { anchor, child } = hostOnly(item, host)
+      const cls = [item.disabled ? 'is-disabled' : '', child ? 'settings-row--child' : ''].filter(Boolean).join(' ')
       return (
-        <SettingsRow label={item.title} description={item.desc} className={item.disabled ? 'is-disabled' : undefined}
+        <SettingsRow label={item.title} description={item.desc} className={cls || undefined} anchor={anchor}
           fit={fitOf(item, phone)} control={<RowControl item={item} phone={phone} />} />
       )
+    }
     default: return null
   }
 }
 
 const keyOf = (x: { id?: unknown }, i: number): string => (typeof x?.id === 'string' && x.id ? x.id : `#${i}`)
 
-function Group({ group, phone }: { group: PluginSettingsGroup; phone: boolean }) {
-  const items = arr(group.items)
+/** 组里的项按顺序切段:连续的行进同一个行清单;宿主的 block 自己成一段、直接落在面板里。 */
+function runsOf(items: AnyItem[], host: boolean): Array<{ block?: ReactNode; key: string; anchor?: string } | { rows: Array<{ item: AnyItem; key: string }> }> {
+  const out: Array<{ block?: ReactNode; key: string; anchor?: string } | { rows: Array<{ item: AnyItem; key: string }> }> = []
+  items.forEach((it, i) => {
+    if (it.type === 'block') { if (host) out.push({ block: it.node, key: keyOf(it, i), anchor: it.anchor }); return }
+    const last = out[out.length - 1]
+    if (last && 'rows' in last) last.rows.push({ item: it, key: keyOf(it, i) })
+    else out.push({ rows: [{ item: it, key: keyOf(it, i) }] })
+  })
+  return out
+}
+
+function Group({ group, phone, host }: { group: PluginSettingsGroup | HostSettingsGroup; phone: boolean; host: boolean }) {
+  const items = arr(group.items as AnyItem[])
   const actions = arr(group.actions)
+  const g = group as HostSettingsGroup
+  const icon = host && g.icon != null && typeof g.icon !== 'string' ? g.icon : glyph(group.icon, 16)
+  const head = host && g.headActions ? g.headActions : actions.length ? actions.map((b, i) => <PartButton key={i} b={b} value={undefined} />) : undefined
   return (
-    <SettingsPanel className="settings-panel--parts" icon={glyph(group.icon, 16)} title={group.title} description={group.desc}
-      actions={actions.length ? actions.map((b, i) => <PartButton key={i} b={b} value={undefined} />) : undefined}>
-      {items.length > 0 && <div className="settings-control-list settings-parts-list">{items.map((it, i) => <Guard key={keyOf(it, i)}><Item item={it} phone={phone} /></Guard>)}</div>}
+    <SettingsPanel className={`settings-panel--parts${host && g.className ? ` ${g.className}` : ''}`} anchor={host ? g.anchor : undefined}
+      icon={icon} title={group.title} description={group.desc} actions={head}>
+      {runsOf(items, host).map((run, ri) => 'rows' in run
+        ? <div key={`rows-${ri}`} className="settings-control-list settings-parts-list">{run.rows.map(({ item, key }) => <Guard key={key}><Item item={item} phone={phone} host={host} /></Guard>)}</div>
+        : <Guard key={run.key}>{run.anchor ? <div className="settings-parts-block" data-setting-anchor={run.anchor}>{run.block}</div> : run.block}</Guard>)}
     </SettingsPanel>
   )
 }
 
-/** 一整页:分组面板一组一个;`state` 给了就只画它(整页加载中 / 未登录 / 出错)。外面不包元素,面板直接落在调用方的容器里。 */
-export function SettingsPage({ schema }: { schema: PluginSettingsPageSchema }) {
+/** 一整页:分组面板一组一个;`state` 给了就只画它(整页加载中 / 未登录 / 出错)。外面不包元素,面板直接落在调用方的容器里。
+ *  `host`:宿主自己的页面(认 HostSettingsGroup / HostSettingsItem 的扩展);插件挂载的页面不传。 */
+export function SettingsPage({ schema, host = false }: { schema: PluginSettingsPageSchema | HostSettingsPageSchema; host?: boolean }) {
   const [phone] = useState(isPhoneSettings)
-  if (schema?.state) return <PartState state={schema.state} />
-  return <>{arr(schema?.groups).map((g, i) => <Guard key={keyOf(g, i)}><Group group={g} phone={phone} /></Guard>)}</>
+  const whole = (schema as PluginSettingsPageSchema | undefined)?.state
+  if (whole) return <PartState state={whole} />
+  return <>{arr(schema?.groups as Array<PluginSettingsGroup | HostSettingsGroup>).map((g, i) => <Guard key={keyOf(g, i)}><Group group={g} phone={phone} host={host} /></Guard>)}</>
 }
 
 /** 一件(方案 A):和整页里同一个 item 画法一样,插件自己决定放哪。 */
 export function SettingsItem({ item }: { item: PluginSettingsItem }) {
   const [phone] = useState(isPhoneSettings)
   // 按 id 认:换了 id 就是另一件(自定义块的收尾 / 新挂、输入中的值都不能串过去)
-  return <Guard key={keyOf(item, 0)}><Item item={item} phone={phone} /></Guard>
+  return <Guard key={keyOf(item, 0)}><Item item={item} phone={phone} host={false} /></Guard>
 }

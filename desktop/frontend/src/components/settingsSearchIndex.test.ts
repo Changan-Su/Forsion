@@ -15,7 +15,7 @@ import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery } from './settingsSearchInd
 // U-15 静态半边:索引项的锚点在源码里真有、子页 key 真存在、标签双语都有。
 // 真落点(本端门控下点结果 → 锚点可见)由 check:settingsmode 在真 Electron 里逐项点。
 // 锚点可以落在 SettingsModal 直接渲染的独立页组件里(P1-K4 远程会话页的三块面板)。
-const SRC = ['SettingsModal.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx', 'MaskingSettingsSection.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
+const SRC = ['SettingsModal.tsx', 'AppearanceSettings.tsx', 'RibbonSettings.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx', 'MaskingSettingsSection.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
 
 describe('settings search index', () => {
   it('id 唯一,每项都有检索别名', () => {
@@ -24,9 +24,11 @@ describe('settings search index', () => {
     for (const e of SETTINGS_SEARCH_INDEX) expect(e.keywords.trim().length, e.id).toBeGreaterThan(0)
   })
 
-  it('每个 anchor 都作为 data-setting-anchor / anchor= 字面量出现在 SettingsModal', () => {
+  it('每个 anchor 都作为 data-setting-anchor / anchor= / anchor: 字面量出现在设置页源码', () => {
     for (const e of SETTINGS_SEARCH_INDEX.filter((x) => x.anchor)) {
       const literal = SRC.includes(`data-setting-anchor="${e.anchor}"`) || SRC.includes(`anchor="${e.anchor}"`)
+        // 设置零件描述里的行 / 组(SettingsPage host,设置页规范 v1):`anchor: 'x'`
+        || SRC.includes(`anchor: '${e.anchor}'`)
       expect(literal, `${e.id} → ${e.anchor}`).toBe(true)
     }
   })

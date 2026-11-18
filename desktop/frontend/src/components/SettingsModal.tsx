@@ -14,13 +14,10 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick, FolderInput } from 'lucide-react'
-import { ThemeCard } from './ThemeCard'
-import { ThemeSettingsPanel } from './ThemeSettingsPanel'
-import { StartupAppearanceSettings } from './StartupAppearanceSettings'
-import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
-import { customAccentVars } from '../theme/lcl/lovableData'
-import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
+import { X, Shapes, ArrowLeft, ChevronRight, Loader2, RefreshCw, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Server, Type, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, Wind, MousePointerClick, FolderInput } from 'lucide-react'
+import { AppearanceSettings } from './AppearanceSettings'
+import { RibbonSettings } from './RibbonSettings'
+import { UI_MODE, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
 import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
@@ -42,19 +39,11 @@ import type {
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
-import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
-import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
-import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
-import { isRibbonAutoHome, setRibbonAutoHome, useRibbonStore, RIBBON_RECENT_MAX } from '@lcl/engine/ribbonRegistry'
-import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
-import { getUiZoom, setUiZoom } from '../uiZoom'
-import { listFonts, getFont } from '../fontPresets'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
-import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection, openPenzorSync, penzorSyncReady } from './RemoteSyncSection'
 import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
@@ -96,7 +85,6 @@ import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSetti
 import { DELEGATED_SETTINGS_TABS, isDelegatedAdmin } from '../services/delegatedAdmin'
 import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
-import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
 import {
   FORSION_PRIVACY_URL,
@@ -116,14 +104,12 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { aiSpaceTriggerEnabled, setAiSpaceTriggerEnabled } from '@amadeus/lib/aiSpaceTrigger'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
-import { isCalmOn, setCalmOn, type CalmKey } from '../theme/calm'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
 import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
-import { MotionThemeSection, MotionFadeRow } from './MotionThemeSection'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import { MaskingSettingsSection } from './MaskingSettingsSection'
@@ -381,16 +367,6 @@ const BACKEND_STATE_LABEL: Record<string, string> = {
   crashed: 'settings.backend.state.crashed',
 }
 
-/** 「呼吸感」开关行(theme/calm.ts):纯本机渲染偏好,行自己持有状态,不进设置草稿;别的窗口经 storage 事件跟上。 */
-function CalmRow({ k, anchor, icon, label, hint }: { k: CalmKey; anchor: string; icon: React.ReactNode; label: string; hint: string }) {
-  const [on, setOn] = useState(() => isCalmOn(k))
-  return (
-    <div className="settings-control-row" data-setting-anchor={anchor}>
-      <div className="settings-control-copy">{icon}<span><strong>{label}</strong><small>{hint}</small></span></div>
-      <SettingsSwitch checked={on} label={label} onChange={(next) => { setCalmOn(k, next); setOn(next) }} />
-    </div>
-  )
-}
 
 export const SettingsModal: React.FC<{
   open: boolean
@@ -452,14 +428,6 @@ export const SettingsModal: React.FC<{
   // 普通入口先落一级列表;显式 deep link(initialTab)直达对应二级页。
   const [mobileMenuOpen, setMobileMenuOpen] = useState(() => mobileSettings && !p.initialTab)
   const [appVersion, setAppVersion] = useState<string>('')
-  // 背景色轴 + 它的自定义 seed(走 themeStore,不经 props 链;主题色轴仍走 props 的 onThemeChange)。
-  const themeBg = useTheme((s) => s.bg)
-  const setBg = useTheme((s) => s.setBg)
-  const themeBgSeed = useTheme((s) => s.bgSeed)
-  const setBgSeedValue = useTheme((s) => s.setBgSeedValue)
-  const themeSignal = useTheme((s) => s.signal)
-  const setSignal = useTheme((s) => s.setSignal)
-  const ambientOn = useTheme((s) => s.ambient)
   // 应用内自动更新状态(经 window.tangu.onUpdaterStatus 广播驱动;mac 仅检测引导手动下载)。
   const [upd, setUpd] = useState<UpdaterStatusInfo>({ phase: 'idle' })
   // 测试版通道(真源在主进程 config.json 的 updater.beta,这里只是它的镜像;开面板时拉一次)。
@@ -481,24 +449,14 @@ export const SettingsModal: React.FC<{
   const [showSysPrompt, setShowSysPrompt] = useState<boolean>(() => {
     try { return localStorage.getItem(SHOW_SYSTEM_PROMPT_KEY) === '1' } catch { return false }
   })
-  // 丝滑光标(默认关;localStorage,smoothCaret.ts 全局模块即时生效)。
-  const [smoothCaret, setSmoothCaret] = useState<boolean>(isSmoothCaretOn)
-  // 主页壁纸动效:和主页壁纸面板里的开关是同一个值(主页那边听同一份偏好)。
-  const [homeMotion, setHomeMotion] = useState(() => loadHomepageWallpaperPrefs().motion)
-  useEffect(() => onHomepageWallpaperPrefsChange(() => setHomeMotion(loadHomepageWallpaperPrefs().motion)), [])
-  // 划线菜单的排法(缺省视图工具在前;localStorage,条每次出现时现读)。
-  const [selBarOrder, setSelBarOrder] = useState(selectionBarOrder)
   // 聊天头像 / 输入建议是 Tangu 的偏好(核心插件化 2e-2):读写走 Tangu 交出的接缝,没装 Tangu 就不摆这两个开关。
   const tanguPrefs = readTanguPrefs()
   // 输入建议(缺省开;localStorage,promptSuggest.ts 每次现读)。
   const [promptSuggest, setPromptSuggest] = useState<boolean>(() => tanguPrefs?.promptSuggest.get() ?? false)
   // 对话里的可视化卡多少(auto / less / off;localStorage,随下一次 run 的 ui_settings 快照进引擎)。
   const [visualsPref, setVisualsPrefState] = useState<VisualsPref>(getVisualsPref)
-  const [chatAvatars, setChatAvatars] = useState<boolean>(() => tanguPrefs?.chatAvatars.get() ?? true)
-  const [ribbonAutoHome, setRibbonAutoHomeOn] = useState<boolean>(isRibbonAutoHome)
   // 「外围淡出」靠悬停恢复(calm.css 整段关在 hover: hover 里):没有悬停的设备上那一行与它的搜索结果都不出。
   const hoverCapable = !!window.matchMedia?.('(hover: hover)').matches
-  const ribbonRecent = useRibbonStore((s) => s.recentCount)
   // 画布双击聚焦(默认开;纯本机视口偏好，不进笔记/桌面后端配置)。
   const [canvasDoubleClickFocus, setCanvasDoubleClickFocus] = useState<boolean>(canvasDoubleClickFocusEnabled)
   const [aiSpaceTrigger, setAiSpaceTrigger] = useState<boolean>(aiSpaceTriggerEnabled) // 正文 AI 空行空格唤起(G3-07,缺省关,本机)
@@ -506,23 +464,6 @@ export const SettingsModal: React.FC<{
   const bracketAutoPair = useBracketAutoPair() // 正文 + 代码块括号 / 引号自动成对(本机偏好,R-27 的 key)
   const markdownAutoPair = useMarkdownAutoPair() // 选中文字后敲 * _ ~ = $ % 包裹(本机偏好)
   const [canvasOverviewZ, setCanvasOverviewZ] = useState<number>(canvasOverviewZoom)
-  // 界面字体三档(空 = 跟随主题;uiFont.ts 注入 <style> 即刻生效)。
-  const [fonts, setFonts] = useState<Record<FontSlot, string>>(() => ({
-    ui: readFont('ui'), body: readFont('body'), mono: readFont('mono'),
-  }))
-  // 界面缩放与快捷键/命令面板共用 uiZoom 单一真源。设置页只订阅已有的缩放事件，
-  // 以便面板开着时按 ⌘/Ctrl +/- 也能当场刷新百分比与预设选中态。
-  const [uiZoom, setUiZoomState] = useState<number>(getUiZoom)
-  useEffect(() => {
-    const syncUiZoom = (): void => setUiZoomState(getUiZoom())
-    window.addEventListener(UI_ZOOM_EVENT, syncUiZoom)
-    return () => window.removeEventListener(UI_ZOOM_EVENT, syncUiZoom)
-  }, [])
-  const setFont = (slot: FontSlot, v: string): void => {
-    setFonts((f) => ({ ...f, [slot]: v }))
-    writeFont(slot, v)
-    applyUiFonts()
-  }
   // 开发者「摘要栏卡片立体感」(见 SUMMARY_ELEVATION_KEY)。
   const [summaryElevation, setSummaryElevationState] = useState<string>(() => {
     try { const v = localStorage.getItem(SUMMARY_ELEVATION_KEY); return v === 'float' || v === 'flat' ? v : 'half' } catch { return 'half' }
@@ -541,7 +482,6 @@ export const SettingsModal: React.FC<{
     try { return localStorage.getItem(ACTIVITY_VIEW_KEY) === '1' } catch { return false }
   })
   const [draft, setDraft] = useState(p.cfg)
-  const [themesReloading, setThemesReloading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState('')
   const [models, setModels] = useState<ModelsResponse | null>(null)
@@ -2848,6 +2788,8 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
                 {tab === 'spaces' && <SpacesTab phone={phoneShell} />}
+                {/* Ribbon 两项从外观搬来(设置页规范 v1):改的是左边那条 Space 图标。手机上没有 Ribbon 滚动,不出 */}
+                {tab === 'spaces' && !mobileSettings && <RibbonSettings />}
                 {tab === 'notifications' && <NotificationsTab onOpenInbox={isDesktop && stored ? () => openSubPage('general', 'g-inbox') : undefined} />}
                 {tab === 'statusbar' && <StatusBarTab />}
                 {/* 左栏点进来的 Forsion 插件设置页 = 插件页的详情面,受控于 tab(不再是卡片列表的内部 state)。 */}
@@ -2940,381 +2882,13 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
+                {/* 外观页:整页是一份设置零件描述(AppearanceSettings.tsx;设置页规范 v1 · 方案 B,2026-11-17) */}
                 {tab === 'theme' && (
-                  <>
-                    <ThemePreview tabLabel={activeTabLabel} />
-                    <section className="settings-panel settings-theme-language" data-setting-anchor="theme-language">
-                      <div className="settings-panel-head settings-panel-head--actions">
-                        <span className="settings-panel-icon"><Palette size={16} /></span>
-                        <div><strong>{t('settings.theme.langLabel')}</strong><p>{t('settings.theme.langDescription')}</p></div>
-                        <div className="settings-panel-actions">
-                          <button type="button" className="btn ghost sm" onClick={() => { void window.tangu?.openThemesDir?.() }} title={t('settings.theme.openFolder')}>
-                            <FolderOpen size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            className="btn ghost sm settings-panel-btn--text"
-                            title={t('settings.theme.reload')}
-                            disabled={themesReloading}
-                            onClick={async () => {
-                              setThemesReloading(true)
-                              try { await p.onReloadThemes?.() } finally { setThemesReloading(false) }
-                            }}
-                          >
-                            <RefreshCw size={13} className={themesReloading ? 'spin' : ''} /> {t('settings.theme.reload')}
-                          </button>
-                        </div>
-                      </div>
-                      <div className="theme-grid" role="radiogroup" aria-label={t('settings.theme.langLabel')} onKeyDown={onRadioGroupKeyDown}>
-                        {listLanguages().map((th, i, all) => (
-                          <ThemeCard
-                            key={th.manifest.id}
-                            entry={th}
-                            active={th.manifest.id === p.themeLang}
-                            tabIndex={radioTabIndex(th.manifest.id === p.themeLang, i, all.some((x) => x.manifest.id === p.themeLang))}
-                            onSelect={() => {
-                              // 传明暗**偏好**(非落地明暗):换到锁定 colorScheme 的主题时由 setTheme 解析,
-                              // 不在此处先按旧 mode 应用一次(会闪),交给 setTheme 一步到位。
-                              p.onThemeChange(th.manifest.id, p.themeSkin, p.themeModePref)
-                            }}
-                          />
-                        ))}
-                      </div>
-                      {/* 选中主题自曝的可调参数(有才渲染);key 带 lang 使换主题时重挂,存值副本跟着重取。
-                          磁盘主题里写了动效 token 的,收口时已删掉(theme/motionGuard.ts),这里说一句。 */}
-                      {(() => {
-                        const cur = listLanguages().find((th) => th.manifest.id === p.themeLang)
-                        if (!cur) return null
-                        const ignored = cur.motionIgnored?.length ?? 0
-                        return (
-                          <>
-                            <ThemeSettingsPanel key={p.themeLang} entry={cur} />
-                            {cur.cssRejected
-                              ? <div className="hint" data-theme-motion-rejected="" style={{ marginTop: 6 }}>{t('settings.theme.motionRejected')}</div>
-                              : ignored > 0 && <div className="hint" data-theme-motion-ignored={ignored} style={{ marginTop: 6 }}>{t('settings.theme.motionIgnored', { n: ignored })}</div>}
-                          </>
-                        )
-                      })()}
-                      <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.dropHint')}</div>
-                    </section>
-                    {/* 动效主题(theme/motionTheme.tsx):紧跟设计语言;本机偏好,行自己订阅,不进设置草稿 */}
-                    <MotionThemeSection anchor="motion-theme">
-                      <MotionFadeRow anchor="motion-fade" />
-                    </MotionThemeSection>
-                    <section className="settings-panel settings-theme-palette" data-setting-anchor="palette">
-                      <div className="settings-panel-head">
-                        <span className="settings-panel-icon"><Sparkles size={16} /></span>
-                        <div><strong>{t('settings.theme.skinLabel')}</strong><p>{t('settings.theme.skinDescription')}</p></div>
-                      </div>
-                      {/* 两根**独立**的轴:主题色只换 accent 家族,背景色只换底/文字/边线族(见 theme/skins.css)。
-                          两边选同一个 id = 拆轴前的整套配色。背景轴不走 props 链,直接读写 themeStore(同 bgSeed)。 */}
-                      <div className="settings-palette-axis">
-                        <strong>{t('settings.theme.accentLabel')}</strong>
-                        <div className="skin-row">
-                          {listSkins().map((sk) => (
-                            <button
-                              key={sk.id}
-                              type="button"
-                              className={`skin-chip${sk.id === p.themeSkin ? ' active' : ''}`}
-                              title={t(`settings.theme.skin.${sk.id}`)}
-                              onClick={() => p.onThemeChange(p.themeLang, sk.id, p.themeModePref)}
-                            >
-                              <i className="skin-dot" style={{ background: sk.id === 'custom' ? p.themeSeed : skinSwatch(sk, p.themeMode === 'dark', 'accent') }} />
-                              <span>{t(`settings.theme.skin.${sk.id}`)}</span>
-                            </button>
-                          ))}
-                        </div>
-                        {p.themeSkin === 'custom' && (
-                          <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
-                            <input
-                              type="color"
-                              value={p.themeSeed}
-                              onChange={(e) => p.onSeedChange(e.target.value)}
-                              aria-label={t('settings.theme.customSeedLabel')}
-                              style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                            />
-                            <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{p.themeSeed}</span>
-                          </div>
-                        )}
-                      </div>
-                      <div className="settings-palette-axis">
-                        <strong>{t('settings.theme.bgLabel')}</strong>
-                        <div className="skin-row">
-                          {listSkins().map((sk) => (
-                            <button
-                              key={sk.id}
-                              type="button"
-                              className={`skin-chip${sk.id === themeBg ? ' active' : ''}`}
-                              title={t(`settings.theme.skin.${sk.id}`)}
-                              onClick={() => setBg(sk.id)}
-                            >
-                              <i
-                                className="skin-dot skin-dot-background"
-                                style={{ background: backgroundSwatch(sk, p.themeMode === 'dark', sk.id === 'custom' ? (themeBgSeed || p.themeSeed) : sk.bgSeed) }}
-                              />
-                              <span>{t(`settings.theme.skin.${sk.id}`)}</span>
-                            </button>
-                          ))}
-                        </div>
-                        {themeBg === 'custom' && (
-                          <>
-                            <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
-                              <input
-                                type="color"
-                                value={themeBgSeed || '#f8f7f6'}
-                                onChange={(e) => setBgSeedValue(e.target.value)}
-                                aria-label={t('settings.theme.customBgLabel')}
-                                style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                              />
-                              <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>
-                                {themeBgSeed || t('settings.theme.customBgFollow')}
-                              </span>
-                              {themeBgSeed && (
-                                <button className="btn ghost sm" onClick={() => setBgSeedValue('')}>{t('settings.theme.customBgClear')}</button>
-                              )}
-                            </div>
-                            <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.customBgHint')}</div>
-                          </>
-                        )}
-                      </div>
-                      {/* 强调色(--signal):指示类元素(落点线 / 开关 / 勾选 / 选中框 / 双链…)的那支色。'' = 跟随主题色,
-                          内置 id 取 SIGNALS,'#hex' 自定义(loader 按明暗收敛可读性)。全局一份,不进 Space 外观。 */}
-                      {(() => {
-                        const dark = p.themeMode === 'dark'
-                        const custom = /^#/.test(themeSignal)
-                        const pair = (id: string) => SIGNALS.find((x) => x.id === id)
-                        const tone = (id: string) => { const x = pair(id); return x ? (dark ? x.dark : x.light) : '' }
-                        const skinInfo = listSkins().find((sk) => sk.id === p.themeSkin)
-                        const accent = p.themeSkin === 'custom' || !skinInfo ? p.themeSeed : skinSwatch(skinInfo, dark, 'accent')
-                        // 「跟随」圆点:左上主题色、右下它带的强调色(单色配色带柔蓝;自定义取 loader 同一个 --signal-skin,近灰也是柔蓝)
-                        const follows = p.themeSkin === 'custom' ? customAccentVars(p.themeSeed, dark)['--signal-skin']
-                          : tone(p.themeSkin === 'cream' || p.themeSkin === 'ink' ? 'blue' : p.themeSkin) || accent
-                        const chips = [
-                          { id: '', label: t('settings.theme.signalFollow'), dot: `linear-gradient(135deg, ${accent} 0 50%, ${follows} 50% 100%)` },
-                          ...SIGNALS.map((x) => ({ id: x.id, label: x.id === 'blue' ? t('settings.theme.signalBlue') : t(`settings.theme.skin.${x.id}`), dot: dark ? x.dark : x.light })),
-                        ]
-                        return (
-                          <div className="settings-palette-axis">
-                            <strong>{t('settings.theme.signalLabel')}</strong>
-                            <div className="skin-row">
-                              {chips.map((c) => (
-                                <button key={c.id || 'follow'} type="button" className={`skin-chip${c.id === themeSignal ? ' active' : ''}`} title={c.label} onClick={() => setSignal(c.id)}>
-                                  <i className="skin-dot" style={{ background: c.dot }} />
-                                  <span>{c.label}</span>
-                                </button>
-                              ))}
-                              <button type="button" className={`skin-chip${custom ? ' active' : ''}`} title={t('settings.theme.skin.custom')} onClick={() => { if (!custom) setSignal('#b4532a') }}>
-                                <i className="skin-dot" style={{ background: custom ? themeSignal : 'conic-gradient(#d9774a, #c9b04a, #5f9a6a, #4f7fb0, #8a6fb0, #d9774a)' }} />
-                                <span>{t('settings.theme.skin.custom')}</span>
-                              </button>
-                            </div>
-                            {custom && (
-                              <div className="field-row" style={{ alignItems: 'center', gap: 10, marginTop: 11 }}>
-                                <input
-                                  type="color"
-                                  value={themeSignal}
-                                  onChange={(e) => setSignal(e.target.value)}
-                                  aria-label={t('settings.theme.customSignalLabel')}
-                                  style={{ width: 48, height: 32, padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-                                />
-                                <span className="hint" style={{ fontFamily: 'var(--font-mono)' }}>{themeSignal}</span>
-                                <button className="btn ghost sm" onClick={() => setSignal('')}>{t('settings.theme.customBgClear')}</button>
-                              </div>
-                            )}
-                            <div className="hint" style={{ marginTop: 9 }}>{t('settings.theme.signalHint')}</div>
-                          </div>
-                        )
-                      })()}
-                    </section>
-                    <section className="settings-panel settings-theme-behavior">
-                      <div className="settings-panel-head">
-                        <span className="settings-panel-icon"><Layers3 size={16} /></span>
-                        <div><strong>{t('settings.theme.behaviorTitle')}</strong><p>{t('settings.theme.behaviorDescription')}</p></div>
-                      </div>
-                      <div className="settings-control-list">
-                        <div className="settings-control-row" data-setting-anchor="ui-zoom">
-                          <div className="settings-control-copy"><Scaling size={14} /><span><strong>{t('settings.theme.zoomLabel')}</strong><small>{t('settings.theme.zoomHint', { percent: Math.round(uiZoom * 100) })}</small></span></div>
-                          <div className="seg settings-zoom-presets" role="group" aria-label={t('settings.theme.zoomPresetLabel')}>
-                            {([
-                              [0.8, 'settings.theme.zoomSmall'],
-                              [1, 'settings.theme.zoomStandard'],
-                              [1.2, 'settings.theme.zoomLarge'],
-                            ] as const).map(([value, labelKey]) => (
-                              <button
-                                key={value}
-                                type="button"
-                                className={Math.abs(uiZoom - value) < 0.001 ? 'active' : ''}
-                                aria-pressed={Math.abs(uiZoom - value) < 0.001}
-                                onClick={() => setUiZoom(value)}
-                              >
-                                {t(labelKey)} {Math.round(value * 100)}%
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {(() => {
-                          // 主题若锁定 colorScheme(如 Glass 固定 system),明暗不可手动改:高亮强制值 + 禁用按钮。
-                          // 用校验版(与 store 同一判定):脏 manifest 值(如 "auto")不会让按钮禁用而 store 却没锁。
-                          const forced = forcedSchemeForLanguage(p.themeLang)
-                          const active = forced ?? p.themeModePref
-                          const opts: Array<{ id: 'light' | 'dark' | 'system'; icon: typeof Sun; label: string }> = [
-                            { id: 'light', icon: Sun, label: t('settings.theme.light') },
-                            { id: 'dark', icon: Moon, label: t('settings.theme.dark') },
-                            { id: 'system', icon: MonitorCog, label: t('settings.theme.system') },
-                          ]
-                          return (
-                            <div className="settings-control-row" data-setting-anchor="color-mode">
-                              <div className="settings-control-copy"><MonitorCog size={14} /><span><strong>{t('settings.theme.modeLabel')}</strong>{forced && <small>{t('settings.theme.modeLockedHint')}</small>}</span></div>
-                              <div className="seg" role="group" aria-label={t('settings.theme.modeLabel')}>
-                                {opts.map(({ id, icon: Ic, label }) => (
-                                  <button
-                                    key={id}
-                                    type="button"
-                                    aria-pressed={active === id}
-                                    className={active === id ? 'active' : ''}
-                                    disabled={!!forced}
-                                    title={forced ? t('settings.theme.modeLocked') : undefined}
-                                    onClick={() => p.onThemeChange(p.themeLang, p.themeSkin, id)}
-                                  >
-                                    <Ic size={13} />{label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )
-                        })()}
-                        <div className="settings-control-row">
-                          <div className="settings-control-copy"><Sparkles size={14} /><span><strong>{t('settings.theme.flatLabel')}</strong><small>{t('settings.theme.flatDescription')}</small></span></div>
-                          <div className="seg" role="group" aria-label={t('settings.theme.flatLabel')}>
-                            <button type="button" aria-pressed={!p.flatOn} className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
-                            <button type="button" aria-pressed={p.flatOn} className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
-                          </div>
-                        </div>
-                        <div className="settings-control-row" data-setting-anchor="glass">
-                          <div className="settings-control-copy"><Layers3 size={14} /><span><strong>{t('settings.theme.glassLabel')}</strong><small>{t('settings.theme.glassDescription')}</small></span></div>
-                          <div className="seg" role="group" aria-label={t('settings.theme.glassLabel')}>
-                            <button type="button" aria-pressed={p.glassOn} className={p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(true)}>{t('settings.theme.glassOn')}</button>
-                            <button type="button" aria-pressed={!p.glassOn} className={!p.glassOn ? 'active' : ''} onClick={() => p.onGlassChange(false)}>{t('settings.theme.glassOff')}</button>
-                          </div>
-                        </div>
-                        <div className="settings-control-row" data-setting-anchor="home-motion">
-                          <div className="settings-control-copy"><ImageIcon size={14} /><span><strong>{t('settings.theme.homeMotion')}</strong><small>{t('settings.theme.homeMotionHint')}</small></span></div>
-                          <SettingsSwitch checked={homeMotion} label={t('settings.theme.homeMotion')} onChange={() => { setHomeMotion(!homeMotion); setHomepageWallpaperMotion(!homeMotion) }} />
-                        </div>
-                        {/* 直接读写 themeStore(同背景轴,不走 props 链 → 三端自动到位)。毛玻璃关着时这行照样在:
-                            设置搜索的落点不能时有时无,开关本身只是记下偏好。 */}
-                        <div className="settings-control-row" data-setting-anchor="ambient">
-                          <div className="settings-control-copy"><Droplets size={14} /><span><strong>{t('settings.theme.ambient')}</strong><small>{t('settings.theme.ambientHint')}</small></span></div>
-                          <SettingsSwitch checked={ambientOn} label={t('settings.theme.ambient')} onChange={() => useTheme.getState().setAmbient(!ambientOn)} />
-                        </div>
-                        <div className="settings-control-row" data-setting-anchor="smooth-caret">
-                          <div className="settings-control-copy"><MousePointer2 size={14} /><span><strong>{t('settings.theme.smoothCaret')}</strong><small>{t('settings.theme.smoothCaretHint')}</small></span></div>
-                          <SettingsSwitch checked={smoothCaret} label={t('settings.theme.smoothCaret')} onChange={() => {
-                              const on = !smoothCaret
-                              setSmoothCaret(on)
-                              persistSmoothCaret(on)
-                            }} />
-                        </div>
-                        <div className="settings-control-row" data-setting-anchor="selection-bar">
-                          <div className="settings-control-copy"><TextSelect size={14} /><span><strong>{t('settingsmodal.selectionBar')}</strong><small>{t('settingsmodal.selectionBarHint')}</small></span></div>
-                          <select
-                            aria-label={t('settingsmodal.selectionBar')}
-                            value={selBarOrder}
-                            onChange={(e) => { const v = e.target.value === 'actions' ? 'actions' : 'tools'; setSelBarOrder(v); setSelectionBarOrder(v) }}
-                          >
-                            <option value="tools">{t('settingsmodal.selectionBar.tools')}</option>
-                            <option value="actions">{t('settingsmodal.selectionBar.actions')}</option>
-                          </select>
-                        </div>
-                        {tanguPrefs && <div className="settings-control-row" data-setting-anchor="chat-avatars">
-                          <div className="settings-control-copy"><CircleUserRound size={14} /><span><strong>{t('settings.theme.chatAvatars')}</strong><small>{t('settings.theme.chatAvatarsHint')}</small></span></div>
-                          <SettingsSwitch checked={chatAvatars} label={t('settings.theme.chatAvatars')} onChange={() => {
-                              const on = !chatAvatars
-                              setChatAvatars(on)
-                              tanguPrefs.chatAvatars.set(on)
-                            }} />
-                        </div>}
-                        {/* 「呼吸感」三项(theme/calm.ts)。「外围淡出」靠悬停恢复:没有悬停的设备上样式本来就不生效,开关也不摆出来。 */}
-                        {hoverCapable && (
-                          <CalmRow k="dim" anchor="calm-dim" icon={<SunDim size={14} />} label={t('settings.theme.calmDim')} hint={t('settings.theme.calmDimHint')} />
-                        )}
-                        <CalmRow k="reading" anchor="calm-reading" icon={<AlignLeft size={14} />} label={t('settings.theme.calmReading')} hint={t('settings.theme.calmReadingHint')} />
-                        <CalmRow k="motion" anchor="calm-motion" icon={<Wind size={14} />} label={t('settings.theme.calmMotion')} hint={t('settings.theme.calmMotionHint')} />
-                        {!mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="ribbon-auto-home">
-                            <div className="settings-control-copy"><Undo2 size={14} /><span><strong>{t('settings.theme.ribbonAutoHome')}</strong><small>{t('settings.theme.ribbonAutoHomeHint')}</small></span></div>
-                            <SettingsSwitch checked={ribbonAutoHome} label={t('settings.theme.ribbonAutoHome')} onChange={() => {
-                                const on = !ribbonAutoHome
-                                setRibbonAutoHomeOn(on)
-                                setRibbonAutoHome(on)
-                              }} />
-                          </div>
-                        )}
-                        {!mobileSettings && (
-                          <div className="settings-control-row" data-setting-anchor="ribbon-recent">
-                            <div className="settings-control-copy"><History size={14} /><span><strong>{t('settings.theme.ribbonRecent')}</strong><small>{t('settings.theme.ribbonRecentHint')}</small></span></div>
-                            <div className="seg" role="group" aria-label={t('settings.theme.ribbonRecent')}>
-                              {Array.from({ length: RIBBON_RECENT_MAX + 1 }, (_, n) => (
-                                <button
-                                  key={n}
-                                  type="button"
-                                  className={ribbonRecent === n ? 'active' : ''}
-                                  aria-pressed={ribbonRecent === n}
-                                  onClick={() => useRibbonStore.getState().setRecentCount(n)}
-                                >
-                                  {n === 0 ? t('settings.theme.ribbonRecentOff') : n}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </section>
-                    <section className="settings-panel settings-theme-fonts" data-setting-anchor="fonts">
-                      <div className="settings-panel-head">
-                        <span className="settings-panel-icon"><Type size={16} /></span>
-                        <div><strong>{t('settings.theme.typographyTitle')}</strong><p>{t('settings.theme.fontHint')}</p></div>
-                      </div>
-                      <div className="settings-font-list">
-                        {/* 字体三档:空 = 跟随主题(uiFont 一条声明都不出)。**只能选预设** ——
-                            预设字体随包内置(build/gen-fonts.cjs),不再依赖本机装没装;插件注册的字体
-                            与内置项同形,只是分到另一个 optgroup。 */}
-                        {([
-                          ['ui', 'settings.theme.fontUi'],
-                          ['body', 'settings.theme.fontBody'],
-                          ['mono', 'settings.theme.fontMono'],
-                        ] as const).map(([slot, labelKey]) => {
-                          const list = listFonts(slot)
-                          const builtin = list.filter((f) => f.source === 'builtin')
-                          const fromPlugins = list.filter((f) => f.source !== 'builtin')
-                          const nameOf = (f: (typeof list)[number]): string =>
-                            f.labelKey ? t(f.labelKey as Parameters<typeof t>[0]) : (f.label ?? f.id)
-                          return (
-                            <label className="settings-font-row" key={slot} htmlFor={`font-${slot}`}>
-                              <span>{t(labelKey)}</span>
-                              {/* 预览就用选中项的栈本身,选完立刻能看出长什么样 */}
-                              <select
-                                id={`font-${slot}`}
-                                value={fonts[slot]}
-                                onChange={(e) => setFont(slot, e.target.value)}
-                                style={{ fontFamily: getFont(fonts[slot])?.stack || undefined }}>
-                                <option value="">{t('settings.theme.fontFollow')}</option>
-                                <optgroup label={t('settings.theme.fontGroupBuiltin')}>
-                                  {builtin.map((f) => <option key={f.id} value={f.id}>{nameOf(f)}</option>)}
-                                </optgroup>
-                                {fromPlugins.length > 0 && (
-                                  <optgroup label={t('settings.theme.fontGroupPlugin')}>
-                                    {fromPlugins.map((f) => <option key={f.id} value={f.id}>{nameOf(f)}</option>)}
-                                  </optgroup>
-                                )}
-                              </select>
-                            </label>
-                          )
-                        })}
-                      </div>
-                    </section>
-                    <StartupAppearanceSettings />
-                  </>
+                  <AppearanceSettings
+                    tabLabel={activeTabLabel} themeLang={p.themeLang} themeSkin={p.themeSkin} themeMode={p.themeMode} themeModePref={p.themeModePref}
+                    glassOn={p.glassOn} flatOn={p.flatOn} themeSeed={p.themeSeed} onThemeChange={p.onThemeChange} onGlassChange={p.onGlassChange}
+                    onFlatChange={p.onFlatChange} onSeedChange={p.onSeedChange} onReloadThemes={p.onReloadThemes}
+                  />
                 )}
 
                 {aiImportOpen && <ExternalImportSheet engine={homeTarget()} onClose={() => setAiImportOpen(false)} />}
