@@ -243,15 +243,15 @@ async function main() {
     check('界面缩放跟到主窗', baseline.zoom === '' && afterZoom.zoom === '1.2', `'${baseline.zoom}' -> '${afterZoom.zoom}'`)
     const largePanel = await panelFit(floating)
     check('120%: Floating panel fills its own viewport without clipping', fitsViewport(largePanel), JSON.stringify(largePanel))
-    await floating.waitForFunction(() => document.querySelectorAll('.settings-zoom-presets button')[2]?.getAttribute('aria-pressed') === 'true')
+    await floating.waitForFunction(() => document.querySelectorAll('[data-setting-anchor="ui-zoom"] .seg button')[2]?.getAttribute('aria-checked') === 'true')
     await pause(200) // Let Electron paint the new preset state before capture.
     const largeShot = path.join(temp, 'floating-settings-120.png')
     await floating.screenshot({ path: largeShot })
     console.log(`ZOOM_SCREENSHOT ${largeShot}`)
-    await floating.locator('.settings-zoom-presets button').nth(0).click()
+    await floating.locator('[data-setting-anchor="ui-zoom"] .seg button').nth(0).click()
     const smallPanel = await panelFit(floating)
     check('80%: Floating panel fills its own viewport without blank margins', fitsViewport(smallPanel), JSON.stringify(smallPanel))
-    await floating.waitForFunction(() => document.querySelectorAll('.settings-zoom-presets button')[0]?.getAttribute('aria-pressed') === 'true')
+    await floating.waitForFunction(() => document.querySelectorAll('[data-setting-anchor="ui-zoom"] .seg button')[0]?.getAttribute('aria-checked') === 'true')
     await pause(200)
     const smallShot = path.join(temp, 'floating-settings-80.png')
     await floating.screenshot({ path: smallShot })
@@ -270,7 +270,7 @@ async function main() {
     check('zoom shortcuts do not change Electron per-window zoom', nativeZoom.every((zoom) => Math.abs(zoom - 1) < 0.01), JSON.stringify(nativeZoom))
     // 调回 100%:既验反向(删键→回端默认),也让浮窗恢复原尺寸再去点语言开关。
     await floating.bringToFront()
-    await floating.locator('.settings-zoom-presets button').nth(1).click()
+    await floating.locator('[data-setting-anchor="ui-zoom"] .seg button').nth(1).click()
     const backZoom = await settled(main, (v) => v.zoom === '')
     check('缩放调回 100% 也跟得到(删键回默认)', fromMain.zoom === '0.8' && backZoom.zoom === '', `'0.8' -> '${backZoom.zoom}'`)
 

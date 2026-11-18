@@ -250,7 +250,7 @@ async function main() {
       await win.waitForTimeout(600)
       const five = await recents()
       check('S4 改成 5 → 露出 5 个(上限),顺序仍是最近的在上', five.join() === M.slice(0, 5).join(), { got: five, want: M.slice(0, 5) })
-      await row.locator('.seg button:text-is("3")').click()
+      await stepTo(3)
       await sp.close().catch(() => {})
       await win.waitForTimeout(500)
     } else check('S1 设置浮窗开得出来', false)
