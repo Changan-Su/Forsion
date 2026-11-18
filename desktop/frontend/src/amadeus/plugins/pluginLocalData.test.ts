@@ -19,7 +19,8 @@
  *  ⑰ 推送读本机的时候插进来一次读失败后的保存 → 不推;⑱ 从云端恢复也先另存本机那份;
  *  ⑲ 同一个插件实例读失败过一次,之后别处读成功了,它的保存照样不同步(到重新加载为止);
  *  ⑳ saveData 传进存不成 JSON 的值 → 直接拒,不写空内容、不动同步状态。
- *  ㉑ 第一次上传在途时又来一次读失败后的保存 → 传成了也不清记号;㉒ 在途时那份已经被拉取对上、又有了新编辑 → 409 不丢新编辑的 dirty。
+ *  ㉑ 第一次上传在途时又来一次读失败后的保存 → 传成了也不清记号;㉒ 在途时那份已经被拉取对上、又有了新编辑 → 409 不丢新编辑的 dirty;
+ *  ㉓ 第一次上传在途时来的是一次正常编辑 → 传成了照样清记号,那次编辑接着以新版本为基推上去。
  * 负对照:pluginStore 的读改回 `.catch(() => null)` → ②③④ 红;去掉 restoreFromCloud → ⑤ 红;
  *  saveData 不分「读失败后的写」→ ⑧ 红;不撤回记号 → ⑨ 红;记号只放内存 → ⑩ 红;读失败后的写不撤回 → ⑬ 红;
  *  恢复时不在读本机之前记代号 → ⑭ 红。
@@ -397,5 +398,25 @@ describe('云同步:本机读不出来时不当「本机没有」', () => {
     await settle()
     expect(state('s').dirty).toEqual(expect.any(Number))
     expect(state('s').unverified).toBeUndefined()
+  })
+
+  it('㉓ 读失败后的那份按第一次上传、在途时来的是一次正常编辑(加载完马上存)→ 传成了清记号,编辑接着以新版本为基推', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
+    let release!: () => void
+    putGate = new Promise<void>((r) => { release = r })
+    putReplies.push({ status: 200, json: { version: 1, owner: 'acct' } })
+    const ctx = ctxOf('s', true)
+    await expect(ctx.loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    expect(puts).toHaveLength(1)
+    await ctx.saveData!({ defaults: 1, tidied: true }) // 这个实例读成功了,是一次正常编辑
+    putGate = null
+    release()
+    await settle(); await settle()
+    expect(state('s').unverified).toBeUndefined()
+    expect(puts).toHaveLength(2)
+    expect(puts[1].base).toBe(1)
+    expect(puts[1].value).toBe('{"defaults":1,"tidied":true}')
   })
 })

@@ -135,9 +135,10 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
         markOk()
         index = null
         const cur = readState(id)
-        // 推的过程中又来了读失败后的保存(之前没有记号;或者传的正是 unverified 那份、在途时又存过):新存的那份没传上去,
-        // 还没和云端对过,状态不动 —— 下次 loadData 云端那份赢、宿主先另存本机这份
-        if (cur.unverified && (!st.unverified || cur.gen !== st.gen)) return
+        // 推的过程中又来了读失败后的保存(之前没有记号;或者传的正是 unverified 那份、在途时记号被重新打过 ——
+        // notePluginDataUnverifiedWrite 会抹掉 dirty):新存的那份还没和云端对过,状态不动,下次 loadData 云端那份赢、
+        // 宿主先另存本机这份。在途时来的是正常编辑(notePluginDataEdit 留着 dirty)不算:记号照清,那次编辑接着推。
+        if (cur.unverified && (!st.unverified || cur.dirty !== st.dirty)) return
         // 推的过程中又存了一次(代号变了):那次还没推,dirty 留着,后面排着的那次推送会推它。
         // 传上去的是 unverified 那份(按第一次上传):云端现在就是这份,对上了,记号清掉
         const { dirty: _pushed, unverified: _checked, ...rest } = cur
