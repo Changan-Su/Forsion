@@ -5,7 +5,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import { useI18n } from '../../i18n'
 import { ColorPalettePopover } from '../blocks/markdown/ColorPalette'
-import { blockColorTr, colorTargetsOf, sharedColor, type ColorChannel } from './blockColorCommands'
+import { blockColorTr, colorTargetsOf, dispatchBlockColor, sharedColor, type ColorChannel } from './blockColorCommands'
 
 type Range = { from: number; to: number } | null
 
@@ -56,7 +56,7 @@ export function BlockColorMenu({ view, restore, onDone, rangeOf }: { view: Edito
     if (!view.editable || !restore()) { onDone(); return }
     // restore 之后重新取目标:菜单开着期间文档没变(restore 已核),位置与菜单打开时一致
     const tr = blockColorTr(view.state, colorTargetsOf(view.state, rangeOf?.(view) ?? null), { [ch]: value })
-    if (tr) view.dispatch(tr)
+    if (tr) dispatchBlockColor(view, tr)
     onDone(); view.focus()
   }
   const swatch = bg || fg

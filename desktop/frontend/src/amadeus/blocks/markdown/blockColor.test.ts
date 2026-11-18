@@ -59,11 +59,26 @@ describe('块首颜色标记:读进 attr、原样写回', () => {
     ['未知 data-amadeus 属性', '<span data-amadeus-icon="🚀"></span>字\n'],
     ['颜色值不规范(大写 hex)', '<span data-amadeus-bg="#ABCDEF"></span>字\n'],
     ['同一属性出现两次', `${BG('red')}${BG('blue')}字\n`],
+    // Codex 评审 #2:容器摘走第一枚后,段落别再把第二枚当自己的颜色读走(写回时会被容器颜色盖掉)
+    ['列表项里同一属性两次', `- ${BG('red')}${BG('blue')}first\n- second\n`],
+    ['引用里同一属性两次', `> ${BG('red')}${BG('blue')}引用\n`],
   ])('读不懂的标记不摘、不丢:%s', async (_label, md) => {
     const got = await open(md)
     expect(await roundTrip(md)).toBe(md)
     // 同一属性两次:第一枚认、第二枚留在正文;其余整串留在正文
     expect(got.md).toBe(md)
+  })
+
+  // Codex 评审 #3:引用里摘掉颜色会露出 [!type] —— 不摘,标记照旧是正文 HTML、不变成标注 / 折叠块。
+  // 整篇重存时 `[` 被转义成 `\[`:main(没有 A1)上同一份笔记一模一样(实测),没编辑过的块逐字回写不受影响。
+  it.each([
+    ['折叠令牌', `> ${BG('red')}[!fold]- title\n> body\n`],
+    ['标注令牌(前面还有对齐)', `> <span data-amadeus-align="center"></span>${BG('red')}[!tip] title\n> body\n`],
+  ])('颜色标记后面紧跟 %s:标记不丢、不变成标注,和没有 A1 时一致', async (_label, src) => {
+    const got = await open(src)
+    expect(got.attrs).toEqual([])
+    expect(got.md).toBe(src.replace('[!', '\\[!'))
+    expect(await roundTrip(got.md)).toBe(got.md)
   })
 
   it('非规范顺序(颜色在对齐前)读得懂,重写成规范形,不丢信息', async () => {

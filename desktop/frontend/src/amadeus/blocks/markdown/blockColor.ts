@@ -35,7 +35,8 @@ export function colorMarker(c: { bg?: unknown; fg?: unknown }): string | null {
 }
 
 export type TextAlignment = 'left' | 'center' | 'right'
-type MdNode = { type: string; value?: string; children?: MdNode[] }
+/** amadeusKeep:liftContainerColor 判定「这枚标记不能摘」时打的记号,段落解析见到就停、原样留作 HTML。 */
+type MdNode = { type: string; value?: string; children?: MdNode[]; amadeusKeep?: boolean }
 type MarkerKey = 'align' | 'bg' | 'fg'
 
 const ATTRS = '((?:\\s+data-amadeus-[a-z]+="[^"]*")+)\\s*'
@@ -63,7 +64,7 @@ function leadingMarkers(children: MdNode[] | undefined): Array<{ attrs: Partial<
   let i = 0
   while (children && i < children.length) {
     const node = children[i]
-    if (node?.type !== 'html' || typeof node.value !== 'string') break
+    if (node?.type !== 'html' || typeof node.value !== 'string' || node.amadeusKeep) break
     const v = node.value.trim()
     let hit = FULL.exec(v), size = 1
     if (!hit) {
@@ -90,6 +91,17 @@ export function takeBlockMarkers(children: MdNode[] | undefined): { align: TextA
   return { align: (all.align as TextAlignment | undefined) ?? 'left', bg: all.bg ?? '', fg: all.fg ?? '', children: children!.slice(used) }
 }
 
+/** mdast 行内节点的纯文字(同 PM 的 textContent:HTML 节点不算字)。只看开头一小段就够判断。 */
+function mdText(nodes: MdNode[]): string {
+  let out = ''
+  for (const c of nodes) {
+    if (out.length > 64) break
+    if (c.type === 'html') continue
+    out += c.children ? mdText(c.children) : (c.value ?? '')
+  }
+  return out
+}
+
 /** 列表项 / 引用:从第一段(段落或标题)的段首只摘**颜色**,对齐标记留给那一段自己。不改入参,返回新的 mdast 节点。 */
 export function liftContainerColor<T extends MdNode>(node: T): { bg: string; fg: string; node: T } {
   const first = node.children?.[0]
@@ -108,7 +120,20 @@ export function liftContainerColor<T extends MdNode>(node: T): { bg: string; fg:
     } else keep.push(...own)
   }
   if (!bg && !fg) return { bg: '', fg: '', node }
-  const firstOut = { ...first, children: [...keep, ...first.children!.slice(i)] }
+  const rest = first.children!.slice(i)
+  const firstOut = { ...first, children: [...keep, ...rest] }
+  // 摘了会变样的两种(Codex 评审 #2 #3),这时**不摘**:
+  //  · 摘完段首又是一枚颜色标记(手写的重复标记):段落会把它当自己的颜色读走,写回时容器颜色盖掉它 → 第二枚丢了;
+  //  · 引用里摘完露出 `[!type]`:读进来成了标注 / 折叠块,写回时标注不写颜色 → 标记丢了、结构也变了。
+  //  后一种把颜色标记钉成正文 HTML(和没有 A1 时一模一样);前一种交给段落自己读(第一枚归段落,重复的那枚照旧是正文)。
+  const relifts = leadingMarkers(firstOut.children).some((m) => m.attrs.bg || m.attrs.fg)
+  // 口径同写盘那侧的 isCalloutQuote(PM textContent):HTML 不算字,转义拆开的几段文字拼起来看
+  const exposesCallout = node.type === 'blockquote' && /^\[![^\]\s]+\]/.test(mdText(rest))
+  if (exposesCallout) {
+    const pinned = first.children!.map((c, k) => (k < i && c.type === 'html' && /data-amadeus-(?:bg|fg)=/.test(c.value ?? '') ? { ...c, amadeusKeep: true } : c))
+    return { bg: '', fg: '', node: { ...node, children: [{ ...first, children: pinned }, ...node.children!.slice(1)] } }
+  }
+  if (relifts) return { bg: '', fg: '', node }
   return { bg, fg, node: { ...node, children: [firstOut, ...node.children!.slice(1)] } }
 }
 
@@ -131,7 +156,7 @@ export const COLOR_ATTR_SPEC = { bg: { default: '' }, fg: { default: '' } }
 
 /** 标记从 md 源串里剥掉(给按源码行找标题的地方用:`![[笔记#标题]]` 嵌入等)。只剥认识的块标记。 */
 export function stripBlockMarkers(line: string): string {
-  return line.replace(/<span(?:\s+data-amadeus-(?:align|bg|fg)="[^"]*")+\s*><\/span>/g, '')
+  return line.replace(/^(\s*)(?:<span(?:\s+data-amadeus-(?:align|bg|fg)="[^"]*")+\s*><\/span>)+/, '$1')
 }
 
 // ── 容器(列表项 / 引用)写盘:把容器的颜色交给第一段,由段落的 toMarkdown 写进段首标记 ──────────────

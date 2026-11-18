@@ -149,6 +149,23 @@ async function main() {
     ok('/blue background 上色', (await attrs(p, 'BETA')).bg === 'blue')
     await slash(p, 'ALPHA', 'red x')
     ok('多词名对不上的空格照旧关菜单、留字面', await p.locator('.slash-item').count() === 0 && (await block(p, 'ALPHA').innerText()).includes('/red x'))
+    // Codex 评审 #1:行中上色只删 /查询,前面原有的空格留着
+    await p.evaluate(() => {
+      const v = window.__upage.probe.view(), st = v.state, TS = st.selection.constructor.atStart(st.doc).constructor
+      let hit = null
+      st.doc.descendants((node, pos) => { if (hit != null) return false; if (!node.isTextblock) return true; const i = node.textContent.indexOf('GAMMA'); if (i >= 0) hit = pos + 1 + i; return false })
+      v.focus(); v.dispatch(st.tr.setSelection(TS.create(st.doc, hit)))
+    })
+    await p.keyboard.type('/blue background', { delay: 25 }); await sleep(p, 300)
+    await p.keyboard.press('Enter'); await sleep(p, 300)
+    ok('行中 /blue background:上色、前面的空格还在', (await attrs(p, 'GAMMA')).bg === 'blue' && (await block(p, 'GAMMA').innerText()).trim() === '第三段 GAMMA', await block(p, 'GAMMA').innerText())
+    // Codex 评审 #4:上色后马上打字,撤销只撤字;再撤一次 = 颜色和 /查询 一起回去
+    await p.keyboard.type('X'); await sleep(p, 100)
+    await p.keyboard.press('Meta+z'); await sleep(p, 200)
+    ok('上色后马上打字:第一次撤销只撤字', (await attrs(p, 'GAMMA')).bg === 'blue' && !(await block(p, 'GAMMA').innerText()).includes('X'))
+    await p.keyboard.press('Meta+z'); await sleep(p, 200)
+    ok('再撤一次:颜色没了、/查询回来(删查询和上色是一步)', !(await attrs(p, 'GAMMA')).bg && (await block(p, 'GAMMA').innerText()).includes('/blue background'))
+    await p.keyboard.press('Escape')
     await slash(p, 'OMEGA', '')
     ok('浏览(没打字)时不列颜色项', await p.locator('.slash-item[data-key^="bg-"], .slash-item[data-key^="color-"]').count() === 0)
     await p.keyboard.press('Escape')

@@ -6,6 +6,7 @@
  *  - 斜杠 / 光标 → 光标所在的块:列表项或引用的第一段 = 那个容器,其余段 = 段落自己。
  *  一次上色 = 一个事务、一个撤销步。 */
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
+import type { EditorView } from '@milkdown/kit/prose/view'
 import { NodeSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import { containerTakesColor, isCalloutQuote, normalizeBlockColor } from '../blocks/markdown/blockColor'
@@ -82,11 +83,12 @@ export function sharedColor(targets: ColorTarget[], ch: ColorChannel): string {
   return vals.size === 1 ? [...vals][0] : ''
 }
 
-/** 上色(值 '' = 清除;只改 patch 里给了的那一路)。一个事务、单独一个撤销步;什么都没变返回 null。 */
-export function blockColorTr(state: EditorState, targets: ColorTarget[], patch: Partial<Record<ColorChannel, string>>): Transaction | null {
+/** 上色(值 '' = 清除;只改 patch 里给了的那一路)。一个事务、单独一个撤销步;什么都没变返回 null。
+ *  base:接着别的改动往下写(斜杠:删 `/查询` 和上色同一个事务);目标位置要在 base 里不变(都在被删的那段之前)。 */
+export function blockColorTr(state: EditorState, targets: ColorTarget[], patch: Partial<Record<ColorChannel, string>>, base?: Transaction): Transaction | null {
   if (!targets.length) return null
   const next = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, normalizeBlockColor(v)])) as Partial<Record<ColorChannel, string>>
-  let tr = closeHistory(state.tr)
+  let tr = base ?? closeHistory(state.tr)
   let changed = false
   for (const t of targets) {
     const node = tr.doc.nodeAt(t.pos)
@@ -97,4 +99,10 @@ export function blockColorTr(state: EditorState, targets: ColorTarget[], patch: 
     changed = true
   }
   return changed ? tr : null
+}
+
+/** 派发上色,并把撤销组封口:否则紧接着在这一段打的字会和上色并成一步,一次撤销连字带色一起没了(Codex 评审 #4)。 */
+export function dispatchBlockColor(view: EditorView, tr: Transaction): void {
+  view.dispatch(tr)
+  view.dispatch(closeHistory(view.state.tr))
 }
