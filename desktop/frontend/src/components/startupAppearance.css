@@ -1,4 +1,3 @@
-.settings-sub--theme > .startup-appearance { grid-column:1 / -1; }
 .startup-appearance .settings-panel-actions .btn { width:30px; padding:0; }
 .startup-appearance-fields { border:0; padding:0; margin:0; min-width:0; }
 .startup-appearance .settings-control-row { flex-direction:row; align-items:center; }

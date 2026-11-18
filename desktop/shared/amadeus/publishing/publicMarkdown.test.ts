@@ -17,6 +17,13 @@ describe('Amadeus publication dialect', () => {
       '<details class="md-callout md-fold"><summary>全部更新</summary>',
     )
   })
+  it('reads the callout metadata slot: icon goes into the title, colour becomes data-bg, unknown words stay hidden (A5)', () => {
+    const { html } = renderPublicMarkdown('> [!tip|🚀 blue wide] 发布节奏\n> 正文\n\n> [!fold|green]+ 折叠\n> 内容')
+    expect(html).toContain('<aside class="md-callout" data-bg="blue"><p class="md-callout-title">🚀 发布节奏</p>')
+    expect(html).toContain('<details class="md-callout md-fold" data-bg="green" open><summary>折叠</summary>')
+    expect(html).not.toContain('wide')
+    expect(html).not.toContain('|')
+  })
   it('combines standard poster image and native wiki video embed without loading a player', () => {
     const { html } = renderPublicMarkdown(
       '![Film](/releases/cover.jpg)\n\n![[/releases/film.mp4]]',
@@ -88,6 +95,24 @@ describe('Amadeus publication dialect', () => {
     expect(renderPublicMarkdown('![[BV1xx411c7mD]]').html).toContain(
       'href="https://www.bilibili.com/video/BV1xx411c7mD"',
     )
+  })
+  it('renders a ```toc block as a nested list of links to the heading ids, honoring min/max depth', () => {
+    const md = '# Title\n\n```toc\nmin_depth: 1\nmax_depth: 3\n```\n\n## Goals\n\n## Split\n\n### Design\n\n#### Deep\n\n> ## In a quote\n\n## A <b> & c\n'
+    const { title, html } = renderPublicMarkdown(md, { idPrefix: 'p', locale: 'zh' })
+    expect(title).toBe('Title')
+    expect(html).not.toContain('<pre>')
+    const nav = /<nav class="md-toc" aria-label="目录">(.*?)<\/nav>/.exec(html)?.[1]
+    expect(nav).toBe(
+      '<ul><li><a href="#p-1">Goals</a></li><li><a href="#p-2">Split</a><ul><li><a href="#p-3">Design</a></li></ul></li>' +
+        '<li><a href="#p-5">In a quote</a></li><li><a href="#p-6">A &lt;b&gt; &amp; c</a></li></ul>',
+    )
+    // 每条链接都指向真实存在的标题 id
+    for (const id of nav!.matchAll(/href="#([^"]+)"/g)) expect(html).toContain(`id="${id[1]}"`)
+    expect(renderPublicMarkdown('```toc\nmax_depth: 4\n```\n\n## A\n\n#### D\n').html).toContain('<a href="#md-2">D</a>')
+  })
+  it('drops a ```toc block with no headings in range instead of showing its source', () => {
+    expect(renderPublicMarkdown('```toc\n```\n\nJust text.\n').html).toBe('<p>Just text.</p>')
+    expect(renderPublicMarkdown('```toc\nmin_depth: 4\n```\n\n## A\n').html).not.toContain('md-toc')
   })
   it('supports reference links and images and tolerates an empty draft', () => {
     expect(renderPublicMarkdown('').html).toBe('')

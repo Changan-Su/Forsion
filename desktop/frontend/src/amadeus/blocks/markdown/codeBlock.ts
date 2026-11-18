@@ -15,6 +15,7 @@ import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCo
 import { parseButtonBlock } from '../button/format'
 import { codeAutoPairBackspace, codeAutoPairInput } from './codeAutoPair'
 import { CODE_LANGUAGES, highlightCode, isPlainCodeLanguage, type CodeHighlight } from './codeHighlight'
+import { TOC_LANG } from '@amadeus-shared/tocBlock'
 export { codeHighlightRuns } from './codeHighlight'
 
 /** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
@@ -274,7 +275,8 @@ class CodeBlockView implements NodeView {
     // 有效的按钮块(```forsion-button + 合法 JSON)由嵌入层渲染成按钮,不给代码块工具条(R-14):工具条压在按钮上,
     // 语言下拉一改(改成 javascript 后列表里再没有 forsion-button)按钮就变回 JSON、改不回来。JSON 坏了的仍是
     // 普通代码块(R-13 的回落),工具条照给 —— 那时它就是一段代码。签名带上这一位:改源码修好 / 改坏时当场切换。
-    const button = lang === 'forsion-button' && !!parseButtonBlock('```forsion-button\n' + this.node.textContent + '\n```')
+    // 页内目录块(```toc)同理:任何内文都被嵌入层渲染成目录,工具条只会压在目录上、语言一改就变回代码。
+    const button = (lang === 'forsion-button' && !!parseButtonBlock('```forsion-button\n' + this.node.textContent + '\n```')) || lang === TOC_LANG
     const sig = button ? 'button' : `${lang}:${detected}:${isWrap ? 1 : 0}:${isNo ? 1 : 0}:${isCollapsed ? 1 : 0}:${currentLocale()}`
     if (sig !== this.barSig) {
       if (button) {

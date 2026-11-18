@@ -143,6 +143,7 @@ describe('modelContextWindow', () => {
     expect(modelContextWindowInfo('codex/gpt-6-sol')).toEqual({ tokens: 272_000, source: 'family' });
     expect(modelContextWindowInfo('gpt-6-luna')).toEqual({ tokens: 272_000, source: 'family' });
     expect(modelContextWindowInfo('gpt-6.1-terra')).toEqual({ tokens: 272_000, source: 'family' });
+    for (const id of ['gpt-6.2-sol', 'gpt-6.2-astra', 'codex/gpt-6.2-sol', 'openai/gpt-6.2-astra']) expect(modelContextWindowInfo(id)).toEqual({ tokens: 272_000, source: 'family' });
     for (const id of ['gpt-6.1-sol', 'codex/gpt-6.1-sol', 'openai/gpt-6.1-sol']) {
       expect(modelContextWindowInfo(id)).toEqual({ tokens: 272_000, source: 'family' });
     }

@@ -66,6 +66,15 @@ describe('sliceHeadingSection', () => {
     expect(sliceHeadingSection(DOC, '围栏里的假标题')).toBeNull()
     expect(sliceHeadingSection(DOC, '不存在')).toBeNull()
   })
+  it('段首块标记(居中 / 整块颜色)不算标题文字', () => {
+    const md = '## <span data-amadeus-align="center"></span><span data-amadeus-bg="yellow"></span>黄底标题\n\n正文。\n'
+    expect(sliceHeadingSection(md, '黄底标题')).toBe('## <span data-amadeus-align="center"></span><span data-amadeus-bg="yellow"></span>黄底标题\n\n正文。')
+  })
+  it('行内代码里的字面 span 是标题文字,不剥(Codex 评审 #5)', () => {
+    const md = '## `<span data-amadeus-bg="blue"></span>` Example\n\n正文。\n'
+    expect(sliceHeadingSection(md, '<span data-amadeus-bg="blue"></span> Example')).toBe('## `<span data-amadeus-bg="blue"></span>` Example\n\n正文。')
+    expect(sliceHeadingSection(md, 'Example')).toBeNull()
+  })
 })
 
 describe('sliceAnchoredBlock', () => {

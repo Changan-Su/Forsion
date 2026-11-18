@@ -1,4 +1,4 @@
-import { cancelScrollToElement } from '@lcl/engine'
+import { cancelScrollToElement, scrollToElement } from '@lcl/engine'
 
 /** 把正文里的某个块「亮到阅读位置」:块顶贴在滚动容器可视区上部,让开 sticky 顶栏再留一条缝。
  *
@@ -53,4 +53,21 @@ export function revealBlockAtTop(el: HTMLElement, gap = READING_GAP): void {
   const z = (host as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
   cancelScrollToElement(host) // 目录跳转的落地补正还在跑会把这次定位拉回去
   host.scrollTop += (rect.top - (hr.top + stickyTopInset(host) + gap)) / z
+}
+
+/** 平滑版 revealBlockAtTop(页内目录块点一条用,与浮动目录同一个 LCL scrollToElement:平滑滚 + 落地补正 + 用户一动就停)。
+ *  落点同一口径(顶栏下 gap);onLanded 在落稳后调一次(给「闪一下」)—— 被用户打断 / 被新的跳转顶掉不调。
+ *  画布那一面照旧先发 `amx-reveal` 让它自己接管(接了就当已落地);没有能滚的祖先时退回瞬时定位。 */
+export function glideBlockToTop(el: HTMLElement, onLanded?: () => void, gap = READING_GAP): void {
+  const rect = el.getBoundingClientRect()
+  if (!rect.width && !rect.height) return
+  const taken = !el.dispatchEvent(new CustomEvent('amx-reveal', { bubbles: true, cancelable: true, detail: { rect } }))
+  if (taken) { onLanded?.(); return }
+  const host = scrollerOf(el.parentElement)
+  if (!host) {
+    window.scrollBy(0, rect.top - gap)
+    onLanded?.()
+    return
+  }
+  scrollToElement(host, el, stickyTopInset(host) + gap, onLanded)
 }

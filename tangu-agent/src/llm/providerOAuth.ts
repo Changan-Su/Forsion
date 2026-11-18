@@ -36,8 +36,9 @@ export interface OAuthProvider {
 // GPT-6 Sol / Luna 同理:0.153.4 拉到的目录没有,0.155.1 才返回(09-22 同账号实测)。
 // GPT-6.1 Sol:0.155.1 仍隐藏,0.159.2 返回(10-01 同账号实测)。
 // GPT-6.1 Terra:0.158.0 隐藏,0.159.0 起返回,无需升版本(10-27 同账号实测;目录里的 minimal_client_version 写 0.153.0,不是实际门槛)。
+// GPT-6.2 Sol / Astra:0.165.x 隐藏,0.166.0 起返回(11-17 同账号实测,这次目录的 minimal_client_version 写的正是 0.166.0);取当天发布的 CLI 0.169.1。
 // 与缓存版本一起推进,升级后立即重拉,不能复用旧客户端过滤过的 24h 缓存。
-export const CODEX_MODELS_CLIENT_VERSION = '0.159.2';
+export const CODEX_MODELS_CLIENT_VERSION = '0.169.1';
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
   xai: {
@@ -86,7 +87,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     protocol: 'openai-responses',
     // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
     // 2026-10-27 实测 list 集;真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
-    modelIds: ['gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
+    modelIds: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
     extraAuthParams: { id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true' },
   },
 };

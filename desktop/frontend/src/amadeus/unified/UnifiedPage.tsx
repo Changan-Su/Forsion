@@ -29,7 +29,7 @@ import { awaitTypingQuiet, installTypingGuard, isComposing } from '../store/typi
 import { COMPOSE_SAVE_POLL_MS, createTypingDraftPacer, saveTickAction, typingDraftPlugin, type TypingDraftPacer } from './typingDraft'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
-  PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  PREFIX_TRIGGERS, SLASH_SENTINELS, blockColorFromScaffold, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
   copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -68,7 +68,7 @@ import { AmadeusPropertiesPanel, PropsDraftFlushContext } from '../../amadeusPro
 import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '../chrome/pageChrome'
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
-import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, type Trigger } from '../blocks/markdown/blockTriggers'
+import { applyTrigger, codeBlockTurnInto, liftOutOfWrappers, slashRange, type Trigger } from '../blocks/markdown/blockTriggers'
 import { blockKindOf, turnBlocksInto, turnCalloutInto, turnIntoCallout, turnRangeIntoCode, type BlockKind } from './blockTurn'
 import { columnRowOf, columnSplitApplies } from '../blocks/markdown/menuContext'
 import { NotePicker, blockLinkOf, canMove, copyLink, moveBlocksTo } from './blockLinks'
@@ -82,7 +82,7 @@ import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, re
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
-import { createEmbedLayer } from './embedLayer'
+import { caretBelowEmbed, createEmbedLayer } from './embedLayer'
 import { documentAgentFence, newDocAgentSpec, serializeDocAgentSpec } from '../blocks/documentAgent/format'
 import { instructionsOf, pageInstructionContext } from './pageInstructions'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
@@ -108,9 +108,12 @@ import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
-import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
+import { TableAxisMenu, TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { ColumnWidthMenu } from './ColumnWidthMenu'
 import { BlockColorMenu } from './BlockColorMenu'
+import { blockColorTr, calloutTokenEditable, colorTargetAtCursor, dispatchBlockColor, setCalloutMeta } from './blockColorCommands'
+import { isCalloutQuote } from '../blocks/markdown/blockColor'
+import { isCalloutIcon } from '../../../../shared/amadeus/calloutToken'
 import { ListNumberingMenu } from './ListNumberingMenu'
 import { hrefKind, normalizeHref, noteLinkTarget } from '../blocks/markdown/linkHref'
 import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
@@ -889,6 +892,26 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       typeAt()
       return
     }
+    // 整块颜色(Notion 对齐 A1):光标所在的块上色;标注 / 表格 / 代码里没有目标 → 一句提示。
+    // 删 `/查询` 与上色同一个事务、一个撤销步;只删查询本身,不连带前面原有的空格(行中上色,Codex 评审 #1)。
+    const color = blockColorFromScaffold(item.scaffold)
+    if (color) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const target = colorTargetAtCursor(view.state)
+        const { $from, empty } = view.state.selection
+        // 行尾的 `字 /红色`:连空格一起删(同别的命令);后面还有字:留着空格,不让前后两个词粘在一起
+        const r = empty ? slashRange($from, { keepSpace: $from.parentOffset < $from.parent.content.size }) : null
+        const base = closeHistory(view.state.tr)
+        if (r) base.delete(r.from, r.to)
+        // 标注只有底色(元数据位,A5):在标注标题行打 /红色(字色)= 做不成,同样给一句提示
+        const calloutFg = !!target && isCalloutQuote(target.node) && !('bg' in color)
+        if (!target || calloutFg) slashTurnFailed(item.label)
+        dispatchBlockColor(view, (target && !calloutFg && blockColorTr(view.state, [target], color, base)) || base)
+        view.focus()
+      })
+      return
+    }
     ops.consume() // 返回值是「整篇是否空」,统一实例用不着:空块判定在 insertMd 里按当前顶层块算
     if (item.scaffold === S.event) {
       typeAt()
@@ -1056,7 +1079,9 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
     // 公式骨架 `$$  $$`:光标落在两对 `$$` 之间(R-17),而不是行尾 —— 否则插完还得往回挪三格才能开写。
-    insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
+    const ok = insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
+    // 目录块的源码是藏着的:光标别留在里面(接着打字会写进源码 / 并进下一个标题),落到它下面的空行。
+    if (ok && item.key === 'toc') getInstance()?.action((ctx) => caretBelowEmbed(ctx.get(editorViewCtx)))
   }
   applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
 
@@ -1836,7 +1861,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
-      ...createEmbedLayer({ path, readOnly,
+      ...createEmbedLayer({ path, readOnly, flash: flashCiteTip,
         // 「打开」键 = 点双链同一口径:没带修饰键时文件类开在旁边那半屏,笔记就地开(见 MarkdownBlock 的 onOpenWiki)。
         open: (target, o) => void scoped.getState().openWikiLink(target, path, o ?? { split: true }),
         alive: () => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current,
@@ -3818,6 +3843,36 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     return el ? registerFindProvider(pmFindProvider(el, () => layer.getView())) : undefined
   }, [readOnly, reading, mode, layer])
 
+  // 标注换图标(Notion 对齐 A5):点标注左上角的图标 → 页面图标那个选择器(.amx-iconpick)→ 写进令牌元数据位 `[!tip|🚀 …]`。
+  // 图标挂件(blocks/markdown/callout.ts)只发事件;这里记下当时的节点,选完时文档变过(节点不是同一个)就不改。
+  const [calloutIconPick, setCalloutIconPick] = useState<{ bqPos: number; node: ProseNode; x: number; y: number; current: string | null } | null>(null)
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || readOnly || reading || mode === 'source') return
+    const on = (e: Event): void => {
+      const d = (e as CustomEvent<{ bqPos: number; rect: DOMRect; current: string | null }>).detail
+      // 只认本页主编辑器发的:画布卡片 / 嵌入的编辑器也在 bodyRef 里,它们的 bqPos 是另一份文档的位置
+      const view = layer.getView()
+      if (!view || e.target !== view.dom) return
+      const node = view.state.doc.nodeAt(d.bqPos)
+      // 令牌前有 HTML 原子的标注改不了令牌(见 calloutTokenEditable),不开选择器
+      if (node && isCalloutQuote(node) && calloutTokenEditable(node)) setCalloutIconPick({ bqPos: d.bqPos, node, x: d.rect.left, y: d.rect.bottom + 4, current: d.current })
+    }
+    el.addEventListener('amadeus:callout-icon', on)
+    return () => el.removeEventListener('amadeus:callout-icon', on)
+  }, [readOnly, reading, mode, layer])
+  const pickCalloutIcon = (icon: string | null): void => {
+    const pick = calloutIconPick
+    setCalloutIconPick(null)
+    const view = layer.getView()
+    if (!pick || !view?.editable || view.state.doc.nodeAt(pick.bqPos) !== pick.node) return
+    // 只收 emoji(ASCII 词在元数据位里是 Obsidian 的 CSS 片段名);null = 去掉图标、回到按类型的缺省图标
+    if (icon && !isCalloutIcon(icon)) { view.focus(); return }
+    const tr = closeHistory(view.state.tr)
+    if (setCalloutMeta(tr, pick.bqPos, { icon: icon ?? '' })) dispatchBlockColor(view, tr)
+    view.focus()
+  }
+
   return (
     <>
       {/* 顶栏胶囊的锚:恒在场(源码模式也在),只用来 `closest('.amx-pane')` 找本 pane 的插槽。
@@ -3937,8 +3992,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           if (href.startsWith('#')) {
             let title = href.slice(1)
             try { title = decodeURIComponent(title) } catch { /* malformed escapes remain literal */ }
-            title = title.replace(/-/g, ' ')
-            const heading = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find((h) => h.textContent?.toLowerCase() === title.toLowerCase())
+            const heads = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])]
+            // 原文先比(目录块的 `#标题` 是原样编码的,标题里本来就带 `-` 的也要找得到),再按 slug 习惯把 `-` 当空格。
+            const same = (t: string): HTMLElement | undefined => heads.find((h) => h.textContent?.toLowerCase() === t.toLowerCase())
+            const heading = same(title) ?? same(title.replace(/-/g, ' '))
             if (heading) revealBlockAtTop(heading)
           } else if (hrefKind(href) === 'external') window.open(normalizeHref(href)!, '_blank', 'noopener,noreferrer')
           else if (hrefKind(href) === 'note') void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)
@@ -4082,6 +4139,12 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             }}
           />
       )}
+      {calloutIconPick && !readOnly && (
+        <IconPicker x={calloutIconPick.x} y={calloutIconPick.y} current={calloutIconPick.current}
+          onPick={pickCalloutIcon} onClose={() => { setCalloutIconPick(null); layer.getView()?.focus() }} />
+      )}
+      {/* 表格行首 / 列首把手的菜单(tableHover.ts 打开;只装表格区,不带整表的删除 / 复制)。 */}
+      <TableAxisMenu getView={() => layer.getView()} readOnly={readOnly} />
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
@@ -4128,7 +4191,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             {isTableSelected(layer.getView()) && (
               <TableMenuSection view={layer.getView()!} cell={blockMenu.cell ?? null} onDone={() => setBlockMenu(null)} />
             )}
-            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
+            {layer.getView() && <BlockColorMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} rangeOf={(v) => layer.topRangeOf(v)} />}
             {layer.getView() && <ListNumberingMenu view={layer.getView()!} restore={() => restoreMenuTarget(layer.getView()!)} onDone={() => setBlockMenu(null)} />}
             <div className="ubm-sep" role="separator" />
             {/* 多块选中:置灰 + 说明(B-05:此前点了静默无效)。aria-disabled 而不是 disabled —— 禁用的按钮不出 title 提示。 */}

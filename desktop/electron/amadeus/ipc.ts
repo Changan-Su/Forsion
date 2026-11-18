@@ -1,6 +1,6 @@
 import { contentSyncOwned } from '../contentSyncHost'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
-import { promises as fs, readdirSync, readFileSync } from 'node:fs'
+import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -939,24 +939,60 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       ? path.join(forsionHomeDir(), 'plugins-data', `${id}.json`)
       : null
 
+  // 读失败 ≠ 没写过(用户 10-28 定的规矩):只有文件不存在才回 null,其余读错误照实抛给渲染层
+  // (渲染层 pluginLocalData.ts 统一判:读错误 / 不是合法 JSON → ctx.loadData reject,不再当空)。
+  // 读不出来的那份记在 unreadablePluginData 里:插件拿到读失败后若自己决定按默认值继续、再 saveData,
+  // 写之前先把原件另存成 <id>.json.unreadable-<时间>,原件在旁边留着;连原件都拷不出来就拒绝这次写。
+  // 记号只在「另存过原件的那次写」之后才清:别的窗口 / 设备页之后读成功了也不清 —— 拿到读失败的那个插件
+  // 手里仍是默认值,它下一次写照样要先另存(最多多出一份备份)。
+  const unreadablePluginData = new Set<string>()
+  // 同一个文件的写排队:两次写挤在同一毫秒时临时文件 / 备份名会撞,后一次要么写坏前一次的临时文件、要么被拒
+  const pluginDataWrites = new Map<string, Promise<void>>()
+  let pluginDataSeq = 0
   handle(IPC.pluginDataRead, async (_e, id: string): Promise<string | null> => {
     const f = pluginDataFile(id)
     if (!f) return null
+    let text: string
     try {
-      return await fs.readFile(f, 'utf8')
-    } catch {
-      return null // 没写过 = null,与「读失败」同一出口:插件侧只需一条 `?? 默认值`
+      text = await fs.readFile(f, 'utf8')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') { unreadablePluginData.delete(f); return null }
+      unreadablePluginData.add(f)
+      throw e
     }
+    // 不是合法 JSON(零字节、写到一半、被手改坏):原文照回,由渲染层判成读失败;这里只记下来,写之前先另存原件
+    try { JSON.parse(text) } catch { unreadablePluginData.add(f) }
+    return text
   })
 
-  handle(IPC.pluginDataWrite, async (_e, id: string, text: string): Promise<void> => {
+  // opts.backup(渲染层同步拉云端那份、盖「读失败后插件按默认值存下的」本机数据时要):写之前把现有那份另存成
+  // <id>.json.replaced-<时间>,读失败之后用户在默认值上做的修改不随这次覆盖消失;拷不出来同样拒写。
+  handle(IPC.pluginDataWrite, async (_e, id: string, text: string, opts?: { backup?: boolean }): Promise<void> => {
     const f = pluginDataFile(id)
     if (!f) throw new Error('非法插件 id')
-    await fs.mkdir(path.dirname(f), { recursive: true })
-    // 原子写:直接覆盖会在崩溃/断电时留下半截 JSON,而这里存的是用户手写的片段库。
-    const tmp = `${f}.tmp-${process.pid}-${Date.now()}`
-    await fs.writeFile(tmp, String(text ?? ''), 'utf8')
-    await fs.rename(tmp, f)
+    const backupFirst = opts?.backup === true
+    const run = async (): Promise<void> => {
+      await fs.mkdir(path.dirname(f), { recursive: true })
+      const n = ++pluginDataSeq
+      const keep = unreadablePluginData.has(f) ? 'unreadable' : backupFirst ? 'replaced' : null
+      if (keep) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+        try {
+          await fs.copyFile(f, `${f}.${keep}-${stamp}-${n}`, fsConstants.COPYFILE_EXCL)
+        } catch (e) {
+          // 原件已经不在了:没有可留的,照常写。其余(仍读不出来……)不写,原件不能被这次写盖掉。
+          if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw new Error(`Saved data of plugin "${id}" could not be read or backed up; not overwriting it`)
+        }
+        unreadablePluginData.delete(f)
+      }
+      // 原子写:直接覆盖会在崩溃/断电时留下半截 JSON,而这里存的是用户手写的片段库。
+      const tmp = `${f}.tmp-${process.pid}-${Date.now()}-${n}`
+      await fs.writeFile(tmp, String(text ?? ''), 'utf8')
+      await fs.rename(tmp, f)
+    }
+    const next = (pluginDataWrites.get(f) ?? Promise.resolve()).then(run, run)
+    pluginDataWrites.set(f, next)
+    try { await next } finally { if (pluginDataWrites.get(f) === next) pluginDataWrites.delete(f) }
   })
 
   handle(IPC.revealInFileManager, async (_e, targetPath: string) => {

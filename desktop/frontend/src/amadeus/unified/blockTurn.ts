@@ -5,6 +5,7 @@ import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { canJoin, findWrapping, liftTarget } from '@milkdown/kit/prose/transform'
 import { FOLD_TOKEN, applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { CALLOUT_HEAD_RE, CALLOUT_TOKEN_SRC, FOLD_HEAD_RE, calloutHead, parseCalloutMeta } from '../../../../shared/amadeus/calloutToken'
 
 const LIST_KINDS = new Set<Trigger['kind']>(['bullet', 'ordered', 'task'])
 
@@ -21,7 +22,7 @@ export function blockKindOf(node: PMNode | null | undefined): BlockKind | null {
     case 'amadeusCanvasCard': return 'card'
     case 'blockquote': {
       const head = node.firstChild?.isTextblock ? node.firstChild.textContent : ''
-      return /^\[!fold\]/i.test(head) ? 'fold' : /^\[![\w-]+\]/.test(head) ? 'callout' : 'quote'
+      return FOLD_HEAD_RE.test(head) ? 'fold' : CALLOUT_HEAD_RE.test(head) ? 'callout' : 'quote'
     }
     default: return null
   }
@@ -101,7 +102,7 @@ export function turnRangeIntoCode(view: EditorView, from: number, to: number): b
 }
 
 /** callout 首行令牌(Obsidian `> [!type]`)。 */
-const CALLOUT_HEAD = /^\[![\w-]+\]/
+const CALLOUT_HEAD = CALLOUT_HEAD_RE
 /** 「转换为 → 标注」(B-14):单块先按「引用」包起来(applyTrigger 同一套:出列表、标题降为段落),跨块选区整段
  *  包进**一只**引用;再在首行行首补 `[!note] `(与「折叠」补 `[!fold]-` 同形:原首行成为标注标题)。
  *  已经是 callout 的不重复补。[from, to) = 整块边界(NodeSelection 或 topRangeOf)。 */
@@ -134,8 +135,8 @@ export function turnIntoCallout(view: EditorView, from: number, to: number, mult
   return true
 }
 
-/** callout 首行令牌:`[!type]`,可带折叠符,连同其后那一个空格。 */
-const CALLOUT_TOKEN = /^\[![\w-]+\]([+-])?[ \u00a0]?/
+/** callout 首行令牌:`[!type]` / `[!type|元数据]`,可带折叠符,连同其后那一个空格。分组 2 = 元数据,3 = 折叠符。 */
+const CALLOUT_TOKEN = new RegExp(`^${CALLOUT_TOKEN_SRC}([+-])?[ \u00a0]?`)
 
 /** at 处的 blockquote 若是 callout:摘掉首行令牌(标题留作普通段落;标题为空则整行不留)。返回是否摘了。 */
 function stripCalloutToken(tr: Transaction, at: number): boolean {
@@ -161,9 +162,12 @@ export function turnCalloutInto(view: EditorView, from: number, to: number, targ
   if (!bq || !head || !m) return null
   const tr = view.state.tr
   if (target !== 'code' && target.kind === 'fold') {
-    if (/^\[!fold\]/i.test(head.textContent)) return true
+    if (FOLD_HEAD_RE.test(head.textContent)) return true
     const tokenLen = m[0].length - (/[ \u00a0]$/.test(m[0]) ? 1 : 0)
-    tr.replaceWith(from + 2, from + 2 + tokenLen, view.state.schema.text(FOLD_TOKEN))
+    // 底色跟着走(A5,元数据位);图标丢掉 —— 折叠块没有图标。没有底色就是原来的 `[!fold]-`。
+    const meta = parseCalloutMeta(m[2])
+    const fold = meta.color || meta.rest.length ? `${calloutHead('fold', { ...meta, icon: '' })}-` : FOLD_TOKEN
+    tr.replaceWith(from + 2, from + 2 + tokenLen, view.state.schema.text(fold))
     view.dispatch(tr.scrollIntoView())
     return true
   }

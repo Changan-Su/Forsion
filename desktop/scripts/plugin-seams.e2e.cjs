@@ -94,6 +94,29 @@ function writeProbe(pluginsDir) {
   }, null, 2))
 }
 
+/** 回到「插件 › 已安装插件」卡片列表(从插件设置页回来也走这里)。 */
+async function backToInstalled(sp) {
+  const nav = sp.locator('.settings-nav')
+  for (const label of ['插件', 'Plugins']) {
+    const b = nav.getByRole('button', { name: label, exact: true }).first()
+    if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
+  }
+  await sp.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
+  await sp.locator('.settings-nav-subitem', { hasText: /^(已安装插件|Installed plugins)$/ }).first().click().catch(() => {})
+  await sp.waitForTimeout(700)
+}
+
+/** 详情页的「设置」直达(方案 P4,2026-11-18 起设置只在「设置 › 插件设置」里画,详情页不再画第二份)。 */
+async function openSettingsFromDetail(sp) {
+  const b = sp.locator('[data-plugin-open-settings]').first()
+  await b.waitFor({ timeout: 5000 }).catch(() => {})
+  if (!(await b.count().catch(() => 0))) return false
+  await b.click()
+  await sp.locator('[data-plugin-identity]').first().waitFor({ timeout: 5000 }).catch(() => {})
+  await sp.waitForTimeout(700)
+  return true
+}
+
 /** 进设置 → 插件栏。store 没挂 window,只能走真 UI。
  *  ⚠️ 设置画在独立浮窗里(Floating Panel 化 2026-09-20):**插件管理与插件自绘面板都住在那个窗口**,
  *  开窗前要先 arm window 事件,后面所有插件 locator / `window.__seamprobe` 都得打在返回的这个 page 上。 */
@@ -134,7 +157,7 @@ async function openDetail(win, name) {
   return true
 }
 
-/** 详情页的启用开关(唯一一个 role=switch)。 */
+/** 启用开关:详情页 / 插件设置页身份卡上的第一个 role=switch。 */
 async function setEnabled(win, want) {
   const cb = win.locator('[role="switch"]').first()
   if (!(await cb.count().catch(() => 0))) return false
@@ -221,10 +244,12 @@ async function main() {
     // ── T2/T3 探针:settingsView 挂载 + loadData 首次为空 + saveData 落盘
     if (!(await openDetail(sp, 'Seam Probe'))) throw new Error('打不开探针详情页')
     await setEnabled(sp, true)
+    // 设置面板画在插件设置页上:从详情页的「设置」过去(之后的启停也在那页的身份卡上拨)
+    check('T2a 详情页给「设置」直达插件设置页', await openSettingsFromDetail(sp))
     let st = await probeState(sp)
     check('T2 registerSettingsView 在真插件管理器里挂载', !!st && st.mounts >= 1,
       st ? `mounts=${st.mounts}` : 'window.__seamprobe 不存在')
-    check('T2b 面板 DOM 真的进了详情页',
+    check('T2b 面板 DOM 真的进了插件设置页',
       !!(await sp.locator('.seamprobe-view').first().count().catch(() => 0)))
     check('T3a loadData 走真 IPC 返回(首次应为空)', !!st && st.loaded === true && (st.data === null || st.data === undefined),
       st ? `loaded=${st.loaded} data=${JSON.stringify(st.data)}` : '-')
@@ -285,6 +310,7 @@ async function main() {
         if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
       }
       await sp.waitForTimeout(900)
+      await backToInstalled(sp) // 此刻停在插件设置页(左栏子项),先回卡片列表
       const gotLatex = await openDetail(sp, 'LaTeX')
       if (!gotLatex) await sp.screenshot({ path: path.join(SHOT_DIR, 'seams-nolatex.png') }).catch(() => {})
       if (gotLatex) {
@@ -292,6 +318,8 @@ async function main() {
         await sp.waitForTimeout(1800)
         const mdNodes = await sp.locator('.md-body h1, .md-body h2, .md-body code, .md-body li').count().catch(() => 0)
         check('T6a README 渲染成 DOM(不是裸文本)', mdNodes > 0, `节点数=${mdNodes}`)
+        await openSettingsFromDetail(sp) // 自绘面板在插件设置页上(P4)
+        await sp.waitForTimeout(1200)
         const cm = await sp.locator('.cm-editor').count().catch(() => 0)
         check('T6b 自绘面板里是真代码编辑器(CodeMirror)', cm > 0, `.cm-editor=${cm}`)
       } else skip('T6 latex-suite 自绘面板', '详情页打不开')

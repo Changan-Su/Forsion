@@ -117,11 +117,13 @@ for (const id of ['counter', 'mini-counter']) {
         if (!n) empty = ctx.ui.mountEmptyState(body, { icon: 'plus', title: { zh: '还没开始计数', en: 'Nothing counted yet' }, action: { label: { zh: '加一', en: 'Add one' }, run: inc } })
       }
       const off = view?.onParamsChanged?.((params) => { picker.update({ value: String(params.counterId || 'daily') }); render() })
+      // Saved counts that can't be read reject (code 'plugin-data-unreadable', 2026-11-17+): keep showing nothing and
+      // don't save over them. change() rejects too, so a click can't overwrite the stored file with zeros.
       Promise.resolve(ctx.loadData()).then((data) => {
         if (disposed) return
         counts = readCounts(data)
         render()
-      })
+      }, (e) => console.warn('[sample] stored counts could not be read', e))
       render()
       return () => { disposed = true; off?.(); empty?.dispose(); picker.dispose(); head.dispose(); body.remove() }
     },
