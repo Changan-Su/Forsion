@@ -210,6 +210,7 @@
     "check:taskbox": "node scripts/e2e-editor.cjs --check=taskbox",
     "check:focuscost": "node scripts/e2e-editor.cjs --check=focus-cost",
     "check:table": "node scripts/e2e-editor.cjs --check=unified-table",
+    "check:tablehover": "node scripts/e2e-editor.cjs --check=table-hover",
     "check:unifiedsync": "node scripts/e2e-editor.cjs --check=unified-sync",
     "check:editorai": "node scripts/e2e-editor.cjs --check=editor-ai",
     "check:menus": "node scripts/e2e-editor.cjs --check=editor-menus",

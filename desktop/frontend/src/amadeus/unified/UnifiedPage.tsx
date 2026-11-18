@@ -108,7 +108,7 @@ import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
-import { TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
+import { TableAxisMenu, TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
 import { ColumnWidthMenu } from './ColumnWidthMenu'
 import { BlockColorMenu } from './BlockColorMenu'
 import { blockColorTr, calloutTokenEditable, colorTargetAtCursor, dispatchBlockColor, setCalloutMeta } from './blockColorCommands'
@@ -4143,6 +4143,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         <IconPicker x={calloutIconPick.x} y={calloutIconPick.y} current={calloutIconPick.current}
           onPick={pickCalloutIcon} onClose={() => { setCalloutIconPick(null); layer.getView()?.focus() }} />
       )}
+      {/* 表格行首 / 列首把手的菜单(tableHover.ts 打开;只装表格区,不带整表的删除 / 复制)。 */}
+      <TableAxisMenu getView={() => layer.getView()} readOnly={readOnly} />
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>

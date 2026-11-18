@@ -2340,11 +2340,14 @@ body.amx-marquee-active * {
   box-shadow: inset 2px 0 0 var(--primary);
 }
 
-/* 表格减线(10-02 用户拍板 a5):表头不垫底色、灰字中等字重;格线淡一半;格内段落不带上下边距(原来把行撑到 44px)。
+/* 表格减线(10-02 用户拍板 a5):格线淡一半;格内段落不带上下边距(原来把行撑到 44px)。
+   表头(11-17「页面编辑对齐 Notion」第 3 条用户拍板,改掉 a5 的「表头不垫底色、中等字重」):浅底 + 半粗 + 次级字色,
+   让第一行一眼看得出是表头;不提供关掉(GFM 一定有表头行)。悬停加行列 / 行列把手见 unified/tableHover.ts。
    表格线本身保留(DESIGN §5:表格线是信息)。写在这里而不是上面 th,td 那条:同特异性,放后面才压得住。 */
 .am-app .milkdown .ProseMirror th {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-muted);
+  background: var(--overlay-light);
 }
 .am-app .milkdown .ProseMirror :is(th, td) {
   border-color: color-mix(in srgb, var(--border) 55%, transparent);
