@@ -685,6 +685,28 @@ const SCENES = {
     await page.evaluate(() => getSelection().removeAllRanges())
     const elsewhere = [await tap(text('q2')), await tap(page.locator(`${CHAT} .t2c-ta`).first())]
     await page.evaluate(() => document.activeElement?.blur())
+    // an answer on its way with nothing written yet: its name row (and the dot in it) is left out like any other, so the
+    // line that says it is thinking is what tells the answer is coming
+    const app = moduleUrl('../desktop/frontend/src/stores/appStore.ts')
+    const setLive = (on) => page.evaluate(async ([url, live, at]) => {
+      const { useApp } = await import(/* @vite-ignore */ url)
+      useApp.setState((s) => {
+        const sid = Object.keys(s.messagesBySession).find((k) => s.messagesBySession[k].some((m) => m.id === 'st-q1'))
+        const rows = s.messagesBySession[sid].filter((m) => m.id !== 'st-q9')
+        return { messagesBySession: { ...s.messagesBySession, [sid]: live ? [...rows, { id: 'st-q9', role: 'assistant', content: '', status: 'streaming', timestamp: at }] : rows } }
+      })
+    }, [app, on, T0])
+    await setLive(true)
+    await page.waitForSelector(`${CHAT} #tocmsg-st-q9`, { timeout: 5000 })
+    await page.waitForTimeout(400)
+    const coming = await page.evaluate((q) => {
+      const m = document.querySelector(q), line = m.querySelector('.chat-thinking-live')
+      return { quiet: m.getAttribute('data-quiet'), name: getComputedStyle(m.querySelector('.t2-name')).display, line: line ? line.textContent.trim() : null, h: line ? line.getBoundingClientRect().height : 0 }
+    }, `${CHAT} #tocmsg-st-q9`)
+    const whileComing = await messageChrome(page)
+    await page.screenshot({ path: path.join(OUT, `chat-quiet-coming${DARK ? '-dark' : ''}.png`) })
+    await setLive(false)
+    await page.waitForTimeout(300)
     await page.evaluate((q) => { const el = document.querySelector(q); el.scrollTop = el.scrollHeight }, `${CHAT} .t2-stream`)
     const of = (rows, id) => rows.find((r) => r.id === id) || {}
     const brief = (rows) => JSON.stringify(rows.map((r) => `${r.id}[${r.quiet}]${r.name ? ' name' : ''}${r.time ? ' time' : ''}${r.keys ? ` keys=${r.keys}` : ''}${r.tapped ? ' tapped' : ''}`))
@@ -699,6 +721,7 @@ const SCENES = {
       ['a tap on a code block\'s copy key is not a tap on the message', idsOf(onKey, (r) => r.tapped) === '', brief(onKey)],
       ['with text selected a tap only drops the selection', idsOf(onSelected, (r) => r.tapped) === '', brief(onSelected)],
       ['a tap elsewhere (the input) puts the message back', idsOf(elsewhere[0], (r) => r.tapped) === 'q2' && idsOf(elsewhere[1], (r) => r.tapped) === '', brief(elsewhere[1])],
+      ['an answer still on its way: no name row, the line that says it is thinking shows; the row of keys has left the answer before it', /\bsolo\b/.test(coming.quiet || '') && /\blast\b/.test(coming.quiet || '') && coming.name === 'none' && coming.line === '思考中' && coming.h > 0 && !of(whileComing, 'q8').keys && !of(whileComing, 'q8').time, JSON.stringify({ coming, rows: JSON.parse(brief(whileComing)) })],
     ]
   },
   'chat-quiet-team': async (page) => {
