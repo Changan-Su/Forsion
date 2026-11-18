@@ -31,7 +31,7 @@
   line-height: 1.5;
   text-decoration: none;
   cursor: pointer;
-  transition: background-color var(--dur-fast, 120ms) ease, color var(--dur-fast, 120ms) ease;
+  transition: background-color var(--duration-fast), color var(--duration-fast);
 }
 .am-app .milkdown .ProseMirror a.amx-toc-item:hover {
   background: var(--overlay-subtle);
