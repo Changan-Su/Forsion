@@ -29,7 +29,8 @@ registerMessages({
 const OPEN_DELAY = 500
 const CLOSE_DELAY = 250
 /** 悬停卡认的两种目标:链接,与脚注上标(R-18)。 */
-const HOVER_SEL = 'a[href], sup[data-type="footnote_reference"]'
+// data-no-linkcard:不是正文里的链接(页内目录块的条目是 `#标题` 锚点,没有可编辑的 link mark)—— 不弹卡。
+const HOVER_SEL = 'a[href]:not([data-no-linkcard]), sup[data-type="footnote_reference"]'
 
 interface FootHover {
   /** 上标上显示的编号(没编号时是 label)。 */

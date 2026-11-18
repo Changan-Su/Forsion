@@ -16,7 +16,8 @@ export interface UnifiedHeading {
 export function docHeadings(doc: ProseNode): UnifiedHeading[] {
   const out: UnifiedHeading[] = []
   doc.descendants((n: ProseNode, pos: number) => {
-    if (n.type.name !== 'heading') return true
+    // 别的文本块(段落 / 代码块)里只有行内内容,不会再有标题 —— 不下钻,长笔记里每次重算只走块级节点(页内目录块逐帧跟着算)。
+    if (n.type.name !== 'heading') return !n.isTextblock
     const raw = Number((n.attrs as { level?: unknown } | undefined)?.level)
     const level = Number.isFinite(raw) ? Math.min(6, Math.max(1, raw)) : 1
     const text = n.textContent.trim()

@@ -9,6 +9,7 @@ import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkStrike from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import { platformPlayer } from './platformVideo'
 import { CALLOUT_TOKEN_SRC, parseCalloutMeta } from '../calloutToken'
+import { parseTocRange, TOC_LANG } from '../tocBlock'
 
 /** 标注首行:令牌(可带元数据位)+ 折叠符 + 标题。分组 1 = 类型,2 = 元数据,3 = 折叠符,4 = 标题。 */
 const CALLOUT_LINE_RE = new RegExp(`^${CALLOUT_TOKEN_SRC}([+-])?\\s*(.*)`)
@@ -119,6 +120,36 @@ export function renderPublicMarkdown(
       .map((n) => [n.identifier, n]),
   )
   let heading = 0
+  /** 正文里每个标题和它在下面 render 里拿到的 id 序号(同一遍深度优先、同一个起点),给 ```toc 目录块指链接。 */
+  const numbered: Array<{ depth: number; text: string; n: number }> = []
+  /** ```toc 页内目录块 → 本页标题的嵌套列表(锚点链接到标题 id)。范围按源码级别(不加 headingOffset);
+   *  范围内没有标题就什么都不出(发布页上没有「加几个标题」这种编辑提示)。 */
+  const tocNav = (body: string): string => {
+    const { min, max } = parseTocRange(body)
+    const items = numbered.filter((h) => h.depth >= min && h.depth <= max)
+    if (!items.length) return ''
+    const prefix = escapeHtml(options.idPrefix || 'md')
+    let out = ''
+    const liOpen: boolean[] = []
+    const openList = (): void => { out += '<ul>'; liOpen.push(false) }
+    const closeItem = (): void => { if (liOpen[liOpen.length - 1]) { out += '</li>'; liOpen[liOpen.length - 1] = false } }
+    const closeList = (): void => { closeItem(); out += '</ul>'; liOpen.pop() }
+    let depth = Math.min(...items.map((h) => h.depth))
+    openList()
+    for (const h of items) {
+      while (depth < h.depth) {
+        if (!liOpen[liOpen.length - 1]) { out += '<li>'; liOpen[liOpen.length - 1] = true }
+        openList()
+        depth++
+      }
+      while (depth > h.depth) { closeList(); depth-- }
+      closeItem()
+      out += `<li><a href="#${prefix}-${h.n}">${escapeHtml(h.text)}</a>`
+      liOpen[liOpen.length - 1] = true
+    }
+    while (liOpen.length) closeList()
+    return `<nav class="md-toc" aria-label="${zh ? '目录' : 'Table of contents'}">${out}</nav>`
+  }
   const renderChildren = (n: MdNode): string =>
     (n.children ?? []).map(render).join('')
   const media = (url: string, poster?: MdNode): string | null => {
@@ -227,6 +258,7 @@ export function renderPublicMarkdown(
       case 'table':
         return `<div class="md-table-wrap"><table>${(n.children ?? []).map((row, i) => `<${i ? 'tbody' : 'thead'}><tr>${(row.children ?? []).map((cell) => `<${i ? 'td' : 'th'}>${renderChildren(cell)}</${i ? 'td' : 'th'}>`).join('')}</tr></${i ? 'tbody' : 'thead'}>`).join('')}</table></div>`
       case 'code':
+        if (n.lang === TOC_LANG) return tocNav(n.value ?? '')
         return `<pre><code${n.lang ? ` class="language-${escapeHtml(n.lang.replace(/[^\w-]/g, ''))}"` : ''}>${escapeHtml(n.value)}</code></pre>`
       case 'thematicBreak':
         return '<hr>'
@@ -245,6 +277,11 @@ export function renderPublicMarkdown(
   let title = ''
   if (nodes[0]?.type === 'heading' && nodes[0].depth === 1)
     title = text(nodes.shift()!)
+  const number = (n: MdNode): void => {
+    if (n.type === 'heading') numbered.push({ depth: n.depth ?? 2, text: text(n), n: numbered.length + 1 })
+    else n.children?.forEach(number)
+  }
+  nodes.forEach(number)
   let html = '',
     section = false
   for (let i = 0; i < nodes.length; i++) {

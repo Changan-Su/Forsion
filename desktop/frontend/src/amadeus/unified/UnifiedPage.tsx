@@ -82,7 +82,7 @@ import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, re
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
-import { createEmbedLayer } from './embedLayer'
+import { caretBelowEmbed, createEmbedLayer } from './embedLayer'
 import { documentAgentFence, newDocAgentSpec, serializeDocAgentSpec } from '../blocks/documentAgent/format'
 import { instructionsOf, pageInstructionContext } from './pageInstructions'
 import { reconcileTr, type ReconcileChange } from './reconcileDiff'
@@ -1079,7 +1079,9 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
     // 整块型(代码/表格/分隔线/公式/[[/按钮):scaffold 本身就是要插的 markdown。
     // 公式骨架 `$$  $$`:光标落在两对 `$$` 之间(R-17),而不是行尾 —— 否则插完还得往回挪三格才能开写。
-    insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
+    const ok = insertMd(item.scaffold, 'cursor', item.key === 'math' ? { caretBack: 3 } : undefined)
+    // 目录块的源码是藏着的:光标别留在里面(接着打字会写进源码 / 并进下一个标题),落到它下面的空行。
+    if (ok && item.key === 'toc') getInstance()?.action((ctx) => caretBelowEmbed(ctx.get(editorViewCtx)))
   }
   applySlashRef.current = applySlash // 交出去的是恒等身份 stableApply,真身逐渲染刷新
 
@@ -1859,7 +1861,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         // 折叠失败时这个回调根本不会被调,清零动作放在它里面就永远等不到。
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
-      ...createEmbedLayer({ path, readOnly,
+      ...createEmbedLayer({ path, readOnly, flash: flashCiteTip,
         // 「打开」键 = 点双链同一口径:没带修饰键时文件类开在旁边那半屏,笔记就地开(见 MarkdownBlock 的 onOpenWiki)。
         open: (target, o) => void scoped.getState().openWikiLink(target, path, o ?? { split: true }),
         alive: () => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current,
@@ -3990,8 +3992,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           if (href.startsWith('#')) {
             let title = href.slice(1)
             try { title = decodeURIComponent(title) } catch { /* malformed escapes remain literal */ }
-            title = title.replace(/-/g, ' ')
-            const heading = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])].find((h) => h.textContent?.toLowerCase() === title.toLowerCase())
+            const heads = [...(readingRoot.current?.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6') ?? [])]
+            // 原文先比(目录块的 `#标题` 是原样编码的,标题里本来就带 `-` 的也要找得到),再按 slug 习惯把 `-` 当空格。
+            const same = (t: string): HTMLElement | undefined => heads.find((h) => h.textContent?.toLowerCase() === t.toLowerCase())
+            const heading = same(title) ?? same(title.replace(/-/g, ' '))
             if (heading) revealBlockAtTop(heading)
           } else if (hrefKind(href) === 'external') window.open(normalizeHref(href)!, '_blank', 'noopener,noreferrer')
           else if (hrefKind(href) === 'note') void scoped.getState().openWikiLink(noteLinkTarget(href, path, scoped.getState().pages), path)
