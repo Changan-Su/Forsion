@@ -10,25 +10,60 @@ import { label, type Command, type RibbonItem } from './types'
  *   - 同上但宿主没有账号项(没装账号桥 = 没有头像),或某一项点不了(没有 onClick,进不了菜单)→ 留在「⋯」最前。 */
 const isFootItem = (i: RibbonItem): boolean => i.id === 'rb-settings' || !!i.mobileFoot
 
-/** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。 */
-export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean): RibbonItem[] {
-  return nativeSpaces && all.some((i) => i.id === 'rb-account') ? all.filter((i) => isFootItem(i) && !!i.onClick) : []
+/** 手机(宿主画底部导航栏 × 竖屏单列)上「⋯」只装这一页自己的事(2026-11-18):原来住在里面的全局项各有一个去处 ——
+ *   - 两个全局开关(明暗、命令面板)跟着设置进**头像菜单**;
+ *   - 其余点得了的入口(商店、成就、反馈、首方的 Ribbon 入口…)进 Dock「全部」那张半屏的最后一组(allSheetItems);
+ *   - 没处去的才留在「⋯」:带 component 的项(原生半屏画不了)、没有头像时的设置和那两个开关、Dock 没有「全部」格时的入口。
+ *  「一项要么在这三处之一,不会都没有」是这三个函数共同守的口径,改一个要看另外两个。平板横屏(并排左栏)不算手机,照旧。 */
+export interface MoreSeats {
+  /** 手机:宿主画底部导航栏 × 竖屏单列。 */
+  phone: boolean
+  /** Dock 上有「全部」那一格(Space 多过 Dock 的格数)—— 没有它,「全部」半屏无从打开。 */
+  allCell: boolean
+}
+const NO_SEATS: MoreSeats = { phone: false, allCell: false }
+/** 跟着设置进头像菜单的全局开关(手机)。 */
+const ACCOUNT_SWITCHES: ReadonlySet<string> = new Set(['rb-mode', 'rb-cmd'])
+const isAccountSwitch = (i: RibbonItem): boolean => i.side === 'bottom' && ACCOUNT_SWITCHES.has(i.id)
+
+/** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。手机上再带两个全局开关,排在后面
+ *  (带 component 的不收:头像菜单只画图标和名字,组件里的东西会丢 —— 留在「⋯」)。 */
+export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean, phone = false): RibbonItem[] {
+  if (!nativeSpaces || !all.some((i) => i.id === 'rb-account')) return []
+  const usable = all.filter((i) => !!i.onClick)
+  return [...usable.filter(isFootItem), ...(phone ? usable.filter((i) => !isFootItem(i) && isAccountSwitch(i) && !i.component) : [])]
 }
 
-/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉账号与住在别处的 foot 项(见上)。原生底栏下没处去的 foot 项排最前。 */
-export function moreItems(all: readonly RibbonItem[], nativeSpaces: boolean): RibbonItem[] {
-  const elsewhere = new Set(nativeSpaces ? accountMenuItems(all, true) : all.filter(isFootItem))
+/** 手机上从「⋯」挪进「全部」半屏最后一组的入口(见 MoreSeats 上方);不是手机或 Dock 没有「全部」格时为空。 */
+export function allSheetItems(all: readonly RibbonItem[], seats: MoreSeats): RibbonItem[] {
+  if (!seats.phone || !seats.allCell) return []
+  return all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !isFootItem(i) && !isAccountSwitch(i) && !!i.onClick && !i.component)
+}
+
+/** 「⋯」菜单收哪些 ribbon 项:底部区,去掉账号与住在别处的项(见上)。原生底栏下没处去的 foot 项排最前。 */
+export function moreItems(all: readonly RibbonItem[], nativeSpaces: boolean, seats: MoreSeats = NO_SEATS): RibbonItem[] {
+  const elsewhere = new Set(nativeSpaces ? [...accountMenuItems(all, true, seats.phone), ...allSheetItems(all, seats)] : all.filter(isFootItem))
   const items = all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !elsewhere.has(i))
   return nativeSpaces ? [...items.filter(isFootItem), ...items.filter((i) => !isFootItem(i))] : items
 }
 
 export interface MoreCommandGroup { id: string; title: string; commands: Command[] }
 
-export function moreCommandGroups(commands: readonly Command[]): MoreCommandGroup[] {
+/** `phone` = 手机上「⋯」只装这一页的事:声明了 `moreGroup.when` 的组只在它答 true 时列出(插件的命令只在那个插件自己的
+ *  页面上;求值抛错按 false)。不是手机(抽屉形态、平板横屏)不看 `when`,照旧全列。 */
+export function moreCommandGroups(commands: readonly Command[], phone = false): MoreCommandGroup[] {
   const groups = new Map<string, MoreCommandGroup>()
+  const here = new Map<string, boolean>() // 一组问一次:整组跟第一条命令的 when 走(同 title),后面几条写没写都一样
   for (const c of commands) {
     const g = c.moreGroup
     if (!g || typeof g.id !== 'string' || !g.id) continue
+    let ok = here.get(g.id)
+    if (ok === undefined) {
+      ok = true
+      if (phone && g.when) { try { ok = !!g.when() } catch { ok = false } }
+      here.set(g.id, ok)
+    }
+    if (!ok) continue
     let entry = groups.get(g.id)
     if (!entry) {
       entry = { id: g.id, title: safeLabel(g.title, ''), commands: [] }

@@ -79,6 +79,12 @@
 ::highlight(amx-find) {
   background-color: color-mix(in srgb, var(--accent-ink, #6c5ce7) 22%, transparent);
 }
+/* 窄屏(手机):整条收在视口里,左右各留 8px —— 输入框让出宽度,按钮不动。桌面上这个上限碰不到。
+   --uiz = 页面整体的缩放(手机上 body 带 zoom,100vw 是没缩放的宽,要先除回来)。 */
+.amx-findbar { box-sizing: border-box; max-width: calc(100vw / var(--uiz, 1) - 16px); }
+.amx-findbar-rows, .amx-findbar-row { min-width: 0; }
+.amx-findbar input { flex: 0 1 180px; min-width: 56px; }
+
 ::highlight(amx-find-active) {
   background-color: color-mix(in srgb, #f5a623 78%, transparent);
   color: #1b1206;

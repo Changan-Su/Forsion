@@ -247,12 +247,35 @@ export function textareaFindProvider(ta: HTMLTextAreaElement): FindReplaceProvid
 export function pickRoot(): HTMLElement | null {
   const focused = document.activeElement
   const near = focused instanceof Element ? focused.closest('.wb-view, .mb-view, .fs-overlay') : null
-  return ((near?.getClientRects().length ? near : null)
+  // 手机(原生外壳 × 竖屏单列)两级导航:收起的那张列表还挂着、只是滑到了屏外,焦点也可能还留在它里面;而且它在 DOM 里排在
+  // 主区前面。所以手机上只认屏上的那一面(主区在屏上就是主区,人在列表层就是列表)。别的形态一概照旧。
+  const phone = !!document.querySelector(PHONE_SHELL)
+  return ((near?.getClientRects().length && !(phone && near.classList.contains('mb-view') && !onScreen(near)) ? near : null)
     ?? document.querySelector('.dv-render-overlay[data-lcl-active="true"] .wb-view')
     ?? document.querySelector('.dv-active-group .wb-view')
     ?? [...document.querySelectorAll('.wb-view--main')].find(el => el.getClientRects().length)
+    ?? (phone ? [...document.querySelectorAll('.mb-view')].find(onScreen) : null)
     ?? document.querySelector('.mb-view')
     ?? document.body) as HTMLElement | null
+}
+/** 手机形态的外壳:原生宿主画底部导航栏 × 不是并排的宽屏(和 lcl SingleColumnHost 的 phoneNow 是同一件事的 DOM 写法)。 */
+const PHONE_SHELL = '.mb-shell[data-native-chrome]:not([data-wide])'
+/** 画着、而且有一部分在视口的左右范围内(滑到屏外的抽屉页有尺寸,但不是「正在看的这一面」)。 */
+function onScreen(el: Element | null | undefined): boolean {
+  if (!el || !el.getClientRects().length) return false
+  const r = el.getBoundingClientRect()
+  return r.right > 1 && r.left < window.innerWidth - 1
+}
+/** 这一面顶上被悬浮的胶囊顶栏盖住多高:查找条要落在它下面。只有手机(原生外壳 × 竖屏单列)让 —— 那里的查找条是从
+ *  页面自己的「⋯」开出来的;别的形态(桌面、Mini、网页抽屉、平板横屏)位置和原来一样,不读这个变量。 */
+function chromeRoom(root: HTMLElement): number {
+  if (!root.closest(PHONE_SHELL)) return 0
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;width:0;height:var(--mb-top, 0px)'
+  root.appendChild(probe)
+  const h = probe.getBoundingClientRect().height
+  probe.remove()
+  return h
 }
 
 /** 单行选区的文字(开条预填用):正文选区或输入框 / textarea 里的选区;跨行、过长、纯空白的不算。 */
@@ -518,7 +541,7 @@ function FindBarBody(): React.ReactElement {
   useLayoutEffect(() => {
     const place = (): void => {
       const r = root?.getBoundingClientRect()
-      if (r) setBox({ top: r.top + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
+      if (r && root) setBox({ top: r.top + chromeRoom(root) + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
     }
     place()
     window.addEventListener('resize', place)

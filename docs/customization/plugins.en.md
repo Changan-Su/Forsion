@@ -43,10 +43,10 @@ If a plugin depends on a program on your computer, its detail page lists it and 
 
 The Forsion Android app can also install Forsion plugins, using the same plugin interface as desktop:
 
-- **Installed only through the app market** — "⋯" menu → App market; on phones the market lists only Forsion plugins (install skills, Agents, engine plugins, themes and Spaces on desktop). Plugins are enabled right after installing, with no restart.
+- **Installed only through the app market** — the dock's "All" → the "More" group → Store (on a tablet in landscape and in the web drawer layout it is still in the "⋯" menu); on phones the market lists only Forsion plugins (install skills, Agents, engine plugins, themes and Spaces on desktop). Plugins are enabled right after installing, with no restart.
 - **Plugins live in the app's private folder**, not in any vault; Settings → Plugins works as usual for enabling, disabling, details and uninstalling (uninstalling keeps the settings the plugin saved, so they're still there after reinstalling). There's no visible plugin folder on the phone, so there's no "Open plugins folder / Create sample plugin".
 - **Desktop-only plugins** — a plugin whose manifest says `"isDesktopOnly": true` (for example one that depends on a local program, Node or an engine plugin) is refused on the phone with the reason; one already in the list shows "Desktop only", and its code never runs.
-- **Commands in "⋯"** — besides the command palette, commands a plugin registers are listed directly in the top bar's "⋯" menu, in one section per plugin (titled with the plugin name), so on the phone you don't need to open the command palette first.
+- **Commands in "⋯"** — besides the command palette, commands a plugin registers are listed directly in the top bar's "⋯" menu, in one section per plugin (titled with the plugin name). On a phone in portrait "⋯" holds only what belongs to the page on screen: a plugin's commands are listed on that plugin's own pages (its Space, the views it registers); elsewhere, open the command palette (in the avatar menu).
 - **Home is a single page** — a view opened by running a plugin command on Home takes you to that plugin's own Space and opens there; if the plugin has no Space, the view covers Home for now and is closed automatically the next time you return to Home.
 - Not supported on phones yet: plugin status bar items (phones have no status bar), and engine plugins / Agents / skills / Spaces inside plugin bundles.
 

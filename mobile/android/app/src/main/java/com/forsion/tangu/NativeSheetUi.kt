@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -65,6 +66,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -252,7 +254,11 @@ private fun ChecklistContent(p: SheetPayload.Checklist, ticked: List<String>, on
 
 private const val GRID_COLUMNS = 4
 
-/** One tile of a grid section: the icon on a rounded square, the name under it; the checked one is where you are. */
+/**
+ * One tile of a grid section: the icon on a rounded square, the name under it; the checked one is where you are.
+ * A tile has no second line. A `detail` (what the tile's dot stands for, e.g. something to claim) is drawn as a dot on
+ * the square's corner and read out with the name (`nativeSheet.itemDot.<id>`).
+ */
 @Composable
 private fun RowScope.MenuTile(item: MenuItemSpec, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
@@ -260,17 +266,25 @@ private fun RowScope.MenuTile(item: MenuItemSpec, onClick: () -> Unit) {
     val tint = (if (item.checked) colors.primary else colors.onSurfaceVariant).copy(alpha = if (enabled) 1f else .38f)
     Column(
         Modifier.weight(1f).clip(RoundedCornerShape(18.dp))
-            .semantics { selected = item.checked }
+            .semantics { selected = item.checked; if (item.detail.isNotBlank()) stateDescription = item.detail }
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .testTag("nativeSheet.item.${item.id}")
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier.size(56.dp).clip(RoundedCornerShape(18.dp))
-                .background(if (item.checked) colors.primary.copy(alpha = .16f) else colors.onSurface.copy(alpha = .06f)),
-            contentAlignment = Alignment.Center,
-        ) { if (item.icon != null) NativeIconView(item.icon, tint, 26.dp) }
+        Box(Modifier.size(56.dp)) {
+            Box(
+                Modifier.matchParentSize().clip(RoundedCornerShape(18.dp))
+                    .background(if (item.checked) colors.primary.copy(alpha = .16f) else colors.onSurface.copy(alpha = .06f)),
+                contentAlignment = Alignment.Center,
+            ) { if (item.icon != null) NativeIconView(item.icon, tint, 26.dp) }
+            if (item.detail.isNotBlank()) {
+                Box(
+                    Modifier.align(Alignment.TopEnd).size(10.dp).clip(CircleShape).background(colors.error)
+                        .testTag("nativeSheet.itemDot.${item.id}"),
+                )
+            }
+        }
         Text(
             item.label, Modifier.padding(top = 6.dp, start = 2.dp, end = 2.dp),
             color = (if (item.checked) colors.primary else colors.onSurface).copy(alpha = if (enabled) 1f else .38f),

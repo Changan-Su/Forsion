@@ -152,7 +152,7 @@ export {
 export type {
   NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
   NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
-  NativeChromeSpace, NativeHaptic,
+  NativeChromeSpace, NativeHaptic, NativeChromeExtras, NativeChromePageAction,
 } from './nativeChrome'
 
 export type { ViewLayoutHints } from './layoutCoordinator'

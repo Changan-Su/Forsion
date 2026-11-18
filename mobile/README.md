@@ -225,6 +225,12 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
   **设置与「Forsion Unit 切换」是这张菜单里的两行**（同微信「我 → 设置」；10-04 那一版排在「⋯」最前，一天后按用户意见搬走），所以只在第一层页面点得到；
   未登录 / 登录过期时点头像同样开菜单（登录是其中一行），不再直接跳登录。判据只有一份：`lcl/engine/moreSheet.ts` 的 `accountMenuItems` / `moreItems`
   —— 一项要么在头像菜单、要么在「⋯」；宿主没有账号项（没有头像）时这两项留在「⋯」最前。
+- **手机竖屏的「⋯」只装这一页的事**（2026-11-18；判据 `SingleColumnHost` 的 `phoneNow()` = 宿主画底部导航栏 × 不是并排的宽屏）：
+  原来住在「⋯」里的全局项各有一个去处 —— 明暗、命令面板跟着设置进头像菜单；商店、成就、反馈、首方的 Ribbon 入口进 Dock「全部」半屏的「更多」一组
+  （亮着红点的，点挂在 Dock「全部」那一格上，状态字段 `allDot`；半屏里那一格的图标角上也有一个点，红点的意思经 `detail` 传过去、读屏时念出来）；没处去的（带 `component` 的项、没有头像时的设置和开关、Dock 没有「全部」格时的入口）才留在「⋯」。
+  三处的口径在 `lcl/engine/moreSheet.ts`（`MoreSeats`），一项恰好在其中一处。页面自己的项由视图经 `useNativeChromeExtras` 的 `more` 声明（对话页：置顶 / 重命名 / 归档 / 在这条对话里查找）；
+  这一页什么都没有时状态里带 `more: false`，原生顶栏不画这颗钮（右胶囊空了也不画）。手机上也没有「新建标签页」和前进后退那一行（系统返回走同一份页内历史）；
+  已有的多个标签照旧能切、能关。平板横屏、抽屉形态（网页 / 手机框）一概不变。台架：`stage:phone` 的 `page-more` 场景。
 - **本地 / 云端**（2026-10-05）：原先占着每个左栏顶部一行的「本地 | 云端」胶囊，手机上并进了「Forsion Unit 切换」弹层最前面的「智库」一段（桌面 08-23 就并进了 Unit 切换器，同样排在最前）。
   它只换笔记库（`window.amadeusVaultMode.switch`），与同一弹层里的「在哪运行」是两根轴。弹层没上架（无 `unitsList` 桥）时 `VaultSideSwitch` 仍画胶囊，库切换不会两头都没有。
 - **`NativeSheet`**：通用 Compose 半屏底单，四种 `kind`：`menu`（分组 / 勾选 / 子菜单 / 搜索 / 行尾按钮）、`checklist`、`prompt`、`confirm`。
@@ -234,7 +240,8 @@ Kotlin 在 `NativeChrome*` / `NativeSheet*`。没装宿主（桌面、Web、浏�
     还在重弹的只剩标签页底单的「×」关标签。
   已接入：标签页底单、更多底单（无自定义组件项时）、`ContextMenu` 原语（`pickNativeCtxItem`）、`askString`、无 children 的 `ConfirmDialog`。
 - **「⋯」里的插件命令**：命令声明 `moreGroup = { id, title }` 就按组列进「⋯」（Web sheet 与原生底单同一份整形，`lcl/engine/moreSheet.ts`）；
-  外置插件的命令由 `amadeusPlugins.ts` 的桥按插件分节（节标题 = 插件名，开关命令带勾选态）。手机没有 ribbon，这是插件命令的一键入口。
+  外置插件的命令由 `pluginCommandBridge.ts` 的桥按插件分节（节标题 = 插件名，开关命令带勾选态）。手机没有 ribbon，这是插件命令的一键入口；
+  手机竖屏上这一节只在插件自己的页面出现（`moreGroup.when`，桥填的是 `pluginOwnsPage`：屏上是它带的 Space 或它注册的视图），别的页面走命令面板。
 - **应用市场**与设置同款走 `page` 模式：列表页「返回」= 退出市场；详情页标题 = 条目名，「返回」= 回列表、「×」= 退出市场。
 - **`SheetMenu`**（`lcl/engine/nativeSheetMenu.ts`）：一份条目（文案 + `run` 回调）同时喂 Web 菜单与原生底单。
   点击触发的菜单用 `openNativeSheetMenu(build, { onFallback })`（无宿主同步返回 false，走原 Web 路径）；

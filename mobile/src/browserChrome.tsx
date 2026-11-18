@@ -170,7 +170,8 @@ export function BrowserChrome() {
               {chrome.search && <Action action="search" label={chrome.search}><Search size={20} /></Action>}
               {chrome.right && <Action action="right" label={chrome.labels.right}><PanelRight size={20} /></Action>}
               {chrome.tabCount > 1 && <Action action="tabs" label={chrome.labels.tabs}><span className="mb-tabcount">{chrome.tabCount}</span></Action>}
-              <Action action="more" label={chrome.labels.more}><MoreHorizontal size={20} /></Action>
+              {/* On a phone "more" is the page's own menu: a page with nothing of its own sends `more: false`. */}
+              {chrome.more !== false && <Action action="more" label={chrome.labels.more}><MoreHorizontal size={20} /></Action>}
               {!atDetail && !showRail && account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
                 {account.avatar ? <img src={account.avatar} alt="" /> : account.loggedIn ? account.initial : <UserRound size={20} />}
               </button>}
@@ -179,7 +180,11 @@ export function BrowserChrome() {
       </header>
       {showDock && chrome.mode === 'shell' && <nav ref={dockRef} className="bmc-dock" aria-label={chrome.allLabel}>
         {dock.map((sp) => <Destination key={sp.id} sp={sp} badge={badges[sp.id]} />)}
-        {showAll && <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>}
+        {/* `allDot`: an entry of the all-Spaces sheet wants a look (something to claim, a reply) — the dot is on this cell. */}
+        {showAll && <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}>
+          <span className="bmc-destination-icon"><LayoutGrid size={22} />{chrome.allDot && <i className="bmc-badge" data-kind="unread" data-all-dot="" role="img" aria-label={chrome.allDot.label} />}</span>
+          <span>{chrome.allLabel}</span>
+        </button>}
       </nav>}
       {showRail && chrome.mode === 'shell' && <nav className="bmc-rail" aria-label={chrome.allLabel}>
         <div className="bmc-rail-cells" ref={railCellsRef}>
