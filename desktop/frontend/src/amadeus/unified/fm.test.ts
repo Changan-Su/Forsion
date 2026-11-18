@@ -424,3 +424,70 @@ describe('多行 flow 结构键 + 顶格收尾(N-2)', () => {
     expect(setAmadeusStructure(dup, null, CANVAS)).toContain(`amadeus_canvas: ${CANVAS}`)
   })
 })
+
+// ── page/5(版块,方向 B):amadeus_page 闸标记归结构区,有版块才发,去掉版块就随结构区摘掉 ──────────
+describe('page/5 结构区:schema 升降与闸标记', () => {
+  const SEC = '{"v":4,"rows":[{"columns":[{"refs":["s1"],"width":1}],"tail":"t1","section":{"bg":"blue"}}]}'
+  const COLS = '{"v":4,"rows":[{"columns":[{"refs":["c1"],"width":1},{"refs":["c2"],"width":1}],"tail":"t2"}]}'
+  const ICON = '---\nicon: "📘"\n---\n'
+  const fm5 = setAmadeusStructure(ICON, SEC, null)
+
+  it('有版块 → page/5 + amadeus_page 固定值,顺序 schema → page → layout', () => {
+    expect(fm5).toBe(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\nicon: "📘"\n---\n`)
+    expect(classifyPageSource(composeFm(fm5, BODY))).toBe('v4-structured')
+    expect(setAmadeusStructure(fm5, SEC, null)).toBe(fm5) // 不动点:每击都跑的派生不改字节
+  })
+
+  it('去掉最后一个版块、留两栏 → 与原生 page/4 逐字一样,没有 amadeus_page', () => {
+    const back = setAmadeusStructure(fm5, COLS, null)
+    expect(back).toBe(setAmadeusStructure(ICON, COLS, null))
+    expect(back).not.toMatch(/amadeus_page/)
+    expect(back).toContain('amadeus_schema: amadeus.page/4')
+  })
+
+  it('结构全去掉 → 零 amadeus_* 行,判素文件(孤儿闸标记会被判成 v3)', () => {
+    const plain = setAmadeusStructure(fm5, null, null)
+    expect(plain).toBe(ICON)
+    expect(classifyPageSource(composeFm(plain, BODY))).toBe('v4-plain')
+    expect(setAmadeusStructure(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\n---\n`, null, null)).toBe('')
+  })
+
+  it('没有版块的 page/4:每击派生逐字不动', () => {
+    const fm4 = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\nicon: "📘"\n---\n`
+    expect(setAmadeusStructure(fm4, COLS, null)).toBe(fm4)
+  })
+
+  it('闸标记被外部删掉 → 下一次真保存补回;值被改了 → 归位成固定值,不重成两行', () => {
+    const lost = fm5.replace('amadeus_page: v5\n', '')
+    expect(setAmadeusStructure(lost, SEC, null)).toBe(fm5)
+    const changed = fm5.replace('amadeus_page: v5', 'amadeus_page: pg_old')
+    expect(setAmadeusStructure(changed, SEC, null)).toBe(fm5)
+  })
+
+  it('闸标记不是用户属性:属性面板看不见,改属性时原样留着', () => {
+    expect(foreignFmObject(fm5)).toEqual({ icon: '📘' })
+    const next = setForeignFm(fm5, 'icon: "🚀"')
+    expect(next).toContain('amadeus_page: v5')
+    expect(next).toContain(`amadeus_layout: ${SEC}`)
+    const patched = patchFm(fm5, { icon: '🎯' })
+    expect(patched).toContain('amadeus_page: v5')
+    expect(patched).toContain('amadeus_schema: amadeus.page/5')
+  })
+
+  it('源码模式 fixStructKeys:只补不拆', () => {
+    // 手写进 page/4 的版块 → 升 page/5 + 闸标记
+    const hand = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${SEC}\n---\n`
+    expect(fixStructKeys(hand)).toBe(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\n---\n`)
+    // page/5 丢了闸标记 → 补回
+    expect(fixStructKeys(fm5.replace('amadeus_page: v5\n', ''))).toBe(fm5)
+    // 版块删光但还标着 page/5 → 不拆(下次可视模式保存归位)
+    const stale = `---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${COLS}\n---\n`
+    expect(fixStructKeys(stale)).toBe(stale)
+    // 结构全删、只剩我们的闸标记 → 摘掉(否则判 v3)
+    expect(fixStructKeys('---\namadeus_page: v5\nicon: "📘"\n---\n')).toBe(ICON)
+    // 别人的 amadeus_page 不碰
+    expect(fixStructKeys('---\namadeus_page: pg_x\n---\n')).toBe('---\namadeus_page: pg_x\n---\n')
+    // 合法的 page/5 原样
+    expect(fixStructKeys(fm5)).toBe(fm5)
+  })
+})

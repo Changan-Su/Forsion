@@ -11,13 +11,92 @@ import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, Schema } from '@milkdown/kit/prose/model'
+import { BLOCK_COLOR_NAMES } from '../blocks/markdown/blockColor'
 
 export interface LayoutColumn { refs: string[]; width: number }
 /** tail = 行尾界标锚(可选):规范辖域是「锚到下一锚或文件尾」,行在文件中间而行后内容无锚时,
  *  最后一列会把后续内容整个吞进来 —— 我们写盘的行一律带 tail 锚封底(语法仍是普通锚注释,
  *  外部工具零感知;layout 里记下 id,读侧折叠时一并吸收不留字面)。手写/升级的无 tail 行照旧到下一锚/EOF。 */
-export interface LayoutRow { columns: LayoutColumn[]; tail?: string }
+export interface LayoutRow { columns: LayoutColumn[]; tail?: string; section?: Record<string, unknown> }
 export interface LayoutV4 { v: 4; rows: LayoutRow[] }
+
+// ── 版块(方向 B,page/5)───────────────────────────────────────────────────────────────
+// 版块 = 带 `section` 样式的分栏行:一整块带底色和留白的区域,里面 1–4 栏(栏 = 卡片或素栏)。
+// 磁盘上就是 layout 行多一个 `section` 对象,正文仍是锚注释 + 普通 Markdown(Obsidian 照常读,
+// Agent 读到的是按顺序展开的 Markdown)。缺省值一律不写:`"section":{}` = 全缺省的版块。
+// 带版块的笔记由 structureKeysFor 升 page/5(老端只读,见 v4.ts PAGE_SCHEMA_V5)。
+// PM 侧 = amadeusColumnRow 的 `section` attr(null = 普通分栏);对象原样往返,未知键也带回去。
+export type SectionPad = 's' | 'm' | 'l'
+export type SectionAlign = 't' | 'm' | 'b'
+/** 渲染用的规整值。bg '' = 跟随主题(主题色混进纸面)。 */
+export interface SectionView { bg: string; pad: SectionPad; cards: boolean; valign: SectionAlign }
+export const SECTION_MAX_COLUMNS = 4
+export const SECTION_DEFAULTS: SectionView = { bg: '', pad: 'm', cards: true, valign: 't' }
+const PADS: readonly string[] = ['s', 'm', 'l']
+const ALIGNS: readonly string[] = ['t', 'm', 'b']
+
+/** 磁盘 / attr 里的 section 对象 → 规整值;认不出的取值回缺省(读侧容错,不改写原对象)。 */
+export function sectionView(raw: unknown): SectionView {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  return {
+    bg: typeof o.bg === 'string' && (BLOCK_COLOR_NAMES as readonly string[]).includes(o.bg) ? o.bg : '',
+    pad: typeof o.pad === 'string' && PADS.includes(o.pad) ? (o.pad as SectionPad) : 'm',
+    cards: o.cards !== false,
+    valign: typeof o.valign === 'string' && ALIGNS.includes(o.valign) ? (o.valign as SectionAlign) : 't',
+  }
+}
+
+/** 改版块样式 → 新对象(绝不就地改:PM attr 按值比较,共享引用一改全改)。等于缺省的键删掉,
+ *  未知键原样留着(将来的版本加的键,老一点的新端改别的样式时不能顺手吞掉)。 */
+export function patchSection(raw: unknown, patch: Partial<SectionView>): Record<string, unknown> {
+  const base = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, unknown>) } : {}
+  for (const k of Object.keys(patch) as Array<keyof SectionView>) {
+    const v = patch[k]
+    if (v === undefined) continue
+    if (v === SECTION_DEFAULTS[k]) delete base[k]
+    else base[k] = v
+  }
+  return base
+}
+
+/** section attr 的合法形态 = 普通对象;其余一律当「不是版块」。 */
+function asSection(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+
+export const isSectionRow = (node: ProseNode | null | undefined): boolean =>
+  !!node && node.type.name === 'amadeusColumnRow' && asSection(node.attrs.section) != null
+
+/** 一行至少几栏才成立:版块 1 栏也是版块,普通分栏要 2 栏。 */
+const minCells = (node: ProseNode): number => (isSectionRow(node) ? 1 : 2)
+
+/** 行的 DOM 属性(toDOM 与 data-section 往返:复制粘贴版块时样式跟着走)。 */
+function rowDomAttrs(node: ProseNode): Record<string, string> {
+  const base: Record<string, string> = { 'data-amx-colrow': '', 'data-tail': String(node.attrs.tail), class: 'amx-ucolrow' }
+  const sec = asSection(node.attrs.section)
+  if (!sec) return base
+  const v = sectionView(sec)
+  return {
+    ...base,
+    class: 'amx-ucolrow amx-usection',
+    'data-section': JSON.stringify(sec),
+    'data-sec-bg': v.bg || 'theme',
+    'data-sec-pad': v.pad,
+    'data-sec-cards': v.cards ? '1' : '0',
+    'data-sec-valign': v.valign,
+    'data-cols': String(Math.min(node.childCount, SECTION_MAX_COLUMNS)),
+  }
+}
+
+function sectionFromDom(dom: HTMLElement): Record<string, unknown> | null {
+  const raw = dom.dataset.section
+  if (raw == null) return null
+  try {
+    return asSection(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
 
 /** 规范 §3.3 锚注释(与 shared markers 同语法;这里只认整行注释形态)。 */
 const MARKER_RE = /^<!--\s*a\s+([A-Za-z0-9_-]+)\s*-->$/
@@ -32,6 +111,7 @@ export function parseLayoutJson(raw: string | null): LayoutV4 | null {
     for (const row of l.rows) {
       if (!row || !Array.isArray(row.columns) || row.columns.length < 1) return null
       if (row.tail != null && (typeof row.tail !== 'string' || !/^[A-Za-z0-9_-]+$/.test(row.tail))) return null
+      if (row.section != null && !asSection(row.section)) return null
       for (const col of row.columns) {
         // refs 至少一条:空列过形状校验后 fold 读 refs[0] 会对 markers 索引 undefined 直接抛错(Codex 终审)。
         if (!col || !Array.isArray(col.refs) || col.refs.length < 1 || !col.refs.every((r) => typeof r === 'string' && /^[A-Za-z0-9_-]+$/.test(r))) return null
@@ -94,13 +174,17 @@ export const columnRowSchema = $nodeSchema('amadeusColumnRow', () => ({
   // 不可整体选中(Codex Y-P0):行后段首退格的 selectNodeBackward 会选中整行,再一击就删掉
   // 两列内容;行/列的结构操作只走专用 UI(拖拽/菜单),不给通用 NodeSelection。
   selectable: false,
-  attrs: { tail: { default: '' } },
-  parseDOM: [{ tag: 'div[data-amx-colrow]', getAttrs: (dom) => ({ tail: (dom as HTMLElement).dataset.tail ?? '' }) }],
-  toDOM: (node) => ['div', { 'data-amx-colrow': '', 'data-tail': String(node.attrs.tail), class: 'amx-ucolrow' }, 0],
+  // section:版块样式(null = 普通分栏)。见文件头「版块」一节。
+  attrs: { tail: { default: '' }, section: { default: null } },
+  parseDOM: [{
+    tag: 'div[data-amx-colrow]',
+    getAttrs: (dom) => ({ tail: (dom as HTMLElement).dataset.tail ?? '', section: sectionFromDom(dom as HTMLElement) }),
+  }],
+  toDOM: (node) => ['div', rowDomAttrs(node), 0],
   parseMarkdown: {
     match: ({ type }) => type === 'amadeusColumnRow',
     runner: (state, node, type) => {
-      state.openNode(type, { tail: (node as { tail?: string }).tail ?? '' })
+      state.openNode(type, { tail: (node as { tail?: string }).tail ?? '', section: asSection((node as { section?: unknown }).section) })
       state.next(node.children)
       state.closeNode()
     },
@@ -206,7 +290,9 @@ function foldColumns(tree: MdNode, layout: LayoutV4 | null, onFolded?: () => voi
   const consumed = new Set<number>()
   const replaces: Array<{ from: number; to: number; node: MdNode }> = []
   for (const row of layout.rows) {
-    if (row.columns.length < 2) continue
+    const section = asSection(row.section)
+    const need = section ? 1 : 2 // 版块 1 栏也成行
+    if (row.columns.length < need) continue
     const flat = row.columns.flatMap((c) => c.refs)
     if (!flat.length) continue
     const ords = flat.map((r) => ordOf.get(r) ?? -1)
@@ -238,13 +324,13 @@ function foldColumns(tree: MdNode, layout: LayoutV4 | null, onFolded?: () => voi
         children: children.length ? children : [{ type: 'paragraph', children: [] }],
       })
     })
-    if (!ok || cells.length < 2) continue
+    if (!ok || cells.length < need) continue
     ords.forEach((o) => consumed.add(o))
     if (tailOrd != null) consumed.add(tailOrd)
     replaces.push({
       from: markers[ords[0]].idx,
       to: tailOrd != null ? markers[tailOrd].idx + 1 : spanEnd,
-      node: { type: 'amadeusColumnRow', tail: tailOrd != null ? row.tail : '', children: cells },
+      node: { type: 'amadeusColumnRow', tail: tailOrd != null ? row.tail : '', ...(section ? { section } : {}), children: cells },
     })
   }
   replaces.sort((a, b) => b.from - a.from)
@@ -286,7 +372,10 @@ export function deriveLayoutJson(doc: ProseNode): string | null {
     node.forEach((cell) => {
       columns.push({ refs: cellRefs(cell), width: Number(cell.attrs.width) || 1 })
     })
-    if (columns.length >= 2) rows.push({ columns, ...(node.attrs.tail ? { tail: String(node.attrs.tail) } : {}) })
+    const section = asSection(node.attrs.section)
+    if (columns.length >= (section ? 1 : 2)) {
+      rows.push({ columns, ...(node.attrs.tail ? { tail: String(node.attrs.tail) } : {}), ...(section ? { section } : {}) })
+    }
   })
   if (!rows.length) return null
   return JSON.stringify({ v: 4, rows })
@@ -346,10 +435,14 @@ export const columnsNormalizer = $prose(() =>
         if (node.type.name !== 'amadeusColumnRow') return
         const cells: ProseNode[] = []
         node.forEach((c) => cells.push(c))
-        const survivors = structural ? cells.filter((c) => !cellIsEmpty(c)) : cells
+        // 版块的空栏是用户自己摆的(工具条「栏数」、卡片占位),不随别处的拖拽被清掉;
+        // 删栏只走工具条与空栏退格(removeEmptyColumnTr)。
+        const section = isSectionRow(node)
+        const need = minCells(node)
+        const survivors = structural && !section ? cells.filter((c) => !cellIsEmpty(c)) : cells
         // 空锚补号(PM createAndFill 自动补 cell 时 anchor=''):就地重建带新锚的 cell。
         const needAnchorFix = survivors.some((c) => !c.attrs.anchor)
-        if (survivors.length === cells.length && survivors.length >= 2 && !needAnchorFix) return
+        if (survivors.length === cells.length && survivors.length >= need && !needAnchorFix) return
         const used = new Set<string>()
         state.doc.descendants((n) => {
           if (n.type.name === 'amadeusColumnCell' && n.attrs.anchor) used.add(String(n.attrs.anchor))
@@ -365,7 +458,7 @@ export const columnsNormalizer = $prose(() =>
         // 被清 cell 恒为空(只有空 cell 会被结构性清除),其锚是裸锚无内容 —— 统一放行后
         // (语义:原属该行,行后最接近原位;完美插回原列间隙不值得为空锚做,Codex 终审 P1 记录)。
         const droppedMarkers = cells.filter((c) => !survivors.includes(c)).flatMap((c) => markerParas(String(c.attrs.anchor)))
-        if (survivors.length >= 2) {
+        if (survivors.length >= need) {
           jobs.push({
             from: offset,
             to: offset + node.nodeSize,
@@ -443,6 +536,7 @@ export function executePair(view: EditorView, targetPos: number, side: 'left' | 
     const rowPos2 = tr.mapping.map(inRow.rowPos)
     const rowNode = tr.doc.nodeAt(rowPos2)
     if (!rowNode || rowNode.type !== row) return false
+    if (isSectionRow(rowNode) && rowNode.childCount >= SECTION_MAX_COLUMNS) return false // 版块最多 4 栏
     const insertIndex = side === 'left' ? inRow.cellIndex : inRow.cellIndex + 1
     let at = rowPos2 + 1
     for (let i = 0; i < Math.min(insertIndex, rowNode.childCount); i++) at += rowNode.child(i).nodeSize
@@ -565,7 +659,7 @@ export function removeEmptyColumnTr(state: EditorState, cellPos: number, dir: -1
   const rest: ProseNode[] = []
   row.forEach((c, _o, i) => { if (i !== idx) rest.push(c) })
   const markers = anchorMarkers(state.schema, String(cell.attrs.anchor))
-  if (rest.length >= 2) {
+  if (rest.length >= minCells(row)) {
     const tr = state.tr.delete(cellPos, cellPos + cell.nodeSize)
     if (markers.length) tr.insert(tr.mapping.map(rowEnd), markers)
     tr.setSelection(Selection.near(tr.doc.resolve(Math.min(cellPos, tr.doc.content.size)), dir))

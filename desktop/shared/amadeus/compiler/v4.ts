@@ -10,6 +10,7 @@
 //
 // v4 不写 amadeus_page(页身份=路径;全端核实页 id 零消费者)也不写 amadeus_next_id(锚永不
 // 重编号,无需高水位);`amadeus_` 前缀整体保留(未知 amadeus_* 键 → 按 v3 处理,升级时剥除)。
+// 例外:page/5 发一行固定值的 amadeus_page 给老端的只读闸看(见下方 PAGE_SCHEMA_V5)。
 //
 // DORMANT:本模块目前没有调用方——统一实例编辑器落地前 loadPage/compile 仍走 v3;先行合入
 // 是为了用契约测试钉住格式,与 v3→v4 升级规则。
@@ -22,6 +23,21 @@ import { AMADEUS_FM_KEY, extractFrontmatterExtra, parseFrontmatter, schemaMajorO
 export const PAGE_SCHEMA_V4 = 'amadeus.page/4' as const
 export const SCHEMA_MAJOR_V4 = 4
 
+// ── page/5 = 带「版块」行样式的 v4(方向 B,2026-11-18)────────────────────────────────
+// 格式与 page/4 完全同构,只多一样:分栏行可带 `section` 样式(此时 1 栏也成行)。只有真带版块的
+// 笔记才升 page/5,其余照旧 page/4、一个字节不变。升号是为了让老版本只读:它们不认识行样式,
+// 按自己的文档重算 layout 会把版块冲掉(1 栏行在老端直接不折叠,样式随首存蒸发)。
+// ⚠️ 老端的只读闸是 `fm.amadeus_page && major > 3`(compiler/page.ts loadPage/parsePageSource)。
+//    v4 不写 amadeus_page,光升 schema 的话老端把笔记当外来 md 打开、**首次编辑就改写成 page/3**,
+//    版块与分栏布局全丢(2026-11-18 在 v2.14.2 上 A/B 实测)。所以 page/5 一并发一行固定值的
+//    `amadeus_page` —— 只给老端的闸看,新端不读它的值(页身份 = 路径,全端零消费者)。它与 schema
+//    同属结构区:由 structureKeysFor 唯一发射,回到 page/4 / 素文件时随结构区一起摘掉,绝不留孤儿
+//    (孤儿 amadeus_* 键会被 classifyPageSource 判成 v3,拽进 v3 管线)。
+export const PAGE_SCHEMA_V5 = 'amadeus.page/5' as const
+export const SCHEMA_MAJOR_V5 = 5
+/** page/5 的老端闸标记值。固定值:保存逐字稳定,结构判据保持纯函数。 */
+export const LEGACY_GATE_PAGE_ID = 'v5'
+
 // ── 识别(spec §3.1):按 frontmatter 键判,绝不按标记判 ─────────────────────────────
 // 外来 md 里的无辜注释 `<!-- a note -->` 恰好匹配标记语法;按标记判会把它送进 parseV3,
 // 触发补号并在打开时落盘改写外来文件。
@@ -31,8 +47,8 @@ export type PageClass = 'v3' | 'v4-plain' | 'v4-structured' | 'future'
 export function classifyPageSource(raw: string): PageClass {
   const fm = parseFrontmatter(raw)
   const major = schemaMajorOf(fm)
-  if (major != null && major > SCHEMA_MAJOR_V4) return 'future'
-  if (major === SCHEMA_MAJOR_V4) return 'v4-structured'
+  if (major != null && major > SCHEMA_MAJOR_V5) return 'future'
+  if (major === SCHEMA_MAJOR_V4 || major === SCHEMA_MAJOR_V5) return 'v4-structured'
   // 任一 amadeus_ 前缀键在场(含解析不出 major 的 amadeus_schema、未知的 amadeus_* 键)
   // → v3 尽力而为:前缀是整体保留的,未知键宁可保守当 v3 也不能误判成素文件(Codex #5)。
   // 实测全部 5 库 0 个「有标记但无 amadeus_layout」的 v3 文件,此规则无漏判(2026-08-13)。
@@ -45,7 +61,13 @@ export function classifyPageSource(raw: string): PageClass {
 const v4ColumnSchema = z.object({ refs: z.array(z.string()), width: z.number() })
 /** tail = 行尾界标锚(可选):锚辖域=「锚行到下一锚或文件尾」,行在文件中间而行后内容无锚时,
  *  末列会把后续自然流整个吞进来。升级/编辑器写出的分栏行一律带 tail 封底(语法仍是普通锚注释)。 */
-const v4RowSchema = z.object({ columns: z.array(v4ColumnSchema), tail: z.string().optional() })
+/** section = 版块样式(page/5)。按不透明对象收:键与取值的解释在渲染侧(columns.ts normalizeSection),
+ *  这里只保证认得出、往返不丢(将来加的键照样原样带回)。 */
+const v4RowSchema = z.object({
+  columns: z.array(v4ColumnSchema),
+  tail: z.string().optional(),
+  section: z.record(z.string(), z.unknown()).optional(),
+})
 const v4LayoutSchema = z.object({ v: z.literal(4), rows: z.array(v4RowSchema) })
 
 export type V4Column = z.infer<typeof v4ColumnSchema>
@@ -135,6 +157,21 @@ function sanitizeFmExtra(fmExtra: string, keepUnknown: boolean): string {
     .replace(/^\n+|\n+$/g, '')
 }
 
+/** layout 里有没有版块行(决定 page/4 还是 page/5)。读得懂 → 按行判;读不懂(块状原文被逐字保留的
+ *  那种)→ 按字面 `"section":` 判 —— 宁可多升一档,也不能把带版块的笔记降回 page/4 交给老端改写。
+ *  锚 id 只有 [A-Za-z0-9_-],`"section"` 后面紧跟冒号只可能是键。 */
+export function layoutHasSections(layoutJson: string | null): boolean {
+  if (layoutJson == null) return false
+  try {
+    const v: unknown = JSON.parse(layoutJson)
+    const rows = v && typeof v === 'object' ? (v as { rows?: unknown }).rows : undefined
+    if (Array.isArray(rows)) return rows.some((r) => !!r && typeof r === 'object' && (r as { section?: unknown }).section != null)
+  } catch {
+    // 落到下面按字面判
+  }
+  return /"section"\s*:/.test(layoutJson)
+}
+
 /** **结构键发射的唯一判据**(方案 §6.0-1,2026-08-15):`amadeus_schema` 在场 ⟺ 分栏或画布任一在场。
  *  两个真实写点(本文件的 compileV4 + desktop 的 fm 行级 splice)必须共用这一份——各判各的迟早
  *  写出「剥了 schema 却留着 canvas 行」的半吊子文件,而 classifyPageSource 见任一 amadeus_ 前缀键
@@ -142,8 +179,10 @@ function sanitizeFmExtra(fmExtra: string, keepUnknown: boolean): string {
  *  返回的是**结构键行**,顺序固定 schema→layout→canvas;两个 JSON 参数都必须是单行 stringify 输出。 */
 export function structureKeysFor(layoutJson: string | null, canvasJson: string | null): string[] {
   if (layoutJson == null && canvasJson == null) return []
+  const v5 = layoutHasSections(layoutJson)
   return [
-    `amadeus_schema: ${PAGE_SCHEMA_V4}`,
+    `amadeus_schema: ${v5 ? PAGE_SCHEMA_V5 : PAGE_SCHEMA_V4}`,
+    ...(v5 ? [`amadeus_page: ${LEGACY_GATE_PAGE_ID}`] : []),
     ...(layoutJson != null ? [`amadeus_layout: ${layoutJson}`] : []),
     ...(canvasJson != null ? [`amadeus_canvas: ${canvasJson}`] : []),
   ]

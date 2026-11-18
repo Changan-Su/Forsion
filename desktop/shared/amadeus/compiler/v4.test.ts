@@ -2,14 +2,18 @@
 // compile∘parse 不动点、v3→v4 升级规则(平凡布局全剥/分栏保锚/结构文件拒绝)。
 import { describe, expect, it } from 'vitest'
 import {
+  LEGACY_GATE_PAGE_ID,
   PAGE_SCHEMA_V4,
+  PAGE_SCHEMA_V5,
   classifyPageSource,
+  layoutHasSections,
   compileV4,
   parseV4Layout,
   parseV4Source,
   structureKeysFor,
   upgradeV3Source,
 } from './v4'
+import { parsePageSource } from './page'
 
 const NOW = '2026-08-13T00:00:00.000Z'
 
@@ -35,10 +39,10 @@ describe('classifyPageSource:按 frontmatter 键判,绝不按标记判(spec §3.
     expect(classifyPageSource('---\namadeus_custom: x\n---\n正文\n')).toBe('v3')
   })
 
-  it('schema major 4 → v4-structured (quoted YAML tolerated); major 5 → future', () => {
+  it('schema major 4 → v4-structured (quoted YAML tolerated); major 5 = page/5(版块)也是 v4-structured;major 6 → future', () => {
     expect(classifyPageSource('---\namadeus_schema: amadeus.page/4\n---\n正文\n')).toBe('v4-structured')
     expect(classifyPageSource('---\namadeus_schema: "amadeus.page/4"\n---\n正文\n')).toBe('v4-structured')
-    expect(classifyPageSource('---\namadeus_schema: amadeus.page/5\n---\n正文\n')).toBe('future')
+    expect(classifyPageSource('---\namadeus_schema: amadeus.page/6\n---\n正文\n')).toBe('future')
   })
 })
 
@@ -90,7 +94,7 @@ describe('parseV4Source / compileV4', () => {
 
   it('refuses to parse a v3/future source (caller must classify first)', () => {
     expect(() => parseV4Source(v3Source([], ['正文']))).toThrow(/v3/)
-    expect(() => parseV4Source('---\namadeus_schema: amadeus.page/5\n---\n正文\n')).toThrow(/future/)
+    expect(() => parseV4Source('---\namadeus_schema: amadeus.page/6\n---\n正文\n')).toThrow(/future/)
   })
 
   it('parseV4Layout rejects invalid shapes instead of guessing', () => {
@@ -247,6 +251,69 @@ describe('upgradeV3Source(spec §5.1)', () => {
     const quotedMindmap = v3Source(['"mindmap": \'{"1":{"p":null,"o":0}}\''], ['<!-- a 1 -->', '', '正文。'])
     expect(upgradeV3Source('note.md', quotedMindmap, NOW)).toEqual({ ok: false, reason: 'plugin-structured-frontmatter' })
     expect(upgradeV3Source('note.md', '纯正文。\n', NOW)).toEqual({ ok: false, reason: 'not-v3' })
-    expect(upgradeV3Source('note.md', '---\namadeus_schema: amadeus.page/5\n---\n正文\n', NOW)).toEqual({ ok: false, reason: 'not-v3' })
+    expect(upgradeV3Source('note.md', '---\namadeus_schema: amadeus.page/6\n---\n正文\n', NOW)).toEqual({ ok: false, reason: 'not-v3' })
+  })
+})
+
+// ── page/5 = 带版块的 v4(方向 B,2026-11-18)────────────────────────────────────────────
+describe('page/5:只有带版块的笔记升号,老端借 amadeus_page 走只读闸', () => {
+  const SEC = '{"v":4,"rows":[{"columns":[{"refs":["s1"],"width":1}],"tail":"t1","section":{"bg":"blue"}}]}'
+  const COLS = '{"v":4,"rows":[{"columns":[{"refs":["c1"],"width":1},{"refs":["c2"],"width":1}],"tail":"t2"}]}'
+  const BODY = '<!-- a s1 -->\n\n版块 ALPHA。\n\n<!-- a t1 -->\n\n后文。\n'
+
+  it('识别:page/5 = v4-structured;page/6 = future', () => {
+    expect(classifyPageSource(`---\namadeus_schema: ${PAGE_SCHEMA_V5}\namadeus_page: ${LEGACY_GATE_PAGE_ID}\namadeus_layout: ${SEC}\n---\n\n${BODY}`)).toBe('v4-structured')
+    // 闸标记被外部工具删掉了也照样是结构化(下次真保存时补回)
+    expect(classifyPageSource(`---\namadeus_schema: ${PAGE_SCHEMA_V5}\namadeus_layout: ${SEC}\n---\n\n${BODY}`)).toBe('v4-structured')
+    expect(classifyPageSource(`---\namadeus_schema: amadeus.page/6\namadeus_page: ${LEGACY_GATE_PAGE_ID}\n---\n\nx\n`)).toBe('future')
+  })
+
+  it('structureKeysFor:有版块 → page/5 + 闸标记;没有 → page/4 原样(一个字节不变)', () => {
+    expect(structureKeysFor(SEC, null)).toEqual([
+      `amadeus_schema: ${PAGE_SCHEMA_V5}`,
+      `amadeus_page: ${LEGACY_GATE_PAGE_ID}`,
+      `amadeus_layout: ${SEC}`,
+    ])
+    expect(structureKeysFor(COLS, null)).toEqual([`amadeus_schema: ${PAGE_SCHEMA_V4}`, `amadeus_layout: ${COLS}`])
+    expect(structureKeysFor(null, '{"v":1}')).toEqual([`amadeus_schema: ${PAGE_SCHEMA_V4}`, 'amadeus_canvas: {"v":1}'])
+  })
+
+  it('layoutHasSections:按行判;读不懂按字面判;锚名叫 section 不算', () => {
+    expect(layoutHasSections(SEC)).toBe(true)
+    expect(layoutHasSections(COLS)).toBe(false)
+    expect(layoutHasSections(null)).toBe(false)
+    expect(layoutHasSections('{"v":4,"rows":[{"columns":[{"refs":["section"],"width":1},{"refs":["b"],"width":1}],"tail":"section"}]}')).toBe(false)
+    expect(layoutHasSections('{"v":4,"rows":[{"columns":[],"section":null}]}')).toBe(false)
+    // 块状原文逐字保留的那种(JSON 读不懂)
+    expect(layoutHasSections('amadeus_layout:\n  v: 4\n  rows: [{"section": {}}]')).toBe(true)
+  })
+
+  it('parseV4Layout 认 section 对象、未知键原样带回;compileV4 发 page/5', () => {
+    const lay = parseV4Layout('{"v":4,"rows":[{"columns":[{"refs":["s1"],"width":1}],"tail":"t1","section":{"bg":"blue","later":{"x":1}}}]}')
+    expect(lay?.rows[0].section).toEqual({ bg: 'blue', later: { x: 1 } })
+    const src = compileV4({ kind: 'structured', fmExtra: 'icon: "📘"', layout: lay, canvas: null, body: BODY })
+    expect(src.split('\n').slice(0, 5)).toEqual([
+      '---',
+      `amadeus_schema: ${PAGE_SCHEMA_V5}`,
+      `amadeus_page: ${LEGACY_GATE_PAGE_ID}`,
+      `amadeus_layout: ${JSON.stringify(lay)}`,
+      'icon: "📘"',
+    ])
+    // fmExtra 里混进来的旧 amadeus_page 不会和闸标记重成两行
+    const dup = compileV4({ kind: 'structured', fmExtra: 'amadeus_page: pg_old\nicon: "📘"', layout: lay, canvas: null, body: BODY })
+    expect(dup.split('\n').filter((l) => l.startsWith('amadeus_page')).length).toBe(1)
+    const back = parseV4Source(src)
+    expect(back.layout).toEqual(lay)
+    expect(back.fmExtra).toBe('icon: "📘"')
+  })
+
+  it('老端(v3 编译器的只读闸):page/5 判 schemaTooNew、拒写,正文原样;没有闸标记就会被当外来 md 改写', () => {
+    const src = compileV4({ kind: 'structured', fmExtra: '', layout: parseV4Layout(SEC), canvas: null, body: BODY })
+    const gated = parsePageSource('Sec.md', src, NOW)
+    expect(gated.manifest.schemaTooNew).toBe(true)
+    expect(Object.values(gated.blocks).map((b) => b.content).join('\n')).toContain('版块 ALPHA。')
+    // 反证(2026-11-18 v2.14.2 实测的失败形态):少了闸标记 → importForeign,可编辑,首存即改写成 page/3
+    const ungated = parsePageSource('Sec.md', src.replace(`amadeus_page: ${LEGACY_GATE_PAGE_ID}\n`, ''), NOW)
+    expect(ungated.manifest.schemaTooNew).toBeUndefined()
   })
 })

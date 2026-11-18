@@ -3,8 +3,8 @@
  *  这里把源文拆成「fm 块原文(逐字,含 amadeus_* 行)+ 正文」,保存时原样拼回;
  *  chrome(icon/cover/属性)只改 fm 侧,与正文共用同一条整文件写盘管线(单写者,不与防抖竞态)。 */
 import { parse as parseYaml } from 'yaml'
-import { AMADEUS_FM_KEY, BOM, fmEntries, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
-import { structureKeysFor } from '@amadeus-shared/compiler/v4'
+import { AMADEUS_FM_KEY, BOM, fmEntries, schemaMajorOf, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
+import { LEGACY_GATE_PAGE_ID, SCHEMA_MAJOR_V5, layoutHasSections, structureKeysFor } from '@amadeus-shared/compiler/v4'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 
 export interface FmSplit {
@@ -125,9 +125,11 @@ function extractAmadeusLines(fmText: string): string[] {
   return (entriesOf(fmText) ?? []).filter((e) => AMADEUS_FM_KEY.test(e[0])).flat()
 }
 
-const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas)["']?\s*:/
+/** 结构区 = schema / layout / canvas,外加 page/5 给老端只读闸看的 amadeus_page(见 v4.ts PAGE_SCHEMA_V5)。
+ *  v4 文件里的 amadeus_page 一律归结构区:有版块才由 structureKeysFor 发,没有就随结构区摘掉。 */
+const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas|page)["']?\s*:/
 
-/** 结构键(amadeus_schema/amadeus_layout/amadeus_canvas)行级 splice(绝不过 YAML 往返,Codex A14):
+/** 结构键(amadeus_schema/amadeus_layout/amadeus_canvas,page/5 另加 amadeus_page)行级 splice(绝不过 YAML 往返,Codex A14):
  *  整片结构区重写 —— 先摘掉全部旧结构行(容忍引号键/重复行),再按 structureKeysFor 的判据重发;
  *  其余 fm 行逐字原样,剥到空 fm 块则整块消失。两个 JSON 参数必须是单行 JSON.stringify 输出。
  *  ⚠️ canvasJson 是**必填**:它与 layout 同属被本函数整片重写的区域,漏传 = 保存一次画布几何蒸发
@@ -153,13 +155,24 @@ export function setAmadeusStructure(fmText: string, layoutJson: string | null, c
 /** 结构键自愈:layout/canvas 任一在场却没有 `amadeus_schema` 时补发结构区(顺序也归位)。
  *  只补不拆 —— 两者都不在场时原样返回,不去动一个孤零零的 schema 行(那只是 v4-structured
  *  的合法空态,拆了会把文件从 structured 变成 plain,不该由「自愈」擅自决定)。
- *  给源码模式这类绕过 setAmadeusStructure 的手写路径兜底(Codex P0)。 */
+ *  给源码模式这类绕过 setAmadeusStructure 的手写路径兜底(Codex P0)。
+ *  版块(page/5)两条同理只补不拆:layout 里有版块,但 schema 不是 page/5 或闸标记 amadeus_page 不在
+ *  → 补发(否则老端照 page/4 打开、一存就冲掉版块);反方向(版块删光了还标着 page/5)留给下一次
+ *  可视模式保存归位。唯一的「拆」是孤儿闸标记:schema/layout/canvas 全删了只剩 `amadeus_page: v5`,
+ *  那一行会让文件被判成 v3 拽进 v3 管线 —— 只摘我们自己发的固定值,别的 amadeus_page 不碰。 */
 export function fixStructKeys(fmText: string): string {
   const layout = layoutLineOf(fmText)
   const canvas = canvasLineOf(fmText)
-  if (layout == null && canvas == null) return fmText
-  if (/^["']?amadeus_schema["']?\s*:/m.test(fmText)) return fmText
-  return setAmadeusStructure(fmText, layout, canvas)
+  const schema = structLineOf(fmText, 'schema')
+  const page = structLineOf(fmText, 'page')
+  if (layout == null && canvas == null) {
+    return schema == null && page === LEGACY_GATE_PAGE_ID ? setAmadeusStructure(fmText, null, null) : fmText
+  }
+  if (schema == null) return setAmadeusStructure(fmText, layout, canvas)
+  if (layoutHasSections(layout) && (schemaMajorOf({ amadeus_schema: schema }) !== SCHEMA_MAJOR_V5 || !page)) {
+    return setAmadeusStructure(fmText, layout, canvas)
+  }
+  return fmText
 }
 
 /** fm 块 → amadeus_layout 单行 JSON 原文(没有 → null)。 */
@@ -172,7 +185,8 @@ export function canvasLineOf(fmText: string): string | null {
   return structLineOf(fmText, 'canvas')
 }
 
-type StructKey = 'layout' | 'canvas'
+/** 读值用;块状写法的逐字回写只给 layout / canvas(STRUCT_EMIT),schema / page 恒单行发射。 */
+type StructKey = 'layout' | 'canvas' | 'schema' | 'page'
 const STRUCT_EMIT = /^amadeus_(layout|canvas):/
 
 function structLineOf(fmText: string, key: StructKey): string | null {
