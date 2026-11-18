@@ -95,9 +95,16 @@ async function main() {
   // ⚠️ 图片行不能是最后一行:harness 默认把光标放在文末,同一行会露源码而不渲染(设计如此)。
   p = await open(`seed=${encodeURIComponent('文字 ![[pic.png]] 更多文字\n\n最后一行')}`)
   check('S4 行内图片渲染成 <img>', (await p.locator('.wiki-inline-img').count()) === 1)
-  b = await btnState(p, '.wiki-inline-img-wrap .amx-src-btn')
-  check('S4 行内图片挂了 `</>`', !!b && b.text === '</>', JSON.stringify(b))
-  check('S4 不悬停时不吃点击', !!b && b.pe === 'none', JSON.stringify(b))
+  // 11-18 起 `![[…]]` 图片的 `</>` 收进悬停工具条(与 `![](…)` 同一排,image-toolbar.check W*);第一次悬停才建
+  check('S4 没悬停过:工具条还没建', (await p.locator('.wiki-inline-img-wrap > .amx-img-tb').count()) === 0)
+  await p.hover('.wiki-inline-img')
+  await p.waitForTimeout(300)
+  b = await btnState(p, '.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]')
+  check('S4 行内图片的工具条里有 `</>`', !!b && b.text === '</>', JSON.stringify(b))
+  await p.mouse.move(2, 2)
+  await p.waitForTimeout(300)
+  b = await btnState(p, '.wiki-inline-img-wrap > .amx-img-tb')
+  check('S4 不悬停时工具条不吃点击', !!b && b.pe === 'none', JSON.stringify(b))
   await p.close()
 
   // ── 块级:整块嵌入(图片 / PDF)由 BlockHost 画按钮 ──
@@ -194,13 +201,19 @@ async function main() {
   const stay = await p.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
   check('S8 点「打开」不露源码、不改选区', !stay.text.includes('![[report.pdf]]'), JSON.stringify(stay))
   await p.evaluate(() => { window.__opened = [] })
+  // 图片的「打开」11-18 起收进悬停工具条的 ⋯(`</>` 也在工具条里),包裹层上不再单挂
   await p.hover('.wiki-inline-img-wrap')
   await p.waitForTimeout(300)
-  const imgBtns = await p.evaluate(() => [...document.querySelectorAll('.wiki-inline-img-wrap > .amx-src-btn')].map((x) => x.classList.contains('amx-open-btn') ? 'open' : x.textContent))
-  check('S8 图片也挂「打开」,第一颗仍是 `</>`', imgBtns.length === 2 && imgBtns[0] === '</>' && imgBtns[1] === 'open', JSON.stringify(imgBtns))
-  await p.click('.wiki-inline-img-wrap > .amx-open-btn')
+  const imgBtns = await p.evaluate(() => ({ loose: document.querySelectorAll('.wiki-inline-img-wrap > .amx-open-btn').length, src: !!document.querySelector('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') }))
+  check('S8 图片:「打开」不再单挂,`</>` 在工具条里', imgBtns.loose === 0 && imgBtns.src, JSON.stringify(imgBtns))
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="more"]')
+  await p.click('.wiki-inline-img-wrap > .amx-img-more [data-act="open"]')
+  await p.hover('.wiki-inline-img-wrap')
+  await p.waitForTimeout(200)
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="more"]')
+  await p.click('.wiki-inline-img-wrap > .amx-img-more [data-act="open"]', { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
   opened8 = await p.evaluate(() => window.__opened)
-  check('S8 点图片的「打开」→ openWikiLink(pic.png)', opened8.length === 1 && opened8[0].name === 'pic.png', JSON.stringify(opened8))
+  check('S8 ⋯ →「打开」→ openWikiLink(pic.png);⌘/Ctrl+点 = 新标签页', opened8.length === 2 && opened8[0].name === 'pic.png' && !opened8[0].o?.newTab && opened8[1].o?.newTab === true, JSON.stringify(opened8))
   await p.close()
 
   // 只读(分享页形态):没有 `</>`,「打开」独占右上角

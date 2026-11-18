@@ -9,6 +9,7 @@
  *  会改文档的按钮只读时不出(调用方执行时还会再判一次 view.editable —— dispatch 不看只读)。
  *  文案在露出时现取(refresh):切过语言,下次悬停就是新文案。 */
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { fromAssetUrl } from '@amadeus-shared/assets'
 import { registerMessages, subscribeLocale, translate } from '../../../i18n'
 import type { TextAlignment } from './paragraphIndent'
 
@@ -23,6 +24,8 @@ registerMessages({
   'imgtb.download': { zh: '下载', en: 'Download' },
   'imgtb.source': { zh: '查看源码', en: 'View source' },
   'imgtb.more': { zh: '更多', en: 'More' },
+  'imgtb.open': { zh: '打开', en: 'Open' },
+  'imgtb.openHint': { zh: '⌘/Ctrl+点击在新标签页打开', en: '⌘/Ctrl+click to open in a new tab' },
   'imgtb.copy': { zh: '复制图片', en: 'Copy image' },
   'imgtb.delete': { zh: '删除', en: 'Delete' },
   'imgtb.captionPlaceholder': { zh: '写个说明…', en: 'Write a caption…' },
@@ -34,7 +37,7 @@ registerMessages({
 
 const SVG = (inner: string): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`
-// lucide:align-left / align-center / align-right / captions / refresh-cw / maximize-2 / download / ellipsis / copy / trash-2
+// lucide:align-left / align-center / align-right / captions / refresh-cw / maximize-2 / download / ellipsis / external-link / copy / trash-2
 const ICON = {
   alignLeft: SVG('<path d="M21 6H3"/><path d="M15 12H3"/><path d="M17 18H3"/>'),
   alignCenter: SVG('<path d="M21 6H3"/><path d="M17 12H7"/><path d="M19 18H5"/>'),
@@ -44,11 +47,12 @@ const ICON = {
   fullscreen: SVG('<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>'),
   download: SVG('<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>'),
   more: SVG('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>'),
+  open: SVG('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
   copy: SVG('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
   trash: SVG('<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>'),
 }
 
-/** 工具条要的动作。可选项不给 = 那颗按钮不出(如 `![[x.png]]` 形态没有说明的存处,不给 caption)。 */
+/** 工具条要的动作。可选项不给 = 那颗按钮不出(如 `![[x.png]]` 形态没有说明的存处,不给 caption —— 见 wikiImageToolbar.ts)。 */
 export interface ImageToolbarActions {
   view: EditorView
   /** 图片所在那一段的对齐(高亮当前档)。 */
@@ -61,6 +65,8 @@ export interface ImageToolbarActions {
   fullscreen(): void
   download(): void
   source(): void
+  /** ⋯ →「打开」:应用内打开这张图(⌘/Ctrl+点击 = 新标签页)。只有 `![[…]]` 形态给(11-07 起它右上角就有这颗键)。 */
+  open?: (newTab: boolean) => void
   copy?: () => void
   remove(): void
 }
@@ -156,24 +162,26 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     m.setAttribute('role', 'menu')
     m.contentEditable = 'false'
     shield(m)
-    const item = (key: string, icon: string, run: () => void, danger = false): void => {
+    const item = (key: 'open' | 'copy' | 'delete', icon: string, run: (e: MouseEvent) => void, danger = false): void => {
       const b = document.createElement('button')
       b.type = 'button'
       b.setAttribute('role', 'menuitem')
       b.dataset.act = key
       if (danger) b.className = 'danger'
+      if (key === 'open') b.title = translate('imgtb.openHint')
       b.innerHTML = icon
-      b.append(translate(key === 'copy' ? 'imgtb.copy' : 'imgtb.delete'))
+      b.append(translate(key === 'open' ? 'imgtb.open' : key === 'copy' ? 'imgtb.copy' : 'imgtb.delete'))
       b.addEventListener('click', (e) => {
         e.preventDefault()
         e.stopPropagation()
         closeMenu()
-        run()
+        run(e)
       })
       m.appendChild(b)
     }
-    if (a.copy) item('copy', ICON.copy, a.copy)
-    if (a.view.editable) item('delete', ICON.trash, a.remove, true)
+    if (a.open) item('open', ICON.open, (e) => a.open!(e.metaKey || e.ctrlKey))
+    if (a.copy) item('copy', ICON.copy, () => a.copy!())
+    if (a.view.editable) item('delete', ICON.trash, () => a.remove(), true)
     if (!m.childElementCount) return
     if (variant === 'hover') {
       // 定位父级是图片包裹层;偏移量是布局 px(offset*),不受界面缩放 / 画布 scale 影响。
@@ -190,7 +198,10 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
 
   function run(act: Act): void {
     const al = ALIGN_OF[act]
-    if (al) return a.setAlign(al)
+    if (al) {
+      if (variant === 'hover') holdToolbar(host)
+      return a.setAlign(al)
+    }
     if (act === 'more') return menu ? closeMenu() : openMenu()
     closeMenu()
     if (act === 'caption') a.caption?.()
@@ -221,7 +232,7 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     }
     if (!btns.has('more')) return
     // ⋯ 里只剩「删除」时只读下没东西可放:整颗收起
-    btns.get('more')!.hidden = !a.copy && !editable
+    btns.get('more')!.hidden = !a.copy && !a.open && !editable
     // 分隔线:两侧都有露出的键才画
     const vis = groups.map((g) => g.some((act) => btns.get(act) && !btns.get(act)!.hidden))
     seps.forEach((s, i) => { s.hidden = !(vis.slice(0, i + 1).some(Boolean) && vis[i + 1]) })
@@ -236,6 +247,70 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     menuOpen: () => !!menu,
     destroy: () => { unsub(); closeMenu(); el.remove() },
   }
+}
+
+/** 点了对齐:悬停工具条「钉住」到下一次指针移动。段落换了 attrs,PM 会把图片挪进新的段落元素(recreateWrapper),
+ *  Chromium 在指针动之前不给挪过的元素算 :hover —— 不钉住,点完一下工具条就消失了(指针明明还在它上面)。 */
+export function holdToolbar(host: HTMLElement): void {
+  host.setAttribute('data-tb-hold', '')
+  document.addEventListener('pointermove', () => host.removeAttribute('data-tb-hold'), { once: true, capture: true })
+}
+
+/** 悬停工具条摆在哪(两种形态共用,露出前调):
+ *   · 图够宽 → 图片右上角里面(CSS 缺省);
+ *   · 图比工具条窄 → 挪到图片上方,按段落对齐靠左 / 居中 / 靠右(`data-tb-out`);
+ *   · 窄,但上方没地方(被最近的裁切容器裁掉:画布卡片是 overflow:auto,图在卡顶时工具条上半截被裁、点击落到舞台上 ——
+ *     11-18 台架实测)→ 叠在图片顶上,同样按对齐靠边(`data-tb-over`)。
+ *  加载失败的图 `<img>` 藏着(宽 0),量包裹层(露出的是「图片无法加载」占位)。 */
+export function placeHoverToolbar(wrap: HTMLElement, img: HTMLElement, tb: HTMLElement, align: TextAlignment): void {
+  const shown = img.offsetWidth ? img : wrap
+  let mode: 'out' | 'over' | null = null
+  if (shown.offsetWidth < tb.offsetWidth + 16) {
+    let clipTop = 0
+    for (let el = wrap.parentElement; el && el !== document.body; el = el.parentElement) {
+      if (getComputedStyle(el).overflowY === 'visible') continue
+      clipTop = Math.max(0, el.getBoundingClientRect().top)
+      break
+    }
+    mode = shown.getBoundingClientRect().top - clipTop >= tb.getBoundingClientRect().height + 6 ? 'out' : 'over'
+  }
+  if (mode === 'out') wrap.setAttribute('data-tb-out', align)
+  else wrap.removeAttribute('data-tb-out')
+  if (mode === 'over') wrap.setAttribute('data-tb-over', align)
+  else wrap.removeAttribute('data-tb-over')
+}
+
+/** 两种形态共用的几样动作(mdImage.ts / wikiImageToolbar.ts)。 */
+export function imageToast(key: string, error = false): void {
+  window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate(key), error } }))
+}
+
+/** 下载用的文件名:库内图取库内路径末段;外链取地址末段;都取不到给 image.png。`ref` 可以是显示 URL,也可以是 `![[…]]` 里的库内路径。 */
+export function imageDownloadName(ref: string): string {
+  const rel = fromAssetUrl(ref)
+  let tail = (rel ?? ref).split(/[?#]/)[0].split('/').pop() ?? ''
+  try { tail = decodeURIComponent(tail) } catch { /* 留原样 */ }
+  return !tail || /^data:|^blob:/i.test(ref) || !/\.[a-z0-9]{2,5}$/i.test(tail) ? 'image.png' : tail
+}
+
+/** 「下载」:走全应用的下载出口 saveResponseAs(桌面 / 网页 `<a download>`,安卓原生「存到下载」)。 */
+export async function downloadImage(img: HTMLImageElement, ref: string): Promise<void> {
+  const src = img.currentSrc || img.src
+  if (!src) return
+  try {
+    const r = await fetch(src)
+    if (!r.ok) throw new Error(String(r.status))
+    const { saveResponseAs } = await import('../../../services/nativeDownload')
+    await saveResponseAs(imageDownloadName(ref || src), r)
+  } catch {
+    imageToast('imgtb.downloadFailed', true)
+  }
+}
+
+/** 「全屏」= 双击看大图那个查看器。加载失败的图不开。 */
+export function viewImageFullscreen(img: HTMLImageElement, wrap: HTMLElement): void {
+  if (!(img.currentSrc || img.src) || wrap.hasAttribute('data-broken')) return
+  void import('../../../components/ImageViewer').then((m) => m.openImageViewer(img)).catch(() => {})
 }
 
 /** 粗指针?(与 touch.ts 同口径;这里不 import 它,免得 blocks/markdown 再挂一条依赖)。 */

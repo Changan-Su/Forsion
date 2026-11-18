@@ -6254,18 +6254,24 @@ async function main() {
   await p72.waitForTimeout(1000)
   const stage72 = await p72.evaluate(() => {
     const r = document.querySelector('.amx-stage').getBoundingClientRect()
-    return { drop: { x: Math.round(r.right - 220), y: Math.round(r.top + r.height * 0.55) }, blank: { x: Math.round(r.right - 120), y: Math.round(r.top + 110) } }
+    // 落点比别格靠左:图片工具条(11-18)约 260px 宽,窄图 / 加载失败的占位上它摆在图片上方、从左缘往右伸,卡贴着舞台右缘时会伸出窗口
+    return { drop: { x: Math.round(r.right - 520), y: Math.round(r.top + r.height * 0.55) }, blank: { x: Math.round(r.right - 120), y: Math.round(r.top + 110) } }
   })
   await dragBlockToStage(p72, 'pic.png', stage72.drop)
   await p72.waitForTimeout(700)
   await p72.mouse.click(stage72.blank.x, stage72.blank.y) // 光标挪出卡 → 图片复渲染,`</>` 才在
   await p72.waitForTimeout(500)
+  // 11-18 起 `![[…]]` 图片的 `</>` 在悬停工具条里(第一次悬停才建):先悬停图片,再取工具条里那颗
+  // 悬停包裹层而不是 <img>:台架里这张图加载失败,<img> 藏起来(尺寸 0),露出的是「图片无法加载」占位
+  const img72 = await p72.evaluate(() => { const r = document.querySelector('.amx-ucard .wiki-inline-img-wrap')?.getBoundingClientRect(); return r && r.width > 0 ? { x: Math.round(r.x + Math.min(20, r.width / 2)), y: Math.round(r.y + r.height / 2) } : null })
+  if (img72) { await p72.mouse.move(img72.x, img72.y); await p72.waitForTimeout(250) }
   const btn72 = await p72.evaluate(() => {
-    const b = document.querySelector('.amx-ucard .amx-src-btn')
+    const b = document.querySelector('.amx-ucard .amx-img-tb [data-act="source"]')
     if (!b) return null
     const r = b.getBoundingClientRect()
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2), wrap: !!document.querySelector('.amx-ucard .wiki-inline-img-wrap') }
   })
+  let diag72 = null
   if (btn72) {
     await p72.evaluate(() => {
       window.__seen72 = []
@@ -6273,8 +6279,17 @@ async function main() {
         document.addEventListener(t, (e) => window.__seen72.push(`${t}:${(e.target?.className || e.target?.tagName || '').toString().split(' ')[0]}`), true)
       }
     })
-    await p72.mouse.move(btn72.x, btn72.y) // 悬停:按钮平时 pointer-events:none
+    await p72.mouse.move(btn72.x, btn72.y) // 悬停:工具条平时 pointer-events:none
     await p72.waitForTimeout(200)
+    // 观测(11-18 二振后加):点之前工具条在哪、露没露、点击坐标下面是谁、卡片会不会把它裁掉
+    diag72 = await p72.evaluate(({ x, y }) => {
+      const tb = document.querySelector('.amx-ucard .amx-img-tb'), w = tb?.parentElement, card = document.querySelector('.amx-ucard')
+      const rr = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.right), Math.round(r.bottom)] }
+      const clip = []
+      for (let el = w; el && el !== document.body; el = el.parentElement) { const cs = getComputedStyle(el); if (cs.overflow !== 'visible' || cs.clipPath !== 'none' || cs.contain.includes('paint')) clip.push(`${el.className.toString().split(' ')[0]}:${cs.overflow}/${cs.contain}`) }
+      const hit = document.elementFromPoint(x, y)
+      return { out: w?.getAttribute('data-tb-out'), hover: w?.matches(':hover'), op: tb && getComputedStyle(tb).opacity, tb: rr(tb), wrap: rr(w), card: rr(card), hit: hit?.className?.toString().split(' ')[0] ?? hit?.tagName, clip }
+    }, btn72)
     await p72.mouse.click(btn72.x, btn72.y)
     await p72.waitForTimeout(400)
   }
@@ -6288,10 +6303,10 @@ async function main() {
       pmFocus: document.activeElement?.classList.contains('ProseMirror') ?? false,
     }
   })
-  record('C72 画布里卡内的 `</>` 点得动:mousedown/click 真落到按钮上,源码露出且 PM 拿到焦点',
-    !!btn72 && btn72.wrap && c72.seen.includes('mousedown:amx-src-btn') && c72.seen.includes('click:amx-src-btn')
+  record('C72 画布里卡内图片工具条的 `</>` 点得动:mousedown/click 真落到按钮上,源码露出且 PM 拿到焦点',
+    !!btn72 && btn72.wrap && c72.seen.includes('mousedown:amx-img-tb-btn') && c72.seen.includes('click:amx-img-tb-btn')
       && c72.pmFocus && c72.text.includes('![[pic.png]]') && !c72.text.includes('</>'),
-    JSON.stringify({ btn: btn72, ...c72 }))
+    JSON.stringify({ btn: btn72, diag: diag72, ...c72 }))
   await p72.close()
 
   // ── C73 嵌入 = 一张卡(卡内下潜 + 嵌入体不冒充主卡 + 外壳不是第二张卡)─────────────

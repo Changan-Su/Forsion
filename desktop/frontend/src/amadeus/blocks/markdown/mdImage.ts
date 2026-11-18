@@ -20,7 +20,7 @@ import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { mediaNameOf, watchBrokenImage } from './brokenMedia'
 import { normalizeTextAlignment, setTextAlignment, type TextAlignment } from './paragraphIndent'
-import { buildImageToolbar, coarsePointer, openImageSheet, type ImageToolbar, type ImageToolbarActions } from './imageToolbar'
+import { buildImageToolbar, coarsePointer, downloadImage, imageToast as toast, openImageSheet, placeHoverToolbar, viewImageFullscreen, type ImageToolbar, type ImageToolbarActions } from './imageToolbar'
 import { translate } from '../../../i18n'
 
 /** 宿主交进来的能力(MarkdownBlock 的 MilkdownInner 按自己的 ref 现取)。不给 = 对应按钮不出 / 不可用。 */
@@ -66,18 +66,6 @@ const flatLine = (t: string): string => t.replace(/\r\n?|\n/g, ' ')
 
 /** 工具条 / 把手的一次动作 = 一步撤销:连点几下对齐、拖两次把手,不并进同一步(history 缺省 500ms 内相邻改动合并)。 */
 const ownStep = (tr: Transaction): Transaction => closeHistory(tr)
-
-const toast = (key: string, error = false): void => {
-  window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate(key), error } }))
-}
-
-/** 下载用的文件名:库内图取库内路径末段;外链取地址末段;都取不到给 image.png。 */
-function downloadName(src: string): string {
-  const rel = fromAssetUrl(src)
-  let tail = (rel ?? src).split(/[?#]/)[0].split('/').pop() ?? ''
-  try { tail = decodeURIComponent(tail) } catch { /* 留原样 */ }
-  return !tail || /^data:|^blob:/i.test(src) || !/\.[a-z0-9]{2,5}$/i.test(tail) ? 'image.png' : tail
-}
 
 /** `![|200](x)` / `![说明|200](x)` 的 alt → 说明文字 + 宽度;没有 `|数字` 尾巴 → 整串都是说明。 */
 export function parseAlt(alt: string): { label: string; width?: number } {
@@ -184,10 +172,7 @@ class MdImageView implements NodeView {
     }
     this.tb.refresh()
     this.layout()
-    const narrow = this.img.offsetWidth < this.tb.el.offsetWidth + 16
-    const want = narrow ? this.align() : null
-    if (want) this.dom.setAttribute('data-tb-out', want)
-    else this.dom.removeAttribute('data-tb-out')
+    placeHoverToolbar(this.dom, this.img, this.tb.el, this.align())
   }
   private pos(): number | null {
     try {
@@ -233,11 +218,8 @@ class MdImageView implements NodeView {
       caption: () => this.openCaption(),
       captionOpen: () => !!this.capLine,
       replace: this.opts.saveImage ? () => this.replace() : undefined,
-      fullscreen: () => {
-        if (!(this.img.currentSrc || this.img.src) || this.dom.hasAttribute('data-broken')) return
-        void import('../../../components/ImageViewer').then((m) => m.openImageViewer(this.img)).catch(() => {})
-      },
-      download: () => void this.download(),
+      fullscreen: () => viewImageFullscreen(this.img, this.dom),
+      download: () => void downloadImage(this.img, String(this.node.attrs.src ?? '')),
       source: () => this.openSource(),
       copy: this.opts.copyImage ? () => {
         this.select()
@@ -267,19 +249,6 @@ class MdImageView implements NodeView {
       })()
     }
     input.click()
-  }
-  /** 「下载」:走全应用的下载出口 saveResponseAs(桌面 / 网页 `<a download>`,安卓原生「存到下载」)。 */
-  private async download(): Promise<void> {
-    const src = this.img.currentSrc || this.img.src
-    if (!src) return
-    try {
-      const r = await fetch(src)
-      if (!r.ok) throw new Error(String(r.status))
-      const { saveResponseAs } = await import('../../../services/nativeDownload')
-      await saveResponseAs(downloadName(String(this.node.attrs.src ?? src)), r)
-    } catch {
-      toast('imgtb.downloadFailed', true)
-    }
   }
   /** ⋯ →「删除」:独占一段的图连段落一起删(不留一个空段落);混在文字里的只删图。 */
   private remove(): void {

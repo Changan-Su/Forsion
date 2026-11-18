@@ -171,7 +171,7 @@ async function main() {
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.move(r.x + 40, r.cy)
   await p.waitForTimeout(300)
-  await p.click('.wiki-inline-img-wrap .amx-src-btn')
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') // 11-18 起 `</>` 在悬停工具条里
   await p.waitForTimeout(400)
   const txt = await p.evaluate((s) => document.querySelector(s).innerText, UBODY)
   check('I4 点 `</>` 才露出字面源码可编辑', txt.includes('![[pic.png|260]]'), JSON.stringify(txt))
@@ -208,7 +208,7 @@ async function main() {
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.move(r.x + 20, r.cy)
   await p.waitForTimeout(300)
-  await p.click('.wiki-inline-img-wrap .amx-src-btn')
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') // 11-18 起 `</>` 在悬停工具条里
   await p.waitForTimeout(400)
   check('I6 v3 行内:点 `</>` 露源码', (await p.evaluate(() => document.querySelector('.md-block .ProseMirror').innerText)).includes('![[pic.png|170]]'))
   await p.close()

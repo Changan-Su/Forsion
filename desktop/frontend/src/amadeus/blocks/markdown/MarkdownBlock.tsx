@@ -95,6 +95,7 @@ import { IS_MAC_PLATFORM, wikilinkPlugin } from './wikilink'
 import { codeExitPlugin } from './codeExit'
 import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
 import { captionOf, mdImagePlugin, withImageCaptionSchema } from './mdImage'
+import { EMBED_UNSAFE_RE } from './wikiImageToolbar'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
@@ -1205,7 +1206,20 @@ export function MilkdownInner({
       .use(listener)
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
-      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name), () => wikiOpenableRef.current))
+      // `![[x.png|200]]` 图片的工具条(2026-11-18):替换走与 `/图片` 同一条 saveAttachment(回库内名,写回 `![[…]]`),
+      // 复制图片同 `![](…)`。整篇宿主存不了图、没有笔记路径 → 这两项不出。
+      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name), () => wikiOpenableRef.current, standalone ? {} : {
+        saveEmbed: async (f) => {
+          const page = pagePathRef.current
+          if (!page) return null
+          const { opts } = await getAttachmentPrefs()
+          // 文件名里的 wiki 定界符(`[` `]` `|` `#` `^`)换成 `-`:否则写回 `![[…]]` 会把引用写坏
+          const name = (f.name || 'image.png').replace(EMBED_UNSAFE_RE, '-')
+          const { base } = await amadeus.saveAttachment(page, name, new Uint8Array(await f.arrayBuffer()), opts)
+          return base || null
+        },
+        copyImage: (v) => (pagePathRef.current ? copySelectedImage(v, pagePathRef.current) : Promise.resolve(false)),
+      }))
       .use(linkFollowPlugin(openLinkTarget)) // 「打开光标处链接」的记账(命令面板 / 焦点不在正文时用,L-20)
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
