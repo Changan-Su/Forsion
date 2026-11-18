@@ -1511,7 +1511,7 @@ body.amx-marquee-active * {
    外壳与斜杠菜单同一套(读 --surface-*,Genesis 材质表照样接管);不吃指针,不挡菜单。小样是示意,不是正文排版。 */
 .am-app .slash-preview {
   position: fixed;
-  z-index: 50;
+  z-index: var(--z-menu);
   width: 264px;
   box-sizing: border-box;
   padding: 8px 8px 10px;
