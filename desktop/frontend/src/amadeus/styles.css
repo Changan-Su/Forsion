@@ -3286,6 +3286,10 @@ body.amx-marquee-active * {
 .unified-body .amx-fold-hidden { display: none; }
 /* 锚标记段(独占一段的 `<!-- a id -->`,anchorMarks.ts):落盘留着给 `![[笔记#id]]` 定位,编辑器里不露原文。 */
 .unified-body .amx-anchor-mark { display: none; }
+/* 版块栏内首尾块去外边距(.amx-usection > .amx-ucolcell 的 :first-child / :last-child,#756)认的是 DOM 第一个孩子;栏里打头 / 收尾的
+   是看不见的锚标记段时,真正的第一 / 最后一块照样去,不然这一栏的标题比隔壁低一截(栏里多锚、减栏后常见)。版块没合之前这两条不生效。 */
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :nth-child(1 of :not(.amx-anchor-mark)) { margin-top: 0; }
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :nth-last-child(1 of :not(.amx-anchor-mark)) { margin-bottom: 0; }
 .am-app .amx-fold-caret {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; margin-right: 4px; padding: 0;

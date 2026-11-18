@@ -529,22 +529,31 @@ function anchorMarkRun($from: ResolvedPos, dir: -1 | 1): { from: number; to: num
   return { from, to, other, otherPos: other ? to : -1 }
 }
 
-/** 锚标记挪到 at 之后,在挪好的文档上跑 base 的合并命令;并不了 → null(锚标记也别挪)。
- *  合并在不带插件的临时状态里算(state.apply 会顺带跑各插件的 appendTransaction,步骤就接不回来了)。 */
-function joinAcrossMarks(state: EditorState, run: { from: number; to: number }, at: number, caret: number, join: Command): Transaction | null {
+/** 先把这串锚标记拿掉,在拿掉之后的文档上跑 base 的合并命令,再把锚标记插回「它指着的那块的字」最后落进的那一块前面。
+ *  不假定一定是合并:base 遇到引用 / 列表可能只是拆壳或包进去(Codex 评审:Delete 撞引用 = 引用拆壳、两块并没有并),
+ *  锚标记跟着字走才不会指错块。合并在不带插件的临时状态里算(state.apply 会顺带跑各插件的 appendTransaction,
+ *  步骤就接不回来了)。base 什么都没改 → null。
+ *  caret / textAt 是原文档坐标:caret = 光标,textAt = 被指着的那块里的一处文字位置;depth = 锚标记所在容器的深度。 */
+function joinAcrossMarks(
+  state: EditorState, run: { from: number; to: number }, caret: number, textAt: number, depth: number, join: Command,
+): Transaction | null {
   const marks = state.doc.slice(run.from, run.to).content
-  const tr = state.tr.delete(run.from, run.to).insert(at, marks)
-  const tmp = EditorState.create({ doc: tr.doc, selection: TextSelection.create(tr.doc, caret) })
+  const tr = state.tr.delete(run.from, run.to)
+  const text = tr.mapping.map(textAt)
+  const tmp = EditorState.create({ doc: tr.doc, selection: TextSelection.create(tr.doc, tr.mapping.map(caret)) })
   let joined = null as Transaction | null
   join(tmp, (t) => { joined = t })
   if (!joined || !joined.docChanged) return null
   for (const step of joined.steps) tr.step(step)
-  return tr.setSelection(Selection.fromJSON(tr.doc, joined.selection.toJSON()))
+  tr.setSelection(Selection.fromJSON(tr.doc, joined.selection.toJSON()))
+  const at = joined.mapping.map(text, -1)
+  const $a = tr.doc.resolve(at)
+  return tr.insert($a.depth > depth ? $a.before(depth + 1) : at, marks)
 }
 
 /** 行首退格、前面隔着几枚看不见的锚标记段:跨过它们去并真正的上一块。交给 base 会把本段并进锚标记段
  *  (落盘成 `<!-- a id -->正文`:锚失效、正文进了注释行 —— 锚标记可见时 main 上就会这样,探针 K1 / C1)。
- *  这串锚标记(指着本段)挪到上一块前面:合并后那一块装着本段的字,`![[笔记#id]]` 仍指得到。
+ *  这串锚标记(指着本段)跟着本段的字走,插到合并后那一块前面:那一块装着本段的字,`![[笔记#id]]` 仍指得到。
  *  上一块是整块型(代码 / 表格 / 嵌入 / 分割线)→ 只选中它,锚标记不动;前面没有块 / 并不了 → 吞掉,什么都不动。 */
 export const bsOverAnchorMarks: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
@@ -557,14 +566,14 @@ export const bsOverAnchorMarks: Command = (state, dispatch) => {
     if (NodeSelection.isSelectable(prev)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
     return true
   }
-  // 删掉 [from, to) 再在前面插回同样长的一串:本段段首的位置不变
-  const tr = joinAcrossMarks(state, run, run.otherPos, $from.pos, joinBackward)
+  const tr = joinAcrossMarks(state, run, $from.pos, $from.pos, $from.depth - 1, joinBackward)
   if (tr) dispatch?.(tr.scrollIntoView())
   return true
 }
 
 /** 块尾 Delete、后面隔着几枚看不见的锚标记段:跨过它们把真正的下一块并上来(base 会把锚标记段并进本块,探针 K2 / C2)。
- *  那串锚标记(指着下一块)挪到本块前面,合并后的这一块装着下一块的字。下一块是整块型 → 只选中它;后面没有块 / 并不了 → 吞掉。 */
+ *  那串锚标记(指着下一块)跟着下一块的字走:并上来了就到本块前面,base 只是给引用拆壳就仍在拆出来的那段前面。
+ *  下一块是整块型 → 只选中它;后面没有块 / 并不了 → 吞掉。 */
 export const deleteOverAnchorMarks: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
   if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
@@ -576,7 +585,10 @@ export const deleteOverAnchorMarks: Command = (state, dispatch) => {
     if (NodeSelection.isSelectable(next)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
     return true
   }
-  const tr = joinAcrossMarks(state, run, $from.before($from.depth), $from.pos + (run.to - run.from), joinForward)
+  const first = Selection.findFrom(state.doc.resolve(run.to), 1, true)
+  const textAt = first && first.head < run.to + next.nodeSize ? first.head : run.to + 1
+  // 与没有锚标记时同一条路:先试 K-22 的「把下一块的字接上来」,再交 base(临时状态没有折叠插件,折叠判据按没折叠算)
+  const tr = joinAcrossMarks(state, run, $from.pos, textAt, $from.depth - 1, chain(deleteJoinNextText, joinForward))
   if (tr) dispatch?.(tr.scrollIntoView())
   return true
 }
@@ -1041,7 +1053,8 @@ export const keyboardPlugins: MilkdownPlugin[] = [
       'Shift-Enter': chain(enterHeadingToParagraph, codeShiftEnter, enterInDisplayMath),
       'Mod-Enter': modEnterCmd,
       Backspace: backspaceCmd,
-      'Mod-Backspace': modBackspaceCmd,
+      'Mod-Backspace': chain(modBackspaceCmd, bsOverAnchorMarks),
+      'Mod-Delete': deleteOverAnchorMarks, // 不接管时交回 base(joinForward / 删词)
       Delete: chain(deleteEmptyColumn(1), deleteUnfoldHeading, deleteOverAnchorMarks, deleteSelectNextAtom, deleteJoinNextText),
       // mac 的 emacs 习惯键,与 Delete 同一支。**只在 mac 上挂**(拍板 #8):其它平台 Ctrl 就是 Mod,
       // Ctrl+D 归「复制块」(blockLayer 的 Mod-d,对齐 Notion),不能在这里再被当成向前删除。
