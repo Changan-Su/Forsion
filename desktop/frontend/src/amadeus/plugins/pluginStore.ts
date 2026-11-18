@@ -125,6 +125,7 @@ import type {
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
+  SettingsPageContribution,
   StoreViewContribution,
   ReadinessContribution,
   SlashContribution,
@@ -231,6 +232,12 @@ interface Owned<T> {
   token?: object
 }
 
+/** 登记进宿主的插件设置页:id 补齐了,alive = 注册它的那一代插件上下文还活着。 */
+export interface HostSettingsPage extends Omit<SettingsPageContribution, 'id'> {
+  id: string
+  alive(): boolean
+}
+
 interface PluginState {
   plugins: AmadeusPlugin[]
   /** Persisted preference: ids the user has explicitly turned off (default = enabled). */
@@ -247,6 +254,8 @@ interface PluginState {
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
   settingsViews: Owned<SettingsViewContribution>[]
+  /** ctx.registerSettingsPage(2026-11-18):插件设置页的数据描述;宿主在「设置 › 插件设置」里挂、关页 / 停用 / 重载时收。 */
+  settingsPages: Owned<HostSettingsPage>[]
   /** 商店左栏里由插件提供的页(ctx.registerStoreView)。 */
   storeViews: Owned<StoreViewContribution>[]
   /** 插件自报的就绪检查(manifest onboarding.requires 的 check 那类)。 */
@@ -1407,7 +1416,7 @@ function afterReconcile(): void {
 type OwnedKey = { [K in keyof PluginState]: PluginState[K] extends Owned<unknown>[] ? K : never }[keyof PluginState]
 const SLICE_KEYS = Object.keys({
   slashItems: 1, selectionActions: 1, commands: 1, themes: 1, panels: 1, statusItems: 1, propertyTypes: 1, settings: 1,
-  settingsViews: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
+  settingsViews: 1, settingsPages: 1, storeViews: 1, readiness: 1, views: 1, listSources: 1, fileTypes: 1, embedRenderers: 1, toolResultRenderers: 1, toolLabels: 1, fileCreators: 1,
 } satisfies Record<OwnedKey, 1>) as OwnedKey[]
 
 /** 摘掉 id 的全部切片贡献;没有它的切片保持原数组身份(订阅者不白白重渲)。 */
@@ -2270,7 +2279,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 同 key 重注册即覆盖:宿主自动注册的标准行(如 workFolder)插件可用自己的定义顶掉。
     registerSetting: (def) =>
       set((s) => ({ settings: [...s.settings.filter((o) => !(o.pluginId === pluginId && o.item.key === def.key)), { pluginId, item: def }] })),
-    // 自绘设置面板(Obsidian PluginSettingTab 的对位):同 id 重注册即覆盖,渲染在详情页声明式表单下方。
+    // 自绘设置面板(Obsidian PluginSettingTab 的对位):同 id 重注册即覆盖,画在插件设置页「通用」组之后(自定义块)。
     registerSettingsView: (def) => {
       if (!def?.id || typeof def.mount !== 'function') {
         console.warn(`[plugin:${pluginId}] registerSettingsView 需要 { id, mount }`)
@@ -2282,6 +2291,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
           { pluginId, item: def },
         ],
       }))
+    },
+    // 插件设置页(2026-11-18):数据描述、宿主画。同 id 重注册即覆盖;拆插件时随切片一起摘(dropSlices),页面组件跟着卸、调收尾。
+    // alive 绑这一代上下文:停用 / 重载之后页面里残留的回调一律不再调(SettingsPage 的 Live 闸)。
+    registerSettingsPage: (def) => {
+      if (!ctxAlive()) return
+      const title = def?.title
+      if (!def || typeof def.mount !== 'function' || !(typeof title === 'string' || typeof title === 'function')) {
+        console.warn(`[plugin:${pluginId}] registerSettingsPage 需要 { title, mount }`)
+        return
+      }
+      const id = typeof def.id === 'string' && def.id.trim() ? def.id.trim() : 'main'
+      const item: HostSettingsPage = {
+        id,
+        title,
+        ...(typeof def.keywords === 'string' ? { keywords: def.keywords } : {}),
+        mount: (page) => def.mount(page),
+        alive: ctxAlive,
+      }
+      set((s) => ({ settingsPages: [...s.settingsPages.filter((o) => !(o.pluginId === pluginId && o.item.id === id)), { pluginId, item }] }))
     },
     // 商店左栏的插件页:同 id 重注册即覆盖。显示与否(首方内置包、非设备页)由 MarketModal 把关。
     registerStoreView: (def) => {
@@ -3505,6 +3533,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     propertyTypes: [],
     settings: [],
     settingsViews: [],
+    settingsPages: [],
     storeViews: [],
     readiness: [],
     views: [],

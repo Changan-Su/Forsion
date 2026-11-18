@@ -87,7 +87,6 @@ const DEBT: Record<string, [number, number, number]> = {
   'components/ModelPickerSettings.tsx': [0, 1, 0],
   'components/MotionThemeSection.tsx': [2, 0, 0],
   'components/NotificationsTab.tsx': [0, 1, 0],
-  'components/PluginSettingsForm.tsx': [0, 1, 0],
   'components/RealtimeVoiceSettings.tsx': [0, 2, 0],
   'components/RemoteSafetyPanel.tsx': [0, 3, 0],
   'components/RemoteSessionsSettings.tsx': [0, 4, 0],

@@ -41,7 +41,7 @@ describe('fetchProviderModels', () => {
     const r = await fetchProviderModels({ protocol: 'openai-responses', baseUrl: 'https://chatgpt.com/backend-api/codex' } as any, 'tok', 'acct');
     expect(r).toEqual(['gpt-6.1-sol', 'gpt-6-astra', 'gpt-5.6-sol']);
     // 回归:Codex 后端缺 client_version query 直接 400 → 实拉永远失败,用户被冻结在硬编快照上看不到新模型。
-    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.159.2'); // 0.155.1 的目录里没有 gpt-6.1-sol
+    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.169.1'); // 0.165.x 的目录里没有 gpt-6.2-sol / gpt-6.2-astra(0.155.1 没有 gpt-6.1-sol)
   });
 
   it('Codex 目录:各模型的 Fast 档(service_tiers 里 id=priority)连说明原文一起收,隐藏的模型不收', async () => {

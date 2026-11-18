@@ -97,20 +97,36 @@ export const voiceInputPlugin: AmadeusPlugin = {
     // 租约只由主窗挂:设置窗 / Mini / 拆出的视图窗里也有一份插件实例,它们只画设置页,不重复挂。
     const holder = windowKind() === 'main'
     if (holder) void api.attach(true).catch((e) => console.warn('[voice-input] attach failed', e))
-    ctx.registerSettingsView?.({
-      id: 'voice-input',
-      mount(el) {
-        let state: DictationState | null = null
-        const page = ctx.ui?.mountSettingsPage?.(el, schema(state, api))
-        const render = (s: DictationState | null): void => { state = s ?? state; page?.update(schema(state, api)) }
-        const off = api.onChange(render)
-        const refresh = (): void => { void api.state().then(render, () => {}) }
-        refresh()
-        // 从系统设置里给完辅助功能授权回来:窗口重新聚焦时再读一次
-        window.addEventListener('focus', refresh)
-        return () => { off(); window.removeEventListener('focus', refresh); page?.dispose() }
-      },
-    })
+    // 设置页内容:读状态、跟着变(含切语言),页面关掉时收。2026-11-18 起走 ctx.registerSettingsPage(宿主画、宿主管生命周期),
+    // 旧宿主退回自绘面板 + mountSettingsPage。
+    const run = (update: (next: PluginSettingsPageSchema) => void): (() => void) => {
+      let state: DictationState | null = null
+      const render = (s?: DictationState | null): void => { state = s ?? state; update(schema(state, api)) }
+      render()
+      const off = api.onChange(render)
+      const offLocale = ctx.subscribeLocale?.(() => render())
+      const refresh = (): void => { void api.state().then(render, () => {}) }
+      refresh()
+      // 从系统设置里给完辅助功能授权回来:窗口重新聚焦时再读一次
+      window.addEventListener('focus', refresh)
+      return () => { off(); offLocale?.(); window.removeEventListener('focus', refresh) }
+    }
+    if (ctx.registerSettingsPage) {
+      ctx.registerSettingsPage({
+        title: () => translate('dictation.plugin.name'),
+        keywords: '语音输入 听写 快捷键 voice input dictation shortcut',
+        mount: (page) => run((next) => page.update(next)),
+      })
+    } else {
+      ctx.registerSettingsView?.({
+        id: 'voice-input',
+        mount(el) {
+          const page = ctx.ui?.mountSettingsPage?.(el, schema(null, api))
+          const off = run((next) => page?.update(next))
+          return () => { off(); page?.dispose() }
+        },
+      })
+    }
     return () => { if (holder) void api.attach(false).catch(() => {}) }
   },
 }
