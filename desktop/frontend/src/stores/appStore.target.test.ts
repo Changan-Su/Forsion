@@ -6,16 +6,18 @@
 //      没绑过的会话即便焦点在远端也打本端;列表只拉本端并保留已注入的那几条(R-17)。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-type Reply = { status: number; body?: unknown }
-type Call = { url: string; method: string; body: string | undefined; opts: unknown; signal?: AbortSignal | null }
+type Reply = { status: number; body?: unknown; headers?: HeadersInit }
+type Call = { url: string; method: string; body: string | undefined; opts: unknown; signal?: AbortSignal | null; etag: string | null }
 const calls: Call[] = []
 let router: (url: string, method: string) => Reply | Promise<Reply> = () => ({ status: 200, body: {} })
 vi.mock('../services/http', () => ({
   authFetch: async (url: string, init?: RequestInit, opts?: unknown) => {
     const method = (init?.method || 'GET').toUpperCase()
-    calls.push({ url: String(url), method, body: typeof init?.body === 'string' ? init.body : undefined, opts, signal: init?.signal })
+    calls.push({ url: String(url), method, body: typeof init?.body === 'string' ? init.body : undefined, opts, signal: init?.signal,
+      etag: new Headers(init?.headers).get('If-None-Match') })
     const r = await router(String(url), method)
-    return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {}), { status: r.status })
+    return new Response(r.status === 304 ? null : typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {}),
+      { status: r.status, headers: r.headers })
   },
   setUnauthorizedHandler: () => {},
 }))
@@ -62,6 +64,44 @@ function armMobile(): void {
 }
 
 const sessionRec = (id: string, extra: object = {}) => ({ id, title: id, created_at: '2026-09-28T00:00:00Z', updated_at: '2026-09-28T00:00:00Z', ...extra })
+
+it('revalidates foreground web history, suppresses parallel polls, and stops while hidden', async () => {
+  Object.assign(window.tangu!, { mobile: false, cloudWeb: true })
+  const doc = { visibilityState: 'visible' }
+  vi.stubGlobal('document', doc)
+  const id = 'web-traffic-test'
+  useApp.setState({ activeId: id })
+  const messageCalls = () => calls.filter((call) => call.url.includes(`/${id}/messages?`))
+  let resolveFirst!: (r: Reply) => void
+  const first = new Promise<Reply>((resolve) => { resolveFirst = resolve })
+  const oldMessage = { id: 'msg-1', role: 'user', content: 'From another device', timestamp: 1 }
+  router = (url) => {
+    if (!url.includes(`/${id}/messages?`)) return { status: 200, body: { runs: [] } }
+    if (messageCalls().length === 1) return first
+    if (messageCalls().length === 2) return { status: 304, headers: { etag: '"history-1"' } }
+    return { status: 200, headers: { etag: '"history-2"' }, body: { messages: [
+      oldMessage, { ...oldMessage, id: 'msg-2', content: 'New since the last poll', timestamp: 2 },
+    ] } }
+  }
+
+  doc.visibilityState = 'hidden'
+  await useApp.getState().pollSession(id)
+  expect(messageCalls()).toHaveLength(0)
+  doc.visibilityState = 'visible'
+  const pending = useApp.getState().pollSession(id)
+  await vi.waitFor(() => expect(messageCalls()).toHaveLength(1))
+  await useApp.getState().pollSession(id)
+  expect(messageCalls()).toHaveLength(1)
+  resolveFirst({ status: 200, headers: { etag: '"history-1"' }, body: { messages: [oldMessage] } })
+  await pending
+  const landed = useApp.getState().messagesBySession[id]
+  expect(landed?.map((m) => m.id)).toEqual(['msg-1'])
+  await useApp.getState().pollSession(id)
+  expect(useApp.getState().messagesBySession[id]).toBe(landed)
+  await useApp.getState().pollSession(id)
+  expect(messageCalls().map((call) => call.etag)).toEqual([null, '"history-1"', '"history-1"'])
+  expect(useApp.getState().messagesBySession[id]?.map((m) => m.id)).toEqual(['msg-1', 'msg-2'])
+})
 
 beforeEach(() => {
   calls.length = 0

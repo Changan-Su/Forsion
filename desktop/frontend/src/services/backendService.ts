@@ -29,11 +29,21 @@ registerMessages({
 
 /** P1-K6:基址与鉴权头都归目标(头与改造前的 `headers(cfg.token)` 同形同序)。S3 起所有服务函数只收解析层给的
  *  EngineTarget(homeTarget / targetForSession / focusTarget / connectionTarget),本文件不读 cfg(棘轮 R1 + 品牌类型钉住)。 */
-export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number; onUploadProgress?: (sent: number, total: number) => void }): Promise<T> {
+type RequestOptions = { timeoutMs?: number; onUploadProgress?: (sent: number, total: number) => void }
+
+export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: RequestOptions): Promise<T> {
+  return (await requestResponse(t, path, init, opts)).json() as Promise<T>
+}
+
+async function requestResponse(t: EngineTarget, path: string, init?: RequestInit, opts?: RequestOptions, etag?: string): Promise<Response> {
   // home 目标的第三参与改造前逐字一致(opts 原样,可能是 undefined);非 home 恒带 target(401 分流,K6 §3.5)。
   // onUploadProgress(上传进度)两边都带上:authFetch 见到它改走 XHR。
   const o = t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs)
-  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, opts?.onUploadProgress && t.key !== 'home' ? { ...o, onUploadProgress: opts.onUploadProgress } : o)
+  const url = `${t.base}${path}`
+  const headers = await t.headers(true)
+  const r = await authFetch(url, { ...init, headers: etag ? { ...headers, 'If-None-Match': etag } : headers },
+    opts?.onUploadProgress && t.key !== 'home' ? { ...o, onUploadProgress: opts.onUploadProgress } : o)
+  if (etag && r.status === 304) return r
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
@@ -63,7 +73,7 @@ export async function request<T>(t: EngineTarget, path: string, init?: RequestIn
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {}, info ? { info } : {})
   }
   if (t.via === 'unit') noteReachable(t.key) // 2xx:这台此刻是通的(离线类不必干等探针,见 health.noteReachable)
-  return r.json() as Promise<T>
+  return r
 }
 
 /** 头像 / 项目图标这类 blob 的 GET。home 与改造前逐字一致(两参);非 home 带目标键,让 401 拦截器知道是哪台拒的
@@ -301,10 +311,20 @@ export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, be
   listHistory(t, sessionId, limit, before).then((r) => r.messages)
 
 /** 同一个接口,连同失败的那几轮一起(引擎 services/failedRuns.ts):重开对话时据此补回失败行。老引擎不带 = 空,不是「没有失败」以外的意思。 */
+type HistoryResponse = { messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }
+const historyPath = (sessionId: string, limit: number, before?: number) =>
+  `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`
+const decodeHistory = (r: HistoryResponse) =>
+  ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] })
+
 export const listHistory = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
-  request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }>(
-    t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
-  ).then((r) => ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] }))
+  request<HistoryResponse>(t, historyPath(sessionId, limit, before)).then(decodeHistory)
+
+/** Keep the validator in memory. The browser and shared proxies never cache message bodies. */
+export async function pollHistory(t: EngineTarget, sessionId: string, etag?: string) {
+  const response = await requestResponse(t, historyPath(sessionId, 200), { cache: 'no-store' }, { timeoutMs: 15_000 }, etag)
+  return response.status === 304 ? null : { ...decodeHistory(await response.json()), etag: response.headers.get('ETag') }
+}
 
 /**
  * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。

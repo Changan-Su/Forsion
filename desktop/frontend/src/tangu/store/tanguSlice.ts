@@ -418,6 +418,8 @@ const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
 const loadedHistory = new Set<string>()
 /** 在途的历史加载:重复调用等同一份(建了分支马上发的,要等配置到了再发,不然拿空配置把继承来的 Agent 冲成缺省) */
 const historyInflight = new Map<string, Promise<void>>()
+const webPolls = new Set<string>()
+let webHistoryValidator: { key: string; etag: string } | undefined
 
 /** 下一个新会话的模式(**唯一**判定源;空态药丸、send() 隐式建会话、createInWorkspace 三处同源):
  *  ① 项目会话(cloud/local)恒 work —— chat 按定义不带 Project;② 用户在空态显式选过就听他的;
@@ -2342,6 +2344,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
 
   pollSession: async (sessionId) => {
     if (!sessionId || get().activeId !== sessionId || get().runningBySession[sessionId]) return
+    const web = currentPlatform() === 'web'
+    if (web && document.visibilityState === 'hidden') return
     // P1-K6:会话在「我的电脑」上 → 每 12s 一次(bootstrap 的全局轮询是 4s;经 hub 的请求吃全局限流),那台不健康时暂停。
     // S4 起按**会话所在的那台**判(不再看焦点)。不因 SSE 在线而跳过:它还负责拉带外消息(有人在那台电脑本机往同一会话打字)。
     const pollRef = refForSession(sessionId)
@@ -2354,25 +2358,39 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (now - (host.unitPollAt.get(key) ?? 0) < UNIT_POLL_MS) return
       host.unitPollAt.set(key, now)
     }
+    const generation = host.authGen()
+    const target = targetForSession(sessionId)
+    const base = target.base
+    const webKey = web ? JSON.stringify([generation, target.key, base, sessionId]) : undefined
+    if (webKey && webPolls.has(webKey)) return
+    if (webKey) webPolls.add(webKey)
     try {
-      const c = get().cfg
-      const [{ messages: records, failedRuns }, active] = await Promise.all([
-        api.listHistory(targetForSession(sessionId), sessionId),
-        listActiveRuns(targetForSession(sessionId), sessionId).catch(() => []),
+      const etag = webKey && webHistoryValidator?.key === webKey && get().messagesBySession[sessionId]
+        ? webHistoryValidator?.etag : undefined
+      const [history, active] = await Promise.all([
+        web ? api.pollHistory(target, sessionId, etag) : api.listHistory(target, sessionId),
+        listActiveRuns(target, sessionId).catch(() => []),
       ])
-      if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
-      const failStamp = agentStamp(get(), get().configBySession[sessionId])
-      set((s) => {
-        const existing = s.messagesBySession[sessionId] || []
-        const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
-        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
-        const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
-        const byId = new Map(ui.map((m) => [m.id, m] as const))
-        for (const m of existing) byId.set(m.id, m)
-        const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
-        if (merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
-      })
+      const current = targetForSession(sessionId)
+      if (generation !== host.authGen() || current.key !== target.key || current.base !== base
+        || get().activeId !== sessionId || get().runningBySession[sessionId]) return
+      if (history) {
+        const { messages: records, failedRuns } = history
+        const failStamp = agentStamp(get(), get().configBySession[sessionId])
+        set((s) => {
+          const existing = s.messagesBySession[sessionId] || []
+          const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
+          const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
+          const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
+          const byId = new Map(ui.map((m) => [m.id, m] as const))
+          for (const m of existing) byId.set(m.id, m)
+          const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
+          if (s.messagesBySession[sessionId] && merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
+          return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
+        })
+        if (webKey) webHistoryValidator = 'etag' in history && history.etag
+          ? { key: webKey, etag: history.etag } : undefined
+      }
       const stamp = agentStamp(get(), get().configBySession[sessionId])
       for (const run of active) {
         if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id && !subscribedRuns.has(run.id)) {
@@ -2386,6 +2404,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
       }
     } catch { /* 轮询失败静默 */ }
+    finally { if (webKey) webPolls.delete(webKey) }
   },
 
   setActiveId: (id, opts) => {

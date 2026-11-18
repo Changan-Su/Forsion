@@ -13,6 +13,7 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
  *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
 import { Router, type Response } from 'express';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
@@ -492,7 +493,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
       before ? [req.params.id, before] : [req.params.id],
     );
     rows.reverse(); // 时间正序
-    res.json({
+    const body = JSON.stringify({
       failed_runs: await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
         ...r,
@@ -502,6 +503,16 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
         display_files: parseMaybeJson(r.display_files),
       })),
     });
+    const etag = `W/"${createHash('sha256').update(body).digest('base64url')}"`;
+    res.set({ 'Cache-Control': 'private, no-store', ETag: etag });
+    // Explicit browser validators also work through an authenticated no-store
+    // proxy. Express's automatic check skips requests carrying no-cache.
+    const candidate = req.get('If-None-Match');
+    if (candidate?.split(',').some((tag) => tag.trim() === '*' || tag.trim().replace(/^W\//, '') === etag.slice(2))) {
+      res.status(304).end();
+      return;
+    }
+    res.type('application/json').send(body);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list messages failed' });
   }

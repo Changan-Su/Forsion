@@ -123,6 +123,44 @@ async function cleanDetachedFixture(options: BackendOptions): Promise<void> {
 }
 
 describe('Unit backend workers', () => {
+  it('exposes HTTP socket byte counters to the worker request monitor', async () => {
+    const options = await fixture(`
+      import { writeFile } from 'node:fs/promises';
+      import { join } from 'node:path';
+      import { channel } from 'node:diagnostics_channel';
+      export default (ctx) => {
+        const count = ({ request, response, socket }) => {
+          if (request.url !== '/api/meter') return;
+          response.once('close', () => {
+            void writeFile(join(ctx.dataDir, 'meter.json'), JSON.stringify({
+              read: socket.bytesRead, written: socket.bytesWritten,
+            }));
+          });
+        };
+        const events = channel('http.server.request.start');
+        return {
+          mounts: ['/api'],
+          start() { events.subscribe(count); },
+          stop() { events.unsubscribe(count); },
+          async handle(req, res) {
+            for await (const _chunk of req) {}
+            res.end(Buffer.alloc(128 * 1024));
+          },
+        };
+      };
+    `)
+    const app = await gateway(await startBackend(options))
+    try {
+      const result = await fetch(app.base + '/api/meter', { method: 'POST', body: Buffer.alloc(16 * 1024) })
+      expect((await result.arrayBuffer()).byteLength).toBe(128 * 1024)
+      await eventually(async () => {
+        const counts = JSON.parse(await readFile(join(options.dataDir, 'meter.json'), 'utf8'))
+        expect(counts.read).toBeGreaterThan(16 * 1024)
+        expect(counts.written).toBeGreaterThan(128 * 1024)
+      })
+    } finally { await app.close() }
+  })
+
   it('resolves concurrent accounts without crossing identities or exposing provider private fields', async () => {
     const options = await fixture(`
       export default () => ({ mounts: ['/api'], handle(_req, res) { res.end('available'); },

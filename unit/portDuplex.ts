@@ -18,6 +18,8 @@ export class PortDuplex extends Duplex {
   readonly localAddress?: string
   readonly localPort?: number
   readonly encrypted?: boolean
+  private readBytes = 0
+  private writtenBytes = 0
   private pendingWrite?: (error?: Error | null) => void
   private awaitingRead = false
   private receivedEnd = false
@@ -34,6 +36,7 @@ export class PortDuplex extends Duplex {
       if (this.destroyed) return
       this.touch()
       if (packet.type === 'data') {
+        this.readBytes += packet.bytes.byteLength
         if (this.push(Buffer.from(packet.bytes))) this.send({ type: 'ack' })
         else this.awaitingRead = true
       } else if (packet.type === 'ack') {
@@ -76,8 +79,14 @@ export class PortDuplex extends Duplex {
     this.touch()
     this.pendingWrite = callback
     // Do not transfer chunk.buffer: pooled Buffers can share it with unrelated data.
-    this.send({ type: 'data', bytes: typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk })
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk
+    this.writtenBytes += bytes.byteLength
+    this.send({ type: 'data', bytes })
   }
+
+  // Node's HTTP diagnostics read these on the socket passed to the worker server.
+  get bytesRead(): number { return this.readBytes }
+  get bytesWritten(): number { return this.writtenBytes }
 
   override _final(callback: (error?: Error | null) => void): void {
     this.send({ type: 'end' })
