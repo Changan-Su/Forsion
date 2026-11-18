@@ -39,8 +39,6 @@ const GH_REPO = 'Forsion' // 2026-07-05 GitHub 仓已改名(旧名 Tangu 经重�
 const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`
 /** 这么久没有新的下载进度就算「下不动」,换另一边。 */
 const STALL_MS = 30_000
-/** mac:Squirrel.Mac 从本机代理取包、验签、解包,最多等这么久(几百 MB 的 zip 正常几十秒)。 */
-const STAGE_MS = 5 * 60_000
 
 export type UpdaterPhase =
   | 'idle' | 'checking' | 'available' | 'not-available'
@@ -435,7 +433,8 @@ export async function downloadUpdate(): Promise<void> {
  * 打开测试版不动:手上那份正式版照样能装。
  */
 export function channelChanged(beta: boolean): void {
-  if (beta || !target || !isPrerelease(target.version)) return
+  // mac 已经点了安装、Squirrel 在取 / 已取好:它一取好就会在退出时装上,这时作废只会让界面和实际装的对不上(Codex 评审)
+  if (beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
   if (dl) { dl.dropped = true; dl.token.cancel() }
   target = null
   broadcast({ phase: 'idle' })
@@ -489,9 +488,13 @@ export async function prepareInstall(): Promise<boolean> {
   staging = true
   broadcast({ ...lastStatus, preparing: true })
   try {
+    // 检查时探的结果可能过时了(装好后被改成只读 / 挪进没权限的地方):Squirrel 遇到不可写会改走提权 ShipIt,我们只走普通用户这条
+    const now = await probeMacSelfInstall(app.getPath('exe'))
+    if (!now.ok) throw new Error(`mac self-install no longer possible: ${now.reason}`)
+    // 不设超时:Squirrel 取包验签解包这一步没法取消,超时后它照样可能取好(下次退出就装)或报错,界面会对不上。
+    // 等它给出结果,期间应用照常可用(后端没停),按钮显示「准备安装…」(Codex 评审)。
     await new Promise<void>((ok, fail) => {
       const done = (err?: unknown): void => {
-        clearTimeout(timer)
         nativeUpdater.removeListener('update-downloaded', onReady)
         nativeUpdater.removeListener('update-not-available', onNone)
         nativeUpdater.removeListener('error', onError)
@@ -501,7 +504,6 @@ export async function prepareInstall(): Promise<boolean> {
       const onReady = (): void => done()
       const onNone = (): void => done(new Error('Squirrel.Mac found no update'))
       const onError = (err: Error): void => done(err)
-      const timer = setTimeout(() => done(new Error('Squirrel.Mac staging timed out')), STAGE_MS)
       nativeUpdater.on('update-downloaded', onReady)
       nativeUpdater.on('update-not-available', onNone)
       nativeUpdater.on('error', onError)
@@ -521,5 +523,16 @@ export async function prepareInstall(): Promise<boolean> {
 
 export function installUpdate(): void {
   if (!canInstallUpdate()) return
+  if (process.platform === 'darwin') {
+    // 走到这儿后端已停、窗口马上全关:Squirrel 交接(写 ShipItState、拉 ShipIt)再出错,应用就成了无窗口、无后端的空壳。
+    // 那就直接重开(旧版本照常起来,下次检查退回 .dmg 也行),不留半退出状态(Codex 评审 P1)。
+    const onError = (err: Error): void => {
+      nativeUpdater.removeListener('error', onError)
+      console.warn('[updater] Squirrel.Mac failed during quitAndInstall, relaunching the current version:', err)
+      app.relaunch()
+      app.exit(0)
+    }
+    nativeUpdater.on('error', onError)
+  }
   autoUpdater.quitAndInstall(process.platform !== 'win32', true)
 }

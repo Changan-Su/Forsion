@@ -16,10 +16,11 @@ const updater = vi.hoisted(() => ({
   opened: [] as string[],
   /** 钉过去拉 yml 失败(例:这一版 GitHub 上没有 latest-mac.yml) */
   checkFails: false,
+  relaunched: 0,
 }))
 const emitNative = (name: string, ...args: any[]) => { for (const cb of [...(updater.native.get(name) ?? [])]) cb(...args) }
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getVersion: () => updater.current, getPath: () => '/Applications/Forsion.app/Contents/MacOS/Forsion' },
+  app: { isPackaged: true, getVersion: () => updater.current, getPath: () => '/Applications/Forsion.app/Contents/MacOS/Forsion', relaunch: () => { updater.relaunched++ }, exit: () => {} },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (_c: string, s: any) => updater.sent.push(s) } }] },
   shell: { openExternal: async (url: string) => { updater.opened.push(url) } },
   // Squirrel.Mac(Electron 原生 autoUpdater)
@@ -65,7 +66,7 @@ beforeEach(() => {
   updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; updater.reject = false; answers.clear()
   updater.beta = false; updater.current = '2.13.3'
   updater.macSelf = { ok: false, reason: 'not-developer-id' }; updater.quitAndInstall.mockClear(); updater.native.clear()
-  updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false
+  updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -307,4 +308,39 @@ it('Developer ID mac: a release without latest-mac.yml on GitHub still offers th
   answers.set('/auth/region', { country: 'GB', mainland_china: false })
   const { checkForUpdates } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', manualInstall: true })
+})
+
+it('Developer ID mac: install-time recheck refuses a bundle that became read-only, and a beta toggle cannot drop a staged install', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, prepareInstall, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  updater.macSelf = { ok: false, reason: 'read-only' }
+  expect(await prepareInstall()).toBe(false)
+  expect(updater.native.get('update-downloaded')?.size ?? 0).toBe(0) // Squirrel 根本没被叫起来
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', manualInstall: true, selfInstallFailed: true })
+})
+
+it('Developer ID mac: a staged beta survives turning beta off, and a Squirrel error after quitAndInstall relaunches instead of leaving a windowless app', async () => {
+  onMac()
+  updater.beta = true
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }))
+  const { checkForUpdates, downloadUpdate, prepareInstall, channelChanged, installUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  const staging = prepareInstall()
+  channelChanged(false) // 准备中关测试版:不作废
+  expect(await staging).toBe(true)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.14.0-beta.1' })
+  installUpdate()
+  expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+  emitNative('error', new Error('ShipItState.plist could not be written'))
+  expect(updater.relaunched).toBe(1)
 })
