@@ -654,7 +654,9 @@ export function calloutPlugin() {
                     el.contentEditable = 'false'
                     if (emoji) el.textContent = emoji
                     else el.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`
-                    if (!view.editable) { el.setAttribute('aria-hidden', 'true'); return el }
+                    // 只有接管了换图标的宿主(统一页面主编辑器,MarkdownBlock 打 data-callout-icon-pick)才是按钮;
+                    // 别的宿主没人接这个事件,做成按钮就是吞掉点击、什么也不发生。
+                    if (!view.editable || !view.dom.hasAttribute('data-callout-icon-pick')) { el.setAttribute('aria-hidden', 'true'); return el }
                     el.setAttribute('role', 'button')
                     el.title = translate('mdcallout.icon')
                     el.setAttribute('aria-label', el.title)
@@ -667,7 +669,7 @@ export function calloutPlugin() {
                       view.dom.dispatchEvent(new CustomEvent('amadeus:callout-icon', { bubbles: true, detail: { bqPos: at - 2, rect: el.getBoundingClientRect(), current: emoji || null } }))
                     })
                     return el
-                  }, { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ci:${emoji || kind || 'note'}` }))
+                  }, { side: -1, ignoreSelection: true, stopEvent: (e) => !!(e.target as Element | null)?.closest?.('.callout-icon[role="button"]'), key: `ci:${emoji || kind || 'note'}` }))
                   // 没写标题 → 显示类型名作默认标题(本地化;自定义类型用它自己的名字)。只是装饰,不写进 md。
                   if (!inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)) {
                     const label = kind ? translate(`mdcallout.type.${kind}`) : c.raw.charAt(0).toUpperCase() + c.raw.slice(1)

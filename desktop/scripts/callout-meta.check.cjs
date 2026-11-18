@@ -91,6 +91,8 @@ async function main() {
     await caretAtEnd(p, 'OMEGA'); const before = await selHead(p)
     const tipIcon = bq(p, '提示标题').locator('.callout-icon')
     ok('可编辑时图标是按钮、有「换图标」提示', (await tipIcon.getAttribute('role')) === 'button' && (await tipIcon.getAttribute('title')) === '换图标')
+    // 只有接管换图标的宿主(统一页面主编辑器)才出按钮:画布卡片 / 嵌入 / v3 的编辑器没人接这个事件
+    ok('主编辑器带 data-callout-icon-pick,页面里只有它一个', await p.evaluate(() => { const all = document.querySelectorAll('.ProseMirror[data-callout-icon-pick]'); return all.length === 1 && all[0] === window.__upage.probe.view().dom }))
     await tipIcon.click(); await sleep(p, 300)
     const pick = p.locator('.amx-iconpick')
     ok('点图标打开图标选择器', await pick.count() === 1)

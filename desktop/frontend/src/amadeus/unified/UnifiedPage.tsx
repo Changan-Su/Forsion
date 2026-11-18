@@ -3849,7 +3849,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (!el || readOnly || reading || mode === 'source') return
     const on = (e: Event): void => {
       const d = (e as CustomEvent<{ bqPos: number; rect: DOMRect; current: string | null }>).detail
-      const node = layer.getView()?.state.doc.nodeAt(d.bqPos)
+      // 只认本页主编辑器发的:画布卡片 / 嵌入的编辑器也在 bodyRef 里,它们的 bqPos 是另一份文档的位置
+      const view = layer.getView()
+      if (!view || e.target !== view.dom) return
+      const node = view.state.doc.nodeAt(d.bqPos)
       // 令牌前有 HTML 原子的标注改不了令牌(见 calloutTokenEditable),不开选择器
       if (node && isCalloutQuote(node) && calloutTokenEditable(node)) setCalloutIconPick({ bqPos: d.bqPos, node, x: d.rect.left, y: d.rect.bottom + 4, current: d.current })
     }
