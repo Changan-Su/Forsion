@@ -105,6 +105,7 @@ export function TocBlock({ src, source }: { src: string; source: TocDocSource })
           className="amx-toc-item"
           href={`#${encodeURIComponent(it.text)}`}
           draggable={false}
+          data-no-linkcard=""
           data-level={it.level}
           style={{ '--toc-depth': it.level - base } as CSSProperties}
           // mousedown 吞掉:否则 ProseMirror 先按坐标改选区 / 抢焦点(同 `</>` 键);中键也不许当链接开新窗。

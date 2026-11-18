@@ -228,8 +228,14 @@ async function main() {
     const tocSeed = seed.replace('本页汇总 2.15 发布前要对齐的事项。\n\n', `本页汇总 2.15 发布前要对齐的事项。\n\n${FENCE}\n\n`)
 
     // ── 整块选中目录块再打字:字落在下面新起的一段,不进藏着的源码 ──────────────
-    p = await open(browser, `# 选中\n\n${FENCE}\n\n正文。\n`)
+    p = await open(browser, `# 选中\n\n${FENCE}\n\n正文。\n\n看 [网页](https://example.com) 这条链接。\n`)
     await p.waitForSelector(`${PM} .amx-toc-item`)
+    // 条目是 `#标题` 锚点,不是正文链接:悬停不弹链接卡(正对照:正文链接照弹)
+    await p.locator(`${PM} a[href="https://example.com"]`).hover(); await p.waitForTimeout(800)
+    const cardOnLink = await p.locator('.amx-linkcard').count()
+    await p.mouse.move(5, 5); await p.waitForTimeout(600)
+    await p.locator(`${PM} .amx-toc-item`).first().hover(); await p.waitForTimeout(800)
+    ok('hovering a toc row shows no link card (a body link still does)', cardOnLink === 1 && await p.locator('.amx-linkcard').count() === 0, { cardOnLink })
     await caretAfterParagraph(p, 0)
     await p.evaluate(() => { const v = window.__upage.probe.view(); const s = v.state.selection; v.dispatch(v.state.tr.setSelection(s.constructor.create(v.state.doc, s.$from.start()))) })
     await p.keyboard.press('ArrowUp')
@@ -237,7 +243,7 @@ async function main() {
     await p.keyboard.type('abc')
     await flush(p)
     saved = await disk(p)
-    ok('typing on a selected toc block starts a new line below, source untouched', saved.includes(`${FENCE}\n\nabc\n\n正文。`), saved)
+    ok('typing on a selected toc block starts a new line below, source untouched', saved.includes(`${FENCE}\n\nabc\n\n正文。\n`), saved)
     await p.close()
 
     // ── 折起的小节里的标题:点了先展开再跳 ──────────────────────────────
