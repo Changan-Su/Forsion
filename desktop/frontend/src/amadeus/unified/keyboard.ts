@@ -532,8 +532,9 @@ function anchorMarkRun($from: ResolvedPos, dir: -1 | 1): { from: number; to: num
 /** 先把这串锚标记拿掉,在拿掉之后的文档上跑 base 的合并命令,再把锚标记插回「它指着的那块的字」最后落进的那一块前面。
  *  不假定一定是合并:base 遇到引用 / 列表可能只是拆壳或包进去(Codex 评审:Delete 撞引用 = 引用拆壳、两块并没有并),
  *  锚标记跟着字走才不会指错块。合并在不带插件的临时状态里算(state.apply 会顺带跑各插件的 appendTransaction,
- *  步骤就接不回来了)。base 什么都没改 → null。
- *  caret / textAt 是原文档坐标:caret = 光标,textAt = 被指着的那块里的一处文字位置;depth = 锚标记所在容器的深度。 */
+ *  步骤就接不回来了)。base 什么都没改 → null;base 只挪了选区(K-22 撞上 callout 标题 = 整块选中)→ 只带选区。
+ *  caret / textAt 是原文档坐标:caret = 光标,textAt = 被指着的那块里**最后**一处文字的位置(引用打头是空段时,
+ *  K-22 只吃掉那个空段,头一处文字会落进本块、锚标记跟着指错,Codex 评审);depth = 锚标记所在容器的深度。 */
 function joinAcrossMarks(
   state: EditorState, run: { from: number; to: number }, caret: number, textAt: number, depth: number, join: Command,
 ): Transaction | null {
@@ -543,7 +544,11 @@ function joinAcrossMarks(
   const tmp = EditorState.create({ doc: tr.doc, selection: TextSelection.create(tr.doc, tr.mapping.map(caret)) })
   let joined = null as Transaction | null
   join(tmp, (t) => { joined = t })
-  if (!joined || !joined.docChanged) return null
+  if (!joined) return null
+  if (!joined.docChanged) {
+    if (!joined.selectionSet) return null
+    return state.tr.setSelection(joined.selection.map(state.doc, tr.mapping.invert()))
+  }
   for (const step of joined.steps) tr.step(step)
   tr.setSelection(Selection.fromJSON(tr.doc, joined.selection.toJSON()))
   const at = joined.mapping.map(text, -1)
@@ -566,7 +571,7 @@ export const bsOverAnchorMarks: Command = (state, dispatch) => {
     if (NodeSelection.isSelectable(prev)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
     return true
   }
-  const tr = joinAcrossMarks(state, run, $from.pos, $from.pos, $from.depth - 1, joinBackward)
+  const tr = joinAcrossMarks(state, run, $from.pos, $from.end(), $from.depth - 1, joinBackward)
   if (tr) dispatch?.(tr.scrollIntoView())
   return true
 }
@@ -585,8 +590,8 @@ export const deleteOverAnchorMarks: Command = (state, dispatch) => {
     if (NodeSelection.isSelectable(next)) dispatch?.(state.tr.setSelection(NodeSelection.create(state.doc, run.otherPos)).scrollIntoView())
     return true
   }
-  const first = Selection.findFrom(state.doc.resolve(run.to), 1, true)
-  const textAt = first && first.head < run.to + next.nodeSize ? first.head : run.to + 1
+  const last = Selection.findFrom(state.doc.resolve(run.to + next.nodeSize), -1, true)
+  const textAt = last && last.head > run.to ? last.head : run.to + 1
   // 与没有锚标记时同一条路:先试 K-22 的「把下一块的字接上来」,再交 base(临时状态没有折叠插件,折叠判据按没折叠算)
   const tr = joinAcrossMarks(state, run, $from.pos, textAt, $from.depth - 1, chain(deleteJoinNextText, joinForward))
   if (tr) dispatch?.(tr.scrollIntoView())

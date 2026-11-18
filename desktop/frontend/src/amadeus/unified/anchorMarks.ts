@@ -12,7 +12,7 @@ import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@mil
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import { Mapping } from '@milkdown/kit/prose/transform'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
-import type { Node as ProseNode } from '@milkdown/kit/prose/model'
+import type { Node as ProseNode, NodeType } from '@milkdown/kit/prose/model'
 import { BLOCK_MARKER_RE } from '../../../../shared/amadeus/compiler/markers'
 
 /** 这个 html 节点是不是一枚锚标记(值恰好是 `<!-- a id -->`)。 */
@@ -44,29 +44,31 @@ function markIdOf(n: ProseNode | null | undefined): string | null {
   return m ? m[1] : null
 }
 
-/** 旧文档里的一枚独占一段的锚标记:html 节点位置、所在段落、父容器深度、它指着的那一块(下一个非锚标记兄弟)最后一处文字的位置。 */
-type Site = { h: number; para: ProseNode; id: string; depth: number; targetEnd: number | null }
+/** 旧文档里的一枚独占一段的锚标记:html 节点位置、所在段落、父容器(深度与类型)、它指着的那一块(下一个非锚标记兄弟)
+ *  最后一处文字的位置。按容器逐层走,一串连着的锚标记共用一次查找(Codex 评审:逐枚往后扫在几千枚连着时是平方级)。 */
+type Site = { h: number; para: ProseNode; id: string; depth: number; container: NodeType; targetEnd: number | null }
 function pureMarkSites(doc: ProseNode): Site[] {
   const out: Site[] = []
-  doc.descendants((node, pos, parent, index) => {
-    if (!node.isTextblock) return true
-    if (!isAnchorMarkPara(node)) return false
-    let targetEnd: number | null = null
-    if (parent) {
-      let p = pos + node.nodeSize
-      for (let k = index + 1; k < parent.childCount; k++) {
-        const c = parent.child(k)
-        if (!isAnchorMarkPara(c)) {
-          const last = Selection.findFrom(doc.resolve(p + c.nodeSize), -1, true)
-          if (last && last.head > p) targetEnd = last.head
-          break
-        }
-        p += c.nodeSize
+  const walk = (node: ProseNode, start: number, depth: number): void => {
+    let pending: Site[] = []
+    node.forEach((c, off) => {
+      const at = start + off
+      if (isAnchorMarkPara(c)) {
+        pending.push({ h: at + 1, para: c, id: markIdOf(c.firstChild)!, depth, container: node.type, targetEnd: null })
+        return
       }
-    }
-    out.push({ h: pos + 1, para: node, id: markIdOf(node.firstChild)!, depth: doc.resolve(pos).depth, targetEnd })
-    return false
-  })
+      if (pending.length) {
+        const last = Selection.findFrom(doc.resolve(at + c.nodeSize), -1, true)
+        const end = last && last.head > at ? last.head : null
+        for (const s of pending) s.targetEnd = end
+        out.push(...pending)
+        pending = []
+      }
+      if (!c.isTextblock && !c.isLeaf) walk(c, at + 1, depth + 1)
+    })
+    out.push(...pending)
+  }
+  walk(doc, 0, 0)
   return out
 }
 
@@ -88,57 +90,74 @@ function splitOut(tr: Transaction, h: number): Transaction {
   return tr
 }
 
-/** 从锚标记段出发朝 dir 找最近一处看得见的文字位置(连着几枚锚标记段一并跳过);这头没有就找另一头,都没有 → null。 */
-function escapeFrom(doc: ProseNode, pos: number, dir: 1 | -1): Selection | null {
+/** 从锚标记段出发朝 dir 找最近一处看得见的文字位置(连着几枚锚标记段一并跳过);这头没有就找另一头,都没有 → null。
+ *  avoid:找到的恰好是这个位置就换另一头(有范围的选区,头别挪到锚点上把范围收没了,Codex 评审)。 */
+function escapeFrom(doc: ProseNode, pos: number, dir: 1 | -1, avoid = -1): Selection | null {
   for (const d of [dir, -dir] as const) {
     let $at = doc.resolve(pos)
     while (isAnchorMarkPara($at.parent)) {
       const next = Selection.findFrom(doc.resolve(d > 0 ? $at.after() : $at.before()), d, true)
       if (!next) break
-      if (!isAnchorMarkPara(next.$head.parent)) return next
+      if (!isAnchorMarkPara(next.$head.parent)) {
+        if (next.head !== avoid) return next
+        break
+      }
       $at = next.$head
     }
   }
   return null
 }
 
-/** 用户这一下编辑(粘贴、输入法、命令…);撤销重做是回放、外部回灌是权威内容,都不改写。 */
-const userEdit = (t: Transaction): boolean => t.docChanged && !t.getMeta('history$') && t.getMeta('addToHistory') !== false
+/** 这一组事务是不是用户这一下编辑(粘贴、输入法、命令…)。撤销重做是回放、外部回灌是权威内容,都不改写;
+ *  别的插件追加的事务按它的根事务算(根是回灌 / 撤销时,追加的规范化事务也不算用户编辑,Codex 评审)。 */
+function userEdits(trs: readonly Transaction[]): boolean {
+  const isUser = (t: Transaction): boolean => {
+    const root = (t.getMeta('appendedTransaction') as Transaction | undefined) ?? t
+    return !root.getMeta('history$') && root.getMeta('addToHistory') !== false
+  }
+  return trs.some((t) => t.docChanged) && trs.every(isUser)
+}
 
-/** 用户这一下编辑之后的修复:① 原本独占一段、现在混进了文字的锚标记拆回独占一段;② 被一并删掉、但它指着的那一块
- *  还剩着字的锚标记(跨块选中删除 / 剪切,Codex 评审),插回那块字最后落进的那一块前面 —— 文档里别处还有同号的
- *  (拖走、剪切粘贴挪了地方)就不补。 */
+/** 用户这一下编辑之后的修复:① 原本独占一段、现在混进了文字的锚标记拆回独占一段;② 被跨块选中删除一并删掉、
+ *  但它指着的那一块还剩着字的锚标记(Codex 评审),插回那块字最后落进的那一块前面。不补的:文档里别处还有同号的
+ *  独占锚标记(拖走挪了地方);剪切(锚标记跟着剪贴板走,粘贴回来就是它,补了会变两份);那块字落进了别的容器
+ *  (跨出引用 / 列表 / 栏,补回去会指错块,宁可和以前一样丢掉)。 */
 function repair(tr: Transaction, trs: readonly Transaction[], old: EditorState, state: EditorState): Transaction {
   const sites = pureMarkSites(old.doc)
   if (!sites.length) return tr
   const mapping = new Mapping()
   for (const t of trs) mapping.appendMapping(t.mapping)
+  // 还活着的 = 独占一段的锚标记 + 下面要拆回独占的那几枚;行内注释里同号的不算(Codex 评审)
   const live = new Set<string>()
   state.doc.descendants((n) => {
     if (!n.isTextblock) return true
-    n.forEach((c) => { const id = markIdOf(c); if (id) live.add(id) })
+    if (isAnchorMarkPara(n)) live.add(markIdOf(n.firstChild)!)
     return false
   })
+  const cutting = trs.some((t) => t.getMeta('uiEvent') === 'cut')
   const mixed: number[] = []
   const lost: Array<{ site: Site; at: number }> = []
   for (const s of sites) {
     const r = mapping.mapResult(s.h, 1)
     if (!r.deleted && markIdOf(state.doc.nodeAt(r.pos)) === s.id) {
       const parent = state.doc.resolve(r.pos).parent
-      if (!isAnchorMarkPara(parent) && parent.isTextblock && parent.type.name !== 'code_block') mixed.push(r.pos)
-      continue
+      if (!isAnchorMarkPara(parent) && parent.isTextblock && parent.type.name !== 'code_block') { mixed.push(r.pos); live.add(s.id) }
     }
-    if (live.has(s.id) || s.targetEnd == null) continue
+  }
+  for (const s of sites) {
+    const r = mapping.mapResult(s.h, 1)
+    if (!r.deleted && markIdOf(state.doc.nodeAt(r.pos)) === s.id) continue
+    if (cutting || live.has(s.id) || s.targetEnd == null) continue
     const t = mapping.mapResult(s.targetEnd, -1)
     if (!t.deleted) lost.push({ site: s, at: t.pos })
   }
   for (const h of mixed.sort((a, b) => b - a)) tr = splitOut(tr, h)
   // 按原文序逐枚插回:同一块前面的几枚,先插的在前
   for (const { site, at } of lost.sort((a, b) => a.site.h - b.site.h)) {
-    const pos = tr.mapping.map(at, -1)
-    const $a = tr.doc.resolve(pos)
+    const $a = tr.doc.resolve(tr.mapping.map(at, -1))
+    if ($a.depth <= site.depth || $a.node(site.depth).type !== site.container) continue
     try {
-      tr.insert($a.depth > site.depth ? $a.before(site.depth + 1) : pos, site.para)
+      tr.insert($a.before(site.depth + 1), site.para)
     } catch {
       // 插不进(那一处已不是能放段落的容器)就算了
     }
@@ -160,7 +179,7 @@ export const anchorMarksPlugin = $prose(() => {
     appendTransaction: (trs, old, state) => {
       if (!trs.some((t) => t.docChanged || t.selectionSet)) return null
       let tr = state.tr
-      if (trs.some(userEdit)) tr = repair(tr, trs, old, state)
+      if (userEdits(trs)) tr = repair(tr, trs, old, state)
       // 选区头落在锚标记段上 → 挪到看得见的文字。在标记前(段内偏移 0)= 属于上一块的末尾,往回挪;在标记后 = 下一块的开头,往前挪。
       // 有范围的选区只挪头,锚点留着(Codex 评审)。
       const sel = tr.selection
@@ -170,7 +189,7 @@ export const anchorMarksPlugin = $prose(() => {
           if (target) tr.setSelection(target)
         }
       } else if (isAnchorMarkPara(sel.$head.parent)) {
-        const target = escapeFrom(tr.doc, sel.head, sel.$head.parentOffset === 0 ? -1 : 1)
+        const target = escapeFrom(tr.doc, sel.head, sel.$head.parentOffset === 0 ? -1 : 1, sel.empty ? -1 : sel.anchor)
         if (target) tr.setSelection(sel.empty ? target : TextSelection.create(tr.doc, sel.anchor, target.head))
       }
       return tr.docChanged || tr.selectionSet ? tr : null
