@@ -889,25 +889,25 @@ const SCEN = {
       return t
     }
     const MARK = { ...OLD_DONE, [KEYS.suggest]: '1' }
-    // 缺省五张卡片是哪几张;再从架子上另找一个 Space 凑成六张(三整行)
-    let five = [], six = null
+    // 缺省的卡片是哪几张;再从架子上另找 Space 凑成六张(三整行)
+    let base = [], six = null
     {
       cur = 's15-baseline'
       const t = await home({ seed: OLD_DONE, viewport: { width: 360, height: 800 } })
       try {
         const g = await homeGeometry(t.page, t.dockTop)
-        five = g.cardIds
+        base = g.cardIds
         ok('no marker: no fit attribute, every card drawn (same as before this change)', g.fit === null && g.suggest === null && g.cards === g.cardsDom && g.cards > 0, { fit: g.fit, cards: g.cards, cardsDom: g.cardsDom, ids: g.cardIds })
-        const extra = await t.page.evaluate((have) => (window.__stage?.state?.spaces || []).map((sp) => `space:${sp.id}`).find((id) => !have.includes(id) && id !== 'space:home') ?? null, five)
-        if (extra && five.length === 5) six = [...five, extra]
+        const extra = await t.page.evaluate((have) => (window.__stage?.state?.spaces || []).map((sp) => `space:${sp.id}`).filter((id) => !have.includes(id) && id !== 'space:home'), base)
+        if (base.length && base.length < 6 && base.length + extra.length >= 6) six = [...base, ...extra.slice(0, 6 - base.length)]
       } finally { await t.ctx.close() }
     }
-    if (!six) notRun('six-card cases', `could not build a six-card set (default cards: ${JSON.stringify(five)})`)
+    if (!six) notRun('six-card cases', `could not build a six-card set (default cards: ${JSON.stringify(base)})`)
 
     // 常见手机 + 一台横放的平板:建议块必须出现(至少两条),输入条在最后一张画出来的卡下面、Dock 上面
     const SIZES = [{ width: 360, height: 780 }, { width: 360, height: 800 }, { width: 393, height: 851 }, { width: 412, height: 915 }, { width: 1280, height: 768 }]
     for (const vp of SIZES) for (const locale of ['zh-CN', 'en-US']) for (const set of six ? [null, six] : [null]) {
-      const n = set ? 6 : 5
+      const n = set ? 6 : base.length
       cur = `s15-${vp.width}x${vp.height}-${locale.slice(0, 2)}-${n}`
       const t = await home({ seed: { ...MARK, ...(set ? { forsion_home_cards_v1: JSON.stringify(set) } : {}) }, viewport: vp, locale })
       try {
