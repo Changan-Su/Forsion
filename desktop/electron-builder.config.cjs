@@ -18,7 +18,7 @@ const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
 // Either half missing keeps the ad-hoc path: a Developer ID signature without notarization is still blocked by
 // Gatekeeper, and a half-configured CI would otherwise fail late inside electron-builder.
 const macDeveloperId = Boolean(
-  (process.env.CSC_LINK || process.env.CSC_NAME) &&
+  (process.env.CSC_LINK || process.env.CSC_NAME || process.env.CSC_KEYCHAIN) &&
     ((process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
       process.env.APPLE_KEYCHAIN_PROFILE),
 )
@@ -162,8 +162,8 @@ module.exports = {
   mac: {
     target: 'dmg',
     icon: 'build/icon.icns',
-    // Developer ID signing + notarization only when macDeveloperId (certificate: CSC_LINK from the MAC_CSC_LINK
-    // secret, or CSC_NAME locally; notarization: APPLE_API_KEY / _KEY_ID / _ISSUER or APPLE_KEYCHAIN_PROFILE).
+    // Developer ID signing + notarization only when macDeveloperId (certificate: CSC_KEYCHAIN prepared by CI from the
+    // MAC_CSC_LINK secret, or CSC_LINK / CSC_NAME locally; notarization: APPLE_API_KEY / _KEY_ID / _ISSUER or APPLE_KEYCHAIN_PROFILE).
     // Otherwise identity stays null and afterPack's ad-hoc signature is what ships, exactly as before.
     identity: macDeveloperId ? undefined : null,
     hardenedRuntime: true,
