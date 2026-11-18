@@ -9,7 +9,8 @@ import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { NodeSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
-import { containerTakesColor, isCalloutQuote, normalizeBlockColor } from '../blocks/markdown/blockColor'
+import { containerTakesColor, hasBlockColor, isCalloutQuote, normalizeBlockColor } from '../blocks/markdown/blockColor'
+import { CALLOUT_COLOR_NAMES, readCalloutToken, withCalloutMeta, type CalloutMeta } from '../../../../shared/amadeus/calloutToken'
 
 export type ColorChannel = 'bg' | 'fg'
 export interface ColorTarget { pos: number; node: PMNode }
@@ -39,7 +40,8 @@ function collect(node: PMNode, pos: number, out: ColorTarget[]): void {
     return
   }
   if (/_list$/.test(name)) { node.forEach((child, off) => collect(child, pos + 1 + off, out)); return }
-  if (name === 'blockquote') { if (!isCalloutQuote(node) && containerTakesColor(node)) out.push({ pos, node }); return }
+  // 标注 / 折叠块(A5):底色写进令牌的元数据位 `[!tip|🚀 blue]`,没有字色
+  if (name === 'blockquote') { if (isCalloutQuote(node) ? calloutTokenEditable(node) : containerTakesColor(node)) out.push({ pos, node }); return }
   if (PASS_THROUGH.has(name)) node.forEach((child, off) => collect(child, pos + 1 + off, out))
 }
 
@@ -68,7 +70,8 @@ export function colorTargetAtCursor(state: EditorState): ColorTarget | null {
     const n = $from.node(d)
     if (n.type.name === 'table_cell' || n.type.name === 'table_header') return null
     if (n.type.name === 'list_item' || n.type.name === 'blockquote') {
-      if (n.type.name === 'blockquote' && isCalloutQuote(n)) return null
+      // 标注:标题行 = 整只标注(底色进元数据位,A5);正文里的段落 = 段落自己(下面 break 之后那一支)
+      if (n.type.name === 'blockquote' && isCalloutQuote(n)) { if ($from.index(d) === 0) return calloutTokenEditable(n) ? { pos: $from.before(d), node: n } : null; break }
       // 容器的第一段 = 容器本身;其余段 = 段落自己
       if ($from.index(d) === 0) return containerTakesColor(n) ? { pos: $from.before(d), node: n } : null
       break
@@ -77,9 +80,45 @@ export function colorTargetAtCursor(state: EditorState): ColorTarget | null {
   return { pos: $from.before($from.depth), node: tb }
 }
 
+/** 标注的底色在令牌里(A5);别的块在 attr 里。 */
+const isCallout = (n: PMNode): boolean => n.type.name === 'blockquote' && isCalloutQuote(n)
+
+/** 令牌能不能按文字改:标题段从开头起、盖住整个令牌的必须全是文本节点。
+ *  段首有 HTML 原子(A1 留着的 `<span data-amadeus-bg>`、手写的 span)时,textContent 的下标和文档位置对不上(原子占位置、不占字),
+ *  照下标替换会删掉原子、把令牌尾巴留进标题(Codex 评审 A5 #1);Obsidian 也不认令牌前有东西的标注 —— 这种不改。 */
+export function calloutTokenEditable(bq: PMNode): boolean {
+  const first = bq.firstChild
+  const t = first && first.isTextblock ? readCalloutToken(first.textContent) : null
+  if (!first || !t) return false
+  let covered = 0
+  for (let i = 0; i < first.childCount && covered < t.token.length; i++) {
+    const c = first.child(i)
+    if (!c.isText) return false
+    covered += c.text!.length
+  }
+  return covered >= t.token.length
+}
+
+/** 改标注令牌的元数据位(图标 / 底色),写进 tr。块颜色和换图标共用这一个写入口。改了返回 true。 */
+export function setCalloutMeta(tr: Transaction, bqPos: number, patch: Partial<Pick<CalloutMeta, 'icon' | 'color'>>): boolean {
+  const node = tr.doc.nodeAt(bqPos)
+  if (!node || !isCallout(node) || !calloutTokenEditable(node)) return false
+  const r = withCalloutMeta(node.firstChild!.textContent, patch)
+  if (!r) return false
+  tr.insertText(r.head, bqPos + 2 + r.from, bqPos + 2 + r.to)
+  return true
+}
+function colorOf(t: ColorTarget, ch: ColorChannel): string {
+  if (!isCallout(t.node)) return normalizeBlockColor(t.node.attrs[ch])
+  return ch === 'bg' ? readCalloutToken(t.node.firstChild!.textContent)?.meta.color ?? '' : ''
+}
+
+/** 选中的全是标注:块菜单只给「背景」页、不给「更多颜色」(元数据位只存语义名)。 */
+export const onlyCallouts = (targets: ColorTarget[]): boolean => targets.length > 0 && targets.every((t) => isCallout(t.node))
+
 /** 这些目标当前的颜色:全一样 → 那个值,不一样 / 没有 → ''。 */
 export function sharedColor(targets: ColorTarget[], ch: ColorChannel): string {
-  const vals = new Set(targets.map((t) => normalizeBlockColor(t.node.attrs[ch])))
+  const vals = new Set(targets.map((t) => colorOf(t, ch)))
   return vals.size === 1 ? [...vals][0] : ''
 }
 
@@ -90,9 +129,18 @@ export function blockColorTr(state: EditorState, targets: ColorTarget[], patch: 
   const next = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, normalizeBlockColor(v)])) as Partial<Record<ColorChannel, string>>
   let tr = base ?? closeHistory(state.tr)
   let changed = false
-  for (const t of targets) {
+  // 从后往前改:标注改的是令牌文字(长度会变),先改后面的,前面目标的位置就不受影响(Codex 评审 A5 前置)
+  for (const t of [...targets].sort((a, b) => b.pos - a.pos)) {
     const node = tr.doc.nodeAt(t.pos)
     if (!node || node.type !== t.node.type) continue
+    if (isCallout(node)) {
+      // 只有底色;值只收语义名(九色 + accent),「更多颜色」的 hex 对标注不生效
+      if (!('bg' in next) || (next.bg && !(CALLOUT_COLOR_NAMES as readonly string[]).includes(next.bg))) continue
+      if (setCalloutMeta(tr, t.pos, { color: next.bg })) changed = true
+      // 引用先上过整块颜色、后来才写成标注:attr 上的颜色存不下(写盘时标注不写段首标记),一并清掉,显示和存盘一致
+      if (hasBlockColor(node.attrs)) { tr = tr.setNodeMarkup(t.pos, undefined, { ...tr.doc.nodeAt(t.pos)!.attrs, bg: '', fg: '' }); changed = true }
+      continue
+    }
     const attrs = { ...node.attrs, ...next }
     if ((['bg', 'fg'] as const).every((k) => normalizeBlockColor(attrs[k]) === normalizeBlockColor(node.attrs[k]))) continue
     tr = tr.setNodeMarkup(t.pos, undefined, attrs)

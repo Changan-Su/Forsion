@@ -4,6 +4,7 @@
 // 靠「改 store → content 差异 → remount」转换必然竞态(残留 '/'、丢字、丢焦点),已实测坐实。
 // 语义对齐 Notion/AFFiNE:标题是「设成 N 级」(Milkdown 内置规则是叠加,h1+## 会变 h3);
 // 同级重打幂等;已在列表项内时 -/1./[] 改父列表类型/勾选态,不再嵌套包一层。
+import { CALLOUT_HEAD_RE } from '../../../../../shared/amadeus/calloutToken'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { Selection, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
@@ -35,7 +36,7 @@ export type TriggerKind = 'text' | 'heading' | 'bullet' | 'ordered' | 'task' | '
 // 令牌**不带尾随空格**:contenteditable 会把行尾空格吃掉(实测),留着只会得到一个「有时有有时没有」
 // 的落盘形态。标题紧跟在 `-` 后面 Obsidian 照样认,渲染层靠 CSS 给出间距。
 export const FOLD_TOKEN = '[!fold]-'
-const CALLOUT_HEAD_RE = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09:`[!my-type]` 也是 callout)
+// 与 callout.ts 的类型口径一致(R-09:`[!my-type]` 也是 callout;A5:`[!tip|🚀 blue]` 也是),规则在 shared/amadeus/calloutToken
 
 export interface Trigger {
   kind: TriggerKind

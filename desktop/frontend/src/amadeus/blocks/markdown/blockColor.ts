@@ -11,6 +11,7 @@
  *    存盘逐字写回,不丢。 */
 
 /** 九色语义名:与划词调色板(./colorPaletteValues 的 itb.color.*)同名;底色那一组的「粉」在暗色 CSS 里也叫 magenta。 */
+import { CALLOUT_HEAD_RE } from '../../../../../shared/amadeus/calloutToken'
 export const BLOCK_COLOR_NAMES = ['red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'magenta', 'grey'] as const
 export type BlockColorName = (typeof BLOCK_COLOR_NAMES)[number]
 
@@ -128,7 +129,7 @@ export function liftContainerColor<T extends MdNode>(node: T): { bg: string; fg:
   //  后一种把颜色标记钉成正文 HTML(和没有 A1 时一模一样);前一种交给段落自己读(第一枚归段落,重复的那枚照旧是正文)。
   const relifts = leadingMarkers(firstOut.children).some((m) => m.attrs.bg || m.attrs.fg)
   // 口径同写盘那侧的 isCalloutQuote(PM textContent):HTML 不算字,转义拆开的几段文字拼起来看
-  const exposesCallout = node.type === 'blockquote' && /^\[![^\]\s]+\]/.test(mdText(rest))
+  const exposesCallout = node.type === 'blockquote' && CALLOUT_HEAD_RE.test(mdText(rest))
   if (exposesCallout) {
     const pinned = first.children!.map((c, k) => (k < i && c.type === 'html' && /data-amadeus-(?:bg|fg)=/.test(c.value ?? '') ? { ...c, amadeusKeep: true } : c))
     return { bg: '', fg: '', node: { ...node, children: [{ ...first, children: pinned }, ...node.children!.slice(1)] } }
@@ -173,7 +174,7 @@ type PMLike = {
 /** `> [!type]…` 标注 / 折叠块:颜色不写段首标记(令牌必须在段首,A5 另定存法)。 */
 export const isCalloutQuote = (node: PMLike): boolean => {
   const first = node.firstChild
-  return node.type.name === 'blockquote' && !!first && first.isTextblock && /^\[![^\]\s]+\]/.test(first.textContent)
+  return node.type.name === 'blockquote' && !!first && first.isTextblock && CALLOUT_HEAD_RE.test(first.textContent)
 }
 
 /** 容器能不能存颜色:第一段是段落 / 标题,且不是标注。 */

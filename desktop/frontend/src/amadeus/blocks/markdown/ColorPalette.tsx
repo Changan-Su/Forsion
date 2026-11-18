@@ -37,6 +37,8 @@ export interface ColorPaletteProps {
   side?: 'below' | 'right'
   onText?: (value: string) => void
   onFill: (value: string) => void
+  /** 不给「更多颜色」(自定义 hex):标注的底色只存语义名(A5,hex 在 Obsidian 里会被认成标签)。 */
+  noCustom?: boolean
   onClose: () => void
   anchor: HTMLElement | null
   fallback?: { x: number; y: number }
@@ -120,7 +122,7 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
           {mode === 'text' ? <span data-hlc={c.nameKey.slice('itb.color.'.length)} style={{ color: swatchOf(c) }}>A</span> : <i style={{ background: swatchOf(c) }} />}{current === c.v && <Check size={12} />}
         </button>)}
       </div>
-      <button className="amx-palette-option" data-more data-color-option onClick={() => { if (/^#[0-9a-f]{6}$/i.test(current)) setHex(current); setCustom(true) }}><span>{t('palette.more')}</span>{customSelected && <Check size={14} />}</button>
+      {!p.noCustom && <button className="amx-palette-option" data-more data-color-option onClick={() => { if (/^#[0-9a-f]{6}$/i.test(current)) setHex(current); setCustom(true) }}><span>{t('palette.more')}</span>{customSelected && <Check size={14} />}</button>}
     </>}
     <div className="amx-palette-scope">{t(p.scope === 'block' ? 'palette.block' : 'palette.selection')}</div>
   </OverlayAt>, document.body)

@@ -17,6 +17,13 @@ describe('Amadeus publication dialect', () => {
       '<details class="md-callout md-fold"><summary>全部更新</summary>',
     )
   })
+  it('reads the callout metadata slot: icon goes into the title, colour becomes data-bg, unknown words stay hidden (A5)', () => {
+    const { html } = renderPublicMarkdown('> [!tip|🚀 blue wide] 发布节奏\n> 正文\n\n> [!fold|green]+ 折叠\n> 内容')
+    expect(html).toContain('<aside class="md-callout" data-bg="blue"><p class="md-callout-title">🚀 发布节奏</p>')
+    expect(html).toContain('<details class="md-callout md-fold" data-bg="green" open><summary>折叠</summary>')
+    expect(html).not.toContain('wide')
+    expect(html).not.toContain('|')
+  })
   it('combines standard poster image and native wiki video embed without loading a player', () => {
     const { html } = renderPublicMarkdown(
       '![Film](/releases/cover.jpg)\n\n![[/releases/film.mp4]]',

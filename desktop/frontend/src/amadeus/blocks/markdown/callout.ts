@@ -12,6 +12,7 @@ import { registerMessages, translate } from '../../../i18n'
 import { splitParagraph } from './softBreak'
 import { FOLD_TOKEN } from './blockTriggers'
 import { reducedMotion } from '@lcl/engine/spring'
+import { CALLOUT_TOKEN_RE, readCalloutToken } from '../../../../../shared/amadeus/calloutToken'
 
 registerMessages({
   'mdcallout.expand': { zh: '展开', en: 'Expand' },
@@ -19,6 +20,7 @@ registerMessages({
   'mdcallout.title': { zh: '折叠标题', en: 'Toggle title' },
   'mdcallout.empty': { zh: '空折叠块，点击添加内容', en: 'Empty toggle. Click to add content.' },
   'mdcallout.source': { zh: '编辑折叠源码', en: 'Edit toggle source' },
+  'mdcallout.icon': { zh: '换图标', en: 'Change icon' },
   // 有色标注没写标题时的默认标题(R-09,Obsidian 同:缺标题 = 类型名)。别名归到下面 CALLOUT_ALIASES 的正名。
   'mdcallout.type.note': { zh: '笔记', en: 'Note' },
   'mdcallout.type.abstract': { zh: '摘要', en: 'Abstract' },
@@ -69,7 +71,7 @@ type CalloutAst = { type: string; value?: string; children?: CalloutAst[]; posit
 export function splitCalloutTitle(tree: CalloutAst): void {
   const first = tree.children?.[0]
   if (tree.type === 'blockquote' && first?.type === 'paragraph' && first.position
-    && /^\[![\w-]+\][+-]?/.test(first.children?.[0]?.value ?? '')) {
+    && CALLOUT_TOKEN_RE.test(first.children?.[0]?.value ?? '')) {
     const parts: CalloutAst[] = splitParagraph(first)
     if (parts.length > 1) tree.children!.splice(0, 1, ...parts)
   }
@@ -92,14 +94,22 @@ export const calloutTitleRemark = $remark('amadeusCalloutTitle', () => () => spl
  * 只认**引用行行首**的令牌,普通段落里的 `\[` 一概不动 —— 那里的转义是必要的。
  */
 export const unescapeCalloutToken = (md: string): string =>
-  md.replace(/^((?:[ \t]*>[ \t]?)+)\\\[!/gm, '$1[!')
+  md.replace(/^((?:[ \t]*>[ \t]?)+)\\\[!/gm, '$1[!').replace(CALLOUT_ESCAPED_RE, (all, q: string, inner: string) => {
+    // 令牌里(类型 + 元数据位)的 Markdown 转义也去掉:remark 会把 `[!tip|foo_bar]` 写成 `foo\_bar`,
+    // 而 Obsidian 按原文读元数据(CSS 片段名就变了)。只认去转义后仍是令牌形状的(Codex 评审 A5 #2)。
+    const raw = inner.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+    return /^[\w-]+(?:\|[^\]\n]*)?$/.test(raw) ? `${q}[!${raw}]` : all
+  })
+/** 引用行首、带反斜杠转义的令牌 `[!type|…]`(第一步已把 `\[!` 换成 `[!`)。分组 1 = 引用前缀,2 = `[!` 与 `]` 之间。 */
+const CALLOUT_ESCAPED_RE = /^((?:[ \t]*>[ \t]?)+)\[!((?:[^\]\\\n]|\\[!-/:-@[-`{-~])*\\[!-/:-@[-`{-~](?:[^\]\\\n]|\\[!-/:-@[-`{-~])*)\]/gm
 
 // ⚠️ 这条正则**漏过 `]`**(`\[!([a-zA-Z]+)([+-])?`),于是 `[!note]- 标题` 里 `note` 之后遇到 `]` 直接不匹配
 // —— callout 整个功能从来没生效过(2026-07-29 真浏览器取证:blockquote 的 class 恒为空)。
 // 顺手放宽尾部:标题紧跟在 `-` 后面(`[!fold]-标题`)也认,Obsidian 同样接受;而且 contenteditable
 // 会把行尾那个空格吃掉,不放宽的话「敲 `>` 生成令牌 → 一打字就不是 callout 了」。
 // R-09:类型放宽到 `[\w-]+` —— `[!my-type]`、`[!todo-2]` 这类自定义类型此前退化成普通引用(Obsidian 认)。
-const CALLOUT_RE = /^\[!([\w-]+)\]([+-])?/
+// A5:令牌可带元数据位 `[!tip|🚀 blue]`(图标 / 底色),规则在 shared/amadeus/calloutToken —— 别在这里另写一份。
+const CALLOUT_RE = CALLOUT_TOKEN_RE
 
 // 令牌之后才是标题;标题自己还能带块级前缀:`## ` → 按 H2 排版,`- ` → 项目符号。
 // 纯装饰(落盘仍是 Obsidian 的单行 callout,折叠跨端不坏),故 `##` 不进 schema、不变成真 heading 节点。
@@ -109,20 +119,24 @@ const TITLE_MARK_RE = /^(#{1,6}|[-*+]) /
 export function calloutOf(node: PMNode) {
   if (node.type.name !== 'blockquote') return null
   const first = node.firstChild
-  const m = first && first.isTextblock ? CALLOUT_RE.exec(first.textContent) : null
+  const m = first && first.isTextblock ? readCalloutToken(first.textContent) : null
   if (!m || !first) return null
   // 令牌与标题之间那个空格跟着令牌一起藏,否则隐藏后标题左边凭空空一格
-  const gap = /[ \u00a0]/.test(first.textContent[m[0].length] ?? '') ? 1 : 0
-  const mk = TITLE_MARK_RE.exec(first.textContent.slice(m[0].length + gap))
+  const gap = /[ \u00a0]/.test(first.textContent[m.token.length] ?? '') ? 1 : 0
+  const mk = TITLE_MARK_RE.exec(first.textContent.slice(m.token.length + gap))
   return {
-    type: m[1].toLowerCase(),
-    raw: m[1],
-    marker: m[2] as '+' | '-' | undefined,
-    token: m[0],
-    hideLen: m[0].length + gap, // 隐藏范围(含那个空格)比徽章范围长
+    type: m.type.toLowerCase(),
+    raw: m.type,
+    marker: m.marker,
+    token: m.token,
+    /** `[!type|元数据]` 的长度(不含折叠符):折叠符就在它后面一位 */
+    head: m.head,
+    /** 元数据位里的图标 / 底色(A5);认不得的词在 meta.rest,不显示也不动 */
+    meta: m.meta,
+    hideLen: m.token.length + gap, // 隐藏范围(含那个空格)比徽章范围长
     first,
     mark: mk
-      ? { at: m[0].length + gap, len: mk[0].length, cls: mk[1][0] === '#' ? `h${mk[1].length}` : 'bullet' }
+      ? { at: m.token.length + gap, len: mk[0].length, cls: mk[1][0] === '#' ? `h${mk[1].length}` : 'bullet' }
       : null,
   }
 }
@@ -137,7 +151,7 @@ function unfoldCalloutsInRanges(tr: Transaction, inserted: Array<[number, number
     const bodyStart = pos + 1 + c.first.nodeSize
     const bodyEnd = pos + node.nodeSize - 1
     if (inserted.some(([from, to]) => from < bodyEnd && to > bodyStart && !(from <= pos && to >= pos + node.nodeSize))) {
-      const marker = pos + 2 + c.raw.length + 3
+      const marker = pos + 2 + c.head // 折叠符紧跟令牌(带元数据时令牌更长,别按类型名长度算)
       tr.insertText('+', marker, marker + 1)
     }
   })
@@ -195,7 +209,7 @@ function calloutAt($pos: ResolvedPos, hiddenAncestor = false) {
       afterBq: $pos.after(d), // blockquote 之后那一位
       headEnd: bqStart + 1 + c.first.content.size,
       inHead,
-      markerPos: bqStart + 1 + c.type.length + 3,
+      markerPos: bqStart + 1 + c.head, // `]` 后那一位;令牌可带元数据,按实际长度算
       /** 标题行里被藏起来的语法段(令牌、`## `/`- ` 前缀),文档绝对位 */
       hidden: [
         [bqStart + 1, bqStart + 1 + c.hideLen] as [number, number],
@@ -598,6 +612,8 @@ export function calloutPlugin() {
                     // 别名再挂一枚正名的 class(`[!faq]` → callout-faq callout-question),配色只按正名写一份。
                     class: `callout callout-${type}${kind && kind !== type ? ` callout-${kind}` : ''}${collapsed ? ' callout-collapsed' : ''}`,
                     'data-callout': type,
+                    // 元数据位的底色(A5):和整块颜色同一组语义名,CSS 复用 A1 的 --amx-blk-bg(明暗两档都有)
+                    ...(c.meta.color ? { 'data-bg': c.meta.color } : {}),
                     ...(pluginState?.animations.some((a) => a.at === pos) ? { 'data-fold-animating': '' } : {}),
                   }),
                 )
@@ -627,16 +643,31 @@ export function calloutPlugin() {
                 }
                 if (mark) decos.push(Decoration.node(headStart, headEnd, { class: `callout-title-${mark.cls}` }))
                 if (type !== 'fold') {
-                  // 有色标注的类型图标(R-09):行首,令牌之前;不认识的类型用缺省图标。
+                  // 有色标注的类型图标(R-09):行首,令牌之前;不认识的类型用缺省图标。元数据位里选过 emoji(A5)就画 emoji。
+                  // 可编辑时点它 = 换图标:发 `amadeus:callout-icon`,统一页面开页面图标那个选择器(.amx-iconpick),选完改写令牌。
+                  // stopEvent:点图标不放光标、不切折叠(标题行单击)、不进源码(双击)。只读页面不可点。
                   const icon = CALLOUT_ICONS[kind ?? 'note']
-                  decos.push(Decoration.widget(pos + 2, () => {
+                  const emoji = c.meta.icon
+                  decos.push(Decoration.widget(pos + 2, (view, getPos) => {
                     const el = document.createElement('span')
-                    el.className = 'callout-icon'
+                    el.className = emoji ? 'callout-icon callout-icon-emoji' : 'callout-icon'
                     el.contentEditable = 'false'
-                    el.setAttribute('aria-hidden', 'true')
-                    el.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`
+                    if (emoji) el.textContent = emoji
+                    else el.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`
+                    if (!view.editable) { el.setAttribute('aria-hidden', 'true'); return el }
+                    el.setAttribute('role', 'button')
+                    el.title = translate('mdcallout.icon')
+                    el.setAttribute('aria-label', el.title)
+                    el.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() })
+                    el.addEventListener('click', (e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      const at = getPos() // = 块起点 + 2
+                      if (at == null || !view.editable) return // 切到只读后旧 DOM 万一还在,也不改文档
+                      view.dom.dispatchEvent(new CustomEvent('amadeus:callout-icon', { bubbles: true, detail: { bqPos: at - 2, rect: el.getBoundingClientRect(), current: emoji || null } }))
+                    })
                     return el
-                  }, { side: -1, ignoreSelection: true, key: `ci:${kind ?? 'note'}` }))
+                  }, { side: -1, ignoreSelection: true, stopEvent: () => true, key: `ci:${emoji || kind || 'note'}` }))
                   // 没写标题 → 显示类型名作默认标题(本地化;自定义类型用它自己的名字)。只是装饰,不写进 md。
                   if (!inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)) {
                     const label = kind ? translate(`mdcallout.type.${kind}`) : c.raw.charAt(0).toUpperCase() + c.raw.slice(1)

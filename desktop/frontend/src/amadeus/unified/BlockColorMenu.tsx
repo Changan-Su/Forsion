@@ -5,7 +5,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import { useI18n } from '../../i18n'
 import { ColorPalettePopover } from '../blocks/markdown/ColorPalette'
-import { blockColorTr, colorTargetsOf, dispatchBlockColor, sharedColor, type ColorChannel } from './blockColorCommands'
+import { blockColorTr, colorTargetsOf, dispatchBlockColor, onlyCallouts, sharedColor, type ColorChannel } from './blockColorCommands'
 
 type Range = { from: number; to: number } | null
 
@@ -51,6 +51,7 @@ export function BlockColorMenu({ view, restore, onDone, rangeOf }: { view: Edito
   }
   if (!targets.length) return null
   const bg = sharedColor(targets, 'bg')
+  const calloutsOnly = onlyCallouts(targets)
   const fg = sharedColor(targets, 'fg')
   const apply = (ch: ColorChannel, value: string): void => {
     if (!view.editable || !restore()) { onDone(); return }
@@ -70,7 +71,8 @@ export function BlockColorMenu({ view, restore, onDone, rangeOf }: { view: Edito
         <ChevronRight size={13} />
       </span>
     </button>
+    {/* 全是标注(A5):只有底色(存进元数据位),不给字色页、不给「更多颜色」 */}
     {anchor && <ColorPalettePopover anchor={anchor} side="right" set="block" scope="block" initial={!bg && fg ? 'text' : 'fill'} fill={bg} text={fg}
-      onText={(v) => apply('fg', v)} onFill={(v) => apply('bg', v)} onClose={() => { setAnchor(null); onDone(); view.focus() }} />}
+      onText={calloutsOnly ? undefined : (v) => apply('fg', v)} noCustom={calloutsOnly} onFill={(v) => apply('bg', v)} onClose={() => { setAnchor(null); onDone(); view.focus() }} />}
   </>
 }

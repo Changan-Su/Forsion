@@ -17,6 +17,7 @@
 //    (还牵动 cascadeFdAfterRename / remapScopePaths),风险与收益不成比例。
 //  · 顶层列表项 Shift-Tab 无反应 —— 现状「脱出列表变段落」是 Obsidian 语义,很多人靠它取消列表。
 //  · 跨块选区禁止缩进 —— 那是 AFFiNE 自身架构的妥协,不是优点。
+import { CALLOUT_HEAD_RE } from '../../../../shared/amadeus/calloutToken'
 import { $prose } from '@milkdown/kit/utils'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Plugin } from '@milkdown/kit/prose/state'
@@ -561,7 +562,7 @@ const deleteSelectNextAtom: Command = (state, dispatch) => {
  *  只接管跨容器的那几种;同层相邻兄弟(段↔段、段↔标题)base 本来就并对,原样交回。
  *  下一块是 callout 标题 → 整块选中(与撞上代码块同一口径),不把 `[!note]` 令牌拉成正文;
  *  中间夹着分割线等叶子、代码块、表格、折叠藏起来的块 → 交回原路。 */
-const CALLOUT_HEAD = /^\[![\w-]+\]/ // 与 callout.ts 的类型口径一致(R-09)
+const CALLOUT_HEAD = CALLOUT_HEAD_RE // 与 callout.ts 的类型口径一致(R-09;A5 起可带元数据位,规则在 shared/amadeus/calloutToken)
 const deleteJoinNextText: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
   if (!empty || !$from.parent.isTextblock || $from.parentOffset !== $from.parent.content.size) return false
