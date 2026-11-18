@@ -10,13 +10,14 @@ const RELEASES_URL = 'https://github.com/Changan-Su/Forsion/releases/latest'
 export function UpdateActions({ upd }: { upd: UpdaterStatusInfo }) {
   const { t } = useI18n()
   const core = useCorePluginUpdates()
-  const isMac = window.tangu?.platform === 'darwin'
+  // mac 能不能自装由主进程判(Developer ID 签名 + 可写)写进状态;老主进程不带这格 → mac 照旧手动
+  const manual = upd.manualInstall ?? window.tangu?.platform === 'darwin'
   // 无 IPC(浏览器/旧 preload)→ 回退打开站点(保持原行为)。
   const check = (): void => {
     if (window.tangu?.checkForUpdates) void window.tangu.checkForUpdates()
     else window.open('https://forsion.net', '_blank')
   }
-  // mac 没签名不能自装:在浏览器里直接开这一版 .dmg(主进程按下载来源挑官网 / GitHub);老主进程退回 Releases 页。
+  // mac 不能自装:在浏览器里直接开这一版 .dmg(主进程按下载来源挑官网 / GitHub);老主进程退回 Releases 页。
   const openInstaller = (): void => {
     if (window.tangu?.openUpdateInstaller) void window.tangu.openUpdateInstaller()
     else window.open(RELEASES_URL, '_blank')
@@ -26,12 +27,13 @@ export function UpdateActions({ upd }: { upd: UpdaterStatusInfo }) {
     case 'checking':
       return <button className="btn ghost sm" disabled><Loader2 size={12} className="spin" /> {t('about.update.checking')}</button>
     case 'available':
-      return isMac
+      return manual
         ? <button className="btn primary sm" onClick={openInstaller}><Download size={12} /> {t('about.update.downloadInstaller')}</button>
         : <button className="btn primary sm" onClick={() => window.tangu?.downloadUpdate?.()}><Download size={12} /> {t('about.update.download')}</button>
     case 'downloading':
       return <button className="btn ghost sm" disabled><Loader2 size={12} className="spin" /> {t('about.update.downloading', { percent: upd.percent ?? 0 })}</button>
     case 'downloaded':
+      if (upd.preparing) return <button className="btn ghost sm" disabled><Loader2 size={12} className="spin" /> {t('about.update.preparing')}</button>
       return <button className="btn primary sm" onClick={() => window.tangu?.installUpdate?.()}><RefreshCw size={12} /> {t('about.update.install')}</button>
     case 'not-available':
       return <button className="btn ghost sm" onClick={check}><Check size={12} /> {t(core.items.some((item) => item.phase !== 'current') ? 'about.update.check' : 'about.update.upToDate')}</button>
@@ -48,6 +50,7 @@ const mb = (bytes: number): string => `${Math.round(bytes / 1048576)} MB`
 export function UpdateSourceNote({ upd }: { upd: UpdaterStatusInfo }) {
   const { t } = useI18n()
   if (upd.opened && upd.phase === 'available') return <span className="upd-src">{t('about.update.macOpened')}</span>
+  if (upd.selfInstallFailed && upd.phase === 'available') return <span className="upd-src">{t('about.update.macSelfInstallFailed')}</span>
   if (!upd.source) return null
   const host = upd.source === 'website' ? 'forsion.net' : 'GitHub'
   if (upd.phase === 'available') {

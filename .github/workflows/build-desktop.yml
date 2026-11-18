@@ -248,6 +248,17 @@ jobs:
           codesign -dv --verbose=2 "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Runtime Version|flags)'
           spctl --assess --type execute --verbose=4 "$app"
           xcrun stapler validate "$app"
+          # 应用内自动更新下的是 zip:解出来的 .app 也要过同一套(签名、Gatekeeper、票据),Squirrel.Mac 换包时才认
+          zip=$(find dist -maxdepth 1 -name '*.zip' | head -1)
+          test -n "$zip" || { echo "::error::no .zip under dist/ (mac auto-update target missing)"; exit 1; }
+          x="$RUNNER_TEMP/zip-check"; rm -rf "$x"; mkdir -p "$x"
+          ditto -x -k "$zip" "$x"
+          zapp=$(find "$x" -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$zapp" || { echo "::error::no .app inside $zip"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$zapp"
+          spctl --assess --type execute --verbose=4 "$zapp"
+          xcrun stapler validate "$zapp"
+          rm -rf "$x"
 
       - name: Verify permission and Computer Use delivery
         working-directory: desktop
@@ -279,14 +290,13 @@ jobs:
             || { echo "::error::asar 缺 node_modules(beforeBuild 返回值语义回归?)— 该包启动即崩,拒绝发布"; exit 1; }
           rm -f "$tmp"
 
-      # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml);
+      # electron-builder 在有 publish 配置时随包产出更新 feed 清单(Win=latest.yml / Linux=latest-linux.yml / mac=latest-mac.yml);
       # 缺失则应用内更新形同虚设 → 这里硬失败,避免发出一个装不了更新的版本。
-      # macOS 走 GitHub API 检测(未签名不自装),不依赖该 feed,故跳过校验。
+      # mac 的清单要指着 zip(Squirrel.Mac 只吃 zip;只有 dmg 时 electron-updater 报 ZIP file not provided)。
       #
       # default=latest*.yml;NoExtend=latest-no-extend*.yml。即使发 beta tag 也按发行版写这两套
       # 清单(客户端 beta 清单 404 时回退各自的 latest);精确核对,防止两份构建共用错误的 feed。
       - name: Verify update manifests
-        if: runner.os != 'macOS'
         working-directory: desktop
         shell: bash
         run: |
@@ -295,9 +305,14 @@ jobs:
           if [ "$FORSION_BUNDLE_EXTEND" = "0" ]; then channel=latest-no-extend; fi
           suffix=''
           if [ "$RUNNER_OS" = "Linux" ]; then suffix=-linux; fi
+          if [ "$RUNNER_OS" = "macOS" ]; then suffix=-mac; fi
           manifest="dist/${channel}${suffix}.yml"
           test -f "$manifest" || { echo "::error::缺少 $manifest — 该发行版的更新 feed 未生成"; exit 1; }
           echo "$manifest"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            grep -E '^ *- url: .+\.zip$' "$manifest" > /dev/null || { echo "::error::$manifest 里没有 zip"; cat "$manifest"; exit 1; }
+          fi
+          cat "$manifest"
 
       # Windows 默认版是最慢的打包任务(10-25:17 分钟,其中这段验收 4.5 分钟),其余平台早就跑完在等它。
       # Windows 上只在换钉 Extend 时跑:比的是上一个已发的 Release(含预发布)里 desktop/package.json 的 @forsion/extend。
@@ -362,6 +377,7 @@ jobs:
           path: |
             desktop/dist/*.AppImage
             desktop/dist/*.dmg
+            desktop/dist/*.zip
             desktop/dist/*.exe
             desktop/dist/latest*.yml
             desktop/dist/beta*.yml
@@ -541,7 +557,7 @@ jobs:
         run: |
           node -e '
             const m = require("./release-metadata/build-materials.json");
-            const keep = /\.(AppImage|dmg|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
+            const keep = /\.(AppImage|dmg|zip|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
             const names = new Set(["build-materials.json", "release-materials.json", "release-sbom.json"]);
             for (const p of Object.values(m.platforms)) for (const a of p.artifacts) if (keep.test(a.name)) names.add(a.name);
             for (const f of require("fs").readdirSync("release-metadata")) names.add(f);
@@ -599,7 +615,7 @@ jobs:
             const built = new Map();
             for (const p of Object.values(m.platforms)) for (const a of p.artifacts) built.set(a.name, a.sha256);
             const rel = JSON.parse(fs.readFileSync("artifacts/release-materials.json", "utf8")).artifacts;
-            const keep = /\.(AppImage|dmg|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
+            const keep = /\.(AppImage|dmg|zip|exe|blockmap|apk)$|^(latest|beta).*\.yml$/;
             const bad = rel.filter(a => keep.test(a.name) && built.get(a.name) !== a.sha256).map(a => a.name);
             if (bad.length) { console.error("No matching build evidence for: " + bad.join(", ")); process.exit(1); }
           '

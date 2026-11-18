@@ -51,7 +51,7 @@ describe('backend production packaging', () => {
 })
 
 const mocks = vi.hoisted(() => ({ quitAndInstall: vi.fn() }))
-vi.mock('electron', () => ({ app: { isPackaged: true }, BrowserWindow: {} }))
+vi.mock('electron', () => ({ app: { isPackaged: true }, BrowserWindow: {}, autoUpdater: {} }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: mocks } }))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/fixture' }))
 
@@ -63,6 +63,7 @@ describe('update installer visibility', () => {
       Object.defineProperty(process, 'platform', { value: platform })
       const { installUpdate } = await import('./updater')
       installUpdate()
+      // mac 只有确认过「Developer ID 签名、能自装」才退出去装(updater.test.ts 覆盖那条);没确认过的(ad-hoc 旧包)不动
       if (platform === 'darwin') expect(mocks.quitAndInstall).not.toHaveBeenCalled()
       else expect(mocks.quitAndInstall).toHaveBeenCalledWith(platform !== 'win32', true)
     } finally {

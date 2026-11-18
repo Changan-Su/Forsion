@@ -63,7 +63,7 @@ import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccoun
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, prepareInstall, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
 import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -3637,6 +3637,8 @@ app.whenReady().then(async () => {
     restart: async (install) => {
       // 还有文件在传(蓬洲云):重启 / 装更新前先问一次;点了退出,后面的 before-quit 就不再问
       if (!(await quitGuards.confirmFirst())) return
+      // mac:先让 Squirrel.Mac 取包验签,成了才停后端;不成已退回「下载安装包」,应用照常用(见 updater.prepareInstall)
+      if (install && !(await prepareInstall())) { quitGuards.reset(); return }
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
