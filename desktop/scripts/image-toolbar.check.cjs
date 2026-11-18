@@ -103,9 +103,14 @@ async function main() {
     const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1100, height: 860 }, acceptDownloads: true, permissions: ['clipboard-read', 'clipboard-write'] })
     let { p, errs } = await open(ctx, SEED)
 
-    // ── T1 悬停出工具条 ──
+    // ── T1 悬停出工具条(第一次悬停才建;移开后透明且不吃点击) ──
     let s = await tbState(p)
-    check('T1 不悬停:工具条透明且不吃点击', s && s.op === 0 && s.pe === 'none', s)
+    check('T1 没悬停过:还没建工具条(长笔记不给每张图先挂一排按钮)', s === null, s)
+    await hover(p)
+    await p.mouse.move(2, 2)
+    await p.waitForTimeout(250)
+    s = await tbState(p)
+    check('T1 移开:工具条透明且不吃点击', s && s.op === 0 && s.pe === 'none', s)
     await hover(p)
     s = await tbState(p)
     check('T1 悬停:工具条浮现', s && s.op === 1 && s.pe === 'auto', s)

@@ -794,7 +794,7 @@ async function main() {
       await p.mouse.down(); await p.mouse.up(); await p.waitForTimeout(400)
     }
     const btn = await p.evaluate(() => {
-      const b = document.querySelectorAll('.wiki-inline-img-wrap')[1]?.querySelector('.amx-src-btn')
+      const b = document.querySelectorAll('.wiki-inline-img-wrap')[1]?.querySelector('.amx-img-tb [data-act="source"], .amx-src-btn') // md 图的 `</>` 在悬停工具条里(2026-11-17)
       if (!b) return null
       const r = b.getBoundingClientRect()
       return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null

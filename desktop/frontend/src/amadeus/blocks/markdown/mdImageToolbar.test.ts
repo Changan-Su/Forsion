@@ -102,7 +102,11 @@ describe('对齐 = 段首对齐标记(复用段落对齐)', () => {
 })
 
 describe('NodeView:工具条「说明」输入行', () => {
-  const capBtn = (b: Booted): HTMLButtonElement => b.view.dom.querySelector<HTMLButtonElement>('.amx-img-tb [data-act="caption"]')!
+  // 工具条第一次悬停才建(长笔记别每张图都先挂一排按钮)
+  const capBtn = (b: Booted): HTMLButtonElement => {
+    b.view.dom.querySelector('.wiki-inline-img-wrap')!.dispatchEvent(new PointerEvent('pointerenter'))
+    return b.view.dom.querySelector<HTMLButtonElement>('.amx-img-tb [data-act="caption"]')!
+  }
   const line = (b: Booted): HTMLInputElement | null => b.view.dom.querySelector<HTMLInputElement>('.amx-img-capline')
   const key = (el: HTMLElement, k: string): void => { el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })) }
 
@@ -110,6 +114,7 @@ describe('NodeView:工具条「说明」输入行', () => {
     const b = await boot('![|200](a.png)\n', true)
     const cap = b.view.dom.querySelector<HTMLElement>('.amx-img-cap')!
     expect(cap.hidden).toBe(true) // 没有说明:不占位
+    expect(b.view.dom.querySelector('.amx-img-tb')).toBeNull() // 没悬停过:工具条还没建
     capBtn(b).click()
     const input = line(b)!
     expect(input).toBeTruthy()

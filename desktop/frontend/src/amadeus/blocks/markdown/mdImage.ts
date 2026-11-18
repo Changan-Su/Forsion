@@ -64,7 +64,8 @@ class MdImageView implements NodeView {
   private img: HTMLImageElement
   /** 图下的说明(title);为空不占位(hidden)。 */
   private cap: HTMLElement
-  private tb: ImageToolbar
+  /** 悬停工具条:第一次悬停才建(长笔记几百张图,别每张都先挂一排按钮)。 */
+  private tb: ImageToolbar | null = null
   private sheet: { close(): void; refresh(): void } | null = null
   private drops: Array<() => void> = []
   private srcLine: HTMLInputElement | null = null
@@ -104,8 +105,6 @@ class MdImageView implements NodeView {
       this.select()
     })
     // 悬停工具条(2026-11-17 Notion 对齐第 4 条):`</>` 收进这一排,不再单挂一颗。
-    this.tb = buildImageToolbar(this.actions(), this.dom, 'hover')
-    this.dom.appendChild(this.tb.el)
     this.dom.addEventListener('pointerenter', () => {
       this.hovered = true
       this.placeToolbar()
@@ -148,6 +147,10 @@ class MdImageView implements NodeView {
   /** 露出前:现取文案 / 只读 / 当前档;图比工具条窄 → 挪到图片上方(按对齐靠左 / 居中 / 靠右)。 */
   private placeToolbar(): void {
     this.dom.toggleAttribute('data-ro', !this.view.editable)
+    if (!this.tb) {
+      this.tb = buildImageToolbar(this.actions(), this.dom, 'hover')
+      this.dom.appendChild(this.tb.el)
+    }
     this.tb.refresh()
     this.layout()
     const narrow = this.img.offsetWidth < this.tb.el.offsetWidth + 16
@@ -192,9 +195,9 @@ class MdImageView implements NodeView {
         view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos)))
         setTextAlignment(view.state, (tr) => view.dispatch(ownStep(tr)), a)
         view.focus()
-        this.tb.refresh()
+        this.tb?.refresh()
         this.sheet?.refresh()
-        requestAnimationFrame(() => this.placeToolbar())
+        if (this.hovered) requestAnimationFrame(() => this.placeToolbar()) // 换了档:窄图的工具条要跟着换边
       },
       caption: () => this.openCaption(),
       captionOpen: () => !!this.capLine,
@@ -285,7 +288,7 @@ class MdImageView implements NodeView {
       this.capLine = null
       this.apply(this.node)
       this.layout()
-      this.tb.refresh()
+      this.tb?.refresh()
       this.sheet?.refresh()
       const pos = this.pos()
       if (commit && v !== old && pos != null && this.view.editable) {
@@ -306,7 +309,7 @@ class MdImageView implements NodeView {
     this.cap.hidden = true
     this.cap.after(input)
     this.layout()
-    this.tb.refresh()
+    this.tb?.refresh()
     this.sheet?.refresh()
     input.focus()
     input.setSelectionRange(input.value.length, input.value.length)
@@ -344,7 +347,7 @@ class MdImageView implements NodeView {
     else if (!picked && this.dom.hasAttribute('data-selected')) this.deselectNode()
     // 工具条露着时跟上当前档(撤销 / 快捷键改了这一段的对齐)
     if (this.hovered || this.sheet) {
-      this.tb.refresh()
+      this.tb?.refresh()
       this.sheet?.refresh()
     }
   }
@@ -375,6 +378,7 @@ class MdImageView implements NodeView {
       const v = input.value.trim()
       input.remove()
       this.srcLine = null
+      this.dom.removeAttribute('data-src-open')
       this.layout()
       if (commit) this.commitSource(v)
       this.view.focus()
@@ -388,6 +392,9 @@ class MdImageView implements NodeView {
     input.addEventListener('blur', () => finish(true))
     this.dom.insertBefore(input, this.img)
     this.srcLine = input
+    this.tb?.closeMenu()
+    // 源码行开着时收起工具条:窄图的工具条挪在图片上方,正好压在这一行上(点进输入框会点到按钮、源码行失焦提交)
+    this.dom.setAttribute('data-src-open', '')
     this.layout()
     input.focus()
     input.select()
@@ -435,7 +442,7 @@ class MdImageView implements NodeView {
     for (const d of this.drops) d()
     this.drops = []
     this.ro?.disconnect()
-    this.tb.destroy()
+    this.tb?.destroy()
     this.sheet?.close()
     this.sheet = null
     this.onDestroy()

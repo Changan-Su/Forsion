@@ -1217,7 +1217,8 @@ export function MilkdownInner({
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
       // `![](path)` 图片(粘贴/上传形态)= 可选中 + 两侧缩放把手 + 悬停工具条(对齐 / 说明 / 替换 / 全屏 / 下载 / `</>` / ⋯)。
       // 替换走与粘贴同一条 saveImage;复制图片 = 块菜单那份 copySelectedImage。都读 ref:换笔记不重建编辑器。
-      .use(mdImagePlugin({
+      // 整篇宿主(PlainMarkdownEditor:工作区文件 / 记录正文 / 插件编辑面)存不了图、没有笔记路径 → 这两项不出。
+      .use(mdImagePlugin(standalone ? {} : {
         saveImage: (f) => saveImageRef.current(f),
         copyImage: (v) => (pagePathRef.current ? copySelectedImage(v, pagePathRef.current) : Promise.resolve(false)),
       }))

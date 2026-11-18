@@ -696,6 +696,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .wiki-inline-img-wrap[data-tb-menu] > .amx-img-tb,
 .am-app .wiki-inline-img-wrap > .amx-img-tb:focus-within { opacity: 1; pointer-events: auto; }
 .am-app .wiki-inline-img-wrap[data-resizing] > .amx-img-tb { opacity: 0; pointer-events: none; }
+.am-app .wiki-inline-img-wrap[data-src-open] > .amx-img-tb { display: none; }
 .am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb { top: auto; bottom: calc(100% - var(--amx-img-top, 0px) + 6px); }
 .am-app .wiki-inline-img-wrap[data-tb-out='left'] > .amx-img-tb { right: auto; left: 0; }
 .am-app .wiki-inline-img-wrap[data-tb-out='center'] > .amx-img-tb { right: auto; left: 50%; translate: -50% 0; }
