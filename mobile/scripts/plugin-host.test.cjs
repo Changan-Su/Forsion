@@ -616,6 +616,17 @@ const test = async (name, fn) => {
     assert.deepEqual(kept, ['{"a":1}', '{"b":1}', '{"c":1}'])
   })
 
+  await test('要另存的原件有一份读不出字节:一份备份都不先写,整次不写(重试不攒一堆一样的备份)', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0
+    await h.writePluginData('p', '{"defaults":1}') // 槽 1(最新)
+    fs.failReadOf = 'plugins-data/p.json'
+    for (let i = 0; i < 3; i++) await assert.rejects(h.writePluginData('p', '{"from":"cloud"}', { backup: true }), /EIO/)
+    fs.failReadOf = null
+    assert.deepEqual([...fs.files.keys()].filter((k) => k.includes('.replaced-') || k.includes('.unreadable-')), [])
+  })
+
   // ── 市场 ────────────────────────────────────────────────────────────────
   const API = 'https://cloud.test/api'
   /** 假云端 + 假下载。install = 每个市场 id 的解析结果;blobs = 下载地址 → 字节 / Error。 */

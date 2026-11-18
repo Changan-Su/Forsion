@@ -2346,8 +2346,8 @@ export interface PluginContext {
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`(旧宿主读不出来时仍回 null)。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。存不成 JSON 的值(函数、`toJSON` 回 undefined、
-   *  BigInt、循环引用)→ reject,什么都不写(2026-11-18 起;之前会写进空内容,下次读就成了读不出来)。
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。转成 JSON 什么都没有的值(函数、`toJSON` 回
+   *  undefined)→ reject,什么都不写(2026-11-18 起;之前会写进空内容,下次读就成了读不出来)。BigInt、循环引用本来就会 reject。
    *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives

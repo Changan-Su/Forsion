@@ -469,16 +469,12 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         const paths = slotPaths(pluginId)
         let target: 0 | 1 = r.latest ? (r.latest.slot === 0 ? 1 : 0) : 0
         let seq = (r.latest?.env.seq ?? 0) + 1
-        const kept = new Set<0 | 1>()
-        // 另存失败(读不出字节 / 写不进去)→ 抛出去,不写
-        const keep = async (i: 0 | 1, kind: 'unreadable' | 'replaced'): Promise<void> => {
-          await fs.writeBytes(dataBackupPath(paths[i], kind), await fs.readBytes(paths[i]))
-          kept.add(i)
-        }
+        // 写之前要原样另存的槽。另存失败(读不出字节 / 写不进去)→ 抛出去,不写
+        const keep: Array<[0 | 1, 'unreadable' | 'replaced']> = []
         if (opts?.backup === true && r.latest) {
           // 渲染层同步要拉云端那份盖「读失败后插件按默认值存下的」本机数据:当前那槽(最新的内容)先原样另存。
           // 另一槽不算备份 —— 这次写不碰当前槽,但下一次写就轮到它。和有没有坏槽无关:另一槽恰好读出错、走下面那条路时也照样存。
-          await keep(r.latest.slot, 'replaced')
+          keep.push([r.latest.slot, 'replaced'])
         }
         if (r.unreadable) {
           // 读失败:原件不能被这次或以后的写盖掉(见上)。**每一个**坏槽(半截 / 读不出字节)都先原样另存 ——
@@ -486,7 +482,7 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
           // 有槽连字节都读不出来:不写,抛出去(同桌面拷不出原件就拒写)。
           for (const i of [0, 1] as const) {
             const k = r.states[i].kind
-            if (k === 'partial' || k === 'unreadable') await keep(i, 'unreadable')
+            if (k === 'partial' || k === 'unreadable') keep.push([i, 'unreadable'])
           }
           // 没有有效槽时优先写进不存在的那槽;有有效槽时照常写另一槽(已另存过)
           if (!r.latest) target = r.states[0].kind === 'missing' ? 0 : r.states[1].kind === 'missing' ? 1 : 0
@@ -495,9 +491,13 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         // 要盖的那槽里有东西、却不算一份可用的内容,盖之前也先另存:只有槽 0 且是半截(按没写过处理,但也可能是
         // 唯一一份写坏的原件);信封完好、里面不是合法 JSON(宿主当有效槽、渲染层判读失败,不另存的话两次写就轮掉了)
         const t = r.states[target]
-        if (!kept.has(target) && ((t.kind === 'partial' && !r.latest) || (t.kind === 'ok' && !isJsonText(t.env.text)))) {
-          await keep(target, 'unreadable')
+        if (!keep.some(([i]) => i === target) && ((t.kind === 'partial' && !r.latest) || (t.kind === 'ok' && !isJsonText(t.env.text)))) {
+          keep.push([target, 'unreadable'])
         }
+        // 先把要另存的原件全读出来,有一份读不出字节就整次不写;读齐了再写备份 —— 重试不会攒下一堆一样的备份
+        const originals: Array<[0 | 1, 'unreadable' | 'replaced', Uint8Array]> = []
+        for (const [i, kind] of keep) originals.push([i, kind, await fs.readBytes(paths[i])])
+        for (const [i, kind, bytes] of originals) await fs.writeBytes(dataBackupPath(paths[i], kind), bytes)
         const env: DataEnvelope = { forsionPluginData: 1, seq, text: body }
         await writeText(fs, paths[target], JSON.stringify(env))
       })

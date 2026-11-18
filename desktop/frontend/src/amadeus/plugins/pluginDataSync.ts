@@ -135,7 +135,9 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
         markOk()
         index = null
         const cur = readState(id)
-        if (cur.unverified && !st.unverified) return // 推的过程中又来了一次读失败后的保存:那份还没和云端对过,状态不动
+        // 推的过程中又来了读失败后的保存(之前没有记号;或者传的正是 unverified 那份、在途时又存过):新存的那份没传上去,
+        // 还没和云端对过,状态不动 —— 下次 loadData 云端那份赢、宿主先另存本机这份
+        if (cur.unverified && (!st.unverified || cur.gen !== st.gen)) return
         // 推的过程中又存了一次(代号变了):那次还没推,dirty 留着,后面排着的那次推送会推它。
         // 传上去的是 unverified 那份(按第一次上传):云端现在就是这份,对上了,记号清掉
         const { dirty: _pushed, unverified: _checked, ...rest } = cur
@@ -149,9 +151,11 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
       if (st.unverified) {
         // 本机这份还没和云端对过,而云端已经有别人写的那份:让给云端(不比编辑时刻 —— 这份是按默认值起来的),
         // 记号留着,下次 loadData 拉云端那份(宿主先另存本机这份)
-        const { dirty: _yield, ...cur } = readState(id)
-        writeState(id, cur)
         index = null
+        const cur = readState(id)
+        if (!cur.unverified || cur.owner !== st.owner) return // 在途时已被拉取对上 / 换了账号:那是之后的状态,不动它
+        const { dirty: _yield, ...rest } = cur
+        writeState(id, rest)
         return
       }
       // 别的设备先写了。本机这次编辑更晚 → 以云端当前版本为基再写一次;否则让给云端,下次 loadData 拉下来
