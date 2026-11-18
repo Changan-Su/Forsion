@@ -53,7 +53,7 @@ import {
 import { HomeWallpaperArt } from './homepageWallpaperArt'
 import { DeskCardStatus, useCardStatus } from './homeCardStatus'
 import { watchAccountName } from '../services/accountName'
-import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
+import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, defaultHomeCards, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, RAIL_GEOMETRY, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
 import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
@@ -240,8 +240,9 @@ registerMessages({
 
 interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
 
-/** 手机主页的大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画。
- *  放哪几张由用户定(长按任意一张,见 homeCards.ts);没改过 = 架子上头两个 Space + 商店、成就。 */
+/** 手机主页的大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画
+ *  (日历、收件箱那一行各是一个组件,摆了那张卡才读日历库 / 未读数)。
+ *  放哪几张由用户定(长按任意一张,见 homeCards.ts);没改过 = 有近况可说的那几个 Space:Tangu、笔记、日历、收件箱。 */
 /** 手机主页的四条起步建议,放在大卡片上面(homepage.css 文末 .hp-suggest)。点哪条由外面接(填草稿 + 展开输入区)。 */
 function HomeSuggest({ onPick }: { onPick: (key: string) => void }) {
   const { t } = useI18n()
@@ -265,12 +266,13 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
   const [picked, setPicked] = useState(loadHomeCards)
   const spaceCard = (sp: SpaceDefinition): HomeCard => ({ id: `space:${sp.id}`, name: label(sp.name), statusId: sp.id, spaceId: sp.id, icon: sp.icon, open: () => onLaunch(sp.id) })
   const top = tiles.filter((tile): tile is Extract<Tile, { kind: 'space' }> => tile.kind === 'space').map((tile) => spaceCard(tile.space))
-  // 可选的:架子上所有 Space(收纳夹里的也算)+ 商店、成就
+  // 可选的:架子上所有 Space(收纳夹里的也算)+ 商店、成就这些固定入口
   const all: HomeCard[] = [
     ...tiles.flatMap((tile) => (tile.kind === 'space' ? [tile.space] : tile.members)).map(spaceCard),
     ...actions.map((item): HomeCard => ({ id: item.id, name: item.tooltip ? label(item.tooltip) : '', statusId: item.id, icon: item.icon, open: () => item.onClick?.() })),
   ]
-  const cards = shownHomeCards(picked, all, [...top.slice(0, 2), ...all.filter((c) => !c.spaceId)])
+  // 缺省的那四个 Space 一个都不在架子上时退回:架子上头两个 Space + 固定入口
+  const cards = shownHomeCards(picked, all, defaultHomeCards(all, [...top.slice(0, 2), ...all.filter((c) => !c.spaceId)]))
 
   /** 原生勾选清单:勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效;新勾的排在最后,至少留一张(没有卡片就没处长按)。
    *  没有原生宿主就什么都不出。 */
@@ -303,7 +305,7 @@ function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: Ribbo
         >
           <span className="hp-card-icon">{c.icon && <c.icon />}</span>
           <span className="hp-card-name">{c.name}</span>
-          <span className="hp-card-status">{status(c.statusId)}</span>
+          <span className="hp-card-status">{c.spaceId === 'calendar' || c.spaceId === 'inbox' ? <DeskCardStatus spaceId={c.spaceId} /> : status(c.statusId)}</span>
         </button>
       ))}
     </section>
@@ -872,7 +874,7 @@ export function HomepageView(_props: ViewProps) {
           </button>
         )}
 
-        {/* 手机:大卡片,各带一行近况。默认 = 架子上的头两个 Space + 商店、成就;长按任意一张改成自己要的那几张(见 HomeCards)。
+        {/* 手机:大卡片,各带一行近况。默认 = 有近况可说的那几个 Space(Tangu、笔记、日历、收件箱);长按任意一张改成自己要的那几张(见 HomeCards)。
             其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
         {suggestShown && <HomeSuggest onPick={pickSuggest} />}
         {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
