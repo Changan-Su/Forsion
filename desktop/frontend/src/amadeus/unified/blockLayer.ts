@@ -2152,7 +2152,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         /** 指针拖出窗口:之后不会再有 dragover,线、落点和自动滚动当场收掉(别等 400ms 超时)。 */
         const onWindowDragLeave = (e: DragEvent): void => {
           if (!blockDragging()) return
-          if (e.clientX > 0 && e.clientY > 0 && e.clientX < innerWidth && e.clientY < innerHeight) return
+          const de = document.documentElement
+          if (e.clientX > 0 && e.clientY > 0 && e.clientX < de.clientWidth && e.clientY < de.clientHeight) return
           dragPt = null
           stopAutoScroll()
           if (marginActive) resetDropState()

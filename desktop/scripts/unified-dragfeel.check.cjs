@@ -531,7 +531,11 @@ async function main() {
       await p.mouse.move(h.x, t.y + t.h * 0.75, { steps: 8 })
       await idle(p, h.x, t.y + t.h * 0.75)
       mid = await lines(p)
-      await p.mouse.move(last.x + 200, last.b + 40, { steps: 8 })
+      // 停在 ⠿ 道、末块下半(页边画的是正文同一套精确线),再**一步**跳进正文宽度内的文末续写区:
+      // 中间不经过 view.dom,正文路由收不到 dragleave,页边那根线只能由路由切换时收掉。
+      await p.mouse.move(h.x, last.y + last.h * 0.75, { steps: 6 })
+      await idle(p, h.x, last.y + last.h * 0.75)
+      await p.mouse.move(last.x + 200, last.b + 40)
       await idle(p, last.x + 200, last.b + 40)
       end = await lines(p)
       await release(p)
