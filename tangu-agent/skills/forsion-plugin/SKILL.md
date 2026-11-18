@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.124.0
+  version: 1.125.0
   author: Forsion
   category: Forsion
 ---
@@ -28,7 +28,7 @@ metadata:
 
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
-- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; Plugin settings page: ctx.registerSettingsPage; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
 - [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus(含按 runId 跟状态与 stop); Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`(今天没有 agent 在用)
 - [references/agent-settings.md](references/agent-settings.md): UI and engine `ctx.registerAgentSettings`; explicit read-only fields, secret configured flags, lifecycle revocation and the `read_plugin_settings` tool.
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
@@ -103,6 +103,7 @@ A view that draws its own dropdowns, menus, dialogs or tab bars looks foreign in
 | A sidebar list | `ctx.registerListSource` (见下「统一左栏列表源」) | a list view in the left pane |
 | Buttons and icons | classes `.btn` `.btn.primary` `.btn.ghost` `.btn.danger` `.btn.sm`; `ctx.ui.icon(name, { size })` | hand-styled `<button>`, pasted SVGs |
 | CSS and labels | `ctx.addStyle(css)` with public tokens only (样式契约, next); labels as `{ zh, en }` or `ctx.i18n.define` | `<style>` in `document.head`; strings frozen at registration |
+| Your plugin's settings page | `ctx.registerSettingsPage({ title, mount(page) { page.update({ groups }) } })` (2026-11-18+; older hosts: `registerSettingsView` + `ctx.ui.mountSettingsPage`) | a settings page drawn with copied `.settings-*` CSS |
 | Settings, chat box, Markdown editor, table, board | `ctx.registerSetting` / `ctx.ui.mountSettingsPage`, `mountChatBox`, `mountMarkdownEditor`, `ctx.table.mount`, `ctx.ui.mountBoard` | your own copy |
 
 Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts.md), section "Host parts" and the one for each mount. The bundle template's counter view (`samples/forsion-sample-bundle/main.js`) uses the parts; copy from it.
@@ -367,7 +368,8 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了(唯一例外:签名的 Forsion Extend 画 `publish_web_page` / `forsion_account`);2026-10-28 起可带 `match({ tool, args })` 按参数收窄;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
 | `registerToolLabel` | 对话过程行里**你自己引擎半身的工具**每次调用那一行的整句(可带应用图标) | 2026-11-13 起;认领同 `registerToolResultRenderer`;`describe(call)` 同步且便宜,抛错 / 返回空 = 宿主照旧写法;老宿主没有 → `ctx.registerToolLabel?.(…)`。见下「Process-row sentences」 |
-| `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
+| `registerSetting` | 插件设置页的「通用」组(number/boolean/text;2026-11-18 起,详情页不再画) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖;宿主画成开关 / 步进器(`min`–`max` 跨度 ≤24)/ 输入框 |
+| `registerSettingsPage` | 插件自己的设置页,描述成数据、宿主画(设置 › 插件设置 › 你的插件) | 2026-11-18 起;`{ id?, title, keywords?, mount(page) }`,`mount` 里 `page.update({ groups })`,返回收尾(关页 / 停用 / 重载时调);零件同 `ctx.ui.mountSettingsPage`;**不许仿宿主 `.settings-*` 样式**;老宿主没有 → `ctx.registerSettingsPage?.(…)`,退回 `registerSettingsView` + `mountSettingsPage`。见 references/host-ui-mounts.md「Plugin settings page」 |
 | `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),缺省**不碰笔记库**,`vault: true`(2.13.8+)接上当前库的双链补全 / 跳转;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
 | `ctx.ui.mountMarkdown` | 只读 Markdown(聊天那套:公式、双链) | 2.13.8+;`update({ markdown })`;列表每行一个也行;有它就说明编辑器的 `vault` 有效 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;正文用 `[data-lcl-ftoc]` + `--lcl-ftoc-gutter` 让出沟(见 references);老宿主没有 → 可选链 |
@@ -519,7 +521,7 @@ ctx.registerCommand({
 - 宿主**不订阅**你的状态:Ribbon 在点击后、悬停进出时重读;别处(快捷键、设置页)改了状态,
   按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
 
-| `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页,别的插件写了照旧画在详情页 |
+| `registerSettingsView` | 插件设置页上自己画的一块(2026-11-18 起;以前在详情页) | 每个面板一组、组里一个自定义块,排在「通用」组之后;新页面先用 `registerSettingsPage`,这里只放零件清单外的内容;会被反复挂载卸载,状态别放模块级单例;`title` 可传函数(切语言跟上)。`category: 'forsion'`(2026-09-28 起)只对带主进程半身的首方内置包(Forsion Extend)生效:面板成为设置「Forsion 云端」的一个子页 |
 | `registerStoreView` | 商店左栏里的一页(左栏多一个入口,整页正文自己画) | 2026-10-05 起;**只对带主进程半身的首方内置包(Forsion Extend)生效**,别的插件注册了不显示 —— 做普通插件用不到。旧宿主没有:`ctx.registerStoreView?.(…)`,没有就不注册,**别拿 `registerSettingsView` 顶替**(那会把页面画进插件详情页)。想在商店里列出自己的一批条目,用 manifest `storeSources`(见「商店来源」) |
 | `ctx.app.openSettings?(target)` | 打开设置到某一页 / 子页(2026-09-28 起) | 口径同宿主深链,如 `'model/m-providers'`;旧宿主没有,一律 `?.` 调 |
 | `ctx.app.motion?()` / `subscribeMotion?(cb)` | 动效偏好 `{ reduce, fadeOnly }`(2026-11-09 起) | `reduce` = 系统减少动态效果或设置里「只淡入淡出」任一开着:别做位移 / 缩放,只留淡入淡出;和宿主界面同一个判据。订阅返回退订,停用时宿主也会退;旧宿主没有 → 只看 `prefers-reduced-motion` |
@@ -649,6 +651,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - Floats: ctx.ui.float (2026-11-07+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 - Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
+- Plugin settings page: ctx.registerSettingsPage (2026-11-18+)
 - 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
 - 仪表盘 ctx.dashboard(2026-09-01 起)
 - 原生多维表 ctx.table.mount(2026-09-05 起)

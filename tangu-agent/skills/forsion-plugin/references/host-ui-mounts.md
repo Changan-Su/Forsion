@@ -391,6 +391,34 @@ return () => page?.dispose()
 - Settings parts are rows (56 px with padding). Don't put them in a toolbar or a view head — use `ctx.ui.mountControl` there (next section). Their schema stays plain strings (it crosses to the native half-sheet): call `update(schema)` from `ctx.subscribeLocale` to follow a language switch.
 - Lifecycle: same mount protocol as the other `ctx.ui.mount*` (element returned to you after `dispose()`, one mount per element, host disposes on disable / reload, callbacks stop after that). Malformed calls throw `TypeError` synchronously.
 
+### Plugin settings page: ctx.registerSettingsPage (2026-11-18+)
+
+Every installed plugin that has settings is listed under **Settings › Extensions › Plugin settings** (one sub-item per plugin, sorted by name; more than 8 → the 5 most recently opened plus "N more…"). Disabled plugins stay listed, greyed; their page is a "Disabled · Enable" card and stored values are kept. A plugin's page is: an identity card the host draws (icon, name, `version · Built-in / Store / Local`, "Open plugin" when the plugin has a Space, the on/off switch), then the plugin's settings drawn **only with host settings parts**. Uninstall and auto-update stay on the Plugins page; the plugin's detail page there only has a "Settings" button.
+
+```js
+ctx.registerSettingsPage?.({
+  title: () => t('settingsTitle'),            // shown where the host lists your pages; functions follow the language
+  keywords: 'timer 计时 pomodoro',            // Settings search finds your plugin by these
+  mount(page) {
+    const render = () => page.update({ groups: [
+      { id: 'timer', icon: 'clock', title: t('timer'), items: [
+        { type: 'stepper', id: 'focus', title: t('focus'), value: prefs.focus, min: 5, max: 60, step: 5, onChange: (n) => save({ focus: n }) },
+        { type: 'switch', id: 'auto', title: t('autoNext'), value: prefs.auto, onChange: (on) => save({ auto: on }) },
+      ] },
+    ] })
+    render()
+    const off = ctx.subscribeLocale?.(render)
+    return () => off?.()                       // page closed, plugin disabled or reloaded
+  },
+})
+```
+
+- Same part shapes and rules as `ctx.ui.mountSettingsPage` (stable ids, `update` replaces the whole description, rejected switch / select flips back, `custom` blocks for anything else). The host mounts your page when it opens and calls the cleanup when it closes or your plugin is disabled / reloaded; callbacks from an old page are not called after that.
+- `id` defaults to `'main'`; registering the same id again replaces the page. One page is normal.
+- Older interfaces still work and land on the same page: `registerSetting` rows → a "General" group (switch / stepper / text field, values in localStorage `plugin.<id>.<key>` as before); `registerSettingsView` panels → one group each with a `custom` block after "General". Engine plugins' manifest `settings.fields` are converted too (section → group, toggle → switch, select → select, number → stepper or text field, text → text field, textarea / image-list → custom blocks, note → a text line, link → an "Open" button). If a `registerSettingsView` panel only mounts `ctx.ui.mountSettingsPage`, switch to `registerSettingsPage`.
+- **Don't imitate the host's `.settings-*` styles** in your own DOM: the parts are the host's and follow its layout per device; a copy breaks on phones and drifts.
+- Older hosts lack it: `ctx.registerSettingsPage?.(…)`; else keep `registerSettingsView` + `ctx.ui.mountSettingsPage` (the built-in Voice input plugin does exactly this).
+
 ### Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 
 The host draws these for you so a plugin looks native without copying host CSS, hand-placing overlays or freezing strings. All of them are feature-detected (`ctx.ui?.confirm`, …), stop calling you after disable / reload, are cleaned up by the host on disable / reload, and throw `TypeError` synchronously on malformed input. Text fields take **PluginText**: a string, `() => string` (evaluated whenever the host draws) or `{ zh, en }` — the last two follow a language switch at once.

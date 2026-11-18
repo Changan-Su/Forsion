@@ -66,6 +66,7 @@ vi.mock('./SpacesTab', () => ({ SpacesTab: () => null }))
 vi.mock('./NotificationsTab', () => ({ NotificationsTab: () => null, StatusBarTab: () => null }))
 vi.mock('./HooksTab', () => ({ HooksTab: () => null }))
 vi.mock('./PluginSettingsPage', () => ({ PluginSettingsPage: () => null }))
+vi.mock('./PluginSettingsHost', () => ({ EnginePluginSettingsHostPage: () => null, ForsionPluginSettingsPage: () => null, PluginSettingsDirectory: () => null, enginePluginSource: () => 'local', forsionPluginSource: () => 'local', pluginMetaLine: () => '' }))
 vi.mock('./AgentClisTab', () => ({ AgentClisTab: () => null }))
 vi.mock('./QrImage', () => ({ QrImage: () => null }))
 
