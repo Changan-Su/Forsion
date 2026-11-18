@@ -481,6 +481,10 @@ describe('page/5 结构区:schema 升降与闸标记', () => {
       const plain = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\n${bad}\nicon: "📘"\n---\n`
       expect(setAmadeusStructure(plain, COLS, null)).toBe(plain)
     }
+    // schema 键后有空格:我们认得、老端读不到版本号 → 结构区重发成规范写法
+    const spaced = fm5.replace('amadeus_schema: amadeus.page/5', 'amadeus_schema : amadeus.page/5')
+    expect(fixStructKeys(spaced)).toBe(fm5)
+    expect(patchFm(spaced, { icon: '📘' })).toContain('\namadeus_schema: amadeus.page/5\n')
     // 老端读得出值的(含带引号的键)= 闸在,原样留着
     const quoted = fm5.replace('amadeus_page: v5', '"amadeus_page": pg_q')
     const once = setAmadeusStructure(quoted, SEC, null)

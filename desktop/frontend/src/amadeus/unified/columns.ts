@@ -421,6 +421,14 @@ export const columnsNormalizer = $prose(() =>
       const structural = trs.some((t) =>
         (t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns')) && !t.getMeta('amxColumnsKeepEmpty'))
       let tr = state.tr
+      // 锚撞号先修、在规范化**之前**:规范化会整行重建(Alt 拖复制带空栏的行,原件也被重建),原件的位置就映射不回来了,
+      // 锚号会跑到副本上(Codex 复核)。只在「用户这一下编辑」时做(粘贴、拖放、Mod-D…):撤销重做是回放、
+      // 外部回灌(reconcileDiff)是权威内容,都带着各自该有的锚,一个不改(撤销删掉的重复注释也不会被换号)。
+      if (trs.some((t) => t.docChanged && !t.getMeta('history$') && t.getMeta('addToHistory') !== false)) {
+        const mapping = new Mapping()
+        for (const t of trs) mapping.appendMapping(t.mapping)
+        tr = dedupeAnchors(tr, old.doc, mapping)
+      }
       // 嵌套的两份活儿(外层行要补锚、它栏里又粘着一行)不能按同一份旧坐标一起做:里层先换掉以后,
       // 外层的 to 就过期了,会切进后面的正文(Codex 复核)。每轮只做最里层、按新文档重算,直到没活儿。
       // (PM 不会为插件自己追加的事务再调它一次,所以得在这一次里做完。)
@@ -430,11 +438,6 @@ export const columnsNormalizer = $prose(() =>
         if (!inner.length) break
         for (const j of inner.sort((a, b) => b.from - a.from)) tr = tr.replaceWith(j.from, j.to, j.content)
       }
-      // 旧文档 → 本次结果的坐标映射:去重只认「这次新冒出来的」锚,原有的(哪怕原本就重名)一律不动
-      const mapping = new Mapping()
-      for (const t of trs) mapping.appendMapping(t.mapping)
-      mapping.appendMapping(tr.mapping)
-      tr = dedupeAnchors(tr, old.doc, mapping)
       return tr.docChanged ? tr : null // 与触发它的事务同一个撤销步
     },
   }),

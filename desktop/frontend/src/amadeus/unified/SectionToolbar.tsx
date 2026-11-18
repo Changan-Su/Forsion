@@ -10,7 +10,7 @@ import { AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, AlignVerticalJusti
 import { registerMessages, useI18n } from '../../i18n'
 import { BLOCK_BG_COLORS } from '../blocks/markdown/colorPaletteValues'
 import { SECTION_MAX_COLUMNS, sectionView, type SectionAlign, type SectionPad } from './columns'
-import { removeSection, setSectionColumns, setSectionStyle, type SectionToolbarStore } from './sections'
+import { removeSection, setSectionColumns, setSectionStyle, toolbarStep, type SectionToolbarStore } from './sections'
 
 registerMessages({
   'amxsec.toolbar': { zh: '版块', en: 'Section' },
@@ -54,7 +54,7 @@ export function SectionToolbar({ store }: { store: SectionToolbarStore }) {
   const act = (fn: (view: EditorView, rowPos: number) => unknown, close = true) => (e: ReactMouseEvent) => {
     e.preventDefault()
     const cur = store.get()
-    if (cur) fn(cur.view, cur.rowPos)
+    if (cur) toolbarStep(cur.view, () => fn(cur.view, cur.rowPos))
     if (close) setOpen(null)
   }
   const toggle = (which: 'bg' | 'more') => (e: ReactMouseEvent) => { e.preventDefault(); setOpen((o) => (o === which ? null : which)) }

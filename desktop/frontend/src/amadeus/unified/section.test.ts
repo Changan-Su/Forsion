@@ -153,7 +153,7 @@ describe('版块:复制与粘贴', () => {
     const { state } = bb.view
     const sec = state.doc.child(1)
     expect(isSectionRow(sec)).toBe(true)
-    bb.view.dispatch(state.tr.insert(state.doc.content.size, sec.copy(sec.content)))
+    bb.view.dispatch(state.tr.insert(state.doc.content.size, sec.copy(sec.content)).setMeta('uiEvent', 'paste'))
     const anchors: string[] = []
     bb.view.state.doc.forEach((n) => {
       if (n.type.name !== 'amadeusColumnRow') return
@@ -193,7 +193,7 @@ describe('版块:评审补的几条', () => {
     const { state } = bb.view
     const sec = state.doc.child(1)
     const at = state.doc.child(0).nodeSize // 原件之前
-    bb.view.dispatch(state.tr.insert(at, sec.copy(sec.content)))
+    bb.view.dispatch(state.tr.insert(at, sec.copy(sec.content)).setMeta('uiEvent', 'paste'))
     const rs: Array<{ tail: string; anchors: string[] }> = []
     bb.view.state.doc.forEach((n) => {
       if (n.type.name !== 'amadeusColumnRow') return
@@ -205,6 +205,34 @@ describe('版块:评审补的几条', () => {
     expect(rs[1]).toEqual({ tail: 't1', anchors: ['s1'] }) // 原件
     expect(rs[0].tail).not.toBe('t1')
     expect(rs[0].anchors[0]).not.toBe('s1')
+  })
+
+  it('撤销重做、外部回灌带回来的锚一个不改(撤销删掉的重复注释不被换号)', async () => {
+    const body = ['甲段。', '', '<!-- a x1 -->', '', '乙段。', '', '<!-- a x1 -->', '', '丙段。', ''].join('\n')
+    const bb = await boot(body, null)
+    const { state } = bb.view
+    let first = -1
+    state.doc.forEach((n, off) => { if (first < 0 && n.type.name === 'paragraph' && n.childCount === 1 && n.firstChild!.type.name === 'html') first = off })
+    const node = state.doc.nodeAt(first)!
+    // 外部回灌形态(addToHistory:false):把删掉的那段原样塞回来
+    bb.view.dispatch(state.tr.delete(first, first + node.nodeSize))
+    bb.view.dispatch(bb.view.state.tr.insert(first, node).setMeta('addToHistory', false))
+    expect(bb.saved()).toBe(body)
+    // 撤销重做形态(history$ 回放)
+    bb.view.dispatch(bb.view.state.tr.delete(first, first + node.nodeSize))
+    bb.view.dispatch(bb.view.state.tr.insert(first, node).setMeta('history$', { redo: false }))
+    expect(bb.saved()).toBe(body)
+  })
+
+  it('Mod-D 那样不带粘贴标记的复制(普通编辑)照样换新锚', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const { state } = bb.view
+    const sec = state.doc.child(1)
+    bb.view.dispatch(state.tr.insert(state.doc.child(0).nodeSize + sec.nodeSize, sec.copy(sec.content)))
+    const tails: string[] = []
+    bb.view.state.doc.forEach((n) => { if (n.type.name === 'amadeusColumnRow') tails.push(String(n.attrs.tail)) })
+    expect(tails[0]).toBe('t1')
+    expect(new Set(tails).size).toBe(tails.length)
   })
 
   it('没有分栏的笔记里本来就重复的锚注释:一次无关编辑不改写它们', async () => {
@@ -244,6 +272,23 @@ describe('版块:评审补的几条', () => {
     expect(out).toContain('右栏X GAMMA。')
     expect(out).toContain('<!-- a c2 -->')
     expect(out).not.toMatch(/X<!--|-->X/)
+  })
+
+  it('并进来的栏只有分隔线(没有正文块):补一个空段落放光标,打的字不进锚标记', async () => {
+    const body = ['<!-- a e1 -->', '', '<!-- a d2 -->', '', '---', '', '<!-- a te -->', '', '后文。', ''].join('\n')
+    const lay = '{"v":4,"rows":[{"columns":[{"refs":["e1"],"width":1},{"refs":["d2"],"width":1}],"tail":"te","section":{}}]}'
+    const bb = await boot(body, lay)
+    const rowPos = rows(bb)[0].pos
+    const row = bb.view.state.doc.nodeAt(rowPos)!
+    let firstCell = -1
+    row.forEach((c, off, i) => { if (i === 0) firstCell = rowPos + 1 + off + 2 })
+    bb.view.dispatch(bb.view.state.tr.setSelection(TextSelection.create(bb.view.state.doc, firstCell)))
+    expect(setSectionColumns(bb.view, rowPos, 1)).toBe(true)
+    bb.view.dispatch(bb.view.state.tr.insertText('X'))
+    const out = bb.saved()
+    expect(out).not.toMatch(/X<!--|-->X/)
+    expect(out).toContain('<!-- a d2 -->')
+    expect(out).toMatch(/\nX\n/)
   })
 
   it('光标在要并掉的空栏里减栏:光标落到留下那栏的正文末尾,不落进行后的锚标记', async () => {

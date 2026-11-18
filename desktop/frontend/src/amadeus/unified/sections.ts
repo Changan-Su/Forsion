@@ -172,11 +172,21 @@ export function setSectionColumns(view: EditorView, rowPos: number, n: number): 
   }
   const rebuilt = rowNode.type.create(rowNode.attrs, next)
   const tr = state.tr.replaceWith(rowPos, rowPos + rowNode.nodeSize, [rebuilt, ...after])
-  const target = columnsCaret(state.selection.from, rowPos, rowNode, rebuilt, n, { extraAt, baseSize, lastWasEmpty: n < cells.length && isEmpty(cells[n - 1]) }, tr.doc)
+  let target = columnsCaret(state.selection.from, rowPos, rowNode, rebuilt, n, { extraAt, baseSize, lastWasEmpty: n < cells.length && isEmpty(cells[n - 1]) }, tr.doc)
+  if (target === APPEND) {
+    // 并完的最后一栏里没有能放光标的正文块(只有分隔线之类):补一个空段落放光标,别让 near() 落进锚标记段(Codex 复核)
+    let lastEnd = rowPos + 1
+    rebuilt.forEach((c, off, i) => { if (i === n - 1) lastEnd = rowPos + 1 + off + c.nodeSize - 1 })
+    tr.insert(lastEnd, paragraph.create())
+    target = lastEnd + 1
+  }
   if (target != null) tr.setSelection(TextSelection.near(tr.doc.resolve(target)))
   view.dispatch(closeHistory(markStructural(tr)))
   return true
 }
+
+/** columnsCaret 的「最后一栏里没有正文块,得补一个空段落」。 */
+const APPEND = -1
 
 /** 改栏数后光标落哪(Codex 评审:光标在被并掉的空栏里时,原来落进行后的锚标记段,一打字锚就坏了)。
  *  · 不在这一行里 → null(事务的 mapping 管);
@@ -198,10 +208,19 @@ function columnsCaret(
   let lastCellPos = rowPos + 1
   newRow.forEach((c, off, i) => { if (i === n - 1) lastCellPos = rowPos + 1 + off })
   if (idx < n - 1) return from
-  if (idx === n - 1) return info.lastWasEmpty && info.extraAt.size ? textblockIn(doc, lastCellPos, false) ?? from : from
+  if (idx === n - 1) return info.lastWasEmpty && info.extraAt.size ? textblockIn(doc, lastCellPos, false) ?? APPEND : from
   const at = info.extraAt.get(idx)
   if (at != null) return lastCellPos + 1 + info.baseSize + at + (from - (cellStart + 1))
-  return textblockIn(doc, lastCellPos, true) ?? lastCellPos + 1
+  return textblockIn(doc, lastCellPos, true) ?? APPEND
+}
+
+/** 工具条上的一下 = 单独一个撤销步:前后各派一笔空的 closeHistory —— 前一笔隔开刚打的字,后一笔隔开紧接着打的字
+ *  (prosemirror-history 先认 closeHistory 再看有没有 steps,空事务也收口;单栏「取消版块」走 unsplitRow,自己派事务,
+ *  也一样被隔开)。Codex 复核。 */
+export function toolbarStep(view: EditorView, fn: () => unknown): void {
+  view.dispatch(closeHistory(view.state.tr))
+  fn()
+  view.dispatch(closeHistory(view.state.tr))
 }
 
 /** 取消版块:两栏以上 → 留下普通分栏(位置不动);只有一栏 → 内容回到正文(同「取消分栏」)。 */

@@ -195,7 +195,10 @@ export function ensureSectionGate(fmText: string): string {
   const schema = structLineOf(fmText, 'schema')
   const major = schema == null ? null : schemaMajorOf({ amadeus_schema: schema })
   if (major == null || major > SCHEMA_MAJOR_V5) return fmText
-  if (major === SCHEMA_MAJOR_V5 && legacyGateHolds(entriesOf(fmText) ?? [])) return fmText
+  // 老端的闸要两样都读得出:amadeus_page 非空、schema 主版本 > 3。键后有空格(`amadeus_schema :`)我们认得、老端读不到,
+  // 闸就是开着的 —— 两个键都按老端的读法判,读不出就重发结构区(规范写法)(Codex 复核)
+  const legacy = parseSimpleYaml((entriesOf(fmText) ?? []).flat().join('\n'))
+  if (major === SCHEMA_MAJOR_V5 && !!legacy.amadeus_page && schemaMajorOf(legacy) === SCHEMA_MAJOR_V5) return fmText
   return setAmadeusStructure(fmText, layout, canvasLineOf(fmText))
 }
 
