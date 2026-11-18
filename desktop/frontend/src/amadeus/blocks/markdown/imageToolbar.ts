@@ -245,16 +245,32 @@ export function buildImageToolbar(a: ImageToolbarActions, host: HTMLElement, var
     refresh,
     closeMenu,
     menuOpen: () => !!menu,
-    destroy: () => { unsub(); closeMenu(); el.remove() },
+    destroy: () => { unsub(); closeMenu(); releaseToolbarHold(host); el.remove() },
   }
 }
 
 /** 点了对齐:悬停工具条「钉住」到下一次指针移动。段落换了 attrs,PM 会把图片挪进新的段落元素(recreateWrapper),
  *  Chromium 在指针动之前不给挪过的元素算 :hover —— 不钉住,点完一下工具条就消失了(指针明明还在它上面)。 */
+const holds = new WeakMap<HTMLElement, () => void>()
 export function holdToolbar(host: HTMLElement): void {
+  releaseToolbarHold(host) // 同一宿主只挂一个监听
+  const release = (): void => releaseToolbarHold(host)
   host.setAttribute('data-tb-hold', '')
-  document.addEventListener('pointermove', () => host.removeAttribute('data-tb-hold'), { once: true, capture: true })
+  document.addEventListener('pointermove', release, true)
+  holds.set(host, () => {
+    document.removeEventListener('pointermove', release, true)
+    host.removeAttribute('data-tb-hold')
+  })
 }
+/** 解除钉住(指针动了 / 工具条销毁)。document 上的监听一并摘掉:纯键盘关笔记时不留着旧编辑器的引用。 */
+export function releaseToolbarHold(host: HTMLElement): void {
+  const off = holds.get(host)
+  if (!off) return
+  holds.delete(host)
+  off()
+}
+/** 这个宿主此刻还钉着吗(派完事务的下一帧用:指针要是已经动过,就别再钉回去)。 */
+export const toolbarHeld = (host: HTMLElement): boolean => holds.has(host)
 
 /** 悬停工具条摆在哪(两种形态共用,露出前调):
  *   · 图够宽 → 图片右上角里面(CSS 缺省);
@@ -266,11 +282,11 @@ export function placeHoverToolbar(wrap: HTMLElement, img: HTMLElement, tb: HTMLE
   const shown = img.offsetWidth ? img : wrap
   let mode: 'out' | 'over' | null = null
   if (shown.offsetWidth < tb.offsetWidth + 16) {
+    // 所有裁切祖先(与视口)可视区的上沿取最低的那条:卡片自己有地方、外层舞台没有,一样会被裁掉
     let clipTop = 0
     for (let el = wrap.parentElement; el && el !== document.body; el = el.parentElement) {
       if (getComputedStyle(el).overflowY === 'visible') continue
-      clipTop = Math.max(0, el.getBoundingClientRect().top)
-      break
+      clipTop = Math.max(clipTop, el.getBoundingClientRect().top)
     }
     mode = shown.getBoundingClientRect().top - clipTop >= tb.getBoundingClientRect().height + 6 ? 'out' : 'over'
   }

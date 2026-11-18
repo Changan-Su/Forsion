@@ -14,7 +14,8 @@ import { closeHistory } from '@milkdown/kit/prose/history'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { normalizeTextAlignment, setTextAlignment, type TextAlignment } from './paragraphIndent'
 import {
-  buildImageToolbar, coarsePointer, downloadImage, holdToolbar, imageToast, openImageSheet, placeHoverToolbar, viewImageFullscreen,
+  buildImageToolbar, coarsePointer, downloadImage, holdToolbar, imageToast, openImageSheet, placeHoverToolbar, releaseToolbarHold,
+  toolbarHeld, viewImageFullscreen,
   type ImageToolbar, type ImageToolbarActions,
 } from './imageToolbar'
 
@@ -71,7 +72,8 @@ function sourceAt(view: EditorView, at: { from: number; to: number }): string | 
 export const EMBED_UNSAFE_RE = /[[\]|#^\r\n]/g
 export function isEmbedSafeName(name: string): boolean {
   EMBED_UNSAFE_RE.lastIndex = 0
-  return !!name.trim() && !EMBED_UNSAFE_RE.test(name)
+  // 首尾空白也不行:读引用时会被 trim 掉,指到另一个文件
+  return !!name && name === name.trim() && !EMBED_UNSAFE_RE.test(name)
 }
 
 /** 换图后的源码:只换库内名,`|宽度`(以及 Obsidian 的其它 `|…` 尾巴)原样留着。 */
@@ -89,7 +91,6 @@ function actions(ctx: WikiImageCtx): ImageToolbarActions {
     setAlign: (a) => {
       const at = ctx.span()
       if (!view.editable || !at) return
-      const held = ctx.wrap.hasAttribute('data-tb-hold')
       // 工具条是悬停出来的,光标可能在别的段落:先选中这张图,再交给段落对齐命令(Mod-Shift-L/E/R 同一条)。
       ctx.select()
       const picked = view.state.selection
@@ -100,7 +101,7 @@ function actions(ctx: WikiImageCtx): ImageToolbarActions {
         view.dispatch(ownStep(tr))
       }, a)
       view.focus()
-      reshowAt(view, at.from, held)
+      reshowAt(view, at.from, ctx.wrap)
     },
     replace: ctx.opts.saveEmbed ? () => replace(ctx) : undefined,
     fullscreen: () => viewImageFullscreen(ctx.img, ctx.wrap),
@@ -155,7 +156,7 @@ function replace(ctx: WikiImageCtx): void {
           : TextSelection.create(tr.doc, at.from, at.from + next.length))
       }
       view.dispatch(ownStep(tr))
-      reshowAt(view, at.from, false)
+      reshowAt(view, at.from, null)
     })()
   }
   input.click()
@@ -197,11 +198,16 @@ export function refreshShownToolbar(view: EditorView): void {
 
 /** 派完事务:装饰可能整颗重建了 / 被挪进了新的段落元素,指针还停在那张图上,pointerenter 却不会再来 ——
  *  按位置找到它补一次露出(刷新当前档)。held = 刚点的是对齐,工具条钉住到下一次指针移动(见 holdToolbar)。 */
-function reshowAt(view: EditorView, from: number, held: boolean): void {
+function reshowAt(view: EditorView, from: number, holdSrc: HTMLElement | null): void {
   requestAnimationFrame(() => {
     const w = view.dom.querySelector<HTMLElement>(`.wiki-inline-img-wrap[data-src-from="${from}"]`)
+    // 现查:这一帧之前指针动过,钉住已经解除,别凭点击那一刻的状态再钉回去
+    const held = !!holdSrc && toolbarHeld(holdSrc)
     if (!w) return
-    if (held && !w.hasAttribute('data-tb-hold')) holdToolbar(w)
+    if (held && w !== holdSrc) {
+      releaseToolbarHold(holdSrc!) // widget 换了一颗:钉住跟到新那颗上
+      holdToolbar(w)
+    }
     if (held || w.matches(':hover')) show(w)
   })
 }
@@ -215,6 +221,7 @@ export function armWikiImageToolbar(ctx: WikiImageCtx): () => void {
   return () => {
     ctx.wrap.removeEventListener('pointerenter', enter)
     armed.get(ctx.wrap)?.tb?.destroy()
+    releaseToolbarHold(ctx.wrap) // 还没建过工具条时也可能被 reshowAt 钉过
     armed.delete(ctx.wrap)
   }
 }

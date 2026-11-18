@@ -1258,7 +1258,7 @@ export function MilkdownInner({
           if (!page) return null
           const { opts } = await getAttachmentPrefs()
           // 文件名里的 wiki 定界符(`[` `]` `|` `#` `^`)换成 `-`:否则写回 `![[…]]` 会把引用写坏
-          const name = (f.name || 'image.png').replace(EMBED_UNSAFE_RE, '-')
+          const name = (f.name || '').trim().replace(EMBED_UNSAFE_RE, '-') || 'image.png'
           const { base } = await amadeus.saveAttachment(page, name, new Uint8Array(await f.arrayBuffer()), opts)
           return base || null
         },

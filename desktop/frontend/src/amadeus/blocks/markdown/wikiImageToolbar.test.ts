@@ -120,6 +120,19 @@ describe('对齐 = 段首对齐标记(与 `![](…)` / Mod-Shift-E 同一条)', 
     expect(wrapOf(b).hasAttribute('data-tb-hold')).toBe(true)
     document.dispatchEvent(new PointerEvent('pointermove'))
     expect(wrapOf(b).hasAttribute('data-tb-hold')).toBe(false)
+    await new Promise((r) => requestAnimationFrame(() => r(null))) // 下一帧:指针动过了,不许再钉回去(Codex 二轮 P3)
+    expect(wrapOf(b).hasAttribute('data-tb-hold')).toBe(false)
+  })
+
+  it('钉住着时工具条销毁:document 上的监听一起摘掉(Codex 二轮 P3)', async () => {
+    const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n')
+    const spy = vi.spyOn(document, 'removeEventListener')
+    click(hover(b), 'alignCenter')
+    expect(wrapOf(b).hasAttribute('data-tb-hold')).toBe(true)
+    let at = -1
+    b.view.state.doc.descendants((n, p) => { if (at < 0 && n.isText && n.text!.includes('![[pic')) at = p })
+    b.view.dispatch(b.view.state.tr.insertText('![[pic.png|300]]', at, at + '![[pic.png|200]]'.length)) // 源码变 → widget 重建、旧工具条销毁
+    expect(spy.mock.calls.some(([t, , o]) => t === 'pointermove' && o === true)).toBe(true)
   })
 
   it('混在文字里的图:对齐整段(段落级),源码不动', async () => {
@@ -202,7 +215,7 @@ describe('替换:只换库内名,`|宽度` 原样', () => {
   })
 
   it('库内名带 wiki 定界符(`]` `|` `#` `^` 换行):不写,源码不坏', async () => {
-    for (const bad of ['bad].png', 'a|b.png', 'x#y.png', 'p^q.png', 'n\nl.png']) expect(isEmbedSafeName(bad)).toBe(false)
+    for (const bad of ['bad].png', 'a|b.png', 'x#y.png', 'p^q.png', 'n\nl.png', ' pic.png', 'pic.png ', '   ']) expect(isEmbedSafeName(bad)).toBe(false)
     expect(isEmbedSafeName('dir/正常 名字-1.png')).toBe(true)
     const b = await boot('前文\n\n![[pic.png|200]]\n\n后文\n', { saveEmbed: async () => 'bad].png' })
     pickFile()

@@ -6290,6 +6290,7 @@ async function main() {
       const hit = document.elementFromPoint(x, y)
       return { out: w?.getAttribute('data-tb-out'), hover: w?.matches(':hover'), op: tb && getComputedStyle(tb).opacity, tb: rr(tb), wrap: rr(w), card: rr(card), hit: hit?.className?.toString().split(' ')[0] ?? hit?.tagName, clip }
     }, btn72)
+    if (process.env.SHOT_DIR) await p72.screenshot({ path: require('node:path').join(process.env.SHOT_DIR, 'canvas-card-image-toolbar.png'), clip: { x: Math.max(0, diag72.card[0] - 40), y: Math.max(0, diag72.card[1] - 60), width: 520, height: 200 } })
     await p72.mouse.click(btn72.x, btn72.y)
     await p72.waitForTimeout(400)
   }
