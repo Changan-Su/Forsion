@@ -454,6 +454,7 @@
     "check:canvasreal": "node scripts/e2e-editor.cjs --check=canvas-realinput",
     "check:canvastouch": "node scripts/e2e-editor.cjs --check=canvas-touch",
     "check:blockops": "node scripts/e2e-editor.cjs --check=block-file-ops",
+    "check:slashsuggested": "node scripts/e2e-editor.cjs --check=slash-suggested",
     "check:selection-display": "node scripts/e2e-editor.cjs --check=selection-display",
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
     "check:segstretch": "node scripts/e2e-editor.cjs --check=seg-stretch",

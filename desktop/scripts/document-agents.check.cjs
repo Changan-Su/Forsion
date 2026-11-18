@@ -210,8 +210,9 @@ async function slashScenarios(browser) {
     await page.keyboard.press('ArrowDown')
     const card = await slashActive(page)
     await page.keyboard.press('ArrowDown')
-    const ul = await slashActive(page)
-    check('S12 Basic keyboard order follows the visible heading, card and list rows', h6Index >= 0 && h6.key === 'h6' && card.key === 'card' && ul.key === 'ul' && first.keys.slice(h6Index, h6Index + 3).join(',') === 'h6,card,ul', { h6: h6.key, card: card.key, ul: ul.key, keys: first.keys })
+    const ol = await slashActive(page)
+    // 「常用」一组(A2)把无序列表提到了最前,所以「基础」的卡片之后接的是「列表」组剩下的第一项:有序列表
+    check('S12 Basic keyboard order follows the visible heading, card and list rows', h6Index >= 0 && h6.key === 'h6' && card.key === 'card' && ol.key === 'ol' && first.keys.slice(h6Index, h6Index + 3).join(',') === 'h6,card,ol', { h6: h6.key, card: card.key, ol: ol.key, keys: first.keys })
     await page.keyboard.press('ArrowLeft')
     const last = await waitCategory(page, 'plugin')
     await page.keyboard.press('ArrowRight')
