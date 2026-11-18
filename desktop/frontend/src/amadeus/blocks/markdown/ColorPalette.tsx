@@ -80,7 +80,8 @@ export function ColorPalettePopover(p: ColorPaletteProps) {
   // Keep the editor's selection when using the mouse; keyboard activation is native click.
   const pick = (value: string) => ({ onMouseDown: (e: React.MouseEvent) => { e.preventDefault(); apply(value) }, onClick: (e: React.MouseEvent) => { if (!e.detail) apply(value) } })
   const r = p.anchor?.getBoundingClientRect()
-  const right = p.side === 'right' && r
+  // 右侧放不下(手机宽度、菜单贴着右边)→ 退回到行下方,不让视口夹取把它压到菜单上
+  const right = p.side === 'right' && r && r.right + 4 + 280 <= window.innerWidth - 8
   return createPortal(<OverlayAt className="ui-popover amx-color-popover" role="dialog" aria-label={t('palette.custom')}
     x={right ? r.right + 4 : r?.left ?? p.fallback?.x ?? 8} y={right ? r.top - 5 : (r?.bottom ?? p.fallback?.y ?? 8) + 6} anchorTop={right ? r.bottom + 5 : (r?.top ?? 8) - 6} anchor={right ? undefined : anchor /* 跟随锚点时 x/y 不用;右侧摆法按行的位置一次摆定(块菜单本身不随滚动走) */}
     innerRef={(el) => { root.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}

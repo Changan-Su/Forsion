@@ -182,6 +182,24 @@ async function main() {
     ok('暗色:字色换亮一档', darkFg.color === 'rgb(249, 141, 141)', darkFg)
     await p.screenshot({ path: path.join(out, 'colored-dark.png') })
 
+    // ── 手机宽度(触屏):⠿ → 「颜色」点开同一个调色板,整块在屏内,点色块上色(方案:手机块菜单里同一项) ──
+    {
+      const ctx = await browser.newContext({ locale: 'zh-CN', viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+      const m = await ctx.newPage(); m.setDefaultTimeout(15000); m.on('pageerror', (e) => errors.push(e.message))
+      await m.goto(origin + '?upage&useed=' + encodeURIComponent(SEED))
+      await m.locator('.unified-body .ProseMirror').waitFor({ timeout: 120000 }); await sleep(m, 600)
+      const bb = await block(m, 'BETA').boundingBox()
+      await m.touchscreen.tap(bb.x + 40, bb.y + bb.height / 2); await sleep(m, 400)
+      await m.locator('.unified-gutter .drag-handle').tap(); await m.locator('.unified-block-menu').waitFor(); await sleep(m, 200)
+      await m.locator('[data-act="blockColor"]').tap(); await sleep(m, 300)
+      const mp = m.locator('.amx-color-popover'), vb = await mp.boundingBox()
+      ok('手机:点「颜色」出同一个调色板,整块在屏内', !!vb && vb.x >= 0 && vb.x + vb.width <= 390 && vb.y >= 0 && vb.y + vb.height <= 844, vb)
+      await m.screenshot({ path: path.join(out, 'phone-palette.png') })
+      await mp.locator('[data-color-value="green"]').tap(); await sleep(m, 300)
+      ok('手机:点色块给整块上色', (await attrs(m, 'BETA')).bg === 'green')
+      await ctx.close()
+    }
+
     ok('页面没有报错', errors.length === 0, errors)
     console.log(`\n${checks.length} 项全过;截图在 ${out}`)
   } finally { await browser.close() }
