@@ -94,7 +94,7 @@ import {
 import { IS_MAC_PLATFORM, wikilinkPlugin } from './wikilink'
 import { codeExitPlugin } from './codeExit'
 import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
-import { mdImagePlugin } from './mdImage'
+import { captionOf, mdImagePlugin, withImageCaptionSchema } from './mdImage'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
@@ -373,7 +373,10 @@ export function selectedAttachment(view: EditorView): { reference: string; ref: 
     const src = String(image.attrs.src ?? '')
     const ref = fromAssetUrl(src) ?? src
     if (!ref || /^(?:https?:|data:|blob:)/i.test(ref)) return null
-    return { reference: `![${String(image.attrs.alt ?? '')}](${ref})`, ref }
+    // 图下说明(title)跟着引用走:库内粘回来说明还在(转义同 markdown 标题)。
+    const cap = captionOf(image)
+    const title = cap ? ` "${cap.replace(/[\\"]/g, (c) => `\\${c}`)}"` : ''
+    return { reference: `![${String(image.attrs.alt ?? '')}](${ref}${title})`, ref }
   }
   const wiki = /^!\[\[([^\]\n]+)\]\]$/.exec(reference)
   if (!wiki) return null
@@ -436,7 +439,7 @@ function internalAttachmentReference(dt: DataTransfer | null, raw: string): stri
   if (recent && (recent.reference === raw || (!raw && nativeFile && recentFileMatches))) return recent.reference
   if (!raw) return null
   const attachmentSyntax = /^!\[\[[^\]\n]+\]\]$/.test(raw)
-    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)[^)\n]+\)$/i.test(raw)
+    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)[^)\n"]+(?:\s+"(?:[^"\\\n]|\\.)*")?\)$/i.test(raw) // 可带图下说明(title)
   return nativeFile && attachmentSyntax ? raw : null
 }
 
@@ -1157,7 +1160,7 @@ export function MilkdownInner({
       // 加粗字面化(隐藏开关,./literalBold):开关开着才装;⌘B 要排在 preset 的键位之前。
       // Literal bold (hidden switch): installed only when on; Mod-b must come before the presets' keymaps.
       .use(literalBoldEnabled() ? literalBoldPlugin() : [])
-      .use(commonmarkWithIndent)
+      .use(withImageCaptionSchema(commonmarkWithIndent)) // 图片读 DOM 不再拿 alt 顶 title(title = 图下说明,见 mdImage.ts)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
       .use(emptyTaskRemark) // Obsidian 的空待办 `- [ ]`:GFM 读成字面 `[ ]`,这里补认成空待办(R-10b,见 ./taskList)

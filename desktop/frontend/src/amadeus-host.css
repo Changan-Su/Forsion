@@ -1695,7 +1695,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   #amx-print-root .lcl-ftoc-frame,
   #amx-print-root .ctx-menu,
   #amx-print-root .block-gutter,
-  #amx-print-root .drag-handle { display: none !important; }
+  #amx-print-root .drag-handle,
+  #amx-print-root .amx-img-tb,
+  #amx-print-root .amx-img-resize { display: none !important; } /* 图片工具条 / 把手(悬停过、选中着时克隆里带着) */
   /* iframe(PDF 预览)打印不出内容、克隆的 video 无帧 → 隐去预览体,只留文件名头(文件卡片语义)。 */
   #amx-print-root .embed-pdf,
   #amx-print-root .embed-video,

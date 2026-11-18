@@ -31,7 +31,7 @@ const png = (W, H) => {
 }
 const sizeOf = (name) => [+(/w(\d+)/.exec(name)?.[1] ?? 640), +(/h(\d+)/.exec(name)?.[1] ?? 360)]
 
-async function open(ctx, seed, file = 'Pic.md') {
+async function open(ctx, seed, file = 'Pic.md', query = 'upage') {
   const p = await ctx.newPage()
   p.setDefaultTimeout(15000)
   const errs = []
@@ -40,7 +40,7 @@ async function open(ctx, seed, file = 'Pic.md') {
     const name = decodeURIComponent(r.request().url().split('/__img/')[1])
     r.fulfill({ status: 200, contentType: 'image/png', headers: { 'cache-control': 'no-store' }, body: png(...sizeOf(name)) })
   })
-  await p.goto(`${URL}?upage`, { waitUntil: 'domcontentloaded', timeout: 180000 })
+  await p.goto(`${URL}?${query}`, { waitUntil: 'domcontentloaded', timeout: 180000 })
   await p.waitForSelector(PM, { timeout: 180000 })
   await p.evaluate(() => {
     const base = `${location.origin}/__img/`
@@ -301,6 +301,21 @@ async function main() {
     const t9 = await box(p, `${WRAP} > .amx-img-tb`), i9 = await box(p, `${WRAP} > img`)
     check('T9 窄图:工具条在图片上方、左缘对齐', t9 && t9.b <= i9.y && Math.abs(t9.x - i9.x) < 2 && (await tbState(p)).op === 1, { t9, i9 })
     if (SHOT) await p.screenshot({ path: path.join(SHOT, 'narrow.png') })
+    {
+      // 指针从图片往上挪到工具条:中间那道缝不许让工具条消失,按钮真点得到
+      const b9 = await box(p, `${WRAP} > .amx-img-tb [data-act="alignCenter"]`)
+      await p.mouse.move(i9.cx, i9.cy)
+      await p.waitForTimeout(150)
+      await p.mouse.move(b9.cx, b9.cy, { steps: 10 })
+      await p.waitForTimeout(200)
+      const at = await p.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-act]')?.dataset.act ?? null, { x: b9.cx, y: b9.cy })
+      const st = await tbState(p)
+      await p.mouse.down()
+      await p.mouse.up()
+      await p.waitForTimeout(200)
+      md = await saved(p)
+      check('T9 窄图:从图片挪到上方工具条,工具条不消失、按钮点得到(居中落盘)', at === 'alignCenter' && st?.op === 1 && md.includes('<span data-amadeus-align="center"></span>![小|90](tiny-w90-h60.png)'), { at, st, md })
+    }
 
     // ── T10 只读:不出会改文档的键,也没有把手 ──
     await reopen(p, SEED, 'Ro.md')
@@ -318,6 +333,75 @@ async function main() {
     s = await tbState(p)
     check('T11 英文:工具条文案切过来', s?.titles.includes('Align center') && s.titles.includes('Caption') && s.titles.includes('View full screen'), s?.titles)
     await p.evaluate(() => window.__upage.setLocale('zh'))
+
+    // ── T14 阅读模式:说明照样在图下、跟段落对齐;不带工具条 / ⋯ / 把手 ──
+    await reopen(p, '前文\n\n<span data-amadeus-align="center"></span>![新版主页|320](home-w640-h360.png "阅读里的说明")\n\n尾巴\n', 'Read.md')
+    await hover(p) // 先把工具条、把手建出来并选中图片,确认阅读快照里摘干净了
+    {
+      const r = await box(p, `${WRAP} > img`)
+      await p.mouse.click(r.x + 20, r.y + r.h - 20)
+      await p.waitForTimeout(200)
+    }
+    await p.evaluate(() => window.__upage.probe.setReading(true))
+    await p.waitForFunction(() => !!document.querySelector('.amx-reading-renderer .wiki-inline-img-wrap img'), null, { timeout: 8000 }).catch(() => null)
+    await p.waitForTimeout(300)
+    const rd = await p.evaluate(() => {
+      const root = document.querySelector('.amx-reading-renderer')
+      const w = root?.querySelector('.wiki-inline-img-wrap')
+      if (!w) return null
+      const cap = w.querySelector('.amx-img-cap'), img = w.querySelector('img')
+      const r = w.getBoundingClientRect(), pr = w.closest('p, div:not(.wiki-inline-img-wrap)').getBoundingClientRect()
+      return {
+        cap: cap?.textContent ?? null, capShown: !!cap && !cap.hidden && getComputedStyle(cap).display !== 'none',
+        capBelow: !!cap && cap.getBoundingClientRect().y >= img.getBoundingClientRect().bottom - 1,
+        chrome: root.querySelectorAll('.amx-img-tb, .amx-img-more, .amx-img-resize, .amx-img-capline').length,
+        dcx: Math.round(Math.abs(r.x + r.width / 2 - (pr.x + pr.width / 2))),
+      }
+    })
+    check('T14 阅读模式:说明在图下照样显示', rd && rd.cap === '阅读里的说明' && rd.capShown && rd.capBelow, rd)
+    check('T14 阅读模式:没有工具条 / ⋯ / 把手 / 输入行', rd && rd.chrome === 0, rd)
+    check('T14 阅读模式:居中图仍居中', rd && rd.dcx < 3, rd)
+    if (SHOT) await p.screenshot({ path: path.join(SHOT, 'reading.png') })
+    await p.evaluate(() => window.__upage.probe.setReading(false))
+    await p.waitForTimeout(300)
+
+    // ── T15 复制带说明的图 → 粘贴:说明在、盘上是库内路径(不是显示地址)、没说明的不被 alt 顶出假说明 ──
+    const A15 = '![图|300](sub/a-w300-h160.png "说 \\"明\\" (x)")', B15 = '![无|200](sub/b-w200-h100.png)'
+    await reopen(p, `前文\n\n${A15}\n\n${B15}\n\n尾巴\n`, 'Copy.md')
+    const pasteAfterTail = async () => {
+      const t = await p.locator(`${PM} > p`, { hasText: '尾巴' }).boundingBox()
+      await p.mouse.click(t.x + t.width - 2, t.y + t.height / 2)
+      await p.keyboard.press('End')
+      await p.keyboard.press('Enter')
+      await p.keyboard.press('Meta+v')
+      await p.waitForTimeout(600)
+      return saved(p)
+    }
+    const lines = (md, needle) => md.split('\n').filter((l) => l.includes(needle))
+    const selectNth = async (n) => {
+      const rr = await p.evaluate(({ PM, n }) => { const im = document.querySelectorAll(PM + ' .wiki-inline-img-wrap > img')[n]; const b = im.getBoundingClientRect(); return { x: b.x, y: b.y, h: b.height } }, { PM, n })
+      await p.mouse.click(rr.x + 20, rr.y + rr.h - 20)
+      await p.waitForTimeout(200)
+    }
+    await selectNth(0)
+    await p.keyboard.press('Meta+c')
+    await p.waitForTimeout(300)
+    md = await pasteAfterTail()
+    check('T15 Mod+C 复制带说明的图 → 粘贴:说明逐字跟过来', JSON.stringify(lines(md, 'sub/a-w300')) === JSON.stringify([A15, A15]), lines(md, 'sub/a-w300'))
+    await selectNth(1)
+    await p.keyboard.press('Meta+c')
+    await p.waitForTimeout(300)
+    md = await pasteAfterTail()
+    check('T15 Mod+C 复制没说明的图 → 粘贴:不冒出拿 alt 顶的说明', JSON.stringify(lines(md, 'sub/b-w200')) === JSON.stringify([B15, B15]), lines(md, 'sub/b-w200'))
+    await p.mouse.move(2, 2)
+    await p.waitForTimeout(150)
+    await tb(p, 'more')
+    await p.click(`${WRAP} > .amx-img-more [data-act="copy"]`)
+    await p.waitForTimeout(600)
+    md = await pasteAfterTail()
+    check('T15 ⋯「复制图片」→ 粘贴:说明逐字跟过来', JSON.stringify(lines(md, 'sub/a-w300')) === JSON.stringify([A15, A15, A15]), lines(md, 'sub/a-w300'))
+    check('T15 盘上没有显示地址', !/__img|amadeus-asset|https?:/.test(md), md)
+
     check('T12 无渲染错误(桌面)', errs.length === 0, errs)
     await p.close()
 
@@ -344,7 +428,41 @@ async function main() {
     await ph.p.touchscreen.tap(tail.x + 10, tail.cy)
     await ph.p.waitForTimeout(400)
     check('T13 点别处:底栏收起', await ph.p.locator('.amx-img-sheet').count() === 0)
+    // 底栏「说明」:图下出输入行,回车落盘;底栏还在(图仍选中)
+    await ph.p.touchscreen.tap(ib.cx, ib.cy)
+    await ph.p.waitForTimeout(400)
+    await ph.p.locator('.amx-img-sheet [data-act="caption"]').tap()
+    await ph.p.waitForTimeout(250)
+    const capFocused = await ph.p.evaluate(() => document.activeElement?.classList.contains('amx-img-capline') ?? false)
+    await ph.p.keyboard.type('手机上写的说明')
+    await ph.p.keyboard.press('Enter')
+    await ph.p.waitForTimeout(300)
+    md = await saved(ph.p)
+    check('T13 底栏「说明」:输入行聚焦,回车写进 title', capFocused && LINE(md).endsWith('(home-w640-h360.png "手机上写的说明")'), { capFocused, line: LINE(md) })
+    check('T13 写完说明底栏还在', await ph.p.locator('.amx-img-sheet').count() === 1)
+    await ph.p.locator('.amx-img-sheet [data-act="more"]').tap()
+    await ph.p.waitForTimeout(250)
+    const m13 = await ph.p.evaluate(() => {
+      const m = document.querySelector('.amx-img-sheet .amx-img-more')
+      if (!m) return null
+      const r = m.getBoundingClientRect()
+      return { x: r.x, y: r.y, r: r.right, b: r.bottom, W: innerWidth, H: innerHeight, items: [...m.querySelectorAll('button')].map((b) => b.dataset.act), btnH: Math.round(m.querySelector('button').getBoundingClientRect().height) }
+    })
+    check('T13 底栏 ⋯:菜单整个在屏幕里,按钮 ≥ 44px', m13 && m13.x >= 0 && m13.y >= 0 && m13.r <= m13.W && m13.b <= m13.H && JSON.stringify(m13.items) === '["copy","delete"]' && m13.btnH >= 44, m13)
+    if (SHOT) await ph.p.screenshot({ path: path.join(SHOT, 'phone-more.png') })
     check('T13 无渲染错误(手机)', ph.errs.length === 0, ph.errs)
+    // 生产壳 + 移动端编辑胶囊:底栏摆在胶囊上面,不叠
+    const pb = await open(touch, SEED, 'Pic.md', 'upage&upane&umbar')
+    const ib2 = await box(pb.p, `${WRAP} > img`)
+    await pb.p.touchscreen.tap(ib2.cx, ib2.cy)
+    await pb.p.waitForTimeout(400)
+    const ov = await pb.p.evaluate(() => {
+      const s = document.querySelector('.amx-img-sheet')?.getBoundingClientRect(), m = document.querySelector('.amx-mbar')?.getBoundingClientRect()
+      return s && m ? { sheetB: Math.round(s.bottom), barT: Math.round(m.top), barH: Math.round(m.height) } : { sheet: !!s, bar: !!m }
+    })
+    check('T13 有移动端编辑胶囊时:底栏坐在胶囊上面,不叠', ov.sheetB !== undefined && ov.barH > 0 && ov.sheetB <= ov.barT, ov)
+    if (SHOT) await pb.p.screenshot({ path: path.join(SHOT, 'phone-mbar.png') })
+    check('T13 无渲染错误(手机 + 胶囊)', pb.errs.length === 0, pb.errs)
     await touch.close()
   } finally {
     await browser.close()

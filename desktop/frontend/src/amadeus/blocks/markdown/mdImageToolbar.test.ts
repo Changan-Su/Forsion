@@ -6,6 +6,8 @@
 // 真浏览器那一半:npm run check:imagetoolbar。
 import { afterEach, describe, expect, it } from 'vitest'
 import { NodeSelection } from '@milkdown/kit/prose/state'
+import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model'
+import { selectedAttachment } from './MarkdownBlock'
 import { bootEditor, roundTrip, type Booted } from './parseFidelity.testkit'
 import { mdImagePlugin } from './mdImage'
 import { setTextAlignment } from './paragraphIndent'
@@ -159,5 +161,30 @@ describe('NodeView:工具条「说明」输入行', () => {
     b.view.dom.querySelector('.wiki-inline-img-wrap')!.dispatchEvent(new PointerEvent('pointerenter'))
     const shown = [...b.view.dom.querySelectorAll<HTMLButtonElement>('.amx-img-tb button')].filter((x) => !x.hidden).map((x) => x.dataset.act)
     expect(shown).toEqual(['fullscreen', 'download'])
+  })
+})
+
+describe('粘贴 / 剪切过一趟 DOM:不再拿 alt 顶 title(imageCaptionSchema)', () => {
+  it('没说明的图过一趟 DOM 回来 title 仍为空;有说明的照旧', async () => {
+    const b = await boot('![图|300](a.png)\n\n![x](b.png "真说明")\n')
+    const dom = DOMSerializer.fromSchema(b.view.state.schema).serializeFragment(b.view.state.doc.content)
+    const holder = document.createElement('div')
+    holder.appendChild(dom)
+    const slice = DOMParser.fromSchema(b.view.state.schema).parseSlice(holder)
+    const titles: unknown[] = []
+    slice.content.descendants((n) => { if (n.type.name === 'image') titles.push(n.attrs.title) })
+    expect(titles).toEqual(['', '真说明']) // Milkdown 原版第一项是 '图|300'
+  })
+  it('盘上 title 与 alt 一字不差(旧粘贴路径塞进来的):不当说明显示,盘上原样', async () => {
+    const b = await boot('![图|300](a.png "图|300")\n', true)
+    expect(b.view.dom.querySelector<HTMLElement>('.amx-img-cap')!.hidden).toBe(true)
+    expect(b.saved()).toBe('![图|300](a.png "图|300")\n')
+  })
+  it('复制图片的引用文字带上说明(库内粘回来说明还在)', async () => {
+    const b = await boot('![|200](a.png "say \\"hi\\" (x)")\n')
+    b.view.dispatch(b.view.state.tr.setSelection(NodeSelection.create(b.view.state.doc, imagePos(b))))
+    expect(selectedAttachment(b.view)).toEqual({ reference: '![|200](a.png "say \\"hi\\" (x)")', ref: 'a.png' })
+    const re = await boot(selectedAttachment(b.view)!.reference + '\n')
+    expect(titleOf(re)).toBe('say "hi" (x)')
   })
 })

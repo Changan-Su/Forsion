@@ -9,6 +9,8 @@
  *  路径一个字节不动,Obsidian 里打开同样按 200px 显示;别的 markdown 渲染器最多把 `|200`
  *  当成 alt 文字,图片照显示。 */
 import { $prose } from '@milkdown/kit/utils'
+import { imageSchema } from '@milkdown/kit/preset/commonmark'
+import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Plugin, NodeSelection, type Transaction } from '@milkdown/kit/prose/state'
 import { closeHistory } from '@milkdown/kit/prose/history'
 import type { EditorView, NodeView } from '@milkdown/kit/prose/view'
@@ -27,6 +29,31 @@ export interface MdImageOpts {
   saveImage?: (file: File) => Promise<string | null>
   /** 把**当前选中**的图片复制成真图片(块菜单「复制图片」那份,copySelectedImage)。 */
   copyImage?: (view: EditorView) => Promise<boolean>
+}
+
+/** 图片 schema 的读 DOM 规则去掉「没有 title 就拿 alt 顶上」(Milkdown 原版 `title || alt`)。
+ *  粘贴 / 剪切粘贴 / 拖入都要过一趟 DOM(md → PM → DOM → parseSlice),原版会把 alt(连 `|宽度`)塞进 title 落盘:
+ *  `![图|300](a.png "图|300")`。title 从前只是个悬停提示,看不出来;现在 title = 图下说明,这一塞就是一句凭空的说明。 */
+const imageCaptionSchema = imageSchema.extendSchema((prev) => (ctx) => ({
+  ...prev(ctx),
+  parseDOM: [{
+    tag: 'img[src]',
+    getAttrs: (dom: HTMLElement | string) => {
+      if (!(dom instanceof HTMLElement)) return false
+      return { src: dom.getAttribute('src') || '', alt: dom.getAttribute('alt') || '', title: dom.getAttribute('title') || '' }
+    },
+  }],
+}))
+/** commonmark preset 里原位换上 imageCaptionSchema(位置不动,同 paragraphIndent 的换法)。 */
+export function withImageCaptionSchema(preset: MilkdownPlugin[]): MilkdownPlugin[] {
+  return preset.map((p) => ((p as unknown) === (imageSchema.node as unknown) ? imageCaptionSchema.node
+    : (p as unknown) === (imageSchema.ctx as unknown) ? imageCaptionSchema.ctx : p) as MilkdownPlugin)
+}
+/** 图下要显示的说明。title 与 alt 一字不差 = 旧版粘贴路径顺手塞进来的(见 imageCaptionSchema),不当说明显示
+ *  (盘上原样不动;用户在「说明」里写下一句和 alt 一模一样的话,这一条也会把它当成没写 —— 已知取舍)。 */
+export function captionOf(node: ProseNode): string {
+  const t = (node.attrs.title as string | null) ?? ''
+  return t && t !== ((node.attrs.alt as string | null) ?? '') ? t : ''
 }
 
 /** 说明(title)在源码行里的写法:`\` 与 `"` 加反斜杠(与 markdown 标题同口径),读回时去掉。 */
@@ -129,7 +156,7 @@ class MdImageView implements NodeView {
     if (this.img.getAttribute('src') !== src) this.img.src = src
     this.img.alt = label
     this.img.style.width = width ? `${width}px` : ''
-    const title = (node.attrs.title as string | null) ?? ''
+    const title = captionOf(node)
     if (this.cap.textContent !== title) this.cap.textContent = title
     this.cap.hidden = !title || !!this.capLine
     this.dom.toggleAttribute('data-ro', !this.view.editable)
@@ -232,7 +259,7 @@ class MdImageView implements NodeView {
         const pos = this.pos()
         const node = pos == null ? null : this.view.state.doc.nodeAt(pos)
         if (pos == null || !node || node.type.name !== 'image' || node.attrs.src !== before || !this.view.editable) return
-        this.view.dispatch(ownStep(this.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, src: url })))
+        this.markup(pos, { ...node.attrs, src: url })
       })()
     }
     input.click()
@@ -271,7 +298,7 @@ class MdImageView implements NodeView {
       this.capLine.focus()
       return
     }
-    const old = String(this.node.attrs.title ?? '')
+    const old = captionOf(this.node)
     const input = document.createElement('input')
     input.className = 'amx-img-capline'
     input.type = 'text'
@@ -293,7 +320,7 @@ class MdImageView implements NodeView {
       const pos = this.pos()
       if (commit && v !== old && pos != null && this.view.editable) {
         const node = this.view.state.doc.nodeAt(pos)
-        if (node?.type.name === 'image') this.view.dispatch(ownStep(this.view.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, title: v || null })))
+        if (node?.type.name === 'image') this.markup(pos, { ...node.attrs, title: v || null })
       }
       this.view.focus()
     }
@@ -415,7 +442,15 @@ class MdImageView implements NodeView {
     const title = m[3] == null ? null : unescapeTitle(m[3]) || null
     const next = { ...this.node.attrs, alt: m[1], src, title }
     if (next.alt === this.node.attrs.alt && next.src === this.node.attrs.src && (next.title ?? null) === (this.node.attrs.title ?? null)) return
-    this.view.dispatch(ownStep(this.view.state.tr.setNodeMarkup(pos, undefined, next)))
+    this.markup(pos, next)
+  }
+  /** 改图片 attrs(一步撤销)。叶子节点的 setNodeMarkup 是整颗替换,NodeSelection 映射过去会塌成光标 ——
+   *  原来选着这张图就放回去,不然手机底栏写完说明 / 替换完就收起了。 */
+  private markup(pos: number, attrs: Record<string, unknown>): void {
+    const { state } = this.view
+    const tr = state.tr.setNodeMarkup(pos, undefined, attrs)
+    if (state.selection instanceof NodeSelection && state.selection.from === pos) tr.setSelection(NodeSelection.create(tr.doc, pos))
+    this.view.dispatch(ownStep(tr))
   }
 
   /** 松手 → 宽度写进 alt。一次事务 = 一步撤销;写完把选区放回本节点,免得把手跟着消失。 */
