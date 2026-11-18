@@ -54,6 +54,8 @@ app.whenReady().then(() => {
   if (covered) app.setAccessibilitySupportEnabled(true)
   const area = screen.getPrimaryDisplay().workArea
   const win = new BrowserWindow({ width: 520, height: 320, x: area.x + (covered ? Math.round((area.width - 520) / 2) : area.width - 540), y: area.y + (covered ? Math.round((area.height - 320) / 2) : 40), show: false, title: 'Draft Desk' })
+  // 人切到别的桌面(Space)时,只在原桌面上的窗口 helper 列不到,模型就找不到替身(11-18 一次 cuweb 因此没跑到)。和桌面整链台架同一做法
+  win.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true })
   win.once('ready-to-show', () => win.showInactive())
   win.loadURL(process.env.CU_FIXTURE_URL)
 })`;
@@ -69,6 +71,18 @@ win.title = "Reading list"
 win.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 app.run()
+`;
+
+// 替身进程此刻在屏上的普通窗口里,宽度够得上替身的有几扇(只读窗口列表,不需要录屏授权)
+const ONSCREEN = `import CoreGraphics
+let pid = Int32(CommandLine.arguments[1]) ?? 0
+let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+var n = 0
+for info in list where (info[kCGWindowOwnerPID as String] as? Int32 ?? 0) == pid && (info[kCGWindowLayer as String] as? Int ?? 0) == 0 {
+  let b = info[kCGWindowBounds as String] as? [String: Any] ?? [:]
+  if (b["Width"] as? Double ?? 0) >= 400 { n += 1 }
+}
+print(n)
 `;
 
 // 盖窗起来会拿走键盘;页面进 hidden 之后把前台还给原来那个 App(盖窗还压在替身上面,页面照样 hidden)。helper 连不上就不还
@@ -106,7 +120,7 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   writeFileSync(join(appDir, 'main.js'), MAIN);
   const child = spawn(electron, [appDir], { stdio: 'ignore', env: { ...process.env, CU_FIXTURE_URL: `http://127.0.0.1:${server.address().port}/`, CU_FIXTURE_DATA: join(appDir, 'data'), ...(key === 'cuwebcovered' ? { CU_FIXTURE_COVERED: '1' } : {}) } });
 
-  let ev, cover, sampling = true, samples = 0, tookFront = 0, firstFrontAt = null;
+  let ev, cover, sampling = true, samples = 0, tookFront = 0, firstFrontAt = null, shownAfterMs = null;
   const t0 = Date.now();
   const sampler = (async () => {
     while (sampling) {
@@ -119,6 +133,14 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   try {
     for (let i = 0; i < 150 && !events.some((e) => e.type === 'load'); i++) await sleep(100);
     if (!events.some((e) => e.type === 'load')) return { ok: false, detail: '替身没加载出来,场景无效' };
+    // 页面 load 不等于窗口上屏:机器忙时 showInactive 要晚几秒,模型这时列不到替身,找几次就放弃(11-18 cuweb 两次)。
+    // cuwebcovered 先编盖窗,天然多等了几秒,所以一直没撞上。等替身真在屏上再开跑,记下等了多久
+    writeFileSync(join(appDir, 'onscreen.swift'), ONSCREEN);
+    await execFileP('swiftc', ['-o', join(appDir, 'onscreen'), join(appDir, 'onscreen.swift')]);
+    const onscreen = async () => Number((await execFileP(join(appDir, 'onscreen'), [String(child.pid)]).catch(() => ({ stdout: '0' }))).stdout.trim()) > 0;
+    for (let i = 0; i < 150 && !(await onscreen()); i++) await sleep(100);
+    if (!(await onscreen())) return { ok: true, inconclusive: true, detail: '没走到:替身窗口 15 秒内没上屏' };
+    shownAfterMs = Date.now() - t0;
     if (key === 'cuwebcovered') {
       writeFileSync(join(appDir, 'cover.swift'), COVER);
       await execFileP('swiftc', ['-o', join(appDir, 'cover'), join(appDir, 'cover.swift')]);
@@ -167,7 +189,7 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   checks['没绕去 shell / AppleScript'] = bypass.length === 0;
   checks['模型正常收尾'] = ev.done === true && !ev.error;
 
-  const metrics = `工具调用 ${calls.length} 次(${calls.join('、')});页面点击 ${events.filter((e) => e.type === 'click').map((e) => `${e.id}${e.hovered === undefined ? '' : e.hovered ? '(悬停)' : '(无悬停)'}`).join('、') || '无'};前台采样 ${samples} 次,替身在前台 ${tookFront} 次${firstFrontAt === null ? '' : `(第一次在 ${firstFrontAt} ms)`}`;
+  const metrics = `工具调用 ${calls.length} 次(${calls.join('、')});页面点击 ${events.filter((e) => e.type === 'click').map((e) => `${e.id}${e.hovered === undefined ? '' : e.hovered ? '(悬停)' : '(无悬停)'}`).join('、') || '无'};前台采样 ${samples} 次,替身在前台 ${tookFront} 次${firstFrontAt === null ? '' : `(第一次在 ${firstFrontAt} ms)`};替身开出来 ${shownAfterMs} ms 后上屏`;
   writeFileSync(join(dir, '过程.md'), `# ${key}\n\n提示词:${PROMPTS[key]}\n\n${metrics}\n\n## 判据\n\n${Object.entries(checks).map(([k, v]) => `- ${v ? '过' : '没过'}:${k}`).join('\n')}\n\n## 页面事件\n\n\`\`\`json\n${JSON.stringify(events, null, 1)}\n\`\`\`\n\n## 工具调用\n\n${ev.toolArgs.map((c, i) => `### ${i + 1}. ${c.name}\n\n\`\`\`json\n${c.arguments}\n\`\`\`\n\n\`\`\`\n${results[i] ?? ''}\n\`\`\``).join('\n\n')}\n\n## 模型回复\n\n${ev.content}\n`);
   const failed = Object.entries(checks).filter(([, pass]) => !pass).map(([name]) => name);
   // 模型有时看着截图直接按坐标点:那走的是坐标点击,没进 AXPress 这条路。没走到不算过,也不算这处改动坏了
