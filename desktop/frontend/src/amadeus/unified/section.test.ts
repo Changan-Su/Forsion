@@ -146,11 +146,51 @@ describe('版块:规范化', () => {
   })
 })
 
+describe('版块:复制与粘贴', () => {
+  it('同篇里再贴一份版块 → 后一份换新锚,两份都还能折叠', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const { state } = bb.view
+    const sec = state.doc.child(1)
+    expect(isSectionRow(sec)).toBe(true)
+    bb.view.dispatch(state.tr.insert(state.doc.content.size, sec.copy(sec.content)))
+    const anchors: string[] = []
+    bb.view.state.doc.forEach((n) => {
+      if (n.type.name !== 'amadeusColumnRow') return
+      anchors.push(String(n.attrs.tail))
+      n.forEach((c) => anchors.push(String(c.attrs.anchor)))
+    })
+    expect(rows(bb).map((r) => r.cells)).toEqual([1, 2, 1])
+    expect(new Set(anchors).size).toBe(anchors.length)
+    // 派生 → 重新打开:三行都折得回来
+    const lay = deriveLayoutJson(bb.view.state.doc)
+    const saved = bb.saved()
+    await bb.destroy(); b = null
+    const again = await boot(saved, lay)
+    expect(rows(again).map((r) => r.cells)).toEqual([1, 2, 1])
+  })
+
+  it('外层缺锚的行里又粘着一行:先修里层再修外层,后面的正文一个字不少', async () => {
+    const bb = await boot('Intro 段落。\n', null)
+    const { schema } = bb.view.state
+    const { amadeusColumnRow: row, amadeusColumnCell: cell, paragraph } = schema.nodes
+    const inner = row.create({ tail: '', section: {} }, cell.create({ anchor: '' }, paragraph.create(null, schema.text('里层'))))
+    const outer = row.create({ tail: '', section: {} }, cell.create({ anchor: '' }, [paragraph.create(null, schema.text('外层')), inner]))
+    bb.view.dispatch(bb.view.state.tr.insert(0, outer))
+    expect(bb.view.state.doc.textContent).toContain('Intro 段落。')
+    expect(bb.view.state.doc.textContent).toContain('外层')
+    expect(bb.view.state.doc.textContent).toContain('里层')
+    let nested = 0
+    bb.view.state.doc.forEach((n) => n.descendants((c) => { if (c.type.name === 'amadeusColumnRow') nested++ }))
+    expect(nested).toBe(0)
+    bb.view.state.doc.forEach((n) => { if (n.type.name === 'amadeusColumnRow') n.forEach((c) => expect(c.attrs.anchor).not.toBe('')) })
+  })
+})
+
 describe('版块样式工具函数', () => {
   it('sectionView:缺省与认不出的取值', () => {
-    expect(sectionView({})).toEqual({ bg: '', pad: 'm', cards: true, valign: 't' })
-    expect(sectionView({ bg: 'pink', pad: 'xl', cards: 0, valign: 'x' })).toEqual({ bg: '', pad: 'm', cards: true, valign: 't' })
-    expect(sectionView({ bg: 'teal', pad: 's', cards: false, valign: 'b' })).toEqual({ bg: 'teal', pad: 's', cards: false, valign: 'b' })
+    expect(sectionView({})).toEqual({ bg: '', pad: 'm', cards: true, valign: 't', stack: true })
+    expect(sectionView({ bg: 'pink', pad: 'xl', cards: 0, valign: 'x', stack: 0 })).toEqual({ bg: '', pad: 'm', cards: true, valign: 't', stack: true })
+    expect(sectionView({ bg: 'teal', pad: 's', cards: false, valign: 'b', stack: false })).toEqual({ bg: 'teal', pad: 's', cards: false, valign: 'b', stack: false })
   })
 
   it('patchSection:新对象、缺省值删键、未知键留着', () => {

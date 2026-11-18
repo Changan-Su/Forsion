@@ -286,6 +286,8 @@ describe('page/5:只有带版块的笔记升号,老端借 amadeus_page 走只读
     expect(layoutHasSections('{"v":4,"rows":[{"columns":[],"section":null}]}')).toBe(false)
     // 块状原文逐字保留的那种(JSON 读不懂)
     expect(layoutHasSections('amadeus_layout:\n  v: 4\n  rows: [{"section": {}}]')).toBe(true)
+    // 外部工具改成的 YAML flow 写法(键不带引号)
+    expect(layoutHasSections('{v: 4, rows: [{columns: [{refs: [s1], width: 1}], section: {}}]}')).toBe(true)
   })
 
   it('parseV4Layout 认 section 对象、未知键原样带回;compileV4 发 page/5', () => {

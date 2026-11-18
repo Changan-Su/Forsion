@@ -28,10 +28,10 @@ export interface LayoutV4 { v: 4; rows: LayoutRow[] }
 // PM 侧 = amadeusColumnRow 的 `section` attr(null = 普通分栏);对象原样往返,未知键也带回去。
 export type SectionPad = 's' | 'm' | 'l'
 export type SectionAlign = 't' | 'm' | 'b'
-/** 渲染用的规整值。bg '' = 跟随主题(主题色混进纸面)。 */
-export interface SectionView { bg: string; pad: SectionPad; cards: boolean; valign: SectionAlign }
+/** 渲染用的规整值。bg '' = 跟随主题(主题色混进纸面);stack = 栏宽不够(约 320px)时竖排。 */
+export interface SectionView { bg: string; pad: SectionPad; cards: boolean; valign: SectionAlign; stack: boolean }
 export const SECTION_MAX_COLUMNS = 4
-export const SECTION_DEFAULTS: SectionView = { bg: '', pad: 'm', cards: true, valign: 't' }
+export const SECTION_DEFAULTS: SectionView = { bg: '', pad: 'm', cards: true, valign: 't', stack: true }
 const PADS: readonly string[] = ['s', 'm', 'l']
 const ALIGNS: readonly string[] = ['t', 'm', 'b']
 
@@ -43,6 +43,7 @@ export function sectionView(raw: unknown): SectionView {
     pad: typeof o.pad === 'string' && PADS.includes(o.pad) ? (o.pad as SectionPad) : 'm',
     cards: o.cards !== false,
     valign: typeof o.valign === 'string' && ALIGNS.includes(o.valign) ? (o.valign as SectionAlign) : 't',
+    stack: o.stack !== false,
   }
 }
 
@@ -84,6 +85,7 @@ function rowDomAttrs(node: ProseNode): Record<string, string> {
     'data-sec-pad': v.pad,
     'data-sec-cards': v.cards ? '1' : '0',
     'data-sec-valign': v.valign,
+    'data-sec-stack': v.stack ? '1' : '0',
     'data-cols': String(Math.min(node.childCount, SECTION_MAX_COLUMNS)),
   }
 }
@@ -416,69 +418,138 @@ export const columnsNormalizer = $prose(() =>
       if (!trs.some((t) => t.docChanged)) return null
       const structural = trs.some((t) =>
         (t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns')) && !t.getMeta('amxColumnsKeepEmpty'))
-      const { paragraph } = state.schema.nodes
-      const markerParas = (anchor: string): ProseNode[] => anchorMarkers(state.schema, anchor)
-      type Job = { from: number; to: number; content: ProseNode[] }
-      const jobs: Job[] = []
-      // 嵌套行禁令(Codex Y-P0:cell content 'block+' 管不住粘贴进来的 row):cell 里的 row 原地展开。
-      // ⚠️ 顶级 row 必须继续下钻(返回 true)才能看见 cell 里的嵌套 row(Codex 终审:返回 false 则分支不可达)。
-      state.doc.descendants((node, pos, parent) => {
-        if (node.type.name === 'amadeusColumnRow' && parent?.type.name === 'amadeusColumnCell') {
-          const flat: ProseNode[] = []
-          node.forEach((c) => c.forEach((child) => flat.push(child)))
-          jobs.push({ from: pos, to: pos + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
-          return false // 嵌套行自身之下不再深入(内容已整体摊平)
-        }
-        return true
-      })
-      state.doc.forEach((node, offset) => {
-        if (node.type.name !== 'amadeusColumnRow') return
-        const cells: ProseNode[] = []
-        node.forEach((c) => cells.push(c))
-        // 版块的空栏是用户自己摆的(工具条「栏数」、卡片占位),不随别处的拖拽被清掉;
-        // 删栏只走工具条与空栏退格(removeEmptyColumnTr)。
-        const section = isSectionRow(node)
-        const need = minCells(node)
-        const survivors = structural && !section ? cells.filter((c) => !cellIsEmpty(c)) : cells
-        // 空锚补号(PM createAndFill 自动补 cell 时 anchor=''):就地重建带新锚的 cell。
-        const needAnchorFix = survivors.some((c) => !c.attrs.anchor)
-        if (survivors.length === cells.length && survivors.length >= need && !needAnchorFix) return
-        const used = new Set<string>()
-        state.doc.descendants((n) => {
-          if (n.type.name === 'amadeusColumnCell' && n.attrs.anchor) used.add(String(n.attrs.anchor))
-          if (n.type.name === 'amadeusColumnRow' && n.attrs.tail) used.add(String(n.attrs.tail))
-        })
-        const fixAnchor = (c: ProseNode): ProseNode => {
-          if (c.attrs.anchor) return c
-          let id = 'c' + Math.random().toString(36).slice(2, 6)
-          while (used.has(id)) id = 'c' + Math.random().toString(36).slice(2, 6)
-          used.add(id)
-          return c.type.create({ ...c.attrs, anchor: id }, c.content)
-        }
-        // 被清 cell 恒为空(只有空 cell 会被结构性清除),其锚是裸锚无内容 —— 统一放行后
-        // (语义:原属该行,行后最接近原位;完美插回原列间隙不值得为空锚做,Codex 终审 P1 记录)。
-        const droppedMarkers = cells.filter((c) => !survivors.includes(c)).flatMap((c) => markerParas(String(c.attrs.anchor)))
-        if (survivors.length >= need) {
-          jobs.push({
-            from: offset,
-            to: offset + node.nodeSize,
-            content: [node.type.create(node.attrs, survivors.map(fixAnchor)), ...droppedMarkers],
-          })
-        } else {
-          // 解散:每个存活 cell 的锚转惰性标记 + 内容摊平,空 cell 只留标记,tail 锚同保。
-          const flat: ProseNode[] = [...droppedMarkers, ...flattenCells(state.schema, survivors, String(node.attrs.tail ?? ''))]
-          jobs.push({ from: offset, to: offset + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
-        }
-      })
-      if (!jobs.length) return null
       let tr = state.tr
-      for (const j of jobs.sort((a, b) => b.from - a.from)) {
-        tr = tr.replaceWith(j.from, j.to, j.content)
+      // 嵌套的两份活儿(外层行要补锚、它栏里又粘着一行)不能按同一份旧坐标一起做:里层先换掉以后,
+      // 外层的 to 就过期了,会切进后面的正文(Codex 复核)。每轮只做最里层、按新文档重算,直到没活儿。
+      // (PM 不会为插件自己追加的事务再调它一次,所以得在这一次里做完。)
+      for (let round = 0; round < 8; round++) {
+        const jobs = normalizeJobs(tr.doc, state.schema, structural)
+        const inner = jobs.filter((a) => !jobs.some((b) => b !== a && a.from <= b.from && b.to <= a.to))
+        if (!inner.length) break
+        for (const j of inner.sort((a, b) => b.from - a.from)) tr = tr.replaceWith(j.from, j.to, j.content)
       }
-      return tr
+      tr = dedupeAnchors(tr)
+      return tr.docChanged ? tr : null // 与触发它的事务同一个撤销步
     },
   }),
 )
+
+type NormalizeJob = { from: number; to: number; content: ProseNode[] }
+
+function normalizeJobs(doc: ProseNode, schema: Schema, structural: boolean): NormalizeJob[] {
+  const { paragraph } = schema.nodes
+  const markerParas = (anchor: string): ProseNode[] => anchorMarkers(schema, anchor)
+  const jobs: NormalizeJob[] = []
+  // 嵌套行禁令(Codex Y-P0:cell content 'block+' 管不住粘贴进来的 row):cell 里的 row 原地展开。
+  // ⚠️ 顶级 row 必须继续下钻(返回 true)才能看见 cell 里的嵌套 row(Codex 终审:返回 false 则分支不可达)。
+  doc.descendants((node, pos, parent) => {
+    if (node.type.name === 'amadeusColumnRow' && parent?.type.name === 'amadeusColumnCell') {
+      const flat: ProseNode[] = []
+      node.forEach((c) => c.forEach((child) => flat.push(child)))
+      jobs.push({ from: pos, to: pos + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
+      return false // 嵌套行自身之下不再深入(内容已整体摊平)
+    }
+    return true
+  })
+  doc.forEach((node, offset) => {
+    if (node.type.name !== 'amadeusColumnRow') return
+    const cells: ProseNode[] = []
+    node.forEach((c) => cells.push(c))
+    // 版块的空栏是用户自己摆的(工具条「栏数」、卡片占位),不随别处的拖拽被清掉;
+    // 删栏只走工具条与空栏退格(removeEmptyColumnTr)。
+    const section = isSectionRow(node)
+    const need = minCells(node)
+    const survivors = structural && !section ? cells.filter((c) => !cellIsEmpty(c)) : cells
+    // 空锚补号(PM createAndFill 自动补 cell 时 anchor=''):就地重建带新锚的 cell。
+    const needAnchorFix = survivors.some((c) => !c.attrs.anchor)
+    if (survivors.length === cells.length && survivors.length >= need && !needAnchorFix) return
+    const used = new Set<string>()
+    doc.descendants((n) => {
+      if (n.type.name === 'amadeusColumnCell' && n.attrs.anchor) used.add(String(n.attrs.anchor))
+      if (n.type.name === 'amadeusColumnRow' && n.attrs.tail) used.add(String(n.attrs.tail))
+    })
+    const fixAnchor = (c: ProseNode): ProseNode => {
+      if (c.attrs.anchor) return c
+      let id = 'c' + Math.random().toString(36).slice(2, 6)
+      while (used.has(id)) id = 'c' + Math.random().toString(36).slice(2, 6)
+      used.add(id)
+      return c.type.create({ ...c.attrs, anchor: id }, c.content)
+    }
+    // 被清 cell 恒为空(只有空 cell 会被结构性清除),其锚是裸锚无内容 —— 统一放行后
+    // (语义:原属该行,行后最接近原位;完美插回原列间隙不值得为空锚做,Codex 终审 P1 记录)。
+    const droppedMarkers = cells.filter((c) => !survivors.includes(c)).flatMap((c) => markerParas(String(c.attrs.anchor)))
+    if (survivors.length >= need) {
+      jobs.push({
+        from: offset,
+        to: offset + node.nodeSize,
+        content: [node.type.create(node.attrs, survivors.map(fixAnchor)), ...droppedMarkers],
+      })
+    } else {
+      // 解散:每个存活 cell 的锚转惰性标记 + 内容摊平,空 cell 只留标记,tail 锚同保。
+      const flat: ProseNode[] = [...droppedMarkers, ...flattenCells(schema, survivors, String(node.attrs.tail ?? ''))]
+      jobs.push({ from: offset, to: offset + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
+    }
+  })
+  return jobs
+}
+
+/** 锚撞号:复制粘贴 / 拖放复制一个分栏行或版块,两份带着同一套栏锚、行尾锚(栏里的惰性标记也是),
+ *  下次打开两份都因「重复锚」折不起来(Codex 复核)。按文序留第一份,后出现的换新锚。
+ *  画布卡的锚只记进已用集合不改(卡与卡撞号归 canvas.ts 的规范化管)。 */
+function lazyMarkerId(n: ProseNode): string | null {
+  if (n.type.name !== 'paragraph' || n.childCount !== 1 || n.firstChild!.type.name !== 'html') return null
+  const m = MARKER_RE.exec(String(n.firstChild!.attrs.value ?? '').trim())
+  return m ? m[1] : null
+}
+
+function dedupeAnchors(tr: Transaction): Transaction {
+  const seen = new Set<string>()
+  const fixes: Array<{ pos: number; kind: 'cell' | 'tail' | 'lazy' }> = []
+  const note = (id: string, pos: number, kind: 'cell' | 'tail' | 'lazy'): void => {
+    if (!id) return
+    if (seen.has(id)) fixes.push({ pos, kind })
+    else seen.add(id)
+  }
+  tr.doc.forEach((node, offset) => {
+    const name = node.type.name
+    if (name === 'amadeusColumnRow') {
+      let p = offset + 1
+      node.forEach((cell) => {
+        note(String(cell.attrs.anchor ?? ''), p, 'cell')
+        let q = p + 1
+        cell.forEach((ch) => { const id = lazyMarkerId(ch); if (id) note(id, q, 'lazy'); q += ch.nodeSize })
+        p += cell.nodeSize
+      })
+      note(String(node.attrs.tail ?? ''), offset, 'tail')
+    } else if (name === 'amadeusCanvasCard') {
+      const a = String(node.attrs.anchor ?? '')
+      if (a) seen.add(a)
+    } else {
+      const id = lazyMarkerId(node)
+      if (id) note(id, offset, 'lazy')
+    }
+  })
+  if (!fixes.length) return tr
+  const taken = new Set<string>()
+  const fresh = (): string => {
+    let id = freshAnchorId(tr.doc)
+    while (taken.has(id) || seen.has(id)) id = freshAnchorId(tr.doc)
+    taken.add(id)
+    return id
+  }
+  // 换锚 = 只改属性 / 原子节点的值,位置不动,按原坐标逐个改即可
+  for (const f of fixes) {
+    const node = tr.doc.nodeAt(f.pos)
+    if (!node) continue
+    if (f.kind === 'cell') tr = tr.setNodeMarkup(f.pos, undefined, { ...node.attrs, anchor: fresh() })
+    else if (f.kind === 'tail') tr = tr.setNodeMarkup(f.pos, undefined, { ...node.attrs, tail: fresh() })
+    else {
+      const html = node.firstChild
+      if (html) tr = tr.setNodeMarkup(f.pos + 1, undefined, { ...html.attrs, value: `<!-- a ${fresh()} -->` })
+    }
+  }
+  return tr
+}
 
 // ── 拖至块左右缘 → 成列(v3 pairBlocks 语义,单事务单步撤销)。────────────────────────────
 // target 顶级块:目标+拖块成两列新行;target 已在列内:该侧插入新列(Codex B8 拓扑)。

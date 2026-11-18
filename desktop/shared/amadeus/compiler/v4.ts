@@ -157,9 +157,10 @@ function sanitizeFmExtra(fmExtra: string, keepUnknown: boolean): string {
     .replace(/^\n+|\n+$/g, '')
 }
 
-/** layout 里有没有版块行(决定 page/4 还是 page/5)。读得懂 → 按行判;读不懂(块状原文被逐字保留的
- *  那种)→ 按字面 `"section":` 判 —— 宁可多升一档,也不能把带版块的笔记降回 page/4 交给老端改写。
- *  锚 id 只有 [A-Za-z0-9_-],`"section"` 后面紧跟冒号只可能是键。 */
+/** layout 里有没有版块行(决定 page/4 还是 page/5)。读得懂 JSON → 按行判;读不懂(块状原文、外部工具
+ *  改成的 YAML flow 写法 `{v: 4, rows: [{…, section: {}}]}`,都被逐字保留)→ 按字面 `section:` 判,
+ *  引号可有可无 —— 宁可多升一档(老端只读),也不能把带版块的笔记降回 page/4 交给老端改写。
+ *  锚 id 只有 [A-Za-z0-9_-],「section」后面紧跟冒号只可能是键。 */
 export function layoutHasSections(layoutJson: string | null): boolean {
   if (layoutJson == null) return false
   try {
@@ -169,7 +170,7 @@ export function layoutHasSections(layoutJson: string | null): boolean {
   } catch {
     // 落到下面按字面判
   }
-  return /"section"\s*:/.test(layoutJson)
+  return /(?:^|[{,\s])["']?section["']?\s*:/.test(layoutJson)
 }
 
 /** **结构键发射的唯一判据**(方案 §6.0-1,2026-08-15):`amadeus_schema` 在场 ⟺ 分栏或画布任一在场。
