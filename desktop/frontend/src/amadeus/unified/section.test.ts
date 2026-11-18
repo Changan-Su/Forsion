@@ -7,7 +7,8 @@ import {
   columnPlugins, createColumnsFold, deriveLayoutJson, parseLayoutJson, patchSection, removeEmptyColumnTr,
   sectionView, isSectionRow, executePair, type LayoutV4,
 } from './columns'
-import { NodeSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
+import { setSectionColumns } from './sections'
 
 const BODY = [
   '# 版块探针', '',
@@ -183,6 +184,81 @@ describe('版块:复制与粘贴', () => {
     bb.view.state.doc.forEach((n) => n.descendants((c) => { if (c.type.name === 'amadeusColumnRow') nested++ }))
     expect(nested).toBe(0)
     bb.view.state.doc.forEach((n) => { if (n.type.name === 'amadeusColumnRow') n.forEach((c) => expect(c.attrs.anchor).not.toBe('')) })
+  })
+})
+
+describe('版块:评审补的几条', () => {
+  it('贴在原件上方:原件的锚不动,换号的是新贴的那份(既有链接仍指原件)', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const { state } = bb.view
+    const sec = state.doc.child(1)
+    const at = state.doc.child(0).nodeSize // 原件之前
+    bb.view.dispatch(state.tr.insert(at, sec.copy(sec.content)))
+    const rs: Array<{ tail: string; anchors: string[] }> = []
+    bb.view.state.doc.forEach((n) => {
+      if (n.type.name !== 'amadeusColumnRow') return
+      const anchors: string[] = []
+      n.forEach((c) => anchors.push(String(c.attrs.anchor)))
+      rs.push({ tail: String(n.attrs.tail), anchors })
+    })
+    expect(rs).toHaveLength(3)
+    expect(rs[1]).toEqual({ tail: 't1', anchors: ['s1'] }) // 原件
+    expect(rs[0].tail).not.toBe('t1')
+    expect(rs[0].anchors[0]).not.toBe('s1')
+  })
+
+  it('没有分栏的笔记里本来就重复的锚注释:一次无关编辑不改写它们', async () => {
+    const body = ['甲段。', '', '<!-- a x1 -->', '', '乙段。', '', '<!-- a x1 -->', '', '丙段。', ''].join('\n')
+    const bb = await boot(body, null)
+    let pos = -1
+    bb.view.state.doc.descendants((n, p) => { if (pos < 0 && n.isTextblock && n.textContent === '甲段。') pos = p + 1 })
+    bb.view.dispatch(bb.view.state.tr.insertText('X', pos))
+    expect(bb.saved()).toBe(body.replace('甲段。', 'X甲段。'))
+  })
+
+  it('版块粘进引用块:原地摊平成普通内容(存盘只折顶层行,留着重开就丢布局)', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const { state } = bb.view
+    const sec = state.doc.child(1)
+    const { blockquote, paragraph } = state.schema.nodes
+    const end = state.doc.content.size
+    bb.view.dispatch(state.tr.insert(end, blockquote.create(null, [paragraph.create(null, state.schema.text('引用里')), sec.copy(sec.content)])))
+    let nested = 0
+    bb.view.state.doc.forEach((n) => n.descendants((c) => { if (c.type.name === 'amadeusColumnRow') nested++ }))
+    expect(nested).toBe(0)
+    let quoted = ''
+    bb.view.state.doc.forEach((n) => { if (n.type.name === 'blockquote') quoted = n.textContent })
+    expect(quoted).toContain('引用里')
+    expect(quoted).toContain('ALPHA')
+  })
+
+  it('光标在要并掉的栏里减栏:光标跟着内容走,打的字不进锚标记', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const rowPos = rows(bb)[1].pos // 两栏版块
+    let gamma = -1
+    bb.view.state.doc.descendants((n, p) => { if (n.isTextblock && n.textContent.startsWith('右栏')) gamma = p + 1 })
+    bb.view.dispatch(bb.view.state.tr.setSelection(TextSelection.create(bb.view.state.doc, gamma + 2)))
+    expect(setSectionColumns(bb.view, rowPos, 1)).toBe(true)
+    bb.view.dispatch(bb.view.state.tr.insertText('X'))
+    const out = bb.saved()
+    expect(out).toContain('右栏X GAMMA。')
+    expect(out).toContain('<!-- a c2 -->')
+    expect(out).not.toMatch(/X<!--|-->X/)
+  })
+
+  it('光标在要并掉的空栏里减栏:光标落到留下那栏的正文末尾,不落进行后的锚标记', async () => {
+    const bb = await boot(BODY, LAYOUT)
+    const rowPos = rows(bb)[1].pos
+    expect(setSectionColumns(bb.view, rowPos, 3)).toBe(true)
+    let third = -1
+    const row = bb.view.state.doc.nodeAt(rowPos)!
+    row.forEach((c, off, i) => { if (i === 2) third = rowPos + 1 + off + 2 })
+    bb.view.dispatch(bb.view.state.tr.setSelection(TextSelection.create(bb.view.state.doc, third)))
+    expect(setSectionColumns(bb.view, rowPos, 2)).toBe(true)
+    bb.view.dispatch(bb.view.state.tr.insertText('X'))
+    const out = bb.saved()
+    expect(out).toContain('右栏 GAMMA。X')
+    expect(out).not.toMatch(/X<!--|-->X/)
   })
 })
 

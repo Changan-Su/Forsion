@@ -10,6 +10,7 @@ import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@mil
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
+import { Mapping } from '@milkdown/kit/prose/transform'
 import type { Node as ProseNode, Schema } from '@milkdown/kit/prose/model'
 import { BLOCK_COLOR_NAMES } from '../blocks/markdown/blockColor'
 
@@ -415,7 +416,7 @@ function flattenCells(schema: Schema, cells: ProseNode[], tail: string, skipEmpt
 export const columnsNormalizer = $prose(() =>
   new Plugin({
     key: new PluginKey('AMX_COLUMNS_NORMALIZE'),
-    appendTransaction: (trs, _old, state) => {
+    appendTransaction: (trs, old, state) => {
       if (!trs.some((t) => t.docChanged)) return null
       const structural = trs.some((t) =>
         (t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns')) && !t.getMeta('amxColumnsKeepEmpty'))
@@ -429,7 +430,11 @@ export const columnsNormalizer = $prose(() =>
         if (!inner.length) break
         for (const j of inner.sort((a, b) => b.from - a.from)) tr = tr.replaceWith(j.from, j.to, j.content)
       }
-      tr = dedupeAnchors(tr)
+      // 旧文档 → 本次结果的坐标映射:去重只认「这次新冒出来的」锚,原有的(哪怕原本就重名)一律不动
+      const mapping = new Mapping()
+      for (const t of trs) mapping.appendMapping(t.mapping)
+      mapping.appendMapping(tr.mapping)
+      tr = dedupeAnchors(tr, old.doc, mapping)
       return tr.docChanged ? tr : null // 与触发它的事务同一个撤销步
     },
   }),
@@ -442,9 +447,11 @@ function normalizeJobs(doc: ProseNode, schema: Schema, structural: boolean): Nor
   const markerParas = (anchor: string): ProseNode[] => anchorMarkers(schema, anchor)
   const jobs: NormalizeJob[] = []
   // 嵌套行禁令(Codex Y-P0:cell content 'block+' 管不住粘贴进来的 row):cell 里的 row 原地展开。
+  // 引用 / 列表里粘进来的行同样展开(Codex 评审 B:存盘只折顶层行,留在引用里的行 / 版块重开就丢了布局);
+  // 画布卡里的行另有 canvasNormalizer 整行搬到卡前,这里不碰。
   // ⚠️ 顶级 row 必须继续下钻(返回 true)才能看见 cell 里的嵌套 row(Codex 终审:返回 false 则分支不可达)。
   doc.descendants((node, pos, parent) => {
-    if (node.type.name === 'amadeusColumnRow' && parent?.type.name === 'amadeusColumnCell') {
+    if (node.type.name === 'amadeusColumnRow' && parent && parent.type.name !== 'doc' && parent.type.name !== 'amadeusCanvasCard') {
       const flat: ProseNode[] = []
       node.forEach((c) => c.forEach((child) => flat.push(child)))
       jobs.push({ from: pos, to: pos + node.nodeSize, content: flat.length ? flat : [paragraph.create()] })
@@ -495,41 +502,54 @@ function normalizeJobs(doc: ProseNode, schema: Schema, structural: boolean): Nor
 }
 
 /** 锚撞号:复制粘贴 / 拖放复制一个分栏行或版块,两份带着同一套栏锚、行尾锚(栏里的惰性标记也是),
- *  下次打开两份都因「重复锚」折不起来(Codex 复核)。按文序留第一份,后出现的换新锚。
- *  画布卡的锚只记进已用集合不改(卡与卡撞号归 canvas.ts 的规范化管)。 */
+ *  下次打开两份都因「重复锚」折不起来(Codex 复核)。**只给这次新冒出来的那份换新锚**:旧文档里就有的锚
+ *  (按事务映射认:旧位置映射过来正好落在这里)一律不动 —— 粘在原件上方时,按文序换会把原件的锚换掉、
+ *  既有链接跟着跑到副本上;笔记里本来就重复的字面注释也不该被一次无关编辑改写(Codex 评审 B)。
+ *  这次新冒出来的几份彼此重名时留第一份。画布卡的锚只记进已用集合不改(卡与卡撞号归 canvas.ts 的规范化管)。 */
 function lazyMarkerId(n: ProseNode): string | null {
   if (n.type.name !== 'paragraph' || n.childCount !== 1 || n.firstChild!.type.name !== 'html') return null
   const m = MARKER_RE.exec(String(n.firstChild!.attrs.value ?? '').trim())
   return m ? m[1] : null
 }
 
-function dedupeAnchors(tr: Transaction): Transaction {
-  const seen = new Set<string>()
-  const fixes: Array<{ pos: number; kind: 'cell' | 'tail' | 'lazy' }> = []
-  const note = (id: string, pos: number, kind: 'cell' | 'tail' | 'lazy'): void => {
-    if (!id) return
-    if (seen.has(id)) fixes.push({ pos, kind })
-    else seen.add(id)
-  }
-  tr.doc.forEach((node, offset) => {
+type AnchorKind = 'cell' | 'tail' | 'lazy' | 'card'
+/** 文档里每一处锚(栏锚、行尾锚、惰性标记、画布卡锚),按文序。 */
+function anchorSites(doc: ProseNode): Array<{ id: string; pos: number; kind: AnchorKind }> {
+  const out: Array<{ id: string; pos: number; kind: AnchorKind }> = []
+  const add = (id: string, pos: number, kind: AnchorKind): void => { if (id) out.push({ id, pos, kind }) }
+  doc.forEach((node, offset) => {
     const name = node.type.name
     if (name === 'amadeusColumnRow') {
       let p = offset + 1
       node.forEach((cell) => {
-        note(String(cell.attrs.anchor ?? ''), p, 'cell')
+        add(String(cell.attrs.anchor ?? ''), p, 'cell')
         let q = p + 1
-        cell.forEach((ch) => { const id = lazyMarkerId(ch); if (id) note(id, q, 'lazy'); q += ch.nodeSize })
+        cell.forEach((ch) => { const id = lazyMarkerId(ch); if (id) add(id, q, 'lazy'); q += ch.nodeSize })
         p += cell.nodeSize
       })
-      note(String(node.attrs.tail ?? ''), offset, 'tail')
-    } else if (name === 'amadeusCanvasCard') {
-      const a = String(node.attrs.anchor ?? '')
-      if (a) seen.add(a)
-    } else {
+      add(String(node.attrs.tail ?? ''), offset, 'tail')
+    } else if (name === 'amadeusCanvasCard') add(String(node.attrs.anchor ?? ''), offset, 'card')
+    else {
       const id = lazyMarkerId(node)
-      if (id) note(id, offset, 'lazy')
+      if (id) add(id, offset, 'lazy')
     }
   })
+  return out
+}
+
+function dedupeAnchors(tr: Transaction, oldDoc: ProseNode, mapping: Mapping): Transaction {
+  const sites = anchorSites(tr.doc)
+  const key = (s: { id: string; pos: number; kind: AnchorKind }): string => `${s.kind}|${s.id}|${s.pos}`
+  // 旧文档里的每一处锚映射到新文档的位置;落点上正好是同类同号的锚 = 原有的那一份
+  const original = new Set(anchorSites(oldDoc).map((s) => key({ ...s, pos: mapping.map(s.pos, 1) })))
+  const seen = new Set<string>()
+  for (const s of sites) if (s.kind === 'card' || original.has(key(s))) seen.add(s.id)
+  const fixes: Array<{ pos: number; kind: 'cell' | 'tail' | 'lazy' }> = []
+  for (const s of sites) {
+    if (s.kind === 'card' || original.has(key(s))) continue
+    if (seen.has(s.id)) fixes.push({ pos: s.pos, kind: s.kind })
+    else seen.add(s.id)
+  }
   if (!fixes.length) return tr
   const taken = new Set<string>()
   const fresh = (): string => {

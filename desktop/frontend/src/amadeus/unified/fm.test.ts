@@ -467,6 +467,27 @@ describe('page/5 结构区:schema 升降与闸标记', () => {
     expect(parseYaml(out.replace(/^---\n|---\n$/g, ''))).toBeTruthy() // 没有重名键
   })
 
+  it('别人的 amadeus_page 老端读不出值(空值 / 键后有空格):有版块时换成闸标记,不留重名键', () => {
+    for (const bad of ['amadeus_page:', 'amadeus_page: ', 'amadeus_page : pg_x']) {
+      const src = `---\namadeus_schema: amadeus.page/4\n${bad}\namadeus_layout: ${COLS}\nicon: "📘"\n---\n`
+      const out = setAmadeusStructure(src, SEC, null)
+      expect(out).toBe(fm5)
+      expect(setAmadeusStructure(out, SEC, null)).toBe(out) // 不动点
+      // chrome 写入那条路同样补上
+      const withSec = src.replace(COLS, SEC)
+      expect(patchFm(withSec, { icon: '📘' })).toContain('amadeus_page: v5')
+      expect(fixStructKeys(withSec)).toContain('amadeus_page: v5')
+      // 没有版块:一个字节不动(写者产出的顺序:结构区在前,外来行原样在后)
+      const plain = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\n${bad}\nicon: "📘"\n---\n`
+      expect(setAmadeusStructure(plain, COLS, null)).toBe(plain)
+    }
+    // 老端读得出值的(含带引号的键)= 闸在,原样留着
+    const quoted = fm5.replace('amadeus_page: v5', '"amadeus_page": pg_q')
+    const once = setAmadeusStructure(quoted, SEC, null)
+    expect(once.split('\n').filter((l) => /amadeus_page/.test(l))).toEqual(['"amadeus_page": pg_q'])
+    expect(setAmadeusStructure(once, SEC, null)).toBe(once)
+  })
+
   it('不带版块的 page/4 里别人的 amadeus_page:逐字不动(结构区只认领 v5 那一行)', () => {
     const keep = `---\namadeus_schema: amadeus.page/4\nicon: "📘"\n"amadeus_page": pg_keep\namadeus_layout: ${COLS}\n---\n`
     const once = setAmadeusStructure(keep, COLS, null)

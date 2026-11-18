@@ -1,7 +1,8 @@
 // 版块工具条(方向 B):选区落在版块里时浮在版块右上方。挂载点 / 命令见 sections.ts。
 // 只订阅 sections.ts 的小 store —— 版块换了、样式或栏数变了才重渲,打字不触发。
 // 所有按钮 mousedown 先 preventDefault:焦点和选区留在编辑器里(工具条在 .ProseMirror 里面,
-// CSS 用 :focus-within 判「编辑器正在用」,焦点被按钮抢走工具条会当场消失)。
+// CSS 用 :focus-within 判「编辑器正在用」,焦点被按钮抢走工具条会当场消失)。动作挂在 click 上:
+// 键盘 Tab 到按钮、按 Enter / 空格只派 click 不派 mousedown(Codex 评审 B)。
 import { useEffect, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { EditorView } from '@milkdown/kit/prose/view'
@@ -57,12 +58,13 @@ export function SectionToolbar({ store }: { store: SectionToolbarStore }) {
     if (close) setOpen(null)
   }
   const toggle = (which: 'bg' | 'more') => (e: ReactMouseEvent) => { e.preventDefault(); setOpen((o) => (o === which ? null : which)) }
+  const hold = (e: ReactMouseEvent): void => e.preventDefault()
   const bgSwatch = v.bg ? BLOCK_BG_COLORS.find((c) => c.v === v.bg)?.swatch : undefined
 
   return createPortal(
     <div className="amx-sec-tb" role="toolbar" aria-label={t('amxsec.toolbar')} onMouseDown={(e) => e.preventDefault()}>
       <div className="amx-sec-tb-group">
-        <button type="button" className="amx-sec-tb-btn" data-act="bg" aria-haspopup="true" aria-expanded={open === 'bg'} title={t('amxsec.bg')} onMouseDown={toggle('bg')}>
+        <button type="button" className="amx-sec-tb-btn" data-act="bg" aria-haspopup="true" aria-expanded={open === 'bg'} title={t('amxsec.bg')} onMouseDown={hold} onClick={toggle('bg')}>
           <i className="amx-sec-swatch" data-sec-bg={v.bg || 'theme'} style={bgSwatch ? { background: bgSwatch } : undefined} />
           <ChevronDown size={12} />
         </button>
@@ -70,41 +72,41 @@ export function SectionToolbar({ store }: { store: SectionToolbarStore }) {
       <div className="amx-sec-tb-group" role="group" aria-label={t('amxsec.columns')}>
         {Array.from({ length: SECTION_MAX_COLUMNS }, (_, i) => i + 1).map((n) => (
           <button key={n} type="button" className="amx-sec-tb-btn amx-sec-tb-seg" data-act={`cols-${n}`} aria-pressed={s.cols === n}
-            title={t('amxsec.colN', { n })} onMouseDown={act((view, pos) => setSectionColumns(view, pos, n))}>{n}</button>
+            title={t('amxsec.colN', { n })} onMouseDown={hold} onClick={act((view, pos) => setSectionColumns(view, pos, n))}>{n}</button>
         ))}
       </div>
       <div className="amx-sec-tb-group" role="group" aria-label={t('amxsec.spacing')}>
         {PADS.map((p) => (
           <button key={p} type="button" className="amx-sec-tb-btn amx-sec-tb-seg" data-act={`pad-${p}`} aria-pressed={v.pad === p}
-            title={t(`amxsec.padTitle.${p}`)} onMouseDown={act((view, pos) => setSectionStyle(view, pos, { pad: p }))}>{t(`amxsec.pad.${p}`)}</button>
+            title={t(`amxsec.padTitle.${p}`)} onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { pad: p }))}>{t(`amxsec.pad.${p}`)}</button>
         ))}
       </div>
       <div className="amx-sec-tb-group" role="group" aria-label={t('amxsec.align')}>
         {ALIGNS.map(({ v: a, icon: Icon }) => (
           <button key={a} type="button" className="amx-sec-tb-btn amx-sec-tb-seg" data-act={`valign-${a}`} aria-pressed={v.valign === a}
-            title={t(`amxsec.align.${a}`)} aria-label={t(`amxsec.align.${a}`)} onMouseDown={act((view, pos) => setSectionStyle(view, pos, { valign: a }))}>
+            title={t(`amxsec.align.${a}`)} aria-label={t(`amxsec.align.${a}`)} onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { valign: a }))}>
             <Icon size={14} />
           </button>
         ))}
       </div>
       <div className="amx-sec-tb-group">
         <button type="button" className="amx-sec-tb-btn" data-act="cards" aria-pressed={v.cards} title={t('amxsec.cards')}
-          onMouseDown={act((view, pos) => setSectionStyle(view, pos, { cards: !v.cards }))}>
+          onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { cards: !v.cards }))}>
           <LayoutGrid size={14} /><span>{t('amxsec.cards')}</span>
         </button>
-        <button type="button" className="amx-sec-tb-btn" data-act="more" aria-haspopup="menu" aria-expanded={open === 'more'} title={t('amxsec.more')} aria-label={t('amxsec.more')} onMouseDown={toggle('more')}>
+        <button type="button" className="amx-sec-tb-btn" data-act="more" aria-haspopup="menu" aria-expanded={open === 'more'} title={t('amxsec.more')} aria-label={t('amxsec.more')} onMouseDown={hold} onClick={toggle('more')}>
           <Ellipsis size={14} />
         </button>
       </div>
       {open === 'bg' && (
         <div className="amx-sec-pop amx-sec-pop-bg" role="dialog" aria-label={t('amxsec.bg')}>
-          <button type="button" className="amx-sec-pop-row" data-act="bg-theme" onMouseDown={act((view, pos) => setSectionStyle(view, pos, { bg: '' }))}>
+          <button type="button" className="amx-sec-pop-row" data-act="bg-theme" onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { bg: '' }))}>
             <i className="amx-sec-swatch" data-sec-bg="theme" /><span>{t('amxsec.bgTheme')}</span>{!v.bg && <Check size={14} />}
           </button>
           <div className="amx-sec-pop-grid">
             {BLOCK_BG_COLORS.map((c) => (
               <button key={c.v} type="button" data-act={`bg-${c.v}`} title={t(c.nameKey)} aria-label={t(c.nameKey)} aria-pressed={v.bg === c.v}
-                onMouseDown={act((view, pos) => setSectionStyle(view, pos, { bg: c.v }))}>
+                onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { bg: c.v }))}>
                 <i style={{ background: c.swatch }} />{v.bg === c.v && <Check size={12} />}
               </button>
             ))}
@@ -114,10 +116,10 @@ export function SectionToolbar({ store }: { store: SectionToolbarStore }) {
       {open === 'more' && (
         <div className="amx-sec-pop amx-sec-pop-more" role="menu" aria-label={t('amxsec.more')}>
           <button type="button" role="menuitemcheckbox" aria-checked={v.stack} className="amx-sec-pop-row" data-act="stack"
-            onMouseDown={act((view, pos) => setSectionStyle(view, pos, { stack: !v.stack }))}>
+            onMouseDown={hold} onClick={act((view, pos) => setSectionStyle(view, pos, { stack: !v.stack }))}>
             <span>{t('amxsec.stack')}</span>{v.stack && <Check size={14} />}
           </button>
-          <button type="button" role="menuitem" className="amx-sec-pop-row" data-act="remove" onMouseDown={act((view, pos) => { removeSection(view, pos); view.focus() })}>
+          <button type="button" role="menuitem" className="amx-sec-pop-row" data-act="remove" onMouseDown={hold} onClick={act((view, pos) => { removeSection(view, pos); view.focus() })}>
             <span>{t('amxsec.remove')}</span>
           </button>
         </div>

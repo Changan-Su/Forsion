@@ -7,6 +7,7 @@
 import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
+import { closeHistory } from '@milkdown/kit/prose/history'
 import { $prose } from '@milkdown/kit/utils'
 import { freshAnchorId, isSectionRow, patchSection, unsplitRow, SECTION_MAX_COLUMNS, type SectionView } from './columns'
 
@@ -101,8 +102,29 @@ export function insertSection(view: EditorView): boolean {
 export function setSectionStyle(view: EditorView, rowPos: number, patch: Partial<SectionView>): boolean {
   const node = view.state.doc.nodeAt(rowPos)
   if (!isSectionRow(node)) return false
-  view.dispatch(view.state.tr.setNodeMarkup(rowPos, undefined, { ...node!.attrs, section: patchSection(node!.attrs.section, patch) }))
+  // 工具条改动自成一个撤销步:不和刚打的字并成一步(撤销一下连字带样式一起回去,Codex 评审)
+  view.dispatch(closeHistory(view.state.tr.setNodeMarkup(rowPos, undefined, { ...node!.attrs, section: patchSection(node!.attrs.section, patch) })))
   return true
+}
+
+/** 只装着一枚锚注释的段落(惰性标记)。光标不能落进去:在里面打字 = `X<!-- a c2 -->`,锚就认不出了。 */
+function isMarkerPara(n: ProseNode): boolean {
+  return n.type.name === 'paragraph' && n.childCount === 1 && n.firstChild!.type.name === 'html'
+    && /^<!--\s*a\s+[A-Za-z0-9_-]+\s*-->$/.test(String(n.firstChild!.attrs.value ?? '').trim())
+}
+
+/** cell(pos = 节点前位)里第一 / 最后一个**不是锚标记**的文本块,返回块内起点 / 终点;没有 = null。 */
+function textblockIn(doc: ProseNode, cellPos: number, last: boolean): number | null {
+  const cell = doc.nodeAt(cellPos)
+  if (!cell) return null
+  let hit: number | null = null
+  cell.descendants((n, p) => {
+    if (hit != null && !last) return false
+    if (!n.isTextblock) return true
+    if (!isMarkerPara(n)) hit = cellPos + 1 + p + 1 + (last ? n.content.size : 0)
+    return false
+  })
+  return hit
 }
 
 /** 栏数 1–4。加栏 = 末尾补空栏(宽度取现有均值);减栏 = 末尾的栏并进最后留下的那栏:内容一个字不丢,
@@ -121,6 +143,8 @@ export function setSectionColumns(view: EditorView, rowPos: number, n: number): 
   const isEmpty = (c: ProseNode): boolean => c.childCount === 1 && c.firstChild!.type === paragraph && c.firstChild!.content.size === 0
   let next: ProseNode[]
   const after: ProseNode[] = []
+  const extraAt = new Map<number, number>()
+  let baseSize = 0
   if (n > cells.length) {
     const avg = cells.reduce((s, c) => s + (Number(c.attrs.width) || 1), 0) / cells.length
     const width = Math.round(avg * 10000) / 10000 || 1
@@ -129,29 +153,55 @@ export function setSectionColumns(view: EditorView, rowPos: number, n: number): 
   } else {
     const keep = cells.slice(0, n)
     const extra: ProseNode[] = []
-    for (const c of cells.slice(n)) {
+    let extraSize = 0
+    for (const [i, c] of cells.slice(n).entries()) {
       if (isEmpty(c)) after.push(...marker(String(c.attrs.anchor)))
       else {
-        extra.push(...marker(String(c.attrs.anchor)))
-        c.forEach((child) => extra.push(child))
+        for (const m of marker(String(c.attrs.anchor))) { extra.push(m); extraSize += m.nodeSize }
+        extraAt.set(n + i, extraSize) // 这一栏的内容在并进去的那串里从哪开始(光标按原偏移搬过去)
+        c.forEach((child) => { extra.push(child); extraSize += child.nodeSize })
       }
     }
     const last = keep[keep.length - 1]
     if (extra.length) {
       const base: ProseNode[] = isEmpty(last) ? [] : (() => { const a: ProseNode[] = []; last.forEach((ch) => a.push(ch)); return a })()
+      baseSize = base.reduce((s, b) => s + b.nodeSize, 0)
       keep[keep.length - 1] = last.type.create(last.attrs, Fragment.fromArray([...base, ...extra]))
     }
     next = keep
   }
   const rebuilt = rowNode.type.create(rowNode.attrs, next)
   const tr = state.tr.replaceWith(rowPos, rowPos + rowNode.nodeSize, [rebuilt, ...after])
-  const keepSel = state.selection.from > rowPos && state.selection.from < rowPos + rowNode.nodeSize
-  if (keepSel) {
-    const mapped = Math.min(state.selection.from, rowPos + rebuilt.nodeSize - 2)
-    tr.setSelection(TextSelection.near(tr.doc.resolve(mapped)))
-  }
-  view.dispatch(markStructural(tr))
+  const target = columnsCaret(state.selection.from, rowPos, rowNode, rebuilt, n, { extraAt, baseSize, lastWasEmpty: n < cells.length && isEmpty(cells[n - 1]) }, tr.doc)
+  if (target != null) tr.setSelection(TextSelection.near(tr.doc.resolve(target)))
+  view.dispatch(closeHistory(markStructural(tr)))
   return true
+}
+
+/** 改栏数后光标落哪(Codex 评审:光标在被并掉的空栏里时,原来落进行后的锚标记段,一打字锚就坏了)。
+ *  · 不在这一行里 → null(事务的 mapping 管);
+ *  · 前面留下的栏 → 原位(这些栏一个字节没动);
+ *  · 被并掉、有内容的栏 → 按栏内原偏移搬到最后一栏里它那段内容上;
+ *  · 被并掉的空栏、或最后一栏原本是空的(被内容整个替换)→ 最后一栏里最近的正文块(跳过锚标记段)。 */
+function columnsCaret(
+  from: number, rowPos: number, oldRow: ProseNode, newRow: ProseNode, n: number,
+  info: { extraAt: Map<number, number>; baseSize: number; lastWasEmpty: boolean }, doc: ProseNode,
+): number | null {
+  if (from <= rowPos || from >= rowPos + oldRow.nodeSize) return null
+  let idx = -1
+  let cellStart = 0
+  oldRow.forEach((c, off, i) => {
+    const s = rowPos + 1 + off
+    if (from > s && from < s + c.nodeSize) { idx = i; cellStart = s }
+  })
+  if (idx < 0 || n >= oldRow.childCount) return from // 加栏:原有的栏都没动
+  let lastCellPos = rowPos + 1
+  newRow.forEach((c, off, i) => { if (i === n - 1) lastCellPos = rowPos + 1 + off })
+  if (idx < n - 1) return from
+  if (idx === n - 1) return info.lastWasEmpty && info.extraAt.size ? textblockIn(doc, lastCellPos, false) ?? from : from
+  const at = info.extraAt.get(idx)
+  if (at != null) return lastCellPos + 1 + info.baseSize + at + (from - (cellStart + 1))
+  return textblockIn(doc, lastCellPos, true) ?? lastCellPos + 1
 }
 
 /** 取消版块:两栏以上 → 留下普通分栏(位置不动);只有一栏 → 内容回到正文(同「取消分栏」)。 */
@@ -159,7 +209,7 @@ export function removeSection(view: EditorView, rowPos: number): boolean {
   const node = view.state.doc.nodeAt(rowPos)
   if (!isSectionRow(node)) return false
   if (node!.childCount >= 2) {
-    view.dispatch(view.state.tr.setNodeMarkup(rowPos, undefined, { ...node!.attrs, section: null }))
+    view.dispatch(closeHistory(view.state.tr.setNodeMarkup(rowPos, undefined, { ...node!.attrs, section: null })))
     return true
   }
   return unsplitRow(view, rowPos)
