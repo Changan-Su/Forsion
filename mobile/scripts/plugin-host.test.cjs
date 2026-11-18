@@ -559,6 +559,63 @@ const test = async (name, fn) => {
     assert.equal(await h.readPluginData('p'), '{"from":"cloud"}')
   })
 
+  // 11-18 Codex 评审补的四条(每条对合并时的 main 都红过)
+  await test('只有槽 0、是半截(当没写过)→ 第一次写盖它之前先原样另存', async () => {
+    const fs = memFs()
+    const bad0 = enc('{"forsionPluginData":1,"seq":1,"text":"{\\"user\\":')
+    fs.files.set('plugins-data/p.json', bad0)
+    assert.equal(await host(fs).readPluginData('p'), null)
+    await host(fs).writePluginData('p', '{"defaults":1}')
+    const kept = [...fs.files.entries()].filter(([k]) => k.startsWith('plugins-data/p.json.unreadable-')).map(([, v]) => dec(v))
+    assert.deepEqual(kept, [dec(bad0)])
+    assert.equal(await host(fs).readPluginData('p'), '{"defaults":1}')
+  })
+
+  await test('信封完好、里面不是合法 JSON 的那槽:轮到它被盖之前先另存', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0
+    const badEnv = JSON.stringify({ forsionPluginData: 1, seq: 2, text: '{"user":"data", broken' })
+    fs.files.set('plugins-data/p.json.alt', enc(badEnv)) // 槽 1 最新,但内容坏了(手改 / 旧版写进空内容)
+    assert.equal(await h.readPluginData('p'), '{"user":"data", broken') // 原样交给渲染层,由它判读失败
+    await h.writePluginData('p', '{"defaults":1}') // → 槽 0
+    await h.writePluginData('p', '{"defaults":2}') // → 槽 1:盖之前另存
+    const kept = [...fs.files.entries()].filter(([k]) => k.startsWith('plugins-data/p.json.alt.unreadable-')).map(([, v]) => dec(v))
+    assert.deepEqual(kept, [badEnv])
+    assert.equal(await h.readPluginData('p'), '{"defaults":2}')
+  })
+
+  await test('要求先另存时,另一槽恰好读出错:照样另存当前那槽(不因为走了坏槽那条路就跳过)', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"n":1}') // 槽 0(旧)
+    await h.writePluginData('p', '{"defaults":1}') // 槽 1(最新,要被云端那份换掉的本机数据)
+    const orig = fs.readBytes
+    let failOnce = true
+    fs.readBytes = async (p) => { if (failOnce && p === 'plugins-data/p.json') { failOnce = false; throw new Error('EIO') } return orig(p) }
+    try {
+      await h.writePluginData('p', '{"from":"cloud"}', { backup: true })
+    } finally { fs.readBytes = orig }
+    const kept = [...fs.files.entries()].filter(([k]) => k.includes('.replaced-')).map(([k, v]) => [k.replace(/\.replaced-.*/, ''), JSON.parse(dec(v)).text])
+    assert.deepEqual(kept, [['plugins-data/p.json.alt', '{"defaults":1}']])
+    assert.equal(await h.readPluginData('p'), '{"from":"cloud"}')
+  })
+
+  await test('同一毫秒里同一槽另存两次(连着三次要求另存,槽轮回来):备份名不撞,三份都在', async () => {
+    const fs = memFs()
+    const h = host(fs)
+    await h.writePluginData('p', '{"a":1}')
+    const iso = Date.prototype.toISOString
+    Date.prototype.toISOString = function () { return '2026-11-18T00:00:00.000Z' }
+    try {
+      await h.writePluginData('p', '{"b":1}', { backup: true }) // 另存槽 0
+      await h.writePluginData('p', '{"c":1}', { backup: true }) // 另存槽 1
+      await h.writePluginData('p', '{"d":1}', { backup: true }) // 又另存槽 0
+    } finally { Date.prototype.toISOString = iso }
+    const kept = [...fs.files.entries()].filter(([k]) => k.includes('.replaced-')).map(([, v]) => JSON.parse(dec(v)).text).sort()
+    assert.deepEqual(kept, ['{"a":1}', '{"b":1}', '{"c":1}'])
+  })
+
   // ── 市场 ────────────────────────────────────────────────────────────────
   const API = 'https://cloud.test/api'
   /** 假云端 + 假下载。install = 每个市场 id 的解析结果;blobs = 下载地址 → 字节 / Error。 */

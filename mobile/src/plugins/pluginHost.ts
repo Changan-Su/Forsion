@@ -216,6 +216,13 @@ const parseEnvelope = (raw: string): DataEnvelope | null => {
   return null
 }
 
+/** 另存原件的文件名:<槽>.<unreadable|replaced>-<时间>-<序号>。写按插件串行,序号在本进程里递增 ——
+ *  同一毫秒里同一槽另存两次(连着几次要求另存,槽轮回来)也不撞名、不互相盖掉。 */
+let dataBackupSeq = 0
+const dataBackupPath = (slot: string, kind: 'unreadable' | 'replaced'): string =>
+  `${slot}.${kind}-${new Date().toISOString().replace(/[:.]/g, '-')}-${++dataBackupSeq}`
+const isJsonText = (t: string): boolean => { try { JSON.parse(t); return true } catch { return false } }
+
 /** 一槽的状态:不存在 / 半截(信封解析不了)/ 读出错(在,但读不出字节)/ 有效。 */
 type SlotState = { kind: 'missing' } | { kind: 'partial' } | { kind: 'unreadable' } | { kind: 'ok'; env: DataEnvelope }
 
@@ -462,27 +469,34 @@ export function createPluginHost(fs: PluginFs, opts: { appVersion: () => string 
         const paths = slotPaths(pluginId)
         let target: 0 | 1 = r.latest ? (r.latest.slot === 0 ? 1 : 0) : 0
         let seq = (r.latest?.env.seq ?? 0) + 1
-        if (opts?.backup === true && !r.unreadable && r.latest) {
+        const kept = new Set<0 | 1>()
+        // 另存失败(读不出字节 / 写不进去)→ 抛出去,不写
+        const keep = async (i: 0 | 1, kind: 'unreadable' | 'replaced'): Promise<void> => {
+          await fs.writeBytes(dataBackupPath(paths[i], kind), await fs.readBytes(paths[i]))
+          kept.add(i)
+        }
+        if (opts?.backup === true && r.latest) {
           // 渲染层同步要拉云端那份盖「读失败后插件按默认值存下的」本机数据:当前那槽(最新的内容)先原样另存。
-          // 另一槽不算备份 —— 这次写不碰当前槽,但下一次写就轮到它。另存失败 → 抛出去,不写。
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-          const at = paths[r.latest.slot]
-          await fs.writeBytes(`${at}.replaced-${stamp}`, await fs.readBytes(at))
+          // 另一槽不算备份 —— 这次写不碰当前槽,但下一次写就轮到它。和有没有坏槽无关:另一槽恰好读出错、走下面那条路时也照样存。
+          await keep(r.latest.slot, 'replaced')
         }
         if (r.unreadable) {
           // 读失败:原件不能被这次或以后的写盖掉(见上)。**每一个**坏槽(半截 / 读不出字节)都先原样另存 ——
           // 只存要盖的那槽的话,下一次普通写会落到另一个坏槽上,而那槽可能才是较新的原件。
           // 有槽连字节都读不出来:不写,抛出去(同桌面拷不出原件就拒写)。
-          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
           for (const i of [0, 1] as const) {
             const k = r.states[i].kind
-            if (k !== 'partial' && k !== 'unreadable') continue
-            const original = await fs.readBytes(paths[i])
-            await fs.writeBytes(`${paths[i]}.unreadable-${stamp}`, original)
+            if (k === 'partial' || k === 'unreadable') await keep(i, 'unreadable')
           }
           // 没有有效槽时优先写进不存在的那槽;有有效槽时照常写另一槽(已另存过)
           if (!r.latest) target = r.states[0].kind === 'missing' ? 0 : r.states[1].kind === 'missing' ? 1 : 0
           seq = Math.max(seq, Date.now())
+        }
+        // 要盖的那槽里有东西、却不算一份可用的内容,盖之前也先另存:只有槽 0 且是半截(按没写过处理,但也可能是
+        // 唯一一份写坏的原件);信封完好、里面不是合法 JSON(宿主当有效槽、渲染层判读失败,不另存的话两次写就轮掉了)
+        const t = r.states[target]
+        if (!kept.has(target) && ((t.kind === 'partial' && !r.latest) || (t.kind === 'ok' && !isJsonText(t.env.text)))) {
+          await keep(target, 'unreadable')
         }
         const env: DataEnvelope = { forsionPluginData: 1, seq, text: body }
         await writeText(fs, paths[target], JSON.stringify(env))

@@ -1946,7 +1946,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
     }
     // 本机那份插件数据(主进程 / 手机宿主各自落盘);两样都有才谈得上同步
-    /** 这个插件上一次 ctx.loadData 是不是读不出来(下一次读成功就清)。见 saveData。 */
+    /** 这个插件实例的 ctx.loadData 读不出来过(之后读成功了也不清,到插件重新加载为止):读失败的那个视图手里
+     *  可能仍是默认值,它之后的保存不能当「本机更新」同步。见 saveData。 */
     let lastLoadUnreadable = false
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? {
@@ -2371,19 +2372,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
         lastLoadUnreadable = true
         throw isPluginDataUnreadable(e) ? e : new PluginDataUnreadableError(pluginId, 'invalid-json', e)
       }
-      lastLoadUnreadable = false
       return raw == null ? null : JSON.parse(raw)
     },
     saveData: async (value) => {
       if (!amadeus?.writePluginData) return
+      // 先序列化:存不成 JSON 的值(函数、toJSON 回 undefined)以前会写进空内容,下次读就成了「读不出来」
+      const text = JSON.stringify(value ?? null)
+      if (typeof text !== 'string') throw new TypeError(`Plugin "${pluginId}" saveData: the value can't be stored as JSON`)
       const p = get().plugins.find((o) => o.id === pluginId)
-      // 上一次 loadData 读不出来(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite);
+      // 这个实例的 loadData 读不出来过(插件接住错误照样存):这次写不算本机的编辑,不推、不在冲突里赢过云端(见 notePluginDataUnverifiedWrite);
       // 这个记号落进同步状态,之后的保存(哪怕之后读成功了、重启了)在和云端对上之前都不推
       const unverified = lastLoadUnreadable
       // 先记这次编辑、再写本机(拉取落盘前核对代号);声明了 syncData 就记,同步关着也记 —— 重新打开时认得出本机更新
       const undoEdit = p?.syncData ? (unverified ? notePluginDataUnverifiedWrite(pluginId) : notePluginDataEdit(pluginId)) : undefined
       try {
-        await amadeus.writePluginData(pluginId, JSON.stringify(value ?? null))
+        await amadeus.writePluginData(pluginId, text)
       } catch (e) {
         undoEdit?.() // 没写成:撤掉这次记下的记号,放回原来的
         throw e
