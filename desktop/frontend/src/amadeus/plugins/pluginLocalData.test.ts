@@ -13,6 +13,14 @@
  *     被换掉的本机那份由宿主先另存;⑪ 云端没有 → 按第一次上传推上去,记号清掉;⑫ 云端那份本身坏了 → 当云端没有;
  *  ⑬ 读失败后的那次写被宿主拒了 → 撤回,原来的版本和没推的编辑记号都还在;
  *  ⑭ 等云端恢复的时候插件又存了一次 → 不拿云端那份盖它。
+ * 11-18 Codex 评审补的(每条对合并时的 main 都红过):
+ *  ⑮ 读失败后的那份按第一次上传时撞上别的设备刚建的云端那份 → 让给云端,不在冲突里赢;传成了才清记号;
+ *  ⑯ 换账号那一步不清记号(新账号那份没拉成,下一次保存不能当本机更新推进去);
+ *  ⑰ 推送读本机的时候插进来一次读失败后的保存 → 不推;⑱ 从云端恢复也先另存本机那份;
+ *  ⑲ 同一个插件实例读失败过一次,之后别处读成功了,它的保存照样不同步(到重新加载为止);
+ *  ⑳ saveData 传进存不成 JSON 的值 → 直接拒,不写空内容、不动同步状态。
+ *  ㉑ 第一次上传在途时又来一次读失败后的保存 → 传成了也不清记号;㉒ 在途时那份已经被拉取对上、又有了新编辑 → 409 不丢新编辑的 dirty;
+ *  ㉓ 第一次上传在途时来的是一次正常编辑 → 传成了照样清记号,那次编辑接着以新版本为基推上去。
  * 负对照:pluginStore 的读改回 `.catch(() => null)` → ②③④ 红;去掉 restoreFromCloud → ⑤ 红;
  *  saveData 不分「读失败后的写」→ ⑧ 红;不撤回记号 → ⑨ 红;记号只放内存 → ⑩ 红;读失败后的写不撤回 → ⑬ 红;
  *  恢复时不在读本机之前记代号 → ⑭ 红。
@@ -24,12 +32,17 @@ const failing = new Map<string, unknown>()
 const failWrite = new Set<string>()
 const writes: Array<[string, string]> = []
 const writeOpts: unknown[] = []
-const puts: unknown[] = []
+const puts: any[] = []
+const putReplies: Array<{ status: number; json?: unknown }> = []
 const cloudRows = new Map<string, { value: string; version: number }>()
 let online = true
 let indexGate: Promise<void> | null = null
+let readGate: Promise<void> | null = null
+let failItemGet = false
+let putGate: Promise<void> | null = null
 ;(window as any).amadeus = {
   readPluginData: async (id: string) => {
+    if (readGate) await readGate
     const err = failing.get(id)
     if (err) throw err
     return files.get(id) ?? null
@@ -42,18 +55,19 @@ let indexGate: Promise<void> | null = null
 ;(window as any).tangu = {
   cloudFetch: async (req: { path: string; method?: string; body?: unknown }) => {
     if (!online) throw new Error('offline')
-    if (req.method === 'PUT') { puts.push(req.body); return { status: 500 } }
+    if (req.method === 'PUT') { puts.push(req.body); if (putGate) await putGate; return putReplies.shift() ?? { status: 500 } }
     if (req.path === '/plugin-data') {
       if (indexGate) await indexGate
       return { status: 200, json: { owner: 'acct', items: Object.fromEntries([...cloudRows].map(([k, r]) => [k, { version: r.version, updatedAt: '2026-11-17T00:00:00Z', editedAt: Date.now() - 60_000 }])) } }
     }
+    if (failItemGet) return { status: 500 }
     const id = decodeURIComponent(req.path.replace('/plugin-data/', ''))
     const row = cloudRows.get(id)
     return row ? { status: 200, json: { value: row.value, version: row.version } } : { status: 404 }
   },
 }
 const { usePluginStore } = await import('./pluginStore')
-const { pushPluginData, notePluginDataEdit } = await import('./pluginDataSync')
+const { pushPluginData, notePluginDataEdit, notePluginDataUnverifiedWrite } = await import('./pluginDataSync')
 const { readLocalPluginData } = await import('./pluginLocalData')
 type Ctx = import('./types').PluginContext
 
@@ -75,7 +89,8 @@ let clockOffset = 0
 vi.spyOn(Date, 'now').mockImplementation(() => realNow() + clockOffset)
 
 beforeEach(() => {
-  files.clear(); failing.clear(); failWrite.clear(); writes.length = 0; writeOpts.length = 0; puts.length = 0; cloudRows.clear(); online = true; indexGate = null
+  files.clear(); failing.clear(); failWrite.clear(); writes.length = 0; writeOpts.length = 0; puts.length = 0; putReplies.length = 0
+  cloudRows.clear(); online = true; indexGate = null; readGate = null; failItemGet = false; putGate = null
   localStorage.clear()
   clockOffset += 61_000
 })
@@ -137,6 +152,7 @@ describe('云同步:本机读不出来时不当「本机没有」', () => {
     cloudRows.set('s', { value: '{"from":"cloud"}', version: 3 })
     await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ from: 'cloud' })
     expect(writes).toEqual([['s', '{"from":"cloud"}']])
+    expect(writeOpts).toEqual([{ backup: true }]) // ⑱ 恢复也先另存:同一时刻刚写完的一次保存不会没了底
     expect(state('s')).toEqual({ v: 3, owner: 'acct', gen: 0 })
   })
 
@@ -235,14 +251,22 @@ describe('云同步:本机读不出来时不当「本机没有」', () => {
     expect(state('s')).toEqual({ v: 3, owner: 'acct', gen: 3 })
   })
 
-  it('⑪ 读失败后存的那份、云端没有 → 连上后按第一次上传推上去,记号清掉', async () => {
+  it('⑪ 读失败后存的那份、云端没有 → 连上后按第一次上传推上去;没传成记号留着,传成了才清', async () => {
     files.set('s', '{"defaults":1}')
     setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
     await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ defaults: 1 })
     await settle()
     expect(puts).toHaveLength(1)
-    expect(state('s').unverified).toBeUndefined()
+    expect(puts[0].base).toBe(0)
+    expect(state('s').unverified).toBe(true) // 服务端 500:还是没对过,下次再试
     expect(state('s').dirty).toEqual(expect.any(Number))
+    putReplies.push({ status: 200, json: { version: 1, owner: 'acct' } })
+    await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    expect(puts).toHaveLength(2)
+    expect(state('s').unverified).toBeUndefined()
+    expect(state('s').dirty).toBeUndefined()
+    expect(state('s').v).toBe(1)
   })
 
   it('⑫ 读失败后存的那份、云端那份本身坏了 → 当云端没有:推本机这份、记号清掉(否则永远对不上)', async () => {
@@ -253,7 +277,7 @@ describe('云同步:本机读不出来时不当「本机没有」', () => {
     await settle()
     expect(writes).toEqual([])
     expect(puts).toHaveLength(1)
-    expect(state('s').unverified).toBeUndefined()
+    expect(puts[0].base).toBe(5) // 以坏的那份的版本为基去盖它;这期间别人又写过就 409、让给云端
   })
 
   it('⑬ 读失败后的那次写被宿主拒了 → 撤回,原来的版本和没推的编辑记号都还在', async () => {
@@ -280,5 +304,119 @@ describe('云同步:本机读不出来时不当「本机没有」', () => {
     await expect(loading).resolves.toEqual({ saved: 'meanwhile' })
     expect(writes).toEqual([])
     expect(state('s').dirty).toEqual(expect.any(Number))
+  })
+
+  it('⑮ 读失败后的那份按第一次上传,撞上别的设备刚建的云端那份(409)→ 让给云端:不重推、记号留着、下次拉云端', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
+    putReplies.push({ status: 409, json: { version: 4, editedAt: Date.now() - 60_000 } })
+    await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    expect(puts).toHaveLength(1)
+    expect(state('s').unverified).toBe(true)
+    expect(state('s').dirty).toBeUndefined()
+  })
+
+  it('⑯ 换了账号、新账号那份没拉成 → 记号不清,之后的保存照样不推', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'someone-else', gen: 1, unverified: true })
+    cloudRows.set('s', { value: '{"theirs":1}', version: 3 })
+    failItemGet = true
+    const ctx = ctxOf('s', true)
+    await expect(ctx.loadData!()).resolves.toEqual({ defaults: 1 })
+    expect(state('s').unverified).toBe(true)
+    await ctx.saveData!({ defaults: 2 })
+    await settle()
+    expect(puts).toEqual([])
+    expect(state('s').dirty).toBeUndefined()
+  })
+
+  it('⑰ 推送读本机的时候插进来一次读失败后的保存 → 不推读到的那份', async () => {
+    files.set('s', '{"mine":1}')
+    setState('s', { v: 3, owner: 'acct', gen: 4, dirty: Date.now() - 1000 })
+    let release!: () => void
+    readGate = new Promise<void>((r) => { release = r })
+    const local = { read: () => readLocalPluginData('s', () => (window as any).amadeus.readPluginData('s')), write: async () => {} }
+    const pushing = pushPluginData('s', local)
+    await settle()
+    notePluginDataUnverifiedWrite('s'); files.set('s', '{"defaults":1}') // 读失败过的视图按默认值存(先记、再写)
+    release()
+    await pushing
+    expect(puts).toEqual([])
+  })
+
+  it('⑲ 同一个插件实例读失败过一次,之后读成功了,它的保存照样不同步(直到重新加载)', async () => {
+    files.set('s', '{"trunc')
+    setState('s', { v: 2, owner: 'acct', gen: 0 })
+    online = false
+    const ctx = ctxOf('s', true)
+    await expect(ctx.loadData!()).rejects.toEqual(unreadable('invalid-json'))
+    files.set('s', '{"real":1}') // 别的视图 / 外部把文件修好了
+    await expect(ctx.loadData!()).resolves.toEqual({ real: 1 })
+    online = true
+    await ctx.saveData!({ defaults: 1 }) // 读失败那个视图手里仍是默认值
+    await settle()
+    expect(puts).toEqual([])
+    expect(state('s').unverified).toBe(true)
+    expect(state('s').dirty).toBeUndefined()
+  })
+
+  it('⑳ saveData 传进存不成 JSON 的值 → 直接拒,不写盘、不动同步状态', async () => {
+    setState('s', { v: 3, owner: 'acct', gen: 4 })
+    await expect(ctxOf('s', true).saveData!({ toJSON: () => undefined } as any)).rejects.toThrow(/JSON/)
+    await expect(ctxOf('s', true).saveData!((() => 1) as any)).rejects.toThrow(/JSON/)
+    expect(writes).toEqual([])
+    expect(state('s')).toEqual({ v: 3, owner: 'acct', gen: 4 })
+  })
+
+  it('㉑ 读失败后的那份按第一次上传、在途时又来一次读失败后的保存 → 传成了也不清记号(新存的那份没传上去)', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
+    let release!: () => void
+    putGate = new Promise<void>((r) => { release = r })
+    putReplies.push({ status: 200, json: { version: 1, owner: 'acct' } })
+    await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    expect(puts).toHaveLength(1)
+    notePluginDataUnverifiedWrite('s'); files.set('s', '{"defaults":2}')
+    release()
+    await settle()
+    expect(state('s').unverified).toBe(true)
+  })
+
+  it('㉒ 读失败后的那份按第一次上传、在途时已被拉取对上又有了新编辑 → 409 回来不丢新编辑的 dirty', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
+    let release!: () => void
+    putGate = new Promise<void>((r) => { release = r })
+    putReplies.push({ status: 409, json: { version: 4, editedAt: Date.now() - 60_000 } })
+    await expect(ctxOf('s', true).loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    setState('s', { v: 4, owner: 'acct', gen: 2 }) // 别处的 loadData 把云端那份拉下来、对上了
+    notePluginDataEdit('s') // 之后一次正常编辑
+    release()
+    await settle()
+    expect(state('s').dirty).toEqual(expect.any(Number))
+    expect(state('s').unverified).toBeUndefined()
+  })
+
+  it('㉓ 读失败后的那份按第一次上传、在途时来的是一次正常编辑(加载完马上存)→ 传成了清记号,编辑接着以新版本为基推', async () => {
+    files.set('s', '{"defaults":1}')
+    setState('s', { v: 0, owner: 'acct', gen: 1, unverified: true })
+    let release!: () => void
+    putGate = new Promise<void>((r) => { release = r })
+    putReplies.push({ status: 200, json: { version: 1, owner: 'acct' } })
+    const ctx = ctxOf('s', true)
+    await expect(ctx.loadData!()).resolves.toEqual({ defaults: 1 })
+    await settle()
+    expect(puts).toHaveLength(1)
+    await ctx.saveData!({ defaults: 1, tidied: true }) // 这个实例读成功了,是一次正常编辑
+    putGate = null
+    release()
+    await settle(); await settle()
+    expect(state('s').unverified).toBeUndefined()
+    expect(puts).toHaveLength(2)
+    expect(puts[1].base).toBe(1)
+    expect(puts[1].value).toBe('{"defaults":1,"tidied":true}')
   })
 })

@@ -2334,18 +2334,20 @@ export interface PluginContext {
    *
    *  旧宿主没有:`ctx.registerEditorExtension?.(…)`。 */
   registerEditorExtension?(factory: EditorExtensionFactory, opts?: EditorExtensionOptions): void
-  /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null。
+  /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null(存的就是 `null` 时也读回 null)。
    *  **存过却读不出来**(读错误、零字节、写到一半、被手改坏)→ reject,`err.code === 'plugin-data-unreadable'`,
    *  `err.reason` 为 `'read-failed' | 'invalid-json'`(2026-11-17 起;之前宿主把这些也当没写过回 null)。
    *  接到它别按默认值往下走再 saveData —— 那会把用户原来那份整个盖掉;停用相关功能、提示用户、等下次重试。
    *  原件宿主不动;插件接住错误后仍然 saveData 时,桌面 / 手机宿主先把原件另存一份(`<id>.json.unreadable-<时间>`),
    *  拷不出原件就拒绝这次写(saveData reject)。`syncData` 插件:本机内容坏了而云端有一份时,loadData 直接用云端那份恢复;
-   *  读失败后插件仍存的数据,在和云端对上之前都不推、也不在冲突里盖掉云端那份(之后读成功了、重启了也一样);
-   *  下次连上云端:云端有一份就换成云端那份,被换掉的本机数据宿主先另存(`<id>.json.replaced-<时间>`),云端没有才推本机这份。
+   *  读失败后插件仍存的数据,在和云端对上之前都不推、也不在冲突里盖掉云端那份(之后读成功了、重启了也一样;
+   *  插件这次运行里读失败过一次,到重新加载之前它的保存都这样处理);下次连上云端:云端有一份就换成云端那份,
+   *  被换掉的本机数据宿主先另存(`<id>.json.replaced-<时间>`),云端没有才推本机这份(推的时候别的设备刚建了一份就让给它)。
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
    *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`(旧宿主读不出来时仍回 null)。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。转成 JSON 什么都没有的值(函数、`toJSON` 回
+   *  undefined)→ reject,什么都不写(2026-11-18 起;之前会写进空内容,下次读就成了读不出来)。BigInt、循环引用本来就会 reject。
    *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
