@@ -653,24 +653,34 @@ export function Ribbon() {
   }, [flyOpen])
   // 「+N」浮层:左键点浮层与「+N」以外的地方就缩回,Esc 也收;点进 iframe / webview 的视图时事件到不了本窗口 → 窗口 blur 兜。
   // 浮层里的条目自带浮层(设备互联胶囊的菜单挂在 body 上,带 data-rb-overlay)、右键菜单、图标选择器:点它们不收。右键不收。
+  // 按在条上不收:那一下可能是要把条上的图标拖进浮层(11-19 用户报拖不进去 —— 按下就开始倒放,浮层没了)。
+  // 条上改在 click 收:拖动不产生 click(原生拖拽没有、指针拖拽吞掉),只点一下照旧收。
   useEffect(() => {
     if (!moreFly) return
+    const kept = (t: Element | null): boolean =>
+      !!t?.closest?.('.rb-menu, .rb-iconpick, [data-rb-overlay], [data-rb-more]') || !!(t && moreRef.current?.contains(t))
     const onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return
       const t = e.target as Element | null
-      if (t?.closest?.('.rb-menu, .rb-iconpick, [data-rb-overlay], [data-rb-more]') || (t && moreRef.current?.contains(t))) return
+      if (kept(t) || (t && rootRef.current?.contains(t))) return
       closeMore()
+    }
+    const onClick = (e: MouseEvent): void => {
+      const t = e.target as Element | null
+      if (e.button === 0 && t && rootRef.current?.contains(t) && !kept(t)) closeMore()
     }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeMore() }
     // 窗口 / 缩放变了:按钮已挪走,浮层和液滴的几何都是旧的,倒放只会从旧位置飞一下 → 直接撤
     const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; moreClosing.current = false; setMoreFly(null) }
     window.addEventListener('pointerdown', onDown, true)
+    window.addEventListener('click', onClick, true)
     window.addEventListener('keydown', onKey)
     window.addEventListener('blur', closeMore)
     window.addEventListener('resize', onLayout)
     window.addEventListener(UI_ZOOM_EVENT, onLayout)
     return () => {
       window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('click', onClick, true)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('blur', closeMore)
       window.removeEventListener('resize', onLayout)
@@ -773,6 +783,7 @@ export function Ribbon() {
       if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
       setOver((o) => (o ? null : o)) // 出了条:让位预览收回去(图标回原位 = 「它要走了」)
       setOverFolder((o) => (o ? null : o))
+      setOverId((o) => (o ? null : o))
     }
     const onDrop = (e: DragEvent): void => {
       st.dropped = true
@@ -856,7 +867,51 @@ export function Ribbon() {
     }
   }
 
-  type PointerTarget = { kind: 'bar'; zone: RibbonZone; id: string | null }
+  /** 「+N」浮层里指针对着的顶层行:按 y 取最近的一行,行间缝、标题、底下的提示都有确定落点(同条上 slotIndexAt 的思路)。
+   *  收纳夹标题 / 成员行有自己的落点,不归这里;浮层里一行顶层条目都没有时 = null(收进「+N」)。 */
+  const moreRowAt = (clientY: number): string | null => {
+    let best: string | null = null, dist = Infinity
+    for (const el of moreRef.current?.querySelectorAll<HTMLElement>(':scope > .rb-fly-row[data-id]') ?? []) {
+      const r = el.getBoundingClientRect()
+      const d = clientY < r.top ? r.top - clientY : clientY > r.bottom ? clientY - r.bottom : 0
+      if (d < dist) { dist = d; best = el.dataset.id ?? null }
+    }
+    return best
+  }
+  /** 落在「+N」浮层里(11-19:原来浮层的顶层行没有落点,拖进 / 拖动全是空操作)。
+   *  - 本来就藏在浮层里:同条上「顶位」—— 挪到目标那一格(下移落在目标之下,线也画在下沿),直接走 dropOnBar。
+   *  - 从条上 / 收纳夹进来:落在目标那一行之前(同收纳夹浮层从外面拖进来)。
+   *  - targetId = null(浮层里没有顶层行):收进「+N」,同拖到「+N」钮上。 */
+  const dropInMore = (zone: RibbonZone, targetId: string | null, current = drag): void => {
+    const d = current
+    const tail = (zone === 'top' ? top : bot).tail
+    if (!d || d.zone !== zone || d.id === targetId) { endDrag(); return }
+    const inTail = !d.from && tail.some((e) => e.id === d.id)
+    if (!targetId) {
+      if (inTail) endDrag()
+      else dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null, d)
+      return
+    }
+    if (inTail) { dropOnBar(zone, targetId, d); return }
+    endDrag()
+    if (d.from) st().moveOutOfFolder(d.id)
+    const base = reorderBase(zone === 'top' ? st().order : st().bottomOrder, (zone === 'top' ? topE : botE).map((x) => x.id), d.id)
+    const ti = base.indexOf(targetId)
+    base.splice(ti >= 0 ? ti : base.length, 0, d.id)
+    st().setZoneOrder(zone, base)
+  }
+  /** 悬停在「+N」浮层上:标出落点行(或「+N」钮)。返回值同 dropInMore 的 targetId;不收(本来就在浮层里、又没对着行)= undefined。 */
+  const markMore = (zone: RibbonZone, d: DragState, clientY: number): string | null | undefined => {
+    const row = moreRowAt(clientY)
+    setOver(null)
+    if (row) { setOverFolder(null); setOverId(row); return row }
+    setOverId(null)
+    if (!d.from && (zone === 'top' ? top : bot).tail.some((e) => e.id === d.id)) { setOverFolder(null); return undefined }
+    setOverFolder(`more:${zone}`)
+    return null
+  }
+
+  type PointerTarget = { kind: 'bar'; zone: RibbonZone; id: string | null } | { kind: 'more'; zone: RibbonZone; id: string | null }
     | { kind: 'folder'; folder: RibbonFolder; at?: number } | { kind: 'tear' } | { kind: 'cancel' }
   const pointerActions = useRef<{
     target(e: PointerEvent, d: DragState): PointerTarget
@@ -875,9 +930,14 @@ export function Ribbon() {
           if (!row && !moreRef.current?.contains(hit)) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
           return { kind: 'folder', folder, at: row ? Number(row.dataset.rbFolderIndex) : undefined }
         }
+        if (moreRef.current?.contains(hit)) { // 「+N」浮层里(收纳夹标题 / 成员行上面已经接走)
+          if (moreFly !== d.zone) return { kind: 'cancel' }
+          const id = markMore(d.zone, d, e.clientY)
+          return id === undefined ? { kind: 'cancel' } : { kind: 'more', zone: d.zone, id }
+        }
         const more = hit.closest<HTMLElement>('[data-rb-more]')?.dataset.rbMore
         if (more === d.zone) {
-          setOver(null); setOverFolder(`more:${more}`)
+          setOver(null); setOverId(null); setOverFolder(`more:${more}`)
           return { kind: 'bar', zone: d.zone, id: d.zone === 'bottom' ? (botE[0]?.id ?? null) : null }
         }
         const group = hit.closest<HTMLElement>('.rb-top, .rb-bottom')
@@ -897,6 +957,7 @@ export function Ribbon() {
     },
     drop: (e, d, target) => {
       if (target.kind === 'bar') dropOnBar(target.zone, target.id, d)
+      else if (target.kind === 'more') dropInMore(target.zone, target.id, d)
       else if (target.kind === 'folder') dropIntoFolder(target.folder, target.at, d)
       else {
         endDrag()
@@ -1054,7 +1115,7 @@ export function Ribbon() {
         aria-haspopup="true"
         data-rb-tip={expanded || open ? undefined : name}
         onClick={() => toggleMore(zone)}
-        onDragOver={(e) => acceptOver(e, !!drag && drag.zone === zone, () => { setOver(null); setOverFolder(`more:${zone}`) })}
+        onDragOver={(e) => acceptOver(e, !!drag && drag.zone === zone, () => { setOver(null); setOverId(null); setOverFolder(`more:${zone}`) })}
         onDragLeave={() => { if (overFolder === `more:${zone}`) setOverFolder(null) }}
         // 收进「+N」= 挪到它吃的那一端:上区 = 区末尾,命令区 = 区开头。
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null) }}
@@ -1127,7 +1188,7 @@ export function Ribbon() {
         /* 下标没变就还回原对象:dragover 每秒几十发,不这么挡会整条 ribbon 每帧重渲一次。 */
         onDragOver={(e) => {
           const ix = indexAt(e.currentTarget, e.clientY, ids.length)
-          acceptOver(e, !!drag && drag.zone === zone, () => { setOverFolder(null); setOver((o) => (o?.zone === zone && o.index === ix ? o : { zone, index: ix })) })
+          acceptOver(e, !!drag && drag.zone === zone, () => { setOverFolder(null); setOverId(null); setOver((o) => (o?.zone === zone && o.index === ix ? o : { zone, index: ix })) })
         }}
         /* 刻意用 over 而不是在 drop 里拿 e.clientY 重算:over 也是让位预览的输入,
          * 「已画出来的那一帧」和提交必然一致。重算能贴指针贴得更紧,但会在最后一发 dragover
@@ -1204,12 +1265,16 @@ export function Ribbon() {
     )
     const at = zone === 'top' ? topE.indexOf(e) : -1
     const hint = at >= 0 ? slotHint(at) : ''
+    // 落点线:同收纳夹浮层的行 —— 浮层里往下挪 = 顶掉目标、落在它之下,线画下沿;从外面进来 = 落在它之前
+    const list = moreTail.map((x) => x.id)
+    const lineHere = !!drag && overId === e.id && drag.id !== e.id
+    const below = lineHere && !drag.from && list.indexOf(drag.id) >= 0 && list.indexOf(drag.id) < list.indexOf(e.id)
     return (
       <div
         key={e.id}
         data-id={e.id}
         // 也挂 rb-slot:各台架按 `.rb-slot[data-id=…]` 找格子,藏进 +N 的照样找得到(组内量槽只认 .rb-group 里的)
-        className={`rb-slot rb-fly-row${drag?.id === e.id ? ' dragging' : ''}`}
+        className={`rb-slot rb-fly-row${drag?.id === e.id ? ' dragging' : ''}${lineHere ? ` drag-over${below ? ' below' : ''}` : ''}`}
         data-menu-open={menuOpenFor(e)}
         draggable={nativeDraggable(e.id)}
         onPointerDown={(ev) => pointerDown(ev, e.id, zone, null, false)}
@@ -1307,6 +1372,21 @@ export function Ribbon() {
           data-rb-more-fly={moreFly}
           // 点开一项(普通按钮)就缩回;自带浮层的组件条目(设备互联胶囊)不是 .rb-btn,点它不收。
           onClick={(e) => { if (!drag && (e.target as Element).closest('.rb-btn')) closeMore() }}
+          // 收纳夹标题 / 成员行接得住的已在它们那层截停;到这里的按 y 落到最近的顶层行(markMore)。
+          // dragover 与 drop 用同一份状态:drop 只认已经画出来的那条线 / 亮着的「+N」。
+          onDragOver={(e) => {
+            if (!drag || drag.zone !== moreFly) return
+            acceptOver(e, markMore(moreFly, drag, e.clientY) !== undefined)
+          }}
+          onDrop={(e) => {
+            if (!drag || drag.zone !== moreFly) return
+            e.preventDefault()
+            e.stopPropagation()
+            const row = overId && moreTail.some((x) => x.id === overId) ? overId : undefined
+            if (row) dropInMore(moreFly, row)
+            else if (overFolder === `more:${moreFly}`) dropInMore(moreFly, null)
+            else endDrag()
+          }}
         >
           <div className="rb-fly-head">{t('lcl.ribbon.moreCount', { label: t(moreFly === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands'), n: moreTail.length })}</div>
           {moreTail.map((e) => moreRow(e, moreFly))}
