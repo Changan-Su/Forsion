@@ -30,3 +30,12 @@ export function useListFirst(): boolean {
   const wide = useWorkspace((s) => s.wideMode)
   return spaces && !wide && listFirstNow()
 }
+
+/** React: the phone's form — the host draws the Space bar and the screen is not wide (not a phone held sideways, not a
+ *  tablet in landscape). The gate of useListFirst without the Space's own list level: for what differs on a phone in
+ *  any Space (no keys to press, a soft keyboard to put away, Home). */
+export function usePhoneForm(): boolean {
+  const spaces = useNativeChromeSpaces()
+  const wide = useWorkspace((s) => s.wideMode)
+  return spaces && !wide
+}

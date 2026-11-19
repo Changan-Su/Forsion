@@ -7,8 +7,7 @@ import { fuzzyRank } from './fuzzy'
 import { label } from './types'
 import { useEngineI18n } from './i18nSeam'
 import { isImeKeyEvent } from './ime'
-import { useNativeChromeSpaces } from './nativeChrome'
-import { useWorkspace } from './singleColumnStore'
+import { usePhoneForm } from './listFirst'
 
 export function CommandPalette() {
   const { t } = useEngineI18n()
@@ -22,9 +21,7 @@ export function CommandPalette() {
   useExitGhost(overlayRef, open)
   // 手机(原生底栏、竖屏的两级导航)上没有键盘可按:行尾的快捷键与底部的按键说明都不画,只留条数(手机走查 2026-11-19)。
   // 桌面、横屏 / 平板的宽屏、网页的抽屉形态照旧。
-  const drawsSpaces = useNativeChromeSpaces()
-  const wide = useWorkspace((s) => s.wideMode)
-  const keys = !(drawsSpaces && !wide)
+  const keys = !usePhoneForm()
 
   useEffect(() => {
     if (open) {

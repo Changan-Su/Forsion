@@ -3077,6 +3077,37 @@ const tabCountText = (list) => {
     }
   })
 
+  // The cloud vault card (walk 2026-11-19, d): it sits in the list's drawer and was zoomed twice there (drawer body ×
+  // body), wider than the screen with its close button off it; system Back went past it. Here in the device's WebView
+  // (124 — the stage's Chromium is newer, and the fix is zoom arithmetic): a screenshot to look at (a fixed element's
+  // rect is not trusted on this WebView), and system Back closes the card and only the card.
+  await check('cloud vault card: drawn in the device WebView (screenshot); system Back closes it and leaves the notes list', async () => {
+    await toSpace('amadeus')
+    const side = await cdp.eval('window.amadeusVaultMode.side')
+    if (side !== 'cloud') await switchVault('cloud')
+    // the card lists what the collab seam answers; the fixture account has no cloud vault behind it
+    const stubbed = await cdp.eval(`(() => { if (window.amadeusCollab) return false
+      window.amadeusCollab = { listVaults: async () => [{ id: 'v1', name: '我的库' }, { id: 'v2', name: 'A team vault with a rather long English name' }], activeVaultId: async () => 'v1', switchVault: () => {}, sharedWithMe: async () => [], listAllShares: async () => [], publishes: async () => [] }
+      return true })()`)
+    try {
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 8000), 'not on the notes list')
+      const row = "[...document.querySelectorAll('.mb-drawer--left .t2s-foot .t2s-special')].pop()"
+      assert.ok(await h.waitPage(cdp, `!!${row}`, 6000), 'no vault row at the end of the notes list')
+      await tapEl(row)
+      assert.ok(await h.waitPage(cdp, "document.querySelectorAll('.amxc-panel .amxc-row').length === 2", 5000), 'the cloud vault card did not open with its two vaults')
+      await h.pause(600)
+      shot('03v-cloud-vault-card')
+      h.key(4)
+      await h.pause(900)
+      const after = await cdp.eval("({ card: !!document.querySelector('.amxc-panel'), space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav })")
+      assert.deepEqual(after, { card: false, space: 'amadeus', nav: 'list' }, 'system Back did not close just the card')
+    } finally {
+      if (await cdp.eval("!!document.querySelector('.amxc-x')")) { await tapEl("document.querySelector('.amxc-x')").catch(() => {}); await h.pause(400) }
+      if (stubbed) await cdp.eval('(delete window.amadeusCollab, true)')
+      if (side !== 'cloud') await switchVault(side)
+    }
+  })
+
   // The inbox is a host list source, and on the phone a flat list source is drawn as the phone's own list (2026-10-13):
   // category chips, icon buttons behind a left swipe, one main button. Since 2026-10-14 the mail is grouped by sender:
   // a group head (the workspace's first-level row, 52 dp on a 40 dp lead) and under it rows that carry no icon block,
