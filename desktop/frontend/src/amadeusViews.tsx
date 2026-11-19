@@ -96,7 +96,7 @@ import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
 import './styles/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsView 全局加载;显式引入以防独立挂载)
-import { MenuRows, OverlayAt, buildObjectMenu, openObjectMenu, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useRibbonStore, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { MenuRows, OverlayAt, buildObjectMenu, openObjectMenu, useListFirst, useNativeChromeExtras, useNativeSheetMenu, usePhoneForm, useRibbonStore, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { fileKind, installNoteObject, noteRef, noteSheetRows, openVaultEntry } from './objects/note'
 import { confirmedDelete, deleteNoteFlow } from './noteDelete'
 import { CtxMenuButtons } from './components/CtxMenuButtons'
@@ -2030,7 +2030,7 @@ export function pageStyleSheetActions(entries: PageStyleEntry[]): AmxAction[] {
  *   · 手机浏览器:布局视口不变,只有 visualViewport 变矮 → 差值就是键盘高;
  *   · 安卓 APK(adjustResize):WebView 布局自己变矮,visualViewport 差值≈0 → 只能拿 innerHeight 的
  *     回落量。基线按**屏宽**记,旋转换向时重置,免得横屏被当成「键盘弹起」。 */
-function useKeyboardMetrics(): { lift: number; kbHeight: () => number } {
+function useKeyboardMetrics(): { lift: number; kbHeight: () => number; kbUp: () => boolean } {
   const [lift, setLift] = useState(0)
   const kbRef = useRef(0)
   const baseRef = useRef({ w: 0, h: 0 })
@@ -2057,7 +2057,14 @@ function useKeyboardMetrics(): { lift: number; kbHeight: () => number } {
   }, [])
   // 从没弹过键盘(一进来就点「+」)→ 按屏高估一个,夹在常见键盘高度区间内。
   const kbHeight = (): number => kbRef.current || Math.min(380, Math.max(240, Math.round(window.innerHeight * 0.42)))
-  return { lift, kbHeight }
+  /** 此刻键盘占着位置(同上面两种环境的量法;kbHeight 是记下来的,收起后也不归零,不能拿来判这个)。 */
+  const kbUp = (): boolean => {
+    const vv = window.visualViewport
+    const vvLift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0
+    const b = baseRef.current
+    return Math.max(vvLift, b.w === window.innerWidth ? b.h - window.innerHeight : 0) > 120
+  }
+  return { lift, kbHeight, kbUp }
 }
 
 /** 双列块面板:占掉软键盘的位置(Notion 式)。清单 = useAllSlashItems(),与桌面 slash 菜单同一份真源,
@@ -2119,7 +2126,8 @@ export function AmxMobileBar({ actions, objectRows, onUpload, undo, redo, indent
   canvas: { on: boolean; toggle: () => void } | null
 }) {
   const { t } = useI18n()
-  const { lift, kbHeight } = useKeyboardMetrics()
+  const { lift, kbHeight, kbUp } = useKeyboardMetrics()
+  const phone = usePhoneForm()
   const [sheet, setSheetOpen] = useState(false)
   const [frozenRows, setFrozenRows] = useState<AmxAction[]>([])
   const setSheet = (open: boolean): void => { setFrozenRows(open ? objectRows?.() ?? [] : []); setSheetOpen(open) }
@@ -2139,6 +2147,12 @@ export function AmxMobileBar({ actions, objectRows, onUpload, undo, redo, indent
     const h = kbHeight()
     ;(document.activeElement as HTMLElement | null)?.blur?.() // 收键盘,把位置让给面板
     setPick(h)
+  }
+  // 「⋯」:手机上键盘开着就先收(同「+」)。半屏贴着页面底边,键盘还在时只剩键盘上面那一截 —— 13 行只露出 7 行,
+  // 还被胶囊压着一截(手机走查 2026-11-19)。收键盘不丢正文落点:半屏里的上传照旧插回原处。平板横屏、桌面照旧。
+  const openSheet = (): void => {
+    if (phone && kbUp()) (document.activeElement as HTMLElement | null)?.blur?.()
+    setSheet(true)
   }
   return (
     <>
@@ -2164,7 +2178,7 @@ export function AmxMobileBar({ actions, objectRows, onUpload, undo, redo, indent
         )}
         {!sourceMode && <button onPointerDown={keep} onClick={undo} title={t('amxv.mbar.undo')}><Undo2 size={19} /></button>}
         {!sourceMode && <button onPointerDown={keep} onClick={redo} title={t('amxv.mbar.redo')}><Redo2 size={19} /></button>}
-        <button onPointerDown={keep} onClick={() => setSheet(true)} title={t('amxv.moreActions')}><MoreHorizontal size={19} /></button>
+        <button onPointerDown={keep} onClick={openSheet} title={t('amxv.moreActions')}><MoreHorizontal size={19} /></button>
         <button onClick={() => { setPick(0); (document.activeElement as HTMLElement | null)?.blur?.() }} title={t('amxv.mbar.hideKeyboard')}><ChevronsDown size={19} /></button>
       </div>
       {pickLocal > 0 && <AmxBlockPicker height={pickLocal} onClose={() => setPick(0)} />}
