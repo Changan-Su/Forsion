@@ -130,6 +130,7 @@ exports.default = async function afterPack(context) {
   //    且 --deep 才能把重建后的 .node 一并签上)。无 Developer ID → Gatekeeper 显「未识别开发者/仍要打开」。
   if (electronPlatformName === 'darwin') {
     const appPath = path.join(appOutDir, `${packager.appInfo.productFilename}.app`);
+    require('./space-launcher.cjs').buildSpaceLauncher(path.join(resourcesDir(), 'space-launcher'));
     // 悬空软链接:依赖过滤丢掉了包本体、node_modules/.bin 里指向它的链接还在(如 tangu-server 的 .bin/esbuild)。
     // 它们本就指向不存在的东西,删掉不改变任何行为;不删的话 Developer ID 签名(@electron/osx-sign 遍历时对每项
     // fs.stat,在 signIgnore 之前)直接 ENOENT 退出。

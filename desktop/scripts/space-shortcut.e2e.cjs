@@ -8,7 +8,10 @@
  *  N  不带 window 参数的普通 `forsion://space/<id>`:照旧叫出主窗(老行为没被截走)。
  *  M  Ribbon 右键 Space 有「添加到桌面」;dev 下点了提示只在安装版可用(开发模式恒拒,主进程那条 IPC 接上了)。
  *  I  渲染层交给主进程的图标是一张 1024px PNG;拿它按 mac 的路子真做一个 .app(临时目录,isPackaged 假装为真):
- *     Info.plist 过 plutil、AppIcon.icns 过 iconutil、launch 可执行 —— 只检查,不双击(双击会唤起本机装的那个 Forsion)。
+ *     Info.plist 过 plutil、AppIcon.icns 过 iconutil、launch 可执行。
+ *  P  随包 Space 注册后自动调用同一条 IPC，单体 Space 的声明被忽略。
+ *  D  macOS：原地升级旧链接，LaunchServices 真运行原生 Space launcher，最小化仍常驻，点回当前窗口，
+ *     Dock 退出时关掉独立 Space 窗。测试仅绑定此台架的临时 socket。
  *
  * ⚠️ 验不到的:安装版里 LaunchServices / 注册表把链接投给 Forsion 的那一段(dev 不注册 forsion://),
  *    Windows 任务栏按 Space 单独成组(setAppDetails)。
@@ -31,6 +34,72 @@ const check = (name, ok, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail !== undefined ? '  | ' + (typeof detail === 'string' ? detail : JSON.stringify(detail)) : ''}`)
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+function runningDockApps(bundleId) {
+  return Number(execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
+    function run(args) {
+      ObjC.import('AppKit');
+      const running = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(args[0]);
+      let regular = 0;
+      for (let i = 0; i < Number(running.count); i++) {
+        const app = running.objectAtIndex(i);
+        if (Number(app.activationPolicy) === 0 && !app.terminated) regular++;
+      }
+      return regular;
+    }`, bundleId], { encoding: 'utf8' }).trim())
+}
+
+async function checkMacDock(app, spaceWin, legacy, opts) {
+  // The bundle identity and endpoint are unique so this probe can never launch
+  // the user's installed Space or connect to their Forsion process.
+  const { createSpaceShortcut, spaceBundleId } = loadTs(path.join(ROOT, 'electron/spaceShortcut.ts'))
+  const { macSpaceSocket, startMacSpaceLaunchers } = loadTs(path.join(ROOT, 'electron/macSpaceLauncher.ts'))
+  const id = opts.id
+  const bundleId = spaceBundleId(id)
+  const socket = macSpaceSocket(os.tmpdir(), home)
+  const binary = path.join(home, 'space-launcher')
+  require('../build/space-launcher.cjs').buildSpaceLauncher(binary)
+
+  const windowCommand = (operation) => app.evaluate(({ BrowserWindow }, { id, operation }) => {
+    const window = BrowserWindow.fromId(id)
+    if (!window) return false
+    if (operation === 'minimize') window.minimize()
+    if (operation === 'close') { window.close(); return true }
+    return window.isMinimized()
+  }, { id: legacy.windowId, operation })
+  const dock = startMacSpaceLaunchers(socket, binary, {
+    exists: () => legacy.live,
+    open: () => { void secondInstance(LINK) },
+    close: () => { void windowCommand('close') },
+  })
+  try {
+    const result = await createSpaceShortcut({ id, name: opts.name }, {
+      ...opts,
+      macLauncher: { binary, socket, hostPath: '', hostId: '', profile: '' },
+    })
+    check('D1 native launcher upgrades the legacy .app in place', result.ok && result.path === legacy.path, result)
+    if (!result.ok) return
+    execFileSync('/usr/bin/codesign', ['--verify', '--strict', result.path])
+    dock.show(id, result.path)
+    check('D2 LaunchServices reports one regular running Space app', await until(async () => runningDockApps(bundleId) === 1))
+    await windowCommand('minimize')
+    check('D3 minimizing the window leaves its Dock app running', await until(async () => (await windowCommand('state')) && runningDockApps(bundleId) === 1))
+    execFileSync('/usr/bin/open', ['-g', '-a', result.path])
+    check('D4 reopening the launcher restores the same window', await until(async () => !(await windowCommand('state'))) && (await spaceWin())?.id === legacy.windowId)
+    execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `
+      function run(args) {
+        ObjC.import('AppKit');
+        const running = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(args[0]);
+        if (running.count) running.objectAtIndex(0).terminate;
+      }`, bundleId])
+    check('D5 quitting the Dock app closes its Space window', await until(async () => !(await spaceWin())))
+    legacy.live = false
+    dock.hide(id)
+    check('D6 closing the Space connection removes the running Dock app', await until(async () => runningDockApps(bundleId) === 0))
+  } finally {
+    dock.dispose()
+  }
+}
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-spaceshortcut-'))
 const userData = path.join(home, 'userdata')
@@ -130,12 +199,39 @@ async function main() {
     // ───────── I 图标 → 真 .app ─────────
     await app.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('spaces:addToDesktop')
-      ipcMain.handle('spaces:addToDesktop', (_e, input) => { globalThis.__spaceShortcutInput = input; return { ok: false, code: 'unpackaged' } })
+      globalThis.__spaceShortcutInputs = []
+      ipcMain.handle('spaces:addToDesktop', (_e, input) => {
+        globalThis.__spaceShortcutInputs.push(input)
+        return { ok: false, code: 'unpackaged' }
+      })
     })
-    await win.waitForTimeout(800)
+    const write = (rel, data) => {
+      const file = path.join(home, rel)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, data)
+    }
+    const optedIn = (id) => JSON.stringify({
+      id, name: id, autoDesktopShortcut: true, layout: { main: [{ type: 'outline' }], left: [], right: [] },
+    })
+    write('plugins/shortcut-probe/manifest.json', JSON.stringify({ id: 'shortcut-probe', name: 'Shortcut probe', version: '1.0.0', apiVersion: 1, main: 'main.js' }))
+    write('plugins/shortcut-probe/main.js', 'return () => {}\n')
+    write('plugins/shortcut-probe/spaces/auto-probe/space.json', optedIn('auto-probe'))
+    write('spaces/standalone-probe/space.json', optedIn('standalone-probe'))
+    const spaceWarnings = []
+    const watchConsole = (message) => {
+      if (/shortcut-probe|auto-probe|\[spaces\]/.test(message.text())) spaceWarnings.push(message.text())
+    }
+    win.on('console', watchConsole)
+    await win.reload()
+    const auto = await until(() => app.evaluate(() => globalThis.__spaceShortcutInputs.find((v) => v.plugin)))
+    check('P1 已注册的随包 Space 自动请求同一条快捷方式 IPC', auto?.id === 'auto-probe' && auto?.plugin === 'shortcut-probe',
+      auto ? { id: auto.id, plugin: auto.plugin } : { spaceWarnings, recipes: (await win.evaluate(() => window.tangu.spacesList())).map(({ slug, plugin }) => ({ slug, plugin })) })
+    win.off('console', watchConsole)
+    check('P2 自建 Space 声明不触发自动创建', (await app.evaluate(() => globalThis.__spaceShortcutInputs.every((v) => v.id !== 'standalone-probe'))))
+    await win.waitForSelector(`.rb-space[data-space-id="${SPACE}"]`, { timeout: 30000 })
     await rightClick()
     await win.locator('.rb-menu button, .rb-menu [role="menuitem"]', { hasText: '添加到桌面' }).first().click().catch(() => {})
-    const input = await until(() => app.evaluate(() => globalThis.__spaceShortcutInput), 8000)
+    const input = await until(() => app.evaluate(() => globalThis.__spaceShortcutInputs.find((v) => !v.plugin)), 8000)
     const dataUrl = input && input.iconPng
     check('I1 渲染层交来名字、兜底名和一张 PNG 图标', !!input && typeof input.name === 'string' && !!input.fallbackName && /^data:image\/png;base64,/.test(dataUrl || ''), input && { ...input, iconPng: dataUrl ? `${dataUrl.length} chars` : null })
     if (dataUrl) {
@@ -155,10 +251,12 @@ async function main() {
         const { createSpaceShortcut } = loadTs(path.join(ROOT, 'electron/spaceShortcut.ts'))
         const desk = path.join(home, 'Desktop')
         fs.mkdirSync(desk)
-        const r = await createSpaceShortcut({ id: SPACE, name: input.name }, {
+        const platformOpts = {
           platform: 'darwin', isPackaged: true, desktopDir: desk, execPath: '/Applications/Forsion.app/Contents/MacOS/Forsion',
           iconDir: path.join(home, 'space-shortcuts'), fallbackName: input.fallbackName, iconPng,
-        })
+        }
+        const id = `probe-${process.pid}`
+        const r = await createSpaceShortcut({ id, name: input.name }, platformOpts)
         check('I3 按 mac 的路子做出 .app', r.ok, r)
         if (r.ok) {
           let lint = ''
@@ -169,6 +267,9 @@ async function main() {
           try { execFileSync('iconutil', ['-c', 'iconset', path.join(r.path, 'Contents/Resources/AppIcon.icns'), '-o', iconset]); iconOk = fs.readdirSync(iconset).length >= 5 } catch (e) { console.log(String(e.stderr || e)) }
           check('I5 AppIcon.icns 能被 iconutil 拆开', iconOk, iconOk ? fs.readdirSync(iconset) : undefined)
           check('I6 launch 可执行', (fs.statSync(path.join(r.path, 'Contents/MacOS/launch')).mode & 0o111) !== 0)
+          await checkMacDock(app, spaceWin, { path: r.path, windowId: sw2?.id, live: !!sw2 }, {
+            ...platformOpts, id, name: input.name,
+          })
           if (SHOTS) {
             // Finder 会怎么画这个 .app:Quick Look 缩略图(读 CFBundleIconFile)。
             // qlmanage 画完也可能不退出(实测挂住),给它 20 秒。

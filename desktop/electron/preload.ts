@@ -524,7 +524,7 @@ const api = {
   },
   marketSourcesInstalls: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInstall[]> => ipcRenderer.invoke('marketSources:installs', locale),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
-  spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
+  spacesList: (disabledPluginIds?: string[]): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list', disabledPluginIds),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
   spacesDelete: (slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:delete', slug),
   // ── 环境检测 + 引导安装(首启向导;run 仅认 check 登记的 opaque id)──
@@ -674,7 +674,7 @@ const api = {
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at, opts),
   /** Space「添加到桌面」:双击快捷方式 = 这个 Space 开在自己的独立窗口里(spaceShortcut.ts)。iconPng = 渲染层画好的 PNG data URL。 */
-  addSpaceToDesktop: (input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
+  addSpaceToDesktop: (input: { id: string; name: string; fallbackName?: string; iconPng?: string; plugin?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }> =>
     ipcRenderer.invoke('spaces:addToDesktop', input),
   /** 开 / 叫出一扇 Mini(同一实体复用、满了不开):结果里 ok:false + reason:'limit' 时调用方负责提示用户。 */
   openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): Promise<import('../shared/miniPanel').MiniOpenResult | undefined> =>
