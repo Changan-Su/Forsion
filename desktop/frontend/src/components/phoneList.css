@@ -191,9 +191,20 @@
   min-height: calc(48 * var(--pl-dp)); padding: 0 calc(8 * var(--pl-dp)) 0 0; border-radius: 0; color: var(--text);
 }
 .mb-shell[data-list-first] .amx-tags-inlist .amx-panel-empty { padding: calc(14 * var(--pl-dp)) calc(12 * var(--pl-dp)); }
+/* 「标签」一档的筛选框和排序那组排成一行:筛选框占满,排序靠右;左缘和下面的行对齐 */
+.mb-shell[data-list-first] .amx-tags-inlist-bar {
+  display: flex; align-items: center; gap: calc(8 * var(--pl-dp));
+  padding: calc(2 * var(--pl-dp)) calc(8 * var(--pl-dp)) calc(6 * var(--pl-dp));
+}
+.mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-search { flex: 1 1 auto; min-width: 0; margin: 0; }
+.mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-sort { flex: none; font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); }
+.mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-sort > button { min-height: calc(32 * var(--pl-dp)); padding: 0 calc(12 * var(--pl-dp)); }
 /* 触屏上 :hover 会粘在最后点过的那一行上:只留按下的反馈 */
 .mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):hover { background: transparent; }
 .mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):active { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+/* 列表末尾那几行:「全文搜索」领头(只在这种列表上有),回收站原来和上面隔开的那一段让给它 */
+.mb-shell[data-list-first] .t2s-foot > .amx-fulltext-entry { margin-top: 10px; }
+.mb-shell[data-list-first] .t2s-foot > .amx-fulltext-entry ~ .amx-trash-entry { margin-top: 0; }
 .mb-shell[data-list-first] .amx-panel--inlist { height: auto; overflow: visible; padding: 0 calc(10 * var(--pl-dp)) calc(12 * var(--pl-dp)); }
 .mb-shell[data-list-first] .amx-panel--inlist .amx-panel-back {
   display: flex; align-items: center; gap: calc(4 * var(--pl-dp)); width: 100%; min-height: calc(44 * var(--pl-dp));

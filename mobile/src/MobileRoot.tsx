@@ -103,7 +103,13 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
   // (不关视图,再点同一条目即回)。
   const listFirst = listFirstNow()
-  if (listFirst && ws.leftVisible) return rootBack()
+  if (listFirst && ws.leftVisible) {
+    // 列表层自己还有一层(笔记列表里就地打开的检索):先收它,再按才是离开这一层。问法同上面的浮层(先发 probe),
+    // 但排在它们后面 —— 列表上面开着半屏(切换设备 / 智库)时,这一下该关的是半屏。
+    const held = !window.dispatchEvent(new CustomEvent('forsion:mobile-list-back', { cancelable: true, detail: { probe: true } }))
+    if (held) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-list-back', { cancelable: true })) } }
+    return rootBack()
+  }
   if (ws.leftVisible) return { slide: 'left', run: () => ws.toggleSidebar('left') }
   if (ws.rightVisible) return { slide: 'right', run: () => ws.toggleSidebar('right') }
   const active = ws.mainTabs.find((t) => t.active)
@@ -133,7 +139,11 @@ function useBrowserBack(): void {
     return installBrowserBack(planBack, (changed) => {
       // Subscribe to navigation inputs, not streamed message content. Menu-local navigation asks the
       // same cancellable back event as Android; its sheet presenter reports opening/closing here.
+      // The list level's own layer (planBack's forsion:mobile-list-back) is the view's local state, in no store:
+      // the view reports when it starts and stops holding Back.
+      window.addEventListener('forsion:mobile-list-back-change', changed)
       const offs = [
+        () => window.removeEventListener('forsion:mobile-list-back-change', changed),
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
         useApp.subscribe((s, prev) => {

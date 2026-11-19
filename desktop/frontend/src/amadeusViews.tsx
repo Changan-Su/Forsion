@@ -985,20 +985,41 @@ export function AmadeusPagesView() {
   const flatList = phone && !!vaultRoot && (phoneTab === 'recent' || phoneTab === 'boards')
   const tagsTab = phone && !!vaultRoot && phoneTab === 'tags'
   // 全文检索画在这张列表里:列表层只画笔记列表这一个左栏视图(Space 的 soleList),点标签、点收藏的检索集合去激活的
-  // 那个左栏检索视图不在屏上。来了一次新的检索请求(useSearchSeed 的序号变了)就在胶囊下面就地显示结果;标题那行或任一档胶囊回到列表。
+  // 那个左栏检索视图不在屏上。来了一次新的检索请求(useSearchSeed 的序号变了:点标签 / 检索集合带着查询,末尾「全文搜索」那一行
+  // 和搜索命令是空查询)就在胶囊下面就地打开;标题那行或任一档胶囊回到列表。
   // 「看过第几次」记在模块里:列表还没挂上时来的请求(冷启动直接在笔记里点了正文的标签),挂上后照样接住。
   const searchSeed = useSearchSeed((s) => (phone ? s.seed : null))
   const [listSearch, setListSearch] = useState(false)
+  // 换了智库:上一个库的检索不带过来。只在真换了的时候收(挂上那一次不算),并且排在下面那条前面 —— 挂上时正等着的请求照样接住。
+  // 旧请求不会在新库上再触发一次:它的序号已经记在 phoneSeedSeen 里了。
+  const searchVault = useRef(vaultRoot)
+  useEffect(() => {
+    if (searchVault.current === vaultRoot) return
+    searchVault.current = vaultRoot
+    setListSearch(false)
+  }, [vaultRoot])
   useEffect(() => {
     if (!searchSeed || searchSeed.n === phoneSeedSeen) return
     phoneSeedSeen = searchSeed.n
     setListSearch(true)
   }, [searchSeed])
   const inListSearch = phone && !!vaultRoot && listSearch
-  // 系统返回先收掉这层结果、回到列表,再按才是离开这一层。只在列表层在屏上时接:进了某篇笔记之后这张列表还挂着
-  // (滑到屏外),那时的返回是「回列表」,不该被一层看不见的结果吃掉。
+  // 系统返回先收掉这层检索、回到列表,再按才是离开这一层。外壳在浮层(半屏、菜单)都问过之后才来问列表层
+  // (forsion:mobile-list-back:先发一个只问不动手的 probe);只在列表层在屏上时接 —— 进了某篇笔记之后这张列表还挂着(滑到屏外),
+  // 那时的返回是「回列表」,不该被一层看不见的检索吃掉。接上 / 放下各报一声:浏览器里的返回要据此决定留不留那条历史记录。
   const listShown = useWorkspace((s) => s.leftVisible)
-  useMobileBackClose(inListSearch && listShown, () => setListSearch(false))
+  const holdsBack = inListSearch && listShown
+  useEffect(() => {
+    if (!holdsBack) return
+    const onBack = (e: Event): void => {
+      e.preventDefault()
+      if (!(e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) setListSearch(false)
+    }
+    const report = (): void => { window.dispatchEvent(new Event('forsion:mobile-list-back-change')) }
+    window.addEventListener('forsion:mobile-list-back', onBack)
+    report()
+    return () => { window.removeEventListener('forsion:mobile-list-back', onBack); report() }
+  }, [holdsBack])
   const pickPhoneTab = (tab: NotesPhoneTab): void => { setListSearch(false); setSavedTab(tab); saveNotesPhoneTab(tab) }
   const openSearch = (): void => useQuickFind.getState().openPalette()
   usePullToSearch(scrollRef, phone ? openSearch : undefined)
@@ -1809,6 +1830,13 @@ export function AmadeusPagesView() {
 
   const foot = (
     <div className="t2s-foot">
+      {/* 手机:全库的全文检索从这一行进(顶栏的搜索只按名字找);点了在列表里就地打开,光标进输入框 */}
+      {phone && !!vaultRoot && (
+        <button className="t2s-special amx-fulltext-entry" onClick={() => useSearchSeed.getState().request('')}>
+          <span className="t2s-special-ic"><Search /></span>
+          <span className="t2s-special-title">{t('amxpanel.searchHead')}</span>
+        </button>
+      )}
       <TrashSection />
       {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
