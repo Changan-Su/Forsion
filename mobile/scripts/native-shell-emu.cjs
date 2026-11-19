@@ -4339,6 +4339,55 @@ const tabCountText = (list) => {
     }
   })
 
+  // A conversation held sideways (walk 2026-11-19, g): "the right capsule covers a user message", and turned back the
+  // phone showed the list rather than the conversation. Measured here: where the user's bubbles sit against the two
+  // capsules at rest (the conversation as it opens, at its end) and after a scroll to its top, then which level the
+  // phone lands on when turned back. Content passing under the glass capsules while scrolling is the floating chrome's
+  // design (portrait too); at rest nothing may be under one.
+  await check('landscape conversation: at rest no message under a capsule; turned back, where it lands is logged', async () => {
+    await openChat('E2E Session One')
+    const accel = h.adb('shell', 'settings', 'get', 'system', 'accelerometer_rotation').trim()
+    const turn = (r) => { h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0'); h.adb('shell', 'settings', 'put', 'system', 'user_rotation', String(r)) }
+    const bubbles = async () => {
+      const list = ui()
+      const wv = webViewNode(list)
+      const caps = ['nativeChrome.capLeft', 'nativeChrome.capRight'].map((id) => h.byId(list, id)).filter(Boolean).map((n) => n.rect)
+      const page = await cdp.eval(`(() => [...document.querySelectorAll('.mb-main .t2-userwrap')].map((w) => { const el = w.querySelector('.t2-user') || w; const r = el.getBoundingClientRect()
+        let z = 1; for (let e = el; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+        return { l: r.left * z, t: r.top * z, r: r.right * z, b: r.bottom * z, dpr: devicePixelRatio, text: el.textContent.trim().slice(0, 16) } }))()`)
+      const px = page.map((u) => ({ left: Math.round(wv.rect.left + u.l * u.dpr), top: Math.round(wv.rect.top + u.t * u.dpr), right: Math.round(wv.rect.left + u.r * u.dpr), bottom: Math.round(wv.rect.top + u.b * u.dpr), text: u.text }))
+      const under = px.filter((u) => caps.some((c) => u.left < c.right && u.right > c.left && u.top < c.bottom && u.bottom > c.top))
+      return { caps, users: px, under, wv: wv.rect }
+    }
+    let turned = false
+    try {
+      turn(1); turned = true
+      const wide = await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.right - wv.rect.left > wv.rect.bottom - wv.rect.top && h.byId(l, 'nativeChrome.capRight') ? l : null }, { timeout: 10000 })
+      assert.ok(wide.hit, 'the app did not turn sideways (or no right capsule)')
+      await h.pause(1500)
+      const st = await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, wide: document.querySelector('.mb-shell')?.hasAttribute('data-wide') })")
+      const rest = await bubbles()
+      shot('03s-landscape-chat-rest')
+      console.log(`  sideways: ${JSON.stringify(st)} capsules ${rest.caps.map(fmt).join(' ')}; user bubbles ${JSON.stringify(rest.users)}`)
+      await cdp.eval("(() => { const s = document.querySelector('.mb-main .t2-stream'); if (s) s.scrollTop = 0; return true })()")
+      await h.pause(800)
+      const top = await bubbles()
+      shot('03t-landscape-chat-top')
+      console.log(`  scrolled to the top: user bubbles ${JSON.stringify(top.users)}; under a capsule: ${JSON.stringify(top.under)}`)
+      assert.deepEqual(rest.under, [], `at rest a user message is under a capsule (${JSON.stringify(rest.under)} vs ${rest.caps.map(fmt).join(' ')})`)
+      assert.deepEqual(top.under, [], `scrolled to its top, a user message is under a capsule (${JSON.stringify(top.under)} vs ${top.caps.map(fmt).join(' ')})`)
+    } finally {
+      if (turned) {
+        turn(0)
+        await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.bottom - wv.rect.top > wv.rect.right - wv.rect.left ? l : null }, { timeout: 10000 })
+        await h.pause(1500)
+        console.log(`  turned back: ${JSON.stringify(await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, view: document.querySelector('.mb-main > .mb-view')?.dataset.view })"))}`)
+        shot('03u-portrait-again')
+        h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', accel || '0')
+      }
+    }
+  })
+
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {
     if (!h.byId(ui(), 'nativeChrome.account')) await openDrawer()
     await tapId('nativeChrome.account') // a first-level page has no ⋯ on a phone: the avatar menu is the sheet to leave open
