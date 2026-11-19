@@ -129,6 +129,47 @@ export function finishNavSpace(leafIds?: string[]): void {
   useNav.setState({ stacks })
 }
 export function forgetNavSpace(id: string): void { spaces.delete(id) }
+
+/** Rewrites what the histories hold after the thing an entry points at moved or went away (a file renamed, moved or
+ *  deleted): `fn` returns the entry to put in its place, `null` to drop it, `undefined` to keep it as it is. Covers the
+ *  live stacks and the ones parked with other Spaces. Two equal keys left side by side become one (the later); the
+ *  cursor stays on the entry it was on, or on the nearest one before it when that one was dropped.
+ *  Without it a renamed note stays in the history under its old path: Back lands on a note that is not there. */
+export function remapNav(fn: (leafId: string, entry: NavEntry) => NavEntry | null | undefined): void {
+  const fix = (id: string, st: LeafStack): LeafStack | null => {
+    let touched = false
+    let shifted = false
+    const entries: NavEntry[] = []
+    let idx = -1
+    st.entries.forEach((entry, i) => {
+      const next = fn(id, entry)
+      if (next !== undefined) touched = true
+      const out = next === undefined ? entry : next
+      if (!out) shifted = true
+      else if (entries.length && entries[entries.length - 1].key === out.key) { entries[entries.length - 1] = out; shifted = true }
+      else entries.push(out)
+      if (i === st.idx) idx = entries.length - 1
+    })
+    if (!touched) return null
+    return { ...st, entries, idx: entries.length ? Math.max(0, Math.min(idx, entries.length - 1)) : -1, ...(shifted ? { error: false } : {}) }
+  }
+  const live = get()
+  let stacks: Record<string, LeafStack> | null = null
+  for (const [id, st] of Object.entries(live)) {
+    const next = fix(id, st)
+    if (!next) continue
+    // positions moved under a restore in flight: its indices no longer mean the same entries
+    if (next.entries.length !== st.entries.length) cancel(id)
+    ;(stacks ??= { ...live })[id] = next
+  }
+  if (stacks) useNav.setState({ stacks })
+  for (const [space, parked] of spaces) {
+    let out: Record<string, LeafStack> | null = null
+    for (const [id, st] of Object.entries(parked)) { const next = fix(id, st); if (next) (out ??= { ...parked })[id] = next }
+    if (out) spaces.set(space, out)
+  }
+  function get(): Record<string, LeafStack> { return useNav.getState().stacks }
+}
 export function recordNav(leafId: string | null | undefined, key: string, restore: NavEntry['restore'], title?: string): void {
   if (leafId) useNav.getState().record(leafId, { key, restore, title })
 }

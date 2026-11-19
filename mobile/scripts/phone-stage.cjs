@@ -1509,6 +1509,96 @@ const SCENES = {
     const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
     return [['each default card says what is going on: the last session, the last note, the next appointment, unread mail', cards.map((c) => c[0]).join() === 'tangu,amadeus,calendar,inbox' && /^继续：/.test(of('tangu')) && of('amadeus') === '发版清单 2.13' && /14:00 周会$/.test(of('calendar')) && of('inbox') === '2 条未读', JSON.stringify(cards)]]
   },
+  // A new note named from its title, then system Back (walk 2026-11-19, b): Back goes to the list — never to the note
+  // under the name it was born with («当前库里没有这篇笔记「untitled.md」»). The history keeps the note under its new path.
+  // Home's note card names it, and stops naming it once it is deleted (h: the card read the first "recent" path as is —
+  // the dead `untitled.md` that the wrong Back had opened, or a deleted note).
+  'notes-rename-back': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    const notes = await newNote(page, '购物清单')
+    const before = await noteHistory(page)
+    const via = await detailBack(page)
+    const after = { nav: await stage.nav(page), missing: await page.evaluate(() => /当前库里没有这篇笔记/.test(document.querySelector('.mb-shell')?.innerText || '')), history: await noteHistory(page) }
+    await stage.space(page, 'home')
+    const card = () => page.evaluate(() => [...document.querySelectorAll('.mb-view[data-view="homepage"] .hp-card')].find((el) => el.dataset.spaceId === 'amadeus')?.querySelector('.hp-card-status')?.textContent ?? null)
+    const named = await card()
+    await page.evaluate(async (u) => { await (await import(/* @vite-ignore */ u)).usePageStore.getState().deletePage('购物清单.md') }, moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'))
+    await page.waitForTimeout(600)
+    const deleted = await card()
+    await stage.space(page, 'amadeus')
+    return [
+      ['the title renames the new note (the file follows it)', notes.includes('购物清单.md') && !notes.some((p) => /^untitled/.test(p)), JSON.stringify(notes)],
+      ['the history holds the note once, under its new path — not under the name it was born with', before.includes('amadeus:购物清单.md') && !before.some((k) => k.includes('untitled')), JSON.stringify(before)],
+      ['system Back from the renamed note goes to the list, not to a note that is not there', after.nav === 'list' && !after.missing && !after.history.some((k) => k.includes('untitled')), JSON.stringify({ via, ...after })],
+      ['Home\'s note card names the renamed note, and no longer names it once it is deleted', named === '购物清单' && deleted !== '购物清单', JSON.stringify({ named, deleted })],
+    ]
+  },
+  // What is written in a note reaches the tag list and the full-text search without reopening the vault (walk
+  // 2026-11-19, c: the local vault's index skipped the editor's own saves — only the title matched). No reindex, no
+  // version bump by hand here: the app's own save has to do it.
+  'notes-edit-index': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    await newNote(page, '采购单')
+    await page.keyboard.press('Enter') // title → body
+    await page.waitForTimeout(500)
+    await page.keyboard.type('牛奶 #待买 全文探针词')
+    await page.waitForTimeout(2500) // the editor's save is debounced
+    const disk = await page.evaluate(async () => window.amadeus.readTextFile('采购单.md'))
+    await page.evaluate(() => document.activeElement?.blur())
+    await stage.action(page, 'left')
+    await chip(page, 'tags')
+    await page.waitForSelector(`${LIST} .amx-tags-inlist .amx-tagtree-row`, { timeout: 4000 }).catch(() => {})
+    const tags = await texts(page, `${LIST} .amx-tags-inlist .amx-tag-name`)
+    await chip(page, 'recent')
+    await page.locator(`${LIST} .t2s-foot .amx-fulltext-entry`).tap()
+    const PANE = `${LIST} .t2s-scroll .amx-panel--inlist`
+    await page.waitForSelector(`${PANE} input`, { timeout: 5000 }).catch(() => {})
+    await page.keyboard.type('全文探针词')
+    await page.waitForSelector(`${PANE} .amx-list-item`, { timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(400)
+    const found = await texts(page, `${PANE} .amx-list-item`)
+    await page.evaluate(() => document.activeElement?.blur())
+    await page.locator(`${PANE} .amx-panel-back`).tap().catch(() => {})
+    await chip(page, 'recent')
+    return [
+      ['the body was saved', /全文探针词/.test(disk || ''), JSON.stringify(disk)],
+      ['its tag is in the tag list right away', tags.includes('待买'), tags.join('、')],
+      ['the full-text search finds it by a word of its body', found.some((t) => /采购单/.test(t)), JSON.stringify(found)],
+    ]
+  },
+}
+
+/** The list's main button, then a title typed into the new note (Enter commits it = the file is renamed). Returns the
+ *  vault's pages afterwards. Leaves the caret in the note. */
+async function newNote(page, title) {
+  await page.locator(`${LIST} .pl-fab`).tap()
+  await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+  await page.waitForTimeout(800)
+  await page.keyboard.type(title)
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(1200)
+  return page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).usePageStore.getState().pages, moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'))
+}
+/** The note entries of every View's history (`amadeus:<path>`). */
+const noteHistory = (page) => page.evaluate(async (u) => Object.values((await import(/* @vite-ignore */ u)).useNav.getState().stacks).flatMap((s) => s.entries.map((e) => e.key)).filter((k) => k.startsWith('amadeus:')), moduleUrl('../lcl/engine/navStore.ts'))
+/** One system Back in the main area (see backPath). Where the key does not arrive, what MobileRoot's planBack does there
+ *  once nothing above the page takes Back: back through this trip's pages, else to the list. Returns the way it went. */
+async function detailBack(page) {
+  const via = await backPath(page)
+  await page.evaluate(async ([key, navUrl, wsUrl]) => {
+    document.activeElement?.blur?.()
+    if (key) return void window.Capacitor.Plugins.App.notifyListeners('backButton', { canGoBack: false })
+    const { useNav } = await import(/* @vite-ignore */ navUrl)
+    const ws = (await import(/* @vite-ignore */ wsUrl)).useWorkspace.getState()
+    const tab = ws.mainTabs.find((t) => t.active)
+    const st = tab && useNav.getState().stacks[tab.id]
+    if (st && st.idx > 0) useNav.getState().back(tab.id)
+    else ws.toggleSidebar('left')
+  }, [via === 'key', moduleUrl('../lcl/engine/navStore.ts'), moduleUrl('../lcl/engine/singleColumnStore.ts')])
+  await page.waitForTimeout(1200)
+  return via
 }
 
 /** Puts the app's own call bar up (or takes it down) through the store the composer's call key writes to. No call is

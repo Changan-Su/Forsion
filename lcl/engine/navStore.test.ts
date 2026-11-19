@@ -84,3 +84,50 @@ describe('navStore per-leaf', () => {
     expect(Object.keys(nav().stacks)).toHaveLength(0)
   })
 })
+
+describe('remapNav(条目指向的东西改名 / 挪走 / 删掉之后改写历史)', () => {
+  beforeEach(() => useNav.getState().reset())
+  const keys = (id: string) => nav().stacks[id].entries.map((e) => e.key)
+
+  it('改名:原位换 key 与复原,不另起一条;之后再记新 key 只替换当前那条(新建 → 改标题 → 返回不落到旧路径)', async () => {
+    const { remapNav } = await import('./navStore')
+    const log: string[] = []
+    nav().record('A', entry('note:untitled.md', log))
+    remapNav((_, e) => (e.key === 'note:untitled.md' ? entry('note:购物清单.md', log) : undefined))
+    nav().record('A', entry('note:购物清单.md', log)) // 视图跟到新路径后照常记的那一下
+    expect(keys('A')).toEqual(['note:购物清单.md'])
+    expect(nav().stacks.A.idx).toBe(0)
+  })
+
+  it('删掉:拿掉那条,游标停在原来那条(被拿掉时退到它前面那条);两边留下的同 key 并成一条', async () => {
+    const { remapNav } = await import('./navStore')
+    const log: string[] = []
+    for (const k of ['a', 'dead', 'a', 'b']) nav().record('A', entry(k, log))
+    expect(nav().stacks.A.idx).toBe(3)
+    remapNav((_, e) => (e.key === 'dead' ? null : undefined))
+    expect(keys('A')).toEqual(['a', 'b'])
+    expect(nav().stacks.A.idx).toBe(1)
+    for (const k of ['c', 'gone']) nav().record('A', entry(k, log))
+    remapNav((_, e) => (e.key === 'gone' ? null : undefined))
+    expect(keys('A')).toEqual(['a', 'b', 'c'])
+    expect(nav().stacks.A.idx).toBe(2)
+    nav().back('A')
+    await Promise.resolve()
+    expect(log).toEqual(['b'])
+  })
+
+  it('别的 Space 里停放的历史一样改写;没碰到的栈原样(同一个对象)', async () => {
+    const { remapNav, beginNavSpace, finishNavSpace } = await import('./navStore')
+    const log: string[] = []
+    nav().record('A', entry('old', log))
+    beginNavSpace('s1', 's2')
+    finishNavSpace()
+    nav().record('B', entry('x', log))
+    const before = nav().stacks.B
+    remapNav((_, e) => (e.key === 'old' ? entry('new', log) : undefined))
+    expect(nav().stacks.B).toBe(before)
+    beginNavSpace('s2', 's1')
+    finishNavSpace()
+    expect(keys('A')).toEqual(['new'])
+  })
+})
