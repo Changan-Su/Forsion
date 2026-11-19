@@ -21,6 +21,7 @@ import { beginRibbonPointerDrag } from './ribbonPointerDrag'
 import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './shortcutStore'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
+import { moreRowLabel } from './moreSheet'
 import type { Command, RibbonItem, RibbonMenuEntry } from './types'
 import { OverlayAt, UI_ZOOM_EVENT, zoomOf } from './menuAnchor'
 import { closeMenu, openMenu, openObjectMenu } from './objectMenu'
@@ -84,7 +85,8 @@ function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: b
     <button className="rb-btn" aria-label={name || undefined} data-rb-tip={expanded ? undefined : name || undefined} onClick={item.onClick}>
       {Icon && <Icon size={18} />}
       {dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
-      {expanded && <span className="rb-label">{name}</span>}
+      {/* 展开态一行放不下末尾的快捷键括注(「命令面板 (⌘K)」):行上剥掉,收起态的浮签照旧带着。 */}
+      {expanded && <span className="rb-label">{moreRowLabel(name)}</span>}
     </button>
   )
 }
@@ -113,7 +115,7 @@ function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: 
       }}
     >
       <Icon size={18} />
-      {expanded && <span className="rb-label">{name}</span>}
+      {expanded && <span className="rb-label">{moreRowLabel(name)}</span>}
     </button>
   )
 }
