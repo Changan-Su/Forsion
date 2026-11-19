@@ -628,10 +628,10 @@ export function HomepageView(_props: ViewProps) {
     clearPhoneSuggest()
     setSuggestPending(false)
   }, [phoneApp, sentOnce])
-  // 放不下就逐级让:四条 + 全部卡片 → 四条 + 两行卡片 → 两条 + 两行卡片 → 不出(SUGGEST_FITS;样式在 homepage.css 文末)。
-  // 每次都从头判:屏高变了(转屏、分屏)、问候折行、换语言、长按改了卡片都重判,变宽裕了能放回来。
+  // 放不下就逐级让:四条 + 「继续」三行 → 四条 + 两行 → 两条 + 两行 → 不出(SUGGEST_FITS;样式在 homepage.css 文末)。
+  // 每次都从头判:屏高变了(转屏、分屏)、问候折行、换语言、「继续」长出来或少了都重判,变宽裕了能放回来。
   // 档位直接写在根的 data-suggest-fit 上、不走 state:同一拍里试完几档才落定,中间不出一帧挤着的样子;
-  // 卡片只在画的时候藏第三行(CSS :nth-child),HomeCards 手里那份清单不动,长按改卡片存下的还是全部。
+  // 「继续」只在画的时候藏第三行(CSS :nth-child),HomeContinue 手里那份清单不动。
   const suggestShown = showHomeSuggest({ phone, tangu: hasTangu, phoneApp, pending: suggestPending, onboarding, sent: sentOnce, composerFocused })
   useLayoutEffect(() => {
     if (!suggestShown) return
@@ -660,10 +660,9 @@ export function HomepageView(_props: ViewProps) {
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(decide)
     ro?.observe(root)
     ro?.observe(title)
-    // 卡片张数变了(长按改卡片)也重判;看子节点增减,不看卡片区的尺寸 —— 那是档位自己会改的
-    const cards = stack.querySelector('.hp-cards')
-    const mo = cards && typeof MutationObserver !== 'undefined' ? new MutationObserver(decide) : null
-    if (cards) mo?.observe(cards, { childList: true })
+    // 「继续」晚到(会话、笔记读进来)或行数变了也重判;看子节点增减,不看尺寸 —— 那是档位自己会改的
+    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(decide) : null
+    mo?.observe(stack, { childList: true, subtree: true })
     // 字体晚到会让建议从一行变两行:这一块自己的尺寸不拿来观察(档位会改它),改听字体装完
     const fonts = typeof document !== 'undefined' ? document.fonts : undefined
     fonts?.addEventListener?.('loadingdone', decide)

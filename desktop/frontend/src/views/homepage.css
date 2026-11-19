@@ -1684,12 +1684,12 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
 .lcl-drop-ind.hp-drop-ind.lcl-drop-ind--zone { border-radius: var(--radius-lg); }
 
 /* ── 手机主页:走完手机引导后的四条起步建议(HomepageView 的 HomeSuggest;方案在仓根 docs/ToBeImproved/手机首次引导方案_2026-11-13)。
- *    放在四张大卡片上面(order 同卡片,DOM 在前);卡色实底、不描边、低阴影,字用正文角色,最多两行(英文长句不截成半句)。
- *    尺寸照上面 .hp-phone 那段按 dp 写;输入区展开时和卡片一起让位。
+ *    放在「继续」上面(DOM 在前;新用户没有「继续」);卡色实底、不描边、低阴影,字用正文角色,最多两行(英文长句不截成半句)。
+ *    尺寸照上面 .hp-phone 那段按 dp 写;输入区展开时和「继续」一起让位。
  *    一屏放不下时逐级让(HomepageView 量过后写在根的 data-suggest-fit 上,档位见 homeSuggest.ts 的 SUGGEST_FITS):
- *    卡片只画前两行 → 建议只留前两条 → 这一块不出;不把输入条往 Dock 底下挤(台架钉着「输入条底边在 Dock 之上、在最后一张画出来的卡之下」)。
- *    主页一列 = 问候约 80 + 卡片(两行 220 / 三行 336)+ 输入条 54 + 间距 14×2,外加胶囊、Dock 与上下留白约 270;
- *    这一块约 113–161(中文一行 / 英文两行)+ 间距 14。不按屏高写媒体查询:卡片张数、问候折行、导航条高度都算不准,一律实量。 ── */
+ *    「继续」只画前两行 → 建议只留前两条 → 这一块不出;不把输入条往 Dock 底下挤(phone-guide 台架钉着「输入条底边在 Dock 之上、在最后一行画出来的「继续」之下」)。
+ *    主页一列 = 问候约 80 + 「继续」(三行约 190)+ 输入条 54 + 间距 14×2,外加胶囊、Dock 与上下留白约 270;
+ *    这一块约 113–161(中文一行 / 英文两行)+ 间距 14。不按屏高写媒体查询:「继续」行数、问候折行、导航条高度都算不准,一律实量。 ── */
 .hp-phone .hp-suggest { order: 2; display: flex; flex-direction: column; gap: calc(8 * var(--hp-dp)); }
 .hp-phone .hp-suggest-title { display: flex; align-items: center; gap: calc(6 * var(--hp-dp)); color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); line-height: 1.4; }
 .hp-phone .hp-suggest-title > svg { flex: none; width: calc(14 * var(--hp-dp)); height: calc(14 * var(--hp-dp)); }
