@@ -612,8 +612,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
   // steer 切段时 turn_boundary 把清单带进新段,跑着的那份在新段上转;旧段已 done,只留快照。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
-  // 手机(原生外壳画 Dock):这条消息平时少写哪几样(名字 / 时间 / 那排按钮),见 messageQuiet.ts。写成根上的 data-quiet,
-  // 剩下的归样式(chat2.css 文末);别的端恒为 undefined,不带这个属性。
+  // 手机(有宿主画 Dock:Android 外壳、手机浏览器里的网页版):这条消息平时少写哪几样(名字 / 时间 / 那排按钮),见 messageQuiet.ts。
+  // 写成根上的 data-quiet,剩下的归样式(chat2.css 文末);没有宿主画 Dock 的端恒为 undefined,不带这个属性。
   const quiet = useApp((s) => (runSid && nativeChromeDrawsSpaces() ? quietTokens(s.messagesBySession[runSid], s.configBySession[runSid], msg.id) : undefined))
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。

@@ -9,13 +9,13 @@ const asst = (id: string, min: number, extra: Partial<UiMessage> = {}): UiMessag
 const tokens = (rows: UiMessage[], cfg: Parameters<typeof quietTokens>[1] = {}) => Object.fromEntries(rows.map((m) => [m.id, quietTokens(rows, cfg, m.id)]))
 
 describe('which messages write their time', () => {
-  it('the first one, and each one more than five minutes after the one before it', () => {
-    const rows = [user('u1', 0), asst('a1', 1), user('u2', 6), asst('a2', 6.5), user('u3', 12), asst('a3', 30)]
+  it('the first one, and each one five minutes or more after the one before it', () => {
+    const rows = [user('u1', 0), asst('a1', 1), user('u2', 5.5), asst('a2', 6.5), user('u3', 12), asst('a3', 30)]
     expect(tokens(rows)).toEqual({ u1: 'gap', a1: 'solo', u2: '', a2: 'solo', u3: 'gap', a3: 'gap last solo' })
   })
-  it('exactly five minutes is not "more than"', () => {
-    const rows = [user('u1', 0), { ...user('u2', 0), timestamp: T0 + TIME_GAP_MS }, { ...user('u3', 0), timestamp: T0 + 2 * TIME_GAP_MS + 1 }]
-    expect(tokens(rows)).toEqual({ u1: 'gap', u2: '', u3: 'gap' })
+  it('exactly five minutes writes it; a millisecond short does not', () => {
+    const rows = [user('u1', 0), { ...user('u2', 0), timestamp: T0 + TIME_GAP_MS }, { ...user('u3', 0), timestamp: T0 + 2 * TIME_GAP_MS - 1 }]
+    expect(tokens(rows)).toEqual({ u1: 'gap', u2: 'gap', u3: '' })
   })
   it('measured from the bubble before: system rows, machine rows and rows the list does not draw are not "the one before"', () => {
     const rows: UiMessage[] = [
@@ -43,9 +43,37 @@ describe('the last answer', () => {
     const marks = quietMarksOf(rows)
     expect([...marks.bits].filter(([, b]) => b & 2).map(([id]) => id)).toEqual(['a2'])
   })
-  it('a reply still streaming is already the last one: the row under the answer before it folds away', () => {
-    const rows = [user('u1', 0), asst('a1', 1), user('u2', 2), asst('a2', 2, { status: 'streaming', content: '' })]
-    expect(tokens(rows)).toMatchObject({ a1: 'solo', a2: 'last solo' })
+  it('is the last one that draws its row of keys: while the next reply is on its way the row stays where it was', () => {
+    const rows = [user('u1', 0), asst('a1', 1), user('u2', 2), asst('a2', 2, { status: 'streaming', content: 'so far' })]
+    expect(tokens(rows)).toMatchObject({ a1: 'last solo', a2: 'solo' })
+    const done = [...rows.slice(0, 3), asst('a2', 2)]
+    expect(tokens(done)).toMatchObject({ a1: 'solo', a2: 'last solo' })
+  })
+  it('a run that failed has a retry row and no keys: the answer before it keeps them', () => {
+    const rows = [user('u1', 0), asst('a1', 1), user('u2', 2), asst('a2', 2, { status: 'error', error: 'boom', content: '' })]
+    expect(tokens(rows)).toMatchObject({ a1: 'last solo', a2: 'solo bare' })
+    // a stopped answer does draw them
+    const stopped = [user('u1', 0), asst('a1', 1), user('u2', 2), asst('a2', 2, { status: 'stopped', content: 'half' })]
+    expect(tokens(stopped)).toMatchObject({ a1: 'solo', a2: 'last solo' })
+    // nothing finished yet: no answer is the last one
+    expect(tokens([user('u1', 0), asst('a1', 0, { status: 'streaming', content: '' })]).a1).toBe('solo bare')
+  })
+})
+
+describe('an answer with nothing written', () => {
+  it('only tool cards or files, or stopped before a word: marked bare, so its row is never folded away', () => {
+    const rows = [
+      user('u1', 0),
+      asst('a1', 1, { content: '', toolEvents: [{ id: 't1' }] as UiMessage['toolEvents'] }),
+      user('u2', 2),
+      asst('a2', 3, { content: ' \n', status: 'stopped' }),
+      user('u3', 4),
+      asst('a3', 5),
+    ]
+    expect(tokens(rows)).toEqual({ u1: 'gap', a1: 'solo bare', u2: '', a2: 'solo bare', u3: '', a3: 'last solo' })
+  })
+  it('the user\'s own messages are never bare', () => {
+    expect(tokens([user('u1', 0, ''), asst('a1', 1)]).u1).toBe('gap')
   })
 })
 

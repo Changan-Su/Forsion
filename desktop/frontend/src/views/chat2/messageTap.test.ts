@@ -4,6 +4,7 @@ import { installNativeChromeHost } from '@lcl/engine'
 import { tapTarget } from './messageTap'
 
 const STREAM = `
+  <div class="mb-shell" id="shell" data-native-chrome="">
   <div class="t2-stream-inner">
     <div class="t2-userwrap" id="u1" data-quiet=""><div class="t2-user-col"><div class="t2-user"><span id="u1-text">question</span></div><div class="t2-actions"><button id="u1-copy">copy</button></div></div></div>
     <div class="t2-asst" id="a1" data-quiet="solo"><div class="t2-asst-col">
@@ -14,7 +15,8 @@ const STREAM = `
     <div class="t2-asst" id="a2" data-quiet="last solo"><div class="t2-asst-col"><div class="t2-content"><p id="a2-text">last answer</p></div></div></div>
     <div class="t2-asst" id="plain"><div class="t2-asst-col"><div class="t2-content"><p id="plain-text">a preview's message</p></div></div></div>
   </div>
-  <button id="outside">send</button>`
+  <button id="outside">send</button>
+  </div>`
 const $ = (id: string): HTMLElement => document.getElementById(id)!
 const tapped = (): string[] => [...document.querySelectorAll('[data-tapped]')].map((el) => el.id)
 /** A finger's tap: the press, then the click. */
@@ -88,8 +90,27 @@ describe('a tap on a message', () => {
     tap('u1-text')
     expect(tapped()).toEqual(['u1'])
   })
-  it('does nothing where no host draws the dock (desktop, web, a phone browser)', () => {
+  it('does nothing where no host draws the dock (desktop, the web drawer layout)', () => {
     off?.(); off = undefined
+    tap('a1-text')
+    expect(tapped()).toEqual([])
+  })
+  it('nor side by side (a tablet in landscape): nothing is folded away there, and the message that was showing is put back', () => {
+    tap('a1-text')
+    expect(tapped()).toEqual(['a1'])
+    $('shell').setAttribute('data-wide', '')
+    tap('u1-text')
+    expect(tapped()).toEqual([])
+    tap('a1-text')
+    expect(tapped()).toEqual([])
+    // back to one column: taps count again, and nothing is left open from before
+    $('shell').removeAttribute('data-wide')
+    expect(tapped()).toEqual([])
+    tap('a1-text')
+    expect(tapped()).toEqual(['a1'])
+  })
+  it('a shell without a host\'s dock around the message does not count either', () => {
+    $('shell').removeAttribute('data-native-chrome')
     tap('a1-text')
     expect(tapped()).toEqual([])
   })
