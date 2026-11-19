@@ -149,12 +149,14 @@ const MODELS = [
   { id: 'stage-model-b', name: 'Stage Model B', provider: 'Stage', source: 'forsion', modelType: 'llm' },
 ]
 
-// The phone's inbox is device-local (desktop/frontend/src/services/localInbox.ts): rows as the periodic pull stores them —
-// broadcasts from the server, so every sender is Forsion. One of each thing a row or the reader has to lay out: a
-// markdown body, a reward with claim conditions, a subject too long for the line. (The feedback conversation is not
-// offered on a phone — `feedbackThreadAvailable` — so a feedback notice is just a message here.)
-// The list groups mail by sender (2026-10-14), so one older, read system notice is here too: a second group, folded
-// because nothing in it is unread.
+// The phone's inbox is the account's cloud inbox (2026-11-12, ca809c648): the bundled Extend provides the channel
+// (`ctx.app.provideInboxChannel`) and reads `/brain/inbox/messages`; with that channel up the device-local list
+// (localInbox.ts, `tangu_inbox_msgs`) is not read any more. The rows below are what the server sends — broadcasts, so every
+// sender is Forsion (the server stamps each row server/forsion: on a phone the list is one sender group). One of each
+// thing a row or the reader has to lay out: a markdown body, a reward with claim conditions, a subject too long for the
+// line. (The feedback conversation is not offered on a phone — `feedbackThreadAvailable` — so a feedback notice is just a
+// message here.) The order of groups and "a group with nothing unread starts folded" are pinned by
+// desktop/frontend/src/views/inbox/inboxListSource.test.ts: a second sender cannot reach a phone's list.
 const utc = (ago) => new Date(T0 - ago).toISOString().slice(0, 19).replace('T', ' ')
 const mail = (id, title, body, ago, extra = {}) => ({
   id, title, body, sender_kind: 'server', sender_id: null, origin_broadcast_id: `b-${id}`, read_at: null, archived_at: null,
@@ -168,8 +170,47 @@ const INBOX = [
   mail('ib-3', '你的反馈有新回复', '关于「登录页验证码不显示」：已经定位到原因，下个版本修复。', DAY + 2 * HOUR, { read_at: utc(DAY) }),
   mail('ib-4', '会员即将到期', '你的 Plus 会员将在 7 天后到期，续费后权益不中断。', 4 * DAY, { read_at: utc(3 * DAY) }),
   mail('ib-5', 'A long English subject line that has to be cut somewhere before the edge of the screen', 'First sentence in English, also long enough that it has to be cut with an ellipsis on a phone.', 9 * DAY, { read_at: utc(8 * DAY) }),
-  mail('ib-6', '云端同步已恢复', '之前失败的 3 个文件已经补传。', 12 * DAY, { sender_kind: 'system', sender_id: 'sync', origin_broadcast_id: null, read_at: utc(11 * DAY) }),
 ]
+/** The account's cloud inbox as the server keeps it (server/microserver/brain-api/cloudInbox.ts): empty until a scene
+ *  seeds it (seedInbox), then read, archived and deleted through the same routes the channel calls. */
+const cloudInbox = { rows: [] }
+const toCloud = (m) => ({ ...m, id: `cloud:${m.id}`, origin_broadcast_id: m.id, sender_kind: 'server', sender_id: 'forsion', deleted_at: undefined })
+const nowUtc = () => new Date().toISOString().slice(0, 19).replace('T', ' ')
+/** GET/PATCH/DELETE/POST under /brain/inbox/messages, answered like the server: `all` = not archived, newest first,
+ *  ids `cloud:<broadcast id>`, an unread count whose revision moves with every change; a malformed filter or write is a
+ *  400 and an unknown id a 404, so a write the app gets wrong fails here as it would there. Returns [status, body], or
+ *  undefined for a route the server does not have. */
+function cloudInboxAnswer(method, p, query, body) {
+  const rows = cloudInbox.rows
+  const live = rows.filter((m) => !m.archived_at)
+  if (/\/brain\/inbox\/messages$/.test(p) && method === 'GET') {
+    const filter = query.get('filter') || 'all'
+    if (!['all', 'unread', 'archived'].includes(filter)) return [400, { detail: 'Invalid inbox filter' }]
+    const out = filter === 'archived' ? rows.filter((m) => m.archived_at) : filter === 'unread' ? live.filter((m) => !m.read_at) : live
+    return [200, { messages: [...out].sort((a, b) => b.created_at.localeCompare(a.created_at)), nextCursor: null }]
+  }
+  if (/\/brain\/inbox\/messages\/unread-count$/.test(p) && method === 'GET') {
+    const latest = [...live].sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+    return [200, { count: live.filter((m) => !m.read_at).length, latestId: latest?.id ?? null, latestCreatedAt: latest?.created_at ?? null, revision: rows.map((m) => `${m.id}:${m.read_at}:${m.archived_at}`).join('|') }]
+  }
+  if (/\/brain\/inbox\/messages\/read-all$/.test(p) && method === 'POST') { live.forEach((m) => { m.read_at = m.read_at || nowUtc() }); return [200, { ok: true }] }
+  const one = p.match(/\/brain\/inbox\/messages\/([^/]+)$/)
+  if (one && (method === 'PATCH' || method === 'DELETE')) {
+    const raw = decodeURIComponent(one[1])
+    if (!/^[0-9a-zA-Z-]{1,64}$/.test(raw)) return [400, { detail: 'Invalid message id' }]
+    const keys = Object.keys(body || {})
+    if (method === 'PATCH' && (!keys.length || keys.some((k) => !['read', 'archived'].includes(k) || typeof body[k] !== 'boolean'))) return [400, { detail: 'Expected read or archived booleans' }]
+    const row = rows.find((m) => m.id === `cloud:${raw}`)
+    if (!row) return [404, { detail: 'Message not found' }]
+    if (method === 'DELETE') cloudInbox.rows = rows.filter((m) => m !== row)
+    else {
+      if ('read' in body) row.read_at = body.read ? nowUtc() : null
+      if ('archived' in body) row.archived_at = body.archived ? nowUtc() : null
+    }
+    return [200, { ok: true }]
+  }
+  return undefined
+}
 /** Answers the API from the fixtures; anything it does not know is refused and listed at the end of the run. */
 async function stubApi(page, unknown) {
   const configs = Object.fromEntries(SESSIONS.map((s) => [s.id, { ...s.agent_config }]))
@@ -179,7 +220,7 @@ async function stubApi(page, unknown) {
     const p = url.pathname
     if (url.origin === new URL(URL_).origin && !/^\/(api|auth|account|shared|oauth|shop|pay|legal)(\/|$)/.test(p)) return route.continue()
     const m = req.method()
-    const json = (data) => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(data) })
+    const json = (data, status = 200) => route.fulfill({ status, contentType: 'application/json', headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify(data) })
     if (m === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': '*' } })
     if (p.endsWith('/auth/me')) return json({ username: 'stage', id: 'stage' })
     if (p.endsWith('/health')) return json({ ok: true, sandbox: 'stage' })
@@ -195,6 +236,12 @@ async function stubApi(page, unknown) {
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
     if (/\/market\/items$/.test(p)) return json({ items: [] })
     if (p.endsWith('/inbox/broadcasts')) return json({ broadcasts: [] })
+    if (/\/brain\/inbox\/messages(\/|$)/.test(p)) {
+      let body = {}
+      try { body = JSON.parse(req.postData() || '{}') } catch { body = null }
+      const answer = body === null ? [400, { detail: 'Invalid JSON' }] : cloudInboxAnswer(m, p, url.searchParams, body)
+      if (answer) return json(answer[1], answer[0])
+    }
     if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p)) return json({ checkpoints: [] })
     const cfg = p.match(/\/agent\/sessions\/([^/]+)\/config$/)
     if (cfg) {
@@ -269,17 +316,20 @@ async function seedNotes(page) {
   }, { storeUrl: moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'), recentUrl: moduleUrl('../desktop/frontend/src/recentViews.ts'), notes: NOTES, now: T0 })
 }
 
-/** The inbox rows go where the app keeps them on a phone (localStorage), then the store is asked to read them again. */
+/** The inbox rows go where a phone reads them from (the account's cloud inbox, through Extend's channel), then the store
+ *  is asked to read them again. Without that channel the phone would read its old device-local list instead: not this
+ *  app any more, so the scene stops there. */
 async function seedInbox(page, rows = INBOX) {
-  await page.evaluate(async ({ storeUrl, ntfUrl, rows }) => {
-    localStorage.setItem('tangu_inbox_msgs', JSON.stringify(rows))
+  cloudInbox.rows = rows.map(toCloud)
+  await page.evaluate(async ({ storeUrl, ntfUrl, channelUrl }) => {
+    if (!(await import(/* @vite-ignore */ channelUrl)).readInboxChannel()) throw new Error('no cloud inbox channel on this page: the bundled Extend did not provide it, so the phone reads its legacy local list')
     const { useInbox } = await import(/* @vite-ignore */ storeUrl)
     await useInbox.getState().refreshList()
     await useInbox.getState().refreshUnread()
     // rows that appear after the first poll count as new mail: the app puts a notification card up. Not what is looked at here.
     const { useNotifications } = await import(/* @vite-ignore */ ntfUrl)
     useNotifications.getState().dismissAll()
-  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows })
+  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), channelUrl: moduleUrl('../desktop/frontend/src/services/inboxChannel.ts') })
   await page.waitForTimeout(400)
 }
 
@@ -687,12 +737,14 @@ const SCENES = {
     const m = await page.evaluate((q) => {
       const root = document.querySelector(q)
       const takes = (el, dx, dy) => { el.scrollIntoView({ block: 'center' }); const b = el.getBoundingClientRect(); const at = document.elementFromPoint(b.left + b.width / 2 + dx, b.top + b.height / 2 + dy); return { ok: !!at && el.contains(at), h: b.height, w: b.width } }
-      const think = root.querySelector('.t2-think-head'); const copy = root.querySelector('.t2-asst .t2-content pre ~ .icon-btn')
-      return { think: think && [takes(think, 0, -22), takes(think, 0, 22)], copy: copy && [takes(copy, 0, 23), takes(copy, -23, 0)] }
+      // the thinking is the head of the answer's process row since 10-17 (b16e945ed): one row for thinking and tools
+      const heads = root.querySelectorAll('.t2-asst .tool-group-head'); const think = heads.length === 1 ? heads[0] : null
+      const copy = root.querySelector('.t2-asst .t2-content pre ~ .icon-btn')
+      return { heads: heads.length, think: think && [takes(think, 0, -22), takes(think, 0, 22)], copy: copy && [takes(copy, 0, 23), takes(copy, -23, 0)] }
     }, CHAT)
     const d = JSON.stringify(m)
     return [
-      ['the thinking row takes a touch 22 dp above and below its middle', !!m.think && m.think.every((x) => x.ok), d],
+      ['the thinking row (the process row\'s head) takes a touch 22 dp above and below its middle', !!m.think && m.think.every((x) => x.ok), d],
       ['the copy key of a code block takes a touch 23 dp below and beside its middle', !!m.copy && m.copy.every((x) => x.ok), d],
     ]
   },
@@ -1123,9 +1175,11 @@ const SCENES = {
   'agents-list': async (page) => {
     await stage.space(page, 'agents')
     const fab = await rect(page, `${LIST} .pl-fab`)
+    // the roster's rows top to bottom: "me" first (the human/ profile, named after the account — 905d5100b), then the agents
     const names = await texts(page, `${LIST} .agents-roster-item strong`)
+    const me = await texts(page, `${LIST} [data-roster-me] .agents-roster-item strong`)
     const link = await rect(page, `${LIST} .agents-roster-create`)
-    return [['Agents: the roster, and "create" is the main button (no link at the foot)', (await stage.nav(page)) === 'list' && names.length === 2 && !link && !!fab && near(fab.w, 58) && near(SCREEN.width - fab.right, 16) && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ names, link, fab })]]
+    return [['Agents: "me" on top, then the roster, and "create" is the main button (no link at the foot)', (await stage.nav(page)) === 'list' && names.join('|') === 'stage|研究员|编辑' && me.join('|') === 'stage' && !link && !!fab && near(fab.w, 58) && near(SCREEN.width - fab.right, 16) && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ names, me, link, fab })]]
   },
   // An agent's run settings on a touch screen (10-25 round 4 · 4.3): no native selects; the approval names are the composer's.
   'agent-config': async (page) => {
@@ -1201,20 +1255,20 @@ const SCENES = {
     const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.classList.contains('is-unread'), getComputedStyle(el.querySelector('.t2s-srow-title')).fontWeight].join(':')), ROW)
     const fab = await rect(page, `${LIST} .pl-fab`)
     const fabName = await page.evaluate((q) => document.querySelector(q)?.getAttribute('aria-label') || '', `${LIST} .pl-fab`)
-    // the folded sender opens on a tap and folds again on the next
-    await page.locator(HEAD, { hasText: '系统' }).tap(); await page.waitForTimeout(250)
-    const opened = `${await heads()} rows=${(await texts(page, `${ROW} .t2s-srow-title`)).length}`
-    await page.locator(HEAD, { hasText: '系统' }).tap(); await page.waitForTimeout(250)
+    // the sender's group folds on a tap and opens again on the next (the scenes after this one start from it open)
+    await page.locator(HEAD, { hasText: 'Forsion' }).tap(); await page.waitForTimeout(250)
     const folded = `${await heads()} rows=${(await texts(page, `${ROW} .t2s-srow-title`)).length}`
+    await page.locator(HEAD, { hasText: 'Forsion' }).tap(); await page.waitForTimeout(250)
+    const opened = `${await heads()} rows=${(await texts(page, `${ROW} .t2s-srow-title`)).length}`
     await page.screenshot({ path: path.join(OUT, `inbox-groups${DARK ? '-dark' : ''}.png`) })
     return [
       ['the inbox opens on a phone list: no toolbar, no filter menu, no row buttons; search is on the capsule', (await stage.nav(page)) === 'list' && !desk.length && !!st.search, `nav=${await stage.nav(page)} desktop parts=${desk.join(',') || 'none'} search=${st.search}`],
       ['its categories are chips: senders are groups now, not filters', chips.join('|') === '全部|未读|已归档', chips.join('|')],
-      ['mail is grouped by sender, the one who wrote last on top; a group with unread mail is open and says how many', headsAtFirst === 'Forsion:true:2 系统:false:', headsAtFirst],
+      ['mail is grouped by sender (on a phone all of it is Forsion\'s); a group with unread mail is open and says how many', headsAtFirst === 'Forsion:true:2', headsAtFirst],
       ['a group head is the workspace\'s first-level row at touch size: 52 dp on a 40 dp lead, 16 from the edge', !!head && near(head.h, 52) && !!headLead && near(headLead.w, 40) && near(headLead.h, 40) && near(headLead.x, 16), JSON.stringify({ head: head?.h, lead: headLead })],
       ['rows inside a group carry no icon block: the unread dot only, the title under the sender\'s name', subs.length === 5 && dots === 'dot,dot,empty,empty,empty' && !!title && !!headName && near(title.x, headName.x) && !!row && row.h >= 59 && row.h <= 68, JSON.stringify({ rows: subs.length, dots, title: title?.x, name: headName?.x, row: row?.h, lead: lead && [lead.w, lead.h] })],
       ['second line: the first sentence, on one line (the sender is on the head)', subs[0] === '这一版把收件箱翻新了一遍，列表里能直接看到正文的第一句。' && !!sub && sub.h < 24, `«${subs[0]}» ${JSON.stringify(sub)}`],
-      ['a tap on a folded group opens it, the next tap folds it', opened === 'Forsion:true:2 系统:true: rows=6' && folded === 'Forsion:true:2 系统:false: rows=5', `${opened} → ${folded}`],
+      ['a tap on a group\'s head folds it, the next tap opens it again', folded === 'Forsion:false:2 rows=0' && opened === 'Forsion:true:2 rows=5', `${folded} → ${opened}`],
       ['the time sits on the title\'s line; the second line runs the full width under it', !!sub && !!time && !!title && time.y < sub.y && near(sub.right, time.right) && sub.w > title.w + 40, JSON.stringify({ sub, time, title })],
       ['a title too long for the line is cut before the time', !!long && !!longTime && long.right <= longTime.x, JSON.stringify({ long, longTime })],
       ['unread rows carry a heavier title, read ones do not', unread.join() === 'true:650,true:650,false:500,false:500,false:500', unread.join()],
@@ -1222,34 +1276,39 @@ const SCENES = {
     ]
   },
   'inbox-swipe': async (page) => {
-    // the gesture itself is the browser's horizontal scroll: here it is scrolled, then the buttons are used
+    // the gesture itself (a pointer drag on the row's track, since 10-14 — dca6414cb) is pushed in as pointer events, as
+    // in tangu-swipe; then the buttons are used
     const ROW = `${LIST} .t2sw-plug-item .t2s-srow`
     const sw = `${LIST} .t2sw-plug-item .pl-swipe`
-    await page.evaluate((q) => { const el = document.querySelectorAll(q)[1]; el.scrollLeft = el.scrollWidth }, sw)
-    await page.waitForTimeout(350)
+    const rested = (q) => page.evaluate((s) => [...document.querySelectorAll(s)].every((el) => !el.hasAttribute('data-open') && ['none', 'matrix(1, 0, 0, 1, 0, 0)'].includes(getComputedStyle(el.firstElementChild).transform)), q)
+    await page.evaluate(([q, i]) => window.__swipeOpen(document.querySelectorAll(q)[i]), [sw, 1])
+    await page.waitForTimeout(700)
     const acts = await page.evaluate((q) => [...document.querySelectorAll(q)[1].querySelectorAll('.pl-swipe-act')].map((b) => { const r = b.getBoundingClientRect(); return { id: b.dataset.act, name: b.getAttribute('aria-label'), x: r.left, right: r.right, w: r.width, h: r.height, text: b.textContent.trim(), svg: !!b.querySelector('svg'), danger: b.classList.contains('danger') } }), sw)
     await page.screenshot({ path: path.join(OUT, `inbox-swipe-open${DARK ? '-dark' : ''}.png`) })
     await page.locator(`${sw} >> nth=1`).locator('[data-act="read"]').tap()
     await page.waitForTimeout(500)
     const unread = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.classList.contains('is-unread')), ROW)
-    const closed = await page.evaluate((q) => [...document.querySelectorAll(q)].every((el) => el.scrollLeft < 2), sw)
+    const closed = await rested(sw)
     await chip(page, 'g:unread')
     const onlyUnread = await texts(page, `${ROW} .t2s-srow-title`)
     await chip(page, '__all')
     // archive the last one: it leaves the list and turns up under its own chip
-    await page.evaluate((q) => { const el = document.querySelectorAll(q)[4]; el.scrollLeft = el.scrollWidth }, sw)
-    await page.waitForTimeout(350)
+    await page.evaluate(([q, i]) => window.__swipeOpen(document.querySelectorAll(q)[i]), [sw, 4])
+    await page.waitForTimeout(700)
     await page.locator(`${sw} >> nth=4`).locator('[data-act="archive"]').tap()
     await page.waitForTimeout(600)
     const left = (await texts(page, `${ROW} .t2s-srow-title`)).length
     await chip(page, 'g:archived')
     const archived = await texts(page, `${ROW} .t2s-srow-title`)
     await chip(page, '__all')
+    // both taps reached the account's inbox (the server's copy), not only the list on screen
+    const stored = cloudInbox.rows.map((m) => `${m.id.slice(6)}:${m.read_at ? 'read' : 'unread'}${m.archived_at ? ':archived' : ''}`).join()
     return [
       ['a row slides left onto mark read / archive / delete, all on screen', acts.map((a) => a.id).join(',') === 'read,archive,delete' && acts.every((a) => a.x >= 0 && a.right <= SCREEN.width), JSON.stringify(acts)],
       ['the actions are round 44 dp buttons with an icon only, each named for a screen reader; delete is the warning one', acts.every((a) => near(a.w, 44) && near(a.h, 44) && a.svg && !a.text && !!a.name) && acts.map((a) => a.name).join('|') === '标为已读|归档|删除' && acts[2]?.danger && !acts[0]?.danger, JSON.stringify(acts.map((a) => [a.name, a.w, a.danger]))],
       ['mark read: the row loses its unread mark, the tray closes, the unread chip lists one less', unread.join() === 'true,false,false,false,false' && closed && onlyUnread.join('|') === '2.13 更新了什么', `${unread.join()} closed=${closed} unread chip: ${onlyUnread.join('|')}`],
       ['archive: the row leaves the list and is found under the archived chip', left === 4 && archived.length === 1 && archived[0].startsWith('A long English'), `left=${left} archived=${archived.join('|')}`],
+      ['both changes are written to the account\'s cloud inbox', stored === 'ib-1:unread,ib-2:read,ib-3:read,ib-4:read,ib-5:read:archived', stored],
     ]
   },
   'inbox-search': async (page) => {
@@ -1499,11 +1558,13 @@ const SCENES = {
     await stage.space(page, 'home')
     const day = new Date(T0 + DAY)
     const at = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}T14:00`
-    await page.evaluate(async ([prefs, schedule, inbox, when]) => {
+    await page.evaluate(async ([prefs, schedule, when]) => {
       ;(await import(/* @vite-ignore */ prefs)).useAmadeusPrefs.setState({ recents: ['项目/发版清单 2.13.md'] })
       ;(await import(/* @vite-ignore */ schedule)).useAgentSchedules.setState({ loaded: true, ok: true, schedules: [{ slug: 'researcher', name: '研究员', db: { columns: [{ id: 'name', name: '名称', type: 'text' }, { id: 'when', name: '时间', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { name: '周会', when } }] } }] })
-      ;(await import(/* @vite-ignore */ inbox)).useInbox.setState({ unreadCount: 2 })
-    }, [moduleUrl('../desktop/frontend/src/amadeusPrefs.ts'), moduleUrl('../desktop/frontend/src/stores/agentScheduleStore.ts'), moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), at])
+    }, [moduleUrl('../desktop/frontend/src/amadeusPrefs.ts'), moduleUrl('../desktop/frontend/src/stores/agentScheduleStore.ts'), at])
+    // two unread letters in the account's inbox (the fixture as first seeded), read back the way the app reads them: a
+    // count set straight into the store would be overwritten by the next poll, which gets real answers from the stub
+    await seedInbox(page)
     await page.waitForTimeout(600)
     const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.dataset.spaceId || el.dataset.fixedId, el.querySelector('.hp-card-status').textContent]), '.mb-view[data-view="homepage"] .hp-card')
     const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
@@ -1572,6 +1633,7 @@ async function main() {
   const stop = () => { if (vite && !process.env.KEEP) { try { process.kill(-vite.pid, 'SIGTERM') } catch { /* gone */ } } }
   let browser = null
   const fails = []
+  const unknown = new Set()
   try {
     for (let i = 0; i < 120 && !(await ping()); i++) await new Promise((r) => setTimeout(r, 500))
     if (!(await ping())) throw new Error(`vite dev did not come up\n${viteErr.slice(-600)}`)
@@ -1604,7 +1666,6 @@ async function main() {
       const first = page; page = await ctx.newPage(); await first.close()
     }
     if (!(await page.evaluate(() => navigator.maxTouchPoints))) throw new Error('stage: the browser gave this page no touch emulation (maxTouchPoints=0); the sizes below cannot be trusted')
-    const unknown = new Set()
     await stubApi(page, unknown)
     page.on('pageerror', (e) => fails.push(`uncaught: ${e.message}`))
     page.on('request', (r) => { const u = new URL(r.url()); if (/\.(tsx?|jsx?)$/.test(u.pathname)) loaded.set(u.pathname, u.pathname + u.search) })
@@ -1618,20 +1679,24 @@ async function main() {
 
     for (const [name, go] of Object.entries(SCENES)) {
       if (ONLY.length && !ONLY.includes(name)) continue
-      const rows = await go(page)
+      // a scene that throws is one red row, not the end of the run: the scenes after it still report (they start from
+      // wherever it left the page, so read the first red first). Until 11-19 a throw here hid every later scene.
+      let rows
+      try { rows = await go(page) } catch (e) { rows = [['the scene ran to its end', false, String(e && e.message || e).split('\n').slice(0, 3).join(' ')]] }
       await page.waitForTimeout(600)
       const file = path.join(OUT, `${name}${DARK ? '-dark' : ''}.png`)
-      await page.screenshot({ path: file })
+      await page.screenshot({ path: file }).catch((e) => rows.push(['its screenshot was taken', false, String(e && e.message || e).split('\n')[0]]))
       console.log(`── ${name} → ${path.relative(ROOT, file)}`)
       for (const [what, ok, detail] of rows) {
         console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}${detail ? '  | ' + detail : ''}`)
         if (!ok) fails.push(`${name}: ${what} | ${detail}`)
       }
     }
-    if (unknown.size) console.log(`unanswered API calls (refused):\n  ${[...unknown].sort().join('\n  ')}`)
   } catch (e) {
     fails.push(String(e && e.stack || e))
   } finally {
+    // printed on an aborted run too: an API the stub does not answer is often why a scene is red
+    if (unknown.size) console.log(`unanswered API calls (refused):\n  ${[...unknown].sort().join('\n  ')}`)
     await browser?.close().catch(() => {})
     stop()
   }
