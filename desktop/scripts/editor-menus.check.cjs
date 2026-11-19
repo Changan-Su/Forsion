@@ -493,7 +493,7 @@ async function main() {
         check('B10d 键盘打开:块已选上、焦点进菜单首项', open && st.inMenu && st.sel === 'node', JSON.stringify(st))
         await page.keyboard.press('Escape')
       }
-      // B10e「转换为 ›」(c2):12 项不再平铺;悬停那一行 → 右侧拉出子菜单,行尾灰字 = 当前类型,子菜单里同一项打勾。
+      // B10e「转换为 ›」(c2):13 项(11-18 #756 加了「版块」)不再平铺;悬停那一行 → 右侧拉出子菜单,行尾灰字 = 当前类型,子菜单里同一项打勾。
       {
         await load(page, SEED)
         const open = await openHandleMenu(page, '段乙')
@@ -505,9 +505,9 @@ async function main() {
           const s = document.querySelector('.unified-block-submenu')
           const r = s?.getBoundingClientRect()
           return { tail: document.querySelector('.unified-block-menu [data-sub] .ubm-sub-tail')?.textContent.trim(), checked: s?.querySelector('[aria-checked="true"]')?.textContent.trim(),
-            items: s ? s.querySelectorAll('button').length : 0, side: r ? r.left >= m.right - 1 || r.right <= m.left + 1 : false, menuH: Math.round(m.height) }
+            items: s ? s.querySelectorAll('button').length : 0, section: s ? [...s.querySelectorAll('button')].some((x) => x.textContent.trim().includes('版块')) : false, side: r ? r.left >= m.right - 1 || r.right <= m.left + 1 : false, menuH: Math.round(m.height) }
         })
-        check('B10e 转换为收进子菜单:块菜单里不再平铺,悬停拉出 12 项(含卡片),当前类型「正文」打勾、并排不压住本菜单', open && !flat && sub && g.tail === '正文' && g.checked === '正文' && g.items === 12 && g.side, JSON.stringify({ flat, sub, ...g }))
+        check('B10e 转换为收进子菜单:块菜单里不再平铺,悬停拉出 13 项(含卡片、版块),当前类型「正文」打勾、并排不压住本菜单', open && !flat && sub && g.tail === '正文' && g.checked === '正文' && g.items === 13 && g.section && g.side, JSON.stringify({ flat, sub, ...g }))
         await page.keyboard.press('Escape')
       }
       // B10h 行尾当前类型认得出标题 / 待办 / 引用(blockKindOf 在真 schema 上的判定;标注 / 代码块的 rectOf 定位不到首行,未覆盖)。
