@@ -7,6 +7,8 @@ import { fuzzyRank } from './fuzzy'
 import { label } from './types'
 import { useEngineI18n } from './i18nSeam'
 import { isImeKeyEvent } from './ime'
+import { useNativeChromeSpaces } from './nativeChrome'
+import { useWorkspace } from './singleColumnStore'
 
 export function CommandPalette() {
   const { t } = useEngineI18n()
@@ -18,6 +20,11 @@ export function CommandPalette() {
   const [active, setActive] = useState(0)
   const overlayRef = useRef<HTMLDivElement>(null)
   useExitGhost(overlayRef, open)
+  // 手机(原生底栏、竖屏的两级导航)上没有键盘可按:行尾的快捷键与底部的按键说明都不画,只留条数(手机走查 2026-11-19)。
+  // 桌面、横屏 / 平板的宽屏、网页的抽屉形态照旧。
+  const drawsSpaces = useNativeChromeSpaces()
+  const wide = useWorkspace((s) => s.wideMode)
+  const keys = !(drawsSpaces && !wide)
 
   useEffect(() => {
     if (open) {
@@ -88,15 +95,15 @@ export function CommandPalette() {
                 {label(c.title)}
               </span>
               {/* 生效键(用户改绑 / 解绑都跟)按平台格式化:原样打 c.hotkey 会露出「mod+n」这种存储串 */}
-              {commandHotkeyText(c.id) && <kbd className="cmd-hotkey" title={pairHint(effectiveHotkey(c))}>{commandHotkeyText(c.id)}</kbd>}
+              {keys && commandHotkeyText(c.id) && <kbd className="cmd-hotkey" title={pairHint(effectiveHotkey(c))}>{commandHotkeyText(c.id)}</kbd>}
             </button>
           ))}
           {results.length === 0 && <div className="cmd-empty">{t('command.empty')}</div>}
         </div>
         <div className="cmd-foot">
-          <span>
+          {keys && <span>
             <kbd>↑↓</kbd> {t('command.select')} <kbd>↵</kbd> {t('command.run')} <kbd>Esc</kbd> {t('common.close')}
-          </span>
+          </span>}
           <span className="cmd-foot-count">{t('command.count', { count: results.length })}</span>
         </div>
       </div>

@@ -529,6 +529,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   color: var(--text-muted);
 }
 .cmd-foot kbd { margin: 0 1px; }
+.cmd-foot-count { margin-left: auto; } /* 手机上没有按键说明那一段时,条数照旧靠右 */
 
 /* ===== Dockview 的 LCL 皮肤:把 --dv-* 别名到 LCL token(叠在 dockview-theme-light|dark 之上) ===== */
 .dockview-theme-lcl {

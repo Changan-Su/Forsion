@@ -3039,6 +3039,44 @@ const tabCountText = (list) => {
     } finally { if (side !== 'local') await switchVault(side) }
   })
 
+  // The editor's own capsule ⋯ (walk 2026-11-19, e): its press keeps the editor's focus, so with the keyboard up the
+  // sheet came up under it, the lower rows behind the keys. ⋯ now puts the keyboard away before the sheet opens.
+  // The browser stage (`note-more-keyboard`) can only shrink its viewport; the real keyboard is here.
+  await check('note editor ⋯ with the keyboard up: the keyboard goes away and the sheet rows are above the screen bottom', async () => {
+    await toSpace('amadeus')
+    const side = await cdp.eval('window.amadeusVaultMode.side')
+    if (side !== 'local') await switchVault('local')
+    let made = ''
+    try {
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list' && !!document.querySelector('.mb-drawer--left [data-act="list-fab"]')`, 8000), 'no main button on the notes list')
+      await tapEl(`document.querySelector('.mb-drawer--left [data-act="list-fab"]')`)
+      assert.ok(await h.waitPage(cdp, `${nav} === 'detail' && !!document.querySelector('.mb-main .amx-mbar')`, 8000), 'the main button did not open a new note with its capsule')
+      await h.pause(900)
+      made = await cdp.eval("document.querySelector('.mb-main .amx-title-input')?.value || ''")
+      await tapEl("document.querySelector('.mb-main .ProseMirror')")
+      assert.ok(await h.waitPage(cdp, "!!document.activeElement?.closest?.('.mb-main .ProseMirror')", 4000), 'a tap on the body did not put the caret in the note')
+      for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(150)
+      assert.ok(imeShown(), 'no keyboard with the caret in the note')
+      shot('03q-note-keyboard')
+      await tapEl("document.querySelector('.mb-main .amx-mbar button[title=\"更多操作\"]')")
+      assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-sheet')", 4000), 'the capsule ⋯ opened no sheet')
+      for (let i = 0; i < 20 && imeShown(); i++) await h.pause(150)
+      await h.pause(500) // the sheet's slide-in, the page growing back
+      const look = await cdp.eval(`(() => { const s = document.querySelector('.mb-sheet'); const r = s.getBoundingClientRect(); const rows = [...s.querySelectorAll('.mb-sheet-row')]
+        return { caret: !!document.activeElement?.closest?.('.ProseMirror'), rows: rows.length, seen: rows.filter((x) => { const q = x.getBoundingClientRect(); return q.top >= r.top - 1 && q.bottom <= Math.min(r.bottom, innerHeight) + 1 }).length } })()`)
+      shot('03r-note-more-no-keyboard')
+      assert.ok(!imeShown() && !look.caret, `the keyboard stayed up under the sheet (${JSON.stringify({ ime: imeShown(), ...look })})`)
+      assert.ok(look.seen >= 8, `few of the sheet's rows are in sight (${JSON.stringify(look)})`)
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-sheet')", 4000), 'system Back did not close the sheet')
+    } finally {
+      if (imeShown()) { h.key(4); await h.pause(500) }
+      if (await cdp.eval(`${nav} === 'detail'`)) { await tapId('nativeChrome.left').catch(() => {}); await h.pause(800) }
+      if (/^(untitled|未命名)/i.test(made)) await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(`${made}.md`)}).then(() => true, () => true)`).catch(() => {})
+      if (side !== 'local') await switchVault(side)
+    }
+  })
+
   // The inbox is a host list source, and on the phone a flat list source is drawn as the phone's own list (2026-10-13):
   // category chips, icon buttons behind a left swipe, one main button. Since 2026-10-14 the mail is grouped by sender:
   // a group head (the workspace's first-level row, 52 dp on a 40 dp lead) and under it rows that carry no icon block,
@@ -4279,6 +4317,26 @@ const tabCountText = (list) => {
     const closeTabs = await tabsSheet()
     shot('08-tabs-sheet-dark')
     await closeTabs()
+  })
+
+  // The command panel from the avatar menu (walk 2026-11-19, f): its field took focus while the native sheet was still
+  // on screen over the WebView, so no keyboard came; a phone also has no keys for the shortcut chips. Now the field is
+  // focused again once the sheet is gone (`forsion:native-sheet-gone`), and the chips / key legend are not drawn.
+  await check('command panel from the avatar: the keyboard comes up with it; no shortcut chips or key legend', async () => {
+    await goHome()
+    if (imeShown()) { h.key(4); await h.pause(600) }
+    await openPalette()
+    for (let i = 0; i < 25 && !imeShown(); i++) await h.pause(150)
+    const look = await cdp.eval("({ focus: document.activeElement?.classList.contains('cmd-input') || false, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, rows: document.querySelectorAll('.cmd-panel .cmd-item').length })")
+    shot('05b-palette-keyboard')
+    try {
+      assert.ok(imeShown(), `no keyboard with the command panel open (${JSON.stringify(look)})`)
+      assert.ok(look.focus, `the command panel's field does not have the focus (${JSON.stringify(look)})`)
+      assert.ok(look.rows > 5 && look.chips === 0 && look.keys === 0, `shortcut chips / key legend on a phone (${JSON.stringify(look)})`)
+    } finally {
+      if (imeShown()) { h.key(4); await h.pause(700) }
+      if (await cdp.eval("!!document.querySelector('.cmd-input')")) { h.key(4); await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000) }
+    }
   })
 
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {

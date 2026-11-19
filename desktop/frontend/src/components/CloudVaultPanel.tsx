@@ -3,6 +3,7 @@
  * 共享和发布的管理都在「共享与发布」总览页,每页的成员和链接在分享卡片(ShareCard)里。
  */
 import React, { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { X, FolderOpen, Check } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 
@@ -25,7 +26,9 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
 
   if (!collab) return null
 
-  return (
+  // 挂到 body 下:它是整屏遮罩,留在笔记列表里会再吃一层列表抽屉的 zoom(手机上抽屉体与 body 各 1.15),
+  // 卡片被放大到比屏幕还宽、关闭钮出屏(手机走查 2026-11-19)。React 事件照旧沿组件树冒泡。
+  return createPortal(
     <div className="amxc-overlay" onClick={onClose}>
       <div className="amxc-panel" onClick={(e) => e.stopPropagation()}>
         <div className="amxc-head">
@@ -42,6 +45,7 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
           </button>
         ))}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
