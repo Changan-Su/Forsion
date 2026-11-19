@@ -218,6 +218,12 @@ export function MobileRoot() {
   useBootstrap()
   useAndroidBack()
   useBrowserBack()
+  // 整页(设置 / 商店 / 反馈 / 成就)盖上来时,底下那一面开着的页内查找条跟着收:它的层级比整页高,留着就浮在整页上面,
+  // 找的却是被盖住的那一面,返回键还得先经过整页自己的层级才轮到它。
+  useEffect(() => useApp.subscribe((s, prev) => {
+    const up = (x: typeof s): boolean => x.settingsOpen || x.marketOpen || x.feedbackOpen || x.achievementsOpen
+    if (up(s) && !up(prev) && useFind.getState().open) closeFindBar()
+  }), [])
   // 通知事件接线(幂等)。三段里 A(amadeusSync)/B(remoteSync)在移动端是可选链 no-op,真正生效的是
   // C:后台会话跑完 → 右上角通知。此前只挂了 NotificationHost 外壳没接线,设置里的「通知」页
   // 一直在管一个永不触发的东西。desktop 在 Root 里装,移动端走本文件 → 必须自己装一份。
