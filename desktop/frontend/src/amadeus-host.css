@@ -709,6 +709,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .wiki-inline-img-wrap > .amx-img-tb:focus-within { opacity: 1; pointer-events: auto; }
 .am-app .wiki-inline-img-wrap[data-resizing] > .amx-img-tb { opacity: 0; pointer-events: none; }
 .am-app .wiki-inline-img-wrap[data-src-open] > .amx-img-tb { display: none; }
+/* 块拖拽进行中(blockLayer beginBlockDrag 打的 data-dragging,⠿ 与图片本体两个起拖口都打)收起工具条、不接指针。
+   原生拖拽期间 Chromium 把 :hover 冻在起拖那一刻:从图片本体起拖,工具条整场都亮着,挪到图片上方时(data-tb-out)
+   正好盖住上一段的上沿 —— 落点落在工具条上,编辑器收不到 dragover / drop,图拖不动(check:coldrag R24)。 */
+.am-app .ProseMirror[data-dragging='true'] .wiki-inline-img-wrap > .amx-img-tb { opacity: 0; pointer-events: none; }
 .am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb { top: auto; bottom: calc(100% - var(--amx-img-top, 0px) + 6px); }
 /* 挪到上方时工具条和图片之间有 6px 缝:指针从图片往上挪,经过缝那一下包裹层就不算 :hover 了,工具条当场收起、点击落到底下
    (画布舞台上实测)。工具条下沿垫一条透明的桥盖住这道缝 —— 桥是工具条的子元素,压在上面时包裹层仍算悬停。 */
