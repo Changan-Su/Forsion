@@ -10,10 +10,31 @@
  *     只能 xattr 去隔离);带一个 ad-hoc 签名后会降级为「未识别开发者」——用户即可在
  *     系统设置 → 隐私与安全性 里点「仍要打开」。彻底无提示仍需 Developer ID + 公证(notarize)。
  *     配合 package.json 的 build.mac.identity=null(electron-builder 跳过自身签名,签名全交本钩子)。
+ *     有 Developer ID 时(CSC_LINK / CSC_NAME,见 electron-builder.config.cjs)这一步照做:后面的 ⑤ 要在 arm64 上
+ *     真跑打包产物,得先有签名;electron-builder 在 afterPack 之后用 Developer ID + hardened runtime 逐个重签并公证,
+ *     ad-hoc 签名被整体覆盖,不会留在发出去的包里。
  */
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { assertPackagedRuntime } = require('./runtime-policy.cjs');
+
+/** 删除 root 下所有目标不存在的软链接(不跟随链接进目录),返回被删的路径。 */
+function removeDanglingSymlinks(root) {
+  const fs = require('node:fs');
+  const removed = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!fs.existsSync(p)) { fs.unlinkSync(p); removed.push(p); }
+      } else if (entry.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(root);
+  return removed;
+}
 
 exports.default = async function afterPack(context) {
   const { appOutDir, packager, electronPlatformName, arch } = context;
@@ -109,6 +130,11 @@ exports.default = async function afterPack(context) {
   //    且 --deep 才能把重建后的 .node 一并签上)。无 Developer ID → Gatekeeper 显「未识别开发者/仍要打开」。
   if (electronPlatformName === 'darwin') {
     const appPath = path.join(appOutDir, `${packager.appInfo.productFilename}.app`);
+    // 悬空软链接:依赖过滤丢掉了包本体、node_modules/.bin 里指向它的链接还在(如 tangu-server 的 .bin/esbuild)。
+    // 它们本就指向不存在的东西,删掉不改变任何行为;不删的话 Developer ID 签名(@electron/osx-sign 遍历时对每项
+    // fs.stat,在 signIgnore 之前)直接 ENOENT 退出。
+    const dangling = removeDanglingSymlinks(appPath);
+    if (dangling.length) console.log(`[afterPack] 删除 ${dangling.length} 个悬空软链接:${dangling.slice(0, 5).map((p) => path.relative(appPath, p)).join(', ')}${dangling.length > 5 ? ' …' : ''}`);
     console.log(`[afterPack] codesign ad-hoc(--force --deep --sign -)→ ${appPath}`);
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
     console.log('[afterPack] ad-hoc 签名完成');

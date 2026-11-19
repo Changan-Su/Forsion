@@ -23,6 +23,7 @@
  * Finding a cause (each prints to the console, artefacts under OUT):
  *   MODE=trace [RATE=4] [ROW=2]   devtools.timeline trace → what every long task after the input was made of
  *                                 (TRACE_CATS=accessibility,cc adds categories to the saved trace-*.json, for reading by hand)
+ *   MODE=profile ONLY=open RATE=4  sampling profile of the first open, before any chat has been loaded
  *   MODE=profile                  CPU profiles of the slow gestures + the restyle cost of single mutations
  *   MODE=land [MSGS=short]        does the view stay at the bottom while a long chat mounts in batches? (frame by frame)
  *   MODE=exp EXP=<file.cjs>       your own measurements: a module exporting [{ label, js, n?, noForce?, poll? }]; each
@@ -32,29 +33,63 @@
  *                                 pin an attribute — to tell which line of a change costs what
  */
 const h = require('./lib/emu-cdp.cjs')
+const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const PKG = process.env.PKG || 'com.forsion.tangu'
 const ACTIVITY = `${PKG}/com.forsion.tangu.AppActivity`
+const TEST_ORIGIN = process.env.PERF_TEST_ORIGIN
+if (TEST_ORIGIN && (PKG !== 'com.forsion.tangu.phonefirstopen' || !/^https:\/\/[a-z0-9.-]+\.invalid$/.test(TEST_ORIGIN))) {
+  throw new Error('PERF_TEST_ORIGIN requires the isolated com.forsion.tangu.phonefirstopen APK and an HTTPS .invalid origin')
+}
 const OUT = path.resolve(process.env.OUT || path.join(__dirname, '../outputs/perf-emu'))
 const RATES = (process.env.RATES || '1,4').split(',').map(Number)
 const REPS = Number(process.env.REPS || 3)
 const ONLY = (process.env.ONLY || 'open,scroll,drag,back,list,space').split(',').filter(Boolean)
+const FIRST_OPEN_ONLY = ONLY.length === 1 && ONLY[0] === 'open'
+const load = () => os.loadavg()[0]
+async function measurementLoad(label) {
+  if (!TEST_ORIGIN) return load()
+  for (let waits = 0; waits <= 4; waits++) {
+    const before = load()
+    console.log(`${label} · ${execFileSync('uptime', { encoding: 'utf8', timeout: 3000 }).trim()}`)
+    if (before <= 6) return before
+    if (waits < 4) await h.pause(60000)
+  }
+  throw new Error(`${label}: host load stayed above 6 for four minutes`)
+}
+function watchLoad(before) {
+  let peak = Math.max(before, load())
+  const timer = setInterval(() => { peak = Math.max(peak, load()) }, 500)
+  timer.unref()
+  return () => {
+    clearInterval(timer)
+    const after = load()
+    return { loadBefore: before, load: after, loadPeak: Math.max(peak, after) }
+  }
+}
 fs.mkdirSync(OUT, { recursive: true })
 
 const T0 = Date.now()
 const iso = (ago) => new Date(T0 - ago).toISOString()
 const sessions = Array.from({ length: 60 }, (_, i) => ({ id: `perf-s${i}`, title: `Perf session ${i} — a title long enough to wrap or clip`, summary: 'Last line of the conversation shown under the title', model_id: null, archived: false, emoji: null,
   agent_config: { execMode: 'host', approvalMode: 'auto-edit' }, project_path: null, project_name: null, projectless: true, created_at: iso(i * 3600e3 + 6e4), updated_at: iso(i * 3600e3 + 6e4) }))
-const REPLY = (i) => `## Section ${i}\n\nA paragraph of ordinary prose with **bold**, *emphasis*, \`inline code\` and a [link](https://example.com). It runs long enough to wrap over several lines on a phone, the way a real answer does when the model explains what it did and why.\n\n- first point with some detail\n- second point, a little longer than the first one\n  - a nested point\n- third point\n\n\`\`\`ts\nexport function sum(xs: number[]): number {\n  let total = 0\n  for (const x of xs) total += x\n  return total\n}\n\`\`\`\n\n| Name | Value | Note |\n|---|---|---|\n| alpha | 1 | first row |\n| beta | 2 | second row |\n| gamma | 3 | third row |\n\n1. step one\n2. step two\n3. step three\n\n> A quoted remark to close section ${i}.`
+const REPLY = (i, sessionId) => `## Section ${i}\n\nA paragraph of ordinary prose with **bold**, *emphasis*, \`inline code\` and a [link](https://example.com). It runs long enough to wrap over several lines on a phone, the way a real answer does when the model explains what it did and why.\n\n- first point with some detail\n- second point, a little longer than the first one\n  - a nested point\n- third point\n\n\`\`\`ts\nexport function sum(xs: number[]): number {\n  let total = 0\n  for (const x of xs) total += x\n  return total\n}\n\`\`\`\n\n| Name | Value | Note |\n|---|---|---|\n| alpha | 1 | first row |\n| beta | 2 | second row |\n| gamma | 3 | third row |\n\n1. step one\n2. step two\n3. step three\n\n> A quoted remark to close section ${i} of ${sessionId}.`
 const SHORT = process.env.MSGS === 'short'
-const messages = Array.from({ length: 60 }, (_, i) => ({ id: `perf-m${i}`, role: i % 2 ? 'model' : 'user', content: SHORT ? (i % 2 ? `ok ${i}` : `q ${i}`) : i % 2 ? REPLY(i) : `Question ${i}: please explain the thing in some detail, with an example.`, reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - (60 - i) * 6e4, model_id: null, is_error: false }))
+const MESSAGE_COUNT = 60
+const LAST_MESSAGE = `.mb-main .t2-stream [id^="tocmsg-perf-s"][id$="-m${MESSAGE_COUNT - 1}"]`
+const messagesFor = (sessionId) => Array.from({ length: MESSAGE_COUNT }, (_, i) => ({ id: `${sessionId}-m${i}`, role: i % 2 ? 'model' : 'user', content: SHORT ? (i % 2 ? `ok ${i}` : `q ${i}`) : i % 2 ? REPLY(i, sessionId) : `Question ${i}: please explain the thing in some detail, with an example.`, reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - (MESSAGE_COUNT - i) * 6e4, model_id: null, is_error: false }))
 // MODELS_N=60: a catalog the size a real account has (the model key's menu carries every one of them)
 const MODELS = Array.from({ length: Number(process.env.MODELS_N || 1) }, (_, i) => ({ id: i ? `perf-model-${i}` : 'perf-model', name: i ? `Perf Model ${i}` : 'Perf Model', provider: `E2E ${i % 6}`, source: 'forsion', modelType: 'llm' }))
 
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url); const p = url.pathname; const m = ev.request.method
+    const send = (method, params = {}) => cdp.send(method, { requestId: ev.requestId, ...params }).catch(() => {})
+    if (TEST_ORIGIN && url.origin !== TEST_ORIGIN) {
+      return url.origin === 'https://localhost' ? send('Fetch.continueRequest') : send('Fetch.failRequest', { errorReason: 'ConnectionRefused' })
+    }
     const json = (data) => cdp.send('Fetch.fulfillRequest', { requestId: ev.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' }], body: Buffer.from(JSON.stringify(data)).toString('base64') }).catch(() => {})
     if (m === 'OPTIONS') return cdp.send('Fetch.fulfillRequest', { requestId: ev.requestId, responseCode: 204, responseHeaders: [{ name: 'Access-Control-Allow-Origin', value: '*' }, { name: 'Access-Control-Allow-Headers', value: '*' }, { name: 'Access-Control-Allow-Methods', value: '*' }] }).catch(() => {})
     if (p.endsWith('/auth/me')) return json({ username: 'perf', id: 'perf' })
@@ -68,10 +103,12 @@ function installStub(cdp) {
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
     if (/\/agent\/sessions\/[^/]+\/checkpoints$/.test(p)) return json({ checkpoints: [] })
     if (/\/agent\/sessions\/[^/]+\/config$/.test(p)) return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } })
-    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages })
+    const history = p.match(/\/agent\/sessions\/(perf-s\d+)\/messages$/)
+    if (history) return json({ messages: messagesFor(history[1]) })
     return cdp.send('Fetch.failRequest', { requestId: ev.requestId, errorReason: 'ConnectionRefused' }).catch(() => {})
   })
-  return cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*api.forsion.net*', requestStage: 'Request' }] })
+  return cdp.send('Fetch.enable', { patterns: (TEST_ORIGIN ? ['http://*', 'https://*'] : ['*api.forsion.net*'])
+    .map((urlPattern) => ({ urlPattern, requestStage: 'Request' })) })
 }
 
 const KIT = `(() => {
@@ -81,17 +118,51 @@ const KIT = `(() => {
   const r1 = (n) => Math.round(n * 10) / 10
   const tick = (t) => { if (!P.on) return; if (last) P.frames.push([r1(t), r1(t - last)]); last = t; requestAnimationFrame(tick) }
   const mark = (why, t) => { if (P.on) P.marks.push({ why, t: r1(t ?? performance.now()) }) }
+  const observeTranscript = (selector, onArrival) => {
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector(selector)) return
+      observer.disconnect()
+      onArrival()
+    })
+    observer.observe(document.querySelector('.mb-body'), { childList: true, subtree: true })
+    return observer
+  }
   P.mark = mark
-  P.start = () => {
+  P.start = (transcriptSelector = '') => {
     P.frames = []; P.loaf = []; P.ev = []; P.marks = []; P.on = true; last = 0
     const sh = document.querySelector('.mb-shell')
     if (P.mo) P.mo.disconnect()
     if (sh) { P.mo = new MutationObserver((l) => { for (const m of l) mark(m.attributeName + '=' + (sh.getAttribute(m.attributeName) ?? '')) }); P.mo.observe(sh, { attributes: true, attributeFilter: ['data-space', 'data-nav'] }) }
     // the Space push (spaceTransition.ts) holds <html data-space-switch> from its start to its end
     if (!P.mo2) { const de = document.documentElement; P.mo2 = new MutationObserver((l) => { for (const m of l) mark('vt=' + (de.getAttribute('data-space-switch') ?? '')) }); P.mo2.observe(de, { attributes: true, attributeFilter: ['data-space-switch'] }) }
+    if (transcriptSelector && !document.querySelector(transcriptSelector)) {
+      P.transcript = observeTranscript(transcriptSelector, () => mark('transcript'))
+    }
     requestAnimationFrame(tick); return performance.now()
   }
-  P.stop = () => { P.on = false; return { now: performance.now(), marks: P.marks, frames: P.frames, loaf: P.loaf, ev: P.ev, noLoaf: P.noLoaf, noEv: P.noEv } }
+  P.stop = () => { P.on = false; P.transcript?.disconnect(); return { now: performance.now(), marks: P.marks, frames: P.frames, loaf: P.loaf, ev: P.ev, noLoaf: P.noLoaf, noEv: P.noEv } }
+  P.armOpenTrace = (selector) => {
+    const shell = document.querySelector('.mb-shell')
+    const nav = new MutationObserver(() => {
+      if (shell.dataset.nav !== 'detail') return
+      performance.mark('probe-detail')
+      nav.disconnect()
+    })
+    nav.observe(shell, { attributes: true, attributeFilter: ['data-nav'] })
+    const transcript = observeTranscript(selector, () => performance.mark('probe-transcript'))
+    const transition = (event) => {
+      if (event.propertyName !== 'transform' || !event.target.matches('.mb-body > .mb-main')) return
+      performance.mark(event.type === 'transitionrun' ? 'probe-slide-start' : 'probe-slide-end')
+    }
+    addEventListener('transitionrun', transition, true)
+    addEventListener('transitionend', transition, true)
+    P.disarmOpenTrace = () => {
+      nav.disconnect()
+      transcript.disconnect()
+      removeEventListener('transitionrun', transition, true)
+      removeEventListener('transitionend', transition, true)
+    }
+  }
   addEventListener('touchstart', (e) => mark('touchstart', e.timeStamp), { capture: true, passive: true })
   addEventListener('touchend', (e) => mark('touchend', e.timeStamp), { capture: true, passive: true })
   addEventListener('forsion:mobile-back', () => mark('back'), true)
@@ -116,7 +187,11 @@ function gfx() {
   const cdp = await h.connect(PKG)
   await cdp.send('Page.enable')
   await cdp.send('Performance.enable')
-  const saved = await cdp.eval(`(async () => ({ token: (await Capacitor.Plugins.Preferences.get({ key: 'forsion_token' })).value, locale: localStorage.getItem('tangu_locale'), onboarding: localStorage.getItem('forsion_tangu_onboarding_done') }))()`)
+  const saved = TEST_ORIGIN ? {} : await cdp.eval(`(async () => ({ token: (await Capacitor.Plugins.Preferences.get({ key: 'forsion_token' })).value, locale: localStorage.getItem('tangu_locale'), onboarding: localStorage.getItem('forsion_tangu_onboarding_done') }))()`)
+  if (TEST_ORIGIN) {
+    const builtApi = await cdp.eval("fetch('./forsion-native.json').then((r) => r.json()).then((r) => r.apiBase)")
+    if (builtApi !== `${TEST_ORIGIN}/api`) throw new Error('installed APK has a different API origin')
+  }
   await cdp.eval(`(async () => { await Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: 'e2e-native-shell.fake.token' }); localStorage.setItem('forsion_tangu_onboarding_done', '1'); localStorage.setItem('tangu_locale', 'zh'); return true })()`)
   await installStub(cdp)
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: KIT })
@@ -157,13 +232,16 @@ function gfx() {
 
   const results = []
   /** One measured gesture. `from` = the mark that starts the window (first mark matching), window `win` ms. */
-  async function run(name, rate, act, { settle = 1300, from = /touchstart|back|data-/, win = 700 } = {}) {
+  async function run(name, rate, act, { settle = 1300, from = /touchstart|back|data-/, win = 700, transcriptSelector = '' } = {}) {
+    const loadBefore = await measurementLoad(name)
     gfxReset()
     const m0 = await met()
-    await cdp.eval('__perf.start()')
+    await cdp.eval(`__perf.start(${JSON.stringify(transcriptSelector)})`)
+    const finishLoad = watchLoad(loadBefore)
     await act()
     await h.pause(settle)
     const p = await cdp.eval('__perf.stop()')
+    const loadStats = finishLoad()
     const m1 = await met()
     const g = gfx()
     const t0 = p.marks.find((m) => from.test(m.why))?.t
@@ -178,10 +256,17 @@ function gfx() {
       loaf: p.loaf.filter((l) => t0 == null || (l.s + l.d >= t0 && l.s <= t0 + 1200)).map((l) => ({ at: t0 == null ? l.s : Math.round(l.s - t0), d: l.d, block: l.block, style: l.style, scripts: l.scripts })),
       events: p.ev.filter((e) => /pointerup|click|touchend|pointerdown|touchstart/.test(e.n)).map((e) => `${e.n}:${e.d}ms(wait ${e.wait}, run ${e.run})`),
       main: { script: ms('ScriptDuration'), style: ms('RecalcStyleDuration'), layout: ms('LayoutDuration'), task: ms('TaskDuration'), styleN: m1.RecalcStyleCount - m0.RecalcStyleCount, layoutN: m1.LayoutCount - m0.LayoutCount },
-      gfx: g, noLoaf: p.noLoaf, noEv: p.noEv, load: Math.round(require('node:os').loadavg()[0] * 10) / 10,
+      gfx: g, noLoaf: p.noLoaf, noEv: p.noEv, ...loadStats,
     }
     // a Space switch: when it landed (`data-space` after the input) and the frames while the push ran (`vt=` marks)
     const at = (re) => p.marks.find((m) => t0 != null && m.t >= t0 && re.test(m.why))?.t
+    if (transcriptSelector) {
+      const detail = at(/^data-nav=detail$/)
+      const transcript = at(/^transcript$/)
+      if (detail == null || transcript == null) throw new Error('first-open measurement is missing the tap, the detail transition or the expected transcript')
+      row.detail = Math.round(detail - t0)
+      row.transcript = Math.round(transcript - t0)
+    }
     const landed = at(/^data-space=/), vtOn = at(/^vt=(next|prev|fade)/), vtOff = vtOn != null ? p.marks.find((m) => m.t >= vtOn && m.why === 'vt=')?.t : null
     if (landed != null) row.landed = Math.round(landed - t0)
     if (vtOn != null) {
@@ -198,11 +283,16 @@ function gfx() {
   console.log('Dock cells:', spaceIds().join(','), '| space', await cdp.eval(space), '| nav', await cdp.eval(nav), '| zoom', await cdp.eval('getComputedStyle(document.body).zoom'), '| dpr', await cdp.eval('devicePixelRatio'), '| UA', (await cdp.eval('navigator.userAgent')).match(/Chrome\/[\d.]+/)?.[0])
   if ((await cdp.eval(space)) !== 'tangu') await toSpace('tangu')
   if (!(await h.waitPage(cdp, "document.querySelectorAll('.mb-drawer--left .t2s-srow').length >= 20", 12000))) throw new Error(`session rows missing: ${await cdp.eval("document.querySelectorAll('.mb-drawer--left .t2s-srow').length")}`)
-  const row = (i) => `document.querySelectorAll('.mb-drawer--left .t2s-srow')[${i}]`
+  const row = (i) => `document.querySelector('.mb-drawer--left .t2s-srow[data-sel-id="perf-s${i}"]')`
+  const lastMessage = (i) => i == null ? LAST_MESSAGE : `.mb-main .t2-stream #tocmsg-perf-s${i}-m${MESSAGE_COUNT - 1}`
   const W = wv().rect
   const midY = Math.round((W.top + W.bottom) / 2)
   const openChat = async (i) => { const p = await elPoint(row(i)); h.tapAt(p.x, p.y) }
-  const inDetail = () => h.waitPage(cdp, `${nav} === 'detail' && document.querySelectorAll('.t2-stream .t2-msg, .t2-stream [data-msg-id], .t2-stream .t2m').length >= 1`, 8000)
+  const inDetail = async (i) => {
+    if (!(await h.waitPage(cdp, `${nav} === 'detail' && !!document.querySelector(${JSON.stringify(lastMessage(i))})`, 8000))) {
+      throw new Error('the fixture transcript did not reach the main view')
+    }
+  }
   const inList = () => h.waitPage(cdp, `${nav} === 'list'`, 6000)
   const ensureList = async () => { for (let i = 0; i < 6 && (await cdp.eval(nav)) !== 'list'; i++) { h.key(4); await h.pause(1100) } if ((await cdp.eval(nav)) !== 'list') throw new Error('could not get back to the list') ; await h.pause(400) }
   const ensureDetail = async (i) => { if ((await cdp.eval(nav)) === 'detail') return; await openChat(i); await inDetail(); await h.pause(1400) }
@@ -228,19 +318,29 @@ function gfx() {
     // browser is idle). Sampled every frame from the first message on: the distance to the bottom must stay ~0 — a frame
     // away from it is a visible jump. MSGS=short is the case scroll anchoring cannot cover (nothing is scrolled yet).
     for (const rate of RATES) {
-      if (!(await setRate(rate)) && rate !== 1) continue
+      if (!(await setRate(rate)) && rate !== 1) throw new Error(`cannot measure landing at ${rate}x`)
       await ensureList()
+      const loadBefore = await measurementLoad('land')
       await cdp.eval(`(() => { const L = (window.__land = { on: true, s: [] }); const tick = (t) => { if (!L.on) return
-        const sc = [...document.querySelectorAll('.t2-stream')].find((e) => e.offsetParent)
+        const sc = [...document.querySelectorAll('.mb-main .t2-stream')].find((e) => e.offsetParent)
         const n = sc ? sc.querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap').length : 0
-        if (n) L.s.push([Math.round(t), n, Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), sc.scrollHeight > sc.clientHeight + 1 ? 1 : 0])
+        if (n) {
+          const { scrollHeight, scrollTop, clientHeight } = sc
+          L.s.push([Math.round(t), n, Math.round(scrollHeight - scrollTop - clientHeight), scrollHeight > clientHeight + 1 ? 1 : 0, Math.round(scrollTop), scrollHeight, clientHeight])
+        }
         requestAnimationFrame(tick) }; requestAnimationFrame(tick); return true })()`)
-      await openChat(RATES.indexOf(rate)); await inDetail(); await h.pause(rate > 1 ? 5000 : 2500) // a row not opened yet: reopening the same chat mounts nothing
+      const i = RATES.indexOf(rate)
+      const finishLoad = watchLoad(loadBefore)
+      await openChat(i); await inDetail(i); await h.pause(rate > 1 ? 5000 : 2500) // reopening the same chat mounts nothing
       const smp = await cdp.eval('(() => { __land.on = false; return __land.s })()')
+      const loadStats = finishLoad()
       const steps = smp.filter((x, i) => !i || x[1] !== smp[i - 1][1]).map((x) => `${x[1]}@${x[0] - smp[0][0]}`)
       const off = smp.filter((x) => x[2] > 8)
+      fs.writeFileSync(path.join(OUT, `land-${rate}x-frames.json`), JSON.stringify(smp))
       console.log(`${rate}x land${SHORT ? ' (short messages)' : ''}: ${smp.length} frames · messages on the page ${steps.join(' → ')} · frames away from the bottom ${off.length}${off.length ? ` (worst ${Math.max(...off.map((x) => x[2]))}px, first at +${off[0][0] - smp[0][0]}ms with ${off[0][1]} messages)` : ''} · ends ${smp.length ? smp[smp.length - 1][2] : '?'}px from the bottom, ${smp.length && smp[smp.length - 1][3] ? 'scrollable' : 'not scrollable'}`)
-      results.push({ name: 'land', rate, short: SHORT, steps, offFrames: off.length, worst: off.length ? Math.max(...off.map((x) => x[2])) : 0 })
+      const complete = smp.at(-1)?.[1] === MESSAGE_COUNT
+      results.push({ name: 'land', rate, short: SHORT, steps, complete, offFrames: off.length, worst: off.length ? Math.max(...off.map((x) => x[2])) : 0, ...loadStats })
+      if (!complete || off.length) process.exitCode = 1
       h.screenshot(OUT, `land-${rate}x${SHORT ? '-short' : ''}`)
       h.key(4); await h.pause(1200)
     }
@@ -252,24 +352,44 @@ function gfx() {
       const events = []
       const onData = (p) => { events.push(...p.value) }
       cdp.handlers.set('Tracing.dataCollected', [onData])
-      await setRate(rate)
+      if (!(await setRate(rate))) throw new Error(`cannot trace at ${rate}x`)
+      const loadBefore = await measurementLoad(`trace ${label}`)
       await cdp.send('Tracing.start', { transferMode: 'ReportEvents', traceConfig: { includedCategories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink.user_timing', 'v8', ...(process.env.TRACE_CATS || '').split(',').filter(Boolean)], excludedCategories: ['*'] } })
       await cdp.eval("performance.mark('probe-armed')")
+      const finishLoad = watchLoad(loadBefore)
       await act(); await h.pause(settle)
-      const done = new Promise((r) => cdp.on('Tracing.tracingComplete', r))
-      await cdp.send('Tracing.end'); await done
+      const loadStats = finishLoad()
+      let complete
+      const done = new Promise((resolve) => { complete = resolve })
+      cdp.on('Tracing.tracingComplete', complete)
+      let timer
+      try {
+        await cdp.send('Tracing.end')
+        await Promise.race([done, new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('trace collection timed out')), 20000)
+        })])
+      } finally {
+        clearTimeout(timer)
+        cdp.handlers.delete('Tracing.tracingComplete')
+        cdp.handlers.delete('Tracing.dataCollected')
+      }
       await setRate(1)
       fs.writeFileSync(path.join(OUT, `trace-${label}.json`), JSON.stringify(events))
-      // main thread = CrRendererMain by name (the busiest thread is not it when the emulator's software GL keeps the
-      // GPU thread busier — a View Transition does — and then every breakdown below came out empty); else the busiest
+      // Arm the trace on the measured page itself. The busiest thread can be software GL, and other renderers can
+      // have the same thread name. Match both pid and tid to the page mark.
       const X = events.filter((e) => e.ph === 'X' && e.dur)
-      const tname = new Map(events.filter((e) => e.ph === 'M' && e.name === 'thread_name').map((e) => [e.tid, e.args?.name]))
-      const byTid = new Map(); for (const e of X) if (e.name === 'RunTask') byTid.set(e.tid, (byTid.get(e.tid) || 0) + e.dur)
-      const main = [...tname].find(([, n]) => n === 'CrRendererMain')?.[0] ?? [...byTid.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
-      const mt = X.filter((e) => e.tid === main)
-      const input = mt.find((e) => e.name === 'EventDispatch' && /touchstart|keydown|click/.test(e.args?.data?.type || ''))
+      const threads = events.filter((e) => e.ph === 'M' && e.name === 'thread_name')
+      const armed = events.find((e) => e.name === 'probe-armed' && /user_timing/.test(e.cat || ''))
+      if (!armed) throw new Error('trace is missing the page marker')
+      const onMain = (e) => e.pid === armed.pid && e.tid === armed.tid
+      const mainName = threads.filter(onMain).at(-1)?.args?.name
+      const mt = X.filter(onMain).sort((a, b) => a.ts - b.ts)
+      if (!mt.some((e) => e.name === 'RunTask' && e.ts >= armed.ts)) throw new Error('trace is missing measured renderer tasks')
+      console.log(`  renderer ${armed.pid}/${armed.tid} (${mainName || 'unnamed'}) selected by page marker`)
+      const input = mt.find((e) => e.ts >= armed.ts && e.name === 'EventDispatch' && /touchstart|keydown|click/.test(e.args?.data?.type || ''))
+      if (label === 'open-cold' && !input) throw new Error('trace is missing the first-open tap')
       // a Dock tap is no page event: its arrival mark (`dock:<id>`, user timing) stands in for it
-      const dock = events.find((e) => /^dock:/.test(e.name || '') && /user_timing/.test(e.cat || ''))
+      const dock = events.find((e) => onMain(e) && /^dock:/.test(e.name || '') && /user_timing/.test(e.cat || ''))
       const t0 = input ? input.ts : dock ? dock.ts : mt[0].ts
       const tasks = mt.filter((e) => e.name === 'RunTask' && e.dur >= Number(process.env.MIN_TASK || 20) * 1000 && e.ts >= t0 - 50000).sort((a, b) => a.ts - b.ts)
       console.log(`\n== trace ${label} @${rate}x — long tasks after the input (${input ? input.args.data.type : dock ? dock.name : 'no input event found'})`)
@@ -302,10 +422,11 @@ function gfx() {
       const all = mt.filter((e) => e.name === 'RunTask' && e.ts >= t0)
       console.log(`  main thread busy ${Math.round(all.reduce((n, e) => n + e.dur, 0) / 1000)}ms of the ${Math.round((mt[mt.length - 1].ts - t0) / 1000)}ms after the input · longest task ${Math.round(Math.max(0, ...all.map((e) => e.dur)) / 1000)}ms`)
       // the GPU thread: on the emulator it runs software GL, so its time says what this costs here, not on a phone
-      const gpu = [...tname].find(([, n]) => n === 'Chrome_InProcGpuThread')?.[0]
-      if (gpu != null) console.log(`  GPU thread (software GL here) busy ${Math.round(X.filter((e) => e.tid === gpu && e.name === 'RunTask' && e.ts >= t0).reduce((n, e) => n + e.dur, 0) / 1000)}ms`)
+      const gpu = threads.find((e) => e.args?.name === 'Chrome_InProcGpuThread')
+      if (gpu) console.log(`  GPU thread (software GL here) busy ${Math.round(X.filter((e) => e.pid === gpu.pid && e.tid === gpu.tid && e.name === 'RunTask' && e.ts >= t0).reduce((n, e) => n + e.dur, 0) / 1000)}ms`)
       const st = mt.filter((e) => e.name === 'UpdateLayoutTree' && e.ts >= t0)
       console.log(`  style ${Math.round(st.reduce((n, e) => n + e.dur, 0) / 1000)}ms over ${st.length} recalcs · the ones over 100 elements: ${st.filter((e) => (e.args?.elementCount || 0) >= 100).map((e) => `${e.args.elementCount}/${Math.round(e.dur / 1000)}ms@+${Math.round((e.ts - t0) / 1000)}`).join(' ') || 'none'}`)
+      results.push({ name: `trace ${label}`, rate, pid: armed.pid, tid: armed.tid, thread: mainName, t0, ...loadStats })
       return t0
     }
     // STEPS picks what is traced (default: the five of the list ↔ conversation round trip)
@@ -339,7 +460,13 @@ function gfx() {
     // a chat opened and left first, as in the rows (its page stays mounted behind the list)
     if (step('hops')) { await ensureDetail(R); await ensureList() }
     if (step('hops')) for (const id of hopOrder()) { const cell = h.byId(ui(), `nativeChrome.space.${id}`); await trace(`hop-${id}`, async () => { h.tapNode(cell) }, 1800); await h.pause(600) }
-    if (step('open-cold')) { await trace('open-cold', () => openChat(R)); await inDetail(); await h.pause(800) }
+    if (step('open-cold')) {
+      const point = await elPoint(row(R))
+      await cdp.eval(`__perf.armOpenTrace(${JSON.stringify(lastMessage(R))})`)
+      try { await trace('open-cold', () => h.tapAt(point.x, point.y)) }
+      finally { await cdp.eval('__perf.disarmOpenTrace()') }
+      await inDetail(R); await h.pause(800)
+    }
     if (step('back')) { await ensureDetail(R); await trace('back', async () => { h.key(4) }); await ensureList() }
     if (step('open-again')) { await trace('open-again', () => openChat(R)); await inDetail(); await h.pause(800); await ensureList() }
     if (step('open-other')) { await trace('open-other', () => openChat(R + 1)); await inDetail(); await h.pause(800) }
@@ -409,7 +536,26 @@ function gfx() {
       await ensureList()
     }
   }
-  if (process.env.MODE === 'profile') {
+  if (process.env.MODE === 'profile' && FIRST_OPEN_ONLY) {
+    const rate = Number(process.env.RATE || 4)
+    await ensureList()
+    const i = Number(process.env.ROW || 0)
+    const point = await elPoint(row(i))
+    if (!(await setRate(rate))) throw new Error(`cannot profile at ${rate}x`)
+    await cdp.send('Profiler.enable')
+    await cdp.send('Profiler.setSamplingInterval', { interval: 250 })
+    const loadBefore = await measurementLoad('profile first open')
+    const finishLoad = watchLoad(loadBefore)
+    await cdp.send('Profiler.start')
+    h.tapAt(point.x, point.y)
+    await h.pause(2500)
+    const { profile } = await cdp.send('Profiler.stop')
+    const loadStats = finishLoad()
+    await inDetail(i)
+    fs.writeFileSync(path.join(OUT, 'profile-open-cold.cpuprofile'), JSON.stringify(profile))
+    console.log(`profile first open @${rate}x: ${profile.samples.length} samples`)
+    results.push({ name: 'profile first open', rate, ...loadStats })
+  } else if (process.env.MODE === 'profile') {
     // (1) where a full style pass comes from: one mutation at a time, forced with offsetHeight, chat mounted
     await ensureDetail(0)
     const cost = async (label, js) => {
@@ -458,16 +604,24 @@ function gfx() {
     // (3) is the Tracing domain reachable here (for style invalidation attribution)?
     try { await cdp.send('Tracing.start', { categories: 'devtools.timeline', transferMode: 'ReportEvents' }); await h.pause(300); await cdp.send('Tracing.end'); console.log('\nTracing: available on the page target') } catch (e) { console.log('\nTracing: not on the page target —', e.message) }
   }
-  for (const rate of (['profile', 'exp', 'trace', 'land'].includes(process.env.MODE) ? [] : RATES)) {
+  for (const [rateIndex, rate] of (['profile', 'exp', 'trace', 'land'].includes(process.env.MODE) ? [] : RATES).entries()) {
     const throttled = await setRate(rate)
-    if (!throttled && rate !== 1) continue
+    if (!throttled && rate !== 1) {
+      if (FIRST_OPEN_ONLY) throw new Error(`cannot measure first open at ${rate}x`)
+      continue
+    }
     await h.pause(400)
-    for (let r = 0; r < REPS; r++) {
+    for (let rep = 0; rep < REPS; rep++) {
+      const r = FIRST_OPEN_ONLY ? rateIndex * REPS + rep : rep
       await ensureList()
-      if (want('open')) { await run('open (row → chat)', rate, () => openChat(r), { settle: 2000 }); await inDetail() }
-      else await ensureDetail(r)
-      if (r === 0 && rate === RATES[0]) console.log('   insert one element [in a message, under <body>] ms:', await cdp.eval(`(() => { const ms = (sel) => { const host = document.querySelector(sel); const one = () => { void document.body.offsetHeight; const t = performance.now(); const p = document.createElement('span'); host.appendChild(p); void document.body.offsetHeight; p.remove(); void document.body.offsetHeight; return performance.now() - t }; one(); one(); return Math.round(Math.min(one(), one(), one()) * 10) / 10 }; return JSON.stringify([ms('.t2-stream-inner > .t2-asst'), ms('body')]) })()`))
-      if (r === 0 && rate === RATES[0]) console.log('   chat DOM:', await cdp.eval("JSON.stringify({ nodes: document.querySelector('.mb-main').querySelectorAll('*').length, all: document.querySelectorAll('*').length, streamH: document.querySelector('.t2-stream')?.scrollHeight })"))
+      if (want('open')) {
+        const point = await elPoint(row(r))
+        const transcriptSelector = FIRST_OPEN_ONLY ? lastMessage(r) : ''
+        await run('open (row → chat)', rate, () => h.tapAt(point.x, point.y), { settle: 2000, from: /^touchstart$/, transcriptSelector })
+        await inDetail(r)
+      } else await ensureDetail(r)
+      if (!FIRST_OPEN_ONLY && r === 0 && rate === RATES[0]) console.log('   insert one element [in a message, under <body>] ms:', await cdp.eval(`(() => { const ms = (sel) => { const host = document.querySelector(sel); const one = () => { void document.body.offsetHeight; const t = performance.now(); const p = document.createElement('span'); host.appendChild(p); void document.body.offsetHeight; p.remove(); void document.body.offsetHeight; return performance.now() - t }; one(); one(); return Math.round(Math.min(one(), one(), one()) * 10) / 10 }; return JSON.stringify([ms('.t2-stream-inner > .t2-asst'), ms('body')]) })()`))
+      if (!FIRST_OPEN_ONLY && r === 0 && rate === RATES[0]) console.log('   chat DOM:', await cdp.eval("JSON.stringify({ nodes: document.querySelector('.mb-main').querySelectorAll('*').length, all: document.querySelectorAll('*').length, streamH: document.querySelector('.t2-stream')?.scrollHeight })"))
       if (want('scroll')) {
         const fling = async () => { h.adb('shell', 'input', 'swipe', String(540), String(midY - 300), String(540), String(midY + 500), '120') }
         await run('chat fling (glass on)', rate, fling, { settle: 1800, win: 1200 })
@@ -524,5 +678,9 @@ function gfx() {
   cdp.close()
   h.adb('shell', 'am', 'force-stop', PKG)
   console.log('done →', path.join(OUT, 'results.json'))
-  process.exit(0)
+  if (TEST_ORIGIN && results.some((row) => row.loadPeak > 6)) {
+    console.error('Discard the affected samples: host load exceeded 6 during measurement')
+    process.exitCode = 76
+  }
+  process.exit(process.exitCode || 0)
 })().catch((e) => { console.error('PROBE FAILED:', e && e.stack || e); try { h.adb('shell', 'am', 'force-stop', PKG) } catch { /* */ } process.exit(1) })
