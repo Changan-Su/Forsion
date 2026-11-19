@@ -43,15 +43,20 @@ export function installNativeSheet(): void {
  *  Only a field focused from a sheet's start until it is gone counts: one the person was already typing in when the sheet
  *  came up is left as it is (what they picked was most likely not "go on typing"). An app without the event: nothing. */
 function installFocusReturn(): { covered(): void; settled(): void } {
-  let covering = false
+  // `open` = sheets asked for and not answered yet. A `gone` that comes while another one is up belongs to the one
+  // that left (a sheet that opens the next straight away, or one replaced by the next): the field waits for the gone
+  // of the last one, and the watch only lapses once none is open (Codex review).
+  let open = 0
+  let watching = false
   let grabbed: HTMLElement | null = null
   let lapse = 0
   const textField = (el: EventTarget | null): el is HTMLElement =>
     el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !NOT_TEXT.has(el.type))
-  document.addEventListener('focusin', (e) => { if (covering && textField(e.target)) grabbed = e.target }, true)
+  document.addEventListener('focusin', (e) => { if (watching && textField(e.target)) grabbed = e.target }, true)
   window.addEventListener('forsion:native-sheet-gone', () => {
+    if (open > 0) return
     window.clearTimeout(lapse)
-    covering = false
+    watching = false
     const el = grabbed
     grabbed = null
     if (!el || el !== document.activeElement || !el.isConnected) return
@@ -59,10 +64,15 @@ function installFocusReturn(): { covered(): void; settled(): void } {
     el.focus({ preventScroll: true })
   })
   return {
-    covered: () => { window.clearTimeout(lapse); covering = true },
+    covered: () => { window.clearTimeout(lapse); open++; watching = true },
     // the event normally comes within the exit animation; a sheet taken down without one (replaced, aborted) or an
     // app that never sends it must not leave the watch on
-    settled: () => { window.clearTimeout(lapse); lapse = window.setTimeout(() => { covering = false; grabbed = null }, 4000) },
+    settled: () => {
+      open = Math.max(0, open - 1)
+      if (open > 0) return
+      window.clearTimeout(lapse)
+      lapse = window.setTimeout(() => { watching = false; grabbed = null }, 4000)
+    },
   }
 }
 const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'range', 'color', 'file', 'submit', 'reset', 'image', 'hidden'])

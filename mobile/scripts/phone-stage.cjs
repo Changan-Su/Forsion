@@ -1532,11 +1532,25 @@ const SCENES = {
     const close = await rect(page, '.amxc-panel .amxc-x')
     const rows = await texts(page, '.amxc-panel .amxc-row')
     await page.screenshot({ path: path.join(OUT, `vault-card-open${DARK ? "-dark" : ""}.png`) })
-    await page.locator('.amxc-panel .amxc-x').tap().catch(() => {})
+    // system Back closes the card and nothing under it: the list stays, in the notes Space. Without the back key (see
+    // backPath) the overlays are asked first, the way MobileRoot's planBack does, then the list level.
+    if ((await backPath(page)) === 'key') await systemBack(page)
+    else {
+      const taken = await page.evaluate(() => {
+        const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
+        if (taken) window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true }))
+        return taken
+      })
+      if (!taken) await systemBack(page)
+    }
+    await page.waitForTimeout(400)
+    const back = await page.evaluate(() => ({ card: !!document.querySelector('.amxc-panel'), space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav }))
+    await page.locator('.amxc-panel .amxc-x').tap({ timeout: 1000 }).catch(() => {})
     await page.evaluate(async ([u, was]) => { delete window.amadeusCollab; (await import(/* @vite-ignore */ u)).usePageStore.setState({ vaultSide: was }) }, [store, side])
     await page.waitForTimeout(300)
     return [
       ['the cloud vault\'s card lists the vaults and stays on the screen, with a margin; its close button is on it too', rows.length === 2 && !!card && card.x >= 8 && card.right <= SCREEN.width - 8 && card.bottom <= SCREEN.height && !!close && close.x >= 0 && close.right <= SCREEN.width, JSON.stringify({ rows, card, close })],
+      ['system Back closes the card and only the card: the notes list stays', !back.card && back.space === 'amadeus' && back.nav === 'list', JSON.stringify(back)],
     ]
   },
   // The editor's floating capsule, "⋯" while typing (walk 2026-11-19, e): the sheet came up with the keyboard still up,
