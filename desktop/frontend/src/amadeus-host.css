@@ -479,6 +479,15 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   user-select: none;
 }
 .am-app .milkdown .ProseMirror .callout-icon svg { width: 1em; height: 1em; }
+/* 标注的元数据位(Notion 对齐 A5,`> [!tip|🚀 blue]`,callout.ts 的装饰挂 data-bg / emoji 图标):
+   底色 = 整块颜色(A1)的 --amx-blk-bg(styles.css 按语义名定义,明暗两档);选了底色标题改用正文色(不再偏类型色)。
+   折叠块本来透明,选了底色才铺色、留出和标注一样的内距。图标可点(换图标),只读页面不可点(callout.ts 不挂 role)。 */
+.am-app .milkdown .ProseMirror blockquote.callout[data-bg] { background: var(--amx-blk-bg); }
+.am-app .milkdown .ProseMirror blockquote.callout[data-bg]:not(.callout-fold) > p:first-child { color: var(--text); }
+.am-app .milkdown .ProseMirror blockquote.callout-fold[data-bg] { border-radius: 8px; padding: 6px 14px 6px 28px; }
+.am-app .milkdown .ProseMirror[contenteditable='true'] .callout-icon[role='button'] { cursor: pointer; border-radius: 4px; }
+.am-app .milkdown .ProseMirror[contenteditable='true'] .callout-icon[role='button']:hover { background: var(--overlay-light); }
+.am-app .milkdown .ProseMirror .callout-icon-emoji { line-height: 1; vertical-align: -0.06em; }
 .am-app .milkdown .ProseMirror .callout-default-title { user-select: none; pointer-events: none; }
 .am-app .milkdown .ProseMirror .callout-token {
   color: var(--callout-color, #448aff);

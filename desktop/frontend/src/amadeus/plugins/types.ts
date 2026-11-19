@@ -1390,8 +1390,10 @@ export interface ToolLabelContribution {
   revision?(): number | string
 }
 
-/** A user-tunable setting a plugin declares. The host renders the form on the plugin's detail
- *  page and persists values to localStorage `plugin.<pluginId>.<key>` — the plugin reads the
+/** A user-tunable setting a plugin declares. The host draws it on the plugin's settings page
+ *  (Settings › Plugin settings › your plugin, 2026-11-18+), in a group named "General", with its own parts: a switch
+ *  for `boolean`, a stepper for a `number` with a small `min`–`max` range (otherwise a text field), a text field for `text`.
+ *  Values persist to localStorage `plugin.<pluginId>.<key>` — the plugin reads the
  *  same key at use time (poll-loop reads pick changes up next round; no change notification). */
 export interface SettingContribution {
   /** Storage key suffix (localStorage `plugin.<pluginId>.<key>`). */
@@ -1428,8 +1430,11 @@ export interface ReadinessContribution {
  *  `registerSetting` 那套「一行一个 number/boolean/text」只够调旋钮;需要列表编辑、多标签页、
  *  内嵌代码编辑器的插件(片段库、规则表)装不下 —— 这里直接给一个裸 DOM 容器,插件自己画。
  *
- *  渲染在插件详情页的声明式设置表**下方**(两者可并存:旋钮交给宿主渲染,复杂面自绘)。
- *  ⚠️宿主主题的 CSS 变量在容器上照常可用,但**没有任何样式重置** —— 自己带样式。 */
+ *  2026-11-18 起画在插件的设置页(设置 › 插件设置 › 你的插件)里,是「通用」组之后的一个自定义块(宿主给一块空 div,
+ *  每个面板一组);插件详情页不再画设置。新写的设置页请用 `ctx.registerSettingsPage`(描述成数据、宿主来画),
+ *  这里只留给零件清单外的内容(列表编辑、内嵌代码编辑器)。
+ *  ⚠️宿主主题的 CSS 变量在容器上照常可用,但**没有任何样式重置** —— 自己带样式;不许仿 `.settings-*` 宿主类名去冒充宿主设置
+ *  (要宿主的样子就在块里用 `ctx.ui.mountSettingsItem`)。 */
 export interface SettingsViewContribution {
   /** 本插件内唯一(同 id 重注册即覆盖)。 */
   id: string
@@ -1450,6 +1455,35 @@ export interface SettingsViewContribution {
   /** 详情页打开时调用。返回的函数在面板关闭 / 插件禁用时执行(定时器、订阅、第三方编辑器实例在此收)。
    *  ⚠️同一插件的面板可能被反复挂载卸载(用户来回进出详情页),别把状态放在闭包外的模块级单例里。 */
   mount(el: HTMLElement, context?: { anchor?: string }): void | (() => void)
+}
+
+/** The handle `SettingsPageContribution.mount` receives. `update(schema)` replaces the whole description
+ *  (same shapes and rules as `ctx.ui.mountSettingsPage`); call it again whenever a value or the language changes. */
+export interface PluginSettingsPageSurface {
+  update(schema: import('../../../../shared/settingsPage').PluginSettingsPageSchema): void
+}
+
+/** Your plugin's settings page, described as data (`ctx.registerSettingsPage`, 2026-11-18+).
+ *
+ *  Every installed plugin with settings appears under Settings › Plugin settings in the sidebar. Its page is an identity
+ *  card the host draws (icon, name, version, source, "Open plugin" when you have a Space, the on/off switch), then your
+ *  page: the host mounts it when the page opens and calls the returned cleanup when the page closes, when your plugin is
+ *  disabled or reloaded. Inside `mount` call `page.update({ groups })` (or `{ state }`) with the host settings parts —
+ *  groups, switch, input, select, segmented, stepper, buttons, meters, states, `custom` blocks. All text comes from you;
+ *  pass functions or re-call `update` from `ctx.subscribeLocale` so the page follows the language.
+ *
+ *  Feature-detect: `ctx.registerSettingsPage?.(…)`; on older hosts keep `registerSettingsView` + `ctx.ui.mountSettingsPage`.
+ *  Don't draw imitations of the host's `.settings-*` styles — the parts are the host's. */
+export interface SettingsPageContribution {
+  /** Unique within your plugin (re-registering the same id replaces it). Default `'main'`. A plugin normally has one. */
+  id?: string
+  /** Shown as the page section's name where the host lists your pages (search results). Functions re-evaluate on locale change. */
+  title: string | (() => string)
+  /** Search aliases in either language, space-separated (Settings search finds your page by them). */
+  keywords?: string
+  /** Called when the page is shown. Return a cleanup: it runs when the page closes, or when your plugin is disabled /
+   *  reloaded (the host also drops the page then). Callbacks you gave in `update` are not called after that. */
+  mount(page: PluginSettingsPageSurface): void | (() => void)
 }
 
 /** 商店左栏里由插件提供的一页(2026-10-05):左栏多一个入口,点开后整页正文归插件画(版式、数据都归插件)。
@@ -2267,11 +2301,15 @@ export interface PluginContext {
   /** Add a stylesheet (2026-10-26+) instead of `document.head.append(style)`: the host removes it on disable / reload.
    *  `update(css)` replaces the text. Feature-detect: `ctx.addStyle?.(css)`. */
   addStyle?(css: string): { update(css: string): void; dispose(): void }
-  /** Declare a tunable setting (rendered on the plugin detail page; localStorage-backed). */
+  /** Declare a tunable setting (drawn in the "General" group of your plugin's settings page; localStorage-backed). */
   registerSetting(def: SettingContribution): void
   /** 自绘设置面板(2026-08-15+)。声明式旋钮装不下的复杂设置走这里。见 SettingsViewContribution。
-   *  旧宿主没有:`ctx.registerSettingsView?.(…)`。 */
+   *  2026-11-18 起画在插件设置页上(自定义块),不再画在插件详情页。旧宿主没有:`ctx.registerSettingsView?.(…)`。 */
   registerSettingsView?(def: SettingsViewContribution): void
+  /** Your settings page as data (2026-11-18+): the host lists your plugin under Settings › Plugin settings and draws the
+   *  page with its own settings parts — see SettingsPageContribution. Feature-detect: `ctx.registerSettingsPage?.(…)`;
+   *  older hosts: `registerSettingsView` + `ctx.ui.mountSettingsPage`. */
+  registerSettingsPage?(def: SettingsPageContribution): void
   /** 往商店左栏加一页(2026-10-05+,只认首方内置包,见 StoreViewContribution)。
    *  旧宿主没有,而且**不能**拿 registerSettingsView 顶替(那会把页面画进插件详情页):`ctx.registerStoreView?.(…)`,没有就不注册。 */
   registerStoreView?(def: StoreViewContribution): void
@@ -2296,11 +2334,20 @@ export interface PluginContext {
    *
    *  旧宿主没有:`ctx.registerEditorExtension?.(…)`。 */
   registerEditorExtension?(factory: EditorExtensionFactory, opts?: EditorExtensionOptions): void
-  /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null。
+  /** 读本插件的私有 JSON blob(`~/.forsion/plugins-data/<id>.json`)。没写过 / 宿主缺位 → null(存的就是 `null` 时也读回 null)。
+   *  **存过却读不出来**(读错误、零字节、写到一半、被手改坏)→ reject,`err.code === 'plugin-data-unreadable'`,
+   *  `err.reason` 为 `'read-failed' | 'invalid-json'`(2026-11-17 起;之前宿主把这些也当没写过回 null)。
+   *  接到它别按默认值往下走再 saveData —— 那会把用户原来那份整个盖掉;停用相关功能、提示用户、等下次重试。
+   *  原件宿主不动;插件接住错误后仍然 saveData 时,桌面 / 手机宿主先把原件另存一份(`<id>.json.unreadable-<时间>`),
+   *  拷不出原件就拒绝这次写(saveData reject)。`syncData` 插件:本机内容坏了而云端有一份时,loadData 直接用云端那份恢复;
+   *  读失败后插件仍存的数据,在和云端对上之前都不推、也不在冲突里盖掉云端那份(之后读成功了、重启了也一样;
+   *  插件这次运行里读失败过一次,到重新加载之前它的保存都这样处理);下次连上云端:云端有一份就换成云端那份,
+   *  被换掉的本机数据宿主先另存(`<id>.json.replaced-<时间>`),云端没有才推本机这份(推的时候别的设备刚建了一份就让给它)。
    *  registerSetting 是「一键一个字符串」,存不下片段库这类大块数据,也没有原子性。
-   *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`。 */
+   *  旧宿主没有:`await ctx.loadData?.() ?? 默认值`(旧宿主读不出来时仍回 null)。 */
   loadData?<T = unknown>(): Promise<T | null>
-  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。
+  /** 原子写本插件的私有 JSON blob(整体覆盖)。宿主缺位时静默 no-op。转成 JSON 什么都没有的值(函数、`toJSON` 回
+   *  undefined)→ reject,什么都不写(2026-11-18 起;之前会写进空内容,下次读就成了读不出来)。BigInt、循环引用本来就会 reject。
    *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives

@@ -326,7 +326,7 @@ describe('Fast 档:只在 Codex 订阅且目录列了这一档时发 service_tie
 
 describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
   const providers = [
-    { providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk', modelIds: ['gpt-6-luna', 'gpt-5.5', 'gpt-5-nano', 'gpt-6-sol-2026-09-01', 'gpt-6.1-sol'] },
+    { providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk', modelIds: ['gpt-6-luna', 'gpt-5.5', 'gpt-5-nano', 'gpt-6-sol-2026-09-01', 'gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.2-astra'] },
     { providerId: 'gw', baseUrl: 'https://api.openai.com.evil.tld/v1', apiKey: 'sk', modelIds: ['gpt-6-luna'] },
     { providerId: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'sk', protocol: 'anthropic-messages', modelIds: ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5'] },
   ];
@@ -339,8 +339,8 @@ describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
 
   it('模型表按官方价目给单价倍数;仿冒 host、价表外的模型、研究预览的 Opus 都没有', () => {
     const tiers = Object.fromEntries(registry.list().map((p) => [p.providerId, p.fastTiers]));
-    expect(tiers.openai).toEqual({ 'gpt-6-luna': '2x price', 'gpt-5.5': '2.5x price', 'gpt-6-sol-2026-09-01': '2x price', 'gpt-6.1-sol': '2x price' });
-    expect(registry.list().find((p) => p.providerId === 'openai')!.ultrafastTiers).toEqual({ 'gpt-6.1-sol': '6x price' });
+    expect(tiers.openai).toEqual({ 'gpt-6-luna': '2x price', 'gpt-5.5': '2.5x price', 'gpt-6-sol-2026-09-01': '2x price', 'gpt-6.1-sol': '2x price', 'gpt-6.2-sol': '2x price', 'gpt-6.2-astra': '2x price' });
+    expect(registry.list().find((p) => p.providerId === 'openai')!.ultrafastTiers).toEqual({ 'gpt-6.1-sol': '6x price', 'gpt-6.2-sol': '6x price', 'gpt-6.2-astra': '6x price' });
     expect(registry.list().find((p) => p.providerId === 'anthropic')!.ultrafastTiers).toBeUndefined();
     expect(tiers.gw).toBeUndefined();
     expect(tiers.anthropic).toEqual({ 'claude-opus-5-5': '2x price' });

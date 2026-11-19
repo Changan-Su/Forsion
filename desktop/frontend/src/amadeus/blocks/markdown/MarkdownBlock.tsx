@@ -65,7 +65,7 @@ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
-import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { splitBlock } from '@milkdown/kit/prose/commands'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -100,11 +100,13 @@ import { editContextOf, slashItemApplies, type EditContext } from './menuContext
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
 import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
-import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
+import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, setSpacedSlashLabels, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
 import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
 import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
+import { hasSlashPreview, SlashPreviewBody, withSuggestedGroup } from './slashSuggested'
+import { zoomOf } from '@lcl/engine'
 import { useCapsuleSlide } from '../../../components/capsuleTabs'
 import { openAppRef } from '../../../components/appRefs'
 import { readTangu } from '../../plugins/tanguSeam'
@@ -121,6 +123,8 @@ import { tagPillPlugin } from './tagPill'
 import { editorFocusPlugin, editorFocused } from './editorFocus'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
+import { TOC_FENCE } from '@amadeus-shared/tocBlock'
+import { TableOfContents } from 'lucide-react'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
@@ -170,6 +174,27 @@ registerMessages({
   'mdblock.group.list': { zh: '列表', en: 'Lists' },
   'mdblock.group.advanced': { zh: '高级', en: 'Advanced' },
   'mdblock.group.plugin': { zh: '插件', en: 'Plugins' },
+  // 整块颜色(Notion 对齐 A1):只在搜索时出现(searchOnly),浏览时不占菜单
+  'mdblock.group.color': { zh: '颜色', en: 'Color' },
+  'mdblock.slash.colorDefault': { zh: '默认颜色', en: 'Default color' },
+  'mdblock.slash.color.red': { zh: '红色', en: 'Red' },
+  'mdblock.slash.bg.red': { zh: '红色背景', en: 'Red background' },
+  'mdblock.slash.color.orange': { zh: '橙色', en: 'Orange' },
+  'mdblock.slash.bg.orange': { zh: '橙色背景', en: 'Orange background' },
+  'mdblock.slash.color.yellow': { zh: '黄色', en: 'Yellow' },
+  'mdblock.slash.bg.yellow': { zh: '黄色背景', en: 'Yellow background' },
+  'mdblock.slash.color.green': { zh: '绿色', en: 'Green' },
+  'mdblock.slash.bg.green': { zh: '绿色背景', en: 'Green background' },
+  'mdblock.slash.color.teal': { zh: '青色', en: 'Teal' },
+  'mdblock.slash.bg.teal': { zh: '青色背景', en: 'Teal background' },
+  'mdblock.slash.color.blue': { zh: '蓝色', en: 'Blue' },
+  'mdblock.slash.bg.blue': { zh: '蓝色背景', en: 'Blue background' },
+  'mdblock.slash.color.purple': { zh: '紫色', en: 'Purple' },
+  'mdblock.slash.bg.purple': { zh: '紫色背景', en: 'Purple background' },
+  'mdblock.slash.color.magenta': { zh: '品红', en: 'Magenta' },
+  'mdblock.slash.bg.magenta': { zh: '粉色背景', en: 'Pink background' },
+  'mdblock.slash.color.grey': { zh: '灰色', en: 'Gray' },
+  'mdblock.slash.bg.grey': { zh: '灰色背景', en: 'Gray background' },
   // slash 菜单条目名(**唯一真源**,桌面菜单与移动端块面板共用)
   'mdblock.picker.query': { zh: '搜索内容类型', en: 'Search block types' },
   'mdblock.slash.text': { zh: '文本', en: 'Text' },
@@ -190,6 +215,7 @@ registerMessages({
   'mdblock.slash.code': { zh: '代码块', en: 'Code block' },
   'mdblock.slash.table': { zh: '表格', en: 'Table' },
   'mdblock.slash.divider': { zh: '分割线', en: 'Divider' },
+  'mdblock.slash.toc': { zh: '目录', en: 'Table of contents' },
   'mdblock.slash.math': { zh: '数学公式', en: 'Equation' },
   'mdblock.slash.wikilink': { zh: '链接笔记', en: 'Link to note' },
   'mdblock.slash.image': { zh: '图片', en: 'Image' },
@@ -301,6 +327,16 @@ const PROMPT_SENTINEL = '\u0000__amadeus_prompt__'
 // 「日程」= 只插 @ 弹日期面板(这一行只进日历)。只在 v4 统一实例里落地(UnifiedPage.applySlash)。
 const TASK_LIST_SENTINEL = '\u0000__amadeus_task_list__'
 const EVENT_SENTINEL = '\u0000__amadeus_event__'
+/** 整块颜色(Notion 对齐 A1):`<sentinel>bg:blue` / `fg:red` / `clear`。只在 v4 统一实例里落地(UnifiedPage.applySlash)。 */
+const BLOCK_COLOR_SENTINEL = '\u0000__amadeus_block_color__:'
+/** 颜色 slash 项的 scaffold → 要上的颜色;不是颜色项返回 null。clear = 字色与底色一起清。 */
+export function blockColorFromScaffold(scaffold: string): { bg?: string; fg?: string } | null {
+  if (!scaffold.startsWith(BLOCK_COLOR_SENTINEL)) return null
+  const rest = scaffold.slice(BLOCK_COLOR_SENTINEL.length)
+  if (rest === 'clear') return { bg: '', fg: '' }
+  const [ch, v] = rest.split(':')
+  return ch === 'bg' ? { bg: v } : ch === 'fg' ? { fg: v } : null
+}
 
 const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
@@ -1103,6 +1139,14 @@ export function MilkdownInner({
         ctx.set(defaultValueCtx, initial)
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,
+          // 统一页面的主编辑器接管「点标注图标换图标」(Notion 对齐 A5,UnifiedPage 监听 amadeus:callout-icon)。
+          // 只给它打这个标记:画布卡片、嵌入、行预览、v3 宿主没人接,图标在那里照旧是不可点的装饰(callout.ts)。
+          ...(unified ? {
+            attributes: (state: EditorState) => ({
+              ...(typeof prev.attributes === 'function' ? prev.attributes(state) : prev.attributes ?? {}),
+              'data-callout-icon-pick': '',
+            }),
+          } : {}),
           editable: () => !readOnly,
           handleKeyDown: readOnly ? undefined : handleKeyDown,
           handlePaste: readOnly ? undefined : handlePaste,
@@ -2522,6 +2566,8 @@ export interface SlashItem {
   needsAi?: boolean
   category?: SlashCategory
   needsDocumentTask?: boolean
+  /** 只在输入了搜索词时出现(颜色这类一长串的命令:浏览时不占菜单,打 /红色、/blue 才出来)。 */
+  searchOnly?: boolean
 }
 
 /** SLASH_ITEMS 的**表内**形态:名字与分组存 i18n 键,useAllSlashItems 在渲染期取词。
@@ -2560,6 +2606,7 @@ export const SLASH_SENTINELS = {
   prompt: PROMPT_SENTINEL,
   taskList: TASK_LIST_SENTINEL,
   event: EVENT_SENTINEL,
+  blockColor: BLOCK_COLOR_SENTINEL,
 } as const
 
 // 前缀型 scaffold → 块转换(slash 选中时经 SlashOps.transform 在编辑器内单事务完成,绝不新建块)。
@@ -2605,6 +2652,9 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'code', labelKey: 'mdblock.slash.code', hint: '```', icon: <CodeBlockIcon />, groupKey: 'mdblock.group.advanced', scaffold: '```\n\n```', kw: 'code 代码 daima codeblock' },
   { key: 'table', labelKey: 'mdblock.slash.table', hint: '⊞', icon: <TableIcon />, groupKey: 'mdblock.group.advanced', scaffold: tableScaffold, kw: 'table 表格 biaoge grid 网格' },
   { key: 'divider', labelKey: 'mdblock.slash.divider', hint: '---', icon: <DividerIcon />, groupKey: 'mdblock.group.advanced', scaffold: '---\n\n', kw: 'divider hr 分割线 分隔 fenge' },
+  // 页内目录块:整块型,插入的就是 ```toc + 两行范围(Obsidian Dynamic Table of Contents 认的写法),嵌入层渲染成本页标题列表。
+  // v3 宿主没有嵌入层(插进去只是一段代码)→ 只给 v4。kw 的 `tableofcontents` 让中文界面打 /table of contents 也能搜到(查询里的空格会被去掉)。
+  { key: 'toc', labelKey: 'mdblock.slash.toc', hint: '```toc', icon: <TableOfContents size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.advanced', scaffold: TOC_FENCE, kw: 'toc tableofcontents table-of-contents contents 目录 mulu ml', unifiedOnly: true },
   // 单行 $$  $$(两 delimiter 同处一个 textblock,填内容即渲染为居中块公式)。旧的 '$$\n\n$$' 会被 commonmark
   // 拆成两个段落、每段只剩一个 $$ → 实况预览永远扫不到成对公式(见 mathLivePreview.scanMath)。
   { key: 'math', labelKey: 'mdblock.slash.math', hint: '$$', icon: <TeXIcon />, groupKey: 'mdblock.group.advanced', scaffold: '$$  $$', kw: 'math latex katex formula 数学 公式 gongshi' },
@@ -2623,6 +2673,26 @@ export const SLASH_ITEMS: SlashSeed[] = [
   // hint 是**触发语法**那一列(`.db` / `![[ ]]` / `#`),按钮没有语法就留空(同「图片」)。
   // 原本放的 ⚡ 在 mac 上渲染成彩色 emoji,是整张菜单里唯一一处。
   { key: 'button', labelKey: 'mdblock.slash.button', hint: '', icon: <SelectIcon />, groupKey: 'mdblock.group.advanced', scaffold: BLANK_BUTTON_BLOCK, kw: 'button 按钮 anniu 自动化 automation 一键 yijian 快捷 notion' },
+  // 整块颜色(Notion 对齐 A1):/红色、/蓝色背景、/默认颜色;/red、/blue background;拼音全拼与首字母
+  { key: 'color-default', labelKey: 'mdblock.slash.colorDefault', hint: '', icon: <span className="slash-color-glyph">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'clear', kw: 'default color 默认颜色 默认 moren yanse mrys 清除颜色 qingchu 无颜色 none', unifiedOnly: true, searchOnly: true },
+  { key: 'color-red', labelKey: 'mdblock.slash.color.red', hint: '', icon: <span className="slash-color-glyph" data-fg="red">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:red', kw: 'red red 红色 红 hongse hs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-red', labelKey: 'mdblock.slash.bg.red', hint: '', icon: <span className="slash-color-glyph" data-bg="red">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:red', kw: 'redbackground red-background redbackground 红色背景 红底 hongsebeijing hsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-orange', labelKey: 'mdblock.slash.color.orange', hint: '', icon: <span className="slash-color-glyph" data-fg="orange">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:orange', kw: 'orange orange 橙色 橙 chengse cs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-orange', labelKey: 'mdblock.slash.bg.orange', hint: '', icon: <span className="slash-color-glyph" data-bg="orange">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:orange', kw: 'orangebackground orange-background orangebackground 橙色背景 橙底 chengsebeijing csbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-yellow', labelKey: 'mdblock.slash.color.yellow', hint: '', icon: <span className="slash-color-glyph" data-fg="yellow">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:yellow', kw: 'yellow yellow 黄色 黄 huangse hs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-yellow', labelKey: 'mdblock.slash.bg.yellow', hint: '', icon: <span className="slash-color-glyph" data-bg="yellow">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:yellow', kw: 'yellowbackground yellow-background yellowbackground 黄色背景 黄底 huangsebeijing hsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-green', labelKey: 'mdblock.slash.color.green', hint: '', icon: <span className="slash-color-glyph" data-fg="green">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:green', kw: 'green green 绿色 绿 lvse lyuse lüse ls 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-green', labelKey: 'mdblock.slash.bg.green', hint: '', icon: <span className="slash-color-glyph" data-bg="green">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:green', kw: 'greenbackground green-background greenbackground 绿色背景 绿底 lvsebeijing lyusebeijing lüsebeijing lsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-teal', labelKey: 'mdblock.slash.color.teal', hint: '', icon: <span className="slash-color-glyph" data-fg="teal">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:teal', kw: 'teal teal 青色 青 qingse qs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-teal', labelKey: 'mdblock.slash.bg.teal', hint: '', icon: <span className="slash-color-glyph" data-bg="teal">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:teal', kw: 'tealbackground teal-background tealbackground 青色背景 青底 qingsebeijing qsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-blue', labelKey: 'mdblock.slash.color.blue', hint: '', icon: <span className="slash-color-glyph" data-fg="blue">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:blue', kw: 'blue blue 蓝色 蓝 lanse ls 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-blue', labelKey: 'mdblock.slash.bg.blue', hint: '', icon: <span className="slash-color-glyph" data-bg="blue">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:blue', kw: 'bluebackground blue-background bluebackground 蓝色背景 蓝底 lansebeijing lsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-purple', labelKey: 'mdblock.slash.color.purple', hint: '', icon: <span className="slash-color-glyph" data-fg="purple">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:purple', kw: 'purple purple 紫色 紫 zise zs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-purple', labelKey: 'mdblock.slash.bg.purple', hint: '', icon: <span className="slash-color-glyph" data-bg="purple">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:purple', kw: 'purplebackground purple-background purplebackground 紫色背景 紫底 zisebeijing zsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-magenta', labelKey: 'mdblock.slash.color.magenta', hint: '', icon: <span className="slash-color-glyph" data-fg="magenta">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:magenta', kw: 'magenta magenta 品红 品红 粉 粉色 pink pinhong fense ph fs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-magenta', labelKey: 'mdblock.slash.bg.magenta', hint: '', icon: <span className="slash-color-glyph" data-bg="magenta">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:magenta', kw: 'pinkbackground pink-background magentabackground 粉色背景 品红底 pinhongbeijing fensebeijing phbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
+  { key: 'color-grey', labelKey: 'mdblock.slash.color.grey', hint: '', icon: <span className="slash-color-glyph" data-fg="grey">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'fg:grey', kw: 'grey gray 灰色 灰 gray grey huise hs 字色 文字颜色 text color', unifiedOnly: true, searchOnly: true },
+  { key: 'bg-grey', labelKey: 'mdblock.slash.bg.grey', hint: '', icon: <span className="slash-color-glyph" data-bg="grey">A</span>, groupKey: 'mdblock.group.color', scaffold: BLOCK_COLOR_SENTINEL + 'bg:grey', kw: 'graybackground gray-background greybackground 灰色背景 灰底 huisebeijing hsbj 背景 底色 background highlight', unifiedOnly: true, searchOnly: true },
 ]
 
 /** v4 统一实例里暂不支持的 slash 项(按 key 屏蔽)。**空集不是死代码** —— MarkdownBlock 是
@@ -2854,12 +2924,23 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
   const editorDomRef = useRef(editorDom)
   editorDomRef.current = editorDom
   const all = useAllSlashItems({ unified })
+  // 多词条目名交给 slashSuggestPlugin:`/blue background` 打空格时菜单不关(见 setSpacedSlashLabels)
+  // 多词名 = 带空格的条目名 + 关键词里带连字符的(`blue-background` → `blue background`:中文界面下英文也能带空格搜)
+  useEffect(() => {
+    setSpacedSlashLabels(all.flatMap((it) => [
+      ...(/\s/.test(it.label) ? [it.label.toLowerCase()] : []),
+      ...it.kw.split(/\s+/).filter((k) => /\w-\w/.test(k)).map((k) => k.toLowerCase().replace(/-/g, ' ')),
+    ]))
+  }, [all])
   const allItems = useMemo(
     () => all.filter((it) => !hideKeys?.has(it.key) && (!ctx || slashItemApplies(it.key, ctx))),
     [all, hideKeys, ctx],
   )
 
   const q = query.trim().toLowerCase()
+  // 浏览(没打字)时「常用」一组排最前(A2,slashSuggested.ts);打字搜索照旧只看 allItems 的匹配分。
+  // 只供搜索的项(A1 的 /红色 等整块颜色)浏览时不占菜单,也不进「常用」。
+  const browseItems = useMemo(() => withSuggestedGroup(allItems.filter((it) => !it.searchOnly), t('mdblock.group.suggested'), true), [allItems, t])
   // 有输入 → 按匹配度排序(label 与各关键词取最佳 fuzzy 分,降序);无输入 → 保持分组固定顺序。
   // 修掉「text 恒第一」:此前只 includes 过滤不排序,SLASH_ITEMS 首项 text 永远最靠前。
   const matches = q
@@ -2868,7 +2949,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         .filter((x): x is { it: SlashItem; s: number } => x.s !== null)
         .sort((a, b) => b.s - a.s)
         .map((x) => x.it)
-    : allItems
+    : browseItems
   const category = categoryChoice?.query === q ? categoryChoice.category : defaultSlashCategory(matches, q)
   const categoryItems = matches.filter((it) => slashCategory(it) === category)
   // Browsing groups share one visual/keyboard order, including late-added built-in and plugin items.
@@ -2884,6 +2965,11 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
     setActive(0)
     setCategoryChoice(null)
   }, [query])
+
+  // 悬停预览卡(A2):只认真鼠标悬停;键盘上下、换页、滚动、打字都收起。手机块面板 / 带搜索框的选择器不出。
+  const [preview, setPreview] = useState<{ key: string; top: number; menu: DOMRect; w: number } | null>(null)
+  useEffect(() => { setPreview(null) }, [query, category])
+  const colorTip = all.some((it) => it.key === 'bg-blue') // 整块颜色的斜杠命令在才提(A1)
 
   // 切类别不许挪菜单:同一个 query 内只长不缩。菜单开在光标上方时底边贴着光标,一缩顶上的类别胶囊
   // 就从鼠标底下滑走(基本 → AI 实测下移 206px)。按 query 记账(同 categoryChoice),换 query 当帧解锁。
@@ -2927,6 +3013,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         stop(e)
         onClose()
       } else if (bareArrow && e.key.startsWith('Arrow')) {
+        setPreview(null)
         const nextCategory = moveSlashCategory(category, e.key)
         if (nextCategory !== null) { stop(e); chooseCategory(nextCategory) }
         else {
@@ -2939,7 +3026,8 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         else onClose() // 无匹配:不拦截,让 Enter/Tab 正常落进编辑器(换行/缩进)
       }
       // 其余(字母/空格/退格/Home…)一律放行 → 落进编辑器,slashSuggestPlugin 重算 query。
-      // 空格/换行让 query 含空白 → 插件 report(null) → 菜单自动关、'/…' 留成字面文本(AFFiNE 式)。
+      // 空格/换行让 query 含空白 → 插件 report(null) → 菜单自动关、'/…' 留成字面文本(AFFiNE 式);
+      // 例外:还有多词条目名以它开头(`/blue background`、`/标题 1`)时菜单不关(spacedSlashQueryOk)。
       // 退格删到 '/' 之前 → 无 '/' → 插件 report(null) → 关菜单(Notion 式撤销)。
     }
     window.addEventListener('keydown', onKey, true)
@@ -2957,6 +3045,11 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
       // ↑↓ 走到可视区外的选项要跟着滚(block:'nearest' 已可见时是空操作,鼠标 hover 不会乱跳)。
       ref={i === activeIdx ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
       onMouseEnter={() => setActive(i)}
+      onPointerEnter={(e) => {
+        const menu = menuEl.current?.getBoundingClientRect()
+        setPreview(!onQuery && e.pointerType === 'mouse' && menu && hasSlashPreview(it.key)
+          ? { key: it.key, top: e.currentTarget.getBoundingClientRect().top, menu, w: PREVIEW_W * zoomOf(e.currentTarget) } : null)
+      }}
       // onMouseDown+preventDefault:选项按下时不夺走编辑器焦点(否则 consume/transform 前编辑器已 blur),同 WikiSuggest。
       onMouseDown={(e) => { e.preventDefault(); onPick(it) }}
       role="menuitem"
@@ -2969,6 +3062,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
     </button>
   )
 
+  const previewItem = preview ? items.find((x) => x.key === preview.key) : undefined
   // Browsing (no query) → grouped with section labels; filtering → flat list.
   const grouped: Array<{ name: string; rows: Array<{ it: SlashItem; idx: number }> }> = []
   items.forEach((it, idx) => {
@@ -2985,6 +3079,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
       <div className="slash-backdrop" onMouseDown={onClose} />
       {/* 按下菜单空白/分组标签/滚动条不夺编辑器焦点:失焦即关(L-04)后,不拦这一下菜单会自己关掉。 */}
       <OverlayAt id={menuId} className={`slash-menu${onQuery ? ' slash-menu--picker' : ''}`} x={left} y={top} anchorTop={anchorTop} style={{ minHeight }}
+        onPointerLeave={() => setPreview(null)}
         innerRef={(el) => { menuEl.current = el }} onMouseDown={(e) => { if (!(e.target instanceof HTMLInputElement)) e.preventDefault() }}>
         {onQuery && <input className="slash-query" autoFocus value={query} onChange={(e) => onQuery(e.target.value)} aria-label={t('mdblock.picker.query')} placeholder={t('mdblock.picker.query')} />}
         <div className="slash-category-tabs cap-tabs" role="tablist" aria-label={t('mdblock.category.label')} ref={tabsRef}>
@@ -2998,7 +3093,7 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
         </div>
         <div className="slash-list" id={`${menuId}-panel`} role="tabpanel" data-category={category} aria-labelledby={`${menuId}-tab-${category}`}>
         {items.length === 0 && <div className="slash-empty">{t(q ? 'mdblock.menu.noMatch' : 'mdblock.category.empty')}</div>}
-        <div className="slash-scroll" id={`${menuId}-commands`} role="menu" aria-labelledby={`${menuId}-tab-${category}`}>
+        <div className="slash-scroll" id={`${menuId}-commands`} role="menu" aria-labelledby={`${menuId}-tab-${category}`} onScroll={() => setPreview(null)}>
           {q || grouped.length <= 1
             ? items.map(renderItem)
             : grouped.map((g) => (
@@ -3016,9 +3111,19 @@ function SlashMenu({ query, onQuery, left, top, anchorTop, hideKeys, ctx, unifie
             <span>{t('mdblock.foot.close')}</span>
         </div>
       </OverlayAt>
+      {previewItem && preview && (
+        // 卡片宽 264(CSS px,乘上 body zoom 才是视口宽):右边放得下放右边,放不下翻到菜单左边;纵向由 OverlayAt 夹进视口。
+        // 不吃指针,不挡菜单。
+        <OverlayAt className="slash-preview" aria-hidden y={preview.top - 6}
+          x={preview.menu.right + 8 + preview.w <= window.innerWidth - 8 ? preview.menu.right + 8 : Math.max(8, preview.menu.left - 8 - preview.w)}>
+          <SlashPreviewBody item={previewItem} t={t} colorTip={colorTip} />
+        </OverlayAt>
+      )}
     </>
   )
 }
+
+const PREVIEW_W = 264
 
 /** 「链接数据库」选择器(slash 唤起):列出 vault 全部 .db,可打字过滤;
  *  选中插入 ![[..]] 嵌入 —— 唯一裸名即最短,重名给全 vault 相对路径(resolveAttachment 根回退可解析)。 */

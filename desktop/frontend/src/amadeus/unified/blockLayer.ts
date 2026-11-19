@@ -12,6 +12,7 @@
  *    handleDrop 用精确落点替换 PM 默认 dropPoint(默认那个会诡异重嵌套);同文档移动=删+插一个事务。
  *  - AFFiNE 行为基准:块内打字藏把手 / callout(blockquote)整只一个把手 / 表格内部不出把手 /
  *    Esc 两段(文字 → 块选中 → 回文字)。多选/框选归 Phase B。 */
+import { CALLOUT_HEAD_RE } from '../../../../shared/amadeus/calloutToken'
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { findParent } from '@milkdown/kit/prose'
@@ -35,6 +36,7 @@ import { carryFolds, unfoldNewlyHidden, withFoldedSections } from './foldCarry'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
 import { installColumnResize } from './columnResize'
+import { installTableHover } from './tableHover'
 import { openBlockPicker } from '../blocks/markdown/blockPicker'
 import { isCoarsePointer } from '../../touch'
 import { numberedMarkerAt, installNumberedMarkerLongPress } from './listNumbering'
@@ -758,7 +760,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     let forbidden = false
     content.descendants((n) => { if (['amadeusCanvasCard', 'amadeusColumnRow', 'amadeusColumnCell'].includes(n.type.name)) forbidden = true })
     if (forbidden) return null
-    const head = !!node.firstChild?.isTextblock && /^\[![\w-]+\]/.test(node.firstChild.textContent)
+    const head = !!node.firstChild?.isTextblock && CALLOUT_HEAD_RE.test(node.firstChild.textContent)
     const titleEl = view.nodeDOM(pos + 1)
     if (head && boxed(titleEl)) {
       const r = titleEl.getBoundingClientRect()
@@ -2010,6 +2012,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         root.addEventListener('drop', onDropCapture, true)
 
         const columnResize = installColumnResize(editorView, container, root, overlayOrigin)
+        // 表格悬停层(Notion 对齐第 3 条):加号条 / 右下角 / 行列把手,定位与把手栏同一套几何。
+        const tableHover = installTableHover(editorView, container, root, { origin: overlayOrigin, scale: () => visualScale(editorView.dom) })
 
         // 三颗常驻钮的 title 只在建 DOM 时写过一次 —— 切语言不重建编辑器,不订阅就永远停在旧语言。
         // (fold.title 每次 syncFold 重算、空块 placeholder 随 decorations 重算,都不用管。)
@@ -2030,6 +2034,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           //    一律按「锚点块已不在」处理 = hide(),本函数绝不许抛。仪器:check:dragdel。
           update: (v) => {
             columnResize.update()
+            tableHover.update()
             const a = activeRef
             if (!a) return
             let same = false
@@ -2057,6 +2062,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             root.removeEventListener('mouseleave', onLeave)
             offLocale()
             columnResize.destroy()
+            tableHover.destroy()
             window.removeEventListener('scroll', onScroll, { capture: true })
             window.removeEventListener('dragover', onDragOver)
             content.remove()

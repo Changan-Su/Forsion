@@ -58,13 +58,13 @@ const OFFICIAL_FAST: Record<string, Array<[RegExp, string]>> = {
     [/^(gpt-4\.1(-mini)?|o3)$/, '1.75'],
     [/^gpt-4o$/, '1.7'],
     [/^gpt-4o-mini$/, '1.67'],
-    [/^(gpt-6(\.1)?-(astra|sol|luna|terra)|gpt-5\.6-(sol|terra|luna)|gpt-5\.4(-mini)?|gpt-5\.[12]|gpt-5|gpt-5\.3-codex)$/, '2'],
+    [/^(gpt-6(\.[12])?-(astra|sol|luna|terra)|gpt-5\.6-(sol|terra|luna)|gpt-5\.4(-mini)?|gpt-5\.[12]|gpt-5|gpt-5\.3-codex)$/, '2'],
   ],
   'api.anthropic.com': [[/^claude-opus-5-5$/, '2']],
 };
 /** OpenAI Ultrafast(11-03 真 key 实测):只有 Responses 认 service_tier "ultrafast",chat/completions 与不支持的模型都 400 Invalid service_tier。 */
 const OFFICIAL_ULTRAFAST: Record<string, Array<[RegExp, string]>> = {
-  'api.openai.com': [[/^(gpt-6-astra|gpt-6\.1-sol)$/, '6']],
+  'api.openai.com': [[/^(gpt-6-astra|gpt-6\.1-sol|gpt-6\.2-(astra|sol))$/, '6']], // 6.2 两支价目页:至 2027-02-28 促销 3x,之后 6x;标签按牌价
 };
 
 function officialFastTiers(p: DirectProvider, table: Record<string, Array<[RegExp, string]>>): Record<string, string> | undefined {

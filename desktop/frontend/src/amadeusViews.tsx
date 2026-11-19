@@ -79,6 +79,7 @@ import type { ViewProps } from '@lcl/engine'
 import { PageView, focusBody } from '@amadeus/components/PageView'
 // 移动端块面板的清单与落点(与桌面 slash 菜单同一份真源,见 MarkdownBlock)。
 import { useAllSlashItems, getFocusedBlockApply, type SlashItem } from '@amadeus/blocks/markdown/MarkdownBlock'
+import { withSuggestedGroup } from '@amadeus/blocks/markdown/slashSuggested'
 import { hrefKind } from '@amadeus/blocks/markdown/linkHref'
 import { CloudVaultPanel } from './components/CloudVaultPanel'
 import { PresenceDots } from './components/PresenceDots'
@@ -2020,12 +2021,14 @@ function useKeyboardMetrics(): { lift: number; kbHeight: () => number } {
  *  插件注册的项自动出现在这里。选中不走「往正文打 /」,直接调最后聚焦那个块的 applySlash —— 因此
  *  模板/图片/数据库/画板那些 sentinel 分支、插件 run() 的返回值校验全都照旧生效。 */
 function AmxBlockPicker({ height, onClose }: { height: number; onClose: () => void }) {
+  const { t } = useI18n()
   const items = useAllSlashItems()
+  // 「常用」一组在最前(A2,同桌面斜杠菜单);单列清单,常用里有的不在原分组里重复
   const groups = useMemo(() => {
     const m = new Map<string, SlashItem[]>()
-    for (const it of items) (m.get(it.group) ?? m.set(it.group, []).get(it.group)!).push(it)
+    for (const it of withSuggestedGroup(items, t('mdblock.group.suggested'), false)) (m.get(it.group) ?? m.set(it.group, []).get(it.group)!).push(it)
     return [...m]
-  }, [items])
+  }, [items, t])
   return (
     <div className="amx-bpick" style={{ height }}>
       <div className="amx-bpick-scroll">

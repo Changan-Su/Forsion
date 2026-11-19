@@ -72,7 +72,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'calm-motion', tab: 'theme', anchor: 'calm-motion', labelKey: 'settings.theme.calmMotion', keywords: '舒缓过渡 呼吸感 动画 节奏 慢 transition animation motion gentle calm' },
   { id: 'motion-theme', tab: 'theme', anchor: 'motion-theme', labelKey: 'settings.motionTheme.title', keywords: '动效主题 动画 动效 水滴 拉伸 平移 液滴 风格 motion theme animation droplet stretch glide genesis' },
   { id: 'motion-fade', tab: 'theme', anchor: 'motion-fade', labelKey: 'settings.motionTheme.fadeOnly', keywords: '只淡入淡出 减少动态效果 淡入 淡出 晕动 无障碍 fade only reduce motion accessibility' },
-  { id: 'ribbon-auto-home', tab: 'theme', anchor: 'ribbon-auto-home', labelKey: 'settings.theme.ribbonAutoHome', keywords: '归位 Ribbon 滚动 复位 滚轮 scroll reset', needs: ['wide'] },
+  { id: 'ribbon-auto-home', tab: 'spaces', anchor: 'ribbon-auto-home', labelKey: 'settings.theme.ribbonAutoHome', keywords: '归位 Ribbon 滚动 复位 滚轮 scroll reset', needs: ['wide'] },
   { id: 'fonts', tab: 'theme', anchor: 'fonts', labelKey: 'settings.theme.typographyTitle', keywords: '字体 font typography' },
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },

@@ -60,7 +60,7 @@ import { newSessionPreset, amadeusLandingRoot, type QueueItem } from '../tangu/s
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
-import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell } from '@lcl/engine'
+import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell, useWideLayout } from '@lcl/engine'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -296,7 +296,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
   const restoringEarlierMessages = !!readingKey && readChatPosition(readingKey)?.follow === false
-  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId)
+  const singleColumnShell = inSingleColumnShell()
+  const wideLayout = useWideLayout(singleColumnShell)
+  const deferFirstBatch = singleColumnShell && !wideLayout
+  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId, deferFirstBatch)
+  const waitingForTail = deferFirstBatch && activeMessages.length > 0 && shownMessages.length === 0
   // 运行中发出、Agent 还没读到的插话:按下 Enter 就画进对话末尾(像 Codex / Claude 那样「发出去了」),不再挂在输入框上方排队。
   // 引擎读到时 turn_boundary 带回**同一个 id** 的用户消息,插在收尾那段之后 —— 和这里的位置一样,同 key 原地转正、不重挂。
   // 画布模式没有这条流,等待区照旧留在输入框上方(Composer2 steerInline)。
@@ -545,7 +549,6 @@ export function ChatView({ leaf, params }: ViewProps) {
     const el = chatScrollRef.current
     const content = el?.querySelector('.t2-stream-inner')
     if (!el || !content) return
-    let raf = 0
     // Geometry changes cannot tell user scrolling from content-visibility corrections.
     // Only explicit gestures/navigation release follow; a downward gesture at the end
     // (or scrollToBottom) restores it. No initial geometry read during the Space commit.
@@ -586,7 +589,8 @@ export function ChatView({ leaf, params }: ViewProps) {
         setShowJump(false)
       }
     }
-    const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(follow) })
+    // 高度在排版后变化时当帧贴底。再排一个 rAF 会让一帧先按旧的滚动位置画出来。
+    const ro = new ResizeObserver(follow)
     ro.observe(content)
     ro.observe(el)
     // ResizeObserver handles the first delivered size and later changes; no duplicate
@@ -601,7 +605,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
     return () => {
-      ro.disconnect(); cancelAnimationFrame(raf)
+      ro.disconnect()
       el.removeEventListener('scroll', update); el.removeEventListener('wheel', onWheel)
       el.removeEventListener('touchstart', onTouchStart); el.removeEventListener('touchmove', onTouchMove)
       el.removeEventListener('pointerdown', down); el.removeEventListener('keydown', onKey)
@@ -613,8 +617,8 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   const compactingOn = s.compacting !== undefined
   useLayoutEffect(() => {
-    if (stickToBottom.current && !s.jumpTarget && !readingPosition.current?.restoring) scrollToBottom()
-  }, [activeMessages, historyLoading, scrollToBottom, compactingOn])
+    if (!waitingForTail && stickToBottom.current && !s.jumpTarget && !readingPosition.current?.restoring) scrollToBottom()
+  }, [activeMessages, historyLoading, waitingForTail, scrollToBottom, compactingOn])
 
   // 新计划待拍板时强制定位到底部:拍板区在输入框上方的托盘里,但计划正文在流里,得让人看得到。
   // 审批与普通提问不算:它们整张在托盘里恒可见,再把人拽到底部正是「打断阅读」的一半。
@@ -732,7 +736,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     ? s.sessions.find((x) => x.id === activeSession.parent_session_id) : undefined))
   const kidRoot = kidParent ? (kidParent.fork_message_id ? kidParent.parent_session_id : kidParent.parent_session_id ? undefined : kidParent.id) : undefined
   const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : kidRoot || activeId
-  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !inSingleColumnShell() && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
+  const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !singleColumnShell && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
@@ -859,10 +863,10 @@ export function ChatView({ leaf, params }: ViewProps) {
                 别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
             <div className="t2-stream-inner" data-has-messages={anyShown ? '' : undefined}>
             {hasMessages && <ChildFromLine session={activeSession} />}
-            {!hasMessages ? (
+            {!hasMessages || waitingForTail ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。
-              historyLoading ? <Skeleton variant="chat" /> : null
+              historyLoading || waitingForTail ? <Skeleton variant="chat" /> : null
             ) : (
               // 待读插话和正文放进同一个数组:读到后同 id 的真消息接替它时 React 认成同一个节点
               // 已经进了正文的(turn_boundary 抢在 POST 应答前到)不再画一份,免得同 key 两个节点

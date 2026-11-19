@@ -69,6 +69,14 @@ describe('unescapeCalloutToken', () => {
     expect(unescapeCalloutToken('> \\[链接]')).toBe('> \\[链接]')
   })
 
+  it('令牌里(类型 + 元数据位)的转义也去掉,标题和正文的不动(A5,Obsidian 按原文读元数据)', () => {
+    expect(unescapeCalloutToken('> [!tip|blue wide foo\\_bar] 标题 a\\_b')).toBe('> [!tip|blue wide foo_bar] 标题 a\\_b')
+    expect(unescapeCalloutToken('> \\[!my\\_type|x\\*y] t')).toBe('> [!my_type|x*y] t')
+    expect(unescapeCalloutToken('> [!tip] a\\_b')).toBe('> [!tip] a\\_b')
+    expect(unescapeCalloutToken('> [!not a\\_token] y')).toBe('> [!not a\\_token] y')
+    expect(unescapeCalloutToken('[!tip|foo\\_bar] 不在引用里')).toBe('[!tip|foo\\_bar] 不在引用里')
+  })
+
   it('没有转义时原样返回', () => {
     expect(unescapeCalloutToken('> [!note] 已经是对的')).toBe('> [!note] 已经是对的')
   })

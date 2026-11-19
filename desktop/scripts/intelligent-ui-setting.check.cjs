@@ -46,7 +46,7 @@ async function main() {
       fs.mkdirSync(path.dirname(SHOT), { recursive: true }); await fl.screenshot({ path: SHOT })
     }
     await fl.locator('.settings-nav-list button').filter({ hasText: '外观' }).first().click()
-    await fl.locator('.settings-theme-behavior, [data-setting-anchor="ui-zoom"]').first().waitFor({ timeout: 15000 })
+    await fl.locator('[data-setting-anchor="ui-zoom"]').first().waitFor({ timeout: 15000 })
     check('外观页不再有这一行', await fl.locator('[data-setting-anchor="visuals"]').count() === 0)
     console.log(failed ? `${failed} FAILED` : `all passed. Screenshot: ${SHOT}`)
   } finally {

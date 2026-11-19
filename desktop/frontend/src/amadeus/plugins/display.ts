@@ -47,10 +47,13 @@ export function pluginsWithSettingsPanel<T extends { id: string; locked?: boolea
   activeIds: readonly string[],
   settings: ReadonlyArray<{ pluginId: string; item: { key: string } }>,
   settingsViews: ReadonlyArray<{ pluginId: string; item: { category?: string } }>,
+  /** ctx.registerSettingsPage 的整页描述(2026-11-18+);旧调用方不传 = 没有。 */
+  settingsPages: ReadonlyArray<{ pluginId: string }> = [],
 ): T[] {
   return plugins.filter((p) => activeIds.includes(p.id) && (
     settings.some((o) => o.pluginId === p.id && o.item.key !== AUTO_WORK_FOLDER_KEY)
     || settingsViews.some((o) => o.pluginId === p.id && !isPlacedSettingsView(p, o.item))
+    || settingsPages.some((o) => o.pluginId === p.id)
   ))
 }
 

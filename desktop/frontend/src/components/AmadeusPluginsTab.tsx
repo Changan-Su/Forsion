@@ -21,7 +21,8 @@ import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '.
 import { pluginDataSyncOn, pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
-import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
+import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
+import { forsionPluginHasSettings, readKnownPluginSettings } from './pluginSettingsNav'
 import { Markdown } from './Markdown'
 import { SettingsSwitch } from './SettingsPrimitives'
 import { KNOWN_APPS } from '../../../shared/knownApps'
@@ -431,6 +432,24 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
   )
 }
 
+/** 插件设置页(SettingsModal 的 `fplugin:<id>`)身份卡上的开关:和卡片 / 详情页同一个动作(普通插件 PluginSwitch,
+ *  带主进程半身的内置包 BundleSwitch;没有那座桥就不给)。 */
+export const PluginEnableSwitch: React.FC<{ p: AmadeusPlugin; onEngineReload?: () => void }> = ({ p, onEngineReload }) => {
+  const { t, locale } = useI18n()
+  if (p.locked) return window.tangu?.setBundleEnabled ? <BundleSwitch p={p} /> : null
+  return <PluginSwitch p={p} onFlip={() => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))} />
+}
+
+/** 插件设置页「已停用 · 启用」那颗按钮:朝「开」拨(已经想开的不动)。locked 包没有桥就做不了 → false。 */
+export function canTurnOnPlugin(p: AmadeusPlugin): boolean {
+  return !p.blocked && (p.locked ? !!window.tangu?.setBundleEnabled : true)
+}
+export function turnOnPlugin(p: AmadeusPlugin, t: T, locale: Loc, onEngineReload?: () => void): void {
+  if (!canTurnOnPlugin(p) || pluginWanted(p)) return
+  if (p.locked) { void setBundleOn(p, true); return }
+  flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))
+}
+
 /** manifest `syncData: true` 的插件:这台设备上同不同步它的数据(pluginDataSync.ts;没有 cloudFetch 的宿主不画)。 */
 const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const { t } = useI18n()
@@ -630,22 +649,24 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
 
 /** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
  *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
+async function setBundleOn(p: AmadeusPlugin, on: boolean): Promise<void> {
+  try {
+    const { restartPending } = await window.tangu!.setBundleEnabled!(p.id, on)
+    usePluginStore.setState((s) => ({ plugins: s.plugins.map((x) => (x.id === p.id ? { ...x, bundleOff: !on, restartPending } : x)) }))
+    // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来)
+    if (on) usePluginStore.getState().enable(p.id)
+    else usePluginStore.getState().disable(p.id)
+  } catch (e) {
+    panelToast(ipcErrorText(e), true)
+  }
+}
+
 const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const { locale } = useI18n()
   const [busy, setBusy] = useState(false)
   const flip = async (on: boolean): Promise<void> => {
     setBusy(true)
-    try {
-      const { restartPending } = await window.tangu!.setBundleEnabled!(p.id, on)
-      usePluginStore.setState((s) => ({ plugins: s.plugins.map((x) => (x.id === p.id ? { ...x, bundleOff: !on, restartPending } : x)) }))
-      // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来)
-      if (on) usePluginStore.getState().enable(p.id)
-      else usePluginStore.getState().disable(p.id)
-    } catch (e) {
-      panelToast(ipcErrorText(e), true)
-    } finally {
-      setBusy(false)
-    }
+    try { await setBundleOn(p, on) } finally { setBusy(false) }
   }
   return (
     <span onClick={(e) => e.stopPropagation()}>
@@ -763,13 +784,15 @@ const PluginDetail: React.FC<{
   cfg?: TanguDesktopConfig | null
   onEngineReload?: () => void
   enginePlugins?: PluginInfo[] | null
-}> = ({ plugin: p, onBack, fromList, cfg, onEngineReload, enginePlugins }) => {
+  onOpenSettings?: (id: string) => void
+}> = ({ plugin: p, onBack, fromList, cfg, onEngineReload, enginePlugins, onOpenSettings }) => {
   const { t, locale } = useI18n()
   const activeIds = usePluginStore((s) => s.activeIds)
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
-  const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
-  // 挂进「Forsion 云端」的面板在那一页画,详情页不重复
-  const settingsViews = usePluginStore((s) => s.settingsViews).filter((o) => o.pluginId === p.id && !isPlacedSettingsView(p, o.item))
+  // 设置只住一处(方案 P4,2026-11-18):插件的设置页在「设置 › 插件设置」,详情页只给一颗「设置」直达,不再画第二份。
+  // 判据与左栏同一条(在跑看它注册了什么,关着看以前见过没有),挂进「Forsion 云端」的面板不算。
+  const hasSettings = usePluginStore((s) => forsionPluginHasSettings(p.id, s.activeIds.includes(p.id),
+    new Set(pluginsWithSettingsPanel([p], s.activeIds, s.settings, s.settingsViews, s.settingsPages).map((x) => x.id)), readKnownPluginSettings()))
   usePluginOnboarding((s) => s.version) // 实测结果一变,徽标即时跟上
   const on = activeIds.includes(p.id)
   // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
@@ -828,6 +851,9 @@ const PluginDetail: React.FC<{
         {/* 只有带 requires 的才是「闸」;没有前置条件的 onboarding 只是使用说明,在下面安静地展示,不给这个按钮。 */}
         {isGate(p) && on && (
           <button className="btn ghost sm" data-onboarding-run onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
+        )}
+        {onOpenSettings && hasSettings && (
+          <button className="btn ghost sm" data-plugin-open-settings onClick={() => onOpenSettings(p.id)}>{t('settings.amadeusPlugins.settings')}</button>
         )}
         {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
         {/* 随 App 播种的(preinstalled)同样不给卸载:删了下次启动会种回来,想不用就关开关 */}
@@ -923,18 +949,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
-      {settings.length > 0 && (
-        <>
-          <div className="hint">{t('settings.amadeusPlugins.settings')}</div>
-          <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {settings.map((o) => <SettingRow key={o.item.key} pluginId={p.id} def={o.item} />)}
-          </div>
-        </>
-      )}
       <PluginSyncRow p={p} />
-      {/* 自绘设置面板:排在声明式旋钮之后 —— 旋钮是宿主统一样式的小项,复杂面往下放才不打断阅读节奏。
-          只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
-      {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
       <PluginGuide plugin={p} />
       {on && <PluginFootprint p={p} />}
       {/* README / 更新日志:必须套 .md-body —— 裸 <Markdown> 吃的是浏览器默认样式(h1 2em、1em 段距),
@@ -966,7 +981,9 @@ export const AmadeusPluginsTab: React.FC<{
    *  id 与返回去处**必须成对**给 —— 拆成两个可选 prop 会出现「给了 id 没给 onBack、返回点不动」
    *  的半瘫状态(codex 评审 2026-08-21)。 */
   controlledDetail?: { id: string; onBack: () => void }
-}> = ({ cfg, onEngineReload, enginePlugins, controlledDetail, section = 'installed' }) => {
+  /** 详情页的「设置」直达(插件有设置时才出):落到它在「设置 › 插件设置」里的那一页。不给 = 不出这颗按钮。 */
+  onOpenSettings?: (id: string) => void
+}> = ({ cfg, onEngineReload, enginePlugins, controlledDetail, onOpenSettings, section = 'installed' }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -996,7 +1013,7 @@ export const AmadeusPluginsTab: React.FC<{
   }, [listDetailOpen])
   if (detailPlugin) {
     const back = controlled && controlledDetail ? controlledDetail.onBack : () => setDetail(null)
-    return <PluginDetail plugin={detailPlugin} onBack={back} fromList={!controlled} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} />
+    return <PluginDetail plugin={detailPlugin} onBack={back} fromList={!controlled} cfg={cfg} onEngineReload={onEngineReload} enginePlugins={enginePlugins} onOpenSettings={onOpenSettings} />
   }
 
   // 核心独立一页；已安装页把编辑器扩展、宿主内置能力与开发操作折叠收纳。

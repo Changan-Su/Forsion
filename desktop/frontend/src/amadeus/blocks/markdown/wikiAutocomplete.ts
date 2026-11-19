@@ -133,6 +133,16 @@ export function wikiSuggestPlugin(report: SuggestReport) {
  *  to the editor and never get swallowed, and typing a space just leaves "/foo " as literal
  *  text (the menu vanishes). `from` = position just after "/"; the picker deletes the
  *  "/query" range via slashRange (blockTriggers) before applying the item. */
+/** 多词条目名(小写,当前语言):斜杠查询里的空格只在某个多词条目名以它开头时才不关菜单
+ *  (`/blue background`、`/标题 1`,Notion 同);其余照旧「空格 = 关菜单、留字面」。由斜杠菜单按当前清单登记。 */
+let spacedSlashLabels: readonly string[] = []
+export function setSpacedSlashLabels(labels: readonly string[]): void { spacedSlashLabels = labels }
+export function spacedSlashQueryOk(q: string): boolean {
+  if (/^\s|\s\s/.test(q)) return false
+  const l = q.toLowerCase().replace(/\s/g, ' ')
+  return spacedSlashLabels.some((x) => x.startsWith(l))
+}
+
 export function slashSuggestPlugin(report: SuggestReport) {
   return $prose(
     () =>
@@ -156,7 +166,7 @@ export function slashSuggestPlugin(report: SuggestReport) {
             const q = before.slice(slash + 1)
             // 空格(含 nbsp)/换行/']' → 关菜单留字面;'￼' = 行内图片/公式 leaf 占位,命中即关
             // (否则 slashRange 从 '/' 删到光标会把图片/公式一起删掉,Codex)。
-            if (q.length > 40 || /[\s\]\n￼]/.test(q)) return report(null)
+            if (q.length > 40 || /[\]\n￼]/.test(q) || (/\s/.test(q) && !spacedSlashQueryOk(q))) return report(null)
             const from = $head.start() + slash + 1
             const to = selection.head
             let coords: { left: number; top: number; bottom: number }
