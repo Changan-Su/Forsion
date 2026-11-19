@@ -27,7 +27,7 @@ export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode
 export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout } from './SingleColumnHost'
-export { listFirstNow, useListFirst } from './listFirst'
+export { listFirstNow, useListFirst, usePhoneForm } from './listFirst'
 export { MiniColumnHost } from './MiniColumnHost'
 export { useMiniChrome } from './miniChrome'
 export type { MiniChromePicker } from './miniChrome'

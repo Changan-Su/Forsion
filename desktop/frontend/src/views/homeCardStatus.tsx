@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { mountHostReact } from '@lcl/components'
+import { usePhoneForm } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -77,17 +78,19 @@ export function useCardStatus(): (id: string) => string {
 
 /** 最近打开的、还在库里的那篇。「最近」不跟改名 / 删除(amadeusPrefs 的约定:失效即隐藏,笔记列表的「最近」也这样过滤),
  *  只取第一条会把已经不在的旧路径报在卡上 —— 改过名的笔记显示成改名前的 `untitled`(手机走查 2026-11-19)。
- *  库根与页面表是一起落定的(restoreVault / 换库):还没有库根时无从核对,照旧取第一条。 */
+ *  库根与页面表是一起落定的(restoreVault / 换库):还没有库根时无从核对,照旧取第一条。只在手机形态上过滤(这次走查的范围),
+ *  桌面与平板横屏照旧取第一条。 */
 function useLatestNote(): string | undefined {
+  const phone = usePhoneForm()
   const recents = useAmadeusPrefs((s) => s.recents)
   const root = usePageStore((s) => s.vaultRoot)
   const pages = usePageStore((s) => s.pages)
   const files = usePageStore((s) => s.files)
   return useMemo(() => {
-    if (!root) return recents[0]
+    if (!phone || !root) return recents[0]
     const known = new Set([...pages, ...files])
     return recents.find((p) => known.has(p))
-  }, [recents, root, pages, files])
+  }, [phone, recents, root, pages, files])
 }
 
 /** `ctx.spaces.mountStatus` 的界面那半:把某个 Space(或商店 / 成就那两格)的近况那一行画进插件给的 `el`,跟着数据自己更新。 */
