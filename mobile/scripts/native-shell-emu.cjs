@@ -4144,7 +4144,18 @@ const tabCountText = (list) => {
     const bar = await elRect("document.querySelector('.amx-findbar')")
     const capL = h.byId(ui(), 'nativeChrome.capLeft')
     shot('05d-chat-find-bar')
-    assert.ok(bar && bar.top >= 0 && bar.bottom <= screen.h && (!capL || bar.top >= capL.rect.bottom - 2), `the find bar is off screen or under the capsules (${bar && fmt(bar)}, capsule ${capL && fmt(capL.rect)})`)
+    console.log(`  webview: ${JSON.stringify(await cdp.eval("({ ua: (navigator.userAgent.match(/Chrome\\/[\\d.]+/) || [''])[0], currentCSSZoom: 'currentCSSZoom' in document.body, bodyZoom: getComputedStyle(document.body).zoom, innerWidth })"))}`)
+    // with a word typed (what a person sees): the bar stays put and the text is on screen
+    if (!(await cdp.eval("document.activeElement === document.querySelector('.amx-findbar input')"))) await tapEl("document.querySelector('.amx-findbar input')")
+    await h.pause(300)
+    h.adb('shell', 'input', 'text', 'E2E')
+    await h.pause(900)
+    const barTyped = await elRect("document.querySelector('.amx-findbar')")
+    const inpTyped = await elRect("document.querySelector('.amx-findbar input')")
+    console.log(`  find bar ${fmt(bar)}; typed "E2E": bar ${fmt(barTyped)}, input ${fmt(inpTyped)}, value "${await cdp.eval("document.querySelector('.amx-findbar input')?.value")}", screen ${screen.w}x${screen.h}`)
+    shot('05d2-chat-find-typed-light')
+    if (imeShown()) { h.key(4); await h.pause(700) } // the keyboard goes first; the Back under test comes next
+    assert.ok(bar &&bar.top >= 0 && bar.bottom <= screen.h && (!capL || bar.top >= capL.rect.bottom - 2), `the find bar is off screen or under the capsules (${bar && fmt(bar)}, capsule ${capL && fmt(capL.rect)})`)
     const sideways = bar.left < -1 || bar.right > screen.w + 1 ? `the find bar runs off the screen sideways (${fmt(bar)} on a ${screen.w}px screen)` : null
     if (sideways) console.log(`  ${sideways}`)
     const where = async () => JSON.stringify({ bar: await cdp.eval("!!document.querySelector('.amx-findbar')"), nav: await cdp.eval(nav), space: await cdp.eval("document.querySelector('.mb-shell')?.dataset.space"), ime: imeShown(), focus: await cdp.eval("document.activeElement?.tagName + '.' + String(document.activeElement?.className || '').slice(0, 30)") })
