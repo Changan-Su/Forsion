@@ -128,14 +128,15 @@ const sheetRow = (it: SheetMenuItem): ReactNode => (
   <Row key={it.id} id={it.id} icon={it.icon ?? null} title={it.label} value={it.detail} danger={it.danger} disabled={it.disabled} onClick={it.run} chevron={!it.danger} />
 )
 function MePage() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const chip = useSyncExternalStore(subscribeAccountChip, accountChip)
   const items = useRibbonStore((s) => s.items)
   const dotted = useDotted(items)
   const { me } = phonePageItems(items, PAGE_SEATS)
   const [sections, setSections] = useState<SheetMenuSection[] | null>(null)
-  // 账号那几节:进这一页、登录态 / 账号换了时现取一次(额度要问服务端,最多等 3 秒;取不到的那一行照实写)
-  const chipKey = chip ? `${chip.loggedIn ? 1 : 0}:${chip.label}` : ''
+  // 账号那几节:进这一页、登录态 / 账号 / 界面语言换了时现取一次(额度要问服务端,最多等 3 秒;取不到的那一行照实写)。
+  // 文案是取的那一刻按当时语言写好的:从这一页开设置切了语言、关掉回来,得重取
+  const chipKey = chip ? `${chip.loggedIn ? 1 : 0}:${chip.label}:${locale}` : ''
   useEffect(() => {
     let live = true
     setSections(null)

@@ -672,6 +672,8 @@ export function returnFromTrip(): boolean {
   enterSpace(origin)
   return true
 }
+/** 「应用」「我」那一页挂上时把焦点交给它(外接键盘 / 读屏从这一页开始;下面那层此时 inert),不滚动。 */
+const focusPhonePage = (el: HTMLDivElement | null): void => { el?.focus({ preventScroll: true }) }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
 setBeforeMainOpenHook(redirectOpenFromOnePage)
 // 换了 Space、主区换了一页:盖在上面的「应用」「我」收起(从那两页点进去的东西得露出来)。
@@ -1342,7 +1344,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
-      <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`} aria-hidden={showPhonePage || undefined}>
+      {/* 「应用」「我」盖着时下面这层既不给读屏、也不给外接键盘(inert),焦点交给那一页 */}
+      <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`} aria-hidden={showPhonePage || undefined} inert={showPhonePage || undefined}>
         <Drawer side="left" docked={wide} showFoot page={listFirst} />
         <main ref={mainRef} className="mb-main">
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
@@ -1358,7 +1361,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       </div>
 
       {/* 「应用」「我」:盖在壳的第一层上的一整页,页面由平台画(phoneDock.ts 的 installPhonePages);Dock 和顶栏胶囊照旧在。 */}
-      {showPhonePage && renderPhonePage && phonePage && <div className="mb-phonepage" data-phone-page={phonePage}>{renderPhonePage(phonePage)}</div>}
+      {showPhonePage && renderPhonePage && phonePage && <div ref={focusPhonePage} className="mb-phonepage" data-phone-page={phonePage} tabIndex={-1}>{renderPhonePage(phonePage)}</div>}
       {tabsOpen && <TabSheet onClose={() => setTabsOpen(false)} />}
       {moreOpen && <MoreSheet onClose={() => setMoreOpen(false)} />}
     </div>

@@ -144,4 +144,25 @@ describe('return trip from Home\'s Continue (2026-11-19): back from that page go
       endReturnTrip()
     } finally { vi.useRealTimers() }
   })
+
+  it('ends when another tab comes to the front after the way in; off the phone two-level layout (turned sideways) there is no trip', () => {
+    vi.useFakeTimers()
+    try {
+      phone()
+      list(false)
+      beginReturnTrip('home'); useSpaceStore.setState({ activeSpaceId: 's' })
+      useWorkspace.getState().openView('files', {}, 'main') // the row's content opens in a tab: part of the way in
+      expect(returnTripOrigin()).toBe('home')
+      vi.advanceTimersByTime(1000)
+      useWorkspace.getState().openView('files', { other: 1 }, 'main', { newTab: true }) // the user picked another tab
+      expect(returnTripOrigin()).toBeNull()
+      // a fresh trip, then the phone layout goes away (no native dock host any more): nothing to return through
+      useSpaceStore.setState({ activeSpaceId: 'home' })
+      beginReturnTrip('home'); useSpaceStore.setState({ activeSpaceId: 's' })
+      expect(returnTripOrigin()).toBe('home')
+      offs.shift()?.()
+      expect(returnTripOrigin()).toBeNull()
+      endReturnTrip()
+    } finally { vi.useRealTimers() }
+  })
 })

@@ -540,3 +540,5 @@
   box-sizing: border-box;
 }
 .mb-shell[data-phone-page] .mb-body .lcl-float-layer { display: none; }
+/* 挂上时焦点给了这一页(外接键盘从这里开始):程序给的焦点不画框 */
+.mb-phonepage:focus { outline: none; }

@@ -849,8 +849,13 @@ const tabCountText = (list) => {
   const sameRect = (a, b, tol = 2) => near(a.left, b.left, tol) && near(a.top, b.top, tol) && near(a.right, b.right, tol) && near(a.bottom, b.bottom, tol)
   const fmt = (r) => `[${r.left},${r.top}][${r.right},${r.bottom}]`
   const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
-  /** Closes every notification card on screen (an error card stays until it is closed). */
-  const closeCards = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+  /** Closes every notification on screen (an error one stays until it is closed): the page's cards, and the phone's native
+   *  banner (2026-11-15), which sits over the capsule row — a tap meant for a capsule lands on it while it is up. */
+  const closeCards = async () => {
+    await cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    for (let i = 0; i < 8; i++) { const x = h.byId(ui(), 'nativeBanner.close'); if (!x) break; h.tapNode(x); await h.pause(600) }
+    return true
+  }
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
@@ -2178,19 +2183,23 @@ const tabCountText = (list) => {
   })
 
   // A failed request surfaces as the browser's own words ("TypeError: Failed to fetch"). On the phone the notification
-  // says it plainly; the rest of the message (what failed) is kept.
+  // says it plainly; the rest of the message (what failed) is kept. Since 2026-11-15 a phone's notification is a native
+  // banner (nativeBanner.card, one at a time; the page draws no card): its words are read off that banner, and each one is
+  // closed before the next — a banner left up covers the capsule row and every check after this one taps into it.
   await check('offline wording: "Failed to fetch" in an error notification reads as "network unavailable"', async () => {
-    const texts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent)"
-    const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
-    await closeToasts()
+    const bannerWords = (l) => { const c = h.byId(l, 'nativeBanner.card'); return c ? l.filter((n) => within(c, n)).map((n) => n.text || n['content-desc'] || '').filter(Boolean).join(' | ') : '' }
+    const closeBanners = async () => { for (let i = 0; i < 8; i++) { const x = h.byId(ui(), 'nativeBanner.close'); if (!x) break; h.tapNode(x); await h.pause(600) } }
+    await closeBanners()
     try {
       for (const [raw, want] of [['TypeError: Failed to fetch', '网络不可用，请稍后再试'], ['同步失败：Failed to fetch', '同步失败：网络不可用，请稍后再试'], ['同步失败：磁盘已满', '同步失败：磁盘已满']]) {
         await cdp.eval(`(window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: ${JSON.stringify(raw)}, level: 'error' } })), true)`)
-        assert.ok(await h.waitPage(cdp, `${texts}.includes(${JSON.stringify(want)})`, 4000), `"${raw}" was shown as: ${await cdp.eval(`${texts}.join(' | ')`)}`)
+        const r = await h.waitNodes((l) => (bannerWords(l).includes(want) ? l : null), { timeout: 6000 })
+        assert.ok(r.hit, `"${raw}" was shown as: ${bannerWords(r.nodes) || '(no banner)'}`)
+        assert.ok(!bannerWords(r.hit).includes('Failed to fetch'), "the browser's wording is still on screen")
+        if (raw.startsWith('TypeError')) shot('41-offline-wording')
+        await closeBanners()
       }
-      assert.ok(!(await cdp.eval(`${texts}.join(' | ')`)).includes('Failed to fetch'), "the browser's wording is still on screen")
-      shot('41-offline-wording')
-    } finally { await closeToasts() }
+    } finally { await closeBanners() }
   })
 
   await check('session row menu (long-press): native sheet, rename through the native prompt reaches the server', async () => {
@@ -2357,7 +2366,8 @@ const tabCountText = (list) => {
     await goHome()
     const rows = JSON.parse(await cdp.eval(`JSON.stringify([...document.querySelectorAll('.hp-root .hp-continue-row')].map((r) => [r.dataset.continue, r.querySelector('.hp-continue-name').textContent]))`))
     assert.ok(rows.length >= 1 && rows.length <= 3, `Continue does not list one to three things (${JSON.stringify(rows)})`)
-    assert.ok(rows[0][0].startsWith('chat:') && /E2E/.test(rows[0][1]), `Continue does not lead with the conversation last worked on (${JSON.stringify(rows)})`)
+    // newest first, whatever kind (a note an earlier check opened may lead); the conversations last worked on are there
+    assert.ok(rows.some(([k, name]) => k.startsWith('chat:') && /E2E/.test(name)), `Continue lists no conversation last worked on (${JSON.stringify(rows)})`)
     assert.equal(await cdp.eval("document.querySelectorAll('.hp-root .hp-card').length"), 0, 'Space cards on a phone Home')
     assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), null, 'Home stored a card choice')
     const top = ui()
@@ -2386,6 +2396,7 @@ const tabCountText = (list) => {
   // arrow or the system back — is Home again, not that Space's list (lcl listTrips' return trip). A conversation opened
   // from the list still goes back to the list.
   await check('phone Home: a Continue row opens the conversation itself; back (arrow or system) returns Home, not to the list', async () => {
+    await closeCards() // a banner left up covers the bar's back arrow
     await goHome()
     await foldHomeComposer()
     const row = `document.querySelector('.hp-root .hp-continue-row[data-continue^="chat:"]')`
