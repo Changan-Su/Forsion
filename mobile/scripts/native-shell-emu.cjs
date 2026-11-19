@@ -4199,7 +4199,25 @@ const tabCountText = (list) => {
     h.key(4)
     await h.pause(600)
     if (await cdp.eval("!!document.querySelector('.amx-findbar')")) { h.key(4); await h.pause(600) }
-    assert.deepEqual([sideways, backIssue].filter(Boolean), [], 'the find bar (opened from ⋯)')
+    // … and on the session list (first level) through avatar → command panel → "Find in page": the bar lands in the same
+    // place (under the capsule row, inside the screen); opening a conversation from the list closes it
+    await tanguDrawer()
+    assert.equal(await cdp.eval(nav), 'list', 'control: not on the session list')
+    await paletteRun('find', '页内查找')
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-findbar')", 5000), 'find in page (command panel) did not open the find bar on the list')
+    await h.pause(400)
+    const bar3 = await elRect("document.querySelector('.amx-findbar')")
+    const capL3 = h.byId(ui(), 'nativeChrome.capLeft')
+    console.log(`  list level: find bar ${fmt(bar3)} (data-phone ${await cdp.eval("document.querySelector('.amx-findbar')?.hasAttribute('data-phone')")}), capsule bottom ${capL3 && capL3.rect.bottom}; from the conversation ${fmt(bar)}`)
+    shot('05f-list-find-bar')
+    const listIssue = !(bar3.top >= 0 && bar3.left >= -1 && bar3.right <= screen.w + 1 && (!capL3 || bar3.top >= capL3.rect.bottom - 2)) ? `on the list the find bar is off screen or under the capsules (${fmt(bar3)})` : null
+    if (imeShown()) { h.key(4); await h.pause(600) }
+    await tapEl(rowExpr('E2E Session One'))
+    await h.pause(1200)
+    const leftOpen = await cdp.eval("!!document.querySelector('.amx-findbar')")
+    console.log(`  after opening a conversation from the list: nav ${await cdp.eval(nav)}, bar ${leftOpen}`)
+    const listLeave = leftOpen ? 'opening a conversation from the list did not close the find bar' : null
+    assert.deepEqual([sideways, backIssue, listIssue, listLeave].filter(Boolean), [], 'the find bar (opened from ⋯)')
   })
 
   // 2026-11-18: on a phone ⋯ holds only the page's own things. The two global switches it carried (theme, command panel)
