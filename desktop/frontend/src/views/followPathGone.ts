@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useWorkspace } from '@lcl/engine'
+import { remapNav, useWorkspace } from '@lcl/engine'
 import { onNotePathGone, usePageStore } from '@amadeus/store/pageStore'
 import { pathHit } from '@amadeus/unified/lifecycle'
 
@@ -32,6 +32,8 @@ export function installLeafPathFollow(): void {
   installed = true
   onNotePathGone((from, kind, to) => {
     const dead = (p: string): boolean => pathHit(p, from, kind)
+    // 历史先改:标签跟到新路径时视图会记一条新 key,当前那条已是这个 key 就原位替换,不会把「前进」截掉(Codex 评审)
+    followNavHistory(dead, (p) => (to ? (kind === 'file' ? to : to + p.slice(from.length)) : null))
     useWorkspace.getState().remapLeaves((type, params) => {
       const key = PATH_PARAM[type]
       const path = key ? params[key] : undefined
@@ -40,6 +42,34 @@ export function installLeafPathFollow(): void {
       if (type === 'amadeus-editor') return { notePath: usePageStore.getState().pages.find((p) => !dead(p)) }
       return null
     })
+  })
+}
+
+/** 页内历史(前进 / 后退)里攥着这个路径的条目同样跟过去:改名、挪走 → 换成新路径(原位,不另起一条);删掉 → 拿掉。
+ *  不跟的话,改了名的笔记在历史里还是旧路径,返回落到「当前库里没有这篇笔记」(手机走查 2026-11-19:新建 → 改标题 →
+ *  系统返回);web 与移动端缺文件即新建,还会把它重新建出来。条目的 key 由两处记(amadeusViews 的 `amadeus:<路径>`、
+ *  bootstrapEngine 的 `file:<视图>:<路径>`);新条目的复原照两处的写法:把这个标签切回那个视图、指到新路径。
+ *  只改当前布局的历史(和 remapLeaves 同一范围),停放的 Space 连布局带历史原样留着。 */
+function followNavHistory(dead: (p: string) => boolean, moved: (p: string) => string | null): void {
+  remapNav((leafId, entry) => {
+    const note = entry.key.startsWith('amadeus:') ? entry.key.slice('amadeus:'.length) : null
+    const file = note === null ? /^file:([^:]+):([\s\S]*)$/.exec(entry.key) : null
+    const type = note !== null ? 'amadeus-editor' : file?.[1]
+    const path = note ?? file?.[2]
+    const param = type ? PATH_PARAM[type] : undefined
+    if (!type || path == null || !param || !dead(path)) return undefined
+    const next = moved(path)
+    if (!next) return null
+    return {
+      key: note !== null ? `amadeus:${next}` : `file:${type}:${next}`,
+      title: entry.title,
+      restore: () => {
+        const ws = useWorkspace.getState()
+        if (!ws.leafById(leafId)) throw new Error('The view is no longer available')
+        // 只带路径:条目原先的落点参数(页码、引用)攥在它自己的复原里拿不出来,也不能借此刻标签上别的文件的参数(Codex 评审)
+        ws.navigateLeaf(leafId, type, { [param]: next })
+      },
+    }
   })
 }
 

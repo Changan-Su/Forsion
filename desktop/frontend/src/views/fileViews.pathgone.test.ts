@@ -79,7 +79,8 @@ async function boot(kind: 'dock' | 'single', files: string[]) {
   // 桌面 Dockview store 还是单列(移动 / mini)store —— 与 workspaceStore 选择器同一个二选一
   vi.doMock('@lcl/engine', async () => {
     const { useWorkspace } = kind === 'single' ? await import('@lcl/engine/singleColumnStore') : await import('@lcl/engine/dockviewStore')
-    return { Skeleton: () => null, useWorkspace }
+    const { remapNav } = await import('@lcl/engine/navStore') // 页内历史一起跟(followPathGone 的 followNavHistory)
+    return { Skeleton: () => null, useWorkspace, remapNav }
   })
   const disk = new Set(files)
   const under = (x: string, p: string): boolean => x === p || x.startsWith(`${p}/`)
@@ -225,6 +226,27 @@ describe('笔记编辑器标签(amadeus-editor)', () => {
     await settle()
     expect(panels[1].params).toEqual({ notePath: '1.md', followActive: false, __loc: 'main', __type: 'amadeus-editor' })
     expect(ws.getState().stash.right).toEqual([{ type: 'amadeus-editor', params: { notePath: '1.md' } }])
+  })
+})
+
+describe('页内历史(前进 / 后退)跟着走', () => {
+  it('改名 / 挪走:历史条目原位换成新路径,复原指到新路径;删掉:条目拿掉(手机走查 2026-11-19:改标题后返回落到不存在的旧路径)', async () => {
+    const { store, ws } = await boot('dock', ['资料/笔记.md', '资料/图.pdf', '1.md'])
+    const { api, panels } = dockApi([{ id: 'ed', type: 'amadeus-editor', params: { notePath: '1.md' } }])
+    ws.getState().setApi(api)
+    const { useNav } = await import('@lcl/engine/navStore')
+    const noop = () => undefined
+    for (const key of ['amadeus:资料/笔记.md', 'file:amadeus-pdf:资料/图.pdf', 'amadeus:1.md']) useNav.getState().record('ed', { key, restore: noop })
+    await act(async () => store.remapScopePaths('资料', '归档', 'prefix'))
+    expect(useNav.getState().stacks.ed.entries.map((e) => e.key)).toEqual(['amadeus:归档/笔记.md', 'file:amadeus-pdf:归档/图.pdf', 'amadeus:1.md'])
+    expect(useNav.getState().stacks.ed.idx).toBe(2)
+    // 复原:把这个标签切回那种视图、指到新路径
+    await act(async () => { useNav.getState().back('ed') })
+    await settle()
+    expect(panels[0].params).toMatchObject({ pdfPath: '归档/图.pdf' })
+    await act(async () => { await store.usePageStore.getState().deletePage('归档/笔记.md') })
+    await settle()
+    expect(useNav.getState().stacks.ed.entries.map((e) => e.key)).not.toContain('amadeus:归档/笔记.md')
   })
 })
 
