@@ -363,6 +363,7 @@ export async function installUnitShim(): Promise<boolean> {
       return ((await r.json()) as { spaces?: unknown[] }).spaces || []
     } }),
   }
-  document.title = `${meta.name} · Forsion`
+  // Public entries get their browser title in the HTML, before login or renderer startup.
+  if (!published) document.title = `${meta.name} · Forsion`
   return true
 }
