@@ -14,6 +14,14 @@ process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
 const builtinBundles = require('./electron/builtinBundles.json')
 const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
 const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
+// Developer ID certificate AND complete notarization credentials → sign + notarize the mac app (see `mac` below).
+// Either half missing keeps the ad-hoc path: a Developer ID signature without notarization is still blocked by
+// Gatekeeper, and a half-configured CI would otherwise fail late inside electron-builder.
+const macDeveloperId = Boolean(
+  (process.env.CSC_LINK || process.env.CSC_NAME || process.env.CSC_KEYCHAIN) &&
+    ((process.env.APPLE_API_KEY && process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER) ||
+      process.env.APPLE_KEYCHAIN_PROFILE),
+)
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
@@ -152,9 +160,18 @@ module.exports = {
   ],
   linux: { target: 'AppImage', icon: 'build/icon.png' },
   mac: {
-    target: 'dmg',
+    // dmg = 新用户 / 官网下载;zip = 应用内自动更新(Squirrel.Mac 只吃 zip,electron-builder 有 zip 才写 latest-mac.yml)。
+    // 架构跟 CLI(CI 是 --mac --arm64),两个目标同一个架构;zip 里的 .app 与 dmg 里的是同一份已签名、已公证、钉了票据的包。
+    target: ['dmg', 'zip'],
     icon: 'build/icon.icns',
-    identity: null,
+    // Developer ID signing + notarization only when macDeveloperId (certificate: CSC_KEYCHAIN prepared by CI from the
+    // MAC_CSC_LINK secret, or CSC_LINK / CSC_NAME locally; notarization: APPLE_API_KEY / _KEY_ID / _ISSUER or APPLE_KEYCHAIN_PROFILE).
+    // Otherwise identity stays null and afterPack's ad-hoc signature is what ships, exactly as before.
+    identity: macDeveloperId ? undefined : null,
+    hardenedRuntime: true,
+    entitlements: 'build/entitlements.mac.plist',
+    entitlementsInherit: 'build/entitlements.mac.plist',
+    notarize: macDeveloperId,
     // 三条 TCC 用途说明。缺了对应那条 = 首次请求权限时**直接崩**(不是弹窗被拒,是进程挂掉)。
     // NSCamera 不写的话 Electron 基础 plist 里那句英文默认文案会顶上来,英文出现在中文界面里。
     extendInfo: {

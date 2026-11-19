@@ -170,6 +170,8 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 
 `space.json` 声明视图布局配方(引用视图类型 id;插件视图用 `plugin:<插件id>:<视图id>` 并在 `requires.views` 声明)。纯数据,无代码。
 
+For a Space bundled at `spaces/<slug>/space.json`, `"autoDesktopShortcut": true` asks the installed desktop host to create a shortcut once when it registers the enabled plugin’s Space. Deleting or moving it is respected across reloads, updates, and restarts. Users can create it again from the Space menu. Older hosts ignore this field.
+
 ### 图标:`icon` + `iconFile`(2026-10-04 起)
 
 图标库只有 30 枚,几个 Space 一多就撞图标。给 Space 配一枚自己的图:
