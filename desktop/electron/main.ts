@@ -7,6 +7,7 @@ import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
 import { registerDictation } from './dictation'
 import { installAmbientPalette } from './ambientPalette'
+import { installPluginCapture } from './pluginCapture'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
@@ -4025,6 +4026,8 @@ app.whenReady().then(async () => {
   // 用 webContents.capturePage 而不是 html2canvas 那类 DOM 复刻——webview / canvas / 原生视图
   // 都能抓到,复刻方案对这些一律是空白。矩形按 DIP,与 getBoundingClientRect 的视口坐标同系。
   installAmbientPalette(isTrustedSender)
+  // 插件出图 / 录屏(ctx.ui.capture / record):原生像素、不压尺寸、只认可信顶层窗口;下面 Desk 那条原样不动
+  installPluginCapture(isTrustedSender)
   ipcMain.handle('ui:captureRect', async (e, rect: { x: number; y: number; width: number; height: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender)
     if (!win || win.isDestroyed()) return null

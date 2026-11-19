@@ -1,0 +1,10 @@
+{
+  "id": "plugin-capture-other",
+  "name": "出图录屏样例(别的插件)",
+  "nameEn": "Capture sample (another plugin)",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "另一个插件的视图:capture 样例截它必须被拒。由 scripts/plugin-capture.check.cjs 驱动。",
+  "descriptionEn": "Another plugin's view: the capture sample must be refused when it tries to capture it. Driven by scripts/plugin-capture.check.cjs.",
+  "main": "main.js"
+}
