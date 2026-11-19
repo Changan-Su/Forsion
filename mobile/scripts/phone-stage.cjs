@@ -871,9 +871,16 @@ const SCENES = {
     rows.push(['find: the find bar opens, below the capsule row and inside the screen', !!bar && bar.y >= LAYOUT.top - 2 && bar.right <= SCREEN.width && bar.x >= 0, JSON.stringify(bar)])
     await page.screenshot({ path: path.join(OUT, `page-more-find${DARK ? '-dark' : ''}.png`) })
     // system Back closes the bar first and stays on the conversation (the bar listens to Esc only; a phone has no such key)
-    await systemBack(page)
-    await page.waitForTimeout(250)
-    rows.push(['find: system Back closes the bar and stays on the conversation', !(await rect(page, '.amx-findbar')) && (await stage.nav(page)) === 'detail', JSON.stringify({ bar: await rect(page, '.amx-findbar'), nav: await stage.nav(page) })])
+    // (asked only on a load where this stage's Back key reaches MobileRoot's chain — see backPath; the emulator suite asks it always)
+    if ((await backPath(page)) === 'key') {
+      await systemBack(page)
+      await page.waitForTimeout(250)
+      rows.push(['find: system Back closes the bar and stays on the conversation', !(await rect(page, '.amx-findbar')) && (await stage.nav(page)) === 'detail', JSON.stringify({ bar: await rect(page, '.amx-findbar'), nav: await stage.nav(page) })])
+    } else {
+      console.log('(page-more: the Back key does not reach the chain on this load — "Back closes the find bar" not asked)')
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(200)
+    }
     // leaving the page by the top-left button takes the bar with it (both levels stay mounted: nothing unmounts to close it)
     await ask('more', { id: 'page:find' })
     const again = await rect(page, '.amx-findbar')
