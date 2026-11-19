@@ -1,6 +1,8 @@
 package com.forsion.tangu
 
+import android.content.Context
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebView
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
@@ -50,6 +52,38 @@ class NativeSheetPlugin : Plugin() {
                     onGone = { if (surface === view) { removeSurface(); reportGone(payload.requestId) } },
                 )
             }
+        }
+    }
+
+    /**
+     * Ask for the soft keyboard on the WebView's focused field. A field the page focuses without a touch of its own (an
+     * answer from this sheet opening the command panel) gets no keyboard from the WebView: Chromium only asks for one on a
+     * focus that follows a touch on the page. Measured 2026-11-19 (emulator, walk f): 1 in 10 came up, and that one was
+     * the system's own forward-navigation show, not the page's. The page calls this once the sheet is gone and the field it
+     * focused under it still has the caret (mobile/src/nativeSheet.ts).
+     * The request is served only once the activity window has its focus back from the sheet's own window: asked at once
+     * it fails at PHASE_CLIENT_VIEW_SERVED (7 in 10 in the same probe). So it is asked when the window has focus, and again
+     * every 100 ms until it is taken (2 s at most); it stops as soon as the window has its focus and no editable field is
+     * focused in the page.
+     */
+    @PluginMethod
+    fun showKeyboard(call: PluginCall) {
+        activity.runOnUiThread {
+            val web = bridge.webView
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            var tries = 0
+            lateinit var attempt: Runnable
+            attempt = Runnable {
+                tries++
+                // while the window is without its focus Chromium may report no editor for a field that has the caret
+                // (it resets its input state on losing window focus): only give up once the window has its focus back
+                if (web.hasWindowFocus() && !web.onCheckIsTextEditor()) { call.resolve(JSObject().put("shown", false).put("tries", tries)); return@Runnable }
+                if (!web.hasFocus()) web.requestFocus()
+                val shown = web.hasWindowFocus() && imm.showSoftInput(web, InputMethodManager.SHOW_IMPLICIT)
+                if (shown || tries >= 20) call.resolve(JSObject().put("shown", shown).put("tries", tries))
+                else web.postDelayed(attempt, 100)
+            }
+            attempt.run()
         }
     }
 

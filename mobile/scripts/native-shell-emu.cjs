@@ -4352,23 +4352,32 @@ const tabCountText = (list) => {
     await closeTabs()
   })
 
-  // The command panel from the avatar menu (walk 2026-11-19, f): its field took focus while the native sheet was still
-  // on screen over the WebView, so no keyboard came; a phone also has no keys for the shortcut chips. Now the field is
-  // focused again once the sheet is gone (`forsion:native-sheet-gone`), and the chips / key legend are not drawn.
+  // The command panel from the avatar menu (walk 2026-11-19, f): the answer comes from a touch on the native sheet, not on
+  // the page, and the WebView asks for a keyboard only on a focus that follows a touch on the page — so the panel's field
+  // got the caret and no keyboard (focusing it again did nothing either). Once the sheet is gone the page asks for the
+  // keyboard natively (NativeSheet.showKeyboard), which waits for the activity window to have its focus back. A phone also
+  // has no keys for the shortcut chips. Three times in a row, up to 8 s each (the emulator stalls ~1 s while the sheet's
+  // window goes); a miss carries the system's ImeTracker lines, which name the phase a request failed at
+  // (PHASE_CLIENT_VIEW_SERVED = asked before the window had its focus back). Measured before the native ask: 1 in 10.
   await check('command panel from the avatar: the keyboard comes up with it; no shortcut chips or key legend', async () => {
-    await goHome()
-    if (imeShown()) { h.key(4); await h.pause(600) }
-    await openPalette()
-    for (let i = 0; i < 25 && !imeShown(); i++) await h.pause(150)
-    const look = await cdp.eval("({ focus: document.activeElement?.classList.contains('cmd-input') || false, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, rows: document.querySelectorAll('.cmd-panel .cmd-item').length })")
-    shot('05b-palette-keyboard')
-    try {
-      assert.ok(imeShown(), `no keyboard with the command panel open (${JSON.stringify(look)})`)
-      assert.ok(look.focus, `the command panel's field does not have the focus (${JSON.stringify(look)})`)
-      assert.ok(look.rows > 5 && look.chips === 0 && look.keys === 0, `shortcut chips / key legend on a phone (${JSON.stringify(look)})`)
-    } finally {
-      if (imeShown()) { h.key(4); await h.pause(700) }
-      if (await cdp.eval("!!document.querySelector('.cmd-input')")) { h.key(4); await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000) }
+    for (let run = 1; run <= 3; run++) {
+      await goHome()
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      h.adb('logcat', '-c')
+      await openPalette()
+      for (const end = Date.now() + 8000; Date.now() < end && !imeShown();) await h.pause(150)
+      const shown = imeShown()
+      const look = await cdp.eval("({ focus: document.activeElement?.classList.contains('cmd-input') || false, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, rows: document.querySelectorAll('.cmd-panel .cmd-item').length })")
+      if (run === 1) shot('05b-palette-keyboard')
+      try {
+        const ime = shown ? '' : h.adb('logcat', '-d', '-s', 'ImeTracker').split('\n').filter((l) => /forsion/.test(l)).slice(-4).map((l) => l.replace(/^.*ImeTracker: /, '')).join(' | ')
+        assert.ok(shown, `run ${run}: no keyboard with the command panel open (${JSON.stringify(look)}; ImeTracker: ${ime || 'nothing'})`)
+        assert.ok(look.focus, `run ${run}: the command panel's field does not have the focus (${JSON.stringify(look)})`)
+        assert.ok(look.rows > 5 && look.chips === 0 && look.keys === 0, `shortcut chips / key legend on a phone (${JSON.stringify(look)})`)
+      } finally {
+        if (imeShown()) { h.key(4); await h.pause(700) }
+        if (await cdp.eval("!!document.querySelector('.cmd-input')")) { h.key(4); await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000) }
+      }
     }
   })
 
