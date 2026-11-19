@@ -6,7 +6,8 @@
  *     只认库里还在的;没时刻的排在最后。
  *  原来的四张近况卡片在手机上退场(横竖屏一样);卡片里放过的 Space 去了「应用」页第一排(lcl phoneDock.ts)。 */
 import { FileText, MessageSquare, NotebookText } from 'lucide-react'
-import { beginReturnTrip, getView, useSpaceStore } from '@lcl/engine'
+import { beginReturnTrip, getView, useNativeChromeExtras, useSpaceStore } from '@lcl/engine'
+import { useQuickFind } from '../quickFind'
 import { useApp } from '../stores/appStore'
 import { useRecentViews, type RecentView } from '../recentViews'
 import { useAmadeusPrefs } from '../amadeusPrefs'
@@ -20,7 +21,14 @@ registerMessages({
   'home.continue.title': { zh: '继续', en: 'Continue' },
   'home.continue.chat': { zh: '对话', en: 'Chat' },
   'home.continue.note': { zh: '笔记', en: 'Note' },
+  'home.search': { zh: '搜索对话、笔记、文件', en: 'Search chats, notes, files' },
 })
+
+/** 手机主页右上只有一颗搜索(方案 E1):开的是 QuickFind —— 对话、笔记、文件按名字找,对话还按内容找(笔记正文不在内)。 */
+export function useHomeSearch(on: boolean): void {
+  const { t } = useI18n()
+  useNativeChromeExtras(on ? { where: 'main', search: { label: t('home.search'), run: () => useQuickFind.getState().openPalette() } } : null)
+}
 
 type SessionRecord = ReturnType<typeof useApp.getState>['sessions'][number]
 /** updated_at → ms(同 SidebarPane 的 sessionActivityAt;解析不了 = 0)。 */

@@ -386,18 +386,131 @@ async function seedTags(page) {
 const SCENES = {
   home: async (page) => {
     await stage.space(page, 'home')
+    await seedNotes(page)
+    await page.waitForTimeout(400)
     const HOME = '.mb-view[data-view="homepage"]'
     const pill = await rect(page, `${HOME} .hp-pill`)
-    const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => { const r = el.getBoundingClientRect(); return { name: el.querySelector('.hp-card-name').textContent, status: el.querySelector('.hp-card-status').textContent, w: r.width, h: r.height, bottom: r.bottom } }), `${HOME} .hp-card`)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => ({ key: el.getAttribute('data-continue'), name: el.querySelector('.hp-continue-name').textContent, when: el.querySelector('.hp-continue-when')?.textContent ?? '' })), `${HOME} .hp-continue-row`)
+    const card = await rect(page, `${HOME} .hp-continue`)
     const greet = await rect(page, `${HOME} .hp-greet`)
     const composerShown = () => page.evaluate((q) => { const el = document.querySelector(q); return !!el && el.getBoundingClientRect().height > 0 }, `${HOME} .hp-composer`)
     const before = await composerShown()
-    const stored = await page.evaluate(() => localStorage.getItem('forsion_home_cards_v1'))
+    const st = await stage.state(page)
     return [
       ['the greeting leads, below the capsules', !!greet && greet.y >= LAYOUT.top, JSON.stringify(greet && { y: greet.y })],
-      ['never chosen: the four Spaces with something to report, two to a row, the first with what was last worked on; no store, no achievements', cards.map((c) => c.name).join() === 'Tangu,笔记,日历,收件箱' && cards.every((c) => c.h >= 103 && near(c.w, cards[0].w)) && cards[0].status === '继续：发版说明草稿', JSON.stringify(cards.map((c) => [c.name, c.status, Math.round(c.h)]))],
-      ['showing the defaults stores nothing', stored === null, String(stored)],
-      ['the input is one pill above the dock, the full composer hidden', !!pill && near(pill.h, 54) && pill.bottom <= DOCK_TOP - 6 && pill.y > cards[cards.length - 1]?.bottom && !before, JSON.stringify({ pill, before })],
+      // 方向 E:卡片换成「继续」—— 最近三项,对话和笔记混排、新的在前(会话 4 / 38 分钟前,笔记 25 分钟前);没有卡片了
+      ['Continue: the three most recent, chats and notes mixed, newest first; no cards any more', rows.map((r) => r.name).join() === '发版说明草稿,发版清单 2.13,周末去哪儿' && rows.every((r) => r.when) && !(await page.locator(`${HOME} .hp-card`).count()), JSON.stringify(rows)],
+      ['the input is one pill above the dock, below Continue; the full composer hidden', !!pill && near(pill.h, 54) && pill.bottom <= DOCK_TOP - 6 && !!card && pill.y > card.bottom && !before, JSON.stringify({ pill, card: card && card.bottom, before })],
+      ['top right holds only search (chats, notes, files); no "more", no avatar (Me is a dock cell)', st.search === '搜索对话、笔记、文件' && st.more === false && !st.right, JSON.stringify({ search: st.search, more: st.more, right: st.right })],
+    ]
+  },
+  // 手机五格 Dock(方向 E 第 1 步):主页 · 对话 · 笔记 · 应用 · 我,固定;Tangu 的列表层标题叫「对话」;别的 Space 算「应用」那格
+  'dock-five': async (page) => {
+    await stage.space(page, 'home')
+    const cells = (st) => (st.spaces || []).map((c) => `${c.id}:${c.label}${c.active ? '*' : ''}${c.pinned ? '' : '?'}`).join(' ')
+    const atHome = await stage.state(page)
+    await stage.space(page, 'tangu')
+    const atChats = await stage.state(page)
+    await stage.space(page, 'calendar')
+    const atCal = await stage.state(page)
+    const calSpace = await shellSpace(page)
+    await stage.space(page, 'home')
+    return [
+      ['five fixed cells, all pinned (≤ five: an older native build draws every cell and no "all" cell)', cells(atHome) === 'home:主页* tangu:对话 amadeus:笔记 @apps:应用 @me:我', cells(atHome)],
+      ['the Chats cell is Tangu: its list level is called 对话 and the cell is selected there', atChats.title === '对话' && cells(atChats).includes('tangu:对话*'), `${atChats.title} | ${cells(atChats)}`],
+      ['a Space reached through Apps (calendar) lights the Apps cell', calSpace === 'calendar' && cells(atCal).includes('@apps:应用*'), `${calSpace} | ${cells(atCal)}`],
+    ]
+  },
+  'apps-page': async (page) => {
+    await stage.space(page, 'home')
+    await stage.space(page, '@apps')
+    const PAGE = '.mb-phonepage[data-phone-page="apps"]'
+    const shown = await page.locator(PAGE).count()
+    const st = await stage.state(page)
+    const sections = await page.evaluate((q) => [...document.querySelectorAll(`${q} .pp-section`)].map((sec) => ({
+      title: sec.querySelector('.pp-section-title')?.textContent ?? '',
+      tiles: [...sec.querySelectorAll('.pp-tile')].map((t) => t.getAttribute('data-space')),
+      rows: [...sec.querySelectorAll('.pp-row')].map((r) => r.getAttribute('data-row')),
+    })), PAGE)
+    const frequent = sections.find((x) => x.title === '常用')?.tiles ?? []
+    const all = sections.find((x) => x.title === '全部')?.tiles ?? []
+    const rows = sections.flatMap((x) => x.rows)
+    const box = await rect(page, PAGE)
+    await page.screenshot({ path: path.join(OUT, `apps-page-open${DARK ? '-dark' : ''}.png`) })
+    // 点「全部」里的一格:收起这一页、进那个 Space,Dock 上亮的仍是「应用」
+    const target = all[0] || frequent[0]
+    await page.locator(`${PAGE} .pp-tile[data-space="${target}"]`).tap()
+    await page.waitForTimeout(700)
+    const after = await stage.state(page)
+    const gone = !(await page.locator('.mb-phonepage').count())
+    const landed = await shellSpace(page)
+    // 再开一次,按系统返回:回主页。按不到返回键的这一趟(backPath = event,只问得到列表层)不判,真返回键在模拟器上验
+    await stage.space(page, '@apps')
+    const via = await systemBack(page)
+    const backTo = await shellSpace(page)
+    const closed = !(await page.locator('.mb-phonepage').count())
+    if (via !== 'key') await stage.space(page, 'home')
+    return [
+      ['the Apps page covers the first level between the capsules and the dock; title 应用, no left button / ⋯ / search', shown === 1 && st.title === '应用' && !st.left && st.more === false && !st.search && (st.spaces || []).find((c) => c.active)?.id === '@apps' && !!box && near(box.h, SCREEN.height), JSON.stringify({ shown, title: st.title, left: st.left, more: st.more })],
+      ['first row 常用 = calendar and inbox, then list order (nothing chosen yet); 全部 = the rest; no Home / Chats / Notes on the page', frequent.slice(0, 2).join() === 'calendar,inbox' && frequent.length <= 4 && ![...frequent, ...all].some((id) => id === 'home' || id === 'tangu' || id === 'amadeus') && !all.some((id) => frequent.includes(id)), JSON.stringify({ frequent, all })],
+      ['the store is the first row under the grids; the last row chooses the frequent ones', rows[0] === 'rb-market' && rows[rows.length - 1] === 'choose-frequent', rows.join()],
+      ['a tile closes the page and enters that Space; the dock lights Apps', gone && landed === target && (after.spaces || []).find((c) => c.active)?.id === '@apps', `${target} → ${landed} gone=${gone}`],
+      [`system Back on the Apps page goes Home (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || (closed && backTo === 'home'), `${backTo} closed=${closed}`],
+    ]
+  },
+  'me-page': async (page) => {
+    await stage.space(page, 'home')
+    await stage.space(page, '@me')
+    const PAGE = '.mb-phonepage[data-phone-page="me"]'
+    await page.waitForFunction((q) => !document.querySelector(`${q} [data-row="account-loading"]`), PAGE, { timeout: 8000 }).catch(() => {})
+    const st = await stage.state(page)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(`${q} [data-row]`)].map((r) => r.getAttribute('data-row')), PAGE)
+    const name = await page.evaluate((q) => document.querySelector(`${q} .pp-me-name strong`)?.textContent ?? '', PAGE)
+    await page.screenshot({ path: path.join(OUT, `me-page-open${DARK ? '-dark' : ''}.png`) })
+    // 设置盖上来、关掉之后,「我」还在
+    await page.locator(`${PAGE} [data-row="rb-settings"]`).tap()
+    await page.waitForTimeout(800)
+    const app = (await page.evaluate(async (url) => { const { useApp } = await import(/* @vite-ignore */ url); return { open: useApp.getState().settingsOpen } }, moduleUrl('../desktop/frontend/src/stores/appStore.ts')))
+    const covered = (await stage.state(page)).mode !== 'shell'
+    await page.evaluate(async (url) => { const { useApp } = await import(/* @vite-ignore */ url); useApp.getState().closeSettings() }, moduleUrl('../desktop/frontend/src/stores/appStore.ts'))
+    await page.waitForTimeout(700)
+    const still = await page.locator(PAGE).count()
+    await systemBack(page)
+    return [
+      ['the Me page: title 我, the Me cell lit, no avatar and no ⋯ in the capsules', st.title === '我' && (st.spaces || []).find((c) => c.active)?.id === '@me' && st.more === false, JSON.stringify({ title: st.title, more: st.more })],
+      ['account head, then quota / backpack / invite / upgrade (what the avatar menu had), settings, where it runs, dark mode, command palette, achievements, feedback, sign out', name === 'stage' && ['rb-settings', 'rb-units-mobile', 'rb-mode', 'rb-cmd', 'rb-achievements'].every((id) => rows.includes(id)) && rows.indexOf('rb-settings') < rows.indexOf('rb-achievements'), `${name} | ${rows.join()}`],
+      ['settings covers the page and closing it returns to Me', app.open && covered && still === 1, JSON.stringify({ ...app, covered, still })],
+    ]
+  },
+  // 主页「继续」点一行 → 直接到那条对话;返回(顶栏左钮 / 系统返回)回主页,不经 Tangu 的列表;
+  // 先在列表里看过另一条(甲)再回主页点乙,返回也不翻出甲(listTrips 只在列表层起算的那条坑)
+  'continue-trip': async (page) => {
+    await openChat(page, '周末去哪儿')
+    await stage.action(page, 'left')
+    await stage.space(page, 'home')
+    const row = '.mb-view[data-view="homepage"] .hp-continue-row[data-continue="chat:st-1"]'
+    await page.locator(row).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    const inChat = { space: await shellSpace(page), nav: await stage.nav(page), title: (await stage.state(page)).title }
+    await stage.action(page, 'left')
+    const byButton = await shellSpace(page)
+    await page.locator(row).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    const via = await systemBack(page)
+    const bySystem = await shellSpace(page)
+    if (via !== 'key') await stage.action(page, 'left')
+    // 从列表点进去的照旧回列表
+    await openChat(page, '周末去哪儿')
+    await stage.action(page, 'left')
+    const fromList = { space: await shellSpace(page), nav: await stage.nav(page) }
+    await stage.space(page, 'home')
+    return [
+      ['a Continue row opens that chat directly (Tangu, second level)', inChat.space === 'tangu' && inChat.nav === 'detail' && inChat.title === '发版说明草稿', JSON.stringify(inChat)],
+      ['back from there (capsule) goes Home, not to the list — and not to the chat seen before', byButton === 'home', byButton],
+      [`system Back goes Home too (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || bySystem === 'home', bySystem],
+      ['a chat opened from the list still goes back to the list', fromList.space === 'tangu' && fromList.nav === 'list', JSON.stringify(fromList)],
     ]
   },
   'home-open': async (page) => {
@@ -817,15 +930,20 @@ const SCENES = {
     const list = await stage.state(page)
     rows.push(["a Space's list: no \"more\" button", list.more === false, `more=${list.more}`])
 
-    // where the app-wide entries went
-    const all = await ask('spacesAll')
-    const groups = (all?.sections || []).map((x) => ({ title: x.title || '', grid: !!x.grid, ids: x.items.map((i) => i.id) }))
-    const go = groups.findIndex((g) => g.ids.some((id) => id.startsWith('go:')))
-    rows.push(['all Spaces: the launchers are one group of tiles after the Spaces, before the dock row',
-      go > 0 && groups[go].grid && groups[go].ids.every((id) => id.startsWith('go:')) && groups[go].ids.includes('go:rb-achievements') && groups[go + 1]?.ids.join() === 'dock:edit',
-      JSON.stringify(groups.map((g) => [g.title, g.grid, g.ids.filter((id) => !id.startsWith('space:'))]))])
+    // where the app-wide entries went: no sheet any more —「全部」那一格换成了「应用」页,头像菜单换成了「我」页(方向 E,phonePageItems)
+    const before = await page.evaluate(() => window.__stage.menus.length)
+    await stage.action(page, 'spacesAll')
+    await page.waitForTimeout(500)
+    const sheets = await page.evaluate((n) => window.__stage.menus.length - n, before)
+    const appsPage = await page.locator('.mb-phonepage[data-phone-page="apps"]').count()
+    const appsRows = await page.evaluate(() => [...document.querySelectorAll('.mb-phonepage [data-row]')].map((r) => r.getAttribute('data-row')))
+    rows.push(['"all" opens the Apps page, not a sheet: the store and the other launchers are rows there', sheets === 0 && appsPage === 1 && appsRows[0] === 'rb-market', JSON.stringify({ sheets, appsPage, appsRows })])
+    await stage.space(page, '@me')
+    const meRows = await page.evaluate(() => [...document.querySelectorAll('.mb-phonepage [data-row]')].map((r) => r.getAttribute('data-row')))
     const avatar = await page.evaluate(async (url) => (await import(/* @vite-ignore */ url)).accountMenuRows().map((r) => r.id), moduleUrl('../lcl/engine/SingleColumnHost.tsx'))
-    rows.push(['the avatar menu: settings first, then theme mode and the command palette', avatar[0] === 'rb-settings' && avatar.slice(-2).join() === 'rb-mode,rb-cmd', avatar.join()])
+    const at = (id) => meRows.indexOf(id)
+    rows.push(['what the avatar menu had is on the Me page: settings first, then theme mode and the command palette, achievements after; no avatar menu rows left', avatar.length === 0 && at('rb-settings') >= 0 && at('rb-settings') < at('rb-mode') && at('rb-mode') < at('rb-cmd') && at('rb-cmd') < at('rb-achievements'), JSON.stringify({ avatar, meRows })])
+    await stage.space(page, 'tangu')
 
     // a conversation: its own rows only
     await openChat(page, TITLE)

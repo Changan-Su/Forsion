@@ -52,7 +52,7 @@ import {
 } from './homepageWallpaper'
 import { HomeWallpaperArt } from './homepageWallpaperArt'
 import { DeskCardStatus } from './homeCardStatus'
-import { HomeContinue } from './homeContinue'
+import { HomeContinue, useHomeSearch } from './homeContinue'
 import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
@@ -265,6 +265,7 @@ export function HomepageView(_props: ViewProps) {
   const name = useAccountName()
   // 手机(原生外壳画 Dock):布局「二」—— 问候在上、四张带近况的大卡片在下、输入区收成一条(homepage.css 文末 .hp-phone)。
   const phone = useNativeChromeSpaces()
+  useHomeSearch(phone)
   const spaces = useSpaceStore((s) => s.spaces)
   const ribbonItems = useRibbonStore((s) => s.items)
   const { tiles } = useDockTiles()
