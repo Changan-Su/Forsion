@@ -343,6 +343,8 @@ PKG=com.forsion.tangu.nativepreview npm run emu:perf     # 约 4 分钟；RATES=
   `MODELS_N=60` 把模型目录撑到真实账号的量级。
 - 找原因：`MODE=trace`（每一段长任务由什么组成，含每次样式重算涉及多少元素）、`MODE=profile`（CPU 剖析 + 单个改动的样式代价）、
   `MODE=exp EXP=<模块>`（自己写的页面内测量）、`INJECT_CSS=<文件>`（不重打包先试一段样式）。用法在脚本开头。
+- 只量首次点开长对话用 `RATES=4 REPS=3 ONLY=open npm run emu:perf`。用 `MODE=trace RATE=4 STEPS=open-cold ROW=0 npm run emu:perf` 和 `MODE=profile RATE=4 ONLY=open npm run emu:perf` 分别采集到各自的 `OUT`，再用 `node scripts/perf-emu-report.cjs trace <OUT>` 或 `node scripts/perf-emu-report.cjs profile <OUT> [source-map 目录]` 汇总。
+- 隔离跑分包用 `PKG=com.forsion.tangu.phonefirstopen PERF_TEST_ORIGIN=https://api.forsion.invalid`，APK 的构建网关 `VITE_API_ORIGIN` 要一致。装包、核对版本和采样放在同一次 `devlock.cjs run` 内。
 - 已经量出来、定成规矩的几条：进度 / 让位这类**逐帧或每次切页都变的量不要写成会继承的自定义属性**（整棵子树重算）；
   两级导航的样式挂 `[data-list-first]` 不挂 `[data-nav]`；`:has(…)` 后面不接没有类名可认的结尾；探针元素别往 `<body>` 下插。
 
