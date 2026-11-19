@@ -1780,6 +1780,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             movePt = null
             return
           }
+          // 把手栏收着(打字 / 滚动后)时,第一次移动当场命中:否则同一刻的点击(移过去就点 ＋ / ⠿)
+          // 落在还没显出来的把手栏上,打空(check:menus B19c)。显出来以后才按帧合并。
+          if (content.dataset.show !== 'true') {
+            if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = 0 }
+            movePt = null
+            handleMove(e.clientX, e.clientY)
+            return
+          }
           movePt = { x: e.clientX, y: e.clientY }
           if (moveRaf) return
           moveRaf = requestAnimationFrame(() => {
@@ -1812,7 +1820,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           hide()
         }
         root.addEventListener('mouseleave', onLeave)
-        const onKeyDown = (): void => {
+        // 单按修饰键不算打字:Alt+点 ＋(插到上方)、Alt / Ctrl 拖(复制)都要先按住修饰键,把手栏不能因此收起。
+        const MODIFIER_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'])
+        const onKeyDown = (e: KeyboardEvent): void => {
+          if (MODIFIER_KEYS.has(e.key)) return
           if (editorView.dom.dataset.dragging !== 'true') hide()
         }
         editorView.dom.addEventListener('keydown', onKeyDown)

@@ -63,12 +63,16 @@ const PROMPTS = {
 const LIKED_POSITION = 18;
 
 /** 起引擎之前:核对捆绑包、放进隔离 home。和 cuvision 同一条「别把装着的 helper 换掉」的前置检查。 */
-export function cuJevSetup({ bundle, shared }) {
+export function cuJevSetup({ bundle, shared, replaceInstalledHelper = false }) {
   if (process.platform !== 'darwin') throw new Error('cumusic / cusend 只在 macOS 上跑');
   if (!bundle || !existsSync(join(bundle, 'tangu-plugins/computer-use/dist/index.js'))) throw new Error('--cu-plugin 要指向一份构建好的 Computer Use 捆绑包');
   if (!existsSync(join(bundle, 'scripts/vision-fixtures.mjs'))) throw new Error('--cu-plugin 这份包里没有 scripts/vision-fixtures.mjs(Melody / Chatter 替身):把插件仓的 scripts/ 一并覆盖进去');
   const check = spawnSync(process.execPath, [join(bundle, 'scripts/setup-helper.mjs'), '--check'], { stdio: 'ignore' });
-  if (check.status !== 0) {
+  if (check.status !== 0 && replaceInstalledHelper) {
+    // 验已装 helper 的真实升级(换掉 /Applications 里那份、重启真实 socket 上的守护进程)时才放行,缺省照旧拒跑。
+    // 插件自己只接受正式证书签的 helper(macos-bundle.mjs 的 releaseCertSha1),所以换过去授权不会丢;要换回去,用插件的 setup-helper 或事先备份的那份。
+    console.log('⚠️ --cu-replace-installed-helper:这份包随带的 helper 和装着的不是同一个,第一次调用电脑操作工具时插件会把装着的换成它自己那份');
+  } else if (check.status !== 0) {
     throw new Error('--cu-plugin 这份包随带的 helper 和装着的不是同一个(setup-helper.mjs --check 非 0):跑起来会把装着的 helper 换掉、系统授权作废。'
       + '用装着的那份插件目录(~/.forsion-dev/plugins/tangu-computer-use)做底,只覆盖 tangu-plugins/computer-use/dist、skills/ 与 scripts/');
   }

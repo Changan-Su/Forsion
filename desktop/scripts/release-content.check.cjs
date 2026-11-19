@@ -3,16 +3,22 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const asar = require('@electron/asar')
-const { execFileSync } = require('node:child_process')
+const { execFileSync, spawnSync } = require('node:child_process')
 const crypto = require('node:crypto')
 const os = require('node:os')
 
 const desktop = path.resolve(__dirname, '..')
-// Computer Use's release certificate (SHA-1), pinned here rather than read from the CU package: this check exists
-// to stop a helper signed by another certificate from shipping, so a CU release that changed both its certificate
-// and its own pin must still fail here. Changing this value costs every Mac user a new Accessibility and Screen
-// Recording grant.
-const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
+// Computer Use's release signing team (Apple Developer ID), pinned here rather than read from the CU package: this
+// check exists to stop a helper signed by anyone else from shipping, so a CU release that changed both its signer
+// and its own pin must still fail here. macOS files the Accessibility and Screen Recording grants under bundle id +
+// team, so changing this value costs every Mac user a new grant. (CU up to 0.7.x used a self-signed certificate,
+// which Apple notarization rejects.)
+const CU_RELEASE_TEAM_ID = 'F3DBC75233'
+const CU_BUNDLE_ID = 'com.forsion.tangu-computer-use'
+const CU_DESIGNATED = `identifier "${CU_BUNDLE_ID}" and anchor apple generic`
+  + ' and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */'
+  + ' and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */'
+  + ` and certificate leaf[subject.OU] = ${CU_RELEASE_TEAM_ID}`
 // The bundled-plugin list (electron/builtinBundles.json) is the single source: every entry must be pinned, packaged,
 // and (for packages with a main-process half) signed with the key pinned in that list. A package missing from
 // extraResources used to ship silently; now it fails here.
@@ -154,22 +160,26 @@ for (const dir of resources) {
   // afterPack --deep signing from replacing the helper's original identity.
   try { execFileSync(process.execPath, [path.join(cu, 'scripts', 'verify-macos-bundles.mjs')], { stdio: 'pipe' }) }
   catch (error) { errors.push(`Invalid sealed CU app bundle: ${error.stderr?.toString() || error.message}`) }
-  // The bundled helper must be signed by CU's release certificate (releaseCertSha1 in its macos-bundle.mjs).
-  // An ad-hoc or differently signed helper changes the designated requirement, and every Mac user
-  // would lose the Accessibility and Screen Recording grants. Never bundle a local `build:native` output.
+  // The bundled helper must be signed with CU's release Developer ID (releaseTeamId in its macos-bundle.mjs), with
+  // the hardened runtime and a secure timestamp. Any other signer changes the designated requirement and every Mac
+  // user would lose the Accessibility and Screen Recording grants; a helper without runtime / timestamp makes Apple
+  // reject the whole app at notarization (forty minutes into a mac build). Never bundle a local `build:native` output.
   let packagePin
-  try { packagePin = /releaseCertSha1 = '([0-9a-f]{40})'/.exec(fs.readFileSync(path.join(cu, 'scripts', 'macos-bundle.mjs'), 'utf8'))?.[1] } catch { /* reported below */ }
-  check(packagePin === CU_RELEASE_CERT_SHA1, `CU package pins certificate ${packagePin ?? '(none)'}, Desktop expects ${CU_RELEASE_CERT_SHA1}`)
+  try { packagePin = /releaseTeamId = '([A-Z0-9]{10})'/.exec(fs.readFileSync(path.join(cu, 'scripts', 'macos-bundle.mjs'), 'utf8'))?.[1] } catch { /* reported below */ }
+  check(packagePin === CU_RELEASE_TEAM_ID, `CU package pins signing team ${packagePin ?? '(none)'}, Desktop expects ${CU_RELEASE_TEAM_ID}`)
   if (process.platform === 'darwin') {
-    const pin = CU_RELEASE_CERT_SHA1
     for (const arch of ['arm64', 'x64']) {
       const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-signer-'))
       try {
         execFileSync('/usr/bin/ditto', ['-x', '-k', path.join(cu, 'prebuilt', 'macos', arch, 'tangu-computer-use.app.zip'), temp])
-        execFileSync('/usr/bin/codesign', ['-d', `--extract-certificates=${path.join(temp, 'signer')}`, path.join(temp, 'tangu-computer-use.app')], { stdio: 'pipe' })
-        const leaf = path.join(temp, 'signer0')
-        const signer = fs.existsSync(leaf) ? crypto.createHash('sha1').update(fs.readFileSync(leaf)).digest('hex') : 'ad-hoc'
-        check(signer === pin, `Bundled CU macOS ${arch} helper is signed by ${signer}, not the CU release certificate ${pin}`)
+        const shown = spawnSync('/usr/bin/codesign', ['-d', '-vv', '-r-', path.join(temp, 'tangu-computer-use.app')], { encoding: 'utf8' })
+        const out = `${shown.stdout}${shown.stderr}`
+        const team = /^TeamIdentifier=(.*)$/m.exec(out)?.[1]?.trim() ?? '(none)'
+        const designated = /^(?:# )?designated => (.*)$/m.exec(out)?.[1]?.trim() ?? '(none)'
+        check(team === CU_RELEASE_TEAM_ID && designated === CU_DESIGNATED,
+          `Bundled CU macOS ${arch} helper is not signed with the Developer ID of team ${CU_RELEASE_TEAM_ID} (team ${team}; designated => ${designated})`)
+        check(/^CodeDirectory .*flags=\S*runtime/m.test(out), `Bundled CU macOS ${arch} helper lacks the hardened runtime; notarization would reject the app`)
+        check(/^Timestamp=/m.test(out), `Bundled CU macOS ${arch} helper has no secure timestamp; notarization would reject the app`)
       } catch (error) {
         errors.push(`Cannot inspect bundled CU macOS ${arch} helper: ${error.message}`)
       } finally {
