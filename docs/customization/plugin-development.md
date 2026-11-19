@@ -539,12 +539,12 @@ const video = await rec.stop()                      // { bytes, mime, width, hei
 
 规则:
 
-- **只能截自己的**:元素必须在宿主交给本插件的表面里——自己的视图、`ctx.ui.float` 浮层、自己开的 `openDialog` / `popover` / `contextMenu`。宿主元素、别的插件的视图一律拒(`not-owned`)。工具结果卡片、设置页、嵌入渲染器这一期还不算。
+- **只能截自己的**:元素必须在宿主交给本插件的表面里——自己的视图、`ctx.ui.float` 浮层、自己开的 `openDialog` / `confirm` / `popover` / `contextMenu`。宿主元素、别的插件的视图一律拒(`not-owned`)。工具结果卡片、设置页、嵌入渲染器这一期还不算。
 - **只能截屏上看得见的**:整块元素都要在屏上——没被滚出滚动容器、没被面板边裁掉、没被别人的东西盖住(`clipped` / `covered`)。自己的浮层、对话框、popover、`ctx.ui.contextMenu` 菜单盖在上面不算挡。要拍比面板大的图,放进窗口级 `ctx.ui.float`,或用 CSS transform 缩小。
 - **像素密度跟屏幕走**:Retina / Windows 200% 缩放下是 2 倍,普通屏 1 倍;`scale` 只能往下调,不能放大造像素(结果里的 `scale` 是实际给的)。
 - 截图前宿主等两帧,让刚改的 DOM 画上屏;自己的字体、图片先等好(`document.fonts.ready`、`img.decode()`)。
 - **不带鼠标指针**;窗口最小化 / 隐藏时拍不了(`window-hidden`)。
-- **录屏**:开始时检查一次上面的规则;画幅在开始时定下(宽高取偶数,最大塞进 3840 × 2160),元素挪动时跟着走,元素出屏、缩得比画幅小或窗口最小化期间停在上一帧,不会录进别的东西。之后盖上来的菜单、宿主提示会录进去。同一扇窗同时只能录一段(`busy`),没有声音。默认 MP4 / H.264(公众号、剪映、QuickTime 都直接认),不支持时退回 WebM;要 WebM 就传 `mimeType: 'video/webm;codecs=vp9'`。视频在内存里攒到 `stop()`,`maxSeconds` 从第一帧算,默认 60、最多 300。`maxSeconds` 到了自动停,之后 `stop()` 拿到的是同一段;`cancel()` 扔掉。插件停用 / 重载时自动取消;编码器出错时整段作废,`done` / `stop()` 给 `null`。
+- **录屏**:开始时检查一次上面的规则;画幅在开始时定下(宽高取偶数,最大塞进 3840 × 2160),元素挪到新位置后跟着走(正在挪的那几帧丢掉,拖动 / 滚动中的元素停在上一帧,停稳了再接上),元素出屏、缩得比画幅小或窗口最小化期间也停在上一帧,不会录进别的东西。之后盖上来的菜单、宿主提示会录进去。同一扇窗同时只能录一段(`busy`),没有声音。默认 MP4 / H.264(公众号、剪映、QuickTime 都直接认),不支持时退回 WebM;要 WebM 就传 `mimeType: 'video/webm;codecs=vp9'`。视频在内存里攒到 `stop()`,`maxSeconds` 从第一帧算,默认 60、最多 300。`maxSeconds` 到了自动停,之后 `stop()` 拿到的是同一段;`cancel()` 扔掉。插件停用 / 重载时自动取消;编码器出错时整段作废,`done` / `stop()` 给 `null`。
 - 失败时 reject 一个 `name` 为 `PluginCaptureError` 的错误,`code` 是 `not-owned` / `detached` / `empty` / `clipped` / `covered` / `window-hidden` / `busy` / `unsupported` / `unavailable` / `disposed` / `failed` 之一;传的不是元素时同步抛 TypeError。
 
 实测(macOS Retina):截 480 × 300 的元素得 960 × 600 PNG;整块插件视图(2162 × 1728 像素)按 30 fps 录,实得约 29 fps。这两个口只按约定挡住「截别人的界面」,不是沙箱:插件和宿主跑在同一个渲染进程里。

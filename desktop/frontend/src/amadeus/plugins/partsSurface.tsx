@@ -123,7 +123,7 @@ export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClos
 
 /** 是 / 否:Android 上先走原生确认框,宿主没有 / 画不了再落回网页对话框。
  *  focus:网页对话框初始焦点(缺省 = danger 时落取消,否则落主按钮);宿主替插件问用户时传 'cancel',正在打字的回车不会替用户点了允许。 */
-export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: AbortSignal, focus?: 'primary' | 'cancel'): Promise<boolean> {
+export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: AbortSignal, focus?: 'primary' | 'cancel', owner?: string): Promise<boolean> {
   const ok = o.ok ?? (() => translate(o.danger ? 'pluginparts.delete' : 'pluginparts.ok'))
   const cancel = o.cancel ?? (() => translate('pluginparts.cancel'))
   const web = (): Promise<boolean> => new Promise((resolve) => {
@@ -132,7 +132,7 @@ export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: Abo
     const d = openPluginDialog({
       title: o.title, body: o.body,
       actions: [{ label: cancel }, { label: ok, primary: true, danger: !!o.danger, run: () => { answer = true } }],
-    }, guard, () => resolve(answer), focus ?? (o.danger ? 'cancel' : 'primary'))
+    }, guard, () => resolve(answer), focus ?? (o.danger ? 'cancel' : 'primary'), owner)
     signal.addEventListener('abort', () => d.close(), { once: true })
   })
   if (signal.aborted) return Promise.resolve(false)

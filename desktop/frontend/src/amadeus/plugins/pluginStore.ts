@@ -1713,7 +1713,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!ctxAlive()) return Promise.resolve(false)
       const ctl = new AbortController()
       const dispose = scope.own('mount', () => ctl.abort(), 'confirm')
-      return import('./partsSurface').then((m) => m.confirmPlugin(o, guard, ctl.signal))
+      return import('./partsSurface').then((m) => m.confirmPlugin(o, guard, ctl.signal, undefined, pluginId)) // 确认框也记作本插件的表面
         .then((v) => v && ctxAlive(), () => false)
         .finally(() => dispose.forget())
     }

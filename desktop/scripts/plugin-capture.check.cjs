@@ -234,6 +234,76 @@ const refuse = async (win, label, fn, want) => {
     check('record: unknown mimeType → unsupported', misc.bad === 'unsupported', misc.bad)
     check('record: same visibility rules at the start (half scrolled out → clipped)', misc.clipped === 'clipped', misc.clipped)
 
+    // 录屏画幅比原生小:主进程先缩再送(scale 1 在 Retina 上 = 一半)
+    const low = await win.evaluate(async () => {
+      const stage = document.querySelector('[data-pc="stage"]')
+      const r = await window.__pcap.ctx.ui.record(stage, { scale: 1 })
+      await new Promise((res) => setTimeout(res, 1500))
+      const out = await r.stop()
+      const url = URL.createObjectURL(new Blob([out.bytes], { type: out.mime }))
+      const v = document.createElement('video'); v.muted = true; v.src = url
+      await new Promise((ok, bad) => { v.onloadeddata = ok; v.onerror = () => bad(new Error('decode failed')) })
+      v.currentTime = 0.5; await new Promise((ok) => { v.onseeked = ok })
+      const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(v, 0, 0)
+      const tl = Array.from(g.getImageData(10, 10, 1, 1).data.slice(0, 3))
+      URL.revokeObjectURL(url)
+      return { w: out.width, h: out.height, vw: v.videoWidth, vh: v.videoHeight, frames: out.frames, durationMs: out.durationMs, tl }
+    })
+    check('record scale 1: 480×300 video (resized in main before IPC), red top-left, frames flowing', low.w === 480 && low.h === 300 && low.vw === 480 && near(low.tl, [255, 0, 0], 60) && low.frames >= 20, low)
+    // 奇数尺寸元素:画幅取偶数,和原生差一两像素 → 主进程不缩、渲染层吸收(记帧率)
+    const odd = await win.evaluate(async () => {
+      const stage = document.querySelector('[data-pc="stage"]')
+      stage.style.width = '481px'; stage.style.height = '301px'
+      await new Promise((res) => setTimeout(res, 200))
+      try {
+        const r = await window.__pcap.ctx.ui.record(stage, { scale: 1 })
+        await new Promise((res) => setTimeout(res, 1500))
+        const out = await r.stop()
+        return { size: `${out.width}x${out.height}`, frames: out.frames, fps: Math.round((out.frames / out.durationMs) * 10000) / 10 }
+      } finally { stage.style.width = '480px'; stage.style.height = '300px' }
+    })
+    check('record an odd-sized element (481×301 at scale 1): even frame, frames flowing', odd.size === '480x300' && odd.frames >= 20, odd)
+    note('record: odd-sized element at scale 1', odd)
+
+    // 自己开的对话框 / popover / 确认框:里面的元素能截,盖在视图上也不算挡
+    const dlg = await win.evaluate(async () => {
+      const ctx = window.__pcap.ctx
+      const h = ctx.ui.openDialog({ title: 'Capture dialog', mount(el) { el.innerHTML = '<div data-pc="dlg" style="width:200px;height:80px;background:#00aa00"></div>' } })
+      await new Promise((res) => setTimeout(res, 600))
+      let inner, under
+      try { inner = (await ctx.ui.capture(document.querySelector('[data-pc="dlg"]'))).width } catch (e) { inner = e.code }
+      try { under = (await ctx.ui.capture(document.querySelector('[data-pc="stage"]'))).width } catch (e) { under = e.code }
+      h.close()
+      await new Promise((res) => setTimeout(res, 400))
+      return { inner, under }
+    })
+    check('own openDialog: its content is capturable, and it does not count as covering the view', typeof dlg.inner === 'number' && typeof dlg.under === 'number', dlg)
+    const pop = await win.evaluate(async () => {
+      const ctx = window.__pcap.ctx
+      const anchor = document.querySelector('[data-pc="count"]')
+      const h = ctx.ui.popover(anchor, { mount(el) { el.innerHTML = '<div data-pc="pop" style="width:160px;height:60px;background:#aa00aa"></div>' } })
+      await new Promise((res) => setTimeout(res, 600))
+      let inner, under
+      try { inner = (await ctx.ui.capture(document.querySelector('[data-pc="pop"]'))).width } catch (e) { inner = e.code }
+      try { under = (await ctx.ui.capture(document.querySelector('[data-pc="stage"]'))).width } catch (e) { under = e.code }
+      h.dispose()
+      await new Promise((res) => setTimeout(res, 300))
+      return { inner, under }
+    })
+    check('own popover: its content is capturable, and it does not count as covering the view', typeof pop.inner === 'number' && typeof pop.under === 'number', pop)
+    const conf = await win.evaluate(async () => {
+      const ctx = window.__pcap.ctx
+      const answer = ctx.ui.confirm({ title: 'Capture confirm' })
+      await new Promise((res) => setTimeout(res, 600))
+      let under; try { under = (await ctx.ui.capture(document.querySelector('[data-pc="stage"]'))).width } catch (e) { under = e.code }
+      window.__pcapConfirm = answer
+      return { under, open: !!document.querySelector('dialog[open]') }
+    })
+    await win.keyboard.press('Escape')
+    await sleep(400)
+    check('own confirm dialog open over the view: not covered', typeof conf.under === 'number' && conf.open, conf)
+
     // 大块区域的实测帧率(只记不判):整个插件视图容器,原生密度
     const big = await win.evaluate(async () => {
       const host = document.querySelector('[data-pc="stage"]').closest('[data-plugin-view-host]')

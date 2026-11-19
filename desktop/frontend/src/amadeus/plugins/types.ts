@@ -2155,7 +2155,7 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 /** Why `ctx.ui.capture` / `ctx.ui.record` refused (2026-11-19+). The rejection is an `Error` named `PluginCaptureError`
  *  with one of these in `code`; `message` says the same in English.
  *  - `not-owned`: the element is not inside a surface the host handed to your plugin (your views, `ctx.ui.float`,
- *    your `openDialog` / `popover` / `contextMenu`). Tool result cards, settings pages and embed renderers don't count yet.
+ *    your `openDialog` / `confirm` / `popover` / `contextMenu`). Tool result cards, settings pages and embed renderers don't count yet.
  *  - `detached`: not in the document (or not in this window).
  *  - `empty`: zero width or height (`display: none`, collapsed).
  *  - `clipped`: part of it is outside what is on screen — scrolled out of its scroll container, cut by a panel
@@ -2649,9 +2649,10 @@ export interface PluginContext {
     capture?(el: Element, opts?: PluginCaptureOptions): Promise<PluginCaptureResult>
     /** A video of one of your own elements (2026-11-19+, desktop app only — `ctx.ui.record?.(el)`). Same rules as
      *  `capture` for which elements and what must be visible at the start. Resolves once the first frame is in.
-     *  - The frame size is fixed at the start; the recording follows the element if it moves. While the element is
-     *    (partly) off screen, smaller than that frame, or the window is minimized, the last frame is held — nothing
-     *    else is recorded instead.
+     *  - The frame size is fixed at the start; the recording follows the element when it has moved (a frame taken while
+     *    it is moving is dropped, so a dragged or scrolling element holds its last frame until it settles). While it is
+     *    (partly) off screen, smaller than that frame, or the window is minimized, the last frame is held too —
+     *    nothing else is recorded instead.
      *  - Whatever appears over the element later (menus you open, a host toast) is in the video: only the start is
      *    checked. The mouse cursor is not in it — draw your own pointer for a demo.
      *  - One recording per window at a time (`busy`). No audio.

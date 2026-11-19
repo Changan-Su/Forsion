@@ -23,7 +23,8 @@ export function installPluginCapture(trusted: (event: IpcMainInvokeEvent) => boo
       const native = img.getSize()
       if (req.format === 'bgra') {
         // 录屏画幅比原生小(scale < 原生密度、或塞进 4K 框)时先缩:序列化 / 跨进程搬的是缩后的位图
-        if (req.size && (req.size.width < native.width || req.size.height < native.height)) img = img.resize({ ...req.size, quality: 'good' })
+        // 只差一两像素(奇数宽、小数尺寸、125% / 150% 缩放)不缩:渲染层 drawImage 顺手吸收,省得每帧在主线程 resize
+        if (req.size && (req.size.width < native.width - 2 || req.size.height < native.height - 2)) img = img.resize({ ...req.size, quality: 'good' })
         const out = img.getSize()
         const data = img.toBitmap()
         // 紧排 BGRA 才能直接当 VideoFrame 用;有行填充(没见过)就算失败,不交一帧错位的画面
