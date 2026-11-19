@@ -96,6 +96,17 @@ const messages = [
   { id: 'e2e-m1', role: 'user', content: 'Hello fixture', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 50000, model_id: null, is_error: false },
   { id: 'e2e-m2', role: 'model', content: 'Hi! This is the fixture reply.', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: T0 - 49000, model_id: null, is_error: false },
 ]
+// A quiet conversation for the phone's chat page (2026-11-19: no names in a one-agent chat, a time only after ≥ 5 min,
+// the row of buttons only under the last reply — the others show theirs on a tap). Served for Session Two only while the
+// "chat page is quiet" check turns it on: everything else expects Two to be empty.
+let quietChat = false
+const quietAt = T0 - 30 * 60000
+const quietMessages = [
+  { id: 'e2e-q1', role: 'user', content: 'Quiet one', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: quietAt, model_id: null, is_error: false },
+  { id: 'e2e-q2', role: 'model', content: 'The first answer, a little while ago.', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: quietAt + 5000, model_id: null, is_error: false },
+  { id: 'e2e-q3', role: 'user', content: 'Quiet two', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: quietAt + 60000, model_id: null, is_error: false },
+  { id: 'e2e-q4', role: 'model', content: 'The second answer, the last one.', reasoning: null, tool_calls: null, tool_results: null, attachments: null, timestamp: quietAt + 65000, model_id: null, is_error: false },
+]
 // Model catalog for the composer's model pill (the native model sheet needs something to list).
 const MODELS = [
   { id: 'e2e-model-alpha', name: 'E2E Model Alpha', provider: 'E2E', source: 'forsion', modelType: 'llm' },
@@ -346,7 +357,7 @@ function installStub(cdp) {
       if (m === 'PATCH' || m === 'PUT') configs[id] = { ...(m === 'PUT' ? {} : configs[id]), ...JSON.parse(body || '{}') }
       return json({ agent_config: configs[id] || {} })
     }
-    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/e2e-s1/') ? messages : [] })
+    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/e2e-s1/') ? messages : quietChat && p.includes('/e2e-s2/') ? quietMessages : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
       const s = sessions.find((x) => x.id === decodeURIComponent(one[1]))
@@ -1644,7 +1655,7 @@ const tabCountText = (list) => {
   // On a phone (2026-11-18) achievements left ⋯ for the last group of the dock's "all" sheet: the dot went along, onto
   // the "all" cell (state `allDot`, Kotlin `allBadge()`: the same badge node as any cell's, drawn as an unread dot).
   // The achievements store is seeded on disk and the page reloaded (it reads the disk once at boot).
-  await check('more dot: nothing to claim → no dot; an achievement to claim → a dot on the dock\'s "all" cell, its tile says why', async () => {
+  await check('more dot: nothing to claim → no dot; an achievement to claim → a red dot on the dock\'s "all" cell and on its tile', async () => {
     const KEY = 'forsion_tangu_achievements'
     const kept = await cdp.eval(`localStorage.getItem('${KEY}')`)
     const put = async (data) => { await cdp.eval(`(localStorage.setItem('${KEY}', ${JSON.stringify(JSON.stringify(data))}), true)`); await reload() }
@@ -1662,6 +1673,9 @@ const tabCountText = (list) => {
       assert.ok(r.hit, `no dot on the "all" cell with an achievement to claim (badges: ${h.byIdPrefix(r.nodes, 'nativeChrome.badge').map((n) => n.bounds)})`)
       assert.ok(!h.byId(r.hit, 'nativeChrome.more') && !h.byId(r.hit, 'nativeChrome.moreDot'), 'Home shows a ⋯ (or its dot)')
       assert.equal(h.byIdPrefix(r.hit, 'nativeChrome.badge').length, 1, 'more than one dot')
+      const dot = dotOf(r.hit)
+      const c = pixelAt(dot.rect.cx, dot.rect.cy) // the launchers' dot is a notice (--danger), red in every theme
+      assert.ok(c.r > c.g + 60 && c.r > c.b + 60, `the "all" cell's dot is not the danger colour: ${JSON.stringify(c)}`)
       shot('03g-more-dot')
       // the tile behind it: a tile has no second line, so the dot's meaning is a dot on its square
       // (`nativeSheet.itemDot.<id>`) and the screen reader's state; the other launchers carry none
@@ -1671,6 +1685,8 @@ const tabCountText = (list) => {
       const tileDot = h.byId(list, 'nativeSheet.itemDot.go:rb-achievements')
       assert.ok(tileDot && within(tile, tileDot), `the achievements tile carries no dot (${ids(list, 'nativeSheet.itemDot.')})`)
       assert.deepEqual(ids(list, 'nativeSheet.itemDot.'), ['go:rb-achievements'], 'dots on other tiles')
+      const tc = pixelAt(tileDot.rect.cx, tileDot.rect.cy)
+      assert.ok(tc.r > tc.g + 60 && tc.r > tc.b + 60, `the tile's dot is not red: ${JSON.stringify(tc)}`)
       shot('03h-all-sheet-dot')
       h.key(4)
       await waitSheet(false)
@@ -2882,6 +2898,87 @@ const tabCountText = (list) => {
       if (await cdp.eval(`!!${chipOf(on0)}`)) await tapEl(chipOf(on0))
       if (saved0 === null) await cdp.eval("(localStorage.removeItem('forsion_notes_phone_tab'), true)")
     }
+    // 2026-11-19: the list ends with "full-text search" before the two rows at its foot. A tap opens the search inside the
+    // list with the caret in its field; system Back closes it and stays on the list (a sheet over it takes Back first);
+    // only the next Back leaves for Home.
+    const LIST = '.mb-drawer--left'
+    const PANE = `${LIST} .amx-panel--inlist`
+    const look = async () => JSON.parse(await cdp.eval(`JSON.stringify((() => { const pane = document.querySelector(${JSON.stringify(PANE)}), input = pane?.querySelector('input')
+      return { pane: !!pane, caret: !!input && document.activeElement === input, nav: document.querySelector('.mb-shell')?.dataset.nav || '', space: document.querySelector('.mb-shell')?.dataset.space } })())`))
+    await cdp.eval(`(() => { const s = document.querySelector('${LIST} .t2s-scroll'); if (s) s.scrollTop = s.scrollHeight; return true })()`)
+    await h.pause(500)
+    const foot = await cdp.eval(`[...document.querySelectorAll('${LIST} .t2s-foot .t2s-special-title')].map((e) => e.textContent.trim())`)
+    assert.ok(foot.length === 3 && foot[0] === '全文搜索', `the rows at the list's foot: ${JSON.stringify(foot)}`)
+    shot('03f2-notes-list-foot')
+    await tapEl(`document.querySelector('${LIST} .t2s-foot .amx-fulltext-entry')`)
+    assert.ok(await h.waitPage(cdp, `!!document.querySelector(${JSON.stringify(PANE)})`, 5000), 'the full-text row did not open the search in the list')
+    await h.pause(500)
+    let st = await look()
+    assert.deepEqual(st, { pane: true, caret: true, nav: 'list', space: 'amadeus' }, 'the search in the list: open, caret in its field, still on the list')
+    shot('03i-notes-fulltext')
+    if (imeShown()) { h.key(4); await h.pause(700) } // that Back is the keyboard's
+    assert.ok((await look()).pane, 'putting the keyboard away closed the search')
+    // a sheet over it (the vault switcher, from the capsule's title) takes Back first; the search stays
+    const titleBtn = (await h.waitNodes((l) => h.byId(l, 'nativeChrome.titleButton'), { timeout: 5000 })).hit
+    assert.ok(titleBtn, 'control: the capsule title (the vault) is not a button')
+    await tapId('nativeChrome.titleButton')
+    await waitSheet(true)
+    shot('03j-notes-fulltext-vault-sheet')
+    h.key(4)
+    await waitSheet(false)
+    st = await look()
+    assert.ok(st.pane && st.nav === 'list', `Back on the vault sheet also closed the search / left the list: ${JSON.stringify(st)}`)
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, `!document.querySelector(${JSON.stringify(PANE)})`, 4000), 'system Back did not close the search')
+    await h.pause(500)
+    st = await look()
+    assert.deepEqual([st.nav, st.space], ['list', 'amadeus'], `system Back with the search open left the list: ${JSON.stringify(st)}`)
+    assert.ok(resumed(), 'Back left the app')
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell')?.dataset.space === 'home'", 5000), 'the Back after that did not lead Home')
+    await toSpace('amadeus')
+    // the tags chip: a filter and two sort keys over the tags; a tag lists its notes in the list
+    const TAGGED = 'E2E tagged.md'
+    const saved1 = await cdp.eval("localStorage.getItem('forsion_notes_phone_tab')")
+    const on1 = await cdp.eval("document.querySelector('.mb-drawer--left .pl-chips button.on')?.dataset.filter")
+    try {
+      await cdp.eval(`window.amadeus.writeTextFile(${JSON.stringify(TAGGED)}, '# E2E tagged\\n\\nA note with a tag #e2etag\\n', { create: true }).then(() => true)`)
+      await switchVault('cloud'); await switchVault('local')
+      assert.ok(await h.waitPage(cdp, `!!${chipOf('tags')}`, 8000), 'no tags chip after reopening the vault')
+      await tapEl(chipOf('tags'))
+      const bar = `${LIST} .amx-tags-inlist-bar`
+      assert.ok(await h.waitPage(cdp, `${chipOf('tags')}.classList.contains('on') && !!document.querySelector('${bar} input')`, 6000), 'the tags chip has no filter over the tags')
+      const sorts = await cdp.eval(`document.querySelectorAll('${bar} .amx-tagtree-sort button').length`)
+      assert.equal(sorts, 2, 'two sort keys expected beside the filter')
+      assert.equal(await cdp.eval(`!!document.querySelector('${LIST} .mb-drawer-bar')`), false, 'a left-view switcher on the tags chip')
+      const tag = `[...document.querySelectorAll('${LIST} .amx-tag')].find((e) => e.textContent.includes('e2etag'))`
+      assert.ok(await h.waitPage(cdp, `!!${tag}`, 8000), `the vault's tag is not listed (${await cdp.eval(`JSON.stringify([...document.querySelectorAll('${LIST} .amx-tag')].map((e) => e.textContent.trim()).slice(0, 8))`)})`)
+      shot('03k-notes-tags')
+      await tapEl(tag)
+      assert.ok(await h.waitPage(cdp, `!!document.querySelector(${JSON.stringify(PANE)}) && [...document.querySelectorAll('${PANE} .amx-taghit-file, ${PANE} .amx-list-item')].some((e) => e.textContent.includes('E2E tagged'))`, 8000),
+        `a tag did not list its note in the list (${await cdp.eval(`document.querySelector(${JSON.stringify(PANE)})?.innerText.slice(0, 120) || 'no pane'`)})`)
+      shot('03l-notes-tag-hits')
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, `!document.querySelector(${JSON.stringify(PANE)})`, 4000), 'system Back did not close the tag\'s notes')
+      assert.equal(await cdp.eval(nav), 'list', 'system Back with a tag\'s notes open left the list')
+    } finally {
+      await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(TAGGED)}).then(() => true, () => true)`).catch(() => {})
+      if (on1 && await cdp.eval(`!!${chipOf(on1)}`)) await tapEl(chipOf(on1))
+      if (saved1 === null) await cdp.eval("(localStorage.removeItem('forsion_notes_phone_tab'), true)")
+    }
+    // dark: the same list
+    await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
+    try {
+      await reload()
+      await toSpace('amadeus')
+      await h.waitPage(cdp, `${nav} === 'list' && !!document.querySelector('.mb-drawer--left .pl-chips')`, 8000)
+      await h.pause(600)
+      shot('03m-notes-list-dark')
+    } finally {
+      await cdp.eval("localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light'); true")
+      await reload()
+    }
     } finally { if (side !== 'local') await switchVault(side) }
   })
 
@@ -3194,6 +3291,70 @@ const tabCountText = (list) => {
     await h.pause(600)
     assert.ok(resumed(), 'left the app')
   })
+
+  // 2026-11-19 (messageQuiet.ts / messageTap.ts, chat2.css "手机:对话页少写几样"): a one-agent conversation writes no
+  // names over its replies and none over the user's; a time only where ≥ 5 minutes passed; the row of buttons stays under
+  // the last finished reply only — an earlier one shows its row when its text is tapped, and a second tap folds it back.
+  // A folded row is clipped to 1×1 (not display:none: a screen reader still reaches it), so it is judged by what is visible.
+  await check('user message: the chat page is quiet — no names in a one-agent chat, a time only after a pause, the button row under the last reply only; a tap on an earlier reply shows its row, a second tap folds it', async () => {
+    quietChat = true
+    try {
+      await reload() // Session Two's messages are read again, now the quiet fixture
+      await openChat('Two')
+      const replies = "[...document.querySelectorAll('.mb-main .t2-asst')]"
+      assert.ok(await h.waitPage(cdp, `${replies}.length === 2`, 8000), `the quiet fixture did not load (${await cdp.eval(`${replies}.length`)} replies)`)
+      const first = `${replies}[0]`, last = `${replies}[1]`
+      /** What of a reply's button row is visible: its rectangle clipped by every ancestor that clips (device px area). */
+      const rowSeen = (msg) => cdp.eval(`(() => { const m = ${msg}, row = m && m.querySelector(':scope > .t2-asst-col > .t2-actions'); if (!row) return null
+        let r = row.getBoundingClientRect(), box = { l: r.left, t: r.top, r: r.right, b: r.bottom }
+        for (let e = row; e; e = e.parentElement) { const cs = getComputedStyle(e); const b = e.getBoundingClientRect()
+          if (cs.clipPath && cs.clipPath !== 'none' && /inset\\(50%/.test(cs.clipPath)) return { area: 0, quiet: m.dataset.quiet, tapped: m.hasAttribute('data-tapped') }
+          if (e !== row && /hidden|clip|auto|scroll/.test(cs.overflow)) box = { l: Math.max(box.l, b.left), t: Math.max(box.t, b.top), r: Math.min(box.r, b.right), b: Math.min(box.b, b.bottom) } }
+        box = { l: Math.max(box.l, 0), t: Math.max(box.t, 0), r: Math.min(box.r, innerWidth), b: Math.min(box.b, innerHeight) }
+        const btn = row.querySelector('.t2-iconbtn'), bb = btn && btn.getBoundingClientRect()
+        const hit = bb ? document.elementFromPoint(bb.left + bb.width / 2, bb.top + bb.height / 2) : null
+        return { area: Math.max(0, box.r - box.l) * Math.max(0, box.b - box.t), w: r.width, h: r.height, hit: !!hit && !!btn && btn.contains(hit), quiet: m.dataset.quiet, tapped: m.hasAttribute('data-tapped') } })()`)
+      // bring the last reply on screen (the stream ends with it)
+      await cdp.eval(`(${last}.scrollIntoView({ block: 'end' }), true)`); await h.pause(500)
+      const names = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-asst .t2-name, .mb-main .t2-username')].filter((e) => { const r = e.getBoundingClientRect(); return getComputedStyle(e).display !== 'none' && r.width > 1 && r.height > 1 }).map((e) => e.textContent.trim())`)
+      assert.deepEqual(names, [], 'names written in a one-agent conversation')
+      const times = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-msgtime')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 1 && r.height > 1 && getComputedStyle(e).visibility !== 'hidden' }).length`)
+      assert.ok(times <= 1, `a time on ${times} messages of a conversation whose four messages are a minute apart (the first only)`)
+      let a = await rowSeen(last), b = await rowSeen(first)
+      assert.ok(a && a.area > 100 && a.hit, `the last reply's button row is not on screen (${JSON.stringify(a)})`)
+      assert.ok(b && b.area === 0 || b && b.area <= 1, `the earlier reply's button row is on screen (${JSON.stringify(b)})`)
+      assert.ok(/last/.test(a.quiet) && !/last/.test(b.quiet || ''), `the marks: last ${a.quiet}, earlier ${b.quiet}`)
+      await cdp.eval(`(${last}.scrollIntoView({ block: 'end' }), true)`); await h.pause(400)
+      shot('21-chat-quiet-light')
+      // a real tap on the earlier reply's text shows its row; a second tap folds it again
+      const text = `${first}.querySelector('.t2-content p, .t2-content')`
+      await tapEl(text)
+      assert.ok(await h.waitPage(cdp, `${first}.hasAttribute('data-tapped')`, 3000), 'a tap on the earlier reply did not mark it')
+      await h.pause(300)
+      b = await rowSeen(first)
+      assert.ok(b && b.area > 100 && b.hit, `the tapped reply's button row did not show (${JSON.stringify(b)})`)
+      shot('21b-chat-quiet-tapped')
+      await tapEl(text)
+      assert.ok(await h.waitPage(cdp, `!${first}.hasAttribute('data-tapped')`, 3000), 'a second tap did not fold it')
+      await h.pause(300)
+      b = await rowSeen(first)
+      assert.ok(b && b.area <= 1, `the row stayed after the second tap (${JSON.stringify(b)})`)
+      a = await rowSeen(last)
+      assert.ok(a && a.area > 100, `the last reply lost its row (${JSON.stringify(a)})`)
+      // dark: the same page
+      await cdp.eval("localStorage.setItem('forsion_theme_pref', 'dark'); localStorage.setItem('forsion_theme', 'dark'); true")
+      await reload()
+      await openChat('Two')
+      assert.ok(await h.waitPage(cdp, `${replies}.length === 2`, 8000), 'the quiet fixture did not load (dark)')
+      await cdp.eval(`(${last}.scrollIntoView({ block: 'end' }), true)`); await h.pause(600)
+      shot('21c-chat-quiet-dark')
+    } finally {
+      quietChat = false
+      await cdp.eval("localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light'); true")
+      await reload()
+    }
+  })
+
 
   await check('rewind menu: native sheet with the note as footer; cancel changes nothing', async () => {
     const btn = `document.querySelector('[data-act="rewind"]')` // still in the DOM (hidden under the native host): tells the fixture message is up
@@ -3955,7 +4116,21 @@ const tabCountText = (list) => {
     assert.ok(menu.indexOf('rb-mode') > menu.indexOf('rb-settings') && menu.indexOf('rb-cmd') > menu.indexOf('rb-settings'), `theme / command panel not after settings (${menu})`)
     assert.ok(!menu.includes('tab:new'), `"New tab" in the avatar menu (${menu})`)
     shot('05-account-menu-light')
-    await tapId('nativeSheet.item.rb-mode', list)
+    h.key(4)
+    await waitSheet(false)
+    // avatar → command panel → system Back: the panel closes and the person is still on the page they were on
+    await openPalette()
+    await h.pause(400)
+    if (imeShown()) { h.key(4); await h.pause(700) } // that Back is the keyboard's
+    assert.ok(await cdp.eval("!!document.querySelector('.cmd-input')"), 'putting the keyboard away closed the command panel')
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000), 'system Back did not close the command panel')
+    await h.pause(500)
+    assert.ok(resumed(), 'system Back on the command panel left the app')
+    assert.deepEqual(await cdp.eval(`({ space: document.querySelector('.mb-shell')?.dataset.space, home: ${homeShown} })`), { space: 'home', home: true }, 'system Back on the command panel also left Home')
+    await tapId('nativeChrome.account')
+    const again = await waitSheet(true)
+    await tapId('nativeSheet.item.rb-mode', again)
     await waitSheet(false)
     assert.equal(await h.waitPage(cdp, `(${dom.mode}) !== ${JSON.stringify(mode)} && (${dom.mode})`, 5000), 'dark')
     await h.pause(700) // the bar repaints from the MutationObserver
@@ -4880,9 +5055,8 @@ const tabCountText = (list) => {
     const stillListed = await cdp.eval("[...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).filter((t) => /E2E plugin/.test(t))")
     assert.deepEqual(stillListed, [], 'the uninstalled plugin\'s commands are still in the command panel')
     if (imeShown()) { h.key(4); await h.pause(600) }
-    // leave it closed for whatever runs next (system back does not close the command panel: Escape, as a keyboard would)
-    await cdp.eval("(document.querySelector('.cmd-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), true)")
-    assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000), 'the command panel stayed open')
+    h.key(4) // system Back closes the command panel (MobileRoot planBack)
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000), 'system Back did not close the command panel')
   })
 
   // ── restore the device state we touched ──
