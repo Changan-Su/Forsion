@@ -35,6 +35,7 @@ async function layout(page, zone) {
 }
 const moveTo = (list, id, to) => { const out = list.filter((x) => x !== id); out.splice(Math.max(0, Math.min(to, out.length)), 0, id); return out }
 const insertBefore = (list, id, before) => { const out = list.filter((x) => x !== id); out.splice(out.indexOf(before), 0, id); return out }
+const insertAfter = (list, id, after) => { const out = list.filter((x) => x !== id); out.splice(out.indexOf(after) + 1, 0, id); return out }
 
 async function openFly(page, zone) {
   if (await page.locator(fly(zone)).count()) return
@@ -114,6 +115,25 @@ async function zoneSuite(page, zone, { label, reload, pick = (rows) => rows }) {
     assert.deepEqual(await layout(page, zone), insertBefore(before, d, t))
     assert.ok((await flyIds(page, zone)).includes(d), 'it is in the flyout now')
   })
+  if (zone === 'top') await step(`${tag} I0 条上 → 浮层第一行:插到它之前等于没动,改落在它之后(线画下沿)`, async () => {
+    await openFly(page, zone)
+    const rows = pick(await flyIds(page, zone)), bar = await barIds(page, zone), before = await layout(page, zone)
+    const d = bar[1], t = rows[0]
+    const mid = await drag(page, `.rb-${zone} .rb-slot[data-id="${d}"]`, `${fly(zone)} > [data-id="${t}"]`)
+    assert.deepEqual(mid.line, [`${t}:below`], JSON.stringify(mid))
+    assert.deepEqual(await layout(page, zone), insertAfter(before, d, t))
+    assert.ok((await flyIds(page, zone)).includes(d), 'it really went into the flyout')
+  })
+  // 只指针一路:原生拖拽本来不产生 click;且 CDP 鼠标拖条上→条上收不到 drop(main 上也一样,条上格子带让位 transform,疑 CDP 拦截的毛病),
+  // 条上原生重排另由 e2e:ribbon 的派发事件钉
+  if (label === 'pointer') await step(`${tag} B 浮层开着,条上格子之间指针拖:松手合成的 click 不把浮层收掉`, async () => {
+    await openFly(page, zone)
+    const bar = (await barIds(page, zone)).filter((id) => pick([id]).length), before = await layout(page, zone)
+    await drag(page, `.rb-${zone} .rb-slot[data-id="${bar[0]}"]`, `.rb-${zone} .rb-slot[data-id="${bar[2]}"]`)
+    assert.deepEqual(await layout(page, zone), moveTo(before, bar[0], before.indexOf(bar[2])))
+    await page.waitForTimeout(SETTLE)
+    assert.equal(await page.locator(fly(zone)).count(), 1, 'flyout still open')
+  })
   await step(`${tag} C 条上单击一格:浮层照样收`, async () => {
     await openFly(page, zone)
     const id = (await barIds(page, zone)).find((x) => pick([x]).length)
@@ -161,6 +181,21 @@ async function harness() {
       // harness 每次加载都重设顺序,持久化只在 --electron 里验
       await zoneSuite(page, 'top', { label: mode })
       if (mode === 'native') await zoneSuite(page, 'bottom', { label: mode })
+      if (mode === 'native') await step('native X 命令区的图标先在本区悬停、再拖到 Space 区浮层上松手:谁都不动', async () => {
+        await openFly(page, 'top')
+        const top0 = await layout(page, 'top'), bot0 = await layout(page, 'bottom'), b = await barIds(page, 'bottom')
+        const a = await center(page, `.rb-bottom .rb-slot[data-id="${b[0]}"]`), m = await center(page, `.rb-bottom .rb-slot[data-id="${b[2]}"]`)
+        const t = await center(page, `${fly('top')} > .rb-fly-row[data-id]`)
+        await page.mouse.move(a.x, a.y); await page.mouse.down()
+        for (let i = 1; i <= 8; i++) await page.mouse.move(a.x, a.y + (m.y - a.y) * i / 8)
+        await page.waitForTimeout(150)
+        for (let i = 1; i <= 12; i++) await page.mouse.move(m.x + (t.x - m.x) * i / 12, m.y + (t.y - m.y) * i / 12)
+        await page.waitForTimeout(150)
+        await page.mouse.up(); await page.waitForTimeout(400)
+        assert.deepEqual(await layout(page, 'bottom'), bot0, 'command zone unchanged')
+        assert.deepEqual(await layout(page, 'top'), top0, 'space zone unchanged')
+        await page.keyboard.press('Escape'); await page.waitForTimeout(SETTLE)
+      })
       if (mode === 'pointer') {
         await step('pointer 浮层里的 Space 拖到窗外仍是撕出开窗', async () => {
           await openFly(page, 'top')
