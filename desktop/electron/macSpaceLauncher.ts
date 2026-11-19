@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
-import { dirname, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { isSpaceId, spaceBundleId } from './spaceShortcut'
 import { xml } from './productShortcut'
 
@@ -81,7 +82,8 @@ export function startMacSpaceLaunchers(endpoint: string, binary: string, windows
     if (typeof bundle !== 'string' || !isAbsolute(bundle) || !bundle.endsWith('.app')) return false
     try {
       const plist = readFileSync(join(bundle, 'Contents', 'Info.plist'), 'utf8')
-      return plist.includes(`<key>ForsionSpaceId</key>\t<string>${xml(id)}</string>`) &&
+      return plist.includes(`<key>CFBundleIdentifier</key>\t<string>${xml(spaceBundleId(id))}</string>`) &&
+        plist.includes(`<key>ForsionSpaceId</key>\t<string>${xml(id)}</string>`) &&
         plist.includes(`<key>ForsionSpaceSocket</key>\t<string>${xml(endpoint)}</string>`)
     } catch { return false }
   }
@@ -101,9 +103,12 @@ export function startMacSpaceLaunchers(endpoint: string, binary: string, windows
     show(id: string, bundle: string): void {
       if (!listening || launchers.has(id) || starting.has(id)) return
       starting.add(id)
-      if (matches(bundle, id)) { launch(id, bundle); return }
-      // Finder may have moved the .app to Applications. Resolve its installed
-      // path by bundle ID, then verify it still belongs to this Space/profile.
+      // Finder moves can take time to show up in LaunchServices. Check the
+      // usual Applications locations by filename before consulting the index.
+      const name = basename(bundle)
+      const known = [bundle, join(homedir(), 'Applications', name), join('/Applications', name)]
+        .find((candidate) => matches(candidate, id))
+      if (known) { launch(id, known); return }
       execFile(binary, ['--locate', spaceBundleId(id)], (error, output) => {
         let located: string | undefined
         if (!error) {

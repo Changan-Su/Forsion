@@ -11,7 +11,7 @@
  *     Info.plist 过 plutil、AppIcon.icns 过 iconutil、launch 可执行。
  *  P  随包 Space 注册后自动调用同一条 IPC，单体 Space 的声明被忽略。
  *  D  macOS：原地升级旧链接，LaunchServices 真运行原生 Space launcher，最小化仍常驻，点回当前窗口，
- *     Dock 退出时关掉独立 Space 窗。测试仅绑定此台架的临时 socket。
+ *     Dock 退出时关掉独立 Space 窗，剪切到「应用程序」后仍能从宿主拉起。
  *
  * ⚠️ 验不到的:安装版里 LaunchServices / 注册表把链接投给 Forsion 的那一段(dev 不注册 forsion://),
  *    Windows 任务栏按 Space 单独成组(setAppDetails)。
@@ -96,6 +96,26 @@ async function checkMacDock(app, spaceWin, legacy, opts) {
     legacy.live = false
     dock.hide(id)
     check('D6 closing the Space connection removes the running Dock app', await until(async () => runningDockApps(bundleId) === 0))
+
+    const applications = path.join(home, 'Applications')
+    fs.mkdirSync(applications)
+    const moved = path.join(applications, path.basename(result.path))
+    const previousHome = process.env.HOME
+    fs.renameSync(result.path, moved)
+    try {
+      process.env.HOME = home
+      await secondInstance(LINK)
+      legacy.live = !!await until(spaceWin)
+      dock.show(id, result.path)
+      check('D7 the host finds the launcher after moving it to Applications', await until(async () => runningDockApps(bundleId) === 1))
+    } finally {
+      legacy.live = false
+      dock.hide(id)
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      await until(async () => runningDockApps(bundleId) === 0)
+      fs.renameSync(moved, result.path)
+    }
   } finally {
     dock.dispose()
   }
