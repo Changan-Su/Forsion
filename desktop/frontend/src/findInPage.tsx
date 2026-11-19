@@ -347,6 +347,9 @@ export function openFindBar(opts: { replace?: boolean } = {}): void {
   const pre = selectedQuery()
   // 已经开着时再按一次 = 重新聚焦并全选(输入框的 autoFocus 只在挂载那一次生效;焦点回到正文
   // 之后再按 Cmd+F,不做这一步就是「按了没反应」)。正文里新选了一段 → 同 VS Code,换成它。
+  // 手机:条开着、找的却是另一面(在列表层开的,那张列表还挂着,人已经进了主区)→ 先收掉,下面对着屏上这一面重开。
+  // 别的形态 root 一开条就定死(见 FindBar 的定位),照旧只是重新聚焦。
+  if (useFind.getState().open && document.querySelector(PHONE_SHELL) && useFind.getState().root !== pickRoot()) closeFindBar()
   if (useFind.getState().open) {
     useFind.setState({ ...(pre ? { query: pre } : {}), ...(opts.replace ? { replaceOpen: true } : {}) })
     const inp = document.querySelector<HTMLInputElement>('.amx-findbar input')

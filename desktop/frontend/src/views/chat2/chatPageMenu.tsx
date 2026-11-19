@@ -3,17 +3,22 @@
  *  只是把行交给外壳(useNativeChromeExtras 的 more):画不画「⋯」、怎么呈现由外壳定,别的形态(桌面、平板横屏)不认这些行。 */
 import { useEffect, useState } from 'react'
 import { Archive, ArchiveRestore, Pencil, Pin, PinOff, Search } from 'lucide-react'
-import { dispatchNativeChromeAction, listFirstNow, useNativeChromeExtras, useWorkspace, type NativeChromePageAction } from '@lcl/engine'
+import { dispatchNativeChromeAction, listFirstNow, useCommandStore, useNativeChromeExtras, useWorkspace, type NativeChromePageAction } from '@lcl/engine'
 import { useApp } from '../../stores/appStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { askString } from '../../amadeus/components/askString'
-import { closeFindBar, findSupported, openFindBar, pickRoot, useFind } from '../../findInPage'
 import { isOrbitPinned, onOrbitPinsChanged, readOrbitPins, toggleStoredOrbitPin } from './orbitPins'
 
 registerMessages({
   'chat.pageMenu.find': { zh: '在这条对话里查找', en: 'Find in this chat' },
 })
+
+/** 页内查找是宿主的功能:经它登记的命令去开(`find-in-page`,bootstrapEngine),这里不直接引宿主的查找模块
+ *  (Tangu 界面对宿主的依赖只许减,见 scripts/tangu-boundary.check.cjs)。条开在哪一面、落在哪由宿主那边定。 */
+const FIND_COMMAND = 'find-in-page'
+/** 查找条靠 CSS 自定义高亮画命中;浏览器不支持时宿主不开条,这一行也就不列(同宿主那边的特性探测)。 */
+const canFind = typeof CSS !== 'undefined' && 'highlights' in CSS
 
 /** `sessionId` = 这一页的会话;null(新对话还没落库、右栏里的对话面板、子会话)= 这一页没有自己的菜单。 */
 export function useChatPageMenu(sessionId: string | null): void {
@@ -57,11 +62,7 @@ export function useChatPageMenu(sessionId: string | null): void {
         })
       },
     },
-    ...(findSupported ? [{
-      id: 'find', label: t('chat.pageMenu.find'), icon: Search, section: 1,
-      // 查找条已经开着、找的却是别的面(在列表层开的,列表还挂着):先收掉,再对着屏上这一面开。
-      run: () => { const f = useFind.getState(); if (f.open && f.root !== pickRoot()) closeFindBar(); openFindBar() },
-    }] : []),
+    ...(canFind ? [{ id: 'find', label: t('chat.pageMenu.find'), icon: Search, section: 1, run: () => useCommandStore.getState().run(FIND_COMMAND) }] : []),
   ]
   useNativeChromeExtras(rows ? { where: 'main', more: rows } : null)
 }
