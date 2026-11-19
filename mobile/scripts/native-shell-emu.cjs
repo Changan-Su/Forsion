@@ -2940,6 +2940,29 @@ const tabCountText = (list) => {
     h.key(4)
     assert.ok(await h.waitPage(cdp, "document.querySelector('.mb-shell')?.dataset.space === 'home'", 5000), 'the Back after that did not lead Home')
     await toSpace('amadeus')
+    /** A first-level list has nothing of its own for ⋯ (2026-11-18). If one shows up anyway, record what it holds and the
+     *  state around it (sheet title, rows, the main view behind the list, the shell's marks, any reachable stores), then fail. */
+    const noMoreOnList = async (where) => {
+      await h.pause(700)
+      const l = (await h.waitNodes((x) => (h.byId(x, 'nativeChrome.bar') ? x : null), { timeout: 4000 })).nodes
+      if (!h.byId(l, 'nativeChrome.more')) { console.log(`  ${where}: no ⋯ on the list level`); return }
+      shot(`03n-notes-more-${where}`)
+      await tapId('nativeChrome.more', l)
+      const sheet = await waitSheet(true)
+      const rows = h.byIdPrefix(sheet, 'nativeSheet.item.').map((n) => ({ id: n['resource-id'].slice('nativeSheet.item.'.length), label: rowLabel(sheet, n['resource-id']) }))
+      const title = textOf(sheet, 'nativeSheet.title')
+      shot(`03o-notes-more-sheet-${where}`)
+      h.key(4); await waitSheet(false)
+      const scene = await cdp.eval(`JSON.stringify((() => { const sh = document.querySelector('.mb-shell'), v = document.querySelector('.mb-main > .mb-view')
+        const stores = {}
+        for (const k of Object.getOwnPropertyNames(window)) { let o; try { o = window[k] } catch { continue } if (!o || typeof o.getState !== 'function') continue
+          try { const s = o.getState(); if (Array.isArray(s.items)) stores[k + '.items'] = s.items.filter((i) => i.side === 'bottom').map((i) => ({ id: i.id, component: !!i.component, onClick: !!i.onClick }))
+            if (Array.isArray(s.commands)) stores[k + '.moreGroups'] = s.commands.filter((c) => c.moreGroup).map((c) => ({ id: c.id, group: c.moreGroup.id }))
+            if (Array.isArray(s.mainLeaves)) stores[k + '.main'] = { active: s.activeMainId, leaves: s.mainLeaves.map((r) => r.type), leftVisible: s.leftVisible } } catch {} }
+        return { view: v?.dataset.view || null, nav: sh?.dataset.nav ?? null, space: sh?.dataset.space ?? null, wide: sh?.getAttribute('data-wide'), stores } })())`)
+      console.log(`  ⋯ on the list level (${where}): sheet "${title}" rows ${JSON.stringify(rows)}; scene ${scene}`)
+      assert.fail(`a ⋯ on the notes list level (${where}): sheet "${title}", rows ${JSON.stringify(rows)}; scene ${scene}`)
+    }
     // the tags chip: a filter and two sort keys over the tags; a tag lists its notes in the list
     const TAGGED = 'E2E tagged.md'
     const saved1 = await cdp.eval("localStorage.getItem('forsion_notes_phone_tab')")
@@ -2957,6 +2980,7 @@ const tabCountText = (list) => {
       const tag = `[...document.querySelectorAll('${LIST} .amx-tag')].find((e) => e.textContent.includes('e2etag'))`
       assert.ok(await h.waitPage(cdp, `!!${tag}`, 8000), `the vault's tag is not listed (${await cdp.eval(`JSON.stringify([...document.querySelectorAll('${LIST} .amx-tag')].map((e) => e.textContent.trim()).slice(0, 8))`)})`)
       shot('03k-notes-tags')
+      await noMoreOnList('tags')
       await tapEl(tag)
       assert.ok(await h.waitPage(cdp, `!!document.querySelector(${JSON.stringify(PANE)}) && [...document.querySelectorAll('${PANE} .amx-taghit-file, ${PANE} .amx-list-item')].some((e) => e.textContent.includes('E2E tagged'))`, 8000),
         `a tag did not list its note in the list (${await cdp.eval(`document.querySelector(${JSON.stringify(PANE)})?.innerText.slice(0, 120) || 'no pane'`)})`)
@@ -2965,6 +2989,36 @@ const tabCountText = (list) => {
       h.key(4)
       assert.ok(await h.waitPage(cdp, `!document.querySelector(${JSON.stringify(PANE)})`, 4000), 'system Back did not close the tag\'s notes')
       assert.equal(await cdp.eval(nav), 'list', 'system Back with a tag\'s notes open left the list')
+      for (const chip of ['recent', 'tree']) {
+        await tapEl(chipOf(chip))
+        assert.ok(await h.waitPage(cdp, `${chipOf(chip)}.classList.contains('on')`, 5000), `the ${chip} chip did not turn on`)
+        await noMoreOnList(chip)
+      }
+      // control: a page with something of its own still has ⋯. A note opened from the list: if its view has several
+      // ways to look at it, its ⋯ carries the "view" section (`cmd:view-mode:*`); otherwise it is told which view it is.
+      await tapEl(chipOf('recent'))
+      const row = `[...document.querySelectorAll('.mb-drawer--left [data-timeline] .t2s-srow')].find((e) => e.textContent.includes('E2E tagged'))`
+      assert.ok(await h.waitPage(cdp, `!!${row}`, 6000), 'control: the tagged note is not under "recent"')
+      await tapEl(row)
+      assert.ok(await h.waitPage(cdp, `${nav} === 'detail'`, 8000), 'control: the note did not open')
+      await h.pause(1200)
+      const view = await cdp.eval("document.querySelector('.mb-main > .mb-view')?.dataset.view || ''")
+      const page = ui()
+      if (h.byId(page, 'nativeChrome.more')) {
+        await tapId('nativeChrome.more', page)
+        const up = await h.waitNodes((l) => (sheetOpen(l) ? l : null), { timeout: 5000 })
+        shot('03p-note-more-sheet')
+        const rows = up.hit ? ids(up.hit) : []
+        const web = up.hit ? null : await cdp.eval("document.querySelector('.mb-sheet, .ctx-menu, [role=\"menu\"]')?.innerText.replace(/\\s+/g, ' ').slice(0, 160) || null")
+        console.log(`  control: the note (view ${view}) has ⋯: ${up.hit ? `native sheet ${JSON.stringify(rows)}` : `no native sheet; page menu: ${web}`}`)
+        h.key(4); await h.pause(600)
+        if (sheetOpen(ui())) { h.key(4); await waitSheet(false) }
+        assert.ok(rows.length > 0 || web, 'control: the note\'s ⋯ opens nothing')
+        if (!rows.some((x) => x.startsWith('cmd:view-mode:'))) console.log(`  control: the note's view (${view}) offers no "view" section (it has one way to look at it, or its own menu)`)
+      } else console.log(`  control: the note (view ${view}) shows no ⋯`)
+      await tapId('nativeChrome.left')
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 6000), 'control: the back arrow did not return to the list')
+      await noMoreOnList('back-from-note')
     } finally {
       await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(TAGGED)}).then(() => true, () => true)`).catch(() => {})
       if (on1 && await cdp.eval(`!!${chipOf(on1)}`)) await tapEl(chipOf(on1))
