@@ -39,7 +39,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
 import { SingleColumnHost, listFirstNow, useCommandStore, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
-// 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
+// 于是 ribbon 的 rb-cmd 项(无条件注册,移动端经头像菜单 / 「⋯」可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
