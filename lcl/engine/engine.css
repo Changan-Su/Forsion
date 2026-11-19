@@ -198,10 +198,10 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .rb-group .account-card { flex: 0 0 auto; }
 
 /* 展开态:宽条,按钮变「图标 + 名称」左对齐行;底部账号卡铺满。
-   11-19 用户嫌 180px 太占地,选「紧凑行」(docs/ToBeImproved/Ribbon展开收窄方案_2026-11-19 方案 A):宽 128(英文名字长,164:Command palette 放得下),
-   两侧内距 8→6、图标与字 10→8,⌘N 悬停才露,＋ 号只露图标。顶部「只显示图标」那一行照旧带字(用户:只留箭头不好看)。 */
-.rb-expanded { width: var(--rb-w-expanded, 128px); align-items: stretch; }
-html[lang^='en'] .rb-expanded { --rb-w-expanded: 164px; }
+   11-19 用户嫌 180px 太占地,选「紧凑行」(docs/ToBeImproved/Ribbon展开收窄方案_2026-11-19 方案 A):宽 132(英文名字长,168:Command palette、钉进来的 Change accent color 都放得下;中文最长的「切换明暗模式」78px 也放得下),
+   两侧内距 8→6、图标与字 10→8,⌘N 悬停才露。顶部「只显示图标」那一行照旧带字(用户:只留箭头不好看)。 */
+.rb-expanded { width: var(--rb-w-expanded, 132px); align-items: stretch; }
+html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
 .rb-expanded .rb-group { align-items: stretch; }
 .rb-expanded .rb-head,
 .rb-expanded .rb-home,
@@ -210,20 +210,18 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 164px; }
 .rb-expanded .rb-pinned { padding: 0 6px; }
 .rb-expanded .rb-slot { width: 100%; justify-content: stretch; }
 .rb-expanded .rb-btn { width: 100%; justify-content: flex-start; gap: 8px; padding: 0 8px; height: 34px; }
-/* ＋ 号(新建 Space 或收纳夹 / 添加命令)展开态也只露图标:那串字最长,一行放不下,名字在 aria-label 里。 */
-.rb-expanded .rb-plus .rb-label { display: none; }
 /* 槽位右侧的快捷键提示(⌘1…):绝对定位不进流 —— 槽高常量与拖拽落点几何一点不受影响。
-   pointer-events:none 让点击照旧落在按钮上。只在悬停 / 键盘聚焦那一行时出现,名字这时让出右边距、长名省略号不会压上来;
-   平时名字占满整行。 */
+   pointer-events:none 让点击照旧落在按钮上。只在悬停 / 键盘聚焦(:focus-visible,鼠标点过留下的焦点不算,否则移走了还亮着)
+   那一行时出现,名字这时让出右边距、长名省略号不会压上来;平时名字占满整行。淡入有过渡,移开时立刻消失 ——
+   名字同一帧收回全宽,带着淡出会和它叠字。 */
 .rb-expanded .rb-top .rb-slot .rb-key {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   pointer-events: none; font-size: var(--ui-font-caption, 11px); line-height: 1; letter-spacing: 0.02em;
   color: var(--text-muted, var(--text-light, #8a8a8a)); opacity: 0;
   font-variant-numeric: tabular-nums;
-  transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease);
 }
-.rb-expanded .rb-top .rb-slot:is(:hover, :focus-within) .rb-label { padding-right: 24px; }
-.rb-expanded .rb-top .rb-slot:is(:hover, :focus-within) .rb-key { opacity: 0.55; }
+.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-label { padding-right: 24px; }
+.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-key { opacity: 0.55; transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 
 /* ===== 收纳夹 / 「…」浮层(悬停在 ribbon 右侧展开:icon + 文字行,可拖排/拖出) ===== */
 .rb-fly {

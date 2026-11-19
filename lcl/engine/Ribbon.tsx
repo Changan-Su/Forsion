@@ -73,7 +73,8 @@ function slotHint(i: number): string {
   return hk ? formatHotkey(hk, isMacPlatform()) : ''
 }
 
-function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: boolean; dot?: boolean }) {
+/** compact = 画在 Ribbon 条上的展开行:一行窄,剥掉名字末尾的快捷键括注。收纳夹 / 「+N」浮层里的行也带名字,但不剥(宽、且那是唯一看得到快捷键的地方)。 */
+function RibbonItemView({ item, expanded, dot, compact }: { item: RibbonItem; expanded: boolean; dot?: boolean; compact?: boolean }) {
   if (item.component) {
     const C = item.component
     return <C expanded={expanded} />
@@ -85,13 +86,13 @@ function RibbonItemView({ item, expanded, dot }: { item: RibbonItem; expanded: b
     <button className="rb-btn" aria-label={name || undefined} data-rb-tip={expanded ? undefined : name || undefined} onClick={item.onClick}>
       {Icon && <Icon size={18} />}
       {dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
-      {/* 展开态一行放不下末尾的快捷键括注(「命令面板 (⌘K)」):行上剥掉,收起态的浮签照旧带着。 */}
-      {expanded && <span className="rb-label">{moreRowLabel(name)}</span>}
+      {/* 展开态一行放不下末尾的快捷键括注(「命令面板 (⌘K)」):条上的行剥掉,收起态的浮签照旧带着。 */}
+      {expanded && <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>}
     </button>
   )
 }
 
-function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: boolean; overrideIcon?: LucideIcon }) {
+function CmdItemView({ cmd, expanded, overrideIcon, compact }: { cmd: Command; expanded: boolean; overrideIcon?: LucideIcon; compact?: boolean }) {
   // 开关类命令(声明了 checked):渲染期读状态。引擎不订阅宿主状态 → 点完、悬停进出时各重读一次。
   const [, recheck] = useReducer((n: number) => n + 1, 0)
   const Icon = overrideIcon ?? cmd.icon ?? Zap
@@ -115,7 +116,7 @@ function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: 
       }}
     >
       <Icon size={18} />
-      {expanded && <span className="rb-label">{moreRowLabel(name)}</span>}
+      {expanded && <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>}
     </button>
   )
 }
@@ -1069,8 +1070,9 @@ export function Ribbon() {
   }
   const renderEntry = (e: Entry, forceExpanded?: boolean): React.ReactNode => {
     const ex = forceExpanded ?? expanded
-    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} dot={dotted.has(e.id)} />
-    if (e.kind === 'cmd') return <CmdItemView cmd={e.cmd} expanded={ex} overrideIcon={iconByName(commandIcons[e.cmd.id])} />
+    const compact = !forceExpanded && expanded
+    if (e.kind === 'item') return <RibbonItemView item={e.item} expanded={ex} dot={dotted.has(e.id)} compact={compact} />
+    if (e.kind === 'cmd') return <CmdItemView cmd={e.cmd} expanded={ex} overrideIcon={iconByName(commandIcons[e.cmd.id])} compact={compact} />
     return renderFolderBtn(e.folder)
   }
   /** i = 当前槽下标,preview = 落点预览后的 id 序;两者之差 = 让位位移(手机桌面那种排斥占位)。
