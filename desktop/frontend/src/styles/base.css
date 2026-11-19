@@ -5587,6 +5587,12 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
 /* ③ 视图自绘顶部工具条:内距加在**条**上 —— 条的底色铺到 y=0,按钮落在胶囊下方。
       (给条下面的滚动器加内距是错的:条本身仍会杵在胶囊底下。) */
 .mb-shell:not(.mini-shell) .mb-view[data-view='calendar'] .amx-cal-bar { padding-top: calc(var(--mb-top) + 10px); }
+/*    日历插件 0.1.9 起(随包于 2026-11-12)把日历条挂进宿主 32px 的视图头行(ctx.ui.setViewModes):头行这时才是
+      视图顶端那个元素,留白给头行;头行里的条不再叠一层。只按上一条给条加内距,条在 32px 的行里居中、向上溢出,
+      标题落在胶囊底下(通话中压在通话条底下)。头行只在插件挂了东西时才画(ViewHead 没内容不占位)。
+      仪器:mobile `calendar-phone.check.cjs`;`stage:phone` 的 call-bar。 */
+.mb-shell:not(.mini-shell) .mb-view[data-view='calendar'] .lcl-viewhead { height: auto; min-height: calc(var(--mb-top) + 32px); padding-top: var(--mb-top); }
+.mb-shell:not(.mini-shell) .mb-view[data-view='calendar'] .lcl-viewhead .amx-cal-bar { padding-top: 0; }
 .mb-shell:not(.mini-shell) .mb-view[data-view='public-view'] .pv-head { padding-top: calc(var(--mb-top) + 12px); }
 .mb-shell:not(.mini-shell) .mb-view[data-view='wsfile'] .wsfile-head { padding-top: calc(var(--mb-top) + 7px); }
 .mb-shell:not(.mini-shell) .mb-view[data-view='amadeus-pdf'] .pdfa-toolbar { padding-top: calc(var(--mb-top) + 6px); }

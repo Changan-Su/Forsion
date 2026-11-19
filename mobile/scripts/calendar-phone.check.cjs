@@ -5,7 +5,7 @@ const os = require('node:os')
 const fs = require('node:fs')
 const { chromium } = require('../../desktop/node_modules/playwright-core')
 const { findChromium } = require('../../desktop/scripts/lib/find-chromium.cjs')
-const { stubApi, installChrome, stage, moduleUrl, loaded, SCREEN } = require('./phone-stage.cjs')
+const { stubApi, installChrome, stage, moduleUrl, loaded, SCREEN, LAYOUT } = require('./phone-stage.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const OUT = process.env.CALENDAR_PHONE_OUT || path.join(os.tmpdir(), 'forsion-calendar-phone-shell')
 async function main() {
@@ -59,6 +59,25 @@ async function main() {
     })
     await stage.space(page, 'calendar')
     await page.locator('[data-key="Phone.db::short"]').waitFor({ timeout: 15000 })
+    // The calendar's header starts below the capsule row, and below the call bar while a call is up (the bar adds to the
+    // shell's top room). Since Calendar 0.1.9 the header lives in the host's view-head row; a top room given to the bar
+    // alone left it centred in that 32 px row, overflowing upward under the capsules (2026-11-19).
+    const head = () => page.evaluate(() => {
+      const box = (q) => { const el = document.querySelector(q); if (!el) return null; const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom } }
+      return { title: box('.mb-view[data-view="calendar"] .amx-cal-title'), grid: box('.mb-view[data-view="calendar"] .amx-cal-tscroll'), bar: box('.vc-bar') }
+    })
+    const idle = await head()
+    assert.ok(idle.title && idle.title.top >= LAYOUT.top && idle.grid && idle.grid.top >= idle.title.bottom, `calendar header below the capsule row (ends at ${LAYOUT.top}): ${JSON.stringify(idle)}`)
+    await page.screenshot({ path: path.join(OUT, 'phone-shell-head.png') })
+    const callBar = (show) => page.evaluate(async ([url, on]) => (await import(url)).openCallLayer(on ? { sessionId: 'st-1', agentSlug: '' } : null), [moduleUrl('../desktop/frontend/src/services/realtimeCall.ts'), show])
+    await callBar(true)
+    await page.waitForFunction(() => !!document.querySelector('.vc-bar'), null, { timeout: 5000 })
+    await page.waitForTimeout(400) // the bar's enter animation; the shell's new top room
+    const calling = await head()
+    await page.screenshot({ path: path.join(OUT, 'phone-shell-head-call.png') })
+    await callBar(false)
+    await page.waitForFunction(() => !document.querySelector('.vc-bar'), null, { timeout: 5000 })
+    assert.ok(calling.bar && calling.title && calling.title.top >= calling.bar.bottom, `calendar header below the call bar: ${JSON.stringify(calling)}`)
     await page.evaluate(() => {
       const sc = document.querySelector('.amx-cal-tscroll'), cell = document.querySelector(`.amx-cal-daycol2[data-date="${window.__phoneCal.day}"]`)
       sc.scrollLeft = cell.offsetLeft
@@ -84,8 +103,8 @@ async function main() {
     await page.evaluate(() => window.__phoneCal.useDbStore.getState().flushAll(true))
     assert.equal(await page.evaluate(async () => (await window.amadeus.readDatabase('Phone.db', 'Phone.db')).data.rows.length), 2, 'phone delete and notification undo persisted')
     assert.equal(errors.length, 0, errors.join('\n'))
-    fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ passed: 5, errors, unknown: [...unknown], vehicle: 'full mobile entry + real local bridge + Chromium touch, native chrome stand-in' }, null, 2))
-    console.log(`PASS mobile shell: short tap, dock, clone persistence, delete/undo persistence, no exceptions. ${OUT}`)
+    fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify({ passed: 7, errors, unknown: [...unknown], vehicle: 'full mobile entry + real local bridge + Chromium touch, native chrome stand-in' }, null, 2))
+    console.log(`PASS mobile shell: header below the capsules and the call bar, short tap, dock, clone persistence, delete/undo persistence, no exceptions. ${OUT}`)
   } finally { await browser.close(); await server.close() }
 }
 main().catch((e) => { console.error(e); process.exitCode = 1 })
