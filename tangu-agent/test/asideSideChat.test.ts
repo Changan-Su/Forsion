@@ -6,7 +6,7 @@
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run test/asideSideChat.test.ts
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -165,6 +165,13 @@ const lastUser = (): any => payloads[payloads.length - 1].messages.at(-1);
 const imageParts = (m: any): any[] => (Array.isArray(m?.content) ? m.content.filter((p: any) => p?.type === 'image_url') : []);
 
 describe('旁聊附件(10-24 方案 A):只给这一问、主对话同一条图片路、文件抽成文字', () => {
+  it('converts a phone HEIC photo before sending it to the side-question model', async () => {
+    payloads = [];
+    const data = readFileSync(new URL('./fixtures/phone-digits.heic', import.meta.url)).toString('base64');
+    await askWith({ question: 'Read the photo.', attachments: [{ name: 'phone.heic', mimeType: 'image/heic', data }] });
+    expect(imageParts(lastUser())[0].image_url.url).toMatch(/^data:image\/jpeg;base64,/);
+  });
+
   it('图片 → 本问的 image parts(与主对话 toImageParts 同形);追问时前一轮的图不再发,只报名字', async () => {
     payloads = [];
     const r = await askWith({ question: 'What is in the picture?', attachments: [{ name: 'shot.png', mimeType: 'image/png', data: PNG_1PX, size: 70 }] });

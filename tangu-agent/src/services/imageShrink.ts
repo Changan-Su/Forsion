@@ -44,6 +44,16 @@ export interface FittedImage {
 
 interface Header { kind: 'png' | 'jpeg'; width: number; height: number; orientation: number }
 
+/** Encode decoded phone photos with the same viewing budget as other user images. */
+export function encodePhotoForModel(data: Uint8Array, width: number, height: number): Buffer {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0
+    || width * height > MAX_DECODE_PIXELS || data.length !== width * height * 4) throw new Error('Invalid image dimensions');
+  const scale = Math.min(1, MAX_EDGE / Math.max(width, height), Math.sqrt(MAX_PIXELS / (width * height)));
+  const w = Math.max(1, Math.floor(width * scale)), h = Math.max(1, Math.floor(height * scale));
+  flattenOnWhite(data);
+  return jpeg.encode({ data: scale < 1 ? shrinkArea(data, width, height, w, h) : data, width: w, height: h }, JPEG_QUALITY).data;
+}
+
 /** 只读文件头:格式按字节认,不信扩展名 / 声明的 MIME。 */
 function readHeader(buf: Buffer): Header | null {
   try {

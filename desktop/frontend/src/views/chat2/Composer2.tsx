@@ -37,6 +37,7 @@ import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
 import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentTile'
 import { useUploads } from '../../services/uploads'
+import { imageMimeForFile } from '../../services/fileKinds'
 import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
@@ -246,8 +247,8 @@ export const fileChip = (path: string): RefChip => ({
 
 /** 拖进来的 OS 文件分两路:放得进附件的图片(与粘贴一致)+ 其余。图片若只给路径芯片,模型只拿到一串路径,
  *  edit_image 只认附件 → 改图 / 合成必失败(2026-10-19 反馈:把脸合成到裙子上连失败 5 次)。 */
-export const splitDroppedFiles = <F extends { type: string; size: number }>(files: F[]): { images: F[]; rest: F[] } => {
-  const images = files.filter((f) => f.type.startsWith('image/') && f.size <= MAX_ATTACH_BYTES)
+export const splitDroppedFiles = <F extends { type: string; size: number; name?: string }>(files: F[]): { images: F[]; rest: F[] } => {
+  const images = files.filter((f) => imageMimeForFile(f) && f.size <= MAX_ATTACH_BYTES)
   return { images, rest: files.filter((f) => !images.includes(f)) }
 }
 
@@ -1644,7 +1645,7 @@ export const Composer2: React.FC<{
     const next: File[] = []
     const skipped: string[] = []
     for (const f of Array.from(files)) {
-      if (!f.type.startsWith('image/')) { skipped.push(t('input.skip.notImage', { name: f.name })); continue }
+      if (!imageMimeForFile(f)) { skipped.push(t('input.skip.notImage', { name: f.name })); continue }
       if (f.size > MAX_ATTACH_BYTES) { skipped.push(t('input.skip.tooBig', { name: f.name, mb: String(Math.round(MAX_ATTACH_BYTES / 1024 / 1024)) })); continue }
       next.push(f)
     }
@@ -1694,8 +1695,8 @@ export const Composer2: React.FC<{
   /** Web / 云端回退：一个系统文件选择动作里，图片仍进 vision 附件，其余文件仍进工作区附件。 */
   const pickMixedFiles = async (files: FileList | null): Promise<void> => {
     if (!files?.length) return
-    const images = Array.from(files).filter((f) => f.type.startsWith('image/'))
-    const others = Array.from(files).filter((f) => !f.type.startsWith('image/'))
+    const images = Array.from(files).filter((f) => imageMimeForFile(f))
+    const others = Array.from(files).filter((f) => !imageMimeForFile(f))
     if (images.length) {
       const dt = new DataTransfer()
       images.forEach((f) => dt.items.add(f))
@@ -1734,8 +1735,9 @@ export const Composer2: React.FC<{
       try {
         const file = await window.tangu?.readHostFile?.(item.path)
         if (!file || file.tooLarge) { nextRefs.push(fileChip(item.path)); continue }
-        const attachment = { name: chipBaseName(item.path), mimeType: file.mimeType, data: file.content, size: file.size }
-        if (file.mimeType.startsWith('image/') && file.size <= MAX_ATTACH_BYTES) nextImages.push(attachment)
+        const mimeType = imageMimeForFile({ name: item.path, type: file.mimeType }) || file.mimeType
+        const attachment = { name: chipBaseName(item.path), mimeType, data: file.content, size: file.size }
+        if (mimeType.startsWith('image/') && file.size <= MAX_ATTACH_BYTES) nextImages.push(attachment)
         else if (file.size <= MAX_WS_BYTES) nextFiles.push(attachment)
         else nextRefs.push(fileChip(item.path))
       } catch {

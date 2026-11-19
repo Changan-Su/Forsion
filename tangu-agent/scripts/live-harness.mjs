@@ -333,6 +333,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
+KEYS.push('heic'); OPT_IN.add('heic'); // --only heic: real HEIC photo through attachment hydration and the live vision model
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
 KEYS.push('caltodo', 'cloudtodo');
@@ -3902,6 +3903,21 @@ try {
   // 慢上行下每轮光上传就要半分钟。判据三条:① 工具结果报了「原尺寸 → 缩后尺寸」,缩后在两条上限内;
   // ② 图上了 wire 的那一轮,请求体只涨缩后那张的量(修前涨的是整张原图的 base64);③ 缩完还看得清:读出图里的随机数字。
   // 负对照 = dist/tools/hostExec.js 里把 `const fit = fitImageForModel(buf)` 换成 `const fit = null`,①② 须红。
+  await scenario('heic', 'heic 手机照片转成模型可读的图像', async () => {
+    const data = readFileSync(new URL('../test/fixtures/phone-digits.heic', import.meta.url)).toString('base64');
+    const runs = [];
+    // HEIC MIME, then mislabeled JPEG: only the actual bytes can identify both correctly.
+    for (const mimeType of ['image/heic', 'image/jpeg']) {
+      runs.push(await run(`live-heic-${mimeType.split('/')[1]}-${Date.now()}`,
+        'Read the four digits in the attached image. Reply with only the digits. Do not use tools.',
+        180_000, {}, undefined, undefined, undefined, undefined,
+        { attachments: [{ name: 'phone-photo.heic', mimeType, data }] }));
+    }
+    return { ok: runs.every((ev) => !ev.error && ev.content.trim() === '4826' && !ev.toolCalls.length),
+      detail: runs.map((ev, i) => `${i === 0 ? 'HEIC' : 'mislabeled JPEG'}: ${ev.error || ev.content.trim()}`).join('; '),
+      output: runs.map((ev) => ev.content).join('\n'), toolCalls: runs.flatMap((ev) => ev.toolCalls) };
+  });
+
   await scenario('viewimage', 'viewimage view_image 读大图先缩再进上下文', async () => {
     if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: 'view_image 只在 host 形态有' };
     writeFileSync(join(workspace, VIEWIMG_FILE), VIEWIMG_PNG);

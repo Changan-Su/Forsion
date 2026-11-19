@@ -76,6 +76,7 @@
 - **Docker 沙箱**：`run_python`（Python 3.12，自动同步工作区，预装 20+ 库）+ 按需 `pip_install`；无 docker 自动降级禁用。
 - **本地 OS 沙箱（可选）**：macOS / Linux 的命令与文件写入隔离、网络开关；默认关闭，配置入口与边界见 [运行取消与本地沙箱](docs/runtime-safety.md)。
 - **看图 / 生成图**：`view_image` 识图、`generate_image` 文生图（行内缩略图）。
+- 用户附件的 HEIC/HEIF 照片发送前按实际字节转为 JPEG，原附件保留；解码使用隔离 WASM worker，单张最多 2400 万像素。回归：`npm exec vitest run src/services/imageAttachments.test.ts test/agentLoopCarriers.test.ts`；真模型：`node scripts/live-harness.mjs --only heic --model codex/gpt-6-luna`。
 - **联网**：本地浏览器工具（搜索 DuckDuckGo/Bing/Google/Baidu + 读 a11y 树 + 点击/输入/滚动/执行 JS）、`web_search`、`web_fetch`（带 SSRF 防护，拦内网/元数据地址）。
 - **MCP**：连接任意 MCP server（stdio / HTTP / SSE）扩展工具集。工具缺省按需加载：系统提示只列一行目录，模型用 `load_tools` 装上再调；某个 server 要常驻就在配置里写 `"deferLoading": false`。
 - 还有 `todo`、`memory_log`、`get_datetime`、`calculator` 等贴身小工具。

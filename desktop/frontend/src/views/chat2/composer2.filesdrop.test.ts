@@ -116,6 +116,12 @@ describe('bindFilesDropZone', () => {
 })
 
 describe('splitDroppedFiles', () => {
+  it('recognizes AirDrop HEIC/HEIF files when the OS supplies no image MIME', () => {
+    const heic = { name: 'IMG_4826.HEIC', type: '', size: 2000 }
+    const heif = { name: 'book.heif', type: 'application/octet-stream', size: 3000 }
+    const pdf = { name: 'book.pdf', type: 'application/pdf', size: 5000 }
+    expect(splitDroppedFiles([heic, heif, pdf])).toEqual({ images: [heic, heif], rest: [pdf] })
+  })
   it('5 MB 以内的图片另进附件(与粘贴一致);本机会话里每个文件照旧出路径芯片,非本机的其余文件上传工作区', () => {
     const photo = { name: 'dress.png', type: 'image/png', size: 3_620_426 } // 反馈里那张裙子截图
     const huge = { name: 'raw.jpeg', type: 'image/jpeg', size: 6 * 1024 * 1024 }
