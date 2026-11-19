@@ -34,7 +34,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
-import { cancelScrollToElement, useWorkspace } from '@lcl/engine'
+import { cancelScrollToElement } from '@lcl/engine'
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, ReplaceAll } from 'lucide-react'
 import { registerMessages, useI18n } from './i18n'
 import './findInPage.css'
@@ -247,45 +247,44 @@ export function textareaFindProvider(ta: HTMLTextAreaElement): FindReplaceProvid
 export function pickRoot(): HTMLElement | null {
   const focused = document.activeElement
   const near = focused instanceof Element ? focused.closest('.wb-view, .mb-view, .fs-overlay') : null
-  // 手机(原生外壳 × 竖屏单列)两级导航:收起的那张列表还挂着、只是滑到了屏外,焦点也可能还留在它里面;而且它在 DOM 里排在
-  // 主区前面。所以手机上只认屏上的那一面(主区在屏上就是主区,人在列表层就是列表)。别的形态一概照旧。
-  const phone = !!document.querySelector(PHONE_SHELL)
-  return ((near?.getClientRects().length && !(phone && near.classList.contains('mb-view') && !onScreen(near)) ? near : null)
+  // 手机(原生外壳 × 竖屏单列):列表、主区、右栏三面一直都挂着,换层只是滑走,焦点也可能还留在滑走的那一面里;而且列表在 DOM 里
+  // 排在主区前面。所以手机上只认屏上的这一面:焦点在它里面(或在不属于外壳的整页浮层里)才听焦点的,否则就是这一面自己。
+  const face = phoneFace()
+  if (face) {
+    if (near?.getClientRects().length && (face.contains(near) || !near.closest('.mb-shell'))) return near as HTMLElement
+    return face.querySelector<HTMLElement>('.mb-view') ?? face
+  }
+  return ((near?.getClientRects().length ? near : null)
     ?? document.querySelector('.dv-render-overlay[data-lcl-active="true"] .wb-view')
     ?? document.querySelector('.dv-active-group .wb-view')
     ?? [...document.querySelectorAll('.wb-view--main')].find(el => el.getClientRects().length)
-    ?? (phone ? [...document.querySelectorAll('.mb-view')].find(onScreen) : null)
     ?? document.querySelector('.mb-view')
     ?? document.body) as HTMLElement | null
 }
 /** 手机形态的外壳:原生宿主画底部导航栏 × 不是并排的宽屏(和 lcl SingleColumnHost 的 phoneNow 是同一件事的 DOM 写法)。 */
 const PHONE_SHELL = '.mb-shell[data-native-chrome]:not([data-wide])'
-/** 画着、而且有一部分在视口的左右范围内(滑到屏外的抽屉页有尺寸,但不是「正在看的这一面」)。 */
-function onScreen(el: Element | null | undefined): boolean {
-  if (!el || !el.getClientRects().length) return false
-  const r = el.getBoundingClientRect()
-  return r.right > 1 && r.left < fixedFrame().right - 1
+/** 手机上此刻在屏上的那一面,不是手机 = null。按外壳写在 DOM 上的状态认(右栏开着是它;左栏在屏上 —— 两级导航的列表层 ——
+ *  是它;否则主区),不量矩形:换层的滑动途中两面都在视口里,抽屉里还另叠着一档 zoom,没有 currentCSSZoom 的旧内核
+ *  WebView 量出来的数和别处不是一个口径(模拟器实测过:拿它和 window.innerWidth 比,条横着出屏)。 */
+function phoneFace(): HTMLElement | null {
+  const shell = document.querySelector(PHONE_SHELL)
+  const body = shell?.querySelector('.mb-body')
+  if (!shell || !body) return null
+  const side = body.classList.contains('push-right') ? '.mb-drawer--right' : body.classList.contains('push-left') ? '.mb-drawer--left' : null
+  return (side ? shell.querySelector<HTMLElement>(side) : null) ?? shell.querySelector<HTMLElement>('.mb-main')
 }
-/** 量出来的坐标(getBoundingClientRect)里视口的右缘在哪、`position: fixed` 的一个样式 px 在里面占多少。
- *  祖先上有 CSS zoom(手机整页放大)时这两套坐标不是一回事,而且内核新旧对量出来的口径还不一样:新的给屏上的位置,
- *  旧的(没有 currentCSSZoom 的 WebView)给没缩放的局部 px —— 拿 window.innerWidth 去比,旧内核上条会横着出屏
- *  (模拟器实测:左边切掉 50dp)。所以放一个探针量,不靠算;量不出(测试环境没有排版)按 1:1。 */
-function fixedFrame(): { right: number; unit: number } {
-  const probe = document.createElement('div')
-  probe.style.cssText = 'position:fixed;top:0;right:0;width:100px;height:0;visibility:hidden;pointer-events:none'
-  document.body.appendChild(probe)
-  const r = probe.getBoundingClientRect()
-  probe.remove()
-  return r.width > 0 ? { right: r.right, unit: r.width / 100 } : { right: window.innerWidth, unit: 1 }
+/** 手机:条找的那一面已经不是屏上这一面了(在列表层开的、人已经进了主区,或反过来)。整页浮层里开的条不归这儿管。 */
+function offFace(root: HTMLElement | null): boolean {
+  const face = phoneFace()
+  return !!face && !!root && !!root.closest('.mb-shell') && !face.contains(root)
 }
-/** 这一面顶上被悬浮的胶囊顶栏盖住多高:查找条要落在它下面。只有手机(原生外壳 × 竖屏单列)让 —— 那里的查找条是从
- *  页面自己的「⋯」开出来的;别的形态(桌面、Mini、网页抽屉、平板横屏)位置和原来一样,不读这个变量。 */
-function chromeRoom(root: HTMLElement): number {
-  if (!root.closest(PHONE_SHELL)) return 0
+/** 手机上悬浮的胶囊顶栏从屏幕顶边起盖住多高(外壳的 --mb-top,单位是外壳自己的 px —— 和查找条同一档缩放):条落在它下面。
+ *  读排版出来的高度,不量矩形(口径见 phoneFace)。 */
+function chromeRoom(shell: Element): number {
   const probe = document.createElement('div')
   probe.style.cssText = 'position:absolute;visibility:hidden;pointer-events:none;width:0;height:var(--mb-top, 0px)'
-  root.appendChild(probe)
-  const h = probe.getBoundingClientRect().height
+  shell.appendChild(probe)
+  const h = probe.offsetHeight
   probe.remove()
   return h
 }
@@ -361,7 +360,7 @@ export function openFindBar(opts: { replace?: boolean } = {}): void {
   // 之后再按 Cmd+F,不做这一步就是「按了没反应」)。正文里新选了一段 → 同 VS Code,换成它。
   // 手机:条开着、找的却是另一面(在列表层开的,那张列表还挂着,人已经进了主区)→ 先收掉,下面对着屏上这一面重开。
   // 别的形态 root 一开条就定死(见 FindBar 的定位),照旧只是重新聚焦。
-  if (useFind.getState().open && document.querySelector(PHONE_SHELL) && useFind.getState().root !== pickRoot()) closeFindBar()
+  if (useFind.getState().open && offFace(useFind.getState().root)) closeFindBar()
   if (useFind.getState().open) {
     useFind.setState({ ...(pre ? { query: pre } : {}), ...(opts.replace ? { replaceOpen: true } : {}) })
     const inp = document.querySelector<HTMLInputElement>('.amx-findbar input')
@@ -546,7 +545,7 @@ function FindBarBody(): React.ReactElement {
   const replacement = useFind((s) => s.replacement)
   const replaceable = useFind((s) => s.replaceable)
   const providerVer = useFind((s) => s.providerVer)
-  const [box, setBox] = useState<{ top: number; right: number }>({ top: 12, right: 12 })
+  const [box, setBox] = useState<{ top: number; right: number; phone?: boolean }>({ top: 12, right: 12 })
   const findRef = useRef<HTMLInputElement | null>(null)
   // 这一面有没有可替换的 provider(没有就不给替换行 —— 大多数 View、只读页)。
   const canReplace = !!root && [...providers].some((p) => p.el.isConnected && root.contains(p.el))
@@ -557,15 +556,19 @@ function FindBarBody(): React.ReactElement {
     const place = (): void => {
       const r = root?.getBoundingClientRect()
       if (!r || !root) return
-      // 手机:量出来的位置先换成这根条自己的样式 px 再落(见 fixedFrame)。别的形态照旧,一个数都不动。
-      if (root.closest(PHONE_SHELL)) {
-        const f = fixedFrame()
-        setBox({ top: (r.top + chromeRoom(root)) / f.unit + 8, right: Math.max(8, (f.right - r.right) / f.unit + 8) })
-      } else setBox({ top: r.top + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
+      // 手机:每一面都是整屏宽,条固定在胶囊顶栏下面、贴右 8px —— 不拿量出来的矩形去算(口径见 phoneFace)。
+      // 别的形态照旧贴活动 View 的右上角,一个数都不动。
+      const shell = document.querySelector(PHONE_SHELL)
+      if (shell) setBox({ top: chromeRoom(shell) + 8, right: 8, phone: true })
+      else setBox({ top: r.top + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
     }
     place()
     window.addEventListener('resize', place)
-    return () => window.removeEventListener('resize', place)
+    // 转屏换形态(手机 ↔ 并排):外壳的 data-wide 比 resize 晚一拍才改 → 它变了再落一次。
+    const host = document.querySelector('.mb-shell[data-native-chrome]')
+    const mo = host ? new MutationObserver(place) : null
+    if (host) mo?.observe(host, { attributes: true, attributeFilter: ['data-wide'] })
+    return () => { window.removeEventListener('resize', place); mo?.disconnect() }
   }, [root])
 
   // 条开着期间给搜索根里的 provider 挂准备工作(textarea 铺镜像)。面换了(切源码模式)跟着换。
@@ -600,11 +603,18 @@ function FindBarBody(): React.ReactElement {
     }
   }, [root])
 
-  // 手机两级导航:列表和主区都一直挂着,换层只是滑走 —— 上面那条「根被摘掉就收」等不到。人离开这一面(进了一条 / 退回列表,
+  // 手机两级导航:列表和主区都一直挂着,换层只是滑走 —— 上面那条「根被摘掉就收」等不到。人离开这一面(进了一条 / 退回列表 / 拉开右栏,
   // 不管是点左上的返回、边缘滑还是系统返回)条就收,不留在另一面上搜不到东西。
+  // 外壳把「此刻是哪一面」写在自己的属性和 .mb-body 的类名上(进 / 退一层、开右栏、转屏换形态都会动到)—— 盯这两处,
+  // 变了就看条找的那一面还在不在屏上。只在原生外壳的宿主里装(手机、平板);桌面没有这个壳。
   useEffect(() => {
-    if (!root?.closest(PHONE_SHELL)) return
-    return useWorkspace.subscribe((s, prev) => { if (s.leftVisible !== prev.leftVisible) closeFindBar() })
+    const shell = root && document.querySelector('.mb-shell[data-native-chrome]')
+    const body = shell?.querySelector('.mb-body')
+    if (!root || !shell || !body) return
+    const mo = new MutationObserver(() => { if (offFace(root)) closeFindBar() })
+    mo.observe(shell, { attributes: true, attributeFilter: ['data-wide', 'data-nav'] })
+    mo.observe(body, { attributes: true, attributeFilter: ['class'] })
+    return () => mo.disconnect()
   }, [root])
 
   // 正文变了(打字、聊天流式输出、切页)→ 重扫,否则 Range 还指着已经没了的文本。
@@ -681,7 +691,7 @@ function FindBarBody(): React.ReactElement {
   }
 
   return (
-    <div className={`amx-findbar${replaceOpen && canReplace ? ' amx-findbar--replace' : ''}`} style={{ top: box.top, right: box.right }}>
+    <div className={`amx-findbar${replaceOpen && canReplace ? ' amx-findbar--replace' : ''}`} data-phone={box.phone ? '' : undefined} style={{ top: box.top, right: box.right }}>
       {canReplace && (
         <button
           className="amx-findbar-expand"

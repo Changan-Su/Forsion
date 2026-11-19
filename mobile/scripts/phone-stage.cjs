@@ -868,7 +868,9 @@ const SCENES = {
     // find opens the find bar on this page
     await ask('more', { id: 'page:find' })
     const bar = await rect(page, '.amx-findbar')
-    rows.push(['find: the find bar opens, below the capsule row and inside the screen', !!bar && bar.y >= LAYOUT.top - 2 && bar.right <= SCREEN.width && bar.x >= 0, JSON.stringify(bar)])
+    const zoom = await page.evaluate(() => Number(getComputedStyle(document.body).zoom) || 1)
+    const placed = (b) => !!b && near(b.y, LAYOUT.top + 8 * zoom, 2) && near(SCREEN.width - b.right, 8 * zoom, 1.5) && b.x >= 0
+    rows.push(['find: the find bar opens right under the capsule row, 8 from the right edge, inside the screen', placed(bar), JSON.stringify({ bar, capsulesEnd: LAYOUT.top, zoom })])
     await page.screenshot({ path: path.join(OUT, `page-more-find${DARK ? '-dark' : ''}.png`) })
     // system Back closes the bar first and stays on the conversation (the bar listens to Esc only; a phone has no such key)
     // (asked only on a load where this stage's Back key reaches MobileRoot's chain — see backPath; the emulator suite asks it always)
@@ -888,7 +890,16 @@ const SCENES = {
     await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'list', null, { timeout: 5000 }).catch(() => {})
     await page.waitForTimeout(250)
     rows.push(['find: going back to the list closes the bar', !!again && !(await rect(page, '.amx-findbar')) && (await stage.nav(page)) === 'list', JSON.stringify({ opened: !!again, bar: await rect(page, '.amx-findbar'), nav: await stage.nav(page) })])
-    await openChat(page, TITLE)
+    // opened on the list level (the command palette's "find in page"): the same place — the list sits in a drawer that
+    // has a zoom of its own and already starts below the capsule row; going into a conversation closes it
+    await page.evaluate(async (url) => { (await import(/* @vite-ignore */ url)).openFindBar() }, moduleUrl('../desktop/frontend/src/findInPage.tsx'))
+    await page.waitForTimeout(250)
+    const onList = await rect(page, '.amx-findbar')
+    // (the bar floats over the row of chips, as a find bar does: the conversation's own row below it is tapped)
+    await page.locator(`${LIST} [data-timeline] .t2s-srow`, { hasText: TITLE }).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    rows.push(['find on the list level: the same place; opening a conversation closes it', placed(onList) && !(await rect(page, '.amx-findbar')) && (await stage.nav(page)) === 'detail', JSON.stringify({ onList, bar: await rect(page, '.amx-findbar'), nav: await stage.nav(page) })])
     await page.keyboard.press('Escape')
     await page.waitForTimeout(200)
     if (await rect(page, '.amx-findbar')) await page.evaluate(async (url) => { (await import(/* @vite-ignore */ url)).closeFindBar() }, moduleUrl('../desktop/frontend/src/findInPage.tsx'))

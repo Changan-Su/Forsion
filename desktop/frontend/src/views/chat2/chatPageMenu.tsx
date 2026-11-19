@@ -58,6 +58,10 @@ export function useChatPageMenu(sessionId: string | null): void {
           // 归档完这一页就没什么可做的了:两级导航里退回列表(和点左上的返回是同一个动作)。取消归档留在原地。
           // 存上了(活动列表里没有它了)、人也还在详情层才退;没存上(断网)留在这条对话里,提示由 store 给。
           if (archived || !listFirstNow() || useWorkspace.getState().leftVisible) return
+          // 请求在路上的这会儿人已经去了别的对话(退回列表又点开一条):那一页不是这条的,别把人从那儿退出去。
+          // 还在这一页时,归档成功后 store 已把当前会话清空(null)。
+          const now = useApp.getState().activeId
+          if (now && now !== sessionId) return
           if (!useApp.getState().sessions.some((x) => x.id === sessionId)) dispatchNativeChromeAction('left')
         })
       },
