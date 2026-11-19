@@ -29,7 +29,15 @@ export interface NativeChromeSpace {
   iconRev?: number
   /** The user keeps it in the bar; the others are reached through the bar's "all" cell. */
   pinned?: boolean
+  /** A phone's fixed dock (phoneDock.ts): the cell is not drawn with its Space's icon but with this one (`phoneGlyphIcon`);
+   *  the Apps / Me cells are not Spaces at all. Hosts resolve it; the native side never sees the word. */
+  glyph?: PhoneGlyph
+  /** Something on the page behind this cell wants a look (a launcher with its dot lit): hosts put a dot on the cell unless
+   *  a Space behind it already shows a more pressing one. `label` = what a screen reader says. */
+  notice?: { label: string }
 }
+/** See `NativeChromeSpace.glyph`. */
+export type PhoneGlyph = 'chats' | 'apps' | 'me'
 /** Width of the Space rail that stands at the left edge of a wide layout instead of the bottom dock (2026-10-20, Pad A2).
  *  = NATIVE_RAIL_WIDTH (Android NativeChromeBar.kt); the browser host draws the same rail (mobile/src/browserChrome.tsx). */
 export const NATIVE_RAIL_WIDTH = 76

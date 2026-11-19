@@ -1,7 +1,7 @@
 /** 两级导航里一趟的页内历史(listTrips):从列表点进去的那一页是起点,进来之前看过的页不排在列表前面。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installNativeChromeHost } from './nativeChrome'
-import { installListTrips, touchedPage } from './listTrips'
+import { beginReturnTrip, endReturnTrip, installListTrips, returnTripOrigin, touchedPage } from './listTrips'
 import { useNav } from './navStore'
 import { registerView } from './viewRegistry'
 import { useSpaceStore } from './spaceRegistry'
@@ -101,5 +101,47 @@ describe('listTrips', () => {
     page('a'); page('b')
     list(false); page('c')
     expect(keys()).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('return trip from Home\'s Continue (2026-11-19): back from that page goes Home, not to the Space\'s list', () => {
+  beforeEach(() => {
+    useSpaceStore.setState({ spaces: [
+      { id: 'home', name: 'Home', sidebarDefaults: { left: [], right: [] }, build: () => {} },
+      { id: 's', name: 'S', sidebarDefaults: { left: [], right: [] }, build: () => {} },
+    ], activeSpaceId: 'home' })
+  })
+
+  it('settles once the other Space shows its second level; the list level that switching passes through right after does not end it', () => {
+    phone()
+    list(false)
+    beginReturnTrip('home')
+    expect(returnTripOrigin()).toBeNull()
+    useSpaceStore.setState({ activeSpaceId: 's' }) // mid-switch: already "the other Space, second level"
+    expect(returnTripOrigin()).toBe('home')
+    list(true); list(false) // landOnList, then the row's content opens
+    expect(returnTripOrigin()).toBe('home')
+  })
+
+  it('ends when the list comes up later or the Space changes; a trip that never opened anything lapses', () => {
+    vi.useFakeTimers()
+    try {
+      phone()
+      list(false)
+      beginReturnTrip('home'); useSpaceStore.setState({ activeSpaceId: 's' }); list(true); list(false)
+      vi.advanceTimersByTime(1000)
+      list(true) // the user brought the list up (a swipe): the trip is over
+      expect(returnTripOrigin()).toBeNull()
+      list(false); useSpaceStore.setState({ activeSpaceId: 'home' })
+      beginReturnTrip('home'); useSpaceStore.setState({ activeSpaceId: 's' }); list(false)
+      expect(returnTripOrigin()).toBe('home')
+      useSpaceStore.setState({ activeSpaceId: 'home' })
+      expect(returnTripOrigin()).toBeNull()
+      beginReturnTrip('home')
+      vi.advanceTimersByTime(4000)
+      useSpaceStore.setState({ activeSpaceId: 's' }); list(true); list(false) // long after: someone else's navigation
+      expect(returnTripOrigin()).toBeNull()
+      endReturnTrip()
+    } finally { vi.useRealTimers() }
   })
 })

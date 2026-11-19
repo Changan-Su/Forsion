@@ -34,7 +34,7 @@ import {
   ArrowUp, Check, FolderMinus, Grid2X2, Image,
   Mic, Pencil, Plus, RefreshCw, Sparkles, Upload, X,
 } from 'lucide-react'
-import { commandHotkeyText, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, presentNativeConfirm, openObject, objectContextMenuHandler, type SheetMenuItem, type SheetMenuSection, type Place } from '@lcl/engine'
+import { commandHotkeyText, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeConfirm, openObject, objectContextMenuHandler, type SheetMenuItem, type SheetMenuSection, type Place } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, moveOutItem, setHomeOrganizerToggle } from './SpaceOrganizer'
 import { spaceOpensElsewhere, spaceRef } from '../objects/space'
@@ -51,9 +51,10 @@ import {
   type BingWallpaper, type HomepageThemePreset, type HomepageWallpaperPrefs, type HomepageWallpaperSource,
 } from './homepageWallpaper'
 import { HomeWallpaperArt } from './homepageWallpaperArt'
-import { DeskCardStatus, useCardStatus } from './homeCardStatus'
+import { DeskCardStatus } from './homeCardStatus'
+import { HomeContinue } from './homeContinue'
 import { watchAccountName } from '../services/accountName'
-import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, defaultHomeCards, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
+import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HOME_GUIDE_OWNER, HomeRail, HomeRow, PartFrame, PartsLibrary, RAIL_GEOMETRY, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
 import { cancelLibraryDrag, forgetLibraryDrop, startLibraryDrag, undoLibraryDrop, type LibItem } from './homeLibraryDrag'
@@ -225,8 +226,6 @@ registerMessages({
   // 手机(布局「二」):收起的输入条 + 带一行近况的大卡片
   'home.pill': { zh: '问点什么…', en: 'Ask anything…' },
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
-  'home.cards.editHint': { zh: '勾选的显示在主页，1 到 {max} 张，按勾选的先后排。', en: 'Checked ones show on Home (1 to {max}), in the order you check them.' },
-  'home.cards.done': { zh: '完成', en: 'Done' },
   // 手机:走完手机引导后问候下面那四条起步建议(只填不发,发出第一条消息后收起;views/homeSuggest.ts)
   'home.suggest.title': { zh: '试试这些 · 点了只填进输入框，不会直接发', en: 'Try these · tap to fill, nothing is sent' },
   'home.suggest.today': { zh: '理一理今天要做的事', en: 'Sort out what I need to do today' },
@@ -238,7 +237,6 @@ registerMessages({
   'home.suggest.cancel': { zh: '取消', en: 'Cancel' },
 })
 
-interface HomeCard { id: string; name: string; statusId: string; spaceId?: string; icon?: SpaceDefinition['icon'] | RibbonItem['icon']; open: () => void }
 
 /** 手机主页的大卡片。单独成组件:近况要订阅会话 / 笔记 / 成就 / 插件四份状态,桌面的主页不该为它们多重画
  *  (日历、收件箱那一行各是一个组件,摆了那张卡才读日历库 / 未读数)。
@@ -256,58 +254,6 @@ function HomeSuggest({ onPick }: { onPick: (key: string) => void }) {
           </button>
         ))}
       </div>
-    </section>
-  )
-}
-
-function HomeCards({ tiles, actions, onLaunch }: { tiles: Tile[]; actions: RibbonItem[]; onLaunch: (spaceId: string) => void }) {
-  const { t } = useI18n()
-  const status = useCardStatus()
-  const [picked, setPicked] = useState(loadHomeCards)
-  const spaceCard = (sp: SpaceDefinition): HomeCard => ({ id: `space:${sp.id}`, name: label(sp.name), statusId: sp.id, spaceId: sp.id, icon: sp.icon, open: () => onLaunch(sp.id) })
-  const top = tiles.filter((tile): tile is Extract<Tile, { kind: 'space' }> => tile.kind === 'space').map((tile) => spaceCard(tile.space))
-  // 可选的:架子上所有 Space(收纳夹里的也算)+ 商店、成就这些固定入口
-  const all: HomeCard[] = [
-    ...tiles.flatMap((tile) => (tile.kind === 'space' ? [tile.space] : tile.members)).map(spaceCard),
-    ...actions.map((item): HomeCard => ({ id: item.id, name: item.tooltip ? label(item.tooltip) : '', statusId: item.id, icon: item.icon, open: () => item.onClick?.() })),
-  ]
-  // 缺省的那四个 Space 一个都不在架子上时退回:架子上头两个 Space + 固定入口
-  const cards = shownHomeCards(picked, all, defaultHomeCards(all, [...top.slice(0, 2), ...all.filter((c) => !c.spaceId)]))
-
-  /** 原生勾选清单:勾的时候半屏不动,关上时(完成 / 下滑 / 返回都算)一起生效;新勾的排在最后,至少留一张(没有卡片就没处长按)。
-   *  没有原生宿主就什么都不出。 */
-  const edit = async (): Promise<void> => {
-    const ids = cards.map((c) => c.id)
-    const out = await presentNativeChecklist({
-      title: t('home.cards.editTitle'),
-      items: all.map((c) => ({ id: `card:${c.id}`, label: c.name, icon: c.icon && 'imageUrl' in c.icon && c.icon.imageUrl ? c.icon.nativeFallback : c.icon })),
-      checked: ids.map((id) => `card:${id}`),
-      footer: t('home.cards.editHint', { max: String(HOME_CARDS_MAX) }),
-      done: t('home.cards.done'),
-      min: 1,
-      max: HOME_CARDS_MAX,
-    })
-    const next = out.handled ? out.value?.checked.map((id) => id.slice('card:'.length)) : undefined
-    // 原样关上 = 不记(没改过的人继续跟着缺省走)
-    if (!next?.length || next.join('\n') === ids.join('\n')) return
-    if (saveHomeCards(next)) setPicked(next)
-  }
-
-  return (
-    <section className="hp-cards">
-      {cards.map((c) => (
-        <button
-          key={c.id} type="button" className="hp-card"
-          {...(c.spaceId ? { 'data-space-id': c.spaceId } : { 'data-fixed-id': c.id })}
-          onClick={(event) => { event.stopPropagation(); c.open() }}
-          // 长按(Android WebView 的 contextmenu,自带触感)= 改这几张卡片;松手不再算点击
-          onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); void edit() }}
-        >
-          <span className="hp-card-icon">{c.icon && <c.icon />}</span>
-          <span className="hp-card-name">{c.name}</span>
-          <span className="hp-card-status">{c.spaceId === 'calendar' || c.spaceId === 'inbox' ? <DeskCardStatus spaceId={c.spaceId} /> : status(c.statusId)}</span>
-        </button>
-      ))}
     </section>
   )
 }
@@ -874,10 +820,10 @@ export function HomepageView(_props: ViewProps) {
           </button>
         )}
 
-        {/* 手机:大卡片,各带一行近况。默认 = 有近况可说的那几个 Space(Tangu、笔记、日历、收件箱);长按任意一张改成自己要的那几张(见 HomeCards)。
-            其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
+        {/* 手机(横竖屏一样):「继续」最近三项,点一行直接进那条对话 / 那篇笔记(见 homeContinue.tsx);一项都没有时不画,新用户在这里看到起步建议。
+            原来的近况卡片退场,卡片上放过的 Space 去了 Dock「应用」页的第一排。 */}
         {suggestShown && <HomeSuggest onPick={pickSuggest} />}
-        {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
+        {phone && <HomeContinue />}
     </>
   )
   const statusNode = deskCards.length > 0 && (

@@ -21,7 +21,8 @@ import { switchSpace } from './spaceTransition'
 import { SpaceFloatLayer } from './SpaceFloatLayer'
 import { useDotted, useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
-import { accountMenuItems, allSheetItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand, type MoreCommandGroup, type MoreSeats } from './moreSheet'
+import { accountMenuItems, allSheetItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, phonePageItems, presentedCommand, type MoreCommandGroup, type MoreSeats } from './moreSheet'
+import { PHONE_CHATS_SPACE, closePhonePage, openPhonePage, phoneDockCells, phonePageOfCell, phonePagesInstalled, subscribePhonePagesInstalled, usePhonePage, usePhonePagesRenderer, type PhoneDockNotices } from './phoneDock'
 import { getView } from './viewRegistry'
 import { label, identitySig, type RibbonItem, type SpaceIcon } from './types'
 import { bindNativeSheetMark, nativeSheetPresenter, presentNativeChecklist, presentNativeMenu, type NativeMenuItem } from './nativeSheet'
@@ -34,7 +35,7 @@ import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension, setAfterLayoutHook, setBeforeMainOpenHook } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
-import { installListTrips } from './listTrips'
+import { installListTrips, returnTripOrigin, endReturnTrip } from './listTrips'
 import { onePageLanding } from './pinnedViews'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
@@ -483,7 +484,8 @@ export function useDrawerDrag(
         if (ws.rightVisible && dx > 0) { d.side = 'right'; d.opening = false }
         else if (ws.leftVisible && !env.wide && dx < 0 && !listFirstNow()) { d.side = 'left'; d.opening = false }
         else if (ws.leftVisible || ws.rightVisible) { d = null; return }
-        else if (dx > 0 && env.hasLeft && !env.wide) { d.side = 'left'; d.opening = true }
+        // 从主页「继续」点进来的这一页:返回是回主页,不是这个 Space 的列表 —— 不跟手拖出列表(系统返回手势照旧,见 listTrips)。
+        else if (dx > 0 && env.hasLeft && !env.wide && !returnTripOrigin()) { d.side = 'left'; d.opening = true }
         else if (dx < 0 && env.hasRight) { d.side = 'right'; d.opening = true }
         else { d = null; return }
         if (!arm(d)) { d = null; return } // 面板还没挂上(该侧没有内容)→ 不拖
@@ -599,9 +601,16 @@ function switchSpaceKeepDrawer(id: string): void {
   }, { axis: 'x' })
 }
 
-/** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。 */
-function nativeSpaceList(): NativeChromeSpace[] {
+/** 原生底部导航栏的数据:与抽屉里 Web Space 条同一份列表、同一条「当前项」判据(活动 id 不在表里时落第一格)。
+ *  手机有「应用」「我」两页时是固定的五格(phoneDock.ts);`notices` = 那两页里亮着红点的入口。 */
+function nativeSpaceList(tr: Tr, notices: PhoneDockNotices = {}): NativeChromeSpace[] {
   const { spaces, activeSpaceId } = useSpaceStore.getState()
+  if (phoneDockOn()) {
+    return phoneDockCells(
+      spaces.map((sp) => ({ id: sp.id, label: label(sp.name), iconRev: iconRev(sp.icon) })), activeSpaceId, usePhonePage.getState().page,
+      { chats: tr('lcl.mobile.dock.chats'), apps: tr('lcl.mobile.dock.apps'), me: tr('lcl.mobile.dock.me') }, notices,
+    )
+  }
   const known = spaces.some((x) => x.id === activeSpaceId)
   const inDock = dockSpaceIds(spaces.map((x) => x.id))
   return spaces.map((sp, i) => ({
@@ -648,12 +657,34 @@ function enterSpace(id: string): void {
   // 手机的 Space 横排在底栏:横着推(10-16 起先不播,直接换;见 switchSpace)。同一个也经过 switchSpace(作废还在等下一帧的上一次切换)
   switchSpace(id, id === useSpaceStore.getState().activeSpaceId ? () => { landOnOnePage(); landOnMainPage() } : undefined, { axis: 'x' })
 }
+/** Dock 上点了一格:「应用」「我」开那一页;Space 先收掉开着的那一页再进。 */
+function tapDockCell(id: string): void {
+  const page = phonePageOfCell(id)
+  if (page) { if (phoneDockOn()) openPhonePage(page); return }
+  closePhonePage()
+  enterSpace(id)
+}
+/** 从主页「继续」点进来的这一页返回:回到主页,不经这个 Space 的列表(listTrips.ts 的 return trip)。没有这一趟 = false。 */
+export function returnFromTrip(): boolean {
+  const origin = returnTripOrigin()
+  if (!origin) return false
+  endReturnTrip()
+  enterSpace(origin)
+  return true
+}
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
 setBeforeMainOpenHook(redirectOpenFromOnePage)
+// 换了 Space、主区换了一页:盖在上面的「应用」「我」收起(从那两页点进去的东西得露出来)。
+useSpaceStore.subscribe((s, p) => { if (s.activeSpaceId !== p.activeSpaceId) closePhonePage() })
+useWorkspace.subscribe((s, p) => { if (s.activeMainId !== p.activeMainId) closePhonePage() })
 /** 手机:宿主画底部导航栏 × 竖屏单列。平板横屏(并排左栏)、抽屉形态的网页 / 手机框都不算。 */
 const phoneNow = (): boolean => nativeChromeDrawsSpaces() && !useWorkspace.getState().wideMode
+/** 手机上 Dock 是固定五格(主页 · 对话 · 笔记 · 应用 · 我,phoneDock.ts):平台装了「应用」「我」两页才是。 */
+const phoneDockOn = (): boolean => phoneNow() && phonePagesInstalled()
+/** 「应用」「我」那一页此刻盖在壳上(横过来时不画,不算)。系统返回(mobile 的 planBack)据此先收它。 */
+export const phonePageShown = (): boolean => phoneDockOn() && !!usePhonePage.getState().page
 /** 「⋯」里的全局项此刻各归哪里(moreSheet.ts 的 MoreSeats)。Dock 有没有「全部」那一格 = Space 比它的格数多(同 spaceDock / Kotlin 的 dock)。 */
-const seatsOf = (phone: boolean, spaceCount: number): MoreSeats => ({ phone, allCell: spaceCount > DOCK_CELLS })
+const seatsOf = (phone: boolean, spaceCount: number): MoreSeats => ({ phone, allCell: spaceCount > DOCK_CELLS, pages: phone && phonePagesInstalled() })
 const seatsNow = (): MoreSeats => seatsOf(phoneNow(), useSpaceStore.getState().spaces.length)
 /** 这个 Space 里有没有「新建标签页」:一页式 Space 没有;手机上哪儿都没有(一页一件事,已有的多个标签照旧能切、能关,
  *  只是不再给新开的入口)。「⋯」、标签页面板两处的那一行都看它。 */
@@ -767,7 +798,7 @@ function DrawerFoot() {
  *  判据与「⋯」同一份(moreSheet.ts 的 accountMenuItems / moreItems):一项要么在这里、要么在「⋯」,不会两头都没有。
  *  feature 层的账号卡取用(引擎不 import feature);行 id = ribbon id,原生测试锚点 `nativeSheet.item.<id>` 不变。 */
 export function accountMenuRows(): SheetMenuItem[] {
-  return accountMenuItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces(), phoneNow()).map((it) => ({
+  return accountMenuItems(useRibbonStore.getState().items, nativeChromeDrawsSpaces(), phoneNow(), phonePagesInstalled()).map((it) => ({
     id: it.id,
     label: it.tooltip ? moreRowLabel(label(it.tooltip)) : it.id,
     ...(it.icon ? { icon: createElement(it.icon, { size: 14 }) } : {}),
@@ -1113,6 +1144,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   const moreDot = !!moreDotItem
   const moreDotLabel = dotLabel(moreDotItem)
   const allDotLabel = dotLabel(allSheetItems(ribbonItems, seats).find((i) => dotted.has(i.id)))
+  // 手机五格 Dock:「应用」「我」两页里有亮着红点的入口 → 点挂在那一格上(收件箱这类 Space 的点由宿主按 Space 合上去)。
+  const pageItems = phonePageItems(ribbonItems, seats)
+  const appsNotice = dotLabel(pageItems.apps.find((i) => dotted.has(i.id)))
+  const meNotice = dotLabel([...pageItems.me.settings, ...pageItems.me.launchers].find((i) => dotted.has(i.id)))
+  const phonePage = usePhonePage((s) => s.page)
+  const renderPhonePage = usePhonePagesRenderer()
   const activeSpaceId = useSpaceStore((s) => s.activeSpaceId) // 仪器锚点(data-space):原生底栏接管后 DOM 里没有 .mb-tab.on 可查
 
   const chromeOff = useChromeAutoHide(mainRef, true)
@@ -1153,19 +1190,34 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
       const drawsSpaces = nativeChromeDrawsSpaces()
       // 两级导航(见 listFirstNow):列表层 = 这个 Space 的首页(标题是 Space 名,没有左钮 / 右栏钮);
       // 进了主区,左钮是「返回列表」,标题才是当前标签页。
+      const dock5 = phoneDockOn()
+      const notices: PhoneDockNotices = { apps: appsNotice, me: meNotice }
+      // 手机五格 Dock 的「应用」「我」:一级页,标题是这一页的名字,只有 Dock,没有左钮、右栏钮、「⋯」和搜索。
+      const page = dock5 ? usePhonePage.getState().page : null
+      if (page) {
+        setNativeChromeShell({
+          title: trRef.current(`lcl.mobile.dock.${page}`), left: false, right: false, tabCount: 1, labels, more: false,
+          spaces: nativeSpaceList(trRef.current, notices), allLabel: trRef.current('lcl.mobile.allSpaces'),
+        }, {
+          spacesAll: () => openPhonePage('apps'), space: tapDockCell,
+          spaceLong: (id) => { if (!phonePageOfCell(id)) openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
+        })
+        return
+      }
       const listFirst = listFirstNow()
       const atList = listFirst && ws.leftVisible
       const toList = listFirst && !atList
       const extras = nativeChromeExtras(atList ? 'list' : 'main')
       setNativeChromeShell({
-        title: atList ? label(getActiveSpace()?.name ?? '') : ws.mainTabs.find((t) => t.active)?.title ?? '',
+        // 手机五格 Dock 上 Tangu 那格叫「对话」:它的列表层标题也跟着叫「对话」。
+        title: atList ? (dock5 && getActiveSpace()?.id === PHONE_CHATS_SPACE ? trRef.current('lcl.mobile.dock.chats') : label(getActiveSpace()?.name ?? '')) : ws.mainTabs.find((t) => t.active)?.title ?? '',
         left: listFirst ? toList : ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0 || (!drawsSpaces && footAliveNow()),
         ...(toList ? { leftBack: true } : {}),
         right: !atList && (ws.rightLeaves.length > 0 || ws.sidebarDefaults.right.length > 0),
         tabCount: ws.mainTabs.length || 1,
         labels: toList ? { ...labels, left: back } : labels,
         // 底栏只在每个 Space 的第一层:列表层,或没有列表层的 Space(主页 / 日历…)的主区。
-        ...(drawsSpaces && !toList ? { spaces: nativeSpaceList(), allLabel: trRef.current('lcl.mobile.allSpaces') } : {}),
+        ...(drawsSpaces && !toList ? { spaces: nativeSpaceList(trRef.current, notices), allLabel: trRef.current('lcl.mobile.allSpaces') } : {}),
         // 当前这一层的视图给顶栏加的东西(搜索钮、标题的第二段、左胶囊的宽度上限),见 useNativeChromeExtras。
         ...(extras?.search ? { search: extras.search.label } : {}),
         ...(extras?.title ? { titleSub: extras.title.sub, ...(extras.title.run ? { titleTap: true } : {}) } : {}),
@@ -1176,25 +1228,27 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         ...(sideInset ? { leftInset: sideInset } : {}),
         ...(extras?.capLeftMax ? { capLeftMax: extras.capLeftMax } : {}),
       }, {
-        left: () => useWorkspace.getState().toggleSidebar('left'),
+        // 从主页「继续」点进来的那一页:返回回主页(returnFromTrip);别的照旧回这个 Space 的列表。
+        left: () => { if (!returnFromTrip()) useWorkspace.getState().toggleSidebar('left') },
         right: () => useWorkspace.getState().toggleSidebar('right'),
         tabs: () => chromeActions.current.tabs(),
         more: () => chromeActions.current.more(),
         search: () => extras?.search?.run(),
         title: () => extras?.title?.run?.(),
-        spacesAll: () => { void presentAllSpaces(trRef.current) },
-        // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。
-        space: enterSpace,
-        // 原生底栏的长按:同一份 Space 对象菜单(原生 sheet 不看坐标;万一回落到网页菜单,放在屏幕中下方)
-        spaceLong: (id) => { openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
+        // 手机五格 Dock 没有「全部」格;万一收到(老宿主),开「应用」页。
+        spacesAll: () => { if (phoneDockOn()) openPhonePage('apps'); else void presentAllSpaces(trRef.current) },
+        // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。「应用」「我」开那一页。
+        space: tapDockCell,
+        // 原生底栏的长按:同一份 Space 对象菜单(原生 sheet 不看坐标;万一回落到网页菜单,放在屏幕中下方)。「应用」「我」不是 Space,没有。
+        spaceLong: (id) => { if (!phonePageOfCell(id)) openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
       })
     }
     push()
     // 命令表:手机上「⋯」画不画要看这一页有没有自己的命令组(插件启停、看法换了都会变)
-    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), useCommandStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push), subscribeSideInset(push)]
+    const offs = [useWorkspace.subscribe(push), useSpaceStore.subscribe(push), useRibbonStore.subscribe(push), useCommandStore.subscribe(push), subscribeNativeChromeExtras(push), subscribeDockPicks(push), subscribeSideInset(push), usePhonePage.subscribe(push), subscribePhonePagesInstalled(push)]
     // 只退订,不清状态:换语言重跑本 effect 时若先清成 null,原生栏会先收起再弹出(WebView 高度跳两下)。
     return () => { offs.forEach((off) => off()) }
-  }, [nativeChrome, chromeLabelsKey, moreDotLabel, allDotLabel]) // 两个红点的 label:点亮 / 熄灭 / 换语言都重推一次
+  }, [nativeChrome, chromeLabelsKey, moreDotLabel, allDotLabel, appsNotice, meNotice]) // 红点的 label:点亮 / 熄灭 / 换语言都重推一次
   useEffect(() => () => setNativeChromeShell(null), [])
 
   // Android 系统返回:MobileRoot 派发可取消的 forsion:mobile-back,壳先接管最上层的两个 sheet。
@@ -1243,6 +1297,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   }, [])
   // 两级导航的列表层整屏盖住 main,没有「被推开的 main」可罩 —— 遮罩只跟右抽屉。
   const pushed = !wide && ((leftVisible && !listFirst) || rightVisible)
+  const showPhonePage = !!phonePage && !!renderPhonePage && nativeSpaces && !wide
 
   {/* 按钮收成左右两组胶囊(Obsidian 式)。顺序不许动:mobile e2e(note-open)靠
       `.mb-topbar .mb-icon-btn` 的第一个拿左抽屉钮 —— 胶囊只是中间多包了一层 div,后代选择器照命中。 */}
@@ -1282,11 +1337,12 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
     // data-native-sheet="open":原生半屏(Compose 画在 WebView 上面,DOM 里看不到)正盖着页面,收起即去掉(shellRef →
     //   nativeSheet.ts bindNativeSheetMark)。和 data-nav 同一类宿主页面属性:判「用户正看着」的代码(插件自己的已读 / 不弹)
     //   遇到它一律算盖着。不是插件 API,也别往它下面挂样式。
-    <div ref={shellRef} className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} data-wide={wide ? '' : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    // data-phone-page:手机五格 Dock 的「应用」「我」那一页正盖在壳上(仪器认它;样式只藏浮层,见 singleColumn.css 末尾)。
+    <div ref={shellRef} className="mb-shell" data-chrome={chromeOff ? 'off' : undefined} data-native-chrome={nativeChrome ? '' : undefined} data-space={activeSpaceId} data-nav={listFirst ? (leftVisible ? 'list' : 'detail') : undefined} data-list-first={listFirst ? '' : undefined} data-wide={wide ? '' : undefined} data-phone-page={showPhonePage ? phonePage : undefined} style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {/* push 连贯式:左右抽屉都是 .mb-body 内的绝对定位面板,开侧把 main **原尺寸**推向另一边
           (translate 同一宽度,main 不缩放);dim 层盖在被推开的 main 上,点击/反向横滑收回。
           宽屏:左栏 docked 并排(sidecol),右栏滑入但不推 main。 */}
-      <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`}>
+      <div ref={bodyRef} className={`mb-body${!wide && leftVisible ? ' push-left' : ''}${!wide && rightVisible ? ' push-right' : ''}`} aria-hidden={showPhonePage || undefined}>
         <Drawer side="left" docked={wide} showFoot page={listFirst} />
         <main ref={mainRef} className="mb-main">
           {/* ⚠️ 胶囊顶栏必须住在 .mb-main 里,不能挂在 .mb-shell 上:
@@ -1301,6 +1357,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         <SpaceFloatLayer />
       </div>
 
+      {/* 「应用」「我」:盖在壳的第一层上的一整页,页面由平台画(phoneDock.ts 的 installPhonePages);Dock 和顶栏胶囊照旧在。 */}
+      {showPhonePage && renderPhonePage && phonePage && <div className="mb-phonepage" data-phone-page={phonePage}>{renderPhonePage(phonePage)}</div>}
       {tabsOpen && <TabSheet onClose={() => setTabsOpen(false)} />}
       {moreOpen && <MoreSheet onClose={() => setMoreOpen(false)} />}
     </div>

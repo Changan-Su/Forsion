@@ -20,6 +20,7 @@
 import { useNav } from './navStore'
 import { useWorkspace } from './singleColumnStore'
 import { listFirstNow } from './listFirst'
+import { useSpaceStore } from './spaceRegistry'
 
 /** 栈里留着的那一页是进这一趟之前的:列表层在屏上起为真,进主区后人碰了屏幕为假。 */
 let inherited = false
@@ -44,12 +45,50 @@ export function touchedPage(): void {
 
 /** 手机单列壳装一次(SingleColumnHost 模块作用域)。返回值卸掉监听,测试用。 */
 export function installListTrips(): () => void {
-  const offs = [useWorkspace.subscribe(settle), useNav.subscribe(settle)]
+  const tripTick = (): void => {
+    const lf = listFirstNow()
+    const left = useWorkspace.getState().leftVisible
+    settleReturnTrip(useSpaceStore.getState().activeSpaceId, lf && left, lf && !left)
+  }
+  const offs = [useWorkspace.subscribe(settle), useNav.subscribe(settle), useWorkspace.subscribe(tripTick), useSpaceStore.subscribe(tripTick)]
   if (typeof window !== 'undefined') {
     for (const ev of ['pointerdown', 'keydown'] as const) {
       window.addEventListener(ev, touchedPage, true)
       offs.push(() => window.removeEventListener(ev, touchedPage, true))
     }
   }
-  return () => { offs.forEach((off) => off()); inherited = false }
+  return () => { offs.forEach((off) => off()); inherited = false; trip = null }
+}
+
+// ── 从主页「继续」点进来的一趟(2026-11-19,方向 E 第 1 步)──────────────────────────────────────
+// 主页「继续」里点一行,直接进那条对话 / 那篇笔记(被带去它自己的 Space 的第二层);这一页返回 = 回主页,不经那个 Space 的列表。
+// 三条返回路都问这里:顶栏左钮(SingleColumnHost 的 returnFromTrip)、系统 / 浏览器返回(mobile 的 planBack)、页面往右拖出列表
+// (useDrawerDrag:这一趟里不跟手拖出列表,系统返回手势照旧)。
+// 开始 = 调 beginReturnTrip(之后紧接着开内容);**落定** = 第一次看到「换到了另一个 Space、且在它的第二层」。之后:换了 Space
+// (包括回到主页)、或者列表层出来了就结束;3 秒内没落定(没开成)也结束。
+// ⚠️ 进去的那一下本身会经过列表层:换 Space 时先落到列表(landOnList),内容开出来才收起 —— 而 store 在换 Space 的半中间就可能
+//    已经满足「另一个 Space 的第二层」(收列表之前那一拍)。所以落定后 ENTRY_MS 之内冒出来的列表层算进门的一部分,不结束这一趟。
+//    只有手机两级导航用得到(listFirstNow 为假时不会落定)。
+let trip: { from: string; to: string | null; until: number; settledAt: number } | null = null
+const tripSubs = new Set<() => void>()
+const TRIP_SETTLE_MS = 3000
+const ENTRY_MS = 600
+export function subscribeReturnTrip(fn: () => void): () => void { tripSubs.add(fn); return () => { tripSubs.delete(fn) } }
+function setTrip(next: typeof trip): void { if (trip === next) return; trip = next; tripSubs.forEach((fn) => fn()) }
+
+/** 主页「继续」开内容之前调:记下现在在哪个 Space(`from`)。 */
+export function beginReturnTrip(from: string): void { setTrip({ from, to: null, until: Date.now() + TRIP_SETTLE_MS, settledAt: 0 }) }
+/** 这一页返回该回哪个 Space(落定了才有);没有这一趟 = null。 */
+export function returnTripOrigin(): string | null { return trip?.to ? trip.from : null }
+export function endReturnTrip(): void { setTrip(null) }
+
+/** 每次工作区 / Space 变化时调(installListTrips 挂上)。`active` = 当前活动 Space。 */
+export function settleReturnTrip(active: string, atList: boolean, detail: boolean): void {
+  if (!trip) return
+  if (!trip.to) {
+    if (Date.now() > trip.until) setTrip(null)
+    else if (active !== trip.from && detail) setTrip({ ...trip, to: active, settledAt: Date.now() })
+    return
+  }
+  if (active !== trip.to || (atList && Date.now() - trip.settledAt > ENTRY_MS)) setTrip(null)
 }

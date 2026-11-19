@@ -525,3 +525,18 @@
    仪器:mobile `MODE=trace npm run emu:perf`(open-again / back 的第一段里 Style 应该只有几十个元素)。 */
 .mb-shell[data-list-first] .mb-drawer--left { visibility: visible; pointer-events: auto; }
 .mb-shell[data-list-first] .mb-drawer--left:not(.open)::after { content: ''; position: absolute; inset: 0; z-index: 2147483647; }
+
+/* ── 手机五格 Dock 的「应用」「我」(phoneDock.ts,2026-11-19 方向 E 第 1 步):盖在壳第一层上的一整页,页面由平台画。
+   夹在抽屉(z3)与状态栏那条渐变(z5)之间:正文滚到状态栏底下照样有那层底色;上下让开胶囊和 Dock(--mb-top / --mb-bottom)。
+   底下那层的浮层(视图 / Space 作用域,z20 / z100)会压过它 —— 页开着时藏起来(只动浮层自己那棵子树)。放文件末尾(DESIGN §7.2)。 */
+.mb-phonepage {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg, #fff);
+  padding: var(--mb-top, 0px) 0 var(--mb-bottom, 0px);
+  box-sizing: border-box;
+}
+.mb-shell[data-phone-page] .mb-body .lcl-float-layer { display: none; }
