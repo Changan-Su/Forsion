@@ -21,6 +21,7 @@ import { IS_MINI_PANEL, UI_MODE } from './uiMode'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { OverlayAt } from './menuAnchor'
 import { nativeChromeInstalled } from './nativeChrome'
+import { listFirstNow } from './listFirst'
 import { useSegFlow } from './segFlow'
 import './viewModes.css'
 import { ViewNavigation } from './viewNavigation'
@@ -125,11 +126,15 @@ function syncPickCommands(): void {
       id: PICK_PREFIX + m.value,
       title: engineTr('lcl.viewMode.pick', { label: m.label }),
       keywords: `view mode switch ${m.value} 看法 视图 切换`,
-      ...(inMore ? { moreGroup: { id: 'lcl-view-mode', title: () => engineTr('lcl.viewMode.aria') }, checked: () => viewModesOf(viewModeTarget())?.value === m.value } : {}),
+      ...(inMore ? { moreGroup: { id: 'lcl-view-mode', title: () => engineTr('lcl.viewMode.aria'), when: mainOnScreen }, checked: () => viewModesOf(viewModeTarget())?.value === m.value } : {}),
       run: () => { const t = viewModesOf(viewModeTarget()); if (t && t.value !== m.value && t.modes.some((x) => x.value === m.value)) t.onChange(m.value) },
     })
   }
 }
+
+/** 「看法」这一节说的是主区那张视图:手机两级导航停在列表层时它压在列表后面,不算屏上这一页的事 ——
+ *  不然进过一张带看法的视图再回列表,列表上就凭这一节多出一颗「⋯」。只有手机看 `when`(见 moreSheet 的 moreCommandGroups)。 */
+const mainOnScreen = (): boolean => !(listFirstNow() && (useWorkspace.getState() as { leftVisible?: boolean }).leftVisible)
 
 /** 宿主装配期调一次(与其它内置命令一起)。 */
 export function installViewModeCommands(): () => void {
