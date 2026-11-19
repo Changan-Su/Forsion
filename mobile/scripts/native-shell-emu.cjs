@@ -640,7 +640,11 @@ const tabCountText = (list) => {
   async function openDrawer() {
     await leavePhonePage()
     if (await cdp.eval(drawerOpen)) return
-    if (!h.byId(ui(), 'nativeChrome.left')) { await toSpace('tangu'); return }
+    if (!h.byId(ui(), 'nativeChrome.left')) {
+      // toSpace goes through here from a detail page: without the bar's back key there it would call back into this forever
+      assert.notEqual(await cdp.eval(nav), 'detail', 'a detail page without the native back key: cannot get back to the list')
+      await toSpace('tangu'); return
+    }
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 'drawer did not open')
     await h.pause(500)
