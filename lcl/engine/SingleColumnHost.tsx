@@ -672,6 +672,10 @@ export function returnFromTrip(): boolean {
   enterSpace(origin)
   return true
 }
+/** Dock 上长按一个 Space:它的对象菜单(手机底栏那一处);「应用」「我」两格不是 Space,没有。 */
+function spaceLongMenu(id: string): void {
+  if (!phonePageOfCell(id)) openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 })
+}
 /** 「应用」「我」那一页挂上时把焦点交给它(外接键盘 / 读屏从这一页开始;下面那层此时 inert),不滚动。 */
 const focusPhonePage = (el: HTMLDivElement | null): void => { el?.focus({ preventScroll: true }) }
 // 人在一页式 Space 里开别的 Space 的视图:先带到那个 Space 去(见 spaceRegistry.redirectOpenFromOnePage)。
@@ -1202,7 +1206,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
           spaces: nativeSpaceList(trRef.current, notices), allLabel: trRef.current('lcl.mobile.allSpaces'),
         }, {
           spacesAll: () => openPhonePage('apps'), space: tapDockCell,
-          spaceLong: (id) => { if (!phonePageOfCell(id)) openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
+          spaceLong: spaceLongMenu,
         })
         return
       }
@@ -1242,7 +1246,7 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。「应用」「我」开那一页。
         space: tapDockCell,
         // 原生底栏的长按:同一份 Space 对象菜单(原生 sheet 不看坐标;万一回落到网页菜单,放在屏幕中下方)。「应用」「我」不是 Space,没有。
-        spaceLong: (id) => { if (!phonePageOfCell(id)) openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
+        spaceLong: spaceLongMenu,
       })
     }
     push()

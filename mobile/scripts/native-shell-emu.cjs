@@ -629,7 +629,16 @@ const tabCountText = (list) => {
   const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
   /** Show the left panel: a two-level Space's list (from its detail page: the back arrow) or a drawer Space's drawer.
    *  A Space without a left panel (Home) has neither: use Tangu's list. */
+  /** The Apps / Me page covers the Space it was opened over (a row there — settings, the Unit switcher — returns to it):
+   *  tap that Space (its dock cell, or its tile on Apps) to be on it again, with nothing on top. */
+  async function leavePhonePage() {
+    if (!(await cdp.eval(anyPhonePage))) return
+    await tapSpace(await cdp.eval("document.querySelector('.mb-shell').dataset.space"))
+    assert.ok(await h.waitPage(cdp, `!(${anyPhonePage})`, 5000), 'the Apps / Me page did not close')
+    await h.pause(500)
+  }
   async function openDrawer() {
+    await leavePhonePage()
     if (await cdp.eval(drawerOpen)) return
     if (!h.byId(ui(), 'nativeChrome.left')) { await toSpace('tangu'); return }
     await tapId('nativeChrome.left')
@@ -639,6 +648,7 @@ const tabCountText = (list) => {
   /** Leave the left panel. On a two-level Space that means entering its main page — through the tabs sheet when there
    *  is one (two or more tabs), which needs no particular list item; on a drawer Space system back closes the drawer. */
   async function closeDrawer() {
+    await leavePhonePage()
     if (!(await cdp.eval(drawerOpen))) return
     if ((await cdp.eval(nav)) === 'list') {
       if (h.byId(ui(), 'nativeChrome.tabs')) {
@@ -693,13 +703,22 @@ const tabCountText = (list) => {
     await accountItem('rb-cmd')
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000), 'the command panel did not open')
   }
+  /** The command panel's field, ready to type into. Opened from a row of the Me page (a WebView tap) the field takes the
+   *  focus at once and the keyboard comes up straight away, moving the panel while it rises: a tap measured before it
+   *  settles lands on a command row and runs it. So wait for the keyboard; tap only when the field does not have it. */
+  async function focusPaletteInput() {
+    for (let i = 0; i < 15 && !imeShown(); i++) await h.pause(200)
+    await h.pause(500)
+    if (!imeShown() || !(await cdp.eval("document.activeElement === document.querySelector('.cmd-input')"))) await tapEl("document.querySelector('.cmd-input')")
+    await h.pause(500)
+  }
   /** Command panel → the first row whose text includes `match` (typed: `query`, ASCII). */
   async function paletteRun(query, match) {
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', query.replace(/ /g, '%s'))
     const row = `[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes(${JSON.stringify(match)}))`
-    assert.ok(await h.waitPage(cdp, `!!${row}`, 5000), `the command panel does not list "${match}" (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).slice(0, 8))")})`)
+    assert.ok(await h.waitPage(cdp, `!!${row}`, 5000), `the command panel does not list "${match}" (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).slice(0, 8))")}; panel ${await cdp.eval("JSON.stringify({ open: !!document.querySelector('.cmd-input'), value: document.querySelector('.cmd-input')?.value ?? null, focus: document.activeElement?.className || document.activeElement?.tagName, page: document.querySelector('.mb-phonepage')?.dataset.phonePage || null, space: document.querySelector('.mb-shell')?.dataset.space })")})`)
     if (imeShown()) { h.key(4); await h.pause(600) }
     await tapEl(row)
   }
@@ -2481,7 +2500,7 @@ const tabCountText = (list) => {
     if ((await st()).view !== 'homepage') { h.key(4); await h.pause(900) } // the build without the fix: get the stray tab out of the way
     // the command panel (avatar menu on a phone); quick find (conversations, notes) is one of its commands
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', 'quick')
     const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
     assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'control: the command panel does not list quick find')
@@ -5217,7 +5236,7 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 6000) || (h.key(4), await h.waitPage(cdp, `!(${settingsOpen})`, 6000)), 'settings stayed open')
     // its page is gone with it, so ⋯ has nowhere to list it: what is left to check is the command panel (avatar menu)
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', 'E2E')
     await h.pause(800)
     const stillListed = await cdp.eval("[...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).filter((t) => /E2E plugin/.test(t))")
