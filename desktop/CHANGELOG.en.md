@@ -2,6 +2,17 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.3-beta.1 (2026-11-19)
+
+This build is available on the preview channel.
+
+- **Mobile**: Simplified Home, Chat, and Notes, and sped up the first open of long conversations. Back works after renaming a note, and edits show up promptly in tags and full-text search. Fixed the calendar header overlapping the top controls or call bar, the cloud vault card overflowing the screen, and the command palette failing to open the keyboard.
+- **Chat**: Send HEIC photos to models. Fixed a case where continuing a response could pick the wrong turn when two responses had the same timestamp. Added support for GPT-6.2 Sol and Astra.
+- **Notes**: The slash menu now offers suggestions. Set callout icons and colors, add or remove table rows and columns, and insert a table of contents that follows your headings. Open a Tangu chat alongside a PDF.
+- **Settings and plugins**: Appearance settings have been reorganized, and plugin settings are now grouped under Extensions. If plugin data cannot be read, the host blocks subsequent writes that could overwrite existing data.
+- **Desktop**: Space shortcuts follow their Dock state. macOS installers are signed with Developer ID and notarized, and signed builds support in-app updates.
+- Bundles Tangu engine 2.14.8 and Calendar 0.1.13. The default desktop distribution includes Forsion Extend 0.10.10, with WeChat and GitHub account linking and a Windows recovery fix for missing local cloud note mirrors.
+
 ## 2.14.2 (2026-11-16)
 
 This release includes everything in 2.14.2-beta.1 through beta.4; see the sections below. New since beta.4:

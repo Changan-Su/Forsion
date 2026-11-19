@@ -1259,11 +1259,9 @@ const SCENES = {
   'note-more-keyboard': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'amadeus')
-    await page.locator(`${LIST} .pl-fab`).tap()
-    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
-    await page.waitForTimeout(800)
-    await page.keyboard.press('Enter') // title → body: the caret in the note
-    await page.waitForTimeout(400)
+    const fixtureTitle = '键盘菜单台架'
+    const fixturePath = `${fixtureTitle}.md`
+    const pages = await newNote(page, fixtureTitle)
     const inBody = () => page.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
     const typing = await inBody()
     await page.setViewportSize({ width: SCREEN.width, height: SCREEN.height - 300 })
@@ -1282,6 +1280,10 @@ const SCENES = {
     await page.locator('.mb-sheet-scrim').tap({ position: { x: 200, y: 40 } }).catch(() => {})
     await page.waitForTimeout(300)
     await stage.action(page, 'left')
+    // Leave the next note scene a fresh draft to create and rename.
+    if (pages.includes(fixturePath)) await page.evaluate(async ([url, notePath]) => {
+      await (await import(/* @vite-ignore */ url)).usePageStore.getState().deletePage(notePath)
+    }, [moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'), fixturePath])
     return [
       ['typing in a new note, the floating capsule has its "⋯"', typing && found === 1, JSON.stringify({ typing, found })],
       ['"⋯" with the keyboard up takes the caret out of the note (the keyboard goes) and opens the sheet', open && !caret, JSON.stringify({ open, caret })],

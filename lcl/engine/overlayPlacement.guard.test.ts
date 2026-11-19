@@ -31,7 +31,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/components/ModelPill.tsx': [1, '二级面板边界,落位走 nestedPanelTop'],
   'desktop/frontend/src/views/chat2/EditorialMessage.tsx': [1, '没有输入框时以窗口底为界,不是浮层'],
   'desktop/frontend/src/amadeus/unified/linkCard.tsx': [1, '链接编辑卡居中在窗口 30% 处,落位走 OverlayAt'],
-  'desktop/frontend/src/amadeusViews.tsx': [8, '手机软键盘高度(visualViewport / adjustResize)与共享卡居中'],
+  'desktop/frontend/src/amadeusViews.tsx': [10, '共享卡居中、手机软键盘高度，以及点「⋯」前判断键盘是否展开（visualViewport / adjustResize）'],
   'desktop/frontend/src/views/WorkspaceView.tsx': [1, '手机「更多」菜单的起点,落位走 OverlayAt'],
   'desktop/frontend/src/amadeus/plugins/guideSpotlight.ts': [1, '上手提示圈注的视口尺寸'],
   'desktop/frontend/src/amadeus/plugins/guideTips.ts': [1, '判断锚点是否在视口里'],
