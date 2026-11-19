@@ -9,11 +9,12 @@
  * singleColumn 的 .mini-shell .mb-main 0.85。桌面 Electron 默认 1 → 开发机上完全看不见。
  *
  * 【定则】视口坐标 x 要落地 → 写 `left: x / 元素自身的 currentCSSZoom`;跟视口尺寸比大小前,
- * 局部 px 先 `× zoom`。别自己再写一遍,一律走这里。仪器:`npm run check:overlay`。
+ * 局部 px 先 `× zoom`。别自己再写一遍,一律走这里。仪器:`npm run check:overlay`;纵向出界(矮窗口翻面 / 封顶 / 搜索框钉住)
+ * 是 `npm run check:menuedge`。
  *
  * 【选哪个】React 里、按坐标开(右键、光标)→ `<OverlayAt>` / `useClampedMenu`;
  * 贴着一个元素开、浮层不归 React 管(原生 popover、命令式 DOM)→ `followAnchor`;
- * CSS 已定位只怕横向出界 → `useEdgeNudge`。在别处直接拿 `innerHeight` 算浮层位置会被
+ * CSS 已定位(贴按钮 `bottom|top: 100%`)→ `useEdgeNudge`(横向推回 + 纵向翻面 / 封顶,11-17 起)。在别处直接拿 `innerHeight` 算浮层位置会被
  * `overlayPlacement.guard.test.ts` 拦下(那份名单里是存量,只减不增)。
  */
 import React, { useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
@@ -373,14 +374,85 @@ export function nestedPanelTop(
   return (top - menuTop) / safeZoom
 }
 
+/**
+ * useEdgeNudge 的纵向算术(视口 px 进、视口 px 出;仪器在 menuAnchor.test.ts)。用户 11-17:「列表有时候会被边界挡住」。
+ * - 贴着锚点开的(菜单底边贴锚点上沿 / 顶边贴锚点下沿,CSS `bottom|top: 100%` 那种):首选侧放得下就不动;
+ *   放不下而另一侧放得下 → 翻面(`side`);两侧都放不下 → 放在空间大的一侧,`maxHeight` 封到那侧可用高度(浮层自己滚)。
+ * - 不贴锚点的(按坐标开的右键菜单、一级菜单旁边的二级面板):整体平移 `dy` 回到可见区;比可见区还高就贴顶并封顶高度。
+ * `clipTop / clipBottom` = 真正会裁到它的那一圈边界(视口 ∩ 有 overflow 的祖先,见 verticalClip)。
+ */
+export function edgeVertical(
+  top: number,
+  height: number,
+  clipTop: number,
+  clipBottom: number,
+  anchor?: { top: number; bottom: number } | null,
+  margin = 8,
+): { dy: number; side?: 'up' | 'down'; gap?: number; maxHeight?: number } {
+  if (height <= 0) return { dy: 0 }
+  const lo = clipTop + margin, hi = clipBottom - margin
+  const bottom = top + height
+  if (anchor) {
+    const up = bottom <= anchor.top + 2
+    const down = !up && top >= anchor.bottom - 2
+    if (up || down) {
+      const gap = Math.max(0, up ? anchor.top - bottom : top - anchor.bottom)
+      const roomUp = anchor.top - gap - lo
+      const roomDown = hi - (anchor.bottom + gap)
+      const pref: 'up' | 'down' = up ? 'up' : 'down'
+      const other: 'up' | 'down' = up ? 'down' : 'up'
+      const roomPref = up ? roomUp : roomDown, roomOther = up ? roomDown : roomUp
+      if (height <= roomPref + 0.5) return { dy: 0 }
+      if (height <= roomOther + 0.5) return { dy: 0, side: other, gap }
+      const flip = roomOther > roomPref
+      return { dy: 0, side: flip ? other : undefined, gap, maxHeight: Math.max(0, flip ? roomOther : roomPref) }
+    }
+  }
+  if (height > hi - lo) return { dy: lo - top, maxHeight: Math.max(0, hi - lo) }
+  if (bottom > hi) return { dy: hi - bottom }
+  if (top < lo) return { dy: lo - top }
+  return { dy: 0 }
+}
+
+/** 真正会裁到浮层的纵向边界(视口 px):视口 ∩ 它的包含块往上每个 overflow-y 非 visible 的祖先(碰到 fixed 祖先为止)。
+ *  absolute 浮层从 offsetParent 起算:夹在它和包含块之间、没定位的 overflow 祖先裁不到它。 */
+export function verticalClip(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0, bottom = window.innerHeight
+  const position = getComputedStyle(el).position
+  if (position === 'fixed') return { top, bottom }
+  let n: Element | null = position === 'absolute' ? el.offsetParent : el.parentElement
+  for (; n && n !== document.documentElement && n !== document.body; n = n.parentElement) {
+    const cs = getComputedStyle(n)
+    if (cs.overflowY !== 'visible') {
+      const r = n.getBoundingClientRect(), z = zoomOf(n), h = n as HTMLElement
+      top = Math.max(top, r.top + h.clientTop * z)
+      bottom = Math.min(bottom, r.top + (h.clientTop + h.clientHeight) * z)
+    }
+    if (cs.position === 'fixed') break
+  }
+  return { top, bottom: Math.max(top, bottom) }
+}
+
 interface EdgeNudgeOptions {
   margin?: number
   /** 除 viewport 外再收进最近的容器边界，例如 Chat View。找不到时自动回退 viewport。 */
   boundary?: string
+  /** 浮层里有绝对定位到它外面的二级面板(.cm-sub):必须 overflow:visible,封顶加滚动会把面板裁掉 → 只翻面不封顶。
+   *  面板是悬停后才挂上的,挂上那一刻浮层尺寸不变、不会重量,所以要调用方声明,不能等量的时候去找。 */
+  subPanels?: boolean
 }
 
 /** @param active 假值 = 关闭(清零);真值同时**兼作重算依赖** —— 调用方把会挪动浮层的状态编进去
- *  (如 ModelPill 的 `${pane}:${flip}`),翻面之后才会重新夹取。 */
+ *  (如 ModelPill 的 `${pane}:${flip}`),翻面之后才会重新夹取。
+ *  横向:按 `boundary`(缺省视口)推回 / 收窄。纵向(11-17 起):按 `edgeVertical` 翻面 / 封顶 / 平移,边界是真正会裁到它的祖先
+ *  (`boundary` 只管横向:Chat 输入区的浮层本来就开在卡片外面)。封顶时浮层打 `data-edge-capped`,
+ *  里面标了 `data-edge-pin` 的头部(搜索框)钉在顶上、只滚其余部分(engine.css)。 */
+interface EdgeFix { dx: number; maxWidth?: number; dy: number; side?: 'up' | 'down'; gap?: number; maxHeight?: number; scroll?: boolean }
+const sameFix = (a: EdgeFix, b: EdgeFix): boolean => Math.abs(a.dx - b.dx) < 0.5 && Math.abs(a.dy - b.dy) < 0.5 && a.maxWidth === b.maxWidth
+  && a.side === b.side && Math.abs((a.gap ?? 0) - (b.gap ?? 0)) < 0.5 && Math.abs((a.maxHeight ?? -1) - (b.maxHeight ?? -1)) < 0.5 && a.scroll === b.scroll
+/** 测量前要撤掉的、本钩子写过的内联样式(写回由 React 按返回的 style 渲染,这里只临时撤、量完原样放回)。 */
+const EDGE_OWNED = ['translate', 'maxWidth', 'maxHeight', 'top', 'bottom', 'marginTop', 'marginBottom', 'overflowY', 'transformOrigin'] as const
+type EdgeOwnedKey = (typeof EDGE_OWNED)[number]
 export function useEdgeNudge(
   active: string | number | boolean | null | undefined,
   options: number | EdgeNudgeOptions = 8,
@@ -390,23 +462,45 @@ export function useEdgeNudge(
 } {
   const margin = typeof options === 'number' ? options : (options.margin ?? 8)
   const boundarySelector = typeof options === 'number' ? undefined : options.boundary
+  const subPanels = typeof options === 'number' ? false : !!options.subPanels
   const ref = useRef<HTMLDivElement>(null)
-  const [fix, setFix] = useState<{ dx: number; maxWidth?: number }>({ dx: 0 })
+  const [fix, setFix] = useState<EdgeFix>({ dx: 0, dy: 0 })
+  const owned = useRef<Set<EdgeOwnedKey>>(new Set())
   useLayoutEffect(() => {
-    if (!active) return setFix((p) => (p.dx === 0 && p.maxWidth === undefined ? p : { dx: 0 }))
+    if (!active) {
+      ref.current?.removeAttribute('data-edge-capped')
+      return setFix((p) => (sameFix(p, { dx: 0, dy: 0 }) ? p : { dx: 0, dy: 0 }))
+    }
     const el = ref.current
     if (!el) return
     const apply = (): void => {
       const z = zoomOf(el)
-      // 先撤掉上一次的推移和收窄再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去);
+      // 先撤掉上一次的推移、收窄、翻面和封顶再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去);
       // 收窄不撤的话,量到的是收窄后的宽 → 判「放得下」→ 撤掉收窄 → 变宽又放不下,ResizeObserver 来回翻(边界比浮层窄时闪)。
-      const prev = el.style.translate, prevMax = el.style.maxWidth
-      el.style.translate = ''
-      el.style.maxWidth = ''
+      // translate / maxWidth 一向归本钩子;其余只撤本钩子上次写过的键(按坐标开的菜单 top / left 是调用方的)。
+      const saved: Array<[EdgeOwnedKey, string]> = []
+      for (const k of EDGE_OWNED) {
+        if (k !== 'translate' && k !== 'maxWidth' && !owned.current.has(k)) continue
+        saved.push([k, el.style[k]])
+        el.style[k] = ''
+      }
       const r = el.getBoundingClientRect()
-      const ow = el.offsetWidth
-      el.style.translate = prev
-      el.style.maxWidth = prevMax
+      const ow = el.offsetWidth, oh = el.offsetHeight
+      const cs = getComputedStyle(el)
+      // 纵向几何不吃入场动画的 transform:absolute 的用 offsetTop 推回视口坐标,锚点 = 它的定位祖先(触发按钮的包裹层)。
+      const op = cs.position === 'absolute' ? (el.offsetParent as HTMLElement | null) : null
+      const opRect = op?.getBoundingClientRect()
+      const top = op && opRect ? opRect.top + (op.clientTop + el.offsetTop) * z : r.top
+      const clip = verticalClip(el)
+      const chrome = cs.boxSizing === 'content-box'
+        ? (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+        : 0
+      // 带二级面板的菜单(.cm-sub 绝对定位在菜单外)必须 overflow:visible,封顶加滚动会把面板整块裁掉 → 只翻面不封顶。
+      const canScroll = !subPanels && !el.querySelector('.cm-sub')
+      const hidden = cs.display === 'none'
+      // ⚠️ cs 是活的:下面把内联样式写回之后再读 overflowY,读到的是上一轮自己写的 auto,会判成「不用补滚动」把滚动丢掉(评审 11-17)
+      const naturalOverflowY = cs.overflowY
+      for (const [k, v] of saved) el.style[k] = v
       // ⚠️ 这里跑在 useLayoutEffect,而入场动画 `@keyframes pop` 正 `scale(0.97)` 着 —— rect 会**偏窄**,
       // 于是刚好溢出的菜单被判成「放得下」,dx=0,动画结束一还原就露在屏幕外(实测:390 屏上模式菜单
       // 量到 357 宽判定通过,实际 368 宽、右缘 387.5 已经出界)。offsetWidth 不吃 transform,是未缩放的
@@ -417,7 +511,19 @@ export function useEdgeNudge(
       const boundaryRight = boundary?.right ?? window.innerWidth
       const localLeft = (r.left + r.right) / 2 - w / 2 - boundaryLeft
       const { dx, maxWidth } = edgeNudge(localLeft, w, boundaryRight - boundaryLeft, z, margin)
-      setFix((p) => (Math.abs(p.dx - dx) < 0.5 && p.maxWidth === maxWidth ? p : { dx, maxWidth }))
+      const v = hidden ? { dy: 0 } as ReturnType<typeof edgeVertical> : edgeVertical(top, oh * z, clip.top, clip.bottom, opRect ? { top: opRect.top, bottom: opRect.bottom } : null, margin)
+      const capped = v.maxHeight !== undefined && canScroll
+      const next: EdgeFix = {
+        dx,
+        maxWidth,
+        dy: v.dy / z,
+        side: v.side,
+        gap: v.gap === undefined || !v.side ? undefined : v.gap / z,
+        maxHeight: capped ? Math.max(0, v.maxHeight! / z - chrome) : undefined,
+        scroll: capped && naturalOverflowY === 'visible',
+      }
+      el.toggleAttribute('data-edge-capped', capped)
+      setFix((p) => (sameFix(p, next) ? p : next))
     }
     apply()
     // 兜住「动画不止 translateY」的将来:入场动画放完再夹一次(尺寸没变时 setFix 会自己短路)。
@@ -433,8 +539,21 @@ export function useEdgeNudge(
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
     }
-  }, [active, margin, boundarySelector])
-  return { ref, style: { translate: fix.dx ? `${fix.dx}px` : undefined, maxWidth: fix.maxWidth } }
+  }, [active, margin, boundarySelector, subPanels])
+  const style: CSSProperties = {
+    translate: fix.dx || fix.dy ? `${fix.dx}px ${fix.dy}px` : undefined,
+    maxWidth: fix.maxWidth,
+    maxHeight: fix.maxHeight,
+    overflowY: fix.scroll ? 'auto' : undefined,
+    // 翻面:原来贴上沿的改贴下沿(反之亦然),间距照原样;原间距若是 margin 给的,这里一并归零
+    ...(fix.side === 'down'
+      ? { top: `calc(100% + ${fix.gap ?? 0}px)`, bottom: 'auto', marginTop: 0, marginBottom: 0, transformOrigin: 'top' }
+      : fix.side === 'up'
+        ? { bottom: `calc(100% + ${fix.gap ?? 0}px)`, top: 'auto', marginTop: 0, marginBottom: 0, transformOrigin: 'bottom' }
+        : {}),
+  }
+  owned.current = new Set(EDGE_OWNED.filter((k) => style[k] !== undefined))
+  return { ref, style }
 }
 
 /**
