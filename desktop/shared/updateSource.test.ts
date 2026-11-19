@@ -15,6 +15,13 @@ it('selects revisions numerically and keeps stable users away from prereleases, 
   expect(selectGitHubRelease(releases.slice(0, 1), false)).toBeNull()
   expect(selectGitHubRelease(releases, true, false, r => r.tag_name === 'v2.13.8-beta.1')?.version).toBe('2.13.8-beta.1')
   expect(parseWebsiteInstallers({ platforms: { android: { version: '2.13.7+build.2', filename: 'update.apk' } } })?.android?.version).toBe('2.13.7+build.2')
+  // mac 自动更新用的 zip 是单独一条(官网 server 的 macos-update),和给人下载的 dmg 分开读
+  const mac = parseWebsiteInstallers({ platforms: {
+    macos: { version: '2.14.3', filename: 'Forsion-2.14.3-arm64.dmg' },
+    'macos-update': { version: '2.14.3', filename: 'Forsion-2.14.3-arm64.zip', size: 5, sha512: 'z==' },
+  } })
+  expect(mac?.macos?.filename).toBe('Forsion-2.14.3-arm64.dmg')
+  expect(mac?.['macos-update']).toEqual({ version: '2.14.3', filename: 'Forsion-2.14.3-arm64.zip', size: 5, sha512: 'z==' })
 })
 
 it('auto source goes by region: mainland website first, elsewhere GitHub first, unknown website first', () => {

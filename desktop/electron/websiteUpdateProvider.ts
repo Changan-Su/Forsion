@@ -4,7 +4,7 @@ import type { CustomPublishOptions, UpdateInfo } from 'builder-util-runtime'
 import type { WebsiteInstaller } from '../shared/updateSource'
 
 /**
- * 官网下载源(只给 Windows 标准包用):版本、大小、sha512 都来自官网 `/api/website/config` 那条安装包记录,不读 yml。
+ * 官网下载源(Windows 标准包的 exe、mac 标准包的自动更新 zip):版本、大小、sha512 都来自官网 `/api/website/config` 那条安装包记录,不读 yml。
  * 文件地址是官网下载接口(302 到 OSS 签名链接,electron-updater 会跟着跳);缓存文件名取 info.url = 安装包文件名
  * (下载地址不以 .exe 结尾时 electron-updater 就用它)。sha512 照常校验,没有 sha512 的记录 updater.ts 根本不会选这边。
  */

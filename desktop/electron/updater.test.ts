@@ -364,3 +364,47 @@ it('Developer ID mac: a staged beta survives turning beta off, and a Squirrel er
   emitNative('error', new Error('ShipItState.plist could not be written'))
   expect(updater.relaunched).toBe(1)
 })
+
+// 官网收了 mac 自动更新用的 zip(server 的 `macos-update`)之后:大陆的 mac 也和 Windows 一样从官网应用内更新
+const macWithZip = (zip: Record<string, unknown> = {}) => ({ platforms: {
+  macos: { version: '2.13.4', filename: 'Forsion-2.13.4-arm64.dmg', size: 200 },
+  'macos-update': { version: '2.13.4', filename: 'Forsion-2.13.4-arm64.zip', size: 210, sha512: 'zip==', ...zip },
+} })
+
+it('Developer ID mac in mainland: downloads the website zip in-app, and can still switch to GitHub', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', macWithZip())
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: false })
+  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/macos-update', installer: { filename: 'Forsion-2.13.4-arm64.zip', sha512: 'zip==' } })
+  updater.download.push(async () => { throw new Error('ECONNRESET') })
+  await downloadUpdate()
+  expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' })
+  expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloading', source: 'github', fallbackFrom: 'website' }))
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
+})
+
+it.each([
+  ['a different version (dmg rolled back or zip not imported yet)', { version: '2.13.5' }],
+  ['no sha512', { sha512: undefined }],
+  ['a NoExtend file', { filename: 'Forsion-NoExtend-2.13.4-arm64.zip' }],
+  ['not a zip', { filename: 'Forsion-2.13.4-arm64.dmg' }],
+])('Developer ID mac in mainland: a website update record with %s is not used, the website .dmg is offered instead', async (_name, zip) => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', macWithZip(zip))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: true })
+  expect(updater.feeds).toEqual([])
+})
+
+it('Windows never picks the mac update record', async () => {
+  answers.set('/website/config', { platforms: { ...macWithZip().platforms, windows: { version: '2.13.4', filename: 'Forsion-2.13.4-x64.exe', size: 100, sha512: 'exe==' } } })
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates } = await import('./updater')
+  await checkForUpdates()
+  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows', installer: { sha512: 'exe==' } })
+})

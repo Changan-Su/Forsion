@@ -34,7 +34,8 @@ export function parseMainland(body: unknown): boolean | null {
   return typeof b.mainland_china === 'boolean' ? b.mainland_china : b.country === 'CN'
 }
 
-export type WebsitePlatform = 'windows' | 'macos' | 'android'
+/** `macos-update` = mac 应用内自动更新用的 zip(官网只当更新源,不在页面上列);`macos` 那份是给人下载的 dmg。 */
+export type WebsitePlatform = 'windows' | 'macos' | 'android' | 'macos-update'
 export interface WebsiteInstaller {
   version: string
   filename: string
@@ -49,7 +50,7 @@ export function parseWebsiteInstallers(body: unknown): WebsiteInstallers | null 
   const platforms = (body as { platforms?: unknown } | null)?.platforms
   if (!platforms || typeof platforms !== 'object') return null
   const out: WebsiteInstallers = {}
-  for (const key of ['windows', 'macos', 'android'] as const) {
+  for (const key of ['windows', 'macos', 'android', 'macos-update'] as const) {
     const p = (platforms as Record<string, any>)[key]
     const version = String(p?.version || '').trim().replace(/^v/i, '')
     if (!p || !parseReleaseVersion(version)) continue

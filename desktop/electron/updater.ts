@@ -8,7 +8,8 @@
  *    GitHub = 该 tag 的 latest*.yml(generic);官网 = WebsiteUpdateProvider(Windows 标准包、官网记录带 sha512 才有)。
  *    一边下不动(出错 / 30 秒没进度)自动换另一边一次;下载中也能手动换。electron-updater 现在只管下载和安装,不再决定有没有新版。
  *  - macOS:当前运行的包是 Developer ID 签名、且 .app 所在目录可写(macSelfUpdate.ts 探一次)→ 和 Windows / Linux 一样
- *    electron-updater 下 zip(latest-mac.yml,只在 GitHub 上;官网只收 .dmg,所以该先走官网的大陆用户照旧从官网开 .dmg)→「重启并安装」时先让 Squirrel.Mac 取包验签
+ *    electron-updater 下 zip:GitHub = 该 tag 的 latest-mac.yml;官网 = `macos-update` 那条记录(和 dmg 同一版、带 sha512 才用,
+ *    没有就说明官网这一版还没收 zip,该先走官网的大陆用户照旧从官网开 .dmg)→「重启并安装」时先让 Squirrel.Mac 取包验签
  *    (prepareInstall),成了才停后端、quitAndInstall。ad-hoc 签名的旧包 / 从 .dmg 里直接跑 / 任何一步失败 →
  *    退回老路:「下载安装包」在浏览器里直接开这一版 .dmg 的链接,装由用户自己拖。
  *
@@ -235,10 +236,15 @@ async function findLatest(beta: boolean): Promise<{ version: string; notes?: str
 function feedFor(src: UpdateSource): Parameters<typeof autoUpdater.setFeedURL>[0] | null {
   if (!target) return null
   if (src === 'github') return { provider: 'generic', url: `https://github.com/${GH_OWNER}/${GH_REPO}/releases/download/v${target.version}` }
-  // 官网只给 Windows:mac 那份记录是 .dmg(server websiteService 按扩展名收),Squirrel.Mac 要的是 zip → mac 自装只走 GitHub。
-  const it = target.site?.windows
-  if (process.platform !== 'win32' || !websiteCarries('win32', BUNDLE_EXTEND) || !websiteHas(it, target.version) || !it.sha512) return null
-  return { provider: 'custom', updateProvider: WebsiteUpdateProvider, installer: it, downloadUrl: `${WEBSITE_API}/website/download/windows` }
+  // Windows 用官网的 exe;mac 用官网的 `macos-update`(自动更新专用的 zip,Squirrel.Mac 只吃 zip,`macos` 那份 dmg 换不了包)。
+  // 官网要正好有这一版、带 sha512、是标准包才用;对不上(还没收 zip / 后台把 dmg 回退了)就当官网给不了。
+  const mac = process.platform === 'darwin'
+  if (!mac && process.platform !== 'win32') return null
+  const key = mac ? 'macos-update' : 'windows'
+  const it = target.site?.[key]
+  if (!websiteCarries(process.platform, BUNDLE_EXTEND) || !websiteHas(it, target.version) || !it.sha512) return null
+  if (mac && !/\.zip$/i.test(it.filename)) return null
+  return { provider: 'custom', updateProvider: WebsiteUpdateProvider, installer: it, downloadUrl: `${WEBSITE_API}/website/download/${key}` }
 }
 
 /** 下载顺序里、除当前这边以外第一个能用的。 */
