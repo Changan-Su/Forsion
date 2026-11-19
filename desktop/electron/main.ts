@@ -46,7 +46,7 @@ import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, mig
 import { moveToDesktopTrash } from './trashWriter'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
-import { homedir, hostname, networkInterfaces } from 'os'
+import { homedir, hostname, networkInterfaces, tmpdir } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
 import { registerBrowserPickIpc } from './browserPick'
@@ -156,7 +156,8 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
-import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
+import { macSpaceSocket, startMacSpaceLaunchers } from './macSpaceLauncher'
+import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromDataUrl, isSpaceId, spaceShortcutReceipt, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, windowShortcutAppUserModelId, windowShortcutLink, type WindowShortcutKind } from './spaceShortcut'
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
@@ -195,6 +196,7 @@ let deepLinkReady = false
 // 不进 deep link 队列:那条路会 showMainWindow 并让主窗渲染层切 Space,用户要的恰恰是「不露出 Forsion 本体」。
 // 启动还没走到恢复独立窗那一步(IPC 没注册全、主窗还没建)之前先排着;冷启动因它而起时,主窗建好也不显示(hideMainOnLaunch)。
 const pendingSpaceWindows: string[] = []
+const cancelledStartupSpaces = new Set<string>()
 /** 同上,设备快捷方式 forsion://unit/<id>?window=standalone(unitShortcut.ts):直接开那台设备的 Unit 窗。 */
 const pendingUnitWindows: string[] = []
 let spaceWindowsLive = false
@@ -210,6 +212,7 @@ function routeSpaceWindowLink(url: string): boolean {
   }
   const id = spaceWindowIdFromUrl(url)
   if (!id) return false
+  cancelledStartupSpaces.delete(id)
   if (!spaceWindowsLive) { if (!pendingSpaceWindows.includes(id)) pendingSpaceWindows.push(id) }
   else createDetachedWindow({ space: id })
   return true
@@ -2018,6 +2021,23 @@ function showMainWindow(): void {
 type ViewDesc = WindowView
 
 const detachedWindows = new Map<string, BrowserWindow>()
+const nativeSpaceLauncher = process.platform === 'darwin' && app.isPackaged && !SANDBOX
+  ? {
+      binary: join(process.resourcesPath, 'space-launcher'),
+      socket: macSpaceSocket(tmpdir(), app.getPath('userData')),
+      hostId: readSelfBundleId(process.execPath) ?? '',
+      hostPath: dirname(dirname(dirname(process.execPath))),
+      profile: app.getPath('userData'),
+    }
+  : undefined
+let macSpaceLaunchers: ReturnType<typeof startMacSpaceLaunchers> | undefined
+
+function showSpaceDockIcon(space: string): void {
+  if (!macSpaceLaunchers) return
+  let bundle: string
+  try { bundle = readFileSync(spaceShortcutReceipt(spaceShortcutDir(), space), 'utf8') } catch { return }
+  macSpaceLaunchers.show(space, bundle)
+}
 const readyDetachedWindows = new WeakSet<BrowserWindow>()
 const pendingDetachedViews = new Map<string, ViewDesc[]>() // 拖出登记的初始视图,渲染端 detachedReady 时 pull
 let persistedDetached: Array<{ id: string; bounds: Electron.Rectangle; space?: string }> = [] // 内存副本 + 落盘(重启恢复);space = 这扇是哪个 Space 的窗口
@@ -2124,6 +2144,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   if (open && !open.isDestroyed()) {
     // 先开着窗、后加的快捷方式:从快捷方式再叫它时补上任务栏身份(Codex 评审)。
     if (space && process.platform === 'win32') applySpaceTaskbarIdentity(open, space)
+    if (space) showSpaceDockIcon(space)
     if (unit && process.platform === 'win32') applyShortcutTaskbarIdentity(open, UNIT_SHORTCUT, unit)
     if (open.isMinimized()) open.restore()
     if (readyDetachedWindows.has(open)) present(open)
@@ -2169,6 +2190,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     present(win)
   })
   detachedWindows.set(id, win)
+  if (space) showSpaceDockIcon(space)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
   let closing = false
@@ -2188,6 +2210,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   win.on('closed', () => {
     console.log('[win] detached closed', id)
     detachedWindows.delete(id)
+    if (space) macSpaceLaunchers?.hide(space)
     pendingDetachedViews.delete(id)
     if (!isQuitting) forget() // Also handles webContents being closed directly by a harness.
   })
@@ -2257,6 +2280,7 @@ async function restoreDetachedWindows(): Promise<void> {
   for (const { unit, bounds } of [...persistedUnitWindows]) createDetachedWindow({ unit, bounds })
   await loadDetachedState()
   for (const { id, bounds, space } of [...persistedDetached]) {
+    if (space && cancelledStartupSpaces.has(space)) { removeDetachedState(id); continue }
     createDetachedWindow({ id, bounds, space: typeof space === 'string' && SPACE_ID.test(space) ? space : undefined })
   }
 }
@@ -3196,6 +3220,28 @@ async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'do
 }
 
 app.whenReady().then(async () => {
+  if (nativeSpaceLauncher) {
+    macSpaceLaunchers = startMacSpaceLaunchers(nativeSpaceLauncher.socket, nativeSpaceLauncher.binary, {
+      exists: (space) => detachedWindows.has(`sp_${space}`),
+      open: (space) => {
+        routeSpaceWindowLink(windowShortcutLink(SPACE_SHORTCUT, space))
+        if (spaceWindowsLive && !QUIET_WINDOWS) app.focus({ steal: true })
+      },
+      close: (space) => {
+        const win = detachedWindows.get(`sp_${space}`)
+        if (win && !win.isDestroyed()) win.close()
+        else {
+          const pending = pendingSpaceWindows.indexOf(space)
+          if (pending >= 0) {
+            pendingSpaceWindows.splice(pending, 1)
+            cancelledStartupSpaces.add(space)
+          }
+          macSpaceLaunchers?.hide(space)
+        }
+      },
+    })
+    app.once('quit', () => macSpaceLaunchers?.dispose())
+  }
   loadMiniLayouts() // Mini 按实体键记的位置和大小:放在最前、同步读,任何窗口 / 快捷键能开 Mini 之前就读完
   miniSessionFile = miniSessionState(join(app.getPath('userData'), 'mini-session.json'))
   savedMiniSession = miniSessionFile.read()
@@ -5066,7 +5112,26 @@ app.whenReady().then(async () => {
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
   // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
   // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
-  ipcMain.handle('spaces:list', () => readSpacesList({ dev: true }))
+  let automaticSpaceRecipes = new Map<string, Set<string>>()
+  ipcMain.handle('spaces:list', async (e, disabledPluginIds?: unknown) => {
+    const recipes = await readSpacesList({ dev: true })
+    if (e.sender === mainWindow?.webContents && isTrustedSender(e)) {
+      const disabled = new Set(Array.isArray(disabledPluginIds) ? disabledPluginIds : [])
+      const optedIn = new Map<string, Set<string>>()
+      for (const { plugin, json } of recipes) {
+        if (!plugin || disabled.has(plugin)) continue
+        try {
+          const recipe = JSON.parse(json)
+          if (recipe?.autoDesktopShortcut !== true || !isSpaceId(recipe.id)) continue
+          const owners = optedIn.get(recipe.id) ?? new Set()
+          owners.add(plugin)
+          optedIn.set(recipe.id, owners)
+        } catch { /* invalid recipe */ }
+      }
+      automaticSpaceRecipes = optedIn
+    }
+    return recipes
+  })
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
     if (!isSafeSlug(slug)) throw new Error('invalid-space-id') // 原因码,渲染层 ipcErrorText 译
     JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方
@@ -5216,17 +5281,26 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return { ok: false, code: 'error', detail: 'untrusted sender' }
     const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
     if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
+    const { id, plugin } = input
+    const stillCurrent = typeof plugin === 'string' ? () =>
+      !SANDBOX && isTrustedSender(e) && e.sender === mainWindow?.webContents &&
+      automaticSpaceRecipes.get(id)?.has(plugin) === true : undefined
+    if (stillCurrent && !stillCurrent()) return { ok: false, code: 'not_found' }
     const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
     const iconPng = shortcutIconSource(input.iconPng)
     const result = await createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
       isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
       appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
-      iconDir: spaceShortcutDir(), iconPng,
+      iconDir: spaceShortcutDir(), iconPng, automatic: !!stillCurrent, stillCurrent, macLauncher: nativeSpaceLauncher,
+      readShortcutArgs: process.platform === 'win32' ? (p) => shell.readShortcutLink(p).args : undefined,
       writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
     })
     // 这个 Space 的窗此刻开着的话,当场换上任务栏身份(Windows)。
     const live = detachedWindows.get(`sp_${input.id}`)
-    if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+    if (result.ok && live && !live.isDestroyed()) {
+      if (process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+      showSpaceDockIcon(input.id)
+    }
     return result
   })
   // 设备「添加到桌面」(账号面板 Unit 段的右键)。渲染层只给:设备 id、名字洗空时的本地化兜底名、画好的图标;
@@ -5662,6 +5736,7 @@ app.whenReady().then(async () => {
   // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
   void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
     spaceWindowsLive = true
+    cancelledStartupSpaces.clear()
     for (const id of pendingSpaceWindows.splice(0)) createDetachedWindow({ space: id })
     for (const unit of pendingUnitWindows.splice(0)) createDetachedWindow({ unit })
   })

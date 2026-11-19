@@ -296,6 +296,8 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 ### Space 与 Ribbon 收纳架
 
+随包 Space 可以在 `spaces/<slug>/space.json` 中声明 `"autoDesktopShortcut": true`。安装版首次注册这个已启用插件的 Space 时，会在系统桌面为这个 Space 创建一个快捷方式。删除或移动快捷方式后，插件重载、升级和应用重启都不会重新生成，仍可在 Space 菜单里手动添加。该字段只在桌面安装版生效，旧版宿主会忽略它。
+
 启动台、主页一类插件可以列出你的 Space、点一下打开、显示图标和近况（继续某会话、最近的笔记、下一条日程、未读数），并在自己的界面里调整 Ribbon 上 Space 的顺序和收纳夹。插件必须声明 `spaces` 才拿得到；它改的就是 Ribbon 那一份顺序，在插件里拖一下，Ribbon 上跟着变，反过来也一样。某个 Space 换了图标（比如它的插件更新了），插件里画的图标也跟着换。2026-11-09 起，插件里右键一个 Space 弹的是和 Ribbon、主页同一份菜单（`ctx.spaces.contextMenu`，插件可以在最后加几项自己的），能问到点它会不会开到它自己的窗口去（`opensElsewhere`），商店、成就那两格之后也会带上活动中心这类首方 Ribbon 入口。插件详情页会多一项「打开 Space，调整 Ribbon 上 Space 的顺序和收纳夹」。接口细节见插件开发技能「Space 与 Ribbon 收纳架」一节。
 
 另外三件零碎的：插件可以拿到当前登录的名字（`ctx.app.watchAccountName`，有昵称用昵称，只给名字不给令牌）、必应每日壁纸（`ctx.wallpaper.bing`，由 Forsion 代拉），以及和 Forsion 自己一样样式的右键菜单（`ctx.ui.contextMenu`）。菜单项多、窗口矮时自己滚动；做勾选清单时可以让它点了不关，一次勾好几项。插件还能读到动效偏好（`ctx.app.motion`，2026-11-09 起）：系统减少动态效果、或在设置里选了「只淡入淡出」时别做位移和缩放，和 Forsion 自己的界面同一个判据。

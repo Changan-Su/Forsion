@@ -1,3 +1,4 @@
+import { addSpaceToDesktop } from './spaceShortcut'
 import { windowKind } from './windowKind'
 /** 用户自定义 Space(L0 数据 Space):~/.tangu/spaces/<slug>/space.json → registerSpace。
  *  设计:Space=纯数据布局配方(只组合已注册视图,无信任问题,可自建/market 分发);
@@ -85,6 +86,7 @@ const userIds = new Map<string, string>()
 const pluginSpaceJson = new Map<string, string>()
 /** 已注册插件 Space 的自绘图标:只换了图就原地重注册(不走注销那条 —— 它会把正在用的 Space 打回 tangu)。 */
 const pluginSpaceIcon = new Map<string, string | undefined>()
+const automaticShortcuts = new Set<string>()
 let pluginOnlyStartupResolved = false
 /** Recipe migrations can happen after WorkspaceHost has already restored the previous run's current layout:
  * plugin views and their bundled Spaces are loaded asynchronously. Keep the migration pending until the
@@ -342,7 +344,7 @@ export function settleAsyncStartupSpace(): void {
   if (final) asyncStartupSpaceResolved = true
 }
 async function loadUserSpacesOnce(): Promise<void> {
-  const list = await window.tangu?.spacesList?.().catch(() => null)
+  const list = await window.tangu?.spacesList?.(readDisabledPluginIds()).catch(() => null)
   if (!list) return // 无桥(Web/移动)→ 不装载;空数组仍需走注销分支(最后一个插件被卸时清干净)
   const appVersion = await window.tangu?.appVersion?.().catch(() => null) ?? null
   const disabled = new Set(readDisabledPluginIds())
@@ -399,6 +401,19 @@ async function loadUserSpacesOnce(): Promise<void> {
       pluginSpaceIcon.set(id, w.iconUrl)
     } else {
       installUserSpace(w.spec, w.dirSlug, w.iconUrl) // 目录名可与 id 不同(market 目录来自上架名称 slug)
+    }
+  }
+  if (windowKind() === 'main' && window.tangu?.addSpaceToDesktop) {
+    for (const [id, { plugin, spec }] of wanted) {
+      if (!plugin || !running.has(plugin) || !spec.autoDesktopShortcut ||
+          pluginSpaceOwner.get(id) !== plugin || automaticShortcuts.has(id)) continue
+      automaticShortcuts.add(id)
+      void addSpaceToDesktop(id, {
+        plugin,
+        isCurrent: () => pluginSpaceOwner.get(id) === plugin && usePluginStore.getState().activeIds.includes(plugin) &&
+          !readDisabledPluginIds().includes(plugin) &&
+          pluginSpaceJson.get(id) === wanted.get(id)?.raw,
+      }).then((done) => { if (!done) automaticShortcuts.delete(id) })
     }
   }
   // 启动恢复时活动 Space 可能正是刚注册的用户 Space:installEngine 曾按 fallback(tangu)设过侧栏默认,补正。

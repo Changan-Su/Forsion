@@ -8,15 +8,14 @@
  * 各平台落什么:
  *   · Windows:`.lnk`(shell.writeShortcutLink),目标 = Forsion.exe + 链接,图标 = 落在 userData 的 .ico,
  *     并带一个按 Space 分的 AppUserModelID —— Space 窗口用同一个 id(setAppDetails),任务栏上就是单独的一格、能单独固定。
- *   · macOS:一个**小 .app**(Info.plist + 一行 `open <链接>` 的脚本 + AppIcon.icns)。不用造物那种 .webloc:
- *     .webloc 是文档图标,不像一个 App,也放不进 Dock 左侧。脚本 .app 本机写出来不带隔离属性(quarantine),
- *     Gatekeeper 不审它,能直接双击;LSUIElement 让它跑那一下不在 Dock 里冒头。
- *     ⚠️ 限制:窗口归 Forsion 进程所有,Dock 上亮的是 Forsion 的图标,不会另起一个 Space 的 Dock 图标(Electron 做不到按窗分 Dock)。
+ *   · macOS:Space uses a native .app that follows the detached window via macSpaceLauncher.ts.
+ *     Older Space shortcuts and Unit shortcuts use a short-lived script that opens the same deep link.
  *   · Linux:`.desktop`,Icon 指向 userData 里的 png。
  *
  * 无 Electron 依赖(纯 node,可测);图标缩放、写 .lnk 由宿主注入。
- * ponytail: 只管放一个能点的东西,不做删除 / 改名同步;Space 被删了,快捷方式打开的窗会停在「这个 Space 还没准备好」。
  */
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -28,6 +27,18 @@ import { desktopValue, detailOf, execArg, safeShortcutName, serialShortcutWrite,
 export const SPACE_WINDOW_PARAM = 'window'
 export const SPACE_WINDOW_VALUE = 'standalone'
 const MAX_SUFFIX = 99
+const run = promisify(execFile)
+
+export interface MacSpaceLauncherSource {
+  binary: string
+  socket: string
+  hostId: string
+  hostPath: string
+  profile: string
+}
+
+export const spaceShortcutReceipt = (dir: string, id: string): string =>
+  spaceShortcutMetaFile(path.join(dir, 'automatic'), id)
 
 export const isSpaceId = (id: unknown): id is string => typeof id === 'string' && SPACE_ID_RE.test(id)
 
@@ -194,6 +205,7 @@ export interface SpaceShortcutOpts {
   appImage?: string
   /** mac:装进 .app 的图标;没有就是无图标的 .app(Finder 画通用 App 图标)。 */
   icns?: Buffer
+  macLauncher?: MacSpaceLauncherSource & { content: Buffer }
   /** linux:Icon= 指向的 png 路径。 */
   iconPath?: string
 }
@@ -220,7 +232,12 @@ export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Pl
       '\t<key>CFBundleShortVersionString</key>\t<string>1.0</string>',
       '\t<key>CFBundleVersion</key>\t<string>1</string>',
       ...(opts.icns ? ['\t<key>CFBundleIconFile</key>\t<string>AppIcon</string>'] : []),
-      '\t<key>LSUIElement</key>\t<true/>',
+      ...(opts.macLauncher ? [
+        `\t<key>ForsionSpaceSocket</key>\t<string>${xml(opts.macLauncher.socket)}</string>`,
+        `\t<key>ForsionSpaceHost</key>\t<string>${xml(opts.macLauncher.hostId)}</string>`,
+        `\t<key>ForsionSpaceHostPath</key>\t<string>${xml(opts.macLauncher.hostPath)}</string>`,
+        `\t<key>ForsionSpaceProfile</key>\t<string>${xml(opts.macLauncher.profile)}</string>`,
+      ] : ['\t<key>LSUIElement</key>\t<true/>']),
       '\t<key>NSHighResolutionCapable</key>\t<true/>',
       `\t<key>${kind.plistKey}</key>\t<string>${xml(opts.id)}</string>`,
       '</dict>',
@@ -235,7 +252,7 @@ export function windowShortcutPlan(kind: WindowShortcutKind, platform: NodeJS.Pl
     const files: Array<{ rel: string; content: string | Buffer; mode?: number }> = [
       { rel: 'Contents/Info.plist', content: plist },
       { rel: 'Contents/PkgInfo', content: 'APPL????' },
-      { rel: 'Contents/MacOS/launch', content: script, mode: 0o755 },
+      { rel: 'Contents/MacOS/launch', content: opts.macLauncher?.content ?? script, mode: 0o755 },
     ]
     if (opts.icns) files.push({ rel: 'Contents/Resources/AppIcon.icns', content: opts.icns })
     return { kind: 'bundle', name: stem, files }
@@ -271,6 +288,9 @@ export interface CreateSpaceShortcutDeps {
   iconDir: string
   /** 渲染层画好的源图,按尺寸给出 PNG(宿主用 nativeImage 缩放);没有图标就不传。 */
   iconPng?: (size: number) => Buffer | undefined
+  macLauncher?: MacSpaceLauncherSource
+  automatic?: boolean
+  readShortcutArgs?: (path: string) => string | undefined
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number; appUserModelId?: string }) => boolean
   /** 排到队头、动盘之前再核一次请求还作不作数(设备快捷方式:发起时的账号没换);false = 什么都不写。 */
   stillCurrent?: () => boolean
@@ -308,7 +328,23 @@ async function writeIconFile(file: string | null, data: Buffer | undefined): Pro
 /** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名并发会写到同一个文件上(Codex 评审)。
  *  造物 / Space / 设备三种快捷方式排同一条队列(productShortcut.serialShortcutWrite)。 */
 export function createSpaceShortcut(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
-  return createWindowShortcut(SPACE_SHORTCUT, space, deps) as Promise<ShortcutResult>
+  return serialShortcutWrite(async () => {
+    if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
+    if (!isSpaceId(space.id)) return { ok: false, code: 'not_found' }
+    const receipt = spaceShortcutReceipt(deps.iconDir, space.id)
+    if (deps.automatic) {
+      // Any local path here records a completed creation, even if the user has
+      // since removed or moved the shortcut. Unknown read failures fail closed.
+      try { return { ok: true, path: await fs.readFile(receipt, 'utf8') } } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { ok: false, code: 'error', detail: detailOf(error) }
+      }
+    }
+    const result = await createWindowShortcutNow(SPACE_SHORTCUT, space, deps) as ShortcutResult
+    if (result.ok && !await writeIconFile(receipt, Buffer.from(result.path))) {
+      return { ok: false, code: 'error', detail: 'Could not save the shortcut record' }
+    }
+    return result
+  })
 }
 
 /** 排到队头真正开始写之前,stillCurrent() 说「请求已经不作数了」(比如发起时的账号已经换掉)→ 什么都不写。 */
@@ -339,9 +375,12 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
     } else if (platform === 'linux') {
       iconPath = await writeIconFile(spaceIconFile(deps.iconDir, space.id, platform, kind), deps.iconPng?.(LINUX_ICON_SIZE))
     }
+    const macLauncher = platform === 'darwin' && deps.macLauncher
+      ? { ...deps.macLauncher, content: await fs.readFile(deps.macLauncher.binary) }
+      : undefined
     plan = windowShortcutPlan(kind, platform, {
       id: space.id, name: space.name, fallbackName: deps.fallbackName,
-      execPath: deps.execPath, appImage: deps.appImage, icns, iconPath,
+      execPath: deps.execPath, appImage: deps.appImage, icns, iconPath, macLauncher,
     })
   } catch (e) { return { ok: false, code: 'error', detail: detailOf(e) } }
   if (!plan) return { ok: false, code: 'unsupported' }
@@ -350,9 +389,37 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
   const ext = plan.kind === 'bundle' ? '.app' : plan.kind === 'lnk' ? '.lnk' : '.desktop'
   try {
     if (!(await fs.stat(base)).isDirectory()) return { ok: false, code: 'error', detail: `Desktop path is not a directory: ${base}` }
-    for (let n = 0; n <= MAX_SUFFIX; n++) {
-      const target = path.join(base, n === 0 ? `${plan.name}${ext}` : `${plan.name} (${n})${ext}`)
+    // Find existing shortcuts by Space identity before choosing the first free
+    // name, including renamed shortcuts and ones created under another locale.
+    let existingMac: string | undefined
+    if (deps.automatic || deps.macLauncher) {
+      for (const entry of await fs.readdir(base, { withFileTypes: true })) {
+        if (!entry.name.endsWith(ext) || (plan.kind === 'bundle' ? !entry.isDirectory() : !entry.isFile())) continue
+        const candidate = path.join(base, entry.name)
+        if (deps.macLauncher) {
+          const existing = await matchesMacBundle(candidate, kind, space.id, deps.macLauncher.socket)
+          if (existing === 'native' && deps.automatic) return { ok: true, path: candidate }
+          if (existing && !existingMac) existingMac = candidate
+        } else if (await matchesShortcut(candidate, kind, space.id, deps)) return { ok: true, path: candidate }
+      }
+    }
+    const candidates = Array.from({ length: MAX_SUFFIX + 1 }, (_, n) =>
+      path.join(base, n === 0 ? `${plan.name}${ext}` : `${plan.name} (${n})${ext}`))
+    if (existingMac) candidates.unshift(existingMac)
+    for (const target of new Set(candidates)) {
       if (path.dirname(target) !== base) return { ok: false, code: 'error', detail: 'Shortcut name escaped the desktop directory' }
+      if (plan.kind === 'bundle' && deps.macLauncher) {
+        const { binary, socket } = deps.macLauncher
+        const matches = () => matchesMacBundle(target, kind, space.id, socket)
+        const existing = await matches()
+        if (deps.automatic && existing === 'native') return { ok: true, path: target }
+        if (stale()) return { ok: false, code: 'account_changed' }
+        if (!existing && await taken(target)) continue
+        if (await publishMacBundle(target, plan, binary, stale, existing ? async () => !!await matches() : undefined)) {
+          return { ok: true, path: target }
+        }
+        continue
+      }
       if (plan.kind === 'lnk') {
         // writeShortcutLink 的 create 会覆盖:先查再写(同造物那条,竞态接受)。
         if (await taken(target)) continue
@@ -405,4 +472,79 @@ async function createWindowShortcutNow(kind: WindowShortcutKind, space: { id: st
     }
     return { ok: false, code: 'error', detail: `More than ${MAX_SUFFIX} shortcuts named ${plan.name}` }
   } catch (e) { return { ok: false, code: 'error', detail: detailOf(e) } }
+}
+
+async function matchesMacBundle(target: string, kind: WindowShortcutKind, id: string, endpoint?: string): Promise<'native' | 'legacy' | false> {
+  try {
+    if (!(await fs.lstat(target)).isDirectory()) return false
+    const plist = await fs.readFile(path.join(target, 'Contents', 'Info.plist'), 'utf8')
+    if (!plist.includes(`<key>${kind.plistKey}</key>\t<string>${xml(id)}</string>`) ||
+        !plist.includes(`<key>CFBundleIdentifier</key>\t<string>${xml(windowShortcutBundleId(kind, id))}</string>`)) return false
+    if (endpoint && plist.includes(`<key>ForsionSpaceSocket</key>\t<string>${xml(endpoint)}</string>`)) return 'native'
+    const launch = await fs.readFile(path.join(target, 'Contents', 'MacOS', 'launch'), 'utf8')
+    return launch === `#!/bin/sh\n${kind.scriptComment}\nexec /usr/bin/open "${windowShortcutLink(kind, id)}"\n` && 'legacy'
+  } catch { return false }
+}
+
+async function matchesShortcut(target: string, kind: WindowShortcutKind, id: string, deps: CreateSpaceShortcutDeps): Promise<boolean> {
+  const link = windowShortcutLink(kind, id)
+  try {
+    if (target.endsWith('.app')) return !!await matchesMacBundle(target, kind, id, deps.macLauncher?.socket)
+    if (!(await fs.lstat(target)).isFile()) return false
+    if (target.endsWith('.lnk')) return deps.readShortcutArgs?.(target) === `"${link}"`
+    return (await fs.readFile(target, 'utf8')).split('\n').some((line) => line.startsWith('Exec=') && line.endsWith(` ${execArg(link)}`))
+  } catch { return false }
+}
+
+async function publishMacBundle(target: string, plan: Extract<SpaceShortcutPlan, { kind: 'bundle' }>, launcher: string, stale: () => boolean, replace?: () => Promise<boolean>): Promise<boolean> {
+  // A hidden sibling on the same volume keeps unsigned and partial apps out
+  // of Finder and lets the launcher publish without overwriting another app.
+  const stage = await fs.mkdtemp(path.join(path.dirname(target), '.forsion-space-'))
+  const bundle = path.join(stage, path.basename(target))
+  let retainStage = false
+  try {
+    for (const file of plan.files) {
+      const output = path.join(bundle, file.rel)
+      await fs.mkdir(path.dirname(output), { recursive: true })
+      await fs.writeFile(output, file.content, { mode: file.mode ?? 0o644 })
+    }
+    await run('/usr/bin/codesign', ['--force', '--sign', '-', bundle])
+    const original = replace ? await fs.lstat(target).catch(() => null) : null
+    if (replace && (!original || !await replace())) return false
+    if (stale()) return false
+    try {
+      await run(launcher, ['--publish-bundle', replace ? 'replace' : 'create', bundle, target])
+    } catch (error) {
+      const code = (error as { code?: number }).code
+      if (code === 2 || (code === 3 && replace)) return false
+      if (code !== 3) throw error
+      // Some Desktop volumes do not implement exclusive rename. Reserve an
+      // empty directory so regular rename cannot replace an existing app.
+      try { await fs.mkdir(target) } catch (failure) {
+        if ((failure as NodeJS.ErrnoException).code === 'EEXIST') return false
+        throw failure
+      }
+      try { await fs.rename(bundle, target) } catch (failure) {
+        await fs.rmdir(target).catch(() => {}) // leaves nonempty/user-owned items alone
+        throw failure
+      }
+    }
+    if (original) {
+      // The Desktop is shared with Finder and sync tools. Verify what we
+      // displaced before removing it, even if the target changed mid-swap.
+      retainStage = true
+      const displaced = await fs.lstat(bundle)
+      if (displaced.dev !== original.dev || displaced.ino !== original.ino) {
+        await run(launcher, ['--publish-bundle', 'replace', bundle, target]).catch(() => {
+          throw new Error(`Could not restore the Desktop item; it is saved at ${bundle}`)
+        })
+        retainStage = false
+        return false
+      }
+      retainStage = false
+    }
+    return true
+  } finally {
+    if (!retainStage) await fs.rm(stage, { recursive: true, force: true }).catch(() => {})
+  }
 }

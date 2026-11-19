@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.126.0
+  version: 1.127.0
   author: Forsion
   category: Forsion
 ---
@@ -169,6 +169,8 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 ## Space(samples/forsion-sample-space)
 
 `space.json` 声明视图布局配方(引用视图类型 id;插件视图用 `plugin:<插件id>:<视图id>` 并在 `requires.views` 声明)。纯数据,无代码。
+
+For a Space bundled at `spaces/<slug>/space.json`, `"autoDesktopShortcut": true` asks the installed desktop host to create a shortcut once when it registers the enabled plugin’s Space. Deleting or moving it is respected across reloads, updates, and restarts. Users can create it again from the Space menu. Older hosts ignore this field.
 
 ### 图标:`icon` + `iconFile`(2026-10-04 起)
 
