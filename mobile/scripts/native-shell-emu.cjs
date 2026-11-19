@@ -4143,11 +4143,52 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-findbar')", 5000), 'find did not open the find bar')
     const bar = await elRect("document.querySelector('.amx-findbar')")
     const capL = h.byId(ui(), 'nativeChrome.capLeft')
-    assert.ok(bar && bar.top >= 0 && bar.bottom <= screen.h && (!capL || bar.top >= capL.rect.bottom - 2), `the find bar is off screen or under the capsules (${bar && fmt(bar)}, capsule ${capL && fmt(capL.rect)})`)
     shot('05d-chat-find-bar')
+    assert.ok(bar && bar.top >= 0 && bar.bottom <= screen.h && (!capL || bar.top >= capL.rect.bottom - 2), `the find bar is off screen or under the capsules (${bar && fmt(bar)}, capsule ${capL && fmt(capL.rect)})`)
+    const sideways = bar.left < -1 || bar.right > screen.w + 1 ? `the find bar runs off the screen sideways (${fmt(bar)} on a ${screen.w}px screen)` : null
+    if (sideways) console.log(`  ${sideways}`)
+    const where = async () => JSON.stringify({ bar: await cdp.eval("!!document.querySelector('.amx-findbar')"), nav: await cdp.eval(nav), space: await cdp.eval("document.querySelector('.mb-shell')?.dataset.space"), ime: imeShown(), focus: await cdp.eval("document.activeElement?.tagName + '.' + String(document.activeElement?.className || '').slice(0, 30)") })
+    console.log(`  find bar open: ${await where()}`)
+    h.key(4)
+    await h.pause(800)
+    const back1 = JSON.parse(await where())
+    console.log(`  after Back #1: ${JSON.stringify(back1)}`)
+    // system Back with the find bar up closes the bar and stays on the conversation (it belongs to this page)
+    const backIssue = back1.bar || back1.nav !== 'detail' ? `system Back with the find bar up did not just close it: ${JSON.stringify(back1)}` : null
+    if (await cdp.eval("!!document.querySelector('.amx-findbar')")) { h.key(4); await h.pause(800); console.log(`  after Back #2: ${await where()}`) }
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('.amx-findbar')", 4000), 'control: the find bar did not close')
+    const after = await cdp.eval(nav)
+    console.log(`  after closing the find bar: nav ${after}`)
+    if (after !== 'detail') await openChat('E2E Session One') // the Backs that closed it went one level further
+    // … also with the focus in the message box (keyboard put away, focus left there): the find command steps aside for a
+    // code editor that has the focus, and the chat's input is not one of those
+    const field = "document.querySelector('.mb-main .t2c-input-wrap textarea, .mb-main .t2c-input-wrap [contenteditable=\\'true\\'], .mb-main .t2c-input-wrap [contenteditable=\\'\\']')"
+    await tapEl(field)
+    for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(150)
+    await h.pause(500)
+    // (putting the keyboard away with Back also takes the focus out of the box — measured 2026-11-19: activeElement = BODY —
+    //  so ⋯ is opened with the keyboard still up, the one way the focus is in the box when find is asked for)
+    const focusOf = () => cdp.eval(`(() => { const a = document.activeElement; const f = ${field}; return { field: !!a && !!f && (a === f || f.contains(a)), tag: a?.tagName || null, cls: String(a?.className || '').slice(0, 60), cm: !!a?.closest?.('.cm-editor') } })()`)
+    const focus = await focusOf()
+    console.log(`  focus before ⋯: ${JSON.stringify(focus)}, keyboard ${imeShown() ? 'up' : 'down'}`)
+    assert.ok(focus.field, `control: a tap on the message box did not put the focus there (${JSON.stringify(focus)})`)
+    shot('05e0-chat-input-focused')
+    list = await open()
+    console.log(`  focus with ⋯ open: ${JSON.stringify(await focusOf())}, keyboard ${imeShown() ? 'up' : 'down'}`)
+    await tapId('nativeSheet.item.page:find', list)
+    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-findbar')", 5000), 'find did not open the find bar with the focus in the message box')
+    await h.pause(400)
+    const bar2 = await elRect("document.querySelector('.amx-findbar')")
+    const capL2 = h.byId(ui(), 'nativeChrome.capLeft')
+    assert.ok(bar2 && bar2.top >= 0 && bar2.bottom <= screen.h && (!capL2 || bar2.top >= capL2.rect.bottom - 2), `with the focus in the message box the find bar is off screen or under the capsules (${bar2 && fmt(bar2)}, capsule ${capL2 && fmt(capL2.rect)})`)
+    shot('05e-chat-find-bar-from-input')
+    assert.ok(bar2.left >= -1 && bar2.right <= screen.w + 1, `with the focus in the message box the find bar runs off the screen sideways (${fmt(bar2)} on a ${screen.w}px screen)`)
+    if (imeShown()) { h.key(4); await h.pause(600) }
     h.key(4)
     await h.pause(600)
     if (await cdp.eval("!!document.querySelector('.amx-findbar')")) { h.key(4); await h.pause(600) }
+    assert.deepEqual([sideways, backIssue].filter(Boolean), [], 'the find bar (opened from ⋯)')
   })
 
   // 2026-11-18: on a phone ⋯ holds only the page's own things. The two global switches it carried (theme, command panel)
