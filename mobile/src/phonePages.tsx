@@ -6,7 +6,7 @@
  *  哪个入口进哪一页由 lcl moreSheet.ts 的 phonePageItems 定:点得了的每一项恰好在一页里出现一次。
  *  红点:Space 的点(收件箱未读…)画在格子上;入口的点画在那一行;Dock 上那一格的点由外壳合(dockBadges)。 */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { ChevronRight, UserRound } from 'lucide-react'
+import { ChevronRight, SlidersHorizontal, UserRound } from 'lucide-react'
 import {
   FREQUENT_MAX, dispatchNativeChromeSpace, dockPicks, frequentSpaceIds, installPhonePages, label, moreRowLabel, objectContextMenuHandler,
   phoneAppsSpaceIds, phonePageItems, presentNativeChecklist, saveFrequent, storedFrequent, subscribeFrequent, useDotted, useRibbonStore, useSpaceStore,
@@ -117,7 +117,7 @@ function AppsPage() {
       {rest.length > 0 && <Section title={t('phonePages.all')}><div className="pp-grid">{rest.map(tile)}</div></Section>}
       <Section>
         {launchers.map((it) => ribbonRow(it, dotted, it.id === 'rb-market' ? { detail: t('phonePages.marketDetail') } : {}))}
-        {candidates.length > 0 && <Row id="choose-frequent" icon={null} title={t('phonePages.chooseFrequent')} onClick={() => { void choose() }} />}
+        {candidates.length > 0 && <Row id="choose-frequent" icon={<SlidersHorizontal size={22} />} title={t('phonePages.chooseFrequent')} onClick={() => { void choose() }} />}
       </Section>
     </div>
   )
