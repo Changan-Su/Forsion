@@ -47,7 +47,7 @@ class NativeSheetPlugin : Plugin() {
                 NativeSheetHost(
                     payload,
                     onAnswer = { answer -> if (requestId == payload.requestId) resolve(if (answer != null && payload.accepts(answer)) answer else null) },
-                    onGone = { if (surface === view) { removeSurface(); reportGone() } },
+                    onGone = { if (surface === view) { removeSurface(); reportGone(payload.requestId) } },
                 )
             }
         }
@@ -86,12 +86,13 @@ class NativeSheetPlugin : Plugin() {
      * The sheet has finished going away: tell the page. An answer settles the call while the sheet is still animating out,
      * and the page acts on it at once — a text field it focuses then (the command panel opened from the avatar menu) gets
      * no keyboard while this view covers the WebView. Focused again after this, it does (mobile/src/nativeSheet.ts).
-     * Only on the animated exit: a replacement brings the next sheet straight up.
+     * Only on the animated exit: a replacement brings the next sheet straight up. Carries the request it was, so the page
+     * can tell a sheet that left from the one that is up now.
      */
-    private fun reportGone() {
+    private fun reportGone(id: String) {
         val web = bridge.webView
         if (!web.hasFocus()) web.requestFocus()
-        bridge.triggerWindowJSEvent("forsion:native-sheet-gone")
+        bridge.triggerWindowJSEvent("forsion:native-sheet-gone", JSObject().put("requestId", id).toString())
     }
 
     /** Cancel whatever is open, without animation (replacement, reload, destroy, JS abort). */

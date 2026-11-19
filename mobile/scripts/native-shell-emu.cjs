@@ -3046,13 +3046,13 @@ const tabCountText = (list) => {
     await toSpace('amadeus')
     const side = await cdp.eval('window.amadeusVaultMode.side')
     if (side !== 'local') await switchVault('local')
-    let made = ''
+    const pages = () => cdp.eval('window.amadeus.listPages().then((p) => JSON.stringify(p))').then(JSON.parse)
+    const before = new Set(await pages())
     try {
       assert.ok(await h.waitPage(cdp, `${nav} === 'list' && !!document.querySelector('.mb-drawer--left [data-act="list-fab"]')`, 8000), 'no main button on the notes list')
       await tapEl(`document.querySelector('.mb-drawer--left [data-act="list-fab"]')`)
       assert.ok(await h.waitPage(cdp, `${nav} === 'detail' && !!document.querySelector('.mb-main .amx-mbar')`, 8000), 'the main button did not open a new note with its capsule')
       await h.pause(900)
-      made = await cdp.eval("document.querySelector('.mb-main .amx-title-input')?.value || ''")
       await tapEl("document.querySelector('.mb-main .ProseMirror')")
       assert.ok(await h.waitPage(cdp, "!!document.activeElement?.closest?.('.mb-main .ProseMirror')", 4000), 'a tap on the body did not put the caret in the note')
       for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(150)
@@ -3072,7 +3072,8 @@ const tabCountText = (list) => {
     } finally {
       if (imeShown()) { h.key(4); await h.pause(500) }
       if (await cdp.eval(`${nav} === 'detail'`)) { await tapId('nativeChrome.left').catch(() => {}); await h.pause(800) }
-      if (/^(untitled|未命名)/i.test(made)) await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(`${made}.md`)}).then(() => true, () => true)`).catch(() => {})
+      // the note the main button made (the list before and after; a new note's title field is empty, its name is the file's)
+      for (const p of (await pages().catch(() => [])).filter((x) => !before.has(x))) await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(p)}).then(() => true, () => true)`).catch(() => {})
       if (side !== 'local') await switchVault(side)
     }
   })
@@ -3085,8 +3086,9 @@ const tabCountText = (list) => {
     await toSpace('amadeus')
     const side = await cdp.eval('window.amadeusVaultMode.side')
     if (side !== 'cloud') await switchVault('cloud')
-    // the card lists what the collab seam answers; the fixture account has no cloud vault behind it
-    const stubbed = await cdp.eval(`(() => { if (window.amadeusCollab) return false
+    // the card lists what the collab seam answers; the fixture account has no cloud vault behind it, so the real seam
+    // (installed with the cloud side) is set aside for the check and put back after
+    await cdp.eval(`(() => { window.__e2eCollab = window.amadeusCollab
       window.amadeusCollab = { listVaults: async () => [{ id: 'v1', name: '我的库' }, { id: 'v2', name: 'A team vault with a rather long English name' }], activeVaultId: async () => 'v1', switchVault: () => {}, sharedWithMe: async () => [], listAllShares: async () => [], publishes: async () => [] }
       return true })()`)
     try {
@@ -3103,7 +3105,7 @@ const tabCountText = (list) => {
       assert.deepEqual(after, { card: false, space: 'amadeus', nav: 'list' }, 'system Back did not close just the card')
     } finally {
       if (await cdp.eval("!!document.querySelector('.amxc-x')")) { await tapEl("document.querySelector('.amxc-x')").catch(() => {}); await h.pause(400) }
-      if (stubbed) await cdp.eval('(delete window.amadeusCollab, true)')
+      await cdp.eval('(() => { if (window.__e2eCollab) window.amadeusCollab = window.__e2eCollab; else delete window.amadeusCollab; delete window.__e2eCollab; return true })()')
       if (side !== 'cloud') await switchVault(side)
     }
   })
