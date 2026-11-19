@@ -15,6 +15,7 @@
 //  D16 从 ⠿ 道斜进正文宽度内的文末续写区 → 只剩一根线(修前:页边那根没收,两根同在)
 //  D17 贴边自动滚远了再放进列表项当子项 → 视图不往回跳(修前:选区留在源处,scrollIntoView 一跳几百 px)
 //  D18 按住复制键拖到源块紧邻的缝 → 复制成功(修前:落点库按起拖时的 move 当「落回自己」拒掉)
+//  D19 单按 Alt 不收把手栏;打字收起后移到 ＋ 当场点下 → 点得中(修前:按帧合并,点击落在还没显出的栏上;check:menus B19c)
 //  第 2 条 自动滚动按帧 + 滚动后原地重判
 //  D5 长文贴 pane 下沿按住不动 → pane 滚下去;松手落在指针下那块附近(修前:落回滚动前那条缝,偏 ~290px)
 //  第 3 条 拖影
@@ -614,6 +615,36 @@ async function main() {
     const doc = await shape(p)
     check('D18 复制键 + 源块下沿:出一根线', !!during && during.length === 1 && !during[0].v, JSON.stringify(during))
     check('D18 松手复制出一份(段3 两份、段4 还在后面)', doc.filter((n) => n === '段3').length === 2 && doc.indexOf('段4') > doc.lastIndexOf('段3'), JSON.stringify(doc))
+    await p.close()
+  }
+
+  // ── D19 修饰键不收把手栏;收起后移过去当场点 ＋ 也点得中 ───────────────────────────────
+  {
+    const p = await openPage(browser, SEED_SHORT)
+    const t2 = await rectOf(p, 2)
+    await p.mouse.click(t2.x + t2.w - 4, t2.y + t2.h / 2) // 光标进段2,keydown 才落在编辑器上
+    const a = await rectOf(p, 3)
+    const h = await handleAt(p, a.x + 30, a.y + a.h / 2)
+    let altShow = null
+    let plus = null
+    if (h) {
+      plus = await p.evaluate(() => { const el = document.querySelector('.unified-gutter .block-add'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })
+      await p.keyboard.down('Alt')
+      altShow = (await gutterState(p))?.show
+      await p.keyboard.up('Alt')
+    }
+    check('D19 单按 Alt:把手栏不收', altShow === true, JSON.stringify({ altShow }))
+    let typedHide = null
+    let menu = false
+    if (plus) {
+      await p.keyboard.type('x')
+      typedHide = (await gutterState(p))?.show === false
+      await p.mouse.click(plus.x, plus.y) // 移过去 + 按下 + 松开,同一刻
+      menu = await p.waitForSelector('.slash-menu', { timeout: 1500 }).then(() => true, () => false)
+      await p.keyboard.press('Escape')
+    }
+    const doc = await shape(p)
+    check('D19 打字收起后移到 ＋ 当场点下:开出块选择器,新段在段3 之后', typedHide === true && menu && doc.indexOf('段3') >= 0 && doc[doc.indexOf('段3') + 1] === '', JSON.stringify({ typedHide, menu, doc: doc.slice(0, 5) }))
     await p.close()
   }
 
