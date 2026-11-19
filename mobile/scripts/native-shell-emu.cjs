@@ -1611,7 +1611,9 @@ const tabCountText = (list) => {
   // per-account unread set does not survive a reload (cloudAccountCache: a fresh anonymous scope every boot), and a
   // running session needs a live run stream. The other two kinds are covered by the payload unit test (Kotlin).
   await check('bottom bar badge: no dot at rest; a session waiting for the user puts a warning dot on Tangu; answered → the dot leaves', async () => {
-    const badges = (l) => h.byIdPrefix(l, 'nativeChrome.badge')
+    // the Space cells' dots. The "all" cell can carry the launchers' dot (an achievement earned by the checks above to
+    // claim: 2026-11-18 it moved there from ⋯) — that one is the "more dot" check's.
+    const badges = (l) => { const all = h.byId(l, 'nativeChrome.spacesAll'); return h.byIdPrefix(l, 'nativeChrome.badge').filter((n) => !all || !within(all, n)) }
     const refetch = () => cdp.eval("(document.dispatchEvent(new Event('visibilitychange')), true)") // attentionStore refetches when the page comes to the front
     const polled = () => stubLog.filter((l) => l.includes('/agent/approvals/pending')).slice(-3).join(' | ')
     await goHome()
@@ -1661,13 +1663,14 @@ const tabCountText = (list) => {
       assert.ok(!h.byId(r.hit, 'nativeChrome.more') && !h.byId(r.hit, 'nativeChrome.moreDot'), 'Home shows a ⋯ (or its dot)')
       assert.equal(h.byIdPrefix(r.hit, 'nativeChrome.badge').length, 1, 'more than one dot')
       shot('03g-more-dot')
-      // the tile behind it carries the dot's meaning as a line under its name (a native tile draws no dot)
+      // the tile behind it: a tile has no second line, so the dot's meaning is a dot on its square
+      // (`nativeSheet.itemDot.<id>`) and the screen reader's state; the other launchers carry none
       list = await openAllSpaces()
       const tile = h.byId(list, 'nativeSheet.item.go:rb-achievements')
       assert.ok(tile, `no achievements tile behind "all" (${ids(list)})`)
-      assert.ok(rowLabel(list, 'nativeSheet.item.go:rb-achievements').split(' ').length > 1 || list.some((n) => n !== tile && n.text && within(tile, n) && n.text !== rowLabel(list, 'nativeSheet.item.go:rb-achievements')),
-        `the achievements tile does not say what is waiting (${rowLabel(list, 'nativeSheet.item.go:rb-achievements')})`)
-      console.log(`  achievements tile: "${rowLabel(list, 'nativeSheet.item.go:rb-achievements')}"`)
+      const tileDot = h.byId(list, 'nativeSheet.itemDot.go:rb-achievements')
+      assert.ok(tileDot && within(tile, tileDot), `the achievements tile carries no dot (${ids(list, 'nativeSheet.itemDot.')})`)
+      assert.deepEqual(ids(list, 'nativeSheet.itemDot.'), ['go:rb-achievements'], 'dots on other tiles')
       shot('03h-all-sheet-dot')
       h.key(4)
       await waitSheet(false)
