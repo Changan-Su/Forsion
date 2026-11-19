@@ -542,7 +542,7 @@ const SCENES = {
     await page.waitForTimeout(500)
     const focused = await page.evaluate(() => document.activeElement?.matches('.hp-composer .t2c-ta') ?? false)
     const shown = await page.evaluate((q) => { const el = document.querySelector(q); return !!el && el.getBoundingClientRect().height > 0 }, `${HOME} .hp-composer`)
-    return [['a tap on the pill opens the full composer with the caret in it; the cards make room', shown && focused && !(await rect(page, `${HOME} .hp-card`))?.h, `focused=${focused}`]]
+    return [['a tap on the pill opens the full composer with the caret in it; Continue makes room', shown && focused && !(await rect(page, `${HOME} .hp-continue`))?.h, `focused=${focused}`]]
   },
   'home-closed': async (page) => {
     // something typed, then a touch outside the composer: it folds back into the pill, which now reads what was typed
@@ -1621,12 +1621,13 @@ const SCENES = {
       ['native host: the ticks come back in tick order', nativeTeam === '研究员 等 2 位', nativeTeam],
     ]
   },
-  // Home again, with something going on in each of the four: a session, a note opened last, an agent's appointment
-  // tomorrow, unread mail. The stores the cards read are filled directly — the stage answers neither the schedule nor
-  // the unread count — so this looks at the cards' lines, not at how those stores get their data.
+  // Home again, with something going on in each of what the four cards used to show: a session, a note opened last, an
+  // agent's appointment tomorrow, unread mail. The stores are filled directly — the stage answers neither the schedule nor
+  // the unread count — so this looks at where each shows now, not at how those stores get their data.
   'home-status': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'home')
+    await seedNotes(page) // the note opened last (recent views carry its time); on its own this scene has no vault yet
     const day = new Date(T0 + DAY)
     const at = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}T14:00`
     await page.evaluate(async ([prefs, schedule, inbox, when]) => {
@@ -1635,9 +1636,25 @@ const SCENES = {
       ;(await import(/* @vite-ignore */ inbox)).useInbox.setState({ unreadCount: 2 })
     }, [moduleUrl('../desktop/frontend/src/amadeusPrefs.ts'), moduleUrl('../desktop/frontend/src/stores/agentScheduleStore.ts'), moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), at])
     await page.waitForTimeout(600)
-    const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.dataset.spaceId || el.dataset.fixedId, el.querySelector('.hp-card-status').textContent]), '.mb-view[data-view="homepage"] .hp-card')
-    const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
-    return [['each default card says what is going on: the last session, the last note, the next appointment, unread mail', cards.map((c) => c[0]).join() === 'tangu,amadeus,calendar,inbox' && /^继续：/.test(of('tangu')) && of('amadeus') === '发版清单 2.13' && /14:00 周会$/.test(of('calendar')) && of('inbox') === '2 条未读', JSON.stringify(cards)]]
+    // Since 2026-11-19 a phone Home has no Space cards: what their status lines said lives elsewhere. The last session and
+    // the last note are Continue rows; unread mail is the unread dot on the Apps cell (the inbox is reached through Apps);
+    // the next appointment is not on Home any more (it is in Calendar).
+    const HOME = '.mb-view[data-view="homepage"]'
+    const cards = await page.evaluate((q) => document.querySelectorAll(q).length, `${HOME} .hp-card`)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.getAttribute('data-continue')), `${HOME} .hp-continue-row`)
+    // the dots are added by the host on their way to the native bar (the stage records the engine's state, before that):
+    // ask the host's own rule, with the cells the engine sent
+    const apps = await page.evaluate(async ({ hostUrl, spacesUrl }) => {
+      const host = await import(/* @vite-ignore */ hostUrl)
+      const { useSpaceStore } = await import(/* @vite-ignore */ spacesUrl)
+      const dots = host.dockBadges(window.__stage.state.spaces || [], host.spaceBadges(), useSpaceStore.getState().spaces.map((x) => x.id))
+      return { id: '@apps', badge: dots['@apps'] ?? null }
+    }, { hostUrl: moduleUrl('src/nativeChrome.ts'), spacesUrl: moduleUrl('../lcl/engine/spaceRegistry.ts') })
+    return [
+      ['no Space cards (and no card status lines) on a phone Home', cards === 0, String(cards)],
+      ['the last session and the last note are Continue rows', rows.some((k) => /^chat:/.test(k)) && rows.includes('note:项目/发版清单 2.13.md'), JSON.stringify(rows)],
+      ['unread mail is the unread dot on the Apps cell (the inbox is not in the dock)', apps?.badge?.kind === 'unread', JSON.stringify(apps)],
+    ]
   },
 }
 
