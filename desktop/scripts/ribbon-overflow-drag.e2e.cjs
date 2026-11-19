@@ -60,6 +60,7 @@ async function drag(page, fromSel, toSel, shot) {
     dragging: !!document.querySelector('.rb.rb-dragging'),
     fly: [...document.querySelectorAll('.rb-more-fly')].map((e) => e.dataset.rbMoreFly).join(),
     line: [...document.querySelectorAll('.rb-fly-row.drag-over, .rb-slot.drag-over')].map((e) => e.dataset.id + (e.classList.contains('below') ? ':below' : '')),
+    into: [...document.querySelectorAll('.drag-into')].map((e) => e.dataset.id || e.dataset.rbMore || e.dataset.rbFolder),
     preview: [...document.querySelectorAll('.rb-group .rb-slot')].filter((e) => e.style.transform).map((e) => e.dataset.id),
   }))
   if (shot) await page.screenshot({ path: shot, clip: { x: 0, y: 0, width: 360, height: page.viewportSize()?.height ?? 900 } })
@@ -181,6 +182,38 @@ async function harness() {
       // harness 每次加载都重设顺序,持久化只在 --electron 里验
       await zoneSuite(page, 'top', { label: mode })
       if (mode === 'native') await zoneSuite(page, 'bottom', { label: mode })
+      if (mode === 'native') await step('native F1 浮层里的收纳夹:顶层行拖到夹标题 = 收进夹,途中只亮夹标题一处', async () => {
+        await openFly(page, 'top')
+        const fid = await page.evaluate(() => { const s = window.__rb.getState(); s.addFolder('top', 'FX'); const f = window.__rb.getState().folders.at(-1); return f.id })
+        await page.waitForTimeout(400)
+        const rows = await flyIds(page, 'top'), d = rows[0], m = rows[1]
+        await page.evaluate(({ fid, m }) => window.__rb.getState().setFolderItems(fid, [m]), { fid, m })
+        await page.waitForTimeout(400)
+        const head = `${fly('top')} .rb-fly-folderhead[data-rb-folder="${fid}"]`
+        assert.equal(await page.locator(head).count(), 1, 'the folder is listed in the flyout')
+        // 先让顶层行画出线,再移到夹标题:旧线要灭
+        const a = await center(page, `${fly('top')} > [data-id="${d}"]`), mid1 = await center(page, `${fly('top')} > .rb-fly-row[data-id]:not([data-id="${d}"])`), h = await center(page, head)
+        await page.mouse.move(a.x, a.y); await page.mouse.down()
+        for (let i = 1; i <= 8; i++) await page.mouse.move(a.x, a.y + (mid1.y - a.y) * i / 8)
+        await page.waitForTimeout(120)
+        for (let i = 1; i <= 8; i++) await page.mouse.move(mid1.x + (h.x - mid1.x) * i / 8, mid1.y + (h.y - mid1.y) * i / 8)
+        await page.mouse.move(h.x + 1, h.y); await page.waitForTimeout(220)
+        const mid = await page.evaluate(() => ({ line: [...document.querySelectorAll('.drag-over')].map((e) => e.dataset.id), into: [...document.querySelectorAll('.drag-into')].length }))
+        await page.mouse.up(); await page.waitForTimeout(400)
+        assert.deepEqual(mid, { line: [], into: 1 }, 'only the folder head is lit')
+        assert.deepEqual(await page.evaluate((fid) => window.__rb.getState().folders.find((f) => f.id === fid).items, fid), [m, d])
+      })
+      if (mode === 'native') await step('native F2 整夹拖过浮层里的成员行:不画线、松手不动', async () => {
+        await openFly(page, 'top')
+        const f = await page.evaluate(() => window.__rb.getState().folders.at(-1))
+        const before = await layout(page, 'top')
+        const mid = await drag(page, `${fly('top')} .rb-fly-folderhead[data-rb-folder="${f.id}"]`, `${fly('top')} .rb-fly-group .rb-fly-row[data-id="${f.items[0]}"]`)
+        assert.ok(mid.dragging, JSON.stringify(mid))
+        assert.deepEqual(mid.line, [], `no insertion line: ${JSON.stringify(mid)}`)
+        assert.deepEqual(await layout(page, 'top'), before)
+        assert.deepEqual(await page.evaluate((id) => window.__rb.getState().folders.find((x) => x.id === id).items, f.id), f.items)
+        await page.keyboard.press('Escape'); await page.waitForTimeout(SETTLE)
+      })
       if (mode === 'native') await step('native X 命令区的图标先在本区悬停、再拖到 Space 区浮层上松手:谁都不动', async () => {
         await openFly(page, 'top')
         const top0 = await layout(page, 'top'), bot0 = await layout(page, 'bottom'), b = await barIds(page, 'bottom')
