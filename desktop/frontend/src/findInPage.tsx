@@ -34,7 +34,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
-import { cancelScrollToElement } from '@lcl/engine'
+import { cancelScrollToElement, useWorkspace } from '@lcl/engine'
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Replace, ReplaceAll } from 'lucide-react'
 import { registerMessages, useI18n } from './i18n'
 import './findInPage.css'
@@ -264,7 +264,19 @@ const PHONE_SHELL = '.mb-shell[data-native-chrome]:not([data-wide])'
 function onScreen(el: Element | null | undefined): boolean {
   if (!el || !el.getClientRects().length) return false
   const r = el.getBoundingClientRect()
-  return r.right > 1 && r.left < window.innerWidth - 1
+  return r.right > 1 && r.left < fixedFrame().right - 1
+}
+/** 量出来的坐标(getBoundingClientRect)里视口的右缘在哪、`position: fixed` 的一个样式 px 在里面占多少。
+ *  祖先上有 CSS zoom(手机整页放大)时这两套坐标不是一回事,而且内核新旧对量出来的口径还不一样:新的给屏上的位置,
+ *  旧的(没有 currentCSSZoom 的 WebView)给没缩放的局部 px —— 拿 window.innerWidth 去比,旧内核上条会横着出屏
+ *  (模拟器实测:左边切掉 50dp)。所以放一个探针量,不靠算;量不出(测试环境没有排版)按 1:1。 */
+function fixedFrame(): { right: number; unit: number } {
+  const probe = document.createElement('div')
+  probe.style.cssText = 'position:fixed;top:0;right:0;width:100px;height:0;visibility:hidden;pointer-events:none'
+  document.body.appendChild(probe)
+  const r = probe.getBoundingClientRect()
+  probe.remove()
+  return r.width > 0 ? { right: r.right, unit: r.width / 100 } : { right: window.innerWidth, unit: 1 }
 }
 /** 这一面顶上被悬浮的胶囊顶栏盖住多高:查找条要落在它下面。只有手机(原生外壳 × 竖屏单列)让 —— 那里的查找条是从
  *  页面自己的「⋯」开出来的;别的形态(桌面、Mini、网页抽屉、平板横屏)位置和原来一样,不读这个变量。 */
@@ -544,7 +556,12 @@ function FindBarBody(): React.ReactElement {
   useLayoutEffect(() => {
     const place = (): void => {
       const r = root?.getBoundingClientRect()
-      if (r && root) setBox({ top: r.top + chromeRoom(root) + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
+      if (!r || !root) return
+      // 手机:量出来的位置先换成这根条自己的样式 px 再落(见 fixedFrame)。别的形态照旧,一个数都不动。
+      if (root.closest(PHONE_SHELL)) {
+        const f = fixedFrame()
+        setBox({ top: (r.top + chromeRoom(root)) / f.unit + 8, right: Math.max(8, (f.right - r.right) / f.unit + 8) })
+      } else setBox({ top: r.top + 8, right: Math.max(8, window.innerWidth - r.right + 8) })
     }
     place()
     window.addEventListener('resize', place)
@@ -581,6 +598,13 @@ function FindBarBody(): React.ReactElement {
       window.removeEventListener('focusin', check)
       window.clearInterval(id)
     }
+  }, [root])
+
+  // 手机两级导航:列表和主区都一直挂着,换层只是滑走 —— 上面那条「根被摘掉就收」等不到。人离开这一面(进了一条 / 退回列表,
+  // 不管是点左上的返回、边缘滑还是系统返回)条就收,不留在另一面上搜不到东西。
+  useEffect(() => {
+    if (!root?.closest(PHONE_SHELL)) return
+    return useWorkspace.subscribe((s, prev) => { if (s.leftVisible !== prev.leftVisible) closeFindBar() })
   }, [root])
 
   // 正文变了(打字、聊天流式输出、切页)→ 重扫,否则 Range 还指着已经没了的文本。

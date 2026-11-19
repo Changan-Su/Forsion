@@ -32,7 +32,7 @@ import { VoiceCallBar } from '@/mini/VoiceCallView'
 import { getCallLayer, openCallLayer, subscribeCallLayer } from '@/services/realtimeCall'
 import { readTanguShell, TanguBtwHost } from '@/amadeus/plugins/tanguSeam'
 import { QuickFind, useQuickFind } from '@/quickFind'
-import { FindBar } from '@/findInPage'
+import { FindBar, closeFindBar, useFind } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -87,6 +87,9 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 再问壳:标签页 sheet /「⋯」菜单 / 编辑器浮层 / 设置二级页…开着 → 由它们接管(可取消事件)。
   const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
   if (taken) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true })) } }
+  // 页内查找条(对话页「⋯」里的「在这条对话里查找」、外接键盘的快捷键):它只听 Esc 和自己那颗 ✕。浮在这一页上面,
+  // 返回先收它;不接的话返回直接换了页,条还留在屏上。排在半屏 / 菜单之后 —— 那些是盖在它上面开的。
+  if (useFind.getState().open) return { run: () => closeFindBar() }
   const app = useApp.getState()
   // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
   // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
@@ -150,6 +153,7 @@ function useBrowserBack(): void {
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
         useCommandStore.subscribe((s, prev) => { if (s.paletteOpen !== prev.paletteOpen) changed() }),
+        useFind.subscribe((s, prev) => { if (s.open !== prev.open) changed() }),
         useApp.subscribe((s, prev) => {
           if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen || s.feedbackOpen !== prev.feedbackOpen) changed()
         }),
