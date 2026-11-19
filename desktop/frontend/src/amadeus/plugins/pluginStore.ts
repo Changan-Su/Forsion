@@ -1694,13 +1694,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (o.mount != null && typeof o.mount !== 'function') throw new TypeError('openDialog mount must be a function')
       if (!ctxAlive()) return { update() {}, close() {}, dispose() {} }
       let surf: import('./partsSurface').DialogSurface | null = null, cancelled = false
-      const pending = { ...o, width: o.width === 'md' ? 'md' as const : 'sm' as const,
-        // 对话框内容区记作本插件的表面(ctx.ui.capture / record 的归属):宿主登记,不靠 DOM 属性
-        ...(typeof o.mount === 'function' ? { mount: (el: HTMLElement) => { markPluginSurface(el, pluginId); return o.mount!(el) } } : {}) }
+      const pending = { ...o, width: o.width === 'md' ? 'md' as const : 'sm' as const }
       const dispose = scope.own('mount', () => { cancelled = true; surf?.close() }, 'dialog')
       void import('./partsSurface').then((m) => {
         if (cancelled) return
-        surf = m.openPluginDialog(pending, guard, () => { dispose.forget(); if (typeof pending.onClose === 'function') guard(pending.onClose) })
+        // 最后一个参数:整个对话框记作本插件的表面(ctx.ui.capture / record 的归属,宿主登记、不靠 DOM 属性)
+        surf = m.openPluginDialog(pending, guard, () => { dispose.forget(); if (typeof pending.onClose === 'function') guard(pending.onClose) }, 'primary', pluginId)
         if (cancelled) surf.close() // mount 里同步停用了插件 / 关了:那时 surf 还没赋值
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" dialog failed`, e))
       return {
@@ -1840,9 +1839,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const dispose = scope.own('mount', () => { cancelled = true; pop?.close() }, 'popover')
       void import('./partsSurface').then((m) => {
         if (cancelled) return
-        // popover 内容区记作本插件的表面(ctx.ui.capture / record 的归属)
-        const mine = { ...o, mount: (el: HTMLElement) => { markPluginSurface(el, pluginId); return o.mount(el) } }
-        pop = m.openPluginPopover(anchor, mine, guard, () => { dispose.forget(); if (typeof o.onClose === 'function') guard(o.onClose) })
+        pop = m.openPluginPopover(anchor, o, guard, () => { dispose.forget(); if (typeof o.onClose === 'function') guard(o.onClose) }, pluginId) // 最后一个参数:popover 记作本插件的表面
         if (cancelled) pop.close()
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" popover failed`, e))
       return { update: () => pop?.update(), dispose: () => dispose() }

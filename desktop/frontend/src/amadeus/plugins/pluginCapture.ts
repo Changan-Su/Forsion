@@ -45,30 +45,45 @@ interface Box { left: number; top: number; right: number; bottom: number }
 const boxOf = (r: { left: number; top: number; right: number; bottom: number }): Box => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom })
 const intersect = (a: Box, b: Box): Box => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) })
 
-/** 裁剪 `el` 的祖先(按包含块链近似):overflow 不是 visible、或 contain: paint 的那些。
- *  fixed 元素跳过祖先直到为 fixed 建包含块的那层(transform / filter / perspective / contain / will-change),
- *  absolute 跳到最近的定位祖先 —— 否则窗口级浮层会被它 DOM 上路过的滚动容器误判成「裁掉了」。 */
-function clippingAncestors(el: Element): Element[] {
-  const out: Element[] = []
+/** 排版上的父:被分进 slot 的元素跟着 slot 走(shadow 里的滚动容器裁它),否则组合树父。 */
+const layoutParent = (n: Element): Element | null => (n as HTMLElement).assignedSlot ?? composedParent(n)
+
+interface Clip { el: Element; x: boolean; y: boolean }
+
+/** 裁剪 `el` 的祖先(按包含块链近似),分轴记:overflow-x / -y 各自不是 visible 的那一轴、contain: paint 两轴都裁。
+ *  fixed 元素跳过祖先直到为 fixed 建包含块的那层(transform / translate / rotate / scale / filter / perspective / contain /
+ *  will-change),absolute 跳到最近的定位祖先 —— 否则窗口级浮层会被它 DOM 上路过的滚动容器误判成「裁掉了」。
+ *  display: contents 的包装没有盒子:既不裁,也不当包含块。 */
+function clippingAncestors(el: Element): Clip[] {
+  const out: Clip[] = []
   let pos = getComputedStyle(el).position
-  for (let n = composedParent(el); n && n !== document.documentElement; n = composedParent(n)) {
+  for (let n = layoutParent(el); n && n !== document.documentElement; n = layoutParent(n)) {
     const cs = getComputedStyle(n)
+    if (cs.display === 'contents') continue
     const set = (v: string | undefined): boolean => !!v && v !== 'none' // 空串(没实现的引擎)按 none 算
-    const fixedBlock = set(cs.transform) || set(cs.perspective) || set(cs.filter)
-      || /paint|layout|strict|content/.test(cs.contain || '') || /transform|perspective|filter/.test(cs.willChange || '')
+    const fixedBlock = set(cs.transform) || set(cs.getPropertyValue('translate')) || set(cs.getPropertyValue('rotate')) || set(cs.getPropertyValue('scale'))
+      || set(cs.perspective) || set(cs.filter)
+      || /paint|layout|strict|content/.test(cs.contain || '') || /transform|translate|rotate|scale|perspective|filter/.test(cs.willChange || '')
     const block = pos === 'fixed' ? fixedBlock : pos === 'absolute' ? cs.position !== 'static' || fixedBlock : true
     if (!block) continue
     const clips = (v: string | undefined): boolean => !!v && v !== 'visible'
-    if (clips(cs.overflowX) || clips(cs.overflowY) || clips(cs.overflow) || /paint|strict|content/.test(cs.contain || '')) out.push(n)
+    // 分轴读;只给了简写的引擎(测试用的 happy-dom)按「x y」拆
+    const [sx, sy = sx] = (cs.overflow || '').split(/\s+/)
+    const paint = /paint|strict|content/.test(cs.contain || '')
+    const x = paint || clips(cs.overflowX || sx), y = paint || clips(cs.overflowY || sy)
+    if (x || y) out.push({ el: n, x, y })
     pos = cs.position
   }
   return out
 }
 
-/** 元素此刻在屏上露出来的那块(视口 ∩ 各裁剪祖先);一点都不露 = null。 */
+/** 元素此刻在屏上露出来的那块(视口 ∩ 各裁剪祖先,分轴);一点都不露 = null。 */
 export function visibleBox(el: Element, rect: Box = boxOf(el.getBoundingClientRect())): Box | null {
   let box = intersect(rect, { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight })
-  for (const a of clippingAncestors(el)) box = intersect(box, boxOf(a.getBoundingClientRect()))
+  for (const c of clippingAncestors(el)) {
+    const a = boxOf(c.el.getBoundingClientRect())
+    box = intersect(box, { left: c.x ? a.left : -Infinity, right: c.x ? a.right : Infinity, top: c.y ? a.top : -Infinity, bottom: c.y ? a.bottom : Infinity })
+  }
   return box.right - box.left >= 1 && box.bottom - box.top >= 1 ? box : null
 }
 
@@ -189,26 +204,47 @@ export async function recordPluginElement(
   const chunks: Blob[] = []
   recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
   const stopped = new Promise<void>((r) => { recorder.onstop = () => r() })
+  // 编码器出错:立刻收尾、整段作废(done = null),不把空的 / 截断的视频当成功交出去
+  let failed = false
+  recorder.onerror = () => { failed = true; void finish(false) }
   let phase: 'running' | 'finishing' | 'done' = 'running'
   let stoppedBy: PluginVideoResult['stoppedBy'] = 'stop'
   let frames = 0
   let startedAt = 0
   let wake: (() => void) | null = null
   let started = false
+  let discard = false
+  let inflight = false
+  let deadline: ReturnType<typeof setTimeout> | null = null
   let own: { (): void; forget(): void } | null = null
   let resolveDone!: (r: PluginVideoResult | null) => void
   const done = new Promise<PluginVideoResult | null>((r) => { resolveDone = r })
   const lockedW = start.width, lockedH = start.height
 
-  /** 抓一帧画进 canvas;此刻抓不了(元素出屏、窗口藏了、主进程失败)= false,上一帧原样留着。 */
+  /** 此刻能不能按锁定的画幅抓:还在文档里、还归本插件、没缩小到画幅以下(缩小 / display:none 时锁定画幅会框进邻居)、
+   *  整块在屏上。能 = 当前视口矩形。 */
+  const frameRect = (): CaptureRect | null => {
+    if (!el.isConnected || document.visibilityState === 'hidden' || pluginSurfaceOwner(el) !== pluginId) return null
+    const r = el.getBoundingClientRect()
+    if (r.width < lockedW - 1 || r.height < lockedH - 1) return null
+    const box = { left: r.left, top: r.top, right: r.left + lockedW, bottom: r.top + lockedH }
+    return whole(box, visibleBox(el, box)) ? { x: r.left, y: r.top, width: lockedW, height: lockedH } : null
+  }
+  /** 抓一帧画进 canvas;此刻抓不了(元素出屏 / 缩小、窗口藏了、主进程失败、上一帧还在路上)= false,上一帧原样留着。 */
   const grab = async (): Promise<boolean> => {
+    if (inflight) return false // 上一次 capturePage 超时了但还没回:不叠第二个,主进程一次只读一帧
     try {
-      if (!el.isConnected || phase !== 'running') return false
-      const r = el.getBoundingClientRect()
-      const box = { left: r.left, top: r.top, right: r.left + lockedW, bottom: r.top + lockedH }
-      if (document.visibilityState === 'hidden' || !whole(box, visibleBox(el, box))) return false
-      const reply = await withTimeout(bridge({ rect: { x: r.left, y: r.top, width: lockedW, height: lockedH }, format: 'bgra' }), 3000)
+      if (phase !== 'running') return false
+      const rect = frameRect()
+      if (!rect) return false
+      inflight = true
+      // 按画幅要:主进程先缩再序列化,4K 区域按 0.5 录也不搬 33 MB 一帧
+      const req = bridge({ rect, format: 'bgra', size: { width: canvas.width, height: canvas.height } }).finally(() => { inflight = false })
+      const reply = await withTimeout(req, 3000)
       if (!reply || !reply.ok || phase !== 'running') return false
+      // 回来时再核一遍:元素挪了 / 缩了 / 走了,这帧框的就不一定是它 —— 丢掉
+      const now = frameRect()
+      if (!now || Math.abs(now.x - rect.x) > 1 || Math.abs(now.y - rect.y) > 1) return false
       const frame = new VideoFrame(reply.data as Uint8Array<ArrayBuffer>, { format: 'BGRA', codedWidth: reply.width, codedHeight: reply.height, timestamp: Math.round(performance.now() * 1000) })
       try { g.drawImage(frame, 0, 0, canvas.width, canvas.height) } finally { frame.close() }
       track.requestFrame()
@@ -222,25 +258,29 @@ export async function recordPluginElement(
   /** 收尾只走一次;无论哪条路(stop / cancel / 停用 / 出错)都要放开 busy、停掉 track、兑现 done。
    *  后到的调用拿到同一个 promise:开头失败的 reject 要等收尾做完再抛,否则调用方立刻重试会撞上还没放开的 busy。 */
   let finishing: Promise<void> | null = null
-  const finish = (keep: boolean): Promise<void> => (finishing ??= finishOnce(keep))
-  const finishOnce = async (keep: boolean): Promise<void> => {
+  /** `keep: false`(cancel / 停用 / 出错)在收尾途中到达也算数:这段作废,不交给已经停用的插件。 */
+  const finish = (keep: boolean): Promise<void> => { if (!keep) discard = true; return (finishing ??= finishOnce()) }
+  const finishOnce = async (): Promise<void> => {
     phase = 'finishing'
     const endedAt = performance.now()
     wake?.()
+    if (deadline) clearTimeout(deadline)
     let result: PluginVideoResult | null = null
     try {
       if (recorder.state !== 'inactive') recorder.stop()
       // start() 没成功的录制不会有 stop 事件:别等它;成功的也给个上限,编码器卡住不拖死这扇窗
       if (started) await Promise.race([stopped, new Promise<void>((r) => setTimeout(r, 5000))])
-      if (keep && frames) {
+      if (!discard && !failed && frames) {
         const type = recorder.mimeType || mime
         const bytes = new Uint8Array(await new Blob(chunks, { type }).arrayBuffer())
-        result = { bytes, mime: type, width: size.width, height: size.height, durationMs: Math.round(endedAt - startedAt), frames, stoppedBy }
+        if (!discard && !failed) result = { bytes, mime: type, width: size.width, height: size.height, durationMs: Math.round(endedAt - startedAt), frames, stoppedBy }
       }
     } catch {
       result = null
     } finally {
       track.stop()
+      chunks.length = 0 // 句柄被留着也别攒着编码块:字节已经在 result 里了
+      recorder.ondataavailable = null; recorder.onerror = null
       phase = 'done'
       recordingActive = false
       own?.forget()
@@ -252,14 +292,17 @@ export async function recordPluginElement(
   try {
     recorder.start(1000) // 每秒交一块,长录不在编码器里攒成一整块
     started = true
-    startedAt = performance.now()
     // 第一帧进来才算开始(调用方据此开演);5 秒还没有 = 抓不到
     const first = Date.now() + 5000
     while (!(await grab())) {
+      if (failed) throw captureError('failed')
       if (!hooks.alive() || phase !== 'running') throw captureError('disposed')
       if (Date.now() > first || !el.isConnected) throw captureError(document.visibilityState === 'hidden' ? 'window-hidden' : 'failed')
       await new Promise((r) => setTimeout(r, 100))
     }
+    // 时长从第一帧算;到点由定时器收,不靠循环碰上(一帧在路上最多 3 秒,会拖过 maxSeconds)
+    startedAt = performance.now()
+    deadline = setTimeout(() => { if (phase === 'running') { stoppedBy = 'maxSeconds'; void finish(true) } }, maxMs)
   } catch (e) {
     await finish(false)
     throw e
@@ -270,7 +313,6 @@ export async function recordPluginElement(
     let next = performance.now() + interval
     while (phase === 'running') {
       const now = performance.now()
-      if (now - startedAt >= maxMs) { stoppedBy = 'maxSeconds'; break }
       if (!el.isConnected) { stoppedBy = 'detached'; break }
       if (next > now) await new Promise<void>((r) => { wake = r; setTimeout(r, next - now) })
       wake = null

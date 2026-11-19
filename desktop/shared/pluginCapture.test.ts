@@ -6,6 +6,8 @@ describe('plugin capture geometry', () => {
     expect(sanitizeCaptureRequest({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'png', scale: 1 }))
       .toEqual({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'png', scale: 1 })
     expect(sanitizeCaptureRequest({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'bgra' })).toEqual({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'bgra' })
+    expect(sanitizeCaptureRequest({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'bgra', size: { width: 60.4, height: 80 } })).toEqual({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'bgra', size: { width: 60, height: 80 } })
+    expect(sanitizeCaptureRequest({ rect: { x: 1, y: 2, width: 30, height: 40 }, format: 'bgra', size: { width: 0, height: 80 } })).toBeNull()
     for (const bad of [null, 'x', {}, { rect: { x: 0, y: 0, width: 0, height: 5 }, format: 'png' }, { rect: { x: 0, y: 0, width: NaN, height: 5 }, format: 'png' },
       { rect: { x: 0, y: 0, width: 5, height: 5 }, format: 'jpeg' }, { rect: { x: 0, y: 0, width: 5, height: 5 }, format: 'png', scale: 0 },
       { rect: { x: 0, y: 0, width: 5, height: 5 }, format: 'png', scale: '2' }]) {
@@ -30,6 +32,7 @@ describe('plugin capture geometry', () => {
     expect(outputSize(native, { width: 800, height: 500 }, 3)).toEqual(native) // a 2× screen can't give 3×
     expect(outputSize(native, { width: 800, height: 500 }, 1)).toEqual({ width: 800, height: 500 })
     expect(outputSize({ width: 800, height: 500 }, { width: 800, height: 500 }, 2)).toEqual({ width: 800, height: 500 }) // 1× screen asked for 2×
+    expect(outputSize({ width: 2, height: 200 }, { width: 1, height: 100 }, 0.5)).toEqual({ width: 1, height: 50 }) // each axis on its own
   })
 
   it('records even frame sizes, fitted into 4K', () => {

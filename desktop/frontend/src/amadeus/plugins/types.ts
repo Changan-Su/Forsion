@@ -2155,7 +2155,7 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 /** Why `ctx.ui.capture` / `ctx.ui.record` refused (2026-11-19+). The rejection is an `Error` named `PluginCaptureError`
  *  with one of these in `code`; `message` says the same in English.
  *  - `not-owned`: the element is not inside a surface the host handed to your plugin (your views, `ctx.ui.float`,
- *    `openDialog` / `popover` content). Tool result cards, settings pages and embed renderers don't count yet.
+ *    your `openDialog` / `popover` / `contextMenu`). Tool result cards, settings pages and embed renderers don't count yet.
  *  - `detached`: not in the document (or not in this window).
  *  - `empty`: zero width or height (`display: none`, collapsed).
  *  - `clipped`: part of it is outside what is on screen — scrolled out of its scroll container, cut by a panel
@@ -2195,7 +2195,7 @@ export interface PluginCaptureResult {
 export interface PluginVideoOptions {
   /** Frames per second, 1–60 (default 30). Real rate depends on the machine: the frame count is in the result. */
   fps?: number
-  /** Stops by itself after this long, 1–300 (default 60). `stop()` afterwards still returns the video. */
+  /** Stops by itself this long after the first frame, 1–300 (default 60). `stop()` afterwards still returns the video. */
   maxSeconds?: number
   /** Pixels per CSS pixel, only lowers (default = screen density). The frame is also fitted into 3840 × 2160. */
   scale?: number
@@ -2229,7 +2229,7 @@ export interface PluginVideoRecording {
   stop(): Promise<PluginVideoResult | null>
   /** Throw the recording away (`done` / `stop()` resolve `null`). */
   cancel(): void
-  /** Settles once the recording ends, however it ended: the result, or `null` (cancelled, plugin disabled). */
+  /** Settles once the recording ends, however it ended: the result, or `null` (cancelled, plugin disabled, the encoder failed). */
   readonly done: Promise<PluginVideoResult | null>
 }
 
@@ -2637,8 +2637,8 @@ export interface PluginContext {
     /** A PNG of one of your own elements (2026-11-19+, desktop app only — `undefined` on web, mobile and older hosts:
      *  call `ctx.ui.capture?.(el)`). The host reads the real pixels on screen, so host parts you mounted inside (Chat
      *  Box, editor, table, chat), canvases and web surfaces all come out as drawn; a DOM-to-image copy can't do that.
-     *  - Only elements inside a surface the host gave your plugin: your views, `ctx.ui.float` floats, `openDialog` /
-     *    `popover` content (`not-owned` otherwise).
+     *  - Only elements inside a surface the host gave your plugin: your views, `ctx.ui.float` floats, your `openDialog` /
+     *    `popover` / `contextMenu` (`not-owned` otherwise).
      *  - Only what is on screen right now: the whole element must be visible — not scrolled out, not cut by a panel
      *    edge, not under someone else's menu. For a picture bigger than a panel, stage it in a window-scope
      *    `ctx.ui.float` or shrink it with a CSS transform. It waits two frames for your last DOM change to paint;
@@ -2650,7 +2650,8 @@ export interface PluginContext {
     /** A video of one of your own elements (2026-11-19+, desktop app only — `ctx.ui.record?.(el)`). Same rules as
      *  `capture` for which elements and what must be visible at the start. Resolves once the first frame is in.
      *  - The frame size is fixed at the start; the recording follows the element if it moves. While the element is
-     *    (partly) off screen, or the window is minimized, the last frame is held — nothing else is recorded instead.
+     *    (partly) off screen, smaller than that frame, or the window is minimized, the last frame is held — nothing
+     *    else is recorded instead.
      *  - Whatever appears over the element later (menus you open, a host toast) is in the video: only the start is
      *    checked. The mouse cursor is not in it — draw your own pointer for a demo.
      *  - One recording per window at a time (`busy`). No audio.

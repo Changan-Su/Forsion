@@ -106,6 +106,26 @@ describe('what may be captured', () => {
     expect(code(() => checkCaptureTarget(el, 'demo'))).toBe('clipped')
   })
 
+  it('clips per axis: overflow clip on x only does not cut the element vertically', () => {
+    const { host, el } = view()
+    const strip = host.appendChild(document.createElement('div'))
+    strip.style.overflow = 'clip visible'
+    place(strip, { left: 0, top: 150, width: 1000, height: 50 }) // vertically much shorter than el (100..400)
+    strip.appendChild(el)
+    expect(code(() => checkCaptureTarget(el, 'demo'))).toBeUndefined()
+    strip.style.overflow = 'hidden'
+    expect(code(() => checkCaptureTarget(el, 'demo'))).toBe('clipped')
+  })
+
+  it('a display: contents wrapper is no box: it neither clips nor counts as a containing block', () => {
+    const { host, el } = view()
+    const wrap = host.appendChild(document.createElement('div'))
+    wrap.style.display = 'contents'; wrap.style.overflow = 'hidden'
+    place(wrap, { left: 0, top: 0, width: 0, height: 0 })
+    wrap.appendChild(el)
+    expect(code(() => checkCaptureTarget(el, 'demo'))).toBeUndefined()
+  })
+
   it('refuses when something that is not the plugin\'s lies on top; its own float on top is fine', () => {
     const { el } = view()
     const toast = document.body.appendChild(document.createElement('div'))
@@ -159,7 +179,8 @@ describe('record lifecycle (fake encoder)', () => {
     mimeType: string
     ondataavailable: ((e: { data: Blob }) => void) | null = null
     onstop: (() => void) | null = null
-    constructor(_s: unknown, o: { mimeType: string }) { this.mimeType = o.mimeType }
+    onerror: (() => void) | null = null
+    constructor(_s: unknown, o: { mimeType: string }) { this.mimeType = o.mimeType; (globalThis as unknown as { __lastRecorder?: unknown }).__lastRecorder = this }
     start(): void { if (startThrows) throw new Error('NotSupportedError'); this.state = 'recording' }
     stop(): void {
       this.state = 'inactive'
@@ -222,6 +243,39 @@ describe('record lifecycle (fake encoder)', () => {
     window.tangu = { captureRegion: async () => ({ ok: true, data: new Uint8Array(16), width: 2, height: 2 }) } as unknown as typeof window.tangu
     const rec = await recordPluginElement('demo', el)
     rec.cancel()
+    await rec.done
+  })
+
+  it('holds the last frame while the element is smaller than the locked frame (no neighbours in the crop)', async () => {
+    const { el } = view()
+    const bridge = vi.fn(async (_req: unknown) => ({ ok: true as const, data: new Uint8Array(16), width: 2, height: 2 }))
+    window.tangu = { captureRegion: bridge } as unknown as typeof window.tangu
+    const rec = await recordPluginElement('demo', el, { fps: 60 })
+    expect(bridge.mock.calls[0][0]).toMatchObject({ format: 'bgra', size: expect.objectContaining({ width: expect.any(Number) }) })
+    place(el, { left: 100, top: 100, width: 200, height: 300 }) // shrank
+    await new Promise((r) => setTimeout(r, 30))
+    const calls = bridge.mock.calls.length
+    await new Promise((r) => setTimeout(r, 120))
+    expect(bridge.mock.calls.length).toBe(calls)
+    rec.cancel()
+    await rec.done
+  })
+
+  it('an encoder error ends the recording with null, not an empty "video"', async () => {
+    const { el } = view()
+    const rec = await recordPluginElement('demo', el)
+    const r = (globalThis as unknown as { __lastRecorder?: { onerror: (() => void) | null } }).__lastRecorder
+    r!.onerror!()
+    expect(await rec.done).toBeNull()
+    expect(await rec.stop()).toBeNull()
+  })
+
+  it('a cancel that arrives while stop() is finishing still discards the video', async () => {
+    const { el } = view()
+    const rec = await recordPluginElement('demo', el)
+    const out = rec.stop()
+    rec.cancel()
+    expect(await out).toBeNull()
   })
 
   it('an unknown mimeType is unsupported', async () => {

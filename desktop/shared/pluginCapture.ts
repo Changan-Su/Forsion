@@ -13,6 +13,8 @@ export interface CaptureRegionRequest {
   format: CaptureRegionFormat
   /** png 才用:每 CSS px 最多几个像素;高于屏幕原生密度时按原生(不放大造像素)。缺省 = 原生。 */
   scale?: number
+  /** bgra 才用:要的帧像素尺寸(录屏画幅)。原生更大时主进程先缩再序列化,不往渲染层搬整张原生位图。 */
+  size?: { width: number; height: number }
 }
 
 export type CaptureRegionReply =
@@ -32,7 +34,14 @@ export function sanitizeCaptureRequest(raw: unknown): CaptureRegionRequest | nul
   if (o.format !== 'png' && o.format !== 'bgra') return null
   const scale = o.scale === undefined ? undefined : num(o.scale)
   if (scale === null || (scale !== undefined && scale <= 0)) return null
-  return { rect: { x, y, width, height }, format: o.format, ...(scale !== undefined ? { scale } : {}) }
+  let size: { width: number; height: number } | undefined
+  if (o.size !== undefined) {
+    const z = o.size as Record<string, unknown> | null
+    const w = num(z?.width), h = num(z?.height)
+    if (w === null || h === null || w < 1 || h < 1 || w > 8192 || h > 8192) return null
+    size = { width: Math.round(w), height: Math.round(h) }
+  }
+  return { rect: { x, y, width, height }, format: o.format, ...(scale !== undefined ? { scale } : {}), ...(size ? { size } : {}) }
 }
 
 /** 视口 CSS px → capturePage 的 DIP 矩形(× webContents 缩放,四边各自取整,夹进内容区);夹完是空的 = null。
@@ -45,12 +54,13 @@ export function toDipRect(rect: CaptureRect, zoom: number, content: { width: num
   return right - left >= 1 && bottom - top >= 1 ? { x: left, y: top, width: right - left, height: bottom - top } : null
 }
 
-/** 单张出图的像素尺寸:要的密度 × CSS 尺寸,但不超过抓到的原生像素(只降不升)。 */
+/** 单张出图的像素尺寸:要的密度 × CSS 尺寸,两轴各自算、各自不超过抓到的原生像素(只降不升)。 */
 export function outputSize(native: { width: number; height: number }, css: { width: number; height: number }, scale?: number): { width: number; height: number } {
   if (!scale || !(scale > 0)) return native
-  const w = Math.round(css.width * scale)
-  if (w >= native.width) return native
-  return { width: Math.max(1, w), height: Math.max(1, Math.round((native.height * w) / native.width)) }
+  return {
+    width: Math.max(1, Math.min(native.width, Math.round(css.width * scale))),
+    height: Math.max(1, Math.min(native.height, Math.round(css.height * scale))),
+  }
 }
 
 /** 录屏画幅上限:4K 框(H.264 level 5.1 的帧尺寸以内),超了等比缩小。 */

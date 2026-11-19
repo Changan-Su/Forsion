@@ -22,10 +22,13 @@ export function installPluginCapture(trusted: (event: IpcMainInvokeEvent) => boo
       if (img.isEmpty()) return { ok: false, code: 'failed' }
       const native = img.getSize()
       if (req.format === 'bgra') {
+        // 录屏画幅比原生小(scale < 原生密度、或塞进 4K 框)时先缩:序列化 / 跨进程搬的是缩后的位图
+        if (req.size && (req.size.width < native.width || req.size.height < native.height)) img = img.resize({ ...req.size, quality: 'good' })
+        const out = img.getSize()
         const data = img.toBitmap()
         // 紧排 BGRA 才能直接当 VideoFrame 用;有行填充(没见过)就算失败,不交一帧错位的画面
-        if (data.length !== native.width * native.height * 4) return { ok: false, code: 'failed' }
-        return { ok: true, data, width: native.width, height: native.height }
+        if (data.length !== out.width * out.height * 4) return { ok: false, code: 'failed' }
+        return { ok: true, data, width: out.width, height: out.height }
       }
       const size = outputSize(native, req.rect, req.scale)
       if (size.width !== native.width || size.height !== native.height) img = img.resize({ ...size, quality: 'best' })
