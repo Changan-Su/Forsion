@@ -1155,6 +1155,99 @@ const SCENES = {
     const heads = await texts(page, `${LIST} .ims-nav .csn-heading`)
     return [['Image studio: "new project" is the main button; the list starts with "my projects"', (await stage.nav(page)) === 'list' && items[0] === '我的项目' && !heads.includes('创建') && !!fab && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ items, heads, fab })]]
   },
+  // A cloud vault's row at the end of the notes list opens a small card of the account's vaults (walk 2026-11-19, d:
+  // it ran off the right edge — its width was taken from 100vw inside the page's zoom). The card is on the screen,
+  // its close button too. (A cloud vault is put on here: the side flag and the collab seam the card reads.)
+  'vault-card': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    const store = moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts')
+    const side = await page.evaluate(async (u) => {
+      // the list's shared sections ask the same seam (nothing shared here)
+      window.amadeusCollab = { listVaults: async () => [{ id: 'v1', name: '我的库' }, { id: 'v2', name: 'A team vault with a rather long English name' }], activeVaultId: async () => 'v1', switchVault: () => {}, sharedWithMe: async () => [], listAllShares: async () => [], publishes: async () => [] }
+      const { usePageStore } = await import(/* @vite-ignore */ u)
+      const was = usePageStore.getState().vaultSide
+      usePageStore.setState({ vaultSide: 'cloud' })
+      return was
+    }, store)
+    await page.waitForTimeout(400)
+    await page.locator(`${LIST} .t2s-foot .t2s-special`).last().tap()
+    await page.waitForSelector('.amxc-panel .amxc-row', { timeout: 4000 }).catch(() => {})
+    await page.waitForTimeout(400)
+    const card = await rect(page, '.amxc-panel')
+    const close = await rect(page, '.amxc-panel .amxc-x')
+    const rows = await texts(page, '.amxc-panel .amxc-row')
+    await page.screenshot({ path: path.join(OUT, `vault-card-open${DARK ? "-dark" : ""}.png`) })
+    // system Back closes the card and nothing under it: the list stays, in the notes Space. Without the back key (see
+    // backPath) the overlays are asked first, the way MobileRoot's planBack does, then the list level.
+    if ((await backPath(page)) === 'key') await systemBack(page)
+    else {
+      const taken = await page.evaluate(() => {
+        const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
+        if (taken) window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true }))
+        return taken
+      })
+      if (!taken) await systemBack(page)
+    }
+    await page.waitForTimeout(400)
+    const back = await page.evaluate(() => ({ card: !!document.querySelector('.amxc-panel'), space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav }))
+    await page.locator('.amxc-panel .amxc-x').tap({ timeout: 1000 }).catch(() => {})
+    await page.evaluate(async ([u, was]) => { delete window.amadeusCollab; (await import(/* @vite-ignore */ u)).usePageStore.setState({ vaultSide: was }) }, [store, side])
+    await page.waitForTimeout(300)
+    return [
+      ['the cloud vault\'s card lists the vaults and stays on the screen, with a margin; its close button is on it too', rows.length === 2 && !!card && card.x >= 8 && card.right <= SCREEN.width - 8 && card.bottom <= SCREEN.height && !!close && close.x >= 0 && close.right <= SCREEN.width, JSON.stringify({ rows, card, close })],
+      ['system Back closes the card and only the card: the notes list stays', !back.card && back.space === 'amadeus' && back.nav === 'list', JSON.stringify(back)],
+    ]
+  },
+  // The editor's floating capsule, "⋯" while typing (walk 2026-11-19, e): the sheet came up with the keyboard still up,
+  // squeezed into what was left above it (7 of 13 rows, the capsule over the rest). "⋯" sends the keyboard away first,
+  // as "+" does. The keyboard here: the page made shorter by its height at the same width — what the app's WebView does.
+  'note-more-keyboard': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    await page.locator(`${LIST} .pl-fab`).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(800)
+    await page.keyboard.press('Enter') // title → body: the caret in the note
+    await page.waitForTimeout(400)
+    const inBody = () => page.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
+    const typing = await inBody()
+    await page.setViewportSize({ width: SCREEN.width, height: SCREEN.height - 300 })
+    await page.waitForTimeout(500)
+    const more = page.locator('.amx-mbar button[title="更多操作"]')
+    const found = await more.count()
+    if (found) await more.tap()
+    await page.waitForTimeout(500)
+    const caret = await inBody()
+    const open = await page.evaluate(() => !!document.querySelector('.mb-sheet'))
+    await page.setViewportSize(SCREEN) // the keyboard gone
+    await page.waitForTimeout(500)
+    // rows wholly in sight (the sheet has a height cap and scrolls past it: that is how it is without a keyboard too)
+    const sheet = await page.evaluate(() => { const s = document.querySelector('.mb-sheet'); if (!s) return null; const r = s.getBoundingClientRect(); const rows = [...s.querySelectorAll('.mb-sheet-row')]; return { top: Math.round(r.top), bottom: Math.round(r.bottom), rows: rows.length, seen: rows.filter((x) => { const q = x.getBoundingClientRect(); return q.top >= r.top - 1 && q.bottom <= Math.min(r.bottom, innerHeight) + 1 }).length } })
+    await page.screenshot({ path: path.join(OUT, `note-more-keyboard-open${DARK ? '-dark' : ''}.png`) })
+    await page.locator('.mb-sheet-scrim').tap({ position: { x: 200, y: 40 } }).catch(() => {})
+    await page.waitForTimeout(300)
+    await stage.action(page, 'left')
+    return [
+      ['typing in a new note, the floating capsule has its "⋯"', typing && found === 1, JSON.stringify({ typing, found })],
+      ['"⋯" with the keyboard up takes the caret out of the note (the keyboard goes) and opens the sheet', open && !caret, JSON.stringify({ open, caret })],
+      ['with the keyboard gone the sheet has the screen\'s height to show its rows in (the device showed 7 with the keyboard left up)', !!sheet && sheet.top >= 0 && sheet.bottom <= SCREEN.height + 1 && sheet.seen >= 10, JSON.stringify(sheet)],
+    ]
+  },
+  // The command panel on a phone (walk 2026-11-19, f): no keyboard to press, so no shortcut chips on the rows and no
+  // key legend in the foot (the count of commands stays). On a desktop both stay — not looked at here.
+  'palette-touch': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'home')
+    await page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).openCommandPalette(), moduleUrl('../lcl/engine/commandRegistry.ts'))
+    await page.waitForSelector('.cmd-panel', { timeout: 4000 }).catch(() => {})
+    await page.waitForTimeout(300)
+    const look = await page.evaluate(() => ({ open: !!document.querySelector('.cmd-panel'), rows: document.querySelectorAll('.cmd-panel .cmd-item').length, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, count: document.querySelector('.cmd-panel .cmd-foot-count')?.textContent || '' }))
+    await page.screenshot({ path: path.join(OUT, `palette-touch-open${DARK ? '-dark' : ''}.png`) })
+    await page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).useCommandStore.getState().setPaletteOpen(false), moduleUrl('../lcl/engine/commandRegistry.ts'))
+    await page.waitForTimeout(300)
+    return [['the command panel on a phone: rows without shortcut chips, no key legend in the foot, the count stays', look.open && look.rows > 5 && look.chips === 0 && look.keys === 0 && /\d/.test(look.count), JSON.stringify(look)]]
+  },
   // A call is on. Its bar belongs to the app, not to the chat: it stays up on every page, right under the capsules, so
   // every page starts below it (the shell's top room grows by the bar, see voiceCall.css). Checked page by page.
   // An empty inbox (10-25 round 4 · 4.1): the list is the page on a phone, so the shared EmptyState sits in the list —
@@ -1508,99 +1601,6 @@ const SCENES = {
     const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.dataset.spaceId || el.dataset.fixedId, el.querySelector('.hp-card-status').textContent]), '.mb-view[data-view="homepage"] .hp-card')
     const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
     return [['each default card says what is going on: the last session, the last note, the next appointment, unread mail', cards.map((c) => c[0]).join() === 'tangu,amadeus,calendar,inbox' && /^继续：/.test(of('tangu')) && of('amadeus') === '发版清单 2.13' && /14:00 周会$/.test(of('calendar')) && of('inbox') === '2 条未读', JSON.stringify(cards)]]
-  },
-  // A cloud vault's row at the end of the notes list opens a small card of the account's vaults (walk 2026-11-19, d:
-  // it ran off the right edge — its width was taken from 100vw inside the page's zoom). The card is on the screen,
-  // its close button too. (A cloud vault is put on here: the side flag and the collab seam the card reads.)
-  'vault-card': async (page) => {
-    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
-    await stage.space(page, 'amadeus')
-    const store = moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts')
-    const side = await page.evaluate(async (u) => {
-      // the list's shared sections ask the same seam (nothing shared here)
-      window.amadeusCollab = { listVaults: async () => [{ id: 'v1', name: '我的库' }, { id: 'v2', name: 'A team vault with a rather long English name' }], activeVaultId: async () => 'v1', switchVault: () => {}, sharedWithMe: async () => [], listAllShares: async () => [], publishes: async () => [] }
-      const { usePageStore } = await import(/* @vite-ignore */ u)
-      const was = usePageStore.getState().vaultSide
-      usePageStore.setState({ vaultSide: 'cloud' })
-      return was
-    }, store)
-    await page.waitForTimeout(400)
-    await page.locator(`${LIST} .t2s-foot .t2s-special`).last().tap()
-    await page.waitForSelector('.amxc-panel .amxc-row', { timeout: 4000 }).catch(() => {})
-    await page.waitForTimeout(400)
-    const card = await rect(page, '.amxc-panel')
-    const close = await rect(page, '.amxc-panel .amxc-x')
-    const rows = await texts(page, '.amxc-panel .amxc-row')
-    await page.screenshot({ path: path.join(OUT, `vault-card-open${DARK ? "-dark" : ""}.png`) })
-    // system Back closes the card and nothing under it: the list stays, in the notes Space. Without the back key (see
-    // backPath) the overlays are asked first, the way MobileRoot's planBack does, then the list level.
-    if ((await backPath(page)) === 'key') await systemBack(page)
-    else {
-      const taken = await page.evaluate(() => {
-        const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
-        if (taken) window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true }))
-        return taken
-      })
-      if (!taken) await systemBack(page)
-    }
-    await page.waitForTimeout(400)
-    const back = await page.evaluate(() => ({ card: !!document.querySelector('.amxc-panel'), space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav }))
-    await page.locator('.amxc-panel .amxc-x').tap({ timeout: 1000 }).catch(() => {})
-    await page.evaluate(async ([u, was]) => { delete window.amadeusCollab; (await import(/* @vite-ignore */ u)).usePageStore.setState({ vaultSide: was }) }, [store, side])
-    await page.waitForTimeout(300)
-    return [
-      ['the cloud vault\'s card lists the vaults and stays on the screen, with a margin; its close button is on it too', rows.length === 2 && !!card && card.x >= 8 && card.right <= SCREEN.width - 8 && card.bottom <= SCREEN.height && !!close && close.x >= 0 && close.right <= SCREEN.width, JSON.stringify({ rows, card, close })],
-      ['system Back closes the card and only the card: the notes list stays', !back.card && back.space === 'amadeus' && back.nav === 'list', JSON.stringify(back)],
-    ]
-  },
-  // The editor's floating capsule, "⋯" while typing (walk 2026-11-19, e): the sheet came up with the keyboard still up,
-  // squeezed into what was left above it (7 of 13 rows, the capsule over the rest). "⋯" sends the keyboard away first,
-  // as "+" does. The keyboard here: the page made shorter by its height at the same width — what the app's WebView does.
-  'note-more-keyboard': async (page) => {
-    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
-    await stage.space(page, 'amadeus')
-    await page.locator(`${LIST} .pl-fab`).tap()
-    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
-    await page.waitForTimeout(800)
-    await page.keyboard.press('Enter') // title → body: the caret in the note
-    await page.waitForTimeout(400)
-    const inBody = () => page.evaluate(() => !!document.activeElement?.closest?.('.ProseMirror'))
-    const typing = await inBody()
-    await page.setViewportSize({ width: SCREEN.width, height: SCREEN.height - 300 })
-    await page.waitForTimeout(500)
-    const more = page.locator('.amx-mbar button[title="更多操作"]')
-    const found = await more.count()
-    if (found) await more.tap()
-    await page.waitForTimeout(500)
-    const caret = await inBody()
-    const open = await page.evaluate(() => !!document.querySelector('.mb-sheet'))
-    await page.setViewportSize(SCREEN) // the keyboard gone
-    await page.waitForTimeout(500)
-    // rows wholly in sight (the sheet has a height cap and scrolls past it: that is how it is without a keyboard too)
-    const sheet = await page.evaluate(() => { const s = document.querySelector('.mb-sheet'); if (!s) return null; const r = s.getBoundingClientRect(); const rows = [...s.querySelectorAll('.mb-sheet-row')]; return { top: Math.round(r.top), bottom: Math.round(r.bottom), rows: rows.length, seen: rows.filter((x) => { const q = x.getBoundingClientRect(); return q.top >= r.top - 1 && q.bottom <= Math.min(r.bottom, innerHeight) + 1 }).length } })
-    await page.screenshot({ path: path.join(OUT, `note-more-keyboard-open${DARK ? '-dark' : ''}.png`) })
-    await page.locator('.mb-sheet-scrim').tap({ position: { x: 200, y: 40 } }).catch(() => {})
-    await page.waitForTimeout(300)
-    await stage.action(page, 'left')
-    return [
-      ['typing in a new note, the floating capsule has its "⋯"', typing && found === 1, JSON.stringify({ typing, found })],
-      ['"⋯" with the keyboard up takes the caret out of the note (the keyboard goes) and opens the sheet', open && !caret, JSON.stringify({ open, caret })],
-      ['with the keyboard gone the sheet has the screen\'s height to show its rows in (the device showed 7 with the keyboard left up)', !!sheet && sheet.top >= 0 && sheet.bottom <= SCREEN.height + 1 && sheet.seen >= 10, JSON.stringify(sheet)],
-    ]
-  },
-  // The command panel on a phone (walk 2026-11-19, f): no keyboard to press, so no shortcut chips on the rows and no
-  // key legend in the foot (the count of commands stays). On a desktop both stay — not looked at here.
-  'palette-touch': async (page) => {
-    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
-    await stage.space(page, 'home')
-    await page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).openCommandPalette(), moduleUrl('../lcl/engine/commandRegistry.ts'))
-    await page.waitForSelector('.cmd-panel', { timeout: 4000 }).catch(() => {})
-    await page.waitForTimeout(300)
-    const look = await page.evaluate(() => ({ open: !!document.querySelector('.cmd-panel'), rows: document.querySelectorAll('.cmd-panel .cmd-item').length, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, count: document.querySelector('.cmd-panel .cmd-foot-count')?.textContent || '' }))
-    await page.screenshot({ path: path.join(OUT, `palette-touch-open${DARK ? '-dark' : ''}.png`) })
-    await page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).useCommandStore.getState().setPaletteOpen(false), moduleUrl('../lcl/engine/commandRegistry.ts'))
-    await page.waitForTimeout(300)
-    return [['the command panel on a phone: rows without shortcut chips, no key legend in the foot, the count stays', look.open && look.rows > 5 && look.chips === 0 && look.keys === 0 && /\d/.test(look.count), JSON.stringify(look)]]
   },
 }
 
