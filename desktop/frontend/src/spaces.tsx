@@ -197,6 +197,9 @@ const amadeusSpace: SpaceDefinition = {
   resizableSides: { left: true },
   // 主区没有硬规则时(启动器/搜索/图谱/日历…)左栏回笔记树,而不是全局默认的会话。
   autoWorkspaceMode: 'notes',
+  // 手机的列表层只画笔记列表:标签是它里面的一档,点标签 / 检索集合出来的全文检索也画在它里面(AmadeusPagesView),
+  // 不再靠顶上的下拉在三个左栏视图之间切。
+  soleList: true,
   // 不定义 newPage:＋ 与「关掉最后一个主区 view」统一落到 launcher 启动器(与 Tangu Space 一致),
   // 启动器按当前 Space 列出可用视图 + 最近使用;「新建笔记」成为启动器里的一项。
   /** 编辑器(主)→ 左栏(笔记 + 搜索/标签 同组 tab)→ 右栏(大纲/反链/关系图,默认折叠)。

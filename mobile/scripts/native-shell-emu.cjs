@@ -2295,7 +2295,9 @@ const tabCountText = (list) => {
   await check('phone Home: four cards with what is going on; the input is one pill that opens the composer above the keyboard and folds back', async () => {
     await goHome()
     const cards = await cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => [c.dataset.spaceId || c.dataset.fixedId, c.querySelector('.hp-card-status').textContent])`)
-    assert.ok(cards.length === 4 && String(cards.slice(2).map((c) => c[0])) === 'rb-market,rb-achievements', `two Spaces, then the store and achievements: ${JSON.stringify(cards)}`)
+    // never chosen = Tangu, notes, calendar, inbox (the store and achievements are in the long-press list, not on Home), and showing them stores nothing
+    assert.equal(String(cards.map((c) => c[0])), 'tangu,amadeus,calendar,inbox', `the default cards are not Tangu, notes, calendar, inbox: ${JSON.stringify(cards)}`)
+    assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), null, 'showing the default cards stored a choice')
     const tangu = cards.find((c) => c[0] === 'tangu')
     assert.ok(tangu && /E2E/.test(tangu[1]), `the Tangu card does not say what was last worked on (${JSON.stringify(cards)})`)
     const hidden = homeFolded
@@ -2841,7 +2843,9 @@ const tabCountText = (list) => {
     assert.ok(textOf(list, 'nativeChrome.titleSub'), 'the capsule does not name the open vault')
     assert.ok(h.byId(list, 'nativeChrome.search'), 'no search button on the capsule')
     const chips = await cdp.eval(`[...document.querySelectorAll('.mb-drawer--left .pl-chips button')].map((b) => b.dataset.filter)`)
-    assert.deepEqual(chips, ['recent', 'tree', 'boards'])
+    assert.deepEqual(chips, ['recent', 'tree', 'boards', 'tags'])
+    // the list level draws the notes list only: no switcher between the left views above it (tags are a chip, search is on the capsule)
+    assert.equal(await cdp.eval("!!document.querySelector('.mb-drawer--left .mb-drawer-bar')"), false, 'the notes list still has the left-view switcher above it')
     assert.equal(await cdp.eval("!!document.querySelector('.mb-drawer--left .amxv-search, .mb-drawer--left input[type=search]')"), false, 'the list still has its own search box')
     const fab = await elRect(`document.querySelector('.mb-drawer--left [data-act="list-fab"]')`)
     const dock = h.byId(list, 'nativeChrome.dock')
@@ -3150,10 +3154,11 @@ const tabCountText = (list) => {
   /** The second sheet opens right behind the first: wait for one of its own rows, not for "a sheet". */
   const rewindSheet = async (timeout = 8000) => (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.conversation') ? l : null), { timeout })).hit
 
-  await check('user message: no inline buttons — a long-press opens copy / edit / rewind natively and edit runs; the reply keeps its row with a taller touch area', async () => {
+  await check('user message: no inline buttons — a long-press opens copy / edit / rewind natively and edit runs; the last reply keeps its row with a taller touch area', async () => {
     await openChat('E2E Session One')
     assert.ok(await h.waitPage(cdp, `!!${bubble}`, 4000), 'fixture user message missing')
-    const css = await cdp.eval(`(() => { const u = [...document.querySelectorAll('.t2-userwrap .t2-actions .t2-iconbtn')], a = document.querySelector('.t2-asst .t2-actions .t2-iconbtn')
+    // the row of buttons stays under the last reply only (earlier replies show theirs on a tap), so that is the one probed
+    const css = await cdp.eval(`(() => { const u = [...document.querySelectorAll('.t2-userwrap .t2-actions .t2-iconbtn')], a = [...document.querySelectorAll('.t2-asst')].pop().querySelector('.t2-actions .t2-iconbtn')
       const r = a.getBoundingClientRect(); let z = 1; for (let e = a; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
       const hit = (dy) => document.elementFromPoint((r.left + r.width / 2) * z, (r.top + dy) * z) === a
       // out of sight, not out of the tree: a screen reader still reaches them (and each keeps its name)
@@ -3161,7 +3166,7 @@ const tabCountText = (list) => {
       return { user: u.map(size), named: u.every((e) => e.title && getComputedStyle(e).display !== 'none'), asst: getComputedStyle(a).display, above: hit(-6), far: hit(-14) } })()`)
     assert.ok(css.user.length >= 2 && css.user.every((d) => d <= 1), `inline buttons still visible under the user message: ${css.user}`)
     assert.ok(css.named, 'the hidden buttons left the accessibility tree (display:none) or lost their names')
-    assert.notEqual(css.asst, 'none', 'the reply lost its action row')
+    assert.notEqual(css.asst, 'none', 'the last reply lost its action row')
     assert.ok(css.above, 'the reply button does not take a touch 6px above its edge')
     assert.ok(!css.far, 'control: 14px above the reply button still hits it (the probe proves nothing)')
     const felt = hapticLog()

@@ -61,7 +61,8 @@ import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { REF_MIME, PATHS_MIME, setChatRefDrag } from './components/chatDragRef'
 import { newTabOf, useItemSelect } from './views/itemSelect'
-import { useSearchSeed } from './amadeusPanels'
+import { AmadeusSearchView, AmadeusTagsView, useSearchSeed } from './amadeusPanels'
+import { loadNotesPhoneTab, saveNotesPhoneTab, type NotesPhoneTab } from './notesPhoneTab'
 import { askString } from '@amadeus/components/askString'
 import { renameDb } from '@amadeus/lib/dbFileOps'
 import { renameNoteFile, retargetEditorLeaves } from '@amadeus/lib/noteRename'
@@ -186,6 +187,7 @@ registerMessages({
   'amxv.phone.tab.recent': { zh: '最近', en: 'Recent' },
   'amxv.phone.tab.tree': { zh: '文件夹', en: 'Folders' },
   'amxv.phone.tab.boards': { zh: '白板', en: 'Whiteboards' },
+  'amxv.phone.tab.tags': { zh: '标签', en: 'Tags' },
   'amxv.phone.noRecent': { zh: '还没有最近打开的笔记', en: 'No recently opened notes yet' },
   'amxv.phone.noBoards': { zh: '还没有白板', en: 'No whiteboards yet' },
   'amxv.phone.new': { zh: '新建', en: 'New' },
@@ -925,6 +927,8 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
 }
 
 const NO_RECENT_VIEWS: ReturnType<typeof useRecentViews.getState>['items'] = []
+/** 手机笔记列表已经接住(显示过)的那一次检索请求的序号,见 AmadeusPagesView 的 inListSearch。 */
+let phoneSeedSeen = 0
 const NO_PATHS: string[] = []
 
 export function AmadeusPagesView() {
@@ -954,17 +958,11 @@ export function AmadeusPagesView() {
   // 行多选:判据与会话列表/文件树同源(views/itemSelect);范围选按 DOM 顺序 → 要容器 ref。
   const sel = useItemSelect(scrollRef)
 
-  // ── 手机的整屏列表(两级导航的列表层,布局「二」):三档胶囊 最近 / 文件夹 / 白板、一颗悬浮主按钮,
-  //    搜索与切换智库在原生顶栏上。「文件夹」就是原来那棵树;另两档是两行的平铺列表。 ──
+  // ── 手机的整屏列表(两级导航的列表层,布局「二」):四档胶囊 最近 / 文件夹 / 白板 / 标签、一颗悬浮主按钮,
+  //    搜索与切换智库在原生顶栏上。「文件夹」就是原来那棵树,「标签」是标签树;另两档是两行的平铺列表。 ──
   const phone = useListFirst()
-  type PhoneTab = 'recent' | 'tree' | 'boards'
-  const [savedTab, setSavedTab] = useState<PhoneTab | null>(() => {
-    // 这一行在每个平台上都跑:存储读不了(浏览器禁了站点数据)时不能把整块笔记面板带崩
-    try {
-      const v = localStorage.getItem('forsion_notes_phone_tab')
-      return v === 'recent' || v === 'tree' || v === 'boards' ? v : null
-    } catch { return null }
-  })
+  // 这一行在每个平台上都跑:读法见 notesPhoneTab(存储读不了时不把整块笔记面板带崩)
+  const [savedTab, setSavedTab] = useState<NotesPhoneTab | null>(loadNotesPhoneTab)
   // 只有手机这种摆法用得到:桌面上别为它多订阅两份状态(每开一个视图就重画一遍整棵树)
   const recentViews = useRecentViews((s) => (phone ? s.items : NO_RECENT_VIEWS))
   const prefsRecents = useAmadeusPrefs((s) => (phone ? s.recents : NO_PATHS))
@@ -982,10 +980,47 @@ export function AmadeusPagesView() {
   // 画板在 files 里,不在 pages 里:两个库管理器都把它挡在页面之外(当页面解析会被改写)。pages 一并看只为不依赖这条分法。
   const boards = useMemo(() => [...new Set([...files, ...pages])].filter(isDrawingPath).sort((a, b) => baseName(a).localeCompare(baseName(b))), [pages, files])
   // 没选过档位时:有最近打开的就从「最近」起,否则直接给树(新装的手机上「最近」是空的)
-  const phoneTab: PhoneTab = savedTab ?? (recentList.length ? 'recent' : 'tree')
-  const pickPhoneTab = (tab: PhoneTab): void => { setSavedTab(tab); try { localStorage.setItem('forsion_notes_phone_tab', tab) } catch { /* 存不了:只管这一次 */ } }
-  // 没开库时三档都无从谈起:只剩「打开智库」的提示与末尾两行(胶囊也不画)
-  const flatList = phone && !!vaultRoot && phoneTab !== 'tree'
+  const phoneTab: NotesPhoneTab = savedTab ?? (recentList.length ? 'recent' : 'tree')
+  // 没开库时这几档都无从谈起:只剩「打开智库」的提示与末尾两行(胶囊也不画)
+  const flatList = phone && !!vaultRoot && (phoneTab === 'recent' || phoneTab === 'boards')
+  const tagsTab = phone && !!vaultRoot && phoneTab === 'tags'
+  // 全文检索画在这张列表里:列表层只画笔记列表这一个左栏视图(Space 的 soleList),点标签、点收藏的检索集合去激活的
+  // 那个左栏检索视图不在屏上。来了一次新的检索请求(useSearchSeed 的序号变了:点标签 / 检索集合带着查询,末尾「全文搜索」那一行
+  // 和搜索命令是空查询)就在胶囊下面就地打开;标题那行或任一档胶囊回到列表。
+  // 「看过第几次」记在模块里:列表还没挂上时来的请求(冷启动直接在笔记里点了正文的标签),挂上后照样接住。
+  const searchSeed = useSearchSeed((s) => (phone ? s.seed : null))
+  const [listSearch, setListSearch] = useState(false)
+  // 换了智库:上一个库的检索不带过来。只在真换了的时候收(挂上那一次不算),并且排在下面那条前面 —— 挂上时正等着的请求照样接住。
+  // 旧请求不会在新库上再触发一次:它的序号已经记在 phoneSeedSeen 里了。
+  const searchVault = useRef(vaultRoot)
+  useEffect(() => {
+    if (searchVault.current === vaultRoot) return
+    searchVault.current = vaultRoot
+    setListSearch(false)
+  }, [vaultRoot])
+  useEffect(() => {
+    if (!searchSeed || searchSeed.n === phoneSeedSeen) return
+    phoneSeedSeen = searchSeed.n
+    setListSearch(true)
+  }, [searchSeed])
+  const inListSearch = phone && !!vaultRoot && listSearch
+  // 系统返回先收掉这层检索、回到列表,再按才是离开这一层。外壳在浮层(半屏、菜单)都问过之后才来问列表层
+  // (forsion:mobile-list-back:先发一个只问不动手的 probe);只在列表层在屏上时接 —— 进了某篇笔记之后这张列表还挂着(滑到屏外),
+  // 那时的返回是「回列表」,不该被一层看不见的检索吃掉。接上 / 放下各报一声:浏览器里的返回要据此决定留不留那条历史记录。
+  const listShown = useWorkspace((s) => s.leftVisible)
+  const holdsBack = inListSearch && listShown
+  useEffect(() => {
+    if (!holdsBack) return
+    const onBack = (e: Event): void => {
+      e.preventDefault()
+      if (!(e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) setListSearch(false)
+    }
+    const report = (): void => { window.dispatchEvent(new Event('forsion:mobile-list-back-change')) }
+    window.addEventListener('forsion:mobile-list-back', onBack)
+    report()
+    return () => { window.removeEventListener('forsion:mobile-list-back', onBack); report() }
+  }, [holdsBack])
+  const pickPhoneTab = (tab: NotesPhoneTab): void => { setListSearch(false); setSavedTab(tab); saveNotesPhoneTab(tab) }
   const openSearch = (): void => useQuickFind.getState().openPalette()
   usePullToSearch(scrollRef, phone ? openSearch : undefined)
   // 顶栏标题后面那一段 = 现在开着的智库;有「互联设备 / 智库」入口(手机的 rb-units-mobile)时点它就是切换。
@@ -1795,6 +1830,13 @@ export function AmadeusPagesView() {
 
   const foot = (
     <div className="t2s-foot">
+      {/* 手机:全库的全文检索从这一行进(顶栏的搜索只按名字找);点了在列表里就地打开,光标进输入框 */}
+      {phone && !!vaultRoot && (
+        <button className="t2s-special amx-fulltext-entry" onClick={() => useSearchSeed.getState().request('')}>
+          <span className="t2s-special-ic"><Search /></span>
+          <span className="t2s-special-title">{t('amxpanel.searchHead')}</span>
+        </button>
+      )}
       <TrashSection />
       {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
@@ -1809,12 +1851,12 @@ export function AmadeusPagesView() {
 
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0, minWidth: 0 }}>
-      <aside className="t2s-side amx-tree" data-timeline={flatList ? '' : undefined}>
-        {/* 手机:搜索在顶栏(和下拉),这里换成三档胶囊 */}
+      <aside className="t2s-side amx-tree" data-timeline={flatList && !inListSearch ? '' : undefined}>
+        {/* 手机:搜索在顶栏(和下拉),这里换成四档胶囊 */}
         {phone ? !!vaultRoot && (
           <ListChips
             label={t('amxv.phone.tabs')}
-            items={[{ id: 'recent', label: t('amxv.phone.tab.recent') }, { id: 'tree', label: t('amxv.phone.tab.tree') }, { id: 'boards', label: t('amxv.phone.tab.boards') }]}
+            items={[{ id: 'recent', label: t('amxv.phone.tab.recent') }, { id: 'tree', label: t('amxv.phone.tab.tree') }, { id: 'boards', label: t('amxv.phone.tab.boards') }, { id: 'tags', label: t('amxv.phone.tab.tags') }]}
             value={phoneTab} onChange={pickPhoneTab}
           />
         ) : (
@@ -1857,12 +1899,13 @@ export function AmadeusPagesView() {
           }}
         >
           {phone && <PullHint />}
-          {flatList && <ListHint id="notes">{t('amxv.phone.hint')}</ListHint>}
-          {flatList && phoneTab === 'recent' && (recentList.length
+          {inListSearch ? <AmadeusSearchView onBack={() => setListSearch(false)} /> : tagsTab ? <AmadeusTagsView inList /> : null}
+          {flatList && !inListSearch && <ListHint id="notes">{t('amxv.phone.hint')}</ListHint>}
+          {flatList && !inListSearch && phoneTab === 'recent' && (recentList.length
             ? withSections(recentList, (x) => dayBucket(x.at)).map((x) => ('section' in x ? <ListSection key={`sec:${x.section}`} bucket={x.section} /> : flatRow(x.item.path, x.item.at)))
             : <div className="t2s-hint">{t('amxv.phone.noRecent')}</div>)}
-          {flatList && phoneTab === 'boards' && (boards.length ? boards.map((path) => flatRow(path, 0)) : <div className="t2s-hint">{t('amxv.phone.noBoards')}</div>)}
-          {flatList ? null : q ? (
+          {flatList && !inListSearch && phoneTab === 'boards' && (boards.length ? boards.map((path) => flatRow(path, 0)) : <div className="t2s-hint">{t('amxv.phone.noBoards')}</div>)}
+          {flatList || tagsTab || inListSearch ? null : q ? (
             matches.length ? matches.map((p) => row(p)) : <div className="t2s-hint">{t('amxv.noMatches')}</div>
           ) : (
             <>
@@ -1900,7 +1943,7 @@ export function AmadeusPagesView() {
               })()}
             </>
           )}
-          {phone && foot}
+          {phone && !inListSearch && foot}
         </div>
         {/* 回收站 + Vault 常驻侧栏底部(sticky footer),不随笔记树滚走;Vault 在回收站下方最底。
             手机上这一块排进列表末尾(见上面的 phoneFoot):钉在底部的话它会挡在 Dock 与列表之间。 */}

@@ -106,7 +106,7 @@ Android 的共享 `ModelPill` 可通过 `modelPickerHost` 接口使用 Kotlin / 
 ```
 
 Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true`）：插件注册的 Space 自动出现在里面，图标取 `SpaceDefinition.icon`，不需要额外接线。
-有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。
+有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。左栏有几个视图时列表上方有一个切换下拉；头一个视图自己就给了其余几个的入口的 Space 写 `soleList: true`，列表层只画头一个、不出下拉（只换画哪一个，不关视图、不改存下的布局）。
 视图可以往这条原生顶栏上加两样东西：`useNativeChromeExtras` —— 右胶囊里的搜索钮、标题的第二段（给了 `run` 就可点）；不声明就没有，只有当前这一层的声明生效。
 
 ```js

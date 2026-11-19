@@ -293,6 +293,11 @@ export interface SpaceDefinition {
    *  左栏不是这种列表的 Space(日历的待办)写 false:主区即第一层,左栏照旧是侧滑抽屉。
    *  配方 Space(用户 / 插件的 space.json)一律 false(见 userSpaces.specToDefinition):配方照桌面的三栏写,左栏未必是这种列表。 */
   listFirst?: boolean
+  /** 手机两级导航的列表层只画这个 Space 左栏的**头一个**视图(`sidebarDefaults.left` 的第一项):它就是那张列表,其余左栏视图
+   *  由它自己给入口(笔记:搜索在顶栏,标签是列表里的一档)。**缺省 = 左栏有几个视图,列表层顶上就留一个切换下拉**。
+   *  只管画哪一个:leaf 不关,激活的是谁、存下的布局都不动 —— 平板横屏 / 网页宽屏和它共用一份状态,那边照旧是并排的几个标签。
+   *  配方 Space(space.json)没有这一项。 */
+  soleList?: boolean
   /** 固定 View:该区内始终至少留一个这种 View —— 关不掉、拖不出本区、不被别的类型顶掉(别的类型开新标签,
    *  同类照旧就地换),进入 Space 时缺了就补。params = 补回时的重建参数。判定见 pinnedViews.ts。
    *  只管主区与左右栏;固定不等于常显,侧栏照常可以收起。 */

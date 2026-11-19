@@ -236,7 +236,11 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
     return () => window.clearTimeout(timer)
   }, [parked, page, reader])
   const leaves = side === 'left' ? useWorkspace.getState().leftLeaves : useWorkspace.getState().rightLeaves
-  const active = useWorkspace.getState().getActiveSideLeaf(side)
+  // 列表层只画头一个左栏视图的 Space(SpaceDefinition.soleList):不看激活的是哪一个,也不留切换下拉。头一个按 Space
+  // 声明的类型认(桶里的先后是打开的先后,别处存下的布局未必还是声明的顺序),认不出就取桶里第一个。只换画谁,不动 store。
+  const sole = !!page && side === 'left' && !!getActiveSpace()?.soleList
+  const lead = sole ? leaves.find((r) => r.type === getActiveSpace()?.sidebarDefaults.left[0]?.type) ?? leaves[0] : undefined
+  const active = lead ? useWorkspace.getState().leafById(lead.id) : useWorkspace.getState().getActiveSideLeaf(side)
   const def = active ? getView(active.type) : null
   const close = () => useWorkspace.getState().toggleSidebar(side)
   // 「这个抽屉有没有东西可给」:侧栏视图,或(仅左)底部常驻区。见 footAliveOf 上方的注释。
@@ -252,9 +256,9 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
   }, [docking])
   const inner = !alive ? null : (
     <>
-      {/* page = 两级导航的列表层(见 listFirstNow):标题已在原生顶栏上,这里只在该侧有多个视图时留下切换下拉;
-          也没有「关闭」—— 这一层是 Space 的首页,往下走靠点条目。 */}
-      {!(page && leaves.length <= 1) && <div className="mb-drawer-bar">
+      {/* page = 两级导航的列表层(见 listFirstNow):标题已在原生顶栏上,这里只在该侧有多个视图时留下切换下拉
+          (只画头一个的 Space 不留,见上面的 sole);也没有「关闭」—— 这一层是 Space 的首页,往下走靠点条目。 */}
+      {!(page && (sole || leaves.length <= 1)) && <div className="mb-drawer-bar">
         {/* 该侧多个视图 → 下拉切换(原生 select,真机走系统选择器);单个则显示标题。 */}
         {leaves.length > 1 ? (
           <select

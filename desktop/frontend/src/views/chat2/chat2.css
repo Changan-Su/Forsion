@@ -1984,3 +1984,30 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .t2cv-runfold { animation: none; }
 }
+
+/* ── 手机(有宿主画 Dock 的窄列:Android 原生外壳、手机浏览器里的网页版):对话页少写几样 ──
+   哪一条带哪几个记号由 messageQuiet.ts 算,EditorialMessage 写在消息根的 data-quiet 上(没有这个属性的消息原样画);
+   点过的那一条 = 根上的 data-tapped(messageTap.ts)。
+   · 自己的名字不写;只有一个 Agent 的对话(solo),回答上面也不写 Agent 的名字。团队 / 多 Agent 的对话照旧写。
+   · 时间只在离上一条满 5 分钟的那条(gap)上写;点过的那条也写。
+   · 回答下面那排按钮只在最后一条画得出它的回答(last)下常驻;别的回答点一下才出来。没写出字的回答(bare:只有工具卡 / 产物)
+     没有正文可点,它那一排一直留着。
+   收起来的行是「看不见」不是「没有」(同前面用户消息的三个小键,不用 display:none):读屏逐项滑得到,外接键盘 Tab 进去时
+   整行原样显出来。原生菜单弹不出来过的那条用户消息(.t2-userwrap--inline)整行留着。
+   只在有宿主画 Dock 的窄列里命中(与前面头像那条同一条 520px 线,再排除宽屏并排);桌面、网页的抽屉形态(没有宿主画 Dock)、
+   平板横屏不变。
+   不写 :has、不写按位置的选择器:挂在聊天流上的这两类规则,每插一条消息都把整段对话的样式重算一遍(DESIGN §7.10)。
+   放文件末尾(DESIGN §7.2)。仪器:mobile `npm run stage:phone` 的 chat-quiet / chat-quiet-team。 */
+@container (max-width: 520px) {
+  .mb-shell[data-native-chrome]:not([data-wide]) .t2-username,
+  .mb-shell[data-native-chrome]:not([data-wide]) .t2-asst[data-quiet~='solo'] > .t2-asst-col > .t2-name { display: none; }
+  /* 整行收起:没到写时间的用户消息(它的小键本来就收着);不是最后一条、没到写时间、也写出了字的回答 */
+  .mb-shell[data-native-chrome]:not([data-wide]) .t2-userwrap[data-quiet]:not([data-quiet~='gap'], [data-tapped], .t2-userwrap--inline) > .t2-user-col > .t2-actions:not(:focus-within),
+  .mb-shell[data-native-chrome]:not([data-wide]) .t2-asst[data-quiet]:not([data-quiet~='last'], [data-quiet~='gap'], [data-quiet~='bare'], [data-tapped]) > .t2-asst-col > .t2-actions:not(:focus-within) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  /* 只写时间:到了写时间、但不是最后一条的回答 —— 那排按钮收着,点一下才出来 */
+  .mb-shell[data-native-chrome]:not([data-wide]) .t2-asst[data-quiet~='gap']:not([data-quiet~='last'], [data-quiet~='bare'], [data-tapped]) > .t2-asst-col > .t2-actions:not(:focus-within) > :not(.t2-msgtime) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+}

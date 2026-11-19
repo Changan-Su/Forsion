@@ -72,6 +72,7 @@ const ping = () => new Promise((res) => {
 // ── fixtures: what a used account looks like (the lists are judged on real-looking rows, not on two placeholders) ──
 const T0 = Date.now()
 const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR
+const SINCE_MIDNIGHT = T0 - new Date(T0).setHours(0, 0, 0, 0)
 const iso = (ago) => new Date(T0 - ago).toISOString()
 const session = (id, title, ago, extra = {}) => ({
   id, title, summary: null, model_id: null, archived: false, emoji: null, agent_config: { execMode: 'host', approvalMode: 'auto-edit' },
@@ -114,6 +115,28 @@ const CHAT_MESSAGES = [
     content: ['| 文件 | 改动 | 行数 | 风险 | 测试 |', '|---|---|---|---|---|', '| `auth/captcha.ts` | 返回相对路径，不带前缀 | +3 −5 | 低 | 新增 1 条 |', '| `shared/assetUrl.ts` | 已带前缀的地址不再重复拼，其余地址照旧按环境加前缀 | +6 −1 | 中，全站在用 | 已有 14 条全过 |', '| `auth/login.html` | 图片加载失败时给出「点击重试」 | +11 −0 | 低 | 手动点过 |', '',
       '两个环境的差别：', '', '| 环境 | 前缀 |', '|---|---|', '| 开发 | `/api` |', '| 生产 | 空 |', '',
       '```ts', "export const buildAssetUrl = (path: string, base = ''): string => path.startsWith(`${base}/api/`) ? path : `${base}/api/${path}`", '```'].join('\n') },
+]
+// A conversation with pauses in it, for what the chat page leaves out on a phone (st-7): a time is written only on a
+// message more than five minutes after the one before it, the row of keys stays under the last answer only. Second
+// pair: no pause. Third answer: it took eighteen minutes, so it carries a time without being the last. One answer has a
+// code block (its copy key must not count as a tap on the message).
+const QUIET_AT = 3 * DAY
+const QUIET_MESSAGES = [
+  { ...MESSAGES[0], id: 'st-q1', content: '帮我想三个年终总结的标题。', timestamp: T0 - QUIET_AT - 3 * HOUR },
+  { ...MESSAGES[1], id: 'st-q2', content: '三个方向：\n\n- 做成了什么\n- 没做成什么\n- 明年只做哪三件', timestamp: T0 - QUIET_AT - 3 * HOUR + MIN },
+  { ...MESSAGES[0], id: 'st-q3', content: '第二个再短一点。', timestamp: T0 - QUIET_AT - 40 * MIN },
+  { ...MESSAGES[1], id: 'st-q4', content: ['改成「没做成的」。放进提纲是这样：', '', '```', '一、做成了什么', '二、没做成的', '三、明年只做三件', '```'].join('\n'), timestamp: T0 - QUIET_AT - 39 * MIN },
+  { ...MESSAGES[0], id: 'st-q5', content: '好，就用这个。把每一部分要写的要点也列出来。', timestamp: T0 - QUIET_AT - 38 * MIN },
+  { ...MESSAGES[1], id: 'st-q6', content: '每一部分三条要点，先按时间排，再按影响大小排。第一部分写上线的功能，第二部分写推迟的两件事和原因，第三部分只写目标，不写做法。', timestamp: T0 - QUIET_AT - 20 * MIN },
+  { ...MESSAGES[0], id: 'st-q7', content: '可以，谢谢。', timestamp: T0 - QUIET_AT - 19 * MIN },
+  { ...MESSAGES[1], id: 'st-q8', content: '不客气。写完发我，我帮你压到一页。', timestamp: T0 - QUIET_AT - 18 * MIN },
+]
+// The team's session (st-team): history stores each speaker as a first line, as the engine writes it.
+const TEAM_AT = 2 * DAY
+const TEAM_MESSAGES = [
+  { ...MESSAGES[0], id: 'st-t1', content: '这周的周报谁来起草？', timestamp: T0 - TEAM_AT - 30 * MIN },
+  { ...MESSAGES[1], id: 'st-t2', agent_slug: 'researcher', content: '**🗣 研究员**\n\n我来列这周的三件事，数据在周三的表里。', timestamp: T0 - TEAM_AT - 29 * MIN },
+  { ...MESSAGES[1], id: 'st-t3', agent_slug: 'editor', content: '**🗣 编辑**\n\n我等研究员的提纲，再统一口吻，压到一页。', timestamp: T0 - TEAM_AT - 28 * MIN },
 ]
 const AGENTS = [
   { slug: 'researcher', name: '研究员', description: '查资料、读长文、列出处' },
@@ -179,8 +202,11 @@ async function stubApi(page, unknown) {
       if (m === 'PATCH' || m === 'PUT') configs[id] = { ...(m === 'PATCH' ? configs[id] : {}), ...JSON.parse(req.postData() || '{}') }
       return json({ agent_config: configs[id] || {} })
     }
+    // a tap on a team's row asks the engine for that team's session (the one it has, or a new one)
+    const team = p.match(/\/agent\/teams\/([^/]+)\/session\/open$/)
+    if (team && m === 'POST') return json({ session: SESSIONS.find((x) => x.agent_config.teamSlug === decodeURIComponent(team[1])) || null, created: false })
     if (p.endsWith('/agent/link-preview')) return json({ preview: url.searchParams.get('url') === LINK_PR ? LINK_PREVIEW : null })
-    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : [] })
+    if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : p.includes('/st-7/') ? QUIET_MESSAGES : p.includes('/st-team/') ? TEAM_MESSAGES : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
       const row = SESSIONS.find((x) => x.id === decodeURIComponent(one[1]))
@@ -230,7 +256,9 @@ const NOTES = {
   folders: ['项目', '读书笔记'],
   pages: ['十月计划.md', '项目/发版清单 2.13.md', '项目/会议纪要 9-30.md', '读书笔记/《置身事内》第三章摘记.md', '读书笔记/《枪炮、病菌与钢铁》.md'],
   files: ['项目/信息架构草图.excalidraw.md', '流程图.excalidraw.md'],
-  recents: [['项目/发版清单 2.13.md', 25 * MIN], ['读书笔记/《置身事内》第三章摘记.md', DAY + 3 * HOUR], ['十月计划.md', 3 * DAY], ['项目/信息架构草图.excalidraw.md', 4 * DAY], ['项目/会议纪要 9-30.md', 9 * DAY]],
+  // the first two are placed by the clock, not by age, so "today" and "yesterday" hold at any hour: 25 minutes ago is
+  // yesterday just after midnight, and 27 hours ago is two days back until 03:00
+  recents: [['项目/发版清单 2.13.md', Math.min(25 * MIN, SINCE_MIDNIGHT / 2)], ['读书笔记/《置身事内》第三章摘记.md', SINCE_MIDNIGHT + 3 * HOUR], ['十月计划.md', 3 * DAY], ['项目/信息架构草图.excalidraw.md', 4 * DAY], ['项目/会议纪要 9-30.md', 9 * DAY]],
 }
 async function seedNotes(page) {
   await page.evaluate(async ({ storeUrl, recentUrl, notes, now }) => {
@@ -286,6 +314,74 @@ const openChat = async (page, title) => {
   await page.waitForTimeout(600)
 }
 const chip = async (page, id) => { await page.locator(`${LIST} .pl-chips [data-filter="${id}"]`).tap(); await page.waitForTimeout(400) }
+/** What each message of the open chat shows: a name, a time, how many keys of its action row. A folded row is still in
+ *  the page (a 1 px clipped box a screen reader reaches), so an element counts as shown only when neither it nor
+ *  anything between it and its message is clipped or hidden. */
+const messageChrome = (page) => page.evaluate((q) => {
+  const shown = (el, msg) => {
+    if (!el || !el.getClientRects().length) return false
+    for (let a = el; a && a !== msg.parentElement; a = a.parentElement) {
+      const cs = getComputedStyle(a)
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.clipPath !== 'none') return false
+    }
+    return true
+  }
+  return [...document.querySelector(q).querySelectorAll('.t2-stream-inner > .t2-asst, .t2-stream-inner > .t2-userwrap')].map((m) => ({
+    id: m.id.replace('tocmsg-st-', ''), quiet: m.getAttribute('data-quiet'), tapped: m.hasAttribute('data-tapped'),
+    name: shown(m.querySelector('.t2-name, .t2-username'), m), time: shown(m.querySelector('.t2-msgtime'), m),
+    keys: [...m.querySelectorAll('.t2-actions .t2-iconbtn')].filter((b) => shown(b, m)).length,
+  }))
+}, CHAT)
+const idsOf = (rows, pick) => rows.filter(pick).map((r) => r.id).join(',')
+/** The left side as the workspace store has it (not as the list level draws it): its views and the active one. */
+const leftSide = (page) => page.evaluate(async (url) => {
+  const ws = (await import(/* @vite-ignore */ url)).useWorkspace.getState()
+  return { types: ws.leftLeaves.map((l) => l.type), active: ws.leftLeaves.find((l) => l.id === ws.leftActiveId)?.type ?? null }
+}, moduleUrl('../lcl/engine/singleColumnStore.ts'))
+/** Notes with tags, written through the app's own vault bridge (in a browser it keeps its files in IndexedDB), so the
+ *  tag list and the tag search answer from a real index. */
+/** Which way this stage can press system Back. A browser has no back key: Capacitor's web App plugin passes a
+ *  `backButton` on through notifyListeners, but on a good share of page loads the listener MobileRoot registered sits on
+ *  an instance a later first call replaced (measured in home-back.e2e.cjs) — and this stage is one load. So the key is
+ *  tried once, swallowed at the first link of the chain (nothing moves). `key` = it arrives; `event` = it does not, and
+ *  the list level is asked directly, the way MobileRoot's planBack asks it once every overlay has declined. */
+const backPath = (page) => page.evaluate(async () => {
+  const st = window.__stage
+  if (st.backPath) return st.backPath
+  let seen = 0
+  const swallow = (e) => { seen++; e.preventDefault() }
+  window.addEventListener('forsion:mobile-back', swallow, { capture: true, once: true })
+  window.Capacitor?.Plugins?.App?.notifyListeners?.('backButton', { canGoBack: false })
+  await new Promise((r) => setTimeout(r, 400))
+  window.removeEventListener('forsion:mobile-back', swallow, true)
+  return (st.backPath = seen ? 'key' : 'event')
+})
+/** One system Back (see backPath). Returns the way it was pressed. */
+async function systemBack(page) {
+  const via = await backPath(page)
+  await page.evaluate((key) => {
+    if (key) return void window.Capacitor.Plugins.App.notifyListeners('backButton', { canGoBack: false })
+    if (!window.dispatchEvent(new CustomEvent('forsion:mobile-list-back', { cancelable: true, detail: { probe: true } }))) window.dispatchEvent(new Event('forsion:mobile-list-back', { cancelable: true }))
+  }, via === 'key')
+  await page.waitForTimeout(500)
+  return via
+}
+/** Whether the list level says it has a layer of its own to close before Back leaves it (asked without closing it). */
+const listHoldsBack = (page) => page.evaluate(() => !window.dispatchEvent(new CustomEvent('forsion:mobile-list-back', { cancelable: true, detail: { probe: true } })))
+const shellSpace = (page) => page.evaluate(() => document.querySelector('.mb-shell')?.getAttribute('data-space') || '')
+
+async function seedTags(page) {
+  await page.evaluate(async (storeUrl) => {
+    const a = window.amadeus
+    await a.writeTextFile('标签样例/周报提纲.md', '周报提纲 #工作/周报\n\n- 三个部分 #待整理\n')
+    await a.writeTextFile('标签样例/读书计划.md', '下半年的书单 #读书\n\n先读第三章 #工作/周报 里要引用\n')
+    await a.writeTextFile('标签样例/灵感.md', '路上想到的 #待整理\n')
+    await a.reindex()
+    const { usePageStore } = await import(/* @vite-ignore */ storeUrl)
+    usePageStore.setState((st) => ({ linkGraphVersion: (st.linkGraphVersion || 0) + 1 }))
+  }, moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'))
+  await page.waitForTimeout(300)
+}
 
 const SCENES = {
   home: async (page) => {
@@ -296,9 +392,11 @@ const SCENES = {
     const greet = await rect(page, `${HOME} .hp-greet`)
     const composerShown = () => page.evaluate((q) => { const el = document.querySelector(q); return !!el && el.getBoundingClientRect().height > 0 }, `${HOME} .hp-composer`)
     const before = await composerShown()
+    const stored = await page.evaluate(() => localStorage.getItem('forsion_home_cards_v1'))
     return [
       ['the greeting leads, below the capsules', !!greet && greet.y >= LAYOUT.top, JSON.stringify(greet && { y: greet.y })],
-      ['four cards, two to a row, the first with what was last worked on', cards.length === 4 && cards.every((c) => c.h >= 103 && near(c.w, cards[0].w)) && cards[0].status === '继续：发版说明草稿', JSON.stringify(cards.map((c) => [c.name, c.status, Math.round(c.h)]))],
+      ['never chosen: the four Spaces with something to report, two to a row, the first with what was last worked on; no store, no achievements', cards.map((c) => c.name).join() === 'Tangu,笔记,日历,收件箱' && cards.every((c) => c.h >= 103 && near(c.w, cards[0].w)) && cards[0].status === '继续：发版说明草稿', JSON.stringify(cards.map((c) => [c.name, c.status, Math.round(c.h)]))],
+      ['showing the defaults stores nothing', stored === null, String(stored)],
       ['the input is one pill above the dock, the full composer hidden', !!pill && near(pill.h, 54) && pill.bottom <= DOCK_TOP - 6 && pill.y > cards[cards.length - 1]?.bottom && !before, JSON.stringify({ pill, before })],
     ]
   },
@@ -598,6 +696,91 @@ const SCENES = {
       ['the copy key of a code block takes a touch 23 dp below and beside its middle', !!m.copy && m.copy.every((x) => x.ok), d],
     ]
   },
+  // What the chat page leaves out on a phone: the user's own name; the agent's name while one agent answers; a time
+  // unless the message comes more than five minutes after the one before; the row of keys except under the last answer.
+  // A tap on a message brings its time and its row out, a second tap or a tap elsewhere puts them back.
+  'chat-quiet': async (page) => {
+    await openChat(page, '年终总结提纲')
+    await page.waitForSelector(`${CHAT} #tocmsg-st-q1`, { timeout: 10_000 }) // the earlier messages are mounted in idle time
+    await page.waitForTimeout(400)
+    const text = (id) => page.locator(`${CHAT} #tocmsg-st-${id} :is(.t2-content p, .t2-user)`).first()
+    const tap = async (target) => { await target.tap(); await page.waitForTimeout(250); return messageChrome(page) }
+    const rest = await messageChrome(page)
+    // the answer that carries a time without being the last (it is on screen at the conversation's end: the shot)
+    const onTimed = await tap(text('q6'))
+    await page.screenshot({ path: path.join(OUT, `chat-quiet-tapped${DARK ? '-dark' : ''}.png`) })
+    const onAnswer = await tap(text('q2'))
+    const onQuestion = await tap(text('q5'))
+    const again = await tap(text('q5'))
+    const onKey = await tap(page.locator(`${CHAT} #tocmsg-st-q4 .t2-content pre ~ .icon-btn`).first())
+    await page.evaluate((q) => getSelection().selectAllChildren(document.querySelector(q)), `${CHAT} #tocmsg-st-q6 .t2-content p`)
+    const onSelected = await tap(text('q4'))
+    await page.evaluate(() => getSelection().removeAllRanges())
+    const elsewhere = [await tap(text('q2')), await tap(page.locator(`${CHAT} .t2c-ta`).first())]
+    await page.evaluate(() => document.activeElement?.blur())
+    // What follows the last answer, put straight into the app's store (ids st-q9 … are taken away again at the end):
+    const app = moduleUrl('../desktop/frontend/src/stores/appStore.ts')
+    const follow = async (extra) => {
+      await page.evaluate(async ([url, more]) => {
+        const { useApp } = await import(/* @vite-ignore */ url)
+        useApp.setState((s) => {
+          const sid = Object.keys(s.messagesBySession).find((k) => s.messagesBySession[k].some((m) => m.id === 'st-q1'))
+          return { messagesBySession: { ...s.messagesBySession, [sid]: [...s.messagesBySession[sid].filter((m) => !/^st-q(9|1\d)$/.test(m.id)), ...more] } }
+        })
+      }, [app, extra])
+      if (extra.length) await page.waitForSelector(`${CHAT} #tocmsg-${extra[extra.length - 1].id}`, { timeout: 5000 })
+      await page.waitForTimeout(400)
+      return messageChrome(page)
+    }
+    // an answer on its way with nothing written yet: its name row (and the dot in it) is left out like any other, so the
+    // line that says it is thinking is what tells the answer is coming; the keys stay under the answer before it
+    const whileComing = await follow([{ id: 'st-q9', role: 'assistant', content: '', status: 'streaming', timestamp: T0 }])
+    const coming = await page.evaluate((q) => {
+      const m = document.querySelector(q), line = m.querySelector('.chat-thinking-live')
+      return { quiet: m.getAttribute('data-quiet'), name: getComputedStyle(m.querySelector('.t2-name')).display, line: line ? line.textContent.trim() : null, h: line ? line.getBoundingClientRect().height : 0 }
+    }, `${CHAT} #tocmsg-st-q9`)
+    await page.screenshot({ path: path.join(OUT, `chat-quiet-coming${DARK ? '-dark' : ''}.png`) })
+    // a run that failed: its row is the error with "retry", it has no keys of its own — the answer before it keeps them
+    const afterFailure = await follow([{ id: 'st-q9', role: 'assistant', content: '', status: 'error', error: 'stage: the run failed', timestamp: T0 }])
+    // an answer stopped before a word was written has no text to tap: its row stays out, though it is not the last one
+    const withBare = await follow([
+      { id: 'st-q9', role: 'assistant', content: '', status: 'stopped', timestamp: T0 },
+      { id: 'st-q10', role: 'user', content: '继续。', status: 'done', timestamp: T0 + MIN },
+      { id: 'st-q11', role: 'assistant', content: '好，接着写第二部分。', status: 'done', timestamp: T0 + 2 * MIN },
+    ])
+    await page.screenshot({ path: path.join(OUT, `chat-quiet-bare${DARK ? '-dark' : ''}.png`) })
+    await follow([])
+    await page.evaluate((q) => { const el = document.querySelector(q); el.scrollTop = el.scrollHeight }, `${CHAT} .t2-stream`)
+    const of = (rows, id) => rows.find((r) => r.id === id) || {}
+    const brief = (rows) => JSON.stringify(rows.map((r) => `${r.id}[${r.quiet}]${r.name ? ' name' : ''}${r.time ? ' time' : ''}${r.keys ? ` keys=${r.keys}` : ''}${r.tapped ? ' tapped' : ''}`))
+    return [
+      ['one agent: no name over the answers, none over the user\'s own messages', rest.length === 8 && rest.every((r) => !r.name), brief(rest)],
+      ['a time on the first message, on each one five minutes or more after the one before, and in the last answer\'s row', idsOf(rest, (r) => r.time) === 'q1,q3,q6,q8', brief(rest)],
+      ['the row of keys stays under the last answer only', idsOf(rest, (r) => r.keys > 0) === 'q8' && of(rest, 'q8').keys >= 2, brief(rest)],
+      ['an earlier answer that carries a time shows the time alone; a tap brings its keys out beside it', !of(rest, 'q6').keys && of(onTimed, 'q6').keys >= 2 && of(onTimed, 'q6').time && idsOf(onTimed, (r) => r.tapped) === 'q6', brief(onTimed)],
+      ['a tap on another earlier answer brings out its keys and its time, and puts the first one back', of(onAnswer, 'q2').keys >= 2 && of(onAnswer, 'q2').time && idsOf(onAnswer, (r) => r.tapped) === 'q2' && idsOf(onAnswer, (r) => r.keys > 0) === 'q2,q8', brief(onAnswer)],
+      ['a tap on a question brings out its time (its keys stay behind the long-press) and puts the answer back', of(onQuestion, 'q5').time && !of(onQuestion, 'q5').keys && idsOf(onQuestion, (r) => r.tapped) === 'q5' && !of(onQuestion, 'q2').keys && !of(onQuestion, 'q2').time, brief(onQuestion)],
+      ['a second tap puts it back', idsOf(again, (r) => r.tapped) === '' && idsOf(again, (r) => r.time) === 'q1,q3,q6,q8', brief(again)],
+      ['a tap on a code block\'s copy key is not a tap on the message', idsOf(onKey, (r) => r.tapped) === '', brief(onKey)],
+      ['with text selected a tap only drops the selection', idsOf(onSelected, (r) => r.tapped) === '', brief(onSelected)],
+      ['a tap elsewhere (the input) puts the message back', idsOf(elsewhere[0], (r) => r.tapped) === 'q2' && idsOf(elsewhere[1], (r) => r.tapped) === '', brief(elsewhere[1])],
+      ['an answer still on its way: no name row, the line that says it is thinking shows; the row of keys stays under the answer before it', /\bsolo\b/.test(coming.quiet || '') && !/\blast\b/.test(coming.quiet || '') && coming.name === 'none' && coming.line === '思考中' && coming.h > 0 && of(whileComing, 'q8').keys >= 2 && idsOf(whileComing, (r) => r.keys > 0) === 'q8', JSON.stringify({ coming, rows: JSON.parse(brief(whileComing)) })],
+      ['a run that failed has no keys of its own: the answer before it keeps them', of(afterFailure, 'q8').keys >= 2 && !of(afterFailure, 'q9').keys && idsOf(afterFailure, (r) => r.keys > 0) === 'q8', brief(afterFailure)],
+      ['an answer with nothing written (stopped before a word) keeps its row out, though it is not the last; the last answer has the keys', /\bbare\b/.test(of(withBare, 'q9').quiet || '') && of(withBare, 'q9').keys >= 1 && !of(withBare, 'q8').keys && of(withBare, 'q11').keys >= 2 && idsOf(withBare, (r) => r.tapped) === '', brief(withBare)],
+    ]
+  },
+  'chat-quiet-team': async (page) => {
+    await openChat(page, '周报小组')
+    await page.waitForSelector(`${CHAT} #tocmsg-st-t1`, { timeout: 10_000 })
+    await page.waitForTimeout(400)
+    const rows = await messageChrome(page)
+    const names = await texts(page, `${CHAT} .t2-stream-inner > .t2-asst .t2-name`)
+    const brief = JSON.stringify({ names, rows: rows.map((r) => `${r.id}[${r.quiet}]${r.name ? ' name' : ''}${r.time ? ' time' : ''}${r.keys ? ` keys=${r.keys}` : ''}`) })
+    return [
+      ['a team\'s conversation keeps each speaker\'s name; the user\'s own is still not written', names.join() === '研究员,编辑' && idsOf(rows, (r) => r.name) === 't2,t3', brief],
+      ['times and keys follow the same rule there', idsOf(rows, (r) => r.time) === 't1,t3' && idsOf(rows, (r) => r.keys > 0) === 't3', brief],
+    ]
+  },
   'chat-leave': async (page) => {
     await stage.action(page, 'left')
     return [['back on the list', (await stage.nav(page)) === 'list', await stage.nav(page)]]
@@ -707,7 +890,11 @@ const SCENES = {
     const secs = await texts(page, `${LIST} .pl-sec`)
     const fab = await rect(page, `${LIST} .pl-fab`)
     const search = await rect(page, `${LIST} .t2s-search`)
+    const chips = await texts(page, `${LIST} .pl-chips button`)
+    const switcher = await page.evaluate((q) => !!document.querySelector(`${q} .mb-drawer-bar, ${q} select`), LIST)
+    const left = await leftSide(page)
     return [
+      ['four chips, tags last; no view switcher over the list, though the Space still has its three left views', chips.join() === '最近,文件夹,白板,标签' && !switcher && left.types.join() === 'workspace,amadeus-search,amadeus-tags', JSON.stringify({ chips, switcher, left })],
       ['the capsule carries search and the open vault', st.search === '搜索笔记' && !!st.titleSub, `search=${st.search} sub=${st.titleSub}`],
       ['"recent" leads: what was opened last, newest first, in day sections, each with its folder', on.join() === '最近' && titles[0] === '发版清单 2.13' && subs[0] === '项目' && secs.join('|') === '今天|昨天|这一周|更早', `${on.join()} / ${titles.join('、')} / ${secs.join('|')}`],
       ['no search box or "new" rows in the list; one main button above the dock', !search && !!fab && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ search, fab })],
@@ -728,6 +915,129 @@ const SCENES = {
     const titles = await texts(page, `${LIST} [data-timeline] .t2s-srow-title`)
     return [['Whiteboards: only the whiteboards', titles.join('、') === '流程图、信息架构草图', titles.join('、')]]
   },
+  // Tags are the fourth chip: the tag tree in place of the list, in the list's own scroller. A tag's notes (the vault's
+  // full-text search with a tag condition) are shown in the list as well — that level draws one left view, so the left
+  // search view the tap activates is not on screen; the search row's heading leads back.
+  'notes-tags': async (page) => {
+    await seedTags(page)
+    await chip(page, 'tags')
+    await page.waitForSelector(`${LIST} .amx-tags-inlist .amx-tagtree-row`, { timeout: 6000 }).catch(() => {})
+    const TAGS = `${LIST} .t2s-scroll .amx-tags-inlist`
+    const tags = await page.evaluate((q) => [...document.querySelectorAll(`${q} .amx-tagtree-row`)].map((row) => { const r = row.getBoundingClientRect(); return { name: row.querySelector('.amx-tag-name').textContent, count: row.querySelector('.amx-tag-count').textContent, h: r.height, x: row.querySelector('.amx-tag-name').getBoundingClientRect().left } }), TAGS)
+    const chrome = await page.evaluate((q) => ({ on: document.querySelector(`${q} .pl-chips .on`)?.textContent, head: !!document.querySelector(`${q} .amx-panel-head`), filter: !!document.querySelector(`${q} .amx-tags-inlist-bar .amx-tagtree-search input`), sort: [...document.querySelectorAll(`${q} .amx-tags-inlist-bar .amx-tagtree-sort button`)].map((b) => b.textContent.trim() + (b.classList.contains('on') ? '*' : '')), tree: !!document.querySelector(`${q} .t2s-group, ${q} [data-timeline]`), switcher: !!document.querySelector(`${q} .mb-drawer-bar, ${q} select`), stored: localStorage.getItem('forsion_notes_phone_tab') }), LIST)
+    const fab = await rect(page, `${LIST} .pl-fab`)
+    await page.screenshot({ path: path.join(OUT, `notes-tags${DARK ? '-dark' : ''}.png`) })
+    // the filter narrows the tree as it is typed in; the sort keys change the order (count ↔ name) — put back afterwards
+    const names = () => texts(page, `${TAGS} .amx-tagtree-row .amx-tag-name`)
+    const byCount = await names()
+    await page.locator(`${TAGS} .amx-tags-inlist-bar .amx-tagtree-sort button`, { hasText: '名称' }).tap()
+    await page.waitForTimeout(300)
+    const byName = await names()
+    await page.locator(`${TAGS} .amx-tags-inlist-bar .amx-tagtree-sort button`, { hasText: '数量' }).tap()
+    await page.waitForTimeout(300)
+    await page.locator(`${TAGS} .amx-tags-inlist-bar input`).fill('读')
+    await page.waitForTimeout(300)
+    const filtered = await names()
+    const bar = await rect(page, `${TAGS} .amx-tags-inlist-bar`)
+    await page.screenshot({ path: path.join(OUT, `notes-tags-filter${DARK ? '-dark' : ''}.png`) })
+    await page.locator(`${TAGS} .amx-tags-inlist-bar input`).fill('')
+    await page.evaluate(() => document.activeElement?.blur())
+    await page.waitForTimeout(300)
+    // a nested tag opens in place
+    await page.locator(`${TAGS} .amx-tagtree-chev`).first().tap()
+    await page.waitForTimeout(400)
+    const open = await texts(page, `${TAGS} .amx-tag-name`)
+    // a tag's notes
+    await page.locator(`${TAGS} .amx-tag`, { hasText: '待整理' }).first().tap()
+    await page.waitForSelector(`${LIST} .t2s-scroll .amx-panel--inlist .amx-taghit-file`, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(300)
+    const PANE = `${LIST} .t2s-scroll .amx-panel--inlist`
+    const hits = await page.evaluate((q) => ({ query: document.querySelector(`${q} input`)?.value, files: [...document.querySelectorAll(`${q} .amx-taghit-file .amx-tag-name`)].map((el) => el.textContent), focused: document.activeElement?.tagName, scrolls: getComputedStyle(document.querySelector(q)).overflowY, chips: document.querySelectorAll('.mb-drawer--left .pl-chips button').length }), PANE)
+    const side = await leftSide(page)
+    const nav = await stage.nav(page)
+    await page.screenshot({ path: path.join(OUT, `notes-tag-hits${DARK ? '-dark' : ''}.png`) })
+    // into a note and back: the hits are still there; the heading row returns to the tags
+    await page.locator(`${PANE} .amx-taghit-file`).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    const opened = await stage.nav(page)
+    await stage.action(page, 'left')
+    const kept = await page.evaluate((q) => document.querySelectorAll(`${q} .amx-taghit-file`).length, PANE)
+    await page.locator(`${PANE} .amx-panel-back`).tap()
+    await page.waitForTimeout(300)
+    const listLook = () => page.evaluate((q) => ({ pane: !!document.querySelector(`${q} .amx-panel--inlist`), tags: document.querySelectorAll(`${q} .amx-tags-inlist .amx-tagtree-row`).length }), LIST)
+    const back = await listLook()
+    // system Back with a tag's notes open: the notes close and the tags are back, still on the list; the Back after
+    // that is the one that leaves the level. With something above the list holding Back (a sheet), the notes stay.
+    await page.locator(`${TAGS} .amx-tag`, { hasText: '待整理' }).first().tap()
+    await page.waitForSelector(`${PANE} .amx-taghit-file`, { timeout: 6000 }).catch(() => {})
+    const held = await listHoldsBack(page)
+    let under = null
+    if ((await backPath(page)) === 'key') {
+      await page.evaluate(() => { window.__stage.sheetBack = (e) => e.preventDefault(); window.addEventListener('forsion:mobile-back', window.__stage.sheetBack) })
+      await systemBack(page)
+      under = await listLook()
+      await page.evaluate(() => { window.removeEventListener('forsion:mobile-back', window.__stage.sheetBack); delete window.__stage.sheetBack })
+    }
+    const via = await systemBack(page)
+    const first = { ...(await listLook()), nav: await stage.nav(page), space: await shellSpace(page), holds: await listHoldsBack(page) }
+    await systemBack(page)
+    const second = { space: await shellSpace(page) }
+    if (second.space !== 'amadeus') await stage.space(page, 'amadeus')
+    return [
+      ['Tags: the tag tree in the list with its filter and its sort keys in one row — no heading of its own, no folder tree, the main button stays', chrome.on === '标签' && chrome.stored === 'tags' && !chrome.head && chrome.filter && chrome.sort.join() === '按数量*,按名称' && !chrome.tree && !chrome.switcher && !!fab && tags.map((t) => `${t.name}=${t.count}`).sort().join() === ['工作=2', '待整理=2', '读书=1'].sort().join(), JSON.stringify({ chrome, tags })],
+      ['the sort keys reorder the tags (by count, by name); typing in the filter narrows them; the row fits the screen', byCount.length === 3 && byName.length === 3 && byName.join() === byCount.slice().sort((a, b) => a.localeCompare(b, 'zh')).join() && byName.join() !== byCount.join() && filtered.join() === '读书' && !!bar && bar.x >= 0 && bar.right <= SCREEN.width, JSON.stringify({ byCount, byName, filtered, bar })],
+      ['a row is a touch target (48 dp) and starts where the list\'s rows do', tags.length === 3 && tags.every((t) => near(t.h, 48, 1) && t.x >= 16 && t.x <= 60), JSON.stringify(tags)],
+      ['a parent tag opens to its nested tags in place', open.length === 4 && open.indexOf('周报') === open.indexOf('工作') + 1, open.join()],
+      ['a tap on a tag lists its notes in the list (still the list level, chips above), without raising the keyboard', nav === 'list' && hits.query === 'tag:#待整理' && hits.files.slice().sort().join() === '周报提纲,灵感' && hits.focused !== 'INPUT' && hits.scrolls === 'visible' && hits.chips === 4, JSON.stringify({ nav, hits })],
+      ['the store still has the three left views (the search one now active); only what the list level draws changed', side.types.length === 3 && side.active === 'amadeus-search', JSON.stringify(side)],
+      ['a hit opens its note; back returns to the hits; the heading row returns to the tags', opened === 'detail' && kept === 2 && !back.pane && back.tags >= 3, JSON.stringify({ opened, kept, back })],
+      ['system Back with a tag\'s notes open closes them and stays on the list (a sheet above the list takes Back first); only the Back after that leaves the level', held && (under === null || under.pane) && !first.pane && first.tags >= 3 && first.nav === 'list' && first.space === 'amadeus' && !first.holds && (via === 'key' ? second.space === 'home' : second.space === 'amadeus'), JSON.stringify({ via, held, under, first, second })],
+    ]
+  },
+  // Full-text search has its own way in on the phone (the capsule's search finds by name): a row at the foot of the
+  // list, and the search command. Both open it in the list with nothing typed and the caret in the field.
+  'notes-fulltext': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    await chip(page, 'recent')
+    const PANE = `${LIST} .t2s-scroll .amx-panel--inlist`
+    const look = async () => ({ ...(await page.evaluate((q) => { const pane = document.querySelector(q), input = pane?.querySelector('input'); return { pane: !!pane, query: input ? input.value : null, caret: !!input && document.activeElement === input } }, PANE)), nav: await stage.nav(page) })
+    const foot = await texts(page, `${LIST} .t2s-foot .t2s-special-title`)
+    await page.locator(`${LIST} .t2s-foot .amx-fulltext-entry`).tap()
+    await page.waitForSelector(PANE, { timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(300)
+    const opened = await look()
+    await page.screenshot({ path: path.join(OUT, `notes-fulltext-open${DARK ? '-dark' : ''}.png`) })
+    await page.keyboard.type('书单')
+    await page.waitForSelector(`${PANE} .amx-list-item`, { timeout: 6000 }).catch(() => {})
+    const found = await texts(page, `${PANE} .amx-list-item`)
+    await page.evaluate(() => document.activeElement?.blur())
+    const via = await systemBack(page)
+    const closed = await look()
+    // the search command, from inside a note: back on the list, the search open, nothing typed, the caret in the field
+    await page.locator(`${LIST} [data-timeline] .t2s-srow`).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    const inNote = await stage.nav(page)
+    await page.evaluate(async (url) => { (await import(/* @vite-ignore */ url)).useCommandStore.getState().run('amadeus-search') }, moduleUrl('../lcl/engine/commandRegistry.ts'))
+    await page.waitForSelector(PANE, { timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const byCommand = await look()
+    // another vault: the search does not come along, and coming back does not bring it up again
+    const store = moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts')
+    const setRoot = async (to) => { const was = await page.evaluate(async ([url, root]) => { const { usePageStore } = await import(/* @vite-ignore */ url); const old = usePageStore.getState().vaultRoot; usePageStore.setState({ vaultRoot: root ?? `${old}-other` }); return old }, [store, to]); await page.waitForTimeout(400); return was }
+    const root = await setRoot(null)
+    const otherVault = await look()
+    await setRoot(root)
+    const sameVault = await look()
+    await page.evaluate(() => document.activeElement?.blur())
+    return [
+      ['a "full-text search" row leads the two at the foot of the list; a tap opens the search in the list, nothing typed, the caret in the field', foot[0] === '全文搜索' && foot.length === 3 && opened.pane && opened.query === '' && opened.caret && opened.nav === 'list', JSON.stringify({ foot, opened })],
+      ['what is typed there is searched in the notes\' text', found.length === 1 && /读书计划/.test(found[0]), JSON.stringify(found)],
+      ['system Back closes the search and stays on the list', !closed.pane && closed.nav === 'list', JSON.stringify({ via, closed })],
+      ['the search command inside a note returns to the list with the search open, nothing typed, the caret in the field', inNote === 'detail' && byCommand.nav === 'list' && byCommand.pane && byCommand.query === '' && byCommand.caret, JSON.stringify({ inNote, byCommand })],
+      ['another vault opened: the search is not carried over, and is not brought up again on the way back', !otherVault.pane && !sameVault.pane, JSON.stringify({ otherVault, sameVault })],
+    ]
+  },
   'notes-star': async (page) => {
     await chip(page, 'recent')
     const sw = `${LIST} [data-timeline] .pl-swipe`
@@ -745,6 +1055,19 @@ const SCENES = {
     return [['the star action names what it will do, also right after it was used', !!before && !!after && before !== after && again === before, `${before} → ${after} → ${again}`]]
   },
   'notes-reset': async (page) => { await chip(page, 'recent'); return [] },
+  // Only a Space that asks for it draws its first left view alone: another Space with a second view on its left side
+  // keeps the switcher over its list. (A view is added to Tangu's left side for the look, then closed again.)
+  'left-switcher': async (page) => {
+    const store = moduleUrl('../lcl/engine/singleColumnStore.ts')
+    await stage.space(page, 'tangu')
+    const id = await page.evaluate(async (url) => (await import(/* @vite-ignore */ url)).useWorkspace.getState().openView('amadeus-tags', {}, 'left')?.id ?? null, store)
+    await page.waitForTimeout(400)
+    const options = await page.evaluate((q) => [...document.querySelectorAll(`${q} .mb-drawer-select option`)].length, LIST)
+    await page.evaluate(async ([url, leaf]) => { (await import(/* @vite-ignore */ url)).useWorkspace.getState().closeLeaf(leaf, true) }, [store, id])
+    await page.waitForTimeout(400)
+    const after = { bar: await page.evaluate((q) => !!document.querySelector(`${q} .mb-drawer-bar`), LIST), left: await leftSide(page) }
+    return [['Tangu with a second left view: the switcher lists both; closed again, the list is as before', !!id && options === 2 && !after.bar && after.left.types.length === 1, JSON.stringify({ id, options, after })]]
+  },
   // The other first-level lists keep their own rows; what they share with the two above is the one main button.
   'agents-list': async (page) => {
     await stage.space(page, 'agents')
@@ -1116,6 +1439,24 @@ const SCENES = {
       ['native host: a checklist of names, no web sheet', sent?.kind === 'checklist' && items.map((i) => i.label).join('、') === '研究员、编辑' && items.every((i) => !i.detail) && noWebSheet, JSON.stringify(sent && { kind: sent.kind, items: items.map((i) => [i.label, i.detail]) })],
       ['native host: the ticks come back in tick order', nativeTeam === '研究员 等 2 位', nativeTeam],
     ]
+  },
+  // Home again, with something going on in each of the four: a session, a note opened last, an agent's appointment
+  // tomorrow, unread mail. The stores the cards read are filled directly — the stage answers neither the schedule nor
+  // the unread count — so this looks at the cards' lines, not at how those stores get their data.
+  'home-status': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'home')
+    const day = new Date(T0 + DAY)
+    const at = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}T14:00`
+    await page.evaluate(async ([prefs, schedule, inbox, when]) => {
+      ;(await import(/* @vite-ignore */ prefs)).useAmadeusPrefs.setState({ recents: ['项目/发版清单 2.13.md'] })
+      ;(await import(/* @vite-ignore */ schedule)).useAgentSchedules.setState({ loaded: true, ok: true, schedules: [{ slug: 'researcher', name: '研究员', db: { columns: [{ id: 'name', name: '名称', type: 'text' }, { id: 'when', name: '时间', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { name: '周会', when } }] } }] })
+      ;(await import(/* @vite-ignore */ inbox)).useInbox.setState({ unreadCount: 2 })
+    }, [moduleUrl('../desktop/frontend/src/amadeusPrefs.ts'), moduleUrl('../desktop/frontend/src/stores/agentScheduleStore.ts'), moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), at])
+    await page.waitForTimeout(600)
+    const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.dataset.spaceId || el.dataset.fixedId, el.querySelector('.hp-card-status').textContent]), '.mb-view[data-view="homepage"] .hp-card')
+    const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
+    return [['each default card says what is going on: the last session, the last note, the next appointment, unread mail', cards.map((c) => c[0]).join() === 'tangu,amadeus,calendar,inbox' && /^继续：/.test(of('tangu')) && of('amadeus') === '发版清单 2.13' && /14:00 周会$/.test(of('calendar')) && of('inbox') === '2 条未读', JSON.stringify(cards)]]
   },
 }
 
