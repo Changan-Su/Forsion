@@ -2922,10 +2922,13 @@ const tabCountText = (list) => {
     const titleBtn = (await h.waitNodes((l) => h.byId(l, 'nativeChrome.titleButton'), { timeout: 5000 })).hit
     assert.ok(titleBtn, 'control: the capsule title (the vault) is not a button')
     await tapId('nativeChrome.titleButton')
-    await waitSheet(true)
+    // the Unit sheet (an overlay of the page that hides the bar, as from the avatar: see "hidden overlay")
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('[data-units-sheet]')", 5000), 'the capsule title did not open the Unit / vault sheet')
+    await h.pause(500)
     shot('03j-notes-fulltext-vault-sheet')
     h.key(4)
-    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('[data-units-sheet]')", 5000), 'system Back did not close the Unit sheet')
+    await h.pause(500)
     st = await look()
     assert.ok(st.pane && st.nav === 'list', `Back on the vault sheet also closed the search / left the list: ${JSON.stringify(st)}`)
     h.key(4)
@@ -3312,20 +3315,28 @@ const tabCountText = (list) => {
           if (e !== row && /hidden|clip|auto|scroll/.test(cs.overflow)) box = { l: Math.max(box.l, b.left), t: Math.max(box.t, b.top), r: Math.min(box.r, b.right), b: Math.min(box.b, b.bottom) } }
         box = { l: Math.max(box.l, 0), t: Math.max(box.t, 0), r: Math.min(box.r, innerWidth), b: Math.min(box.b, innerHeight) }
         const btn = row.querySelector('.t2-iconbtn'), bb = btn && btn.getBoundingClientRect()
-        const hit = bb ? document.elementFromPoint(bb.left + bb.width / 2, bb.top + bb.height / 2) : null
+        let z = 1; for (let e = btn; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1 // body zoom: rects are unzoomed, elementFromPoint is not
+        const hit = bb ? document.elementFromPoint((bb.left + bb.width / 2) * z, (bb.top + bb.height / 2) * z) : null
         return { area: Math.max(0, box.r - box.l) * Math.max(0, box.b - box.t), w: r.width, h: r.height, hit: !!hit && !!btn && btn.contains(hit), quiet: m.dataset.quiet, tapped: m.hasAttribute('data-tapped') } })()`)
       // bring the last reply on screen (the stream ends with it)
       await cdp.eval(`(${last}.scrollIntoView({ block: 'end' }), true)`); await h.pause(500)
-      const names = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-asst .t2-name, .mb-main .t2-username')].filter((e) => { const r = e.getBoundingClientRect(); return getComputedStyle(e).display !== 'none' && r.width > 1 && r.height > 1 }).map((e) => e.textContent.trim())`)
+      shot('21-chat-quiet-light')
+      /** On screen for a person: laid out, not display:none / hidden, and no ancestor (nor itself) clipped to nothing (the 1×1 fold). */
+      const seen = "((e) => { const r = e.getBoundingClientRect(); if (r.width <= 1 || r.height <= 1) return false; for (let a = e; a; a = a.parentElement) { const cs = getComputedStyle(a); if (cs.display === 'none' || cs.visibility === 'hidden' || /inset\\(50%/.test(cs.clipPath) || (a !== e && /hidden|clip/.test(cs.overflow) && (a.getBoundingClientRect().width <= 1 || a.getBoundingClientRect().height <= 1))) return false } return true })"
+      const names = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-asst .t2-name, .mb-main .t2-username')].filter(${seen}).map((e) => e.textContent.trim())`)
       assert.deepEqual(names, [], 'names written in a one-agent conversation')
-      const times = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-msgtime')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 1 && r.height > 1 && getComputedStyle(e).visibility !== 'hidden' }).length`)
-      assert.ok(times <= 1, `a time on ${times} messages of a conversation whose four messages are a minute apart (the first only)`)
+      const times = await cdp.eval(`[...document.querySelectorAll('.mb-main .t2-msgtime')].filter(${seen}).map((e) => (e.closest('.t2-asst, .t2-userwrap')?.dataset.quiet ?? '?') + ':' + e.textContent.trim())`)
+      console.log(`  times on screen: ${JSON.stringify(times)}`)
+      // a time where a pause came before (the first message) — and on the last reply, whose whole row stays and the time is
+      // in that row (2026-11-19 build: chat2.css folds the row of a reply that is not the last; the last one's keeps its time)
+      const stray = times.filter((t) => !/^[^:]*\bgap\b/.test(t) && !/^[^:]*\blast\b/.test(t))
+      assert.deepEqual(stray, [], `a time on a message with no pause before it: ${JSON.stringify(times)}`)
+      assert.ok(times.some((t) => /^[^:]*\bgap\b/.test(t)), `control: the first message shows no time (${JSON.stringify(times)})`)
       let a = await rowSeen(last), b = await rowSeen(first)
       assert.ok(a && a.area > 100 && a.hit, `the last reply's button row is not on screen (${JSON.stringify(a)})`)
       assert.ok(b && b.area === 0 || b && b.area <= 1, `the earlier reply's button row is on screen (${JSON.stringify(b)})`)
       assert.ok(/last/.test(a.quiet) && !/last/.test(b.quiet || ''), `the marks: last ${a.quiet}, earlier ${b.quiet}`)
       await cdp.eval(`(${last}.scrollIntoView({ block: 'end' }), true)`); await h.pause(400)
-      shot('21-chat-quiet-light')
       // a real tap on the earlier reply's text shows its row; a second tap folds it again
       const text = `${first}.querySelector('.t2-content p, .t2-content')`
       await tapEl(text)
