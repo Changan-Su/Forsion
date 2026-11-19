@@ -189,7 +189,7 @@ async function stubApi(page, unknown) {
     if (p.endsWith('/agent/teams') && m === 'GET') return json({ teams: TEAMS })
     if (p.endsWith('/agent/engines') && m === 'GET') return json({ engines: [] })
     if (p.endsWith('/agent/agents-meta') && m === 'GET') return json({ order: AGENTS.map((a) => a.slug), defaultSlug: AGENTS[0].slug })
-    if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: url.searchParams.get('archived') === 'true' ? [] : SESSIONS })
+    if (p.endsWith('/agent/sessions') && m === 'GET') return json({ sessions: SESSIONS.filter((x) => !!x.archived === (url.searchParams.get('archived') === 'true')) })
     if (p.endsWith('/agent/runs')) return json({ runs: [] })
     if (p.endsWith('/agent/approvals/pending')) return json({ rev: 'stage', approvals: [] })
     if (p.endsWith('/agent/models') && m === 'GET') return json({ models: MODELS, directProviders: [], defaultModelId: MODELS[0].id })
@@ -913,6 +913,17 @@ const SCENES = {
     await page.keyboard.press('Escape')
     await page.waitForTimeout(200)
     if (await rect(page, '.amx-findbar')) await page.evaluate(async (url) => { (await import(/* @vite-ignore */ url)).closeFindBar() }, moduleUrl('../desktop/frontend/src/findInPage.tsx'))
+
+    // archive from the page: once it is stored the page has nothing left to do — back on the list, the row gone from it
+    await ask('more', { id: 'page:archive' })
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'list', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(400)
+    const gone = { nav: await stage.nav(page), rows: await texts(page, `${LIST} [data-timeline] .t2s-srow .t2s-srow-title`) }
+    rows.push(['archive: back on the list, and the conversation is no longer in it', gone.nav === 'list' && gone.rows.length > 0 && !gone.rows.includes(TITLE), JSON.stringify(gone)])
+    // (put it back for the scenes after this one)
+    await page.evaluate(async (url) => { await (await import(/* @vite-ignore */ url)).useApp.getState().archiveSession('st-1', false) }, moduleUrl('../desktop/frontend/src/stores/appStore.ts'))
+    await page.waitForTimeout(400)
+    await openChat(page, TITLE)
 
     await page.evaluate(() => { window.__stage.offSheet(); delete window.__stage.offSheet })
     await stage.action(page, 'left')
