@@ -62,12 +62,18 @@ async function main() {
     // The calendar's header starts below the capsule row, and below the call bar while a call is up (the bar adds to the
     // shell's top room). Since Calendar 0.1.9 the header lives in the host's view-head row; a top room given to the bar
     // alone left it centred in that 32 px row, overflowing upward under the capsules (2026-11-19).
+    // The title is read where the plugin puts it (its header in the host's view-head row), so the built-in fallback calendar
+    // cannot pass in its place; `inset` = how far below its own row's top the title sits: one top room, not two.
     const head = () => page.evaluate(() => {
-      const box = (q) => { const el = document.querySelector(q); if (!el) return null; const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom } }
-      return { title: box('.mb-view[data-view="calendar"] .amx-cal-title'), grid: box('.mb-view[data-view="calendar"] .amx-cal-tscroll'), bar: box('.vc-bar') }
+      const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom } }
+      const view = document.querySelector('.mb-view[data-view="calendar"]')
+      const row = view?.querySelector('.lcl-viewhead:has(.fc-native-cal-head)')
+      const title = box(row?.querySelector('.fc-native-cal-head .amx-cal-title')), rowBox = box(row)
+      return { title, grid: box(view?.querySelector('.amx-cal-tscroll')), bar: box(document.querySelector('.vc-bar')), inset: title && rowBox ? title.top - rowBox.top : null }
     })
+    const SLACK = 24 // the title's own line inside the 32 px row
     const idle = await head()
-    assert.ok(idle.title && idle.title.top >= LAYOUT.top && idle.grid && idle.grid.top >= idle.title.bottom, `calendar header below the capsule row (ends at ${LAYOUT.top}): ${JSON.stringify(idle)}`)
+    assert.ok(idle.title && idle.title.top >= LAYOUT.top && idle.inset <= LAYOUT.top + SLACK && idle.grid && idle.grid.top >= idle.title.bottom, `calendar header in its view-head row, below the capsule row (ends at ${LAYOUT.top}) by one top room: ${JSON.stringify(idle)}`)
     await page.screenshot({ path: path.join(OUT, 'phone-shell-head.png') })
     const callBar = (show) => page.evaluate(async ([url, on]) => (await import(url)).openCallLayer(on ? { sessionId: 'st-1', agentSlug: '' } : null), [moduleUrl('../desktop/frontend/src/services/realtimeCall.ts'), show])
     await callBar(true)
@@ -77,7 +83,7 @@ async function main() {
     await page.screenshot({ path: path.join(OUT, 'phone-shell-head-call.png') })
     await callBar(false)
     await page.waitForFunction(() => !document.querySelector('.vc-bar'), null, { timeout: 5000 })
-    assert.ok(calling.bar && calling.title && calling.title.top >= calling.bar.bottom, `calendar header below the call bar: ${JSON.stringify(calling)}`)
+    assert.ok(calling.bar && calling.title && calling.title.top >= calling.bar.bottom && calling.inset <= calling.bar.bottom + SLACK && calling.grid && calling.grid.top >= calling.title.bottom, `calendar header below the call bar by one top room: ${JSON.stringify(calling)}`)
     await page.evaluate(() => {
       const sc = document.querySelector('.amx-cal-tscroll'), cell = document.querySelector(`.amx-cal-daycol2[data-date="${window.__phoneCal.day}"]`)
       sc.scrollLeft = cell.offsetLeft
