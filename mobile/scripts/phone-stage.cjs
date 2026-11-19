@@ -436,6 +436,8 @@ const SCENES = {
     const all = sections.find((x) => x.title === '全部')?.tiles ?? []
     const rows = sections.flatMap((x) => x.rows)
     const box = await rect(page, PAGE)
+    const lastApps = await page.evaluate((q) => { const p = document.querySelector(q); p.scrollTop = p.scrollHeight; const rows = p.querySelectorAll('[data-row]'); const r = rows[rows.length - 1]; return r ? { id: r.dataset.row, bottom: r.getBoundingClientRect().bottom } : null }, PAGE)
+    await page.evaluate((q) => { document.querySelector(q).scrollTop = 0 }, PAGE)
     await page.screenshot({ path: path.join(OUT, `apps-page-open${DARK ? '-dark' : ''}.png`) })
     // 点「全部」里的一格:收起这一页、进那个 Space,Dock 上亮的仍是「应用」
     const target = all[0] || frequent[0]
@@ -454,6 +456,7 @@ const SCENES = {
       ['the Apps page covers the first level between the capsules and the dock; title 应用, no left button / ⋯ / search', shown === 1 && st.title === '应用' && !st.left && st.more === false && !st.search && (st.spaces || []).find((c) => c.active)?.id === '@apps' && !!box && near(box.h, SCREEN.height), JSON.stringify({ shown, title: st.title, left: st.left, more: st.more })],
       ['first row 常用 = calendar and inbox, then list order (nothing chosen yet); 全部 = the rest; no Home / Chats / Notes on the page', frequent.slice(0, 2).join() === 'calendar,inbox' && frequent.length <= 4 && ![...frequent, ...all].some((id) => id === 'home' || id === 'tangu' || id === 'amadeus') && !all.some((id) => frequent.includes(id)), JSON.stringify({ frequent, all })],
       ['the store is the first row under the grids; the last row chooses the frequent ones', rows[0] === 'rb-market' && rows[rows.length - 1] === 'choose-frequent', rows.join()],
+      ['scrolled to its end, the last row ends above the dock', !!lastApps && lastApps.id === 'choose-frequent' && lastApps.bottom <= DOCK_TOP, JSON.stringify({ lastApps, dockTop: DOCK_TOP })],
       ['a tile closes the page and enters that Space; the dock lights Apps', gone && landed === target && (after.spaces || []).find((c) => c.active)?.id === '@apps', `${target} → ${landed} gone=${gone}`],
       [`system Back on the Apps page goes Home (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || (closed && backTo === 'home'), `${backTo} closed=${closed}`],
     ]
@@ -466,6 +469,9 @@ const SCENES = {
     const st = await stage.state(page)
     const rows = await page.evaluate((q) => [...document.querySelectorAll(`${q} [data-row]`)].map((r) => r.getAttribute('data-row')), PAGE)
     const name = await page.evaluate((q) => document.querySelector(`${q} .pp-me-name strong`)?.textContent ?? '', PAGE)
+    // 滚到底:最后一行(退出)整行在 Dock 之上
+    const lastMe = await page.evaluate((q) => { const p = document.querySelector(q); p.scrollTop = p.scrollHeight; const rows = p.querySelectorAll('[data-row]'); const r = rows[rows.length - 1]; return r ? { id: r.dataset.row, bottom: r.getBoundingClientRect().bottom } : null }, PAGE)
+    await page.evaluate((q) => { document.querySelector(q).scrollTop = 0 }, PAGE)
     await page.screenshot({ path: path.join(OUT, `me-page-open${DARK ? '-dark' : ''}.png`) })
     // 设置盖上来、关掉之后,「我」还在
     await page.locator(`${PAGE} [data-row="rb-settings"]`).tap()
@@ -480,6 +486,7 @@ const SCENES = {
       ['the Me page: title 我, the Me cell lit, no avatar and no ⋯ in the capsules', st.title === '我' && (st.spaces || []).find((c) => c.active)?.id === '@me' && st.more === false, JSON.stringify({ title: st.title, more: st.more })],
       ['account head, then quota / backpack / invite / upgrade (what the avatar menu had), settings, where it runs, dark mode, command palette, achievements, feedback, sign out', name === 'stage' && ['rb-settings', 'rb-units-mobile', 'rb-mode', 'rb-cmd', 'rb-achievements'].every((id) => rows.includes(id)) && rows.indexOf('rb-settings') < rows.indexOf('rb-achievements'), `${name} | ${rows.join()}`],
       ['settings covers the page and closing it returns to Me', app.open && covered && still === 1, JSON.stringify({ ...app, covered, still })],
+      ['scrolled to its end, the last row (sign out) ends above the dock', !!lastMe && lastMe.id === 'logout' && lastMe.bottom <= DOCK_TOP, JSON.stringify({ lastMe, dockTop: DOCK_TOP })],
     ]
   },
   // 主页「继续」点一行 → 直接到那条对话;返回(顶栏左钮 / 系统返回)回主页,不经 Tangu 的列表;
@@ -501,6 +508,21 @@ const SCENES = {
     const via = await systemBack(page)
     const bySystem = await shellSpace(page)
     if (via !== 'key') await stage.action(page, 'left')
+    // 笔记那一行:走的是另一条路(openNote 是异步的、去的是笔记 Space),返回同样回主页
+    await seedNotes(page)
+    const noteRow = '.mb-view[data-view="homepage"] .hp-continue-row[data-continue^="note:"]'
+    const noteTrip = []
+    for (const how of ['capsule', 'system']) {
+      await page.locator(noteRow).first().tap()
+      await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+      await page.waitForTimeout(900)
+      const at = { space: await shellSpace(page), nav: await stage.nav(page) }
+      let via = how
+      if (how === 'capsule') await stage.action(page, 'left')
+      else { via = await systemBack(page); if (via !== 'key') await stage.action(page, 'left') }
+      await page.waitForTimeout(500)
+      noteTrip.push({ how: via, at, back: await shellSpace(page) })
+    }
     // 从列表点进去的照旧回列表
     await openChat(page, '周末去哪儿')
     await stage.action(page, 'left')
@@ -510,6 +532,7 @@ const SCENES = {
       ['a Continue row opens that chat directly (Tangu, second level)', inChat.space === 'tangu' && inChat.nav === 'detail' && inChat.title === '发版说明草稿', JSON.stringify(inChat)],
       ['back from there (capsule) goes Home, not to the list — and not to the chat seen before', byButton === 'home', byButton],
       [`system Back goes Home too (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || bySystem === 'home', bySystem],
+      ['a note row opens the note itself (Notes, second level); back from it is Home too', noteTrip.every((t) => t.at.space === 'amadeus' && t.at.nav === 'detail' && t.back === 'home'), JSON.stringify(noteTrip)],
       ['a chat opened from the list still goes back to the list', fromList.space === 'tangu' && fromList.nav === 'list', JSON.stringify(fromList)],
     ]
   },

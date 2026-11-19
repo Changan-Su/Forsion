@@ -294,6 +294,14 @@ async function main() {
         await guardSettled(true)
         await page.goBack()
         await page.waitForSelector('.mb-shell[data-space="home"]')
+        // a note row (the Note check opened one): the note itself, and Back is Home again
+        const noteRow = page.locator('.hp-continue-row[data-continue^="note:"]').first()
+        assert.equal(await noteRow.count(), 1, 'no note in Continue')
+        await noteRow.click()
+        await page.waitForSelector('.mb-shell[data-space="amadeus"][data-nav="detail"]')
+        await guardSettled(true)
+        await page.goBack()
+        await page.waitForSelector('.mb-shell[data-space="home"]')
       })
       await check('return Home then browser Back leaves the app; no empty-page trap', async () => {
         await page.locator('.bmc-dock [data-space="home"]').click()

@@ -2434,6 +2434,19 @@ const tabCountText = (list) => {
       assert.ok(resumed(), `back (${via}) left the app`)
       await h.pause(600)
     }
+    // a note row: another way in (the note opens asynchronously, in the Notes Space) — back is Home just the same
+    const noteRow = `document.querySelector('.hp-root .hp-continue-row[data-continue^="note:"]')`
+    if (await cdp.eval(`!!${noteRow}`)) {
+      for (const via of ['arrow', 'system']) {
+        await tapEl(noteRow)
+        assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'amadeus' && (${nav}) === 'detail'`, 8000), `the Continue note row did not open the note (${via})`)
+        await h.pause(900)
+        if (via === 'arrow') { shot('03g-continue-note'); await tapId('nativeChrome.left') } else h.key(4)
+        assert.ok(await h.waitPage(cdp, homeShown, 6000), `back (${via}) from a note opened in Continue did not return Home (space ${await cdp.eval("document.querySelector('.mb-shell').dataset.space")}, nav ${await cdp.eval(nav)})`)
+        assert.ok(resumed(), `back (${via}) left the app`)
+        await h.pause(600)
+      }
+    } else console.log('  (no note in Continue: the note leg is not tried)')
     // from the list it is the list again
     await openChat('E2E Session One')
     h.key(4)
@@ -4287,6 +4300,15 @@ const tabCountText = (list) => {
     assert.equal(rows.at(-1), 'choose-frequent', `"choose frequent" is not the last row (${rows})`)
     for (const gone of ['rb-mode', 'rb-cmd', 'rb-settings', 'rb-account', 'rb-achievements', 'rb-feedback']) assert.ok(!rows.includes(gone), `"${gone}" on the Apps page (${rows})`)
     assert.equal(textOf(ui(), 'nativeChrome.title'), '应用')
+    /** Scrolled to its end, the page's last row ends above the native dock (the page runs under the dock's glass). */
+    const lastRowClear = async (id) => {
+      await cdp.eval("(document.querySelector('.mb-phonepage').scrollTop = 1e6, true)"); await h.pause(400)
+      const r = await elRect(pageRowExpr(id))
+      const dockTop = h.byId(ui(), 'nativeChrome.dock').rect.top
+      await cdp.eval("(document.querySelector('.mb-phonepage').scrollTop = 0, true)")
+      assert.ok(r.bottom <= dockTop, `the ${id} row ends under the dock (${fmt(r)}, dock top ${dockTop})`)
+    }
+    await lastRowClear('choose-frequent')
     shot('05-apps-page-light')
     h.key(4)
     assert.ok(await h.waitPage(cdp, homeShown, 5000), 'system back on the Apps page did not go Home')
@@ -4301,6 +4323,7 @@ const tabCountText = (list) => {
     assert.ok(rows.indexOf('rb-mode') > rows.indexOf('rb-settings') && rows.indexOf('rb-cmd') > rows.indexOf('rb-settings'), `theme / command panel not after settings (${rows})`)
     assert.ok(rows.indexOf('rb-achievements') > rows.indexOf('rb-cmd') && rows.includes('rb-feedback'), `achievements / feedback not after the switches (${rows})`)
     assert.ok(!rows.includes('tab:new'), `"New tab" on the Me page (${rows})`)
+    await lastRowClear('logout')
     shot('05-me-page-light')
     // Me → command panel → system Back: the panel closes and the person is still on the page they were on
     await openPalette()
