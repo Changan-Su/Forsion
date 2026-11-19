@@ -9,6 +9,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { askString } from '../../amadeus/components/askString'
 import { isOrbitPinned, onOrbitPinsChanged, readOrbitPins, toggleStoredOrbitPin } from './orbitPins'
+import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'chat.pageMenu.find': { zh: '在这条对话里查找', en: 'Find in this chat' },
