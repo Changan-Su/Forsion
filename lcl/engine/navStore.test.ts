@@ -1,6 +1,6 @@
 /** per-tab 导航历史:栈按 leafId 隔离、去重、前进截断、drop/reset 清理。 */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useNav } from './navStore'
+import { useNav, type NavEntry } from './navStore'
 
 const nav = () => useNav.getState()
 const entry = (key: string, log: string[]) => ({ key, restore: () => { log.push(key) } })
@@ -116,7 +116,7 @@ describe('remapNav(条目指向的东西改名 / 挪走 / 删掉之后改写历�
     expect(log).toEqual(['b'])
   })
 
-  it('别的 Space 里停放的历史一样改写;没碰到的栈原样(同一个对象)', async () => {
+  it('只改当前布局的历史:停放的 Space 连布局带历史原样(别的库里同名改名碰不到它);没碰到的栈原样(同一个对象)', async () => {
     const { remapNav, beginNavSpace, finishNavSpace } = await import('./navStore')
     const log: string[] = []
     nav().record('A', entry('old', log))
@@ -128,6 +128,27 @@ describe('remapNav(条目指向的东西改名 / 挪走 / 删掉之后改写历�
     expect(nav().stacks.B).toBe(before)
     beginNavSpace('s2', 's1')
     finishNavSpace()
-    expect(keys('A')).toEqual(['new'])
+    expect(keys('A')).toEqual(['old'])
+  })
+
+  it('改写时有还原在途:叫停它,游标回到正在显示的那条(不停在半路要去的那条上)', async () => {
+    const { remapNav } = await import('./navStore')
+    const log: string[] = []
+    let release: () => void = () => {}
+    const slow = (key: string): NavEntry => ({ key, restore: () => new Promise<void>((r) => { release = () => { log.push(key); r() } }) })
+    nav().record('A', entry('a', log))
+    nav().record('A', slow('b'))
+    nav().record('A', entry('c', log))
+    nav().back('A') // 去 b,b 慢慢加载
+    expect(nav().stacks.A.idx).toBe(1)
+    remapNav((_, e) => (e.key === 'a' ? null : undefined)) // 期间删掉 a
+    expect(keys('A')).toEqual(['b', 'c'])
+    expect(nav().stacks.A.idx).toBe(1) // 回到 c:屏上还是 c
+    release()
+    await Promise.resolve(); await Promise.resolve()
+    expect(nav().stacks.A.idx).toBe(1) // 叫停的那次不再把游标挪走
+    nav().back('A')
+    await Promise.resolve()
+    expect(nav().stacks.A.idx).toBe(0) // 再按返回才去 b
   })
 })

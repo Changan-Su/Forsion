@@ -75,15 +75,22 @@ export class VaultIndex {
     // 不是笔记(白板 / 插件文件类型)就不进索引 —— 与 build() 走的 listPages 同一个判据。桥里的 loadPage / savePage /
     // 移动改名都会来更新单篇,插件经页表面读写自己的 `.mindmap.md` 也走那几条。
     if (!this.vault.isPagePath(pagePath)) { this.entries.delete(pagePath); return }
+    // 同一篇的读取可能交错(连着两次写各自来更新):晚发起的那次读到的不旧于早的,只认它;remove 之后
+    // 迟到的读也作废,不把改名 / 删掉的那篇塞回去(Codex 评审)
+    const turn = this.bump(pagePath)
     const e = await this.readEntry(pagePath)
+    if (this.turns.get(pagePath) !== turn) return
     if (e) this.entries.set(pagePath, e)
     else this.entries.delete(pagePath)
   }
 
-  remove(pagePath: string): void { this.entries.delete(pagePath) }
+  remove(pagePath: string): void { this.bump(pagePath); this.entries.delete(pagePath) }
+
+  private readonly turns = new Map<string, number>()
+  private bump(pagePath: string): number { const n = (this.turns.get(pagePath) ?? 0) + 1; this.turns.set(pagePath, n); return n }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
-    this.entries.delete(oldPath)
+    this.remove(oldPath)
     await this.update(newPath)
   }
 
