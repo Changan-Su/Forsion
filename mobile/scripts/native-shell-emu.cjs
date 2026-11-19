@@ -1964,6 +1964,8 @@ const tabCountText = (list) => {
 
   /** Home is one page (2026-10-11: no tabs, no "New tab" in it) — what is checked about tabs is checked on a Space that has them. */
   async function offHome() {
+    // right after a reload the shell may not have said which Space it is in yet: wait for it before judging
+    assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-shell')?.dataset.space", 8000), 'control: the shell names no Space')
     if ((await cdp.eval("document.querySelector('.mb-shell')?.dataset.space")) === 'home') await toSpace('calendar')
   }
   /** A second tab in `space`, behind the one in front. The phone has no "New tab" any more (2026-11-18: one page, one
@@ -1971,6 +1973,7 @@ const tabCountText = (list) => {
    *  desktop leaves one: leave the Space (its layout goes into its slot), add a tab to that slot, come back. The slot is
    *  found like leaveHomeForItsSlot finds Home's: the layout in use that changed is this account's. Returns the tab id. */
   async function seedSecondTab(space) {
+    assert.ok(space && space !== 'home', `control: no second tab can be seeded into "${space}" (Home drops stray tabs on entry)`)
     await toSpace(space)
     const before = Number(tabCountText(ui()) || '1')
     const inUse = "Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith('lcl_sc_layout_v1')).map((k) => [k, localStorage.getItem(k)]))"
@@ -4846,10 +4849,19 @@ const tabCountText = (list) => {
     await h.pause(400)
     shot('p32-plugin-detail-en')
     await tapEl("document.querySelector('[data-plugin-uninstall]')")
-    // window.confirm → the WebView's system AlertDialog
-    const ok = await h.waitNodes((l) => h.byId(l, 'android:id/button1'), { timeout: 6000 })
-    assert.ok(ok.hit, 'uninstall confirmation dialog missing')
-    h.tapNode(ok.hit)
+    // the confirmation is the app's own uninstall sheet (UninstallDialog: what goes where; a bottom sheet on the phone).
+    // Older builds asked through window.confirm → the WebView's system AlertDialog: that one is still taken.
+    const confirmBtn = "document.querySelector('[data-uninstall-dialog] .dialog-btn[data-danger]:not(:disabled)')"
+    const asked = await h.waitPage(cdp, `!!${confirmBtn} && 'sheet'`, 8000)
+    if (asked === 'sheet') {
+      await h.pause(400)
+      shot('p33-uninstall-sheet-en')
+      await tapEl(confirmBtn)
+    } else {
+      const ok = await h.waitNodes((l) => h.byId(l, 'android:id/button1'), { timeout: 4000 })
+      assert.ok(ok.hit, 'uninstall confirmation (sheet or dialog) missing')
+      h.tapNode(ok.hit)
+    }
     assert.ok(await h.waitPage(cdp, `(async () => !(await window.amadeus.listPlugins()).some((p) => p.id === '${PLUGIN_ID}'))()`, 8000), 'still listed after uninstall')
     const left = runAs('ls', `files/plugins/${PLUGIN_ID}`)
     assert.match(left, /No such file/, `files/plugins/${PLUGIN_ID} still there: ${left}`)
@@ -4863,8 +4875,9 @@ const tabCountText = (list) => {
     const stillListed = await cdp.eval("[...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).filter((t) => /E2E plugin/.test(t))")
     assert.deepEqual(stillListed, [], 'the uninstalled plugin\'s commands are still in the command panel')
     if (imeShown()) { h.key(4); await h.pause(600) }
-    h.key(4)
-    assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000) || (h.key(4), await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000)), 'the command panel stayed open')
+    // leave it closed for whatever runs next (system back does not close the command panel: Escape, as a keyboard would)
+    await cdp.eval("(document.querySelector('.cmd-input')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), true)")
+    assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000), 'the command panel stayed open')
   })
 
   // ── restore the device state we touched ──
