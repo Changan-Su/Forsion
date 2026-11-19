@@ -75,6 +75,10 @@ describe('an answer with nothing written', () => {
   it('the user\'s own messages are never bare', () => {
     expect(tokens([user('u1', 0, ''), asst('a1', 1)]).u1).toBe('gap')
   })
+  it('a row stored without any content at all is bare too, and does not throw', () => {
+    const rows = [user('u1', 0), asst('a1', 1, { content: undefined as unknown as string }), asst('a2', 2)]
+    expect(tokens(rows)).toMatchObject({ a1: 'solo bare', a2: 'last solo' })
+  })
 })
 
 describe('one agent or several', () => {

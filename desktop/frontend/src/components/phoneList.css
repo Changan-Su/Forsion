@@ -199,6 +199,10 @@
 .mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-search { flex: 1 1 auto; min-width: 0; margin: 0; }
 .mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-sort { flex: none; font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); }
 .mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-sort > button { min-height: calc(32 * var(--pl-dp)); padding: 0 calc(12 * var(--pl-dp)); }
+/* 选中的那一颗照上面分类胶囊的选中样子:侧栏里那种「卡片底」在深色下和底色分不开 */
+.mb-shell[data-list-first] .amx-tags-inlist-bar > .amx-tagtree-sort > button.on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-ink, var(--accent)); font-weight: 600;
+}
 /* 触屏上 :hover 会粘在最后点过的那一行上:只留按下的反馈 */
 .mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):hover { background: transparent; }
 .mb-shell[data-list-first] :is(.amx-tags-inlist, .amx-panel--inlist) :is(.amx-list-item, .amx-tagtree-chev):active { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }

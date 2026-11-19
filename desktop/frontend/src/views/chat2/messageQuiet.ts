@@ -49,7 +49,7 @@ export function quietMarksOf(rows: readonly UiMessage[]): QuietMarks {
     }
     if (m.role === 'assistant') {
       b |= ANSWER
-      if (!m.content.trim()) b |= BARE
+      if (!(m.content || '').trim()) b |= BARE // 类型上恒是字符串;这里每条消息都要过,不让一条存坏的行带崩整段对话
       if (hasActions(m)) last = m.id
       const who = m.agentId || m.agentName
       if (who) speakers.add(who)
