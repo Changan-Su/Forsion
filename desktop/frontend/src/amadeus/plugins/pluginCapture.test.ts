@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { markPluginSurface, pluginSurfaceOwner } from './pluginSurfaces'
-import { capturePluginElement, checkCaptureArgs, checkCaptureTarget } from './pluginCapture'
+import { capturePluginElement, checkCaptureArgs, checkCaptureTarget, recordPluginElement } from './pluginCapture'
 import { usePluginStore } from './pluginStore'
 import type { PluginContext } from './types'
 
@@ -147,6 +147,86 @@ describe('capture through the bridge', () => {
     await expect(capturePluginElement('demo', el)).rejects.toMatchObject({ code: 'window-hidden' })
     await expect(capturePluginElement('demo', el, {}, () => false)).rejects.toMatchObject({ code: 'disposed' })
     await expect(capturePluginElement('other', el)).rejects.toMatchObject({ code: 'not-owned' })
+  })
+})
+
+describe('record lifecycle (fake encoder)', () => {
+  /** 假 MediaRecorder:start / stop 同步改状态,stop 后异步发 dataavailable + stop;startThrows 模拟编码器起不来。 */
+  let startThrows = false
+  class FakeRecorder {
+    static isTypeSupported = (m: string): boolean => m.startsWith('video/mp4') || m.startsWith('video/webm')
+    state: 'inactive' | 'recording' = 'inactive'
+    mimeType: string
+    ondataavailable: ((e: { data: Blob }) => void) | null = null
+    onstop: (() => void) | null = null
+    constructor(_s: unknown, o: { mimeType: string }) { this.mimeType = o.mimeType }
+    start(): void { if (startThrows) throw new Error('NotSupportedError'); this.state = 'recording' }
+    stop(): void {
+      this.state = 'inactive'
+      setTimeout(() => { this.ondataavailable?.({ data: new Blob([new Uint8Array([1, 2, 3])]) }); this.onstop?.() }, 0)
+    }
+  }
+  let frameThrows = false
+  class FakeFrame { constructor() { if (frameThrows) throw new Error('bad bitmap') } close(): void {} }
+  beforeEach(() => {
+    startThrows = false; frameThrows = false
+    vi.stubGlobal('MediaRecorder', FakeRecorder)
+    vi.stubGlobal('VideoFrame', FakeFrame)
+    const track = { stop: vi.fn(), requestFrame: vi.fn() }
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D)
+    ;(HTMLCanvasElement.prototype as unknown as { captureStream: () => unknown }).captureStream = () => ({ getVideoTracks: () => [track] })
+    window.tangu = { captureRegion: async () => ({ ok: true, data: new Uint8Array(16), width: 2, height: 2 }) } as unknown as typeof window.tangu
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('stop() returns the video; a second recording is busy until then, free afterwards', async () => {
+    const { el } = view()
+    const rec = await recordPluginElement('demo', el, { fps: 30 })
+    await expect(recordPluginElement('demo', el)).rejects.toMatchObject({ code: 'busy' })
+    const out = await rec.stop()
+    expect(out).toMatchObject({ mime: 'video/mp4;codecs=avc1', stoppedBy: 'stop' })
+    expect(out!.bytes.length).toBe(3)
+    expect(await rec.stop()).toBe(out)
+    const again = await recordPluginElement('demo', el)
+    again.cancel()
+    expect(await again.done).toBeNull()
+  })
+
+  it('an encoder that fails to start rejects and does not leave the window busy', async () => {
+    const { el } = view()
+    startThrows = true
+    await expect(recordPluginElement('demo', el)).rejects.toThrow()
+    startThrows = false
+    const rec = await recordPluginElement('demo', el)
+    rec.cancel()
+    expect(await rec.done).toBeNull()
+  })
+
+  it('a frame that throws mid-recording only drops that frame; maxSeconds still ends it', async () => {
+    const { el } = view()
+    const rec = await recordPluginElement('demo', el, { fps: 60, maxSeconds: 1 })
+    frameThrows = true
+    const out = await rec.done
+    expect(out).toMatchObject({ stoppedBy: 'maxSeconds' })
+    expect(out!.frames).toBe(1)
+  })
+
+  it('the plugin being disabled before the first frame rejects disposed and frees the window', async () => {
+    const { el } = view()
+    window.tangu = { captureRegion: async () => ({ ok: false, code: 'failed' }) } as unknown as typeof window.tangu
+    let alive = true
+    let cancel: (() => void) | null = null
+    const p = recordPluginElement('demo', el, {}, { alive: () => alive, own: (c) => { cancel = c; return Object.assign(() => c(), { forget() {} }) } })
+    alive = false; cancel!()
+    await expect(p).rejects.toMatchObject({ code: 'disposed' })
+    window.tangu = { captureRegion: async () => ({ ok: true, data: new Uint8Array(16), width: 2, height: 2 }) } as unknown as typeof window.tangu
+    const rec = await recordPluginElement('demo', el)
+    rec.cancel()
+  })
+
+  it('an unknown mimeType is unsupported', async () => {
+    const { el } = view()
+    await expect(recordPluginElement('demo', el, { mimeType: 'video/x-nope' })).rejects.toMatchObject({ code: 'unsupported' })
   })
 })
 
