@@ -635,8 +635,11 @@ function parseRunResult(v: unknown): any {
 export async function resumableExternalSession(
   sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string, message = '',
 ): Promise<{ resumeId?: string; resumeAgent?: string; latest: string | null }> {
+  // timestamp 只到毫秒:两轮回答可以落在同一毫秒(引擎回得快的时候),并列时不排就可能取到旧的那条,判成对不上、
+  // 不声不响地新开。SQLite 上用插入顺序(rowid)补排,与下面 runs 那条同一做法;回答行由 ON CONFLICT 更新时 rowid 不变。
   const msgs = await query<any[]>(
-    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ? ORDER BY timestamp DESC LIMIT 1`,
+    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ?
+     ORDER BY timestamp DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ''} LIMIT 1`,
     [sessionId, assistantId],
   );
   const latest: string | null = msgs[0]?.id ?? null;
