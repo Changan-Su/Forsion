@@ -253,7 +253,7 @@ export interface UnitWebDeps {
   /** 这台 Forsion 当前的外观(渲染层上报的主题色 / 背景色 / 明暗 / 语言),给已配对的 Forsion Clip 跟随。缺省 / 还没上报 = 404。 */
   appearance?: () => UnitAppearance | null
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
-  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; inheritWebAccount?: boolean; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
+  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; browserTitle?: string; faviconPath?: string; inheritWebAccount?: boolean; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -577,6 +577,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         const baseTag = deps.projection ? `<base href="${baseHref ?? deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
+        if (deps.projection?.mode === 'public') {
+          const title = deps.projection.browserTitle ?? `${deps.meta.name} · Forsion`
+          const escapedTitle = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          html = html.replace(/<title>[^<]*<\/title>/i, () => `<title>${escapedTitle}</title>`)
+          const favicon = deps.projection.faviconPath
+          if (favicon) html = html.replace(/<link\b[^>]*\srel=["']icon["'][^>]*>/i, () => `<link rel="icon" type="image/svg+xml" href="${favicon}">`)
+        }
         // ⚠️ 设备页必须放行 'unsafe-eval':插件宿主用 new Function 求值插件代码,而 web 构建的
         // CSP(script-src 'self' 'unsafe-inline')没它 —— 19 个插件会**全部** setup 失败,页面看起来
         // 就是「插件和视图都没了」(2026-08-24 真机实测)。云端 web 那份 index 不动(它本就不装插件)。
