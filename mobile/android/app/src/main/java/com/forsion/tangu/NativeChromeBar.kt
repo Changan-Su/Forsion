@@ -135,6 +135,8 @@ private class CapsuleLook(theme: SheetTheme, frosted: Boolean) {
  * Floating (shell pages that asked for it) the view is see-through around the capsules and the WebView runs under
  * it; otherwise the strip is painted and the WebView starts below.
  * "More" carries a dot while something behind it wants a look (`moreDot`; danger red like the web `.rb-dot`).
+ * On a phone "more" is the page's own menu: a page with nothing of its own sends `more: false` and the button is not
+ * drawn; a right capsule left with nothing in it is not drawn either (its plate is withdrawn with it).
  * [rail] = the Spaces stand in the rail at the left edge (wide windows, NativeSpaceRail): the capsules start after it, and
  * after the page's docked left column (`leftInset`); the avatar is at the rail's foot instead of in the right capsule.
  * `capLeftMax` caps the left capsule (the page lays something out in this row right of it); the title is cut with an ellipsis.
@@ -176,12 +178,12 @@ internal fun NativeChromeBar(state: ChromeState, insets: Insets, onPlate: PlateS
                             more = state.icons.titleMore.takeIf { state.titleTap }, onTap = if (state.titleTap) ({ onAction("title") }) else null,
                         )
                     } else Spacer(Modifier.width(0.dp)) // keeps the other capsule at the trailing edge
-                    Capsule("capRight", look, onPlate, Modifier.padding(start = CAPSULE_BETWEEN)) {
+                    if (state.rightCapsule(rail)) Capsule("capRight", look, onPlate, Modifier.padding(start = CAPSULE_BETWEEN)) {
                         if (state.search.isNotBlank()) CapsuleIconButton("search", state.search, state.icons.search, fg) { onAction("search") }
                         if (state.right) CapsuleIconButton("right", state.labels.getValue("right"), state.icons.right, fg) { onAction("right") }
-                        // One tab = nothing to switch between: the count would only take a slot ("New tab" is in ⋯).
+                        // One tab = nothing to switch between: the count would only take a slot.
                         if (state.tabCount > 1) TabCountButton(state.tabCount, state.labels.getValue("tabs"), fg) { onAction("tabs") }
-                        CapsuleIconButton(
+                        if (state.moreButton) CapsuleIconButton(
                             "more", state.labels.getValue("more"), state.icons.more, fg,
                             dot = state.moreDot, dotColor = Color(theme.danger), ring = Color(theme.surface),
                         ) { onAction("more") }
@@ -361,7 +363,7 @@ internal fun NativeSpaceBar(
     val view = LocalView.current
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
-    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.danger), Color(theme.surface))
     val motion = motionOn(theme)
     // the gesture below is started once (pointerInput(Unit)): it reads this, so Fade only turned on mid-session holds at once
     val motionNow by rememberUpdatedState(motion)
@@ -701,7 +703,7 @@ internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Un
     val density = LocalDensity.current
     val scheme = remember(theme) { theme.colorScheme() }
     val bg = Color(theme.background)
-    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), bg)
+    val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.danger), bg)
     MaterialTheme(colorScheme = scheme) { Row(
         Modifier.fillMaxSize().background(bg).semantics { testTagsAsResourceId = true }.testTag("nativeChrome.rail"),
     ) {
@@ -765,12 +767,12 @@ private fun SpaceCells(
         } else if (space.icon != null) NativeIconView(space.icon, tint, DOCK_ICON)
     }
     if (more.isNotEmpty()) SpaceCell(
-        cellModifier, ALL_CELL, state.allLabel, selected == ALL_CELL, colors, ChromeState.pressing(more), pill, interactive, motion, onClick = onAll, onLongClick = null,
+        cellModifier, ALL_CELL, state.allLabel, selected == ALL_CELL, colors, state.allBadge(more), pill, interactive, motion, onClick = onAll, onLongClick = null,
     ) { tint -> state.icons.all?.let { NativeIconView(it, tint, DOCK_ICON) } }
 }
 
 /** `bar` = what the dock is filled with (the ring around a badge dot is that colour). */
-private class CellColors(val accent: Color, val muted: Color, val warning: Color, val bar: Color)
+private class CellColors(val accent: Color, val muted: Color, val warning: Color, val danger: Color, val bar: Color)
 
 /** One cell of the dock / the rail: [icon] over [label]. The name is on screen for every cell, so it is also what a screen reader says. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -834,9 +836,13 @@ private fun BadgeDot(kind: ChromeBadge.Kind, colors: CellColors, ring: Color, mo
             pulse
         }
         ChromeBadge.Kind.UNREAD -> 0.6f
-        ChromeBadge.Kind.ATTENTION -> 1f
+        ChromeBadge.Kind.ATTENTION, ChromeBadge.Kind.NOTICE -> 1f
     }
-    val color = if (kind == ChromeBadge.Kind.ATTENTION) colors.warning else colors.accent
+    val color = when (kind) {
+        ChromeBadge.Kind.ATTENTION -> colors.warning
+        ChromeBadge.Kind.NOTICE -> colors.danger
+        else -> colors.accent
+    }
     Dot(color.copy(alpha = alpha), ring, modifier.testTag("nativeChrome.badge"))
 }
 

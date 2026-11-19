@@ -52,6 +52,7 @@ import { MuseStarters } from './chat2/MuseStarters'
 import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
+import { useChatPageMenu } from './chat2/chatPageMenu'
 import { useChangeTrailDriver } from './chat2/changeTrail'
 import { BgStrip } from './chat2/BackgroundProcs'
 import { useApp, activeChatModelId } from '../stores/appStore'
@@ -177,6 +178,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const studioRoot = useCodeStudio(state => state.activeProject)
   const pinnedSessionId = typeof params.sessionId === 'string' ? params.sessionId : null
   const activeId = followActive ? globalActiveId : pinnedSessionId
+  // 手机的「⋯」只装这一页的事:主区的对话页把这条对话的动作交给外壳(右栏里的对话面板、子会话没有)
+  useChatPageMenu(leaf.loc === 'main' && leaf.type !== 'chat-panel' && !params.childSurface && !params.readOnly ? activeId : null)
   // P1-K6:输入框对着的那台是「我的电脑」且没连上 → 「等待那台连上」;S4 起按本会话所在的那台(空白新对话 = 焦点)
   const targetPlaceholder = useTargetComposerPlaceholder(activeId)
   const composerTargetReady = useComposerReady(activeId)

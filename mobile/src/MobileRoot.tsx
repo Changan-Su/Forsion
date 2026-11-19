@@ -32,14 +32,14 @@ import { VoiceCallBar } from '@/mini/VoiceCallView'
 import { getCallLayer, openCallLayer, subscribeCallLayer } from '@/services/realtimeCall'
 import { readTanguShell, TanguBtwHost } from '@/amadeus/plugins/tanguSeam'
 import { QuickFind, useQuickFind } from '@/quickFind'
-import { FindBar } from '@/findInPage'
+import { FindBar, closeFindBar, useFind } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useCommandStore, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
-// 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
+// 于是 ribbon 的 rb-cmd 项(无条件注册,移动端经头像菜单 / 「⋯」可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
 import { CommandPalette } from '@lcl/engine/CommandPalette'
 import { buildDefaultLayout } from '@/bootstrapEngine'
@@ -81,9 +81,15 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
   // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
   if (useQuickFind.getState().open) return { run: () => useQuickFind.getState().close() }
+  // 命令面板同理:它只听 Esc,触屏上没有这个键。手机上它从头像菜单开(「⋯」只装这一页的事),别处的插件命令也从这儿走 ——
+  // 不接的话,返回会越过它去动它底下的那一层,面板还留在屏上。
+  if (useCommandStore.getState().paletteOpen) return { run: () => useCommandStore.getState().setPaletteOpen(false) }
   // 再问壳:标签页 sheet /「⋯」菜单 / 编辑器浮层 / 设置二级页…开着 → 由它们接管(可取消事件)。
   const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
   if (taken) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true })) } }
+  // 页内查找条(对话页「⋯」里的「在这条对话里查找」、外接键盘的快捷键):它只听 Esc 和自己那颗 ✕。浮在这一页上面,
+  // 返回先收它;不接的话返回直接换了页,条还留在屏上。排在半屏 / 菜单之后 —— 那些是盖在它上面开的。
+  if (useFind.getState().open) return { run: () => closeFindBar() }
   const app = useApp.getState()
   // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
   // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
@@ -103,7 +109,13 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
   // (不关视图,再点同一条目即回)。
   const listFirst = listFirstNow()
-  if (listFirst && ws.leftVisible) return rootBack()
+  if (listFirst && ws.leftVisible) {
+    // 列表层自己还有一层(笔记列表里就地打开的检索):先收它,再按才是离开这一层。问法同上面的浮层(先发 probe),
+    // 但排在它们后面 —— 列表上面开着半屏(切换设备 / 智库)时,这一下该关的是半屏。
+    const held = !window.dispatchEvent(new CustomEvent('forsion:mobile-list-back', { cancelable: true, detail: { probe: true } }))
+    if (held) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-list-back', { cancelable: true })) } }
+    return rootBack()
+  }
   if (ws.leftVisible) return { slide: 'left', run: () => ws.toggleSidebar('left') }
   if (ws.rightVisible) return { slide: 'right', run: () => ws.toggleSidebar('right') }
   const active = ws.mainTabs.find((t) => t.active)
@@ -133,9 +145,15 @@ function useBrowserBack(): void {
     return installBrowserBack(planBack, (changed) => {
       // Subscribe to navigation inputs, not streamed message content. Menu-local navigation asks the
       // same cancellable back event as Android; its sheet presenter reports opening/closing here.
+      // The list level's own layer (planBack's forsion:mobile-list-back) is the view's local state, in no store:
+      // the view reports when it starts and stops holding Back.
+      window.addEventListener('forsion:mobile-list-back-change', changed)
       const offs = [
+        () => window.removeEventListener('forsion:mobile-list-back-change', changed),
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
+        useCommandStore.subscribe((s, prev) => { if (s.paletteOpen !== prev.paletteOpen) changed() }),
+        useFind.subscribe((s, prev) => { if (s.open !== prev.open) changed() }),
         useApp.subscribe((s, prev) => {
           if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen || s.feedbackOpen !== prev.feedbackOpen) changed()
         }),
@@ -200,6 +218,12 @@ export function MobileRoot() {
   useBootstrap()
   useAndroidBack()
   useBrowserBack()
+  // 整页(设置 / 商店 / 反馈 / 成就)盖上来时,底下那一面开着的页内查找条跟着收:它的层级比整页高,留着就浮在整页上面,
+  // 找的却是被盖住的那一面,返回键还得先经过整页自己的层级才轮到它。
+  useEffect(() => useApp.subscribe((s, prev) => {
+    const up = (x: typeof s): boolean => x.settingsOpen || x.marketOpen || x.feedbackOpen || x.achievementsOpen
+    if (up(s) && !up(prev) && useFind.getState().open) closeFindBar()
+  }), [])
   // 通知事件接线(幂等)。三段里 A(amadeusSync)/B(remoteSync)在移动端是可选链 no-op,真正生效的是
   // C:后台会话跑完 → 右上角通知。此前只挂了 NotificationHost 外壳没接线,设置里的「通知」页
   // 一直在管一个永不触发的东西。desktop 在 Root 里装,移动端走本文件 → 必须自己装一份。

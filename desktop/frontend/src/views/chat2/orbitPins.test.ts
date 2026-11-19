@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isOrbitPinned, orderOrbitEntries, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins } from './orbitPins'
+import { isOrbitPinned, orderOrbitEntries, readOrbitPins, sameOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins } from './orbitPins'
 
 describe('Orbits 一级 Pin 排序', () => {
   const entries = [
@@ -32,5 +32,12 @@ describe('Orbits 一级 Pin 排序', () => {
     writeOrbitPins(pinned, { setItem: (_key, value) => { saved = value } })
     expect(readOrbitPins({ getItem: () => saved })).toEqual(pinned)
     expect(readOrbitPins({ getItem: () => '{"ok":12,"bad":"x","zero":0}' })).toEqual({ ok: 12 })
+  })
+
+  it('sameOrbitPins:同一批条目、同样的时间才算没变(重读回来用它决定换不换状态)', () => {
+    expect(sameOrbitPins({ 'ses:a': 1, 'row:agent:x': 2 }, { 'row:agent:x': 2, 'ses:a': 1 })).toBe(true)
+    expect(sameOrbitPins({ 'ses:a': 1 }, { 'ses:a': 2 })).toBe(false)
+    expect(sameOrbitPins({ 'ses:a': 1 }, { 'ses:a': 1, 'ses:b': 3 })).toBe(false)
+    expect(sameOrbitPins({}, {})).toBe(true)
   })
 })

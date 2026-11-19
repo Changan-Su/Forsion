@@ -106,18 +106,21 @@ and pages with their own back semantics (such as Settings) use `mode: 'page'`.
 ```
 
 On Android, Space switching is a native bottom navigation bar (the host declares `spaces: true`): Spaces registered by plugins appear in it automatically with the icon from `SpaceDefinition.icon`, with no extra wiring.
-A Space with a left sidebar has two-level navigation on Android: you land on the sidebar (a full-screen list), tapping an item opens the main area, and Back returns to the list. A Space whose sidebar isn't that kind of list sets `listFirst: false` in its definition; the main area is then the first level and the sidebar stays a drawer.
+A Space with a left sidebar has two-level navigation on Android: you land on the sidebar (a full-screen list), tapping an item opens the main area, and Back returns to the list. A Space whose sidebar isn't that kind of list sets `listFirst: false` in its definition; the main area is then the first level and the sidebar stays a drawer. When the left sidebar holds several views, a switcher sits above the list; a Space whose first view already leads to the others sets `soleList: true`, and the list level draws only that first view, without the switcher (only what is drawn changes: no view is closed and the saved layout is untouched).
 A view can add two things to this native top bar: `useNativeChromeExtras` — a search button in the right capsule and a second part of the title (tappable when `run` is given). Without a declaration there is neither, and only the current level's declaration applies.
 
 ```js
-useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?: { sub, run? } })
+useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?: { sub, run? }, more?: [{ id, label, run, icon?, detail?, on?, danger?, section? }] })
 ```
+
+`more` is the page's own "⋯" menu (pin / rename / archive for the conversation on screen): rows with the same `section` stand together, `on` draws a row checked. On a phone in portrait "⋯" holds only what belongs to the page — when a view declares no `more` and has no command group of its own, that page has no "⋯" button; a tablet in landscape and the drawer layout do not read `more`.
 
 To know whether it is currently shown full-screen as the "list level" (so it can switch to a phone arrangement: one primary button, swipe actions), a view uses `useListFirst()`; without a native host it is always `false`. The built-in phone list parts (category capsules, swipeable rows, primary button, pull-down search) live in the app-level `components/phoneList` and are not open to plugins yet.
 For a custom menu that should also support the native sheet, write its items once as a `SheetMenu` (labels + `run` callbacks), shared by the web render and the native sheet:
 use `openNativeSheetMenu(build, { onFallback })` for click-triggered menus and `useNativeSheetMenu(open, build, onClose)` for state-driven ones (right-click / long-press).
-Besides the ribbon's bottom items, the phone "⋯" menu lists commands that declare `Command.moreGroup = { id, title }` (one section per group, titled `title`);
-commands an external plugin registers through `ctx.registerCommand` are placed there automatically, one section per plugin (titled with the plugin name), with no plugin code changes. The app market's full-screen page uses `page` mode, like Settings.
+Besides the ribbon's bottom items, the single-column shell's "⋯" menu lists commands that declare `Command.moreGroup = { id, title, when? }` (one section per group, titled `title`);
+commands an external plugin registers through `ctx.registerCommand` are placed there automatically, one section per plugin (titled with the plugin name), with no plugin code changes.
+On a phone in portrait (a host that draws the bottom navigation bar) the ribbon's bottom items are not in "⋯": settings, theme mode and the command palette are in the avatar menu, the other entries in the "More" group of the dock's all-Spaces sheet (`lcl/engine/moreSheet.ts`); a command group that declares `when` is listed only while it returns true — for an external plugin's group the host supplies "the page on screen is this plugin's own Space or view". The app market's full-screen page uses `page` mode, like Settings.
 
 This interface only changes how interactions are presented; it doesn't change plugin installation, DOM Views or the editor extension mechanism.
 Support for loading external plugins on mobile needs to be confirmed separately; see [Android pilot and acceptance](../../mobile/README.md).

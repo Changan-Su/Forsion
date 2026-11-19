@@ -41,6 +41,8 @@ import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
 import './chatAvatars' // 「聊天头像」开关落 <html data-chat-avatars>,见该文件
+import './messageTap' // 手机:点一下消息,它的时间和那排按钮出来(整个文档一组监听),见该文件
+import { quietTokens } from './messageQuiet'
 
 import { citeIndexOf } from '../../../../../tangu-agent/src/contracts/citeSources'
 import { CITE_HOVER } from './citeHover'
@@ -81,7 +83,7 @@ import { agentName, agentNames } from '../../agentName'
 import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
-import { UI_MODE, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
+import { UI_MODE, nativeChromeDrawsSpaces, nativeSheetPresenter, runNativeCtxMenu, runNativeSheetMenu, useEdgeNudge, type SheetMenuItem } from '@lcl/engine'
 import { splitSuggestions, type FenceKind, type SuggestState, type TaskCard } from './suggest'
 import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
@@ -610,6 +612,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
   // steer 切段时 turn_boundary 把清单带进新段,跑着的那份在新段上转;旧段已 done,只留快照。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
+  // 手机(有宿主画 Dock:Android 外壳、手机浏览器里的网页版):这条消息平时少写哪几样(名字 / 时间 / 那排按钮),见 messageQuiet.ts。
+  // 写成根上的 data-quiet,剩下的归样式(chat2.css 文末);没有宿主画 Dock 的端恒为 undefined,不带这个属性。
+  const quiet = useApp((s) => (runSid && nativeChromeDrawsSpaces() ? quietTokens(s.messagesBySession[runSid], s.configBySession[runSid], msg.id) : undefined))
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
@@ -759,7 +764,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         .then((shown) => { if (!shown) restore() }, restore)
     }
     return (
-      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
+      <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle} data-quiet={quiet}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
@@ -885,7 +890,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   return (
     <>
     {msg.fallback && <FallbackLine fb={msg.fallback} />}
-    <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
+    <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined} data-quiet={quiet}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>

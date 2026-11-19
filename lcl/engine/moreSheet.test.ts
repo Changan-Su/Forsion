@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
+import { accountMenuItems, allSheetItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
 import { useCommandStore } from './commandRegistry'
 import type { Command, RibbonItem } from './types'
 
@@ -107,5 +107,81 @@ describe('where settings and the foot entries live on a phone', () => {
       // drawer shell: the foot row holds them; native: one of the two menus must
       if (native) expect([...placed].sort()).toEqual(['rb-card', 'rb-settings', 'rb-theme'])
     }
+  })
+})
+
+describe('on a phone ⋯ holds only the page\'s own things: where the app-wide entries go', () => {
+  const rb = (id: string, extra: Partial<RibbonItem> = {}): RibbonItem => ({ id, side: 'bottom', onClick: () => {}, ...extra })
+  // the app's own bottom zone, in registration order, plus a first-party ribbon action and a Space icon of the top zone
+  const ALL = [
+    rb('rb-achievements'), rb('rb-mode'), rb('rb-plugin-events'), rb('rb-market'), rb('rb-feedback'), rb('rb-cmd'),
+    rb('rb-settings'), rb('rb-units', { mobileFoot: true }), rb('rb-account'), rb('space:x', { side: 'top' }),
+  ]
+  const ids = (list: RibbonItem[]): string[] => list.map((i) => i.id)
+  const PHONE = { phone: true, allCell: true }
+
+  it('the two app-wide switches follow settings into the avatar menu; every other launcher goes to the all-Spaces sheet; ⋯ keeps none', () => {
+    expect(ids(accountMenuItems(ALL, true, true))).toEqual(['rb-settings', 'rb-units', 'rb-mode', 'rb-cmd'])
+    expect(ids(allSheetItems(ALL, PHONE))).toEqual(['rb-achievements', 'rb-plugin-events', 'rb-market', 'rb-feedback'])
+    expect(moreItems(ALL, true, PHONE)).toEqual([])
+  })
+
+  it('not a phone (a tablet in landscape, the drawer shell): nothing moves — the same lists as before', () => {
+    for (const seats of [undefined, { phone: false, allCell: true }]) {
+      expect(ids(moreItems(ALL, true, seats))).toEqual(['rb-achievements', 'rb-mode', 'rb-plugin-events', 'rb-market', 'rb-feedback', 'rb-cmd'])
+      expect(ids(accountMenuItems(ALL, true, false))).toEqual(['rb-settings', 'rb-units'])
+    }
+    expect(allSheetItems(ALL, { phone: false, allCell: true })).toEqual([])
+    expect(ids(moreItems(ALL, false, PHONE))).toEqual(['rb-achievements', 'rb-mode', 'rb-plugin-events', 'rb-market', 'rb-feedback', 'rb-cmd']) // no native bar = no phone seats at all
+  })
+
+  it('a dock without an "all" cell cannot open that sheet: the launchers stay in ⋯ (the switches still go to the avatar)', () => {
+    const seats = { phone: true, allCell: false }
+    expect(allSheetItems(ALL, seats)).toEqual([])
+    expect(ids(moreItems(ALL, true, seats))).toEqual(['rb-achievements', 'rb-plugin-events', 'rb-market', 'rb-feedback'])
+  })
+
+  it('no avatar (no account item): settings and the switches have no menu to go to and stay in ⋯; the launchers still move', () => {
+    const noAccount = ALL.filter((i) => i.id !== 'rb-account')
+    expect(accountMenuItems(noAccount, true, true)).toEqual([])
+    expect(ids(moreItems(noAccount, true, PHONE))).toEqual(['rb-settings', 'rb-units', 'rb-mode', 'rb-cmd'])
+  })
+
+  it('an entry is never lost: each bottom item is in exactly one of the three places, whatever the host has', () => {
+    const odd = [...ALL, rb('rb-card', { onClick: undefined }), rb('rb-widget', { onClick: undefined, component: () => null })]
+    for (const account of [true, false]) for (const allCell of [true, false]) {
+      const list = account ? odd : odd.filter((i) => i.id !== 'rb-account')
+      const seats = { phone: true, allCell }
+      const placed = [...ids(moreItems(list, true, seats)), ...ids(accountMenuItems(list, true, true)), ...ids(allSheetItems(list, seats))]
+      const want = list.filter((i) => i.side === 'bottom' && i.id !== 'rb-account').map((i) => i.id)
+      expect([...placed].sort()).toEqual([...want].sort()) // no duplicates, none missing
+    }
+    // what a native sheet cannot draw (a component) or run (no onClick) stays in ⋯
+    expect(ids(moreItems(odd, true, PHONE))).toEqual(['rb-card', 'rb-widget'])
+  })
+
+  it('a switch that carries a component stays in ⋯: the avatar menu draws an icon and a name, the component would be dropped', () => {
+    const list = ALL.map((i) => (i.id === 'rb-mode' ? rb('rb-mode', { component: () => null }) : i))
+    expect(ids(accountMenuItems(list, true, true))).toEqual(['rb-settings', 'rb-units', 'rb-cmd'])
+    expect(ids(allSheetItems(list, PHONE))).not.toContain('rb-mode')
+    expect(ids(moreItems(list, true, PHONE))).toEqual(['rb-mode'])
+  })
+
+  it('command groups: on a phone a group with `when` is listed only while it answers true; elsewhere `when` is not asked', () => {
+    let here = false
+    let asked = 0
+    const mine = { id: 'amadeus:p', title: 'Plugin P', when: () => { asked++; return here } }
+    const cmds = [
+      cmd('amadeus:p:one', { moreGroup: mine }), cmd('amadeus:p:two', { moreGroup: { id: 'amadeus:p', title: 'x' } }),
+      cmd('view:grid', { moreGroup: { id: 'lcl-view-mode', title: 'View' } }),
+      cmd('amadeus:q:one', { moreGroup: { id: 'amadeus:q', title: 'Q', when: () => { throw new Error('boom') } } }),
+    ]
+    expect(moreCommandGroups(cmds, true).map((g) => g.id)).toEqual(['lcl-view-mode']) // P is elsewhere, Q throws = not here
+    expect(asked).toBe(1) // once per group, not per command
+    here = true
+    expect(moreCommandGroups(cmds, true).map((g) => [g.id, g.commands.length])).toEqual([['amadeus:p', 2], ['lcl-view-mode', 1]])
+    asked = 0
+    expect(moreCommandGroups(cmds).map((g) => g.id)).toEqual(['amadeus:p', 'lcl-view-mode', 'amadeus:q'])
+    expect(asked).toBe(0)
   })
 })

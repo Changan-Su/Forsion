@@ -3,7 +3,11 @@ import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 const mode = vi.hoisted(() => ({ mini: false }))
-vi.mock('../../../lcl/engine/uiMode', () => ({ get IS_MINI_PANEL() { return mode.mini }, UI_MODE: 'desktop' }))
+// 部分替身:只钉这里关心的两项,其余(WINDOW_SPACE_ID 等,viewModes → listFirst → spaceRegistry 加载时就读)用真实导出
+vi.mock('../../../lcl/engine/uiMode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../lcl/engine/uiMode')>()),
+  get IS_MINI_PANEL() { return mode.mini }, UI_MODE: 'desktop',
+}))
 vi.mock('../../../lcl/engine/workspaceStore', () => ({
   useWorkspace: { getState: () => ({ leafById: () => ({ loc: 'main' }) }) }, activeMainPanel: () => null,
 }))

@@ -1,6 +1,6 @@
 /** Amadeus 侧栏面板(Tangu 原生 amx- 外观,只复用 vendored 组件的逻辑):全文搜索 / 标签 / 局部关系图。 */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ChevronRight, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { AnimatedCollapse } from '@lcl/components'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
@@ -17,7 +17,7 @@ import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from './i18n'
 import { graphTopology } from '@amadeus/lib/localGraph'
-import { useWorkspace } from '@lcl/engine'
+import { listFirstNow, useSpaceStore, useWorkspace } from '@lcl/engine'
 
 registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
@@ -52,14 +52,34 @@ export const useSearchSeed = create<{ seed: { q: string; n: number } | null; req
   request: (q) => set((s) => ({ seed: { q, n: (s.seed?.n ?? 0) + 1 } })),
 }))
 
-export function AmadeusSearchView() {
+/** 手机笔记列表里那一层检索已经把光标给过输入框的那一次请求的序号(见 AmadeusSearchView:同一次请求不因为重新挂上再弹一次键盘)。 */
+let listSearchFocused = 0
+
+/** 手机的列表层只画笔记列表这一个左栏视图时(两级导航 × Space 的 soleList),全文检索画在那张列表里(AmadeusPagesView):
+ *  回到列表层,发一次空查询 —— 那边接住、就地打开,输入框拿到光标。不是这种形态 → false,调用方照旧去开左栏的检索视图。 */
+export function openListSearch(): boolean {
+  const sp = useSpaceStore.getState()
+  if (!listFirstNow() || !sp.spaces.find((x) => x.id === sp.activeSpaceId)?.soleList) return false
+  const ws = useWorkspace.getState()
+  if (!ws.leftVisible) ws.toggleSidebar('left')
+  useSearchSeed.getState().request('')
+  return true
+}
+
+/** `onBack`:画在手机的笔记列表里(AmadeusPagesView:点标签 / 检索集合出来的结果、「全文搜索」那一行就地显示,那一层只画笔记列表
+ *  这一个左栏视图)—— 标题那一行是「回到列表」,滚动交给外面的列表。带着查询进来(点了标签)不弹键盘;空查询进来是要打字,光标给输入框。 */
+export function AmadeusSearchView({ onBack }: { onBack?: () => void } = {}) {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const [query, setQuery] = useState('')
   const seed = useSearchSeed((s) => s.seed)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const inList = !!onBack
   useEffect(() => {
-    if (seed) setQuery(seed.q)
-  }, [seed])
+    if (!seed) return
+    setQuery(seed.q)
+    if (inList && !seed.q && seed.n !== listSearchFocused) { listSearchFocused = seed.n; inputRef.current?.focus() }
+  }, [seed, inList])
   const [hits, setHits] = useState<SearchHit[]>([])
   const seq = useRef(0)
   const parsed = useMemo(() => parseSearchQuery(query), [query])
@@ -124,11 +144,13 @@ export function AmadeusSearchView() {
   const lineTotal = hits.reduce((n, h) => n + (h.hits?.length ?? 0), 0)
 
   return (
-    <div className="amx-panel">
-      <div className="amx-panel-head">{t('amxpanel.searchHead')}</div>
+    <div className={`amx-panel${onBack ? ' amx-panel--inlist' : ''}`}>
+      {onBack
+        ? <button type="button" className="amx-panel-head amx-panel-back" onClick={onBack}><ChevronLeft size={14} />{t('amxpanel.searchHead')}</button>
+        : <div className="amx-panel-head">{t('amxpanel.searchHead')}</div>}
       <div className="t2s-search amx-search-box">
         <Search size={13} className="t2s-dim" />
-        <input autoFocus value={query} placeholder={t('amxpanel.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
+        <input ref={inputRef} autoFocus={!onBack} value={query} placeholder={t('amxpanel.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
         {query.trim() && (
           <button
             className="amx-search-save"
@@ -244,7 +266,9 @@ const TAG_SORTS: Array<{ id: TagTreeSort; label: 'amxpanel.tagsSortCount' | 'amx
   { id: 'name', label: 'amxpanel.tagsSortName' },
 ]
 
-export function AmadeusTagsView() {
+/** `inList`:手机笔记列表里的「标签」一档(AmadeusPagesView)。那一档的名字就是标题,所以不画标题栏;筛选框和排序照样有
+ *  (排在一行里),库里一个标签都没有时这一行也不画。 */
+export function AmadeusTagsView({ inList }: { inList?: boolean } = {}) {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const version = usePageStore((s) => s.linkGraphVersion)
@@ -266,33 +290,47 @@ export function AmadeusTagsView() {
   // 筛选时展开什么由匹配决定(不落盘),此时箭头不响应,否则点了也看不出变化。
   const isOpen = (key: string): boolean => (filtering ? shown.open.has(key) : expanded.includes(key))
 
+  const body = !vaultRoot ? (
+    <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
+  ) : tree.length === 0 ? (
+    <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
+  ) : shown.nodes.length === 0 ? (
+    <div className="amx-panel-empty">{t('amxpanel.noResults')}</div>
+  ) : (
+    <div className="amx-list">
+      <TagTreeRows nodes={shown.nodes} depth={0} isOpen={isOpen} locked={filtering} />
+    </div>
+  )
+  const filterBox = (
+    <div className="t2s-search amx-search-box amx-tagtree-search">
+      <Search size={13} className="t2s-dim" />
+      <input value={filter} placeholder={t('amxpanel.tagsFilter')} aria-label={t('amxpanel.tagsFilter')} onChange={(e) => setFilter(e.target.value)} />
+    </div>
+  )
+  const sortKeys = (
+    <span className="amx-tagtree-sort" role="group">
+      {TAG_SORTS.map((s) => (
+        <button key={s.id} className={sort === s.id ? 'on' : undefined} aria-pressed={sort === s.id} onClick={() => useAmadeusPrefs.getState().setTagSort(s.id)}>
+          {t(s.label)}
+        </button>
+      ))}
+    </span>
+  )
+  if (inList) return (
+    <div className="amx-tags-inlist">
+      {!!vaultRoot && tree.length > 0 && <div className="amx-tags-inlist-bar">{filterBox}{sortKeys}</div>}
+      {body}
+    </div>
+  )
+
   return (
     <div className="amx-panel">
-      <div className="t2s-search amx-search-box amx-tagtree-search">
-        <Search size={13} className="t2s-dim" />
-        <input value={filter} placeholder={t('amxpanel.tagsFilter')} aria-label={t('amxpanel.tagsFilter')} onChange={(e) => setFilter(e.target.value)} />
-      </div>
+      {filterBox}
       <div className="amx-panel-head amx-tagtree-head">
         <span>{t('amxpanel.tagsHead', { n: tree.length })}</span>
-        <span className="amx-tagtree-sort" role="group">
-          {TAG_SORTS.map((s) => (
-            <button key={s.id} className={sort === s.id ? 'on' : undefined} aria-pressed={sort === s.id} onClick={() => useAmadeusPrefs.getState().setTagSort(s.id)}>
-              {t(s.label)}
-            </button>
-          ))}
-        </span>
+        {sortKeys}
       </div>
-      {!vaultRoot ? (
-        <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
-      ) : tree.length === 0 ? (
-        <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
-      ) : shown.nodes.length === 0 ? (
-        <div className="amx-panel-empty">{t('amxpanel.noResults')}</div>
-      ) : (
-        <div className="amx-list">
-          <TagTreeRows nodes={shown.nodes} depth={0} isOpen={isOpen} locked={filtering} />
-        </div>
-      )}
+      {body}
     </div>
   )
 }

@@ -13,6 +13,7 @@ import { openTutorial } from './amadeusTutorial'
 import { openManual } from './amadeusManual'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { createDashboard, createDrawing } from './amadeusNav'
+import { openListSearch } from './amadeusPanels'
 import { setWikiFilesEnabled, wikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { translate } from './i18n'
 import { FOLD_COMMANDS } from '@amadeus/unified/foldCommands'
@@ -62,9 +63,11 @@ export const CMDS: Command[] = [
   ...READING_COMMANDS,
 ]
 
-/** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */
+/** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。
+ *  手机的列表层只画笔记列表(Space 的 soleList):左栏那个检索视图不在屏上,改在列表里就地打开(openListSearch)。 */
 export function openSearchView(): void {
   if (!amadeusAvailable()) return
+  if (openListSearch()) return
   ws().showSideView('left', 'amadeus-search')
   const st = useWorkspace.getState()
   const api = (st as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api

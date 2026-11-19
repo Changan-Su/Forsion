@@ -106,18 +106,21 @@ Android 的共享 `ModelPill` 可通过 `modelPickerHost` 接口使用 Kotlin / 
 ```
 
 Space 切换在 Android 上是原生底部导航栏（宿主声明 `spaces: true`）：插件注册的 Space 自动出现在里面，图标取 `SpaceDefinition.icon`，不需要额外接线。
-有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。
+有左栏的 Space 在 Android 上是两级导航：进来先看左栏（全屏列表），点条目进主区，返回回到列表。左栏不是这种列表的 Space 在定义里写 `listFirst: false`，主区就是第一层、左栏仍是抽屉。左栏有几个视图时列表上方有一个切换下拉；头一个视图自己就给了其余几个的入口的 Space 写 `soleList: true`，列表层只画头一个、不出下拉（只换画哪一个，不关视图、不改存下的布局）。
 视图可以往这条原生顶栏上加两样东西：`useNativeChromeExtras` —— 右胶囊里的搜索钮、标题的第二段（给了 `run` 就可点）；不声明就没有，只有当前这一层的声明生效。
 
 ```js
-useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?: { sub, run? } })
+useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?: { sub, run? }, more?: [{ id, label, run, icon?, detail?, on?, danger?, section? }] })
 ```
+
+`more` 是这一页自己的「⋯」菜单项（这条对话的置顶 / 重命名 / 归档这类）：`section` 相同的排在一节，`on` 画成勾选态。手机竖屏上「⋯」只装这一页的事 —— 视图没声明 `more`、也没有自己的命令组时，这一页就没有「⋯」这颗钮；平板横屏和抽屉形态不认 `more`。
 
 视图要知道自己是不是正作为「列表层」整屏显示（好换成手机的摆法：一颗主按钮、左滑操作），用 `useListFirst()`；没有原生宿主时恒为 `false`。内置的那套手机列表件（分类胶囊、左滑一行、主按钮、下拉搜索）在应用层的 `components/phoneList`，目前不对插件开放。
 自绘菜单想同时支持原生底单时，把条目写成一份 `SheetMenu`（文案 + `run` 回调），Web 渲染与原生底单共用：
 点击触发用 `openNativeSheetMenu(build, { onFallback })`，状态驱动（右键 / 长按）用 `useNativeSheetMenu(open, build, onClose)`。
-手机「⋯」菜单除 ribbon 底部项外，还列出声明了 `Command.moreGroup = { id, title }` 的命令（同组一节、节标题 = `title`）；
-外置插件经 `ctx.registerCommand` 注册的命令由宿主自动按插件分节放进去（节标题 = 插件名），插件无需改代码。应用市场全屏页与设置同款走 `page` 模式。
+单列壳的「⋯」菜单除 ribbon 底部项外，还列出声明了 `Command.moreGroup = { id, title, when? }` 的命令（同组一节、节标题 = `title`）；
+外置插件经 `ctx.registerCommand` 注册的命令由宿主自动按插件分节放进去（节标题 = 插件名），插件无需改代码。
+手机竖屏（宿主画底部导航栏）上 ribbon 底部项不在「⋯」里：设置、明暗、命令面板在头像菜单，其余入口在 Dock「全部」半屏的「更多」一组（`lcl/engine/moreSheet.ts`）；命令组声明了 `when` 的只在它返回真时列出 —— 宿主给外置插件的那一组填的是「屏上是这个插件自己的 Space 或视图」。应用市场全屏页与设置同款走 `page` 模式。
 
 此接口只改变交互的展示层，不改变插件安装、DOM View 或编辑器扩展机制。
 移动端外部插件加载的支持情况需独立确认，详见 [Android 试点与验收](../../mobile/README.md)。
