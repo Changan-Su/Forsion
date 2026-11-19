@@ -441,6 +441,12 @@ export interface UpdaterStatusInfo {
   canSwitch?: boolean
   /** mac:已在浏览器里开了 .dmg 的下载链接 */
   opened?: boolean
+  /** mac:只能在浏览器里下 .dmg 手动装;false = 应用内下载安装。缺省(老主进程)= mac 手动 */
+  manualInstall?: boolean
+  /** mac:应用内自装没成,已退回下载安装包 */
+  selfInstallFailed?: boolean
+  /** mac:点了重启并安装,正在准备 */
+  preparing?: boolean
 }
 
 /** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */
@@ -678,7 +684,7 @@ declare global {
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
-      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
+      /** 应用内自动更新:检查 / 下载 / 重启安装(状态带 manualInstall 的 mac 不能自装,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
       onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>

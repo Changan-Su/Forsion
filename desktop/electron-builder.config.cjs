@@ -160,7 +160,9 @@ module.exports = {
   ],
   linux: { target: 'AppImage', icon: 'build/icon.png' },
   mac: {
-    target: 'dmg',
+    // dmg = 新用户 / 官网下载;zip = 应用内自动更新(Squirrel.Mac 只吃 zip,electron-builder 有 zip 才写 latest-mac.yml)。
+    // 架构跟 CLI(CI 是 --mac --arm64),两个目标同一个架构;zip 里的 .app 与 dmg 里的是同一份已签名、已公证、钉了票据的包。
+    target: ['dmg', 'zip'],
     icon: 'build/icon.icns',
     // Developer ID signing + notarization only when macDeveloperId (certificate: CSC_KEYCHAIN prepared by CI from the
     // MAC_CSC_LINK secret, or CSC_LINK / CSC_NAME locally; notarization: APPLE_API_KEY / _KEY_ID / _ISSUER or APPLE_KEYCHAIN_PROFILE).

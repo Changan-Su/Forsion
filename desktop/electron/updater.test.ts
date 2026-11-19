@@ -8,12 +8,30 @@ const updater = vi.hoisted(() => ({
   reject: false,
   beta: false,
   current: '2.13.3',
+  macSelf: { ok: false, reason: 'not-developer-id' },
+  quitAndInstall: vi.fn(),
+  native: new Map<string, Set<(...args: any[]) => void>>(),
+  /** Squirrel.Mac 取包验签的结果:'update-downloaded' 成,'error' 验签没过 */
+  squirrel: 'update-downloaded' as 'update-downloaded' | 'error',
+  opened: [] as string[],
+  /** 钉过去拉 yml 失败(例:这一版 GitHub 上没有 latest-mac.yml) */
+  checkFails: false,
+  relaunched: 0,
+  sourcePref: 'auto',
 }))
+const emitNative = (name: string, ...args: any[]) => { for (const cb of [...(updater.native.get(name) ?? [])]) cb(...args) }
 vi.mock('electron', () => ({
-  app: { isPackaged: true, getVersion: () => updater.current },
+  app: { isPackaged: true, getVersion: () => updater.current, getPath: () => '/Applications/Forsion.app/Contents/MacOS/Forsion', relaunch: () => { updater.relaunched++ }, exit: () => {} },
   BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: (_c: string, s: any) => updater.sent.push(s) } }] },
-  shell: { openExternal: vi.fn() },
+  shell: { openExternal: async (url: string) => { updater.opened.push(url) } },
+  // Squirrel.Mac(Electron 原生 autoUpdater)
+  autoUpdater: {
+    on: (name: string, cb: any) => { if (!updater.native.has(name)) updater.native.set(name, new Set()); updater.native.get(name)!.add(cb) },
+    removeListener: (name: string, cb: any) => { updater.native.get(name)?.delete(cb) },
+    checkForUpdates: () => { setTimeout(() => emitNative(updater.squirrel, ...(updater.squirrel === 'error' ? [new Error('Code signature did not pass validation')] : [])), 0) },
+  },
 }))
+vi.mock('./macSelfUpdate', () => ({ probeMacSelfInstall: async () => updater.macSelf }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: {
   isUpdateAvailable: async () => true,
   isUpdateSupported: async () => !updater.reject,
@@ -22,12 +40,14 @@ vi.mock('electron-updater', () => ({ default: { autoUpdater: {
   setFeedURL: (feed: any) => updater.feeds.push(feed),
   // 钉在哪个 tag / 官网记录上,就答哪个版本(和真的 generic / WebsiteUpdateProvider 一样)
   checkForUpdates: async () => {
+    if (updater.checkFails) throw new Error('HttpError: 404 latest-mac.yml')
     const feed = updater.feeds.at(-1)
     const version = feed.provider === 'custom' ? feed.installer.version : /\/v([^/]+)$/.exec(feed.url)![1]
     if (updater.reject) return { isUpdateAvailable: false, updateInfo: { version } } // 例:minimumSystemVersion 高过本机
     updater.events.get('update-available')?.({ version, files: [{ size: 100 }] })
     return { isUpdateAvailable: true, updateInfo: { version } }
   },
+  quitAndInstall: updater.quitAndInstall,
   downloadUpdate: () => (updater.download.shift() ?? (async () => updater.events.get('update-downloaded')!({ version: '2.13.4' })))(),
 } } }))
 vi.mock('./distribution', () => ({ BUNDLE_EXTEND: true }))
@@ -35,7 +55,7 @@ vi.mock('./websiteUpdateProvider', () => ({ WebsiteUpdateProvider: class {} }))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/nonexistent-forsion-updater-test' }))
 vi.mock('node:fs/promises', async importOriginal => ({
   ...await importOriginal<typeof import('node:fs/promises')>(),
-  readFile: async () => JSON.stringify({ updater: { beta: updater.beta } }),
+  readFile: async () => JSON.stringify({ updater: { beta: updater.beta, source: updater.sourcePref } }),
 }))
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
@@ -46,6 +66,8 @@ beforeEach(() => {
   vi.resetModules()
   updater.events.clear(); updater.feeds.length = 0; updater.sent.length = 0; updater.download.length = 0; updater.reject = false; answers.clear()
   updater.beta = false; updater.current = '2.13.3'
+  updater.macSelf = { ok: false, reason: 'not-developer-id' }; updater.quitAndInstall.mockClear(); updater.native.clear()
+  updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0; updater.sourcePref = 'auto'
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -204,4 +226,141 @@ it('a late "downloaded" event for a dropped prerelease is ignored (Codex review)
   finish()
   await downloading
   expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+})
+
+// ── macOS:Developer ID 签名的包应用内自装,ad-hoc 旧包退回浏览器开 .dmg ────────────────────────────────
+const mac = (macos: Record<string, unknown> = {}) => ({ platforms: { macos: { version: '2.13.4', filename: 'Forsion-2.13.4-arm64.dmg', size: 200, ...macos } } })
+const onMac = () => Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+
+it('ad-hoc mac: offers the .dmg in the browser and never pins electron-updater', async () => {
+  onMac()
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates, downloadUpdate, canInstallUpdate, openUpdateInstaller, installUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.4', source: 'website', size: 200, manualInstall: true })
+  await downloadUpdate()
+  expect(updater.feeds).toEqual([])
+  expect(getUpdaterStatus().phase).toBe('available')
+  expect(canInstallUpdate()).toBe(false)
+  installUpdate()
+  expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  expect(await openUpdateInstaller()).toBe(true)
+  expect(updater.opened).toEqual(['https://forsion.net/api/website/download/macos'])
+})
+
+it('Developer ID mac abroad: downloads the zip feed from GitHub, stages Squirrel, then quits and installs', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac({ sha512: 'abc==' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, canInstallUpdate, prepareInstall, installUpdate, openUpdateInstaller, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', manualInstall: false })
+  expect(updater.feeds).toEqual([{ provider: 'generic', url: 'https://github.com/Changan-Su/Forsion/releases/download/v2.13.4' }])
+  expect(await openUpdateInstaller()).toBe(false)
+  await downloadUpdate()
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.13.4' })
+  expect(canInstallUpdate()).toBe(true)
+  expect(await prepareInstall()).toBe(true)
+  expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloaded', preparing: true }))
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', preparing: false })
+  installUpdate()
+  expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+})
+
+it('Developer ID mac: a Squirrel signature rejection falls back to the .dmg before anything is shut down', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.squirrel = 'error'
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, canInstallUpdate, prepareInstall, installUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  expect(await prepareInstall()).toBe(false)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', version: '2.13.4', source: 'github', manualInstall: true, selfInstallFailed: true })
+  expect(updater.sent.some((s) => s.phase === 'error')).toBe(false)
+  expect(canInstallUpdate()).toBe(false)
+  installUpdate()
+  expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  // 本次运行不再试自装:再检查也只给 .dmg
+  updater.sent.length = 0
+  const { channelChanged } = await import('./updater')
+  channelChanged(false)
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', manualInstall: true })
+})
+
+it.each([
+  ['mainland', { country: 'CN', mainland_china: true }, 'auto'],
+  ['unknown region', undefined, 'auto'],
+  ['website chosen abroad', { country: 'GB', mainland_china: false }, 'website'],
+])('Developer ID mac, %s: follows the website, which only has the .dmg, and never detours to GitHub', async (_name, region, source) => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.sourcePref = source
+  answers.set('/website/config', mac({ sha512: 'abc==' }))
+  if (region) answers.set('/auth/region', region)
+  const { checkForUpdates, downloadUpdate, openUpdateInstaller } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', size: 200, manualInstall: true })
+  expect(updater.feeds).toEqual([])
+  await downloadUpdate()
+  expect(updater.feeds).toEqual([])
+  expect(await openUpdateInstaller()).toBe(true)
+  expect(updater.opened).toEqual(['https://forsion.net/api/website/download/macos'])
+})
+
+it('Developer ID mac abroad: a stalled GitHub download falls back to the .dmg instead of a dead error', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  updater.download.push(async () => { throw new Error('ECONNRESET') })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'github', manualInstall: true, selfInstallFailed: true })
+})
+
+it('Developer ID mac: a release without latest-mac.yml on GitHub still offers the .dmg', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.checkFails = true // GitHub 这一版只有 .dmg:generic 拉 latest-mac.yml 404
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', manualInstall: true })
+})
+
+it('Developer ID mac: install-time recheck refuses a bundle that became read-only, and a beta toggle cannot drop a staged install', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, prepareInstall, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  updater.macSelf = { ok: false, reason: 'read-only' }
+  expect(await prepareInstall()).toBe(false)
+  expect(updater.native.get('update-downloaded')?.size ?? 0).toBe(0) // Squirrel 根本没被叫起来
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', manualInstall: true, selfInstallFailed: true })
+})
+
+it('Developer ID mac: a staged beta survives turning beta off, and a Squirrel error after quitAndInstall relaunches instead of leaving a windowless app', async () => {
+  onMac()
+  updater.beta = true
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }))
+  const { checkForUpdates, downloadUpdate, prepareInstall, channelChanged, installUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  const staging = prepareInstall()
+  channelChanged(false) // 准备中关测试版:不作废
+  expect(await staging).toBe(true)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.14.0-beta.1' })
+  installUpdate()
+  expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+  emitNative('error', new Error('ShipItState.plist could not be written'))
+  expect(updater.relaunched).toBe(1)
 })

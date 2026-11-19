@@ -7,12 +7,14 @@
  *  - Windows(NSIS)/ Linux(AppImage):定下版本后,把 electron-updater 的下载源钉到这个版本 ——
  *    GitHub = 该 tag 的 latest*.yml(generic);官网 = WebsiteUpdateProvider(Windows 标准包、官网记录带 sha512 才有)。
  *    一边下不动(出错 / 30 秒没进度)自动换另一边一次;下载中也能手动换。electron-updater 现在只管下载和安装,不再决定有没有新版。
- *  - macOS:未签名应用无法经 Squirrel.Mac 自装(硬性要求 Developer ID 签名+公证+zip 目标),
- *    「下载安装包」在浏览器里直接开这一版 .dmg 的链接,装由用户自己拖。
+ *  - macOS:当前运行的包是 Developer ID 签名、且 .app 所在目录可写(macSelfUpdate.ts 探一次)→ 和 Windows / Linux 一样
+ *    electron-updater 下 zip(latest-mac.yml,只在 GitHub 上;官网只收 .dmg,所以该先走官网的大陆用户照旧从官网开 .dmg)→「重启并安装」时先让 Squirrel.Mac 取包验签
+ *    (prepareInstall),成了才停后端、quitAndInstall。ad-hoc 签名的旧包 / 从 .dmg 里直接跑 / 任何一步失败 →
+ *    退回老路:「下载安装包」在浏览器里直接开这一版 .dmg 的链接,装由用户自己拖。
  *
  * 所有状态广播 'updater:status' 给渲染层;dev 未打包态统一 no-op 返回 phase:'unsupported'。
  */
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, shell, autoUpdater as nativeUpdater } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import electronUpdater from 'electron-updater'
@@ -21,6 +23,7 @@ import { forsionHomeDir } from './forsionHome'
 import { changelogSection, isNewer, isPrerelease, notesToString } from './updaterUtil'
 import { BUNDLE_EXTEND } from './distribution'
 import { WebsiteUpdateProvider } from './websiteUpdateProvider'
+import { probeMacSelfInstall } from './macSelfUpdate'
 import { checkRevisionUpdate } from './revisionUpdateCheck'
 import {
   WEBSITE_API, parseMainland, parseSourcePref, parseWebsiteInstallers, sourceOrder,
@@ -62,6 +65,12 @@ export interface UpdaterStatus {
   canSwitch?: boolean
   /** mac:已在浏览器里开了下载链接 */
   opened?: boolean
+  /** mac:这次只能在浏览器里下 .dmg 手动装(ad-hoc 旧包 / 自装失败);false = 和 Windows 一样应用内下载安装。老主进程不带这格 */
+  manualInstall?: boolean
+  /** mac:应用内自装没成,已退回下载安装包 */
+  selfInstallFailed?: boolean
+  /** mac:点了「重启并安装」,Squirrel.Mac 正在取包验签 */
+  preparing?: boolean
 }
 
 let wired = false
@@ -75,6 +84,13 @@ let busy = false
 /** 下载进行中:取消令牌、最后一次有进度的时刻、手动要换去的那边 */
 type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean }
 let dl: Download | null = null
+/** mac:当前运行的包能不能自装(探一次记住);自装失败过一次,本次运行不再试;Squirrel 已经取好包 */
+let macSelf: Promise<boolean> | null = null
+let macSelfOk = false
+let macSelfBroken = false
+let squirrelReady = false
+/** prepareInstall 进行中:Squirrel 的报错由它处理,别广播 */
+let staging = false
 
 /** 阶段变了才回调(匿名遥测的 update 事件:见 telemetryHost.appUpdateProps);下载进度那种同阶段的刷新不回调。返回退订。 */
 const phaseListeners = new Set<(status: UpdaterStatus) => void>()
@@ -219,6 +235,7 @@ async function findLatest(beta: boolean): Promise<{ version: string; notes?: str
 function feedFor(src: UpdateSource): Parameters<typeof autoUpdater.setFeedURL>[0] | null {
   if (!target) return null
   if (src === 'github') return { provider: 'generic', url: `https://github.com/${GH_OWNER}/${GH_REPO}/releases/download/v${target.version}` }
+  // 官网只给 Windows:mac 那份记录是 .dmg(server websiteService 按扩展名收),Squirrel.Mac 要的是 zip → mac 自装只走 GitHub。
   const it = target.site?.windows
   if (process.platform !== 'win32' || !websiteCarries('win32', BUNDLE_EXTEND) || !websiteHas(it, target.version) || !it.sha512) return null
   return { provider: 'custom', updateProvider: WebsiteUpdateProvider, installer: it, downloadUrl: `${WEBSITE_API}/website/download/windows` }
@@ -259,7 +276,7 @@ function ensureWired(): void {
   autoUpdater.on('update-available', (info) => {
     if (dl || !target || info.version !== target.version) return // 下载中换源时的回声
     announceAvailable(info.version, notesToString(info.releaseNotes),
-      { source: feedSource ?? undefined, size: info.files?.[0]?.size })
+      { source: feedSource ?? undefined, size: info.files?.[0]?.size, manualInstall: false })
   })
   // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
@@ -274,9 +291,40 @@ function ensureWired(): void {
     broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false })
   })
   autoUpdater.on('error', (err) => {
-    if (busy || dl) return // 调用处自己处理(换源或报错)
+    if (busy || dl || staging) return // 调用处自己处理(换源 / 报错 / mac 退回 .dmg)
     broadcast({ phase: 'error', error: err?.message || String(err) })
   })
+}
+
+/** mac:这次运行能不能走应用内自装。非 mac 恒 true;判不出来当不能。 */
+async function selfInstallable(): Promise<boolean> {
+  if (process.platform !== 'darwin') return true
+  if (macSelfBroken) return false
+  if (!macSelf) {
+    macSelf = probeMacSelfInstall(app.getPath('exe')).then((r) => {
+      console.log(`[updater] mac self-install: ${r.reason}`)
+      macSelfOk = r.ok
+      return r.ok
+    })
+  }
+  return macSelf
+}
+
+/** mac 手动装时 .dmg 从哪边下:按下载顺序,官网要正好有这一版标准包才算。 */
+function manualMacSource(version: string): { source: UpdateSource; size?: number } {
+  const site = target?.site?.macos
+  const source = target?.order.find((s) => s === 'github' || (websiteCarries('darwin', BUNDLE_EXTEND) && websiteHas(site, version))) ?? 'github'
+  return { source, size: source === 'website' ? site?.size : undefined }
+}
+
+/** mac 应用内自装这条路走不通(下不动 / Squirrel 验签失败):退回浏览器开 .dmg,本次运行不再试。 */
+function degradeToManual(): void {
+  macSelfBroken = true
+  squirrelReady = false
+  if (!target) return
+  const { version } = target
+  const notes = lastStatus.version === version ? { releaseNotes: lastStatus.releaseNotes, releaseNotesEn: lastStatus.releaseNotesEn } : {}
+  broadcast({ phase: 'available', version, ...notes, ...manualMacSource(version), manualInstall: true, selfInstallFailed: true })
 }
 
 export function getUpdaterStatus(): UpdaterStatus {
@@ -311,9 +359,10 @@ async function runCheck(): Promise<UpdaterStatus> {
       return lastStatus
     }
     target = { version: latest.version, site: latest.site, order: sourceOrder(source, source === 'auto' ? await detectMainland() : null) }
-    if (process.platform === 'darwin') {
-      const src = target.order.find((s) => s === 'github' || (websiteCarries('darwin', BUNDLE_EXTEND) && websiteHas(target!.site?.macos, latest.version))) ?? 'github'
-      announceAvailable(latest.version, latest.notes, { source: src, size: src === 'website' ? latest.site?.macos?.size : undefined })
+    // mac 只能手动装(ad-hoc 旧包等);或者这次该先走官网(大陆 / 选了官网 / 地区没探出来)而官网给不了 zip ——
+    // 官网只收 .dmg,那就照旧从官网开 .dmg,不为了自装绕去 GitHub(下载源按地区是 10-19 定的口径)。
+    if (!(await selfInstallable()) || (process.platform === 'darwin' && target.order[0] === 'website' && !feedFor('website'))) {
+      announceAvailable(latest.version, latest.notes, { ...manualMacSource(latest.version), manualInstall: true })
       return lastStatus
     }
     ensureWired()
@@ -323,6 +372,11 @@ async function runCheck(): Promise<UpdaterStatus> {
       const res = await useSource(src)
       if (res === 'ok') return lastStatus // update-available 已广播
       if (res === 'rejected') { target = null; broadcast({ phase: 'not-available' }); return lastStatus }
+    }
+    // mac:GitHub 上这一版没有 latest-mac.yml(zip 之前发的版本)或连不上 → 还能在浏览器里下 .dmg(官网那份也算)
+    if (process.platform === 'darwin') {
+      announceAvailable(latest.version, latest.notes, { ...manualMacSource(latest.version), manualInstall: true })
+      return lastStatus
     }
     broadcast({ phase: 'error', error: 'unreachable' })
   } catch (err: any) {
@@ -336,7 +390,7 @@ async function runCheck(): Promise<UpdaterStatus> {
  * 换过去还不行就报错,不来回切。手动换源(switchUpdateSource)随时可以,不占这一次。
  */
 export async function downloadUpdate(): Promise<void> {
-  if (unsupported() || process.platform === 'darwin' || !target || dl || lastStatus.phase !== 'available') return
+  if (unsupported() || lastStatus.manualInstall || !target || dl || lastStatus.phase !== 'available') return
   ensureWired()
   // 先把阶段钉成 downloading:第一条进度事件要等一会儿,这段空档里定时 / 唤醒检查会当成「还没下载」
   // 照常去查,查回来晚于下载完成就把 downloaded 盖回 available(Codex 评审 P2)。
@@ -357,7 +411,10 @@ export async function downloadUpdate(): Promise<void> {
       const switched = !!next && (await useSource(next)) === 'ok'
       if (cur.dropped) return // 换源那一下 await 期间关了测试版
       if (!switched) {
-        broadcast({ ...lastStatus, phase: 'error', error: downloadErrorCode(err) })
+        const code = downloadErrorCode(err)
+        // mac 下不动还有 .dmg 这条路(大陆可走官网);磁盘满换哪条路都一样,照常报
+        if (process.platform === 'darwin' && code !== 'disk-full') degradeToManual()
+        else broadcast({ ...lastStatus, phase: 'error', error: code })
         return
       }
       if (!manual) autoSwitched = true
@@ -378,7 +435,8 @@ export async function downloadUpdate(): Promise<void> {
  * 打开测试版不动:手上那份正式版照样能装。
  */
 export function channelChanged(beta: boolean): void {
-  if (beta || !target || !isPrerelease(target.version)) return
+  // mac 已经点了安装、Squirrel 在取 / 已取好:它一取好就会在退出时装上,这时作废只会让界面和实际装的对不上(Codex 评审)
+  if (beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
   if (dl) { dl.dropped = true; dl.token.cancel() }
   target = null
   broadcast({ phase: 'idle' })
@@ -395,7 +453,7 @@ export function switchUpdateSource(): boolean {
 
 /** mac:在浏览器里直接开这一版 .dmg 的下载链接(官网 = 官网下载接口;GitHub = 同一 tag 的资产)。 */
 export async function openUpdateInstaller(): Promise<boolean> {
-  if (process.platform !== 'darwin' || !target || lastStatus.phase !== 'available') return false
+  if (process.platform !== 'darwin' || !target || lastStatus.phase !== 'available' || !lastStatus.manualInstall) return false
   const v = target.version
   const url = lastStatus.source === 'website'
     ? `${WEBSITE_API}/website/download/macos`
@@ -412,12 +470,71 @@ export async function openUpdateInstaller(): Promise<boolean> {
  * 调用方(main 的 updater:install 处理器)须先优雅停后端,避免 before-quit 的 app.exit(0)
  * 截断 electron-updater 的退出安装路径。
  */
-/** installUpdate() 会不会真的退出去装(mac / 未打包是 no-op)。调用方据此决定要不要先封住后端拉起。 */
+/** installUpdate() 会不会真的退出去装(未打包 / 只能手动装的 mac 是 no-op)。调用方据此决定要不要先封住后端拉起。 */
 export function canInstallUpdate(): boolean {
-  return !unsupported() && process.platform !== 'darwin'
+  return !unsupported() && (process.platform !== 'darwin' || (macSelfOk && !macSelfBroken))
+}
+
+/**
+ * 装之前的准备,调用方在**停后端之前** await 它,false 就别往下走(状态已退回「下载安装包」)。
+ *
+ * 只有 mac 有事做:electron-updater 下完 zip 只是在本机起了个代理、把 Squirrel.Mac 的 feed 指过去;
+ * 不让它提前取(autoInstallOnAppQuit=false),quitAndInstall 才去取包、解包、核签名 —— 那时后端早停了,
+ * 验签一失败应用就卡在半退出。所以这里先让 Squirrel 取完验完(原生 update-downloaded),quitAndInstall 就是当场退出去装。
+ * ⚠️ 取好之后 Squirrel 会在下次退出时自己装上(它的固有行为),所以只在用户点了「重启并安装」、确认过之后才取。
+ */
+export async function prepareInstall(): Promise<boolean> {
+  if (process.platform !== 'darwin') return true
+  if (!canInstallUpdate() || lastStatus.phase !== 'downloaded') return false
+  if (squirrelReady) return true
+  staging = true
+  broadcast({ ...lastStatus, preparing: true })
+  try {
+    // 检查时探的结果可能过时了(装好后被改成只读 / 挪进没权限的地方):Squirrel 遇到不可写会改走提权 ShipIt,我们只走普通用户这条
+    const now = await probeMacSelfInstall(app.getPath('exe'))
+    if (!now.ok) throw new Error(`mac self-install no longer possible: ${now.reason}`)
+    // 不设超时:Squirrel 取包验签解包这一步没法取消,超时后它照样可能取好(下次退出就装)或报错,界面会对不上。
+    // 等它给出结果,期间应用照常可用(后端没停),按钮显示「准备安装…」(Codex 评审)。
+    await new Promise<void>((ok, fail) => {
+      const done = (err?: unknown): void => {
+        nativeUpdater.removeListener('update-downloaded', onReady)
+        nativeUpdater.removeListener('update-not-available', onNone)
+        nativeUpdater.removeListener('error', onError)
+        if (err) fail(err)
+        else ok()
+      }
+      const onReady = (): void => done()
+      const onNone = (): void => done(new Error('Squirrel.Mac found no update'))
+      const onError = (err: Error): void => done(err)
+      nativeUpdater.on('update-downloaded', onReady)
+      nativeUpdater.on('update-not-available', onNone)
+      nativeUpdater.on('error', onError)
+      try { nativeUpdater.checkForUpdates() } catch (err) { done(err) }
+    })
+    squirrelReady = true
+    broadcast({ ...lastStatus, preparing: false })
+    return true
+  } catch (err) {
+    console.warn('[updater] Squirrel.Mac could not stage the update, falling back to the installer download:', err)
+    degradeToManual()
+    return false
+  } finally {
+    staging = false
+  }
 }
 
 export function installUpdate(): void {
   if (!canInstallUpdate()) return
+  if (process.platform === 'darwin') {
+    // 走到这儿后端已停、窗口马上全关:Squirrel 交接(写 ShipItState、拉 ShipIt)再出错,应用就成了无窗口、无后端的空壳。
+    // 那就直接重开(旧版本照常起来,下次检查退回 .dmg 也行),不留半退出状态(Codex 评审 P1)。
+    const onError = (err: Error): void => {
+      nativeUpdater.removeListener('error', onError)
+      console.warn('[updater] Squirrel.Mac failed during quitAndInstall, relaunching the current version:', err)
+      app.relaunch()
+      app.exit(0)
+    }
+    nativeUpdater.on('error', onError)
+  }
   autoUpdater.quitAndInstall(process.platform !== 'win32', true)
 }
