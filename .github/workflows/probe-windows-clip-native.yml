@@ -57,7 +57,7 @@ jobs:
           if (!(Test-Path -LiteralPath $env:FORSION_CLIP_NATIVE_EXE)) { throw 'Actual packaged executable is missing' }
           node scripts/clip-native-windows.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-clip-native/packaged-run.log
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-clip-native-evidence

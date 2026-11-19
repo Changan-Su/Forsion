@@ -52,7 +52,7 @@ jobs:
           New-Item -ItemType Directory -Force $env:FORSION_UPGRADE_OUTPUT | Out-Null
           node scripts/windows-upgrade.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/windows-upgrade/run.log
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-upgrade-evidence
@@ -93,7 +93,7 @@ jobs:
             node "scripts/$script" 2>&1 | Tee-Object -FilePath "outputs/windows-issues/$script.log"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-issue-evidence
