@@ -5,8 +5,10 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { once } from 'node:events'
+import { MessageChannel } from 'node:worker_threads'
 import { build } from 'esbuild'
 import { startBackend, migrateBackend, type BackendHandle, type BackendOptions } from '../../unit/backendRunner'
+import { PortDuplex } from '../../unit/portDuplex'
 
 let root: string
 let workerFile: string
@@ -123,6 +125,56 @@ async function cleanDetachedFixture(options: BackendOptions): Promise<void> {
 }
 
 describe('Unit backend workers', () => {
+  it('does not count a write discarded before peer acknowledgement', async () => {
+    const { port1, port2 } = new MessageChannel()
+    const socket = new PortDuplex(port1)
+    const packet = once(port2, 'message')
+    const closed = once(socket, 'close').catch(() => [])
+    socket.write(Buffer.alloc(128 * 1024))
+    await packet
+    port2.close()
+    await closed
+    expect(socket.bytesWritten).toBe(0)
+  })
+
+  it('exposes HTTP socket byte counters to the worker request monitor', async () => {
+    const options = await fixture(`
+      import { writeFile } from 'node:fs/promises';
+      import { join } from 'node:path';
+      import { channel } from 'node:diagnostics_channel';
+      export default (ctx) => {
+        const count = ({ request, response, socket }) => {
+          if (request.url !== '/api/meter') return;
+          response.once('close', () => {
+            void writeFile(join(ctx.dataDir, 'meter.json'), JSON.stringify({
+              read: socket.bytesRead, written: socket.bytesWritten,
+            }));
+          });
+        };
+        const events = channel('http.server.request.start');
+        return {
+          mounts: ['/api'],
+          start() { events.subscribe(count); },
+          stop() { events.unsubscribe(count); },
+          async handle(req, res) {
+            for await (const _chunk of req) {}
+            res.end(Buffer.alloc(128 * 1024));
+          },
+        };
+      };
+    `)
+    const app = await gateway(await startBackend(options))
+    try {
+      const result = await fetch(app.base + '/api/meter', { method: 'POST', body: Buffer.alloc(16 * 1024) })
+      expect((await result.arrayBuffer()).byteLength).toBe(128 * 1024)
+      await eventually(async () => {
+        const counts = JSON.parse(await readFile(join(options.dataDir, 'meter.json'), 'utf8'))
+        expect(counts.read).toBeGreaterThan(16 * 1024)
+        expect(counts.written).toBeGreaterThan(128 * 1024)
+      })
+    } finally { await app.close() }
+  })
+
   it('resolves concurrent accounts without crossing identities or exposing provider private fields', async () => {
     const options = await fixture(`
       export default () => ({ mounts: ['/api'], handle(_req, res) { res.end('available'); },

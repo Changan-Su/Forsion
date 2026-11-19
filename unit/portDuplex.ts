@@ -18,7 +18,9 @@ export class PortDuplex extends Duplex {
   readonly localAddress?: string
   readonly localPort?: number
   readonly encrypted?: boolean
-  private pendingWrite?: (error?: Error | null) => void
+  private readBytes = 0
+  private writtenBytes = 0
+  private pendingWrite?: { bytes: number; done: (error?: Error | null) => void }
   private awaitingRead = false
   private receivedEnd = false
   private timeoutMs = 0
@@ -34,12 +36,16 @@ export class PortDuplex extends Duplex {
       if (this.destroyed) return
       this.touch()
       if (packet.type === 'data') {
+        this.readBytes += packet.bytes.byteLength
         if (this.push(Buffer.from(packet.bytes))) this.send({ type: 'ack' })
         else this.awaitingRead = true
       } else if (packet.type === 'ack') {
-        const callback = this.pendingWrite
+        const pending = this.pendingWrite
         this.pendingWrite = undefined
-        callback?.()
+        if (pending) {
+          this.writtenBytes += pending.bytes
+          pending.done()
+        }
       } else if (packet.type === 'end') {
         this.receivedEnd = true
         this.push(null)
@@ -74,10 +80,15 @@ export class PortDuplex extends Duplex {
 
   override _write(chunk: Buffer, encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
     this.touch()
-    this.pendingWrite = callback
     // Do not transfer chunk.buffer: pooled Buffers can share it with unrelated data.
-    this.send({ type: 'data', bytes: typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk })
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk
+    this.pendingWrite = { bytes: bytes.byteLength, done: callback }
+    this.send({ type: 'data', bytes })
   }
+
+  // Node's HTTP diagnostics read these on the socket passed to the worker server.
+  get bytesRead(): number { return this.readBytes }
+  get bytesWritten(): number { return this.writtenBytes }
 
   override _final(callback: (error?: Error | null) => void): void {
     this.send({ type: 'end' })
@@ -88,7 +99,7 @@ export class PortDuplex extends Duplex {
     if (this.timeoutTimer) clearTimeout(this.timeoutTimer)
     const pending = this.pendingWrite
     this.pendingWrite = undefined
-    pending?.(error ?? new Error('Backend connection closed'))
+    pending?.done(error ?? new Error('Backend connection closed'))
     try { this.port.postMessage({ type: 'close' } satisfies Packet) } catch { /* peer already gone */ }
     this.port.close()
     callback(error)
