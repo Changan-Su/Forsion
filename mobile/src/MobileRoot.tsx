@@ -37,7 +37,7 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useCommandStore, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,经「⋯」菜单在移动端可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
@@ -81,6 +81,9 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   // 搜索面板开着时永远在最上面(下拉搜索 / 顶栏搜索钮 / 外接键盘的快捷键打开;z-index 高过设置、商店、旁聊那几张整页):
   // 返回先关它。排在后面的话,它盖着的那一层会先被关掉;不排的话,列表层上按返回直接把 app 退到后台。
   if (useQuickFind.getState().open) return { run: () => useQuickFind.getState().close() }
+  // 命令面板同理:它只听 Esc,触屏上没有这个键。手机上它从头像菜单开(「⋯」只装这一页的事),别处的插件命令也从这儿走 ——
+  // 不接的话,返回会越过它去动它底下的那一层,面板还留在屏上。
+  if (useCommandStore.getState().paletteOpen) return { run: () => useCommandStore.getState().setPaletteOpen(false) }
   // 再问壳:标签页 sheet /「⋯」菜单 / 编辑器浮层 / 设置二级页…开着 → 由它们接管(可取消事件)。
   const taken = !window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail: { probe: true } }))
   if (taken) return { run: () => { window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true })) } }
@@ -136,6 +139,7 @@ function useBrowserBack(): void {
       const offs = [
         useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
+        useCommandStore.subscribe((s, prev) => { if (s.paletteOpen !== prev.paletteOpen) changed() }),
         useApp.subscribe((s, prev) => {
           if (s.settingsOpen !== prev.settingsOpen || s.marketOpen !== prev.marketOpen || s.onboarding !== prev.onboarding || s.activeId !== prev.activeId || s.achievementsOpen !== prev.achievementsOpen || s.feedbackOpen !== prev.feedbackOpen) changed()
         }),
