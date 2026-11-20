@@ -1,9 +1,9 @@
 /** One hidden Historian conversation per parent, shared by maintenance and team summaries. */
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
-import { compactSession, getLatestSummary } from './compaction.js';
+import { compactSession, getLatestSummary, rowCoverage } from './compaction.js';
 import { claudeThinkingHeadroom, thinkingHeadroom } from '../llm/openaiCompat.js';
 
 export const HISTORIAN_CONTEXT_CHARS = 24_000;
@@ -56,7 +56,11 @@ async function completeTask(p: HistorianTask) {
   const snapshot = p.transcript.slice(-16_000);
   const input = `[Task: ${p.task}]\n${p.instructions}\n\n[New conversation text]\n${transcriptDelta(String(cfg.snapshots?.[p.task] || ''), snapshot)}`;
   let checkpoint = await getLatestSummary(id);
-  const readHistory = () => query<any[]>('SELECT role, content, timestamp FROM chat_messages WHERE session_id = ? AND timestamp > ? ORDER BY timestamp ASC', [id, checkpoint?.throughTimestamp || 0]);
+  // 边界那一毫秒也读进来再按 rowCoverage 筛(11-20):原来 `timestamp > 边界` 会把同一毫秒、没进摘要的行直接跳过 —— 既不在摘要里也不在历史里
+  const readHistory = async () => (await query<any[]>(
+    `SELECT id, role, content, timestamp FROM chat_messages WHERE session_id = ? AND timestamp >= ? ORDER BY ${messageTimeOrder('ASC')}`,
+    [id, checkpoint?.throughTimestamp || 0],
+  )).filter((r) => rowCoverage(r, checkpoint) !== 'covered');
   let rows = await readHistory();
   if (rows.length && rows.reduce((n, r) => n + String(r.content || '').length, input.length + (checkpoint?.summary.length || 0)) > HISTORIAN_CONTEXT_CHARS) {
     const compact = await compactSession(id, p.modelId, 'tangu', signal);

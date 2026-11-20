@@ -184,10 +184,29 @@ describe('current working context compaction', () => {
     expect(r.boundary).toEqual({ partialRow: { id: 'a0', ts: 20, toolCallId: 'x1' } });
     // 切点在 now2 之前:a0 与 u1 整体覆盖(边界行 = u1,带 id),本 run 的 n1 轮也被覆盖 → pending
     r = await compactWorkingMessages(msgs.map((m) => m), 'm', 'tangu', undefined, { settings: keepLast(msgs, 2) });
-    expect(r.boundary).toEqual({ through: { id: 'u1', ts: 30 }, pendingToolCallId: 'n1' });
+    // wholeRows:pending 段落库后从这里挑同一毫秒的邻行(11-20)
+    expect(r.boundary).toEqual({ through: { id: 'u1', ts: 30 }, pendingToolCallId: 'n1',
+      wholeRows: [{ id: 'u0', ts: 10 }, { id: 'a0', ts: 20 }, { id: 'u1', ts: 30 }] });
     // 切点在 u1 之前:a0 整体覆盖,无行内切点、无未落库段
     r = await compactWorkingMessages(msgs.map((m) => m), 'm', 'tangu', undefined, { settings: keepLast(msgs, 5) });
     expect(r.boundary).toEqual({ through: { id: 'a0', ts: 20 } });
+  });
+
+  it('boundary:插话拆段 —— 段 A 与插话 U 同一毫秒落库;都被总结 → 锚点 U、A 进邻行;U 留在保留区 → 锚点 A、没有邻行', async () => {
+    const call = (id: string) => ({ id, type: 'function', function: { name: 'todo_read', arguments: '{}' } });
+    const rowA = { id: 'A', ts: 40 };
+    const msgs: ChatMessage[] = [
+      message('system', 'stable'),
+      tagMessageSource(message('user', 'first ask'), { id: 'u0', ts: 10 }),
+      tagMessageSource({ role: 'assistant', content: 'working', tool_calls: [call('x1')] } as any, rowA),
+      tagMessageSource({ role: 'tool', tool_call_id: 'x1', content: 'x1 result' } as any, rowA),
+      tagMessageSource(message('user', 'steer: also check B'), { id: 'U', ts: 40 }),
+      { role: 'assistant', content: 'now1' } as any,
+    ];
+    let r = await compactWorkingMessages(msgs.map((m) => m), 'm', 'tangu', undefined, { settings: keepLast(msgs, 1) });
+    expect(r.boundary).toEqual({ through: { id: 'U', ts: 40, peerIds: ['A'] } });
+    r = await compactWorkingMessages(msgs.map((m) => m), 'm', 'tangu', undefined, { settings: keepLast(msgs, 2) });
+    expect(r.boundary).toEqual({ through: { id: 'A', ts: 40 } });
   });
 
   it('boundary:范围里有有损消息(机械折叠 / 硬帽截断)→ lossy,摘要只留内存不推进检查点', async () => {
