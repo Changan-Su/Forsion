@@ -3712,11 +3712,15 @@ app.whenReady().then(async () => {
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
   // 唤醒 / 定时到点那一刻网络多半还没通(见 updaterUtil.waitForNetwork):先等网络再查;同一入口连着触发(DarkWake 一夜好多次)只留最后一次。
+  // 唤醒后 20 秒内一律当还没网:另一路已经在等网的检查(比如合盖前到点、正在轮询的定时检查)也不在刚唤醒时插队
+  const NET_SETTLE_MS = 20_000
+  let lastResumeAt = 0
   const waitingFor = new Map<string, number>()
   const whenNetworkSettles = (key: string, run: () => void): void => {
     const gen = (waitingFor.get(key) ?? 0) + 1
     waitingFor.set(key, gen)
-    void waitForNetwork({ isOnline: () => net.isOnline(), settleMs: 20_000 }).then((ok) => { if (ok && waitingFor.get(key) === gen) run() })
+    const online = (): boolean => Date.now() - lastResumeAt >= NET_SETTLE_MS && net.isOnline()
+    void waitForNetwork({ isOnline: online, settleMs: NET_SETTLE_MS }).then((ok) => { if (ok && waitingFor.get(key) === gen) run() })
   }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
@@ -3812,6 +3816,7 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
+    lastResumeAt = Date.now()
     if (app.isPackaged) whenNetworkSettles('resume', checkAppUpdateQuietly) // 合盖一夜回来,新版本在这时候提示(等网络通了再查)
   })
 
