@@ -232,7 +232,7 @@ export class VaultIndex {
     const files = new Set<string>()
     const queue = [...seeds]
     // 镜像 shared/amadeus/assets.ts 的 IMG_RE(未导出;落盘形态标准 md 图片不在 links/embeds 里)。
-    const IMG_RE = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+    const IMG_RE = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"(?:[^"\\]|\\[\s\S])*")?\)/g
     const isExternal = (u: string): boolean => /^(https?:|data:|amadeus-asset:|blob:|\/)/.test(u)
     const addFile = async (pagePath: string, ref: string): Promise<void> => {
       if (!vaultRoot) return

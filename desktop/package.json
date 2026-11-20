@@ -207,6 +207,7 @@
     "check:autopair": "node scripts/e2e-editor.cjs --check=body-auto-pair",
     "check:litbold": "node scripts/e2e-editor.cjs --check=literal-bold",
     "check:imagecopy": "node scripts/e2e-editor.cjs --check=unified-imagecopy",
+    "check:imagetoolbar": "node scripts/e2e-editor.cjs --check=image-toolbar",
     "check:taskbox": "node scripts/e2e-editor.cjs --check=taskbox",
     "check:focuscost": "node scripts/e2e-editor.cjs --check=focus-cost",
     "check:table": "node scripts/e2e-editor.cjs --check=unified-table",

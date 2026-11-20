@@ -16,7 +16,7 @@ export function readingSnapshot(root: HTMLElement, path: string, markdown: strin
     el.disabled = true
     el.toggleAttribute('checked', sourceChecks[index]?.checked ?? false)
   })
-  copy.querySelectorAll('script,style,iframe,object,embed,button,input:not([type="checkbox"]),textarea,select,.drag-handle,.ProseMirror-separator,.amx-fold-caret,.amx-code-tools,.mk-code-tools').forEach((el) => el.remove())
+  copy.querySelectorAll('script,style,iframe,object,embed,button,input:not([type="checkbox"]),textarea,select,.drag-handle,.ProseMirror-separator,.amx-fold-caret,.amx-code-tools,.mk-code-tools,.amx-img-tb,.amx-img-more,.amx-img-resize').forEach((el) => el.remove())
   for (const el of [copy, ...copy.querySelectorAll<HTMLElement>('*')]) {
     el.removeAttribute('contenteditable')
     el.removeAttribute('draggable')

@@ -94,7 +94,8 @@ import {
 import { IS_MAC_PLATFORM, wikilinkPlugin } from './wikilink'
 import { codeExitPlugin } from './codeExit'
 import { linkAtCursor, linkFollowPlugin, linkKindOfEvent, type LinkAtCursor } from './linkFollow'
-import { mdImagePlugin } from './mdImage'
+import { captionOf, mdImagePlugin, withImageCaptionSchema } from './mdImage'
+import { EMBED_UNSAFE_RE } from './wikiImageToolbar'
 import { focusStructuralPrefix, structuralSourcePlugin } from './structuralSource'
 import { editContextOf, slashItemApplies, type EditContext } from './menuContext'
 import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
@@ -409,7 +410,13 @@ export function selectedAttachment(view: EditorView): { reference: string; ref: 
     const src = String(image.attrs.src ?? '')
     const ref = fromAssetUrl(src) ?? src
     if (!ref || /^(?:https?:|data:|blob:)/i.test(ref)) return null
-    return { reference: `![${String(image.attrs.alt ?? '')}](${ref})`, ref }
+    // 图下说明(title)跟着引用走:库内粘回来说明还在。转义同序列化器:`\` `"` 加反斜杠;
+    // 能拼成字符引用的 `&`(`&quot;` `&copy;` `&#169;` …)写成 `\&`,否则粘回来被解码成 `"` `©`。alt 同理。
+    const amp = (t: string): string => t.replace(/&(?=[#A-Za-z])/g, '\\&')
+    const cap = captionOf(image)
+    const title = cap ? ` "${amp(cap.replace(/[\\"]/g, (c) => `\\${c}`))}"` : ''
+    const alt = amp(String(image.attrs.alt ?? '').replace(/\\/g, '\\\\'))
+    return { reference: `![${alt}](${ref}${title})`, ref }
   }
   const wiki = /^!\[\[([^\]\n]+)\]\]$/.exec(reference)
   if (!wiki) return null
@@ -471,9 +478,14 @@ function internalAttachmentReference(dt: DataTransfer | null, raw: string): stri
     file.name === recent.fileName || (/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(recent.fileName) && file.type.startsWith('image/')))
   if (recent && (recent.reference === raw || (!raw && nativeFile && recentFileMatches))) return recent.reference
   if (!raw) return null
-  const attachmentSyntax = /^!\[\[[^\]\n]+\]\]$/.test(raw)
-    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)[^)\n]+\)$/i.test(raw)
-  return nativeFile && attachmentSyntax ? raw : null
+  return nativeFile && isAttachmentReferenceText(raw) ? raw : null
+}
+
+/** 一整份库内附件引用的文字形态:`![[x.png|200]]`,或 `![alt](库内路径)` / `![alt](库内路径 "说明")`。
+ *  没说明时路径照旧可以带 `"`(`attachments/a"b.png`);带说明时说明里可以有 `)` 与转义引号。 */
+export function isAttachmentReferenceText(raw: string): boolean {
+  return /^!\[\[[^\]\n]+\]\]$/.test(raw)
+    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)(?:[^)\n]+|[^)\n"]+\s+"(?:[^"\\\n]|\\.)*")\)$/i.test(raw)
 }
 
 // 光标是否在本块「首/末视觉行」——决定 ↑↓ 该在块内移行还是跳去邻块。
@@ -1201,7 +1213,7 @@ export function MilkdownInner({
       // 加粗字面化(隐藏开关,./literalBold):开关开着才装;⌘B 要排在 preset 的键位之前。
       // Literal bold (hidden switch): installed only when on; Mod-b must come before the presets' keymaps.
       .use(literalBoldEnabled() ? literalBoldPlugin() : [])
-      .use(commonmarkWithIndent)
+      .use(withImageCaptionSchema(commonmarkWithIndent)) // 图片读 DOM 不再拿 alt 顶 title(title = 图下说明,见 mdImage.ts)
       .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
       .use(emptyTaskRemark) // Obsidian 的空待办 `- [ ]`:GFM 读成字面 `[ ]`,这里补认成空待办(R-10b,见 ./taskList)
@@ -1238,7 +1250,20 @@ export function MilkdownInner({
       .use(listener)
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
-      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name), () => wikiOpenableRef.current))
+      // `![[x.png|200]]` 图片的工具条(2026-11-18):替换走与 `/图片` 同一条 saveAttachment(回库内名,写回 `![[…]]`),
+      // 复制图片同 `![](…)`。整篇宿主存不了图、没有笔记路径 → 这两项不出。
+      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name), () => wikiOpenableRef.current, standalone ? {} : {
+        saveEmbed: async (f) => {
+          const page = pagePathRef.current
+          if (!page) return null
+          const { opts } = await getAttachmentPrefs()
+          // 文件名里的 wiki 定界符(`[` `]` `|` `#` `^`)换成 `-`:否则写回 `![[…]]` 会把引用写坏
+          const name = (f.name || '').trim().replace(EMBED_UNSAFE_RE, '-') || 'image.png'
+          const { base } = await amadeus.saveAttachment(page, name, new Uint8Array(await f.arrayBuffer()), opts)
+          return base || null
+        },
+        copyImage: (v) => (pagePathRef.current ? copySelectedImage(v, pagePathRef.current) : Promise.resolve(false)),
+      }))
       .use(linkFollowPlugin(openLinkTarget)) // 「打开光标处链接」的记账(命令面板 / 焦点不在正文时用,L-20)
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
@@ -1259,7 +1284,13 @@ export function MilkdownInner({
         },
       })))
       .use(tagPillPlugin()) // 正文 #标签 → 可点胶囊(光标行露源码;零 schema,L-14)
-      .use(mdImagePlugin()) // `![](path)` 图片(粘贴/上传形态)= 可选中 + 右缘缩放把手,与 `![[x|200]]` 同手感
+      // `![](path)` 图片(粘贴/上传形态)= 可选中 + 两侧缩放把手 + 悬停工具条(对齐 / 说明 / 替换 / 全屏 / 下载 / `</>` / ⋯)。
+      // 替换走与粘贴同一条 saveImage;复制图片 = 块菜单那份 copySelectedImage。都读 ref:换笔记不重建编辑器。
+      // 整篇宿主(PlainMarkdownEditor:工作区文件 / 记录正文 / 插件编辑面)存不了图、没有笔记路径 → 这两项不出。
+      .use(mdImagePlugin(standalone ? {} : {
+        saveImage: (f) => saveImageRef.current(f),
+        copyImage: (v) => (pagePathRef.current ? copySelectedImage(v, pagePathRef.current) : Promise.resolve(false)),
+      }))
       .use(wikiSuggestPlugin((q, blurred) => {
         if (!q) {
           if (!blurred) wikiDismissedFrom.current = null // 失焦只藏面板,Esc 闩锁留着(同 @,L-04)

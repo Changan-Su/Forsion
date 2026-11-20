@@ -497,3 +497,22 @@ describe('挪了位置之后的引用(rebaseFileRefs)', () => {
     expect(await rebaseFileRefs(fenced, 'notes/n.md', 'other/n.md', null, () => true)).toBe(fenced)
   })
 })
+
+describe('图片说明(title)里的转义引号(2026-11-17 Notion 对齐第 4 条)', () => {
+  // 说明写在 title 里;含 `"` 时编辑器写成 `\"`。旧版 IMG_RE 的标题段 `"[^"]*"` 认不出整张图:
+  // 存盘时显示地址原样落盘,读盘时相对路径换不成显示地址(图裂)。
+  const TITLES = ['"plain"', '"say \\"hi\\""', '"a\\\\"', '"\\\\\\"x\\\\\\""', '"paren ) here"']
+  it('display → stored → display 往返,地址照换', () => {
+    for (const t of TITLES) {
+      const stored = `前文 ![封面|200](attachments/a%20b.png ${t}) 后文\n`
+      const shown = toDisplayMarkdown(stored, 'notes')
+      expect(shown).toContain(`(${toAssetUrl('notes/attachments/a b.png', true)} ${t})`)
+      expect(toStoredMarkdown(shown, 'notes')).toBe(stored)
+    }
+  })
+  it('挪笔记时带说明的图片引用照样重算', async () => {
+    const md = '![x](pic.png "say \\"hi\\"")\n'
+    const has = (p: string): boolean => p === 'notes/pic.png'
+    expect(await rebaseFileRefs(md, 'notes/a.md', 'other/a.md', null, has)).toBe('![x](../notes/pic.png "say \\"hi\\"")\n')
+  })
+})
