@@ -916,6 +916,23 @@ describe('unitWeb', () => {
     return { gate, calls, requested, o }
   }
 
+  it('refreshes the desktop workspace only after an allowed remote session write succeeds', async () => {
+    let changes = 0
+    const g = fakeGate({ enabled: true, trust: { account: 'trusted' } })
+    const b = await boot(null, undefined, undefined, { remoteAccess: g.gate, onSessionsChanged: () => { changes++ } })
+    try {
+      const headers = { 'x-unit-internal': b.handle.internalSecret, 'Content-Type': 'application/json' }
+      expect((await raw(b.base, 'POST', '/engine/agent/sessions', headers)).status).toBe(200)
+      expect(changes).toBe(1)
+      expect((await raw(b.base, 'PATCH', '/engine/agent/sessions/s1?ignored=yes', headers)).status).toBe(200)
+      expect(changes).toBe(2)
+      expect((await raw(b.base, 'GET', '/engine/agent/sessions', headers)).status).toBe(200)
+      g.o.enabled = false
+      expect((await raw(b.base, 'POST', '/engine/agent/sessions', headers)).status).toBe(403)
+      expect(changes).toBe(2)
+    } finally { b.close() }
+  })
+
   it('K4 负对照 #1:开关关 → 隧道 POST /engine/agent/runs 403 REMOTE_SESSIONS_OFF 且到不了引擎;查看 / 答审批 / 答询问 / 停止 / 截图回传照常', async () => {
     const g = fakeGate({ enabled: false })
     const b = await boot(null, undefined, undefined, { remoteAccess: g.gate })

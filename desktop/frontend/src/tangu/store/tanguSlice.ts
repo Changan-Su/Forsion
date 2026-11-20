@@ -889,6 +889,8 @@ export interface TanguSliceDeps {
 type SessionMode = 'chat' | 'work'
 /** 界面动作 / Agent 命令的结果(与 agentCommands 的 UiActionResult 同形)。 */
 type UiCommandResult = { ok: boolean; error?: string; state?: string; result?: string; pending?: boolean }
+let sessionRefreshSequence = 0
+let appliedSessionRefresh = 0
 let host: TanguSliceDeps
 /** 组装时绑定的 store 句柄:模块级辅助函数(不在 createTanguSlice 闭包里)经它读写,不 import useApp。 */
 let store: { get: StoreApi<AppState>['getState']; set: StoreApi<AppState>['setState'] }
@@ -2129,11 +2131,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
     if (tanguDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
+    const sequence = ++sessionRefreshSequence
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
     const t = homeTarget()
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== host.authGen()) return []
+    if (sequence < appliedSessionRefresh) return get().sessions
+    appliedSessionRefresh = sequence
     // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
     // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
     for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)

@@ -178,34 +178,41 @@ describe('Sketch 主动触发交付闸', () => {
 
 describe('商店卡片之后不再重画(10-17 live:6 次里 2 次 sketch 把插件卡片又画了一遍)', () => {
   const entry = (id: string, author: string) => ({ id, name: 'PDF Notes', author, type: 'amadeus-plugin', source: 'zip', installSlug: `market-${id}`, summary: 'PDF notes', tags: ['pdf'], minAppVersion: '2.13.0', platforms: ['desktop'] });
-  const searchStep = () => () => ({
+  const marketStep = (recommend = false) => () => ({
     content: '', reasoning: '',
-    toolCalls: [{ id: 'ms1', type: 'function', function: { name: 'search_marketplace', arguments: JSON.stringify({ query: 'pdf' }) } }],
+    toolCalls: [{ id: 'ms1', type: 'function', function: { name: recommend ? 'recommend_marketplace_plugin' : 'search_marketplace', arguments: JSON.stringify(recommend ? { id: 'a1' } : { query: 'pdf' }) } }],
     usage: { prompt_tokens: 10, completion_tokens: 10 }, finishReason: 'stop',
   });
   const toolText = (payload: any, id: string) => String((payload.messages as any[]).find((m) => m.role === 'tool' && m.tool_call_id === id)?.content || '');
 
   it('本 run 已出商店卡片 → sketch 不执行、回一句让模型用文字说', async () => {
-    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
-    script = [searchStep(), sketchStep(), finalStep('两个候选作者不同。')];
-    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => entry('a1', 'Alice') } } });
+    script = [marketStep(true), sketchStep(), finalStep('这个候选可以整理 PDF 笔记。')];
+    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v2']);
     expect(run.status).toBe('done');
     expect(toolText(llmPayloads[2], 'sk1')).toContain('already shown as plugin cards');
   }, 20_000);
 
-  it('同一条回复里先搜后画:搜索一完成就置位,同批的 sketch 也不执行', async () => {
-    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
-    const both = () => () => ({ ...searchStep()(), toolCalls: [...searchStep()().toolCalls, ...sketchStep()().toolCalls] });
+  it('同一批先推荐再画:推荐完成后不再重画', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => entry('a1', 'Alice') } } });
+    const both = () => () => ({ ...marketStep(true)(), toolCalls: [...marketStep(true)().toolCalls, ...sketchStep()().toolCalls] });
     script = [both(), finalStep('两个候选作者不同。')];
-    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    const run = await runToSettled({}, '帮我在商店找 PDF 笔记插件,推荐两个候选', 'desktop/2.13.4', ['marketplace-cards.v2']);
     expect(run.status).toBe('done');
     expect(toolText(llmPayloads[1], 'sk1')).toContain('already shown as plugin cards');
   }, 20_000);
 
   it('负对照:用户点名要图 → sketch 照常执行', async () => {
-    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => null } } });
-    script = [searchStep(), sketchStep(), finalStep('图里是两个候选。')];
-    const run = await runToSettled({}, '在商店找 PDF 笔记插件,画一张对比图给我', 'desktop/2.13.4', ['marketplace-cards.v1']);
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => entry('a1', 'Alice') } } });
+    script = [marketStep(true), sketchStep(), finalStep('图里是商店的候选。')];
+    const run = await runToSettled({}, '在商店找 PDF 笔记插件,画一张对比图给我', 'desktop/2.13.4', ['marketplace-cards.v2']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[2], 'sk1')).toContain('HTML card rendered');
+  }, 20_000);
+  it('仅搜索不算展示卡片', async () => {
+    configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice')], detail: async () => null } } });
+    script = [marketStep(), sketchStep(), finalStep('已画图。')];
+    const run = await runToSettled({}, '帮我搜一搜 PDF 笔记插件', 'desktop/2.13.4', ['marketplace-cards.v2']);
     expect(run.status).toBe('done');
     expect(toolText(llmPayloads[2], 'sk1')).toContain('HTML card rendered');
   }, 20_000);

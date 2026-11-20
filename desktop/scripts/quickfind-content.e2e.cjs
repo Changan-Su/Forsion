@@ -9,6 +9,8 @@ const { sleep } = U
 
 const R1 = '5c1e0a52-0000-4000-8000-0000000000f1'
 const R2 = '5c1e0a52-0000-4000-8000-0000000000f2'
+const SERVER_ONLY = '5c1e0a52-0000-4000-8000-0000000000f3'
+const SERVER_TITLE = '远程创建的健康方案'
 const T = Date.now() - 3 * 60 * 60_000
 const long = (n) => Array.from({ length: 40 }, (_, i) => `${i + 1}. 第 ${n} 轮第 ${i + 1} 条:打包、签名、公证、上传,每一步都写清楚。`).join('\n')
 const msg = (id, role, mins, content) => ({ id, role, timestamp: T + mins * 60_000, content })
@@ -19,6 +21,7 @@ const MSGS = {
     msg('u3', 'user', 4, '第三轮:安卓签名证书是不是快过期了?'), msg('a3', 'model', 5, `没有,签名证书有效到 2027 年 3 月 4 日。\n\n${long(3)}`),
     msg('u4', 'user', 6, '第四轮:好,那先出安卓包。'), msg('a4', 'model', 7, `好的,开始出安卓包。\n\n${long(4)}`),
   ],
+  [SERVER_ONLY]: [msg('remote-u1', 'user', 0, '手机发来的原始问题')],
   [R2]: [msg('b1', 'user', 0, '安卓外壳要不要换签名?'), msg('b2', 'model', 1, '签名证书永不换,换了就装不上旧版。')],
 }
 const HITS = [
@@ -40,12 +43,14 @@ const { check } = rep
     fixtures: { agents: [], sessions: [] },
     stubOverride: async ({ path: p, method, url }) => {
       if (p === '/agent/sessions' && method === 'GET') return { sessions: rows() }
-      if (p === '/agent/sessions/search') { const q = url.searchParams.get('q') || ''; searches.push(q); return { hits: q.includes('签名') ? HITS : [] } }
+      if (p === '/agent/sessions/search') { const q = url.searchParams.get('q') || ''; searches.push(q); return { hits: q.includes('签名') ? HITS : q === SERVER_TITLE
+        ? [{ id: SERVER_ONLY, title: SERVER_TITLE, summary: '', archived: false, updatedAt: '2026-10-21' }]
+        : [] } }
       const m = p.match(/^\/agent\/sessions\/([^/]+)\/(messages|asides|detail)$/)
       if (m && method === 'GET') {
         if (m[2] === 'messages') return { messages: MSGS[m[1]] || [] }
         if (m[2] === 'asides') return { asides: [] }
-        const r = rows().find((x) => x.id === m[1])
+        const r = m[1] === SERVER_ONLY ? row(SERVER_ONLY, SERVER_TITLE, 0) : rows().find((x) => x.id === m[1])
         if (r) return { session: { ...r, kind: 'user', delegate_running: false } }
       }
       return undefined
@@ -131,6 +136,16 @@ const { check } = rep
     await sleep(400)
     const flashed = await win.evaluate(() => document.querySelectorAll('.t2-jump-flash').length)
     check('C4 ↵ 只打开会话、不闪', flashed === 0, `flash=${flashed}`)
+    // Metadata hits still work while the sidebar only has its initial snapshot.
+    check('D1 工作区快照里还没有远程会话', await win.locator(`.t2s-srow[data-sel-id="${SERVER_ONLY}"]`).count() === 0)
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
+    await win.locator('.amx-qf-input').fill(SERVER_TITLE)
+    const remote = win.locator('.amx-qf-row').filter({ hasText: SERVER_TITLE })
+    await remote.waitFor({ timeout: 8000 })
+    check('D2 快速查找展示仅引擎返回的标题结果', await remote.count() === 1)
+    await remote.click()
+    await win.locator('#tocmsg-remote-u1').waitFor({ timeout: 8000 })
+    check('D3 可打开结果并读取原会话消息', await win.locator('#tocmsg-remote-u1').isVisible())
     rep.note('截图', shots)
   } finally { await close() }
   const failed = rep.results.filter((r) => !r.ok).length

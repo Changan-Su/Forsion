@@ -216,6 +216,8 @@ export interface UnitWebDeps {
   /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。token = 本机引擎令牌(TANGU_LOCAL_TOKEN,契约 C2);
    *  remoteMark = 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET,契约 C1),缺省则只盖来源不盖标记。 */
   getEngine: () => { url: string | null; token: string; remoteMark?: string }
+  /** A successful remote write changed the local workspace session list. */
+  onSessionsChanged?: () => void
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
   confirmPair: (info: { name: string; code: string; ip: string; expires: number }) => Promise<boolean>
   /** Tangu 浏览器控制的连接码(本机引擎的 /agent/browser-extension;拿不到 = null)。只给同一台电脑上已配对的
@@ -531,6 +533,11 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (via === 'tunnel' && caller) headers[ENGINE_CALLER_HEADER] = encodeEngineCaller(caller)
       if (via === 'tunnel' && delegated) headers[ENGINE_ROLE_HEADER] = DELEGATED_ADMIN_ROLE
     }
+    const route = path.split('?', 1)[0]
+    const changesSessions = via && !delegated && deps.onSessionsChanged && (
+      (req.method === 'POST' && /^\/agent\/sessions(?:\/[^/]+\/branch)?$/i.test(route)) ||
+      (req.method === 'PATCH' && /^\/agent\/sessions\/[^/]+$/i.test(route))
+    )
     const up = http.request({
       host: target.hostname,
       port: target.port,
@@ -538,13 +545,16 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       method: req.method,
       headers,
     }, (upRes) => {
+      const status = upRes.statusCode || 502
+      // The engine commits the write before sending headers. Notify even if the caller disconnects mid-response.
+      if (changesSessions && status >= 200 && status < 300) deps.onSessionsChanged?.()
       const h: Record<string, string> = {}
       for (const k of ['content-type', 'cache-control'] as const) {
         const v = upRes.headers[k]
         if (typeof v === 'string') h[k] = v
       }
       if (String(upRes.headers['content-type'] || '').includes('text/event-stream')) h['X-Accel-Buffering'] = 'no'
-      res.writeHead(upRes.statusCode || 502, h)
+      res.writeHead(status, h)
       upRes.pipe(res)
       res.on('close', () => upRes.destroy())
     })

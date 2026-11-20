@@ -2017,7 +2017,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
     let marketplaceCardsShown = false;
     let visualAsked = sketchTurnSignal?.kind === 'explicit';
-    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Forsion marketplace search and detail tools automatically render native plugin cards in Chat View. Those cards already satisfy visual delivery and include real details, compatibility and installation actions. After retrieving entries, explain them in brief prose; do not recreate them with intelligent_ui_html or intelligent_ui.');
+    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Marketplace search and detail are private lookups. To show a native store card, call recommend_marketplace_plugin for each entry you have chosen after confirming it meets the user’s need. If no entry fits, do not call it. Explain why selected entries fit in brief prose. Do not redraw the native card with intelligent_ui_html or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);

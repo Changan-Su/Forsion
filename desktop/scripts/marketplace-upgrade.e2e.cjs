@@ -11,7 +11,10 @@ const b64 = value => Buffer.from(JSON.stringify(value)).toString('base64url')
 const token = `${b64({ alg: 'HS256' })}.${b64({ userId: 'owner', username: 'Alice' })}.fixture`
 const session = { id: 'market-acceptance', title: '插件选择验收', model_id: 'm1', archived: false, projectless: true, agent_config: null, created_at: '2026-10-14 17:00:00', updated_at: '2026-10-14 17:00:00' }
 const recommendation = evidence.recommendation
-const toolPairs = recommendation.toolArgs.map((call, n) => ({ call, result: recommendation.toolResults[n] })).filter(pair => pair.call.name === 'search_marketplace' && JSON.parse(pair.result.result).items?.length)
+const toolPairs = recommendation.toolArgs.flatMap(call => {
+  const result = recommendation.toolResults.find(r => r.id === call.id)
+  return result && ['search_marketplace', 'recommend_marketplace_plugin'].includes(call.name) ? [{ call, result }] : []
+})
 const messages = [
   { id: 'market-user', role: 'user', content: '帮我在商店找两个整理 PDF 阅读笔记的插件。', timestamp: Date.now() },
   { id: 'market-answer', role: 'model', content: recommendation.content, timestamp: Date.now() + 1,

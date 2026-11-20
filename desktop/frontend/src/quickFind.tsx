@@ -318,18 +318,28 @@ function QuickFindInner() {
 
   // 「对话内容」一段(按正文搜会话):排在名称结果与「新建笔记」之后 —— 它是异步到的,排在前面会让
   // 「打个新名字 + 回车 = 新建笔记」变成看手速。只在「全部 / 会话」分类出现,选取模式没有。
-  // 只收正文命中(带 hit)的:标题 / 摘要自证命中的,上面的名称匹配已经列了。
+  // 本地列表之外的标题 / 摘要命中也要展示,但跟正文一样放在「新建笔记」之后,不抢回车。
   const needle = !pick && !mini && sessionsAvailable() ? contentNeedle(q) : null
   const [content, setContent] = useState<{ q: string; hits: SessionSearchHit[] } | null>(null)
   const searcher = useMemo(() => debouncedSearch(
     (s, signal) => searchSessions(homeTarget(), s, { limit: 20, signal }),
-    (s, hits) => setContent({ q: s, hits: hits.filter((h) => h.hit) }),
+    (s, hits) => setContent({ q: s, hits }),
   ), [])
   useEffect(() => { searcher.set(needle); if (!needle) setContent(null) }, [needle, searcher])
   useEffect(() => searcher.dispose, [searcher])
   // 只认这一个词的结果:换词后旧结果不留(还在等 / 新请求失败时,回车会打开一条不相干的旧命中 —— Codex 评审)
-  const contentHits = content && content.q === needle && (cat === 'all' || cat === 'session') ? content.hits : []
-  const hit0 = results.length + (showCreate ? 1 : 0) // 第一条「对话内容」的序号
+  const serverHits = content && content.q === needle && (cat === 'all' || cat === 'session') ? content.hits : []
+  const nameHitIds = new Set(results.filter((item) => item.kind === 'session').map((item) => item.id))
+  const titleHits = serverHits.filter((h) => !h.hit && !nameHitIds.has(h.id)).map((h): Item => ({
+    kind: 'session',
+    id: h.id,
+    title: h.title || t('quickfind.untitledSession'),
+    sub: t('quickfind.subSession'),
+    open: (opts) => openSession(h.id, opts),
+  }))
+  const contentHits = serverHits.filter((h) => h.hit)
+  const title0 = results.length + (showCreate ? 1 : 0)
+  const hit0 = title0 + titleHits.length // 第一条「对话内容」的序号
   const total = hit0 + contentHits.length
   const selHit = sel >= hit0 ? contentHits[sel - hit0] : undefined
   const wide = !phone && contentHits.length > 0
@@ -361,9 +371,22 @@ function QuickFindInner() {
   const chooseAt = (i: number, opts?: { newTab?: boolean }): void => {
     if (showCreate && i === results.length) { createNote(); return }
     if (i >= hit0) { const h = contentHits[i - hit0]; if (h) openHit(h, !!opts?.newTab); return }
-    const it = results[i]
+    const it = i >= title0 ? titleHits[i - title0] : results[i]
     if (it) openItem(it, opts)
   }
+
+  const itemButton = (it: Item, i: number) => (
+    <button
+      key={`${it.kind}:${it.id}`}
+      className={`amx-qf-row${i === sel ? ' sel' : ''}`}
+      onMouseMove={() => setSel(i)}
+      onClick={(e) => openItem(it, { newTab: e.metaKey || e.ctrlKey })}
+    >
+      <span className="amx-qf-icon">{icon(it.kind, it.emoji)}</span>
+      <span className="amx-qf-title">{it.title}</span>
+      <span className="amx-qf-sub">{it.sub}</span>
+    </button>
+  )
 
   const onKey = (e: ReactKeyboardEvent): void => {
     if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/←→/Esc 归输入法(G4-02:此前组字回车直接打开第一条)
@@ -432,18 +455,7 @@ function QuickFindInner() {
         <div className="amx-qf-body">
         <div className="amx-qf-list">
           {!q.trim() && results.length > 0 && <div className="amx-qf-sec">{t(pick ? 'quickfind.secPickable' : 'quickfind.secRecent')}</div>}
-          {results.map((it, i) => (
-            <button
-              key={`${it.kind}:${it.id}`}
-              className={`amx-qf-row${i === sel ? ' sel' : ''}`}
-              onMouseMove={() => setSel(i)}
-              onClick={(e) => openItem(it, { newTab: e.metaKey || e.ctrlKey })}
-            >
-              <span className="amx-qf-icon">{icon(it.kind, it.emoji)}</span>
-              <span className="amx-qf-title">{it.title}</span>
-              <span className="amx-qf-sub">{it.sub}</span>
-            </button>
-          ))}
+          {results.map(itemButton)}
           {showCreate && (
             <button
               className={`amx-qf-row amx-qf-create${sel === results.length ? ' sel' : ''}`}
@@ -455,6 +467,7 @@ function QuickFindInner() {
               <span className="amx-qf-sub">{t('quickfind.subNewNote')}</span>
             </button>
           )}
+          {titleHits.map((it, i) => itemButton(it, title0 + i))}
           {contentHits.length > 0 && <div className="amx-qf-sec">{t('quickfind.secContent')}</div>}
           {contentHits.map((h, j) => (
             <button
@@ -472,7 +485,7 @@ function QuickFindInner() {
               <span className="amx-qf-sub">{h.updatedAt.startsWith(`${new Date().getFullYear()}-`) ? h.updatedAt.slice(5) : h.updatedAt}</span>
             </button>
           ))}
-          {results.length === 0 && !showCreate && !contentHits.length && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
+          {total === 0 && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
         </div>
         {/* 预览栏只在有「对话内容」时出;选中的不是正文命中就空着(栏不收起,免得上下走一格面板宽度跳一下)。窄于 760px 由 CSS 藏起。 */}
         {wide && (selHit ? <ContentPreview hit={selHit} q={content!.q} /> : <div className="amx-qf-preview amx-qf-pv-empty" data-testid="qf-preview">{t('quickfind.previewEmpty')}</div>)}
