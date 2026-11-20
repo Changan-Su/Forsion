@@ -380,7 +380,8 @@ OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelli
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
-OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 三个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z、LZ 两腿须红
+OPT_IN.add('visualsdial'); //--only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
@@ -2725,6 +2726,29 @@ try {
     return { ok: !ev.error && ev.content.length > 0, detail: ev.error || `${ev.content.length} 字`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
+
+  // turninfo(11-20,借鉴 chat-demo ③ #734):系统提示日期段补时区名 + 界面语言。三条腿各一个 run,都直接核系统提示原文:
+  //   Z host run、不准用工具问「我在哪个时区」→ 提示里有 `time zone <进程时区>`,回答说得出这个 IANA 名;
+  //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
+  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z、LZ 须红。
+  await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
+    const cjk = (t) => (String(t || '').match(/[一-鿿]/g) || []).length;
+    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。');
+    const promptZ = String(z.systemPrompt || '');
+    const okZ = !z.error && !!tz && promptZ.includes(`time zone ${tz}, UTC`) && z.content.includes(tz) && !z.toolCalls.length;
+    const code = '```js\nconst pick = (xs, n) => xs.filter((_, i) => i % n === 0);\n```';
+    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, {}, undefined, undefined, undefined, undefined, ui('zh'));
+    const okLZ = !lz.error && String(lz.systemPrompt || '').includes("interface is set to Chinese") && cjk(lz.content) >= 10;
+    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, {}, undefined, undefined, undefined, undefined, ui('en'));
+    const okLE = !le.error && String(le.systemPrompt || '').includes("interface is set to English") && cjk(le.content) >= 10;
+    const dateLine = (p) => (String(p || '').match(/^Today is [^\n]*/m) || [''])[0];
+    const detail = `Z 进程时区 ${tz || '取不到'}、提示「${dateLine(promptZ)}」、回答「${z.content.trim().slice(0, 60)}」、工具 ${z.toolCalls.join(',') || '无'}`
+      + `;LZ 界面中文 + 只有代码 → 提示有中文段=${String(lz.systemPrompt || '').includes('interface is set to Chinese')}、回答汉字 ${cjk(lz.content)} 个`
+      + `;LE 界面英文 + 中文提问 → 提示有英文段=${String(le.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(le.content)} 个`;
+    return { ok: okZ && okLZ && okLE, detail, output: `【Z】\n${z.content}\n【LZ 界面中文,只发代码】\n${lz.content}\n【LE 界面英文,中文提问】\n${le.content}`, tokens: tokensOf(z) + tokensOf(lz) + tokensOf(le) };
+  });
 
   // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
   // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
