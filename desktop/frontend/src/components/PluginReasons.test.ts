@@ -56,6 +56,18 @@ describe('ReasonSwitch:拨下先问理由', () => {
     expect(onChange).toHaveBeenCalledWith(true)
     expect(pop()).toBeNull()
   })
+  it('开关贴着窗口底边:理由行翻到开关上面,按钮都在窗口里', async () => {
+    const onChange = vi.fn()
+    await render(React.createElement(ReasonSwitch, { checked: true, label: 'X', onChange }))
+    const vh = window.innerHeight
+    vi.spyOn(host.querySelector('span')!, 'getBoundingClientRect').mockReturnValue({ top: vh - 30, bottom: vh - 10, left: 0, right: 40, width: 40, height: 20, x: 0, y: vh - 30, toJSON: () => ({}) } as DOMRect)
+    const real = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.matches('[data-disable-reasons]') ? ({ top: 0, bottom: 100, left: 0, right: 300, width: 300, height: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect) : real.call(this)
+    })
+    await click(host.querySelector('[role="switch"]'))
+    expect(parseFloat((pop() as HTMLElement).style.top)).toBe(vh - 30 - 6 - 100)
+  })
   it('取消 / 点别处 = 不关(开关照旧开着,什么都不报)', async () => {
     const onChange = vi.fn()
     await render(React.createElement(ReasonSwitch, { checked: true, label: 'X', onChange }))

@@ -216,8 +216,10 @@ const depName = (d: PluginDependency, plugins: AmadeusPlugin[], locale: Loc): st
 /** 卡片与详情页共用的开关动作。开关跟意图(偏好)走:在等前置 / 加载失败的插件开关是「开」的,再点一下是关掉它。
  *  关之前把会跟着暂停的依赖方说清楚;开了却没跑起来(setup 抛错)就地报 —— 宿主只发 Amadeus 吐司,只有主窗渲染,
  *  设置浮窗里拨开关就像没反应。 */
-function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void, reason?: LifecycleReason): void {
+function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void, reason?: LifecycleReason, want?: boolean): void {
   const wasOn = pluginWanted(p)
+  // 停用先问理由:问的这会儿状态可能已经变了(熔断自动停用、别的窗口拨过)—— 已经是想要的状态就什么都不做,别反着拨回去
+  if (want !== undefined && wasOn === want) return
   const name = pluginDisplayName(p, locale)
   if (wasOn) {
     const deps = runningDependents(p.id).map((x) => pluginDisplayName(x, locale))
@@ -233,7 +235,7 @@ function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void, re
 }
 
 /** 普通插件的开关:勾选 = 想开。用户关着、前置又没齐 → 开不了(灰掉,悬停说缺什么)。 */
-const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: (reason?: LifecycleReason) => void }> = ({ p, onFlip }) => {
+const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: (reason?: LifecycleReason, want?: boolean) => void }> = ({ p, onFlip }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -243,7 +245,7 @@ const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: (reason?: LifecycleReas
   const stuck = !!p.blocked || unmet.length > 0
   return (
     <span title={unmet.length ? t('settings.amadeusPlugins.needsDepsToEnable', { list: unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep')) }) : undefined} onClick={(e) => e.stopPropagation()}>
-      <ReasonSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={(_on, reason) => onFlip(reason)} />
+      <ReasonSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={(on, reason) => onFlip(reason, on)} />
     </span>
   )
 }
@@ -442,7 +444,7 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
 export const PluginEnableSwitch: React.FC<{ p: AmadeusPlugin; onEngineReload?: () => void }> = ({ p, onEngineReload }) => {
   const { t, locale } = useI18n()
   if (p.locked) return window.tangu?.setBundleEnabled ? <BundleSwitch p={p} /> : null
-  return <PluginSwitch p={p} onFlip={(reason) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason)} />
+  return <PluginSwitch p={p} onFlip={(reason, want) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)} />
 }
 
 /** 插件设置页「已停用 · 启用」那颗按钮:朝「开」拨(已经想开的不动)。locked 包没有桥就做不了 → false。 */
@@ -806,7 +808,7 @@ const PluginDetail: React.FC<{
   // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
   useEffect(() => { if (on && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id) }, [p, on])
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
-  const toggleHere = (reason?: LifecycleReason): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason)
+  const toggleHere = (reason?: LifecycleReason, want?: boolean): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)
   // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
   // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
   const [askUninstall, setAskUninstall] = useState(false)
@@ -1071,7 +1073,7 @@ export const AmadeusPluginsTab: React.FC<{
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
           {p.locked
             ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
-            : <PluginSwitch p={p} onFlip={(reason) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason)} />}
+            : <PluginSwitch p={p} onFlip={(reason, want) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)} />}
         </div>
       </div>
     )

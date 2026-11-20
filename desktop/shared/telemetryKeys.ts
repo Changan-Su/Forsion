@@ -54,11 +54,16 @@ export const MODEL_COUNT_KEYS = ['regenerate', 'stop', 'editResend'] as const
 export type ModelCountKey = typeof MODEL_COUNT_KEYS[number]
 export const PROVIDER_KINDS = ['forsion', 'codex', 'byok', 'local', 'other'] as const
 export type ProviderKind = typeof PROVIDER_KINDS[number]
-/** 模型 id → 来源类别(与 Forsion Extend core/telemetry.ts providerKindOf 同一规则):托管 `pr-`、Codex 订阅 `codex/`、本地 ollama / lmstudio / local,其余自带 key。 */
+/**
+ * 模型 id → 来源类别(model_feedback.providerKind,交给 Extend 的 publicModelId 当「宿主核过的来源」):
+ * 托管只认 `pr-` + 48 位十六进制整串,Codex 订阅只认 `codex/<一段模型名>`,本地 ollama / lmstudio / local,其余自带 key。
+ * 比 Extend 的 providerKindOf 严:Extend 对 codex / forsion 原样放行整串,用户自建的渠道叫 `codex`、`pr-xxx` 时
+ * (`codex/私有空间/模型`、`pr-my-relay/gpt-4o`)这里判成自带 key,Extend 就只留最后一段 —— 渠道名 / 命名空间不出本机。
+ */
 export function providerKindOf(modelId: string | null | undefined): ProviderKind {
   if (!modelId) return 'other'
-  if (/^pr-/.test(modelId)) return 'forsion'
-  if (/^codex\//.test(modelId)) return 'codex'
+  if (/^pr-[a-f0-9]{48}$/.test(modelId)) return 'forsion'
+  if (/^codex\/[^/]+$/.test(modelId)) return 'codex'
   if (/^(?:ollama|lmstudio|local)[/:]/i.test(modelId)) return 'local'
   return 'byok'
 }

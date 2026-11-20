@@ -58,13 +58,24 @@ export function useDisableReason(anchorRef: RefObject<HTMLElement | null>): { as
 function DisableReasonPop({ anchor, onPick, onCancel }: { anchor: HTMLElement; onPick: (r: LifecycleReason | null) => void; onCancel: () => void }) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+  const [pos, setPos] = useState<{ top: number; right: number; placed: boolean } | null>(null)
   useLayoutEffect(() => {
     // body 上有界面缩放(CSS zoom):量到的是视口像素,fixed 定位要换回缩放前的坐标
     const z = zoomOf(document.body) || 1
     const r = anchor.getBoundingClientRect()
-    setPos({ top: (r.bottom + 6) / z, right: Math.max(8, (window.innerWidth - r.right) / z) })
+    setPos({ top: (r.bottom + 6) / z, right: Math.max(8, (window.innerWidth - r.right) / z), placed: false })
   }, [anchor])
+  // 第二拍量自己(两拍都在绘制之前,看不到跳):下面放不下就翻到开关上面(开关贴着窗口底边时,滚过去够按钮 = 取消,不翻就关不掉);
+  // 上面也放不下就贴底边
+  useLayoutEffect(() => {
+    if (!pos || pos.placed || !ref.current) return
+    const z = zoomOf(document.body) || 1
+    const h = ref.current.getBoundingClientRect().height
+    const a = anchor.getBoundingClientRect()
+    const vh = window.innerHeight
+    const top = a.bottom + 6 + h <= vh - 8 ? a.bottom + 6 : a.top - 6 - h >= 8 ? a.top - 6 - h : Math.max(8, vh - 8 - h)
+    setPos({ ...pos, top: top / z, placed: true })
+  }, [pos, anchor])
   useEffect(() => {
     const away = (e: PointerEvent): void => { if (!(e.target instanceof Node && (ref.current?.contains(e.target) || anchor.contains(e.target)))) onCancel() }
     const gone = (): void => onCancel()
