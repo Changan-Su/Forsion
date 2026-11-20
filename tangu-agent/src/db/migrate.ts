@@ -378,6 +378,9 @@ export async function runMigration(): Promise<void> {
     // run 的持有进程 `<pid>:<启动时刻秒>`(本机 SQLite 才写,见 services/runOwner.ts):重启自愈据此探活,别的活着的引擎进程的 run 不碰
     //(TUI 与桌面共用 state.db;PI-DSH 评审 R2)。NULL = 云端 / 升级前的行 / 非 SQLite 本机库。
     ['agent_runs', 'owner VARCHAR(64)'],
+    // 被停下的 run(status=interrupted)由哪个续跑 run 接了(中断任务续跑方案 B):启动恢复用它做「只认领一次」的 CAS。
+    // '-' = 没自动续、只补了一条中断说明行。NULL = 还没处理。
+    ['agent_runs', 'resumed_by VARCHAR(36)'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);

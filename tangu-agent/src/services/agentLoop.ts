@@ -34,13 +34,15 @@ import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
-import { LENGTH_RESUME_CHECK, type InterruptReason } from '../contracts/turnResume.js';
+import { LENGTH_RESUME_CHECK, autoResumeMarker, interruptedNoticeMarker, type InterruptReason } from '../contracts/turnResume.js';
 import { isRecoveryHost, createRowWriter, markLiveRow, unmarkLiveRow, type ToolInflight } from './runProgress.js';
+import { readShutdownIntent, clearShutdownIntent } from './shutdownIntentStore.js';
+import { buildResumeInput, claimInterruptedRun, ensureUserRow, intentReasonForOwner, pickResumeModel, reasonFromError, resumeBlocker, runAgeFlags, runInput } from './runResume.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
-import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
+import { getRun, createRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolSourceOf, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
@@ -966,31 +968,88 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   }
 }
 
-const INTERRUPTED_DETAIL =
-  'The engine restarted while this run was in progress, so it was stopped here instead of starting over (that would repeat actions already taken). Send a message to continue.';
-
-/** 跑到一半就没了持有者的 run(崩溃 / 退出 / 更新):标失败 + 补一条终态事件,不从头重跑。 */
-async function terminalizeInterruptedRun(runId: string): Promise<void> {
+/** 持有者已死、行还停在 running 的 run(中断任务续跑方案 B 之前叫 orphaned / failed):现在记 interrupted(<原因>) ——
+ *  原因按停引擎意图(pid 对得上)定,没有意图 = crash;补一条终态事件给还连着的客户端。CAS:同时启动的两个引擎只有一个标得上。
+ *  返回是否标上了。年龄要在这之前读(标记会刷新 updated_at)。 */
+async function markOrphanInterrupted(runId: string, reason: InterruptReason): Promise<boolean> {
   try {
-    // 裸码 'orphaned':桌面 humanizeRunError 已有对应双语文案(chat.err.orphaned「运行意外中断…请重试」)
-    await updateRunStatus(runId, 'failed', { error: 'orphaned' });
-    await publish(runId, 'error', { error: 'orphaned', detail: INTERRUPTED_DETAIL });
+    const marked = await query<any[]>(
+      `UPDATE agent_runs SET status = 'interrupted', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running' RETURNING id`,
+      [`interrupted:${reason}`, runId],
+    );
+    if (!marked.length) return false;
+    await publish(runId, 'error', { error: 'interrupted', aborted: true, interrupted: reason });
     await drain(runId);
+    return true;
   } catch (e) {
-    console.warn('[agent-core] terminalizeInterruptedRun failed:', e);
+    console.warn('[agent-core] markOrphanInterrupted failed:', e);
+    return false;
   } finally {
     setTimeout(() => cleanup(runId), 30_000);
   }
 }
 
-/** 进程重启自愈(PI-DSH 评审 R2 改过语义):先清陈旧行(30 分钟没动静 → failed),余下在飞 run 按 session 分组、created_at 顺序处理 ——
- *  - 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
- *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
- *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
- *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
+/**
+ * 一条被停下、还没处理过的 run(status=interrupted、resumed_by 为空):过方案 6.5 的门控就自动续一轮,否则补一条说明原因的中断行。
+ * 两条路都先 CAS 认领(resumed_by),同时起来的两个引擎、TUI 与桌面都只处理一次。返回是否起了续跑 run。
+ * 绝不从原始输入重跑(10-02 R2):续跑是新的一轮(trigger: recovery),消息是 autoResumeMarker,模型从落库的现场接着做。
+ */
+async function settleInterruptedRun(runId: string, kindOf: (sessionId: string) => Promise<string>, knownAge?: { over2h: boolean; over24h: boolean }): Promise<boolean> {
+  const run = await getRun(runId).catch(() => null);
+  if (!run || run.status !== 'interrupted') return false;
+  const reason: InterruptReason = reasonFromError(run.error) ?? 'engine_stop';
+  const kind = await kindOf(run.session_id);
+  // 团队成员会话:团队 run 重新激活时会新建子 run,这里只记「处理过了」,不往成员会话里插行
+  if (kind === TEAMWORK_KIND) { await claimInterruptedRun(runId, '-'); return false; }
+  const input = runInput(run);
+  await ensureUserRow(run, input);
+  const age = knownAge ?? await runAgeFlags(runId);
+  const blocker = await resumeBlocker(run as any, reason, age, kind).catch(() => 'error');
+  const notice = async (): Promise<void> => {
+    await deps().state.insertUserMessage({
+      id: uuidv4(), sessionId: run.session_id, content: interruptedNoticeMarker(reason), modelId: run.model_id || '', attachments: null,
+    }).catch((e) => console.warn('[agent-core] persist interrupted notice failed:', e));
+  };
+  if (blocker) {
+    if (!(await claimInterruptedRun(runId, '-'))) return false;
+    await notice();
+    console.log(`[tangu] interrupted run ${runId} (${reason}) not resumed: ${blocker}`);
+    return false;
+  }
+  const resumeRunId = uuidv4();
+  if (!(await claimInterruptedRun(runId, resumeRunId))) return false;
+  try {
+    const marker = autoResumeMarker(reason);
+    const markerId = uuidv4();
+    const modelId = await pickResumeModel(run.model_id || '', run.session_id);
+    // 续跑行先落库(runLoop 起跑时按同一个 id 再插一次是空操作):续跑 run 起不来,这一行也在,界面照样画得出那条线
+    await deps().state.insertUserMessage({ id: markerId, sessionId: run.session_id, content: marker, modelId, attachments: null });
+    await createRun({
+      id: resumeRunId, sessionId: run.session_id, userId: run.user_id, appId: run.app_id, modelId, assistantMessageId: uuidv4(),
+      input: buildResumeInput(input, runId, markerId, marker),
+    });
+    enqueueRun(run.session_id, resumeRunId);
+    console.log(`[tangu] interrupted run ${runId} (${reason}) resumed as ${resumeRunId}`);
+    return true;
+  } catch (e: any) {
+    console.warn(`[agent-core] auto-resume of ${runId} failed, leaving a notice instead:`, e?.message || e);
+    await query(`UPDATE agent_runs SET resumed_by = '-' WHERE id = ? AND resumed_by = ?`, [runId, resumeRunId]).catch(() => {});
+    await notice();
+    return false;
+  }
+}
+
+/** 进程重启自愈(PI-DSH 评审 R2;2026-11-20 中断任务续跑方案 B 改过):
+ *  ① 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰(TUI 与桌面共用 state.db)。
+ *  ② running 但持有者已死 → interrupted(<原因>):停引擎意图对得上持有者 pid → 意图里的原因,否则 crash。**不从头重跑**
+ *     —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍。陈旧清扫不再先把它们吃成 failed(年龄交给门控)。
+ *  ③ 陈旧的排队行(30 分钟没动静、持有者已死)照旧 failed。
+ *  ④ 被停下、还没处理过的(②刚标的 + 优雅退出时 runLoop 自己标的):按门控自动续一轮或补一条说明原因的中断行(settleInterruptedRun)。
+ *  ⑤ queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队。排在④之后:同会话里补的说明行在它前面,它跑的时候看得到。
+ *  最后删掉停引擎意图文件。返回入队数量(含续跑 run)。复现台架:scripts/run-recovery.repro.mjs。 */
 export async function recoverQueuedRuns(): Promise<number> {
   // 非 SQLite(外部 PG / PGlite 回退)不记持有者 → 持有者一律按已死处理,即「独占库」语义(单实例是这两种库唯一受支持的形态)。
-  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标 orphaned、抢排队行;云端为此走网关 + recoverRuns:false);
+  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标中断、抢排队行;云端为此走网关 + recoverRuns:false);
   // 真要支持,得上带主机标识的租约 + 执行前 CAS —— 本机 pid 跨主机探不了活。
   const aliveCache = new Map<string, Promise<boolean>>();
   const alive = (owner: string | null): Promise<boolean> => {
@@ -998,40 +1057,62 @@ export async function recoverQueuedRuns(): Promise<number> {
     if (!aliveCache.has(owner)) aliveCache.set(owner, ownerAlive(owner));
     return aliveCache.get(owner)!;
   };
-  const owners = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner).filter((o): o is string => !!o))];
-  const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
-  const stale = await failStaleRuns(30, live);
-  if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
-  const rows = await listPendingRunsForRecovery();
   // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
   //(没人订阅它的事件、它的审批会永久占住成员会话的串行队列、工具动作会重做)→ 直接终态化(Codex 09-16 r4 #5)。
-  let kinds = new Map<string, string>();
-  try {
-    const ids = [...new Set(rows.map((r) => r.session_id))];
-    if (ids.length) {
-      const ks = await query<any[]>(`SELECT id, kind FROM chat_sessions WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
-      kinds = new Map((ks || []).map((k) => [String(k.id), String(k.kind || 'user')]));
+  const kinds = new Map<string, Promise<string>>();
+  const kindOf = (sessionId: string): Promise<string> => {
+    if (!kinds.has(sessionId)) {
+      kinds.set(sessionId, query<any[]>(`SELECT kind FROM chat_sessions WHERE id = ?`, [sessionId])
+        .then((r) => String(r[0]?.kind || 'user'), () => 'user')); // 查不到 kind 按普通会话处理
     }
-  } catch { /* 查不到 kind 按普通会话处理 */ }
+    return kinds.get(sessionId)!;
+  };
+  const intent = readShutdownIntent();
   let n = 0;
-  for (const r of rows) {
-    if (await alive(r.owner)) continue;
-    if (kinds.get(r.session_id) === 'teamwork') {
-      await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
-      continue;
+  try {
+    const first = await listPendingRunsForRecovery();
+    // ② 持有者已死的 running → interrupted
+    const ages = new Map<string, { over2h: boolean; over24h: boolean }>();
+    for (const r of first) {
+      if (r.status !== 'running' || await alive(r.owner)) continue;
+      if (await kindOf(r.session_id) === TEAMWORK_KIND) {
+        await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
+        continue;
+      }
+      const reason = intentReasonForOwner(intent, r.owner) ?? 'crash';
+      const age = await runAgeFlags(r.id); // 标记前读:标记会刷新 updated_at
+      if (await markOrphanInterrupted(r.id, reason)) ages.set(r.id, age);
     }
-    if (r.status === 'running') {
-      await terminalizeInterruptedRun(r.id);
-      continue;
-    }
-    const claimed = await query<any[]>(
-      // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
-      `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
-      [SELF_OWNER, r.id, r.owner || ''],
+    // ③ 陈旧的排队行
+    const owners = [...new Set(first.map((r) => r.owner).filter((o): o is string => !!o))];
+    const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
+    const stale = await failStaleRuns(30, live);
+    if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
+    // ④ 被停下、还没处理过的,按建的先后
+    const pendingInterrupted = await query<any[]>(
+      `SELECT id FROM agent_runs WHERE status = 'interrupted' AND resumed_by IS NULL ORDER BY created_at ASC`,
     ).catch(() => []);
-    if (!claimed.length) continue;
-    enqueueRun(r.session_id, r.id);
-    n++;
+    for (const { id } of pendingInterrupted) {
+      if (await settleInterruptedRun(String(id), kindOf, ages.get(String(id))).catch((e) => { console.warn('[agent-core] settle interrupted failed:', e); return false; })) n++;
+    }
+    // ⑤ 排队行认领入队
+    for (const r of await listPendingRunsForRecovery()) {
+      if (r.status !== 'queued' || await alive(r.owner)) continue;
+      if (await kindOf(r.session_id) === TEAMWORK_KIND) {
+        await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
+        continue;
+      }
+      const claimed = await query<any[]>(
+        // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
+        `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
+        [SELF_OWNER, r.id, r.owner || ''],
+      ).catch(() => []);
+      if (!claimed.length) continue;
+      enqueueRun(r.session_id, r.id);
+      n++;
+    }
+  } finally {
+    clearShutdownIntent();
   }
   return n;
 }
@@ -1310,6 +1391,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
+  // 记忆 / 会话召回的查询句:自动续跑那一轮(trigger: recovery)的消息是续跑行,召回按被续的那一句(runResume.buildResumeInput 带的 resumeQuery)
+  const recallQuery = input.trigger === 'recovery' && typeof input.resumeQuery === 'string' ? input.resumeQuery
+    : typeof input.message === 'string' ? input.message : '';
   // 团队成员的子 run(services/teamRuns.ts 起的,方案 §6.4):团队段拼进 system、成员不可再起讨论 / 派遣 / 界面动作(inDiscussion 同款闸);
   // 临时成员(不在 ~/.tangu/agents)的定义随 teamMember.def 下发,按 slug 优先于磁盘,且不为它建 / 同步 agent 文件夹。
   const teamMember = plainObject(agentConfig.teamMember);
@@ -1812,7 +1896,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
     // 子会话回报那一轮(childReport)/ 会话消息那一轮(fromSession)的「用户消息」是机器写的,不拿它起标题
-    if (!input.childReport && !input.fromSession) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 自动续跑那一轮(trigger: recovery)的「用户消息」是续跑行,也不是用户的话
+    if (!input.childReport && !input.fromSession && input.trigger !== 'recovery') onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -2263,7 +2348,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
       // portrait:画像的详情也按这句话召回(11-09 分层),和上面画像注入同一道门(本机、不连通道);分身按身份不给(不看此刻连没连通道)
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx, portrait: !standIn && channelBinding === false && !!profile.capabilities.hostExec,
-        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
+        query: recallQuery, excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       recallStats = { recallEntries: memoryContext.entryIds.length, recallHistory: memoryContext.historyMessageIds.length, recallTruncated: !!memoryContext.truncated };
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
@@ -2281,7 +2366,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
     if (profile.capabilities.hostExec && !standIn) { // 分身没有项目记忆(常驻、详情、召回都不给:那份给这个项目里所有 Agent,含本体)
       try {
-        const projectMemory = await buildProjectMemoryLayers(userId, sessionId, typeof input.message === 'string' ? input.message : '');
+        const projectMemory = await buildProjectMemoryLayers(userId, sessionId, recallQuery);
         if (projectMemory.stable) systemParts.push(volatilePlacement === 'system' && projectMemory.volatile ? `${projectMemory.stable}\n\n${projectMemory.volatile}` : projectMemory.stable);
         if (volatilePlacement !== 'system' && projectMemory.volatile) volatileMemory = [volatileMemory, projectMemory.volatile].filter(Boolean).join('\n');
       } catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
@@ -3378,7 +3463,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
     // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
     // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
-    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
+    if (!deferBypass && input.trigger !== 'recovery' && workingMessages.some((m) => m.role === 'assistant')) {
       const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
       if (decision) {
         const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');

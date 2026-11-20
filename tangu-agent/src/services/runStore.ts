@@ -8,6 +8,7 @@ import { deps } from '../seams/runtime.js';
 import { currentRunClientTag } from '../seams/runContext.js';
 import type { AgentEvent } from './eventBus.js';
 import type { ActiveRunRow, PendingRunRow, StepInput, StepRow } from '../seams/stateStore.js';
+import { isRecoveryHost } from './runProgress.js';
 
 export interface AgentRun {
   id: string;
@@ -35,10 +36,13 @@ export const createRun = (run: {
   input: any;
 }): Promise<void> => {
   const clientTag = currentRunClientTag();
-  const input = clientTag && run.input && typeof run.input === 'object' && !Array.isArray(run.input)
-    && run.input.client == null
+  const plain = !!run.input && typeof run.input === 'object' && !Array.isArray(run.input);
+  let input = clientTag && plain && run.input.client == null
     ? { ...run.input, client: clientTag }
     : run.input;
+  // 会做启动恢复的本机引擎建的 run 盖戳(中断任务续跑方案 B,门控第 8 条):被停下后只有带戳的才会被自动续。
+  // TUI(与桌面共用 state.db、不做恢复)建的 run 不带。所有引擎内的建 run 都经这里;POST 请求体伸不进 input。
+  if (plain && isRecoveryHost() && input.hostRecovery == null) input = { ...input, hostRecovery: true };
   return deps().state.createRun(input === run.input ? run : { ...run, input });
 };
 
