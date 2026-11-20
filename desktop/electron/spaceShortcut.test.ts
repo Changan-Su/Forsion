@@ -157,6 +157,34 @@ describe('createSpaceShortcut', () => {
     expect(await fs.readFile(path.join(desktop, 'Notes.app'), 'utf8')).toBe('mine')
   })
 
+  it('creates one automatic shortcut and respects removal across repeat registration', async () => {
+    const space = { id: 'calendar', name: 'Calendar' }
+    const automatic = deps({ platform: 'linux', automatic: true })
+    const [first, second] = await Promise.all([
+      createSpaceShortcut(space, automatic), createSpaceShortcut(space, automatic),
+    ])
+    expect(first).toEqual({ ok: true, path: path.join(desktop, 'Calendar.desktop') })
+    expect(second).toEqual(first)
+    expect(await onDesktop()).toEqual(['Calendar.desktop'])
+    await fs.unlink(path.join(desktop, 'Calendar.desktop'))
+    await createSpaceShortcut({ ...space, name: '日历' }, automatic)
+    expect(await onDesktop()).toEqual([])
+    await createSpaceShortcut(space, { ...automatic, automatic: false })
+    expect(await onDesktop()).toEqual(['Calendar.desktop'])
+  })
+
+  it('recognizes a shortcut created by an older host and leaves a different Space untouched', async () => {
+    const legacy = path.join(desktop, 'Calendar.app')
+    await createSpaceShortcut({ id: 'calendar', name: 'Calendar' }, deps({ platform: 'darwin' }))
+    await fs.rm(path.join(iconDir, 'automatic'), { recursive: true })
+    const renamed = path.join(desktop, 'My old shortcut.app')
+    await fs.rename(legacy, renamed)
+    const automatic = deps({ platform: 'darwin', automatic: true })
+    expect(await createSpaceShortcut({ id: 'calendar', name: 'Calendar' }, automatic)).toEqual({ ok: true, path: renamed })
+    expect(await createSpaceShortcut({ id: 'other', name: 'My old shortcut' }, automatic)).toEqual({ ok: true, path: path.join(desktop, 'My old shortcut (1).app') })
+    expect(await onDesktop()).toEqual(['My old shortcut (1).app', 'My old shortcut.app'])
+  })
+
   it('windows: .lnk carries the link, the Space AppUserModelID and the stored .ico; name is recorded for the taskbar', async () => {
     const writer = vi.fn<Writer>(() => true)
     const r = await createSpaceShortcut({ id: 'amadeus', name: 'Notes' }, deps({ platform: 'win32', iconPng: png, writeShortcutLink: writer }))

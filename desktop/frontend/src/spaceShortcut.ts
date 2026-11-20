@@ -152,20 +152,27 @@ export async function renderAppIconPng(glyphSrc: AppIconGlyph, platform = window
 }
 
 /** Ribbon 右键「添加到桌面」。结果一律 toast 告诉用户。 */
-export async function addSpaceToDesktop(spaceId: string): Promise<void> {
+export async function addSpaceToDesktop(spaceId: string, automatic?: { plugin: string; isCurrent(): boolean }): Promise<boolean> {
   const make = window.tangu?.addSpaceToDesktop
   const space = useSpaceStore.getState().spaces.find((s) => s.id === spaceId)
-  if (!make || !space) return
+  if (!make || !space) return false
   const toast = (text: string, error = false): void => useApp.getState().toast(text, error)
   const name = label(space.name)
   try {
     const iconPng = await renderSpaceIconPng(space).catch(() => undefined)
     // fallbackName = 名字洗空时的桌面文件名,落盘产物命名跟界面语言走,由这边翻好再传。
-    const result = await make({ id: space.id, name, fallbackName: translate('spaceShortcut.fallbackName'), iconPng })
+    if (automatic && !automatic.isCurrent()) return false
+    const result = await make({
+      id: space.id, name, fallbackName: translate('spaceShortcut.fallbackName'), iconPng,
+      ...(automatic ? { plugin: automatic.plugin } : {}),
+    })
+    if (automatic) return result.ok || result.code === 'unpackaged'
     if (result.ok) toast(translate('spaceShortcut.toast.ok', { name }))
     else if (result.code === 'unpackaged') toast(translate('spaceShortcut.toast.unpackaged'), true)
     else toast(translate('spaceShortcut.toast.failed', { detail: result.detail || result.code }), true)
+    return result.ok
   } catch (e) {
-    toast(translate('spaceShortcut.toast.failed', { detail: e instanceof Error ? e.message : String(e) }), true)
+    if (!automatic) toast(translate('spaceShortcut.toast.failed', { detail: e instanceof Error ? e.message : String(e) }), true)
+    return false
   }
 }

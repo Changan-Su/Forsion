@@ -441,6 +441,12 @@ export interface UpdaterStatusInfo {
   canSwitch?: boolean
   /** mac:已在浏览器里开了 .dmg 的下载链接 */
   opened?: boolean
+  /** mac:只能在浏览器里下 .dmg 手动装;false = 应用内下载安装。缺省(老主进程)= mac 手动 */
+  manualInstall?: boolean
+  /** mac:应用内自装没成,已退回下载安装包 */
+  selfInstallFailed?: boolean
+  /** mac:点了重启并安装,正在准备 */
+  preparing?: boolean
 }
 
 /** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */
@@ -678,7 +684,7 @@ declare global {
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
-      /** 应用内自动更新:检查 / 下载 / 重启安装(mac 的 download/install 为 no-op,改用 openUpdateInstaller)。 */
+      /** 应用内自动更新:检查 / 下载 / 重启安装(状态带 manualInstall 的 mac 不能自装,改用 openUpdateInstaller)。 */
       getCorePluginUpdates?(): Promise<CorePluginUpdates>
       onCorePluginUpdates?(cb: (status: CorePluginUpdates) => void): () => void
       checkForUpdates?(): Promise<UpdaterStatusInfo>
@@ -1008,7 +1014,7 @@ declare global {
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string, movedSlug?: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
-      spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
+      spacesList?(disabledPluginIds?: string[]): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
       spacesDelete?(slug: string): Promise<{ ok: boolean }>
       /** 收件箱:系统通知(点击回跳 Inbox Space)/ dock 角标(仅 mac 生效)/ 通知点击订阅。 */
@@ -1031,7 +1037,7 @@ declare global {
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
       /** Space「添加到桌面」(仅桌面宿主):快捷方式双击后这个 Space 开在自己的独立窗口里,不露出主窗。 */
-      addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
+      addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string; plugin?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
       /** 开 / 叫出一扇 Mini 悬浮卡片(2.13.8 起多开:同一实体再开 = 叫出那扇,duplicate 才另开;普通 Mini 满 6 扇不开,
        *  结果 { ok: false, reason: 'limit' } 由调用方提示,用 openMiniWindow() 就带提示)。不带参数 = ⌘⇧M:开合最近用过的那扇。 */

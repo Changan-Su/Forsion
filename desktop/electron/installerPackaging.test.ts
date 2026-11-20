@@ -51,7 +51,7 @@ describe('backend production packaging', () => {
 })
 
 const mocks = vi.hoisted(() => ({ quitAndInstall: vi.fn() }))
-vi.mock('electron', () => ({ app: { isPackaged: true }, BrowserWindow: {} }))
+vi.mock('electron', () => ({ app: { isPackaged: true }, BrowserWindow: {}, autoUpdater: {} }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: mocks } }))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/fixture' }))
 
@@ -63,6 +63,7 @@ describe('update installer visibility', () => {
       Object.defineProperty(process, 'platform', { value: platform })
       const { installUpdate } = await import('./updater')
       installUpdate()
+      // mac 只有确认过「Developer ID 签名、能自装」才退出去装(updater.test.ts 覆盖那条);没确认过的(ad-hoc 旧包)不动
       if (platform === 'darwin') expect(mocks.quitAndInstall).not.toHaveBeenCalled()
       else expect(mocks.quitAndInstall).toHaveBeenCalledWith(platform !== 'win32', true)
     } finally {
@@ -143,5 +144,19 @@ describe('mac dmg layout', () => {
 
   it('would have caught the 2.13.1 layout (window 540x380, help file at y=372)', () => {
     expect(offWindow({ x: 280, y: 372 }, 80, 540, 380)).toBe(true)
+  })
+})
+
+// mac 自装的关键顺序只在 main.ts 里:Squirrel 取包验签(prepareInstall)必须在停后端之前,
+// 否则验签失败时后端已停、应用半退出。updater.test.ts 碰不到 main.ts,所以这里直接钉源码顺序。
+describe('mac update install order', () => {
+  it('stages Squirrel.Mac before the restart path marks quitting or stops the backend', () => {
+    const src = readFileSync(join(__dirname, 'main.ts'), 'utf8')
+    const body = src.slice(src.indexOf('restart: async (install) =>'))
+    const at = (s: string) => { const i = body.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i }
+    const prepare = at('await prepareInstall()')
+    expect(at('quitGuards.confirmFirst()')).toBeLessThan(prepare)
+    expect(prepare).toBeLessThan(at('isQuitting = true'))
+    expect(prepare).toBeLessThan(at('await backend.stop()'))
   })
 })

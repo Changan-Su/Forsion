@@ -3110,6 +3110,77 @@ const tabCountText = (list) => {
     } finally { if (side !== 'local') await switchVault(side) }
   })
 
+  // The editor's own capsule ⋯ (walk 2026-11-19, e): its press keeps the editor's focus, so with the keyboard up the
+  // sheet came up under it, the lower rows behind the keys. ⋯ now puts the keyboard away before the sheet opens.
+  // The browser stage (`note-more-keyboard`) can only shrink its viewport; the real keyboard is here.
+  await check('note editor ⋯ with the keyboard up: the keyboard goes away and the sheet rows are above the screen bottom', async () => {
+    await toSpace('amadeus')
+    const side = await cdp.eval('window.amadeusVaultMode.side')
+    if (side !== 'local') await switchVault('local')
+    const pages = () => cdp.eval('window.amadeus.listPages().then((p) => JSON.stringify(p))').then(JSON.parse)
+    const before = new Set(await pages())
+    try {
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list' && !!document.querySelector('.mb-drawer--left [data-act="list-fab"]')`, 8000), 'no main button on the notes list')
+      await tapEl(`document.querySelector('.mb-drawer--left [data-act="list-fab"]')`)
+      assert.ok(await h.waitPage(cdp, `${nav} === 'detail' && !!document.querySelector('.mb-main .amx-mbar')`, 8000), 'the main button did not open a new note with its capsule')
+      await h.pause(900)
+      await tapEl("document.querySelector('.mb-main .ProseMirror')")
+      assert.ok(await h.waitPage(cdp, "!!document.activeElement?.closest?.('.mb-main .ProseMirror')", 4000), 'a tap on the body did not put the caret in the note')
+      for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(150)
+      assert.ok(imeShown(), 'no keyboard with the caret in the note')
+      shot('03q-note-keyboard')
+      await tapEl("document.querySelector('.mb-main .amx-mbar button[title=\"更多操作\"]')")
+      assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-sheet')", 4000), 'the capsule ⋯ opened no sheet')
+      for (let i = 0; i < 20 && imeShown(); i++) await h.pause(150)
+      await h.pause(500) // the sheet's slide-in, the page growing back
+      const look = await cdp.eval(`(() => { const s = document.querySelector('.mb-sheet'); const r = s.getBoundingClientRect(); const rows = [...s.querySelectorAll('.mb-sheet-row')]
+        return { caret: !!document.activeElement?.closest?.('.ProseMirror'), rows: rows.length, seen: rows.filter((x) => { const q = x.getBoundingClientRect(); return q.top >= r.top - 1 && q.bottom <= Math.min(r.bottom, innerHeight) + 1 }).length } })()`)
+      shot('03r-note-more-no-keyboard')
+      assert.ok(!imeShown() && !look.caret, `the keyboard stayed up under the sheet (${JSON.stringify({ ime: imeShown(), ...look })})`)
+      assert.ok(look.seen >= 8, `few of the sheet's rows are in sight (${JSON.stringify(look)})`)
+      h.key(4)
+      assert.ok(await h.waitPage(cdp, "!document.querySelector('.mb-sheet')", 4000), 'system Back did not close the sheet')
+    } finally {
+      if (imeShown()) { h.key(4); await h.pause(500) }
+      if (await cdp.eval(`${nav} === 'detail'`)) { await tapId('nativeChrome.left').catch(() => {}); await h.pause(800) }
+      // the note the main button made (the list before and after; a new note's title field is empty, its name is the file's)
+      for (const p of (await pages().catch(() => [])).filter((x) => !before.has(x))) await cdp.eval(`window.amadeus.deletePage?.(${JSON.stringify(p)}).then(() => true, () => true)`).catch(() => {})
+      if (side !== 'local') await switchVault(side)
+    }
+  })
+
+  // The cloud vault card (walk 2026-11-19, d): it sits in the list's drawer and was zoomed twice there (drawer body ×
+  // body), wider than the screen with its close button off it; system Back went past it. Here in the device's WebView
+  // (124 — the stage's Chromium is newer, and the fix is zoom arithmetic): a screenshot to look at (a fixed element's
+  // rect is not trusted on this WebView), and system Back closes the card and only the card.
+  await check('cloud vault card: drawn in the device WebView (screenshot); system Back closes it and leaves the notes list', async () => {
+    await toSpace('amadeus')
+    const side = await cdp.eval('window.amadeusVaultMode.side')
+    if (side !== 'cloud') await switchVault('cloud')
+    // the card lists what the collab seam answers; the fixture account has no cloud vault behind it, so the real seam
+    // (installed with the cloud side) is set aside for the check and put back after
+    await cdp.eval(`(() => { window.__e2eCollab = window.amadeusCollab
+      window.amadeusCollab = { listVaults: async () => [{ id: 'v1', name: '我的库' }, { id: 'v2', name: 'A team vault with a rather long English name' }], activeVaultId: async () => 'v1', switchVault: () => {}, sharedWithMe: async () => [], listAllShares: async () => [], publishes: async () => [] }
+      return true })()`)
+    try {
+      assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 8000), 'not on the notes list')
+      const row = "[...document.querySelectorAll('.mb-drawer--left .t2s-foot .t2s-special')].pop()"
+      assert.ok(await h.waitPage(cdp, `!!${row}`, 6000), 'no vault row at the end of the notes list')
+      await tapEl(row)
+      assert.ok(await h.waitPage(cdp, "document.querySelectorAll('.amxc-panel .amxc-row').length === 2", 5000), 'the cloud vault card did not open with its two vaults')
+      await h.pause(600)
+      shot('03v-cloud-vault-card')
+      h.key(4)
+      await h.pause(900)
+      const after = await cdp.eval("({ card: !!document.querySelector('.amxc-panel'), space: document.querySelector('.mb-shell')?.dataset.space, nav: document.querySelector('.mb-shell')?.dataset.nav })")
+      assert.deepEqual(after, { card: false, space: 'amadeus', nav: 'list' }, 'system Back did not close just the card')
+    } finally {
+      if (await cdp.eval("!!document.querySelector('.amxc-x')")) { await tapEl("document.querySelector('.amxc-x')").catch(() => {}); await h.pause(400) }
+      await cdp.eval('(() => { if (window.__e2eCollab) window.amadeusCollab = window.__e2eCollab; else delete window.amadeusCollab; delete window.__e2eCollab; return true })()')
+      if (side !== 'cloud') await switchVault(side)
+    }
+  })
+
   // The inbox is a host list source, and on the phone a flat list source is drawn as the phone's own list (2026-10-13):
   // category chips, icon buttons behind a left swipe, one main button. Since 2026-10-14 the mail is grouped by sender:
   // a group head (the workspace's first-level row, 52 dp on a 40 dp lead) and under it rows that carry no icon block,
@@ -4355,6 +4426,85 @@ const tabCountText = (list) => {
     const closeTabs = await tabsSheet()
     shot('08-tabs-sheet-dark')
     await closeTabs()
+  })
+
+  // The command panel from the avatar menu (walk 2026-11-19, f): the answer comes from a touch on the native sheet, not on
+  // the page, and the WebView asks for a keyboard only on a focus that follows a touch on the page — so the panel's field
+  // got the caret and no keyboard (focusing it again did nothing either). Once the sheet is gone the page asks for the
+  // keyboard natively (NativeSheet.showKeyboard), which waits for the activity window to have its focus back. A phone also
+  // has no keys for the shortcut chips. Three times in a row, up to 8 s each (the emulator stalls ~1 s while the sheet's
+  // window goes); a miss carries the system's ImeTracker lines, which name the phase a request failed at
+  // (PHASE_CLIENT_VIEW_SERVED = asked before the window had its focus back). Measured before the native ask: 1 in 10.
+  await check('command panel from the avatar: the keyboard comes up with it; no shortcut chips or key legend', async () => {
+    for (let run = 1; run <= 3; run++) {
+      await goHome()
+      if (imeShown()) { h.key(4); await h.pause(600) }
+      h.adb('logcat', '-c')
+      await openPalette()
+      for (const end = Date.now() + 8000; Date.now() < end && !imeShown();) await h.pause(150)
+      const shown = imeShown()
+      const look = await cdp.eval("({ focus: document.activeElement?.classList.contains('cmd-input') || false, chips: document.querySelectorAll('.cmd-panel .cmd-hotkey').length, keys: document.querySelectorAll('.cmd-panel .cmd-foot kbd').length, rows: document.querySelectorAll('.cmd-panel .cmd-item').length })")
+      if (run === 1) shot('05b-palette-keyboard')
+      try {
+        const ime = shown ? '' : h.adb('logcat', '-d', '-s', 'ImeTracker').split('\n').filter((l) => /forsion/.test(l)).slice(-4).map((l) => l.replace(/^.*ImeTracker: /, '')).join(' | ')
+        assert.ok(shown, `run ${run}: no keyboard with the command panel open (${JSON.stringify(look)}; ImeTracker: ${ime || 'nothing'})`)
+        assert.ok(look.focus, `run ${run}: the command panel's field does not have the focus (${JSON.stringify(look)})`)
+        assert.ok(look.rows > 5 && look.chips === 0 && look.keys === 0, `shortcut chips / key legend on a phone (${JSON.stringify(look)})`)
+      } finally {
+        if (imeShown()) { h.key(4); await h.pause(700) }
+        if (await cdp.eval("!!document.querySelector('.cmd-input')")) { h.key(4); await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000) }
+      }
+    }
+  })
+
+  // A conversation held sideways (walk 2026-11-19, g): "the right capsule covers a user message", and turned back the
+  // phone showed the list rather than the conversation. Measured on 2026-11-19: scrolled to its top the stream keeps the
+  // capsules' room (nothing under them); as it opens — at its end — the reply pushes the first user message up under the
+  // right capsule (sideways the capsule row is a fifth of the height). That is the floating chrome's design (content
+  // passes under the glass capsules, as in portrait), so only the room at the top is asserted; the end and the level
+  // the phone lands on when turned back (the list, today) are logged — both wait on a decision.
+  await check('landscape conversation: scrolled to its top no message under a capsule; at its end and turned back are logged', async () => {
+    await openChat('E2E Session One')
+    const accel = h.adb('shell', 'settings', 'get', 'system', 'accelerometer_rotation').trim()
+    const turn = (r) => { h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0'); h.adb('shell', 'settings', 'put', 'system', 'user_rotation', String(r)) }
+    const bubbles = async () => {
+      const list = ui()
+      const wv = webViewNode(list)
+      const caps = ['nativeChrome.capLeft', 'nativeChrome.capRight'].map((id) => h.byId(list, id)).filter(Boolean).map((n) => n.rect)
+      const page = await cdp.eval(`(() => [...document.querySelectorAll('.mb-main .t2-userwrap')].map((w) => { const el = w.querySelector('.t2-user') || w; const r = el.getBoundingClientRect()
+        let z = 1; for (let e = el; e; e = e.parentElement) z *= parseFloat(getComputedStyle(e).zoom) || 1
+        return { l: r.left * z, t: r.top * z, r: r.right * z, b: r.bottom * z, dpr: devicePixelRatio, text: el.textContent.trim().slice(0, 16) } }))()`)
+      const px = page.map((u) => ({ left: Math.round(wv.rect.left + u.l * u.dpr), top: Math.round(wv.rect.top + u.t * u.dpr), right: Math.round(wv.rect.left + u.r * u.dpr), bottom: Math.round(wv.rect.top + u.b * u.dpr), text: u.text }))
+      const under = px.filter((u) => caps.some((c) => u.left < c.right && u.right > c.left && u.top < c.bottom && u.bottom > c.top))
+      return { caps, users: px, under, wv: wv.rect }
+    }
+    let turned = false
+    try {
+      turn(1); turned = true
+      const wide = await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.right - wv.rect.left > wv.rect.bottom - wv.rect.top && h.byId(l, 'nativeChrome.capRight') ? l : null }, { timeout: 10000 })
+      assert.ok(wide.hit, 'the app did not turn sideways (or no right capsule)')
+      await h.pause(1500)
+      const st = await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, wide: document.querySelector('.mb-shell')?.hasAttribute('data-wide') })")
+      const rest = await bubbles()
+      shot('03s-landscape-chat-rest')
+      console.log(`  sideways: ${JSON.stringify(st)} capsules ${rest.caps.map(fmt).join(' ')}; user bubbles ${JSON.stringify(rest.users)}`)
+      await cdp.eval("(() => { const s = document.querySelector('.mb-main .t2-stream'); if (s) s.scrollTop = 0; return true })()")
+      await h.pause(800)
+      const top = await bubbles()
+      shot('03t-landscape-chat-top')
+      console.log(`  scrolled to the top: user bubbles ${JSON.stringify(top.users)}; under a capsule: ${JSON.stringify(top.under)}`)
+      console.log(`  at its end, under a capsule: ${JSON.stringify(rest.under)}`)
+      assert.deepEqual(top.under, [], `scrolled to its top, a user message is under a capsule (${JSON.stringify(top.under)} vs ${top.caps.map(fmt).join(' ')})`)
+    } finally {
+      if (turned) {
+        turn(0)
+        await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.bottom - wv.rect.top > wv.rect.right - wv.rect.left ? l : null }, { timeout: 10000 })
+        await h.pause(1500)
+        console.log(`  turned back: ${JSON.stringify(await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, view: document.querySelector('.mb-main > .mb-view')?.dataset.view })"))}`)
+        shot('03u-portrait-again')
+        h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', accel || '0')
+      }
+    }
   })
 
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {

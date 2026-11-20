@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react'
 import { X, FolderOpen, Check } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
+import { useMobileBackClose } from '../amadeus/lib/mobileBack'
 
 registerMessages({
   'cloudvault.title': { zh: '云端智库', en: 'Cloud vaults' },
@@ -16,6 +17,8 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
   const collab = window.amadeusCollab
   const [vaults, setVaults] = useState<Array<{ id: string; name: string }>>([])
   const [activeId, setActiveId] = useState('')
+  // 手机上系统返回先关这张卡,不越过它去关它底下的笔记列表(桌面上这个事件从不派发)
+  useMobileBackClose(true, onClose)
 
   useEffect(() => {
     if (!collab) return

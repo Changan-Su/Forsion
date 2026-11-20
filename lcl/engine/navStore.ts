@@ -129,6 +129,41 @@ export function finishNavSpace(leafIds?: string[]): void {
   useNav.setState({ stacks })
 }
 export function forgetNavSpace(id: string): void { spaces.delete(id) }
+
+/** Rewrites what the histories hold after the thing an entry points at moved or went away (a file renamed, moved or
+ *  deleted): `fn` returns the entry to put in its place, `null` to drop it, `undefined` to keep it as it is. Covers the
+ *  live stacks only — the same layout the path follow rewrites; a Space parked away keeps its layout and its history as
+ *  they were, so the two still agree when it comes back (and a rename in another vault never reaches them). Two equal
+ *  keys left side by side become one (the later); the cursor stays on the entry it was on, or on the nearest one before
+ *  it when that one was dropped. A restore in flight on a touched stack is called off and the cursor goes back to the
+ *  entry last shown: its entries may no longer be the ones it was asked for.
+ *  Without it a renamed note stays in the history under its old path: Back lands on a note that is not there. */
+export function remapNav(fn: (leafId: string, entry: NavEntry) => NavEntry | null | undefined): void {
+  if (switching) return
+  const live = useNav.getState().stacks
+  let stacks: Record<string, LeafStack> | null = null
+  for (const [id, st] of Object.entries(live)) {
+    const job = jobs.get(id)
+    const at = job ? job.committed : st.idx
+    let touched = false
+    let shifted = false
+    const entries: NavEntry[] = []
+    let idx = -1
+    st.entries.forEach((entry, i) => {
+      const next = fn(id, entry)
+      if (next !== undefined) touched = true
+      const out = next === undefined ? entry : next
+      if (!out) shifted = true
+      else if (entries.length && entries[entries.length - 1].key === out.key) { entries[entries.length - 1] = out; shifted = true }
+      else entries.push(out)
+      if (i === at) idx = entries.length - 1
+    })
+    if (!touched) continue
+    if (job) cancel(id)
+    ;(stacks ??= { ...live })[id] = { ...st, entries, idx: entries.length ? Math.max(0, Math.min(idx, entries.length - 1)) : -1, ...(shifted || job ? { error: false } : {}) }
+  }
+  if (stacks) useNav.setState({ stacks })
+}
 export function recordNav(leafId: string | null | undefined, key: string, restore: NavEntry['restore'], title?: string): void {
   if (leafId) useNav.getState().record(leafId, { key, restore, title })
 }

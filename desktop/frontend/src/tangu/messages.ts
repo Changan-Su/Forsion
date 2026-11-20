@@ -207,6 +207,7 @@ registerMessages({
   'chat.err.dropped': { zh: '连接中途断开（网络波动），回复未完成', en: 'Connection dropped mid-response (network hiccup); reply incomplete' },
   'chat.err.timeout': { zh: '请求超时，网络或模型响应过慢', en: 'Request timed out — slow network or model' },
   'chat.err.auth': { zh: '鉴权失败，请检查 API Key 或登录状态', en: 'Authentication failed — check API key or login' },
+  'chat.err.imageConversion': { zh: '无法转换这张 HEIC/HEIF 照片，请将它导出为 JPEG 或 PNG 后重新添加', en: 'Could not convert this HEIC/HEIF photo. Export it as JPEG or PNG and attach it again.' },
   'chat.err.rate': { zh: '请求被限流，请稍后重试', en: 'Rate limited — please retry later' },
   'chat.err.maskFailed': { zh: '发给模型前脱敏没能运行，这一轮没有发出', en: 'Masking could not run, so this turn was not sent' },
   'chat.err.maskBlocked': { zh: '这一轮里有要遮住的值，按设置拦下了，没有发出（设置 → 模型 → 提供方 → 发给模型之前）', en: 'This turn had values to mask and was blocked as set, so nothing was sent (Settings → Models → Providers → Before sending to a model)' },

@@ -27,7 +27,7 @@ export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode
 export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout, returnFromTrip, phonePageShown } from './SingleColumnHost'
-export { listFirstNow, useListFirst } from './listFirst'
+export { listFirstNow, useListFirst, usePhoneForm } from './listFirst'
 export { beginReturnTrip, returnTripOrigin, subscribeReturnTrip } from './listTrips'
 export {
   installPhonePages, phonePagesInstalled, usePhonePage, phonePageNow, openPhonePage, closePhonePage, phoneAppsSpaceIds,
@@ -58,9 +58,10 @@ export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
 export { useSpaceStore, registerSpace, unregisterSpace, setActiveSpace, setActiveSpaceCold, adoptSpaceLayoutCold, seedSpaceWindowLayout, resetSpaceLayouts, spaceLayoutsWereReset, BOOT_ACTIVE_SPACE_ID, getActiveSpace, spaceLayoutName, setSpacePinHandler, pinSpaceToHome, canPinSpaceToHome, openRedirectType, landOnMainPage } from './spaceRegistry'
 export { isPinned } from './pinnedViews'
 export type { PinnedViews } from './pinnedViews'
-export { useNav, recordNav, type NavRestoreContext } from './navStore'
+export { useNav, recordNav, remapNav, type NavRestoreContext } from './navStore'
 export type { NavEntry } from './navStore'
 export { useStatusStore, addStatusItem, removeStatusItem } from './statusRegistry'
+export { setEdgeAccessory } from './edgeAccessory'
 export { StatusBar, arrangeStatusItems } from './StatusBar'
 export {
   loadLayout,

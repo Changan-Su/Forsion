@@ -217,6 +217,7 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/engine_unavailable_remote/i, 'chat.err.engineRemote'], // 契约 C6:远程污点 run 不进外部引擎
   [/run_cost_exceeded/i, 'chat.err.runCost'],
   [/input_too_large/i, 'chat.err.inputTooLarge'],
+  [/image_attachment_conversion_failed/i, 'chat.err.imageConversion'],
   [/group_needs_2_agents/i, 'chat.err.groupAgents'],
   [/^orphaned$|stale: process restarted/i, 'chat.err.orphaned'], // 真实产生方写 'stale: process restarted'(sqlStateStore.failStaleRuns)
   [/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i, 'chat.err.network'],

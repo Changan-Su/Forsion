@@ -403,6 +403,17 @@ async function main() {
     check('11b Ribbon 上只剩插件自己的 Space(大纲里没有内置 Space 的按钮)', outline.ok && /Fixture shelf/.test(outlineText) && builtinSpaces.length === 0, JSON.stringify({ builtinSpaces, head: outlineText.slice(0, 400), err: outline.error }))
     const seeded = fs.existsSync(path.join(SBX, 'home', 'plugins')) ? fs.readdirSync(path.join(SBX, 'home', 'plugins')).filter((n) => !n.startsWith('.')) : []
     check('11c 沙箱 home 里没播种内置插件(被测插件没点名要)', seeded.length === 0, JSON.stringify(seeded))
+    // 11-20 沙箱条住进右上角浮钮组(没有外层 .sbx-chrome 了):宿主的重置 / 报告 / 安装照样不进大纲,agent 点不到「重置」清数据
+    const hostLeak = ['重置', '报告问题', '安装', 'Reset', 'Report a problem', 'Install'].filter((n) => new RegExp(`\\] button "${n}"`).test(outlineText))
+    check('11d 沙箱条(重置 / 报告问题 / 安装)不在 agent 的大纲里', outline.ok && hostLeak.length === 0, JSON.stringify({ hostLeak }))
+    // 观感:右栏打开时沙箱条和浮钮组一起让位,不压右栏标签(SHOT_DIR 才截)
+    const rightRef = (outlineText.match(/\[(e\d+)\] button "[^"]*(右侧栏|right panel)/i) || [])[1]
+    if (SHOT_DIR && rightRef) {
+      const opened = await exec('click', { target: rightRef })
+      saveShot('sandbox-right-open.jpg', opened.image || (await exec('screenshot')).image)
+      const ref2 = (JSON.parse((await exec('read', {})).text).action?.outline.match(/\[(e\d+)\] button "[^"]*(右侧栏|right panel)/i) || [])[1]
+      if (ref2) await exec('click', { target: ref2 })
+    }
 
     // ── 12 在沙箱里动手 ──
     const act = async (op, args) => { const r = await exec(op, args); return { r, a: r.ok && r.text ? JSON.parse(r.text).action : null } }

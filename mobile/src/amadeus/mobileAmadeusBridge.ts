@@ -331,7 +331,14 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       try { return await vault.readTextAbs(vault.absPath(p)) } catch { return null }
     },
     // 带 base = 比对交换写(与桌面 / web 同契约);编辑器保存与改名重写同走一把按路径的锁(见 writeText)。
-    writeTextFile: (p, text, opts) => writeText(p, text, { base: opts?.base, create: opts?.create }) as Promise<void | TextWriteResult>,
+    // 写成了就更新这一篇的索引(桌面主进程写盘即更索引,fs/pageWrite.ts):v4 编辑器存盘走的就是这条,
+    // 不更新的话标签、全文检索要等重开智库才看得到刚写的字,全文只剩标题能命中(手机走查 2026-11-19)。
+    // 索引在锁外读盘(同 propagateRenames 的写口);读失败不影响这次写的结果,下次 build 会补上。
+    writeTextFile: async (p, text, opts) => {
+      const r = await writeText(p, text, { base: opts?.base, create: opts?.create })
+      if (r === undefined || (r !== 'gone' && r.ok)) await index.update(p).catch(() => {})
+      return r as void | TextWriteResult
+    },
 
     // ---- 回收站(.trash 语义在 vaultManager;desktop 同款 trash 后全量重建索引) ----
     trashEntry: async (rel) => { await ensureVault(); await vault.trashEntry(rel); await index.build() },

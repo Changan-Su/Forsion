@@ -8,7 +8,7 @@
  * 结构照抄 agentLoopFinishGates.test.ts:真内存 SQLite + 真 loop,fake llm 按脚本逐轮出招。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -19,7 +19,7 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
-import { enqueueRun } from '../src/services/agentLoop.js';
+import { enqueueRun, enqueueSteer } from '../src/services/agentLoop.js';
 import { DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 
 const USER = 'u1';
@@ -98,6 +98,35 @@ const systemOf = (payload: any): string =>
 const toolNamesOf = (opts: any): string[] => (opts.tools || []).map((t: any) => t.function.name);
 
 describe('主 loop 的实验载体', () => {
+  it('preserves the whole drained steering batch when a HEIC conversion fails', async () => {
+    script = [() => {
+      expect(enqueueSteer('heic-steer', { id: 'steer-photo', content: 'Read this photo.',
+        attachments: [{ name: 'broken.heic', mimeType: 'image/heic', data: Buffer.from('broken').toString('base64') }] })).toBe(true);
+      expect(enqueueSteer('heic-steer', { id: 'steer-text', content: 'Keep this later message too.' })).toBe(true);
+      return finalStep('Initial reply.')();
+    }];
+    const run = await runToSettled('Start.', {}, 'heic-steer');
+    expect(run.status).toBe('failed');
+    expect(run.error).toContain('image_attachment_conversion_failed');
+    const rows = await query<any[]>('SELECT id FROM chat_messages WHERE id IN (?, ?) ORDER BY id', ['steer-photo', 'steer-text']);
+    expect(rows.map((r) => r.id)).toEqual(['steer-photo', 'steer-text']);
+  }, 20_000);
+
+  it('converts HEIC user attachments on first send and history replay', async () => {
+    const data = readFileSync(new URL('./fixtures/phone-digits.heic', import.meta.url)).toString('base64');
+    script = [finalStep('4826'), finalStep('4826')];
+    const attachment = { name: 'phone.heic', mimeType: 'image/heic', data };
+    expect((await runToSettled('Read this image.', { attachments: [attachment] }, 'heic-first')).status).toBe('done');
+    expect((await runToSettled('Read that image again.', {}, 'heic-replay')).status).toBe('done');
+    const imageUrls = (payload: any) => payload.messages.flatMap((m: any) => Array.isArray(m.content)
+      ? m.content.filter((p: any) => p.type === 'image_url').map((p: any) => p.image_url.url) : []);
+    const first = imageUrls(llmPayloads[0]);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatch(/^data:image\/jpeg;base64,/);
+    expect(imageUrls(llmPayloads[1])).toEqual(first);
+    expect(attachment.data).toBe(data);
+  }, 20_000);
+
   it('每轮 buildProviderPayload 都带上 agentId(=活跃 agent slug)与 runId', async () => {
     script = [
       () => ({

@@ -529,6 +529,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   color: var(--text-muted);
 }
 .cmd-foot kbd { margin: 0 1px; }
+.cmd-foot-count { margin-left: auto; } /* 手机上没有按键说明那一段时,条数照旧靠右 */
 
 /* ===== Dockview 的 LCL 皮肤:把 --dv-* 别名到 LCL token(叠在 dockview-theme-light|dark 之上) ===== */
 .dockview-theme-lcl {
@@ -811,6 +812,8 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   gap: 2px;
   -webkit-app-region: no-drag;
 }
+/* 宿主的窗口级附件(edgeAccessory.ts,如插件沙箱):排在浮钮组最前,和浮钮之间空出一截;高度跟浮钮对齐。 */
+.dv-edge-accessory { display: flex; align-items: center; gap: 4px; height: 26px; margin-right: 8px; }
 /* 保持 (0,1,0):别写成 .dv-edge-actions > .dv-edge-toggle,那会压过上面的 :hover 底色。 */
 .dv-edge-reset,
 .dv-edge-mini,
@@ -1063,6 +1066,14 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
  * 第一行留给浮钮组和系统按钮(仍是拖窗区),标签落到第二行、不再让位。系统按钮的高度只量没加行的标签头(tabTitleBar.ts)。
  * 只在 Windows 生效:mac 的浮钮组没有系统按钮叠加,照旧横向滚动。放文件末尾:与上面 .dv-under-edge 的让位同条标签头。 */
 [data-tab-titlebar] .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-edge.dv-edge-stacked {
+  height: calc(var(--dv-tabs-and-actions-container-height, 32px) * 2);
+  padding-top: var(--dv-tabs-and-actions-container-height, 32px);
+  padding-right: 0;
+}
+
+/* 宿主附件(edgeAccessory.ts,如插件沙箱条)在时浮钮组宽出两百来 px,mac / Linux 的窄右栏让完也没地方放标签了 →
+ * 同上落到第二行(11-20 评审)。没有附件的普通窗口不受影响:照旧横向滚动。 */
+:has(> .dv-edge-actions > .dv-edge-accessory) > .wb-workspace-viewport .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-edge.dv-edge-stacked {
   height: calc(var(--dv-tabs-and-actions-container-height, 32px) * 2);
   padding-top: var(--dv-tabs-and-actions-container-height, 32px);
   padding-right: 0;

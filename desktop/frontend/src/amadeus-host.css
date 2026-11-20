@@ -2036,6 +2036,11 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
 }
+/* 手机两级导航(列表层就是左栏抽屉):抽屉体自带一层 zoom 1.15,body 又一层,卡片被放大两次、比屏幕还宽,关闭钮出屏
+   (手机走查 2026-11-19)。只在这个形态把抽屉那层除掉(写成数:模拟器的 WebView 124 不认 zoom 里的 calc),视口单位再按
+   body 那层(--uiz)除回去;桌面与网页抽屉形态不变。卡片仍挂在列表里,跟着抽屉一起收。 */
+.mb-shell[data-list-first] .mb-drawer-body .amxc-overlay { zoom: 0.869565; }
+.mb-shell[data-list-first] .amxc-panel { width: min(400px, calc(100vw / var(--uiz, 1) - 48px)); max-height: min(600px, calc(100dvh / var(--uiz, 1) - 96px)); }
 .amxc-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; font-weight: 600; font-size: var(--ui-font-body, 13px); }
 .amxc-head > span { display: inline-flex; align-items: center; gap: 6px; }
 .amxc-x { border: 0; background: none; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm, 6px); padding: 3px; }

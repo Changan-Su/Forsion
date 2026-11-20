@@ -1,6 +1,6 @@
 /** 普通引擎对话的续接规则:真对话循环 + 内存 SQLite,引擎换成一个只记「这一轮让它续接哪个会话」的假管理器。
  *  规则只有一条:这场对话里最新的那条回答,必须就是那个引擎会话里最新的一条 —— 对不上就新开,不让引擎记着界面上已经没有的东西。 */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -104,6 +104,21 @@ describe('普通引擎对话的续接', () => {
     // 会话配置里不留指针(那一份客户端能整份改写、分支会照抄)
     const [{ agent_config }] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
     expect(JSON.stringify(agent_config ?? '')).not.toContain('ext-1');
+  }, 20_000);
+
+  // 引擎回得快时,两轮回答会落在同一毫秒(chat_messages.timestamp 只到毫秒)。「最新的回答」只按时间排、并列不补排,
+  // 就可能取到上一轮那条 → 判成对不上、新开(11-19 build-desktop unit-tests / engine 偶发红的根因)。这里把时钟钉住,让每一轮都同一毫秒。
+  it('几轮回答落在同一毫秒 → 照样续接(并列时按落库先后认最新的那条)', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_795_000_000_000);
+    try {
+      expect((await turn(1)).done).toBe(true);
+      expect((await turn(2)).done).toBe(true);
+      expect((await turn(3)).done).toBe(true);
+      expect((await turn(4)).done).toBe(true);
+    } finally { now.mockRestore(); }
+    const ts = await query<any[]>(`SELECT DISTINCT timestamp FROM chat_messages WHERE session_id = 'S'`);
+    expect(ts).toHaveLength(1); // 真的都落在同一毫秒,不然这条什么也没测
+    expect(resumes()).toEqual([null, 'ext-1', 'ext-1', 'ext-1']);
   }, 20_000);
 
   it('重新生成 / 编辑重发(最后那条回答被删了)→ 不续接,新开一个', async () => {

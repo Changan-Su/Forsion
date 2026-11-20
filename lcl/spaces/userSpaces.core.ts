@@ -34,6 +34,8 @@ export interface SpaceSpec {
    *  同名文件,所以 `"iconFile": "icon.png"` = 直接用插件图标。PNG 原色显示(方形 64~512px、≤256KB);
    *  SVG 只取轮廓、颜色跟随主题(≤64KB)。宿主读图,本解析器只保留字段;老宿主不认这个键。 */
   iconFile?: string
+  /** Opt a bundled plugin Space into one-time desktop shortcut creation. */
+  autoDesktopShortcut?: boolean
   /** 配方版本(插件/市场包升级时递增)。宿主据此判断「这份配方换过了」→ 丢弃该 Space 的
    *  已保存布局,让新配方真正落地;否则 setActiveSpace 恒走 applyNamed(保存布局优先),
    *  改了 layout 的新版对**用过该 Space 的用户永远不生效**。 */
@@ -248,6 +250,7 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
       name: name as SpaceSpec['name'],
       icon: typeof d.icon === 'string' ? d.icon : undefined,
       iconFile: typeof d.iconFile === 'string' ? d.iconFile : undefined,
+      ...(d.autoDesktopShortcut === true ? { autoDesktopShortcut: true } : {}),
       version: typeof d.version === 'string' ? d.version : undefined,
       mini,
       minAppVersion: typeof d.minAppVersion === 'string' ? d.minAppVersion : undefined,

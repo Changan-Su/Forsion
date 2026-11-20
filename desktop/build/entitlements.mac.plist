@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for Developer ID builds (electron-builder.config.cjs uses this file for the app
+  and, via entitlementsInherit, for every nested executable: Electron helpers, bundled node / python / git,
+  LibreOffice). Only applied when the build is signed with a Developer ID; ad-hoc builds carry no entitlements.
+-->
+<plist version="1.0">
+  <dict>
+    <!-- V8 in Electron and in the bundled node needs JIT and writable-executable pages. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Native modules (better-sqlite3 rebuilt in afterPack, python .so files, plugin native helpers). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <!-- Without these the hardened runtime silently denies microphone / camera (no TCC prompt, no error). -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+  </dict>
+</plist>
