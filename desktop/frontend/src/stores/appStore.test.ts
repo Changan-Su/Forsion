@@ -588,7 +588,7 @@ describe('appStore.reduceEvent', () => {
     expect(legacy.segments).toEqual([{ t: 'tools', ids: ['t1', 't2'] }, { t: 'text', text: dsml }])
   })
 
-  it('status/llm_retry 设置重试横幅,流恢复(下一个非 status 事件)即自清', () => {
+  it('status/llm_retry 设置重试横幅,流恢复(token 等)即自清', () => {
     const ref = { current: 'a1' }
     useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type: 'status', payload: { phase: 'llm_retry', attempt: 2, max: 3, waitMs: 3000, error: 'fetch failed' } } as AgentRunEvent)
     expect(useApp.getState().llmRetryBySession.s1).toMatchObject({ attempt: 2, max: 3, waitMs: 3000, error: 'fetch failed' })
@@ -619,23 +619,30 @@ describe('appStore.reduceEvent', () => {
     ev(4, { phase: 'llm_wait_network', since: 2000 })
     ev(5, { phase: 'llm_call', stage: 'sending', bytes: 100 })
     expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
-    // 普通重试横幅不被 llm_call 撤(照旧等首帧)
+    // 「几秒后重试」的倒计时也是:重发的 llm_call 一到就撤,不挂到首帧
     ev(6, { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 })
-    ev(7, { phase: 'llm_call', stage: 'sending', bytes: 100 })
     expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('retry')
+    ev(7, { phase: 'llm_call', stage: 'sending', bytes: 100 })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
   })
 
-  it('「网络已断开」不被等网期间的别的事件撤掉(如回答了挂起的提问),run 终态才撤', () => {
+  it('重试 / 等网横幅不被等待期间的无关事件撤掉(如回答了挂起的提问),流恢复或 run 终态才撤', () => {
     const ref = { current: 'a1' }
     const re = (seq: number, type: string, payload: any) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq, type, payload } as AgentRunEvent)
-    re(1, 'status', { phase: 'llm_wait_network', since: 1 })
-    re(2, 'inquiry_result', { inquiryId: 'q1', answer: 'ok' })
-    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('wait_network')
-    re(3, 'error', { error: 'aborted', aborted: true, content: '' })
+    // 普通重试横幅:无关事件不撤,流恢复(推理 / 工具调用 / 正文)才撤
+    re(1, 'status', { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 })
+    re(2, 'inquiry_result', { inquiryId: 'q2', answer: 'ok' })
+    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('retry')
+    re(3, 'reasoning', { delta: 'thinking' })
     expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
-    // 普通重试横幅照旧:第一个非 status 事件就撤
-    re(4, 'status', { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 })
-    re(5, 'inquiry_result', { inquiryId: 'q2', answer: 'ok' })
+    re(4, 'status', { phase: 'llm_retry', attempt: 2, max: 3, waitMs: 2000 })
+    re(5, 'tool_call', { id: 't1', name: 'read_file', args: {} })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
+    // 「网络已断开」同样:回答提问不撤,run 终态撤
+    re(6, 'status', { phase: 'llm_wait_network', since: 1 })
+    re(7, 'inquiry_result', { inquiryId: 'q1', answer: 'ok' })
+    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('wait_network')
+    re(8, 'error', { error: 'aborted', aborted: true, content: '' })
     expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
   })
 
