@@ -150,7 +150,8 @@ async function main() {
     await panel.getByRole('button', { name: '已安装插件', exact: true }).click()
     const plugin = panel.locator('[data-plugin-id="bluebird"]'); await plugin.waitFor()
     const toggle = plugin.locator('[data-plugin-switch], [data-bundle-switch]')
-    await toggle.uncheck()
+    await toggle.click()
+    await panel.locator('[data-disable-reasons] [data-reason="none"]').click() // 拨下先问停用理由(遥测 v3):直接停用
     await win.locator('[data-card-unavailable="plugin:bluebird:library-list"]').waitFor()
     check('禁用青鸟即时撤下现有卡片', await bookmarks.count() === 0)
     await toggle.check()

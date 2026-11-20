@@ -165,6 +165,7 @@ async function main() {
     // B
     const appSwitch = () => fl.locator(`[data-plugin-detail="${APP}"] [data-plugin-switch]`)
     await appSwitch().click() // 关
+    await fl.locator('[data-disable-reasons] [data-reason="none"]').click() // 先问停用理由(遥测 v3):直接停用
     check('B 关掉后前置仍没齐 → 开关灰掉(开不了)', await waitFor(() => appSwitch().isDisabled()))
     await back()
 
@@ -190,6 +191,7 @@ async function main() {
 
     // D
     await listSwitch(LIB).click() // 关前置
+    await fl.locator('[data-disable-reasons] [data-reason="none"]').click() // 先问停用理由(遥测 v3):直接停用,再走依赖确认
     check('D 关前置先确认,并点名依赖方', await waitFor(async () => dialogs.some((m) => m.includes('Deps App'))), dialogs.join(' / ').slice(0, 160))
     check('D 依赖方暂停 → 回到「等待前置插件」', await waitFor(() => waiting(APP)))
     const shotPaused = path.join(temp, 'plugin-deps-paused.png')

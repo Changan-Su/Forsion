@@ -227,6 +227,7 @@ async function main() {
     // ── ③c 停用状态下卸载:规则本来就停着;停用记录留着,恢复后仍是停用
     fl = await openPlugins(app, win)
     await fl.locator(`[data-plugin-id="${ID}"] [data-plugin-switch]`).click()
+    await fl.locator('[data-disable-reasons] [data-reason="none"]').click() // 拨下先问停用理由(遥测 v3):直接停用
     check('③c 停用后规则停了', await waitFor(async () => (await rule())?.enabled === false))
     await uninstall(fl)
     await waitFor(async () => !fs.existsSync(pluginDir))

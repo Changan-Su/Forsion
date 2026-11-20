@@ -282,8 +282,10 @@ interface PluginState {
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
   init(plugins?: AmadeusPlugin[]): void
-  enable(id: string): void
-  disable(id: string): void
+  /** opts.quiet:调用方自己报了 plugin_lifecycle(带主进程半身的内置包开关),这里不再报。 */
+  enable(id: string, opts?: { quiet?: boolean }): void
+  /** opts.reason:用户手拨停用时选的理由(遥测 v3,可不选);opts.quiet 同上。熔断等自动停用不带。 */
+  disable(id: string, opts?: { reason?: string; quiet?: boolean }): void
   toggle(id: string): void
   /** Reconcile another window's persisted preference without replaying user-side automation effects. */
   syncDisabledPreferences(): void
@@ -3584,13 +3586,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    enable(id) {
+    enable(id, opts) {
       const plugin = get().plugins.find((p) => p.id === id)
       if (!plugin || plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
       if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
       noteExplicitEnable(id) // 用户重开 = 重试
-      if (get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
+      if (!opts?.quiet && get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
       try {
         localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
       } catch {
@@ -3601,11 +3603,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    disable(id) {
+    disable(id, opts) {
       clearNoteRendererReload(id)
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
-      if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
+      if (plugin && !opts?.quiet && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable', ...(opts?.reason ? { reason: opts.reason } : {}) })
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       const before = get().activeIds
