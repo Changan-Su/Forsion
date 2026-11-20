@@ -1163,6 +1163,7 @@ export interface TanguState {
 export function createTanguSlice(set: StoreApi<AppState>['setState'], get: StoreApi<AppState>['getState'], h: TanguSliceDeps): TanguState {
   host = h
   store = { get, set }
+  initFirstRun() // 首次运行(遥测 v3)的首启时刻:建 store = 开窗那一刻,早于首启引导(sinceFirstLaunchS 要把引导算进去)
   return tanguMembers(set, get)
 }
 
@@ -2157,7 +2158,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
     const t = homeTarget()
-    initFirstRun() // 首次运行的首启时刻(本版本起;已有记录就不动)
+    initFirstRun() // 兜底:建 store 时存储读不了的话这里再试(已有记录就不动)
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== host.authGen()) return []
     noteSessionsListed([...act, ...arch]) // 本端列表真读回来了:首启前就有会话 = 升级上来的,首次运行不发(旧一轮的结果也是真列表)
