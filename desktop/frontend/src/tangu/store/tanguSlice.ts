@@ -36,7 +36,7 @@ import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../..
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
 import { turnResumeMarker, isContinuationRow, isInterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
-import { inflightFromResult, markUnfinishedInflight } from '../inflightTool'
+import { inflightFromResult, markUnfinishedInflight, type ToolEventWithInflight } from '../inflightTool'
 import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -201,6 +201,15 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
   }
   if (r.is_error) msg.status = 'error'
   return msg
+}
+
+/**
+ * 接上一条**还在跑**的 run 时,它的回答行若已在历史里(引擎边跑边落库:做到一半的正文 + 占位工具结果,recordToUi 记成 done),
+ * 清成空的在跑气泡再订阅:订阅从 seq 0 回放,正文 / 思考 / 工具调用由回放原样重建 —— 不清就会把落库的那半截再拼一遍,
+ * 占位也会把在跑的那一步画成「被打断」。计划卡、草图卡、审批等不在回放里重建的字段留着(草图按 callId 去重)。
+ */
+export function replayRow(m: UiMessage): UiMessage {
+  return { ...m, content: '', segments: undefined, toolEvents: undefined, reasoning: undefined, status: 'streaming' }
 }
 
 /**
@@ -1356,7 +1365,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         patchMessage(sessionId, assistantId, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
-          const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup }
+          // inflight: undefined —— 历史里的占位(断在半截)这会儿在线接上了,别再画成「被打断」
+          const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup, inflight: undefined }
           if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs, ...endThink(m), ...(m.live ? { live: undefined } : {}) } }
           evs.push(item)
           return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...endThink(m), ...(m.live ? { live: undefined } : {}) }
@@ -1373,13 +1383,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const i = evs.findIndex((tt) => tt.id === pl.id)
           if (i >= 0) {
             evs[i] = {
-              ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true,
+              ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true, inflight: undefined, // 真结果到了:占位作废
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
               masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
               sources: sourcesFromMetadata(evs[i].name || pl.name, pl.metadata),
-            }
+            } as ToolEventWithInflight
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
             if (sk && !(m.sketches || []).some((s) => s.callId === sk.callId)) {
@@ -1786,7 +1796,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
           // 任务清单带进新段:最新那份总在当前段上 —— 跑着转圈、停在这段报「已停止」;旧段留它那份快照(已 done,不带状态词)
           if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(prevSeg?.todos?.length ? { todos: prevSeg.todos } : {}) })
-          return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...next, ...additions] } }
+          // 回放(重开 / pollSession 接上在跑的 run)时新段已经在历史里了:引擎边跑边落库,那一行带着做到一半的正文 / 占位结果,
+          // 接下来回放的 token 会再拼一遍 —— 清成空的在跑气泡,由回放重建。只清从历史来的(不是 streaming):在线时新段 id 不会事先存在,
+          // 团队成员那种事先摆好的在跑占位不动
+          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' && m.status !== 'streaming' ? replayRow(m) : m)) : next
+          return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...replayed, ...additions] } }
         })
         if (users.length) set((s) => touchSessionActivity(s, sessionId))
         if (newId) assistantRef.current = newId
@@ -2339,7 +2353,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const amid = run.assistant_message_id
           set((s) => {
             const list = s.messagesBySession[sessionId] || []
-            if (list.some((m) => m.id === amid)) return s
+            const i = list.findIndex((m) => m.id === amid)
+            if (i >= 0) return subscribedRuns.has(run.id) ? s : { messagesBySession: { ...s.messagesBySession, [sessionId]: list.map((m, j) => (j === i ? replayRow(m) : m)) } }
             return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: amid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), ...stamp }] } }
           })
           get().subscribeRun(sessionId, run.id, amid)
@@ -2411,7 +2426,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const amid = run.assistant_message_id
           set((s) => {
             const list = s.messagesBySession[sessionId] || []
-            if (list.some((m) => m.id === amid)) return s
+            const i = list.findIndex((m) => m.id === amid)
+            if (i >= 0) return { messagesBySession: { ...s.messagesBySession, [sessionId]: list.map((m, j) => (j === i ? replayRow(m) : m)) } }
             return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: amid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), ...stamp }] } }
           })
           get().subscribeRun(sessionId, run.id, amid)

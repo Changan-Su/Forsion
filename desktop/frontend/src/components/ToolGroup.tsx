@@ -326,7 +326,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
   const active = running && !ev.done && !asking
   const Icon = KIND_ICON[desc.kind]
-  const inflight = inflightOf(ev)
+  // 只在这条回答已不在跑时算「被打断」:接上在跑的 run 时,历史里那一步的占位会被回放的真事件换掉
+  const inflight = running ? undefined : inflightOf(ev)
   return (
     <div className="tool-row" data-inflight={inflight?.state}>
       <button className="tool-row-head" aria-busy={active} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
@@ -442,7 +443,7 @@ export const ToolGroup: React.FC<{
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
-  const anyInflight = groupedEvents.some((e) => !!inflightOf(e))
+  const anyInflight = !running && groupedEvents.some((e) => !!inflightOf(e))
   // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
   const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])

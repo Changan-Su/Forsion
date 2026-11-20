@@ -59,4 +59,10 @@ describe('engine stop paths × shutdown reason', () => {
     expect(keys).not.toContain('autoResumeInterrupted')
     expect(handler('config:set')).toContain('backend.setAutoResume(')
   })
+
+  it('the setting persists in the desktop shell file (written only when patched, so other config:set calls leave it alone) and defaults to on', () => {
+    expect(between('const SHELL_KEYS: Array<keyof TanguStoredConfig> = [', ']')).toContain("'autoResumeInterrupted',")
+    expect(main).toMatch(/keepAwakeWhileRunning: false,\n\s*autoResumeInterrupted: true,/) // DEFAULT_CONFIG
+    expect(main).toContain("backend.setAutoResume(stored.autoResumeInterrupted !== false)") // 每次拉起前按落盘值对齐内存镜像
+  })
 })

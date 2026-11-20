@@ -8,13 +8,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, UiMessage } from '../types'
-const service = vi.hoisted(() => ({ subscribe: vi.fn(), stop: vi.fn(), active: vi.fn(), messages: vi.fn(), history: vi.fn() }))
+const service = vi.hoisted(() => ({ subscribe: vi.fn(), stop: vi.fn(), active: vi.fn(), messages: vi.fn(), history: vi.fn(), config: vi.fn(), usage: vi.fn() }))
 vi.mock('../services/agentRunService', async (original) => ({
   ...await original<typeof import('../services/agentRunService')>(),
   subscribeRunEvents: service.subscribe, abortRunAndWait: service.stop, listActiveRuns: service.active,
 }))
 vi.mock('../services/backendService', async (original) => ({
   ...await original<typeof import('../services/backendService')>(), listMessages: service.messages, listHistory: service.history,
+  getSessionConfig: service.config, getSessionUsage: service.usage,
 }))
 import { useApp } from './appStore'
 import { abortAllTanguRuns, withFailedRuns } from '../tangu/store/tanguSlice'
@@ -45,6 +46,8 @@ beforeEach(() => {
   service.active.mockResolvedValue([])
   service.messages.mockResolvedValue([{ id: 'a1', content: 'half of the answer' }])
   service.history.mockResolvedValue({ messages: [], failedRuns: [] })
+  service.config.mockResolvedValue({})
+  service.usage.mockResolvedValue({ base: 0, ctx: 0 })
   useApp.getState().subscribeRun(SID, 'run-1', 'a1')
 })
 afterEach(async () => { abortAllTanguRuns(); await Promise.resolve(); useApp.setState(initial, true); vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -153,5 +156,57 @@ describe('reopening a conversation', () => {
     const { connectionTarget } = await import('../services/engine/targets')
     const { abortRunAndWait: realAbortRunAndWait } = await vi.importActual<typeof import('../services/agentRunService')>('../services/agentRunService')
     expect(await realAbortRunAndWait(connectionTarget({ backendUrl: 'https://example.test', token: 't' } as never), 'r', 's')).toBe('interrupted')
+  })
+})
+
+// 引擎边跑边落库:还在跑的那一轮,回答行(半截正文 + 占位工具结果)已经在历史里了。重开对话 / pollSession 接上它时
+// 订阅从 seq 0 回放 —— 不能把正文再拼一遍,在跑的那一步也不能画成「被打断」。
+describe('attaching to a run that is still going while its row is already persisted', () => {
+  const persisted = {
+    id: 'a-live', role: 'model', content: 'step one done', timestamp: 3,
+    tool_calls: [{ id: 'c1', function: { name: 'run_bash', arguments: '{"command":"ls"}' } }],
+    tool_results: [{ tool_call_id: 'c1', name: 'run_bash', inflight: { state: 'started', sideEffect: 'system' } }],
+  }
+  const replay = (run: string) => {
+    emit('token', { delta: 'step one done' }, run)
+    emit('tool_call', { id: 'c1', name: 'run_bash', arguments: '{"command":"ls"}' }, run)
+  }
+  const check = async (run: string) => {
+    const live = () => useApp.getState().messagesBySession[SID].find((m) => m.id === 'a-live')!
+    expect(live()).toMatchObject({ status: 'streaming', content: '' }) // 清成空的在跑气泡,等回放
+    replay(run)
+    expect(live().content).toBe('step one done') // 不是 'step one donestep one done'
+    expect(live().toolEvents?.[0]).toMatchObject({ id: 'c1', done: false })
+    expect(inflightOf(live().toolEvents![0])).toBeUndefined()
+    emit('tool_result', { id: 'c1', result: 'a.md' }, run)
+    expect(live().toolEvents?.[0]).toMatchObject({ done: true, result: 'a.md' })
+    emit('done', { content: 'step one done' }, run)
+    expect(live()).toMatchObject({ status: 'done', content: 'step one done' })
+  }
+  beforeEach(() => {
+    abortAllTanguRuns()
+    useApp.setState({ runningBySession: {}, messagesBySession: {} })
+    service.history.mockResolvedValue({ messages: [{ id: 'u1', role: 'user', content: 'go', timestamp: 1 }, persisted], failedRuns: [] })
+    service.active.mockResolvedValue([{ id: 'run-live', status: 'running', assistant_message_id: 'a-live' }])
+  })
+  it('via loadSessionHistory', async () => {
+    useApp.setState({ connState: 'ok' })
+    await useApp.getState().loadSessionHistory(SID)
+    expect(useApp.getState().runningBySession[SID]).toBe('run-live')
+    await check('run-live')
+  })
+  it('via pollSession', async () => {
+    await useApp.getState().pollSession(SID)
+    expect(useApp.getState().runningBySession[SID]).toBe('run-live')
+    await check('run-live')
+  })
+  it('a real tool_result clears a placeholder that is still on the row', () => {
+    useApp.setState({ messagesBySession: { [SID]: [{ id: 'a-x', role: 'assistant', content: '', status: 'streaming', timestamp: 4,
+      toolEvents: [{ id: 'c9', name: 'read_file', done: true, result: undefined, isError: false, inflight: { state: 'started' } } as never] }] } })
+    useApp.getState().subscribeRun(SID, 'run-x', 'a-x')
+    emit('tool_result', { id: 'c9', result: 'body' }, 'run-x')
+    const ev = useApp.getState().messagesBySession[SID][0].toolEvents![0]
+    expect(ev).toMatchObject({ done: true, result: 'body' })
+    expect(inflightOf(ev)).toBeUndefined()
   })
 })
