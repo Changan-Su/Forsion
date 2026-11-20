@@ -8,8 +8,9 @@
  *    整行(C3 spike 实测)。自写版按真指针坐标命中,爬升规则保留其「首子归外壳」,加一条:
  *    **cell 内首子不归壳**(列内逐块粒度);定位改绝对定位÷zoomOf,顺带根治浮动把手 zoom 漂移)。
  *  - dragstart 序列化照抄 plugin-block:serializeForClipboard + view.dragging={slice,move}。
- *  - prosemirror-drop-indicator:dragover 逐块上下边沿找最近落点(嵌套边沿自带缩进 x),
- *    handleDrop 用精确落点替换 PM 默认 dropPoint(默认那个会诡异重嵌套);同文档移动=删+插一个事务。
+ *  - 精确落点 = dropTargets.ts(改自 prosemirror-drop-indicator):dragover 逐块上下边沿找最近落点(嵌套边沿
+ *    自带缩进 x),handleDrop 用精确落点替换 PM 默认 dropPoint(默认那个会诡异重嵌套);同文档移动=删+插一个事务。
+ *    左右页边(view.dom 之外)与按帧自动滚动后的重判也走它(页面编辑手感方案 2026-11-17,见 handlePlugin)。
  *  - AFFiNE 行为基准:块内打字藏把手 / callout(blockquote)整只一个把手 / 表格内部不出把手 /
  *    Esc 两段(文字 → 块选中 → 回文字)。多选/框选归 Phase B。 */
 import { CALLOUT_HEAD_RE } from '../../../../shared/amadeus/calloutToken'
@@ -24,9 +25,9 @@ import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
-import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
+import { createDropTargets, performDrop } from './dropTargets'
 import { calloutOf, unfoldCalloutsForInsert } from '../blocks/markdown/callout'
-import { zoomOf, dropRetarget, dropHide, createsFixedContainingBlock } from '@lcl/engine'
+import { zoomOf, dropRetarget, dropHide, createsFixedContainingBlock, landOffset, releasePoint, reducedMotion, LAND_MS } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
@@ -291,6 +292,33 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   }
   const hideVline = (): void => dropHide(vline)
   const EDGE = 28
+  /** 左页边「拼左栏区」的起点 = 块左缘往外,越过 ⠿ 左沿再 6px(页面编辑手感方案第 1 条,照 Notion 分道:
+   *  ⠿ 那一道和它右边都是换位,越过 ⠿ 才拼左栏;正文里不再有左侧拼栏带)。= 把手栏实际伸出量 + 6,
+   *  dragstart 时按当时的把手栏量(折叠钮 / 抓卡钮在时栏更宽,⠿ 更靠左);没量到用 56。 */
+  let pairLaneW = 56
+  /** 页边判定期间(指针在 view.dom 左 / 右之外,判定坐标钳进了正文):onDrag 据此不认列表子项、不进分栏格。 */
+  let marginEval: 'left' | 'right' | null = null
+  /** ⠿ 左边没地方拼左栏(窄 pane 左页边只有 48px < 把手栏 + 6,或悬浮目录盖住那块):退回旧的
+   *  正文左缘 EDGE 带拼左栏,不让「拼左栏」整个够不着。拖动中随 pane 改宽 / 目录展开跟着变,
+   *  一次 dragover 里的多次判定只量一次(见 leftPairInner / handlePlugin 的 leftPairRoom)。 */
+  let pairLeftInner = false
+  let pairLeftInnerAt = -Infinity
+  let measureLeftRoom: (() => number) | null = null
+  const leftPairInner = (): boolean => {
+    const now = performance.now()
+    if (now - pairLeftInnerAt > 40) {
+      pairLeftInner = (measureLeftRoom?.() ?? Infinity) < 16
+      pairLeftInnerAt = now
+    }
+    return pairLeftInner
+  }
+  /** pos 处的块在分栏行的第二列及以后:它的 ⠿ 落在列缝里,左边没有「越过 ⠿」的地方 → 左缘 EDGE 带照旧
+   *  (在深处两列之间插一列只有这条路;照 Notion 分道只改顶层与首列)。 */
+  const inLaterCell = (view: EditorView, pos: number): boolean => {
+    const $p = view.state.doc.resolve(pos)
+    for (let d = $p.depth; d >= 1; d--) if ($p.node(d).type.name === 'amadeusColumnCell') return $p.index(d - 1) > 0
+    return false
+  }
 
   // ── 分栏行下方落点(第5振):指针越过行底 → 落点=行后顶层,整宽横线。与 pairRef 同一套
   // 捕获期 drop 单点路由;横线复用 .unified-drop-line 样式(关掉入场动画,拖拽逐 tick 重定位不重播)。
@@ -450,6 +478,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     if (!tNode || tNode.type.name !== 'list_item') return false
     const at = hasNested ? tPos + tNode.nodeSize - 2 : tPos + tNode.nodeSize - 1
     tr = tr.insert(at, hasNested ? item : (last.type.name.endsWith('_list') ? last.type : bullet).create(null, item))
+    // 选中落下的那一项再滚:删源之后选区留在源处,直接 scrollIntoView 会把视图拽回起拖的地方
+    // (贴边自动滚了很远再松手时一跳几百 px)。
+    try {
+      tr.setSelection(NodeSelection.create(tr.doc, hasNested ? at : at + 1))
+    } catch { /* 选不中就保持原选区 */ }
     tr.setMeta('amxColumns', true)
     view.dispatch(tr.scrollIntoView())
     return true
@@ -841,7 +874,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
    *  ③它只问最近 8 个候选,另一列若有一串短块会把本列的候选整个挤出去 = 不出线也不落。
    *  dragover 画线与 drop 执行共用这一份判定(线说真话)。三种情况交回插件/原路:
    *  列缝(不归任何列)、指针在容器块里面(列表 / callout / 表格:插件能落进容器,嵌套边沿也更细)、
-   *  块左右缘 ≤EDGE 的配对区(那是「成新列」)。 */
+   *  配对区(那是「成新列」):块右缘 ≤EDGE;左缘 ≤EDGE 只在非首列、或这次拖动 ⠿ 左边没地方时
+   *  (首列与顶层照 Notion 分道,左缘以内是换位,拼左栏在左页边越过 ⠿)。与 onDrag 的竖线判据同源。 */
   interface CellDrop { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean }
   const planCellDrop = (view: EditorView, e: DragEvent): CellDrop | null => {
     const sel = view.state.selection
@@ -851,8 +885,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     for (const rowEl of view.dom.querySelectorAll<HTMLElement>(':scope > .amx-ucolrow')) {
       const rr = rowEl.getBoundingClientRect()
       if (e.clientY < rr.top || e.clientY > rr.bottom || e.clientX < rr.left || e.clientX > rr.right) continue
+      let ci = -1
       for (const cellEl of Array.from(rowEl.children)) {
         if (!boxed(cellEl) || !('amxColcell' in cellEl.dataset)) continue
+        ci++
         const cr = cellEl.getBoundingClientRect()
         if (e.clientX < cr.left || e.clientX > cr.right) continue
         try {
@@ -872,7 +908,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
                   // 更深节点」当判据永远不成立 —— 列内拖不进 callout,列表的线还忽整只忽逐项地跳)。
                   // 文本块与原子块(段落、标题、代码块、图片段、分割线)整块接管:高块中段的死区在这类块上。
                   if (!child.isTextblock && !child.isAtom) return null
-                  if (e.clientX <= r.left + EDGE || e.clientX >= r.right - EDGE) return null // 配对区
+                  // 配对区量的元素与 onDrag 的竖线同一个(居中图片段量图本身,不是整段 <p>)
+                  const vr = visualBlockElement(el).getBoundingClientRect()
+                  if (((ci > 0 || leftPairInner()) && e.clientX <= vr.left + EDGE) || e.clientX >= vr.right - EDGE) return null // 配对区
                 }
                 const before = e.clientY <= r.top + r.height / 2
                 const at = before ? pos : pos + child.nodeSize
@@ -1128,10 +1166,77 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         content.addEventListener('mousedown', showHoverRect)
         window.addEventListener('mouseup', hideHoverRect)
 
+        /** 拖起那一下指针在被拖块(多块 = 并集)里的位置:松手时 releasePoint(drop, 它) = 拖影左上角 = 落位起点。 */
+        let dragGrabPt: { x: number; y: number } | null = null
+        /** 拖影(页面编辑手感方案第 3 条):块的副本,去掉选中底色、字 52% 正文色、不加阴影;外面包一层
+         *  左 / 上透明补白(= 指针在块外那一截),setDragImage(包装, 指针在包装里的位置) —— 偏移恒为正、拖影
+         *  与原文对齐,拿起来不跳。原来是 setDragImage(块本身, 0, 0):块左上角钉在指针上(⠿ 在块左 30–60px,
+         *  一拿起来就往右下跳),还把选中灰底一起拍进去。副本放进 .milkdown(吃得到正文排版),视口外,下一帧摘掉。
+         *  祖先给 fixed 当包含块(画布舞台的 transform)时副本会跟着缩放、位置不可靠:返回 null,调用方退回旧拖影。 */
+        const makeDragGhost = (view: EditorView, els: HTMLElement[], e: DragEvent): { node: HTMLElement; x: number; y: number } | null => {
+          const host = view.dom.parentElement
+          if (!host || !els.length) return null
+          for (let p: HTMLElement | null = host; p; p = p.parentElement) if (createsFixedContainingBlock(getComputedStyle(p))) return null
+          const z = visualScale(view.dom)
+          const rects = els.map((el) => el.getBoundingClientRect())
+          const left = Math.min(...rects.map((r) => r.left))
+          const top = Math.min(...rects.map((r) => r.top))
+          const right = Math.max(...rects.map((r) => r.right))
+          const bottom = Math.max(...rects.map((r) => r.bottom))
+          if (!(right > left && bottom > top)) return null
+          const gx = e.clientX - left
+          const gy = e.clientY - top
+          const padL = Math.max(0, -gx)
+          const padT = Math.max(0, -gy)
+          const wrap = document.createElement('div')
+          wrap.className = 'unified-drag-ghost'
+          wrap.style.padding = `${padT / z}px 0 0 ${padL / z}px`
+          const page = document.createElement('div')
+          page.className = `${view.dom.className} unified-drag-ghost-page` // .ProseMirror 等:副本按正文排版画
+          page.style.width = `${(right - left) / z}px`
+          page.style.height = `${(bottom - top) / z}px`
+          els.forEach((el, i) => {
+            const c = el.cloneNode(true) as HTMLElement
+            for (const n of [c, ...Array.from(c.querySelectorAll<HTMLElement>('*'))]) {
+              n.classList.remove('ProseMirror-selectednode', 'amx-block-selected', 'amx-rendered-selected')
+              n.removeAttribute('id')
+              n.removeAttribute('data-range-selected')
+            }
+            // 会重新加载 / 克隆出来是空白的东西,在副本挂进文档**之前**换成同尺寸的淡底块(嵌入 iframe / webview
+            // 克隆一份挂上去 = 再起一次导航)。尺寸从原件量:没挂上的副本 offsetWidth 恒为 0。
+            const MEDIA = 'iframe, webview, video, canvas, object, embed'
+            const orig = Array.from(el.querySelectorAll<HTMLElement>(MEDIA))
+            Array.from(c.querySelectorAll<HTMLElement>(MEDIA)).forEach((m, k) => {
+              const ph = document.createElement('div')
+              ph.className = 'unified-drag-ghost-media'
+              const src = orig[k]
+              ph.style.width = `${(src ? src.getBoundingClientRect().width : 0) / z}px`
+              ph.style.height = `${(src ? src.getBoundingClientRect().height : 0) / z}px`
+              m.replaceWith(ph)
+            })
+            c.classList.add('unified-drag-ghost-blk')
+            const r = rects[i]
+            Object.assign(c.style, { position: 'absolute', margin: '0', left: `${(r.left - left) / z}px`, top: `${(r.top - top) / z}px`, width: `${r.width / z}px` })
+            page.appendChild(c)
+          })
+          wrap.appendChild(page)
+          host.appendChild(wrap)
+          // 浏览器在 dragstart 处理完时才拍拖影:下一帧再摘(rAF 不来 —— 窗口在后台 —— 也有个兜底)。
+          const drop = (): void => wrap.remove()
+          requestAnimationFrame(drop)
+          setTimeout(drop, 1000)
+          return { node: wrap, x: gx + padL, y: gy + padT }
+        }
+
         // dragstart 序列化照抄 plugin-block:slice 进 DataTransfer + view.dragging={slice,move}。
         // ⠿ 与图片本体两个起拖口共用;dragImage 空 = 用浏览器自己的拖影(图片本体起拖时就是那张图)。
         const beginBlockDrag = (view: EditorView, event: DragEvent, dragImage: HTMLElement | null): void => {
           view.dom.dataset.dragging = 'true'
+          // 左页边拼左栏区按这次的把手栏量(见 pairLaneW)。
+          pairLaneW = ((content.offsetWidth || 52) + 8) * visualScale(view.dom) + 6
+          measureLeftRoom = leftPairRoom
+          pairLeftInnerAt = -Infinity
+          hideHoverRect() // 拖动期间不叠按压高亮(原位只淡到 0.58,见 styles.css)
           let sel = view.state.selection
           // 拖折起的标题 = 标题 + 藏着的小节一个整体,且**折着拖**(B-04:此前先展开,正文在指针下方跳动,
           // 落下后只带走标题一行)。把选区换成盖住整节的块选区 → 走跨块整批拖的既有路径(executeMoveBlocks /
@@ -1164,7 +1269,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             event.dataTransfer.clearData()
             event.dataTransfer.setData('text/html', dom.innerHTML)
             event.dataTransfer.setData('text/plain', text)
-            if (dragImage) event.dataTransfer.setDragImage(dragImage, 0, 0)
+            // 拖的是哪几块(拖影 = 它们的副本;松手落位按它们的左上角算抓的位置)。
+            const els = multi
+              ? (Array.from(view.dom.children) as HTMLElement[]).filter((el) => el.classList.contains('amx-block-selected'))
+              : [dragImage ?? (view.nodeDOM(sel.from) as HTMLElement | null)].filter((el): el is HTMLElement => el instanceof HTMLElement)
+            const ghost = dragImage ? makeDragGhost(view, els, event) : null
+            if (ghost) event.dataTransfer.setDragImage(ghost.node, ghost.x, ghost.y)
+            else if (dragImage) event.dataTransfer.setDragImage(dragImage, 0, 0)
+            const top = els.length ? els.map((el) => el.getBoundingClientRect()).reduce((m, r) => ({ x: Math.min(m.x, r.left), y: Math.min(m.y, r.top) }), { x: Infinity, y: Infinity }) : null
+            dragGrabPt = top ? { x: event.clientX - top.x, y: event.clientY - top.y } : null
             view.dragging = { slice, move: true } as EditorView['dragging']
           }
         }
@@ -1208,6 +1321,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             foldDragHead = null
           }
           hideHoverRect()
+          dragPt = null
+          dragGrabPt = null
+          stopAutoScroll()
+          marginActive = false
+          marginMulti = false
           markDropCard(null) // Esc 取消若没触发 root 的 dragleave,画布目标卡的描边会留到下一次拖拽(Codex 评审)
           pairRef = null
           belowRef = null
@@ -1633,36 +1751,40 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
 
         container.appendChild(content)
 
-        // hover 命中:真指针坐标(节流);命中失败**不藏**(块间空隙抖动),离开容器/滚动/打字才藏。
+        // hover 命中:真指针坐标,**按帧合并**(页面编辑手感方案第 4 条:原 80ms 节流 + 后沿,划得快时
+        // 39–54% 的帧把手指着别的块、最长落后 242ms);一帧里只做最后一次 move 的命中,停住时也不会
+        // 停在倒数第二格。命中失败**不藏**(块间空隙抖动),离开容器/滚动/打字才藏。
         // 指针在编辑区**左右余白**(pane 内、view.dom 盒外)但与某行同水平线:把 x 钳到编辑区
         // 边缘重试(AFFiNE 同款,余白 hover 也出把手 —— 真机第5振追加项)。
-        let lastMove = 0
-        // ⚠️ 80ms 节流必须带**后沿**:只做前沿的话,「快速划过去然后停住」的最后一次 move 被丢掉,
-        //    把手就停在倒数第二个位置上(指针明明在甲上、把手却锚着甲二)。实测可复现:
-        //    先 hover 乙、再 hover 甲,折叠钮不出现 —— 因为生效的是中途那一格。
-        let trailTimer: ReturnType<typeof setTimeout> | null = null
+        let movePt: { x: number; y: number } | null = null
+        let moveRaf = 0
+        /** 指针最后在 pane 里的位置(滚完补命中用,第 8 条);离开 pane 清掉。 */
+        let lastPointer: { x: number; y: number } | null = null
         const onMouseMove = (e: MouseEvent): void => {
+          lastPointer = { x: e.clientX, y: e.clientY }
           // 指针在把手上 = 正要去抓它,不换目标。非首列块的把手画在块左侧 w+8,压在前一列上方:
           // 这里再按坐标 pickBlockAt,PM 的 posAtCoords 会按几何落进前一列的块,把手当场跳走 ——
           // 右栏块的 ⠿ 永远够不着(2026-09-22 探针:块 → 列缝(row,不重锚)→ 把手,中间没有裸露带)。
           if (content.contains(e.target as Node)) {
-            if (trailTimer) clearTimeout(trailTimer)
-            trailTimer = null
+            movePt = null
             return
           }
-          const now = Date.now()
-          if (now - lastMove < 80) {
-            const { clientX, clientY } = e
-            if (trailTimer) clearTimeout(trailTimer)
-            trailTimer = setTimeout(() => {
-              trailTimer = null
-              lastMove = Date.now()
-              handleMove(clientX, clientY)
-            }, 80)
+          // 把手栏收着(打字 / 滚动后)时,第一次移动当场命中:否则同一刻的点击(移过去就点 ＋ / ⠿)
+          // 落在还没显出来的把手栏上,打空(check:menus B19c)。显出来以后才按帧合并。
+          if (content.dataset.show !== 'true') {
+            if (moveRaf) { cancelAnimationFrame(moveRaf); moveRaf = 0 }
+            movePt = null
+            handleMove(e.clientX, e.clientY)
             return
           }
-          lastMove = now
-          handleMove(e.clientX, e.clientY)
+          movePt = { x: e.clientX, y: e.clientY }
+          if (moveRaf) return
+          moveRaf = requestAnimationFrame(() => {
+            moveRaf = 0
+            const p = movePt
+            movePt = null
+            if (p) handleMove(p.x, p.y)
+          })
         }
         const handleMove = (clientX: number, clientY: number): void => {
           const e = { clientX, clientY }
@@ -1682,10 +1804,15 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           // 移出 pane 才算离开;移到把手/编辑器任意处不算(都还在 root 里)。
           const to = e.relatedTarget as HTMLElement | null
           if (to && (content.contains(to) || root.contains(to))) return
+          lastPointer = null
+          movePt = null
           hide()
         }
         root.addEventListener('mouseleave', onLeave)
-        const onKeyDown = (): void => {
+        // 单按修饰键不算打字:Alt+点 ＋(插到上方)、Alt / Ctrl 拖(复制)都要先按住修饰键,把手栏不能因此收起。
+        const MODIFIER_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Meta', 'Shift'])
+        const onKeyDown = (e: KeyboardEvent): void => {
+          if (MODIFIER_KEYS.has(e.key)) return
           if (editorView.dom.dataset.dragging !== 'true') hide()
         }
         editorView.dom.addEventListener('keydown', onKeyDown)
@@ -1757,27 +1884,334 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           hooks.onMenu({ x: e.clientX, y: e.clientY })
         })
 
-        // 滚动即藏(定位只在 pointermove 时算,滚动中把手会原地漂着不动)。
+        // 滚动即藏(定位只在 pointermove 时算,滚动中把手会原地漂着不动);滚动停下 120ms 后按指针最后的
+        // 位置补一次命中(第 8 条:原来要再动一下鼠标把手才回来)。指针已不在这个 pane 上就不补。
+        let scrollIdle: ReturnType<typeof setTimeout> | null = null
         const onScroll = (): void => {
-          if (editorView.dom.dataset.dragging !== 'true') hide()
+          if (editorView.dom.dataset.dragging === 'true') return
+          hide()
+          if (scrollIdle) clearTimeout(scrollIdle)
+          scrollIdle = setTimeout(() => {
+            scrollIdle = null
+            const p = lastPointer
+            if (!p || editorView.dom.dataset.dragging === 'true') return
+            const under = document.elementFromPoint(p.x, p.y)
+            if (!under || !root.contains(under) || content.contains(under)) return
+            handleMove(p.x, p.y)
+          }, 120)
         }
         window.addEventListener('scroll', onScroll, { capture: true, passive: true })
 
-        // 拖拽边缘自动滚(真滚动容器是 .amx-pane 一类外层)。
-        const onDragOver = (e: DragEvent): void => {
-          if (editorView.dom.dataset.dragging !== 'true') return
+        // ── 拖拽中的页边落点、按帧自动滚动、松手落位(页面编辑手感方案 2026-11-17 第 1、2、6 条)。─────────
+        /** 最后一次 dragover 的指针(按帧重判时拿它造一份判定用的事件)。t = 收到的时刻:系统不再补发
+         *  (指针出了窗口)就停滚。 */
+        let dragPt: { x: number; y: number; t: number; types: string[]; alt: boolean; ctrl: boolean } | null = null
+        const blockDragging = (): boolean => editorView.dom.dataset.dragging === 'true' && !!editorView.dragging
+        /** 这个 dragover 已由页边接管:root 捕获期那条路由跳过它(页边在 .unified-body 里的那 48px 两边都收得到)。 */
+        const marginHandled = new WeakSet<object>()
+        /** 页边路由上一轮画过线 / 设过落点:指针离开页边、又不在 pane 里时由这里收拾。 */
+        let marginActive = false
+        /** 页边的多块拖拽(跨块选区):执行走 executeMoveBlocks(只看纵坐标)。 */
+        let marginMulti = false
+        /** 编辑器所在的那块可滚 pane(内容短、此刻滚不动也算):页边的范围。没有可滚祖先(嵌在别的宿主里)
+         *  就只认 .unified-body 的父元素 —— 宿主之外是别人的地盘(相邻面板、工具栏),不当页边抢。 */
+        const paneOf = (): HTMLElement => {
+          for (let p = editorView.dom.parentElement; p; p = p.parentElement) {
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowY)) return p
+          }
+          // 父元素可能是 display: contents 的包装(矩形全 0),往上取第一个真有盒子的
+          for (let p = root.parentElement; p; p = p.parentElement) if (p.getBoundingClientRect().width > 0) return p
+          return root
+        }
+        /** ⠿ 左边还剩多宽能拼左栏:越过 ⠿ 的那一点到 pane 左沿(悬浮目录挡着就到目录右沿)。 */
+        const leftPairRoom = (): number => {
+          const vl = editorView.dom.getBoundingClientRect().left
+          const pr = paneOf().getBoundingClientRect()
+          let bound = Math.max(pr.left, 0)
+          for (const toc of document.querySelectorAll<HTMLElement>('.lcl-ftoc, .lcl-ftoc-panel')) { // 刻度条 + 展开的面板
+            const r = toc.getBoundingClientRect()
+            if (r.width > 0 && r.right <= vl && r.left >= bound - 1 && r.bottom > pr.top && r.top < pr.bottom) bound = Math.max(bound, r.right)
+          }
+          return vl - pairLaneW - bound
+        }
+        /** 指针在本编辑器的左 / 右页边:在 pane 里、不在 view.dom 里、不在悬浮目录上、不在别的编辑器身上、
+         *  不在吸顶 / 固定的界面上(工具栏、浮层按钮),纵向在正文顶到文末续写区之间。 */
+        const marginSideOf = (e: { clientX: number; clientY: number; target: EventTarget | null }): 'left' | 'right' | null => {
+          const t = e.target
+          if (!(t instanceof Element) || editorView.dom.contains(t)) return null
+          const pane = paneOf()
+          if (!pane.contains(t) || t.closest('.lcl-ftoc, .lcl-ftoc-panel, .lcl-ftoc-mount-layer')) return null
+          const body = t.closest('.unified-body')
+          if (body && body !== root) return null
+          for (let p: Element | null = t; p && p !== pane; p = p.parentElement) {
+            const pos = getComputedStyle(p).position
+            if (pos === 'sticky' || pos === 'fixed') return null
+          }
+          const vr = editorView.dom.getBoundingClientRect()
+          const tail = root.querySelector('.page-tail') ?? root.parentElement?.querySelector(':scope > .page-tail')
+          const bottom = Math.max(vr.bottom, root.getBoundingClientRect().bottom, tail ? tail.getBoundingClientRect().bottom : -Infinity)
+          if (e.clientY < vr.top - 8 || e.clientY > bottom) return null
+          if (e.clientX < vr.left) return 'left'
+          if (e.clientX > vr.right) return 'right'
+          return null
+        }
+        const resetDropState = (): void => {
+          pairRef = null
+          belowRef = null
+          cellDropRef = null
+          childRef = null
+          tailRef = false
+          quoteDrop = false
+          marginMulti = false
+          marginActive = false
+          hideVline()
+          hideHline()
+          hidePmLine()
+          markDropCard(null)
+        }
+        /** 页边落点(第 1 条):左页边 ⠿ 那一道换位、越过 ⠿ 拼左栏;右页边可拼就拼右栏、否则换位;
+         *  在末块之下 = 文末。换位按钳进正文的坐标走与正文同一套精确落点。返回 false = 不归页边管
+         *  (画布模式、卡片拖拽、文件 / 链接拖入照旧)。 */
+        const onMarginDragOver = (e: DragEvent, side: 'left' | 'right'): boolean => {
+          const view = editorView
+          if (inCanvas(view)) return false
+          const sel = view.state.selection
+          if (sel instanceof NodeSelection && sel.node.type === view.state.schema.nodes.amadeusCanvasCard) return false
+          const multi = !(sel instanceof NodeSelection) && !!topRangeOf(view)
+          if (!(sel instanceof NodeSelection) && !multi) return false
+          marginHandled.add(e)
+          marginActive = true
+          pairRef = null
+          belowRef = null
+          cellDropRef = null
+          childRef = null
+          quoteDrop = false
+          tailRef = false
+          marginMulti = false
+          const lastEl = view.dom.lastElementChild
+          if (boxed(lastEl) && e.clientY > lastEl.getBoundingClientRect().bottom + 2) {
+            tailRef = true
+            hideVline()
+            hidePmLine()
+            showHline(view, lastEl)
+            e.preventDefault()
+            return true
+          }
+          if (multi) {
+            hideVline()
+            hidePmLine()
+            const hit = topBlockAtY(view, e.clientY)
+            if (!hit) {
+              hideHline()
+              return true
+            }
+            const r = hit.el.getBoundingClientRect()
+            marginMulti = true
+            showHline(view, hit.el, 0, e.clientY > r.top + r.height / 2 ? 'bottom' : 'top')
+            e.preventDefault()
+            return true
+          }
+          hideHline()
+          const vr = view.dom.getBoundingClientRect()
+          marginEval = side
+          let pos: number | null = null
+          try {
+            // 页边不限最近 8 个候选:高分栏行中段最近的全是列内位置(页边不进格,全被否),只看 8 个就没线。
+            pos = dropTargets.evaluate(view, [side === 'left' ? vr.left + 1 : vr.right - 1, e.clientY], e, Infinity)
+          } finally {
+            marginEval = null
+          }
+          if (pairRef || pos != null) e.preventDefault()
+          return true
+        }
+
+        // 松手落位(第 6 条):拖的是哪几个节点、松手处拖影的左上角,在 window 捕获期(先于各条落点路由)记下;
+        // 下一帧(落点事务已同步派发、新位置还没画)找到它们的新 DOM,从松手处滑进去。节点按**对象身份**找:
+        // 挪动 = 同一批节点对象搬家(复制时新旧两处都是它,取离松手处近的那个)。
+        let landPending: { nodes: ProseNode[]; from: { x: number; y: number }; doc: ProseNode } | null = null
+        const armLanding = (e: DragEvent): void => {
+          landPending = null
+          const view = editorView
+          // 复制拖拽不播:副本与原件共用节点对象(画布卡还会换新锚),按身份找元素可能挑中原件。
+          if (!dragGrabPt || inCanvas(view) || dragCopies(e)) return
+          const sel = view.state.selection
+          if (sel instanceof NodeSelection && sel.node.type === view.state.schema.nodes.amadeusCanvasCard) return
+          const nodes: ProseNode[] = []
+          if (sel instanceof NodeSelection) nodes.push(sel.node)
+          else {
+            const r = topRangeOf(view)
+            if (r) view.state.doc.slice(r.from, r.to).content.forEach((n) => { nodes.push(n) })
+          }
+          if (!nodes.length) return
+          landPending = { nodes, from: releasePoint(e, dragGrabPt), doc: view.state.doc }
+          requestAnimationFrame(runLanding)
+        }
+        const runLanding = (): void => {
+          const lp = landPending
+          landPending = null
+          const view = editorView
+          if (!lp || view.isDestroyed || view.state.doc === lp.doc || reducedMotion()) return // 没落成(取消 / 落回原处)
+          const els: HTMLElement[] = []
+          for (const n of lp.nodes) {
+            let best: HTMLElement | null = null
+            let bestD = Infinity
+            view.state.doc.descendants((child, pos) => {
+              if (child !== n) return true
+              const el = view.nodeDOM(pos)
+              if (boxed(el)) {
+                const r = el.getBoundingClientRect()
+                const d = Math.abs(r.top - lp.from.y) + Math.abs(r.left - lp.from.x)
+                if (d < bestD) {
+                  bestD = d
+                  best = el
+                }
+              }
+              return false
+            })
+            if (best) els.push(best)
+          }
+          if (!els.length) return
+          els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+          const to = els[0].getBoundingClientRect()
+          const { dx, dy } = landOffset(lp.from, { x: to.left, y: to.top }, visualScale(view.dom))
+          if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+          // 用 Web Animations,不写内联样式:PM 会把节点 DOM 上的属性改动当成外部改动重画(LCL land() 走的是内联
+          // transition)。时长 / 曲线 / 阴影与 land() 同一套(LAND_MS 160ms、--lcl-drop-ease)。
+          const ease = getComputedStyle(view.dom).getPropertyValue('--lcl-drop-ease').trim() || 'cubic-bezier(.2,.8,.2,1)'
+          els.forEach((el, i) => {
+            const frames: Keyframe[] = i === 0
+              ? [{ transform: `translate(${dx}px, ${dy}px)`, boxShadow: 'var(--card-shadow)' }, { transform: 'none', boxShadow: 'none' }]
+              : [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }]
+            el.animate(frames, { duration: LAND_MS, easing: ease })
+          })
+        }
+
+        /** 按帧自动滚动(第 2 条):指针在滚动容器上 / 下 56px 边带里,速度 0 → 900px/s 按贴边深度平方增长,
+         *  与 dragover 来得多勤无关(原来每次 dragover 推 14px:指针一停就是 20Hz 一跳)。滚了就按指针最后的
+         *  位置原地重判一次落点。减少动态效果不影响速度(这不是装饰动画)。 */
+        const AUTO_BAND = 56
+        const AUTO_MAX = 900
+        let scrollRaf = 0
+        let scrollT = 0
+        let scrollAcc = 0
+        const stopAutoScroll = (): void => {
+          if (scrollRaf) cancelAnimationFrame(scrollRaf)
+          scrollRaf = 0
+          scrollAcc = 0
+        }
+        /** 内容在指针下滚过去了:按指针最后的位置把 dragover 路由原地再走一遍(页边 → root 捕获期 → 正文精确落点),
+         *  线和松手都跟着新位置走。判定用的事件是造的:preventDefault 空转(放不放得下由系统照常补发的真 dragover 定)。 */
+        const reevaluateDrop = (): void => {
+          const p = dragPt
+          if (!p || !blockDragging()) return
+          const target = document.elementFromPoint(p.x, p.y)
+          const fake = {
+            type: 'dragover', clientX: p.x, clientY: p.y, target, altKey: p.alt, ctrlKey: p.ctrl, metaKey: false, shiftKey: false,
+            dataTransfer: { types: p.types }, preventDefault: () => {}, stopPropagation: () => {},
+          } as unknown as DragEvent
+          const side = marginSideOf(fake)
+          if (side && onMarginDragOver(fake, side)) return
+          if (target && root.contains(target)) onRootDragOver(fake)
+          if (target && editorView.dom.contains(target)) dropTargets.evaluate(editorView, [p.x, p.y], fake)
+        }
+        const autoScrollTick = (t: number): void => {
+          scrollRaf = 0
+          const p = dragPt
+          if (!p || !blockDragging() || t - p.t > 400) {
+            scrollAcc = 0
+            return
+          }
+          const dt = Math.min(0.05, Math.max(0, (t - scrollT) / 1000))
+          scrollT = t
           const sc = scrollParentOf(editorView.dom)
           if (!sc) return
           const r = sc.getBoundingClientRect()
-          if (e.clientY < r.top + 56) sc.scrollTop -= 14
-          else if (e.clientY > r.bottom - 56) sc.scrollTop += 14
+          const depth = p.x < r.left || p.x > r.right ? 0
+            : p.y < r.top + AUTO_BAND ? -Math.min(1, (r.top + AUTO_BAND - p.y) / AUTO_BAND)
+              : p.y > r.bottom - AUTO_BAND ? Math.min(1, (p.y - (r.bottom - AUTO_BAND)) / AUTO_BAND) : 0
+          if (!depth) {
+            scrollAcc = 0
+            return
+          }
+          scrollAcc += Math.sign(depth) * AUTO_MAX * depth * depth * dt
+          const step = Math.trunc(scrollAcc)
+          if (step) {
+            scrollAcc -= step
+            const before = sc.scrollTop
+            sc.scrollTop = before + step
+            if (sc.scrollTop !== before) reevaluateDrop()
+            else scrollAcc = 0 // 已经到头
+          }
+          scrollRaf = requestAnimationFrame(autoScrollTick)
         }
-        window.addEventListener('dragover', onDragOver)
+        // window 捕获期:记指针、起自动滚动、接管页边(页边在 view.dom 之外,落点插件收不到;
+        // 大半还在 .unified-body 之外,root 也收不到)。
+        const onWindowDragOver = (e: DragEvent): void => {
+          if (!blockDragging()) return
+          dragPt = { x: e.clientX, y: e.clientY, t: performance.now(), types: e.dataTransfer ? Array.from(e.dataTransfer.types) : [], alt: e.altKey, ctrl: e.ctrlKey }
+          if (!scrollRaf) {
+            scrollT = performance.now()
+            scrollRaf = requestAnimationFrame(autoScrollTick)
+          }
+          const side = marginSideOf(e)
+          if (side && onMarginDragOver(e, side)) return
+          // 路由从页边换到别处(正文 / 文末续写区 / 侧栏 / 别的面板):页边画的线和落点先收掉,接手的路由
+          // (root 捕获期 / 落点插件,都在 window 捕获期之后)自己再画;不收会两根线同在。
+          if (marginActive) resetDropState()
+        }
+        window.addEventListener('dragover', onWindowDragOver, true)
+        /** 指针拖出窗口:之后不会再有 dragover,线、落点和自动滚动当场收掉(别等 400ms 超时)。 */
+        const onWindowDragLeave = (e: DragEvent): void => {
+          if (!blockDragging()) return
+          const de = document.documentElement
+          if (e.clientX > 0 && e.clientY > 0 && e.clientX < de.clientWidth && e.clientY < de.clientHeight) return
+          dragPt = null
+          stopAutoScroll()
+          if (marginActive) resetDropState()
+        }
+        window.addEventListener('dragleave', onWindowDragLeave, true)
+        const onWindowDrop = (e: DragEvent): void => {
+          if (!blockDragging()) return
+          const view = editorView
+          armLanding(e)
+          const side = marginSideOf(e)
+          // 页边松手:按松手这一刻重判(不吃上一次 dragover 的旧状态),再执行。
+          if (!side || !onMarginDragOver(e, side)) return
+          const copy = dragCopies(e)
+          const sel = view.state.selection
+          let done = false
+          if (tailRef) done = executeMoveToTail(view, copy)
+          else if (pairRef) done = executePair(view, pairRef.targetPos, pairRef.side, copy)
+          else if (marginMulti) done = executeMoveBlocks(view, e, copy)
+          else if (sel instanceof NodeSelection && view.dragging) {
+            const vr = view.dom.getBoundingClientRect()
+            marginEval = side
+            let at: number | null = null
+            try {
+              at = dropTargets.targetAt(view, [side === 'left' ? vr.left + 1 : vr.right - 1, e.clientY], e, Infinity)
+            } finally {
+              marginEval = null
+            }
+            if (at != null) {
+              performDrop(view, at, view.dragging.slice, !copy)
+              done = true
+            }
+          }
+          resetDropState()
+          if (done) {
+            e.preventDefault()
+            e.stopPropagation()
+            view.dom.dataset.dragging = 'false'
+            view.dragging = null
+          }
+        }
+        window.addEventListener('drop', onWindowDrop, true)
 
         // 行下方检测(第5振):挂 **root 捕获期**——真机指针在行底以下时多半悬在 .page-tail /
         // pane 空白区(view.dom 的兄弟/祖先),dropIndicator 只监听 view.dom 根本收不到;且这里
         // 不 preventDefault 的话浏览器压根不发 drop(HTML5 DnD 规则),横线冻屏、松手无事发生。
         const onRootDragOver = (e: DragEvent): void => {
+          if (marginHandled.has(e)) return // 页边已接管(onMarginDragOver)
           const view = viewRef
           const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : []
           // OS 文件拖入:内容插入仍归 fileDropGuard/importToPage 那条链,但落点得**看得见**——
@@ -2047,7 +2481,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             window.removeEventListener('mouseup', hideHoverRect)
             hoverRect?.remove()
             hoverRect = null
-            if (trailTimer) clearTimeout(trailTimer)
+            if (moveRaf) cancelAnimationFrame(moveRaf)
+            if (scrollIdle) clearTimeout(scrollIdle)
+            stopAutoScroll()
             onMqUp()
             root.removeEventListener('pointerdown', onMqDown)
             root.removeEventListener('mousemove', onMouseMove)
@@ -2064,7 +2500,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             columnResize.destroy()
             tableHover.destroy()
             window.removeEventListener('scroll', onScroll, { capture: true })
-            window.removeEventListener('dragover', onDragOver)
+            window.removeEventListener('dragover', onWindowDragOver, true)
+            window.removeEventListener('drop', onWindowDrop, true)
+            window.removeEventListener('dragleave', onWindowDragLeave, true)
             content.remove()
             vline?.remove()
             vline = null
@@ -2087,8 +2525,27 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // ── 落点指示线 + 精确落点 drop(prosemirror-drop-indicator)。────────────────────
   // 自绘指示线(不用 @milkdown/plugin-cursor 的 DOM 件):要做 zoomOf 反补偿——
   // position:fixed 元素在 CSS zoom 祖先里,视口 px 直接写 translate 会按 zoom 放大(镜像老坑)。
-  const dropIndicator = $prose(() => {
-    const ensureDom = (view: EditorView): HTMLDivElement => {
+  /** 一条缝只画一根线、画在缝的中线(页面编辑手感方案第 5 条 ①):同一个落点 pos 在库里有两条候选
+   *  (上块下沿 / 下块上沿),指针一过缝中线就换一条,线上下跳一个缝宽。落点不变,只改画线的 y。
+   *  并排的(分栏格)、看不见的(折叠小节)不是上下相邻 → 不改,照候选线画。 */
+  const gapLine = (view: EditorView, pos: number): { x1: number; x2: number; y: number } | null => {
+    try {
+      const $p = view.state.doc.resolve(pos)
+      const before = $p.nodeBefore
+      const after = $p.nodeAfter
+      if (!before || !after) return null
+      const a = view.nodeDOM(pos - before.nodeSize)
+      const b = view.nodeDOM(pos)
+      if (!boxed(a) || !boxed(b)) return null
+      const ra = a.getBoundingClientRect()
+      const rb = b.getBoundingClientRect()
+      if (rb.top < ra.bottom - 1) return null
+      return { x1: Math.min(ra.left, rb.left), x2: Math.max(ra.right, rb.right), y: (ra.bottom + rb.top) / 2 }
+    } catch {
+      return null
+    }
+  }
+  const ensurePmLine = (view: EditorView): HTMLDivElement => {
       if (pmLine && pmLine.isConnected) return pmLine
       const dom = document.createElement('div')
       dom.className = 'unified-drop-line'
@@ -2101,97 +2558,108 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       pmLine = dom
       return dom
     }
-    const plugin = createDropIndicatorPlugin({
-      onDrag: ({ view, event, pos }) => {
-        settlePmLine()
-        // OS 文件拖入不归本层(fileDropGuard/importToPage 链路),不出指示线不抢 drop。
-        const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
-        if (types.includes('Files')) return false
-        // 画布模式:这条线在这里必然撒谎(卡片绝对定位 → 画线依据的块矩形彼此重叠、DOM 序 ≠ 视觉序),
-        // 而落点已由 onDropCapture 的 executeDropInCanvas 全接管。指示改成目标卡描边。
-        if (inCanvas(view)) {
-          hideVline()
-          return false
-        }
-        // 只接管「从 ⠿ 拖起的整块」(Codex P1):PM 文字选区拖拽/浏览器链接与 HTML 拖入
-        // 走 PM 默认落点 —— 精确落点插件会把行内文字硬插到块边界,还 preventDefault 抢默认 drop。
-        if (!view.dragging) return false
-        if (!(view.state.selection instanceof NodeSelection)) return false
-        // 文档模式的卡片拖拽整支归 onRootDragOver / executeCardDropInDoc 自管(2026-08-31):
-        // 「最近块边」对卡是撒谎源(相邻卡缝几 px,最近边常在卡内 → 完整性闸整笔拒),
-        // 这里全让路,线由那边画在合法顶层缝上。
-        if (view.state.selection.node.type === view.state.schema.nodes.amadeusCanvasCard) return false
-        // 行下方 / 末块之下的落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针
-        // 多半在 view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
-        // tailRef / cellDropRef 同理:指针在 view.dom 之内时两边都会出线,drop 却被捕获期路由吞掉。
-        if (belowRef || tailRef || cellDropRef || quoteDrop) {
-          pairRef = null
-          childRef = null // ⚠️ 漏清它 = 画的是「落到行后」、执行的却是「塞进列表项当子项」(drop 路由 cr 在 br 之前)
-          hideVline()
-          return false
-        }
-        // 分栏配对检测:指针贴目标块左右缘 → 竖线换横线,drop 由捕获期路由消费(pair 期横线不出)。
-        const sel = view.state.selection
-        const a = pickBlockAt(view, { x: event.clientX, y: event.clientY })
-        // 列表项右缘(缩进量以内)→ 变成「放进它当子项」,指示线左端缩进 24px 画在该项下缘。
-        if (a && a.node.type.name === 'list_item' && !(a.pos >= sel.from && a.pos < sel.to)) {
-          const r = a.el.getBoundingClientRect()
-          if (event.clientX > r.left + 24 && event.clientY > r.top + r.height / 2) {
-            childRef = { targetPos: a.pos, el: a.el }
-            pairRef = null
-            hideVline()
-            showHline(view, a.el, 24)
-            return false
-          }
-        }
-        childRef = null
-        if (a && !(a.pos >= sel.from && a.pos < sel.to) && pairable(view, a.pos)) {
-          const r = visualBlockElement(a.el).getBoundingClientRect()
-          const side = event.clientX <= r.left + EDGE ? 'left' : event.clientX >= r.right - EDGE ? 'right' : null
-          if (side) {
-            pairRef = { targetPos: a.pos, side }
-            showVline(view, visualBlockElement(a.el), side)
-            return false
-          }
-        }
-        pairRef = null
+  const dropTargets = createDropTargets({
+    isCopy: dragCopies,
+    onDrag: ({ view, event, pos, point }) => {
+      settlePmLine()
+      // OS 文件拖入不归本层(fileDropGuard/importToPage 链路),不出指示线不抢 drop。
+      const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
+      if (types.includes('Files')) return false
+      // 画布模式:这条线在这里必然撒谎(卡片绝对定位 → 画线依据的块矩形彼此重叠、DOM 序 ≠ 视觉序),
+      // 而落点已由 onDropCapture 的 executeDropInCanvas 全接管。指示改成目标卡描边。
+      if (inCanvas(view)) {
         hideVline()
-        // 分栏行的直接子位置(cell 之间 / 行首行尾 = cell 的上下沿)只能放 cell。接受它 = 线画在列底,
-        // replaceRangeWith 却把块挪到行外:短列下方松手恰是被拖块原位 → 删了又插回(录屏第一拖),
-        // 列之间还会被 Fitter 包成一枚新 cell。拒掉,库自动取下一个候选(列内末块下沿)。
-        const $t = view.state.doc.resolve(pos)
-        if ($t.parent.type.name === 'amadeusColumnRow') return false
-        // 列内位置只在指针横向落在**该列**时才算。库按「到线段两端点」的 Manhattan 距离排序,窄列的短线
-        // 端点离指针更近:指针在右列下方,左列末块下沿照样抢到(线画在左列、块进左列)。列缝不归任何列。
-        for (let d = $t.depth; d >= 1; d--) {
-          if ($t.node(d).type.name !== 'amadeusColumnCell') continue
-          const cellEl = view.nodeDOM($t.before(d))
-          if (cellEl instanceof HTMLElement) {
-            const r = cellEl.getBoundingClientRect()
-            if (event.clientX < r.left || event.clientX > r.right) return false
-          }
-          break
+        return false
+      }
+      // 只接管「从 ⠿ 拖起的整块」(Codex P1):PM 文字选区拖拽/浏览器链接与 HTML 拖入
+      // 走 PM 默认落点 —— 精确落点插件会把行内文字硬插到块边界,还 preventDefault 抢默认 drop。
+      if (!view.dragging) return false
+      if (!(view.state.selection instanceof NodeSelection)) return false
+      // 文档模式的卡片拖拽整支归 onRootDragOver / executeCardDropInDoc 自管(2026-08-31):
+      // 「最近块边」对卡是撒谎源(相邻卡缝几 px,最近边常在卡内 → 完整性闸整笔拒),
+      // 这里全让路,线由那边画在合法顶层缝上。
+      if (view.state.selection.node.type === view.state.schema.nodes.amadeusCanvasCard) return false
+      // 行下方 / 末块之下的落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针
+      // 多半在 view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
+      // tailRef / cellDropRef 同理:指针在 view.dom 之内时两边都会出线,drop 却被捕获期路由吞掉。
+      if (belowRef || tailRef || cellDropRef || quoteDrop) {
+        pairRef = null
+        childRef = null // ⚠️ 漏清它 = 画的是「落到行后」、执行的却是「塞进列表项当子项」(drop 路由 cr 在 br 之前)
+        hideVline()
+        return false
+      }
+      // 分栏配对检测:指针在左页边越过 ⠿、或贴目标块右缘 → 竖线换横线,drop 由捕获期路由消费(pair 期横线不出)。
+      // 命中块按判定坐标 point 取(页边时已钳进正文),左右判据按指针真坐标 event.clientX。
+      const sel = view.state.selection
+      const a = pickBlockAt(view, { x: point[0], y: point[1] })
+      // 列表项右缘(缩进量以内)→ 变成「放进它当子项」,指示线左端缩进 24px 画在该项下缘。页边不认(页边只换位 / 拼栏)。
+      if (!marginEval && a && a.node.type.name === 'list_item' && !(a.pos >= sel.from && a.pos < sel.to)) {
+        const r = a.el.getBoundingClientRect()
+        if (event.clientX > r.left + 24 && event.clientY > r.top + r.height / 2) {
+          childRef = { targetPos: a.pos, el: a.el }
+          pairRef = null
+          hideVline()
+          showHline(view, a.el, 24)
+          return false
         }
-        return true
-      },
-      onShow: ({ view, line, pos }) => {
-        pmShown = true
-        const el = ensureDom(view)
-        // 与 showHline 同一套补偿(见那两个 helper 的注释):累计视觉缩放 + fixed 包含块原点。
-        const z = visualScale(view.dom)
-        const o = overlayOrigin(el)
-        const x1 = (line.p1.x - o.x) / z
-        const x2 = (line.p2.x - o.x) / z
-        const y = (line.p1.y - o.y) / z
-        dropRetarget(el, `pm:${pos}`)
-        el.style.display = 'block'
-        el.style.width = `${Math.max(0, x2 - x1)}px`
-        el.style.transform = `translate(${Math.round(x1)}px, ${Math.round(y - 1.5)}px)`
-      },
-      onHide: hidePmLine,
-    })
-    return plugin
+      }
+      childRef = null
+      if (a && !(a.pos >= sel.from && a.pos < sel.to) && pairable(view, a.pos)) {
+        const r = visualBlockElement(a.el).getBoundingClientRect()
+        // 左:只在左页边、越过 ⠿ 才算(正文里的左缘带取消 —— 从 ⠿ 往右挪进正文、贴着左边往下挪都误拼过,
+        // BlockNote #2000 同病同改法);右:右缘 EDGE 带照旧,右页边也算。
+        // 左阈值按块自己的左缘(居中的图片段:visual 元素是图本身,别拿图的左缘量,那样整条 ⠿ 道都成了拼栏区)。
+        const laneEdge = Math.min(r.left, a.el.getBoundingClientRect().left) - pairLaneW
+        // 非首列的分栏块、或 ⠿ 左边没地方(pairLeftInner):左缘 EDGE 带照旧拼左栏(见 inLaterCell / pairLeftInner)。
+        const narrow = leftPairInner()
+        const innerLeft = !marginEval && (narrow || inLaterCell(view, a.pos)) && event.clientX <= r.left + EDGE
+        const side = (marginEval === 'left' && !narrow && event.clientX < laneEdge) || innerLeft ? 'left'
+          : event.clientX >= r.right - EDGE ? 'right' : null
+        if (side) {
+          pairRef = { targetPos: a.pos, side }
+          showVline(view, visualBlockElement(a.el), side)
+          return false
+        }
+      }
+      pairRef = null
+      hideVline()
+      // 分栏行的直接子位置(cell 之间 / 行首行尾 = cell 的上下沿)只能放 cell。接受它 = 线画在列底,
+      // replaceRangeWith 却把块挪到行外:短列下方松手恰是被拖块原位 → 删了又插回(录屏第一拖),
+      // 列之间还会被 Fitter 包成一枚新 cell。拒掉,库自动取下一个候选(列内末块下沿)。
+      const $t = view.state.doc.resolve(pos)
+      if ($t.parent.type.name === 'amadeusColumnRow') return false
+      // 列内位置只在指针横向落在**该列**时才算。库按「到线段两端点」的 Manhattan 距离排序,窄列的短线
+      // 端点离指针更近:指针在右列下方,左列末块下沿照样抢到(线画在左列、块进左列)。列缝不归任何列。
+      for (let d = $t.depth; d >= 1; d--) {
+        if ($t.node(d).type.name !== 'amadeusColumnCell') continue
+        if (marginEval) return false // 页边只换位到行上下(钳进来的坐标总落在首 / 末列,不代表指针想进那一列)
+        const cellEl = view.nodeDOM($t.before(d))
+        if (cellEl instanceof HTMLElement) {
+          const r = cellEl.getBoundingClientRect()
+          if (event.clientX < r.left || event.clientX > r.right) return false
+        }
+        break
+      }
+      return true
+    },
+    onShow: ({ view, line, pos }) => {
+      pmShown = true
+      const el = ensurePmLine(view)
+      // 与 showHline 同一套补偿(见那两个 helper 的注释):累计视觉缩放 + fixed 包含块原点。
+      const z = visualScale(view.dom)
+      const o = overlayOrigin(el)
+      const gap = gapLine(view, pos)
+      const x1 = ((gap?.x1 ?? line.p1.x) - o.x) / z
+      const x2 = ((gap?.x2 ?? line.p2.x) - o.x) / z
+      const y = ((gap?.y ?? line.p1.y) - o.y) / z
+      dropRetarget(el, `pm:${pos}`)
+      el.style.display = 'block'
+      el.style.width = `${Math.max(0, x2 - x1)}px`
+      el.style.transform = `translate(${Math.round(x1)}px, ${Math.round(y - 1.5)}px)`
+    },
+    onHide: hidePmLine,
   })
+  const dropIndicator = $prose(() => dropTargets.createPlugin())
   // 没线就不落:⠿ 起的块拖拽,落点插件没给出目标(= 没画线)时 PM 会退回默认 dropPoint 按指针猜一个
   // 位置 —— 2026-09-22 探针:短列深处无线松手,图片进了另一列。只拦 gutter 起的块拖拽
   // (dataset.dragging),PM 自己的文字拖拽 / 外部拖入照旧;排在 dropIndicator 之后,它接了就轮不到这里。
