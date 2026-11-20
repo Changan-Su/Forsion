@@ -68,8 +68,8 @@ async function main() {
 
     await win.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
     await win.locator('.amx-qf-input').fill(renamed)
-    await win.locator('.amx-qf-row').filter({ hasText: renamed }).waitFor({ timeout: 6000 })
-    assert.equal(await win.locator('.amx-qf-row').filter({ hasText: renamed }).count(), 1)
+    await win.locator('.amx-qf-row:not(.amx-qf-create)').filter({ hasText: renamed }).waitFor({ timeout: 6000 })
+    assert.equal(await win.locator('.amx-qf-row:not(.amx-qf-create)').filter({ hasText: renamed }).count(), 1)
     console.log('PASS  Quick Find shows one result for the remote session')
   } finally {
     await close()

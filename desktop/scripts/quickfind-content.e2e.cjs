@@ -140,7 +140,7 @@ const { check } = rep
     check('D1 工作区快照里还没有远程会话', await win.locator(`.t2s-srow[data-sel-id="${SERVER_ONLY}"]`).count() === 0)
     await win.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
     await win.locator('.amx-qf-input').fill(SERVER_TITLE)
-    const remote = win.locator('.amx-qf-row').filter({ hasText: SERVER_TITLE })
+    const remote = win.locator('.amx-qf-row:not(.amx-qf-create)').filter({ hasText: SERVER_TITLE })
     await remote.waitFor({ timeout: 8000 })
     check('D2 快速查找展示仅引擎返回的标题结果', await remote.count() === 1)
     await remote.click()
