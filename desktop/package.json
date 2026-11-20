@@ -505,6 +505,7 @@
     "check:coldrag": "node scripts/e2e-editor.cjs --check=columns-realdrag",
     "check:topdrag": "node scripts/e2e-editor.cjs --check=toplevel-realdrag",
     "check:dragfeel": "node scripts/e2e-editor.cjs --check=unified-dragfeel",
+    "check:dragsource": "node scripts/e2e-editor.cjs --check=unified-dragsource",
     "check:dragdel": "node scripts/e2e-editor.cjs --check=unified-dragdelete",
     "check:vaultmenu": "node scripts/check-vault-menu.cjs",
     "check:formbase": "node scripts/form-baseline.check.cjs",
