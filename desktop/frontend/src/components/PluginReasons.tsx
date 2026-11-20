@@ -7,7 +7,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { zoomOf } from '@lcl/engine'
+import { followAnchor } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { LIFECYCLE_REASONS, type LifecycleReason } from '../../../shared/telemetryKeys'
 import { ReasonPrompt } from './FeedbackReasons'
@@ -60,41 +60,20 @@ export function useDisableReason(anchorRef: RefObject<HTMLElement | null>): { as
 function DisableReasonPop({ anchor, onPick, onCancel }: { anchor: HTMLElement; onPick: (r: LifecycleReason | null) => void; onCancel: () => void }) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; right: number; placed: boolean } | null>(null)
-  useLayoutEffect(() => {
-    // body 上有界面缩放(CSS zoom):量到的是视口像素,fixed 定位要换回缩放前的坐标
-    const z = zoomOf(document.body) || 1
-    const r = anchor.getBoundingClientRect()
-    setPos({ top: (r.bottom + 6) / z, right: Math.max(8, (window.innerWidth - r.right) / z), placed: false })
-  }, [anchor])
-  // 第二拍量自己(两拍都在绘制之前,看不到跳):下面放不下就翻到开关上面(开关贴着窗口底边时,滚过去够按钮 = 取消,不翻就关不掉);
-  // 上面也放不下就贴底边
-  useLayoutEffect(() => {
-    if (!pos || pos.placed || !ref.current) return
-    const z = zoomOf(document.body) || 1
-    const h = ref.current.getBoundingClientRect().height
-    const a = anchor.getBoundingClientRect()
-    const vh = window.innerHeight
-    const top = a.bottom + 6 + h <= vh - 8 ? a.bottom + 6 : a.top - 6 - h >= 8 ? a.top - 6 - h : Math.max(8, vh - 8 - h)
-    setPos({ ...pos, top: top / z, placed: true })
-  }, [pos, anchor])
+  // 落位交给 followAnchor(缩放、下面放不下翻到上面、窗口变化 / 滚动都跟着开关走),右缘对齐开关
+  useLayoutEffect(() => (ref.current ? followAnchor(ref.current, anchor, { alignEnd: true, gap: 6 }) : undefined), [anchor])
   useEffect(() => {
     const away = (e: PointerEvent): void => { if (!(e.target instanceof Node && (ref.current?.contains(e.target) || anchor.contains(e.target)))) onCancel() }
     const gone = (): void => onCancel()
     window.addEventListener('pointerdown', away, true)
-    window.addEventListener('scroll', gone, true) // 设置页在容器里滚:浮层不跟着走,滚了就收(= 取消)
-    window.addEventListener('resize', gone)
     window.addEventListener('blur', gone)
     return () => {
       window.removeEventListener('pointerdown', away, true)
-      window.removeEventListener('scroll', gone, true)
-      window.removeEventListener('resize', gone)
       window.removeEventListener('blur', gone)
     }
   }, [anchor, onCancel])
-  if (!pos) return null
   return createPortal(
-    <div ref={ref} className="fr-pop" style={{ top: pos.top, right: pos.right }} data-disable-reasons>
+    <div ref={ref} className="fr-pop" data-disable-reasons>
       <ReasonPrompt question={t('pluginReason.disableQuestion')} reasons={options(t)} skipLabel={t('pluginReason.disableSkip')} shareable={false}
         onPick={(r) => onPick(r)} onCancel={onCancel} />
     </div>,

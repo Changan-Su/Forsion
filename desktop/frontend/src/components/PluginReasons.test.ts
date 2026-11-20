@@ -56,17 +56,21 @@ describe('ReasonSwitch:拨下先问理由', () => {
     expect(onChange).toHaveBeenCalledWith(true)
     expect(pop()).toBeNull()
   })
-  it('开关贴着窗口底边:理由行翻到开关上面,按钮都在窗口里', async () => {
+  it('开关贴着窗口底边:理由行翻到开关上面(followAnchor 钉底边),右缘对齐开关', async () => {
     const onChange = vi.fn()
     await render(React.createElement(ReasonSwitch, { checked: true, label: 'X', onChange }))
-    const vh = window.innerHeight
-    vi.spyOn(host.querySelector('span')!, 'getBoundingClientRect').mockReturnValue({ top: vh - 30, bottom: vh - 10, left: 0, right: 40, width: 40, height: 20, x: 0, y: vh - 30, toJSON: () => ({}) } as DOMRect)
-    const real = HTMLElement.prototype.getBoundingClientRect
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-      return this.matches('[data-disable-reasons]') ? ({ top: 0, bottom: 100, left: 0, right: 300, width: 300, height: 100, x: 0, y: 0, toJSON: () => ({}) } as DOMRect) : real.call(this)
-    })
+    const vh = window.innerHeight, vw = window.innerWidth
+    vi.spyOn(host.querySelector('span')!, 'getBoundingClientRect').mockReturnValue({ top: vh - 30, bottom: vh - 10, left: vw - 60, right: vw - 20, width: 40, height: 20, x: vw - 60, y: vh - 30, toJSON: () => ({}) } as DOMRect)
+    const isPop = (el: HTMLElement): boolean => el.matches('[data-disable-reasons]')
+    const sh = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight')!.get!
+    const ow = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!.get!
+    vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) { return this instanceof HTMLElement && isPop(this) ? 100 : sh.call(this) })
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) { return isPop(this) ? 300 : ow.call(this) })
     await click(host.querySelector('[role="switch"]'))
-    expect(parseFloat((pop() as HTMLElement).style.top)).toBe(vh - 30 - 6 - 100)
+    const el = pop() as HTMLElement
+    expect(el.style.top).toBe('auto')
+    expect(el.style.bottom).toBe('36px') // 开关上沿往上 6px 处钉底边
+    expect(el.style.left).toBe(`${vw - 20 - 300}px`) // 右缘对齐开关右缘
   })
   it('没有遥测通道(网页 / 手机 / 没装载 Extend):不问,一拨就关;卸载框里不画理由', async () => {
     delete (window as unknown as { tangu?: unknown }).tangu
