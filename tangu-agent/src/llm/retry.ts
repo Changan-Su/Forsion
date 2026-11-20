@@ -137,10 +137,10 @@ export interface LlmNetworkHooks {
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' });
 
 /** 探网并等网回来。up = 本来就通;back = 断过、回来了;gave_up = 等满了;unknown = 不知道探谁。 */
-async function awaitNetwork(err: unknown, hooks: LlmNetworkHooks, signal: AbortSignal | undefined, maxMs: number): Promise<{ state: 'up' | 'back' | 'gave_up' | 'unknown'; waitedMs: number }> {
+async function awaitNetwork(err: unknown, hooks: LlmNetworkHooks, signal: AbortSignal | undefined, maxMs: number): Promise<{ state: 'up' | 'back' | 'gave_up' | 'unknown'; waitedMs: number; awakeMs: number }> {
   const target = probeTargetOf(err, hooks.target);
-  if (!target) return { state: 'unknown', waitedMs: 0 };
-  if (maxMs <= 0) return { state: 'gave_up', waitedMs: 0 };
+  if (!target) return { state: 'unknown', waitedMs: 0, awakeMs: 0 };
+  if (maxMs <= 0) return { state: 'gave_up', waitedMs: 0, awakeMs: 0 };
   const r = await waitForNetwork({ target, signal, maxMs, onWaiting: (since) => hooks.onWaiting?.(since, err) });
   if (r.state === 'back') hooks.onBack?.(r.waitedMs, r.since);
   return r;
@@ -220,7 +220,7 @@ export class LlmRetryChain {
 
   private async waitNetwork(err: unknown, network: LlmNetworkHooks, signal: AbortSignal | undefined): Promise<'up' | 'back' | 'gave_up' | 'unknown'> {
     const r = await awaitNetwork(err, network, signal, NETWORK_WAIT_MAX_MS - this.networkWaitedMs);
-    this.networkWaitedMs += r.waitedMs;
+    this.networkWaitedMs += r.awakeMs; // 30 分钟只算醒着等的
     if (r.state === 'back') this.excludedMs += r.waitedMs;
     return r.state;
   }

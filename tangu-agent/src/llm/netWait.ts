@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns';
 import net from 'node:net';
 import { LlmError } from '../core/types.js';
+import { SLEEP_GAP_MS } from './sleepDetector.js';
 
 /**
  * 「等待网络」:断网时模型调用不再白白耗掉重试次数、一分钟内就判失败,而是停下来每 ~5 秒探一次网,
@@ -13,8 +14,9 @@ import { LlmError } from '../core/types.js';
  *  2. 探网确认:按报错归成断网也要先探一次,探得通就照常重试(本机模型没起的 ECONNREFUSED、代理没开等),
  *     免费的等待只在探网确认断了的时候发生 —— 否则分类一错就是不扣次数的死循环。
  *
- * 探网 = 解析请求的主机名(dns.lookup,和 fetch 走同一条系统解析)+ 连一下它的端口。对方拒绝 / 重置也算通
- * (包到得了对方)。dns.lookup 不能取消、占 libuv 线程池:同一主机同时只留一个在途解析,超时只是不再等它。
+ * 探网 = 解析请求的主机名(dns.lookup all,和 fetch 走同一条系统解析)+ 并行连一下每个地址的端口,任一个连上 /
+ * 被拒 / 被重置都算通(包到得了对方;fetch 也会把 IPv6 / IPv4 都试一遍,只探第一个会把「IPv6 坏、IPv4 好」误判成断网)。
+ * dns.lookup 不能取消、占 libuv 线程池:同一主机同时只留一个在途解析,超时只是不再等它。
  */
 
 export const NETWORK_WAIT_MAX_MS = 30 * 60_000;
@@ -99,13 +101,14 @@ export function probeTargetOf(err: unknown, fallbackUrl?: string): ProbeTarget |
 
 // ── 探网 ─────────────────────────────────────────────────────────────────────
 
-const pendingLookups = new Map<string, Promise<string>>();
+const pendingLookups = new Map<string, Promise<string[]>>();
 
 /** 同一主机同时只留一个在途 dns.lookup(解析可能挂几十秒,不能每 5 秒叠一个进线程池)。 */
-function lookupOnce(host: string): Promise<string> {
+function lookupOnce(host: string): Promise<string[]> {
   let p = pendingLookups.get(host);
   if (!p) {
-    p = new Promise<string>((resolve, reject) => lookup(host, (err, address) => (err ? reject(err) : resolve(address))));
+    p = new Promise<string[]>((resolve, reject) =>
+      lookup(host, { all: true }, (err, addrs) => (err ? reject(err) : resolve(addrs.map((a) => a.address)))));
     pendingLookups.set(host, p);
     p.then(() => pendingLookups.delete(host), () => pendingLookups.delete(host));
   }
@@ -139,14 +142,24 @@ function tcpReachable(host: string, port: number, ms: number): Promise<boolean> 
   });
 }
 
+/** 并行连每个地址,任一个通就是通;全不通(或没地址)才是断。 */
+export function reachableAny(addresses: string[], port: number, ms = NETWORK_PROBE_TIMEOUT_MS): Promise<boolean> {
+  if (!addresses.length) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let pending = addresses.length;
+    for (const a of addresses) {
+      void tcpReachable(a, port, ms).then((ok) => {
+        if (ok) resolve(true);
+        else if (--pending === 0) resolve(false);
+      });
+    }
+  });
+}
+
 async function defaultProbe(t: ProbeTarget): Promise<boolean> {
-  let address = t.host;
-  if (!net.isIP(address)) {
-    const resolved = await withTimeout(lookupOnce(address), NETWORK_PROBE_TIMEOUT_MS);
-    if (!resolved) return false;
-    address = resolved;
-  }
-  return tcpReachable(address, t.port, NETWORK_PROBE_TIMEOUT_MS);
+  if (net.isIP(t.host)) return reachableAny([t.host], t.port);
+  const resolved = await withTimeout(lookupOnce(t.host), NETWORK_PROBE_TIMEOUT_MS);
+  return resolved ? reachableAny(resolved, t.port) : false;
 }
 
 let probeImpl: (t: ProbeTarget) => Promise<boolean> = defaultProbe;
@@ -189,15 +202,20 @@ export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export interface NetworkWaitResult {
-  /** up = 本来就通(没等);back = 断过、回来了;gave_up = 等满 maxMs 还没通 */
+  /** up = 本来就通(没等);back = 断过、回来了;gave_up = 醒着等满 maxMs 还没通 */
   state: 'up' | 'back' | 'gave_up';
+  /** 墙钟(含睡着的时间):上报 / 从重试预算里扣掉 */
   waitedMs: number;
+  /** 醒着等的时间:算 30 分钟上限的 */
+  awakeMs: number;
   since: number;
 }
 
 /**
  * 先探一次;通 → 立即返回 up。不通 → onWaiting(since) 一次(每段等待只报一次,不是每次探网),
- * 之后每 probeIntervalMs 探一次,通了返回 back,等满 maxMs 返回 gave_up。用户点停抛 AbortError。
+ * 之后每 probeIntervalMs 探一次,通了返回 back,醒着等满 maxMs 返回 gave_up。用户点停抛 AbortError。
+ * 等的中途合盖:两次探网之间远超一个周期的那段按一个周期算 —— 否则通勤路上合盖 2 小时,醒来 Wi-Fi 还没连上那一探
+ * 就因「早过了 30 分钟」放弃,正是这一步要接住的场景。
  */
 export async function waitForNetwork(opts: {
   target: ProbeTarget;
@@ -206,14 +224,21 @@ export async function waitForNetwork(opts: {
   onWaiting?: (since: number) => void;
 }): Promise<NetworkWaitResult> {
   const { target, signal } = opts;
-  if (await probeNetwork(target, signal)) return { state: 'up', waitedMs: 0, since: 0 };
+  if (await probeNetwork(target, signal)) return { state: 'up', waitedMs: 0, awakeMs: 0, since: 0 };
   const since = Date.now();
   const maxMs = opts.maxMs ?? NETWORK_WAIT_MAX_MS;
   opts.onWaiting?.(since);
+  let awakeMs = 0;
+  let prev = since;
   for (;;) {
-    const left = maxMs - (Date.now() - since);
-    if (left <= 0) return { state: 'gave_up', waitedMs: Date.now() - since, since };
+    const left = maxMs - awakeMs;
+    if (left <= 0) return { state: 'gave_up', waitedMs: Date.now() - since, awakeMs, since };
     await sleepOrAbort(Math.min(probeIntervalMs, left), signal);
-    if (await probeNetwork(target, signal)) return { state: 'back', waitedMs: Date.now() - since, since };
+    const ok = await probeNetwork(target, signal);
+    const now = Date.now();
+    const dt = now - prev;
+    prev = now;
+    awakeMs += dt > probeIntervalMs + SLEEP_GAP_MS ? probeIntervalMs : dt; // 睡着的那段不算
+    if (ok) return { state: 'back', waitedMs: now - since, awakeMs, since };
   }
 }

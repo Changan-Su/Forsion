@@ -12,3 +12,8 @@ export function llmRetryLine(r: LlmRetryState, t: (key: string, vars?: Record<st
   const vars = { s: (r.waitMs / 1000).toFixed(1), n: r.attempt, max: r.max || '?' }
   return t(r.overload ? 'chat.llmRetryingBusy' : 'chat.llmRetrying', vars)
 }
+
+/** 文案后面那截灰色报错原文。等网那行只说「网络已断开」:原文(fetch failed / 云端连接失败…)只留在悬停提示里。 */
+export function llmRetryErrorTail(r: LlmRetryState): string {
+  return r.phase === 'wait_network' ? '' : r.error || ''
+}

@@ -29,6 +29,8 @@ let script: Array<(o: any) => any>;
 let online = true;
 let probes = 0;
 let onProbe: (() => void) | undefined;
+/** buildProviderPayload 的出招:有就先执行(可抛),再照常返回 payload。 */
+let buildScript: Array<() => void>;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-netwait-'));
@@ -38,13 +40,14 @@ beforeEach(async () => {
   online = true;
   probes = 0;
   onProbe = undefined;
+  buildScript = [];
   __setNetworkProbeForTests(async () => { probes++; const r = online; onProbe?.(); return r; }, 10);
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   const fakeLlm: any = {
     resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'https://api.example.com/v1', apiModelId: 'm' }),
-    buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })) }),
+    buildProviderPayload: async (o: any) => { buildScript.shift()?.(); return { messages: o.messages.map((m: any) => ({ ...m })) }; },
     streamProviderCompletion: async (o: any) => {
       llmPayloads.push(o.payload);
       const step = script.shift();
@@ -142,6 +145,18 @@ describe('等待网络 · 首帧前', () => {
       expect(llmPayloads.length).toBe(1);
       expect(probes).toBeGreaterThan(1); // 确实在等(探了不止一次)
     } finally { off(); }
+  }, 20_000);
+});
+
+describe('等待网络 · build-payload', () => {
+  it('build-payload 断网 × 4(超过 3 次上限)→ 每次等网,不扣次数,run done', async () => {
+    buildScript = Array.from({ length: 4 }, offlineStep);
+    script = [finalStep('上下文送出去了。')];
+    const { run, statuses } = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(1);
+    expect(statuses.filter((s) => s.phase === 'llm_wait_network' && s.stage === 'build_payload').length).toBe(4);
+    expect(statuses.filter((s) => s.phase === 'llm_retry').length).toBe(0);
   }, 20_000);
 });
 
