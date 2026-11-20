@@ -2408,7 +2408,8 @@ export interface PluginContext {
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
      *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
      *  `typeof box.insertText === 'function'` on the returned handle. Later additions that a handle can't reveal
-     *  (an array of `suggest` triggers, the menu opening upward) are listed in `chatBoxCapabilities`. */
+     *  (an array of `suggest` triggers, the menu opening upward, the host's `@` panel via `mentions` / `onMention`) are listed in
+     *  `chatBoxCapabilities`. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,

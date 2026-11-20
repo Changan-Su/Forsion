@@ -4,13 +4,19 @@ import { createPortal } from 'react-dom'
 import { ChatBox, useChatBoxSelection, type ChatBoxSelection, type ChatBoxSubmission } from '../../components/chatbox'
 import { textareaCaretRect } from '../../components/chatbox/textareaCaret'
 import { SuggestMenu } from '../lib/SuggestMenu'
-import { HostLocaleProvider, registerMessages, useI18n } from '../../i18n'
+import { HostLocaleProvider, registerMessages, translate, useI18n } from '../../i18n'
 import { ChatBox as ChatBoxBase, mountHostReact, type ChatBoxProps as BaseChatBoxProps } from '@lcl/components'
-import { matchChatBoxSuggest, type ChatBoxSuggestMatch, type PluginChatBoxHandle, type PluginChatBoxOptions, type PluginChatBoxSuggest, type PluginChatBoxSuggestItem } from '../../../../shared/chatBox'
+import { matchChatBoxMention, matchChatBoxSuggest, type ChatBoxMention, type ChatBoxMentionKind, type ChatBoxSuggestMatch, type PluginChatBoxHandle, type PluginChatBoxOptions, type PluginChatBoxSuggest } from '../../../../shared/chatBox'
+import { dateCandidates } from '../blocks/markdown/dateQuery'
+import { usePageStore } from '../store/pageStore'
+import { getRecentPages } from '../lib/recents'
 
 registerMessages({
   'chatbox.label': { zh: '输入内容', en: 'Message' },
   'chatbox.submitFailed': { zh: '提交失败，内容已保留，请重试。', en: 'Submission failed. Your draft is preserved; try again.' },
+  // 同笔记 @ 面板的分组标签(WikiSuggest 'wiki.sec.date' / 'wiki.sec.page')
+  'chatbox.mention.date': { zh: '日期', en: 'Date' },
+  'chatbox.mention.page': { zh: '链接到页面', en: 'Link to page' },
 })
 
 const SUGGEST_LIMIT = 8
@@ -23,17 +29,63 @@ interface Host {
 }
 interface BoxProps { options: PluginChatBoxOptions; revision: number; host: Host; isAlive(): boolean }
 
+/** One menu row. `insert()` runs on pick and returns what replaces trigger + query ('' = just remove it). */
+interface SuggestRow { key: string; label: string; hint?: string; section?: string; insert(): string }
+
 interface SuggestMenuState {
   match: ChatBoxSuggestMatch
   trigger: string
-  items: PluginChatBoxSuggestItem[]
+  rows: SuggestRow[]
   left: number
   top: number
   anchorTop: number
 }
 
+const MENTION_KINDS: readonly ChatBoxMentionKind[] = ['date', 'page']
+/** Plugin input: keep the known kinds once each, in the plugin's order. */
+function mentionKinds(options: PluginChatBoxOptions): ChatBoxMentionKind[] {
+  const out: ChatBoxMentionKind[] = []
+  for (const k of Array.isArray(options.mentions) ? options.mentions : []) if (MENTION_KINDS.includes(k) && !out.includes(k)) out.push(k)
+  return out
+}
+const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '')
+
+/** The host's `@` rows: dates first, then notes (same order and labels as the notes `@` panel). No「提醒我」/ `@todo` rows:
+ *  those are note-line marks, a Chat Box consumer has nowhere to keep them. */
+function mentionRows(query: string, kinds: ChatBoxMentionKind[], take: (m: ChatBoxMention) => boolean): SuggestRow[] {
+  const rows: SuggestRow[] = []
+  if (kinds.includes('date')) {
+    for (const c of dateCandidates(query)) {
+      if (c.insert.startsWith('@remind:') || c.insert === '@todo') continue
+      const value = c.insert.slice(1)
+      rows.push({ key: `date:${value}`, label: c.label, hint: c.hint, section: rows.length ? undefined : translate('chatbox.mention.date'),
+        insert: () => (take({ kind: 'date', value }) ? '' : `${c.insert} `) })
+    }
+  }
+  if (kinds.includes('page')) {
+    const all = usePageStore.getState().pages
+    const counts = new Map<string, number>()
+    for (const p of all) counts.set(baseName(p), (counts.get(baseName(p)) ?? 0) + 1)
+    const inVault = new Set(all)
+    const recent = getRecentPages().filter((p) => inVault.has(p))
+    const ordered = [...new Set([...recent, ...all])]
+    const q = query.toLowerCase()
+    const first = rows.length
+    for (const path of ordered) {
+      if (rows.length >= SUGGEST_LIMIT) break
+      const name = baseName(path)
+      if (q && !name.toLowerCase().includes(q)) continue
+      const link = (counts.get(name) ?? 0) > 1 ? path.replace(/\.md$/i, '') : name
+      rows.push({ key: `page:${path}`, label: name, hint: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : undefined,
+        section: rows.length === first ? translate('chatbox.mention.page') : undefined,
+        insert: () => (take({ kind: 'page', path, link }) ? '' : `[[${link}]] `) })
+    }
+  }
+  return rows.slice(0, SUGGEST_LIMIT)
+}
+
 /** The textarea side of `suggest`: when to open, what to show, where. Reads options live, so update() takes effect at once. */
-function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBoxSuggestMatch, text: string) => void) {
+function useChatBoxSuggest({ options, host, isAlive }: BoxProps, replace: (match: ChatBoxSuggestMatch, text: string) => void) {
   const [menu, setMenu] = useState<SuggestMenuState | null>(null)
   const request = useRef(0)
   const composing = useRef(false)
@@ -44,26 +96,37 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
     const el = host.input.current
     const collapsed = !!el && el.selectionStart === el.selectionEnd
     // Several triggers: the one nearest the caret wins (`#a [[b` → `[[`). Plugin input: skip malformed entries.
-    let picked: PluginChatBoxSuggest | undefined
+    // The host's `@` (mentions) takes the `@` trigger; a plugin's own `@` suggest steps aside while it is on.
+    const kinds = mentionKinds(options)
+    let picked: PluginChatBoxSuggest | 'mention' | undefined
     let match: ChatBoxSuggestMatch | null = null
     if (el && collapsed && !composing.current && !options.disabled) {
       for (const s of ([] as PluginChatBoxSuggest[]).concat(options.suggest ?? [])) {
         if (!s || typeof s.trigger !== 'string' || typeof s.items !== 'function') continue
+        if (kinds.length && s.trigger === '@') continue
         const m = matchChatBoxSuggest(value, el.selectionStart, s.trigger, s.mention)
         if (m && (!match || m.from > match.from)) { match = m; picked = s }
       }
+      const m = kinds.length ? matchChatBoxMention(value, el.selectionStart) : null
+      if (m && (!match || m.from > match.from)) { match = m; picked = 'mention' }
     }
     if (!match || !picked) { dismissedAt.current = null; close(); return }
     if (dismissedAt.current === match.from) { close(); return }
-    const suggest = picked, found0 = match
-    setMenu(cur => (cur ? { ...cur, match: found0, trigger: suggest.trigger } : null)) // keep the range current while new items load
+    const suggest = picked, found0 = match, trigger = suggest === 'mention' ? '@' : suggest.trigger
+    setMenu(cur => (cur ? { ...cur, match: found0, trigger } : null)) // keep the range current while new items load
     const id = ++request.current
-    void Promise.resolve().then(() => suggest.items(found0.query)).then(found => {
+    const take = (m: ChatBoxMention): boolean => {
+      if (!isAlive() || typeof options.onMention !== 'function') return false
+      try { return options.onMention(m) === true } catch (e) { console.error('[amadeus] plugin Chat Box onMention failed', e); return false }
+    }
+    void Promise.resolve().then(() => suggest === 'mention' ? mentionRows(found0.query, kinds, take) : Promise.resolve(suggest.items(found0.query)).then(found =>
+      (Array.isArray(found) ? found : []).filter(i => typeof i?.label === 'string' && typeof i?.value === 'string').slice(0, SUGGEST_LIMIT)
+        .map((i, k): SuggestRow => ({ key: `${k}:${i.value}`, label: i.label, hint: i.hint, insert: () => `${i.value} ` })),
+    )).then(rows => {
       if (id !== request.current) return
-      const items = (Array.isArray(found) ? found : []).filter(i => typeof i?.label === 'string' && typeof i?.value === 'string').slice(0, SUGGEST_LIMIT)
-      if (!items.length || !el) { setMenu(null); return }
+      if (!rows.length || !el) { setMenu(null); return }
       const at = textareaCaretRect(el, found0.to)
-      setMenu({ match: found0, trigger: suggest.trigger, items, left: at.left, top: at.bottom, anchorTop: at.top })
+      setMenu({ match: found0, trigger, rows, left: at.left, top: at.bottom, anchorTop: at.top })
     }).catch(e => {
       console.error('[amadeus] plugin Chat Box suggest failed', e)
       if (id === request.current) setMenu(null)
@@ -84,7 +147,7 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
         <SuggestMenu
           className="chat-box-suggest"
           resetKey={menu.match.query}
-          items={menu.items.map((i, k) => ({ key: `${k}:${i.value}`, label: i.label, hint: i.hint }))}
+          items={menu.rows.map(r => ({ key: r.key, label: r.label, hint: r.hint, section: r.section }))}
           left={menu.left}
           top={menu.top}
           anchorTop={menu.anchorTop}
@@ -95,7 +158,7 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
             const typed = `${menu.trigger}${m.query}`
             close()
             // update({ value }) may have swapped the draft since the menu opened: the range no longer means anything.
-            if (host.input.current?.value.slice(m.from, m.to) === typed) replace(m, `${menu.items[i].value} `)
+            if (host.input.current?.value.slice(m.from, m.to) === typed) replace(m, menu.rows[i].insert())
           }}
           onClose={() => { dismissedAt.current = menu.match.from; close() }}
           focused={() => document.activeElement === host.input.current}

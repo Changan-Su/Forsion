@@ -19,6 +19,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 - `suggest: { trigger, items(query), mention? }`：`mention: true` 时只打 `trigger` 就开（`query` 为空串），紧跟中文也开，紧贴拉丁字母或数字不开。宿主补全浮层，外观和键盘与笔记 `#` 补全一致（↑↓ / Enter / Tab / Esc，输入法组字时不弹，Enter 选中不提交）。`items` 回数组或 Promise，每项 `{ label, hint?, value }`，最多显示 8 项；选中把 trigger + 查询换成 `value` 加一个空格。
 - `suggest` 也可以是数组（2026-11-02+）：几种触发各给一份（例如 `#` 标签 + `[[` 关联），离光标最近的那个打开；更早的宿主只认单个对象。传数组前看 `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`（2026-11-04+，没有这个字段 = 不支持）；别拿 `insertText`、`setBody` 这类别的接口当暗号（2.13.8-beta.3 有 `insertText` 却不收数组）。输入卡在窗口下半部分时浮层朝上开（放不下再翻到下面）。
 - `insertText(text)`：在光标处插入（有选区则替换）并聚焦，给「#」按钮、语音转写用。
+- `mentions` / `onMention`（2026-11-20+，能力表 `'mentions'`）：打开宿主自带的 `@` 面板，同笔记：`['date', 'page']` 日期在上（今天、明天、打 `@11/28` / `@2200` 出对应日期）、当前库笔记在下。默认插 `@YYYY-MM-DD `（带时刻 `@YYYY-MM-DDTHH:mm `）或 `[[名字]] `（重名插路径）。`onMention(m)` 同步返回 `true` = 插件自己接手（如设截止日），宿主只删掉 `@查询`；`m` 为 `{ kind: 'date', value }` / `{ kind: 'page', path, link }`。没有「提醒我」「不设日期」行。开着时 `suggest` 里 `@` 那项不生效，`#` / `[[` 照旧。触发同笔记：邮箱里的 `@` 不弹，查询可带 `/ : .`、不含空白、≤30 字。
 旧宿主忽略这三个选项，也没有 `insertText`，用 `typeof box.insertText === 'function'` 探测，四项同时到位。
 插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。

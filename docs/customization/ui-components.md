@@ -49,6 +49,7 @@ ctx.registerView({
 | `toolbar(el)` | 卡片底排左侧的插槽，排在模型药丸前面。把自己的 DOM 放进 `el`，可返回清理函数；清理函数在 dispose 时调用，update 传入另一个函数时也会先清理再重挂。两处抛错都由宿主记录，不影响输入框。 |
 | `suggest` | `{ trigger, items(query), mention? }`，光标旁的宿主补全浮层，外观和键盘行为与笔记里的 `#` 补全一致。 |
 | `insertText(text)` | handle 方法。在光标处插入，有选区时替换选区，并聚焦输入框。给「#」按钮、语音转写用，不会弹补全；用户接着打字才会弹。 |
+| `mentions`, `onMention` | 2026-11-20 起。打开宿主自带的 `@` 面板（和笔记里的同一个）：`'date'` 日期、`'page'` 当前库的笔记。见下面「@ 面板」。 |
 
 `toolbar` 的 `el` 在宿主挂载层里，不吃插件视图的基础样式，里面的按钮要写 class，比如 `.btn.sm`。
 
@@ -84,7 +85,31 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
 
-这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上、`@` 面板）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+
+### @ 面板 mentions
+
+`mentions: ['date', 'page']` 打开宿主自带的 `@` 面板，外观、键盘、分组标签都和笔记里的 `@` 一样：日期在上（今天、明天，或者接着打 `@11/28`、`@2200` 这类写法出对应日期），笔记在下。数组决定开哪几种，顺序固定是日期在前。
+
+- 触发规则同笔记：`@` 前是行首、空白或中文时开，紧贴字母数字（邮箱）不开；查询在同一行、不含空白和方括号、最多 30 字；输入法组字时不弹；Esc 之后同一个 `@` 不再弹。和 `suggest` 不同，查询可以带 `/`、`:`、`.`。
+- 选中后默认插入：日期 `@YYYY-MM-DD `（带时刻是 `@YYYY-MM-DDTHH:mm `，同笔记里的日期标记），笔记 `[[名字]] `（重名时插路径）。
+- `onMention(m)` 在插入前调用：`m` 是 `{ kind: 'date', value }` 或 `{ kind: 'page', path, link }`。返回 `true` 表示你自己接手（比如把日期设成截止日），宿主只删掉打的 `@查询`、不插任何字；返回别的或抛错都照默认插入。必须同步返回。
+- 面板里没有「提醒我」和「不设日期」：那是笔记行上的标记，Chat Box 的使用方没地方存。
+- 打开 `mentions` 时，`suggest` 里触发符是 `@` 的那一项不再生效；`#`、`[[` 照旧。
+- 先看 `ctx.ui.chatBoxCapabilities?.includes('mentions')`，旧宿主会忽略这两个选项。
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  mentions: caps.includes('mentions') ? ['date', 'page'] : undefined,
+  onMention(m) {
+    if (m.kind === 'date') { setDue(m.value); return true } // 日期进截止日，不写进标题
+  },
+  onSubmit: ({ text }) => addTask(text),
+})
+```
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 

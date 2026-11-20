@@ -241,7 +241,7 @@ ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, m
 
 返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(桌面小窗没有 `close`);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`；要笔记那样的 `@` 日期 / 页面面板，传 `mentions` 并用 `onMention` 接手（2026-11-20 起，先看能力表里的 `'mentions'`）。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 
