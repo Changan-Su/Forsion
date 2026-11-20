@@ -5,6 +5,7 @@ import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
  */
 import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
 import { DICTATION_CHANNELS, type DictationState } from '../shared/dictation'
+import { payCenterArgs, withEntry } from '../shared/telemetryKeys'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -226,11 +227,13 @@ const api = {
   authProviders: (): Promise<Array<{ id: string; loggedIn: boolean }>> => ipcRenderer.invoke('auth:providers'),
   providerLogin: (id: string): Promise<any> => ipcRenderer.invoke('auth:providerLogin', id),
   openAccountCenter: (section?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openAccountCenter', section),
-  openPayCenter: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openPayCenter'),
+  // entry(遥测 v3 契约 §16 / §17):额度操作 / 下单从哪个入口点的,一律追加在通道参数末尾 —— 老 Extend 忽略多出来的参数;
+  // 表外的值不带(shared/telemetryKeys withEntry / payCenterArgs)。openPayCenter 的 entry 排在 Extend 老签名 (tab, plan, period) 之后。
+  openPayCenter: (opts?: { entry?: string }): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openPayCenter', ...payCenterArgs(opts)),
   accountQuota: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:quota'),
-  accountUseResetCard: (type?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', type),
-  accountBgConvert: (percent: number): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', percent),
-  accountBgAutoMain: (enabled: boolean): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', enabled),
+  accountUseResetCard: (type?: string, entry?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', ...withEntry([type], entry)),
+  accountBgConvert: (percent: number, entry?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', ...withEntry([percent], entry)),
+  accountBgAutoMain: (enabled: boolean, entry?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', ...withEntry([enabled], entry)),
   /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。
    *  expectedAccountId(auth:status 的 accountId):只用这个账号发,换了号回 account-changed、不发(Extend 2026-11-07 起;老 Extend 不认 = 照旧)。 */
   submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>

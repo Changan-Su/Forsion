@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react'
 import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles, X } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
-import { museSettingTelemetry } from '../telemetrySend'
+import { museSettingTelemetry, quotaPromptTelemetry } from '../telemetrySend'
 import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, SpecialAgentsSummary, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
@@ -84,7 +84,10 @@ function NumberField({ label, value, onChange, min, max, hint }: { label: string
 function BackgroundQuotaSection({ quota, museModelId, modelLabel }: { quota: AccountQuotaView | null; museModelId: string; modelLabel: (id: string) => string }) {
   const { t } = useI18n()
   const bg = quota?.background
-  if (!window.tangu?.accountQuota || !bg?.modelId) return null
+  const visible = !!window.tangu?.accountQuota && !!bg?.modelId
+  // 匿名遥测 v3:Muse 设置里的后台额度说明露出一次(挂上 / 从没有变成有;重渲染不算)
+  useEffect(() => { if (visible) quotaPromptTelemetry('muse-settings', 'shown') }, [visible])
+  if (!visible || !bg?.modelId) return null
   return <>
     <div className="special-section-title">{t('bgQuota.title')}</div>
     <div className="special-bgquota">
@@ -92,7 +95,7 @@ function BackgroundQuotaSection({ quota, museModelId, modelLabel }: { quota: Acc
       {/* museModelId = Muse 实际用的:显式选的,或跟随时本机「设置 → 模型 → 后台任务」槽(config.json models.background)选的那个 */}
       {!!museModelId && museModelId !== bg.modelId && <p className="special-bgquota-warn">{t('bgQuota.otherModel', { model: modelLabel(museModelId) })}</p>}
       {!!window.tangu?.cloudInvoke && (
-        <button type="button" className="btn ghost sm" onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+        <button type="button" className="btn ghost sm" onClick={() => { quotaPromptTelemetry('muse-settings', 'bgSettings'); useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]) }}>
           {t('bgQuota.manage')} <ChevronRight size={12} aria-hidden="true" />
         </button>
       )}

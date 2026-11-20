@@ -26,6 +26,7 @@ import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { AccountUnitSection, unitPanelAvailable } from './AccountUnitSection'
+import { quotaPromptTelemetry } from '../telemetrySend'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -242,6 +243,9 @@ export const AccountCard: React.FC<{
     void d.retract().then(() => { if (drop.current === d) setMenu(null) })
   }
   const menuOpen = !!menu
+  // 匿名遥测 v3:头像菜单里的额度详情展开 = 额度提示露出一次(展开 / 收起来回点各算一次;同一次展开里重渲染不算)
+  const quotaShown = menuOpen && quotaOpen
+  useEffect(() => { if (quotaShown) quotaPromptTelemetry('avatar-menu', 'shown') }, [quotaShown])
   useEffect(() => {
     if (!menuOpen || !auth?.loggedIn) return
     const changed = (): void => { void refreshRewards() }
@@ -284,11 +288,12 @@ export const AccountCard: React.FC<{
     if (usingCard || !quota) return
     if (!confirmCard) { setConfirmCard(true); return }
     setUsingCard(true)
+    quotaPromptTelemetry('avatar-menu', 'card')
     const gen = accountGen.current
     const before = quota
     const pointsToken = pointsReadToken()
     try {
-      const r = await window.tangu?.accountUseResetCard?.('both')
+      const r = await window.tangu?.accountUseResetCard?.('both', 'avatar-menu')
       if (gen !== accountGen.current) return
       ++quotaRequest.current // 在途的额度 GET 作废:它可能比用卡早读到旧张数
       setMenu(null)
@@ -319,7 +324,7 @@ export const AccountCard: React.FC<{
   const hasBackpackPage = (cloudPages || publicWeb) && pages.backpack
   const hasPointsPage = (cloudPages || publicWeb) && pages.points
   const openPayCenter = window.tangu?.openPayCenter
-  const upgrade = openPayCenter ? () => { void openPayCenter() }
+  const upgrade = openPayCenter ? () => { quotaPromptTelemetry('avatar-menu', 'upgrade'); void openPayCenter({ entry: 'avatar-menu' }) }
     : publicWeb && pages.membership && window.tangu?.marketList
       ? () => useApp.getState().openMarket(undefined, { storeView: 'forsion-extend:membership', nonce: Date.now() })
       : null
@@ -510,7 +515,7 @@ export const AccountCard: React.FC<{
               </button>
             )}
             {hasQuotaPage && (
-              <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); openCloudPage('quota') }}>
+              <button className="ap-item ap-sub-item" onClick={() => { quotaPromptTelemetry('avatar-menu', 'more'); setMenu(null); openCloudPage('quota') }}>
                 <span>{t('sidebar.account.menu.more')}</span><span className="grow" /><ChevronRight size={12} />
               </button>
             )}

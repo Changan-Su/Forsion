@@ -26,7 +26,8 @@ import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { openWsFile } from '../../views/wsFileNav'
 import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
-import { tanguCount, tanguSetting } from '../telemetry'
+import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
+import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
@@ -409,6 +410,7 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
       const pointsOn = j.pointsAutoDeduct === true && typeof j.pointsBalance === 'number' && j.pointsBalance > 0
       if (pointsOn) toast(tr('quota.exhausted.pointsOn'))
       else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      tanguQuotaPrompt('run-toast', 'shown') // 匿名遥测 v3:run 收尾那条额度提示露出一次(toast 上没有按钮,只计露出)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === host.authGen()) quotaCheckBusy = false })
@@ -618,6 +620,17 @@ function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<un
 function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid: string): string {
   return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
     || useChildChat.getState().sessions[sid]?.model_id || ''
+}
+/** 这个会话实际跑的模型:会话自己存的,没有就按发送那条回退链落到全局默认(匿名遥测 v3 model_feedback 用)。 */
+function effectiveModelOf(s: AppState, sid: string): string {
+  return sessionModelOf(s, sid) || defaultModelOf(s, refForSession(sid)) || s.modelsResp?.defaultModelId || ''
+}
+/** run 收尾:首次运行(只算新装,见 tangu/firstRun.ts)。时长取本窗口的 run 统计(重挂的取触发它的用户消息时间起算)。 */
+function noteRunEnd(s: AppState, sessionId: string, runId: string, outcome: 'done' | 'error' | 'aborted', error?: string): void {
+  try {
+    const rs = s.runStatsBySession[sessionId]
+    noteRunEnded({ outcome, ...(error ? { error } : {}), ...(rs?.runId === runId ? { durationMs: Date.now() - rs.startedAt } : {}) })
+  } catch { /* 遥测不影响收尾 */ }
 }
 /** 外部引擎的提示(status/engine_notice):文案 zh/en 由引擎给,按钮只能指插件给这个引擎登记的对话菜单项(见 ApprovalTray)。 */
 export interface EngineNoticeUi { id: string; text: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
@@ -1840,6 +1853,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const autoKick = planAutoStart.delete(runId)
           expireRunPrompts(set, sessionId, runId)
           if (autoKick) queueAfterRun(set, sessionId, { text: t('plan.autoKickoff') })
+          noteRunEnd(get(), sessionId, runId, 'done')
           endRun(set, get, sessionId, runId)
         }
         checkQuotaExhausted(get().toast, get().tr)
@@ -1862,6 +1876,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
         expireRunPrompts(set, sessionId, runId)
+        noteRunEnd(get(), sessionId, runId, pl.aborted ? 'aborted' : 'error', pl.aborted ? undefined : String(pl.error || ''))
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         clearSuggestion(sessionId)
         // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
@@ -2142,8 +2157,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
     const t = homeTarget()
+    initFirstRun() // 首次运行的首启时刻(本版本起;已有记录就不动)
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== host.authGen()) return []
+    noteSessionsListed([...act, ...arch]) // 本端列表真读回来了:首启前就有会话 = 升级上来的,首次运行不发(旧一轮的结果也是真列表)
     if (sequence < appliedSessionRefresh) return get().sessions
     appliedSessionRefresh = sequence
     // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
@@ -3160,6 +3177,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const pending = stopRequests.get(runId)
     if (pending) return pending
     tanguCount('chatStop')
+    tanguModelCount('stop', effectiveModelOf(get(), sid))
     stoppedRuns.add(runId)
     planAutoStart.delete(runId)
     set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: runId } }))
@@ -3274,6 +3292,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0 || list[idx].role !== 'user') return
     tanguCount('chatEditResend')
+    tanguModelCount('editResend', effectiveModelOf(get(), sid))
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
@@ -3288,6 +3307,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     while (u >= 0 && (list[u].role !== 'user' || isContinuationRow(list[u].content))) u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
     tanguCount('chatRegenerate')
+    tanguModelCount('regenerate', effectiveModelOf(get(), sid))
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
