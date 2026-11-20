@@ -102,7 +102,7 @@ import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudi
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
 import { externalCreationFor } from './productTrust'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
-import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
+import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal, localStreamDecoder } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
 import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
@@ -4626,7 +4626,8 @@ app.whenReady().then(async () => {
 
   registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
     const cfg = await loadConfig()
-    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return null
+    // 本地离线模型也走流:主进程边收边解,和云端实时转写同一套事件(asrLocalStream.ts),说着就出字。
+    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return { local: true, decoder: () => localStreamDecoder() }
     const modelId = (requestedModel || cfg.asrModelId || '').trim()
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined

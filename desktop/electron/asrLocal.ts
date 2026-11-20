@@ -177,6 +177,19 @@ async function decodeSlice(rec: OfflineRecognizer, samples: Float32Array, sample
   return (result.text || '').trim()
 }
 
+/** 听写流(asrLocalStream.ts)用:先把模型备好,再交出逐段解码函数。同一会话里调用方保证串行;
+ *  几路听写同时开(聊天框 + 全局听写胶囊)时排成一队,不让同一个 recognizer 并发解。 */
+let streamQueue: Promise<unknown> = Promise.resolve()
+export async function localStreamDecoder(language?: string): Promise<(samples: Float32Array) => Promise<string>> {
+  if (!localModelReady()) throw new Error('本地语音模型未下载')
+  const rec = await getRecognizer(language)
+  return (samples) => {
+    const next = streamQueue.then(() => decodeSlice(rec, samples, 16000))
+    streamQueue = next.catch(() => {})
+    return next
+  }
+}
+
 /** 一条带时间的转写片段(秒);与 asr.ts 的 AsrSegment 同形(此处不 import,免主进程模块环)。 */
 export interface LocalSegment { start: number; end: number; text: string }
 
