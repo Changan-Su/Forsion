@@ -11,6 +11,7 @@
  *  R6 打开即读过:引擎收到 POST /agent/sessions/<Muse 私聊>/read
  *  R7 卡片堆里点批准 → 审批离开卡片堆,流里那行变成「你在 HH:MM 批准了 · <结果>」;角标降到 1,不再是警示色;
  *     卡片堆顶上换成待办卡,按钮依次「交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略」,没有「开个子会话」
+ *     R7c 待办卡上「依据 · 3 条」(按 id 读的 evidence,11-20 借鉴 dsh-superagent 第 2 条):缺省收起,点开三行、各带图标;截 dm-evidence.png
  *  R8 点「交给 Muse 执行」→ 引擎收到批准待办,卡片堆清空,流里那行变成「已交给 Muse 执行」
  *  R9 点 Xyra 行 → 角标清零
  * 截图(亮 / 暗)自己看。量的是 out/ 产物:改了源码先 `npx electron-vite build`。
@@ -34,6 +35,18 @@ const AGENTS = [
   { slug: 'muse', name: 'Muse', description: 'Background agent', createdBy: 'system', libraryDir: LIB },
 ]
 const T0 = Date.now() - 50 * 60_000
+// 待办的依据(引擎 GET /agent/special/muse/todos/:id 回;模型写的,跟用户语言走 —— 英文截图用英文那份)
+const EVIDENCE = process.env.LANG_EN
+  ? [
+    { kind: 'chat', source: 'You, in chat · 2026-10-18 09:40', quote: 'People keep asking how to install on Windows. The README needs it.' },
+    { kind: 'file', source: 'README.md', quote: '## Install (macOS) — the only install section' },
+    { kind: 'activity', source: 'Activity · 2026-10-18 10:05', quote: 'Opened 3 feedback threads titled “Windows install fails”' },
+  ]
+  : [
+    { kind: 'chat', source: '你在私聊里说的 · 2026-10-18 09:40', quote: '老有人问 Windows 怎么装，README 得补上。' },
+    { kind: 'file', source: 'README.md', quote: '## 安装（macOS）—— 只有这一节' },
+    { kind: 'activity', source: '活动 · 2026-10-18 10:05', quote: '打开了 3 条标题带「Windows 装不上」的反馈' },
+  ]
 const MUSE_MSGS = [
   { id: 'u1', role: 'user', timestamp: T0, content: '以后 CI 红了先跟我说一声。' },
   { id: 'a1', role: 'model', agent_slug: 'muse', timestamp: T0 + 60_000, content: '好的,记下了。' },
@@ -74,7 +87,7 @@ async function main() {
       if (p === '/agent/runs') return { runs: [] }
       if (p === '/agent/solo/agent/muse/open') return { session: sess(MUSE, 'Muse', 'muse', 2), created: false }
       if (p === '/agent/solo/agent/xyra/open') return { session: sess(XYRA, 'Xyra', 'xyra', 5), created: false }
-      if (p === '/agent/special/muse/todos/t1' && method === 'GET') return { todo: { id: 't1', title: '补 README 的 Windows 安装步骤', status: seen.todoApprove ? 'injected' : 'pending' } }
+      if (p === '/agent/special/muse/todos/t1' && method === 'GET') return { todo: { id: 't1', title: '补 README 的 Windows 安装步骤', status: seen.todoApprove ? 'injected' : 'pending', evidence: EVIDENCE } }
       if (p === '/agent/special/muse/todos/t1/approve' && method === 'POST') { seen.todoApprove++; return { ok: true } }
       if (p === '/agent/special/approvals/a1' && method === 'GET') return { approval: row() }
       if (p === '/agent/special/approvals/a1/approve' && method === 'POST') { seen.approve++; approved = true; return { ok: true, status: 'approved', result: row().result } }
@@ -159,6 +172,26 @@ async function main() {
     const want = process.env.LANG_EN ? ['*Let Muse do it', 'Do it here', 'Run in new session', 'Ignore'] : ['*交给 Muse 执行', '在这里做', '新会话执行', '忽略']
     r.check('R7b 卡片堆顶上换成待办卡:交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略,没有开个子会话', JSON.stringify(after.buttons) === JSON.stringify(want), JSON.stringify(after.buttons))
     await win.screenshot({ path: path.join(dir, 'dm-approved.png') })
+
+    // ── 待办卡上的依据(缺省收起,点开一行一条) ──
+    const CARD = `${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard`
+    const evBtn = win.locator(`${CARD} [data-evidence-toggle]`)
+    await evBtn.waitFor({ timeout: 10_000 }).catch(() => {})
+    const ev0 = await win.evaluate((CARD) => {
+      const b = document.querySelector(`${CARD} [data-evidence-toggle]`)
+      const toggles = [...document.querySelectorAll(`${CARD} .t2-taskcard-toggle`)]
+      return { text: b?.textContent.trim() || '', expanded: b?.getAttribute('aria-expanded') || '', list: !!document.querySelector(`${CARD} .t2-taskcard-evidence`), beforeBrief: !!b && toggles.indexOf(b) === 0 && toggles.length === 2 }
+    }, CARD)
+    await evBtn.click().catch(() => {})
+    await win.waitForSelector(`${CARD} .t2-taskcard-evidence > li`, { timeout: 5_000 }).catch(() => {})
+    await win.waitForTimeout(400)
+    const ev1 = await win.evaluate((CARD) => [...document.querySelectorAll(`${CARD} .t2-taskcard-evidence > li`)].map((li) => ({ kind: li.getAttribute('data-evidence-kind'), icon: !!li.querySelector('svg'), src: li.querySelector('.t2-taskcard-evsrc')?.textContent || '' })), CARD)
+    r.check('R7c 待办卡「依据 · 3 条」在「查看任务书」之前、缺省收起;点开三行各带图标与来源',
+      /^(依据 · 3 条|Evidence · 3)$/.test(ev0.text) && ev0.expanded === 'false' && !ev0.list && ev0.beforeBrief
+        && ev1.length === 3 && ev1.every((x) => x.icon && x.src) && ev1.map((x) => x.kind).join() === 'chat,file,activity', `${JSON.stringify(ev0)} ${JSON.stringify(ev1)}`)
+    await win.screenshot({ path: path.join(dir, 'dm-evidence.png') })
+    const box = await win.locator(CARD).boundingBox().catch(() => null)
+    if (box) await win.screenshot({ path: path.join(dir, 'dm-evidence-card.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 } })
 
     // ── 交给 Muse 执行 ──
     await win.locator(`${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard-actions button.primary`).click()

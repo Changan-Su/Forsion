@@ -1211,7 +1211,7 @@ export const patchMuseTodo = (t: EngineTarget, id: string, status: MuseTodo['sta
 /** 单条 TODO(收件箱任务卡按真状态决定给不给按钮);404 → Error.code = 'todo_not_found'。
  *  12s 超时:authFetch 缺省不超时,挂住的请求会让卡片一直停在「正在确认」—— 超时按读失败处理(给重试)。 */
 export const getMuseTodo = (t: EngineTarget, id: string) =>
-  request<{ todo: Pick<MuseTodo, 'id' | 'title' | 'status'> }>(t, `/agent/special/muse/todos/${encodeURIComponent(id)}`, undefined, { timeoutMs: 12_000 }).then((r) => r.todo)
+  request<{ todo: Pick<MuseTodo, 'id' | 'title' | 'status' | 'evidence'> }>(t, `/agent/special/muse/todos/${encodeURIComponent(id)}`, undefined, { timeoutMs: 12_000 }).then((r) => r.todo)
 
 /** 批准 Muse TODO(收件箱任务卡「交给 Muse 执行」):引擎按 id 读库里的任务书、CAS pending→injected、建一次性 Muse 日程。
  *  409 的 error 码:muse_disabled / todo_not_pending(request() 把它挂在 Error.code 上)。 */

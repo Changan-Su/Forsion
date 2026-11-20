@@ -1353,6 +1353,12 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   font-family: var(--font-mono, monospace); font-size: var(--ui-font-meta, 12px); line-height: 1.5;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
 }
+/* Muse 待办的依据(add_muse_todo 必填,卡片按 id 读,缺省收起):一行一条,来源灰、短摘正文色;字号跟卡面(meta)走,不另写 */
+.t2-taskcard-evidence { list-style: none; margin: 0; padding: 0 0 2px 18px; display: flex; flex-direction: column; gap: 5px; }
+.t2-taskcard-evidence > li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.55; }
+.t2-taskcard-evidence > li > svg { flex: none; margin-top: 3px; color: var(--text-faint, var(--text-muted)); }
+.t2-taskcard-evidence > li > span { min-width: 0; overflow-wrap: anywhere; }
+.t2-taskcard-evsrc { color: var(--text-muted); margin-right: 1em; }
 
 /* ====== Agent Desk 伴随面(ctx.desk.registerCompanion)—— 必须留在文件最末 ======
  * 卡片正文的 0.75 预览缩镜是给「文件缩略」用的;伴随面自绘(WebGL 画布),缩镜只会让它按 0.75 的

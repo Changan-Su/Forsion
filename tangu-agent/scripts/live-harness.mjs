@@ -149,6 +149,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
  *   npm run live:harness -- --only ruleobserve --muse-mode auto  # 规则观察(10-31):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察(改观察分支 / manage_automation 后跑)
  *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
+ *   npm run live:harness -- --only musetodo [--todo-neg]   # Muse 提待办必带依据(11-20):私聊明说要待办 → 有待办、依据对得上种子;--todo-neg 只有随口抱怨 → 一条都不提。新 home 单独跑
  *   npm run live:harness -- --only muselogdm                # 到期日程撞上 LOG 里的活(10-31):私聊存下的交代,第一个周期就得办。要新 home,和别的 Muse 场景分开跑(改周期提示词 / 日程文案后跑)
  *   npm run live:harness -- --only muserulechat             # 私聊直说规则(10-31):Muse 当场建好,不经过周期(改 museChatSection / manage_automation 后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
@@ -345,6 +346,7 @@ OPT_IN.add('handoff'); OPT_IN.add('crosstree'); // --only handoff,crosstree: 挪
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
+KEYS.push('musetodo'); OPT_IN.add('musetodo'); // --only musetodo:Muse 提待办必带依据(11-20,scripts/lib/muse-todo-live.mjs);--todo-neg = 只有随口抱怨,不该提;新 home 单独跑
 KEYS.push('musewakenow'); OPT_IN.add('musewakenow'); // --only musewakenow:面板「叫醒」(11-08)—— 时段外、心跳没到点,点一下就起一轮完整的周期
 OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
@@ -6283,6 +6285,10 @@ Then reply with only the command output.`,
   // 判据:最近几轮的第一行 trigger = manual 且 done、agent_runs.input 里带「用户刚叫醒你」那句(代码拼的简报原文,不看模型)、
   // 周期没报错、请求清掉(wakePending=false)。模型这一轮做了什么 / 有没有又睡下记进 detail 与 output(不计红)。
   // 负对照 = 没有这条路由的旧 dist(POST /wake 404 → 红)。
+  await scenario('musetodo', `musetodo Muse 提待办带依据(${MUSE_MODE}${argv.includes('--todo-neg') ? ',只有随口抱怨的负腿' : ''})`, async () => {
+    const { museTodoLive } = await import('./lib/muse-todo-live.mjs');
+    return museTodoLive({ api, home, workspace, shared, argv, MODEL, MUSE_MODE, until, sleep, asList, museCycleHints, museLogTail, engineLog });
+  });
   await scenario('musewakenow', `musewakenow 面板「叫醒」:时段外点一下就起一轮(${MUSE_MODE})`, async () => {
     const h = new Date().getHours();
     const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
