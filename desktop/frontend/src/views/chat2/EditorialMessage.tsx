@@ -16,10 +16,10 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
-import { turnHasOutput } from './continueTurn'
+import { isLatestAnswer, turnHasOutput } from './continueTurn'
 import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
-import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { TURN_RESUME_OPEN, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -282,6 +282,8 @@ registerMessages({
   'chat.retry': { zh: '重试', en: 'Retry' },
   'chat.continue': { zh: '继续生成', en: 'Continue' },
   'chat.continueTip': { zh: '保留已生成的内容，从断开处接着写', en: 'Keep what was generated and pick up where it stopped' },
+  'chat.truncated': { zh: '回答写到长度上限，停在了半句。', en: 'The reply hit the length limit and stopped mid-sentence.' },
+  'chat.lengthResumed': { zh: '回答较长，写到长度上限后自动接着写了一次。', en: 'This reply was long; it hit the length limit and was continued once automatically.' },
   'chat.regenerateTip': { zh: '删掉这一轮，从你的消息重新生成', en: 'Discard this turn and regenerate from your message' },
   'msg.resumed': { zh: '从这里继续生成', en: 'Continued from here' },
   'chat.copyError': { zh: '复制错误', en: 'Copy error' },
@@ -391,8 +393,33 @@ export interface MessageHandlers {
   onQuote?: (text: string) => void
   /** 回答失败后「重试」:同 /retry(从最后一条用户消息重发)。只读视图不传 → 不出按钮。 */
   onRetry?: () => void
-  /** 回答失败后「继续生成」:不删,发 <turn_resume> 接着写(store.continueRun)。这一轮有产出时才露出;只读视图不传。 */
-  onContinue?: () => void
+  /** 「继续生成」:不删,发 <turn_resume> 接着写(store.continueRun)。这一轮有产出时才露出;只读视图不传。
+   *  reason = 停下的原因(出错 / 写到输出上限 / 用户停下),决定那一行怎么跟模型说;缺省按出错。 */
+  onContinue?: (reason?: TurnResumeReason) => void
+}
+
+/** 停在半截、但不是出错的两种(11-15,借鉴 DeepSeek chat-demo 方案 ①):用户按了停止 / 写到输出上限(引擎自动接过一次仍停在半句)。
+ *  原因一行照「⏹ 已停止」的灰字;按钮行照出错那一行(RunErrorRow)。按钮只在这是会话最后一条回答、没在跑、这一轮有产出时出;
+ *  停下的只给「继续生成」(「重新生成」悬停操作条里已有),截断的再给「重新生成」。 */
+function HaltRow({ msg, sessionId, handlers }: { msg: UiMessage; sessionId?: string; handlers?: MessageHandlers }) {
+  const { t } = useI18n()
+  const kind: TurnResumeReason | null = msg.status === 'stopped' ? 'stopped' : msg.status === 'done' && msg.truncated ? 'length' : null
+  const can = useApp((s) => !!kind && !!sessionId && !s.runningBySession[sessionId]
+    && isLatestAnswer(s.messagesBySession[sessionId], msg.id) && turnHasOutput(s.messagesBySession[sessionId]))
+  if (!kind) return null
+  const canContinue = can && !!handlers?.onContinue
+  const canRegen = can && kind === 'length' && !!handlers?.onRetry
+  return (
+    <>
+      <div className="t2-dim" data-halt={kind}>{kind === 'stopped' ? `⏹ ${t('chat.aborted')}` : t('chat.truncated')}</div>
+      {(canContinue || canRegen) && (
+        <div className="t2-retry-row">
+          {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!(kind)}><StepForward size={13} />{t('chat.continue')}</button>}
+          {canRegen && <button type="button" className="t2-retry-btn" data-testid="msg-retry" title={t('chat.regenerateTip')} onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.action.regenerate')}</button>}
+        </div>
+      )}
+    </>
+  )
 }
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
@@ -1076,7 +1103,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
         {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
-        {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
+        <HaltRow msg={msg} sessionId={runSid} handlers={handlers} />
+        {msg.status === 'done' && msg.lengthResumed && !msg.truncated && <div className="t2-dim">{t('chat.lengthResumed')}</div>}
         {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
         {footer}
         {(msg.status === 'done' || msg.status === 'stopped') && (

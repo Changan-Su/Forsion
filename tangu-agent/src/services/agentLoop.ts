@@ -34,6 +34,7 @@ import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
+import { LENGTH_RESUME_CHECK } from '../contracts/turnResume.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
@@ -1630,9 +1631,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
    *  正文(模型「先说话、再调工具」)必须经此累积,否则落库时只剩末轮收尾词,已流式给用户
    *  看过的话会凭空消失(实例:正文被一句 "NOTHING" 顶掉)。 */
   let uiLeakRollback: string | null = null; // 文档 JSON 写成正文的那条纠正:那条正文进终稿之前的终稿,重答到了才退回到它
+  // 写到输出上限后的自动续写(LENGTH_RESUME_CHECK):接上的那段要和断处直接相连 —— 流式时客户端是原样拼 token 的,
+  // 终稿若在中间插空行,done 一到就把「下午」和「上第二节课」拆成两段。只粘下一段正文,用掉即复位。
+  // glueJoint = 断处那段原文末尾被 trim 掉的空白(断在行尾时是 \n):原样补回,终稿与流式时逐字一致 ——
+  // 少了它,截在「…获取食物。\n」之后、模型从「5. 喜鹊」接着写,就粘成「获取食物。5. 喜鹊」(11-15 live 复跑抓到)。
+  // 只对紧跟着的那一次模型回复有效:续写分支挂进 pendingGlue,下一轮开头交给 glueJoint,再下一轮自动作废 ——
+  // 续写那一发去调了工具 / 被插话转走 / 没出正文,后面的正文都不该再粘到断处(Codex 评审 11-15 #2)。
+  let pendingGlue: string | null = null;
+  let glueJoint: string | null = null;
   const appendFinal = (text: string): void => {
-    const t = String(text || '').trim();
+    const raw = String(text || '');
+    const t = raw.trim();
     if (!t) return;
+    if (glueJoint !== null && finalContent.trim()) {
+      const joint = glueJoint;
+      glueJoint = null;
+      finalContent = finalContent.trimEnd() + joint + raw.trimEnd();
+      return;
+    }
+    glueJoint = null;
     finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${t}` : t;
   };
   const allToolCalls: ToolCall[] = [];
@@ -3239,6 +3256,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
+    let lengthResumed = false; // 纯文字写到输出上限:自动接着写只接一次,再撞上限就停下、交给界面的「继续生成」
+    let finalTruncated = false; // 收尾那一发是被输出上限截断的(done 带 truncated,界面画「停在了半句」那行)
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
@@ -3335,6 +3354,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       runStat.iteration = iteration + 1;
+      glueJoint = pendingGlue; // 写到上限后自动续写的那一发:它的正文直接粘在断处(见 appendFinal)
+      pendingGlue = null;
       // 子代理(delegate)的花销在工具批里记进来:它们把 run 推过上限时,别再先发一次模型请求才收尾(creview 09-27 P1)。
       // 主循环自己的越限仍在下方记账处判(那一刻才知道本轮的价)。
       if (delegatedCost > 0 && isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
@@ -3850,6 +3871,31 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (lastIter) iteration -= 1; // 迟到的结局也必须有人读
           continue;
         }
+        // 纯文字写到输出上限、停在半句(带工具调用的截断走下面 length 分支):用户没让它停,自动接着写一次。
+        // 正文已进终稿(appendFinal 在上面),接上的那段由 glueJoint 直接粘在断处;续写指令不落库不上屏。
+        // 只接一次:再撞上限就照常收尾、done 带 truncated,界面给「继续生成」。整条被模型写成工具标记的不接(那条走纠错网)。
+        // iteration < maxIterations - 2:续写那一发不能是收尾轮,否则它收尾时验证命令等闸门全被跳过(Codex 评审 11-15 #3);
+        // 轮数紧的就不自动接,照常收尾、给「继续生成」。
+        // 一个字都没写出来(推理吃光了输出额度)的不接:那不是「停在半句」,照旧走空终稿的兜底提示。
+        const cutRaw = String(res.content || '');
+        if (
+          res.finishReason === 'length' && !res.toolCalls?.length && !!cutRaw.trim() && !lastIter && iteration < maxIterations - 2 && !leakedText &&
+          !lengthResumed && !(consumed && consumed.ok === false)
+        ) {
+          lengthResumed = true;
+          pendingGlue = cutRaw.slice(cutRaw.trimEnd().length);
+          workingMessages.push(assistantTurnOf(res, res.content || ''));
+          workingMessages.push({ role: 'user', content: LENGTH_RESUME_CHECK } as ChatMessage); // 不落库不上屏:harness 脚手架
+          void publish(runId, 'status', { phase: 'length_resume', iteration });
+          await appendStep({
+            id: uuidv4(), runId, stepNo: iteration,
+            llmResponse: responseForStep(res),
+          });
+          continue;
+        }
+        // 自动续写的那一发没写出正文(空 / 整条是工具标记):断处还在半句,照样算截断,界面给「继续生成」(Codex 评审 11-15 #4)
+        const resumeLeftCut = glueJoint !== null;
+        glueJoint = null;
         // —— Stop hook：run 自然收尾即触发（host-only；云端 no-op）。decision:block+reason → 复用 steer 机制
         //    强制续跑（非末轮），否则纯 side-effect（通知/webhook/日志）。——
         const stopV = await runHooks('Stop', {
@@ -3966,6 +4012,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // Historian fork 快照在配额/截断等异常出口重复追加同一段(Codex 评审 08-03 Major)。
         finalTurnText = leakedText ? '' : String(res.content || '');
         finalTurnNoTools = lastIter;
+        finalTruncated = (res.finishReason === 'length' && !res.toolCalls?.length && !leakedText && !!String(res.content || '').trim()) || resumeLeftCut;
         if (leakedText || droppedCalls) {
           const stop = '(模型把工具调用写成了正文、未被执行,该段已丢弃。发送「继续」可让我接着操作。)';
           finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${stop}` : stop;
@@ -4049,6 +4096,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // 中间迭代的 preamble 正文累积进终稿(工具标记样式的杂文除外,那是待纠正的假工具调用)。
       if (res.content && !looksLikeToolCallText(res.content)) appendFinal(res.content);
+      glueJoint = null; // 续写那一发直接去调工具了:工具卡已经隔开,后面的正文照常另起一段
 
       workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
       persistToolCallsAtCurrentOffset(res.toolCalls);
@@ -4135,9 +4183,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
     await markIfAsked(sessionId, userId, input, finalContent).catch(() => {}); // 父子会话:收尾问句 → 列表「等你」(要在 done 之前)
+    // truncated:收尾那一发停在了输出上限(自动续写已用掉或来不及),界面画「停在了半句」+「继续生成」;
+    // lengthResumed:这一轮自动接着写过一次。都只在这次 done 上,不落库 —— 和「已停止」一样是当场的状态。
     await publish(runId, 'done', {
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
+      ...(finalTruncated ? { truncated: true } : {}),
+      ...(lengthResumed ? { lengthResumed: true } : {}),
     });
     await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
     // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。

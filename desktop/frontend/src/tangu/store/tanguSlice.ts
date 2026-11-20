@@ -35,7 +35,7 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
-import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { turnResumeMarker, isContinuationRow, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -1048,9 +1048,10 @@ export interface TanguState {
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
-  /** 「继续生成」:回答因报错 / 额度用完停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写(retry / regenerate 是删掉重来)。
+  /** 「继续生成」:回答因报错 / 额度用完 / 写到输出上限 / 被用户停下而停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写
+   *  (retry / regenerate 是删掉重来)。reason 决定那一行怎么跟模型说停下的原因,缺省 error。
    *  quotaFallback:额度卡上点了「改用 X」,这一次直接走后备。false = 没发出去(在跑 / 发送失败,已 toast)。 */
-  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean }): Promise<boolean>
+  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean; reason?: TurnResumeReason }): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
@@ -1798,6 +1799,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           return {
             ...m, content, status: 'done' as const, live: undefined, ...endThink(m),
             ...(settled ? { segments: settleSegments(content, m.segments, m.toolEvents, pl.toolOffsets) ?? m.segments } : {}),
+            // 写到输出上限:引擎自动接过一次 / 接过还停在半句(只在这次 done 上,重载即无,同「已停止」)
+            truncated: pl.truncated === true ? true : undefined,
+            lengthResumed: pl.lengthResumed === true ? true : undefined,
             approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
             inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
           }
@@ -3257,7 +3261,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!sid || get().runningBySession[sid] || continuing.has(sid)) return false
     continuing.add(sid)
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
-    try { return await get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
+    try { return await get().send(turnResumeMarker(opts?.reason ?? 'error'), [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
   },
 
   editUserMessage: (messageId, newText, targetSessionId) => {
