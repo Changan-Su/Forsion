@@ -157,6 +157,15 @@ export interface StateStore {
    *  与 finalize 的差别:不动 display_files 里已有的(没给就留着,图片交付回执在里面)、不刷会话 updated_at、插入后不改时间戳;
    *  顺带刷新 run 行的 updated_at(恢复按它算「多久之前停的」)。可选:只有本机 SQL 存储实现,云端 worker 没有 = 不做进度写。 */
   persistAssistantProgress?(m: FinalizeMessageInput & { runId: string }): Promise<void>;
+  /** 已落库段的工具结果按调用 id 原地换掉(挂起审批切段后的「开始执行」/ 兑现回填,评审 #13):只动 tool_results 这一列,
+   *  不碰 origin / model_id / 正文 / 时间戳。返回是否写上了(行不在 = false)。可选:只有本机 SQL 存储实现。 */
+  patchToolResults?(messageId: string, entries: any[]): Promise<boolean>;
+  /** 终稿助手行 + run 记 done 同一事务提交(评审 #5):进程死在两次提交之间,完整终稿已在历史里、run 却还是 running,
+   *  下次启动会再续一轮。可选:只有本机 SQL 存储实现;没有事务的库逐条写。 */
+  completeRun?(m: FinalizeMessageInput, done: { runId: string; result: any; tokensTotal?: number }): Promise<void>;
+  /** 执行入口原子认领 queued → running(评审 #1):返回 false = 这一行已经不是 queued(别处在跑 / 已终态),不许再执行。
+   *  可选:云端 worker 没有 = 照旧直接记 running。 */
+  claimRunStart?(runId: string): Promise<boolean>;
   hasImageDelivery?(userId: string, sessionId: string, delivery: { id: string; receipt: string }): Promise<boolean>;
 
   // ── sessions ──

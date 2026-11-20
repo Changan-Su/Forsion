@@ -40,6 +40,8 @@ export const INTERRUPTED_READ_RESULT = '[Interrupted: the engine stopped before 
 export const OUTCOME_UNKNOWN_RESULT = '[Outcome unknown: the engine stopped while this call was running. It may have partially or fully taken effect. Check the current state before relying on it or running it again.]';
 export const APPROVAL_EXPIRED_RESULT = '[Not completed: the approval request for this call expired when the engine stopped. Run it again if it is still needed; it will ask for approval again.]';
 export const QUESTION_EXPIRED_RESULT = '[Not completed: this question expired unanswered when the engine stopped. Ask it again if you still need the answer.]';
+/** 「已开始」没能落库、而这个调用可能有副作用时,引擎不执行它(评审 #4),给模型的结果。 */
+export const CALL_NOT_STARTED_RESULT = 'Error: this call was not run. The engine could not record that it was starting, so it did not run a call that may have side effects. Nothing was executed; run it again if it is still needed.';
 
 /** 在飞记录 → 合成结果。sideEffect 只有 none / read 算「没有副作用」;缺省 / unknown 一律按有副作用说。 */
 export function inflightResultText(inflight: ToolInflight): string {
@@ -61,14 +63,15 @@ export function expiredParkedText(toolName: string): string {
  * 写失败只记日志:进度写是尽力而为,不能拖垮 run。
  */
 export interface RowWriter {
-  progress(write: () => Promise<void>): Promise<void>;
+  /** 回 true = 这次请求所在的那一笔写成功落库了;false = 写失败 / 已关闭被丢弃。有副作用的调用据此决定能不能开始执行(评审 #4)。 */
+  progress(write: () => Promise<void>): Promise<boolean>;
   exclusive<T>(fn: () => Promise<T>, opts?: { close?: boolean }): Promise<T>;
   readonly closed: boolean;
 }
 
 export function createRowWriter(onError?: (e: unknown) => void): RowWriter {
   let tail: Promise<unknown> = Promise.resolve();
-  let queued: Promise<void> | null = null;
+  let queued: Promise<boolean> | null = null;
   let closed = false;
   const chain = <T>(fn: () => Promise<T>): Promise<T> => {
     const p = tail.then(fn);
@@ -78,12 +81,12 @@ export function createRowWriter(onError?: (e: unknown) => void): RowWriter {
   return {
     get closed() { return closed; },
     progress(write) {
-      if (closed) return Promise.resolve();
+      if (closed) return Promise.resolve(false);
       if (queued) return queued;
       const p = chain(async () => {
         queued = null; // 从这一刻起取快照:之后再来的请求要另排一次
-        if (closed) return;
-        try { await write(); } catch (e) { onError?.(e); }
+        if (closed) return false;
+        try { await write(); return true; } catch (e) { onError?.(e); return false; }
       });
       queued = p;
       return p;
@@ -93,4 +96,9 @@ export function createRowWriter(onError?: (e: unknown) => void): RowWriter {
       return chain(fn);
     },
   };
+}
+
+/** sideEffect 为 none / read 的调用重跑无害:进度写失败也照常执行。其余(含 unknown)要先确认「已开始」落库了。 */
+export function harmlessSideEffect(sideEffect: string): boolean {
+  return sideEffect === 'none' || sideEffect === 'read';
 }

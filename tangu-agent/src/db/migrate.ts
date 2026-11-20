@@ -381,6 +381,10 @@ export async function runMigration(): Promise<void> {
     // 被停下的 run(status=interrupted)由哪个续跑 run 接了(中断任务续跑方案 B):启动恢复用它做「只认领一次」的 CAS。
     // '-' = 没自动续、只补了一条中断说明行。NULL = 还没处理。
     ['agent_runs', 'resumed_by VARCHAR(36)'],
+    // 被停下那一刻(评审 #10):过期 / 崩溃计数的时间基准。启动恢复补标的行记它最后一次动静的时间(原 updated_at),不是补标那一刻。
+    ['agent_runs', 'interrupted_at TIMESTAMP'],
+    // 用户按停 / 急停 / 级联取消 / 通道下线(评审 #2):abortRun 当场记下,强杀后重启据此按 aborted 收尾、不续跑。
+    ['agent_runs', 'cancel_requested VARCHAR(32)'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);

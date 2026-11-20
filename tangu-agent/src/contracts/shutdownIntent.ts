@@ -9,10 +9,11 @@
 export const SHUTDOWN_INTENT_FILE = 'shutdown-intent.json'
 export const INTENT_MAX_AGE_MS = 10 * 60_000
 
-export type ShutdownIntentReason = 'app_quit' | 'app_update' | 'engine_restart' | 'account_change'
+/** engine_stop:桌面明说「这次停了别续」(例如只清桌面设置、保留引擎数据那条路:续跑开关随设置一起没了,不能按缺省开去续)。 */
+export type ShutdownIntentReason = 'app_quit' | 'app_update' | 'engine_restart' | 'account_change' | 'engine_stop'
 export interface ShutdownIntent { reason: ShutdownIntentReason; pid: number; at: number }
 
-const REASONS: readonly string[] = ['app_quit', 'app_update', 'engine_restart', 'account_change']
+const REASONS: readonly string[] = ['app_quit', 'app_update', 'engine_restart', 'account_change', 'engine_stop']
 
 export function parseShutdownIntent(raw: string): ShutdownIntent | null {
   try {

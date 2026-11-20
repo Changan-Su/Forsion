@@ -196,7 +196,7 @@ async function waitMidTool(runId: string): Promise<any[]> {
 }
 
 describe('E2 write-ahead persistence of the current assistant segment', () => {
-  it('mid-tool the row already holds the calls, the running one as started and the next as pending; a user stop then writes today’s row', async () => {
+  it('mid-tool the row already holds the calls, the running one as started and the next as pending; a user stop keeps that progress (review #11)', async () => {
     script = [toolTurn([bashCall('c1', 'sleep 30'), bashCall('c2', 'echo second')], 'Running two commands.')];
     const { runId, off } = await startRun(HOST);
     const mid = await waitMidTool(runId);
@@ -210,8 +210,10 @@ describe('E2 write-ahead persistence of the current assistant segment', () => {
     const st = await settled(runId);
     off();
     expect(st.status).toBe('aborted');
-    const after = await modelRow(`${runId}-a`);
-    expect(after.tool_results, '用户按停的落库与今天一样:没结果的调用缺项,不留在飞记录').toBeNull();
+    const after = parsed((await modelRow(`${runId}-a`)).tool_results);
+    // 评审 #11:用户按停也带着这一批的进度落最后一笔 —— 被停掉的那条命令的真结局照留,没轮到的记 pending,不再整行抹成「缺项」
+    expect(String(after.find((r: any) => r.tool_call_id === 'c1')?.content)).toContain('aborted');
+    expect(after.find((r: any) => r.tool_call_id === 'c2')?.inflight).toEqual({ state: 'pending', sideEffect: expect.any(String) });
     expect(await userRows()).toContain(TURN_INTERRUPTED_MARKER);
   }, 30_000);
 
@@ -225,7 +227,6 @@ describe('E2 write-ahead persistence of the current assistant segment', () => {
     expect(st).toEqual({ status: 'interrupted', error: 'interrupted:app_update' });
     const results = parsed((await modelRow(`${runId}-a`)).tool_results);
     // run_bash 被中止时自己会返回(exit -1 aborted):那是它真实的结局,照记;后面那个还没轮到的记 pending。
-    // 用户按停的同一时刻(上一例)这一批的两项都不落 —— 只有 interrupted 才带进度。
     const c1 = results.find((r: any) => r.tool_call_id === 'c1');
     expect(c1?.inflight).toBeUndefined();
     expect(String(c1?.content)).toContain('aborted');
@@ -246,7 +247,9 @@ describe('E2 write-ahead persistence of the current assistant segment', () => {
     const st0 = deps().state;
     const origUpdate = st0.updateRunStatus.bind(st0);
     const origAppend = st0.appendEvent.bind(st0);
+    const origComplete = st0.completeRun!.bind(st0);
     (st0 as any).updateRunStatus = async (id: string, status: string, extra?: any) => { if (status === 'done') order.push('status:done'); return origUpdate(id, status, extra); };
+    (st0 as any).completeRun = async (m: any, done: any) => { order.push('status:done'); order.push('tx'); return origComplete(m, done); };
     (st0 as any).appendEvent = (id: string, type: string, payload: any) => { if (type === 'done') order.push('event:done'); return origAppend(id, type, payload); };
     try {
       const { runId, off } = await startRun(HOST);
@@ -264,8 +267,10 @@ describe('E2 write-ahead persistence of the current assistant segment', () => {
       await waitUntil(() => order.includes('event:done'), 'done 事件');
       expect(order.indexOf('status:done')).toBeGreaterThanOrEqual(0);
       expect(order.indexOf('status:done'), 'done 先落库、事件后发').toBeLessThan(order.indexOf('event:done'));
+      expect(order, '终稿与 done 同一事务(评审 #5),不再另调 updateRunStatus').toEqual(['status:done', 'tx', 'event:done']);
     } finally {
       (st0 as any).updateRunStatus = origUpdate;
+      (st0 as any).completeRun = origComplete;
       (st0 as any).appendEvent = origAppend;
     }
   }, 30_000);

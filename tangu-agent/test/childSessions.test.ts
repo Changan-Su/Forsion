@@ -190,6 +190,42 @@ describe('child sessions', () => {
     expect((await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [`${P}-k`]))[0].report_run_id).toBeNull();
   });
 
+  it('回报那一轮被停下(interrupted,中断任务续跑评审 #14):还没判 / 认领了续跑 → 等;判了不续 → 送 interrupted 并清指针;续了 → 等续跑那轮的结果', async () => {
+    await setup();
+    const kid = async (id: string, run: string): Promise<void> => {
+      await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id) VALUES (?, 'u1', 'tangu', ?, 'm1', 'user', ?, ?)`, [id, id, P, run]);
+    };
+    const pointer = async (id: string): Promise<any> => (await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [id]))[0].report_run_id;
+    await kid(`${P}-k1`, 'RI1');
+    await kid(`${P}-k2`, 'RI2');
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, error, input, assistant_message_id) VALUES ('RI1', ?, 'u1', 'interrupted', 'interrupted:app_quit', '{}', 'RI1-a')`, [`${P}-k1`]);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, error, input, assistant_message_id, resumed_by) VALUES ('RI2', ?, 'u1', 'interrupted', 'interrupted:app_update', '{}', 'RI2-a', 'RI2r')`, [`${P}-k2`]);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('RI1-a', ?, 'model', 'half of k1', 1)`, [`${P}-k1`]);
+    // 都还没定:RI1 启动恢复还没判;RI2 认领了续跑,续跑 run 还没建成
+    await deliverPendingChildReports(); await idle();
+    expect(await updatesIn(P)).toHaveLength(0);
+    expect([await pointer(`${P}-k1`), await pointer(`${P}-k2`)]).toEqual(['RI1', 'RI2']);
+    // RI1 判了不续 → 送 interrupted、清指针
+    await query(`UPDATE agent_runs SET resumed_by = '-' WHERE id = 'RI1'`);
+    await deliverPendingChildReports(); await idle();
+    let ups = await updatesIn(P);
+    expect(ups).toHaveLength(1);
+    expect(ups[0]).toContain('status="interrupted">\nhalf of k1');
+    expect(ups[0]).not.toContain(`${P}-k2`);
+    expect(await pointer(`${P}-k1`)).toBeNull();
+    // RI2 的续跑在跑 → 还等;跑完 → 送续跑那一轮的回答
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input, assistant_message_id) VALUES ('RI2r', ?, 'u1', 'running', '{}', 'RI2r-a')`, [`${P}-k2`]);
+    await deliverPendingChildReports(); await idle();
+    expect(await updatesIn(P)).toHaveLength(1);
+    await query(`UPDATE agent_runs SET status = 'done' WHERE id = 'RI2r'`);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('RI2r-a', ?, 'model', 'k2 finished after resume', 2)`, [`${P}-k2`]);
+    await deliverPendingChildReports(); await idle();
+    ups = await updatesIn(P);
+    expect(ups).toHaveLength(2);
+    expect(ups[1]).toContain('status="finished">\nk2 finished after resume');
+    expect(await pointer(`${P}-k2`)).toBeNull();
+  });
+
   it('子会话不能再开子会话;子代理 / Muse / 团队成员 / 通道 run 不可见', async () => {
     await setup();
     const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
