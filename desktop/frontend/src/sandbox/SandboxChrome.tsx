@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Download, Flag, FlaskConical, RotateCcw, X } from 'lucide-react'
-import { OverlayAt, setEdgeAccessory } from '@lcl/engine'
+import { OverlayAt, UI_MODE, setEdgeAccessory } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { sandboxSelf } from './sandboxWindow'
 import './sandbox.css'
@@ -38,34 +38,35 @@ export function SandboxChrome() {
   const [text, setText] = useState('')
   const act = (a: 'report' | 'install' | 'reset', n?: string) => void window.tangu?.sandbox?.action(a, n)
   // 标识与按钮进右上角浮钮组(引擎替它在标签头上让位);弹出的「报告问题」框和说明卡留在这里,画在整窗之上。
-  useEffect(() => {
-    if (!self) return
-    const full = `${self.name} ${self.version}`
-    setEdgeAccessory(
-      <div className="sbx-chrome-row" data-testid="sandbox-chrome">
-        <span className="sbx-pill" title={`${full}\n${t('sandbox.note')}`}><FlaskConical size={13} />{t('sandbox.pill')}<span>· {self.name}</span></span>
-        <button type="button" className="sbx-ibtn" title={t('sandbox.resetTip')} aria-label={t('sandbox.reset')} onClick={() => act('reset')}><RotateCcw size={14} /></button>
-        <button type="button" className={`sbx-ibtn${reporting ? ' is-on' : ''}`} title={t('sandbox.reportTip')} aria-label={t('sandbox.report')} aria-expanded={reporting}
-          onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt({ x: r.right, y: r.bottom + 6 }); setReporting((v) => !v) }}><Flag size={14} /></button>
-        <button type="button" className="sbx-cbtn primary" title={t('sandbox.install')} onClick={() => act('install')}><Download size={12} />{t('sandbox.installShort')}</button>
-      </div>,
-    )
-  }, [self, t, reporting])
+  // 手机界面预览(UI_MODE 'mobile',整窗重载才切)走单列壳、没有浮钮组 → 照旧自己浮在右上角。
+  // data-sbx-host:这几块是给人的,agent 的 read / 找目标都跳过它们(sandboxWindow.ts 的 HOST_ONLY),免得点到宿主的「重置」清掉数据。
+  const docked = UI_MODE !== 'mobile'
+  const row = !self ? null : (
+    <div className="sbx-chrome-row" data-sbx-host="" data-testid="sandbox-chrome">
+      <span className="sbx-pill" title={`${self.name} ${self.version}\n${t('sandbox.note')}`}><FlaskConical size={13} />{t('sandbox.pill')}<span>· {self.name}</span></span>
+      <button type="button" className="sbx-ibtn" title={t('sandbox.resetTip')} aria-label={t('sandbox.reset')} onClick={() => act('reset')}><RotateCcw size={14} /></button>
+      <button type="button" className={`sbx-ibtn${reporting ? ' is-on' : ''}`} title={t('sandbox.reportTip')} aria-label={t('sandbox.report')} aria-expanded={reporting}
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setAt({ x: r.right, y: r.bottom + 6 }); setReporting((v) => !v) }}><Flag size={14} /></button>
+      <button type="button" className="sbx-cbtn primary" title={t('sandbox.install')} onClick={() => act('install')}><Download size={12} />{t('sandbox.installShort')}</button>
+    </div>
+  )
+  useEffect(() => { if (docked) setEdgeAccessory(row) }, [self, t, reporting]) // eslint-disable-line react-hooks/exhaustive-deps -- row 由这三样决定
   useEffect(() => () => setEdgeAccessory(null), [])
   if (!self) return null
   const closeNote = () => { setNote(false); try { localStorage.setItem(NOTE_KEY, '1') } catch { /* 下次再提示 */ } }
   const send = () => { act('report', text.trim()); setText(''); setReporting(false) }
   return (
     <>
+      {!docked && <div className="sbx-float">{row}</div>}
       {reporting && (
-        <OverlayAt x={at.x} y={at.y} alignEnd className="sbx-pop ui-popover">
+        <OverlayAt x={at.x} y={at.y} alignEnd className="sbx-pop ui-popover" data-sbx-host="">
           <textarea autoFocus value={text} placeholder={t('sandbox.reportPlaceholder')} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send(); if (e.key === 'Escape') setReporting(false) }} />
           <div className="sbx-pop-actions"><button type="button" className="sbx-cbtn primary" onClick={send}>{t('sandbox.reportSend')}</button></div>
         </OverlayAt>
       )}
       {note && !reporting && (
-        <div className="sbx-note" role="status" data-testid="sandbox-note">
+        <div className="sbx-note" role="status" data-sbx-host="" data-testid="sandbox-note">
           <FlaskConical size={14} /><span>{t('sandbox.note')}</span>
           <button type="button" className="sbx-note-x" aria-label={t('sandbox.noteOk')} title={t('sandbox.noteOk')} onClick={closeNote}><X size={13} /></button>
         </div>
