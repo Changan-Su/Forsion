@@ -38,7 +38,7 @@ registerMessages({
 const TEXT_EXT = /\.(md|markdown|txt|json|yaml|yml|toml|csv|log)$/i
 const POLL_MS = 5000
 /** 远程图片 → 占位文本(不发网络请求)。本地/相对图片路径在库外本就渲染不出,一并占位。 */
-const IMG_RE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g
+const IMG_RE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"(?:[^"\\]|\\[\s\S])*")?\)/g // 标题(图下说明)里可有转义引号
 
 /** 清单排序:Journal/ 目录里的按名倒序(新日期在前)且整组置顶;其余按路径。目录项不列(用文件路径自带层级)。 */
 export function orderFiles(files: MuseLibraryEntry[]): MuseLibraryEntry[] {

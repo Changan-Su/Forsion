@@ -10,8 +10,8 @@ vi.mock('../services/backendService', async (original) => ({
 }))
 import { useApp } from './appStore'
 import '../tangu/store/standalone'
-import { TURN_RESUME_MARKER } from '../../../../tangu-agent/src/contracts/turnResume'
-import { turnHasOutput } from '../views/chat2/continueTurn'
+import { TURN_RESUME_MARKER, isContinuationRow, turnResumeMarker } from '../../../../tangu-agent/src/contracts/turnResume'
+import { isLatestAnswer, turnHasOutput } from '../views/chat2/continueTurn'
 import type { UiMessage } from '../types'
 
 // 失败行的「继续生成」与「重新生成」(2026-11-10 用户反馈:报错 / 额度用完只有一个重试,前面生成的白费)。
@@ -103,5 +103,51 @@ describe('turnHasOutput', () => {
   it('looks through earlier continue rows of the same turn, but not past the real question', () => {
     expect(turnHasOutput([u('u', 'hi'), a('a', 'first half'), u('r', TURN_RESUME_MARKER), a('b', '')])).toBe(true)
     expect(turnHasOutput([u('u0', 'old'), a('a0', 'old answer'), u('u', 'new question'), a('b', '')])).toBe(false)
+  })
+})
+
+// 停下 / 写到输出上限后的「继续生成」(2026-11-15,借鉴 DeepSeek chat-demo 方案 ①):按原因换那一行的说法。
+describe('continue after a stop or a length cut', () => {
+  it('sends the reason-specific marker', async () => {
+    expect(await useApp.getState().continueRun('s', { reason: 'length' })).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    const sent = String(service.start.mock.calls[0][1].message)
+    expect(sent).toBe(turnResumeMarker('length'))
+    expect(sent).toContain('output length limit')
+    expect(sent).toContain('mid-sentence')
+    expect(service.del).not.toHaveBeenCalled()
+  })
+
+  it('the stopped marker says the user stopped it', async () => {
+    expect(await useApp.getState().continueRun('s', { reason: 'stopped' })).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(String(service.start.mock.calls[0][1].message)).toContain('The user stopped your previous response')
+  })
+
+  it('the error marker is unchanged and every variant is a continuation row', () => {
+    // 11-10 落库 / 台架里那句的原文,逐字钉住(只和 turnResumeMarker() 比是自证,Codex 评审 11-15)
+    const LEGACY = '<turn_resume>\n' +
+      'Your previous response stopped because of an error (not because the user interrupted it). Everything produced before the error — text, tool calls and their results — was kept and is shown above. ' +
+      'Continue exactly where it stopped: do not repeat what you already wrote and do not restart the task. ' +
+      'If a tool call was cut off or has no result, check the current state before running it again.\n' +
+      '</turn_resume>'
+    expect(TURN_RESUME_MARKER).toBe(LEGACY)
+    expect(turnResumeMarker()).toBe(LEGACY)
+    expect(turnResumeMarker('error')).toBe(LEGACY)
+    for (const r of ['error', 'length', 'stopped'] as const) expect(isContinuationRow(turnResumeMarker(r))).toBe(true)
+  })
+})
+
+describe('isLatestAnswer', () => {
+  const u = (id: string, content: string): UiMessage => ({ id, role: 'user', content, timestamp: 0, status: 'done' })
+  const a = (id: string): UiMessage => ({ id, role: 'assistant', content: 'x', timestamp: 0, status: 'stopped' })
+  it('looks past interrupt / resume rows and local notices', () => {
+    expect(isLatestAnswer([u('u', 'hi'), a('a'), u('i', '<turn_interrupted>stopped</turn_interrupted>')], 'a')).toBe(true)
+    expect(isLatestAnswer([u('u', 'hi'), a('a'), { id: 'n', role: 'system', content: 'note', timestamp: 0 }], 'a')).toBe(true)
+  })
+  it('is false once a newer question or answer follows', () => {
+    expect(isLatestAnswer([u('u', 'hi'), a('a'), u('u2', 'next')], 'a')).toBe(false)
+    expect(isLatestAnswer([u('u', 'hi'), a('a'), u('r', TURN_RESUME_MARKER), a('b')], 'a')).toBe(false)
+    expect(isLatestAnswer(undefined, 'a')).toBe(false)
   })
 })

@@ -380,7 +380,8 @@ OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelli
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
-OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 四个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z 必红,LZ / LN 至少一腿红(只发代码时旧代码回哪种语言不稳)
+OPT_IN.add('visualsdial'); //--only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
@@ -428,6 +429,7 @@ OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
+OPT_IN.add('lengthcut'); KEYS.push('lengthcut'); // 注入:真 Codex 回答写到一半补一条 response.incomplete(max_output_tokens),看引擎自动接写一次 / 接了还撞上限给 truncated,以及用户按停后「继续生成」;改截断续写(agentLoop 那段 / turnResume 的 length·stopped 两句)后跑。自带负对照腿
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -1019,7 +1021,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -1722,7 +1724,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 台架判定一律按 sketch 记,各场景的判据不用跟着改;事件里真名是哪个由引擎单测钉着。
           if (p.name === 'intelligent_ui_html') p.name = 'sketch';
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
-          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
+          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; if (opts.onToken) await opts.onToken(p, runId, ev); } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
           // 不进 results.json(record 只收场景返回的字段);大小由模型单次输出封顶。
           else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}), at: Date.now() }); if (opts.onToolCall) await opts.onToolCall(p, runId, ev); }
@@ -1790,8 +1792,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'llm_wait_network', 'llm_network_back', 'reasoning_dropped'].includes(p.phase)) ev.statuses.push(p);
-          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'llm_wait_network', 'llm_network_back', 'reasoning_dropped', 'length_resume'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; ev.truncated = p.truncated === true; ev.lengthResumed = p.lengthResumed === true; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
       }
@@ -2726,6 +2728,35 @@ try {
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
 
+  // turninfo(11-20,借鉴 chat-demo ③ #734):系统提示日期段补时区名 + 界面语言。四条腿各一个 run,都直接核系统提示原文:
+  //   Z host run、不准用工具问「我在哪个时区」→ 提示里有 `time zone <进程时区>`,回答说得出这个 IANA 名;
+  //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
+  //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文;
+  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z 必红;只有代码时回哪种语言在旧代码上不稳
+  //   (11-20 两次对照:第一次 LZ 回中文,第二次 LZ、LN 都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
+  await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
+    const cjk = (t) => (String(t || '').match(/[一-鿿]/g) || []).length;
+    const dbg = { debugSystemPrompt: true }; // 不带它引擎不发 system_prompt 事件,提示原文核不到
+    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。', 240_000, dbg);
+    const promptZ = String(z.systemPrompt || '');
+    const okZ = !z.error && !!tz && promptZ.includes(`time zone ${tz}, UTC`) && z.content.includes(tz) && !z.toolCalls.length;
+    const code = '```js\nconst pick = (xs, n) => xs.filter((_, i) => i % n === 0);\n```';
+    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('zh'));
+    const okLZ = !lz.error && String(lz.systemPrompt || '').includes("interface is set to Chinese") && cjk(lz.content) >= 10;
+    const ln = await run(`live-turninfo-ln-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLN = !ln.error && String(ln.systemPrompt || '').includes("interface is set to English") && cjk(ln.content) === 0 && /[A-Za-z]{3,}\s+[A-Za-z]{3,}/.test(ln.content);
+    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLE = !le.error && String(le.systemPrompt || '').includes("interface is set to English") && cjk(le.content) >= 10;
+    const dateLine = (p) => (String(p || '').match(/^Today is [^\n]*/m) || [''])[0];
+    const detail = `Z 进程时区 ${tz || '取不到'}、提示「${dateLine(promptZ)}」、回答「${z.content.trim().slice(0, 60)}」、工具 ${z.toolCalls.join(',') || '无'}`
+      + `;LZ 界面中文 + 只有代码 → 提示有中文段=${String(lz.systemPrompt || '').includes('interface is set to Chinese')}、回答汉字 ${cjk(lz.content)} 个`
+      + `;LN 界面英文 + 只有代码 → 提示有英文段=${String(ln.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(ln.content)} 个`
+      + `;LE 界面英文 + 中文提问 → 提示有英文段=${String(le.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(le.content)} 个`;
+    return { ok: okZ && okLZ && okLN && okLE, detail, output: `【Z】\n${z.content}\n【LZ 界面中文,只发代码】\n${lz.content}\n【LN 界面英文,只发代码】\n${ln.content}\n【LE 界面英文,中文提问】\n${le.content}`, tokens: tokensOf(z) + tokensOf(lz) + tokensOf(ln) + tokensOf(le) };
+  });
+
   // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
   // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
   await scenario('dsimport', 'dsimport 导入的旧对话接着聊', async () => {
@@ -3617,6 +3648,87 @@ try {
     writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content, rows: ok1.dump }, nc: { errA: nc.a.error, fired: nc.fired, partial: nc.partial, after: nc.after, content: nc.b.content, rows: nc.dump } }, null, 2));
     const detail = `掐断 ${ok1.fired} 次、报错=${ok1.a.error ? ok1.a.error.slice(0, 60) : '无'};落库的半截编号 ${ok1.before.join(',') || '无'};续写编号 ${ok1.after.join(',') || '无'}(从 1 重来=${ok1.restarted},写到 12=${ok1.reached12});负对照(删掉半截)续写 ${nc.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`;
     return { ok: quotaErr && ok1.fired === 1 && persisted && continued && ncCaught, detail, output: `【失败前落库】\n${ok1.partial}\n【继续生成】\n${ok1.b.content}\n【负对照:删掉半截后】\n${nc.b.content}`, tokens: tokensOf(ok1.a) + tokensOf(ok1.b) + tokensOf(nc.a) + tokensOf(nc.b) };
+  });
+
+  // lengthcut(11-15,借鉴 DeepSeek chat-demo 方案 ①:写到长度上限不再静默停在半句)。真 Codex 写 1–12 编号列表,写够约 160 字时
+  // 预载在流里补一条 response.incomplete(max_output_tokens),等于撞上输出上限。
+  //   A 截一次 → 引擎自动接写一次(status length_resume),终稿编号 1–12 连续不重,done 带 lengthResumed、不带 truncated;
+  //   B 截两次(自动接写那一发也截)→ done 带 truncated;再发 length 那句 <turn_resume>(界面「继续生成」)→ 从断处接着写到 12;
+  //   C 用户按停(流出约 120 字时 /abort)→ 发 stopped 那句 <turn_resume> → 从断处接着写到 12;
+  //   负对照腿:B 的半截删掉再发同一句 → 只能从 1 写起,同一判据须判「重来」。旧代码(--kind base)上 A、B 须红(没有自动接写、没有 truncated)。
+  await scenario('lengthcut', 'lengthcut 写到长度上限:自动接写一次 / 接了还截给「继续生成」/ 按停后继续', async () => {
+    const tr = await import('../dist/contracts/turnResume.js');
+    const marker = (r) => (typeof tr.turnResumeMarker === 'function' ? tr.turnResumeMarker(r) : tr.TURN_RESUME_MARKER); // 旧代码只有不分原因的那句
+    const ask = (tag) => `${tag} 请写一个 1 到 12 的编号列表,每条两句话介绍一种常见的鸟,格式「N. 鸟名:介绍」,每条单独一行。直接写,不要调用任何工具,不要开场白,不要结尾总结。`;
+    const nums = (text) => [...String(text || '').matchAll(/^\s*(\d{1,2})[.、]/gm)].map((m) => Number(m[1]));
+    const consecutive = (a) => a.length > 0 && a.every((n, i) => i === 0 || n === a[i - 1] + 1);
+    const lastAnswer = async (sid) => {
+      const rows = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+      return [...rows].reverse().find((m) => (m.role === 'assistant' || m.role === 'model') && String(m.content || '').trim());
+    };
+    const fired = () => faultLog().filter((l) => l.fired === 'length_after').length;
+    // 记下自动接写开始时已经流出了多少字:终稿里那个位置就是接缝
+    const trackSeam = () => { const st = { streamed: '', seam: -1 }; return { st, onToken: (p, _rid, ev) => { if (st.seam < 0 && ev.statuses.some((x) => x.phase === 'length_resume')) st.seam = st.streamed.length; st.streamed += String(p.delta || ''); } }; };
+
+    // A
+    const sidA = `live-lencut-a-${Date.now()}`; const tagA = `LC-${randomUUID().slice(0, 6)}`;
+    armFault({ mode: 'length_after', match: tagA, chars: 160, times: 1 });
+    const seamA = trackSeam();
+    const a = await run(sidA, ask(tagA), 240_000, {}, undefined, undefined, undefined, undefined, { onToken: seamA.onToken });
+    const firedA = fired(); disarmFault();
+    const numsA = nums(a.content);
+    const resumesA = a.statuses.filter((x) => x.phase === 'length_resume').length;
+    const okA = !a.error && a.done && firedA === 1 && resumesA === 1 && a.lengthResumed && !a.truncated && consecutive(numsA) && numsA[0] === 1 && numsA.at(-1) === 12;
+    const seamTextA = seamA.st.seam >= 0 ? a.content.slice(Math.max(0, seamA.st.seam - 30), seamA.st.seam + 30) : '';
+
+    // B + 负对照
+    const legB = async (dropPartial) => {
+      const sid = `live-lencut-b${dropPartial ? 'nc' : ''}-${Date.now()}`; const tag = `LC-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'length_after', match: tag, chars: 160, times: 2 });
+      const b = await run(sid, ask(tag));
+      const f = fired(); disarmFault();
+      const row = await lastAnswer(sid);
+      const partial = String(row?.content || '');
+      if (dropPartial && row) await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: [row.id] }) });
+      const c = await run(sid, marker('length'));
+      const before = nums(partial), after = nums(c.content);
+      return { b, c, fired: f, partial, before, after, restarted: after[0] === 1, reached12: after.includes(12) };
+    };
+    const B = await legB(false);
+    const NC = await legB(true);
+    const lastB = B.before.at(-1) ?? 0;
+    const okB = !B.b.error && B.b.done && B.fired === 2 && B.b.truncated && B.b.lengthResumed && B.before.length >= 2
+      && !B.c.error && B.c.done && !B.restarted && B.reached12 && (B.after[0] ?? 0) >= lastB && consecutive(B.after);
+    const ncCaught = NC.restarted;
+
+    // C 用户按停
+    const sidC = `live-lencut-c-${Date.now()}`;
+    let stoppedAt = 0;
+    const c1 = await run(sidC, ask(`LC-${randomUUID().slice(0, 6)}`), 240_000, {}, undefined, undefined, undefined, undefined, {
+      onToken: async (p, runId, ev) => { ev.streamedC = (ev.streamedC || '') + String(p.delta || ''); if (!stoppedAt && ev.streamedC.length >= 120) { stoppedAt = ev.streamedC.length; await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {}); } },
+    });
+    const rowC = await lastAnswer(sidC);
+    const partialC = String(rowC?.content || '');
+    const c2 = await run(sidC, marker('stopped'));
+    const beforeC = nums(partialC), afterC = nums(c2.content);
+    const okC = stoppedAt > 0 && beforeC.length >= 1 && !c2.error && c2.done && afterC[0] !== 1 && afterC.includes(12) && (afterC[0] ?? 0) >= (beforeC.at(-1) ?? 0) && consecutive(afterC);
+    // 模型把自查漏进正文(11-15 首跑 C 腿:「6. 麻雀? Wait #1 already. continue common birds」)—— 单列出来,编号连续那条会因它判红
+    const selfTalk = (t) => /\bwait\b|already\.|\?\s*wait/i.test(String(t || ''));
+
+    writeFileSync(join(OUT, 'lengthcut-evidence.json'), JSON.stringify({
+      A: { err: a.error, fired: firedA, resumes: resumesA, lengthResumed: a.lengthResumed, truncated: a.truncated, nums: numsA, seam: seamA.st.seam, seamText: seamTextA, content: a.content },
+      B: { err: B.b.error, fired: B.fired, truncated: B.b.truncated, lengthResumed: B.b.lengthResumed, partial: B.partial, before: B.before, after: B.after, cont: B.c.content },
+      NC: { partial: NC.partial, after: NC.after, cont: NC.c.content },
+      C: { err1: c1.error, stoppedAt, partial: partialC, before: beforeC, after: afterC, cont: c2.content },
+    }, null, 2));
+    const detail = `A 截 ${firedA} 次、自动接写 ${resumesA} 次、lengthResumed=${!!a.lengthResumed} truncated=${!!a.truncated}、编号 ${numsA.join(',') || '无'}、接缝「${seamTextA.replace(/\n/g, '⏎')}」`
+      + `;B 截 ${B.fired} 次、truncated=${!!B.b.truncated}、半截编号 ${B.before.join(',') || '无'} → 继续生成 ${B.after.join(',') || '无'}(重来=${B.restarted})`
+      + `;负对照(删半截)继续 ${NC.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`
+      + `;C 停在 ${stoppedAt} 字、半截编号 ${beforeC.join(',') || '无'} → 继续生成 ${afterC.join(',') || '无'}`
+      + `;自言自语漏进正文:A=${selfTalk(a.content)} B=${selfTalk(B.c.content)} C=${selfTalk(c2.content)}`;
+    return { ok: okA && okB && ncCaught && okC, detail,
+      output: `【A 终稿(自动接写一次)】\n${a.content}\n【B 截两次后的终稿】\n${B.partial}\n【B 继续生成】\n${B.c.content}\n【负对照:删掉半截后】\n${NC.c.content}\n【C 按停时的半截】\n${partialC}\n【C 继续生成】\n${c2.content}`,
+      tokens: tokensOf(a) + tokensOf(B.b) + tokensOf(B.c) + tokensOf(NC.b) + tokensOf(NC.c) + tokensOf(c1) + tokensOf(c2) };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>

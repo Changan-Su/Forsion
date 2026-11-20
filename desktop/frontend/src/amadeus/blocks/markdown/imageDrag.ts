@@ -41,7 +41,7 @@ export function soleMediaParagraph(wrap: HTMLElement): HTMLElement | null {
   return p && visualBlockElement(p) === wrap ? p : null
 }
 
-const NOT_DRAG = '.amx-img-resize, .amx-src-btn, .amx-img-srcline'
+const NOT_DRAG = '.amx-img-resize, .amx-src-btn, .amx-img-srcline, .amx-img-capline, .amx-img-tb, .amx-img-more'
 
 /** 这次按下能否起「整块拖」。能 → 标 draggable、约好「单击才 select()」,返回 true:调用方**别**
  *  preventDefault,也**别**在按下时改选区。否则返回 false,调用方照旧 preventDefault 并当场选中。 */

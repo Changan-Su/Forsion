@@ -222,6 +222,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
+  let filtered = false;
   let incomplete = false; // response.incomplete(max_output_tokens 等):输出被截断,工具参数不可信
   // cached_tokens / reasoning_tokens 都不预置 0:上游没报时必须保持 undefined(报 0 = 真没命中/真没思考,
   // 是两回事)。预置 0 会让「上游压根没这个字段」在下游报表里长得和「明确报了 0」一模一样。
@@ -318,9 +319,14 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         // 记 output_index 供收尾排序:正常 SSE 有序,但代理重排/实现差异下按 index 恢复原始输出序(防御)。
         outputItems.push({ __idx: typeof ev.output_index === 'number' ? ev.output_index : outputItems.length, item: ev.item });
       } else if (type === 'response.completed' || type === 'response.incomplete') {
-        // incomplete=响应被截断(常见 max_output_tokens;content_filter 等其他原因的半截参数同样不可信)
-        // → 统一归一化为 finishReason:'length',让 agentLoop 的截断硬化把工具调用全部置错不执行。
-        if (type === 'response.incomplete') incomplete = true;
+        // incomplete=响应被截断(常见 max_output_tokens;其他原因的半截参数同样不可信)
+        // → 归一化为 finishReason:'length',让 agentLoop 的截断硬化把工具调用全部置错不执行。
+        //   content_filter 例外,单独报(见下):它也不执行工具,但不续写。
+        if (type === 'response.incomplete') {
+          incomplete = true;
+          // 安全审核拦下的单列出来(isSafetyStop):agentLoop 换固定文案、不进上下文;并进 length 会被当成写到上限去自动续写。
+          if (ev.response?.incomplete_details?.reason === 'content_filter') filtered = true;
+        }
         const u = ev.response?.usage;
         if (u) {
           usage.prompt_tokens = u.input_tokens || usage.prompt_tokens;
@@ -354,7 +360,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     .filter((c): c is { id: string; name: string; arguments: string } => !!c && !!c.name)
     .map((c) => ({ id: c.id, type: 'function' as const, function: { name: c.name, arguments: c.arguments || '{}' } }));
 
-  finishReason = incomplete ? 'length' : toolCalls.length ? 'tool_calls' : 'stop';
+  finishReason = filtered ? 'content_filter' : incomplete ? 'length' : toolCalls.length ? 'tool_calls' : 'stop';
   if (usage.completion_tokens === 0 && content) usage.completion_tokens = Math.ceil(content.length / 4);
 
   const orderedItems = outputItems.sort((a, b) => a.__idx - b.__idx).map((o) => o.item);

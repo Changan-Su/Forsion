@@ -18,3 +18,18 @@ export function turnHasOutput(list: readonly UiMessage[] | undefined): boolean {
   }
   return false
 }
+
+/**
+ * 这条是不是会话里最新的回答:从末尾往回,越过本地通知行(system)和「继续生成」/ 打断标记这些机器行。
+ * 停下 / 截断后的「继续生成」只给最新那条 —— 用户停下时引擎会落一条 <turn_interrupted>,不越过它就永远轮不到。
+ */
+export function isLatestAnswer(list: readonly UiMessage[] | undefined, id: string): boolean {
+  if (!list) return false
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i]
+    if (m.role === 'system') continue
+    if (m.role === 'user' && isContinuationRow(m.content || '')) continue
+    return m.id === id
+  }
+  return false
+}
