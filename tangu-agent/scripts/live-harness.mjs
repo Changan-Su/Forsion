@@ -437,6 +437,7 @@ OPT_IN.add('standin'); KEYS.push('standin');
 OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 OPT_IN.add('dsimport'); KEYS.push('dsimport'); // 导入的旧对话能接着聊(11-16,POST /agent/sessions/import):一个 run;只在动 sessionImport / 导入会话的回放时跑
+OPT_IN.add('resume'); KEYS.push('resume'); // --only resume:工具执行到一半 kill -9 引擎、同一 home 重启后自动续跑(中断任务续跑方案 B,lib/resume-live.mjs);自己起两台引擎。--resume-off = 负对照(须红)
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
@@ -3574,6 +3575,13 @@ try {
       && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
     const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
+  // resume(11-20,中断任务续跑方案 B):工具执行到一半强杀引擎 → 同一 home 重启 → 自动续一轮跑完,不重跑已经开始的那条命令。
+  //   自带独立隔离 home 和两台引擎(主台架那台不参与);判据只看磁盘和库,见 lib/resume-live.mjs。改 runResume / runProgress / 启动恢复后跑。
+  await scenario('resume', 'resume 工具中途崩溃后重启自动续跑', async () => {
+    const { resumeLive } = await import('./lib/resume-live.mjs');
+    return resumeLive({ entry, AUTH, MODEL, OUT, SANDBOX, argv });
   });
 
   // continuegen(11-10 用户反馈:报错 / 额度用完只有「重试」,前面生成的白费):真 Codex 写编号列表写到一半,流里被掐成额度用完。
