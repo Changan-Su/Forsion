@@ -913,11 +913,14 @@ let pendingKick = false;
 // 起的周期(连同规则 / 日程 run)发出请求后机器就回睡,到下一次 DarkWake 才报网络错 / 流超时 —— 白发一份上下文、
 // 记一次失败、cycleMs 还把睡眠时间算进去。本机两次失败的 created_at / updated_at 与 pmset 的 DarkWake 逐秒对上。
 // 判「刚睡醒」用墙钟上的存活间隔:本机 Node 22(libuv 1.52)的单调钟含睡眠时间,比不出差;只看定时器晚到又会漏掉
-// 「刚好在醒来前不久到点」的那次。睡醒后整轮巡检推迟 WAKE_SETTLE_MS:DarkWake 撑不到这么久,真醒了只晚一分钟。
+// 「刚好在醒来前不久到点」的那次。睡醒后整轮巡检推迟到**连续醒着** WAKE_SETTLE_MS:DarkWake 撑不到这么久,真醒了只晚一分钟。
+// 量的是连续醒着多久、不是离第一次醒来多久:DarkWake 常成串来(pmset:17:55:51 / 17:56:18 / 17:56:47 / 17:57:46,
+// 中间各睡 11–16 秒),心跳粗、只认大间隔的话,「第一次醒来 + 60s」的补巡检恰好落进下一个几秒的醒窗、照样起周期。
+// 所以心跳要比最短的那段睡眠细:5 秒一跳,任何一跳隔了 12 秒以上(= 睡过 ≥12s,或事件循环卡了 7 秒以上)就从此刻重新起算。
 /** 两次存活心跳之间隔了这么久 = 机器睡过(或进程被冻住 / 事件循环卡死)。心跳每 ALIVE_BEAT_MS 一次。 */
-export const SLEEP_GAP_MS = 90_000;
-const ALIVE_BEAT_MS = 20_000;
-/** 睡醒后这么久内不起后台 run(用户刚点的叫醒除外)。 */
+export const SLEEP_GAP_MS = 12_000;
+const ALIVE_BEAT_MS = 5_000;
+/** 睡醒后要连续醒着这么久才起后台 run(用户刚点的叫醒除外)。 */
 export const WAKE_SETTLE_MS = 60_000;
 let lastAliveAt = 0;
 let wokeAt = 0;

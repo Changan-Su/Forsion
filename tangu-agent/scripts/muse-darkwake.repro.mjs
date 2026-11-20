@@ -4,6 +4,8 @@
 //   修前:恢复后 1–2 秒内就起(到期的巡检定时器一醒就触发)= REPRO
 //   修后:等满睡醒稳定期(60s)才起,日志里有「没有存活心跳」那行 = CLEAN
 // 用法:npm run build && node scripts/muse-darkwake.repro.mjs [--entry <dist/standalone/main.js>] [--stop-seconds 150]
+//   [--pattern 100,5,20,10,50] = 成串的 DarkWake:冻 100s、放 5s、冻 20s、放 10s、冻 50s(冻 / 放交替,冻打头),
+//   量的是「最后一次 SIGCONT 之后多久起周期」。只认「离第一次醒来 60s」的闸会在第三次恢复那一刻起跑(REPRO)。
 // 退出码:REPRO = 1。负对照:把 muse.ts 里 inWakeSettle 那道闸临时关掉再 build,用 --entry 指向那份 dist 跑一遍,应当 REPRO。
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
@@ -16,6 +18,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const arg = (name, dflt) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : dflt; };
 const entry = resolve(arg('entry', join(root, 'dist', 'standalone', 'main.js')));
 const STOP_MS = Number(arg('stop-seconds', 150)) * 1000;
+const PATTERN = String(arg('pattern', '')).split(',').filter(Boolean).map((x) => Number(x) * 1000);
+const phases = PATTERN.length ? PATTERN : [STOP_MS]; // 冻 / 放交替,冻打头、冻收尾
 if (!existsSync(entry)) { console.error(`没有 ${entry}:先 npm run build`); process.exit(2); }
 const TOKEN = 'darkwake-token';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -75,11 +79,17 @@ try {
   for (let t = 0; !cycles().length; t += 500) { if (t > 60_000) throw new Error('60s 内没起第一个周期'); await sleep(500); }
   await sleep(8000);
   const before = cycles().length;
-  console.log(`第一个周期已起(${before} 个);SIGSTOP ${STOP_MS / 1000}s`);
-  child.kill('SIGSTOP');
-  await sleep(STOP_MS);
-  contAt = Date.now();
-  child.kill('SIGCONT');
+  console.log(`第一个周期已起(${before} 个);冻 / 放:${phases.map((x) => x / 1000).join(',')}s`);
+  let early = null; // 成串冻结的「放」窗里就起了周期 = 一醒就起
+  for (let i = 0; i < phases.length; i++) {
+    if (i % 2 === 0) { child.kill('SIGSTOP'); await sleep(phases[i]); contAt = Date.now(); child.kill('SIGCONT'); }
+    else { const from = Date.now(); await sleep(phases[i]); early = early || cycles(from)[0] || null; }
+  }
+  if (early) {
+    ok = false;
+    console.log(`REPRO  成串冻结的醒窗里就起了周期(${((early[0] - contAt) / 1000).toFixed(1)}s,相对最后一次 SIGCONT)`);
+    throw Object.assign(new Error('early'), { quiet: true });
+  }
   // 最多等 150s:修后应在 ~60s 起;修前 1–2s 就起
   let next = null;
   for (let t = 0; t < 150_000 && !next; t += 250) { next = cycles(contAt)[0] || null; if (!next) await sleep(250); }
@@ -90,7 +100,7 @@ try {
   console.log(`SIGCONT 后 ${delay.toFixed(1)}s 起下一个周期;「没有存活心跳」日志:${gapLine ? '有' : '无'}`);
   console.log(`${ok ? 'CLEAN' : 'REPRO'}  ${ok ? '睡醒后等稳定期才起' : '一醒就起(DarkWake 里起周期)'}`);
 } catch (e) {
-  console.error(String(e?.stack || e));
+  if (!e?.quiet) console.error(String(e?.stack || e));
   ok = false;
 } finally {
   if (process.argv.includes('--verbose')) for (const [t, l] of lines) if (/\[muse\]|run=|SIG/.test(l)) console.log(`  ${((t - (contAt || t0)) / 1000).toFixed(1).padStart(7)}s  ${l.slice(0, 170)}`);
