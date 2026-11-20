@@ -599,6 +599,32 @@ describe('appStore.reduceEvent', () => {
     expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
   })
 
+  it('status/llm_retry 带 overload → 横幅记下「服务繁忙」', () => {
+    const ref = { current: 'a1' }
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type: 'status', payload: { phase: 'llm_retry', attempt: 1, max: 6, waitMs: 1000, overload: true } } as AgentRunEvent)
+    expect(useApp.getState().llmRetryBySession.s1).toMatchObject({ phase: 'retry', attempt: 1, max: 6, overload: true })
+    useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 2, type: 'status', payload: { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 } } as AgentRunEvent)
+    expect(useApp.getState().llmRetryBySession.s1?.overload).toBeUndefined()
+  })
+
+  it('status/llm_wait_network 进「网络已断开」,llm_network_back 撤掉;漏了 back 时下一次 llm_call 也撤掉', () => {
+    const ref = { current: 'a1' }
+    const ev = (seq: number, payload: any) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq, type: 'status', payload } as AgentRunEvent)
+    ev(1, { phase: 'llm_wait_network', since: 1234, stage: 'request', error: 'fetch failed' })
+    expect(useApp.getState().llmRetryBySession.s1).toMatchObject({ phase: 'wait_network', since: 1234, error: 'fetch failed' })
+    ev(2, { phase: 'generating' }) // 别的 status 不撤
+    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('wait_network')
+    ev(3, { phase: 'llm_network_back', since: 1234, waitedMs: 5000 })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
+    ev(4, { phase: 'llm_wait_network', since: 2000 })
+    ev(5, { phase: 'llm_call', stage: 'sending', bytes: 100 })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
+    // 普通重试横幅不被 llm_call 撤(照旧等首帧)
+    ev(6, { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 })
+    ev(7, { phase: 'llm_call', stage: 'sending', bytes: 100 })
+    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('retry')
+  })
+
   it('turn_boundary 的 finalizedId 不匹配时回退到 assistantRef,不孤立气泡也不丢身份', () => {
     // 乐观气泡 a1 带 agent 身份;后端给了一个列表里没有的 finalizedAssistantId(模拟 id 不一致)。
     useApp.setState({ messagesBySession: { s1: [{ ...assistant(), agentId: 'qinche', agentName: '秦彻' }] } })

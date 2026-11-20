@@ -83,6 +83,7 @@ import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
 import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
+import { llmRetryLine } from './chat2/llmRetryLine'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
@@ -937,7 +938,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
-                ⟳ {t('chat.llmRetrying', { s: (s.llmRetry.waitMs / 1000).toFixed(1), n: s.llmRetry.attempt, max: s.llmRetry.max || '?' })}
+                ⟳ {llmRetryLine(s.llmRetry, t)}
                 {s.llmRetry.error ? <span className="t2-retry-err">{s.llmRetry.error}</span> : null}
               </div>
             )}

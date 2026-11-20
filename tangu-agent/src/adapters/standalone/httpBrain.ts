@@ -22,6 +22,7 @@ import {
   HumanCalendarConflictError,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
+import { withRetryAfter } from '../../llm/retry.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
 import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
@@ -133,7 +134,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`);
     }
     if (e instanceof LlmError) return e;
-    return new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`);
+    // 原错留在 cause 上:重试链据它的 code(ENOTFOUND / ENETUNREACH …)认出「本机断网」进入等网络(llm/netWait.ts)
+    return Object.assign(new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`), { cause: e });
   };
   const toB64 = (c: Buffer | string): string =>
     (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
@@ -283,7 +285,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         const detail = await r.text().catch(() => '');
         const special = rejectAs?.(r.status, detail);
         if (special) throw special;
-        throw new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail));
+        throw withRetryAfter(new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail)), r.headers);
       }
 
       const result: StreamResult = {

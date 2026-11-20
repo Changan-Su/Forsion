@@ -221,6 +221,23 @@ export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp
 
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
 /** 团队成员的工作状态一行(见 teamWorkBySession)。 */
+/**
+ * 对话里那行黄字的状态(引擎 status 事件):
+ *  - phase 'retry':llm_retry,「第 N/M 次重试,Xs 后」;overload = 服务过载,文案换「服务繁忙」
+ *  - phase 'wait_network':llm_wait_network,断网等网中(不倒计时);llm_network_back / 下一次 llm_call 撤掉
+ * 缺 phase 的老数据按 'retry' 画。
+ */
+export interface LlmRetryState {
+  attempt: number
+  max: number
+  waitMs: number
+  error?: string
+  phase?: 'retry' | 'wait_network'
+  overload?: boolean
+  /** 开始等网的时刻(wait_network) */
+  since?: number
+}
+
 export interface TeamWorkMember {
   slug: string
   name: string
@@ -962,8 +979,8 @@ export interface TanguState {
   loadProjectIcon(path: string, force?: boolean): Promise<void>
   stoppingBySession: Record<string, string | undefined>
   groupVoting: Record<string, boolean>
-  /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
-  llmRetryBySession: Record<string, { attempt: number; max: number; waitMs: number; error?: string } | undefined>
+  /** LLM 瞬时失败重试中 / 断网等网中(引擎 status/llm_retry、llm_wait_network):渲染那行黄字。任何后续非 status 事件即清除。 */
+  llmRetryBySession: Record<string, LlmRetryState | undefined>
   /** 手动 Compact 进度 0-100(undefined = 未在压缩)。ponytail: 客户端估算,compact 接口一次性返回没有进度信号。 */
   compactingBySession: Record<string, number | undefined>
   subChatsBySession: Record<string, SubChat[]>
@@ -2021,6 +2038,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // 模型调用等待实况:sending(正在上传上下文)→ accepted(已送达,等首帧)。首帧/工具/结束即清(见 token 等分支)。
         // since 续用上一条(重试后引擎重发 sending 不归零):用户看到的是「这次调用总共等了多久」。
         if (pl.phase === 'llm_call') {
+          // 网回来后的重发:「网络已断开」那行不能挂到首帧(llm_network_back 漏了也兜住)
+          if (get().llmRetryBySession[sessionId]?.phase === 'wait_network') {
+            set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
+          }
           patchMessage(sessionId, assistantId, (m) => ({
             ...m,
             live: {
@@ -2040,17 +2061,34 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           } }))
           break
         }
-        // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
+        // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试 / 等网提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
             llmRetryBySession: {
               ...s.llmRetryBySession,
               [sessionId]: {
+                phase: 'retry',
                 attempt: Number(pl.attempt) || 1, max: Number(pl.max) || 0,
                 waitMs: Number(pl.waitMs) || 0, error: pl.error ? String(pl.error) : undefined,
+                ...(pl.overload === true ? { overload: true } : {}),
               },
             },
           }))
+        }
+        // 断网:引擎停下等网(不扣次数、最长 30 分钟),网回来在同一轮接着发
+        if (pl.phase === 'llm_wait_network') {
+          set((s) => ({
+            llmRetryBySession: {
+              ...s.llmRetryBySession,
+              [sessionId]: {
+                phase: 'wait_network', attempt: 0, max: 0, waitMs: 0,
+                since: Number(pl.since) || Date.now(), error: pl.error ? String(pl.error) : undefined,
+              },
+            },
+          }))
+        }
+        if (pl.phase === 'llm_network_back' && get().llmRetryBySession[sessionId]) {
+          set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
         }
         break
       default: break

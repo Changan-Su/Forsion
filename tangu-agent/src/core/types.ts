@@ -69,6 +69,8 @@ export interface ResolvedModel {
 /** 带 HTTP 语义的 LLM 错误。core 自有此类——不跨边界 instanceof(接缝实现 throw 它,路由按 .status 处理)。 */
 export class LlmError extends Error {
   status: number;
+  /** 服务端 Retry-After(毫秒;llm/retry.ts withRetryAfter 从响应头解析)。没给就不在。 */
+  retryAfterMs?: number;
   constructor(status: number, message: string) {
     super(message);
     this.name = 'LlmError';

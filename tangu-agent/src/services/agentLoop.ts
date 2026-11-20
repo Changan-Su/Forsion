@@ -89,7 +89,7 @@ import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, awaitNetworkBeforeResume, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
@@ -3408,6 +3408,30 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void publish(runId, 'status', { phase: 'context_over_budget', warning: 'context_over_budget', estTokens: sendTokens, budgetTokens: ctxWindowTokens, windowTokens: ctxWindowMax, iteration });
       }
 
+      // 重试 / 等网络的状态上报(build-payload、首帧前重试、中流续写三处共用)。
+      // llm_retry 带 overload / retryAfterMs:界面据此说「服务繁忙」;llm_wait_network 每段等待报一次,网回来报 llm_network_back。
+      const errText = (err: unknown): string => String((err as any)?.message || err).slice(0, 160);
+      const publishRetry = (plan: LlmRetryPlan, err: unknown, what: string): void => {
+        console.warn(
+          `[agent-core] run=${runId} ${what}瞬时失败,${plan.waitMs}ms 后重试 ${plan.attempt}/${plan.max}${plan.overload ? '(服务繁忙)' : ''}${plan.retryAfterMs !== undefined ? `(Retry-After ${plan.retryAfterMs}ms)` : ''}: ` +
+            `${(err as any)?.status ?? (err as any)?.name ?? 'net'} ${(err as any)?.message || err}`,
+        );
+        void publish(runId, 'status', {
+          phase: 'llm_retry', attempt: plan.attempt, max: plan.max, waitMs: plan.waitMs, error: errText(err), iteration,
+          ...(plan.overload ? { overload: true } : {}), ...(plan.retryAfterMs !== undefined ? { retryAfterMs: plan.retryAfterMs } : {}),
+        });
+      };
+      const netHooks = (stage: 'build_payload' | 'request' | 'midstream'): LlmNetworkHooks => ({
+        target: baseUrl,
+        onWaiting: (since, err) => {
+          console.warn(`[agent-core] run=${runId} 网络断开(${stage}),等网络恢复后接着这一轮: ${(err as any)?.message || err}`);
+          void publish(runId, 'status', { phase: 'llm_wait_network', since, stage, error: errText(err), iteration });
+        },
+        onBack: (waitedMs, since) => {
+          console.warn(`[agent-core] run=${runId} 网络已恢复(等了 ${Math.round(waitedMs / 1000)}s),接着这一轮`);
+          void publish(runId, 'status', { phase: 'llm_network_back', since, waitedMs, stage, iteration });
+        },
+      });
       // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
       // 缓存稳定且多轮可见;旧链路只在第 0 轮注入,前缀分叉还会让模型第 1 轮起丢图)。
       // 有界重试 + 接 run signal:build-payload 是一次真实上传(带图时 body 数 MB),此前在下面的
@@ -3443,14 +3467,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         ...(agentConfig.reasoningSummary === 'none' ? { reasoningSummary: 'none' as const } : {}),
         signal: ac.signal,
         }),
-        (attempt, wait, err) => {
-          console.warn(`[agent-core] run=${runId} build-payload 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`);
-          void publish(runId, 'status', {
-            phase: 'llm_retry', attempt, max: MODEL_MAX_RETRIES, waitMs: wait,
-            error: String((err as any)?.message || err).slice(0, 160), iteration,
-          });
-        },
+        (_attempt, _wait, err, plan) => publishRetry(plan, err, 'build-payload '),
         ac.signal,
+        undefined,
+        netHooks('build_payload'),
       );
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
@@ -3468,8 +3488,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       let requestBytes = 0;
       try { requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf-8'); } catch { /* ignore */ }
       let llmTiming: { ttftMs?: number; uploadMs?: number; llmMs?: number } = {};
-      const retryChainStartedAt = Date.now();
-      for (let attempt = 0; ; attempt++) {
+      const retryChain = new LlmRetryChain(); // 本次模型调用的重试链:次数、预算、等网络(llm/retry.ts)
+      for (;;) {
         if (immediateSteers.has(runId) && steerQueue.get(runId)?.length) {
           await applySteering(drainSteer(runId));
           resumedMidstream = true;
@@ -3585,8 +3605,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
           // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
-          if (emitted && midstreamResumes < MIDSTREAM_MAX_RESUMES && isRetryableLlmError(err)) {
-            midstreamResumes++;
+          // 断网 / 睡醒:续写前先探网,真断了就等网回来(llm_wait_network),这次续写不扣次数、不再退避;
+          // 网是通的才按 MIDSTREAM_MAX_RESUMES 计数续写。等网期间半截正文仍在 inflightText,点停 / 等满照旧并进终稿。
+          const freeResume = emitted && isRetryableLlmError(err)
+            ? await awaitNetworkBeforeResume(err, attemptStart, { signal: ac.signal, network: netHooks('midstream') })
+            : false;
+          if (emitted && isRetryableLlmError(err) && (freeResume || midstreamResumes < MIDSTREAM_MAX_RESUMES)) {
+            if (!freeResume) midstreamResumes++;
             inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
@@ -3598,17 +3623,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               content:
                 '<stream_resume>\nYour previous message was cut off mid-stream by a transient network error. Anything you already produced was kept and shown to the user. Continue exactly where you left off — do not repeat content you already wrote; if a tool call was cut off, issue it again in full.\n</stream_resume>',
             } as ChatMessage); // 不落库不上屏:harness 脚手架,只进本 run 上下文
-            const wait = MODEL_RETRY_BASE_MS * midstreamResumes;
-            console.warn(`[agent-core] run=${runId} 中流断线,${wait}ms 后续写 ${midstreamResumes}/${MIDSTREAM_MAX_RESUMES}: ${(err as any)?.message || err}`);
-            void publish(runId, 'status', {
-              phase: 'llm_retry', attempt: midstreamResumes, max: MIDSTREAM_MAX_RESUMES, waitMs: wait,
-              error: String((err as any)?.message || err).slice(0, 160), iteration,
-            });
-            await sleepOrAbort(wait, ac.signal);
+            if (!freeResume) {
+              const wait = llmBackoffMs(midstreamResumes);
+              console.warn(`[agent-core] run=${runId} 中流断线,${wait}ms 后续写 ${midstreamResumes}/${MIDSTREAM_MAX_RESUMES}: ${(err as any)?.message || err}`);
+              void publish(runId, 'status', {
+                phase: 'llm_retry', attempt: midstreamResumes, max: MIDSTREAM_MAX_RESUMES, waitMs: wait, error: errText(err), iteration,
+              });
+              await sleepOrAbort(wait, ac.signal);
+            }
             resumedMidstream = true;
             // 续写不消耗迭代额度:同一 iteration 重进。否则在 lastIter(尤其 maxIterations=1)断线时,
             // continue 直接把循环耗尽,run 以半截内容假 done,承诺的续写根本不会发生(Codex 评审 #5)。
-            // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底。
+            // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底(免费续写每次都要探网确认断过 / 真睡过,且新一次尝试吐过帧)。
             iteration -= 1;
             break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
           }
@@ -3646,19 +3672,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 而「上游静默到 idle 看门狗超时」是分钟级慢失败——重试只是把用户的干等 ×4。
           // 服务端 180s idle 504 若照旧重试三次,最终失败要 4×180+9=729s,比不修好不了多少。
           // 按失败耗时判、而非按 status 判:未来任何新增的慢失败路径自动受此保护。
-          const wait = MODEL_RETRY_BASE_MS * (attempt + 1);
-          if (emitted || llmRetryBudgetExceeded(retryChainStartedAt, wait) || attempt >= MODEL_MAX_RETRIES || !isRetryableLlmError(err)) throw err;
-          console.warn(
-            `[agent-core] run=${runId} LLM 调用瞬时失败,${wait}ms 后重试 ${attempt + 1}/${MODEL_MAX_RETRIES}: ` +
-              `${(err as any)?.status ?? (err as any)?.name ?? 'net'} ${(err as any)?.message || err}`,
-          );
+          // 决策交给重试链(llm/retry.ts LlmRetryChain):指数退避 + 抖动、Retry-After、服务繁忙给 6 次;
+          // 断网(探网确认)/ 请求跨过睡眠 → 等网络,不扣次数、不算预算,网回来同一轮接着发。放弃即抛原错。
           // max/waitMs/error 供客户端渲染「第 N/M 次重试,Xs 后」——没有它们 UI 只能干等(用户报告像死机)。
-          void publish(runId, 'status', {
-            phase: 'llm_retry', attempt: attempt + 1, max: MODEL_MAX_RETRIES, waitMs: wait,
-            error: String((err as any)?.message || err).slice(0, 160), iteration,
+          if (emitted) throw err;
+          await retryChain.recover(err, attemptStart, {
+            signal: ac.signal,
+            network: netHooks('request'),
+            onRetry: (plan, e) => publishRetry(plan, e, 'LLM 调用'),
           });
-          await sleepOrAbort(wait, ac.signal);
-          if (llmRetryBudgetExceeded(retryChainStartedAt)) throw err;
         } finally {
           ac.signal.removeEventListener('abort', stopSampling);
           if (steerWakeups.get(runId) === steerSampling) steerWakeups.delete(runId);

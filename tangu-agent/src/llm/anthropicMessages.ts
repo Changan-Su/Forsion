@@ -19,6 +19,7 @@
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { withRetryAfter } from './retry.js';
 import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { PROTOCOL_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
 import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
@@ -302,7 +303,7 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
 
   if (!response.ok || !response.body) {
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw new LlmError(status, detail || `Anthropic upstream error ${response.status}`);
+    throw withRetryAfter(new LlmError(status, detail || `Anthropic upstream error ${response.status}`), response.headers);
   }
 
   let content = '';
