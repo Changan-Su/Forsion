@@ -3,8 +3,8 @@
  *  这里把源文拆成「fm 块原文(逐字,含 amadeus_* 行)+ 正文」,保存时原样拼回;
  *  chrome(icon/cover/属性)只改 fm 侧,与正文共用同一条整文件写盘管线(单写者,不与防抖竞态)。 */
 import { parse as parseYaml } from 'yaml'
-import { AMADEUS_FM_KEY, BOM, fmEntries, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
-import { structureKeysFor } from '@amadeus-shared/compiler/v4'
+import { AMADEUS_FM_KEY, BOM, fmEntries, parseSimpleYaml, schemaMajorOf, stripFrontmatter, extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
+import { LEGACY_GATE_PAGE_ID, SCHEMA_MAJOR_V5, layoutHasSections, structureKeysFor } from '@amadeus-shared/compiler/v4'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 
 export interface FmSplit {
@@ -35,7 +35,7 @@ export function composeFm(fmText: string, body: string): string {
 export function patchFm(fmText: string, patch: Record<string, unknown>): string {
   const foreign = foreignFmText(fmText)
   if (foreign.trim() && !foreignParseable(foreign)) return fmText
-  return splitFm(setFmExtraOnSource(fmText, patch)).fmText
+  return ensureSectionGate(splitFm(setFmExtraOnSource(fmText, patch)).fmText)
 }
 
 function foreignParseable(foreign: string): boolean {
@@ -54,13 +54,13 @@ function foreignParseable(foreign: string): boolean {
  *  不变,对不上(保留行与外来键交错、罕见写法)才走下面的整块重组。 */
 export function setForeignFm(fmText: string, foreignYaml: string): string {
   const inPlace = replaceForeignInPlace(fmText, foreignYaml)
-  if (inPlace !== null) return keepIfYamlBroke(fmText, inPlace)
+  if (inPlace !== null) return ensureSectionGate(keepIfYamlBroke(fmText, inPlace))
   const { bom } = fmInner(fmText)
   const amadeusLines = extractAmadeusLines(fmText)
   const y = foreignYaml.replace(/\n+$/, '')
   if (!amadeusLines.length && !y.trim()) return bom
   const out = bom + ['---', ...amadeusLines, ...(y.trim() ? [y] : []), '---', ''].join('\n')
-  return yamlParses(y) ? keepIfYamlBroke(fmText, out) : out // 提交的就是坏 YAML(原文模式修到一半)= 用户自己的字,照写
+  return ensureSectionGate(yamlParses(y) ? keepIfYamlBroke(fmText, out) : out) // 提交的就是坏 YAML(原文模式修到一半)= 用户自己的字,照写
 }
 
 function replaceForeignInPlace(fmText: string, foreignYaml: string): string | null {
@@ -126,8 +126,18 @@ function extractAmadeusLines(fmText: string): string[] {
 }
 
 const STRUCT_KEY = /^["']?amadeus_(schema|layout|canvas)["']?\s*:/
+/** page/5 给老端只读闸看的 `amadeus_page: v5`(见 v4.ts PAGE_SCHEMA_V5)。结构区只认领**这个值**的那一行:
+ *  有版块才由 structureKeysFor 发,没有就随结构区摘掉。别的值的 amadeus_page(手写、别处来的)不归我们,
+ *  原样留着,字节不动 —— 它在场时老端的闸同样生效,就不再另发一行(两行同名键 = YAML 解析不了)。 */
+const GATE_LINE = new RegExp(`^["']?amadeus_page["']?\\s*:\\s*(["']?)${LEGACY_GATE_PAGE_ID}\\1\\s*$`)
+const PAGE_KEY = /^["']?amadeus_page["']?\s*:/
+const isGateEntry = (e: readonly string[]): boolean => e.length === 1 && GATE_LINE.test(e[0].replace(/\r$/, ''))
+/** 老端的闸挡不挡得住:按老端的读法(parseFrontmatter → parseSimpleYaml,同名键后者胜)读 `amadeus_page`,非空才算。
+ *  我们的 PAGE_KEY 宽松,认得出 `amadeus_page:` 空值、`amadeus_page : x`(键后有空格)这些,老端却读成空 / 读不到 ——
+ *  闸在不在一律按老端算,别按我们认不认得这个键算(Codex 评审 B)。 */
+const legacyGateHolds = (entries: readonly string[][]): boolean => !!parseSimpleYaml(entries.flat().join('\n')).amadeus_page
 
-/** 结构键(amadeus_schema/amadeus_layout/amadeus_canvas)行级 splice(绝不过 YAML 往返,Codex A14):
+/** 结构键(amadeus_schema/amadeus_layout/amadeus_canvas,page/5 另加 amadeus_page)行级 splice(绝不过 YAML 往返,Codex A14):
  *  整片结构区重写 —— 先摘掉全部旧结构行(容忍引号键/重复行),再按 structureKeysFor 的判据重发;
  *  其余 fm 行逐字原样,剥到空 fm 块则整块消失。两个 JSON 参数必须是单行 JSON.stringify 输出。
  *  ⚠️ canvasJson 是**必填**:它与 layout 同属被本函数整片重写的区域,漏传 = 保存一次画布几何蒸发
@@ -137,8 +147,15 @@ export function setAmadeusStructure(fmText: string, layoutJson: string | null, c
   // 整块按 LF 重组(entriesOf 按 /\r?\n/ 切),CRLF 源文不再落成 CRLF/LF 混杂(D-19)。
   const entries = entriesOf(fmText) ?? []
   // 结构键按**条目**摘:块状写法的缩进续行跟着键一起走(V-01:只摘键行 = 续行成孤儿、整块 fm 失效)。
-  const kept = entries.filter((e) => !STRUCT_KEY.test(e[0])).flat()
-  const struct = structureKeysFor(layoutJson, canvasJson).flatMap((line) => {
+  const keptAll = entries.filter((e) => !STRUCT_KEY.test(e[0]) && !isGateEntry(e))
+  const structLines = structureKeysFor(layoutJson, canvasJson)
+  const wantsGate = structLines.some((line) => PAGE_KEY.test(line))
+  // 别人写的 amadeus_page:老端读得出非空值 → 它就是闸,留着、不另发;读不出(空值、键后有空格…)→ 挡不住老端,
+  // 有版块时这几条换成我们的那一行。没有版块时一律不碰(没有版块的笔记逐字节不变)。
+  const keptEntries = wantsGate && !legacyGateHolds(keptAll) ? keptAll.filter((e) => !PAGE_KEY.test(e[0])) : keptAll
+  const kept = keptEntries.flat()
+  const foreignPage = keptEntries.some((e) => PAGE_KEY.test(e[0]))
+  const struct = structLines.filter((line) => !(foreignPage && PAGE_KEY.test(line))).flatMap((line) => {
     // 块状写法的结构键、值没变 → 原条目逐字回写,不走 `键: 值` 单行发射:读不懂的块状原文、块标量里的
     // 字符串都可能含换行或 `: `,拼成单行就是非法 YAML(与 canvas.ts「读不懂就逐字保留」同一道防线)。
     const key = STRUCT_EMIT.exec(line)?.[1] as StructKey | undefined
@@ -153,13 +170,36 @@ export function setAmadeusStructure(fmText: string, layoutJson: string | null, c
 /** 结构键自愈:layout/canvas 任一在场却没有 `amadeus_schema` 时补发结构区(顺序也归位)。
  *  只补不拆 —— 两者都不在场时原样返回,不去动一个孤零零的 schema 行(那只是 v4-structured
  *  的合法空态,拆了会把文件从 structured 变成 plain,不该由「自愈」擅自决定)。
- *  给源码模式这类绕过 setAmadeusStructure 的手写路径兜底(Codex P0)。 */
+ *  给源码模式这类绕过 setAmadeusStructure 的手写路径兜底(Codex P0)。
+ *  版块(page/5)两条同理只补不拆:layout 里有版块,但 schema 不是 page/5 或闸标记 amadeus_page 不在
+ *  → 补发(否则老端照 page/4 打开、一存就冲掉版块);反方向(版块删光了还标着 page/5)留给下一次
+ *  可视模式保存归位。唯一的「拆」是孤儿闸标记:schema/layout/canvas 全删了只剩 `amadeus_page: v5`,
+ *  那一行会让文件被判成 v3 拽进 v3 管线 —— 只摘我们自己发的固定值,别的 amadeus_page 不碰。 */
 export function fixStructKeys(fmText: string): string {
   const layout = layoutLineOf(fmText)
   const canvas = canvasLineOf(fmText)
-  if (layout == null && canvas == null) return fmText
-  if (/^["']?amadeus_schema["']?\s*:/m.test(fmText)) return fmText
-  return setAmadeusStructure(fmText, layout, canvas)
+  const schema = structLineOf(fmText, 'schema')
+  if (layout == null && canvas == null) {
+    return schema == null && (entriesOf(fmText) ?? []).some(isGateEntry) ? setAmadeusStructure(fmText, null, null) : fmText
+  }
+  if (schema == null) return setAmadeusStructure(fmText, layout, canvas)
+  return ensureSectionGate(fmText)
+}
+
+/** 带版块却没升到 page/5、或升了却没有老端读得出的 amadeus_page → 补发结构区(只补不拆)。
+ *  schema 比 page/5 新(将来的格式)或读不出版本号的,一律不碰 —— 降级未来格式 = 让本端冒充认识它。
+ *  图标 / 属性这些 chrome 写入也过这一道:它们是真写盘,缺的闸标记要在这一笔补上。 */
+export function ensureSectionGate(fmText: string): string {
+  const layout = layoutLineOf(fmText)
+  if (!layoutHasSections(layout)) return fmText
+  const schema = structLineOf(fmText, 'schema')
+  const major = schema == null ? null : schemaMajorOf({ amadeus_schema: schema })
+  if (major == null || major > SCHEMA_MAJOR_V5) return fmText
+  // 老端的闸要两样都读得出:amadeus_page 非空、schema 主版本 > 3。键后有空格(`amadeus_schema :`)我们认得、老端读不到,
+  // 闸就是开着的 —— 两个键都按老端的读法判,读不出就重发结构区(规范写法)(Codex 复核)
+  const legacy = parseSimpleYaml((entriesOf(fmText) ?? []).flat().join('\n'))
+  if (major === SCHEMA_MAJOR_V5 && !!legacy.amadeus_page && schemaMajorOf(legacy) === SCHEMA_MAJOR_V5) return fmText
+  return setAmadeusStructure(fmText, layout, canvasLineOf(fmText))
 }
 
 /** fm 块 → amadeus_layout 单行 JSON 原文(没有 → null)。 */
@@ -172,7 +212,8 @@ export function canvasLineOf(fmText: string): string | null {
   return structLineOf(fmText, 'canvas')
 }
 
-type StructKey = 'layout' | 'canvas'
+/** 读值用;块状写法的逐字回写只给 layout / canvas(STRUCT_EMIT),schema / page 恒单行发射。 */
+type StructKey = 'layout' | 'canvas' | 'schema' | 'page'
 const STRUCT_EMIT = /^amadeus_(layout|canvas):/
 
 function structLineOf(fmText: string, key: StructKey): string | null {

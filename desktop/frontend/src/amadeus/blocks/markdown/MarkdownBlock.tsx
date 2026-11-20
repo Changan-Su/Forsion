@@ -125,7 +125,7 @@ import { editorFocusPlugin, editorFocused } from './editorFocus'
 import { retargetWikiInner } from './wikiRetarget'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { TOC_FENCE } from '@amadeus-shared/tocBlock'
-import { TableOfContents } from 'lucide-react'
+import { TableOfContents, LayoutPanelTop } from 'lucide-react'
 import { newDocAgentSpec, serializeDocAgentSpec } from '../documentAgent/format'
 import { emptyTaskRemark, taskCheckboxPlugin } from './taskList'
 import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
@@ -221,6 +221,7 @@ registerMessages({
   'mdblock.slash.wikilink': { zh: '链接笔记', en: 'Link to note' },
   'mdblock.slash.image': { zh: '图片', en: 'Image' },
   'mdblock.slash.columns': { zh: '分栏', en: 'Columns' },
+  'mdblock.slash.section': { zh: '版块', en: 'Section' },
   'mdblock.slash.page': { zh: '页面', en: 'Page' },
   'mdblock.slash.database': { zh: '多维表', en: 'Database' },
   'mdblock.slash.drawing': { zh: '画板', en: 'Drawing' },
@@ -319,6 +320,8 @@ const COLUMN_SENTINEL = '\u0000__amadeus_column__'
 const DATABASE_SENTINEL = '\u0000__amadeus_database__'
 const DRAWING_SENTINEL = '\u0000__amadeus_drawing__'
 const CARD_SENTINEL = '\u0000__amadeus_card__'
+/** 版块(方向 B,page/5):只有 v4 统一编辑器认(UnifiedPage.applySlash → sections.insertSection)。 */
+const SECTION_SENTINEL = '\u0000__amadeus_section__'
 /** `/ai`(评审 G3-07):v4 统一实例开正文 AI 面板(UnifiedPage.applySlash 接)。 */
 const AI_SENTINEL = '\u0000__amadeus_ai__'
 const INSTRUCTIONS_SENTINEL = '\u0000__amadeus_instructions__'
@@ -2626,6 +2629,7 @@ export const SLASH_SENTINELS = {
   template: TEMPLATE_SENTINEL,
   image: IMAGE_SENTINEL,
   column: COLUMN_SENTINEL,
+  section: SECTION_SENTINEL,
   database: DATABASE_SENTINEL,
   drawing: DRAWING_SENTINEL,
   noteview: NOTEVIEW_SENTINEL,
@@ -2692,6 +2696,8 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'wikilink', labelKey: 'mdblock.slash.wikilink', hint: '[[', icon: <LinkedPageIcon />, groupKey: 'mdblock.group.advanced', scaffold: '[[', kw: 'link wiki note 链接 笔记 双链 lianjie shuanglian' },
   { key: 'image', labelKey: 'mdblock.slash.image', hint: '', icon: <ImageIcon />, groupKey: 'mdblock.group.advanced', scaffold: IMAGE_SENTINEL, kw: 'image picture photo 图片 tupian 插图' },
   { key: 'columns', labelKey: 'mdblock.slash.columns', hint: '⫿', icon: <LayoutIcon />, groupKey: 'mdblock.group.advanced', scaffold: COLUMN_SENTINEL, kw: 'column split 分栏 分列 fenlan 并排' },
+  // 版块:带底色和留白的区域,里面 1–4 栏卡片(v3 宿主没有版块 → 只给 v4)
+  { key: 'section', labelKey: 'mdblock.slash.section', hint: '', icon: <LayoutPanelTop size="1em" strokeWidth={1.6} />, groupKey: 'mdblock.group.advanced', scaffold: SECTION_SENTINEL, kw: 'section 版块 bankuai bk 区块 区域 分区 卡片组 cards banner hero', unifiedOnly: true },
   { key: 'page', labelKey: 'mdblock.slash.page', hint: '.fd', icon: <NewPageIcon />, groupKey: 'mdblock.group.advanced', scaffold: PAGE_SENTINEL, kw: 'page 页面 子页面 subpage child yemian xinjian 新建页面 notion' },
   { key: 'database', labelKey: 'mdblock.slash.database', hint: '.db', icon: <DatabaseTableViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: DATABASE_SENTINEL, kw: 'database db 多维表 duoweibiao 数据库 shujuku 表格 base notion' },
   { key: 'drawing', labelKey: 'mdblock.slash.drawing', hint: 'Excalidraw', icon: <PenIcon />, groupKey: 'mdblock.group.advanced', scaffold: DRAWING_SENTINEL, kw: 'drawing draw excalidraw 画板 huaban 手绘 白板 whiteboard 草图 sketch 流程图' },
