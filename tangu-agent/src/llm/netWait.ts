@@ -13,7 +13,7 @@ import { SLEEP_GAP_MS } from './sleepDetector.js';
  *     云端流里转述的「上游 ENOTFOUND」是服务器那边的网,不是这台电脑的。ECONNRESET / 超时也不算(可能是服务端掐的)。
  *  2. 探网确认:按报错归成断网也要先探一次,探得通就照常重试(本机模型没起的 ECONNREFUSED、代理没开等),
  *     免费的等待只在探网确认断了的时候发生 —— 否则分类一错就是不扣次数的死循环。
- *     「通」= 请求的那个端点连得上,**或者**参照域名(NETWORK_REFERENCE_HOSTS,缺省 forsion.net)解析得出:
+ *     「通」= 请求的那个端点连得上,**或者**参照域名(缺省 forsion.net,TANGU_NET_REFERENCE_HOSTS 可改)连得上:
  *     模型地址填错 / 那一家停机 / 代理域名解析不了时本机其实有网,不能挂 30 分钟,照常重试、照常失败。
  *
  * 探网 = 解析请求的主机名(dns.lookup all,和 fetch 走同一条系统解析)+ 并行连一下每个地址的端口,任一个连上 /
@@ -34,7 +34,7 @@ export interface ProbeTarget {
   addresses?: string[];
 }
 
-/** 参照域名:请求端点探不通时,它们任一个解析得出就算本机有网。TANGU_NET_REFERENCE_HOSTS(逗号分隔)可改。 */
+/** 参照域名:请求端点探不通时,它们任一个连得上就算本机有网。TANGU_NET_REFERENCE_HOSTS(逗号分隔)可改。 */
 const DEFAULT_REFERENCE_HOSTS = ['forsion.net'];
 let referenceHosts: string[] = (process.env.TANGU_NET_REFERENCE_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
 if (!referenceHosts.length) referenceHosts = DEFAULT_REFERENCE_HOSTS;
@@ -179,23 +179,23 @@ async function targetReachable(t: ProbeTarget): Promise<boolean> {
   return resolved ? reachableAny(resolved, t.port) : false;
 }
 
-/** 参照域名任一个解析得出 = 本机有网(只做系统解析,不连)。 */
-function referenceResolves(): Promise<boolean> {
+/** 参照域名任一个连得上(解析 + 连 443,被拒也算)= 本机有网。只解析不连不够:断网后系统 / 路由器可能还拿缓存答 DNS。 */
+function referenceReachable(): Promise<boolean> {
   return new Promise((resolve) => {
     let pending = referenceHosts.length;
     if (!pending) return resolve(false);
     for (const h of referenceHosts) {
-      void withTimeout(lookupOnce(h), NETWORK_PROBE_TIMEOUT_MS).then((r) => {
-        if (r?.length) resolve(true);
+      void targetReachable({ host: h, port: 443 }).then((ok) => {
+        if (ok) resolve(true);
         else if (--pending === 0) resolve(false);
       });
     }
   });
 }
 
-/** 通 = 请求端点连得上,或参照域名解析得出(端点自己挂了 / 地址填错不算本机断网)。 */
+/** 通 = 请求端点连得上,或参照域名连得上(端点自己挂了 / 地址填错不算本机断网)。 */
 async function defaultProbe(t: ProbeTarget): Promise<boolean> {
-  return (await targetReachable(t)) || referenceResolves();
+  return (await targetReachable(t)) || referenceReachable();
 }
 
 /** 仅测试:换参照域名(传 null 复原)。 */

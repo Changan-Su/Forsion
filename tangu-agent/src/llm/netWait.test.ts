@@ -93,10 +93,14 @@ describe('真探网(缺省实现)', () => {
     __setReferenceHostsForTests(['also-no-such-host.forsion-probe.invalid']);
     expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(false);
   });
-  it('端点探不通但参照域名解析得出 → 本机有网(地址填错 / 那一家停机不能干等 30 分钟)', async () => {
+  it('端点探不通但参照域名连得上 → 本机有网(地址填错 / 那一家停机不能干等 30 分钟)', async () => {
     __setReferenceHostsForTests(['localhost']);
     expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(true);
     expect(await probeNetwork({ host: '100::1', port: 443 })).toBe(true);
+  });
+  it('参照也要连得上,只「解析得出」不算(断网后 DNS 可能还答缓存;IP 字面量永远「解析得出」)', async () => {
+    __setReferenceHostsForTests(['100::1']);
+    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(false);
   });
   it('解析出多个地址时任一个通就算通:IPv6 坏、IPv4 好不能判成断网(fetch 也会两个都试)', async () => {
     const server = net.createServer();
