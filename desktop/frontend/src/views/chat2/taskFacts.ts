@@ -6,6 +6,7 @@
  */
 import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { citeEntryOf, citeHoverKey, citeIndexOf, type CiteIndex } from '../../../../../tangu-agent/src/contracts/citeSources'
+import { isInflightTool } from '../../tangu/inflightTool'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
 export interface TaskSource {
@@ -85,8 +86,8 @@ const hostOf = (u: string): string => { try { return new URL(u).hostname.replace
 const absolutize = (p: string, cwd?: string): string =>
   !cwd || ABS_RE.test(p) ? p : cwd.replace(/[/\\]+$/, '') + '/' + p
 
-/** 已完成且未失败的调用才算数(§17.3):否则「尝试访问过」会被读成「已采信的资料」。 */
-const counts = (ev: ToolEvent): boolean => !!ev.done && !ev.isError
+/** 已完成且未失败的调用才算数(§17.3):否则「尝试访问过」会被读成「已采信的资料」。断在半截的(结果未知)也不算。 */
+const counts = (ev: ToolEvent): boolean => !!ev.done && !ev.isError && !isInflightTool(ev)
 
 function argsOf(ev: ToolEvent): any {
   try { return ev.arguments ? JSON.parse(ev.arguments) : {} } catch { return null }

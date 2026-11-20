@@ -210,9 +210,10 @@ export async function skipRunCompaction(t: EngineTarget, runId: string, operatio
   } finally { clearTimeout(timer) }
 }
 
-export type TerminalRunStatus = 'done' | 'failed' | 'aborted'
+/** interrupted(中断任务续跑方案 B):不是用户按停的中断,也是终态 —— 不认它,对着它按「停止」会空转 10 秒再报停不下来。 */
+export type TerminalRunStatus = 'done' | 'failed' | 'aborted' | 'interrupted'
 function isTerminalStatus(status: unknown): status is TerminalRunStatus {
-  return status === 'done' || status === 'failed' || status === 'aborted'
+  return status === 'done' || status === 'failed' || status === 'aborted' || status === 'interrupted'
 }
 
 /** 保留 SSE 订阅直到真终态。新引擎等 finally;旧引擎回退到显式的终态记录,空列表不是证明。 */

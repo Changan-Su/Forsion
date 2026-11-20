@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { diffLines } from 'diff'
-import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, MessagesSquare, Split, type LucideIcon } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, PauseCircle, CircleHelp, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, MessagesSquare, Split, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
@@ -20,11 +20,17 @@ import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { kickToolOwners, useEngineTools, useToolLabelOf, type HostToolLabel, type ToolLabelPhase } from '../amadeus/plugins/toolResultCards'
 import { useAppIcon } from './appRefs'
+import { inflightOf, inflightTextKey } from '../tangu/inflightTool'
 
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it. The agent carries on meanwhile; the result lands here once you decide.' },
   'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
   'tool.parked.askPast': { zh: '当时挂起等你回答，Agent 没停下来；答案见后面那一行。', en: 'This question was parked while the agent kept going; see your answer further down.' },
+  // 断在半截的调用(引擎停在这一步,中断任务续跑方案 B 6.3 三分法):灰色一步,不算成功也不算报错
+  'tool.inflight.label': { zh: '被打断', en: 'Interrupted' },
+  'tool.inflight.notRun': { zh: '没有执行：引擎在这一步开始前停了。', en: 'Not run: the engine stopped before this step started.' },
+  'tool.inflight.readCut': { zh: '被打断：引擎在这一步做完前停了。这一步只读取，不改动任何东西。', en: 'Interrupted: the engine stopped before this step finished. It only reads and changes nothing.' },
+  'tool.inflight.unknown': { zh: '结果未知：这一步执行到一半引擎停了，可能已经部分或全部生效。', en: 'Outcome unknown: the engine stopped while this step was running. It may have partly or fully taken effect.' },
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
@@ -320,8 +326,10 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
   const active = running && !ev.done && !asking
   const Icon = KIND_ICON[desc.kind]
+  // 只在这条回答已不在跑时算「被打断」:接上在跑的 run 时,历史里那一步的占位会被回放的真事件换掉
+  const inflight = running ? undefined : inflightOf(ev)
   return (
-    <div className="tool-row">
+    <div className="tool-row" data-inflight={inflight?.state}>
       <button className="tool-row-head" aria-busy={active} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <span className="tool-row-ic">{active ? <Dots /> : desc.appBundleId ? <AppOrKindIcon bundleId={desc.appBundleId} Fallback={Icon} /> : <Icon size={13} />}</span>
         <span className="tool-row-copy">
@@ -335,6 +343,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-status">
           {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
             : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+            : inflight ? <CircleHelp size={11} style={{ color: 'var(--text-faint)' }} aria-label={t('tool.inflight.label')}><title>{t('tool.inflight.label')}</title></CircleHelp>
             : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
         {open ? <ChevronDown size={12} className="tool-row-chev" /> : <ChevronRight size={12} className="tool-row-chev" />}
@@ -354,6 +363,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div><MaskedText text={fmtArgs(ev.arguments)} masked={masked} /></>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
           {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
+            : inflight ? (<><div className="label">{t('tool.resultLabel')}</div>{t(inflightTextKey(inflight))}</>)
             : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div><MaskedText text={toolResultText(ev, t)} masked={masked} /></>)}
         </div>
       </AnimatedCollapse>
@@ -433,6 +443,7 @@ export const ToolGroup: React.FC<{
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
+  const anyInflight = !running && groupedEvents.some((e) => !!inflightOf(e))
   // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
   const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
@@ -476,7 +487,8 @@ export const ToolGroup: React.FC<{
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
                 : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
-                : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
+                : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} />
+                : anyInflight ? <CircleHelp size={13} style={{ color: 'var(--text-faint)' }} aria-label={t('tool.inflight.label')}><title>{t('tool.inflight.label')}</title></CircleHelp> : null}
             </span>
           </button>
           <AnimatedCollapse open={open}>
