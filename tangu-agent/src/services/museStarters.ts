@@ -28,6 +28,38 @@ const oneLine = (s: unknown): string => String(s ?? '').replace(/\s+/g, ' ').tri
 /** 去重键:大小写、空白、句末标点都不算差别(「…起一份」和「…起一份。」是同一句)。 */
 export const starterKey = (text: string): string => oneLine(text).toLowerCase().replace(/[\s。.!！?？…]+$/u, '');
 
+/** 不算差别的字符:空白、各种引号、书名号、括号(模型常把「X」写成 X,或把 FIM 两边的空格去掉)。 */
+const LABEL_NOISE = /[\s"'`“”‘’「」『』《》〈〉【】()（）[\]]/u;
+
+/** 逐个码点折叠(NFKC、小写、去掉 LABEL_NOISE),每个折叠后的码元记下它来自原文的哪一段。 */
+function foldForMatch(s: string): { chars: string; from: number[]; to: number[] } {
+  let chars = '';
+  const from: number[] = [];
+  const to: number[] = [];
+  for (let i = 0; i < s.length;) {
+    const ch = String.fromCodePoint(s.codePointAt(i)!);
+    for (const c of ch.normalize('NFKC').toLowerCase()) {
+      if (LABEL_NOISE.test(c)) continue;
+      chars += c;
+      for (let k = 0; k < c.length; k++) { from.push(i); to.push(i + ch.length); }
+    }
+    i += ch.length;
+  }
+  return { chars, from, to };
+}
+
+/** label 在句子里的那段原文(纯函数,单测钉):原样出现就是它自己;否则大小写、全半角、空白、引号书名号括号都不算差别,
+ *  找到了返回句子里对应的那段(桌面按 indexOf 画链接,必须是句子里的原文);找不到 → null。 */
+export function locateLabel(text: string, label: string): string | null {
+  if (text.includes(label)) return label;
+  const t = foldForMatch(text);
+  const l = foldForMatch(label).chars;
+  if (!l) return null;
+  const p = t.chars.indexOf(l);
+  if (p < 0) return null;
+  return text.slice(t.from[p], t.to[p + l.length - 1]);
+}
+
 /** 校验模型给的一组(纯函数,单测钉)。逐条报错:一条坏了整组不收,免得用户看到缺一条、Muse 却以为都放上了。 */
 export function validateStarters(raw: unknown): { starters: StarterInput[] } | { error: string } {
   if (!Array.isArray(raw)) return { error: 'starters must be an array (pass [] to clear)' };
@@ -45,13 +77,19 @@ export function validateStarters(raw: unknown): { starters: StarterInput[] } | {
     if (text.length > MAX_TEXT) return { error: `${at}: text is longer than ${MAX_TEXT} characters — one sentence the user would send` };
     if (!(STARTER_KINDS as readonly string[]).includes(kind)) return { error: `${at}: source.kind must be one of ${STARTER_KINDS.join(', ')}` };
     if (!label) return { error: `${at}: source.label is required` };
-    if (!text.includes(label)) return { error: `${at}: source.label "${label}" must appear verbatim in the text` };
+    // 11-20 生产遥测:四成调用失败,大头是 label 对不上句子。只差空白 / 大小写 / 全半角 / 引号书名号的,换成句子里那段原文;
+    // muse 类本来就没有可打开的东西(桌面只画静态高亮),对不上就照收、不高亮,不再整组拒收。
+    const found = locateLabel(text, label);
+    if (!found && kind !== 'muse') {
+      return { error: `${at}: source.label "${label}" must appear verbatim in the text (it becomes the link) — use the exact words the sentence uses for that ${kind}, or rewrite the sentence to contain "${label}"` };
+    }
+    const shownLabel = found ?? label;
     if (kind === 'web' && !/^https?:\/\//i.test(ref || '')) return { error: `${at}: a web source needs ref = the http(s) URL` };
     if ((kind === 'note' || kind === 'session') && !ref) return { error: `${at}: a ${kind} source needs ref (${kind === 'note' ? 'the note path' : 'the session id'})` };
     const key = starterKey(text);
     if (seen.has(key)) return { error: `${at}: duplicate of an earlier starter` };
     seen.add(key);
-    out.push({ text, source: { kind, label, ...(ref ? { ref: ref.slice(0, 1000) } : {}) } });
+    out.push({ text, source: { kind, label: shownLabel, ...(ref ? { ref: ref.slice(0, 1000) } : {}) } });
   }
   return { starters: out };
 }
