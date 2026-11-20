@@ -17,7 +17,8 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
-import { enqueueRun, abortRun } from '../src/services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, expediteSteer } from '../src/services/agentLoop.js';
+import { MIDSTREAM_MAX_FREE_RESUMES } from '../src/llm/retry.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { __setNetworkProbeForTests } from '../src/llm/netWait.js';
 
@@ -148,6 +149,31 @@ describe('等待网络 · 首帧前', () => {
   }, 20_000);
 });
 
+describe('等待网络 · 插话', () => {
+  it('等网时立即插话 → 叫醒等待,插话落库并进下一次请求,run done', async () => {
+    script = [() => {
+      online = false; // 一直断:只有插话能叫醒
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND', hostname: 'api.example.com' }) });
+    }, finalStep('按新思路做完。')];
+    const off = subscribe('R1', (ev) => {
+      if (ev.type === 'status' && ev.payload?.phase === 'llm_wait_network') setTimeout(() => {
+        enqueueSteer('R1', { id: 'M2', content: '换个思路' });
+        expediteSteer('R1');
+      }, 30);
+    });
+    try {
+      const t0 = Date.now();
+      const { run } = await runToSettled();
+      expect(run.status).toBe('done');
+      expect(Date.now() - t0).toBeLessThan(5_000);
+      expect(llmPayloads.length).toBe(2);
+      expect(JSON.stringify(llmPayloads[1].messages)).toContain('换个思路');
+      const users = await query<any[]>(`SELECT id, content FROM chat_messages WHERE session_id = 'S' AND role = 'user'`);
+      expect(users.some((u) => u.id === 'M2' && String(u.content).includes('换个思路'))).toBe(true);
+    } finally { off(); }
+  }, 20_000);
+});
+
 describe('等待网络 · build-payload', () => {
   it('build-payload 断网 × 4(超过 3 次上限)→ 每次等网,不扣次数,run done', async () => {
     buildScript = Array.from({ length: 4 }, offlineStep);
@@ -172,6 +198,34 @@ describe('等待网络 · 中流续写', () => {
     const all = rows.map((r) => String(r.content)).join('\n');
     for (const t of ['第一段', '第四段', '收尾']) expect(all).toContain(t);
   }, 20_000);
+
+  it('等网前半截已经落库(等网期间引擎被强杀也不丢屏上那截)', async () => {
+    script = [(o: any) => {
+      o.onToken?.('已经写出来的半句');
+      online = false; // 一直断
+      throw new TypeError('terminated', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+    }];
+    let rowsDuringWait: any[] | null = null;
+    const off = subscribe('R1', (ev) => {
+      if (ev.type === 'status' && ev.payload?.phase === 'llm_wait_network') {
+        void query<any[]>(`SELECT content FROM chat_messages WHERE session_id = 'S' AND role = 'model'`).then((r) => { rowsDuringWait = r; abortRun('R1', { byUser: true }); });
+      }
+    });
+    try {
+      const { run } = await runToSettled();
+      expect(run.status).toBe('aborted');
+      expect(rowsDuringWait!.map((r) => String(r.content)).join('\n')).toContain('已经写出来的半句');
+    } finally { off(); }
+  }, 20_000);
+
+  it(`免费续写有上界:断网又恢复的抖动 × 14 → 前 ${MIDSTREAM_MAX_FREE_RESUMES} 次免费、再 3 次按次数,第 14 次失败`, async () => {
+    script = Array.from({ length: 14 }, (_, i) => midstreamDropStep(`第${i + 1}段,`));
+    const { run, statuses } = await runToSettled(30_000);
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(14);
+    expect(statuses.filter((s) => s.phase === 'llm_wait_network').length).toBe(MIDSTREAM_MAX_FREE_RESUMES);
+    expect(statuses.filter((s) => s.phase === 'llm_retry').map((s) => s.attempt)).toEqual([1, 2, 3]);
+  }, 40_000);
 
   it('负对照:网一直通的中流断线照旧扣续写次数,第 4 次断线失败', async () => {
     const drop = (text: string) => (o: any) => { o.onToken?.(text); throw new TypeError('terminated', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) }); };

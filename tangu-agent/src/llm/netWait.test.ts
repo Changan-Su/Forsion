@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import net from 'node:net';
 import {
-  offlineCauseOf, isOfflineLlmError, mayBeOfflineLlmError, probeTargetOf, waitForNetwork, probeNetwork, reachableAny, __setNetworkProbeForTests,
+  offlineCauseOf, isOfflineLlmError, mayBeOfflineLlmError, probeTargetOf, waitForNetwork, probeNetwork, reachableAny, __setNetworkProbeForTests, __setReferenceHostsForTests,
   NETWORK_WAIT_MAX_MS,
 } from './netWait.js';
 import { createDriftDetector, SLEEP_GAP_MS } from './sleepDetector.js';
@@ -14,7 +14,7 @@ import { LlmError } from '../core/types.js';
 const sysErr = (code: string, extra: Record<string, unknown> = {}): Error => Object.assign(new Error(`${code} x`), { code, ...extra });
 const fetchFailed = (cause: unknown): TypeError => new TypeError('fetch failed', { cause });
 
-afterEach(() => { __setNetworkProbeForTests(null); vi.useRealTimers(); });
+afterEach(() => { __setNetworkProbeForTests(null); __setReferenceHostsForTests(null); vi.useRealTimers(); });
 
 describe('断网类报错', () => {
   it('认得出:ENOTFOUND / EAI_AGAIN / ENETUNREACH / EHOSTUNREACH / ENETDOWN / ECONNREFUSED(连接没建起来)', () => {
@@ -55,10 +55,21 @@ describe('断网类报错', () => {
 });
 
 describe('探谁', () => {
-  it('优先报错里连不上的主机;端口同主机时取请求地址的', () => {
+  it('优先请求地址(重新解析、全部地址都探):报错里的 IP 只是第一个失败的那个', () => {
     expect(probeTargetOf(fetchFailed(sysErr('ENOTFOUND', { hostname: 'api.example.com' })), 'https://api.example.com:8443/v1')).toEqual({ host: 'api.example.com', port: 8443 });
-    expect(probeTargetOf(fetchFailed(sysErr('ENOTFOUND', { hostname: 'proxy.lan' })), 'https://api.example.com/v1')).toEqual({ host: 'proxy.lan', port: 443 });
-    expect(probeTargetOf(fetchFailed(sysErr('ECONNREFUSED', { address: '127.0.0.1', port: 11434 })))).toEqual({ host: '127.0.0.1', port: 11434 });
+    const v6first = fetchFailed(Object.assign(new AggregateError([
+      sysErr('ENETUNREACH', { address: '2001:db8::1', port: 11434 }),
+      sysErr('ECONNREFUSED', { address: '127.0.0.1', port: 11434 }),
+    ], ''), { code: 'ENETUNREACH' }));
+    expect(probeTargetOf(v6first, 'http://localhost:11434/v1')).toEqual({ host: 'localhost', port: 11434 });
+  });
+  it('没有请求地址:报错里的主机名;只有 IP 时把双栈两个地址都带上', () => {
+    expect(probeTargetOf(fetchFailed(sysErr('ENOTFOUND', { hostname: 'proxy.lan' })))).toEqual({ host: 'proxy.lan', port: 443 });
+    const agg = fetchFailed(Object.assign(new AggregateError([
+      sysErr('ENETUNREACH', { address: '2001:db8::1', port: 443 }),
+      sysErr('ECONNREFUSED', { address: '127.0.0.1', port: 443 }),
+    ], ''), { code: 'ENETUNREACH' }));
+    expect(probeTargetOf(agg)).toEqual({ host: '2001:db8::1', port: 443, addresses: ['2001:db8::1', '127.0.0.1'] });
   });
   it('报错没带主机 → 请求地址;http 缺省 80;IPv6 去括号;都没有 → null', () => {
     expect(probeTargetOf(fetchFailed(sysErr('ECONNRESET')), 'http://gw.local/v1')).toEqual({ host: 'gw.local', port: 80 });
@@ -79,7 +90,13 @@ describe('真探网(缺省实现)', () => {
       await new Promise((r) => server.close(r));
     }
     expect(await probeNetwork({ host: '127.0.0.1', port })).toBe(true); // 关了:ECONNREFUSED = 包到得了
+    __setReferenceHostsForTests(['also-no-such-host.forsion-probe.invalid']);
     expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(false);
+  });
+  it('端点探不通但参照域名解析得出 → 本机有网(地址填错 / 那一家停机不能干等 30 分钟)', async () => {
+    __setReferenceHostsForTests(['localhost']);
+    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(true);
+    expect(await probeNetwork({ host: '100::1', port: 443 })).toBe(true);
   });
   it('解析出多个地址时任一个通就算通:IPv6 坏、IPv4 好不能判成断网(fetch 也会两个都试)', async () => {
     const server = net.createServer();

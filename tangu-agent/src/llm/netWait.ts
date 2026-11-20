@@ -13,6 +13,8 @@ import { SLEEP_GAP_MS } from './sleepDetector.js';
  *     云端流里转述的「上游 ENOTFOUND」是服务器那边的网,不是这台电脑的。ECONNRESET / 超时也不算(可能是服务端掐的)。
  *  2. 探网确认:按报错归成断网也要先探一次,探得通就照常重试(本机模型没起的 ECONNREFUSED、代理没开等),
  *     免费的等待只在探网确认断了的时候发生 —— 否则分类一错就是不扣次数的死循环。
+ *     「通」= 请求的那个端点连得上,**或者**参照域名(NETWORK_REFERENCE_HOSTS,缺省 forsion.net)解析得出:
+ *     模型地址填错 / 那一家停机 / 代理域名解析不了时本机其实有网,不能挂 30 分钟,照常重试、照常失败。
  *
  * 探网 = 解析请求的主机名(dns.lookup all,和 fetch 走同一条系统解析)+ 并行连一下每个地址的端口,任一个连上 /
  * 被拒 / 被重置都算通(包到得了对方;fetch 也会把 IPv6 / IPv4 都试一遍,只探第一个会把「IPv6 坏、IPv4 好」误判成断网)。
@@ -28,7 +30,14 @@ const OFFLINE_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUN
 export interface ProbeTarget {
   host: string;
   port: number;
+  /** 报错里连不上的那几个 IP(没有请求地址可解析时用;双栈要全探) */
+  addresses?: string[];
 }
+
+/** 参照域名:请求端点探不通时,它们任一个解析得出就算本机有网。TANGU_NET_REFERENCE_HOSTS(逗号分隔)可改。 */
+const DEFAULT_REFERENCE_HOSTS = ['forsion.net'];
+let referenceHosts: string[] = (process.env.TANGU_NET_REFERENCE_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
+if (!referenceHosts.length) referenceHosts = DEFAULT_REFERENCE_HOSTS;
 
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' });
 
@@ -88,15 +97,22 @@ function targetFromUrl(url: string | undefined): ProbeTarget | null {
   }
 }
 
-/** 探谁:优先报错里那个连不上的主机(它就是失败的那一跳),否则用请求地址。都没有 → null(不探、照常重试)。 */
+/**
+ * 探谁:优先请求地址(重新解析、全部地址都探 —— 报错里的 IP 只是 happy eyeballs 第一个失败的那个,
+ * Windows 上常是 IPv6 ENETUNREACH,IPv4 才是通路);没有请求地址时用报错里的主机名,再不然用报错里全部 IP。
+ * 都没有 → null(不探、照常重试)。
+ */
 export function probeTargetOf(err: unknown, fallbackUrl?: string): ProbeTarget | null {
   const fromUrl = targetFromUrl(fallbackUrl);
+  if (fromUrl) return fromUrl;
   const cause = offlineCauseOf(err);
-  if (cause?.host) {
-    const port = cause.port || (fromUrl && fromUrl.host === cause.host ? fromUrl.port : 443);
-    return { host: cause.host, port };
-  }
-  return fromUrl;
+  if (!cause?.host) return null;
+  const port = cause.port || 443;
+  if (!net.isIP(cause.host)) return { host: cause.host, port };
+  const addresses = [...new Set(errorChain(err)
+    .filter((e) => typeof e.code === 'string' && OFFLINE_CODES.has(e.code) && typeof e.address === 'string')
+    .map((e) => e.address as string))];
+  return { host: cause.host, port, addresses: addresses.length ? addresses : [cause.host] };
 }
 
 // ── 探网 ─────────────────────────────────────────────────────────────────────
@@ -156,10 +172,35 @@ export function reachableAny(addresses: string[], port: number, ms = NETWORK_PRO
   });
 }
 
-async function defaultProbe(t: ProbeTarget): Promise<boolean> {
+async function targetReachable(t: ProbeTarget): Promise<boolean> {
+  if (t.addresses?.length) return reachableAny(t.addresses, t.port);
   if (net.isIP(t.host)) return reachableAny([t.host], t.port);
   const resolved = await withTimeout(lookupOnce(t.host), NETWORK_PROBE_TIMEOUT_MS);
   return resolved ? reachableAny(resolved, t.port) : false;
+}
+
+/** 参照域名任一个解析得出 = 本机有网(只做系统解析,不连)。 */
+function referenceResolves(): Promise<boolean> {
+  return new Promise((resolve) => {
+    let pending = referenceHosts.length;
+    if (!pending) return resolve(false);
+    for (const h of referenceHosts) {
+      void withTimeout(lookupOnce(h), NETWORK_PROBE_TIMEOUT_MS).then((r) => {
+        if (r?.length) resolve(true);
+        else if (--pending === 0) resolve(false);
+      });
+    }
+  });
+}
+
+/** 通 = 请求端点连得上,或参照域名解析得出(端点自己挂了 / 地址填错不算本机断网)。 */
+async function defaultProbe(t: ProbeTarget): Promise<boolean> {
+  return (await targetReachable(t)) || referenceResolves();
+}
+
+/** 仅测试:换参照域名(传 null 复原)。 */
+export function __setReferenceHostsForTests(hosts: string[] | null): void {
+  referenceHosts = hosts ?? DEFAULT_REFERENCE_HOSTS;
 }
 
 let probeImpl: (t: ProbeTarget) => Promise<boolean> = defaultProbe;

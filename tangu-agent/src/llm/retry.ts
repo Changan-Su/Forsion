@@ -155,13 +155,24 @@ async function awaitNetwork(err: unknown, hooks: LlmNetworkHooks, signal: AbortS
  */
 export class LlmRetryChain {
   private retries = 0;
-  private readonly startedAt = Date.now();
-  private excludedMs = 0;
+  /** 预算起点:链开始;每次醒来推到醒来那刻;每段不算预算的等待再往后推它那么长(醒来后的等待也照扣)。 */
+  private base = Date.now();
+  private seenWake = 0;
   private networkWaitedMs = 0;
   constructor(private readonly rng: () => number = Math.random) {}
 
   private budgetStart(): number {
-    return Math.max(this.startedAt + this.excludedMs, lastWakeAt());
+    const w = lastWakeAt();
+    if (w > this.seenWake) {
+      this.seenWake = w;
+      this.base = Math.max(this.base, w);
+    }
+    return this.base;
+  }
+
+  private exclude(ms: number): void {
+    this.budgetStart(); // 先把这期间的醒来并进起点,再往后推
+    this.base += ms;
   }
 
   budgetExceeded(nextWaitMs = 0): boolean {
@@ -196,7 +207,8 @@ export class LlmRetryChain {
     const { signal, network } = hooks;
     if (signal?.aborted) throw abortError();
     if (!isRetryableLlmError(err)) throw err;
-    const woke = attemptStartedAt < lastWakeAt();
+    // 跨睡眠的免费重发不越过服务端点名的等待:带 Retry-After 的照计划走(≤60s 照等、>60s 放弃)
+    const woke = attemptStartedAt < lastWakeAt() && retryAfterMsOf(err) === undefined;
     let probed = false;
     if (network && (woke || isOfflineLlmError(err))) {
       probed = true;
@@ -212,7 +224,7 @@ export class LlmRetryChain {
     }
     hooks.onRetry?.(plan, err);
     await sleepOrAbort(plan.waitMs, signal);
-    if (plan.excludedFromBudget) this.excludedMs += plan.waitMs;
+    if (plan.excludedFromBudget) this.exclude(plan.waitMs);
     // timer/事件循环可能晚唤醒:睡前有余量不代表醒后仍可再发一次请求(睡着了则预算从醒来那刻重算)。
     if (this.budgetExceeded()) throw err;
     return false;
@@ -221,24 +233,38 @@ export class LlmRetryChain {
   private async waitNetwork(err: unknown, network: LlmNetworkHooks, signal: AbortSignal | undefined): Promise<'up' | 'back' | 'gave_up' | 'unknown'> {
     const r = await awaitNetwork(err, network, signal, NETWORK_WAIT_MAX_MS - this.networkWaitedMs);
     this.networkWaitedMs += r.awakeMs; // 30 分钟只算醒着等的
-    if (r.state === 'back') this.excludedMs += r.waitedMs;
+    if (r.state === 'back') this.exclude(r.waitedMs);
     return r.state;
   }
 }
 
+/** 一个 run 里免费续写(等过网 / 跨过睡眠)最多几次:每次流吐一帧就断、断网又恢复的抖动网络不能无限续写刷成本。 */
+export const MIDSTREAM_MAX_FREE_RESUMES = 10;
+
+/** 一个 run 的中流等网账本:醒着等过多久(累计 30 分钟上限)、免费续写过几次。 */
+export interface MidstreamNetBudget { awakeMs: number; free: number }
+
 /**
  * 中流断线续写之前:报错可能是断网(重置 / 静默超时)或这次请求跨过了睡眠 → 探网,断了就等网回来。
- * true = 等过网 / 跨过睡眠:这次续写不扣 MIDSTREAM_MAX_RESUMES、不再退避;false = 网是通的,照常按次数续写。
- * 等满 30 分钟还没网 → 抛原错(和今天续写用完一样收尾);用户点停 → AbortError。
+ * true = 等过网 / 跨过睡眠:这次续写不扣 MIDSTREAM_MAX_RESUMES、不再退避;false = 网是通的(或本 run 的免费续写 /
+ * 等网时间用完了),照常按次数续写。醒着等满还没网 → 抛原错;用户点停 → AbortError。
  */
-export async function awaitNetworkBeforeResume(err: unknown, attemptStartedAt: number, hooks: { signal?: AbortSignal; network?: LlmNetworkHooks }): Promise<boolean> {
+export async function awaitNetworkBeforeResume(
+  err: unknown,
+  attemptStartedAt: number,
+  hooks: { signal?: AbortSignal; network?: LlmNetworkHooks; budget?: MidstreamNetBudget },
+): Promise<boolean> {
   if (!hooks.network) return false;
+  const budget = hooks.budget ?? { awakeMs: 0, free: 0 };
+  if (budget.free >= MIDSTREAM_MAX_FREE_RESUMES || budget.awakeMs >= NETWORK_WAIT_MAX_MS) return false;
   const woke = attemptStartedAt < lastWakeAt();
   if (!woke && !mayBeOfflineLlmError(err)) return false;
-  const r = await awaitNetwork(err, hooks.network, hooks.signal, NETWORK_WAIT_MAX_MS);
-  if (r.state === 'back') return true;
+  const r = await awaitNetwork(err, hooks.network, hooks.signal, NETWORK_WAIT_MAX_MS - budget.awakeMs);
+  budget.awakeMs += r.awakeMs;
   if (r.state === 'gave_up') throw err;
-  return woke;
+  const free = r.state === 'back' || woke;
+  if (free) budget.free++;
+  return free;
 }
 
 /**

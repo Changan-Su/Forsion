@@ -315,6 +315,34 @@ describe('睡眠', () => {
     await vi.runAllTimersAsync();
     await expect(again).resolves.toBe(false);
   });
+  it('跨睡眠的免费重发不越过 Retry-After:65s 的照样放弃,短的照样等', async () => {
+    __setNetworkProbeForTests(async () => true, 5);
+    const started = Date.now() - 5_000;
+    __setLastWakeAtForTests(Date.now() - 1_000);
+    const long = Object.assign(new LlmError(429, 'Rate limit reached'), { retryAfterMs: 65_000 });
+    await expect(new LlmRetryChain().recover(long, started, { network: { target: 'https://api.example.com' } })).rejects.toBe(long);
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    const short = Object.assign(new LlmError(429, 'Rate limit reached'), { retryAfterMs: 3_000 });
+    const p = new LlmRetryChain(() => 0).recover(short, started, { network: { target: 'https://api.example.com' }, onRetry });
+    await vi.runAllTimersAsync();
+    await expect(p).resolves.toBe(false); // 照计划等、扣次数
+    expect(onRetry.mock.calls[0][0]).toMatchObject({ retryAfterMs: 3_000 });
+  });
+  it('醒来之后的等网也不算预算(Codex 评审例:链开始 100s 后醒来,再等网 50s,请求只花 10s)', async () => {
+    vi.useFakeTimers();
+    const chain = new LlmRetryChain(() => 0.5);
+    vi.advanceTimersByTime(100_000);
+    __setLastWakeAtForTests(Date.now());
+    let n = 0;
+    __setNetworkProbeForTests(async () => n++ > 0 && Date.now() - t1 >= 50_000, 5_000);
+    const t1 = Date.now();
+    const p = chain.recover(enotfound(), Date.now() + 1, { network: { target: 'https://api.example.com' } });
+    await vi.advanceTimersByTimeAsync(55_000);
+    await expect(p).resolves.toBe(true);
+    vi.advanceTimersByTime(10_000); // 请求本身 10s
+    expect(chain.budgetExceeded()).toBe(false);
+  });
   it('预算从醒来那刻起算', () => {
     vi.useFakeTimers();
     const chain = new LlmRetryChain(() => 0.5);

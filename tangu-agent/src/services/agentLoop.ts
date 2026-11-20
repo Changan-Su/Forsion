@@ -89,7 +89,7 @@ import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, awaitNetworkBeforeResume, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, awaitNetworkBeforeResume, type LlmRetryPlan, type LlmNetworkHooks, type MidstreamNetBudget } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
@@ -3239,6 +3239,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
+    const midstreamNetBudget: MidstreamNetBudget = { awakeMs: 0, free: 0 }; // 中流等网账本:免费续写 ≤10 次、醒着等网累计 ≤30 分钟
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
     let planNudged = false; // 计划提交只催一次(理由同上;plan 模式也用于问答,催两次就成了逼它编计划)
     let sketchNudged = false; // 本轮已命中强视觉信号却没画:收尾前只补催一次,二次仍拒绝则放行
@@ -3605,13 +3606,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
           // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
-          // 断网 / 睡醒:续写前先探网,真断了就等网回来(llm_wait_network),这次续写不扣次数、不再退避;
-          // 网是通的才按 MIDSTREAM_MAX_RESUMES 计数续写。等网期间半截正文仍在 inflightText,点停 / 等满照旧并进终稿。
-          const freeResume = emitted && isRetryableLlmError(err)
-            ? await awaitNetworkBeforeResume(err, attemptStart, { signal: ac.signal, network: netHooks('midstream') })
-            : false;
-          if (emitted && isRetryableLlmError(err) && (freeResume || midstreamResumes < MIDSTREAM_MAX_RESUMES)) {
-            if (!freeResume) midstreamResumes++;
+          // 断网 / 睡醒:续写前探网,真断了就等网回来(llm_wait_network),这次续写不扣次数、不再退避(一个 run 免费续写
+          // ≤10 次、醒着等网累计 ≤30 分钟);网是通的才按 MIDSTREAM_MAX_RESUMES 计数续写。次数还有时先切段落库再等网
+          // (等网期间引擎被强杀也不丢屏上那截);次数用完时先探网,确认断过才切段续写,否则照旧失败(半截随失败收尾落库)。
+          // 等网时立即插话会叫醒它:当免费续写,重进本迭代,插话在迭代顶注入。
+          const canResume = emitted && isRetryableLlmError(err);
+          const waitNetBeforeResume = async (): Promise<boolean> => {
+            try {
+              return await awaitNetworkBeforeResume(err, attemptStart, { signal: sampling.signal, network: netHooks('midstream'), budget: midstreamNetBudget });
+            } catch (e) {
+              if (!ac.signal.aborted && sampling.signal.aborted && immediateSteers.has(runId)) return true;
+              throw e;
+            }
+          };
+          let freeResume = canResume && midstreamResumes >= MIDSTREAM_MAX_RESUMES ? await waitNetBeforeResume() : false;
+          if (canResume && (freeResume || midstreamResumes < MIDSTREAM_MAX_RESUMES)) {
             inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
@@ -3623,7 +3632,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               content:
                 '<stream_resume>\nYour previous message was cut off mid-stream by a transient network error. Anything you already produced was kept and shown to the user. Continue exactly where you left off — do not repeat content you already wrote; if a tool call was cut off, issue it again in full.\n</stream_resume>',
             } as ChatMessage); // 不落库不上屏:harness 脚手架,只进本 run 上下文
+            if (!freeResume) freeResume = await waitNetBeforeResume();
             if (!freeResume) {
+              midstreamResumes++;
               const wait = llmBackoffMs(midstreamResumes);
               console.warn(`[agent-core] run=${runId} 中流断线,${wait}ms 后续写 ${midstreamResumes}/${MIDSTREAM_MAX_RESUMES}: ${(err as any)?.message || err}`);
               void publish(runId, 'status', {
@@ -3634,7 +3645,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             resumedMidstream = true;
             // 续写不消耗迭代额度:同一 iteration 重进。否则在 lastIter(尤其 maxIterations=1)断线时,
             // continue 直接把循环耗尽,run 以半截内容假 done,承诺的续写根本不会发生(Codex 评审 #5)。
-            // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底(免费续写每次都要探网确认断过 / 真睡过,且新一次尝试吐过帧)。
+            // 无限循环由 MIDSTREAM_MAX_RESUMES 兜底;免费续写每次都要探网确认断过 / 真睡过,且整 run 至多 MIDSTREAM_MAX_FREE_RESUMES 次。
             iteration -= 1;
             break; // 出尝试循环;下方检测到 resumedMidstream 即重进本迭代续写
           }
@@ -3675,12 +3686,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 决策交给重试链(llm/retry.ts LlmRetryChain):指数退避 + 抖动、Retry-After、服务繁忙给 6 次;
           // 断网(探网确认)/ 请求跨过睡眠 → 等网络,不扣次数、不算预算,网回来同一轮接着发。放弃即抛原错。
           // max/waitMs/error 供客户端渲染「第 N/M 次重试,Xs 后」——没有它们 UI 只能干等(用户报告像死机)。
+          // 退避 / 等网时立即插话 → 叫醒:回到尝试循环顶注入插话(不扣次数)。用户点停 / 放弃照常抛。
           if (emitted) throw err;
-          await retryChain.recover(err, attemptStart, {
-            signal: ac.signal,
-            network: netHooks('request'),
-            onRetry: (plan, e) => publishRetry(plan, e, 'LLM 调用'),
-          });
+          try {
+            await retryChain.recover(err, attemptStart, {
+              signal: sampling.signal,
+              network: netHooks('request'),
+              onRetry: (plan, e) => publishRetry(plan, e, 'LLM 调用'),
+            });
+          } catch (e) {
+            if (ac.signal.aborted || !sampling.signal.aborted || !immediateSteers.has(runId)) throw e;
+          }
         } finally {
           ac.signal.removeEventListener('abort', stopSampling);
           if (steerWakeups.get(runId) === steerSampling) steerWakeups.delete(runId);

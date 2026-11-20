@@ -1299,7 +1299,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { teamWorkBySession: { ...s.teamWorkBySession, [sid]: { ...cur, [slug]: { ...cur[slug], status } } } }
     })
     // 重试提示自清:重试后流恢复(token/…)或终结(done/error)的第一个非 status 事件就撤掉横幅。
-    if (ev.type !== 'status' && get().llmRetryBySession[sessionId]) {
+    // 「网络已断开」那行例外:等网期间也会来别的事件(如回答了先前挂起的提问 → inquiry_result),引擎每段等待只报一次,
+    // 撤了就不会再出现 —— 只认 llm_network_back / 下一次 llm_call / run 终态(done / error)。
+    const retryNow = get().llmRetryBySession[sessionId]
+    if (ev.type !== 'status' && retryNow && (retryNow.phase !== 'wait_network' || ev.type === 'done' || ev.type === 'error')) {
       set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
     }
     const upsertSubChat = (id: string, fn: (s: SubChat) => SubChat, init?: Partial<SubChat>) => {

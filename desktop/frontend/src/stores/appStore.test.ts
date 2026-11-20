@@ -625,6 +625,20 @@ describe('appStore.reduceEvent', () => {
     expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('retry')
   })
 
+  it('「网络已断开」不被等网期间的别的事件撤掉(如回答了挂起的提问),run 终态才撤', () => {
+    const ref = { current: 'a1' }
+    const re = (seq: number, type: string, payload: any) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq, type, payload } as AgentRunEvent)
+    re(1, 'status', { phase: 'llm_wait_network', since: 1 })
+    re(2, 'inquiry_result', { inquiryId: 'q1', answer: 'ok' })
+    expect(useApp.getState().llmRetryBySession.s1?.phase).toBe('wait_network')
+    re(3, 'error', { error: 'aborted', aborted: true, content: '' })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
+    // 普通重试横幅照旧:第一个非 status 事件就撤
+    re(4, 'status', { phase: 'llm_retry', attempt: 1, max: 3, waitMs: 1000 })
+    re(5, 'inquiry_result', { inquiryId: 'q2', answer: 'ok' })
+    expect(useApp.getState().llmRetryBySession.s1).toBeUndefined()
+  })
+
   it('turn_boundary 的 finalizedId 不匹配时回退到 assistantRef,不孤立气泡也不丢身份', () => {
     // 乐观气泡 a1 带 agent 身份;后端给了一个列表里没有的 finalizedAssistantId(模拟 id 不一致)。
     useApp.setState({ messagesBySession: { s1: [{ ...assistant(), agentId: 'qinche', agentName: '秦彻' }] } })
