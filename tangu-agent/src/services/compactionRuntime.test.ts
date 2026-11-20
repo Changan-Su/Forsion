@@ -5,7 +5,7 @@ const fake = vi.hoisted(() => ({
   query: vi.fn(), resolve: vi.fn(), build: vi.fn(), stream: vi.fn(),
   publish: vi.fn(), cost: vi.fn(),
 }));
-vi.mock('../core/db.js', () => ({ query: fake.query }));
+vi.mock('../core/db.js', () => ({ query: fake.query, messageTimeOrder: (dir: string) => `timestamp ${dir}` }));
 vi.mock('./eventBus.js', () => ({ publish: fake.publish }));
 vi.mock('../seams/runtime.js', () => ({ deps: () => ({
   brain: { llm: {

@@ -20,7 +20,7 @@
  */
 import { extname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { hydrateHistory } from './agentLoop.js';
@@ -406,7 +406,7 @@ export async function saveAside(p: { asideId?: string; sessionId: string; userId
   // ponytail: 5 次都被抢就落到下面另开一条;真撞上再改成抛错 / 串行写
   const [m] = p.messageId ? await query<any[]>(`SELECT id FROM chat_messages WHERE id = ? AND session_id = ? LIMIT 1`, [p.messageId, p.sessionId]) : [];
   const [latest] = m ? [m] : await query<any[]>(
-    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp DESC LIMIT 1`, [p.sessionId]);
+    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`, [p.sessionId]);
   // 还没有回答可挂(空会话里问的):不存 —— 存了也没有地方重开(Codex 10-18 #5),照旧只在本次面板里
   if (!latest) return null;
   const id = uuidv4();
