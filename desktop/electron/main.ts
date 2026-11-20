@@ -101,7 +101,8 @@ import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
 import { externalCreationFor } from './productTrust'
-import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
+import { transcribeViaOpenAI, transcribeViaForsion, AUDIO_MIME_BY_EXT } from './asr'
+import { transcribeWavInChunks } from './asrCloudChunks'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
@@ -4614,14 +4615,18 @@ app.whenReady().then(async () => {
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
       if (qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))) throw new Error('asr_streaming_required')
-      return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
+      const viaProvider = (a: Buffer, mime: string) => transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio: a, mime, language: req?.language, timestamps: req?.timestamps })
+      // 长 WAV 切段送(asrCloudChunks.ts):整段一次送,几分钟的视频音轨会撞上游 / 网关超时
+      return (await transcribeWavInChunks(audio, { timestamps: req?.timestamps }, (w) => viaProvider(w, 'audio/wav'))) ?? viaProvider(audio, req?.mime || 'audio/wav')
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。
     const creds = loadTanguCreds()
     const cloudUrl = cfg.cloudUrl || creds.cloudUrl || ''
     const token = creds.token || ''
     if (!cloudUrl || !token) throw new Error('未设置语音识别:选一个自带 provider 的语音识别模型 + key,或登录 Forsion 用云端,或下载本地语音模型。')
-    return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
+    const viaForsion = (a: Buffer, mime: string) => transcribeViaForsion({ cloudUrl, token, modelId, audioB64: a.toString('base64'), mime, language: req?.language, timestamps: req?.timestamps })
+    // 生产网关对 /api/brain/transcribe 读超时约 60s:170s 人声整段送实测 504。长 WAV 切成 ≤30s 的段逐段送。
+    return (await transcribeWavInChunks(audio, { timestamps: req?.timestamps }, (w) => viaForsion(w, 'audio/wav'))) ?? viaForsion(audio, req?.mime || 'audio/wav')
   }
 
   registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
@@ -4651,7 +4656,7 @@ app.whenReady().then(async () => {
     if (!filePath || typeof filePath !== 'string') throw new Error('非法的音频路径')
     const audio = await readFile(filePath)
     const ext = (filePath.split('.').pop() || '').toLowerCase()
-    return runTranscribe(audio, { ...(req || {}), mime: req?.mime || (ext === 'wav' ? 'audio/wav' : ext === 'mp3' ? 'audio/mpeg' : ext === 'm4a' ? 'audio/mp4' : 'application/octet-stream') })
+    return runTranscribe(audio, { ...(req || {}), mime: req?.mime || AUDIO_MIME_BY_EXT[ext] || 'application/octet-stream' })
   }
   ipcMain.handle('asr:transcribeFile', async (_e, filePath: string, req?: { mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     transcribeFileByPath(filePath, req))
