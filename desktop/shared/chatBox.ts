@@ -114,6 +114,7 @@ export function matchChatBoxMention(value: string, caret: number): ChatBoxSugges
   if (at > 0 && AT_BLOCKED_BEFORE.test(before[at - 1])) return null
   const query = before.slice(at + 1)
   if (query.length > 30 || /[\s[\]\ufffc]/u.test(query)) return null
-  if (/^[\p{L}\p{N}_]/u.test(value.slice(caret))) return null
+  // Mid-token (`@1|/28`): the pick would replace only the part before the caret and leave the rest behind.
+  if (/^\S/u.test(value.slice(caret))) return null
   return { query, from: lineStart + at, to: caret }
 }

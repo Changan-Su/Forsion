@@ -33,6 +33,8 @@ interface BoxProps { options: PluginChatBoxOptions; revision: number; host: Host
 interface SuggestRow { key: string; label: string; hint?: string; section?: string; insert(): string }
 
 interface SuggestMenuState {
+  /** Which suggest produced `rows` ('mention' = the host's @ panel): rows from one source never act on another's range. */
+  source: PluginChatBoxSuggest | 'mention'
   match: ChatBoxSuggestMatch
   trigger: string
   rows: SuggestRow[]
@@ -48,6 +50,7 @@ function mentionKinds(options: PluginChatBoxOptions): ChatBoxMentionKind[] {
   for (const k of Array.isArray(options.mentions) ? options.mentions : []) if (MENTION_KINDS.includes(k) && !out.includes(k)) out.push(k)
   return out
 }
+const DATE_VALUE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/
 const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/i, '')
 
 /** The host's `@` rows: dates first, then notes (same order and labels as the notes `@` panel). No「提醒我」/ `@todo` rows:
@@ -58,6 +61,7 @@ function mentionRows(query: string, kinds: ChatBoxMentionKind[], take: (m: ChatB
     for (const c of dateCandidates(query)) {
       if (c.insert.startsWith('@remind:') || c.insert === '@todo') continue
       const value = c.insert.slice(1)
+      if (!DATE_VALUE.test(value)) continue // the contract is YYYY-MM-DD[THH:mm]; never hand a plugin anything else
       rows.push({ key: `date:${value}`, label: c.label, hint: c.hint, section: rows.length ? undefined : translate('chatbox.mention.date'),
         insert: () => (take({ kind: 'date', value }) ? '' : `${c.insert} `) })
     }
@@ -65,7 +69,8 @@ function mentionRows(query: string, kinds: ChatBoxMentionKind[], take: (m: ChatB
   if (kinds.includes('page')) {
     const all = usePageStore.getState().pages
     const counts = new Map<string, number>()
-    for (const p of all) counts.set(baseName(p), (counts.get(baseName(p)) ?? 0) + 1)
+    // Links resolve case-insensitively, so `Plan` and `plan` are the same name: count them together.
+    for (const p of all) { const k = baseName(p).toLowerCase(); counts.set(k, (counts.get(k) ?? 0) + 1) }
     const inVault = new Set(all)
     const recent = getRecentPages().filter((p) => inVault.has(p))
     const ordered = [...new Set([...recent, ...all])]
@@ -75,7 +80,7 @@ function mentionRows(query: string, kinds: ChatBoxMentionKind[], take: (m: ChatB
       if (rows.length >= SUGGEST_LIMIT) break
       const name = baseName(path)
       if (q && !name.toLowerCase().includes(q)) continue
-      const link = (counts.get(name) ?? 0) > 1 ? path.replace(/\.md$/i, '') : name
+      const link = (counts.get(name.toLowerCase()) ?? 0) > 1 ? path.replace(/\.md$/i, '') : name
       rows.push({ key: `page:${path}`, label: name, hint: path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : undefined,
         section: rows.length === first ? translate('chatbox.mention.page') : undefined,
         insert: () => (take({ kind: 'page', path, link }) ? '' : `[[${link}]] `) })
@@ -113,7 +118,8 @@ function useChatBoxSuggest({ options, host, isAlive }: BoxProps, replace: (match
     if (!match || !picked) { dismissedAt.current = null; close(); return }
     if (dismissedAt.current === match.from) { close(); return }
     const suggest = picked, found0 = match, trigger = suggest === 'mention' ? '@' : suggest.trigger
-    setMenu(cur => (cur ? { ...cur, match: found0, trigger } : null)) // keep the range current while new items load
+    // Keep the range current while new items load, but only over rows from the same source (`@` rows must not eat a `#a`).
+    setMenu(cur => (cur && cur.source === suggest ? { ...cur, match: found0, trigger } : null))
     const id = ++request.current
     const take = (m: ChatBoxMention): boolean => {
       if (!isAlive() || typeof options.onMention !== 'function') return false
@@ -126,7 +132,7 @@ function useChatBoxSuggest({ options, host, isAlive }: BoxProps, replace: (match
       if (id !== request.current) return
       if (!rows.length || !el) { setMenu(null); return }
       const at = textareaCaretRect(el, found0.to)
-      setMenu({ match: found0, trigger, rows, left: at.left, top: at.bottom, anchorTop: at.top })
+      setMenu({ source: suggest, match: found0, trigger, rows, left: at.left, top: at.bottom, anchorTop: at.top })
     }).catch(e => {
       console.error('[amadeus] plugin Chat Box suggest failed', e)
       if (id === request.current) setMenu(null)
@@ -154,11 +160,15 @@ function useChatBoxSuggest({ options, host, isAlive }: BoxProps, replace: (match
           // Prompt boxes usually sit at the bottom of a view: in the lower half the menu opens upward, over the list.
           prefer={menu.anchorTop > window.innerHeight / 2 ? 'above' : 'below'}
           onPick={i => {
-            const m = menu.match
+            const m = menu.match, row = menu.rows[i]
             const typed = `${menu.trigger}${m.query}`
             close()
             // update({ value }) may have swapped the draft since the menu opened: the range no longer means anything.
-            if (host.input.current?.value.slice(m.from, m.to) === typed) replace(m, menu.rows[i].insert())
+            if (!row || host.input.current?.value.slice(m.from, m.to) !== typed) return
+            if (menu.source === 'mention' && !mentionKinds(options).length) return // update({ mentions: [] }) while open
+            const before = options.value
+            const text = row.insert() // may run the plugin's onMention, which can update({ value }) or dispose the box
+            if (isAlive() && options.value === before) replace(m, text)
           }}
           onClose={() => { dismissedAt.current = menu.match.from; close() }}
           focused={() => document.activeElement === host.input.current}

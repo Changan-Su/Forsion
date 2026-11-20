@@ -416,6 +416,47 @@ describe('host @ mentions', () => {
     await typeText('@')
     expect(menu()).toEqual(['own'])
   })
+  it('an onMention that swaps the draft or disposes the box is not overwritten by the stale range', async () => {
+    let swap = true
+    const onChange = vi.fn()
+    const onMention = vi.fn(() => { if (swap) box!.update({ value: 'ABCDEFGHIJK' }); else box!.dispose(); return true })
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onChange, onSubmit: () => false }) })
+    await typeText('Call @tom')
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledTimes(1)
+    expect(input().value).toBe('ABCDEFGHIJK')
+    swap = false
+    await typeText('Call @tom')
+    onChange.mockClear()
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledTimes(2)
+    expect(onChange).not.toHaveBeenCalled()
+    box = undefined
+  })
+  it('date rows never act on another trigger\'s range, and turning mentions off disarms an open menu', async () => {
+    const onMention = vi.fn(() => true)
+    const tags = { trigger: '#', items: () => new Promise<never>(() => {}) } // still loading
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], suggest: tags, onMention, onSubmit: () => false }) })
+    await typeText('Call @')
+    expect(menu()).toEqual(['[日期]', '今天', '明天'])
+    await typeText('Call @ #a')
+    expect(menu()).toEqual([])
+    await typeText('Call @tom')
+    await act(async () => { box!.update({ mentions: [] }) })
+    await press('Enter')
+    expect(onMention).not.toHaveBeenCalled()
+  })
+  it('names that differ only in case link by path; `@constructor` is not a date', async () => {
+    usePageStore.setState({ pages: ['A/Plan.md', 'B/plan.md', 'Constructor.md'] })
+    const onMention = vi.fn()
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date', 'page'], onMention, onSubmit: () => false }) })
+    await typeText('@constructor')
+    expect(menu()).toEqual(['[链接到页面]', 'Constructor'])
+    await typeText('看 @plan')
+    await press('ArrowDown')
+    await press('Enter')
+    expect(onMention).toHaveBeenLastCalledWith({ kind: 'page', path: 'B/plan.md', link: 'B/plan' })
+  })
   it('stays closed in an e-mail address and after Esc for the same @', async () => {
     await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['date'], onSubmit: () => false }) })
     await typeText('mail a@b')
@@ -442,6 +483,7 @@ describe('matchChatBoxMention', () => {
     expect(matchChatBoxMention('@[[x', 4)).toBeNull()
     expect(matchChatBoxMention(`@${'x'.repeat(31)}`, 32)).toBeNull()
     expect(matchChatBoxMention('@明天下午', 2)).toBeNull()
+    expect(matchChatBoxMention('@1/28', 2)).toBeNull() // caret mid-token: a pick would leave `/28` behind
   })
 })
 
