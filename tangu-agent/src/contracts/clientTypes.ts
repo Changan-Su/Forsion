@@ -60,6 +60,35 @@ export interface AgentRunEvent {
   payload?: any
 }
 
+/**
+ * agent_runs.status。interrupted(2026-11-20 中断任务续跑方案 B)= 引擎被停下(退出 / 更新 / 改设置重启 / 换账号 / 没打招呼的停 / 崩溃)
+ * 时这一轮还没做完;error 列是 `interrupted:<InterruptReason>`。和 aborted(用户按停 / 急停 / 级联)、failed(出错)分开。
+ * 本机引擎才会写它;云端 worker 照旧只有 aborted。
+ */
+export type AgentRunStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'interrupted'
+
+/**
+ * interrupted 的终态 error 事件(在线收尾与 SSE 补发同形):error 固定 'interrupted';aborted 恒 true(老客户端当「已停止」收尾);
+ * interrupted = 原因(contracts/turnResume InterruptReason);content = 已写出的部分正文(补发的那条没有)。
+ */
+export interface RunInterruptedErrorPayload {
+  error: 'interrupted'
+  aborted: true
+  interrupted?: import('./turnResume.js').InterruptReason
+  content?: string
+}
+
+/**
+ * 自动续跑 run 的 input 里多出来的三项(引擎启动恢复时起的那一轮;中断任务续跑方案 B):
+ * trigger 'recovery'、resumeOf = 被续的旧 run id、resumeAttempt = 这一串里第几次自动续(从 1 起)。
+ * 这一轮的「用户消息」是 autoResumeMarker(<原因>) 那一行(contracts/turnResume parseAutoResume 认得),不是用户说的话。
+ */
+export interface RunResumeInput {
+  trigger?: 'recovery'
+  resumeOf?: string
+  resumeAttempt?: number
+}
+
 /** 子聊天(右栏「子聊天」区)的一段内容:发言文本 / 工具调用 / 投票。 */
 export type SubChatSeg =
   | { t: 'text'; speaker?: string; color?: string; text: string }

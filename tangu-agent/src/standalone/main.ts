@@ -30,6 +30,7 @@ import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
 import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
+import { shutdownReasonForSelf } from '../services/shutdownIntentStore.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
@@ -172,17 +173,23 @@ async function main(): Promise<void> {
 
   attachRealtimeVoice(server); // ws /agent/realtime:实时语音通话中转(brain.realtime 未注入则拒连)
 
-  // 优雅退出(桌面 backendManager 发 SIGTERM,3s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
-  // 等被中止的 run 落完终态(部分回答 + aborted)再退,有界 1.5s,赶在 2s 硬退出之前。
+  // 优雅退出(桌面 backendManager 先写 shutdown-intent.json、再发 SIGTERM,5s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
+  // 等被中止的 run 落完终态(部分回答 + interrupted(<原因>))再退,有界 3s,赶在 4s 硬退出之前。
+  // 原因(中断任务续跑方案 B):意图文件写的是本进程 pid、且是刚写的 → 用它(app_quit / app_update / engine_restart / account_change);
+  // 否则 engine_stop(没打招呼的停,不自动续)。只处理第一次:退出时常常先 SIGTERM、再 disconnect,第二次不改写原因。
+  let stopping = false;
   const shutdown = (): void => {
-    const drained = drainRunsForExit(1500);
+    if (stopping) return;
+    stopping = true;
+    const drained = drainRunsForExit(3000, shutdownReasonForSelf());
     try { mod.dispose(); } catch { /* ignore */ }
     void Promise.all([drained, mcp.dispose()]).finally(() => process.exit(0));
-    setTimeout(() => process.exit(0), 2000).unref?.();
+    setTimeout(() => process.exit(0), 4000).unref?.();
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   // A Unit crash must not leave an orphan engine listening with access to its workspace.
+  // 宿主没写意图就断开(Unit 崩了)= engine_stop;写了(先断 IPC 再发信号的退出顺序)照意图记。
   if (process.send) process.on('disconnect', shutdown);
 }
 

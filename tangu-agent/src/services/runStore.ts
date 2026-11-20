@@ -51,7 +51,8 @@ export const getRunForUser = (id: string, userId: string): Promise<AgentRun | nu
 // ── run 终态收敛点:全部引擎调用方(agentLoop/groupChat)都经此写终态,单点发 run.done 活动行。
 // 供 event_seen 盯「某 agent 的 run 结束」;automation run 带 o=triggerKey(评估侧防自激)。
 // muse 周期跳过(高频噪音);仅本地形态(活动日志=hostExec 专属)。监听器由 muse.ts 注册(kickMuse,避免 import 环)。
-const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted']);
+// interrupted(中断任务续跑方案 B)= 引擎被停下的那一刻收的尾,也是终态(之后可能另起一个续跑 run)。
+const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted', 'interrupted']);
 let runTerminalListener: (() => void) | null = null;
 export function setRunTerminalListener(cb: (() => void) | null): void {
   runTerminalListener = cb;

@@ -34,7 +34,8 @@ import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
-import { LENGTH_RESUME_CHECK } from '../contracts/turnResume.js';
+import { LENGTH_RESUME_CHECK, type InterruptReason } from '../contracts/turnResume.js';
+import { isRecoveryHost } from './runProgress.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
@@ -279,6 +280,10 @@ const reasonOf = (runId: string): { reason?: string } => {
   const r = abortReasons.get(runId);
   return r ? { reason: r } : {};
 };
+/** 不是用户按停的中断(中断任务续跑方案 B):drainRunsForExit 按「为什么停」记(app_quit / app_update / engine_restart /
+ *  account_change / engine_stop)。只记在退出那一刻还在跑、且没有别的中止原因的 run;先到先得(SIGTERM 之后的 disconnect 不改写)。
+ *  runLoop 收尾据此把 run 记成 interrupted 而不是 aborted(本机恢复宿主才这样,云端 worker 照旧)。 */
+const interruptReasons = new Map<string, InterruptReason>();
 
 export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Promise<boolean> {
   const task = runTasks.get(runId);
@@ -307,7 +312,7 @@ export async function runControlledOperation<T>(runId: string, sessionId: string
   try { return await task; }
   finally {
     signal.removeEventListener('abort', cancel);
-    abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);
+    abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);interruptReasons.delete(runId);
     setTimeout(() => cleanup(runId), 30_000).unref();
   }
 }
@@ -353,6 +358,22 @@ export function startRun(runId: string): void {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
+    // 退出时(drainRunsForExit 记了原因)还在准备阶段 = 主循环还没开跑、什么都没做(连用户这句都还没落库):
+    // 退回 queued,下次启动按「持有者已死的排队行」认领后照原输入起跑 —— 从没开跑的 run 重跑不会重复任何副作用。
+    if (aborted && interruptReasons.has(runId) && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)) {
+      console.warn(`[agent-core] run preparation interrupted run=${runId} (${interruptReasons.get(runId)}): left queued for the next start`);
+      try {
+        await updateRunStatus(runId, 'queued').catch(() => {});
+      } finally {
+        const sid = runSession.get(runId);
+        abortControllers.delete(runId);
+        steerQueue.delete(runId);
+        runSession.delete(runId);
+        if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
+        setTimeout(() => cleanup(runId), 30_000);
+      }
+      return;
+    }
     const status = aborted ? 'aborted' : 'failed';
     const message = aborted ? 'aborted' : err?.message || String(err);
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
@@ -375,7 +396,7 @@ export function startRun(runId: string): void {
     runTasks.delete(runId);
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
-    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); interruptReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
     if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
   });
@@ -1021,8 +1042,16 @@ let exiting = false;
  * 中止在飞 run,有界等它们落完终态 —— 中止分支会存下已生成的部分回答并标 aborted。不等的话行停在 running,
  * 下次启动只能标 orphaned、部分回答也丢了(PI-DSH 评审 R2:dispose 后 2s 内 exit,实测来不及)。
  */
-export async function drainRunsForExit(timeoutMs: number): Promise<void> {
+export async function drainRunsForExit(timeoutMs: number, reason?: InterruptReason): Promise<void> {
   exiting = true;
+  // 「为什么停」(中断任务续跑方案 B):只给还在跑、没被别的原因中止过的 run 记,先到先得。
+  // 没给原因(TUI 退出)= 照旧按中止收尾。
+  if (reason) {
+    for (const [runId, ac] of abortControllers) {
+      if (ac.signal.aborted || abortReasons.has(runId) || interruptReasons.has(runId)) continue;
+      interruptReasons.set(runId, reason);
+    }
+  }
   abortAllRuns();
   const tasks = [...runTasks.values()];
   if (!tasks.length) return;
@@ -1031,9 +1060,17 @@ export async function drainRunsForExit(timeoutMs: number): Promise<void> {
   if (timer) clearTimeout(timer);
 }
 
+/** 测试用:drainRunsForExit 置了进程级「正在退出」,同一测试文件里后面的 run 还要能起。 */
+export function __resetExitForTests(): void { exiting = false; }
+
 /** 中止所有在飞 run(dispose/卸载用)。各 run 的 finally 会自行清理 + 推进队列。 */
 export function abortAllRuns(): void {
   for (const ac of abortControllers.values()) ac.abort();
+}
+
+/** 这个 run 还在本进程里跑 / 收尾(SSE 补终态事件前问:done 已落库但 done 事件还没发的空档里别抢先补)。 */
+export function isRunLive(runId: string): boolean {
+  return runTasks.has(runId) || abortControllers.has(runId);
 }
 
 /** 本进程在飞 run 数(/health 上报用,worker 模式供 Forsion 调度面板展示)。 */
@@ -4212,8 +4249,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 只认错误名会把用户主动停止误记成 failed(Codex 评审逮到)。
     // Stopping the CLI is not proof that its container stopped: surface uncertain cleanup even after user cancellation.
     const aborted = !(err instanceof DockerCleanupError) && (err?.name === 'AbortError' || err instanceof AbortLikeError || ac.signal.aborted);
-    const status = aborted ? 'aborted' : 'failed';
-    const msg = aborted ? 'aborted' : (err?.message || String(err));
+    // 不是用户按停的中断(引擎被退出 / 更新 / 重启停下,中断任务续跑方案 B):记 interrupted(<原因>),不写「用户打断」标记。
+    // 只在本机恢复宿主上这样记 —— 云端 worker 的 server 不认这个状态,那条路照旧是 aborted。
+    const interruptReason = aborted && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)
+      ? interruptReasons.get(runId) : undefined;
+    const status = interruptReason ? 'interrupted' : aborted ? 'aborted' : 'failed';
+    const msg = interruptReason ? `interrupted:${interruptReason}` : aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);
     // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
     parkAc.abort();
@@ -4232,7 +4273,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
       // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
       // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。
-      if (aborted) {
+      // 引擎被停(interrupted)不是用户打断:不写这条标记 —— 下次启动按门控自动续跑,或补一条说明原因的中断行(recoverQueuedRuns)。
+      if (aborted && !interruptReason) {
         await deps().state.insertUserMessage({
           id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
         }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
@@ -4242,7 +4284,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (aborted && userStopped.has(ac)) noteUserStop(sessionId, runToolNames);
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     // P1-K2:中止且记过原因(急停)→ 带 reason,手机 / 设备页据此显示「已被那台电脑急停」。
-    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+    // interrupted:error 固定 'interrupted'、aborted 仍为 true(老客户端当「已停止」收尾),interrupted 字段带原因(新客户端换成说原因的那条线)。
+    await publish(runId, 'error', interruptReason
+      ? { error: 'interrupted', aborted: true, interrupted: interruptReason, content: finalContent }
+      : { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     // —— Stop hook：失败/中止路径也触发（host-only；纯 side-effect 通知，不影响错误处理，无续跑）。——
     void runHooks('Stop', {
       session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: aborted ? 'aborted' : 'error',
