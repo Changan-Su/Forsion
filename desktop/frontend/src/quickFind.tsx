@@ -26,7 +26,7 @@ import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
 import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, useSegDir, type NativeChromeClaim } from '@lcl/engine'
 import { useSegFlow } from '@lcl/engine/segFlow'
-import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
+import { getSessionDetail, listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
 import { countTelemetry } from './telemetrySend'
@@ -44,6 +44,7 @@ registerMessages({
   'quickfind.secPickable': { zh: '可选', en: 'Available' },
   'quickfind.secRecent': { zh: '最近', en: 'Recent' },
   'quickfind.emptyNoMatch': { zh: '无匹配', en: 'No matches' },
+  'quickfind.openSessionFailed': { zh: '无法打开会话', en: 'Could not open the conversation' },
   'quickfind.emptyNoPickable': { zh: '库里没有可选的文件', en: 'No selectable files in this vault' },
   'quickfind.emptyNoRecent': { zh: '还没有最近项', en: 'No recent items yet' },
   'quickfind.footSelect': { zh: '选择', en: 'Select' },
@@ -338,7 +339,7 @@ function QuickFindInner() {
     id: h.id,
     title: h.title || t('quickfind.untitledSession'),
     sub: t('quickfind.subSession'),
-    open: (opts) => openSession(h.id, opts),
+    open: (opts) => { void openServerSession(h.id, opts) },
   }))
   const contentHits = serverHits.filter((h) => h.hit)
   const title0 = results.length + (showCreate ? 1 : 0)
@@ -362,13 +363,29 @@ function QuickFindInner() {
     close()
     void usePageStore.getState().createWikiPage(createName)
   }
+  async function openServerSession(id: string, opts?: { newTab?: boolean }, messageId?: string): Promise<void> {
+    const app = useApp.getState()
+    if (![...app.sessions, ...app.archivedSessions].some((session) => session.id === id)) {
+      try {
+        const session = await getSessionDetail(homeTarget(), id)
+        if (authGeneration !== currentAuthGeneration()) return
+        if (session.id !== id) throw new Error('Session ID mismatch')
+        useApp.getState().adoptSession(session)
+      } catch {
+        if (authGeneration === currentAuthGeneration()) app.toast(t('quickfind.openSessionFailed'), true)
+        return
+      }
+    }
+    if (messageId) useApp.getState().setJumpTarget(id, messageId)
+    openSession(id, opts)
+  }
+
   /** ↵ 打开会话;⌘↵ 打开后跳到命中那条并闪两下(#153 的跳转)。 */
   const openHit = (h: SessionSearchHit, jump: boolean): void => {
     const title = h.title || t('quickfind.untitledSession')
     notePicked()
     pushRecent({ kind: 'session', id: h.id, title, sub: t('quickfind.subSession') })
-    if (jump && h.hit) useApp.getState().setJumpTarget(h.id, h.hit.messageId) // 目标先落下再开会话(见 setJumpTarget)
-    openSession(h.id)
+    void openServerSession(h.id, undefined, jump ? h.hit?.messageId : undefined)
     close()
   }
   const chooseAt = (i: number, opts?: { newTab?: boolean }): void => {

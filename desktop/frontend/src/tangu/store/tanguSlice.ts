@@ -3678,15 +3678,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const session = withLocation(raw) // S4(R-15):插进 appStore.sessions 的记录一律经 withLocation 打标(位置只从绑定表派生)
     if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
     set((st) => {
-      const existing = st.sessions.findIndex((s) => s.id === session.id)
-      // `/open` 返回既有会话时只原位刷新数据。把它 unshift 到首位会让一次纯点击伪装成「最近活动」;
-      // 真正新建/rotate 的会话才在首位出现,后续活动排序只认消息带来的 updated_at。
-      const sessions = existing >= 0
-        ? st.sessions.map((s, i) => (i === existing ? session : s))
-        : [session, ...st.sessions]
+      // `/open` 返回既有会话时只原位刷新数据。快速查找带回的归档会话仍属于归档列表。
+      const upsert = (rows: SessionRecord[]): SessionRecord[] => rows.some((row) => row.id === session.id)
+        ? rows.map((row) => row.id === session.id ? session : row)
+        : [session, ...rows]
       return {
-        sessions,
-        archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
+        sessions: session.archived ? st.sessions.filter((s) => s.id !== session.id) : upsert(st.sessions),
+        archivedSessions: session.archived ? upsert(st.archivedSessions) : st.archivedSessions.filter((s) => s.id !== session.id),
         configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
         messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
       }
