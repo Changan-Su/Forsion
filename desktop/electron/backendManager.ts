@@ -34,8 +34,10 @@ import { SHUTDOWN_INTENT_FILE, type ShutdownIntentReason } from '../../tangu-age
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
-/** 停引擎的原因(写进 shutdown-intent.json,引擎据此把在途任务记成 interrupted(<原因>))。意外退出没有原因、不写。 */
-export type EngineStopReason = ShutdownIntentReason
+/** 停引擎的原因(写进 shutdown-intent.json,引擎据此把在途任务记成 interrupted(<原因>))。意外退出没有原因、不写。
+ *  engine_stop = 明说「这次停了别续」(只清桌面设置、保留引擎数据:续跑开关随设置一起没了,不能按缺省开去续)。
+ *  契约 ShutdownIntentReason 由引擎那半补上 engine_stop;补上之前这里本地并一下,补上后这个并集就是原样。 */
+export type EngineStopReason = ShutdownIntentReason | 'engine_stop'
 
 /**
  * 把「为什么停」原子写进 `<dir>/shutdown-intent.json`(先写临时文件再 rename):引擎收到 SIGTERM 时同步读一次,

@@ -23,10 +23,14 @@ const between = (from: string, to: string): string => {
 }
 
 describe('engine stop paths × shutdown reason', () => {
-  it('every ensureBackend / backend.stop call names its reason (only clearing data, whose database is about to go, does not)', () => {
+  it('every ensureBackend / backend.stop call names its reason', () => {
     expect(main).not.toMatch(/ensureBackend\(\s*\)/)
-    expect(main.match(/await backend\.stop\(\)/g)).toHaveLength(1) // 注释里提到的 backend.stop() 不算
-    expect(handler('app:clearData')).toContain('await backend.stop() //')
+    expect(main).not.toMatch(/await backend\.stop\(\)/) // 注释里提到的 backend.stop() 不算
+  })
+
+  it('clearing data: wiping the engine database too → no reason; keeping it (desktop settings only) → engine_stop, so the run is not auto-resumed with a reset toggle', () => {
+    // 评审 #3:只清桌面设置时续跑开关跟着没了、下次按缺省「开」;不写原因的话 Windows 强杀后会按 crash 自动续
+    expect(handler('app:clearData')).toContain("await backend.stop(opts?.tangu ? undefined : 'engine_stop')")
   })
 
   it('quitting the app (⌘Q / tray / before-quit) → app_quit', () => {
@@ -47,6 +51,16 @@ describe('engine stop paths × shutdown reason', () => {
       expect(handler(ch), ch).toContain("void ensureBackend('engine_restart', { defer: true })")
     }
     expect(handler('config:set')).toContain("void ensureBackend('engine_restart', { defer: true })")
+  })
+
+  it('a restart stops the old engine before reading config, marks what it carries, and registers itself (review #4)', () => {
+    // 读配置在停之前的话,等旧进程退出那 5s 里存下的设置 / 提供方就得再重启一回;不登记的话,期间来的请求会再排一次重启
+    const body = between('function ensureBackend(reason: EngineStopReason', '\n}\n')
+    const at = (s: string) => { const i = body.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i }
+    expect(at('if (isQuitting) return')).toBeLessThan(at('await backend.stop(reason)')) // 退出 / 清数据自己带原因停,队里这次别抢先
+    expect(at('await backend.stop(reason)')).toBeLessThan(at('deferredEngineRestart.markCovered()'))
+    expect(at('deferredEngineRestart.markCovered()')).toBeLessThan(at('await loadConfig()'))
+    expect(body).toContain('deferredEngineRestart.track(ensureChain)')
   })
 
   it('the explicit restart button and a subscription sign-in restart right away (engine_restart): the caller needs the new engine', () => {

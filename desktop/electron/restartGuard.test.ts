@@ -45,34 +45,34 @@ describe('restart protection', () => {
 
 // 中断任务续跑方案 B 第 7 节:开着「重启后自动接着做」、确实有任务在跑时,弹窗改说更新完会接着做,主按钮是「立即更新」。
 describe('restart dialog when interrupted tasks resume automatically', () => {
-  const ask = async (activity: { tasks: number; processes: number; unknown?: boolean }, install: boolean, autoResume?: () => Promise<boolean>) => {
+  const ask = async (activity: { tasks: number; processes: number; unknown?: boolean; resumable?: number }, install: boolean, autoResume?: () => Promise<boolean>) => {
     const confirm = vi.fn(async (_options: ReturnType<typeof restartDialog>) => true), restart = vi.fn()
     await createRestartGuard({ inspect: async () => activity, confirm, restart, ...(autoResume ? { autoResume } : {}) })(install)
     return confirm.mock.calls[0]?.[0]
   }
   it('update: says the tasks will pick up after the update, primary button is Update now (zh / en)', async () => {
     setMainLocale('zh')
-    const zh = await ask({ tasks: 2, processes: 1 }, true, async () => true)
+    const zh = await ask({ tasks: 2, processes: 1, resumable: 2 }, true, async () => true)
     expect(zh).toMatchObject({ message: '现在更新吗？', buttons: ['稍后', '立即更新'], defaultId: 1, cancelId: 0 })
     expect(zh!.detail).toBe('有 2 个任务在跑。更新完重新打开后，它们会从停下的地方自动接着做。1 个后台进程会被停掉。')
     setMainLocale('en')
-    const en = await ask({ tasks: 3, processes: 0 }, true, async () => true)
+    const en = await ask({ tasks: 3, processes: 0, resumable: 3 }, true, async () => true)
     expect(en).toMatchObject({ message: 'Update now?', buttons: ['Later', 'Update now'], defaultId: 1, cancelId: 0 })
     expect(en!.detail).toBe('3 tasks are running. After the update they will pick up where they left off. 0 background processes will be stopped.')
     setMainLocale('zh')
   })
   it('a plain relaunch says Restart now', async () => {
     setMainLocale('en')
-    expect(await ask({ tasks: 1, processes: 0 }, false, async () => true)).toMatchObject({ message: 'Restart now?', buttons: ['Later', 'Restart now'], defaultId: 1 })
+    expect(await ask({ tasks: 1, processes: 0, resumable: 1 }, false, async () => true)).toMatchObject({ message: 'Restart now?', buttons: ['Later', 'Restart now'], defaultId: 1 })
     setMainLocale('zh')
-    expect(await ask({ tasks: 1, processes: 0 }, false, async () => true)).toMatchObject({ message: '现在重启吗？', buttons: ['稍后', '立即重启'] })
+    expect(await ask({ tasks: 1, processes: 0, resumable: 1 }, false, async () => true)).toMatchObject({ message: '现在重启吗？', buttons: ['稍后', '立即重启'] })
   })
   it('keeps today\'s dialog when the setting is off, unreadable, the status is unknown or only processes run', async () => {
     const legacy = restartDialog({ tasks: 2, processes: 1 })
     expect(legacy.defaultId).toBe(0)
-    expect(await ask({ tasks: 2, processes: 1 }, true, async () => false)).toEqual(legacy)
-    expect(await ask({ tasks: 2, processes: 1 }, true)).toEqual(legacy) // 没接这个依赖(旧调用方)
-    expect(await ask({ tasks: 2, processes: 1 }, true, async () => { throw new Error('config unreadable') })).toEqual(legacy)
+    expect(await ask({ tasks: 2, processes: 1, resumable: 2 }, true, async () => false)).toEqual(legacy)
+    expect(await ask({ tasks: 2, processes: 1, resumable: 2 }, true)).toEqual(legacy) // 没接这个依赖(旧调用方)
+    expect(await ask({ tasks: 2, processes: 1, resumable: 2 }, true, async () => { throw new Error('config unreadable') })).toEqual(legacy)
     expect(await ask({ tasks: 0, processes: 0, unknown: true }, true, async () => true)).toEqual(restartDialog({ tasks: 0, processes: 0, unknown: true }))
     expect(await ask({ tasks: 0, processes: 2 }, true, async () => true)).toEqual(restartDialog({ tasks: 0, processes: 2 }))
   })
@@ -80,5 +80,47 @@ describe('restart dialog when interrupted tasks resume automatically', () => {
     const restart = vi.fn(), confirm = vi.fn(async () => false)
     expect(await createRestartGuard({ inspect: async () => ({ tasks: 1, processes: 0 }), confirm, restart, autoResume: async () => true })(true)).toEqual({ ok: false })
     expect(restart).not.toHaveBeenCalled()
+  })
+})
+
+// 评审 #10:团队任务 / ACP 会话 / 旧引擎建的 run 不会自动续。引擎在 restart-status 里报 resumable(此刻停机本进程会续几个),
+// 弹窗只在有得续时改口,只续一部分就如实说;旧引擎不报这个字段 = 原来的弹窗。
+describe('restart dialog follows how many tasks the engine says will resume', () => {
+  const ask = async (activity: { tasks: number; processes: number; resumable?: number }, install: boolean) => {
+    const confirm = vi.fn(async (_options: ReturnType<typeof restartDialog>) => true), restart = vi.fn()
+    await createRestartGuard({ inspect: async () => activity, confirm, restart, autoResume: async () => true })(install)
+    return confirm.mock.calls[0]?.[0]
+  }
+  it('only some of them resume: says so, primary button stays Update now / Restart now (zh / en)', async () => {
+    setMainLocale('zh')
+    const zh = await ask({ tasks: 3, processes: 1, resumable: 1 }, true)
+    expect(zh).toMatchObject({ message: '现在更新吗？', buttons: ['稍后', '立即更新'], defaultId: 1, cancelId: 0 })
+    expect(zh!.detail).toBe('有 3 个任务在跑，其中 1 个更新后会自动接着做，其余会被中断。')
+    expect((await ask({ tasks: 3, processes: 1, resumable: 2 }, false))!.detail).toBe('有 3 个任务在跑，其中 2 个重启后会自动接着做，其余会被中断。')
+    setMainLocale('en')
+    const en = await ask({ tasks: 4, processes: 0, resumable: 3 }, true)
+    expect(en).toMatchObject({ message: 'Update now?', buttons: ['Later', 'Update now'], defaultId: 1 })
+    expect(en!.detail).toBe('4 tasks are running; 3 of them will pick up where they left off after the update, the rest will be interrupted.')
+    expect((await ask({ tasks: 4, processes: 0, resumable: 3 }, false))!.detail).toBe('4 tasks are running; 3 of them will pick up where they left off after the restart, the rest will be interrupted.')
+    setMainLocale('zh')
+  })
+  it('none of them resume, or an older engine that does not report it: today\'s dialog', async () => {
+    expect(await ask({ tasks: 2, processes: 1, resumable: 0 }, true)).toEqual(restartDialog({ tasks: 2, processes: 1 }))
+    expect(await ask({ tasks: 2, processes: 1 }, true)).toEqual(restartDialog({ tasks: 2, processes: 1 }))
+  })
+  it('the engine\'s resumable count reaches the dialog through the real status reader; a malformed one counts as not reported', async () => {
+    const status = (body: object) => async () => new Response(JSON.stringify(body))
+    expect(await readRestartActivity('http://x', 't', status({ tasks: 3, processes: 0, resumable: 1 }))).toEqual({ tasks: 3, processes: 0, resumable: 1 })
+    for (const bad of [-1, 4, 1.5, '2', null]) {
+      expect(await readRestartActivity('http://x', 't', status({ tasks: 3, processes: 0, resumable: bad })), String(bad)).toEqual({ tasks: 3, processes: 0 })
+    }
+    expect(await readRestartActivity('http://x', 't', status({ tasks: 3, processes: 0 }))).toEqual({ tasks: 3, processes: 0 }) // 旧引擎
+    setMainLocale('zh')
+    const confirm = vi.fn(async (_options: ReturnType<typeof restartDialog>) => true)
+    await createRestartGuard({
+      inspect: () => readRestartActivity('http://x', 't', status({ tasks: 2, processes: 0, resumable: 2 })),
+      confirm, restart: vi.fn(), autoResume: async () => true,
+    })(true)
+    expect(confirm.mock.calls[0][0]).toMatchObject({ message: '现在更新吗？', defaultId: 1 })
   })
 })

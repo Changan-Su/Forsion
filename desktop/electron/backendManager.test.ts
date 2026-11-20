@@ -417,7 +417,7 @@ describe('shutdown intent written before the engine is signalled', () => {
     return { m, eng, pid: m.getStatus().pid! }
   }
 
-  it.each(['app_quit', 'app_update', 'engine_restart', 'account_change'] as const)('stop(%s): the engine reads the reason and its own pid when SIGTERM arrives', async (reason) => {
+  it.each(['app_quit', 'app_update', 'engine_restart', 'account_change', 'engine_stop'] as const)('stop(%s): the engine reads the reason and its own pid when SIGTERM arrives', async (reason) => {
     const { m, eng, pid } = await boot(reason)
     const before = Date.now()
     await m.stop(reason)
@@ -439,7 +439,7 @@ describe('shutdown intent written before the engine is signalled', () => {
     } finally { await m.stop() }
   }, 30_000)
 
-  it('no reason (clearing data) writes nothing', async () => {
+  it('no reason (clearing data along with the engine database) writes nothing', async () => {
     const { m, eng } = await boot('none')
     await m.stop()
     expect(eng.seen().intent).toBeNull()
