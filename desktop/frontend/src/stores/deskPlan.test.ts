@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDeskPath, isDuplicateShow, replaceTop, deskItemFor, extractStreamingString, extractLiveBody, findLiveEdit, packDeskMap, unpackDeskMap, sameDeskFile, placeLiveItem, liveDeskPath, type DeskItem } from './deskPlan'
+import { resolveDeskPath, isDuplicateShow, replaceTop, deskItemFor, extractStreamingString, extractLiveBody, findLiveEdit, packDeskMap, unpackDeskMap, sameDeskFile, placeLiveItem, liveDeskPath, clearLiveTop, liveKeepsDesk, type DeskItem } from './deskPlan'
 
 describe('resolveDeskPath', () => {
   it('绝对路径原样通过(posix + windows)', () => {
@@ -64,6 +64,9 @@ describe('findLiveEdit', () => {
     expect(findLiveEdit([msg([{ id: '1', name: 'run_bash', arguments: '{"command":"ls"}', done: false }])], '/c')).toBeNull()
     expect(findLiveEdit([msg([{ id: '1', name: 'write_file', arguments: '{"pa', done: false }])], '/c')).toBeNull()
   })
+  it('路径没流完(半截)→ null,不出半截名字', () => {
+    expect(findLiveEdit([msg([{ id: '1', name: 'write_file', arguments: '{"path":"/Users/fo', done: false }])], '/c')).toBeNull()
+  })
 })
 
 describe('packDeskMap / unpackDeskMap(会话快照持久化)', () => {
@@ -76,6 +79,12 @@ describe('packDeskMap / unpackDeskMap(会话快照持久化)', () => {
     expect(Object.keys(out)).toEqual(['a'])
     expect(out.a.items.map((x) => x.path)).toEqual(['/x/a.md'])
     expect(out.a).toMatchObject({ size: 'half', mode: 'open', fraction: 0.5, note: 'n' })
+  })
+  it('带 bumped 的直播格整条不落盘(bumped 只在内存里)', () => {
+    const lv = { ...deskItemFor('/x/r.md', 7), live: { msgId: 'm', toolId: 't', tool: 'write_file', bumped: deskItemFor('/x/n.txt', 3) } }
+    const out = unpackDeskMap(packDeskMap({ a: { items: [lv, deskItemFor('/x/k.md', 4)], size: 'half' as const } }))
+    expect(out.a.items.map((x) => x.path)).toEqual(['/x/k.md'])
+    expect(JSON.stringify(out)).not.toContain('n.txt')
   })
   it('超容量按最近展示时间截断', () => {
     const map = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`s${i}`, { items: [deskItemFor(`/f${i}.md`, i)], size: 'half' as const }]))
@@ -152,22 +161,79 @@ describe('sameDeskFile', () => {
 
 describe('placeLiveItem(直播格上台 / 更新)', () => {
   const live = (toolId: string, path: string): DeskItem => ({ key: `live:${toolId}`, path, name: path ? path.split('/').pop()! : '…', at: 30, live: { msgId: 'm', toolId, tool: 'write_file' } })
+  const bumped = (it: DeskItem, b: DeskItem): DeskItem => ({ ...it, live: { ...it.live!, bumped: b } })
   const notes = deskItemFor('/p/notes.txt', 10)
   const reportOld = deskItemFor('/p/report.md', 11)
-  it('新直播格进顶格:第二格是同一份文件 → 改留原顶格', () => {
-    expect(placeLiveItem([notes, reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md'), notes])
+  const reportNew = deskItemFor('/p/report.md', 40)
+  const draft = deskItemFor('/p/draft.md', 41)
+  const names = (xs: DeskItem[] | null) => (xs || []).map((x) => `${x.name}${x.live ? '(live)' : ''}${x.live?.bumped ? `[${x.live.bumped.name}]` : ''}`)
+  it('新直播格进顶格:第二格是同一份文件 → 改留原顶格,下台的旧版记进 bumped', () => {
+    expect(placeLiveItem([notes, reportOld], live('t1', '/p/report.md'))).toEqual([bumped(live('t1', '/p/report.md'), reportOld), notes])
   })
-  it('没路径的直播格进顶格:第二格照留', () => {
-    expect(placeLiveItem([notes, reportOld], live('t1', ''))).toEqual([live('t1', ''), reportOld])
+  it('没路径的直播格进顶格:第二格照留,原顶格记进 bumped', () => {
+    expect(placeLiveItem([notes, reportOld], live('t1', ''))).toEqual([bumped(live('t1', ''), notes), reportOld])
   })
-  it('同一次调用的直播格路径就位:原地替换,下格不同文件照留', () => {
+  it('同一次调用的直播格路径就位:原地替换,下格不同文件照留,bumped 带下去', () => {
+    expect(placeLiveItem([bumped(live('t1', ''), reportOld), notes], live('t1', '/p/report.md'))).toEqual([bumped(live('t1', '/p/report.md'), reportOld), notes])
     expect(placeLiveItem([live('t1', ''), notes], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md'), notes])
   })
-  it('同一次调用的直播格路径就位:下格正是这份文件的旧版 → 只剩直播格', () => {
-    expect(placeLiveItem([live('t1', ''), reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md')])
+  it('同一次调用的直播格路径就位:下格正是这份文件的旧版 → 拿 bumped 换回下格,旧版改记为 bumped', () => {
+    expect(placeLiveItem([bumped(live('t1', ''), notes), reportOld], live('t1', '/p/report.md'))).toEqual([bumped(live('t1', '/p/report.md'), reportOld), notes])
   })
-  it('顶格是别的调用的直播格 → 按 replaceTop 顶替(被顶替的直播不落到第二格)', () => {
+  it('同一次调用的直播格路径就位:下格是旧版但没有可用的 bumped → 只剩直播格(旧版记为 bumped)', () => {
+    expect(placeLiveItem([live('t1', ''), reportOld], live('t1', '/p/report.md'))).toEqual([bumped(live('t1', '/p/report.md'), reportOld)])
+  })
+  it('顶格是别的调用的直播格 → 按 replaceTop 顶替(被顶替的直播不落到第二格),不记 bumped', () => {
     expect(placeLiveItem([live('t0', '/p/report.md'), reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md')])
+    expect(placeLiveItem([live('t0', '/p/x.md'), notes], live('t1', ''))).toEqual([live('t1', ''), notes])
+  })
+  it('整段:[notes, report] + 流式改 report → 起草 → 路径就位 → 落盘 = [report(新), notes]', () => {
+    const s1 = placeLiveItem([notes, reportOld], live('t1', ''))
+    expect(names(s1)).toEqual(['…(live)[notes.txt]', 'report.md'])
+    const s2 = placeLiveItem(s1, live('t1', '/p/report.md'))
+    expect(names(s2)).toEqual(['report.md(live)[report.md]', 'notes.txt'])
+    expect(replaceTop(s2, reportNew)).toEqual([reportNew, notes])
+  })
+  it('整段:直播改别的文件 → 清场回到直播前 [notes, report];落盘只换顶格 [X, report]', () => {
+    const s2 = placeLiveItem(placeLiveItem([notes, reportOld], live('t1', '')), live('t1', '/p/draft.md'))
+    expect(names(s2)).toEqual(['draft.md(live)[notes.txt]', 'report.md'])
+    expect(clearLiveTop(s2, 't1')).toEqual([notes, reportOld])
+    expect(replaceTop(s2, draft)).toEqual([draft, reportOld])
+  })
+  it('整段:直播改顶格那份失败 → 清场回到 [report(旧), notes]', () => {
+    const s2 = placeLiveItem(placeLiveItem([reportOld, notes], live('t1', '')), live('t1', '/p/report.md'))
+    expect(clearLiveTop(s2, 't1')).toEqual([reportOld, notes])
+  })
+  it('整段:直播改下格那份失败 → 两格都回来(顺序对调为 [report(旧), notes])', () => {
+    const s2 = placeLiveItem(placeLiveItem([notes, reportOld], live('t1', '')), live('t1', '/p/report.md'))
+    expect(clearLiveTop(s2, 't1')).toEqual([reportOld, notes])
+  })
+})
+
+describe('clearLiveTop(直播格清场)', () => {
+  const lv: DeskItem = { key: 'live:t1', path: '', name: '…', at: 1, live: { msgId: 'm', toolId: 't1', tool: 'write_file' } }
+  const notes = deskItemFor('/p/notes.txt', 10)
+  it('顶格不是这次调用的直播格 → null(不动)', () => {
+    expect(clearLiveTop([notes, lv], 't1')).toBeNull()
+    expect(clearLiveTop([lv], 't2')).toBeNull()
+    expect(clearLiveTop(undefined, 't1')).toBeNull()
+  })
+  it('没有 bumped → 只去掉顶格', () => {
+    expect(clearLiveTop([lv, notes], 't1')).toEqual([notes])
+  })
+})
+
+describe('liveKeepsDesk(直播中点文件)', () => {
+  const lv: DeskItem = { key: 'live:t1', path: '/p/draft.md', name: 'draft.md', at: 1, live: { msgId: 'm', toolId: 't1', tool: 'write_file' } }
+  const notes = deskItemFor('/p/notes.txt', 10)
+  it('点的是直播格那份 / 下格那份 → 不动', () => {
+    expect(liveKeepsDesk([lv, notes], '/p/draft.md')).toBe(true)
+    expect(liveKeepsDesk([lv, notes], '/p/notes.txt')).toBe(true)
+  })
+  it('点的是 Desk 上没有的文件 / 顶格不是直播格 → 照旧走 replaceTop', () => {
+    expect(liveKeepsDesk([lv, notes], '/p/todo.md')).toBe(false)
+    expect(liveKeepsDesk([notes, lv], '/p/notes.txt')).toBe(false)
+    expect(liveKeepsDesk([{ ...lv, path: '' }, { ...notes, path: '' }], '')).toBe(true) // 与原判据一致:top.path === path
   })
 })
 

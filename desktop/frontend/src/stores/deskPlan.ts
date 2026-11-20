@@ -9,7 +9,9 @@ export interface DeskItem {
   path: string
   name: string
   at: number
-  live?: { msgId: string; toolId: string; tool: string }
+  /** bumped:直播期间因它下了台的那一格(只在内存里;直播条目整条不落快照)。直播失败清场时请回来,
+   *  路径就位时若下格正是这份文件的旧版,也拿它换回下格(见 placeLiveItem / clearLiveTop)。 */
+  live?: { msgId: string; toolId: string; tool: string; bumped?: DeskItem }
   view?: { type: string; params?: Record<string, unknown> }
   /** 插件工具结果卡片(落点 desk):按调用 id 回到这条会话的消息里找那次调用(components/PluginToolCard.tsx)。 */
   tool?: { callId: string }
@@ -87,13 +89,44 @@ export function replaceTop(items: DeskItem[] | undefined, item: DeskItem): DeskI
   return top && !top.live && !sameDeskFile(top, item) ? [item, top] : [item]
 }
 
-/** 直播格上台 / 更新:顶格已是同一次调用(同 toolId)的直播格 → 原地换掉(key 不变不重挂),其余照留;
- *  路径刚就位时下格若正是这份文件的旧版,不留(同 replaceTop 的同文件规则)。否则按 replaceTop 进顶格。 */
+const withBumped = (item: DeskItem, bumped: DeskItem | undefined): DeskItem =>
+  bumped && item.live ? { ...item, live: { ...item.live, bumped } } : item
+
+/** 直播格上台 / 更新(bumped 的口径见 DeskItem.live):
+ *  - 顶格已是同一次调用(同 toolId)的直播格 → 原地换掉(key 不变不重挂),bumped 带下去,其余照留;
+ *    路径刚就位时下格若正是这份文件的旧版 → 拿 bumped 换回下格(bumped 得是别的文件),旧版改记为 bumped。
+ *  - 否则按 replaceTop 进顶格,并记下因此下台的那一格;原顶格是直播格时不记。 */
 export function placeLiveItem(items: DeskItem[] | undefined, item: DeskItem): DeskItem[] {
   const cur = items || []
-  return item.live && cur[0]?.live?.toolId === item.live.toolId
-    ? [item, ...cur.slice(1).filter((x) => !sameDeskFile(x, item))]
-    : replaceTop(cur, item)
+  const top = cur[0]
+  if (!item.live) return replaceTop(cur, item)
+  if (top?.live?.toolId === item.live.toolId) {
+    let bumped = top.live.bumped
+    const rest = cur.slice(1).flatMap((x) => {
+      if (!sameDeskFile(x, item)) return [x]
+      const back = bumped && !sameDeskFile(bumped, item) ? bumped : undefined
+      bumped = x
+      return back ? [back] : []
+    })
+    return [withBumped(item, bumped), ...rest]
+  }
+  const placed = replaceTop(cur, item)
+  const off = top && !top.live ? cur.slice(0, 2).find((x) => !x.live && !placed.includes(x)) : undefined
+  return [withBumped(item, off), ...placed.slice(1)]
+}
+
+/** 直播格清场(失败 / 没落成):只认顶格是这次调用的直播格(不是 → null,不动);
+ *  带着 bumped → 还原成 [bumped, ...其余],否则只去掉顶格。 */
+export function clearLiveTop(items: DeskItem[] | undefined, toolId: string): DeskItem[] | null {
+  const top = items?.[0]
+  if (!items || !top?.live || top.live.toolId !== toolId) return null
+  return top.live.bumped ? [top.live.bumped, ...items.slice(1)] : items.slice(1)
+}
+
+/** 顶格是直播格时点了一份文件:正是直播格那份、或正是下格那份(它已经在 Desk 上)→ 条目原样不动。 */
+export function liveKeepsDesk(items: DeskItem[] | undefined, path: string): boolean {
+  const [top, second] = items || []
+  return !!top?.live && (top.path === path || (!!path && second?.path === path))
 }
 
 /** 直播格的目标路径:path 字段闭合(done)之前不认 —— 路径分段流出时,前半截会被当成完整路径钉进
@@ -225,10 +258,9 @@ export function findLiveEdit(
     for (let j = evs.length - 1; j >= 0; j--) {
       const e = evs[j]
       if (e.done || !DESK_EDIT_TOOLS.has(e.name)) continue
-      const raw = extractStreamingString(e.arguments || '', 'path')
-      const p = raw ? resolveDeskPath(raw.value, cwd) : null
+      const p = liveDeskPath(e.arguments || '', cwd)
       if (p) return { path: p, name: p.split(/[\\/]/).pop() || p }
-      return null // 找到进行中的编辑但路径还没流出来:本轮先不显示
+      return null // 找到进行中的编辑但路径还没流完:本轮先不显示(不出半截名字)
     }
   }
   return null
