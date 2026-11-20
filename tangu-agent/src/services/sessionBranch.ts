@@ -6,7 +6,7 @@
  * SQLite(standalone)/Postgres(microserver) 通吃。
  */
 import { v4 as uuidv4 } from 'uuid';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 
 /** JSON 列归一:对象→字符串、字符串原样、空→null。匹配既有 INSERT 风格(两后端都吃字符串)。 */
 function asJsonText(v: any): string | null {
@@ -78,15 +78,16 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   );
 
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)
+  // 同一毫秒的几行按落库先后排:不然最近 N 条的名额会让给同毫秒里更早的那条,倒序再翻回来时它们在新会话里的先后也会反过来
   const msgs = lastN && lastN > 0
     ? (await query<any[]>(
         `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
-         FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT ?`,
+         FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY ${messageTimeOrder('DESC')} LIMIT ?`,
         [sourceSessionId, throughTs, Math.floor(lastN)],
       )).reverse()
     : await query<any[]>(
         `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
-         FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp ASC`,
+         FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY ${messageTimeOrder('ASC')}`,
         [sourceSessionId, throughTs],
       );
   // ponytail: 逐行插入。分支是一次性操作(非热路径),量大再批量;与既有删除级联一样不开显式事务。

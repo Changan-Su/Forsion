@@ -447,7 +447,7 @@ OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端�
 KEYS.push('pluginext');
 OPT_IN.add('pluginsettings'); KEYS.push('pluginsettings');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
-OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
+OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // Explicit recommendations in work and chat presets.
 // storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
 //   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
 //   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
@@ -2834,20 +2834,27 @@ try {
   });
 
   for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {
+    const { marketplaceItemsOf, MARKETPLACE_CARDS_CAPABILITY, MARKETPLACE_RECOMMENDATION_TOOL } = await import('../dist/shared/marketplace.js');
     const sessionId = `live-${key}-${Date.now()}`;
-    const ev = await run(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。', 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] });
-    const { marketplaceItemsOf } = await import('../dist/shared/marketplace.js');
-    const results = ev.toolResults.filter(r => r.name === 'search_marketplace' && !r.isError);
-    const items = results.flatMap(r => marketplaceItemsOf(r.result));
-    const selected = items[0];
-    const follow = selected ? await run(sessionId, `请查询 ID ${selected.id} 的详细说明和版本要求。`, 240000, cfg, 'desktop/2.13.4') : null;
-    const detail = follow?.toolResults.find(r => r.name === 'get_marketplace_plugin' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
-    // chat 预设里 get_marketplace_plugin 要先 load_tools:模型判断搜索结果够用、第二轮再搜一次作答也算(skill 原话「搜索结果通常够推荐」),结果里写明走的哪条。
-    const viaSearch = cfg.preset === 'chat' && !detail && follow?.toolResults.some(r => r.name === 'search_marketplace' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
-    const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError); // 被 agentLoop 的商店卡片守卫拒掉的不算画出来
-    const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
-    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
-    return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+    const leg = (id, text) => run(id, text, 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: [MARKETPLACE_CARDS_CAPABILITY] });
+    const ev = await leg(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。');
+    const successful = (run, name) => (run?.toolResults || []).filter(r => r.name === name && !r.isError);
+    const items = successful(ev, 'search_marketplace').flatMap(r => marketplaceItemsOf(r.full || r.result));
+    const recommended = successful(ev, MARKETPLACE_RECOMMENDATION_TOOL).flatMap(r => marketplaceItemsOf(r.full || r.result));
+    const selected = recommended[0];
+    const follow = selected ? await leg(sessionId, `请仅查询 ID ${selected.id} 的详细说明和版本要求，用文字告诉我，不需要再推荐。`) : null;
+    const detail = successful(follow, 'get_marketplace_plugin').some(r => marketplaceItemsOf(r.full || r.result).some(i => i.id === selected?.id));
+    const rejected = await leg(`${sessionId}-negative`, '有没有方案可以在 Forsion 里面获取小米运动健康 Mi Fitness 的数据？请现在重新查当前商店，之前查过也请重查。单纯能整理 PDF 笔记的插件不满足，需要实际读取小米运动健康的数据。');
+    const searchedNoMatch = successful(rejected, 'search_marketplace').length > 0;
+    const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError);
+    const lookupOnly = successful(ev, 'search_marketplace').length > 0 && successful(ev, 'search_marketplace').every(r => JSON.parse(r.full || r.result).kind === 'marketplace_lookup');
+    const ok = !redrawn && lookupOnly && ev.done && !ev.error
+      && new Set(recommended.map(item => item.id)).size === 2
+      && recommended.every(item => item.minAppVersion !== '99.0.0' && items.some(candidate => candidate.id === item.id))
+      && detail && !follow.error && follow.done && !follow.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL)
+      && rejected.done && !rejected.error && searchedNoMatch && !rejected.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL);
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, rejected, items, recommended }, null, 2));
+    return { ok, detail: `lookups without cards=${lookupOnly}; selected IDs=${recommended.map(i => i.id).join(',')}; detail=${detail}; no-match search=${searchedNoMatch}, recommendations=${successful(rejected, MARKETPLACE_RECOMMENDATION_TOOL).length}`, output: [ev.content, follow?.content, rejected.content].filter(Boolean).join('\n\n'), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || []), ...rejected.toolCalls], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) + tokensOf(rejected) };
   });
 
   // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
@@ -2883,7 +2890,7 @@ try {
 
   // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
   await scenario('pluginaware', 'pluginaware 反复的事先查商店、查不到提议做一个、一次性问题不查', async () => {
-    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] }];
+    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v2'] }];
     const leg = (name, text) => run(`live-pluginaware-${name}-${Date.now()}`, text, ...opts);
     const repeat = await leg('repeat', '我每周都要把上课录音转成文字再整理成笔记，每次都手动来一遍，太烦了。有什么办法？');
     const nothing = await leg('nothing', '我每天都要手动把咖啡机的除垢提醒抄到日程里，想让 Forsion 自动帮我做这件事。');
@@ -3303,7 +3310,7 @@ try {
   // 每问两条腿;libsOk 为 null = 只记录不判(iuilibsmore 看效果用)。plain 腿一律不许 import 库。证据写 <name>-evidence.json。
   const LIB = /^(three|d3|chart\.js|gsap)\b/;
   const iuiLibLegs = async (name, CASES) => {
-    const base = ['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2'];
+    const base = ['marketplace-cards.v2', 'intelligent-ui.v1', 'intelligent-ui.v2'];
     const rows = [];
     for (const [key, Q, libsOk] of CASES) {
       for (const [leg, caps] of [['plain', base], ['libs', [...base, 'intelligent-ui-libs.v1']]]) {

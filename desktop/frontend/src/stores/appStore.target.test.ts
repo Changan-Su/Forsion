@@ -98,6 +98,48 @@ afterEach(() => {
 /** 不经 refocus 直接把焦点摆到 unit(负对照要在改造前的 store 上也能摆出这个局面)。 */
 const focusUnitRaw = (): void => { T.useEngineFocus.setState({ ref: { kind: 'unit', unitId: U }, name: 'Mac mini' }) }
 
+it('an older list response cannot remove a session that a later refresh found', async () => {
+  let releaseOld!: (reply: Reply) => void
+  const oldResponse = new Promise<Reply>((resolve) => { releaseOld = resolve })
+  let activeRequests = 0
+  router = (url) => {
+    if (url.includes('/agent/sessions?archived=false')) {
+      if (activeRequests++ === 0) return oldResponse
+      return { status: 200, body: { sessions: [sessionRec('remote-new')] } }
+    }
+    return { status: 200, body: { sessions: [] } }
+  }
+  const app = useApp.getState()
+  const oldRefresh = app.refreshSessions(app.cfg)
+  await vi.waitFor(() => expect(activeRequests).toBe(1))
+  await app.refreshSessions(app.cfg)
+  releaseOld({ status: 200, body: { sessions: [] } })
+  await oldRefresh
+  expect(useApp.getState().sessions.map(x => x.id)).toEqual(['remote-new'])
+})
+
+it('reloads the saved title when a remote refresh races a local rename', async () => {
+  let finishRename!: () => void
+  const writing = new Promise<void>((resolve) => { finishRename = resolve })
+  let title = 'Before'
+  router = async (url, method) => {
+    if (method === 'PATCH') {
+      await writing
+      title = 'After'
+      return { status: 200, body: { session: sessionRec('local-one', { title }) } }
+    }
+    return { status: 200, body: { sessions: url.includes('archived=false') ? [sessionRec('local-one', { title })] : [] } }
+  }
+  const app = useApp.getState()
+  await app.refreshSessions(app.cfg)
+  const rename = app.renameSession('local-one', 'After')
+  await app.refreshSessions(app.cfg)
+  expect(useApp.getState().sessions[0].title).toBe('Before')
+  finishRename()
+  await rename
+  await vi.waitFor(() => expect(useApp.getState().sessions[0].title).toBe('After'))
+})
+
 describe('session icons use the owning engine', () => {
   it('bound session saves to its unit after focus changes; full emoji survives', async () => {
     T.bindSession('s-icon', { kind: 'unit', unitId: U })

@@ -50,7 +50,7 @@ async function main() {
       if (dis && method === 'PUT') { const b = await body(); engineCalls.push(`${b.disabled ? 'hide' : 'show'} ${decodeURIComponent(dis[1])} ${b.agentSlug || url.searchParams.get('agentSlug')}`); return { ok: true } }
       const ag = /^\/agent\/agents\/([^/]+)$/.exec(p)
       if (ag && method === 'PATCH') { const b = await body(); engineCalls.push(`save ${ag[1]} ${(b.enabledSkillIds || []).join(',')}`); return { agent: { ...AGENTS.find((a) => a.slug === ag[1]), ...b } } }
-      if (p === '/agent/sessions/mk/messages') return { messages: [{ id: 'u1', role: 'user', content: 'Any skill that reads scans?', timestamp: 1 }, { id: 'a1', role: 'model', content: 'This one fits.', timestamp: 2, tool_calls: [{ id: 'm1', type: 'function', function: { name: 'search_marketplace', arguments: '{"query":"scan"}' }, ui_content_offset: 0 }], tool_results: [{ tool_call_id: 'm1', name: 'search_marketplace', content: MK, isError: false }] }] }
+      if (p === '/agent/sessions/mk/messages') return { messages: [{ id: 'u1', role: 'user', content: 'Any skill that reads scans?', timestamp: 1 }, { id: 'a1', role: 'model', content: 'This one fits.', timestamp: 2, tool_calls: ['search_marketplace', 'get_marketplace_plugin', 'recommend_marketplace_plugin'].map((name, index) => ({ id: `m${index}`, type: 'function', function: { name, arguments: '{}' }, ui_content_offset: 0 })), tool_results: ['search_marketplace', 'get_marketplace_plugin', 'recommend_marketplace_plugin'].map((name, index) => ({ tool_call_id: `m${index}`, name, content: MK, isError: false })) }] }
     } })
   const { app, win } = ctx
   try {
@@ -59,6 +59,7 @@ async function main() {
     await win.locator('.t2s-srow[data-sel-id="mk"]').first().click()
     const chatTrigger = win.locator('[data-marketplace-item] .mk-agents-trigger').first()
     check('对话里的技能商店卡出现「装给」下拉', await chatTrigger.waitFor({ timeout: 10000 }).then(() => true, () => false))
+    check('历史搜索和详情都不生成安装卡，只显示推荐卡', await win.locator('[data-marketplace-item]').count() === 1)
     check('缺省写「所有 Agent」', /所有 Agent/.test(await chatTrigger.textContent().catch(() => '')))
     await captureWindow(app, path.join(OUT, 'chat-card.png'))
     // 商店详情

@@ -88,6 +88,10 @@ export function DetachedRoot() {
   useEffect(() => { ensureAmadeusReady({ attachOnly: !WINDOW_SPACE_ID }) }, [])
   useEffect(() => installFileDropGuard(), []) // 独立窗也装全局拖放守卫
   useEffect(() => window.tangu?.onMainAction?.((action) => {
+    if (action === 'sessions-changed') {
+      const app = useApp.getState()
+      if (app.cfg) void app.refreshSessions(app.cfg).catch(() => {})
+    }
     if (action === 'agents-changed') {
       void useApp.getState().refreshAgents()
       window.dispatchEvent(new Event('forsion:agents-changed'))

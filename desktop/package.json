@@ -101,6 +101,7 @@
     "e2e:linkcard": "node scripts/link-card.e2e.cjs",
     "check:apprefs-real": "APPREF_REAL=1 vitest run electron/appRefs.real.test.ts",
     "e2e:remotesafety": "node scripts/remote-safety.e2e.cjs",
+    "e2e:remotesessionlist": "node scripts/remote-session-list.e2e.cjs",
     "e2e:chatshimmer": "node scripts/chat-shimmer.e2e.cjs",
     "e2e:chatcontinue": "node scripts/chat-continue.e2e.cjs",
     "e2e:runstats": "node scripts/chat-runstats.e2e.cjs",
