@@ -41,7 +41,10 @@ function startMock() {
 const home = mkdtempSync(join(tmpdir(), 'tangu-darkwake-'));
 const mock = await startMock();
 const provFile = join(home, 'providers.json');
+const MUSE = { enabled: true, modelId: 'mock/test-model', mode: 'ask', heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 4, maxRestartsPerWindow: 10, activeHours: null };
 (await import('node:fs')).writeFileSync(provFile, JSON.stringify([{ providerId: 'mock', baseUrl: `http://127.0.0.1:${mock.port}/v1`, modelIds: ['test-model'] }]));
+// 开引擎前就写好:supervisor 启动时按它排巡检(1 分钟);启动后再改只影响下一次排的定时器,第一个还是缺省 5 分钟
+(await import('node:fs')).writeFileSync(join(home, 'special-agents.json'), JSON.stringify({ muse: MUSE }));
 const port = 39000 + Math.floor(Math.random() * 1000);
 const lines = []; // [时刻, 一行]
 const child = spawn(process.execPath, [
@@ -65,7 +68,7 @@ try {
   }
   const r = await fetch(`http://127.0.0.1:${port}/agent/special/config`, {
     method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ muse: { enabled: true, modelId: 'mock/test-model', mode: 'ask', heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 4, maxRestartsPerWindow: 10, activeHours: null } }),
+    body: JSON.stringify({ muse: MUSE }),
   });
   if (!r.ok) throw new Error(`开 Muse 失败:HTTP ${r.status}`);
   // 第一个周期(开 Muse 会催一次巡检)跑完再冻:否则冻住的是一个在飞的周期,量的就不是「醒来起不起新周期」
