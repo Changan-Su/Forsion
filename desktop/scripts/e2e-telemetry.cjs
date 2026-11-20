@@ -99,8 +99,11 @@ async function main() {
     muse: { enabled: true, modelId: '', restartWindowHours: 1, maxRestartsPerWindow: 3, maxIterationsPerCycle: 20, maxTodosPerWindow: 5,
       supervisorPollMinutes: 5, activeHours: { start: 9, end: 17 }, allowedFolders: [], mode: 'ask', heartbeatMinutes: 120, notify: 'digest', escalateTo: '' },
   }
+  // 「关于你」那屏读 / 写 human/MEMORY.md(11-08 起):桩引擎缺省的应答没有 content,那屏报「读不到你原来的资料」
+  const human = { scope: 'human', path: 'human/MEMORY.md', content: '', version: 'h0', exists: false, updatedAt: null, history: [], maxLength: 2000 }
   const stub = await startStubEngine({ models: [{ id: 'cloud-1', name: 'GPT-6 Luna', provider: 'OpenAI', source: 'forsion', modelType: 'llm' }],
     override: async ({ path: p, method }) => (p === '/agent/special/config' ? { config: specialConfig } : p === '/agent/special/muse/intro' ? { ok: true, config: specialConfig }
+      : p === '/agent/human/MEMORY.md' ? (method === 'PUT' ? { document: human, change: null } : human)
       // 插件清单读引擎插件:一个引擎内置(公开 id)+ 一个用户自己放的(只计个数)
       : p === '/agent/plugins' && method === 'GET' ? { plugins: [
         { id: 'forsion-calendar-engine', name: 'Calendar', source: 'builtin', enabled: true, version: '1.0.0', scopes: ['global'], settings: null },
