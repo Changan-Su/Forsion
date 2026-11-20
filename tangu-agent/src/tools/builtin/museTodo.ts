@@ -30,7 +30,8 @@ function clipChars(s: string, max: number): string {
   const a = Array.from(s);
   return a.length > max ? `${a.slice(0, max - 1).join('')}…` : s;
 }
-const flat = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
+/** 只收字符串:对象 / 布尔不 String() 成「[object Object]」「false」混进来(Codex 11-20 P2),库里被改坏的行也不会在这里抛。 */
+const flat = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
 
 export function normalizeEvidence(raw: unknown): MuseTodoEvidence[] {
   let v: unknown = raw;
@@ -52,7 +53,8 @@ export function normalizeEvidence(raw: unknown): MuseTodoEvidence[] {
 
 /** 库里那一列 → 数组(老行 NULL / 坏 JSON → 空数组,卡上不画这一行)。 */
 export function parseStoredEvidence(v: unknown): MuseTodoEvidence[] {
-  return v == null || v === '' ? [] : normalizeEvidence(v);
+  if (v == null || v === '') return [];
+  try { return normalizeEvidence(v); } catch { return []; } // 一行坏数据不许把整个列表接口打成 500
 }
 
 export const EVIDENCE_REQUIRED_ERROR =

@@ -163,6 +163,9 @@ describe('add_muse_todo 必填依据(借鉴 dsh-superagent 第 2 条,11-20)', ()
     expect(normalizeEvidence([{ source: 'x' }, ...[1, 2, 3].map((i) => ({ source: `s${i}`, quote: 'q' }))])).toHaveLength(3);
     // 老行 NULL / 空串 / 坏 JSON → 空(卡上不画)
     for (const v of [null, undefined, '', '{bad']) expect(parseStoredEvidence(v)).toEqual([]);
+    // 非字符串不收(不 String() 成「[object Object]」「false」);库里被改坏的行(toString 不是函数)也不抛
+    expect(normalizeEvidence([{ source: {}, quote: false }, { source: 1, quote: 'x' }, { kind: {}, source: 'a', quote: 'b' }])).toEqual([{ kind: 'other', source: 'a', quote: 'b' }]);
+    expect(parseStoredEvidence(JSON.stringify([{ source: { toString: 0 }, quote: 'q' }, { source: 's', quote: 'q' }]))).toEqual([{ kind: 'other', source: 's', quote: 'q' }]);
   });
 
   it('工具定义:evidence 必填、条数 1–3;描述里有三个判断与三条反例(英文,进模型)', () => {
