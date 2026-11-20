@@ -2732,7 +2732,7 @@ try {
   //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
   //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文;
   //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z 必红;只有代码时回哪种语言在旧代码上不稳
-  //   (11-20 两次对照:一次两腿都回中文、一次都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
+  //   (11-20 两次对照:第一次 LZ 回中文,第二次 LZ、LN 都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
   await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
     const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
