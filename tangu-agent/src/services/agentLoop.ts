@@ -1097,7 +1097,8 @@ export async function recoverQueuedRuns(): Promise<number> {
     }
     // ⑤ 排队行认领入队
     for (const r of await listPendingRunsForRecovery()) {
-      if (r.status !== 'queued' || await alive(r.owner)) continue;
+      // ④ 刚建好入队的续跑 run 也还是 queued:非 SQLite 库不记持有者(owner 为空 = 按已死算),不跳过就会再认领入队一次、跑两遍
+      if (r.status !== 'queued' || runSession.has(r.id) || await alive(r.owner)) continue;
       if (await kindOf(r.session_id) === TEAMWORK_KIND) {
         await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
         continue;

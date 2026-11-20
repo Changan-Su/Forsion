@@ -505,6 +505,30 @@ describe('E4 startup recovery and gated auto-resume', () => {
     expect((await sessionUserRows('R1')).filter((c) => c.startsWith('<turn_resume>') || c.startsWith('<turn_interrupted>'))).toHaveLength(1);
   }, 20_000);
 
+  it('non-SQLite store (no owner recorded): the resume run created in step ④ is not claimed and enqueued a second time in step ⑤', async () => {
+    const { deps } = await import('../seams/runtime.js');
+    const st: any = deps().state;
+    const orig = { createRun: st.createRun, updateRunStatus: st.updateRunStatus, list: st.listPendingRunsForRecovery };
+    // 照外部 PG / PGlite 的形态:建 run 不记持有者,恢复列表里 owner 一律为空
+    st.createRun = async (run: any) => { const r = await orig.createRun.call(st, run); await query(`UPDATE agent_runs SET owner = NULL WHERE id = ?`, [run.id]); return r; };
+    st.listPendingRunsForRecovery = async () => (await orig.list.call(st)).map((r: any) => ({ ...r, owner: null }));
+    // 续跑晚一点才转 running(真库有网络延迟时就是这样):⑤ 列行时它还是 queued
+    st.updateRunStatus = async (id: string, status: string, extra?: any) => {
+      if (status === 'running') await new Promise((r) => setTimeout(r, 300));
+      return orig.updateRunStatus.call(st, id, status, extra);
+    };
+    try {
+      await seedSession('NP'); await seedRun({ id: 'np', session: 'NP', status: 'interrupted', reason: 'app_update' });
+      script = [finalTurn('Once.'), finalTurn('Twice?!')];
+      expect(await recoverQueuedRuns()).toBe(1);
+      expect((await settledResume('np')).status).toBe('done');
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(streamCalls, '续跑只跑一遍').toBe(1);
+    } finally {
+      st.createRun = orig.createRun; st.updateRunStatus = orig.updateRunStatus; st.listPendingRunsForRecovery = orig.list;
+    }
+  }, 20_000);
+
   it('a finished turn is never resumed: done is recorded right after the final answer, before the slow side work', async () => {
     let release!: () => void;
     const hold = new Promise<void>((r) => { release = r; });
