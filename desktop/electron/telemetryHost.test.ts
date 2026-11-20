@@ -107,6 +107,23 @@ describe('宿主事件的形状', () => {
     expect(processGoneProps('renderer', { reason: 'oom', exitCode: 9 }, 5)).toEqual({ process: 'renderer', reason: 'oom', exitCode: 9, uptimeS: 5 })
     expect(processGoneProps('other', { type: 'Sandbox helper', reason: 'memory-eviction', exitCode: 1 })).toEqual({ process: 'other', reason: 'other', exitCode: 1, errorName: 'Sandbox-helper' })
   })
+
+  it('Windows 结束会话被系统强杀(0x40010004)不算崩溃;别的平台同一个数照报', () => {
+    // 生产遥测原样的三种:引擎 abnormal-exit、渲染进程 killed、Utility 子进程 killed
+    expect(engineExitProps(1073807364, null, 39074, 'win32')).toBeNull()
+    expect(processGoneProps('renderer', { reason: 'killed', exitCode: 1073807364 }, 9751, 'win32')).toBeNull()
+    expect(processGoneProps('other', { type: 'Utility', reason: 'killed', exitCode: 1073807364 }, 9416, 'win32')).toBeNull()
+    expect(processGoneProps('renderer', { reason: 'killed', exitCode: 1073807364 }, 1, 'darwin')).toMatchObject({ reason: 'killed', exitCode: 1073807364 })
+    // 别的 killed 照报(外部 SIGTERM、别的退出码)
+    expect(processGoneProps('renderer', { reason: 'killed', exitCode: 15 }, 1, 'darwin')).toMatchObject({ reason: 'killed', exitCode: 15 })
+    expect(processGoneProps('renderer', { reason: 'killed', exitCode: 1 }, 1, 'win32')).toMatchObject({ reason: 'killed', exitCode: 1 })
+  })
+
+  it('退出码超出 int(Windows 崩溃码,常是负数):渲染进程记成十六进制,子进程记成「类型:码」', () => {
+    expect(processGoneProps('renderer', { reason: 'crashed', exitCode: -1073741819 }, 117, 'win32')).toEqual({ process: 'renderer', reason: 'crashed', errorName: '0xC0000005', uptimeS: 117 })
+    expect(processGoneProps('other', { type: 'GPU', reason: 'crashed', exitCode: 3221225477 }, 1, 'win32')).toEqual({ process: 'other', reason: 'crashed', errorName: 'GPU:0xC0000005', uptimeS: 1 })
+    expect(processGoneProps('other', { type: 'GPU', reason: 'crashed', exitCode: 34 }, 1, 'win32')).toEqual({ process: 'other', reason: 'crashed', exitCode: 34, errorName: 'GPU', uptimeS: 1 })
+  })
 })
 
 describe('createTelemetryHost:缓冲、回放、上限', () => {
