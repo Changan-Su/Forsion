@@ -2735,13 +2735,14 @@ try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
     const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
     const cjk = (t) => (String(t || '').match(/[一-鿿]/g) || []).length;
-    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。');
+    const dbg = { debugSystemPrompt: true }; // 不带它引擎不发 system_prompt 事件,提示原文核不到
+    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。', 240_000, dbg);
     const promptZ = String(z.systemPrompt || '');
     const okZ = !z.error && !!tz && promptZ.includes(`time zone ${tz}, UTC`) && z.content.includes(tz) && !z.toolCalls.length;
     const code = '```js\nconst pick = (xs, n) => xs.filter((_, i) => i % n === 0);\n```';
-    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, {}, undefined, undefined, undefined, undefined, ui('zh'));
+    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('zh'));
     const okLZ = !lz.error && String(lz.systemPrompt || '').includes("interface is set to Chinese") && cjk(lz.content) >= 10;
-    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, {}, undefined, undefined, undefined, undefined, ui('en'));
+    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
     const okLE = !le.error && String(le.systemPrompt || '').includes("interface is set to English") && cjk(le.content) >= 10;
     const dateLine = (p) => (String(p || '').match(/^Today is [^\n]*/m) || [''])[0];
     const detail = `Z 进程时区 ${tz || '取不到'}、提示「${dateLine(promptZ)}」、回答「${z.content.trim().slice(0, 60)}」、工具 ${z.toolCalls.join(',') || '无'}`
