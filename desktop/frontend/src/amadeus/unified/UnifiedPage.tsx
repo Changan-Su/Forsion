@@ -106,6 +106,7 @@ import { usePluginStore } from '../plugins/pluginStore'
 import { listSelectionActions, runSelectionAction, selectionActionKey } from '../../selectionActions'
 import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
+import { anchorMarksPlugin } from './anchorMarks'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { TableAxisMenu, TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
@@ -1891,6 +1892,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // 正文 AI(G3-07):目标区间随编辑映射 + 空行按空格唤起(缺省关、IME 守卫,见 inlineAi.ts)。
       ...createInlineAi({ spaceTrigger: () => aiSpaceTriggerEnabled() && canAiRef.current, onSpace: aiSpaceRef }),
       ...headingFoldPlugins,
+      anchorMarksPlugin, // 独占一段的锚注释 `<!-- a id -->` 不露原文(落盘照旧;键盘那半在 keyboard.ts)
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
