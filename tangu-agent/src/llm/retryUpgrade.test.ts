@@ -7,7 +7,7 @@
  *  ⑤ 睡眠:睡眠区间不算预算(睡前花的照算);本地传输中断跨过睡眠 → 免费重发(同一个 2 次额度);HTTP 503 不给
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run src/llm/retryUpgrade.test.ts src/llm/netWait.test.ts
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   llmBackoffMs, parseRetryAfterMs, withRetryAfter, isOverloadedLlmError, isRetryableLlmError, LlmRetryChain, withLlmRetry,
   probeBeforeResume, retryAfterVerdict, createRunNetLedger, RUN_MAX_FREE_RETRIES,
@@ -34,10 +34,14 @@ const enotfound = (host = 'api.example.com'): TypeError =>
 const econnreset = (): TypeError =>
   new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', syscall: 'read' }) });
 
+const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+/** 本机 shell 里导出的代理变量会让探网直接判 unknown:用例一律先清掉。 */
+const clearProxyEnv = (): void => { for (const k of PROXY_VARS) delete process.env[k]; };
+beforeEach(clearProxyEnv);
 afterEach(() => {
   __setNetworkProbeForTests(null);
   __resetSleepForTests();
-  delete process.env.HTTPS_PROXY;
+  clearProxyEnv();
   vi.useRealTimers();
 });
 
@@ -339,6 +343,19 @@ describe('等网络(重试链)', () => {
     expect(ledger.awakeMs).toBe(15_000);
   });
 
+  it('免费重发也照等 ≤60s 的 Retry-After:网回来后先等满它再发', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    __setNetworkProbeForTests(async () => n++ > 0, 5);
+    const err = Object.assign(new LlmError(0, 'fetch failed'), { cause: enotfound().cause, retryAfterMs: 3_000 });
+    let done = false;
+    const p = new LlmRetryChain(() => 0).recover(err, Date.now(), { network: { target: 'https://api.example.com' } }).then((v) => { done = true; return v; });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(done).toBe(false); // 网早回来了,但还在等 Retry-After
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(p).resolves.toBe(true);
+  });
+
   it('等网时用户点停 → 立刻 AbortError', async () => {
     __setNetworkProbeForTests(async () => false, 5_000);
     const ac = new AbortController();
@@ -488,6 +505,19 @@ describe('睡眠', () => {
     await vi.runAllTimersAsync();
     await expect(p).resolves.toBe(false);
     expect(onRetry.mock.calls[0][0]).toMatchObject({ retryAfterMs: 3_000 });
+  });
+});
+
+describe('canRetry 在等完、真要重发之前再问一次', () => {
+  it('退避期间被推过成本上限(canRetry 变 false)→ 不再发,抛原错', async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    let calls = 0;
+    const p = withLlmRetry(async () => { calls++; throw new LlmError(502, 'Bad Gateway'); }, () => { closed = true; }, undefined, () => !closed);
+    const assertion = expect(p).rejects.toMatchObject({ status: 502 });
+    await vi.runAllTimersAsync();
+    await assertion;
+    expect(calls).toBe(1);
   });
 });
 

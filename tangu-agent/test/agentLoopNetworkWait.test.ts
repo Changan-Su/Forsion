@@ -43,6 +43,8 @@ let costOf: (tin: number, tout: number) => number;
 
 beforeEach(async () => {
   RID = `R${++ridSeq}`;
+  // 本机 shell 里导出的代理变量会让探网直接判 unknown(不进等网):先清掉
+  for (const k of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) delete process.env[k];
   home = mkdtempSync(join(tmpdir(), 'tangu-netwait-'));
   process.env.TANGU_HOME = home;
   llmPayloads = [];
@@ -289,6 +291,21 @@ describe('等待网络 · 中流续写', () => {
     const retry = statuses.find((s) => s.phase === 'llm_retry');
     expect(retry).toMatchObject({ attempt: 1, retryAfterMs: 1_500 });
     expect(retry.waitMs).toBeGreaterThanOrEqual(1_500);
+  }, 20_000);
+
+  it('中流本地断线带 ≤60s 的 Retry-After:网回来后的免费续写也先等满它', async () => {
+    script = [(o: any) => {
+      o.onToken?.('前半句,');
+      online = false;
+      onProbe = () => { online = true; onProbe = undefined; };
+      throw Object.assign(new LlmError(0, 'fetch failed'), { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }), retryAfterMs: 1_500 });
+    }, finalStep('后半句。')];
+    const t0 = Date.now();
+    const { run, statuses } = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(statuses.filter((s) => s.phase === 'llm_wait_network').length).toBe(1);
+    expect(statuses.filter((s) => s.phase === 'llm_retry').length).toBe(0); // 免费续写:不扣次数
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(1_500);
   }, 20_000);
 
   it('中流的 overloaded_error 续写也标 overload(界面说「服务繁忙」)', async () => {

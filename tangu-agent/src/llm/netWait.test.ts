@@ -2,7 +2,7 @@
  * 断网判定 / 探网 / 等网络 / 睡眠检测(llm/netWait.ts、llm/sleepDetector.ts)。
  * 报错的形状照 Node 22 undici 实测(11-20):fetch failed → cause{code,hostname} 或 cause AggregateError{code, errors[{address,port}]}。
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import net from 'node:net';
 import {
   offlineCauseOf, isOfflineLlmError, mayBeOfflineLlmError, probeTargetOf, waitForNetwork, probeNetwork, reachableAny, __setNetworkProbeForTests, __setReferenceHostsForTests,
@@ -14,11 +14,15 @@ import { LlmError } from '../core/types.js';
 const sysErr = (code: string, extra: Record<string, unknown> = {}): Error => Object.assign(new Error(`${code} x`), { code, ...extra });
 const fetchFailed = (cause: unknown): TypeError => new TypeError('fetch failed', { cause });
 
+const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'];
+/** 本机 shell 里导出的代理变量会让探网直接判 unknown:用例一律先清掉。 */
+const clearProxyEnv = (): void => { for (const k of PROXY_VARS) delete process.env[k]; };
+beforeEach(clearProxyEnv);
 afterEach(() => {
   __setNetworkProbeForTests(null);
   __setReferenceHostsForTests(null);
   __resetSleepForTests();
-  delete process.env.HTTPS_PROXY;
+  clearProxyEnv();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });

@@ -280,7 +280,8 @@ export class LlmRetryChain {
     const { signal, network } = hooks;
     if (signal?.aborted) throw abortError();
     if (!isRetryableLlmError(err)) throw err;
-    if (retryAfterVerdict(err).kind === 'refuse') throw err;
+    const ra = retryAfterVerdict(err, this.rng);
+    if (ra.kind === 'refuse') throw err;
     const ledger = network?.ledger ?? this.ownLedger;
     const local = isLocalTransportError(err);
     // 跨睡眠的免费重发只给本地传输中断(拿到 HTTP 响应的 503 等不算),且不越过 Retry-After
@@ -290,16 +291,25 @@ export class LlmRetryChain {
       ledger.freeRetries++;
       return true;
     };
+    // 免费重发也不越过服务端点名的等待(≤60s 的 Retry-After 照等,不计预算)
+    const free = async (): Promise<true> => {
+      if (ra.kind === 'wait') {
+        const t0 = Date.now();
+        await sleepOrAbort(ra.ms, signal);
+        this.excludeSpan(t0, Date.now());
+      }
+      return true;
+    };
     let probed = false;
     if (network && (woke || isOfflineLlmError(err))) {
       probed = true;
       const r = await this.waitNetwork(err, network, ledger, signal);
       if (r === 'gave_up') throw err;
-      if ((r === 'back' || (r === 'up' && woke)) && tryFree()) return true;
+      if ((r === 'back' || (r === 'up' && woke)) && tryFree()) return free();
     }
     const plan = this.plan(err);
     if (!plan) {
-      if (network && !probed && local && (await this.waitNetwork(err, network, ledger, signal)) === 'back' && tryFree()) return true;
+      if (network && !probed && local && (await this.waitNetwork(err, network, ledger, signal)) === 'back' && tryFree()) return free();
       throw err;
     }
     hooks.onRetry?.(plan, err);
@@ -325,7 +335,7 @@ export class LlmRetryChain {
  */
 export async function probeBeforeResume(err: unknown, attemptStartedAt: number, hooks: { signal?: AbortSignal; network?: LlmNetworkHooks }): Promise<'down' | 'woke' | 'no'> {
   if (!hooks.network || !isLocalTransportError(err)) return 'no';
-  const woke = attemptStartedAt < lastWakeAt();
+  const woke = retryAfterMsOf(err) === undefined && attemptStartedAt < lastWakeAt();
   const r = await probeOnce(err, hooks.network, hooks.signal);
   if (r === 'down') return 'down';
   return r === 'up' && woke ? 'woke' : 'no';

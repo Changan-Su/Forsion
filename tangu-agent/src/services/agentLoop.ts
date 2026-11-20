@@ -3503,9 +3503,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }),
         (_attempt, _wait, err, plan) => publishRetry(plan, err, 'build-payload '),
         ac.signal,
-        undefined,
+        () => !runCostClosed(), // 退避 / 等网期间被后台子代理推过成本上限:不再重发,按成本闸收尾
         netHooks('build_payload'),
-      );
+      ).catch(async (e) => {
+        if (ac.signal.aborted || !runCostClosed()) throw e;
+        await stopForRunCost();
+        return null;
+      });
+      if (payload === null) return;
 
       let lastGenChars = 0; // 工具调用参数生成进度节流（每 ~600 字符播一次"生成中"）
       // A flush may have arrived while building the payload, before a model request exists.
@@ -3681,6 +3686,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             }
             const free = steered || (canFree && (back || pre === 'woke'));
             if (free && !steered) runNetLedger.freeResumes++;
+            if (free && !steered && midRa.kind === 'wait') await sleepOrAbort(midRa.ms, ac.signal); // 免费续写也不越过 ≤60s 的 Retry-After
             if (!free) {
               if (midstreamResumes >= MIDSTREAM_MAX_RESUMES) throw err;
               midstreamResumes++;
@@ -3745,10 +3751,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               network: netHooks('request'),
               onRetry: (plan, e) => publishRetry(plan, e, 'LLM 调用'),
             });
-            if (runCostClosed()) { await stopForRunCost(); return; }
           } catch (e) {
             if (ac.signal.aborted || !sampling.signal.aborted || !immediateSteers.has(runId)) throw e;
           }
+          // 重发之前(含插话叫醒后的那次)复查 run 成本闸
+          if (runCostClosed()) { await stopForRunCost(); return; }
         } finally {
           ac.signal.removeEventListener('abort', stopSampling);
           if (steerWakeups.get(runId) === steerSampling) steerWakeups.delete(runId);
