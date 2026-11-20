@@ -424,3 +424,119 @@ describe('多行 flow 结构键 + 顶格收尾(N-2)', () => {
     expect(setAmadeusStructure(dup, null, CANVAS)).toContain(`amadeus_canvas: ${CANVAS}`)
   })
 })
+
+// ── page/5(版块,方向 B):amadeus_page 闸标记归结构区,有版块才发,去掉版块就随结构区摘掉 ──────────
+describe('page/5 结构区:schema 升降与闸标记', () => {
+  const SEC = '{"v":4,"rows":[{"columns":[{"refs":["s1"],"width":1}],"tail":"t1","section":{"bg":"blue"}}]}'
+  const COLS = '{"v":4,"rows":[{"columns":[{"refs":["c1"],"width":1},{"refs":["c2"],"width":1}],"tail":"t2"}]}'
+  const ICON = '---\nicon: "📘"\n---\n'
+  const fm5 = setAmadeusStructure(ICON, SEC, null)
+
+  it('有版块 → page/5 + amadeus_page 固定值,顺序 schema → page → layout', () => {
+    expect(fm5).toBe(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\nicon: "📘"\n---\n`)
+    expect(classifyPageSource(composeFm(fm5, BODY))).toBe('v4-structured')
+    expect(setAmadeusStructure(fm5, SEC, null)).toBe(fm5) // 不动点:每击都跑的派生不改字节
+  })
+
+  it('去掉最后一个版块、留两栏 → 与原生 page/4 逐字一样,没有 amadeus_page', () => {
+    const back = setAmadeusStructure(fm5, COLS, null)
+    expect(back).toBe(setAmadeusStructure(ICON, COLS, null))
+    expect(back).not.toMatch(/amadeus_page/)
+    expect(back).toContain('amadeus_schema: amadeus.page/4')
+  })
+
+  it('结构全去掉 → 零 amadeus_* 行,判素文件(孤儿闸标记会被判成 v3)', () => {
+    const plain = setAmadeusStructure(fm5, null, null)
+    expect(plain).toBe(ICON)
+    expect(classifyPageSource(composeFm(plain, BODY))).toBe('v4-plain')
+    expect(setAmadeusStructure(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\n---\n`, null, null)).toBe('')
+  })
+
+  it('没有版块的 page/4:每击派生逐字不动', () => {
+    const fm4 = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\nicon: "📘"\n---\n`
+    expect(setAmadeusStructure(fm4, COLS, null)).toBe(fm4)
+  })
+
+  it('闸标记被外部删掉 → 下一次真保存补回;别的值的 amadeus_page 原样留着、不另发一行', () => {
+    const lost = fm5.replace('amadeus_page: v5\n', '')
+    expect(setAmadeusStructure(lost, SEC, null)).toBe(fm5)
+    const foreign = fm5.replace('amadeus_page: v5', 'amadeus_page: pg_old')
+    const out = setAmadeusStructure(foreign, SEC, null)
+    expect(out.split('\n').filter((l) => l.startsWith('amadeus_page'))).toEqual(['amadeus_page: pg_old'])
+    expect(out).toContain('amadeus_schema: amadeus.page/5')
+    expect(parseYaml(out.replace(/^---\n|---\n$/g, ''))).toBeTruthy() // 没有重名键
+  })
+
+  it('别人的 amadeus_page 老端读不出值(空值 / 键后有空格):有版块时换成闸标记,不留重名键', () => {
+    for (const bad of ['amadeus_page:', 'amadeus_page: ', 'amadeus_page : pg_x']) {
+      const src = `---\namadeus_schema: amadeus.page/4\n${bad}\namadeus_layout: ${COLS}\nicon: "📘"\n---\n`
+      const out = setAmadeusStructure(src, SEC, null)
+      expect(out).toBe(fm5)
+      expect(setAmadeusStructure(out, SEC, null)).toBe(out) // 不动点
+      // chrome 写入那条路同样补上
+      const withSec = src.replace(COLS, SEC)
+      expect(patchFm(withSec, { icon: '📘' })).toContain('amadeus_page: v5')
+      expect(fixStructKeys(withSec)).toContain('amadeus_page: v5')
+      // 没有版块:一个字节不动(写者产出的顺序:结构区在前,外来行原样在后)
+      const plain = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\n${bad}\nicon: "📘"\n---\n`
+      expect(setAmadeusStructure(plain, COLS, null)).toBe(plain)
+    }
+    // schema 键后有空格:我们认得、老端读不到版本号 → 结构区重发成规范写法
+    const spaced = fm5.replace('amadeus_schema: amadeus.page/5', 'amadeus_schema : amadeus.page/5')
+    expect(fixStructKeys(spaced)).toBe(fm5)
+    expect(patchFm(spaced, { icon: '📘' })).toContain('\namadeus_schema: amadeus.page/5\n')
+    // 老端读得出值的(含带引号的键)= 闸在,原样留着
+    const quoted = fm5.replace('amadeus_page: v5', '"amadeus_page": pg_q')
+    const once = setAmadeusStructure(quoted, SEC, null)
+    expect(once.split('\n').filter((l) => /amadeus_page/.test(l))).toEqual(['"amadeus_page": pg_q'])
+    expect(setAmadeusStructure(once, SEC, null)).toBe(once)
+  })
+
+  it('不带版块的 page/4 里别人的 amadeus_page:逐字不动(结构区只认领 v5 那一行)', () => {
+    const keep = `---\namadeus_schema: amadeus.page/4\nicon: "📘"\n"amadeus_page": pg_keep\namadeus_layout: ${COLS}\n---\n`
+    const once = setAmadeusStructure(keep, COLS, null)
+    expect(once).toContain('"amadeus_page": pg_keep')
+    expect(setAmadeusStructure(once, COLS, null)).toBe(once)
+  })
+
+  it('图标 / 属性写入也补闸标记(真写盘的那一笔)', () => {
+    const lost = fm5.replace('amadeus_page: v5\n', '')
+    expect(patchFm(lost, { icon: '🎯' })).toContain('amadeus_page: v5')
+    expect(setForeignFm(lost, 'icon: "🎯"')).toContain('amadeus_page: v5')
+    // 不带版块的笔记,chrome 写入不碰结构区
+    const fm4 = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${COLS}\nicon: "📘"\n---\n`
+    expect(patchFm(fm4, { icon: '🎯' })).not.toMatch(/amadeus_page/)
+  })
+
+  it('闸标记不是用户属性:属性面板看不见,改属性时原样留着', () => {
+    expect(foreignFmObject(fm5)).toEqual({ icon: '📘' })
+    const next = setForeignFm(fm5, 'icon: "🚀"')
+    expect(next).toContain('amadeus_page: v5')
+    expect(next).toContain(`amadeus_layout: ${SEC}`)
+    const patched = patchFm(fm5, { icon: '🎯' })
+    expect(patched).toContain('amadeus_page: v5')
+    expect(patched).toContain('amadeus_schema: amadeus.page/5')
+  })
+
+  it('源码模式 fixStructKeys:只补不拆', () => {
+    // 手写进 page/4 的版块 → 升 page/5 + 闸标记
+    const hand = `---\namadeus_schema: amadeus.page/4\namadeus_layout: ${SEC}\n---\n`
+    expect(fixStructKeys(hand)).toBe(`---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${SEC}\n---\n`)
+    // page/5 丢了闸标记 → 补回
+    expect(fixStructKeys(fm5.replace('amadeus_page: v5\n', ''))).toBe(fm5)
+    // 版块删光但还标着 page/5 → 不拆(下次可视模式保存归位)
+    const stale = `---\namadeus_schema: amadeus.page/5\namadeus_page: v5\namadeus_layout: ${COLS}\n---\n`
+    expect(fixStructKeys(stale)).toBe(stale)
+    // 结构全删、只剩我们的闸标记 → 摘掉(否则判 v3)
+    expect(fixStructKeys('---\namadeus_page: v5\nicon: "📘"\n---\n')).toBe(ICON)
+    // 别人的 amadeus_page 不碰
+    expect(fixStructKeys('---\namadeus_page: pg_x\n---\n')).toBe('---\namadeus_page: pg_x\n---\n')
+    // 合法的 page/5 原样
+    expect(fixStructKeys(fm5)).toBe(fm5)
+    // 引号包着的孤儿闸标记同样摘掉
+    expect(fixStructKeys('---\namadeus_page: "v5"\nicon: "📘"\n---\n')).toBe(ICON)
+    // 将来的格式(page/6)带版块:绝不降级成 page/5
+    const future = `---\namadeus_schema: amadeus.page/6\namadeus_layout: ${SEC}\n---\n`
+    expect(fixStructKeys(future)).toBe(future)
+  })
+})

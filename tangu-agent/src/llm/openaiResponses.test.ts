@@ -340,6 +340,18 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(seen[2]['x-opencode-session']).toBeUndefined();
   });
 
+  it('response.incomplete 的原因是 content_filter:单独报 content_filter(安全审核拦下),不并进 length 去自动续写', async () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"半截"}',
+      'data: {"type":"response.incomplete","response":{"usage":{"input_tokens":5,"output_tokens":3},"incomplete_details":{"reason":"content_filter"}}}',
+      '',
+    ].join('\n');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] } } as any);
+    expect(res.finishReason).toBe('content_filter');
+    expect(res.outputItems).toBeUndefined();
+  });
+
   it('response.incomplete(输出截断)归一化为 finishReason=length——半截函数参数不得伪装成 tool_calls 被执行', async () => {
     const sse = [
       'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc1","call_id":"call_1","name":"write_file","arguments":""}}',

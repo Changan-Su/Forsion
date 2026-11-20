@@ -6,7 +6,7 @@
  * 不给全文,免得每一轮背着别的支;要细看用 read_session(只读)。「带回」是用户的动作,agent 不往别的支写。
  * 每一轮现算(新开一支 / 改名下一轮就生效);放系统提示易变区(agentLoop 8c 之后)。
  */
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 
 const EXCERPT = 80;
@@ -26,7 +26,7 @@ async function forkTs(forkMessageId: unknown): Promise<number | null> {
 
 async function lastReply(sessionId: string): Promise<string> {
   const [m] = await query<any[]>(
-    `SELECT content FROM chat_messages WHERE session_id = ? AND role = 'model' AND content IS NOT NULL AND content <> '' ORDER BY timestamp DESC LIMIT 1`,
+    `SELECT content FROM chat_messages WHERE session_id = ? AND role = 'model' AND content IS NOT NULL AND content <> '' ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`,
     [sessionId],
   );
   return excerpt(m?.content);

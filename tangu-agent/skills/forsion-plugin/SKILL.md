@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.128.0
+  version: 1.129.0
   author: Forsion
   category: Forsion
 ---
@@ -327,7 +327,7 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 - 包里 manifest 的 `minAppVersion` / `maxAppVersion` / `platforms` 优先于表单;已有的 `isDesktopOnly: true` 等同只支持桌面。桌面和手机安装前都会读包里的 manifest 再核一遍,不符就不下载、不写盘;旧版本的过审包和快照会留着,用户可以在「版本」栏装回历史版本。
 - 不写版本范围 = 「未知」,商店照常展示但不算确认适配;靠新宿主接缝的插件写 `minAppVersion`,已知在某个版本坏掉的写 `maxAppVersion`。
 - 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
-- Tangu 在聊天里可以用 `search_marketplace` 搜商店、给用户推荐(画成插件卡片,装不装由用户在卡片上点),所以标签和描述写清能力,别堆营销词。
+- Tangu 用 `search_marketplace` 查候选，确认适合后用 `recommend_marketplace_plugin` 展示卡片。用户可在卡片上选择安装，所以标签和描述应写清实际能力。
 
 ### Android App 与 `isDesktopOnly`(2026-10-02 起)
 

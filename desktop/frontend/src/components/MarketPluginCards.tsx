@@ -2,7 +2,7 @@ import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
 import { useEffect, useState } from 'react'
 import { Check, Download, Loader2, Puzzle } from 'lucide-react'
 import type { MarketCard, MarketInstallProgress, ToolEvent } from '../types'
-import { marketplaceCompatibility, marketplaceItemsOf } from '../../../shared/marketplace'
+import { marketplaceCompatibility, marketplaceItemsOf, MARKETPLACE_RECOMMENDATION_TOOL } from '../../../shared/marketplace'
 import { installMarket, listInstalled, onInstallProgress, installedMarketItem, type InstalledItem } from '../services/marketService'
 import { trackMarketInstall } from '../telemetryInstall'
 // 安装后处理按需加载:它经 userSpaces 拉进 spaces.tsx(模块加载期读 window),静态导入会让所有引到聊天消息的 node 测试整文件挂掉。
@@ -25,7 +25,7 @@ registerMessages({
   'market.cardRestart': { zh: '重启引擎以启用', en: 'Restart engine to activate' },
   'market.cardRestartFailed': { zh: '引擎重启失败，请重试', en: 'Engine restart failed. Try again.' },
 })
-export const isMarketplaceTool = (event: ToolEvent) => ['search_marketplace', 'get_marketplace_plugin'].includes(event.name)
+export const isMarketplaceTool = (event: ToolEvent) => event.name === MARKETPLACE_RECOMMENDATION_TOOL
 export function openMarketItem(item: { id: string; name: string }, comments = false): void {
   if (window.tangu?.openFloatingPanel) void window.tangu.openFloatingPanel({ id: 'market', title: item.name, builtin: 'market', params: { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() } })
   else useApp.getState().openMarket(undefined, { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() })

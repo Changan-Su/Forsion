@@ -14,7 +14,9 @@
 //  R3 文末段 → 右栏深处空白 → 落进右栏末尾(修前:线画在整行底,落到行外)
 //  R4 单块被选满(一次没落成的 drop 留下的选区 / 选中的图片)→ ⠿ 仍能拖(修前:dragstart 不序列化,裸拖绿 +)
 //  R5 配对区静止 → 只剩竖线;松手成列后零残留(修前:旧横线与竖线同现,松手后横线还在)
-//  R5b 顶层配对:先由落点插件画线再进配对区 → 只剩竖线、松手零残留(钉微任务收敛)
+//  R5d 右栏块右缘静止 → 只剩竖线、松手新列在右栏右侧
+//  R5b 顶层配对:先由落点插件画线再进左页边越过 ⠿ → 只剩竖线、松手零残留(钉微任务收敛)
+//  R5c 顶层块左缘以内(旧的 28px 拼栏带,11-18 照 Notion 分道取消;宽 pane 才取消,见 unified-dragfeel D13)→ 只出横线、松手是换位
 //  R6 行下沿正下方静止 → 只有一条线、落到行后
 //  R7 落回自身(右栏末块拖回右栏空白)→ 不出线、文档不变
 //  R8 文末之下(tail 路由)松手 → 零残留
@@ -35,6 +37,7 @@
 //  R23 图片拖到顶层两段之间(落点插件那条路)→ 落地,且拖拽状态清零(原段落被删掉重建,dragend 发在已脱离文档的
 //      节点上、冒泡不到 root —— 收尾只能挂在来源元素上)
 //  R24 图片带着缩进子段:按住图片拖 → 整棵缩进子树一起走(与 ⠿ 同一个拖动单位;Codex 评审 09-22)
+//      11-19:图片悬停工具条挪到图片上方时整场亮着(拖拽期 :hover 冻住)、盖住首段上沿,落点落在工具条上 → 这条红过
 //  R25 跨块选区盖住图片:按住图片拖 → 整批一起走(按下不许把选区收成单图;Codex 评审 09-22)
 //  R26 md 图的 `</>` 源码行里用鼠标拖选文字 → 选中文字,不被当成整块拖(draggable 只活一次按下;Codex 评审 09-22)
 //  R27 在图片上按下后窗口失焦(mouseup / dragend 都不会来)→ 可拖要收回(Codex 复审 09-22)
@@ -376,6 +379,8 @@ async function main() {
   }
 
   // ── R5 配对区静止 → 只剩竖线;松手成列零残留 ───────────────────────────────────
+  // (11-18 照 Notion 分道只动顶层:非首列的块,⠿ 左边是列缝、没有「越过 ⠿」的地方,左缘 28px 拼栏带照旧 ——
+  //  要在深处两列之间插一列只有这条路。)
   {
     const p = await openPage(browser)
     const img = await rect(p, '.wiki-inline-img-wrap', 1)
@@ -391,25 +396,53 @@ async function main() {
     await p.close()
   }
 
-  // ── R5b 顶层配对:先让**落点插件**画出横线,再进配对区 → 只剩竖线;松手成行后零残留 ────────
+  // ── R5d 右栏块右缘静止 → 只剩竖线;松手成列(新列在右栏右侧)───────────────────────────
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const h = await handleAt(p, img.x + 30, img.y + 30)
+    const para = await blockRect(p, '窄size')
+    const r = h && para ? await drag(p, h, { x: para.x + 80, y: para.b + 3 }, { x: para.r - 6, y: para.y + para.h / 2 }) : null
+    const row = rowOf(await shape(p))
+    check('R5d 右缘配对区静止:只有竖线', !!r && r.during.length === 1 && r.during[0].v, JSON.stringify(r?.during))
+    check('R5d 松手成列(新列插在右栏右侧)', !!row && row.length === 3 && row[2][0]?.startsWith('![[wide'), JSON.stringify(row))
+    check('R5d 松手后零指示线', !!r && r.after.length === 0, JSON.stringify(r?.after))
+    await p.close()
+  }
+
+  // ── R5b 顶层配对:先让**落点插件**画出横线,再进左页边越过 ⠿ → 只剩竖线;松手成行后零残留 ────────
   // (R5 的列内路径如今整支由 planCellDrop 自解析,插件根本不出线 —— 那条测不到「同步收敛」。
   //  这里的 via 停在分栏之外的顶层段落下缘,线由插件画,才真正钉住微任务收敛 + 各收尾口的藏。
   //  ⚠️ via 要贴段落**左端**:插件按「到线段端点」的距离只问最近 8 个候选,停在段落横向中点时最近的
-  //  全是下方分栏行在列缝附近的端点(行内位置 / 列缝都被否掉)→ 那里本来就不出线,前置态摆不出来;
-  //  也别进左缘 EDGE(28px)以内,那是配对区,出的是竖线。)
+  //  全是下方分栏行在列缝附近的端点(行内位置 / 列缝都被否掉)→ 那里本来就不出线,前置态摆不出来。
+  //  目标点在正文左缘外 90px:越过 ⠿ 那一道(约 56px)才是拼左栏区,⠿ 道里是换位。)
   {
     const p = await openPage(browser)
     const img = await rect(p, '.wiki-inline-img-wrap', 1)
     const h = await handleAt(p, img.x + 30, img.y + 30)
     const top = await blockRect(p, '热力图等内容')
     const target = await blockRect(p, 'Forsion Extend')
-    const r = h && top && target ? await drag(p, h, { x: top.x + 40, y: top.b - 2 }, { x: target.x + 6, y: target.y + target.h / 2 }) : null
+    const r = h && top && target ? await drag(p, h, { x: top.x + 40, y: top.b - 2 }, { x: target.x - 90, y: target.y + target.h / 2 }) : null
     check('R5b 前置:经过点上落点插件真画出了横线', !!r && (r.viaLines ?? []).some((l) => !l.v), JSON.stringify(r?.viaLines))
     check('R5b 顶层配对区静止:只有竖线(插件那条横线已收敛)', !!r && r.during.length === 1 && r.during[0].v, JSON.stringify(r?.during))
     const doc = await shape(p)
     const rows = doc.filter((n) => n && n.row)
-    check('R5b 松手成行(Forsion 段与图并成新的一行,原来那行还在)', rows.length === 2 && rows[0].row.some((c) => c.some((k) => k.startsWith('Forsion'))), JSON.stringify(doc))
+    check('R5b 松手成行(Forsion 段与图并成新的一行,图在左,原来那行还在)', rows.length === 2 && rows[0].row[0]?.[0]?.startsWith('![[wide') && rows[0].row.some((c) => c.some((k) => k.startsWith('Forsion'))), JSON.stringify(doc))
     check('R5b 松手后零指示线', !!r && r.after.length === 0, JSON.stringify(r?.after))
+    await p.close()
+  }
+
+  // ── R5c 块左缘以内(旧拼栏带)→ 换位:只出横线,松手不成列 ─────────────────────────────
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const h = await handleAt(p, img.x + 30, img.y + 30)
+    const target = await blockRect(p, 'Forsion Extend')
+    const r = h && target ? await drag(p, h, null, { x: target.x + 6, y: target.y + target.h * 0.3 }) : null
+    const doc = await shape(p)
+    const rows = doc.filter((n) => n && n.row)
+    check('R5c 顶层块左缘以内:只有横线、没有竖线', !!r && r.during.length === 1 && !r.during[0].v, JSON.stringify(r?.during))
+    check('R5c 松手是换位(图落在 Forsion 段之前,没多出行)', rows.length === 1 && doc.findIndex((k) => typeof k === 'string' && k.startsWith('![[wide')) === doc.findIndex((k) => typeof k === 'string' && k.startsWith('Forsion')) - 1, JSON.stringify(doc))
     await p.close()
   }
 
@@ -794,7 +827,7 @@ async function main() {
       await p.mouse.down(); await p.mouse.up(); await p.waitForTimeout(400)
     }
     const btn = await p.evaluate(() => {
-      const b = document.querySelectorAll('.wiki-inline-img-wrap')[1]?.querySelector('.amx-src-btn')
+      const b = document.querySelectorAll('.wiki-inline-img-wrap')[1]?.querySelector('.amx-img-tb [data-act="source"], .amx-src-btn') // md 图的 `</>` 在悬停工具条里(2026-11-17)
       if (!b) return null
       const r = b.getBoundingClientRect()
       return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null

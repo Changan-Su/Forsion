@@ -35,7 +35,7 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
-import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { turnResumeMarker, isContinuationRow, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -160,6 +160,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
     ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
+    ...(role === 'assistant' && r.origin === 'refused' ? { refused: true } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -889,6 +890,8 @@ export interface TanguSliceDeps {
 type SessionMode = 'chat' | 'work'
 /** 界面动作 / Agent 命令的结果(与 agentCommands 的 UiActionResult 同形)。 */
 type UiCommandResult = { ok: boolean; error?: string; state?: string; result?: string; pending?: boolean }
+let sessionRefreshSequence = 0
+let appliedSessionRefresh = 0
 let host: TanguSliceDeps
 /** 组装时绑定的 store 句柄:模块级辅助函数(不在 createTanguSlice 闭包里)经它读写,不 import useApp。 */
 let store: { get: StoreApi<AppState>['getState']; set: StoreApi<AppState>['setState'] }
@@ -1046,9 +1049,10 @@ export interface TanguState {
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
-  /** 「继续生成」:回答因报错 / 额度用完停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写(retry / regenerate 是删掉重来)。
+  /** 「继续生成」:回答因报错 / 额度用完 / 写到输出上限 / 被用户停下而停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写
+   *  (retry / regenerate 是删掉重来)。reason 决定那一行怎么跟模型说停下的原因,缺省 error。
    *  quotaFallback:额度卡上点了「改用 X」,这一次直接走后备。false = 没发出去(在跑 / 发送失败,已 toast)。 */
-  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean }): Promise<boolean>
+  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean; reason?: TurnResumeReason }): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
@@ -1796,8 +1800,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           return {
             ...m, content, status: 'done' as const, live: undefined, ...endThink(m),
             ...(settled ? { segments: settleSegments(content, m.segments, m.toolEvents, pl.toolOffsets) ?? m.segments } : {}),
+            // 写到输出上限:引擎自动接过一次 / 接过还停在半句(只在这次 done 上,重载即无,同「已停止」)
+            truncated: pl.truncated === true ? true : undefined,
+            lengthResumed: pl.lengthResumed === true ? true : undefined,
             approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
             inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+            // 安全审核拦下:流出来的那截正文已被上面的终稿换掉,思考一并清掉(引擎也不落库)
+            ...(pl.refused === true ? { refused: true, reasoning: undefined } : {}),
           }
         })
         set((s) => touchSessionActivity(s, sessionId))
@@ -2129,11 +2138,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
     if (tanguDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
+    const sequence = ++sessionRefreshSequence
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
     const t = homeTarget()
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== host.authGen()) return []
+    if (sequence < appliedSessionRefresh) return get().sessions
+    appliedSessionRefresh = sequence
     // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
     // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
     for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)
@@ -2612,7 +2624,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    const target = targetForSession(id)
+    const generation = host.authGen()
+    const listBeforeWrite = appliedSessionRefresh
+    try {
+      await api.updateSession(target, id, { title, title_source: auto ? 'auto' : 'user' })
+      // A refresh started before the PATCH committed may have read the old title.
+      if (target.ref.kind === 'home' && generation === host.authGen() && listBeforeWrite !== sessionRefreshSequence) {
+        void get().refreshSessions(get().cfg).catch(() => {})
+      }
+    } catch (e: any) {
+      get().toast(get().tr('app.renameFail', { e: e?.message || e }), true)
+    }
   },
 
   setSessionEmoji: async (id, value) => {
@@ -3241,7 +3264,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!sid || get().runningBySession[sid] || continuing.has(sid)) return false
     continuing.add(sid)
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
-    try { return await get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
+    try { return await get().send(turnResumeMarker(opts?.reason ?? 'error'), [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
   },
 
   editUserMessage: (messageId, newText, targetSessionId) => {
@@ -3662,15 +3685,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const session = withLocation(raw) // S4(R-15):插进 appStore.sessions 的记录一律经 withLocation 打标(位置只从绑定表派生)
     if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
     set((st) => {
-      const existing = st.sessions.findIndex((s) => s.id === session.id)
-      // `/open` 返回既有会话时只原位刷新数据。把它 unshift 到首位会让一次纯点击伪装成「最近活动」;
-      // 真正新建/rotate 的会话才在首位出现,后续活动排序只认消息带来的 updated_at。
-      const sessions = existing >= 0
-        ? st.sessions.map((s, i) => (i === existing ? session : s))
-        : [session, ...st.sessions]
+      // `/open` 返回既有会话时只原位刷新数据。快速查找带回的归档会话仍属于归档列表。
+      const upsert = (rows: SessionRecord[]): SessionRecord[] => rows.some((row) => row.id === session.id)
+        ? rows.map((row) => row.id === session.id ? session : row)
+        : [session, ...rows]
       return {
-        sessions,
-        archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
+        sessions: session.archived ? st.sessions.filter((s) => s.id !== session.id) : upsert(st.sessions),
+        archivedSessions: session.archived ? upsert(st.archivedSessions) : st.archivedSessions.filter((s) => s.id !== session.id),
         configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
         messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
       }

@@ -98,6 +98,7 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   propose_muse_settings: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 10_000 },
   search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  recommend_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },

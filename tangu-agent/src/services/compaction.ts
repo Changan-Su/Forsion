@@ -15,7 +15,7 @@
  * 所有读 fail-safe → 退回未压缩行为;用户取消会抛出,调用方须终结 run 而非继续机械折叠。
  */
 import { v4 as uuidv4 } from 'uuid';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { withLlmRetry } from '../llm/retry.js';
@@ -738,8 +738,9 @@ export async function compactSession(
 
   let rows: any[];
   try {
+    // 同一毫秒的几行按落库先后走:下面「覆盖到的最后一行」就是同毫秒里最后落库的那条,/usage 的 lastMessageRow 按同一次序认它
     rows = remote ? await remote.messages(sessionId) : await query<any[]>(
-      `SELECT id, role, content, timestamp, tool_calls, tool_results FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC`,
+      `SELECT id, role, content, timestamp, tool_calls, tool_results FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('ASC')}`,
       [sessionId],
     );
   } catch (e: any) {
