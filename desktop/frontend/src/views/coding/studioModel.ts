@@ -1,5 +1,5 @@
 import type { ToolEvent, UiMessage } from '../../types'
-import { isInflightTool } from '../../tangu/inflightTool'
+import { isInflightTool } from '../../../../../tangu-agent/src/contracts/inflightTool'
 
 export type PreviewDevice = 'desktop' | 'tablet' | 'phone'
 export interface StudioIssue { id: string; level: 'error' | 'warning'; message: string; source?: string; at: number }

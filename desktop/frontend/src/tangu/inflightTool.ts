@@ -10,29 +10,11 @@ import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientType
  * 渲染层把它规整成 `done: true, result: undefined, isError: false` 再挂一个 `inflight`:和老历史里「没有结果的调用」同一种形状
  * (各处卡片 / 产物统计本来就认 result === undefined 不画),通用过程行据 `inflight`(行上 data-inflight)整行退成淡色,
  * 行尾写「没执行 / 被打断 / 结果未知」;展开先说结局,打算做的改动收进折叠(样式在 base.css `.tool-row[data-inflight]`)。
- * `inflight` 暂时是渲染层自己的字段(ToolEvent 契约在 tangu-agent/contracts,这一轮不动)。
+ * `inflight` 的形状与判定在 tangu-agent/src/contracts/inflightTool.ts(ToolEvent 本身这一轮不加这个字段)。
  */
-export type InflightState = 'pending' | 'started'
-export interface InflightInfo { state: InflightState; sideEffect?: string }
-export type ToolEventWithInflight = ToolEvent & { inflight?: InflightInfo }
-
-/** 落库的工具结果是不是占位:形状还可能微调,只认「带一个 inflight 对象」,其余字段尽量读。 */
-export function inflightFromResult(res: unknown): InflightInfo | undefined {
-  const raw = res && typeof res === 'object' ? (res as { inflight?: unknown }).inflight : undefined
-  if (!raw || typeof raw !== 'object') return undefined
-  const r = raw as { state?: unknown; sideEffect?: unknown }
-  return {
-    state: r.state === 'pending' ? 'pending' : 'started', // 认不出的按「开始了、结果未知」—— 最保守的那种说法
-    ...(typeof r.sideEffect === 'string' && r.sideEffect ? { sideEffect: r.sideEffect } : {}),
-  }
-}
-
-export function inflightOf(ev: ToolEvent): InflightInfo | undefined {
-  const v = (ev as ToolEventWithInflight).inflight
-  return v && typeof v === 'object' ? v : undefined
-}
-
-export const isInflightTool = (ev: ToolEvent): boolean => !!inflightOf(ev)
+// 占位的形状与判定在契约里(宿主也要用,如 Studio 的改动统计):这里转出给 Tangu 界面各处,下面是界面自己的两件
+export { inflightFromResult, inflightOf, isInflightTool, type InflightInfo, type InflightState, type ToolEventWithInflight } from '../../../../tangu-agent/src/contracts/inflightTool'
+import { type InflightInfo, type ToolEventWithInflight } from '../../../../tangu-agent/src/contracts/inflightTool'
 
 /** 只读不改的副作用等级(引擎 capabilities.sideEffect):断了也不会留下半截改动。 */
 const READ_ONLY = new Set(['none', 'read'])
