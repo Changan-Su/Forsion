@@ -1,5 +1,5 @@
 /** 「本会话最新的那条」几处查询在同一毫秒并列时要认最后落库的那条(#762 的同类):timestamp 只到毫秒,
- *  只按它排时 SQLite 恒把同毫秒里最早落库的那条排在 DESC 最前面。真 SQLite(内存库)+ 真压缩,不 mock 查询。
+ *  只按它排时并列先后没有保证(现在的索引下 SQLite 实测把同毫秒里最早落库的那条排在 DESC 最前面)。真 SQLite(内存库)+ 真压缩,不 mock 查询。
  *  本机文件库实测:中止一轮时半截回答与打断标记 20 次里 11 次同毫秒 —— /usage 那处是真能走到的。 */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { compactSession, getLatestSummary } from './compaction.js';
 import { lastMessageRow, sessionContextTokens } from '../routes/sessions.js';
 import { saveAside } from './aside.js';
 import { branchesSection } from './branchContext.js';
+import { branchSession } from './sessionBranch.js';
 
 const TS = 1_795_000_000_000;
 let home: string;
@@ -72,6 +73,17 @@ describe('同一毫秒落库的几行:认最后落库的那条', () => {
     await msg('a2', 'S', 'model', 'second answer', TS + 1);
     const saved = await saveAside({ sessionId: 'S', userId: 'u1', turn: { question: 'why?', answer: 'because' }, thread: [] });
     expect(saved?.messageId).toBe('a2');
+  });
+
+  it('分支只复制最近 N 条(Historian 协助讨论 lastN=30):名额给最后落库的,同毫秒几行在新会话里先后不变', async () => {
+    await session('S');
+    await msg('u1', 'S', 'user', 'q', TS);
+    await msg('x1', 'S', 'model', 'x1', TS + 5);
+    await msg('x2', 'S', 'user', 'x2', TS + 5);
+    await msg('x3', 'S', 'model', 'x3', TS + 5);
+    const b = await branchSession({ sourceSessionId: 'S', userId: 'u1', appId: 'tangu', messageId: 'x3', kind: 'discussion', lastN: 2, parentSessionId: 'S' });
+    const copied = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = ? ORDER BY rowid`, [b!.id]);
+    expect(copied.map((r) => r.content)).toEqual(['x2', 'x3']);
   });
 
   it('分支段:别的支「最后一句」取最后落库的那条回答', async () => {

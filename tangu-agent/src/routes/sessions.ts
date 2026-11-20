@@ -633,7 +633,9 @@ export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, last
 
 /** 本会话最后落库的一行(sessionContextTokens 拿它比检查点)。同一毫秒的几行要按落库先后取最后那条:手动压缩按升序走到的
  *  最后一行就是检查点边界,这里取成同毫秒里更早的那条 → 判成没覆盖,重开后环又回到压缩前的数(中止后 /compact 时常见,
- *  半截回答与打断标记多半同一毫秒)。thin worker 没有本地库 → 查不到就照旧(undefined)。 */
+ *  半截回答与打断标记多半同一毫秒)。thin worker 没有本地库 → 查不到就照旧(undefined)。
+ *  ponytail: 检查点边界只记一个 id,rowCoverage 把边界同毫秒的其他行一律判没覆盖(hydrate 会再回放它们)—— 那几行不进这里的估算;
+ *  要准得让检查点记下边界那一毫秒里覆盖了哪些行,压缩 / 回放 / 这里共用(Codex 11-20 评审 #1,另立)。 */
 export async function lastMessageRow(sessionId: string): Promise<{ id: string; timestamp?: number | null } | undefined> {
   const rows = await query<any[]>(
     `SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`, [sessionId],

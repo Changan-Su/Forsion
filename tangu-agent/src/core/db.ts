@@ -12,7 +12,8 @@ export const getDbType = (): string => deps().host.getDbType();
 export const getNowSql = (): string => deps().host.getNowSql();
 
 /** chat_messages 按时间排的 ORDER BY 片段。timestamp 只到毫秒,同一毫秒落两行并不少见(中止时的半截回答 + 打断标记:
- *  本机文件库实测 20 次中止 11 次同毫秒);只按 timestamp 排时 SQLite 恒把同毫秒里**最早**落库的那条排在 DESC 的最前面。
+ *  本机文件库实测 20 次中止 11 次同毫秒);只按 timestamp 排时并列的先后没有保证 —— 现在的表结构(只有 session_id 索引)下
+ *  SQLite 实测把同毫秒里最早落库的那条排在 DESC 的最前面,换个索引 / 查询计划又会变。
  *  SQLite 上用插入顺序 rowid 补排(回答行的 upsert 不改 rowid)。PG 不变:没有可用的插入序列,先与 #762 同口径。 */
 export const messageTimeOrder = (dir: 'ASC' | 'DESC'): string =>
   `timestamp ${dir}${getDbType() === 'sqlite' ? `, rowid ${dir}` : ''}`;
