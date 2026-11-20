@@ -380,7 +380,7 @@ OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelli
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
-OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 四个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z、LN 两腿须红
+OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 四个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z 必红,LZ / LN 至少一腿红(只发代码时旧代码回哪种语言不稳)
 OPT_IN.add('visualsdial'); //--only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
@@ -2730,8 +2730,9 @@ try {
   // turninfo(11-20,借鉴 chat-demo ③ #734):系统提示日期段补时区名 + 界面语言。四条腿各一个 run,都直接核系统提示原文:
   //   Z host run、不准用工具问「我在哪个时区」→ 提示里有 `time zone <进程时区>`,回答说得出这个 IANA 名;
   //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
-  //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文(台架隔离环境缺省回中文:11-20 旧代码对照上 LZ 也回中文,区分改动靠这条);
-  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z、LN 须红。
+  //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文;
+  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z 必红;只有代码时回哪种语言在旧代码上不稳
+  //   (11-20 两次对照:一次两腿都回中文、一次都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
   await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
     const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
