@@ -30,6 +30,7 @@ import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
+import { refusedBody } from './safetyStop'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
@@ -884,7 +885,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museApproval = msg.origin === 'proactive:approval'
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
   const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(msg.content, msg.refused), { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // hand_off_task 挪出去的会话:过程行下面、正文前面单独一小块(不进下面的「从这里分出」)
   const handoffIds = handoffIdsOf(msg.toolEvents)
@@ -946,7 +947,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
+                // 安全审核拦下:固定文案在终稿末尾 = 最后一个文本段,摘掉改画灰字(同上面无段那支的 refusedBody)
+                const parsed = splitSuggestions(i === lastTextIdx ? refusedBody(seg.text, msg.refused) : seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
@@ -1102,6 +1104,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
+        {msg.status === 'done' && msg.refused && <div className="t2-dim" data-halt="refused">{t('chat.refused')}</div>}
         {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
         <HaltRow msg={msg} sessionId={runSid} handlers={handlers} />
         {msg.status === 'done' && msg.lengthResumed && !msg.truncated && <div className="t2-dim">{t('chat.lengthResumed')}</div>}

@@ -160,6 +160,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
     ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
+    ...(role === 'assistant' && r.origin === 'refused' ? { refused: true } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -1804,6 +1805,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             lengthResumed: pl.lengthResumed === true ? true : undefined,
             approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
             inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+            // 安全审核拦下:流出来的那截正文已被上面的终稿换掉,思考一并清掉(引擎也不落库)
+            ...(pl.refused === true ? { refused: true, reasoning: undefined } : {}),
           }
         })
         set((s) => touchSessionActivity(s, sessionId))

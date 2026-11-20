@@ -115,6 +115,7 @@ import { computerHistoryDigest, computerHistoryRecallHide } from './computerHist
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
+import { isSafetyStop, safetyStopNotice, SAFETY_STOP_ORIGIN } from '../contracts/safetyStop.js';
 import { channelHub } from '../channels/hub.js';
 import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
 
@@ -1623,6 +1624,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
   let finalTurnText = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
+  let refusedInRun = false; // 本 run 有过被拦下的一发(插话续跑后 safetyStopped 会复位,这个不复位):收尾时清流式帧
+  let safetyStopped = false; // 收尾那一发被模型的安全审核拦下(contracts/safetyStop.ts):终稿是固定文案,origin 记 refused
   let finalReasoning = '';
   // 在飞那次模型调用已流给用户的正文(尝试循环里 partialText 的影子)。成功收下 / 段切分回灌时清空;
   // run 以失败或中止收尾时并进终稿 —— 否则屏上看过的最后一截不落库,「继续生成」时模型看不到,只能重写或跳过。
@@ -2659,7 +2662,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
         const files = pendingDisplayFiles.splice(0);
-        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files);
+        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files, safetyStopped ? SAFETY_STOP_ORIGIN : undefined);
         await settleCheckpointAfterFinalize(finalizedId);
         if (allToolResults.some((r) => r?.parked)) {
           finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
@@ -3792,6 +3795,34 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (res.content || res.toolCalls?.length) finalContent = uiLeakRollback;
         uiLeakRollback = null;
       }
+      // 被模型的安全审核拦下(借鉴 chat-demo ④,contracts/safetyStop.ts):这一发流出的正文 / 思考丢掉、工具调用不执行,
+      // 终稿在此前各轮已成形的正文后面接一句固定文案;不进 workingMessages / Historian 尾巴,步骤只记用量(agent_steps 也是回放源)。
+      // 放在所有续跑闸(纠错重试、插话、审批、Stop hook、审计、验证)之前:拦下的回答不续写、不重答。
+      if (isSafetyStop(res.finishReason)) {
+        safetyStopped = true;
+        refusedInRun = true;
+        appendFinal(safetyStopNotice(uiSettings?.locale?.value, String(input.message || '')));
+        finalTurnText = '';
+        finalReasoning = '';
+        void publish(runId, 'status', { phase: 'safety_stop', iteration, reason: res.finishReason });
+        // 这一发在跑的时候用户插了话:那几句已经回执过,不能随 run 结束丢掉(Codex 11-17)。把这一段(以固定文案收尾、记 refused)
+        // 定稿、换回合接着答新消息 —— 拦下的回答本身照旧不续写。末轮回退轮号时不记这一步:agent_steps 撞号会静默丢掉后一步。
+        const steeredAtRefusal = drainSteer(runId);
+        if (!(steeredAtRefusal.length && lastIter)) {
+          await appendStep({
+            id: uuidv4(), runId, stepNo: iteration,
+            llmResponse: responseForStep({ content: '', usage: res.usage }),
+          });
+        }
+        if (steeredAtRefusal.length) {
+          await applySteering(steeredAtRefusal); // 定稿时按 safetyStopped 记 origin=refused
+          safetyStopped = false;
+          if (lastIter) iteration -= 1;
+          continue;
+        }
+        finalTurnNoTools = lastIter;
+        break;
+      }
       if (!res.toolCalls || res.toolCalls.length === 0 || lastIter) {
         // 安全网:模型把工具调用当正文吐(原生 tool_calls 空且文本兜底没解出来),但正文带工具
         // 调用标记 —— 别静默收尾。回灌一次纠正提示让它改用原生函数调用重试(预算内、非最后一轮)。
@@ -4153,10 +4184,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await finalizeAssistantMessage(
       currentAssistantId,
       sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+      safetyStopped ? SAFETY_STOP_ORIGIN : undefined,
     );
     await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
     await drain(runId); // 确保 token 等事件全部落库后再发 done
+    // 这个 run 里有一发被安全审核拦下:流式帧里还有原文,落库完就删掉(续播只剩终稿;别的回合的帧一并删,终稿已在 chat_messages)
+    if (refusedInRun) await deps().state.purgeStreamFrames?.(runId).catch((e) => console.warn('[agent-core] purge refused frames failed:', e));
     // forkSeed:fork 判官模式的快照接缝(惰性 getter,非 fork 模式零拷贝)。收尾轮正文不在
     // workingMessages 里(只进 finalContent),用 finalTurnText 补上——纯聊天 run 整条回复都靠它;
     // 配额/截断等异常出口 finalTurnText 为空,快照就不补尾(那些收尾语不是模型正文)。
@@ -4178,7 +4212,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 输入建议(services/promptSuggestion.ts):快照要在 done 发出**之前**就位 —— 客户端收到 done 立刻来拉,晚一步就是空。
     // 只存引用、不发请求;团队成员的会话没有人在里面打字,不存。强制收尾的那一轮也不存:那一发请求没带工具头、
     // 多了一条收尾说明,而快照恒带工具头 —— 前缀对不上那一发写下的缓存,这句建议就不止「多读一次缓存」的价了。
-    if (!isTeamMember && !finalTurnNoTools) stashSuggestionSeed(sessionId, runId, historianSeed);
+    if (!isTeamMember && !finalTurnNoTools && !safetyStopped) stashSuggestionSeed(sessionId, runId, historianSeed);
     // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
     // 与重开会话一致:否则引擎丢掉的流式正文(末轮手写成 DSML 的工具调用)一直挂在屏上,
     // 收尾才追加的停止说明/耗尽提示反而看不见(09-15 用户截图)。
@@ -4186,6 +4220,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // truncated:收尾那一发停在了输出上限(自动续写已用掉或来不及),界面画「停在了半句」+「继续生成」;
     // lengthResumed:这一轮自动接着写过一次。都只在这次 done 上,不落库 —— 和「已停止」一样是当场的状态。
     await publish(runId, 'done', {
+      ...(safetyStopped ? { refused: true } : {}),
       content: finalContent,
       toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })),
       ...(finalTruncated ? { truncated: true } : {}),
@@ -4282,13 +4317,16 @@ async function finalizeAssistantMessage(
   toolCalls: ToolCall[],
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
+  /** 覆盖 origin(安全审核拦下 = 'refused')。和额度后备同用一列:拦下优先,那一轮的「改用了」行重载后不再显示。 */
+  originOverride?: string,
 ): Promise<void> {
   // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
   const swap = modelSwaps.get(currentRunId() || '');
+  const origin = originOverride ?? swap?.origin;
   await deps().state.finalizeAssistantMessage({
     messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
     agentSlug: currentDisplayAgentSlug(),
-    ...(swap ? { origin: swap.origin } : {}),
+    ...(origin ? { origin } : {}),
   });
 }
 
