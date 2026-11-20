@@ -11,7 +11,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocaleProvider, translateFor } from '../../i18n'
 import { EditorialMessage, autoResumedLineKey, interruptedLineKey, partitionToolSegment, type MessageHandlers } from './EditorialMessage'
-import { ToolGroup } from '../../components/ToolGroup'
+import { ToolGroup, labelPhase } from '../../components/ToolGroup'
 import { useApp } from '../../stores/appStore'
 import { recordToUi, sketchFromToolEvent } from '../../tangu/store/tanguSlice'
 import { cardEligible } from '../../amadeus/plugins/toolResultCards'
@@ -54,6 +54,19 @@ describe('interrupted-notice row (no automatic resume)', () => {
     await act(async () => button('msg-continue')!.click())
     expect(onContinue).toHaveBeenCalledWith('app_quit')
     expect(turnResumeMarker('app_quit')).toContain('the user did not stop it')
+  })
+  // 评审 #7 之后冷开对话,说明前面的回答行是 stopped + interrupted:<原因>(不再是 done):按钮与那一行的画法都不能变
+  it('with the answer restored as quietly stopped (cold open): still Continue, and the answer shows no Stopped line', async () => {
+    const restored = answer('a', { status: 'stopped', error: 'interrupted:app_quit' })
+    const onContinue = vi.fn(), onRetry = vi.fn()
+    await render(notice, [user('u', 'merge notes'), restored, notice], { onContinue, onRetry })
+    expect(button('msg-continue')).not.toBeNull()
+    expect(button('msg-retry')).toBeNull()
+    await render(restored, [user('u', 'merge notes'), restored, notice], { onContinue, onRetry })
+    expect(text()).toContain('merged weeks 1 and 2')
+    expect(text()).not.toContain('⏹')
+    expect(button('msg-continue')).toBeNull()
+    expect(button('msg-retry')).toBeNull()
   })
   it('no button while the session runs or once a newer row follows', async () => {
     const h = { onContinue: vi.fn(), onRetry: vi.fn() }
@@ -199,6 +212,37 @@ describe('placeholder tool results (cut off mid-call)', () => {
     expect(text()).toContain('没有执行：引擎在这一步开始前停了。')
     expect(text()).toContain('被打断：引擎在这一步做完前停了。这一步只读取，不改动任何东西。')
     expect(host.innerHTML).not.toContain('var(--danger)')
+  })
+
+  // 评审 #9:折叠着看,没跑成的 write_file 不能说成「写入 1 文件」;折叠头直接说有几步被打断;插件描述器拿不到 done 阶段
+  it('the folded head counts only finished steps and says how many were interrupted; a never-run write shows no +N', async () => {
+    const [w, , , ok] = events()
+    const head = (): string => (host.querySelector('.tool-group-sum-long')?.textContent || '')
+    const short = (): string => (host.querySelector('.tool-group-sum-short')?.textContent || '')
+    await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(ToolGroup, { events: [w, ok] }) })))
+    expect(head()).toBe(`${translateFor('zh', 'tool.sum.read', { n: 1 })} · 1 步被打断`)
+    expect(head()).not.toContain(translateFor('zh', 'tool.sum.wrote', { n: 1 }))
+    expect(short()).toBe(`${translateFor('zh', 'tool.sumN', { n: 1 })} · 1 步被打断`)
+    // 整组都没跑成:头上也有话说,不是空的
+    await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(ToolGroup, { events: [w] }) })))
+    expect(head()).toBe('1 步被打断')
+    expect(short()).toBe('1 步被打断')
+    await act(async () => (host.querySelector('.tool-group-head') as HTMLButtonElement).click())
+    expect(host.querySelector('[data-inflight] .tool-row-stat')).toBeNull() // 内容 1 行,但写没写成不知道:不报 +1
+    // 还在跑(接上在跑的 run、回放还没换掉占位):照旧按普通的一步算,不说被打断
+    await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(ToolGroup, { events: [w], running: true }) })))
+    expect(host.textContent).not.toContain('被打断')
+  })
+
+  it('English head copy', () => {
+    expect(translateFor('en', 'tool.sum.interrupted', { n: 2 })).toBe('2 step(s) interrupted')
+  })
+
+  it('plugin tool labels never get the done phase for a placeholder', () => {
+    const [w, , , ok] = events()
+    expect(labelPhase(w, false)).toBe('error') // 和「没做完而消息已经停了」同一个阶段
+    expect(labelPhase(w, true)).toBe('running')
+    expect(labelPhase(ok, false)).toBe('done')
   })
 
   it('odd shapes never crash and never count as a placeholder by accident', () => {

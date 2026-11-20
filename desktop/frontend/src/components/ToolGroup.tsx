@@ -31,6 +31,8 @@ registerMessages({
   'tool.inflight.notRun': { zh: '没有执行：引擎在这一步开始前停了。', en: 'Not run: the engine stopped before this step started.' },
   'tool.inflight.readCut': { zh: '被打断：引擎在这一步做完前停了。这一步只读取，不改动任何东西。', en: 'Interrupted: the engine stopped before this step finished. It only reads and changes nothing.' },
   'tool.inflight.unknown': { zh: '结果未知：这一步执行到一半引擎停了，可能已经部分或全部生效。', en: 'Outcome unknown: the engine stopped while this step was running. It may have partly or fully taken effect.' },
+  // 折叠头里的那一段:被打断的步不算进「写入 N 文件」这类完成计数,单独说(评审 #9)
+  'tool.sum.interrupted': { zh: '{n} 步被打断', en: '{n} step(s) interrupted' },
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
@@ -266,9 +268,10 @@ const AppOrKindIcon: React.FC<{ bundleId: string; Fallback: LucideIcon }> = ({ b
   return src ? <img className="tool-row-app-ic" src={src} alt="" width={13} height={13} draggable={false} style={{ display: 'block', borderRadius: 3 }} /> : <Fallback size={13} />
 }
 
-/** describe 的 phase:做完 = done / error;没做完而消息还在跑 = running;没做完但消息已经停了(被打断)= error。 */
+/** describe 的 phase:做完 = done / error;没做完而消息还在跑 = running;没做完但消息已经停了(被打断)= error。
+ *  断在半截的占位(inflight,形状上 done: true)不算做完:插件拿不到 done 阶段,不会把没跑的一步说成做成了(评审 #9)。 */
 export const labelPhase = (ev: ToolEvent, running: boolean): ToolLabelPhase =>
-  ev.done ? (ev.isError ? 'error' : 'done') : running ? 'running' : 'error'
+  ev.done && !inflightOf(ev) ? (ev.isError ? 'error' : 'done') : running ? 'running' : 'error'
 
 /** 正在进行的那一步:三个小点(纯 CSS,减少动态效果时静止)。 */
 const Dots: React.FC = () => <span className="proc-dots" aria-hidden="true"><i /><i /><i /></span>
@@ -339,7 +342,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
             {!desc.sentence && <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>}
           </span>
         </span>
-        <Stat d={desc} />
+        {/* 断在半截的一步不报 +N 行:写没写成都不知道 */}
+        {!inflight && <Stat d={desc} />}
         <span className="tool-row-status">
           {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
             : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
@@ -418,10 +422,14 @@ export const ToolGroup: React.FC<{
   // 插件句子只给看得见的行求值:展开时每行;折叠时只有头上那条「当前这步」(做完后的折叠头本来就是宿主的汇总)。
   // 句子不影响汇总计数(describeTool 里有没有句子 kind 一样),所以折叠 / 展开算出的摘要一致。
   const descs = groupedEvents.map((ev, i) => describeTool(ev, pluginName, open || i === curIdx ? labelOf : undefined))
+  // 断在半截的占位(这条回答已不在跑;与 ToolRow 同一口径)不算完成的动作、不算文件数,头上单说「N 步被打断」(评审 #9)
+  const cut = groupedEvents.map((e) => !running && !!inflightOf(e))
+  const cutN = cut.filter(Boolean).length
+  const doneDescs = descs.filter((_, i) => !cut[i])
   const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, handoff: 0, other: 0 } as Record<Kind, number>
-  descs.forEach((d) => { counts[d.kind]++ })
+  doneDescs.forEach((d) => { counts[d.kind]++ })
   // 写 / 改按文件数(方案 A:同一个文件改了几次只算一个;先写后改的算在「写入」里),拿不到路径的照调用数
-  const fileCounts = countFiles(descs)
+  const fileCounts = countFiles(doneDescs)
   counts.write = fileCounts.write
   counts.edit = fileCounts.edit
   const SUM: Record<Kind, string> = {
@@ -430,11 +438,13 @@ export const ToolGroup: React.FC<{
   }
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'handoff', 'other']
   const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
-  const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
+  const cutLabel = cutN ? t('tool.sum.interrupted', { n: cutN }) : ''
+  const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })), cutLabel].filter(Boolean).join(' · ')
   // 窄列的短摘要只报个数;整组都是开子会话 / 挪活时照样说那一句(「开了 N 个子会话」「把手头的活挪到了子会话」就是这组在干什么)
-  const allSessions = groupedEvents.length > 0 && counts.session === groupedEvents.length
-  const allHandoff = groupedEvents.length > 0 && counts.handoff === groupedEvents.length
-  const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t(allHandoff ? 'tool.sum.handoff' : allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
+  const doneN = groupedEvents.length - cutN
+  const allSessions = doneN > 0 && counts.session === doneN
+  const allHandoff = doneN > 0 && counts.handoff === doneN
+  const shortSummary = [...(thinking ? [] : [thinkLabel]), doneN ? t(allHandoff ? 'tool.sum.handoff' : allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: doneN }) : '', cutLabel].filter(Boolean).join(' · ') || thinkLabel
 
   // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
   const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
@@ -443,7 +453,7 @@ export const ToolGroup: React.FC<{
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
-  const anyInflight = !running && groupedEvents.some((e) => !!inflightOf(e))
+  const anyInflight = cutN > 0
   // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
   const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])

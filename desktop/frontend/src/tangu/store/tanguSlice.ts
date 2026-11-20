@@ -35,7 +35,7 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
-import { turnResumeMarker, isContinuationRow, isInterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { turnResumeMarker, isContinuationRow, isInterruptReason, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { inflightFromResult, markUnfinishedInflight, type ToolEventWithInflight } from '../inflightTool'
 import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
@@ -234,6 +234,42 @@ export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp
     out.push({ id: f.assistant_message_id, role: 'assistant', content: '', status: 'error', error, timestamp: Number(f.timestamp) || Date.now(), ...stamp })
   }
   return out
+}
+
+/**
+ * 历史里紧跟在某条回答行后面的带原因中断说明(引擎在被非用户原因打断、没自动续的那一轮后面补的 `<turn_interrupted>` + reason)
+ * → 原因;中间只跳过系统行,碰到别的行就算没有。用户按停留下的老式说明不带原因,不算。
+ */
+export function interruptedNoticeAfter(rows: ReadonlyArray<{ id?: unknown; role?: unknown; content?: unknown }>, assistantId: string): InterruptReason | undefined {
+  const i = rows.findIndex((r) => r.id === assistantId)
+  if (i < 0) return undefined
+  let j = i + 1
+  while (j < rows.length && rows[j].role === 'system') j++
+  const next = rows[j]
+  if (!next || next.role !== 'user' || typeof next.content !== 'string') return undefined
+  return parseInterruptedNotice(next.content) ?? undefined
+}
+
+/**
+ * 重开对话 / 轮询合并时,把「被打断」挂回那一轮的回答行(评审 #7)。回答行落库时不带状态,recordToUi 一律记成 done ——
+ * 关着自动续跑时冷开对话,右栏 / 摘要就会和正文的 ⏸ 一起说「已完成」。紧挨在带原因中断说明前面的那条回答行
+ * (中间只跳过系统行;碰到用户行就停 —— 那一轮还没有回答)改成和在线时一样的安静停住(stopped + interrupted:<原因>)。
+ * 只改 done 的(在跑 / 失败 / 停止的不动);没改的行原样返回同一个对象 —— pollSession 按对象相等短路,不能每轮都换新。
+ */
+export function withInterruptedTurns(list: UiMessage[]): UiMessage[] {
+  let out: UiMessage[] | null = null
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].role !== 'user') continue
+    const reason = parseInterruptedNotice(list[i].content)
+    if (!reason) continue
+    let j = i - 1
+    while (j >= 0 && list[j].role === 'system') j--
+    const a = j >= 0 ? list[j] : undefined
+    if (!a || a.role !== 'assistant' || a.status !== 'done') continue
+    out ??= [...list]
+    out[j] = { ...a, status: 'stopped', error: interruptedRunError(reason) }
+  }
+  return out ?? list
 }
 
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
@@ -2134,30 +2170,36 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       try { active = await listActiveRuns(targetForSession(sessionId), sessionId) } catch { return }
       if (active.some((r) => r.id === runId && (r.status === 'running' || r.status === 'queued' || !r.status))) return
       // 后端已不跑此 run,但 UI 还卡 streaming → 重载消息收尾。
-      // 引擎把它记成了失败 / 中断(D4):不能因为有半截正文就标「完成」—— 失败照引擎记的原因画失败行,中断照在线时那样安静收住。
+      // 按 run ID 认引擎记的终态(评审 #7):只有明确 done 才标完成。失败照引擎记的原因画失败行;中断照在线时那样安静收住;
+      // 别处按停的(aborted)= 停止。列表只给最近五条、在跑的排前,这个 run 被挤出去就查不到 —— 查不到时从历史里找线索
+      // (失败记录 / 紧跟的带原因中断说明),都没有就画「事件流中断」,不因为有半截正文就说做完了。
       const recorded = active.find((r) => r.id === runId)?.status
       let rec: any
       let failedError: string | undefined
+      let noticeReason: InterruptReason | undefined
       try {
-        if (recorded === 'failed') {
+        if (recorded === 'done' || recorded === 'aborted') {
+          rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current)
+        } else {
           const h = await api.listHistory(targetForSession(sessionId), sessionId)
           rec = h.messages.find((r: any) => r.id === assistantRef.current)
           failedError = h.failedRuns.find((f) => f.assistant_message_id === assistantRef.current)?.error || undefined
-        } else {
-          rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current)
+          noticeReason = interruptedNoticeAfter(h.messages, assistantRef.current)
         }
       } catch { return }
       if (ac.signal.aborted || stoppedRuns.has(runId) || get().runningBySession[sessionId] !== runId) return
       // Persisted content is authoritative. Flush BEFORE applying it: aborting after the
       // snapshot must not append an already-persisted buffered delta a second time.
       events.flush()
+      const outcome = recorded === 'done' || recorded === 'aborted' || recorded === 'interrupted' || recorded === 'failed' ? recorded
+        : failedError ? 'failed' : noticeReason ? 'interrupted' : 'unknown'
       get().patchMessage(sessionId, assistantRef.current, (m) => {
         const content = rec?.content || m.content
-        if (recorded === 'interrupted') return { ...m, content, status: 'stopped' as const, error: interruptedRunError(), toolEvents: markUnfinishedInflight(m.toolEvents) }
-        if (recorded === 'failed') return { ...m, content, status: 'error' as const, error: failedError || get().tr('app.eventStreamInterrupted') }
-        return content
-          ? { ...m, content, status: 'done' as const }
-          : { ...m, status: 'error' as const, error: get().tr('app.eventStreamInterrupted') }
+        if (outcome === 'interrupted') return { ...m, content, status: 'stopped' as const, error: interruptedRunError(noticeReason), toolEvents: markUnfinishedInflight(m.toolEvents) }
+        if (outcome === 'failed') return { ...m, content, status: 'error' as const, error: failedError || get().tr('app.eventStreamInterrupted') }
+        if (outcome === 'aborted') return { ...m, content, status: 'stopped' as const }
+        if (outcome === 'done' && content) return { ...m, content, status: 'done' as const }
+        return { ...m, content, status: 'error' as const, error: get().tr('app.eventStreamInterrupted') }
       })
       stoppedRuns.add(runId)
       ac.abort() // 停掉还在空转的 SSE 重连循环
@@ -2354,7 +2396,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         for (const m of existing) byId.set(m.id, m)
         // 失败轮在本地已有那一行之后再补:本地那一行可能被看门狗收成了 done(终态事件丢了),以引擎记的失败为准
         const merged = withFailedRuns([...byId.values()], failedRuns, stamp)
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged.sort((a, b) => a.timestamp - b.timestamp) } }
+        return { messagesBySession: { ...s.messagesBySession, [sessionId]: withInterruptedTurns(merged.sort((a, b) => a.timestamp - b.timestamp)) } }
       })
       for (const run of active) {
         if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id) {
@@ -2424,7 +2466,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
-        const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
+        const merged = withInterruptedTurns(withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp)) // 同 loadHistory:合并后再补
         if (merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
       })

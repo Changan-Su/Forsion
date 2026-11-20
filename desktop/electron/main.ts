@@ -1682,13 +1682,18 @@ function ensureBackend(reason: EngineStopReason, opts?: { defer?: boolean }): Pr
   if (opts?.defer) return deferredEngineRestart.request()
   deferredEngineRestart.cancel() // 排在后面的这次立即重启现读配置,等着的那次一并生效
   ensureChain = ensureChain.then(async () => {
+    // 退出 / 清数据已开始:那边自己带着原因停引擎(清数据只清桌面设置时是 engine_stop),排在队里的这次别抢先用自己的原因停
+    if (isQuitting) return
+    // 先停旧引擎、再读配置(评审 #4):旧进程退出最多要等 5s,这期间存下的设置 / 提供方也要算进这一次 ——
+    // 读在停之前的话,它们得再重启一回。两条分支本来都要停(下面 start 里的 stop 此时手里已没有进程,不再写意图)。
+    await backend.stop(reason)
+    deferredEngineRestart.markCovered() // 到这一刻登记过的改动,都由下面这次读配置 / 拉起带上
     const stored = await loadConfig()
     backend.setAutoResume(stored.autoResumeInterrupted !== false)
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
       telemetryStartup.noEngine()
-      await backend.stop(reason)
       return
     }
     const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
@@ -1712,6 +1717,7 @@ function ensureBackend(reason: EngineStopReason, opts?: { defer?: boolean }): Pr
   }).catch((e) => {
     console.error('[tangu-desktop] ensureBackend failed:', e)
   })
+  deferredEngineRestart.track(ensureChain) // 这次进行中:期间来的「改设置重启」先等它,已被带上的不再排第二次
   return ensureChain
 }
 /** 改设置引起的重启:有任务在跑就等它们都结束(每 5s 问一次 restart-status),引擎没在跑 / 问不到就立即重启。
@@ -4939,7 +4945,9 @@ app.whenReady().then(async () => {
     // 会在删目录途中把 computer-history/events 建回来)。超时没落定的,删完目录后由 afterWipe 等它落定再删一次(见下)。
     const chWipe = computerHistory ? await stopComputerHistoryForWipe(computerHistory) : null
     deferredEngineRestart.cancel()
-    await backend.stop() // 释放 state.db 句柄,否则占用删不掉(不写停止原因:库都要删了,没有下次续跑)
+    // 释放 state.db 句柄,否则占用删不掉。引擎数据要删 = 不写原因(没有下次续跑);只清桌面设置、保留引擎数据 = engine_stop:
+    // 续跑开关随桌面设置一起删了、下次按缺省「开」,不写的话 Windows 强杀后在途任务会按 crash 自动续(评审 #3)。
+    await backend.stop(opts?.tangu ? undefined : 'engine_stop')
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
     await configQueue(async () => {
