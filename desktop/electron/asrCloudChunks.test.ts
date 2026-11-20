@@ -100,3 +100,33 @@ describe('transcribeWavInChunks', () => {
     expect(i).toBe(2) // 失败后不再发后面的段
   })
 })
+
+describe('Codex 评审补的几处', () => {
+  const stereo16 = (sec: number): Buffer => {
+    const mono = encodeWav16(speech(Math.ceil(sec / 9)), SR)
+    const b = Buffer.from(mono)
+    b.writeUInt16LE(2, 22) // 声明成双声道
+    return b
+  }
+  it('非 16-bit 单声道 WAV 不切(避免丢声道 / 解错),照旧整段送', async () => {
+    let called = 0
+    expect(await transcribeWavInChunks(stereo16(90), {}, async () => { called++; return 'x' })).toBeNull()
+    const b24 = Buffer.from(encodeWav16(speech(10), SR)); b24.writeUInt16LE(24, 34)
+    expect(await transcribeWavInChunks(b24, {}, async () => { called++; return 'x' })).toBeNull()
+    expect(called).toBe(0)
+  })
+  it('尾巴不丢、非 16k 采样率也不超 30s', () => {
+    const s = build([{ kind: 'tone', sec: 60.01 }])
+    const c = planCloudChunks(s, SR, 30)
+    expect(c[c.length - 1].to).toBe(s.length)
+    const sr = 11025
+    const s2 = new Float32Array(sr * 95).map((_, k) => 0.3 * Math.sin(k / 3))
+    for (const x of planCloudChunks(s2, sr, 30)) expect(x.to - x.from).toBeLessThanOrEqual(sr * 30)
+  })
+  it('块内毫秒时间戳折算成秒', async () => {
+    const out = await transcribeWavInChunks(encodeWav16(speech(10), SR), { timestamps: true }, async () => ({ text: 'a', segments: [{ start: 1200, end: 2400, text: 'a' }] }))
+    const r = out as { segments: Array<{ start: number; end: number }> }
+    expect(r.segments[0].start).toBeCloseTo(1.2, 5)
+    expect(r.segments[1].start).toBeLessThan(60)
+  })
+})

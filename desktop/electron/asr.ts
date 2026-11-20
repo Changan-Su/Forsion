@@ -36,7 +36,8 @@ export const AUDIO_MIME_BY_EXT: Record<string, string> = {
 /** 音频 mime → 上游期望的文件后缀(部分服务按扩展名判编码)。 */
 function extForMime(mime: string): string {
   if (/wav/.test(mime)) return 'wav'
-  if (/mp4|m4a|aac/.test(mime)) return 'm4a'
+  if (/aac/.test(mime) && !/mp4|m4a/.test(mime)) return 'aac' // 裸 ADTS 别标成 m4a 容器(Codex 评审)
+  if (/mp4|m4a/.test(mime)) return 'm4a'
   if (/ogg/.test(mime)) return 'ogg'
   if (/mpeg|mp3/.test(mime)) return 'mp3'
   if (/flac/.test(mime)) return 'flac'

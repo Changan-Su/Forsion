@@ -7,7 +7,7 @@
  * 本地 SenseVoice 那条早就按静音切段(asrLocal.ts),云端照同一个切法切成短段、逐段送,再拼回去。
  *
  * 纯模块:不 import electron,发送函数由调用方给(main.ts 的 runTranscribe),可直接单测。
- * 只切 WAV(PCM)—— 别的格式解不了码,照旧整段送。
+ * 只切 16-bit PCM 单声道 WAV(视频转写交回的就是这种)—— 别的格式 / 位深 / 多声道照旧整段送。
  */
 import type { AsrResult, AsrSegment } from './asr'
 import { splitOnSilence, wavToSamples } from './asrAudio'
@@ -29,13 +29,33 @@ export function isNoSpeechError(message: string): boolean {
 export function planCloudChunks(samples: Float32Array, sampleRate: number, maxSec = CLOUD_CHUNK_SEC): Array<{ from: number; to: number }> {
   const max = Math.max(1, Math.round(maxSec * sampleRate))
   const segs = splitOnSilence(samples, sampleRate, { maxSegMs: maxSec * 1000 })
-  const out: Array<{ from: number; to: number }> = []
+  const merged: Array<{ from: number; to: number }> = []
   for (const s of segs) {
-    const last = out[out.length - 1]
+    const last = merged[merged.length - 1]
     if (last && last.to === s.from && s.to - last.from <= max) last.to = s.to
-    else out.push({ from: s.from, to: s.to })
+    else merged.push({ from: s.from, to: s.to })
   }
+  // splitOnSilence 会丢掉不足一帧的尾巴、按 20ms 帧硬切在非 16k 采样率下会略超 max:补齐尾巴,超长的再按 max 硬切
+  if (merged.length) merged[merged.length - 1].to = samples.length
+  const out: Array<{ from: number; to: number }> = []
+  for (const c of merged) for (let f = c.from; f < c.to; f += max) out.push({ from: f, to: Math.min(c.to, f + max) })
   return out
+}
+
+/** 只有 16-bit PCM 单声道能原样切:24 / 32-bit、浮点、多声道经 wavToSamples 会丢声道或解错(Codex 评审),这些照旧整段送。 */
+export function isMono16Pcm(audio: Buffer): boolean {
+  if (audio.length < 44 || audio.toString('ascii', 0, 4) !== 'RIFF' || audio.toString('ascii', 8, 12) !== 'WAVE') return false
+  let off = 12
+  while (off + 8 <= audio.length) {
+    const id = audio.toString('ascii', off, off + 4)
+    const sz = audio.readUInt32LE(off + 4)
+    if (id === 'fmt ') {
+      if (off + 24 > audio.length) return false
+      return audio.readUInt16LE(off + 8) === 1 && audio.readUInt16LE(off + 10) === 1 && audio.readUInt16LE(off + 22) === 16
+    }
+    off += 8 + sz + (sz & 1)
+  }
+  return false
 }
 
 /** 一段样本 → 16-bit PCM 单声道 WAV。 */
@@ -53,7 +73,6 @@ export function encodeWav16(samples: Float32Array, sampleRate: number, from = 0,
   return buf
 }
 
-const isWav = (audio: Buffer): boolean => audio.length >= 44 && audio.toString('ascii', 0, 4) === 'RIFF'
 
 /** 发一段:回字符串(不要时间戳)或 { text, segments? }。 */
 export type SendChunk = (wav: Buffer) => Promise<string | AsrResult>
@@ -68,7 +87,7 @@ export async function transcribeWavInChunks(
   opts: { timestamps?: boolean; maxSec?: number; concurrency?: number },
   send: SendChunk,
 ): Promise<string | AsrResult | null> {
-  if (!isWav(audio)) return null
+  if (!isMono16Pcm(audio)) return null
   let decoded: { samples: Float32Array; sampleRate: number }
   try { decoded = wavToSamples(audio) } catch { return null }
   const { samples, sampleRate } = decoded
@@ -101,7 +120,10 @@ export async function transcribeWavInChunks(
   const segments: AsrSegment[] = []
   results.forEach((r, i) => {
     const off = chunks[i].from / sampleRate
-    if (r.segments?.length) for (const s of r.segments) segments.push({ start: s.start + off, end: s.end + off, text: s.text })
+    const dur = (chunks[i].to - chunks[i].from) / sampleRate
+    // parseVerboseSegments 只在 >10 小时时才认毫秒;一块 ≤30s,毫秒值(如 1200–2400)会被当秒 —— 超出块长的按毫秒折算
+    const ms = !!r.segments?.some((s) => s.end > dur + 1)
+    if (r.segments?.length) for (const s of r.segments) segments.push({ start: (ms ? s.start / 1000 : s.start) + off, end: (ms ? s.end / 1000 : s.end) + off, text: s.text })
     else if (r.text) segments.push({ start: off, end: chunks[i].to / sampleRate, text: r.text })
   })
   return { text, ...(segments.length ? { segments } : {}) }
