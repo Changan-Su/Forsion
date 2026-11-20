@@ -926,10 +926,15 @@ describe('unitWeb', () => {
       expect(changes).toBe(1)
       expect((await raw(b.base, 'PATCH', '/engine/agent/sessions/s1?ignored=yes', headers)).status).toBe(200)
       expect(changes).toBe(2)
+      const creators = [
+        '/engine/agent/sessions/s1/branch', '/engine/agent/sessions/s1/children', '/engine/agent/sessions/s1/team-members/agent-one',
+        '/engine/agent/solo/agent/agent-one/open', '/engine/agent/solo/agent/agent-one/rotate', '/engine/agent/teams/team-one/session/open',
+      ]
+      for (const path of creators) expect((await raw(b.base, 'POST', path, headers)).status, path).toBe(200)
       expect((await raw(b.base, 'GET', '/engine/agent/sessions', headers)).status).toBe(200)
       g.o.enabled = false
       expect((await raw(b.base, 'POST', '/engine/agent/sessions', headers)).status).toBe(403)
-      expect(changes).toBe(2)
+      expect(changes).toBe(2 + creators.length)
     } finally { b.close() }
   })
 

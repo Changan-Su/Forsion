@@ -193,6 +193,29 @@ describe('商店卡片之后不再重画(10-17 live:6 次里 2 次 sketch 把插
     expect(toolText(llmPayloads[2], 'sk1')).toContain('already shown as plugin cards');
   }, 20_000);
 
+  it('keeps recommendation JSON intact in events and history when the model gets a preview', async () => {
+    const long = { ...entry('a1', 'Alice'), description: '阅读笔记保存原文位置'.repeat(155).slice(0, 1500), readme: 'Long listing README'.repeat(500) };
+    const llm = {
+      ...configured.brain.llm,
+      resolveModelAndKey: async (id: string) => {
+        const resolved = await configured.brain.llm.resolveModelAndKey(id);
+        return { ...resolved, model: { ...resolved.model, contextWindow: 32768 } };
+      },
+    };
+    configureTangu({ ...configured, brain: { ...configured.brain, llm, marketplace: { list: async () => [long], detail: async () => long } } });
+    script = [marketStep(true), finalStep('这个插件整理阅读摘录。')];
+    const run = await runToSettled({}, '推荐一个 PDF 笔记插件', 'desktop/2.13.4', ['marketplace-cards.v2']);
+    expect(run.status).toBe('done');
+    expect(toolText(llmPayloads[1], 'ms1')).toContain('omitted');
+    const [event] = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'R1' AND type = 'tool_result'`);
+    const [message] = await query<any[]>(`SELECT tool_results FROM chat_messages WHERE session_id = 'S' AND role = 'model'`);
+    const wire = JSON.parse(event.payload);
+    const [saved] = JSON.parse(message.tool_results);
+    expect(JSON.parse(wire.result).items[0]).toMatchObject({ id: long.id, description: long.description });
+    expect(saved.content).toBe(wire.result);
+    expect(JSON.parse(saved.content).items[0].readme).toBeUndefined();
+  }, 20_000);
+
   it('同一批先推荐再画:推荐完成后不再重画', async () => {
     configureTangu({ ...configured, brain: { ...configured.brain, marketplace: { list: async () => [entry('a1', 'Alice'), entry('b2', 'Bob')], detail: async () => entry('a1', 'Alice') } } });
     const both = () => () => ({ ...marketStep(true)(), toolCalls: [...marketStep(true)().toolCalls, ...sketchStep()().toolCalls] });

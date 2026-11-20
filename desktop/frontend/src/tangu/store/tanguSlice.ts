@@ -2617,7 +2617,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    const target = targetForSession(id)
+    const generation = host.authGen()
+    const listBeforeWrite = appliedSessionRefresh
+    try {
+      await api.updateSession(target, id, { title, title_source: auto ? 'auto' : 'user' })
+      // A refresh started before the PATCH committed may have read the old title.
+      if (target.ref.kind === 'home' && generation === host.authGen() && listBeforeWrite !== sessionRefreshSequence) {
+        void get().refreshSessions(get().cfg).catch(() => {})
+      }
+    } catch (e: any) {
+      get().toast(get().tr('app.renameFail', { e: e?.message || e }), true)
+    }
   },
 
   setSessionEmoji: async (id, value) => {

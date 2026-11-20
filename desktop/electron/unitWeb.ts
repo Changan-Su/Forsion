@@ -205,6 +205,12 @@ const decodeRpcArgs = (args: unknown[]): unknown[] =>
 const encodeRpcResult = (r: unknown): unknown =>
   r instanceof Uint8Array ? { __u8: Buffer.from(r).toString('base64') } : r
 
+function startsWorkspaceSession(path: string): boolean {
+  return /^\/agent\/sessions(?:\/[^/]+\/(?:branch|children|team-members\/[^/]+))?$/i.test(path)
+    || /^\/agent\/solo\/[^/]+\/[^/]+\/(?:open|rotate)$/i.test(path)
+    || /^\/agent\/teams\/[^/]+\/session\/open$/i.test(path)
+}
+
 export interface UnitWebDeps {
   account?: {
     metadata: () => { apiBase: string; loginPath: string } | undefined
@@ -535,7 +541,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     const route = path.split('?', 1)[0]
     const changesSessions = via && !delegated && deps.onSessionsChanged && (
-      (req.method === 'POST' && /^\/agent\/sessions(?:\/[^/]+\/branch)?$/i.test(route)) ||
+      (req.method === 'POST' && startsWorkspaceSession(route)) ||
       (req.method === 'PATCH' && /^\/agent\/sessions\/[^/]+$/i.test(route))
     )
     const up = http.request({

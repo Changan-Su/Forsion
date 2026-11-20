@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const { createHash, randomUUID } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const { launch, boot } = require('./lib/uiux-electron.cjs')
+const { launch, boot, enterSpace } = require('./lib/uiux-electron.cjs')
 
 const cloudUrl = 'http://127.0.0.1:9'
 const token = randomUUID()
@@ -25,6 +25,8 @@ async function main() {
   })
   try {
     await boot(app, win)
+    assert.equal(await enterSpace(win, 'tangu'), true)
+    await win.locator('.t2s-side').first().waitFor({ timeout: 6000 })
     await win.waitForFunction(async () => {
       const [engine, unit] = await Promise.all([window.tangu.backendStatus(), window.tangu.unitHostStatus()])
       return engine.state === 'ready' && Boolean(unit.webPort)
@@ -35,7 +37,7 @@ async function main() {
     assert.equal(meta.instanceId, instanceId)
 
     const title = '手机创建的健康数据会话'
-    const project = path.basename(projectDir)
+    const project = 'Tangu 默认项目'
     const request = async (method, route, body) => {
       const res = await fetch(base + '/engine' + route, {
         method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },

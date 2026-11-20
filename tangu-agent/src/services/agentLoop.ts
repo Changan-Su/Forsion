@@ -2,7 +2,7 @@ import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
 import { clearRunSecretEnv } from '../sandbox/runSecretEnv.js';
-import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY } from '../shared/marketplace.js';
+import { hasMarketplaceCards, MARKETPLACE_CARDS_CAPABILITY, MARKETPLACE_RECOMMENDATION_TOOL } from '../shared/marketplace.js';
 import { normalizeUIAppCards } from '../shared/intelligentCards.js';
 import { computedUiEnabledFor, intelligentUiEnabledFor, INTELLIGENT_UI_SECTION, INTELLIGENT_UI_V2_SECTION, looksLikeLeakedUiDocument, UI_DOCUMENT_LEAK_CHECK } from '../tools/builtin/intelligentUi.js';
 import { withTaskProjectQueue } from './taskProjectQueue.js';
@@ -2017,7 +2017,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 单个调用一完成就置位;纯续写分段(applySteering([]))保留,真用户转向开新段时清零、按新消息重算「点名要图」。
     let marketplaceCardsShown = false;
     let visualAsked = sketchTurnSignal?.kind === 'explicit';
-    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Marketplace search and detail are private lookups. To show a native store card, call recommend_marketplace_plugin for each entry you have chosen after confirming it meets the user’s need. If no entry fits, do not call it. Explain why selected entries fit in brief prose. Do not redraw the native card with intelligent_ui_html or intelligent_ui.');
+    if (clientCapabilities?.includes(MARKETPLACE_CARDS_CAPABILITY) && deps().brain.marketplace) systemParts.push('Marketplace search and detail lookups do not render installation cards. To show a native store card, call recommend_marketplace_plugin for each entry you have chosen after confirming it meets the user’s need. If no entry fits, do not call it. Explain why selected entries fit in brief prose. Do not redraw the native card with intelligent_ui_html or intelligent_ui.');
     if (sketchEnabled) {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
@@ -3018,8 +3018,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 落库面(tool_result 事件 → agent_run_events、toolResult → agent_steps / chat_messages)与模型面(下面的 toolMessage)
       // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
+      const structuredRecommendation = !result.isError && result.name === MARKETPLACE_RECOMMENDATION_TOOL;
+      // The model sees the context-budgeted preview. Live and restored cards need the complete, bounded JSON.
       const stored = ptc && !result.isError ? `[Read-only program consumed ${capped.length} characters; selected evidence is in the parent result.]`
-        : (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
+        : (!result.isError && declaredPersistPlaceholder(result.name)) || (structuredRecommendation ? result.result : capped);
       // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
       const masked = maskSkipped ? [] : [
         ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),

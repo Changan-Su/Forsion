@@ -118,6 +118,28 @@ it('an older list response cannot remove a session that a later refresh found', 
   expect(useApp.getState().sessions.map(x => x.id)).toEqual(['remote-new'])
 })
 
+it('reloads the saved title when a remote refresh races a local rename', async () => {
+  let finishRename!: () => void
+  const writing = new Promise<void>((resolve) => { finishRename = resolve })
+  let title = 'Before'
+  router = async (url, method) => {
+    if (method === 'PATCH') {
+      await writing
+      title = 'After'
+      return { status: 200, body: { session: sessionRec('local-one', { title }) } }
+    }
+    return { status: 200, body: { sessions: url.includes('archived=false') ? [sessionRec('local-one', { title })] : [] } }
+  }
+  const app = useApp.getState()
+  await app.refreshSessions(app.cfg)
+  const rename = app.renameSession('local-one', 'After')
+  await app.refreshSessions(app.cfg)
+  expect(useApp.getState().sessions[0].title).toBe('Before')
+  finishRename()
+  await rename
+  await vi.waitFor(() => expect(useApp.getState().sessions[0].title).toBe('After'))
+})
+
 describe('session icons use the owning engine', () => {
   it('bound session saves to its unit after focus changes; full emoji survives', async () => {
     T.bindSession('s-icon', { kind: 'unit', unitId: U })

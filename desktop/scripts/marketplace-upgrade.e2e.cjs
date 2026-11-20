@@ -19,7 +19,7 @@ const messages = [
   { id: 'market-user', role: 'user', content: '帮我在商店找两个整理 PDF 阅读笔记的插件。', timestamp: Date.now() },
   { id: 'market-answer', role: 'model', content: recommendation.content, timestamp: Date.now() + 1,
     tool_calls: toolPairs.map(({ call }) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments }, ui_content_offset: 0 })),
-    tool_results: toolPairs.map(({ call, result }) => ({ tool_call_id: call.id, name: call.name, content: result.result, isError: result.isError })) },
+    tool_results: toolPairs.map(({ call, result }) => ({ tool_call_id: call.id, name: call.name, content: result.full || result.result, isError: result.isError })) },
 ]
 const state = () => fetch(`${fixture.base}/__fixture/state`).then(r => r.json())
 const ownMessages = async () => (await state()).inbox.filter(row => JSON.parse(row.target_user_ids).includes('owner')).map(row => ({ ...row, body: row.body || '', sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: row.id, read_at: null, archived_at: null, attachments: null, expires_at: null }))

@@ -535,7 +535,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -583,7 +583,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1186,7 +1186,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1234,7 +1234,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1649,7 +1649,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1697,7 +1697,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2131,7 +2131,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2179,7 +2179,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2941,7 +2941,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2989,7 +2989,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3844,7 +3844,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3892,7 +3892,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5170,7 +5170,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5218,7 +5218,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6515,7 +6515,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6563,7 +6563,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7358,7 +7358,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7406,7 +7406,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8220,7 +8220,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8268,7 +8268,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9546,7 +9546,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9594,7 +9594,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10891,7 +10891,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10939,7 +10939,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12275,7 +12275,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12323,7 +12323,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12699,7 +12699,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13335,7 +13335,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13383,7 +13383,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13708,7 +13708,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -15053,7 +15053,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -15101,7 +15101,7 @@
       "type": "function",
       "function": {
         "name": "get_marketplace_plugin",
-        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "description": "Inspect a Forsion store entry by ID, including its description, README, tags and version requirements. This lookup never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {

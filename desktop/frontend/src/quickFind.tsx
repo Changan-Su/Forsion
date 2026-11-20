@@ -20,7 +20,7 @@ import { openSession } from './sessionNav'
 import { usePageStore } from './amadeus/store/pageStore'
 import { useAllDatabases } from './amadeus/store/dbAggregateStore'
 import { fuzzyScore } from './amadeus/lib/fuzzy'
-import { useApp } from './stores/appStore'
+import { currentAuthGeneration, useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
@@ -244,6 +244,7 @@ function QuickFindInner() {
   const files = usePageStore((s) => s.files)
   const dbs = useAllDatabases()
   const sessions = useApp((s) => s.sessions)
+  const authGeneration = useApp(currentAuthGeneration)
   // 光标在这条线上的位置:-1 = 正文(= 全部),0.. = 分类格。每次唤起都从 -1 起(面板关掉即卸载)。
   const [pos, setPos] = useState(-1)
   const cat = catAt(pos)
@@ -320,15 +321,17 @@ function QuickFindInner() {
   // 「打个新名字 + 回车 = 新建笔记」变成看手速。只在「全部 / 会话」分类出现,选取模式没有。
   // 本地列表之外的标题 / 摘要命中也要展示,但跟正文一样放在「新建笔记」之后,不抢回车。
   const needle = !pick && !mini && sessionsAvailable() ? contentNeedle(q) : null
-  const [content, setContent] = useState<{ q: string; hits: SessionSearchHit[] } | null>(null)
+  const [content, setContent] = useState<{ q: string; generation: number; hits: SessionSearchHit[] } | null>(null)
   const searcher = useMemo(() => debouncedSearch(
     (s, signal) => searchSessions(homeTarget(), s, { limit: 20, signal }),
-    (s, hits) => setContent({ q: s, hits }),
-  ), [])
+    (s, hits) => {
+      if (authGeneration === currentAuthGeneration()) setContent({ q: s, generation: authGeneration, hits })
+    },
+  ), [authGeneration])
   useEffect(() => { searcher.set(needle); if (!needle) setContent(null) }, [needle, searcher])
   useEffect(() => searcher.dispose, [searcher])
   // 只认这一个词的结果:换词后旧结果不留(还在等 / 新请求失败时,回车会打开一条不相干的旧命中 —— Codex 评审)
-  const serverHits = content && content.q === needle && (cat === 'all' || cat === 'session') ? content.hits : []
+  const serverHits = content && content.generation === authGeneration && content.q === needle && (cat === 'all' || cat === 'session') ? content.hits : []
   const nameHitIds = new Set(results.filter((item) => item.kind === 'session').map((item) => item.id))
   const titleHits = serverHits.filter((h) => !h.hit && !nameHitIds.has(h.id)).map((h): Item => ({
     kind: 'session',

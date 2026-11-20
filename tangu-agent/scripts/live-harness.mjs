@@ -2839,15 +2839,15 @@ try {
     const leg = (id, text) => run(id, text, 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: [MARKETPLACE_CARDS_CAPABILITY] });
     const ev = await leg(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。');
     const successful = (run, name) => (run?.toolResults || []).filter(r => r.name === name && !r.isError);
-    const items = successful(ev, 'search_marketplace').flatMap(r => marketplaceItemsOf(r.result));
-    const recommended = successful(ev, MARKETPLACE_RECOMMENDATION_TOOL).flatMap(r => marketplaceItemsOf(r.result));
+    const items = successful(ev, 'search_marketplace').flatMap(r => marketplaceItemsOf(r.full || r.result));
+    const recommended = successful(ev, MARKETPLACE_RECOMMENDATION_TOOL).flatMap(r => marketplaceItemsOf(r.full || r.result));
     const selected = recommended[0];
     const follow = selected ? await leg(sessionId, `请仅查询 ID ${selected.id} 的详细说明和版本要求，用文字告诉我，不需要再推荐。`) : null;
-    const detail = successful(follow, 'get_marketplace_plugin').some(r => marketplaceItemsOf(r.result).some(i => i.id === selected?.id));
+    const detail = successful(follow, 'get_marketplace_plugin').some(r => marketplaceItemsOf(r.full || r.result).some(i => i.id === selected?.id));
     const rejected = await leg(`${sessionId}-negative`, '有没有方案可以在 Forsion 里面获取小米运动健康 Mi Fitness 的数据？请现在重新查当前商店，之前查过也请重查。单纯能整理 PDF 笔记的插件不满足，需要实际读取小米运动健康的数据。');
     const searchedNoMatch = successful(rejected, 'search_marketplace').length > 0;
     const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError);
-    const lookupOnly = successful(ev, 'search_marketplace').length > 0 && successful(ev, 'search_marketplace').every(r => JSON.parse(r.result).kind === 'marketplace_lookup');
+    const lookupOnly = successful(ev, 'search_marketplace').length > 0 && successful(ev, 'search_marketplace').every(r => JSON.parse(r.full || r.result).kind === 'marketplace_lookup');
     const ok = !redrawn && lookupOnly && ev.done && !ev.error
       && new Set(recommended.map(item => item.id)).size === 2
       && recommended.every(item => item.minAppVersion !== '99.0.0' && items.some(candidate => candidate.id === item.id))
