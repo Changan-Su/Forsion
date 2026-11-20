@@ -51,6 +51,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
 - [references/network.md](references/network.md): `ctx.net` (`PluginNetApi`) and manifest `network`: host-side requests for APIs without CORS headers, rules and error codes
 - [references/internals.md](references/internals.md): `ctx.internals` (2026-11-16+, unstable, desktop only): manifest `internals` (read-only copies, subscribe) / `internals-raw` (real host modules), `internalsVerified`, failure cut-off, store review per version.
+- [references/stage.md](references/stage.md): `ctx.stage` demo stage (2026-11-20+, experimental, desktop only): manifest `stage`, isolated Forsion with fixture vault + named plugins, window size / density / theme / clock, full-resolution capture, window recording with pointer, scripted chat replay (`engine.json`), permission prompt, error codes, store review.
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 

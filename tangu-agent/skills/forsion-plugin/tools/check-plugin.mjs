@@ -242,6 +242,20 @@ if (!existsSync(mainFile) && !bundleOnly) { problem(`"main" points at ${mainName
 const src = bundleOnly ? '' : readFileSync(mainFile, 'utf8');
 const lineOf = (offset) => src.slice(0, Math.max(0, offset)).split('\n').length;
 
+// ── 1a. demo stage (ctx.stage, 2026-11-20+): declared before used; no direct calls to the host's internal channels ──
+{
+  const caps = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
+  const usesStage = /\bctx\s*\??\.\s*stage\b/.test(src);
+  const direct = /\bwindow\s*\.\s*tangu\s*\??\.\s*(pluginSandbox|pluginStage)\b/.exec(src);
+  if (usesStage || caps.includes('stage') || direct) {
+    say();
+    say('demo stage (ctx.stage)');
+    if (usesStage && !caps.includes('stage')) problem(`${mainName} uses ctx.stage but "capabilities" does not declare "stage": the host only injects it when declared, so it is undefined here.`);
+    if (direct) problem(`${mainName} calls window.tangu.${direct[1]} directly. That is an internal host channel: use ctx.stage (declare "stage"). Plugins that call it directly do not pass store review.`);
+    if (caps.includes('stage')) ok('declares "stage": desktop only, check `ctx.stage` before use; the first open asks the user, and the official store installs it only after review');
+  }
+}
+
 // ── 1b. internal APIs (ctx.internals, 2026-11-16+): declared before used; no reaching around the host ──────────
 // Static, on the source text: a mention in a comment or a string counts too.
 {

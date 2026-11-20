@@ -458,9 +458,12 @@ export interface PluginBundleInfo {
 /** 需要插件在 manifest 里显式声明才注入的宿主敏感能力(default-deny 白名单)。
  *  `internals` / `internals-raw`(2026-11-16+):明说不稳定的内部口子 `ctx.internals`(只读一级 / 真对象二级),只在本机桌面注入;
  *  二级要和一级一起声明才生效。见 amadeus/plugins/pluginInternals.ts。
- *  `agentImport`(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。 */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw']
+ *  `agentImport`(2026-11-16+):ctx.tangu.createAgent / importSessions —— 新建 Agent、把外部聊天记录写成会话。
+ *  `stage`(2026-11-20+,实验):`ctx.stage` 演示舞台 —— 起一份装着演示库的隔离 Forsion 来截图、录像;只在桌面版注入,第一次用时问用户,
+ *  官方商店里要过审核才装(electron/marketInternals.ts)。
+ */
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw' | 'stage'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw', 'stage']
 
 /** manifest `internalsVerified`(2026-11-16+):作者在哪几版 Forsion 上验过内部接口,只用于插件页标注,不拦。
  *  收字符串或字符串数组,每项是 `主.次` 或 `主.次.补丁`(只比到次版本),最多 8 项;不认识的静默丢。 */

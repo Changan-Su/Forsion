@@ -908,6 +908,8 @@ if (sandboxSelf) {
     self: sandboxSelf,
     action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
     changed: () => ipcRenderer.send('pluginSandbox:changed'),
+    // 演示舞台:渲染层录完的视频交给主进程落盘(只有舞台那份接这条;普通沙箱调了回 null)
+    saveRecording: (bytes: ArrayBuffer, ext: string) => ipcRenderer.invoke('pluginSandbox:saveRecording', bytes, ext),
   }
 } else {
   (api as Record<string, unknown>).pluginSandbox = {
@@ -920,6 +922,10 @@ if (sandboxSelf) {
     install: () => ipcRenderer.invoke('pluginSandbox:install'),
     onChanged: on('pluginSandbox:changed'),
     onReport: on('pluginSandbox:report'),
+  }
+  // 演示舞台(插件的 ctx.stage):宿主的插件入口按插件 id 调;⚠️ 插件代码直接调这里不算正路(手册写明是内部接口)
+  ;(api as Record<string, unknown>).pluginStage = {
+    exec: (pluginId: string, op: string, args: Record<string, unknown>) => ipcRenderer.invoke('pluginStage:exec', pluginId, op, args),
   }
 }
 

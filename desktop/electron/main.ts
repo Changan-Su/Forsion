@@ -22,6 +22,8 @@ import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
+import { parseStageScript, startStageEngine } from './stageEngine'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -166,6 +168,8 @@ setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔�
  *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
 const SANDBOX = sandboxSelf()
 if (SANDBOX) for (const sw of SANDBOX_SWITCHES) app.commandLine.appendSwitch(sw) // 压在底下的沙箱窗口照样出新帧(截图不截到旧画面)
+// 演示舞台:像素密度按参数定,和本机屏幕无关(1440×900 @2 截出来就是 2880×1800,11-20 探针实测)
+if (SANDBOX?.stage) app.commandLine.appendSwitch('force-device-scale-factor', String(SANDBOX.stage.window.scale))
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -1902,17 +1906,22 @@ function createWindow(): void {
   // 置空菜单让 Windows/Linux 与 macOS 观感一致(无窗口内菜单条);文本框的复制/粘贴等由 Chromium 原生处理,不依赖菜单。
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
 
+  // 演示舞台:内容区正好是参数给的尺寸(可以比屏幕大,macOS 不然会把高压到屏幕高);不透明(玻璃在舞台里关掉,截图不透出桌面)
+  const stage = SANDBOX?.stage
+  const stageDark = (SANDBOX?.ui as { storage?: Record<string, string> } | undefined)?.storage?.forsion_theme === 'dark'
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 820,
-    minWidth: 880,
-    minHeight: 600,
+    width: stage ? stage.window.width : 1200,
+    height: stage ? stage.window.height : 820,
+    minWidth: stage ? 640 : 880,
+    minHeight: stage ? 480 : 600,
+    // 尺寸定死:用户拖了 / 最大化了,截出来的就不是参数给的尺寸(Codex 11-20)
+    ...(stage ? { useContentSize: true, enableLargerThanScreen: true, resizable: false, maximizable: false, fullScreenable: false } : {}),
     ...tabTitleBarOptions(),
     autoHideMenuBar: true, // 即便保留了菜单也不在窗口内显示(Alt 不唤出);与置空菜单双保险
     // macOS 系统玻璃必须在建窗时具备透明能力;是否真的启用 vibrancy 由当前主题经 IPC 动态决定。
     // 其他平台保持原来的实色窗口,不改变稳定性/窗口行为。
-    transparent: process.platform === 'darwin',
-    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
+    transparent: process.platform === 'darwin' && !stage,
+    backgroundColor: stage ? (stageDark ? '#1b1b1a' : '#fbf8f5') : process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
     // Let the early HTML paint the saved light/dark splash before showing the native window.
     show: false,
     webPreferences: satelliteWebPreferences(),
@@ -3501,8 +3510,9 @@ app.whenReady().then(async () => {
   const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
   // 插件沙箱只装被测插件 requiresPlugins 点名的内置包:别的(Extend / 日历 / 电脑操作)会把自己的 Space、Ribbon 图标带进来,
   // 沙箱里看到的就不是「只有这一个插件」(11-03 反馈)。旧版沙箱播种过的也撤掉 —— 删的是沙箱自己的 home。
-  const sandboxNeeds = SANDBOX ? await sandboxRequiredPlugins(SANDBOX.dir) : null
-  if (sandboxNeeds && /[\\/]sandbox[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
+  // 演示舞台:点名的插件就是要的那几个(父进程已把用户装的那份包拷进来;随包的更新才替换、不降级)
+  const sandboxNeeds = SANDBOX ? (SANDBOX.stage ? new Set(SANDBOX.stage.plugins) : await sandboxRequiredPlugins(SANDBOX.dir)) : null
+  if (sandboxNeeds && /[\\/](sandbox|stages)[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
   const bundleSources = sandboxNeeds ? allBundleSources.filter((s) => sandboxNeeds.has(s.id)) : allBundleSources
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
@@ -5879,6 +5889,60 @@ if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
 }
 
+// ── 演示舞台(插件的 ctx.stage,pluginStage.ts):插件沙箱那套进程 / 目录隔离的第二个实例,父目录 stages/,闲置 5 分钟自停。
+// 和开发沙箱互不挤占;不广播给沙箱卡(pluginSandbox:changed)、不进 lastShot / 安装 / 重置
+const stageSandbox = SANDBOX ? null : createPluginSandbox({
+  forsionHome: forsionHomeDir,
+  spawn: (args, env) => spawn(process.execPath, args, { env, stdio: 'ignore' }),
+  appArgs: app.isPackaged ? [] : [app.getAppPath()],
+  platform: process.platform,
+  pid: process.pid,
+  ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: {} }), // 不用:舞台的首屏由 open 的参数定
+  onChange: (st) => pluginStage?.onState(st.running),
+  onChildEvent: (ev) => {
+    // 舞台窗口里没有沙箱条:只剩系统投错给它的链接 / 文件要转回来
+    if (ev.event !== 'forward') return
+    if (ev.kind === 'url') { if (isForsionUrl(ev.value) && !routeSpaceWindowLink(ev.value)) deliverDeepLink(ev.value) }
+    else deliverOpenFile(ev.value)
+  },
+  log: (m) => console.log(m.replace('[plugin-sandbox]', '[plugin-stage]')),
+  idleMs: 5 * 60_000,
+  base: 'stages',
+})
+const pluginStage = stageSandbox ? createPluginStage({
+  forsionHome: forsionHomeDir,
+  sandbox: stageSandbox,
+  confirm: async (owner, plugins) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 installFromSandbox):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就当没同意
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return false
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question', title: mt('main.pluginStage.title'),
+      message: mt('main.pluginStage.message', { name: owner.name }),
+      detail: mt('main.pluginStage.detail', { plugins: plugins.length ? plugins.join(', ') : mt('main.pluginStage.none') }),
+      buttons: [mt('main.pluginStage.allow'), mt('main.pluginStage.deny')], defaultId: 0, cancelId: 1, noLink: true,
+    })
+    return response === 0
+  },
+  startEngine: async (script) => {
+    const parsed = parseStageScript(script)
+    if ('error' in parsed) throw new StageError('fixture-invalid', `engine.json: ${parsed.error}`)
+    const token = randomBytes(24).toString('base64url') // 舞台独有:回放服务只认它
+    const e = await startStageEngine(parsed.script, { log: (m) => console.log(`[plugin-stage] ${m}`), token })
+    return { ...e, token }
+  },
+  log: (m) => console.log(m),
+}) : null
+void STAGE_MESSAGES // 文案片段在 pluginStage.ts 注册
+if (pluginStage) {
+  // 插件 id 由宿主的插件入口(ctx.stage)填;插件代码和宿主同一个渲染层,这里只能按 id 认,所以主进程只收 id + 相对路径(见 pluginStage.ts)
+  ipcMain.handle('pluginStage:exec', (e, pluginId: unknown, op: unknown, args: unknown) => {
+    if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
+    return pluginStage.exec(String(pluginId), String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, mainLocale())
+  })
+}
+
 /** 遥测的其余接线(whenReady 里调一次):各窗渲染进程崩溃、引擎意外退出 / 首次就绪、每小时的内存与卡顿、渲染层的上报通道。 */
 function installHostTelemetry(): void {
   // app 级:主窗、独立窗、Mini、浮窗一处都接到(各窗自己的 render-process-gone 只管自愈)
@@ -5942,6 +6006,7 @@ app.on('before-quit', (e) => {
   saveMiniLayouts()
   saveOpenMiniWindows()
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
+  void pluginStage?.dispose() // 舞台同理;回放服务一起关
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   computerUsePip.dispose() // 悬浮小画面跟着退,下次启动也不会回来(它从不落盘)

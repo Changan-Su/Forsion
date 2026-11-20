@@ -115,6 +115,11 @@ registerMessages({
     zh: '这一版插件要直接操作 Forsion 的内部对象，还没通过商店的这项审核，所以没有安装。',
     en: 'This version of the plugin works on Forsion internals directly and hasn\'t passed the store\'s review for that yet, so it wasn\'t installed.',
   },
+  // 演示舞台(2026-11-20+):包声明了 stage,但这一版没过商店审核(先只给首方插件)
+  'market.sources.err.stage-unapproved': {
+    zh: '这一版插件要另起一份 Forsion 来演示和录屏，还没通过商店的这项审核，所以没有安装。',
+    en: 'This version of the plugin starts a separate copy of Forsion for demos and recordings and hasn\'t passed the store\'s review for that yet, so it wasn\'t installed.',
+  },
   'market.sources.err.npm-version': { zh: 'npm 上找不到目录写的那个版本。', en: 'The version named in the catalog isn\'t on npm.' },
 })
 
@@ -124,6 +129,7 @@ const ERROR_CODES: Array<[RegExp, string]> = [
   [/install: duplicate path in archive/, 'duplicate-path'],
   [/install: plugin id taken/, 'plugin-id-taken'],
   [/install: internals-raw-unapproved/, 'internals-raw-unapproved'],
+  [/install: stage-unapproved/, 'stage-unapproved'],
   [/install: package checksum mismatch/, 'checksum'],
   [/install: package folder not found/, 'folder-missing'],
   [/resolve: npm version not found/, 'npm-version'],
