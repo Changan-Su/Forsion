@@ -13,7 +13,7 @@ export interface VoiceInputEndpoint {
 /** 本机离线模型(SenseVoice):不连网,主进程自己边收边解(asrLocalStream.ts)。`decoder()` 备好模型后交出解码函数。 */
 export interface LocalVoiceInputEndpoint {
   local: true
-  decoder(): Promise<(samples: Float32Array) => Promise<string>>
+  decoder(): Promise<(samples: Float32Array, wanted: () => boolean) => Promise<string>>
 }
 
 /** Only match the documented vendor protocol on vendor hosts. */
