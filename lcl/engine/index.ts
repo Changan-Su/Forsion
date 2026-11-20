@@ -51,6 +51,7 @@ export type { PinnedViews } from './pinnedViews'
 export { useNav, recordNav, remapNav, type NavRestoreContext } from './navStore'
 export type { NavEntry } from './navStore'
 export { useStatusStore, addStatusItem, removeStatusItem } from './statusRegistry'
+export { setEdgeAccessory } from './edgeAccessory'
 export { StatusBar, arrangeStatusItems } from './StatusBar'
 export {
   loadLayout,
