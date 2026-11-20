@@ -18,14 +18,8 @@ export const QUOTA_ENTRIES = ['chat-banner', 'run-error', 'run-toast', 'avatar-m
 export type QuotaEntry = typeof QUOTA_ENTRIES[number]
 /** 表里的入口原样;别的(含 undefined)→ undefined,调用方据此**不带**这个参数(老接收方看到的参数个数和原来一样)。 */
 export const quotaEntry = (v: unknown): QuotaEntry | undefined => (typeof v === 'string' && (QUOTA_ENTRIES as readonly string[]).includes(v) ? v as QuotaEntry : undefined)
-/**
- * 通道参数末尾追加 entry(契约 §16 新旧混跑):合法才追加,否则原样 —— 老接收方(老 Extend)看到的参数个数和原来一样。
- * `account:useResetCard(type?, entry?)` / `account:bgConvert(percent, entry?)` / `account:bgAutoMain(enabled, entry?)` / `account:pointsAutoDeduct(enabled, entry?)`。
- */
-export function withEntry(args: readonly unknown[], entry: unknown): unknown[] {
-  const e = quotaEntry(entry)
-  return e ? [...args, e] : [...args]
-}
+// 其余额度通道 `account:useResetCard('both', entry?)` / `account:bgConvert(percent, entry?)` / `account:bgAutoMain(enabled, entry?)` /
+// `account:pointsAutoDeduct(enabled, entry?)`:调用方把 entry 写在末尾,preload 原样转;老 Extend 只看第一个参数,新 Extend 对表外的当没给。
 /** `auth:openPayCenter` 的通道参数:Extend 的老签名是 (tab?, plan?, period?),entry 排第 4 位;没有合法 entry 就一个参数都不带(同原来)。 */
 export function payCenterArgs(opts?: { entry?: unknown } | null): unknown[] {
   const e = quotaEntry(opts?.entry)

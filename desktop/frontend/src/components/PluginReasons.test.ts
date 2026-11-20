@@ -68,6 +68,16 @@ describe('ReasonSwitch:拨下先问理由', () => {
     await click(host.querySelector('[role="switch"]'))
     expect(parseFloat((pop() as HTMLElement).style.top)).toBe(vh - 30 - 6 - 100)
   })
+  it('没有遥测通道(网页 / 手机 / 没装载 Extend):不问,一拨就关;卸载框里不画理由', async () => {
+    delete (window as unknown as { tangu?: unknown }).tangu
+    const onChange = vi.fn()
+    await render(React.createElement(ReasonSwitch, { checked: true, label: 'X', onChange }))
+    await click(host.querySelector('[role="switch"]'))
+    expect(onChange).toHaveBeenCalledWith(false)
+    expect(pop()).toBeNull()
+    await render(React.createElement(UninstallReasonChips, { value: null, onChange: () => {} }))
+    expect(host.querySelector('[data-uninstall-reasons]')).toBeNull()
+  })
   it('取消 / 点别处 = 不关(开关照旧开着,什么都不报)', async () => {
     const onChange = vi.fn()
     await render(React.createElement(ReasonSwitch, { checked: true, label: 'X', onChange }))

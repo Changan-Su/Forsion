@@ -6,7 +6,7 @@
  * 下面的 old* 是 Forsion-Extend src/core/channels.ts(origin/main,2026-11-20)那几条 handler 的参数校验原样搬过来的。
  */
 import { describe, expect, it } from 'vitest'
-import { invokePayCenter, payCenterArgs, quotaEntry, withEntry, QUOTA_ENTRIES } from './telemetryKeys'
+import { invokePayCenter, payCenterArgs, quotaEntry, QUOTA_ENTRIES } from './telemetryKeys'
 
 const PAY_TABS = ['membership', 'credits', 'storefront'] as const
 const PAY_PLAN_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -52,19 +52,19 @@ describe('新调用方 × 老 Extend:entry 追加在末尾,老接收方照常成
     expect(oldOpenPayCenter({ entry: 'chat-banner' })).toEqual({ ok: false, error: 'invalid_tab' })
     expect(oldOpenPayCenter(null, null, null, 'chat-banner')).toEqual({ ok: false, error: 'invalid_tab' })
   })
-  it('useResetCard / bgConvert / bgAutoMain / pointsAutoDeduct:多一个末位参数,老接收方照常', () => {
-    expect(oldUseResetCard(...withEntry(['both'], 'avatar-menu'))).toEqual({ status: 200, body: { type: 'both' } })
-    expect(oldUseResetCard(...withEntry([undefined], 'avatar-menu'))).toEqual({ status: 200, body: { type: 'both' } })
-    expect(oldBgConvert(...withEntry([10], 'chat-banner'))).toEqual({ status: 200, body: { percent: 10 } })
-    expect(oldBoolSwitch(...withEntry([true], 'quota-page'))).toEqual({ status: 200, body: { enabled: true } })
+  it('useResetCard / bgConvert / bgAutoMain / pointsAutoDeduct:调用方把 entry 写在末尾、preload 原样转,老接收方照常', () => {
+    // 这几处调用点原样(QuotaAdvisoryBanner / AccountCard / pointsAutoDeduct):第一个参数写明,entry 跟在后面
+    expect(oldUseResetCard('both', 'avatar-menu')).toEqual({ status: 200, body: { type: 'both' } })
+    expect(oldUseResetCard(undefined, 'avatar-menu')).toEqual({ status: 200, body: { type: 'both' } })
+    expect(oldBgConvert(10, 'chat-banner')).toEqual({ status: 200, body: { percent: 10 } })
+    expect(oldBoolSwitch(true, 'quota-page')).toEqual({ status: 200, body: { enabled: true } })
+    // 防烧卡:带 entry 时第一个参数绝不能是 null(老 / 新接收方都回 400)
+    expect(oldUseResetCard(null, 'avatar-menu').status).toBe(400)
   })
-  it('没有 entry / 表外的 entry:参数和原来逐个相同(一个都不多)', () => {
+  it('没有 entry / 表外的 entry:openPayCenter 一个参数都不多带', () => {
     expect(payCenterArgs()).toEqual([])
     expect(payCenterArgs({ entry: 'nope' })).toEqual([])
     expect(payCenterArgs({ entry: undefined })).toEqual([])
-    expect(withEntry(['both'], undefined)).toEqual(['both'])
-    expect(withEntry([10], 'made-up')).toEqual([10])
-    expect(withEntry([true], 42)).toEqual([true])
   })
 })
 

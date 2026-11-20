@@ -334,13 +334,7 @@ async function main() {
     assert.equal(sentCrash.props.message, undefined, 'no message field')
     assert.match(sentCrash.props.stack || '', /^\s+at /, 'stack keeps frames only')
     console.log(`sink (launch 1): ${sink.batches.length} batch(es), events ${JSON.stringify(all.map((e) => e.event))}`)
-    // v3 新事件:Extend 白名单 ≥ 3 才认;老 Extend 一条都不混进批次(第一跳里能有的是 first_run / plugin_inventory)
-    if (schemaV >= 3) {
-      assert.equal(got('first_run').length, 1, 'first_run arrived')
-      assert.ok(got('plugin_inventory').length >= 2, 'plugin_inventory arrived')
-    } else {
-      assert.equal(got('first_run').length + got('plugin_inventory').length, 0, `old Extend (schema ${schemaV}) drops v3 events: ${JSON.stringify(all.map((e) => e.event))}`)
-    }
+    // v3 新事件(first_run / plugin_inventory 在 ④b 才交出,赶不赶得上第一跳看机器快慢):两次启动的批次合起来再核
 
     // ⑦ 退出 → 计数落进 Extend 的队列 → 再起一次,第一跳带上
     await app.close(); app = null
@@ -367,11 +361,22 @@ async function main() {
     assert.ok(startup && startup.props.startupMs > 0, `second launch startup: ${JSON.stringify(startup?.props)}`)
     console.log(`sink (launch 2): ${JSON.stringify(all2.map((e) => `${e.event}:${e.props.kind || e.props.id || ''}`))}`)
     console.log(`app_counts: ${JSON.stringify(sentCounts[0].props)}`)
+    const both = [...all, ...all2]
+    const v3 = (event) => both.filter((e) => e.event === event)
     if (schemaV >= 3) {
-      assert.ok(all2.some((e) => e.event === 'quota_prompt' && e.props.entry === 'chat-banner' && e.props.shown === 2), 'quota_prompt arrived')
-      assert.ok(all2.some((e) => e.event === 'model_feedback' && e.props.regenerate === 2), 'model_feedback arrived')
+      // Extend 白名单 ≥ 3:四种都到了,形状是 Extend 收紧过的(本地插件只剩个数、模型 id 按来源公开)
+      assert.equal(v3('first_run').length, 1, 'first_run arrived once')
+      assert.equal(v3('first_run')[0].props.outcome, 'done')
+      const inv = v3('plugin_inventory').map((e) => e.props)
+      assert.ok(inv.some((x) => x.id === 'local' && x.localCount >= 1) && inv.some((x) => x.id === 'forsion-calendar-engine' && x.source === 'builtin'), `plugin_inventory arrived: ${JSON.stringify(inv)}`)
+      assert.ok(!JSON.stringify(inv).includes('my-own-engine-plugin'), 'local plugin id not sent')
+      assert.deepEqual(v3('quota_prompt').map((e) => e.props), [{ entry: 'chat-banner', shown: 2, upgrade: 1 }], 'quota_prompt arrived')
+      assert.deepEqual(v3('model_feedback').map((e) => e.props), [{ modelId: 'cloud-1', providerKind: 'byok', regenerate: 2, stop: 1 }], 'model_feedback arrived')
+      console.log(`v3 at the sink: first_run ${JSON.stringify(v3('first_run')[0].props)}; plugin_inventory ${inv.length}; quota_prompt / model_feedback ok`)
     } else {
-      assert.ok(!all2.some((e) => e.event === 'quota_prompt' || e.event === 'model_feedback'), `old Extend (schema ${schemaV}) drops v3 aggregates`)
+      // 老 Extend:宿主推来的 v3 事件不在它的 HOST_EVENTS 里,一条都不混进批次
+      const leaked = both.filter((e) => ['first_run', 'plugin_inventory', 'quota_prompt', 'model_feedback'].includes(e.event))
+      assert.equal(leaked.length, 0, `old Extend (schema ${schemaV}) drops v3 events: ${JSON.stringify(leaked.map((e) => e.event))}`)
     }
     console.log(`extend ${version}; screenshots → ${OUT || '(none)'}`)
   } finally {
