@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveDeskPath, isDuplicateShow, replaceTop, deskItemFor, extractStreamingString, extractLiveBody, findLiveEdit, packDeskMap, unpackDeskMap } from './deskPlan'
+import { resolveDeskPath, isDuplicateShow, replaceTop, deskItemFor, extractStreamingString, extractLiveBody, findLiveEdit, packDeskMap, unpackDeskMap, sameDeskFile, placeLiveItem, liveDeskPath, type DeskItem } from './deskPlan'
 
 describe('resolveDeskPath', () => {
   it('绝对路径原样通过(posix + windows)', () => {
@@ -116,5 +116,71 @@ describe('replaceTop', () => {
   it('替换顶格,保留第二格,丢弃更多', () => {
     expect(replaceTop([a, b], c)).toEqual([c, b])
     expect(replaceTop([a], c)).toEqual([c])
+  })
+  const notes = deskItemFor('/p/notes.txt', 10)
+  const reportOld = deskItemFor('/p/report.md', 11)
+  const reportNew = deskItemFor('/p/report.md', 20)
+  const liveReport: DeskItem = { key: 'live:t1', path: '/p/report.md', name: 'report.md', at: 12, live: { msgId: 'm', toolId: 't1', tool: 'write_file' } }
+  it('第二格是同一份文件的旧版 → 不留旧版,改留原顶格', () => {
+    expect(replaceTop([notes, reportOld], reportNew)).toEqual([reportNew, notes])
+  })
+  it('第二格不是同一份文件 → 照旧保留第二格', () => {
+    expect(replaceTop([reportOld, notes], reportNew)).toEqual([reportNew, notes])
+  })
+  it('原顶格是直播格 / 也是这同一份文件 → 只剩一格', () => {
+    expect(replaceTop([liveReport, reportOld], reportNew)).toEqual([reportNew])
+    expect(replaceTop([reportOld, deskItemFor('/p/report.md', 5)], reportNew)).toEqual([reportNew])
+  })
+  it('没有 path 的条目(view / 插件工具卡)永不算同一份', () => {
+    const v1: DeskItem = { key: 'view:cal@1:0', path: '', name: '日历', at: 1, view: { type: 'calendar' } }
+    const tool: DeskItem = { key: 'tool:c1', path: '', name: '卡片', at: 2, tool: { callId: 'c1' } }
+    const tool2: DeskItem = { key: 'tool:c2', path: '', name: '卡片 2', at: 3, tool: { callId: 'c2' } }
+    expect(replaceTop([notes, v1], tool)).toEqual([tool, v1])
+    expect(replaceTop([v1, tool], tool2)).toEqual([tool2, tool])
+    expect(replaceTop([notes, tool], reportNew)).toEqual([reportNew, tool])
+  })
+})
+
+describe('sameDeskFile', () => {
+  it('path 非空且相等才算同一份', () => {
+    expect(sameDeskFile(deskItemFor('/a', 1), deskItemFor('/a', 2))).toBe(true)
+    expect(sameDeskFile(deskItemFor('/a', 1), deskItemFor('/b', 2))).toBe(false)
+    expect(sameDeskFile({ key: 'v1', path: '', name: 'x', at: 1, view: { type: 'x' } }, { key: 't1', path: '', name: 'y', at: 1, tool: { callId: 'c' } })).toBe(false)
+    expect(sameDeskFile(undefined, deskItemFor('/a', 1))).toBe(false)
+  })
+})
+
+describe('placeLiveItem(直播格上台 / 更新)', () => {
+  const live = (toolId: string, path: string): DeskItem => ({ key: `live:${toolId}`, path, name: path ? path.split('/').pop()! : '…', at: 30, live: { msgId: 'm', toolId, tool: 'write_file' } })
+  const notes = deskItemFor('/p/notes.txt', 10)
+  const reportOld = deskItemFor('/p/report.md', 11)
+  it('新直播格进顶格:第二格是同一份文件 → 改留原顶格', () => {
+    expect(placeLiveItem([notes, reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md'), notes])
+  })
+  it('没路径的直播格进顶格:第二格照留', () => {
+    expect(placeLiveItem([notes, reportOld], live('t1', ''))).toEqual([live('t1', ''), reportOld])
+  })
+  it('同一次调用的直播格路径就位:原地替换,下格不同文件照留', () => {
+    expect(placeLiveItem([live('t1', ''), notes], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md'), notes])
+  })
+  it('同一次调用的直播格路径就位:下格正是这份文件的旧版 → 只剩直播格', () => {
+    expect(placeLiveItem([live('t1', ''), reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md')])
+  })
+  it('顶格是别的调用的直播格 → 按 replaceTop 顶替(被顶替的直播不落到第二格)', () => {
+    expect(placeLiveItem([live('t0', '/p/report.md'), reportOld], live('t1', '/p/report.md'))).toEqual([live('t1', '/p/report.md')])
+  })
+})
+
+describe('liveDeskPath(直播格只认闭合的路径)', () => {
+  it('路径还没流完 → null', () => {
+    expect(liveDeskPath('{"path": "/Users/fo', '/cwd')).toBeNull()
+    expect(liveDeskPath('{"path": "/', '/cwd')).toBeNull()
+    expect(liveDeskPath('{"path": "/a\\', '/cwd')).toBeNull()
+    expect(liveDeskPath('{"pa', '/cwd')).toBeNull()
+  })
+  it('闭合后给完整路径;相对路径拼 cwd,无 cwd → null', () => {
+    expect(liveDeskPath('{"path": "/Users/foo/draft.md", "content": "x', '/cwd')).toBe('/Users/foo/draft.md')
+    expect(liveDeskPath('{"path": "src/a.ts"', '/cwd')).toBe('/cwd/src/a.ts')
+    expect(liveDeskPath('{"path": "src/a.ts"', undefined)).toBeNull()
   })
 })

@@ -72,9 +72,35 @@ export function isDuplicateShow(top: DeskItem | undefined, path: string, now: nu
   return !!top && top.path === path && now - top.at < windowMs
 }
 
-/** 自动上台只替换顶格,保留 agent 显式摆的第二格。 */
+/** 两个条目是不是同一份文件:path 非空且相等。view 条目、插件工具卡条目的 path 是空串,永不算同一份。 */
+export function sameDeskFile(a: DeskItem | undefined, b: DeskItem | undefined): boolean {
+  return !!a?.path && a.path === b?.path
+}
+
+/** 自动上台只替换顶格,第二格(agent 显式摆的 / 用户经 ▾ 换下去的)照旧保留 ——
+ *  除非第二格正是新条目这份文件的旧版:两格不演同一份文件,改留原顶格;原顶格也是这份文件、
+ *  或是直播格(被顶替的直播不落到第二格)→ 只剩一格。 */
 export function replaceTop(items: DeskItem[] | undefined, item: DeskItem): DeskItem[] {
-  return [item, ...(items || []).slice(1, 2)]
+  const [top, second] = items || []
+  if (!second) return [item]
+  if (!sameDeskFile(second, item)) return [item, second]
+  return top && !top.live && !sameDeskFile(top, item) ? [item, top] : [item]
+}
+
+/** 直播格上台 / 更新:顶格已是同一次调用(同 toolId)的直播格 → 原地换掉(key 不变不重挂),其余照留;
+ *  路径刚就位时下格若正是这份文件的旧版,不留(同 replaceTop 的同文件规则)。否则按 replaceTop 进顶格。 */
+export function placeLiveItem(items: DeskItem[] | undefined, item: DeskItem): DeskItem[] {
+  const cur = items || []
+  return item.live && cur[0]?.live?.toolId === item.live.toolId
+    ? [item, ...cur.slice(1).filter((x) => !sameDeskFile(x, item))]
+    : replaceTop(cur, item)
+}
+
+/** 直播格的目标路径:path 字段闭合(done)之前不认 —— 路径分段流出时,前半截会被当成完整路径钉进
+ *  条目且再也不更新(「正在编辑 fo」)。没闭合 / 定位不了 → null。 */
+export function liveDeskPath(args: string, cwd?: string): string | null {
+  const raw = extractStreamingString(args, 'path')
+  return raw?.done ? resolveDeskPath(raw.value, cwd) : null
 }
 
 export function deskItemFor(path: string, now: number, name?: string): DeskItem {
