@@ -16,10 +16,11 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
-import { isLatestAnswer, turnHasOutput } from './continueTurn'
+import { isInterruptedRunError, isLatestAnswer, isLatestRow, turnHasOutput } from './continueTurn'
+import { isInflightTool } from '../../tangu/inflightTool'
 import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
-import { TURN_RESUME_OPEN, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { TURN_RESUME_OPEN, parseAutoResume, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -157,6 +158,12 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     tools = []
   }
   for (const [i, ev] of events.entries()) {
+    // 断在半截的调用(没开始 / 结果未知,见 inflightTool.ts):只进通用过程行画成灰色一步,不出任何结果卡(那些卡会把它当成功)
+    if (isInflightTool(ev)) {
+      if (gitRun.length) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] } // 前面跑完的几步 git 照样收口出卡
+      tools.push(ev)
+      continue
+    }
     if (ev.name === 'intelligent_ui') {
       // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
       // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
@@ -286,6 +293,19 @@ registerMessages({
   'chat.lengthResumed': { zh: '回答较长，写到长度上限后自动接着写了一次。', en: 'This reply was long; it hit the length limit and was continued once automatically.' },
   'chat.regenerateTip': { zh: '删掉这一轮，从你的消息重新生成', en: 'Discard this turn and regenerate from your message' },
   'msg.resumed': { zh: '从这里继续生成', en: 'Continued from here' },
+  // 不是用户按停的中断(中断任务续跑方案 B 第 7、8 节):⏸ = 没自动接着做,给「继续生成」;↻ = 引擎重启后已经自动接着做了
+  'msg.interruptedBy.appQuit': { zh: '应用退出时这一轮还没做完', en: 'This task was cut off when the app quit' },
+  'msg.interruptedBy.appUpdate': { zh: '更新打断了这一轮', en: 'An update interrupted this task' },
+  'msg.interruptedBy.engineRestart': { zh: '引擎重启打断了这一轮', en: 'The engine restarted mid-task' },
+  'msg.interruptedBy.accountChange': { zh: '切换账号打断了这一轮', en: 'Switching accounts interrupted this task' },
+  'msg.interruptedBy.engineStop': { zh: '引擎被停止，这一轮还没做完', en: 'The engine was stopped before this task finished' },
+  'msg.interruptedBy.crash': { zh: '引擎意外退出，这一轮还没做完', en: 'The engine stopped unexpectedly before this task finished' },
+  'msg.interruptedBy.workerRestart': { zh: '服务重启打断了这一轮', en: 'A server restart interrupted this task' },
+  'msg.autoResumed.appQuit': { zh: '应用退出时这一轮还没做完，已接着做', en: 'The app quit mid-task — picked up where it left off' },
+  'msg.autoResumed.appUpdate': { zh: '更新打断了这一轮，已接着做', en: 'An update interrupted this task — picked up where it left off' },
+  'msg.autoResumed.engineRestart': { zh: '引擎重启打断了这一轮，已接着做', en: 'The engine restarted mid-task — picked up where it left off' },
+  'msg.autoResumed.crash': { zh: '引擎意外退出，已接着做', en: 'The engine stopped unexpectedly — picked up where it left off' },
+  'msg.autoResumed.workerRestart': { zh: '服务重启打断了这一轮，已接着做', en: 'A server restart interrupted this task — picked up where it left off' },
   'chat.copyError': { zh: '复制错误', en: 'Copy error' },
   'rewind.title': { zh: '回退到这条消息', en: 'Rewind to this message' },
   'rewind.counting': { zh: '正在统计改动…', en: 'Counting changes…' },
@@ -398,12 +418,51 @@ export interface MessageHandlers {
   onContinue?: (reason?: TurnResumeReason) => void
 }
 
+/** 中断原因 → 文案 key(模块作用域只存 key,渲染期再 t())。↻ 只有能自动续的几种有文案,其余落回「从这里继续生成」。 */
+const INTERRUPTED_LINE: Record<InterruptReason, string> = {
+  app_quit: 'msg.interruptedBy.appQuit', app_update: 'msg.interruptedBy.appUpdate', engine_restart: 'msg.interruptedBy.engineRestart',
+  account_change: 'msg.interruptedBy.accountChange', engine_stop: 'msg.interruptedBy.engineStop', crash: 'msg.interruptedBy.crash',
+  worker_restart: 'msg.interruptedBy.workerRestart',
+}
+const AUTO_RESUMED_LINE: Partial<Record<InterruptReason, string>> = {
+  app_quit: 'msg.autoResumed.appQuit', app_update: 'msg.autoResumed.appUpdate', engine_restart: 'msg.autoResumed.engineRestart',
+  crash: 'msg.autoResumed.crash', worker_restart: 'msg.autoResumed.workerRestart',
+}
+export const interruptedLineKey = (reason: InterruptReason): string => INTERRUPTED_LINE[reason]
+export const autoResumedLineKey = (reason: InterruptReason): string => AUTO_RESUMED_LINE[reason] || 'msg.resumed'
+
+/**
+ * 带原因的中断行(<turn_interrupted>\n[reason: …],引擎重启后没自动接着做时插的):一条说明原因的细线(⏸,同「已在此处打断」那条的样式),
+ * 它是会话最后一行、会话没在跑时下面给「继续生成」(这一轮有产出)或「重试」(什么都还没产出,两者此时等价)。
+ * 「继续生成」发的 <turn_resume> 带同一个原因:告诉模型不是用户停的。
+ */
+function InterruptedLine({ msg, reason, sessionId, handlers, rootRef }: { msg: UiMessage; reason: InterruptReason; sessionId?: string; handlers?: MessageHandlers; rootRef?: Ref<HTMLDivElement> }) {
+  const { t } = useI18n()
+  const can = useApp((s) => !!sessionId && !s.runningBySession[sessionId] && isLatestRow(s.messagesBySession[sessionId], msg.id))
+  const hasOutput = useApp((s) => can && turnHasOutput(s.messagesBySession[sessionId!]))
+  const canContinue = can && hasOutput && !!handlers?.onContinue
+  const canRetry = can && !hasOutput && !!handlers?.onRetry
+  return (
+    <div ref={rootRef}>
+      <div className="t2-sys t2-interrupted" data-interrupted={reason}>⏸ {t(interruptedLineKey(reason))}</div>
+      {(canContinue || canRetry) && (
+        <div className="t2-retry-row t2-interrupted-actions">
+          {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!(reason)}><StepForward size={13} />{t('chat.continue')}</button>}
+          {canRetry && <button type="button" className="t2-retry-btn lead" data-testid="msg-retry" onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.retry')}</button>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** 停在半截、但不是出错的两种(11-15,借鉴 DeepSeek chat-demo 方案 ①):用户按了停止 / 写到输出上限(引擎自动接过一次仍停在半句)。
  *  原因一行照「⏹ 已停止」的灰字;按钮行照出错那一行(RunErrorRow)。按钮只在这是会话最后一条回答、没在跑、这一轮有产出时出;
  *  停下的只给「继续生成」(「重新生成」悬停操作条里已有),截断的再给「重新生成」。 */
 function HaltRow({ msg, sessionId, handlers }: { msg: UiMessage; sessionId?: string; handlers?: MessageHandlers }) {
   const { t } = useI18n()
-  const kind: TurnResumeReason | null = msg.status === 'stopped' ? 'stopped' : msg.status === 'done' && msg.truncated ? 'length' : null
+  // 不是用户按停的中断(error = interrupted:<原因>):不说「已停止」,也不给会告诉模型「用户停的」那个「继续生成」——
+  // 引擎重启后会补一行说明原因的线(自动接着做,或在那一行上给「继续生成」)
+  const kind: TurnResumeReason | null = msg.status === 'stopped' ? (isInterruptedRunError(msg.error) ? null : 'stopped') : msg.status === 'done' && msg.truncated ? 'length' : null
   const can = useApp((s) => !!kind && !!sessionId && !s.runningBySession[sessionId]
     && isLatestAnswer(s.messagesBySession[sessionId], msg.id) && turnHasOutput(s.messagesBySession[sessionId]))
   if (!kind) return null
@@ -703,11 +762,16 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 打断标记(引擎中止时落库的 <turn_interrupted> user 行):给模型看的机器行,对人渲染成一条
     // 轻分隔线,不摆成用户气泡(它不是用户「说」的话)。↑ 历史召回处已同规则滤除。
     if (msg.content.startsWith('<turn_interrupted>')) {
+      // 带原因的(不是用户按停的,中断任务续跑方案 B):说原因 + 「继续生成」;用户按停留下的老式标记照旧
+      const reason = parseInterruptedNotice(msg.content)
+      if (reason) return <InterruptedLine msg={msg} reason={reason} sessionId={runSid} handlers={handlers} rootRef={rootRef} />
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
     }
-    // 「继续生成」行(<turn_resume>,用户点失败行上的「继续生成」发的):同一种轻分隔线,标出续写从哪接上
+    // 「继续生成」行(<turn_resume>,用户点失败行上的「继续生成」发的):同一种轻分隔线,标出续写从哪接上。
+    // 引擎重启后自动接着做插的那一行(第二行 [auto-resume: <原因>])按原因说清是哪种中断、已经接着做了
     if (msg.content.startsWith(TURN_RESUME_OPEN)) {
-      return <div ref={rootRef} className="t2-sys t2-interrupted" data-turn-resume="">↻ {t('msg.resumed')}</div>
+      const auto = parseAutoResume(msg.content)
+      return <div ref={rootRef} className="t2-sys t2-interrupted" data-turn-resume={auto || ''}>↻ {t(auto ? autoResumedLineKey(auto) : 'msg.resumed')}</div>
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。

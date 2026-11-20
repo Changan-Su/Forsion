@@ -35,7 +35,9 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
-import { turnResumeMarker, isContinuationRow, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { turnResumeMarker, isContinuationRow, isInterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { inflightFromResult, markUnfinishedInflight } from '../inflightTool'
+import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -166,9 +168,12 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     msg.toolEvents = r.tool_calls.map((c: any) => {
       const res = results.get(c.id)
       const rawOffset = c.ui_content_offset
+      // 引擎边跑边落库的占位(断在半截:没开始 / 结果未知,见 inflightTool.ts):不当成功(result 留空)也不当报错,挂 inflight 画成灰色一步
+      const inflight = inflightFromResult(res)
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
-        result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
+        result: res && !inflight ? String(res.content ?? '') : undefined, isError: (!inflight && res?.isError) || false,
+        ...(inflight ? { inflight } : {}),
         ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
         ...(sourcesOfResult(c.function?.name || c.name, res) ?? {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
@@ -208,6 +213,8 @@ export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp
   const out = [...ui]
   for (const f of failed) {
     if (!f?.assistant_message_id) continue
+    // 不是用户按停的中断(interrupted:<原因>)不是失败:引擎会在后面补一行说明原因 / 自动接着做,这里不画红色失败行
+    if (isInterruptedRunError(f.error)) continue
     const error = f.error || 'error'
     const i = out.findIndex((m) => m.id === f.assistant_message_id)
     if (i >= 0) {
@@ -1844,15 +1851,22 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         if (!get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
         else clearSuggestion(sessionId)
         break
-      case 'error':
+      case 'error': {
         clearEngineNotices(set, sessionId)
+        // 不是用户按停的中断(退出 / 更新 / 引擎重启 / 换账号,中断任务续跑方案 B):引擎带 interrupted:<原因>。
+        // 不当用户停下(不画「⏹ 已停止」+「继续生成」)、也不当失败(不画红色失败行):气泡安静收住,
+        // 没等到结果的工具调用记成「结果未知」;引擎重启后会补一行说明原因 / 自动接着做(pollSession 拉回来)。
+        const interrupted = isInterruptReason(pl.interrupted) ? pl.interrupted : pl.error === 'interrupted' ? null : undefined
+        const quiet = interrupted !== undefined
+        const aborted = !!pl.aborted || quiet
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
-            ? { ...m, content: get().tr(pl.aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: pl.aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
+            ? { ...m, content: get().tr(aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
-          status: pl.aborted ? ('stopped' as const) : ('error' as const),
-          error: pl.aborted ? undefined : (pl.error || 'error'),
+          status: aborted ? ('stopped' as const) : ('error' as const),
+          error: quiet ? interruptedRunError(interrupted) : aborted ? undefined : (pl.error || 'error'),
+          ...(quiet ? { toolEvents: markUnfinishedInflight(m.toolEvents) } : {}),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
@@ -1861,18 +1875,19 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         clearSuggestion(sessionId)
         // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
         // 记下它可能过时了:用户登录之后再打开模型菜单,就让引擎重新探测(这时当场取没用:多半还没登录)。
-        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) {
+        if (!aborted && isEngineModelNoApiKey(pl.error)) {
           const cfg = sessionConfigBaseOf(get(), sessionId)
           get().ensureEngineCaps(cfg?.engineId || cfg?.soloEngineId, 'stale') // 私聊会话两样都存着,以防只剩身份键
         }
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
-        if (!pl.aborted && get().authInfo?.loggedIn) {
+        if (!aborted && get().authInfo?.loggedIn) {
           void window.tangu?.authStatus?.()
             .then((a) => { if (a?.loggedIn && a.tokenValid === false) get().handleAuthExpired() })
             .catch(() => {})
         }
         break
+      }
       case 'subchat': {
         const id = String(pl.id || '')
         const kind = pl.kind === 'discussion' ? 'discussion' : 'subagent'
@@ -2100,14 +2115,27 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       try { active = await listActiveRuns(targetForSession(sessionId), sessionId) } catch { return }
       if (active.some((r) => r.id === runId && (r.status === 'running' || r.status === 'queued' || !r.status))) return
       // 后端已不跑此 run,但 UI 还卡 streaming → 重载消息收尾。
+      // 引擎把它记成了失败 / 中断(D4):不能因为有半截正文就标「完成」—— 失败照引擎记的原因画失败行,中断照在线时那样安静收住。
+      const recorded = active.find((r) => r.id === runId)?.status
       let rec: any
-      try { rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current) } catch { return }
+      let failedError: string | undefined
+      try {
+        if (recorded === 'failed') {
+          const h = await api.listHistory(targetForSession(sessionId), sessionId)
+          rec = h.messages.find((r: any) => r.id === assistantRef.current)
+          failedError = h.failedRuns.find((f) => f.assistant_message_id === assistantRef.current)?.error || undefined
+        } else {
+          rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current)
+        }
+      } catch { return }
       if (ac.signal.aborted || stoppedRuns.has(runId) || get().runningBySession[sessionId] !== runId) return
       // Persisted content is authoritative. Flush BEFORE applying it: aborting after the
       // snapshot must not append an already-persisted buffered delta a second time.
       events.flush()
       get().patchMessage(sessionId, assistantRef.current, (m) => {
         const content = rec?.content || m.content
+        if (recorded === 'interrupted') return { ...m, content, status: 'stopped' as const, error: interruptedRunError(), toolEvents: markUnfinishedInflight(m.toolEvents) }
+        if (recorded === 'failed') return { ...m, content, status: 'error' as const, error: failedError || get().tr('app.eventStreamInterrupted') }
         return content
           ? { ...m, content, status: 'done' as const }
           : { ...m, status: 'error' as const, error: get().tr('app.eventStreamInterrupted') }
@@ -3156,10 +3184,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         } else {
           set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).map((m) =>
             m.status === 'streaming' ? { ...m, live: undefined, ...endThink(m),
-              status: status === 'aborted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
+              // 用户按了停、引擎恰好把它记成 interrupted(停的同时退出 / 重启了引擎):照用户停下画
+              status: status === 'aborted' || status === 'interrupted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
               ...(status === 'failed' ? { error: translate('agentrun.stopUnconfirmed') } : {}),
             } : m) } }))
-          endRun(set, get, sid, runId, status === 'aborted' ? 'aborted' : 'failed')
+          endRun(set, get, sid, runId, status === 'aborted' || status === 'interrupted' ? 'aborted' : 'failed')
         }
         return status !== 'failed'
       } catch (e: unknown) {
