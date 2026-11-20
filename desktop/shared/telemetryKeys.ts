@@ -31,6 +31,17 @@ export function payCenterArgs(opts?: { entry?: unknown } | null): unknown[] {
   const e = quotaEntry(opts?.entry)
   return e ? [undefined, undefined, undefined, e] : []
 }
+/**
+ * 开付款页:带上 entry 发一次;接收方回 { ok: false, error: 'invalid_*' }(口径对不上)就立刻不带 entry 再开一次 ——
+ * 升级按钮绝不因为遥测参数失效。没带 entry 的那次原样返回。invoke = 往 auth:openPayCenter 发、参数原样转。
+ */
+export async function invokePayCenter<R>(invoke: (...args: unknown[]) => Promise<R>, opts?: { entry?: unknown } | null): Promise<R> {
+  const args = payCenterArgs(opts)
+  const r = await invoke(...args)
+  const o = r as { ok?: unknown; error?: unknown } | null | undefined
+  if (args.length && o?.ok === false && typeof o.error === 'string' && o.error.startsWith('invalid_')) return invoke()
+  return r
+}
 /** 匿名计数 quota_prompt 的入口(telemetry-schema.json events.quota_prompt.entry;比上表少 agent-tool / backpack —— 那两处没有提示可露出)。 */
 export const QUOTA_PROMPT_ENTRIES = ['chat-banner', 'run-error', 'run-toast', 'avatar-menu', 'muse-settings', 'quota-page', 'other'] as const
 export type QuotaPromptEntry = typeof QUOTA_PROMPT_ENTRIES[number]

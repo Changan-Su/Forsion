@@ -16,7 +16,7 @@
 .fr-share > input { flex: none; margin: 2px 0 0; }
 /* 插件停用的理由行(PluginReasons.tsx):开关下面浮出的一块,材质同菜单。卸载确认框里的理由药丸是单选,选中的那颗加深底色。 */
 .fr-pop {
-  position: fixed; z-index: var(--z-menu); max-width: min(360px, calc(100vw - 16px)); padding: 10px 12px;
+  position: fixed; z-index: var(--z-menu); max-width: min(420px, calc(100vw - 16px)); padding: 10px 12px;
   background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width, 1px) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md); box-shadow: var(--card-shadow);
 }

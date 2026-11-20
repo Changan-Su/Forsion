@@ -6,7 +6,7 @@
  * 下面的 old* 是 Forsion-Extend src/core/channels.ts(origin/main,2026-11-20)那几条 handler 的参数校验原样搬过来的。
  */
 import { describe, expect, it } from 'vitest'
-import { payCenterArgs, quotaEntry, withEntry, QUOTA_ENTRIES } from './telemetryKeys'
+import { invokePayCenter, payCenterArgs, quotaEntry, withEntry, QUOTA_ENTRIES } from './telemetryKeys'
 
 const PAY_TABS = ['membership', 'credits', 'storefront'] as const
 const PAY_PLAN_RE = /^[A-Za-z0-9_-]{1,64}$/
@@ -65,6 +65,24 @@ describe('新调用方 × 老 Extend:entry 追加在末尾,老接收方照常成
     expect(withEntry(['both'], undefined)).toEqual(['both'])
     expect(withEntry([10], 'made-up')).toEqual([10])
     expect(withEntry([true], 42)).toEqual([true])
+  })
+})
+
+describe('openPayCenter 带 entry 被拒时不带 entry 重开一次', () => {
+  it('invalid_* → 立刻无参重试;成功 / 别的失败 / 没带 entry 都不重试', async () => {
+    const calls: unknown[][] = []
+    const rejectFourth = async (...a: unknown[]) => { calls.push(a); return a.length > 3 ? { ok: false, error: 'invalid_tab' } : { ok: true } }
+    expect(await invokePayCenter(rejectFourth, { entry: 'chat-banner' })).toEqual({ ok: true })
+    expect(calls).toEqual([[undefined, undefined, undefined, 'chat-banner'], []])
+    calls.length = 0
+    const old = async (...a: unknown[]) => { calls.push(a); return oldOpenPayCenter(...a) }
+    expect((await invokePayCenter(old, { entry: 'run-error' })).ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    calls.length = 0
+    const offline = async (...a: unknown[]) => { calls.push(a); return { ok: false } }
+    expect(await invokePayCenter(offline, { entry: 'run-error' })).toEqual({ ok: false })
+    expect(await invokePayCenter(rejectFourth)).toEqual({ ok: true })
+    expect(calls).toEqual([[undefined, undefined, undefined, 'run-error'], []]) // 没 entry 的那次只发一回
   })
 })
 
