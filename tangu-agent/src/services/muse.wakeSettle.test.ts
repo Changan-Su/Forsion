@@ -66,8 +66,11 @@ describe('inWakeSettle(纯函数)', () => {
     expect(m.inWakeSettle({ now: T0 + 30_000, wokeAt: T0, wakeRequestedAt: 0 })).toBe(true);
     expect(m.inWakeSettle({ now: T0 + m.WAKE_SETTLE_MS, wokeAt: T0, wakeRequestedAt: 0 })).toBe(false);
     expect(m.inWakeSettle({ now: T0 + 30_000, wokeAt: T0, wakeRequestedAt: T0 + 10_000 })).toBe(false);
-    // 睡之前就挂着的叫醒(当时被让位挡住)不算「人在跟前」
+    // 睡之前就挂着的叫醒(当时被让位挡住)不算「人在跟前」;同一毫秒记下的睡醒与叫醒算人在跟前
     expect(m.inWakeSettle({ now: T0 + 30_000, wokeAt: T0, wakeRequestedAt: T0 - 600_000 })).toBe(true);
+    expect(m.inWakeSettle({ now: T0 + 30_000, wokeAt: T0, wakeRequestedAt: T0 })).toBe(false);
+    // 时钟被往回拨到睡醒之前 → 不挡(否则要等墙钟追回来)
+    expect(m.inWakeSettle({ now: T0 - 3600_000, wokeAt: T0, wakeRequestedAt: 0 })).toBe(false);
   });
 });
 
@@ -112,6 +115,15 @@ describe('巡检', () => {
     at(32 * 60_000 + m.WAKE_SETTLE_MS + 1000);
     await m.__museTickForTests();
     expect(state.runs).toHaveLength(1);
+  });
+
+  it('刚开盖就点叫醒(存活心跳还没来得及跳)→ 叫醒排在这次睡醒之后,照起', async () => {
+    m.__museAliveBeatForTests(T0);
+    at(16 * 60_000);
+    m.requestMuseWake(); // 请求先到,tick 后到
+    await m.__museTickForTests();
+    expect(state.runs).toHaveLength(1);
+    expect(state.runs[0].input.museTrigger).toBe('manual');
   });
 
   it('睡醒后用户点了叫醒 → 不等稳定期,照起', async () => {

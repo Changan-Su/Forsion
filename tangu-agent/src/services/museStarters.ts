@@ -31,21 +31,26 @@ export const starterKey = (text: string): string => oneLine(text).toLowerCase().
 /** 不算差别的字符:空白、各种引号、书名号、括号(模型常把「X」写成 X,或把 FIM 两边的空格去掉)。 */
 const LABEL_NOISE = /[\s"'`“”‘’「」『』《》〈〉【】()（）[\]]/u;
 
-/** 逐个码点折叠(NFKC、小写、去掉 LABEL_NOISE),每个折叠后的码元记下它来自原文的哪一段。 */
-function foldForMatch(s: string): { chars: string; from: number[]; to: number[] } {
+/** 逐个码点折叠(NFKC、小写、去掉 LABEL_NOISE),每个折叠后的码元记下它来自原文的哪一段,以及是不是那一段折叠结果的头 / 尾
+ *  (一个字可能展开成几个:⑩ → 10;匹配不许从展开的中间开始或结束,否则 label「1」会链到「⑩」)。 */
+function foldForMatch(s: string): { chars: string; from: number[]; to: number[]; head: boolean[]; tail: boolean[] } {
   let chars = '';
   const from: number[] = [];
   const to: number[] = [];
+  const head: boolean[] = [];
+  const tail: boolean[] = [];
   for (let i = 0; i < s.length;) {
     const ch = String.fromCodePoint(s.codePointAt(i)!);
+    const start = from.length;
     for (const c of ch.normalize('NFKC').toLowerCase()) {
       if (LABEL_NOISE.test(c)) continue;
       chars += c;
-      for (let k = 0; k < c.length; k++) { from.push(i); to.push(i + ch.length); }
+      for (let k = 0; k < c.length; k++) { from.push(i); to.push(i + ch.length); head.push(false); tail.push(false); }
     }
+    if (from.length > start) { head[start] = true; tail[from.length - 1] = true; }
     i += ch.length;
   }
-  return { chars, from, to };
+  return { chars, from, to, head, tail };
 }
 
 /** label 在句子里的那段原文(纯函数,单测钉):原样出现就是它自己;否则大小写、全半角、空白、引号书名号括号都不算差别,
@@ -55,9 +60,11 @@ export function locateLabel(text: string, label: string): string | null {
   const t = foldForMatch(text);
   const l = foldForMatch(label).chars;
   if (!l) return null;
-  const p = t.chars.indexOf(l);
-  if (p < 0) return null;
-  return text.slice(t.from[p], t.to[p + l.length - 1]);
+  for (let p = t.chars.indexOf(l); p >= 0; p = t.chars.indexOf(l, p + 1)) {
+    const e = p + l.length - 1;
+    if (t.head[p] && t.tail[e]) return text.slice(t.from[p], t.to[e]);
+  }
+  return null;
 }
 
 /** 校验模型给的一组(纯函数,单测钉)。逐条报错:一条坏了整组不收,免得用户看到缺一条、Muse 却以为都放上了。 */

@@ -932,9 +932,20 @@ function aliveBeat(now = Date.now()): void {
   lastAliveAt = now;
 }
 
-/** 纯函数,单测钉:此刻还在睡醒稳定期里吗。叫醒请求晚于这次睡醒(人就在跟前点的)→ 不算。 */
+/** 纯函数,单测钉:此刻还在睡醒稳定期里吗。叫醒请求不早于这次睡醒(人就在跟前点的)→ 不算;
+ *  时钟被往回拨到睡醒时刻之前 → 不算(否则要等墙钟追回来才放行)。 */
 export function inWakeSettle(s: { now: number; wokeAt: number; wakeRequestedAt: number }): boolean {
-  return s.wokeAt > 0 && s.now - s.wokeAt < WAKE_SETTLE_MS && !(s.wakeRequestedAt > s.wokeAt);
+  const since = s.now - s.wokeAt;
+  return s.wokeAt > 0 && since >= 0 && since < WAKE_SETTLE_MS && !(s.wakeRequestedAt >= s.wokeAt);
+}
+
+/** tick 开头与起周期前各判一次(tick 里 await 多,中途机器也可能睡过去):还在睡醒稳定期 → 排一次补巡检、返回 true。
+ *  调用方直接 return:到期的规则 / 日程不确认,下一轮照样到期。 */
+function deferForWake(): boolean {
+  aliveBeat();
+  if (!inWakeSettle({ now: Date.now(), wokeAt, wakeRequestedAt })) return false;
+  scheduleSettleTick();
+  return true;
 }
 /** 规则 id → **不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);每 tick 整份替换。
  *  面板经 GET /agent/special/muse/triggers 的 `notice` 字段读它 —— 从前这些情况一律静默,
@@ -960,8 +971,7 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
-    aliveBeat();
-    if (inWakeSettle({ now: Date.now(), wokeAt, wakeRequestedAt })) { scheduleSettleTick(); return; }
+    if (deferForWake()) return;
     // P1-K2(方案 §6.5):急停锁定了远程访问 → 盯任务规则、Agent 日程、Muse 周期整轮**推迟**(不丢:解锁后下一轮照常评估,
     // 到期条目按 dueEntries 补跑)。急停的语义是「不是我在键盘前发起的一律停」;读不出锁 = 锁定。
     let locked = true;
@@ -1113,6 +1123,7 @@ async function tick(): Promise<void> {
       }
     }
 
+    if (deferForWake()) return; // 上面一串 await 期间机器睡过去又 DarkWake:这时起的周期同样白发
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { dropWake('restartCap'); ledger.inc('daily_muse', 'skipRestartCap'); log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
@@ -1188,6 +1199,7 @@ export function kickMuse(): void {
 /** 面板「叫醒」:记一笔、催一次巡检(下一次 tick 当作到点,见 wakeRequestedAt)。supervisor 还没起 → false
  *  (请求照样留着,起来后的第一次巡检照办)。 */
 export function requestMuseWake(): boolean {
+  aliveBeat(); // 刚开盖就点:先把这次睡醒记上,请求才排在它后面(否则被当成睡前挂着的请求,白等一分钟)
   wakeRequestedAt = Date.now();
   wakeBlocked = null;
   if (!timer) return false;

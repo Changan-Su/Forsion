@@ -55,6 +55,8 @@ child.stderr.on('data', onData);
 const cycles = (since = 0) => lines.filter(([t, l]) => t >= since && /\[muse\].*启动第 \d+\/\d+ 个思考周期/.test(l));
 
 let ok = false;
+const t0 = Date.now();
+let contAt = 0;
 try {
   for (let i = 0; ; i++) {
     if (await fetch(`http://127.0.0.1:${port}/health`).then((r) => r.ok).catch(() => false)) break;
@@ -73,7 +75,7 @@ try {
   console.log(`第一个周期已起(${before} 个);SIGSTOP ${STOP_MS / 1000}s`);
   child.kill('SIGSTOP');
   await sleep(STOP_MS);
-  const contAt = Date.now();
+  contAt = Date.now();
   child.kill('SIGCONT');
   // 最多等 150s:修后应在 ~60s 起;修前 1–2s 就起
   let next = null;
@@ -88,6 +90,7 @@ try {
   console.error(String(e?.stack || e));
   ok = false;
 } finally {
+  if (process.argv.includes('--verbose')) for (const [t, l] of lines) if (/\[muse\]|run=|SIG/.test(l)) console.log(`  ${((t - (contAt || t0)) / 1000).toFixed(1).padStart(7)}s  ${l.slice(0, 170)}`);
   try { child.kill('SIGCONT'); child.kill('SIGKILL'); } catch { /* noop */ }
   mock.close();
   rmSync(home, { recursive: true, force: true });

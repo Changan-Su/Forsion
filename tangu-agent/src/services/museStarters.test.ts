@@ -69,6 +69,9 @@ describe('validateStarters', () => {
     expect(locateLabel('Review the Q3 plan', 'q3   PLAN')).toBe('Q3 plan');
     expect(locateLabel('明天的产品周会', '周会纪要')).toBeNull();
     expect(locateLabel('anything', '「」')).toBeNull(); // 全是不算数的字符 = 没给 label
+    // 一个字展开成几个(⑩ → 10):不许从展开中间开始 / 结束,往后接着找
+    expect(locateLabel('Review the ⑩ plan, then open 1.', '１')).toBe('1');
+    expect(locateLabel('Review the ⑩ plan', '１')).toBeNull();
   });
   it('muse 类(没有可打开的东西)label 对不上 → 照收、原样留着,不再整组拒收;可链接的几类照旧拒', () => {
     const own = { text: 'Every Friday, list three things that went well this week.', source: { kind: 'muse', label: 'Weekly review routine' } };
