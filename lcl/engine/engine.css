@@ -812,6 +812,8 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   gap: 2px;
   -webkit-app-region: no-drag;
 }
+/* 宿主的窗口级附件(edgeAccessory.ts,如插件沙箱):排在浮钮组最前,和浮钮之间空出一截;高度跟浮钮对齐。 */
+.dv-edge-accessory { display: flex; align-items: center; gap: 4px; height: 26px; margin-right: 8px; }
 /* 保持 (0,1,0):别写成 .dv-edge-actions > .dv-edge-toggle,那会压过上面的 :hover 底色。 */
 .dv-edge-reset,
 .dv-edge-mini,

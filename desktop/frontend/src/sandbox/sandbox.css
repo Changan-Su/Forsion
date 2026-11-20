@@ -1,18 +1,6 @@
-/* 沙箱窗口的标识与操作(SandboxChrome.tsx)。只在插件沙箱那份 Forsion 里挂。 */
-.sbx-chrome {
-  position: fixed;
-  top: 4px;
-  right: 132px;
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  font-family: var(--font-ui);
-  font-size: var(--ui-font-meta);
-  -webkit-app-region: no-drag;
-}
-.sbx-chrome-row { display: flex; align-items: center; gap: 6px; height: 24px; }
+/* 沙箱窗口的标识与操作(SandboxChrome.tsx)。只在插件沙箱那份 Forsion 里挂。
+ * 一行标识 + 按钮进右上角浮钮组(引擎 .dv-edge-accessory,标签头按整宽让位);宽度压到 ~220px:插件名截断、重置 / 报告只留图标。 */
+.sbx-chrome-row { display: flex; align-items: center; gap: 4px; height: 24px; font-family: var(--font-ui); font-size: var(--ui-font-meta); }
 .sbx-pill {
   display: inline-flex;
   align-items: center;
@@ -25,7 +13,7 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.sbx-pill > span { font-weight: 400; color: var(--text-muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.sbx-pill > span { font-weight: 400; color: var(--text-muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
 .sbx-cbtn {
   display: inline-flex;
   align-items: center;
@@ -40,6 +28,20 @@
   white-space: nowrap;
   cursor: pointer;
 }
+.sbx-ibtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.sbx-ibtn:hover, .sbx-ibtn.is-on { background: var(--menu-hover, var(--bg-hover)); color: var(--text); }
 .sbx-cbtn:hover { background: var(--menu-hover, var(--bg-hover)); }
 .sbx-cbtn.primary { border-color: transparent; background: var(--action-fill); color: var(--on-action); }
 .sbx-cbtn.primary:hover { filter: brightness(1.06); }
@@ -66,6 +68,10 @@
 .sbx-pop textarea:focus { border-color: var(--accent); }
 .sbx-pop-actions { display: flex; justify-content: flex-end; }
 .sbx-note {
+  position: fixed;
+  right: 16px;
+  bottom: 40px; /* 状态栏之上 */
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 8px;
