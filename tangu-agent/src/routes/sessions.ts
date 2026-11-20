@@ -15,7 +15,7 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
 import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { liveRunStatus } from '../services/runStatus.js';
 import { failedRunsFor } from '../services/failedRuns.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
@@ -631,6 +631,16 @@ export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, last
   return compactedContextTokens(cp.summary, lastUsage);
 }
 
+/** 本会话最后落库的一行(sessionContextTokens 拿它比检查点)。同一毫秒的几行要按落库先后取最后那条:手动压缩按升序走到的
+ *  最后一行就是检查点边界,这里取成同毫秒里更早的那条 → 判成没覆盖,重开后环又回到压缩前的数(中止后 /compact 时常见,
+ *  半截回答与打断标记多半同一毫秒)。thin worker 没有本地库 → 查不到就照旧(undefined)。 */
+export async function lastMessageRow(sessionId: string): Promise<{ id: string; timestamp?: number | null } | undefined> {
+  const rows = await query<any[]>(
+    `SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`, [sessionId],
+  ).catch(() => []);
+  return rows[0];
+}
+
 // 本会话累计 token 消耗（跨 run 求和），供客户端「本会话 token」显示。
 // contextTokens = 最近一次 usage 事件的 prompt（当前上下文占用）：客户端只在流式期间收到 usage 事件，
 // 重载/重开会话后没有它，上下文圈只能显示 0%（连「该不该压缩」都判断不了）。事件本就落库，这里回放最后一条主循环的（见 pickMainLoopUsage）。
@@ -648,8 +658,7 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
     // 整页都是后台事件就按游标继续往回翻(见 findMainLoopUsage 的上限说明)。
     const last = await lastMainLoopUsage(req.params.id);
     // 手动 /compact 不产生 usage:不看检查点的话,重开应用后环又回到压缩前那个数(09-20)。thin worker 没有本地库 → 查不到就照旧。
-    const lastRow = (await query<any[]>(`SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1`, [req.params.id]).catch(() => []))[0];
-    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), lastRow) });
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), await lastMessageRow(req.params.id)) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
   }
