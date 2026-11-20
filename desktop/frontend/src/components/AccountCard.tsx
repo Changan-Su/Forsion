@@ -31,7 +31,9 @@ registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
   'sidebar.account.loginLink': { zh: '登录链接', en: 'Sign-in link' },
   'sidebar.account.menu.quota': { zh: 'AI 额度', en: 'AI quota' },
-  'sidebar.account.menu.quotaLine': { zh: '今日 {daily} · 本周 {weekly}', en: 'Today {daily} · This week {weekly}' },
+  'sidebar.account.menu.quotaToday': { zh: '今日 {pct}', en: 'Today {pct}' },
+  'sidebar.account.menu.quotaWeek': { zh: '本周 {pct}', en: 'This week {pct}' },
+  'sidebar.account.menu.pointsLabel': { zh: '积分', en: 'Points' },
   'sidebar.account.menu.openAccount': { zh: '账号设置', en: 'Account settings' },
   'sidebar.account.menu.backpack': { zh: '背包', en: 'Backpack' },
   'sidebar.account.menu.points': { zh: '{n} 积分', en: '{n} points' },
@@ -332,21 +334,41 @@ export const AccountCard: React.FC<{
   const display = auth?.nickname || auth?.username || 'Forsion'
   const initial = display.trim().charAt(0).toUpperCase() || 'F'
   // ── 菜单条目的唯一一份:Web 浮层(下方 JSX)与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染 ──
-  const quotaText = (q: AccountQuotaView | null, failed: boolean): string => q
-    ? t('sidebar.account.menu.quotaLine', {
-      daily: formatRemaining(remainingPercent(q.dailyLimit, q.dailyRemaining, q.dailyPercent), t('sidebar.account.menu.unlimited')),
-      weekly: formatRemaining(remainingPercent(q.weeklyLimit, q.weeklyRemaining, q.weeklyPercent), t('sidebar.account.menu.unlimited')),
-    })
+  const fmtPoints = (n: number): string => t('sidebar.account.menu.points', { n: n.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US') })
+  /**
+   * 积分余额:背包那次读到的优先(积分变动事件会刷新它,和背包那行永远是同一个数),没有再用额度视图带的;
+   * 都不知道 = null,别当 0。不夹到 0:后台能调成负数,和背包那行一样照实写。
+   */
+  const pointsOf = (q: AccountQuotaView | null, r: AccountRewards = rewards): number | null => {
+    if (r.balance !== null) return r.balance
+    const n = q?.pointsBalance
+    return typeof n === 'number' && Number.isFinite(n) ? n : null
+  }
+  /**
+   * 额度一行摘要:只列有上限的那几档(11-20 用户定:不限的不写「不限」);
+   * 两档都不限 → 改列积分(额度用完可用积分继续),积分也不知道就留空。
+   */
+  const quotaSummary = (q: AccountQuotaView, r: AccountRewards = rewards): string => {
+    const parts = [
+      ['sidebar.account.menu.quotaToday', remainingPercent(q.dailyLimit, q.dailyRemaining, q.dailyPercent)],
+      ['sidebar.account.menu.quotaWeek', remainingPercent(q.weeklyLimit, q.weeklyRemaining, q.weeklyPercent)],
+    ] as const
+    const limited = parts.filter(([, pct]) => pct !== null).map(([key, pct]) => t(key, { pct: formatRemaining(pct, '') }))
+    if (limited.length) return limited.join(' · ')
+    const points = pointsOf(q, r)
+    return points === null ? '' : fmtPoints(points)
+  }
+  const quotaText = (q: AccountQuotaView | null, failed: boolean, r: AccountRewards = rewards): string => q
+    ? quotaSummary(q, r)
     : failed ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')
-  const pointsText = (r: AccountRewards): string => r.balance === null ? (r.balanceFailed ? '—' : '…')
-    : t('sidebar.account.menu.points', { n: r.balance.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US') })
+  const pointsText = (r: AccountRewards): string => r.balance === null ? (r.balanceFailed ? '—' : '…') : fmtPoints(r.balance)
   const accountItems = (q: AccountQuotaView | null, failed: boolean, r = rewards): Record<'head' | 'login' | 'restart' | 'quota' | 'backpack' | 'invite' | 'upgrade' | 'logout', SheetMenuItem | null> => ({
     // 头部 = 进「Forsion 云端 → 账号」(资料、会员、安全都在那);没有那几页的宿主只是个标题
     head: loggedIn && hasAccountPage ? { id: 'account', label: display, detail: t('sidebar.account.menu.openAccount'), run: () => { setMenu(null); openCloudPage('account') } } : null,
     login: !loggedIn && !engineDown ? { id: 'login', label: t('sidebar.account.login'), icon: <LogIn size={14} />, disabled: loggingIn, run: () => { setMenu(null); void login() } } : null,
     restart: engineDown ? { id: 'engine-restart', label: t('sidebar.account.engineDown'), icon: <RotateCcw size={14} />, run: () => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) } } : null,
     // 一行 AI 额度摘要(口径同全端:剩余向下取整、不足 1% 写 <1%)→「额度与积分」
-    quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed), icon: <Gauge size={14} />, disabled: !hasQuotaPage, run: () => { setMenu(null); openCloudPage('quota') } } : null,
+    quota: loggedIn && hasQuota ? { id: 'quota', label: t('sidebar.account.menu.quota'), detail: quotaText(q, failed, r), icon: <Gauge size={14} />, disabled: !hasQuotaPage, run: () => { setMenu(null); openCloudPage('quota') } } : null,
     // 背包 / 升级:Web 浮层里住在别处(背包一行、升级在额度展开区),原生半屏不能就地展开 → 各占一行,免得安卓静默少入口。
     backpack: loggedIn && hasBackpackPage ? { id: 'backpack', label: t('sidebar.account.menu.backpack'), detail: pointsText(r), icon: <Backpack size={14} />, run: () => { setMenu(null); openCloudPage('backpack') } } : null,
     invite: loggedIn && hasPointsPage && r.invite !== 'hidden' ? { id: 'invite', label: t('sidebar.account.menu.invite'), icon: <Gift size={14} />, run: () => { setMenu(null); openCloudPage('points#invite') } } : null,
@@ -467,6 +489,7 @@ export const AccountCard: React.FC<{
       {/* AI 额度:收起时一行摘要,点开看各项、用卡、升级(数字口径同全端 formatRemaining,每个数字只出现一次) */}
       {loggedIn && hasQuota && (() => {
         const unlimited = t('sidebar.account.menu.unlimited')
+        const points = pointsOf(quota)
         const daily = quota ? remainingPercent(quota.dailyLimit, quota.dailyRemaining, quota.dailyPercent) : null
         const weekly = quota ? remainingPercent(quota.weeklyLimit, quota.weeklyRemaining, quota.weeklyPercent) : null
         const bg = quota?.background
@@ -478,22 +501,29 @@ export const AccountCard: React.FC<{
             <Gauge size={14} /><span>{t('sidebar.account.menu.quota')}</span><span className="grow" />
             {!quotaOpen && <span className="ap-dim">
               {quota
-                ? t('sidebar.account.menu.quotaLine', { daily: formatRemaining(daily, unlimited), weekly: formatRemaining(weekly, unlimited) })
+                ? quotaSummary(quota)
                 : quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}
             </span>}
             {quotaOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </button>
           {quotaOpen && <div className="ap-usage" data-testid="account-quota-detail">
             {quota ? <>
-              <div className="ap-row"><span>{t('sidebar.account.menu.daily')}</span><span className="grow" /><b>{formatRemaining(daily, unlimited)}</b></div>
-              <div className="ap-row">
+              {/* 不限的那档不画(11-20 用户定);积分跟在后面 */}
+              {daily !== null && <div className="ap-row" data-row="daily"><span>{t('sidebar.account.menu.daily')}</span><span className="grow" /><b>{formatRemaining(daily, unlimited)}</b></div>}
+              {weekly !== null && <div className="ap-row" data-row="weekly">
                 <span>{t('sidebar.account.menu.weekly')}</span><span className="grow" /><b>{formatRemaining(weekly, unlimited)}</b>
                 {!!resetDate && <span className="ap-dim">{t('sidebar.account.menu.resetOn', { date: resetDate })}</span>}
-              </div>
-              {/* 后台额度:Muse 只在桌面本地引擎跑;服务端没配计入模型 → 不显示 */}
-              {museAvailable() && !!bg?.modelId && (
+              </div>}
+              {/* 后台额度:Muse 只在桌面本地引擎跑;服务端没配计入模型 / 两轴都不限 → 不显示 */}
+              {museAvailable() && !!bg?.modelId && bgPct !== null && (
                 <div className="ap-row" data-row="background" title={t('sidebar.account.menu.backgroundHint')}>
                   <span>{t('sidebar.account.menu.background')}</span><span className="grow" /><b>{formatRemaining(bgPct, unlimited)}</b>
+                </div>
+              )}
+              {/* 背包那行已经写着积分就不重复(每个数字只出现一次);没有背包页的宿主才在这里补 */}
+              {points !== null && !webItems.backpack && (
+                <div className="ap-row" data-row="points">
+                  <span>{t('sidebar.account.menu.pointsLabel')}</span><span className="grow" /><b>{points.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')}</b>
                 </div>
               )}
             </> : <div className="ap-row ap-dim">{quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}</div>}
