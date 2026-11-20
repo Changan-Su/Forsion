@@ -71,4 +71,30 @@ describe('TUI /edit /delete:同一毫秒落库的几行', () => {
     expect(await deleteLastExchange('S')).toBeNull();
     expect(await ids()).toEqual(['m1']);
   });
+
+  it('用户自己以同名标签开头的话(没有配对的收尾标签)照样算人说的', async () => {
+    await msg('u1', 'user', 'First question', TS);
+    await msg('u2', 'user', '<turn_interrupted> is the XML tag I need documented', TS + 10);
+    expect(await getLastUserMessageContent('S')).toBe('<turn_interrupted> is the XML tag I need documented');
+    expect(await deleteLastExchange('S')).toBe('<turn_interrupted> is the XML tag I need documented');
+    expect(await ids()).toEqual(['u1']);
+  });
+
+  it('末尾攒了超过一页的机器行(子会话来信):仍能往前找到人说的那句', async () => {
+    await msg('u1', 'user', 'Start the children', TS);
+    for (let i = 0; i < 60; i++) {
+      await msg(`c${i}`, 'user', `<session_message from="c${i}" title="t" relation="child">\nDone ${i}\n</session_message>\nA message from a child session you started.`, TS + 10 + i);
+    }
+    expect(await getLastUserMessageContent('S')).toBe('Start the children');
+  });
+
+  it('删掉的轮次被压缩检查点覆盖过:检查点一并失效,更早的检查点留着', async () => {
+    await msg('u1', 'user', 'First question', TS);
+    await msg('a1', 'model', 'First answer', TS + 10);
+    await msg('u2', 'user', 'Second question', TS + 20);
+    await msg('a2', 'model', 'Second answer', TS + 30);
+    await query(`INSERT INTO session_summaries (id, session_id, summary, through_timestamp) VALUES ('k1', 'S', 'old', ?), ('k2', 'S', 'new', ?)`, [TS + 10, TS + 30]);
+    expect(await deleteLastExchange('S')).toBe('Second question');
+    expect((await query<any[]>(`SELECT id FROM session_summaries WHERE session_id = 'S'`)).map((r) => r.id)).toEqual(['k1']);
+  });
 });

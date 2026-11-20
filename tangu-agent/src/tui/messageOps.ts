@@ -7,21 +7,25 @@ import { bumpHistoryRevision } from '../services/historyRevision.js';
 import type { TranscriptItem } from './types.js';
 
 // 引擎落库的机器行(role 也是 user,但不是人说的话):打断标记、续跑、审批 / 提问回执、子会话通报、跨会话来信。
-// 与 desktop chat2/canvasTree.ts 的 MACHINE 同一份名单;/edit 把它当「最后一句」会把标记原文塞进编辑框。
-const MACHINE_USER_ROW = /^<(?:(?:turn_interrupted|turn_resume|approval_update|inquiry_update|child_sessions_update)>|session_message )/;
+// 名单与 desktop chat2/canvasTree.ts 的 MACHINE 相同;这里另要求带上配对的收尾标签,用户自己打的、以同名标签开头的话不会被跳过。
+// /edit 把机器行当「最后一句」会把标记原文塞进编辑框,/delete 则只删掉一条看不见的行。
+const MACHINE_USER_ROW = /^(?:<(turn_interrupted|turn_resume|approval_update|inquiry_update|child_sessions_update)>[\s\S]*<\/\1>|<session_message [^>\n]*>[\s\S]*<\/session_message>)/;
+const LAST_USER_PAGE = 50;
 
 /** 最后一条人说的 user 消息。同一毫秒落库的几行按落库先后认最新(SQLite 带 rowid,#762 同类);/edit 读和删认同一条。 */
 async function lastUserRow(sessionId: string): Promise<{ content: string; timestamp: number; rowid?: number } | null> {
   const sqlite = getDbType() === 'sqlite';
-  // 一次多取几条:末尾可能是连着的机器行(打断标记后面又有审批回执之类)
-  const rows = await query<any[]>(
-    `SELECT content, timestamp${sqlite ? ', rowid AS rid' : ''} FROM chat_messages WHERE session_id = ? AND role = 'user'
-     ORDER BY ${messageTimeOrder('DESC')} LIMIT 50`,
-    [sessionId],
-  );
-  const r = rows.find((x) => !MACHINE_USER_ROW.test(String(x.content ?? '')));
-  if (!r) return null;
-  return { content: String(r.content ?? ''), timestamp: Number(r.timestamp), ...(sqlite ? { rowid: Number(r.rid) } : {}) };
+  // 按页往前找:末尾可能连着很多机器行(子会话来信可以攒几十条)
+  for (let offset = 0; ; offset += LAST_USER_PAGE) {
+    const rows = await query<any[]>(
+      `SELECT content, timestamp${sqlite ? ', rowid AS rid' : ''} FROM chat_messages WHERE session_id = ? AND role = 'user'
+       ORDER BY ${messageTimeOrder('DESC')} LIMIT ${LAST_USER_PAGE} OFFSET ${offset}`,
+      [sessionId],
+    );
+    const r = rows.find((x) => !MACHINE_USER_ROW.test(String(x.content ?? '')));
+    if (r) return { content: String(r.content ?? ''), timestamp: Number(r.timestamp), ...(sqlite ? { rowid: Number(r.rid) } : {}) };
+    if (rows.length < LAST_USER_PAGE) return null;
+  }
 }
 
 /** 最近一条 user 消息内容（无则 null）。供 /edit 取初值。 */
@@ -46,6 +50,8 @@ export async function deleteLastExchange(sessionId: string): Promise<string | nu
   } else {
     await query(`DELETE FROM chat_messages WHERE session_id = ? AND timestamp >= ?`, [sessionId, row.timestamp]);
   }
+  // 覆盖到被删区间的压缩检查点一并失效(与 POST /messages/delete 同一口径),否则下一轮仍注入叙述已删轮次的摘要
+  await query(`DELETE FROM session_summaries WHERE session_id = ? AND through_timestamp >= ?`, [sessionId, row.timestamp]).catch(() => {});
   bumpHistoryRevision(sessionId); // 在飞的后台摘要落库前复核版本 → 基于已删消息的结果作废
   return row.content;
 }
