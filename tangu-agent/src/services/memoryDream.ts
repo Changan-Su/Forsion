@@ -5,7 +5,7 @@
 import { isStandInSlug } from '../agents/standIn.js';
 import { deps } from '../seams/runtime.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { resolveBackgroundModelId, loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { redactSecrets } from '../core/redact.js';
@@ -177,7 +177,7 @@ async function candidateEvidence(userId: string, slug: string, candidate: Memory
   }
   // New candidates replay the same bounded conversation window they were collected
   // from. Legacy session-only references retain a conservative latest-window fallback.
-  const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? AND role IN ('user','model','assistant')${anchorTimestamp !== undefined ? ' AND timestamp <= ?' : ''} ORDER BY timestamp DESC LIMIT 30`, anchorTimestamp !== undefined ? [sessions[0].id, anchorTimestamp] : [sessions[0].id]);
+  const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? AND role IN ('user','model','assistant')${anchorTimestamp !== undefined ? ' AND timestamp <= ?' : ''} ORDER BY ${messageTimeOrder('DESC')} LIMIT 30`, anchorTimestamp !== undefined ? [sessions[0].id, anchorTimestamp] : [sessions[0].id]);
   const evidence = rows.reverse().map((r) => `${r.role === 'model' ? 'assistant' : r.role}: ${redactSecrets(String(r.content || '').slice(-8000))}`).join('\n').slice(-8000);
   return evidence || undefined;
 }
