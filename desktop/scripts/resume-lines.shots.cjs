@@ -6,7 +6,8 @@
  * 摆三个场景,每个场景旁边断言 DOM,再截图交给人看(观感不外包):
  *   A  一轮回答两个工具调用(read_file 有真结果、write_file 只有占位 { tool_call_id, name, inflight: started/write })
  *      → 引擎自动续跑行 autoResumeMarker('app_update') → 续写正文。期望「↻ 更新打断了这一轮，已接着做」,
- *      折叠头不把那一步算成写入、只说「1 步被打断」;展开后那一行是灰色问号 + 「结果未知」。折叠 / 展开各一张。
+ *      折叠头不把那一步算成写入、只说「1 步被打断」;展开后那一行整行淡色、行尾写「结果未知」,再展开先说结局、
+ *      打算写的内容收在折叠「打算做的改动」里。折叠 / 展开各一张。
  *   B  同样的第一轮,最后一行是 interruptedNoticeMarker('app_quit')。期望「⏸ 应用退出时这一轮还没做完」+「继续生成」。
  *   C  设置 › Agent › 名册页的「重启后自动接着做未完成的任务」开关(缺省开)。
  * 中文跑亮 / 暗两套(A、B)+ 亮色 C;英文(--lang=en-US,另起一个实例、内容也换英文)跑亮色 A、B 看文案。
@@ -49,7 +50,7 @@ const TEXT = {
     first: '前两周的内容已经合并进月报，接下来处理第三周的。',
     cont: '月报里前两周已经在了，从第三周接着合并：第三周的三条要点已经补进「第三周」一节，月报现在是完整的。',
     autoLine: '更新打断了这一轮，已接着做', quitLine: '应用退出时这一轮还没做完', cont_btn: '继续生成',
-    cutSum: '1 步被打断', wroteWord: '写入', unknown: '结果未知', toggle: '重启后自动接着做未完成的任务',
+    cutSum: '1 步被打断', wroteWord: '写入', unknown: '结果未知', toggle: '重启后自动接着做未完成的任务', cardState: '被打断',
   },
   en: {
     ask: 'Merge the weekly reports in the notes folder into one monthly report',
@@ -58,7 +59,7 @@ const TEXT = {
     first: 'Weeks 1 and 2 are merged into the monthly report. Moving on to week 3.',
     cont: 'Weeks 1 and 2 are already in the report, so I continued from week 3: its three points are now under "Week 3" and the report is complete.',
     autoLine: 'An update interrupted this task — picked up where it left off', quitLine: 'This task was cut off when the app quit', cont_btn: 'Continue',
-    cutSum: 'interrupted', wroteWord: 'Wrote', unknown: 'Outcome unknown', toggle: 'Resume unfinished tasks after a restart',
+    cutSum: '1 interrupted', wroteWord: 'Wrote', unknown: 'Outcome unknown', toggle: 'Resume unfinished tasks after a restart', cardState: 'Interrupted',
   },
 }
 
@@ -174,14 +175,19 @@ async function shotA(app, win, ids, lang, mode) {
   const row = surface.locator('.tool-row[data-inflight="started"]')
   await row.waitFor({ timeout: 5000 })
   check(`${lang}/${mode} A:占位那一步标成 inflight=started(只有一行)`, (await surface.locator('.tool-row[data-inflight]').count()) === 1)
-  // 观测(不判红绿):占位那一行的字色 vs 做完那一行。方案说「灰色的一步」,两者相同 = 只有行尾的问号在区分
-  const colors = await surface.evaluate((el) => [...el.querySelectorAll('.tool-row')].map((r) => `${r.getAttribute('data-inflight') || 'done'}: verb ${getComputedStyle(r.querySelector('.tool-row-verb')).color} / target ${getComputedStyle(r.querySelector('.tool-row-target') || r).color} / opacity ${getComputedStyle(r.querySelector('.tool-row-head')).opacity}`))
-  console.log(`NOTE  ${lang}/${mode} A:过程行字色  | ${colors.join('  ‖  ')}`)
+  // 占位那一行整行淡色(方案「灰色的一步」):动词、目标的字色都和做完那一行不同;行尾写明「结果未知」
+  const colors = await surface.evaluate((el) => [...el.querySelectorAll('.tool-row')].map((r) => ({ inflight: !!r.getAttribute('data-inflight'), verb: getComputedStyle(r.querySelector('.tool-row-verb')).color, target: getComputedStyle(r.querySelector('.tool-row-target') || r).color })))
+  const cut = colors.find((c) => c.inflight), ok = colors.find((c) => !c.inflight)
+  check(`${lang}/${mode} A:占位那一行是淡色(动词 / 目标都和做完那行不同)`, !!cut && !!ok && cut.verb !== ok.verb && cut.target !== ok.target, JSON.stringify(colors))
+  const tail = ((await row.locator('.tool-row-inflight').textContent().catch(() => '')) || '').trim()
+  check(`${lang}/${mode} A:行尾写明结果未知`, tail === x.unknown, tail)
   await row.locator('.tool-row-head').click()
   await sleep(500)
   const body = ((await row.textContent().catch(() => '')) || '')
   check(`${lang}/${mode} A:展开后说结果未知`, body.includes(x.unknown), body.replace(/\s+/g, ' ').slice(0, 160))
   check(`${lang}/${mode} A:占位那一步不报 +N 行`, !/\+\d+/.test(((await row.locator('.tool-row-head').textContent()) || '')))
+  const order = await row.locator('.tool-card-body').evaluate((b) => ({ first: b.firstElementChild?.className || '', diffTop: [...b.children].some((c) => c.matches('.wsfile-diff, .wsfile-diff-raw')), diffFolded: !!b.querySelector('details .wsfile-diff, details .wsfile-diff-raw, details .spin') }))
+  check(`${lang}/${mode} A:展开先说结局,打算写的内容收在折叠里`, order.first === 'label' && !order.diffTop && order.diffFolded, JSON.stringify(order))
   await win.mouse.move(5, 400)
   await sleep(300)
   await surface.screenshot({ path: path.join(OUT, `${lang}-${mode}-A-expanded.png`), animations: 'disabled' })
@@ -197,6 +203,8 @@ async function shotB(app, win, ids, lang, mode) {
   const btnText = ((await btn.textContent().catch(() => '')) || '').trim()
   check(`${lang}/${mode} B:有「继续生成」`, (await btn.count()) === 1 && btnText === x.cont_btn, btnText)
   check(`${lang}/${mode} B:没有红色失败行`, (await surface.locator('.t2-tool.err').count()) === 0)
+  const card = ((await win.locator('.t2-tsum-state-tx').first().textContent().catch(() => '')) || '').trim()
+  check(`${lang}/${mode} B:右侧任务卡说「被打断」不说「已停止」`, card === x.cardState, card)
   await surface.screenshot({ path: path.join(OUT, `${lang}-${mode}-B.png`), animations: 'disabled' })
 }
 

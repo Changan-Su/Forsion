@@ -945,6 +945,7 @@
 .t2-tsum-state.attention { color: var(--danger); }
 .t2-tsum-state.error { color: var(--danger); }
 .t2-tsum-state.stopped { color: var(--text-muted); }
+.t2-tsum-state.interrupted { color: var(--text-muted); }
 .t2-tsum-state-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-tsum-count {
   flex-shrink: 0;

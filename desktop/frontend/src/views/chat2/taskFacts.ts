@@ -7,6 +7,7 @@
 import type { DisplayFile, TodoItem, ToolEvent, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { citeEntryOf, citeHoverKey, citeIndexOf, type CiteIndex } from '../../../../../tangu-agent/src/contracts/citeSources'
 import { isInflightTool } from '../../tangu/inflightTool'
+import { isInterruptedRunError } from './continueTurn'
 
 /** 一条「用过的来源」:agent 实际读到/搜到/取到的东西。用户给的附件不算(§7.4 两者不能混)。 */
 export interface TaskSource {
@@ -122,8 +123,9 @@ function writesOf(ev: ToolEvent, cwd?: string): string[] {
 
 export interface TaskFacts {
   /** 顶部主状态。等待用户永远压过「正在运行」(§17.10 验收:等待审批时不得显示为 Running)。
-   *  stopped 单列一档:用户中途摁停不是成功完成,不许显示「已完成」。 */
-  state: 'attention' | 'running' | 'error' | 'stopped' | 'done' | 'idle'
+   *  stopped 单列一档:用户中途摁停不是成功完成,不许显示「已完成」。
+   *  interrupted:不是用户按停、是退出 / 更新 / 引擎重启打断的(中断任务续跑方案 D1),不说成「已停止」暗示是用户停的。 */
+  state: 'attention' | 'running' | 'error' | 'stopped' | 'interrupted' | 'done' | 'idle'
   /** 待处理的审批/询问。 */
   attention: { kind: 'approval' | 'inquiry'; text: string }[]
   /** 最新一版任务清单(todo 事件整单替换,故后来者覆盖)。 */
@@ -153,6 +155,7 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
   let startedAt: number | null = null
   let error: string | null = null
   let stopped = false
+  let interrupted = false
 
   for (const m of messages) {
     const cites = m.role === 'assistant' ? citeIndexOf(m) : null
@@ -196,6 +199,7 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     if (m.role === 'assistant') {
       error = m.status === 'error' ? (m.error || '') : null
       stopped = m.status === 'stopped'
+      interrupted = stopped && isInterruptedRunError(m.error)
     }
   }
 
@@ -217,6 +221,7 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     state: attention.length ? 'attention'
       : running ? 'running'
       : error !== null ? 'error'
+      : interrupted ? 'interrupted'
       : stopped ? 'stopped'
       : messages.length ? 'done' : 'idle',
     attention,

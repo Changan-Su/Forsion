@@ -32,7 +32,13 @@ registerMessages({
   'tool.inflight.readCut': { zh: '被打断：引擎在这一步做完前停了。这一步只读取，不改动任何东西。', en: 'Interrupted: the engine stopped before this step finished. It only reads and changes nothing.' },
   'tool.inflight.unknown': { zh: '结果未知：这一步执行到一半引擎停了，可能已经部分或全部生效。', en: 'Outcome unknown: the engine stopped while this step was running. It may have partly or fully taken effect.' },
   // 折叠头里的那一段:被打断的步不算进「写入 N 文件」这类完成计数,单独说(评审 #9)
-  'tool.sum.interrupted': { zh: '{n} 步被打断', en: '{n} step(s) interrupted' },
+  'tool.sum.interrupted': { zh: '{n} 步被打断', en: '{n} interrupted' },
+  // 过程行尾的短状态字(和展开后的整句同一个三分法)
+  'tool.inflight.short.notRun': { zh: '没执行', en: 'Not run' },
+  'tool.inflight.short.readCut': { zh: '被打断', en: 'Interrupted' },
+  'tool.inflight.short.unknown': { zh: '结果未知', en: 'Outcome unknown' },
+  // 展开后:断在半截的那一步原本打算做的改动(不是已经写进去的)
+  'tool.inflight.intended': { zh: '打算做的改动', en: 'Intended change' },
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
@@ -319,6 +325,13 @@ const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }
   )
 }
 
+/** 过程行尾的短状态字:与展开后的整句一一对应。 */
+const INFLIGHT_SHORT = {
+  'tool.inflight.notRun': 'tool.inflight.short.notRun',
+  'tool.inflight.readCut': 'tool.inflight.short.readCut',
+  'tool.inflight.unknown': 'tool.inflight.short.unknown',
+} as const
+
 const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean; masked: MaskedValue[] }> = ({ ev, desc, running, waiting, asking, masked }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -347,14 +360,30 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-status">
           {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
             : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
-            : inflight ? <CircleHelp size={11} style={{ color: 'var(--text-faint)' }} aria-label={t('tool.inflight.label')}><title>{t('tool.inflight.label')}</title></CircleHelp>
+            : inflight ? <span className="tool-row-inflight"><CircleHelp size={11} aria-hidden="true" />{t(INFLIGHT_SHORT[inflightTextKey(inflight)])}</span>
             : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
         {open ? <ChevronDown size={12} className="tool-row-chev" /> : <ChevronRight size={12} className="tool-row-chev" />}
       </button>
       <AnimatedCollapse open={open}>
         <div className="tool-card-body">
-          {diff ? (
+          {/* 断在半截的一步:先说结局,打算做的改动收进折叠里 —— 一上来整段绿色新增读起来像已经写进去了 */}
+          {inflight ? (
+            <>
+              <div className="label">{t('tool.resultLabel')}</div>{t(inflightTextKey(inflight))}
+              {diff ? (
+                <details className="tool-raw-args">
+                  <summary>{t('tool.inflight.intended')}</summary>
+                  <DiffView text={diff} side={false} />
+                </details>
+              ) : ev.arguments ? (
+                <details className="tool-raw-args">
+                  <summary>{t('tool.argsLabel')}</summary>
+                  <MaskedText text={fmtArgs(ev.arguments)} masked={masked} />
+                </details>
+              ) : null}
+            </>
+          ) : diff ? (
             <>
               <DiffView text={diff} side={false} />
               {ev.arguments && (
@@ -366,8 +395,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
             </>
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div><MaskedText text={fmtArgs(ev.arguments)} masked={masked} /></>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
-          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
-            : inflight ? (<><div className="label">{t('tool.resultLabel')}</div>{t(inflightTextKey(inflight))}</>)
+          {inflight ? null : ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
             : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div><MaskedText text={toolResultText(ev, t)} masked={masked} /></>)}
         </div>
       </AnimatedCollapse>

@@ -207,7 +207,17 @@ describe('placeholder tool results (cut off mid-call)', () => {
     await act(async () => root.render(React.createElement(LocaleProvider, { children: React.createElement(ToolGroup, { events: events().slice(0, 3) }) })))
     await act(async () => (host.querySelector('.tool-group-head') as HTMLButtonElement).click())
     expect(host.querySelectorAll('[data-inflight]')).toHaveLength(3)
+    // 行尾写明是哪一种(不只一个问号):结果未知 / 没执行 / 被打断
+    expect([...host.querySelectorAll('.tool-row-inflight')].map((e) => e.textContent)).toEqual(expect.arrayContaining(['结果未知', '没执行', '被打断']))
     for (const head of host.querySelectorAll('.tool-row-head')) await act(async () => (head as HTMLButtonElement).click())
+    // 写入那一步:先说结局,打算写的内容收进折叠「打算做的改动」里,不是一上来整段绿色新增
+    const writeBody = host.querySelector('.tool-row[data-inflight="started"] .tool-card-body')!
+    expect(writeBody.firstElementChild?.className).toBe('label')
+    const intended = [...writeBody.querySelectorAll('details > summary')].map((s) => s.textContent)
+    expect(intended).toContain('打算做的改动')
+    const DIFF = '.wsfile-diff, .wsfile-diff-raw, .spin' // DiffView 异步出 HTML,先是转圈
+    expect([...writeBody.children].some((c) => c.matches(DIFF))).toBe(false)
+    expect(writeBody.querySelector(`details ${DIFF.split(', ').join(', details ')}`)).not.toBeNull()
     expect(text()).toContain('结果未知：这一步执行到一半引擎停了，可能已经部分或全部生效。')
     expect(text()).toContain('没有执行：引擎在这一步开始前停了。')
     expect(text()).toContain('被打断：引擎在这一步做完前停了。这一步只读取，不改动任何东西。')
@@ -235,7 +245,10 @@ describe('placeholder tool results (cut off mid-call)', () => {
   })
 
   it('English head copy', () => {
-    expect(translateFor('en', 'tool.sum.interrupted', { n: 2 })).toBe('2 step(s) interrupted')
+    expect(translateFor('en', 'tool.sum.interrupted', { n: 2 })).toBe('2 interrupted')
+    // 行尾短字与展开整句同一个三分法
+    expect(translateFor('en', 'tool.inflight.short.unknown')).toBe('Outcome unknown')
+    expect(translateFor('zh', 'tool.inflight.short.notRun')).toBe('没执行')
   })
 
   it('plugin tool labels never get the done phase for a placeholder', () => {

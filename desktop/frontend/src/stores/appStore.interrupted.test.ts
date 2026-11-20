@@ -181,14 +181,14 @@ describe('history restore: the answer right before a reasoned interrupted notice
     service.history.mockResolvedValue({ messages: rows(), failedRuns: [] })
     await useApp.getState().loadSessionHistory(LOAD)
     expect(useApp.getState().messagesBySession[LOAD].find((m) => m.id === 'a1')).toMatchObject({ status: 'stopped', error: 'interrupted:app_quit', content: 'half of the answer' })
-    expect(facts(LOAD).state).toBe('stopped')
+    expect(facts(LOAD).state).toBe('interrupted') // 不说「已停止」(暗示用户停的),也不说已完成
   })
 
   it('pollSession: same; a second poll with nothing new keeps the very same list (no churn)', async () => {
     service.history.mockResolvedValue({ messages: rows(), failedRuns: [] })
     await useApp.getState().pollSession(SID)
     expect(msg()).toMatchObject({ status: 'stopped', error: 'interrupted:app_quit' })
-    expect(facts(SID).state).toBe('stopped')
+    expect(facts(SID).state).toBe('interrupted')
     const before = useApp.getState().messagesBySession[SID]
     await useApp.getState().pollSession(SID)
     expect(useApp.getState().messagesBySession[SID]).toBe(before)

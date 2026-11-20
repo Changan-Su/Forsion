@@ -8,7 +8,8 @@ import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientType
  * 是「没开始 / 结果未知」。在线时被非用户原因打断、没等到结果的调用同样按「结果未知」画。
  *
  * 渲染层把它规整成 `done: true, result: undefined, isError: false` 再挂一个 `inflight`:和老历史里「没有结果的调用」同一种形状
- * (各处卡片 / 产物统计本来就认 result === undefined 不画),通用过程行据 `inflight` 画成灰色的「被打断」一步。
+ * (各处卡片 / 产物统计本来就认 result === undefined 不画),通用过程行据 `inflight`(行上 data-inflight)整行退成淡色,
+ * 行尾写「没执行 / 被打断 / 结果未知」;展开先说结局,打算做的改动收进折叠(样式在 base.css `.tool-row[data-inflight]`)。
  * `inflight` 暂时是渲染层自己的字段(ToolEvent 契约在 tangu-agent/contracts,这一轮不动)。
  */
 export type InflightState = 'pending' | 'started'
