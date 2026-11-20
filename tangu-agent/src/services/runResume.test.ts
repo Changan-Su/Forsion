@@ -1,6 +1,7 @@
 /**
  * 中断任务续跑(2026-11-20 方案 B)的引擎半边:真内存 SQLite + 真 agentLoop + 脚本化 fake llm(套路同 agentLoop.inflightPersist.test.ts)。
  *   E1 引擎被停(drainRunsForExit 带原因)→ interrupted(<原因>),不写「用户打断」标记,半截正文照落库;没原因 / 用户先按停 / 非恢复宿主 → 照旧 aborted。
+ *   E3 回放:没开始 / 只读断在半截 / 有副作用断在半截 / 挂起作废 各一句;本进程还在写的段不套用;升级前的缺项照旧。
  *   E2 工具边界把当前段写进库:执行中的调用 started、还没轮到的 pending;用户按停 / 正常收尾落的那一行与没有进度写时一样
  *      (收尾时间戳也重盖成收尾那一刻);被停时带着这一批的进度;done 先落库、done 事件后发。
  * 负对照(实跑过):runLoop catch 里 interruptReason 恒取 undefined → E1 第一例红;
@@ -20,7 +21,8 @@ import { query } from '../core/db.js';
 import { createRun, getRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
 import { enqueueRun, abortRun, drainRunsForExit, __resetExitForTests, TURN_INTERRUPTED_MARKER } from './agentLoop.js';
-import { markRecoveryHost } from './runProgress.js';
+import { markRecoveryHost, markLiveRow, unmarkLiveRow, NOT_RUN_RESULT, INTERRUPTED_READ_RESULT, OUTCOME_UNKNOWN_RESULT, APPROVAL_EXPIRED_RESULT, QUESTION_EXPIRED_RESULT } from './runProgress.js';
+import { replayAssistantHistory } from './historyReplay.js';
 
 const USER = 'u1';
 let home: string;
@@ -262,4 +264,46 @@ describe('E2 write-ahead persistence of the current assistant segment', () => {
       (st0 as any).appendEvent = origAppend;
     }
   }, 30_000);
+});
+
+// ── E3 回放三分法 ──
+describe('E3 replay of calls the engine never finished', () => {
+  const call = (id: string, name: string) => ({ id, type: 'function', function: { name, arguments: '{}' } });
+  const row = (id: string) => ({
+    id, content: 'Working on it.',
+    tool_calls: [call('p1', 'run_bash'), call('s1', 'read_file'), call('s2', 'write_file'), call('s3', 'mcp_x'), call('k1', 'delete_path'), call('k2', 'ask_user'), call('d1', 'list_dir'), call('m1', 'run_bash')],
+    tool_results: [
+      { tool_call_id: 'p1', name: 'run_bash', inflight: { state: 'pending', sideEffect: 'system' } },
+      { tool_call_id: 's1', name: 'read_file', inflight: { state: 'started', sideEffect: 'read' } },
+      { tool_call_id: 's2', name: 'write_file', inflight: { state: 'started', sideEffect: 'write' } },
+      { tool_call_id: 's3', name: 'mcp_x', inflight: { state: 'started', sideEffect: 'unknown' } },
+      { tool_call_id: 'k1', name: 'delete_path', content: '⏸ Waiting for the user\'s approval: delete x', parked: true },
+      { tool_call_id: 'k2', name: 'ask_user', content: '⏸ Waiting for the user\'s answer: which one?', parked: true },
+      { tool_call_id: 'd1', name: 'list_dir', content: 'a.txt\nb.txt' },
+      // m1:升级前的行 / 没记下的 —— 缺项
+    ],
+  });
+  const toolTexts = (msgs: any[]): Record<string, string> => Object.fromEntries(msgs.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
+
+  it('a row whose run is over: pending / started read-only / started with side effects / expired approval and question / real result / legacy gap', () => {
+    const t = toolTexts(replayAssistantHistory(row('X1')));
+    expect(t.p1).toBe(NOT_RUN_RESULT);
+    expect(t.s1).toBe(INTERRUPTED_READ_RESULT);
+    expect(t.s2).toBe(OUTCOME_UNKNOWN_RESULT);
+    expect(t.s3, '没声明副作用的按有副作用说').toBe(OUTCOME_UNKNOWN_RESULT);
+    expect(t.k1).toBe(APPROVAL_EXPIRED_RESULT);
+    expect(t.k2).toBe(QUESTION_EXPIRED_RESULT);
+    expect(t.d1).toBe('a.txt\nb.txt');
+    expect(t.m1).toMatch(/^Tool outcome unknown: no result was saved/);
+  });
+
+  it('a row still being written by a live run in this process: in-flight records count as missing, parked placeholders stay', () => {
+    markLiveRow('X2');
+    try {
+      const t = toolTexts(replayAssistantHistory(row('X2')));
+      expect(t.p1).toMatch(/^Tool outcome unknown: no result was saved/);
+      expect(t.s2).toMatch(/^Tool outcome unknown: no result was saved/);
+      expect(t.k1).toContain('Waiting for the user');
+    } finally { unmarkLiveRow('X2'); }
+  });
 });

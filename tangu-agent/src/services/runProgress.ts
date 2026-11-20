@@ -21,7 +21,7 @@ export function isRecoveryHost(): boolean { return recoveryHost; }
  */
 export type InflightState = 'pending' | 'started';
 export interface ToolInflight { state: InflightState; sideEffect: string }
-export interface InflightResultEntry { tool_call_id: string; name: string; inflight: ToolInflight }
+export interface InflightResultEntry { tool_call_id: string; name: string; inflight: ToolInflight; content?: unknown }
 
 export function isInflightEntry(r: any): r is InflightResultEntry {
   return !!r && typeof r === 'object' && !!r.inflight && typeof r.inflight === 'object'
