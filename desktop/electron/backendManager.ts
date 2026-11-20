@@ -8,7 +8,9 @@
  *     三者都走 env,不上进程列表。
  *   - /health 轮询就绪(300ms × 20s 超时)
  *   - stdout/stderr 环形缓冲 200 行(设置页可查看)
- *   - 意外退出指数退避自动重启(≤3 次),before-quit SIGTERM→3s→SIGKILL
+ *   - 意外退出指数退避自动重启(≤3 次),before-quit SIGTERM→5s→SIGKILL
+ *   - 停引擎前先把「为什么停」原子写进 <TANGU_HOME>/shutdown-intent.json(中断任务续跑方案 B,contracts/shutdownIntent.ts):
+ *     引擎收到 SIGTERM 时读它,把在途任务记成 interrupted(<原因>);意外退出不写(引擎下次启动推定 crash)。
  * dev:包根 dist/ 缺失 → 报错引导先 `npm run build`(回落 external 模式)。
  * 打包:extraResources 的 resources/tangu-server/(dist + node_modules 同级,Node 解析自然命中)。
  *   打包版不直接跑 standalone 入口,而是经引擎自己的启动器 dist/boot/launch.js:它决定跑安装包自带的 dist,
@@ -17,7 +19,7 @@
 import { app } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync, chmodSync, renameSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -28,8 +30,32 @@ import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 import { REMOTE_LOCK_FILE, REMOTE_LOCK_FILE_ENV } from '../shared/remoteSafety' // P1-K2
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
+import { SHUTDOWN_INTENT_FILE, type ShutdownIntentReason } from '../../tangu-agent/src/contracts/shutdownIntent'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
+
+/** 停引擎的原因(写进 shutdown-intent.json,引擎据此把在途任务记成 interrupted(<原因>))。意外退出没有原因、不写。 */
+export type EngineStopReason = ShutdownIntentReason
+
+/**
+ * 把「为什么停」原子写进 `<dir>/shutdown-intent.json`(先写临时文件再 rename):引擎收到 SIGTERM 时同步读一次,
+ * Windows 上信号等于强杀、引擎来不及读时,下次启动按 pid 对上它。必须在发信号**之前**同步落盘。
+ * 写不进(磁盘满 / 只读)只记日志:没有意图 = 引擎按 engine_stop / crash 算,不当成计划内,不影响停引擎本身。
+ */
+export function writeShutdownIntent(dir: string, reason: EngineStopReason, pid: number, now = Date.now()): boolean {
+  const file = join(dir, SHUTDOWN_INTENT_FILE)
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(tmp, JSON.stringify({ reason, pid, at: now }), 'utf8')
+    renameSync(tmp, file)
+    return true
+  } catch (e) {
+    try { rmSync(tmp, { force: true }) } catch { /* ignore */ }
+    console.warn('[tangu-desktop] shutdown intent not written:', (e as Error)?.message || e)
+    return false
+  }
+}
 
 export interface EngineOverlayControl {
   /** 下一次拉起引擎,启动器会挑中的热更新版本;没有合格的 = null。 */
@@ -188,6 +214,13 @@ export class BackendManager {
   /** 电脑历史数据钥匙(hex)。经 stdin 私有通道交给引擎:每次拉起时发一次,钥匙后到(引导里才打开电脑历史)就当场补发 ——
    *  不走 env(要换就得重起引擎,会断掉在跑的会话;env 还会出现在 ps 里),不走 HTTP(本机令牌渲染层 / 设备页反代也有)。 */
   private computerHistoryKeyHex: string | null = null
+  /** 「重启后自动接着做未完成的任务」的内存镜像(真源 = config.autoResumeInterrupted,缺省开)。每次拉起时读它 ——
+   *  包括意外退出后的自动重启 —— 写进 TANGU_AUTO_RESUME;引擎只在启动时读,所以拨开关不用重启引擎(下次启动就按新值)。 */
+  private autoResume = true
+
+  setAutoResume(on: boolean): void {
+    this.autoResume = on
+  }
 
   /** 钥匙就绪:记下(之后每次拉起都带上),引擎在跑就当场发。 */
   setComputerHistoryKey(hex: string): void {
@@ -343,8 +376,9 @@ export class BackendManager {
     return true
   }
 
-  async start(settings: ManagedBackendSettings): Promise<BackendStatus> {
-    const stopped = this.stop()
+  /** 恒先停再起:正在跑的引擎按 reason 记下「为什么停」(见 stop)。 */
+  async start(settings: ManagedBackendSettings, reason?: EngineStopReason): Promise<BackendStatus> {
+    const stopped = this.stop(reason)
     const gen = this.gen // stop() 同步 +1 之后取;同一 tick 里紧跟的 stop() 会再 +1,作废本次拉起
     await stopped
     if (gen !== this.gen) return this.getStatus()
@@ -409,6 +443,8 @@ export class BackendManager {
       // 没有这个请求方。宿主在 spawn 时把同一个真实 App 版本交给引擎,供通道 run 写入 input.client;
       // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。
       env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`
+      // 中断任务续跑方案 B:引擎启动时读一次,'0' = 被打断的任务不自动接着做(只给「继续生成」)
+      env.TANGU_AUTO_RESUME = this.autoResume ? '1' : '0'
       // 通道回复 / TUI 的界面语言:用户 env 里没有任何可用的语言变量才按系统界面语言注入(见 injectEngineLang)
       injectEngineLang(env, app.getLocale?.() || '')
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
@@ -580,7 +616,9 @@ export class BackendManager {
     }, wait)
   }
 
-  async stop(): Promise<void> {
+  /** reason = 为什么停(退出 / 更新 / 引擎重启 / 换账号):手里有引擎进程时,发信号**之前**同步写好 shutdown-intent.json。
+   *  不带 = 不写(引擎按 engine_stop 记;清空数据这类之后不会再有续跑的场合)。 */
+  async stop(reason?: EngineStopReason): Promise<void> {
     const gen = ++this.gen // 先作废在途的拉起链(可能正卡在 freePort / waitHealthy,手里还没有 child)
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
@@ -588,6 +626,7 @@ export class BackendManager {
     }
     const child = this.child
     if (child) {
+      if (reason && child.pid && child.exitCode === null && child.signalCode === null) writeShutdownIntent(tanguDataDir(), reason, child.pid)
       this.stopping = true
       this.child = null
       this.retiring = Promise.all([this.retiring, terminate(child)])
@@ -615,13 +654,15 @@ export class BackendManager {
   }
 }
 
-/** SIGTERM → 3s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行,别让屏障卡住之后所有 stop/start。 */
+/** SIGTERM → 5s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行,别让屏障卡住之后所有 stop/start。
+ *  5s:引擎收到 SIGTERM 后有 3s 让在途任务停在安全处并记成 interrupted、4s 硬退出(中断任务续跑方案 B 6.6),这里要比它长。 */
+export const TERMINATE_GRACE_MS = 5000
 function terminate(child: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
     const killTimer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch { /* ignore */ }
       setTimeout(resolve, 2000)
-    }, 3000)
+    }, TERMINATE_GRACE_MS)
     child.once('exit', () => {
       clearTimeout(killTimer)
       resolve()

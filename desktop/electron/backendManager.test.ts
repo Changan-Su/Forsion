@@ -8,7 +8,7 @@
  * 现在 getToken() 与 auth.json 无关,续期怎么改都不漂。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -28,7 +28,7 @@ vi.mock('./forsionAuth', async (importOriginal) => {
   return { ...real, loadTanguCreds: vi.fn(real.loadTanguCreds) }
 })
 
-const { BackendManager, injectEngineLang } = await import('./backendManager')
+const { BackendManager, injectEngineLang, writeShutdownIntent, TERMINATE_GRACE_MS } = await import('./backendManager')
 const { loadTanguCreds } = await import('./forsionAuth')
 
 const writeAuth = (token: string): void =>
@@ -378,4 +378,99 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
     expect(m.getStatus().state).toBe('crashed')
     expect(demote).not.toHaveBeenCalled()
   }, 15_000)
+})
+
+// 中断任务续跑方案 B(D1):停引擎前把「为什么停」原子写进 <TANGU_HOME>/shutdown-intent.json,**在发 SIGTERM 之前** ——
+// 引擎收到信号那一刻同步读它,据此把在途任务记成 interrupted(<原因>)。意外退出 / 不带原因的停不写。
+describe('shutdown intent written before the engine is signalled', () => {
+  const INTENT = join(H.dir, 'shutdown-intent.json')
+  /** 假引擎:收到 SIGTERM 时把那一刻盘上的意图文件(没有 = null)、自己的 pid 与 TANGU_AUTO_RESUME 落盘,再退出。 */
+  function intentProbeEngine(tag: string): { entry: string; seen: () => { pid: number; autoResume: string | null; intent: { reason: string; pid: number; at: number } | null } } {
+    const entry = join(H.dir, `intent-probe-${tag}.cjs`)
+    const out = join(H.dir, `intent-probe-${tag}.json`)
+    rmSync(out, { force: true })
+    writeFileSync(entry, [
+      "const fs = require('node:fs')",
+      "const path = require('node:path')",
+      `const out = ${JSON.stringify(out)}`,
+      "const write = (intent) => fs.writeFileSync(out, JSON.stringify({ pid: process.pid, autoResume: process.env.TANGU_AUTO_RESUME ?? null, intent }))",
+      "write(undefined)",
+      "process.on('SIGTERM', () => {",
+      "  let intent = null",
+      "  try { intent = JSON.parse(fs.readFileSync(path.join(process.env.TANGU_HOME, 'shutdown-intent.json'), 'utf8')) } catch {}",
+      "  write(intent); process.exit(0)",
+      "})",
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+    ].join('\n'), 'utf8')
+    return { entry, seen: () => JSON.parse(readFileSync(out, 'utf8')) }
+  }
+  const boot = async (tag: string) => {
+    rmSync(INTENT, { force: true })
+    const eng = intentProbeEngine(tag)
+    vi.restoreAllMocks() // 前面热更新那组把 resolveLaunch 换成了它们的启动器
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    expect(m.getStatus().state).toBe('ready')
+    return { m, eng, pid: m.getStatus().pid! }
+  }
+
+  it.each(['app_quit', 'app_update', 'engine_restart', 'account_change'] as const)('stop(%s): the engine reads the reason and its own pid when SIGTERM arrives', async (reason) => {
+    const { m, eng, pid } = await boot(reason)
+    const before = Date.now()
+    await m.stop(reason)
+    const seen = eng.seen()
+    expect(seen.pid).toBe(pid)
+    expect(seen.intent).toMatchObject({ reason, pid })
+    expect(seen.intent!.at).toBeGreaterThanOrEqual(before)
+    expect(readdirSync(H.dir).filter((f) => f.startsWith('shutdown-intent.json.'))).toEqual([]) // 临时文件 rename 走了
+  }, 30_000)
+
+  it('a restart (start on a running engine) records the reason for the engine it replaces', async () => {
+    const { m, eng, pid } = await boot('restart')
+    const next = intentProbeEngine('restart-next')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(next.entry)
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' }, 'engine_restart')
+      expect(eng.seen().intent).toMatchObject({ reason: 'engine_restart', pid })
+      expect(m.getStatus().pid).not.toBe(pid)
+    } finally { await m.stop() }
+  }, 30_000)
+
+  it('no reason (clearing data) writes nothing', async () => {
+    const { m, eng } = await boot('none')
+    await m.stop()
+    expect(eng.seen().intent).toBeNull()
+    expect(existsSync(INTENT)).toBe(false)
+  }, 30_000)
+
+  it('TANGU_AUTO_RESUME follows the in-memory setting at every spawn', async () => {
+    const { m, eng } = await boot('auto-on')
+    expect(eng.seen().autoResume).toBe('1')
+    m.setAutoResume(false)
+    const off = intentProbeEngine('auto-off')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(off.entry)
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' }, 'engine_restart')
+      expect(off.seen().autoResume).toBe('0')
+    } finally { await m.stop() }
+  }, 30_000)
+
+  it('writeShutdownIntent is atomic and reports failure instead of throwing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'forsion-intent-'))
+    expect(writeShutdownIntent(dir, 'app_update', 4321, 1000)).toBe(true)
+    expect(JSON.parse(readFileSync(join(dir, 'shutdown-intent.json'), 'utf8'))).toEqual({ reason: 'app_update', pid: 4321, at: 1000 })
+    expect(writeShutdownIntent(dir, 'app_quit', 99, 2000)).toBe(true) // 覆盖旧的
+    expect(JSON.parse(readFileSync(join(dir, 'shutdown-intent.json'), 'utf8'))).toMatchObject({ reason: 'app_quit', pid: 99 })
+    const blocker = join(dir, 'file-not-dir')
+    writeFileSync(blocker, 'x')
+    expect(writeShutdownIntent(blocker, 'app_quit', 1)).toBe(false)
+    expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('gives the engine 5s after SIGTERM (its own drain is 3s, hard exit 4s)', () => {
+    expect(TERMINATE_GRACE_MS).toBe(5000)
+  })
 })
