@@ -13,7 +13,9 @@ import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { runMigration } from '../db/migrate.js';
 import { query } from '../core/db.js';
 import { compactSession, getLatestSummary } from './compaction.js';
-import { lastMessageRow, sessionContextTokens } from '../routes/sessions.js';
+import { lastMessageRow, listMessagesPage, sessionContextTokens } from '../routes/sessions.js';
+import { recentTranscript } from './localHistorian.js';
+import { TURN_INTERRUPTED_MARKER } from './agentLoop.js';
 import { saveAside } from './aside.js';
 import { branchesSection } from './branchContext.js';
 import { branchSession } from './sessionBranch.js';
@@ -97,5 +99,45 @@ describe('同一毫秒落库的几行:认最后落库的那条', () => {
     const section = await branchesSection('root', 'u1');
     expect(section).toContain('newest reply on the branch');
     expect(section).not.toContain('older reply on the branch');
+  });
+});
+
+describe('同一毫秒落库的几行:按时间正序列出时保持落库先后', () => {
+  it('消息列表:中止那轮的半截回答排在打断标记前面', async () => {
+    await session('S');
+    await msg('u1', 'S', 'user', 'Explain the plan in detail', TS);
+    await msg('a1', 'S', 'model', 'The plan has three parts. First', TS + 50);
+    await msg('m1', 'S', 'user', TURN_INTERRUPTED_MARKER, TS + 50);
+    expect((await listMessagesPage('S', 200)).map((r) => r.id)).toEqual(['u1', 'a1', 'm1']);
+  });
+
+  it('消息列表翻页(照 desktop listAllMessages:游标 = 最早一条 +1、按 id 去重):同毫秒组跨页也不乱序、不漏行', async () => {
+    await session('S');
+    await msg('u0', 'S', 'user', 'Zero', TS - 10);
+    await msg('u1', 'S', 'user', 'One', TS);
+    await msg('s1', 'S', 'user', 'Steer one', TS + 20);
+    await msg('s2', 'S', 'user', 'Steer two', TS + 20);
+    await msg('a1', 'S', 'model', 'Answer one', TS + 30);
+    await msg('a2', 'S', 'model', 'Answer two', TS + 40);
+    const PAGE = 3; // 同毫秒组(2 行)小于一页:整页同毫秒是客户端已知的「游标走不动」,另说
+    let all: any[] = [];
+    for (let i = 0; i < 10; i++) {
+      const before = Number(all[0]?.timestamp) + 1 || 0;
+      const batch = await listMessagesPage('S', PAGE, before);
+      const seen = new Set(all.map((m) => m.id));
+      all = [...batch.filter((m) => !seen.has(m.id)), ...all];
+      if (batch.length < PAGE) break;
+    }
+    expect(all.map((m) => m.id)).toEqual(['u0', 'u1', 's1', 's2', 'a1', 'a2']);
+  });
+
+  it('Historian 判官读的近况:半截回答在前、打断标记在后', async () => {
+    await session('S');
+    await msg('u1', 'S', 'user', 'Explain the plan in detail', TS);
+    await msg('a1', 'S', 'model', 'The plan has three parts. First', TS + 50);
+    await msg('m1', 'S', 'user', 'Actually, stop', TS + 50);
+    const t = await recentTranscript('S');
+    expect(t.text).toBe('User: Explain the plan in detail\nAssistant: The plan has three parts. First\nUser: Actually, stop');
+    expect(t.anchorMessageId).toBe('m1');
   });
 });

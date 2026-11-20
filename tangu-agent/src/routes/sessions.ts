@@ -478,6 +478,20 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
   }
 });
 
+/** 消息列表的一页(最新的 limit 条,时间正序)。同一毫秒落库的几行按落库先后排(SQLite 带 rowid,#762 同类):只按 timestamp
+ *  DESC 取再翻转时,中止那轮的半截回答和打断标记、一批同毫秒的插话会倒着显示,翻页时新一页接在旧一页前面也会错位。
+ *  before 游标仍是 timestamp < before:客户端 listAllMessages 传「最早一条 +1」再按 id 去重,同毫秒跨页的行在那边补回;
+ *  只有整页都落在同一毫秒时游标走不动(客户端已按「没有新行就停」收住)。PG 先不动(与 #762 同口径)。 */
+export async function listMessagesPage(sessionId: string, limit: number, before = 0): Promise<any[]> {
+  const rows = await query<any[]>(
+    `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, timestamp, model_id, is_error
+     FROM chat_messages WHERE session_id = ?${before ? ' AND timestamp < ?' : ''}
+     ORDER BY ${messageTimeOrder('DESC')} LIMIT ${Math.floor(Math.max(1, limit))}`,
+    before ? [sessionId, before] : [sessionId],
+  );
+  return rows.reverse(); // 时间正序
+}
+
 router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -485,13 +499,7 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
     const before = Number(req.query.before) || 0;
-    const rows = await query<any[]>(
-      `SELECT id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, timestamp, model_id, is_error
-       FROM chat_messages WHERE session_id = ?${before ? ' AND timestamp < ?' : ''}
-       ORDER BY timestamp DESC LIMIT ${limit}`,
-      before ? [req.params.id, before] : [req.params.id],
-    );
-    rows.reverse(); // 时间正序
+    const rows = await listMessagesPage(req.params.id, limit, before);
     res.json({
       failed_runs: await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
