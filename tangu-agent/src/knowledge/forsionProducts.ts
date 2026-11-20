@@ -68,7 +68,7 @@ const sections = (ctx: GuideContext): Record<Exclude<GuideTopic, 'git'>, string>
     '## Store (商店)',
     '- Where users get plugins, skills, agents, Spaces, themes and web apps; also Installed, Updates and Submit (投稿) for authors. Opened from the "商店" / "Store" icon in the ribbon.',
     ctx.marketplace
-      ? '- To recommend something, search it with `search_marketplace`. Never claim you installed anything; the user installs from the result cards.'
+      ? '- Find candidates with `search_marketplace`. Use `recommend_marketplace_plugin` if available to show a card for a candidate that meets the user’s need. Installation is the user’s choice.'
       : '- You cannot search the Store from this conversation; tell the user to open it and search there. Never claim you installed anything.',
   ].join('\n'),
   creations: [
