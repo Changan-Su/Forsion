@@ -785,6 +785,9 @@ export function buildCycleMessages(
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
     // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
+    // 11-20(借鉴 dsh-superagent 第 3 条):该不该发看内容,和每小时 3 条的频次上限互补。放在节奏规矩之后、原「Reaching the user」的位置 ——
+    // 10-30 实测节奏规矩之前多一句,它收尾就容易忘了 set_next_wake;MUSE_DELIVERY_GUIDANCE(11-13 治「太沉默」)不动。
+    'Message the user only if they can now review, use, decide or unblock something. Otherwise stay quiet: routine progress belongs in your log. ' +
     'Todos and approval requests already post to your direct chat; do not duplicate them. Saving work in your Library or showing it with display_file does not deliver it' +
     (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     // 10-30 live:写在节奏规矩前面时,Muse 有一半周期收尾忘了 set_next_wake(同代码去掉这句 4/4 睡,带着 2/4),所以放在「怎么找用户」之后。

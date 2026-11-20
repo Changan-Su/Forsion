@@ -122,6 +122,12 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
   return !s.location || s.location.kind === 'home'
 }
 
+/** Muse 待办的一条依据(add_muse_todo 必填 1–3 条,存在 muse_todos.evidence,GET /agent/special/muse/todos/:id 回)。
+ *  kind 只管卡上的图标,认不出的引擎落成 'other';source / quote 是模型写的纯文本,按文本渲染。 */
+export const MUSE_TODO_EVIDENCE_KINDS = ['chat', 'file', 'calendar', 'activity', 'rule', 'web', 'other'] as const
+export type MuseTodoEvidenceKind = (typeof MUSE_TODO_EVIDENCE_KINDS)[number]
+export interface MuseTodoEvidence { kind: MuseTodoEvidenceKind; source: string; quote: string }
+
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
 export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule' | 'rule-observed'

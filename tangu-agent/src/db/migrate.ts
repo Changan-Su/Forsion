@@ -378,6 +378,8 @@ export async function runMigration(): Promise<void> {
     // run 的持有进程 `<pid>:<启动时刻秒>`(本机 SQLite 才写,见 services/runOwner.ts):重启自愈据此探活,别的活着的引擎进程的 run 不碰
     //(TUI 与桌面共用 state.db;PI-DSH 评审 R2)。NULL = 云端 / 升级前的行 / 非 SQLite 本机库。
     ['agent_runs', 'owner VARCHAR(64)'],
+    // Muse 待办的依据(2026-11-20,add_muse_todo 必填):JSON 数组 [{kind, source, quote}],卡片按 id 读。NULL = 升级前的行,卡上不画。
+    ['muse_todos', 'evidence TEXT'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);

@@ -15,6 +15,49 @@ import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from './inboxSend.
 import { postMuseDm } from '../../services/museDm.js';
 import { ledger } from '../../services/telemetryLedger.js';
 import { noteMuseProduced } from '../../services/museTelemetry.js';
+import { MUSE_TODO_EVIDENCE_KINDS, type MuseTodoEvidence, type MuseTodoEvidenceKind } from '../../contracts/clientTypes.js';
+
+/** 依据(借鉴 dsh-superagent 方案第 2 条,2026-11-20):提议必须说清根据什么。1–3 条,每条来源 + 短摘(≤80 字)。
+ *  存在 muse_todos.evidence,卡片按 id 读 —— 不写进 forsion-task 围栏,模型写在正文里的「依据」冒充不了卡上那一行。
+ *  宽松收:JSON 串照解、单个对象当一条、多于 3 条取前 3、来源 / 短摘过长截断、kind 不认识落 other;
+ *  一条有效的都没有才拒(拒在配额计数之前,不占配额)。 */
+export const EVIDENCE_MAX_ITEMS = 3;
+export const EVIDENCE_QUOTE_MAX = 80;
+export const EVIDENCE_SOURCE_MAX = 120;
+const EVIDENCE_KIND_SET = new Set<string>(MUSE_TODO_EVIDENCE_KINDS);
+/** 按字符(码点)截,超了留一个省略号,总长不超过 max。 */
+function clipChars(s: string, max: number): string {
+  const a = Array.from(s);
+  return a.length > max ? `${a.slice(0, max - 1).join('')}…` : s;
+}
+const flat = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v)).replace(/\s+/g, ' ').trim();
+
+export function normalizeEvidence(raw: unknown): MuseTodoEvidence[] {
+  let v: unknown = raw;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return []; } }
+  const list = Array.isArray(v) ? v : v && typeof v === 'object' ? [v] : [];
+  const out: MuseTodoEvidence[] = [];
+  for (const it of list) {
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    const source = clipChars(flat(o.source), EVIDENCE_SOURCE_MAX);
+    const quote = clipChars(flat(o.quote), EVIDENCE_QUOTE_MAX);
+    if (!source || !quote) continue;
+    const k = flat(o.kind).toLowerCase();
+    out.push({ kind: (EVIDENCE_KIND_SET.has(k) ? k : 'other') as MuseTodoEvidenceKind, source, quote });
+    if (out.length >= EVIDENCE_MAX_ITEMS) break;
+  }
+  return out;
+}
+
+/** 库里那一列 → 数组(老行 NULL / 坏 JSON → 空数组,卡上不画这一行)。 */
+export function parseStoredEvidence(v: unknown): MuseTodoEvidence[] {
+  return v == null || v === '' ? [] : normalizeEvidence(v);
+}
+
+export const EVIDENCE_REQUIRED_ERROR =
+  'Error: evidence is required — 1 to 3 items, each with a source (where you saw it: the user\'s own words with their date and time, a file path, a calendar event, an activity line, the watch rule that fired) ' +
+  `and a quote (a short excerpt, at most ${EVIDENCE_QUOTE_MAX} characters). Look it up with your tools; if nothing you can point to shows the user wants this, do not propose it. Nothing was saved.`;
 
 /** TODO 的收件箱正文 = detail + 末尾一张任务卡(引擎拼,不靠 Muse 自觉;围栏放最后,与审批信同一纪律)。
  *  `todo:` 头让桌面把落点回写这条 TODO(交给 Muse = 批准它去做 / 新会话 = injected / 忽略 = dismissed);
@@ -57,14 +100,34 @@ export const museTodoProvider: ToolProvider = {
             '(rendered as an Amadeus note — markdown, callouts, `[[note]]` links; mention files outside the vault by absolute path), and the app appends an ' +
             'action card (let Muse do it / run in a new session / ignore) whose brief is the title plus the detail — so make the detail self-contained: ' +
             'why it matters, concrete steps, exact paths or symptoms, and how to verify. Do not write forsion-task fences yourself. ' +
-            'Use each opportunity wisely; only submit suggestions truly worth the user\'s time and actionable right now; keep the title concise.',
+            'Use each opportunity wisely; only submit suggestions truly worth the user\'s time and actionable right now; keep the title concise. ' +
+            // 借鉴 dsh-superagent 方案第 2 条(11-20):三个判断 + 三条反例。写在工具描述(Muse 才看得见这个工具)而不进落库的 kickoff:
+            // kickoff 有长度帽,节奏规矩之前加句子 10-30 实测会让它忘了 set_next_wake;人格(config.toml)老装机拿不到。
+            'Propose only when all three hold: it is the user\'s own matter; they actually want it (they asked for it or plainly showed it); and it needs no choice made on their behalf. ' +
+            'These are not evidence that they want it: often reading about a topic does not mean they want to act on it; saying a screen looks bad does not authorize changing it; discussing a plan does not mean the plan is decided. ' +
+            'A watch rule the user set that fired is evidence in itself. Cite what shows it in evidence; if you cannot, keep looking or drop the idea.',
           parameters: {
             type: 'object',
             properties: {
               title: { type: 'string', description: 'A concise todo title' },
               detail: { type: 'string', description: 'Message body and execution brief (markdown): why it is valuable + concrete how-to, self-contained (paths, symptoms, acceptance criteria)' },
+              evidence: {
+                type: 'array',
+                minItems: 1,
+                maxItems: EVIDENCE_MAX_ITEMS,
+                description: 'Required. 1 to 3 items showing the user wants this; the app lists them on the card under "Evidence". Use absolute dates, not "today" (the card stays up for days).',
+                items: {
+                  type: 'object',
+                  properties: {
+                    kind: { type: 'string', enum: [...MUSE_TODO_EVIDENCE_KINDS], description: 'chat = the user\'s own words; file; calendar; activity = an in-app or computer-history line; rule = a watch rule that fired; web; other' },
+                    source: { type: 'string', description: 'Where you saw it, e.g. "You, in chat · 2026-11-20 10:12", a file path, "Calendar · Fri 2026-11-21 23:59"' },
+                    quote: { type: 'string', description: `A short excerpt in the original wording, at most ${EVIDENCE_QUOTE_MAX} characters` },
+                  },
+                  required: ['source', 'quote'],
+                },
+              },
             },
-            required: ['title'],
+            required: ['title', 'evidence'],
           },
         },
       },
@@ -72,6 +135,8 @@ export const museTodoProvider: ToolProvider = {
         const title = String(args.title || '').trim().slice(0, 200);
         if (!title) return 'Error: title 必填';
         const detail = String(args.detail || '').trim().slice(0, 4000);
+        const evidence = normalizeEvidence(args.evidence);
+        if (!evidence.length) return EVIDENCE_REQUIRED_ERROR; // 先于配额:被拒的不占这一时段的名额
         let maxPerWindow = 5;
         let windowHours = 1;
         try {
@@ -95,8 +160,8 @@ export const museTodoProvider: ToolProvider = {
           }
           const id = uuidv4();
           await query(
-            `INSERT INTO muse_todos (id, user_id, title, detail, status, source_session_id) VALUES (?, ?, ?, ?, 'pending', ?)`,
-            [id, ctx.userId, title, detail, ctx.sessionId],
+            `INSERT INTO muse_todos (id, user_id, title, detail, status, source_session_id, evidence) VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
+            [id, ctx.userId, title, detail, ctx.sessionId, JSON.stringify(evidence)],
           );
           ledger.inc('daily_muse', 'todoCreated');
           noteMuseProduced('producedTodos');
