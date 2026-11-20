@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -25,7 +25,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval, type ApprovalDecision } from '../src/services/approvals.js';
 import { enqueueRun, abortRun, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
-import { markRecoveryHost } from '../src/services/runProgress.js';
+import { markRecoveryHost, CALL_NOT_STARTED_RESULT } from '../src/services/runProgress.js';
 
 // ⑧⑨ 用:路径带 prectx → PreToolUse 注入上下文;参数带 boom → 执行抛错。其余一律透传原实现(①–⑦ 不受影响)。
 vi.mock('../src/hooks/index.js', async (importOriginal) => {
@@ -275,6 +275,45 @@ describe('挂起审批(托盘 run)', () => {
       expect(String(b?.content)).not.toContain("Waiting for the user's approval");
       expect((await persistedResult('c-a'))?.parked).toBeFalsy();
     } finally { markRecoveryHost(false); }
+  }, 20_000);
+
+  it('⑪ 已落库那一段里挂着的调用:「已开始」回填没写上 → 有副作用的不执行,如实说没跑(中断任务续跑评审 #4 的挂起那半)', async () => {
+    markRecoveryHost(true);
+    const st: any = deps().state;
+    const orig = st.patchToolResults;
+    st.patchToolResults = async (id: string, entries: any[]) => {
+      if (entries.some((e) => e?.tool_call_id === 'c-b' && e?.inflight?.state === 'started')) throw new Error('disk full');
+      return orig.call(st, id, entries);
+    };
+    try {
+      script = [
+        () => ({
+          content: '', reasoning: '', finishReason: 'stop', usage,
+          toolCalls: [
+            { id: 'c-a', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'a.txt'), content: 'A' }) } },
+            { id: 'c-b', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'b.txt'), content: 'B' }) } },
+          ],
+        }),
+        finalStep('Waiting for both.'),
+        finalStep('A is done, still waiting for B.'),
+        finalStep('B did not run.'),
+      ];
+      const r = await start(true);
+      const ra = await r.nextApproval();
+      const rb = await r.nextApproval();
+      await until(() => payloads.length >= 2, '收尾轮');
+      decide(ra, { action: 'approve' });
+      await until(() => payloads.length >= 3, '批完 A 之后的一轮');
+      decide(rb, { action: 'approve' });
+      expect((await r.settled()).status).toBe('done');
+      expect(readFileSync(join(outside, 'a.txt'), 'utf8')).toBe('A');
+      expect(existsSync(join(outside, 'b.txt')), '「已开始」没落库 → 不执行').toBe(false);
+      expect(String((await persistedResult('c-b'))?.content)).toContain(CALL_NOT_STARTED_RESULT);
+      const update = userMsgs(payloads[3]).filter((m) => m.startsWith(APPROVAL_UPDATE_OPEN)).pop() || '';
+      expect(update).toContain('[not run] write_file (call c-b)');
+      expect(update).not.toContain('It ran and failed');
+      expect(toolMsgs(payloads[3])).toContain(CALL_NOT_STARTED_RESULT);
+    } finally { st.patchToolResults = orig; markRecoveryHost(false); }
   }, 20_000);
 
   it('② 模型还在干活时就批了 → 下一个迭代边界兑现,不等收尾', async () => {

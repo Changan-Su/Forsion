@@ -3537,6 +3537,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const d = e.decision!;
         let status: 'approved' | 'failed' | 'rejected';
         let uncertain = false;
+        let notStarted = false;
         let done: ExecutedToolCall;
         if (d.action === 'reject') {
           status = 'rejected';
@@ -3545,6 +3546,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           try {
             done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);
             status = done.toolResult.isError ? 'failed' : 'approved';
+            // 「已开始」没落上库 → 没执行(评审 #4):别说成「跑了、失败了」
+            notStarted = done.toolResult.content === CALL_NOT_STARTED_RESULT;
           } catch (err: any) {
             if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
             // 抛到这里的(容器清理失败 / MCP 远端调用断连 / 执行完发布结果时出错)都发生在执行开始之后:它可能已经生效。
@@ -3556,10 +3559,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
         const inContext = await putBackParkedResult(e.call.id, done);
         const said = status === 'rejected' ? 'It was NOT run; that call\'s result above now says so.'
+          : notStarted ? 'It was approved but NOT run: the engine could not record that it was starting, so nothing was executed. That call\'s result above says so; run it again if it is still needed.'
           : uncertain ? 'It was started but raised an error before its result was recorded, so it may already have taken effect; verify the current state before retrying.'
           : status === 'failed' ? 'It ran and failed; the error is now that call\'s result above.'
             : 'It has run; its output is now that call\'s result above.';
-        parts.push(`[${status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +
+        parts.push(`[${notStarted ? 'not run' : status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +
           (d.action !== 'reject' && d.argsOverride ? `\nThe user edited the arguments before approving; it ran with: ${JSON.stringify(d.argsOverride)}` : '') +
           (inContext ? '' : '\n(That call is no longer in your context window; check the current state with a read-only tool if you need its result.)'));
       }

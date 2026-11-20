@@ -226,6 +226,26 @@ describe('child sessions', () => {
     expect(await pointer(`${P}-k2`)).toBeNull();
   });
 
+  it('#14 真实触发:被停下的那一轮续跑了,续跑 run 收尾时(onRunSettled)顺着链把续跑的结果送回主会话', async () => {
+    await setup();
+    const k = `${P}-k3`;
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, report_run_id, project_path, agent_config) VALUES (?, 'u1', 'tangu', 'K3', 'm1', 'user', ?, 'RI3', ?, ?)`,
+      [k, P, home, JSON.stringify({ execMode: 'host', cwd: home })]);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, error, input, assistant_message_id, resumed_by) VALUES ('RI3', ?, 'u1', 'interrupted', 'interrupted:app_update', '{}', 'RI3-a', 'RI3r')`, [k]);
+    await createRun({ id: 'RI3r', sessionId: k, userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: 'RI3r-a',
+      input: { message: 'continue', userMessageId: 'RI3r-u', attachments: [], agentConfig: { execMode: 'host', cwd: home }, trigger: 'recovery', resumeOf: 'RI3' } });
+    reply = 'k3 done after resume';
+    try {
+      enqueueRun(k, 'RI3r');
+      await until(async () => (await updatesIn(P)).length > 0);
+      await idle();
+    } finally { reply = 'child result'; }
+    const ups = await updatesIn(P);
+    expect(ups).toHaveLength(1);
+    expect(ups[0]).toContain('status="finished">\nk3 done after resume');
+    expect((await query<any[]>(`SELECT report_run_id FROM chat_sessions WHERE id = ?`, [k]))[0].report_run_id).toBeNull();
+  });
+
   it('子会话不能再开子会话;子代理 / Muse / 团队成员 / 通道 run 不可见', async () => {
     await setup();
     const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
