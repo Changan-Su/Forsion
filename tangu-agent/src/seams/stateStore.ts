@@ -78,6 +78,9 @@ export interface FinalizeMessageInput {
   agentSlug?: string;
   /** 消息来由(chat_messages.origin,≤24 字符):'fallback:quota' = 这一轮额度用完改用了后备模型(modelId 即实际模型)。 */
   origin?: string;
+  /** 这一行先被进度写(persistAssistantProgress)插过、这是它第一次正式落库:时间戳改成这次的(与没有进度写时逐字相同)。
+   *  只有本机 SQL 存储会收到(云端 worker 不做进度写)。 */
+  restamp?: boolean;
 }
 
 /** 重启自愈看到的在飞 run:owner = 持有它的本机引擎进程 `<pid>:<启动时刻秒>`(NULL = 不知道;见 services/runOwner.ts)。 */
@@ -147,6 +150,10 @@ export interface StateStore {
    *  返回是否真改了。可选:没实现的存储(云端 http)就不改正,只影响显示。 */
   correctUserMessage?(m: { id: string; sessionId: string; content: string }): Promise<boolean>;
   finalizeAssistantMessage(m: FinalizeMessageInput): Promise<void>;
+  /** 边跑边落库(中断任务续跑方案 B · E2):在工具边界把这一轮当前助手段写进 chat_messages,引擎崩了下次也看得到做到哪了。
+   *  与 finalize 的差别:不动 display_files 里已有的(没给就留着,图片交付回执在里面)、不刷会话 updated_at、插入后不改时间戳;
+   *  顺带刷新 run 行的 updated_at(恢复按它算「多久之前停的」)。可选:只有本机 SQL 存储实现,云端 worker 没有 = 不做进度写。 */
+  persistAssistantProgress?(m: FinalizeMessageInput & { runId: string }): Promise<void>;
   hasImageDelivery?(userId: string, sessionId: string, delivery: { id: string; receipt: string }): Promise<boolean>;
 
   // ── sessions ──

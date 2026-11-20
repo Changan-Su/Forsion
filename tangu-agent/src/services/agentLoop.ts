@@ -35,7 +35,7 @@ import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { LENGTH_RESUME_CHECK, type InterruptReason } from '../contracts/turnResume.js';
-import { isRecoveryHost } from './runProgress.js';
+import { isRecoveryHost, createRowWriter, markLiveRow, unmarkLiveRow, type ToolInflight } from './runProgress.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
@@ -1718,6 +1718,92 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let currentAssistantId = run.assistant_message_id || uuidv4();
   // 压缩检查点的「段落库后补落」钩子:函数级声明,catch(中止落半截)路径也要调;真身在 workingMessages 就位后赋值。
   let settleCheckpointAfterFinalize: (messageId: string) => Promise<void> = async () => {};
+  // ── 边跑边落库(中断任务续跑方案 B · E2)──
+  // 工具边界上把当前助手段写进 chat_messages:模型回了这批调用(执行前)、每个调用开始执行、每个调用有了结果。
+  // 引擎崩了 / 被强杀,下次启动时这一行还在,回放能分清「没开始 / 开始了结局不明 / 做完了」(historyReplay 三分法)。
+  // 累加器(finalContent / allToolCalls / allToolResults)一个字不改:进度写拿的是它们的**拷贝**加上下面两张表;
+  // 正常收尾 / 用户按停 / 出错落库的那一行与没有进度写时逐字相同(时间戳也是,见 restamp)。只在本机恢复宿主上做。
+  const progressOn = isRecoveryHost() && typeof deps().state.persistAssistantProgress === 'function';
+  const rowWriter = createRowWriter((e: any) => console.warn(`[agent-core] run=${runId} 进度落库失败:`, e?.message || e));
+  /** 当前段里还没有真结果的调用:pending = 这批里还没轮到它;started = 正在执行(可能已生效)。 */
+  const callProgress = new Map<string, ToolInflight>();
+  /** 这一批里已经出了结果、还没并进 allToolResults 的(并进去在整批跑完之后)。 */
+  const batchDone = new Map<string, any>();
+  const sealedRows = new Set<string>(); // 已正式收尾的段(转向切段 / run 收尾):之后的进度写不再碰它
+  const restampPending = new Set<string>(); // 进度写插过、还没正式落库过的段 → 第一次正式落库时把时间戳改成那一刻
+  const finalizedOnce = new Set<string>();
+  const liveMarked = new Set<string>();
+  /** done 已落库 / done 事件已发:之后哪怕被停或抛错,catch 也不许再改状态、再落一遍(那会把答完的一轮记成中断,下次被续跑)。 */
+  let doneRecorded = false;
+  let donePublished = false;
+  /** 当前段的工具结果「进度视图」:已有真结果的原样,这一批已完成的补上,其余带 inflight 记录(没有 content)。 */
+  const progressResults = (): any[] => {
+    const byId = new Map<string, any>();
+    for (const r of allToolResults) if (r && typeof r.tool_call_id === 'string') byId.set(r.tool_call_id, r);
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const call of allToolCalls) {
+      seen.add(call.id);
+      const done = batchDone.get(call.id);
+      const p = callProgress.get(call.id);
+      if (done) out.push(done);
+      else if (p) out.push({ tool_call_id: call.id, name: isHtmlCardTool(call.function.name) ? LEGACY_HTML_CARD_TOOL : call.function.name, inflight: { ...p } });
+      else if (byId.has(call.id)) out.push(byId.get(call.id));
+    }
+    for (const r of allToolResults) if (!seen.has(r?.tool_call_id)) out.push(r);
+    return out;
+  };
+  const writeProgress = async (): Promise<void> => {
+    const id = currentAssistantId;
+    if (sealedRows.has(id) || (!finalContent.trim() && !allToolCalls.length)) return;
+    // 快照在第一个 await 之前取完:写链串行,后取的快照不会被先取的盖掉
+    const row = {
+      runId, messageId: id, sessionId, content: finalContent, reasoning: finalReasoning,
+      toolCalls: [...allToolCalls], toolResults: progressResults(), displayFiles: [...pendingDisplayFiles], ...assistantRowIdentity(modelId),
+    };
+    if (!finalizedOnce.has(id)) restampPending.add(id);
+    markLiveRow(id); liveMarked.add(id);
+    await deps().state.persistAssistantProgress!(row);
+  };
+  const requestProgress = (): Promise<void> => (progressOn ? rowWriter.progress(writeProgress) : Promise.resolve());
+  /** 本 run 的段正式落库:与进度写排在同一条链上。seal = 这一段到此为止(转向切段 / run 收尾);close = run 的最后一笔,之后进度写全部作废。 */
+  const finalizeSegment = (
+    messageId: string, content: string, reasoning: string, toolCalls: ToolCall[], toolResults: any[], displayFiles: DisplayFileItem[] | undefined,
+    opts?: { seal?: boolean; close?: boolean },
+  ): Promise<void> => {
+    if (!progressOn) return finalizeAssistantMessage(messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles);
+    return rowWriter.exclusive(async () => {
+      if (opts?.seal) sealedRows.add(messageId);
+      const restamp = restampPending.delete(messageId);
+      finalizedOnce.add(messageId);
+      await finalizeAssistantMessage(messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles, restamp);
+      if (opts?.seal) { unmarkLiveRow(messageId); liveMarked.delete(messageId); }
+    }, { close: opts?.close });
+  };
+  /** 一个调用开始执行(之后可能已经生效)。当前段里的 → 记 started 并等这次进度写落地;已经切段落库、还挂着的待批调用 → 改那一段的快照再落一次。 */
+  const markCallStarted = async (callId: string, sideEffect: string): Promise<void> => {
+    if (!progressOn) return;
+    if (allToolCalls.some((c) => c.id === callId)) {
+      callProgress.set(callId, { state: 'started', sideEffect });
+      await requestProgress();
+      return;
+    }
+    for (const [segId, snap] of finalizedWithParked) {
+      const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
+      if (k < 0) continue;
+      const results = [...snap.toolResults];
+      results[k] = { tool_call_id: callId, name: snap.toolResults[k]?.name, inflight: { state: 'started', sideEffect } };
+      await finalizeSegment(segId, snap.content, snap.reasoning, snap.toolCalls, results, snap.displayFiles).catch((e: any) => console.warn(`[agent-core] run=${runId} 进度落库失败:`, e?.message || e));
+      return;
+    }
+  };
+  /** 一个调用有了结果(真结果 / 拒绝 / 挂起占位):记进这一批的已完成表,合并式落一次进度(并行工具各自完成时都会来)。 */
+  const noteCallDone = (toolResult: any): Promise<void> => {
+    if (!progressOn || !toolResult || typeof toolResult.tool_call_id !== 'string') return Promise.resolve();
+    callProgress.delete(toolResult.tool_call_id);
+    batchDone.set(toolResult.tool_call_id, toolResult);
+    return requestProgress();
+  };
 
   try {
     if (approvalTray) setApprovalTray(runId, true);
@@ -2393,9 +2479,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 否决本次提交：不跑模型，直接以 hook 原因收尾（同一次触发即含否决+注入，避免在路由层重复触发同一 hook）。
         const reason = `⛔ Hook 拦截了本次提交：${uv.blockReason || 'UserPromptSubmit hook 阻止'}`;
         await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, reason, '', [], [], []);
+        await updateRunStatus(runId, 'done', { result: { content: reason } }); // 答完先记 done,同正常收尾
+        doneRecorded = true;
         await drain(runId);
         await publish(runId, 'done', { content: reason });
-        await updateRunStatus(runId, 'done', { result: { content: reason } });
+        donePublished = true;
         void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
         return;
       }
@@ -2696,7 +2784,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
         const files = pendingDisplayFiles.splice(0);
-        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files);
+        await finalizeSegment(finalizedId, finalContent, finalReasoning, allToolCalls, allToolResults, files, { seal: true });
         await settleCheckpointAfterFinalize(finalizedId);
         if (allToolResults.some((r) => r?.parked)) {
           finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
@@ -2737,6 +2825,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       finalReasoning = '';
       allToolCalls.length = 0;
       allToolResults.length = 0;
+      callProgress.clear(); batchDone.clear();
       currentAssistantId = uuidv4();
       await publish(runId, 'turn_boundary', {
         finalizedAssistantId: finalizedId,
@@ -2840,8 +2929,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // A thin worker's publish only queues an event. Persist the complete message first;
         // this HTTP/SQL call must succeed before the image tool can acknowledge delivery.
         const files = [...pendingDisplayFiles, ...items];
-        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, finalContent, finalReasoning,
-          [...allToolCalls], [...allToolResults], files);
+        // 边跑边落库开着时带上这一批的进度(同一行,只是此刻比收尾时多了在飞记录;收尾那次照常覆盖)。
+        await finalizeSegment(currentAssistantId, finalContent, finalReasoning,
+          [...allToolCalls], progressOn ? progressResults() : [...allToolResults], files);
         pendingDisplayFiles.push(...items);
         for (const item of items) await publish(runId, 'display_file', item);
       },
@@ -3044,6 +3134,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }): Promise<ExecutedToolCall> => {
       (ptc?.signal ?? ac.signal).throwIfAborted();
       const executionContext = { ...toolCtx, toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : {}) };
+      // 意图先落盘(E2):执行前把「已开始」写进这一行 —— 崩在执行中,下次回放说「结局不明,先核对」,而不是「没跑过」。
+      // 只读程序里嵌套的调用(ptc)不在 allToolCalls 里,不记。
+      if (!ptc) {
+        await markCallStarted(call.id, String(getToolCapabilities(execCall.function.name, toolCtx).sideEffect || 'unknown'));
+        (ac.signal).throwIfAborted();
+      }
       const result = await executeTool(execCall, executionContext);
       // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
       // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。
@@ -3134,6 +3230,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       for (let i = 0; i < calls.length;) {
         if (!canRunToolInParallel(calls[i])) {
           const single = await executeOneToolCall(calls[i]);
+          void noteCallDone(single.toolResult); // 不等:下一个调用开始时的那次进度写会把它合进去
           toolResults.push(single.toolResult);
           if (hasMarketplaceCards([single.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(single.toolMessage);
@@ -3145,9 +3242,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           batch.push(calls[i + batch.length]);
         }
         const parallelGroup = batch.length > 1 ? uuidv4() : undefined;
+        // 并行的各自一完成就记(合并式进度写,谁先完成谁先落);整批跑完再按调用顺序并进累加器,同今天。
         const executed = batch.length > 1
-          ? await Promise.all(batch.map((call) => executeOneToolCall(call, parallelGroup)))
-          : [await executeOneToolCall(batch[0])];
+          ? await Promise.all(batch.map((call) => executeOneToolCall(call, parallelGroup).then((r) => { void noteCallDone(r.toolResult); return r; })))
+          : [await executeOneToolCall(batch[0]).then((r) => { void noteCallDone(r.toolResult); return r; })];
         for (const item of executed) {
           toolResults.push(item.toolResult);
           if (hasMarketplaceCards([item.toolResult])) marketplaceCardsShown = true;
@@ -3171,13 +3269,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     /** putBackParkedResult 的落库那半:段还在累积 → 改累加器(同步,随段落库);段已落库 → 用快照按同一 id 再 finalize。 */
     const persistParkedResult = async (callId: string, toolResult: any): Promise<void> => {
       const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
-      if (j >= 0) allToolResults[j] = toolResult;
+      callProgress.delete(callId); // 批准后执行时记的 started 到此为止:真结果回来了
+      if (j >= 0) { allToolResults[j] = toolResult; void requestProgress(); }
       else {
         for (const [segId, snap] of finalizedWithParked) {
           const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
           if (k < 0) continue;
           snap.toolResults[k] = toolResult;
-          await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
+          await finalizeSegment(segId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
           if (!snap.toolResults.some((r) => r?.parked)) finalizedWithParked.delete(segId);
           break;
         }
@@ -4136,6 +4235,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
       persistToolCallsAtCurrentOffset(res.toolCalls);
       usedTools = true; // 到达本行说明这一轮在调工具并继续循环;若后续顶到 lastIter 即为真·循环耗尽
+      // 意图先落盘(E2):这批调用执行之前先把这一段(含每个调用的 pending 记录)写进库。
+      if (progressOn) {
+        for (const call of res.toolCalls) {
+          callProgress.set(call.id, { state: 'pending', sideEffect: String(getToolCapabilities(call.function.name, toolCtx).sideEffect || 'unknown') });
+        }
+        await requestProgress();
+      }
 
       const toolResults = await executeToolCallsInOrder(res.toolCalls);
       // 工具(view_image)读到的图片 → 物化成一条 user 图像消息追加到尾部,下一轮模型即可"看见"。
@@ -4167,6 +4273,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
       }
       allToolResults.push(...toolResults);
+      for (const r of toolResults) { batchDone.delete(r?.tool_call_id); callProgress.delete(r?.tool_call_id); }
 
       await appendStep({
         id: uuidv4(), runId, stepNo: iteration,
@@ -4185,10 +4292,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
 
-    await finalizeAssistantMessage(
-      currentAssistantId,
-      sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+    await finalizeSegment(
+      currentAssistantId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0), { seal: true, close: true },
     );
+    // 答完就先记 done(中断任务续跑方案 B):终稿已落库,之后的旁务(回写工作区、发事件、复盘)慢,
+    // 崩 / 被停在它们中间时行不能还停在 running —— 否则下次启动会把一轮已经答完的再续一遍(Claude Code 修过六次的那个坑)。
+    // SSE 在这段空档里不抢先补 done(routes/runs.ts 看 isRunLive),真的 done 事件随后照发。
+    await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
+    doneRecorded = true;
     await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
     await drain(runId); // 确保 token 等事件全部落库后再发 done
@@ -4226,7 +4337,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ...(finalTruncated ? { truncated: true } : {}),
       ...(lengthResumed ? { lengthResumed: true } : {}),
     });
-    await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
+    donePublished = true;
     // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
     // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
     // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
@@ -4245,6 +4356,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       lazyCheckpoints.set(sessionId, task);
     }
   } catch (err: any) {
+    if (doneRecorded) {
+      // 终稿和 done 都已落库,出错 / 被停在收尾旁务里:状态不改、不再落一遍(那会把答完的一轮记成中断,下次被续跑);
+      // done 事件还没发就补发,在线客户端照常收尾。
+      console.warn(`[agent-core] run ${runId} 收尾旁务出错(done 已落库,状态不改):`, err?.message || err);
+      if (!donePublished) {
+        await publish(runId, 'done', { content: finalContent, toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })) }).catch(() => {});
+      }
+      await drain(runId).catch(() => {});
+      return;
+    }
     // ac.signal.aborted 也算:用户按停后,在途的前置请求可能以传输错(非 AbortError)收尾,
     // 只认错误名会把用户主动停止误记成 failed(Codex 评审逮到)。
     // Stopping the CLI is not proof that its container stopped: surface uncertain cleanup even after user cancellation.
@@ -4265,8 +4386,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {
-      await finalizeAssistantMessage(
-        currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+      // interrupted:带上这一批的进度(做完的结果 + 没开始 / 开始了的在飞记录),回放据此分三种说法;
+      // 用户按停 / 出错:与没有进度写时逐字相同(没结果的调用照旧缺项)。这是这一 run 的最后一笔,之后进度写作废。
+      await finalizeSegment(
+        currentAssistantId, finalContent, finalReasoning, allToolCalls, interruptReason && progressOn ? progressResults() : allToolResults,
+        pendingDisplayFiles.splice(0), { seal: true, close: true },
       ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
       // 半截段落库了 → 本 run 压缩覆盖到它的检查点一并补落(否则下个 run 又把整段原样回放再总结一遍)
       await settleCheckpointAfterFinalize(currentAssistantId).catch((e: any) => console.warn('[agent-core] settle checkpoint on abort failed:', e?.message || e));
@@ -4279,6 +4403,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
         }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
       }
+    } else if (progressOn) {
+      void rowWriter.exclusive(async () => {}, { close: true }); // 没有可落的段:也要关掉进度写(还在跑完的并行工具别再写)
     }
     // 用户按停、且这一轮已经调了好几次工具:记在会话上,等他的下一轮跑完再让后台复盘(那时才看得到他接下来说了什么)。
     if (aborted && userStopped.has(ac)) noteUserStop(sessionId, runToolNames);
@@ -4295,6 +4421,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
+    for (const id of liveMarked) unmarkLiveRow(id); // 本 run 的段不再算「在跑」:之后回放按三分法说
     // 兜底 snapshot（失败/中止路径未走到成功段时）；会话沙箱保持温，由空闲 TTL reaper 回收。
     await flush();
     parkAc.abort(); // 没等到拍板的挂起审批一并撤掉(登记表清空 → 事后点批准回 410)
@@ -4325,14 +4452,19 @@ async function finalizeAssistantMessage(
   toolCalls: ToolCall[],
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
+  restamp?: boolean,
 ): Promise<void> {
-  // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
-  const swap = modelSwaps.get(currentRunId() || '');
   await deps().state.finalizeAssistantMessage({
-    messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
-    agentSlug: currentDisplayAgentSlug(),
-    ...(swap ? { origin: swap.origin } : {}),
+    messageId, sessionId, content, reasoning, toolCalls, toolResults, displayFiles, ...assistantRowIdentity(modelId),
+    ...(restamp ? { restamp: true } : {}),
   });
+}
+
+/** 落库助手行的「谁、用哪个模型」:额度用完换了后备 → 记实际用的模型并标 origin(重开会话时界面据此还原「改用了」那一行)。
+ *  正式落库与进度写共用,两边写出来的这几列一样。 */
+function assistantRowIdentity(modelId: string): { modelId: string; agentSlug?: string; origin?: string } {
+  const swap = modelSwaps.get(currentRunId() || '');
+  return { modelId: swap?.modelId ?? modelId, agentSlug: currentDisplayAgentSlug(), ...(swap ? { origin: swap.origin } : {}) };
 }
 
 function safeParse(s: string): any {
