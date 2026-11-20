@@ -9,8 +9,9 @@
  *  - compactSession:手动 /compact(总结到最后一行)与 run 收尾后的「窗口外老行」惰性检查点
  *    (总结到指定时间戳),都直接落库。
  *
- * 检查点语义(hydrate / rowCoverage 同一把尺):through_timestamp 及之前的行整体被摘要覆盖;
- * through_message_id 指向的那一行只覆盖到 through_tool_call_id(含),其后的工具轮原样回放。
+ * 检查点语义(hydrate / rowCoverage 同一把尺):严格早于 through_timestamp 的行整体被摘要覆盖;
+ * through_message_id 指向的那一行只覆盖到 through_tool_call_id(含),其后的工具轮原样回放;同一毫秒的其他行
+ * 只有记在 through_peer_ids 里的算覆盖(11-20),其余原样回放。
  * 摘要文本一旦写定不再变,summaryMessage 的字节 run 内与 hydrate 时逐字相同 → 压缩后的前缀可跨 run 命中缓存。
  * 所有读 fail-safe → 退回未压缩行为;用户取消会抛出,调用方须终结 run 而非继续机械折叠。
  */
@@ -177,29 +178,73 @@ export interface Checkpoint {
   id: string;
   summary: string;
   throughTimestamp: number;
-  /** 行内切点:该行只覆盖到 throughToolCallId(含)。 */
+  /** 边界那一行(「锚点」)。有 throughToolCallId = 行内切点:该行只覆盖到这个调用(含)。 */
   throughMessageId?: string;
   throughToolCallId?: string;
+  /** 与锚点**同一毫秒**、且整行进了摘要输入的其他行(11-20,`session_summaries.through_peer_ids`)。
+   *  只会把这几行从「没覆盖」升级成「已覆盖」;缺省 / 读不出 = 空,即 09-15 起的保守语义(同毫秒邻行原样回放)。 */
+  throughPeerIds?: string[];
 }
 
-/** 读会话最新压缩检查点(无则 null)。失败 → null(fail-safe)。 */
+/** 一份检查点最多记这么多同毫秒邻行;超出的不记 = 照旧回放(保守)。一毫秒里实际只见过两三行。 */
+export const PEER_IDS_MAX = 64;
+
+/** through_peer_ids 列 / 接缝字段 → id 数组。NULL、坏 JSON、非数组都当空(空就是保守语义,不会因此吞行)。 */
+export function parsePeerIds(v: unknown): string[] | undefined {
+  let arr: unknown = v;
+  if (typeof v === 'string') { try { arr = JSON.parse(v); } catch { return undefined; } }
+  if (!Array.isArray(arr)) return undefined;
+  const ids = arr.filter((x): x is string => typeof x === 'string' && x.length > 0);
+  return ids.length ? ids : undefined;
+}
+
+/** 去重、去掉锚点自己、保持先后、封顶。先传的列表优先保留(调用方把上一份检查点的集合放前面,封顶时超集关系不破)。 */
+export function normalizePeerIds(anchor: string | undefined, ...lists: Array<readonly string[] | undefined>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>(anchor ? [anchor] : []);
+  for (const list of lists) for (const id of list ?? []) {
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+    if (out.length >= PEER_IDS_MAX) return out;
+  }
+  return out;
+}
+
+/** 检查点在边界那一毫秒里**整行**覆盖了哪些行:邻行清单 + 整行覆盖的锚点(行内切点的锚点不算)。 */
+export function wholeRowsAtBoundary(cp: Pick<Checkpoint, 'throughMessageId' | 'throughToolCallId' | 'throughPeerIds'> | null | undefined): string[] {
+  if (!cp?.throughMessageId) return [];
+  return cp.throughToolCallId ? [...(cp.throughPeerIds ?? [])] : [cp.throughMessageId, ...(cp.throughPeerIds ?? [])];
+}
+
+/** 读会话最新压缩检查点(无则 null)。失败 → null(fail-safe)。
+ *  同一时间戳 11-20 起只原地更新、不再另插一行;旧库里已有的同时间戳多行都没有邻行清单,挑哪份都是保守语义。 */
 export async function getLatestSummary(sessionId: string): Promise<Checkpoint | null> {
   try {
     const remote = deps().state?.compaction;
-    if (remote) return await remote.latest(sessionId);
+    if (remote) {
+      const cp = await remote.latest(sessionId);
+      if (!cp) return null;
+      // 网关原样回传;旧网关没有这个字段 → 空(保守)。坏值同样当空。
+      const peers = parsePeerIds((cp as any).throughPeerIds);
+      const { throughPeerIds: _drop, ...rest } = cp as any;
+      return peers && rest.throughMessageId ? { ...rest, throughPeerIds: peers } : rest;
+    }
     const rows = await query<any[]>(
-      `SELECT id, summary, through_timestamp, through_message_id, through_tool_call_id FROM session_summaries
+      `SELECT id, summary, through_timestamp, through_message_id, through_tool_call_id, through_peer_ids FROM session_summaries
        WHERE session_id = ? ORDER BY through_timestamp DESC, created_at DESC LIMIT 1`,
       [sessionId],
     );
     const r = rows[0];
     if (!r || !r.summary) return null;
+    const peers = r.through_message_id ? parsePeerIds(r.through_peer_ids) : undefined;
     return {
       id: String(r.id || ''),
       summary: String(r.summary),
       throughTimestamp: Number(r.through_timestamp) || 0,
       ...(r.through_message_id ? { throughMessageId: String(r.through_message_id) } : {}),
       ...(r.through_tool_call_id ? { throughToolCallId: String(r.through_tool_call_id) } : {}),
+      ...(peers ? { throughPeerIds: peers } : {}),
     };
   } catch {
     return null;
@@ -213,16 +258,22 @@ export type RowCoverage = 'covered' | 'partial' | 'uncovered';
  * 时间戳只有毫秒、不是全序:同一毫秒里可以落两行(连着两条 steer 消息)。所以边界行**按 id 认**:
  *  - 严格早于 through_timestamp 的行 → covered;
  *  - through_message_id 那一行 → 有 tool_call 切点是 partial,否则 covered;
- *  - 与它**同一毫秒**的其它行 → uncovered(原样回放;重复安全,吞掉才是丢数据);
+ *  - 与它**同一毫秒**、记在 through_peer_ids 里的行 → covered(它们整行进过摘要输入,11-20);
+ *  - 与它同一毫秒的其它行 → uncovered(原样回放;重复安全,吞掉才是丢数据 —— 检查点落下之后才在这一毫秒落库的
+ *    插话 / 打断标记就是这种,所以绝不能改回「同一毫秒都算覆盖」);
  *  - 时间戳缺失 / 非法(thin worker 旧端点)→ uncovered,绝不把「未知」当成最早(Codex 09-15 评审 #1/#3)。
  * 没有 through_message_id 的老检查点(09-15 之前的手动 /compact)维持 `<=` 语义。
+ * 压缩、回放、/usage、窗口外惰性检查点都走这一个函数,别另写时间戳比较。
  */
 export function rowCoverage(row: { id: string; timestamp?: number | null }, cp: Checkpoint | null | undefined): RowCoverage {
   if (!cp || !(cp.throughTimestamp > 0)) return 'uncovered';
   if (cp.throughMessageId && row.id === cp.throughMessageId) return cp.throughToolCallId ? 'partial' : 'covered';
   const ts = Number(row.timestamp);
   if (!Number.isFinite(ts) || ts <= 0) return 'uncovered';
-  if (cp.throughMessageId) return ts < cp.throughTimestamp ? 'covered' : 'uncovered';
+  if (cp.throughMessageId) {
+    if (ts < cp.throughTimestamp) return 'covered';
+    return ts === cp.throughTimestamp && !!cp.throughPeerIds?.includes(row.id) ? 'covered' : 'uncovered';
+  }
   return ts <= cp.throughTimestamp ? 'covered' : 'uncovered';
 }
 
@@ -239,8 +290,35 @@ export async function messageTimestamp(messageId: string): Promise<number> {
 }
 
 /** 边界:ts = 覆盖到的最后一行的时间戳;messageId = 那一行(整行覆盖也带,用来区分同一毫秒的邻行);
- *  toolCallId = 行内切点(只覆盖到这个调用)。 */
-export interface CheckpointThrough { ts: number; messageId?: string; toolCallId?: string }
+ *  toolCallId = 行内切点(只覆盖到这个调用);peerIds = 同一毫秒里整行进了摘要输入的其他行(见 Checkpoint.throughPeerIds)。 */
+export interface CheckpointThrough { ts: number; messageId?: string; toolCallId?: string; peerIds?: string[] }
+
+/**
+ * 同一时间戳上,新边界是不是旧边界的超集(只有超集才能原地替换;否则会有已进旧摘要的行重新原样回放,或者两份检查点
+ * 来回换锚点 —— 11-20 的翻环就是这么来的)。超集 =
+ *  - 旧的整行集合(锚点 + 邻行)在新边界里仍是整行覆盖;
+ *  - 旧锚点是行内切点时:新边界把它整行覆盖,或者仍以它为锚点、切点不往前挪(认不出新切点也算倒退)。
+ * 一次压缩切的是工作上下文的前缀,只有切口那一行可能被切成两半 → 一毫秒里最多一个行内切点,就是锚点。
+ * ordinal(messageId, toolCallId) = 该调用在那一行 tool_calls 里的序号(找不到 -1)。纯函数,网关(server)同一套规则。
+ */
+export async function boundaryGrows(
+  prev: Pick<Checkpoint, 'throughMessageId' | 'throughToolCallId' | 'throughPeerIds'>,
+  next: { messageId: string; toolCallId?: string; peerIds: readonly string[] },
+  ordinal: (messageId: string, toolCallId: string) => Promise<number>,
+): Promise<boolean> {
+  if (!prev.throughMessageId) return false; // 老语义(整毫秒都算覆盖):认不出是不是超集,不动
+  const nextWhole = new Set(next.peerIds);
+  if (!next.toolCallId) nextWhole.add(next.messageId);
+  for (const id of wholeRowsAtBoundary(prev)) if (!nextWhole.has(id)) return false;
+  if (prev.throughToolCallId && !nextWhole.has(prev.throughMessageId)) {
+    if (next.messageId !== prev.throughMessageId || !next.toolCallId) return false;
+    if (next.toolCallId !== prev.throughToolCallId) {
+      const [p, n] = await Promise.all([ordinal(next.messageId, prev.throughToolCallId), ordinal(next.messageId, next.toolCallId)]);
+      if (n < 0 || (p >= 0 && n < p)) return false;
+    }
+  }
+  return true;
+}
 
 /** 某调用在该行 tool_calls 里的序号(找不到 → -1;读不到行 → -1)。同一行两个切点比先后用。 */
 async function toolCallOrdinal(messageId: string, toolCallId: string): Promise<number> {
@@ -257,8 +335,9 @@ async function toolCallOrdinal(messageId: string, toolCallId: string): Promise<n
 /**
  * 落一个检查点。绝不把边界往回挪(更早的检查点会让已总结进后一份摘要的行重新原样回放):
  *  - 更晚的时间戳 → 插一行;
- *  - 同一时间戳、同一行 → 只允许「更完整」的边界就地更新:整行 > 靠后的切点 > 靠前的切点(相同切点 = 只换摘要);
- *  - 同一时间戳、不同行(同一毫秒的邻行)→ 插一行(两者都合法,hydrate 对邻行按 id 认、不按时间戳吞)。
+ *  - 同一时间戳 → 只允许原地替换成超集(见 boundaryGrows:整行集合只增不减、切点不往前挪),不再另插一行。
+ *    11-20 之前这里对「同一毫秒的邻行」另插一行,两份检查点轮流当最新 → 锚点来回换、/usage 的环翻回压缩前;
+ *  - 同一时间戳但旧检查点没有锚点(09-15 之前的老语义)/ 新边界没有锚点 → 不动。
  * revision:调用方在开始读历史时记下的 historyRevision;落库前不一致(中途有删改)→ 丢弃,不写。
  * 写失败返回 false,不抛。
  */
@@ -271,25 +350,24 @@ export async function persistCheckpoint(
       console.warn(`[agent-core] session=${sessionId} 历史在摘要期间被删改,丢弃这份检查点`);
       return false;
     }
+    const peers = normalizePeerIds(through.messageId, through.peerIds);
     const remote = deps().state?.compaction;
-    if (remote) return await remote.persist(sessionId, summary, through);
+    if (remote) return await remote.persist(sessionId, summary, { ...through, ...(through.messageId ? { peerIds: peers } : {}) });
+    const peerCol = through.messageId && peers.length ? JSON.stringify(peers) : null;
     const latest = await getLatestSummary(sessionId);
     if (latest && latest.throughTimestamp > through.ts) return false;
-    if (latest && latest.id && latest.throughTimestamp === through.ts && latest.throughMessageId && latest.throughMessageId === through.messageId) {
-      if (!latest.throughToolCallId && through.toolCallId) return false; // 整行 → 切点 = 倒退
-      if (latest.throughToolCallId && through.toolCallId && latest.throughToolCallId !== through.toolCallId) {
-        const [prev, next] = await Promise.all([toolCallOrdinal(through.messageId!, latest.throughToolCallId), toolCallOrdinal(through.messageId!, through.toolCallId)]);
-        if (next < 0 || (prev >= 0 && next < prev)) return false; // 切点往前挪 = 倒退;认不出新切点也不动
-      }
+    if (latest && latest.id && latest.throughTimestamp === through.ts) {
+      if (!through.messageId) return false;
+      if (!(await boundaryGrows(latest, { messageId: through.messageId, toolCallId: through.toolCallId, peerIds: peers }, toolCallOrdinal))) return false;
       await query(
-        `UPDATE session_summaries SET summary = ?, through_tool_call_id = ? WHERE id = ?`,
-        [summary, through.toolCallId ?? null, latest.id],
+        `UPDATE session_summaries SET summary = ?, through_message_id = ?, through_tool_call_id = ?, through_peer_ids = ? WHERE id = ?`,
+        [summary, through.messageId, through.toolCallId ?? null, peerCol, latest.id],
       );
       return true;
     }
     await query(
-      `INSERT INTO session_summaries (id, session_id, summary, through_timestamp, through_message_id, through_tool_call_id) VALUES (?, ?, ?, ?, ?, ?)`,
-      [uuidv4(), sessionId, summary, through.ts, through.messageId ?? null, through.toolCallId ?? null],
+      `INSERT INTO session_summaries (id, session_id, summary, through_timestamp, through_message_id, through_tool_call_id, through_peer_ids) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv4(), sessionId, summary, through.ts, through.messageId ?? null, through.toolCallId ?? null, peerCol],
     );
     return true;
   } catch (e: any) {
@@ -606,10 +684,13 @@ export function compactionRange(msgs: ChatMessage[], keepRecentTokens: number, f
 
 /** 总结覆盖到了哪里(供 agentLoop 落检查点)。 */
 export interface CompactBoundary {
-  /** 覆盖到的最后一条**已落库**行(整行覆盖):id + 时间戳。范围里没有已落库行 → undefined。 */
-  through?: MessageSource;
+  /** 覆盖到的最后一条**已落库**行(整行覆盖):id + 时间戳;peerIds = 与它同一毫秒、也整行在范围里的其他行。
+   *  范围里没有已落库行 → undefined。 */
+  through?: MessageSource & { peerIds?: string[] };
   /** 行内切点:某已落库行只覆盖了一部分 → 该行 id + 已覆盖的最后一个调用 id。与 through 互斥。 */
-  partialRow?: { id: string; ts: number; toolCallId: string };
+  partialRow?: { id: string; ts: number; toolCallId: string; peerIds?: string[] };
+  /** 范围里整行被总结的已落库行(一条也没留在保留区);只在有 pendingToolCallId 时给 —— 该段落库后按它的时间戳从这里挑同毫秒邻行。 */
+  wholeRows?: MessageSource[];
   /** 覆盖到了尚未落库的助手段(带工具调用)→ 已覆盖的最后一个调用 id;该段 finalize 后再落检查点。 */
   pendingToolCallId?: string;
   /** 范围里有有损消息(机械折叠过 / hydrate 时按硬帽截过):摘要没见过原文,**不许**推进持久检查点。 */
@@ -639,13 +720,28 @@ function computeBoundary(covered: ChatMessage[], kept: ChatMessage[]): CompactBo
   const out: CompactBoundary = {};
   if (lossy) out.lossy = true;
   if (pendingToolCallId) out.pendingToolCallId = pendingToolCallId;
+  // 整行在范围里的已落库行:有任何一截留在保留区的不算(那一截还要原样回放)
+  const keptIds = new Set(kept.map((m) => messageSource(m)?.id).filter(Boolean) as string[]);
+  const whole = new Map<string, MessageSource>();
+  for (const m of covered) { const src = messageSource(m); if (src && !keptIds.has(src.id)) whole.set(src.id, src); }
+  const wholeRows = [...whole.values()];
+  if (pendingToolCallId) out.wholeRows = wholeRows; // 只有 pending 段要等落库后再挑邻行
   if (!lastRow) return out;
-  const partial = kept.some((m) => messageSource(m)?.id === lastRow!.id);
-  if (!partial) { out.through = { id: lastRow.id, ts: lastRow.ts }; return out; }
+  /** 与锚点同一毫秒、整行在范围里的其他行(11-20:不记的话它们被判没覆盖、原样回放 → 摘要和原文各一份)。 */
+  const peersOf = (anchor: MessageSource): string[] | undefined => {
+    const ids = wholeRows.filter((r) => r.ts === anchor.ts && r.id !== anchor.id).map((r) => r.id);
+    return ids.length ? ids : undefined;
+  };
+  const withPeers = <T extends object>(b: T, anchor: MessageSource): T => {
+    const peerIds = peersOf(anchor);
+    return peerIds ? { ...b, peerIds } : b;
+  };
+  const partial = keptIds.has(lastRow.id);
+  if (!partial) { out.through = withPeers({ id: lastRow.id, ts: lastRow.ts }, lastRow); return out; }
   if (lastRowLastCall) {
-    out.partialRow = { id: lastRow.id, ts: lastRow.ts, toolCallId: lastRowLastCall };
+    out.partialRow = withPeers({ id: lastRow.id, ts: lastRow.ts, toolCallId: lastRowLastCall }, lastRow);
   } else if (prevRow) {
-    out.through = { id: prevRow.id, ts: prevRow.ts }; // 该行整体重放(重复安全)
+    out.through = withPeers({ id: prevRow.id, ts: prevRow.ts }, prevRow); // 该行整体重放(重复安全)
   }
   return out;
 }
@@ -738,7 +834,7 @@ export async function compactSession(
 
   let rows: any[];
   try {
-    // 同一毫秒的几行按落库先后走:下面「覆盖到的最后一行」就是同毫秒里最后落库的那条,/usage 的 lastMessageRow 按同一次序认它
+    // 同一毫秒的几行按落库先后走:下面「覆盖到的最后一行」(锚点)就是同毫秒里最后落库的那条;其余同毫秒的进邻行清单
     rows = remote ? await remote.messages(sessionId) : await query<any[]>(
       `SELECT id, role, content, timestamp, tool_calls, tool_results FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('ASC')}`,
       [sessionId],
@@ -756,6 +852,7 @@ export async function compactSession(
   signal?.throwIfAborted();
   const messages: ChatMessage[] = [];
   let last: MessageSource | undefined; // 覆盖到的最后一行(时间戳 + id:同一毫秒的邻行靠 id 区分)
+  const fed: MessageSource[] = []; // 喂进摘要输入的行(同一毫秒的邻行从这里挑,见 through_peer_ids)
   for (const r of pending) {
     const role = r.role === 'model' ? 'assistant' : r.role;
     const raw = String(r.content || '');
@@ -776,9 +873,18 @@ export async function compactSession(
       messages.push(...replayed);
     } else continue;
     const ts = Number(r.timestamp) || 0;
+    if (ts > 0) fed.push({ id: String(r.id), ts });
     if (ts > 0 && (!last || ts >= last.ts)) last = { id: String(r.id), ts };
   }
   if (messages.length < 2 || !last) return { ok: false, reason: 'nothing to compact' };
+  // 与锚点同一毫秒、也喂进了摘要的行记成邻行(11-20):不记的话它们被判没覆盖,下一轮原样回放、摘要里又讲一遍;
+  // 中止后 /compact 的半截回答与打断标记多半就在同一毫秒。上一份检查点也在这一毫秒 → 它整行覆盖的行一并带上
+  // (上一份摘要是这次的输入),放在前面:封顶时先保住旧集合,超集关系不破。
+  const peerIds = normalizePeerIds(
+    last.id,
+    prev && prev.throughTimestamp === last.ts ? wholeRowsAtBoundary(prev) : [],
+    fed.filter((r) => r.ts === last!.ts).map((r) => r.id),
+  );
   if (prev?.summary) messages.unshift(summaryMessage(prev.summary));
 
   const fileOps: FileOps = { read: new Set(), modified: new Set() };
@@ -797,6 +903,6 @@ export async function compactSession(
   // 机械附加文件操作块(LLM 输出之后、落库之前;摘要模型抄没抄对不影响清单正确性)。
   summary += formatFileOps(fileOps);
 
-  if (!(await persistCheckpoint(sessionId, summary, { ts: last.ts, messageId: last.id }, { revision }))) return { ok: false, reason: 'persist summary failed' };
+  if (!(await persistCheckpoint(sessionId, summary, { ts: last.ts, messageId: last.id, ...(peerIds.length ? { peerIds } : {}) }, { revision }))) return { ok: false, reason: 'persist summary failed' };
   return { ok: true, summary, throughTimestamp: last.ts, summarizedCount: messages.length - (prev?.summary ? 1 : 0) };
 }

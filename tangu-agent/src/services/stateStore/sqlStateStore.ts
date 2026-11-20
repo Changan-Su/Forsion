@@ -6,7 +6,7 @@
  * 事件的 seq/emit/持久化机制仍在 eventBus(appendEventLocal/drainLocal),本实现透传——保留其内存订阅扇出
  * (SSE)与跨重启 seq 播种不动。
  */
-import { query, getOlderThanSql, getDbType } from '../../core/db.js';
+import { query, getOlderThanSql, getDbType, messageTimeOrder } from '../../core/db.js';
 import { SELF_OWNER } from '../runOwner.js';
 import { appendEventLocal, drainLocal, type AgentEvent } from '../eventBus.js';
 import { readSessionTranscriptInDb, searchSessionsInDb } from '../sessionSearchSql.js';
@@ -170,10 +170,11 @@ export function createSqlStateStore(): StateStore {
       const rows = await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [sessionId]);
       return Number(rows[0]?.n || 0);
     },
+    // 同一毫秒的几行按落库先后补排(11-20):hydrate 先数行数再按 OFFSET 取窗口,并列先后不稳定时窗口边上的那一毫秒可能取漏 / 取重
     async listSessionMessagesWindow(sessionId, limit, offset): Promise<RawMessageRow[]> {
       return await query<any[]>(
         `SELECT id, role, content, tool_calls, tool_results, attachments, timestamp FROM chat_messages
-         WHERE session_id = ? ORDER BY timestamp ASC LIMIT ? OFFSET ?`,
+         WHERE session_id = ? ORDER BY ${messageTimeOrder('ASC')} LIMIT ? OFFSET ?`,
         [sessionId, limit, offset],
       );
     },
