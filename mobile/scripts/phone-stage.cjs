@@ -1825,8 +1825,9 @@ const SCENES = {
   },
   // A new note named from its title, then system Back (walk 2026-11-19, b): Back goes to the list — never to the note
   // under the name it was born with («当前库里没有这篇笔记「untitled.md」»). The history keeps the note under its new path.
-  // Home's note card names it, and stops naming it once it is deleted (h: the card read the first "recent" path as is —
-  // the dead `untitled.md` that the wrong Back had opened, or a deleted note).
+  // Home names it, and stops naming it once it is deleted (h: the old note card read the first "recent" path as is — the
+  // dead `untitled.md` that the wrong Back had opened, or a deleted note). Since 2026-11-19 a phone Home has no cards: the
+  // note is a Continue row.
   'notes-rename-back': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'amadeus')
@@ -1835,7 +1836,7 @@ const SCENES = {
     const via = await detailBack(page)
     const after = { nav: await stage.nav(page), missing: await page.evaluate(() => /当前库里没有这篇笔记/.test(document.querySelector('.mb-shell')?.innerText || '')), history: await noteHistory(page) }
     await stage.space(page, 'home')
-    const card = () => page.evaluate(() => [...document.querySelectorAll('.mb-view[data-view="homepage"] .hp-card')].find((el) => el.dataset.spaceId === 'amadeus')?.querySelector('.hp-card-status')?.textContent ?? null)
+    const card = () => page.evaluate(() => [...document.querySelectorAll('.mb-view[data-view="homepage"] .hp-continue-row')].map((el) => el.getAttribute('data-continue')))
     const named = await card()
     await page.evaluate(async (u) => { await (await import(/* @vite-ignore */ u)).usePageStore.getState().deletePage('购物清单.md') }, moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'))
     await page.waitForTimeout(600)
@@ -1845,7 +1846,7 @@ const SCENES = {
       ['the title renames the new note (the file follows it)', notes.includes('购物清单.md') && !notes.some((p) => /^untitled/.test(p)), JSON.stringify(notes)],
       ['the history holds the note once, under its new path — not under the name it was born with', before.includes('amadeus:购物清单.md') && !before.some((k) => k.includes('untitled')), JSON.stringify(before)],
       ['system Back from the renamed note goes to the list, not to a note that is not there', after.nav === 'list' && !after.missing && !after.history.some((k) => k.includes('untitled')), JSON.stringify({ via, ...after })],
-      ['Home\'s note card names the renamed note, and no longer names it once it is deleted', named === '购物清单' && deleted !== '购物清单', JSON.stringify({ named, deleted })],
+      ['Home\'s Continue lists the renamed note (never under the name it was born with), and drops it once it is deleted', named.includes('note:购物清单.md') && !named.some((k) => /untitled/.test(k)) && !deleted.includes('note:购物清单.md'), JSON.stringify({ named, deleted })],
     ]
   },
   // What is written in a note reaches the tag list and the full-text search without reopening the vault (walk
