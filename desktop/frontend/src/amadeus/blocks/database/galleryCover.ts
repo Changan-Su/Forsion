@@ -31,8 +31,9 @@ function stripCode(body: string): string {
   return out.join('\n')
 }
 
+// Titles (image captions) may carry escaped quotes `\"`.
 // Every repeat is bounded so a hostile body (thousands of unclosed `![`) stays linear-ish instead of rescanning to the end at each start.
-const IMAGE_RE = /!\[\[([^\]\n]{1,500})\]\]|!\[[^\]\n]{0,300}\]\([ \t]{0,20}<?([^)\s>]{1,2000})>?(?:[ \t]{1,20}"[^"\n]{0,300}")?[ \t]{0,20}\)/g
+const IMAGE_RE = /!\[\[([^\]\n]{1,500})\]\]|!\[[^\]\n]{0,300}\]\([ \t]{0,20}<?([^)\s>]{1,2000})>?(?:[ \t]{1,20}"(?:[^"\\\n]|\\.){0,300}")?[ \t]{0,20}\)/g
 /** Only the start of the body is searched: a cover image sits near the top, and this caps the work per card. */
 const SCAN_MAX = 20_000
 

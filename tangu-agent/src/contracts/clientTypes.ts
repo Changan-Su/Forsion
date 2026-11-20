@@ -1162,6 +1162,8 @@ export interface UiMessage {
   /** 并行团队:这条发言以 DONE 收尾(成员表态「我这边完了」)。正文里的 DONE 已剥掉,气泡上以「已完成」小标记呈现。 */
   teamDone?: boolean
   teamSummary?: boolean
+  /** 这一轮被模型的安全审核拦下(done 的 refused / 落库 origin = refused):正文末尾那句固定文案改画成一行灰字,不给「继续生成」。 */
+  refused?: boolean
   /** Live public team remark; historical messages never replay the reveal animation. */
   revealAt?: number
   /** 群聊投票汇总(role=system 的投票行渲染成投票 chip)。 */

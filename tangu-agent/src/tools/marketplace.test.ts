@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn() }));
 vi.mock('../seams/runtime.js', () => ({ isConfigured: () => true, deps: () => ({ brain: { marketplace: fixture } }) }));
 import { marketplaceProvider } from './builtin/marketplace.js';
-import { marketplaceItemsOf } from '../shared/marketplace.js';
+import { hasMarketplaceCards, marketplaceItemsOf } from '../shared/marketplace.js';
 describe('Forsion marketplace tools', () => {
   const item = (id: string, name: string, tags = ['notes']) => ({ id, name, tags, installSlug: `market-${id}`, type: 'amadeus-plugin', source: 'zip', author: 'Author', summary: 'PDF notes', minAppVersion: '2.13.0', platforms: ['desktop'] });
   it('searches the entire catalog, preserves duplicate names, applies filters and propagates cancellation', async () => {
@@ -51,4 +51,21 @@ it('matches capabilities beyond the display excerpt and includes their source ex
   expect(marketplaceItemsOf(result)[0].id).toBe('deep');
   expect(marketplaceItemsOf(result)[0].description).toContain('longitudinal-probe');
   expect(String(result).length).toBeLessThan(48000);
+});
+
+it('keeps loose matches and detail lookups out of chat cards until explicitly recommended', async () => {
+  const live3d = { id: 'live3d', name: 'Live3D', installSlug: 'live3d', type: 'amadeus-plugin', summary: 'A 3D companion with lip sync' };
+  fixture.list.mockResolvedValue([live3d]);
+  fixture.detail.mockResolvedValue(live3d);
+  const [search, detail, recommend] = await marketplaceProvider.tools({} as any);
+  const results = await Promise.all([
+    search.execute({ query: 'health 健康 data sync fitness' }, {} as any),
+    detail.execute({ id: 'live3d' }, {} as any),
+  ]);
+  expect(results.map(content => marketplaceItemsOf(content).map(i => i.id))).toEqual([['live3d'], ['live3d']]);
+  expect(results.map(content => JSON.parse(String(content)).kind)).toEqual(['marketplace_lookup', 'marketplace_lookup']);
+  expect(hasMarketplaceCards(results.map((content, i) => ({ name: [search, detail][i].name, content })))).toBe(false);
+  const selected = await recommend.execute({ id: 'live3d' }, {} as any);
+  expect(JSON.parse(String(selected)).kind).toBe('marketplace');
+  expect(hasMarketplaceCards([{ name: recommend.name, content: selected }])).toBe(true);
 });

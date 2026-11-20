@@ -1538,6 +1538,13 @@ async function doRefreshUnitHost(): Promise<void> {
       return existsSync(dev) ? dev : null
     },
     log: (m: string) => console.log(m),
+    onSessionsChanged: () => {
+      for (const win of [mainWindow, ...detachedWindows.values()]) {
+        if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+          win.webContents.send('window:mainAction', 'sessions-changed')
+        }
+      }
+    },
     remoteAccess: remoteSessions.gate, // P1-K4:会话档闸(同步;K2 的 remoteLock 放在相邻一行)
     ...(PRODUCT.agentBackend ? { remoteLock: () => remoteSafety.isLocked() } : {}), // P1-K2:急停后远端只剩读 + 中止(同步内存镜像)
   }

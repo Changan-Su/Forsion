@@ -16,6 +16,7 @@ import './engine/messages'
 import { currentPlatform } from './platform'
 import { collectClientCapabilities } from './clientSurfaces'
 import { collectIntelligentCards } from './intelligentCardCatalog'
+import { MARKETPLACE_CARDS_CAPABILITY } from '../../../shared/marketplace'
 
 registerMessages({
   'agentrun.authFailed': { zh: '鉴权失败（401）：令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
@@ -165,7 +166,7 @@ export async function startRun(
       // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
       // 小组件(widget.v1)只在桌面报:网页端的引擎在云端、没有 agents/ 文件夹,手机不画卡片区 / 仪表盘 / 主页里的小组件。
-      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : []), ...(currentPlatform() === 'desktop' ? ['widget.v1'] : [])],
+      client_capabilities: [...collectClientCapabilities(), MARKETPLACE_CARDS_CAPABILITY, ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : []), ...(currentPlatform() === 'desktop' ? ['widget.v1'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

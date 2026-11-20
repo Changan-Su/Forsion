@@ -132,6 +132,9 @@ export interface StateStore {
   drain(runId: string): Promise<void>;
   /** SSE 回放(seq>fromSeq)。仅服务端用;worker 不调。 */
   listEventsFrom(runId: string, fromSeq: number): Promise<AgentEvent[]>;
+  /** 可选:删掉这个 run 已落库的流式正文帧(token / reasoning)。被安全审核拦下的 run 收尾时用,原文不留在续播录像里
+   *  (contracts/safetyStop.ts)。worker(HttpStateStore)不实现:云端靠服务端 7 天的保留期清掉。 */
+  purgeStreamFrames?(runId: string): Promise<void>;
 
   // ── messages（会话历史）──
   countSessionMessages(sessionId: string): Promise<number>;

@@ -380,7 +380,8 @@ OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelli
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
-OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 四个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z 必红,LZ / LN 至少一腿红(只发代码时旧代码回哪种语言不稳)
+OPT_IN.add('visualsdial'); //--only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
@@ -449,7 +450,7 @@ OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端�
 KEYS.push('pluginext');
 OPT_IN.add('pluginsettings'); KEYS.push('pluginsettings');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
-OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
+OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // Explicit recommendations in work and chat presets.
 // storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
 //   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
 //   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
@@ -2728,6 +2729,35 @@ try {
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
 
+  // turninfo(11-20,借鉴 chat-demo ③ #734):系统提示日期段补时区名 + 界面语言。四条腿各一个 run,都直接核系统提示原文:
+  //   Z host run、不准用工具问「我在哪个时区」→ 提示里有 `time zone <进程时区>`,回答说得出这个 IANA 名;
+  //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
+  //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文;
+  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z 必红;只有代码时回哪种语言在旧代码上不稳
+  //   (11-20 两次对照:第一次 LZ 回中文,第二次 LZ、LN 都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
+  await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
+    const cjk = (t) => (String(t || '').match(/[一-鿿]/g) || []).length;
+    const dbg = { debugSystemPrompt: true }; // 不带它引擎不发 system_prompt 事件,提示原文核不到
+    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。', 240_000, dbg);
+    const promptZ = String(z.systemPrompt || '');
+    const okZ = !z.error && !!tz && promptZ.includes(`time zone ${tz}, UTC`) && z.content.includes(tz) && !z.toolCalls.length;
+    const code = '```js\nconst pick = (xs, n) => xs.filter((_, i) => i % n === 0);\n```';
+    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('zh'));
+    const okLZ = !lz.error && String(lz.systemPrompt || '').includes("interface is set to Chinese") && cjk(lz.content) >= 10;
+    const ln = await run(`live-turninfo-ln-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLN = !ln.error && String(ln.systemPrompt || '').includes("interface is set to English") && cjk(ln.content) === 0 && /[A-Za-z]{3,}\s+[A-Za-z]{3,}/.test(ln.content);
+    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLE = !le.error && String(le.systemPrompt || '').includes("interface is set to English") && cjk(le.content) >= 10;
+    const dateLine = (p) => (String(p || '').match(/^Today is [^\n]*/m) || [''])[0];
+    const detail = `Z 进程时区 ${tz || '取不到'}、提示「${dateLine(promptZ)}」、回答「${z.content.trim().slice(0, 60)}」、工具 ${z.toolCalls.join(',') || '无'}`
+      + `;LZ 界面中文 + 只有代码 → 提示有中文段=${String(lz.systemPrompt || '').includes('interface is set to Chinese')}、回答汉字 ${cjk(lz.content)} 个`
+      + `;LN 界面英文 + 只有代码 → 提示有英文段=${String(ln.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(ln.content)} 个`
+      + `;LE 界面英文 + 中文提问 → 提示有英文段=${String(le.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(le.content)} 个`;
+    return { ok: okZ && okLZ && okLN && okLE, detail, output: `【Z】\n${z.content}\n【LZ 界面中文,只发代码】\n${lz.content}\n【LN 界面英文,只发代码】\n${ln.content}\n【LE 界面英文,中文提问】\n${le.content}`, tokens: tokensOf(z) + tokensOf(lz) + tokensOf(ln) + tokensOf(le) };
+  });
+
   // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
   // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
   await scenario('dsimport', 'dsimport 导入的旧对话接着聊', async () => {
@@ -2836,20 +2866,27 @@ try {
   });
 
   for (const [key, cfg] of [['marketplace', {}], ['marketplacechat', { preset: 'chat' }]]) await scenario(key, `Forsion marketplace native plugin cards${cfg.preset ? ' (chat preset)' : ''}`, async () => {
+    const { marketplaceItemsOf, MARKETPLACE_CARDS_CAPABILITY, MARKETPLACE_RECOMMENDATION_TOOL } = await import('../dist/shared/marketplace.js');
     const sessionId = `live-${key}-${Date.now()}`;
-    const ev = await run(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。', 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] });
-    const { marketplaceItemsOf } = await import('../dist/shared/marketplace.js');
-    const results = ev.toolResults.filter(r => r.name === 'search_marketplace' && !r.isError);
-    const items = results.flatMap(r => marketplaceItemsOf(r.result));
-    const selected = items[0];
-    const follow = selected ? await run(sessionId, `请查询 ID ${selected.id} 的详细说明和版本要求。`, 240000, cfg, 'desktop/2.13.4') : null;
-    const detail = follow?.toolResults.find(r => r.name === 'get_marketplace_plugin' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
-    // chat 预设里 get_marketplace_plugin 要先 load_tools:模型判断搜索结果够用、第二轮再搜一次作答也算(skill 原话「搜索结果通常够推荐」),结果里写明走的哪条。
-    const viaSearch = cfg.preset === 'chat' && !detail && follow?.toolResults.some(r => r.name === 'search_marketplace' && !r.isError && marketplaceItemsOf(r.result).some(i => i.id === selected.id));
-    const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError); // 被 agentLoop 的商店卡片守卫拒掉的不算画出来
-    const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
-    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
-    return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+    const leg = (id, text) => run(id, text, 240000, cfg, 'desktop/2.13.4', undefined, undefined, undefined, { clientCapabilities: [MARKETPLACE_CARDS_CAPABILITY] });
+    const ev = await leg(sessionId, '我想在 Forsion 里整理 PDF 阅读笔记，请帮我在商店找合适的插件，推荐两个候选，并说明 Forsion 版本要求。我会自己决定是否安装。');
+    const successful = (run, name) => (run?.toolResults || []).filter(r => r.name === name && !r.isError);
+    const items = successful(ev, 'search_marketplace').flatMap(r => marketplaceItemsOf(r.full || r.result));
+    const recommended = successful(ev, MARKETPLACE_RECOMMENDATION_TOOL).flatMap(r => marketplaceItemsOf(r.full || r.result));
+    const selected = recommended[0];
+    const follow = selected ? await leg(sessionId, `请仅查询 ID ${selected.id} 的详细说明和版本要求，用文字告诉我，不需要再推荐。`) : null;
+    const detail = successful(follow, 'get_marketplace_plugin').some(r => marketplaceItemsOf(r.full || r.result).some(i => i.id === selected?.id));
+    const rejected = await leg(`${sessionId}-negative`, '有没有方案可以在 Forsion 里面获取小米运动健康 Mi Fitness 的数据？请现在重新查当前商店，之前查过也请重查。单纯能整理 PDF 笔记的插件不满足，需要实际读取小米运动健康的数据。');
+    const searchedNoMatch = successful(rejected, 'search_marketplace').length > 0;
+    const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError);
+    const lookupOnly = successful(ev, 'search_marketplace').length > 0 && successful(ev, 'search_marketplace').every(r => JSON.parse(r.full || r.result).kind === 'marketplace_lookup');
+    const ok = !redrawn && lookupOnly && ev.done && !ev.error
+      && new Set(recommended.map(item => item.id)).size === 2
+      && recommended.every(item => item.minAppVersion !== '99.0.0' && items.some(candidate => candidate.id === item.id))
+      && detail && !follow.error && follow.done && !follow.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL)
+      && rejected.done && !rejected.error && searchedNoMatch && !rejected.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL);
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, rejected, items, recommended }, null, 2));
+    return { ok, detail: `lookups without cards=${lookupOnly}; selected IDs=${recommended.map(i => i.id).join(',')}; detail=${detail}; no-match search=${searchedNoMatch}, recommendations=${successful(rejected, MARKETPLACE_RECOMMENDATION_TOOL).length}`, output: [ev.content, follow?.content, rejected.content].filter(Boolean).join('\n\n'), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || []), ...rejected.toolCalls], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) + tokensOf(rejected) };
   });
 
   // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
@@ -2885,7 +2922,7 @@ try {
 
   // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
   await scenario('pluginaware', 'pluginaware 反复的事先查商店、查不到提议做一个、一次性问题不查', async () => {
-    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] }];
+    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v2'] }];
     const leg = (name, text) => run(`live-pluginaware-${name}-${Date.now()}`, text, ...opts);
     const repeat = await leg('repeat', '我每周都要把上课录音转成文字再整理成笔记，每次都手动来一遍，太烦了。有什么办法？');
     const nothing = await leg('nothing', '我每天都要手动把咖啡机的除垢提醒抄到日程里，想让 Forsion 自动帮我做这件事。');
@@ -3305,7 +3342,7 @@ try {
   // 每问两条腿;libsOk 为 null = 只记录不判(iuilibsmore 看效果用)。plain 腿一律不许 import 库。证据写 <name>-evidence.json。
   const LIB = /^(three|d3|chart\.js|gsap)\b/;
   const iuiLibLegs = async (name, CASES) => {
-    const base = ['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2'];
+    const base = ['marketplace-cards.v2', 'intelligent-ui.v1', 'intelligent-ui.v2'];
     const rows = [];
     for (const [key, Q, libsOk] of CASES) {
       for (const [leg, caps] of [['plain', base], ['libs', [...base, 'intelligent-ui-libs.v1']]]) {

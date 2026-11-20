@@ -137,7 +137,9 @@ export function fromAssetUrl(url: string): string | null {
 // ![alt](path) or ![alt](path "title") — captures alt-wrapper, the URL token, then the rest.
 // URL 位认两种写法:尖括号目标 `<a b.png>`(CommonMark 允许,里面可以有空格)排在前面,其余是裸目标(I-15:
 // 旧版只认裸目标,`<a.png>` 被整段当路径 → 显示 `%3Ca.png%3E`、落盘写成指向不存在文件的 `%3Ca.png%3E`)。
-const IMG_RE = /(!\[[^\]]*\]\()(<[^>\n]*>|[^)\s]+)((?:\s+"[^"]*")?\))/g
+// 标题段认反斜杠转义(2026-11-17 图片说明):说明写在 title 里,含 `"` 时序列化器写成 `\"`。旧版 `"[^"]*"` 遇到它整张图
+// 不匹配 —— 存盘时显示地址原样落盘、读盘时相对路径换不成显示地址,图当场裂。仪器:assets.test.ts「图片说明」。
+const IMG_RE = /(!\[[^\]]*\]\()(<[^>\n]*>|[^)\s]+)((?:\s+"(?:[^"\\]|\\[\s\S])*")?\))/g
 
 /** markdown 的链接目标里,空格和括号会当场把图片语法弄坏 —— 必须百分号编码。
  *
@@ -207,7 +209,7 @@ export function toStoredMarkdown(md: string, pageDir: string): string {
 }
 
 // `](` 之后的地址与收尾:裸目标 + 可选的 "标题" + `)`。长度封顶 —— 没有收尾的超长串不许拖成平方级回溯。
-const LINK_DEST_RE = /([^)\s]{1,2048})((?:\s+"[^"]{0,2048}")?\))/y
+const LINK_DEST_RE = /([^)\s]{1,2048})((?:\s+"(?:[^"\\]|\\[\s\S]){0,2048}")?\))/y // 标题段认 `\"`(同 IMG_RE)
 /** 链接(非图片)地址里「形似域名」的写法:点击时会被补成 https://(linkHref.normalizeHref 同一判据)。 */
 const DOMAINISH_RE = /^[^\s/]+\.[^\s/]/
 /** 地址原文里出现就不接手的字符:实体、表格、转义、标题、行内代码、强调、查询串、协议、括号 —— 在 markdown 与各读取方

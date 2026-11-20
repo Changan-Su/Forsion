@@ -156,6 +156,7 @@ export function createSqlStateStore(): StateStore {
 
     // ── events ── (透传 eventBus 本地机制:seq 播种 + emit + per-run 写链)
     appendEvent(runId, type, payload) { return appendEventLocal(runId, type, payload); },
+    async purgeStreamFrames(runId) { await query(`DELETE FROM agent_run_events WHERE run_id = ? AND type IN ('token', 'reasoning')`, [runId]); },
     drain(runId) { return drainLocal(runId); },
     async listEventsFrom(runId, fromSeq): Promise<AgentEvent[]> {
       const rows = await query<any[]>(

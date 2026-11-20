@@ -18,6 +18,7 @@
  * 注册表——engines 管理器本来就是「一 run 一进程」的 provider 目录,这里只是把它接到子代理位上。
  */
 import { createDelegateTranscript, delegateHandle, openDelegateTurn } from './delegateTranscript.js';
+import { isSafetyStop, safetyStopNotice, SAFETY_STOP_NOTICE, SAFETY_STOP_ORIGIN } from '../contracts/safetyStop.js';
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
@@ -521,6 +522,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // 所以这是防失控的软上限,不是逐点预留的硬额度)。
     if (parentCtx.runCostExceeded?.()) { overBudget = true; break; }
     let emitted = false; // 已向子聊天区吐过帧的那次尝试不重发,否则转写重复
+    const streamedAt = transcript.mark(); // 安全审核拦下时子会话转写退回到这里
     const res = await withLlmRetry(() => llm.streamProviderCompletion({
       apiKey,
       baseUrl,
@@ -553,6 +555,13 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       parentCtx.chargeRunCost?.(cost);
     }
 
+    // 被模型的安全审核拦下(contracts/safetyStop.ts):半截正文不交给父代理、工具不执行,交回一句固定说明(给模型看,英文)。
+    // 子会话转写(续用时会回放)也退回到这一发之前,换成固定文案并标 refused,原文不落库。
+    if (isSafetyStop(res.finishReason)) {
+      transcript.refuse(streamedAt, safetyStopNotice(parentCtx.uiSettings?.locale?.value, p.task), SAFETY_STOP_ORIGIN);
+      finalContent = SAFETY_STOP_NOTICE.en;
+      break;
+    }
     if (!res.toolCalls?.length || lastIter) {
       finalContent = res.content || finalContent;
       // 触顶那轮不发 tools,但模型仍可能吐出工具调用(文本兜底会解析出来)且正文为空 ——

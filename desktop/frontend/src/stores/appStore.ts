@@ -45,6 +45,7 @@ registerMessages({
 
 export type { SettingsTab }
 let authGeneration = 0
+export const currentAuthGeneration = (): number => authGeneration
 /** P1-K6 S4:焦点代。换焦点不再清会话(会话按绑定走,别的会话照常跑),只换「新会话建在哪」和它的目录 ——
  *  目录类加载(Agent / 模型 / 技能 / 团队 / 云项目 / 特殊 Agent / 家目录)按「账号代 + 焦点代」丢弃过期结果。 */
 let focusGeneration = 0

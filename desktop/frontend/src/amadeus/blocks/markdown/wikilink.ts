@@ -19,8 +19,10 @@ import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { embedSourceKey } from './embedSource'
 import { editorFocused } from './editorFocus'
-import { attachOpenButton, attachSourceButton, revealSource } from './sourceToggle'
+import { attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
+import { normalizeTextAlignment } from './paragraphIndent'
+import { armWikiImageToolbar, refreshShownToolbar, syncWikiImageSheet, type WikiImageOpts } from './wikiImageToolbar'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
 import { FILE_ICON, IMG_EXT_RE, fileIconKind } from './fileIcon'
@@ -163,6 +165,7 @@ function buildDecorations(
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
   canOpen: () => boolean = () => true,
+  imageOpts: WikiImageOpts = {},
 ): DecorationSet {
   const focus = editorFocused(state)
   const sourceFrom = wikiKey.getState(state)?.sourceFrom ?? null
@@ -290,22 +293,30 @@ function buildDecorations(
                 view.focus()
               }
               wrap.addEventListener('mousedown', (e) => {
-                if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn')) return
+                if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn, .amx-img-tb, .amx-img-more')) return
                 e.stopPropagation()
                 if (armImageDrag(view, wrap, e, select)) return
                 e.preventDefault()
                 select()
               })
-              attachSourceButton(wrap, view, () => {
+              const reveal = (): void => {
                 const at = span()
                 if (!at) return
                 const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(at.from + 1, view.state.doc.content.size)))
                 tr.setMeta(wikiKey, { sourceFrom: at.from })
                 view.dispatch(tr)
                 view.focus()
-              }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
-              // 悬停「打开」→ 应用内图片视图(⌘/Ctrl+点击新标签页);须挂在 `</>` 之后,见 attachOpenButton。
-              if (canOpen()) attachOpenButton(wrap, view, (newTab) => onOpen(img.name, newTab ? { newTab: true } : undefined))
+              }
+              // 悬停工具条(2026-11-18 定:与 `![](…)` 同一排 —— 对齐 / 替换 / 全屏 / 下载 / `</>` / ⋯ 里的打开·复制·删除;
+              // 没有「说明」,这一形态没有放说明的地方)。`</>` 与「打开」从此收进工具条,不再单挂。
+              // 小图(< 80px)例外:11-07 定只留一颗缩小版 `</>`,所以这颗仍挂着,常规尺寸由 CSS 藏起(.amx-img-wiki)。
+              attachSourceButton(wrap, view, reveal)
+              const name = img.name
+              const disarm = armWikiImageToolbar({
+                view, wrap, img: el, span, standalone, name, select, source: reveal, opts: imageOpts,
+                open: canOpen() ? (newTab) => onOpen(name, newTab ? { newTab: true } : undefined) : undefined,
+              })
+              ;(wrap as HTMLElement & { __tbStop?: () => void }).__tbStop = disarm
               watchTinyImage(wrap, el)
               return wrap
             },
@@ -318,7 +329,13 @@ function buildDecorations(
             // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
             {
               side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}`,
-              destroy: (node) => (node as HTMLElement & { __tinyStop?: () => void }).__tinyStop?.(),
+              // 工具条 / ⋯ 菜单是按钮:它们的事件(尤其 keydown)不交给 PM,否则 Tab 到按钮按回车被编辑器拿去插段。
+              stopEvent: (e) => !!(e.target as Element | null)?.closest?.('.amx-img-tb, .amx-img-more'),
+              destroy: (node) => {
+                const n = node as HTMLElement & { __tinyStop?: () => void; __tbStop?: () => void }
+                n.__tinyStop?.()
+                n.__tbStop?.()
+              },
             },
           ),
         )
@@ -446,6 +463,8 @@ function syncPicked(view: EditorView): void {
   const want = focus && pickFrom !== pickTo
     ? view.dom.querySelector<HTMLElement>(`.wiki-inline-img-wrap[data-src-from="${pickFrom}"][data-src-to="${pickTo}"]`)
     : null
+  syncWikiImageSheet(view, want) // 粗指针:选中的图贴底出工具条(寿命跟选区走,widget 重建就按新那颗重开)
+  refreshShownToolbar(view) // 桌面:露着的悬停工具条跟上当前档(快捷键 / 撤销改了对齐)
   if (prev === want) return
   if (prev) {
     delete prev.dataset.selected
@@ -456,7 +475,7 @@ function syncPicked(view: EditorView): void {
     want.dataset.selected = ''
     const img = want.querySelector('img')
     if (img && view.editable) {
-      handles.set(want, attachResizeHandle(want, img, (w) => {
+      const commit = (w: number): void => {
         const name = (view.state.doc.textBetween(pickFrom, pickTo).match(/^!\[\[([^\]\n|]+)/) ?? [])[1]
         if (!name) return
         const next = `![[${name}|${w}]]`
@@ -464,7 +483,19 @@ function syncPicked(view: EditorView): void {
         if (view.state.selection instanceof NodeSelection) tr.setSelection(NodeSelection.create(tr.doc, from))
         else tr.setSelection(TextSelection.create(tr.doc, pickFrom, pickFrom + next.length))
         view.dispatch(tr)
-      }))
+      }
+      // 两侧把手(与 `![](…)` 同手感;右在前:台架 / 旧仪器 querySelector('.amx-img-resize') 取第一颗当右缘)。
+      // 居中的图两边同时外扩,指针走 1px 宽度走 2px。
+      const factor = (): number => {
+        try {
+          return normalizeTextAlignment(view.state.doc.resolve(pickFrom).parent.attrs.align) === 'center' ? 2 : 1
+        } catch {
+          return 1
+        }
+      }
+      const right = attachResizeHandle(want, img, commit, { factor })
+      const left = attachResizeHandle(want, img, commit, { side: 'left', factor })
+      handles.set(want, () => { right(); left() })
     }
   }
   if (want) marked.set(view, want)
@@ -531,8 +562,10 @@ export function wikilinkPlugin(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
   iconOf?: (name: string) => string | undefined,
-  /** onOpen 真能打开东西吗;false = 图片不挂「打开」键(无 vault 的记录正文传的是 noop)。 */
+  /** onOpen 真能打开东西吗;false = 图片工具条的 ⋯ 里不给「打开」(无 vault 的记录正文传的是 noop)。 */
   canOpen: () => boolean = () => true,
+  /** 图片工具条的替换 / 复制图片(MarkdownBlock 读 ref 现取;整篇宿主存不了图,不给)。 */
+  imageOpts: WikiImageOpts = {},
 ) {
   return $prose(
     () =>
@@ -540,7 +573,7 @@ export function wikilinkPlugin(
         key: wikiKey,
         // 选中态就地同步:widget 的 DOM 全程不换(见 key 处的注释),所以「选中环 + 缩放把手」
         // 只能在这里按当前选区打/摘。位置从 dataset 读 —— key 不带位置,DOM 跨位置复用,dataset 由 syncPicked 先刷新。
-        view: () => ({ update: syncPicked }),
+        view: (v) => ({ update: syncPicked, destroy: () => syncWikiImageSheet(v, null) }),
         state: {
           init: () => ({ sourceFrom: null }),
           apply: (tr, value) => {
@@ -572,7 +605,7 @@ export function wikilinkPlugin(
             view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())
             return true
           },
-          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf, canOpen),
+          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf, canOpen, imageOpts),
           // 编辑中的双链源码右键 = 同一份文件菜单(渲染态部件自己派,见 widget 里的 contextmenu);已在源码态,不给「编辑」。
           handleDOMEvents: {
             contextmenu: (_view, e) => {
