@@ -653,7 +653,8 @@ export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, tail
 export async function rowsFromBoundary(sessionId: string, cp: Checkpoint | null): Promise<TailRow[] | undefined> {
   if (!cp || !(cp.throughTimestamp > 0)) return undefined;
   return await query<any[]>(
-    `SELECT id, timestamp FROM chat_messages WHERE session_id = ? AND timestamp >= ?`, [sessionId, cp.throughTimestamp],
+    // 时间戳缺失 / 非正的行 hydrate 照样回放,rowCoverage 判它没覆盖 → 一并取回,别让它们漏在判据外(Codex 11-20 #8)
+    `SELECT id, timestamp FROM chat_messages WHERE session_id = ? AND (timestamp >= ? OR timestamp IS NULL OR timestamp <= 0)`, [sessionId, cp.throughTimestamp],
   ).catch(() => undefined);
 }
 

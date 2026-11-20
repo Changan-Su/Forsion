@@ -2442,7 +2442,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
       if (b.lossy || trimmedThisRun) { checkpoint.pending = undefined; return false; }
       if (b.pendingToolCallId) {
-        checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId, wholeRows: b.wholeRows ?? [] };
+        // 同一段落库前连压两次:第一次整行总结掉的行已经在内存摘要里,第二次的范围里看不到它们 → 证明合并,不覆盖(Codex 11-20 #4)
+        const carried = checkpoint.pending?.messageId === currentAssistantId ? checkpoint.pending.wholeRows : [];
+        checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId, wholeRows: [...carried, ...(b.wholeRows ?? [])] };
         return false;
       }
       checkpoint.pending = undefined;

@@ -854,6 +854,7 @@ export async function compactSession(
   let last: MessageSource | undefined; // 覆盖到的最后一行(时间戳 + id:同一毫秒的邻行靠 id 区分)
   const fed: MessageSource[] = []; // 喂进摘要输入的行(同一毫秒的邻行从这里挑,见 through_peer_ids)
   for (const r of pending) {
+    const before = messages.length;
     const role = r.role === 'model' ? 'assistant' : r.role;
     const raw = String(r.content || '');
     if (role === 'user') {
@@ -873,7 +874,8 @@ export async function compactSession(
       messages.push(...replayed);
     } else continue;
     const ts = Number(r.timestamp) || 0;
-    if (ts > 0) fed.push({ id: String(r.id), ts });
+    // 只有真往摘要输入里写了东西的行才算邻行(Codex 11-20 #1):纯图片、空正文的行没进转写,记成邻行就再也回放不到
+    if (ts > 0 && messages.length > before) fed.push({ id: String(r.id), ts });
     if (ts > 0 && (!last || ts >= last.ts)) last = { id: String(r.id), ts };
   }
   if (messages.length < 2 || !last) return { ok: false, reason: 'nothing to compact' };

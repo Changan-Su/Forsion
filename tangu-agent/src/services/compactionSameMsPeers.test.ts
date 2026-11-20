@@ -133,6 +133,29 @@ describe('同一毫秒的邻行进清单', () => {
   });
 });
 
+describe('Codex 11-20 复核补的两条', () => {
+  it('没往摘要输入里写东西的行(纯图片、空正文)不记成邻行', async () => {
+    await session('S');
+    await msg('u1', 'S', 'user', 'Look at this', TS);
+    await msg('a0', 'S', 'model', 'Sure', TS + 10);
+    await msg('img', 'S', 'user', '', TS + 50); // 纯图片消息:正文空,转写里什么都没有
+    await msg('m1', 'S', 'user', 'What do you see?', TS + 50);
+    expect((await compactSession('S', 'm1')).ok).toBe(true);
+    const cp = await getLatestSummary('S');
+    expect([cp?.throughMessageId, ...(cp?.throughPeerIds ?? [])]).not.toContain('img');
+    expect(rowCoverage({ id: 'img', timestamp: TS + 50 }, cp)).toBe('uncovered');
+  });
+
+  it('/usage:时间戳缺失的行照样算进去 → 有它就报实测', async () => {
+    await session('S');
+    await abortedTurn('S');
+    await compactSession('S', 'm1');
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('nots', 'S', 'user', 'no timestamp', NULL)`);
+    const cp = await getLatestSummary('S');
+    expect(sessionContextTokens({ prompt: 90_000 }, cp, await rowsFromBoundary('S', cp))).toBe(90_000);
+  });
+});
+
 describe('单调规则:同一时间戳只许原地扩成超集', () => {
   it('非超集被拒;超集原地更新;更早的时间戳被拒', async () => {
     await session('S');
