@@ -908,6 +908,34 @@ function rollWindow(cfg: MuseConfig): void {
 let ticking = false;
 /** drain 期间到达的 kick 不能丢(桌面写完表踢一下 → 单发闸吃掉 = 退化成等满 5 分钟):记一笔,tick 结束后自唤醒一次。 */
 let pendingKick = false;
+
+// ── 睡醒稳定期(11-20 生产遥测):macOS 合盖时机器每十几分钟 DarkWake 一次、只醒几秒。到期的巡检定时器恰在那一秒触发,
+// 起的周期(连同规则 / 日程 run)发出请求后机器就回睡,到下一次 DarkWake 才报网络错 / 流超时 —— 白发一份上下文、
+// 记一次失败、cycleMs 还把睡眠时间算进去。本机两次失败的 created_at / updated_at 与 pmset 的 DarkWake 逐秒对上。
+// 判「刚睡醒」用墙钟上的存活间隔:本机 Node 22(libuv 1.52)的单调钟含睡眠时间,比不出差;只看定时器晚到又会漏掉
+// 「刚好在醒来前不久到点」的那次。睡醒后整轮巡检推迟 WAKE_SETTLE_MS:DarkWake 撑不到这么久,真醒了只晚一分钟。
+/** 两次存活心跳之间隔了这么久 = 机器睡过(或进程被冻住 / 事件循环卡死)。心跳每 ALIVE_BEAT_MS 一次。 */
+export const SLEEP_GAP_MS = 90_000;
+const ALIVE_BEAT_MS = 20_000;
+/** 睡醒后这么久内不起后台 run(用户刚点的叫醒除外)。 */
+export const WAKE_SETTLE_MS = 60_000;
+let lastAliveAt = 0;
+let wokeAt = 0;
+let aliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 记一次「此刻醒着」;离上一次超过 SLEEP_GAP_MS 就把此刻记为刚睡醒。纯状态更新,心跳定时器与 tick 开头都调。 */
+function aliveBeat(now = Date.now()): void {
+  if (lastAliveAt && now - lastAliveAt > SLEEP_GAP_MS) {
+    wokeAt = now;
+    log(`${Math.round((now - lastAliveAt) / 1000)}s 没有存活心跳(机器睡过 / 进程被冻住):${WAKE_SETTLE_MS / 1000}s 内不起后台 run`);
+  }
+  lastAliveAt = now;
+}
+
+/** 纯函数,单测钉:此刻还在睡醒稳定期里吗。叫醒请求晚于这次睡醒(人就在跟前点的)→ 不算。 */
+export function inWakeSettle(s: { now: number; wokeAt: number; wakeRequestedAt: number }): boolean {
+  return s.wokeAt > 0 && s.now - s.wokeAt < WAKE_SETTLE_MS && !(s.wakeRequestedAt > s.wokeAt);
+}
 /** 规则 id → **不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);每 tick 整份替换。
  *  面板经 GET /agent/special/muse/triggers 的 `notice` 字段读它 —— 从前这些情况一律静默,
  *  规则显示「已启用」却一次都不评估,用户零信号(H3)。 */
@@ -932,6 +960,8 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
+    aliveBeat();
+    if (inWakeSettle({ now: Date.now(), wokeAt, wakeRequestedAt })) { scheduleSettleTick(); return; }
     // P1-K2(方案 §6.5):急停锁定了远程访问 → 盯任务规则、Agent 日程、Muse 周期整轮**推迟**(不丢:解锁后下一轮照常评估,
     // 到期条目按 dueEntries 补跑)。急停的语义是「不是我在键盘前发起的一律停」;读不出锁 = 锁定。
     let locked = true;
@@ -1106,6 +1136,15 @@ async function tick(): Promise<void> {
   }
 }
 
+/** 睡醒稳定期满后补一次巡检(复用 kickTimer:期间来的 kick 会顶掉它,那一轮 tick 仍在稳定期里就再排一次)。
+ *  supervisor 没起(单测直调 tick)→ 不自排。 */
+function scheduleSettleTick(): void {
+  if (!timer) return;
+  if (kickTimer) clearTimeout(kickTimer);
+  kickTimer = setTimeout(() => { void tick(); }, Math.max(1000, wokeAt + WAKE_SETTLE_MS - Date.now() + 1000));
+  (kickTimer as any).unref?.();
+}
+
 /** 启动 Muse supervisor（幂等）。间隔取配置的 supervisorPollMinutes；首次 ~15s 后即跑(不必等满一个周期)。 */
 /** 巡检间隔(毫秒)= min(supervisorPollMinutes, heartbeatMinutes>0 ? heartbeatMinutes : ∞),下限 1 分钟:
  *  心跳比巡检细时巡检跟着缩,否则「心跳 3 分钟」实际每 5 分钟才醒一次。纯函数,单测钉。 */
@@ -1127,6 +1166,10 @@ export function startMuseSupervisor(): void {
   };
   log(`supervisor 启动(巡检 ${nextPollMs() / 60_000} 分钟;15s 后首次)`);
   arm();
+  // 存活心跳:墙钟上隔太久没跳 = 机器睡过,tick 据此推迟起跑(见 aliveBeat)
+  lastAliveAt = Date.now();
+  aliveTimer = setInterval(() => aliveBeat(), ALIVE_BEAT_MS);
+  (aliveTimer as any).unref?.();
   // run 终态 → 催一次评估:event_seen 盯 run.done 的规则不用等满一个巡检周期。
   setRunTerminalListener(() => kickMuse());
   // 首次延迟 15s 即跑(开机不抢资源、但开启后很快就能起来,不必等满一个 poll 周期)。
@@ -1154,10 +1197,13 @@ export function requestMuseWake(): boolean {
 
 /** @internal 测试用:跑一轮巡检(P1-K2 锁定测试)。 */
 export const __museTickForTests = (): Promise<void> => tick();
+/** @internal 测试用:在 now 记一次存活心跳(睡醒稳定期测试)。 */
+export const __museAliveBeatForTests = (now: number): void => aliveBeat(now);
 
 export function stopMuseSupervisor(): void {
   if (timer) { clearTimeout(timer); timer = null; }
   if (kickTimer) { clearTimeout(kickTimer); kickTimer = null; }
+  if (aliveTimer) { clearInterval(aliveTimer); aliveTimer = null; }
 }
 
 export interface MuseStatus {
