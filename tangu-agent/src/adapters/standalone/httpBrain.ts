@@ -131,7 +131,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     const body = bytes > 512 * 1024 ? `,body ${(bytes / 1024 / 1024).toFixed(1)}MB` : '';
     if (e?.name === 'TimeoutError') {
       const secs = Math.round(Math.max(sizedTimeoutMs(bytes), floorMs) / 1000);
-      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`);
+      // 本地计时器判的超时(不是云端回的 504):标 localTransport,重试链按本地传输中断处理
+      return Object.assign(new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`), { localTransport: true });
     }
     if (e instanceof LlmError) return e;
     // 原错留在 cause 上:重试链据它的 code(ENOTFOUND / ENETUNREACH …)认出「本机断网」进入等网络(llm/netWait.ts)

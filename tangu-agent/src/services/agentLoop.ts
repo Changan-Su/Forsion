@@ -90,7 +90,7 @@ import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, awaitNetworkBeforeResume, type LlmRetryPlan, type LlmNetworkHooks, type MidstreamNetBudget } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, isOverloadedLlmError, retryAfterVerdict, probeBeforeResume, awaitNetwork, createRunNetLedger, MIDSTREAM_MAX_FREE_RESUMES, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
@@ -1642,6 +1642,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 续写那一发去调了工具 / 被插话转走 / 没出正文,后面的正文都不该再粘到断处(Codex 评审 11-15 #2)。
   let pendingGlue: string | null = null;
   let glueJoint: string | null = null;
+  // 中流续写已把屏上那截切段落库(等网前先落库):之后按停,新段为空也要写打断标记 —— 按整轮已落库内容判(见外层 catch)
+  let midstreamSegmentPersisted = false;
   const appendFinal = (text: string): void => {
     const raw = String(text || '');
     const t = raw.trim();
@@ -3256,7 +3258,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
-    const midstreamNetBudget: MidstreamNetBudget = { awakeMs: 0, free: 0 }; // 中流等网账本:免费续写 ≤10 次、醒着等网累计 ≤30 分钟
+    // 本 run 的等网账本(llm/retry.ts):首帧前 / build-payload / 中流共用「醒着等网 ≤30 分钟」;免费重发 ≤2、免费续写 ≤3
+    const runNetLedger = createRunNetLedger();
     let lengthResumed = false; // 纯文字写到输出上限:自动接着写只接一次,再撞上限就停下、交给界面的「继续生成」
     let finalTruncated = false; // 收尾那一发是被输出上限截断的(done 带 truncated,界面画「停在了半句」那行)
     let auditNudged = false; // 完成度审计只审一次:第二次收尾放行,避免「审计→敷衍收尾→再审计」死循环
@@ -3433,6 +3436,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 重试 / 等网络的状态上报(build-payload、首帧前重试、中流续写三处共用)。
       // llm_retry 带 overload / retryAfterMs:界面据此说「服务繁忙」;llm_wait_network 每段等待报一次,网回来报 llm_network_back。
       const errText = (err: unknown): string => String((err as any)?.message || err).slice(0, 160);
+      // 每次真要重发(首帧前重试、等网后重发、中流续写)之前复查 run 的成本闸(同下方记账处那道闸);越限照它收尾。
+      const runCostClosed = (): boolean => isOverRunCost(costTotal + delegatedCost, runCostLimit);
+      const stopForRunCost = async (): Promise<void> => {
+        const detail = `本 run 累计成本约 ${(costTotal + delegatedCost).toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
+        await publish(runId, 'error', { error: 'run_cost_exceeded', detail });
+        await drain(runId);
+        await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
+      };
       const publishRetry = (plan: LlmRetryPlan, err: unknown, what: string): void => {
         console.warn(
           `[agent-core] run=${runId} ${what}瞬时失败,${plan.waitMs}ms 后重试 ${plan.attempt}/${plan.max}${plan.overload ? '(服务繁忙)' : ''}${plan.retryAfterMs !== undefined ? `(Retry-After ${plan.retryAfterMs}ms)` : ''}: ` +
@@ -3445,6 +3456,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       };
       const netHooks = (stage: 'build_payload' | 'request' | 'midstream'): LlmNetworkHooks => ({
         target: baseUrl,
+        ledger: runNetLedger,
         onWaiting: (since, err) => {
           console.warn(`[agent-core] run=${runId} 网络断开(${stage}),等网络恢复后接着这一轮: ${(err as any)?.message || err}`);
           void publish(runId, 'status', { phase: 'llm_wait_network', since, stage, error: errText(err), iteration });
@@ -3582,6 +3594,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
+          // 失败尝试已知的用量(流里先报了 usage 再断,如 Anthropic message_start 之后断流):记进本 run 成本,重发前的成本闸据此判
+          const failedUsage = (err as LlmError)?.partialUsage;
+          if (failedUsage && (failedUsage.prompt_tokens || failedUsage.completion_tokens)) {
+            costTotal += await calculateCost(callModelId, failedUsage.prompt_tokens, failedUsage.completion_tokens, undefined, failedUsage.cached_tokens).catch(() => 0);
+          }
           if (sampling.signal.aborted && immediateSteers.has(runId)) {
             inflightText = '';
             if (partialText.trim()) {
@@ -3627,42 +3644,55 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
           // 也允许:对长 run 而言「多等一轮再续」远好于「整 run 报废」。
-          // 断网 / 睡醒:续写前探网,真断了就等网回来(llm_wait_network),这次续写不扣次数、不再退避(一个 run 免费续写
-          // ≤10 次、醒着等网累计 ≤30 分钟);网是通的才按 MIDSTREAM_MAX_RESUMES 计数续写。次数还有时先切段落库再等网
-          // (等网期间引擎被强杀也不丢屏上那截);次数用完时先探网,确认断过才切段续写,否则照旧失败(半截随失败收尾落库)。
-          // 等网时立即插话会叫醒它:当免费续写,重进本迭代,插话在迭代顶注入。
-          const canResume = emitted && isRetryableLlmError(err);
-          const waitNetBeforeResume = async (): Promise<boolean> => {
-            try {
-              return await awaitNetworkBeforeResume(err, attemptStart, { signal: sampling.signal, network: netHooks('midstream'), budget: midstreamNetBudget });
-            } catch (e) {
-              if (!ac.signal.aborted && sampling.signal.aborted && immediateSteers.has(runId)) return true;
-              throw e;
-            }
-          };
-          let freeResume = canResume && midstreamResumes >= MIDSTREAM_MAX_RESUMES ? await waitNetBeforeResume() : false;
-          if (canResume && (freeResume || midstreamResumes < MIDSTREAM_MAX_RESUMES)) {
+          // 断网 / 睡醒:续写前先探一次网(只给本地传输中断);确认断了 → **先切段落库**(等网期间引擎被强杀也不丢屏上那截,
+          // 和续写次数用没用完无关),再等网回来(llm_wait_network,醒着累计 ≤30 分钟、整 run 共用)。网回来 / 跨睡眠的续写
+          // 不扣 MIDSTREAM_MAX_RESUMES、不退避,整 run 至多 MIDSTREAM_MAX_FREE_RESUMES 次;其余照常按次数续写。
+          // Retry-After 超过 60s / 不合法:不续写;≤60s:照它等(不越过 60s)。等网时立即插话会叫醒它(插话在迭代顶注入)。
+          // 每次真续写之前复查 run 成本闸。
+          const steerWoke = (e: unknown): boolean => !ac.signal.aborted && sampling.signal.aborted && immediateSteers.has(runId) && (e as any)?.name === 'AbortError';
+          const midRa = emitted && isRetryableLlmError(err) ? retryAfterVerdict(err) : ({ kind: 'refuse' } as const);
+          let pre: 'down' | 'woke' | 'no' = 'no';
+          let steered = false;
+          if (midRa.kind !== 'refuse') {
+            try { pre = await probeBeforeResume(err, attemptStart, { signal: sampling.signal, network: netHooks('midstream') }); }
+            catch (e) { if (!steerWoke(e)) throw e; steered = true; }
+          }
+          const canFree = steered || ((pre === 'down' || pre === 'woke') && runNetLedger.freeResumes < MIDSTREAM_MAX_FREE_RESUMES);
+          if (midRa.kind !== 'refuse' && (canFree || midstreamResumes < MIDSTREAM_MAX_RESUMES)) {
             inflightText = '';
             if (partialText.trim()) {
               appendFinal(partialText);
               workingMessages.push({ role: 'assistant', content: partialText } as ChatMessage);
             }
+            if (finalContent.trim() || allToolCalls.length) midstreamSegmentPersisted = true;
             await applySteering([]); // 空注入=纯段切分:半截段收尾落库,客户端关旧段开新段(无用户气泡)
             workingMessages.push({
               role: 'user',
               content:
                 '<stream_resume>\nYour previous message was cut off mid-stream by a transient network error. Anything you already produced was kept and shown to the user. Continue exactly where you left off — do not repeat content you already wrote; if a tool call was cut off, issue it again in full.\n</stream_resume>',
             } as ChatMessage); // 不落库不上屏:harness 脚手架,只进本 run 上下文
-            if (!freeResume) freeResume = await waitNetBeforeResume();
-            if (!freeResume) {
+            let back = false;
+            if (pre === 'down' && !steered) {
+              try {
+                const r = await awaitNetwork(err, netHooks('midstream'), runNetLedger, sampling.signal, { assumeDown: true });
+                if (r.state === 'gave_up') throw err;
+                back = r.state === 'back';
+              } catch (e) { if (!steerWoke(e)) throw e; steered = true; }
+            }
+            const free = steered || (canFree && (back || pre === 'woke'));
+            if (free && !steered) runNetLedger.freeResumes++;
+            if (!free) {
+              if (midstreamResumes >= MIDSTREAM_MAX_RESUMES) throw err;
               midstreamResumes++;
-              const wait = llmBackoffMs(midstreamResumes);
+              const wait = midRa.kind === 'wait' ? midRa.ms : llmBackoffMs(midstreamResumes);
               console.warn(`[agent-core] run=${runId} 中流断线,${wait}ms 后续写 ${midstreamResumes}/${MIDSTREAM_MAX_RESUMES}: ${(err as any)?.message || err}`);
               void publish(runId, 'status', {
                 phase: 'llm_retry', attempt: midstreamResumes, max: MIDSTREAM_MAX_RESUMES, waitMs: wait, error: errText(err), iteration,
+                ...(isOverloadedLlmError(err) ? { overload: true } : {}), ...(midRa.kind === 'wait' ? { retryAfterMs: midRa.retryAfterMs } : {}),
               });
               await sleepOrAbort(wait, ac.signal);
             }
+            if (runCostClosed()) { await stopForRunCost(); return; }
             resumedMidstream = true;
             // 续写不消耗迭代额度:同一 iteration 重进。否则在 lastIter(尤其 maxIterations=1)断线时,
             // continue 直接把循环耗尽,run 以半截内容假 done,承诺的续写根本不会发生(Codex 评审 #5)。
@@ -3715,6 +3745,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               network: netHooks('request'),
               onRetry: (plan, e) => publishRetry(plan, e, 'LLM 调用'),
             });
+            if (runCostClosed()) { await stopForRunCost(); return; }
           } catch (e) {
             if (ac.signal.aborted || !sampling.signal.aborted || !immediateSteers.has(runId)) throw e;
           }
@@ -4295,20 +4326,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (inflightText.trim()) { appendFinal(inflightText); inflightText = ''; }
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
-    if (finalContent.trim() || allToolCalls.length) {
+    const persistSegment = !!(finalContent.trim() || allToolCalls.length);
+    if (persistSegment) {
       await finalizeAssistantMessage(
         currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
       ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
       // 半截段落库了 → 本 run 压缩覆盖到它的检查点一并补落(否则下个 run 又把整段原样回放再总结一遍)
       await settleCheckpointAfterFinalize(currentAssistantId).catch((e: any) => console.warn('[agent-core] settle checkpoint on abort failed:', e?.message || e));
-      // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
-      // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
-      // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。
-      if (aborted) {
-        await deps().state.insertUserMessage({
-          id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
-        }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
-      }
+    }
+    // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
+    // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
+    // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。
+    // 按整轮已落库内容判:中流续写已把前面那截切段落库、等网时按停(新段为空)也要标。
+    if (aborted && (persistSegment || midstreamSegmentPersisted)) {
+      await deps().state.insertUserMessage({
+        id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
+      }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
     }
     // 用户按停、且这一轮已经调了好几次工具:记在会话上,等他的下一轮跑完再让后台复盘(那时才看得到他接下来说了什么)。
     if (aborted && userStopped.has(ac)) noteUserStop(sessionId, runToolNames);

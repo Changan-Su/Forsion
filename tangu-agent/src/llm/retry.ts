@@ -1,6 +1,6 @@
 import { LlmError } from '../core/types.js';
-import { isOfflineLlmError, mayBeOfflineLlmError, probeTargetOf, waitForNetwork, sleepOrAbort, NETWORK_WAIT_MAX_MS } from './netWait.js';
-import { lastWakeAt } from './sleepDetector.js';
+import { isOfflineLlmError, isLocalTransportError, probeTargetOf, probeNetwork, waitForNetwork, sleepOrAbort, NETWORK_WAIT_MAX_MS } from './netWait.js';
+import { lastWakeAt, sleepIntervals, sleptMsBetween } from './sleepDetector.js';
 
 /** 有界重试判别:LLM 流式调用抛的错是否值得重试。
  *  - 用户主动 abort(name==='AbortError')→ 否(标 aborted,不是失败)
@@ -82,17 +82,26 @@ const OVERLOADED = /overloaded|server (is )?busy|server_busy|服务(器)?繁忙|
 
 /**
  * 解析响应头里的 Retry-After(毫秒):`retry-after-ms`(OpenAI / Anthropic 自家)优先,其次 `retry-after`
- * (秒数或 HTTP-date)。没有 / 解析不了 → undefined。负数按 0。
+ * (秒数或 HTTP-date)。没有这个头 → undefined。过去的日期 → 0(现在就可以)。
+ * 写了但不合法(负数、乱写、算出来溢出)→ Infinity:按「超过 60 秒」处理,不重试 —— 服务端说了要等,读不懂不能当没说。
  */
 export function parseRetryAfterMs(headers: { get(name: string): string | null } | null | undefined, now = Date.now()): number | undefined {
   if (!headers || typeof headers.get !== 'function') return undefined;
   const ms = headers.get('retry-after-ms');
-  if (ms != null && ms.trim() !== '' && Number.isFinite(Number(ms))) return Math.max(0, Math.round(Number(ms)));
+  if (ms != null && ms.trim() !== '') {
+    const n = Number(ms);
+    return /^\s*\d+(\.\d+)?\s*$/.test(ms) && Number.isFinite(n) ? Math.round(n) : Infinity;
+  }
   const ra = headers.get('retry-after');
   if (ra == null || ra.trim() === '') return undefined;
-  if (/^\s*\d+(\.\d+)?\s*$/.test(ra)) return Math.max(0, Math.round(Number(ra) * 1000));
+  if (/^\s*\d+(\.\d+)?\s*$/.test(ra)) {
+    const n = Number(ra) * 1000;
+    return Number.isFinite(n) ? Math.round(n) : Infinity;
+  }
+  // HTTP-date 一定带月份 / 星期的字母;「-5」「+3」这种 Date.parse 也认(当成年份),不能当日期
+  if (!/[a-z]/i.test(ra)) return Infinity;
   const at = Date.parse(ra);
-  return Number.isFinite(at) ? Math.max(0, at - now) : undefined;
+  return Number.isFinite(at) ? Math.max(0, at - now) : Infinity;
 }
 
 /** 把响应头里的 Retry-After 挂到报错上(err.retryAfterMs);LLM 客户端抛 HTTP 错之前过一遍。 */
@@ -102,14 +111,50 @@ export function withRetryAfter<E>(err: E, headers: { get(name: string): string |
   return err;
 }
 
-const retryAfterMsOf = (err: unknown): number | undefined => {
-  const v = (err as { retryAfterMs?: unknown })?.retryAfterMs;
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
+/** 报错上的 Retry-After:没有 → undefined;不是合法的非负有限数 → Infinity(按超限处理)。 */
+export const retryAfterMsOf = (err: unknown): number | undefined => {
+  if (!err || typeof err !== 'object' || !('retryAfterMs' in err)) return undefined;
+  const v = (err as { retryAfterMs?: unknown }).retryAfterMs;
+  if (v === undefined) return undefined;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : Infinity;
 };
 
-/** 重试链共用墙钟预算,包含退避;只决定是否再发请求,不假装中止仍在执行的请求。睡着的那段不算(从醒来那刻起算)。 */
+/** 服务端说要等多久就照它等,但总长不越过 60 秒边界(抖动只往上加、不越界)。 */
+const retryAfterWaitMs = (ra: number, rng: () => number): number =>
+  Math.min(RETRY_AFTER_MAX_MS, ra + Math.round(rng() * Math.min(1000, Math.max(200, ra * 0.1))));
+
+/**
+ * Retry-After 的统一约束(探网放行、中流续写、multiBrain 降档重发前都先过它):
+ * none = 没给;wait = 照它等(≤60s);refuse = 超过 60s / 不合法,不重试(任何免费重发分支都不能放行)。
+ */
+export function retryAfterVerdict(err: unknown, rng: () => number = Math.random): { kind: 'none' } | { kind: 'wait'; ms: number; retryAfterMs: number } | { kind: 'refuse' } {
+  const ra = retryAfterMsOf(err);
+  if (ra === undefined) return { kind: 'none' };
+  if (!(ra <= RETRY_AFTER_MAX_MS)) return { kind: 'refuse' };
+  return { kind: 'wait', ms: retryAfterWaitMs(ra, rng), retryAfterMs: ra };
+}
+
+/** [from, to] 内若干区间的并集长度(重叠只算一次)。 */
+function unionLength(intervals: Array<{ start: number; end: number }>, from: number, to: number): number {
+  const clipped = intervals
+    .map((x) => ({ start: Math.max(from, x.start), end: Math.min(to, x.end) }))
+    .filter((x) => x.end > x.start)
+    .sort((a, b) => a.start - b.start);
+  let total = 0;
+  let curS = -Infinity;
+  let curE = -Infinity;
+  for (const x of clipped) {
+    if (x.start > curE) { if (curE > curS) total += curE - curS; curS = x.start; curE = x.end; }
+    else curE = Math.max(curE, x.end);
+  }
+  if (curE > curS) total += curE - curS;
+  return total;
+}
+
+/** 重试链共用墙钟预算,包含退避;只决定是否再发请求,不假装中止仍在执行的请求。睡着的那段不算(睡前已花的照算)。 */
 export function llmRetryBudgetExceeded(chainStartedAt: number, nextWaitMs = 0): boolean {
-  return Date.now() - Math.max(chainStartedAt, lastWakeAt()) + nextWaitMs >= SLOW_FAIL_NO_RETRY_MS;
+  const now = Date.now();
+  return now - chainStartedAt - sleptMsBetween(chainStartedAt, now) + nextWaitMs >= SLOW_FAIL_NO_RETRY_MS;
 }
 
 /** 一次重试的计划(status/llm_retry 的载荷来源)。 */
@@ -124,6 +169,20 @@ export interface LlmRetryPlan {
   retryAfterMs?: number;
 }
 
+/** 一个 run 的账本:醒着等网累计(首帧前 / build-payload / 中流共用,≤30 分钟)、免费重发与免费续写次数。 */
+export interface RunNetLedger {
+  awakeMs: number;
+  /** 首帧前 / build-payload 在「网络恢复 / 跨睡眠」后的免费重发(不扣次数)。 */
+  freeRetries: number;
+  /** 中流在「网络恢复 / 跨睡眠」后的免费续写(不扣 MIDSTREAM_MAX_RESUMES)。 */
+  freeResumes: number;
+}
+/** 整 run 的免费重发上限:用完之后网回来照样重发,但扣普通次数。 */
+export const RUN_MAX_FREE_RETRIES = 2;
+/** 整 run 的免费中流续写上限(和普通 MIDSTREAM_MAX_RESUMES 同量级)。 */
+export const MIDSTREAM_MAX_FREE_RESUMES = 3;
+export const createRunNetLedger = (): RunNetLedger => ({ awakeMs: 0, freeRetries: 0, freeResumes: 0 });
+
 /** 等网络的回调(给了它才开等网络:后台调用没人看状态,干等 30 分钟不如照旧失败)。 */
 export interface LlmNetworkHooks {
   /** 请求地址:报错里没带主机时按它探网 */
@@ -132,139 +191,144 @@ export interface LlmNetworkHooks {
   onWaiting?: (since: number, err: unknown) => void;
   /** 网回来了,马上重发 */
   onBack?: (waitedMs: number, since: number) => void;
+  /** 本 run 的账本(没给就每条链自己一份) */
+  ledger?: RunNetLedger;
 }
 
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' });
 
-/** 探网并等网回来。up = 本来就通;back = 断过、回来了;gave_up = 等满了;unknown = 不知道探谁。 */
-async function awaitNetwork(err: unknown, hooks: LlmNetworkHooks, signal: AbortSignal | undefined, maxMs: number): Promise<{ state: 'up' | 'back' | 'gave_up' | 'unknown'; waitedMs: number; awakeMs: number }> {
+/**
+ * 探网并等网回来,醒着的等待记进账本。up = 本来就通;back = 断过、回来了;gave_up = 账本里的 30 分钟用完了;
+ * unknown = 探不出(配了代理 / 不知道探谁),不进长等。assumeDown = 调用方刚探过、确认断了。
+ */
+export async function awaitNetwork(
+  err: unknown,
+  hooks: LlmNetworkHooks,
+  ledger: RunNetLedger,
+  signal: AbortSignal | undefined,
+  opts: { assumeDown?: boolean } = {},
+): Promise<{ state: 'up' | 'back' | 'gave_up' | 'unknown'; since: number; waitedMs: number }> {
   const target = probeTargetOf(err, hooks.target);
-  if (!target) return { state: 'unknown', waitedMs: 0, awakeMs: 0 };
-  if (maxMs <= 0) return { state: 'gave_up', waitedMs: 0, awakeMs: 0 };
-  const r = await waitForNetwork({ target, signal, maxMs, onWaiting: (since) => hooks.onWaiting?.(since, err) });
+  if (!target) return { state: 'unknown', since: 0, waitedMs: 0 };
+  const r = await waitForNetwork({
+    target, signal, maxMs: NETWORK_WAIT_MAX_MS - ledger.awakeMs, assumeDown: opts.assumeDown,
+    onWaiting: (since) => hooks.onWaiting?.(since, err),
+  });
+  ledger.awakeMs += r.awakeMs;
   if (r.state === 'back') hooks.onBack?.(r.waitedMs, r.since);
   return r;
+}
+
+/** 探一次网(不等):down = 确认断了(调用方先落库再 awaitNetwork({assumeDown}));其余同 awaitNetwork。 */
+export async function probeOnce(err: unknown, hooks: LlmNetworkHooks, signal?: AbortSignal): Promise<'up' | 'down' | 'unknown'> {
+  const target = probeTargetOf(err, hooks.target);
+  if (!target) return 'unknown';
+  return probeNetwork(target, signal);
 }
 
 /**
  * 一条重试链(一次模型调用的若干次尝试)的状态与决策:agentLoop 的首帧前重试与 withLlmRetry 共用。
  *
- * 预算(SLOW_FAIL_NO_RETRY_MS,60s)只算「请求本身 + 普通退避」:服务端点名的等待(Retry-After)、服务繁忙的退避、
- * 等网络、睡着的时间都不算 —— 否则 6 次过载重试(退避合计 ~61s)和 60s 的 Retry-After 永远轮不到。
- * 慢失败一票否决照旧:请求本身耗满 60s(上游静默超时)就不再重发。
+ * 预算(SLOW_FAIL_NO_RETRY_MS,60s)= 链开始到现在的墙钟,减去「不计预算的区间」与「睡眠区间」的并集(重叠只扣一次,
+ * 不会算出负数;睡前已花的照算)。不计预算的:服务端点名的等待(Retry-After)、服务繁忙的退避、等网。
+ * 否则 6 次过载重试(退避合计 ~61s)和 60s 的 Retry-After 永远轮不到。慢失败一票否决照旧:请求本身耗满 60s 就不再重发。
  */
 export class LlmRetryChain {
   private retries = 0;
-  /** 预算起点:链开始;每次醒来推到醒来那刻;每段不算预算的等待再往后推它那么长(醒来后的等待也照扣)。 */
-  private base = Date.now();
-  private seenWake = 0;
-  private networkWaitedMs = 0;
+  private readonly startedAt = Date.now();
+  private readonly excluded: Array<{ start: number; end: number }> = [];
+  private readonly ownLedger = createRunNetLedger();
   constructor(private readonly rng: () => number = Math.random) {}
 
-  private budgetStart(): number {
-    const w = lastWakeAt();
-    if (w > this.seenWake) {
-      this.seenWake = w;
-      this.base = Math.max(this.base, w);
-    }
-    return this.base;
-  }
-
-  private exclude(ms: number): void {
-    this.budgetStart(); // 先把这期间的醒来并进起点,再往后推
-    this.base += ms;
+  /** 这条链已经花掉的预算(醒着、且不在不计预算的等待里的时间)。 */
+  budgetUsed(now = Date.now()): number {
+    return Math.max(0, now - this.startedAt - unionLength([...this.excluded, ...sleepIntervals()], this.startedAt, now));
   }
 
   budgetExceeded(nextWaitMs = 0): boolean {
-    return Date.now() - this.budgetStart() + nextWaitMs >= SLOW_FAIL_NO_RETRY_MS;
+    return this.budgetUsed() + nextWaitMs >= SLOW_FAIL_NO_RETRY_MS;
+  }
+
+  private excludeSpan(start: number, end: number): void {
+    if (end > start) this.excluded.push({ start, end });
   }
 
   /** 不探网、不等:这次失败值不值得再试、等多久。null = 放弃。决定重试即记一次。 */
   plan(err: unknown): (LlmRetryPlan & { excludedFromBudget: boolean }) | null {
     if (!isRetryableLlmError(err)) return null;
+    const ra = retryAfterVerdict(err, this.rng);
+    if (ra.kind === 'refuse') return null;
     const overload = isOverloadedLlmError(err);
     const max = overload ? MODEL_OVERLOAD_MAX_RETRIES : MODEL_MAX_RETRIES;
     if (this.retries >= max) return null;
-    const retryAfterMs = retryAfterMsOf(err);
-    if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) return null;
     const attempt = this.retries + 1;
-    const waitMs = retryAfterMs !== undefined
-      ? retryAfterMs + Math.round(this.rng() * Math.min(1000, Math.max(200, retryAfterMs * 0.1)))
-      : llmBackoffMs(attempt, this.rng);
-    const excludedFromBudget = retryAfterMs !== undefined || overload;
+    const waitMs = ra.kind === 'wait' ? ra.ms : llmBackoffMs(attempt, this.rng);
+    const excludedFromBudget = ra.kind === 'wait' || overload;
     if (this.budgetExceeded(excludedFromBudget ? 0 : waitMs)) return null;
     this.retries = attempt;
-    return { attempt, max, waitMs, overload, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}), excludedFromBudget };
+    return { attempt, max, waitMs, overload, ...(ra.kind === 'wait' ? { retryAfterMs: ra.retryAfterMs } : {}), excludedFromBudget };
   }
 
   /**
-   * 处理一次失败:要么等好了返回(true = 这次重发不扣次数:等过网 / 请求跨过了一次睡眠),要么抛出(原错 / AbortError)。
-   *  - 开了等网络、报错是断网类或这次请求跨过了睡眠 → 探网:断了就等(不扣次数、不算预算,最长 30 分钟累计),
-   *    回来立即重发;本来就通 → 跨睡眠的免费重发一次,其余照常走计划(分类错了也不会白送次数)。
-   *  - 计划说放弃时,报错若可能是断网(重置 / 静默超时)再探一次:真断了照样等网。
+   * 处理一次失败:要么等好了返回(true = 这次重发不扣次数:等过网 / 本地传输中断跨过了一次睡眠),要么抛出(原错 / AbortError)。
+   *  - Retry-After 超过 60s / 不合法 → 直接放弃,任何探网分支都不放行。
+   *  - 开了等网络、报错是断网类,或本地传输中断跨过了睡眠 → 探网:断了就等(不算预算,醒着累计 ≤30 分钟,账本整 run 共用);
+   *    回来后免费重发(整 run ≤ RUN_MAX_FREE_RETRIES 次,用完就照常扣次数);探不出(代理)→ 不等,照常走计划。
+   *  - 计划说放弃时,本地传输中断再探一次:真断了照样等网。
    */
   async recover(err: unknown, attemptStartedAt: number, hooks: { signal?: AbortSignal; network?: LlmNetworkHooks; onRetry?: (plan: LlmRetryPlan, err: unknown) => void } = {}): Promise<boolean> {
     const { signal, network } = hooks;
     if (signal?.aborted) throw abortError();
     if (!isRetryableLlmError(err)) throw err;
-    // 跨睡眠的免费重发不越过服务端点名的等待:带 Retry-After 的照计划走(≤60s 照等、>60s 放弃)
-    const woke = attemptStartedAt < lastWakeAt() && retryAfterMsOf(err) === undefined;
+    if (retryAfterVerdict(err).kind === 'refuse') throw err;
+    const ledger = network?.ledger ?? this.ownLedger;
+    const local = isLocalTransportError(err);
+    // 跨睡眠的免费重发只给本地传输中断(拿到 HTTP 响应的 503 等不算),且不越过 Retry-After
+    const woke = local && retryAfterMsOf(err) === undefined && attemptStartedAt < lastWakeAt();
+    const tryFree = (): boolean => {
+      if (ledger.freeRetries >= RUN_MAX_FREE_RETRIES) return false;
+      ledger.freeRetries++;
+      return true;
+    };
     let probed = false;
     if (network && (woke || isOfflineLlmError(err))) {
       probed = true;
-      const r = await this.waitNetwork(err, network, signal);
-      if (r === 'back') return true;
+      const r = await this.waitNetwork(err, network, ledger, signal);
       if (r === 'gave_up') throw err;
-      if (woke) return true;
+      if ((r === 'back' || (r === 'up' && woke)) && tryFree()) return true;
     }
     const plan = this.plan(err);
     if (!plan) {
-      if (network && !probed && mayBeOfflineLlmError(err) && (await this.waitNetwork(err, network, signal)) === 'back') return true;
+      if (network && !probed && local && (await this.waitNetwork(err, network, ledger, signal)) === 'back' && tryFree()) return true;
       throw err;
     }
     hooks.onRetry?.(plan, err);
+    const t0 = Date.now();
     await sleepOrAbort(plan.waitMs, signal);
-    if (plan.excludedFromBudget) this.exclude(plan.waitMs);
-    // timer/事件循环可能晚唤醒:睡前有余量不代表醒后仍可再发一次请求(睡着了则预算从醒来那刻重算)。
+    if (plan.excludedFromBudget) this.excludeSpan(t0, Date.now());
+    // timer/事件循环可能晚唤醒:睡前有余量不代表醒后仍可再发一次请求。
     if (this.budgetExceeded()) throw err;
     return false;
   }
 
-  private async waitNetwork(err: unknown, network: LlmNetworkHooks, signal: AbortSignal | undefined): Promise<'up' | 'back' | 'gave_up' | 'unknown'> {
-    const r = await awaitNetwork(err, network, signal, NETWORK_WAIT_MAX_MS - this.networkWaitedMs);
-    this.networkWaitedMs += r.awakeMs; // 30 分钟只算醒着等的
-    if (r.state === 'back') this.exclude(r.waitedMs);
+  private async waitNetwork(err: unknown, network: LlmNetworkHooks, ledger: RunNetLedger, signal: AbortSignal | undefined): Promise<'up' | 'back' | 'gave_up' | 'unknown'> {
+    const r = await awaitNetwork(err, network, ledger, signal);
+    if (r.state === 'back') this.excludeSpan(r.since, r.since + r.waitedMs);
     return r.state;
   }
 }
 
-/** 一个 run 里免费续写(等过网 / 跨过睡眠)最多几次:每次流吐一帧就断、断网又恢复的抖动网络不能无限续写刷成本。 */
-export const MIDSTREAM_MAX_FREE_RESUMES = 10;
-
-/** 一个 run 的中流等网账本:醒着等过多久(累计 30 分钟上限)、免费续写过几次。 */
-export interface MidstreamNetBudget { awakeMs: number; free: number }
-
 /**
- * 中流断线续写之前:报错可能是断网(重置 / 静默超时)或这次请求跨过了睡眠 → 探网,断了就等网回来。
- * true = 等过网 / 跨过睡眠:这次续写不扣 MIDSTREAM_MAX_RESUMES、不再退避;false = 网是通的(或本 run 的免费续写 /
- * 等网时间用完了),照常按次数续写。醒着等满还没网 → 抛原错;用户点停 → AbortError。
+ * 中流断线续写之前,第一步:探一次网(不等)。只给本地传输中断(重置 / 本地静默超时)和跨睡眠的。
+ * down = 确认断了:调用方先把屏上那截落库,再 awaitNetwork({assumeDown}) 等网;woke = 跨过睡眠、网通:免费续写一次;
+ * no = 网是通的 / 探不出 / 没开等网:照常按次数续写。
  */
-export async function awaitNetworkBeforeResume(
-  err: unknown,
-  attemptStartedAt: number,
-  hooks: { signal?: AbortSignal; network?: LlmNetworkHooks; budget?: MidstreamNetBudget },
-): Promise<boolean> {
-  if (!hooks.network) return false;
-  const budget = hooks.budget ?? { awakeMs: 0, free: 0 };
-  if (budget.free >= MIDSTREAM_MAX_FREE_RESUMES || budget.awakeMs >= NETWORK_WAIT_MAX_MS) return false;
+export async function probeBeforeResume(err: unknown, attemptStartedAt: number, hooks: { signal?: AbortSignal; network?: LlmNetworkHooks }): Promise<'down' | 'woke' | 'no'> {
+  if (!hooks.network || !isLocalTransportError(err)) return 'no';
   const woke = attemptStartedAt < lastWakeAt();
-  if (!woke && !mayBeOfflineLlmError(err)) return false;
-  const r = await awaitNetwork(err, hooks.network, hooks.signal, NETWORK_WAIT_MAX_MS - budget.awakeMs);
-  budget.awakeMs += r.awakeMs;
-  if (r.state === 'gave_up') throw err;
-  const free = r.state === 'back' || woke;
-  if (free) budget.free++;
-  return free;
+  const r = await probeOnce(err, hooks.network, hooks.signal);
+  if (r === 'down') return 'down';
+  return r === 'up' && woke ? 'woke' : 'no';
 }
 
 /**
@@ -274,6 +338,7 @@ export async function awaitNetworkBeforeResume(
  * 托管面一次秒级 `fetch failed` 就能报废一个已经跑了几分钟的 run(2026-08-27 桌面端 2.8.1 实证)。
  * 慢失败一票否决照旧 —— 撞满超时的大 body 上传重试 4 次只是把干等 ×4。
  * 等网络只在传了 network 时开(主循环的 build-payload);resolve / 子代理 / 压缩照旧失败。
+ * canRetry 在决定重试前、等完真要重发前各问一次(子代理据此在退避期间被兄弟推过成本上限时不再发)。
  */
 export async function withLlmRetry<T>(
   fn: () => Promise<T>,
@@ -296,6 +361,7 @@ export async function withLlmRetry<T>(
       if (signal?.aborted) throw abortError();
       if (canRetry?.() === false) throw err;
       await chain.recover(err, attemptStartedAt, { signal, network, onRetry: (plan, e) => onRetry?.(plan.attempt, plan.waitMs, e, plan) });
+      if (canRetry?.() === false) throw err;
     }
   }
 }

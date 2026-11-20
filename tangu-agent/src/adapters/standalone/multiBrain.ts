@@ -10,7 +10,7 @@
 import { imageMimeOf, imageOutputFields, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type StreamResult, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
-import { isAuthExpiredLlmError, isQuotaExhaustedLlmError } from '../../llm/retry.js';
+import { isAuthExpiredLlmError, isQuotaExhaustedLlmError, retryAfterMsOf } from '../../llm/retry.js';
 import { LlmError } from '../../core/types.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
@@ -394,7 +394,10 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           // ponytail: 不记冷却,下一轮仍先试快档(撞 429 只花几百毫秒);频繁撞再加按 retry-after 的冷却。
           const send = async (): Promise<StreamResult> => {
             try { return await sendOnce(); } catch (err) {
-              if (!(err instanceof LlmError && err.status === 429 && !isQuotaExhaustedLlmError(err)) || p[ACCOUNT_MARK] || !downgradeSpeedTier(p)) throw err;
+              if (!(err instanceof LlmError && err.status === 429 && !isQuotaExhaustedLlmError(err)) || p[ACCOUNT_MARK]) throw err;
+              // 服务端点名了等待(Retry-After):不在这里立刻重发 —— 降好档抛出,交给重试链按它等(>60s / 不合法就不重试)
+              if (retryAfterMsOf(err) !== undefined) { downgradeSpeedTier(p); throw err; }
+              if (!downgradeSpeedTier(p)) throw err;
               console.warn(`[multiBrain] ${p.model} 快档被限流(429),降到 ${p.service_tier || p.speed || 'standard'} 重发`);
               return send();
             }

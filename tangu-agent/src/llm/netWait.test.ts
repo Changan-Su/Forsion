@@ -6,15 +6,22 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import net from 'node:net';
 import {
   offlineCauseOf, isOfflineLlmError, mayBeOfflineLlmError, probeTargetOf, waitForNetwork, probeNetwork, reachableAny, __setNetworkProbeForTests, __setReferenceHostsForTests,
-  NETWORK_WAIT_MAX_MS,
+  NETWORK_WAIT_MAX_MS, proxyConfigured,
 } from './netWait.js';
-import { createDriftDetector, SLEEP_GAP_MS } from './sleepDetector.js';
+import { createDriftDetector, SLEEP_GAP_MS, __recordSleepForTests, __resetSleepForTests, sleptMsBetween } from './sleepDetector.js';
 import { LlmError } from '../core/types.js';
 
 const sysErr = (code: string, extra: Record<string, unknown> = {}): Error => Object.assign(new Error(`${code} x`), { code, ...extra });
 const fetchFailed = (cause: unknown): TypeError => new TypeError('fetch failed', { cause });
 
-afterEach(() => { __setNetworkProbeForTests(null); __setReferenceHostsForTests(null); vi.useRealTimers(); });
+afterEach(() => {
+  __setNetworkProbeForTests(null);
+  __setReferenceHostsForTests(null);
+  __resetSleepForTests();
+  delete process.env.HTTPS_PROXY;
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('断网类报错', () => {
   it('认得出:ENOTFOUND / EAI_AGAIN / ENETUNREACH / EHOSTUNREACH / ENETDOWN / ECONNREFUSED(连接没建起来)', () => {
@@ -44,10 +51,12 @@ describe('断网类报错', () => {
     expect(isOfflineLlmError(Object.assign(new LlmError(502, 'getaddrinfo ENOTFOUND upstream'), { cause: sysErr('ENOTFOUND') }))).toBe(false);
     expect(isOfflineLlmError(Object.assign(new Error('aborted'), { name: 'AbortError', cause: sysErr('ENOTFOUND') }))).toBe(false);
   });
-  it('「可能是断网」只决定要不要探网:裸传输错 / status 0 / 504 是,HTTP 状态错不是', () => {
+  it('「可能是断网」只给本地传输中断:裸传输错 / status 0 / 本机静默超时是;拿到 HTTP 响应的(含 504 / 503)不是', () => {
     expect(mayBeOfflineLlmError(fetchFailed(sysErr('ECONNRESET')))).toBe(true);
     expect(mayBeOfflineLlmError(new LlmError(0, 'x'))).toBe(true);
-    expect(mayBeOfflineLlmError(new LlmError(504, 'stream idle timeout'))).toBe(true);
+    expect(mayBeOfflineLlmError(Object.assign(new LlmError(504, 'stream idle timeout'), { localTransport: true }))).toBe(true);
+    expect(mayBeOfflineLlmError(new LlmError(504, 'Gateway Timeout'))).toBe(false);
+    expect(mayBeOfflineLlmError(new LlmError(503, 'Service Unavailable'))).toBe(false);
     expect(mayBeOfflineLlmError(new LlmError(502, 'Bad Gateway'))).toBe(false);
     expect(mayBeOfflineLlmError(new LlmError(429, 'Rate limit'))).toBe(false);
     expect(mayBeOfflineLlmError(Object.assign(new Error('aborted'), { name: 'AbortError' }))).toBe(false);
@@ -85,22 +94,74 @@ describe('真探网(缺省实现)', () => {
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const port = (server.address() as net.AddressInfo).port;
     try {
-      expect(await probeNetwork({ host: '127.0.0.1', port })).toBe(true);
+      expect(await probeNetwork({ host: '127.0.0.1', port })).toBe('up');
     } finally {
       await new Promise((r) => server.close(r));
     }
-    expect(await probeNetwork({ host: '127.0.0.1', port })).toBe(true); // 关了:ECONNREFUSED = 包到得了
+    expect(await probeNetwork({ host: '127.0.0.1', port })).toBe('up'); // 关了:ECONNREFUSED = 包到得了
     __setReferenceHostsForTests(['also-no-such-host.forsion-probe.invalid']);
-    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(false);
+    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe('down');
   });
   it('端点探不通但参照域名连得上 → 本机有网(地址填错 / 那一家停机不能干等 30 分钟)', async () => {
     __setReferenceHostsForTests(['localhost']);
-    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(true);
-    expect(await probeNetwork({ host: '100::1', port: 443 })).toBe(true);
+    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe('up');
+    expect(await probeNetwork({ host: '100::1', port: 443 })).toBe('up');
   });
   it('参照也要连得上,只「解析得出」不算(断网后 DNS 可能还答缓存;IP 字面量永远「解析得出」)', async () => {
     __setReferenceHostsForTests(['100::1']);
-    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe(false);
+    expect(await probeNetwork({ host: 'no-such-host.forsion-probe.invalid', port: 443 })).toBe('down');
+  });
+  it('有结果就关掉其余在途连接:本机端口先通,连 TEST-NET 的那条 socket 当场销毁', async () => {
+    const server = net.createServer();
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as net.AddressInfo).port;
+    const socks: net.Socket[] = [];
+    const real = net.connect.bind(net) as (o: net.NetConnectOpts) => net.Socket;
+    vi.spyOn(net, 'connect').mockImplementation(((o: net.NetConnectOpts) => { const s = real(o); socks.push(s); return s; }) as typeof net.connect);
+    try {
+      __setReferenceHostsForTests(['192.0.2.1']); // TEST-NET-1:连不上,一般挂到超时
+      expect(await probeNetwork({ host: '127.0.0.1', port }, undefined, 3_000)).toBe('up');
+      expect(socks.length).toBe(2);
+      expect(socks.every((s) => s.destroyed)).toBe(true);
+    } finally {
+      await new Promise((r) => server.close(r));
+    }
+  });
+  it('点停:立刻 AbortError,在途 socket 全部销毁', async () => {
+    const socks: net.Socket[] = [];
+    const real = net.connect.bind(net) as (o: net.NetConnectOpts) => net.Socket;
+    vi.spyOn(net, 'connect').mockImplementation(((o: net.NetConnectOpts) => { const s = real(o); socks.push(s); return s; }) as typeof net.connect);
+    __setReferenceHostsForTests(['192.0.2.2']);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 30);
+    const t0 = Date.now();
+    await expect(probeNetwork({ host: '192.0.2.1', port: 443 }, ac.signal, 3_000)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(Date.now() - t0).toBeLessThan(1_000);
+    expect(socks.length).toBe(2);
+    expect(socks.every((s) => s.destroyed)).toBe(true);
+  });
+  it('配了代理(HTTPS_PROXY / HTTP_PROXY / ALL_PROXY,大小写都认):直连探不出实际出口 → unknown,不调探网实现', async () => {
+    expect(proxyConfigured({ https_proxy: 'http://127.0.0.1:7890' })).toBe(true);
+    expect(proxyConfigured({ ALL_PROXY: 'socks5://127.0.0.1:7891' })).toBe(true);
+    expect(proxyConfigured({ HTTP_PROXY: '  ' })).toBe(false);
+    expect(proxyConfigured({})).toBe(false);
+    const probe = vi.fn(async () => false);
+    __setNetworkProbeForTests(probe, 5);
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:7890';
+    expect(await probeNetwork({ host: 'h', port: 443 })).toBe('unknown');
+    const onWaiting = vi.fn();
+    await expect(waitForNetwork({ target: { host: 'h', port: 443 }, onWaiting })).resolves.toMatchObject({ state: 'unknown', waitedMs: 0 });
+    expect(onWaiting).not.toHaveBeenCalled();
+    expect(probe).not.toHaveBeenCalled();
+  });
+  it('探网实现自己说 unknown → 不进长等', async () => {
+    __setNetworkProbeForTests(async () => 'unknown', 5);
+    expect(await probeNetwork({ host: 'h', port: 443 })).toBe('unknown');
+    await expect(waitForNetwork({ target: { host: 'h', port: 443 } })).resolves.toMatchObject({ state: 'unknown' });
+    // 等的中途变成 unknown:也不再等下去
+    const seq: Array<boolean | 'unknown'> = [false, 'unknown'];
+    __setNetworkProbeForTests(async () => seq.shift() ?? false, 5);
+    await expect(waitForNetwork({ target: { host: 'h', port: 443 } })).resolves.toMatchObject({ state: 'unknown' });
   });
   it('解析出多个地址时任一个通就算通:IPv6 坏、IPv4 好不能判成断网(fetch 也会两个都试)', async () => {
     const server = net.createServer();
@@ -148,7 +209,9 @@ describe('waitForNetwork', () => {
     let settled = false;
     const p = waitForNetwork({ target: { host: 'h', port: 443 }, maxMs: NETWORK_WAIT_MAX_MS }).finally(() => { settled = true; });
     await vi.advanceTimersByTimeAsync(10_000); // 醒着等了 10s
-    vi.setSystemTime(Date.now() + 2 * 3600_000); // 合盖 2 小时(定时器不走,墙钟跳)
+    const s0 = Date.now();
+    vi.setSystemTime(s0 + 2 * 3600_000); // 合盖 2 小时(定时器不走,墙钟跳)
+    __recordSleepForTests(s0, Date.now()); // 睡眠检测的心跳记下这一段
     await vi.advanceTimersByTimeAsync(5_000); // 醒来第一探:Wi-Fi 还没连上
     expect(settled).toBe(false);
     up = true;
@@ -157,6 +220,24 @@ describe('waitForNetwork', () => {
     expect(r.state).toBe('back');
     expect(r.waitedMs).toBeGreaterThan(2 * 3600_000);
     expect(r.awakeMs).toBeLessThan(60_000);
+  });
+  it('睡眠只认心跳:墙钟跳了 2 小时但心跳没记睡眠(探网卡住 / 事件循环忙)→ 照算醒着,超 30 分钟放弃', async () => {
+    vi.useFakeTimers();
+    __setNetworkProbeForTests(async () => false, 5_000);
+    const p = waitForNetwork({ target: { host: 'h', port: 443 }, maxMs: NETWORK_WAIT_MAX_MS });
+    await vi.advanceTimersByTimeAsync(10_000);
+    vi.setSystemTime(Date.now() + 2 * 3600_000);
+    await vi.advanceTimersByTimeAsync(5_000);
+    const r = await p;
+    expect(r.state).toBe('gave_up');
+    expect(r.awakeMs).toBeGreaterThan(NETWORK_WAIT_MAX_MS);
+  });
+  it('每次探测受剩余时限约束:只剩 1s 时探网卡住也 1s 就收', async () => {
+    __setNetworkProbeForTests(() => new Promise<boolean>(() => {}), 5);
+    const t0 = Date.now();
+    const r = await waitForNetwork({ target: { host: 'h', port: 443 }, maxMs: 300, assumeDown: true });
+    expect(r.state).toBe('gave_up');
+    expect(Date.now() - t0).toBeLessThan(1_500);
   });
   it('探网卡住时点停也立刻返回 AbortError', async () => {
     __setNetworkProbeForTests(() => new Promise<boolean>(() => {}), 5);
@@ -179,5 +260,13 @@ describe('睡眠检测(drift timer)', () => {
     const woke = now;
     now += 1_000; d.tick();
     expect(d.lastWakeAt()).toBe(woke); // 醒来之后的正常心跳不改它
+    expect(d.intervals()).toEqual([{ start: woke - 20 * 60_000, end: woke }]); // 睡眠区间 = [睡前最后一拍, 醒来第一拍]
+  });
+  it('sleptMsBetween 只算与窗口重叠的那段', () => {
+    __recordSleepForTests(1_000, 5_000);
+    __recordSleepForTests(8_000, 9_000);
+    expect(sleptMsBetween(0, 10_000)).toBe(5_000);
+    expect(sleptMsBetween(3_000, 8_500)).toBe(2_500);
+    expect(sleptMsBetween(5_000, 8_000)).toBe(0);
   });
 });

@@ -1,11 +1,11 @@
 import { lookup } from 'node:dns';
 import net from 'node:net';
 import { LlmError } from '../core/types.js';
-import { SLEEP_GAP_MS } from './sleepDetector.js';
+import { sleptMsBetween } from './sleepDetector.js';
 
 /**
  * 「等待网络」:断网时模型调用不再白白耗掉重试次数、一分钟内就判失败,而是停下来每 ~5 秒探一次网,
- * 网回来就在同一轮接着发(llm/retry.ts 的 LlmRetryChain / awaitNetworkBeforeResume 调用这里)。
+ * 网回来就在同一轮接着发(llm/retry.ts 的 LlmRetryChain / awaitNetwork / probeBeforeResume 调用这里)。
  *
  * 判「断网」分两层:
  *  1. 报错本身:错误链(cause / AggregateError.errors)里有 ENOTFOUND / EAI_AGAIN / ECONNREFUSED / ENETUNREACH /
@@ -18,7 +18,11 @@ import { SLEEP_GAP_MS } from './sleepDetector.js';
  *
  * 探网 = 解析请求的主机名(dns.lookup all,和 fetch 走同一条系统解析)+ 并行连一下每个地址的端口,任一个连上 /
  * 被拒 / 被重置都算通(包到得了对方;fetch 也会把 IPv6 / IPv4 都试一遍,只探第一个会把「IPv6 坏、IPv4 好」误判成断网)。
- * dns.lookup 不能取消、占 libuv 线程池:同一主机同时只留一个在途解析,超时只是不再等它。
+ * 端点和参照域名并行探,整次探网受 NETWORK_PROBE_TIMEOUT_MS 与剩余时限约束;有结果 / 超时 / 点停就销毁其余在途 socket,
+ * 迟到的 DNS 结果不再发起连接。dns.lookup 不能取消、占 libuv 线程池:同一主机同时只留一个在途解析。
+ *
+ * 结果三态:up / down / unknown。配了代理(HTTPS_PROXY / HTTP_PROXY / ALL_PROXY)时直连 TCP 探不出实际出口的通断 → unknown;
+ * unknown 一律不进长等,按普通错误走重试。
  */
 
 export const NETWORK_WAIT_MAX_MS = 30 * 60_000;
@@ -34,10 +38,6 @@ export interface ProbeTarget {
   addresses?: string[];
 }
 
-/** 参照域名:请求端点探不通时,它们任一个连得上就算本机有网。TANGU_NET_REFERENCE_HOSTS(逗号分隔)可改。 */
-const DEFAULT_REFERENCE_HOSTS = ['forsion.net'];
-let referenceHosts: string[] = (process.env.TANGU_NET_REFERENCE_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
-if (!referenceHosts.length) referenceHosts = DEFAULT_REFERENCE_HOSTS;
 
 const abortError = (): Error => Object.assign(new Error('aborted'), { name: 'AbortError' });
 
@@ -76,14 +76,18 @@ export function offlineCauseOf(err: unknown): { code: string; host?: string; por
 export const isOfflineLlmError = (err: unknown): boolean => offlineCauseOf(err) !== null;
 
 /**
- * 可能是断网、但单看报错分不出(连接被重置、流读到一半断了、静默超时):裸传输错、status 0、504。
- * 只用来决定「要不要探一次网」,不直接当断网。
+ * 本地传输中断:连接没建起来 / 建了被掐 / 本地看门狗超时 —— 没拿到 HTTP 响应。裸传输错、status 0、
+ * 以及带 localTransport 标记的(streamIdle 的静默超时、httpBrain 的本地超时)。HTTP 503 / 504 响应不算。
+ * 决定「要不要探网」(放弃前 / 中流续写前)与「跨睡眠能不能免费重发」。
  */
-export function mayBeOfflineLlmError(err: unknown): boolean {
+export function isLocalTransportError(err: unknown): boolean {
   if ((err as any)?.name === 'AbortError') return false;
-  if (err instanceof LlmError) return err.status === 0 || err.status === 504;
+  if (err instanceof LlmError) return err.status === 0 || (err as { localTransport?: boolean }).localTransport === true;
   return true;
 }
+
+/** 兼容旧名:可能是断网 = 本地传输中断(只用来决定要不要探一次网,不直接当断网)。 */
+export const mayBeOfflineLlmError = isLocalTransportError;
 
 function targetFromUrl(url: string | undefined): ProbeTarget | null {
   if (!url) return null;
@@ -117,6 +121,13 @@ export function probeTargetOf(err: unknown, fallbackUrl?: string): ProbeTarget |
 
 // ── 探网 ─────────────────────────────────────────────────────────────────────
 
+export type ProbeResult = 'up' | 'down' | 'unknown';
+
+/** 配了代理:请求走代理出去,直连 TCP 探测说明不了实际出口通不通。 */
+export function proxyConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'].some((k) => String(env[k] || '').trim() !== '');
+}
+
 const pendingLookups = new Map<string, Promise<string[]>>();
 
 /** 同一主机同时只留一个在途 dns.lookup(解析可能挂几十秒,不能每 5 秒叠一个进线程池)。 */
@@ -131,97 +142,127 @@ function lookupOnce(host: string): Promise<string[]> {
   return p;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+/** 等解析,signal 一停就当没结果(底层 getaddrinfo 取消不了,迟到的结果直接丢)。 */
+function lookupUntil(host: string, signal: AbortSignal): Promise<string[] | null> {
+  if (signal.aborted) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const t = setTimeout(() => resolve(null), ms);
-    t.unref?.();
-    p.then((v) => { clearTimeout(t); resolve(v); }, () => { clearTimeout(t); resolve(null); });
+    const onAbort = (): void => resolve(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    lookupOnce(host).then(
+      (r) => { signal.removeEventListener('abort', onAbort); resolve(signal.aborted ? null : r); },
+      () => { signal.removeEventListener('abort', onAbort); resolve(null); },
+    );
   });
 }
 
-function tcpReachable(host: string, port: number, ms: number): Promise<boolean> {
+/** 连一下:连上 / 被拒 / 被重置 = 通;signal 停了就销毁 socket、算不通。 */
+function tcpReachable(host: string, port: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
     let settled = false;
     const sock = net.connect({ host, port });
     const finish = (ok: boolean): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
       sock.destroy();
       resolve(ok);
     };
-    const timer = setTimeout(() => finish(false), ms);
-    timer.unref?.();
+    const onAbort = (): void => finish(false);
+    signal.addEventListener('abort', onAbort, { once: true });
     sock.once('connect', () => finish(true));
-    // 被拒绝 / 被重置 = 包到得了对方:网是通的(本机模型没起、代理没开 → 照常重试再失败,不该当断网干等)
+    // 被拒绝 / 被重置 = 包到得了对方:网是通的(本机模型没起 → 照常重试再失败,不该当断网干等)
     sock.once('error', (e: any) => finish(e?.code === 'ECONNREFUSED' || e?.code === 'ECONNRESET'));
   });
 }
 
-/** 并行连每个地址,任一个通就是通;全不通(或没地址)才是断。 */
+/** 并行跑一组「通不通」,任一个通就返回 true 并停掉其余(销毁在途 socket);全不通 / 停了 → false。 */
+function anyTrue(tasks: Array<(signal: AbortSignal) => Promise<boolean>>, signal: AbortSignal): Promise<boolean> {
+  if (!tasks.length || signal.aborted) return Promise.resolve(false);
+  const inner = new AbortController();
+  const stop = (): void => inner.abort();
+  signal.addEventListener('abort', stop, { once: true });
+  return new Promise<boolean>((resolve) => {
+    let pending = tasks.length;
+    for (const t of tasks) {
+      void t(inner.signal).then((ok) => {
+        if (ok) { resolve(true); inner.abort(); }
+        else if (--pending === 0) resolve(false);
+      }, () => { if (--pending === 0) resolve(false); });
+    }
+  }).finally(() => { signal.removeEventListener('abort', stop); inner.abort(); });
+}
+
+/** 并行连每个地址,任一个通就是通(其余连接随即关掉);全不通(或没地址)才是断。 */
 export function reachableAny(addresses: string[], port: number, ms = NETWORK_PROBE_TIMEOUT_MS): Promise<boolean> {
-  if (!addresses.length) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    let pending = addresses.length;
-    for (const a of addresses) {
-      void tcpReachable(a, port, ms).then((ok) => {
-        if (ok) resolve(true);
-        else if (--pending === 0) resolve(false);
-      });
-    }
-  });
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  t.unref?.();
+  return anyTrue(addresses.map((a) => (s: AbortSignal) => tcpReachable(a, port, s)), ac.signal).finally(() => clearTimeout(t));
 }
 
-async function targetReachable(t: ProbeTarget): Promise<boolean> {
-  if (t.addresses?.length) return reachableAny(t.addresses, t.port);
-  if (net.isIP(t.host)) return reachableAny([t.host], t.port);
-  const resolved = await withTimeout(lookupOnce(t.host), NETWORK_PROBE_TIMEOUT_MS);
-  return resolved ? reachableAny(resolved, t.port) : false;
+function targetReachable(t: ProbeTarget, signal: AbortSignal): Promise<boolean> {
+  const connectAll = (addrs: string[]): Promise<boolean> => anyTrue(addrs.map((a) => (s: AbortSignal) => tcpReachable(a, t.port, s)), signal);
+  if (t.addresses?.length) return connectAll(t.addresses);
+  if (net.isIP(t.host)) return connectAll([t.host]);
+  return lookupUntil(t.host, signal).then((addrs) => (addrs?.length && !signal.aborted ? connectAll(addrs) : false));
 }
 
-/** 参照域名任一个连得上(解析 + 连 443,被拒也算)= 本机有网。只解析不连不够:断网后系统 / 路由器可能还拿缓存答 DNS。 */
-function referenceReachable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    let pending = referenceHosts.length;
-    if (!pending) return resolve(false);
-    for (const h of referenceHosts) {
-      void targetReachable({ host: h, port: 443 }).then((ok) => {
-        if (ok) resolve(true);
-        else if (--pending === 0) resolve(false);
-      });
-    }
-  });
-}
-
-/** 通 = 请求端点连得上,或参照域名连得上(端点自己挂了 / 地址填错不算本机断网)。 */
-async function defaultProbe(t: ProbeTarget): Promise<boolean> {
-  return (await targetReachable(t)) || referenceReachable();
-}
+/** 参照域名:请求端点探不通时,它们任一个连得上就算本机有网。TANGU_NET_REFERENCE_HOSTS(逗号分隔)可改。 */
+const DEFAULT_REFERENCE_HOSTS = ['forsion.net'];
+let referenceHosts: string[] = (process.env.TANGU_NET_REFERENCE_HOSTS || '').split(',').map((h) => h.trim()).filter(Boolean);
+if (!referenceHosts.length) referenceHosts = DEFAULT_REFERENCE_HOSTS;
 
 /** 仅测试:换参照域名(传 null 复原)。 */
 export function __setReferenceHostsForTests(hosts: string[] | null): void {
   referenceHosts = hosts ?? DEFAULT_REFERENCE_HOSTS;
 }
 
-let probeImpl: (t: ProbeTarget) => Promise<boolean> = defaultProbe;
+/**
+ * 缺省探网:端点与参照域名(解析 + 连 443,被拒也算)**并行**,任一个通 = 通(端点自己挂了 / 地址填错不算本机断网;
+ * 参照只解析不连不够 —— 断网后 DNS 可能答缓存,IP 字面量永远「解析得出」)。signal 停 = 超时 / 点停:关掉全部在途连接。
+ */
+function defaultProbe(t: ProbeTarget, signal: AbortSignal): Promise<boolean> {
+  return anyTrue([
+    (s) => targetReachable(t, s),
+    ...referenceHosts.map((h) => (s: AbortSignal) => targetReachable({ host: h, port: 443 }, s)),
+  ], signal);
+}
+
+type ProbeImpl = (t: ProbeTarget, signal: AbortSignal) => Promise<boolean | 'unknown'>;
+let probeImpl: ProbeImpl = defaultProbe;
 let probeIntervalMs = NETWORK_PROBE_INTERVAL_MS;
 
-/** 仅测试:换掉探网实现与间隔(传 null 复原)。 */
-export function __setNetworkProbeForTests(probe: ((t: ProbeTarget) => Promise<boolean>) | null, intervalMs?: number): void {
+/** 仅测试:换掉探网实现与间隔(传 null 复原)。实现可返回 'unknown'。 */
+export function __setNetworkProbeForTests(probe: ProbeImpl | null, intervalMs?: number): void {
   probeImpl = probe ?? defaultProbe;
   probeIntervalMs = intervalMs ?? NETWORK_PROBE_INTERVAL_MS;
 }
 
-/** 探一次:true = 网通。用户点停立刻抛 AbortError(底层解析 / 连接不等它)。 */
-export function probeNetwork(t: ProbeTarget, signal?: AbortSignal): Promise<boolean> {
-  if (signal?.aborted) return Promise.reject(abortError());
-  const p = probeImpl(t).catch(() => false);
-  if (!signal) return p;
-  return new Promise((resolve, reject) => {
-    const onAbort = (): void => reject(abortError());
-    signal.addEventListener('abort', onAbort, { once: true });
-    p.then((v) => { signal.removeEventListener('abort', onAbort); resolve(v); });
-  });
+/**
+ * 探一次。配了代理 → unknown(不探)。timeoutMs(缺省 NETWORK_PROBE_TIMEOUT_MS)到了还没通 → down,并停掉在途连接。
+ * 用户点停 → 立刻抛 AbortError(底层 socket 一并销毁,迟到的解析结果不再发起连接)。
+ */
+export async function probeNetwork(t: ProbeTarget, signal?: AbortSignal, timeoutMs = NETWORK_PROBE_TIMEOUT_MS): Promise<ProbeResult> {
+  if (signal?.aborted) throw abortError();
+  if (proxyConfigured()) return 'unknown';
+  const ac = new AbortController();
+  const onOuter = (): void => ac.abort();
+  signal?.addEventListener('abort', onOuter, { once: true });
+  const timer = setTimeout(() => ac.abort(), Math.max(1, timeoutMs));
+  timer.unref?.();
+  try {
+    const r = await Promise.race([
+      probeImpl(t, ac.signal).catch(() => false as const),
+      new Promise<false>((resolve) => ac.signal.addEventListener('abort', () => resolve(false), { once: true })),
+    ]);
+    if (signal?.aborted) throw abortError();
+    return r === 'unknown' ? 'unknown' : r ? 'up' : 'down';
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onOuter);
+    ac.abort(); // 有结果了:其余在途探测一并停掉
+  }
 }
 
 /** 可中止的等待:signal 一 abort 就抛 AbortError,不再干等完整窗口(retry.ts 原样转出)。 */
@@ -243,43 +284,50 @@ export function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export interface NetworkWaitResult {
-  /** up = 本来就通(没等);back = 断过、回来了;gave_up = 醒着等满 maxMs 还没通 */
-  state: 'up' | 'back' | 'gave_up';
-  /** 墙钟(含睡着的时间):上报 / 从重试预算里扣掉 */
+  /** up = 本来就通(没等);back = 断过、回来了;gave_up = 醒着等满 maxMs 还没通;unknown = 探不出(配了代理等),不等 */
+  state: 'up' | 'back' | 'gave_up' | 'unknown';
+  /** 墙钟(含睡着的时间) */
   waitedMs: number;
-  /** 醒着等的时间:算 30 分钟上限的 */
+  /** 醒着等的时间(墙钟减去睡眠检测记下的睡眠区间):算 30 分钟上限的 */
   awakeMs: number;
   since: number;
 }
 
 /**
- * 先探一次;通 → 立即返回 up。不通 → onWaiting(since) 一次(每段等待只报一次,不是每次探网),
- * 之后每 probeIntervalMs 探一次,通了返回 back,醒着等满 maxMs 返回 gave_up。用户点停抛 AbortError。
- * 等的中途合盖:两次探网之间远超一个周期的那段按一个周期算 —— 否则通勤路上合盖 2 小时,醒来 Wi-Fi 还没连上那一探
- * 就因「早过了 30 分钟」放弃,正是这一步要接住的场景。
+ * 先探一次(assumeDown = 调用方刚探过、确认断了,跳过这一探);通 → up,探不出 → unknown,都不等。
+ * 断了 → onWaiting(since) 一次(每段等待只报一次,不是每次探网),之后每 probeIntervalMs 探一次,通了返回 back,
+ * 醒着等满 maxMs 返回 gave_up;每次探测受剩余时限约束。用户点停抛 AbortError。
+ * 合盖的那段由睡眠检测判定、不算醒着等的时间 —— 不按某一轮耗时长短猜(探网慢不等于睡着了)。
  */
 export async function waitForNetwork(opts: {
   target: ProbeTarget;
   signal?: AbortSignal;
   maxMs?: number;
+  assumeDown?: boolean;
   onWaiting?: (since: number) => void;
 }): Promise<NetworkWaitResult> {
   const { target, signal } = opts;
-  if (await probeNetwork(target, signal)) return { state: 'up', waitedMs: 0, awakeMs: 0, since: 0 };
+  if (!opts.assumeDown) {
+    const first = await probeNetwork(target, signal);
+    if (first !== 'down') return { state: first, waitedMs: 0, awakeMs: 0, since: 0 };
+  }
   const since = Date.now();
   const maxMs = opts.maxMs ?? NETWORK_WAIT_MAX_MS;
-  opts.onWaiting?.(since);
-  let awakeMs = 0;
-  let prev = since;
-  for (;;) {
-    const left = maxMs - awakeMs;
-    if (left <= 0) return { state: 'gave_up', waitedMs: Date.now() - since, awakeMs, since };
-    await sleepOrAbort(Math.min(probeIntervalMs, left), signal);
-    const ok = await probeNetwork(target, signal);
+  const awake = (now: number): number => Math.max(0, now - since - sleptMsBetween(since, now));
+  const result = (state: NetworkWaitResult['state']): NetworkWaitResult => {
     const now = Date.now();
-    const dt = now - prev;
-    prev = now;
-    awakeMs += dt > probeIntervalMs + SLEEP_GAP_MS ? probeIntervalMs : dt; // 睡着的那段不算
-    if (ok) return { state: 'back', waitedMs: now - since, awakeMs, since };
+    return { state, waitedMs: now - since, awakeMs: awake(now), since };
+  };
+  if (maxMs <= 0) return result('gave_up');
+  opts.onWaiting?.(since);
+  for (;;) {
+    let left = maxMs - awake(Date.now());
+    if (left <= 0) return result('gave_up');
+    await sleepOrAbort(Math.min(probeIntervalMs, left), signal);
+    left = maxMs - awake(Date.now());
+    if (left <= 0) return result('gave_up');
+    const r = await probeNetwork(target, signal, Math.min(NETWORK_PROBE_TIMEOUT_MS, left));
+    if (r === 'up') return result('back');
+    if (r === 'unknown') return result('unknown');
   }
 }

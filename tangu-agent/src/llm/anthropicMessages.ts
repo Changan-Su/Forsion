@@ -325,9 +325,18 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
   const decoder = new TextDecoder();
   let buffer = '';
 
+  // 断流时已知的用量(message_start 先报了输入):挂到报错上,run 成本闸归集(agentLoop)
+  const usageSoFar = () => ({
+    prompt_tokens: inputTokens + (usage.cached_tokens ?? 0) + (usage.cache_write_tokens ?? 0),
+    completion_tokens: usage.completion_tokens || Math.ceil(content.length / 4),
+    ...(usage.cached_tokens !== undefined ? { cached_tokens: usage.cached_tokens } : {}),
+  });
   guard.arm();
   while (true) {
-    const { done, value } = await guard.read(reader);
+    const { done, value } = await guard.read(reader).catch((e: unknown) => {
+      if (e && typeof e === 'object' && (e as any).name !== 'AbortError' && inputTokens) (e as any).partialUsage = usageSoFar();
+      throw e;
+    });
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
@@ -402,7 +411,7 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           // 流里的超长(代理把 400 包进 SSE 时会这样)按 400 抛,同 openaiResponses:压缩后重试,不当 5xx 重发
           const msg = ev.error?.message || 'Anthropic stream error';
           const overflow = isStreamContextOverflow(ev.error?.type, msg);
-          throw Object.assign(new LlmError(overflow ? 400 : 502, msg), ev.error?.type ? { code: ev.error.type } : {});
+          throw Object.assign(new LlmError(overflow ? 400 : 502, msg), ev.error?.type ? { code: ev.error.type } : {}, { partialUsage: usageSoFar() });
         }
         default:
           break; // ping / message_stop / content_block_stop

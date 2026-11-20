@@ -71,6 +71,10 @@ export class LlmError extends Error {
   status: number;
   /** 服务端 Retry-After(毫秒;llm/retry.ts withRetryAfter 从响应头解析)。没给就不在。 */
   retryAfterMs?: number;
+  /** 本地判的传输中断(看门狗超时等),不是服务端回的 HTTP 状态 */
+  localTransport?: boolean;
+  /** 失败前已知的用量(流里先报了 usage 再断):run 成本闸归集用 */
+  partialUsage?: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number };
   constructor(status: number, message: string) {
     super(message);
     this.name = 'LlmError';
