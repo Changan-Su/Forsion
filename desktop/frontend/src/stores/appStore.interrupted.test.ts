@@ -18,7 +18,9 @@ vi.mock('../services/backendService', async (original) => ({
   getSessionConfig: service.config, getSessionUsage: service.usage,
 }))
 import { useApp } from './appStore'
-import { abortAllTanguRuns, withFailedRuns } from '../tangu/store/tanguSlice'
+import { abortAllTanguRuns, withFailedRuns, withInterruptedTurns } from '../tangu/store/tanguSlice'
+import { interruptedNoticeMarker } from '../../../../tangu-agent/src/contracts/turnResume'
+import { summarizeTask } from '../views/chat2/taskFacts'
 import '../tangu/store/standalone'
 import { inflightOf } from '../tangu/inflightTool'
 
@@ -92,6 +94,7 @@ describe('live interrupted error', () => {
 describe('watchdog × the run status the engine recorded (D4)', () => {
   it('interrupted: not marked done even though half an answer was persisted', async () => {
     service.active.mockResolvedValue([{ id: 'run-1', status: 'interrupted', assistant_message_id: 'a1' }])
+    service.history.mockResolvedValue({ messages: [{ id: 'a1', role: 'model', content: 'half of the answer' }], failedRuns: [] })
     await vi.advanceTimersByTimeAsync(30_000)
     expect(msg()).toMatchObject({ status: 'stopped', error: 'interrupted', content: 'half of the answer' })
     expect(useApp.getState().runningBySession[SID]).toBeUndefined()
@@ -107,9 +110,106 @@ describe('watchdog × the run status the engine recorded (D4)', () => {
     expect(msg()).toMatchObject({ status: 'error', error: 'stale: process restarted', content: 'half of the answer' })
   })
 
-  it('control: a run that simply vanished from the list keeps the old reconciliation', async () => {
+  it('control: a run the engine recorded as done is reconciled from the database as before', async () => {
+    service.active.mockResolvedValue([{ id: 'run-1', status: 'done', assistant_message_id: 'a1' }])
     await vi.advanceTimersByTimeAsync(30_000)
     expect(msg()).toMatchObject({ status: 'done', content: 'half of the answer' })
+    expect(service.history).not.toHaveBeenCalled()
+  })
+
+  // 评审 #7:列表只给最近五条、在跑的排前;这个 run 被挤出去 = 查不到它的终态,不能因为有半截正文就说「完成」
+  it('a run pushed out of the list: not marked done; history clues decide, otherwise "event stream interrupted"', async () => {
+    service.active.mockResolvedValue([1, 2, 3, 4, 5].map((n) => ({ id: `newer-${n}`, status: 'done' })))
+    service.history.mockResolvedValue({ messages: [{ id: 'u1', role: 'user', content: 'x' }, { id: 'a1', role: 'model', content: 'half of the answer' }], failedRuns: [] })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(msg()).toMatchObject({ status: 'error', error: 'app.eventStreamInterrupted', content: 'half of the answer' })
+    expect(useApp.getState().runningBySession[SID]).toBeUndefined() // 也不一直挂着「在跑」
+  })
+
+  it('a run pushed out of the list whose answer is followed by a reasoned interrupted notice settles quietly with that reason', async () => {
+    service.active.mockResolvedValue([])
+    service.history.mockResolvedValue({
+      messages: [
+        { id: 'u1', role: 'user', content: 'x' },
+        { id: 'a1', role: 'model', content: 'half of the answer' },
+        { id: 'n1', role: 'user', content: interruptedNoticeMarker('app_update') },
+      ],
+      failedRuns: [],
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(msg()).toMatchObject({ status: 'stopped', error: 'interrupted:app_update', content: 'half of the answer' })
+  })
+
+  it('a run pushed out of the list with a failure record shows that failure', async () => {
+    service.active.mockResolvedValue([])
+    service.history.mockResolvedValue({ messages: [], failedRuns: [{ assistant_message_id: 'a1', user_message_id: 'u1', error: 'quota exceeded', timestamp: 2 }] })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(msg()).toMatchObject({ status: 'error', error: 'quota exceeded' })
+  })
+
+  it('interrupted in the list takes the reason from the notice that follows; aborted elsewhere = stopped', async () => {
+    service.active.mockResolvedValue([{ id: 'run-1', status: 'interrupted', assistant_message_id: 'a1' }])
+    service.history.mockResolvedValue({
+      messages: [{ id: 'a1', role: 'model', content: 'half of the answer' }, { id: 'n1', role: 'user', content: interruptedNoticeMarker('engine_restart') }],
+      failedRuns: [],
+    })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(msg()).toMatchObject({ status: 'stopped', error: 'interrupted:engine_restart' })
+    useApp.setState({ messagesBySession: { [SID]: [{ id: 'a2', role: 'assistant', content: '', status: 'streaming', timestamp: 3 }] } })
+    useApp.getState().subscribeRun(SID, 'run-2', 'a2')
+    service.active.mockResolvedValue([{ id: 'run-2', status: 'aborted', assistant_message_id: 'a2' }])
+    service.messages.mockResolvedValue([{ id: 'a2', content: 'some text' }])
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(msg('a2')).toMatchObject({ status: 'stopped', content: 'some text' })
+    expect(msg('a2').error).toBeUndefined()
+  })
+})
+
+// 评审 #7:关着自动续跑冷开对话,被打断那一轮的回答行(落库不带状态)不能记成 done —— 右栏 / 摘要会说「已完成」
+describe('history restore: the answer right before a reasoned interrupted notice', () => {
+  const rows = (extra: unknown[] = []) => [
+    { id: 'u1', role: 'user', content: 'merge the weekly notes', timestamp: 1 },
+    { id: 'a1', role: 'model', content: 'half of the answer', timestamp: 2 },
+    { id: 'n1', role: 'user', content: interruptedNoticeMarker('app_quit'), timestamp: 3 },
+    ...extra,
+  ]
+  const LOAD = 'hist-load' // loadSessionHistory 每个会话只拉一次(模块级记账):用自己的会话,别占掉后面用 SID 的测试
+  const facts = (sid: string) => summarizeTask(useApp.getState().messagesBySession[sid], false, '/tmp')
+  beforeEach(() => { abortAllTanguRuns(); useApp.setState({ connState: 'ok', messagesBySession: { [SID]: [] }, runningBySession: {} }) })
+
+  it('loadSessionHistory: stopped with the reason, and the task summary does not say done', async () => {
+    service.history.mockResolvedValue({ messages: rows(), failedRuns: [] })
+    await useApp.getState().loadSessionHistory(LOAD)
+    expect(useApp.getState().messagesBySession[LOAD].find((m) => m.id === 'a1')).toMatchObject({ status: 'stopped', error: 'interrupted:app_quit', content: 'half of the answer' })
+    expect(facts(LOAD).state).toBe('stopped')
+  })
+
+  it('pollSession: same; a second poll with nothing new keeps the very same list (no churn)', async () => {
+    service.history.mockResolvedValue({ messages: rows(), failedRuns: [] })
+    await useApp.getState().pollSession(SID)
+    expect(msg()).toMatchObject({ status: 'stopped', error: 'interrupted:app_quit' })
+    expect(facts(SID).state).toBe('stopped')
+    const before = useApp.getState().messagesBySession[SID]
+    await useApp.getState().pollSession(SID)
+    expect(useApp.getState().messagesBySession[SID]).toBe(before)
+  })
+
+  it('controls: no answer in that turn, a user stop notice, or an answer further back are left alone', () => {
+    const done = (id: string, content = 'ok'): UiMessage => ({ id, role: 'assistant', content, status: 'done', timestamp: 2 })
+    const u = (id: string, content: string): UiMessage => ({ id, role: 'user', content, status: 'done', timestamp: 1 })
+    const sys: UiMessage = { id: 's', role: 'system', content: 'compacted', status: 'done', timestamp: 2 }
+    // 那一轮还没回答:说明前面是用户那一句 —— 不能越过它把上一轮的回答改掉
+    const noAnswer = [done('a0'), u('u1', 'next'), u('n1', interruptedNoticeMarker('crash'))]
+    expect(withInterruptedTurns(noAnswer)).toBe(noAnswer)
+    // 用户按停留下的老式说明(不带原因):照旧
+    const userStop = [u('u1', 'x'), done('a1'), u('n1', '<turn_interrupted>\nThe user stopped this turn.\n</turn_interrupted>')]
+    expect(withInterruptedTurns(userStop)).toBe(userStop)
+    // 中间只隔着系统行:照样认
+    const withSys = withInterruptedTurns([u('u1', 'x'), done('a1'), sys, u('n1', interruptedNoticeMarker('engine_restart'))])
+    expect(withSys[1]).toMatchObject({ status: 'stopped', error: 'interrupted:engine_restart' })
+    // 已是失败 / 在跑的不动
+    const failed: UiMessage = { ...done('a1'), status: 'error', error: 'quota' }
+    expect(withInterruptedTurns([u('u1', 'x'), failed, u('n1', interruptedNoticeMarker('crash'))])[1]).toBe(failed)
   })
 })
 
