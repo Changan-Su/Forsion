@@ -20,6 +20,7 @@ import { isInterruptedRunError, isLatestAnswer, isLatestRow, turnHasOutput } fro
 import { isInflightTool } from '../../tangu/inflightTool'
 import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
+import { tanguQuotaPrompt, tanguQuotaPromptShownOnce } from '../../tangu/telemetry'
 import { TURN_RESUME_OPEN, parseAutoResume, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
@@ -345,12 +346,22 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   )
 }
 
+/** Forsion 额度用尽那条错误(和会员档位锁住的错误分开:只有前者算额度提示,匿名计数 quota_prompt 的 run-error 入口)。 */
+const isQuotaExhaustedError = (error?: string): boolean => !!error && /token_quota_exceeded/i.test(error)
+/** 运行出错那行的额度提示露出:每条消息只计一次(芯片随滚动 / 切会话重挂不重复计);两颗芯片同一条消息共用一次。 */
+function useRunErrorQuotaShown(show: boolean, msgId: string | undefined): void {
+  useEffect(() => { if (show && msgId) tanguQuotaPromptShownOnce('run-error', msgId) }, [show, msgId])
+}
+
 /** 额度用尽 / 会员档位用不了这个模型那两条错误后面的「升级会员」:打开支付中心。宿主没有支付中心(没装云账号扩展)就不给。 */
-export function UpgradeChip({ error }: { error?: string }) {
+export function UpgradeChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
-  if (!error || !(isTierLockedError(error) || /token_quota_exceeded/i.test(error)) || !window.tangu?.openPayCenter) return null
+  const quota = isQuotaExhaustedError(error)
+  const show = !!error && (isTierLockedError(error) || quota) && !!window.tangu?.openPayCenter
+  useRunErrorQuotaShown(show && quota, msgId)
+  if (!show) return null
   return (
-    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => { if (quota) tanguQuotaPrompt('run-error', 'upgrade'); void window.tangu?.openPayCenter?.({ entry: 'run-error' }) }}>
       <ArrowUpRight size={12} /> {t('chat.err.upgrade')}
     </button>
   )
@@ -358,14 +369,16 @@ export function UpgradeChip({ error }: { error?: string }) {
 
 /** 额度用尽那条错误后面的「额度与积分」:打开云账号扩展画的那一页(「用积分继续」开关、重置卡、积分余额都在那)。
  *  扩展没注册这一页(没装 / 旧宿主 / 没登录云账号)就不给。 */
-export function QuotaPageChip({ error }: { error?: string }) {
+export function QuotaPageChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
   const hasPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
     s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'quota' && v.item.category === 'forsion'))
-  if (!error || !/token_quota_exceeded/i.test(error) || !hasPage) return null
+  const show = isQuotaExhaustedError(error) && hasPage
+  useRunErrorQuotaShown(show, msgId)
+  if (!show) return null
   return (
     <button type="button" className="t2-relogin" data-testid="msg-quota-page"
-      onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+      onClick={() => { tanguQuotaPrompt('run-error', 'more'); useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]) }}>
       <Gauge size={12} /> {t('chat.err.quotaPage')}
     </button>
   )
@@ -503,8 +516,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
       <div className="t2-tool err">
         <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
-        <QuotaPageChip error={msg.error} />
-        <UpgradeChip error={msg.error} />
+        <QuotaPageChip error={msg.error} msgId={msg.id} />
+        <UpgradeChip error={msg.error} msgId={msg.id} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>

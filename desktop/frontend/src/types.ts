@@ -654,19 +654,21 @@ declare global {
       authProviders?(): Promise<Array<{ id: string; loggedIn: boolean }>>
       providerLogin?(id: string): Promise<{ ok: boolean; id: string }>
       openAccountCenter?(section?: string): Promise<{ ok: boolean }>
-      /** 打开会员购买页({cloudUrl}/pay?tab=membership,token 主进程拼接)。 */
-      openPayCenter?(): Promise<{ ok: boolean }>
+      /** 打开会员购买页({cloudUrl}/pay?tab=membership,token 主进程拼接)。
+       *  entry(遥测 v3 契约 §17):从哪个入口点的,随下单记;宿主追加在通道参数末尾(老宿主 / 老 Extend 忽略),表外的值不带。 */
+      openPayCenter?(opts?: { entry?: string }): Promise<{ ok: boolean }>
       /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
       accountQuota?(): Promise<{ status: number; json: any }>
       /** Official Web visitor: fixed read-only points/invite presentation, no generic cloud access. */
       accountRewards?(): Promise<{ balance: { status: number; json: any }; invite: { status: number; json: any } }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
       /** 周卡 2026-08-05 下线,只收缺省或 'both'。 */
-      accountUseResetCard?(type?: 'both'): Promise<{ status: number; json: any }>
+      /** entry(遥测 v3):额度操作的入口,追加在末尾(下同);老接收方忽略,表外的值不带。 */
+      accountUseResetCard?(type?: 'both', entry?: string): Promise<{ status: number; json: any }>
       /** 后台额度:从主额度等额转入 limit×percent%(本周期有效;POST /api/token-quota/background/convert)。 */
-      accountBgConvert?(percent: number): Promise<{ status: number; json: any }>
+      accountBgConvert?(percent: number, entry?: string): Promise<{ status: number; json: any }>
       /** 后台额度用尽后改用主额度继续(开关;POST /api/token-quota/background/auto-main)。 */
-      accountBgAutoMain?(enabled: boolean): Promise<{ status: number; json: any }>
+      accountBgAutoMain?(enabled: boolean, entry?: string): Promise<{ status: number; json: any }>
       /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
        *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
       cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>

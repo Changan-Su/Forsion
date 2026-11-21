@@ -44,7 +44,7 @@ import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, createRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns, completeRunWithMessage } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolSourceOf, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolOriginOf, type ToolContext, type ToolOrigin } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -3169,7 +3169,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
       runReadOnlyTool: async (name, args, signal, parentCallId) => {
         const caps = getToolCapabilities(name, toolCtx);
-        if (!READ_ONLY_PROGRAM_TOOLS.has(name) || sourceOf(name) !== 'builtin'
+        if (!READ_ONLY_PROGRAM_TOOLS.has(name) || originOf(name).source !== 'builtin'
           || !['none', 'read'].includes(caps.sideEffect || '') || caps.approval || declaredPersistPlaceholder(name)) {
           throw new Error(`Tool ${name} is not an admitted built-in read-only tool`);
         }
@@ -3238,21 +3238,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const line = text.split('\n').find((l) => /(?:saved|wrote|path|文件|输出).*\/[^ \n]+/i.test(l));
       return line?.match(/(\/[^\s"'<>\\]+)/)?.[1];
     };
-    // 工具事件的 source(builtin / mcp / plugin;遥测 v2,Extend 据此决定发不发工具名)。每个 run 每个名字只解析一次。
-    const toolSources = new Map<string, 'builtin' | 'mcp' | 'plugin'>();
-    const sourceOf = (name: string): 'builtin' | 'mcp' | 'plugin' => {
-      let s = toolSources.get(name);
-      if (!s) {
-        try { s = toolSourceOf(name, toolCtx); } catch { s = 'plugin'; }
-        toolSources.set(name, s);
+    // 工具事件的 source(builtin / mcp / plugin;遥测 v2,Extend 据此决定发不发工具名);插件工具另带 pluginId + pluginOfficial
+    // (遥测 v3,Extend 公开化后按插件聚合)。每个 run 每个名字只解析一次;展开进 payload,builtin / mcp 不多出键。
+    const toolOrigins = new Map<string, ToolOrigin>();
+    const originOf = (name: string): ToolOrigin => {
+      let o = toolOrigins.get(name);
+      if (!o) {
+        try { o = toolOriginOf(name, toolCtx); } catch { o = { source: 'plugin' }; }
+        toolOrigins.set(name, o);
       }
-      return s;
+      return o;
     };
     // 拒绝/拦截时的统一工具结果（用户审批 reject 与 PreToolUse hook block 共用）。
     const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string, parentCallId?: string): Promise<ExecutedToolCall> => {
       const elapsedMs = Date.now() - startedAt;
       await publish(runId, 'tool_result', {
-        id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name),
+        id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, ...originOf(call.function.name),
         ...(parentCallId ? { parentCallId } : {}),
       });
       return {
@@ -3269,7 +3270,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         arguments: call.function.arguments,
         startedAt,
         parallelGroup,
-        source: sourceOf(call.function.name),
+        ...originOf(call.function.name),
         ...(ptc ? { parentCallId: ptc.parentCallId } : {}),
       };
       await publish(runId, 'tool_call', basePayload);
@@ -3313,7 +3314,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         });
         const msg = parkedInquiryResult(ask.question);
         const elapsedMs = Date.now() - startedAt;
-        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name) });
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, ...originOf(call.function.name) });
         return {
           toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
           toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
@@ -3337,7 +3338,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void decision.decided.then((d) => { entry.decision = d; entry.seq = ++parkedSeq; parkedWake?.(); });
         const msg = parkedToolResult(decision.preview);
         const elapsedMs = Date.now() - startedAt;
-        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name) });
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, ...originOf(call.function.name) });
         return {
           toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
           toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
@@ -3413,7 +3414,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         elapsedMs,
         outputChars: capped.length,
         parallelGroup,
-        source: sourceOf(call.function.name),
+        ...originOf(call.function.name),
         artifactPath,
         metadata: result.metadata,
         ...(ptc ? { parentCallId: ptc.parentCallId } : {}),
@@ -3527,7 +3528,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 挂起的 ask_user:答案就是这次调用的结果(同不挂起时的工具结果),放回原位;回灌行里带答案 —— 那是用户自己的话,不是工具输出
           const toolResult = askToolResult(e.call, e.answer, e.parallelGroup);
           const content = toolResult.content as string;
-          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup, source: sourceOf(e.call.function.name) });
+          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup, ...originOf(e.call.function.name) });
           const inContext = await putBackParkedResult(e.call.id, {
             toolResult,
             toolMessage: { role: 'tool', content: e.preCtxText ? `${content}\n\n${e.preCtxText}` : content, tool_call_id: e.call.id } as ChatMessage,
@@ -4537,9 +4538,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             `Tool call "${call.function.name}" was NOT executed: the response hit the output token limit ` +
             '(finish_reason=length), so its arguments may be silently truncated. Re-issue the call with ' +
             'complete, shorter arguments — e.g. split a large write into several smaller edit/apply_patch calls.';
-          await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, startedAt, source: sourceOf(call.function.name) });
+          await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, startedAt, ...originOf(call.function.name) });
           await publish(runId, 'tool_result', {
-            id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length, source: sourceOf(call.function.name),
+            id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length, ...originOf(call.function.name),
           });
           truncatedResults.push({ tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length });
           workingMessages.push({ role: 'tool', content: msg, tool_call_id: call.id } as ChatMessage);

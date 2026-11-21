@@ -4,7 +4,7 @@
  * 故意没有任何运行期 import:pluginStore、成就、主题这些被很多地方 import 的模块要从这里报,反过来 import 就成环。
  * 一律即发即忘:没有 telemetryReport 键(web / 手机 / 没有带遥测的 Extend)就什么都不做;报失败吞掉,绝不影响用户路径。
  */
-import type { AppCountKey, CommandSource, RendererReportKind } from '../../shared/telemetryKeys'
+import type { AppCountKey, CommandSource, QuotaPromptAction, QuotaPromptEntry, RendererReportKind } from '../../shared/telemetryKeys'
 import type { SpecialAgentsConfig } from './types'
 
 export function sendTelemetry(kind: RendererReportKind, props: Record<string, unknown>): void {
@@ -31,3 +31,6 @@ export function museSettingTelemetry(changed: Partial<Pick<SpecialAgentsConfig['
   const keys: Record<string, string> = { enabled: 'muse.enabled', mode: 'muse.mode', notify: 'muse.notify', heartbeatMinutes: 'muse.heartbeat', maxDmPerDay: 'muse.maxDmPerDay' }
   for (const [field, key] of Object.entries(keys)) if (Object.hasOwn(changed, field)) settingTelemetry(key, (changed as Record<string, unknown>)[field])
 }
+/** 额度提示的一次露出 / 动作(遥测 v3 quota_prompt;主进程按小时按入口攒)。宿主那几处(头像菜单、Muse 设置)用这个;
+ *  Tangu 界面那几处用 tangu/telemetry.ts 的 tanguQuotaPrompt(热更新边界,见那个文件头)。shown 只在「从不显示变成显示」时报。 */
+export const quotaPromptTelemetry = (entry: QuotaPromptEntry, action: QuotaPromptAction): void => sendTelemetry('quotaPrompt', { entry, action })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, ONCE_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
+  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, INVENTORY_CAP, MODEL_PAIR_CAP, ONCE_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
   appUpdateProps, coreUpdateProps, createStartupTracker, storeUpdateTelemetry, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
   telemetryPackaged, updateProps,
   type HostTelemetryEvent,
@@ -21,7 +21,8 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
     expect(shapeRendererReport('crash', ['boom'])).toBeNull()
     // setting_change 不许直接当 feature 报(值没归档):只走 setting 种类
     expect(shapeRendererReport('feature', { name: 'setting_change', key: 'ui.themeMode', value: 'dark' })).toBeNull()
-    expect(RENDERER_REPORT_KINDS).toEqual(['crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting'])
+    expect(RENDERER_REPORT_KINDS).toEqual(['crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting',
+      'quotaPrompt', 'pluginInventory', 'modelCount', 'firstRun'])
   })
 
   it('crash:报错原文不转发(栈头那几行也剥掉,只留「at」帧),stack 封顶 8000;错误名只留合法字符', () => {
@@ -434,5 +435,126 @@ describe('引擎事件派生的计数按事件 id 去重(count.once)', () => {
     h.report('count', { key: 'achComputerUse', once: `c${ONCE_CAP}` })
     h.flushCounts()
     expect(got[1].props).toEqual({ achComputerUse: ONCE_CAP + 2 })
+  })
+})
+
+// ── v3(契约 §19)──
+const MARKET = '7d3f0c52-6a41-4c8e-9f0b-2e5d8a1c4b67'
+describe('v3 渲染层上报的整形', () => {
+  it('quotaPrompt:入口 × 动作都在白名单里才收;额度数值、文案等多余字段不带', () => {
+    expect(shapeRendererReport('quotaPrompt', { entry: 'chat-banner', action: 'shown', percent: 3, text: '今日 AI 额度剩余 3%' })).toEqual({ quotaPrompt: { entry: 'chat-banner', action: 'shown' } })
+    expect(shapeRendererReport('quotaPrompt', { entry: 'agent-tool', action: 'card' })).toBeNull() // 额度操作的入口,不是提示的入口
+    expect(shapeRendererReport('quotaPrompt', { entry: 'chat-banner', action: 'buy' })).toBeNull()
+  })
+  it('modelCount:模型 id 原样(公开化在 Extend)、来源类别宿主按 id 算;形状不对 / 没有模型就丢', () => {
+    expect(shapeRendererReport('modelCount', { key: 'regenerate', modelId: 'pr-' + 'a'.repeat(48), providerKind: 'byok' }))
+      .toEqual({ modelCount: { key: 'regenerate', modelId: 'pr-' + 'a'.repeat(48), providerKind: 'forsion' } })
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: 'my-relay/gpt-5.5' })).toEqual({ modelCount: { key: 'stop', modelId: 'my-relay/gpt-5.5', providerKind: 'byok' } })
+    expect(shapeRendererReport('modelCount', { key: 'editResend', modelId: 'ollama/qwen3' })).toEqual({ modelCount: { key: 'editResend', modelId: 'ollama/qwen3', providerKind: 'local' } })
+    // 用户自建渠道恰好叫 codex / pr-xxx:不认成 Codex 订阅 / 托管(Extend 会对这两类原样放行整串,渠道名 / 命名空间就出去了)
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: 'codex/private-workspace/llama3' })).toEqual({ modelCount: { key: 'stop', modelId: 'codex/private-workspace/llama3', providerKind: 'byok' } })
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: 'pr-my-relay/gpt-4o' })).toEqual({ modelCount: { key: 'stop', modelId: 'pr-my-relay/gpt-4o', providerKind: 'byok' } })
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: 'codex/gpt-6-luna' })).toEqual({ modelCount: { key: 'stop', modelId: 'codex/gpt-6-luna', providerKind: 'codex' } })
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: '' })).toBeNull()
+    expect(shapeRendererReport('modelCount', { key: 'stop', modelId: 'has space/x' })).toBeNull()
+    expect(shapeRendererReport('modelCount', { key: 'retry', modelId: 'codex/gpt-6-luna' })).toBeNull()
+  })
+  it('firstRun:报错原文只拿来归类,不转发;额度用尽归 quota(排在限流前)', () => {
+    expect(shapeRendererReport('firstRun', { outcome: 'error', error: 'HTTP 402 token_quota_exceeded for /Users/me/secret', sinceFirstLaunchS: 42, durationMs: 1500 }))
+      .toEqual({ event: 'first_run', props: { outcome: 'error', errorClass: 'quota', sinceFirstLaunchS: 42, durationMs: 1500 } })
+    expect(shapeRendererReport('firstRun', { outcome: 'error', error: '429 Too Many Requests' })).toEqual({ event: 'first_run', props: { outcome: 'error', errorClass: 'rate_limit' } })
+    expect(shapeRendererReport('firstRun', { outcome: 'aborted' })).toEqual({ event: 'first_run', props: { outcome: 'aborted', errorClass: 'aborted' } })
+    expect(shapeRendererReport('firstRun', { outcome: 'done', error: 'ignored', durationMs: -1 })).toEqual({ event: 'first_run', props: { outcome: 'done' } })
+    expect(shapeRendererReport('firstRun', { outcome: 'stopped' })).toBeNull()
+  })
+  it('plugin_lifecycle.reason:只跟卸载 / 停用走,枚举外的不带', () => {
+    expect(shapeRendererReport('plugin_lifecycle', { pluginId: MARKET, pluginOfficial: true, action: 'uninstall', reason: 'slow' }))
+      .toEqual({ event: 'plugin_lifecycle', props: { id: MARKET, action: 'uninstall', reason: 'slow' } })
+    expect(shapeRendererReport('plugin_lifecycle', { pluginId: 'forsion-calendar', pluginOfficial: true, action: 'disable', reason: 'it is ugly' }))
+      .toEqual({ event: 'plugin_lifecycle', props: { id: 'forsion-calendar', action: 'disable' } })
+    expect(shapeRendererReport('plugin_lifecycle', { pluginId: 'forsion-calendar', pluginOfficial: true, action: 'enable', reason: 'mistake' }))
+      .toEqual({ event: 'plugin_lifecycle', props: { id: 'forsion-calendar', action: 'enable' } })
+  })
+  it('pluginInventory:公开 id 每个一条,核不过的并进 local 个数(排最前);同 id 合并,开着取「有一处开着」', () => {
+    const r = shapeRendererReport('pluginInventory', {
+      plugins: [
+        { pluginId: MARKET, pluginOfficial: true, source: 'store', enabled: true },
+        { pluginId: 'forsion-extend', pluginOfficial: true, source: 'builtin', enabled: false },
+        { pluginId: 'forsion-extend', pluginOfficial: true, source: 'builtin', enabled: true },
+        { pluginId: 'my-secret-plugin', pluginOfficial: false, source: 'store', enabled: true }, // 侧载:id 不发
+        { pluginId: 'market-' + MARKET, pluginOfficial: true, source: 'weird', enabled: true }, // 来源不对:当本地
+      ],
+      localCount: 2,
+    })
+    expect(r).toEqual({ truncated: 0, inventory: [
+      { id: 'local', source: 'local', localCount: 4 },
+      { id: MARKET, source: 'store', installed: 1, enabled: 1 },
+      { id: 'forsion-extend', source: 'builtin', installed: 1, enabled: 1 },
+    ] })
+    expect(JSON.stringify(r)).not.toContain('my-secret-plugin')
+    expect(shapeRendererReport('pluginInventory', { plugins: [] })).toBeNull()
+  })
+})
+
+describe('v3 宿主的攒与发', () => {
+  it('quotaPrompt 按小时按入口攒成 quota_prompt;modelCount 按模型攒成 model_feedback;flush 后清零、不吃每小时上限', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.report('quotaPrompt', { entry: 'chat-banner', action: 'shown' })
+    h.report('quotaPrompt', { entry: 'chat-banner', action: 'shown' })
+    h.report('quotaPrompt', { entry: 'chat-banner', action: 'card' })
+    h.report('quotaPrompt', { entry: 'run-error', action: 'upgrade' })
+    h.report('modelCount', { key: 'regenerate', modelId: 'codex/gpt-6-luna' })
+    h.report('modelCount', { key: 'regenerate', modelId: 'codex/gpt-6-luna' })
+    h.report('modelCount', { key: 'stop', modelId: 'codex/gpt-6-luna' })
+    h.report('modelCount', { key: 'editResend', modelId: 'relay/gpt-5.5' })
+    expect(got).toHaveLength(0)
+    h.flushCounts()
+    expect(got.map((e) => [e.event, e.props])).toEqual([
+      ['quota_prompt', { entry: 'chat-banner', shown: 2, card: 1 }],
+      ['quota_prompt', { entry: 'run-error', upgrade: 1 }],
+      ['model_feedback', { modelId: 'codex/gpt-6-luna', providerKind: 'codex', regenerate: 2, stop: 1 }],
+      ['model_feedback', { modelId: 'relay/gpt-5.5', providerKind: 'byok', editResend: 1 }],
+    ])
+    h.flushCounts()
+    expect(got).toHaveLength(4)
+  })
+  it('一小时里不同模型有上限', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < MODEL_PAIR_CAP + 5; i++) h.report('modelCount', { key: 'stop', modelId: `codex/m${i}` })
+    h.report('modelCount', { key: 'stop', modelId: 'codex/m0' })
+    h.flushCounts()
+    expect(got).toHaveLength(MODEL_PAIR_CAP)
+    expect(got[0].props).toEqual({ modelId: 'codex/m0', providerKind: 'codex', stop: 2 })
+  })
+  it('plugin_inventory:不进启动缓冲(没订阅者就丢并记日志);一天只交一份;单列上限 ≥ 160、一份 ≤ 150 条', () => {
+    const logs: string[] = []
+    const h = createTelemetryHost({ packaged: true, sessionId: 's', channel: () => 'stable', coreVersion: () => null, now: () => Date.UTC(2026, 10, 20, 9), log: (m) => logs.push(m) })
+    const inv = { plugins: [{ pluginId: 'forsion-extend', pluginOfficial: true, source: 'builtin', enabled: true }] }
+    h.report('pluginInventory', inv)
+    expect(logs.some((m) => m.includes('no subscriber'))).toBe(true)
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    expect(got).toHaveLength(0) // 没进缓冲,订阅时不回放
+    h.report('pluginInventory', inv)
+    expect(got.map((e) => [e.event, e.props])).toEqual([['plugin_inventory', { day: '2026-11-20', id: 'forsion-extend', source: 'builtin', installed: 1, enabled: 1 }]])
+    h.report('pluginInventory', inv)
+    expect(got).toHaveLength(1) // 同一天第二份(另一个窗口 / 重载)不交
+    expect(HOURLY_CAP.plugin_inventory).toBeGreaterThanOrEqual(160)
+    const many = Array.from({ length: INVENTORY_CAP + 20 }, (_, i) => ({ pluginId: `p-${i}`, pluginOfficial: true, source: 'builtin', enabled: false }))
+    const r = shapeRendererReport('pluginInventory', { plugins: many })
+    expect(r && 'inventory' in r && r.inventory.length).toBe(INVENTORY_CAP)
+    expect(r && 'truncated' in r && r.truncated).toBe(20)
+  })
+  it('first_run 一个进程只交一次', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.report('firstRun', { outcome: 'done', durationMs: 10 })
+    h.report('firstRun', { outcome: 'done', durationMs: 11 })
+    expect(got.map((e) => e.event)).toEqual(['first_run'])
   })
 })
