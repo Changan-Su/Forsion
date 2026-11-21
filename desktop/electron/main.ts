@@ -65,6 +65,7 @@ import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, prepareInstall, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import { waitForNetwork } from './updaterUtil'
 import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -3756,6 +3757,17 @@ app.whenReady().then(async () => {
   })
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
+  // 唤醒 / 定时到点那一刻网络多半还没通(见 updaterUtil.waitForNetwork):先等网络再查;同一入口连着触发(DarkWake 一夜好多次)只留最后一次。
+  // 唤醒后 20 秒内一律当还没网:另一路已经在等网的检查(比如合盖前到点、正在轮询的定时检查)也不在刚唤醒时插队
+  const NET_SETTLE_MS = 20_000
+  let lastResumeAt = 0
+  const waitingFor = new Map<string, number>()
+  const whenNetworkSettles = (key: string, run: () => void): void => {
+    const gen = (waitingFor.get(key) ?? 0) + 1
+    waitingFor.set(key, gen)
+    const online = (): boolean => Date.now() - lastResumeAt >= NET_SETTLE_MS && net.isOnline()
+    void waitForNetwork({ isOnline: online, settleMs: NET_SETTLE_MS }).then((ok) => { if (ok && waitingFor.get(key) === gen) run() })
+  }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
     if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
@@ -3766,7 +3778,7 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       void corePluginUpdater.check()
       // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
-      setInterval(() => { void corePluginUpdater.check(); checkAppUpdateQuietly() }, 6 * 3600_000).unref()
+      setInterval(() => whenNetworkSettles('timer', () => { void corePluginUpdater.check(); checkAppUpdateQuietly() }), 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -3850,7 +3862,8 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
-    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
+    lastResumeAt = Date.now()
+    if (app.isPackaged) whenNetworkSettles('resume', checkAppUpdateQuietly) // 合盖一夜回来,新版本在这时候提示(等网络通了再查)
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -5836,7 +5849,7 @@ app.whenReady().then(async () => {
   app.on('child-process-gone', (_e, d) => {
     console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
     if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverRenderer(`gpu-gone:${d.reason}`)
-    const crash = processGoneProps('other', d, uptimeS())
+    const crash = isQuitting ? null : processGoneProps('other', d, uptimeS()) // 已经在退出:子进程跟着没了不算崩溃
     if (crash) telemetry.emit('crash', crash)
   })
   installHostTelemetry()
@@ -5927,8 +5940,9 @@ if (pluginSandbox) {
 /** 遥测的其余接线(whenReady 里调一次):各窗渲染进程崩溃、引擎意外退出 / 首次就绪、每小时的内存与卡顿、渲染层的上报通道。 */
 function installHostTelemetry(): void {
   // app 级:主窗、独立窗、Mini、浮窗一处都接到(各窗自己的 render-process-gone 只管自愈)
+  // 已经在退出(托盘退出 / ⌘Q / 装更新重启)时进程跟着没了不算崩溃;Windows 结束会话被系统强杀的由 processGoneProps 认出来
   app.on('render-process-gone', (_e, _wc, d) => {
-    const crash = processGoneProps('renderer', d, uptimeS())
+    const crash = isQuitting ? null : processGoneProps('renderer', d, uptimeS())
     if (crash) telemetry.emit('crash', crash)
   })
   if (PRODUCT.agentBackend && !SANDBOX) {
@@ -5937,7 +5951,10 @@ function installHostTelemetry(): void {
       telemetryStartup.engineReady(process.uptime() * 1000)
       offReady()
     })
-    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
+    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => {
+      const crash = isQuitting ? null : engineExitProps(code, signal, Math.round(uptimeMs / 1000))
+      if (crash) telemetry.emit('crash', crash)
+    })
   }
   // 安装包更新器的阶段 → update(只报有结论的几步;见 telemetryHost.appUpdateProps)
   onUpdaterPhase((st) => {

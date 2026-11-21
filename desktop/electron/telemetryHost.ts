@@ -100,24 +100,42 @@ export function crashFromError(proc: string, reason: 'exception' | 'rejection', 
   })
 }
 
-/** 引擎进程意外退出 → crash props。Windows 的 NTSTATUS(0xC0000005 …)超出 int,改记进 errorName。 */
-export function engineExitProps(code: number | null, signal: string | null, uptimeS?: number): Record<string, unknown> {
+/**
+ * Windows 结束会话(关机 / 重启 / 注销)时,系统把没及时退出的进程一起强杀,退出码是 0x40010004(DBG_TERMINATE_PROCESS)。
+ * 那不是崩溃:11-20 查生产遥测,21 次 crash 里 12 次是它,每一次都是所在那次运行的最后一条事件(主进程也跟着没了)。
+ * Electron 42+ 才在会话结束时自己先退(electron#52604),本仓的 40 还会撞上。
+ */
+export const WIN_SESSION_END_EXIT = 0x40010004
+export const killedBySessionEnd = (code: unknown, platform: string = process.platform): boolean =>
+  platform === 'win32' && typeof code === 'number' && (code >>> 0) === WIN_SESSION_END_EXIT
+/** 退出码超出白名单 int 时(Windows NTSTATUS 0xC0000005 …,Electron 给的还常是负数)换成十六进制串。 */
+const hexCode = (code: unknown): string | undefined =>
+  typeof code === 'number' && Number.isInteger(code) && int(code) === undefined ? `0x${(code >>> 0).toString(16).toUpperCase()}` : undefined
+
+/** 引擎进程意外退出 → crash props;Windows 结束会话被强杀的不算,返回 null。Windows 的 NTSTATUS 超出 int,改记进 errorName。 */
+export function engineExitProps(code: number | null, signal: string | null, uptimeS?: number, platform: string = process.platform): Record<string, unknown> | null {
+  if (killedBySessionEnd(code, platform)) return null
   const exitCode = int(code)
   const fatal = /^SIG(SEGV|BUS|ABRT|ILL|FPE)$/.test(signal ?? '')
   return compact({
     process: 'engine',
     reason: signal ? (fatal ? 'crashed' : signal === 'SIGKILL' || signal === 'SIGTERM' ? 'killed' : 'abnormal-exit') : 'abnormal-exit',
     exitCode,
-    errorName: signal ? errorName(signal) : exitCode === undefined && typeof code === 'number' ? `0x${(code >>> 0).toString(16).toUpperCase()}` : undefined,
+    errorName: signal ? errorName(signal) : hexCode(code),
     uptimeS: int(uptimeS),
   })
 }
 
-/** 渲染进程 / 子进程没了 → crash props(clean-exit 返回 null)。child-process-gone 的类型(GPU / Utility …)记进 errorName。 */
-export function processGoneProps(proc: 'renderer' | 'other', details: { reason?: unknown; exitCode?: unknown; type?: unknown }, uptimeS?: number): Record<string, unknown> | null {
+/**
+ * 渲染进程 / 子进程没了 → crash props(clean-exit、Windows 结束会话被强杀的返回 null)。child-process-gone 的类型(GPU / Utility …)
+ * 记进 errorName;退出码超出 int 的(Windows 崩溃码)也进 errorName:渲染进程就是那串码,子进程是「类型:码」。
+ */
+export function processGoneProps(proc: 'renderer' | 'other', details: { reason?: unknown; exitCode?: unknown; type?: unknown }, uptimeS?: number, platform: string = process.platform): Record<string, unknown> | null {
   const reason = goneReason(details.reason)
-  if (!reason) return null
-  return compact({ process: proc, reason, exitCode: int(details.exitCode), errorName: errorName(details.type), uptimeS: int(uptimeS) })
+  if (!reason || killedBySessionEnd(details.exitCode, platform)) return null
+  const hex = hexCode(details.exitCode)
+  const type = errorName(details.type)
+  return compact({ process: proc, reason, exitCode: int(details.exitCode), errorName: type && hex ? errorName(`${type}:${hex}`) : type ?? hex, uptimeS: int(uptimeS) })
 }
 
 // ── update(契约 §9):安装包、引擎 npm 热更新、界面热更新退回、内置插件 npm 更新、首启预取。报错原文只拿来归类,不转发 ──

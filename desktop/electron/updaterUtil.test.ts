@@ -5,7 +5,7 @@
  * 于是切到测试版的人永远卡在最后一个 beta 上。这条钉死。
  */
 import { describe, it, expect } from 'vitest'
-import { changelogSection, isNewer, isPrerelease } from './updaterUtil'
+import { changelogSection, isNewer, isPrerelease, waitForNetwork } from './updaterUtil'
 
 describe('isNewer', () => {
   it('正常三段比较', () => {
@@ -94,5 +94,23 @@ describe('changelogSection', () => {
     const beta = '## 2.7.4-beta.1 (2026-07-30)\n\n- beta 内容\n\n## 2.7.3 (x)\n\n- 老'
     expect(changelogSection(beta, '2.7.4-beta.1')).toBe('- beta 内容')
     expect(changelogSection('## 2.13.8-rc.1+build.2 (x)\n\n- Revision', '2.13.8-rc.1+build.2')).toBe('- Revision')
+  })
+})
+
+describe('waitForNetwork(后台检查先等网络)', () => {
+  const run = (online: boolean[], opts: { settleMs: number; maxWaitMs?: number }) => {
+    const slept: number[] = []
+    let i = 0
+    const p = waitForNetwork({ ...opts, pollMs: 10, isOnline: () => online[Math.min(i++, online.length - 1)], sleep: async (ms) => { slept.push(ms) } })
+    return p.then((ok) => ({ ok, slept }))
+  }
+  it('先缓 settleMs 再看;在线就查', async () => {
+    expect(await run([true], { settleMs: 20 })).toEqual({ ok: true, slept: [20] })
+  })
+  it('不在线就隔 pollMs 再看,网通了就查', async () => {
+    expect(await run([false, false, true], { settleMs: 0 })).toEqual({ ok: true, slept: [10, 10] })
+  })
+  it('一直不在线:等满 maxWaitMs 放弃这一次', async () => {
+    expect(await run([false], { settleMs: 20, maxWaitMs: 40 })).toEqual({ ok: false, slept: [20, 10, 10] })
   })
 })
