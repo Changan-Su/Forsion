@@ -171,6 +171,31 @@ describe('createMultiAccountApp', () => {
     expect((await call('POST', '/agent/runs', { as: 'dave', body: { session_id: taken, model_id: 'test-model', message: 'x' } })).status).toBe(404);
   });
 
+  it('marks runs left queued or running by the previous engine as failed when the account is opened, without re-running them', async () => {
+    const dir = join(env.home, 'accounts', 'erin');
+    mkdirSync(dir, { recursive: true });
+    const db = new Database(join(dir, 'state.db'));
+    db.exec(toSqliteDDL(STANDALONE_SCHEMA));
+    db.exec(`CREATE TABLE agent_runs (id VARCHAR(36) PRIMARY KEY, session_id VARCHAR(36) NOT NULL, user_id VARCHAR(36) NOT NULL,
+      app_id VARCHAR(50) NOT NULL DEFAULT 'ai-studio', status VARCHAR(16) NOT NULL DEFAULT 'queued', current_step INTEGER NOT NULL DEFAULT 0,
+      model_id VARCHAR(128), sandbox_id VARCHAR(36), assistant_message_id VARCHAR(36), input JSONB, result JSONB, error TEXT,
+      tokens_total INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
+    const sid = '33333333-4444-4555-8666-777777777777';
+    db.prepare(`INSERT INTO chat_sessions (id, user_id, title) VALUES (?, 'erin', 't')`).run(sid);
+    const run = db.prepare(`INSERT INTO agent_runs (id, session_id, user_id, status, model_id) VALUES (?, ?, 'erin', ?, 'test-model')`);
+    run.run('run-q', sid, 'queued'); run.run('run-r', sid, 'running'); run.run('run-d', sid, 'completed');
+    db.close();
+    const before = seenAccounts.length;
+    expect((await call('GET', '/agent/sessions', { as: 'erin' })).status).toBe(200);
+    const after = new Database(join(dir, 'state.db'), { readonly: true });
+    const rows = Object.fromEntries((after.prepare('SELECT id, status, error FROM agent_runs').all() as any[]).map((r) => [r.id, [r.status, r.error]]));
+    after.close();
+    expect(rows).toEqual({ 'run-q': ['failed', 'engine restarted'], 'run-r': ['failed', 'engine restarted'], 'run-d': ['completed', null] });
+    const listed = (await call('GET', `/agent/runs?session_id=${sid}`, { as: 'erin' })).json.runs as Array<{ status: string }>;
+    expect(listed.filter((r) => r.status === 'queued' || r.status === 'running')).toEqual([]);
+    expect(seenAccounts.length).toBe(before); // 没有重新入队去调模型
+  });
+
   it('refuses to open an account whose folder or database is a link to somewhere else', async () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'ma-elsewhere-'));
     // 账号 home 是软链

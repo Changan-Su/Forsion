@@ -231,6 +231,12 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     provision: async (id) => {
       mkdirSync(accountWorkspaceDir(id), { recursive: true });
       await runMigration();
+      // 收敛上次进程留下的 run:开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。标成失败
+      //(与启动时清陈旧行同一种写法),不重新入队、不自动续跑 —— 多账号模式没有启动恢复。
+      const stale = await mh.host.query<any[]>(
+        `UPDATE agent_runs SET status = 'failed', error = 'engine restarted', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'running') RETURNING id`,
+      );
+      if (stale.length) console.log(`[tangu] multi-account: marked ${stale.length} run(s) of ${id} left by the previous engine as failed`);
       await seedBuiltinSkills().catch((e) => console.warn(`[tangu] multi-account: seeding built-in skills for ${id} failed:`, e?.message || e));
       try { seedExampleCommand(); } catch { /* best-effort */ }
       await seedBundleAgents().catch(() => []);
