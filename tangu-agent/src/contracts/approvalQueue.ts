@@ -58,6 +58,29 @@ export function parseInquiryUpdate(text: string): Array<{ answered: boolean; cal
     .map((m) => ({ answered: m[1] === 'answered', callId: m[2], question: m[3], answer: m[4].replace(/^User answered: /, '') }))
 }
 
+/** 被移交进后台的命令的结局行(引擎 services/steerHandoff.ts 写的 user 行,11-20):前台 run_bash 跑着时用户插话 → 命令移交进
+ *  后台进程表,它结束后这一行交回模型。对人渲染成每条命令一行「后台命令已结束 / 到点停了」。行里只有引擎的判定,不带命令输出。 */
+export const BACKGROUND_UPDATE_OPEN = '<background_update>'
+export const BACKGROUND_UPDATE_CLOSE = '</background_update>'
+
+export interface BackgroundOutcome {
+  status: 'finished' | 'failed' | 'timed_out' | 'stopped'
+  processId: string
+  callId: string
+  command: string
+  /** finished 才有;没有退出码(被信号停)= null。 */
+  exitCode: number | null
+}
+
+/** 按引擎写死的行头 `[status] process <id> (run_bash call <id>): <命令>` + 下一行说明取出每一条。 */
+export function parseBackgroundUpdate(text: string): BackgroundOutcome[] {
+  return [...text.matchAll(/^\[(finished|failed|timed_out|stopped)\] process (\S+) \(run_bash call ([^)]*)\): (.*)\n(.*)$/gm)]
+    .map((m) => {
+      const code = m[1] === 'finished' ? m[5].match(/exited with code (-?\d+)/) : null
+      return { status: m[1] as BackgroundOutcome['status'], processId: m[2], callId: m[3], command: m[4], exitCode: code ? Number(code[1]) : null }
+    })
+}
+
 export interface ApprovalOutcome {
   status: 'approved' | 'rejected' | 'failed'
   name: string

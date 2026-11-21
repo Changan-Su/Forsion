@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
-import { getProcess, killProcess, lastLine, listAllProcesses, stripAnsi, type BackgroundProcess } from '../tools/processRegistry.js';
+import { getProcess, killProcess, lastLine, listAllProcesses, processOutput, stripAnsi, type BackgroundProcess } from '../tools/processRegistry.js';
 
 const router = Router();
 const TAIL_DEFAULT = 64_000;
@@ -32,7 +32,7 @@ const view = (p: BackgroundProcess): ProcessView => ({
   id: p.id, sessionId: p.sessionId, command: p.command, status: p.status, exitCode: p.exitCode,
   startedAt: p.startedAt, endedAt: p.endedAt, origin: p.origin,
   url: p.status === 'running' ? p.url ?? null : null,
-  last: lastLine(p.output),
+  last: lastLine(processOutput(p)),
 });
 
 async function ownedSessions(ids: string[], userId: string): Promise<Set<string>> {
@@ -72,8 +72,9 @@ router.get('/agent/sessions/:id/processes/:pid/output', authMiddleware, async (r
     const p = await ownProcess(req, res);
     if (!p) return;
     const tail = Math.min(Math.max(1, Number(req.query.tail) || TAIL_DEFAULT), 200_000);
-    const out = p.output.length > tail ? p.output.slice(-tail) : p.output;
-    res.json({ ...view(p), output: stripAnsi(out), truncated: p.truncated || p.output.length > tail });
+    const all = processOutput(p);
+    const out = all.length > tail ? all.slice(-tail) : all;
+    res.json({ ...view(p), output: stripAnsi(out), truncated: p.truncated || all.length > tail });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read output failed' });
   }

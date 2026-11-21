@@ -5,6 +5,8 @@
  *   - 进程退出后保留记录与输出(可读尾巴),完成态记录 30 分钟后由 reaper 清理
  *   - dispose()(模块卸载/进程退出)SIGKILL 所有在跑子进程,防泄漏
  *   - writeStdin/waitForOutput:交互式驱动(write_process_input 工具用),给 stdin 喂输入 + yield 收集新输出
+ *   - adoptForegroundProcess:前台 run_bash 跑着时用户插话 → 把**同一个**子进程(不重起,沙箱包装与进程树原样)移交进来,
+ *     带 handoff 标记;结局由 services/steerHandoff.ts 交回会话(借鉴 dsh-superagent 方案第 5 条 A,11-20)
  */
 import type { ChildProcess } from 'node:child_process';
 import type { ToolContext } from './toolTypes.js';
@@ -42,6 +44,29 @@ export interface BackgroundProcess {
   /** P1 · G5:起它时套了远程 shell 写保护(macOS,宿主沙箱关 + 远程污点)。没套的进程不收远程 run 的 stdin。 */
   remoteSeatbelt?: boolean;  /** 输出里第一次出现的本机地址(dev server 之类),归一成 localhost;摘要栏「后台」卡据此把这一行当服务。 */
   url?: string;
+  /** 引擎自己要停它(kill_process / 界面停止 / 急停 / 移交上限到点 / 引擎退出)。移交进来的进程据此区分「被停」和「自己跑完」。 */
+  killRequested?: boolean;
+  /** 移交进来的前台命令才有(adoptForegroundProcess)。 */
+  handoff?: ForegroundHandoff;
+  /** 输出打码(移交进来的 run_bash 带着 run 的 secret_env 跑;run 收尾后秘密表已清,这里留着移交那一刻的快照)。读输出一律经 processOutput()。 */
+  redact?: (text: string) => string;
+}
+
+/** 前台 run_bash 因用户插话移交进后台(方案 A:只在插话时才移交,平时和原来一样)。 */
+export interface ForegroundHandoff {
+  /** 移交时那一轮。用户停掉这一轮(仍在跑时)→ 一并停它。 */
+  runId: string;
+  /** 那次 run_bash 调用。 */
+  toolCallId: string;
+  movedAt: number;
+  /** 到这个时刻还在跑 → 停掉、告诉模型(移交后最多再跑 HANDOFF_MAX_MS)。 */
+  deadlineAt: number;
+  /** 到点被停。 */
+  timedOut?: boolean;
+  /** 真正收尾(close,或 exit 后管道迟迟不关的兜底)。结局判定与交回都等它。 */
+  closed?: boolean;
+  /** 结局已经处理过(交进某一轮 / 起了一轮 / 不用交)。同步翻,防两处各交一次。 */
+  delivered?: boolean;
 }
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -65,6 +90,11 @@ export function lastLine(output: string): string {
     if (l) return l.slice(0, 160);
   }
   return '';
+}
+
+/** 给人 / 模型看的输出(带打码的进程先打码)。所有读 output 的地方都走这里。 */
+export function processOutput(p: BackgroundProcess): string {
+  return p.redact ? p.redact(p.output) : p.output;
 }
 
 /**
@@ -91,6 +121,17 @@ function emitChange(): void {
     try { cb(); } catch { /* 订阅者的错误不影响注册表 */ }
   }
 }
+const endListeners = new Set<(p: BackgroundProcess) => void>();
+/** 移交进来的进程真正收尾(输出已齐)。返回退订。 */
+export function onHandoffClosed(cb: (p: BackgroundProcess) => void): () => void {
+  endListeners.add(cb);
+  return () => { endListeners.delete(cb); };
+}
+function emitHandoffClosed(p: BackgroundProcess): void {
+  for (const cb of [...endListeners]) {
+    try { cb(p); } catch { /* 订阅者的错误不影响注册表 */ }
+  }
+}
 
 const procs = new Map<string, BackgroundProcess>(); // id -> proc
 /** Include local processes too: all origins are interrupted when this engine shuts down. */
@@ -112,6 +153,8 @@ function ensureReaper(): void {
   reaper = setInterval(() => {
     const now = Date.now();
     for (const [id, p] of procs) {
+      // 移交进来、结局还没交出去的不收(会话一直忙着的话,交出去之前模型还要读它的输出)
+      if (p.handoff && !p.handoff.delivered) continue;
       if (p.status !== 'running' && p.endedAt && now - p.endedAt > FINISHED_TTL_MS) procs.delete(id);
     }
     if (!procs.size && reaper) {
@@ -168,6 +211,14 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     origin: processOriginOf(ctx),
     ...(remoteSeatbelt ? { remoteSeatbelt } : {}),
   };
+  wire(p, child);
+  procs.set(id, p);
+  ensureReaper();
+  emitChange();
+  return p;
+}
+
+function wire(p: BackgroundProcess, child: ChildProcess): void {
   child.stdout?.on('data', (d) => append(p, d.toString()));
   child.stderr?.on('data', (d) => append(p, d.toString()));
   // 进程关了 stdin / 写入时恰好退出 → 异步 EPIPE(writeStdin 的 try/catch 接不住,无监听即未捕获异常)。
@@ -179,6 +230,7 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     p.endedAt = Date.now();
     p.child = null;
     emitChange();
+    closeHandoff(p);
   });
   child.on('close', (code) => {
     if (p.status === 'running') p.status = code === null ? 'killed' : 'exited';
@@ -186,11 +238,82 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     p.endedAt = Date.now();
     p.child = null;
     emitChange();
+    closeHandoff(p);
   });
+}
+
+/** 移交上限:移交之后最多再跑这么久(方案定 30 分钟)。测试经 TANGU_HANDOFF_MAX_MS 缩短。 */
+export function handoffMaxMs(): number {
+  const v = Number(process.env.TANGU_HANDOFF_MAX_MS);
+  return Number.isFinite(v) && v > 0 ? v : 30 * 60 * 1000;
+}
+/** shell 已退出、管道却被它留下的孙进程撑着不关(close 永远不来)→ 等这么久就按收尾算,别让结局永远交不出去。 */
+const EXIT_CLOSE_GRACE_MS = 3000;
+
+function closeHandoff(p: BackgroundProcess): void {
+  const h = p.handoff;
+  if (!h || h.closed) return;
+  h.closed = true;
+  emitHandoffClosed(p);
+}
+
+/**
+ * 前台 run_bash 跑着时用户插话 → 把**正在跑的那个子进程**(不重起)登记进后台进程表。
+ * 沙箱包装、进程组 / Windows 进程树都是原来那个;来源 / runId / 沙箱范围 / 远程写保护的标签与 run_background 同口径
+ * (急停与 stdin 闸靠它们)。不受每会话 MAX_PER_SESSION 限制:它本来就在跑,拒收 = 继续挡着用户。
+ * output:移交前已收到的输出(stdout 在前、stderr 在后,交错顺序已丢)。
+ */
+export function adoptForegroundProcess(o: {
+  sessionId: string; command: string; child: ChildProcess; ctx?: ToolContext; cwd: string;
+  output: string; startedAt: number; runId: string; toolCallId: string;
+  redact?: (text: string) => string; remoteSeatbelt?: boolean;
+}): BackgroundProcess {
+  const now = Date.now();
+  const id = `bg_${now.toString(36)}_${++seq}`;
+  const p: BackgroundProcess = {
+    id, sessionId: o.sessionId, command: o.command, pid: o.child.pid ?? null,
+    status: 'running', exitCode: null,
+    startedAt: o.startedAt, endedAt: null,
+    output: '', truncated: false, child: o.child, lastDataAt: now,
+    sandboxScope: hostSandboxScopeKey(o.ctx || { cwd: o.cwd }),
+    runId: o.runId,
+    origin: processOriginOf(o.ctx),
+    ...(o.remoteSeatbelt ? { remoteSeatbelt: true } : {}),
+    ...(o.redact ? { redact: o.redact } : {}),
+    handoff: { runId: o.runId, toolCallId: o.toolCallId, movedAt: now, deadlineAt: now + handoffMaxMs() },
+  };
+  if (o.output) append(p, o.output);
+  wire(p, o.child);
+  const deadline = setTimeout(() => {
+    if (p.status !== 'running' || !p.child) return;
+    p.handoff!.timedOut = true;
+    terminate(p);
+    emitChange();
+  }, handoffMaxMs());
+  deadline.unref?.();
+  let exitTimer: ReturnType<typeof setTimeout> | undefined;
+  o.child.on('exit', (code) => {
+    exitTimer = setTimeout(() => {
+      if (p.handoff?.closed) return;
+      // 管道还被孙进程撑着:按 shell 的退出码收尾;剩下的孙进程照旧在进程组里(停它走 kill_process / 界面)
+      if (p.status === 'running') p.status = code === null ? 'killed' : 'exited';
+      if (p.exitCode === null) p.exitCode = code;
+      p.endedAt = p.endedAt ?? Date.now();
+      emitChange();
+      closeHandoff(p);
+    }, EXIT_CLOSE_GRACE_MS);
+    exitTimer.unref?.();
+  });
+  const stopTimers = (): void => { clearTimeout(deadline); if (exitTimer) clearTimeout(exitTimer); };
+  endListenersOnce(p, stopTimers);
   procs.set(id, p);
   ensureReaper();
   emitChange();
   return p;
+}
+/** 本进程收尾时跑一次(只给 adoptForegroundProcess 清计时器用)。 */
+function endListenersOnce(p: BackgroundProcess, fn: () => void): void {
+  const off = onHandoffClosed((x) => { if (x === p) { off(); fn(); } });
 }
 
 /** 所有会话的进程(摘要栏按用户归属自己筛)。 */
@@ -210,6 +333,7 @@ export function getProcess(sessionId: string, id: string): BackgroundProcess | n
 /** SIGTERM 整组 → 3s 后 SIGKILL(不等它退出;close 事件照常收尾)。 */
 function terminate(p: BackgroundProcess): void {
   if (!p.child) return;
+  p.killRequested = true;
   p.status = 'killed';
   p.endedAt = Date.now();
   try {
@@ -313,7 +437,7 @@ export function waitForOutput(
   const start = Date.now();
   const STEP = 50;
   return new Promise((resolve) => {
-    const done = (): void => resolve({ output: p.output.slice(fromLen), status: p.status });
+    const done = (): void => { const out = p.output.slice(fromLen); resolve({ output: p.redact ? p.redact(out) : out, status: p.status }); };
     const tick = (): void => {
       const grew = p.output.length > fromLen;
       const idleEnough = Date.now() - p.lastDataAt >= idleMs;
@@ -331,6 +455,7 @@ export function waitForOutput(
 export function disposeAllProcesses(): void {
   for (const p of procs.values()) {
     if (p.child && p.status === 'running') {
+      p.killRequested = true;
       p.status = 'killed';
       p.endedAt = Date.now();
       try { killTree(p.child); } catch { /* ignore */ }

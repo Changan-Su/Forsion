@@ -443,7 +443,7 @@ export function endsWithQuestion(text: string): boolean {
  *  ponytail: 按问号判,「要不要我再…?」这类可选提议也算等你(Claude 的 waiting for input 同口径)。 */
 export async function markIfAsked(sessionId: string, userId: string, input: any, finalText: string): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return;
-  if (!(input?.origin === 'client' || input?.fromParent === true || input?.childReport === true || input?.fromSession?.relation === 'child')) return; // 兄弟发来的那一轮在等发件人,不是等你
+  if (!(input?.origin === 'client' || input?.fromParent === true || input?.childReport === true || input?.backgroundUpdate === true || input?.fromSession?.relation === 'child')) return; // 兄弟发来的那一轮在等发件人,不是等你
   if (endsWithQuestion(String(finalText || ''))) await markAwaitingUser(sessionId, userId);
 }
 

@@ -10,7 +10,7 @@
  */
 import { noteDetailFileRead } from '../services/memoryUsage.js';
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
-import { redactRunSecrets } from '../sandbox/runSecretEnv.js';
+import { redactRunSecrets, runSecretRedactor } from '../sandbox/runSecretEnv.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
 import { fromShellPath, hostShell, hostShellName, hostShellQuoting } from './hostShell.js';
 import { pinSystemFindstr } from './cmdReadOnly.js';
@@ -30,11 +30,15 @@ import { contentFingerprint, noteAgentWrite, noteRead, readFingerprint } from '.
 import { pageInstructionsForFile } from '../services/pageInstructions.js';
 import { fitImageForModel } from '../services/imageShrink.js';
 import { killProcessTree } from '../utils/boundedProcess.js';
+import { adoptForegroundProcess, handoffMaxMs } from './processRegistry.js';
+import type { ChildProcess } from 'node:child_process';
 
 const READ_MAX_CHARS = 100_000;
 const READ_MAX_LINES = 2000;
 const BASH_OUTPUT_CAP = 100_000; // 单流捕获上限，防爆内存
 const BASH_TIMEOUT_MS = 120_000;
+/** 插话来得太早(命令刚起)先等到这个时刻再移交:几百毫秒就跑完的命令照常返回完整结果,不进后台。 */
+const HANDOFF_GRACE_MS = 1000;
 
 // view_image 支持的位图格式(矢量/异类格式 provider 兼容性差,先不收);单图上限贴近 provider 5-10MB。
 const IMAGE_MIME: Record<string, string> = {
@@ -175,7 +179,8 @@ function runBash(
   signal?: AbortSignal,
   timeoutMs = BASH_TIMEOUT_MS,
   ctx?: ToolContext,
-): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean; refused?: string }> {
+  handoff?: ToolContext['steerHandoff'],
+): Promise<{ stdout: string; stderr: string; code: number; timedOut: boolean; aborted: boolean; refused?: string; handedOff?: ChildProcess }> {
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve({ stdout: '', stderr: '', code: -1, timedOut: false, aborted: true }); return; }
     // detached:true → 子进程自成进程组(pgid=child.pid);超时/中止时杀「整组」,连带它 fork 出的孙进程
@@ -195,13 +200,18 @@ function runBash(
     let timedOut = false;
     let aborted = false;
     let settled = false;
+    let handedOff = false;
+    const startedAt = Date.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let handoffTimer: ReturnType<typeof setTimeout> | undefined;
+    let unwatch: (() => void) | undefined;
+    // 移交之后输出归后台进程表(它自己挂监听),这里不再收
     child.stdout?.on('data', (d) => {
-      if (stdout.length < BASH_OUTPUT_CAP) stdout += d.toString();
+      if (!handedOff && stdout.length < BASH_OUTPUT_CAP) stdout += d.toString();
     });
     child.stderr?.on('data', (d) => {
-      if (stderr.length < BASH_OUTPUT_CAP) stderr += d.toString();
+      if (!handedOff && stderr.length < BASH_OUTPUT_CAP) stderr += d.toString();
     });
 
     const finish = (code: number): void => {
@@ -209,8 +219,26 @@ function runBash(
       settled = true;
       if (timer) clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
+      if (handoffTimer) clearTimeout(handoffTimer);
+      unwatch?.();
       signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, code, timedOut, aborted });
+    };
+    // 长命令不挡插话:用户插话在排队 → 不杀、不等,把这个子进程原样交出去(调用方登记进后台进程表),工具立刻返回。
+    // 正在杀(超时 / 中止的 graceTimer 已起)就不交了。插话撤回了(cancelSteer)也不交。
+    const tryHandoff = (): void => {
+      if (settled || graceTimer || !handoff?.pending()) return;
+      const wait = HANDOFF_GRACE_MS - (Date.now() - startedAt);
+      if (wait > 0) {
+        if (!handoffTimer) handoffTimer = setTimeout(() => { handoffTimer = undefined; tryHandoff(); }, wait);
+        return;
+      }
+      handedOff = true;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      unwatch?.();
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ stdout, stderr, code: -1, timedOut: false, aborted: false, handedOff: child });
     };
     // POSIX 杀进程组;Windows 用 taskkill /T /F 连同孙进程一起停止。
     // Windows 的 taskkill 在负载下启动/枚举可超过 1s,给它 5s,避免先杀 shell 后丢掉整棵树。
@@ -228,12 +256,32 @@ function runBash(
       if (signal.aborted) { aborted = true; killGroup(); }
       else signal.addEventListener('abort', onAbort, { once: true });
     }
+    // 插话可能在本命令起跑前就排着了(模型采样期间到的,不会再有「到达」事件)→ 起跑就查一次
+    if (handoff) { unwatch = handoff.onSteer(tryHandoff); tryHandoff(); }
     child.on('error', (e: any) => {
       stderr = `${stderr}\n[error] ${e?.message || e}`;
       finish(-1);
     });
     child.on('close', (code) => finish(code ?? -1));
   });
+}
+
+/** 移交进后台时 run_bash 的结果(模型读,英文)。教法全在这里,不动工具定义和系统提示:不插话时字节不变。
+ *  不以 Error 开头 —— executeTool 会把那当失败。 */
+export function handoffResultText(stdout: string, stderr: string, processId: string, elapsedMs: number): string {
+  const mins = Math.round(handoffMaxMs() / 60_000);
+  const secs = Math.max(1, Math.round(handoffMaxMs() / 1000));
+  const cap = mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${secs} second${secs === 1 ? '' : 's'}`;
+  let out = '';
+  if (stdout) out += `stdout so far:\n${stdout}\n`;
+  if (stderr) out += `stderr so far:\n${stderr}\n`;
+  if (!stdout && !stderr) out += '(no output yet)\n';
+  return out +
+    `Moved to the background after ${(elapsedMs / 1000).toFixed(1)}s because the user sent a new message while this command was running. ` +
+    `It was not restarted or stopped: the same process keeps running as background process ${processId}.\n` +
+    '- Read the user\'s new message and respond to it now.\n' +
+    `- Do not run this command again, and do not sleep or poll to wait for it. When it ends you will receive a <background_update> message — also after your turn has ended — and can then read its full output with read_process_output (process_id "${processId}").\n` +
+    `- It is stopped if it is still running ${cap} from now, or if the user stops this turn. Use kill_process if it is no longer needed.`;
 }
 
 export const HOST_TOOLS: Record<string, ToolImpl> = {
@@ -269,8 +317,20 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const wrapped = remoteShellSeatbeltApplies(ctx); // 与 spawnHostShell 同一判定(同一时刻现查 steer 染色)
       // findstr 定死到 System32 只对 cmd.exe 有意义;bash 下命令原样交给 bash(hostShell.ts)。
       const prepared = process.platform === 'win32' && hostShell().kind === 'cmd' ? pinSystemFindstr(command) : command;
-      const r = await runBash(prepared, cwd, ctx.signal, timeout, ctx);
+      // 只有主循环那次调用带 steerHandoff;子代理展开 parentCtx 时已清掉,这里再按深度 / PTC 兜一道
+      const handoff = ctx.steerHandoff && ctx.runId && ctx.toolCallId && !ctx.subAgentDepth && !ctx.ptcRead ? ctx.steerHandoff : undefined;
+      const r = await runBash(prepared, cwd, ctx.signal, timeout, ctx, handoff);
       if (r.refused) return `Error: ${r.refused}`;
+      if (r.handedOff) {
+        // ⚠️ 与 runBash 的 resolve 之间不许有 await:登记前的下一块输出 / close 会丢
+        const proc = adoptForegroundProcess({
+          sessionId: ctx.sessionId, command, child: r.handedOff, ctx, cwd,
+          output: r.stdout + (r.stdout && r.stderr && !r.stdout.endsWith('\n') ? '\n' : '') + r.stderr,
+          startedAt: started, runId: ctx.runId!, toolCallId: ctx.toolCallId!,
+          redact: runSecretRedactor(ctx), remoteSeatbelt: wrapped,
+        });
+        return truncateBashOutput(redactRunSecrets(ctx, handoffResultText(r.stdout, r.stderr, proc.id, Date.now() - started)));
+      }
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
       if (r.stderr) out += `stderr:\n${r.stderr}\n`;
