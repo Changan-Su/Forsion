@@ -12,7 +12,7 @@
  * - 本模块不 import 引擎里的任何东西(tanguHome.ts 依赖它,而几乎所有模块都依赖 tanguHome.ts)。
  *
  * 引擎级、不属于任何账号的路径(多账号模式下显式用 `engineRoot()`,清单保持短):
- *   - 引擎热更新覆盖层(boot/launch.ts → boot/overlay.ts 的 engineOverlayRoot)
+ *   - (引擎热更新覆盖层多账号模式下不用:boot/launch.ts 一律跑安装包自带的,见 boot/overlay.ts 的 overlaySkipReason)
  *   - `<engineRoot>/.env`(core/tanguHome.ts 的 envFile)
  *   - `<engineRoot>/session-owners.db`(adapters/standalone/multiAccountSqliteHost.ts):会话 id → 账号的登记,只存这两列、不含用户内容。
  *     会话 id 是全局命名空间:进程里以会话 id 为键的表(排队、「总允许」、读过的文件…)靠它保证一个 id 只属于一个账号。
