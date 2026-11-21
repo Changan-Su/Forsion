@@ -366,6 +366,22 @@ describe('createMultiAccountApp', () => {
     expect(readFileSync(join(out, 'ag', 'config.toml'), 'utf8')).toBe('name = "OUTSIDE_AGENT"\n');
   });
 
+  it('list_dir reports links as links, without the metadata of what they point to', async () => {
+    const acc = join(env.home, 'accounts', 'ivy');
+    const out = mkdtempSync(join(tmpdir(), 'ma-ls-'));
+    writeFileSync(join(out, 'big.bin'), Buffer.alloc(4321));
+    const d = join(acc, 'workspace', 'ls');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'own.txt'), 'abc');
+    symlinkSync(join(out, 'big.bin'), join(d, 'pointer.bin'));
+    const { HOST_TOOLS } = await import('../tools/hostExec.js');
+    const { runWithAccount } = await import('../core/accountScope.js');
+    const listing = String(await runWithAccount('ivy', () => HOST_TOOLS.list_dir.execute({ path: d }, { cwd: d } as any)));
+    expect(listing).toContain('[file] own.txt (3 bytes)');
+    expect(listing).toContain('[link] pointer.bin');
+    expect(listing).not.toContain('4321');
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);
