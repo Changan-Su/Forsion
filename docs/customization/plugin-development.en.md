@@ -465,7 +465,7 @@ To make demo images or videos of a feature (store screenshots, release notes, pr
 
 ```js
 const stage = await ctx.stage?.open({
-  fixture: 'fixtures/calendar-demo',  // folder in your plugin package: vault/ becomes the stage's vault, engine.json drives chat replay
+  fixture: 'fixtures/calendar-demo',  // folder in your plugin package: vault/ becomes the stage's vault, engine.json drives chat replay, human/CALENDAR.db is My calendar
   plugins: ['calendar'],              // installed plugins to bring in (package only, not their data)
   theme: 'light', locale: 'en',
   window: [1440, 900, 2],             // 1440×900 content at density 2: captures are 2880×1800 whatever the user's screen
@@ -489,6 +489,7 @@ await stage.close()
 - `fixture` only accepts a relative path inside your plugin package, and symlinks in it are not copied. Only installed plugins can open a stage (not the copy running in the plugin sandbox).
 - Screenshot pixels = window size × density; `rect` is in CSS pixels. Recordings are at most 3840 pixels wide and 120 seconds long (they stop on their own at the limit and `stop()` still returns them). The default is mp4; pass `format: 'webm'` for WebM.
 - `engine.json`: `{ "models": [...], "runs": [{ "match": "text from the user's message (optional)", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`. Each message sent in the stage replays the first matching entry in `runs`.
+- The personal calendar (My calendar) is not in the vault: the calendar asks the engine for `human/CALENDAR.db`. To film a calendar with events, put `human/CALENDAR.db` in the fixture and use `engine: 'scripted'` (for a calendar-only shot, `engine.json` can be `{ "runs": [] }`). The replay engine serves it in place of the file in the real engine home. The format is the same as the real one, a plain database table up to 8 MB; every column needs `id` / `name` / `type` and every row `id` / `cells`, and in a table with a checkbox column every row is drawn as a to-do with a tick box: `{ "version": 2, "name": "My calendar", "columns": [{ "id": "name", "name": "Name", "type": "text" }, { "id": "date", "name": "Date", "type": "calendarDate" }, { "id": "done", "name": "Done", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "Launch review", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`. Edits to the calendar on the stage stay in that stage only. Without the file the stage shows an empty personal calendar; with `engine: 'none'` there is no engine, so the personal calendar can't be loaded. A link, something that is not a file, or a bad format makes `open` fail with `fixture-invalid`.
 - Every failure rejects with an error that has a `code`: `unsupported`, `invalid`, `denied`, `busy`, `fixture-invalid`, `plugin-missing`, `timeout`, `closed`, `error`.
 - **Publishing**: plugins that declare `stage` must pass store review before the official store installs them (the same per-version review as `internals-raw`). Dev loading and manual installs are not affected.
 - ⚠️ `window.tangu.pluginSandbox` and `window.tangu.pluginStage` are internal host channels. Do not call them from a plugin; use `ctx.stage`.

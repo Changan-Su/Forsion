@@ -4,7 +4,7 @@ A plugin that declares `"capabilities": ["stage"]` can start a **demo stage**: a
 
 ```js
 const stage = await ctx.stage?.open({
-  fixture: 'fixtures/demo',        // folder inside the plugin package; vault/ → stage vault, engine.json → chat replay
+  fixture: 'fixtures/demo',        // folder inside the plugin package; vault/ → stage vault, engine.json → chat replay, human/CALENDAR.db → My calendar
   plugins: ['calendar'],           // installed plugin ids (market installs: their market-<uuid> id); built-ins must be named too
   includeSelf: false,              // default: the calling plugin is the director, not on stage
   theme: 'light',                  // or { mode, lang?, skin?, bg? }; glass is always off on stage
@@ -33,6 +33,7 @@ Rules that matter when writing a director:
 - Only installed plugins can open a stage (not dev copies in the plugin sandbox). `fixture` must be a relative path inside the package; symlinks are skipped; max 5000 files / 200 MB.
 - Recording captures the stage window only (tab capture: no screen-recording permission, works while the window is behind others), max 3840 px wide and 120 s. `cursor: true` draws a pointer that glides to each click. Typing is instant, so recordings follow the "10–20 s loop, no typing or waiting" rule for What's New clips.
 - `engine.json`: `{ "models": [...], "sessions": [...], "messages": [...], "runs": [{ "match"?: "substring of the user's message", "events": [{ "type", "payload", "delay"? }] }] }`. Each message sent in the stage replays the first unused matching run; events use the engine's SSE event types (`token` with `{ delta }` for streamed text, `reasoning`, `tool_call` / `tool_result`, `session_title`; `{ "type": "__hold" }` waits for an approval or answer); `done` is appended automatically. Finished turns are stored, so the chat survives a reload.
+- `human/CALENDAR.db` (optional, needs `engine: 'scripted'`): the personal calendar (「我的日历」) is not a vault file; the calendar asks the engine for `human/CALENDAR.db`, and the replay engine serves this file in its place. Same format as the real one in the engine home: a classic database file `{ "version": 2, "name", "columns": [{ "id": "name", "name": "Name", "type": "text" }, { "id": "date", "name": "Date", "type": "calendarDate" }, { "id": "done", "name": "Done", "type": "checkbox" }], "rows": [{ "id", "cells": { "name": "Launch review", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }` (up to 8 MB, no `source`; every column needs `id` / `name` / `type`, every row `id` / `cells`; in a table with a checkbox column each row is drawn as a to-do with a tick box). Edits made on the stage stay in memory for that stage only. Without the file the stage shows an empty personal calendar; with `engine: 'none'` there is no engine, so the personal calendar cannot be loaded. A link, a non-file or a bad shape → `fixture-invalid`.
 - Errors reject with `code`: `unsupported` · `invalid` · `denied` · `busy` · `fixture-invalid` · `plugin-missing` · `timeout` · `closed` · `error`.
 - Store: packages declaring `stage` install from the official store only after review (same per-version gate as `internals-raw`; error `install: stage-unapproved`).
 - Never call `window.tangu.pluginSandbox.*` or `window.tangu.pluginStage.*` directly; they are internal host channels.

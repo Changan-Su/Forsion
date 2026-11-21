@@ -4,7 +4,7 @@
  */
 import { get } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseStageScript, pickStageRun, startStageEngine, STAGE_SCRIPT_MAX_BYTES, type StageRun, type StageScript } from './stageEngine'
+import { parseStageCalendar, parseStageScript, pickStageRun, startStageEngine, STAGE_CALENDAR_MAX_BYTES, STAGE_SCRIPT_MAX_BYTES, type StageRun, type StageScript } from './stageEngine'
 
 type Frame = { seq: number; type: string; payload: Record<string, any> }
 
@@ -491,5 +491,72 @@ describe('stageEngine hardening (Codex 11-20)', () => {
     const s = e.events(r.runId)
     await s.ended
     expect(s.frames.map((f) => f.type).at(-1)).toMatch(/done|error/)
+  })
+})
+
+// 个人日历 human/CALENDAR.db(11-21):演示插件拍日历,fixture 带一份,回放服务照真引擎 routes/human.ts 的报文回
+const CAL = {
+  version: 2, name: 'My calendar',
+  columns: [{ id: 'name', name: 'Name', type: 'text' }, { id: 'date', name: 'Date', type: 'calendarDate' }, { id: 'done', name: 'Done', type: 'checkbox' }],
+  rows: [{ id: 'ev1', cells: { name: 'Launch review', date: '2026-11-20T14:00/2026-11-20T15:00' } }],
+}
+
+describe('parseStageCalendar', () => {
+  it('accepts text (with a BOM), bytes and parsed values of a classic database file', () => {
+    expect(parseStageCalendar(JSON.stringify(CAL))).toEqual({ data: CAL })
+    expect(parseStageCalendar(Buffer.from('\uFEFF' + JSON.stringify(CAL)))).toEqual({ data: CAL })
+    expect(parseStageCalendar(CAL)).toEqual({ data: CAL })
+  })
+  it('refuses bad JSON, wrong shapes, note views and oversized files', () => {
+    expect(parseStageCalendar('{nope')).toMatchObject({ error: expect.stringContaining('not valid JSON') })
+    expect(parseStageCalendar({ name: 'x', columns: [], rows: [] })).toMatchObject({ error: expect.stringContaining('database file') })
+    expect(parseStageCalendar({ ...CAL, source: { folder: 'Notes' } })).toMatchObject({ error: expect.stringContaining('database file') })
+    expect(parseStageCalendar([CAL])).toMatchObject({ error: expect.any(String) })
+    expect(parseStageCalendar({ ...CAL, rows: [{}] })).toMatchObject({ error: expect.stringContaining('rows[0]') })
+    expect(parseStageCalendar({ ...CAL, columns: [{ id: 'name' }] })).toMatchObject({ error: expect.stringContaining('columns[0]') })
+    expect(parseStageCalendar(JSON.stringify({ ...CAL, name: 'x'.repeat(STAGE_CALENDAR_MAX_BYTES) }))).toMatchObject({ error: expect.stringContaining('8 MB') })
+  })
+})
+
+describe('stage engine personal calendar', () => {
+  async function startCal(calendar?: Record<string, unknown>) {
+    const e = await startStageEngine(script({}), calendar ? { calendar } : {})
+    engines.push(e)
+    return async (method: string, body?: unknown) => {
+      const r = await fetch(`${e.url}/agent/human/CALENDAR.db`, { method, headers: { 'Content-Type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
+      return { status: r.status, body: await r.json() as any }
+    }
+  }
+  it('serves the fixture calendar with a content version, like the real engine', async () => {
+    const cal = await startCal(CAL)
+    const r = await cal('GET')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ status: 'ok', data: CAL, legacy: null })
+    expect(r.body.version).toMatch(/^[0-9a-f]{64}$/)
+  })
+  it('writes compare-and-swap in memory: a stale version is a 409, the right one moves the version', async () => {
+    const cal = await startCal(CAL)
+    const v0 = (await cal('GET')).body.version
+    const moved = { ...CAL, rows: [{ id: 'ev1', cells: { name: 'Launch review', date: '2026-11-20T16:00/2026-11-20T17:00' } }] }
+    expect((await cal('PUT', { data: moved, version: 'stale' })).status).toBe(409)
+    expect((await cal('PUT', { data: moved, version: null })).status).toBe(409)
+    const w = await cal('PUT', { data: moved, version: v0 })
+    expect(w.status).toBe(200)
+    expect(w.body.version).not.toBe(v0)
+    const again = await cal('GET')
+    expect(again.body).toMatchObject({ status: 'ok', data: moved, version: w.body.version })
+  })
+  it('without a fixture calendar it is missing (an empty calendar the stage may create with version null)', async () => {
+    const cal = await startCal()
+    expect((await cal('GET')).body).toEqual({ status: 'missing', legacy: null })
+    expect((await cal('PUT', { data: CAL, version: 'x' })).status).toBe(409)
+    const w = await cal('PUT', { data: CAL, version: null })
+    expect(w.status).toBe(200)
+    expect((await cal('GET')).body).toMatchObject({ status: 'ok', data: CAL, version: w.body.version })
+  })
+  it('refuses writes that are not a database file', async () => {
+    const cal = await startCal(CAL)
+    expect((await cal('PUT', { data: { rows: [] }, version: null })).status).toBe(400)
+    expect((await cal('PUT', { data: CAL, version: 3 })).status).toBe(400)
   })
 })

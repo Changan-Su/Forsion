@@ -23,7 +23,7 @@ import { createDesktopFloat } from './desktopFloat'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
-import { parseStageScript, startStageEngine } from './stageEngine'
+import { parseStageCalendar, parseStageScript, startStageEngine } from './stageEngine'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -5925,11 +5925,17 @@ const pluginStage = stageSandbox ? createPluginStage({
     })
     return response === 0
   },
-  startEngine: async (script) => {
+  startEngine: async (script, human) => {
     const parsed = parseStageScript(script)
     if ('error' in parsed) throw new StageError('fixture-invalid', `engine.json: ${parsed.error}`)
+    let calendar: Record<string, unknown> | undefined
+    if (human?.calendar !== undefined) {
+      const cal = parseStageCalendar(human.calendar)
+      if ('error' in cal) throw new StageError('fixture-invalid', cal.error)
+      calendar = cal.data
+    }
     const token = randomBytes(24).toString('base64url') // 舞台独有:回放服务只认它
-    const e = await startStageEngine(parsed.script, { log: (m) => console.log(`[plugin-stage] ${m}`), token })
+    const e = await startStageEngine(parsed.script, { log: (m) => console.log(`[plugin-stage] ${m}`), token, ...(calendar ? { calendar } : {}) })
     return { ...e, token }
   },
   log: (m) => console.log(m),

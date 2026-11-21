@@ -19,7 +19,7 @@
 // fire), and under Node's permission model where the runtime has it (no file writes, no child processes; the app's own
 // runtime has it). That keeps a plugin away from the user's notes and files. It is a dry run with stand-in host APIs and
 // no saved plugin data, and Node's vm is not a hardened sandbox: do not point it at a plugin you would not install.
-import { readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, statSync, lstatSync, realpathSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -253,6 +253,29 @@ const lineOf = (offset) => src.slice(0, Math.max(0, offset)).split('\n').length;
     if (usesStage && !caps.includes('stage')) problem(`${mainName} uses ctx.stage but "capabilities" does not declare "stage": the host only injects it when declared, so it is undefined here.`);
     if (direct) problem(`${mainName} calls window.tangu.${direct[1]} directly. That is an internal host channel: use ctx.stage (declare "stage"). Plugins that call it directly do not pass store review.`);
     if (caps.includes('stage')) ok('declares "stage": desktop only, check `ctx.stage` before use; the first open asks the user, and the official store installs it only after review');
+    // fixture 的个人日历(human/CALENDAR.db):只有 engine 'scripted' 读它,所以同一个 fixture 里得有 engine.json;格式同引擎家目录里那份
+    const fixturesDir = join(root, 'fixtures');
+    const isDir = (p) => { try { return lstatSync(p).isDirectory(); } catch { return false; } };
+    const fixtures = isDir(fixturesDir) ? readdirSync(fixturesDir).filter((n) => !n.startsWith('.') && isDir(join(fixturesDir, n))) : [];
+    for (const name of fixtures) {
+      const humanDir = join(fixturesDir, name, 'human');
+      const cal = join(humanDir, 'CALENDAR.db');
+      let hst = null;
+      try { hst = lstatSync(humanDir); } catch { continue; }
+      let cst = null;
+      if (hst.isDirectory()) { try { cst = lstatSync(cal); } catch { continue; } }
+      if (!hst.isDirectory() || !cst.isFile()) { problem(`fixtures/${name}/human must be a real folder and human/CALENDAR.db a regular file in the plugin, not links. The stage refuses links with fixture-invalid.`); continue; }
+      let data = null;
+      try { data = cst.size <= 8 * 1024 * 1024 ? JSON.parse(readFileSync(cal, 'utf8').replace(/^\uFEFF/, '')) : null; } catch { data = null; }
+      const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+      const shapeOk = isObj(data) && typeof data.version === 'number' && typeof data.name === 'string'
+        && Array.isArray(data.columns) && Array.isArray(data.rows) && data.source === undefined
+        && data.columns.every((c) => isObj(c) && typeof c.id === 'string' && typeof c.name === 'string' && typeof c.type === 'string')
+        && data.rows.every((r) => isObj(r) && typeof r.id === 'string' && isObj(r.cells));
+      if (!shapeOk) problem(`fixtures/${name}/human/CALENDAR.db must be a database file up to 8 MB: { "version", "name", "columns": [{ id, name, type }], "rows": [{ id, cells }] } without "source". The stage refuses it with fixture-invalid.`);
+      else if (!existsSync(join(fixturesDir, name, 'engine.json'))) problem(`fixtures/${name}/human/CALENDAR.db is only served by the replay engine: add fixtures/${name}/engine.json (\`{ "runs": [] }\` is enough) and open the stage with engine: 'scripted'.`);
+      else ok(`fixtures/${name}/human/CALENDAR.db: personal calendar for the stage (open it with engine: 'scripted')`);
+    }
   }
 }
 

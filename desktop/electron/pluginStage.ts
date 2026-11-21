@@ -11,7 +11,8 @@
  *    演示库位置、要拷的插件包都在主进程按 id 自己找、按真实路径核,渲染层给的绝对路径一概不认。确认框也在主进程弹。
  * ⚠️ 本模块不 import electron(单测直跑);确认框、IPC 在 main.ts 接线。
  */
-import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants as fsc } from 'node:fs'
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join, relative, sep, isAbsolute } from 'node:path'
 import { effectivePluginId } from '../shared/products'
 import { sandboxPaths, type PluginSandbox, type SandboxResult } from './pluginSandbox'
@@ -45,6 +46,8 @@ const fail = (code: StageErrorCode, error: string): StageReply => ({ ok: false, 
 const FIXTURE_MAX_FILES = 5_000
 const FIXTURE_MAX_BYTES = 200 * 1024 * 1024
 const ENGINE_SCRIPT_MAX = 2 * 1024 * 1024
+/** fixture 的个人日历 human/CALENDAR.db 上限:同真引擎那条接口。 */
+const CALENDAR_FIXTURE_MAX = 8 * 1024 * 1024
 const PACKAGE_MAX_FILES = 10_000
 const PACKAGE_MAX_BYTES = 512 * 1024 * 1024
 
@@ -146,14 +149,43 @@ export function stageGrants(forsionHome: string) {
   }
 }
 
+/**
+ * fixture 里的个人日历 human/CALENDAR.db 原文;没有这个文件(或没有 human/)= undefined,交给回放引擎当空日历。
+ * 只认插件包里的真目录 + 真文件:human/ 解析后必须还在 fixture 里,文件用 O_NOFOLLOW 打开、在句柄上 fstat 和限量读,
+ * 查完到读之间被换成软链 / 大文件也读不出去(Codex 11-21)。除了「不存在」,别的读不到一律报错,不当成空日历。
+ */
+export async function readFixtureCalendar(fixtureDir: string): Promise<string | undefined> {
+  const humanDir = join(fixtureDir, 'human')
+  const hst = await lstat(humanDir).catch((e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return null; throw new Error(`human could not be read (${e?.code || e})`) })
+  if (!hst) return undefined
+  if (!hst.isDirectory()) throw new Error('human must be a real folder in the plugin, not a link or a file')
+  const realHuman = await realpath(humanDir)
+  if (realHuman !== join(await realpath(fixtureDir), 'human')) throw new Error('human must be a real folder in the plugin, not a link')
+  let fh: Awaited<ReturnType<typeof open>>
+  try { fh = await open(join(realHuman, 'CALENDAR.db'), fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0)) } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code === 'ENOENT') return undefined
+    throw new Error(code === 'ELOOP' ? 'human/CALENDAR.db must be a regular file, not a link' : `human/CALENDAR.db could not be read (${code || e})`)
+  }
+  try {
+    const st = await fh.stat()
+    if (!st.isFile() || st.size > CALENDAR_FIXTURE_MAX) throw new Error('human/CALENDAR.db must be a regular file up to 8 MB')
+    const buf = Buffer.alloc(st.size + 1) // 多留一字节:读的时候又长了也看得出来
+    let n = 0
+    while (n < buf.length) { const r = await fh.read(buf, n, buf.length - n, n); if (!r.bytesRead) break; n += r.bytesRead }
+    if (n > st.size) throw new Error('human/CALENDAR.db must be a regular file up to 8 MB')
+    return buf.subarray(0, n).toString('utf8')
+  } finally { await fh.close().catch(() => {}) }
+}
+
 export interface StageDeps {
   forsionHome(): string
   /** pluginSandbox.ts 的第二个实例:base 'stages'、闲置 5 分钟自停、不广播给沙箱卡。 */
   sandbox: PluginSandbox
   /** 第一次起舞台的确认框(main.ts 弹,挂主窗)。 */
   confirm(owner: { pluginId: string; name: string }, plugins: string[], opts: StageOptions): Promise<boolean>
-  /** 脚本回放引擎(stageEngine.ts);script 是 engine.json 解析出来的原始值,校验在那边。 */
-  startEngine(script: unknown): Promise<{ url: string; token?: string; close(): Promise<void> }>
+  /** 脚本回放引擎(stageEngine.ts);script 是 engine.json 解析出来的原始值,calendar 是 human/CALENDAR.db 的文本(有才给),校验都在那边。 */
+  startEngine(script: unknown, human?: { calendar?: string }): Promise<{ url: string; token?: string; close(): Promise<void> }>
   log(m: string): void
 }
 
@@ -234,8 +266,11 @@ export function createPluginStage(deps: StageDeps) {
       if (!fst?.isFile() || fst.size > ENGINE_SCRIPT_MAX) return fail('fixture-invalid', `engine "scripted" needs ${opts.fixture}/engine.json (a regular file up to 2 MB)`)
       let script: unknown
       try { script = JSON.parse(await readFile(file, 'utf8')) } catch (e) { return fail('fixture-invalid', `engine.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`) }
+      // 个人日历:fixture 里 human/CALENDAR.db(和真引擎家目录里那份同一个位置)。有就交给回放服务按真引擎的报文回;没有 = 空日历
+      let calendar: string | undefined
+      try { calendar = await readFixtureCalendar(fixture!) } catch (e) { return fail('fixture-invalid', `${opts.fixture}/${e instanceof Error ? e.message : String(e)}`) }
       try {
-        const e = await deps.startEngine(script)
+        const e = await deps.startEngine(script, calendar === undefined ? undefined : { calendar })
         engine = e
         backendUrl = e.url
         backendToken = e.token

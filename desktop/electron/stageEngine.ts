@@ -20,7 +20,7 @@
  * ⚠️ 本模块不 import electron(单测直跑),只绑 127.0.0.1;任何 Bearer 令牌都收,不带也收(舞台写的是 'sandbox')。
  * ⚠️ 它跑在用户那份 Forsion 的主进程里:处理器整体 try/catch、请求体有上限、close() 收干净所有挂着的连接与计时器。
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
@@ -35,6 +35,8 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024
 const MAX_SUBS = 64
 /** 剧本里的消息展开后(不带 session_id 的每个会话各一份)最多多少条:2 MB 的剧本也能靠这个展开成几百万个对象(Codex 11-20)。 */
 export const STAGE_MAX_EXPANDED_MESSAGES = 20_000
+/** 个人日历(fixture 的 human/CALENDAR.db)上限:同真引擎那条接口。 */
+export const STAGE_CALENDAR_MAX_BYTES = 8 * 1024 * 1024
 const HEARTBEAT_MS = 15_000
 const ID_RE = /^[^\u0000-\u001f]{1,200}$/
 
@@ -270,6 +272,34 @@ export function pickStageRun(runs: readonly StageRun[], used: ReadonlySet<number
 
 // ── 回放服务 ────────────────────────────────────────────────────────────────
 
+/** 个人日历的形状:同真引擎 routes/human.ts 的 isDbFile(经典表,不是笔记视图)。 */
+const isCalendarDb = (d: unknown): d is Json => isObj(d) && typeof d.version === 'number' && typeof d.name === 'string'
+  && Array.isArray(d.columns) && Array.isArray(d.rows) && d.source === undefined
+
+/**
+ * 校验 fixture 带的个人日历(human/CALENDAR.db 的文本、字节,或已 JSON.parse 的值)。纯函数。
+ * 形状同真引擎家目录里那份:DbFile 经典表(version / name / columns / rows,没有 source)。
+ */
+export function parseStageCalendar(raw: unknown): { data: Json } | { error: string } {
+  let v = raw
+  if (typeof v === 'string' || Buffer.isBuffer(v) || v instanceof Uint8Array) {
+    const text = (typeof v === 'string' ? v : Buffer.from(v).toString('utf8')).replace(/^\uFEFF/, '')
+    if (Buffer.byteLength(text) > STAGE_CALENDAR_MAX_BYTES) return { error: 'human/CALENDAR.db is larger than 8 MB' }
+    try { v = JSON.parse(text) } catch (e) { return { error: `human/CALENDAR.db is not valid JSON: ${errText(e)}` } }
+  } else if (Buffer.byteLength(JSON.stringify(v) ?? '') > STAGE_CALENDAR_MAX_BYTES) return { error: 'human/CALENDAR.db is larger than 8 MB' }
+  if (!isCalendarDb(v)) return { error: 'human/CALENDAR.db must be a database file: { version, name, columns: [], rows: [] } without source' }
+  // fixture 是第三方插件带的:列和行逐个看形状,坏行(没有 cells)会让舞台里的日历渲染直接抛错(Codex 11-21)
+  const columns = v.columns as unknown[]
+  const rows = v.rows as unknown[]
+  const badCol = columns.findIndex((c) => !isObj(c) || typeof c.id !== 'string' || typeof c.name !== 'string' || typeof c.type !== 'string')
+  if (badCol >= 0) return { error: `human/CALENDAR.db columns[${badCol}] needs string id, name and type` }
+  const badRow = rows.findIndex((r) => !isObj(r) || typeof r.id !== 'string' || !isObj(r.cells))
+  if (badRow >= 0) return { error: `human/CALENDAR.db rows[${badRow}] needs a string id and a cells object` }
+  return { data: v }
+}
+
+const calVersion = (text: string): string => createHash('sha256').update(text).digest('hex')
+
 interface Frame { seq: number; type: string; payload: Json }
 interface Sub { res: ServerResponse; hb: ReturnType<typeof setInterval> }
 type RunStatus = 'running' | 'held' | 'done' | 'failed' | 'aborted'
@@ -337,8 +367,14 @@ async function readBody(req: IncomingMessage): Promise<Json> {
  * 起一个回放服务,只听 127.0.0.1 的随机端口。返回 { url, close }:url 交给舞台当引擎地址(tangu-desktop-config.json 的
  * backendUrl / TANGU_BACKEND_URL);close() 断开所有连接(包括挂着的事件流)、停掉所有计时器后才 resolve。
  */
-export async function startStageEngine(script: StageScript, opts: { log?(m: string): void; token?: string } = {}): Promise<{ url: string; close(): Promise<void> }> {
+export async function startStageEngine(
+  script: StageScript,
+  opts: { log?(m: string): void; token?: string; /** fixture 的 human/CALENDAR.db,已过 parseStageCalendar */ calendar?: Json } = {},
+): Promise<{ url: string; close(): Promise<void> }> {
   const log = (m: string): void => { try { opts.log?.(m) } catch { /* 记日志不许打断服务 */ } }
+  // 个人日历:只活在这次舞台的内存里,舞台里的改动(拖日程、勾待办)不落盘。version = 文本的 sha256,同真引擎
+  let calendar: { data: Json; version: string } | null = null
+  if (opts.calendar) { const text = JSON.stringify(opts.calendar); calendar = { data: JSON.parse(text) as Json, version: calVersion(text) } }
   const now = Date.now()
   const models = script.models.length ? script.models : [{ ...DEFAULT_MODEL }]
   const defaultModelId = models[0].id
@@ -849,6 +885,20 @@ export async function startStageEngine(script: StageScript, opts: { log?(m: stri
         return json({ agent_config: stored })
       }
       return json({ agent_config: configOf(sid) })
+    }
+    // ── 个人日历 human/CALENDAR.db:报文同真引擎 routes/human.ts(GET 的 missing 是 200;PUT 按 version 比对交换,null = 新建)──
+    if (p === '/agent/human/CALENDAR.db' && method === 'GET') {
+      return json(calendar ? { status: 'ok', data: calendar.data, version: calendar.version, legacy: null } : { status: 'missing', legacy: null })
+    }
+    if (p === '/agent/human/CALENDAR.db' && method === 'PUT') {
+      const b = await body()
+      const version = b.version
+      if (!isCalendarDb(b.data) || (version !== null && typeof version !== 'string')) return json({ error: 'HUMAN_BAD_CALENDAR', detail: 'data must be a database file and version a string or null.' }, 400)
+      const text = JSON.stringify(b.data)
+      if (Buffer.byteLength(text) > STAGE_CALENDAR_MAX_BYTES) return json({ error: 'HUMAN_CALENDAR_TOO_LARGE', detail: 'The calendar is too large.' }, 413)
+      if ((calendar?.version ?? null) !== version) return json({ error: 'HUMAN_CONFLICT', detail: 'The calendar changed since it was read.' }, 409)
+      calendar = { data: JSON.parse(text) as Json, version: calVersion(text) }
+      return json({ ok: true, version: calendar.version })
     }
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] })
     if (p === '/agent/models') return json({ models, defaultModelId, directProviders: script.directProviders, ...script.modelsMeta })

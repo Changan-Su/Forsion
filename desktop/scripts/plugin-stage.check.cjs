@@ -14,7 +14,8 @@
  *   6 脚本回放引擎:engine 'scripted' → 舞台里发一句话 → 页面上出现 engine.json 里写的回复
  *   7 互斥:舞台开着时别的插件 open → busy
  *   8 负对照:fixture 带 `..` → invalid;点名没装的插件 → plugin-missing
- *   10 真实的内置插件(forsion-calendar)也能上舞台:open 认得、切得到日历 Space、能截图
+ *   10 真实的内置插件(forsion-calendar)也能上舞台:open 认得、切得到日历 Space、能截图;
+ *      个人日历读 fixture 的 human/CALENDAR.db(engine 'scripted'),那条日程画在日历上
  *   9 close → 舞台进程退出,再调 → closed
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
@@ -57,6 +58,10 @@ function setup() {
     'fixtures/demo/vault/Welcome.md': '# Demo welcome\n\nThis note comes from the fixture.\n',
     'fixtures/demo/vault/Projects/Launch.md': '# Launch plan\n',
     'fixtures/demo/engine.json': JSON.stringify(engineScript()),
+    // 第 10 步:个人日历来自 fixture 的 human/CALENDAR.db(和真引擎家目录里那份同一个位置),回放引擎照真引擎的报文给舞台
+    'fixtures/calendar/vault/Agenda.md': '# Agenda\n',
+    'fixtures/calendar/engine.json': JSON.stringify({ runs: [] }),
+    'fixtures/calendar/human/CALENDAR.db': JSON.stringify(calendarFixture()),
   })
   // 另一个声明了 stage 的插件:舞台被导演占着时它 open → busy
   writePlugin(RIVAL, { name: 'Stage rival', capabilities: ['stage'] }, `window.__rivalStageApi = ctx.stage || null\nreturn () => {}\n`)
@@ -96,6 +101,16 @@ function engineScript() {
       { type: 'token', payload: { delta: REPLY.slice(0, 20) }, delay: 60 },
       { type: 'token', payload: { delta: REPLY.slice(20) }, delay: 60 },
     ] }],
+  }
+}
+
+const CAL_EVENT = 'STAGE_CAL_EVENT Launch review'
+/** 个人日历(human/CALENDAR.db,DbFile):舞台时钟那天下午一条日程。列 id 同 humanCalendarIo 的空日历。 */
+function calendarFixture() {
+  return {
+    version: 2, name: 'My calendar',
+    columns: [{ id: 'name', name: 'Name', type: 'text' }, { id: 'date', name: 'Date', type: 'calendarDate' }, { id: 'done', name: 'Done', type: 'checkbox' }],
+    rows: [{ id: 'ev1', cells: { name: CAL_EVENT, date: '2026-11-20T14:00/2026-11-20T15:00' } }],
   }
 }
 
@@ -246,19 +261,21 @@ async function main() {
     if (!fs.existsSync(path.join(calDir, 'manifest.json'))) {
       check('10 内置日历插件上舞台(本构建没播种 forsion-calendar,无从测)', false, fs.existsSync(path.join(home, 'plugins')) ? fs.readdirSync(path.join(home, 'plugins')).join(', ') : 'no plugins dir')
     } else {
-      const cal = await win.evaluate(async () => {
+      const cal = await win.evaluate(async (needle) => {
         try {
-          const s = await window.__stageApi.open({ plugins: ['forsion-calendar'], window: [1280, 800, 2], theme: 'light', clock: '2026-11-20T10:00' })
+          const s = await window.__stageApi.open({ fixture: 'fixtures/calendar', engine: 'scripted', plugins: ['forsion-calendar'], window: [1280, 800, 2], theme: 'light', clock: '2026-11-20T10:00' })
           const a = await s.space('日历').catch((e) => ({ err: e.code + ' ' + e.message }))
-          const outline = (await s.read()).outline
+          let outline = ''
+          for (let i = 0; i < 20; i++) { outline = (await s.read()).outline; if (outline.includes(needle)) break; await new Promise((r) => setTimeout(r, 500)) }
           const shot = await s.capture()
           await s.close()
-          return { ok: true, plugins: s.plugins, a, outline: outline.slice(0, 600), png: Array.from(shot.bytes) }
+          return { ok: true, plugins: s.plugins, a, seen: outline.includes(needle), outline: outline.slice(0, 1200), png: Array.from(shot.bytes) }
         } catch (e) { return { ok: false, code: e.code, error: e.message } }
-      })
+      }, CAL_EVENT)
       if (cal.ok && SHOT_DIR) fs.writeFileSync(path.join(SHOT_DIR, 'stage-3-calendar.png'), Buffer.from(cal.png))
-      check('10 内置日历插件上舞台:open 认得、切得到日历 Space、能截图', cal.ok && cal.plugins.includes('forsion-calendar') && !cal.a?.err && cal.png.length > 10_000,
+      check('10a 内置日历插件上舞台:open 认得、切得到日历 Space、能截图', cal.ok && cal.plugins.includes('forsion-calendar') && !cal.a?.err && cal.png.length > 10_000,
         cal.ok ? `${JSON.stringify(cal.a)} · ${cal.outline.slice(0, 200)}` : JSON.stringify(cal))
+      check('10b 个人日历读的是 fixture 的 human/CALENDAR.db:那条日程出现在日历页上(周视图格子或右侧待办栏,截图另看)', cal.ok && cal.seen, cal.ok ? cal.outline : JSON.stringify(cal))
     }
   } catch (e) {
     check('台架本身没出错', false, e && e.stack || String(e))

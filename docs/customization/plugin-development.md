@@ -465,7 +465,7 @@ const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/s
 
 ```js
 const stage = await ctx.stage?.open({
-  fixture: 'fixtures/calendar-demo',  // 插件包里的目录：vault/ 拷进舞台的智库，engine.json 给对话回放
+  fixture: 'fixtures/calendar-demo',  // 插件包里的目录：vault/ 拷进舞台的智库，engine.json 给对话回放，human/CALENDAR.db 是「我的日历」
   plugins: ['calendar'],              // 一起装进舞台的已安装插件（只拷插件包，不带它们的数据）
   theme: 'light', locale: 'zh',
   window: [1440, 900, 2],             // 内容区 1440×900，像素密度 2：截出来是 2880×1800，和用户的屏幕无关
@@ -489,6 +489,7 @@ await stage.close()
 - `fixture` 只收插件包里的相对路径；里面的软链接不拷。只有已安装的插件能开舞台（开发沙箱里的副本不行）。
 - 截图的像素 = 窗口尺寸 × 密度；`rect` 用 CSS 像素。录像宽度最多 3840 像素，最长 120 秒（到点自动停，`stop()` 照样拿得到），缺省 mp4，可选 `format: 'webm'`。
 - `engine.json` 的写法：`{ "models": [...], "runs": [{ "match": "用户那句话里的字（可省）", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`。舞台里每发一句话，取第一段对得上的 `runs` 回放。
+- 个人日历「我的日历」不在智库里，日历是向引擎要 `human/CALENDAR.db` 的。要拍带日程的日历，在 fixture 里放 `human/CALENDAR.db`，并且用 `engine: 'scripted'`（只拍日历时 `engine.json` 写 `{ "runs": [] }` 就够）：回放引擎拿这份代替真引擎家目录里的那份。格式和真的一样，是一张普通数据库表，最大 8 MB，每列要有 `id` / `name` / `type`，每行要有 `id` / `cells`；表里有勾选列时，每一行都画成带勾的待办：`{ "version": 2, "name": "我的日历", "columns": [{ "id": "name", "name": "名称", "type": "text" }, { "id": "date", "name": "日期", "type": "calendarDate" }, { "id": "done", "name": "完成", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "发布评审", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`。舞台里对日历的改动只留在这一次舞台里。不放这个文件，舞台里是一本空的个人日历；`engine: 'none'` 没有引擎，个人日历读不到。是软链、不是文件或格式不对时，`open` 报 `fixture-invalid`。
 - 失败都是 reject 带 `code` 的错误：`unsupported`、`invalid`、`denied`、`busy`、`fixture-invalid`、`plugin-missing`、`timeout`、`closed`、`error`。
 - **上架**：声明了 `stage` 的插件要过商店审核才会从官方商店装上（和 `internals-raw` 同一道审核，按版本过）。开发加载、手动安装不受限制。
 - ⚠️ `window.tangu.pluginSandbox`、`window.tangu.pluginStage` 是宿主的内部通道，插件别直接调；用 `ctx.stage`。

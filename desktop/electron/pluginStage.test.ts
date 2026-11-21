@@ -227,4 +227,33 @@ describe('createPluginStage', () => {
     const stage = createPluginStage({ forsionHome: () => tmp(), sandbox: f.sandbox as never, confirm: async () => true, startEngine: async () => ({ url: '', close: async () => {} }), log: () => {} })
     expect(await stage.exec('ghost', 'open', {}, 'en')).toMatchObject({ ok: false, code: 'unsupported' })
   })
+  it('scripted:fixture 的 human/CALENDAR.db 原文交给回放引擎;没有就不给;目录或文件是软链 / 不是文件 → fixture-invalid', async () => {
+    const home = tmp()
+    const dir = install(home, 'director', { id: 'director', name: 'Director', capabilities: ['stage'] })
+    const mk = (name: string, files: Record<string, string>) => {
+      for (const [rel, text] of Object.entries(files)) { mkdirSync(join(dir, 'fixtures', name, rel, '..'), { recursive: true }); writeFileSync(join(dir, 'fixtures', name, rel), text) }
+    }
+    mk('cal', { 'engine.json': '{"runs":[]}', 'human/CALENDAR.db': '{"version":2,"name":"Mine","columns":[],"rows":[]}' })
+    mk('plain', { 'engine.json': '{"runs":[]}' })
+    mk('linked', { 'engine.json': '{"runs":[]}' })
+    symlinkSync(join(dir, 'fixtures', 'cal', 'human'), join(dir, 'fixtures', 'linked', 'human'))
+    mk('dirfile', { 'engine.json': '{"runs":[]}', 'human/CALENDAR.db/x': '{}' })
+    mk('filelink', { 'engine.json': '{"runs":[]}', 'human/.keep': '' })
+    writeFileSync(join(home, 'outside.db'), '{"version":2,"name":"Outside","columns":[],"rows":[]}')
+    symlinkSync(join(home, 'outside.db'), join(dir, 'fixtures', 'filelink', 'human', 'CALENDAR.db'))
+    const got: Array<{ calendar?: string } | undefined> = []
+    const f = fakeSandbox()
+    const stage = createPluginStage({
+      forsionHome: () => home, sandbox: f.sandbox as never, confirm: async () => true, log: () => {},
+      startEngine: async (_script, human) => { got.push(human); return { url: 'http://127.0.0.1:9', close: async () => {} } },
+    })
+    expect(await stage.exec('director', 'open', { fixture: 'fixtures/cal', engine: 'scripted' }, 'en')).toMatchObject({ ok: true })
+    expect(got.at(-1)).toEqual({ calendar: '{"version":2,"name":"Mine","columns":[],"rows":[]}' })
+    expect(await stage.exec('director', 'open', { fixture: 'fixtures/plain', engine: 'scripted' }, 'en')).toMatchObject({ ok: true })
+    expect(got.at(-1)).toBeUndefined()
+    expect(await stage.exec('director', 'open', { fixture: 'fixtures/linked', engine: 'scripted' }, 'en')).toMatchObject({ ok: false, code: 'fixture-invalid' })
+    expect(await stage.exec('director', 'open', { fixture: 'fixtures/dirfile', engine: 'scripted' }, 'en')).toMatchObject({ ok: false, code: 'fixture-invalid' })
+    expect(await stage.exec('director', 'open', { fixture: 'fixtures/filelink', engine: 'scripted' }, 'en')).toMatchObject({ ok: false, code: 'fixture-invalid' })
+    expect(got).toHaveLength(2)
+  })
 })
