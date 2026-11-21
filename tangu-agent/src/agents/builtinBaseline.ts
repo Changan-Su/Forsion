@@ -92,6 +92,11 @@ export function compareVersions(a: string, b: string): number {
 function fromNewerApp(defaults: BuiltinDefaults, current: BuiltinCurrent): boolean {
   return !!defaults.version && compareVersions(current.version, defaults.version) > 0;
 }
+/** 这一项的基线是更新的 app 记的(同一台装回了旧版):工作指令改过时 config.toml 的版本不升,上面那道闸挡不住只换了人格 / 描述的那次,
+ *  所以逐项再比一次 —— 不退回旧默认,也不提示。 */
+function baseFromNewerApp(defaults: BuiltinDefaults, base: BaselineEntry | undefined): boolean {
+  return !!(base?.version && defaults.version && compareVersions(base.version, defaults.version) > 0);
+}
 
 export interface RefreshPlan {
   /** 要换成新默认的项(只含要写的)。 */
@@ -120,6 +125,7 @@ export function planBuiltinRefresh(slug: string, defaults: BuiltinDefaults, curr
     if (cur === null) continue; // SOUL.md 读不到:不知道,这一项不碰
     const def = defaults[field];
     const base = baseline?.[field];
+    if (baseFromNewerApp(defaults, base)) continue;
     if (same(cur, def)) { next[field] = entry(field); continue; }
     if ((base && same(cur, base.text)) || isStockText(slug, field, cur)) { replace[field] = def; next[field] = entry(field); continue; }
     if (!base && defaults.version && current.version === defaults.version) next[field] = entry(field);
@@ -145,12 +151,14 @@ export function pendingBuiltinUpdate(slug: string, defaults: BuiltinDefaults, cu
     if (cur === null) continue;
     const def = defaults[field];
     const base = baseline?.[field];
-    if (same(cur, def) || (base && same(base.text, def))) continue;
+    if (baseFromNewerApp(defaults, base) || same(cur, def) || (base && same(base.text, def))) continue;
     fields.push({ field, current: cur, newDefault: def, oldDefault: base ? base.text : null, ...(base?.version ? { fromVersion: base.version } : {}) });
   }
   if (!fields.length) return null;
-  const token = createHash('sha256').update(JSON.stringify([slug, fields.map((f) => [f.field, textSha256(f.current), textSha256(f.newDefault)])])).digest('hex').slice(0, 32);
-  return { slug, ...(defaults.version ? { toVersion: defaults.version } : {}), fields, token };
+  // token 盖住用户看到的整份提示(原文、不规范化):现在的文本、旧默认、新默认、两头的版本,哪个变了旧 token 都不认
+  const toVersion = defaults.version;
+  const token = createHash('sha256').update(JSON.stringify([slug, toVersion ?? null, fields.map((f) => [f.field, f.current, f.oldDefault, f.newDefault, f.fromVersion ?? null])])).digest('hex').slice(0, 32);
+  return { slug, ...(toVersion ? { toVersion } : {}), fields, token };
 }
 
 /** 用户点了「保留我的」/「换成新默认」之后的基线:提示过的几项都记成新默认(两种选择都是「看过这版了」)。 */
@@ -161,6 +169,23 @@ export function acknowledgedBaseline(defaults: BuiltinDefaults, baseline: Builti
 }
 
 // ── IO ─────────────────────────────────────────────────────────────────────────
+
+/** 严格按 UTF-8 读:坏字节直接抛(Node 的 'utf-8' 会悄悄换成 U+FFFD,再写回去就把用户的字改坏了)。BOM 原样留着,同 readFile。 */
+async function readUtf8(file: string): Promise<string> {
+  return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await fs.readFile(file));
+}
+
+/** 原子写(同目录临时文件 + rename):写到一半断电 / 磁盘满,原文件还是完整的旧版。临时文件点开头,两套同步都不收。 */
+export async function atomicWriteText(file: string, text: string): Promise<void> {
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`);
+  try {
+    await fs.writeFile(tmp, text, 'utf-8');
+    await fs.rename(tmp, file);
+  } catch (e) {
+    await fs.rm(tmp, { force: true }).catch(() => { /* ignore */ });
+    throw e;
+  }
+}
 
 export type BaselineRead = { state: 'none' } | { state: 'ok'; baseline: BuiltinBaseline } | { state: 'unknown' };
 
@@ -181,7 +206,7 @@ function parseBaseline(raw: string): BuiltinBaseline | null {
 /** 读基线:没有文件 = none;读不出来、解析不了、形状不对 = unknown(不知道,调用方什么都不写)。 */
 export async function readBuiltinBaseline(agentDir: string): Promise<BaselineRead> {
   let raw: string;
-  try { raw = await fs.readFile(path.join(agentDir, BUILTIN_BASELINE_FILE), 'utf-8'); } catch (e: any) {
+  try { raw = await readUtf8(path.join(agentDir, BUILTIN_BASELINE_FILE)); } catch (e: any) {
     return e?.code === 'ENOENT' ? { state: 'none' } : { state: 'unknown' };
   }
   const baseline = parseBaseline(raw);
@@ -190,17 +215,9 @@ export async function readBuiltinBaseline(agentDir: string): Promise<BaselineRea
 
 /** 原子写(临时文件 + rename):写到一半断电不会留下半份(半份 = unknown = 这个 Agent 不再升级)。临时文件也是点开头,同步不收。 */
 export async function writeBuiltinBaseline(agentDir: string, baseline: BuiltinBaseline): Promise<void> {
-  const file = path.join(agentDir, BUILTIN_BASELINE_FILE);
-  const tmp = path.join(agentDir, `.builtin-baseline.${process.pid}.${randomUUID().slice(0, 8)}.tmp`);
   const doc: Record<string, unknown> = { format: 1 };
   for (const field of BUILTIN_TEXT_FIELDS) if (baseline[field]) doc[field] = baseline[field];
-  try {
-    await fs.writeFile(tmp, JSON.stringify(doc, null, 2) + '\n', 'utf-8');
-    await fs.rename(tmp, file);
-  } catch (e) {
-    await fs.rm(tmp, { force: true }).catch(() => { /* ignore */ });
-    throw e;
-  }
+  await atomicWriteText(path.join(agentDir, BUILTIN_BASELINE_FILE), JSON.stringify(doc, null, 2) + '\n');
 }
 
 export type CurrentRead = { state: 'ok'; current: BuiltinCurrent; raw: string } | { state: 'absent' } | { state: 'unknown' };
@@ -211,14 +228,14 @@ export type CurrentRead = { state: 'ok'; current: BuiltinCurrent; raw: string } 
  */
 export async function readBuiltinCurrent(agentDir: string): Promise<CurrentRead> {
   let raw: string;
-  try { raw = await fs.readFile(path.join(agentDir, 'config.toml'), 'utf-8'); } catch (e: any) {
+  try { raw = await readUtf8(path.join(agentDir, 'config.toml')); } catch (e: any) {
     return e?.code === 'ENOENT' || e?.code === 'ENOTDIR' ? { state: 'absent' } : { state: 'unknown' };
   }
   let meta: Record<string, unknown>;
   try { meta = parseToml(raw) as Record<string, unknown>; } catch { return { state: 'unknown' }; }
   if (typeof meta.developer_instructions !== 'string') return { state: 'unknown' };
   if (meta.description !== undefined && typeof meta.description !== 'string') return { state: 'unknown' };
-  const soul = await fs.readFile(path.join(agentDir, 'SOUL.md'), 'utf-8').catch(() => null);
+  const soul = await readUtf8(path.join(agentDir, 'SOUL.md')).catch(() => null);
   return {
     state: 'ok',
     raw,

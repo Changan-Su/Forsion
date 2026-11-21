@@ -523,7 +523,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const nameOk = [draft.nameZh ?? draft.name, draft.nameEn].some((n) => n?.trim())
   const enHan = hasHan(draft.nameEn || '')
   const save = async () => {
-    if (busy || !nameOk || enHan) return
+    if (busy || builtinBusy || !nameOk || enHan) return // 「换成新默认」在途时不保存:两边各写一份指令,后到的会悄悄盖掉先到的
     setBusy(true); setError('')
     try {
       const latest = (await listAgents(homeTarget())).find((item) => item.slug === agent.slug)
@@ -633,7 +633,8 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
-      {builtinUpdate && <BuiltinUpdateNotice update={builtinUpdate} busy={builtinBusy || busy}
+      {/* key = token:换了一份提示(409 之后重读、别的窗口改过)就重挂,上一份的「替换」确认态不带过去 */}
+      {builtinUpdate && <BuiltinUpdateNotice key={builtinUpdate.token} update={builtinUpdate} busy={builtinBusy || busy}
         adoptBlocked={dirty && (dirtyFields.current.has('systemPrompt') || dirtyFields.current.has('soul'))}
         onKeep={() => void resolveBuiltin('keep')} onAdopt={() => void resolveBuiltin('adopt')} />}
       <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt || ''} onChange={(systemPrompt) => patch({ systemPrompt })} />

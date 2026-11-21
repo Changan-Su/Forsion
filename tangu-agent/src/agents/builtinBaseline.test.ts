@@ -85,6 +85,27 @@ describe('① 没改过 → 直接换新,基线跟上', () => {
     expect(readFileSync(soulFile('muse'), 'utf-8')).toBe('x'); // 人格没有基线、也不是出厂文本 = 改过,不碰
   });
 
+  it('后台 Agent 关着(监督器不跑 ensureMuseAgent):首访时照样把没改过的 Muse 换新,不会被当成「你改过」来提示', async () => {
+    writeFileSync(cfgFile('muse'), `name = "Muse"\nversion = "1.0.0"\ncreated_by = "system"\ndeveloper_instructions = ${JSON.stringify(LEGACY_MUSE_PROMPTS[2])}\n`);
+    writeFileSync(soulFile('muse'), 'x');
+    const r = await registry();
+    await r.listAgents(); // 只走首访,不调 ensureMuseAgent
+    expect((await r.parseAgentFolder('muse', dir('muse'))).systemPrompt).toBe(DEFAULT_MUSE_PROMPT);
+    expect((await r.getBuiltinUpdate('muse'))?.fields.map((f) => f.field)).toEqual(['soul']); // 人格 'x' 才是改过的那项
+  });
+
+  it('只换描述那次:config.toml 重写,但用户的指令原文一个字符不变(连开头的空格)', async () => {
+    const prompt = '    My own rule, indented on purpose.\n';
+    writeFileSync(cfgFile('coding'), `name = "Coding"\nversion = "1.4.0"\ndescription = "Old description"\ncreated_by = "user"\ndeveloper_instructions = ${JSON.stringify(prompt)}\n`);
+    writeFileSync(soulFile('coding'), CODING_SOUL);
+    writeFileSync(baseFile('coding'), baselineJson({ systemPrompt: { text: CODING_SYSTEM_PROMPT, version: '1.4.0' }, description: { text: 'Old description', version: '1.4.0' } }));
+    const r = await registry();
+    await r.listAgents();
+    const cur = await readBuiltinCurrent(dir('coding'));
+    expect(cur.state === 'ok' && cur.current.systemPrompt).toBe(prompt);
+    expect(cur.state === 'ok' && cur.current.description).not.toBe('Old description');
+  });
+
   it('新装机:骨架写下出厂文本时就记基线,马上升级也不提示', async () => {
     await fs.rm(path.join(home, 'agents'), { recursive: true, force: true });
     const r = await registry();
@@ -258,6 +279,18 @@ describe('④ 读失败不覆盖', () => {
     }
   });
 
+  it('config.toml 里有坏的 UTF-8 字节:不知道,不写(Node 会悄悄换成 U+FFFD,写回去就把用户的字改坏了)', async () => {
+    writeFileSync(cfgFile('coding'), Buffer.concat([Buffer.from(`name = "Coding"\nversion = "1.3.0"\ndescription = "Old description"\ncreated_by = "user"\ndeveloper_instructions = "My rule `), Buffer.from([0xff]), Buffer.from(`"\n`)]));
+    writeFileSync(soulFile('coding'), OLD_SOUL);
+    writeFileSync(baseFile('coding'), baselineJson({ description: { text: 'Old description' }, soul: { text: OLD_SOUL } }));
+    const before = readFileSync(cfgFile('coding'));
+    const r = await registry();
+    await r.listAgents();
+    expect(readFileSync(cfgFile('coding')).equals(before)).toBe(true);
+    expect(readFileSync(soulFile('coding'), 'utf-8')).toBe(OLD_SOUL);
+    expect(await r.getBuiltinUpdate('coding')).toBeNull();
+  });
+
   it('SOUL.md 读不出来:人格这一项不碰,指令照常判', async () => {
     writeFileSync(cfgFile('coding'), toml({ version: '1.3.0', prompt: OLD_DEFAULT }));
     mkdirSync(soulFile('coding'));
@@ -272,10 +305,27 @@ describe('④ 读失败不覆盖', () => {
 
 describe('同步边界与版本', () => {
   it('基线(和它的临时文件)两套同步都不收', () => {
-    for (const p of [BUILTIN_BASELINE_FILE, '.builtin-baseline.123.abcd1234.tmp']) {
+    for (const p of [BUILTIN_BASELINE_FILE, '.builtin-baseline.json.123.abcd1234.tmp', '.config.toml.123.abcd1234.tmp', '.SOUL.md.123.abcd1234.tmp']) {
       expect(validAgentFilePath(p)).toBe(false);
       expect(agentContentSyncable(`agents/coding/${p}`)).toBe(false);
     }
+  });
+
+  it('同一台装回旧版:人格的基线是新版记的(指令改过、config 版本没升)→ 不退回旧默认人格,也不提示', () => {
+    const defaults: BuiltinDefaults = { version: '1.4.0', systemPrompt: 'P4', soul: 'S4', description: 'D' };
+    const current = { version: '1.4.0', systemPrompt: 'Mine', soul: 'S5', description: 'D' };
+    const baseline = { systemPrompt: { text: 'P4', version: '1.4.0' }, soul: { text: 'S5', version: '1.5.0' }, description: { text: 'D', version: '1.4.0' } };
+    expect(planBuiltinRefresh('coding', defaults, current, baseline)?.replace).toEqual({});
+    expect(pendingBuiltinUpdate('coding', defaults, current, baseline)).toBeNull();
+  });
+
+  it('token 盖住用户看到的整份提示:旧默认变了、文本只差空白,旧 token 都不认', () => {
+    const defaults: BuiltinDefaults = { version: '1.5.0', systemPrompt: 'P5', soul: 'S5', description: 'D' };
+    const current = { version: '1.4.0', systemPrompt: 'Mine', soul: 'S5', description: 'D' };
+    const a = pendingBuiltinUpdate('coding', defaults, current, { systemPrompt: { text: 'P3', version: '1.3.0' } })!.token;
+    expect(pendingBuiltinUpdate('coding', defaults, current, { systemPrompt: { text: 'P4', version: '1.4.0' } })!.token).not.toBe(a);
+    expect(pendingBuiltinUpdate('coding', defaults, { ...current, systemPrompt: 'Mine ' }, { systemPrompt: { text: 'P3', version: '1.3.0' } })!.token).not.toBe(a);
+    expect(pendingBuiltinUpdate('coding', defaults, current, { systemPrompt: { text: 'P3', version: '1.3.0' } })!.token).toBe(a);
   });
 
   it('config.toml 来自更新的 app(另一台同步过来的):不退回旧默认,也不提示', () => {
