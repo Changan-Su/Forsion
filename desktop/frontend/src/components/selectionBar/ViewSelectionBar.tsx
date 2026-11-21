@@ -37,9 +37,24 @@ registerMessages({
 /** 划选后自动(2026-11-21 契约 §4):停下这么久才跑;这个长度范围内才自动(更长的只出条,要手点)。 */
 const AUTO_DELAY_MS = 400
 const AUTO_MAX_CHARS = 2000
-/** 自动跑过的结果:同一个动作、同一段、同一个目标语言,本次会话内不再请求(按出现先后最多留这么多)。 */
-const autoCache = new Map<string, string>()
+/** 自动跑过的结果:同一个动作(按这次注册的那个对象认 —— 插件重载后是新对象,旧结果跟着作废)、同一份请求输入
+ *  (视图、来源、目标语言、选中的字),本次会话内不再请求。每个动作按出现先后最多留这么多。 */
+const autoCache = new WeakMap<object, Map<string, string>>()
 const AUTO_CACHE_MAX = 100
+const autoCacheOf = (item: object): Map<string, string> => {
+  let m = autoCache.get(item)
+  if (!m) autoCache.set(item, (m = new Map()))
+  return m
+}
+const autoCacheKey = (view: string, source: BarSource | undefined, language: string | undefined, markdown: string): string =>
+  JSON.stringify([view, source ?? null, language ?? '', markdown])
+/** 两段选区是不是同一处(同名的两个链接字一样、位置不一样)。量不了(跨文档 / 已摘下)当不是。 */
+const sameRange = (a: Range | undefined, b: Range | undefined): boolean => {
+  if (!a || !b) return a === b
+  try { return a.compareBoundaryPoints(Range.START_TO_START, b) === 0 && a.compareBoundaryPoints(Range.END_TO_END, b) === 0 } catch { return false }
+}
+/** 结果卡里小喇叭的 key:哪张卡、这张卡的第几跑、哪一格、念的是什么字 —— 换段 / 重试出了新字都是新的一段。 */
+const cardSpeakPrefix = (c: { key: number; runKey: number }): string => `card:${c.key}:${c.runKey}:`
 /** 锚点读出来的矩形竖向并上条的矩形(条在、看得见时)。只给浮层摆位用,收拾仍归原锚点。 */
 function clearOfBar(a: TextAnchor, bar: () => HTMLElement | null): TextAnchor {
   return {
@@ -56,7 +71,6 @@ function clearOfBar(a: TextAnchor, bar: () => HTMLElement | null): TextAnchor {
   }
 }
 
-const autoCacheKey = (action: string, language: string | undefined, markdown: string): string => `${action}\u0000${language ?? ''}\u0000${markdown}`
 /** 手机没有「停下来」这个时机(选区靠系统菜单),第一轮不自动(契约 §4)。 */
 const autoAllowedHere = (): boolean => {
   if (typeof window === 'undefined' || window.tangu?.mobile) return false
@@ -124,6 +138,10 @@ interface Card {
   action?: string
   /** 宿主划选后自动开的(契约 §4):条留着,点视图里(要换一段划选)不收,松手没选中东西才收。 */
   auto?: boolean
+  /** 新划了一段(还没轮到它自动跑):+1 = 当场中止卡里在飞的那次请求,不等 400ms 之后。只增不减(减回去也算「变了」)。 */
+  cancel?: number
+  /** 中止之后还没重跑:卡里的东西作废了,同一处再划也要重跑(有缓存就直接出)。 */
+  stale?: boolean
 }
 
 const pluginIcon = (icon: string | undefined): ReactNode => {
@@ -191,6 +209,9 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const next: BarSelection = { text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir, range: range.cloneRange() }
       ownRef.current = next
       setOwn(next)
+      // 自动卡开着、在跑上一段:选区一换就当场中止那次请求(不等下面的 400ms;这一段要是不自动跑,卡也会在那时收掉)
+      const c = cardRef.current
+      if (c?.auto && !(c.text === next.text && sameRange(c.range, next.range))) setCard((x) => (x === c ? { ...c, cancel: (c.cancel ?? 0) + 1, stale: true } : x))
       // 停下 400ms 还是这一段,才自动跑(中途又按下 / 又划了一段都会把它取消)
       autoTimer.current = window.setTimeout(() => { autoTimer.current = null; if (ownRef.current === next) autoRef.current(next) }, AUTO_DELAY_MS)
     }
@@ -227,6 +248,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     el.addEventListener('scroll', moved, { passive: true, capture: true })
     el.addEventListener(SELBAR_VIEWPORT_MOVED, moved, true)
     return () => {
+      cancelAuto() // 换会话 / 视图重绑:上一个视图排着的自动跑作废
       paint.dispose()
       ro.disconnect()
       el.removeEventListener('mouseup', read)
@@ -287,7 +309,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const at = { text: sel.text, markdown: sel.markdown ?? sel.text, source, x: sel.rect.left, y: sel.rect.bottom + 6, top: sel.rect.top - 6, range: sel.range, getRect: sel.getRect }
       const prev = cardRef.current
       if (extra.auto && prev?.auto && prev.action === extra.action) {
-        setCard({ ...prev, ...at, ...extra, title, runKey: prev.runKey + 1 })
+        setCard({ ...prev, ...at, ...extra, title, runKey: prev.runKey + 1, stale: false })
         return
       }
       setCard({ key: Date.now(), runKey: 0, title, ...at, ...extra })
@@ -323,11 +345,17 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     })
     // 划选后自动(契约 §4):1–2000 字、桌面、有支持且用户开了的那个(排最前);同一段同一语言已经在卡里了就不再跑
     autoRef.current = (s2) => {
+      if (s2 !== sel) return
       const a = model.auto
-      if (!a || s2 !== sel || !autoAllowedHere() || sel.text.length < 1 || sel.text.length > AUTO_MAX_CHARS) return
-      const extra = pluginCardExtra(a, true)
       const cur = cardRef.current
-      if (cur && cur.action === extra.action && cur.text === sel.text && cur.language === extra.language) return
+      if (!a || !autoAllowedHere() || sel.text.length < 1 || sel.text.length > AUTO_MAX_CHARS) {
+        // 这一段不自动跑(太长 / 这里没有开着的):上一段的自动卡已经中止了,收掉,别留一张跑了一半的
+        if (cur?.auto && (cur.stale || !(cur.text === sel.text && sameRange(cur.range, sel.range)))) setCard(null)
+        return
+      }
+      const extra = pluginCardExtra(a, true)
+      // 同一处、同一个动作、同一个语言:卡里就是它,不再跑(同名的两处字不算同一处:要跟到新那处)
+      if (cur && cur.action === extra.action && cur.text === sel.text && sameRange(cur.range, sel.range) && cur.language === extra.language && !cur.stale) return
       openCard(selectionActionTitle(a), extra)
     }
     const tools = p.tools?.(sel) ?? []
@@ -370,10 +398,11 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     if (card.action) {
       const o = usePluginStore.getState().selectionActions.find((x) => selectionActionKey(x) === card.action)
       if (!o) throw new Error(translate('selbar.err.gone'))
-      const ck = autoCacheKey(card.action, card.language, card.markdown)
+      const cache = autoCacheOf(o.item)
+      const ck = autoCacheKey(p.view, card.source, card.language, card.markdown)
       const useCache = card.auto && cacheArmed.current === card.runKey
       cacheArmed.current = null
-      const hit = useCache ? autoCache.get(ck) : undefined
+      const hit = useCache ? cache.get(ck) : undefined
       if (hit != null) return { text: hit }
       const text = await runSelectionAction(o, {
         text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
@@ -381,9 +410,9 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
         ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
       })
       if (card.auto && text && !signal.aborted) {
-        autoCache.delete(ck)
-        autoCache.set(ck, text)
-        if (autoCache.size > AUTO_CACHE_MAX) autoCache.delete(autoCache.keys().next().value!)
+        cache.delete(ck)
+        cache.set(ck, text)
+        if (cache.size > AUTO_CACHE_MAX) cache.delete(cache.keys().next().value!)
       }
       return { text }
     }
@@ -393,11 +422,21 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   }
 
   const cardOwned = card?.action ? plugins.find((x) => selectionActionKey(x) === card.action) : undefined
+  // 插件停用 / 重载:它的动作没了,卡收掉 —— 卸下时中止在飞的请求(插件拿到的 cx.signal 跟着 abort),迟到的结果没人收
+  const cardGone = !!card?.action && !cardOwned
+  useEffect(() => { if (cardGone) setCard(null) }, [cardGone])
+  // 卡换段(runKey)/ 收起 / 换一张:它小喇叭念着的那段停掉,别让新那段的喇叭显示旧的在念
+  const speakPrefix = card ? cardSpeakPrefix(card) : null
+  useEffect(() => () => {
+    const probe = readTangu()?.tts
+    const cur = probe?.state()?.key
+    if (speakPrefix && cur?.startsWith(speakPrefix)) probe!.stop(cur)
+  }, [speakPrefix])
   const opts = cardOptionsOf(cardOwned)
   const cardSpeak = card && cardOwned && opts.speak && tts
     ? {
-        phase: (which: 'source' | 'result'): SpeakPhase => (speaking?.key === `card:${card.key}:${which}` ? speaking.phase : null),
-        onToggle: (which: 'source' | 'result', text: string) => speakText(`card:${card.key}:${which}`, text, { rect: { left: card.x, right: card.x, top: card.top + 6, bottom: card.y - 6 }, range: card.range, getRect: card.getRect }),
+        phase: (which: 'source' | 'result', text: string): SpeakPhase => (speaking?.key === `${cardSpeakPrefix(card)}${which}:${text}` ? speaking.phase : null),
+        onToggle: (which: 'source' | 'result', text: string) => speakText(`${cardSpeakPrefix(card)}${which}:${text}`, text, { rect: { left: card.x, right: card.x, top: card.top + 6, bottom: card.y - 6 }, range: card.range, getRect: card.getRect }),
       }
     : undefined
   if (!bar && !card && !ttsCard) return null
@@ -408,6 +447,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
         <InlineAiPanel
           key={card.key}
           runKey={card.runKey}
+          cancelKey={card.cancel}
           x={card.x}
           y={card.y}
           anchorTop={card.top}
@@ -422,7 +462,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           keepOnDown={card.auto ? (at) => !!watch?.current?.contains(at) : undefined}
           language={card.language ? {
             value: card.language,
-            onChange: (id) => { if (card.action && opts.language) rememberSelectionLanguage(card.action, id); setCard({ ...card, key: Date.now(), runKey: 0, language: id }) },
+            onChange: (id) => { if (card.action && opts.language) rememberSelectionLanguage(card.action, id); setCard({ ...card, key: Date.now(), runKey: 0, language: id, stale: false }) },
           } : undefined}
           source={cardOwned && opts.source ? card.text : undefined}
           speak={cardSpeak}

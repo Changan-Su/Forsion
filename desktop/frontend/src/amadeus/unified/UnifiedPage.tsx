@@ -2175,6 +2175,17 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     })
   }, [aiPanelKey, layer])
   useEffect(() => () => aiAnchor?.dispose(), [aiAnchor])
+  // 插件停用 / 重载:卡上那个插件动作没了就收卡 —— 卸下时中止在飞的请求(插件的 cx.signal 跟着 abort),迟到的结果没人收
+  const aiPluginGone = !!aiPanel?.plugin && !pluginSelActions.some((o) => `${o.pluginId}:${o.item.id}` === aiPanel.plugin)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (aiPluginGone) closeAi() }, [aiPluginGone])
+  // 卡收起 / 换一张:它小喇叭念着的那段停掉
+  const aiSpeakPrefix = aiPanel ? `card:${aiPanel.key}:` : null
+  useEffect(() => () => {
+    const probe = readTangu()?.tts
+    const cur = probe?.state()?.key
+    if (aiSpeakPrefix && cur?.startsWith(aiSpeakPrefix)) probe!.stop(cur)
+  }, [aiSpeakPrefix])
   /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
   const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
     const view = layer.getView()
@@ -2219,9 +2230,9 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       ...(opts.source && target ? { source: target.text } : {}),
       ...(opts.speak && tts ? {
         speak: {
-          phase: (which) => { const st = tts.state(); return st?.key === `card:${panel.key}:${which}` ? st.phase : null },
+          phase: (which, body) => { const st = tts.state(); return st?.key === `card:${panel.key}:${which}:${body}` ? st.phase : null },
           onToggle: (which, body) => {
-            const k = `card:${panel.key}:${which}`
+            const k = `card:${panel.key}:${which}:${body}`
             if (tts.state()?.key === k) { tts.stop(k); return }
             tts.speak(k, body).catch((e: unknown) => {
               const m = String((e as Error)?.message || e)

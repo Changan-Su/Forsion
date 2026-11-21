@@ -60,7 +60,7 @@ export type CardSpeakPhase = 'loading' | 'playing' | null
 /** model = 这次实际是谁出的结果(翻译才给;readTangu().complete 的返回值可以原样交回来)。 */
 export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
 
-export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelection, askFirst, run, onApply, onClose, editorEl, language, source, speak, auto, runKey, keepOnDown }: {
+export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelection, askFirst, run, onApply, onClose, editorEl, language, source, speak, auto, runKey, cancelKey, keepOnDown }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
@@ -87,11 +87,13 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
   /** 在结果上面列出原文(收成 3 行,点了展开;插件 card.source)。 */
   source?: string
   /** 原文 / 结果旁的小喇叭(插件 card.speak;这个宿主有朗读才给)。phase(which) = 此刻在念的是不是那一段。 */
-  speak?: { phase(which: 'source' | 'result'): CardSpeakPhase; onToggle(which: 'source' | 'result', text: string): void }
+  speak?: { phase(which: 'source' | 'result', text: string): CardSpeakPhase; onToggle(which: 'source' | 'result', text: string): void }
   /** 卡头「划选后自动」开关(只有支持自动的动作有)。 */
   auto?: { on: boolean; onChange(on: boolean): void }
   /** 变了 = 在同一张卡里重跑一次(划选后自动跟到新那段:不卸载、不重放入场,卡不闪)。 */
   runKey?: unknown
+  /** 变了 = 当场中止在飞的那次请求(自动卡:用户已经划了新的一段,旧的结果没人要了;要不要重跑由 runKey 说)。 */
+  cancelKey?: unknown
   /** 点到卡外面那一下(只读卡):回 true = 这一下先别收(宿主随后自己决定,比如自动卡上换一段划选)。 */
   keepOnDown?(target: Node): boolean
 }): ReactElement {
@@ -170,6 +172,12 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runKey])
   const [sourceOpen, setSourceOpen] = useState(false)
+  const firstCancelKey = useRef(cancelKey)
+  useEffect(() => {
+    if (Object.is(firstCancelKey.current, cancelKey)) return
+    firstCancelKey.current = cancelKey
+    ac.current?.abort()
+  }, [cancelKey])
 
   const primary: AiApply = hasSelection ? 'replace' : 'insert'
   // Esc = 丢弃(任何阶段);预览完成后 Enter = 主动作。捕获期拦,别让它们落进编辑器(Enter 会插一个换行)。
@@ -222,7 +230,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
 
   const speaker = (which: 'source' | 'result', body: string): ReactElement | null => {
     if (!speak) return null
-    const ph = speak.phase(which)
+    const ph = speak.phase(which, body)
     return (
       <button type="button" className={`am-ai-speak${ph ? ' on' : ''}`} data-speak={which} data-phase={ph ?? 'idle'} aria-pressed={!!ph}
         title={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')} aria-label={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')}
