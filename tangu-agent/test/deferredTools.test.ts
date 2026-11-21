@@ -64,10 +64,10 @@ async function setupLoop(script: LlmScript, prof = profile): Promise<{ home: str
   return { home, llmPayloads };
 }
 
-async function runToDone(runId = 'R1', message = 'hi'): Promise<void> {
+async function runToDone(runId = 'R1', message = 'hi', agentConfig: Record<string, unknown> = {}): Promise<void> {
   await createRun({
     id: runId, sessionId: 'S', userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: `${runId}-a`,
-    input: { message, userMessageId: `${runId}-u`, attachments: [], agentConfig: {} },
+    input: { message, userMessageId: `${runId}-u`, attachments: [], agentConfig },
   });
   enqueueRun('S', runId);
   const t0 = Date.now();
@@ -141,6 +141,10 @@ describe('registry 级:defer 过滤与解锁', () => {
     // 解锁后追加在末尾
     const after = names({ ...museCtx, unlockedTools: new Set(['manage_automation']) });
     expect(after[after.length - 1]).toBe('manage_automation');
+    // Muse 自己收起了常驻名单里的工具 → 以收起为准(走目录),别笔记说收了、定义照发
+    const shelvedFace = { ...museCtx, shelvedTools: new Set(['manage_schedule']) };
+    expect(names(shelvedFace)).not.toContain('manage_schedule');
+    expect(listDeferredTools(shelvedFace).map((d) => d.name)).toContain('manage_schedule');
     // 常驻名单只管 Muse 周期:手聊 Muse(没有 muse 旗标)照普通会话按需
     expect(names({ ...base, agentSlug: 'muse', unlockTools: () => {} })).not.toContain('manage_schedule');
   });
@@ -263,6 +267,31 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     const sys = (llmPayloads[0].messages as any[]).find((m) => m.role === 'system');
     expect(String(sys?.content)).toContain('Additional Tools (load on demand)');
     expect(String(sys?.content)).toContain('manage_automation');
+  });
+
+  // 11-21:Muse 周期按需装载。真 loop 走一遍:首轮 defs / 目录段 / 个人文件夹段里那句「先 load_tools」三处要一致。
+  it('Muse 周期:首轮 defs 不带按需工具、manage_schedule 常驻;目录列 manage_automation 不列 manage_schedule;不再叫它先装 manage_schedule', async () => {
+    const { home, llmPayloads } = await setupLoop(() => ({ content: 'done', toolCalls: [], finishReason: 'stop' }));
+    cleanupHome = home;
+    await runToDone('R1', 'Start this round', { muse: true, automationOrigin: 'muse', execMode: 'host' });
+    const names1 = (llmPayloads[0].tools || []).map((t: any) => t.function?.name);
+    expect(names1).toContain('load_tools');
+    expect(names1).toContain('manage_schedule');
+    expect(names1).not.toContain('manage_automation');
+    const sysOf = (i: number): string => (llmPayloads[i].messages as any[]).filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n');
+    const sys = sysOf(0);
+    expect(sys).toContain('Additional Tools (load on demand)');
+    expect(sys).toMatch(/^- manage_automation: /m);
+    expect(sys).not.toMatch(/^- manage_schedule: /m);
+    expect(sys).toContain('Manage it with the manage_schedule tool; an entry');
+    // 对照:普通 run 照旧按需,提示照旧叫它先装(这几处字节不变)
+    const r2 = llmPayloads.length;
+    await runToDone('R2', 'hi', { execMode: 'host' });
+    const names2 = (llmPayloads[r2].tools || []).map((t: any) => t.function?.name);
+    expect(names2).not.toContain('manage_schedule');
+    const sys2 = sysOf(r2);
+    expect(sys2).toMatch(/^- manage_schedule: /m);
+    expect(sys2).toContain('Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry');
   });
 
   // 10-02:上一 run 装过并用过的 deferred 工具,下一 run 起点就在 defs 里(否则模型照历史硬调,落到 manage_human 空刷)。

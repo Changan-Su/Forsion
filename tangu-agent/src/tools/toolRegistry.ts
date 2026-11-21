@@ -148,8 +148,10 @@ export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean)
   // 而不是可恢复的报错,发现不了就不会去 load。
   // ponytail: 上限=一个工具名。别在这儿续名单 —— 其余按需工具走 load_tools 那条通道即可。
   if (name === 'read_document' && (ctx.subAgentDepth || 0) >= 1) return false;
-  if (ctx.muse && MUSE_RESIDENT_TOOLS.has(name)) return false;
-  return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name) || (!!ctx.shelvedTools?.has(name) && isShelvable(name));
+  // agent 自己收起的照样走目录:Muse 收起了常驻名单里的工具也以收起为准(否则笔记说收了、定义照发;Codex 11-21)
+  const shelved = !!ctx.shelvedTools?.has(name) && isShelvable(name);
+  if (ctx.muse && MUSE_RESIDENT_TOOLS.has(name) && !shelved) return false;
+  return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name) || shelved;
 }
 
 /** agent 自己收不得的工具(读侧 isDeferredIn 与写侧 manage_harness 校验共用:HARNESS.md 可手改 / 可同步,盘面写了也不认):

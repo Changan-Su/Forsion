@@ -2406,6 +2406,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
     //    CALENDAR.db(原 SCHEDULE.db)+ 「谁的归谁」一段(10-02 反馈):过去只在日程非空时才有 Upcoming Schedule 段,空日程的 agent
     //    不知道自己有日历,答应用户的事被写进用户的 Amadeus 日历,还说「我没有自己的日历」。只放静态文字,条目仍在易变区。
+    // manage_schedule 在本 run 要不要先 load_tools:普通会话按需;Muse 周期常驻(MUSE_RESIDENT_TOOLS)、别的自动化 run 全量可见 ——
+    // 这两种 run 里叫它先装,装了只回「已可用」,白花一轮(Codex 11-21)。普通会话的提示一个字节不变。
+    const scheduleNeedsLoad = !agentConfig.muse && !agentConfig.automationOrigin;
     if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
@@ -2416,7 +2419,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         '- `LOG/<date>.md` — your daily logs (written with log_event, read with read_log)\n' +
         '- `SOUL.md` — your persona\n' +
         `- \`Library/\` (\`${libDir}\`) — your reference library: use the file read/write tools (read_file/write_file/list_dir, etc.; this directory is already writable and needs no approval) to **store and retrieve long-term reference material** (character settings, tool manuals, knowledge documents, etc.). Proactively write down material worth keeping long-term, and read it back when needed.\n` +
-        '- `CALENDAR.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry with auto=false is just a calendar record and needs no approval.\n\n' +
+        '- `CALENDAR.db` — your own calendar, shown in the user\'s Calendar under your name. Manage it with the manage_schedule tool' + (scheduleNeedsLoad ? ' (it is in Additional Tools, call load_tools first)' : '') + '; an entry with auto=false is just a calendar record and needs no approval.\n\n' +
         'What is yours and what is the user\'s: this folder and your schedule belong to you; the working directory and the user\'s Amadeus notes and calendars belong to the user. ' +
         'When you yourself commit to something at a time (a plan, a promise, meeting the user), put it on your own schedule with manage_schedule — not in the user\'s calendar — update that entry when the details change, and never say you have no calendar. ' +
         'Use the amadeus_* calendar tools only when the user wants an entry on their own calendar.';
@@ -2653,7 +2656,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const upcoming = schedDb ? upcomingScheduleLines(entriesOf(schedDb)) : [];
         if (upcoming.length) {
           systemParts.push(
-            '## Upcoming Schedule\nYour schedule for the coming days (auto entries run unattended when due; manage with the manage_schedule tool — it is in Additional Tools, call load_tools first):\n\n' +
+            '## Upcoming Schedule\nYour schedule for the coming days (auto entries run unattended when due; manage with the manage_schedule tool' + (scheduleNeedsLoad ? ' — it is in Additional Tools, call load_tools first' : '') + '):\n\n' +
             upcoming.join('\n'),
           );
         }
