@@ -13,6 +13,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { withRetryAfter } from './retry.js';
 import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { ACCOUNT_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
 import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
@@ -215,7 +216,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
       }
     } catch { /* keep empty */ }
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw Object.assign(new LlmError(status, detail || `Codex upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
+    throw withRetryAfter(Object.assign(new LlmError(status, detail || `Codex upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {}), response.headers);
   }
 
   let content = '';

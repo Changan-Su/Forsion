@@ -536,7 +536,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         emitted = true;
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
-    }), undefined, parentCtx.signal, () => !emitted);
+    }), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.()); // 退避期间被兄弟推过成本上限:等完不再发
 
     if (runId) {
       void publish(runId, 'subagent', {

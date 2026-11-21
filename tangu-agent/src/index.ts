@@ -63,6 +63,7 @@ import { startChannels, stopChannels } from './channels/hub.js';
 import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './services/browserExtension.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 import { startDeviceRenameWatch } from './services/deviceTagContext.js';
+import { startSleepDetector, stopSleepDetector } from './llm/sleepDetector.js';
 
 export interface TanguModule {
   /** session 亲和路由(runs/SSE/workspace/approvals):fleet 模式按 session 哈希转发到 worker。 */
@@ -148,6 +149,9 @@ export function createTanguModule(d: TanguDeps): TanguModule {
         .catch(() => {});
     }
 
+    // 系统睡眠检测(llm/sleepDetector.ts):睡着的时间不算进模型调用的重试预算,睡前发出、醒来才报错的请求按断网处理。
+    startSleepDetector();
+
     // 本机本地的沙箱 janitor(docker 容器 / 会话工作区):每个 worker 各管自己的,安全。
     if (opts?.sandbox !== false) {
       loadSandboxConfig().catch(() => {});
@@ -192,6 +196,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   };
 
   const dispose = (): void => {
+    stopSleepDetector();
     stopCacheJanitor();
     stopSessionReaper();
     stopHistorian();
