@@ -439,16 +439,19 @@ interface CacheEntry { stamp: string; defs: NormalAgentDef[] }
 // 多账号模式按账号分(core/accountScope.ts);单人模式一个槽,行为不变。
 const cacheSlot = perAccount((): { v: CacheEntry | null } => ({ v: null }));
 
+/** 测试用:Agent 目录指纹(单人模式的格式不许变)。 */
+export const __agentDirStampForTests = (dir: string): Promise<string> => dirStamp(dir);
+
 async function dirStamp(dir: string): Promise<string> {
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    return `missing:${dir}`;
+    return isMultiAccount() ? `missing:${dir}` : 'missing';
   }
-  // 指纹带上目录本身:缓存只比指纹是否相等,换了目录(多账号模式下每个账号一个 agents/)就一定失效,
-  // 哪天缓存槽退化成全进程一格,同名 Agent、同样的修改时间也不会把另一个目录的名册当成命中。
-  const parts: string[] = [`dir:${dir}`];
+  // 多账号模式下指纹带上目录本身:缓存只比指纹是否相等,换了目录(每个账号一个 agents/)就一定失效,
+  // 哪天缓存槽退化成全进程一格,同名 Agent、同样的修改时间也不会把另一个目录的名册当成命中。单人模式指纹照旧。
+  const parts: string[] = isMultiAccount() ? [`dir:${dir}`] : [];
   for (const e of entries) {
     if (e.isDirectory()) {
       if (!isValidSlug(e.name)) continue;
