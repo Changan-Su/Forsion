@@ -38,6 +38,8 @@ import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
 import { remoteLockGuard } from './remoteLockGuard.js';
+import { drainRunsForExit } from '../services/agentLoop.js';
+import type { StandaloneConfig } from './config.js';
 
 export interface MultiAccountAppOptions {
   localToken: string;            // 宿主口令
@@ -316,4 +318,42 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     routeAllowlist: ROUTE_ALLOWLIST.map(({ method, path }) => ({ method, path })),
     toolAllowlist: [...MULTI_ACCOUNT_TOOL_ALLOWLIST],
   };
+}
+
+/**
+ * standalone/main.ts 多账号分支的后半段:装配(createMultiAccountApp)→ 监听 → 给宿主发 ready → 收到 SIGTERM / SIGINT / 断开时
+ * 排空 run 再退出。onPhase 报启动走到哪一步(main.ts 退出时据此说停在哪)。
+ */
+export async function startMultiAccountServer(opts: {
+  cfg: StandaloneConfig;
+  brain: CloudBrainServices;
+  version: string;
+  onPhase?: (phase: 'multi-account' | 'listen' | 'ready') => void;
+}): Promise<void> {
+  const { cfg } = opts;
+  opts.onPhase?.('multi-account');
+  const { app, dispose } = await createMultiAccountApp({
+    localToken: cfg.localToken!,
+    brain: opts.brain,
+    defaultModelId: cfg.defaultModelId || undefined,
+  });
+  opts.onPhase?.('listen');
+  const server = app.listen(cfg.port, cfg.host, () => {
+    opts.onPhase?.('ready');
+    const address = server.address();
+    const port = address && typeof address === 'object' ? address.port : cfg.port;
+    if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version: opts.version, mode: 'multi-account' });
+    console.log(`[tangu] standalone (multi-account) 已启动 http://${cfg.host}:${port}`);
+  });
+  let stopping = false;
+  const shutdown = (): void => {
+    if (stopping) return;
+    stopping = true;
+    const drained = drainRunsForExit(3000);
+    void drained.finally(() => dispose()).finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 4000).unref?.();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  if (process.send) process.on('disconnect', shutdown);
 }

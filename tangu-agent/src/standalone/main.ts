@@ -16,7 +16,7 @@ import { parseConfig, validate, validateMultiAccount, HELP, type StandaloneConfi
 import { loadCreds } from './credStore.js';
 import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, buildMultiAccountBaseBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
-import { createMultiAccountApp } from './multiAccount.js';
+import { startMultiAccountServer } from './multiAccount.js';
 import { isMultiAccount } from '../core/accountScope.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { bindPluginMcp } from '../mcp/pluginServers.js';
@@ -65,32 +65,8 @@ async function mainMultiAccount(): Promise<void> {
     process.stderr.write('配置错误(multi-account):\n  - ' + errs.join('\n  - ') + '\n');
     process.exit(1);
   }
-  bootPhase = 'multi-account';
-  const { app, dispose } = await createMultiAccountApp({
-    localToken: cfg.localToken!,
-    brain: buildMultiAccountBaseBrain(cfg),
-    defaultModelId: cfg.defaultModelId || undefined,
-  });
-  const version = engineVersion();
-  bootPhase = 'listen';
-  const server = app.listen(cfg.port, cfg.host, () => {
-    bootPhase = 'ready';
-    const address = server.address();
-    const port = address && typeof address === 'object' ? address.port : cfg.port;
-    if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version, mode: 'multi-account' });
-    console.log(`[tangu] standalone (multi-account) 已启动 http://${cfg.host}:${port}`);
-  });
-  let stopping = false;
-  const shutdown = (): void => {
-    if (stopping) return;
-    stopping = true;
-    const drained = drainRunsForExit(3000);
-    void drained.finally(() => dispose()).finally(() => process.exit(0));
-    setTimeout(() => process.exit(0), 4000).unref?.();
-  };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-  if (process.send) process.on('disconnect', shutdown);
+  // 装配、监听、ready 消息、关停都在 standalone/multiAccount.ts(测试走的同一个入口)
+  await startMultiAccountServer({ cfg, brain: buildMultiAccountBaseBrain(cfg), version: engineVersion(), onPhase: (p) => { bootPhase = p; } });
 }
 
 async function main(): Promise<void> {
