@@ -519,6 +519,8 @@ export interface PluginSandboxSelf {
   dir: string
   appVersion: string
   ui?: PluginSandboxUi
+  /** 演示舞台(插件的 ctx.stage 起的那份):不装开发副本、没有沙箱条;普通沙箱没有这一段。 */
+  stage?: import('../../shared/pluginStage').StageChildInfo
 }
 
 /** preload 注入的 window.tangu(浏览器内调试时缺省,backend/auth 能力按需探测)。 */
@@ -542,7 +544,9 @@ declare global {
       /** 插件沙箱的控制面:只有用户那份桌面 Forsion 有(沙箱自己、web、mobile 都没有)。 */
       pluginSandbox?: PluginSandboxApi
       /** 本进程就是插件沙箱:自身信息 + 沙箱条上的按钮(报告问题 / 安装 / 重置)转给父进程。普通实例没有这个键。 */
-      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void }
+      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void; saveRecording?(bytes: ArrayBuffer, ext: string): Promise<string | null> }
+      /** 演示舞台的通道(宿主的 ctx.stage 按插件 id 调;插件别直接调)。 */
+      pluginStage?: { exec(pluginId: string, op: string, args: Record<string, unknown>): Promise<{ ok: boolean; code?: string; error?: string } & Record<string, unknown>> }
       /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */
       computerHistory?: ComputerHistoryApi
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */

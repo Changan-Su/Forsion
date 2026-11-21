@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.132.0
+  version: 1.133.0
   author: Forsion
   category: Forsion
 ---
@@ -51,6 +51,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
 - [references/network.md](references/network.md): `ctx.net` (`PluginNetApi`) and manifest `network`: host-side requests for APIs without CORS headers, rules and error codes
 - [references/internals.md](references/internals.md): `ctx.internals` (2026-11-16+, unstable, desktop only): manifest `internals` (read-only copies, subscribe) / `internals-raw` (real host modules), `internalsVerified`, failure cut-off, store review per version.
+- [references/stage.md](references/stage.md): `ctx.stage` demo stage (2026-11-20+, experimental, desktop only): manifest `stage`, isolated Forsion with fixture vault + named plugins, window size / density / theme / clock, full-resolution capture, window recording with pointer, scripted chat replay (`engine.json`) and personal calendar (`human/CALENDAR.db`), permission prompt, error codes, store review.
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 

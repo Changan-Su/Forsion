@@ -455,6 +455,45 @@ const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/s
 
 检查：`node check-plugin.mjs <插件目录>` 会报出没声明就用、只声明第二级、直接摸 React 内部结构这几种问题，并列出第二级取用的模块。
 
+## 演示舞台 `ctx.stage`（2026-11-20 起，实验）
+
+要给功能做演示图、录演示视频（商店截图、更新说明、宣传素材）时，可以让 Forsion 另起一份**演示舞台**：一份隔离的 Forsion，里面只有你插件包里带的演示内容和你点名的插件，不登录，不碰用户的智库和插件数据。你按步骤操作它，再拍全分辨率截图或录视频。只在桌面版有，要在 manifest 里声明：
+
+```json
+{ "capabilities": ["stage"] }
+```
+
+```js
+const stage = await ctx.stage?.open({
+  fixture: 'fixtures/calendar-demo',  // 插件包里的目录：vault/ 拷进舞台的智库，engine.json 给对话回放，human/CALENDAR.db 是「我的日历」
+  plugins: ['calendar'],              // 一起装进舞台的已安装插件（只拷插件包，不带它们的数据）
+  theme: 'light', locale: 'zh',
+  window: [1440, 900, 2],             // 内容区 1440×900，像素密度 2：截出来是 2880×1800，和用户的屏幕无关
+  clock: '2026-11-20T10:00',          // 舞台里「现在」的起点（本地时间），日历和时间每次拍都一样
+  engine: 'scripted',                 // 可选：按 engine.json 回放对话，不花额度；缺省没有引擎
+})
+await stage.space('calendar')
+await stage.click('周五')              // 引用（read 给的 e12）、css:<选择器>，或控件上看得见的字
+await stage.type('发布会'); await stage.press('Enter')
+const { outline } = await stage.read()
+const shot = await stage.capture({ selector: 'main' })   // { bytes, width, height, mime: 'image/png' }
+const rec = await stage.record({ fps: 30 })               // 录这个窗口；点击前会画一个指针挪过去
+await stage.click('新建事件')
+const video = await rec.stop()                             // { bytes, mime, width, height, durationMs }
+await stage.close()
+```
+
+- **第一次 `open` 会问用户**允不允许；同意过就不再问。用户不允许 → `denied`。
+- 同一时间整台电脑只有一个舞台：别的插件开着时 → `busy`。自己再 `open` 会先关掉前一份。插件停用、重载时宿主替你关；5 分钟没动静自己停。
+- 每次 `open` 都从演示内容重新开始，上一次留下的标签页和设置不带过来。
+- `fixture` 只收插件包里的相对路径；里面的软链接不拷。只有已安装的插件能开舞台（开发沙箱里的副本不行）。
+- 截图的像素 = 窗口尺寸 × 密度；`rect` 用 CSS 像素。录像宽度最多 3840 像素，最长 120 秒（到点自动停，`stop()` 照样拿得到），缺省 mp4，可选 `format: 'webm'`。
+- `engine.json` 的写法：`{ "models": [...], "runs": [{ "match": "用户那句话里的字（可省）", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`。舞台里每发一句话，取第一段对得上的 `runs` 回放。
+- 个人日历「我的日历」不在智库里，日历是向引擎要 `human/CALENDAR.db` 的。要拍带日程的日历，在 fixture 里放 `human/CALENDAR.db`，并且用 `engine: 'scripted'`（只拍日历时 `engine.json` 写 `{ "runs": [] }` 就够）：回放引擎拿这份代替真引擎家目录里的那份。格式和真的一样，是一张普通数据库表，最大 8 MB，每列要有 `id` / `name` / `type`，每行要有 `id` / `cells`；表里有勾选列时，每一行都画成带勾的待办：`{ "version": 2, "name": "我的日历", "columns": [{ "id": "name", "name": "名称", "type": "text" }, { "id": "date", "name": "日期", "type": "calendarDate" }, { "id": "done", "name": "完成", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "发布评审", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`。舞台里对日历的改动只留在这一次舞台里。不放这个文件，舞台里是一本空的个人日历；`engine: 'none'` 没有引擎，个人日历读不到。是软链、不是文件或格式不对时，`open` 报 `fixture-invalid`。
+- 失败都是 reject 带 `code` 的错误：`unsupported`、`invalid`、`denied`、`busy`、`fixture-invalid`、`plugin-missing`、`timeout`、`closed`、`error`。
+- **上架**：声明了 `stage` 的插件要过商店审核才会从官方商店装上（和 `internals-raw` 同一道审核，按版本过）。开发加载、手动安装不受限制。
+- ⚠️ `window.tangu.pluginSandbox`、`window.tangu.pluginStage` 是宿主的内部通道，插件别直接调；用 `ctx.stage`。
+
 ## 命令的撤销与缺省快捷键
 
 `ctx.registerCommand` 返回一个撤销函数，只撤掉这一次注册（2026-11-16 起）；同一个插件用同一个 `id` 再注册，会原地替换原来那条（标题、动作、快捷键都换成新的），被替换掉的那次注册的撤销函数不再起作用。所以插件可以在运行中增删命令（比如每个启用的模板一条），不用重载。插件停用时它的命令照旧全部撤掉。旧宿主返回 `undefined`，同 `id` 再注册会多出一条，所以写成 `off?.()`，并且在旧宿主上每个 `id` 只注册一次。

@@ -3051,6 +3051,64 @@ export interface PluginContext {
    *  而且只在本机桌面(网页、手机、设备页、旧宿主上是 undefined —— 先判断再用)。里面的东西跟着宿主内部走,
    *  宿主更新时可能改名、改形状或消失,不算破坏性变更。 */
   internals?: PluginInternals
+  /** 演示舞台(2026-11-20+,实验):manifest `capabilities` 声明了 `stage`、且在桌面版里才有(先判断再用)。
+   *  起一份装着演示库的隔离 Forsion,按步骤操作它、拍全分辨率截图、录视频;不碰用户的笔记库和插件数据。
+   *  每个插件第一次 open 时宿主问用户一次。官方商店里声明了 `stage` 的插件要过审核才装。 */
+  stage?: PluginStageApi
+}
+
+/** `ctx.stage`(2026-11-20+)。失败一律 reject 带 `code` 的 Error:`unsupported` / `invalid` / `denied` / `busy` /
+ *  `fixture-invalid` / `plugin-missing` / `timeout` / `closed` / `error`。 */
+export interface PluginStageApi {
+  /** 起舞台(同一时间整机只有一个舞台;自己已开着的会先关掉再按新参数起)。插件停用 / 重载时宿主替它关;闲置 5 分钟自停。 */
+  open(options?: PluginStageOptions): Promise<PluginStageHandle>
+}
+export interface PluginStageOptions {
+  /** 插件包里的目录(相对插件根):`vault/` 拷进舞台的智库,`engine.json` 给脚本回放。不给 = 空库。 */
+  fixture?: string
+  /** 一起装进舞台的**已安装**插件 id(只拷插件包,不带插件数据)。随包的内置插件也要点名才有。 */
+  plugins?: string[]
+  /** 调用方插件自己也进舞台(缺省 false:演示插件是导演,不是被拍的)。 */
+  includeSelf?: boolean
+  /** 缺省亮色。可选语言 / 主题色 / 背景色的 id;玻璃在舞台里一律关。 */
+  theme?: 'light' | 'dark' | { mode: 'light' | 'dark'; lang?: string; skin?: string; bg?: string }
+  /** 缺省跟当前界面语言。 */
+  locale?: 'zh' | 'en'
+  /** 内容区尺寸(CSS 像素)与像素密度,缺省 1440×900 @2;宽 640–3840、高 480–2400、密度 1–3。可以比屏幕大。 */
+  window?: { width: number; height: number; scale?: number } | [number, number, number?]
+  /** 舞台里「现在」的起点,本地时间 `YYYY-MM-DDTHH:mm[:ss]`;之后照常往前走。 */
+  clock?: string
+  /** `scripted`:按 fixture 里的 engine.json 回放对话(不花额度、每次一样);缺省 `none`(没有引擎,对话页连不上)。 */
+  engine?: 'none' | 'scripted'
+}
+/** 动手之后:做了什么、点到了谁(元素名是舞台里的字);read 还带页面大纲。 */
+export interface PluginStageAction { did: string; target: string; outline?: string }
+export interface PluginStageImage { bytes: Uint8Array; width: number; height: number; mime: 'image/png' }
+export interface PluginStageVideo { bytes: Uint8Array; mime: string; width: number; height: number; durationMs: number }
+export interface PluginStageHandle {
+  readonly window: { width: number; height: number; scale: number }
+  /** 实际装进舞台的插件 id。 */
+  readonly plugins: string[]
+  readonly engine: 'none' | 'scripted'
+  /** 切到某个 Space(id 或看得见的名字)。 */
+  space(space: string): Promise<PluginStageAction>
+  /** 跑一条命令(命令面板里的 id)。 */
+  command(id: string, args?: unknown): Promise<PluginStageAction>
+  /** target:`read` 给的引用(`e12`)、`css:<选择器>`,或控件上看得见的字。 */
+  click(target: string): Promise<PluginStageAction>
+  /** 缺省替换输入框里原有的字;append 接在后面。字是一下子出来的(录像里不逐字打)。 */
+  type(text: string, opts?: { target?: string; append?: boolean }): Promise<PluginStageAction>
+  /** 键名:Enter、Escape、Tab、ArrowDown、Meta+K、Mod+Enter…;空格隔开按多个。 */
+  press(key: string, opts?: { target?: string }): Promise<PluginStageAction>
+  scroll(target?: string, amount?: number): Promise<PluginStageAction>
+  /** 页面大纲:看得见的控件一行一个、带引用。 */
+  read(target?: string): Promise<{ outline: string }>
+  /** 全分辨率 PNG(像素 = CSS 尺寸 × 密度)。rect 是 CSS 像素;selector 截那个元素所在的矩形。 */
+  capture(opts?: { rect?: { x: number; y: number; width: number; height: number }; selector?: string }): Promise<PluginStageImage>
+  /** 录本窗口(不录屏幕、不要系统录屏权限)。cursor 缺省开:点击前画一个指针挪过去;maxMs 缺省 / 上限 120 秒,到点自己停。
+   *  宽度上限 3840 像素。format 缺省 mp4(H.264),可选 webm。 */
+  record(opts?: { fps?: number; cursor?: boolean; maxMs?: number; format?: 'mp4' | 'webm' }): Promise<{ stop(): Promise<PluginStageVideo> }>
+  close(): Promise<void>
 }
 
 /** `ctx.internals`(2026-11-16+)。 */

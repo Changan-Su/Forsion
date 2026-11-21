@@ -158,6 +158,7 @@ import { reloadWindow } from '../../reloadWindow'
 import {
   FAULT_LIMIT, createInternalsApi, dropInternalsLive, internalsAvailable, markInternalsLive, nextInternalsSourceUrl, setInternalsTrip, takeRawUsage,
 } from './pluginInternals'
+import { createStageApi } from './stageCtx'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
 import { provideInboxChannel } from '../../services/inboxChannel'
@@ -3300,6 +3301,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
           alive: ctxAlive,
           own: (kind, off, label) => scope.own(kind, off, label),
         }) }
+      : {}),
+    // 演示舞台(2026-11-20+,stageCtx.ts):声明了 'stage' 才有,而且只在桌面版(window.tangu.pluginStage 在);停用 / 重载时替它关
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('stage') && window.tangu?.pluginStage
+      ? { stage: createStageApi({ pluginId, alive: ctxAlive, own: (off) => scope.own('subscription', off, 'stage') }) }
       : {}),
     // 前台窗口采样:**manifest 声明过才注入**(没声明的插件连 ctx.system 都看不到)。
     // 第二道闸在主进程:config.activeWindowEnabled 默认关,关着时下面这个调用恒回 null。

@@ -9,10 +9,12 @@
  *  · 监视插件文件夹,保存即重载(Coding Studio 的「保存即重载」靠项目开着,沙箱里没有 Coding Studio);
  *  · 渲染层沙箱条上的按钮(报告问题 / 安装 / 重置)经 IPC 到这里,再作为事件转给父进程。
  */
-import { app, BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, session, type WebContents } from 'electron'
 import { connect, type Socket } from 'node:net'
 import { watch, lstatSync, realpathSync, type FSWatcher } from 'node:fs'
-import { basename, dirname, isAbsolute, resolve, sep } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { parseStageInfo, type StageChildInfo } from '../shared/pluginStage'
 import { mtFor } from './mainI18n'
 import './pluginSandbox' // 窗口标题的文案片段(PLUGIN_SANDBOX_MESSAGES)在那边注册
 
@@ -26,6 +28,8 @@ export interface SandboxSelf {
   root: string
   /** 父进程带来的语言与主题(PluginSandboxUiSeed),渲染层首屏写进 localStorage。 */
   ui?: unknown
+  /** 演示舞台(pluginStage.ts):不装开发副本、不监视目录;窗口尺寸 / 像素密度 / 时钟按这里给。普通沙箱没有这一段。 */
+  stage?: StageChildInfo
 }
 
 /** 本进程是不是沙箱。只认父进程给的三件:标志、通道、令牌。 */
@@ -37,6 +41,7 @@ export function sandboxSelf(env: NodeJS.ProcessEnv = process.env): SandboxSelf |
     return {
       pluginId: info.pluginId, name: String(info.name || info.pluginId), version: String(info.version || ''), dir: env.FORSION_SANDBOX_PLUGIN,
       vault: typeof info.vault === 'string' ? info.vault : '', root: typeof info.root === 'string' ? info.root : '', ui: info.ui,
+      ...(info.stage ? (() => { const st = parseStageInfo(info.stage); return st ? { stage: st } : {} })() : {}),
     }
   } catch {
     return null
@@ -252,6 +257,8 @@ export function startSandboxChild(self: SandboxSelf, opts: {
       const loc = r.value as Loc
       if (!loc || typeof loc !== 'object') return hookMissText({ ok: false, miss: 'failed' }, where)
       if ('error' in loc) return loc.error
+      // 舞台录着且要假指针:先把指针挪到要点的地方(渲染层画的,录像里看得见点了哪),再点
+      if (rec?.cursor && where === 'main') await hook(`cursorTo(${Math.round(loc.x)}, ${Math.round(loc.y)})`, 3_000, w)
       clickAt(wc, loc)
       // 元素名、通知的字是插件的:只进 target(引擎圈进数据区),did 只放宿主自己的话(Codex 评审:covered 曾拼进 did,漏出围栏)
       label = loc.label
@@ -398,6 +405,86 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     return { action: { did: `the next file dialog will answer with ${paths.length} path(s)`, target: (paths as string[]).join(', '), outline: '', newLogs: [], newNotices: [] } }
   }
 
+  // ── 演示舞台(pluginStage.ts,11-20):全分辨率截图、录像。普通沙箱没有这些动作 ──
+  const stage = self.stage
+  let outSeq = 0
+  const outDir = (): string => join(self.root, 'out')
+  /** 录着的那一段。armed = 下一次 getDisplayMedia 请求给不给;cursor = 点击前把假指针挪过去。 */
+  let rec: { cursor: boolean; armed: boolean; saved?: boolean; finalizing?: boolean } | null = null
+  /** 120 秒 × 16 Mbit/s ≈ 240 MB,再留些余量。 */
+  const MAX_RECORDING_BYTES = 320 * 1024 * 1024
+  if (stage) {
+    // 录像走「录本页签」:渲染层 getDisplayMedia,这里把请求它的那个顶层 frame 交回去。不是录屏幕:不要系统的屏幕录制权限,
+    // 窗口压在别的窗口底下照样出帧(11-20 探针实测 2880×1800@30)。只给 recordStart 武装过的那一次,其余一律拒
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+      const w = win()
+      if (rec?.armed && w && request.frame && request.frame === w.webContents.mainFrame) { rec.armed = false; callback({ video: request.frame }); return }
+      try { callback({} as Electron.Streams) } catch { /* 拒绝必抛(见 main.ts 屏幕共享那段),吞掉 */ }
+    })
+    ipcMain.handle('pluginSandbox:saveRecording', async (e, bytes: unknown, ext: unknown) => {
+      const w = win()
+      // 只收正在收尾的那一段、只收一次(Codex 11-20:舞台里的插件也能调这条,不拦就能一直往盘里写)
+      // 只在 recordStop 收尾时收(Codex 11-20:录着的时候先交一份就占掉了名额)、有大小上限
+      if (!w || e.sender !== w.webContents || !rec || !rec.finalizing || rec.saved) return null
+      const buf = bytes instanceof ArrayBuffer ? Buffer.from(new Uint8Array(bytes)) : ArrayBuffer.isView(bytes) ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : null
+      if (!buf || buf.length > MAX_RECORDING_BYTES) return null
+      rec.saved = true
+      await mkdir(outDir(), { recursive: true })
+      const file = join(outDir(), `rec-${++outSeq}.${ext === 'webm' ? 'webm' : 'mp4'}`)
+      await writeFile(file, buf, { flag: 'wx' }) // 独占新建:不写穿事先放在那里的软链
+      return file
+    })
+  }
+
+  type Rect = { x: number; y: number; width: number; height: number }
+  /** capture:舞台主窗(或其中一块)按原生像素密度截 PNG,写进 <舞台>/out/,回路径与像素尺寸(父进程读出来交给插件)。 */
+  async function capture(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const w = win()
+    if (!w) return { error: 'the stage window is not open' }
+    let rect = args.rect && typeof args.rect === 'object' ? args.rect as Rect : undefined
+    if (typeof args.selector === 'string') {
+      const r = await call(`rectOf(${JSON.stringify(args.selector)})`, 10_000, w)
+      if (!r.ok) return { error: hookMissText(r) }
+      const v = (r.value ?? {}) as Rect & { error?: string }
+      if (v.error) return { error: v.error }
+      rect = { x: v.x, y: v.y, width: v.width, height: v.height }
+    }
+    await hook('settle()', 10_000, w)
+    if (w.isDestroyed()) return { error: 'the stage window closed' }
+    w.webContents.invalidate()
+    await hook('frames(2)', 1500, w)
+    const img = await (rect ? w.webContents.capturePage(rect) : w.webContents.capturePage()).catch(() => null)
+    if (!img || img.isEmpty()) return { error: 'the stage window could not be captured' }
+    await mkdir(outDir(), { recursive: true })
+    const file = join(outDir(), `shot-${++outSeq}.png`)
+    await writeFile(file, img.toPNG(), { flag: 'wx' })
+    const { width, height } = img.getSize()
+    return { path: file, width, height }
+  }
+
+  async function recordStart(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const w = win()
+    if (!w) return { error: 'the stage window is not open' }
+    if (rec) return { error: 'the stage is already recording; stop it first' }
+    rec = { cursor: args.cursor !== false, armed: true }
+    const opts = { fps: Number(args.fps) || 30, maxMs: Number(args.maxMs) || 120_000, cursor: rec.cursor, format: args.format === 'webm' ? 'webm' : 'mp4' }
+    const r = await call(`recordStart(${JSON.stringify(opts)})`, 15_000, w)
+    const v = (r.ok ? r.value ?? {} : {}) as { mime?: string; error?: string }
+    if (!r.ok || v.error) { rec = null; return { error: r.ok ? v.error! : hookMissText(r) } }
+    return { mime: v.mime }
+  }
+
+  async function recordStop(): Promise<Record<string, unknown>> {
+    const w = win()
+    if (!rec) return { error: 'the stage is not recording' }
+    rec.finalizing = true
+    const r = await call('recordStop()', 80_000, w)
+    rec = null
+    if (!r.ok) return { error: hookMissText(r) }
+    const v = (r.value ?? {}) as Record<string, unknown>
+    return typeof v.error === 'string' ? { error: v.error } : v
+  }
+
   // 窗口标题写明是沙箱(以前就叫 Forsion,和用户那份分不清);页面自己的 <title> 不许盖掉它
   const locale = (self.ui as { locale?: unknown } | undefined)?.locale === 'en' ? 'en' : 'zh'
   const dress = (w: BrowserWindow): void => {
@@ -447,6 +534,9 @@ export function startSandboxChild(self: SandboxSelf, opts: {
       case 'click': case 'type': case 'press': case 'scroll': case 'space': return act(String(msg.op), args)
       case 'files': return arm(args)
       case 'settings': return settings(args)
+      case 'capture': return stage ? capture(args) : { error: 'unknown op' }
+      case 'recordStart': return stage ? recordStart(args) : { error: 'unknown op' }
+      case 'recordStop': return stage ? recordStop() : { error: 'unknown op' }
       case 'reload': await reloadAll(); return {}
       case 'show': {
         unsink()
@@ -497,7 +587,8 @@ export function startSandboxChild(self: SandboxSelf, opts: {
   // 保存即重载
   let watcher: FSWatcher | null = null
   let debounce: ReturnType<typeof setTimeout> | null = null
-  try {
+  // 舞台不监视:它的 dir 是舞台根目录,截图 / 录像就写在下面,一写就重载
+  if (!stage) try {
     watcher = watch(self.dir, { recursive: true }, (_ev, file) => {
       if (file && IGNORE.test(String(file))) return
       if (debounce) clearTimeout(debounce)
