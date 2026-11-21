@@ -174,3 +174,44 @@ describe('ctx.ui.mountRecord 的正文与隐藏列(10-24)', () => {
     expect(rows()[0].body).toBe('带上 **材料**')
   })
 })
+
+describe('待办清单的标题 = 行内 Markdown(11-21:任务卡也照格式画)', () => {
+  afterEach(async () => { const { useCalendarConfig } = await import('../store/calendarConfigStore'); useCalendarConfig.setState({ byVault: {} }) })
+  it('日历成员且有完成列:标题照格式显示,点了是原文编辑框,离开回到显示', async () => {
+    const { useCalendarConfig } = await import('../store/calendarConfigStore')
+    useCalendarConfig.setState({ byVault: { '/V': { colors: {}, hidden: [], defaultDbPath: null, members: { 'T.db': { dateCol: 'd1', checkboxCol: 'k1' } }, migrated: true } as never } })
+    await act(async () => { useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: d.rows.map((r) => ({ ...r, cells: { ...r.cells, c1: '**周会** 带 `x_y`' } })) })) })
+    await mount()
+    const shown = el.querySelector<HTMLElement>('.amx-cal-card-title-md')!
+    expect(shown.querySelector('strong')?.textContent).toBe('周会')
+    expect(shown.textContent).toBe('周会 带 x_y')
+    expect(el.querySelector('textarea.amx-cal-card-title')).toBeNull()
+    await act(async () => { shown.click() })
+    const box = el.querySelector<HTMLTextAreaElement>('textarea.amx-cal-card-title')!
+    expect(box.value).toBe('**周会** 带 `x_y`')
+    await act(async () => { box.dispatchEvent(new FocusEvent('blur')); box.dispatchEvent(new FocusEvent('focusout', { bubbles: true })) })
+    expect(el.querySelector('.amx-cal-card-title-md strong')?.textContent).toBe('周会')
+  })
+  it('空标题打字:第一个字落下后还在编辑框里(不跳成预览)', async () => {
+    const { useCalendarConfig } = await import('../store/calendarConfigStore')
+    useCalendarConfig.setState({ byVault: { '/V': { colors: {}, hidden: [], defaultDbPath: null, members: { 'T.db': { dateCol: 'd1', checkboxCol: 'k1' } }, migrated: true } as never } })
+    await act(async () => { useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: d.rows.map((r) => ({ ...r, cells: { ...r.cells, c1: '' } })) })) })
+    await mount()
+    const box = el.querySelector<HTMLTextAreaElement>('textarea.amx-cal-card-title')!
+    await act(async () => {
+      box.focus()
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box, 'Q')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(rows()[0].cells.c1).toBe('Q')
+    expect(el.querySelector('.amx-cal-card-title-md')).toBeNull()
+    expect(el.querySelector('textarea.amx-cal-card-title')).toBe(box)
+  })
+  it('不是待办清单(不在日历里):照旧是原文编辑框', async () => {
+    await act(async () => { useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: d.rows.map((r) => ({ ...r, cells: { ...r.cells, c1: '**周会**' } })) })) })
+    await mount()
+    expect(el.querySelector('.amx-cal-card-title-md')).toBeNull()
+    expect(el.querySelector<HTMLTextAreaElement>('textarea.amx-cal-card-title')!.value).toBe('**周会**')
+  })
+})
+

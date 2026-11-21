@@ -126,3 +126,8 @@ export const gfmWithAnchoredRules = gfm.flatMap((p): MilkdownPlugin[] =>
   : (p as unknown) === (remarkGFMPlugin.options as unknown) ? [gfmOptionsNoSingleTilde]
   : (p as unknown) === (remarkGFMPlugin.plugin as unknown) ? [p, ...strictTildeUnsafe]
   : [p])
+
+/** Chat Box 编辑器按档位挑零件(components/chatbox/editorPlugins):与笔记同一份带锚 mark 规则。 */
+export const anchoredMarkInputRules = { emphasisStar, emphasisUnderscore, inlineCode, strong, strikethrough }
+/** remark-gfm 只认 `~~`(选项 + 收窄 `~` 转义),排在 remarkGFMPlugin 两侧:选项在前、收窄在 `remarkGFMPlugin.plugin` 之后。 */
+export const gfmDoubleTildeOnly = { options: gfmOptionsNoSingleTilde, afterPlugin: strictTildeUnsafe }

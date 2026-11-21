@@ -1900,6 +1900,10 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amx-cal-card-title::placeholder { color: var(--text-faint, var(--text-muted)); font-weight: 500; }
 .amx-cal-card-title:focus { background: var(--bg-hover, var(--overlay-light)); }
 textarea.amx-cal-card-title { display: block; resize: none; field-sizing: content; max-height: calc(4lh + 4px); overflow-y: auto; overflow-wrap: anywhere; }
+.amx-cal-card-title-md { cursor: text; overflow-wrap: anywhere; }
+.amx-cal-card-title-md:hover { background: var(--bg-hover, var(--overlay-light)); }
+.amx-cal-card-title-md code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.9em; }
+.amx-db-wikilink.is-inert, .amx-db-url.is-inert { cursor: inherit; }
 
 /* 行基座(时间/属性共用):图标 + 内容 */
 .amx-cal-card-row { display: flex; gap: 8px; padding: 6px; border-radius: var(--radius-sm, 6px); }

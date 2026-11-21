@@ -50,6 +50,7 @@ Canonical types: `desktop/shared/chatBox.ts`.
 | `suggest` | `{ trigger, items(query), mention? }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
 | `insertText(text)` | Handle method. Inserts at the caret, replaces any selection, and focuses the input. Use it for a "#" button or voice transcription. It doesn't open the menu; the menu opens when the user keeps typing. |
 | `mentions`, `onMention` | 2026-11-20+. Turns on the host's own `@` panel (the same one as in notes): `'date'` dates, `'page'` notes in the current vault. See "The @ panel" below. |
+| `format` | 2026-11-21+. `'inline'` / `'basic'`: the input shows formatting such as bold and lists, and the value is Markdown. See "Formatting: format" below. |
 
 The toolbar's `el` sits inside the host mount layer and doesn't get the plugin view base styles, so give buttons in it a class such as `.btn.sm`.
 
@@ -109,6 +110,31 @@ const box = ctx.ui?.mountChatBox?.(el, {
   },
   onSubmit: ({ text }) => addTask(text),
 })
+```
+
+### Formatting: format
+
+`format: 'inline'` or `'basic'` swaps the textarea for an editor that shows formatting (a trimmed-down version of the one in notes, with the same syntax and shortcuts). The text in `value`, `onChange` and `onSubmit` is then Markdown. Without it you get the plain textarea and plain text, as before.
+
+- `'inline'`: formatting within one line. Bold `**x**`, italic `*x*`, strikethrough `~~x~~`, inline code `` `x` `` and links `[x](url)`; shortcuts ⌘/Ctrl+B, I and E, and ⌘/Ctrl+Alt+X for strikethrough. It stays one line: with `submitOn: 'enter'`, Enter submits, Shift+Enter does nothing, and pasted lines are joined. Use it for titles, tasks and other one-line values.
+- `'basic'`: `inline` plus bullet, numbered and task lists, quotes and code blocks. Shift+Enter starts a new line; Enter in a list or code block works as in notes (a new item, or a new line inside the code block).
+- Neither has headings, tables, callouts, embeds, images, HTML or bare-URL links: `# Title`, `![img](x.png)` and `https://…` stay literal text.
+- Plain text is stored exactly as typed: `snake_case`, URLs, `5*3`, `1. Buy milk` and `# not a heading` come back without added backslashes. Only text that would otherwise turn into formatting keeps a `\` (a literal `**`, for example). A value without formatting therefore reads the same to older readers (older app versions, the Agent, the raw database). Leading and trailing whitespace isn't kept (Markdown doesn't read it): after a pick the space stays on screen but isn't in the `onChange` text.
+- `#`, `[[` and `@` suggestions and `insertText` work as before. `insertText` inserts literal text; it is not parsed as Markdown.
+- To show a stored value, use `ctx.ui.parseInlineMarkdown(md)`. It uses the same grammar as the input, is synchronous and never throws, and returns `{ text, strong?, em?, strike?, code?, href?, wiki?, from, to }[]`. A `[[Name|Alias]]` run carries `wiki` (as written) and its `text` is the display name. `from` / `to` are the run's own offsets in the source (inside any delimiters), so your own parsing of the source (reading a date out of a title, say) can skip formatted runs. For screen-reader labels, tooltips, notifications and sorting, use the plain reading: join every run's `text`. Check the scheme before opening an `href`.
+- Check `ctx.ui.chatBoxCapabilities?.includes('format')` first. Older hosts ignore `format` and have no `parseInlineMarkdown`; their input is a plain textarea that can't write formatting, so showing existing values as plain text is correct there. The phone doesn't report `'format'` for now either and ignores the option (the editor hasn't been verified with phone keyboards yet), but it has `parseInlineMarkdown`, so stored values still show formatted.
+- Set it at mount. `update({ format })` re-creates the input (the draft is kept, undo history is cleared).
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const formatted = caps.includes('format') && typeof ctx.ui?.parseInlineMarkdown === 'function'
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  format: formatted ? 'inline' : undefined,
+  onSubmit: ({ text }) => addTask(text), // text is Markdown, e.g. '**Important** send the report'
+})
+// Showing it: formatted ? draw ctx.ui.parseInlineMarkdown(title) run by run : title as is
 ```
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.

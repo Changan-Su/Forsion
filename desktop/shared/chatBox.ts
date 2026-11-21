@@ -29,6 +29,27 @@ export type ChatBoxMention =
   /** `path` is vault-relative (`Projects/Plan.md`); `link` is what goes inside `[[ ]]` (bare name, or the path when the
    *  name is not unique). Inserted as `[[<link>]] ` by default. */
   | { kind: 'page'; path: string; link: string }
+/** `format` profiles; see `PluginChatBoxOptions.format`. */
+export type ChatBoxFormat = 'inline' | 'basic'
+
+/** One run of an inline Markdown value (`ctx.ui.parseInlineMarkdown`). Marks are set only when on. `from` / `to`: the run's
+ *  own source text (inside any delimiters, escapes included; a wiki run covers its whole `[[…]]`). Runs never overlap, and
+ *  the source outside every run is markup (delimiters, link targets), so a parser that edits the source can leave formatted
+ *  runs and markup alone by touching only unmarked runs. */
+export interface ChatBoxInlineToken {
+  text: string
+  strong?: true
+  em?: true
+  strike?: true
+  code?: true
+  /** Inside a `[text](href)` link. Check the scheme before opening it. */
+  href?: string
+  /** A `[[target|alias]]` wiki link: the inner text as written; `text` is what to show (the alias, else the target). */
+  wiki?: string
+  from: number
+  to: number
+}
+
 export interface PluginChatBoxOptions {
   value?: string
   modelId?: string
@@ -60,6 +81,16 @@ export interface PluginChatBoxOptions {
   /** A row was picked from the host's `@` panel. Return true to take it yourself (e.g. set a due date): the host then removes
    *  the typed `@query` and inserts nothing. Anything else (or an exception) inserts the default text. Synchronous. */
   onMention?(mention: ChatBoxMention): boolean | void
+  /** 2026-11-21+ (check `chatBoxCapabilities?.includes('format')`): the input shows formatting and the value is Markdown.
+   *  `'inline'`: bold, italic, strikethrough, inline code, links on one line (Enter submits with `submitOn: 'enter'`, Shift+Enter
+   *  does nothing, pasted lines are joined). `'basic'`: inline plus bullet / numbered / task lists, quotes and code blocks.
+   *  Neither has headings, tables, callouts, embeds, images, HTML or bare-URL links: those stay literal text.
+   *  The value keeps text as typed (`snake_case`, URLs, `5*3`, `1. x` are stored without backslashes); only text that would
+   *  otherwise turn into formatting keeps a `\`. Leading / trailing whitespace isn't kept (Markdown doesn't read it), so
+   *  `onChange` text can lack the space shown after a pick. Show it with `ctx.ui.parseInlineMarkdown` or your own CommonMark
+   *  reader. Older hosts ignore it (plain textarea, plain text), and so does the phone for now (no `'format'` capability
+   *  there; the reader is). Set it at mount; `update({ format })` re-creates the input. */
+  format?: ChatBoxFormat
   onChange?(draft: ChatBoxSubmission): void
   /** true clears the submitted text; false/rejection keeps it for retry. No automatic AI run. */
   onSubmit(draft: ChatBoxSubmission): boolean | Promise<boolean>
@@ -77,8 +108,8 @@ export interface PluginChatBoxHandle {
 /** Chat Box behaviour a plugin can't feature-detect with `?.`, because hosts that lack it ignore the option instead of
  *  rejecting it. Exposed as `ctx.ui.chatBoxCapabilities` (2026-11-04+); a host without that field has none of these.
  *  `suggestMany`: `suggest` takes an array. `suggestAbove`: the menu opens upward in the lower half of the window.
- *  `mentions`: `mentions` / `onMention` (2026-11-20+). */
-export const CHAT_BOX_CAPABILITIES = ['suggestMany', 'suggestAbove', 'mentions'] as const
+ *  `mentions`: `mentions` / `onMention` (2026-11-20+). `format`: `format` and `ctx.ui.parseInlineMarkdown` (2026-11-21+). */
+export const CHAT_BOX_CAPABILITIES = ['suggestMany', 'suggestAbove', 'mentions', 'format'] as const
 export type ChatBoxCapability = (typeof CHAT_BOX_CAPABILITIES)[number]
 
 export interface ChatBoxSuggestMatch {
