@@ -14,6 +14,7 @@
  *   6 脚本回放引擎:engine 'scripted' → 舞台里发一句话 → 页面上出现 engine.json 里写的回复
  *   7 互斥:舞台开着时别的插件 open → busy
  *   8 负对照:fixture 带 `..` → invalid;点名没装的插件 → plugin-missing
+ *   10 真实的内置插件(forsion-calendar)也能上舞台:open 认得、切得到日历 Space、能截图
  *   9 close → 舞台进程退出,再调 → closed
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
@@ -239,6 +240,26 @@ async function main() {
     check('9 close 之后再调 → closed', closedState === 'closed', closedState)
     const missing = await win.evaluate(async () => { try { await window.__stageApi.open({ plugins: ['not-installed-plugin'] }); return { ok: true } } catch (e) { return { ok: false, code: e.code } } })
     check('8c 点名没装的插件 → plugin-missing', missing.code === 'plugin-missing', JSON.stringify(missing))
+
+    // ── 10 真实的内置插件也能上舞台(演示插件拍日历要的就是这个):主实例启动时播种进隔离 home 的 forsion-calendar ──
+    const calDir = path.join(home, 'plugins', 'forsion-calendar')
+    if (!fs.existsSync(path.join(calDir, 'manifest.json'))) {
+      check('10 内置日历插件上舞台(本构建没播种 forsion-calendar,无从测)', false, fs.existsSync(path.join(home, 'plugins')) ? fs.readdirSync(path.join(home, 'plugins')).join(', ') : 'no plugins dir')
+    } else {
+      const cal = await win.evaluate(async () => {
+        try {
+          const s = await window.__stageApi.open({ plugins: ['forsion-calendar'], window: [1280, 800, 2], theme: 'light', clock: '2026-11-20T10:00' })
+          const a = await s.space('日历').catch((e) => ({ err: e.code + ' ' + e.message }))
+          const outline = (await s.read()).outline
+          const shot = await s.capture()
+          await s.close()
+          return { ok: true, plugins: s.plugins, a, outline: outline.slice(0, 600), png: Array.from(shot.bytes) }
+        } catch (e) { return { ok: false, code: e.code, error: e.message } }
+      })
+      if (cal.ok && SHOT_DIR) fs.writeFileSync(path.join(SHOT_DIR, 'stage-3-calendar.png'), Buffer.from(cal.png))
+      check('10 内置日历插件上舞台:open 认得、切得到日历 Space、能截图', cal.ok && cal.plugins.includes('forsion-calendar') && !cal.a?.err && cal.png.length > 10_000,
+        cal.ok ? `${JSON.stringify(cal.a)} · ${cal.outline.slice(0, 200)}` : JSON.stringify(cal))
+    }
   } catch (e) {
     check('台架本身没出错', false, e && e.stack || String(e))
   } finally {
