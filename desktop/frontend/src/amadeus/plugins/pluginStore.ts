@@ -10,6 +10,8 @@ import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
 import { readEntitlement } from './entitlement'
 import { setPluginViewHead, setPluginViewModes } from './pluginViewModes'
+import { markPluginSurface } from './pluginSurfaces'
+import { captureBridge, captureError, capturePluginElement, checkCaptureArgs, recordPluginElement } from './pluginCapture'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
 
@@ -1675,7 +1677,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (cancelled) return
         menu = m.openPluginContextMenu(at, latest, (run) => { guard(run) },
           () => { dispose.forget(); if (onClose) guard(onClose) }, // 自己关掉的(Esc / 点外面 / 点了某项)从账上划掉,别攒到停用(Codex 评审)
-          { keepOpen: opts?.keepOpen === true })
+          { keepOpen: opts?.keepOpen === true, owner: pluginId })
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" context menu failed`, e))
       return Object.assign(() => dispose(), {
         update: (next: unknown) => {
@@ -1696,7 +1698,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const dispose = scope.own('mount', () => { cancelled = true; surf?.close() }, 'dialog')
       void import('./partsSurface').then((m) => {
         if (cancelled) return
-        surf = m.openPluginDialog(pending, guard, () => { dispose.forget(); if (typeof pending.onClose === 'function') guard(pending.onClose) })
+        // 最后一个参数:整个对话框记作本插件的表面(ctx.ui.capture / record 的归属,宿主登记、不靠 DOM 属性)
+        surf = m.openPluginDialog(pending, guard, () => { dispose.forget(); if (typeof pending.onClose === 'function') guard(pending.onClose) }, 'primary', pluginId)
         if (cancelled) surf.close() // mount 里同步停用了插件 / 关了:那时 surf 还没赋值
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" dialog failed`, e))
       return {
@@ -1710,7 +1713,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (!ctxAlive()) return Promise.resolve(false)
       const ctl = new AbortController()
       const dispose = scope.own('mount', () => ctl.abort(), 'confirm')
-      return import('./partsSurface').then((m) => m.confirmPlugin(o, guard, ctl.signal))
+      return import('./partsSurface').then((m) => m.confirmPlugin(o, guard, ctl.signal, undefined, pluginId)) // 确认框也记作本插件的表面
         .then((v) => v && ctxAlive(), () => false)
         .finally(() => dispose.forget())
     }
@@ -1836,7 +1839,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const dispose = scope.own('mount', () => { cancelled = true; pop?.close() }, 'popover')
       void import('./partsSurface').then((m) => {
         if (cancelled) return
-        pop = m.openPluginPopover(anchor, o, guard, () => { dispose.forget(); if (typeof o.onClose === 'function') guard(o.onClose) })
+        pop = m.openPluginPopover(anchor, o, guard, () => { dispose.forget(); if (typeof o.onClose === 'function') guard(o.onClose) }, pluginId) // 最后一个参数:popover 记作本插件的表面
         if (cancelled) pop.close()
       }).catch((e) => console.error(`[amadeus] plugin "${pluginId}" popover failed`, e))
       return { update: () => pop?.update(), dispose: () => dispose() }
@@ -2536,6 +2539,20 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mountWebCard: uiMountWebCard,
       // 只有桌面壳有 <webview>(web / 移动端没有):那两端不给这个口,插件按「没有」处理
       ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
+      // 出图 / 录屏(2026-11-19):只有桌面壳的出图桥在时才给(网页 / 手机 / 旧壳 = undefined);只认本插件登记过的表面
+      // (pluginSurfaces:视图、浮层、对话框、popover)。参数形状错同步抛,归属 / 可见这些运行期条件走 reject(带 code)。
+      ...(captureBridge() ? {
+        capture: (el: Element, opts?: import('./types').PluginCaptureOptions) => {
+          checkCaptureArgs(el, opts, 'capture')
+          if (!ctxAlive()) return Promise.reject(captureError('disposed'))
+          return capturePluginElement(pluginId, el, opts ?? {}, ctxAlive)
+        },
+        record: (el: Element, opts?: import('./types').PluginVideoOptions) => {
+          checkCaptureArgs(el, opts, 'record')
+          if (!ctxAlive()) return Promise.reject(captureError('disposed'))
+          return recordPluginElement(pluginId, el, opts ?? {}, { alive: ctxAlive, own: (cancel) => scope.own('mount', cancel, 'record') })
+        },
+      } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
@@ -2617,7 +2634,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
           onAnchorChange: onAnchorChange && ((a) => { if (ctxAlive()) onAnchorChange(a) }),
         } as FloatOptions)
         h.el.dataset.floatOwner = pluginId
-        const dispose = scope.own('mount', () => h.close(), 'float')
+        const unmark = markPluginSurface(h.el, pluginId) // 浮层是本插件的表面:窗口级浮层是摆比面板大的演示图的唯一地方
+        const dispose = scope.own('mount', () => { unmark(); h.close() }, 'float')
         return { el: h.el, get anchor() { return h.anchor }, get closed() { return h.closed }, move: (a) => h.move(a), close: dispose }
       },
       // 提示框:LCL 那一份(hoverSurface.ts),同宿主按钮 / 侧栏行;插件停用 / 重载时统一收掉。同步可用,不走动态 import(很小)。

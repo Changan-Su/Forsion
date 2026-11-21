@@ -526,6 +526,29 @@ ctx.registerAppearance?.({ id, label, labelEn, icon, splash })
 
 Plugin tasks, read-only external engines, isolated Git workspaces, native schedules and the Desktop MCP seams are covered in [Task SDK](./plugin-tasks.md).
 
+## Pictures and videos of your own UI (since 2026-11-19, desktop)
+
+A plugin can take a PNG of **its own** UI (`ctx.ui.capture`) or record a video of it (`ctx.ui.record`) — for feature screenshots and demo videos made automatically. The host reads the real pixels on screen, so host parts mounted inside your view (Chat Box, editor, table, chat), canvases and web surfaces come out exactly as drawn — a DOM-to-image copy can't do that. Desktop app only; on web, mobile and older versions both are `undefined`, so call them with optional chaining.
+
+```js
+const shot = await ctx.ui.capture?.(el)            // { bytes: PNG, mime: 'image/png', width, height, scale }
+const rec = await ctx.ui.record?.(el, { fps: 30, maxSeconds: 30 })  // the first frame is already in when this resolves
+/* … run the demo … */
+const video = await rec.stop()                      // { bytes, mime, width, height, durationMs, frames, stoppedBy }
+```
+
+Rules:
+
+- **Only your own elements**: the element must be inside a surface the host gave your plugin — your views, `ctx.ui.float` floats, your own `openDialog` / `confirm` / `popover` / `contextMenu`. Host elements and other plugins' views are refused (`not-owned`). Tool result cards, settings pages and embed renderers don't count yet.
+- **Only what is on screen**: the whole element must be visible — not scrolled out of its scroll container, not cut by a panel edge, not under someone else's layer (`clipped` / `covered`). Your own floats, dialogs, popovers and `ctx.ui.contextMenu` menus on top are fine. For a picture bigger than a panel, stage it in a window-scope `ctx.ui.float`, or shrink it with a CSS transform.
+- **Pixel density follows the screen**: 2× on Retina / 200% Windows scaling, 1× on a standard display. `scale` only lowers it — it never invents pixels (the result's `scale` is what you got).
+- The host waits two frames so your last DOM change is painted; wait for your own fonts and images first (`document.fonts.ready`, `img.decode()`).
+- **No mouse cursor**; a minimized / hidden window can't be captured (`window-hidden`).
+- **Recording**: the rules above are checked once at the start. The frame size is fixed at the start (even numbers, fitted into 3840 × 2160); it follows the element once it has moved (frames taken while it is moving are dropped, so a dragged or scrolling element holds its last frame until it settles), and holds the last frame while the element is off screen, smaller than that frame, or the window is minimized — nothing else gets recorded instead. Menus or host notices that appear over it later are in the video. One recording per window at a time (`busy`); no audio. MP4 / H.264 by default (plays in WeChat, CapCut, QuickTime), WebM where that isn't available; pass `mimeType: 'video/webm;codecs=vp9'` for WebM. The video stays in memory until `stop()`; `maxSeconds` counts from the first frame, default 60, at most 300. When `maxSeconds` ends it, `stop()` still returns that video; `cancel()` throws it away. Disabling / reloading the plugin cancels it; if the encoder fails the recording is dropped and `done` / `stop()` give `null`.
+- Failures reject with an error named `PluginCaptureError` whose `code` is one of `not-owned` / `detached` / `empty` / `clipped` / `covered` / `window-hidden` / `busy` / `unsupported` / `unavailable` / `disposed` / `failed`; a non-element throws a TypeError synchronously.
+
+Measured on macOS Retina: a 480 × 300 element gives a 960 × 600 PNG; a whole plugin view (2162 × 1728 pixels) recorded at 30 fps gets about 29 fps. These two calls keep plugins to their own UI by contract — they are not a sandbox: plugins run in the same renderer as the host.
+
 ## Tool result cards
 
 A plugin with an engine half can give the tools it registers a result card: after Tangu calls such a tool successfully, the chat shows the plugin's card instead of the generic one-line tool record. The card is drawn right in the Forsion interface and follows the theme and text size. Only tools the plugin's own engine half registered can get a card; built-in tools and other plugins' tools cannot (the one exception is hard-coded in the host: the signed Forsion Extend can draw cards for the two built-in tools that publish web pages and list my web pages). From 2026-10-28 a `match` can take only some of a tool's calls (for example when one argument has a certain value). While the tool is still running, when it failed or is waiting for your approval, and while the plugin is disabled or reloading, the generic record shows as before. Cards are still there when you reopen an old conversation.

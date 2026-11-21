@@ -343,6 +343,26 @@ else { f.el.append(card); head.dataset.floatDrag = '' }         // content goes 
 - Wrong shapes throw `TypeError`; a disabled plugin gets a no-op handle. Desktop-level floats (over other apps) are host-only: no `'desktop'` scope for plugins.
 - To float a whole registered **view** (not DOM you draw), use `ctx.workspace.open(viewId, { layer: { float: 'space' | 'window' | 'view', anchor } })` (2.13.8+; `'view'` needs `host`). Same layers and anchors; the host draws the card head (title, "Show in main panel", close) and your `mount` gets `view.surface` `'mini'` (Mini look, default) or `'floating'` (`form: 'main'`). Same view + `key` reopens that card with new params. Closed on disable / reload / unregister / `close()`. `space` cards are saved with that Space's layout (view, current params, look, key, anchor) and reopen after restart / on returning / on undoing "Reset layout" (late-registering views open when they register); "Reset layout" closes them. `window` / `view` cards are not restored (a `view` card is reopened by its host view on mount); their anchor is remembered per view + key.
 
+### Pictures and videos of your own UI: ctx.ui.capture / ctx.ui.record (2026-11-19+)
+
+For screenshots and demo videos made by a plugin (feature demos, "concept card + real UI" figures). The host reads the real composited pixels on screen, so host parts mounted in your view (Chat Box, Markdown editor, table, `tangu.mountChat`), canvases and web surfaces come out as drawn. **Desktop app only**: on web / mobile / older hosts both are `undefined` — always `ctx.ui.capture?.(…)`.
+
+```js
+const shot = await ctx.ui.capture?.(stage)                 // { bytes, mime: 'image/png', width, height, scale }
+if (shot) await ctx.app.writeBytes?.(`${dir}/demo.png`, shot.bytes)    // into the vault (needs an open vault), or upload it
+const rec = await ctx.ui.record?.(stage, { fps: 30, maxSeconds: 30 })   // resolves when the first frame is in
+await runDemoSteps()                                       // drive your own UI; draw your own pointer if the demo needs one
+const video = await rec?.stop()                            // { bytes, mime, width, height, durationMs, frames, stoppedBy }
+```
+
+- **Only your own surfaces**: the element must be inside your views (`registerView`), `ctx.ui.float` floats, your `openDialog` / `confirm` / `popover` / `contextMenu`. Host elements and other plugins' views → `not-owned`. Tool result cards, settings pages, embed renderers don't count yet. The host keeps this list itself; `data-*` attributes don't make anything yours.
+- **Only what is on screen**: the whole element must be visible — not scrolled out of its scroller, not cut by a panel edge, not larger than the window (`clipped`), nothing that isn't yours on top (`covered`; your own floats, dialogs, popovers and `ctx.ui.contextMenu` menus are fine). For a figure bigger than a panel, stage it in a window-scope `ctx.ui.float` (or scale it down with a CSS transform) and capture that.
+- **Density = the screen's** (2× on Retina / Windows 200%, 1× on a standard display). `opts.scale` only lowers it; read the result's `scale` for what you got. No upscaling.
+- Waits two frames for your last DOM change to paint; await `document.fonts.ready` / `img.decode()` yourself first. No mouse cursor. Minimized / hidden window → `window-hidden`.
+- **record**: checked once at the start; frame size fixed at the start (even, fitted into 3840 × 2160); follows the element once it has moved (frames taken mid-move are dropped: a dragged / scrolling element holds its last frame until it settles); while it is off screen, smaller than that frame, or the window is minimized the last frame is held (nothing else is recorded). Later overlays over it (menus, host toasts) are in the video. One per window (`busy`), no audio. Default MP4 / H.264 (`video/mp4;codecs=avc1`), WebM where H.264 is missing; `mimeType` picks one, unknown → `unsupported`. `fps` 1–60 (default 30; measured ~29 fps for a 2162 × 1728 region on an M-series Mac), `maxSeconds` 1–300 from the first frame (default 60; the video sits in memory until `stop()`). Auto-stop at `maxSeconds` → `done` resolves and `stop()` returns the same video; `cancel()` → `null`; disable / reload cancels; an encoder error drops it (`null`). `stoppedBy`: `stop` | `maxSeconds` | `detached`.
+- Errors: rejection named `PluginCaptureError` with `code` ∈ `not-owned` `detached` `empty` `clipped` `covered` `window-hidden` `busy` `unsupported` `unavailable` `disposed` `failed`; a non-element / bad option type throws `TypeError` synchronously.
+- It is a contract guard, not a sandbox (plugins share the renderer); don't try to capture host UI around it.
+
 ### Opening views: ctx.workspace.open (2.13.8+)
 
 Where (`layer`) and what it looks like (`form`) written apart; `openView` / `openMiniPanel` / `openFloatingPanel` are fixed forms of it and keep working. Feature-detect `ctx.workspace?.open`.

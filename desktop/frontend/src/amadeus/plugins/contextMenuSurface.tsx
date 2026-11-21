@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { Check } from 'lucide-react'
 import { OverlayAt, nativeSheetPresenter, runNativeSheetMenu, type SheetMenuSection } from '@lcl/engine'
 import { pluginText } from './pluginText'
+import { markPluginSurface } from './pluginSurfaces'
 import { vocabIcon } from './pluginIcon'
 import './pluginParts.css'
 
@@ -15,7 +16,8 @@ export type PluginMenuEntry =
   | { kind: 'sep' }
   | { kind: 'head'; label: unknown }
 export type PluginMenuAt = { x: number; y: number } | { anchor: HTMLElement; align?: 'start' | 'end'; side?: 'bottom' | 'top' }
-export interface PluginMenuOptions { keepOpen?: boolean }
+/** `owner`:开菜单的插件 id —— 菜单记作它的表面(ctx.ui.capture / record:自己开的菜单盖在自己视图上不算「被挡」)。 */
+export interface PluginMenuOptions { keepOpen?: boolean; owner?: string }
 /** 调用 = 关;`update` = 换一份行(关了之后是空操作)。 */
 export type PluginMenuHandle = (() => void) & { update(items: readonly PluginMenuEntry[]): void }
 
@@ -71,6 +73,7 @@ export function openPluginContextMenu(
 function webMenu(at: PluginMenuAt, items: readonly PluginMenuEntry[], guard: (run: () => void) => void, onClosed: (() => void) | undefined, opts: PluginMenuOptions): PluginMenuHandle {
   const host = document.createElement('div')
   overlayLayer('anchor' in at ? at.anchor : document.elementFromPoint?.(at.x, at.y)).append(host)
+  if (opts.owner) markPluginSurface(host, opts.owner)
   const root = createRoot(host)
   let open = true
   const close = (): void => {

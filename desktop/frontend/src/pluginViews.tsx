@@ -21,6 +21,7 @@ import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
 import { registerMessages, useI18n } from './i18n'
 import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewHeadOf, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { markPluginSurface } from '@amadeus/plugins/pluginSurfaces'
 import { pluginText } from '@amadeus/plugins/pluginText'
 import { pruneStalePluginCompanions, setPluginCompanions } from './pluginCompanions'
 import { EmptyState } from './components/EmptyState'
@@ -100,6 +101,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     const gestureEvents = ['pointerdown', 'click', 'keydown'] as const
     const onGesture = (e: Event): void => { if (e.isTrusted && pluginId) notePluginGesture(pluginId) }
     for (const t of gestureEvents) el.addEventListener(t, onGesture, true)
+    // 视图容器记作本插件的表面:ctx.ui.capture / record 只认登记册里的(不认 data-guide-owner,那个谁都能写)
+    const unmarkSurface = pluginId ? markPluginSurface(el, pluginId) : null
     const fail = (e: unknown): void => {
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       if (pluginId) recordDevMountError(pluginId, def.id, e)
@@ -176,6 +179,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       listeners.current.clear()
       layoutSubscriptions.forEach(off => off()); layoutSubscriptions.clear(); detachLayout?.()
       for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
+      unmarkSurface?.()
       if (typeof cleanup === 'function') runCleanup(cleanup)
       el.replaceChildren()
     }

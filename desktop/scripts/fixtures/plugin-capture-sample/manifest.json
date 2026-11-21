@@ -1,0 +1,10 @@
+{
+  "id": "plugin-capture-sample",
+  "name": "出图录屏样例",
+  "nameEn": "Capture sample",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "一块四角纯色 + 走动计数器的出图台,一块半截滚出滚动容器的元素。由 scripts/plugin-capture.check.cjs 驱动。",
+  "descriptionEn": "A stage with four solid corners and a running counter, plus an element half scrolled out of its scroller. Driven by scripts/plugin-capture.check.cjs.",
+  "main": "main.js"
+}

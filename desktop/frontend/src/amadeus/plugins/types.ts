@@ -2152,6 +2152,87 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 
 
 
+/** Why `ctx.ui.capture` / `ctx.ui.record` refused (2026-11-19+). The rejection is an `Error` named `PluginCaptureError`
+ *  with one of these in `code`; `message` says the same in English.
+ *  - `not-owned`: the element is not inside a surface the host handed to your plugin (your views, `ctx.ui.float`,
+ *    your `openDialog` / `confirm` / `popover` / `contextMenu`). Tool result cards, settings pages and embed renderers don't count yet.
+ *  - `detached`: not in the document (or not in this window).
+ *  - `empty`: zero width or height (`display: none`, collapsed).
+ *  - `clipped`: part of it is outside what is on screen — scrolled out of its scroll container, cut by a panel
+ *    edge, or larger than the window. Scroll it into view, or capture a smaller element.
+ *  - `covered`: something that isn't yours lies on top of it (a host toast, another panel, a menu someone else
+ *    opened). Your own floats, dialogs, popovers and `ctx.ui.contextMenu` menus on top are fine.
+ *  - `window-hidden`: the window is minimized or hidden — there are no pixels to read.
+ *  - `busy`: (record) this window is already recording.
+ *  - `unsupported`: (record) the asked `mimeType` can't be recorded here.
+ *  - `unavailable`: the host has no capture bridge (not the desktop app).
+ *  - `disposed`: your plugin was disabled or reloaded meanwhile.
+ *  - `failed`: anything else (the screenshot came back empty, timed out). */
+export type PluginCaptureErrorCode =
+  | 'not-owned' | 'detached' | 'empty' | 'clipped' | 'covered' | 'window-hidden'
+  | 'busy' | 'unsupported' | 'unavailable' | 'disposed' | 'failed'
+
+/** Options of `ctx.ui.capture`. */
+export interface PluginCaptureOptions {
+  /** At most this many image pixels per CSS pixel. Default = the screen's own density (2 on Retina / 200% Windows
+   *  scaling, 1 on a standard display). Only lowers: asking for 2 on a 1× display gives 1× (the result's `scale` says). */
+  scale?: number
+}
+
+/** A picture from `ctx.ui.capture`: the real composited pixels of the element's box on screen. */
+export interface PluginCaptureResult {
+  /** PNG file bytes. */
+  bytes: Uint8Array
+  mime: 'image/png'
+  /** Pixel size of the PNG. */
+  width: number
+  height: number
+  /** Pixels per CSS pixel actually delivered (`width / element width`). */
+  scale: number
+}
+
+/** Options of `ctx.ui.record`. */
+export interface PluginVideoOptions {
+  /** Frames per second, 1–60 (default 30). Real rate depends on the machine: the frame count is in the result. */
+  fps?: number
+  /** Stops by itself this long after the first frame, 1–300 (default 60). `stop()` afterwards still returns the video. */
+  maxSeconds?: number
+  /** Pixels per CSS pixel, only lowers (default = screen density). The frame is also fitted into 3840 × 2160. */
+  scale?: number
+  /** Container / codec, e.g. `'video/webm;codecs=vp9'`. Default: MP4 / H.264 where the host can, else WebM. */
+  mimeType?: string
+  /** Encoder bitrate (default: from frame size and fps, 2–16 Mbps). */
+  videoBitsPerSecond?: number
+}
+
+/** What a recording hands back. */
+export interface PluginVideoResult {
+  bytes: Uint8Array
+  /** What the file is, e.g. `'video/mp4;codecs=avc1'` or `'video/webm;codecs=vp9'`. */
+  mime: string
+  width: number
+  height: number
+  durationMs: number
+  /** Frames actually captured (lower than fps × seconds on a slow machine or while nothing could be read). */
+  frames: number
+  /** Why it ended: your `stop()`, `maxSeconds`, the element left the document (`detached`). */
+  stoppedBy: 'stop' | 'maxSeconds' | 'detached'
+}
+
+/** A running recording from `ctx.ui.record`. The first frame is already in when you get it. */
+export interface PluginVideoRecording {
+  readonly mime: string
+  /** Video frame size in pixels (even numbers; fixed for the whole recording). */
+  readonly width: number
+  readonly height: number
+  /** Finish and get the video. Calling it again, or after `maxSeconds` / `detached` ended it, returns the same result. */
+  stop(): Promise<PluginVideoResult | null>
+  /** Throw the recording away (`done` / `stop()` resolve `null`). */
+  cancel(): void
+  /** Settles once the recording ends, however it ended: the result, or `null` (cancelled, plugin disabled, the encoder failed). */
+  readonly done: Promise<PluginVideoResult | null>
+}
+
 export interface PluginContext {
   /** Explicit read-only Agent fields; never export a raw settings blob. Revoked on disable/reload. */
   registerAgentSettings?(def: import('../../../../../tangu-agent/src/contracts/agentSettings').AgentSettingsContribution): void
@@ -2553,6 +2634,32 @@ export interface PluginContext {
      *  pens and stroke feel as a `.excalidraw.md` board, without its chrome. See PluginBoardOptions.
      *  Feature-detect on older hosts: `ctx.ui?.mountBoard`. */
     mountBoard?(el: HTMLElement, opts: PluginBoardOptions): PluginBoardHandle
+    /** A PNG of one of your own elements (2026-11-19+, desktop app only — `undefined` on web, mobile and older hosts:
+     *  call `ctx.ui.capture?.(el)`). The host reads the real pixels on screen, so host parts you mounted inside (Chat
+     *  Box, editor, table, chat), canvases and web surfaces all come out as drawn; a DOM-to-image copy can't do that.
+     *  - Only elements inside a surface the host gave your plugin: your views, `ctx.ui.float` floats, your `openDialog` /
+     *    `popover` / `contextMenu` (`not-owned` otherwise).
+     *  - Only what is on screen right now: the whole element must be visible — not scrolled out, not cut by a panel
+     *    edge, not under someone else's menu. For a picture bigger than a panel, stage it in a window-scope
+     *    `ctx.ui.float` or shrink it with a CSS transform. It waits two frames for your last DOM change to paint;
+     *    wait for your own fonts / images first (`document.fonts.ready`, `img.decode()`).
+     *  - Pixel density = the screen's (2× on Retina). `opts.scale` only lowers it.
+     *  - The mouse cursor is never in it. A minimized / hidden window can't be captured (`window-hidden`).
+     *  Rejects with a `PluginCaptureError` (see PluginCaptureErrorCode for `code`); a non-element throws a TypeError. */
+    capture?(el: Element, opts?: PluginCaptureOptions): Promise<PluginCaptureResult>
+    /** A video of one of your own elements (2026-11-19+, desktop app only — `ctx.ui.record?.(el)`). Same rules as
+     *  `capture` for which elements and what must be visible at the start. Resolves once the first frame is in.
+     *  - The frame size is fixed at the start; the recording follows the element when it has moved (a frame taken while
+     *    it is moving is dropped, so a dragged or scrolling element holds its last frame until it settles). While it is
+     *    (partly) off screen, smaller than that frame, or the window is minimized, the last frame is held too —
+     *    nothing else is recorded instead.
+     *  - Whatever appears over the element later (menus you open, a host toast) is in the video: only the start is
+     *    checked. The mouse cursor is not in it — draw your own pointer for a demo.
+     *  - One recording per window at a time (`busy`). No audio.
+     *  - MP4 / H.264 by default where available, else WebM; the result's `mime` says which. WebM from the recorder
+     *    has no duration in its header (players still play it; remux if you need seeking).
+     *  - The video stays in memory until `stop()`: keep `maxSeconds` honest (≤ 300). Plugin disable / reload cancels. */
+    record?(el: Element, opts?: PluginVideoOptions): Promise<PluginVideoRecording>
     /** A floating card or notice over one of three scopes (2026-11-07+), instead of absolutely positioning your own:
      *  a view (`host`), the current Space, or the whole window — see PluginFloatOptions. The host owns the layers, the
      *  stacking order (Space floats sit above the splitters and below menus; window floats below tooltips and menus),

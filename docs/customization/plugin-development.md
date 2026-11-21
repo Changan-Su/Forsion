@@ -526,6 +526,29 @@ ctx.registerAppearance?.({ id, label, labelEn, icon, splash })
 
 插件任务、只读外部引擎、隔离 Git 工作区、原生定时与 Desktop MCP 接缝见 [任务 SDK](./plugin-tasks.md)。
 
+## 出图与录屏（2026-11-19 起，桌面版）
+
+插件可以给**自己的**界面拍一张 PNG(`ctx.ui.capture`),或录一段视频(`ctx.ui.record`),用来自动做功能演示图、演示视频。宿主读的是屏上真实画出来的像素,所以挂在插件视图里的宿主零件(Chat Box、编辑器、表格、对话)、canvas、网页面板都照原样出来——把 DOM 复刻成图片的做法做不到这一点。只有桌面版有;网页版、手机和旧版本上这两个口是 `undefined`,用可选链调用。
+
+```js
+const shot = await ctx.ui.capture?.(el)            // { bytes: PNG, mime: 'image/png', width, height, scale }
+const rec = await ctx.ui.record?.(el, { fps: 30, maxSeconds: 30 })  // 拿到时第一帧已经录进去了
+/* … 演示操作 … */
+const video = await rec.stop()                      // { bytes, mime, width, height, durationMs, frames, stoppedBy }
+```
+
+规则:
+
+- **只能截自己的**:元素必须在宿主交给本插件的表面里——自己的视图、`ctx.ui.float` 浮层、自己开的 `openDialog` / `confirm` / `popover` / `contextMenu`。宿主元素、别的插件的视图一律拒(`not-owned`)。工具结果卡片、设置页、嵌入渲染器这一期还不算。
+- **只能截屏上看得见的**:整块元素都要在屏上——没被滚出滚动容器、没被面板边裁掉、没被别人的东西盖住(`clipped` / `covered`)。自己的浮层、对话框、popover、`ctx.ui.contextMenu` 菜单盖在上面不算挡。要拍比面板大的图,放进窗口级 `ctx.ui.float`,或用 CSS transform 缩小。
+- **像素密度跟屏幕走**:Retina / Windows 200% 缩放下是 2 倍,普通屏 1 倍;`scale` 只能往下调,不能放大造像素(结果里的 `scale` 是实际给的)。
+- 截图前宿主等两帧,让刚改的 DOM 画上屏;自己的字体、图片先等好(`document.fonts.ready`、`img.decode()`)。
+- **不带鼠标指针**;窗口最小化 / 隐藏时拍不了(`window-hidden`)。
+- **录屏**:开始时检查一次上面的规则;画幅在开始时定下(宽高取偶数,最大塞进 3840 × 2160),元素挪到新位置后跟着走(正在挪的那几帧丢掉,拖动 / 滚动中的元素停在上一帧,停稳了再接上),元素出屏、缩得比画幅小或窗口最小化期间也停在上一帧,不会录进别的东西。之后盖上来的菜单、宿主提示会录进去。同一扇窗同时只能录一段(`busy`),没有声音。默认 MP4 / H.264(公众号、剪映、QuickTime 都直接认),不支持时退回 WebM;要 WebM 就传 `mimeType: 'video/webm;codecs=vp9'`。视频在内存里攒到 `stop()`,`maxSeconds` 从第一帧算,默认 60、最多 300。`maxSeconds` 到了自动停,之后 `stop()` 拿到的是同一段;`cancel()` 扔掉。插件停用 / 重载时自动取消;编码器出错时整段作废,`done` / `stop()` 给 `null`。
+- 失败时 reject 一个 `name` 为 `PluginCaptureError` 的错误,`code` 是 `not-owned` / `detached` / `empty` / `clipped` / `covered` / `window-hidden` / `busy` / `unsupported` / `unavailable` / `disposed` / `failed` 之一;传的不是元素时同步抛 TypeError。
+
+实测(macOS Retina):截 480 × 300 的元素得 960 × 600 PNG;整块插件视图(2162 × 1728 像素)按 30 fps 录,实得约 29 fps。这两个口只按约定挡住「截别人的界面」,不是沙箱:插件和宿主跑在同一个渲染进程里。
+
 ## 工具结果卡片
 
 带引擎半身的插件,可以给自己注册的工具配一张结果卡片:Tangu 调用这个工具成功之后,对话里画的是插件的卡片,不再是一行通用的工具记录。卡片直接画在 Forsion 界面里,跟着主题、字号走。只有插件自己引擎半身注册的工具才能配卡片,内置工具和别的插件的工具都不行(唯一的例外写死在宿主里:签名的 Forsion Extend 可以给发布网页、查我的网页这两个内置工具画卡);2026-10-28 起可以用 `match` 只接这个工具的一部分调用(比如某个参数取某个值时);工具还在跑、出错、等你批准,或者插件停用、重新加载时,照旧显示通用记录。重新打开旧对话,卡片照样在。

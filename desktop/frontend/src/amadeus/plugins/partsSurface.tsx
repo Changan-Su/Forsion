@@ -14,6 +14,7 @@ import { WebCard, type WebCardAction } from '../../components/WebCard'
 import { pluginText } from './pluginText'
 import { vocabIcon } from './pluginIcon'
 import { overlayLayer, type PluginMenuEntry } from './contextMenuSurface'
+import { markPluginSurface } from './pluginSurfaces'
 import type { PluginConfirmOptions, PluginControlOption, PluginDialogAction, PluginDialogOptions, PluginEmptyState, PluginPopoverOptions, PluginToolbarControl, PluginWebCard, PluginWebCardAction } from './types'
 import './pluginParts.css'
 
@@ -38,7 +39,8 @@ function runCleanup(fn: unknown): void {
 export interface DialogSurface { update(patch: Partial<PluginDialogOptions>): void; close(): void }
 
 /** 原生 <dialog> + showModal:焦点圈、Esc、遮罩、宿主进场动效(base.css 的 dialog[open])都是原生那一份。 */
-export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClosed: () => void, focus: 'primary' | 'cancel' = 'primary'): DialogSurface {
+/** `owner`:开对话框的插件 id —— 整个对话框记作它的表面(ctx.ui.capture / record 的归属;盖在自己视图上不算「被挡」)。 */
+export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClosed: () => void, focus: 'primary' | 'cancel' = 'primary', owner?: string): DialogSurface {
   let cur = { ...opts }
   const dlg = document.createElement('dialog')
   dlg.className = 'plugin-dialog'
@@ -108,6 +110,7 @@ export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClos
   })
   paint()
   document.body.append(dlg)
+  if (owner) markPluginSurface(dlg, owner)
   cleanup = guard(() => cur.mount?.(content))
   dlg.showModal()
   const first = focus === 'cancel' ? bar.querySelector<HTMLButtonElement>('[data-secondary]') : null
@@ -120,7 +123,7 @@ export function openPluginDialog(opts: PluginDialogOptions, guard: Guard, onClos
 
 /** 是 / 否:Android 上先走原生确认框,宿主没有 / 画不了再落回网页对话框。
  *  focus:网页对话框初始焦点(缺省 = danger 时落取消,否则落主按钮);宿主替插件问用户时传 'cancel',正在打字的回车不会替用户点了允许。 */
-export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: AbortSignal, focus?: 'primary' | 'cancel'): Promise<boolean> {
+export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: AbortSignal, focus?: 'primary' | 'cancel', owner?: string): Promise<boolean> {
   const ok = o.ok ?? (() => translate(o.danger ? 'pluginparts.delete' : 'pluginparts.ok'))
   const cancel = o.cancel ?? (() => translate('pluginparts.cancel'))
   const web = (): Promise<boolean> => new Promise((resolve) => {
@@ -129,7 +132,7 @@ export function confirmPlugin(o: PluginConfirmOptions, guard: Guard, signal: Abo
     const d = openPluginDialog({
       title: o.title, body: o.body,
       actions: [{ label: cancel }, { label: ok, primary: true, danger: !!o.danger, run: () => { answer = true } }],
-    }, guard, () => resolve(answer), focus ?? (o.danger ? 'cancel' : 'primary'))
+    }, guard, () => resolve(answer), focus ?? (o.danger ? 'cancel' : 'primary'), owner)
     signal.addEventListener('abort', () => d.close(), { once: true })
   })
   if (signal.aborted) return Promise.resolve(false)
@@ -286,7 +289,8 @@ export function mountPluginWebCard(el: HTMLElement, card: HostWebCard, guard: Gu
 let currentPop: (() => void) | null = null
 
 /** 锚在元素上的小面板:宿主 .ui-popover 外壳,夹边、翻面、界面缩放、Esc / 点外面 / 失焦关。同一时刻只开一个。 */
-export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOptions, guard: Guard, onClosed: () => void): { update(): void; close(): void } {
+/** `owner`:同 openPluginDialog —— popover 记作开它的插件的表面。 */
+export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOptions, guard: Guard, onClosed: () => void, owner?: string): { update(): void; close(): void } {
   currentPop?.()
   const el = document.createElement('div')
   el.className = 'ui-popover plugin-popover'
@@ -294,6 +298,7 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
   if (opts.label) el.setAttribute('aria-label', pluginText(opts.label))
   el.style.visibility = 'hidden'
   overlayLayer(anchor).append(el)
+  if (owner) markPluginSurface(el, owner)
   let open = true
   let cleanup: unknown
   let stop: (() => void) | null = null

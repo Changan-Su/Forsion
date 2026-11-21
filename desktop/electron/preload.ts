@@ -140,6 +140,9 @@ const api = {
   /** 截当前窗口的一块视口矩形(Agent Desk 截屏);返回 data:image/png;base64,… ,失败 null。 */
   captureRect: (rect: { x: number; y: number; width: number; height: number }): Promise<string | null> =>
     ipcRenderer.invoke('ui:captureRect', rect),
+  /** 插件出图 / 录屏(ctx.ui.capture / record):视口矩形 → 原生像素 PNG 或 BGRA 位图。归属在渲染层判。 */
+  captureRegion: (req: import('../shared/pluginCapture').CaptureRegionRequest): Promise<import('../shared/pluginCapture').CaptureRegionReply> =>
+    ipcRenderer.invoke('ui:captureRegion', req),
   onInboxOpen: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on('inbox:open', listener)

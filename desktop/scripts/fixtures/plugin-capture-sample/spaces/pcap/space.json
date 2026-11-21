@@ -1,0 +1,10 @@
+{
+  "id": "pcap",
+  "name": { "zh": "出图", "en": "Capture" },
+  "icon": "layout-grid",
+  "version": "1.0.0",
+  "layout": {
+    "main": [{ "type": "plugin:plugin-capture-sample:stage", "pinned": true, "mainPage": true }],
+    "right": [{ "type": "plugin:plugin-capture-other:panel" }]
+  }
+}
