@@ -8,7 +8,7 @@ export const HOME_SUGGEST_KEYS = ['home.suggest.today', 'home.suggest.remind', '
 
 /**
  * 主页一屏放不下时逐级让的档位,从宽到紧;HomepageView 从头试到第一个放得下的,写在根的 data-suggest-fit 上(样式在 homepage.css 文末)。
- * all = 四条 + 全部卡片;rows = 四条 + 卡片只画前两行;two = 前两条 + 卡片只画前两行;none = 这一块不出,卡片照常。
+ * all = 四条 + 「继续」三行;rows = 四条 + 「继续」只画前两行;two = 前两条 + 「继续」只画前两行;none = 这一块不出,「继续」照常。
  */
 export const SUGGEST_FITS = ['all', 'rows', 'two', 'none'] as const
 

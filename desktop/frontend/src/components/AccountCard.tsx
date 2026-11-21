@@ -359,11 +359,9 @@ export const AccountCard: React.FC<{
     logout: loggedIn ? { id: 'logout', label: t('sidebar.account.logout'), icon: <LogOut size={14} />, danger: true, run: () => { setMenu(null); void logout() } } : null,
   })
 
-  /** Android:额度与已存账号先取回(各自最多等 3 秒,与 Web 菜单同一套口径),再呈现原生半屏。
-   *  原生菜单不能就地刷新,所以等一下而不是先画「加载中」;超时就照实写「加载中」/「无法加载已登录账号」,不丢行。
-   *  没有原生宿主 → false(调用方开 Web 浮层);宿主呈现失败 → 回落 Web 浮层。 */
-  const openNativeMenu = (el: HTMLElement): boolean => {
-    if (!nativeSheetPresenter()) return false
+  /** 菜单的几节:额度、已存账号、积分先取回(各自最多等 3 秒),再按 accountItems 排成几节。原生半屏(openNativeMenu)和
+   *  手机「我」页(经 accountChip.sections)同一份。期间登录态变了 / 又要了一次 → null(这一份作废)。 */
+  const loadSections = (): Promise<{ sections: SheetMenuSection[]; title?: string } | null> => {
     setQuotaErr(false)
     setQuota(null)
     const request = ++quotaRequest.current
@@ -379,8 +377,8 @@ export const AccountCard: React.FC<{
       : Promise.resolve({ accounts: [], failed: false, loaded: false })
     clearRewards()
     const rewardsP = auth?.loggedIn ? within(refreshRewards(), emptyAccountRewards()) : Promise.resolve(emptyAccountRewards())
-    void Promise.all([quotaP, accountsP, rewardsP]).then(([qr, ar, rr]) => {
-      if (request !== quotaRequest.current) return true // 期间登录态变了 / 又点了一次:这一份作废
+    return Promise.all([quotaP, accountsP, rewardsP]).then(([qr, ar, rr]) => {
+      if (request !== quotaRequest.current) return null // 期间登录态变了 / 又点了一次:这一份作废
       if (qr.q) { setQuota(qr.q); publishAccountQuota(qr.q) } else if (qr.failed) setQuotaErr(true)
       const it = accountItems(qr.q, qr.failed, rr)
       const switcher = accountSwitcherModel({ ...ar, busy: loggingIn, onSelect: (id) => void login(id), onAdd: () => void login(), t })
@@ -390,8 +388,17 @@ export const AccountCard: React.FC<{
         ...(switcher ? [{ title: switcher.title, items: switcher.items, ...(switcher.failedNote ? { footer: switcher.failedNote } : {}) }] : []),
         { items: it.logout ? [it.logout] : [] },
       ]
-      return runNativeSheetMenu({ ...(it.head ? {} : { title: loggedIn ? display : t('sidebar.account.notSignedIn') }), sections })
-    }).then((handled) => { if (!handled) openMenu(el) })
+      return { sections, ...(it.head ? {} : { title: loggedIn ? display : t('sidebar.account.notSignedIn') }) }
+    })
+  }
+  /** Android:额度与已存账号先取回(各自最多等 3 秒,与 Web 菜单同一套口径),再呈现原生半屏。
+   *  原生菜单不能就地刷新,所以等一下而不是先画「加载中」;超时就照实写「加载中」/「无法加载已登录账号」,不丢行。
+   *  没有原生宿主 → false(调用方开 Web 浮层);宿主呈现失败 → 回落 Web 浮层。 */
+  const openNativeMenu = (el: HTMLElement): boolean => {
+    if (!nativeSheetPresenter()) return false
+    void loadSections()
+      .then((menu) => (menu ? runNativeSheetMenu({ ...(menu.title ? { title: menu.title } : {}), sections: menu.sections }) : true))
+      .then((handled) => { if (!handled) openMenu(el) })
     return true
   }
   const showMenu = (el: HTMLElement): void => { if (!openNativeMenu(el)) openMenu(el) }
@@ -425,10 +432,13 @@ export const AccountCard: React.FC<{
   const anchorRef = useRef<HTMLElement | null>(null)
   const activateRef = useRef(toggleFrom)
   activateRef.current = toggleFrom
+  const sectionsRef = useRef(loadSections)
+  sectionsRef.current = loadSections
   useEffect(() => {
     const mine: AccountChip = {
       label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
       activate: (anchor) => { const el = anchor ?? anchorRef.current; if (el) activateRef.current(el) },
+      sections: () => sectionsRef.current().then((menu) => menu?.sections ?? null),
     }
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }

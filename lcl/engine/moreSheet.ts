@@ -14,35 +14,63 @@ const isFootItem = (i: RibbonItem): boolean => i.id === 'rb-settings' || !!i.mob
  *   - 两个全局开关(明暗、命令面板)跟着设置进**头像菜单**;
  *   - 其余点得了的入口(商店、成就、反馈、首方的 Ribbon 入口…)进 Dock「全部」那张半屏的最后一组(allSheetItems);
  *   - 没处去的才留在「⋯」:带 component 的项(原生半屏画不了)、没有头像时的设置和那两个开关、Dock 没有「全部」格时的入口。
- *  「一项要么在这三处之一,不会都没有」是这三个函数共同守的口径,改一个要看另外两个。平板横屏(并排左栏)不算手机,照旧。 */
+ *  「一项要么在这三处之一,不会都没有」是这三个函数共同守的口径,改一个要看另外两个。平板横屏(并排左栏)不算手机,照旧。
+ *  2026-11-19 起(方向 E 第 1 步)手机上头像菜单和「全部」半屏换成了 Dock 的「应用」「我」两整页(MoreSeats.pages):
+ *  三处变成「应用」页、「我」页、「⋯」,口径不变(phonePageItems)。 */
 export interface MoreSeats {
   /** 手机:宿主画底部导航栏 × 竖屏单列。 */
   phone: boolean
   /** Dock 上有「全部」那一格(Space 多过 Dock 的格数)—— 没有它,「全部」半屏无从打开。 */
   allCell: boolean
+  /** 手机上 Dock 是固定五格、有「应用」「我」两整页(phoneDock.ts,2026-11-19 方向 E):上面说的头像菜单与「全部」半屏都不在了,
+   *  原来进那两处的项改进这两页(phonePageItems)。没有这两页时(平台没装)照旧是上面那套。 */
+  pages?: boolean
 }
 const NO_SEATS: MoreSeats = { phone: false, allCell: false }
+const pagesNow = (seats: MoreSeats): boolean => seats.phone && !!seats.pages
+
+/** 「我」页里排在设置那一组后面的三个入口(成就、活动、反馈);活动是首方插件登记的 Ribbon 入口。其余点得了的入口进「应用」页。 */
+const ME_LAUNCHERS = ['rb-achievements', 'rb-plugin-events', 'rb-feedback']
+/** 手机两整页各收哪些 ribbon 项(MoreSeats.pages)。点得了、没有 component 的底部项(账号除外)恰好进其中一处:
+ *   - me.settings:设置、mobileFoot 项(在哪运行 / 互联设备)、明暗、命令面板;
+ *   - me.launchers:成就、活动、反馈;
+ *   - apps:其余(商店、首方插件的入口…),商店排第一。
+ *  点不了的、带 component 的仍留在「⋯」(moreItems)。不是这种形态时三组都空。 */
+export interface PhonePageItems { apps: RibbonItem[]; me: { settings: RibbonItem[]; launchers: RibbonItem[] } }
+export function phonePageItems(all: readonly RibbonItem[], seats: MoreSeats): PhonePageItems {
+  if (!pagesNow(seats)) return { apps: [], me: { settings: [], launchers: [] } }
+  const usable = all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !!i.onClick && !i.component)
+  const settings = [...usable.filter((i) => i.id === 'rb-settings'), ...usable.filter((i) => !!i.mobileFoot), ...usable.filter(isAccountSwitch)]
+  const launchers = ME_LAUNCHERS.map((id) => usable.find((i) => i.id === id)).filter((i): i is RibbonItem => !!i)
+  const me = new Set([...settings, ...launchers])
+  const apps = usable.filter((i) => !me.has(i))
+  return { apps: [...apps.filter((i) => i.id === 'rb-market'), ...apps.filter((i) => i.id !== 'rb-market')], me: { settings, launchers } }
+}
 /** 跟着设置进头像菜单的全局开关(手机)。 */
 const ACCOUNT_SWITCHES: ReadonlySet<string> = new Set(['rb-mode', 'rb-cmd'])
 const isAccountSwitch = (i: RibbonItem): boolean => i.side === 'bottom' && ACCOUNT_SWITCHES.has(i.id)
 
 /** 头像菜单替左栏底部那一排收下的 ribbon 项(原生底栏 × 有账号项);其余宿主形态为空。手机上再带两个全局开关,排在后面
  *  (带 component 的不收:头像菜单只画图标和名字,组件里的东西会丢 —— 留在「⋯」)。 */
-export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean, phone = false): RibbonItem[] {
-  if (!nativeSpaces || !all.some((i) => i.id === 'rb-account')) return []
+export function accountMenuItems(all: readonly RibbonItem[], nativeSpaces: boolean, phone = false, pages = false): RibbonItem[] {
+  // 手机有「我」页时没有头像菜单(头像成了 Dock 的「我」那格):这些行在「我」页里(phonePageItems)。
+  if (!nativeSpaces || (phone && pages) || !all.some((i) => i.id === 'rb-account')) return []
   const usable = all.filter((i) => !!i.onClick)
   return [...usable.filter(isFootItem), ...(phone ? usable.filter((i) => !isFootItem(i) && isAccountSwitch(i) && !i.component) : [])]
 }
 
 /** 手机上从「⋯」挪进「全部」半屏最后一组的入口(见 MoreSeats 上方);不是手机或 Dock 没有「全部」格时为空。 */
 export function allSheetItems(all: readonly RibbonItem[], seats: MoreSeats): RibbonItem[] {
-  if (!seats.phone || !seats.allCell) return []
+  if (!seats.phone || !seats.allCell || pagesNow(seats)) return []
   return all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !isFootItem(i) && !isAccountSwitch(i) && !!i.onClick && !i.component)
 }
 
 /** 「⋯」菜单收哪些 ribbon 项:底部区,去掉账号与住在别处的项(见上)。原生底栏下没处去的 foot 项排最前。 */
 export function moreItems(all: readonly RibbonItem[], nativeSpaces: boolean, seats: MoreSeats = NO_SEATS): RibbonItem[] {
-  const elsewhere = new Set(nativeSpaces ? [...accountMenuItems(all, true, seats.phone), ...allSheetItems(all, seats)] : all.filter(isFootItem))
+  const pages = phonePageItems(all, seats)
+  const elsewhere = new Set(nativeSpaces
+    ? [...accountMenuItems(all, true, seats.phone, seats.pages), ...allSheetItems(all, seats), ...pages.apps, ...pages.me.settings, ...pages.me.launchers]
+    : all.filter(isFootItem))
   const items = all.filter((i) => i.side === 'bottom' && i.id !== 'rb-account' && !elsewhere.has(i))
   return nativeSpaces ? [...items.filter(isFootItem), ...items.filter((i) => !isFootItem(i))] : items
 }

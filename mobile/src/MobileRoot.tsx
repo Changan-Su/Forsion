@@ -37,7 +37,7 @@ import { installNotificationWiring } from '@/stores/notificationWiring'
 import { ensureAmadeusReady } from '@/amadeusPlugins'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useShallow } from 'zustand/react/shallow'
-import { SingleColumnHost, listFirstNow, useCommandStore, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, type NativeChromeClaim } from '@lcl/engine'
+import { SingleColumnHost, listFirstNow, useCommandStore, useWorkspace, useNav, useNativeChromeClaim, useNativeChromeSpaces, useRibbonStore, useSpaceStore, setActiveSpace, drawerPreview, phonePageShown, closePhonePage, usePhonePage, returnTripOrigin, returnFromTrip, subscribeReturnTrip, type NativeChromeClaim } from '@lcl/engine'
 // 命令面板:desktop 由 `Shell.tsx` 渲染,而移动端把 Shell 换成了空壳(vite.config engineSwap)——
 // 于是 ribbon 的 rb-cmd 项(无条件注册,移动端经头像菜单 / 「⋯」可点)点了只是把 paletteOpen 置 true,
 // 没有任何东西渲染它。宿主责任随外壳一起被换掉了,得在这儿接回来。
@@ -67,6 +67,12 @@ function leaveOrHome(): void {
   const now = Date.now()
   if (now - exitArmedAt < EXIT_WINDOW_MS || !exitHint()) { exitArmedAt = 0; void CapApp.minimizeApp(); return }
   exitArmedAt = now
+}
+
+function closePhonePageToHome(): void {
+  closePhonePage()
+  const { spaces, activeSpaceId } = useSpaceStore.getState()
+  if (spaces[0] && activeSpaceId !== spaces[0].id) setActiveSpace(spaces[0].id)
 }
 
 /** 一下返回会做什么。`slide` = 它是把哪一侧的面板滑开 / 收起(手势进行中可以先画出来的那种);`run` = 真去做。
@@ -105,6 +111,9 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   if (app.marketOpen) return { run: () => app.closeMarket() }
   if (app.settingsOpen) return { run: () => app.closeSettings() }
   const ws = useWorkspace.getState()
+  // 手机 Dock 的「应用」「我」(lcl phoneDock.ts):盖在第一层上的一整页,返回 = 收起它回主页(和别的一级页一样,见 leaveOrHome),
+  // 盖在主页上时只收起。横过来时这一页不画(竖条照旧),不接。
+  if (phonePageShown()) return { run: closePhonePageToHome }
   // 两级导航(原生底栏,见 lcl 的 listFirstNow):左栏是这个 Space 的第一层 → 在列表层按返回 = 已在链底(见 leaveOrHome);
   // 在主区按返回 = 先页内后退(只退这一趟进来之后走过的页,见 lcl 的 listTrips),退无可退就回列表
   // (不关视图,再点同一条目即回)。
@@ -122,6 +131,8 @@ function planBack(): BrowserBackPlan & { slide?: 'left' | 'right' } {
   if (active) {
     const st = useNav.getState().stacks[active.id]
     if (st && st.idx > 0) return { run: () => useNav.getState().back(active.id) }
+    // 从主页「继续」点进来的这一页:回主页,不经这个 Space 的列表(lcl listTrips 的 return trip;不画「滑出列表」的预览)
+    if (listFirst && returnTripOrigin()) return { run: () => { returnFromTrip() } }
     if (listFirst) return { slide: 'left', run: () => ws.toggleSidebar('left') }
     // 落地页(`home` 空态占位 / 主页 Space 的 `homepage`)不关 —— 已经在链底。
     // ⚠️ 漏掉 `homepage` 时:主页上按一下返回 = closeLeaf → 唯一主 leaf 就地变 `home` 空态
@@ -150,7 +161,7 @@ function useBrowserBack(): void {
       window.addEventListener('forsion:mobile-list-back-change', changed)
       const offs = [
         () => window.removeEventListener('forsion:mobile-list-back-change', changed),
-        useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed),
+        useWorkspace.subscribe(changed), useNav.subscribe(changed), useSpaceStore.subscribe(changed), usePhonePage.subscribe(changed), subscribeReturnTrip(changed),
         useQuickFind.subscribe(changed), readTanguShell()?.subscribeBtw(changed) ?? (() => {}), subscribeBrowserSheet(changed),
         useCommandStore.subscribe((s, prev) => { if (s.paletteOpen !== prev.paletteOpen) changed() }),
         useFind.subscribe((s, prev) => { if (s.open !== prev.open) changed() }),
