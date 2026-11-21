@@ -50,7 +50,11 @@ export const envFile = (): string => join(isMultiAccount() ? engineRoot() : tang
  * 加载 ~/.tangu/.env(KEY=VALUE 行;# 注释;引号可选)进 process.env——**已存在的环境变量不覆盖**
  * (真实 shell 环境 > .env 文件)。须在 parseConfig 之前调用;模板见包根 example.env。
  * 注:TANGU_HOME 本身只能来自真实环境(鸡生蛋:定位 .env 要先有 home)。
+ * 多账号模式下 `.env` 里的 TANGU_HOME / TANGU_MULTI_ACCOUNT 一律跳过(打一行 warn):引擎根和开关只认真实环境 ——
+ * 否则真实环境没给 TANGU_HOME 时,.env 会在启动途中把引擎根(账号库、登记表的位置)挪走。
  */
+const ENGINE_ONLY_ENV_KEYS = new Set(['TANGU_HOME', 'TANGU_MULTI_ACCOUNT']);
+
 export function loadTanguEnv(): void {
   let raw: string;
   try {
@@ -66,6 +70,10 @@ export function loadTanguEnv(): void {
     const k = t.slice(0, i).trim();
     let v = t.slice(i + 1).trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    if (isMultiAccount() && ENGINE_ONLY_ENV_KEYS.has(k)) {
+      console.warn(`[tangu] multi-account mode: ignoring ${k} in ${envFile()} (only the real environment can set it)`);
+      continue;
+    }
     if (k && process.env[k] === undefined) process.env[k] = v;
   }
 }

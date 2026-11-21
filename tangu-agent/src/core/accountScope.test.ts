@@ -12,7 +12,7 @@ const env = vi.hoisted(() => {
 });
 
 import { accountHome, bindAccount, currentAccountId, engineRoot, isMultiAccount, isValidAccountId, perAccount, requireAccountId, runWithAccount, withinAccountRoot } from './accountScope.js';
-import { configFile, envFile, forsionSharedDir, stateDbPath, tanguHome } from './tanguHome.js';
+import { configFile, envFile, forsionSharedDir, loadTanguEnv, stateDbPath, tanguHome } from './tanguHome.js';
 
 describe('accountScope (multi-account mode)', () => {
   it('is on only through the real environment variable', () => {
@@ -76,5 +76,34 @@ describe('accountScope (multi-account mode)', () => {
       expect(withinAccountRoot(accountHome('bob'))).toBe(false);
     });
     expect(withinAccountRoot(accountHome('alice'))).toBe(false); // 没有账号上下文 = 不在任何账号里
+  });
+
+  it('ignores TANGU_HOME and TANGU_MULTI_ACCOUNT in .env: the engine root only comes from the real environment', () => {
+    const fs = require('node:fs') as typeof import('node:fs');
+    const os = require('node:os') as typeof import('node:os');
+    const path = require('node:path') as typeof import('node:path');
+    const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ma-envhome-'));
+    fs.mkdirSync(path.join(fakeHome, '.tangu'), { recursive: true });
+    fs.writeFileSync(path.join(fakeHome, '.tangu', '.env'), 'TANGU_HOME=/somewhere/else\nTANGU_MULTI_ACCOUNT=0\nMA_ENV_TEST_KEY=ok\n');
+    const saved = { HOME: process.env.HOME, TANGU_HOME: process.env.TANGU_HOME, MA: process.env.TANGU_MULTI_ACCOUNT };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      process.env.HOME = fakeHome; // engineRoot() = ~/.tangu
+      delete process.env.TANGU_HOME;
+      delete process.env.TANGU_MULTI_ACCOUNT;
+      expect(envFile()).toBe(path.join(fakeHome, '.tangu', '.env'));
+      loadTanguEnv();
+      expect(process.env.TANGU_HOME).toBeUndefined();
+      expect(process.env.TANGU_MULTI_ACCOUNT).toBeUndefined();
+      expect(process.env.MA_ENV_TEST_KEY).toBe('ok');
+      expect(engineRoot()).toBe(path.join(fakeHome, '.tangu'));
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => /ignoring TANGU_(HOME|MULTI_ACCOUNT)/.test(m))).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+      process.env.HOME = saved.HOME;
+      process.env.TANGU_HOME = saved.TANGU_HOME;
+      process.env.TANGU_MULTI_ACCOUNT = saved.MA;
+      delete process.env.MA_ENV_TEST_KEY;
+    }
   });
 });
