@@ -10,6 +10,9 @@
  *   { mode: 'cut_after', match, chars }  —— 第一次命中(body 含 match)照常打真上游、原样转发它的流,正文(output_text.delta)累计到 chars 字后
  *        在流里补一条额度用完(insufficient_quota)+ response.failed 掐断。只掐这一次:之后的请求(含「继续生成」那一轮,历史里也有 match)全放行。
  *        等于「回答写到一半额度用完」(11-10 continuegen 场景)。
+ *   { mode: 'length_after', match, chars, times } —— 同 cut_after 的前 times 次(缺省 1)主对话请求:正文攒够 chars 字后补一条
+ *        response.incomplete(incomplete_details.reason = max_output_tokens)收尾,等于「写到输出上限」(11-15 lengthcut 场景)。
+ *        引擎自动接写的那一发历史里也带 match:times = 2 时它也被截,用来造「接了还撞上限」。
  * 每个 /responses 请求往 `<规则文件>.log` 记一行 { t, fired, bytes, encrypted, match },场景据此断言「拒了几次、重发长什么样」。
  * 报文取自 magpie 的厂商原文夹具(overflow_stream_test.go、foreign_seal_test.go,MIT)。
  */
@@ -20,10 +23,10 @@ const realFetch = globalThis.fetch;
 const OVERFLOW = { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'Your input exceeds the context window of this model. Please adjust your input and try again.', param: 'input' };
 const UNVERIFIABLE = { message: 'The encrypted content for item rs_ could not be verified. Reason: Encrypted content could not be decrypted or parsed.', type: 'invalid_request_error', param: null, code: 'invalid_encrypted_content' };
 const QUOTA = { type: 'insufficient_quota', code: 'insufficient_quota', message: 'You exceeded your current quota, please check your plan and billing details.', param: null };
-const state = { rule: '', limit: 0, foreign: new Set(), cut: false };
+const state = { rule: '', limit: 0, foreign: new Set(), cut: false, lengthCuts: 0 };
 
-/** 原样转发真上游的 SSE,正文攒够 chars 字后在事件边界补额度报错并收尾(上游那条连接随之取消)。 */
-function cutStream(res, chars) {
+/** 原样转发真上游的 SSE,正文攒够 chars 字后在事件边界补额度报错(tail = 'length' 时补 response.incomplete)并收尾(上游那条连接随之取消)。 */
+function cutStream(res, chars, tail = 'quota') {
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   const enc = new TextEncoder();
@@ -33,6 +36,7 @@ function cutStream(res, chars) {
     { type: 'error', error: QUOTA, sequence_number: 9000 },
     { type: 'response.failed', sequence_number: 9001, response: { id: 'resp_fault', object: 'response', status: 'failed', error: { code: QUOTA.code, message: QUOTA.message } } },
   ].map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  const incomplete = `event: response.incomplete\ndata: ${JSON.stringify({ type: 'response.incomplete', sequence_number: 9000, response: { id: 'resp_fault', object: 'response', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] } })}\n\n`;
   const body = new ReadableStream({
     async pull(ctrl) {
       // 一块上游数据可能凑不出一个完整事件:读到至少转出一个事件(或流结束)才返回,否则下游那次 read 永远等不到(Codex 评审)
@@ -47,7 +51,7 @@ function cutStream(res, chars) {
           sent = true;
           const data = block.split('\n').find((l) => l.startsWith('data:'));
           try { const e = JSON.parse(data.slice(5)); if (e.type === 'response.output_text.delta') seen += String(e.delta || '').length; } catch { /* 不是 JSON 的行原样过 */ }
-          if (seen >= chars) { ctrl.enqueue(enc.encode(failed)); ctrl.close(); reader.cancel().catch(() => {}); return; }
+          if (seen >= chars) { ctrl.enqueue(enc.encode(tail === 'length' ? incomplete : failed)); ctrl.close(); reader.cancel().catch(() => {}); return; }
         }
       }
     },
@@ -66,7 +70,7 @@ if (FILE) {
     let rule = null;
     try { rule = JSON.parse(readFileSync(FILE, 'utf8')); } catch { /* 没有规则 = 不注入 */ }
     const key = rule ? JSON.stringify(rule) : '';
-    if (key !== state.rule) Object.assign(state, { rule: key, limit: 0, foreign: new Set(), cut: false }); // 换了规则从头记
+    if (key !== state.rule) Object.assign(state, { rule: key, limit: 0, foreign: new Set(), cut: false, lengthCuts: 0 }); // 换了规则从头记
     const blobs = [...body.matchAll(/"encrypted_content":"([^"]+)"/g)].map((m) => m[1]);
     const match = !!rule?.match && body.includes(rule.match);
     let fired = null;
@@ -76,6 +80,9 @@ if (FILE) {
     } else if (rule?.mode === 'cut_after' && match && !state.cut && body.includes('"tools":[')) { // 带工具头 = 主对话那发;标题 / 后台判官的请求也带 match,不许被它们抢走这一次
       state.cut = true;
       fired = 'cut_after';
+    } else if (rule?.mode === 'length_after' && match && state.lengthCuts < (Number(rule.times) || 1) && body.includes('"tools":[')) {
+      state.lengthCuts += 1;
+      fired = 'length_after';
     } else if (rule?.mode === 'invalid_encrypted_content') {
       if (!state.foreign.size && match && blobs.length) blobs.forEach((b) => state.foreign.add(b));
       if (blobs.some((b) => state.foreign.has(b))) fired = 'invalid_encrypted_content';
@@ -91,6 +98,10 @@ if (FILE) {
     if (fired === 'cut_after') {
       const res = await realFetch(input, init);
       return res.ok && res.body ? cutStream(res, Number(rule.chars) || 200) : res;
+    }
+    if (fired === 'length_after') {
+      const res = await realFetch(input, init);
+      return res.ok && res.body ? cutStream(res, Number(rule.chars) || 200, 'length') : res;
     }
     if (fired === 'invalid_encrypted_content') {
       return new Response(JSON.stringify({ error: UNVERIFIABLE }), { status: 400, headers: { 'content-type': 'application/json' } });

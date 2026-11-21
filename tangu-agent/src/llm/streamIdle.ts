@@ -9,6 +9,9 @@
 import type { ReadableStreamDefaultReader, ReadableStreamReadResult } from 'node:stream/web';
 import { LlmError } from '../core/types.js';
 
+/** 本地看门狗判的静默超时:504 只是借个可读的码,不是服务端回的 HTTP 504(重试链据 localTransport 认「本地传输中断」)。 */
+const localIdleError = (msg: string): LlmError => Object.assign(new LlmError(504, msg), { localTransport: true });
+
 export interface StreamIdleGuard {
   /** 传给 fetch 的 signal(合并了 external abort 与内部空闲超时)。 */
   signal: AbortSignal;
@@ -41,13 +44,13 @@ export function streamIdleGuard(externalSignal?: AbortSignal, idleMs = DEFAULT_I
   const arm = (): void => {
     if (disposed || ac.signal.aborted) return; // 已结束/已中止不再续命,杜绝 dispose 后野生 timer
     if (idle) clearTimeout(idle);
-    idle = setTimeout(() => ac.abort(new LlmError(504, 'stream idle timeout')), idleMs);
+    idle = setTimeout(() => ac.abort(localIdleError('stream idle timeout')), idleMs);
   };
 
   const progress = (): void => {
     if (disposed || ac.signal.aborted) return;
     if (progressIdle) clearTimeout(progressIdle);
-    progressIdle = setTimeout(() => ac.abort(new LlmError(504, 'stream progress idle timeout')), idleMs);
+    progressIdle = setTimeout(() => ac.abort(localIdleError('stream progress idle timeout')), idleMs);
   };
 
   const releaseReader = (reader: ReadableStreamDefaultReader<Uint8Array>): void => {
@@ -109,7 +112,7 @@ export function mapStreamAbort(err: unknown, guardSignal: AbortSignal, externalS
     return e;
   }
   const reason = (guardSignal as any).reason;
-  return reason instanceof LlmError ? reason : new LlmError(504, 'stream idle timeout');
+  return reason instanceof LlmError ? reason : localIdleError('stream idle timeout');
 }
 
 /**

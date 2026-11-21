@@ -384,8 +384,12 @@ export function listToolProviders(): ToolProvider[] {
  * 同名后注册者覆盖(host 模式下 hostExec 的 read_file/write_file 覆盖云工作区版本——
  * 后者已被 ① 滤掉,故 host 工具按注册序追加在末尾,对齐原「HOST_TOOLS 末尾叠加」行为)。
  */
-export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Map<string, 'plugin' | 'core'>): Map<string, ToolDef> {
+/** 插件工具的主人(遥测 v3 契约 §19:tool_call / tool_result 带 pluginId + pluginOfficial)。resolveTools 的 owners 参数按名字填。 */
+export interface ToolPluginOwner { ownerPlugin?: string; official: boolean }
+
+export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Map<string, 'plugin' | 'core'>, owners?: Map<string, ToolPluginOwner>): Map<string, ToolDef> {
   origins?.clear();
+  owners?.clear();
   const host = ctx.execMode === 'host';
   const sandboxCtx = { ...ctx, hostSandbox: ctx.hostSandbox ?? (ctx.execMode === 'sandbox' ? undefined : resolveHostSandboxPolicy()) };
   const sandboxRestricted = isHostSandboxRestricted(sandboxCtx);
@@ -452,6 +456,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
     out.set(t.name, t);
     origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
+    if (owners) { if (fromPlugin) owners.set(t.name, { ownerPlugin, official }); else owners.delete(t.name); }
   };
   for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin', p.origin === 'plugin' && p.official === true, p.ownerPlugin);
   for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin', false, p.ownerPlugin);

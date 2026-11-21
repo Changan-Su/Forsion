@@ -37,6 +37,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/amadeus/plugins/guideTips.ts': [1, '判断锚点是否在视口里'],
   'desktop/frontend/src/amadeus/blocks/excalidraw/ExcalidrawCanvas.tsx': [1, '全屏提示没有锚点时放窗口底部中间'],
   'desktop/frontend/src/amadeus/blocks/markdown/footnote.ts': [1, '判断脚注是否在视口里再决定滚动'],
+  'desktop/frontend/src/amadeus/blocks/markdown/imageToolbar.ts': [2, '手机贴底的图片工具条坐在移动端编辑胶囊 / 软键盘上沿(visualViewport),不是锚定浮层'],
   'desktop/frontend/src/amadeus/unified/UnifiedPage.tsx': [1, '判断块是否在视口里再决定滚动'],
   'desktop/frontend/src/amadeus/unified/canvasStage.tsx': [1, '画布可见区与视口求交'],
   'desktop/frontend/src/components/ImageViewer.tsx': [1, '判断原图是否在视口里(缩放动画起点)'],

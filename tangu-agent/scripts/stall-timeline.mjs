@@ -34,7 +34,7 @@ export function stateAfter(e, n) {
     case 'subagent': return 'tool';
     case 'status':
       if (e.phase === 'generating') return 'stream';
-      if (e.phase === 'llm_retry') return 'retry';
+      if (e.phase === 'llm_retry' || e.phase === 'llm_wait_network') return 'retry';
       if (e.phase === 'compacting') return 'compaction';
       if (e.phase === 'queued') return 'queue';
       if (e.phase === 'describing_images') return e.stage === 'done' ? 'llm_wait' : 'vision';

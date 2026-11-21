@@ -27,6 +27,7 @@ body:has([data-browser-mobile-chrome][data-mode='page']) .settings-page[data-nat
 .bmc-badge { position: absolute; right: -4px; top: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
 .bmc-badge[data-kind='attention'] { background: var(--warning); }
 .bmc-badge[data-kind='unread'] { background: var(--danger); }
+.bmc-badge[data-kind='notice'] { background: var(--danger); }
 .bmc-sheet-dialog { position: fixed; inset: 0; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); overflow: hidden; }
 .bmc-sheet-dialog[open] { display: flex; align-items: flex-end; justify-content: center; }
 .bmc-sheet-dialog::backdrop { background: var(--overlay-scrim); }

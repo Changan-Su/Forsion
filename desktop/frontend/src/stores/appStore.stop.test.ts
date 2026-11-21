@@ -101,6 +101,14 @@ describe('confirmed stop and restart', () => {
     expect(useApp.getState().engineNoticesBySession.s).toBeUndefined()
   })
 
+  it('a stop confirmed without an SSE terminal also clears the retry / waiting-for-network banner', async () => {
+    event('status', { phase: 'llm_wait_network', since: 1, stage: 'request', error: 'fetch failed' })
+    expect(useApp.getState().llmRetryBySession.s?.phase).toBe('wait_network')
+    service.stop.mockResolvedValue('aborted')
+    expect(await useApp.getState().stop('s')).toBe(true)
+    expect(useApp.getState().llmRetryBySession.s).toBeUndefined()
+  })
+
   it('retains the active run on failure, reports it, and permits another stop attempt', async () => {
     service.stop.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce('aborted')
     expect(await useApp.getState().stop('s')).toBe(false)

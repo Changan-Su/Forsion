@@ -60,6 +60,35 @@ export interface AgentRunEvent {
   payload?: any
 }
 
+/**
+ * agent_runs.status。interrupted(2026-11-20 中断任务续跑方案 B)= 引擎被停下(退出 / 更新 / 改设置重启 / 换账号 / 没打招呼的停 / 崩溃)
+ * 时这一轮还没做完;error 列是 `interrupted:<InterruptReason>`。和 aborted(用户按停 / 急停 / 级联)、failed(出错)分开。
+ * 本机引擎才会写它;云端 worker 照旧只有 aborted。
+ */
+export type AgentRunStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'interrupted'
+
+/**
+ * interrupted 的终态 error 事件(在线收尾与 SSE 补发同形):error 固定 'interrupted';aborted 恒 true(老客户端当「已停止」收尾);
+ * interrupted = 原因(contracts/turnResume InterruptReason);content = 已写出的部分正文(补发的那条没有)。
+ */
+export interface RunInterruptedErrorPayload {
+  error: 'interrupted'
+  aborted: true
+  interrupted?: import('./turnResume.js').InterruptReason
+  content?: string
+}
+
+/**
+ * 自动续跑 run 的 input 里多出来的三项(引擎启动恢复时起的那一轮;中断任务续跑方案 B):
+ * trigger 'recovery'、resumeOf = 被续的旧 run id、resumeAttempt = 这一串里第几次自动续(从 1 起)。
+ * 这一轮的「用户消息」是 autoResumeMarker(<原因>) 那一行(contracts/turnResume parseAutoResume 认得),不是用户说的话。
+ */
+export interface RunResumeInput {
+  trigger?: 'recovery'
+  resumeOf?: string
+  resumeAttempt?: number
+}
+
 /** 子聊天(右栏「子聊天」区)的一段内容:发言文本 / 工具调用 / 投票。 */
 export type SubChatSeg =
   | { t: 'text'; speaker?: string; color?: string; text: string }
@@ -334,6 +363,24 @@ export interface NormalAgentDef {
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
+/** 内置 Agent(Coding / Muse)的指令有新版本、而用户改过(引擎 agents/builtinBaseline.ts):配置页上方「内置指令改了什么」。 */
+export interface BuiltinUpdateField {
+  field: 'systemPrompt' | 'soul'
+  /** 用户现在的文本。 */
+  current: string
+  newDefault: string
+  /** 用户当初是在哪份默认上改的;null = 这台设备没记下(老用户),界面改比「你的版本 vs 新默认」。 */
+  oldDefault: string | null
+  fromVersion?: string
+}
+export interface BuiltinUpdate {
+  slug: string
+  toVersion?: string
+  fields: BuiltinUpdateField[]
+  /** 「保留 / 换新」要带回去的凭据(用户看到的那份现状);对不上引擎回 409。 */
+  token: string
+}
+
 export interface StandInInfo {
   slug: string
   name: string
@@ -1118,6 +1165,10 @@ export interface UiMessage {
   work?: TeamWork
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
+  /** 收尾那一发写到了输出上限、停在半句(done 的 truncated):画「停在了半句」+「继续生成」。只在本次运行里有,重载即无。 */
+  truncated?: boolean
+  /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
+  lengthResumed?: boolean
   timestamp: number
   /** 群聊模式:本条发言的发言人(Normal Agent slug;__host__=主持人)。缺省=普通单 agent 消息。 */
   agentId?: string
@@ -1129,6 +1180,8 @@ export interface UiMessage {
   /** 并行团队:这条发言以 DONE 收尾(成员表态「我这边完了」)。正文里的 DONE 已剥掉,气泡上以「已完成」小标记呈现。 */
   teamDone?: boolean
   teamSummary?: boolean
+  /** 这一轮被模型的安全审核拦下(done 的 refused / 落库 origin = refused):正文末尾那句固定文案改画成一行灰字,不给「继续生成」。 */
+  refused?: boolean
   /** Live public team remark; historical messages never replay the reveal animation. */
   revealAt?: number
   /** 群聊投票汇总(role=system 的投票行渲染成投票 chip)。 */

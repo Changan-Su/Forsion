@@ -39,6 +39,9 @@ describe('formatConclusion', () => {
   it('reports in-progress when empty and not terminal', () => {
     expect(formatConclusion([], 'running')).toContain('in progress');
   });
+  it('引擎被停 / 崩溃留下的 interrupted 也是终态:不能一直报「还在进行」让 wait_discussion 空等', () => {
+    expect(formatConclusion([], 'interrupted')).toBe('(discussion interrupted with no output)');
+  });
   it('reports no-output when empty and terminal', () => {
     expect(formatConclusion([], 'failed')).toBe('(discussion failed with no output)');
   });

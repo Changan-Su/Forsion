@@ -171,7 +171,7 @@ async function main() {
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.move(r.x + 40, r.cy)
   await p.waitForTimeout(300)
-  await p.click('.wiki-inline-img-wrap .amx-src-btn')
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') // 11-18 起 `</>` 在悬停工具条里
   await p.waitForTimeout(400)
   const txt = await p.evaluate((s) => document.querySelector(s).innerText, UBODY)
   check('I4 点 `</>` 才露出字面源码可编辑', txt.includes('![[pic.png|260]]'), JSON.stringify(txt))
@@ -208,7 +208,7 @@ async function main() {
   r = await rectOf(p, '.wiki-inline-img-wrap')
   await p.mouse.move(r.x + 20, r.cy)
   await p.waitForTimeout(300)
-  await p.click('.wiki-inline-img-wrap .amx-src-btn')
+  await p.click('.wiki-inline-img-wrap > .amx-img-tb [data-act="source"]') // 11-18 起 `</>` 在悬停工具条里
   await p.waitForTimeout(400)
   check('I6 v3 行内:点 `</>` 露源码', (await p.evaluate(() => document.querySelector('.md-block .ProseMirror').innerText)).includes('![[pic.png|170]]'))
   await p.close()
@@ -383,7 +383,12 @@ async function main() {
   if (!r) {
     skipRest(['I16 `![](path)` 挂了 `</>`', 'I16 双击弹源码行', 'I16 提交后落盘重新编码', 'I16 Esc 取消不落盘'])
   } else {
-    let bs = await p.evaluate(() => { const b = document.querySelector('.wiki-inline-img-wrap .amx-src-btn'); if (!b) return null; const cs = getComputedStyle(b); return { text: b.textContent, opacity: +cs.opacity, pe: cs.pointerEvents } })
+    // 2026-11-17 起 `</>` 收进悬停工具条(第一次悬停才建;image-toolbar.check 全面验);这里只认它在、移开后整条不吃点击。
+    await p.mouse.move(r.x + 20, r.cy)
+    await p.waitForTimeout(300)
+    await p.mouse.move(2, 2)
+    await p.waitForTimeout(300)
+    let bs = await p.evaluate(() => { const tb = document.querySelector('.wiki-inline-img-wrap .amx-img-tb'); const b = tb?.querySelector('[data-act="source"]'); if (!b) return null; const cs = getComputedStyle(tb); return { text: b.textContent, opacity: +cs.opacity, pe: cs.pointerEvents } })
     check('I16 `![](path)` 挂了 `</>` 且不悬停时不吃点击', !!bs && bs.text === '</>' && bs.opacity === 0 && bs.pe === 'none', JSON.stringify(bs))
     // 双击 = 灯箱要一张**能加载**的图:这里的 `attachments/a b.png` 在台架里加载不出来,R-21 之后是失败态占位
     // (没东西可看,不开灯箱)。灯箱这一条换到同形态的 `![封面|200](IMG)` 上验,本页只验源码行的提交 / 取消。
@@ -397,7 +402,7 @@ async function main() {
     }
     await p.mouse.move(r.x + 20, r.cy)
     await p.waitForTimeout(300)
-    await p.click('.wiki-inline-img-wrap .amx-src-btn')
+    await p.click('.wiki-inline-img-wrap .amx-img-tb [data-act="source"]')
     await p.waitForTimeout(500)
     const line = await p.evaluate(() => { const i = document.querySelector('.amx-img-srcline'); return i ? { value: i.value, focused: document.activeElement === i } : null })
     check('I16 点 `</>` 弹出源码行,路径是解码后的可读形态且已聚焦', !!line && line.value === '![封面|200](attachments/a b.png)' && line.focused, JSON.stringify(line))
@@ -419,7 +424,7 @@ async function main() {
     const rr = await rectOf(p, '.wiki-inline-img-wrap')
     await p.mouse.move(rr.x + 20, rr.cy) // 源码入口是 `</>`,不是双击(双击已归灯箱)
     await p.waitForTimeout(300)
-    await p.click('.wiki-inline-img-wrap .amx-src-btn')
+    await p.click('.wiki-inline-img-wrap .amx-img-tb [data-act="source"]')
     await p.waitForTimeout(400)
     check('I16 Esc 前置:源码行开着(不然下面敲的字会打进正文)', await p.evaluate(() => !!document.querySelector('.amx-img-srcline')))
     await p.keyboard.press('Meta+a')

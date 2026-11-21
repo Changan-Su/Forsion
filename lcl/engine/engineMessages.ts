@@ -95,6 +95,10 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.mobile.dock.editTitle': { zh: '固定在 Dock', en: 'Spaces in the dock' },
   'lcl.mobile.dock.editHint': { zh: '{first}常驻，另外最多固定 {max} 个。满了先取消一个再选。', en: '{first} is always there; pick up to {max} more. When the dock is full, take one out first.' },
   'lcl.mobile.dock.done': { zh: '完成', en: 'Done' },
+  // 手机五格 Dock(phoneDock.ts):主页、笔记两格用 Space 自己的名字
+  'lcl.mobile.dock.chats': { zh: '对话', en: 'Chats' },
+  'lcl.mobile.dock.apps': { zh: '应用', en: 'Apps' },
+  'lcl.mobile.dock.me': { zh: '我', en: 'Me' },
 
   // 视图模式(viewModes.tsx):头行左端的「看法」胶囊、⌥⌘V、命令面板里每种一条
   'lcl.viewMode.aria': { zh: '看法', en: 'View mode' },

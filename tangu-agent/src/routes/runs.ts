@@ -13,7 +13,8 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
-import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement, isRunLive } from '../services/agentLoop.js';
+import { isInterruptReason } from '../contracts/turnResume.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
 import { skipRunCompaction } from '../services/runCompaction.js';
 import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote, remoteCwdViolation, remoteCwdErrorBody } from '../services/remoteOrigin.js';
@@ -404,10 +405,17 @@ router.get('/agent/runs/:id/events', authMiddleware, async (req: AuthRequest, re
   if (!ended) {
     const fresh = await getRunForUser(runId, userId).catch(() => run);
     const st = fresh?.status || run.status;
-    if (['done', 'failed', 'aborted'].includes(st)) {
+    // 收尾时 done 先落库、done 事件后发(一轮答完就先记 done,免得崩在发事件之前被当成没答完续跑):这段空档里
+    // run 还在本进程收尾,真的 done 事件(带 toolOffsets / truncated)马上就到 —— 别抢先补一条残缺的,等订阅送来。
+    const settlingLive = st === 'done' && isRunLive(runId);
+    if (['done', 'failed', 'aborted', 'interrupted'].includes(st) && !settlingLive) {
       const result = typeof fresh?.result === 'string' ? safeParse(fresh.result) : fresh?.result;
       if (st === 'done') {
         writeEvent({ seq: lastSent + 1, type: 'done', payload: { content: result?.content ?? '' } });
+      } else if (st === 'interrupted') {
+        // 与 run 收尾时发的那条同形(agentLoop catch):error 'interrupted' + aborted + interrupted 原因(从 error 'interrupted:<原因>' 取)
+        const why = String(fresh?.error || '').replace(/^interrupted:/, '');
+        writeEvent({ seq: lastSent + 1, type: 'error', payload: { error: 'interrupted', aborted: true, ...(isInterruptReason(why) ? { interrupted: why } : {}) } });
       } else {
         writeEvent({ seq: lastSent + 1, type: 'error', payload: { error: fresh?.error || st, aborted: st === 'aborted' } });
       }
@@ -478,17 +486,19 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
     const run = await getRunForUser(req.params.id, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     const userMessageId = uuidv4();
+    const remote = parseRemoteOrigin(req.headers);
     const ok = enqueueSteer(req.params.id, {
       id: userMessageId,
       content: message,
       attachments: Array.isArray(attachments) ? attachments : [],
+      // 远端插话不把本机前台命令挪进后台(染色在入队之后,订阅者在入队时就被叫到,只能看消息自己的标记)
+      ...(remote ? { viaRemote: true } : {}),
       // 「另起话题」(输入区 ⌘Enter / 发送键菜单):手头没做完的挪到独立会话,这句在这里答(agentLoop.NEW_TOPIC_NOTE)
       ...(req.body?.newTopic === true ? { newTopic: true } : {}),
     });
     if (!ok) return res.status(409).json({ detail: 'run not active', reason: 'not_active' });
     // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 染色,审批闸 / 路径策略 / 验证命令从此按远程钳制(C3)。
     // 只在入队成功后登记(失败的 steer 不占表);与 enqueueSteer 同一同步段,loop 在迭代边界消费前必已染上。
-    const remote = parseRemoteOrigin(req.headers);
     if (remote) taintRunRemote(req.params.id, remote);
     res.json({ ok: true, userMessageId });
   } catch (err: any) {

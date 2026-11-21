@@ -176,7 +176,7 @@ export function onPromptChange(cb: (c: PromptChange) => void): () => void {
   return () => { listeners.delete(cb); };
 }
 
-const TERMINAL = new Set(['done', 'failed', 'aborted']);
+const TERMINAL = new Set(['done', 'failed', 'aborted', 'interrupted']); // interrupted:引擎被停 / 崩溃(中断任务续跑方案 B)
 const SWEEP_EVERY_MS = 30_000;
 const SWEEP_MIN_AGE_MS = 30_000;
 let lastSweep = 0;

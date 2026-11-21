@@ -21,6 +21,7 @@ import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
 import { isNewer, isPrerelease } from '../../desktop/shared/updateVersion'
 import { parseMainland, parseWebsiteInstallers, selectGitHubRelease, sourceOrder } from '../../desktop/shared/updateSource'
+import { quotaEntry } from '../../desktop/shared/telemetryKeys'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
@@ -354,18 +355,23 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     // P1-DL 存到系统「下载」:Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。只装 native 路径 ——
     // web(dev / preview)是真浏览器,缺席 → 调用方回落 <a download>(见 services/nativeDownload.ts)。
     saveDownload,
-    accountUseResetCard: (type?: string) => {
+    // entry 追加在末尾(遥测 v3):表外的值当没给,绝不因此拒绝
+    accountUseResetCard: (type?: string, entry?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
       }
-      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both' })
+      const e = quotaEntry(entry)
+      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both', ...(e ? { entry: e } : {}) })
     },
     openAccountCenter: (section?: string) => {
       const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
       return openExternal(`${webOrigin}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`)
     },
-    openPayCenter: () =>
-      openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`),
+    // entry(遥测 v3):付款页 pay.js 读 ?from=;表外的值不带
+    openPayCenter: (opts?: { entry?: string }) => {
+      const entry = quotaEntry(opts?.entry)
+      return openExternal(`${webOrigin}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}${entry ? `&from=${entry}` : ''}&redirect=${encodeURIComponent(`${webOrigin}/account`)}`)
+    },
     // 语音输入:共享 hook(hooks/useVoiceInput)只探测这一个方法 —— 此前移动端缺席,麦克风键一直是灰的。
     // 直连云端转写端点,与桌面「Forsion 云端」那条同一路由、同一份计费;不带 modelId = 服务端用 tangu 应用的 asr 默认槽。
     // 只给 native:录音靠 WebView 的 getUserMedia,权限由 Capacitor 向系统申请(清单里的 RECORD_AUDIO)。

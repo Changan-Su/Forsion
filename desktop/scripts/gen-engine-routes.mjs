@@ -236,6 +236,8 @@ export const CLASSIFICATION = {
   'PATCH /agent/agents/:slug': [D, 'update Agent (design appendix C)'],
   'DELETE /agent/agents/:slug': [D, 'delete Agent'],
   'GET /agent/agents/:slug/uninstall-preview': [D, 'uninstall preview (only feeds a local delete)'],
+  'GET /agent/agents/:slug/builtin-update': [D, 'built-in instructions changed while the user edited them (shows both texts; remote callers get no instructions)'],
+  'POST /agent/agents/:slug/builtin-update': [D, 'keep the edited instructions or switch to the new built-in default (local config page only)'],
   'POST /agent/agents/:slug/rename': [D, 'rename Agent'],
   'POST /agent/agents/:slug/avatar': [D, 'update Agent avatar'],
   'GET /agent/agents/:slug/avatar': [A, 'Agent avatar'],

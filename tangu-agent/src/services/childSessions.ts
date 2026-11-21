@@ -403,8 +403,8 @@ function isHandoffRow(r: any): boolean {
  *  挂起那一轮还没到终态就不送(下次收尾 / 重启再送);原会话没了 / 不是这个用户的,只清挂起。 */
 async function deliverHandoffReport(kid: any): Promise<void> {
   const reportRun = String(kid.report_run_id);
-  const run = await getRun(reportRun);
-  if (run && !STATUS[String(run.status)]) return;
+  const run = await reportRunOf(reportRun);
+  if (!reportReady(run)) return;
   const target = String(decode(kid.agent_config).handoffFrom || '');
   const [orig] = target ? await query<any[]>(`SELECT id, user_id, model_id, kind FROM chat_sessions WHERE id = ?`, [target]) : [];
   const [me] = await query<any[]>(`SELECT user_id FROM chat_sessions WHERE id = ?`, [String(kid.id)]);
@@ -443,7 +443,7 @@ export function endsWithQuestion(text: string): boolean {
  *  ponytail: 按问号判,「要不要我再…?」这类可选提议也算等你(Claude 的 waiting for input 同口径)。 */
 export async function markIfAsked(sessionId: string, userId: string, input: any, finalText: string): Promise<void> {
   if (!deps().profile.capabilities.hostExec) return;
-  if (!(input?.origin === 'client' || input?.fromParent === true || input?.childReport === true || input?.fromSession?.relation === 'child')) return; // 兄弟发来的那一轮在等发件人,不是等你
+  if (!(input?.origin === 'client' || input?.fromParent === true || input?.childReport === true || input?.backgroundUpdate === true || input?.fromSession?.relation === 'child')) return; // 兄弟发来的那一轮在等发件人,不是等你
   if (endsWithQuestion(String(finalText || ''))) await markAwaitingUser(sessionId, userId);
 }
 
@@ -465,7 +465,29 @@ export function deliverChildReports(parentId: string, opts: { rowOnly?: boolean 
   return next;
 }
 
-const STATUS: Record<string, string> = { done: 'finished', failed: 'failed', aborted: 'stopped' };
+const STATUS: Record<string, string> = { done: 'finished', failed: 'failed', aborted: 'stopped', interrupted: 'interrupted' };
+
+/**
+ * 回报看的那一轮(评审 #14):被停下后自动续了的(interrupted + resumed_by 指向续跑 run),顺着找到最后那一轮,等它的结果;
+ * 续跑 run 还没建成(认领后崩了,等启动补齐)就停在那条 interrupted 上(reportReady 判它没好)。
+ */
+async function reportRunOf(runId: string): Promise<any> {
+  let run: any = await getRun(runId);
+  for (let hop = 0; hop < 4 && run?.status === 'interrupted' && run.resumed_by && run.resumed_by !== '-'; hop++) {
+    const next = await getRun(String(run.resumed_by));
+    if (!next) break;
+    run = next;
+  }
+  return run;
+}
+
+/** 这一轮的回报能送了吗。run 行没了 → 送(照旧)。interrupted:启动恢复判过「不续」(resumed_by = '-')才算结束 ——
+ *  还没判(NULL)或认领了续跑(续跑还没建成)都接着等。 */
+function reportReady(run: any): boolean {
+  if (!run) return true;
+  if (run.status === 'interrupted') return run.resumed_by === '-';
+  return !!STATUS[String(run.status)];
+}
 
 async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promise<void> {
   const { activeSessionIds, enqueueRun } = await loop();
@@ -485,8 +507,8 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
   let tainted = await sessionRemoteTainted(parentId);
   for (const k of kids) {
     if (!k.report_run_id) continue;
-    const run = await getRun(String(k.report_run_id));
-    if (run && !STATUS[String(run.status)]) continue; // 还没到终态(别的引擎进程持有 / 等认领):下次再送
+    const run = await reportRunOf(String(k.report_run_id));
+    if (!reportReady(run)) continue; // 还没到终态(别的引擎进程持有 / 等认领 / 被停下等续跑):下次再送
     delivered.push([String(k.id), String(k.report_run_id)]);
     const input = decode(run?.input);
     if (input.remote) remote = remote || input.remote;
