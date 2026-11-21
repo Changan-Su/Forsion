@@ -46,7 +46,8 @@ export interface StartDiscussionParams {
 }
 
 function isTerminal(status: string): boolean {
-  return status === 'done' || status === 'failed' || status === 'aborted';
+  // interrupted = 引擎被停 / 崩溃(中断任务续跑方案 B);讨论是群聊,不自动续,不认它会让 wait_discussion 一直等到超时
+  return status === 'done' || status === 'failed' || status === 'aborted' || status === 'interrupted';
 }
 
 /** 起一个后台讨论 run,返回它的 runId(句柄)。不阻塞——讨论在独立 session 异步跑。 */

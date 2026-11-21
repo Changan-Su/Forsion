@@ -13,7 +13,8 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
-import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement, isRunLive } from '../services/agentLoop.js';
+import { isInterruptReason } from '../contracts/turnResume.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
 import { skipRunCompaction } from '../services/runCompaction.js';
 import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote, remoteCwdViolation, remoteCwdErrorBody } from '../services/remoteOrigin.js';
@@ -404,10 +405,17 @@ router.get('/agent/runs/:id/events', authMiddleware, async (req: AuthRequest, re
   if (!ended) {
     const fresh = await getRunForUser(runId, userId).catch(() => run);
     const st = fresh?.status || run.status;
-    if (['done', 'failed', 'aborted'].includes(st)) {
+    // 收尾时 done 先落库、done 事件后发(一轮答完就先记 done,免得崩在发事件之前被当成没答完续跑):这段空档里
+    // run 还在本进程收尾,真的 done 事件(带 toolOffsets / truncated)马上就到 —— 别抢先补一条残缺的,等订阅送来。
+    const settlingLive = st === 'done' && isRunLive(runId);
+    if (['done', 'failed', 'aborted', 'interrupted'].includes(st) && !settlingLive) {
       const result = typeof fresh?.result === 'string' ? safeParse(fresh.result) : fresh?.result;
       if (st === 'done') {
         writeEvent({ seq: lastSent + 1, type: 'done', payload: { content: result?.content ?? '' } });
+      } else if (st === 'interrupted') {
+        // 与 run 收尾时发的那条同形(agentLoop catch):error 'interrupted' + aborted + interrupted 原因(从 error 'interrupted:<原因>' 取)
+        const why = String(fresh?.error || '').replace(/^interrupted:/, '');
+        writeEvent({ seq: lastSent + 1, type: 'error', payload: { error: 'interrupted', aborted: true, ...(isInterruptReason(why) ? { interrupted: why } : {}) } });
       } else {
         writeEvent({ seq: lastSent + 1, type: 'error', payload: { error: fresh?.error || st, aborted: st === 'aborted' } });
       }

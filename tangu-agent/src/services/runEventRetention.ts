@@ -22,7 +22,7 @@ export const RUN_EVENT_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const RUN_EVENT_RETENTION_KICKOFF_MS = 30_000;
 
 const STREAM_TYPES = "('token', 'reasoning', 'tool_stream')";
-const TERMINAL = "('done', 'failed', 'aborted')";
+const TERMINAL = "('done', 'failed', 'aborted', 'interrupted')"; // interrupted:引擎被停下时收的尾(中断任务续跑方案 B),同样已结束
 /** 每条 DELETE 覆盖的主键区间:整表只过一遍,每句只扫自己那段;批间让出事件循环给在飞 run 的落库写链。 */
 const ID_STEP = 50_000;
 /** 释放量不到这个数不整理文件(VACUUM 期间整库独占,350MB 约 1-3s,还要同等临时磁盘)。 */

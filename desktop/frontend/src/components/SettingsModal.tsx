@@ -14,7 +14,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Shapes, ArrowLeft, ChevronRight, Loader2, RefreshCw, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Server, Type, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, Wind, MousePointerClick, FolderInput, SlidersHorizontal } from 'lucide-react'
+import { X, Shapes, ArrowLeft, ChevronRight, Loader2, RefreshCw, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Server, Type, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, Wind, MousePointerClick, FolderInput, SlidersHorizontal, StepForward } from 'lucide-react'
 import { AppearanceSettings } from './AppearanceSettings'
 import { RibbonSettings } from './RibbonSettings'
 import { UI_MODE, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
@@ -188,6 +188,11 @@ registerMessages({
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
     en: 'Keeps your computer from sleeping when idle while sessions are running, and restores normal sleep when they finish. The display can still turn off. Closing the lid or choosing Sleep still works, and Windows laptops on battery may still sleep per power policy.',
   },
+  'settingsmodal.autoResume.title': { zh: '重启后自动接着做未完成的任务', en: 'Resume unfinished tasks after a restart' },
+  'settingsmodal.autoResume.description': {
+    zh: '应用退出、更新或引擎重启时没做完的任务，下次打开会从停下的地方接着做。断在半截的操作会先核对，不会直接重做。',
+    en: 'If the app quits, updates or restarts its engine mid-task, the task picks up where it left off next time. Steps that were cut off are checked first, not simply repeated.',
+  },
   'settingsmodal.closeAction.title': { zh: '关闭窗口时', en: 'When closing the window' },
   'settingsmodal.closeAction.description': {
     zh: '点主窗口的关闭按钮后做什么。在后台运行时会话、Muse 和同步不中断，可从托盘图标重新打开。',
@@ -318,6 +323,9 @@ const UPDATE_ERROR_KEYS: Record<string, string> = {
   unreachable: 'about.update.unreachable', 'disk-full': 'about.update.diskFull', 'no-permission': 'about.update.noPermission', 'file-busy': 'about.update.fileBusy',
 }
 
+/** 桌面配置里「重启后自动接着做」那一键(主进程 TanguStoredConfig.autoResumeInterrupted,缺省开)。共享契约 StoredDesktopConfig
+ *  在 tangu-agent/contracts 里、这一轮不动它,先在这里补上类型。 */
+type StoredWithAutoResume = StoredDesktopConfig & { autoResumeInterrupted?: boolean }
 type StaticTab = typeof SETTINGS_TABS[number]
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
@@ -2835,6 +2843,17 @@ export const SettingsModal: React.FC<{
                   else openAgentProfile(slug)
                   p.onClose()
                 }} />}
+                {/* 中断任务续跑(方案 B):本机托管引擎的行为,跨 Agent 生效 —— 放在名册页「适用于所有 Agent 的设置」里。缺省开。 */}
+                {tab === 'agents' && activeSub === 'ag-roster' && isDesktop && stored && (
+                  <div data-setting-anchor="auto-resume">
+                    <SettingsPanel
+                      icon={<StepForward size={16} />}
+                      title={t('settingsmodal.autoResume.title')}
+                      description={t('settingsmodal.autoResume.description')}
+                      actions={<SettingsSwitch checked={(stored as StoredWithAutoResume).autoResumeInterrupted !== false} onChange={(on) => void window.tangu!.setConfig({ autoResumeInterrupted: on } as Partial<StoredWithAutoResume>).then(setStored)} label={t('settingsmodal.autoResume.title')} />}
+                    />
+                  </div>
+                )}
                 {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} initialRole={initialTarget.pane === 'muse' ? 'muse' : undefined} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
