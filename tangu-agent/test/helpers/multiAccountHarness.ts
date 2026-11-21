@@ -385,8 +385,11 @@ export class Client {
   }
 
   /** Raw request with exact header lines (duplicates, empty values). */
-  raw(method: string, path: string, headers: Record<string, string | string[]>): Promise<{ status: number; text: string }> {
+  /** A request sent byte-for-byte as given: no URL normalization (`..`, `%2e%2e`, backslashes reach the server as typed). */
+  raw(method: string, path: string, headers: Record<string, string | string[]>, body?: unknown): Promise<{ status: number; text: string }> {
     const u = new URL(this.base);
+    const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+    if (payload) headers = { ...headers, 'Content-Type': 'application/json', 'Content-Length': String(payload.length) };
     return new Promise((resolve, reject) => {
       const req = httpRequest({ host: u.hostname, port: u.port, method, path, headers }, (res) => {
         let buf = '';
@@ -399,7 +402,7 @@ export class Client {
         });
       });
       req.on('error', reject);
-      req.end();
+      req.end(payload);
     });
   }
 
@@ -637,6 +640,15 @@ export async function waitQuiet(root: string, counter: () => number, o: { quietM
   }
 }
 
+/** What a refused tool call answers (an unknown or unavailable tool, a denied path, …). */
+export const REFUSAL_RE = /error|unknown|not (available|allowed|found|permitted|enabled)|denied|refus|disabled|unavailable|no such tool|does not exist/i;
+
+/** First step of a script: load the named tools that this run was not offered (deferred tools), if load_tools exists. */
+export const loadToolsStep = (names: string[]) => (ctx: ScriptCtx): StepOut => {
+  const missing = names.filter((n) => !ctx.offered.has(n));
+  return { calls: missing.length && ctx.offered.has('load_tools') ? [{ name: 'load_tools', args: { names: missing } }] : [] };
+};
+
 // ── engine-level session registry ───────────────────────────────────────────────────────────────────────────────
 /**
  * Session ids are one namespace across accounts in multi-account mode, so the engine keeps one registry outside every
@@ -733,7 +745,7 @@ export interface MaEngine {
  * The brain passed in mirrors what the standalone assembly hands over (local per-home memory and skills overlays)
  * with the model replaced by the fake and **without** outbound masking: the entry itself must wrap it.
  */
-export async function bootMultiAccount(): Promise<MaEngine> {
+export async function bootMultiAccount(o: { bundleDirs?: string[] } = {}): Promise<MaEngine> {
   const scope: any = await import('../../src/core/accountScope.js');
   const ma: any = await import('../../src/standalone/multiAccount.js');
   if (typeof ma.createMultiAccountApp !== 'function') throw new Error('src/standalone/multiAccount.ts does not export createMultiAccountApp');
@@ -746,7 +758,7 @@ export async function bootMultiAccount(): Promise<MaEngine> {
     memory: createLocalMemoryBrain({ deviceId: 'multi-account-test-device', deviceName: null }),
     assets: createLocalAssets(fake.brain.assets as any, false),
   };
-  const created = await ma.createMultiAccountApp({ localToken: LOCAL_TOKEN, brain, defaultModelId: MODEL_ID, bundleDirs: [] });
+  const created = await ma.createMultiAccountApp({ localToken: LOCAL_TOKEN, brain, defaultModelId: MODEL_ID, bundleDirs: o.bundleDirs ?? [] });
   const server = created.app.listen(0, '127.0.0.1') as import('node:http').Server;
   await once(server, 'listening');
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
