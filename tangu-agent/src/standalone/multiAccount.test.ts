@@ -98,6 +98,20 @@ describe('createMultiAccountApp', () => {
     }
   });
 
+  it('decides the allowlist on the raw method before reading the body or opening the account', async () => {
+    const hdr = { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'frank', 'Content-Type': 'application/json' };
+    // HEAD 不当 GET、OPTIONS 不自动应答
+    expect((await fetch(`${base}/agent/sessions`, { method: 'HEAD', headers: hdr })).status).toBe(403);
+    expect((await fetch(`${base}/agent/sessions`, { method: 'OPTIONS', headers: hdr })).status).toBe(403);
+    // 名单外的路径:坏 JSON 也是 403(没解析请求体),也没给 frank 开户
+    expect((await fetch(`${base}/agent/tools`, { method: 'POST', headers: hdr, body: '{not json' })).status).toBe(403);
+    expect((await fetch(`${base}/agent/sessions/x/nope`, { method: 'GET', headers: hdr })).status).toBe(403);
+    expect(existsSync(join(env.home, 'accounts', 'frank'))).toBe(false);
+    // 名单里的照常
+    expect((await fetch(`${base}/agent/sessions`, { headers: hdr })).status).toBe(200);
+    expect(existsSync(join(env.home, 'accounts', 'frank', 'state.db'))).toBe(true);
+  });
+
   it('gives each account its own database file and hides the other account sessions', async () => {
     const a = await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'alice-secret-title' } });
     expect(a.status).toBe(200);

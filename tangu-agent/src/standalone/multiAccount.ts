@@ -212,6 +212,8 @@ function cwdClamp(clamp: Clamp | undefined): RequestHandler {
   };
 }
 
+const NOT_AVAILABLE = { detail: 'Not available in multi-account mode' } as const;
+
 /** 测试与 main.ts 共用的入口。整个进程只装配一次(configureTangu 是进程级的)。 */
 export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promise<{
   app: Express;
@@ -269,8 +271,16 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     (req as any).user = { userId: who.accountId, username: who.accountId, role: 'USER' };
     next();
   });
+  // ② 白名单先判(先于读请求体、先于开户):按原始 method + 注册的路由模式。HEAD 不当 GET、OPTIONS 不自动应答 ——
+  // 只认名单里那条路由自己登记的 method(Express 的 route.methods),路径用同一个 layer 的 match 判。
+  const allowedLayers = (allowRouter as any).stack as Array<{ match(path: string): boolean; route?: { methods?: Record<string, boolean> } }>;
+  const listed = (req: Request): boolean => {
+    const method = String(req.method || '').toLowerCase();
+    return allowedLayers.some((l) => l.route?.methods?.[method] === true && l.match(req.path));
+  };
+  app.use((req, res, next) => { if (listed(req)) return next(); res.status(403).json(NOT_AVAILABLE); });
   app.use(express.json({ limit: '25mb' }));
-  // ② 开户 + 整个请求(含它起的 run 的异步子树)绑进这个账号
+  // ③ 开户 + 整个请求(含它起的 run 的异步子树)绑进这个账号
   app.use((req, res, next) => {
     const id = (req as any).accountId as string;
     mh.ensureAccount(id).then(
@@ -282,12 +292,12 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
       },
     );
   });
-  // ③ 远程锁定(与单人 standalone 同一道):锁定时带远程来源头的非只读请求一律 423(中止 run 除外)。
+  // ④ 远程锁定(与单人 standalone 同一道):锁定时带远程来源头的非只读请求一律 423(中止 run 除外)。
   // 锁是整台电脑的(桌面主进程的锁文件 + 进程内闩),对所有账号都收紧;读它不碰账号路径、不抛(读不出 = 锁定)。
   app.use((req, res, next) => remoteLockGuard(req, res, next));
-  // ④ 白名单里的路由;其余一律 403
+  // ⑤ 白名单里的路由;其余一律 403(②已经挡过,这里是兜底)
   app.use(allowRouter);
-  app.use((_req, res) => { res.status(403).json({ detail: 'Not available in multi-account mode' }); });
+  app.use((_req, res) => { res.status(403).json(NOT_AVAILABLE); });
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     res.status(typeof err?.status === 'number' ? err.status : 500).json({ detail: err?.type === 'entity.parse.failed' ? 'Invalid JSON body' : 'Request failed' });
   });
