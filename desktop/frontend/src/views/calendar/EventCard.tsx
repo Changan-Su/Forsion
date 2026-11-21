@@ -116,7 +116,8 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const frame = window.requestAnimationFrame(() => {
-      const titleInput = dialogRef.current?.querySelector<HTMLInputElement>('.amx-cal-card-title:not(.amx-cal-card-title-ro)')
+      // A formatted to-do title stays formatted on open; only an explicit title request (focusTitle) opens it for editing.
+      const titleInput = dialogRef.current?.querySelector<HTMLElement>(focusTitle ? '.amx-cal-card-title:not(.amx-cal-card-title-ro)' : '.amx-cal-card-title:not(.amx-cal-card-title-ro):not(.amx-cal-card-title-md)')
       if (!calendar || focusTitle) (titleInput ?? closeRef.current)?.focus()
     })
     const keydown = (e: KeyboardEvent): void => {
@@ -262,6 +263,7 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.preventDefault() }}
             onChange={(e) => setAggName(db, row.rowId, e.target.value.replace(/\r?\n/g, ' '))}
             autoFocus={titleEdit}
+            onFocus={() => { if (mdTitle) setTitleEdit(true) }} // typing into an empty title must not flip it to the preview mid-word
             onBlur={() => setTitleEdit(false)}
           />
         ) : (

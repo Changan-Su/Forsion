@@ -44,7 +44,7 @@ import { BUCKET_LABEL, COLLAPSED_BY_DEFAULT, ORDER, VIEWS, bucketOf, dropDay, in
 import { dragGrab, landWhenMoved, releasePoint, zoomOf, type LandPoint, type Leaf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
-import { InlineMarkdownText } from '../amadeus/blocks/database/todoTitle'
+import { InlineMarkdownText, todoTitleCol } from '../amadeus/blocks/database/todoTitle'
 import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 
 registerMessages({
@@ -128,6 +128,8 @@ interface Row {
   /** 来源色(多维表 = 日历列表里那张表的颜色;正文任务画文件图标,不用色) */
   color?: string
   db?: CalMemberDb
+  /** The title is a to-do list's inline Markdown (todoTitleCol). */
+  md?: boolean
   rowId?: string
   /** 正文任务的落点 */
   note?: { path: string; heading: string }
@@ -136,7 +138,7 @@ interface Row {
 }
 
 /** A to-do list's title is inline Markdown (the to-do box writes it, 11-21): drawn with marks, read as plain text for labels and sorting. */
-const plainName = (r: { name: string; db?: unknown }): string => (r.db ? inlineMarkdownToPlain(r.name) : r.name)
+const plainName = (r: { name: string; md?: boolean }): string => (r.md ? inlineMarkdownToPlain(r.name) : r.name)
 
 /** 视图自身宽度过没过门槛。ResizeObserver 量的是 CSS 像素,界面缩放不影响判定。 */
 function useWide(ref: RefObject<HTMLElement | null>): boolean {
@@ -214,7 +216,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
       const color = colorForDb(vault, byVault, m.db.path, members.indexOf(m))
       for (const r of todoRowsOf(m)) {
         const raw = typeof r.cells[m.dateCol] === 'string' ? (r.cells[m.dateCol] as string) : ''
-        out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || t('todolist.untitled'), checked: r.cells[checkCol] === true, raw, source: m.db.name, short: m.db.name, color, db: m, rowId: r.rowId })
+        out.push({ key: `db:${m.db.path}:${r.rowId}`, name: r.name || t('todolist.untitled'), checked: r.cells[checkCol] === true, raw, source: m.db.name, short: m.db.name, color, db: m, md: todoTitleCol(m.db.columns, checkCol) !== null, rowId: r.rowId })
       }
     }
     // 只收带勾选框的标记行:没勾选框的 `@` 行是日程,归日历(useMdCalDbs)。
@@ -410,7 +412,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
           <span className={`amx-todo-box${r.checked ? ' on' : ''}`} aria-hidden="true" />
         )}
         <button className="amx-todo-main" title={r.note ? t('todolist.openInNote') : t('todolist.clickToEdit')} onClick={(e) => openRow(r, e)} onKeyDown={rowKeys}>
-          <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.db ? <InlineMarkdownText md={r.name} /> : r.name}</span>
+          <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.md ? <InlineMarkdownText md={r.name} /> : r.name}</span>
           {/* 「在笔记中打开」图标叠在标题后面、悬停才出现,不占日期列的位置(从前占位,笔记行的日期比别的行往左缩一截) */}
           {r.note ? <ExternalLink className="amx-todo-jump" size={12} /> : null}
         </button>

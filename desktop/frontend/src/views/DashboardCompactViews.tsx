@@ -24,7 +24,8 @@ import { useInbox, parseUtc, type InboxMessage } from '../stores/inboxStore'
 import { inboxSubtitle } from './inbox/inboxListSource'
 import { SenderGlyph } from './inbox/SenderGlyph'
 import { registerMessages, useI18n } from '../i18n'
-import { InlineMarkdownText } from '../amadeus/blocks/database/todoTitle'
+import { InlineMarkdownText, todoTitleCol } from '../amadeus/blocks/database/todoTitle'
+import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 import { formatMonthDay } from '../format/time'
 
 registerMessages({
@@ -61,7 +62,7 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
       for (const row of todoRowsOf(member)) {
         if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
-        out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, md: true, complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
+        out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, ...(todoTitleCol(member.db.columns, checkCol) ? { md: true as const } : {}), complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
       }
     }
     for (const mark of marks) if (mark.isTask && !mark.checked) {
@@ -69,7 +70,8 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
         if (!patchMark(mark, { checked: true })) void openNoteAtHeading(mark.path, mark.heading)
       } })
     }
-    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || a.name.localeCompare(b.name, 'zh'))
+    const plain = (r: { name: string; md?: true }): string => (r.md ? inlineMarkdownToPlain(r.name) : r.name)
+    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || plain(a).localeCompare(plain(b), 'zh'))
   }, [members, marks, today])
   const undone = rows.length
   const shown = rows.slice(0, limitFor(size, 4))
@@ -103,7 +105,7 @@ export function useAgendaItems(): AgendaItem[] {
   useStableCalendarColors()
   return useMemo(() => {
     const sources = [
-      ...members.map((member) => ({ db: member.db, dateCol: member.dateCol, md: !!member.checkboxCol })),
+      ...members.map((member) => ({ db: member.db, dateCol: member.dateCol, md: todoTitleCol(member.db.columns, member.checkboxCol) !== null })),
       ...[...agent, ...other, ...ics, ...md]
         .map((db) => ({ db, dateCol: firstDateCol(db)?.id ?? '' }))
         .filter((source) => source.dateCol),

@@ -60,7 +60,7 @@ import { agendaOrder, byStart, layoutMonthWeek, layoutTimedEvents } from './cale
 import { calendarScope, deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit, redoLastCalendarEdit } from './calendar/eventActions'
 import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
 import { armLongPress, longPressTarget } from './calendar/longPress'
-import { InlineMarkdownText } from '../amadeus/blocks/database/todoTitle'
+import { InlineMarkdownText, todoTitleCol } from '../amadeus/blocks/database/todoTitle'
 import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 import {
   HOURS,
@@ -158,6 +158,8 @@ interface CalEvent {
   /** 这张表是待办来源(成员映射了勾选列)→ 列 id;块里画方框,在日历里就能勾。 */
   check?: string
   done?: boolean
+  /** The title is a to-do list's inline Markdown (todoTitleCol: the Done column still is a checkbox, the first column text). */
+  md?: boolean
 }
 type DraftGeom = Omit<CalDraft, 'title' | 'dbPath'>
 
@@ -186,6 +188,7 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
         readonly: (!!db.readonly && !db.writeCell) || isStamped(db.columns.find((c) => c.id === dateCol)?.type ?? ''),
         check: checkboxCol,
         done: checkboxCol ? r.cells[checkboxCol] === true : undefined,
+        md: todoTitleCol(db.columns, checkboxCol) !== null,
       })
     }
   })
@@ -196,8 +199,8 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
 const dateOnlyTodo = (e: CalEvent): boolean => DESK && !!e.check && e.allDay && !e.end
 /** A to-do's title is inline Markdown (the to-do box writes it, 11-21): drawn with its marks; labels, tooltips and the drag
  *  preview read the plain text. Links and wiki links aren't clickable in a chip (the whole chip is the drag / open target). */
-const titleOf = (e: CalEvent): string => (e.check ? inlineMarkdownToPlain(e.title) : e.title)
-const titleView = (e: CalEvent): ReactNode => (e.check ? <InlineMarkdownText md={e.title} /> : e.title)
+const titleOf = (e: CalEvent): string => (e.md ? inlineMarkdownToPlain(e.title) : e.title)
+const titleView = (e: CalEvent): ReactNode => (e.md ? <InlineMarkdownText md={e.title} /> : e.title)
 
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const fmtMin = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`

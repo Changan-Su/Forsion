@@ -238,6 +238,15 @@ describe('format: review 11-21 (second pass)', () => {
   })
 })
 
+describe('format: review 11-21 (third pass)', () => {
+  it('an explicit clear empties a document that holds only spaces (its value is already empty)', async () => {
+    await mount({ onSubmit: () => false })
+    await type('   ')
+    await act(async () => { box!.update({ value: '' }) })
+    expect(editor()!.textContent).toBe('')
+  })
+})
+
 describe('format on the phone (11-21: not verified there yet)', () => {
   it('the phone host reports no format capability and keeps the textarea; the reader is still there', async () => {
     vi.stubGlobal('tangu', { ...(window as unknown as { tangu?: object }).tangu, mobile: true })

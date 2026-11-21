@@ -77,6 +77,7 @@ export function trimDocEdges(doc: PMNode): PMNode {
     let k = 0
     for (let i = 0; i < b.childCount; i++) {
       const c = b.child(fromEnd ? b.childCount - 1 - i : i)
+      if (c.marks.some((m) => m.type.spec.code)) break // spaces inside a code span are its text (`  x  `)
       const whole = blank(c)
       if (whole >= 0) { k += whole; continue }
       if (c.isText) k += (fromEnd ? /[ \t]*$/ : /^[ \t]*/).exec(c.text ?? '')![0].length
@@ -136,7 +137,8 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
   /** Replace the document with `value` (a fresh undo history; no onChange). A value the grammar can't read shows as text. */
   const applyValue = (value: string): void => {
     const e = editor.current
-    if (!e || value === shown.current) return
+    // Same value: nothing to do, except an explicit clear over a document that serializes to '' (only spaces) yet isn't empty.
+    if (!e || (value === shown.current && (value !== '' || e.view.state.doc.textContent === ''))) return
     const schema = e.view.state.schema
     let doc: PMNode
     try { doc = e.ctx.get(parserCtx)((value || '').replace(/\r\n?/g, '\n')) as PMNode } catch (err) {

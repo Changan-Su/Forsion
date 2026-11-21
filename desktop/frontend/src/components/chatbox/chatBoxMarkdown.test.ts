@@ -169,6 +169,10 @@ describe('edge whitespace (Electron acceptance 11-21)', () => {
         const marked = b.schema.node('doc', null, [b.schema.node('paragraph', null, [b.schema.text(' '), b.schema.text('粗', [b.schema.marks.strong.create()]), b.schema.text(' ')])])
         expect(b.store(marked)).toBe('**粗**')
         expect(b.store(doc('   '))).toBe('')
+        // spaces inside a code span at the edge are its text (review 11-21, third pass)
+        const code = b.schema.node('doc', null, [b.schema.node('paragraph', null, [b.schema.text('  foo  ', [b.schema.marks.inlineCode.create()])])])
+        expect(b.store(code)).toBe('`   foo   `') // CommonMark strips one space each side when both have one
+        expect(parseInlineMarkdown('`   foo   `')).toMatchObject([{ text: '  foo  ', code: true }])
       } finally { await b.destroy() }
     }
   })
