@@ -11,6 +11,7 @@ import type { PluginChatBoxHandle } from '../../../../shared/chatBox'
 import { Slice, Fragment } from '@milkdown/kit/prose/model'
 import { flattenSlice } from '../../components/chatbox/ChatBoxEditor'
 import '../../tangu/store/standalone' // the Chat Box reads agent defs from Tangu's store
+import { usePluginStore } from './pluginStore'
 
 let el: HTMLDivElement
 let box: PluginChatBoxHandle | undefined
@@ -198,6 +199,41 @@ describe('format: review 11-21', () => {
     await type('#产')
     await act(async () => { await new Promise(r => setTimeout(r, 10)) })
     expect(rows()).toEqual([])
+  })
+})
+
+describe('format: review 11-21 (second pass)', () => {
+  it('a swapped value closes the menu even where the caret and the query line up again', async () => {
+    const onSubmit = vi.fn(() => false)
+    await mount({ submitOn: 'enter', suggest: { trigger: '#', items: () => [{ label: 'xyz', value: '#xyz' }] }, onSubmit })
+    await type('one #x')
+    expect(rows()).toEqual(['xyz'])
+    await act(async () => { box!.update({ value: 'two #x' }) })
+    expect(rows()).toEqual([])
+    await press('Enter')
+    expect(editor()!.textContent).toBe('two #x')
+  })
+  it('links draw a live href only for http(s) / mailto; the stored text keeps what was written', async () => {
+    const onChange = vi.fn()
+    const ed = await mount({ value: '[a](javascript:alert) [b](https://x.test/) [c](mailto:m@x.test)', onChange, onSubmit: () => false })
+    const links = [...ed.querySelectorAll('a')]
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([null, 'https://x.test/', 'mailto:m@x.test'])
+    await type('!')
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ text: expect.stringContaining('[a](javascript:alert)') }))
+  })
+  it('the public ctx handle: insertText before the mount lands is text, not Markdown', async () => {
+    const onChange = vi.fn()
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    await act(async () => {
+      usePluginStore.getState().init([{ id: 'chatbox-format-insert', name: 'Insert', version: '1', setup(ctx) {
+        box = ctx.ui!.mountChatBox!(el, { modelPicker: false, format: 'inline', value: '**a** b', onChange, onSubmit: () => false })
+        box.insertText('**x**')
+      } }])
+      await new Promise(resolve => setTimeout(resolve, 10))
+    })
+    const ed = await ready()
+    expect([...ed.querySelectorAll('strong')].map((b) => b.textContent)).toEqual(['a'])
+    expect(ed.textContent).toBe('a b**x**')
   })
 })
 

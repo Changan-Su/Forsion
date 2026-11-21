@@ -3,7 +3,7 @@
  *  Real Milkdown with the box's own parts (./editorPlugins). The 11-20 measurement (instrument/todo-title-roundtrip.md) found
  *  `snake_case`, URLs with `_` / `&` and `5*3` stored with backslashes by the notes' serializer; these pin that the box
  *  stores them as typed, that a plain title loads and re-saves byte for byte, and that the readers' parse agrees. */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Editor, editorViewCtx, parserCtx, rootCtx } from '@milkdown/kit/core'
 import type { Ctx } from '@milkdown/kit/ctx'
 import type { Node as PMNode, Schema } from '@milkdown/kit/prose/model'
@@ -153,13 +153,61 @@ describe('parseInlineMarkdown', () => {
   })
 })
 
+describe('parseInlineMarkdown offsets (review 11-21, second pass)', () => {
+  /** Runs in source order, never overlapping, each spelling its own text (or its `[[…]]`). */
+  const wellFormed = (src: string): void => {
+    let end = 0
+    for (const t of parseInlineMarkdown(src)) {
+      expect(t.from).toBeGreaterThanOrEqual(end)
+      expect(t.to).toBeGreaterThanOrEqual(t.from)
+      end = t.to
+    }
+  }
+  it('escapes and a wiki link inside bold: exact, non-overlapping ranges', () => {
+    const src = '**A \\*x\\* [[foo]] B** rest'
+    const runs = parseInlineMarkdown(src)
+    expect(runs.map((t) => src.slice(t.from, t.to))).toEqual(['A \\*x\\* ', '[[foo]]', ' B', ' rest'])
+    expect(runs.map((t) => t.text)).toEqual(['A *x* ', 'foo', ' B', ' rest'])
+    wellFormed(src)
+  })
+  it('a wiki run covers its whole [[…]], padded alias or not', () => {
+    const src = '[[note| alias ]] x'
+    const w = parseInlineMarkdown(src)[0]
+    expect(w).toMatchObject({ text: 'alias', wiki: 'note| alias ', from: 0, to: 16 })
+  })
+  it('a code span: inside the backticks and the stripped spaces, even when its text is a backtick', () => {
+    for (const [src, inner] of [['`` ` `` a', '`'], ['` x `', 'x'], ['``a`b``', 'a`b'], ['`  `', '  ']] as const) {
+      const c = parseInlineMarkdown(src).find((t) => t.code)!
+      expect(c.text).toBe(inner)
+      expect(src.slice(c.from, c.to)).toBe(inner)
+    }
+  })
+  it('a link: the text run sits inside the brackets; the target is outside every run', () => {
+    const src = '[Plan](https://x.test/2026-11-28) 明天'
+    const runs = parseInlineMarkdown(src)
+    expect(runs.map((t) => src.slice(t.from, t.to))).toEqual(['Plan', ' 明天'])
+    wellFormed(src)
+  })
+  it('CRLF / CR line breaks read as a space, in code spans too', () => {
+    expect(inlineMarkdownToPlain('A\r\nB')).toBe('A B')
+    expect(inlineMarkdownToPlain('A\rB')).toBe('A B')
+    expect(inlineMarkdownToPlain('`a\nb` c')).toBe('a b c')
+  })
+  it('stays well-formed over a mixed bag', () => {
+    for (const src of ['&#65;[[p]] **b** `c` ~~d~~ [e](https://f) g', '交周报 **明天下午** 前', '\\[[x]] y', 'a  \nb', '**[[Plan #work]]**', 'p1\n\np2']) wellFormed(src)
+  })
+})
+
 describe('minimizeEscapes', () => {
   const same = (keep: string[]) => (c: string) => !keep.some((k) => !c.includes(k))
   it('drops what the check allows, keeps the rest', () => {
     expect(minimizeEscapes('a\\_b \\*c\\*', same(['\\*c']))).toBe('a_b \\*c*')
   })
-  it('skips long values (each test is a parse)', () => {
+  it('long values get one all-at-once try (each test is a parse; review 11-21)', () => {
     const long = 'x\\_'.repeat(2000)
-    expect(minimizeEscapes(long, () => true)).toBe(long)
+    expect(minimizeEscapes(long, () => true)).toBe('x_'.repeat(2000))
+    const calls = vi.fn(() => false)
+    expect(minimizeEscapes(long, calls)).toBe(long)
+    expect(calls).toHaveBeenCalledTimes(1)
   })
 })

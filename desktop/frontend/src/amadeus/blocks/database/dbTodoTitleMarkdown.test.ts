@@ -59,6 +59,10 @@ describe('待办清单标题列的行内 Markdown', () => {
     expect(cell.querySelector('strong')).toBeNull()
     expect(cell.textContent).toBe('**会前材料**：设计 评审议程 snake_case')
   })
+  it('映射的完成列已删(review 11-21):不再算待办清单,照旧', async () => {
+    await mount({ dateCol: 'date', checkboxCol: 'gone' })
+    expect(host().querySelector('.amx-db-value-text strong')).toBeNull()
+  })
   it('不在日历里:照旧', async () => {
     await mount(null)
     expect(host().querySelector('.amx-db-value-text strong')).toBeNull()

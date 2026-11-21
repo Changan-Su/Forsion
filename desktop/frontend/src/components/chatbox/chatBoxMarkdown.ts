@@ -39,12 +39,17 @@ const imageLiteral = {
 }
 
 interface MdTree { type: string; value?: string; children?: MdTree[] }
-/** `inline` is one line: a line break (`a  ⏎b`, `a\⏎b`, a soft break in a value with newlines) reads as a space. */
+/** `inline` is one line: a line break (`a  ⏎b`, `a\⏎b`, a soft break in a value with newlines; LF, CRLF or CR) reads as
+ *  a space, in code spans too. */
 function oneLine(tree: MdTree): void {
+  const EOL = /[ \t]*(?:\r\n?|\n)[ \t]*/g
   const walk = (n: MdTree): void => {
     if (!n.children) return
     n.children = n.children.map((c) => (c.type === 'break' ? { ...c, type: 'text', value: ' ' } : c))
-    for (const c of n.children) { if (c.type === 'text' && c.value?.includes('\n')) c.value = c.value.replace(/[ \t]*\n[ \t]*/g, ' '); walk(c) }
+    for (const c of n.children) {
+      if ((c.type === 'text' || c.type === 'inlineCode') && c.value && /[\r\n]/.test(c.value)) c.value = c.value.replace(EOL, ' ')
+      walk(c)
+    }
   }
   walk(tree)
 }
@@ -93,29 +98,30 @@ export function parseInlineMarkdown(md: string): ChatBoxInlineToken[] {
     tree = p.runSync(p.parse(src)) as unknown as MdNode
   } catch { return [{ text: src, from: 0, to: src.length }] }
   const out: ChatBoxInlineToken[] = []
+  // Offsets come from the source spans (escapes and references included), so runs never overlap: a text node spans its
+  // own source; a wiki link inside it is found in the source, and the text around it gets the source between.
   const push = (value: string, node: MdNode, marks: Marks, wikis: boolean): void => {
-    const nodeFrom = node.position?.start.offset ?? 0, to0 = node.position?.end.offset ?? nodeFrom
-    // Offsets are exact where the source spells the text as is (inside a code span's backticks too); with escapes or
-    // references in it, a run gets the node's range.
-    const k = src.indexOf(value, nodeFrom)
-    const exact = !!value && k >= nodeFrom && k + value.length <= to0
-    const from = exact ? k : nodeFrom, to = exact ? k + value.length : to0
-    const at = (i: number): number => (exact ? from + i : from)
-    const end = (i: number): number => (exact ? from + i : to)
-    let last = 0
+    let from = node.position?.start.offset ?? 0, to = node.position?.end.offset ?? from
+    if (node.type === 'inlineCode') { // inside the backticks, and inside the one space CommonMark strips from each side
+      let fence = 0
+      while (src[from + fence] === '`') fence++
+      from += fence; to = Math.max(from, to - fence)
+      if (to - from > value.length && src[from] === ' ' && src[to - 1] === ' ') { from++; to-- }
+    }
+    let last = 0, cursor = from
     if (wikis) {
       for (const m of value.matchAll(WIKI_RE)) {
+        const raw = src.indexOf(m[0], cursor)
+        if (raw < 0 || raw + m[0].length > to) continue // spelled with escapes: leave it as text
         const i = m.index ?? 0
-        if (i > last) out.push({ text: value.slice(last, i), ...marks, from: at(last), to: end(i) })
+        if (i > last) out.push({ text: value.slice(last, i), ...marks, from: cursor, to: raw })
         const inner = m[0].slice(2, -2)
         const shown = (inner.includes('|') ? inner.slice(inner.indexOf('|') + 1) : inner).trim() || inner
-        const raw = src.indexOf(m[0], exact ? from + i : from)
-        const wFrom = raw >= from && raw + m[0].length <= to ? raw : at(i), wTo = raw >= from && raw + m[0].length <= to ? raw + m[0].length : end(i + m[0].length)
-        out.push({ text: shown, ...marks, wiki: inner, from: wFrom, to: wTo })
-        last = i + m[0].length
+        out.push({ text: shown, ...marks, wiki: inner, from: raw, to: raw + m[0].length })
+        last = i + m[0].length; cursor = raw + m[0].length
       }
     }
-    if (last < value.length) out.push({ text: value.slice(last), ...marks, from: at(last), to: end(value.length) })
+    if (last < value.length) out.push({ text: value.slice(last), ...marks, from: cursor, to })
   }
   const walk = (node: MdNode, marks: Marks): void => {
     switch (node.type) {
@@ -147,17 +153,18 @@ const ESCAPABLE = /[!-/:-@[-`{-~]/
 const CHAR_REF = /^&#(?:x([0-9a-f]{1,6})|(\d{1,7}));/i
 /** Drop each `\` before ASCII punctuation, and spell out each `&#x…;` reference, when `same(candidate)` stays true
  *  (the candidate parses to the same document). Left to right, greedy; every accepted step re-parses equal, so the
- *  result always does too. Long values skip it (each test is a parse): correct, just more backslashes. */
+ *  result always does too. Past `limit` only the all-at-once try runs (each test is a parse): correct, maybe more backslashes. */
 export function minimizeEscapes(md: string, same: (candidate: string) => boolean, limit = 4000): string {
-  if (md.length > limit || !/[\\&]/.test(md)) return md
+  if (!/[\\&]/.test(md)) return md
   let out = md, tries = 0
   const attempt = (candidate: string): boolean => {
     if (++tries > 600) return false
     try { return same(candidate) } catch { return false }
   }
   const bare = (x: string): string => x.replace(/\\([!-/:-@[-`{-~])/g, '$1')
-  // Most values need no escape at all: one parse settles it.
+  // Most values need no escape at all: one parse settles it (long values get only this one).
   if (bare(out) !== out && attempt(bare(out))) return bare(out)
+  if (md.length > limit) return md
   // Otherwise one at a time, repeating while a pass frees an escape an earlier one kept; then the remaining ones together
   // (`\*a\*\*b`: each of the last two is needed alone, both can go at once → `*a**b`).
   for (let pass = 0; pass < 4; pass++) {

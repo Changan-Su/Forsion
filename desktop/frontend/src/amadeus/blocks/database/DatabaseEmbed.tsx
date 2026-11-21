@@ -666,7 +666,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const calByVault = useCalendarConfig((s) => s.byVault)
   const addMember = useCalendarConfig((s) => s.addMember)
   // Todo lists = calendar members with a done column (and the default calendar): their title column is the todo box's Markdown.
-  const mdTitleCol = (dbRef === HUMAN_CAL || !!memberOf(vault, calByVault, dbPath)?.checkboxCol) && db.columns[0]?.type === 'text' ? db.columns[0].id : null
+  const todoCheck = memberOf(vault, calByVault, dbPath)?.checkboxCol // the mapped Done column, only while it still is one
+  const mdTitleCol = (dbRef === HUMAN_CAL || (!!todoCheck && db.columns.some((c) => c.id === todoCheck && c.type === 'checkbox'))) && db.columns[0]?.type === 'text' ? db.columns[0].id : null
 
   const identityId = db.columns[0]?.id
   const isIdentity = (colId: string): boolean => colId === identityId

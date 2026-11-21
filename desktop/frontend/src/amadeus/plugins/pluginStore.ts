@@ -2548,12 +2548,14 @@ export const usePluginStore = create<PluginState>((set, get) => {
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
         let cancelled = false, focusPending = false
         const pending = { ...opts }
+        const early: string[] = [] // format boxes: the value is Markdown, so text typed in before the mount goes in as text
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
         const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
           if (!mine()) { dispose(); return }
           mounted = m.mountPluginChatBox(el, pending)
+          for (const t of early.splice(0)) mounted.insertText(t)
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
         return {
@@ -2562,6 +2564,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           insertText(text) {
             if (cancelled) return
             if (mounted) mounted.insertText(text)
+            else if (pending.format === 'inline' || pending.format === 'basic') { early.push(String(text)); focusPending = true }
             else { pending.value = (pending.value ?? '') + String(text); focusPending = true }
           },
           dispose,

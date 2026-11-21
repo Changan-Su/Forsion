@@ -177,7 +177,7 @@ function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) 
       onBlur: close,
       onSelect: caretMoved,
     },
-    editorProps: { onTextInput: evaluate, onCaretMove: caretMoved, onCompositionStart: compositionStart, onCompositionEnd: compositionEnd, onBlur: close },
+    editorProps: { onTextInput: evaluate, onCaretMove: caretMoved, onReplace: () => { pendingAt.current = null; close() }, onCompositionStart: compositionStart, onCompositionEnd: compositionEnd, onBlur: close },
     menu: menu && createPortal(
       // Outside the card: its container-type would capture position:fixed. The classes carry the menu's scoped styles.
       <div className="am-app tangu-lovable" style={{ display: 'contents' }}>

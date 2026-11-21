@@ -32,8 +32,10 @@ export type ChatBoxMention =
 /** `format` profiles; see `PluginChatBoxOptions.format`. */
 export type ChatBoxFormat = 'inline' | 'basic'
 
-/** One run of an inline Markdown value (`ctx.ui.parseInlineMarkdown`). Marks are set only when on. `from` / `to`: offsets of
- *  the run's own text in the source (inside any delimiters), so a parser that edits the source can leave formatted runs alone. */
+/** One run of an inline Markdown value (`ctx.ui.parseInlineMarkdown`). Marks are set only when on. `from` / `to`: the run's
+ *  own source text (inside any delimiters, escapes included; a wiki run covers its whole `[[…]]`). Runs never overlap, and
+ *  the source outside every run is markup (delimiters, link targets), so a parser that edits the source can leave formatted
+ *  runs and markup alone by touching only unmarked runs. */
 export interface ChatBoxInlineToken {
   text: string
   strong?: true

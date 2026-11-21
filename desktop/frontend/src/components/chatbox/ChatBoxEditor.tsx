@@ -51,8 +51,10 @@ export interface ChatBoxEditorProps {
   handle: MutableRefObject<ChatBoxEditorHandle | null>
   /** After the user changed the text (the suggest menu re-reads). */
   onTextInput?(): void
-  /** The caret moved without a text change, or a value from outside replaced the document. */
+  /** The caret moved without a text change. */
   onCaretMove?(): void
+  /** A value from outside replaced the document: any open or pending suggestion belonged to the old one. */
+  onReplace?(): void
   onCompositionStart?(): void
   onCompositionEnd?(): void
   onBlur?(): void
@@ -103,7 +105,7 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
     if (!e || value === shown.current) return
     const schema = e.view.state.schema
     let doc: PMNode
-    try { doc = e.ctx.get(parserCtx)(value || '') as PMNode } catch (err) {
+    try { doc = e.ctx.get(parserCtx)((value || '').replace(/\r\n?/g, '\n')) as PMNode } catch (err) {
       console.error('[chatbox] could not read value; showing it as text', err)
       const line = (value || '').replace(/\s*\n\s*/g, ' ')
       doc = schema.node('doc', null, [schema.nodes.paragraph.create(null, line ? schema.text(line) : undefined)])
@@ -112,7 +114,7 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
     shown.current = value
     applying.current = true
     try { e.view.updateState(state) } finally { applying.current = false }
-    live.current.onCaretMove?.() // an open suggest menu's range belonged to the old document
+    live.current.onReplace?.() // an open suggest menu's range belonged to the old document, even where caret and query match
   }
 
   useEffect(() => {

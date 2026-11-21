@@ -61,13 +61,21 @@ const syntaxRemark = {
 
 const r = anchoredMarkInputRules
 
+/** Links draw an `href` only for http(s) / mailto: a stored `[x](javascript:…)` stays in the Markdown as typed, but the
+ *  editor's anchor carries no live target (the same allowlist as the readers that render these values). */
+const SAFE_HREF = /^(https?:|mailto:)/i
+const safeLinkSchema = linkSchema.extendSchema((prev) => (ctx) => {
+  const base = prev(ctx)
+  return { ...base, toDOM: (mark) => ['a', { ...ctx.get(linkAttr.key)(mark), ...mark.attrs, href: SAFE_HREF.test(String(mark.attrs.href ?? '').trim()) ? mark.attrs.href : null }] }
+})
+
 function inlineParts(format: ChatBoxFormat): MilkdownPlugin[] {
   return [
     // Schema. ⚠️ paragraph before any other block: the first block type is the default one (a trimmed preset that
     // put heading first made every new block an H1 in the notes editor).
     format === 'inline' ? inlineDocSchema : docSchema,
     paragraphAttr, paragraphSchema,
-    emphasisAttr, emphasisSchema, strongAttr, strongSchema, inlineCodeAttr, inlineCodeSchema, linkAttr, linkSchema,
+    emphasisAttr, emphasisSchema, strongAttr, strongSchema, inlineCodeAttr, inlineCodeSchema, linkAttr, safeLinkSchema,
     strikethroughAttr, strikethroughSchema,
     textSchema,
     // Grammar: gfm with `~~` only, CJK-friendly attention after it, the profile's switched-off syntax.
