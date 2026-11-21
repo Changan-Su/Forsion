@@ -4,7 +4,7 @@
  * 注册表与生命周期在 ../processRegistry.ts;模块 dispose 时统一 SIGKILL 防泄漏。
  * 注意:不给 run_bash 加 background 参数——改既有工具的 schema 会打破 defs 字节级前缀稳定。
  */
-import { startBackgroundProcess, listProcesses, getProcess, killProcess, writeStdin, waitForOutput } from '../processRegistry.js';
+import { startBackgroundProcess, listProcesses, getProcess, killProcess, writeStdin, waitForOutput, processOutput } from '../processRegistry.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
 const READ_CHUNK_CHARS = 20_000;
@@ -91,9 +91,10 @@ export const hostProcessProvider: ToolProvider = {
       execute: (args, ctx) => {
         const p = getProcess(ctx.sessionId, String(args.process_id ?? ''));
         if (!p) return `Error: 进程 ${args.process_id} 不存在`;
-        const total = p.output.length;
+        const output = processOutput(p); // 移交进来的 run_bash 带着 secret_env 跑过:先打码再切
+        const total = output.length;
         const offset = Number.isFinite(Number(args.offset)) && Number(args.offset) >= 0 ? Number(args.offset) : Math.max(0, total - READ_CHUNK_CHARS);
-        const chunk = p.output.slice(offset, offset + READ_CHUNK_CHARS);
+        const chunk = output.slice(offset, offset + READ_CHUNK_CHARS);
         const head = `[${p.id} ${p.status}${p.exitCode !== null ? ` exit=${p.exitCode}` : ''} · chars ${offset}-${offset + chunk.length} of ${total}${p.truncated ? '(头部已被环形缓冲覆盖)' : ''}]`;
         return `${head}\n${chunk || '(no output yet)'}`;
       },
