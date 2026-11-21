@@ -327,6 +327,45 @@ describe('createMultiAccountApp', () => {
     }
   });
 
+  it('skips linked entries when listing an account skills and agents, and refuses writes through links', async () => {
+    expect((await call('GET', '/agent/sessions', { as: 'ivy' })).status).toBe(200); // 开户
+    const acc = join(env.home, 'accounts', 'ivy');
+    const out = mkdtempSync(join(tmpdir(), 'ma-links-'));
+    // 技能:整个文件夹是软链 / SKILL.md 是软链
+    mkdirSync(join(out, 'sk'), { recursive: true });
+    writeFileSync(join(out, 'sk', 'SKILL.md'), '---\nname: outside-skill\ndescription: OUTSIDE_SKILL\n---\nbody\n');
+    mkdirSync(join(acc, 'skills'), { recursive: true });
+    symlinkSync(join(out, 'sk'), join(acc, 'skills', 'linked-skill'));
+    mkdirSync(join(acc, 'skills', 'half-skill'), { recursive: true });
+    symlinkSync(join(out, 'sk', 'SKILL.md'), join(acc, 'skills', 'half-skill', 'SKILL.md'));
+    // Agent:整个文件夹是软链 / config.toml 是软链
+    mkdirSync(join(out, 'ag'), { recursive: true });
+    writeFileSync(join(out, 'ag', 'config.toml'), 'name = "OUTSIDE_AGENT"\n');
+    expect((await call('GET', '/agent/agents', { as: 'ivy' })).status).toBe(200); // 建出 agents/
+    symlinkSync(join(out, 'ag'), join(acc, 'agents', 'linked-agent'));
+    mkdirSync(join(acc, 'agents', 'half-agent'), { recursive: true });
+    symlinkSync(join(out, 'ag', 'config.toml'), join(acc, 'agents', 'half-agent', 'config.toml'));
+    const skills = JSON.stringify((await call('GET', '/agent/skills', { as: 'ivy' })).json);
+    expect(skills).not.toContain('OUTSIDE_SKILL');
+    expect(skills).not.toContain('linked-skill');
+    expect(skills).not.toContain('half-skill');
+    const agents = JSON.stringify((await call('GET', '/agent/agents', { as: 'ivy' })).json);
+    expect(agents).not.toContain('OUTSIDE_AGENT');
+    expect(agents).not.toContain('linked-agent');
+    expect(agents).not.toContain('half-agent');
+    // 写入:目标已存在且是软链 → 拒
+    const { runWithAccount } = await import('../core/accountScope.js');
+    const { saveAgent } = await import('../agents/agentRegistry.js');
+    await expect(runWithAccount('ivy', () => saveAgent({ slug: 'half-agent', name: 'Half', systemPrompt: 'p' } as any))).rejects.toThrow(/symbolic link/);
+    const { manageSkillProvider } = await import('../tools/builtin/manageSkill.js');
+    const tool = (manageSkillProvider.tools as any)().find((t: any) => t.name === 'manage_skill');
+    const r = await runWithAccount('ivy', () => tool.execute({ action: 'update', slug: 'half-skill', instructions: 'NEW BODY' }, {}));
+    expect(String(r)).toMatch(/symbolic link/);
+    const { readFileSync } = await import('node:fs');
+    expect(readFileSync(join(out, 'sk', 'SKILL.md'), 'utf8')).not.toContain('NEW BODY');
+    expect(readFileSync(join(out, 'ag', 'config.toml'), 'utf8')).toBe('name = "OUTSIDE_AGENT"\n');
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);

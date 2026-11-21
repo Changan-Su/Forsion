@@ -20,7 +20,7 @@
  * 插件包目录(TANGU_BUNDLE_DIRS、包内首方 plugins/)只读。其余一律账号级;归不清的先归账号级或关掉。
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -112,6 +112,15 @@ export function perAccount<T>(factory: () => T): () => T {
     if (!byAccount.has(id)) byAccount.set(id, factory());
     return byAccount.get(id) as T;
   };
+}
+
+/** 这些路径里第一个「存在且是软链」的(lstat,不跟链);都不是就 null。多账号模式扫描 / 写入账号自己的文件夹时用:
+ *  软链条目跳过 / 拒绝,不让账号经它读写到别处。不存在的路径不算。 */
+export function firstLink(...paths: string[]): string | null {
+  for (const p of paths) {
+    try { if (lstatSync(p).isSymbolicLink()) return p; } catch { /* 不存在 / 读不了:不算软链 */ }
+  }
+  return null;
 }
 
 /** 引擎根(不属于任何账号):`TANGU_HOME || ~/.tangu`。 */

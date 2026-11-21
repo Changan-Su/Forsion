@@ -13,7 +13,7 @@
  * microserver/worker 不触本模块。mtime 缓存(config.toml + SOUL.md),改文件即时生效。
  * 旧扁平 <slug>.md 首次访问时惰性迁移成文件夹(原文件留 .bak)。
  */
-import { perAccount } from '../core/accountScope.js';
+import { firstLink, isMultiAccount, perAccount } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -353,6 +353,8 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
 
 /** 读 <dir>/config.toml + <dir>/SOUL.md 组装 def。 */
 export async function parseAgentFolder(slug: string, dir: string): Promise<NormalAgentDef> {
+  // 多账号模式:Agent 文件夹或它的 config.toml / SOUL.md 是软链 → 当坏目录(调用方跳过 / 当不存在),不跟链读
+  if (isMultiAccount() && firstLink(dir, path.join(dir, 'config.toml'), path.join(dir, 'SOUL.md'))) throw new Error(`agent folder ${slug} contains a symbolic link`);
   const tomlRaw = await fs.readFile(path.join(dir, 'config.toml'), 'utf-8').catch(() => '');
   const soul = await fs.readFile(path.join(dir, 'SOUL.md'), 'utf-8').catch(() => '');
   return parseAgentConfig(slug, tomlRaw, soul);
@@ -984,6 +986,7 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   const defs: NormalAgentDef[] = [];
   let entries;
   try {
+    if (isMultiAccount() && firstLink(dir)) throw new Error('linked agents folder'); // 多账号模式:agents/ 本身是软链 → 当空
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     cacheSlot().v = { stamp, defs };
@@ -1276,6 +1279,9 @@ async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, i
   if (!existing && !input.standInOf && isStandInSlugShape(slug)) throw new Error(`"${slug}" is reserved for stand-ins (it contains "-standin-"); pick another id.`);
   const def = buildAgentDef(slug, existing, input);
   const adir = path.join(agentsDir(), slug);
+  // 多账号模式:目标(agents/、Agent 文件夹、config.toml、SOUL.md)已存在且是软链 → 拒,不经它写到别处
+  const linked = isMultiAccount() ? firstLink(agentsDir(), adir, path.join(adir, 'config.toml'), path.join(adir, 'SOUL.md')) : null;
+  if (linked) throw new Error(`Refusing to write agent "${slug}": ${linked} is a symbolic link.`);
   if (!existing) mkdirSync(adir, { recursive: true });
   else if (!existsSync(path.join(adir, 'config.toml'))) throw new AgentNotFoundError(slug);
   await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');

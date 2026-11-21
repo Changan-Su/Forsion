@@ -8,7 +8,7 @@
  * 混进目录与 system prompt 被 use_skill 直接调用。改由「设置 → Agent CLIs」逐个显式导入
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
-import { isMultiAccount, perAccount } from '../core/accountScope.js';
+import { firstLink, isMultiAccount, perAccount } from '../core/accountScope.js';
 import { promises as fs, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -155,14 +155,17 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
   const skills: SkillRecord[] = [];
   let entries;
   try {
+    // 多账号模式:技能目录本身是软链就当空(不跟链读到账号文件夹之外)
+    if (isMultiAccount() && firstLink(dir)) throw new Error('linked skills folder');
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     cache.set(dir, { stamp, skills });
     return skills;
   }
   for (const e of entries) {
-    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue;
+    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue; // 软链条目的 Dirent 不是目录,本来就跳过
     const file = path.join(dir, e.name, 'SKILL.md');
+    if (isMultiAccount() && firstLink(file)) continue; // 多账号模式:SKILL.md 是软链 → 跳过
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf-8');
