@@ -28,6 +28,7 @@
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const JSZip = require('jszip')
 const electron = require('./lib/launch-electron.cjs')
+const { skipDisableReason } = require('./lib/disable-reason.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -257,6 +258,7 @@ async function syncRound() {
     // P:关掉再打开闸插件 → 检查卡弹出 → 在卡里装配套推荐的引擎插件(假引擎说要重启)
     const hostBox = st.locator('[data-plugin-id="rec-host"] [role="switch"]')
     await hostBox.click()
+    await skipDisableReason(st) // 拨下先问停用理由(遥测 v3):直接停用
     await pause(300)
     await hostBox.click()
     const obCard = st.locator('.plugin-onboarding-card')

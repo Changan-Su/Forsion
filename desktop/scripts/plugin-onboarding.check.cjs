@@ -24,6 +24,7 @@
  */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
+const { skipDisableReason } = require('./lib/disable-reason.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -134,6 +135,7 @@ async function main() {
 
     // H:老的自证标志不许再让一道真闸闭嘴(删 __setupDone 之后的迁移回归)
     await legacyCard.locator('[role="switch"]').click() // 关
+    await skipDisableReason(fl) // 先问停用理由(遥测 v3):直接停用
     await pause(300)
     await legacyCard.locator('[role="switch"]').click() // 开 → 重测
     check('H 老用户点过的 __setupDone=1 不再让未满足的闸闭嘴',

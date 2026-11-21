@@ -556,7 +556,7 @@ export const ModelPill: React.FC<{
   }
 
   const canUpgrade = typeof window !== 'undefined' && !!window.tangu?.openPayCenter
-  const openUpgrade = (): void => { setPillOpen(false); void window.tangu?.openPayCenter?.() }
+  const openUpgrade = (): void => { setPillOpen(false); void window.tangu?.openPayCenter?.({ entry: 'other' }) } // entry:下单入口(遥测 v3),模型锁的升级不属额度提示
   /** 选中了当前档位用不了的模型:不选,就地说明。原生菜单那两条路答回后菜单已收,改弹一张原生小卡;没有原生面就回到网页菜单里那一行下面说。 */
   const lockedPicked = (id: string): void => {
     const model = all.find((m) => m.id === id) || modelsResponse?.models.find((m) => m.id === id)

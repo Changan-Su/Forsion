@@ -81,8 +81,10 @@
   max-width: 460px;
   padding: 8px 8px 8px 12px;
   border-radius: var(--radius-md);
-  background: var(--bg-card);
-  border: var(--border-width, 1px) solid var(--border);
+  /* 压在插件页面上的提示条 = 浮层档(DESIGN §3「浮层表面」):Genesis / Soft 落回原实色,Glass 给磨砂 */
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   box-shadow: var(--card-shadow);
   color: var(--text-muted);
   font-size: var(--ui-font-meta);

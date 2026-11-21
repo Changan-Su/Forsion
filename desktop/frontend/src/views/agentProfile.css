@@ -455,3 +455,15 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .engine-harness-link:hover:not(:disabled) { color: var(--text); }
 .engine-harness-link:disabled { color: var(--text-ghost); cursor: default; }
 .engine-harness-btn { flex: none; }
+
+/* 内置指令有新版本、而用户改过(BuiltinUpdateNotice,11-20):要用户拍板的提示,底色分层不描边(DESIGN §5);
+   差异是改动记录的 FileDiff(.ct-diff),这里只限高、换底色,长指令在卡里滚。 */
+.builtin-update { display: grid; gap: 10px; min-width: 0; padding: 14px 16px; border-radius: var(--radius-md, 12px); background: var(--overlay-light); }
+.builtin-update-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.builtin-update-head > strong { flex: 1 1 12em; min-width: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; overflow-wrap: anywhere; }
+.builtin-update-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-left: auto; }
+.builtin-update > p { margin: 0; }
+.builtin-update-field { display: grid; gap: 6px; min-width: 0; }
+.builtin-update-field > small { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.builtin-update-field > small > span:first-child { color: var(--text); font-weight: 500; }
+.builtin-update-field .ct-diff { max-height: 260px; overflow-y: auto; background: var(--bg); border-radius: var(--radius-sm, 8px); }

@@ -14,6 +14,7 @@ import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
 import { homeTarget } from '../services/engine/targets'
 import { isDelegatedAdmin } from '../services/delegatedAdmin'
+import { UninstallReasonChips, type LifecycleReason } from './PluginReasons'
 import {
   agentUninstallPreview, deleteSkillCatalogEntry, restoreTrashEntry, skillUninstallPreview,
   type AgentUninstallPreview, type SkillUninstallPreview, type TrashEntry,
@@ -113,7 +114,7 @@ export interface UninstallRow {
   check?: { key: string; label: string; checkedDest?: string; checkedTone?: 'del' | 'keep' }
 }
 
-export function UninstallDialog({ title, message, rows, confirmLabel, note, blocked, loading, onConfirm, onClose }: {
+export function UninstallDialog({ title, message, rows, confirmLabel, note, blocked, loading, reasons, onConfirm, onClose }: {
   title: string
   message?: string
   rows: UninstallRow[]
@@ -122,12 +123,15 @@ export function UninstallDialog({ title, message, rows, confirmLabel, note, bloc
   /** 删不了(默认 Agent、内置技能…):只给关闭。 */
   blocked?: boolean
   loading?: boolean
-  onConfirm: (checks: Record<string, boolean>) => void
+  /** 画「为什么卸载」那一行可选理由(插件;遥测 v3 plugin_lifecycle.reason),选的随 onConfirm 第二个参数回来。 */
+  reasons?: boolean
+  onConfirm: (checks: Record<string, boolean>, reason: LifecycleReason | null) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
   const titleId = useId()
   const [checks, setChecks] = useState<Record<string, boolean>>({})
+  const [reason, setReason] = useState<LifecycleReason | null>(null)
   useEscape(onClose)
   const ic = { size: 15, strokeWidth: 1.8 }
   return createPortal(
@@ -148,11 +152,12 @@ export function UninstallDialog({ title, message, rows, confirmLabel, note, bloc
                 <span className="un-pill" data-tone={(on ? r.check?.checkedTone : r.tone) || undefined}>{on && r.check?.checkedDest ? r.check.checkedDest : r.dest}</span>
               </div>
             })}</div>}
+          {reasons && !blocked && !loading && <UninstallReasonChips value={reason} onChange={setReason} />}
           <div className="un-foot">
             <span className="un-note">{!blocked && note}</span>
             <div className="dialog-actions">
               <button className="dialog-btn" onClick={onClose}>{t(blocked ? 'uninstall.close' : 'amdlg.cancel')}</button>
-              {!blocked && <button className="dialog-btn" data-danger autoFocus disabled={loading} onClick={() => { onConfirm(checks); onClose() }}>{confirmLabel}</button>}
+              {!blocked && <button className="dialog-btn" data-danger autoFocus disabled={loading} onClick={() => { onConfirm(checks, reason); onClose() }}>{confirmLabel}</button>}
             </div>
           </div>
         </div>
@@ -328,7 +333,8 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, s
   agents?: string[]
   /** 这份商店安装取代的旧普通目录(AmadeusPlugin.supersedes):缺省一起进回收站,勾「保留旧副本」才留下(留下就是重新运行它)。 */
   superseded?: { version: string } | null
-  onConfirm: (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean }) => void
+  /** reason:用户在框里选的卸载理由(可不选 = 不带);调用方原样交给 pluginUninstall,随 plugin_lifecycle 报。 */
+  onConfirm: (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean; reason?: LifecycleReason }) => void
   onClose: () => void
 }) {
   const { t } = useI18n()
@@ -343,8 +349,8 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, s
   ]
   return <UninstallDialog
     title={t('uninstall.plugin.title', { name })} message={warning ? `${warning} ${t('uninstall.plugin.msg')}` : t('uninstall.plugin.msg')} rows={rows}
-    confirmLabel={t('uninstall.plugin.confirm')} note={t('uninstall.note')}
-    onConfirm={(checks) => onConfirm({ keepSettings: !!checks.keepSettings, moveVault: !!checks.moveVault, keepOld: !!checks.keepOld })}
+    confirmLabel={t('uninstall.plugin.confirm')} note={t('uninstall.note')} reasons
+    onConfirm={(checks, reason) => onConfirm({ keepSettings: !!checks.keepSettings, moveVault: !!checks.moveVault, keepOld: !!checks.keepOld, ...(reason ? { reason } : {}) })}
     onClose={onClose}
   />
 }

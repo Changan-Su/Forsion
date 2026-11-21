@@ -18,7 +18,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undo as pmUndo, redo as pmRedo, closeHistory } from '@milkdown/kit/prose/history'
-import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageCircle, Code2, Info, Link2, FileInput, Check, ChevronRight } from 'lucide-react'
+import { Pilcrow, Heading1, Heading2, Heading3, List, ListOrdered, ListTodo, TextQuote, ChevronsDown, Copy, Columns2, Rows2, Trash2, Undo2, StickyNote, MessageCircle, Code2, Info, Link2, FileInput, Check, ChevronRight, LayoutPanelTop } from 'lucide-react'
 import { isCoarsePointer } from '../../touch'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
@@ -78,7 +78,9 @@ import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { adoptOrigins } from '../blocks/markdown/verbatim'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
-import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, removeEmptyColumnTr, splitToColumn, unsplitRow } from './columns'
+import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, removeEmptyColumnTr, splitToColumn, unsplitRow, isSectionRow } from './columns'
+import { createSectionToolbar, insertSection, wrapInSection, rowToSection, removeSection, canWrapInSection } from './sections'
+import { SectionToolbar } from './SectionToolbar'
 import { canvasPlugins, createCanvasFold, createSelectionClamp, createHistoryTimeline, createCardActiveDeco, createCardDepthDeco, parseCanvasJson, deriveCanvasJson, withElements, withTree, withMain, CARD_W, MAIN_W, type CanvasMain, type UndoTimeline } from './canvas'
 import { CanvasStage, unwrapCard, blockToCard } from './canvasStage'
 import { rawTree, setParent, childrenOf } from './canvasEdit'
@@ -106,6 +108,7 @@ import { usePluginStore } from '../plugins/pluginStore'
 import { listSelectionActions, runSelectionAction, selectionActionKey } from '../../selectionActions'
 import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
+import { anchorMarksPlugin } from './anchorMarks'
 import { listFoldPlugins } from './listFold'
 import { LinkHoverCard } from './linkCard'
 import { TableAxisMenu, TableMenuSection, isTableSelected, tableCellAtPoint } from './tableMenu'
@@ -168,6 +171,8 @@ registerMessages({
   'unipage.menu.callout': { zh: '标注', en: 'Callout' },
   'unipage.menu.code': { zh: '代码块', en: 'Code block' },
   'unipage.menu.card': { zh: '卡片', en: 'Card' },
+  'unipage.menu.section': { zh: '版块', en: 'Section' },
+  'unipage.toast.sectionTopLevelOnly': { zh: '版块只能建在正文顶层，栏里、列表里和卡片里都不行', en: 'Sections can only be added at the top level — not inside a column, list or card.' },
   'unipage.menu.toNewColumn': { zh: '移到新列', en: 'Move to new column' },
   'unipage.menu.unsplit': { zh: '取消分栏', en: 'Unsplit columns' },
   'unipage.menu.aria': { zh: '块操作', en: 'Block actions' },
@@ -993,6 +998,18 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           return
         }
         splitToColumn(view, $from.before(1), $from.after(1), $from.node(1))
+        view.focus()
+      })
+      return
+    }
+    if (item.scaffold === S.section) {
+      getInstance()?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        // 版块只在顶层(与「分栏」同规);'/query' 已被 consume 删掉,不说一句就是「字没了、也没建」
+        if (!insertSection(view)) {
+          window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('unipage.toast.sectionTopLevelOnly') } }))
+          return
+        }
         view.focus()
       })
       return
@@ -1843,10 +1860,13 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   // ⚠️ 稳定引用:MilkdownInner 只建一次编辑器。
   const typingDraft = useRef<TypingDraftPacer | null>(null) // 连打期间的草稿节拍(见 typingDraft.ts),装在下面 G2-08 那条 effect 里
   const recoveryOpen = useRef(false) // 「恢复草稿」条还在等用户决定:那份草稿和本实例同一格,连打节拍不许盖掉它
+  // 版块工具条(sections.ts):插件 + 小 store,工具条组件只订阅它。每个实例一份,稳定引用。
+  const sectionTb = useMemo(() => createSectionToolbar(), [])
   const editorPlugins = useMemo(
     () => [
       ...layer.plugins,
       ...columnPlugins,
+      sectionTb.plugin,
       ...createColumnsFold(
         () => parseLayoutJson(layoutLineOf(pipe.fm)),
         () => { pipe.sawRows = true }, // parse 折叠成功=真渲染过行(打开即拖散也要能剥 layout)
@@ -1891,6 +1911,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // 正文 AI(G3-07):目标区间随编辑映射 + 空行按空格唤起(缺省关、IME 守卫,见 inlineAi.ts)。
       ...createInlineAi({ spaceTrigger: () => aiSpaceTriggerEnabled() && canAiRef.current, onSpace: aiSpaceRef }),
       ...headingFoldPlugins,
+      anchorMarksPlugin, // 独占一段的锚注释 `<!-- a id -->` 不露原文(落盘照旧;键盘那半在 keyboard.ts)
       ...listFoldPlugins,
       ...createFoldMemory(() => foldWhere.current), // 折叠的本机记忆 + 折叠命令的目标登记(B-13)
       ...createStatsTicker(), // 状态栏字 / 词 / 选区计数的刷新节拍(C-22)
@@ -2221,7 +2242,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
    *  在这里归一，再共用 blockToCard 的单事务搬迁与同一套几何/保存链。
    *  **卡里建卡 = 子卡**(2026-08-31 用户拍板:此前 slash 一律 unavailable、块菜单则默默建成顶层卡,
    *  两条入口自相矛盾)。层级写进 fm 的 tree,文档模式立刻呈现为缩进+框,画布模式是父卡右侧一支。 */
-  type TurnItem = { k: BlockKind; icon: typeof Pilcrow; label: string; run: () => void }
+  type TurnItem = { k: BlockKind | 'section'; icon: typeof Pilcrow; label: string; run: () => void }
   /** 「转换为 ›」子菜单的项。文字类转换对整张表静默无效(K-10):表格上不列出;「卡片」对不支持的节点不露入口。 */
   const turnIntoItems = (): TurnItem[] => {
     const view = layer.getView()
@@ -2249,7 +2270,32 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       for (let depth = $at.depth; depth >= 1; depth--) if ($at.node(depth).type.name === 'amadeusColumnCell') inCell = true
       if (!inCell) out.push({ k: 'card', icon: StickyNote, label: t('unipage.menu.card'), run: () => withSelectedNode((current) => { makeCard(current) }) })
     }
+    // 版块(方向 B):顶层块 / 跨块选区 → 装进 1 栏版块;块在普通分栏里 → 整行转成版块;已在版块里不列
+    const sectionTarget = sectionTurnTarget(view)
+    if (sectionTarget) out.push({ k: 'section', icon: LayoutPanelTop, label: t('unipage.menu.section'), run: () => turnIntoSection() })
     return out
+  }
+  /** 「转换为 → 版块」作用在哪:wrap = 一段顶层块;row = 块所在的普通分栏行。 */
+  const sectionTurnTarget = (view: EditorView): { wrap: { from: number; to: number } } | { row: number } | null => {
+    const r = layer.topRangeOf(view)
+    const sel = view.state.selection
+    const range = r ?? (sel instanceof NodeSelection ? { from: sel.from, to: sel.to } : null)
+    if (!range) return null
+    const rowPos = columnRowOf(sel)
+    if (rowPos != null) {
+      const row = view.state.doc.nodeAt(rowPos)
+      return row && !isSectionRow(row) && row.childCount <= 4 ? { row: rowPos } : null
+    }
+    return canWrapInSection(view.state, range.from, range.to) ? { wrap: range } : null
+  }
+  const turnIntoSection = (): void => {
+    setBlockMenu(null)
+    const view = layer.getView()
+    if (!view || !restoreMenuTarget(view)) return
+    const target = sectionTurnTarget(view)
+    const ok = !!target && ('row' in target ? rowToSection(view, target.row) : wrapInSection(view, target.wrap.from, target.wrap.to))
+    if (!ok) window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('mdblock.turn.failed', { kind: translate('unipage.menu.section') }) } }))
+    view.focus()
   }
   /** 当前块的类型(行尾灰字 + 子菜单打勾);跨块选区不止一种类型 → null。 */
   const turnIntoCurrent = (): BlockKind | null => {
@@ -4145,6 +4191,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       )}
       {/* 表格行首 / 列首把手的菜单(tableHover.ts 打开;只装表格区,不带整表的删除 / 复制)。 */}
       <TableAxisMenu getView={() => layer.getView()} readOnly={readOnly} />
+      {/* 版块工具条:portal 进选中版块行尾的 widget(sections.ts);只读时插件不挂 widget。 */}
+      {!readOnly && <SectionToolbar store={sectionTb.store} />}
       {/* 只读兜底(B-02):交互层已不在只读下开菜单,这里再挡一层 —— 菜单项全是改文档的动作。 */}
       {blockMenu && !readOnly && (
         <OverlayPortal>
@@ -4217,10 +4265,13 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                 const view = layer.getView()
                 if (!view || !restoreMenuTarget(view)) return
                 const rowPos = columnRowOf(view.state.selection)
-                if (rowPos != null) unsplitRow(view, rowPos)
+                if (rowPos != null) {
+                  if (isSectionRow(view.state.doc.nodeAt(rowPos))) removeSection(view, rowPos)
+                  else unsplitRow(view, rowPos)
+                }
                 view.focus()
               }}>
-                <Rows2 size={13} /> {t('unipage.menu.unsplit')}
+                <Rows2 size={13} /> {t(isSectionRow(layer.getView()!.state.doc.nodeAt(columnRowOf(layer.getView()!.state.selection)!)) ? 'amxsec.remove' : 'unipage.menu.unsplit')}
               </button>
             )}
             {/* 卡片才有:把卡收回自然流(拖回主卡的键鼠等价物 —— 文档模式下没有舞台可拖)。

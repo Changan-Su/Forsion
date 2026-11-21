@@ -210,7 +210,7 @@ export const activateMember: ActivateMember = async (a) => {
     }
     if (!run) return { status: 'failed', text: '', error: 'run row missing', sessionId, runId };
     if (!isTerminal(run.status)) return { status: 'failed', text: '', error: `run status did not settle (${run.status})`, sessionId, runId };
-    if (run.status === 'aborted') return { status: aborted() ? 'aborted' : 'failed', text: '', error: 'aborted', sessionId, runId };
+    if (run.status === 'aborted' || run.status === 'interrupted') return { status: aborted() ? 'aborted' : 'failed', text: '', error: run.status === 'interrupted' ? String(run.error || 'interrupted') : 'aborted', sessionId, runId };
     if (run.status !== 'done') return { status: 'failed', text: '', error: String(run.error || run.status), sessionId, runId };
     const result = parseJson(run.result);
     return { status: 'done', text: String(result?.content ?? ''), sessionId, runId };
@@ -223,5 +223,5 @@ export const activateMember: ActivateMember = async (a) => {
 };
 
 function isTerminal(status: string): boolean {
-  return status === 'done' || status === 'failed' || status === 'aborted';
+  return status === 'done' || status === 'failed' || status === 'aborted' || status === 'interrupted'; // interrupted:引擎被停(中断任务续跑方案 B)
 }

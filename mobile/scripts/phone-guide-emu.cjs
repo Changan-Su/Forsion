@@ -347,22 +347,22 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
       note(`C6 after dialogs: wizard ${closed ? 'closed' : JSON.stringify(await wizard())}; native ${JSON.stringify(await nativeStatus())}; keys ${JSON.stringify(await keys())}`)
       assert.ok(closed, 'the wizard did not finish by itself after everything was allowed')
     })
-    await check('C7 home: suggestions shown above the cards (4, or 2 where the screen is short), pill above the native dock', async () => {
-      // the page steps down when one screen cannot hold everything: all → rows (cards: first two rows) → two (first two suggestions) → none
+    await check('C7 home: suggestions shown above Continue (4, or 2 where the screen is short), pill above the native dock', async () => {
+      // the page steps down when one screen cannot hold everything: all → rows (Continue: first two rows) → two (first two suggestions) → none
       assert.ok(await h.waitPage(cdp, "['all','rows','two'].includes(document.querySelector('.hp-root')?.getAttribute('data-suggest-fit'))", 10000), `suggestion block not shown (fit=${await cdp.eval("document.querySelector('.hp-root')?.getAttribute('data-suggest-fit') ?? null")})`)
       await h.pause(1200)
-      const order = await cdp.eval(`(() => { const s = document.querySelector('.hp-suggest').getBoundingClientRect(), c = document.querySelector('.hp-cards')?.getBoundingClientRect()
+      const order = await cdp.eval(`(() => { const s = document.querySelector('.hp-suggest').getBoundingClientRect(), c = document.querySelector('.hp-continue')?.getBoundingClientRect()
         const drawn = (sel) => [...document.querySelectorAll(sel)].filter((b) => b.getBoundingClientRect().height > 0)
-        return { fit: document.querySelector('.hp-root').getAttribute('data-suggest-fit'), suggestBottom: s.bottom, cardsTop: c ? c.top : null,
-          chips: drawn('.hp-suggest-chip').map((b) => b.textContent.trim()), cardsDrawn: drawn('.hp-card').length, cardsInList: document.querySelectorAll('.hp-card').length } })()`)
+        return { fit: document.querySelector('.hp-root').getAttribute('data-suggest-fit'), suggestBottom: s.bottom, continueTop: c ? c.top : null,
+          chips: drawn('.hp-suggest-chip').map((b) => b.textContent.trim()), rowsDrawn: drawn('.hp-continue-row').length, rowsInList: document.querySelectorAll('.hp-continue-row').length } })()`)
       assert.ok(order.chips.length === (order.fit === 'two' ? 2 : 4), `fit ${order.fit} but ${order.chips.length} suggestions drawn`)
-      assert.ok(order.cardsDrawn === (order.fit === 'all' ? order.cardsInList : Math.min(order.cardsInList, 4)), `fit ${order.fit} but ${order.cardsDrawn}/${order.cardsInList} cards drawn`)
+      assert.ok(order.rowsDrawn === (order.fit === 'all' ? order.rowsInList : Math.min(order.rowsInList, 2)), `fit ${order.fit} but ${order.rowsDrawn}/${order.rowsInList} Continue rows drawn`)
       const pill = await elRect("document.querySelector('.hp-pill')")
       const wv = webViewNode(h.nodes(OUT))
       const dock = h.byId(h.nodes(OUT), 'nativeChrome.dock')
       note(`C7 ${JSON.stringify(order)} pill(device px, in WebView)=${JSON.stringify(pill)} webview=${JSON.stringify(wv && wv.rect)} dock=${JSON.stringify(dock && dock.rect)}`)
       shot('C7-home-suggest')
-      assert.ok(order.cardsTop === null || order.suggestBottom <= order.cardsTop + 1, 'suggestions not above the cards')
+      assert.ok(order.continueTop === null || order.suggestBottom <= order.continueTop + 1, 'suggestions not above Continue')
       const pillBottom = wv.rect.top + pill.bottom
       if (dock) assert.ok(pillBottom <= dock.rect.top, `pill bottom ${Math.round(pillBottom)} below dock top ${dock.rect.top}`)
       else {

@@ -1,7 +1,7 @@
 /**
  * 远程活动 + 急停 + 解锁(设备能力 MCP 方案 P1 · K2 §3.5,方案 §6.5)。**本机专用**:桌面主进程带本机引擎令牌调。
  *   GET  /agent/remote/activity           ActivitySnapshot(在飞 run 分类 + 待批计数 + 非本机后台进程 + 锁状态)
- *   GET  /agent/remote/restart-status     本机退出清单(全部运行/排队任务 + 子任务 + 后台进程)
+ *   GET  /agent/remote/restart-status     本机退出清单(本进程的运行/排队任务 + 子任务 + 后台进程 + 其中会自动续跑的数)
  *   GET  /agent/remote/activity/events    SSE:连上立即一帧全量 snapshot,之后每次变更(去抖 200ms)再发全量;15s 一次 `: hb`
  *   POST /agent/remote/estop {source}     急停:上闩 → 中止全部非本机 run(reason:'remote_estop')→ 杀其后台进程 → 撤回远端批准的 Muse 条目
  *   POST /agent/remote/unlock             清闩:只在主进程已写好解锁(锁文件可读且 lock===null)时成立,否则 409
@@ -13,11 +13,10 @@ import { Router } from 'express';
 import { authMiddleware } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { abortRun, abortUnregisteredNonLocalRuns, waitForRunSettlement } from '../services/agentLoop.js';
+import { abortRun, abortUnregisteredNonLocalRuns, ownRunIds, waitForRunSettlement, wouldAutoResume } from '../services/agentLoop.js';
 import { activitySnapshot, notifyActivity, onActivityChange, type RunCategory } from '../services/remoteActivity.js';
 import { clearRemoteLatch, latchRemoteLock, remoteLatchId, remoteLocked, remoteLockState } from '../services/remoteLock.js';
 import { killProcessesWhere, runningProcessCount } from '../tools/processRegistry.js';
-import { listPendingRunsForRecovery } from '../services/runStore.js';
 import { activeDelegateCount } from '../services/delegateTranscript.js';
 import { revertRemoteMuseEntries } from '../services/remoteCreated.js';
 
@@ -54,11 +53,16 @@ router.get('/agent/remote/activity', authMiddleware, (req, res) => {
 });
 
 // Restart must also see queued work, delegates and local background processes absent from the remote activity list.
+// 只算本进程实际持有的运行 / 排队 / 委派(D5):共用 state.db 的 TUI 被强杀留下的 running 行、别的进程的行都不算,否则延后重启永远等不到空闲。
+// resumable(D10)= 此刻停机会被自动续跑的本进程任务数(团队、ACP / 外部引擎、没有 hostRecovery 戳、TANGU_AUTO_RESUME=0、
+// 有取消请求、换了账号的都不算;委派是 run 里的子任务,随它所在的 run 一起续,不单算)。旧引擎没有这个字段 = 能力未知。
 router.get('/agent/remote/restart-status', authMiddleware, async (req, res) => {
   if (!localOnly(req, res)) return;
   try {
-    const runs = await listPendingRunsForRecovery();
-    res.json({ tasks: runs.length + activeDelegateCount(), processes: runningProcessCount() });
+    const own = ownRunIds();
+    let resumable = 0;
+    for (const id of own) if (await wouldAutoResume(id)) resumable++;
+    res.json({ tasks: own.length + activeDelegateCount(), processes: runningProcessCount(), resumable });
   } catch {
     res.status(503).json({ detail: 'Task status unavailable' });
   }

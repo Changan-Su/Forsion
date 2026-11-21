@@ -81,6 +81,9 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only handoff                    # 挪出去(11-08,方案「会话互通升级」):逐个读 6 个文件写摘要,跑到一半插话 ——
  *                                                              A 问个不相干的(SSH 端口)→ 调 hand_off_task、挪出去的会话把 6 行写完、原会话答了端口;
  *                                                              B 负对照「第 3 个写短点」→ 不挪、本会话写完;C 「另起话题」(steer newTopic)→ 挪。改 hand_off_task / NEW_TOPIC_NOTE / 持久性段后跑
+ *   npm run live:harness -- --only bgsteer [--bgsteer-legs a|b]   # 长命令不挡插话(11-20,借鉴 dsh-superagent 方案第 5 条 A):A 跑 ~40s 命令时插话 → 移到后台、
+ *                                                              插话在命令结束前答完、命令只跑一次没被杀、结束后起一轮(<background_update>)交回结果码;B 不插话 = 负对照(照旧等完、不起轮)。
+ *                                                              改 run_bash 移交 / services/steerHandoff.ts / agentLoop 插话与收尾闸门后跑;改前的 dist 跑 A 须红
  *   npm run live:harness -- --only crosstree                  # 跨树互发(11-08):会话 Q 记一个事实;另一棵树里的 S 用 search_sessions 找到 Q、send_to_session 去问,
  *                                                              Q 收到 relation="peer" 的消息并回发,S 收到回信里有答案。改 send_to_session / peer 规则后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
@@ -228,7 +231,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  */
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID, createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
@@ -342,6 +345,10 @@ KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: a
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('nestedmsg'); // --only nestedmsg: fork 上下文 + 兄弟会话传话(10-28)
 OPT_IN.add('handoff'); OPT_IN.add('crosstree'); // --only handoff,crosstree: 挪出去 + 跨树互发(11-08)
+// bgsteer(11-20,借鉴 dsh-superagent 方案第 5 条 A):长命令不挡插话。A 腿跑一条 ~40s 的命令时插话 → 命令移到后台、插话在命令结束前被答、
+//   命令没被杀只跑一次、结束后起一轮交回结果码;B 腿不插话(负对照:行为同改前、不起轮、不多调模型)。--bgsteer-legs a|b 只跑一条腿。
+//   改 run_bash 的移交 / services/steerHandoff.ts / agentLoop 的插话与收尾闸门后跑;--kind base 在改前的 dist 上跑 A 腿须红
+OPT_IN.add('bgsteer'); KEYS.push('bgsteer');
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
@@ -380,7 +387,8 @@ OPT_IN.add('iuicalc'); KEYS.push('iuicalc'); // --only iuicalc:计算层(intelli
 OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT 同题的 13 条首问 + 5 条跟进,另加让它办事的两句(共 20 个 run):出不出、出在回答的哪儿、先说话还是先出卡、末尾有没有追问;改本轮信号 / Intelligent UI 提示段后跑
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
-OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('turninfo'); KEYS.push('turninfo'); // 四个 run;只在动 promptHead.currentDateSection(日期段的时区名 / 界面语言段)时跑。旧代码上 Z 必红,LZ / LN 至少一腿红(只发代码时旧代码回哪种语言不稳)
+OPT_IN.add('visualsdial'); //--only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
@@ -428,6 +436,7 @@ OPT_IN.add('secretenv'); KEYS.push('secretenv'); // --only secretenv:一个 run;
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
+OPT_IN.add('lengthcut'); KEYS.push('lengthcut'); // 注入:真 Codex 回答写到一半补一条 response.incomplete(max_output_tokens),看引擎自动接写一次 / 接了还撞上限给 truncated,以及用户按停后「继续生成」;改截断续写(agentLoop 那段 / turnResume 的 length·stopped 两句)后跑。自带负对照腿
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -436,6 +445,7 @@ OPT_IN.add('standin'); KEYS.push('standin');
 OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 OPT_IN.add('dsimport'); KEYS.push('dsimport'); // 导入的旧对话能接着聊(11-16,POST /agent/sessions/import):一个 run;只在动 sessionImport / 导入会话的回放时跑
+OPT_IN.add('resume'); KEYS.push('resume'); // --only resume:工具执行到一半 kill -9 引擎、同一 home 重启后自动续跑(中断任务续跑方案 B,lib/resume-live.mjs);自己起两台引擎。--resume-off = 负对照(须红)
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
@@ -1019,7 +1029,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -1722,7 +1732,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 台架判定一律按 sketch 记,各场景的判据不用跟着改;事件里真名是哪个由引擎单测钉着。
           if (p.name === 'intelligent_ui_html') p.name = 'sketch';
           // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
-          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
+          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'tool_stream' && p.name) (ev.streamAt ||= {})[p.name] ??= Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; if (opts.onToken) await opts.onToken(p, runId, ev); } }
           // toolArgs:参数原文(control 场景要看 B 腿的 run_bash 到底跑了什么命令 —— 只记工具名的话事后只看得见「run_bash」)。
           // 不进 results.json(record 只收场景返回的字段);大小由模型单次输出封顶。
           else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); ev.toolArgs.push({ id: p.id, name: p.name || '?', args: toolArgsText(p.arguments), arguments: typeof p.arguments === 'string' ? p.arguments : JSON.stringify(p.arguments || {}), at: Date.now() }); if (opts.onToolCall) await opts.onToolCall(p, runId, ev); }
@@ -1790,8 +1800,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'reasoning_dropped'].includes(p.phase)) ev.statuses.push(p);
-          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'llm_wait_network', 'llm_network_back', 'reasoning_dropped', 'length_resume'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; ev.truncated = p.truncated === true; ev.lengthResumed = p.lengthResumed === true; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
       }
@@ -2726,6 +2736,35 @@ try {
   });
   if (chat && !chat.ok) throw new Error(`基础对话失败,后续场景不跑:${chat.detail}`);
 
+  // turninfo(11-20,借鉴 chat-demo ③ #734):系统提示日期段补时区名 + 界面语言。四条腿各一个 run,都直接核系统提示原文:
+  //   Z host run、不准用工具问「我在哪个时区」→ 提示里有 `time zone <进程时区>`,回答说得出这个 IANA 名;
+  //   LZ 界面中文 + 消息只有一段代码 → 提示里有 Interface Language … Chinese,回答用中文;
+  //   LN 界面英文 + 消息只有一段代码 → 提示里有 … English,回答用英文;
+  //   LE 界面英文 + 用户写中文 → 仍用中文回(按用户写的语言,界面语言只在看不出时兜底)。旧代码(--kind base)上 Z 必红;只有代码时回哪种语言在旧代码上不稳
+  //   (11-20 两次对照:第一次 LZ 回中文,第二次 LZ、LN 都回英文),所以要 LZ、LN 同时过才说明是界面语言段起的作用。
+  await scenario('turninfo', 'turninfo 日期段的时区名 + 界面语言', async () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const ui = (v) => ({ ui: { locale: { value: v, allowed: ['zh', 'en'] } } });
+    const cjk = (t) => (String(t || '').match(/[一-鿿]/g) || []).length;
+    const dbg = { debugSystemPrompt: true }; // 不带它引擎不发 system_prompt 事件,提示原文核不到
+    const z = await run(`live-turninfo-z-${Date.now()}`, '不要调用任何工具,直接回答:我现在所在的时区是哪个(IANA 名称)?只回答时区名。', 240_000, dbg);
+    const promptZ = String(z.systemPrompt || '');
+    const okZ = !z.error && !!tz && promptZ.includes(`time zone ${tz}, UTC`) && z.content.includes(tz) && !z.toolCalls.length;
+    const code = '```js\nconst pick = (xs, n) => xs.filter((_, i) => i % n === 0);\n```';
+    const lz = await run(`live-turninfo-lz-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('zh'));
+    const okLZ = !lz.error && String(lz.systemPrompt || '').includes("interface is set to Chinese") && cjk(lz.content) >= 10;
+    const ln = await run(`live-turninfo-ln-${Date.now()}`, code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLN = !ln.error && String(ln.systemPrompt || '').includes("interface is set to English") && cjk(ln.content) === 0 && /[A-Za-z]{3,}\s+[A-Za-z]{3,}/.test(ln.content);
+    const le = await run(`live-turninfo-le-${Date.now()}`, '这段代码是做什么的?两三句话说清楚。\n' + code, 240_000, dbg, undefined, undefined, undefined, undefined, ui('en'));
+    const okLE = !le.error && String(le.systemPrompt || '').includes("interface is set to English") && cjk(le.content) >= 10;
+    const dateLine = (p) => (String(p || '').match(/^Today is [^\n]*/m) || [''])[0];
+    const detail = `Z 进程时区 ${tz || '取不到'}、提示「${dateLine(promptZ)}」、回答「${z.content.trim().slice(0, 60)}」、工具 ${z.toolCalls.join(',') || '无'}`
+      + `;LZ 界面中文 + 只有代码 → 提示有中文段=${String(lz.systemPrompt || '').includes('interface is set to Chinese')}、回答汉字 ${cjk(lz.content)} 个`
+      + `;LN 界面英文 + 只有代码 → 提示有英文段=${String(ln.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(ln.content)} 个`
+      + `;LE 界面英文 + 中文提问 → 提示有英文段=${String(le.systemPrompt || '').includes('interface is set to English')}、回答汉字 ${cjk(le.content)} 个`;
+    return { ok: okZ && okLZ && okLN && okLE, detail, output: `【Z】\n${z.content}\n【LZ 界面中文,只发代码】\n${lz.content}\n【LN 界面英文,只发代码】\n${ln.content}\n【LE 界面英文,中文提问】\n${le.content}`, tokens: tokensOf(z) + tokensOf(lz) + tokensOf(ln) + tokensOf(le) };
+  });
+
   // 11-16 导入的旧对话(DeepSeek 网页导出)要能接着聊:前面埋一个只在旧对话里出现过的事实,中间垫 30 轮无关的,
   // 再问「接着刚才的」—— 模型要接得上(说得出名字和颜色),新消息排在旧历史后面,原标题不被改。
   await scenario('dsimport', 'dsimport 导入的旧对话接着聊', async () => {
@@ -3582,6 +3621,13 @@ try {
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
   });
 
+  // resume(11-20,中断任务续跑方案 B):工具执行到一半强杀引擎 → 同一 home 重启 → 自动续一轮跑完,不重跑已经开始的那条命令。
+  //   自带独立隔离 home 和两台引擎(主台架那台不参与);判据只看磁盘和库,见 lib/resume-live.mjs。改 runResume / runProgress / 启动恢复后跑。
+  await scenario('resume', 'resume 工具中途崩溃后重启自动续跑', async () => {
+    const { resumeLive } = await import('./lib/resume-live.mjs');
+    return resumeLive({ entry, AUTH, MODEL, OUT, SANDBOX, argv });
+  });
+
   // continuegen(11-10 用户反馈:报错 / 额度用完只有「重试」,前面生成的白费):真 Codex 写编号列表写到一半,流里被掐成额度用完。
   //   ① 失败那一轮已流出的正文落了库(引擎 catch 把在飞那截并进终稿);② 发 <turn_resume>(界面「继续生成」发的就是它),
   //   模型从断处接着写到 12,不从 1 重来。负对照腿(同一 run 内):把半截回答删掉再发同一个标记 → 模型只能从 1 写起,判据必须判它「重来」。
@@ -3617,6 +3663,87 @@ try {
     writeFileSync(join(OUT, 'continuegen-evidence.json'), JSON.stringify({ ok: { errA: ok1.a.error, fired: ok1.fired, partial: ok1.partial, before: ok1.before, after: ok1.after, content: ok1.b.content, rows: ok1.dump }, nc: { errA: nc.a.error, fired: nc.fired, partial: nc.partial, after: nc.after, content: nc.b.content, rows: nc.dump } }, null, 2));
     const detail = `掐断 ${ok1.fired} 次、报错=${ok1.a.error ? ok1.a.error.slice(0, 60) : '无'};落库的半截编号 ${ok1.before.join(',') || '无'};续写编号 ${ok1.after.join(',') || '无'}(从 1 重来=${ok1.restarted},写到 12=${ok1.reached12});负对照(删掉半截)续写 ${nc.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`;
     return { ok: quotaErr && ok1.fired === 1 && persisted && continued && ncCaught, detail, output: `【失败前落库】\n${ok1.partial}\n【继续生成】\n${ok1.b.content}\n【负对照:删掉半截后】\n${nc.b.content}`, tokens: tokensOf(ok1.a) + tokensOf(ok1.b) + tokensOf(nc.a) + tokensOf(nc.b) };
+  });
+
+  // lengthcut(11-15,借鉴 DeepSeek chat-demo 方案 ①:写到长度上限不再静默停在半句)。真 Codex 写 1–12 编号列表,写够约 160 字时
+  // 预载在流里补一条 response.incomplete(max_output_tokens),等于撞上输出上限。
+  //   A 截一次 → 引擎自动接写一次(status length_resume),终稿编号 1–12 连续不重,done 带 lengthResumed、不带 truncated;
+  //   B 截两次(自动接写那一发也截)→ done 带 truncated;再发 length 那句 <turn_resume>(界面「继续生成」)→ 从断处接着写到 12;
+  //   C 用户按停(流出约 120 字时 /abort)→ 发 stopped 那句 <turn_resume> → 从断处接着写到 12;
+  //   负对照腿:B 的半截删掉再发同一句 → 只能从 1 写起,同一判据须判「重来」。旧代码(--kind base)上 A、B 须红(没有自动接写、没有 truncated)。
+  await scenario('lengthcut', 'lengthcut 写到长度上限:自动接写一次 / 接了还截给「继续生成」/ 按停后继续', async () => {
+    const tr = await import('../dist/contracts/turnResume.js');
+    const marker = (r) => (typeof tr.turnResumeMarker === 'function' ? tr.turnResumeMarker(r) : tr.TURN_RESUME_MARKER); // 旧代码只有不分原因的那句
+    const ask = (tag) => `${tag} 请写一个 1 到 12 的编号列表,每条两句话介绍一种常见的鸟,格式「N. 鸟名:介绍」,每条单独一行。直接写,不要调用任何工具,不要开场白,不要结尾总结。`;
+    const nums = (text) => [...String(text || '').matchAll(/^\s*(\d{1,2})[.、]/gm)].map((m) => Number(m[1]));
+    const consecutive = (a) => a.length > 0 && a.every((n, i) => i === 0 || n === a[i - 1] + 1);
+    const lastAnswer = async (sid) => {
+      const rows = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+      return [...rows].reverse().find((m) => (m.role === 'assistant' || m.role === 'model') && String(m.content || '').trim());
+    };
+    const fired = () => faultLog().filter((l) => l.fired === 'length_after').length;
+    // 记下自动接写开始时已经流出了多少字:终稿里那个位置就是接缝
+    const trackSeam = () => { const st = { streamed: '', seam: -1 }; return { st, onToken: (p, _rid, ev) => { if (st.seam < 0 && ev.statuses.some((x) => x.phase === 'length_resume')) st.seam = st.streamed.length; st.streamed += String(p.delta || ''); } }; };
+
+    // A
+    const sidA = `live-lencut-a-${Date.now()}`; const tagA = `LC-${randomUUID().slice(0, 6)}`;
+    armFault({ mode: 'length_after', match: tagA, chars: 160, times: 1 });
+    const seamA = trackSeam();
+    const a = await run(sidA, ask(tagA), 240_000, {}, undefined, undefined, undefined, undefined, { onToken: seamA.onToken });
+    const firedA = fired(); disarmFault();
+    const numsA = nums(a.content);
+    const resumesA = a.statuses.filter((x) => x.phase === 'length_resume').length;
+    const okA = !a.error && a.done && firedA === 1 && resumesA === 1 && a.lengthResumed && !a.truncated && consecutive(numsA) && numsA[0] === 1 && numsA.at(-1) === 12;
+    const seamTextA = seamA.st.seam >= 0 ? a.content.slice(Math.max(0, seamA.st.seam - 30), seamA.st.seam + 30) : '';
+
+    // B + 负对照
+    const legB = async (dropPartial) => {
+      const sid = `live-lencut-b${dropPartial ? 'nc' : ''}-${Date.now()}`; const tag = `LC-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'length_after', match: tag, chars: 160, times: 2 });
+      const b = await run(sid, ask(tag));
+      const f = fired(); disarmFault();
+      const row = await lastAnswer(sid);
+      const partial = String(row?.content || '');
+      if (dropPartial && row) await api(`/agent/sessions/${sid}/messages/delete`, { method: 'POST', body: JSON.stringify({ ids: [row.id] }) });
+      const c = await run(sid, marker('length'));
+      const before = nums(partial), after = nums(c.content);
+      return { b, c, fired: f, partial, before, after, restarted: after[0] === 1, reached12: after.includes(12) };
+    };
+    const B = await legB(false);
+    const NC = await legB(true);
+    const lastB = B.before.at(-1) ?? 0;
+    const okB = !B.b.error && B.b.done && B.fired === 2 && B.b.truncated && B.b.lengthResumed && B.before.length >= 2
+      && !B.c.error && B.c.done && !B.restarted && B.reached12 && (B.after[0] ?? 0) >= lastB && consecutive(B.after);
+    const ncCaught = NC.restarted;
+
+    // C 用户按停
+    const sidC = `live-lencut-c-${Date.now()}`;
+    let stoppedAt = 0;
+    const c1 = await run(sidC, ask(`LC-${randomUUID().slice(0, 6)}`), 240_000, {}, undefined, undefined, undefined, undefined, {
+      onToken: async (p, runId, ev) => { ev.streamedC = (ev.streamedC || '') + String(p.delta || ''); if (!stoppedAt && ev.streamedC.length >= 120) { stoppedAt = ev.streamedC.length; await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {}); } },
+    });
+    const rowC = await lastAnswer(sidC);
+    const partialC = String(rowC?.content || '');
+    const c2 = await run(sidC, marker('stopped'));
+    const beforeC = nums(partialC), afterC = nums(c2.content);
+    const okC = stoppedAt > 0 && beforeC.length >= 1 && !c2.error && c2.done && afterC[0] !== 1 && afterC.includes(12) && (afterC[0] ?? 0) >= (beforeC.at(-1) ?? 0) && consecutive(afterC);
+    // 模型把自查漏进正文(11-15 首跑 C 腿:「6. 麻雀? Wait #1 already. continue common birds」)—— 单列出来,编号连续那条会因它判红
+    const selfTalk = (t) => /\bwait\b|already\.|\?\s*wait/i.test(String(t || ''));
+
+    writeFileSync(join(OUT, 'lengthcut-evidence.json'), JSON.stringify({
+      A: { err: a.error, fired: firedA, resumes: resumesA, lengthResumed: a.lengthResumed, truncated: a.truncated, nums: numsA, seam: seamA.st.seam, seamText: seamTextA, content: a.content },
+      B: { err: B.b.error, fired: B.fired, truncated: B.b.truncated, lengthResumed: B.b.lengthResumed, partial: B.partial, before: B.before, after: B.after, cont: B.c.content },
+      NC: { partial: NC.partial, after: NC.after, cont: NC.c.content },
+      C: { err1: c1.error, stoppedAt, partial: partialC, before: beforeC, after: afterC, cont: c2.content },
+    }, null, 2));
+    const detail = `A 截 ${firedA} 次、自动接写 ${resumesA} 次、lengthResumed=${!!a.lengthResumed} truncated=${!!a.truncated}、编号 ${numsA.join(',') || '无'}、接缝「${seamTextA.replace(/\n/g, '⏎')}」`
+      + `;B 截 ${B.fired} 次、truncated=${!!B.b.truncated}、半截编号 ${B.before.join(',') || '无'} → 继续生成 ${B.after.join(',') || '无'}(重来=${B.restarted})`
+      + `;负对照(删半截)继续 ${NC.after.slice(0, 3).join(',')}… 判为重来=${ncCaught}`
+      + `;C 停在 ${stoppedAt} 字、半截编号 ${beforeC.join(',') || '无'} → 继续生成 ${afterC.join(',') || '无'}`
+      + `;自言自语漏进正文:A=${selfTalk(a.content)} B=${selfTalk(B.c.content)} C=${selfTalk(c2.content)}`;
+    return { ok: okA && okB && ncCaught && okC, detail,
+      output: `【A 终稿(自动接写一次)】\n${a.content}\n【B 截两次后的终稿】\n${B.partial}\n【B 继续生成】\n${B.c.content}\n【负对照:删掉半截后】\n${NC.c.content}\n【C 按停时的半截】\n${partialC}\n【C 继续生成】\n${c2.content}`,
+      tokens: tokensOf(a) + tokensOf(B.b) + tokensOf(B.c) + tokensOf(NC.b) + tokensOf(NC.c) + tokensOf(c1) + tokensOf(c2) };
   });
 
   await scenario('taskoutcomes', 'taskoutcomes actual artifacts, rejected approvals and repeat delivery', () =>
@@ -5047,7 +5174,7 @@ Then reply with only the command output.`,
 
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
     const noVoice = argv.includes('--settingsnav-no-voice');
-    const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, close-action, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, motion-theme, motion-fade, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, auto-resume, close-action, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, motion-theme, motion-fade, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
     // ⚠️ 上面那行字面量的变量名别改:desktop settingsTarget.test.ts 按 `const TARGETS = '…';` 逐字找它。
     const SHOWN = noVoice ? TARGETS.replace(' voice,', '') : TARGETS;
     const ENTRY = { id: 'open-settings',
@@ -7216,6 +7343,106 @@ Then reply with only the command output.`,
       output: ['a', 'b', 'c'].map((k, i) => { const x = [a, b, c][i]; return `【${k.toUpperCase()} 原会话最后的回答】${x.ev.content}\n【hand_off_task 参数】${x.handArgs.map((t) => t.args).join('\n')}\n【notes.md】\n${x.notes}`; }).join('\n\n'),
       toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls, ...c.ev.toolCalls],
       ttftMs: ttft(a.ev), tokens: [a.ev, b.ev, c.ev].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
+    };
+  });
+
+  // ── bgsteer:长命令不挡插话(11-20)── 判据看时刻(done.txt 的 mtime = 命令真正结束)、磁盘与落库行,不看措辞。
+  await scenario('bgsteer', 'bgsteer 长命令不挡插话:~40s 命令跑着时插话 → 移到后台、插话在命令结束前答完、命令只跑一次没被杀、结束后起一轮交回;不插话照旧', async () => {
+    const legs = new Set(String(opt('bgsteer-legs', 'a,b')).split(',').map((x) => x.trim()));
+    const sessionsOf = async () => (await api('/agent/sessions?limit=500')).sessions;
+    const msgsOf = async (sid) => (await api(`/agent/sessions/${sid}/messages?limit=300`)).messages || [];
+    const runsOf = async (sid) => asList(await api(`/agent/runs?session_id=${sid}`).catch(() => []), 'runs');
+    const BG = '<background_update>';
+    // 先等命令真正结束(done.txt 出现:后台跑着时会话是空的,只看会话会提前判「静了」),再等会话空下来且稳 4s ——
+    // 交回那一轮是引擎在命令收尾后自己起的,得等它也跑完
+    const settle = async (sid, doneFile, ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms && !existsSync(doneFile)) await sleep(1000);
+      while (Date.now() - t0 < ms) {
+        await sleep(4000);
+        const busy = (await sessionsOf()).find((x) => x.id === sid)?.busy || (await runsOf(sid)).some((r) => r.status === 'running' || r.status === 'queued');
+        if (!busy) { await sleep(4000); if (!(await runsOf(sid)).some((r) => r.status === 'running' || r.status === 'queued')) return true; }
+      }
+      return false;
+    };
+    const slowCalls = (msgs) => msgs.flatMap((m) => (Array.isArray(m.tool_calls) ? m.tool_calls : []))
+      .filter((c) => c?.function?.name === 'run_bash' && String(c.function.arguments || '').includes('slow-check'));
+    const leg = async (tag, steer) => {
+      const dir = join(workspace, `bgsteer-${tag}-${Date.now().toString(36)}`);
+      mkdirSync(dir, { recursive: true });
+      // 结果码运行时才生成:读脚本拿不到,只有真跑完才有(同一个码写进 done.txt 供判据比对)
+      // 给绝对路径、done.txt 写在脚本旁边:模型照抄就能跑,不会先在工作区根上跑一次「找不到文件」(11-20 头三次就是这么偏掉的)
+      const script = join(dir, 'slow-check.sh');
+      writeFileSync(script, [
+        '#!/bin/sh',
+        'echo "checking the build cache..."',
+        'sleep 40',
+        'code="BGS-$(od -An -N4 -tx1 /dev/urandom | tr -d \' \\n\')"',
+        'echo "$code" > "$(dirname "$0")/done.txt"',
+        'echo "result code: $code"',
+        '',
+      ].join('\n'));
+      const S = `live-bgsteer-${tag}-${Date.now()}`;
+      const TASK = `运行 \`sh ${script}\`,把它最后打印的 result code 告诉我。`;
+      let steered = null; let steerAt = 0;
+      const ev = await run(S, TASK, 300_000, { approvalMode: 'full-auto' }, undefined, undefined, undefined, undefined, steer ? {
+        onToolCall: async (p, runId) => {
+          if (steered || p.name !== 'run_bash' || !toolArgsText(p.arguments).includes('slow-check')) return;
+          steered = 'pending';
+          setTimeout(() => {
+            steerAt = Date.now();
+            api(`/agent/runs/${runId}/steer`, { method: 'POST', body: JSON.stringify({ message: '顺便问一句:git 的 SSH 默认端口是多少?' }) })
+              .then(() => { steered = { ok: true }; }, (err) => { steered = { error: String(err.message) }; });
+          }, 4000);
+        },
+      } : {});
+      const firstEndAt = Date.now();
+      const settled = await settle(S, join(dir, 'done.txt'), 240_000);
+      const msgs = await msgsOf(S);
+      const runs = await runsOf(S);
+      let doneAt = null; let code = '';
+      try { doneAt = statSync(join(dir, 'done.txt')).mtimeMs; code = readFileSync(join(dir, 'done.txt'), 'utf8').trim(); } catch { /* 命令没跑完 / 被杀 */ }
+      // 那条真正在跑的调用:被移交的那条优先,其次跑成的那条,都没有才取最后一条
+      const slowResults = ev.toolResults.filter((r) => r.name === 'run_bash' && ev.toolArgs.find((a) => a.id === r.id)?.args.includes('slow-check'));
+      const slowResult = slowResults.find((r) => /Moved to the background/.test(r.result)) || slowResults.find((r) => /exit_code: 0/.test(r.result)) || slowResults[slowResults.length - 1];
+      const updates = msgs.filter((m) => m.role === 'user' && String(m.content).startsWith(BG));
+      const updIdx = msgs.findIndex((m) => m.role === 'user' && String(m.content).startsWith(BG));
+      const answeredAfter = updIdx >= 0 && !!code && msgs.slice(updIdx + 1).some((m) => m.role !== 'user' && String(m.content || '').includes(code));
+      // 答端口的那条排在结局行之前 = 模型在拿到命令结果之前就读到并答了插话
+      const portIdx = msgs.findIndex((m) => m.role !== 'user' && /22/.test(String(m.content || '')) && !(code && String(m.content || '').includes(code)));
+      const portBeforeUpdate = portIdx >= 0 && (updIdx < 0 || portIdx < updIdx);
+      return { S, ev, steered, steerAt, firstEndAt, settled, msgs, runs, doneAt, code, slowResult, updates, answeredAfter, portBeforeUpdate, calls: slowCalls(msgs).length };
+    };
+    const out = []; let ok = true; const notes = []; const evs = [];
+    if (legs.has('a')) {
+      const a = await leg('a', true); evs.push(a.ev);
+      const moved = !!a.slowResult && /Moved to the background/.test(a.slowResult.result);
+      const movedBeforeEnd = moved && !!a.doneAt && a.slowResult.at < a.doneAt - 5000;
+      // 插话在命令结束前被读到:移交在命令结束前 5s 以上(移交后的下一次模型调用就带着插话),且答端口的那条排在结局行之前。
+      // 第一轮是不是在命令结束前收尾只记不判:模型慢的时候它答完插话时命令可能刚好也结束了,结局就进同一轮(也是对的)
+      const answeredBeforeEnd = movedBeforeEnd && a.portBeforeUpdate;
+      const finished = a.updates.some((m) => /\[finished\][\s\S]*exited with code 0/.test(m.content));
+      const okA = !a.ev.error && a.steered?.ok === true && movedBeforeEnd && answeredBeforeEnd && !!a.code && a.calls === 1 && finished && a.answeredAfter && a.settled
+        && !a.updates.some((m) => m.content.includes(a.code)); // 结局行不带输出
+      ok &&= okA;
+      notes.push(`【A 插话】插话${a.steered?.ok ? '已送' : `失败(${JSON.stringify(a.steered)})`};移到后台${moved ? (movedBeforeEnd ? '(命令结束前)' : '(太晚!)') : '否!'};`
+        + `${answeredBeforeEnd ? '拿到命令结果前先答了端口' : '没在拿到命令结果前答端口!'}(第一轮收尾 ${a.doneAt ? `${((a.firstEndAt - a.doneAt) / 1000).toFixed(1)}s 相对命令结束` : '命令没结束'},${a.runs.length > 1 ? '结局起一轮交回' : '结局进同一轮'});`
+        + `命令${a.code ? '跑完没被杀' : '没跑完!'};slow-check 调用 ×${a.calls};交回行 ${a.updates.length}${finished ? '(finished, code 0)' : '!'};`
+        + `交回后答出结果码:${a.answeredAfter ? '是' : '否!'};会话共 ${a.runs.length} 轮${okA ? '' : ' ✗'}`);
+      out.push(`【A 第一轮】${a.ev.content}\n【A run_bash 结果】${a.slowResult?.result || '(无)'}\n【A 全部消息】\n${a.msgs.map((m) => `[${m.role}] ${String(m.content || '').slice(0, 600)}`).join('\n')}`);
+    }
+    if (legs.has('b')) {
+      const b = await leg('b', false); evs.push(b.ev);
+      const plain = !!b.slowResult && /exit_code: 0/.test(b.slowResult.result) && !/Moved to the background/.test(b.slowResult.result) && !!b.code && b.slowResult.result.includes(b.code);
+      const okB = !b.ev.error && plain && b.updates.length === 0 && b.runs.length === 1 && (b.ev.content || '').includes(b.code);
+      ok &&= okB;
+      notes.push(`【B 不插话(负对照)】run_bash 照常等完${plain ? '' : '否!'};交回行 ${b.updates.length};会话共 ${b.runs.length} 轮;模型调用 ${b.ev.usages?.length ?? '?'} 次;答出结果码:${(b.ev.content || '').includes(b.code) ? '是' : '否!'}${okB ? '' : ' ✗'}`);
+      out.push(`【B 回答】${b.ev.content}\n【B run_bash 结果】${b.slowResult?.result || '(无)'}`);
+    }
+    return {
+      ok, detail: notes.join(' '), output: out.join('\n\n'),
+      toolCalls: evs.flatMap((e) => e.toolCalls), ttftMs: evs[0] ? ttft(evs[0]) : null,
+      tokens: evs.reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
     };
   });
 

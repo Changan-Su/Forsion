@@ -101,7 +101,7 @@ describe('routeNote', () => {
   })
 
   it('future schema → block(futureSchemaPage 原样只读在那边)', () => {
-    expect(routeNote('note.md', '---\namadeus_schema: amadeus.page/5\n---\n未来\n', true, NOW)).toEqual({ editor: 'block' })
+    expect(routeNote('note.md', '---\namadeus_schema: amadeus.page/6\n---\n未来\n', true, NOW)).toEqual({ editor: 'block' })
   })
 
   it('读不到(当前库没有这个文件)→ missing:绝不判 block 去装载(装载=缺文件即 newPage 落盘)', () => {

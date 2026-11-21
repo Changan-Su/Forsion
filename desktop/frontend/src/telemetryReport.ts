@@ -15,6 +15,7 @@ import { isUserSpace } from './userSpaces'
 import { windowKind } from './windowKind'
 import { commandTelemetry, sendTelemetry } from './telemetrySend'
 import { telemetryCommandId, telemetryPluginRef, type TelemetryPluginRef } from './telemetryPluginId'
+import { installPluginInventoryReport } from './telemetryInventory'
 
 const pluginById = (id: string) => usePluginStore.getState().plugins.find((p) => p.id === id)
 /** 按插件 id 换成遥测里的引用(商店条目 id / 内置 id / local,规则见 telemetryPluginId.ts)。 */
@@ -78,6 +79,7 @@ export function installTelemetryReport(): void {
   // 换 Space 会把新 Space 的主视图翻到前台:那是「开了 Space」,不是「开了 View」,之后一小会儿的前台变化不记。
   let viewQuietUntil = 0
   if (kind === 'main') {
+    installPluginInventoryReport() // v3:每个 UTC 日一份插件清单,只在主窗报(设置 / 商店浮窗各有一份插件仓)
     useSpaceStore.subscribe((s, p) => {
       if (s.activeSpaceId === p.activeSpaceId) return
       viewQuietUntil = Date.now() + 1500
