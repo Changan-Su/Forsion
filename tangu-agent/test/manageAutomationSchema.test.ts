@@ -12,7 +12,7 @@ import { manageAutomationProvider } from '../src/tools/builtin/manageAutomation.
 const def = manageAutomationProvider.tools()[0].definition;
 const strip = (o: unknown): unknown =>
   Array.isArray(o) ? o.map(strip)
-  : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => k !== 'description').map(([k, v]) => [k, strip(v)]))
+  : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k, v]) => !(k === 'description' && typeof v === 'string')).map(([k, v]) => [k, strip(v)]))
   : o;
 const text = JSON.stringify(def);
 
@@ -33,6 +33,9 @@ describe('manage_automation definition', () => {
     ['no actions wakes Muse', 'Without actions the rule wakes Muse'],
     ['only the user turns observing rules on', 'Only the user can turn an observing rule on'],
     ['cooldown defaults', 'default 24'],
+    ['observing rules run nothing, not even a wake', 'run nothing, not even a Muse wake'],
+    ['cell_changed needs a column selector', 'cell_changed also needs column_id or column_ids'],
+    ['match resolves in the target table', 'every row of the target table'],
   ])('keeps: %s', (_label, phrase) => {
     expect(text).toContain(phrase);
   });

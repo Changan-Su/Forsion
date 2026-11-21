@@ -109,7 +109,7 @@ export const manageAutomationProvider: ToolProvider = {
             'Triggers: at (one time; the rule disables itself after firing), every (recurring), daily_at (once a day after HH:MM), ' +
             'event_seen (a new in-app activity line contains match), file_chars_gte (a file reaches n non-whitespace chars), ' +
             'manual (never fires on its own; the user clicks a button block in a note. Use for "a button that does X"), ' +
-            'db_changed (a row added to, or a column changed in, an Amadeus database; needs path + event), ' +
+            'db_changed (a row added to, or a column changed in, an Amadeus database; needs path + event, and cell_changed also needs column_id or column_ids), ' +
             'computer.app_opened (params.app: name or bundle id; the user switched to it), computer.app_used (params.app + params.minutes of continuous use), ' +
             'computer.returned (params.minutes: back after being away at least that long), computer.unlocked (screen unlocked or the computer woke), ' +
             'calendar.before (params.minutes before a timed calendar event). computer.* rules need Computer History on and match on this machine; only the fact that one fired is shared. ' +
@@ -120,7 +120,7 @@ export const manageAutomationProvider: ToolProvider = {
             properties: {
               action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update, list, remove=delete by id' },
               id: { type: 'string', description: 'set: update this rule; remove: rule id from list' },
-              desc: { type: 'string', description: 'set: one-line description shown to the user' },
+              desc: { type: 'string', description: 'set: human-readable description shown to the user' },
               cond_type: { type: 'string', enum: listTriggerSources().map((s) => s.id), description: 'set: trigger type' },
               params: { type: 'object', description: 'set(computer.*, calendar.before, plugin triggers): trigger parameters, see the trigger list above' },
               only: {
@@ -132,7 +132,7 @@ export const manageAutomationProvider: ToolProvider = {
                 },
               },
               max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
-              observe: { type: 'boolean', description: 'set: true = record each firing without running its actions (not for at or manual rules). Only the user can turn an observing rule on.' },
+              observe: { type: 'boolean', description: 'set: true = record each firing and run nothing, not even a Muse wake or `agent` (not for at or manual rules). Only the user can turn an observing rule on.' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(cell_changed): the column ID, NOT its name (names are neither unique nor stable); read the .db JSON to find it' },
               column_ids: { type: 'array', items: { type: 'string' }, description: 'set(cell_changed): several column IDs, fires when ANY changes (max 10; union with column_id). Prefer this over one rule per column.' },
@@ -151,7 +151,7 @@ export const manageAutomationProvider: ToolProvider = {
                 },
               },
               datetime: { type: 'string', description: 'set(at): local "YYYY-MM-DD HH:mm"' },
-              interval: { type: 'string', description: 'set(every): "30m"/"2h"/"1d" (min 15m; min 1h when any agent runs)' },
+              interval: { type: 'string', description: 'set(every): interval like "30m"/"2h"/"1d" (min 15m; min 1h when any agent runs)' },
               time: { type: 'string', description: 'set(daily_at): local "HH:MM"' },
               match: { type: 'string', description: 'set(event_seen): substring, e.g. a file name, "note.edit", "run.done agent=historian", "plugin:activitywatch:focus"' },
               path: { type: 'string', description: 'set(file_chars_gte): file path, absolute or relative to the current workspace. set(db_changed): vault-relative .db path, e.g. "Tasks.db"' },
@@ -164,9 +164,9 @@ export const manageAutomationProvider: ToolProvider = {
                   'remind {title, body?}: system notification plus one line in the Muse chat; no model, nothing leaves this computer, skipped outside Muse active hours. ' +
                   'agent_run {agentSlug, prompt}: run that agent unattended. ' +
                   'db_row_add {path, cells, skipIfEmpty?}: append a row (skipIfEmpty = a cells key; skip the step when that value expands to empty). ' +
-                  'db_row_edit {path, cells, rowId | rowFrom | match}: rowId = one row; rowFrom = a relation column of the trigger row, edits each linked row (as {{target.X}}); ' +
-                  'match = {column, value} edits every row whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
-                  'path is a vault-relative .db; cells maps a column ID (or name) to a value. ' +
+                  'db_row_edit {path, cells, rowId? | rowFrom? | match?}: rowId = one row; rowFrom = a relation column (ID or name) of the trigger row, edits each linked row (as {{target.X}}); ' +
+                  'match = {column, value} edits every row of the target table whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
+                  'path is a vault-relative Amadeus .db; cells maps a column ID (or name) to a value. ' +
                   'Templates {{row.<column>}}, {{target.<column>}}, {{now}}, {{today}} and arithmetic {{= {target.qty} - {row.qty} }} (formula syntax, column refs in single braces) ' +
                   'expand ONLY in notify text and db cell values, never in prompts, paths or tool arguments. Computed columns (lookup/formula) of the trigger row are resolved first.',
                 items: {
