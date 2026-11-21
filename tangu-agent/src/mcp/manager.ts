@@ -1,3 +1,4 @@
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * MCP 管理器(仅 standalone/TUI 组装;deps().mcp 可选——microserver/worker 不构造,云端零影响):
@@ -308,6 +309,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     const t = inferTransport(cfg);
     if (t === 'stdio') {
       if (!cfg.command) throw new Error('stdio server 缺 command');
+      assertHostSpawnAllowed('mcp stdio server'); // 多账号模式不起宿主子进程(core/hostSpawn.ts)
       return new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],

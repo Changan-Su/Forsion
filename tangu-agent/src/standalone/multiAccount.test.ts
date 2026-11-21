@@ -437,6 +437,19 @@ describe('createMultiAccountApp', () => {
     expect(() => agentLockKey('xyra')).toThrow(/no account in context/);
   });
 
+  it('never starts an MCP stdio server process', async () => {
+    const { createMcpManager } = await import('../mcp/manager.js');
+    const { runWithAccount } = await import('../core/accountScope.js');
+    const dir = mkdtempSync(join(tmpdir(), 'ma-mcp-'));
+    const marker = join(dir, 'spawned');
+    const mgr = createMcpManager(join(dir, 'mcp.json'), { connectTimeoutMs: 3000 });
+    const r = await runWithAccount('alice', () => mgr.probe({ command: process.execPath, args: ['-e', `require('fs').writeFileSync(${JSON.stringify(marker)}, 'x')`] } as any));
+    expect(r.ok).toBe(false);
+    expect((r as any).error).toMatch(/starting a host process is not available/);
+    expect(existsSync(marker)).toBe(false);
+    await (mgr as any).dispose?.();
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);
