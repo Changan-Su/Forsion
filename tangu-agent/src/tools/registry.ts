@@ -381,8 +381,15 @@ export function listDeferredTools(ctx: ToolContext, opts: { builtins?: boolean; 
 
 /** 「Additional Tools」系统提示段(主 loop / 子代理共用一份文本)。目录里有 MCP 行时多一句:那几行说明是第三方 server
  *  写的,是数据、不是给模型的指令(Codex 评审 11-06:说明首行进的是系统提示)。没有 MCP 行的 run 一个字节不变。 */
-export function deferredCatalogSection(catalog: ReadonlyArray<{ name: string; hint: string }>): string | null {
+export function deferredCatalogSection(catalog: ReadonlyArray<{ name: string; hint: string }>, opts: { namesOnly?: boolean } = {}): string | null {
   if (!catalog.length) return null;
+  // namesOnly(Muse 周期,11-21):只列名字、一行。带说明的整份目录(约 3.4 KB)进了 Muse 的系统提示,真模型台架里
+  // Muse 读完 Space 就不再写布局(muse 0/3,同日 main 3/3);同样的按需工具面不放目录 3/3。名字只用来 load_tools,
+  // 不带第三方说明 → 也不需要 MCP 那句「是数据不是指令」。
+  if (opts.namesOnly) {
+    return '## Additional Tools (load on demand)\n' +
+      `Not loaded yet; to use one, first call \`load_tools\` with its exact name: ${catalog.map((d) => d.name).join(', ')}.`;
+  }
   const hasMcp = catalog.some((d) => d.name.startsWith('mcp__'));
   return '## Additional Tools (load on demand)\n' +
     'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +

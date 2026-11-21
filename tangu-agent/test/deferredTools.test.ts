@@ -269,8 +269,8 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     expect(String(sys?.content)).toContain('manage_automation');
   });
 
-  // 11-21:Muse 周期按需装载。真 loop 走一遍:首轮 defs / 目录段 / 个人文件夹段里那句「先 load_tools」三处要一致。
-  it('Muse 周期:首轮 defs 不带按需工具、manage_schedule 常驻;目录列 manage_automation 不列 manage_schedule;不再叫它先装 manage_schedule', async () => {
+  // 11-21:Muse 周期按需装载。真 loop 走一遍:首轮 defs 与目录段要一致;普通 run 对照照旧。
+  it('Muse 周期:首轮 defs 不带按需工具、manage_schedule 常驻;目录只列名字(有 manage_automation、没有 manage_schedule)', async () => {
     const { home, llmPayloads } = await setupLoop(() => ({ content: 'done', toolCalls: [], finishReason: 'stop' }));
     cleanupHome = home;
     await runToDone('R1', 'Start this round', { muse: true, automationOrigin: 'muse', execMode: 'host' });
@@ -280,18 +280,20 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     expect(names1).not.toContain('manage_automation');
     const sysOf = (i: number): string => (llmPayloads[i].messages as any[]).filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n');
     const sys = sysOf(0);
+    // Muse 周期的目录只列名字、一行(带说明的整份目录进 Muse 系统提示时,真模型台架 muse 布局 0/3)
+    const line = sys.split('\n').find((l) => l.startsWith('Not loaded yet; to use one, first call `load_tools`')) || '';
     expect(sys).toContain('Additional Tools (load on demand)');
-    expect(sys).toMatch(/^- manage_automation: /m);
-    expect(sys).not.toMatch(/^- manage_schedule: /m);
-    expect(sys).toContain('Manage it with the manage_schedule tool; an entry');
+    expect(line).toMatch(/\bmanage_automation\b/);
+    expect(line).not.toMatch(/\bmanage_schedule\b/);
+    expect(sys).not.toMatch(/^- manage_automation: /m);
     // 对照:普通 run 照旧按需,提示照旧叫它先装(这几处字节不变)
     const r2 = llmPayloads.length;
     await runToDone('R2', 'hi', { execMode: 'host' });
     const names2 = (llmPayloads[r2].tools || []).map((t: any) => t.function?.name);
     expect(names2).not.toContain('manage_schedule');
     const sys2 = sysOf(r2);
-    expect(sys2).toMatch(/^- manage_schedule: /m);
-    expect(sys2).toContain('Manage it with the manage_schedule tool (it is in Additional Tools, call load_tools first); an entry');
+    expect(sys2).toMatch(/^- manage_schedule: /m); // 普通会话照旧带说明的整份目录
+    expect(sys2).not.toContain('Not loaded yet; to use one');
   });
 
   // 10-02:上一 run 装过并用过的 deferred 工具,下一 run 起点就在 defs 里(否则模型照历史硬调,落到 manage_human 空刷)。
