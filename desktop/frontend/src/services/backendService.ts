@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
-  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
+  BuiltinUpdate, GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -899,6 +899,13 @@ export const saveAgentDef = (t: EngineTarget, def: Omit<Partial<NormalAgentDef>,
     slug ? `/agent/agents/${encodeURIComponent(slug)}` : '/agent/agents',
     { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
   ).then((r) => r.agent)
+
+/** 内置 Agent 的指令有新版本、而用户改过:配置页上方的提示(引擎 agents/builtinBaseline.ts)。没有 / 旧引擎 / 云端 / 远端 → null。 */
+export const getBuiltinUpdate = (t: EngineTarget, slug: string) =>
+  request<{ update: BuiltinUpdate | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/builtin-update`).then((r) => r.update ?? null).catch(() => null)
+/** 保留我的(keep:只记下看过这版)/ 换成新默认(adopt)。token = 上面那份提示带的;现状变了引擎回 409,调用方重读提示。 */
+export const resolveBuiltinUpdate = (t: EngineTarget, slug: string, action: 'keep' | 'adopt', token: string) =>
+  request<{ agent: NormalAgentDef | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/builtin-update`, { method: 'POST', body: JSON.stringify({ action, token }) }).then((r) => r.agent)
 
 /** 本机引擎:整份进回收站(trashId),私聊缺省归档、deleteChats 连私聊一起删;云端引擎直接删、不回 trashId。 */
 export const deleteAgentDef = (t: EngineTarget, slug: string, opts?: { deleteChats?: boolean }) =>

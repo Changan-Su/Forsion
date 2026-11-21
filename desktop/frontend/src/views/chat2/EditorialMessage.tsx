@@ -69,12 +69,22 @@ registerMessages({
   // M1B:别处答的(执行的电脑本机 / 另一台设备 / 消息通道)—— {where} = approval.byHost* / byDevice … 的「在哪」短语
   'chat.approval.update.byApproved': { zh: '{where}批准', en: 'Approved {where}' },
   'chat.approval.update.byRejected': { zh: '{where}拒绝', en: 'Rejected {where}' },
+  // <background_update>(11-20):用户插话时被移到后台的命令结束了
+  'chat.background.update.finished': { zh: '后台命令已结束（退出码 {code}）', en: 'Background command finished (exit code {code})' },
+  'chat.background.update.ended': { zh: '后台命令已结束', en: 'Background command ended' },
+  'chat.background.update.failed': { zh: '后台命令出错', en: 'Background command failed' },
+  'chat.background.update.timedOut': { zh: '后台命令超过时限，已停止', en: 'Background command hit the time limit and was stopped' },
+  'chat.background.update.stopped': { zh: '后台命令已停止', en: 'Background command stopped' },
 })
 const UPDATE_KEY = {
   approved: 'chat.approval.update.approved',
   failed: 'chat.approval.update.failed',
   rejected: 'chat.approval.update.rejected',
 } as const
+const backgroundKey = (r: BackgroundOutcome): string => r.status === 'finished'
+  ? (r.exitCode === null ? 'chat.background.update.ended' : 'chat.background.update.finished')
+  : r.status === 'timed_out' ? 'chat.background.update.timedOut'
+    : r.status === 'failed' ? 'chat.background.update.failed' : 'chat.background.update.stopped'
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
 import { playSendFlight } from './sendFlight'
@@ -97,7 +107,7 @@ import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProac
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, HandoffBlock, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf, handoffIdsOf } from './ChildSessions'
-import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, BACKGROUND_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseBackgroundUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome, type BackgroundOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
@@ -805,6 +815,27 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
             </div>
           ))}
+        </div>
+      )
+    }
+    // 被移到后台的命令结束了(<background_update>,11-20):同理是机器行,每条命令一行;输出不在这行里(模型自己去读)。
+    // 复用审批结局那一行的排法:退出码 0 记成 approved 那档的绿勾,其余红叉。
+    // 一条都解析不出来(用户自己打了这个标记开头的话)→ 照普通消息画,别画成一行空白
+    const bgRows = msg.content.startsWith(BACKGROUND_UPDATE_OPEN) ? parseBackgroundUpdate(msg.content) : []
+    if (bgRows.length) {
+      const rows = bgRows
+      return (
+        <div ref={rootRef} className="t2-sys t2-apv-update" data-background-update={rows.length}>
+          {rows.map((r) => {
+            const ok = r.status === 'finished' && r.exitCode === 0
+            return (
+              <div key={r.processId} className="t2-apv-update-row" data-status={ok ? 'approved' : 'failed'}>
+                {ok ? <CircleCheck size={12} /> : <CircleX size={12} />}
+                <span className="t2-apv-update-what">{t(backgroundKey(r), { code: String(r.exitCode ?? '') })}</span>
+                <span className="t2-apv-update-preview" title={r.command}>{r.command}</span>
+              </div>
+            )
+          })}
         </div>
       )
     }

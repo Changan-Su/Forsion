@@ -81,6 +81,9 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only handoff                    # 挪出去(11-08,方案「会话互通升级」):逐个读 6 个文件写摘要,跑到一半插话 ——
  *                                                              A 问个不相干的(SSH 端口)→ 调 hand_off_task、挪出去的会话把 6 行写完、原会话答了端口;
  *                                                              B 负对照「第 3 个写短点」→ 不挪、本会话写完;C 「另起话题」(steer newTopic)→ 挪。改 hand_off_task / NEW_TOPIC_NOTE / 持久性段后跑
+ *   npm run live:harness -- --only bgsteer [--bgsteer-legs a|b]   # 长命令不挡插话(11-20,借鉴 dsh-superagent 方案第 5 条 A):A 跑 ~40s 命令时插话 → 移到后台、
+ *                                                              插话在命令结束前答完、命令只跑一次没被杀、结束后起一轮(<background_update>)交回结果码;B 不插话 = 负对照(照旧等完、不起轮)。
+ *                                                              改 run_bash 移交 / services/steerHandoff.ts / agentLoop 插话与收尾闸门后跑;改前的 dist 跑 A 须红
  *   npm run live:harness -- --only crosstree                  # 跨树互发(11-08):会话 Q 记一个事实;另一棵树里的 S 用 search_sessions 找到 Q、send_to_session 去问,
  *                                                              Q 收到 relation="peer" 的消息并回发,S 收到回信里有答案。改 send_to_session / peer 规则后跑
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
@@ -229,7 +232,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  */
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID, createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
@@ -343,6 +346,10 @@ KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: a
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('nestedmsg'); // --only nestedmsg: fork 上下文 + 兄弟会话传话(10-28)
 OPT_IN.add('handoff'); OPT_IN.add('crosstree'); // --only handoff,crosstree: 挪出去 + 跨树互发(11-08)
+// bgsteer(11-20,借鉴 dsh-superagent 方案第 5 条 A):长命令不挡插话。A 腿跑一条 ~40s 的命令时插话 → 命令移到后台、插话在命令结束前被答、
+//   命令没被杀只跑一次、结束后起一轮交回结果码;B 腿不插话(负对照:行为同改前、不起轮、不多调模型)。--bgsteer-legs a|b 只跑一条腿。
+//   改 run_bash 的移交 / services/steerHandoff.ts / agentLoop 的插话与收尾闸门后跑;--kind base 在改前的 dist 上跑 A 腿须红
+OPT_IN.add('bgsteer'); KEYS.push('bgsteer');
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
@@ -7366,6 +7373,106 @@ Then reply with only the command output.`,
       output: ['a', 'b', 'c'].map((k, i) => { const x = [a, b, c][i]; return `【${k.toUpperCase()} 原会话最后的回答】${x.ev.content}\n【hand_off_task 参数】${x.handArgs.map((t) => t.args).join('\n')}\n【notes.md】\n${x.notes}`; }).join('\n\n'),
       toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls, ...c.ev.toolCalls],
       ttftMs: ttft(a.ev), tokens: [a.ev, b.ev, c.ev].reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
+    };
+  });
+
+  // ── bgsteer:长命令不挡插话(11-20)── 判据看时刻(done.txt 的 mtime = 命令真正结束)、磁盘与落库行,不看措辞。
+  await scenario('bgsteer', 'bgsteer 长命令不挡插话:~40s 命令跑着时插话 → 移到后台、插话在命令结束前答完、命令只跑一次没被杀、结束后起一轮交回;不插话照旧', async () => {
+    const legs = new Set(String(opt('bgsteer-legs', 'a,b')).split(',').map((x) => x.trim()));
+    const sessionsOf = async () => (await api('/agent/sessions?limit=500')).sessions;
+    const msgsOf = async (sid) => (await api(`/agent/sessions/${sid}/messages?limit=300`)).messages || [];
+    const runsOf = async (sid) => asList(await api(`/agent/runs?session_id=${sid}`).catch(() => []), 'runs');
+    const BG = '<background_update>';
+    // 先等命令真正结束(done.txt 出现:后台跑着时会话是空的,只看会话会提前判「静了」),再等会话空下来且稳 4s ——
+    // 交回那一轮是引擎在命令收尾后自己起的,得等它也跑完
+    const settle = async (sid, doneFile, ms) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < ms && !existsSync(doneFile)) await sleep(1000);
+      while (Date.now() - t0 < ms) {
+        await sleep(4000);
+        const busy = (await sessionsOf()).find((x) => x.id === sid)?.busy || (await runsOf(sid)).some((r) => r.status === 'running' || r.status === 'queued');
+        if (!busy) { await sleep(4000); if (!(await runsOf(sid)).some((r) => r.status === 'running' || r.status === 'queued')) return true; }
+      }
+      return false;
+    };
+    const slowCalls = (msgs) => msgs.flatMap((m) => (Array.isArray(m.tool_calls) ? m.tool_calls : []))
+      .filter((c) => c?.function?.name === 'run_bash' && String(c.function.arguments || '').includes('slow-check'));
+    const leg = async (tag, steer) => {
+      const dir = join(workspace, `bgsteer-${tag}-${Date.now().toString(36)}`);
+      mkdirSync(dir, { recursive: true });
+      // 结果码运行时才生成:读脚本拿不到,只有真跑完才有(同一个码写进 done.txt 供判据比对)
+      // 给绝对路径、done.txt 写在脚本旁边:模型照抄就能跑,不会先在工作区根上跑一次「找不到文件」(11-20 头三次就是这么偏掉的)
+      const script = join(dir, 'slow-check.sh');
+      writeFileSync(script, [
+        '#!/bin/sh',
+        'echo "checking the build cache..."',
+        'sleep 40',
+        'code="BGS-$(od -An -N4 -tx1 /dev/urandom | tr -d \' \\n\')"',
+        'echo "$code" > "$(dirname "$0")/done.txt"',
+        'echo "result code: $code"',
+        '',
+      ].join('\n'));
+      const S = `live-bgsteer-${tag}-${Date.now()}`;
+      const TASK = `运行 \`sh ${script}\`,把它最后打印的 result code 告诉我。`;
+      let steered = null; let steerAt = 0;
+      const ev = await run(S, TASK, 300_000, { approvalMode: 'full-auto' }, undefined, undefined, undefined, undefined, steer ? {
+        onToolCall: async (p, runId) => {
+          if (steered || p.name !== 'run_bash' || !toolArgsText(p.arguments).includes('slow-check')) return;
+          steered = 'pending';
+          setTimeout(() => {
+            steerAt = Date.now();
+            api(`/agent/runs/${runId}/steer`, { method: 'POST', body: JSON.stringify({ message: '顺便问一句:git 的 SSH 默认端口是多少?' }) })
+              .then(() => { steered = { ok: true }; }, (err) => { steered = { error: String(err.message) }; });
+          }, 4000);
+        },
+      } : {});
+      const firstEndAt = Date.now();
+      const settled = await settle(S, join(dir, 'done.txt'), 240_000);
+      const msgs = await msgsOf(S);
+      const runs = await runsOf(S);
+      let doneAt = null; let code = '';
+      try { doneAt = statSync(join(dir, 'done.txt')).mtimeMs; code = readFileSync(join(dir, 'done.txt'), 'utf8').trim(); } catch { /* 命令没跑完 / 被杀 */ }
+      // 那条真正在跑的调用:被移交的那条优先,其次跑成的那条,都没有才取最后一条
+      const slowResults = ev.toolResults.filter((r) => r.name === 'run_bash' && ev.toolArgs.find((a) => a.id === r.id)?.args.includes('slow-check'));
+      const slowResult = slowResults.find((r) => /Moved to the background/.test(r.result)) || slowResults.find((r) => /exit_code: 0/.test(r.result)) || slowResults[slowResults.length - 1];
+      const updates = msgs.filter((m) => m.role === 'user' && String(m.content).startsWith(BG));
+      const updIdx = msgs.findIndex((m) => m.role === 'user' && String(m.content).startsWith(BG));
+      const answeredAfter = updIdx >= 0 && !!code && msgs.slice(updIdx + 1).some((m) => m.role !== 'user' && String(m.content || '').includes(code));
+      // 答端口的那条排在结局行之前 = 模型在拿到命令结果之前就读到并答了插话
+      const portIdx = msgs.findIndex((m) => m.role !== 'user' && /22/.test(String(m.content || '')) && !(code && String(m.content || '').includes(code)));
+      const portBeforeUpdate = portIdx >= 0 && (updIdx < 0 || portIdx < updIdx);
+      return { S, ev, steered, steerAt, firstEndAt, settled, msgs, runs, doneAt, code, slowResult, updates, answeredAfter, portBeforeUpdate, calls: slowCalls(msgs).length };
+    };
+    const out = []; let ok = true; const notes = []; const evs = [];
+    if (legs.has('a')) {
+      const a = await leg('a', true); evs.push(a.ev);
+      const moved = !!a.slowResult && /Moved to the background/.test(a.slowResult.result);
+      const movedBeforeEnd = moved && !!a.doneAt && a.slowResult.at < a.doneAt - 5000;
+      // 插话在命令结束前被读到:移交在命令结束前 5s 以上(移交后的下一次模型调用就带着插话),且答端口的那条排在结局行之前。
+      // 第一轮是不是在命令结束前收尾只记不判:模型慢的时候它答完插话时命令可能刚好也结束了,结局就进同一轮(也是对的)
+      const answeredBeforeEnd = movedBeforeEnd && a.portBeforeUpdate;
+      const finished = a.updates.some((m) => /\[finished\][\s\S]*exited with code 0/.test(m.content));
+      const okA = !a.ev.error && a.steered?.ok === true && movedBeforeEnd && answeredBeforeEnd && !!a.code && a.calls === 1 && finished && a.answeredAfter && a.settled
+        && !a.updates.some((m) => m.content.includes(a.code)); // 结局行不带输出
+      ok &&= okA;
+      notes.push(`【A 插话】插话${a.steered?.ok ? '已送' : `失败(${JSON.stringify(a.steered)})`};移到后台${moved ? (movedBeforeEnd ? '(命令结束前)' : '(太晚!)') : '否!'};`
+        + `${answeredBeforeEnd ? '拿到命令结果前先答了端口' : '没在拿到命令结果前答端口!'}(第一轮收尾 ${a.doneAt ? `${((a.firstEndAt - a.doneAt) / 1000).toFixed(1)}s 相对命令结束` : '命令没结束'},${a.runs.length > 1 ? '结局起一轮交回' : '结局进同一轮'});`
+        + `命令${a.code ? '跑完没被杀' : '没跑完!'};slow-check 调用 ×${a.calls};交回行 ${a.updates.length}${finished ? '(finished, code 0)' : '!'};`
+        + `交回后答出结果码:${a.answeredAfter ? '是' : '否!'};会话共 ${a.runs.length} 轮${okA ? '' : ' ✗'}`);
+      out.push(`【A 第一轮】${a.ev.content}\n【A run_bash 结果】${a.slowResult?.result || '(无)'}\n【A 全部消息】\n${a.msgs.map((m) => `[${m.role}] ${String(m.content || '').slice(0, 600)}`).join('\n')}`);
+    }
+    if (legs.has('b')) {
+      const b = await leg('b', false); evs.push(b.ev);
+      const plain = !!b.slowResult && /exit_code: 0/.test(b.slowResult.result) && !/Moved to the background/.test(b.slowResult.result) && !!b.code && b.slowResult.result.includes(b.code);
+      const okB = !b.ev.error && plain && b.updates.length === 0 && b.runs.length === 1 && (b.ev.content || '').includes(b.code);
+      ok &&= okB;
+      notes.push(`【B 不插话(负对照)】run_bash 照常等完${plain ? '' : '否!'};交回行 ${b.updates.length};会话共 ${b.runs.length} 轮;模型调用 ${b.ev.usages?.length ?? '?'} 次;答出结果码:${(b.ev.content || '').includes(b.code) ? '是' : '否!'}${okB ? '' : ' ✗'}`);
+      out.push(`【B 回答】${b.ev.content}\n【B run_bash 结果】${b.slowResult?.result || '(无)'}`);
+    }
+    return {
+      ok, detail: notes.join(' '), output: out.join('\n\n'),
+      toolCalls: evs.flatMap((e) => e.toolCalls), ttftMs: evs[0] ? ttft(evs[0]) : null,
+      tokens: evs.reduce((n, e) => n + (tokensOf(e) || 0), 0) || null,
     };
   });
 

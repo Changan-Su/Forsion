@@ -6,10 +6,10 @@ import { getDbType, messageTimeOrder, query } from '../core/db.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import type { TranscriptItem } from './types.js';
 
-// 引擎落库的机器行(role 也是 user,但不是人说的话):打断标记、续跑、审批 / 提问回执、子会话通报、跨会话来信。
+// 引擎落库的机器行(role 也是 user,但不是人说的话):打断标记、续跑、审批 / 提问回执、后台命令结局、子会话通报、跨会话来信。
 // 名单与 desktop chat2/canvasTree.ts 的 MACHINE 相同;这里另要求带上配对的收尾标签,用户自己打的、以同名标签开头的话不会被跳过。
 // /edit 把机器行当「最后一句」会把标记原文塞进编辑框,/delete 则只删掉一条看不见的行。
-const MACHINE_USER_ROW = /^(?:<(turn_interrupted|turn_resume|approval_update|inquiry_update|child_sessions_update)>[\s\S]*<\/\1>|<session_message [^>\n]*>[\s\S]*<\/session_message>)/;
+const MACHINE_USER_ROW = /^(?:<(turn_interrupted|turn_resume|approval_update|inquiry_update|background_update|child_sessions_update)>[\s\S]*<\/\1>|<session_message [^>\n]*>[\s\S]*<\/session_message>)/;
 const LAST_USER_PAGE = 50;
 
 /** 最后一条人说的 user 消息。同一毫秒落库的几行按落库先后认最新(SQLite 带 rowid,#762 同类);/edit 读和删认同一条。 */
