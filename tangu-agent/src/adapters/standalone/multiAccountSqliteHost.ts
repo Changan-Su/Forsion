@@ -44,7 +44,8 @@ export function checkAccountIdentity(headers: Record<string, string | string[] |
 
 export interface MultiAccountHost {
   host: HostServices;
-  /** 开户(第一次见到某账号):建目录、base schema、provision(迁移 + 播种)。同账号并发的首请求共享一个 promise;失败下次重试。 */
+  /** 开户(本进程第一次见到某账号):核对落盘位置、建目录、base schema、把库里已有的会话 id 补登进登记表、provision(迁移 + 收敛上次留下的 run + 播种)。
+   *  同账号并发的首请求共享一个 promise;失败下次重试。 */
   ensureAccount(id: string): Promise<void>;
   /** 会话 id 现在归谁(没人认领过 → undefined)。 */
   sessionOwner(sessionId: string): string | undefined;
@@ -128,6 +129,21 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
     return sessionOwner(sessionId) === accountId;
   };
 
+  /**
+   * 开户时把这个账号库里已有的会话 id 补登给这个账号(登记表和账号库可能不同步:登记表丢了 / 账号库是搬来的 / 上次进程在
+   * 插行和认领之间退出)。已被别的账号登记的 id 不改动、不中断开户,只在日志里写清楚 —— 那条会话在本账号里照常可见,
+   * 但它的 id 起新 run 会被当成别人的(404)。
+   */
+  const backfillClaims = (id: string, db: Database.Database): void => {
+    const ids = (db.prepare('SELECT id FROM chat_sessions').pluck().all() as unknown[]).filter((x): x is string => typeof x === 'string' && !!x);
+    if (!ids.length) return;
+    owners.transaction((list: string[]) => { for (const sid of list) claimIns.run(sid, id); })(ids);
+    for (const sid of ids) {
+      const owner = sessionOwner(sid);
+      if (owner !== id) console.error(`[tangu] multi-account: session ${sid} in account ${id} is registered to another account; registry left unchanged`);
+    }
+  };
+
   const accountOrThrow = (what: string): string => {
     const id = currentAccountId();
     if (!id) throw new Error(`multi-account: no account in context for ${what}`);
@@ -207,7 +223,7 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
     let p = ready.get(id);
     if (!p) {
       p = runWithAccount(id, async () => {
-        dbFor(id);
+        backfillClaims(id, dbFor(id));
         await cfg.provision(id);
       });
       p.catch(() => { if (ready.get(id) === p) ready.delete(id); });

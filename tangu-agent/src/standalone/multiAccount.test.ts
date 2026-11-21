@@ -20,6 +20,9 @@ const env = vi.hoisted(() => {
 import { existsSync, linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
+import { toSqliteDDL } from '../core/dialectDDL.js';
+import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { createMultiAccountApp } from './multiAccount.js';
 
 const TOKEN = 'host-secret';
@@ -142,6 +145,30 @@ describe('createMultiAccountApp', () => {
     const who = a.status === 200 ? 'alice' : 'bob';
     const sse = await fetch(`${base}/agent/runs/${winner.json.runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': who } });
     expect(await sse.text()).toMatch(/"type":"done"/);
+  });
+
+  it('registers the session ids already in an account database when the account is opened', async () => {
+    const taken = (await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'alice-owned' } })).json.session.id as string;
+    const mine = '22222222-3333-4444-8555-666666666666';
+    const dir = join(env.home, 'accounts', 'dave');
+    mkdirSync(dir, { recursive: true });
+    const db = new Database(join(dir, 'state.db'));
+    db.exec(toSqliteDDL(STANDALONE_SCHEMA));
+    const ins = db.prepare(`INSERT INTO chat_sessions (id, user_id, title) VALUES (?, 'dave', ?)`);
+    ins.run(mine, 'dave-old');
+    ins.run(taken, 'dave-copy-of-a-taken-id');
+    db.close();
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(' ')); });
+    try {
+      expect((await call('GET', '/agent/sessions', { as: 'dave' })).status).toBe(200);
+    } finally { spy.mockRestore(); }
+    // 自己库里的 id 补登给了 dave:别人拿它起 run 是 404
+    expect((await call('POST', '/agent/runs', { as: 'bob', body: { session_id: mine, model_id: 'test-model', message: 'x' } })).status).toBe(404);
+    // 已是 alice 的那个:登记不动、开户不断,日志写清是哪个 id
+    expect(errors.some((e) => e.includes(taken) && e.includes('dave'))).toBe(true);
+    expect((await call('GET', `/agent/sessions/${taken}/detail`, { as: 'alice' })).status).toBe(200);
+    expect((await call('POST', '/agent/runs', { as: 'dave', body: { session_id: taken, model_id: 'test-model', message: 'x' } })).status).toBe(404);
   });
 
   it('refuses to open an account whose folder or database is a link to somewhere else', async () => {
