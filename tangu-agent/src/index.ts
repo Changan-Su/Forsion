@@ -48,6 +48,7 @@ import linkPreviewRouter from './routes/linkPreview.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
+import { markRecoveryHost } from './services/runProgress.js';
 import { deliverPendingChildReports } from './services/childSessions.js';
 import { loadSandboxConfig } from './sandbox/sandboxConfig.js';
 import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './sandbox/dockerProvider.js';
@@ -136,6 +137,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
     // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
+    // 会做启动恢复的本机引擎(standalone / 桌面拉起的那个):之后建的 run 盖 hostRecovery 戳、引擎被停时记 interrupted、
+    // 边跑边落库(中断任务续跑方案 B,services/runProgress.ts)。TUI(recoverRuns:false)/ 云端 worker / 网关都不是。
+    // 先于下面一切会建 run 的后台任务(Muse、通道、恢复本身)。
+    markRecoveryHost(opts?.recoverRuns !== false && !!deps().profile.capabilities.hostExec);
     if (opts?.recoverRuns !== false) {
       recoverQueuedRuns()
         .then((m) => { if (m) console.log(`[tangu] re-enqueued ${m} pending run(s)`); })

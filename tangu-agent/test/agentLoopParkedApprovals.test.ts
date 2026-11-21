@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -25,6 +25,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval, type ApprovalDecision } from '../src/services/approvals.js';
 import { enqueueRun, abortRun, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
+import { markRecoveryHost, CALL_NOT_STARTED_RESULT } from '../src/services/runProgress.js';
 
 // ⑧⑨ 用:路径带 prectx → PreToolUse 注入上下文;参数带 boom → 执行抛错。其余一律透传原实现(①–⑦ 不受影响)。
 vi.mock('../src/hooks/index.js', async (importOriginal) => {
@@ -236,6 +237,83 @@ describe('挂起审批(托盘 run)', () => {
     expect((await persistedResult('c-a'))?.parked).toBeFalsy();
     expect((await persistedResult('c-b'))?.parked).toBeFalsy();
     expect(String((await persistedResult('c-b'))?.content)).not.toContain("Waiting for the user's approval");
+  }, 20_000);
+
+  it('⑩ 回填已落库的旧段只改那一段的 tool_results(按消息 id + 调用 id),不动它的正文 / 来源 / 模型(中断任务续跑评审 #13)', async () => {
+    markRecoveryHost(true); // 进度落库开着:「已开始」与结局都走回填
+    try {
+      script = [
+        () => ({
+          content: 'Two writes.', reasoning: '', finishReason: 'stop', usage,
+          toolCalls: [
+            { id: 'c-a', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'a.txt'), content: 'A' }) } },
+            { id: 'c-b', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'b.txt'), content: 'B' }) } },
+          ],
+        }),
+        finalStep('Waiting for both.'),
+        finalStep('A is done, still waiting for B.'),
+        finalStep('Both done.'),
+      ];
+      const r = await start(true);
+      const ra = await r.nextApproval();
+      const rb = await r.nextApproval();
+      await until(() => payloads.length >= 2, '收尾轮');
+      decide(ra, { action: 'approve' });
+      await until(() => payloads.length >= 3, '批完 A 之后的一轮');
+      const seg = (await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = 'S' AND tool_results LIKE '%c-b%'`))[0]?.id;
+      expect(seg).toBeTruthy();
+      // 这段落库之后被别处改过(换了模型显示、补了来源 / 正文):回填 B 的结局不能把它们抹回段快照
+      await query(`UPDATE chat_messages SET content = 'EDITED', origin = 'refused', model_id = 'old-model', agent_slug = 'old-agent' WHERE id = ?`, [seg]);
+      decide(rb, { action: 'approve' });
+      expect((await r.settled()).status).toBe('done');
+      const row = (await query<any[]>(`SELECT content, origin, model_id, agent_slug FROM chat_messages WHERE id = ?`, [seg]))[0];
+      expect(row).toEqual({ content: 'EDITED', origin: 'refused', model_id: 'old-model', agent_slug: 'old-agent' });
+      expect(readFileSync(join(outside, 'b.txt'), 'utf8')).toBe('B');
+      const b = await persistedResult('c-b');
+      expect(b?.parked).toBeFalsy();
+      expect(b?.inflight).toBeFalsy();
+      expect(String(b?.content)).not.toContain("Waiting for the user's approval");
+      expect((await persistedResult('c-a'))?.parked).toBeFalsy();
+    } finally { markRecoveryHost(false); }
+  }, 20_000);
+
+  it('⑪ 已落库那一段里挂着的调用:「已开始」回填没写上 → 有副作用的不执行,如实说没跑(中断任务续跑评审 #4 的挂起那半)', async () => {
+    markRecoveryHost(true);
+    const st: any = deps().state;
+    const orig = st.patchToolResults;
+    st.patchToolResults = async (id: string, entries: any[]) => {
+      if (entries.some((e) => e?.tool_call_id === 'c-b' && e?.inflight?.state === 'started')) throw new Error('disk full');
+      return orig.call(st, id, entries);
+    };
+    try {
+      script = [
+        () => ({
+          content: '', reasoning: '', finishReason: 'stop', usage,
+          toolCalls: [
+            { id: 'c-a', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'a.txt'), content: 'A' }) } },
+            { id: 'c-b', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: join(outside, 'b.txt'), content: 'B' }) } },
+          ],
+        }),
+        finalStep('Waiting for both.'),
+        finalStep('A is done, still waiting for B.'),
+        finalStep('B did not run.'),
+      ];
+      const r = await start(true);
+      const ra = await r.nextApproval();
+      const rb = await r.nextApproval();
+      await until(() => payloads.length >= 2, '收尾轮');
+      decide(ra, { action: 'approve' });
+      await until(() => payloads.length >= 3, '批完 A 之后的一轮');
+      decide(rb, { action: 'approve' });
+      expect((await r.settled()).status).toBe('done');
+      expect(readFileSync(join(outside, 'a.txt'), 'utf8')).toBe('A');
+      expect(existsSync(join(outside, 'b.txt')), '「已开始」没落库 → 不执行').toBe(false);
+      expect(String((await persistedResult('c-b'))?.content)).toContain(CALL_NOT_STARTED_RESULT);
+      const update = userMsgs(payloads[3]).filter((m) => m.startsWith(APPROVAL_UPDATE_OPEN)).pop() || '';
+      expect(update).toContain('[not run] write_file (call c-b)');
+      expect(update).not.toContain('It ran and failed');
+      expect(toolMsgs(payloads[3])).toContain(CALL_NOT_STARTED_RESULT);
+    } finally { st.patchToolResults = orig; markRecoveryHost(false); }
   }, 20_000);
 
   it('② 模型还在干活时就批了 → 下一个迭代边界兑现,不等收尾', async () => {

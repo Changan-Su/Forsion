@@ -172,6 +172,12 @@ describe('summarizeTask', () => {
     expect(summarizeTask([msg({ status: 'stopped' })], false).state).toBe('stopped')
   })
 
+  it('退出 / 更新打断的(error = interrupted:<原因>)说「被打断」,不说「已停止」暗示是用户停的', () => {
+    expect(summarizeTask([msg({ status: 'stopped', error: 'interrupted:app_quit' })], false).state).toBe('interrupted')
+    expect(summarizeTask([msg({ status: 'stopped', error: 'interrupted' })], false).state).toBe('interrupted')
+    expect(summarizeTask([msg({ status: 'stopped', error: 'something else' })], false).state).toBe('stopped')
+  })
+
   it('当前动作只取未结束的工具;不在跑就没有', () => {
     const ms = [msg({ toolEvents: [{ id: 't1', name: 'read_file', done: true }, { id: 't2', name: 'run_bash', done: false }] })]
     expect(summarizeTask(ms, true).action?.id).toBe('t2')

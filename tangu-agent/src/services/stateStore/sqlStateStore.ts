@@ -7,6 +7,7 @@
  * (SSE)与跨重启 seq 播种不动。
  */
 import { query, getOlderThanSql, getDbType } from '../../core/db.js';
+import { deps } from '../../seams/runtime.js';
 import { SELF_OWNER } from '../runOwner.js';
 import { appendEventLocal, drainLocal, type AgentEvent } from '../eventBus.js';
 import { readSessionTranscriptInDb, searchSessionsInDb } from '../sessionSearchSql.js';
@@ -32,18 +33,88 @@ function safeParse(s: any): any {
   try { return JSON.parse(s); } catch { return s; }
 }
 
+/** 一条 SQL 语句。下面几个构造函数让 async 路径与本机 SQLite 的同步事务(host.transactionSync)共用同一份 SQL。 */
+export interface SqlStmt { sql: string; params: any[] }
+
+export function createRunStmt(run: { id: string; sessionId: string; userId: string; appId: string; modelId: string; assistantMessageId: string; input: any }): SqlStmt {
+  // 本机共享库(SQLite,TUI 与桌面同指 state.db)记下持有进程:重启自愈据此不碰别的活着的引擎的 run(PI-DSH 评审 R2)。
+  // ponytail: 只 SQLite 写 —— 恢复只在本机跑;云库未必迁过这一列;PGlite 回退档本就不与他端共享。
+  const owner = getDbType() === 'sqlite' ? [SELF_OWNER] : [];
+  return {
+    sql: `INSERT INTO agent_runs (id, session_id, user_id, app_id, status, model_id, assistant_message_id, input${owner.length ? ', owner' : ''})
+         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?${owner.length ? ', ?' : ''})`,
+    params: [run.id, run.sessionId, run.userId, run.appId, run.modelId, run.assistantMessageId, JSON.stringify(run.input ?? null), ...owner],
+  };
+}
+
+/** 用户行;ON CONFLICT DO NOTHING + RETURNING:回行 = 新插的(会话活动只随新消息推进)。 */
+export function insertUserRowStmt(m: { id: string; sessionId: string; content: string; modelId: string; attachments: any[] | null; timestamp?: number }): SqlStmt {
+  return {
+    sql: `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, attachments)
+         VALUES (?, ?, 'user', ?, ?, ?, FALSE, ?)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+    params: [
+      m.id, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
+      Array.isArray(m.attachments) && m.attachments.length ? JSON.stringify(m.attachments) : null,
+    ],
+  };
+}
+
+export const bumpSessionStmt = (sessionId: string): SqlStmt => ({ sql: `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, params: [sessionId] });
+
+export function finalizeMessageStmt(m: FinalizeMessageInput): SqlStmt {
+  const displayFiles = Array.isArray(m.displayFiles) && m.displayFiles.length ? JSON.stringify(m.displayFiles) : null;
+  return {
+    sql: `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin)
+         VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET ${m.restamp ? 'timestamp=EXCLUDED.timestamp, ' : ''}content=EXCLUDED.content, model_id=CASE WHEN EXCLUDED.origin IS NOT NULL THEN EXCLUDED.model_id ELSE chat_messages.model_id END, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=EXCLUDED.display_files, agent_slug=EXCLUDED.agent_slug, origin=COALESCE(EXCLUDED.origin, chat_messages.origin), updated_at=CURRENT_TIMESTAMP`,
+    params: [
+      m.messageId, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
+      m.reasoning || null,
+      m.toolCalls.length ? JSON.stringify(m.toolCalls) : null,
+      m.toolResults.length ? JSON.stringify(m.toolResults) : null,
+      displayFiles,
+      m.agentSlug || null,
+      m.origin || null,
+    ],
+  };
+}
+
+export function runStatusStmt(id: string, status: string, extra?: { result?: any; error?: string; currentStep?: number; tokensTotal?: number }): SqlStmt {
+  const sets: string[] = ['status = ?', 'updated_at = CURRENT_TIMESTAMP'];
+  const params: any[] = [status];
+  if (extra?.result !== undefined) { sets.push('result = ?'); params.push(JSON.stringify(extra.result)); }
+  if (extra?.error !== undefined) { sets.push('error = ?'); params.push(extra.error); }
+  if (extra?.currentStep !== undefined) { sets.push('current_step = ?'); params.push(extra.currentStep); }
+  if (extra?.tokensTotal !== undefined) { sets.push('tokens_total = ?'); params.push(extra.tokensTotal); }
+  // 被停下那一刻(评审 #10):过期 / 崩溃计数按它算,之后再改这一行(认领、补说明)不挪动基准。interrupted 只在本机恢复宿主上出现。
+  if (status === 'interrupted') sets.push('interrupted_at = COALESCE(interrupted_at, CURRENT_TIMESTAMP)');
+  params.push(id);
+  return { sql: `UPDATE agent_runs SET ${sets.join(', ')} WHERE id = ?`, params };
+}
+
+/** 本机 SQLite 的同步事务;别的库没有 → null(调用方逐条写)。 */
+function syncTx(): (<T>(fn: (run: (sql: string, params?: any[]) => any[]) => T) => T) | null {
+  const h = deps().host;
+  return typeof h.transactionSync === 'function' ? h.transactionSync.bind(h) as any : null;
+}
+
+/** tool_results 里按 tool_call_id 换掉对应项(没有的不加)。 */
+function patchResults(raw: unknown, entries: any[]): any[] | null {
+  let list: any;
+  try { list = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
+  if (!Array.isArray(list)) return null;
+  const byId = new Map(entries.filter((e) => e && typeof e.tool_call_id === 'string').map((e) => [e.tool_call_id, e]));
+  return list.map((r: any) => (r && byId.has(r.tool_call_id) ? byId.get(r.tool_call_id) : r));
+}
+
 export function createSqlStateStore(): StateStore {
   return {
     // ── runs ──
     async createRun(run) {
-      // 本机共享库(SQLite,TUI 与桌面同指 state.db)记下持有进程:重启自愈据此不碰别的活着的引擎的 run(PI-DSH 评审 R2)。
-      // ponytail: 只 SQLite 写 —— 恢复只在本机跑;云库未必迁过这一列;PGlite 回退档本就不与他端共享。
-      const owner = getDbType() === 'sqlite' ? [SELF_OWNER] : [];
-      await query(
-        `INSERT INTO agent_runs (id, session_id, user_id, app_id, status, model_id, assistant_message_id, input${owner.length ? ', owner' : ''})
-         VALUES (?, ?, ?, ?, 'queued', ?, ?, ?${owner.length ? ', ?' : ''})`,
-        [run.id, run.sessionId, run.userId, run.appId, run.modelId, run.assistantMessageId, JSON.stringify(run.input ?? null), ...owner],
-      );
+      const st = createRunStmt(run);
+      await query(st.sql, st.params);
     },
     async getRun(id): Promise<AgentRun | null> {
       const rows = await query<any[]>(`SELECT * FROM agent_runs WHERE id = ? LIMIT 1`, [id]);
@@ -54,15 +125,29 @@ export function createSqlStateStore(): StateStore {
       return rows[0] || null;
     },
     async updateRunStatus(id, status, extra) {
-      const sets: string[] = ['status = ?', 'updated_at = CURRENT_TIMESTAMP'];
-      const params: any[] = [status];
-      if (extra?.result !== undefined) { sets.push('result = ?'); params.push(JSON.stringify(extra.result)); }
-      if (extra?.error !== undefined) { sets.push('error = ?'); params.push(extra.error); }
-      if (extra?.currentStep !== undefined) { sets.push('current_step = ?'); params.push(extra.currentStep); }
-      if (extra?.tokensTotal !== undefined) { sets.push('tokens_total = ?'); params.push(extra.tokensTotal); }
-      params.push(id);
-      await query(`UPDATE agent_runs SET ${sets.join(', ')} WHERE id = ?`, params);
+      const st = runStatusStmt(id, status, extra);
+      await query(st.sql, st.params);
       if (status === 'done') { try { runDoneListener?.(id); } catch { /* 监听方自己兜底,绝不影响 run 收尾 */ } }
+    },
+    async claimRunStart(runId) {
+      const rows = await query<any[]>(
+        `UPDATE agent_runs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' RETURNING id`, [runId],
+      );
+      return Array.isArray(rows) && rows.length > 0;
+    },
+    async completeRun(m, done) {
+      const fin = finalizeMessageStmt(m);
+      const bump = bumpSessionStmt(m.sessionId);
+      const st = runStatusStmt(done.runId, 'done', { result: done.result, tokensTotal: done.tokensTotal });
+      const tx = syncTx();
+      if (tx) {
+        tx((run) => { run(fin.sql, fin.params); run(bump.sql, bump.params); run(st.sql, st.params); });
+      } else {
+        await query(fin.sql, fin.params);
+        await query(bump.sql, bump.params).catch(() => {});
+        await query(st.sql, st.params);
+      }
+      try { runDoneListener?.(done.runId); } catch { /* 同 updateRunStatus */ }
     },
     async listActiveRunsBySession(sessionId, userId): Promise<ActiveRunRow[]> {
       return await query<any[]>(
@@ -207,25 +292,42 @@ export function createSqlStateStore(): StateStore {
     },
 
     async insertUserMessage(m) {
-      const inserted = await query<any[]>(
-        `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, attachments)
-         VALUES (?, ?, 'user', ?, ?, ?, FALSE, ?)
-         ON CONFLICT (id) DO NOTHING
-         RETURNING id`,
-        [
-          m.id, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
-          Array.isArray(m.attachments) && m.attachments.length ? JSON.stringify(m.attachments) : null,
-        ],
-      );
+      const st = insertUserRowStmt(m);
+      const inserted = await query<any[]>(st.sql, st.params);
       // 会话活动只随**新**消息推进:恢复/重试把同一 message id 再写一遍时不冒充新活动。
-      if (inserted.length) await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [m.sessionId]).catch(() => {});
+      if (inserted.length) { const b = bumpSessionStmt(m.sessionId); await query(b.sql, b.params).catch(() => {}); }
     },
     async finalizeAssistantMessage(m: FinalizeMessageInput) {
+      const st = finalizeMessageStmt(m);
+      await query(st.sql, st.params);
+      const b = bumpSessionStmt(m.sessionId);
+      await query(b.sql, b.params).catch(() => {});
+    },
+    async patchToolResults(messageId, entries) {
+      const read = `SELECT tool_results FROM chat_messages WHERE id = ?`;
+      const write = `UPDATE chat_messages SET tool_results = ? WHERE id = ?`;
+      const tx = syncTx();
+      if (tx) {
+        return tx((run) => {
+          const row = run(read, [messageId])[0];
+          const next = row ? patchResults(row.tool_results, entries) : null;
+          if (!next) return false;
+          run(write, [JSON.stringify(next), messageId]);
+          return true;
+        });
+      }
+      const row = (await query<any[]>(read, [messageId]))[0];
+      const next = row ? patchResults(row.tool_results, entries) : null;
+      if (!next) return false;
+      await query(write, [JSON.stringify(next), messageId]);
+      return true;
+    },
+    async persistAssistantProgress(m) {
       const displayFiles = Array.isArray(m.displayFiles) && m.displayFiles.length ? JSON.stringify(m.displayFiles) : null;
       await query(
         `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin)
          VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL, ?, ?, ?)
-         ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, model_id=CASE WHEN EXCLUDED.origin IS NOT NULL THEN EXCLUDED.model_id ELSE chat_messages.model_id END, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=EXCLUDED.display_files, agent_slug=EXCLUDED.agent_slug, origin=COALESCE(EXCLUDED.origin, chat_messages.origin), updated_at=CURRENT_TIMESTAMP`,
+         ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, model_id=CASE WHEN EXCLUDED.origin IS NOT NULL THEN EXCLUDED.model_id ELSE chat_messages.model_id END, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=COALESCE(EXCLUDED.display_files, chat_messages.display_files), agent_slug=EXCLUDED.agent_slug, origin=COALESCE(EXCLUDED.origin, chat_messages.origin), updated_at=CURRENT_TIMESTAMP`,
         [
           m.messageId, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
           m.reasoning || null,
@@ -236,7 +338,7 @@ export function createSqlStateStore(): StateStore {
           m.origin || null,
         ],
       );
-      await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [m.sessionId]).catch(() => {});
+      await query(`UPDATE agent_runs SET updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running'`, [m.runId]).catch(() => {});
     },
 
     // ── sessions ──

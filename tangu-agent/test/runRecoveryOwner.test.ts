@@ -1,7 +1,8 @@
 /**
  * 重启自愈按持有者处理在飞 run(PI-DSH 评审 R2;端到端复现台架见 scripts/run-recovery.repro.mjs):
  *   ① 别的活着的引擎进程持有的(running / queued)一概不碰;
- *   ② running 但持有者已死 → 标中断 + 终态事件,不从头重跑;
+ *   ② running 但持有者已死 → 标 interrupted(crash)+ 终态事件,不从头重跑(2026-11-20 起不再记 failed/orphaned;
+ *      本文件不开恢复宿主 = 建的 run 不带 hostRecovery 戳 → 不自动续,只补一条中断说明行;自动续跑见 src/services/runResume.test.ts);
  *   ③ queued 且持有者已死 / 不明(升级前的行)→ 认领成本进程再入队;
  *   ④ 本机 SQLite 建 run 时记下持有进程(`<pid>:<启动时刻秒>`,见 services/runOwner.ts);
  *   ⑤ 陈旧清扫也跳过活进程持有的行;认领刷新 updated_at;非 SQLite 库按独占库处理(Codex 两轮评审);
@@ -97,7 +98,7 @@ describe('重启自愈 × 持有进程', () => {
     await seed('reused-running', 'running', REUSED);
     await seed('self-running', 'running', SELF_OWNER);
     expect(await recoverQueuedRuns()).toBe(0);
-    expect(await row('reused-running')).toMatchObject({ status: 'failed', error: 'orphaned' });
+    expect(await row('reused-running')).toMatchObject({ status: 'interrupted', error: 'interrupted:crash' });
     expect(await row('self-running')).toMatchObject({ status: 'running', owner: SELF_OWNER });
   });
 
@@ -115,8 +116,8 @@ describe('重启自愈 × 持有进程', () => {
     expect(await row('live-queued')).toMatchObject({ status: 'queued', owner: LIVE });
     expect(await events('live-running')).toEqual([]);
 
-    expect(await row('dead-running')).toMatchObject({ status: 'failed', error: 'orphaned' }); // 桌面 chat.err.orphaned 认这个裸码
-    expect((await events('dead-running')).at(-1)).toMatchObject({ type: 'error', payload: { error: 'orphaned' } });
+    expect(await row('dead-running')).toMatchObject({ status: 'interrupted', error: 'interrupted:crash' });
+    expect((await events('dead-running')).at(-1)).toMatchObject({ type: 'error', payload: { error: 'interrupted', aborted: true, interrupted: 'crash' } });
 
     await settled(['dead-queued', 'legacy-queued']);
     expect((await row('dead-queued')).owner).toBe(SELF_OWNER);
@@ -124,16 +125,16 @@ describe('重启自愈 × 持有进程', () => {
     expect(llmCalls).toBe(2); // 只有两条 queued 真跑了;interrupted 那条没被从头重跑
   }, 20_000);
 
-  it('陈旧清扫(30 分钟)同样跳过活进程持有的行:TUI 等审批超过 30 分钟时桌面引擎启动,不能把它标失败', async () => {
+  it('陈旧清扫(30 分钟)同样跳过活进程持有的行:TUI 等审批超过 30 分钟时桌面引擎启动,不能把它标失败;死持有者的旧 running 不再被清扫吃成 failed', async () => {
     await seed('live-old', 'running', LIVE);
     await seed('dead-old', 'running', DEAD);
     await query(`UPDATE agent_runs SET updated_at = datetime('now', '-2 hours') WHERE id IN ('live-old', 'dead-old')`);
     expect(await recoverQueuedRuns()).toBe(0);
     expect(await row('live-old')).toMatchObject({ status: 'running', owner: LIVE });
-    expect(await row('dead-old')).toMatchObject({ status: 'failed', error: 'stale: process restarted' });
+    expect(await row('dead-old')).toMatchObject({ status: 'interrupted', error: 'interrupted:crash' }); // 年龄交给续跑门控(崩溃 2 小时),不在这里吃掉
   });
 
-  it('非 SQLite 库(外部 PG / PGlite)不记持有者 → 按独占库处理:running 标 orphaned、queued 认领,不会卡在 running', async () => {
+  it('非 SQLite 库(外部 PG / PGlite)不记持有者 → 按独占库处理:running 标中断、queued 认领,不会卡在 running', async () => {
     await seed('pg-running', 'running', null);
     await seed('pg-queued', 'queued', null);
     const host = deps().host;
@@ -144,7 +145,7 @@ describe('重启自愈 × 持有进程', () => {
     } finally {
       host.getDbType = orig;
     }
-    expect(await row('pg-running')).toMatchObject({ status: 'failed', error: 'orphaned' });
+    expect(await row('pg-running')).toMatchObject({ status: 'interrupted', error: 'interrupted:crash' });
     await settled(['pg-queued']);
     expect(llmCalls).toBe(1);
   });

@@ -69,7 +69,7 @@ export function recoverTeamOutputs(sessionId: string, userId: string): Promise<v
 async function recover(sessionId: string, userId: string): Promise<void> {
   const runs = await query<any[]>(
     `SELECT r.id, r.input FROM agent_runs r WHERE r.session_id = ? AND r.user_id = ?
-     AND r.status IN ('done', 'failed', 'aborted')
+     AND r.status IN ('done', 'failed', 'aborted', 'interrupted')
      AND EXISTS (SELECT 1 FROM agent_run_events e WHERE e.run_id = r.id AND e.type = 'team_member')
      AND NOT EXISTS (SELECT 1 FROM agent_run_events e WHERE e.run_id = r.id AND e.type = ?)`,
     [sessionId, userId, TEAM_OUTPUT_MODE],

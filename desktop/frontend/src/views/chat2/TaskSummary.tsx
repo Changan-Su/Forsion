@@ -14,7 +14,7 @@
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
 import { Fragment, createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, StepForward, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CirclePause, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, StepForward, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool, toolVerb, usePluginToolName } from '../../components/ToolGroup'
 import { useToolLabelOf } from '../../amadeus/plugins/toolResultCards'
@@ -48,6 +48,7 @@ registerMessages({
   'tsum.state.attention': { zh: '等待你处理', en: 'Waiting for you' },
   'tsum.state.error': { zh: '已失败', en: 'Failed' },
   'tsum.state.stopped': { zh: '已停止', en: 'Stopped' },
+  'tsum.state.interrupted': { zh: '被打断', en: 'Interrupted' },
   'tsum.state.done': { zh: '已完成', en: 'Done' },
   'tsum.elapsed': { zh: '已运行 {t}', en: 'Running {t}' },
   'tsum.attention.approval': { zh: '需要批准：{name}', en: 'Approval needed: {name}' },
@@ -399,6 +400,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const StateIcon = f.state === 'attention' ? AlertTriangle
     : f.state === 'error' ? XCircle
     : f.state === 'stopped' ? CircleStop
+    : f.state === 'interrupted' ? CirclePause
     : f.state === 'running' ? null
     : CheckCircle2
   // 助手一句都没回过的会话不报「已完成」:空会话是 idle、只有用户消息的是 done,原先都显示「已完成」(W-03 / Codex r3a-3)

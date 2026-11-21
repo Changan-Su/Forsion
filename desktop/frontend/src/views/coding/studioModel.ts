@@ -1,4 +1,5 @@
 import type { ToolEvent, UiMessage } from '../../types'
+import { isInflightTool } from '../../../../../tangu-agent/src/contracts/inflightTool'
 
 export type PreviewDevice = 'desktop' | 'tablet' | 'phone'
 export interface StudioIssue { id: string; level: 'error' | 'warning'; message: string; source?: string; at: number }
@@ -28,7 +29,7 @@ export function projectRelative(root: string, path: string): string | null {
 export function collectStudioWrites(messages: UiMessage[], root: string): string[] {
   const files = new Set<string>()
   for (const message of messages) for (const event of message.toolEvents || []) {
-    if (!event.done || event.isError || !WRITE_TOOLS.has(event.name)) continue
+    if (!event.done || event.isError || isInflightTool(event) || !WRITE_TOOLS.has(event.name)) continue // 断在半截的写入不算写成
     let args: Record<string, unknown> = {}
     try {
       const parsed: unknown = JSON.parse(event.arguments || '{}')
