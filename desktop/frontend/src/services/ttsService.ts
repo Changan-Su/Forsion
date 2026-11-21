@@ -122,10 +122,18 @@ export async function speakMessage(t: EngineTarget, stored: StoredDesktopConfig 
  * 合成并念一段(任意 key):**念完 / 被停 / 被新的顶掉时才兑现**(插件 ctx.tts.speak 要的就是这个)。
  * 没配朗读模型 reject `Error('tts_no_model')`;空文本 reject `Error('EMPTY')`;合成失败 reject 原错误;主动取消(stop / 新 speak /
  * signal)静默兑现。
+ * stored 可以是一个现读配置的函数(划线 / 插件朗读要认用户刚在设置浮窗里选的模型):这时**先在播放器上登记这一段**(按下即
+ * 「合成中」、stop 看得见它),再等配置 —— 等的这会儿别处又点了朗读,这一段就作废,不会回头把后来那段掐掉。
  */
-export async function speakKey(t: EngineTarget, stored: StoredDesktopConfig | null, key: string, markdown: string, o: { signal?: AbortSignal } = {}): Promise<void> {
-  const model = stored?.ttsModelId?.trim()
-  if (!model) throw new Error('tts_no_model')
+export async function speakKey(
+  t: EngineTarget,
+  stored: StoredDesktopConfig | null | (() => Promise<StoredDesktopConfig | null>),
+  key: string,
+  markdown: string,
+  o: { signal?: AbortSignal } = {},
+): Promise<void> {
+  const lazy = typeof stored === 'function'
+  if (!lazy && !stored?.ttsModelId?.trim()) throw new Error('tts_no_model')
   const text = speakableText(markdown)
   if (!text) throw new Error('EMPTY')
   if (o.signal?.aborted) return
@@ -137,11 +145,16 @@ export async function speakKey(t: EngineTarget, stored: StoredDesktopConfig | nu
   emit({ key, msgId: key, phase: 'loading' })
   const onAbort = (): void => { if (my === seq) stopSpeaking() }
   o.signal?.addEventListener('abort', onAbort)
+  let noModel = false
   try {
+    const cfg = lazy ? await stored() : stored
+    if (my !== seq) return // 等配置时已被新 speak/stop 取代
+    const model = cfg?.ttsModelId?.trim()
+    if (!model) { noModel = true; throw new Error('tts_no_model') }
     const blob = await synthesizeTts(t, {
       text, model,
-      ...(stored?.ttsVoice ? { voice: stored.ttsVoice } : {}),
-      ...(stored?.ttsSpeed && stored.ttsSpeed !== 1 ? { speed: stored.ttsSpeed } : {}),
+      ...(cfg?.ttsVoice ? { voice: cfg.ttsVoice } : {}),
+      ...(cfg?.ttsSpeed && cfg.ttsSpeed !== 1 ? { speed: cfg.ttsSpeed } : {}),
     }, ac.signal)
     if (my !== seq) return // 已被新 speak/stop 取代
     const ended = new Promise<void>((res) => { settle = res })
@@ -163,7 +176,7 @@ export async function speakKey(t: EngineTarget, stored: StoredDesktopConfig | nu
       endCurrent()
     }
     if (!aborted) {
-      console.warn('[tts] speak failed:', e)
+      if (!noModel) console.warn('[tts] speak failed:', e)
       throw e
     }
   } finally {

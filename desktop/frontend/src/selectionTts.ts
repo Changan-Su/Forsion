@@ -21,13 +21,12 @@ export function createSelectionTts(): TanguTts {
       const s = useApp.getState()
       return !!effectiveTtsConfig(s.desktopConfig, s.modelsResp, signedIn())?.ttsModelId?.trim()
     },
-    speak: async (key, text, o) => {
-      // 现读配置:store 里那份只在设置关掉时刷新,用户刚在设置浮窗里选好的模型要认(同自动朗读那条)。
+    // 现读配置:store 里那份只在设置关掉时刷新,用户刚在设置浮窗里选好的模型要认(同自动朗读那条)。
+    // 读配置交给 speakKey 去等:它先在播放器上登记这一段,等的时候别处点了朗读 / stop,这一段作废(不回头掐掉后来那段)。
+    speak: (key, text, o) => speakKey(homeTarget(), async () => {
       const raw = (await window.tangu?.getConfig?.().catch(() => null)) ?? useApp.getState().desktopConfig
-      const cfg = effectiveTtsConfig(raw, useApp.getState().modelsResp, signedIn())
-      if (!cfg?.ttsModelId?.trim()) throw new Error('tts_no_model')
-      await speakKey(homeTarget(), cfg, key, text, o)
-    },
+      return effectiveTtsConfig(raw, useApp.getState().modelsResp, signedIn())
+    }, key, text, o),
     stop: (key) => stopSpeaking(key),
     state: () => { const s = ttsState(); return s ? { key: s.key, phase: s.phase } : null },
     subscribe: (cb) => subscribeTts(() => cb()),

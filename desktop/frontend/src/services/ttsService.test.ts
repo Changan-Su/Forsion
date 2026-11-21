@@ -59,3 +59,35 @@ describe('speakKey:任意 key、一个播放器、念完才兑现', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('speakKey:现读配置时先登记', () => {
+  it('A 还在读配置时 B 开念:A 读完作废,不回头掐掉 B;读配置期间 stop(A) 看得见它', async () => {
+    vi.resetModules()
+    vi.doMock('./backendService', () => ({ synthesizeTts: vi.fn(async () => new Blob(['x'])) }))
+    class FakeAudio { src = ''; onended: (() => void) | null = null; onerror: (() => void) | null = null; play = async () => {}; pause() {}; removeAttribute() {} }
+    vi.stubGlobal('Audio', FakeAudio)
+    vi.stubGlobal('URL', { ...URL, createObjectURL: () => 'blob:x', revokeObjectURL: () => {} })
+    const svc = await import('./ttsService')
+    let release!: (v: unknown) => void
+    const slowCfg = () => new Promise((r) => { release = r }) as never
+    const a = svc.speakKey({} as never, slowCfg, 'sel:a', 'hello')
+    expect(svc.ttsState()).toMatchObject({ key: 'sel:a', phase: 'loading' }) // 按下即登记
+    const b = svc.speakKey({} as never, { ttsModelId: 'm' } as never, 'msg-b', 'world')
+    await vi.waitFor(() => expect(svc.ttsState()).toMatchObject({ key: 'msg-b', phase: 'playing' }))
+    release({ ttsModelId: 'm' })
+    await expect(a).resolves.toBeUndefined()
+    expect(svc.ttsState()?.key).toBe('msg-b') // A 迟到的配置没把 B 掐掉
+    svc.stopSpeaking()
+    await b
+    const c = svc.speakKey({} as never, slowCfg, 'plugin:p:g:1', 'x')
+    svc.stopSpeaking('plugin:p:g:1') // 还在读配置:照样停得掉
+    expect(svc.ttsState()).toBeNull()
+    release({ ttsModelId: 'm' })
+    await expect(c).resolves.toBeUndefined()
+    const d = svc.speakKey({} as never, slowCfg, 'k', 'x')
+    release({ ttsModelId: '' })
+    await expect(d).rejects.toThrow('tts_no_model')
+    expect(svc.ttsState()).toBeNull()
+    vi.unstubAllGlobals()
+  })
+})

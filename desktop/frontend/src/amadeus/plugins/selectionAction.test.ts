@@ -202,6 +202,22 @@ describe('ctx.tts', () => {
     await expect(p).resolves.toBeUndefined() // 中止 = 兑现(和被停一样),不是报错
     await expect(ctx.tts!.speak('again')).rejects.toThrow(/plugin disabled/)
   })
+  it('停用 / 重载后旧 ctx 的 stop 停不了新那一代的;传错 signal 先拒、不留清理记录', async () => {
+    const tts = fakeTts()
+    setTanguProbe(baseProbe({ tts }))
+    const old = ctxOf('t4')
+    usePluginStore.getState().disable('t4')
+    const fresh = ctxOf('t4') // 同一个插件重新起一代
+    void fresh.tts!.speak('new one')
+    const key = tts.current?.key
+    expect(key).toMatch(/^plugin:t4:/)
+    old.tts!.stop()
+    expect(tts.current?.key).toBe(key) // 旧 ctx 已停用:不动
+    tts.stopped.length = 0
+    await expect(fresh.tts!.speak('x', { signal: {} as AbortSignal })).rejects.toThrow(/signal must be an AbortSignal/)
+    usePluginStore.getState().disable('t4')
+    expect(tts.stopped.filter((k) => k && k !== key)).toEqual([]) // 被拒的那次没登记过要清理的东西
+  })
   it('没配模型:原样 reject tts_no_model', async () => {
     setTanguProbe(baseProbe({ tts: fakeTts({ speak: async () => { throw new Error('tts_no_model') } }) }))
     await expect(ctxOf('t3').tts!.speak('x')).rejects.toThrow('tts_no_model')

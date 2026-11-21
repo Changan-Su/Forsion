@@ -3248,7 +3248,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
     ...(readTangu()
       ? (() => {
           let n = 0
-          const mine = (k: string | undefined): boolean => !!k && k.startsWith(`plugin:${pluginId}:`)
+          // 这一次激活的代际:同一个插件重载后旧 ctx 还被谁拿着,它的 stop 也只认自己这一代起的那段
+          const gen = Math.random().toString(36).slice(2, 10)
+          const prefix = `plugin:${pluginId}:${gen}:`
+          const mine = (k: string | undefined): boolean => !!k && k.startsWith(prefix)
           return {
             tts: {
               speak: async (text: string, o?: { signal?: AbortSignal }): Promise<void> => {
@@ -3256,14 +3259,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 const probe = readTangu()?.tts
                 if (!probe) throw new Error('tts_unavailable')
                 if (typeof text !== 'string' || !text.trim()) throw new Error('ctx.tts.speak: text is required')
-                const key = `plugin:${pluginId}:${++n}`
+                // 先验参数再登记资源:传错了不留一笔清理记录
+                const outer = o?.signal
+                if (outer != null && !(outer instanceof AbortSignal)) throw new Error('ctx.tts.speak: signal must be an AbortSignal')
+                const key = `${prefix}${++n}`
                 const ac = new AbortController()
                 const own = scope.own('request', () => { ac.abort(); probe.stop(key) }, 'tts')
-                const outer = o?.signal
                 const onOuter = (): void => ac.abort()
-                outer?.addEventListener('abort', onOuter)
-                if (outer?.aborted) ac.abort()
                 try {
+                  outer?.addEventListener('abort', onOuter)
+                  if (outer?.aborted) ac.abort()
                   await probe.speak(key, text, { signal: ac.signal })
                 } catch (e) {
                   // 没配模型:宿主自己出「去设置」的提示(契约),插件照样拿到 tts_no_model 自己决定要不要再说什么
@@ -3273,11 +3278,15 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   }
                   throw e
                 } finally {
-                  outer?.removeEventListener('abort', onOuter)
-                  own.forget()
+                  try { outer?.removeEventListener('abort', onOuter) } finally { own.forget() }
                 }
               },
-              stop: (): void => { const probe = readTangu()?.tts; const cur = probe?.state()?.key; if (mine(cur)) probe!.stop(cur) },
+              stop: (): void => {
+                if (!ctxAlive()) return // 停用 / 重载后的旧 ctx:停不了任何人的
+                const probe = readTangu()?.tts
+                const cur = probe?.state()?.key
+                if (mine(cur)) probe!.stop(cur)
+              },
               available: (): boolean => !!readTangu()?.tts?.available(),
             },
           }
