@@ -7,7 +7,7 @@ import { ListFab } from '../components/phoneList'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, fetchToolCatalog, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, fetchToolCatalog, getAgentHarness, getBuiltinUpdate, listAgents, resolveBuiltinUpdate, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { MODE_KEY } from '../approvalReason'
 import { delegatedApprovalField, tanguDelegatedAdmin as isDelegatedAdmin, tanguDelegatedAdminName as delegatedAdminName } from '../tangu/delegatedRole'
 import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
@@ -20,7 +20,8 @@ import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { EngineHarnessRows } from './EngineHarnessRows'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
-import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentConfig, BuiltinUpdate, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { BuiltinUpdateNotice } from './BuiltinUpdateNotice'
 import { ProfileGroup, ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
@@ -345,6 +346,32 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   const scrollRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  // 内置指令有新版本、而用户改过(引擎 builtinBaseline):只在本机的配置页提示;保存 / 换新之后文本变了就重读
+  const [builtinUpdate, setBuiltinUpdate] = useState<BuiltinUpdate | null>(null)
+  const [builtinBusy, setBuiltinBusy] = useState(false)
+  useEffect(() => {
+    if (delegated) { setBuiltinUpdate(null); return }
+    let live = true
+    void getBuiltinUpdate(homeTarget(), agent.slug).then((u) => { if (live) setBuiltinUpdate(u) })
+    return () => { live = false }
+  }, [agent.slug, agent.systemPrompt, agent.soul, agent.version, delegated])
+  const resolveBuiltin = async (action: 'keep' | 'adopt') => {
+    if (!builtinUpdate || builtinBusy) return
+    setBuiltinBusy(true); setError(''); setNotice('')
+    try {
+      const updated = await resolveBuiltinUpdate(homeTarget(), agent.slug, action, builtinUpdate.token)
+      if (updated) {
+        useApp.setState((a) => ({ agentDefs: a.agentDefs.map((v) => v.slug === agent.slug ? updated : v) }))
+        window.dispatchEvent(new Event('forsion:agents-changed'))
+        window.tangu?.requestMainAction?.('agents-changed')
+      }
+      if (alive.current) { setBuiltinUpdate(null); setNotice(t(action === 'keep' ? 'agentProfile.builtinUpdate.kept' : 'agentProfile.builtinUpdate.adopted')) }
+    } catch (e: any) {
+      // 409 = 用户看的那份过时了(另一个窗口刚改过 / app 又升了版):换上现在的提示再看一遍;别的错原样报
+      const fresh = await getBuiltinUpdate(homeTarget(), agent.slug)
+      if (alive.current) { setBuiltinUpdate(fresh); setError(e?.status === 409 ? t('agentProfile.builtinUpdate.stale') : String(e?.message || e)) }
+    } finally { if (alive.current) setBuiltinBusy(false) }
+  }
   useEffect(() => {
     if (!dirty) { setDraft(agent); baseDraft.current = agent }
     else setDraft((current) => {
@@ -606,6 +633,9 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
+      {builtinUpdate && <BuiltinUpdateNotice update={builtinUpdate} busy={builtinBusy || busy}
+        adoptBlocked={dirty && (dirtyFields.current.has('systemPrompt') || dirtyFields.current.has('soul'))}
+        onKeep={() => void resolveBuiltin('keep')} onAdopt={() => void resolveBuiltin('adopt')} />}
       <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt || ''} onChange={(systemPrompt) => patch({ systemPrompt })} />
       <ProfileTextEditor label={t('agentProfile.soul')} value={draft.soul || ''} onChange={(soul) => patch({ soul })} />
     </ProfileGroup>

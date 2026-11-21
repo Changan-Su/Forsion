@@ -334,6 +334,24 @@ export interface NormalAgentDef {
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
+/** 内置 Agent(Coding / Muse)的指令有新版本、而用户改过(引擎 agents/builtinBaseline.ts):配置页上方「内置指令改了什么」。 */
+export interface BuiltinUpdateField {
+  field: 'systemPrompt' | 'soul'
+  /** 用户现在的文本。 */
+  current: string
+  newDefault: string
+  /** 用户当初是在哪份默认上改的;null = 这台设备没记下(老用户),界面改比「你的版本 vs 新默认」。 */
+  oldDefault: string | null
+  fromVersion?: string
+}
+export interface BuiltinUpdate {
+  slug: string
+  toVersion?: string
+  fields: BuiltinUpdateField[]
+  /** 「保留 / 换新」要带回去的凭据(用户看到的那份现状);对不上引擎回 409。 */
+  token: string
+}
+
 export interface StandInInfo {
   slug: string
   name: string
