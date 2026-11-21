@@ -577,6 +577,9 @@ function multiAccountCwd(cwd: string | undefined): string | undefined {
   }
   const dir = accountWorkspaceDir(requireAccountId('run cwd'));
   mkdirSync(dir, { recursive: true });
+  // 缺省工作目录也过同一道:workspace 是软链 / 指到账号文件夹外 → 整轮拒
+  const bad = accountCwdDenied(dir);
+  if (bad) throw new Error(bad);
   return dir;
 }
 

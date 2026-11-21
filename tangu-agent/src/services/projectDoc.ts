@@ -121,6 +121,7 @@ export function projectDocPaths(cwd: string): string[] {
 function projectDocLayers(cwd: string): string[][] {
   const dir = path.resolve(cwd);
   if (!isDir(dir)) return [];
+  if (!withinAccountRoot(dir)) return []; // 多账号模式:账号文件夹之外(含经软链指出去)的目录不读项目文档;单人模式恒放行
   const root = findProjectRoot(dir);
   const dirs: string[] = [];
   if (root) {

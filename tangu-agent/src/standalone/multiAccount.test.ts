@@ -17,7 +17,7 @@ const env = vi.hoisted(() => {
   return { home };
 });
 
-import { existsSync, linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -259,6 +259,33 @@ describe('createMultiAccountApp', () => {
     } finally {
       if (prev === undefined) delete process.env.FORSION_REMOTE_LOCK_FILE; else process.env.FORSION_REMOTE_LOCK_FILE = prev;
     }
+  });
+
+  it('refuses a turn whose default workspace is a link out of the account, and reads no project docs outside it', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'ma-ws-out-'));
+    mkdirSync(join(outside, '.git'));
+    writeFileSync(join(outside, 'AGENTS.md'), 'OUTSIDE_PROJECT_DOC');
+    expect((await call('GET', '/agent/sessions', { as: 'gina' })).status).toBe(200); // 开户(建 workspace)
+    const ws = join(env.home, 'accounts', 'gina', 'workspace');
+    rmSync(ws, { recursive: true, force: true });
+    symlinkSync(outside, ws);
+    const sid = (await call('POST', '/agent/sessions', { as: 'gina', body: { title: 'ws' } })).json.session.id as string;
+    seenAccounts.length = 0;
+    const run = await call('POST', '/agent/runs', { as: 'gina', body: { session_id: sid, model_id: 'test-model', message: 'hi' } });
+    expect(run.status).toBe(200);
+    const sse = await (await fetch(`${base}/agent/runs/${run.json.runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'gina' } })).text();
+    expect(sse).not.toMatch(/"type":"done"/);
+    expect(sse).toMatch(/outside your account folder|you can only write inside your account folder/);
+    expect(seenAccounts).toEqual([]); // 没走到模型调用
+    // 项目文档的入口:账号域外的目录(含经软链指出去的)一律不读
+    const { projectDocPaths } = await import('../services/projectDoc.js');
+    const { runWithAccount } = await import('../core/accountScope.js');
+    expect(runWithAccount('gina', () => projectDocPaths(ws))).toEqual([]);
+    expect(runWithAccount('gina', () => projectDocPaths(outside))).toEqual([]);
+    const inside = join(env.home, 'accounts', 'gina', 'proj');
+    mkdirSync(join(inside, '.git'), { recursive: true });
+    writeFileSync(join(inside, 'AGENTS.md'), 'INSIDE');
+    expect(runWithAccount('gina', () => projectDocPaths(inside))).toEqual([join(inside, 'AGENTS.md')]);
   });
 
   it('clamps working directories to the account folder', async () => {
