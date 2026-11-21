@@ -9,6 +9,7 @@
 //      (Codex 评审抓到:只认这支笔的过滤一度把引擎的补收笔也拦了,旧笔画的监听永远摘不掉)。
 //   P5–P7 前一接触丢了抬起或在画布外取消：下一笔出墨，视口不动，旧笔画留在原地。
 //   P8 双指缩放正常。P9 补收已采样的笔画时，末点保持在原处。
+//   P10 手掌抬起后取消笔画。P11 橡皮擦取消后保留笔迹。P12 只结束被取消的平移。
 //
 // 每条都跑两遍:补丁版(public/excalidraw 的副本)必须过;**原版引擎**(拦下请求换成 node_modules 里没打补丁的)
 // 必须红 —— 原版也绿 = 这条量不出补丁的作用,判台架失效(负对照,每次都跑)。
@@ -38,6 +39,7 @@ const ORIGINAL = path.join(__dirname, '../node_modules/@excalidraw/excalidraw/di
 /** 别用 0.5:引擎把压力恰好 0.5 的输入当鼠标、改走模拟压感,就量不到压感有没有跟着点走了 */
 const PRESSURE = 0.7
 const CANVAS = '.excalidraw canvas.excalidraw__canvas.interactive'
+const SEED_PEN_ID = 90
 const viewport = (p) => p.evaluate(() => window.__board.getViewport())
 const sameViewport = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z
 const freedraws = (p) => p.evaluate(() => (window.__scene?.elements ?? []).filter((e) => e.type === 'freedraw' && !e.isDeleted))
@@ -224,8 +226,7 @@ async function scenarios(s) {
 /** CDP owns the current pen ID. Inject just the previous contact with a
  * different ID to model a driver that starts a new pointer sequence. */
 async function seedPenContact(s, { wheel, canceled, sampled }) {
-  await s.p.locator(CANVAS).evaluate(async (canvas, { x, y, wheel, canceled, sampled }) => {
-    const pointerId = 90
+  await s.p.locator(CANVAS).evaluate(async (canvas, { x, y, wheel, canceled, sampled, pointerId }) => {
     const capture = canvas.setPointerCapture
     canvas.setPointerCapture = function (id) {
       if (id !== pointerId) capture.call(this, id)
@@ -253,7 +254,7 @@ async function seedPenContact(s, { wheel, canceled, sampled }) {
         ...contact, button: -1, buttons: 0,
       }))
     }
-  }, { x: s.box.x + 660, y: s.box.y + 420, wheel, canceled, sampled })
+  }, { x: s.box.x + 660, y: s.box.y + 420, wheel, canceled, sampled, pointerId: SEED_PEN_ID })
   await s.frame()
 }
 
@@ -300,6 +301,105 @@ async function pinch(s) {
   return { always: true, ok: after.z > before.z + 0.1, detail: `zoom ${before.z} → ${after.z}` }
 }
 
+const cancelPointer = (s, pointerId, pointerType = 'pen') => s.p.evaluate(({ pointerId, pointerType }) => {
+  document.body.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId, pointerType, button: -1 }))
+}, { pointerId, pointerType })
+
+async function palmThenCancel(s) {
+  await seedPenContact(s, { sampled: true })
+  const palm = { x: s.box.x + 710, y: s.box.y + 500, id: 15 }
+  await s.touch('touchStart', [palm])
+  await s.touch('touchEnd', [])
+  await cancelPointer(s, SEED_PEN_ID)
+  await s.frame()
+  const beforeHover = await freedraws(s.p)
+  // The canceled ID must no longer add samples even if a hover arrives.
+  await s.p.locator(CANVAS).evaluate((canvas, { pointerId, x, y }) => {
+    canvas.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true, pointerId, pointerType: 'pen', clientX: x, clientY: y, button: -1,
+    }))
+  }, { pointerId: SEED_PEN_ID, x: s.box.x + 750, y: s.box.y + 480 })
+  await settle(s.p)
+  const [el] = await freedraws(s.p)
+  const end = el && lastScene(el)
+  return {
+    ok: beforeHover.length === 1 && !!end && near(end, { x: 688, y: 434 }),
+    detail: JSON.stringify({ end, countBeforeHover: beforeHover.length }),
+  }
+}
+
+async function cancelEraser(s) {
+  const from = { x: s.box.x + 350, y: s.box.y + 310 }
+  await stroke(s, from, 12, 1, 8, 0)
+  await s.p.locator('[data-tool="eraser"]').click()
+  const eraseAcrossStroke = async () => {
+    await s.p.mouse.move(from.x + 42, from.y - 25)
+    await s.p.mouse.down()
+    await s.p.mouse.move(from.x + 42, from.y + 25, { steps: 7 })
+    await s.frame()
+  }
+  await s.p.evaluate(() => {
+    window.addEventListener('pointerdown', (e) => { window.__eraserPointerId = e.pointerId }, { once: true, capture: true })
+  })
+  await eraseAcrossStroke()
+  const id = await s.p.evaluate(() => window.__eraserPointerId)
+  await cancelPointer(s, id, 'mouse')
+  // Deliver a mouseup too, to catch leaked drag listeners committing later.
+  await s.p.mouse.up()
+  await settle(s.p)
+  const afterCancel = (await freedraws(s.p)).length
+  await eraseAcrossStroke()
+  await s.p.mouse.up()
+  await settle(s.p)
+  const afterRelease = (await freedraws(s.p)).length
+  return { ok: afterCancel === 1 && afterRelease === 0, detail: JSON.stringify({ afterCancel, afterRelease }) }
+}
+
+async function panCancelOwnership(s) {
+  await seedPenContact(s, { sampled: true })
+  await s.p.evaluate(() => {
+    const second = document.createElement('div')
+    second.className = 'pen-check-second'
+    second.style.cssText = 'position:fixed;right:0;top:0;width:400px;height:280px;z-index:1000'
+    document.body.appendChild(second)
+    window.ReactDOM.createRoot(second).render(window.React.createElement(window.ExcalidrawLib.Excalidraw, {
+      viewModeEnabled: true,
+      onExcalidrawAPI: (api) => { window.__penCheckSecond = api },
+    }))
+  })
+  const secondCanvas = s.p.locator(`.pen-check-second ${CANVAS}`)
+  await secondCanvas.waitFor()
+  const panId = SEED_PEN_ID + 1
+  const started = await secondCanvas.evaluate((canvas, pointerId) => {
+    // Enter the pinned fork's pan session directly so the two boards can have
+    // overlapping pointer lifetimes despite its shared pointerdown cleanup.
+    const key = Object.keys(canvas).find((name) => name.startsWith('__reactFiber'))
+    let fiber = canvas[key]
+    while (fiber && !fiber.stateNode?.handleCanvasPanUsingWheelOrSpaceDrag) fiber = fiber.return
+    return fiber.stateNode.handleCanvasPanUsingWheelOrSpaceDrag(new PointerEvent('pointerdown', {
+      pointerId, pointerType: 'pen', button: 1, buttons: 4, clientX: 700, clientY: 150,
+    }))
+  }, panId)
+  const secondView = () => s.p.evaluate(() => {
+    const { scrollX, scrollY, zoom } = window.__penCheckSecond.getAppState()
+    return { x: scrollX, y: scrollY, z: zoom.value }
+  })
+  const before = await secondView()
+  await cancelPointer(s, SEED_PEN_ID)
+  await s.p.mouse.move(770, 190)
+  await s.frame()
+  const during = await secondView()
+  await cancelPointer(s, panId)
+  await s.frame()
+  await s.p.mouse.move(820, 220)
+  await s.frame()
+  const after = await secondView()
+  return {
+    ok: started && during.x > before.x + 30 && sameViewport(during, after),
+    detail: JSON.stringify({ started, before, during, after }),
+  }
+}
+
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
   let failed = 0
@@ -307,7 +407,7 @@ async function pinch(s) {
   for (const patched of [true, false]) {
     const s = await open(browser, patched)
     const tag = patched ? '补丁版' : '原版引擎(负对照)'
-    if (patched && s.marker !== 2) {
+    if (patched && s.marker !== 3) {
       console.log(`FAIL  ${tag}:副本没打补丁(__forsionPenPatch=${s.marker}),先跑 node build/copy-excalidraw-assets.cjs`)
       failed++
     }
@@ -319,6 +419,9 @@ async function pinch(s) {
       P7: (board) => recovery(board, { wheel: true, canceled: true }),
       P8: pinch,
       P9: (board) => recovery(board, { sampled: true }),
+      P10: palmThenCancel,
+      P11: cancelEraser,
+      P12: panCancelOwnership,
     }
     for (const [name, run] of Object.entries(cases)) {
       const board = await open(browser, patched)

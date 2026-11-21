@@ -149,6 +149,14 @@ function ownsContact(gesture: Gesture, id: number, editorId: string): boolean {
   return gesture.forsionContacts?.get(id)?.editorId === editorId
 }
 
+/** 最后一根手指抬起时，笔仍可能在写，保留笔的接触记录。 */
+function endTouches(gesture: Gesture, remove: (id: number) => void): void {
+  if (!gesture.forsionContacts) return
+  for (const [id, contact] of gesture.forsionContacts) {
+    if (contact.pointerType === 'touch') remove(id)
+  }
+}
+
 /** undefined 让引擎计算真实抬笔的末点。取消或补收时，已有笔画无需追加点，单点需要补出极短的点状笔迹。 */
 function finishStroke(el: Freedraw, e: PointerEvent, pointerId: number) {
   if (e.type === 'pointerup' && e.pointerId === pointerId) return undefined
@@ -167,7 +175,7 @@ const release = (e: PointerEvent): void => {
 }
 
 export function installPenInput(): void {
-  ;(globalThis as Record<string, unknown>).__forsionPenInput = { down, wrap, freedraw, trackContact, ownsContact, finishStroke }
+  ;(globalThis as Record<string, unknown>).__forsionPenInput = { down, wrap, freedraw, trackContact, ownsContact, endTouches, finishStroke }
   window.addEventListener('pointerup', release, true)
   window.addEventListener('pointercancel', release, true)
 }

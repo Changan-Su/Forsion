@@ -133,7 +133,7 @@ const lib = g.ExcalidrawLib as typeof ExcalidrawLib | undefined
 if (!lib) throw new Error(translate('boardengine.libMissing'))
 // 手写笔补丁的钩子是拷副本时插进去的(见 penInput.ts);老副本没有它,白板照常能用、只是笔还是老手感。
 installPenInput()
-if (g.__forsionPenPatch !== 2) console.warn('[board] 白板引擎副本的手写笔补丁过期，重跑 node build/copy-excalidraw-assets.cjs')
+if (g.__forsionPenPatch !== 3) console.warn('[board] 白板引擎副本的手写笔补丁过期，重跑 node build/copy-excalidraw-assets.cjs')
 if (!g.__forsionTextPatch) console.warn('[board] 白板引擎副本没打文案补丁(菜单还是「拷贝 / 复制」),重跑 node build/copy-excalidraw-assets.cjs')
 
 export const { Excalidraw, MainMenu, Footer, serializeAsJSON, restoreElements, newElementWith, CaptureUpdateAction, exportToSvg, getCommonBounds } = lib

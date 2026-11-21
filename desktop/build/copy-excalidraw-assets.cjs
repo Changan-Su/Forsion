@@ -57,7 +57,7 @@ const FONTS = path.join(pkgDir, 'dist', 'prod', 'fonts')
 /** 手写笔补丁的逻辑在 frontend/src/amadeus/blocks/excalidraw/penInput.ts。
  *  钩子按 fork 0.18.122 的压缩原文匹配，每处必须恰好命中一次。升级 fork 时对照上游实现。
  *  修改后增加 PEN_PATCH，确保 postinstall 重建已有副本。 */
-const PEN_PATCH = 2
+const PEN_PATCH = 3
 const PEN_HOOK = 'globalThis.__forsionPenInput'
 const REMOVE_POINTER = 'let o=ve.pointers.size>=2;ve.pointers.delete(t.pointerId),o&&ve.pointers.size<2&&this.state.scrollConstraints&&this.viewport.releaseOverscroll()'
 const FREEDRAW_END = 'let u=He(o,this.state),m=a.points,w=u.x-a.x,b=u.y-a.y;w===m[0][0]&&b===m[0][1]&&(b+=1e-4,w+=1e-4);let D=a.simulatePressure?[]:[...a.pressures,o.pressure];this.scene.mutateElement(a,{points:[...m,k(w,b)],pressures:D})'
@@ -86,7 +86,7 @@ const PEN_PATCHES = [
     `M(this,"removePointer",t=>{fB&&this.resetContextMenuTimer(),t.type==="pointercancel"&&this.bucketFill.cancel();${REMOVE_POINTER}});`,
     `M(this,"removeGesturePointer",t=>{let o=ve.pointers.size>=2;ve.pointers.delete(t),ve.forsionContacts?.delete(t),o&&ve.pointers.size<2&&this.state.scrollConstraints&&this.viewport.releaseOverscroll()});
      M(this,"removePointer",t=>{fB&&this.resetContextMenuTimer(),t.type==="pointercancel"&&this.bucketFill.cancel(),this.removeGesturePointer(t.pointerId)});
-     M(this,"handlePointerCancel",t=>{if(${PEN_HOOK}?.ownsContact?.(ve,t.pointerId,this.id)){this.removePointer(t),this.maybeCleanupAfterMissingPointerUp(t)}});`,
+     M(this,"handlePointerCancel",t=>{if(${PEN_HOOK}?.ownsContact?.(ve,t.pointerId,this.id)){this.removePointer(t);if(this.lastPointerDownEvent?.pointerId===t.pointerId)this.missingPointerEventCleanupEmitter.trigger(t).clear()}});`,
   ],
   [
     'onPointerCancel:this.removePointer,onTouchMove:this.handleTouchMove',
@@ -102,7 +102,19 @@ const PEN_PATCHES = [
   ],
   [
     'this.state.previousSelectedElementIds,this.state)}):ve.pointers.clear())',
-    'this.state.previousSelectedElementIds,this.state)}):(ve.pointers.clear(),ve.forsionContacts?.clear()))',
+    `this.state.previousSelectedElementIds,this.state)}):(${PEN_HOOK}?.endTouches?${PEN_HOOK}.endTouches(ve,this.removeGesturePointer):ve.pointers.clear()))`,
+  ],
+  // 旧 fork 的 Up 是模块变量。平移只结束自己的按压，画板的普通取消监听不碰 Up。
+  [
+    'window.removeEventListener("blur",g),n.flush()});return window.addEventListener("blur",g),window.addEventListener("pointermove",n,{passive:!0}),window.addEventListener("pointerup",g),!0',
+    `window.removeEventListener("blur",g),window.removeEventListener("pointercancel",cancelPan,true),n.flush()});
+     const cancelPan=e=>{if(e.pointerId===t.pointerId)g()};
+     return window.addEventListener("blur",g),window.addEventListener("pointermove",n,{passive:!0}),window.addEventListener("pointerup",g),window.addEventListener("pointercancel",cancelPan,true),!0`,
+  ],
+  // 取消橡皮擦时收掉轨迹和待删除预览，正常松手仍会提交。
+  [
+    'let E=this.lastPointerDownEvent,h=this.lastPointerUpEvent||this.lastPointerMoveEvent;if(ig(this.state)&&E&&h)',
+    'let E=this.lastPointerDownEvent,h=this.lastPointerUpEvent||this.lastPointerMoveEvent;if(ig(this.state)&&o.type==="pointercancel"){this.eraserTrail.endPath(),this.restoreReadyToEraseElements();return}if(ig(this.state)&&E&&h)',
   ],
   // 补收笔沿用最后的实际采样。真正的抬笔继续用引擎原有的终点算法。
   [
