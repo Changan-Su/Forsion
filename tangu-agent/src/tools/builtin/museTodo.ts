@@ -112,13 +112,15 @@ export const museTodoProvider: ToolProvider = {
                 type: 'array',
                 minItems: 1,
                 maxItems: EVIDENCE_MAX_ITEMS,
-                // 借鉴 dsh-superagent 第 2 条(11-20):三个判断 + 三条反例。11-21 从工具描述挪到 evidence 字段,挂在依据上,末句写明门槛只管提待办,
-                // 是保守做法:曾怀疑写在工具描述里会让它对投收件箱也犹豫,但同批对照分不出(musedm 各版本与 main 都在批次波动之内)。
-                // 工具 schema 整份一开始就进上下文,不是填依据时才读到。不进 kickoff(有长度帽,10-30 实测会忘 set_next_wake),不进人格(老装机拿不到)。
+                // 借鉴 dsh-superagent 第 2 条(11-20):三个判断 + 反例。放在 evidence 字段说明里,末句写明门槛只管提待办(工具 schema 一开始就整份进上下文)。
+                // 11-21 live 负对照:反例点名具体场景(常看某类文章 / 说界面难看 / 讨论方案)时,只有随口话也会被提成待办,同批 main 0/6、点名版 2/6;
+                // 所以反例只讲原则、不点场景。三个判断写成「提待办的条件」,依据只证明「用户想要」,不要求依据去证明「不用替他选」。
+                // 不进 kickoff(有长度帽,10-30 实测会忘 set_next_wake),不进人格(老装机拿不到)。
                 description:
-                  'Required. 1 to 3 items showing the todo is the user\'s own matter and that they want it (they asked for it or plainly showed it), and that doing it needs no choice made on their behalf. ' +
-                  'These alone are not evidence: often reading about a topic does not mean they want to act on it; saying a screen looks bad does not authorize changing it; discussing a plan does not mean the plan is decided. ' +
-                  'A watch rule the user set that fired is evidence in itself (kind "rule"). If you cannot cite anything, keep looking or drop the todo. ' +
+                  'Required. 1 to 3 items, each showing the user wants this todo: they asked for it or plainly showed it. ' +
+                  'Propose a todo only when it is the user\'s own matter, they want it, and carrying it out needs no choice made on their behalf. ' +
+                  'Interest, complaints, and open discussion are not by themselves a request to act. ' +
+                  'A watch rule the user set that fired counts as evidence (kind "rule"). If you cannot cite anything, keep looking or drop the todo. ' +
                   'This bar is for proposing todos only; finished work still goes to the inbox as usual. ' +
                   'The app lists these on the card under "Evidence". Use absolute dates, not "today" (the card stays up for days).',
                 items: {

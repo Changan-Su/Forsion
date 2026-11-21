@@ -168,23 +168,27 @@ describe('add_muse_todo 必填依据(借鉴 dsh-superagent 第 2 条,11-20)', ()
     expect(parseStoredEvidence(JSON.stringify([{ source: { toString: 0 }, quote: 'q' }, { source: 's', quote: 'q' }]))).toEqual([{ kind: 'other', source: 's', quote: 'q' }]);
   });
 
-  it('工具定义:evidence 必填、条数 1–3;三个判断与三条反例在 evidence 字段说明里、不在工具描述里(英文,进模型)', () => {
+  it('工具定义:evidence 必填、条数 1–3;三个判断与原则式反例在 evidence 字段说明里、不在工具描述里、不点具体场景(英文,进模型)', () => {
     const fn = (tool.definition as any).function;
     expect(fn.parameters.required).toEqual(['title', 'evidence']);
     expect(fn.parameters.properties.evidence).toMatchObject({ type: 'array', minItems: 1, maxItems: 3 });
     expect(fn.parameters.properties.evidence.items.required).toEqual(['source', 'quote']);
-    // 11-21 live:写在工具描述里时 Muse 对投收件箱也犹豫,所以只放在填依据时才读到的地方,并写明只管提待办
     const d: string = fn.description;
-    for (const phrase of ['all three hold', "the user's own matter", 'no choice made on their behalf', 'not evidence', 'reading about a topic', 'screen looks bad', 'discussing a plan', 'watch rule the user set'])
-      expect(d).not.toContain(phrase);
     const e: string = fn.parameters.properties.evidence.description;
-    expect(e).toContain("the todo is the user's own matter and that they want it");
-    expect(e).toContain('needs no choice made on their behalf');
-    expect(e).toContain('often reading about a topic does not mean they want to act on it');
-    expect(e).toContain('saying a screen looks bad does not authorize changing it');
-    expect(e).toContain('discussing a plan does not mean the plan is decided');
-    expect(e).toContain('A watch rule the user set that fired is evidence in itself');
+    for (const phrase of ["the user's own matter", 'no choice made on their behalf', 'not by themselves a request to act', 'watch rule the user set'])
+      expect(d).not.toContain(phrase);
+    expect(e).toContain("Propose a todo only when it is the user's own matter, they want it, and carrying it out needs no choice made on their behalf");
+    expect(e).toContain('Interest, complaints, and open discussion are not by themselves a request to act');
+    expect(e).toContain('A watch rule the user set that fired counts as evidence');
     expect(e).toContain('This bar is for proposing todos only; finished work still goes to the inbox as usual');
+    // 11-21 live 负对照:点名具体场景的反例会被当成提示(同批 main 0/6、点名版 2/6),工具定义里一律不点
+    const all = JSON.stringify(tool.definition);
+    for (const named of ['reading about a topic', 'screen looks bad', 'discussing a plan', 'plan is decided'])
+      expect(all).not.toContain(named);
+    // 依据只证明「用户想要」,不要求依据去证明「不用替他选」(Codex 评审)
+    const evidencePart = e.slice(0, e.indexOf('Propose a todo'));
+    expect(evidencePart).toContain('showing the user wants this todo');
+    expect(evidencePart).not.toContain('choice');
     for (const s of [d, e, EVIDENCE_REQUIRED_ERROR]) expect(/[一-鿿]/.test(s)).toBe(false);
   });
 });
