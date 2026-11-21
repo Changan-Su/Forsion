@@ -27,6 +27,7 @@ import { createMultiAccountApp } from './multiAccount.js';
 
 const TOKEN = 'host-secret';
 const seenAccounts: Array<string | undefined> = [];
+let holdRun: Promise<void> | null = null; // 用户消息带 HOLD_RUN 的那轮模型调用等它
 const brain: any = {
   llm: {
     resolveModelAndKey: async () => ({ model: { provider: 'test', context_window: 128000 }, apiKey: '', baseUrl: '', apiModelId: 'test' }),
@@ -36,6 +37,7 @@ const brain: any = {
       seenAccounts.push(currentAccountId());
       // 脚本:用户消息里带 CALL_FORBIDDEN_TOOL 的那轮,第一次先叫一个白名单外的工具
       const msgs: any[] = Array.isArray(opts.payload?.messages) ? opts.payload.messages : [];
+      if (holdRun && JSON.stringify(msgs).includes('HOLD_RUN')) await holdRun;
       if (JSON.stringify(msgs).includes('CALL_FORBIDDEN_TOOL') && !msgs.some((m) => m?.role === 'tool')) {
         return { content: '', reasoning: '', toolCalls: [{ id: 'call_forbidden_0', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command: 'echo forbidden' }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 }, finishReason: 'tool_calls' };
       }
@@ -394,6 +396,33 @@ describe('createMultiAccountApp', () => {
     const sse = await (await fetch(`${base}/agent/runs/${run.json.runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'alice' } })).text();
     expect(sse).toMatch(/not available in multi-account mode/);
     expect(sse).not.toMatch(/"type":"approval/);
+    expect(sse).toMatch(/"type":"done"/);
+  });
+
+  it('forgets the owner of a run cancelled while queued, through the same delayed cleanup as started runs', async () => {
+    const { __runOwnerForTests } = await import('../services/agentLoop.js');
+    let release!: () => void;
+    holdRun = new Promise<void>((r) => { release = r; });
+    const sid = (await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'queue-cancel' } })).json.session.id as string;
+    const a = (await call('POST', '/agent/runs', { as: 'alice', body: { session_id: sid, model_id: 'test-model', message: 'HOLD_RUN first' } })).json.runId as string;
+    const b = (await call('POST', '/agent/runs', { as: 'alice', body: { session_id: sid, model_id: 'test-model', message: 'second' } })).json.runId as string;
+    expect(__runOwnerForTests(b)).toBe('alice');
+    const timers: Array<() => void> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...rest: unknown[]) => {
+      if (ms === 30_000) timers.push(fn);
+      return (realSetTimeout as any)(fn, ms, ...rest);
+    }) as any);
+    try {
+      expect((await call('POST', `/agent/runs/${b}/abort`, { as: 'alice' })).status).toBe(200);
+      for (let i = 0; i < 50 && !timers.length; i++) await new Promise((r) => realSetTimeout(r, 20));
+    } finally { spy.mockRestore(); }
+    expect(timers.length).toBeGreaterThan(0);
+    for (const fn of timers) fn(); // 保留期到了
+    expect(__runOwnerForTests(b)).toBeUndefined();
+    expect(__runOwnerForTests(a)).toBe('alice'); // 还在跑的那条不动
+    release(); holdRun = null;
+    const sse = await (await fetch(`${base}/agent/runs/${a}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'alice' } })).text();
     expect(sse).toMatch(/"type":"done"/);
   });
 

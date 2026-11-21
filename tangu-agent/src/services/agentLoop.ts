@@ -311,6 +311,21 @@ function foreignRun(runId: string): boolean {
   return owner !== undefined && owner !== currentAccountId();
 }
 /** 进程级调用方(退出时中止全部 / 无上下文的清理)碰一个 run:多账号模式下进它属主的账号上下文再做。 */
+/**
+ * run 收尾后的延迟清理(事件总线保留期 30s 后)——所有收尾路径(跑完、准备阶段失败、被拒、排队中取消…)共用这一个入口。
+ * 多账号模式顺手删 run 的属主登记:保留期里 SSE 补订阅 / 终态补发还要认它。单人模式与原来的 `setTimeout(() => cleanup(runId), 30_000)` 一样。
+ */
+function scheduleRunCleanup(runId: string, unref = false): void {
+  const t = setTimeout(() => {
+    cleanup(runId);
+    if (isMultiAccount() && !runSession.has(runId) && !abortControllers.has(runId)) runAccount.delete(runId);
+  }, 30_000);
+  if (unref) t.unref();
+}
+
+/** 测试用:run 的属主登记(多账号模式)。 */
+export function __runOwnerForTests(runId: string): string | undefined { return runAccount.get(runId); }
+
 function inRunAccount<T>(runId: string, fn: () => T): T {
   if (!isMultiAccount() || currentAccountId()) return fn();
   const owner = runAccount.get(runId);
@@ -362,7 +377,7 @@ export async function runControlledOperation<T>(runId: string, sessionId: string
   finally {
     signal.removeEventListener('abort', cancel);
     abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);interruptReasons.delete(runId);
-    setTimeout(() => cleanup(runId), 30_000).unref();
+    scheduleRunCleanup(runId, true);
   }
 }
 
@@ -444,7 +459,7 @@ function startRunInAccount(runId: string): void {
         steerQueue.delete(runId);
         runSession.delete(runId);
         if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
-        setTimeout(() => cleanup(runId), 30_000);
+        scheduleRunCleanup(runId);
       }
       return;
     }
@@ -462,14 +477,12 @@ function startRunInAccount(runId: string): void {
       steerQueue.delete(runId);
       runSession.delete(runId);
       if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
-      setTimeout(() => cleanup(runId), 30_000);
+      scheduleRunCleanup(runId);
     }
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
     runTasks.delete(runId);
-    // 属主留到 30s 后的事件总线清理一起删:这段时间里 SSE 补订阅 / 终态补发还要认它
-    if (isMultiAccount()) setTimeout(() => { if (!runSession.has(runId) && !abortControllers.has(runId)) runAccount.delete(runId); }, 30_000).unref?.();
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
     clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); interruptReasons.delete(runId);
@@ -607,7 +620,7 @@ function releaseRefusedRun(runId: string, sessionId: string): void {
   steerQueue.delete(runId);
   runSession.delete(runId);
   if (sessionActive.get(sessionId) === runId) advanceQueue(sessionId);
-  setTimeout(() => cleanup(runId), 30_000);
+  scheduleRunCleanup(runId);
 }
 
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
@@ -995,7 +1008,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     abortControllers.delete(runId);
     runSession.delete(runId);
     advanceQueue(sessionId);
-    setTimeout(() => cleanup(runId), 30_000);
+    scheduleRunCleanup(runId);
   }
 }
 
@@ -1085,7 +1098,7 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   } catch (e) {
     console.warn('[agent-core] terminalizeQueuedAbort failed:', e);
   } finally {
-    setTimeout(() => cleanup(runId), 30_000);
+    scheduleRunCleanup(runId);
   }
 }
 
@@ -1108,7 +1121,7 @@ async function markOrphanInterrupted(runId: string, reason: InterruptReason): Pr
     console.warn('[agent-core] markOrphanInterrupted failed:', e);
     return 'error';
   } finally {
-    setTimeout(() => cleanup(runId), 30_000);
+    scheduleRunCleanup(runId);
   }
 }
 
@@ -4958,7 +4971,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     takeRunThinking(runId); // 末轮才改的思考档没被取走 → 丢弃(会话存值已写,下一个 run 照样生效)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
-    setTimeout(() => cleanup(runId), 30_000);
+    scheduleRunCleanup(runId);
   }
 }
 
