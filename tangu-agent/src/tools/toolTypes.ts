@@ -28,8 +28,10 @@ export interface ToolContext {
   /** 长命令不挡插话(借鉴 dsh-superagent 方案第 5 条 A):前台 run_bash 跑着时用户插话 → 命令移交进后台进程表、工具立刻返回。
    *  只有主循环、本机交互 run 的那次调用带它(agentLoop runApprovedCall 装配);子代理 / PTC / 远程 / 通道 / 无人值守一律没有。 */
   steerHandoff?: {
-    /** 有用户插话还在排队、模型没读到。 */
+    /** 有用户插话还在排队、模型没读到,且还没有哪条命令因它移交过。 */
     pending(): boolean;
+    /** 这条命令因眼下排着的插话移交了:同一批后面的命令不再因它们移交。 */
+    claim(): void;
     /** 用户插话到达时回调;返回退订。 */
     onSteer(cb: () => void): () => void;
   };

@@ -7,7 +7,7 @@ import os from 'node:os';
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
 import { hostProcessProvider } from '../src/tools/builtin/hostProcess.js';
 import { disposeAllProcesses, getProcess, killProcess, listProcesses, processOutput, type BackgroundProcess } from '../src/tools/processRegistry.js';
-import { endReasonOf, endWakes, formatHandoffUpdate, takeHandoffUpdates } from '../src/services/steerHandoff.js';
+import { endReasonOf, endWakes, formatHandoffUpdate, releaseHandoffUpdates, takeHandoffUpdates } from '../src/services/steerHandoff.js';
 import { parseBackgroundUpdate } from '../src/contracts/approvalQueue.js';
 import { clearRunSecretEnv, setRunSecretEnv } from '../src/sandbox/runSecretEnv.js';
 
@@ -18,15 +18,16 @@ let seq = 0;
 /** 一次带 steerHandoff 的 run_bash 调用;pending 由测试控制,flip() 模拟插话到达。 */
 function call(command: string, opts: { pending?: boolean; runId?: string } = {}) {
   let pending = !!opts.pending;
+  let claims = 0;
   const cbs = new Set<() => void>();
   const sessionId = `S${++seq}`;
   const ctx: any = {
     cwd: os.tmpdir(), sessionId, userId: 'u', appId: 'a', runId: opts.runId || `R${seq}`, toolCallId: `c${seq}`,
-    steerHandoff: { pending: () => pending, onSteer: (cb: () => void) => { cbs.add(cb); return () => cbs.delete(cb); } },
+    steerHandoff: { pending: () => pending, claim: () => { claims++; }, onSteer: (cb: () => void) => { cbs.add(cb); return () => cbs.delete(cb); } },
   };
   const out = HOST_TOOLS.run_bash.execute({ command }, ctx) as Promise<string>;
   return {
-    out, sessionId, ctx,
+    out, sessionId, ctx, claims: () => claims,
     steer: () => { pending = true; for (const cb of [...cbs]) cb(); },
     withdraw: () => { pending = false; },
   };
@@ -66,6 +67,7 @@ describe('run_bash 移交', () => {
     expect(Date.now() - t0).toBeLessThan(500);
     expect(out).toMatch(/^stdout so far:\nearly/);
     expect(out).toContain('Moved to the background');
+    expect(c.claims()).toBe(1); // 认领了这条插话:同一批后面的命令不再因它移交
     const [p] = listProcesses(c.sessionId);
     expect(p.handoff).toMatchObject({ runId: c.ctx.runId, toolCallId: c.ctx.toolCallId });
     expect(p.runId).toBe(c.ctx.runId);
@@ -95,11 +97,64 @@ describe('run_bash 移交', () => {
     expect(text).not.toContain('sekrit-value-123456');
   });
 
+  it('秘密变量打到一半时移交:结果里扣下半截行,前后两截都不外泄(Codex 11-21 P0-4)', async () => {
+    const runId = 'R-split';
+    setRunSecretEnv(runId, { MY_TOKEN: 'sekrit-value-123456' });
+    const c = call('printf "ok-line\\ntoken=%s" "${MY_TOKEN%??????????}"; sleep 1.4; printf "%s\\n" "${MY_TOKEN#?????????}"', { runId });
+    await sleep(1100);
+    c.steer();
+    const out = await c.out;
+    expect(out).toContain('ok-line');
+    expect(out).not.toContain('sekrit-va'); // 半截行(秘密的开头)没进结果
+    const [p] = listProcesses(c.sessionId);
+    await until(() => !!p.handoff?.closed);
+    clearRunSecretEnv(runId);
+    expect(p.output).toContain('token=sekrit-value-123456');
+    expect(processOutput(p)).toContain('token=[REDACTED:MY_TOKEN]');
+  });
+
+  it('本机地址里带着秘密变量 → 不登记成进程地址(Codex 11-21 P0-3)', async () => {
+    const runId = 'R-url';
+    setRunSecretEnv(runId, { MY_TOKEN: 'sekrit-url-7777' });
+    const c = call('sleep 1.2; echo "listening on http://localhost:5173/?t=$MY_TOKEN"; sleep 0.3', { runId });
+    await sleep(1100);
+    c.steer();
+    await c.out;
+    const [p] = listProcesses(c.sessionId);
+    await until(() => !!p.handoff?.closed);
+    expect(p.output).toContain('localhost:5173');
+    expect(p.url).toBeFalsy();
+    clearRunSecretEnv(runId);
+    // 对照:不带秘密的地址照常登记
+    const d = call('sleep 1.2; echo "listening on http://localhost:5174/"; sleep 0.3');
+    await sleep(1100);
+    d.steer();
+    await d.out;
+    const [q] = listProcesses(d.sessionId);
+    await until(() => !!q.handoff?.closed);
+    expect(q.url).toContain('localhost:5174');
+  });
+
+  it('宽限期里 shell 已退、孙进程撑着管道 → 移交后照样收尾(按 shell 的退出码),撑管道的孙进程被停(Codex 11-21 P1-2 / P1-3)', async () => {
+    const c = call('sleep 30 & echo "child:$!"; exit 3', { pending: true });
+    const out = await c.out; // 1s 宽限到了才移交;那时 shell 早退了
+    expect(out).toContain('Moved to the background');
+    const [p] = listProcesses(c.sessionId);
+    const pid = Number(/child:(\d+)/.exec(p.output)?.[1]);
+    expect(pid).toBeGreaterThan(0);
+    await until(() => !!p.handoff?.closed, 8000);
+    expect(p.exitCode).toBe(3);
+    expect(endReasonOf(p)).toBe('finished');
+    let alive = true;
+    for (let i = 0; i < 80 && alive; i++) { try { process.kill(pid, 0); await sleep(50); } catch { alive = false; } }
+    expect(alive).toBe(false);
+  }, 20_000);
+
   it('子代理 / PTC 的调用不移交(哪怕上下文里带着 steerHandoff)', async () => {
     for (const extra of [{ subAgentDepth: 1 }, { ptcRead: true }]) {
       const ctx: any = {
         cwd: os.tmpdir(), sessionId: `S-x${++seq}`, userId: 'u', appId: 'a', runId: 'R-x', toolCallId: 'c-x', ...extra,
-        steerHandoff: { pending: () => true, onSteer: () => () => {} },
+        steerHandoff: { pending: () => true, claim: () => {}, onSteer: () => () => {} },
       };
       const out = String(await HOST_TOOLS.run_bash.execute({ command: 'sleep 1.3; echo sub-done' }, ctx));
       expect(out).toContain('sub-done');
@@ -131,9 +186,11 @@ describe('结局表', () => {
     const [pb] = listProcesses(b.sessionId);
     await until(() => !!pb.handoff?.closed);
     expect(endReasonOf(pb)).toBe('timed_out');
-    const text = takeHandoffUpdates(b.sessionId)!;
-    expect(text).toContain('[timed_out]');
+    const taken = takeHandoffUpdates(b.sessionId)!;
+    expect(taken.text).toContain('[timed_out]');
     expect(takeHandoffUpdates(b.sessionId)).toBeNull(); // 只交一次
+    releaseHandoffUpdates(taken); // 注入失败退回 → 下一个消费者还能取到
+    expect(takeHandoffUpdates(b.sessionId)?.text).toContain('[timed_out]');
   });
 
   it('结局行能被界面解析(行头格式是两边的契约)', () => {
@@ -143,6 +200,9 @@ describe('结局表', () => {
     } as unknown as BackgroundProcess;
     const rows = parseBackgroundUpdate(formatHandoffUpdate([p]));
     expect(rows).toEqual([{ status: 'finished', processId: 'bg_x', callId: 'call_1', command: 'npm test --silent', exitCode: 1 }]);
+    // 调用号自带括号(供应商原样保留的 id)也解析得出来(Codex 11-21 P2)
+    const q = { ...p, handoff: { ...p.handoff!, toolCallId: 'vendor(42)' } } as BackgroundProcess;
+    expect(parseBackgroundUpdate(formatHandoffUpdate([q]))).toEqual([{ status: 'finished', processId: 'bg_x', callId: 'vendor(42)', command: 'npm test --silent', exitCode: 1 }]);
     expect(getProcess('none', 'bg_x')).toBeNull();
   });
 });

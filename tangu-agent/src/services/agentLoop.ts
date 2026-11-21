@@ -117,12 +117,14 @@ import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryLayers, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
+import { sessionRemoteTainted } from './remoteTaint.js';
 import './remoteTaint.js'; // 首次远程染色 → 落进 run 行(input.remoteTainted),会话级污点判据据此跨重启认得(P1 · M1A)
 import { buildProbe, currentDateSection, formatCwdListing, processTimeZone, type ProbeSegment } from './promptHead.js';
 import { isSafetyStop, safetyStopNotice, SAFETY_STOP_ORIGIN } from '../contracts/safetyStop.js';
 import { channelHub } from '../channels/hub.js';
 import { markIfAsked, onRunSettled as onChildRunSettled, onRunStart as onChildRunStart } from './childSessions.js';
-import { deliverHandoffWake, hasHandoffUpdates, installHandoffDelivery, stopRunHandoffs, takeHandoffUpdates } from './steerHandoff.js';
+import { deliverHandoffWake, hasHandoffUpdates, installHandoffDelivery, releaseHandoffUpdates, stopRunHandoffs, takeHandoffUpdates } from './steerHandoff.js';
+import { onHandoffClosed } from '../tools/processRegistry.js';
 
 // ── 注入依赖的 lazy 别名:保持下方调用点不变(接缝装配后才会真正取到 deps)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -158,7 +160,8 @@ const VERIFY_MAX_ROUNDS = 2;
 // 当前 run（而非另起新 run，也不是等整个 run 跑完）。仅「活跃 run」(已注册 AbortController = 已进循环)
 // 接受注入；排队中的 run 还没 AC → 拒收（前端回退起新 run）。
 /** newTopic = 用户在跑的时候选了「另起话题」(⌘Enter / 发送键菜单):这一句另起一件事,手头没做完的挪到独立会话(hand_off_task)。 */
-interface SteerMsg { id: string; content: string; attachments?: any[]; newTopic?: boolean }
+/** viaRemote:远端发来的插话(不移交本机前台命令,见 steerHandoff);machine:引擎自己写的结局行(不拼用户刚上传的附件)。 */
+interface SteerMsg { id: string; content: string; attachments?: any[]; newTopic?: boolean; viaRemote?: boolean; machine?: boolean }
 const steerQueue = new Map<string, SteerMsg[]>();
 // Only the read-only model request is interruptible for steering. Tool execution and
 // the parent run keep their lifetime; completed work remains in workingMessages.
@@ -1552,8 +1555,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 只有引擎内部起的 run 会带(POST /agent/runs 按字段名组装 input,客户端塞不进来;就算塞进来也只会更严)。
   const sessionMsgCap: CapMode | undefined = input.approvalCap === 'readonly' || input.approvalCap === 'auto-edit' || input.approvalCap === 'full-auto'
     ? input.approvalCap : undefined;
-  if (sessionMsgCap) setRunApprovalCap(runId, sessionMsgCap); // 审批闸现读会话档之后再钳;收尾由 childSessions.onRunSettled 清
-  const remoteCap = minCapMode(remote ? remoteApprovalCap() : undefined, sessionMsgCap);
+  // 交回被移交命令结局的那一轮(steerHandoff.wakeNow 起的):起跑时现查会话污点 —— wakeNow 查污点与入队之间有 await,
+  // 排在它前面的远端一轮可能刚把会话染上;染了就按远程上限钳(Codex 11-21 P0-2)。查不出按染了算。
+  const bgTainted = input.backgroundUpdate === true && profile.capabilities.hostExec && !remote
+    && (await sessionRemoteTainted(sessionId).catch(() => true));
+  const runCap = minCapMode(bgTainted ? remoteApprovalCap() : undefined, sessionMsgCap);
+  if (runCap) setRunApprovalCap(runId, runCap); // 审批闸现读会话档之后再钳;收尾由 childSessions.onRunSettled 清
+  const remoteCap = minCapMode(remote ? remoteApprovalCap() : undefined, runCap);
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
@@ -1826,7 +1834,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modeSessionId = profile.capabilities.hostExec
     // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
     // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
-    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.handoff === true || input.childReport === true || input.backgroundUpdate === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.handoff === true || input.childReport === true || input.bgFollowSession === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -3041,8 +3049,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       // 运行中追加的一句同样带上它之前刚上传的附件(appStore.send:先 upload 再 steer),拼在这一批的第一条上。
       // 同来源才拼:远端 steer 在入队成功后已给本 run 染色(effectiveRemote 为真),本机 steer 进本机 run。
-      const steerUploads = execMode === 'host' ? takeWorkspaceUploads(sessionId, { remote: !!effectiveRemote({ remote, runId }) }) : [];
-      if (steerUploads.length && msgs[0]) msgs[0] = { ...msgs[0], content: withUploadRefs(msgs[0].content, steerUploads) };
+      // 拼在这一批第一条**用户**消息上:结局行(审批 / 后台命令)不是用户说的话,拼上去附件就跟错了人、界面也认不出那一行;
+      // 这一批没有用户消息就不取,附件留给用户下一句(Codex 11-21 P1-9)
+      const firstUser = msgs.findIndex((m) => !m.machine && !String(m.content || '').startsWith(APPROVAL_UPDATE_OPEN) && !String(m.content || '').startsWith(INQUIRY_UPDATE_OPEN));
+      const steerUploads = execMode === 'host' && firstUser >= 0 ? takeWorkspaceUploads(sessionId, { remote: !!effectiveRemote({ remote, runId }) }) : [];
+      if (steerUploads.length) msgs[firstUser] = { ...msgs[firstUser], content: withUploadRefs(msgs[firstUser].content, steerUploads) };
       for (const m of msgs) {
         await deps().state.insertUserMessage({
           id: m.id, sessionId, content: m.content, modelId,
@@ -3249,9 +3260,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 长命令不挡插话(借鉴 dsh-superagent 方案第 5 条 A):只给本机交互 run —— 远程(含中途被远端插话染色)/ 通道 / 无人值守 / 团队成员不移交,
     // 每次调用现判。主循环的调用才装 steerHandoff(PTC 不装;子代理展开 parentCtx 时清掉)。
     const handoffAllowed = (): boolean => execMode === 'host' && !isTeamMember && runCategory(input, runId) === 'local';
+    // 一条插话只移交一条命令:同一批里后面那条串行命令起跑时它还排着,但不能再把那条也挤进后台(两条并发跑,
+    // 后一条可能读到前一条没写完的产物,Codex 11-21 P1-6)。远端插话不移交(路由在入队之后才染色,这里按消息自己的标记判)。
+    const claimedSteers = new Set<string>();
     const steerHandoff: NonNullable<ToolContext['steerHandoff']> = {
-      pending: () => !!steerQueue.get(runId)?.length,
+      pending: () => handoffAllowed() && !!steerQueue.get(runId)?.some((m) => !m.viaRemote && !claimedSteers.has(m.id)),
+      claim: () => { for (const m of steerQueue.get(runId) || []) claimedSteers.add(m.id); },
       onSteer: (cb) => onSteerArrival(runId, cb),
+    };
+    /** 取走已收尾的结局 → 结局行(machine)。末轮不取(末轮不带工具,模型读不了输出):留给这一轮收尾后起的那一轮(Codex 11-21 P1-8)。 */
+    const takeBgRows = (finalIter: boolean): { rows: SteerMsg[]; taken: ReturnType<typeof takeHandoffUpdates> } => {
+      const taken = handoffAllowed() && !finalIter ? takeHandoffUpdates(sessionId) : null;
+      return { rows: taken ? [{ id: uuidv4(), content: taken.text, machine: true }] : [], taken };
+    };
+    /** 落库失败 → 结局退回未交,别让后面的消费者都当它交过了(Codex 11-21 P1-1)。 */
+    const applyWithBg = async (msgs: SteerMsg[], taken: ReturnType<typeof takeHandoffUpdates>): Promise<void> => {
+      try { await applySteering(msgs); } catch (e) { if (taken) releaseHandoffUpdates(taken); throw e; }
     };
     const MAX_PARALLEL_TOOL_CALLS = Math.max(1, Number(process.env.TANGU_TOOL_PARALLELISM) || 4);
     const canRunToolInParallel = (call: ToolCall): boolean => {
@@ -3606,10 +3630,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       return out;
     };
     /** 收尾闸门用:还有挂起项、模型已无别的可干 → 等到有东西可交(任一张拍板 / 用户插话);中止即抛。 */
-    const waitForParked = async (): Promise<void> => {
-      while (![...parked.values()].some(parkedReady) && !steerQueue.get(runId)?.length) {
+    const waitForParked = async (finalIter: boolean): Promise<void> => {
+      // 被移交的命令收尾了也算有东西可交(否则要等用户拍板才交得出去,Codex 11-21 P1-5);末轮不取(见 takeBgRows)
+      const bgReady = (): boolean => !finalIter && handoffAllowed() && hasHandoffUpdates(sessionId);
+      while (![...parked.values()].some(parkedReady) && !steerQueue.get(runId)?.length && !bgReady()) {
         await new Promise<void>((resolve, reject) => {
-          const settle = (): void => { parkedWake = null; ac.signal.removeEventListener('abort', onAbort); };
+          const offBg = onHandoffClosed((p) => { if (p.sessionId === sessionId) parkedWake?.(); });
+          const settle = (): void => { parkedWake = null; offBg(); ac.signal.removeEventListener('abort', onAbort); };
           const onAbort = (): void => { settle(); reject(new AbortLikeError()); };
           parkedWake = () => { settle(); resolve(); };
           if (ac.signal.aborted) return onAbort();
@@ -3782,9 +3809,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const steered = drainSteer(runId);
       const outcomes = parked.size ? await settleParkedCalls() : [];
       // 被移交进后台的命令收尾了(本轮或本会话早先那一轮移交的):结局行跟在审批结局后、用户插话前
-      const bgUpdate = handoffAllowed() ? takeHandoffUpdates(sessionId) : null;
-      const bg: SteerMsg[] = bgUpdate ? [{ id: uuidv4(), content: bgUpdate }] : [];
-      if (steered.length || outcomes.length || bg.length) await applySteering([...outcomes, ...bg, ...steered]);
+      const { rows: bg, taken: bgTaken } = takeBgRows(iteration >= maxIterations - 1);
+      if (steered.length || outcomes.length || bg.length) await applyWithBg([...outcomes, ...bg, ...steered], bgTaken);
       // run 内续调前再扫一遍读过的文件(模型干活时用户可能还在编辑器里写):有改动就在尾部追加一条
       // 不落库不上屏的 user 消息(同 NO_VISION_NOTE),本 run 之后的调用都看得见。第 0 轮已由开头的 runtime_context 报过。
       if (iteration > 0 && execMode === 'host') {
@@ -4365,12 +4391,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           continue;
         }
         // 被移交进后台的命令在这一轮收尾前就结束了:结局进这一轮(不等还在跑的 —— 那些等它结束再起一轮交回,见 steerHandoff.ts)
-        if (handoffAllowed() && hasHandoffUpdates(sessionId)) {
-          const bgUpdate = takeHandoffUpdates(sessionId);
-          if (bgUpdate) {
+        if (!lastIter && handoffAllowed() && hasHandoffUpdates(sessionId)) {
+          const { rows, taken } = takeBgRows(false);
+          if (rows.length) {
             if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
-            await applySteering([{ id: uuidv4(), content: bgUpdate }]);
-            if (lastIter) iteration -= 1; // 结局也必须有人读
+            await applyWithBg(rows, taken);
             continue;
           }
         }
@@ -4379,8 +4404,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (parked.size) {
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           void publish(runId, 'status', { phase: 'awaiting_approval', pending: parked.size }); // 时间线 / 台架的观测点(桌面不认的 status 直接忽略)
-          await waitForParked();
-          await applySteering([...(await settleParkedCalls()), ...drainSteer(runId)]);
+          await waitForParked(lastIter);
+          const parkedOutcomes = await settleParkedCalls();
+          const { rows: bgRows, taken: bgTakenParked } = takeBgRows(lastIter);
+          await applyWithBg([...parkedOutcomes, ...bgRows, ...drainSteer(runId)], bgTakenParked);
           if (lastIter) iteration -= 1; // 迟到的结局也必须有人读
           continue;
         }
@@ -4822,6 +4849,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
+    // 按了停止、而这一轮照样正常收尾的(停在最后一次落库 / 刷工作区上,catch 走不到):移交的命令也一并停(Codex 11-21 P1-4)
+    if (ac.signal.aborted) stopRunHandoffs(runId);
     for (const id of liveMarked) unmarkLiveRow(id); // 本 run 的段不再算「在跑」:之后回放按三分法说
     // 兜底 snapshot（失败/中止路径未走到成功段时）；会话沙箱保持温，由空闲 TTL reaper 回收。
     await flush();

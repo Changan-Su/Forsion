@@ -72,9 +72,10 @@ export interface BackgroundOutcome {
   exitCode: number | null
 }
 
-/** 按引擎写死的行头 `[status] process <id> (run_bash call <id>): <命令>` + 下一行说明取出每一条。 */
+/** 按引擎写死的行头 `[status] process <id> (run_bash call <id>): <命令>` + 下一行说明取出每一条。
+ *  调用号可能自带括号(OpenAI 兼容通道原样保留供应商的 id,如 `vendor(42)`):非贪婪匹配到第一个「): 」。 */
 export function parseBackgroundUpdate(text: string): BackgroundOutcome[] {
-  return [...text.matchAll(/^\[(finished|failed|timed_out|stopped)\] process (\S+) \(run_bash call ([^)]*)\): (.*)\n(.*)$/gm)]
+  return [...text.matchAll(/^\[(finished|failed|timed_out|stopped)\] process (\S+) \(run_bash call (.*?)\): (.*)\n(.*)$/gm)]
     .map((m) => {
       const code = m[1] === 'finished' ? m[5].match(/exited with code (-?\d+)/) : null
       return { status: m[1] as BackgroundOutcome['status'], processId: m[2], callId: m[3], command: m[4], exitCode: code ? Number(code[1]) : null }

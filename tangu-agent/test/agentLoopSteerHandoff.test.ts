@@ -8,6 +8,9 @@
  *   ④ 移交后到上限 → 停掉,起一轮告诉模型 [timed_out]
  *   ⑤ 停掉那一轮 → 被移交的命令一并停,不起轮
  *   ⑥ run_background 起的进程结束 → 不唤醒
+ *   ⑦ 同一批两条串行命令:一条插话只移交正在跑的那条,后一条照常前台跑完(不并发)
+ *   ⑧ 远端发来的插话不移交本机前台命令
+ *   ⑨ 交回那一轮的审批跟那一轮同口径(TUI 快照档不被换成会话档、发方上限照抄),Agent 跟会话此刻选着的
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
@@ -90,20 +93,23 @@ const runsOf = async (): Promise<any[]> => query<any[]>(`SELECT id, status, inpu
 const inputOf = (r: any): any => (typeof r.input === 'string' ? JSON.parse(r.input) : r.input || {});
 
 /** 起一个本机交互 run;steerOn:看到这个工具调用后 steerAfterMs 毫秒插一句话。 */
-async function start(opts: { steerOn?: string; steerAfterMs?: number } = {}): Promise<{ runId: string; settled: () => Promise<any>; results: any[] }> {
+async function start(opts: { steerOn?: string; steerAfterMs?: number; steerRemote?: boolean; input?: Record<string, unknown> } = {}): Promise<{ runId: string; settled: () => Promise<any>; results: any[] }> {
   const runId = `R${++runSeq}`;
   await createRun({
     id: runId, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A${runSeq}`,
     input: {
       message: '跑一下检查', userMessageId: `U${runSeq}`, attachments: [], origin: 'client', client: 'desktop/2.14.0',
       agentConfig: { execMode: 'host', cwd: ws, approvalMode: 'full-auto' },
+      ...(opts.input || {}),
     },
   });
   const results: any[] = [];
   const off = subscribe(runId, (ev) => {
     if (ev.type === 'tool_result') results.push({ ...ev.payload, at: Date.now() });
     if (ev.type === 'tool_call' && opts.steerOn && ev.payload?.id === opts.steerOn) {
-      setTimeout(() => { enqueueSteer(runId, { id: `steer-${runId}`, content: 'By the way, what is the default SSH port?' }); }, opts.steerAfterMs ?? 300);
+      setTimeout(() => {
+        enqueueSteer(runId, { id: `steer-${runId}`, content: 'By the way, what is the default SSH port?', ...(opts.steerRemote ? { viaRemote: true } : {}) });
+      }, opts.steerAfterMs ?? 300);
     }
   });
   enqueueRun('S', runId);
@@ -249,4 +255,68 @@ describe('长命令不挡插话', () => {
     expect((await runsOf()).length).toBe(1);
     expect(payloads.length).toBe(2);
   });
+
+  it('⑦ 同一批两条串行命令:插话只移交正在跑的那条,后一条照常前台跑完', async () => {
+    script = [
+      () => ({
+        content: '', reasoning: '', finishReason: 'stop', usage,
+        toolCalls: [
+          { id: 'c-a', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command: "sleep 3; printf 'A-%s' MARK" }) } },
+          { id: 'c-b', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command: 'sleep 1.5; echo B-DONE' }) } },
+        ],
+      }),
+      finalStep('Port 22.'),
+      finalStep('A finished too.'),
+    ];
+    const r = await start({ steerOn: 'c-a' });
+    expect((await r.settled()).status).toBe('done');
+    const tools = toolMsgs(payloads[1]);
+    expect(tools[0]).toMatch(/Moved to the background/);
+    // 后一条没被同一句插话挤进后台:前台跑完、带退出码
+    expect(tools[1]).toContain('B-DONE');
+    expect(tools[1]).toMatch(/exit_code: 0/);
+    expect(tools[1]).not.toMatch(/Moved to the background/);
+    expect(listProcesses('S').filter((p) => p.handoff).map((p) => p.handoff!.toolCallId)).toEqual(['c-a']);
+    const [proc] = listProcesses('S');
+    for (let i = 0; i < 300 && !proc.handoff?.delivered; i++) await sleep(30);
+    expect(proc.handoff?.delivered).toBe(true);
+  }, 30_000);
+
+  it('⑧ 远端发来的插话不移交本机前台命令', async () => {
+    script = [bash('c-r', 'sleep 2; echo R-DONE'), finalStep('Port 22.')];
+    const r = await start({ steerOn: 'c-r', steerRemote: true });
+    expect((await r.settled()).status).toBe('done');
+    expect(toolMsgs(payloads[1])[0]).toContain('R-DONE');
+    expect(toolMsgs(payloads[1])[0]).not.toMatch(/Moved to the background/);
+    expect(userMsgs(payloads[1]).some((u) => u.includes('default SSH port'))).toBe(true); // 插话照样读到(命令跑完之后)
+    expect(listProcesses('S')).toEqual([]);
+  }, 30_000);
+
+  it('⑨ 交回那一轮:TUI 那类按快照定档的不改跟会话档;发方上限照抄;Agent 跟会话此刻选着的', async () => {
+    script = [bash('c-long', 'sleep 3; echo T-DONE'), finalStep('Port 22.'), finalStep('Done.')];
+    // 不带 origin: 'client'(TUI / 通道那类),发方给了上限
+    const r = await start({ steerOn: 'c-long', input: { origin: undefined, approvalCap: 'full-auto' } });
+    expect((await r.settled()).status).toBe('done');
+    // 那一轮之后用户换了 Agent(输入区切 Agent = PUT 进会话的 agent_config)
+    const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
+    const cfg = typeof row?.agent_config === 'string' ? JSON.parse(row.agent_config || '{}') : row?.agent_config || {};
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'S'`, [JSON.stringify({ ...cfg, agentSlug: 'agent-b' })]);
+    let wake: any;
+    for (let i = 0; i < 300 && !wake; i++) { wake = (await runsOf()).find((x) => inputOf(x).backgroundUpdate === true); if (!wake) await sleep(30); }
+    expect(wake).toBeTruthy();
+    const input = inputOf(wake);
+    expect(input.bgFollowSession).toBeUndefined();
+    expect(input.approvalCap).toBe('full-auto');
+    expect(input.agentConfig.approvalMode).toBe('full-auto'); // 快照档照抄
+    expect(input.agentConfig.agentSlug).toBe('agent-b');
+  }, 30_000);
+
+  it('⑨b 桌面输入区起的那一轮(跟会话现档)→ 交回那一轮也跟', async () => {
+    script = [bash('c-long', 'sleep 2.5; echo D-DONE'), finalStep('Port 22.'), finalStep('Done.')];
+    const r = await start({ steerOn: 'c-long' });
+    expect((await r.settled()).status).toBe('done');
+    const wake = await wakeRun();
+    expect(inputOf(wake).bgFollowSession).toBe(true);
+    expect(inputOf(wake).approvalCap).toBeUndefined();
+  }, 30_000);
 });

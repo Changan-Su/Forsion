@@ -807,8 +807,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
     // 被移到后台的命令结束了(<background_update>,11-20):同理是机器行,每条命令一行;输出不在这行里(模型自己去读)。
     // 复用审批结局那一行的排法:退出码 0 记成 approved 那档的绿勾,其余红叉。
-    if (msg.content.startsWith(BACKGROUND_UPDATE_OPEN)) {
-      const rows = parseBackgroundUpdate(msg.content)
+    // 一条都解析不出来(用户自己打了这个标记开头的话)→ 照普通消息画,别画成一行空白
+    const bgRows = msg.content.startsWith(BACKGROUND_UPDATE_OPEN) ? parseBackgroundUpdate(msg.content) : []
+    if (bgRows.length) {
+      const rows = bgRows
       return (
         <div ref={rootRef} className="t2-sys t2-apv-update" data-background-update={rows.length}>
           {rows.map((r) => {

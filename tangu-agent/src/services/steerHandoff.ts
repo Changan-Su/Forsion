@@ -71,12 +71,17 @@ export function formatHandoffUpdate(procs: BackgroundProcess[]): string {
   ].join('\n');
 }
 
-/** 当前轮取走已收尾、还没处理的结局(同步翻 delivered)。返回要注入的 user 行;只有被停的 / 没有 → null。 */
-export function takeHandoffUpdates(sessionId: string): string | null {
+export interface TakenHandoffs { text: string; procs: BackgroundProcess[] }
+/** 当前轮取走已收尾、还没处理的结局(同步翻 delivered)。返回要注入的 user 行与对应进程;只有被停的 / 没有 → null。 */
+export function takeHandoffUpdates(sessionId: string): TakenHandoffs | null {
   const ended = pendingEnded(sessionId);
   for (const p of ended) p.handoff!.delivered = true;
   const worth = ended.filter((p) => endWakes(endReasonOf(p)));
-  return worth.length ? formatHandoffUpdate(worth) : null;
+  return worth.length ? { text: formatHandoffUpdate(worth), procs: worth } : null;
+}
+/** 注入失败(落库出错)→ 退回未交,等下一个消费者(这一轮收尾时 startRun 会再叫 deliverHandoffWake)。 */
+export function releaseHandoffUpdates(taken: TakenHandoffs): void {
+  for (const p of taken.procs) if (p.handoff) p.handoff.delivered = false;
 }
 
 /** 收尾闸门用:有要交回的结局(被停的不算)。 */
@@ -120,27 +125,44 @@ async function wakeNow(sessionId: string): Promise<void> {
   const worth = ended.filter((p) => endWakes(endReasonOf(p)));
   if (!worth.length) return;
   const text = formatHandoffUpdate(worth);
-  const owner = await getRun(worth[worth.length - 1].handoff!.runId);
-  if (!owner) return; // 那一轮的行没了(会话删了):没处交
-  const input = decode(owner.input);
-  const modelId = String(owner.model_id || deps().profile.defaultModelId || '');
-  // 会话后来被远端插话染过色:不起本机来源的一轮(那会绕过远程的审批上限),只写一行,等用户下一句再看
-  if (input.remote || (await sessionRemoteTainted(sessionId))) {
-    await deps().state.insertUserMessage({ id: uuidv4(), sessionId, content: text, modelId, attachments: null });
-    await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
-    return;
+  try {
+    const owner = await getRun(worth[worth.length - 1].handoff!.runId);
+    if (!owner) return; // 那一轮的行没了(会话删了):没处交
+    const input = decode(owner.input);
+    const modelId = String(owner.model_id || deps().profile.defaultModelId || '');
+    // 会话后来被远端插话染过色:不起本机来源的一轮(那会绕过远程的审批上限),只写一行,等用户下一句再看。
+    // 查与入队之间还有 await:那一轮起跑时 agentLoop 会再查一次(bgTainted)。
+    if (input.remote || (await sessionRemoteTainted(sessionId))) {
+      await deps().state.insertUserMessage({ id: uuidv4(), sessionId, content: text, modelId, attachments: null });
+      await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [sessionId]).catch(() => {});
+      return;
+    }
+    const cfg = { ...decode(input.agentConfig) };
+    delete cfg.remoteOrigin;
+    // Agent 跟会话此刻选着的那个(用户可能在那一轮之后换了 Agent;抄那一轮的会在起跑时被写穿回会话,Codex 11-21 P1-10)
+    const stored = decode(await deps().state.getAgentConfig(sessionId).catch(() => null));
+    if (typeof stored.agentSlug === 'string' && stored.agentSlug) cfg.agentSlug = stored.agentSlug;
+    // 审批:那一轮跟着会话现档走的(桌面输入区 / 派生轮)才跟;TUI 等按自己快照定档的照旧用快照(cfg.approvalMode);
+    // 发方给那一轮定的上限照抄,不能经交回这一轮放宽(Codex 11-21 P0-1)
+    const followsSession = input.origin === 'client' || input.fromParent === true || input.handoff === true
+      || input.childReport === true || !!input.fromSession || input.bgFollowSession === true;
+    const cap = input.approvalCap === 'readonly' || input.approvalCap === 'auto-edit' || input.approvalCap === 'full-auto' ? input.approvalCap : undefined;
+    const runId = uuidv4();
+    await createRun({
+      id: runId, sessionId, userId: owner.user_id, appId: owner.app_id, modelId, assistantMessageId: uuidv4(),
+      input: {
+        message: text, userMessageId: uuidv4(), attachments: [], agentConfig: cfg, backgroundUpdate: true,
+        ...(followsSession ? { bgFollowSession: true } : {}),
+        ...(cap ? { approvalCap: cap } : {}),
+        ...(typeof input.client === 'string' ? { client: input.client } : {}),
+      },
+    });
+    enqueueRun(sessionId, runId);
+  } catch (e) {
+    // 查库 / 建行失败:退回未交,下一次进程收尾或会话里任一轮收尾再交(Codex 11-21 P1-1)
+    for (const p of worth) if (p.handoff) p.handoff.delivered = false;
+    throw e;
   }
-  const cfg = { ...decode(input.agentConfig) };
-  delete cfg.remoteOrigin;
-  const runId = uuidv4();
-  await createRun({
-    id: runId, sessionId, userId: owner.user_id, appId: owner.app_id, modelId, assistantMessageId: uuidv4(),
-    input: {
-      message: text, userMessageId: uuidv4(), attachments: [], agentConfig: cfg, backgroundUpdate: true,
-      ...(typeof input.client === 'string' ? { client: input.client } : {}),
-    },
-  });
-  enqueueRun(sessionId, runId);
 }
 
 let installed = false;

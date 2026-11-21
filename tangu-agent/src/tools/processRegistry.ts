@@ -181,7 +181,8 @@ function append(p: BackgroundProcess, chunk: string): void {
   if (!p.url) {
     // 多看前面 200 字:地址可能被切在两个 chunk 之间
     const url = detectLocalUrl(p.output.slice(-(chunk.length + 200)), true);
-    if (url) { p.url = url; emitChange(); }
+    // 地址里带着秘密变量的值(打码会改动它)→ 不登记:url 会原样经进程接口和界面地址条出去(Codex 11-21 P0-3)
+    if (url && (!p.redact || p.redact(url) === url)) { p.url = url; emitChange(); }
   }
 }
 
@@ -292,18 +293,28 @@ export function adoptForegroundProcess(o: {
   }, handoffMaxMs());
   deadline.unref?.();
   let exitTimer: ReturnType<typeof setTimeout> | undefined;
-  o.child.on('exit', (code) => {
+  const child = o.child;
+  const onExit = (code: number | null): void => {
+    if (exitTimer) return;
     exitTimer = setTimeout(() => {
       if (p.handoff?.closed) return;
-      // 管道还被孙进程撑着:按 shell 的退出码收尾;剩下的孙进程照旧在进程组里(停它走 kill_process / 界面)
+      // 管道还被孙进程撑着:按 shell 的退出码收尾,并停掉撑着管道的孙进程 —— 不停的话记录已成终态,kill_process / 停止那一轮 /
+      // 到点都够不着它们(Codex 11-21 P1-3)。没移交时同样的命令也是等到超时整组停掉。不记 killRequested:结局按 shell 的退出码算。
       if (p.status === 'running') p.status = code === null ? 'killed' : 'exited';
       if (p.exitCode === null) p.exitCode = code;
       p.endedAt = p.endedAt ?? Date.now();
+      try {
+        killTree(child, 'SIGTERM');
+        if (process.platform !== 'win32') setTimeout(() => killTree(child), 3000).unref?.();
+      } catch { /* 组已空 */ }
       emitChange();
       closeHandoff(p);
     }, EXIT_CLOSE_GRACE_MS);
     exitTimer.unref?.();
-  });
+  };
+  // shell 可能在宽限期里就退了(孙进程撑着管道,runBash 还在等 close):exit 早已发过,补挂不到 → 现在就起兜底(Codex 11-21 P1-2)
+  if (child.exitCode !== null || child.signalCode !== null) onExit(child.exitCode);
+  else child.on('exit', (code) => onExit(code));
   const stopTimers = (): void => { clearTimeout(deadline); if (exitTimer) clearTimeout(exitTimer); };
   endListenersOnce(p, stopTimers);
   procs.set(id, p);
@@ -437,7 +448,11 @@ export function waitForOutput(
   const start = Date.now();
   const STEP = 50;
   return new Promise((resolve) => {
-    const done = (): void => { const out = p.output.slice(fromLen); resolve({ output: p.redact ? p.redact(out) : out, status: p.status }); };
+    // 先整段打码再按打码后的前缀长度切:按原始偏移切,跨在 fromLen 上的一段秘密两边都配不上打码表(Codex 11-21 P0-4)
+    const done = (): void => {
+      const out = p.redact ? p.redact(p.output).slice(p.redact(p.output.slice(0, fromLen)).length) : p.output.slice(fromLen);
+      resolve({ output: out, status: p.status });
+    };
     const tick = (): void => {
       const grew = p.output.length > fromLen;
       const idleEnough = Date.now() - p.lastDataAt >= idleMs;

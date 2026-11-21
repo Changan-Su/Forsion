@@ -235,6 +235,7 @@ function runBash(
       }
       handedOff = true;
       settled = true;
+      handoff.claim();
       if (timer) clearTimeout(timer);
       unwatch?.();
       signal?.removeEventListener('abort', onAbort);
@@ -329,7 +330,10 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           startedAt: started, runId: ctx.runId!, toolCallId: ctx.toolCallId!,
           redact: runSecretRedactor(ctx), remoteSeatbelt: wrapped,
         });
-        return truncateBashOutput(redactRunSecrets(ctx, handoffResultText(r.stdout, r.stderr, proc.id, Date.now() - started)));
+        // 有秘密变量时,结果里只放完整的行:半截行可能是一段秘密的开头,剩下半截后到 —— 两截都配不上打码表(Codex 11-21 P0-4)。
+        // 被扣下的那截照样在进程缓冲里,read_process_output 按整段打码后给。
+        const whole = (s: string): string => (proc.redact ? s.slice(0, s.lastIndexOf('\n') + 1) : s);
+        return truncateBashOutput(redactRunSecrets(ctx, handoffResultText(whole(r.stdout), whole(r.stderr), proc.id, Date.now() - started)));
       }
       let out = '';
       if (r.stdout) out += `stdout:\n${r.stdout}\n`;
