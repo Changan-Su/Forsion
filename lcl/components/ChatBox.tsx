@@ -54,20 +54,22 @@ export interface ChatBoxProps {
   inputProps?: Omit<ChatBoxInputProps, 'value' | 'onChange' | 'disabled'>
   beforeInput?: ReactNode
   afterInput?: ReactNode
+  /** Replaces the textarea (an app-level formatting editor). It owns Enter-to-submit; `inputRef` / `inputProps` don't apply. */
+  input?: ReactNode
   controls?: ReactNode
   submitContent?: ReactNode
   submitClassName?: string
 }
 
-export function ChatBox({ value, onValueChange, onSubmit, submitLabel, disabled, submitDisabled, submitOn = 'modifier-enter', className, inputRef, inputProps, beforeInput, afterInput, controls, submitContent, submitClassName }: ChatBoxProps) {
+export function ChatBox({ value, onValueChange, onSubmit, submitLabel, disabled, submitDisabled, submitOn = 'modifier-enter', className, inputRef, inputProps, beforeInput, afterInput, input, controls, submitContent, submitClassName }: ChatBoxProps) {
   const submit = () => { if (!disabled && !submitDisabled) onSubmit() }
   return <ChatBoxSurface className={className}>
     {beforeInput}
-    <ChatBoxInput {...inputProps} ref={inputRef} value={value} disabled={disabled} onChange={e => onValueChange(e.target.value)} onKeyDown={e => {
+    {input ?? <ChatBoxInput {...inputProps} ref={inputRef} value={value} disabled={disabled} onChange={e => onValueChange(e.target.value)} onKeyDown={e => {
       inputProps?.onKeyDown?.(e)
       if (!e.defaultPrevented && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing
         && (submitOn === 'enter' || e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() }
-    }} />
+    }} />}
     {afterInput}
     <ChatBoxToolbar>{controls}<span className="t2c-grow" /><ChatBoxSubmit className={submitClassName} disabled={disabled || submitDisabled} title={submitLabel} aria-label={submitLabel} onClick={submit}>{submitContent}</ChatBoxSubmit></ChatBoxToolbar>
   </ChatBoxSurface>

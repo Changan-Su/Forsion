@@ -23,6 +23,7 @@ const os = require('os')
 const path = require('path')
 const http = require('http')
 const electron = require('./lib/launch-electron.cjs')
+const { skipDisableReason } = require('./lib/disable-reason.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -257,6 +258,7 @@ async function extendCard(sp) {
         // ⑥b 插件卡上 Extend 的开关:读主进程状态(开),拨下 → 落盘 + 待重启;拨回 → 名单清空、提示消失
         const before = await extendCard(sp)
         await before.sw.click()
+        await skipDisableReason(sp) // 拨下先问停用理由(遥测 v3):直接停用
         await sp.waitForTimeout(800)
         const off = await extendCard(sp)
         const offCfg = shellConfig(home).disabledBundles

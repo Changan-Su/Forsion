@@ -5,6 +5,7 @@ import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
  */
 import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
 import { DICTATION_CHANNELS, type DictationState } from '../shared/dictation'
+import { invokePayCenter } from '../shared/telemetryKeys'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -126,6 +127,12 @@ const api = {
     ipcRenderer.on('config:changed', listener)
     return () => { ipcRenderer.removeListener('config:changed', listener) }
   },
+  /** 改设置要重启引擎、但正有任务在跑:设置已存,引擎等任务结束再重启(中断任务续跑方案 B 6.6)。渲染层据此提示一句。 */
+  onBackendRestartDeferred: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('backend:restartDeferred', listener)
+    return () => { ipcRenderer.removeListener('backend:restartDeferred', listener) }
+  },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),
   /** 通用系统通知(所有应用内通知同步发;点击仅聚焦窗口,不强制回跳 Inbox)。 */
@@ -226,11 +233,17 @@ const api = {
   authProviders: (): Promise<Array<{ id: string; loggedIn: boolean }>> => ipcRenderer.invoke('auth:providers'),
   providerLogin: (id: string): Promise<any> => ipcRenderer.invoke('auth:providerLogin', id),
   openAccountCenter: (section?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openAccountCenter', section),
-  openPayCenter: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openPayCenter'),
+  // entry(遥测 v3 契约 §16 / §17):额度操作 / 下单从哪个入口点的,一律追加在通道参数末尾 —— 老 Extend 忽略多出来的参数;
+  // openPayCenter 的 entry 排在 Extend 老签名 (tab, plan, period) 之后,表外的值不带(shared/telemetryKeys payCenterArgs)。
+  // 带了 entry 却回 invalid_*(接收方口径对不上):立刻不带 entry 再开一次,升级按钮不因遥测参数失效(invokePayCenter)。
+  openPayCenter: (opts?: { entry?: string }): Promise<{ ok: boolean }> =>
+    invokePayCenter((...args) => ipcRenderer.invoke('auth:openPayCenter', ...args) as Promise<{ ok: boolean }>, opts),
   accountQuota: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:quota'),
-  accountUseResetCard: (type?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', type),
-  accountBgConvert: (percent: number): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', percent),
-  accountBgAutoMain: (enabled: boolean): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', enabled),
+  // 这三个具名键参数原样转(entry 等追加参数一起转;老 Extend 只看第一个,新 Extend 对表外的 entry 当没给)。老 preload 只转第一个参数:
+  // 热更新到老宿主上的 Tangu 界面 entry 会丢,无害。
+  accountUseResetCard: (...args: [type?: string, entry?: string]): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', ...args),
+  accountBgConvert: (...args: [percent: number, entry?: string]): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', ...args),
+  accountBgAutoMain: (...args: [enabled: boolean, entry?: string]): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', ...args),
   /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。
    *  expectedAccountId(auth:status 的 accountId):只用这个账号发,换了号回 account-changed、不发(Extend 2026-11-07 起;老 Extend 不认 = 照旧)。 */
   submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>

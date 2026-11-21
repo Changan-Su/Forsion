@@ -16,10 +16,12 @@ import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, us
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
-import { turnHasOutput } from './continueTurn'
+import { isInterruptedRunError, isLatestAnswer, isLatestRow, turnHasOutput } from './continueTurn'
+import { isInflightTool } from '../../tangu/inflightTool'
 import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
-import { TURN_RESUME_OPEN } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { tanguQuotaPrompt, tanguQuotaPromptShownOnce } from '../../tangu/telemetry'
+import { TURN_RESUME_OPEN, parseAutoResume, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
 import * as api from '../../services/backendService'
@@ -30,6 +32,7 @@ import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
 import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
+import { refusedBody } from './safetyStop'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
@@ -66,12 +69,22 @@ registerMessages({
   // M1B:别处答的(执行的电脑本机 / 另一台设备 / 消息通道)—— {where} = approval.byHost* / byDevice … 的「在哪」短语
   'chat.approval.update.byApproved': { zh: '{where}批准', en: 'Approved {where}' },
   'chat.approval.update.byRejected': { zh: '{where}拒绝', en: 'Rejected {where}' },
+  // <background_update>(11-20):用户插话时被移到后台的命令结束了
+  'chat.background.update.finished': { zh: '后台命令已结束（退出码 {code}）', en: 'Background command finished (exit code {code})' },
+  'chat.background.update.ended': { zh: '后台命令已结束', en: 'Background command ended' },
+  'chat.background.update.failed': { zh: '后台命令出错', en: 'Background command failed' },
+  'chat.background.update.timedOut': { zh: '后台命令超过时限，已停止', en: 'Background command hit the time limit and was stopped' },
+  'chat.background.update.stopped': { zh: '后台命令已停止', en: 'Background command stopped' },
 })
 const UPDATE_KEY = {
   approved: 'chat.approval.update.approved',
   failed: 'chat.approval.update.failed',
   rejected: 'chat.approval.update.rejected',
 } as const
+const backgroundKey = (r: BackgroundOutcome): string => r.status === 'finished'
+  ? (r.exitCode === null ? 'chat.background.update.ended' : 'chat.background.update.finished')
+  : r.status === 'timed_out' ? 'chat.background.update.timedOut'
+    : r.status === 'failed' ? 'chat.background.update.failed' : 'chat.background.update.stopped'
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
 import { playSendFlight } from './sendFlight'
@@ -94,7 +107,7 @@ import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProac
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, HandoffBlock, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf, handoffIdsOf } from './ChildSessions'
-import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, BACKGROUND_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseBackgroundUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome, type BackgroundOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
@@ -157,6 +170,12 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     tools = []
   }
   for (const [i, ev] of events.entries()) {
+    // 断在半截的调用(没开始 / 结果未知,见 inflightTool.ts):只进通用过程行画成灰色一步,不出任何结果卡(那些卡会把它当成功)
+    if (isInflightTool(ev)) {
+      if (gitRun.length) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] } // 前面跑完的几步 git 照样收口出卡
+      tools.push(ev)
+      continue
+    }
     if (ev.name === 'intelligent_ui') {
       // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
       // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
@@ -282,8 +301,23 @@ registerMessages({
   'chat.retry': { zh: '重试', en: 'Retry' },
   'chat.continue': { zh: '继续生成', en: 'Continue' },
   'chat.continueTip': { zh: '保留已生成的内容，从断开处接着写', en: 'Keep what was generated and pick up where it stopped' },
+  'chat.truncated': { zh: '回答写到长度上限，停在了半句。', en: 'The reply hit the length limit and stopped mid-sentence.' },
+  'chat.lengthResumed': { zh: '回答较长，写到长度上限后自动接着写了一次。', en: 'This reply was long; it hit the length limit and was continued once automatically.' },
   'chat.regenerateTip': { zh: '删掉这一轮，从你的消息重新生成', en: 'Discard this turn and regenerate from your message' },
   'msg.resumed': { zh: '从这里继续生成', en: 'Continued from here' },
+  // 不是用户按停的中断(中断任务续跑方案 B 第 7、8 节):⏸ = 没自动接着做,给「继续生成」;↻ = 引擎重启后已经自动接着做了
+  'msg.interruptedBy.appQuit': { zh: '应用退出时这一轮还没做完', en: 'This task was cut off when the app quit' },
+  'msg.interruptedBy.appUpdate': { zh: '更新打断了这一轮', en: 'An update interrupted this task' },
+  'msg.interruptedBy.engineRestart': { zh: '引擎重启打断了这一轮', en: 'The engine restarted mid-task' },
+  'msg.interruptedBy.accountChange': { zh: '切换账号打断了这一轮', en: 'Switching accounts interrupted this task' },
+  'msg.interruptedBy.engineStop': { zh: '引擎被停止，这一轮还没做完', en: 'The engine was stopped before this task finished' },
+  'msg.interruptedBy.crash': { zh: '引擎意外退出，这一轮还没做完', en: 'The engine stopped unexpectedly before this task finished' },
+  'msg.interruptedBy.workerRestart': { zh: '服务重启打断了这一轮', en: 'A server restart interrupted this task' },
+  'msg.autoResumed.appQuit': { zh: '应用退出时这一轮还没做完，已接着做', en: 'The app quit mid-task — picked up where it left off' },
+  'msg.autoResumed.appUpdate': { zh: '更新打断了这一轮，已接着做', en: 'An update interrupted this task — picked up where it left off' },
+  'msg.autoResumed.engineRestart': { zh: '引擎重启打断了这一轮，已接着做', en: 'The engine restarted mid-task — picked up where it left off' },
+  'msg.autoResumed.crash': { zh: '引擎意外退出，已接着做', en: 'The engine stopped unexpectedly — picked up where it left off' },
+  'msg.autoResumed.workerRestart': { zh: '服务重启打断了这一轮，已接着做', en: 'A server restart interrupted this task — picked up where it left off' },
   'chat.copyError': { zh: '复制错误', en: 'Copy error' },
   'rewind.title': { zh: '回退到这条消息', en: 'Rewind to this message' },
   'rewind.counting': { zh: '正在统计改动…', en: 'Counting changes…' },
@@ -322,12 +356,22 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   )
 }
 
+/** Forsion 额度用尽那条错误(和会员档位锁住的错误分开:只有前者算额度提示,匿名计数 quota_prompt 的 run-error 入口)。 */
+const isQuotaExhaustedError = (error?: string): boolean => !!error && /token_quota_exceeded/i.test(error)
+/** 运行出错那行的额度提示露出:每条消息只计一次(芯片随滚动 / 切会话重挂不重复计);两颗芯片同一条消息共用一次。 */
+function useRunErrorQuotaShown(show: boolean, msgId: string | undefined): void {
+  useEffect(() => { if (show && msgId) tanguQuotaPromptShownOnce('run-error', msgId) }, [show, msgId])
+}
+
 /** 额度用尽 / 会员档位用不了这个模型那两条错误后面的「升级会员」:打开支付中心。宿主没有支付中心(没装云账号扩展)就不给。 */
-export function UpgradeChip({ error }: { error?: string }) {
+export function UpgradeChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
-  if (!error || !(isTierLockedError(error) || /token_quota_exceeded/i.test(error)) || !window.tangu?.openPayCenter) return null
+  const quota = isQuotaExhaustedError(error)
+  const show = !!error && (isTierLockedError(error) || quota) && !!window.tangu?.openPayCenter
+  useRunErrorQuotaShown(show && quota, msgId)
+  if (!show) return null
   return (
-    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => { if (quota) tanguQuotaPrompt('run-error', 'upgrade'); void window.tangu?.openPayCenter?.({ entry: 'run-error' }) }}>
       <ArrowUpRight size={12} /> {t('chat.err.upgrade')}
     </button>
   )
@@ -335,14 +379,16 @@ export function UpgradeChip({ error }: { error?: string }) {
 
 /** 额度用尽那条错误后面的「额度与积分」:打开云账号扩展画的那一页(「用积分继续」开关、重置卡、积分余额都在那)。
  *  扩展没注册这一页(没装 / 旧宿主 / 没登录云账号)就不给。 */
-export function QuotaPageChip({ error }: { error?: string }) {
+export function QuotaPageChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
   const hasPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
     s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'quota' && v.item.category === 'forsion'))
-  if (!error || !/token_quota_exceeded/i.test(error) || !hasPage) return null
+  const show = isQuotaExhaustedError(error) && hasPage
+  useRunErrorQuotaShown(show, msgId)
+  if (!show) return null
   return (
     <button type="button" className="t2-relogin" data-testid="msg-quota-page"
-      onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+      onClick={() => { tanguQuotaPrompt('run-error', 'more'); useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]) }}>
       <Gauge size={12} /> {t('chat.err.quotaPage')}
     </button>
   )
@@ -391,8 +437,72 @@ export interface MessageHandlers {
   onQuote?: (text: string) => void
   /** 回答失败后「重试」:同 /retry(从最后一条用户消息重发)。只读视图不传 → 不出按钮。 */
   onRetry?: () => void
-  /** 回答失败后「继续生成」:不删,发 <turn_resume> 接着写(store.continueRun)。这一轮有产出时才露出;只读视图不传。 */
-  onContinue?: () => void
+  /** 「继续生成」:不删,发 <turn_resume> 接着写(store.continueRun)。这一轮有产出时才露出;只读视图不传。
+   *  reason = 停下的原因(出错 / 写到输出上限 / 用户停下),决定那一行怎么跟模型说;缺省按出错。 */
+  onContinue?: (reason?: TurnResumeReason) => void
+}
+
+/** 中断原因 → 文案 key(模块作用域只存 key,渲染期再 t())。↻ 只有能自动续的几种有文案,其余落回「从这里继续生成」。 */
+const INTERRUPTED_LINE: Record<InterruptReason, string> = {
+  app_quit: 'msg.interruptedBy.appQuit', app_update: 'msg.interruptedBy.appUpdate', engine_restart: 'msg.interruptedBy.engineRestart',
+  account_change: 'msg.interruptedBy.accountChange', engine_stop: 'msg.interruptedBy.engineStop', crash: 'msg.interruptedBy.crash',
+  worker_restart: 'msg.interruptedBy.workerRestart',
+}
+const AUTO_RESUMED_LINE: Partial<Record<InterruptReason, string>> = {
+  app_quit: 'msg.autoResumed.appQuit', app_update: 'msg.autoResumed.appUpdate', engine_restart: 'msg.autoResumed.engineRestart',
+  crash: 'msg.autoResumed.crash', worker_restart: 'msg.autoResumed.workerRestart',
+}
+export const interruptedLineKey = (reason: InterruptReason): string => INTERRUPTED_LINE[reason]
+export const autoResumedLineKey = (reason: InterruptReason): string => AUTO_RESUMED_LINE[reason] || 'msg.resumed'
+
+/**
+ * 带原因的中断行(<turn_interrupted>\n[reason: …],引擎重启后没自动接着做时插的):一条说明原因的细线(⏸,同「已在此处打断」那条的样式),
+ * 它是会话最后一行、会话没在跑时下面给「继续生成」(这一轮有产出)或「重试」(什么都还没产出,两者此时等价)。
+ * 「继续生成」发的 <turn_resume> 带同一个原因:告诉模型不是用户停的。
+ */
+function InterruptedLine({ msg, reason, sessionId, handlers, rootRef }: { msg: UiMessage; reason: InterruptReason; sessionId?: string; handlers?: MessageHandlers; rootRef?: Ref<HTMLDivElement> }) {
+  const { t } = useI18n()
+  const can = useApp((s) => !!sessionId && !s.runningBySession[sessionId] && isLatestRow(s.messagesBySession[sessionId], msg.id))
+  const hasOutput = useApp((s) => can && turnHasOutput(s.messagesBySession[sessionId!]))
+  const canContinue = can && hasOutput && !!handlers?.onContinue
+  const canRetry = can && !hasOutput && !!handlers?.onRetry
+  return (
+    <div ref={rootRef}>
+      <div className="t2-sys t2-interrupted" data-interrupted={reason}>⏸ {t(interruptedLineKey(reason))}</div>
+      {(canContinue || canRetry) && (
+        <div className="t2-retry-row t2-interrupted-actions">
+          {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!(reason)}><StepForward size={13} />{t('chat.continue')}</button>}
+          {canRetry && <button type="button" className="t2-retry-btn lead" data-testid="msg-retry" onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.retry')}</button>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 停在半截、但不是出错的两种(11-15,借鉴 DeepSeek chat-demo 方案 ①):用户按了停止 / 写到输出上限(引擎自动接过一次仍停在半句)。
+ *  原因一行照「⏹ 已停止」的灰字;按钮行照出错那一行(RunErrorRow)。按钮只在这是会话最后一条回答、没在跑、这一轮有产出时出;
+ *  停下的只给「继续生成」(「重新生成」悬停操作条里已有),截断的再给「重新生成」。 */
+function HaltRow({ msg, sessionId, handlers }: { msg: UiMessage; sessionId?: string; handlers?: MessageHandlers }) {
+  const { t } = useI18n()
+  // 不是用户按停的中断(error = interrupted:<原因>):不说「已停止」,也不给会告诉模型「用户停的」那个「继续生成」——
+  // 引擎重启后会补一行说明原因的线(自动接着做,或在那一行上给「继续生成」)
+  const kind: TurnResumeReason | null = msg.status === 'stopped' ? (isInterruptedRunError(msg.error) ? null : 'stopped') : msg.status === 'done' && msg.truncated ? 'length' : null
+  const can = useApp((s) => !!kind && !!sessionId && !s.runningBySession[sessionId]
+    && isLatestAnswer(s.messagesBySession[sessionId], msg.id) && turnHasOutput(s.messagesBySession[sessionId]))
+  if (!kind) return null
+  const canContinue = can && !!handlers?.onContinue
+  const canRegen = can && kind === 'length' && !!handlers?.onRetry
+  return (
+    <>
+      <div className="t2-dim" data-halt={kind}>{kind === 'stopped' ? `⏹ ${t('chat.aborted')}` : t('chat.truncated')}</div>
+      {(canContinue || canRegen) && (
+        <div className="t2-retry-row">
+          {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!(kind)}><StepForward size={13} />{t('chat.continue')}</button>}
+          {canRegen && <button type="button" className="t2-retry-btn" data-testid="msg-retry" title={t('chat.regenerateTip')} onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.action.regenerate')}</button>}
+        </div>
+      )}
+    </>
+  )
 }
 
 /** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
@@ -416,8 +526,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
       <div className="t2-tool err">
         <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
-        <QuotaPageChip error={msg.error} />
-        <UpgradeChip error={msg.error} />
+        <QuotaPageChip error={msg.error} msgId={msg.id} />
+        <UpgradeChip error={msg.error} msgId={msg.id} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>
@@ -676,11 +786,16 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 打断标记(引擎中止时落库的 <turn_interrupted> user 行):给模型看的机器行,对人渲染成一条
     // 轻分隔线,不摆成用户气泡(它不是用户「说」的话)。↑ 历史召回处已同规则滤除。
     if (msg.content.startsWith('<turn_interrupted>')) {
+      // 带原因的(不是用户按停的,中断任务续跑方案 B):说原因 + 「继续生成」;用户按停留下的老式标记照旧
+      const reason = parseInterruptedNotice(msg.content)
+      if (reason) return <InterruptedLine msg={msg} reason={reason} sessionId={runSid} handlers={handlers} rootRef={rootRef} />
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
     }
-    // 「继续生成」行(<turn_resume>,用户点失败行上的「继续生成」发的):同一种轻分隔线,标出续写从哪接上
+    // 「继续生成」行(<turn_resume>,用户点失败行上的「继续生成」发的):同一种轻分隔线,标出续写从哪接上。
+    // 引擎重启后自动接着做插的那一行(第二行 [auto-resume: <原因>])按原因说清是哪种中断、已经接着做了
     if (msg.content.startsWith(TURN_RESUME_OPEN)) {
-      return <div ref={rootRef} className="t2-sys t2-interrupted" data-turn-resume="">↻ {t('msg.resumed')}</div>
+      const auto = parseAutoResume(msg.content)
+      return <div ref={rootRef} className="t2-sys t2-interrupted" data-turn-resume={auto || ''}>↻ {t(auto ? autoResumedLineKey(auto) : 'msg.resumed')}</div>
     }
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
@@ -700,6 +815,27 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
             </div>
           ))}
+        </div>
+      )
+    }
+    // 被移到后台的命令结束了(<background_update>,11-20):同理是机器行,每条命令一行;输出不在这行里(模型自己去读)。
+    // 复用审批结局那一行的排法:退出码 0 记成 approved 那档的绿勾,其余红叉。
+    // 一条都解析不出来(用户自己打了这个标记开头的话)→ 照普通消息画,别画成一行空白
+    const bgRows = msg.content.startsWith(BACKGROUND_UPDATE_OPEN) ? parseBackgroundUpdate(msg.content) : []
+    if (bgRows.length) {
+      const rows = bgRows
+      return (
+        <div ref={rootRef} className="t2-sys t2-apv-update" data-background-update={rows.length}>
+          {rows.map((r) => {
+            const ok = r.status === 'finished' && r.exitCode === 0
+            return (
+              <div key={r.processId} className="t2-apv-update-row" data-status={ok ? 'approved' : 'failed'}>
+                {ok ? <CircleCheck size={12} /> : <CircleX size={12} />}
+                <span className="t2-apv-update-what">{t(backgroundKey(r), { code: String(r.exitCode ?? '') })}</span>
+                <span className="t2-apv-update-preview" title={r.command}>{r.command}</span>
+              </div>
+            )
+          })}
         </div>
       )
     }
@@ -857,7 +993,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museApproval = msg.origin === 'proactive:approval'
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
   const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(msg.content, msg.refused), { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // hand_off_task 挪出去的会话:过程行下面、正文前面单独一小块(不进下面的「从这里分出」)
   const handoffIds = handoffIdsOf(msg.toolEvents)
@@ -919,7 +1055,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
-                const parsed = splitSuggestions(seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
+                // 安全审核拦下:固定文案在终稿末尾 = 最后一个文本段,摘掉改画灰字(同上面无段那支的 refusedBody)
+                const parsed = splitSuggestions(i === lastTextIdx ? refusedBody(seg.text, msg.refused) : seg.text, { streaming: streaming || i !== lastTextIdx, state: fenceState, kinds: fenceKinds })
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
@@ -1075,8 +1212,10 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
+        {msg.status === 'done' && msg.refused && <div className="t2-dim" data-halt="refused">{t('chat.refused')}</div>}
         {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
-        {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
+        <HaltRow msg={msg} sessionId={runSid} handlers={handlers} />
+        {msg.status === 'done' && msg.lengthResumed && !msg.truncated && <div className="t2-dim">{t('chat.lengthResumed')}</div>}
         {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
         {footer}
         {(msg.status === 'done' || msg.status === 'stopped') && (

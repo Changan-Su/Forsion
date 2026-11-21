@@ -152,6 +152,25 @@ class NativeChromeStateTest {
         assertEquals(6, s.spaces.size)
     }
 
+    /**
+     * A phone's fixed dock (Home · Chats · Notes · Apps · Me, 2026-11-19): five pinned cells, so every build draws all five and
+     * no "all" cell; the Apps / Me cells are pages, not Spaces, and a launcher behind them sends a "notice" dot (an older
+     * build drops that kind and still draws the cell).
+     */
+    @Test fun aPhonesFixedDockIsFiveCellsWithNoticeDots() {
+        val s = ChromeState.parse(shell("""[
+          {"id":"home","label":"Home","active":true,"pinned":true},
+          {"id":"tangu","label":"Chats","pinned":true,"badge":{"kind":"running","label":"A session is running"}},
+          {"id":"amadeus","label":"Notes","pinned":true},
+          {"id":"@apps","label":"Apps","pinned":true,"badge":{"kind":"unread","label":"Unread"}},
+          {"id":"@me","label":"Me","pinned":true,"badge":{"kind":"notice","label":"1 to claim"}}
+        ]"""))
+        assertEquals(listOf("home", "tangu", "amadeus", "@apps", "@me"), s.dock.map { it.id })
+        assertTrue(s.more.isEmpty()) // no "all" cell
+        assertEquals(ChromeBadge(ChromeBadge.Kind.NOTICE, "1 to claim"), s.spaces[4].badge)
+        assertEquals(ChromeBadge.Kind.UNREAD, s.spaces[3].badge?.kind)
+    }
+
     /** "More" carries a dot only when the page says so; an older page never sends the field. Cosmetic: a bad label
      *  still draws the dot (unannounced) and never refuses the bar. Pages have no "more" button. */
     @Test fun moreDotIsOptionalAndItsLabelIsWhatAReaderSays() {

@@ -18,6 +18,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'DELETE', path: '/agent/agents/:slug/avatar', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'update Agent avatar' },
   { method: 'GET', path: '/agent/agents/:slug/avatar', access: 'allow', delegatedAdmin: true, src: 'routes/agents.ts', why: 'Agent avatar' },
   { method: 'POST', path: '/agent/agents/:slug/avatar', access: 'deny-remote', delegatedAdmin: true, src: 'routes/agents.ts', why: 'update Agent avatar' },
+  { method: 'GET', path: '/agent/agents/:slug/builtin-update', access: 'deny-remote', src: 'routes/agents.ts', why: 'built-in instructions changed while the user edited them (shows both texts; remote callers get no instructions)' },
+  { method: 'POST', path: '/agent/agents/:slug/builtin-update', access: 'deny-remote', src: 'routes/agents.ts', why: 'keep the edited instructions or switch to the new built-in default (local config page only)' },
   { method: 'GET', path: '/agent/agents/:slug/harness', access: 'allow', src: 'routes/agents.ts', why: 'read HARNESS' },
   { method: 'POST', path: '/agent/agents/:slug/harness/candidate', access: 'deny-remote', src: 'routes/agents.ts', why: 'adopt / dismiss one harness candidate (writes HARNESS.md as the user; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/agents/:slug/harness/rollback', access: 'deny-remote', src: 'routes/agents.ts', why: 'harness rollback (design appendix C)' },

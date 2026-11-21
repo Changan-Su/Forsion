@@ -294,3 +294,24 @@ describe('httpBrain realtime endpoint', () => {
     expect(createHttpBrain({ cloudUrl: 'http://127.0.0.1:3001', token: 't' }).realtime!.endpoint('m').url).toBe('ws://127.0.0.1:3001/api/brain/realtime?model=m&projectSource=tangu');
   });
 });
+
+// 重试升级(中断任务续跑方案 6.7):托管面也要把「本机断网」和 Retry-After 交给重试链
+describe('httpBrain 把断网证据和 Retry-After 带出来', () => {
+  it('fetch 连不上(ENOTFOUND)→ LlmError(0) 的 cause 里留着原错,重试链认得出是断网', async () => {
+    const { isOfflineLlmError } = await import('../../llm/netWait.js');
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed', {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND cloud.test'), { code: 'ENOTFOUND', hostname: 'cloud.test' }),
+    })));
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    const err: any = await brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' } } as any).catch((e) => e);
+    expect(err.status).toBe(0);
+    expect(isOfflineLlmError(err)).toBe(true);
+  });
+  it('云端回 429 + Retry-After → err.retryAfterMs', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response('{"error":"rate limited"}', { status: 429, headers: { 'retry-after': '5' } })));
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    const err: any = await brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' } } as any).catch((e) => e);
+    expect(err.status).toBe(429);
+    expect(err.retryAfterMs).toBe(5000);
+  });
+});

@@ -34,11 +34,14 @@ import { notifyApp } from './notificationStore'
 import { isDelegatedAdmin, useDelegatedApprovalCap } from '../services/delegatedAdmin'
 import { localOnlyMessage } from '../services/localOnly'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
-import { translate } from '../i18n'
+import { registerMessages, translate } from '../i18n'
 import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
 import { resetAccountQuotaScope } from '../services/accountQuota'
 import { provideInternalStore } from '../amadeus/plugins/internalsStores'
 
+registerMessages({
+  'app.restartDeferred': { zh: '设置已保存，当前任务结束后生效。', en: 'Saved. The change takes effect when the current tasks finish.' },
+})
 
 export type { SettingsTab }
 let authGeneration = 0
@@ -537,6 +540,8 @@ export const useApp = create<AppState>((set, get) => ({
       }, BOOT_RETRY_MS)
     }
     window.tangu?.onConfigChanged?.(() => reloadDesktopConfig())
+    // 改设置要重启引擎、但有任务在跑:设置已存,等任务结束再重启(中断任务续跑方案 B 6.6)
+    window.tangu?.onBackendRestartDeferred?.(() => get().toast(get().tr('app.restartDeferred')))
     window.tangu?.onBackendStatus?.((st) => {
       if (st.state === 'ready') {
         lastConnectAuthRejected = false // 重启后是新 token,重新给机会

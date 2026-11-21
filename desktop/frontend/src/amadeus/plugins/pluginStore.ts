@@ -149,6 +149,7 @@ import { createEffectScope, type EffectHandle, type EffectRecord, type EffectSco
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
+import { parseInlineMarkdown } from '../../components/chatbox/chatBoxMarkdown'
 import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared/pluginSurface'
 import { registerEngineHarness } from './engineHarness'
 import { isElectronHost } from '../unified/writeSafety'
@@ -283,8 +284,10 @@ interface PluginState {
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
   init(plugins?: AmadeusPlugin[]): void
-  enable(id: string): void
-  disable(id: string): void
+  /** opts.quiet:调用方自己报了 plugin_lifecycle(带主进程半身的内置包开关),这里不再报。 */
+  enable(id: string, opts?: { quiet?: boolean }): void
+  /** opts.reason:用户手拨停用时选的理由(遥测 v3,可不选);opts.quiet 同上。熔断等自动停用不带。 */
+  disable(id: string, opts?: { reason?: string; quiet?: boolean }): void
   toggle(id: string): void
   /** Reconcile another window's persisted preference without replaying user-side automation effects. */
   syncDisabledPreferences(): void
@@ -2539,28 +2542,36 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
-      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
+      // The formatting editor isn't verified on the phone yet (soft keyboard Enter, Gboard composition): the phone keeps the
+      // textarea and doesn't report 'format'. The reader stays, so stored titles still show formatted there (11-21).
+      chatBoxCapabilities: hostTangu()?.mobile ? CHAT_BOX_CAPABILITIES.filter((c) => c !== 'format') : CHAT_BOX_CAPABILITIES,
+      parseInlineMarkdown: (md) => parseInlineMarkdown(String(md ?? '')),
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
         let cancelled = false, focusPending = false
-        const pending = { ...opts }
+        const noFormat = !!hostTangu()?.mobile // see chatBoxCapabilities: the phone ignores `format`, as an older host would
+        const strip = <T extends { format?: unknown }>(o: T): T => { if (!noFormat || !('format' in o)) return o; const { format: _drop, ...rest } = o; return rest as T }
+        const pending = strip({ ...opts })
+        const early: string[] = [] // format boxes: the value is Markdown, so text typed in before the mount goes in as text
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
         const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
           if (!mine()) { dispose(); return }
           mounted = m.mountPluginChatBox(el, pending)
+          for (const t of early.splice(0)) mounted.insertText(t)
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
         return {
-          update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
+          update(patch) { if (!cancelled) { const p = strip({ ...patch }); Object.assign(pending, p); mounted?.update(p) } },
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
           insertText(text) {
             if (cancelled) return
             if (mounted) mounted.insertText(text)
+            else if (pending.format === 'inline' || pending.format === 'basic') { early.push(String(text)); focusPending = true }
             else { pending.value = (pending.value ?? '') + String(text); focusPending = true }
           },
           dispose,
@@ -3589,13 +3600,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    enable(id) {
+    enable(id, opts) {
       const plugin = get().plugins.find((p) => p.id === id)
       if (!plugin || plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
       if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
       noteExplicitEnable(id) // 用户重开 = 重试
-      if (get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
+      if (!opts?.quiet && get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
       try {
         localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
       } catch {
@@ -3606,11 +3617,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    disable(id) {
+    disable(id, opts) {
       clearNoteRendererReload(id)
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
-      if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
+      if (plugin && !opts?.quiet && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable', ...(opts?.reason ? { reason: opts.reason } : {}) })
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       const before = get().activeIds

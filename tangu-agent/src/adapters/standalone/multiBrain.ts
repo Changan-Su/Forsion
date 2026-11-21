@@ -394,6 +394,8 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           // ponytail: 不记冷却,下一轮仍先试快档(撞 429 只花几百毫秒);频繁撞再加按 retry-after 的冷却。
           const send = async (): Promise<StreamResult> => {
             try { return await sendOnce(); } catch (err) {
+              // 快档 429 的 Retry-After 说的是快档自己的容量;降到标准档是另一份容量,照旧当场重发,不按它等
+              // (按它等 = 白等或整轮失败,评审 #5 这一处不采纳)。标准档再 429 才交给重试链按 Retry-After 处理。
               if (!(err instanceof LlmError && err.status === 429 && !isQuotaExhaustedLlmError(err)) || p[ACCOUNT_MARK] || !downgradeSpeedTier(p)) throw err;
               console.warn(`[multiBrain] ${p.model} 快档被限流(429),降到 ${p.service_tier || p.speed || 'standard'} 重发`);
               return send();

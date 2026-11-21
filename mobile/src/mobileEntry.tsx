@@ -37,6 +37,7 @@ import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
 import { installPhoneGuideHost } from './phoneGuide'
 import { installTapRipple } from './tapRipple'
+import { installPhonePageViews } from './phonePages'
 import { Capacitor } from '@capacitor/core'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
@@ -70,6 +71,8 @@ try {
   if (!Capacitor.isNativePlatform() && !window.tangu?.mobile) installBrowserChrome()
   // 按压反馈:Android App 与网页移动壳里是从落点散开的水波纹(别的端仍是 base.css 那层整块变灰)。
   if (Capacitor.getPlatform() === 'android' || browserChromeInstalled()) installTapRipple()
+  // 手机 Dock 的「应用」「我」两整页(lcl phoneDock.ts):装上之后,画 Dock 的宿主(原生 / 网页)在竖屏单列时是固定五格。
+  installPhonePageViews()
   // 系统文件选择器(window.tangu.pickFiles):原生半屏里点「添加文件」时 WebView 没有用户激活,文件 input 打不开。
   installNativeFilePicker()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。

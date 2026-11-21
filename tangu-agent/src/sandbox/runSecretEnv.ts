@@ -74,10 +74,23 @@ export function redactRunSecrets(ctx: { runId?: string } | undefined, text: stri
   if (!text || !ctx?.runId) return text;
   const e = store.get(ctx.runId);
   if (!e) return text;
-  const pieces = Object.entries(e.env).flatMap(([k, v]) => secretPieces(v.trim()).map((p) => [k, p] as const));
+  return redactWith(e.env, text);
+}
+
+function redactWith(env: Record<string, string>, text: string): string {
+  const pieces = Object.entries(env).flatMap(([k, v]) => secretPieces(v.trim()).map((p) => [k, p] as const));
   let out = text;
   for (const [k, p] of pieces.sort((a, b) => b[1].length - a[1].length)) out = out.split(p).join(`[REDACTED:${k}]`);
   return out;
+}
+
+/** 本 run 秘密值的打码函数**快照**(没有秘密 → undefined)。给活得比 run 久的输出用:run_bash 被移交进后台进程表后,
+ *  run 收尾就清了秘密表(clearRunSecretEnv),之后 read_process_output / 界面读到的输出照样要打码。 */
+export function runSecretRedactor(ctx: { runId?: string } | undefined): ((text: string) => string) | undefined {
+  const e = ctx?.runId ? store.get(ctx.runId) : undefined;
+  if (!e || !Object.keys(e.env).length) return undefined;
+  const env = { ...e.env };
+  return (text) => (text ? redactWith(env, text) : text);
 }
 
 /** 测试用 */

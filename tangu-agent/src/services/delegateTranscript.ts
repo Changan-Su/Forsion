@@ -57,7 +57,7 @@ export async function createDelegateTranscript(id: string, parent: ToolContext, 
 export async function openDelegateTurn(id: string, messageId: string, modelId: string, task: string, agentSlug?: string) {
   const userMessageId = uuidv4();
   await deps().state.insertUserMessage({ id: userMessageId, sessionId: id, modelId, content: task, attachments: null });
-  const message = { messageId, sessionId: id, modelId, content: '', reasoning: '', toolCalls: [] as any[], toolResults: [] as any[], agentSlug };
+  const message = { messageId, sessionId: id, modelId, content: '', reasoning: '', toolCalls: [] as any[], toolResults: [] as any[], agentSlug, origin: undefined as string | undefined };
   let chain = Promise.resolve();
   const save = () => {
     const snapshot = { ...message, toolCalls: [...message.toolCalls], toolResults: [...message.toolResults] };
@@ -76,6 +76,15 @@ export async function openDelegateTurn(id: string, messageId: string, modelId: s
       message.toolResults.push({ tool_call_id: id, name, content: result, isError });
     },
     save,
+    /** 发一次模型请求前记下正文 / 思考写到哪了(安全审核拦下时据此回退)。 */
+    mark() { return { content: message.content.length, reasoning: message.reasoning.length }; },
+    /** 这一发被安全审核拦下(contracts/safetyStop.ts):流进来的正文 / 思考退回到 mark,接一句固定文案,行标 origin=refused。 */
+    refuse(at: { content: number; reasoning: number }, notice: string, origin: string) {
+      const kept = message.content.slice(0, at.content).trimEnd();
+      message.content = kept ? `${kept}\n\n${notice}` : notice;
+      message.reasoning = message.reasoning.slice(0, at.reasoning);
+      message.origin = origin;
+    },
     async finish(content?: string) {
       if (!message.content && content) message.content = content;
       try { await save(); } finally { activeDelegates.delete(id); }

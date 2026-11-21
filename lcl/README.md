@@ -21,7 +21,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 ## Chat Box
 
 - `@lcl/components`：`ChatBox`、`ChatBoxSurface`、`ChatBoxInput`、`ChatBoxToolbar`、`ChatBoxSubmit`。受控输入、伸缩、键盘提交与插槽；没有会话副作用。
-- `desktop/frontend/src/components/chatbox`：接入共享 `ModelPill` 与宿主实时模型目录的 ChatBox、`useChatBoxSelection`。草稿选择局部保存，用户排序 / 隐藏偏好和模型思考档复用现有选择器。
+- `desktop/frontend/src/components/chatbox`：接入共享 `ModelPill` 与宿主实时模型目录的 ChatBox、`useChatBoxSelection`。草稿选择局部保存，用户排序 / 隐藏偏好和模型思考档复用现有选择器。`ChatBoxEditor` 是带格式的输入（Milkdown 按档位组装 `inline` / `basic`，值是 Markdown），经 `ChatBox` 的 `input` 插槽替换文本框；同一套语法的读法 `parseInlineMarkdown` 在 `chatBoxMarkdown.ts`，插件经 `ctx.ui.parseInlineMarkdown` 拿到。
 - `Composer2`：聊天会话编排器，组合上述基础组件并接入附件、引用、命令、语音、运行状态。首页复用该编排器；Coding 项目创建使用提示表单组件，在创建成功后显式移交模型与思考档。
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 - 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。

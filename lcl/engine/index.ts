@@ -26,8 +26,18 @@ export { startOpenDrag } from './WorkspaceHost'
 export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT, useSegDir } from './viewModes'
 export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
-export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout } from './SingleColumnHost'
+export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout, returnFromTrip, phonePageShown } from './SingleColumnHost'
 export { listFirstNow, useListFirst, usePhoneForm } from './listFirst'
+export { beginReturnTrip, returnTripOrigin, subscribeReturnTrip } from './listTrips'
+export {
+  installPhonePages, phonePagesInstalled, usePhonePage, phonePageNow, openPhonePage, closePhonePage, phoneAppsSpaceIds,
+  frequentSpaceIds, storedFrequent, saveFrequent, subscribeFrequent, FREQUENT_MAX, PHONE_APPS, PHONE_ME, PHONE_GLYPHS,
+  PHONE_CHATS_SPACE, PHONE_NOTES_SPACE,
+} from './phoneDock'
+export type { PhonePage } from './phoneDock'
+export { phonePageItems, moreRowLabel } from './moreSheet'
+export type { PhonePageItems } from './moreSheet'
+export { dockPicks } from './spaceDock'
 export { MiniColumnHost } from './MiniColumnHost'
 export { useMiniChrome } from './miniChrome'
 export type { MiniChromePicker } from './miniChrome'
@@ -41,7 +51,7 @@ export { useWorkspace, activeMainPanel, scheduleWorkspaceSave, bootLayoutFellThr
 export type { MainTab, SideTab } from './workspaceStore'
 export { useCommandStore, addCommand, removeCommand, openCommandPalette, openCommandPicker, installHotkeys, commandHotkeyText, setCommandObserver, noteCommandUse, type CommandSource } from './commandRegistry'
 export { useShortcuts, effectiveHotkey, eventToHotkey, formatHotkey, isMacPlatform, isPairHotkey, pairHotkeyOf, trackPair, MOD_PAIR } from './shortcutStore'
-export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBBON_RECENT_MAX } from './ribbonRegistry'
+export { useRibbonStore, addRibbonIcon, removeRibbonIcon, setRibbonActions, RIBBON_RECENT_MAX, useDotted } from './ribbonRegistry'
 /** 拖拽重排的公共语义(悬停谁就顶掉谁);侧栏等 app 层的可排序列表复用同一个,别再各写一份 splice。 */
 export { moveTo, rankIds } from './ribbonRegistry'
 export type { RibbonFolder, RibbonZone } from './ribbonRegistry'
@@ -153,7 +163,7 @@ export {
 export type {
   NativeChromeAction, NativeChromeState, NativeChromeShellState, NativeChromePageState, NativeChromeHiddenState,
   NativeChromeHost, NativeChromeClaim, NativeChromeClaimHandle, NativeChromeShellLabels, NativeChromeShellHandlers,
-  NativeChromeSpace, NativeHaptic, NativeChromeExtras, NativeChromePageAction,
+  NativeChromeSpace, NativeHaptic, NativeChromeExtras, NativeChromePageAction, PhoneGlyph,
 } from './nativeChrome'
 
 export type { ViewLayoutHints } from './layoutCoordinator'

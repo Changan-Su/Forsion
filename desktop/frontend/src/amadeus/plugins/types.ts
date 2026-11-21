@@ -2408,7 +2408,8 @@ export interface PluginContext {
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
      *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
      *  `typeof box.insertText === 'function'` on the returned handle. Later additions that a handle can't reveal
-     *  (an array of `suggest` triggers, the menu opening upward) are listed in `chatBoxCapabilities`. */
+     *  (an array of `suggest` triggers, the menu opening upward, the host's `@` panel via `mentions` / `onMention`) are listed in
+     *  `chatBoxCapabilities`. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -2416,6 +2417,10 @@ export interface PluginContext {
     /** What this host's Chat Box does beyond the options it has always taken (2026-11-04+), see `CHAT_BOX_CAPABILITIES`.
      *  Missing field = none of them: e.g. pass `suggest` as an array only when this includes `'suggestMany'`. */
     readonly chatBoxCapabilities?: readonly import('../../../../shared/chatBox').ChatBoxCapability[]
+    /** 2026-11-21+ (with `chatBoxCapabilities` `'format'`): read a `format: 'inline'` value — e.g. a task title written by that
+     *  Chat Box — as runs of text with their marks, in the same grammar the box writes. Synchronous, never throws.
+     *  `[[wiki]]` runs carry `wiki`; join every `text` for the plain reading (labels, tooltips, notifications, sorting). */
+    parseInlineMarkdown?(markdown: string): import('../../../../shared/chatBox').ChatBoxInlineToken[]
     mountFloatingToc(
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,

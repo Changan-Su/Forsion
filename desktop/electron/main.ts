@@ -50,7 +50,8 @@ import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces, tmpdir } from 'os'
 import { randomUUID } from 'crypto'
-import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus, type EngineStopReason } from './backendManager'
+import { createDeferredRestart } from './engineRestart'
 import { registerBrowserPickIpc } from './browserPick'
 import { registerPageThumbIpc } from './pageThumb'
 import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
@@ -585,6 +586,8 @@ interface TanguStoredConfig {
   activeWindowEnabled: boolean
   /** 有会话运行时阻止电脑闲置休眠(electron/keepAwake.ts)。默认关。 */
   keepAwakeWhileRunning: boolean
+  /** 应用退出 / 更新 / 引擎重启时没做完的任务,下次引擎启动时自动接着做(中断任务续跑方案 B;经 TANGU_AUTO_RESUME 交给引擎)。默认开。 */
+  autoResumeInterrupted: boolean
   /** 点主窗 X 时:'ask' 先问(缺省)/ 'tray' 隐藏到托盘 / 'quit' 真退出(electron/closeAction.ts)。 */
   closeAction: CloseAction
   /** Agent Desk 演出面板:聊天右侧 agent 展示区(编辑自动上台 + desk_present/desk_screenshot 工具)。
@@ -663,6 +666,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   mcpEnabled: false,
   activeWindowEnabled: false,
   keepAwakeWhileRunning: false,
+  autoResumeInterrupted: true,
   closeAction: 'ask',
   agentDeskEnabled: true,
   summaryOpenIn: 'tab',
@@ -703,6 +707,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
   'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
   'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
+  'autoResumeInterrupted', // 桌面专属(拉起托管引擎时经 TANGU_AUTO_RESUME 注入;CLI / TUI 自己的引擎不读这里)
   'closeAction', // 桌面专属(主窗关闭钮由 main 拦)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
@@ -1384,7 +1389,7 @@ async function enableUnitHostFromDoorbell(expires: number, port: number): Promis
   if (Date.now() > expires - 10_000) return false
   await saveConfig({ unitHostEnabled: true })
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
-  if (backend.getStatus().state !== 'ready') await ensureBackend() // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
+  if (backend.getStatus().state !== 'ready') await ensureBackend('engine_restart') // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
   await refreshUnitHost()
   // Clip 在门铃那个固定口上等:互联口就落在它上面,或固定口上已换成转发入口,都算接上了
   return (unitWeb?.port === port || unitEntrance?.port === port) && Date.now() < expires
@@ -1671,17 +1676,28 @@ const coreTangu = createCoreTangu({
 
 // 串行化:连续 config:set(如先改 cloudUrl 再改 sandbox)触发的多次 ensureBackend
 // 排队执行,避免并发 start() 双 spawn/端口竞争。
+// reason(必填,中断任务续跑方案 B):这次若要停掉正在跑的引擎,写进 shutdown-intent.json 的原因 —— 引擎据此把在途任务
+// 记成 interrupted(<原因>),下次启动按门控接着做。defer = 改设置这类重启:有任务在跑就等任务结束再重启(engineRestart.ts),
+// 调用方不等;登录登出、手点重启、要立刻用新引擎的调用方不带。
 let ensureChain: Promise<void> = Promise.resolve()
-function ensureBackend(): Promise<void> {
+function ensureBackend(reason: EngineStopReason, opts?: { defer?: boolean }): Promise<void> {
   if (!PRODUCT.agentBackend) return Promise.resolve() // 产品档案:本变体不捆 agent 托管后端
   if (SANDBOX) return Promise.resolve() // 沙箱不起引擎(设置页里切到托管也不起;契约 plugin-sandbox.md §6)
+  if (opts?.defer) return deferredEngineRestart.request()
+  deferredEngineRestart.cancel() // 排在后面的这次立即重启现读配置,等着的那次一并生效
   ensureChain = ensureChain.then(async () => {
+    // 退出 / 清数据已开始:那边自己带着原因停引擎(清数据只清桌面设置时是 engine_stop),排在队里的这次别抢先用自己的原因停
+    if (isQuitting) return
+    // 先停旧引擎、再读配置(评审 #4):旧进程退出最多要等 5s,这期间存下的设置 / 提供方也要算进这一次 ——
+    // 读在停之前的话,它们得再重启一回。两条分支本来都要停(下面 start 里的 stop 此时手里已没有进程,不再写意图)。
+    await backend.stop(reason)
+    deferredEngineRestart.markCovered() // 到这一刻登记过的改动,都由下面这次读配置 / 拉起带上
     const stored = await loadConfig()
+    backend.setAutoResume(stored.autoResumeInterrupted !== false)
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
       telemetryStartup.noEngine()
-      await backend.stop()
       return
     }
     const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
@@ -1701,12 +1717,29 @@ function ensureBackend(): Promise<void> {
       browserAllowPrivateUrls: stored.browserAllowPrivateUrls,
       browserCommandTimeoutMs: stored.browserCommandTimeoutMs,
       defaultWorkspaceDir,
-    })
+    }, reason)
   }).catch((e) => {
     console.error('[tangu-desktop] ensureBackend failed:', e)
   })
+  deferredEngineRestart.track(ensureChain) // 这次进行中:期间来的「改设置重启」先等它,已被带上的不再排第二次
   return ensureChain
 }
+/** 改设置引起的重启:有任务在跑就等它们都结束(每 5s 问一次 restart-status),引擎没在跑 / 问不到就立即重启。
+ *  等待放在 ensureChain 之外:排在链里会把账号切换、退出都堵在一个忙着的引擎后面。 */
+const deferredEngineRestart = createDeferredRestart({
+  probe: async () => {
+    if (isQuitting) return 'down'
+    const st = backend.getStatus()
+    if (st.state !== 'ready' || !st.url) return 'down'
+    const activity = await readRestartActivity(st.url, backend.getToken())
+    return activity.tasks > 0 ? 'busy' : 'idle'
+  },
+  restart: () => (isQuitting ? Promise.resolve() : ensureBackend('engine_restart')),
+  onDeferred: () => {
+    console.log('[tangu-desktop] engine restart deferred until running tasks finish')
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('backend:restartDeferred')
+  },
+})
 
 /** 所有窗口(主窗 + 独立窗 + mini + floating)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
 /** 台架静默:Playwright 起的实例(或 TANGU_HARNESS_QUIET=1)窗口一律 showInactive —— 不激活 App、不抢用户前台焦点。
@@ -3526,7 +3559,8 @@ app.whenReady().then(async () => {
     assertCredsWritable: assertTanguCredsWritable,
     saveConfig: (patch) => saveConfig(patch),
     loadConfig,
-    ensureBackend,
+    // 登录 / 登出 / 401 登出 / auth.json 被改写:换了账号,旧引擎不能再拿旧身份接着跑 —— 立即重启,记 account_change(不自动续)
+    ensureBackend: () => ensureBackend('account_change'),
     refreshUnitHost,
     renderers: () => [mainWindow, ...miniWindows(), ...detachedWindows.values()]
       .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
@@ -3652,7 +3686,8 @@ app.whenReady().then(async () => {
         },
         ...contentSyncOwnership({
           accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
-          ensureBackend, loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
+          // 认领同步归属要等新引擎起来再写:不延后(engine_restart)
+          ensureBackend: () => ensureBackend('engine_restart'), loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
           dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
         }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
@@ -3692,6 +3727,8 @@ app.whenReady().then(async () => {
       if (st.state !== 'ready' || !st.url) return { tasks: 0, processes: 0, unknown: true }
       return readRestartActivity(st.url, backend.getToken())
     },
+    // 开着「重启后自动接着做」:有任务在跑时弹窗改说「更新完会接着做」,主按钮是「立即更新」(续跑方案 B 第 7 节)
+    autoResume: async () => (await loadConfig()).autoResumeInterrupted !== false,
     confirm: async (options) => {
       showMainWindow()
       if (!mainWindow || mainWindow.isDestroyed()) return false
@@ -3706,7 +3743,9 @@ app.whenReady().then(async () => {
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
         await contentFlush.quit() // 还在静默期里的改动先推上去(最多等 5 秒);冲过了,紧跟着的 before-quit 不再冲
-        await backend.stop()
+        deferredEngineRestart.cancel()
+        // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
+        await backend.stop(install ? 'app_update' : 'app_quit')
         if (install) installUpdate()
         else { app.relaunch(); app.quit() }
       } catch (error) {
@@ -3891,6 +3930,8 @@ app.whenReady().then(async () => {
       // 落盘之后才推,主窗回读 config 时拿到的才是新值。
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', 'dev-commands')
     }
+    // 只改内存镜像、不重启引擎:引擎只在启动时读 TANGU_AUTO_RESUME,下次拉起(含意外退出后的自动重启)就按新值
+    if (patch.autoResumeInterrupted !== undefined) backend.setAutoResume(patch.autoResumeInterrupted !== false)
     if (patch.keepAwakeWhileRunning !== undefined) {
       keepAwakeOn = patch.keepAwakeWhileRunning === true
       keepAwake.refresh() // 运行中切开关:关要立刻放、开要立刻拦,不等下一次上报
@@ -3902,7 +3943,7 @@ app.whenReady().then(async () => {
       'unitHostEnabled', // 开着 = 引擎常驻(即使 mode≠managed),见 ensureBackend
     ]
     if (managedKeys.some((k) => patch[k] !== undefined && patch[k] !== before[k])) {
-      void ensureBackend()
+      void ensureBackend('engine_restart', { defer: true }) // 有任务在跑:设置照存,等任务结束再重启(6.6)
     }
     // 设备互联:开关或云端地址变化 → 重建 unit host 连接。
     if ((patch.unitHostEnabled !== undefined && patch.unitHostEnabled !== before.unitHostEnabled)
@@ -4350,7 +4391,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())
   ipcMain.handle('backend:restart', async () => {
-    await ensureBackend()
+    await ensureBackend('engine_restart') // 用户点的「重启引擎」:立即重启,不延后
     return backend.getStatus()
   })
 
@@ -4584,7 +4625,7 @@ app.whenReady().then(async () => {
     })
     telemetry.count('byokSave') // 匿名遥测只数次数:渠道 id、地址、key 一概不报
     const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend()
+    if (stored.mode === 'managed') void ensureBackend('engine_restart', { defer: true })
     return list
   })
   // 导入本机配置(electron/discovery/providers.ts):打开提供方页时查,最多一分钟一次;导入按 id 在主进程重读,key 不经渲染端
@@ -4605,14 +4646,14 @@ app.whenReady().then(async () => {
     telemetry.count('byokImport', add.length)
     localScan = null
     const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend()
+    if (stored.mode === 'managed') void ensureBackend('engine_restart', { defer: true })
     return list
   })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
     const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
     telemetry.count('byokDelete')
     const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend()
+    if (stored.mode === 'managed') void ensureBackend('engine_restart', { defer: true })
     return list
   })
 
@@ -4913,7 +4954,10 @@ app.whenReady().then(async () => {
     // 电脑历史先停:断订阅、丢缓冲、store 关门、等在途那笔写落定(封顶 10s)(app.exit 不发 before-quit;不停的话 1s 批量落盘
     // 会在删目录途中把 computer-history/events 建回来)。超时没落定的,删完目录后由 afterWipe 等它落定再删一次(见下)。
     const chWipe = computerHistory ? await stopComputerHistoryForWipe(computerHistory) : null
-    await backend.stop() // 释放 state.db 句柄,否则占用删不掉
+    deferredEngineRestart.cancel()
+    // 释放 state.db 句柄,否则占用删不掉。引擎数据要删 = 不写原因(没有下次续跑);只清桌面设置、保留引擎数据 = engine_stop:
+    // 续跑开关随桌面设置一起删了、下次按缺省「开」,不写的话 Windows 强杀后在途任务会按 crash 自动续(评审 #3)。
+    await backend.stop(opts?.tangu ? undefined : 'engine_stop')
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
     await configQueue(async () => {
@@ -5249,7 +5293,8 @@ app.whenReady().then(async () => {
     const stored = await loadConfig()
     // await(不是 void):provider 只在引擎启动时装载一次,IPC 必须等重启完成才返回,
     // 否则渲染层拿到 ok 就去拉模型目录 —— 打的还是正在被杀的旧端口。
-    if (stored.mode === 'managed') await ensureBackend() // 重启让后端加载该 provider
+    // 不延后:渲染层等这次重启做完就去拉模型目录(延后 = 拉到的还是旧引擎、没有这个 provider)
+    if (stored.mode === 'managed') await ensureBackend('engine_restart') // 重启让后端加载该 provider
     return { ok: true, id }
   })
 
@@ -5717,7 +5762,7 @@ app.whenReady().then(async () => {
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
   // auth.json)一连就整片 401,表现为「本地会话列表加载失败 + 假的『登录已过期』」。开窗不等这条
   // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
-  void accountCore.refresh(4000).catch(() => {}).finally(() => { void ensureBackend() })
+  void accountCore.refresh(4000).catch(() => {}).finally(() => { void ensureBackend('engine_restart') }) // 首次拉起:手里没有引擎,原因用不上
   setInterval(() => { void accountCore.refresh().catch(() => {}) }, 24 * 3600_000) // 一直开着不关的也算「在用软件」;auth.json 坏了写回被拒,旧 token 照用
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
@@ -6022,12 +6067,13 @@ app.on('before-quit', (e) => {
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 新同步还在静默期里的改动先推上去(最多等 5 秒;没有要推的 = null,不等)。要在停后端之前:合并、通知引擎都要它在
   const flushing = contentFlush.quit()
-  // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
+  deferredEngineRestart.cancel() // 等着空闲再重启的那次作废:引擎这就停了
+  // 优雅停后端(SIGTERM→5s→SIGKILL);停完再真正退出。发信号前写下 app_quit:在途任务记成 interrupted,下次打开接着做。
   const st = backend.getStatus().state
   if (flushing || st === 'ready' || st === 'starting') {
     e.preventDefault()
     exitChain = (flushing ?? Promise.resolve())
-      .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop() : undefined })
+      .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain
   }

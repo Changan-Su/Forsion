@@ -15,6 +15,7 @@ import { displaySessionTitle } from '../sessionTitle'
 import { HostLocaleProvider, registerMessages, useI18n } from '../i18n'
 import { formatMonthDay, formatTime } from '../format/time'
 import { useAgendaItems } from './DashboardCompactViews'
+import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 import { useInbox } from '../stores/inboxStore'
 
 registerMessages({
@@ -45,7 +46,7 @@ function CalendarCardStatus() {
   if (!next) return null
   const today = next.start.toDateString() === new Date().toDateString()
   const when = next.allDay ? (today ? '' : formatMonthDay(next.start)) : today ? formatTime(next.start) : `${formatMonthDay(next.start)} ${formatTime(next.start)}`
-  return <>{[when, next.title || t('dashcompact.untitled')].filter(Boolean).join(' ')}</>
+  return <>{[when, (next.md ? inlineMarkdownToPlain(next.title) : next.title) || t('dashcompact.untitled')].filter(Boolean).join(' ')}</>
 }
 function InboxCardStatus() {
   const { t } = useI18n()

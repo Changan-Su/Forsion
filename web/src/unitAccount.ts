@@ -1,6 +1,7 @@
 import { AccountChangedError, AccountHttpError, createBrowserAccount, type BrowserIdentity } from './account'
 import { contentStorageKey, setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import type { PluginAccount, PluginAccountStatus } from '../../desktop/frontend/src/amadeus/plugins/types'
+import { quotaEntry } from '../../desktop/shared/telemetryKeys'
 
 const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (n) => n.toString(16).padStart(2, '0')).join('')
 
@@ -166,10 +167,12 @@ export async function installUnitAccount(meta: {
         ? result.value : { status: 0, json: null }
       return { balance: read(results[0]), invite: read(results[1]) }
     },
-    accountUseResetCard: async (type?: string) => {
+    // entry 追加在末尾(遥测 v3):表外的值当没给,绝不因此拒绝
+    accountUseResetCard: async (type?: string, entry?: string) => {
       if (type !== undefined && type !== 'both') return { status: 400, json: { error: 'invalid_type' } }
+      const e = quotaEntry(entry)
       return accountJson('/token-quota/reset-card/use', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'both' }) })
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'both', ...(e ? { entry: e } : {}) }) })
     },
     membershipPlans: () => accountJson('/membership/plans'),
     membershipOfferings: () => accountJson('/payment/offerings'),

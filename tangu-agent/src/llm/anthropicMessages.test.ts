@@ -237,6 +237,17 @@ describe('Anthropic 直连的缓存断点与思考延续性', () => {
     expect(res.usage.prompt_tokens).toBe(10); // 未缓存 7 + 缓存读 3
   });
 
+  it('stop_reason refusal 原样上传成 finishReason refusal(agentLoop 据此换固定文案)', async () => {
+    const sse =
+      `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5 } } })}\n` +
+      `data: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n` +
+      `data: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } })}\n` +
+      `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'refusal' }, usage: { output_tokens: 2 } })}\n`;
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamAnthropicMessages({ apiKey: 'k', baseUrl: 'https://api.anthropic.com', payload: { model: 'claude-x', messages: [] } } as any);
+    expect(res.finishReason).toBe('refusal');
+  });
+
   it('上游没报缓存字段 → cached_tokens 保持 undefined(与「报了 0」分开)', async () => {
     const sse =
       `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5 } } })}\n` +

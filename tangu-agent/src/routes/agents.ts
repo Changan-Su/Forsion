@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN, agentUndeletableReason, listStandIns } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN, agentUndeletableReason, listStandIns, getBuiltinUpdate, resolveBuiltinUpdate, BuiltinUpdateStaleError } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -291,6 +291,36 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
   } catch (e: any) {
     if (e instanceof AgentNotFoundError) return void res.status(404).json({ detail: 'Agent not found' });
     res.status(400).json({ detail: e?.message || 'update agent failed' });
+  }
+});
+
+/** 内置指令有新版本、而用户改过(builtinBaseline.ts):配置页上方的「内置指令改了什么」。没有 = { update: null }。
+ *  只给本机的配置页:云端名册不覆盖内置(没有升级这回事);远端(手机 / 设备页 / 委托管理员)拿不到指令正文,也改不了。 */
+router.get('/agent/agents/:slug/builtin-update', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled() || parseRemoteOrigin(req.headers)) return void res.json({ update: null });
+  if (!ensureLocal(res)) return;
+  try { res.json({ update: await getBuiltinUpdate(req.params.slug) }); }
+  catch (e: any) { res.status(500).json({ detail: e?.message || 'read built-in update failed' }); }
+});
+
+/** 用户拍板:{ action: 'keep' | 'adopt', token }(token = GET 回的那份,核对用户看到的就是现在的样子)。
+ *  200 { agent } / 409 { detail, update }(现状变了,带上现在的提示)/ 404 / 403 远端 / 400 云端或参数不对。 */
+router.post('/agent/agents/:slug/builtin-update', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return void res.status(400).json({ detail: 'Cloud agents have no built-in updates' });
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Built-in instructions can only be changed on this computer' });
+  if (!ensureLocal(res)) return;
+  const action = req.body?.action;
+  const token = req.body?.token;
+  if ((action !== 'keep' && action !== 'adopt') || typeof token !== 'string' || !token) return void res.status(400).json({ detail: 'action must be keep or adopt, with the token from GET' });
+  try {
+    const slug = req.params.slug;
+    const agent = await resolveBuiltinUpdate(slug, action, token);
+    if (agent) agent.cloudSync = agentSyncPermission(slug, agentSyncScope(deps().brain.agentFiles, req.user!.userId)).enabled;
+    res.json({ agent });
+  } catch (e: any) {
+    if (e instanceof AgentNotFoundError) return void res.status(404).json({ detail: 'Agent not found' });
+    if (e instanceof BuiltinUpdateStaleError) return void res.status(409).json({ detail: e.message, update: e.update });
+    res.status(500).json({ detail: e?.message || 'resolve built-in update failed' });
   }
 });
 

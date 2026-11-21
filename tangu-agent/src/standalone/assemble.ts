@@ -26,6 +26,7 @@ import { createProviderRegistry, type DirectProvider } from '../llm/providerRegi
 import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { getRawSection } from '../core/config.js';
 import type { StandaloneConfig } from './config.js';
+import { setCloudTokenSource } from '../services/cloudAccount.js';
 
 /** 读一个 providers JSON(裸数组或 { providers: [...] } 包装);失败/缺失返回 []。 */
 function readProvidersJson(path: string, label: string, warnMissing: boolean): DirectProvider[] {
@@ -125,7 +126,10 @@ export async function setupHost(
  * httpBrain 仍构造(供同步服务调用云端 memory/log 端点),但不再是运行时 memory 来源。
  */
 export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; providers: DirectProvider[] } {
-  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
+  const credential = cloudCredential(cfg);
+  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: credential });
+  // 建 run 时记下当时的云端账号、恢复时核对(换了账号的不续、旧账号排队的不跑):services/cloudAccount.ts
+  setCloudTokenSource(typeof credential === 'function' ? credential : () => credential);
   const providers = loadProviders(cfg);
   const base = withPluginModelProviders(providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain);
   const localMemory = createLocalMemoryBrain();
