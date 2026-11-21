@@ -141,7 +141,7 @@
   background: var(--bg-card);
   transition: left var(--duration-fast, 120ms) var(--ease-surface, ease);
 }
-.am-ai-panel .am-ai-switch.on { background: var(--accent); }
+.am-ai-panel .am-ai-switch.on { background: var(--signal-mark); }
 .am-ai-panel .am-ai-switch.on > span { left: 14px; }
 .am-ai-panel .am-ai-switch:focus-visible,
 .am-ai-panel .am-ai-speak:focus-visible,

@@ -112,6 +112,28 @@ function silentWav(seconds = 1.2) {
   return b
 }
 
+/** 用滚轮把 `text` 滚到屏中间附近(最多 30 下)。 */
+async function wheelTo(win, rootSel, text) {
+  const yOf = () => win.evaluate(({ rootSel, text }) => {
+    for (const root of document.querySelectorAll(rootSel)) {
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      let n
+      while ((n = w.nextNode())) if (n.data.includes(text)) return n.parentElement.getBoundingClientRect().top
+    }
+    return null
+  }, { rootSel, text })
+  const c = await win.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { x: (r.left + r.right) / 2, y: Math.min(r.bottom, innerHeight) - 100 } }, rootSel)
+  await win.mouse.move(c.x, c.y)
+  for (let i = 0; i < 30; i++) {
+    const y = await yOf()
+    if (y == null) throw new Error(`text not found: ${text}`)
+    const mid = (await win.evaluate(() => innerHeight)) / 2
+    if (Math.abs(y - mid) < 200) return
+    await win.mouse.wheel(0, Math.max(-400, Math.min(400, y - mid)))
+    await win.waitForTimeout(80)
+  }
+}
+
 /** 视图里一处露在外面(没被卡盖住、也不在视口外)的点:四个角挨个试。点一下 = 没划出东西。 */
 async function blankIn(win, rootSel) {
   const p = await win.evaluate((sel) => {
@@ -414,6 +436,8 @@ async function main() {
     // ── 滚动:条跟着那段字走(划线菜单方案 B,2026-11-08);滚出可见区只藏不收,滚回来原样出现 ──
     // 负对照(实跑):ViewSelectionBar 里 followRef 恒为 false(滚动 / 盒子变了就收的旧路)→ 这一段红。
     await step('聊天里滚动跟着走', async () => {
+      // 聊天贴底时,脚本一次大跨度改 scrollTop(scrollIntoView 也是)会被弹回去;真人是滚轮滚上去的,这里也用滚轮
+      await wheelTo(win, CHAT, FOLLOW)
       await dragSelect(win, CHAT, FOLLOW)
       const b0 = await barReady(win)
       const d1 = await scrollIn(win, CHAT, -80) // 往上滚 80 = 字往下走 80
