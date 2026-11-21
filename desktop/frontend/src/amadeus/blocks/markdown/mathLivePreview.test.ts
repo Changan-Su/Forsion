@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest'
-import { formulaAtSelection, maskNonMath, mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
+import { formulaAtSelection, maskNonMath, mathLivePreviewPlugin, mdMathSpans, scanMath, unescapeMathSource } from './mathLivePreview'
+import { bgSchema, inlineHtmlMarksRemark } from './marks'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import { bootEditor, roundTrip } from './parseFidelity.testkit'
 import { normalizeFragmentMd } from './MarkdownBlock'
@@ -619,5 +620,30 @@ describe('formulaAtSelection', () => {
       const code = v.state.doc.child(0).nodeSize + v.state.doc.child(1).nodeSize + 1
       expect(at(code + 2, code + 4)).toBeNull()
     } finally { await b.destroy() }
+  })
+})
+
+// 背景色划线连公式一起:渲染件是挂在源码前的 widget,要套上源码整段带着的标记,不然公式那块没有底色。
+describe('formula widget carries the source marks', () => {
+  it('a highlighted inline formula renders inside the same <mark>; partial / unmarked ones stay bare', async () => {
+    const b = await bootEditor('<mark style="background:#fef3a1">$t(\\{n_j\\})$: number</mark>, $a$ and <mark>$b</mark>$ <mark>lead </mark>$c$\n', {
+      extra: [inlineHtmlMarksRemark, bgSchema, mathLivePreviewPlugin()].flat(),
+    })
+    try {
+      const v = b.view
+      v.dom.blur()
+      v.dispatch(v.state.tr) // 失焦 → 全部渲染
+      const rendered = [...v.dom.querySelectorAll('.math-rendered')] as HTMLElement[]
+      expect(rendered.length).toBe(4)
+      const [hl, plain, partial, after] = rendered
+      const mark = hl.closest('mark')
+      expect(mark?.getAttribute('data-hl')).toBe('yellow')
+      expect(mark?.textContent).toContain(': number') // 和后面那段划线同一个 <mark>,底色连成一条
+      expect(plain.closest('mark')).toBeNull()
+      expect(partial.closest('mark')).toBeNull() // 只划了半个公式:不套
+      expect(after.closest('mark')).toBeNull() // 紧跟在一段划线后面、自己没划:不沿用前文的 <mark>
+    } finally {
+      await b.destroy()
+    }
   })
 })

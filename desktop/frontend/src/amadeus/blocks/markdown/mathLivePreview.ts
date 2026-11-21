@@ -7,7 +7,7 @@
 import { $prose, $remark } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
-import type { Node as PMNode } from '@milkdown/kit/prose/model'
+import type { Mark, Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 import { attachCopyButton, attachSourceButton, revealSource } from './sourceToggle'
@@ -991,6 +991,21 @@ export const mathEscapeRemark = $remark('amadeusMathEscapes', () => remarkMathEs
 
 const mathKey = new PluginKey('amadeus-math-live-preview')
 
+/** 渲染后的公式要包进的行内标记(背景色 / 文字色 / 下划线 / 删除线等):公式源码整段都带着的那几个。
+ *  渲染件是挂在源码前的 widget,PM 缺省只给 side ≥ 0 的 widget 套后一段文字的标记;side -1 的拿不到 ——
+ *  于是整段划了背景色,公式那块却是白底。链接、行内代码类标记不套:套上 `<a>` 点公式会跳走。 */
+const WRAP_SKIP = /link|code/i
+export function formulaMarks(doc: PMNode, from: number, to: number): readonly Mark[] {
+  const acc: { marks: readonly Mark[] | null } = { marks: null }
+  doc.nodesBetween(from, to, (n) => {
+    if (!n.isInline) return true
+    acc.marks = acc.marks === null ? n.marks : acc.marks.filter((m) => m.isInSet(n.marks))
+    return false
+  })
+  return (acc.marks ?? []).filter((m) => !WRAP_SKIP.test(m.type.name))
+}
+const marksKey = (marks: readonly Mark[]): string => marks.map((m) => `${m.type.name}${JSON.stringify(m.attrs)}`).join('|')
+
 function buildDecorations(state: EditorState): DecorationSet {
   const focus = editorFocused(state)
   const decos: Decoration[] = []
@@ -1031,10 +1046,15 @@ function buildDecorations(state: EditorState): DecorationSet {
       decos.push(Decoration.inline(from, to, { class: 'math-src-hidden' }))
       // ⚠️ key **不带位置**(评审 P-04):带上 from 的话,文首打一个字,下游每个公式的 key 都变,PM 把它们
       //    整批销毁重建、逐个重跑 KaTeX(120 个公式每键 ~78ms)。位置改由 widget 的 getPos 在点击时现算。
+      // 行内公式套上源码的标记(背景色划线要连公式一起);块公式独占一块,不套。行内的一律显式给 marks(交集空也给 []):
+      // 不给的话 side -1 的 widget 沿用前一段文字的标记 —— `<mark>前文</mark>$x$` 里没划线的公式也被涂上底色(Codex 评审)。
+      const marks = display ? [] : formulaMarks(state.doc, from, to)
       decos.push(Decoration.widget(from, (v, getPos) => renderMath(v, latex, display, getPos), {
         side: -1,
         ignoreSelection: true,
-        key: `m:${display ? 'b' : 'i'}:${latex}`,
+        // 标记进 key:同一公式改了颜色要换一份 widget,PM 按 key 复用时不会重套标记。
+        key: `m:${display ? 'b' : 'i'}:${latex}${marks.length ? `#${marksKey(marks)}` : ''}`,
+        ...(display ? {} : { marks }),
       }))
       if (!display && to === cs + node.content.size) decos.push(inlinePreviewCaret(from, to, `math:${latex}`))
     }

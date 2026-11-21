@@ -1765,6 +1765,10 @@ body.amx-marquee-active * {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+/* 字色跟正文走:浏览器给 <mark> 的缺省字色是纯黑(MarkText),暗色下无色高亮(强调色兜底底)里的字就成了黑字。
+   只放过「无色」与「色板色」两种 —— 这两种的底色都随明暗切换;手写的色板外背景(盘上 `<mark style>`)不随明暗,
+   保留黑字才读得出。 */
+.am-app .ProseMirror mark:is(:not([style]), [data-hl]) { color: inherit; }
 /* 高亮暗色对齐 AFFiNE **v1** 编辑器真值(--affine-text-highlight-* 的 [data-theme=dark] 段;
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
