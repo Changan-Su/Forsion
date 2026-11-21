@@ -25,6 +25,9 @@ import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, local
 import { forsionPluginHasSettings, readKnownPluginSettings } from './pluginSettingsNav'
 import { Markdown } from './Markdown'
 import { SettingsSwitch } from './SettingsPrimitives'
+import { ReasonSwitch, type LifecycleReason } from './PluginReasons'
+import { sendTelemetry } from '../telemetrySend'
+import { telemetryPluginRef } from '../telemetryPluginId'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces, pluginOfSpace } from '../userSpaces'
@@ -213,14 +216,18 @@ const depName = (d: PluginDependency, plugins: AmadeusPlugin[], locale: Loc): st
 /** 卡片与详情页共用的开关动作。开关跟意图(偏好)走:在等前置 / 加载失败的插件开关是「开」的,再点一下是关掉它。
  *  关之前把会跟着暂停的依赖方说清楚;开了却没跑起来(setup 抛错)就地报 —— 宿主只发 Amadeus 吐司,只有主窗渲染,
  *  设置浮窗里拨开关就像没反应。 */
-function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void): void {
+function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void, reason?: LifecycleReason, want?: boolean): void {
   const wasOn = pluginWanted(p)
+  // 停用先问理由:问的这会儿状态可能已经变了(熔断自动停用、别的窗口拨过)—— 已经是想要的状态就什么都不做,别反着拨回去
+  if (want !== undefined && wasOn === want) return
   const name = pluginDisplayName(p, locale)
   if (wasOn) {
     const deps = runningDependents(p.id).map((x) => pluginDisplayName(x, locale))
     if (deps.length && !window.confirm(t('settings.amadeusPlugins.disableDependents', { name, list: deps.join(t('common.listSep')) }))) return
   }
-  usePluginStore.getState().toggle(p.id)
+  // 同 toggle(按意图翻),停用时带上用户选的理由(遥测 v3 plugin_lifecycle.reason)
+  if (wasOn) usePluginStore.getState().disable(p.id, reason ? { reason } : undefined)
+  else usePluginStore.getState().enable(p.id)
   const st = usePluginStore.getState()
   if (!wasOn && !st.isActive(p.id) && st.lastSetupError[p.id]) panelToast(t('pluginhost.setupFailed', { name }), true)
   if (!wasOn) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
@@ -228,7 +235,7 @@ function flipPlugin(p: AmadeusPlugin, t: T, locale: Loc, cascade: () => void): v
 }
 
 /** 普通插件的开关:勾选 = 想开。用户关着、前置又没齐 → 开不了(灰掉,悬停说缺什么)。 */
-const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, onFlip }) => {
+const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: (reason?: LifecycleReason, want?: boolean) => void }> = ({ p, onFlip }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
@@ -238,7 +245,7 @@ const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, o
   const stuck = !!p.blocked || unmet.length > 0
   return (
     <span title={unmet.length ? t('settings.amadeusPlugins.needsDepsToEnable', { list: unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep')) }) : undefined} onClick={(e) => e.stopPropagation()}>
-      <SettingsSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={onFlip} />
+      <ReasonSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={(on, reason) => onFlip(reason, on)} />
     </span>
   )
 }
@@ -437,7 +444,7 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
 export const PluginEnableSwitch: React.FC<{ p: AmadeusPlugin; onEngineReload?: () => void }> = ({ p, onEngineReload }) => {
   const { t, locale } = useI18n()
   if (p.locked) return window.tangu?.setBundleEnabled ? <BundleSwitch p={p} /> : null
-  return <PluginSwitch p={p} onFlip={() => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))} />
+  return <PluginSwitch p={p} onFlip={(reason, want) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)} />
 }
 
 /** 插件设置页「已停用 · 启用」那颗按钮:朝「开」拨(已经想开的不动)。locked 包没有桥就做不了 → false。 */
@@ -649,13 +656,16 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
 
 /** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
  *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
-async function setBundleOn(p: AmadeusPlugin, on: boolean): Promise<void> {
+async function setBundleOn(p: AmadeusPlugin, on: boolean, reason?: LifecycleReason): Promise<void> {
   try {
+    const was = !p.bundleOff
     const { restartPending } = await window.tangu!.setBundleEnabled!(p.id, on)
     usePluginStore.setState((s) => ({ plugins: s.plugins.map((x) => (x.id === p.id ? { ...x, bundleOff: !on, restartPending } : x)) }))
-    // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来)
-    if (on) usePluginStore.getState().enable(p.id)
-    else usePluginStore.getState().disable(p.id)
+    // 匿名遥测 plugin_lifecycle(v3 补漏):locked 包的开 / 关只在这里报一次 —— 重启后它不在停用名单里,store 那边认不出「从关到开」
+    if (was !== on) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(p), action: on ? 'enable' : 'disable', ...(!on && reason ? { reason } : {}) })
+    // 渲染半身跟着走:朝目标拨,别用 toggle(localStorage 里旧的「关」会让它反着来);上面报过了,这里不再报
+    if (on) usePluginStore.getState().enable(p.id, { quiet: true })
+    else usePluginStore.getState().disable(p.id, { quiet: true })
   } catch (e) {
     panelToast(ipcErrorText(e), true)
   }
@@ -664,13 +674,13 @@ async function setBundleOn(p: AmadeusPlugin, on: boolean): Promise<void> {
 const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const { locale } = useI18n()
   const [busy, setBusy] = useState(false)
-  const flip = async (on: boolean): Promise<void> => {
+  const flip = async (on: boolean, reason?: LifecycleReason): Promise<void> => {
     setBusy(true)
-    try { await setBundleOn(p, on) } finally { setBusy(false) }
+    try { await setBundleOn(p, on, reason) } finally { setBusy(false) }
   }
   return (
     <span onClick={(e) => e.stopPropagation()}>
-      <SettingsSwitch data-bundle-switch="" checked={!p.bundleOff} disabled={busy || !!p.blocked} label={pluginDisplayName(p, locale)} onChange={(on) => void flip(on)} />
+      <ReasonSwitch data-bundle-switch="" checked={!p.bundleOff} disabled={busy || !!p.blocked} label={pluginDisplayName(p, locale)} onChange={(on, reason) => void flip(on, reason)} />
     </span>
   )
 }
@@ -798,11 +808,11 @@ const PluginDetail: React.FC<{
   // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
   useEffect(() => { if (on && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id) }, [p, on])
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
-  const toggleHere = (): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))
+  const toggleHere = (reason?: LifecycleReason, want?: boolean): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)
   // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
   // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
   const [askUninstall, setAskUninstall] = useState(false)
-  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean }): Promise<boolean> =>
+  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean; reason?: string }): Promise<boolean> =>
     uninstallForsionPlugin(p, pluginDisplayName(p, locale), opts, { engine: !!cfg, onGone: onBack, onEngineReload })
 
   /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
@@ -1063,7 +1073,7 @@ export const AmadeusPluginsTab: React.FC<{
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
           {p.locked
             ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
-            : <PluginSwitch p={p} onFlip={() => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))} />}
+            : <PluginSwitch p={p} onFlip={(reason, want) => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload), reason, want)} />}
         </div>
       </div>
     )

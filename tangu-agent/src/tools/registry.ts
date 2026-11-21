@@ -11,7 +11,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef, type ToolPluginOwner } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -98,6 +98,7 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   propose_muse_settings: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 10_000 },
   search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  recommend_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
@@ -417,16 +418,41 @@ export function deferredUnlocksFromHistory(
 /** 工具事件上的来源(帮助改进 v2 遥测):MCP 按名字;插件 provider 的工具 → plugin;本 run 的自定义工具和认不出的也当 plugin
  *  (Extend 不发 plugin 的工具名,认不出来的名字宁可不发);其余是内置。 */
 export function toolSourceOf(name: string, ctx: ToolContext): 'builtin' | 'mcp' | 'plugin' {
-  if (name.startsWith('mcp__') || ctx.mcpTools?.has(name)) return 'mcp';
+  return toolOriginOf(name, ctx).source;
+}
+
+/** 工具事件上的来源字段(遥测 v3 契约 §19):builtin / mcp 只有 source;插件 provider 的工具再带 pluginId(注册它的插件 id)
+ *  与 pluginOfficial(plugins/bootstrap 的官方判定)。认不出主人的(本 run 的自定义工具、模型编的名字)只有 source:'plugin'。
+ *  id 原样交出:公开化(market-<UUID> → UUID、非官方不发)在 Extend。 */
+export type ToolOrigin =
+  | { source: 'builtin' | 'mcp' }
+  | { source: 'plugin'; pluginId?: string; pluginOfficial?: boolean };
+
+export function toolOriginOf(name: string, ctx: ToolContext): ToolOrigin {
+  if (name.startsWith('mcp__') || ctx.mcpTools?.has(name)) return { source: 'mcp' };
   const canonical = canonicalToolName(name);
   const origins = new Map<string, 'plugin' | 'core'>();
-  if (!resolveTools(currentProfile(ctx), ctx, origins).has(canonical) || origins.get(canonical) === 'plugin') return 'plugin';
+  const owners = new Map<string, ToolPluginOwner>();
+  if (!resolveTools(currentProfile(ctx), ctx, origins, owners).has(canonical)) return { source: 'plugin' };
+  if (origins.get(canonical) === 'plugin') return pluginOrigin(owners.get(canonical));
   // builtin 只认全局注册的核心 provider(引擎自己的代码);profile 注入的 app 工具等一律当 plugin
   const core = listToolProviders().some((p) => {
     if (p.origin === 'plugin') return false;
     try { const list = p.tools(); return Array.isArray(list) && list.some((t) => t?.name === canonical); } catch { return false; }
   });
-  return core ? 'builtin' : 'plugin';
+  return core ? { source: 'builtin' } : { source: 'plugin' };
+}
+
+const pluginOrigin = (o: ToolPluginOwner | undefined): ToolOrigin =>
+  o?.ownerPlugin ? { source: 'plugin', pluginId: o.ownerPlugin, pluginOfficial: o.official === true } : { source: 'plugin' };
+
+/** 已知是插件工具时补主人(给只拿得到 toolSourceOf 的调用方,如外接引擎的工具桥)。认不出 = {}。 */
+export function toolPluginOwnerOf(name: string, ctx: ToolContext): { pluginId?: string; pluginOfficial?: boolean } {
+  const owners = new Map<string, ToolPluginOwner>();
+  const canonical = canonicalToolName(name);
+  resolveTools(currentProfile(ctx), ctx, undefined, owners);
+  const o = owners.get(canonical);
+  return o?.ownerPlugin ? { pluginId: o.ownerPlugin, pluginOfficial: o.official === true } : {};
 }
 
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */

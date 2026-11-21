@@ -111,10 +111,11 @@ async function main() {
       p = await open(`Top\n\n${format === 'markdown' ? '![pic|200](pic.png)' : (format === 'heading' ? '# ' : '') + '![[pic.png|200]]'}\n\nTail\n`)
       const image = p.locator('.wiki-inline-img').first()
       await image.click(); await pause(p)
-      const hasHandle = await p.locator('.amx-img-resize').count() === 1
+      // `![](…)` 两侧各一枚(2026-11-17 Notion 对齐第 4 条,左把手另带 --left);这里量右缘那枚
+      const hasHandle = await p.locator('.amx-img-resize:not(.amx-img-resize--left)').count() === 1
       check(`${format} click exposes resize handle`, hasHandle)
       if (!hasHandle) { await p.close(); continue }
-      r = await box(p.locator('.amx-img-resize').first())
+      r = await box(p.locator('.amx-img-resize:not(.amx-img-resize--left)').first())
       // Exercise the outer half as well as the center covered by image-select.check.
       await p.mouse.move(r.x + r.width - 2, r.cy); await p.mouse.down()
       await p.mouse.move(r.x + r.width + 58, r.cy, { steps: 8 }); await p.mouse.up(); await pause(p)

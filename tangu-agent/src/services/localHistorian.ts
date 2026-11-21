@@ -30,7 +30,7 @@ import { isStandInSlug } from '../agents/standIn.js';
 import { v4 as uuidv4 } from 'uuid';
 import { completeHistorianTask } from './historianSession.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { claudeThinkingHeadroom } from '../llm/openaiCompat.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
@@ -279,9 +279,11 @@ async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   }
 }
 
-async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): Promise<{ text: string; userText: string; anchorMessageId?: string }> {
+// 同一毫秒落库的几行按落库先后排(#762 同类):中止那轮的半截回答与打断标记多半同毫秒,只按 timestamp 取会让判官读到
+// 「先打断、后回答」。anchorMessageId 取成同毫秒里哪一条都不影响 Dream 回放(它按锚点 timestamp <= 取窗),换口径只为一致。
+export async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): Promise<{ text: string; userText: string; anchorMessageId?: string }> {
   const rows = await query<any[]>(
-    `SELECT id, role, content FROM chat_messages WHERE session_id = ? AND id <> ? ORDER BY timestamp DESC LIMIT ?`,
+    `SELECT id, role, content FROM chat_messages WHERE session_id = ? AND id <> ? ORDER BY ${messageTimeOrder('DESC')} LIMIT ?`,
     [sessionId, excludeId, limit],
   );
   const anchorMessageId = rows[0]?.id ? String(rows[0].id) : undefined;
@@ -990,7 +992,7 @@ async function startAssistDiscussion(opts: {
       try {
         const r = await query<any[]>(
           `SELECT agent_slug FROM chat_messages WHERE session_id = ? AND role IN ('model', 'assistant')
-             AND agent_slug IS NOT NULL ORDER BY timestamp DESC LIMIT 1`,
+             AND agent_slug IS NOT NULL ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`,
           [sessionId],
         );
         const s2 = r[0]?.agent_slug ? String(r[0].agent_slug) : '';

@@ -42,7 +42,9 @@ export function normalizeMarkdown(markdown: string): string {
  *  键容忍 YAML 引号("amadeus_schema": 是合法写法):否则版本闸/升级拒绝全被引号绕过(Codex)。
  *  按 /\r?\n/ 切行(N-1,2026-09-28):remark 的 yaml 节点保留 CRLF 行尾,而 `(.*)$` 越不过 `\r` ——
  *  按 '\n' 切时 CRLF 笔记只认得最后一个键,v3 被判成 v4-plain、跳过升级,首击把分栏布局写坏。 */
-function parseSimpleYaml(s: string): Record<string, string> {
+/** 逐行读顶格 `键: 值`(老版本的 frontmatter 读法,parseFrontmatter 用它)。导出给 page/5 的闸判定:
+ *  老端只读闸 `fm.amadeus_page && major > 3` 读的就是这个结果,闸在不在要按它算(unified/fm.ts)。 */
+export function parseSimpleYaml(s: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const line of s.split(/\r?\n/)) {
     const m = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+)):\s*(.*)$/.exec(line)

@@ -224,8 +224,9 @@ async function act(c: CloudAccountBrain, ctx: ToolContext, args: any): Promise<s
   const a = parseAccountAction(args);
   if (!a.ok) return `Error: ${a.error}`;
   const post = (path: string, body: unknown) => c.request({ path, method: 'POST', body, signal: ctx.signal });
-  const r = a.action === 'use_reset_card' ? await post('/api/token-quota/reset-card/use', { type: 'both' })
-    : a.action === 'move_quota_to_background' ? await post('/api/token-quota/background/convert', { percent: a.percent })
+  // entry = 从哪个入口点的(遥测 v3 契约 §17,服务端随账号记);老服务端忽略多出来的字段
+  const r = a.action === 'use_reset_card' ? await post('/api/token-quota/reset-card/use', { type: 'both', entry: 'agent-tool' })
+    : a.action === 'move_quota_to_background' ? await post('/api/token-quota/background/convert', { percent: a.percent, entry: 'agent-tool' })
     : await post('/api/feedback', { description: a.message });
   if (!ok(r)) {
     const code = errCode(r);

@@ -7,8 +7,85 @@
 /** 渲染层经 preload telemetryReport 报给主进程的种类(契约 §9);主进程 shapeRendererReport 每种一个分支,别的一律丢。 */
 export const RENDERER_REPORT_KINDS = [
   'crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting',
+  // v3(契约 §19):额度提示计数、插件清单、按模型的重新生成 / 停止 / 改了再发、首次运行
+  'quotaPrompt', 'pluginInventory', 'modelCount', 'firstRun',
 ] as const
 export type RendererReportKind = typeof RENDERER_REPORT_KINDS[number]
+
+// ── v3 · 额度(契约 §16 / §17 / §19)──
+/** 额度操作 / 下单请求里带的入口(服务端随账号记)。新接收方对表外的值当没给,绝不因此拒绝请求。 */
+export const QUOTA_ENTRIES = ['chat-banner', 'run-error', 'run-toast', 'avatar-menu', 'muse-settings', 'quota-page', 'agent-tool', 'backpack', 'other'] as const
+export type QuotaEntry = typeof QUOTA_ENTRIES[number]
+/** 表里的入口原样;别的(含 undefined)→ undefined,调用方据此**不带**这个参数(老接收方看到的参数个数和原来一样)。 */
+export const quotaEntry = (v: unknown): QuotaEntry | undefined => (typeof v === 'string' && (QUOTA_ENTRIES as readonly string[]).includes(v) ? v as QuotaEntry : undefined)
+// 其余额度通道 `account:useResetCard('both', entry?)` / `account:bgConvert(percent, entry?)` / `account:bgAutoMain(enabled, entry?)` /
+// `account:pointsAutoDeduct(enabled, entry?)`:调用方把 entry 写在末尾,preload 原样转;老 Extend 只看第一个参数,新 Extend 对表外的当没给。
+/** `auth:openPayCenter` 的通道参数:Extend 的老签名是 (tab?, plan?, period?),entry 排第 4 位;没有合法 entry 就一个参数都不带(同原来)。 */
+export function payCenterArgs(opts?: { entry?: unknown } | null): unknown[] {
+  const e = quotaEntry(opts?.entry)
+  return e ? [undefined, undefined, undefined, e] : []
+}
+/**
+ * 开付款页:带上 entry 发一次;接收方回 { ok: false, error: 'invalid_*' }(口径对不上)就立刻不带 entry 再开一次 ——
+ * 升级按钮绝不因为遥测参数失效。没带 entry 的那次原样返回。invoke = 往 auth:openPayCenter 发、参数原样转。
+ */
+export async function invokePayCenter<R>(invoke: (...args: unknown[]) => Promise<R>, opts?: { entry?: unknown } | null): Promise<R> {
+  const args = payCenterArgs(opts)
+  const r = await invoke(...args)
+  const o = r as { ok?: unknown; error?: unknown } | null | undefined
+  if (args.length && o?.ok === false && typeof o.error === 'string' && o.error.startsWith('invalid_')) return invoke()
+  return r
+}
+/** 匿名计数 quota_prompt 的入口(telemetry-schema.json events.quota_prompt.entry;比上表少 agent-tool / backpack —— 那两处没有提示可露出)。 */
+export const QUOTA_PROMPT_ENTRIES = ['chat-banner', 'run-error', 'run-toast', 'avatar-menu', 'muse-settings', 'quota-page', 'other'] as const
+export type QuotaPromptEntry = typeof QUOTA_PROMPT_ENTRIES[number]
+/** quota_prompt 的计数字段(= 提示上的动作;shown 是露出)。 */
+export const QUOTA_PROMPT_ACTIONS = ['shown', 'dismiss', 'card', 'points', 'upgrade', 'topup', 'bgConvert', 'bgSettings', 'more'] as const
+export type QuotaPromptAction = typeof QUOTA_PROMPT_ACTIONS[number]
+
+// ── v3 · 按模型的计数(model_feedback)与首次运行(first_run)──
+export const MODEL_COUNT_KEYS = ['regenerate', 'stop', 'editResend'] as const
+export type ModelCountKey = typeof MODEL_COUNT_KEYS[number]
+export const PROVIDER_KINDS = ['forsion', 'codex', 'byok', 'local', 'other'] as const
+export type ProviderKind = typeof PROVIDER_KINDS[number]
+/**
+ * 模型 id → 来源类别(model_feedback.providerKind,交给 Extend 的 publicModelId 当「宿主核过的来源」):
+ * 托管只认 `pr-` + 48 位十六进制整串,Codex 订阅只认 `codex/<一段模型名>`,本地 ollama / lmstudio / local,其余自带 key。
+ * 比 Extend 的 providerKindOf 严:Extend 对 codex / forsion 原样放行整串,用户自建的渠道叫 `codex`、`pr-xxx` 时
+ * (`codex/私有空间/模型`、`pr-my-relay/gpt-4o`)这里判成自带 key,Extend 就只留最后一段 —— 渠道名 / 命名空间不出本机。
+ */
+export function providerKindOf(modelId: string | null | undefined): ProviderKind {
+  if (!modelId) return 'other'
+  if (/^pr-[a-f0-9]{48}$/.test(modelId)) return 'forsion'
+  if (/^codex\/[^/]+$/.test(modelId)) return 'codex'
+  if (/^(?:ollama|lmstudio|local)[/:]/i.test(modelId)) return 'local'
+  return 'byok'
+}
+export const RUN_ERROR_CLASSES = ['timeout', 'rate_limit', 'auth', 'network', 'context_length', 'upstream', 'tool', 'aborted', 'quota', 'other'] as const
+export type RunErrorClass = typeof RUN_ERROR_CLASSES[number]
+/**
+ * 运行的报错句子 → 类别(与 Extend errorClassOf 同一规则,另把额度用尽排在限流前面:契约 §20)。只回枚举,原文不出这个函数。
+ * aborted = 用户停下 / 中止。
+ */
+export function runErrorClass(error: unknown, aborted = false): RunErrorClass {
+  if (aborted) return 'aborted'
+  const e = String(error ?? '').toLowerCase()
+  if (!e) return 'other'
+  if (/token_quota_exceeded/.test(e)) return 'quota'
+  if (/abort|cancel/.test(e)) return 'aborted'
+  if (/timeout|timed out|etimedout/.test(e)) return 'timeout'
+  if (/\b429\b|rate.?limit|too many requests|quota/.test(e)) return 'rate_limit'
+  if (/\b40[13]\b|unauthori[sz]ed|forbidden|invalid api key|authentication/.test(e)) return 'auth'
+  if (/context.{0,20}(length|window|too long)|maximum context|too many tokens|prompt is too long/.test(e)) return 'context_length'
+  if (/econn|enotfound|eai_again|socket|network|fetch failed|getaddrinfo/.test(e)) return 'network'
+  if (/\b5\d\d\b|upstream|bad gateway|overloaded|service unavailable/.test(e)) return 'upstream'
+  if (/tool/.test(e)) return 'tool'
+  return 'other'
+}
+
+/** 卸载 / 停用时可选的理由(plugin_lifecycle.reason)。 */
+export const LIFECYCLE_REASONS = ['unused', 'broken', 'slow', 'mistake'] as const
+export type LifecycleReason = typeof LIFECYCLE_REASONS[number]
 
 /** app_counts 的字段(telemetry-schema.json events.app_counts,逐字照抄)。 */
 export const APP_COUNT_KEYS = [

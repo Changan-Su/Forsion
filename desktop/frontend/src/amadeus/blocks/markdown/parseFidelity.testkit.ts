@@ -7,6 +7,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { commonmarkWithIndent } from './paragraphIndent'
+import { withImageCaptionSchema } from './mdImage'
 import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { cjkFriendlyRemark } from './cjkFriendly'
@@ -54,7 +55,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean; extra?: 
         ctx.set(rootCtx, root)
         ctx.set(defaultValueCtx, initial)
       })
-      .use(commonmarkWithIndent)
+      .use(withImageCaptionSchema(commonmarkWithIndent))
       .use(gfmWithAnchoredRules)
       .use(structuralIndentRemark)
       .use(cjkFriendlyRemark)

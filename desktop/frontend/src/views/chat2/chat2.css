@@ -945,6 +945,7 @@
 .t2-tsum-state.attention { color: var(--danger); }
 .t2-tsum-state.error { color: var(--danger); }
 .t2-tsum-state.stopped { color: var(--text-muted); }
+.t2-tsum-state.interrupted { color: var(--text-muted); }
 .t2-tsum-state-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-tsum-count {
   flex-shrink: 0;
@@ -2017,3 +2018,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
   }
 }
+
+/* 带原因的中断行(<turn_interrupted>[reason],中断任务续跑方案 B):细线下面那排「继续生成 / 重试」跟着线居中。
+   .t2-retry-row 本身是给回答气泡用的(左对齐、左边距 -8px),这里 (0,2,0) 抬过它,不靠源码顺序。 */
+.t2-retry-row.t2-interrupted-actions { justify-content: center; margin: 2px 0 0; }

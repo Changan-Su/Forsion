@@ -9,6 +9,12 @@
  *   ⑤ 宿主 → Extend 这一侧(FORSION_TELEMETRY_TRACE 旁路,main.ts):上面这些都交出去了、形状对
  *   ⑥ Extend 第一跳(启动后 60 s)→ 收件桩:onboarding / plugin_install / crash 到了,和宿主交出的逐字段一致;请求里没有凭据、原文
  *   ⑦ 退出:before-quit 把本小时的计数交给 Extend、落进它的 queue.jsonl → 同一个 home 再起:第一跳带上 app_counts / command_use + startup
+ * 契约 v3(§19)另加:
+ *   ④b 新装第一次发消息(桩引擎一条 done 的 run)→ first_run { outcome: done };主窗插件清单(Forsion 插件 + 桩里的引擎插件)→ plugin_inventory;
+ *      quotaPrompt / modelCount 经 preload 交给主进程(表外的入口 / 键被丢)→ 退出时攒成 quota_prompt / model_feedback;
+ *      带 entry 的 openPayCenter 对**当前 EXTEND 检出**照常成功(entry 追加在第四位,前三位 undefined;老 Extend 不看第四位)。
+ *   first_run / plugin_inventory 只在 Extend 报「可发」时才交出:两个负对照里旁路一条都没有。
+ *   收件桩那一侧:EXTEND 的白名单 ≥ 3 才核这四条到了;老 Extend(< 3)核它们一条都没混进批次(HOST_EVENTS 外的丢掉)。
  * 负对照(都要实跑):
  *   NEG=1         不带 FORSION_TELEMETRY=force(= 开发版)→ 宿主照样交出(旁路里有),收件桩一批都收不到、Extend 不落队列。
  *   NEG=signedout 从头到尾不登录(带 force):引导里那一行开关灰着也是关、写「登录后才能开」、详情不弹、Extend 不记看过告知;
@@ -93,8 +99,16 @@ async function main() {
     muse: { enabled: true, modelId: '', restartWindowHours: 1, maxRestartsPerWindow: 3, maxIterationsPerCycle: 20, maxTodosPerWindow: 5,
       supervisorPollMinutes: 5, activeHours: { start: 9, end: 17 }, allowedFolders: [], mode: 'ask', heartbeatMinutes: 120, notify: 'digest', escalateTo: '' },
   }
+  // 「关于你」那屏读 / 写 human/MEMORY.md(11-08 起):桩引擎缺省的应答没有 content,那屏报「读不到你原来的资料」
+  const human = { scope: 'human', path: 'human/MEMORY.md', content: '', version: 'h0', exists: false, updatedAt: null, history: [], maxLength: 2000 }
   const stub = await startStubEngine({ models: [{ id: 'cloud-1', name: 'GPT-6 Luna', provider: 'OpenAI', source: 'forsion', modelType: 'llm' }],
-    override: async ({ path: p }) => (p === '/agent/special/config' ? { config: specialConfig } : p === '/agent/special/muse/intro' ? { ok: true, config: specialConfig } : undefined) })
+    override: async ({ path: p, method }) => (p === '/agent/special/config' ? { config: specialConfig } : p === '/agent/special/muse/intro' ? { ok: true, config: specialConfig }
+      : p === '/agent/human/MEMORY.md' ? (method === 'PUT' ? { document: human, change: null } : human)
+      // 插件清单读引擎插件:一个引擎内置(公开 id)+ 一个用户自己放的(只计个数)
+      : p === '/agent/plugins' && method === 'GET' ? { plugins: [
+        { id: 'forsion-calendar-engine', name: 'Calendar', source: 'builtin', enabled: true, version: '1.0.0', scopes: ['global'], settings: null },
+        { id: 'my-own-engine-plugin', name: 'Mine', source: 'folder', enabled: false, version: '0.1.0', scopes: ['global'], settings: null },
+      ] } : undefined) })
   const shot = async (page, name) => { if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await page.screenshot({ path: path.join(OUT, `${name}.png`) }) } }
   const traced = (event) => readJsonl(trace).filter((e) => e.event === event)
   let app
@@ -191,6 +205,61 @@ async function main() {
     await win.evaluate((h) => { setTimeout(() => { throw new Error(`boom at ${h}/secret/notes.md key sk-abcdefghijklmnopqrstuv "my title"`) }, 0) }, os.homedir())
     await win.waitForTimeout(800)
 
+    // ④b 契约 v3
+    const ACTIVE = !NEG // 两个负对照里 telemetry:get 都报不可发
+    // first_run:新装、会话列表读回来是空的 → 第一次 run 结束(done)交出;不可发时一条都不交
+    let ta = win.locator('.t2c-ta').first()
+    if (!(await ta.isVisible().catch(() => false))) {
+      await win.evaluate(() => localStorage.setItem('forsion_default_space', 'tangu'))
+      await win.reload({ waitUntil: 'domcontentloaded' })
+      ta = win.locator('.t2c-ta').first()
+    }
+    await ta.waitFor({ timeout: 30000 })
+    await ta.fill('hello')
+    await ta.press('Enter')
+    for (const until = Date.now() + 15000; !stub.seen.runs.length && Date.now() < until;) await win.waitForTimeout(200)
+    assert.ok(stub.seen.runs.length >= 1, 'first message started a run')
+    if (ACTIVE) {
+      for (const until = Date.now() + 15000; !traced('first_run').length && Date.now() < until;) await win.waitForTimeout(300)
+    } else await win.waitForTimeout(2000)
+    const firstRun = traced('first_run')
+    if (ACTIVE) {
+      assert.equal(firstRun.length, 1, `one first_run: ${JSON.stringify(firstRun)}`)
+      assert.equal(firstRun[0].props.outcome, 'done'); assert.equal(firstRun[0].props.errorClass, undefined)
+      assert.ok(Number.isInteger(firstRun[0].props.sinceFirstLaunchS) && firstRun[0].props.sinceFirstLaunchS >= 0, `sinceFirstLaunchS = ${firstRun[0].props.sinceFirstLaunchS}`)
+    } else assert.equal(firstRun.length, 0, `not sendable: no first_run handed over: ${JSON.stringify(firstRun)}`)
+    // quota_prompt / model_feedback 的接缝:经 preload 交给主进程;表外的入口(agent-tool 不是提示入口)/ 键被丢
+    await win.evaluate(() => {
+      const r = (k, p) => window.tangu.telemetryReport(k, p)
+      r('quotaPrompt', { entry: 'chat-banner', action: 'shown' }); r('quotaPrompt', { entry: 'chat-banner', action: 'shown' })
+      r('quotaPrompt', { entry: 'chat-banner', action: 'upgrade' }); r('quotaPrompt', { entry: 'agent-tool', action: 'shown' }); r('quotaPrompt', { entry: 'chat-banner', action: 'buy' })
+      r('modelCount', { key: 'regenerate', modelId: 'cloud-1' }); r('modelCount', { key: 'regenerate', modelId: 'cloud-1' })
+      r('modelCount', { key: 'stop', modelId: 'cloud-1' }); r('modelCount', { key: 'like', modelId: 'cloud-1' }); r('modelCount', { key: 'stop', modelId: '' })
+    })
+    // 带 entry 的 openPayCenter × 当前 EXTEND 检出:照常成功、只开一次外部浏览器(桩掉 shell.openExternal,不真开)
+    await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u) } })
+    const pay = await win.evaluate(() => window.tangu.openPayCenter({ entry: 'chat-banner' }))
+    const opened = await app.evaluate(() => globalThis.__opened)
+    if (SIGN_IN) {
+      assert.equal(pay?.ok, true, `openPayCenter with entry accepted: ${JSON.stringify(pay)}`)
+      assert.equal(opened.length, 1, 'opened the pay page once')
+      assert.ok(opened[0].startsWith(`${sink.url}/pay?tab=membership`), 'pay page on the default tab (entry did not shift tab / plan / period)')
+    } else assert.notEqual(pay?.error, 'invalid_tab', `signed out: not rejected for the extra arg: ${JSON.stringify(pay)}`)
+    // plugin_inventory:外部插件读进来 + 20 s 后才读;可发时等它出来,不可发时一条都不交
+    if (ACTIVE) {
+      for (const until = Date.now() + 60000; !traced('plugin_inventory').length && Date.now() < until;) await win.waitForTimeout(1000)
+      const inv = traced('plugin_inventory').map((e) => e.props)
+      const day = new Date().toISOString().slice(0, 10)
+      assert.ok(inv.length >= 2, `plugin_inventory handed over: ${JSON.stringify(inv)}`)
+      assert.ok(inv.every((x) => x.day === day), 'inventory day = UTC today')
+      assert.deepEqual(inv[0], { day, id: 'local', source: 'local', localCount: inv[0].localCount }, 'local summary first')
+      assert.ok(inv[0].localCount >= 1, 'the user engine plugin counted as local')
+      const eng = inv.find((x) => x.id === 'forsion-calendar-engine')
+      assert.deepEqual(eng, { day, id: 'forsion-calendar-engine', source: 'builtin', installed: 1, enabled: 1 }, 'engine builtin listed by id')
+      assert.ok(!JSON.stringify(inv).includes('my-own-engine-plugin'), 'local plugin ids not handed over')
+      assert.ok(inv.every((x) => x.id === 'local' || (x.installed === 1 && (x.enabled === 0 || x.enabled === 1))), 'item shape')
+    }
+
     // ⑤ 宿主 → Extend:旁路里看交出去的
     const onboarding = traced('onboarding')
     assert.equal(onboarding.length, 1, `one onboarding event: ${JSON.stringify(onboarding)}`)
@@ -217,6 +286,16 @@ async function main() {
     assert.deepEqual({ signedIn: view.signedIn, enabled: view.enabled, noticeSeen: view.noticeSeen, packaged: view.packaged, active: view.active },
       { signedIn: SIGN_IN, enabled: true, noticeSeen: true, packaged: !DEV_BUILD, active: !NEG }, 'telemetry gates before sending')
 
+    /** 退出时攒好的 v3 聚合:quota_prompt 按入口一条、model_feedback 按模型一条;表外的没混进来。 */
+    const checkAggregates = () => {
+      const qp = traced('quota_prompt').map((e) => e.props)
+      assert.deepEqual(qp, [{ entry: 'chat-banner', shown: 2, upgrade: 1 }], `quota_prompt at quit: ${JSON.stringify(qp)}`)
+      const mf = traced('model_feedback').map((e) => e.props)
+      assert.equal(mf.length, 1, `one model_feedback: ${JSON.stringify(mf)}`)
+      // 模型 id 原样交给 Extend(由它按 publicModelId 换成公开 id);providerKind 宿主按 Extend 同一规则算:不是 pr- / codex/ / 本地 → byok
+      assert.deepEqual(mf[0], { modelId: 'cloud-1', providerKind: 'byok', regenerate: 2, stop: 1 }, 'model_feedback counts')
+    }
+
     // ⑥ 等 Extend 第一跳(启动后 60 s)
     const deadline = Date.now() + 120_000
     while (!sink.batches.length && Date.now() < deadline) await win.waitForTimeout(2000)
@@ -225,6 +304,9 @@ async function main() {
       assert.ok(!fs.existsSync(queue), DEV_BUILD ? 'dev build queues nothing' : 'signed out queues nothing')
       await app.close(); app = null
       assert.ok(traced('app_counts').length >= 1, 'host still flushed its counts at quit (Extend drops them)')
+      assert.equal(traced('plugin_inventory').length, 0, 'not sendable: no plugin_inventory handed over (waited out the first-hop window)')
+      assert.equal(traced('first_run').length, 0, 'not sendable: still no first_run')
+      checkAggregates()
       console.log(`NEG=${NEG} ok: host handed over ${readJsonl(trace).length} events, sink got 0 batches, no queue file`)
       return
     }
@@ -252,6 +334,7 @@ async function main() {
     assert.equal(sentCrash.props.message, undefined, 'no message field')
     assert.match(sentCrash.props.stack || '', /^\s+at /, 'stack keeps frames only')
     console.log(`sink (launch 1): ${sink.batches.length} batch(es), events ${JSON.stringify(all.map((e) => e.event))}`)
+    // v3 新事件(first_run / plugin_inventory 在 ④b 才交出,赶不赶得上第一跳看机器快慢):两次启动的批次合起来再核
 
     // ⑦ 退出 → 计数落进 Extend 的队列 → 再起一次,第一跳带上
     await app.close(); app = null
@@ -260,6 +343,7 @@ async function main() {
     assert.equal(counts[0].props.searchOpen, 1); assert.equal(counts[0].props.searchCloseEmpty, 1)
     const cmd = traced('command_use').find((e) => e.props.id === 'quick-find' && e.props.source === 'hotkey')
     assert.ok(cmd && cmd.props.n === 1, `command_use quick-find / hotkey: ${JSON.stringify(traced('command_use'))}`)
+    checkAggregates()
     const queued = readJsonl(queue).map((e) => e.event)
     assert.ok(queued.includes('app_counts') && queued.includes('command_use'), `counts survived quit in Extend's queue: ${JSON.stringify(queued)}`)
     sink.batches.length = 0
@@ -277,6 +361,23 @@ async function main() {
     assert.ok(startup && startup.props.startupMs > 0, `second launch startup: ${JSON.stringify(startup?.props)}`)
     console.log(`sink (launch 2): ${JSON.stringify(all2.map((e) => `${e.event}:${e.props.kind || e.props.id || ''}`))}`)
     console.log(`app_counts: ${JSON.stringify(sentCounts[0].props)}`)
+    const both = [...all, ...all2]
+    const v3 = (event) => both.filter((e) => e.event === event)
+    if (schemaV >= 3) {
+      // Extend 白名单 ≥ 3:四种都到了,形状是 Extend 收紧过的(本地插件只剩个数、模型 id 按来源公开)
+      assert.equal(v3('first_run').length, 1, 'first_run arrived once')
+      assert.equal(v3('first_run')[0].props.outcome, 'done')
+      const inv = v3('plugin_inventory').map((e) => e.props)
+      assert.ok(inv.some((x) => x.id === 'local' && x.localCount >= 1) && inv.some((x) => x.id === 'forsion-calendar-engine' && x.source === 'builtin'), `plugin_inventory arrived: ${JSON.stringify(inv)}`)
+      assert.ok(!JSON.stringify(inv).includes('my-own-engine-plugin'), 'local plugin id not sent')
+      assert.deepEqual(v3('quota_prompt').map((e) => e.props), [{ entry: 'chat-banner', shown: 2, upgrade: 1 }], 'quota_prompt arrived')
+      assert.deepEqual(v3('model_feedback').map((e) => e.props), [{ modelId: 'cloud-1', providerKind: 'byok', regenerate: 2, stop: 1 }], 'model_feedback arrived')
+      console.log(`v3 at the sink: first_run ${JSON.stringify(v3('first_run')[0].props)}; plugin_inventory ${inv.length}; quota_prompt / model_feedback ok`)
+    } else {
+      // 老 Extend:宿主推来的 v3 事件不在它的 HOST_EVENTS 里,一条都不混进批次
+      const leaked = both.filter((e) => ['first_run', 'plugin_inventory', 'quota_prompt', 'model_feedback'].includes(e.event))
+      assert.equal(leaked.length, 0, `old Extend (schema ${schemaV}) drops v3 events: ${JSON.stringify(leaked.map((e) => e.event))}`)
+    }
     console.log(`extend ${version}; screenshots → ${OUT || '(none)'}`)
   } finally {
     if (app) await app.close().catch(() => {})

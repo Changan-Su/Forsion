@@ -59,11 +59,12 @@ export function assertMarketplaceRequirements(item: MarketplaceRequirements & { 
 export function marketplaceItemsOf(result: unknown): MarketplaceItem[] {
   try {
     const data = typeof result === 'string' ? JSON.parse(result) : result;
-    if (!data || data.kind !== 'marketplace' || data.version !== 1 || !Array.isArray(data.items)) return [];
+    if (!data || !(data.kind === 'marketplace' || data.kind === 'marketplace_lookup') || data.version !== 1 || !Array.isArray(data.items)) return [];
     return data.items.filter((i: any) => marketplaceId(i?.id) && typeof i.name === 'string' && typeof i.type === 'string' && typeof i.installSlug === 'string').slice(0, 12)
       .map((i: any) => ({ id: i.id, name: i.name.slice(0, 255), type: i.type.slice(0, 32), source: String(i.source || 'zip').slice(0, 16), installSlug: i.installSlug.slice(0, 64), latestVersion: typeof i.latestVersion === 'string' ? i.latestVersion.slice(0, 64) : null, description: typeof i.description === 'string' ? i.description.slice(0, 1500) : '', ...(typeof i.readme === 'string' && data.items.length === 1 ? { readme: i.readme.slice(0, 8000) } : {}), summary: String(i.summary || '').slice(0, 600), author: String(i.author || '').slice(0, 100), tags: Array.isArray(i.tags) ? i.tags.filter((t: unknown) => typeof t === 'string').slice(0, 8).map((t: string) => t.slice(0, 40)) : [], platforms: Array.isArray(i.platforms) ? i.platforms.filter((p: unknown) => typeof p === 'string').slice(0, 7).map((p: string) => p.slice(0, 20)) : [], minAppVersion: typeof i.minAppVersion === 'string' ? i.minAppVersion.slice(0, 64) : null, maxAppVersion: typeof i.maxAppVersion === 'string' ? i.maxAppVersion.slice(0, 64) : null }));
   } catch { return []; }
 }
 
-export const MARKETPLACE_CARDS_CAPABILITY = 'marketplace-cards.v1';
-export const hasMarketplaceCards = (results: Array<{ name?: string; content?: unknown; isError?: boolean }>) => results.some(r => ['search_marketplace', 'get_marketplace_plugin'].includes(r.name || '') && !r.isError && marketplaceItemsOf(r.content).length > 0);
+export const MARKETPLACE_CARDS_CAPABILITY = 'marketplace-cards.v2';
+export const MARKETPLACE_RECOMMENDATION_TOOL = 'recommend_marketplace_plugin';
+export const hasMarketplaceCards = (results: Array<{ name?: string; content?: unknown; isError?: boolean }>) => results.some(r => r.name === MARKETPLACE_RECOMMENDATION_TOOL && !r.isError && marketplaceItemsOf(r.content).length > 0);

@@ -130,6 +130,8 @@ export interface CloudHost {
 export type HostTelemetryEvent = {
   event: 'crash' | 'perf' | 'feature' | 'plugin_install' | 'plugin_deps' | 'plugin_lifecycle' | 'plugin_load'
        | 'update' | 'onboarding' | 'guide_tip' | 'command_use' | 'app_counts'
+       // v3(契约 §19):额度提示计数(按小时、按入口)、插件清单(每 UTC 日、每插件一条)、按模型的计数(按小时)、首次运行(每台一次)
+       | 'quota_prompt' | 'plugin_inventory' | 'model_feedback' | 'first_run'
   ts: string; props: Record<string, unknown>
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>

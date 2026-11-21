@@ -26,6 +26,7 @@ import { museAvailable } from '../features/runtime'
 import { presentResetCardCeremony } from './ResetCardCeremony'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { AccountUnitSection, unitPanelAvailable } from './AccountUnitSection'
+import { quotaPromptTelemetry } from '../telemetrySend'
 
 registerMessages({
   'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
@@ -242,6 +243,9 @@ export const AccountCard: React.FC<{
     void d.retract().then(() => { if (drop.current === d) setMenu(null) })
   }
   const menuOpen = !!menu
+  // 匿名遥测 v3:头像菜单里的额度详情展开 = 额度提示露出一次(展开 / 收起来回点各算一次;同一次展开里重渲染不算)
+  const quotaShown = menuOpen && quotaOpen
+  useEffect(() => { if (quotaShown) quotaPromptTelemetry('avatar-menu', 'shown') }, [quotaShown])
   useEffect(() => {
     if (!menuOpen || !auth?.loggedIn) return
     const changed = (): void => { void refreshRewards() }
@@ -284,11 +288,12 @@ export const AccountCard: React.FC<{
     if (usingCard || !quota) return
     if (!confirmCard) { setConfirmCard(true); return }
     setUsingCard(true)
+    quotaPromptTelemetry('avatar-menu', 'card')
     const gen = accountGen.current
     const before = quota
     const pointsToken = pointsReadToken()
     try {
-      const r = await window.tangu?.accountUseResetCard?.('both')
+      const r = await window.tangu?.accountUseResetCard?.('both', 'avatar-menu')
       if (gen !== accountGen.current) return
       ++quotaRequest.current // 在途的额度 GET 作废:它可能比用卡早读到旧张数
       setMenu(null)
@@ -319,7 +324,7 @@ export const AccountCard: React.FC<{
   const hasBackpackPage = (cloudPages || publicWeb) && pages.backpack
   const hasPointsPage = (cloudPages || publicWeb) && pages.points
   const openPayCenter = window.tangu?.openPayCenter
-  const upgrade = openPayCenter ? () => { void openPayCenter() }
+  const upgrade = openPayCenter ? () => { quotaPromptTelemetry('avatar-menu', 'upgrade'); void openPayCenter({ entry: 'avatar-menu' }) }
     : publicWeb && pages.membership && window.tangu?.marketList
       ? () => useApp.getState().openMarket(undefined, { storeView: 'forsion-extend:membership', nonce: Date.now() })
       : null
@@ -354,11 +359,9 @@ export const AccountCard: React.FC<{
     logout: loggedIn ? { id: 'logout', label: t('sidebar.account.logout'), icon: <LogOut size={14} />, danger: true, run: () => { setMenu(null); void logout() } } : null,
   })
 
-  /** Android:额度与已存账号先取回(各自最多等 3 秒,与 Web 菜单同一套口径),再呈现原生半屏。
-   *  原生菜单不能就地刷新,所以等一下而不是先画「加载中」;超时就照实写「加载中」/「无法加载已登录账号」,不丢行。
-   *  没有原生宿主 → false(调用方开 Web 浮层);宿主呈现失败 → 回落 Web 浮层。 */
-  const openNativeMenu = (el: HTMLElement): boolean => {
-    if (!nativeSheetPresenter()) return false
+  /** 菜单的几节:额度、已存账号、积分先取回(各自最多等 3 秒),再按 accountItems 排成几节。原生半屏(openNativeMenu)和
+   *  手机「我」页(经 accountChip.sections)同一份。期间登录态变了 / 又要了一次 → null(这一份作废)。 */
+  const loadSections = (): Promise<{ sections: SheetMenuSection[]; title?: string } | null> => {
     setQuotaErr(false)
     setQuota(null)
     const request = ++quotaRequest.current
@@ -374,8 +377,8 @@ export const AccountCard: React.FC<{
       : Promise.resolve({ accounts: [], failed: false, loaded: false })
     clearRewards()
     const rewardsP = auth?.loggedIn ? within(refreshRewards(), emptyAccountRewards()) : Promise.resolve(emptyAccountRewards())
-    void Promise.all([quotaP, accountsP, rewardsP]).then(([qr, ar, rr]) => {
-      if (request !== quotaRequest.current) return true // 期间登录态变了 / 又点了一次:这一份作废
+    return Promise.all([quotaP, accountsP, rewardsP]).then(([qr, ar, rr]) => {
+      if (request !== quotaRequest.current) return null // 期间登录态变了 / 又点了一次:这一份作废
       if (qr.q) { setQuota(qr.q); publishAccountQuota(qr.q) } else if (qr.failed) setQuotaErr(true)
       const it = accountItems(qr.q, qr.failed, rr)
       const switcher = accountSwitcherModel({ ...ar, busy: loggingIn, onSelect: (id) => void login(id), onAdd: () => void login(), t })
@@ -385,8 +388,17 @@ export const AccountCard: React.FC<{
         ...(switcher ? [{ title: switcher.title, items: switcher.items, ...(switcher.failedNote ? { footer: switcher.failedNote } : {}) }] : []),
         { items: it.logout ? [it.logout] : [] },
       ]
-      return runNativeSheetMenu({ ...(it.head ? {} : { title: loggedIn ? display : t('sidebar.account.notSignedIn') }), sections })
-    }).then((handled) => { if (!handled) openMenu(el) })
+      return { sections, ...(it.head ? {} : { title: loggedIn ? display : t('sidebar.account.notSignedIn') }) }
+    })
+  }
+  /** Android:额度与已存账号先取回(各自最多等 3 秒,与 Web 菜单同一套口径),再呈现原生半屏。
+   *  原生菜单不能就地刷新,所以等一下而不是先画「加载中」;超时就照实写「加载中」/「无法加载已登录账号」,不丢行。
+   *  没有原生宿主 → false(调用方开 Web 浮层);宿主呈现失败 → 回落 Web 浮层。 */
+  const openNativeMenu = (el: HTMLElement): boolean => {
+    if (!nativeSheetPresenter()) return false
+    void loadSections()
+      .then((menu) => (menu ? runNativeSheetMenu({ ...(menu.title ? { title: menu.title } : {}), sections: menu.sections }) : true))
+      .then((handled) => { if (!handled) openMenu(el) })
     return true
   }
   const showMenu = (el: HTMLElement): void => { if (!openNativeMenu(el)) openMenu(el) }
@@ -420,10 +432,13 @@ export const AccountCard: React.FC<{
   const anchorRef = useRef<HTMLElement | null>(null)
   const activateRef = useRef(toggleFrom)
   activateRef.current = toggleFrom
+  const sectionsRef = useRef(loadSections)
+  sectionsRef.current = loadSections
   useEffect(() => {
     const mine: AccountChip = {
       label: stateLabel, loggedIn, initial, ...(picture ? { avatar: picture } : {}),
       activate: (anchor) => { const el = anchor ?? anchorRef.current; if (el) activateRef.current(el) },
+      sections: () => sectionsRef.current().then((menu) => menu?.sections ?? null),
     }
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }
@@ -510,7 +525,7 @@ export const AccountCard: React.FC<{
               </button>
             )}
             {hasQuotaPage && (
-              <button className="ap-item ap-sub-item" onClick={() => { setMenu(null); openCloudPage('quota') }}>
+              <button className="ap-item ap-sub-item" onClick={() => { quotaPromptTelemetry('avatar-menu', 'more'); setMenu(null); openCloudPage('quota') }}>
                 <span>{t('sidebar.account.menu.more')}</span><span className="grow" /><ChevronRight size={12} />
               </button>
             )}
