@@ -404,6 +404,14 @@ describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
       expect(bodies(f).map((b: any) => b.speed)).toEqual(['fast', undefined]);
     });
 
+    it('429 带 Retry-After:那是快档自己的容量,降到标准档当场重发,不按它等', async () => {
+      const ra = (sec: string) => new Response(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Rate limit reached for fast tier' } }), { status: 429, headers: { 'content-type': 'application/json', 'retry-after': sec } });
+      const f = vi.fn().mockResolvedValueOnce(ra('120')).mockResolvedValueOnce(sse());
+      vi.stubGlobal('fetch', f);
+      expect((await send('openai/gpt-6-luna')).content).toBe('ok');
+      expect(bodies(f).map((b: any) => b.service_tier)).toEqual(['fast', undefined]);
+    });
+
     it('额度用完的 429 不降档(那是账单问题,降了也没用)', async () => {
       const f = vi.fn().mockResolvedValueOnce(err(429, 'You exceeded your current quota'));
       vi.stubGlobal('fetch', f);
