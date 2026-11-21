@@ -24,7 +24,9 @@ import { join, relative } from 'node:path'
 // `<embed>/<object>`。**这是防误用的护栏,不是沙箱** —— 铁了心要绕(动态拼标签名、innerHTML、
 // 插件运行时自己 mount)绕得过去;它的职责是让**顺手写下的** iframe 在 CI 里立刻变红。
 const SRC = join(__dirname)
-const BAD = /<iframe|<embed[\s/>]|<object[\s/>]|srcDoc=|['"]iframe['"]/
+// `<embed` / `<object` 紧跟在标识符后面是 TS 泛型(`new WeakSet<object>()`、`Map<object, X>`),不是标签;
+// JSX 标签前面只会是空白、`(`、`>`、`{` 这类,所以用反向断言把「前一个字符是标识符」的排除掉。
+const BAD = /<iframe|(?<![\w$])<embed[\s/>]|(?<![\w$])<object[\s/>]|srcDoc=|['"]iframe['"]/
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -37,6 +39,13 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe('网页宿体', () => {
+  it('守卫正则:TS 泛型 <object> / <embed> 不报,JSX 标签仍报', () => {
+    for (const ok of ['const marginHandled = new WeakSet<object>()', 'const m: Map<object, number> = new Map()', 'useRef<embed>(null)'])
+      expect(BAD.test(ok), ok).toBe(false)
+    for (const bad of ['<object data={url} />', 'return (<object data="x.pdf">', '{show && <embed src={u}/>}', '<div><object>', '<iframe src={u} />', 'srcDoc={html}', "const F = 'iframe' as any"])
+      expect(BAD.test(bad), bad).toBe(true)
+  })
+
   it('渲染层不得新增未豁免的 <iframe> / srcDoc', () => {
     const offenders: string[] = []
     for (const file of walk(SRC)) {
