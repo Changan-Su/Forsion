@@ -133,14 +133,15 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
       "summary": "按尺寸与层级规则排一张活动海报。",
       "tags": ["海报", "排版"], "icon": "icons/poster.png", "readme": "# 海报排版\n…",
       "minAppVersion": "2.13.8",
-      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "path": "skills/poster" }
+      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "commit": "3b1f0c9e5a7d2e4b6c8a0f1e3d5b7a9c2e4f6a8b", "path": "skills/poster" }
     }
   ]
 }
 ```
 
 - `type` 与商店投稿同一套：`skill` / `amadeus-plugin` / `plugin` / `agent` / `space` / `theme`。`id` 在目录内唯一，`^[a-z0-9][a-z0-9-]{0,47}$`，**发出去就别改**：装进本机的目录名、更新时认的都是它。
-- `package` 四选一：`{ "github", "ref", "path"? }`（下这个 ref 的仓库归档，`path` 只取其中一个目录）；`{ "npm", "version", "integrity"? }`（版本必须等于条目的 `version`，没写 `integrity` 时按 registry 记录的 sha512 校验）；`{ "url", "sha256" }`（必须带 sha256）；`{ "forsionGit": "owner/repo", "ref", "path"? }`（Forsion Git 私有仓：服务端按装的人的账号下这个 ref 的整仓归档，`path` 只取其中一个目录；装的人要登录、要对这个仓库有读权限；`ref` 写分支、标签或提交号，不存在会报「没有那个分支或标签」）。
+- `package` 四选一：`{ "github", "ref", "path"? }`（下这个 ref 的仓库归档，`path` 只取其中一个目录）；`{ "npm", "version", "integrity"? }`（版本必须等于条目的 `version`，没写 `integrity` 时按 registry 记录的 sha512 校验）；`{ "url", "sha256" }`（必须带 sha256）；`{ "forsionGit": "owner/repo", "ref", "path"? }`（Forsion Git 私有仓：服务端按装的人的账号下这个 ref 的整仓归档，`path` 只取其中一个目录；装的人要登录、要对这个仓库有读权限；`ref` 写分支、标签或提交号，不存在会报「没有那个分支、标签或提交」）。
+- **钉提交（`commit`，2026-11-21 起）**：GitHub 和 Forsion Git 两种包可以加 `commit`（40 位小写十六进制的完整提交号）。写了就按这个提交下载，并用归档自带的提交号（`git archive` 写在 zip 注释里的那个）核对，对不上不装；`ref` 本身写成 40 位提交号也算钉住。不写 `commit` 时，往分支或标签推一次，之后新装的人拿到的代码就变了、目录里的版本号却没变，所以建议发布时一并写上。`ref` 照旧必填：老版本 App 不认识 `commit`，会照 `ref` 装。`commit` 写错（短提交号、不是字符串）这一条会被跳过，不会退回去按 `ref` 装。没钉的条目，装完会把实际装到的提交记进出处；同一个版本号换了提交，自动更新会停下等用户点（这个核对查的是「下错了提交」，不是防伪造的校验值）。
 - 相对路径的 `icon` 按目录所在位置解析（npm 和 Forsion Git 私有仓没有可公开访问的位置，写完整的 `https://` 地址）。最多读 1000 条、单条 README 64 KB，坏条目跳过不影响其他条。包里 manifest 的版本与平台要求照样生效，和商店里的条目一样。
 - 更新：改目录里的 `version` 和 `package`。商店按用户的自动更新设置照常更新；**包的出处变了（换了仓库、npm 包名或下载域名）自动更新会停下**，等用户自己点。
 - 装进本机的身份是 `src-<来源哈希>-<条目 id>`，`requiresPlugins` 的 `market` 字段认不到来源里的条目。用户第一次从某个来源安装、以及每装一个会运行代码的条目（插件、Agent、Space）前，商店会在详情页侧栏让用户确认一次；来源里的东西标着「未经 Forsion 审核」。

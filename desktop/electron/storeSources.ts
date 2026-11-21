@@ -24,7 +24,7 @@ import { forsionAccountId } from '../shared/forsionAccount'
 import { registryOrder, resolveLatest, timeoutSignal } from '../shared/npmRegistry'
 import { planZipFiles } from '../shared/marketPackage'
 import {
-  canonicalSource, isPublicHttpsUrl, declaredSourcesOf, isSourceId, MAX_INDEX_BYTES, packageOrigin, parseSourceInput, parseStoreIndex, pickText,
+  canonicalSource, isCommitId, isPublicHttpsUrl, declaredSourcesOf, isSourceId, MAX_INDEX_BYTES, packageOrigin, parseSourceInput, parseStoreIndex, pickText,
   sourceCardId, sourceInstallSlug, splitSourceCardId, STORE_INDEX_FILE, StoreIndexError,
   type DeclaredStoreSource, type LocalText, type StoreIndex, type StoreIndexItem, type StorePackage, type StoreSourceRef,
   type StoreSourceCard, type StoreSourceCatalog, type StoreSourceInfo, type StoreSourceInstall,
@@ -35,7 +35,8 @@ type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<strin
 
 interface UserSource { id: string; uri: string; title?: LocalText; addedAt: number }
 interface PluginSource { id: string; pluginId: string; declId: string; uri: string; title: LocalText; icon?: string }
-interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string }
+/** `commit` = the commit a GitHub / Forsion Git package was installed from (absent: not known, e.g. installed before it was kept). */
+interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string; commit?: string }
 interface State { user: UserSource[]; declared: PluginSource[]; disabled: string[]; trusted: string[]; installs: InstallRecord[] }
 
 /** Where Forsion Git reads go: the Forsion server and the signed-in account's token. null = not signed in. */
@@ -45,6 +46,8 @@ export interface SourceDownload {
   info: { type: string; installSlug: string; downloadUrl: string; source: string; version: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] }
   buf: Buffer
   origin: string
+  /** GitHub / Forsion Git: the commit the archive was made from (null when the archive doesn't say). */
+  commit?: string | null
 }
 
 const FRESH_MS = 10 * 60_000
@@ -122,6 +125,23 @@ async function readCapped(res: Response, max: number): Promise<string> {
     chunks.push(value)
   }
   return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
+ * The commit id `git archive` writes as the zip comment (GitHub's and Gitea's archives both carry it); null when the
+ * comment is absent or isn't a full commit id. Read before `subtreeZip`, which builds a new zip without it.
+ * The archive reports this itself: it catches "not the commit the catalog names", not a forged archive.
+ */
+export function archiveCommit(buf: Buffer): string | null {
+  const EOCD = 22
+  for (let i = buf.length - EOCD, end = Math.max(0, buf.length - EOCD - 0xffff); i >= end; i--) {
+    if (buf.readUInt32LE(i) !== 0x06054b50) continue
+    const len = buf.readUInt16LE(i + 20)
+    if (i + EOCD + len !== buf.length) continue
+    const c = buf.subarray(i + EOCD).toString('latin1').trim()
+    return isCommitId(c) ? c : null
+  }
+  return null
 }
 
 /** Cut one folder out of a repository archive (GitHub wraps everything in `<repo>-<ref>/`, Gitea in `<repo>/`). */
@@ -542,12 +562,19 @@ export function createStoreSources(o: {
     return viaGit && !!o.forsionSignedIn && !o.forsionSignedIn()
   }
 
-  async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void, allowLocal: boolean): Promise<{ buf: Buffer; url: string }> {
+  /** A pinned package must come back as that commit; an unpinned one reports the commit it turned out to be. */
+  const checkCommit = (pkg: { commit?: string }, got: string | null, strict: boolean): string | null => {
+    if (pkg.commit && (got ? got !== pkg.commit : strict)) throw new Error('install: package commit mismatch')
+    return pkg.commit ?? got
+  }
+  async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void, allowLocal: boolean): Promise<{ buf: Buffer; url: string; commit?: string | null }> {
     const mirror = await o.mirror()
     const fetchFn = (u: string, init: { signal: AbortSignal }) => o.fetchFor(u)(u, init)
     if (pkg.kind === 'forsion-git') {
       const a = await gitAccess().catch((e: StoreIndexError) => { throw new Error(`resolve: ${e.code}`) })
-      const url = gitUrl(a, 'archive', { repo: pkg.repo, ref: pkg.ref })
+      // Pinned: ask for the commit itself (the server and Gitea take a full commit id where a ref goes).
+      const at = pkg.commit ?? pkg.ref
+      const url = gitUrl(a, 'archive', { repo: pkg.repo, ref: at })
       // The server's refusal carries a reason code; downloadZip only knows "HTTP 4xx", so keep the code and rethrow it.
       let refused = ''
       const authed: FetchFn = async (u, init) => {
@@ -556,13 +583,17 @@ export function createStoreSources(o: {
         return res
       }
       const zip = await downloadZip([url], authed, onProgress, ZIP_MAGIC).catch((e) => { throw refused ? new Error(`resolve: ${refused}`) : e })
+      // The archive comes from the signed-in Forsion server, asked for that commit: a missing comment isn't refused here
+      // (a different one is). GitHub archives can come through third-party mirrors, so there it must be present.
+      const commit = checkCommit(pkg, archiveCommit(zip), false)
       // Gitea's archive wraps everything in `<repo>/` (one top folder): subtreeZip strips it like GitHub's.
-      return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url: `forsion-git:${pkg.repo}@${pkg.ref}` }
+      return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url: `forsion-git:${pkg.repo}@${at}`, commit }
     }
     if (pkg.kind === 'github') {
-      const url = `https://github.com/${pkg.repo}/archive/${pkg.ref}.zip`
+      const url = `https://github.com/${pkg.repo}/archive/${pkg.commit ?? pkg.ref}.zip`
       const zip = await downloadZip(downloadCandidates(url, mirror, o.githubProxy?.() || ''), fetchFn, onProgress, ZIP_MAGIC)
-      return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url }
+      const commit = checkCommit(pkg, archiveCommit(zip), true)
+      return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url, commit }
     }
     if (pkg.kind === 'url') {
       const zip = await downloadZip([pkg.url], guardedFetch(allowLocal), onProgress, ZIP_MAGIC)
@@ -592,13 +623,20 @@ export function createStoreSources(o: {
     const origin = packageOrigin(it.package)
     // Automatic updates only follow a package whose origin and type match what the user installed. No record of
     // that (a crash between install and the write, a failed write) counts as "moved": the user updates by hand.
+    const rec = opts.auto ? state.installs.find((x) => x.cardId === cardId) : undefined
     if (opts.auto) {
-      const rec = state.installs.find((x) => x.cardId === cardId)
       if (!rec || rec.origin !== origin || rec.type !== it.type) throw new Error('resolve: source-package-moved')
     }
-    const { buf, url } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}), localSource(refOf(s)))
+    // The same version number from a different commit is not an update the user agreed to: stop and let them do it.
+    // (The updater only fetches newer versions; this is the backstop. A record without a commit is "not known", not "changed".)
+    const sameVersionOtherCommit = (commit: string | null | undefined) => isCommitId(rec?.commit) && !!commit && rec.version === it.version && commit !== rec.commit
+    if (it.package.kind === 'github' || it.package.kind === 'forsion-git') {
+      if (sameVersionOtherCommit(it.package.commit)) throw new Error('resolve: source-package-moved')
+    }
+    const { buf, url, commit } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}), localSource(refOf(s)))
+    if (sameVersionOtherCommit(commit)) throw new Error('resolve: source-package-moved')
     return {
-      buf, origin,
+      buf, origin, ...(commit !== undefined ? { commit } : {}),
       info: {
         type: it.type, installSlug: sourceInstallSlug(s.id, it.id), downloadUrl: url, source: it.package.kind === 'npm' ? 'npm' : it.package.kind === 'github' ? 'github' : 'zip',
         version: it.version, ...(it.minAppVersion ? { minAppVersion: it.minAppVersion } : {}), ...(it.maxAppVersion ? { maxAppVersion: it.maxAppVersion } : {}),
@@ -608,8 +646,9 @@ export function createStoreSources(o: {
   }
 
   /** summary / author are copied in so "Installed" can still describe the item after its source is gone. */
-  async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string }): Promise<void> {
-    await save((s) => { s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...r, at: Date.now() }] })
+  async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string; commit?: string | null }): Promise<void> {
+    const { commit, ...rest } = r
+    await save((s) => { s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...rest, ...(isCommitId(commit) ? { commit } : {}), at: Date.now() }] })
   }
   async function forget(type: string, slug: string): Promise<void> {
     await load()
