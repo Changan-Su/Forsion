@@ -23,7 +23,7 @@ vi.mock('../core/db.js', () => ({
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { validateStarters, setStarters, markStarter, listActiveStarters, buildStarterHint, starterKey, resolveNoteRefs, MAX_STARTERS } from './museStarters.js';
+import { validateStarters, setStarters, markStarter, listActiveStarters, buildStarterHint, starterKey, resolveNoteRefs, locateLabel, MAX_STARTERS } from './museStarters.js';
 
 const cal = { text: '明天 10:00 的「产品周会」还没有议程。按本周开发日志起一份议程。', source: { kind: 'calendar', label: '产品周会', ref: '2026-10-26' } };
 const note = { text: '「蓬洲云同步简化方案」三天没动了。把剩下的待定项列成清单。', source: { kind: 'note', label: '蓬洲云同步简化方案', ref: 'Projects/蓬洲云同步简化方案.md' } };
@@ -51,6 +51,34 @@ describe('validateStarters', () => {
   ])('拒:%s', (_name, raw, msg) => {
     const v = validateStarters(raw);
     expect('error' in v && v.error).toMatch(msg);
+  });
+
+  // 11-20 生产遥测:set_chat_starters 四成调用失败,大头是 label 对不上句子(夹具是编的句子)
+  it('label 只差空白 / 大小写 / 全半角 / 引号书名号 → 收,label 换成句子里那段原文(桌面按 indexOf 画链接)', () => {
+    const rows = [
+      { text: '核对“支持 FIM 补全吗”这次配置,整理哪些模型能用。', source: { kind: 'session', label: '支持FIM补全吗', ref: 's-1' } },
+      { text: '继续看《Lattice Notes》第三章的推导。', source: { kind: 'note', label: 'lattice notes', ref: 'Notes/lattice.md' } },
+      { text: '把 ＡＰＩ 草案的错误码表补完。', source: { kind: 'calendar', label: '「API 草案」' } },
+    ];
+    const v = validateStarters(rows);
+    expect('starters' in v && v.starters.map((s) => s.source.label)).toEqual(['支持 FIM 补全吗', 'Lattice Notes', 'ＡＰＩ 草案']);
+    if ('starters' in v) for (const s of v.starters) expect(s.text.includes(s.source.label)).toBe(true);
+  });
+  it('locateLabel:原样在 → 它自己;差的是字不是格式 → null', () => {
+    expect(locateLabel('明天的产品周会', '产品周会')).toBe('产品周会');
+    expect(locateLabel('Review the Q3 plan', 'q3   PLAN')).toBe('Q3 plan');
+    expect(locateLabel('明天的产品周会', '周会纪要')).toBeNull();
+    expect(locateLabel('anything', '「」')).toBeNull(); // 全是不算数的字符 = 没给 label
+    // 一个字展开成几个(⑩ → 10):不许从展开中间开始 / 结束,往后接着找
+    expect(locateLabel('Review the ⑩ plan, then open 1.', '１')).toBe('1');
+    expect(locateLabel('Review the ⑩ plan', '１')).toBeNull();
+  });
+  it('muse 类(没有可打开的东西)label 对不上 → 照收、原样留着,不再整组拒收;可链接的几类照旧拒', () => {
+    const own = { text: 'Every Friday, list three things that went well this week.', source: { kind: 'muse', label: 'Weekly review routine' } };
+    const v = validateStarters([cal, own]);
+    expect('starters' in v && v.starters[1].source).toEqual({ kind: 'muse', label: 'Weekly review routine' });
+    const linked = validateStarters([{ ...own, source: { kind: 'calendar', label: 'Weekly review routine' } }]);
+    expect('error' in linked && linked.error).toMatch(/verbatim.*exact words the sentence uses for that calendar/);
   });
 });
 

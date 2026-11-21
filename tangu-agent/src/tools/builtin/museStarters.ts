@@ -28,7 +28,7 @@ export const museStartersProvider: ToolProvider = {
             '"Tomorrow\'s 10:00 product sync has no agenda yet. Draft one from this week\'s dev log." ' +
             'Ground each one in something concrete you saw — a calendar event, a note, a todo, a recent session, a web page — and name it in source.label: ' +
             'the label must appear verbatim in the text, and the app turns it into a link (so keep it short: the event or note title, not a sentence). ' +
-            'Use kind "muse" for something you propose yourself, such as a recurring routine. ' +
+            'Use kind "muse" for something you propose yourself, such as a recurring routine (there is nothing to open, so its label is only highlighted). ' +
             'Prefer timely things the user would actually do in a chat; do not repeat your todos or what is already waiting in your direct chat. ' +
             'Keep a starter until it stops being relevant — swapping them every cycle makes the page jumpy.',
           parameters: {
