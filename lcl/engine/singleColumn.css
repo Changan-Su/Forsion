@@ -528,11 +528,13 @@
 
 /* ── 手机五格 Dock 的「应用」「我」(phoneDock.ts,2026-11-19 方向 E 第 1 步):盖在壳第一层上的一整页,页面由平台画。
    夹在抽屉(z3)与状态栏那条渐变(z5)之间:正文滚到状态栏底下照样有那层底色;上下让开胶囊和 Dock(--mb-top / --mb-bottom)。
+   和抽屉同一档 z3,靠 DOM 先后压过它:这一页是 .mb-body 后面的兄弟,.mb-body 不自成叠放上下文(没有 z-index / transform /
+   isolation),抽屉与它在同一个上下文里比,同档时后出现的在上。别改回 4 —— 0–3 才是局部叠放顺序,再大的数字算层级(check:zindex)。
    底下那层的浮层(视图 / Space 作用域,z20 / z100)会压过它 —— 页开着时藏起来(只动浮层自己那棵子树)。放文件末尾(DESIGN §7.2)。 */
 .mb-phonepage {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  z-index: 3;
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--bg, #fff);
