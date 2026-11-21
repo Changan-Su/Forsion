@@ -37,6 +37,7 @@ export interface SettingsSearchEntry {
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'workspace-dir', tab: 'general', sub: 'g-basic', anchor: 'workspace-dir', labelKey: 'settings.workspace.label', keywords: '工作目录 工作区 目录 workspace folder directory', needs: ['stored'] },
   { id: 'keep-awake', tab: 'general', sub: 'g-basic', anchor: 'keep-awake', labelKey: 'settingsmodal.keepAwake.title', keywords: '休眠 睡眠 唤醒 sleep awake', needs: ['stored'] },
+  { id: 'auto-resume', tab: 'agents', sub: 'ag-roster', anchor: 'auto-resume', labelKey: 'settingsmodal.autoResume.title', keywords: '续跑 接着做 中断 重启 恢复 resume interrupted restart', needs: ['stored', 'desktop'] },
   { id: 'close-action', tab: 'general', sub: 'g-basic', anchor: 'close-action', labelKey: 'settingsmodal.closeAction.title', keywords: '关闭 退出 托盘 后台 close quit tray background', needs: ['stored'] },
   { id: 'backend-mode', tab: 'general', sub: 'g-conn', anchor: 'backend-mode', labelKey: 'settings.backend.modeLabel', keywords: '后端 托管 外部 backend managed external', needs: ['desktop'] },
   { id: 'sandbox', tab: 'general', sub: 'g-runtime', anchor: 'sandbox', labelKey: 'settings.sandbox.label', keywords: '沙箱 docker sandbox', needs: ['stored', 'managed'] },

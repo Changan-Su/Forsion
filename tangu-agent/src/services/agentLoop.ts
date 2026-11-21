@@ -34,12 +34,16 @@ import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
 import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
-import { LENGTH_RESUME_CHECK } from '../contracts/turnResume.js';
+import { LENGTH_RESUME_CHECK, autoResumeMarker, interruptedNoticeMarker, type InterruptReason } from '../contracts/turnResume.js';
+import { isRecoveryHost, createRowWriter, markLiveRow, unmarkLiveRow, harmlessSideEffect, CALL_NOT_STARTED_RESULT, type ToolInflight } from './runProgress.js';
+import { readShutdownIntent, clearShutdownIntent } from './shutdownIntentStore.js';
+import { claimInterruptedRun, commitNotice, commitResume, derivedId, ensureUserRow, intentReasonForOwner, pickResumeModel, reasonFromError, repairDanglingResumes, resumeBlocker, runAgeFlags, runInput, staticResumeBlocker } from './runResume.js';
+import { accountChanged } from './cloudAccount.js';
 import { standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
-import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
+import { getRun, createRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns, completeRunWithMessage } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolOriginOf, type ToolContext, type ToolOrigin } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
@@ -280,6 +284,10 @@ const reasonOf = (runId: string): { reason?: string } => {
   const r = abortReasons.get(runId);
   return r ? { reason: r } : {};
 };
+/** 不是用户按停的中断(中断任务续跑方案 B):drainRunsForExit 按「为什么停」记(app_quit / app_update / engine_restart /
+ *  account_change / engine_stop)。只记在退出那一刻还在跑、且没有别的中止原因的 run;先到先得(SIGTERM 之后的 disconnect 不改写)。
+ *  runLoop 收尾据此把 run 记成 interrupted 而不是 aborted(本机恢复宿主才这样,云端 worker 照旧)。 */
+const interruptReasons = new Map<string, InterruptReason>();
 
 export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Promise<boolean> {
   const task = runTasks.get(runId);
@@ -308,13 +316,15 @@ export async function runControlledOperation<T>(runId: string, sessionId: string
   try { return await task; }
   finally {
     signal.removeEventListener('abort', cancel);
-    abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);
+    abortControllers.delete(runId);runSession.delete(runId);runTasks.delete(runId);abortReasons.delete(runId);interruptReasons.delete(runId);
     setTimeout(() => cleanup(runId), 30_000).unref();
   }
 }
 
 /** 入队一个 run：空闲则立刻起，否则排队等当前 run 跑完。同步 check-and-set（set 前无 await），单线程下无竞态。 */
 export function enqueueRun(sessionId: string, runId: string): void {
+  // 同一个 run 在本进程只排一次(评审 #1):外部 PG 不记持有者,启动恢复可能把请求刚入队的那一行再认领入队一次
+  if (runSession.has(runId)) return;
   runSession.set(runId, sessionId);
   if (!sessionActive.has(sessionId)) {
     sessionActive.set(sessionId, runId);
@@ -354,6 +364,22 @@ export function startRun(runId: string): void {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
+    // 退出时(drainRunsForExit 记了原因)还在准备阶段 = 主循环还没开跑、什么都没做(连用户这句都还没落库):
+    // 退回 queued,下次启动按「持有者已死的排队行」认领后照原输入起跑 —— 从没开跑的 run 重跑不会重复任何副作用。
+    if (aborted && interruptReasons.has(runId) && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)) {
+      console.warn(`[agent-core] run preparation interrupted run=${runId} (${interruptReasons.get(runId)}): left queued for the next start`);
+      try {
+        await updateRunStatus(runId, 'queued').catch(() => {});
+      } finally {
+        const sid = runSession.get(runId);
+        abortControllers.delete(runId);
+        steerQueue.delete(runId);
+        runSession.delete(runId);
+        if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
+        setTimeout(() => cleanup(runId), 30_000);
+      }
+      return;
+    }
     const status = aborted ? 'aborted' : 'failed';
     const message = aborted ? 'aborted' : err?.message || String(err);
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
@@ -376,7 +402,7 @@ export function startRun(runId: string): void {
     runTasks.delete(runId);
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
-    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); interruptReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
     if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
   });
@@ -498,6 +524,15 @@ function releaseRefusedRun(runId: string, sessionId: string): void {
 
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
   try {
+    // 执行入口原子认领 queued → running(评审 #1):这一行已经不是 queued(另一个队列项 / 另一个引擎已经跑了、或已终态)就不再执行,
+    // 否则同一行会按原输入跑第二遍。存储没有这个能力(云端 worker)= 照旧。
+    const claim = deps().state.claimRunStart;
+    if (typeof claim === 'function' && !(await claim.call(deps().state, runId))) {
+      console.warn(`[agent-core] run ${runId} is no longer queued; not running it again`);
+      const sid = runSession.get(runId);
+      if (sid) releaseRefusedRun(runId, sid);
+      return;
+    }
     const run = await getRun(runId);
     if (run) {
       const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
@@ -876,10 +911,25 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   }
 }
 
+/**
+ * 取消请求当场落库(评审 #2):abortRun 只在内存里记「为什么停」,终态要等半截回答、检查点、事件排空后才写。按停之后马上退出 / 被强杀,
+ * 重启只看到 running,会按 app_quit / crash 自动续跑 —— 用户按掉的事又被做了一遍。这一列让启动恢复先认「有人要它停」,按 aborted 收尾。
+ * 只在本机恢复宿主上写(只有它会续跑);本机 SQLite 的 query 是同步执行的,调用返回时这一行已经写好。写失败只记日志。
+ * kind:'user' = 用户按停;'cancel' = 级联 / 管理端 / 插件取消;其余 = abortRun 的 reason(如 remote_estop)。
+ */
+function persistCancelRequest(runId: string, kind: string): void {
+  if (!isRecoveryHost()) return;
+  void query(
+    `UPDATE agent_runs SET cancel_requested = ? WHERE id = ? AND cancel_requested IS NULL AND status IN ('queued', 'running')`,
+    [kind.slice(0, 32), runId],
+  ).catch((e: any) => console.warn(`[agent-core] run ${runId} 取消请求落库失败:`, e?.message || e));
+}
+
 /** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。
  *  opts.reason(P1-K2):写进终态 error 事件的 reason 字段('remote_estop' = 被那台电脑急停)。先到先得,不覆盖已记的原因。 */
 export function abortRun(runId: string, opts?: { reason?: string; byUser?: boolean }): void {
   if (opts?.reason && !abortReasons.has(runId) && (abortControllers.has(runId) || runSession.has(runId))) abortReasons.set(runId, opts.reason);
+  if (abortControllers.has(runId) || runSession.has(runId)) persistCancelRequest(runId, opts?.byUser ? 'user' : opts?.reason || 'cancel');
   const ac = abortControllers.get(runId);
   if (ac) {
     // byUser = 用户自己按的停(停止键 / TUI Esc / 通道里的停止指令),不是团队级联、急停或通道下线。只对在跑的 run 记:
@@ -946,31 +996,142 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
   }
 }
 
-const INTERRUPTED_DETAIL =
-  'The engine restarted while this run was in progress, so it was stopped here instead of starting over (that would repeat actions already taken). Send a message to continue.';
-
-/** 跑到一半就没了持有者的 run(崩溃 / 退出 / 更新):标失败 + 补一条终态事件,不从头重跑。 */
-async function terminalizeInterruptedRun(runId: string): Promise<void> {
+/** 持有者已死、行还停在 running 的 run(中断任务续跑方案 B 之前叫 orphaned / failed):现在记 interrupted(<原因>) ——
+ *  原因按停引擎意图(pid 对得上)定,没有意图 = crash;补一条终态事件给还连着的客户端。CAS:同时启动的两个引擎只有一个标得上。
+ *  interrupted_at 记它最后一次动静的时间(标记前的 updated_at,评审 #10):过期与崩溃计数按它算,不按补标的这一刻。
+ *  返回 'marked' / 'lost'(别人先标了)/ 'error'。 */
+async function markOrphanInterrupted(runId: string, reason: InterruptReason): Promise<'marked' | 'lost' | 'error'> {
   try {
-    // 裸码 'orphaned':桌面 humanizeRunError 已有对应双语文案(chat.err.orphaned「运行意外中断…请重试」)
-    await updateRunStatus(runId, 'failed', { error: 'orphaned' });
-    await publish(runId, 'error', { error: 'orphaned', detail: INTERRUPTED_DETAIL });
+    const marked = await query<any[]>(
+      `UPDATE agent_runs SET status = 'interrupted', error = ?, interrupted_at = COALESCE(interrupted_at, updated_at), updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = 'running' RETURNING id`,
+      [`interrupted:${reason}`, runId],
+    );
+    if (!marked.length) return 'lost';
+    await publish(runId, 'error', { error: 'interrupted', aborted: true, interrupted: reason });
     await drain(runId);
+    return 'marked';
   } catch (e) {
-    console.warn('[agent-core] terminalizeInterruptedRun failed:', e);
+    console.warn('[agent-core] markOrphanInterrupted failed:', e);
+    return 'error';
   } finally {
     setTimeout(() => cleanup(runId), 30_000);
   }
 }
 
-/** 进程重启自愈(PI-DSH 评审 R2 改过语义):先清陈旧行(30 分钟没动静 → failed),余下在飞 run 按 session 分组、created_at 顺序处理 ——
- *  - 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰,陈旧清扫也跳过(TUI 与桌面共用 state.db,从前桌面一起来就把 TUI 正在跑的 run 再跑一遍);
- *  - running(持有者已死):标中断,**不从头重跑** —— 从 input 重跑会把已经执行过的工具副作用(写文件、发消息)再来一遍;
- *  - queued(持有者已死 / 不明):从没开跑,先认领成自己的再入队(别让同时起来的另一个引擎也捡)。
- *  返回重入队数量。复现台架:scripts/run-recovery.repro.mjs(crash / sigterm / cross 三场景)。 */
+/**
+ * 有人要它停(cancel_requested,评审 #2)的 run 在恢复时按 aborted 收尾:用户按停 / 急停 / 级联取消之后进程马上退出或被强杀,
+ * 终态没来得及写。from = 它现在的状态(running:持有者已死;queued:没开跑;interrupted:被标了中断还没处理)。
+ * 用户按停的、且这一轮已经落了回答 → 补一条打断标记(同本进程按停时),模型下一轮知道上一轮是被叫停的。返回是否由本进程收尾。
+ */
+async function settleCancelled(run: { id: string; session_id: string; model_id?: string | null; assistant_message_id?: string | null; cancel_requested?: string | null }, from: 'running' | 'queued' | 'interrupted'): Promise<boolean> {
+  const kind = String(run.cancel_requested || 'cancel');
+  try {
+    const done = await query<any[]>(
+      `UPDATE agent_runs SET status = 'aborted', error = 'aborted', updated_at = CURRENT_TIMESTAMP${from === 'interrupted' ? `, resumed_by = '-'` : ''}
+        WHERE id = ? AND status = ?${from === 'interrupted' ? ' AND resumed_by IS NULL' : ''} RETURNING id`,
+      [run.id, from],
+    );
+    if (!done.length) return false;
+    if (kind === 'user' && run.assistant_message_id) {
+      const answered = await query<any[]>(`SELECT 1 FROM chat_messages WHERE id = ?`, [run.assistant_message_id]).catch(() => []);
+      if (answered.length) {
+        await deps().state.insertUserMessage({
+          id: derivedId('stop', run.id), sessionId: run.session_id, content: TURN_INTERRUPTED_MARKER, modelId: run.model_id || '', attachments: null,
+        }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
+      }
+    }
+    await publish(run.id, 'error', { error: 'aborted', aborted: true, ...(kind !== 'user' && kind !== 'cancel' ? { reason: kind } : {}) });
+    await drain(run.id);
+    console.log(`[tangu] run ${run.id} was asked to stop (${kind}) before the engine went away: settled as aborted`);
+    return true;
+  } catch (e) {
+    console.warn('[agent-core] settle cancelled run failed:', e);
+    return false;
+  } finally {
+    setTimeout(() => cleanup(run.id), 30_000);
+  }
+}
+
+/**
+ * 一条被停下、还没处理过的 run(status=interrupted、resumed_by 为空):过方案 6.5 的门控就自动续一轮,否则补一条说明原因的中断行。
+ * 认领(resumed_by)与写行 / 建续跑 run 一起提交(评审 #8,runResume.commitResume / commitNotice),同时起来的两个引擎、TUI 与桌面都只处理一次。
+ * 返回是否起了续跑 run。绝不从原始输入重跑(10-02 R2):续跑是新的一轮(trigger: recovery),消息是 autoResumeMarker,模型从落库的现场接着做。
+ */
+async function settleInterruptedRun(runId: string, kindOf: (sessionId: string) => Promise<string>): Promise<boolean> {
+  const run = await getRun(runId).catch(() => null) as any;
+  if (!run || run.status !== 'interrupted' || run.resumed_by != null) return false;
+  if (run.cancel_requested) { await settleCancelled(run, 'interrupted'); return false; }
+  let reason: InterruptReason = reasonFromError(run.error) ?? 'engine_stop';
+  const kind = await kindOf(run.session_id);
+  // 团队成员会话:团队 run 重新激活时会新建子 run,这里只记「处理过了」,不往成员会话里插行
+  if (kind === TEAMWORK_KIND) { await claimInterruptedRun(runId, '-'); return false; }
+  const input = runInput(run);
+  await ensureUserRow(run, input);
+  let blocker = await resumeBlocker(run, reason, await runAgeFlags(runId), kind).catch(() => 'error');
+  if (!blocker) {
+    try {
+      const resumeRunId = uuidv4();
+      const outcome = await commitResume({ run, reason, modelId: await pickResumeModel(run.model_id || '', run.session_id), resumeRunId });
+      if (outcome === 'lost') return false;
+      if (outcome === 'ok') {
+        enqueueRun(run.session_id, resumeRunId);
+        console.log(`[tangu] interrupted run ${runId} (${reason}) resumed as ${resumeRunId}`);
+        return true;
+      }
+      blocker = outcome; // 提交前重验门控 7 没过
+    } catch (e: any) {
+      console.warn(`[agent-core] auto-resume of ${runId} failed, leaving a notice instead:`, e?.message || e);
+      blocker = 'error';
+    }
+  }
+  // 换了账号:说明行按 account_change 写(error 列一并改),不按原来的停因
+  const accountChange = blocker === 'account' && reason !== 'account_change';
+  if (blocker === 'account') reason = 'account_change';
+  if (await commitNotice(run, reason, { rewriteError: accountChange }).catch((e) => { console.warn('[agent-core] persist interrupted notice failed:', e); return false; })) {
+    console.log(`[tangu] interrupted run ${runId} (${reason}) not resumed: ${blocker}`);
+  }
+  return false;
+}
+
+/** 排队中、还没开跑的 run 属于换号前的账号(D2):不执行,标 interrupted:account_change + 说明行(本轮用户消息先补回来)。 */
+async function parkQueuedForAccount(run: any): Promise<boolean> {
+  const marked = await query<any[]>(
+    `UPDATE agent_runs SET status = 'interrupted', error = 'interrupted:account_change', interrupted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'queued' RETURNING id`,
+    [run.id],
+  ).catch(() => []);
+  if (!marked.length) return false;
+  await ensureUserRow(run, runInput(run));
+  await publish(run.id, 'error', { error: 'interrupted', aborted: true, interrupted: 'account_change' }).catch(() => {});
+  await drain(run.id).catch(() => {});
+  await commitNotice(run, 'account_change').catch((e) => console.warn('[agent-core] persist interrupted notice failed:', e));
+  console.log(`[tangu] queued run ${run.id} belongs to the previous account: not run`);
+  return true;
+}
+
+/** pid 还在吗(停引擎意图只在写它的那个进程已经没了时才删,D3 / 评审 #3)。没权限探 = 在。 */
+function pidAlive(pid: number): boolean {
+  if (pid === process.pid) return true;
+  try { process.kill(pid, 0); return true; } catch (e: any) { return e?.code === 'EPERM'; }
+}
+
+/** 进程重启自愈(PI-DSH 评审 R2;2026-11-20 中断任务续跑方案 B 改过):
+ *  ① 别的活着的引擎进程持有的(pid 在且启动时刻对得上,见 runOwner.ts):不碰(TUI 与桌面共用 state.db)。
+ *  ② running 但持有者已死:有取消请求(用户按停 / 急停 / 级联)→ aborted,不续(评审 #2,先于意图判);
+ *     否则 interrupted(<原因>):停引擎意图对得上持有者 pid → 意图里的原因,否则 crash。**不从头重跑** —— 从 input 重跑会把
+ *     已经执行过的工具副作用(写文件、发消息)再来一遍。陈旧清扫不再先把它们吃成 failed(年龄交给门控)。
+ *  ③ 陈旧的排队行(30 分钟没动静、持有者已死)照旧 failed。
+ *  ④ 被停下、还没处理过的(②刚标的 + 优雅退出时 runLoop 自己标的):按门控自动续一轮或补一条说明原因的中断行(settleInterruptedRun);
+ *     认领了续跑、续跑 run 却不在的(没有事务的库认领后崩了)照同一个 id 补齐(评审 #8)。
+ *  ⑤ queued(持有者已死 / 不明):从没开跑。有取消请求 → aborted;换号前的账号建的 → 不跑,标 account_change(D2);
+ *     其余先认领成自己的再入队。排在④之后:同会话里补的说明行在它前面,它跑的时候看得到。
+ *  最后:停引擎意图只在写它的进程已经没了、它名下的行都处理完时才删(还活着 = 那个引擎还在跑,意图留给它下次停)。
+ *  返回入队数量(含续跑 run)。复现台架:scripts/run-recovery.repro.mjs。 */
 export async function recoverQueuedRuns(): Promise<number> {
   // 非 SQLite(外部 PG / PGlite 回退)不记持有者 → 持有者一律按已死处理,即「独占库」语义(单实例是这两种库唯一受支持的形态)。
-  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标 orphaned、抢排队行;云端为此走网关 + recoverRuns:false);
+  // 这种库上意图对不上持有者(落进 crash),换账号那条由账号核对兜住(input.cloudAccount,评审 #3)。
+  // ponytail: 多个实例共用一个 PG 不受支持(会互相把在飞 run 标中断、抢排队行;云端为此走网关 + recoverRuns:false);
   // 真要支持,得上带主机标识的租约 + 执行前 CAS —— 本机 pid 跨主机探不了活。
   const aliveCache = new Map<string, Promise<boolean>>();
   const alive = (owner: string | null): Promise<boolean> => {
@@ -978,42 +1139,95 @@ export async function recoverQueuedRuns(): Promise<number> {
     if (!aliveCache.has(owner)) aliveCache.set(owner, ownerAlive(owner));
     return aliveCache.get(owner)!;
   };
-  const owners = [...new Set((await listPendingRunsForRecovery()).map((r) => r.owner).filter((o): o is string => !!o))];
-  const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
-  const stale = await failStaleRuns(30, live);
-  if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
-  const rows = await listPendingRunsForRecovery();
   // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
   //(没人订阅它的事件、它的审批会永久占住成员会话的串行队列、工具动作会重做)→ 直接终态化(Codex 09-16 r4 #5)。
-  let kinds = new Map<string, string>();
-  try {
-    const ids = [...new Set(rows.map((r) => r.session_id))];
-    if (ids.length) {
-      const ks = await query<any[]>(`SELECT id, kind FROM chat_sessions WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
-      kinds = new Map((ks || []).map((k) => [String(k.id), String(k.kind || 'user')]));
+  const kinds = new Map<string, Promise<string>>();
+  const kindOf = (sessionId: string): Promise<string> => {
+    if (!kinds.has(sessionId)) {
+      kinds.set(sessionId, query<any[]>(`SELECT kind FROM chat_sessions WHERE id = ?`, [sessionId])
+        .then((r) => String(r[0]?.kind || 'user'), () => 'user')); // 查不到 kind 按普通会话处理
     }
-  } catch { /* 查不到 kind 按普通会话处理 */ }
+    return kinds.get(sessionId)!;
+  };
+  const intent = readShutdownIntent();
+  let intentRowsLeft = false; // 意图那个进程名下有行没标上(库写失败):意图留着,下次再认
   let n = 0;
-  for (const r of rows) {
-    if (await alive(r.owner)) continue;
-    if (kinds.get(r.session_id) === 'teamwork') {
-      await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
-      continue;
+  try {
+    const first = await listPendingRunsForRecovery();
+    // ② 持有者已死的 running → aborted(有取消请求)/ interrupted
+    for (const r of first) {
+      if (r.status !== 'running' || await alive(r.owner)) continue;
+      if (await kindOf(r.session_id) === TEAMWORK_KIND) {
+        await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
+        continue;
+      }
+      const row = await getRun(r.id).catch(() => null) as any;
+      if (row?.cancel_requested) { await settleCancelled(row, 'running'); continue; }
+      const planned = intentReasonForOwner(intent, r.owner);
+      const reason = planned ?? 'crash';
+      if ((await markOrphanInterrupted(r.id, reason)) === 'error' && planned) intentRowsLeft = true;
     }
-    if (r.status === 'running') {
-      await terminalizeInterruptedRun(r.id);
-      continue;
-    }
-    const claimed = await query<any[]>(
-      // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
-      `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
-      [SELF_OWNER, r.id, r.owner || ''],
+    // ③ 陈旧的排队行
+    const owners = [...new Set(first.map((r) => r.owner).filter((o): o is string => !!o))];
+    const live = (await Promise.all(owners.map(async (o) => ((await alive(o)) ? o : '')))).filter(Boolean);
+    const stale = await failStaleRuns(30, live);
+    if (stale) console.log(`[tangu] marked ${stale} stale runs as failed`);
+    // ④ 被停下、还没处理过的,按建的先后;再补齐认领了却没建成的续跑
+    const pendingInterrupted = await query<any[]>(
+      `SELECT id FROM agent_runs WHERE status = 'interrupted' AND resumed_by IS NULL ORDER BY created_at ASC`,
     ).catch(() => []);
-    if (!claimed.length) continue;
-    enqueueRun(r.session_id, r.id);
-    n++;
+    for (const { id } of pendingInterrupted) {
+      if (await settleInterruptedRun(String(id), kindOf).catch((e) => { console.warn('[agent-core] settle interrupted failed:', e); return false; })) n++;
+    }
+    for (const fixed of await repairDanglingResumes(pickResumeModel)) {
+      enqueueRun(fixed.sessionId, fixed.runId);
+      console.log(`[tangu] completed the half-written resume ${fixed.runId}`);
+      n++;
+    }
+    // ⑤ 排队行认领入队
+    for (const r of await listPendingRunsForRecovery()) {
+      // ④ 刚建好入队的续跑 run 也还是 queued:非 SQLite 库不记持有者(owner 为空 = 按已死算),不跳过就会再认领入队一次、跑两遍
+      if (r.status !== 'queued' || runSession.has(r.id) || await alive(r.owner)) continue;
+      if (await kindOf(r.session_id) === TEAMWORK_KIND) {
+        await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
+        continue;
+      }
+      const row = await getRun(r.id).catch(() => null) as any;
+      if (row?.cancel_requested) { await settleCancelled(row, 'queued'); continue; }
+      if (row && accountChanged(runInput(row))) { await parkQueuedForAccount(row); continue; }
+      const claimed = await query<any[]>(
+        // 认领顺手刷新 updated_at:否则同时启动的另一个引擎按它旧快照做陈旧清扫,会把刚认领入队的行标失败(Codex 复审)
+        `UPDATE agent_runs SET owner = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued' AND COALESCE(owner, '') = ? RETURNING id`,
+        [SELF_OWNER, r.id, r.owner || ''],
+      ).catch(() => []);
+      if (!claimed.length) continue;
+      enqueueRun(r.session_id, r.id);
+      n++;
+    }
+  } finally {
+    // 意图只在写它的进程已经没了、它名下的行都处理完时才删:那个引擎还活着(别的桌面实例正停它)就留给它
+    if (intent && !intentRowsLeft && !pidAlive(intent.pid)) clearShutdownIntent();
   }
   return n;
+}
+
+/** 本进程实际持有的 run(在跑 / 排队 / 收尾中)。restart-status 只算这些(D5):共用库里别的进程或已死持有者的行不算。 */
+export function ownRunIds(): string[] {
+  return [...new Set([...runSession.keys(), ...runTasks.keys()])];
+}
+
+/** 此刻停机、按门控会被自动续跑的(D10 restart-status.resumable):只看不随时间 / 会话动静变的那几道门(runResume.staticResumeBlocker),
+ *  按「计划内的停」(app_update)算。读不出 = 不算。 */
+export async function wouldAutoResume(runId: string): Promise<boolean> {
+  try {
+    const run = await getRun(runId) as any;
+    if (!run || (run.status !== 'running' && run.status !== 'queued')) return false;
+    const kind = String((await query<any[]>(`SELECT kind FROM chat_sessions WHERE id = ?`, [run.session_id]))[0]?.kind || 'user');
+    if (kind === TEAMWORK_KIND) return false;
+    return (await staticResumeBlocker(run, 'app_update', kind)) === null;
+  } catch {
+    return false;
+  }
 }
 
 let exiting = false;
@@ -1022,8 +1236,16 @@ let exiting = false;
  * 中止在飞 run,有界等它们落完终态 —— 中止分支会存下已生成的部分回答并标 aborted。不等的话行停在 running,
  * 下次启动只能标 orphaned、部分回答也丢了(PI-DSH 评审 R2:dispose 后 2s 内 exit,实测来不及)。
  */
-export async function drainRunsForExit(timeoutMs: number): Promise<void> {
+export async function drainRunsForExit(timeoutMs: number, reason?: InterruptReason): Promise<void> {
   exiting = true;
+  // 「为什么停」(中断任务续跑方案 B):只给还在跑、没被别的原因中止过的 run 记,先到先得。
+  // 没给原因(TUI 退出)= 照旧按中止收尾。
+  if (reason) {
+    for (const [runId, ac] of abortControllers) {
+      if (ac.signal.aborted || abortReasons.has(runId) || interruptReasons.has(runId)) continue;
+      interruptReasons.set(runId, reason);
+    }
+  }
   abortAllRuns();
   const tasks = [...runTasks.values()];
   if (!tasks.length) return;
@@ -1032,9 +1254,17 @@ export async function drainRunsForExit(timeoutMs: number): Promise<void> {
   if (timer) clearTimeout(timer);
 }
 
+/** 测试用:drainRunsForExit 置了进程级「正在退出」,同一测试文件里后面的 run 还要能起。 */
+export function __resetExitForTests(): void { exiting = false; }
+
 /** 中止所有在飞 run(dispose/卸载用)。各 run 的 finally 会自行清理 + 推进队列。 */
 export function abortAllRuns(): void {
   for (const ac of abortControllers.values()) ac.abort();
+}
+
+/** 这个 run 还在本进程里跑 / 收尾(SSE 补终态事件前问:done 已落库但 done 事件还没发的空档里别抢先补)。 */
+export function isRunLive(runId: string): boolean {
+  return runTasks.has(runId) || abortControllers.has(runId);
 }
 
 /** 本进程在飞 run 数(/health 上报用,worker 模式供 Forsion 调度面板展示)。 */
@@ -1274,6 +1504,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
+  // 记忆 / 会话召回的查询句:自动续跑那一轮(trigger: recovery)的消息是续跑行,召回按被续的那一句(runResume.buildResumeInput 带的 resumeQuery)
+  const recallQuery = input.trigger === 'recovery' && typeof input.resumeQuery === 'string' ? input.resumeQuery
+    : typeof input.message === 'string' ? input.message : '';
   // 团队成员的子 run(services/teamRuns.ts 起的,方案 §6.4):团队段拼进 system、成员不可再起讨论 / 派遣 / 界面动作(inDiscussion 同款闸);
   // 临时成员(不在 ~/.tangu/agents)的定义随 teamMember.def 下发,按 slug 优先于磁盘,且不为它建 / 同步 agent 文件夹。
   const teamMember = plainObject(agentConfig.teamMember);
@@ -1684,6 +1917,109 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   let currentAssistantId = run.assistant_message_id || uuidv4();
   // 压缩检查点的「段落库后补落」钩子:函数级声明,catch(中止落半截)路径也要调;真身在 workingMessages 就位后赋值。
   let settleCheckpointAfterFinalize: (messageId: string) => Promise<void> = async () => {};
+  // ── 边跑边落库(中断任务续跑方案 B · E2)──
+  // 工具边界上把当前助手段写进 chat_messages:模型回了这批调用(执行前)、每个调用开始执行、每个调用有了结果。
+  // 引擎崩了 / 被强杀,下次启动时这一行还在,回放能分清「没开始 / 开始了结局不明 / 做完了」(historyReplay 三分法)。
+  // 累加器(finalContent / allToolCalls / allToolResults)一个字不改:进度写拿的是它们的**拷贝**加上下面两张表;
+  // 正常收尾 / 用户按停 / 出错落库的那一行与没有进度写时逐字相同(时间戳也是,见 restamp)。只在本机恢复宿主上做。
+  const progressOn = isRecoveryHost() && typeof deps().state.persistAssistantProgress === 'function';
+  /** 终稿与 done 同一事务、在发 done 事件之前提交(评审 #5 / #7):只在本机恢复宿主上;云端 worker / TUI 照原来的顺序。 */
+  const commitDoneEarly = progressOn && typeof deps().state.completeRun === 'function';
+  const rowWriter = createRowWriter((e: any) => console.warn(`[agent-core] run=${runId} 进度落库失败:`, e?.message || e));
+  /** 当前段里还没有真结果的调用:pending = 这批里还没轮到它;started = 正在执行(可能已生效)。 */
+  const callProgress = new Map<string, ToolInflight>();
+  /** 这一批里已经出了结果、还没并进 allToolResults 的(并进去在整批跑完之后)。 */
+  const batchDone = new Map<string, any>();
+  const sealedRows = new Set<string>(); // 已正式收尾的段(转向切段 / run 收尾):之后的进度写不再碰它
+  const restampPending = new Set<string>(); // 进度写插过、还没正式落库过的段 → 第一次正式落库时把时间戳改成那一刻
+  const finalizedOnce = new Set<string>();
+  const liveMarked = new Set<string>();
+  /** done 已落库 / done 事件已发:之后哪怕被停或抛错,catch 也不许再改状态、再落一遍(那会把答完的一轮记成中断,下次被续跑)。 */
+  let doneRecorded = false;
+  let donePublished = false;
+  /** 当前段的工具结果「进度视图」:已有真结果的原样,这一批已完成的补上,其余带 inflight 记录(没有 content)。 */
+  const progressResults = (): any[] => {
+    const byId = new Map<string, any>();
+    for (const r of allToolResults) if (r && typeof r.tool_call_id === 'string') byId.set(r.tool_call_id, r);
+    const out: any[] = [];
+    const seen = new Set<string>();
+    for (const call of allToolCalls) {
+      seen.add(call.id);
+      const done = batchDone.get(call.id);
+      const p = callProgress.get(call.id);
+      if (done) out.push(done);
+      else if (p) out.push({ tool_call_id: call.id, name: isHtmlCardTool(call.function.name) ? LEGACY_HTML_CARD_TOOL : call.function.name, inflight: { ...p } });
+      else if (byId.has(call.id)) out.push(byId.get(call.id));
+    }
+    for (const r of allToolResults) if (!seen.has(r?.tool_call_id)) out.push(r);
+    return out;
+  };
+  const writeProgress = async (): Promise<void> => {
+    const id = currentAssistantId;
+    if (sealedRows.has(id) || (!finalContent.trim() && !allToolCalls.length)) return;
+    // 快照在第一个 await 之前取完:写链串行,后取的快照不会被先取的盖掉
+    const row = {
+      runId, messageId: id, sessionId, content: finalContent, reasoning: finalReasoning,
+      toolCalls: [...allToolCalls], toolResults: progressResults(), displayFiles: [...pendingDisplayFiles], ...assistantRowIdentity(modelId),
+    };
+    if (!finalizedOnce.has(id)) restampPending.add(id);
+    markLiveRow(id); liveMarked.add(id);
+    await deps().state.persistAssistantProgress!(row);
+  };
+  /** 回 true = 这次进度写落库了(没开进度写也算 true)。 */
+  const requestProgress = (): Promise<boolean> => (progressOn ? rowWriter.progress(writeProgress) : Promise.resolve(true));
+  /** 本 run 的段正式落库:与进度写排在同一条链上。seal = 这一段到此为止(转向切段 / run 收尾);close = run 的最后一笔,之后进度写全部作废。 */
+  const finalizeSegment = (
+    messageId: string, content: string, reasoning: string, toolCalls: ToolCall[], toolResults: any[], displayFiles: DisplayFileItem[] | undefined,
+    opts?: { seal?: boolean; close?: boolean; origin?: string; done?: RunDoneCommit },
+  ): Promise<void> => {
+    if (!progressOn) return finalizeAssistantMessage(messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles, { origin: opts?.origin, done: opts?.done });
+    return rowWriter.exclusive(async () => {
+      if (opts?.seal) sealedRows.add(messageId);
+      const restamp = restampPending.delete(messageId);
+      finalizedOnce.add(messageId);
+      await finalizeAssistantMessage(messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles, { restamp, origin: opts?.origin, done: opts?.done });
+      if (opts?.seal) { unmarkLiveRow(messageId); liveMarked.delete(messageId); }
+    }, { close: opts?.close });
+  };
+  /** 已落库(切段 / 挂起)那一段的工具结果按调用 id 原地改(评审 #13):只动 tool_results,不重算 origin / model_id(那一段可能是
+   *  后备模型写的、或被安全审核拦下记了 refused)。排在同一条写链上。存储没有这个能力(云端)→ 照旧按快照整行再落一次。返回是否写上了。 */
+  const patchSegment = (segId: string, snap: { content: string; reasoning: string; toolCalls: any[]; toolResults: any[]; displayFiles: DisplayFileItem[] }, entries: any[]): Promise<boolean> => {
+    const st = deps().state;
+    const write = async (): Promise<boolean> => {
+      if (typeof st.patchToolResults === 'function') return st.patchToolResults(segId, entries);
+      const byId = new Map(entries.map((e) => [e.tool_call_id, e]));
+      const results = snap.toolResults.map((r) => (r && byId.has(r.tool_call_id) ? byId.get(r.tool_call_id) : r));
+      await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, results, snap.displayFiles);
+      return true;
+    };
+    const guarded = (): Promise<boolean> => write().catch((e: any) => { console.warn(`[agent-core] run=${runId} 回填已落库的段失败:`, e?.message || e); return false; });
+    return progressOn ? rowWriter.exclusive(guarded) : guarded();
+  };
+  /** 一个调用开始执行(之后可能已经生效)。当前段里的 → 记 started 并等这次进度写落地;已经切段落库、还挂着的待批调用 → 只改那一段的 tool_results。
+   *  回 false = 「已开始」没落上库、而它可能有副作用(sideEffect 不是 none / read):调用方不许执行它(评审 #4) ——
+   *  否则崩在执行中,回放会说「没开始」,续跑的模型会把已经生效的事再做一遍。 */
+  const markCallStarted = async (callId: string, sideEffect: string): Promise<boolean> => {
+    if (!progressOn) return true;
+    if (allToolCalls.some((c) => c.id === callId)) {
+      callProgress.set(callId, { state: 'started', sideEffect });
+      return (await requestProgress()) || harmlessSideEffect(sideEffect);
+    }
+    for (const [segId, snap] of finalizedWithParked) {
+      const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
+      if (k < 0) continue;
+      const ok = await patchSegment(segId, snap, [{ tool_call_id: callId, name: snap.toolResults[k]?.name, inflight: { state: 'started', sideEffect } }]);
+      return ok || harmlessSideEffect(sideEffect);
+    }
+    return true;
+  };
+  /** 一个调用有了结果(真结果 / 拒绝 / 挂起占位):记进这一批的已完成表,合并式落一次进度(并行工具各自完成时都会来)。 */
+  const noteCallDone = (toolResult: any): Promise<void> => {
+    if (!progressOn || !toolResult || typeof toolResult.tool_call_id !== 'string') return Promise.resolve();
+    callProgress.delete(toolResult.tool_call_id);
+    batchDone.set(toolResult.tool_call_id, toolResult);
+    return requestProgress().then(() => {});
+  };
 
   try {
     if (approvalTray) setApprovalTray(runId, true);
@@ -1692,7 +2028,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
     // 子会话回报那一轮(childReport)/ 会话消息那一轮(fromSession)的「用户消息」是机器写的,不拿它起标题
-    if (!input.childReport && !input.fromSession) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 自动续跑那一轮(trigger: recovery)的「用户消息」是续跑行,也不是用户的话
+    if (!input.childReport && !input.fromSession && input.trigger !== 'recovery') onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -2143,7 +2480,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
       // portrait:画像的详情也按这句话召回(11-09 分层),和上面画像注入同一道门(本机、不连通道);分身按身份不给(不看此刻连没连通道)
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx, portrait: !standIn && channelBinding === false && !!profile.capabilities.hostExec,
-        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
+        query: recallQuery, excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       recallStats = { recallEntries: memoryContext.entryIds.length, recallHistory: memoryContext.historyMessageIds.length, recallTruncated: !!memoryContext.truncated };
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
@@ -2161,7 +2498,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     只在本机有(存用户目录、按会话存档的项目路径索引);无项目会话不注入。读不到只丢这一段,不影响上面的 agent 记忆。
     if (profile.capabilities.hostExec && !standIn) { // 分身没有项目记忆(常驻、详情、召回都不给:那份给这个项目里所有 Agent,含本体)
       try {
-        const projectMemory = await buildProjectMemoryLayers(userId, sessionId, typeof input.message === 'string' ? input.message : '');
+        const projectMemory = await buildProjectMemoryLayers(userId, sessionId, recallQuery);
         if (projectMemory.stable) systemParts.push(volatilePlacement === 'system' && projectMemory.volatile ? `${projectMemory.stable}\n\n${projectMemory.volatile}` : projectMemory.stable);
         if (volatilePlacement !== 'system' && projectMemory.volatile) volatileMemory = [volatileMemory, projectMemory.volatile].filter(Boolean).join('\n');
       } catch (e) { ac.signal.throwIfAborted(); console.warn('[agent-core] load project memory failed:', (e as Error)?.message || e); }
@@ -2355,10 +2692,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (uv.block) {
         // 否决本次提交：不跑模型，直接以 hook 原因收尾（同一次触发即含否决+注入，避免在路由层重复触发同一 hook）。
         const reason = `⛔ Hook 拦截了本次提交：${uv.blockReason || 'UserPromptSubmit hook 阻止'}`;
-        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, reason, '', [], [], []);
-        await drain(runId);
-        await publish(runId, 'done', { content: reason });
-        await updateRunStatus(runId, 'done', { result: { content: reason } });
+        if (commitDoneEarly) {
+          // 同正常收尾:这一行与 done 同一事务(评审 #5)
+          await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, reason, '', [], [], [], { done: { runId, result: { content: reason } } });
+          doneRecorded = true;
+          await drain(runId);
+          await publish(runId, 'done', { content: reason });
+          donePublished = true;
+        } else {
+          await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, reason, '', [], [], []);
+          await drain(runId);
+          await publish(runId, 'done', { content: reason });
+          donePublished = true;
+          await updateRunStatus(runId, 'done', { result: { content: reason } });
+          doneRecorded = true;
+        }
         void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
         return;
       }
@@ -2659,7 +3007,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
         const files = pendingDisplayFiles.splice(0);
-        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files, safetyStopped ? SAFETY_STOP_ORIGIN : undefined);
+        await finalizeSegment(finalizedId, finalContent, finalReasoning, allToolCalls, allToolResults, files, { seal: true, origin: safetyStopped ? SAFETY_STOP_ORIGIN : undefined });
         await settleCheckpointAfterFinalize(finalizedId);
         if (allToolResults.some((r) => r?.parked)) {
           finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
@@ -2700,6 +3048,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       finalReasoning = '';
       allToolCalls.length = 0;
       allToolResults.length = 0;
+      callProgress.clear(); batchDone.clear();
       currentAssistantId = uuidv4();
       await publish(runId, 'turn_boundary', {
         finalizedAssistantId: finalizedId,
@@ -2803,8 +3152,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // A thin worker's publish only queues an event. Persist the complete message first;
         // this HTTP/SQL call must succeed before the image tool can acknowledge delivery.
         const files = [...pendingDisplayFiles, ...items];
-        await finalizeAssistantMessage(currentAssistantId, sessionId, modelId, finalContent, finalReasoning,
-          [...allToolCalls], [...allToolResults], files);
+        // 边跑边落库开着时带上这一批的进度(同一行,只是此刻比收尾时多了在飞记录;收尾那次照常覆盖)。
+        await finalizeSegment(currentAssistantId, finalContent, finalReasoning,
+          [...allToolCalls], progressOn ? progressResults() : [...allToolResults], files);
         pendingDisplayFiles.push(...items);
         for (const item of items) await publish(runId, 'display_file', item);
       },
@@ -3008,6 +3358,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }): Promise<ExecutedToolCall> => {
       (ptc?.signal ?? ac.signal).throwIfAborted();
       const executionContext = { ...toolCtx, toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : {}) };
+      // 意图先落盘(E2):执行前把「已开始」写进这一行 —— 崩在执行中,下次回放说「结局不明,先核对」,而不是「没跑过」。
+      // 只读程序里嵌套的调用(ptc)不在 allToolCalls 里,不记。
+      if (!ptc) {
+        const started = await markCallStarted(call.id, String(getToolCapabilities(execCall.function.name, toolCtx).sideEffect || 'unknown'));
+        (ac.signal).throwIfAborted();
+        // 「已开始」没落上库(评审 #4):有副作用的不执行,如实告诉模型没跑 —— 崩了也不会被说成「没开始」而其实已经生效
+        if (!started) return mkRejected(call, startedAt, parallelGroup, CALL_NOT_STARTED_RESULT);
+      }
       const result = await executeTool(execCall, executionContext);
       // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
       // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。
@@ -3100,6 +3458,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       for (let i = 0; i < calls.length;) {
         if (!canRunToolInParallel(calls[i])) {
           const single = await executeOneToolCall(calls[i]);
+          void noteCallDone(single.toolResult); // 不等:下一个调用开始时的那次进度写会把它合进去
           toolResults.push(single.toolResult);
           if (hasMarketplaceCards([single.toolResult])) marketplaceCardsShown = true;
           workingMessages.push(single.toolMessage);
@@ -3111,9 +3470,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           batch.push(calls[i + batch.length]);
         }
         const parallelGroup = batch.length > 1 ? uuidv4() : undefined;
+        // 并行的各自一完成就记(合并式进度写,谁先完成谁先落);整批跑完再按调用顺序并进累加器,同今天。
         const executed = batch.length > 1
-          ? await Promise.all(batch.map((call) => executeOneToolCall(call, parallelGroup)))
-          : [await executeOneToolCall(batch[0])];
+          ? await Promise.all(batch.map((call) => executeOneToolCall(call, parallelGroup).then((r) => { void noteCallDone(r.toolResult); return r; })))
+          : [await executeOneToolCall(batch[0]).then((r) => { void noteCallDone(r.toolResult); return r; })];
         for (const item of executed) {
           toolResults.push(item.toolResult);
           if (hasMarketplaceCards([item.toolResult])) marketplaceCardsShown = true;
@@ -3137,13 +3497,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     /** putBackParkedResult 的落库那半:段还在累积 → 改累加器(同步,随段落库);段已落库 → 用快照按同一 id 再 finalize。 */
     const persistParkedResult = async (callId: string, toolResult: any): Promise<void> => {
       const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
-      if (j >= 0) allToolResults[j] = toolResult;
+      callProgress.delete(callId); // 批准后执行时记的 started 到此为止:真结果回来了
+      if (j >= 0) { allToolResults[j] = toolResult; void requestProgress(); }
       else {
         for (const [segId, snap] of finalizedWithParked) {
           const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
           if (k < 0) continue;
           snap.toolResults[k] = toolResult;
-          await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
+          await patchSegment(segId, snap, [toolResult]);
           if (!snap.toolResults.some((r) => r?.parked)) finalizedWithParked.delete(segId);
           break;
         }
@@ -3177,6 +3538,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const d = e.decision!;
         let status: 'approved' | 'failed' | 'rejected';
         let uncertain = false;
+        let notStarted = false;
         let done: ExecutedToolCall;
         if (d.action === 'reject') {
           status = 'rejected';
@@ -3185,6 +3547,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           try {
             done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);
             status = done.toolResult.isError ? 'failed' : 'approved';
+            // 「已开始」没落上库 → 没执行(评审 #4):别说成「跑了、失败了」
+            notStarted = done.toolResult.content === CALL_NOT_STARTED_RESULT;
           } catch (err: any) {
             if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
             // 抛到这里的(容器清理失败 / MCP 远端调用断连 / 执行完发布结果时出错)都发生在执行开始之后:它可能已经生效。
@@ -3196,10 +3560,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
         const inContext = await putBackParkedResult(e.call.id, done);
         const said = status === 'rejected' ? 'It was NOT run; that call\'s result above now says so.'
+          : notStarted ? 'It was approved but NOT run: the engine could not record that it was starting, so nothing was executed. That call\'s result above says so; run it again if it is still needed.'
           : uncertain ? 'It was started but raised an error before its result was recorded, so it may already have taken effect; verify the current state before retrying.'
           : status === 'failed' ? 'It ran and failed; the error is now that call\'s result above.'
             : 'It has run; its output is now that call\'s result above.';
-        parts.push(`[${status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +
+        parts.push(`[${notStarted ? 'not run' : status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +
           (d.action !== 'reject' && d.argsOverride ? `\nThe user edited the arguments before approving; it ran with: ${JSON.stringify(d.argsOverride)}` : '') +
           (inContext ? '' : '\n(That call is no longer in your context window; check the current state with a read-only tool if you need its result.)'));
       }
@@ -3245,7 +3610,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
     // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
     // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
-    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
+    if (!deferBypass && input.trigger !== 'recovery' && workingMessages.some((m) => m.role === 'assistant')) {
       const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
       if (decision) {
         const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
@@ -4130,6 +4495,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       workingMessages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
       persistToolCallsAtCurrentOffset(res.toolCalls);
       usedTools = true; // 到达本行说明这一轮在调工具并继续循环;若后续顶到 lastIter 即为真·循环耗尽
+      // 意图先落盘(E2):这批调用执行之前先把这一段(含每个调用的 pending 记录)写进库。
+      if (progressOn) {
+        for (const call of res.toolCalls) {
+          callProgress.set(call.id, { state: 'pending', sideEffect: String(getToolCapabilities(call.function.name, toolCtx).sideEffect || 'unknown') });
+        }
+        await requestProgress();
+      }
 
       const toolResults = await executeToolCallsInOrder(res.toolCalls);
       // 工具(view_image)读到的图片 → 物化成一条 user 图像消息追加到尾部,下一轮模型即可"看见"。
@@ -4161,6 +4533,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
       }
       allToolResults.push(...toolResults);
+      for (const r of toolResults) { batchDone.delete(r?.tool_call_id); callProgress.delete(r?.tool_call_id); }
 
       await appendStep({
         id: uuidv4(), runId, stepNo: iteration,
@@ -4179,13 +4552,30 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
 
-    await finalizeAssistantMessage(
-      currentAssistantId,
-      sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
-      safetyStopped ? SAFETY_STOP_ORIGIN : undefined,
-    );
-    await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
-    await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
+    const finalOrigin = safetyStopped ? SAFETY_STOP_ORIGIN : undefined;
+    const doneCommit: RunDoneCommit = { runId, result: { content: finalContent }, tokensTotal };
+    if (commitDoneEarly) {
+      // 本机恢复宿主(中断任务续跑方案 B):先把会话工作区改动回写(评审 #6:done 先记了、回写前崩了,重启会跳过这一轮,
+      // 本地改过的文件下次 hydrate 被云端旧版盖掉),再把终稿与 done 同一事务提交(评审 #5:两次提交之间崩了 = 完整终稿在历史里、
+      // run 却还是 running,下次启动会再续一轮)。之后的旁务(发事件、复盘)崩 / 被停在中间也不会被当成没答完。
+      // SSE 在这段空档里不抢先补 done(routes/runs.ts 看 isRunLive),真的 done 事件随后照发。
+      await flush();
+      await finalizeSegment(
+        currentAssistantId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+        { seal: true, close: true, origin: finalOrigin, done: doneCommit },
+      );
+      doneRecorded = true;
+      await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
+    } else {
+      // 云端 worker / TUI(评审 #7):照原来的顺序 —— 终稿 → 检查点 → 回写 → 发 done → 最后才记 done。
+      // HTTP 状态层记终态时会清事件缓冲和请求令牌,先记 done 会让 done 事件赶不上终态前的排空。
+      await finalizeSegment(
+        currentAssistantId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+        { seal: true, close: true, origin: finalOrigin },
+      );
+      await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
+      await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
+    }
     await drain(runId); // 确保 token 等事件全部落库后再发 done
     // 这个 run 里有一发被安全审核拦下:流式帧里还有原文,落库完就删掉(续播只剩终稿;别的回合的帧一并删,终稿已在 chat_messages)
     if (refusedInRun) await deps().state.purgeStreamFrames?.(runId).catch((e) => console.warn('[agent-core] purge refused frames failed:', e));
@@ -4224,7 +4614,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ...(finalTruncated ? { truncated: true } : {}),
       ...(lengthResumed ? { lengthResumed: true } : {}),
     });
-    await updateRunStatus(runId, 'done', { result: { content: finalContent }, tokensTotal });
+    donePublished = true;
+    if (!commitDoneEarly) { await updateRunStatus(runId, 'done', { result: doneCommit.result, tokensTotal }); doneRecorded = true; }
     // 本地 Historian（Special Agent）：本「轮」完成 → 按 X/Y 轮触发标题/记忆维护。
     // fire-and-forget，绝不阻断/影响 run；非本地形态或未启用时内部 no-op。
     // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
@@ -4243,12 +4634,26 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       lazyCheckpoints.set(sessionId, task);
     }
   } catch (err: any) {
+    if (doneRecorded) {
+      // 终稿和 done 都已落库,出错 / 被停在收尾旁务里:状态不改、不再落一遍(那会把答完的一轮记成中断,下次被续跑);
+      // done 事件还没发就补发,在线客户端照常收尾。
+      console.warn(`[agent-core] run ${runId} 收尾旁务出错(done 已落库,状态不改):`, err?.message || err);
+      if (!donePublished) {
+        await publish(runId, 'done', { ...(safetyStopped ? { refused: true } : {}), content: finalContent, toolOffsets: allToolCalls.map((c) => ({ id: c.id, offset: c.ui_content_offset })) }).catch(() => {});
+      }
+      await drain(runId).catch(() => {});
+      return;
+    }
     // ac.signal.aborted 也算:用户按停后,在途的前置请求可能以传输错(非 AbortError)收尾,
     // 只认错误名会把用户主动停止误记成 failed(Codex 评审逮到)。
     // Stopping the CLI is not proof that its container stopped: surface uncertain cleanup even after user cancellation.
     const aborted = !(err instanceof DockerCleanupError) && (err?.name === 'AbortError' || err instanceof AbortLikeError || ac.signal.aborted);
-    const status = aborted ? 'aborted' : 'failed';
-    const msg = aborted ? 'aborted' : (err?.message || String(err));
+    // 不是用户按停的中断(引擎被退出 / 更新 / 重启停下,中断任务续跑方案 B):记 interrupted(<原因>),不写「用户打断」标记。
+    // 只在本机恢复宿主上这样记 —— 云端 worker 的 server 不认这个状态,那条路照旧是 aborted。
+    const interruptReason = aborted && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)
+      ? interruptReasons.get(runId) : undefined;
+    const status = interruptReason ? 'interrupted' : aborted ? 'aborted' : 'failed';
+    const msg = interruptReason ? `interrupted:${interruptReason}` : aborted ? 'aborted' : (err?.message || String(err));
     console.error(`[agent-core] run ${runId} ${status}:`, msg);
     // 先撤掉挂起项、让出一拍:挂起提问的「没等到回答」要先写进本段的工具结果,下面落库的半截段才不是「还在等」的占位
     parkAc.abort();
@@ -4259,25 +4664,34 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 落库「已停止/失败」时已累积的部分助手轮次:有正文或工具调用就持久化 → 留在聊天记录、且作为上下文
     // 喂给后续 run(否则被中断的这一轮凭空消失,用户与后续 agent 都读不到)。幂等 upsert,失败不二次抛。
     if (finalContent.trim() || allToolCalls.length) {
-      await finalizeAssistantMessage(
-        currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
+      // 任何终态(中断 / 用户按停 / 出错)都带上这一批的进度(评审 #11):做完的真结果照留 —— 进度写早已把它们落了库,
+      // 不带就会被这一笔整行盖掉;没做完的留在飞记录(没开始 / 开始了),回放据此说清。这是这一 run 的最后一笔,之后进度写作废。
+      await finalizeSegment(
+        currentAssistantId, finalContent, finalReasoning, allToolCalls, progressOn ? progressResults() : allToolResults,
+        pendingDisplayFiles.splice(0), { seal: true, close: true },
       ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
       // 半截段落库了 → 本 run 压缩覆盖到它的检查点一并补落(否则下个 run 又把整段原样回放再总结一遍)
       await settleCheckpointAfterFinalize(currentAssistantId).catch((e: any) => console.warn('[agent-core] settle checkpoint on abort failed:', e?.message || e));
       // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
       // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
       // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。
-      if (aborted) {
+      // 引擎被停(interrupted)不是用户打断:不写这条标记 —— 下次启动按门控自动续跑,或补一条说明原因的中断行(recoverQueuedRuns)。
+      if (aborted && !interruptReason) {
         await deps().state.insertUserMessage({
           id: uuidv4(), sessionId, content: TURN_INTERRUPTED_MARKER, modelId, attachments: null,
         }).catch((e) => console.warn('[agent-core] persist interrupt marker failed:', e));
       }
+    } else if (progressOn) {
+      void rowWriter.exclusive(async () => {}, { close: true }); // 没有可落的段:也要关掉进度写(还在跑完的并行工具别再写)
     }
     // 用户按停、且这一轮已经调了好几次工具:记在会话上,等他的下一轮跑完再让后台复盘(那时才看得到他接下来说了什么)。
     if (aborted && userStopped.has(ac)) noteUserStop(sessionId, runToolNames);
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     // P1-K2:中止且记过原因(急停)→ 带 reason,手机 / 设备页据此显示「已被那台电脑急停」。
-    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+    // interrupted:error 固定 'interrupted'、aborted 仍为 true(老客户端当「已停止」收尾),interrupted 字段带原因(新客户端换成说原因的那条线)。
+    await publish(runId, 'error', interruptReason
+      ? { error: 'interrupted', aborted: true, interrupted: interruptReason, content: finalContent }
+      : { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
     // —— Stop hook：失败/中止路径也触发（host-only；纯 side-effect 通知，不影响错误处理，无续跑）。——
     void runHooks('Stop', {
       session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: aborted ? 'aborted' : 'error',
@@ -4285,6 +4699,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   } finally {
+    for (const id of liveMarked) unmarkLiveRow(id); // 本 run 的段不再算「在跑」:之后回放按三分法说
     // 兜底 snapshot（失败/中止路径未走到成功段时）；会话沙箱保持温，由空闲 TTL reaper 回收。
     await flush();
     parkAc.abort(); // 没等到拍板的挂起审批一并撤掉(登记表清空 → 事后点批准回 410)
@@ -4315,17 +4730,28 @@ async function finalizeAssistantMessage(
   toolCalls: ToolCall[],
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
-  /** 覆盖 origin(安全审核拦下 = 'refused')。和额度后备同用一列:拦下优先,那一轮的「改用了」行重载后不再显示。 */
-  originOverride?: string,
+  /** restamp:边跑边落库后的第一次正式落库,时间戳改成这一刻(与没有进度写时逐字相同)。
+   *  origin:覆盖 origin(安全审核拦下 = 'refused')。和额度后备同用一列:拦下优先,那一轮的「改用了」行重载后不再显示。
+   *  done:这是终稿,和 run 记 done 同一事务提交(评审 #5,只有本机存储有 completeRun;调用方只在那时传)。 */
+  opts?: { restamp?: boolean; origin?: string; done?: RunDoneCommit },
 ): Promise<void> {
-  // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
+  const m = {
+    messageId, sessionId, content, reasoning, toolCalls, toolResults, displayFiles, ...assistantRowIdentity(modelId, opts?.origin),
+    ...(opts?.restamp ? { restamp: true } : {}),
+  };
+  if (opts?.done) return completeRunWithMessage(m, opts.done);
+  await deps().state.finalizeAssistantMessage(m);
+}
+
+/** 终稿与 run 的 done 一起提交时带的那一份。 */
+interface RunDoneCommit { runId: string; result: any; tokensTotal?: number }
+
+/** 落库助手行的「谁、用哪个模型」:额度用完换了后备 → 记实际用的模型并标 origin(重开会话时界面据此还原「改用了」那一行)。
+ *  正式落库与进度写共用,两边写出来的这几列一样。 */
+function assistantRowIdentity(modelId: string, originOverride?: string): { modelId: string; agentSlug?: string; origin?: string } {
   const swap = modelSwaps.get(currentRunId() || '');
   const origin = originOverride ?? swap?.origin;
-  await deps().state.finalizeAssistantMessage({
-    messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
-    agentSlug: currentDisplayAgentSlug(),
-    ...(origin ? { origin } : {}),
-  });
+  return { modelId: swap?.modelId ?? modelId, agentSlug: currentDisplayAgentSlug(), ...(origin ? { origin } : {}) };
 }
 
 function safeParse(s: string): any {

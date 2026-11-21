@@ -152,11 +152,14 @@ describe('mac dmg layout', () => {
 describe('mac update install order', () => {
   it('stages Squirrel.Mac before the restart path marks quitting or stops the backend', () => {
     const src = readFileSync(join(__dirname, 'main.ts'), 'utf8')
-    const body = src.slice(src.indexOf('restart: async (install) =>'))
+    // 只看更新回调这一段(到下一个 IPC 处理器为止):全文找会命中后面别的路径(清空数据)的停机,挪了这里的顺序也照样过
+    const from = src.indexOf('restart: async (install) =>')
+    expect(from).toBeGreaterThan(-1)
+    const body = src.slice(from, src.indexOf('ipcMain.handle(', from))
     const at = (s: string) => { const i = body.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i }
     const prepare = at('await prepareInstall()')
     expect(at('quitGuards.confirmFirst()')).toBeLessThan(prepare)
     expect(prepare).toBeLessThan(at('isQuitting = true'))
-    expect(prepare).toBeLessThan(at('await backend.stop()'))
+    expect(prepare).toBeLessThan(at("await backend.stop(install ? 'app_update' : 'app_quit')"))
   })
 })

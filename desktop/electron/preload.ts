@@ -127,6 +127,12 @@ const api = {
     ipcRenderer.on('config:changed', listener)
     return () => { ipcRenderer.removeListener('config:changed', listener) }
   },
+  /** 改设置要重启引擎、但正有任务在跑:设置已存,引擎等任务结束再重启(中断任务续跑方案 B 6.6)。渲染层据此提示一句。 */
+  onBackendRestartDeferred: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('backend:restartDeferred', listener)
+    return () => { ipcRenderer.removeListener('backend:restartDeferred', listener) }
+  },
   // ── 收件箱:系统通知 + dock 角标(仅 mac)+ 通知点击回跳订阅 ──
   notifyInbox: (title: string, body: string): Promise<void> => ipcRenderer.invoke('inbox:notify', title, body),
   /** 通用系统通知(所有应用内通知同步发;点击仅聚焦窗口,不强制回跳 Inbox)。 */

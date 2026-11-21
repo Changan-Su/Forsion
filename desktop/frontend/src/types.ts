@@ -583,6 +583,8 @@ declare global {
       backendRestart?(): Promise<BackendStatusInfo>
       onBackendStatus?(cb: (st: BackendStatusInfo) => void): () => void
       onConfigChanged?(cb: () => void): () => void
+      /** 改设置要重启引擎、但正有任务在跑:设置已存,引擎等任务结束再重启(中断任务续跑方案 B 6.6)。 */
+      onBackendRestartDeferred?(cb: () => void): () => void
       // ── 设备互联(Forsion Unit):名册 + 本机 host 状态(token 留主进程,渲染层只拿结果)──
       /** shared = 连同别人共享给当前账号的 Unit 一起要(旧版 Extend 忽略这个参数,回包里就没有 `shared`)。 */
       unitsList?(opts?: { shared?: boolean }): Promise<{ status: number; json: { units?: UnitInfo[]; shared?: unknown } | null }>

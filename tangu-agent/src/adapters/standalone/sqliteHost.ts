@@ -68,6 +68,16 @@ export function createSqliteHost(cfg: SqliteHostConfig): { host: HostServices; d
       stmt.run(...clean);
       return [] as unknown as T;
     },
+    transactionSync: <T>(fn: (run: (sql: string, params?: any[]) => any[]) => T): T => {
+      const run = (sql: string, params?: any[]): any[] => {
+        const stmt = db.prepare(sql);
+        const clean = (params ?? []).map(sanitize);
+        if (stmt.reader) return stmt.all(...clean) as any[];
+        stmt.run(...clean);
+        return [];
+      };
+      return db.transaction(() => fn(run)).immediate();
+    },
     getDbType: () => 'sqlite',
     getNowSql: () => 'CURRENT_TIMESTAMP',
     getDateSql: (column: string) => `date(${column})`,

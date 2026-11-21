@@ -438,6 +438,7 @@ OPT_IN.add('standin'); KEYS.push('standin');
 OPT_IN.add('chanagentmode'); KEYS.push('chanagentmode'); // 通道 run 按 Agent 自己设的审批档收紧(11-14):同一个假通道,Agent 只读 / 分身按本体只读 → 要批不写;没设档 → 照通道完全放行;--kind neg 在没收紧的代码上跑应当红 // 分身(11-09):多联系人假通道 × 本体的私事;七个 run。动通道选 Agent / 分身权限域 / 文件读根 / 委派闸时跑;--kind neg 在旧代码上跑应当漏
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 OPT_IN.add('dsimport'); KEYS.push('dsimport'); // 导入的旧对话能接着聊(11-16,POST /agent/sessions/import):一个 run;只在动 sessionImport / 导入会话的回放时跑
+OPT_IN.add('resume'); KEYS.push('resume'); // --only resume:工具执行到一半 kill -9 引擎、同一 home 重启后自动续跑(中断任务续跑方案 B,lib/resume-live.mjs);自己起两台引擎。--resume-off = 负对照(须红)
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
@@ -3613,6 +3614,13 @@ try {
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
   });
 
+  // resume(11-20,中断任务续跑方案 B):工具执行到一半强杀引擎 → 同一 home 重启 → 自动续一轮跑完,不重跑已经开始的那条命令。
+  //   自带独立隔离 home 和两台引擎(主台架那台不参与);判据只看磁盘和库,见 lib/resume-live.mjs。改 runResume / runProgress / 启动恢复后跑。
+  await scenario('resume', 'resume 工具中途崩溃后重启自动续跑', async () => {
+    const { resumeLive } = await import('./lib/resume-live.mjs');
+    return resumeLive({ entry, AUTH, MODEL, OUT, SANDBOX, argv });
+  });
+
   // continuegen(11-10 用户反馈:报错 / 额度用完只有「重试」,前面生成的白费):真 Codex 写编号列表写到一半,流里被掐成额度用完。
   //   ① 失败那一轮已流出的正文落了库(引擎 catch 把在飞那截并进终稿);② 发 <turn_resume>(界面「继续生成」发的就是它),
   //   模型从断处接着写到 12,不从 1 重来。负对照腿(同一 run 内):把半截回答删掉再发同一个标记 → 模型只能从 1 写起,判据必须判它「重来」。
@@ -5159,7 +5167,7 @@ Then reply with only the command output.`,
 
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
     const noVoice = argv.includes('--settingsnav-no-voice');
-    const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, close-action, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, motion-theme, motion-fade, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, auto-resume, close-action, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, motion-theme, motion-fade, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
     // ⚠️ 上面那行字面量的变量名别改:desktop settingsTarget.test.ts 按 `const TARGETS = '…';` 逐字找它。
     const SHOWN = noVoice ? TARGETS.replace(' voice,', '') : TARGETS;
     const ENTRY = { id: 'open-settings',
