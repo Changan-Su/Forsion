@@ -218,8 +218,9 @@ list.addEventListener('drop', async (e) => {
 Watched ordinary DOM reading surfaces share continuous line selection bands with chat, notes and result previews. Math is measured as a unit, while native Selection, keyboard extension and copying remain intact. Paint is outside the content DOM and is removed on dispose. Touch pointers and custom PDF/code-editor selection layers retain native paint; `watch: false` continues to use the plugin's own paint and manual `show()` / `hide()`.
 
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
-show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
-as a quote), **Translate** (result in a card under the selection) and **⋯** (selection actions from plugins). Which
+show the same one: the view's own tools plus the shared actions — **Ask Tangu** (hands the text to the side chat
+as a quote), **Translate** (result in a card under the selection), **Read aloud** (2026-11-21+, hosts with a
+read-aloud setting), then a divider and up to three plugin actions placed on the bar, then **⋯** (the rest). Which
 block comes first is the user's setting (Settings → Appearance → Selection menu); do not depend on the order.
 
 **Give your own view the bar.** Do not draw your own popup menu on new hosts.
@@ -265,8 +266,9 @@ ctx.registerView({ id: 'reader', title: 'Reader', mount(el) {
   `mountFloatingToc` and other mounts on the same element. The host disposes it on disable / reload.
 - A view that never calls `mountSelectionBar` gets no bar: the host does not sniff selections globally.
 
-**Add an action to the bar.** `ctx.registerSelectionAction` entries are listed behind "⋯" under "Plugins".
-With no `scope` they appear in notes only, exactly as before; opt into more with the new optional fields:
+**Add an action to the bar.** `ctx.registerSelectionAction` entries are listed behind "⋯" under "Plugins" unless
+they ask for a spot on the bar (`placement: 'bar'`, below). With no `scope` they appear in notes only, exactly as
+before; opt into more with the new optional fields:
 
 ```js
 ctx.registerSelectionAction({
@@ -298,6 +300,42 @@ ctx.registerSelectionAction({
   (Copy / Close). You cannot bypass the card to write into a note.
 - `output: 'none'`: you handle the result yourself (open a view, save a clipping) — the host shows no card and
   ignores the return value. Report failures yourself or throw: the host shows a toast with the error message.
+
+**On the bar, running by itself, card controls (2026-11-21+).** All optional; older hosts ignore them.
+
+```js
+ctx.registerSelectionAction({
+  id: 'translate',
+  title: { zh: '翻译', en: 'Translate' },             // string | () => string | { zh, en } — drawn in the current language
+  icon: 'languages',
+  scope: 'all',
+  placement: 'bar',                                  // default spot: on the bar ('more' = behind ⋯, the default)
+  auto: true,                                        // supports "Run on select" — the user turns it on, never you
+  card: { language: true, source: true, speak: true },
+  run: async (cx) => (await ctx.tangu.translate({ text: cx.markdown, language: cx.language ?? 'English', signal: cx.signal, onDelta: cx.onDelta })).text,
+})
+```
+
+- `placement: 'bar'` is a default only. The user pins / unpins in ⋯ (a pin on each row), right-clicks a bar button
+  ("Move to ⋯", "Manage selection menu…") or uses the table under Settings → Appearance → Selection menu
+  (Bar / ⋯ / Hidden, drag to reorder); their choice always wins and is remembered. At most **3** plugin actions sit
+  on the bar; the rest go behind ⋯ in install order and ⋯ says "N more did not fit · Manage". Core plugins sit with
+  the host's actions before the divider and don't use those slots.
+- `auto: true` only declares support (needs output `'preview'`). The switch is per action, off by default, in the
+  card head ("Run on select") and the Settings table; a plugin cannot turn it on. When on, a mouse selection that
+  rests 400 ms (1–2000 characters, not in inputs) opens the bar and your card together and `run` gets
+  `cx.auto === true`; a new selection retargets the same card and aborts the previous `cx.signal`; the same text in
+  the same language is not requested twice in a session. With several switched on only the first in the user's
+  order runs. Desktop only for now (phones don't run actions automatically). Notes don't run actions automatically
+  either: there the card can write into the note.
+- `card.language` draws a target-language picker in the card head; the value reaches `run` as `cx.language` (English
+  language names: `'English'`, `'Chinese (Simplified)'`, `'Japanese'`…). Initial value = the host's guess from the
+  selection, then the user's last pick for this action. `card.source` shows the selection above the result (3 lines,
+  click to expand). `card.speak` adds speaker buttons next to the original and the result (hidden where read-aloud
+  is not available).
+- `title` as a function or `{ zh, en }` needs this host: older hosts drop the whole action (console warning) when
+  `title` is not a string. Set `minAppVersion`, or pass a string on older hosts.
+- Read aloud yourself with `ctx.tts?.speak(text, { signal })` (see the host APIs reference).
 - Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
   has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
 
