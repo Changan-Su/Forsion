@@ -92,7 +92,7 @@ const pluginIcon = (icon: string | undefined): ReactNode => {
 }
 
 export const speakIcon = (phase: SpeakPhase): ReactElement =>
-  phase === 'loading' ? <Loader2 size={14} className="selbar-spin" /> : phase === 'playing' ? <Square size={12} fill="currentColor" /> : <Volume2 size={14} />
+  phase === 'loading' ? <Loader2 size={14} className="spin" data-spin="" /> : phase === 'playing' ? <Square size={12} fill="currentColor" /> : <Volume2 size={14} />
 
 /** 这一次的条。where = 视图 / 能不能写 / 选了多少字(插件动作的 scope / when 按它过滤)。 */
 export function buildSelectionBarModel(o: {

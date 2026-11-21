@@ -40,6 +40,22 @@ const AUTO_MAX_CHARS = 2000
 /** 自动跑过的结果:同一个动作、同一段、同一个目标语言,本次会话内不再请求(按出现先后最多留这么多)。 */
 const autoCache = new Map<string, string>()
 const AUTO_CACHE_MAX = 100
+/** 锚点读出来的矩形竖向并上条的矩形(条在、看得见时)。只给浮层摆位用,收拾仍归原锚点。 */
+function clearOfBar(a: TextAnchor, bar: () => HTMLElement | null): TextAnchor {
+  return {
+    read: () => {
+      const r = a.read()
+      const el = bar()
+      if (!r || !el?.isConnected || el.hasAttribute('data-anchor-hidden')) return r
+      const b = el.getBoundingClientRect()
+      return b.height ? { ...r, top: Math.min(r.top, b.top), bottom: Math.max(r.bottom, b.bottom) } : r
+    },
+    lost: () => a.lost(),
+    subscribe: (fn) => a.subscribe(fn),
+    dispose: () => {},
+  }
+}
+
 const autoCacheKey = (action: string, language: string | undefined, markdown: string): string => `${action}\u0000${language ?? ''}\u0000${markdown}`
 /** 手机没有「停下来」这个时机(选区靠系统菜单),第一轮不自动(契约 §4)。 */
 const autoAllowedHere = (): boolean => {
@@ -238,6 +254,10 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cardAnchor = useMemo(() => anchorOf(ownerEl, cardSrc, () => setCard(null)), [ownerEl, !!card, card?.range, card?.getRect])
   useEffect(() => () => cardAnchor?.dispose(), [cardAnchor])
+  // 自动开的卡和条同时在:卡按「那段字 + 条」一起让位 —— 下面放不下翻到上面时摆在条的上面,不盖住条
+  const barElRef = useRef<HTMLDivElement | null>(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const shownCardAnchor = useMemo(() => (cardAnchor && card?.auto ? clearOfBar(cardAnchor, () => barElRef.current) : cardAnchor), [cardAnchor, !!card?.auto])
   const ttsAnchor = useMemo(() => anchorOf(ownerEl, ttsCard, () => setTtsCard(null)), [ownerEl, ttsCard])
   useEffect(() => () => ttsAnchor?.dispose(), [ttsAnchor])
   const installed = usePluginStore((s) => s.plugins)
@@ -315,6 +335,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     if (actions.length || model.plugins.length || more.length || model.moreHost.length || tools.length) {
       bar = (
         <OverlayAt
+          innerRef={(el) => { barElRef.current = el }}
           className="ui-popover selbar"
           x={(sel.rect.left + sel.rect.right) / 2}
           y={sel.rect.bottom + 8}
@@ -390,7 +411,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           x={card.x}
           y={card.y}
           anchorTop={card.top}
-          anchor={cardAnchor}
+          anchor={shownCardAnchor}
           title={cardOwned ? selectionActionTitle(cardOwned) : card.title}
           icon={cardOwned ? pluginIcon(cardOwned.item.icon) ?? undefined : undefined}
           hasSelection

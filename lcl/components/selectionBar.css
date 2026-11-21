@@ -205,7 +205,3 @@
 .selbar-notice-act:hover { background: var(--menu-hover); }
 .selbar-notice-act:focus-visible,
 .selbar-pin:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -2px; }
-/* 朗读合成中:图标转圈(只转图标,字不动) */
-@keyframes selbar-spin { to { transform: rotate(360deg); } }
-.selbar-spin { animation: selbar-spin 0.9s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .selbar-spin { animation: none; } }

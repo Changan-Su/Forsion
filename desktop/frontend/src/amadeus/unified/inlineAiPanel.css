@@ -129,7 +129,7 @@
   border-radius: 8px;
   background: var(--border-strong, var(--border));
   cursor: pointer;
-  transition: background var(--duration-fast, 120ms) var(--ease-out, ease);
+  transition: background var(--duration-fast, 120ms) var(--ease-surface, ease);
 }
 .am-ai-panel .am-ai-switch > span {
   position: absolute;
@@ -139,7 +139,7 @@
   height: 12px;
   border-radius: 50%;
   background: var(--bg-card);
-  transition: left var(--duration-fast, 120ms) var(--ease-out, ease);
+  transition: left var(--duration-fast, 120ms) var(--ease-surface, ease);
 }
 .am-ai-panel .am-ai-switch.on { background: var(--accent); }
 .am-ai-panel .am-ai-switch.on > span { left: 14px; }

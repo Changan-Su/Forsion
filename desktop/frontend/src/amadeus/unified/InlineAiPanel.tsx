@@ -227,7 +227,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
       <button type="button" className={`am-ai-speak${ph ? ' on' : ''}`} data-speak={which} data-phase={ph ?? 'idle'} aria-pressed={!!ph}
         title={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')} aria-label={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')}
         onClick={() => speak.onToggle(which, body)}>
-        {ph === 'loading' ? <Loader2 size={13} className="selbar-spin" /> : ph === 'playing' ? <Square size={11} fill="currentColor" /> : <Volume2 size={13} />}
+        {ph === 'loading' ? <Loader2 size={13} className="spin" data-spin="" /> : ph === 'playing' ? <Square size={11} fill="currentColor" /> : <Volume2 size={13} />}
       </button>
     )
   }
