@@ -288,6 +288,45 @@ describe('createMultiAccountApp', () => {
     expect(runWithAccount('gina', () => projectDocPaths(inside))).toEqual([join(inside, 'AGENTS.md')]);
   });
 
+  it('seeds plugin package personas without following links, and refuses package folders that overlap the accounts', async () => {
+    const { assertBundleDirsOutsideAccounts, setMultiAccountBundleDirs } = await import('../plugins/bundles.js');
+    const secret = join(mkdtempSync(join(tmpdir(), 'ma-secret-')), 'secret.txt');
+    writeFileSync(secret, 'PACKAGE_LINK_TARGET');
+    const pkg = mkdtempSync(join(tmpdir(), 'ma-pkg-'));
+    writeFileSync(join(pkg, 'manifest.json'), JSON.stringify({ id: 'ma-test-pkg' }));
+    const agentSrc = join(pkg, 'agents', 'pkg-persona');
+    mkdirSync(join(agentSrc, 'skills', 'pkg-skill'), { recursive: true });
+    writeFileSync(join(agentSrc, 'config.toml'), 'name = "Pkg persona"\n');
+    writeFileSync(join(agentSrc, 'skills', 'pkg-skill', 'SKILL.md'), '---\nname: pkg-skill\ndescription: d\n---\nbody\n');
+    symlinkSync(secret, join(agentSrc, 'linked.txt'));
+    symlinkSync(secret, join(agentSrc, 'skills', 'pkg-skill', 'linked.md'));
+    try {
+      setMultiAccountBundleDirs([pkg]);
+      expect((await call('GET', '/agent/sessions', { as: 'hank' })).status).toBe(200); // 开户时播种
+      const seeded = join(env.home, 'accounts', 'hank', 'agents', 'pkg-persona');
+      expect(existsSync(join(seeded, 'config.toml'))).toBe(true);
+      expect(existsSync(join(seeded, 'linked.txt'))).toBe(false);
+      expect(existsSync(join(seeded, 'skills', 'pkg-skill', 'SKILL.md'))).toBe(true);
+      expect(existsSync(join(seeded, 'skills', 'pkg-skill', 'linked.md'))).toBe(false);
+      // 包目录与账号文件夹重叠:装配时抛;运行期也不当只读根
+      const inside = join(env.home, 'accounts', 'hank', 'pkg');
+      mkdirSync(inside, { recursive: true });
+      writeFileSync(join(inside, 'manifest.json'), '{}');
+      writeFileSync(join(env.home, 'manifest.json'), '{}'); // 引擎根当插件包目录(它包着 accounts/)
+      for (const bad of [inside, env.home]) {
+        setMultiAccountBundleDirs([bad]);
+        expect(() => assertBundleDirsOutsideAccounts()).toThrow(/must not overlap/);
+        await expect(createMultiAccountApp({ localToken: TOKEN, brain, bundleDirs: [bad] })).rejects.toThrow(/must not overlap/);
+      }
+      const { bundleDirs } = await import('../plugins/bundles.js');
+      setMultiAccountBundleDirs([inside, pkg]);
+      expect(bundleDirs()).toEqual([pkg]);
+    } finally {
+      setMultiAccountBundleDirs(null);
+      rmSync(join(env.home, 'manifest.json'), { force: true });
+    }
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);

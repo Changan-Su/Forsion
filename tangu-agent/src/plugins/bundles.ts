@@ -20,9 +20,9 @@
  * Dirent 扫描本就不认它们,引擎若跟随会产生「桌面看不见、级联管不着」的隐身子插件(codex P2-1)。
  * (用户插件目录 ~/.tangu/plugins 里的符号链接是 --link 开发流,归 loader 管,不受此限。)
  */
-import { isMultiAccount } from '../core/accountScope.js';
+import { engineRoot, isMultiAccount } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { agentsDir, forsionSharedDir } from '../core/tanguHome.js';
 import { supersededPlainInstalls } from '../contracts/pluginAliases.js';
@@ -49,7 +49,34 @@ export function setMultiAccountBundleDirs(dirs: string[] | null): void {
   multiAccountBundles = dirs ? [...new Set(dirs)] : null;
 }
 
-export function bundleDirs(): string[] {
+/** 真实路径;拿不到(不存在 / 读不了)就按字面。 */
+function realOr(p: string): string {
+  try { return realpathSync.native(p); } catch { return path.resolve(p); }
+}
+const overlaps = (a: string, b: string): boolean => {
+  const r1 = path.relative(a, b);
+  const r2 = path.relative(b, a);
+  return r1 === '' || (!r1.startsWith('..') && !path.isAbsolute(r1)) || (!r2.startsWith('..') && !path.isAbsolute(r2));
+};
+
+/** 多账号模式:插件包目录(真实路径)与 `<engineRoot>/accounts` 互不包含。包目录是所有账号的只读根,
+ *  和账号文件夹重叠就等于把别人的文件夹当成只读根放出去。 */
+function bundleOverlapsAccounts(root: string): boolean {
+  return overlaps(realOr(root), path.join(realOr(engineRoot()), 'accounts'));
+}
+
+/** createMultiAccountApp 装配时调:有包目录与账号文件夹重叠就抛。 */
+export function assertBundleDirsOutsideAccounts(): void {
+  const bad = bundleDirs({ keepOverlapping: true }).filter(bundleOverlapsAccounts);
+  if (bad.length) throw new Error(`multi-account mode: plugin package folders must not overlap ${path.join(engineRoot(), 'accounts')}: ${bad.join(', ')}`);
+}
+
+/** 多账号模式播种时复制用的过滤:软链条目跳过,不解引用(复制出来的东西里不会有指向账号文件夹之外的链接)。 */
+export async function skipLinks(src: string): Promise<boolean> {
+  try { return !(await fs.lstat(src)).isSymbolicLink(); } catch { return false; }
+}
+
+export function bundleDirs(opts?: { keepOverlapping?: boolean }): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
   if (isMultiAccount()) {
     let roots: string[] = multiAccountBundles ?? [];
@@ -59,7 +86,10 @@ export function bundleDirs(): string[] {
       if (!Array.isArray(parsed) || parsed.some((root) => typeof root !== 'string' || !path.isAbsolute(root))) throw new Error('TANGU_BUNDLE_DIRS must be a JSON array of absolute package paths');
       roots = parsed as string[];
     }
-    return [...new Set(roots)].filter((root) => isRealDir(root) && existsSync(path.join(root, 'manifest.json'))).sort();
+    return [...new Set(roots)]
+      .filter((root) => isRealDir(root) && existsSync(path.join(root, 'manifest.json')))
+      .filter((root) => opts?.keepOverlapping || !bundleOverlapsAccounts(root)) // 运行期也不把重叠的当只读根
+      .sort();
   }
   if (process.env.TANGU_PLUGINS_DIR) return []; // 显式覆盖 = 只认那一个目录(云端/docker 形态)
   // Unit passes only active, validated package roots. An explicit empty list must
@@ -191,7 +221,8 @@ export async function seedBundleAgents(): Promise<string[]> {
       const staging = path.join(agentsDir(), `.seed-${slug}-${process.pid}-${seeded.length}`);
       try {
         await fs.mkdir(agentsDir(), { recursive: true });
-        await fs.cp(src, staging, { recursive: true, dereference: true });
+        // 多账号模式:不跟软链(跳过软链条目、不解引用),别把包外的东西复制进账号文件夹
+        await fs.cp(src, staging, isMultiAccount() ? { recursive: true, dereference: false, filter: skipLinks } : { recursive: true, dereference: true });
         // 归属标记:只在**新播种**时写(在 cp 之后 → 插件自带的同名文件被真值盖掉;在 rename 之前 → 与人格一起原子落位)。
         // 桌面 ctx.tangu.startChat 的 send:true 只认它 —— 同 slug 已存在(用户自建 / 默认 agent / 别家插件先播)时
         // 上面的已存在分支永不写,那个插件就拿不到直发权。点开头的文件不进同步(validSyncPath)/名册/技能指纹。

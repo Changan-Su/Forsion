@@ -8,13 +8,13 @@
  * 混进目录与 system prompt 被 use_skill 直接调用。改由「设置 → Agent CLIs」逐个显式导入
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
-import { perAccount } from '../core/accountScope.js';
+import { isMultiAccount, perAccount } from '../core/accountScope.js';
 import { promises as fs, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
-import { bundleSkillRoots } from '../plugins/bundles.js';
+import { bundleSkillRoots, skipLinks } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd, currentStandIn } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { pathWithin } from '../sandbox/hostSandboxProtection.js';
@@ -259,7 +259,8 @@ async function replaceDir(srcDir: string, destDir: string, stamp: string): Promi
   const trash = `${destDir}.seed-old-${process.pid}`;
   try {
     await fs.rm(staging, { recursive: true, force: true });
-    await fs.cp(srcDir, staging, { recursive: true });
+    // 多账号模式:播种进账号文件夹时不复制软链条目
+    await fs.cp(srcDir, staging, isMultiAccount() ? { recursive: true, filter: skipLinks } : { recursive: true });
     await fs.writeFile(path.join(staging, SEED_STAMP), stamp, 'utf8');
     let hadOld = false;
     try {

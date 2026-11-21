@@ -32,7 +32,7 @@ import { withOutboundMasking } from '../llm/outboundMask.js';
 import { runMigration } from '../db/migrate.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { seedExampleCommand } from '../services/customCommands.js';
-import { bundleDirs, seedBundleAgents, setMultiAccountBundleDirs } from '../plugins/bundles.js';
+import { assertBundleDirsOutsideAccounts, bundleDirs, seedBundleAgents, setMultiAccountBundleDirs } from '../plugins/bundles.js';
 import { accountCwdDenied, setAccountReadOnlyRoots } from '../services/accessDomain.js';
 import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
@@ -225,6 +225,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   if (!opts.localToken) throw new Error('multi-account mode requires a host credential (TANGU_LOCAL_TOKEN)');
 
   if (opts.bundleDirs) setMultiAccountBundleDirs(opts.bundleDirs);
+  assertBundleDirsOutsideAccounts(); // 插件包目录与账号文件夹重叠 → 不装配
   setAccountReadOnlyRoots(() => bundleDirs());
 
   const mh = createMultiAccountSqliteHost({
