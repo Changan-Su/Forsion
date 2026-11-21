@@ -24,7 +24,7 @@ import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { AssetsBrain, CloudBrainServices, StorageBrain } from '../seams/cloudBrain.js';
-import { accountWorkspaceDir, isMultiAccount, runWithAccount } from '../core/accountScope.js';
+import { accountWorkspaceDir, isMultiAccount, runWithAccount, setSessionClaimer } from '../core/accountScope.js';
 import { checkAccountIdentity, createMultiAccountSqliteHost, type MultiAccountHost } from '../adapters/standalone/multiAccountSqliteHost.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
@@ -245,6 +245,8 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     },
   });
 
+  setSessionClaimer((sessionId) => mh.claimSession(sessionId)); // enqueueRun 入队前核会话归属(core/accountScope.ts)
+
   const mod = createTanguModule({
     host: mh.host,
     brain: multiAccountBrain(opts.brain),
@@ -308,6 +310,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
       try { mod.dispose(); } catch { /* ignore */ }
       mh.close();
       setMultiAccountBundleDirs(null);
+      setSessionClaimer(null);
     },
     routeAllowlist: ROUTE_ALLOWLIST.map(({ method, path }) => ({ method, path })),
     toolAllowlist: [...MULTI_ACCOUNT_TOOL_ALLOWLIST],

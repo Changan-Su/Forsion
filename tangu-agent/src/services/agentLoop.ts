@@ -1,4 +1,4 @@
-import { accountWorkspaceDir, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
+import { accountWorkspaceDir, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
@@ -370,7 +370,13 @@ export function enqueueRun(sessionId: string, runId: string): void {
   // 同一个 run 在本进程只排一次(评审 #1):外部 PG 不记持有者,启动恢复可能把请求刚入队的那一行再认领入队一次
   if (runSession.has(runId)) return;
   // 多账号模式:不在账号上下文里入队 = 不知道它是谁的 → 抛(缺省拒绝);记下属主,startRun 按它重绑。
-  if (isMultiAccount()) runAccount.set(runId, requireAccountId('enqueueRun'));
+  // 会话 id 必须在登记表里属于当前账号(没登记的当场认领):所有入队路径(请求、团队成员、子会话、续跑…)在这一处兜住,
+  // 属于别人的 → 抛,不进任何进程级表(以会话 id 为键的排队、审批「总允许」等就不会串到别人的会话上)。
+  if (isMultiAccount()) {
+    const me = requireAccountId('enqueueRun');
+    if (!claimSessionForCurrentAccount(sessionId)) throw new Error('multi-account: this session belongs to another account');
+    runAccount.set(runId, me);
+  }
   runSession.set(runId, sessionId);
   if (!sessionActive.has(sessionId)) {
     sessionActive.set(sessionId, runId);

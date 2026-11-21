@@ -150,6 +150,20 @@ describe('createMultiAccountApp', () => {
     expect((await call('GET', `/agent/sessions/${sid}/detail`, { as: 'alice' })).status).toBe(200);
   });
 
+  it('refuses to queue a run on a session id registered to another account, whatever path queues it', async () => {
+    const { enqueueRun, isRunLive } = await import('../services/agentLoop.js');
+    const { claimSessionForCurrentAccount, runWithAccount } = await import('../core/accountScope.js');
+    const aliceSid = (await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'queue-owner' } })).json.session.id as string;
+    expect(() => runWithAccount('bob', () => enqueueRun(aliceSid, 'run-from-another-account'))).toThrow(/another account/);
+    expect(isRunLive('run-from-another-account')).toBe(false);
+    expect(() => enqueueRun(aliceSid, 'run-without-account')).toThrow(/no account in context/);
+    // 没登记过的 id:入队前当场替当前账号认领,之后别的账号拿它就是 404
+    const fresh = '44444444-5555-4666-8777-888888888888';
+    expect(runWithAccount('bob', () => claimSessionForCurrentAccount(fresh))).toBe(true);
+    expect(runWithAccount('alice', () => claimSessionForCurrentAccount(fresh))).toBe(false);
+    expect((await call('POST', '/agent/runs', { as: 'alice', body: { session_id: fresh, model_id: 'test-model', message: 'x' } })).status).toBe(404);
+  });
+
   it('two accounts racing on one new session id: one gets it, the other a plain 404', async () => {
     const fresh = '11111111-2222-4333-8444-555555555555';
     const [a, b] = await Promise.all(['alice', 'bob'].map((as) =>

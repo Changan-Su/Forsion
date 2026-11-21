@@ -67,6 +67,23 @@ export function requireAccountId(what: string): string {
   return id;
 }
 
+let sessionClaimer: ((sessionId: string) => boolean) | null = null;
+/** 会话 id 登记器(多账号模式由 createMultiAccountApp 装配时登记;单人模式不用)。 */
+export function setSessionClaimer(fn: ((sessionId: string) => boolean) | null): void {
+  sessionClaimer = fn;
+}
+
+/**
+ * 多账号模式:这个会话 id 在登记表里属于当前账号 → true(没登记过的当场替当前账号认领);属于别的账号、或者没有登记器 → false
+ * (缺省拒绝)。没有账号上下文就抛。单人模式恒 true、不调用登记器。
+ */
+export function claimSessionForCurrentAccount(sessionId: string): boolean {
+  if (!MULTI) return true;
+  requireAccountId('claimSession');
+  if (!sessionClaimer || typeof sessionId !== 'string' || !sessionId) return false;
+  return sessionClaimer(sessionId);
+}
+
 /**
  * 把「当前账号」和回调绑在一起:存进进程级结构、稍后在别的异步上下文里执行的回调(队列、防抖、定时器、事件监听)用。
  * 单人模式原样返回 fn;多账号模式下绑定时不在账号上下文里也原样返回(执行时照样拿不到账号 → 碰账号数据就抛)。
