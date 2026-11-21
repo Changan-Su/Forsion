@@ -48,6 +48,7 @@ import { getRun, createRun, updateRunStatus, appendStep, listPendingRunsForRecov
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolOriginOf, type ToolContext, type ToolOrigin } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
+import { multiAccountToolAllowed } from '../tools/multiAccountTools.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
@@ -3454,6 +3455,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
           toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
         };
+      }
+
+      // 多账号模式:白名单外的工具在审批之前就拒 —— 不弹审批卡、不挂起会话(执行层 tools/registry.ts 那道照留)
+      if (isMultiAccount() && !multiAccountToolAllowed(effCall.function.name)) {
+        return mkRejected(call, startedAt, parallelGroup, `Error: tool "${effCall.function.name}" is not available in multi-account mode.`, ptc?.parentCallId);
       }
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。

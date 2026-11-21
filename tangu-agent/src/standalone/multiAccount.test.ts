@@ -34,6 +34,11 @@ const brain: any = {
     streamProviderCompletion: async (opts: any) => {
       const { currentAccountId } = await import('../core/accountScope.js');
       seenAccounts.push(currentAccountId());
+      // 脚本:用户消息里带 CALL_FORBIDDEN_TOOL 的那轮,第一次先叫一个白名单外的工具
+      const msgs: any[] = Array.isArray(opts.payload?.messages) ? opts.payload.messages : [];
+      if (JSON.stringify(msgs).includes('CALL_FORBIDDEN_TOOL') && !msgs.some((m) => m?.role === 'tool')) {
+        return { content: '', reasoning: '', toolCalls: [{ id: 'call_forbidden_0', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command: 'echo forbidden' }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 }, finishReason: 'tool_calls' };
+      }
       opts.onToken?.('hi');
       return { content: 'hi', reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } };
     },
@@ -380,6 +385,16 @@ describe('createMultiAccountApp', () => {
     expect(listing).toContain('[file] own.txt (3 bytes)');
     expect(listing).toContain('[link] pointer.bin');
     expect(listing).not.toContain('4321');
+  });
+
+  it('refuses a tool outside the allowlist before approval: no approval card, the session is not held', async () => {
+    const s = await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'forbidden-tool' } });
+    const run = await call('POST', '/agent/runs', { as: 'alice', body: { session_id: s.json.session.id, model_id: 'test-model', message: 'CALL_FORBIDDEN_TOOL', agent_config: { approvalMode: 'ask' } } });
+    expect(run.status).toBe(200);
+    const sse = await (await fetch(`${base}/agent/runs/${run.json.runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'alice' } })).text();
+    expect(sse).toMatch(/not available in multi-account mode/);
+    expect(sse).not.toMatch(/"type":"approval/);
+    expect(sse).toMatch(/"type":"done"/);
   });
 
   it('clamps working directories to the account folder', async () => {
