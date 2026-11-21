@@ -8,7 +8,7 @@
  */
 import type { RequestHandler } from 'express';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import type { HostServices } from '../../seams/hostServices.js';
@@ -69,6 +69,43 @@ export class SessionIdTakenError extends Error {
   constructor() { super('Session not found'); this.name = 'SessionIdTakenError'; }
 }
 
+/**
+ * 开户前核对账号的落盘位置没被软链引到别处:`accounts/`、账号 home 必须是真目录(不是软链),state.db 及已存在的 -wal / -shm
+ * 必须是普通文件(不是软链、没有别的硬链接),home 的真实路径必须正好是 `<engineRoot 的真实路径>/accounts/<id>`。
+ * 不满足就抛(这次开户失败,请求 500),日志写清是哪一项。engineRoot 本身经软链到达是允许的(宿主自己的配置)。
+ */
+export function assertAccountPaths(id: string): void {
+  const home = accountHome(id);
+  const accountsDir = join(engineRoot(), 'accounts');
+  const fail = (why: string): never => {
+    const msg = `multi-account: refusing to open account ${id}: ${why}`;
+    console.error(`[tangu] ${msg}`);
+    throw new Error(msg);
+  };
+  const realDir = (p: string): void => {
+    let st;
+    try { st = lstatSync(p); } catch (e) { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return; throw e; }
+    if (st.isSymbolicLink()) fail(`${p} is a symbolic link`);
+    if (!st.isDirectory()) fail(`${p} is not a directory`);
+  };
+  realDir(accountsDir);
+  realDir(home);
+  mkdirSync(home, { recursive: true });
+  realDir(accountsDir);
+  realDir(home);
+  const expected = join(realpathSync.native(engineRoot()), 'accounts', id);
+  const real = realpathSync.native(home);
+  if (real !== expected) fail(`${home} resolves to ${real}, not ${expected}`);
+  for (const name of ['state.db', 'state.db-wal', 'state.db-shm']) {
+    const f = join(home, name);
+    let st;
+    try { st = lstatSync(f); } catch (e) { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') continue; throw e; }
+    if (st.isSymbolicLink()) fail(`${f} is a symbolic link`);
+    if (!st.isFile()) fail(`${f} is not a regular file`);
+    if (st.nlink > 1) fail(`${f} has other hard links`);
+  }
+}
+
 export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): MultiAccountHost {
   const dbs = new Map<string, Database.Database>();
   const ready = new Map<string, Promise<void>>();
@@ -100,9 +137,8 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
   const dbFor = (id: string): Database.Database => {
     let db = dbs.get(id);
     if (db) return db;
-    const home = accountHome(id);
-    mkdirSync(home, { recursive: true });
-    db = new Database(join(home, 'state.db'));
+    assertAccountPaths(id); // 账号 home / 库文件不许是软链、不许落到 accounts/<id> 之外
+    db = new Database(join(accountHome(id), 'state.db'));
     applyWalWithFallback(db);
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');

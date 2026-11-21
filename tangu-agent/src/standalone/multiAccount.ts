@@ -268,7 +268,11 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     const id = (req as any).accountId as string;
     mh.ensureAccount(id).then(
       () => runWithAccount(id, () => next()),
-      (e) => res.status(500).json({ detail: `Account could not be opened: ${(e as Error)?.message || e}` }),
+      (e) => {
+        // 细节(本机路径)只进日志,不回给请求方
+        console.error(`[tangu] multi-account: account ${id} could not be opened:`, (e as Error)?.message || e);
+        res.status(500).json({ detail: 'Account could not be opened' });
+      },
     );
   });
   // ③ 白名单里的路由;其余一律 403

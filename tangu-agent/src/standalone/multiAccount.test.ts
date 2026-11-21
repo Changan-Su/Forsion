@@ -17,7 +17,8 @@ const env = vi.hoisted(() => {
   return { home };
 });
 
-import { existsSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMultiAccountApp } from './multiAccount.js';
 
@@ -141,6 +142,24 @@ describe('createMultiAccountApp', () => {
     const who = a.status === 200 ? 'alice' : 'bob';
     const sse = await fetch(`${base}/agent/runs/${winner.json.runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': who } });
     expect(await sse.text()).toMatch(/"type":"done"/);
+  });
+
+  it('refuses to open an account whose folder or database is a link to somewhere else', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'ma-elsewhere-'));
+    // 账号 home 是软链
+    symlinkSync(elsewhere, join(env.home, 'accounts', 'mallory'));
+    expect((await call('GET', '/agent/sessions', { as: 'mallory' })).status).toBe(500);
+    expect(existsSync(join(elsewhere, 'state.db'))).toBe(false);
+    // home 是真目录,state.db 是软链 / 硬链接
+    mkdirSync(join(env.home, 'accounts', 'eve'), { recursive: true });
+    writeFileSync(join(elsewhere, 'other.db'), '');
+    symlinkSync(join(elsewhere, 'other.db'), join(env.home, 'accounts', 'eve', 'state.db'));
+    expect((await call('GET', '/agent/sessions', { as: 'eve' })).status).toBe(500);
+    mkdirSync(join(env.home, 'accounts', 'trent'), { recursive: true });
+    linkSync(join(elsewhere, 'other.db'), join(env.home, 'accounts', 'trent', 'state.db'));
+    const r = await call('GET', '/agent/sessions', { as: 'trent' });
+    expect(r.status).toBe(500);
+    expect(JSON.stringify(r.json)).not.toContain(elsewhere); // 路径只进日志
   });
 
   it('clamps working directories to the account folder', async () => {
