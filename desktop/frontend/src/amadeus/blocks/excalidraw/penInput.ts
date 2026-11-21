@@ -1,5 +1,5 @@
-/** 手写笔输入的三处修补。引擎(fork 0.18.122)是预编译的 IIFE,改不了源码:
- *  build/copy-excalidraw-assets.cjs 拷副本时往里插三个钩子(调 `globalThis.__forsionPenInput`),
+/** 手写笔输入补丁。引擎(fork 0.18.122)是预编译的 IIFE:
+ *  build/copy-excalidraw-assets.cjs 拷副本时插入钩子(调 `globalThis.__forsionPenInput`),
  *  逻辑全在这里。钩子不在(老副本)= 引擎原样,不会报错。
  *
  *  ① 丢点:引擎把拖动中的 pointermove 按帧节流(throttleRAF 只留每帧最后一个),也不读
@@ -11,8 +11,11 @@
  *  ③ 手掌先放:手掌按着时笔落下,引擎把两者凑成双指(gesture.pointers.size > 1)→ 笔画根本不开始,
  *     移动还会变成缩放。笔落下时把按着的手指从引擎的手势表里拿掉。
  *
- *  只管笔(pointerType === 'pen');手指 / 鼠标一概不动。笔模式被用户关掉 = 手指也要能画,②③ 不管。
- *  ponytail: 橡皮擦路径(handleEraser)仍是每帧一个点 —— 擦除漏几个点肉眼看不出,要补再挂第四个钩子。
+ *  ④ 残留接触点:抬起丢失或取消落在画布外时，单笔可能被当成捏合。对照上游 #12704，
+ *     新主指针清理上一支同类型的主指针，取消事件交给所属画布收尾。
+ *     补收旧笔画保留已有采样，避免和新落点连起来。
+ *
+ *  笔模式关掉时手指仍可画，②③ 不生效。
  */
 
 type Ptr = { pointerId: number; pointerType: string }
@@ -23,7 +26,11 @@ type BoardState = {
   penDetected: boolean
   currentStrokeOptions?: { constantPressure?: boolean } | null
 }
-type Gesture = { pointers: Map<number, unknown> }
+type Contact = Pick<PointerEvent, 'pointerType' | 'isPrimary'> & { editorId: string }
+type Gesture = {
+  pointers: Map<number, unknown>
+  forsionContacts?: Map<number, Contact>
+}
 /** 引擎的 pointerDownState(每次按下新建一份);我们把这一笔的采样缓冲挂在它上面 */
 type DownState = { fsSamples?: Sample[] }
 type Throttled = ((e: PointerEvent) => void) & { flush: () => void; cancel?: () => void }
@@ -50,7 +57,12 @@ export function down(e: Ptr, st: BoardState, gesture: Gesture): boolean {
     touchIds.add(e.pointerId)
     return false
   }
-  if (e.pointerType === 'pen' && penRules(st)) for (const id of touchIds) gesture.pointers.delete(id) // ③
+  if (e.pointerType === 'pen' && penRules(st)) {
+    for (const id of touchIds) {
+      gesture.pointers.delete(id)
+      gesture.forsionContacts?.delete(id)
+    }
+  }
   return false
 }
 
@@ -117,6 +129,37 @@ export function freedraw(
   return { points, pressures: el.simulatePressure ? el.pressures : pressures }
 }
 
+/** 主指针在同一输入类型中唯一。ID 换了就可以清掉旧主指针，同时保留真正的双指接触。 */
+function trackContact(
+  gesture: Gesture,
+  e: Ptr & Pick<PointerEvent, 'isPrimary'>,
+  editorId: string,
+  remove: (id: number) => void,
+): void {
+  const contacts = (gesture.forsionContacts ??= new Map())
+  if (e.isPrimary && e.pointerType) {
+    for (const [id, contact] of contacts) {
+      if (id !== e.pointerId && contact.isPrimary && contact.pointerType === e.pointerType) remove(id)
+    }
+  }
+  contacts.set(e.pointerId, { pointerType: e.pointerType, isPrimary: e.isPrimary, editorId })
+}
+
+function ownsContact(gesture: Gesture, id: number, editorId: string): boolean {
+  return gesture.forsionContacts?.get(id)?.editorId === editorId
+}
+
+/** undefined 让引擎计算真实抬笔的末点。取消或补收时，已有笔画无需追加点，单点需要补出极短的点状笔迹。 */
+function finishStroke(el: Freedraw, e: PointerEvent, pointerId: number) {
+  if (e.type === 'pointerup' && e.pointerId === pointerId) return undefined
+  if (el.points.length !== 1) return null
+  const [x, y] = el.points[0]
+  return {
+    points: [...el.points, [x + 0.0001, y + 0.0001]],
+    pressures: el.simulatePressure ? [] : [...el.pressures, el.pressures[0]],
+  }
+}
+
 /** 抬起 / 取消在 window 捕获阶段记账(先于引擎自己的监听,引擎有时根本没挂监听) */
 const release = (e: PointerEvent): void => {
   touchIds.delete(e.pointerId)
@@ -124,7 +167,7 @@ const release = (e: PointerEvent): void => {
 }
 
 export function installPenInput(): void {
-  ;(globalThis as Record<string, unknown>).__forsionPenInput = { down, wrap, freedraw }
+  ;(globalThis as Record<string, unknown>).__forsionPenInput = { down, wrap, freedraw, trackContact, ownsContact, finishStroke }
   window.addEventListener('pointerup', release, true)
   window.addEventListener('pointercancel', release, true)
 }

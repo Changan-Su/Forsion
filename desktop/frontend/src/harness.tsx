@@ -516,6 +516,7 @@ function BoardHarness() {
   // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   // 真 App 里写设置是异步的(drawingStore 先 flush、预读盘面再写):lag > 0 模拟那段「props 还是旧值」的窗口
+  const viewport = useRef({ x: 0, y: 0, z: 1 })
   const lag = useRef(0)
   const patches = useRef<Partial<BoardSettings>[]>([])
   const cur = useRef(settings)
@@ -528,6 +529,7 @@ function BoardHarness() {
       setLag: (ms: number) => { lag.current = ms },
       patches: patches.current,
       get: () => cur.current,
+      getViewport: () => viewport.current,
     }
   }, [])
   return (
@@ -544,6 +546,7 @@ function BoardHarness() {
             if (lag.current) setTimeout(apply, lag.current)
             else apply()
           }}
+          onViewportChange={(next) => { viewport.current = next }}
           onSceneChange={(json: string) => {
             ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
           }}

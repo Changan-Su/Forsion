@@ -7,6 +7,8 @@
 //   P3 手掌先放:手掌按着时笔落下,照样要画出来(引擎原样会把两者当双指,笔画不开始)。
 //   P4 笔的抬起丢了:下一次(鼠标)按下要把上一笔收在笔最后到的地方,鼠标也要能接着画
 //      (Codex 评审抓到:只认这支笔的过滤一度把引擎的补收笔也拦了,旧笔画的监听永远摘不掉)。
+//   P5–P7 前一接触丢了抬起或在画布外取消：下一笔出墨，视口不动，旧笔画留在原地。
+//   P8 双指缩放正常。P9 补收已采样的笔画时，末点保持在原处。
 //
 // 每条都跑两遍:补丁版(public/excalidraw 的副本)必须过;**原版引擎**(拦下请求换成 node_modules 里没打补丁的)
 // 必须红 —— 原版也绿 = 这条量不出补丁的作用,判台架失效(负对照,每次都跑)。
@@ -35,6 +37,9 @@ const ORIGINAL = path.join(__dirname, '../node_modules/@excalidraw/excalidraw/di
 
 /** 别用 0.5:引擎把压力恰好 0.5 的输入当鼠标、改走模拟压感,就量不到压感有没有跟着点走了 */
 const PRESSURE = 0.7
+const CANVAS = '.excalidraw canvas.excalidraw__canvas.interactive'
+const viewport = (p) => p.evaluate(() => window.__board.getViewport())
+const sameViewport = (a, b) => a.x === b.x && a.y === b.y && a.z === b.z
 const freedraws = (p) => p.evaluate(() => (window.__scene?.elements ?? []).filter((e) => e.type === 'freedraw' && !e.isDeleted))
 const settle = (p) => p.waitForTimeout(450)
 
@@ -55,7 +60,7 @@ async function open(browser, patched) {
   })
   if (!patched) await p.route('**/excalidraw/excalidraw.js', (r) => r.fulfill({ path: ORIGINAL, contentType: 'application/javascript' }))
   await p.goto(`${BASE}?board`)
-  await p.waitForSelector('.excalidraw canvas.excalidraw__canvas.interactive', { timeout: 20000 })
+  await p.waitForSelector(CANVAS, { timeout: 20000 })
   await p.waitForTimeout(600)
   const marker = await p.evaluate(() => globalThis.__forsionPenPatch ?? null)
   const box = await p.evaluate(() => {
@@ -216,6 +221,85 @@ async function scenarios(s) {
   return out
 }
 
+/** CDP owns the current pen ID. Inject just the previous contact with a
+ * different ID to model a driver that starts a new pointer sequence. */
+async function seedPenContact(s, { wheel, canceled, sampled }) {
+  await s.p.locator(CANVAS).evaluate(async (canvas, { x, y, wheel, canceled, sampled }) => {
+    const pointerId = 90
+    const capture = canvas.setPointerCapture
+    canvas.setPointerCapture = function (id) {
+      if (id !== pointerId) capture.call(this, id)
+    }
+    const contact = {
+      bubbles: true, cancelable: true, composed: true,
+      pointerId, isPrimary: true, pointerType: 'pen',
+      clientX: x, clientY: y, pressure: 0.7,
+      button: wheel ? 1 : 0,
+      buttons: wheel ? 4 : 1,
+    }
+    try {
+      canvas.dispatchEvent(new PointerEvent('pointerdown', contact))
+    } finally {
+      canvas.setPointerCapture = capture
+    }
+    if (sampled) {
+      canvas.dispatchEvent(new PointerEvent('pointermove', {
+        ...contact, button: -1, clientX: x + 28, clientY: y + 14,
+      }))
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    }
+    if (canceled) {
+      document.body.dispatchEvent(new PointerEvent('pointercancel', {
+        ...contact, button: -1, buttons: 0,
+      }))
+    }
+  }, { x: s.box.x + 660, y: s.box.y + 420, wheel, canceled, sampled })
+  await s.frame()
+}
+
+async function recovery(s, { wheel = false, canceled = false, sampled = false }) {
+  await seedPenContact(s, { wheel, canceled, sampled })
+  const view = await viewport(s.p)
+  if (canceled) {
+    // Cancellation must stop the pan immediately, before another press
+    // has a chance to run the engine's lost-release cleanup.
+    await s.p.mouse.move(s.box.x + 760, s.box.y + 470)
+    await s.frame()
+  }
+  const hoverStill = sameViewport(view, await viewport(s.p))
+  const start = { x: s.box.x + 350, y: s.box.y + 260 }
+  const { end } = await stroke(s, start, 10, 1, 8, 2)
+  const els = await freedraws(s.p)
+  const newStroke = els.at(-1)
+  const newDrawn = els.length === (wheel ? 1 : 2) && newStroke.points.length >= 8 &&
+    near({ x: newStroke.x, y: newStroke.y }, { x: 350, y: 260 }) &&
+    near(lastScene(newStroke), { x: end.x - s.box.x, y: end.y - s.box.y })
+  const old = wheel ? null : els[0]
+  const oldEnd = old && lastScene(old)
+  const oldRetained = wheel || (!!oldEnd && near(oldEnd, { x: 660 + (sampled ? 28 : 0), y: 420 + (sampled ? 14 : 0) }))
+  const viewAfter = await viewport(s.p)
+  return {
+    ok: hoverStill && newDrawn && oldRetained && sameViewport(view, viewAfter),
+    detail: JSON.stringify({ strokes: els.length, newDrawn, oldEnd, oldRetained, hoverStill, view, viewAfter }),
+  }
+}
+
+async function pinch(s) {
+  await s.p.locator('[data-tool="selection"]').click()
+  const first = { x: s.box.x + 430, y: s.box.y + 280, id: 12 }
+  const second = { x: s.box.x + 530, y: s.box.y + 380, id: 13 }
+  const before = await viewport(s.p)
+  await s.touch('touchStart', [first])
+  await s.touch('touchStart', [first, second])
+  await s.frame()
+  await s.touch('touchMove', [first, { ...second, x: second.x + 90, y: second.y + 40 }])
+  await s.frame()
+  await s.touch('touchEnd', [])
+  await settle(s.p)
+  const after = await viewport(s.p)
+  return { always: true, ok: after.z > before.z + 0.1, detail: `zoom ${before.z} → ${after.z}` }
+}
+
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium() })
   let failed = 0
@@ -223,11 +307,28 @@ async function scenarios(s) {
   for (const patched of [true, false]) {
     const s = await open(browser, patched)
     const tag = patched ? '补丁版' : '原版引擎(负对照)'
-    if (patched && s.marker !== 1) {
+    if (patched && s.marker !== 2) {
       console.log(`FAIL  ${tag}:副本没打补丁(__forsionPenPatch=${s.marker}),先跑 node build/copy-excalidraw-assets.cjs`)
       failed++
     }
     runs[tag] = await scenarios(s)
+    await s.ctx.close()
+    const cases = {
+      P5: (board) => recovery(board, {}),
+      P6: (board) => recovery(board, { wheel: true }),
+      P7: (board) => recovery(board, { wheel: true, canceled: true }),
+      P8: pinch,
+      P9: (board) => recovery(board, { sampled: true }),
+    }
+    for (const [name, run] of Object.entries(cases)) {
+      const board = await open(browser, patched)
+      try {
+        runs[tag][name] = await run(board)
+        s.errs.push(...board.errs)
+      } finally {
+        await board.ctx.close()
+      }
+    }
     for (const [k, r] of Object.entries(runs[tag])) {
       const pass = patched || r.always ? r.ok : !r.ok
       if (!pass) failed++
@@ -237,7 +338,6 @@ async function scenarios(s) {
       failed++
       console.log(`FAIL  [${tag}] 页面报错:${s.errs.join(' / ')}`)
     }
-    await s.ctx.close()
   }
   await browser.close()
   console.log(failed ? `\n${failed} 条没过` : '\n全部通过')

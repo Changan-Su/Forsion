@@ -54,12 +54,13 @@ const SRC = {
 }
 const FONTS = path.join(pkgDir, 'dist', 'prod', 'fonts')
 
-/** 手写笔补丁:往引擎里插三个钩子,逻辑在 frontend/src/amadeus/blocks/excalidraw/penInput.ts(为什么见那里)。
- *  按**压缩后的原文**逐字匹配(变量名是这一版构建的),每处必须恰好命中一次,否则构建直接失败 ——
- *  升级 fork 后先看上游是不是已经修了;没修就照新构建的原文重写这三条。改补丁要把 PEN_PATCH 加一,
- *  老副本才会被重拷(幂等戳带着它)。 */
-const PEN_PATCH = 1
+/** 手写笔补丁的逻辑在 frontend/src/amadeus/blocks/excalidraw/penInput.ts。
+ *  钩子按 fork 0.18.122 的压缩原文匹配，每处必须恰好命中一次。升级 fork 时对照上游实现。
+ *  修改后增加 PEN_PATCH，确保 postinstall 重建已有副本。 */
+const PEN_PATCH = 2
 const PEN_HOOK = 'globalThis.__forsionPenInput'
+const REMOVE_POINTER = 'let o=ve.pointers.size>=2;ve.pointers.delete(t.pointerId),o&&ve.pointers.size<2&&this.state.scrollConstraints&&this.viewport.releaseOverscroll()'
+const FREEDRAW_END = 'let u=He(o,this.state),m=a.points,w=u.x-a.x,b=u.y-a.y;w===m[0][0]&&b===m[0][1]&&(b+=1e-4,w+=1e-4);let D=a.simulatePressure?[]:[...a.pressures,o.pressure];this.scene.mutateElement(a,{points:[...m,k(w,b)],pressures:D})'
 const PEN_PATCHES = [
   // 钩子 1:画布按下的最开头 —— 要赶在 maybeCleanupAfterMissingPointerUp 收掉正在画的那一笔之前。`ve` = 引擎的手势表
   [
@@ -69,12 +70,48 @@ const PEN_PATCHES = [
   // 钩子 2:按下后建拖动监听。`l` = pointerDownState,`t` = 这次按下的事件,`He` = viewportCoordsToSceneCoords
   [
     'let c=this.onPointerMoveFromPointerDownHandler(l),C=this.onPointerUpFromPointerDownHandler(l),',
-    `let[c,C]=(${PEN_HOOK}?.wrap??((a,b)=>[a,b]))(this.onPointerMoveFromPointerDownHandler(l),this.onPointerUpFromPointerDownHandler(l),l,t,this.state,A=>He(A,this.state)),`,
+    `let[c,C]=(${PEN_HOOK}?.wrap??((a,b)=>[a,b]))(this.onPointerMoveFromPointerDownHandler(l),this.onPointerUpFromPointerDownHandler(l,t.pointerId),l,t,this.state,A=>He(A,this.state)),`,
   ],
   // 钩子 3:自由画笔每帧追加点。`t` = pointerDownState
   [
     'if(c.type==="freedraw"){let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}',
     `if(c.type==="freedraw"){let __fp=${PEN_HOOK}?.freedraw(c,t,this.state);if(__fp!==void 0)__fp&&(this.scene.mutateElement(c,__fp,{informMutation:!1,isDragging:!1}),this.setState({newElement:c}));else{let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}}`,
+  ],
+  // #12704：记录引擎实际接收的接触点，范围包括笔侧键启动的平移。
+  [
+    'updateGestureOnPointerDown(t){ve.pointers.set(',
+    `updateGestureOnPointerDown(t){${PEN_HOOK}?.trackContact?.(ve,t,this.id,this.removeGesturePointer),ve.pointers.set(`,
+  ],
+  [
+    `M(this,"removePointer",t=>{fB&&this.resetContextMenuTimer(),t.type==="pointercancel"&&this.bucketFill.cancel();${REMOVE_POINTER}});`,
+    `M(this,"removeGesturePointer",t=>{let o=ve.pointers.size>=2;ve.pointers.delete(t),ve.forsionContacts?.delete(t),o&&ve.pointers.size<2&&this.state.scrollConstraints&&this.viewport.releaseOverscroll()});
+     M(this,"removePointer",t=>{fB&&this.resetContextMenuTimer(),t.type==="pointercancel"&&this.bucketFill.cancel(),this.removeGesturePointer(t.pointerId)});
+     M(this,"handlePointerCancel",t=>{if(${PEN_HOOK}?.ownsContact?.(ve,t.pointerId,this.id)){this.removePointer(t),this.maybeCleanupAfterMissingPointerUp(t)}});`,
+  ],
+  [
+    'onPointerCancel:this.removePointer,onTouchMove:this.handleTouchMove',
+    `onPointerCancel:t=>${PEN_HOOK}?.ownsContact?this.handlePointerCancel(t.nativeEvent):this.removePointer(t),onTouchMove:this.handleTouchMove`,
+  ],
+  [
+    '_e(document,"pointerup",this.removePointer,{passive:!1}),',
+    '_e(document,"pointerup",this.removePointer,{passive:!1}),_e(document,"pointercancel",this.handlePointerCancel),',
+  ],
+  [
+    've.pointers.clear(),ve.lastCenter=null',
+    've.pointers.clear(),ve.forsionContacts?.clear(),ve.lastCenter=null',
+  ],
+  [
+    'this.state.previousSelectedElementIds,this.state)}):ve.pointers.clear())',
+    'this.state.previousSelectedElementIds,this.state)}):(ve.pointers.clear(),ve.forsionContacts?.clear()))',
+  ],
+  // 补收笔沿用最后的实际采样。真正的抬笔继续用引擎原有的终点算法。
+  [
+    'onPointerUpFromPointerDownHandler(t){return Bo(o=>',
+    'onPointerUpFromPointerDownHandler(t,originPointerId){return Bo(o=>',
+  ],
+  [
+    `a?.type==="freedraw"){${FREEDRAW_END},this.actionManager.executeAction(sa);return}`,
+    `a?.type==="freedraw"){let finish=${PEN_HOOK}?.finishStroke?.(a,o,originPointerId);if(finish===void 0){${FREEDRAW_END}}else if(finish)this.scene.mutateElement(a,finish);this.actionManager.executeAction(sa);return}`,
   ],
 ]
 /** 文案补丁(走查续七 7.6):引擎不导出 i18n,语言包是模块私有的。插两个钩子,逻辑在
