@@ -149,6 +149,7 @@ import { createEffectScope, type EffectHandle, type EffectRecord, type EffectSco
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
+import { parseInlineMarkdown } from '../../components/chatbox/chatBoxMarkdown'
 import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared/pluginSurface'
 import { registerEngineHarness } from './engineHarness'
 import { isElectronHost } from '../unified/writeSafety'
@@ -2539,6 +2540,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
+      parseInlineMarkdown: (md) => parseInlineMarkdown(String(md ?? '')),
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')

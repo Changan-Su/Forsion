@@ -67,3 +67,9 @@ it('生产编辑器 MarkdownBlock 挂了 attentionSerializer', () => {
   const src = readFileSync(join(__dirname, 'MarkdownBlock.tsx'), 'utf8') // happy-dom 下 import.meta.url 不是 file:
   expect(src).toMatch(/^\s*\.use\(attentionSerializer\)/m)
 })
+
+// Chat Box 的 format 档是第二个写 Markdown 的编辑器(11-21):同一行装配,别让它只在笔记里生效。真往返见 chatBoxMarkdown.test。
+it('Chat Box 编辑器(components/chatbox/editorPlugins)也挂了 attentionSerializer', () => {
+  const src = readFileSync(join(__dirname, '../../../components/chatbox/editorPlugins.ts'), 'utf8')
+  expect(src).toMatch(/^\s*attentionSerializer,/m)
+})

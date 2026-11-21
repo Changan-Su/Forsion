@@ -148,7 +148,9 @@ describe('public Chat Box mount', () => {
     let ctx!: PluginContext
     await act(async () => { usePluginStore.getState().init([{ id: 'chatbox-caps', name: 'Caps', version: '1', setup(c) { ctx = c } }]) })
     // Arrays are exercised in 'takes several triggers' below; the upward menu needs layout, which jsdom doesn't have.
-    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove', 'mentions'])
+    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove', 'mentions', 'format'])
+    // 'format' comes with the reader for what that box writes.
+    expect(ctx.ui!.parseInlineMarkdown?.('**a** b')).toEqual([{ text: 'a', strong: true, from: 2, to: 3 }, { text: ' b', from: 5, to: 7 }])
   })
 })
 
