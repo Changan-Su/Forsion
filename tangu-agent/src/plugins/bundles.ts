@@ -20,6 +20,7 @@
  * Dirent 扫描本就不认它们,引擎若跟随会产生「桌面看不见、级联管不着」的隐身子插件(codex P2-1)。
  * (用户插件目录 ~/.tangu/plugins 里的符号链接是 --link 开发流,归 loader 管,不受此限。)
  */
+import { isMultiAccount } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -41,8 +42,25 @@ function isRealDir(p: string): boolean {
 }
 
 /** 共享域 plugins/ 下的 bundle 目录(有 manifest.json 的真目录;符号链接不认)。搜索停用时返回 []。 */
+/** 多账号模式的插件包目录(只读;createMultiAccountApp 装配时给,缺省读 TANGU_BUNDLE_DIRS)。不扫任何账号自己的 plugins/。 */
+let multiAccountBundles: string[] | null = null;
+export function setMultiAccountBundleDirs(dirs: string[] | null): void {
+  if (dirs && dirs.some((d) => typeof d !== 'string' || !path.isAbsolute(d))) throw new Error('bundle dirs must be absolute package paths');
+  multiAccountBundles = dirs ? [...new Set(dirs)] : null;
+}
+
 export function bundleDirs(): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
+  if (isMultiAccount()) {
+    let roots: string[] = multiAccountBundles ?? [];
+    if (!multiAccountBundles && process.env.TANGU_BUNDLE_DIRS !== undefined) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(process.env.TANGU_BUNDLE_DIRS); } catch { throw new Error('TANGU_BUNDLE_DIRS must be a JSON array of absolute package paths'); }
+      if (!Array.isArray(parsed) || parsed.some((root) => typeof root !== 'string' || !path.isAbsolute(root))) throw new Error('TANGU_BUNDLE_DIRS must be a JSON array of absolute package paths');
+      roots = parsed as string[];
+    }
+    return [...new Set(roots)].filter((root) => isRealDir(root) && existsSync(path.join(root, 'manifest.json'))).sort();
+  }
   if (process.env.TANGU_PLUGINS_DIR) return []; // 显式覆盖 = 只认那一个目录(云端/docker 形态)
   // Unit passes only active, validated package roots. An explicit empty list must
   // stay empty rather than discovering disabled installations in the shared directory.
@@ -88,6 +106,7 @@ function manifestIdOf(dir: string): unknown {
 
 /** 各 bundle 的内嵌引擎插件根(<bundle>/tangu-plugins),供 resolvePluginsDirs 追加。 */
 export function bundleEnginePluginRoots(): string[] {
+  if (isMultiAccount()) return []; // 多账号模式不加载插件包里的引擎代码,只要它带的人设和技能
   return bundleDirs()
     .map((d) => path.join(d, 'tangu-plugins'))
     .filter(isRealDir);

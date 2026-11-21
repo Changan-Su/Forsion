@@ -22,6 +22,7 @@
  * `TANGU_MODEL_CONTEXT_WINDOWS` 或手删本文件。要根治:条目带上 learnedAt,超过 N 天降级为参考值,
  * 或在设置里露一个「清空自动识别到的窗口」按钮。
  */
+import { perAccount } from '../core/accountScope.js';
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
@@ -122,12 +123,14 @@ export function parseContextLimit(detail: string | undefined): number | undefine
   return undefined;
 }
 
-let cache: Record<string, number> | null = null;
+// 多账号模式按账号分(core/accountScope.ts:文件在账号 home 里);单人模式一个槽,行为不变。
+const cacheSlot = perAccount((): { v: Record<string, number> | null } => ({ v: null }));
 /** 单测模式:只在内存里学,绝不碰真家目录(否则跑一次测试就往用户 ~/.tangu 里塞测试数据)。 */
 let memoryOnly = false;
 
 function load(): Record<string, number> {
-  if (cache) return cache;
+  const hit = cacheSlot().v;
+  if (hit) return hit;
   try {
     const raw = JSON.parse(readFileSync(file(), 'utf8'));
     const out: Record<string, number> = {};
@@ -135,20 +138,20 @@ function load(): Record<string, number> {
       const v = Number(raw[k]);
       if (Number.isFinite(v) && v >= MIN_TOKENS && v <= MAX_TOKENS) out[k] = Math.floor(v);
     }
-    cache = out;
+    cacheSlot().v = out;
   } catch {
-    cache = {}; // 没有文件 / 文件坏了都当空表——这是可重新学到的缓存,不是真源
+    cacheSlot().v = {}; // 没有文件 / 文件坏了都当空表——这是可重新学到的缓存,不是真源
   }
-  return cache;
+  return cacheSlot().v!;
 }
 
 /** 落盘尽力而为:临时文件 + rename,失败不影响本次运行(内存里的值照样生效)。 */
 function persist(): void {
-  if (!cache || memoryOnly) return;
+  if (!cacheSlot().v || memoryOnly) return;
   try {
     mkdirSync(tanguHome(), { recursive: true });
     const tmp = `${file()}.tmp`;
-    writeFileSync(tmp, JSON.stringify(cache, null, 2), 'utf8');
+    writeFileSync(tmp, JSON.stringify(cacheSlot().v, null, 2), 'utf8');
     renameSync(tmp, file());
   } catch {
     /* 只读家目录 / 磁盘满:学到的值本轮仍可用,下次重新学 */
@@ -184,6 +187,6 @@ export function learnFromUpstreamError(
 
 /** 单测用:清空内存表(各用例互不污染;不碰磁盘)。 */
 export function resetContextWindowStoreForTest(seed?: Record<string, number>): void {
-  cache = seed ? { ...seed } : {};
+  cacheSlot().v = seed ? { ...seed } : {};
   memoryOnly = true;
 }

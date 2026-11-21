@@ -17,8 +17,11 @@
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { accountHome, engineRoot, isMultiAccount, requireAccountId } from './accountScope.js';
 
 export function tanguHome(): string {
+  // 多账号模式:每个账号一个 home(<engineRoot>/accounts/<id>);不在账号上下文里就抛,绝不落进共用目录(core/accountScope.ts)。
+  if (isMultiAccount()) return accountHome(requireAccountId('tanguHome'));
   return process.env.TANGU_HOME || join(homedir(), '.tangu');
 }
 
@@ -31,13 +34,17 @@ export function tanguHome(): string {
  * 两边解析出不同的 config.json,跨进程写锁 `<config.json>.lock` 就各锁各的(两边 test 同形态对照)。
  */
 export function forsionSharedDir(): string {
+  // 多账号模式:共享域 = 账号 home 自身(不走「目录名叫 tangu 就跳父目录」:账号 id 叫 tangu 也不能跳到 accounts/)。
+  // config.json / auth.json / provider-auth.json / connector-auth.json 因此都是每人一份。
+  if (isMultiAccount()) return tanguHome();
   const h = tanguHome();
   let real = h;
   try { real = realpathSync(h); } catch { /* home 尚不存在:按字面路径判断 */ }
   return basename(real) === 'tangu' ? dirname(real) : h;
 }
 
-export const envFile = (): string => join(tanguHome(), '.env');
+/** `.env` 是引擎级的(多账号模式下在引擎根,不在任何账号的 home 里)。 */
+export const envFile = (): string => join(isMultiAccount() ? engineRoot() : tanguHome(), '.env');
 
 /**
  * 加载 ~/.tangu/.env(KEY=VALUE 行;# 注释;引号可选)进 process.env——**已存在的环境变量不覆盖**

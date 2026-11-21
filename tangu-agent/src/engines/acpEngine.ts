@@ -13,6 +13,7 @@
  *
  * 纯翻译逻辑抽成 createAcpClient(无进程)，单测直接喂伪造通知即可，见 acpEngine.test.ts。
  */
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Writable, Readable } from 'node:stream';
 import {
@@ -63,6 +64,7 @@ export const HANDSHAKE_TIMEOUT_MS = Number(process.env.TANGU_ENGINE_HANDSHAKE_TI
  *  launchd 精简 PATH,`openclaw`/`pi` 这类全局 bin 在终端跑得起、装成 App 就 ENOENT;检测端 binOnPath 早就扫这些目录了,
  *  spawn 端不补就是「检测说有、跑起来没有」。 */
 export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: boolean; env?: Record<string, string> }) {
+  assertHostSpawnAllowed('external engine');
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型

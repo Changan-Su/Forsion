@@ -1,4 +1,6 @@
 import { readToolOutputProvider } from './builtin/readToolOutput.js';
+import { isMultiAccount } from '../core/accountScope.js';
+import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from './multiAccountTools.js';
 import { readOnlyCodeProvider } from './builtin/readOnlyCode.js';
 /**
  * 工具系统门面(G3 拆分后)。工具实现按域拆在 builtin/* 各 provider,经 toolRegistry 自注册;
@@ -301,7 +303,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   // MCP 按需加载不吃 deferBypass(见 isMcpDeferred):Muse / 自动化 run 里只有 MCP 待装时也要露出 load_tools。
   // 先把自定义工具的名字并进来再算:与下面 defs 的撞名判定同一份。
   const ownedNames = new Set<string>([...tools.keys(), ...(ctx.customTools?.keys() ?? [])]);
-  const mcpVisible = visibleMcpTools(ctx, ownedNames);
+  const mcpVisible = isMultiAccount() ? [] : visibleMcpTools(ctx, ownedNames); // 多账号模式没有 MCP
   // 按需加载得有装载口:严格名单 / 部署白名单没放 load_tools、或调用方不支持解锁时,MCP 照旧常驻 ——
   // 否则目录里有、定义没有、又装不上,这些 MCP 工具就凭空没了(Codex 评审 11-06)。listDeferredTools 同一判据。
   const deferMcp = !!ctx.unlockTools && tools.has('load_tools');
@@ -330,7 +332,8 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const taken = new Set<string>(tools.keys());
   // 自定义/MCP 工具按 PRESET_TABLE.externalTools 在此再拒一次:主 loop 对 chat 本就不构造这两个 Map,
   // 这里让 getToolDefinitions/executeTool 自身也满足默认拒(内部调用方带 Map 也绕不过;creview 09-07 E8)。
-  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
+  // 多账号模式:自定义工具与 MCP 一律不给(tools/multiAccountTools.ts 的白名单只认审过的内置工具)。
+  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx) && !isMultiAccount();
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
       if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) continue;
@@ -461,6 +464,8 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   // Legacy/internal callers still receive the trusted policy before executing a covered tool.
   if (ctx.execMode === 'host' && !ctx.hostSandbox) ctx = { ...ctx, hostSandbox: resolveHostSandboxPolicy() };
   const name = canonicalToolName(call.function.name);
+  // 多账号模式:不在白名单里的名字执行时再拒一次(清单不是能力边界,模型可以凭名字硬调)。
+  if (isMultiAccount() && !MULTI_ACCOUNT_TOOL_ALLOWLIST.has(name)) return { toolCallId: call.id, name, result: `Error: tool "${name}" is not available in this session; do not retry this name.`, isError: true };
   if (ctx.toolsStrict && !ctx.toolsList?.includes(name)) return { toolCallId: call.id, name, result: `Error: tool "${name}" is outside this session's allowed tool set.`, isError: true };
   // 子代理硬闸(共享执行层):管理面对 subAgentDepth≥1 缺省拒,**早于**任何审批闸门 ——
   // 别去问用户批不批一个本就不该存在的调用。resolveTools 那边已让它不可见,这里是「模型凭名字
@@ -555,7 +560,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     }
   }
 
-  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx); // 与 getToolDefinitions 同判
+  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx) && !isMultiAccount(); // 与 getToolDefinitions 同判
   const custom = externalOk ? ctx.customTools?.get(name) : undefined;
   if (custom && usableToolDefinition(custom.definition, 'custom', custom.name)) {
     try {

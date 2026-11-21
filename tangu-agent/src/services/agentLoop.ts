@@ -1,3 +1,4 @@
+import { accountWorkspaceDir, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
@@ -39,7 +40,7 @@ import { isRecoveryHost, createRowWriter, markLiveRow, unmarkLiveRow, harmlessSi
 import { readShutdownIntent, clearShutdownIntent } from './shutdownIntentStore.js';
 import { claimInterruptedRun, commitNotice, commitResume, derivedId, ensureUserRow, intentReasonForOwner, pickResumeModel, reasonFromError, repairDanglingResumes, resumeBlocker, runAgeFlags, runInput, staticResumeBlocker } from './runResume.js';
 import { accountChanged } from './cloudAccount.js';
-import { standInSearchDenied } from './accessDomain.js';
+import { accountCwdDenied, standInSearchDenied } from './accessDomain.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -201,6 +202,7 @@ function waitSteer(runId: string): Promise<void> {
 }
 
 export function expediteSteer(runId: string): boolean {
+  if (foreignRun(runId)) return false;
   const ac = abortControllers.get(runId);
   if (!ac || ac.signal.aborted) return false;
   if (steerQueue.get(runId)?.length) {
@@ -217,6 +219,7 @@ export const NEW_TOPIC_NOTE = '<new_topic>The user sent the message above as a N
 
 /** 入队一条转向消息；run 非活跃返回 false（前端据此回退 startRun）。 */
 export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
+  if (foreignRun(runId)) return false;
   const ac = abortControllers.get(runId);
   if (!ac || ac.signal.aborted || steerClosed.has(runId)) return false;
   const q = steerQueue.get(runId);
@@ -239,6 +242,7 @@ function drainSteer(runId: string): SteerMsg[] {
 
 /** 撤回一条尚未注入的转向消息(供前端「删除/↑撤回编辑」)。已注入或未知 → false。 */
 export function cancelSteer(runId: string, msgId: string): boolean {
+  if (foreignRun(runId)) return false;
   const q = steerQueue.get(runId);
   if (!q) return false;
   const i = q.findIndex((m) => m.id === msgId);
@@ -296,6 +300,21 @@ export const INQUIRY_UPDATE_OPEN = '<inquiry_update>';
 const sessionActive = new Map<string, string>(); // sessionId -> 活跃 runId
 const sessionQueue = new Map<string, string[]>(); // sessionId -> 排队 runId（FIFO）
 const runSession = new Map<string, string>(); // runId -> sessionId（abort/清理反查）
+// 多账号模式(core/accountScope.ts):runId -> 属主账号。enqueueRun 时从请求 / 发起它的 run 的上下文记下;startRun 一律按它重绑
+// (advanceQueue / 子会话回报 / handoff wake 都是从别的 run 的收尾里起的,不能信那一刻的环境)。按 id 碰进程级表的入口据此认属主。
+const runAccount = new Map<string, string>();
+/** 多账号模式下这个 run 属于别的账号(调用方在账号上下文里、run 登记的属主不是它):一律当不存在。 */
+function foreignRun(runId: string): boolean {
+  if (!isMultiAccount()) return false;
+  const owner = runAccount.get(runId);
+  return owner !== undefined && owner !== currentAccountId();
+}
+/** 进程级调用方(退出时中止全部 / 无上下文的清理)碰一个 run:多账号模式下进它属主的账号上下文再做。 */
+function inRunAccount<T>(runId: string, fn: () => T): T {
+  if (!isMultiAccount() || currentAccountId()) return fn();
+  const owner = runAccount.get(runId);
+  return owner ? runWithAccount(owner, fn) : fn();
+}
 // 终态事件早于 finally 清理;停止确认必须等待整个任务退出,不能只看 DB 的 status。
 const runTasks = new Map<string, Promise<void>>();
 // P1-K2:中止原因(急停 remote_estop / 锁定 remote_locked)。abortRun 记、四个终态 publish 点在 aborted 时展开、任务收尾清。
@@ -314,6 +333,7 @@ const reasonOf = (runId: string): { reason?: string } => {
 const interruptReasons = new Map<string, InterruptReason>();
 
 export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Promise<boolean> {
+  if (foreignRun(runId)) return true;
   const task = runTasks.get(runId);
   if (!task) return !runSession.has(runId) && !abortControllers.has(runId);
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -349,6 +369,8 @@ export async function runControlledOperation<T>(runId: string, sessionId: string
 export function enqueueRun(sessionId: string, runId: string): void {
   // 同一个 run 在本进程只排一次(评审 #1):外部 PG 不记持有者,启动恢复可能把请求刚入队的那一行再认领入队一次
   if (runSession.has(runId)) return;
+  // 多账号模式:不在账号上下文里入队 = 不知道它是谁的 → 抛(缺省拒绝);记下属主,startRun 按它重绑。
+  if (isMultiAccount()) runAccount.set(runId, requireAccountId('enqueueRun'));
   runSession.set(runId, sessionId);
   if (!sessionActive.has(sessionId)) {
     sessionActive.set(sessionId, runId);
@@ -375,6 +397,20 @@ async function waitMcpAdmission(ready: Promise<void>, signal: AbortSignal): Prom
 }
 
 export function startRun(runId: string): void {
+  if (!isMultiAccount()) return startRunInAccount(runId);
+  const owner = runAccount.get(runId);
+  if (!owner) {
+    // 没登记属主的 run 不起(不该发生:enqueueRun 恒登记)。照「run 行不存在」那条路收拾,别让会话队列卡死。
+    console.error(`[agent-core] multi-account: run ${runId} has no recorded account; not starting it`);
+    const sid = runSession.get(runId);
+    runSession.delete(runId);
+    if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
+    return;
+  }
+  runWithAccount(owner, () => startRunInAccount(runId));
+}
+
+function startRunInAccount(runId: string): void {
   if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
   const settledSessionId = runSession.get(runId); // enqueueRun 已登记;收尾时 runSession 早被清掉
   // Reconcile while the admission barrier still observes idle. Register the controller synchronously
@@ -425,6 +461,8 @@ export function startRun(runId: string): void {
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
     runTasks.delete(runId);
+    // 属主留到 30s 后的事件总线清理一起删:这段时间里 SSE 补订阅 / 终态补发还要认它
+    if (isMultiAccount()) setTimeout(() => { if (!runSession.has(runId) && !abortControllers.has(runId)) runAccount.delete(runId); }, 30_000).unref?.();
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
     clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId); interruptReasons.delete(runId);
@@ -521,6 +559,19 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
 export function approvalModeSessionId(p: { fromClient: boolean; sessionId: string; teamSessionId?: string; followSessionMode?: boolean }): string | undefined {
   if (p.teamSessionId) return p.fromClient || p.followSessionMode ? p.teamSessionId : undefined;
   return p.fromClient ? p.sessionId : undefined;
+}
+
+/** 多账号模式的工作目录:给了就必须在账号文件夹里(否则整轮拒);没给就用 <accountHome>/workspace。单人模式原样返回。 */
+function multiAccountCwd(cwd: string | undefined): string | undefined {
+  if (!isMultiAccount()) return cwd;
+  if (cwd) {
+    const bad = accountCwdDenied(cwd);
+    if (bad) throw new Error(bad);
+    return cwd;
+  }
+  const dir = accountWorkspaceDir(requireAccountId('run cwd'));
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function safeRealpath(p: string): string {
@@ -955,6 +1006,11 @@ function persistCancelRequest(runId: string, kind: string): void {
 /** 请求中止某个 run。活跃 run 走 AbortController（finally 会推进队列）；排队中的 run 直接移出队列并标终态。
  *  opts.reason(P1-K2):写进终态 error 事件的 reason 字段('remote_estop' = 被那台电脑急停)。先到先得,不覆盖已记的原因。 */
 export function abortRun(runId: string, opts?: { reason?: string; byUser?: boolean }): void {
+  if (foreignRun(runId)) return; // 多账号模式:别的账号的 run 当不存在
+  return inRunAccount(runId, () => abortRunInAccount(runId, opts));
+}
+
+function abortRunInAccount(runId: string, opts?: { reason?: string; byUser?: boolean }): void {
   if (opts?.reason && !abortReasons.has(runId) && (abortControllers.has(runId) || runSession.has(runId))) abortReasons.set(runId, opts.reason);
   if (abortControllers.has(runId) || runSession.has(runId)) persistCancelRequest(runId, opts?.byUser ? 'user' : opts?.reason || 'cancel');
   const ac = abortControllers.get(runId);
@@ -1291,6 +1347,7 @@ export function abortAllRuns(): void {
 
 /** 这个 run 还在本进程里跑 / 收尾(SSE 补终态事件前问:done 已落库但 done 事件还没发的空档里别抢先补)。 */
 export function isRunLive(runId: string): boolean {
+  if (foreignRun(runId)) return false;
   return runTasks.has(runId) || abortControllers.has(runId);
 }
 
@@ -1311,12 +1368,20 @@ const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, 
 
 /** 本进程有在飞 / 排队 run 的会话(会话列表的「在跑」、子会话回报的「主会话空闲」判定用;services/childSessions.ts)。 */
 export function activeSessionIds(): Set<string> {
+  if (isMultiAccount()) {
+    // 只列当前账号的(会话 id 跨账号唯一,见 multiAccountSqliteHost 的认领表;这里再按 run 的属主筛一遍)
+    const me = currentAccountId();
+    const out = new Set<string>();
+    for (const [runId, sid] of runSession) if (runAccount.get(runId) === me) out.add(sid);
+    for (const [sid, runId] of sessionActive) if (runAccount.get(runId) === me) out.add(sid);
+    return out;
+  }
   return new Set([...runSession.values(), ...sessionActive.keys()]);
 }
 
 /** 该会话是否有在飞的 run(路由层用:手动 /compact 与在途落库不许并发)。 */
 export function sessionHasActiveRun(sessionId: string): boolean {
-  for (const sid of runSession.values()) if (sid === sessionId) return true;
+  for (const [runId, sid] of runSession) if (sid === sessionId && !foreignRun(runId)) return true;
   return false;
 }
 
@@ -1519,6 +1584,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
   const sessionId = run.session_id;
   const userId = run.user_id;
+  // 多账号模式:环境账号必须就是这一行的属主(startRun 已按登记的属主重绑;对不上说明调度串了号 —— 宁可失败,不替别人跑)。
+  if (isMultiAccount() && currentAccountId() !== userId) throw new Error('multi-account: run account does not match its owner');
   // 上一轮被用户按停留下的复盘信号:起跑时就取走,不管这一轮从哪条路收尾。只有正常 done 那条路把它交给判官,
   // 别的路(钩子否决 / 群聊 / 出错 / 又被中止)上就此作废 —— 留着不取,它会被之后某一轮拿去,把更早那次按停说成「上一轮」。
   const pendingStop = takePendingStop(sessionId);
@@ -1792,11 +1859,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
   // 缺省 sandbox + full-auto → microserver/standalone-server/worker 行为零变化（审批仅 host 激活）。
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
+  // 多账号模式恒 host:sandbox 形态的文件工具走进程那一份云端存储凭据,不给;host 工具另有账号文件夹的读写根(services/accessDomain.ts)。
   const execMode: 'sandbox' | 'host' =
-    agentConfig.execMode === 'host' && profile.capabilities.hostExec ? 'host' : 'sandbox';
+    isMultiAccount() ? 'host' : agentConfig.execMode === 'host' && profile.capabilities.hostExec ? 'host' : 'sandbox';
   // 工作预设(preset / ps)已在上面按「会话事实」解析并锁定;分档一律查 core/presetTable,不在此处开 if。
-  const cwd: string | undefined =
-    typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined;
+  const cwd: string | undefined = multiAccountCwd(
+    typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined);
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
   // 手聊 Muse(私聊,或普通会话里切到 Muse;周期 run 不算):系统提示里要补一段聊天口径,见下面 2'')。
   // 它的 Space 目录不用另加可写根 —— fsPolicy.writableRoots 本来就把 agents/<自己>/ 整个算进去。
@@ -1816,6 +1884,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .filter((r) => !cwd || r !== path.resolve(cwd))
           .slice(0, 8)
       : [];
+  // 多账号模式:额外工作文件夹也必须在账号文件夹里(会话存值 / 派生配置里抄来的也算),有一个在外面整轮拒。
+  if (isMultiAccount()) for (const r of extraRoots) { const bad = accountCwdDenied(r); if (bad) throw new Error(bad); }
   const requestedApprovalMode: ApprovalMode =
     normalizeApprovalMode(agentConfig.approvalMode, `run ${runId}`) || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // C3:远程污点 run 的快照档先钳一次(Agent 定义激活填进来的也在内);每次调用现读的会话存档由审批闸再钳。
@@ -3237,7 +3307,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 在这里取一次并固定。此前是每帧现取,而 probeSeq=0 已经把 map 更新成本 run 的值,于是第 2 帧起
     // 悄悄改成了「与本 run 首帧比」—— 字段名说的是跨会话比较,消费端把 run 内 load_tools 的正常变化
     // 误读成跨会话头部分叉(Codex 评审三轮 #5)。轮内变化只看 changedSegments。
-    const headKey = `${activeAgentSlug}\u0000${modelId}`;
+    // 多账号模式按账号分(两个账号的同名 Agent 不互相比 head hash)
+    const headKey = `${isMultiAccount() ? `${requireAccountId('headKey')}\u0000` : ''}${activeAgentSlug}\u0000${modelId}`;
     const priorRunHeadHash = lastHeadHashByAgentModel.get(headKey);
 
     type ExecutedToolCall = {
@@ -4522,7 +4593,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
         // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的,
         // 以及起跑后才被远端 steer 染上的(现查 effectiveRemote)。
-        const verifyCommand = execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
+        // 多账号模式没有宿主命令(core/hostSpawn.ts):验证命令不跑
+        const verifyCommand = execMode === 'host' && !isMultiAccount() && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
           ? String(agentConfig.verifyCommand).trim() : '';
         if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
           verifyRounds++;

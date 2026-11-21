@@ -12,10 +12,12 @@ import { readFileSync, writeSync } from 'node:fs';
 import { createTanguModule } from '../index.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
-import { parseConfig, validate, HELP, type StandaloneConfig } from './config.js';
+import { parseConfig, validate, validateMultiAccount, HELP, type StandaloneConfig } from './config.js';
 import { loadCreds } from './credStore.js';
 import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
-import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
+import { resolveSandboxMode, setupHost, buildBrain, buildMultiAccountBaseBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
+import { createMultiAccountApp } from './multiAccount.js';
+import { isMultiAccount } from '../core/accountScope.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { createEngineManager } from '../engines/index.js';
@@ -48,7 +50,51 @@ function engineVersion(): string {
 /** 启动走到哪一步了(见 main 里的 exit 监听);listen 回调里置 'ready'。 */
 let bootPhase = 'config';
 
+/**
+ * 多账号模式(TANGU_MULTI_ACCOUNT=1,真实环境变量):一个进程服务多个账号(standalone/multiAccount.ts)。
+ * 启动时不读 config.json、不读 auth.json、不加载 OAuth provider、不迁移旧配置;引擎配置只来自 env / CLI(含引擎根的 .env)。
+ * 不接桌面私有 stdin 通道、不挂实时语音 ws、不起 MCP / 外部引擎、不加载插件引擎代码。
+ */
+async function mainMultiAccount(): Promise<void> {
+  loadTanguEnv(); // <engineRoot>/.env(引擎级;多账号开关本身不认它)
+  const cfg = parseConfig(process.argv.slice(2), { configFile: false });
+  if (cfg.showHelp) { process.stdout.write(HELP); return; }
+  if (cfg.showVersion) { process.stdout.write(`tangu-server ${engineVersion() || 'unknown'}\n`); return; }
+  const errs = validateMultiAccount(cfg);
+  if (errs.length) {
+    process.stderr.write('配置错误(multi-account):\n  - ' + errs.join('\n  - ') + '\n');
+    process.exit(1);
+  }
+  bootPhase = 'multi-account';
+  const { app, dispose } = await createMultiAccountApp({
+    localToken: cfg.localToken!,
+    brain: buildMultiAccountBaseBrain(cfg),
+    defaultModelId: cfg.defaultModelId || undefined,
+  });
+  const version = engineVersion();
+  bootPhase = 'listen';
+  const server = app.listen(cfg.port, cfg.host, () => {
+    bootPhase = 'ready';
+    const address = server.address();
+    const port = address && typeof address === 'object' ? address.port : cfg.port;
+    if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version, mode: 'multi-account' });
+    console.log(`[tangu] standalone (multi-account) 已启动 http://${cfg.host}:${port}`);
+  });
+  let stopping = false;
+  const shutdown = (): void => {
+    if (stopping) return;
+    stopping = true;
+    const drained = drainRunsForExit(3000);
+    void drained.finally(() => dispose()).finally(() => process.exit(0));
+    setTimeout(() => process.exit(0), 4000).unref?.();
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+  if (process.send) process.on('disconnect', shutdown);
+}
+
 async function main(): Promise<void> {
+  if (isMultiAccount()) return mainMultiAccount();
   startHostChannel(); // 桌面拉起时的私有 stdin 通道(电脑历史钥匙);先于一切,开关读完即从 env 删掉
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig

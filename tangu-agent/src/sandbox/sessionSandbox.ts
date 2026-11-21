@@ -17,6 +17,7 @@
  * 局限：绕过 sys.stdout 的裸 fd 写（os.write(1,...) 等）会破坏帧 → 视为 kernel 死亡，杀容器重建并回退
  * ephemeral。文档生成类代码（print / 库写文件）不受影响。
  */
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { ExecutionQueue } from './executionQueue.js';
@@ -109,6 +110,7 @@ class PythonKernel {
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
+        assertHostSpawnAllowed('sandbox kernel');
         this.child = spawn('docker', ['exec', '-i', this.containerName, 'python3', '-u', '-c', KERNEL_DRIVER],
           { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       } catch { this.dead = true; return done(false); }

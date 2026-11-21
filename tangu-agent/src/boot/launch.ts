@@ -14,6 +14,7 @@ import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forsionSharedDir } from '../core/tanguHome.js';
+import { engineRoot as accountsEngineRoot, isMultiAccount } from '../core/accountScope.js';
 import { ENGINE_ENTRIES, engineOverlayRoot, markBad, selectOverlay, type SelectedOverlay } from './overlay.js';
 
 type ResolveResult = { url: string; shortCircuit?: boolean; format?: string | null };
@@ -52,7 +53,8 @@ function redirectBareImports(overlayUrl: string): boolean {
 }
 
 let overlay: SelectedOverlay | null = null;
-const engineRoot = engineOverlayRoot(forsionSharedDir());
+// 覆盖层是引擎级的:多账号模式下在引擎根(不属于任何账号;forsionSharedDir 在那里没有账号上下文会抛)。
+const engineRoot = engineOverlayRoot(isMultiAccount() ? accountsEngineRoot() : forsionSharedDir());
 if (process.env.TANGU_ENGINE_OVERLAY !== 'off') {
   try {
     overlay = selectOverlay(engineRoot, bundledRoot, {

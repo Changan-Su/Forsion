@@ -13,6 +13,7 @@
  * microserver/worker 不触本模块。mtime 缓存(config.toml + SOUL.md),改文件即时生效。
  * 旧扁平 <slug>.md 首次访问时惰性迁移成文件夹(原文件留 .bak)。
  */
+import { perAccount } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -433,16 +434,19 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
 
 // ── mtime 缓存(各 agent 子目录的 config.toml + SOUL.md 指纹)──
 interface CacheEntry { stamp: string; defs: NormalAgentDef[] }
-let cache: CacheEntry | null = null;
+// 多账号模式按账号分(core/accountScope.ts);单人模式一个槽,行为不变。
+const cacheSlot = perAccount((): { v: CacheEntry | null } => ({ v: null }));
 
 async function dirStamp(dir: string): Promise<string> {
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    return 'missing';
+    return `missing:${dir}`;
   }
-  const parts: string[] = [];
+  // 指纹带上目录本身:缓存只比指纹是否相等,换了目录(多账号模式下每个账号一个 agents/)就一定失效,
+  // 哪天缓存槽退化成全进程一格,同名 Agent、同样的修改时间也不会把另一个目录的名册当成命中。
+  const parts: string[] = [`dir:${dir}`];
   for (const e of entries) {
     if (e.isDirectory()) {
       if (!isValidSlug(e.name)) continue;
@@ -634,7 +638,7 @@ async function refreshBuiltinTexts(slug: string): Promise<void> {
     }
     if (replace.soul !== undefined) await atomicWriteText(path.join(adir, 'SOUL.md'), replace.soul);
     if (plan.baseline) await writeBuiltinBaseline(adir, plan.baseline);
-    if (Object.keys(replace).length || plan.baseline) cache = null;
+    if (Object.keys(replace).length || plan.baseline) cacheSlot().v = null;
   });
 }
 
@@ -686,7 +690,7 @@ export async function resolveBuiltinUpdate(slug: string, action: 'keep' | 'adopt
       if (fields.includes('soul')) await atomicWriteText(path.join(adir, 'SOUL.md'), defaults.soul);
     }
     await writeBuiltinBaseline(adir, acknowledgedBaseline(defaults, baseline, fields));
-    cache = null;
+    cacheSlot().v = null;
     return getAgent(slug);
   });
 }
@@ -708,7 +712,7 @@ export async function ensureMuseAgent(legacyPrompt?: string): Promise<void> {
   const preset = { ...MUSE_AGENT_PRESET };
   if (legacyPrompt && legacyPrompt.trim()) preset.systemPrompt = legacyPrompt.trim();
   await recordScaffoldBaseline(MUSE_AGENT_SLUG, await writeAgentScaffold(preset));
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** 内置头像显式删除后不复活;自定义头像和独立的记忆保持原样。 */
@@ -774,7 +778,7 @@ export async function migrateDefaultEffortOnce(): Promise<void> {
     const cur = await parseAgentFolder(slug, adir);
     if (cur.thinkingLevel === 'low') {
       await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig({ ...cur, thinkingLevel: 'medium' }), 'utf-8');
-      cache = null;
+      cacheSlot().v = null;
     }
   }
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
@@ -797,7 +801,7 @@ export async function migrateAgentNamesOnce(): Promise<void> {
     await fs.writeFile(file, stringifyToml({ ...(nameZh ? { name_zh: nameZh } : {}), ...(nameEn ? { name_en: nameEn } : {}) }) + raw, 'utf-8');
   }
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** Arioso/Coding 保持原来的补齐语义;Aria/Recita/Muse 独立播种标记让已有安装也能获得新名册,
@@ -845,7 +849,7 @@ export async function seedDshAgentOnce(): Promise<void> {
   } catch { return; } // 运行时还没装配:不播种,下次进程再看
   await writeAgentScaffold(DSH_AGENT_PRESET);
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** 旧扁平 <slug>.md → <slug>/(config.toml + 空 SOUL.md);原文件留 .bak。幂等、非破坏。 */
@@ -915,11 +919,11 @@ async function migrateImportedPortraitOnce(): Promise<void> {
   } catch (e) { console.warn('[import] portrait migration failed:', e instanceof Error ? e.message : e); }
 }
 
-let readyChecked = false;
+const readyFlag = perAccount((): { checked: boolean } => ({ checked: false })); // 多账号模式每个账号各跑一次
 /** 首次访问:迁移扁平 agent → 文件夹、播种默认 agent + USER.md、迁移旧全局记忆 → xyra。幂等、绝不抛。 */
 async function ensureAgentsReady(): Promise<void> {
-  if (readyChecked) return;
-  readyChecked = true;
+  if (readyFlag().checked) return;
+  readyFlag().checked = true;
   try { mkdirSync(agentsDir(), { recursive: true }); } catch { /* ignore */ }
   await migrateFlatAgentsOnce().catch(() => { /* ignore */ });
   await seedDefaultAgentsOnce().catch(() => { /* ignore */ });
@@ -929,7 +933,7 @@ async function ensureAgentsReady(): Promise<void> {
   await migrateImportedPortraitOnce();
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
   await purgeExpiredWidgets().catch((e) => { console.warn('[widgets] purge failed:', e instanceof Error ? e.message : e); });
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** 解析本 run 的 active agent slug:合法 slug 用之,否则回默认 agent(记忆/日志据此选文件夹)。 */
@@ -967,7 +971,7 @@ export async function writeAgentsMeta(patch: Partial<AgentsMeta>): Promise<Agent
   });
   mkdirSync(agentsDir(), { recursive: true });
   await fs.writeFile(agentsMetaFile(), JSON.stringify(next, null, 2), 'utf-8');
-  cache = null; // 顺序变 → 列表缓存失效
+  cacheSlot().v = null; // 顺序变 → 列表缓存失效
   return next;
 }
 
@@ -975,13 +979,14 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   await ensureAgentsReady();
   const dir = agentsDir();
   const stamp = await dirStamp(dir);
-  if (cache && cache.stamp === stamp) return cache.defs.filter((a) => !a.standInOf); // 缓存存全量(listStandIns 也读它),命中时同样不列分身(Codex 评审 #9)
+  const cached = cacheSlot().v;
+  if (cached && cached.stamp === stamp) return cached.defs.filter((a) => !a.standInOf); // 缓存存全量(listStandIns 也读它),命中时同样不列分身(Codex 评审 #9)
   const defs: NormalAgentDef[] = [];
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    cache = { stamp, defs };
+    cacheSlot().v = { stamp, defs };
     return defs;
   }
   for (const e of entries) {
@@ -1000,7 +1005,7 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   // 按 meta.order 排(order 内按序在前,order 外按 name 在后)。
   const meta = readAgentsMeta();
   const visible = sortAgentDefs(defs.filter((a) => !isRetiredBuiltin(a)), meta.order);
-  cache = { stamp, defs: visible };
+  cacheSlot().v = { stamp, defs: visible };
   return visible.filter((a) => !a.standInOf);
 }
 
@@ -1022,7 +1027,7 @@ async function standInDirsOf(bodySlug: string): Promise<string[]> {
 
 export async function listStandIns(bodySlug?: string): Promise<NormalAgentDef[]> {
   await listAgents();
-  return (cache?.defs ?? []).filter((a) => !!a.standInOf && (!bodySlug || a.standInOf === bodySlug));
+  return (cacheSlot().v?.defs ?? []).filter((a) => !!a.standInOf && (!bodySlug || a.standInOf === bodySlug));
 }
 
 export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
@@ -1275,7 +1280,7 @@ async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, i
   else if (!existsSync(path.join(adir, 'config.toml'))) throw new AgentNotFoundError(slug);
   await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
   await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
-  cache = null; // 失效缓存
+  cacheSlot().v = null; // 失效缓存
   return def;
 }
 
@@ -1380,7 +1385,7 @@ export async function trashAgent(slug: string, opts: { record?: boolean; alsoTra
       const standIns = own && !own.standInOf && existsSync(path.join(dir, 'config.toml')) ? (await standInDirsOf(slug)).map((p) => ({ path: p, role: 'standin' })) : [];
       if (opts.record !== false && !own?.standInOf) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
       const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...standIns, ...(opts.alsoTrash ?? [])] });
-      cache = null;
+      cacheSlot().v = null;
       return entry ? { ok: true, entry } : { ok: true };
     } catch {
       // 没挪走(config.toml 还在)就撤掉这次的记录:不然下次同步会删云端、再把本地没动过的文件当成别处删了一起删掉
@@ -1391,7 +1396,7 @@ export async function trashAgent(slug: string, opts: { record?: boolean; alsoTra
 }
 
 /** 恢复之后名册重读(目录是回收站挪回来的,不经 saveAgent)。 */
-export function invalidateAgentCache(): void { cache = null; }
+export function invalidateAgentCache(): void { cacheSlot().v = null; }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
 export const AVATAR_MIME_EXT: Record<string, string> = {

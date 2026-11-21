@@ -15,6 +15,7 @@
  * stdout,本侧增量按行解析、经 ctx.displayFile 即时扇出到桌面对话区——聊天里直播它在干什么
  * (headless / 微信远程会话也能监工)。审批:browser_task 已并入 run_bash 同档(approvals.ts)。
  */
+import { assertHostSpawnAllowed } from '../../core/hostSpawn.js';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -170,6 +171,7 @@ function spawnRunner(
     let child;
     try {
       // detached → 自成进程组,超时可整组 SIGKILL(Chrome 是 python 的子进程,只杀 uv 会留孤儿浏览器)。
+      assertHostSpawnAllowed('browser_task');
       child = spawn(cmd, argv, { env, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true });
     } catch (e: any) {
       resolve({ success: false, error: e?.code === 'ENOENT' ? missingHint : String(e?.message || e), enoent: e?.code === 'ENOENT' });

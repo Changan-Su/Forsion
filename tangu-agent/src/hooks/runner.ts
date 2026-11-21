@@ -10,6 +10,7 @@
  * 线格式对齐 Claude Code：stdout JSON `{decision,reason,hookSpecificOutput,continue,...}`，
  * 或退出码（0 ok / 2 block + stderr reason / 其它 fail）。不认识的输出 fail-open（标 failed，绝不静默改行为）。
  */
+import { isMultiAccount } from '../core/accountScope.js';
 import { runBoundedProcess, type BoundedProcessResult } from '../utils/boundedProcess.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { toolNameSpellings } from '../tools/toolRegistry.js';
@@ -147,6 +148,7 @@ export async function executeHook(
 
 /** 派发点唯一入口。host-only 闸在最顶（云端/worker 直接空判定，绝不读 config、绝不 spawn）。 */
 export async function runHooks(event: HookEventName, input: HookInput, ctx: HookRunContext): Promise<HookVerdict> {
+  if (isMultiAccount()) return emptyVerdict(); // 多账号模式没有钩子(core/accountScope.ts):钩子是宿主命令
   if (!ctx.profile?.capabilities?.hostExec || ctx.execMode !== 'host') return emptyVerdict();
   if (isHostSandboxRestricted(ctx)) {
     return { ...emptyVerdict(), systemMessages: ['Shell hooks are disabled while local sandbox restrictions are active'] };

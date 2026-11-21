@@ -1,3 +1,4 @@
+import { isMultiAccount } from '../core/accountScope.js';
 import { pluginDependencyIndex } from '../shared/pluginAliases.js';
 import { cmpVersion } from '../contracts/lenientVersion.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
@@ -39,6 +40,8 @@ const MANIFEST = 'tangu-plugin.json';
  */
 export function resolvePluginsDirs(bundleRoots = bundleEnginePluginRoots()): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
+  // 多账号模式不加载任何插件引擎代码(首方 / 用户装的 / 包内嵌的都不):插件只带人设和技能进来(plugins/bundles.ts)。
+  if (isMultiAccount()) return [];
   const override = process.env.TANGU_PLUGINS_DIR;
   if (override) return [path.resolve(override)];
   const here = path.dirname(fileURLToPath(import.meta.url)); // <pkg>/dist/plugins

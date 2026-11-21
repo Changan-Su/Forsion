@@ -25,7 +25,7 @@ export interface SqliteHostConfig {
 }
 
 /** WAL(一写多读);NFS/SMB/WSL1 上 WAL 不可用时回落 DELETE(照 Hermes apply_wal_with_fallback)。 */
-function applyWalWithFallback(db: Database.Database): void {
+export function applyWalWithFallback(db: Database.Database): void {
   try {
     const mode = db.pragma('journal_mode = WAL', { simple: true });
     if (String(mode).toLowerCase() !== 'wal') db.pragma('journal_mode = DELETE');
@@ -35,7 +35,7 @@ function applyWalWithFallback(db: Database.Database): void {
 }
 
 /** better-sqlite3 绑定不接受 undefined / boolean → 归一化(undefined→null,bool→0/1)。 */
-function sanitize(v: any): any {
+export function sanitize(v: any): any {
   if (v === undefined) return null;
   if (typeof v === 'boolean') return v ? 1 : 0;
   return v;

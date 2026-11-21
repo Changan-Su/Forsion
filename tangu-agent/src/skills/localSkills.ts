@@ -8,6 +8,7 @@
  * 混进目录与 system prompt 被 use_skill 直接调用。改由「设置 → Agent CLIs」逐个显式导入
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
+import { perAccount } from '../core/accountScope.js';
 import { promises as fs, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -174,7 +175,8 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
   return skills;
 }
 
-let seeding: Promise<SeedReport> | null = null;
+// 多账号模式每个账号各播一次(core/accountScope.ts);单人模式一个槽,行为不变。
+const seedingSlot = perAccount((): { p: Promise<SeedReport> | null } => ({ p: null }));
 
 /**
  * 播种指纹:**与被描述的东西同住**——写在技能目录里的 `.seed-stamp`,内容 = 我们写下去时**整棵目录树**的哈希。
@@ -357,13 +359,14 @@ export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<
 export async function seedBuiltinSkills(): Promise<SeedReport> {
   // ⚠️共享 Promise,不是布尔闩:布尔闩的语义其实是「后来的调用**不等**第一次跑完」——并发首调会去扫
   // 一个正在被写的目录,读到半个技能;而且第一次抛错后闩仍为 true,本进程永不重试(codex)。
-  if (!seeding) {
-    seeding = seedSkillsInto(builtinSkillsDir(), userSkillsDir()).catch((e) => {
-      seeding = null; // 失败允许下次重试
+  const slot = seedingSlot();
+  if (!slot.p) {
+    slot.p = seedSkillsInto(builtinSkillsDir(), userSkillsDir()).catch((e) => {
+      slot.p = null; // 失败允许下次重试
       throw e;
     });
   }
-  const r = await seeding;
+  const r = await slot.p;
   // 有新版却被保护住的,说出来 —— 静默停更就是这次事故的成因(用户看不到内置技能已经修好了)。
   if (r.protectedStale.length) {
     console.warn(
