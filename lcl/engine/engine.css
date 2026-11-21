@@ -84,7 +84,7 @@
 .rb-recent-slot { -webkit-app-region: no-drag; display: flex; justify-content: center; }
 .rb-recent .rb-btn { opacity: 0.6; transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 .rb-recent .rb-btn:hover, .rb-recent .rb-btn:focus-visible { opacity: 1; }
-.rb-expanded .rb-recent { padding: 0 8px; }
+.rb-expanded .rb-recent { padding: 0 6px; }
 .rb-expanded .rb-recent-slot { width: 100%; justify-content: stretch; }
 /* 滚轮翻看的滑动框(10-02):框只露 n 格高,里面整区一列按窗口起点 translateY。overflow:clip 不建滚动容器
    (不会被 scrollIntoView / 键盘滚走);留 4px 裁切余量给焦点环、插入线、未读角标。窗外占位 .rb-cell 与槽等高。 */
@@ -135,14 +135,14 @@
   box-sizing: border-box;
 }
 /* 展开态:角标继续贴在**图标**右上角(不是行右端)—— 行右端已被快捷键提示 .rb-key 占着,
-   两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 10px + 18px 见方),
+   两者摞在一起就是用户报的「红点和 ⌘1 重合」。图标位置在展开态是定死的(左内边距 8px + 18px 见方),
    故落点直接写常量;右侧留给 .rb-key。 */
-.rb-expanded .rb-space .rb-badge { top: 2px; left: 21px; right: auto; transform: none; }
+.rb-expanded .rb-space .rb-badge { top: 2px; left: 19px; right: auto; transform: none; }
 /* 提示红点(RibbonItem.dot:成就有可领;收进「…」/ 收纳夹时挂在它们上):无数字的小圆点,压在图标右上角。
    宿主钮默认不是定位容器(.rb-space 才是)—— 只给带红点的那颗钮补上,别动所有 .rb-btn 的定位上下文。 */
 .rb-btn:has(> .rb-dot) { position: relative; }
 .rb-badge.rb-dot { top: 4px; right: 4px; min-width: 0; width: 8px; height: 8px; padding: 0; }
-.rb-expanded .rb-btn > .rb-dot { top: 5px; left: 22px; right: auto; }
+.rb-expanded .rb-btn > .rb-dot { top: 5px; left: 20px; right: auto; }
 /* 进度环(插件 Space 经 ctx.app.setSpaceProgress 挂的,如蓬洲云在传文件):和角标同一个角,展开态跟着上面那条落在图标右上;
    颜色是「指示」那一档(--signal-mark,DESIGN §1),外圈仍用侧栏底色描一圈和图标分开 */
 .rb-badge.rb-ring { top: 1px; right: 1px; min-width: 0; width: 13px; height: 13px; padding: 0;
@@ -197,27 +197,31 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .rb-btn, .rb-group .account-card, .rb-group .ribbon-account { -webkit-app-region: no-drag; }
 .rb-group .account-card { flex: 0 0 auto; }
 
-/* 展开态:宽条,按钮变「图标 + 名称」左对齐行;底部账号卡铺满。 */
-.rb-expanded { width: 180px; align-items: stretch; }
+/* 展开态:宽条,按钮变「图标 + 名称」左对齐行;底部账号卡铺满。
+   11-19 用户嫌 180px 太占地,选「紧凑行」(docs/ToBeImproved/Ribbon展开收窄方案_2026-11-19 方案 A):宽 132(英文名字长,168:Command palette、钉进来的 Change accent color 都放得下;中文最长的「切换明暗模式」78px 也放得下),
+   两侧内距 8→6、图标与字 10→8,⌘N 悬停才露。顶部「只显示图标」那一行照旧带字(用户:只留箭头不好看)。 */
+.rb-expanded { width: var(--rb-w-expanded, 132px); align-items: stretch; }
+html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
 .rb-expanded .rb-group { align-items: stretch; }
 .rb-expanded .rb-head,
 .rb-expanded .rb-home,
 .rb-expanded .rb-top,
 .rb-expanded .rb-bottom,
-.rb-expanded .rb-pinned { padding: 0 8px; }
+.rb-expanded .rb-pinned { padding: 0 6px; }
 .rb-expanded .rb-slot { width: 100%; justify-content: stretch; }
-.rb-expanded .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 34px; }
+.rb-expanded .rb-btn { width: 100%; justify-content: flex-start; gap: 8px; padding: 0 8px; height: 34px; }
 /* 槽位右侧的快捷键提示(⌘1…):绝对定位不进流 —— 槽高常量与拖拽落点几何一点不受影响。
-   pointer-events:none 让点击照旧落在按钮上;名称给它让出右边距,长名省略号不会压上来。 */
+   pointer-events:none 让点击照旧落在按钮上。只在悬停 / 键盘聚焦(:focus-visible,鼠标点过留下的焦点不算,否则移走了还亮着)
+   那一行时出现,名字这时让出右边距、长名省略号不会压上来;平时名字占满整行。淡入有过渡,移开时立刻消失 ——
+   名字同一帧收回全宽,带着淡出会和它叠字。 */
 .rb-expanded .rb-top .rb-slot .rb-key {
-  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   pointer-events: none; font-size: var(--ui-font-caption, 11px); line-height: 1; letter-spacing: 0.02em;
-  color: var(--text-muted, var(--text-light, #8a8a8a)); opacity: 0.55;
+  color: var(--text-muted, var(--text-light, #8a8a8a)); opacity: 0;
   font-variant-numeric: tabular-nums;
 }
-.rb-expanded .rb-top .rb-slot .rb-label { padding-right: 26px; }
-/* 悬停/当前 Space 时提示稍微实一点,但始终比正文淡。 */
-.rb-expanded .rb-top .rb-slot:hover .rb-key { opacity: 0.8; }
+.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-label { padding-right: 24px; }
+.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-key { opacity: 0.55; transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 
 /* ===== 收纳夹 / 「…」浮层(悬停在 ribbon 右侧展开:icon + 文字行,可拖排/拖出) ===== */
 .rb-fly {

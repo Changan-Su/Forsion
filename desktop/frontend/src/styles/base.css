@@ -991,6 +991,8 @@ a:hover { color: var(--accent-ink); }
 .account-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 徽章挪到第二行后成了 flex 列的直接子项:不给 align-self 会被拉满整行宽(自身 inline-flex 挡不住 stretch)。 */
 .account-meta > .tier-badge { align-self: flex-start; }
+/* Ribbon 展开态只有 132px(11-19 收窄):已登录时信息列只剩三四十像素,ULTRA 这类长徽章会伸进退出钮那一格。受列宽约束、超出裁掉,完整会员名在账号面板里。 */
+.rb-expanded .account-meta > .tier-badge { max-width: 100%; min-width: 0; overflow: hidden; white-space: nowrap; }
 .account-logout { width: 24px; height: 24px; flex-shrink: 0; opacity: 0; }
 .account-card:hover .account-logout { opacity: 1; }
 .tier-badge {
