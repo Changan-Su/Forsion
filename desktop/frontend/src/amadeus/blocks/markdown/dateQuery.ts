@@ -91,7 +91,7 @@ function nextDayOfMonth(day: number, now: Date): string | null {
 
 function parseDateOnly(input: string, now: Date): string | null {
   const s = input.trim().toLowerCase()
-  const relative = WORDS[s]
+  const relative = Object.prototype.hasOwnProperty.call(WORDS, s) ? WORDS[s] : undefined // `@constructor` is not a day
   if (relative !== undefined) return ymd(plusDays(now, relative))
 
   const valid = (y: string | number, m: string | number, d: string | number): string | null => {
