@@ -8,6 +8,10 @@
  *           ⋯ 展开时那一行不动、面板往远离选区的一侧长;不经鼠标切标签时结果卡藏起、切回来还在;插件 show({ getRect }) 也跟。
  *   插件视图 —— ctx.ui.mountSelectionBar:自己的工具(颜色点 / 图标钮)+ 宿主的动作区;接管「问 Tangu」;source 交给动作;
  *           output:'none' 不出卡;show() / hide();输入框里不出;排法设置(工具在前 / 动作在前);dispose 后不再出。
+ *   插件常驻 / 朗读 / 自动 / 翻译归属(2026-11-21,第三个实例:探针插件 id 就叫 translation)—— 装着 translation 插件宿主翻译不出;
+ *           placement:'bar' 上条、第 4 个起进 ⋯ 并提示「还有 N 个放不下」;⋯ 里的钉 / 条上右键「收进 ⋯」生效;朗读没配模型出提示卡、
+ *           配了之后三态(合成中 → 播放中 → 静止);结果卡的原文 / 小喇叭 / 卡头语言记住;卡头开「划选后自动」后划选出卡(条留着)、
+ *           新划选在同一张卡里重跑(不卸载不闪)并中止旧请求、同段同语言不重复请求;设置里的管理表列出这些动作。
  * 笔记那一半(格式工具栏里的动作区)在浏览器台架 `npm run check:editorai -- --group=H`。
  * npm run build && npm run check:selectionbar        ZOOM=1.1 再跑一遍(用户的开发版常年 110%)
  * 全程打隔离 loopback stub(引擎 /agent/inline 按剧本回 SSE),不碰真账号、不烧模型额度;对真的机器翻译接口这里证不了。
@@ -31,7 +35,9 @@ function check(name, condition, detail) {
 /** main() 里装上:一段抛了就拍一张、记下当时页面上有什么 —— 下次红了从证据查起,不用再占一次锁去猜。 */
 let onStepFail = null
 /** 一段和后面互不依赖的步骤:里面抛了(等不到元素之类)记一条红,后面的段照跑。 */
+// 调试用:STEP=<名字片段> 只跑名字里含它的段(实例照样起)
 async function step(name, fn) {
+  if (process.env.STEP && !name.includes(process.env.STEP)) return
   try { await fn() } catch (e) {
     failed.push(name)
     console.log(`FAIL ${name} | 抛错: ${String((e && e.message) || e).split('\n')[0]}`)
@@ -77,6 +83,59 @@ ctx.registerView({ id: 'reader', title: 'Sel Probe', mount: function (el) {
 window.__selprobe.open = function () { return ctx.openView('reader') }
 `
 
+/** 第三个实例的探针插件:id 就叫 translation(契约 §5:装着它,宿主自己的翻译就不出)。一个支持自动 / 卡头语言 / 原文 / 小喇叭的
+ *  「翻译」,四个要上条的(放不下的进 ⋯),一个缺省进 ⋯ 的。run 记下拿到的语言 / 是不是自动、被中止的次数;delay 可调(测「新划选中止旧请求」)。 */
+const PINS_MAIN = `
+window.__pins = { runs: [], aborted: 0, delay: 0 }
+function tr(cx) {
+  window.__pins.runs.push({ text: cx.text, language: cx.language, auto: !!cx.auto })
+  var d = window.__pins.delay
+  return new Promise(function (res, rej) {
+    var settled = false
+    var tm = setTimeout(function () { settled = true; res('T(' + cx.language + '|' + (cx.auto ? 'auto' : 'manual') + '):' + cx.text.slice(0, 6)) }, d)
+    // 只数在飞时被中止的(已经出结果的卡被换掉时宿主也会 abort 它的 signal,那不算)
+    if (cx.signal) cx.signal.addEventListener('abort', function () { if (settled) return; clearTimeout(tm); window.__pins.aborted++; rej(new Error('aborted')) })
+  })
+}
+ctx.registerSelectionAction({ id: 'translate', title: { zh: '翻译', en: 'Translate' }, icon: 'languages', scope: 'all', placement: 'bar', auto: true, card: { language: true, source: true, speak: true }, run: tr })
+;[['b1', '摘录到今日笔记', 'bookmark'], ['b2', '查词典', 'book-open'], ['b3', '生成闪卡', 'layout-grid'], ['b4', '做成分享图', 'image']].forEach(function (a) {
+  ctx.registerSelectionAction({ id: a[0], title: a[1], icon: a[2], scope: 'all', placement: 'bar', run: function () { return a[0] } })
+})
+ctx.registerSelectionAction({ id: 'm1', title: '搜索网页', icon: 'globe', scope: 'all', run: function () { return 'web' } })
+`
+/** 一段 1.2 秒的静音 WAV(8 kHz / 16 bit / 单声道):朗读的假合成结果,够看「播放中」再自己放完。 */
+function silentWav(seconds = 1.2) {
+  const rate = 8000, n = Math.round(rate * seconds), data = n * 2
+  const b = Buffer.alloc(44 + data)
+  b.write('RIFF', 0); b.writeUInt32LE(36 + data, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22)
+  b.writeUInt32LE(rate, 24); b.writeUInt32LE(rate * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(data, 40)
+  return b
+}
+
+/** 视图里一处露在外面(没被卡盖住、也不在视口外)的点:四个角挨个试。点一下 = 没划出东西。 */
+async function blankIn(win, rootSel) {
+  const p = await win.evaluate((sel) => {
+    const root = document.querySelector(sel)
+    const r = root.getBoundingClientRect()
+    const top = Math.max(r.top, 0) + 4, bottom = Math.min(r.bottom, innerHeight) - 4
+    for (const [x, y] of [[r.left + 4, bottom], [r.right - 4, bottom], [r.left + 4, top], [r.right - 4, top]]) {
+      if (root.contains(document.elementFromPoint(x, y))) return { x, y }
+    }
+    return null
+  }, rootSel)
+  if (!p) throw new Error(`no uncovered blank point in ${rootSel}`)
+  return p
+}
+
+/** 候选里第一段没被浮着的卡盖住的,拖选它;返回选中的是哪一段。 */
+async function dragSelectAny(win, rootSel, texts) {
+  const why = []
+  for (const text of texts) {
+    try { await dragSelect(win, rootSel, text); return text } catch (e) { if (!/drag points covered/.test(String(e?.message))) throw e; why.push(String(e.message)) }
+  }
+  throw new Error(`all drag candidates covered: ${why.join(' | ')}`)
+}
+
 /** 真鼠标拖选 `root` 里第一处 `text`(松手才出条)。返回选区外接矩形(视口 px)。 */
 async function dragSelect(win, rootSel, text) {
   const r = await win.evaluate(({ rootSel, text }) => {
@@ -114,6 +173,12 @@ async function dragSelect(win, rootSel, text) {
     }
     return null
   }, { rootSel, text })
+  // 起点 / 终点被浮着的卡盖住:真人也划不到那段字,是台架选的字不对,直说
+  const hit = await win.evaluate(({ at, rootSel }) => [[at.x0, at.y0], [at.x1, at.y1]].map(([x, y]) => {
+    const el = document.elementFromPoint(x, y)
+    return el?.closest(rootSel) ? null : (el?.closest('[data-testid]')?.getAttribute('data-testid') || el?.className || String(el))
+  }), { at, rootSel })
+  if (hit.some(Boolean)) throw new Error(`drag points covered or off-screen (${text}): ${JSON.stringify(hit)} at ${JSON.stringify(at)}`)
   await win.mouse.move(at.x0, at.y0)
   await win.mouse.down()
   await win.mouse.move((at.x0 + at.x1) / 2, (at.y0 + at.y1) / 2, { steps: 4 })
@@ -137,7 +202,8 @@ const barState = (win) => win.evaluate(() => {
     left: b.left, right: b.right, top: b.top, bottom: b.bottom,
     view: el.getAttribute('data-view'), dense: el.hasAttribute('data-dense'), popover: el.classList.contains('ui-popover'),
     radius: parseFloat(cs.borderTopLeftRadius), position: cs.position, inBody: el.parentElement === document.body,
-    row: [...el.querySelectorAll('.selbar-row > *')].map((x) => (x.classList.contains('selbar-sep') ? '|' : x.getAttribute('data-act') || '?')),
+    // 工具包在 .selbar-tool / .selbar-split 里(10 月加的分体工具):取里面主按钮的 data-act
+    row: [...el.querySelectorAll('.selbar-row > *')].map((x) => (x.classList.contains('selbar-sep') ? '|' : x.getAttribute('data-act') || x.querySelector(':scope > [data-act]')?.getAttribute('data-act') || '?')),
     vw: innerWidth, vh: innerHeight,
     // 跟随(方案 B):看不见时只藏(data-anchor-hidden,透明);⋯ 展开时 .selbar-row 钉住、面板往哪边长(data-grow)
     hidden: el.hasAttribute('data-anchor-hidden'), opacity: cs.opacity, grow: el.dataset.grow ?? null,
@@ -145,8 +211,10 @@ const barState = (win) => win.evaluate(() => {
     panelBox: (() => { const r = el.querySelector('.selbar-panel')?.getBoundingClientRect(); return r ? { top: r.top, bottom: r.bottom } : null })(),
   }
 })
+/** 结果卡(换语言重开时有一份退场替身 data-lcl-exit,不算)。 */
+const PANEL = '[data-testid="inline-ai-panel"]:not([data-lcl-exit])'
 const card = (win) => win.evaluate(() => {
-  const el = document.querySelector('[data-testid="inline-ai-panel"]')
+  const el = document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')
   if (!el) return null
   const b = el.getBoundingClientRect()
   return {
@@ -243,9 +311,10 @@ async function launch(stubUrl, prefs, fixture = {}) {
   const userdata = path.join(home, 'userdata'); fs.mkdirSync(userdata)
   const vault = path.join(home, 'vault'); fs.mkdirSync(vault)
   for (const [name, content] of Object.entries(fixture.notes || {})) fs.writeFileSync(path.join(vault, name), content)
-  const plugin = path.join(home, 'plugins', 'selprobe'); fs.mkdirSync(plugin, { recursive: true })
+  const pluginId = fixture.pluginId || 'selprobe'
+  const plugin = path.join(home, 'plugins', pluginId); fs.mkdirSync(plugin, { recursive: true })
   fs.writeFileSync(path.join(plugin, 'main.js'), fixture.pluginMain || PLUGIN_MAIN)
-  fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: 'selprobe', name: 'selprobe', version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
+  fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: pluginId, name: fixture.pluginName || pluginId, version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
@@ -273,6 +342,7 @@ async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   const inline = []
   let failMt = false
+  const tts = { calls: 0, delay: 0 }
   const stub = await startStubEngine({
     sessions: SESSIONS,
     messages: MESSAGES,
@@ -280,6 +350,11 @@ async function main() {
     modelsMeta: { translateModels: [{ id: 'qwen-mt', name: 'Qwen MT Flash', provider: 'bailian', apiModelId: 'qwen-mt-flash' }] },
     handle: async ({ path: route, method, body }) => {
       if (route === '/agent/runs') return { runs: [] }
+      if (route === '/agent/tts' && method === 'POST') {
+        tts.calls++
+        if (tts.delay) await new Promise((r) => setTimeout(r, tts.delay))
+        return { __buffer: silentWav(), contentType: 'audio/wav' }
+      }
       if (route === '/api/brain/users/me') return { id: 'test-selbar', username: 'Selbar tester' }
       if (route === '/agent/inline' && method === 'POST') {
         const b = await body()
@@ -325,7 +400,7 @@ async function main() {
     check('聊天里选中文字 → 划线条出现,挂在 body 下、fixed', !!sel1 && !!bar1 && bar1.inBody && bar1.position === 'fixed' && bar1.view === 'chat', JSON.stringify({ sel1, bar1 }))
     check('条在选区上方、水平居中(±2px)、不越出视口', bar1.bottom <= sel1.top + 1 && sel1.top - bar1.bottom < 16 && Math.abs((bar1.left + bar1.right) / 2 - (sel1.left + sel1.right) / 2) <= 2 && bar1.left >= 0 && bar1.right <= bar1.vw && bar1.top >= 0, JSON.stringify({ sel1, bar1 }))
     check('外壳是共用的 .ui-popover 圆角矩形(不是胶囊)', bar1.popover && bar1.radius > 0 && bar1.radius <= 14 && (await win.locator('.t2-quote-menu').count()) === 0, `radius=${bar1.radius}`)
-    check('组成:引用 / 顺便问 / 翻译 / ⋯(10-18「在侧栏提问」并进顺便问;聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,btw,translate,more', bar1.row.join(','))
+    check('组成:引用 / 顺便问 / 翻译 / 朗读 / ⋯(10-18「在侧栏提问」并进顺便问;11-21 加朗读;聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,btw,translate,speak,more', bar1.row.join(','))
     await shot(win, path.join(shots, 'chat-bar.png'))
     // 选区贴着聊天区顶上时条会压到标签栏上,标签栏是窗口拖拽区(不看层叠):条自己得打 no-drag 的洞,不然按下去是拖窗口。
     // CDP 派发的点击不经过系统的拖拽区,这里只能钉计算样式;先确认标签栏那边读得出 drag,读不出就如实跳过。
@@ -446,7 +521,7 @@ async function main() {
     check('插件视图挂上了宿主的划线条', await win.evaluate(() => !!window.__selprobe.bar && typeof window.__selprobe.bar.show === 'function'))
     const sel5 = await dragSelect(win, '.selprobe', 'paragraph for the selection')
     const bar5 = await barReady(win)
-    check('插件视图里:自己的工具在前(颜色点、图标钮),竖线,再是问 Tangu / 翻译 / ⋯', !!bar5 && bar5.view === 'selprobe:reader' && bar5.row.join(',') === 'yellow,note,|,ask,translate,more', JSON.stringify(bar5))
+    check('插件视图里:自己的工具在前(颜色点、图标钮),竖线,再是问 Tangu / 翻译 / 朗读 / ⋯', !!bar5 && bar5.view === 'selprobe:reader' && bar5.row.join(',') === 'yellow,note,|,ask,translate,speak,more', JSON.stringify(bar5))
     check('位置同样在选区上方居中', bar5.bottom <= sel5.top + 1 && Math.abs((bar5.left + bar5.right) / 2 - (sel5.left + sel5.right) / 2) <= 2, JSON.stringify({ sel5, bar5 }))
     await shot(win, path.join(shots, 'plugin-bar.png'))
     await win.locator('[data-testid="selection-bar"] [data-act="yellow"]').click()
@@ -527,7 +602,7 @@ async function main() {
       await win.evaluate(() => localStorage.setItem('forsion_selection_bar_order', 'actions'))
       await dragSelect(win, '.selprobe', 'paragraph for the selection')
       const bar6 = await barReady(win)
-      check('设置换成「动作在前」→ 问 Tangu / 翻译 / ⋯ 打头,工具在后', bar6?.row.join(',') === 'ask,translate,more,|,yellow,note', bar6?.row.join(','))
+      check('设置换成「动作在前」→ 问 Tangu / 翻译 / 朗读 / ⋯ 打头,工具在后', bar6?.row.join(',') === 'ask,translate,speak,more,|,yellow,note', bar6?.row.join(','))
       await shot(win, path.join(shots, 'plugin-bar-actions-first.png'))
     })
     await win.evaluate(() => { localStorage.removeItem('forsion_selection_bar_order'); window.getSelection().removeAllRanges() })
@@ -589,6 +664,179 @@ async function main() {
       const cEn = await cardDone(win)
       check('英文界面:中文选区译成英文;卡上的按钮是英文', inline.at(-1)?.language === 'English' && !!cEn && (await win.evaluate(() => [...document.querySelectorAll('[data-testid="inline-ai-panel"] button[data-act]')].map((b) => b.textContent.trim()).join('|'))) === 'Copy|Try again|Close', JSON.stringify(cEn))
       await shot(win, path.join(shots, 'chat-translate-card-dark-en.png'))
+    })
+
+    // ── 2026-11-21:插件常驻 / 朗读 / 自动 / 翻译归属(第三个实例,探针插件就是 translation)──
+    await step('插件常驻 / 朗读 / 自动 / 翻译归属', async () => {
+      await app.close().catch(() => {})
+      const third = await launch(stub.url, { tangu_locale: 'zh' }, { pluginId: 'translation', pluginName: '翻译', pluginMain: PINS_MAIN })
+      app = third.app
+      win = third.win
+      check('第三个实例离开首启引导', await skipOnboarding(win))
+      await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+      await ensureTangu(win, shots)
+      const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
+      await row.waitFor({ timeout: 30000 })
+      await row.click()
+      await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
+      check('探针插件(translation)已加载', (await until(() => win.evaluate(() => !!window.__pins), 15000)) === true)
+      const K = (id) => `plugin:translation:${id}`
+
+      // 放哪:宿主翻译让位;插件位 3 个;⋯ 顶上「还有 2 个放不下」、每行一颗钉
+      await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
+      const b = await barReady(win)
+      check('装着 translation 插件:宿主自己的翻译不出(条上恰好一颗翻译 = 插件那颗)', !!b && !b.row.includes('translate') && b.row.filter((x) => /translate/.test(x)).length === 1, b?.row.join(','))
+      check("placement:'bar' 上条:宿主那组 | 插件三颗,第 4、5 个进 ⋯", b?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b2')},more`, b?.row.join(','))
+      const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] [data-group="plugin"]')].map((x) => ({ t: x.textContent.trim(), icon: !!x.querySelector('svg') })))
+      check('条上插件按钮是「图标 + 字」,字跟着界面语言({ zh, en } 的 title)', labels.length === 3 && labels.every((l) => l.icon) && labels[0].t === '翻译', JSON.stringify(labels))
+      await shot(win, path.join(shots, 'pins-bar.png'))
+      await win.locator('[data-testid="selection-bar"] [data-act="more"]').click()
+      await win.locator('[data-testid="selbar-more"]').waitFor({ timeout: 3000 })
+      const more = await win.evaluate(() => ({
+        notice: document.querySelector('[data-testid="selbar-overflow"]')?.textContent ?? null,
+        items: [...document.querySelectorAll('[data-testid="selbar-more"] [data-ai]')].map((x) => x.getAttribute('data-ai')),
+        pins: [...document.querySelectorAll('[data-testid="selbar-more"] [data-pin]')].map((x) => `${x.getAttribute('data-pin')}=${x.getAttribute('aria-pressed')}`),
+      }))
+      check('⋯:顶上「还有 2 个放不下 · 去管理」;放不下的两颗钉着、缺省进 ⋯ 的没钉', /还有 2 个放不下/.test(more.notice || '') && /去管理/.test(more.notice || '') && more.items.join(',') === `${K('b3')},${K('b4')},${K('m1')}` && more.pins.join(',') === `${K('b3')}=true,${K('b4')}=true,${K('m1')}=false`, JSON.stringify(more))
+      await shot(win, path.join(shots, 'pins-more.png'))
+      await win.locator(`[data-testid="selbar-more"] [data-pin="${K('m1')}"]`).click()
+      await frames(win)
+      const b2 = await barState(win)
+      check('⋯ 里钉上「搜索网页」:它真的上条(排到插件那组最前),挤下去的进 ⋯', b2?.row.join(',') === `quote,btw,speak,|,${K('m1')},${K('translate')},${K('b1')},more`, b2?.row.join(','))
+      await win.locator(`[data-testid="selection-bar"] [data-act="${K('m1')}"]`).click({ button: 'right' })
+      const menu = win.locator('.plugin-menu')
+      await menu.waitFor({ timeout: 3000 })
+      const menuText = await menu.textContent()
+      check('条上插件按钮右键:「搜索网页 · 翻译」+「收进 ⋯」+「管理划线菜单…」', /搜索网页 · 翻译/.test(menuText) && /收进 ⋯/.test(menuText) && /管理划线菜单/.test(menuText), menuText)
+      await shot(win, path.join(shots, 'pins-ctx.png'))
+      await menu.locator('button', { hasText: '收进 ⋯' }).click()
+      await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
+      const b3 = await barReady(win)
+      check('右键「收进 ⋯」之后它回到 ⋯,条上恢复原来三颗', b3?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b2')},more`, b3?.row.join(','))
+      const prefs = await win.evaluate(() => JSON.parse(localStorage.getItem('forsion_selection_actions') || 'null'))
+      check('钉 / 收进 ⋯ 记进偏好(只记动过的那一项)', prefs?.placement?.[K('m1')] === 'more' && Object.keys(prefs.placement).length === 1, JSON.stringify(prefs))
+
+      // 朗读:没配模型 → 选区下的提示卡(不回落系统声音);配了 → 合成中 → 播放中 → 点停;放完回静止
+      const speakBtn = win.locator('[data-testid="selection-speak"]')
+      const speakState = () => win.evaluate(() => {
+        const el = document.querySelector('[data-testid="selection-speak"]')
+        return el ? { pressed: el.getAttribute('aria-pressed'), spin: !!el.querySelector('[data-spin]'), label: el.textContent.trim() } : null
+      })
+      const ttsBefore = tts.calls
+      await speakBtn.click()
+      const setup = await until(() => win.evaluate(() => document.querySelector('[data-testid="tts-setup-card"]')?.textContent ?? null), 4000)
+      check('没配朗读模型:点「朗读」出「还没选朗读模型 · 去设置」小卡,不去合成', /还没选朗读模型/.test(setup || '') && /去设置/.test(setup || '') && tts.calls === ttsBefore, setup)
+      await shot(win, path.join(shots, 'speak-nomodel.png'))
+      await win.locator('[data-testid="tts-setup-card"] [data-act="discard"]').click()
+      await win.evaluate(() => window.tangu.setConfig({ ttsModelId: 'tts-stub' }))
+      tts.delay = 900
+      await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
+      await barReady(win)
+      await win.locator('[data-testid="selection-speak"]').click()
+      const loading = await until(async () => { const st = await speakState(); return st?.spin ? st : null }, 2000)
+      check('配了模型:点了先是「合成中」(转圈,按钮按下,字仍是「朗读」)', !!loading && loading.pressed === 'true' && loading.label === '朗读', JSON.stringify(loading))
+      await shot(win, path.join(shots, 'speak-loading.png'))
+      const playing = await until(async () => { const st = await speakState(); return st && !st.spin && st.pressed === 'true' ? st : null }, 4000)
+      check('合成完:「播放中」(方块、按下);条一直在', !!playing && !!(await barState(win)) && tts.calls === ttsBefore + 1, JSON.stringify(playing))
+      await win.locator('[data-testid="selection-speak"]').click()
+      const stopped = await until(async () => { const st = await speakState(); return st?.pressed === 'false' ? st : null }, 2000)
+      check('播放中再点一下 = 停,回静止', !!stopped, JSON.stringify(await speakState()))
+      tts.delay = 0
+      await win.locator('[data-testid="selection-speak"]').click()
+      await until(async () => (await speakState())?.pressed === 'true', 3000)
+      const ended = await until(async () => (await speakState())?.pressed === 'false', 6000)
+      check('不去停它:放完自己回静止', ended === true, JSON.stringify(await speakState()))
+      await win.evaluate(() => window.getSelection().removeAllRanges())
+
+      // 插件结果卡:原文、两颗小喇叭、卡头语言(记住)、「划选后自动」开关(缺省关)
+      await dragSelect(win, CHAT, '重构解析器的词法阶段')
+      await barReady(win)
+      await win.locator(`[data-testid="selection-bar"] [data-act="${K('translate')}"]`).click()
+      const c1 = await cardDone(win)
+      const extras = await win.evaluate(() => {
+        const el = document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')
+        return {
+          source: el?.querySelector('[data-testid="inline-ai-source"]')?.textContent ?? null,
+          speakers: [...(el?.querySelectorAll('[data-speak]') ?? [])].map((x) => x.getAttribute('data-speak')),
+          auto: el?.querySelector('[data-testid="inline-ai-auto"] [role="switch"]')?.getAttribute('aria-checked') ?? null,
+        }
+      })
+      const r1 = await win.evaluate(() => window.__pins.runs.at(-1))
+      check('插件卡:手点 = auto false;cx.language = 卡头初值(中文界面下中文 → English);卡里有原文、原文 / 结果各一颗喇叭、开关缺省关', !!c1 && c1.lang === 'English' && r1?.language === 'English' && r1.auto === false && c1.preview === 'T(English|manual):重构解析器的' && extras.source === '重构解析器的词法阶段' && extras.speakers.join(',') === 'source,result' && extras.auto === 'false', JSON.stringify({ c1, r1, extras }))
+      await shot(win, path.join(shots, 'pins-card.png'))
+      await win.locator(`${PANEL} [data-testid="inline-ai-lang"]`).selectOption('Japanese')
+      await until(async () => (await win.evaluate(() => window.__pins.runs.at(-1)?.language)) === 'Japanese', 4000)
+      await cardDone(win)
+      await win.locator(`${PANEL} [data-testid="inline-ai-auto"] [role="switch"]`).click()
+      await frames(win)
+      const on = await win.evaluate(() => ({
+        checked: document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit]) [data-testid="inline-ai-auto"] [role="switch"]')?.getAttribute('aria-checked'),
+        note: document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit]) [data-testid="inline-ai-auto-note"]')?.textContent ?? null,
+        prefs: JSON.parse(localStorage.getItem('forsion_selection_actions') || 'null'),
+      }))
+      check('卡头换语言记住;打开「划选后自动」:开关亮、下面写明「每次划选都会调用模型,计入额度」', on.checked === 'true' && /计入额度/.test(on.note || '') && on.prefs?.auto?.[K('translate')] === true && on.prefs?.language?.[K('translate')] === 'Japanese', JSON.stringify(on))
+      await shot(win, path.join(shots, 'pins-card-auto-on.png'))
+      await win.keyboard.press('Escape')
+      await until(async () => !(await card(win)), 3000)
+
+      // 自动:划选停 400ms 出卡,条留着;新划选在同一张卡里重跑(不卸载 = 不闪),中止旧请求;同段同语言不重复请求
+      const runs0 = await win.evaluate(() => window.__pins.runs.length)
+      await dragSelect(win, CHAT, '先把记号流和错误恢复拆开')
+      const a1 = await cardDone(win)
+      const ar = await win.evaluate(() => window.__pins.runs.at(-1))
+      check('开了自动:划选后不点就出结果卡,run 拿到 auto: true 和记住的语言;条还在', !!a1 && a1.preview === 'T(Japanese|auto):先把记号流和' && ar?.auto === true && !!(await barState(win)) && (await win.evaluate(() => window.__pins.runs.length)) === runs0 + 1, JSON.stringify({ a1, ar }))
+      const ov = { card: await card(win), bar: await barState(win) }
+      check('自动卡和条同时在:卡不盖住条(下面放不下就摆到条的上面)', !!ov.card && !!ov.bar && (ov.card.bottom <= ov.bar.top + 0.5 || ov.card.top >= ov.bar.bottom - 0.5), JSON.stringify({ card: ov.card && [ov.card.top, ov.card.bottom], bar: ov.bar && [ov.bar.top, ov.bar.bottom] }))
+      await shot(win, path.join(shots, 'pins-auto.png'))
+      await win.evaluate(() => {
+        const el = document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')
+        el.__mark = 'first'
+        window.__panelRemoved = 0
+        window.__panelObs = new MutationObserver((ms) => { for (const m of ms) for (const n of m.removedNodes) if (n.nodeType === 1 && (n.matches?.('[data-testid="inline-ai-panel"]:not([data-lcl-exit])') || n.querySelector?.('[data-testid="inline-ai-panel"]:not([data-lcl-exit])'))) window.__panelRemoved++ })
+        window.__panelObs.observe(document.body, { childList: true, subtree: true })
+        window.__pins.delay = 2500
+      })
+      const aborted0 = await win.evaluate(() => window.__pins.aborted)
+      await dragSelect(win, CHAT, '再补一组边界用例')
+      await until(async () => (await win.evaluate(() => window.__pins.runs.at(-1)?.text)) === '再补一组边界用例', 3000)
+      await win.evaluate(() => { window.__pins.delay = 0 })
+      // 卡浮在上一段旁边,可能正好盖住同一条回复里的字(真人也划不到):换到屏上露着的一段历史(这次会话没自动跑过)
+      const pick3 = await dragSelectAny(win, CHAT, ['第 50 条历史', '第 49 条历史', '第 48 条历史', '第 47 条历史', '第 46 条历史', '第 45 条历史'])
+      const a2 = await until(async () => { const c = await card(win); return c?.phase === 'done' && c.preview === `T(Japanese|auto):${pick3.slice(0, 6)}` ? c : null }, 6000)
+      const flash = await win.evaluate(() => ({ mark: document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')?.__mark ?? null, removed: window.__panelRemoved, aborted: window.__pins.aborted }))
+      check('新划选:同一张卡跟到新那段重跑(没卸载过、不闪),在飞的旧请求被中止', !!a2 && flash.mark === 'first' && flash.removed === 0 && flash.aborted === aborted0 + 1, JSON.stringify({ pick3, a2, flash, aborted0, now: a2 ? undefined : await card(win) }))
+      const runs1 = await win.evaluate(() => window.__pins.runs.length)
+      // 先点一下视图收掉这张卡(免得它盖住那段),再划回第一段:新开的卡直接用缓存
+      const blank = await blankIn(win, CHAT)
+      await win.mouse.click(blank.x, blank.y)
+      await until(async () => !(await card(win)), 3000)
+      await dragSelect(win, CHAT, '先把记号流和错误恢复拆开')
+      const a3 = await until(async () => { const c = await card(win); return c?.phase === 'done' && /先把记号流/.test(c.preview || '') ? c : null }, 4000)
+      check('同一段、同一个语言再划一次(卡收了再划):直接用这次会话里的结果,不再请求', !!a3 && (await win.evaluate(() => window.__pins.runs.length)) === runs1, JSON.stringify({ a3, runs1 }))
+      await win.evaluate(() => window.__panelObs.disconnect())
+      const empty = await blankIn(win, CHAT)
+      await win.mouse.click(empty.x, empty.y)
+      check('在视图里点一下(没划出东西):自动卡收起', (await until(async () => !(await card(win)), 3000)) === true)
+
+      // 设置 → 外观里的管理表:列出宿主那组和这几个插件动作;开着自动的那个挂「先跑」
+      await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'theme', n: Date.now() } }))
+      let fl
+      await until(async () => { fl = app.windows().filter((w) => !w.isClosed() && w.url().includes('window=floating')).pop(); return !!fl && (await fl.locator('[data-testid="selection-actions-table"]').count()) > 0 }, 30000)
+      if (!fl) throw new Error('settings floating window missing')
+      await fl.locator('[data-testid="selection-actions-table"]').scrollIntoViewIfNeeded()
+      const table = await fl.evaluate(() => ({
+        rows: [...document.querySelectorAll('[data-selaction]')].map((r) => `${r.getAttribute('data-selaction')}:${r.querySelector('[data-place][aria-checked="true"]')?.getAttribute('data-place')}`),
+        first: [...document.querySelectorAll('.selactions-first')].map((x) => x.closest('[data-selaction]')?.getAttribute('data-selaction')),
+        autos: [...document.querySelectorAll('[data-auto]')].map((x) => x.getAttribute('data-auto')),
+      }))
+      check('管理表:宿主那组(没有宿主翻译)+ 插件动作按条上的次序,放哪如实;只有支持的那个有自动开关并挂「先跑」',
+        table.rows.join(',') === `host:ask:bar,host:speak:bar,${K('m1')}:more,${K('translate')}:bar,${K('b1')}:bar,${K('b2')}:bar,${K('b3')}:bar,${K('b4')}:bar` && table.first.join(',') === K('translate') && table.autos.join(',') === K('translate'), JSON.stringify(table))
+      await fl.locator('[data-testid="selection-actions-table"]').screenshot({ path: path.join(shots, 'pins-settings-table.png') })
+      await fl.locator(`[data-selaction="${K('b2')}"] [data-place="hidden"]`).click()
+      await fl.close().catch(() => {})
+      await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
+      const b4 = await barReady(win)
+      check('管理表里设成「不显示」:条上没有它,下一个放得下的补上', b4?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b3')},more`, b4?.row.join(','))
     })
 
     console.log(`\n${checks} checks passed, ${failed.length} failed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)
