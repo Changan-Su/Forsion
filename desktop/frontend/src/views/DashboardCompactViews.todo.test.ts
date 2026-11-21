@@ -37,4 +37,14 @@ describe('TodoDashboardCard', () => {
     expect(names.sort()).toEqual(['交周报', '周会', '没排期的'].sort())
     expect(el.querySelector('.dash-compact-kpi strong')?.textContent).toBe('3')
   })
+  it('待办清单的标题是行内 Markdown(11-21):照格式画,没有 ** 标记', async () => {
+    db.rows.push({ rowId: 'fmt', name: '**重要** 交', cells: { name: '**重要** 交', date: '2026-11-11' } } as never)
+    try {
+      const el = document.createElement('div'); document.body.append(el)
+      root = createRoot(el)
+      await act(async () => root!.render(createElement(TodoDashboardCard, { size: 'full' })))
+      const row = [...el.querySelectorAll('.dash-compact-row span')].find((e) => e.textContent === '重要 交')!
+      expect(row.querySelector('strong')?.textContent).toBe('重要')
+    } finally { db.rows.pop() }
+  })
 })

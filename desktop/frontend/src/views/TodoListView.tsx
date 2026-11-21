@@ -44,6 +44,8 @@ import { BUCKET_LABEL, COLLAPSED_BY_DEFAULT, ORDER, VIEWS, bucketOf, dropDay, in
 import { dragGrab, landWhenMoved, releasePoint, zoomOf, type LandPoint, type Leaf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
+import { InlineMarkdownText } from '../amadeus/blocks/database/todoTitle'
+import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 
 registerMessages({
   'todolist.title': { zh: '待办', en: 'To-dos' },
@@ -132,6 +134,9 @@ interface Row {
   /** 正文任务的原始标记(就地勾选 / 改日期时按内容回写那一行) */
   mark?: MdMark
 }
+
+/** A to-do list's title is inline Markdown (the to-do box writes it, 11-21): drawn with marks, read as plain text for labels and sorting. */
+const plainName = (r: { name: string; db?: unknown }): string => (r.db ? inlineMarkdownToPlain(r.name) : r.name)
 
 /** 视图自身宽度过没过门槛。ResizeObserver 量的是 CSS 像素,界面缩放不影响判定。 */
 function useWide(ref: RefObject<HTMLElement | null>): boolean {
@@ -239,7 +244,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
       l.sort((a, b) => {
         const ta = sortTimeOf(a.raw)
         const tb = sortTimeOf(b.raw)
-        return (ta === tb ? 0 : ta < tb ? -1 : 1) || a.source.localeCompare(b.source, 'zh') || a.name.localeCompare(b.name, 'zh')
+        return (ta === tb ? 0 : ta < tb ? -1 : 1) || a.source.localeCompare(b.source, 'zh') || plainName(a).localeCompare(plainName(b), 'zh')
       })
     }
     return by
@@ -384,7 +389,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
       >
         {r.db && r.rowId ? (
           <CheckboxInput
-            label={r.name}
+            label={plainName(r)}
             isLabelHidden
             size="sm"
             value={r.checked}
@@ -393,7 +398,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
         ) : r.mark && canPatch ? (
           // 正文任务**就地勾**:按内容回写笔记里那一行(`- [ ]`→`- [x]`),真源仍只有 markdown 一份。
           <CheckboxInput
-            label={r.name}
+            label={plainName(r)}
             isLabelHidden
             size="sm"
             value={r.checked}
@@ -405,7 +410,7 @@ export function TodoListView({ params, leaf }: { params?: Record<string, unknown
           <span className={`amx-todo-box${r.checked ? ' on' : ''}`} aria-hidden="true" />
         )}
         <button className="amx-todo-main" title={r.note ? t('todolist.openInNote') : t('todolist.clickToEdit')} onClick={(e) => openRow(r, e)} onKeyDown={rowKeys}>
-          <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.name}</span>
+          <span className={`amx-todo-name${r.checked ? ' done' : ''}`}>{r.db ? <InlineMarkdownText md={r.name} /> : r.name}</span>
           {/* 「在笔记中打开」图标叠在标题后面、悬停才出现,不占日期列的位置(从前占位,笔记行的日期比别的行往左缩一截) */}
           {r.note ? <ExternalLink className="amx-todo-jump" size={12} /> : null}
         </button>
