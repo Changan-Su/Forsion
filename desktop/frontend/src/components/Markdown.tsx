@@ -14,7 +14,6 @@ import 'katex/dist/katex.min.css'
 import { Copy, Check, Play, ImageOff } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../builtins/runCommand'
-import { normalizeMath } from '../services/mathNormalize'
 import { parseFileHref, remarkWiki, resolveAgainst } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatLinkWithCard } from './ChatLinkCard'
@@ -300,7 +299,6 @@ export function ReadOnlyMarkdown({ content, transforms = [], allowWebLink }: {
   content: string; transforms?: PluggableList; allowWebLink: (href: string) => boolean
 }): React.JSX.Element {
   const parentRun = useContext(RunContext)
-  const normalized = useMemo(() => normalizeMath(content), [content])
   return <RunContext.Provider value={{ cwd: parentRun?.cwd, allowRun: false }}>
     <EmbedContext.Provider value={undefined}><LinkCardContext.Provider value={false}>
       <ReactMarkdown remarkPlugins={[remarkCachedParse, remarkWiki, ...transforms]}
@@ -311,7 +309,7 @@ export function ReadOnlyMarkdown({ content, transforms = [], allowWebLink }: {
             return href && (local || allowWebLink(href))
               ? <WikiAnchor href={href} {...rest}>{children}</WikiAnchor> : <span>{children}</span>
           },
-        }}>{normalized}</ReactMarkdown>
+        }}>{content}</ReactMarkdown>
     </LinkCardContext.Provider></EmbedContext.Provider>
   </RunContext.Provider>
 }
@@ -333,7 +331,8 @@ const MarkdownPart = React.memo(({ content, anchorPrefix, headingStart = 0, brea
 export const Markdown: React.FC<MarkdownProps> = React.memo(
   ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, cites = null, codeHead = false, breaks = false, streaming = false }) => {
     const previous = React.useRef<MarkdownSnapshot | undefined>(undefined)
-    const normalized = useMemo(() => normalizeMath(content), [content])
+    // \( \[ 由解析器直接认(remarkLlmMath),不再先用正则改写源文。
+    const normalized = content
     const snapshot = useMemo(() => {
       if (!streaming && !previous.current) return undefined // history/README: parse once as before
       const next = markdownSnapshot(normalized, streaming ? previous.current : undefined)

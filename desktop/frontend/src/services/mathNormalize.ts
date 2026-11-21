@@ -1,21 +1,32 @@
 /**
- * 把 LLM 常输出的 \(…\) / \[…\] LaTeX 定界符归一化为 remark-math 认得的 $…$ / $$…$$。
- * remark-math 默认只认 $ 系定界符,不认 \( \[ —— 这是公式「渲染不出来」的常见根因。
- * 保护 ``` 围栏与 `行内代码` 不被改写。
+ * 把 LLM 常输出的 \(…\) / \[…\] 定界符改成 $…$ / $$…$$ —— 插进笔记时用(笔记编辑器只认 $ 系)。
+ * 聊天渲染不再经过这里:解析器(components/remarkLlmMath)直接认 \( \[。
  *
- * ponytail: \\( 双反斜杠转义、流式未闭合围栏是已知缺口,真咬人再换成 remark 插件。
+ * 认哪些由同一个解析器说了算(11-17 起,借鉴 DeepSeek chat-demo ⑦):先解析,只改解析器认成公式、且源文确实以 \( / \[ 开头的
+ * 那几段的定界符,公式内容和所在的列表 / 引用前缀原样不动。以前的正则会改坏代码块(未闭合围栏、~~~、缩进代码)和 \\( 转义。
  */
+import { parseMarkdown } from '../components/markdownParse'
+
+type Node = { type: string; position?: { start: { offset?: number }; end: { offset?: number } }; children?: Node[] }
+
 export function normalizeMath(src: string): string {
   if (!src.includes('\\(') && !src.includes('\\[')) return src // 快路径:绝大多数文本零成本
-  // split 捕获组:奇数下标 = 代码段(原样保留),偶数下标 = 普通文本(才做替换)。
-  return src
-    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
-    .map((seg, i) =>
-      i % 2
-        ? seg
-        : seg
-            .replace(/\\\[([\s\S]+?)\\\]/g, (_m, x) => `$$${x}$$`)
-            .replace(/\\\(([\s\S]+?)\\\)/g, (_m, x) => `$${x}$`),
-    )
-    .join('')
+  const edits: Array<{ at: number; len: number; text: string }> = []
+  const walk = (n: Node): void => {
+    if ((n.type === 'inlineMath' || n.type === 'math') && n.position) {
+      const a = n.position.start.offset, b = n.position.end.offset
+      if (a !== undefined && b !== undefined) {
+        let e = b
+        while (e > a && (src[e - 1] === ' ' || src[e - 1] === '\t')) e-- // 块节点的终点可能带着 \] 后面的空白
+        const open = src.slice(a, a + 2), close = src.slice(e - 2, e)
+        const pair = open === '\\(' && close === '\\)' ? '$' : open === '\\[' && close === '\\]' ? '$$' : ''
+        if (pair && e - a >= 4) edits.push({ at: a, len: 2, text: pair }, { at: e - 2, len: 2, text: pair })
+      }
+    }
+    for (const c of n.children || []) walk(c)
+  }
+  walk(parseMarkdown(src) as unknown as Node)
+  let out = src
+  for (const e of edits.sort((x, y) => y.at - x.at)) out = out.slice(0, e.at) + e.text + out.slice(e.at + e.len)
+  return out
 }

@@ -28,4 +28,38 @@ describe('Markdown × 块公式复制键', () => {
     expect(wrote).toBe('E = mc^2')
     act(() => root.unmount())
   })
+  // 11-17:\( \[ 由解析器直接认(remarkLlmMath),不再先用正则改写源文
+  it('\\[ 块公式同样带复制键,\\( 渲染成行内公式', () => {
+    const h = renderToStaticMarkup(md('a\n\n\\[\nT = \\frac{a}{b}\n\\]\n\n行内 \\(x^2\\) 结束'))
+    expect(h.match(/class="md-math"/g)?.length).toBe(1)
+    expect(h.match(/class="katex"/g)?.length).toBe(2)
+    expect(h).not.toContain('\\(')
+  })
+  it('代码里和 \\\\( 转义的不当公式', () => {
+    const h = renderToStaticMarkup(md('a \\\\(x\\\\) b\n\n~~~\n\\(y\\)\n~~~'))
+    expect(h).not.toContain('katex')
+    expect(h).toContain('\\(x\\)')
+    expect(h).toContain('\\(y\\)')
+  })
+  it('单独成段的 \\[ 升成块公式;段中的、带后文的、没闭合的不升', () => {
+    const block = renderToStaticMarkup(md('\\[\nE[X] = \\mu\n\\]'))
+    expect(block.match(/class="md-math"/g)?.length).toBe(1)
+    expect(block).toContain('katex-display')
+    const inline = renderToStaticMarkup(md('\\[x\\] tail and \\[y\\]'))
+    expect(inline).not.toContain('md-math')
+    expect(inline.match(/class="katex"/g)?.length).toBe(2)
+    expect(inline).toContain('tail')
+    const partial = renderToStaticMarkup(md('\\[\n\\frac{1'))
+    expect(partial).not.toContain('katex')
+  })
+  it('块公式里以 - + 1. # > 开头的行、空行都还是公式,不被拆成列表 / 引用(Codex 11-17 复核)', () => {
+    for (const src of ['\\[\na\n+ b\n\\]', '\\[\nx =\n- y\n\\]', '\\[\n1. x\n\\]', '\\[\n> x\n\\]', '\\[\na\n\nb\n\\]', 'para\n\\[\nx\n\\]\nmore', '- item\n\n  \\[\n  - y\n  \\]']) {
+      const h = renderToStaticMarkup(md(src))
+      expect(h.match(/class="md-math"/g)?.length, src).toBe(1)
+      expect(h, src).not.toMatch(/<li>[^<]*y|<blockquote/)
+    }
+  })
+  it('块公式没收尾(流式写到一半)按普通文字显示', () => {
+    for (const src of ['\\[\nx =\n- y', '\\[']) expect(renderToStaticMarkup(md(src)), src).not.toContain('katex')
+  })
 })
