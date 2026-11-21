@@ -36,7 +36,21 @@ type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<strin
 interface UserSource { id: string; uri: string; title?: LocalText; addedAt: number }
 interface PluginSource { id: string; pluginId: string; declId: string; uri: string; title: LocalText; icon?: string }
 /** `commit` = the commit a GitHub / Forsion Git package was installed from (absent: not known, e.g. installed before it was kept). */
-interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string; commit?: string }
+interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string; commit?: string; commits?: Record<string, string> }
+/** How many version → commit pairs an install record keeps (the updater compares the version it is about to fetch). */
+const MAX_KEPT_COMMITS = 8
+const validCommits = (v: unknown): Record<string, string> => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => e[0].length <= 200 && isCommitId(e[1])))
+}
+const withCommit = (commits: Record<string, string>, version: string | null, commit: string | null | undefined): Record<string, string> => {
+  if (!version) return commits
+  const next = { ...commits }
+  delete next[version]
+  // Installed without a known commit: that version's commit is unknown again, not the one seen before.
+  if (isCommitId(commit)) next[version] = commit
+  return Object.fromEntries(Object.entries(next).slice(-MAX_KEPT_COMMITS))
+}
 interface State { user: UserSource[]; declared: PluginSource[]; disabled: string[]; trusted: string[]; installs: InstallRecord[] }
 
 /** Where Forsion Git reads go: the Forsion server and the signed-in account's token. null = not signed in. */
@@ -128,20 +142,18 @@ async function readCapped(res: Response, max: number): Promise<string> {
 }
 
 /**
- * The commit id `git archive` writes as the zip comment (GitHub's and Gitea's archives both carry it); null when the
- * comment is absent or isn't a full commit id. Read before `subtreeZip`, which builds a new zip without it.
- * The archive reports this itself: it catches "not the commit the catalog names", not a forged archive.
+ * The zip comment, read by JSZip exactly as the installer reads the archive ('' when absent). `git archive` writes the
+ * commit id there (GitHub's and Gitea's archives both carry it). Read before `subtreeZip`, which builds a new zip
+ * without it. The archive reports this itself: it catches "not the commit the catalog names", not a forged archive.
  */
-export function archiveCommit(buf: Buffer): string | null {
-  const EOCD = 22
-  for (let i = buf.length - EOCD, end = Math.max(0, buf.length - EOCD - 0xffff); i >= end; i--) {
-    if (buf.readUInt32LE(i) !== 0x06054b50) continue
-    const len = buf.readUInt16LE(i + 20)
-    if (i + EOCD + len !== buf.length) continue
-    const c = buf.subarray(i + EOCD).toString('latin1').trim()
-    return isCommitId(c) ? c : null
-  }
-  return null
+export async function archiveComment(buf: Buffer): Promise<string> {
+  const c = (await JSZip.loadAsync(buf) as unknown as { comment?: unknown }).comment
+  return typeof c === 'string' ? c.trim() : ''
+}
+/** The commit id in an archive's comment, or null when the comment isn't one. */
+export async function archiveCommit(buf: Buffer): Promise<string | null> {
+  const c = (await archiveComment(buf)).toLowerCase()
+  return isCommitId(c) ? c : null
 }
 
 /** Cut one folder out of a repository archive (GitHub wraps everything in `<repo>-<ref>/`, Gitea in `<repo>/`). */
@@ -563,8 +575,10 @@ export function createStoreSources(o: {
   }
 
   /** A pinned package must come back as that commit; an unpinned one reports the commit it turned out to be. */
-  const checkCommit = (pkg: { commit?: string }, got: string | null, strict: boolean): string | null => {
-    if (pkg.commit && (got ? got !== pkg.commit : strict)) throw new Error('install: package commit mismatch')
+  /** `comment` = the archive's zip comment ('' = none). A comment that is there but isn't the pinned commit always fails. */
+  const checkCommit = (pkg: { commit?: string }, comment: string, strict: boolean): string | null => {
+    const got = isCommitId(comment.toLowerCase()) ? comment.toLowerCase() : null
+    if (pkg.commit && (comment ? got !== pkg.commit : strict)) throw new Error('install: package commit mismatch')
     return pkg.commit ?? got
   }
   async function downloadPackage(pkg: StorePackage, type: string, onProgress: (p: DownloadProgress) => void, allowLocal: boolean): Promise<{ buf: Buffer; url: string; commit?: string | null }> {
@@ -585,15 +599,30 @@ export function createStoreSources(o: {
       const zip = await downloadZip([url], authed, onProgress, ZIP_MAGIC).catch((e) => { throw refused ? new Error(`resolve: ${refused}`) : e })
       // The archive comes from the signed-in Forsion server, asked for that commit: a missing comment isn't refused here
       // (a different one is). GitHub archives can come through third-party mirrors, so there it must be present.
-      const commit = checkCommit(pkg, archiveCommit(zip), false)
+      const commit = checkCommit(pkg, await archiveComment(zip), false)
       // Gitea's archive wraps everything in `<repo>/` (one top folder): subtreeZip strips it like GitHub's.
       return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url: `forsion-git:${pkg.repo}@${at}`, commit }
     }
     if (pkg.kind === 'github') {
       const url = `https://github.com/${pkg.repo}/archive/${pkg.commit ?? pkg.ref}.zip`
-      const zip = await downloadZip(downloadCandidates(url, mirror, o.githubProxy?.() || ''), fetchFn, onProgress, ZIP_MAGIC)
-      const commit = checkCommit(pkg, archiveCommit(zip), true)
-      return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url, commit }
+      const list = downloadCandidates(url, mirror, o.githubProxy?.() || '')
+      if (!pkg.commit) {
+        const zip = await downloadZip(list, fetchFn, onProgress, ZIP_MAGIC)
+        return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url, commit: checkCommit(pkg, await archiveComment(zip), true) }
+      }
+      // Pinned: an archive that isn't that commit (a mirror's stale or rewritten copy) moves on to the next address.
+      let failure: unknown
+      for (const [i, candidate] of list.entries()) {
+        try {
+          const zip = await downloadZip([candidate], fetchFn, (p) => onProgress({ ...p, attempt: i + 1, attempts: list.length }), ZIP_MAGIC)
+          const commit = checkCommit(pkg, await archiveComment(zip), true)
+          return { buf: pkg.path ? await subtreeZip(zip, pkg.path) : zip, url, commit }
+        } catch (e) {
+          // A commit mismatch anywhere is the answer to report; otherwise the last download failure.
+          if (!(failure instanceof Error && failure.message === 'install: package commit mismatch')) failure = e
+        }
+      }
+      throw failure
     }
     if (pkg.kind === 'url') {
       const zip = await downloadZip([pkg.url], guardedFetch(allowLocal), onProgress, ZIP_MAGIC)
@@ -629,7 +658,8 @@ export function createStoreSources(o: {
     }
     // The same version number from a different commit is not an update the user agreed to: stop and let them do it.
     // (The updater only fetches newer versions; this is the backstop. A record without a commit is "not known", not "changed".)
-    const sameVersionOtherCommit = (commit: string | null | undefined) => isCommitId(rec?.commit) && !!commit && rec.version === it.version && commit !== rec.commit
+    const known = rec ? validCommits(rec.commits)[it.version] ?? (rec.version === it.version && isCommitId(rec.commit) ? rec.commit : undefined) : undefined
+    const sameVersionOtherCommit = (commit: string | null | undefined) => !!known && !!commit && commit !== known
     if (it.package.kind === 'github' || it.package.kind === 'forsion-git') {
       if (sameVersionOtherCommit(it.package.commit)) throw new Error('resolve: source-package-moved')
     }
@@ -648,7 +678,23 @@ export function createStoreSources(o: {
   /** summary / author are copied in so "Installed" can still describe the item after its source is gone. */
   async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string; commit?: string | null }): Promise<void> {
     const { commit, ...rest } = r
-    await save((s) => { s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...rest, ...(isCommitId(commit) ? { commit } : {}), at: Date.now() }] })
+    await save((s) => {
+      // Commits seen for this item's earlier versions are kept: only for the same item from the same origin (another item
+      // reusing the folder, or the package moved to another repository, starts over).
+      const was = s.installs.find((x) => x.cardId === r.cardId && x.type === r.type && x.slug === r.slug && x.origin === r.origin)
+      const commits = withCommit(validCommits(was?.commits), r.version, commit)
+      s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...rest, ...(isCommitId(commit) ? { commit } : {}), ...(Object.keys(commits).length ? { commits } : {}), at: Date.now() }]
+    })
+  }
+  /** The updater downloaded `version` from `commit`: remember the pair (the installed version and commit stay as they are). */
+  async function noteCommit(cardId: string, version: string, commit: string | null | undefined): Promise<void> {
+    await load()
+    if (!isCommitId(commit) || !state.installs.some((x) => x.cardId === cardId)) return
+    await save((s) => {
+      const rec = s.installs.find((x) => x.cardId === cardId)
+      if (!rec || validCommits(rec.commits)[version] === commit) return false
+      rec.commits = withCommit(validCommits(rec.commits), version, commit)
+    })
   }
   async function forget(type: string, slug: string): Promise<void> {
     await load()
@@ -665,6 +711,6 @@ export function createStoreSources(o: {
     })
   }
 
-  return { load, list, probe, add, remove, setDisabled, trust, setDeclared, catalog, detail, lookup, updatesPaused, download, recordInstall, forget, installs }
+  return { load, list, probe, add, remove, setDisabled, trust, setDeclared, catalog, detail, lookup, updatesPaused, download, recordInstall, noteCommit, forget, installs }
 }
 export type StoreSources = ReturnType<typeof createStoreSources>

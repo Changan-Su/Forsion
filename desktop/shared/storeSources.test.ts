@@ -81,10 +81,13 @@ describe('parseStoreIndex', () => {
         item({ id: 'bad-commit', package: { github: 'a/b', ref: 'v1', commit: 42 } }),
         item({ id: 'two-commits', package: { github: 'a/b', ref: C, commit: D } }),
         item({ id: 'no-ref', package: { github: 'a/b', commit: C } }),
+        item({ id: 'upper-ref', package: { github: 'a/b', ref: C.toUpperCase() } }),
+        item({ id: 'upper-conflict', package: { github: 'a/b', ref: D.toUpperCase(), commit: C } }),
       ],
     })
     // A malformed commit drops the item: falling back to the ref would let the author believe it is pinned.
-    expect(index.items.map((x) => x.id)).toEqual(['pinned', 'ref-is-commit', 'same'])
+    expect(index.items.map((x) => x.id)).toEqual(['pinned', 'ref-is-commit', 'same', 'upper-ref'])
+    expect(index.items[3].package).toMatchObject({ ref: C.toUpperCase(), commit: C })
     expect(index.items[0].package).toEqual({ kind: 'github', repo: 'a/b', ref: 'v1', commit: C })
     expect(index.items[1].package).toEqual({ kind: 'forsion-git', repo: 'acme/kit', ref: D, commit: D })
     // Pinning doesn't change where a package downloads from (an update to a new commit is not "moved").

@@ -265,8 +265,8 @@ function parsePackage(v: unknown): StorePackage | null {
     if (o.commit !== undefined) {
       if (typeof o.commit !== 'string' || !isCommitId(o.commit.toLowerCase())) return null
       commit = o.commit.toLowerCase()
-      if (isCommitId(o.ref) && o.ref !== commit) return null
-    } else if (isCommitId(o.ref)) commit = o.ref
+      if (isCommitId(o.ref.toLowerCase()) && o.ref.toLowerCase() !== commit) return null
+    } else if (isCommitId(o.ref.toLowerCase())) commit = o.ref.toLowerCase()
     return { kind, repo: `${owner}/${name}`, ref: o.ref, ...(path ? { path } : {}), ...(commit ? { commit } : {}) }
   }
   if (o.github !== undefined) return repoPkg('github', o.github)

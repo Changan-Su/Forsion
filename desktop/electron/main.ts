@@ -3512,8 +3512,10 @@ app.whenReady().then(async () => {
       return Array.isArray(data.items) ? data.items : []
     },
     download: async (item) => {
-      const { info, buf } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
+      const { info, buf, commit } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
+      // Keep which commit this version came from, so the same version from another commit later stops (storeSources.download).
+      if (isSourceCardId(item.id) && info.version) await sources.noteCommit(item.id, info.version, commit).catch((e) => console.warn('[store-sources] note commit:', e))
       return buf
     },
     broadcast: (status) => {
