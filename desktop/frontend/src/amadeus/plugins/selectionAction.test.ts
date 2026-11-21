@@ -162,10 +162,11 @@ describe('ctx.registerSelectionAction:2026-11-21 新字段', () => {
 
 describe('ctx.tts', () => {
   type Tts = NonNullable<Probe['tts']>
-  const fakeTts = (over: Partial<Tts> = {}): Tts & { stopped: (string | undefined)[]; current: { key: string; phase: 'loading' | 'playing' } | null } => {
-    const me = {
-      stopped: [] as (string | undefined)[],
-      current: null as { key: string; phase: 'loading' | 'playing' } | null,
+  type Fake = Tts & { stopped: (string | undefined)[]; current: { key: string; phase: 'loading' | 'playing' } | null }
+  const fakeTts = (over: Partial<Tts> = {}): Fake => {
+    const me: Fake = {
+      stopped: [],
+      current: null,
       available: () => true,
       speak: (key: string, _t: string, o?: { signal?: AbortSignal }) => new Promise<void>((res) => {
         me.current = { key, phase: 'playing' }
