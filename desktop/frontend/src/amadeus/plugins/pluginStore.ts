@@ -172,6 +172,8 @@ import { unitAuthHeader } from '../../services/unitToken'
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
+  'pluginhost.ttsNoModel': { zh: '还没选朗读模型：在「设置 → 模型 → 语音」里选一个', en: 'No read-aloud model yet: pick one in Settings → Models → Voice' },
+  'pluginhost.ttsNoModel.action': { zh: '去设置', en: 'Open settings' },
   'pluginhost.workFolder.desc': {
     zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/<英文插件 ID>）',
     en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>)',
@@ -2016,7 +2018,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
-      if (!action || typeof action.id !== 'string' || typeof action.title !== 'string' || typeof action.run !== 'function') {
+      // title:字符串 / 函数 / { zh, en }(2026-11-21+,PluginText,画的那一刻求值)
+      if (!action || typeof action.id !== 'string' || !isPluginText(action.title) || typeof action.run !== 'function') {
         console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
         return
       }
@@ -2027,6 +2030,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       if (when != null && typeof when !== 'function') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」when 不是函数,已当作没写`)
       if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
+      const { placement, auto, card } = action
+      if (placement != null && placement !== 'bar' && placement !== 'more') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」placement 只认 'bar' | 'more',已当作 'more'`)
+      if (auto != null && typeof auto !== 'boolean') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」auto 不是布尔,已当作没写`)
+      if (auto === true && output === 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」auto 要 output 'preview',output: 'none' 的动作不会自动跑`)
+      if (card != null && (typeof card !== 'object' || Array.isArray(card))) console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」card 不是对象,已当作没写`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
     // 2026-11-16+:回一个只撤这一次登记的 disposer;同插件同 id 再登记 = 原位替换(命令面板一行,不是两行)。
@@ -3234,6 +3242,46 @@ export const usePluginStore = create<PluginState>((set, get) => {
               : {}),
           },
         }
+      : {}),
+    // 朗读(2026-11-21,ctx.tts):和 ctx.tangu 同一道门(Tangu 宿主)。这个宿主配不了朗读(网页端)→ 探针没有 tts,speak 回
+    // tts_unavailable。插件只停得了自己起的那段;停用 / 重载时中止它在飞的合成、停掉它在放的那段。
+    ...(readTangu()
+      ? (() => {
+          let n = 0
+          const mine = (k: string | undefined): boolean => !!k && k.startsWith(`plugin:${pluginId}:`)
+          return {
+            tts: {
+              speak: async (text: string, o?: { signal?: AbortSignal }): Promise<void> => {
+                if (!ctxAlive()) throw new Error('plugin disabled')
+                const probe = readTangu()?.tts
+                if (!probe) throw new Error('tts_unavailable')
+                if (typeof text !== 'string' || !text.trim()) throw new Error('ctx.tts.speak: text is required')
+                const key = `plugin:${pluginId}:${++n}`
+                const ac = new AbortController()
+                const own = scope.own('request', () => { ac.abort(); probe.stop(key) }, 'tts')
+                const outer = o?.signal
+                const onOuter = (): void => ac.abort()
+                outer?.addEventListener('abort', onOuter)
+                if (outer?.aborted) ac.abort()
+                try {
+                  await probe.speak(key, text, { signal: ac.signal })
+                } catch (e) {
+                  // 没配模型:宿主自己出「去设置」的提示(契约),插件照样拿到 tts_no_model 自己决定要不要再说什么
+                  if ((e as Error)?.message === 'tts_no_model' && ctxAlive()) {
+                    notifyApp({ text: translate('pluginhost.ttsNoModel'), level: 'info', inAppOnly: true, dedupeKey: 'tts.noModel',
+                      action: { label: translate('pluginhost.ttsNoModel.action'), run: () => readTangu()?.tts?.openSettings() } })
+                  }
+                  throw e
+                } finally {
+                  outer?.removeEventListener('abort', onOuter)
+                  own.forget()
+                }
+              },
+              stop: (): void => { const probe = readTangu()?.tts; const cur = probe?.state()?.key; if (mine(cur)) probe!.stop(cur) },
+              available: (): boolean => !!readTangu()?.tts?.available(),
+            },
+          }
+        })()
       : {}),
     ...agentSurface(),
     // Agent Desk 伴随面(2026-09-19):**只在有 Agent Desk 的宿主上注入** —— 桌面 Tangu。判据与 ChatView 的

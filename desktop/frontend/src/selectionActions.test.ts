@@ -1,9 +1,15 @@
 // @vitest-environment happy-dom
 /** 划线条的动作表:插件动作在哪个视图里列、怎么跑、条的排法偏好,以及「翻译」的目标语言。 */
-import { describe, expect, it } from 'vitest'
-import { listSelectionActions, runSelectionAction, selectionActionKey, selectionBarOrder, selectionScopeMatches, setSelectionBarOrder, type OwnedSelectionAction } from './selectionActions'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  HOST_SELECTION_KEYS, arrangeSelectionActions, autoSelectionAction, hostSelectionEntry, hostTranslateAllowed, listSelectionActions, orderedSelectionEntries,
+  pinSelectionAction, pluginSelectionEntry, readSelectionActionPrefs, rememberSelectionLanguage, reorderSelectionActions, runSelectionAction,
+  selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, selectionScopeMatches, setSelectionAuto, setSelectionBarOrder,
+  setSelectionPlacement, type OwnedSelectionAction, type SelectionActionPrefs, type SelectionEntry,
+} from './selectionActions'
+import { setLocaleGlobal } from './i18n'
 import { translateTargetOf } from './translateTarget'
-import { SELECTION_BAR_ORDER_KEY } from './types'
+import { SELECTION_ACTION_PREFS_KEY, SELECTION_BAR_ORDER_KEY } from './types'
 
 const act = (pluginId: string, id: string, extra: Partial<OwnedSelectionAction['item']> = {}): OwnedSelectionAction => ({ pluginId, item: { id, title: id, run: () => '', ...extra } })
 const keys = (list: OwnedSelectionAction[]): string[] => list.map(selectionActionKey)
@@ -98,5 +104,136 @@ describe('翻译的目标语言:译成界面语言,选中的已经是界面语�
     expect(translateTargetOf('これは日本語の文章です', 'en')).toBe('English')
     expect(translateTargetOf('Привет, как дела?', 'en')).toBe('English')
     expect(translateTargetOf('Über die Brücke gehen wir später', 'en')).toBe('English') // 带变音符的不当英文
+  })
+})
+
+// ── 2026-11-21 划线插件常驻 / 自动 / 翻译改插件 ──────────────────────────────────────────────
+const P = (p: Partial<SelectionActionPrefs> = {}): SelectionActionPrefs => ({ placement: {}, order: [], auto: {}, language: {}, ...p })
+const installed = [{ id: 'alpha' }, { id: 'beta' }, { id: 'gamma' }, { id: 'translation', builtin: true }, { id: 'forsion-calendar', builtin: true }]
+const pe = (o: OwnedSelectionAction, i = 0): SelectionEntry => pluginSelectionEntry(o, i, installed)
+const ks = (l: SelectionEntry[]): string[] => l.map((e) => e.key)
+
+describe('放哪:插件给缺省、用户的永远优先、插件位最多 3 个', () => {
+  const host = [hostSelectionEntry(HOST_SELECTION_KEYS.ask), hostSelectionEntry(HOST_SELECTION_KEYS.translate), hostSelectionEntry(HOST_SELECTION_KEYS.speak)]
+  const a1 = pe(act('alpha', 'a1', { placement: 'bar' }), 0)
+  const a2 = pe(act('alpha', 'a2', { placement: 'bar' }), 1)
+  const b1 = pe(act('beta', 'b1', { placement: 'bar' }), 2)
+  const g1 = pe(act('gamma', 'g1', { placement: 'bar' }), 3)
+  const g2 = pe(act('gamma', 'g2'), 4)
+  const all = [...host, g2, g1, b1, a2, a1]
+  it("缺省:宿主那组照固定次序;placement 'bar' 的按装的先后上条,第 4 个落进 ⋯ 并计入「放不下」", () => {
+    const r = arrangeSelectionActions(all, P())
+    expect(ks(r.lead)).toEqual(['host:ask', 'host:translate', 'host:speak'])
+    expect(ks(r.plugins)).toEqual(['plugin:alpha:a1', 'plugin:alpha:a2', 'plugin:beta:b1'])
+    expect(ks(r.more)).toEqual(['plugin:gamma:g1', 'plugin:gamma:g2'])
+    expect(r.overflow).toBe(1)
+  })
+  it("用户的选择优先:收进 ⋯ / 不显示 / 把 'more' 的钉上条;宿主的也能收", () => {
+    const r = arrangeSelectionActions(all, P({ placement: { 'plugin:alpha:a1': 'hidden', 'plugin:alpha:a2': 'more', 'plugin:gamma:g2': 'bar', 'host:translate': 'more' } }))
+    expect(ks(r.lead)).toEqual(['host:ask', 'host:speak'])
+    expect(ks(r.plugins)).toEqual(['plugin:beta:b1', 'plugin:gamma:g1', 'plugin:gamma:g2'])
+    expect(ks(r.more)).toEqual(['host:translate', 'plugin:alpha:a2'])
+    expect(r.overflow).toBe(0)
+  })
+  it('用户排过的在前,没排过的按缺省接在后面', () => {
+    const r = arrangeSelectionActions(all, P({ order: ['plugin:gamma:g1', 'host:speak'] }))
+    expect(ks(r.lead)).toEqual(['host:speak', 'host:ask', 'host:translate'])
+    expect(ks(r.plugins)).toEqual(['plugin:gamma:g1', 'plugin:alpha:a1', 'plugin:alpha:a2'])
+  })
+  it('核心插件的动作和宿主那组站一起(翻译之后、朗读之前),不占插件位', () => {
+    // 用已在核心名单里的日历做样本(翻译插件进 CORE_BUNDLE_IDS 是随包接入那一包的事)
+    const cal = pluginSelectionEntry(act('forsion-calendar', 'todo', { placement: 'bar' }), 9, installed)
+    const cal2 = pluginSelectionEntry(act('forsion-calendar', 'x'), 10, installed)
+    expect(cal.kind).toBe('core')
+    const r = arrangeSelectionActions([hostSelectionEntry(HOST_SELECTION_KEYS.ask), hostSelectionEntry(HOST_SELECTION_KEYS.speak), cal, cal2, a1, a2, b1], P())
+    expect(ks(r.lead)).toEqual(['host:ask', 'plugin:forsion-calendar:todo', 'host:speak'])
+    expect(ks(r.plugins)).toEqual(['plugin:alpha:a1', 'plugin:alpha:a2', 'plugin:beta:b1'])
+    expect(ks(r.more)).toEqual(['plugin:forsion-calendar:x']) // 核心插件没要 bar 的照样进 ⋯
+    // 名单里没有 builtin / preinstalled 标记的同名插件(商店里冒名的)不算核心
+    expect(pluginSelectionEntry(act('forsion-calendar', 'todo'), 0, [{ id: 'forsion-calendar' }]).kind).toBe('plugin')
+  })
+})
+
+describe('宿主翻译的归属:装着翻译插件(启用或停用)就不出', () => {
+  it('按装着的插件名单判,不按注册的动作判', () => {
+    expect(hostTranslateAllowed([{ id: 'alpha' }])).toBe(true)
+    expect(hostTranslateAllowed([{ id: 'alpha' }, { id: 'translation' }])).toBe(false)
+    expect(hostTranslateAllowed([])).toBe(true)
+  })
+})
+
+describe('划选后自动:只跑排最前、用户开了的那个', () => {
+  const x = pe(act('alpha', 'x', { auto: true }), 0)
+  const y = pe(act('beta', 'y', { auto: true }), 1)
+  const z = pe(act('gamma', 'z', { auto: true, output: 'none' }), 2)
+  it('插件声明了 auto 也不会自己开(缺省关)', () => {
+    expect(autoSelectionAction([x, y], P())).toBeNull()
+  })
+  it('开了两个只跑排在最前那个;排序换了跟着换;不显示的不跑;output none 的不算支持', () => {
+    expect(autoSelectionAction([x, y], P({ auto: { 'plugin:alpha:x': true, 'plugin:beta:y': true } }))?.key).toBe('plugin:alpha:x')
+    expect(autoSelectionAction([x, y], P({ auto: { 'plugin:alpha:x': true, 'plugin:beta:y': true }, order: ['plugin:beta:y'] }))?.key).toBe('plugin:beta:y')
+    expect(autoSelectionAction([x, y], P({ auto: { 'plugin:alpha:x': true, 'plugin:beta:y': true }, placement: { 'plugin:alpha:x': 'hidden' } }))?.key).toBe('plugin:beta:y')
+    expect(z.auto).toBe(false)
+    expect(autoSelectionAction([z], P({ auto: { 'plugin:gamma:z': true } }))).toBeNull()
+  })
+  it('核心插件排在宿主那组里,比普通插件先', () => {
+    const core = pluginSelectionEntry(act('forsion-calendar', 'c', { auto: true }), 0, installed)
+    expect(autoSelectionAction([x, core], P({ auto: { 'plugin:alpha:x': true, 'plugin:forsion-calendar:c': true } }))?.key).toBe('plugin:forsion-calendar:c')
+    expect(ks(orderedSelectionEntries([x, core], P()))).toEqual(['plugin:forsion-calendar:c', 'plugin:alpha:x'])
+  })
+})
+
+describe('偏好的读写:读失败 ≠ 空、只改动到的、不修剪', () => {
+  beforeEach(() => { localStorage.removeItem(SELECTION_ACTION_PREFS_KEY); localStorage.removeItem(`${SELECTION_ACTION_PREFS_KEY}.unreadable`) })
+  it('没存过 = 空;存坏了 = 不知道(按缺省显示,读一遍不写回)', () => {
+    expect(readSelectionActionPrefs()).toEqual({ ok: true, prefs: P() })
+    localStorage.setItem(SELECTION_ACTION_PREFS_KEY, '{not json')
+    expect(readSelectionActionPrefs().ok).toBe(false)
+    expect(selectionActionPrefs()).toEqual(P())
+    expect(localStorage.getItem(SELECTION_ACTION_PREFS_KEY)).toBe('{not json') // 只读不写
+    localStorage.setItem(SELECTION_ACTION_PREFS_KEY, JSON.stringify({ placement: [] }))
+    expect(readSelectionActionPrefs().ok).toBe(false)
+  })
+  it('用户在坏掉的上面再改:原件挪到 .unreadable 留着,再从空的记这一下', () => {
+    localStorage.setItem(SELECTION_ACTION_PREFS_KEY, '\u0000garbage')
+    setSelectionPlacement('plugin:a:b', 'bar')
+    expect(localStorage.getItem(`${SELECTION_ACTION_PREFS_KEY}.unreadable`)).toBe('\u0000garbage')
+    expect(selectionActionPrefs().placement).toEqual({ 'plugin:a:b': 'bar' })
+  })
+  it('只改动到的那一项;此刻没注册的动作的选择、不认识的字段都原样留着', () => {
+    localStorage.setItem(SELECTION_ACTION_PREFS_KEY, JSON.stringify({ placement: { 'plugin:gone:x': 'hidden', bad: 'sideways' }, auto: { 'plugin:gone:x': true }, order: ['plugin:gone:x'], future: { v: 2 } }))
+    setSelectionAuto('plugin:a:b', true)
+    rememberSelectionLanguage('plugin:a:b', 'Japanese')
+    reorderSelectionActions(['plugin:a:b'])
+    const raw = JSON.parse(localStorage.getItem(SELECTION_ACTION_PREFS_KEY)!)
+    expect(raw.placement).toEqual({ 'plugin:gone:x': 'hidden' }) // 认不出的单个值丢掉,别的不连累
+    expect(raw.auto).toEqual({ 'plugin:gone:x': true, 'plugin:a:b': true })
+    expect(raw.language).toEqual({ 'plugin:a:b': 'Japanese' })
+    expect(raw.order).toEqual(['plugin:a:b', 'plugin:gone:x'])
+    expect(raw.future).toEqual({ v: 2 })
+  })
+  it('⋯ 里钉上而插件位满了:它排到条上第一个插件前面(真的出现在条上),挤下去的进 ⋯', () => {
+    const e = (id: string, placement?: 'bar' | 'more'): SelectionEntry => pe(act('alpha', id, placement ? { placement } : {}), 0)
+    const all = [e('p1', 'bar'), e('p2', 'bar'), e('p3', 'bar'), e('p4')].map((x, i) => ({ ...x, rank: i }))
+    pinSelectionAction('plugin:alpha:p4', true, all)
+    const r = arrangeSelectionActions(all)
+    expect(ks(r.plugins)).toEqual(['plugin:alpha:p4', 'plugin:alpha:p1', 'plugin:alpha:p2'])
+    expect(ks(r.more)).toEqual(['plugin:alpha:p3'])
+    expect(r.overflow).toBe(1)
+    pinSelectionAction('plugin:alpha:p4', false, all) // 收进 ⋯
+    expect(ks(arrangeSelectionActions(all).plugins)).toEqual(['plugin:alpha:p1', 'plugin:alpha:p2', 'plugin:alpha:p3'])
+  })
+})
+
+describe('动作名:字符串 / 函数 / { zh, en } 画的那一刻求值', () => {
+  it('跟着界面语言换', () => {
+    const o = act('p', 'x', { title: { zh: '翻译', en: 'Translate' } })
+    setLocaleGlobal('zh')
+    expect(selectionActionTitle(o)).toBe('翻译')
+    setLocaleGlobal('en')
+    expect(selectionActionTitle(o)).toBe('Translate')
+    expect(selectionActionTitle(act('p', 'y', { title: () => 'Fn' }))).toBe('Fn')
+    expect(selectionActionTitle(act('p', 'z', { title: (() => { throw new Error('x') }) as never }))).toBe('z') // 抛了退回 id
+    setLocaleGlobal('zh')
   })
 })

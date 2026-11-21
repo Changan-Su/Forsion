@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { Languages, MessageCircle } from 'lucide-react'
+import { MessageCircle } from 'lucide-react'
 import { OverlayAt, mountLineSelection, rangeAnchor, rectAnchor, type TextAnchor } from '@lcl/engine'
 import { SelectionBar, type SelectionBarAction, type SelectionBarTool } from '@lcl/components'
 import { registerMessages, translate, useI18n } from '../../i18n'
@@ -22,14 +22,31 @@ import { readTangu } from '@amadeus/plugins/tanguSeam'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
-import { listSelectionActions, runSelectionAction, selectionActionKey, selectionBarOrder, type OwnedSelectionAction } from '../../selectionActions'
+import { runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, rememberSelectionLanguage, setSelectionAuto, type OwnedSelectionAction } from '../../selectionActions'
 import { translateTargetOf } from '../../translateTarget'
 import { selectionMarkdown } from './selectionMarkdown'
+import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
+import { TtsSetupCard } from './TtsSetupCard'
 
 registerMessages({
   'selbar.ask': { zh: '问 Tangu', en: 'Ask Tangu' },
   'selbar.askTitle': { zh: '把选中的文字带到侧栏对话里问', en: 'Ask about the selection in the side chat' },
+  'selbar.speakFailed': { zh: '朗读没有完成：{e}', en: 'Read aloud did not finish: {e}' },
 })
+
+/** 划选后自动(2026-11-21 契约 §4):停下这么久才跑;这个长度范围内才自动(更长的只出条,要手点)。 */
+const AUTO_DELAY_MS = 400
+const AUTO_MAX_CHARS = 2000
+/** 自动跑过的结果:同一个动作、同一段、同一个目标语言,本次会话内不再请求(按出现先后最多留这么多)。 */
+const autoCache = new Map<string, string>()
+const AUTO_CACHE_MAX = 100
+const autoCacheKey = (action: string, language: string | undefined, markdown: string): string => `${action}\u0000${language ?? ''}\u0000${markdown}`
+/** 手机没有「停下来」这个时机(选区靠系统菜单),第一轮不自动(契约 §4)。 */
+const autoAllowedHere = (): boolean => {
+  if (typeof window === 'undefined' || window.tangu?.mobile) return false
+  try { return !window.matchMedia?.('(pointer: coarse)').matches } catch { return true }
+}
+
 
 /** 选中的那一段。rect = 选区外接矩形(视口 px);markdown 给不出就等于 text。 */
 export interface BarSelection {
@@ -73,6 +90,8 @@ export interface ViewSelectionBarProps {
 
 interface Card {
   key: number
+  /** 自动跟到新那段时 +1:同一张卡重跑,不卸载(不闪)。 */
+  runKey: number
   title: string
   text: string
   markdown: string
@@ -87,6 +106,8 @@ interface Card {
   language?: string
   /** 插件动作的键;没有 = 内置的翻译。 */
   action?: string
+  /** 宿主划选后自动开的(契约 §4):条留着,点视图里(要换一段划选)不收,松手没选中东西才收。 */
+  auto?: boolean
 }
 
 const pluginIcon = (icon: string | undefined): ReactNode => {
@@ -118,6 +139,13 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   onDismissRef.current = p.onDismiss
   // 这一条能不能跟着那段字走(有锚点):能跟的,滚动 / 盒子变了不收(锚点跟着走或藏起来);只有快照的照旧收
   const followRef = useRef(false)
+  // 划选后自动:松手停 400ms 再跑(只认看着的元素里的鼠标划选:键盘扩选、程序改选区都不经过这里)
+  const autoTimer = useRef<number | null>(null)
+  const autoRef = useRef<(sel: BarSelection) => void>(() => {})
+  const cardRef = useRef<Card | null>(null)
+  const ownRef = useRef<BarSelection | null>(null)
+  const [ttsCard, setTtsCard] = useState<{ x: number; y: number; top: number; range?: Range; getRect?: BarSelection['getRect'] } | null>(null)
+  useEffect(() => () => { if (autoTimer.current != null) window.clearTimeout(autoTimer.current) }, [])
 
   useEffect(() => {
     const el = watch?.current
@@ -125,24 +153,32 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     const paint = mountLineSelection(el)
     // 按在条上的那一下(按钮按下即执行,条随即收起):它的松手可能落回这个元素,那不是一次新的选择,不能把条再弹出来。
     let fromBar = false
+    const cancelAuto = (): void => { if (autoTimer.current != null) { window.clearTimeout(autoTimer.current); autoTimer.current = null } }
+    // 自动开的卡:点一下视图(没划出东西)就收 —— 按下那一下为了不闪没收它(见卡的 keepOnDown)
+    const dropAutoCard = (): void => { if (cardRef.current?.auto) setCard(null) }
     const read = (e: MouseEvent): void => {
       if (fromBar) return
+      cancelAuto()
       const s = window.getSelection()
-      if (!s || s.isCollapsed || !s.rangeCount) { setOwn(null); return }
+      if (!s || s.isCollapsed || !s.rangeCount) { setOwn(null); dropAutoCard(); return }
       const content = selectionMarkdown(s, el)
       const text = content?.text ?? ''
       const range = s.getRangeAt(0)
       const at = range.commonAncestorContainer
       const host = at.nodeType === Node.ELEMENT_NODE ? (at as Element) : at.parentElement
       // 输入框 / 可编辑区里的选区不归这一条管(那里有自己的工具栏或什么都不该出)。
-      if (!text || !el.contains(at) || host?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) { setOwn(null); return }
+      if (!text || !el.contains(at) || host?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) { setOwn(null); dropAutoCard(); return }
       const r = range.getBoundingClientRect()
       const back = s.anchorNode === s.focusNode ? s.focusOffset < s.anchorOffset
         : !!(s.anchorNode && s.focusNode && s.anchorNode.compareDocumentPosition(s.focusNode) & Node.DOCUMENT_POSITION_PRECEDING)
       const dir = e.detail > 1 ? undefined : back ? 'backward' : 'forward'
-      setOwn({ text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir, range: range.cloneRange() })
+      const next: BarSelection = { text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir, range: range.cloneRange() }
+      ownRef.current = next
+      setOwn(next)
+      // 停下 400ms 还是这一段,才自动跑(中途又按下 / 又划了一段都会把它取消)
+      autoTimer.current = window.setTimeout(() => { autoTimer.current = null; if (ownRef.current === next) autoRef.current(next) }, AUTO_DELAY_MS)
     }
-    const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setOwn(null) }
+    const onSelection = (): void => { if (window.getSelection()?.isCollapsed) { ownRef.current = null; setOwn(null) } }
     // 调用方自己报的选区(插件的 show())也跟着收:它是按当时的位置报的,滚了 / 盒子变了就不在那儿了。
     const clear = (): void => { setOwn(null); onDismissRef.current?.() }
     // 滚动 / 盒子变了 / 画布挪视口:能跟的条不收(锚点跟着走,看不见就藏),只有快照的才收
@@ -151,7 +187,9 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     const onDown = (e: MouseEvent): void => {
       const at = e.target as Element | null
       fromBar = !!at?.closest?.('.selbar')
-      if (at && !el.contains(at) && !fromBar) clear()
+      cancelAuto()
+      // 结果卡 / 朗读提示卡和条是一起的(自动开的卡和条同时在):点在卡里不算点到外面
+      if (at && !el.contains(at) && !fromBar && !at.closest?.('.am-ai-panel')) clear()
     }
     // 标记只管这一次按下到松手:松手过去就清。留到「下一次按下」的话,之后前面没有按下的松手(脚本派发的那种)会被它吞掉。
     // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
@@ -185,7 +223,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   }, [watch, watchKey])
 
   const sel = p.selection ?? (watch ? own : null) // 调用方报的优先(插件的 show());没报才用自己看到的
-  const dismiss = (): void => { setOwn(null); p.onDismiss?.() }
+  cardRef.current = card
+  const dismiss = (): void => { ownRef.current = null; setOwn(null); p.onDismiss?.() }
   const ownerEl = (p.owner ?? watch)?.current ?? null
   followRef.current = !!ownerEl && !!(sel?.range || sel?.getRect)
   const dismissRef = useRef(dismiss)
@@ -199,22 +238,51 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const cardAnchor = useMemo(() => anchorOf(ownerEl, cardSrc, () => setCard(null)), [ownerEl, !!card, card?.range, card?.getRect])
   useEffect(() => () => cardAnchor?.dispose(), [cardAnchor])
+  const ttsAnchor = useMemo(() => anchorOf(ownerEl, ttsCard, () => setTtsCard(null)), [ownerEl, ttsCard])
+  useEffect(() => () => ttsAnchor?.dispose(), [ttsAnchor])
+  const installed = usePluginStore((s) => s.plugins)
+  // 此刻在念的那段;设置改了(钉 / 收进 ⋯ / 卡头开关 / 别的窗)也借它重画 —— 条和卡每次都现读偏好
+  const speaking = useSelectionBarLive()
+  const tts = readTangu()?.tts
+  /** 念一段(条上的「朗读」、卡里的小喇叭):同一个 key 正在念 = 停;没配模型 → 选区下出「去设置」小卡(不回落系统声音)。 */
+  const speakText = (key: string, text: string, at: { rect: BarSelection['rect']; range?: Range; getRect?: BarSelection['getRect'] }): void => {
+    if (!tts) return
+    if (speaking?.key === key) { tts.stop(key); return }
+    tts.speak(key, text).catch((e: unknown) => {
+      const m = String((e as Error)?.message || e)
+      if (m === 'tts_no_model') setTtsCard({ x: at.rect.left, y: at.rect.bottom + 6, top: at.rect.top - 6, range: at.range, getRect: at.getRect })
+      else if (m !== 'EMPTY') useApp.getState().toast(translate('selbar.speakFailed', { e: m }), true)
+    })
+  }
   /** 收起并清掉选区(动作把这段文字拿走了)。 */
   const done = (): void => { dismiss(); window.getSelection()?.removeAllRanges() }
 
   let bar: ReactElement | null = null
+  autoRef.current = () => {}
   if (sel) {
     const probe = readTangu()
     const source = p.source?.(sel)
-    const openCard = (title: string, extra: Pick<Card, 'language' | 'action'>): void => {
-      setCard({ key: Date.now(), title, text: sel.text, markdown: sel.markdown ?? sel.text, source, x: sel.rect.left, y: sel.rect.bottom + 6, top: sel.rect.top - 6, range: sel.range, getRect: sel.getRect, ...extra })
-      dismiss() // 选区留着:卡在它下面,看得出译的是哪一段
+    /** 开结果卡。auto = 划选后自动开的:条留着;已经开着一张自动卡就在原地跟到新那段(同一个 DOM,重跑,不闪)。 */
+    const openCard = (title: string, extra: Pick<Card, 'language' | 'action' | 'auto'>): void => {
+      const at = { text: sel.text, markdown: sel.markdown ?? sel.text, source, x: sel.rect.left, y: sel.rect.bottom + 6, top: sel.rect.top - 6, range: sel.range, getRect: sel.getRect }
+      const prev = cardRef.current
+      if (extra.auto && prev?.auto && prev.action === extra.action) {
+        setCard({ ...prev, ...at, ...extra, title, runKey: prev.runKey + 1 })
+        return
+      }
+      setCard({ key: Date.now(), runKey: 0, title, ...at, ...extra })
+      if (!extra.auto) dismiss() // 选区留着:卡在它下面,看得出译的是哪一段
+    }
+    const pluginCardExtra = (o: OwnedSelectionAction, auto: boolean): Pick<Card, 'language' | 'action' | 'auto'> => {
+      const key = selectionActionKey(o)
+      const lang = cardOptionsOf(o).language ? (selectionActionPrefs().language[key] ?? translateTargetOf(sel.text)) : undefined
+      return { action: key, ...(lang ? { language: lang } : {}), ...(auto ? { auto: true } : {}) }
     }
     const runPlugin = (o: OwnedSelectionAction): void => {
-      if (o.item.output !== 'none') { openCard(o.item.title, { action: selectionActionKey(o) }); return }
+      if (o.item.output !== 'none') { openCard(selectionActionTitle(o), pluginCardExtra(o, false)); return }
       const cx = { text: sel.text, markdown: sel.markdown ?? sel.text, view: p.view, editable: false, source }
       dismiss()
-      void runSelectionAction(o, cx).catch((e: unknown) => useApp.getState().toast(translate('selbar.failed', { title: o.item.title, e: String((e as Error)?.message || e) }), true))
+      void runSelectionAction(o, cx).catch((e: unknown) => useApp.getState().toast(translate('selbar.failed', { title: selectionActionTitle(o), e: String((e as Error)?.message || e) }), true))
     }
     const ask = p.ask
     const lead: SelectionBarAction[] = p.lead
@@ -222,14 +290,29 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       : ask === false || (!ask && !probe?.askInChat)
         ? []
         : [{ id: 'ask', label: t('selbar.ask'), title: t('selbar.askTitle'), icon: <MessageCircle size={14} />, lead: true, testId: 'selection-ask', onRun: () => { done(); if (ask) ask(sel); else probe?.askInChat?.(quoteOf(sel, source)) } }]
-    const actions: SelectionBarAction[] = [
-      ...lead,
-      ...(probe?.complete ? [{ id: 'translate', label: t('inlineai.action.translate'), icon: <Languages size={14} />, testId: 'selection-translate', onRun: () => openCard(t('inlineai.action.translate'), { language: translateTargetOf(sel.text) }) }] : []),
-    ]
-    const more: SelectionBarAction[] = listSelectionActions(plugins, { view: p.view, editable: false, length: sel.text.length })
-      .map((o) => ({ id: selectionActionKey(o), label: o.item.title, icon: pluginIcon(o.item.icon), onRun: () => runPlugin(o) }))
+    const selKey = speakKeyOf(sel.text)
+    const model = buildSelectionBarModel({
+      view: p.view, editable: false, length: sel.text.length, registered: plugins, installed,
+      host: {
+        ask: lead,
+        translate: probe?.complete ? () => openCard(t('inlineai.action.translate'), { language: translateTargetOf(sel.text) }) : undefined,
+        // 朗读不收条:三态(静止 → 合成中 → 播放中)就画在这一枚上,点它停
+        speak: tts ? { phase: (speaking?.key === selKey ? speaking.phase : null) as SpeakPhase, onRun: () => speakText(selKey, sel.text, sel) } : undefined,
+      },
+      onPlugin: runPlugin,
+    })
+    // 划选后自动(契约 §4):1–2000 字、桌面、有支持且用户开了的那个(排最前);同一段同一语言已经在卡里了就不再跑
+    autoRef.current = (s2) => {
+      const a = model.auto
+      if (!a || s2 !== sel || !autoAllowedHere() || sel.text.length < 1 || sel.text.length > AUTO_MAX_CHARS) return
+      const extra = pluginCardExtra(a, true)
+      const cur = cardRef.current
+      if (cur && cur.action === extra.action && cur.text === sel.text && cur.language === extra.language) return
+      openCard(selectionActionTitle(a), extra)
+    }
     const tools = p.tools?.(sel) ?? []
-    if (actions.length || more.length || tools.length) {
+    const { actions, more } = model
+    if (actions.length || model.plugins.length || more.length || model.moreHost.length || tools.length) {
       bar = (
         <OverlayAt
           className="ui-popover selbar"
@@ -249,42 +332,84 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           // 点在条的空白处也不能丢选区(按钮自己各有一份 preventDefault)。
           onMouseDown={(e) => e.preventDefault()}
         >
-          <SelectionBar tools={tools} actions={actions} more={more} moreHeading={t('selbar.plugins')} moreLabel={t('selbar.more')} order={selectionBarOrder()} onClose={dismiss} />
+          <SelectionBar tools={tools} actions={actions} plugins={model.plugins} more={more} moreHost={model.moreHost} moreNotice={model.notice}
+            moreHeading={t('selbar.plugins')} moreLabel={t('selbar.more')} order={selectionBarOrder()} onClose={dismiss} />
         </OverlayAt>
       )
     }
   }
 
+  // 自动卡这一次(runKey)的第一跑才看缓存;用户点「重试」就是要重新请求
+  const cacheArmed = useRef<number | null>(null)
+  const armedFor = card?.auto ? `${card.key}:${card.runKey}` : null
+  const lastArmed = useRef<string | null>(null)
+  if (armedFor !== lastArmed.current) { lastArmed.current = armedFor; cacheArmed.current = armedFor ? card!.runKey : null }
   const runCard: InlineAiRun = async (_instruction, onDelta, signal) => {
     if (!card) return { text: '' }
     if (card.action) {
       const o = usePluginStore.getState().selectionActions.find((x) => selectionActionKey(x) === card.action)
       if (!o) throw new Error(translate('selbar.err.gone'))
-      return { text: await runSelectionAction(o, { text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) } }) }
+      const ck = autoCacheKey(card.action, card.language, card.markdown)
+      const useCache = card.auto && cacheArmed.current === card.runKey
+      cacheArmed.current = null
+      const hit = useCache ? autoCache.get(ck) : undefined
+      if (hit != null) return { text: hit }
+      const text = await runSelectionAction(o, {
+        text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
+        onDelta: (d) => { if (typeof d === 'string') onDelta(d) },
+        ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
+      })
+      if (card.auto && text && !signal.aborted) {
+        autoCache.delete(ck)
+        autoCache.set(ck, text)
+        if (autoCache.size > AUTO_CACHE_MAX) autoCache.delete(autoCache.keys().next().value!)
+      }
+      return { text }
     }
     const complete = readTangu()?.complete
     if (!complete) throw new Error(translate('inlineai.unavailable'))
     return complete({ action: 'translate', selection: card.markdown, language: card.language }, { signal, onDelta })
   }
 
-  if (!bar && !card) return null
+  const cardOwned = card?.action ? plugins.find((x) => selectionActionKey(x) === card.action) : undefined
+  const opts = cardOptionsOf(cardOwned)
+  const cardSpeak = card && cardOwned && opts.speak && tts
+    ? {
+        phase: (which: 'source' | 'result'): SpeakPhase => (speaking?.key === `card:${card.key}:${which}` ? speaking.phase : null),
+        onToggle: (which: 'source' | 'result', text: string) => speakText(`card:${card.key}:${which}`, text, { rect: { left: card.x, right: card.x, top: card.top + 6, bottom: card.y - 6 }, range: card.range, getRect: card.getRect }),
+      }
+    : undefined
+  if (!bar && !card && !ttsCard) return null
   return createPortal(
     <>
       {bar}
       {card && (
         <InlineAiPanel
           key={card.key}
+          runKey={card.runKey}
           x={card.x}
           y={card.y}
           anchorTop={card.top}
           anchor={cardAnchor}
-          title={card.title}
+          title={cardOwned ? selectionActionTitle(cardOwned) : card.title}
+          icon={cardOwned ? pluginIcon(cardOwned.item.icon) ?? undefined : undefined}
           hasSelection
           askFirst={false}
           run={runCard}
           onClose={() => setCard(null)}
-          language={card.language ? { value: card.language, onChange: (id) => setCard({ ...card, key: Date.now(), language: id }) } : undefined}
+          // 自动卡:按在视图里(多半要换一段划选)先不收,松手时没划出东西再收(read 里)—— 收了再开会闪一下
+          keepOnDown={card.auto ? (at) => !!watch?.current?.contains(at) : undefined}
+          language={card.language ? {
+            value: card.language,
+            onChange: (id) => { if (card.action && opts.language) rememberSelectionLanguage(card.action, id); setCard({ ...card, key: Date.now(), runKey: 0, language: id }) },
+          } : undefined}
+          source={cardOwned && opts.source ? card.text : undefined}
+          speak={cardSpeak}
+          auto={cardOwned && opts.auto ? { on: selectionActionPrefs().auto[card.action!] === true, onChange: (on) => setSelectionAuto(card.action!, on) } : undefined}
         />
+      )}
+      {ttsCard && (
+        <TtsSetupCard x={ttsCard.x} y={ttsCard.y} anchorTop={ttsCard.top} anchor={ttsAnchor} onOpenSettings={() => tts?.openSettings()} onClose={() => setTtsCard(null)} />
       )}
     </>,
     document.body,

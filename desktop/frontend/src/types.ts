@@ -299,6 +299,9 @@ export const DEFAULT_AGENT_SLUG = 'xyra'
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
 /** 划线条的排法(localStorage,**缺席 = 'tools'**:本视图的工具在前;'actions' = 动作在前。selectionActions.ts + 设置→外观)。 */
 export const SELECTION_BAR_ORDER_KEY = 'forsion_selection_bar_order'
+/** 划线条上每个动作放哪 / 排序 / 划选后自动 / 结果卡上次选的语言(JSON;2026-11-21,selectionActions.ts + 设置→外观「划线菜单」管理表)。
+ *  只存用户动过的;读不出来 ≠ 空(按缺省显示、不写回,用户再改时先把原件留到 `<键>.unreadable`)。 */
+export const SELECTION_ACTION_PREFS_KEY = 'forsion_selection_actions'
 /** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
 export const UI_ZOOM_KEY = 'forsion_ui_zoom'
 /** 界面语言(i18n.tsx 真源;同上)。 */

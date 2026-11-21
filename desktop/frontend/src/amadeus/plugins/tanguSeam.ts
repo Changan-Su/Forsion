@@ -298,6 +298,23 @@ export interface TanguProbe {
    *  模型:`req.modelId` → 「补全」模型槽(还在目录里)→ 目录 fimModels 第一个 → 都没有 reject `Error('fim_unavailable')`;
    *  引擎 / 云端回 fim_unsupported 也 reject 成 `fim_unavailable`(插件据此落回 `complete`)。只在给得出 `complete` 的宿主上有。 */
   fim?(req: TanguFimRequest, opts?: TanguCompleteOptions): Promise<TanguFimResult>
+  /** 朗读(2026-11-21+):划线条的「朗读」、结果卡里的小喇叭和插件的 `ctx.tts` 都走这一个(全应用一个播放器,和聊天朗读共用)。
+   *  只在能配朗读模型的宿主上给(桌面、手机;网页端没有地方配,不给 → 那里不出朗读按钮、插件拿到 `tts_unavailable`)。 */
+  tts?: TanguTts
+}
+
+export interface TanguTts {
+  /** 此刻配没配朗读模型(按 store 里那份配置算,随登录 / 后台默认走 effectiveTtsConfig)。 */
+  available(): boolean
+  /** 念一段(markdown 会剥成纯文本,上限 4000 字):念完 / 被停 / 被顶掉时兑现。没配模型 reject `Error('tts_no_model')`
+   *  (调用时现读配置,刚在设置里选好的也认)。key 带上自己的前缀(`sel:` / `plugin:<id>:`)。 */
+  speak(key: string, text: string, o?: { signal?: AbortSignal }): Promise<void>
+  /** 停:给了 key 只停它(正念着别的就不动)。 */
+  stop(key?: string): void
+  state(): { key: string; phase: 'loading' | 'playing' } | null
+  subscribe(cb: () => void): () => void
+  /** 打开「设置 → 模型 → 语音」。 */
+  openSettings(): void
 }
 
 export interface TanguFimRequest {

@@ -159,3 +159,53 @@
 .selbar-split { gap: 0; }
 .selbar .selbar-menu-trigger { min-width: 18px; padding-inline: 2px; }
 @media (pointer: coarse) { .selbar .selbar-menu-trigger { min-width: 32px; } }
+
+/* ⋯ 里每一行:左边是动作本身,右边一颗钉(2026-11-21 划线插件常驻:钉了就上条)。钉缺省淡、行悬停 / 钉着时才显眼。 */
+.selbar-more-row { display: flex; align-items: center; gap: 2px; }
+.selbar-more-row > :first-child { flex: 1 1 auto; min-width: 0; }
+.selbar-pin {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: pointer;
+}
+.selbar-more-row:hover .selbar-pin,
+.selbar-pin.on { opacity: 1; }
+.selbar-pin:hover { background: var(--menu-hover); color: var(--text); }
+.selbar-pin.on { color: var(--accent-ink, var(--accent)); }
+/* 顶上那一行:「还有 N 个放不下 · 去管理」 */
+.selbar-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  font-size: var(--ui-font-meta, 12px);
+  color: var(--text-muted);
+}
+.selbar-notice-act {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.selbar-notice-act:hover { background: var(--menu-hover); }
+.selbar-notice-act:focus-visible,
+.selbar-pin:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -2px; }
+/* 朗读合成中:图标转圈(只转图标,字不动) */
+@keyframes selbar-spin { to { transform: rotate(360deg); } }
+.selbar-spin { animation: selbar-spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .selbar-spin { animation: none; } }

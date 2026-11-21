@@ -642,7 +642,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const ttsCfg = effectiveTtsConfig(s.desktopConfig, s.modelsResp, !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false)
   const ttsEnabled = !!ttsCfg?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
-    if (tts?.msgId === id) { stopSpeaking(); return }
+    if (tts?.key === id) { stopSpeaking(); return }
     speakMessage(homeTarget(), ttsCfg, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
@@ -907,7 +907,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     userAvatar={userAvatar}
                     fileCtx={fileCtx}
                     modelId={mvModelId}
-                    speakState={tts?.msgId === m.id ? tts.phase : undefined}
+                    speakState={tts?.key === m.id ? tts.phase : undefined}
                     voice={voice}
                     handlers={handlersFor(m.id)}
                     todoInTail={m.id === tailTodo?.id}

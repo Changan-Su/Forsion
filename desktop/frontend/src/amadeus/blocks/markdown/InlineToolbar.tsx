@@ -6,7 +6,8 @@
 // 同一份;谁在前由设置 → 外观的「划线菜单」定(缺省工具在前)。
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { AlignCenter, AlignLeft, AlignRight, Languages, MessageCircle } from 'lucide-react'
-import { SelectionBarActions, type SelectionBarAction } from '@lcl/components'
+import { SelectionBarActions, SelectionBarMoreList, type SelectionBarAction, type SelectionBarMoreNotice } from '@lcl/components'
+import { useSelectionBarLive } from '../../../components/selectionBar/barModel'
 import { ColorPalettePopover } from './ColorPalette'
 import { rectAnchor } from '@lcl/engine'
 import { OverlayAt } from '../../lib/clampMenu'
@@ -73,6 +74,16 @@ registerMessages({
 
 /** 「AI ▾」/「⋯」菜单的一项(评审 G3-07):宿主给好当前语言的文案。⋯ 里的是插件经 registerSelectionAction 注册的,可以带图标。 */
 export interface ToolbarAiItem { id: string; label: string; icon?: ReactNode }
+
+/** 动作区整份(2026-11-21 划线插件常驻):宿主那组 | 条上的插件 | ⋯(带钉、「还有 N 个放不下」)。和聊天那一条同一份排法
+ *  (components/selectionBar/barModel.buildSelectionBarModel);每次画都现取,朗读三态 / 偏好变了跟着重画。 */
+export interface ToolbarBarModel {
+  actions: SelectionBarAction[]
+  plugins: SelectionBarAction[]
+  moreHost: SelectionBarAction[]
+  more: SelectionBarAction[]
+  notice?: SelectionBarMoreNotice
+}
 
 export type ToolbarAction =
   | 'bold'
@@ -143,6 +154,7 @@ export function InlineToolbar({
   onReturnFocus,
   onAsk,
   ai,
+  bar,
   follow,
 }: {
   left: number
@@ -177,11 +189,14 @@ export function InlineToolbar({
   /** 正文 AI(评审 G3-07):宿主能做时才传;选中一项(id)交给宿主开预览面板。不传 = 这几样都不出。
    *  items = 「AI ▾」里的改写动作(本视图的工具);translate = 动作区出「翻译」(id 'translate');more = ⋯ 里的插件动作。 */
   ai?: { items: ToolbarAiItem[]; translate?: boolean; more?: ToolbarAiItem[]; onPick: (id: string) => void }
+  /** 动作区整份(给了就用它画动作区与 ⋯,不再看 onAsk / ai.translate / ai.more)。 */
+  bar?: () => ToolbarBarModel
   /** 跟着那段字走(划线菜单方案 B):有它就每帧按选区现量摆位(left / top / bottom / pane* 只当初值),滚出可见区只藏不收;
    *  展开的面板往远离选区的一侧长,那一行不动。 */
   follow?: SelFollow
 }) {
   const { t } = useI18n()
+  useSelectionBarLive() // 朗读三态 / 偏好变了重画(bar() 每次现取)
   const anchor = useMemo(() => (follow ? rectAnchor(follow.owner, follow.rect) : null), [follow])
   useEffect(() => () => anchor?.dispose(), [anchor])
   const [enterDir] = useState(dir)
@@ -252,7 +267,8 @@ export function InlineToolbar({
     const inPanel = box.classList.contains('itb-panel')
     const keys = inPanel ? ['ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'Home', 'End'] : ['ArrowRight', 'ArrowLeft', 'Home', 'End']
     if (!keys.includes(e.key)) return
-    const btns = [...box.querySelectorAll<HTMLElement>(':scope > button, :scope > * > button')]
+    // ⋯ 面板里每行右边的钉不进方向键序(鼠标点;键盘用户去设置里的管理表)
+    const btns = [...box.querySelectorAll<HTMLElement>(inPanel ? ':scope > button, :scope > * > [role="menuitem"], :scope > .selbar-notice > button' : ':scope > button, :scope > * > button')]
     const i = btns.indexOf(document.activeElement as HTMLElement)
     const fwd = e.key === 'ArrowRight' || e.key === 'ArrowDown'
     const next = e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : i < 0 ? 0 : (i + (fwd ? 1 : -1) + btns.length) % btns.length
@@ -262,14 +278,16 @@ export function InlineToolbar({
   }
 
   // 动作区(每个视图都一样的那几枚):问 Tangu 把选区交给侧栏对话、翻译进预览卡,笔记一个字不动;⋯ 是插件动作。
-  const shared: SelectionBarAction[] = [
+  const model = bar?.()
+  const shared: SelectionBarAction[] = model ? model.actions : [
     ...(onAsk ? [{ id: 'ask', label: t('itb.askTangu'), title: t('itb.askTanguTitle'), icon: <MessageCircle size={14} />, lead: true, onRun: onAsk }] : []),
     ...(ai?.translate ? [{ id: 'translate', label: t('itb.translate'), title: t('itb.translateTitle'), icon: <Languages size={14} />, onRun: () => ai.onPick('translate') }] : []),
   ]
-  const more = ai?.more?.length ? ai.more : null
-  const actionZone = shared.length || more ? (
+  const more = model ? (model.more.length || model.moreHost.length ? model.more : null) : ai?.more?.length ? ai.more : null
+  const actionZone = shared.length || more || model?.plugins.length ? (
     <SelectionBarActions
       actions={shared}
+      plugins={model?.plugins}
       more={more ? {
         label: t('itb.more'),
         open: panel === 'more',
@@ -358,7 +376,12 @@ export function InlineToolbar({
       )}
 
       {/* ⋯:插件动作(2026-10-13 起从「AI ▾ → 插件」挪到这里;聊天、插件视图里的那一条也在同一个位置列它们)。 */}
-      {panel === 'more' && ai && more && (
+      {panel === 'more' && model && more && (
+        <div className="itb-panel itb-ai-menu" role="menu" aria-label={t('itb.more')} data-testid="selbar-more">
+          <SelectionBarMoreList host={model.moreHost} plugins={model.more} heading={t('itb.aiPlugins')} notice={model.notice} onPicked={() => setPanel(null)} itemClass="itb-menu-item itb-more-item" />
+        </div>
+      )}
+      {panel === 'more' && !model && ai && more && (
         <div className="itb-panel itb-ai-menu" role="menu" aria-label={t('itb.more')} data-testid="selbar-more">
           <div className="itb-color-head">{t('itb.aiPlugins')}</div>
           {more.map((it) => (

@@ -3,8 +3,8 @@
  *  丢弃 / Esc = 文档一个字不动。宿主不给 onApply = **只读**(聊天、插件视图):只有「复制 / 重试 / 关闭」,点卡外面就收。
  *  纯展示 + 请求生命周期:请求怎么发(内置动作走 readTangu().complete,插件项走它自己的 run)由宿主给的 run 决定。
  *  样式在同目录 inlineAiPanel.css(聊天不加载 Amadeus 那份大样式表,所以单拎出来由本文件自己带)。 */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { Languages, Sparkles } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { Languages, Loader2, Sparkles, Square, Volume2 } from 'lucide-react'
 import { OverlayAt } from '../lib/clampMenu'
 import type { TextAnchor } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
@@ -44,12 +44,23 @@ registerMessages({
   'inlineai.close': { zh: '关闭', en: 'Close' },
   'inlineai.targetLang': { zh: '目标语言', en: 'Target language' },
   'inlineai.byMt': { zh: '机器翻译 · {name}', en: 'Machine translation · {name}' },
+  'inlineai.source': { zh: '原文', en: 'Original' },
+  'inlineai.translation': { zh: '译文', en: 'Translation' },
+  'inlineai.result': { zh: '结果', en: 'Result' },
+  'inlineai.expand': { zh: '展开原文', en: 'Show all of the original' },
+  'inlineai.speak': { zh: '朗读', en: 'Read aloud' },
+  'inlineai.speakStop': { zh: '停止朗读', en: 'Stop reading' },
+  'inlineai.auto': { zh: '划选后自动', en: 'Run on select' },
+  'inlineai.autoNote': { zh: '每次划选都会调用模型，计入额度', en: 'Every selection calls the model and counts toward your quota' },
 })
+
+/** 卡里小喇叭的状态(和划线条「朗读」同一个播放器)。 */
+export type CardSpeakPhase = 'loading' | 'playing' | null
 
 /** model = 这次实际是谁出的结果(翻译才给;readTangu().complete 的返回值可以原样交回来)。 */
 export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
 
-export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, askFirst, run, onApply, onClose, editorEl, language }: {
+export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelection, askFirst, run, onApply, onClose, editorEl, language, source, speak, auto, runKey, keepOnDown }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
@@ -71,6 +82,18 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
   editorEl?: HTMLElement | null
   /** 翻译:卡头上能临时换目标语言。换了由宿主换 key 重开这张卡(在飞的请求随卸载中止)。 */
   language?: { value: string; onChange: (id: string) => void }
+  /** 卡头的图标(插件动作的那枚);不给 = 翻译用文字图标、其余用 AI 图标。 */
+  icon?: ReactNode
+  /** 在结果上面列出原文(收成 3 行,点了展开;插件 card.source)。 */
+  source?: string
+  /** 原文 / 结果旁的小喇叭(插件 card.speak;这个宿主有朗读才给)。phase(which) = 此刻在念的是不是那一段。 */
+  speak?: { phase(which: 'source' | 'result'): CardSpeakPhase; onToggle(which: 'source' | 'result', text: string): void }
+  /** 卡头「划选后自动」开关(只有支持自动的动作有)。 */
+  auto?: { on: boolean; onChange(on: boolean): void }
+  /** 变了 = 在同一张卡里重跑一次(划选后自动跟到新那段:不卸载、不重放入场,卡不闪)。 */
+  runKey?: unknown
+  /** 点到卡外面那一下(只读卡):回 true = 这一下先别收(宿主随后自己决定,比如自动卡上换一段划选)。 */
+  keepOnDown?(target: Node): boolean
 }): ReactElement {
   const { t } = useI18n()
   const [phase, setPhase] = useState<'ask' | 'running' | 'done' | 'error'>(askFirst ? 'ask' : 'running')
@@ -137,6 +160,16 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
     return () => ac.current?.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  // 同一张卡换一段再跑(自动跟随):第一次挂上时上面那个已经跑了,这里只认之后的变化
+  const firstRunKey = useRef(runKey)
+  useEffect(() => {
+    if (Object.is(firstRunKey.current, runKey)) return
+    firstRunKey.current = runKey
+    setSourceOpen(false)
+    start(undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runKey])
+  const [sourceOpen, setSourceOpen] = useState(false)
 
   const primary: AiApply = hasSelection ? 'replace' : 'insert'
   // Esc = 丢弃(任何阶段);预览完成后 Enter = 主动作。捕获期拦,别让它们落进编辑器(Enter 会插一个换行)。
@@ -176,11 +209,28 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
   // 只读卡手里没有待确认的改动,点到卡外面就收(可写的那张不自动关:结果还没落笔,见上)。
   useEffect(() => {
     if (onApply) return
-    const onDown = (e: MouseEvent): void => { if (!panelRef.current?.contains(e.target as Node)) onClose() }
+    const onDown = (e: MouseEvent): void => {
+      const at = e.target as Node
+      if (panelRef.current?.contains(at) || keepRef.current?.(at)) return
+      onClose()
+    }
     document.addEventListener('mousedown', onDown, true)
     return () => document.removeEventListener('mousedown', onDown, true)
   }, [onApply, onClose])
+  const keepRef = useRef(keepOnDown)
+  keepRef.current = keepOnDown
 
+  const speaker = (which: 'source' | 'result', body: string): ReactElement | null => {
+    if (!speak) return null
+    const ph = speak.phase(which)
+    return (
+      <button type="button" className={`am-ai-speak${ph ? ' on' : ''}`} data-speak={which} data-phase={ph ?? 'idle'} aria-pressed={!!ph}
+        title={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')} aria-label={t(ph ? 'inlineai.speakStop' : 'inlineai.speak')}
+        onClick={() => speak.onToggle(which, body)}>
+        {ph === 'loading' ? <Loader2 size={13} className="selbar-spin" /> : ph === 'playing' ? <Square size={11} fill="currentColor" /> : <Volume2 size={13} />}
+      </button>
+    )
+  }
   const copy = (): void => {
     void navigator.clipboard?.writeText(text).then(() => {
       setCopied(true)
@@ -194,7 +244,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
   return (
     <OverlayAt innerRef={(el) => { panelRef.current = el }} className="ui-popover am-ai-panel" x={x} y={y} anchorTop={anchorTop} anchor={anchor} gap={6} prefer="below" role="dialog" aria-label={onApply ? t('inlineai.label') : title} data-testid="inline-ai-panel" data-phase={phase} data-readonly={onApply ? undefined : ''}>
       <div className="am-ai-head">
-        {language ? <Languages size={14} aria-hidden /> : <Sparkles size={14} aria-hidden />}
+        {icon ?? (language ? <Languages size={14} aria-hidden /> : <Sparkles size={14} aria-hidden />)}
         <span className="am-ai-title">{title}</span>
         {language && (
           <select className="am-ai-lang" aria-label={t('inlineai.targetLang')} data-testid="inline-ai-lang" value={language.value} onChange={(e) => language.onChange(e.target.value)}>
@@ -203,7 +253,15 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
         )}
         {/* 右侧:生成中 → 进度;翻译完 → 这次是谁译的;别的可写结果 → 「确认后才写入」。 */}
         {phase !== 'ask' && <span className="am-ai-hint" data-testid="inline-ai-hint">{phase === 'running' ? t('inlineai.generating') : (phase === 'done' && by) || (onApply ? t('inlineai.hint') : '')}</span>}
+        {auto && (
+          <label className="am-ai-auto" data-testid="inline-ai-auto">
+            <span>{t('inlineai.auto')}</span>
+            <button type="button" role="switch" className={`am-ai-switch${auto.on ? ' on' : ''}`} aria-checked={auto.on} aria-label={t('inlineai.auto')} data-act="auto"
+              onClick={() => auto.onChange(!auto.on)}><span /></button>
+          </label>
+        )}
       </div>
+      {auto?.on && <div className="am-ai-note" data-testid="inline-ai-auto-note">{t('inlineai.autoNote')}</div>}
       {phase === 'ask' && (
         <div className="am-ai-ask">
           <textarea
@@ -231,6 +289,14 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, hasSelection, as
       )}
       {phase !== 'ask' && (
         <>
+          {source != null && (
+            <>
+              <div className="am-ai-label">{t('inlineai.source')}{speaker('source', source)}</div>
+              <button type="button" className={`am-ai-source${sourceOpen ? ' open' : ''}`} data-testid="inline-ai-source" title={sourceOpen ? undefined : t('inlineai.expand')}
+                aria-expanded={sourceOpen} onClick={() => setSourceOpen(true)}>{source}</button>
+            </>
+          )}
+          {(source != null || speak) && <div className="am-ai-label">{t(language ? 'inlineai.translation' : 'inlineai.result')}{phase === 'done' && speaker('result', text)}</div>}
           <div ref={previewRef} className="am-ai-preview md-body" data-testid="inline-ai-preview"><Markdown content={text || (phase === 'running' ? '…' : '')} allowRun={false} /></div>
           {phase === 'error' && <div className="am-ai-error" role="alert">{error}</div>}
           {toolText && phase === 'done' && <div className="am-ai-error">{t('inlineai.toolText')}</div>}
