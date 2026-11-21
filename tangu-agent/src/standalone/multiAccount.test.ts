@@ -162,6 +162,25 @@ describe('createMultiAccountApp', () => {
     expect(JSON.stringify(r.json)).not.toContain(elsewhere); // 路径只进日志
   });
 
+  it('honours the remote lock like single-user standalone: remote writes 423, reads pass', async () => {
+    const lockFile = join(mkdtempSync(join(tmpdir(), 'ma-lock-')), 'remote-lock.json');
+    writeFileSync(lockFile, JSON.stringify({ v: 1, lock: { locked: true, at: Date.now() } }));
+    const prev = process.env.FORSION_REMOTE_LOCK_FILE;
+    process.env.FORSION_REMOTE_LOCK_FILE = lockFile;
+    try {
+      const remote = { 'X-Forsion-Remote': 'tunnel' };
+      const hdr = { Authorization: `Bearer ${TOKEN}`, 'X-Forsion-User': 'alice', 'Content-Type': 'application/json', ...remote };
+      const w = await fetch(`${base}/agent/sessions`, { method: 'POST', headers: hdr, body: JSON.stringify({ title: 'remote' }) });
+      expect(w.status).toBe(423);
+      const r = await fetch(`${base}/agent/sessions`, { headers: hdr });
+      expect(r.status).toBe(200);
+      // 本机来的(没有远程头)不受影响
+      expect((await call('POST', '/agent/sessions', { as: 'alice', body: { title: 'local' } })).status).toBe(200);
+    } finally {
+      if (prev === undefined) delete process.env.FORSION_REMOTE_LOCK_FILE; else process.env.FORSION_REMOTE_LOCK_FILE = prev;
+    }
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);

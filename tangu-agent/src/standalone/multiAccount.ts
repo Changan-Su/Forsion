@@ -37,6 +37,7 @@ import { accountCwdDenied, setAccountReadOnlyRoots } from '../services/accessDom
 import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
+import { remoteLockGuard } from './remoteLockGuard.js';
 
 export interface MultiAccountAppOptions {
   localToken: string;            // 宿主口令
@@ -275,7 +276,10 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
       },
     );
   });
-  // ③ 白名单里的路由;其余一律 403
+  // ③ 远程锁定(与单人 standalone 同一道):锁定时带远程来源头的非只读请求一律 423(中止 run 除外)。
+  // 锁是整台电脑的(桌面主进程的锁文件 + 进程内闩),对所有账号都收紧;读它不碰账号路径、不抛(读不出 = 锁定)。
+  app.use((req, res, next) => remoteLockGuard(req, res, next));
+  // ④ 白名单里的路由;其余一律 403
   app.use(allowRouter);
   app.use((_req, res) => { res.status(403).json({ detail: 'Not available in multi-account mode' }); });
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
