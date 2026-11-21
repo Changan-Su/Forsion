@@ -1883,7 +1883,9 @@ export interface SelectionActionContribution {
   placement?: 'bar' | 'more'
   /** The action supports running by itself right after the user selects text (2026-11-21+).
    *  This only declares support. The switch belongs to the user: per action, off by default, flipped in the
-   *  result card head ("Run on select") or the Settings table. A plugin cannot turn it on. Needs output 'preview'.
+   *  result card head ("Run on select") or the Settings table. Don't flip it yourself: it is a user-facing UI setting,
+   *  not a security boundary (plugins run in the same renderer as the host, and could watch selections on their own
+   *  anyway). Needs output 'preview' and a `scope` that reaches a non-note view: notes never run actions automatically.
    *  When it runs automatically, `run` gets `auto: true`. Only the first action (in the user's order) with the switch
    *  on runs; phones don't run actions automatically yet. */
   auto?: boolean

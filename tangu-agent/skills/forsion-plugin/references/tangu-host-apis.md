@@ -260,7 +260,7 @@ tts?.stop()                                                  // 只停你自己�
 - 全应用**一个**播放器,和聊天朗读、划线条「朗读」共用:新的 `speak` 顶掉正在放的那段(被顶掉的那次兑现,不 reject)。
 - 没配朗读模型 reject `Error('tts_no_model')`,宿主同时弹一条「还没选朗读模型 · 去设置」;这个宿主配不了朗读(网页端)reject `Error('tts_unavailable')`。**不回落系统声音。**
 - markdown 剥成纯文本(代码块跳过),上限 4000 字;合成走宿主的模型和额度,插件拿不到密钥。
-- `stop()` 只停你起的那段,别人(聊天朗读)在放的不碰;插件停用 / 重载时宿主中止你在飞的合成、停掉你在放的那段。
+- `stop()` 只停你起的那段,别人(聊天朗读)在放的不碰;插件停用 / 重载时宿主中止你在飞的合成、停掉你在放的那段。停用 / 重载之后旧 `ctx` 上的 `stop()` 什么都不做,停不到新一代起的那段。`signal` 只收真的 `AbortSignal`,别的直接拒。
 - 划线条结果卡里的小喇叭不用自己画:`registerSelectionAction({ card: { speak: true } })`(见 host-ui-mounts「Selection bar」)。
 
 ### 翻译:ctx.tangu.translate(2026-10-13 起)

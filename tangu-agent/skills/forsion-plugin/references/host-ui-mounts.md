@@ -322,12 +322,18 @@ ctx.registerSelectionAction({
   on the bar; the rest go behind ⋯ in install order and ⋯ says "N more did not fit · Manage". Core plugins sit with
   the host's actions before the divider and don't use those slots.
 - `auto: true` only declares support (needs output `'preview'`). The switch is per action, off by default, in the
-  card head ("Run on select") and the Settings table; a plugin cannot turn it on. When on, a mouse selection that
+  card head ("Run on select") and the Settings table. It is a user-facing setting, not a security boundary (plugins run
+  in the host's renderer): never flip it yourself. Your `scope` must reach a non-note view, or there is no switch at
+  all. When on, a mouse selection that
   rests 400 ms (1–2000 characters, not in inputs) opens the bar and your card together and `run` gets
   `cx.auto === true`; a new selection retargets the same card and aborts the previous `cx.signal`; the same text in
   the same language is not requested twice in a session. With several switched on only the first in the user's
   order runs. Desktop only for now (phones don't run actions automatically). Notes don't run actions automatically
-  either: there the card can write into the note.
+  either: there the card can write into the note. Disabling or reloading the plugin closes its open card and aborts
+  the in-flight `cx.signal`.
+- The host's own Translate gives way to plugin id `translation` when it is a host-shipped core plugin (even while
+  disabled) or when it is enabled and has registered a selection action; it keeps the placement the user gave the
+  host's Translate.
 - `card.language` draws a target-language picker in the card head; the value reaches `run` as `cx.language` (English
   language names: `'English'`, `'Chinese (Simplified)'`, `'Japanese'`…). Initial value = the host's guess from the
   selection, then the user's last pick for this action. `card.source` shows the selection above the result (3 lines,
