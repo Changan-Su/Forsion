@@ -64,9 +64,10 @@ describe('收起工具 = 走按需目录,不是删能力', () => {
     for (const n of shelvedTools) expect(catalog({ shelvedTools }), n).not.toContain(n);
   });
 
-  it('Muse / 自动化这类系统 run 不吃这套(全量可见)', () => {
+  it('自动化 run(不是 Muse 周期)不吃这套(全量可见);Muse 周期 11-21 起按需,收起的照样走目录', () => {
     const [a] = pick();
-    expect(visible({ shelvedTools: new Set([a]), muse: true })).toContain(a);
+    expect(visible({ shelvedTools: new Set([a]), automationOrigin: 'rule-1' })).toContain(a);
+    expect(visible({ shelvedTools: new Set([a]), muse: true, automationOrigin: 'muse' })).not.toContain(a);
   });
 });
 

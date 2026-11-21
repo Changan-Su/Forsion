@@ -68,6 +68,16 @@ const all = {
     clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
   });
 }
+// Muse 周期(11-21 起按需装载,常驻 toolRegistry.MUSE_RESIDENT_TOOLS):追加在末尾,旧键零扰动。与 test/tooldefs.snapshot.test.ts 的同名块逐字同改。
+// set_chat_starters 按用户设置门控(开场建议开关,读 special-agents.json)—— 两边都从这个键剔,定义由 museStarters 的单测钉。
+{
+  const p = createTanguProfile({ sandboxMode: 'none' });
+  configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+  all['tangu-none:host+muse'] = getToolDefinitions({
+    userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+    execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', muse: true, automationOrigin: 'muse', agentSlug: 'muse',
+  }).filter((t) => t?.function?.name !== 'set_chat_starters');
+}
 // 按**用户本机状态**门控的工具:read_computer_history 看 <共享域>/computer-history/state.json 是否开着 ——
 // 只有 `tangu-none:host+gui`(本机引擎 + desktop 客户端)过得了门禁,开过电脑历史的机器上会多出它。**只**从这一个键剔
 // (与 test/tooldefs.snapshot.test.ts 同改),别的键里出现它就是真漂移;定义字节由 src/services/computerHistory.test.ts 的哈希钉。

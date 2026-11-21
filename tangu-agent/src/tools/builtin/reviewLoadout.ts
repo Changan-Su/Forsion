@@ -13,7 +13,7 @@ export const reviewLoadoutProvider: ToolProvider = {
     {
       name: 'review_loadout',
       mode: 'host',
-      deferred: true, // Muse 周期全量可见(deferBypass);手聊 Muse 时走按需目录
+      deferred: true, // Muse 周期常驻(toolRegistry.MUSE_RESIDENT_TOOLS);手聊 Muse 时走按需目录
       deferHint: 'Usage report: which always-loaded tools and listed skills each agent never or rarely used lately',
       // 'muse' = MUSE_AGENT_SLUG(硬编码避免 builtin→agentRegistry import 环,同 readActivity)
       isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && (!!ctx.muse || ctx.agentSlug === 'muse'),

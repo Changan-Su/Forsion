@@ -23,7 +23,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import { getToolDefinitions, listDeferredTools, deferredCatalogSection, executeTool, type ToolContext } from '../tools/registry.js';
-import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
+import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName, builtinsAlwaysLoaded } from '../tools/toolRegistry.js';
 import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
 import { withLlmRetry } from '../llm/retry.js';
 import { publish } from './eventBus.js';
@@ -433,8 +433,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // 本次授予的那几个**也滤**:它们已预解锁进首轮 defs,目录段的原话是「exist but are not loaded yet」,
   // 再列一行模型就会先白花一轮 load_tools(live 09-15 实测:授了 manage_schedule 的子代理仍先 load_tools 再调)。
   // 目录在子代理 run 内只算一次,滤掉授予项不影响稳定性。
-  // Muse/自动化:内置全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
-  const deferBypass = !!subCtx.muse || !!subCtx.automationOrigin;
+  // 自动化 run(不是 Muse 周期):内置全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 同一判据 builtinsAlwaysLoaded)。
+  // Muse 周期派出的子代理继承 muse 旗标,照普通子代理按需装载。
+  const deferBypass = builtinsAlwaysLoaded(subCtx);
   const deferredCatalog = listDeferredTools(subCtx, { builtins: !deferBypass }).filter((d) => !isSubAgentDenied(denyProbe, d.name) && !grants.has(d.name));
   const deferSection = deferredCatalogSection(deferredCatalog);
   // 项目记忆(父会话所在的那个项目):子 agent 与父会话同一个会话 id,remember 的项目级它本来就写得进,提示里也该看得到已有的。

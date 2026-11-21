@@ -60,6 +60,16 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
         clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
       } as any);
     }
+    // Muse 周期(11-21 起按需装载,常驻 MUSE_RESIDENT_TOOLS):与 scripts/dump-tooldefs.mjs 的同名块逐字同改。
+    // set_chat_starters 按用户设置门控(开场建议开关,读 special-agents.json)—— 两边都从这个键剔,定义由 museStarters 的单测钉。
+    {
+      const p = createTanguProfile({ sandboxMode: 'none' });
+      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+      all['tangu-none:host+muse'] = (getToolDefinitions({
+        userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+        execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', muse: true, automationOrigin: 'muse', agentSlug: 'muse',
+      } as any) as any[]).filter((t) => t?.function?.name !== 'set_chat_starters');
+    }
     const here = dirname(fileURLToPath(import.meta.url));
     const snapshotPath = join(here, '../scripts/__snapshots__/tooldefs.json');
     const expected = JSON.parse(readFileSync(snapshotPath, 'utf8'));

@@ -51,7 +51,7 @@ import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
 import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
-import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
+import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason, builtinsAlwaysLoaded } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { WIDGET_SECTION, widgetsEnabledFor } from '../tools/builtin/manageWidget.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
@@ -2511,12 +2511,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
     // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
     // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
-    // 系统驱动的 run(Muse/自动化)的内置工具不吃这套:registry 全量可见;MCP 工具照样按需(11-06,见 toolRegistry.isMcpDeferred)。
+    // 不是 Muse 周期的自动化 run 的内置工具不吃这套:registry 全量可见;MCP 工具照样按需(11-06,见 toolRegistry.isMcpDeferred)。
+    // Muse 周期 11-21 起按需(builtinsAlwaysLoaded / MUSE_RESIDENT_TOOLS)。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
       ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
       : undefined;
-    const deferBypass = !!agentConfig.muse || !!agentConfig.automationOrigin;
+    // 系统驱动的 run(Muse / 自动化):开场白不是用户的话 —— 不判纠正、不催动作兑现、不起 ultra。与工具面无关(工具面看 deferBypass)。
+    const systemDriven = !!agentConfig.muse || !!agentConfig.automationOrigin;
+    const deferBypass = builtinsAlwaysLoaded({ muse: !!agentConfig.muse, automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined });
     // 目录与工具面必须用**同一套门禁字段**:少传一个,目录就与真实工具面分叉 —— set_ui_setting 的
     // 门禁是 `client + uiCommands`,此前这里两个都没传,真实 GUI run 的「Additional Tools」里根本
     // 没有它,而它的完整定义又因 deferred 被藏起来 → 用户开口要求换主题时模型无从解锁(Codex 评审三轮·tools #1)。
@@ -2600,7 +2603,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         new Promise<''>((res) => { const t = setTimeout(res, 2000, ''); t.unref?.(); ac.signal.addEventListener('abort', () => res(''), { once: true }); }),
       ])) || undefined;
     }
-    // Muse / 自动化 run 的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
+    // 自动化 run(不是 Muse 周期)的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 同一判据 builtinsAlwaysLoaded)。
     // canUnlock:下面 toolCtx 一定挂 unlockTools,这里的 toolGateCtx 还没有。
     const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass, canUnlock: true });
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
@@ -2732,7 +2735,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // run 级,只在开关那一刻动前缀)。三道闸缺一不可:会话开了 ultra;
     // 不是 Muse / 自动化这类无人值守 run(抄了会话配置也不许无人看管地扇出 max 档子代理);本 run 真拿得到 delegate ——
     // hostExec / chat 正向面 / toolsMode 黑白名单 / 子代理深度都在 resolveTools 一处判,这里不重抄条件。
-    if (ultraRequested && !deferBypass && resolveTools(profile, toolGateCtx as ToolContext).has('delegate')) {
+    if (ultraRequested && !systemDriven && resolveTools(profile, toolGateCtx as ToolContext).has('delegate')) {
       systemParts.push(ULTRA_SECTION);
     }
 
@@ -3609,7 +3612,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
     // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
     // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
-    if (!deferBypass && input.trigger !== 'recovery' && workingMessages.some((m) => m.role === 'assistant')) {
+    if (!systemDriven && input.trigger !== 'recovery' && workingMessages.some((m) => m.role === 'assistant')) {
       const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
       if (decision) {
         const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
@@ -4358,7 +4361,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // —— 动作兑现兜底:用户要了一个动作,模型一个工具都没调就说「我这就写 / 建好了」收尾(10-02 live:luna ~1/5)。
         //    只催一次;系统驱动的 run(Muse / 自动化)不在此列 —— kickoff 里满是动作词,零工具收尾在那边是正常结局。——
         // iteration < maxIterations - 2:下一轮不能是收尾轮(收尾轮不给工具,催了也做不了;Codex 10-02)
-        if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !deferBypass
+        if (!actionNudged && !usedTools && !planMode && iteration < maxIterations - 2 && !systemDriven
           && actionDeliveryNudgeNeeded(actionAskText, res.content || '')) {
           actionNudged = true;
           judgeSignals.push(NUDGE_SIGNAL);

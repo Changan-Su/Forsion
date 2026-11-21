@@ -98,18 +98,27 @@ describe('registry 级:MCP 缺省按需加载', () => {
     expect(deferredCatalogSection([])).toBeNull();
   });
 
-  it('Muse / 自动化:内置全量可见、目录里只剩 MCP,load_tools 照样露出(MCP 不吃 deferBypass)', () => {
-    for (const sys of [{ muse: true, approvalMode: 'full-auto' as const }, { automationOrigin: 'rule-1' }]) {
-      const ctx = { ...base, ...sys, mcpTools: mcpMap(SEARCH) };
-      const got = names(ctx);
-      expect(got).toContain('manage_automation'); // 内置 deferred 仍全量
-      expect(got).not.toContain(SEARCH.name);
-      expect(got).toContain('load_tools');
-      expect(listDeferredTools(ctx, { builtins: false }).map((d) => d.name)).toEqual([SEARCH.name]);
-    }
-    // 没有 MCP 的 Muse run:与改前一致 —— 无目录、无 load_tools
-    expect(listDeferredTools({ ...base, muse: true }, { builtins: false })).toEqual([]);
-    expect(names({ ...base, muse: true })).not.toContain('load_tools');
+  it('自动化 run:内置全量可见、目录里只剩 MCP,load_tools 照样露出(MCP 不吃自动化豁免)', () => {
+    const ctx = { ...base, automationOrigin: 'rule-1', mcpTools: mcpMap(SEARCH) };
+    const got = names(ctx);
+    expect(got).toContain('manage_automation'); // 内置 deferred 仍全量
+    expect(got).not.toContain(SEARCH.name);
+    expect(got).toContain('load_tools');
+    expect(listDeferredTools(ctx, { builtins: false }).map((d) => d.name)).toEqual([SEARCH.name]);
+    // 没有 MCP 的自动化 run:无目录、无 load_tools
+    expect(listDeferredTools({ ...base, automationOrigin: 'rule-1' }, { builtins: false })).toEqual([]);
+    expect(names({ ...base, automationOrigin: 'rule-1' })).not.toContain('load_tools');
+  });
+
+  it('Muse 周期(11-21 起):内置与 MCP 一起按需,目录两样都列', () => {
+    const ctx = { ...base, muse: true, automationOrigin: 'muse', approvalMode: 'full-auto' as const, mcpTools: mcpMap(SEARCH) };
+    const got = names(ctx);
+    expect(got).not.toContain('manage_automation');
+    expect(got).not.toContain(SEARCH.name);
+    expect(got).toContain('load_tools');
+    const catalog = listDeferredTools(ctx).map((d) => d.name);
+    expect(catalog).toContain('manage_automation');
+    expect(catalog).toContain(SEARCH.name);
   });
 
   it('与 defs 同一过滤:chat 预设(无外部工具)/ 严格名单之外的 MCP 既不进目录也装不上', async () => {

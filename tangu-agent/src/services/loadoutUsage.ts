@@ -114,7 +114,7 @@ const day = (ts: string): string => ts.slice(0, 10);
 const cut = (list: string[]): string => (list.length > MAX_NAMES ? `${list.slice(0, MAX_NAMES).join(', ')}, … (+${list.length - MAX_NAMES} more)` : list.join(', '));
 
 /** 一个 agent 在「普通本机会话」里常驻的工具(每次请求都带完整定义的那些)及各自定义的字节数。
- *  不带 muse / automation 旗标(那两种 run 全量可见),也不带它自己已收起的 —— 已收起的另列。
+ *  不带 muse / automation 旗标(那两种 run 的工具面不同),也不带它自己已收起的 —— 已收起的另列。
  *  仅 GUI 客户端才有的工具(界面命令、画图卡片等)不在这个合成工具面里:它们的门禁要发起端能力,这里没有。 */
 async function residentTools(ctx: ToolContext, slug: string, def: { toolsMode?: 'allow' | 'deny'; toolsList?: string[] }, skillIds: string[]): Promise<Array<{ name: string; bytes: number }>> {
   const face = {

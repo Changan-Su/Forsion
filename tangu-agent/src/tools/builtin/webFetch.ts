@@ -11,7 +11,7 @@ import { fetchPublic, readBodyCapped, httpDeadline } from '../../core/util/publi
 export { fetchPublic, readBodyCapped } from '../../core/util/publicHttp.js';
 export type { FetchPublicInit, FetchedPage } from '../../core/util/publicHttp.js';
 import { formatToolOutput } from '../outputPersist.js';
-import { resolveTools, isDeferredIn, type ToolProvider } from '../toolRegistry.js';
+import { resolveTools, isDeferredIn, builtinsAlwaysLoaded, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { deps } from '../../seams/runtime.js';
 import { toWebSource } from '../webSources.js';
@@ -325,7 +325,7 @@ export function browserReach(ctx: ToolContext): BrowserReach {
   const tools = resolveTools(ctx.profile ?? deps().profile, ctx);
   const t = tools.get('browser_navigate');
   if (!t) return null;
-  const locked = !ctx.muse && !ctx.automationOrigin && isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name);
+  const locked = !builtinsAlwaysLoaded(ctx) && isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name);
   // 'load' 要 load_tools 自己也够得着:限定工具集的 agent 名单里可以有浏览器却没有它
   return !locked ? 'ready' : ctx.unlockTools && tools.has('load_tools') ? 'load' : null;
 }

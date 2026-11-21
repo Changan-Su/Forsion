@@ -1,7 +1,7 @@
 /**
  * deferred tools 按需装载(P0-2,借 pi deferred-tools):
  * registry 级——defer 工具默认不进 defs、load_tools 只在「有未解锁项且调用方支持」时出现、
- *   解锁后追加在内置 defs 末尾、muse/automation 全量、deferGroup 连坐、部署白名单自动补 load_tools;
+ *   解锁后追加在内置 defs 末尾、自动化 run 全量(Muse 周期 11-21 起按需,常驻 MUSE_RESIDENT_TOOLS)、deferGroup 连坐、部署白名单自动补 load_tools;
  * loop 级——模型调 load_tools 后下一迭代 tools 里出现解锁工具;真实 delegate 子代理能自助解锁**能力面**、
  *   解锁不了**管理面**(manage_* 族),且不污染父 run 的解锁面。
  */
@@ -13,6 +13,7 @@ import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { getToolDefinitions, listDeferredTools, executeTool, deferredUnlocksFromHistory } from '../src/tools/registry.js';
 import type { ToolContext } from '../src/tools/registry.js';
+import { builtinsAlwaysLoaded, MUSE_RESIDENT_TOOLS } from '../src/tools/toolRegistry.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
@@ -110,14 +111,48 @@ describe('registry 级:defer 过滤与解锁', () => {
     expect(lean).not.toContain('manage_automation');
   });
 
-  it('muse / automation 系统 run:全量可见,load_tools 不出现', () => {
-    // Muse 三档都看得见 manage_automation;ask/agent 档只能提规则卡(execute 里收口,见 test/manageAutomationMuseCard)。
-    const got = names({ ...base, muse: true, approvalMode: 'full-auto', unlockTools: () => {} });
-    expect(got).toContain('manage_automation');
-    expect(names({ ...base, muse: true, approvalMode: 'auto-edit', unlockTools: () => {} })).toContain('manage_automation');
-    expect(got).not.toContain('load_tools');
+  it('自动化 run(不是 Muse 周期):全量可见,load_tools 不出现', () => {
     const auto = names({ ...base, automationOrigin: 'rule-1', unlockTools: () => {} });
     expect(auto).toContain('manage_automation');
+    expect(auto).toContain('calculator');
+    expect(auto).not.toContain('load_tools');
+    expect(listDeferredTools({ ...base, automationOrigin: 'rule-1' }, { builtins: !builtinsAlwaysLoaded({ automationOrigin: 'rule-1' }) })).toEqual([]);
+  });
+
+  it('Muse 周期(11-21 起按需装载):只有它每轮点名的 manage_schedule / review_loadout 常驻,其余走目录 + load_tools', async () => {
+    // Muse 周期 run 同时带 muse 与 automationOrigin='muse'(museAgentConfig)—— 豁免只看「不是 Muse 的自动化」。
+    const museCtx: ToolContext = { ...base, muse: true, automationOrigin: 'muse', agentSlug: 'muse', approvalMode: 'full-auto', unlockTools: () => {} };
+    expect(builtinsAlwaysLoaded(museCtx)).toBe(false);
+    for (const approvalMode of ['full-auto', 'auto-edit'] as const) {
+      const got = names({ ...museCtx, approvalMode });
+      expect(got).toContain('load_tools');
+      for (const n of MUSE_RESIDENT_TOOLS) expect(got, `${n} 在 Muse 周期常驻`).toContain(n);
+      for (const n of ['manage_automation', 'manage_agent', 'generate_image', 'calculator']) expect(got, `${n} 在 Muse 周期按需`).not.toContain(n);
+    }
+    const catalog = listDeferredTools(museCtx).map((d) => d.name);
+    expect(catalog).toContain('manage_automation');
+    for (const n of MUSE_RESIDENT_TOOLS) expect(catalog).not.toContain(n); // 常驻的不进目录(否则模型会先白花一轮 load_tools)
+    // 目录里列的都装得上:load_tools 与目录同一判定;常驻的报「已可用」
+    const unlocked: string[] = [];
+    const out = await executeTool({ id: 'c1', type: 'function', function: { name: 'load_tools', arguments: JSON.stringify({ names: ['manage_automation', 'manage_schedule'] }) } } as any,
+      { ...museCtx, unlockTools: (ns) => { unlocked.push(...ns); } });
+    expect(unlocked).toEqual(['manage_automation']);
+    expect(out.result).toMatch(/Already available: manage_schedule/);
+    // 解锁后追加在末尾
+    const after = names({ ...museCtx, unlockedTools: new Set(['manage_automation']) });
+    expect(after[after.length - 1]).toBe('manage_automation');
+    // 常驻名单只管 Muse 周期:手聊 Muse(没有 muse 旗标)照普通会话按需
+    expect(names({ ...base, agentSlug: 'muse', unlockTools: () => {} })).not.toContain('manage_schedule');
+  });
+
+  it('Muse 周期调了没装的工具:报错指到 load_tools(此前 Muse 全量可见、不给这条出路)', async () => {
+    const r = await executeTool({ id: 'c2', type: 'function', function: { name: 'no_such_tool_x', arguments: '{}' } } as any,
+      { ...base, muse: true, automationOrigin: 'muse', unlockTools: () => {} });
+    expect(r.isError).toBe(true);
+    expect(r.result).toMatch(/load_tools/);
+    const auto = await executeTool({ id: 'c3', type: 'function', function: { name: 'no_such_tool_x', arguments: '{}' } } as any,
+      { ...base, automationOrigin: 'rule-1', unlockTools: () => {} });
+    expect(auto.result).not.toMatch(/load_tools/);
   });
 
   it('load_tools 执行:deferGroup 连坐解锁 discussion 对;未知名报告', async () => {

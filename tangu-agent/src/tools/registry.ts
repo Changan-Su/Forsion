@@ -11,7 +11,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, builtinsAlwaysLoaded, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -290,15 +290,15 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const tools = resolveTools(currentProfile(ctx), ctx);
   // deferred 按需装载(P0-2,借 pi deferred-tools):defer 标记的工具默认不进 defs(系统提示只留
   // 目录一行),load_tools 解锁后**追加在内置 defs 末尾**——immediate 前缀字节不动,缓存只在解锁
-  // 那一刻断一次。系统驱动的 run(Muse/自动化)全量可见不吃这套;无 unlockTools 回调的调用方
-  // (delegate 子代理/群聊)看不到 load_tools,deferred 保持隐藏(拿到的就是精简集)。
-  const deferBypass = !!ctx.muse || !!ctx.automationOrigin;
+  // 那一刻断一次。不是 Muse 周期的自动化 run 全量可见不吃这套(builtinsAlwaysLoaded;Muse 11-21 起按需,常驻名单见
+  // MUSE_RESIDENT_TOOLS);无 unlockTools 回调的调用方(群聊)看不到 load_tools,deferred 保持隐藏(拿到的就是精简集)。
+  const deferBypass = builtinsAlwaysLoaded(ctx);
   const unlocked = ctx.unlockedTools;
   let lockedCount = 0;
   if (!deferBypass) {
     for (const t of tools.values()) if (isDeferredIn(ctx, t.name, t.deferred) && !unlocked?.has(t.name)) lockedCount++;
   }
-  // MCP 按需加载不吃 deferBypass(见 isMcpDeferred):Muse / 自动化 run 里只有 MCP 待装时也要露出 load_tools。
+  // MCP 按需加载不吃 deferBypass(见 isMcpDeferred):自动化 run 里只有 MCP 待装时也要露出 load_tools。
   // 先把自定义工具的名字并进来再算:与下面 defs 的撞名判定同一份。
   const ownedNames = new Set<string>([...tools.keys(), ...(ctx.customTools?.keys() ?? [])]);
   const mcpVisible = visibleMcpTools(ctx, ownedNames);
@@ -563,10 +563,10 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   if (computerUseHiddenNames(currentProfile(ctx), ctx, [name]).length) {
     return { toolCallId: call.id, name, result: `Tool "${name}" was not run. ${computerUseUnavailableReason(ctx.computerUseUnavailable)}`, isError: true };
   }
-  // 目录提示只在本 ctx 真有可解锁目录时给(delegate 无 unlockTools、Muse/自动化全量豁免,这些场景
+  // 目录提示只在本 ctx 真有可解锁目录时给(无 unlockTools 的调用方、自动化 run 全量豁免,这些场景
   // 没有 load_tools,瞎指会把「出路」变成第二次失败——Codex 评审 #4);plan 模式下 custom/MCP 工具
   // 根本不进 ctx、无法逐名识别 → 补一句模式级说明兜底(Codex 评审 #3)。
-  const canLoad = !!ctx.unlockTools && !ctx.muse && !ctx.automationOrigin &&
+  const canLoad = !!ctx.unlockTools && !builtinsAlwaysLoaded(ctx) &&
     [...resolveTools(currentProfile(ctx), ctx).values()].some((t) => isDeferredIn(ctx, t.name, t.deferred) && !ctx.unlockedTools?.has(t.name));
   const planNote = ctx.planMode ? ' Note: plan mode is active — custom/external tools are disabled until the plan is approved.' : '';
   const known = [...resolveTools(currentProfile(ctx), ctx).keys(), ...(externalOk ? [...(ctx.customTools?.keys() ?? []), ...(ctx.mcpTools?.keys() ?? [])] : [])];

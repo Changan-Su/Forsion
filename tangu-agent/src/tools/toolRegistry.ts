@@ -90,7 +90,7 @@ export { CODING_PRESET_DEFERRED } from '../core/presetTable.js';
 
 /** MCP 工具是否按需加载(11-06):缺省是 —— 一个连接器的工具定义动辄几十 KB,不用也每次请求都重读。
  *  server 配置 `deferLoading: false` 的常驻。与 isDeferredIn 分开判:内置工具的判定与工具快照字节一个不动;
- *  也**不吃** Muse / 自动化的 deferBypass —— 那条豁免是怕系统驱动的 run 找不到内置工具,第三方工具照样按需。 */
+ *  也**不吃**自动化 run 的豁免(builtinsAlwaysLoaded)—— 那条豁免是怕系统驱动的 run 找不到内置工具,第三方工具照样按需。 */
 export function isMcpDeferred(t: Pick<LoadedMcpTool, 'deferLoading'>): boolean {
   return t.deferLoading !== false;
 }
@@ -122,6 +122,23 @@ export function mcpCatalogHint(t: LoadedMcpTool): string {
  *  目录(listDeferredTools)、defs 过滤(getToolDefinitions)、解锁(load_tools)三处必须
  *  共用本判定——2026-08-09 前 load_tools 只认静态 deferred:true,coding 预设的情境 deferred
  *  工具在目录里被广而告之却解锁不了("Unknown/not loadable"),Codex 评审抓到的存量 bug。 */
+/** 本 run 的内置按需工具是否全量可见、不进「Additional Tools」目录:只剩**不是 Muse 周期**的自动化 run(规则 / 日程起的
+ *  agent_run)。Muse 周期 11-21 起按需装载 —— 每个周期的第一次调用都不命中缓存(心跳 2 小时,缓存早过期),全量可见时
+ *  34 件它几乎不用的按需工具(约 43 KB,约 1.1 万 token)每个周期都全价付一次(生产遥测 #785)。Muse 的周期 run 也带
+ *  automationOrigin='muse'(活动行防自激用),所以先排除 muse。MCP 不吃这条(见 isMcpDeferred)。
+ *  defs(registry.getToolDefinitions)、目录(agentLoop / subAgent 拼目录段)、未知工具的出路提示(executeTool)、
+ *  browserReach 五处共用,别各写一份:一分叉就是「目录里有、装不上」或「藏起来了、目录里没有」。 */
+export function builtinsAlwaysLoaded(ctx: Pick<ToolContext, 'muse' | 'automationOrigin'>): boolean {
+  return !!ctx.automationOrigin && !ctx.muse;
+}
+
+/** Muse 周期里照旧常驻的按需工具:它自己的周期指令每轮都点名的那几个。按需的代价是周期中途一次 load_tools ——
+ *  工具定义渲染在提示最前面,装一次 = 系统提示 + 整段历史按未命中价重算一遍(约 4.6 万),比常驻一个周期的钱贵得多;
+ *  所以只有「每轮都可能用」的留常驻。manage_schedule:kickoff 每轮让它排自己的跟进、到期日程让它改或删;
+ *  review_loadout:每周装备巡检那条日程点名调它。manage_automation 也被 kickoff 点名,但 8.6 KB、本机 103 个周期调过 0 次 ——
+ *  按需(装一次的钱 ≈ 常驻 5% 以上周期的钱)。名单只管 Muse 周期(ctx.muse),手聊 Muse 照普通会话走。 */
+export const MUSE_RESIDENT_TOOLS: ReadonlySet<string> = new Set(['manage_schedule', 'review_loadout']);
+
 export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
   // 子代理(delegate)现在**有** load_tools 这条通道了(subAgent.ts 给它自己的 unlockedTools/
   // unlockTools + 目录段),deferred 工具不再是「看不见且取不回」。这条窄口因此不再是能力闸,
@@ -131,6 +148,7 @@ export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean)
   // 而不是可恢复的报错,发现不了就不会去 load。
   // ponytail: 上限=一个工具名。别在这儿续名单 —— 其余按需工具走 load_tools 那条通道即可。
   if (name === 'read_document' && (ctx.subAgentDepth || 0) >= 1) return false;
+  if (ctx.muse && MUSE_RESIDENT_TOOLS.has(name)) return false;
   return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name) || (!!ctx.shelvedTools?.has(name) && isShelvable(name));
 }
 
