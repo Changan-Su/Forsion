@@ -726,7 +726,7 @@ async function main() {
       await win.locator(`[data-testid="selbar-more"] [data-pin="${K('m1')}"]`).click()
       await frames(win)
       const b2 = await barState(win)
-      check('⋯ 里钉上「搜索网页」:它真的上条(排到插件那组最前),挤下去的进 ⋯', b2?.row.join(',') === `quote,btw,speak,|,${K('m1')},${K('translate')},${K('b1')},more`, b2?.row.join(','))
+      check('⋯ 里钉上「搜索网页」:用户点名的先分到插件位(真的上条,先后照旧),缺省上条的挤下去进 ⋯', b2?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('m1')},more`, b2?.row.join(','))
       await win.locator(`[data-testid="selection-bar"] [data-act="${K('m1')}"]`).click({ button: 'right' })
       const menu = win.locator('.plugin-menu')
       await menu.waitFor({ timeout: 3000 })
@@ -826,9 +826,11 @@ async function main() {
       await win.evaluate(() => { window.__pins.delay = 0 })
       // 卡浮在上一段旁边,可能正好盖住同一条回复里的字(真人也划不到):换到屏上露着的一段历史(这次会话没自动跑过)
       const pick3 = await dragSelectAny(win, CHAT, ['第 50 条历史', '第 49 条历史', '第 48 条历史', '第 47 条历史', '第 46 条历史', '第 45 条历史'])
+      // 松手就中止旧的(dragSelect 松手后只等了 250ms,还没到 400ms 的自动时机)
+      const abortedEarly = await win.evaluate(() => window.__pins.aborted)
       const a2 = await until(async () => { const c = await card(win); return c?.phase === 'done' && c.preview === `T(Japanese|auto):${pick3.slice(0, 6)}` ? c : null }, 6000)
       const flash = await win.evaluate(() => ({ mark: document.querySelector('[data-testid="inline-ai-panel"]:not([data-lcl-exit])')?.__mark ?? null, removed: window.__panelRemoved, aborted: window.__pins.aborted }))
-      check('新划选:同一张卡跟到新那段重跑(没卸载过、不闪),在飞的旧请求被中止', !!a2 && flash.mark === 'first' && flash.removed === 0 && flash.aborted === aborted0 + 1, JSON.stringify({ pick3, a2, flash, aborted0, now: a2 ? undefined : await card(win) }))
+      check('新划选:松手就中止在飞的旧请求(不等 400ms),同一张卡跟到新那段重跑(没卸载过、不闪)', !!a2 && flash.mark === 'first' && flash.removed === 0 && flash.aborted === aborted0 + 1 && abortedEarly === aborted0 + 1, JSON.stringify({ pick3, abortedEarly, a2, flash, aborted0, now: a2 ? undefined : await card(win) }))
       const runs1 = await win.evaluate(() => window.__pins.runs.length)
       // 先点一下视图收掉这张卡(免得它盖住那段),再划回第一段:新开的卡直接用缓存
       const blank = await blankIn(win, CHAT)
@@ -854,7 +856,7 @@ async function main() {
         autos: [...document.querySelectorAll('[data-auto]')].map((x) => x.getAttribute('data-auto')),
       }))
       check('管理表:宿主那组(没有宿主翻译)+ 插件动作按条上的次序,放哪如实;只有支持的那个有自动开关并挂「先跑」',
-        table.rows.join(',') === `host:ask:bar,host:speak:bar,${K('m1')}:more,${K('translate')}:bar,${K('b1')}:bar,${K('b2')}:bar,${K('b3')}:bar,${K('b4')}:bar` && table.first.join(',') === K('translate') && table.autos.join(',') === K('translate'), JSON.stringify(table))
+        table.rows.join(',') === `host:ask:bar,host:speak:bar,${K('translate')}:bar,${K('b1')}:bar,${K('b2')}:bar,${K('b3')}:bar,${K('b4')}:bar,${K('m1')}:more` && table.first.join(',') === K('translate') && table.autos.join(',') === K('translate'), JSON.stringify(table))
       await fl.locator('[data-testid="selection-actions-table"]').screenshot({ path: path.join(shots, 'pins-settings-table.png') })
       await fl.locator(`[data-selaction="${K('b2')}"] [data-place="hidden"]`).click()
       await fl.close().catch(() => {})
