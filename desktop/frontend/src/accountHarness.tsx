@@ -17,6 +17,8 @@ import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 st
 setLocaleGlobal('zh')
 const withRewards = new URLSearchParams(location.search).has('rewards')
 const withBg = new URLSearchParams(location.search).has('bg')
+// ?unlimited:今日不限 + 带积分余额(11-20:不限那档不画,积分跟在额度里)
+const unlimitedDaily = new URLSearchParams(location.search).has('unlimited')
 applyTheme('lovable', 'cream', 'paper', 'light')
 const accounts: AuthAccountInfo[] = [
   { id: 'alice', cloudUrl: 'https://example.test', username: 'Alice', active: true },
@@ -35,6 +37,7 @@ const bridge: Partial<NonNullable<Window['tangu']>> = {
   ...(withRewards ? { cloudInvoke: async () => ({ ok: true }), cloudFetch: async ({ path }: { path: string }) => ({ status: 200, json: path === '/credits/balance' ? { balance: active === 'alice' ? 1280 : 0 } : { code: 'DEMO' } }) } : {}),
   accountQuota: async () => ({ status: 200, json: {
     dailyPercent: 10, weeklyPercent: 25, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-09-28',
+    ...(unlimitedDaily ? { dailyLimit: -1, pointsBalance: 1280 } : {}),
     // ?bg:服务端带回后台额度(Muse / 自动化那一桶),菜单「额度剩余」下多一行「后台智能体」
     ...(withBg ? { background: { modelId: 'm-cheap', sharePercent: 15, dailyLimit: 15, dailyRemaining: 9, weeklyLimit: 75, weeklyRemaining: 60 } } : {}),
   } }),
