@@ -385,6 +385,8 @@ export async function runMigration(): Promise<void> {
     ['agent_runs', 'interrupted_at TIMESTAMP'],
     // 用户按停 / 急停 / 级联取消 / 通道下线(评审 #2):abortRun 当场记下,强杀后重启据此按 aborted 收尾、不续跑。
     ['agent_runs', 'cancel_requested VARCHAR(32)'],
+    // Muse 待办的依据(2026-11-20,add_muse_todo 必填):JSON 数组 [{kind, source, quote}],卡片按 id 读。NULL = 升级前的行,卡上不画。
+    ['muse_todos', 'evidence TEXT'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);

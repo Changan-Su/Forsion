@@ -1461,7 +1461,8 @@ export function buildTriggerKickoff(fired: MuseTrigger[]): string {
   const uniq = [...new Map(fired.map((t) => [t.id, t])).values()];
   const lines = uniq.slice(0, 5).map((t) => `- ${t.desc} (${condSummary(t.cond)})${t.prompt ? ` — ${t.prompt}` : ''}`);
   return (
-    '\n\n[Watch triggers fired this cycle — the user explicitly asked to be told about these; handle them FIRST via add_muse_todo]\n' +
+    // 11-20:add_muse_todo 必填依据。命中的规则本身就是依据 —— 写在这里,免得它漏了依据被拒、收尾时这次命中就丢了(一次性规则起周期时已关;Codex 11-20 P2)。
+    '\n\n[Watch triggers fired this cycle — the user explicitly asked to be told about these; handle them FIRST via add_muse_todo, citing the fired rule as evidence (kind "rule", the rule as source, its condition as quote)]\n' +
     lines.join('\n')
   );
 }
