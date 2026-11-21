@@ -322,6 +322,10 @@ A plugin can ship its own MCP servers (only ones that run on this computer). Onc
 
 Plugins can also receive file events in your vault: files created, deleted, renamed or moved in Forsion, changed by another program or by Tangu, and switching vaults. Backlink and tidy-up plugins use this to keep up with changes without rescanning the vault again and again. For the API, see the plugin development skill's sections on bundled MCP servers and hooks and on vault file events (`ctx.app.onVaultEvent`); how a plugin command hands query results back to Tangu is in the "`invoke`" section.
 
+## Plugins in multi-account mode (2026-11-21+)
+
+The local engine can run in "multi-account mode": several accounts on one machine share one engine process, and each account's chats, agents, memory, skills and files live in that account's own folder. In this mode the engine takes only two things from a plugin bundle, both read-only: the agent personas in `agents/` and the skills in `skills/`. It does not load the engine code in `tangu-plugins/`, and it does not start the plugin's own MCP servers or hooks. If a plugin should work in this mode, put its core abilities in personas and skills rather than in an engine plugin. The default single-user mode is unchanged and still loads everything.
+
 ## Folders, file times, renaming and moving in the vault (2026-11-16+)
 
 Plugins can create folders, read a file's size and times, and rename or move files in the vault, the same way you do it in the file tree: renaming or moving a note rewrites the `[[links]]` to it across the vault, editors that have it open follow, and its subnotes move with it. All of these need an open vault; older hosts don't have them, so check with optional chaining.

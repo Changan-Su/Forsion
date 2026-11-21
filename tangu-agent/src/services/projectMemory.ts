@@ -22,6 +22,7 @@
  *
  * 归属只认会话存档的 project_path(humanProjectScope 的做法),绝不接受模型或客户端给的路径。
  */
+import { withinAccountRoot } from '../core/accountScope.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -75,6 +76,7 @@ export function projectMemoryRoot(project: string): string {
   let dir = own;
   for (let hop = 0; hop < 64; hop++) {
     if (homes.some((home) => isInsideOrSame(home, dir))) break; // 到了家目录或它上面
+    if (!withinAccountRoot(dir)) break; // 多账号模式:上溯在账号文件夹停住(core/accountScope.ts)
     const dotGit = path.join(dir, '.git');
     let kind: 'dir' | 'file' | null = null;
     try { const st = lstatSync(dotGit); kind = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : null; } catch { /* 没有:往上 */ }

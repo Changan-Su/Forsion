@@ -15,6 +15,7 @@
  * delete_path is recoverable by default: the item goes to the engine's Trash (services/trash.ts, kind 'file') — the
  * same place deleted agents, skills and plugins go. The user restores it from Settings › Trash; it is cleared after 30 days.
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { promises as fs, realpathSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
@@ -311,6 +312,7 @@ function openWithDefaultApp(target: string): Promise<{ ok: boolean; error?: stri
     env.TANGU_OPEN_PATH = target;
   } else { file = 'xdg-open'; argv = [target]; }
   return new Promise((resolve) => {
+    { const denied = hostSpawnDenied('open_path'); if (denied) { resolve({ ok: false, error: denied }); return; } }
     execFile(file, argv, { env, timeout: 20_000, windowsHide: true }, (err, _out, stderr) => {
       if (!err) resolve({ ok: true });
       else resolve({ ok: false, error: String(stderr || err.message || err).trim().slice(0, 400) });

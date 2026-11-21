@@ -16,6 +16,7 @@ import { fromShellPath, hostShell, hostShellName, hostShellQuoting } from './hos
 import { pinSystemFindstr } from './cmdReadOnly.js';
 import { HOST_FILE_OP_TOOLS } from './hostFileOps.js';
 import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
+import { isMultiAccount } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -564,13 +565,16 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       }
       if (!entries.length) return '(empty directory)';
       const lines: string[] = [];
+      const multi = isMultiAccount();
       for (const e of entries) {
         if (e.isDirectory()) lines.push(`[dir]  ${e.name}/`);
+        else if (multi && e.isSymbolicLink()) lines.push(`[link] ${e.name}`); // 多账号模式:软链不跟,不报目标的元数据
         else {
           let size = 0;
           try {
             // The helper batches metadata reads in one sandbox launch for the whole directory.
-            size = hostSandboxEnabled(ctx) ? (e as any).sandboxSize : (await fs.stat(path.join(abs, e.name))).size;
+            // 多账号模式用 lstat(不跟软链)
+            size = hostSandboxEnabled(ctx) ? (e as any).sandboxSize : (await (multi ? fs.lstat : fs.stat)(path.join(abs, e.name))).size;
           } catch {
             /* ignore */
           }
