@@ -168,19 +168,23 @@ describe('add_muse_todo 必填依据(借鉴 dsh-superagent 第 2 条,11-20)', ()
     expect(parseStoredEvidence(JSON.stringify([{ source: { toString: 0 }, quote: 'q' }, { source: 's', quote: 'q' }]))).toEqual([{ kind: 'other', source: 's', quote: 'q' }]);
   });
 
-  it('工具定义:evidence 必填、条数 1–3;描述里有三个判断与三条反例(英文,进模型)', () => {
+  it('工具定义:evidence 必填、条数 1–3;三个判断与三条反例在 evidence 字段说明里、不在工具描述里(英文,进模型)', () => {
     const fn = (tool.definition as any).function;
     expect(fn.parameters.required).toEqual(['title', 'evidence']);
     expect(fn.parameters.properties.evidence).toMatchObject({ type: 'array', minItems: 1, maxItems: 3 });
     expect(fn.parameters.properties.evidence.items.required).toEqual(['source', 'quote']);
+    // 11-21 live:写在工具描述里时 Muse 对投收件箱也犹豫,所以只放在填依据时才读到的地方,并写明只管提待办
     const d: string = fn.description;
-    expect(d).toContain("it is the user's own matter; they actually want it");
-    expect(d).toContain('it needs no choice made on their behalf');
-    expect(d).toContain('often reading about a topic does not mean they want to act on it');
-    expect(d).toContain('saying a screen looks bad does not authorize changing it');
-    expect(d).toContain('discussing a plan does not mean the plan is decided');
-    expect(d).toContain('A watch rule the user set that fired is evidence in itself');
-    expect(/[一-鿿]/.test(d)).toBe(false);
-    expect(/[一-鿿]/.test(EVIDENCE_REQUIRED_ERROR)).toBe(false);
+    expect(d).not.toContain('Propose only when all three hold');
+    expect(d).not.toContain('These alone are not evidence');
+    const e: string = fn.parameters.properties.evidence.description;
+    expect(e).toContain("the todo is the user's own matter and that they want it");
+    expect(e).toContain('needs no choice made on their behalf');
+    expect(e).toContain('often reading about a topic does not mean they want to act on it');
+    expect(e).toContain('saying a screen looks bad does not authorize changing it');
+    expect(e).toContain('discussing a plan does not mean the plan is decided');
+    expect(e).toContain('A watch rule the user set that fired is evidence in itself');
+    expect(e).toContain('This bar is for proposing todos only; finished work still goes to the inbox as usual');
+    for (const s of [d, e, EVIDENCE_REQUIRED_ERROR]) expect(/[一-鿿]/.test(s)).toBe(false);
   });
 });

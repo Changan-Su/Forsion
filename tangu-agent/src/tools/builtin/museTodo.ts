@@ -102,12 +102,7 @@ export const museTodoProvider: ToolProvider = {
             '(rendered as an Amadeus note — markdown, callouts, `[[note]]` links; mention files outside the vault by absolute path), and the app appends an ' +
             'action card (let Muse do it / run in a new session / ignore) whose brief is the title plus the detail — so make the detail self-contained: ' +
             'why it matters, concrete steps, exact paths or symptoms, and how to verify. Do not write forsion-task fences yourself. ' +
-            'Use each opportunity wisely; only submit suggestions truly worth the user\'s time and actionable right now; keep the title concise. ' +
-            // 借鉴 dsh-superagent 方案第 2 条(11-20):三个判断 + 三条反例。写在工具描述(Muse 才看得见这个工具)而不进落库的 kickoff:
-            // kickoff 有长度帽,节奏规矩之前加句子 10-30 实测会让它忘了 set_next_wake;人格(config.toml)老装机拿不到。
-            'Propose only when all three hold: it is the user\'s own matter; they actually want it (they asked for it or plainly showed it); and it needs no choice made on their behalf. ' +
-            'These are not evidence that they want it: often reading about a topic does not mean they want to act on it; saying a screen looks bad does not authorize changing it; discussing a plan does not mean the plan is decided. ' +
-            'A watch rule the user set that fired is evidence in itself. Cite what shows it in evidence; if you cannot, keep looking or drop the idea.',
+            'Use each opportunity wisely; only submit suggestions truly worth the user\'s time and actionable right now; keep the title concise.',
           parameters: {
             type: 'object',
             properties: {
@@ -117,7 +112,15 @@ export const museTodoProvider: ToolProvider = {
                 type: 'array',
                 minItems: 1,
                 maxItems: EVIDENCE_MAX_ITEMS,
-                description: 'Required. 1 to 3 items showing the user wants this; the app lists them on the card under "Evidence". Use absolute dates, not "today" (the card stays up for days).',
+                // 借鉴 dsh-superagent 第 2 条(11-20):三个判断 + 三条反例。11-21 从工具描述挪到这里:写在工具描述里时,
+                // 它对「把做完的成品投进收件箱」也变犹豫(live musedm 只删这段的隔离臂 4/6,对照 main 3/6;整版另一轮 3/6 对 main 6/6)。
+                // 这里只在填依据时读到;末句写明门槛只管提待办。不进 kickoff(有长度帽,10-30 实测会忘 set_next_wake),不进人格(老装机拿不到)。
+                description:
+                  'Required. 1 to 3 items showing the todo is the user\'s own matter and that they want it (they asked for it or plainly showed it), and that doing it needs no choice made on their behalf. ' +
+                  'These alone are not evidence: often reading about a topic does not mean they want to act on it; saying a screen looks bad does not authorize changing it; discussing a plan does not mean the plan is decided. ' +
+                  'A watch rule the user set that fired is evidence in itself (kind "rule"). If you cannot cite anything, keep looking or drop the todo. ' +
+                  'This bar is for proposing todos only; finished work still goes to the inbox as usual. ' +
+                  'The app lists these on the card under "Evidence". Use absolute dates, not "today" (the card stays up for days).',
                 items: {
                   type: 'object',
                   properties: {
