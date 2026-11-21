@@ -16,6 +16,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { EditorState, Plugin, TextSelection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Fragment, Slice, type Node as PMNode, type Schema } from '@milkdown/kit/prose/model'
+import { Transform } from '@milkdown/kit/prose/transform'
 import { insertHardbreakCommand } from '@milkdown/kit/preset/commonmark'
 import { chatBoxEditorPlugins } from './editorPlugins'
 import { minimizeEscapes, type ChatBoxFormat } from './chatBoxMarkdown'
@@ -63,12 +64,41 @@ export interface ChatBoxEditorProps {
 const LEAF = '￼'
 
 /** Serialize the way the box stores it: the profile serializer, no trailing newline, then every escape the parse doesn't need dropped. */
-/** Whitespace at the very start / end of a value, as typed or as the serializer spells it to keep it (`&#x20;`). */
-const EDGE_SPACE = /^(?:[ \t]|&#(?:x20|32|x9|9);)+|(?:[ \t]|&#(?:x20|32|x9|9);)+$/gi
+/** Spaces, tabs and line breaks at the very start of the first text block and the end of the last one go: Markdown reads a
+ *  value without them, and the serializer would spell them as `&#x20;` to keep them (a title ended in one after an `@` pick).
+ *  Done on the document, not the string, so a typed `&#x20;` or `\` at the end stays text. A code block keeps its own. */
+export function trimDocEdges(doc: PMNode): PMNode {
+  const blocks: Array<{ node: PMNode; pos: number }> = []
+  doc.descendants((n, pos) => { if (n.isTextblock) { blocks.push({ node: n, pos }); return false } return true })
+  if (!blocks.length) return doc
+  const blank = (c: PMNode): number => (c.isText ? /^[ \t]*$/.test(c.text ?? '') ? c.nodeSize : -1 : c.type.name === 'hardbreak' ? c.nodeSize : -1)
+  const run = (b: PMNode, fromEnd: boolean): number => {
+    if (b.type.spec.code) return 0
+    let k = 0
+    for (let i = 0; i < b.childCount; i++) {
+      const c = b.child(fromEnd ? b.childCount - 1 - i : i)
+      const whole = blank(c)
+      if (whole >= 0) { k += whole; continue }
+      if (c.isText) k += (fromEnd ? /[ \t]*$/ : /^[ \t]*/).exec(c.text ?? '')![0].length
+      break
+    }
+    return k
+  }
+  const first = blocks[0], last = blocks[blocks.length - 1]
+  const lastStart = last.pos + 1, lastEnd = lastStart + last.node.content.size
+  const lead = run(first.node, false), trail = run(last.node, true)
+  if (!lead && !trail) return doc
+  const tr = new Transform(doc)
+  if (first === last && lead + trail >= first.node.content.size) tr.delete(lastStart, lastEnd)
+  else {
+    if (trail) tr.delete(lastEnd - trail, lastEnd)
+    if (lead) tr.delete(first.pos + 1, first.pos + 1 + lead)
+  }
+  return tr.doc
+}
 
 export function storeMarkdown(ctx: Ctx, doc: PMNode): string {
-  // Edge whitespace isn't kept (Markdown reads a value without it; a title would end in `&#x20;` after an `@` pick).
-  const raw = ctx.get(serializerCtx)(doc).replace(/\n+$/, '').replace(EDGE_SPACE, '')
+  const raw = ctx.get(serializerCtx)(trimDocEdges(doc)).replace(/\n+$/, '')
   const parse = ctx.get(parserCtx)
   let base: PMNode | undefined
   try { base = parse(raw) as PMNode } catch { return raw }

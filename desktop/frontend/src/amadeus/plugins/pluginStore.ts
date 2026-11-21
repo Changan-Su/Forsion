@@ -2539,7 +2539,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
-      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
+      // The formatting editor isn't verified on the phone yet (soft keyboard Enter, Gboard composition): the phone keeps the
+      // textarea and doesn't report 'format'. The reader stays, so stored titles still show formatted there (11-21).
+      chatBoxCapabilities: hostTangu()?.mobile ? CHAT_BOX_CAPABILITIES.filter((c) => c !== 'format') : CHAT_BOX_CAPABILITIES,
       parseInlineMarkdown: (md) => parseInlineMarkdown(String(md ?? '')),
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
@@ -2547,7 +2549,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
         let cancelled = false, focusPending = false
-        const pending = { ...opts }
+        const noFormat = !!hostTangu()?.mobile // see chatBoxCapabilities: the phone ignores `format`, as an older host would
+        const strip = <T extends { format?: unknown }>(o: T): T => { if (!noFormat || !('format' in o)) return o; const { format: _drop, ...rest } = o; return rest as T }
+        const pending = strip({ ...opts })
         const early: string[] = [] // format boxes: the value is Markdown, so text typed in before the mount goes in as text
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
         const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
@@ -2559,7 +2563,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
         return {
-          update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
+          update(patch) { if (!cancelled) { const p = strip({ ...patch }); Object.assign(pending, p); mounted?.update(p) } },
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
           insertText(text) {
             if (cancelled) return

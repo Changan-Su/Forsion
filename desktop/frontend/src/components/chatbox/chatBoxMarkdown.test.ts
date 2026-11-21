@@ -162,6 +162,13 @@ describe('edge whitespace (Electron acceptance 11-21)', () => {
         expect(b.store(doc('交周报 5*3 '))).toBe('交周报 5*3')
         expect(b.store(doc('  前后  '))).toBe('前后')
         expect(b.store(doc('a  b'))).toBe('a  b')
+        // typed as characters: a literal reference stays text (it needs its `\\`, or it would read as a trailing space)
+        expect(b.store(doc('x &#x20;'))).toBe('x \\&#x20;')
+        expect(inlineMarkdownToPlain('x \\&#x20;')).toBe('x &#x20;')
+        expect(b.store(doc('x \\'))).toBe('x \\')
+        const marked = b.schema.node('doc', null, [b.schema.node('paragraph', null, [b.schema.text(' '), b.schema.text('粗', [b.schema.marks.strong.create()]), b.schema.text(' ')])])
+        expect(b.store(marked)).toBe('**粗**')
+        expect(b.store(doc('   '))).toBe('')
       } finally { await b.destroy() }
     }
   })

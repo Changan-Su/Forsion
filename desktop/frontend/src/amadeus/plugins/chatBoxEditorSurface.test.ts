@@ -238,6 +238,27 @@ describe('format: review 11-21 (second pass)', () => {
   })
 })
 
+describe('format on the phone (11-21: not verified there yet)', () => {
+  it('the phone host reports no format capability and keeps the textarea; the reader is still there', async () => {
+    vi.stubGlobal('tangu', { ...(window as unknown as { tangu?: object }).tangu, mobile: true })
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    let caps: readonly string[] | undefined, reader: unknown
+    await act(async () => {
+      usePluginStore.getState().init([{ id: 'chatbox-format-phone', name: 'Phone', version: '1', setup(ctx) {
+        caps = ctx.ui!.chatBoxCapabilities; reader = ctx.ui!.parseInlineMarkdown
+        box = ctx.ui!.mountChatBox!(el, { modelPicker: false, format: 'inline', value: '**a**', onSubmit: () => false })
+        box.update({ format: 'basic' })
+      } }])
+      await new Promise(resolve => setTimeout(resolve, 20))
+    })
+    expect(caps).not.toContain('format')
+    expect(caps).toContain('mentions')
+    expect(typeof reader).toBe('function')
+    expect(editor()).toBeNull()
+    expect(el.querySelector('textarea')?.value).toBe('**a**')
+  })
+})
+
 describe('format: basic', () => {
   it('holds lists; Enter in a list item does not submit, Shift+Enter is a line break', async () => {
     const onChange = vi.fn(), onSubmit = vi.fn(() => false)

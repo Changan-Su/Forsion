@@ -86,8 +86,10 @@ export interface PluginChatBoxOptions {
    *  does nothing, pasted lines are joined). `'basic'`: inline plus bullet / numbered / task lists, quotes and code blocks.
    *  Neither has headings, tables, callouts, embeds, images, HTML or bare-URL links: those stay literal text.
    *  The value keeps text as typed (`snake_case`, URLs, `5*3`, `1. x` are stored without backslashes); only text that would
-   *  otherwise turn into formatting keeps a `\`. Show it with `ctx.ui.parseInlineMarkdown` or your own CommonMark reader.
-   *  Older hosts ignore it (plain textarea, plain text). Set it at mount; `update({ format })` re-creates the input. */
+   *  otherwise turn into formatting keeps a `\`. Leading / trailing whitespace isn't kept (Markdown doesn't read it), so
+   *  `onChange` text can lack the space shown after a pick. Show it with `ctx.ui.parseInlineMarkdown` or your own CommonMark
+   *  reader. Older hosts ignore it (plain textarea, plain text), and so does the phone for now (no `'format'` capability
+   *  there; the reader is). Set it at mount; `update({ format })` re-creates the input. */
   format?: ChatBoxFormat
   onChange?(draft: ChatBoxSubmission): void
   /** true clears the submitted text; false/rejection keeps it for retry. No automatic AI run. */

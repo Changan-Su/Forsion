@@ -119,10 +119,10 @@ const box = ctx.ui?.mountChatBox?.(el, {
 - `'inline'`：一行内的格式。加粗 `**x**`、斜体 `*x*`、删除线 `~~x~~`、行内代码 `` `x` ``、链接 `[x](url)`；快捷键 ⌘/Ctrl+B、I、E，⌘/Ctrl+Alt+X 删除线。只有一行：`submitOn: 'enter'` 时 Enter 提交，Shift+Enter 什么都不做，粘贴多行合成一行。适合标题、待办这类一行的东西。
 - `'basic'`：`inline` 加上无序 / 有序 / 任务列表、引用、代码块，Shift+Enter 换行；列表和代码块里的 Enter 同笔记（列表续一项，代码块里换行）。
 - 两档都没有标题、表格、标注、嵌入、图片、HTML 和裸网址自动成链接：`# 标题`、`![图](x.png)`、`https://…` 原样是字。
-- 纯文字一字不差：`snake_case`、网址、`5*3`、`1. 买菜`、`# 不是标题` 存下来和打的一样，不会多出反斜杠；只有本来会变成格式的字才留一个 `\`（比如想要字面的 `**`）。所以没用格式的值，老读者（旧版本、Agent、直接读库）看到的和以前一样。
+- 纯文字一字不差：`snake_case`、网址、`5*3`、`1. 买菜`、`# 不是标题` 存下来和打的一样，不会多出反斜杠；只有本来会变成格式的字才留一个 `\`（比如想要字面的 `**`）。所以没用格式的值，老读者（旧版本、Agent、直接读库）看到的和以前一样。值的首尾空白不保留（Markdown 本来不认）：选完补全后屏幕上的那个空格还在，`onChange` 的文字里没有。
 - `#`、`[[`、`@` 补全和 `insertText` 照旧。`insertText` 插的是字面文字，不按 Markdown 解析。
 - 显示存下来的值用 `ctx.ui.parseInlineMarkdown(md)`：和输入框同一套语法，同步、不抛错，返回 `{ text, strong?, em?, strike?, code?, href?, wiki?, from, to }[]`。`[[名字|别名]]` 那段带 `wiki`（原文）、`text` 是显示名；`from` / `to` 是这段字在原文里的位置（不含定界符），自己再解析原文时（比如从标题里认日期）可以绕开带格式的段。读屏标签、悬停、通知、排序用纯文字：把每段的 `text` 连起来。`href` 打开前自己查协议。
-- 先看 `ctx.ui.chatBoxCapabilities?.includes('format')`。旧宿主忽略 `format`，也没有 `parseInlineMarkdown`，输入框是纯文本框、写不出格式，存量的值照旧按纯文字显示就对。
+- 先看 `ctx.ui.chatBoxCapabilities?.includes('format')`。旧宿主忽略 `format`，也没有 `parseInlineMarkdown`，输入框是纯文本框、写不出格式，存量的值照旧按纯文字显示就对。手机端暂时也不报 `'format'`、忽略这个选项（编辑器在手机输入法上还没验过），但有 `parseInlineMarkdown`，存下的值照样能按格式显示。
 - 挂载时定好；`update({ format })` 会重建输入框（草稿保留，撤销历史清空）。
 
 ```js

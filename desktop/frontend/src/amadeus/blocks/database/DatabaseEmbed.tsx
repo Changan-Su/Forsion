@@ -67,6 +67,7 @@ import { newTabOf } from '../../../views/itemSelect'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
 import { HUMAN_CAL } from '../../store/humanCalendarIo'
+import { todoTitleColumn } from './todoTitle'
 import { inlineMarkdownToPlain, parseInlineMarkdown } from '../../../components/chatbox/chatBoxMarkdown'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
 import { monthGridDays, useWeekStart, weekdays } from '../../../views/calendar/dateUtils'
@@ -666,8 +667,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const calByVault = useCalendarConfig((s) => s.byVault)
   const addMember = useCalendarConfig((s) => s.addMember)
   // Todo lists = calendar members with a done column (and the default calendar): their title column is the todo box's Markdown.
-  const todoCheck = memberOf(vault, calByVault, dbPath)?.checkboxCol // the mapped Done column, only while it still is one
-  const mdTitleCol = (dbRef === HUMAN_CAL || (!!todoCheck && db.columns.some((c) => c.id === todoCheck && c.type === 'checkbox'))) && db.columns[0]?.type === 'text' ? db.columns[0].id : null
+  const mdTitleCol = todoTitleColumn(vault, calByVault, dbRef === HUMAN_CAL ? HUMAN_CAL : dbPath, db.columns)
 
   const identityId = db.columns[0]?.id
   const isIdentity = (colId: string): boolean => colId === identityId
