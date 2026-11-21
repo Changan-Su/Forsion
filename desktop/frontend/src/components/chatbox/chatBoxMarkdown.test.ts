@@ -35,9 +35,11 @@ async function boot(format: ChatBoxFormat): Promise<Booted> {
 /** Plain-text titles people write. Each is stored exactly as typed. */
 const AS_TYPED = ['5*3', 'a_b_c', 'snake_case_name', '#工作 交周报', '[[评审议程]]', '1. 买菜', '- x', '2026. 计划', 'C:\\dir\\a',
   'https://forsion.net/a_b?x=1&y=2', '@2026-11-21', '交周报 @2026-11-21T17:00', '<b>x</b>', '50% off & more', 'a  b', '> 引用',
-  '价格 $5 * 2', '# 标题', '3~5 小时', '![[图.png]]', '[^1] 注', '| a | b |', '---', 'www.forsion.net', 'mail me@x.cn']
+  '价格 $5 * 2', '# 标题', '3~5 小时', '![[图.png]]', '[^1] 注', '| a | b |', '---', 'www.forsion.net', 'mail me@x.cn',
+  // review 11-21: images are off, so `![x](y)` is text, not `!` + a link; a later pass frees an escape an earlier one kept
+  '![cat](pic.png)', '*a**b']
 /** Text that spells formatting: typed as plain characters it keeps the fewest backslashes that stop it turning into marks. */
-const MARKUP = ['**会前材料**：设计', '`code`', '~~删~~', '[链接](https://a.b)', '*重要* 回电话', '<https://a.b>']
+const MARKUP = ['**会前材料**：设计', '`code`', '~~删~~', '[链接](https://a.b)', '*重要* 回电话', '<https://a.b>', '[[*x*]] 里']
 
 describe('inline profile', () => {
   let b: Booted
@@ -85,6 +87,13 @@ describe('inline profile', () => {
     const doc = s.node('doc', null, [s.node('paragraph', null, [s.text('abc\u00A0', [s.marks.strong.create()])])])
     expect(b.store(doc)).toBe('**abc&#xA0;**')
   })
+  it('a line break in a value reads as a space (the inline schema has no break node)', () => {
+    for (const md of ['A  \nB', 'A\\\nB', 'A\nB']) {
+      const doc = b.parse(md)
+      expect(doc.textContent, JSON.stringify(md)).toBe('A B')
+      expect(parseInlineMarkdown(md).map((t) => t.text).join('')).toBe('A B')
+    }
+  })
   it('several paragraphs in a value read as one line, nothing dropped', () => {
     const doc = b.parse('第一行\n\n第二行')
     expect(doc.childCount).toBe(1)
@@ -122,6 +131,13 @@ describe('parseInlineMarkdown', () => {
       { text: ' 和 ', from: 12, to: 15 },
       { text: 'a_b_c', wiki: 'a_b_c', from: 15, to: 24 },
     ])
+  })
+  it('wiki links are read where the editor sees text: not in code, not split by marks (review 11-21)', () => {
+    expect(parseInlineMarkdown('`[[x]]`')).toEqual([{ text: '[[x]]', code: true, from: 1, to: 6 }])
+    expect(parseInlineMarkdown('[[*x*]]').some((t) => t.wiki !== undefined)).toBe(false)
+    const src = '&#65;[[p]]'
+    const w = parseInlineMarkdown(src).find((t) => t.wiki !== undefined)!
+    expect(src.slice(w.from, w.to)).toBe('[[p]]')
   })
   it('offsets point at the run in the source, inside its delimiters', () => {
     const src = '交周报 **明天下午** 前'

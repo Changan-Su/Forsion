@@ -10,7 +10,7 @@
  *    line break; ⌘/Ctrl+Enter always submits. A suggest menu that is open takes Enter first (it stops the event).
  *  - The handle speaks plain text of the caret's block, so the suggest machinery that works on a textarea works here too. */
 import { useEffect, useRef, type MutableRefObject } from 'react'
-import { Editor, commandsCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, rootAttrsCtx, rootCtx, serializerCtx, defaultValueCtx } from '@milkdown/kit/core'
+import { Editor, commandsCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, parserCtx, rootAttrsCtx, rootCtx, serializerCtx } from '@milkdown/kit/core'
 import type { Ctx } from '@milkdown/kit/ctx'
 import { $prose } from '@milkdown/kit/utils'
 import { EditorState, Plugin, TextSelection } from '@milkdown/kit/prose/state'
@@ -33,8 +33,10 @@ export interface ChatBoxEditorHandle {
   /** Replace `[from, to)` of that block's text with plain `text` and put the caret after it. */
   replace(block: number, from: number, to: number, text: string): boolean
   rect(block: number, offset: number): { left: number; top: number; bottom: number } | null
-  /** Insert plain text at the selection; false while the editor is still starting (the caller keeps it in the value). */
-  insertText(text: string): boolean
+  /** Insert plain text at the selection (queued while the editor is starting: it is text, never parsed as Markdown). */
+  insertText(text: string): void
+  /** Show this value now (the box's `update({ value })`), without waiting for React: what Enter submits is what is on screen. */
+  setValue(markdown: string): void
 }
 
 export interface ChatBoxEditorProps {
@@ -49,7 +51,7 @@ export interface ChatBoxEditorProps {
   handle: MutableRefObject<ChatBoxEditorHandle | null>
   /** After the user changed the text (the suggest menu re-reads). */
   onTextInput?(): void
-  /** The caret moved without a text change. */
+  /** The caret moved without a text change, or a value from outside replaced the document. */
   onCaretMove?(): void
   onCompositionStart?(): void
   onCompositionEnd?(): void
@@ -90,17 +92,27 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
   live.current = props
   const editor = useRef<{ view: EditorView; ctx: Ctx; ed: Editor } | null>(null)
   /** What the document stands for: the last value emitted or applied. A `value` prop equal to it is no news. */
-  const shown = useRef(props.value)
+  const shown = useRef<string | null>(null) // null until the first value is in
   const applying = useRef(false)
+  const queued = useRef<string[]>([])
+  const focusQueued = useRef(false)
+  const composition = useRef(0)
+  /** Replace the document with `value` (a fresh undo history; no onChange). A value the grammar can't read shows as text. */
   const applyValue = (value: string): void => {
     const e = editor.current
     if (!e || value === shown.current) return
+    const schema = e.view.state.schema
     let doc: PMNode
-    try { doc = e.ctx.get(parserCtx)(value || '') as PMNode } catch (err) { console.error('[chatbox] could not read value', err); return }
+    try { doc = e.ctx.get(parserCtx)(value || '') as PMNode } catch (err) {
+      console.error('[chatbox] could not read value; showing it as text', err)
+      const line = (value || '').replace(/\s*\n\s*/g, ' ')
+      doc = schema.node('doc', null, [schema.nodes.paragraph.create(null, line ? schema.text(line) : undefined)])
+    }
     const state = EditorState.create({ doc, plugins: e.view.state.plugins, selection: TextSelection.atEnd(doc) })
     shown.current = value
     applying.current = true
     try { e.view.updateState(state) } finally { applying.current = false }
+    live.current.onCaretMove?.() // an open suggest menu's range belonged to the old document
   }
 
   useEffect(() => {
@@ -108,7 +120,6 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
     let cancelled = false
     let made: Editor | null = null
     const { format } = live.current
-    const initial = live.current.value || ''
     const behaviour = $prose((ctx) => new Plugin({
       view: () => ({
         update: (view, prev) => {
@@ -157,10 +168,12 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
           return format === 'inline' // modifier mode: inline has no second line; basic starts a paragraph
         },
         handleDOMEvents: {
-          compositionstart: () => { live.current.onCompositionStart?.(); return false },
+          compositionstart: () => { composition.current++; live.current.onCompositionStart?.(); return false },
           compositionend: () => {
-            // The last composed text lands in a transaction around this event: read after it.
-            setTimeout(() => live.current.onCompositionEnd?.(), 0)
+            // The last composed text lands in a transaction around this event: read after it — unless a new
+            // composition has started by then (its guard must stay up).
+            const n = composition.current
+            setTimeout(() => { if (composition.current === n) live.current.onCompositionEnd?.() }, 0)
             return false
           },
           blur: () => { live.current.onBlur?.(); return false },
@@ -172,7 +185,7 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
         ctx.set(rootCtx, root)
         // Not "milkdown": the notes' typography (`.milkdown .ProseMirror p` …) must not reach a Chat Box.
         ctx.set(rootAttrsCtx, { class: 't2c-ed-shell' })
-        ctx.set(defaultValueCtx, initial)
+        ctx.set(defaultValueCtx, '') // the value goes in below, where a value the grammar can't read falls back to text
         ctx.update(editorViewOptionsCtx, (prev) => ({ ...prev, editable: () => !live.current.disabled }))
       })
       .use(behaviour) // first: its Enter / paste handling runs before the presets' keymaps
@@ -181,12 +194,12 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
       .then((ed) => {
         made = ed
         if (cancelled) { void ed.destroy(); return }
-        ed.action((ctx) => {
-          const view = ctx.get(editorViewCtx)
-          editor.current = { view, ctx, ed }
-          shown.current = initial
-        })
-        applyValue(live.current.value) // changed while the editor was starting
+        ed.action((ctx) => { editor.current = { view: ctx.get(editorViewCtx), ctx, ed } })
+        applyValue(live.current.value || '')
+        const view = editor.current!.view
+        // Text inserted while starting goes in as text, at the end of the value.
+        for (const text of queued.current.splice(0)) view.dispatch(view.state.tr.insertText(text).scrollIntoView())
+        if (focusQueued.current) { focusQueued.current = false; view.focus() }
       })
       .catch((e) => console.error('[chatbox] editor failed to start', e))
     return () => {
@@ -206,7 +219,7 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
   }, [props.placeholder, props.disabled, props.ariaLabel])
 
   props.handle.current = {
-    focus: () => { const e = editor.current; if (e) e.view.focus(); else requestAnimationFrame(() => editor.current?.view.focus()) },
+    focus: () => { const e = editor.current; if (e) e.view.focus(); else focusQueued.current = true },
     focused: () => !!editor.current?.view.hasFocus(),
     read: () => {
       const view = editor.current?.view
@@ -246,10 +259,11 @@ export default function ChatBoxEditor(props: ChatBoxEditorProps) {
     },
     insertText: (text) => {
       const view = editor.current?.view
-      if (!view) return false
-      if (text) view.dispatch(view.state.tr.insertText(text).scrollIntoView())
-      return true
+      if (!text) return
+      if (!view) { queued.current.push(text); return }
+      view.dispatch(view.state.tr.insertText(text).scrollIntoView())
     },
+    setValue: (markdown) => applyValue(markdown),
   }
 
   return <div ref={host} className="t2c-ed-host" data-format={props.format} />

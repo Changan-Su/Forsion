@@ -29,6 +29,8 @@ interface Host {
   /** Set once the box has rendered. */
   insertText?(text: string): void
   focus?(): void
+  /** `insertText` before the first render of a `format` box: text, so it can't go into the Markdown value. */
+  early: string[]
 }
 interface BoxProps { options: PluginChatBoxOptions; revision: number; host: Host; isAlive(): boolean }
 
@@ -111,6 +113,8 @@ function mentionRows(query: string, kinds: ChatBoxMentionKind[], take: (m: ChatB
 function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) {
   const [menu, setMenu] = useState<SuggestMenuState | null>(null)
   const request = useRef(0)
+  /** Where the request in flight was made: a caret that leaves it drops the request (its rows would open a menu elsewhere). */
+  const pendingAt = useRef<{ block: number; to: number } | null>(null)
   const composing = useRef(false)
   const dismissedAt = useRef<number | null>(null) // Esc holds for this trigger until the word ends, as in the editor
   const close = () => { request.current++; setMenu(null) }
@@ -138,6 +142,7 @@ function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) 
     // Keep the range current while new items load, but only over rows from the same source (`@` rows must not eat a `#a`).
     setMenu(cur => (cur && cur.source === suggest && cur.block === block ? { ...cur, match: found0, trigger } : null))
     const id = ++request.current
+    pendingAt.current = { block, to: found0.to }
     const take = (m: ChatBoxMention): boolean => {
       if (!isAlive() || typeof options.onMention !== 'function') return false
       try { return options.onMention(m) === true } catch (e) { console.error('[amadeus] plugin Chat Box onMention failed', e); return false }
@@ -147,6 +152,7 @@ function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) 
         .map((i, k): SuggestRow => ({ key: `${k}:${i.value}`, label: i.label, hint: i.hint, insert: () => `${i.value} ` })),
     )).then(rows => {
       if (id !== request.current) return
+      pendingAt.current = null
       const rect = rows.length ? input.rect(block, found0.to) : null
       if (!rect) { setMenu(null); return }
       setMenu({ source: suggest, match: found0, block, trigger, rows, left: rect.left, top: rect.bottom, anchorTop: rect.top })
@@ -156,9 +162,9 @@ function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) 
     })
   }
   const caretMoved = () => {
-    if (!menu) return
     const at = input.read()
-    if (!at || at.block !== menu.block || at.caret !== menu.match.to) close()
+    const away = (p: { block: number; to: number }) => !at || at.block !== p.block || at.caret !== p.to
+    if (menu ? away({ block: menu.block, to: menu.match.to }) : pendingAt.current && away(pendingAt.current)) close()
   }
   const compositionStart = () => { composing.current = true; close() }
   // Chromium fires the last input before compositionend, so a finished `#产` has to be looked at here.
@@ -189,7 +195,9 @@ function useChatBoxSuggest({ options, isAlive }: BoxProps, input: InputAdapter) 
             const typed = `${menu.trigger}${m.query}`
             close()
             // update({ value }) may have swapped the draft since the menu opened: the range no longer means anything.
-            if (!row || input.blockText(menu.block)?.slice(m.from, m.to) !== typed) return
+            // The caret must still sit at the end of the typed query too (in that block), or the pick lands where no one is typing.
+            const at = input.read()
+            if (!row || !at || at.block !== menu.block || at.caret !== m.to || input.blockText(menu.block)?.slice(m.from, m.to) !== typed) return
             if (menu.source === 'mention' && !mentionKinds(options).length) return // update({ mentions: [] }) while open
             const before = options.value
             const text = row.insert() // may run the plugin's onMention, which can update({ value }) or dispose the box
@@ -282,11 +290,13 @@ function PluginChatBox(props: BoxProps) {
     focused: () => !!host.input.current && document.activeElement === host.input.current,
   }
   const suggest = useChatBoxSuggest(props, input)
+  // insertText calls made before this first render: text, through the editor (the textarea path put them in the value).
+  useLayoutEffect(() => { if (format) for (const t of host.early.splice(0)) host.insertText?.(t) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   host.focus = input.focus
   host.insertText = inserted => {
     if (format) {
-      // Still starting: keep it in the value, which the editor reads when it is up.
-      if (!host.editor.current?.insertText(inserted)) change({ ...selected(), text: (options.value ?? text) + inserted })
+      // The editor queues it while starting (as text, at the end), and focuses when up.
+      host.editor.current?.insertText(inserted)
       host.editor.current?.focus()
       return
     }
@@ -343,17 +353,24 @@ function PluginChatBox(props: BoxProps) {
 
 export function mountPluginChatBox(el: HTMLElement, initial: PluginChatBoxOptions): PluginChatBoxHandle {
   const options = { ...initial }
-  const host: Host = { input: { current: null }, editor: { current: null } }
+  const host: Host = { input: { current: null }, editor: { current: null }, early: [] }
   let alive = true, revision = 0
   const tree = () => <HostLocaleProvider><PluginChatBox options={options} revision={revision++} host={host} isAlive={() => alive} /></HostLocaleProvider>
   // alive 跟着这次挂载走:被后来的挂载收掉也算卸了,晚到的提交结果不再认
   const mounted = mountHostReact(el, tree(), () => { alive = false })
   return {
-    update(patch) { if (alive) { Object.assign(options, patch); mounted.render(tree()) } },
+    update(patch) {
+      if (!alive) return
+      Object.assign(options, patch)
+      // A `format` box shows a new value at once (React renders later): Enter in between must submit what is on screen.
+      if (typeof patch.value === 'string' && formatOf(options)) host.editor.current?.setValue(patch.value)
+      mounted.render(tree())
+    },
     focus() { if (alive) (host.focus ?? (() => host.input.current?.focus()))() },
     insertText(text) {
       if (!alive) return
       if (host.insertText) { host.insertText(String(text)); return }
+      if (formatOf(options)) { host.early.push(String(text)); return } // Markdown value: text must not be read as markup
       options.value = (options.value ?? '') + String(text) // first render still pending: it reads this
       requestAnimationFrame(() => { if (alive) (host.focus ?? (() => host.input.current?.focus()))() })
     },

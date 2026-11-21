@@ -66,6 +66,8 @@ import { openDb } from '../../../amadeusNav'
 import { newTabOf } from '../../../views/itemSelect'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
+import { HUMAN_CAL } from '../../store/humanCalendarIo'
+import { inlineMarkdownToPlain, parseInlineMarkdown } from '../../../components/chatbox/chatBoxMarkdown'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
 import { monthGridDays, useWeekStart, weekdays } from '../../../views/calendar/dateUtils'
 import { act, actDebounced, shortVal } from '../../../activity/log'
@@ -467,6 +469,9 @@ interface CellEnv {
  *  ⚠️ 点外关闭走的是遮罩的 React onMouseDown —— 合成事件穿 portal 照常冒泡到 DbTable,所以 portal 之后
  *  「点弹层里面」仍被 stopPropagation 挡住,不会被当成外面。 */
 const PopHostCtx = createContext<HTMLElement | null>(null)
+/** The column whose text is inline Markdown (a todo list's title column, written by the todo Chat Box with
+ *  `format: 'inline'`): table cells show the formatting, the other layouts read it as plain text. null = none. */
+const MarkdownTitleColCtx = createContext<string | null>(null)
 function PopLayer({ children }: { children: ReactNode }): ReactNode {
   const host = useContext(PopHostCtx)
   return host ? createPortal(children, host) : children
@@ -660,6 +665,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const vault = usePageStore((s) => s.vaultRoot) ?? ''
   const calByVault = useCalendarConfig((s) => s.byVault)
   const addMember = useCalendarConfig((s) => s.addMember)
+  // Todo lists = calendar members with a done column (and the default calendar): their title column is the todo box's Markdown.
+  const mdTitleCol = (dbRef === HUMAN_CAL || !!memberOf(vault, calByVault, dbPath)?.checkboxCol) && db.columns[0]?.type === 'text' ? db.columns[0].id : null
 
   const identityId = db.columns[0]?.id
   const isIdentity = (colId: string): boolean => colId === identityId
@@ -987,8 +994,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     }))
   }
 
-  /** 卡片/事件标题 = 首列(身份列)显示值。 */
-  const rowTitle = (r: DbRow): string => dbRowTitle(db, r) || t('dbembed.untitled')
+  /** 卡片/事件标题 = 首列(身份列)显示值;待办清单的标题列是行内 Markdown,这里读纯文字(不露 `**`)。 */
+  const rowTitle = (r: DbRow): string => (mdTitleCol ? inlineMarkdownToPlain(dbRowTitle(db, r)) : dbRowTitle(db, r)) || t('dbembed.untitled')
   /** 单元格环境(附件/关联表列用);env 身份跟 refDbs 走,目标库更新时 Cell 重渲染。 */
   // eslint-disable-next-line react-hooks/exhaustive-deps -- targetOf 闭包依赖 refPaths/refDbs/db.columns(已在列)
   const cellEnv = useMemo<CellEnv>(() => ({
@@ -1411,7 +1418,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const popView = pop?.viewId ? views.find((v) => v.id === pop.viewId) : undefined
 
   return (
-    <PopHostCtx.Provider value={popHost ?? null}>
+    <PopHostCtx.Provider value={popHost ?? null}><MarkdownTitleColCtx.Provider value={mdTitleCol}>
     <div className="amx-db" ref={tableRef}>
       {/* hideHead:插件面板自己有标题栏,再顶一行库名 + 行数只是重复(筛选/搜索/视图菜单照留,那才是用原生表的理由)。 */}
       {!hideHead && (
@@ -1997,7 +2004,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         </RowPeek>
       )}
     </div>
-    </PopHostCtx.Provider>
+    </MarkdownTitleColCtx.Provider></PopHostCtx.Provider>
   )
 }
 
@@ -2016,6 +2023,24 @@ const wikiSegments = (s: string, onOpen: (inner: string, nt?: { newTab: true }) 
         {label}
       </button>
     )
+  })
+/** 行内 Markdown 片段(待办标题列):加粗 / 斜体 / 删除线 / 代码 / 链接照格式画,`[[双链]]` 同 wikiSegments 可点。
+ *  外链只放行 http(s) / mailto,别的协议画成文字。 */
+const inlineMdSegments = (s: string, onOpen: (inner: string, nt?: { newTab: true }) => void): ReactNode[] =>
+  parseInlineMarkdown(s).map((tok, i) => {
+    let node: ReactNode = tok.wiki !== undefined
+      ? <button className="amx-db-wikilink" onClick={(e) => { e.stopPropagation(); onOpen(tok.wiki!, newTabOf(e)) }} title={tok.wiki}>{tok.text}</button>
+      : tok.text
+    if (tok.code) node = <code>{node}</code>
+    if (tok.strike) node = <del>{node}</del>
+    if (tok.em) node = <em>{node}</em>
+    if (tok.strong) node = <strong>{node}</strong>
+    if (tok.href !== undefined && tok.wiki === undefined) {
+      node = /^(https?:|mailto:)/i.test(tok.href)
+        ? <a className="amx-db-url" href={tok.href} target="_blank" rel="noreferrer" title={tok.href} onClick={(e) => e.stopPropagation()}>{node}</a>
+        : node
+    }
+    return <span key={i}>{node}</span>
   })
 /** `[[目标]]` 点击:linkTarget 剥 |别名 与 #锚点(与 Markdown 块同语义);已存在页面优先
  *  (v2.1 这类带点号页名不被误判为附件),未命中且带非 .md/.db 扩展名才当附件系统打开
@@ -2079,6 +2104,7 @@ function ValueCell({ row, col, pagePath, setCell }: {
 }) {
   const { t } = useI18n()
   const ps = useScopedPageStore()
+  const mdCol = useContext(MarkdownTitleColCtx)
   const value = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
   const textValue = value == null ? '' : String(value)
   const [editing, setEditing] = useState(false)
@@ -2144,7 +2170,7 @@ function ValueCell({ row, col, pagePath, setCell }: {
         onKeyDown={keyDown}
       /> : <div className="amx-db-value-display" onClick={() => begin()} title={t('dbembed.clickToEdit')}>
         <span className="amx-db-value-text">
-          {shown ? (isText ? wikiSegments(shown, (raw, nt) => openCellLink(ps, pagePath, raw, nt)) : shown) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
+          {shown ? (isText ? (col.id === mdCol ? inlineMdSegments : wikiSegments)(shown, (raw, nt) => openCellLink(ps, pagePath, raw, nt)) : shown) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
         </span>
         {col.type === 'url' && /^https?:\/\//i.test(textValue) && <a
           className="amx-db-value-link" href={textValue} target="_blank" rel="noreferrer"
@@ -2265,6 +2291,7 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
 }) {
   const { t } = useI18n()
   const ps = useScopedPageStore()
+  const mdCol = useContext(MarkdownTitleColCtx)
   // 动作列:不渲值,渲原生 <button> —— 宿主挂在祖先上的委托监听照常收得到。
   // 刻意**不** stopPropagation:开行那侧自己按 closest('button,a,input,…') 忽略。
   if (col.id === ACTIONS_COL_ID) {
@@ -2346,6 +2373,7 @@ function ReadOnlyCell({ row, col, env, meta, pagePath }: {
     }
     const sV = v as string
     // text:富文本展示照留(链接可点),只是没有编辑入口。
+    if (col.id === mdCol && sV) return <span className="amx-db-richtext">{inlineMdSegments(sV, (r, nt) => openCellLink(ps, pagePath, r, nt))}</span>
     if (CELL_WIKI_RE.test(sV)) return <span className="amx-db-richtext">{wikiSegments(sV, (r, nt) => openCellLink(ps, pagePath, r, nt))}</span>
     return sV || blank
   })()

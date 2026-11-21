@@ -29,17 +29,38 @@ const OFF: Record<ChatBoxFormat, string[]> = {
   basic: OFF_BOTH,
 }
 
+/** `![` is two characters of text: with images off, `![cat](pic.png)` must not turn into `!` + a link to the picture. */
+const imageLiteral = {
+  name: 'chatBoxImageLiteral',
+  tokenize(effects: { enter(t: string): void; exit(t: string): void; consume(c: number): void }, ok: (c: number) => unknown, nok: (c: number) => unknown) {
+    const open = (code: number) => { if (code !== 91) return nok(code); effects.consume(code); effects.exit('data'); return ok }
+    return (code: number) => { if (code !== 33) return nok(code); effects.enter('data'); effects.consume(code); return open }
+  },
+}
+
+interface MdTree { type: string; value?: string; children?: MdTree[] }
+/** `inline` is one line: a line break (`a  ⏎b`, `a\⏎b`, a soft break in a value with newlines) reads as a space. */
+function oneLine(tree: MdTree): void {
+  const walk = (n: MdTree): void => {
+    if (!n.children) return
+    n.children = n.children.map((c) => (c.type === 'break' ? { ...c, type: 'text', value: ' ' } : c))
+    for (const c of n.children) { if (c.type === 'text' && c.value?.includes('\n')) c.value = c.value.replace(/[ \t]*\n[ \t]*/g, ' '); walk(c) }
+  }
+  walk(tree)
+}
+
 /** remark plugin: switch the profile's missing syntax off (it parses as literal text). Must come after remark-gfm:
  *  bare URLs are found by a tree transform of gfm's, not only by the micromark constructs, so that transform goes too. */
-export function remarkChatBoxSyntax(this: Processor, format: ChatBoxFormat = 'inline'): void {
+export function remarkChatBoxSyntax(this: Processor, format: ChatBoxFormat = 'inline'): ((tree: MdTree) => void) | undefined {
   const data = this.data() as { micromarkExtensions?: unknown[]; fromMarkdownExtensions?: unknown[] }
-  ;(data.micromarkExtensions ??= []).push({ disable: { null: OFF[format] ?? OFF.inline } })
+  ;(data.micromarkExtensions ??= []).push({ disable: { null: OFF[format] ?? OFF.inline } }, { text: { 33: imageLiteral } })
   const walk = (ext: unknown): void => {
     if (Array.isArray(ext)) { ext.forEach(walk); return }
     const e = ext as { enter?: Record<string, unknown>; transforms?: unknown[] } | null
     if (e && typeof e === 'object' && e.enter && 'literalAutolink' in e.enter) e.transforms = [] // a fresh object per processor
   }
   walk(data.fromMarkdownExtensions ?? [])
+  return format === 'basic' ? undefined : oneLine
 }
 
 const processors = new Map<ChatBoxFormat, Processor>()
@@ -60,52 +81,53 @@ interface MdNode { type: string; value?: string; url?: string; children?: MdNode
 type Marks = Pick<ChatBoxInlineToken, 'strong' | 'em' | 'strike' | 'code' | 'href'>
 
 const WIKI_RE = /\[\[[^\]\n]+\]\]/g
-const WIKI_OPEN = '', WIKI_CLOSE = '', WIKI_FILL = ''
-/** Same-length mask: offsets stay valid, and nothing inside a wiki link is read as markup (`[[a_b_c]]`, `[[*x*]]`). */
-function maskWiki(md: string): { masked: string; links: string[] } {
-  const links: string[] = []
-  const masked = md.replace(WIKI_RE, (m) => { links.push(m); return WIKI_OPEN + WIKI_FILL.repeat(m.length - 2) + WIKI_CLOSE })
-  return { masked, links }
-}
 
-/** Parse an inline-profile value (a todo title) into runs of text. Never throws; anything unexpected reads as text. */
+/** Parse an inline-profile value (a todo title) into runs of text. Never throws; anything unexpected reads as text.
+ *  Wiki links are found in the parsed text, as the editor shows them: `` `[[x]]` `` is code, `[[*x*]]` has an italic x. */
 export function parseInlineMarkdown(md: string): ChatBoxInlineToken[] {
   const src = String(md ?? '')
   if (!src) return []
-  const { masked, links } = maskWiki(src)
   let tree: MdNode
-  try { tree = processor('inline').parse(masked) as MdNode } catch { return [{ text: src, from: 0, to: src.length }] }
+  try {
+    const p = processor('inline')
+    tree = p.runSync(p.parse(src)) as unknown as MdNode
+  } catch { return [{ text: src, from: 0, to: src.length }] }
   const out: ChatBoxInlineToken[] = []
-  let wikiIndex = 0
-  const push = (value: string, node: MdNode, marks: Marks): void => {
-    const from = node.position?.start.offset ?? 0, to = node.position?.end.offset ?? from
-    // Split masked wiki links back out of the text, in order of appearance.
-    let rest = value, at = from
-    while (rest) {
-      const open = rest.indexOf(WIKI_OPEN)
-      if (open < 0) { out.push({ text: rest, ...marks, from: at, to }); break }
-      if (open > 0) out.push({ text: rest.slice(0, open), ...marks, from: at, to: at + open })
-      const close = rest.indexOf(WIKI_CLOSE, open)
-      const end = close < 0 ? rest.length : close + 1
-      const raw = links[wikiIndex++] ?? ''
-      const inner = raw.slice(2, -2)
-      const shown = (inner.includes('|') ? inner.slice(inner.indexOf('|') + 1) : inner).trim() || inner
-      out.push({ text: shown, ...marks, wiki: inner, from: at + open, to: at + end })
-      rest = rest.slice(end); at += end
+  const push = (value: string, node: MdNode, marks: Marks, wikis: boolean): void => {
+    const nodeFrom = node.position?.start.offset ?? 0, to0 = node.position?.end.offset ?? nodeFrom
+    // Offsets are exact where the source spells the text as is (inside a code span's backticks too); with escapes or
+    // references in it, a run gets the node's range.
+    const k = src.indexOf(value, nodeFrom)
+    const exact = !!value && k >= nodeFrom && k + value.length <= to0
+    const from = exact ? k : nodeFrom, to = exact ? k + value.length : to0
+    const at = (i: number): number => (exact ? from + i : from)
+    const end = (i: number): number => (exact ? from + i : to)
+    let last = 0
+    if (wikis) {
+      for (const m of value.matchAll(WIKI_RE)) {
+        const i = m.index ?? 0
+        if (i > last) out.push({ text: value.slice(last, i), ...marks, from: at(last), to: end(i) })
+        const inner = m[0].slice(2, -2)
+        const shown = (inner.includes('|') ? inner.slice(inner.indexOf('|') + 1) : inner).trim() || inner
+        const raw = src.indexOf(m[0], exact ? from + i : from)
+        const wFrom = raw >= from && raw + m[0].length <= to ? raw : at(i), wTo = raw >= from && raw + m[0].length <= to ? raw + m[0].length : end(i + m[0].length)
+        out.push({ text: shown, ...marks, wiki: inner, from: wFrom, to: wTo })
+        last = i + m[0].length
+      }
     }
+    if (last < value.length) out.push({ text: value.slice(last), ...marks, from: at(last), to: end(value.length) })
   }
   const walk = (node: MdNode, marks: Marks): void => {
     switch (node.type) {
-      case 'text': push(node.value ?? '', node, marks); return
-      case 'inlineCode': push(node.value ?? '', node, { ...marks, code: true }); return
-      case 'break': out.push({ text: ' ', ...marks, from: node.position?.start.offset ?? 0, to: node.position?.end.offset ?? 0 }); return
+      case 'text': push(node.value ?? '', node, marks, true); return
+      case 'inlineCode': push(node.value ?? '', node, { ...marks, code: true }, false); return
       case 'strong': for (const c of node.children ?? []) walk(c, { ...marks, strong: true }); return
       case 'emphasis': for (const c of node.children ?? []) walk(c, { ...marks, em: true }); return
       case 'delete': for (const c of node.children ?? []) walk(c, { ...marks, strike: true }); return
       case 'link': for (const c of node.children ?? []) walk(c, { ...marks, href: node.url ?? '' }); return
       default:
         if (node.children) for (const c of node.children) walk(c, marks)
-        else if (typeof node.value === 'string') push(node.value, node, marks)
+        else if (typeof node.value === 'string') push(node.value, node, marks, false)
     }
   }
   const blocks = tree.children ?? []
@@ -130,9 +152,25 @@ export function minimizeEscapes(md: string, same: (candidate: string) => boolean
   if (md.length > limit || !/[\\&]/.test(md)) return md
   let out = md, tries = 0
   const attempt = (candidate: string): boolean => {
-    if (++tries > 200) return false
+    if (++tries > 600) return false
     try { return same(candidate) } catch { return false }
   }
+  const bare = (x: string): string => x.replace(/\\([!-/:-@[-`{-~])/g, '$1')
+  // Most values need no escape at all: one parse settles it.
+  if (bare(out) !== out && attempt(bare(out))) return bare(out)
+  // Otherwise one at a time, repeating while a pass frees an escape an earlier one kept; then the remaining ones together
+  // (`\*a\*\*b`: each of the last two is needed alone, both can go at once → `*a**b`).
+  for (let pass = 0; pass < 4; pass++) {
+    const before = out
+    out = minimizePass(out, attempt)
+    if (out === before) break
+  }
+  if (bare(out) !== out && attempt(bare(out))) out = bare(out)
+  return out
+}
+
+function minimizePass(md: string, attempt: (candidate: string) => boolean): string {
+  let out = md
   for (let i = 0; i < out.length; i++) {
     if (out[i] === '\\' && ESCAPABLE.test(out[i + 1] ?? '')) {
       const candidate = out.slice(0, i) + out.slice(i + 1)

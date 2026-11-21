@@ -145,6 +145,62 @@ describe('format: inline', () => {
   })
 })
 
+describe('format: review 11-21', () => {
+  it('update({ value }) shows at once: Enter in the same tick submits what is on screen, typing appends to it', async () => {
+    const onSubmit = vi.fn(() => false)
+    await mount({ submitOn: 'enter', value: 'A', onSubmit })
+    await act(async () => {
+      box!.update({ value: 'B' })
+      expect(editor()!.textContent).toBe('B')
+      editor()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ text: 'B' }))
+    const onChange = vi.fn()
+    await act(async () => { box!.update({ value: 'C', onChange }); box!.insertText('!') })
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'C!' }))
+  })
+  it('a value with a hard break mounts (as one line)', async () => {
+    const ed = await mount({ value: 'A  \nB', onSubmit: () => false })
+    expect(ed.textContent).toBe('A B')
+  })
+  it('text inserted while the editor starts is text, not Markdown', async () => {
+    const onChange = vi.fn()
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, format: 'inline', onChange, onSubmit: () => false }); box.insertText('**x**') })
+    const ed = await ready()
+    expect(ed.querySelector('strong')).toBeNull()
+    expect(ed.textContent).toBe('**x**')
+  })
+  it('a swapped value closes the menu: Enter does not write the pick into the old range (basic, two paragraphs)', async () => {
+    const onSubmit = vi.fn(() => false)
+    await mount({ format: 'basic', submitOn: 'enter', suggest: { trigger: '#', items: () => [{ label: 'xyz', value: '#xyz' }] }, onSubmit })
+    await type('#x')
+    expect(rows()).toEqual(['xyz'])
+    await act(async () => { box!.update({ value: '#x\n\nNew draft' }) })
+    expect(rows()).toEqual([])
+    await press('Enter')
+    expect(editor()!.textContent).not.toContain('#xyz')
+  })
+  it('rows that arrive after the caret left do not open a menu', async () => {
+    let finish!: (v: Array<{ label: string; value: string }>) => void
+    await mount({ suggest: { trigger: '#', items: () => new Promise(r => { finish = r }) }, onSubmit: () => false })
+    await type('#a')
+    await act(async () => { box!.update({ value: 'elsewhere' }) })
+    await act(async () => { finish([{ label: 'alpha', value: '#alpha' }]); await Promise.resolve() })
+    expect(rows()).toEqual([])
+  })
+  it('a second composition starting before the first one settles keeps its guard up', async () => {
+    const ed = await mount({ suggest: tags, onSubmit: () => false })
+    await act(async () => {
+      ed.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      ed.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+      ed.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    })
+    await type('#产')
+    await act(async () => { await new Promise(r => setTimeout(r, 10)) })
+    expect(rows()).toEqual([])
+  })
+})
+
 describe('format: basic', () => {
   it('holds lists; Enter in a list item does not submit, Shift+Enter is a line break', async () => {
     const onChange = vi.fn(), onSubmit = vi.fn(() => false)
