@@ -5,18 +5,19 @@
  * 纪律:先把值写进本窗的 localStorage,再调各自的 applier —— 那些 applier 自己读 localStorage,
  * 靠 IPC 先到还是 Chromium 的跨进程 storage 同步先到是没谱的(见 shared/uiSync.ts 的告诫)。
  */
-import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, SELECTION_ACTION_PREFS_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
+import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
 import { applyUiFonts } from './uiFont'
 import { applyStoredUiZoom } from './uiZoom'
 import { setSmoothCaretEnabled } from './smoothCaret'
 import { setLocaleGlobal } from './i18n'
 import { applyThemeSettings } from './theme/themeSettings'
 import { getLanguage } from './theme/registry'
-import { withReplay, SELECTION_PREFS_EVENT } from './uiPrefsBus'
+import { withReplay, SELECTION_PREFS_EVENT, SELECTION_PREFS_SIGNAL_KEY } from './uiPrefsBus'
 
 const FONT_KEYS = new Set<string>([FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY])
-// 划线条的排法 / 动作放哪只要写进 localStorage 就够:条每次出现时现读(selectionActions.ts);设置里的管理表另听 SELECTION_PREFS_EVENT。
-const FIXED = new Set<string>([...FONT_KEYS, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, SELECTION_ACTION_PREFS_KEY, UI_ZOOM_KEY, LOCALE_KEY])
+// 划线条的排法只要写进 localStorage 就够:条每次出现时现读(selectionActions.selectionBarOrder),没有要重放的 applier。
+// 划线条的动作偏好不在这里:它只发 SELECTION_PREFS_SIGNAL_KEY 这个信号,收方从 localStorage 重读(见 uiPrefsBus)。
+const FIXED = new Set<string>([...FONT_KEYS, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY])
 /** 主题自曝的可调参数(只有磁盘主题会声明);值最终进 CSS 变量,键必须收敛。 */
 const THEME_KNOB = /^theme\.[A-Za-z0-9._-]{1,64}\.--[a-z0-9-]{1,64}$/i
 
@@ -46,7 +47,7 @@ export function applyPrefs(prefs: Record<string, string | null> | undefined): vo
     if (fonts) applyUiFonts()
     if (UI_ZOOM_KEY in prefs) applyStoredUiZoom()
     if (SMOOTH_CARET_KEY in prefs) setSmoothCaretEnabled(prefs[SMOOTH_CARET_KEY] === '1')
-    if (SELECTION_ACTION_PREFS_KEY in prefs) window.dispatchEvent(new Event(SELECTION_PREFS_EVENT))
+    if (SELECTION_PREFS_SIGNAL_KEY in prefs) window.dispatchEvent(new Event(SELECTION_PREFS_EVENT)) // 不写盘:只是「别处改了,重读」
     const locale = prefs[LOCALE_KEY]
     if (locale === 'zh' || locale === 'en') setLocaleGlobal(locale)
     // 只覆盖写进来的那些键;发方把某个旋钮**重置**(删键)时本窗要到下次启动才跟上 —— 磁盘主题的

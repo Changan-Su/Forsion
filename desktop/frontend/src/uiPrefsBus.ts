@@ -5,13 +5,16 @@
  * 为什么挂在 setter 里而不是各个 UI 调用点:字体/缩放/语言/光标都有多个入口(设置页、引导页、
  * ⌘K 命令、agent 命令),挂调用点必漏。收方重放时走 `withReplay` 静音,故不会来回弹。
  */
-import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, SELECTION_ACTION_PREFS_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
+import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY } from './types'
 
 /** 会跨窗同步的偏好键(固定那批)。主题可调参数 `theme.<id>.--<var>` 是动态键,见 collectPrefs。 */
-export const UI_PREF_KEYS = [FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, SELECTION_ACTION_PREFS_KEY, UI_ZOOM_KEY, LOCALE_KEY] as const
+export const UI_PREF_KEYS = [FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY, SMOOTH_CARET_KEY, SELECTION_BAR_ORDER_KEY, UI_ZOOM_KEY, LOCALE_KEY] as const
 
-/** 划线条动作偏好变了(本窗设置 / 别的窗重放):设置里的管理表听它重读。 */
+/** 划线条动作偏好变了(本窗写了 / 别的窗发来信号 / storage 同步到了):条、卡、管理表听它重读。 */
 export const SELECTION_PREFS_EVENT = 'forsion:selection-action-prefs'
+/** 划线条动作偏好(forsion_selection_actions)**不**整表跨窗互发:晚到的旧快照会盖掉另一窗刚写的字段,整表也会超出
+ *  ui:sync 的单值长度上限。只发这个不带内容的信号(值是个随手的序号),收方自己从 localStorage 重读。 */
+export const SELECTION_PREFS_SIGNAL_KEY = 'forsion_selection_actions.changed'
 
 const THEME_KNOB = /^theme\.[A-Za-z0-9._-]{1,64}\.--[a-z0-9-]{1,64}$/i
 
@@ -46,4 +49,10 @@ export function collectPrefs(): Record<string, string | null> {
 export function broadcastPrefs(): void {
   if (replaying) return
   try { window.tangu?.broadcastUi?.({ prefs: collectPrefs() }) } catch { /* 无 preload */ }
+}
+
+/** 划线条动作偏好变了:只告诉其余窗口「重读一下」,不带值。 */
+export function broadcastSelectionPrefsChanged(): void {
+  if (replaying) return
+  try { window.tangu?.broadcastUi?.({ prefs: { [SELECTION_PREFS_SIGNAL_KEY]: String(Date.now() % 1e9) } }) } catch { /* 无 preload */ }
 }

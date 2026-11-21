@@ -13,7 +13,7 @@ import { pluginDisplayName } from '../amadeus/plugins/display'
 import { readTangu } from '../amadeus/plugins/tanguSeam'
 import {
   HOST_SELECTION_KEYS, autoSelectionAction, hostSelectionEntry, hostTranslateAllowed, orderedSelectionEntries, placementOf, pluginSelectionEntry,
-  reorderSelectionActions, selectionActionPrefs, selectionActionTitle, setSelectionAuto, setSelectionPlacement,
+  moveSelectionAction, selectionActionPrefs, selectionActionTitle, setSelectionAuto, setSelectionPlacement,
   type OwnedSelectionAction, type SelectionEntry, type SelectionPlacement,
 } from '../selectionActions'
 import { SELECTION_PREFS_EVENT } from '../uiPrefsBus'
@@ -67,7 +67,7 @@ export function SelectionActionsTable(): ReactElement {
 
   const rows: Row[] = [
     hostSelectionEntry(HOST_SELECTION_KEYS.ask),
-    ...(hostTranslateAllowed(installed) && readTangu()?.complete !== undefined ? [hostSelectionEntry(HOST_SELECTION_KEYS.translate)] : []),
+    ...(hostTranslateAllowed(installed, registered) && readTangu()?.complete !== undefined ? [hostSelectionEntry(HOST_SELECTION_KEYS.translate)] : []),
     ...(ttsHostAvailable() ? [hostSelectionEntry(HOST_SELECTION_KEYS.speak)] : []),
     ...registered.map((o, i) => ({ ...pluginSelectionEntry(o, i, installed), owned: o })),
   ]
@@ -93,9 +93,7 @@ export function SelectionActionsTable(): ReactElement {
     const me = ordered.find((r) => r.key === key)
     const to = ordered.find((r) => r.key === target)
     if (!me || !to || !sameGroup(me, to)) return
-    const keys = ordered.map((r) => r.key).filter((k) => k !== key)
-    keys.splice(keys.indexOf(target) + (after ? 1 : 0), 0, key)
-    reorderSelectionActions(keys)
+    moveSelectionAction(key, target, after, ordered.map((r) => r.key)) // 只挪这一个;表外(别处 / 停用插件)的先后不动
   }
   const onKey = (r: Row) => (e: KeyboardEvent<HTMLButtonElement>): void => {
     if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return

@@ -54,12 +54,9 @@ export function useSelectionBarLive(): { key: string; phase: 'loading' | 'playin
   return st
 }
 
-/** 划线朗读的 key:按那段字认(同一段再点 = 停;换一段 = 念新的)。前缀免得和聊天消息 id 撞上。 */
-export const speakKeyOf = (text: string): string => {
-  let h = 0
-  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0
-  return `sel:${text.length}:${(h >>> 0).toString(36)}`
-}
+/** 划线朗读的 key:按那段字本身认(同一段再点 = 停;换一段 = 念新的)。不用哈希:两段不同的字不能撞成同一个 key。
+ *  前缀免得和聊天消息 id 撞上。 */
+export const speakKeyOf = (text: string): string => `sel:${text}`
 
 export interface BarModelHost {
   /** 「带去对话」那一格(host:ask):聊天是引用 / 在侧栏提问 / 顺便问,别处是「问 Tangu」。空 = 这里没有。 */
@@ -109,7 +106,7 @@ export function buildSelectionBarModel(o: {
   const t = translate
   const entries: Entry[] = []
   if (o.host.ask.length) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.ask))
-  if (o.host.translate && hostTranslateAllowed(o.installed)) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.translate))
+  if (o.host.translate && hostTranslateAllowed(o.installed, o.registered)) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.translate))
   if (o.host.speak) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.speak))
   for (const a of listSelectionActions(o.registered, { view: o.view, editable: o.editable, length: o.length })) {
     entries.push({ ...pluginSelectionEntry(a, o.registered.indexOf(a), o.installed), owned: a })

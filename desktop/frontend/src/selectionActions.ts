@@ -6,7 +6,7 @@
  */
 import type { SelectionBarOrder } from '@lcl/components'
 import { registerMessages, translate } from './i18n'
-import { broadcastPrefs, SELECTION_PREFS_EVENT } from './uiPrefsBus'
+import { broadcastPrefs, broadcastSelectionPrefsChanged, SELECTION_PREFS_EVENT } from './uiPrefsBus'
 import { SELECTION_ACTION_PREFS_KEY, SELECTION_BAR_ORDER_KEY } from './types'
 import type { SelectionActionContribution } from './amadeus/plugins/types'
 import { pluginText } from './amadeus/plugins/pluginText'
@@ -19,6 +19,7 @@ registerMessages({
   'selbar.err.controlChars': { zh: 'run() 返回内容含控制字符', en: 'run() returned content containing control characters' },
   'selbar.err.gone': { zh: '这个动作已经不在了（插件被停用或重载）', en: 'This action is no longer available (the plugin was disabled or reloaded).' },
   'selbar.failed': { zh: '「{title}」没有完成：{e}', en: '"{title}" did not finish: {e}' },
+  'selbar.prefsUnreadable': { zh: '划线菜单的设置读不出来，这次改动没有保存（原来的设置没动）', en: 'Could not read the selection menu settings, so this change was not saved (the existing settings were left as they were).' },
 })
 
 /** 动作的显示名(插件可给 string / 函数 / { zh, en },画的那一刻求值)。 */
@@ -81,7 +82,8 @@ export function setSelectionBarOrder(order: SelectionBarOrder): void {
 /** 宿主自己的通用动作的键(和插件的 `plugin:<插件>:<项>` 同一张偏好表)。host:ask 管「带去对话」那一格的全部按钮
  *  (聊天的引用 / 在侧栏提问 / 顺便问,别处的「问 Tangu」)。 */
 export const HOST_SELECTION_KEYS = { ask: 'host:ask', translate: 'host:translate', speak: 'host:speak' } as const
-/** 接管宿主「翻译」的核心插件:装着(启用或停用都算)宿主就不画自己的翻译(契约 §5),条上恰好一颗。 */
+/** 接管宿主「翻译」的插件 id(契约 §5,11-21 评审后收紧):它是宿主认的核心插件(随包 / 预装,停用也算),或者它启用着且
+ *  注册了划线动作,宿主就不画自己的翻译 —— 条上恰好一颗。接管它的动作沿用 host:translate 的「放在哪」。 */
 export const TRANSLATION_PLUGIN_ID = 'translation'
 /** 条上的插件位(不含视图工具、宿主通用动作、核心插件的动作)。 */
 export const SELECTION_BAR_PLUGIN_SLOTS = 3
@@ -124,33 +126,45 @@ export function selectionActionPrefs(): SelectionActionPrefs {
   return r.ok ? r.prefs : emptyPrefs()
 }
 
-/** 用户动了一处(钉 / 收进 ⋯ / 管理表 / 卡头开关 / 卡头换语言):只改动到的那几项,别的原样留着 —— 包括此刻没注册的
- *  动作(插件停用着 / 还没加载)的选择,**不按「现在列得出的动作」修剪**。原来那份读不出来:先把原件挪到
- *  `<键>.unreadable`(只留第一次的),再从空的开始记 —— 用户这一下的选择要生效,原件也不丢。 */
-export function updateSelectionActionPrefs(fn: (p: SelectionActionPrefs) => void): void {
+/** 用户动了一处(钉 / 收进 ⋯ / 管理表 / 卡头开关 / 卡头换语言):**从 localStorage 现读 → 只改这一处 → 写回**,别的原样留着
+ *  —— 包括此刻没注册的动作(插件停用着 / 还没加载)的选择,不按「现在列得出的动作」修剪;不认识的字段照抄。
+ *  跨窗只发一个不带值的「变了」信号,收方自己重读(不整表互发:晚到的旧快照会盖掉另一窗刚写的,整表也会超出 IPC 的长度上限)。
+ *  **原来那份读不出来 = 不写**(读失败 ≠ 空,覆盖了就找不回):返回 false,提示用户这次没保存,界面按原样重画(开关回弹)。 */
+export function updateSelectionActionPrefs(fn: (p: SelectionActionPrefs) => void): boolean {
   const r = readSelectionActionPrefs()
+  if (!r.ok) { selectionPrefsUnwritable(); return false }
   let base: Record<string, unknown> = {}
-  if (r.ok) {
-    try { const o = JSON.parse(localStorage.getItem(SELECTION_ACTION_PREFS_KEY) ?? '{}'); if (isRecord(o)) base = o } catch { /* 上面读过了 */ }
-  } else {
-    try {
-      const raw = localStorage.getItem(SELECTION_ACTION_PREFS_KEY)
-      if (raw != null && localStorage.getItem(`${SELECTION_ACTION_PREFS_KEY}.unreadable`) == null) localStorage.setItem(`${SELECTION_ACTION_PREFS_KEY}.unreadable`, raw)
-    } catch { /* private mode */ }
-  }
-  const prefs = r.ok ? r.prefs : emptyPrefs()
+  try { const o = JSON.parse(localStorage.getItem(SELECTION_ACTION_PREFS_KEY) ?? '{}'); if (isRecord(o)) base = o } catch { selectionPrefsUnwritable(); return false }
+  const prefs = r.prefs
   fn(prefs)
-  // 原对象里我们不认识的字段(新版本写的)照抄回去
   const out = { ...base, placement: prefs.placement, order: prefs.order, auto: prefs.auto, language: prefs.language }
-  try { localStorage.setItem(SELECTION_ACTION_PREFS_KEY, JSON.stringify(out)) } catch { return }
-  broadcastPrefs()
-  try { window.dispatchEvent(new Event(SELECTION_PREFS_EVENT)) } catch { /* 非浏览器 */ }
+  try { localStorage.setItem(SELECTION_ACTION_PREFS_KEY, JSON.stringify(out)) } catch { selectionPrefsUnwritable(); return false }
+  broadcastSelectionPrefsChanged()
+  emitSelectionPrefsChanged()
+  return true
 }
+
+const emitSelectionPrefsChanged = (): void => { try { window.dispatchEvent(new Event(SELECTION_PREFS_EVENT)) } catch { /* 非浏览器 */ } }
+
+/** 没写成:让订阅者按原样重画(开关回弹),再提示一句。toast 动态取,免得这个纯逻辑模块拖上整个应用 store。 */
+function selectionPrefsUnwritable(): void {
+  emitSelectionPrefsChanged()
+  void import('./stores/appStore').then((m) => m.useApp.getState().toast(translate('selbar.prefsUnreadable'), true)).catch(() => {})
+}
+
+// 别的窗口写了:Chromium 的跨进程 storage 同步到了也算一次「变了」(和 IPC 信号谁先到没谱,两边都听)
+try {
+  window.addEventListener('storage', (e) => { if (e.key === SELECTION_ACTION_PREFS_KEY || e.key === null) emitSelectionPrefsChanged() })
+} catch { /* 非浏览器 */ }
 
 /** 排一个动作要知道的几样。kind:host = 宿主自己的;core = 核心插件(和宿主那组站一起、不占插件位);plugin = 其余插件。
  *  want = 缺省放哪(插件的 placement;宿主的恒为 'bar');rank = 缺省先后(宿主固定次序,插件按装的先后 + 注册先后);
  *  auto = 支持划选后自动(插件声明了 auto 且出结果卡)。 */
-export interface SelectionEntry { key: string; kind: 'host' | 'core' | 'plugin'; want: 'bar' | 'more'; rank: number; auto?: boolean }
+export interface SelectionEntry {
+  key: string; kind: 'host' | 'core' | 'plugin'; want: 'bar' | 'more'; rank: number; auto?: boolean
+  /** 没给自己设过「放在哪」时沿用这个键的(接管宿主翻译的那个插件动作沿用 host:translate)。 */
+  alias?: string
+}
 
 const HOST_RANK: Record<string, number> = { [HOST_SELECTION_KEYS.ask]: 0, [HOST_SELECTION_KEYS.translate]: 1_000, [HOST_SELECTION_KEYS.speak]: 1e9 }
 
@@ -169,14 +183,38 @@ export function pluginSelectionEntry(o: OwnedSelectionAction, index: number, plu
     kind: core ? 'core' : 'plugin',
     want: o.item.placement === 'bar' ? 'bar' : 'more',
     rank: core ? 2_000 + pluginRank / 1e4 : pluginRank,
-    auto: o.item.auto === true && o.item.output !== 'none',
+    // 自动只在聊天 / 插件视图跑(笔记的卡能写,不自动):只认笔记的动作在哪都跑不到,不算支持
+    auto: o.item.auto === true && o.item.output !== 'none' && selectionAutoReachable(o),
+    ...(o.pluginId === TRANSLATION_PLUGIN_ID ? { alias: HOST_SELECTION_KEYS.translate } : {}),
   }
 }
 
-/** 宿主的「翻译」这次出不出:接管它的核心插件装着(启用或停用都算)就不出。 */
-export const hostTranslateAllowed = (plugins: readonly { id: string }[]): boolean => !plugins.some((p) => p.id === TRANSLATION_PLUGIN_ID)
+/** 这个动作有没有能自动跑的视图:scope 缺省 / 'note' = 只在笔记,没有。 */
+export function selectionAutoReachable(o: OwnedSelectionAction): boolean {
+  const sc = o.item.scope
+  if (sc == null || sc === 'note') return false
+  if (sc === 'all' || sc === 'own') return true
+  return Array.isArray(sc) && sc.some((v) => typeof v === 'string' && !!v && v !== 'note')
+}
 
-export const placementOf = (e: SelectionEntry, prefs: SelectionActionPrefs): SelectionPlacement => prefs.placement[e.key] ?? e.want
+/** 宿主的「翻译」这次出不出。plugins = 装着的(含停用的);registered = 这个窗口注册着的划线动作。
+ *  不出的两种:翻译插件是宿主认的核心插件(随包 / 预装,停用也算);或它启用着、且真注册了划线动作。
+ *  同名的普通插件只是装着、没注册动作,宿主翻译照旧 —— 别让一个空壳把翻译弄没了。 */
+export function hostTranslateAllowed(
+  plugins: readonly { id: string; enabled?: boolean; builtin?: boolean; preinstalled?: boolean }[],
+  registered: readonly OwnedSelectionAction[],
+): boolean {
+  const p = plugins.find((x) => x.id === TRANSLATION_PLUGIN_ID)
+  if (!p) return true
+  if (isCorePlugin(p)) return false
+  return !(p.enabled !== false && registered.some((o) => o.pluginId === TRANSLATION_PLUGIN_ID))
+}
+
+/** 用户自己设过的「放在哪」(含沿用的那个键的);没设过 = undefined。 */
+const explicitPlacement = (e: SelectionEntry, prefs: SelectionActionPrefs): SelectionPlacement | undefined =>
+  prefs.placement[e.key] ?? (e.alias ? prefs.placement[e.alias] : undefined)
+
+export const placementOf = (e: SelectionEntry, prefs: SelectionActionPrefs): SelectionPlacement => explicitPlacement(e, prefs) ?? e.want
 
 /** 一组里的先后:用户排过的在前(按他排的),没排过的按缺省 rank 接在后面。 */
 function ordered<T extends SelectionEntry>(list: readonly T[], prefs: SelectionActionPrefs): T[] {
@@ -211,9 +249,14 @@ export function arrangeSelectionActions<T extends SelectionEntry>(entries: reado
     if (at === 'bar') lead.push(e)
     else if (at === 'more') hostMore.push(e)
   }
-  for (const e of ordered(entries.filter((x) => x.kind === 'plugin'), prefs)) {
+  // 插件位先给用户自己设成「条上」的,剩下的再按缺省(插件 placement: 'bar')排 —— 缺省上条的占不掉用户点名要的
+  const pl = ordered(entries.filter((x) => x.kind === 'plugin'), prefs)
+  const want = pl.filter((e) => placementOf(e, prefs) === 'bar')
+  const seats = new Set([...want.filter((e) => explicitPlacement(e, prefs) === 'bar'), ...want.filter((e) => explicitPlacement(e, prefs) !== 'bar')]
+    .slice(0, SELECTION_BAR_PLUGIN_SLOTS).map((e) => e.key))
+  for (const e of pl) {
     const at = placementOf(e, prefs)
-    if (at === 'bar' && plugins.length < SELECTION_BAR_PLUGIN_SLOTS) plugins.push(e)
+    if (at === 'bar' && seats.has(e.key)) plugins.push(e)
     else if (at === 'bar') { pluginMore.push(e); overflow++ } else if (at === 'more') pluginMore.push(e)
   }
   return { lead, plugins, more: [...hostMore, ...pluginMore], overflow }
@@ -229,35 +272,45 @@ export function autoSelectionAction<T extends SelectionEntry>(entries: readonly 
   return orderedSelectionEntries(entries, prefs).find((e) => e.auto && prefs.auto[e.key] === true && placementOf(e, prefs) !== 'hidden') ?? null
 }
 
-/** ⋯ 里的钉 / 条上右键「收进 ⋯」。钉上时插件位已满:把它排到条上第一个插件前面 —— 用户刚钉的那个要真的出现在条上,
- *  挤下去的那个落进 ⋯(顶上会写「还有 N 个放不下」)。all = 这次列得出的全部(排位置用)。 */
-export function pinSelectionAction(key: string, on: boolean, all: readonly SelectionEntry[]): void {
-  updateSelectionActionPrefs((p) => {
+/** 在 order 里只挪 key 一个:放到 target 前(after = 后)。visible = 这次列得出的全部键(按现在的先后);它们里还没进 order 的
+ *  先按现在的先后接到末尾(没排过的本来就排在排过的后面,接上去先后不变),表外 / 别的视图里的键位置一概不动。 */
+function moveKey(order: readonly string[], visible: readonly string[], key: string, target: string, after: boolean): string[] {
+  const out = [...order]
+  for (const k of visible) if (!out.includes(k)) out.push(k)
+  const i = out.indexOf(key)
+  if (i >= 0) out.splice(i, 1)
+  const j = out.indexOf(target)
+  out.splice(j < 0 ? out.length : j + (after ? 1 : 0), 0, key)
+  return out
+}
+
+/** ⋯ 里的钉 / 条上右键「收进 ⋯」。钉上 = 用户点名要上条,先分到插件位;三个位都已被用户点名的占着,才把它挪到条上
+ *  第一个插件前面(只挪它一个),挤下去的那个落进 ⋯(顶上写「还有 N 个放不下」)。all = 这次列得出的全部。 */
+export function pinSelectionAction(key: string, on: boolean, all: readonly SelectionEntry[]): boolean {
+  return updateSelectionActionPrefs((p) => {
     p.placement[key] = on ? 'bar' : 'more'
     if (!on) return
     const me = all.find((e) => e.key === key)
     if (!me || me.kind !== 'plugin') return
-    const { plugins } = arrangeSelectionActions(all.filter((e) => e.key !== key), p)
-    if (plugins.length < SELECTION_BAR_PLUGIN_SLOTS) return
-    const seq = orderedSelectionEntries(all, p).map((e) => e.key).filter((k) => k !== key)
-    seq.splice(seq.indexOf(plugins[0].key), 0, key)
-    // 没在这次列表里的旧排序(停用插件的)接在后面,不丢
-    p.order = [...seq, ...p.order.filter((k) => !seq.includes(k) && k !== key)]
+    const { plugins } = arrangeSelectionActions(all, p)
+    if (!plugins.length || plugins.some((e) => e.key === key)) return
+    p.order = moveKey(p.order, orderedSelectionEntries(all, p).map((e) => e.key), key, plugins[0].key, false)
   })
 }
 
-/** 管理表拖排序:keys = 拖完之后的整张表(宿主那组 + 插件)。表外的旧键接在后面不丢。 */
-export function reorderSelectionActions(keys: readonly string[]): void {
-  updateSelectionActionPrefs((p) => { p.order = [...keys, ...p.order.filter((k) => !keys.includes(k))] })
+/** 管理表拖排序:把 key 挪到 target 前 / 后,只动它一个。visible = 表里这一刻的整张先后。 */
+export function moveSelectionAction(key: string, target: string, after: boolean, visible: readonly string[]): boolean {
+  if (key === target) return true
+  return updateSelectionActionPrefs((p) => { p.order = moveKey(p.order, visible, key, target, after) })
 }
-export function setSelectionPlacement(key: string, at: SelectionPlacement): void {
-  updateSelectionActionPrefs((p) => { p.placement[key] = at })
+export function setSelectionPlacement(key: string, at: SelectionPlacement): boolean {
+  return updateSelectionActionPrefs((p) => { p.placement[key] = at })
 }
-export function setSelectionAuto(key: string, on: boolean): void {
-  updateSelectionActionPrefs((p) => { p.auto[key] = on })
+export function setSelectionAuto(key: string, on: boolean): boolean {
+  return updateSelectionActionPrefs((p) => { p.auto[key] = on })
 }
 /** 结果卡卡头换过语言:按动作记住(下次初值用它)。 */
-export function rememberSelectionLanguage(key: string, language: string): void {
-  if (selectionActionPrefs().language[key] === language) return
-  updateSelectionActionPrefs((p) => { p.language[key] = language })
+export function rememberSelectionLanguage(key: string, language: string): boolean {
+  if (selectionActionPrefs().language[key] === language) return true
+  return updateSelectionActionPrefs((p) => { p.language[key] = language })
 }
