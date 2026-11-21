@@ -92,7 +92,8 @@ describe('format: inline', () => {
     expect(rows()).toEqual([])
     expect(onSubmit).not.toHaveBeenCalled()
     expect(editor()!.textContent).toBe('回顾 #产品/路线图 ')
-    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ text: '回顾 #产品/路线图 ' })) // the space after a pick stays, as in the textarea
+    // the space after a pick stays on screen (typing goes on after it); the value has no edge whitespace (11-21 acceptance)
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ text: '回顾 #产品/路线图' }))
     await press('Enter')
     expect(onSubmit).toHaveBeenCalledTimes(1)
   })

@@ -63,8 +63,12 @@ export interface ChatBoxEditorProps {
 const LEAF = '￼'
 
 /** Serialize the way the box stores it: the profile serializer, no trailing newline, then every escape the parse doesn't need dropped. */
+/** Whitespace at the very start / end of a value, as typed or as the serializer spells it to keep it (`&#x20;`). */
+const EDGE_SPACE = /^(?:[ \t]|&#(?:x20|32|x9|9);)+|(?:[ \t]|&#(?:x20|32|x9|9);)+$/gi
+
 export function storeMarkdown(ctx: Ctx, doc: PMNode): string {
-  const raw = ctx.get(serializerCtx)(doc).replace(/\n+$/, '')
+  // Edge whitespace isn't kept (Markdown reads a value without it; a title would end in `&#x20;` after an `@` pick).
+  const raw = ctx.get(serializerCtx)(doc).replace(/\n+$/, '').replace(EDGE_SPACE, '')
   const parse = ctx.get(parserCtx)
   let base: PMNode | undefined
   try { base = parse(raw) as PMNode } catch { return raw }

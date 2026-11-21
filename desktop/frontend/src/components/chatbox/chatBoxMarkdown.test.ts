@@ -153,6 +153,20 @@ describe('parseInlineMarkdown', () => {
   })
 })
 
+describe('edge whitespace (Electron acceptance 11-21)', () => {
+  it('a value never starts or ends with a space or its reference: `x ` after an @ pick stores `x`', async () => {
+    for (const format of ['inline', 'basic'] as const) {
+      const b = await boot(format)
+      try {
+        const doc = (t: string): PMNode => b.schema.node('doc', null, [b.schema.node('paragraph', null, [b.schema.text(t)])])
+        expect(b.store(doc('交周报 5*3 '))).toBe('交周报 5*3')
+        expect(b.store(doc('  前后  '))).toBe('前后')
+        expect(b.store(doc('a  b'))).toBe('a  b')
+      } finally { await b.destroy() }
+    }
+  })
+})
+
 describe('parseInlineMarkdown offsets (review 11-21, second pass)', () => {
   /** Runs in source order, never overlapping, each spelling its own text (or its `[[…]]`). */
   const wellFormed = (src: string): void => {
