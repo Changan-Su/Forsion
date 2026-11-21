@@ -6246,12 +6246,21 @@ Then reply with only the command output.`,
     const now = new Date();
     const nowH = now.getHours();
     const active = (h) => { const k = (h - nowH + 24) % 24; return k >= 6 && k < 16; };
+    // 11-21:活动行指向的笔记要真有(绝对路径、建在授权文件夹里)—— 从前写的是不存在的 Notes/day-*.md,set_chat_starters
+    // 引用它们必报错重试,首周期白耗 2–3 轮,顶到轮数上限还没走到 set_next_wake(新旧代码都中招)。
+    const notesDir = join(workspace, 'Notes'); mkdirSync(notesDir, { recursive: true });
     for (let t = now.getTime() - 14 * 86_400_000; t < now.getTime(); t += 3_600_000) {
       const d = new Date(t); d.setMinutes(15, 0, 0);
-      if (d.getTime() < now.getTime() && active(d.getHours())) appendUserActivity(d, `note.edit f="Notes/day-${actDay(d)}.md" l=${d.getHours()}`);
+      if (d.getTime() >= now.getTime() || !active(d.getHours())) continue;
+      const note = join(notesDir, `day-${actDay(d)}.md`);
+      if (!existsSync(note)) writeFileSync(note, `# ${actDay(d)}\n\n- 写了一点日记\n`);
+      appendUserActivity(d, `note.edit f="${note}" l=${d.getHours()}`);
     }
     const usualStart = new Date(now.getTime() + 6 * 3_600_000); usualStart.setMinutes(0, 0, 0);
-    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 5, allowedFolders: [workspace], notify: 'immediate' } }) });
+    // 11-21:轮数上限用产品缺省(specialAgentsConfig 的 maxIterationsPerCycle = 20);从前写死 12,而首周期还要做每周装备巡检、
+    // 开场建议、今日简报,六次里四次顶到 12 轮被截停,判的是「轮数够不够」而不是「它决定睡没睡」。`--musewake-iters N` 可改。
+    const iters = Number(opt('musewake-iters', 20));
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: iters, maxRestartsPerWindow: 5, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s));
     const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
     if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
@@ -6260,10 +6269,25 @@ Then reply with only the command output.`,
     const cycle1At = Number(done1.lastCycleAt);
     const sid = done1.sessionId;
     const says = async () => (sid ? asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '');
+    // 11-21:只判**第一个周期**。从前读 status 的 sleepUntil:周期 1 没睡、紧接着的周期 2 睡了,台架照样判绿(11-21 旧代码基线就这样绿过一次)。
+    // 改读第一个 Muse run 里有没有 set_next_wake,并记下它用了几轮、有没有顶到上限。
+    const first = await (async () => {
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+      try {
+        const runs = db.prepare(`SELECT r.id FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all();
+        const id = runs[0]?.id;
+        if (!id) return { runs: 0, rounds: 0, slept: false, calls: [] };
+        const rounds = db.prepare(`SELECT COUNT(*) AS n FROM agent_run_events WHERE run_id = ? AND type = 'usage'`).get(id).n;
+        const calls = db.prepare(`SELECT json_extract(payload, '$.name') AS n FROM agent_run_events WHERE run_id = ? AND type = 'tool_call' ORDER BY rowid`).all(id).map((x) => x.n);
+        return { runs: runs.length, rounds, slept: calls.includes('set_next_wake'), calls };
+      } finally { db.close(); }
+    })().catch((e) => ({ runs: 0, rounds: 0, slept: false, calls: [], error: String(e?.message || e) }));
+    const roundsText = `周期 1 用了 ${first.rounds}/${iters} 轮${first.rounds >= iters ? '(顶到上限)' : ''}、工具 ${first.calls.length} 次(${first.calls.join(',')})${first.runs > 1 ? `;读状态时已起 ${first.runs} 个周期` : ''}`;
     const sleepUntil = Number(done1.sleepUntil) || 0;
-    const slept = sleepUntil - Date.now() >= 60 * 60_000;
+    const slept = first.slept && sleepUntil - Date.now() >= 60 * 60_000;
     const plan = sleepUntil ? `睡到 ${hhmm(sleepUntil)}(作息起点 ${hhmm(usualStart)};理由:${done1.sleepReason || '无'})` : '没睡';
-    if (!slept) return { ok: false, detail: `现在 ${hhmm(now)} 在作息深夜段、上次活动约 9h 前,Muse ${plan}`, output: await says(), status: done1 };
+    if (!slept) return { ok: false, detail: `现在 ${hhmm(now)} 在作息深夜段、上次活动约 9h 前,Muse 周期 1 ${first.slept ? plan : '没调 set_next_wake'};${roundsText}`, output: await says(), status: done1 };
     // ② 心跳 1 分钟 + 巡检 1 分钟:醒着的话 100s 内必起周期 2
     await sleep(100_000);
     const mid = await status();
@@ -6276,7 +6300,7 @@ Then reply with only the command output.`,
     const journalSleep = /sleep → /.test(journal);
     return {
       ok: slept && honored && !!woke && journalSleep,
-      detail: `${plan};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
+      detail: `${plan};${roundsText};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
       output: await says(), journal, status: woke || mid,
     };
   });

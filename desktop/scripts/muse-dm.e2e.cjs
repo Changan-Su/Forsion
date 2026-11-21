@@ -16,7 +16,7 @@
  *  R9 点 Xyra 行 → 角标清零
  * 截图(亮 / 暗)自己看。量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Muse 私聊台架" --eta=3 -- node scripts/muse-dm.e2e.cjs
- *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色
+ *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色;NARROW=1 再拍一张 400 宽的依据卡(手机宽度)
  */
 const path = require('path')
 const { launch, boot, enterSpace, makeReporter, shotDir } = require('./lib/uiux-electron.cjs')
@@ -150,7 +150,7 @@ async function main() {
     }, DECK)
     r.check('R3 三条主动消息头上有「主动发来 · 时间」,普通回答没有', chat.from.every((x) => /主动发来 · \d|Reached out · \d/.test(x)) && !chat.none, JSON.stringify(chat.from))
     r.check('R4 待办与后台审批都在对话末尾的卡片堆(审批在上、待办垫底);流里待办只剩一行;没有 Muse 自己的托盘',
-      chat.inStream && chat.n === '2' && chat.top === 'muse-approval' && /任务卡 1|task cards: 1/.test(chat.more) && !chat.p2card && /在对话最下面|at the end of the chat/.test(chat.p2trace) && !chat.oldTray, JSON.stringify(chat))
+      chat.inStream && chat.n === '2' && chat.top === 'muse-approval' && /任务卡 1|1 张任务卡|task cards: 1|1 more task card/.test(chat.more) && !chat.p2card && /在对话最下面|at the end of the chat/.test(chat.p2trace) && !chat.oldTray, JSON.stringify(chat))
     r.check('R5 审批围栏不进正文,流里一行指向对话最下面,卡片堆里有那张卡', !chat.fenceLeak && chat.pointer === 'pending' && /对话最下面|end of the chat/.test(chat.pointerText) && chat.tray, `${chat.pointer} · ${chat.pointerText}`)
     await win.waitForTimeout(500)
     r.check('R6 打开即读过(POST read)', seen.read.includes(MUSE), JSON.stringify(seen.read))
@@ -192,6 +192,16 @@ async function main() {
     await win.screenshot({ path: path.join(dir, 'dm-evidence.png') })
     const box = await win.locator(CARD).boundingBox().catch(() => null)
     if (box) await win.screenshot({ path: path.join(dir, 'dm-evidence-card.png'), clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 } })
+    if (process.env.NARROW) {
+      // 手机宽度(同一张卡:手机 / 网页走同一套 LCL 视图与 TaskCards):视口缩到 400 宽再拍这张卡,拍完放回
+      await win.setViewportSize({ width: 400, height: 860 }).catch(() => {})
+      await win.waitForTimeout(800)
+      await win.locator(CARD).scrollIntoViewIfNeeded().catch(() => {})
+      const nb = await win.locator(CARD).boundingBox().catch(() => null)
+      if (nb) await win.screenshot({ path: path.join(dir, 'dm-evidence-narrow.png'), clip: { x: 0, y: Math.max(0, nb.y - 16), width: 400, height: Math.min(860, nb.height + 32) } })
+      await win.setViewportSize({ width: 1440, height: 900 }).catch(() => {})
+      await win.waitForTimeout(500)
+    }
 
     // ── 交给 Muse 执行 ──
     await win.locator(`${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard-actions button.primary`).click()
