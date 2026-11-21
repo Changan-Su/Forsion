@@ -13,7 +13,7 @@
  * microserver/worker 不触本模块。mtime 缓存(config.toml + SOUL.md),改文件即时生效。
  * 旧扁平 <slug>.md 首次访问时惰性迁移成文件夹(原文件留 .bak)。
  */
-import { firstLink, isMultiAccount, perAccount } from '../core/accountScope.js';
+import { firstLink, isMultiAccount, perAccount, requireAccountId } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -1257,17 +1257,23 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
 // 盖掉先写的一方(比如用户刚收紧的审批档)。KEEP_APPROVAL_MODE 的「现读」只有在这把锁里才算数。
 // 删除 / 头像的读-改-写也排进同一条队(Codex 09-25 二轮 #3 #4):删除不入队 = 保存读到 existing 之后删掉、保存再把目录建回来
 // (mustExist 形同虚设);头像在锁外读的旧快照(含审批档)会盖掉排在它前面的用户收紧。
-const saveChains = new Map<string, Promise<unknown>>(); // slug -> 队尾
+const saveChains = new Map<string, Promise<unknown>>(); // 锁键(agentLockKey:slug,多账号模式带账号)-> 队尾
 
 /** 把 fn 排进该 slug 的队。⚠️ fn 里绝不能再调 saveAgent / deleteAgent / saveAgentAvatar / deleteAgentAvatar(同 slug = 自己等自己,
  *  永久挂死)—— 要写就调 writeAgentLocked。入队前先 ensureAgentsReady(见 saveAgent 的注释)。 */
 function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
-  const tail = saveChains.get(slug) || Promise.resolve();
+  const key = agentLockKey(slug);
+  const tail = saveChains.get(key) || Promise.resolve();
   const mine = tail.then(fn);
   const entry = mine.then(() => undefined, () => undefined);
-  saveChains.set(slug, entry);
-  void entry.then(() => { if (saveChains.get(slug) === entry) saveChains.delete(slug); });
+  saveChains.set(key, entry);
+  void entry.then(() => { if (saveChains.get(key) === entry) saveChains.delete(key); });
   return mine;
+}
+
+/** Agent 写锁的键:单人模式 = slug;多账号模式 = 账号 + slug(两个账号的同名 Agent 不互相排队)。 */
+export function agentLockKey(slug: string): string {
+  return isMultiAccount() ? `${requireAccountId('agent lock')}\u0000${slug}` : slug;
 }
 
 /** 锁内落盘(调用方已持有该 slug 的锁、existing 是锁内现读的)。基于已有 agent 的写不建目录:落盘那一刻它的 config.toml

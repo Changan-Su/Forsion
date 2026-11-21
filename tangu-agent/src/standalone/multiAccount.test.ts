@@ -426,6 +426,17 @@ describe('createMultiAccountApp', () => {
     expect(sse).toMatch(/"type":"done"/);
   });
 
+  it('keys the agent write lock by account and slug', async () => {
+    const { agentLockKey } = await import('../agents/agentRegistry.js');
+    const { runWithAccount } = await import('../core/accountScope.js');
+    const a = runWithAccount('alice', () => agentLockKey('xyra'));
+    const b = runWithAccount('bob', () => agentLockKey('xyra'));
+    expect(a).not.toBe(b);
+    expect(a).toContain('alice');
+    expect(runWithAccount('alice', () => agentLockKey('xyra'))).toBe(a);
+    expect(() => agentLockKey('xyra')).toThrow(/no account in context/);
+  });
+
   it('clamps working directories to the account folder', async () => {
     const outside = await call('POST', '/agent/sessions', { as: 'alice', body: { project_path: env.home } });
     expect(outside.status).toBe(400);
