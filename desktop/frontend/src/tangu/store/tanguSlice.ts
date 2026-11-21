@@ -28,7 +28,7 @@ import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
 import { tanguCount, tanguSetting } from '../telemetry'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, clearLiveTop, isDuplicateShow, liveDeskPath, liveKeepsDesk, packDeskMap, placeLiveItem, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
@@ -2922,8 +2922,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const msgs = get().messagesBySession[sessionId] || []
     outer: for (let i = msgs.length - 1; i >= 0; i--) {
       for (const e of msgs[i].toolEvents || []) if (e.id === toolId) {
-        const raw = extractStreamingString(e.arguments || '', 'path')
-        p = raw ? resolveDeskPath(raw.value, cfg.cwd || session?.project_path || undefined) : null
+        // 路径闭合前不认(没闭合时条目 path 留空,界面显示「正在起草…」)
+        p = liveDeskPath(e.arguments || '', cfg.cwd || session?.project_path || undefined)
         break outer
       }
     }
@@ -2937,16 +2937,16 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      const items = c.items[0]?.live?.toolId === toolId ? [item, ...c.items.slice(1)] : replaceTop(c.items, item)
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items } } }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: placeLiveItem(c.items, item) } } }
     })
     persistDeskSoon() // 直播格本身不落盘,但 replaceTop 可能挤掉了要落盘的磁盘格
   },
   deskLiveClear: (sessionId, toolId) => {
     set((s) => {
       const c = s.deskBySession[sessionId]
-      if (!c || c.items[0]?.live?.toolId !== toolId) return {}
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: c.items.slice(1) } } }
+      const items = clearLiveTop(c?.items, toolId) // 带着 bumped 的直播格 → 回到直播前的摆法
+      if (!c || !items) return {}
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items } } }
     })
     persistDeskSoon()
   },
@@ -2964,8 +2964,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         v?.params?.pdfPath ?? v?.params?.path ?? v?.params?.filePath
       const sameFile = !!view && top?.view?.type === view.type
         && fileKeyOf(view) != null && fileKeyOf(top.view) === fileKeyOf(view)
-      // 顶格正是这个文件的直播格 → 别打断直播,解除静音即可
-      const items = top?.live && top.path === path
+      // 顶格是直播格、点的正是它那份或下格那份(已在 Desk 上)→ 别打断直播,条目不动,只展开
+      const items = liveKeepsDesk(c.items, path)
         ? c.items
         : replaceTop(c.items, sameFile
           ? { ...top!, view, at: Date.now() }
