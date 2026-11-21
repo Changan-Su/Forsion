@@ -175,8 +175,8 @@ describe('add_muse_todo 必填依据(借鉴 dsh-superagent 第 2 条,11-20)', ()
     expect(fn.parameters.properties.evidence.items.required).toEqual(['source', 'quote']);
     // 11-21 live:写在工具描述里时 Muse 对投收件箱也犹豫,所以只放在填依据时才读到的地方,并写明只管提待办
     const d: string = fn.description;
-    expect(d).not.toContain('Propose only when all three hold');
-    expect(d).not.toContain('These alone are not evidence');
+    for (const phrase of ['all three hold', "the user's own matter", 'no choice made on their behalf', 'not evidence', 'reading about a topic', 'screen looks bad', 'discussing a plan', 'watch rule the user set'])
+      expect(d).not.toContain(phrase);
     const e: string = fn.parameters.properties.evidence.description;
     expect(e).toContain("the todo is the user's own matter and that they want it");
     expect(e).toContain('needs no choice made on their behalf');
