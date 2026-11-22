@@ -779,6 +779,8 @@ export function buildCycleMessages(
     'If that context ends with a computer-history block, it is what the user was actually doing on this computer outside Forsion: treat it as your most direct signal of what they are working on. ' +
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
+    // 11-22 live:每周手动的活被当成待办提了(待办里写着「可设每周一的规则」)。重复的活走自动化建议,不走待办;预算紧,只留一句。
+    (cfg.automationSuggestions ? 'A chore the user repeats by hand goes to set_automation_suggestions, not a todo. ' : '') +
     (cfg.chatStarters ? `Keep ${MAX_STARTERS} new-chat starters shown via set_chat_starters (fill it back up when fewer are shown); change one only when something more timely comes up. ` : '') +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
     'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
