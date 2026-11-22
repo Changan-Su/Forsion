@@ -178,6 +178,7 @@ const SKETCH_EXPLICIT_RE = /(?:画|绘制|生成|做|给我|用)[^。！？\n]{0
 // A changing condition plus an outcome question is a presentation cue. Neither a subject
 // name nor a change verb alone decides whether there is anything spatial to display.
 const VARY_CONDITION_RE = /(?:逐渐|渐渐|慢慢|逐步|移动|转动|旋转|改变|调节|穿过|越过|经过|从.{1,16}(?:移到|移向|转到|到达|到))|\b(?:gradually|vary|varying|rotate|rotating|move|moving|cross|crosses|crossing|increase|decrease|from.{1,40}to)\b/i;
+const SPECIFIC_FORMAT_RE = /(?:只用|仅用|仅输出|只输出|只要|只给|仅给|用一?句(?:话)?|以.{0,12}格式)|(?:用|以|输出为|给我一张?)[^。！？\n]{0,12}(?:表格|纯文本|静态图|JSON|CSV)|\b(?:as (?:a |an )?(?:table|list|json|csv)|(?:json(?: object)?|csv|markdown(?: table)?|prose|table|text)[- ]only|only.{0,14}(?:json|csv|prose|text|table)|static diagram|no controls|one sentence)\b/i;
 const ASK_EFFECT_RE = /(?:会.{0,14}(?:怎样|怎么样|如何|什么变化)|怎么变|有何变化|如何变化)|\b(?:what (?:happens|changes)|how (?:does|do|will|would))\b/i;
 const SKETCH_RELATION_RE = /(?:比较|对比|排名|趋势|变化|演变|分布|构成|前后|步骤|流程|架构|结构|层级|关系|状态机|生命周期|用户旅程|路线图|时间线|决策矩阵|布局|版式|配色)|\b(?:compare|comparison|versus|vs\.?|rank|ranking|trend|distribution|composition|before and after|steps?|flow|process|architecture|hierarchy|relationship|state machine|lifecycle|journey|roadmap|timeline|decision matrix|layout|palette)\b/i;
 const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|交互式)|\b(?:calculator|slider|filter|toggle|interactive)\b/i;
@@ -214,11 +215,11 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   // less:只认明确要求;隐式信号(比较 / 流程 / 数据形状)不再提醒,收尾补催也随之缺席(它只看这个信号)。
   if (visuals === 'less') return undefined;
 
-  if (VARY_CONDITION_RE.test(text) && ASK_EFFECT_RE.test(text) && !SKETCH_ACTIONABLE_SKIP_RE.test(text) && !SKETCH_CODE_FOCUS_RE.test(text)) {
+  if (VARY_CONDITION_RE.test(text) && ASK_EFFECT_RE.test(text) && !SPECIFIC_FORMAT_RE.test(text) && !SKETCH_ACTIONABLE_SKIP_RE.test(text) && !SKETCH_CODE_FOCUS_RE.test(text)) {
     return {
       kind: 'implicit',
       section: '## Changing conditions in this question\n' +
-        'Identify the variable being changed and the observable outcome. If the outcome involves position, alignment, direction, shape or paths, deliver its diagram now: call `intelligent_ui_html` before your final prose. Show the mechanism and its contrasting states on a common frame. Use the host tabs for distinct states, or continuous control for a meaningful sweep. For a purely scalar result or a requested text, table or other specific format, give that answer directly.',
+        'Identify the variable being changed and the observable outcome. Only when the user leaves the format open and the outcome involves position, alignment, direction, shape or paths, deliver its diagram now: call `intelligent_ui_html` before your final prose. Show the mechanism and its contrasting states on a common frame. For a qualitative question, draw the distinct states directly in labelled host tab panels on the same reference frame. Use a numeric control when the user wants to explore intermediate values. For a purely scalar result or a requested text, table or other specific format, give that answer directly.',
     };
   }
 
@@ -253,7 +254,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
 // Advisory only: the model sees the task and history; keywords never require a card.
 export const PRESENTATION_CHOICE = `Choose the form afresh for the question the user is trying to answer. Honor their format and visual preference. Use a view when seeing or operating it materially helps.
 ${MECHANISM_CHOICE}
-For a one-off quantitative decision with fixed inputs, compute the result before composing the first sentence. Where a strict threshold is involved, substitute the candidate and the preceding attainable value and verify which satisfies the condition. Then lead with that verified action and value; a tie counts only if the question allows equality. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
+For a one-off quantitative decision with fixed inputs, compute the result before composing the first sentence. For a discrete threshold, check the candidate and its adjacent attainable value against the condition. For continuous inputs, state the inequality and whether its boundary is included. Then lead with that verified action and value; a tie counts only if the question allows equality. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
 Use normal chat Markdown for reading, definitions, notes, derivations and static comparisons. Never invent controls to justify a card or repeat the full explanation in it.`;
 const SHAPE_NOTE = `## Presentation choice for this turn
 ${PRESENTATION_CHOICE}

@@ -244,6 +244,9 @@ describe('sketch proactive turn signal', () => {
       expect(sketchTurnSignalFor(message, 'less')).toBeUndefined();
     }
     expect(sketchTurnSignalFor('把以下描述改写成英文：逐渐移动，两点会怎样？')?.section || '').not.toContain('Changing conditions');
+    for (const message of ['What happens as I rotate it? Return a JSON object only.', '逐渐调节间距，会怎样？用表格回答。']) {
+      expect(sketchTurnSignalFor(message, 'auto', true)?.section || '').not.toContain('Changing conditions');
+    }
     expect(sketchTurnSignalFor('How does the tax work?')?.section || '').not.toContain('Changing conditions');
   });
 
