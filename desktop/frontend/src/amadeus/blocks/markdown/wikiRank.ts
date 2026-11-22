@@ -5,7 +5,7 @@
 // 于是笔记数 ≥8 的 vault 里附件/数据库**永远**不出现。看起来就是「这功能没做」。
 // 药:先按分排,再给文件留固定名额(有文件候选时至少露 FILE_SLOTS 条),名额从队尾挤。
 
-import { fuzzyScore } from '../../lib/fuzzy'
+import { rankNames, type PinyinReadings } from '../../lib/nameSearch'
 
 export interface Cand {
   /** vault 相对路径。 */
@@ -23,17 +23,10 @@ export const WIKI_LIMIT = 8
 export const FILE_SLOTS = 2
 
 /** 按 query 排序候选并截断;文件候选保底 FILE_SLOTS 条(不足则有多少给多少)。 */
-export function pickWikiResults(cands: Cand[], query: string, limit = WIKI_LIMIT): Cand[] {
-  // 名字命中优先(+1000)、仅路径命中垫底;sort 稳定 → 同分保持入参顺序(@ 提及 recents-first 不乱)。
-  const scored: Array<{ c: Cand; s: number }> = []
-  for (const c of cands) {
-    if (c.alias && !query.trim()) continue // 空查询不列别名:每篇笔记会平白多出几行,冲掉最近优先的顺序
-    const sName = fuzzyScore(query, c.base)
-    const s = sName !== null ? sName + 1000 : fuzzyScore(query, c.path)
-    if (s !== null) scored.push({ c, s })
-  }
-  scored.sort((a, b) => b.s - a.s)
-  const ranked = scored.map((x) => x.c)
+export function pickWikiResults(cands: Cand[], query: string, limit = WIKI_LIMIT, lookup?: PinyinReadings): Cand[] {
+  // 空查询不列别名:每篇笔记会平白多出几行,冲掉最近优先的顺序。
+  const pool = query.trim() ? cands : cands.filter((c) => !c.alias)
+  const ranked = rankNames(pool, query, (c) => c.base, (c) => c.path, lookup)
   const head = ranked.slice(0, limit)
   const spare = ranked.filter((c) => c.file && !head.includes(c)).slice(0, FILE_SLOTS)
   return spare.length ? [...head.slice(0, limit - spare.length), ...spare] : head

@@ -21,6 +21,7 @@ import { dateCandidates } from './dateQuery'
 import { usePageStore } from '../../store/pageStore'
 import { useVaultAliases } from '../../lib/vaultAliases'
 import { fuzzyScore } from '../../lib/fuzzy'
+import { useNameConfirmation, useNameDictionary } from '../../lib/useNameSearch'
 import { amadeus } from '../../api'
 import { unifiedBody, unifiedHeadings } from '../../unified/lifecycle'
 import { anchorSafe, blockIdsOf, headingsOf, parseSubQuery } from './wikiSubpath'
@@ -141,14 +142,15 @@ function dirOf(p: string): string {
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
 export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false, undatedTask = false }: Props) {
-  const [active, setActive] = useState(0)
+  const [activeKey, setActiveKey] = useState<string | null>(null)
   const [, refreshAgents] = useState(0)
   const agentMentions = !!onPickAgent
   useEffect(() => agentMentions ? readTangu()?.subscribeAgents?.(() => refreshAgents((n) => n + 1)) : undefined, [agentMentions])
   const roster = agentMentions ? readTangu()?.agents?.() ?? agents : agents
   const { t } = useI18n()
   const icons = usePageStore((s) => s.icons) // 页面 emoji(path 键);非 vault 候选池查不到 → 无图标,天然兼容
-  const aliasMap = useVaultAliases()
+  const { aliases: aliasMap, pending: aliasesPending } = useVaultAliases()
+  const { lookup, pending } = useNameDictionary()
 
   const pageNames = getPageNames()
   const cands: Cand[] = [
@@ -197,7 +199,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
     const dateCands = dates ? dateCandidates(query, undefined, { undatedTask }) : []
     for (const d of dateCands) rows.push({ key: `d:${d.insert}`, name: d.label, hint: d.hint, section: 'date', pick: () => onPickRaw?.(d.insert) })
     // 排序 + 文件保底名额见 ./wikiRank(附件/数据库曾被页面整页挤掉,单测钉在 wikiRank.test.ts)。
-    for (const c of pickWikiResults(cands, query)) {
+    for (const c of pickWikiResults(cands, query, undefined, lookup)) {
       rows.push({
         key: (c.file ? 'f:' : c.alias ? `a:${c.alias}:` : 'p:') + c.path,
         name: (
@@ -258,6 +260,12 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   const shown = cat === 'all' ? allRows : cat === 'window' ? winRows : cat === 'app' ? appRows
     : dates ? rows.filter((r) => r.section === (cat === 'note' ? 'page' : cat)) : rows // @:Agent / 日期 / 笔记按行的分区筛
   const total = shown.length
+  const active = activeKey === null ? 0 : Math.max(0, shown.findIndex((row) => row.key === activeKey))
+  const setActive = (index: number) => setActiveKey(shown[index]?.key ?? null)
+  const waitingForNames = !sub && (cat === 'all' || cat === 'note') && ((pending && /[a-zü]/i.test(query)) || (!!q && aliasesPending))
+  const confirmDefault = useNameConfirmation(`${cat}\0${query}`, waitingForNames, () => {
+    if (!editorFocused || editorFocused()) shown[0]?.pick()
+  })
   // 哪一类都没有东西 → 面板整体不出现(同从前);只是当前这一类空着 → 留着分类条,好切回去。
   const visible = allRows.length > 0
   const tabsRef = useCapsuleSlide<HTMLDivElement>(tabbed && visible ? cat : '') // 分类条不在场时给空键:它出现的那一拍才重新量
@@ -273,7 +281,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   })
 
   useEffect(() => {
-    setActive(0)
+    setActiveKey(null)
   }, [query])
 
   // ⚠️ useLayoutEffect 而非 useEffect:被动 effect 的 cleanup 排在提交之后的调度任务里,面板已经
@@ -296,22 +304,23 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
         e.preventDefault()
         e.stopPropagation()
         setCatChoice(nextCat)
-        setActive(0)
+        setActiveKey(null)
         return
       }
       if (total === 0 && e.key !== 'Escape') return // 当前这一类空着:只认 Esc,回车 / ↑↓ 照常落进编辑器
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         e.stopPropagation()
-        setActive((a) => Math.min(a + 1, total - 1))
+        setActive(Math.min(active + 1, total - 1))
       } else if (e.key === 'ArrowUp') {
         e.preventDefault()
         e.stopPropagation()
-        setActive((a) => Math.max(a - 1, 0))
+        setActive(Math.max(active - 1, 0))
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
         e.stopPropagation()
-        shown[active]?.pick()
+        if (activeKey === null && shown[0]?.create) confirmDefault(undefined)
+        else shown[active]?.pick()
       } else if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -347,7 +356,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       <div className="wiki-tabs cap-tabs" role="tablist" aria-label={t('wiki.tab.label')} ref={tabsRef}>
         {cats.map((c) => (
           <button key={c} type="button" className="wiki-tab" role="tab" data-category={c} aria-selected={c === cat}
-            tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => { setCatChoice(c); setActive(0) }}>
+            tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => { setCatChoice(c); setActiveKey(null) }}>
             {t(`wiki.tab.${c}`)}
           </button>
         ))}

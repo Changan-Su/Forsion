@@ -584,6 +584,7 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.7.284",
     "perfect-freehand": "^1.2.3",
+    "pinyinlite": "1.2.1",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

@@ -93,6 +93,7 @@
     "pako": "^1.0.11",
     "path-browserify": "^1.0.1",
     "pdfjs-dist": "^6.4.299",
+    "pinyinlite": "1.2.1",
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

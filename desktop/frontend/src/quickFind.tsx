@@ -19,7 +19,9 @@ import { Search, FileText, Database, MessageSquare, File, Plus } from 'lucide-re
 import { openSession } from './sessionNav'
 import { usePageStore } from './amadeus/store/pageStore'
 import { useAllDatabases } from './amadeus/store/dbAggregateStore'
-import { fuzzyScore } from './amadeus/lib/fuzzy'
+import { rankNames } from './amadeus/lib/nameSearch'
+import { useVaultAliases } from './amadeus/lib/vaultAliases'
+import { useNameConfirmation, useNameDictionary } from './amadeus/lib/useNameSearch'
 import { currentAuthGeneration, useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
@@ -254,8 +256,10 @@ function QuickFindInner() {
   const segThumb = useRef<HTMLDivElement>(null)
   useSegFlow(pos + 1, segThumb) // 动效主题是水滴时滑块流过去
   const [q, setQ] = useState('')
-  const [sel, setSel] = useState(0)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { lookup, pending } = useNameDictionary()
+  const { aliases, pending: aliasesPending } = useVaultAliases()
 
   // 全部候选(名称快切)。open 内构建 → 只在面板打开时加载 .db。
   const allItems = useMemo<Item[]>(() => {
@@ -284,13 +288,9 @@ function QuickFindInner() {
     const all = pick ? allItems.filter((it) => pick.accept(it.kind, it.id)) : allItems
     const inCat = (it: Item): boolean => cat === 'all' || catOf(it.kind) === cat
     if (needle) {
-      return all
-        .filter(inCat)
-        .map((it) => ({ it, s: fuzzyScore(needle, it.title) }))
-        .filter((x): x is { it: Item; s: number } => x.s !== null)
-        .sort((a, b) => b.s - a.s)
-        .slice(0, 30)
-        .map((x) => x.it)
+      return rankNames(all.filter(inCat), needle, (it) => it.title,
+        (it) => it.kind !== 'session' && it.sub !== '/' ? `${it.sub}/${it.title}` : undefined,
+        lookup, (it) => it.kind === 'note' ? aliases[it.id] : undefined).slice(0, 30)
     }
     // 选取模式空态:直接列可选项(最近项与会话兜底在这儿都不成立 —— 会 accept 成空面板)。
     if (pick) return all.slice(0, 30)
@@ -305,7 +305,7 @@ function QuickFindInner() {
       .map((s) => byKey.get(`session:${s.id}`))
       .filter((x): x is Item => !!x)
       .filter(inCat)
-  }, [q, allItems, sessions, cat, pick])
+  }, [q, allItems, sessions, cat, pick, lookup, aliases])
 
   // 「新建笔记」行(评审 G4-11:⌘P 曾被本面板与 Amadeus 的快速切换同时绑定,能新建的那个永远打不开 ——
   // 两个合成本面板一个,新建能力搬过来)。条件同旧快切:有查询、没有 pageKey 精确同名的笔记;
@@ -345,10 +345,15 @@ function QuickFindInner() {
   const title0 = results.length + (showCreate ? 1 : 0)
   const hit0 = title0 + titleHits.length // 第一条「对话内容」的序号
   const total = hit0 + contentHits.length
+  // Late phonetic / alias / server results can move an explicitly selected row.
+  const keyOf = (it: Item) => `${it.kind}:${it.id}`
+  const rowKeys = [...results.map(keyOf), ...(showCreate ? ['create'] : []), ...titleHits.map(keyOf), ...contentHits.map((h) => `content:${h.id}`)]
+  const sel = selectedKey === null ? 0 : Math.max(0, rowKeys.indexOf(selectedKey))
+  const setSel = (index: number) => setSelectedKey(rowKeys[index] ?? null)
   const selHit = sel >= hit0 ? contentHits[sel - hit0] : undefined
   const wide = !phone && contentHits.length > 0
 
-  useEffect(() => setSel(0), [q, pos])
+  useEffect(() => setSelectedKey(null), [q, pos])
   useEffect(() => inputRef.current?.focus(), [])
 
   const openItem = (it: Item, opts?: { newTab?: boolean }): void => {
@@ -395,6 +400,10 @@ function QuickFindInner() {
     if (it) openItem(it, opts)
   }
 
+  const waitingForNames = (pending && /[a-zü]/i.test(q)) || (!!q.trim() && aliasesPending && (cat === 'all' || cat === 'note'))
+  const confirmSelection = useNameConfirmation(`${vaultRoot}\0${cat}\0${q}`, waitingForNames,
+    (newTab: boolean) => chooseAt(0, { newTab }))
+
   const itemButton = (it: Item, i: number) => (
     <button
       key={`${it.kind}:${it.id}`}
@@ -411,9 +420,14 @@ function QuickFindInner() {
   const onKey = (e: ReactKeyboardEvent): void => {
     if (isImeKeyEvent(e)) return // 组字中的 Enter/↑↓/←→/Esc 归输入法(G4-02:此前组字回车直接打开第一条)
     if (e.key === 'Escape') { e.preventDefault(); close() }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); setSel((i) => Math.min(i + 1, total - 1)) }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((i) => Math.max(i - 1, 0)) }
-    else if (e.key === 'Enter') { e.preventDefault(); chooseAt(sel, { newTab: e.metaKey || e.ctrlKey }) }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); setSel(Math.min(sel + 1, total - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setSel(Math.max(sel - 1, 0)) }
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      const newTab = e.metaKey || e.ctrlKey
+      if (selectedKey === null && !results.length && (showCreate || !total)) confirmSelection(newTab)
+      else chooseAt(sel, { newTab })
+    }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       if (pick) return // 选取模式没有分类胶囊 → 左右恒归输入框
       const el = inputRef.current

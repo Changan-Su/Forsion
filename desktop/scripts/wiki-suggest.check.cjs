@@ -47,8 +47,9 @@ const tryTest = async (name, fn) => {
   }
 }
 
-async function open(browser, md, pages) {
+async function open(browser, md, pages, setup) {
   const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1200, height: 900 } })
+  if (setup) await setup(page)
   page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
   await page.goto(`${BASE}?upage&useed=${encodeURIComponent(md)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await page.waitForSelector(PM, { timeout: 120000 })
@@ -98,6 +99,47 @@ const waitCaret = (page) =>
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const PAGES = ['Alpha.md', 'Beta.md', 'Unified.md']
+
+  await tryTest('pinyin', async () => {
+    const page = await open(browser, '# 测试\n\n正文\n', ['研究/项目周报.md', '工作/项目周报.md', 'Unified.md'])
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[xmzb')
+    await page.waitForFunction(() => [...document.querySelectorAll('.wiki-item')].some((el) => el.textContent.includes('项目周报')))
+    await page.keyboard.press('Enter')
+    const md = await saved(page)
+    check('双链首字母补全写入中文原路径和显示名', typeof md === 'string' && md.includes('[[研究/项目周报|项目周报]]') && !md.includes('xmzb'), JSON.stringify(md))
+    await page.close()
+  })
+  await tryTest('pinyin-cold', async () => {
+    const page = await open(browser, '# 测试\n\n正文\n', ['hax.md', 'hbxx.md', '项目.md'])
+    await page.evaluate(() => {
+      window.amadeus.pageAliases = () => new Promise((resolve) => { window.__finishAliases = () => resolve({ '项目.md': ['hx'] }) })
+    })
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[hx')
+    await page.waitForFunction(() => !!window.__finishAliases && [...document.querySelectorAll('.wiki-item')].some((e) => e.textContent.includes('hbxx')))
+    await page.keyboard.press('ArrowDown')
+    const before = (await items(page)).find((r) => r.startsWith('*'))
+    await page.evaluate(() => window.__finishAliases())
+    await page.waitForFunction(() => document.querySelector('.wiki-item')?.textContent.includes('别名'))
+    const after = (await items(page)).find((r) => r.startsWith('*'))
+    await page.keyboard.press('Enter')
+    check('双链异步别名重排后，回车仍插主动选中的原笔记', before === '*hbxx' && before === after && (await saved(page))?.includes('[[hbxx]]'), JSON.stringify({ before, after }))
+    await page.close()
+
+    let release
+    const gate = new Promise((done) => { release = done })
+    const p2 = await open(browser, '# 测试\n\n正文\n', ['项目周报.md'], (p) => p.route('**/*pinyinlite*', async (route) => { await gate; await route.continue() }))
+    await clickEnd(p2, `${PM} > p`)
+    await p2.keyboard.type(' @notamatch')
+    await p2.waitForFunction(() => !document.querySelector('.wiki-suggest .wiki-item'))
+    await p2.keyboard.press('Enter') // @ 的 allowCreate=false，空面板把 Enter 留给正文。
+    await p2.keyboard.type('next')
+    release()
+    const md = await saved(p2)
+    check('拼音表冷加载期间，无候选的 @ 提及仍能正常换行', typeof md === 'string' && md.includes('正文 @notamatch\n\nnext') && !md.includes('[['), JSON.stringify(md))
+    await p2.close()
+  })
 
   // ── L-02:已闭合链接里改目标名 → 只替换目标名这一段 ──
   // 光标进链接 = 行首 Meta+← 再 → 若干格(`see [[` 共 6 格);在里面打字才弹(T38 契约)。
