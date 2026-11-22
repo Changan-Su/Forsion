@@ -257,7 +257,7 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 
 要一个「在这里打字、按发送就去 Tangu 开新对话」的输入区时（主页就是这么用的），使用 `ctx.tangu.mountComposer`：宿主把主页那一整块新对话输入区挂进来（附件、模式、项目、运行位置、语音、通话都在），用户按发送后由宿主建会话、切到 Tangu 并发出，插件只能读到草稿（`draft()`），改不了要发的内容。插件可以往空着的输入框里填一句并聚焦（`prefill(text)`，2026-11-09 起），已经写了一半的草稿原样留着，回车仍由用户按。
 
-不需要对话、只要模型回一段文字时用 `ctx.tangu.complete`（一次性调用：没有工具、不进任何会话，用聊天当前的模型）。翻译用 `ctx.tangu.translate({ text, language })`：同一条通道，但模型取用户在「设置 → 模型 → 翻译」里选的那个；没选时账号里有机器翻译模型就用它，都没有才跟聊天模型（2.13.3 及更早的桌面版本：没选就跟聊天模型）。逐句翻译这类量大的活应当走它；它只返回译文。旧版本没有 `translate`，先探测再退回 `complete`。
+不需要对话、只要模型回一段文字时用 `ctx.tangu.complete`（一次性调用：没有工具、不进任何会话，用聊天当前的模型）。翻译用 `ctx.tangu.translate({ text, language })`：同一条通道，但模型取用户在「设置 → 模型 → 翻译」里选的那个；没选时账号里有机器翻译模型就用它，都没有才跟聊天模型（2.13.3 及更早的桌面版本：没选就跟聊天模型）。逐句翻译这类量大的活应当走它；它只返回译文。旧版本没有 `translate`，先探测再退回 `complete`。在划线动作的 `run` 里调用时，把 `cx.signal` 原样当 `signal` 传进去（2026-11-22 起）：结果卡头会像内置翻译那样写明是哪个模型出的（这次 run 里先调用的那个），`complete` 同理。选区周边（笔记前后的文字、页面说明）只补进宿主核心翻译插件的 `translate` 请求，别的插件不补。
 
 边打字边给灰字建议这类按光标补中间的活用 `ctx.tangu.fim({ before, after })`（2026-10-26 起）：光标前后的正文原样交给补全模型（FIM，fill-in-the-middle），没有提示词，返回模型原文（不 trim）和实际用的 `model`。模型取用户在「设置 → 模型 → 补全」选的那个，没选就用账号里第一个补全模型；`maxTokens` 夹到 1..512（缺省 64），`stop` 最多 4 个、每个不超过 32 字符。没有补全模型、模型或引擎做不了 FIM 时 reject `Error('fim_unavailable')`：退回 `complete`，并在本次会话里记住别再试；云端目录这次没拉到时 reject `Error('fim_catalog_unreachable')`，属临时错误，下次照常试 `fim`。与 `complete` / `translate` 合计每个用户同时最多 3 个请求，每次按键先 abort 上一次。旧版本没有 `fim`，先探测。
 
@@ -275,11 +275,12 @@ ctx.ui?.attachTooltip?.(el, content, { side })
 
 拖动排序、拖进去的落点提示也用宿主那一个：`ctx.ui?.dropIndicator?.()` 拿到 `{ line, zone, hide, dispose }`，传视口坐标；换落点原地淡出淡入、颜色跟主题，给 `key` 免得滚动被当成换落点，插件禁用时宿主统一收；旧宿主没有就照旧自己画。见 [可复用界面组件](./ui-components.md)。松手之后 `drop.land?.(行或找它的函数, 松手处)` 让被拖的那一行从松手处滑进新位置（2026-10-25 起，160ms，减少动态效果下直接到位）。
 
-选中文字后浮出的那一条（划线条）对插件开放两半。一是加动作：`ctx.registerSelectionAction` 的动作列在条上的「⋯ → 插件」里，`run(cx)` 返回的 markdown 进宿主的结果卡（笔记里用户点「替换 / 插入下方」才写，别处只读）。不写 `scope` 只在笔记里出现；`scope: 'all'` 出现在所有有这一条的视图（笔记、聊天、接入了的插件视图），`'own'` 只在自己的视图，数组点名视图；`when({ view, editable, length })` 按视图和字数过滤，`output: 'none'` 表示结果由插件自己处理。二是让自己的视图用上这一条：`ctx.ui?.mountSelectionBar`，宿主给「问 Tangu」「翻译」「⋯」，插件声明自己的工具（图标钮或颜色点）；不接就不出。这两半在 2.13.3 之后的桌面版本里才有：更早的版本只在笔记里列动作（「AI ▾ → 插件」），没有 `mountSelectionBar`，先探测、保留自己的菜单。2026-11-08 起条和结果卡随滚动、缩放跟着那段字走,滚出可见区先藏起来;`watch: false` 自己报选区的视图在 `show()` 里再给 `getRect` 也能跟。见 [可复用界面组件](./ui-components.md)。
+选中文字后浮出的那一条（划线条）对插件开放两半。一是加动作：`ctx.registerSelectionAction` 的动作列在条上的「⋯ → 插件」里，`run(cx)` 返回的 markdown 进宿主的结果卡（笔记里用户点「替换 / 插入下方」才写，别处只读）。不写 `scope` 只在笔记里出现；`scope: 'all'` 出现在所有有这一条的视图（笔记、聊天、接入了的插件视图），`'own'` 只在自己的视图，数组点名视图；`when({ view, editable, length })` 按视图和字数过滤，`output: 'none'` 表示结果由插件自己处理。二是让自己的视图用上这一条：`ctx.ui?.mountSelectionBar`，宿主给「问 Tangu」「翻译」「⋯」，插件声明自己的工具（图标钮或颜色点）；不接就不出。这两半在 2.13.3 之后的桌面版本里才有：更早的版本只在笔记里列动作（「AI ▾ → 插件」），没有 `mountSelectionBar`，先探测、保留自己的菜单。2026-11-08 起条和结果卡随滚动、缩放跟着那段字走,滚出可见区先藏起来;`watch: false` 自己报选区的视图在 `show()` 里再给 `getRect` 也能跟。2026-11-21 起动作可以常驻条上(`placement: 'bar'`,条上插件位最多 3 个,用户在 ⋯ 里钉 / 右键收进 ⋯ / 设置里改的永远优先),可以声明支持「划选后自动」(`auto: true`,开关归用户、缺省关,开了以后划选停下就出结果卡,`run` 拿到 `cx.auto`;这个开关是给用户的界面开关、不是安全边界 —— 插件和宿主跑在同一个渲染进程里,别自己去改它;笔记里不自动跑,`scope` 只认笔记的动作声明了也没用),可以让宿主在结果卡上画目标语言(`cx.language`)、原文和小喇叭(`card`);`title` 也收 `{ zh, en }`。条上多了「朗读」,插件自己念用 `ctx.tts?.speak(text)`(用用户选的朗读模型,没配时宿主提示去设置,不回落系统声音)。宿主自己的「翻译」让给 id 为 `translation` 的插件,条件是它是宿主认的核心插件(随包 / 预装,停用也算),或者它启用着并注册了划线动作;接管后沿用用户给宿主翻译设的「放在哪」。见 [可复用界面组件](./ui-components.md)。
 
 ```js
-ctx.registerSelectionAction({ id, title, run })
+ctx.registerSelectionAction({ id, title, run, placement, auto, card })
 ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
+await ctx.tts?.speak(text, { signal })
 ```
 
 「拿着一件工具干活」的视图(PDF 批注一类)换工具用宿主的工具岛:`ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` 顶部居中(窄于 520px 停底部),选中受控(`onPick` 里自己 `setActive`),句柄的 `row` 是岛下那一排、归插件画。旧宿主没有就画自己的那条。详见[可复用界面组件](./ui-components.md)「工具岛」。

@@ -3377,7 +3377,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))
     // 正在朗读的消息被删(重新生成/编辑重发)→ 停播,否则音频没了停止按钮还在响。
     const speaking = ttsState()
-    if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
+    if (speaking && removed.some((m) => m.id === speaking.key)) stopSpeaking()
     const ok = await get().send(text, attachments, undefined, undefined, undefined, sid, fromQueue)
     if (!ok) {
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: [...(s.messagesBySession[sid] || []).slice(0, fromIndex), ...removed] } }))
@@ -3473,7 +3473,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
       catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return }
       const speaking = ttsState()
-      if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
+      if (speaking && removed.some((m) => m.id === speaking.key)) stopSpeaking()
       set((s) => {
         // 上下文分解是按「回退前那些消息」算的,删完还挂着就是假数据(且刻意不重发 → 没人来刷新它)。
         const ctx = { ...s.ctxInfoBySession }

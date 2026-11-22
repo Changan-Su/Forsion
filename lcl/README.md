@@ -50,7 +50,7 @@ Chat 的阅读位置按 Space / View / 会话 / 引擎分开记消息 ID、消�
 选中文字后浮出来的那一条,全应用一份。
 
 - `@lcl/components`:`SelectionBar`(一行 = 本视图的工具 + 动作,中间一道竖线;「⋯」展开的面板往远离选区的一侧长,那一行不动)、`SelectionBarActions`(只要动作那几枚,给自己画工具行的宿主嵌进去)。纯展示:选区怎么来、条放哪儿、每个按钮做什么都由宿主给;外壳是宿主套的 `.ui-popover.selbar`(定位用 `@lcl/engine` 的 `OverlayAt`)。
-- `desktop/frontend/src/components/selectionBar/ViewSelectionBar`:应用层。看一个元素里的 DOM 选区,接上「带去对话 / 翻译 / 插件动作」和结果卡;聊天直接用。动作表(插件动作的 scope / when、排法偏好)在 `desktop/frontend/src/selectionActions.ts`。
+- `desktop/frontend/src/components/selectionBar/ViewSelectionBar`:应用层。看一个元素里的 DOM 选区,接上「带去对话 / 翻译 / 朗读 / 插件动作」和结果卡;聊天直接用。动作表(插件动作的 scope / when、排法偏好、放哪 / 排序 / 划选后自动,2026-11-21)在 `desktop/frontend/src/selectionActions.ts`,翻成条上按钮的一份在同目录 `barModel.tsx`(笔记格式栏也从它取)。`SelectionBar` 的 `plugins`(竖线后、条上的插件动作)、⋯ 里每行的 `pin` 与顶上的 `moreNotice`、按钮的 `onContextMenu` / `pressed` 都是 11-21 加的;`SelectionBarMoreList` 是 ⋯ 面板的里子,自己画面板的宿主(笔记)嵌它。
 - 笔记:`InlineToolbar` 保留自己的工具行和下拉,把 `SelectionBarActions` 嵌在行首或行尾。
 - 插件:`ctx.ui.mountSelectionBar`(自己的视图用上这一条)、`ctx.registerSelectionAction`(往「⋯」里加动作);详见 [公共契约](../docs/customization/ui-components.md)。
 - 不做全局选区监听:每个视图自己接,没接的视图不出。新视图接入时别再另画一条。

@@ -30,6 +30,7 @@ import { listFonts, getFont } from '../fontPresets'
 import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
 import { loadHomepageWallpaperPrefs, onHomepageWallpaperPrefsChange, setHomepageWallpaperMotion } from '../views/homepageWallpaper'
 import { selectionBarOrder, setSelectionBarOrder } from '../selectionActions'
+import { SelectionActionsTable } from './SelectionActionsTable'
 import { readTanguPrefs } from '../amadeus/plugins/tanguSeam'
 
 export interface AppearanceSettingsProps {
@@ -301,6 +302,8 @@ export function AppearanceSettings(p: AppearanceSettingsProps): React.ReactEleme
     { type: 'select', id: 'selection-bar', anchor: 'selection-bar', title: t('settingsmodal.selectionBar'), desc: t('settingsmodal.selectionBarHint'),
       value: selBarOrder, options: [{ value: 'tools', label: t('settingsmodal.selectionBar.tools') }, { value: 'actions', label: t('settingsmodal.selectionBar.actions') }],
       onChange: (v) => { const next = v === 'actions' ? 'actions' : 'tools'; setSelBarOrder(next); setSelectionBarOrder(next) } },
+    // 管理表(2026-11-21):每个动作放哪 / 排序 / 划选后自动。落点沿用上面那一格的 selection-bar(没另开设置搜索的 id)
+    { type: 'block', id: 'selection-actions', node: <SelectionActionsTable /> },
   )
   const reading: HostSettingsGroup = {
     id: 'reading', className: 'settings-theme-reading',
