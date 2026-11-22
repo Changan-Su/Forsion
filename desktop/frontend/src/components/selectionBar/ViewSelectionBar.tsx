@@ -23,7 +23,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, rememberSelectionLanguage, setSelectionAuto, type OwnedSelectionAction } from '../../selectionActions'
-import { bindSelectionRun, type SelectionRunModel } from '../../amadeus/plugins/selectionRun'
+import { bindSelectionRun, unbindSelectionRun, type SelectionRunModel } from '../../amadeus/plugins/selectionRun'
 import { translateTargetOf } from '../../translateTarget'
 import { selectionMarkdown } from './selectionMarkdown'
 import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
@@ -407,11 +407,14 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       if (hit != null) return { text: hit.text, ...(hit.model ? { model: { name: hit.model.name, mt: !!hit.model.mt } } : {}) }
       // 插件在 run 里把 cx.signal 交给 ctx.tangu.translate / complete 时,出结果的模型记在这里,卡头照宿主翻译那样署名
       const ran = bindSelectionRun(signal, { pluginId: o.pluginId })
-      const text = await runSelectionAction(o, {
+      let text: string
+      try {
+        text = await runSelectionAction(o, {
         text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
         onDelta: (d) => { if (typeof d === 'string') onDelta(d) },
         ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
       })
+      } finally { unbindSelectionRun(signal) }
       if (card.auto && text && !signal.aborted) {
         cache.delete(ck)
         cache.set(ck, { text, ...(ran.model ? { model: ran.model } : {}) })

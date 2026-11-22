@@ -129,6 +129,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
     setText('')
     setError('')
     setToolText(false)
+    setBy('') // 重试 / 换语言:上一次的署名别挂在这次(可能被停下的)半截结果上
     setPhase('running')
     run(instr, (d) => {
       if (ctl.signal.aborted) return

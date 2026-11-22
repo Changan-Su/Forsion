@@ -106,7 +106,7 @@ import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
 import { listSelectionActions, rememberSelectionLanguage, runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle } from '../../selectionActions'
-import { bindSelectionRun } from '../plugins/selectionRun'
+import { bindSelectionRun, unbindSelectionRun } from '../plugins/selectionRun'
 import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive } from '../../components/selectionBar/barModel'
 import { TtsSetupCard } from '../../components/selectionBar/TtsSetupCard'
 import { resolveIcon } from '../components/icons'
@@ -2206,7 +2206,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         pluginId: owned.pluginId, title: noteTitle, pagePath: path, pageInstructions: instructionsOf(view.state.doc),
         ...(ctxAround.before ? { before: ctxAround.before } : {}), ...(ctxAround.after ? { after: ctxAround.after } : {}),
       })
-      const text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) })
+      let text: string
+      try {
+        text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) })
+      } finally { unbindSelectionRun(signal) }
       return { text, ...(text && ran.model ? { model: { name: ran.model.name, mt: !!ran.model.mt } } : {}) }
     }
     const probe = readTangu()

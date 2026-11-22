@@ -280,9 +280,9 @@ const tr = ctx.tangu?.translate
 - 引擎每个用户同时最多 3 个一次性请求(`complete` + `translate` 合计),超出回 429。自己排队,并发开 2 就够。
 - 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
-- **划线动作的 `run` 里**(2026-11-22 起):把 `cx.signal` 原样当 `signal` 传(`translate` / `complete` 都行),宿主就把这段选区的周边
-  (笔记前后文、页面说明)补进它自己发的请求(插件拿不到这些内容),结果卡头也会像内置翻译那样写明是哪个模型出的。
-  自己另建 AbortController 就对不上这次 run,两样都没有。
+- **划线动作的 `run` 里**(2026-11-22 起):把 `cx.signal` 原样当 `signal` 传(`translate` / `complete` 都行),结果卡头就会像内置翻译
+  那样写明是哪个模型出的(这次 run 里先调用的那个)。自己另建 AbortController 就对不上这次 run。选区周边(笔记前后文、页面说明)
+  只补进宿主核心翻译插件 `translation` 的 `translate` 请求,别的插件不补(模型可能把没选中的原文回给插件)。
 
 ### 行内补全:ctx.tangu.fim(2026-10-26 起)
 

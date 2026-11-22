@@ -31,6 +31,11 @@ export function bindSelectionRun(signal: AbortSignal, cx: SelectionRunContext): 
   return cx
 }
 
+/** run 结束(出结果 / 出错)就撤掉:插件把旧 signal 存起来、下一次 run 里再交回来,也对不上那次的周边内容。 */
+export function unbindSelectionRun(signal: AbortSignal): void {
+  runs.delete(signal)
+}
+
 /** ctx.tangu 的请求里带的 signal 是不是这个插件某次划线 run 的那个;是就给它的上下文。 */
 export function selectionRunOf(signal: unknown, pluginId: string): SelectionRunContext | undefined {
   if (typeof AbortSignal === 'undefined' || !(signal instanceof AbortSignal)) return undefined

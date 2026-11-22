@@ -175,7 +175,10 @@ describe('宿主翻译的归属:翻译插件是核心插件(停用也算),或启
   })
   it('随包的翻译插件是核心插件:停用了宿主也不出(条上零颗,不回落成两颗);动作站在宿主那组、不占插件位', () => {
     expect(hostTranslateAllowed([{ id: 'translation', builtin: true, enabled: false }], [])).toBe(false)
-    expect(hostTranslateAllowed([{ id: 'translation', preinstalled: true }], [])).toBe(false)
+    expect(hostTranslateAllowed([{ id: 'translation', builtin: true, enabled: false }], [tr])).toBe(false)
+    expect(hostTranslateAllowed([{ id: 'translation', preinstalled: true }], [tr])).toBe(false)
+    // 核心插件启用着却没注册上(setup 抛错 / 还没载完)不算接管:宿主翻译照旧,条上不至于一颗都没有
+    expect(hostTranslateAllowed([{ id: 'translation', preinstalled: true }], [])).toBe(true)
     // 宿主载不了它(版本闸等)不是用户关的:宿主翻译照旧,条上不至于一颗都没有
     expect(hostTranslateAllowed([{ id: 'translation', builtin: true, blocked: 'minApp' }], [])).toBe(true)
     const core = pluginSelectionEntry(act('translation', 'translate', { placement: 'bar' }), 0, [{ id: 'translation', builtin: true }])

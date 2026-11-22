@@ -168,6 +168,7 @@ import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
 import { unitAuthHeader } from '../../services/unitToken'
 import { selectionRunOf } from './selectionRun'
+import { TRANSLATION_PLUGIN_ID } from '../../selectionActions'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -3204,7 +3205,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
                     // 划线动作 run 里原样交回 cx.signal:宿主补上这段的周边(笔记前后文 / 页面说明 / 标题),插件自己给的优先;
                     // 出结果的模型记回去给结果卡署名(selectionRun.ts)。插件看不到这些字段。
                     const run = selectionRunOf(req?.signal, pluginId)
-                    const full: TanguCompleteRequest = run
+                    // 周边内容只补给核心翻译插件的 translate(宿主的翻译提示词、输出就是选区的译文);第三方插件自写提示词的
+                    // complete 不补 —— 模型可能把没选中的笔记原文回给插件(11-22 Codex 复核)。署名谁都给。
+                    const withContext = !!run && what === 'translate' && pluginId === TRANSLATION_PLUGIN_ID
+                    const full: TanguCompleteRequest = run && withContext
                       ? {
                           ...body,
                           ...(body.before == null && run.before ? { before: run.before } : {}),
@@ -3216,7 +3220,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
                       : body
                     const r = await scoped(what, req, (o) => probe.complete!(full, o))
                     const model = r.model ?? (body.modelId ? { id: body.modelId, name: body.modelId } : undefined)
-                    if (run && model) run.model = model
+                    if (run && model && !run.model) run.model = model // 一次 run 里先出的那个算(插件再调别的模型做校对不改署名)
                     return { text: r.text, ...(model ? { model } : {}) }
                   }
                   return {

@@ -2818,9 +2818,10 @@ export interface PluginContext {
      *  只做翻译:要模型顺带改错字、按你的格式回话,请用 `complete` 自己写指令。引擎每个用户同时最多 3 个这类请求
      *  (与 `complete` 合计),超出回 429 → 自己排队。停用时在飞的请求被中止并 reject。
      *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。
-     *  In a selection action's `run` (2026-11-22+): pass `cx.signal` through as `signal` and the host adds the selection's
-     *  surroundings (note text before / after, page instructions) to its own request — your plugin never sees them — and
-     *  labels the result card with the model that answered, like the built-in translate. Same for `complete`. */
+     *  In a selection action's `run` (2026-11-22+): pass `cx.signal` through as `signal` and the result card names the model
+     *  that answered (the first call in that run), like the built-in translate; same for `complete`. Only the host's core
+     *  translation plugin also gets the selection's surroundings (note text before / after, page instructions) added to its
+     *  `translate` request; other plugins never do. */
     translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }>
     /** 行内补全 / Inline completion (FIM, fill-in-the-middle; 2026-10-26+). 光标前后文原样交给**补全模型**,没有提示词、没有指令:
      *  `before` = 光标前的正文(引擎留最后 16k 字符),`after` = 光标后的正文(留前 8k);两者至少一个非空。返回 `text` = 模型原文

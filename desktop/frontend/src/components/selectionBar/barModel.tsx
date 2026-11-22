@@ -16,7 +16,7 @@ import { readTangu } from '@amadeus/plugins/tanguSeam'
 import { SELECTION_PREFS_EVENT } from '../../uiPrefsBus'
 import {
   HOST_SELECTION_KEYS, arrangeSelectionActions, autoSelectionAction, hostSelectionEntry, hostTranslateAllowed, listSelectionActions, pinSelectionAction,
-  placementOf, pluginSelectionEntry, selectionActionKey, selectionActionPrefs, selectionActionTitle,
+  placementOf, pluginSelectionEntry, selectionActionKey, selectionActionPrefs, selectionActionTitle, TRANSLATION_PLUGIN_ID,
   type OwnedSelectionAction, type SelectionActionPrefs, type SelectionEntry,
 } from '../../selectionActions'
 
@@ -108,7 +108,10 @@ export function buildSelectionBarModel(o: {
   if (o.host.ask.length) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.ask))
   if (o.host.translate && hostTranslateAllowed(o.installed, o.registered)) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.translate))
   if (o.host.speak) entries.push(hostSelectionEntry(HOST_SELECTION_KEYS.speak))
+  // 翻译插件只走宿主的 Tangu 翻译管线:这个宿主没有(纯 Amadeus 壳从共用的 plugins/ 里载到它)就不画它,免得一颗点了必错的「翻译」
+  const canTranslate = readTangu()?.complete !== undefined
   for (const a of listSelectionActions(o.registered, { view: o.view, editable: o.editable, length: o.length })) {
+    if (a.pluginId === TRANSLATION_PLUGIN_ID && !canTranslate) continue
     entries.push({ ...pluginSelectionEntry(a, o.registered.indexOf(a), o.installed), owned: a })
   }
 

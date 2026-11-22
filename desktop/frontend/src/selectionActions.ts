@@ -208,8 +208,10 @@ export function hostTranslateAllowed(
   if (!p) return true
   // 装着但这个宿主载不了(版本闸 / API / 清单坏):不是用户关的,别让条上一颗翻译都没有(11-22 Codex)
   if (p.blocked) return true
-  if (isCorePlugin(p)) return false
-  return !(p.enabled !== false && registered.some((o) => o.pluginId === TRANSLATION_PLUGIN_ID))
+  const took = registered.some((o) => o.pluginId === TRANSLATION_PLUGIN_ID)
+  // 核心插件:用户停用 = 条上没有翻译(契约 §5);启用着却没注册上(setup 抛错、还没载完)不算接管,宿主照旧(11-22 Codex 复核)
+  if (isCorePlugin(p)) return p.enabled === false ? false : !took
+  return !(p.enabled !== false && took)
 }
 
 /** 用户自己设过的「放在哪」(含沿用的那个键的);没设过 = undefined。 */
