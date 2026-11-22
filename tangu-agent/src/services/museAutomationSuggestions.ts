@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { resolveNoteRef } from './museStarters.js';
 import { validateTriggerInput, type TriggerInput, type ValidatedTrigger } from './museTriggers.js';
+import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 
 export const SUGGESTION_SOURCE_KINDS = ['calendar', 'note', 'todo', 'database', 'computer', 'muse'] as const;
@@ -65,9 +66,16 @@ export function validateSuggestions(raw: unknown, opts: { vaultPath?: string; cw
     if (!ruleIn) return { error: `${at}: rule is required (the same fields as manage_automation set)` };
     // 画布只认动作链:旧式 agent_slug / agent 会在草稿里变成「叫醒 Muse」,改用 actions 里的 agent_run 步骤
     if ((ruleIn as any).agent_slug || (ruleIn as any).agent) return { error: `${at}: rule: use an agent_run step in actions instead of agent_slug` };
-    const v = validateTriggerInput({ ...ruleIn, desc: oneLine(ruleIn.desc) || title }, { allowToolCall: false, vaultPath, cwd: opts.cwd });
+    // 草稿里的 agent_run 可以先不定执行者(缺省或写 muse):用户在画布里挑。校验时借一个占位 slug,过了再清空 ——
+    // 11-22 live 三次里三次首调都因为写了 muse 被整组拒收,退成「提醒」,而用户要的是「交给 Agent 去做」。
+    const PICK = '__user_picks__';
+    const rawActions = Array.isArray((ruleIn as any).actions) ? (ruleIn as any).actions as any[] : undefined;
+    const picked = rawActions?.map((a) => a?.type === 'agent_run' && (!String(a.agentSlug || a.agent_slug || '').trim() || String(a.agentSlug || a.agent_slug).trim() === MUSE_AGENT_SLUG));
+    const forCheck = rawActions ? { ...ruleIn, actions: rawActions.map((a, k) => (picked![k] ? { ...a, agentSlug: PICK, agent_slug: undefined } : a)) } : ruleIn;
+    const v = validateTriggerInput({ ...forCheck, desc: oneLine(ruleIn.desc) || title } as TriggerInput, { allowToolCall: false, vaultPath, cwd: opts.cwd });
     if (!v.ok) return { error: `${at}: rule: ${v.error}` };
-    const { desc, cond, prompt, cooldownHours, actions, only, maxPerDay } = v.value;
+    const { desc, cond, prompt, cooldownHours, only, maxPerDay } = v.value;
+    const actions = v.value.actions?.map((a) => (a.type === 'agent_run' && a.agentSlug === PICK ? { ...a, agentSlug: '' } : a));
     const key = suggestionKey(title);
     if (seen.has(key)) return { error: `${at}: duplicate of an earlier suggestion` };
     seen.add(key);

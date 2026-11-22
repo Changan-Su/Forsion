@@ -65,6 +65,15 @@ describe('validateSuggestions', () => {
     expect(V([{ ...away, rule: undefined }])).toEqual({ error: expect.stringMatching(/rule is required/) });
     expect(V([{ ...away, rule: { cond_type: 'daily_at', time: '09:00', actions: [{ type: 'tool_call', tool: 'run_bash', args: {} }] } }])).toHaveProperty('error');
   });
+  it('agent_run 可以先不定执行者(缺省或写 muse):草稿里留空,用户在画布里挑;写了别的 agent 原样留着', () => {
+    const v = V([
+      { ...weekly, rule: { cond_type: 'daily_at', time: '09:00', only: { weekdays: [1] }, actions: [{ type: 'agent_run', prompt: '整理周报' }] } },
+      { ...away, rule: { cond_type: 'daily_at', time: '10:00', actions: [{ type: 'agent_run', agentSlug: 'muse', prompt: 'x' }, { type: 'agent_run', agentSlug: 'xyra', prompt: 'y' }] } },
+    ]);
+    if (!('suggestions' in v)) throw new Error(v.error);
+    expect(v.suggestions[0].rule.actions).toEqual([{ type: 'agent_run', agentSlug: '', prompt: '整理周报' }]);
+    expect(v.suggestions[1].rule.actions!.map((a: any) => a.agentSlug)).toEqual(['', 'xyra']);
+  });
   it('旧式 agent_slug 不收(画布会把它画成「叫醒 Muse」),要用 actions 里的 agent_run', () => {
     expect(V([{ ...away, rule: { cond_type: 'daily_at', time: '09:00', agent_slug: 'xyra' } }])).toEqual({ error: expect.stringMatching(/agent_run step/) });
   });

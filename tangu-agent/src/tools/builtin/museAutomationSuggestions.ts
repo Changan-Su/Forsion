@@ -30,6 +30,7 @@ export const museAutomationSuggestionsProvider: ToolProvider = {
             'Write title and why in the user\'s language. title: the task in a few words. why: one sentence on what you saw. ' +
             'source names that evidence (the app shows label as a link; note and database need ref = the file path you read). ' +
             'rule takes the same fields as manage_automation set (cond_type, its parameters, actions, only, …); use only triggers and actions that tool offers, and no tool_call steps. ' +
+            'For a weekly task use daily_at with only.weekdays (e.g. Monday = [1]). An agent_run step may leave agentSlug empty: the user picks the agent when they open the draft. ' +
             'Do not repeat a rule the user already has, a rule card waiting in your direct chat, or one of your todos. ' +
             'Keep a suggestion until it stops being relevant — swapping them every cycle makes the page jumpy.',
           parameters: {
