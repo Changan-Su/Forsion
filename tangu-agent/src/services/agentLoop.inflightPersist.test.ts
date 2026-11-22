@@ -121,6 +121,18 @@ describe('inflight text is persisted when the run fails mid-stream', () => {
     expect((await getRun(r.runId))?.result).toBeNull();
   }, 20_000);
 
+  it('rejects a draft when the provider reached EOF without a completion frame', async () => {
+    script = [async (o) => {
+      const content = 'Your train departs at';
+      o.onToken(content);
+      return { content, reasoning: '', finishReason: 'stop', streamEndedEarly: true, toolCalls: [],
+        usage: { prompt_tokens: 10, completion_tokens: 5 } };
+    }];
+    const r = await runToEnd(AUTOMATION_DRAFT_BACKGROUND);
+    expect(r.status).toBe('failed');
+    expect((await getRun(r.runId))?.result).toBeNull();
+  }, 20_000);
+
   it('single iteration: tokens streamed then a non-retryable error → finalize and error event carry the streamed text', async () => {
     script = [
       async (o) => {

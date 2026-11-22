@@ -173,16 +173,19 @@ describe('跑在外部引擎上的 Agent', () => {
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES ('P', 'u1', 'tangu', 't', 'm1', 'user', ?)`,
       [JSON.stringify({ soloAgentSlug: 'ds', agentSlug: 'ds' })]);
     expect((await turn(1, {}, { origin: 'client' }, 'P')).done).toBe(true);
-    for (const content of ['First scheduled message', 'Second scheduled message']) {
+    const messages = Array.from({ length: 21 }, (_, i) => `Scheduled message #${i + 1}.`);
+    for (const content of messages) {
       await appendProactiveMessage({ sessionId: 'P', agentSlug: 'ds', content, origin: AUTOMATION_DM_ORIGIN, ask: false });
     }
     expect((await turn(2, {}, { origin: 'client' }, 'P')).done).toBe(true);
     expect((await turn(3, {}, { origin: 'client' }, 'P')).done).toBe(true);
-    expect(calls.map((c) => c.resume)).toEqual([undefined, 'ext-1', 'ext-1']);
-    expect(calls[1].message).toContain('["First scheduled message","Second scheduled message"]');
+    expect((await turn(4, {}, { origin: 'client' }, 'P')).done).toBe(true);
+    expect(calls.map((c) => c.resume)).toEqual([undefined, 'ext-1', 'ext-1', 'ext-1']);
+    expect(calls[1].message).toContain(JSON.stringify(messages.slice(0, 20)));
     expect(calls[1].message).toContain('q2');
-    expect(calls[2].message).toBe('q3');
-    expect((await rows('P')).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['q1', 'q2', 'q3']);
+    expect(calls[2].message).toContain(JSON.stringify(messages.slice(20)));
+    expect(calls[3].message).toBe('q4');
+    expect((await rows('P')).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['q1', 'q2', 'q3', 'q4']);
   }, 20_000);
 
   it('普通对话:带了目录就用那个目录;没带目录落在它的 Library,没有就补建', async () => {
