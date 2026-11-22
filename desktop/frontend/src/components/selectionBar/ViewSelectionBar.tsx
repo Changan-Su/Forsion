@@ -23,6 +23,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, rememberSelectionLanguage, setSelectionAuto, type OwnedSelectionAction } from '../../selectionActions'
+import { bindSelectionRun, type SelectionRunModel } from '../../amadeus/plugins/selectionRun'
 import { translateTargetOf } from '../../translateTarget'
 import { selectionMarkdown } from './selectionMarkdown'
 import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
@@ -39,9 +40,9 @@ const AUTO_DELAY_MS = 400
 const AUTO_MAX_CHARS = 2000
 /** 自动跑过的结果:同一个动作(按这次注册的那个对象认 —— 插件重载后是新对象,旧结果跟着作废)、同一份请求输入
  *  (视图、来源、目标语言、选中的字),本次会话内不再请求。每个动作按出现先后最多留这么多。 */
-const autoCache = new WeakMap<object, Map<string, string>>()
+const autoCache = new WeakMap<object, Map<string, { text: string; model?: SelectionRunModel }>>()
 const AUTO_CACHE_MAX = 100
-const autoCacheOf = (item: object): Map<string, string> => {
+const autoCacheOf = (item: object): Map<string, { text: string; model?: SelectionRunModel }> => {
   let m = autoCache.get(item)
   if (!m) autoCache.set(item, (m = new Map()))
   return m
@@ -403,7 +404,9 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const useCache = card.auto && cacheArmed.current === card.runKey
       cacheArmed.current = null
       const hit = useCache ? cache.get(ck) : undefined
-      if (hit != null) return { text: hit }
+      if (hit != null) return { text: hit.text, ...(hit.model ? { model: { name: hit.model.name, mt: !!hit.model.mt } } : {}) }
+      // 插件在 run 里把 cx.signal 交给 ctx.tangu.translate / complete 时,出结果的模型记在这里,卡头照宿主翻译那样署名
+      const ran = bindSelectionRun(signal, { pluginId: o.pluginId })
       const text = await runSelectionAction(o, {
         text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
         onDelta: (d) => { if (typeof d === 'string') onDelta(d) },
@@ -411,10 +414,10 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       })
       if (card.auto && text && !signal.aborted) {
         cache.delete(ck)
-        cache.set(ck, text)
+        cache.set(ck, { text, ...(ran.model ? { model: ran.model } : {}) })
         if (cache.size > AUTO_CACHE_MAX) cache.delete(cache.keys().next().value!)
       }
-      return { text }
+      return { text, ...(text && ran.model ? { model: { name: ran.model.name, mt: !!ran.model.mt } } : {}) }
     }
     const complete = readTangu()?.complete
     if (!complete) throw new Error(translate('inlineai.unavailable'))

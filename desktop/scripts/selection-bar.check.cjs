@@ -879,6 +879,60 @@ async function main() {
       check('管理表里设成「不显示」:条上没有它,下一个放得下的补上', b4?.row.join(',') === `quote,btw,${K('translate')},speak,|,${P('b1')},${P('b3')},${P('b4')},more`, b4?.row.join(','))
     })
 
+    // ── 2026-11-22:真的随包 @forsion/translation(播种进来的那份,不是探针):聊天与笔记各点一次「翻译」──
+    // 证的是装出去的产品那条路:条上恰好一颗翻译、在宿主那组;请求照旧走宿主翻译管线(机器翻译模型);卡头写明谁译的;
+    // 笔记里插件接管后请求仍带前后文与页面说明(宿主侧上下文 selectionRun.ts,插件看不到这些字段)。
+    await step('随包翻译插件:聊天与笔记', async () => {
+      await app.close().catch(() => {})
+      const NOTE = ['# 词汇表', '', '```forsion-instructions', 'Translate 记号 as token.', '```', '', '词法阶段先切分记号。', '', '解析器再把记号拼成语法树。', '', '最后检查边界用例。', ''].join('\n')
+      const BT = "window.__bt = { note: () => ctx.app.openNote('Glossary.md') }"
+      const fourth = await launch(stub.url, { tangu_locale: 'zh' }, { pluginId: 'btprobe', pluginMain: BT, keepBundledTranslation: true, notes: { 'Glossary.md': NOTE } })
+      app = fourth.app
+      win = fourth.win
+      check('第四个实例离开首启引导', await skipOnboarding(win))
+      await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+      await ensureTangu(win, shots)
+      check('随包的翻译插件已播种(plugins/translation 是 npm 包那份)', JSON.parse(fs.readFileSync(path.join(fourth.home, 'plugins', 'translation', 'manifest.json'), 'utf8')).id === 'translation'
+        && fs.existsSync(path.join(fourth.home, 'plugins', 'translation', 'main.js')))
+      const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
+      await row.waitFor({ timeout: 30000 })
+      await row.click()
+      await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
+      const T = 'plugin:translation:translate'
+      await until(async () => { await dragSelect(win, CHAT, '重构解析器的词法阶段'); const b = await barReady(win); return !!b && b.row.includes(T) }, 20000)
+      const b = await barState(win)
+      check('聊天:条上恰好一颗翻译 = 随包插件那颗,站在宿主那组(朗读前),宿主自己的不出', !!b && !b.row.includes('translate') && b.row.filter((x) => /translat/.test(x)).length === 1
+        && b.row.indexOf(T) >= 0 && b.row.indexOf(T) < b.row.indexOf('speak') && !b.row.includes('|'), b?.row.join(','))
+      const before = inline.length
+      await win.locator(`[data-testid="selection-bar"] [data-act="${T}"]`).click()
+      const c = await cardDone(win)
+      const req = inline.at(-1)
+      check('聊天:请求照旧走宿主翻译管线(action=translate、选中的字、中文译成英文、目录里的机器翻译模型)', inline.length === before + 1 && req?.action === 'translate'
+        && req.selection === '重构解析器的词法阶段' && req.language === 'English' && req.model_id === 'qwen-mt', JSON.stringify(req))
+      check('聊天:卡头照宿主翻译那样写明是机器翻译、哪个模型', /机器翻译.*Qwen MT Flash/.test(c?.hint || ''), JSON.stringify(c))
+      await shot(win, path.join(shots, 'bundled-chat.png'))
+      await win.keyboard.press('Escape')
+
+      await win.evaluate(() => window.__bt.note())
+      const PM = '.unified-body .ProseMirror'
+      await win.locator(PM, { hasText: '解析器再把记号拼成语法树' }).first().waitFor({ timeout: 30000 })
+      await dragSelect(win, PM, '解析器再把记号拼成语法树')
+      const tb = win.locator('[data-testid="inline-toolbar"]')
+      await tb.waitFor({ timeout: 5000 })
+      const acts = await tb.evaluate((el) => [...el.querySelectorAll('[data-act]')].map((x) => x.getAttribute('data-act')))
+      const mine = acts.filter((a) => /translat/.test(a))
+      check('笔记:工具条上恰好一颗翻译,是插件那颗(宿主的 translate 不出)', mine.length === 1 && mine[0] !== 'translate', acts.join(','))
+      const n0 = inline.length
+      await tb.locator(`[data-act="${mine[0]}"]`).click()
+      const nc = await cardDone(win)
+      const nreq = inline.at(-1)
+      check('笔记:插件接管后请求仍带前后文与页面说明(术语表)、标题与路径', inline.length === n0 + 1 && nreq?.action === 'translate' && nreq.selection === '解析器再把记号拼成语法树'
+        && /词法阶段先切分记号/.test(nreq.before || '') && /最后检查边界用例/.test(nreq.after || '') && /Translate 记号 as token/.test(nreq.page_instructions || nreq.pageInstructions || '')
+        && /Glossary\.md$/.test(nreq.page_path || nreq.pagePath || ''), JSON.stringify(nreq))
+      check('笔记:卡头写明谁译的;只是预览,没写盘', /机器翻译.*Qwen MT Flash/.test(nc?.hint || '') && fs.readFileSync(path.join(fourth.home, 'vault', 'Glossary.md'), 'utf8') === NOTE, JSON.stringify(nc))
+      await shot(win, path.join(shots, 'bundled-note.png'))
+    })
+
     console.log(`\n${checks} checks passed, ${failed.length} failed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)
     console.log(`SCREENSHOTS ${shots}`)
     if (failed.length) process.exitCode = 1

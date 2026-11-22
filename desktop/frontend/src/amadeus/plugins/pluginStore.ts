@@ -167,6 +167,7 @@ import { connectionTarget, homeTarget } from '../../services/engine/targets'
 import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
 import { unitAuthHeader } from '../../services/unitToken'
+import { selectionRunOf } from './selectionRun'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -3200,8 +3201,23 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                     const probe = readTangu()
                     if (!probe?.complete) throw new Error(`${what} is not available on this host`)
-                    const r = await scoped(what, req, (o) => probe.complete!(body, o))
-                    return { text: r.text, ...(r.model ? { model: r.model } : body.modelId ? { model: { id: body.modelId, name: body.modelId } } : {}) }
+                    // 划线动作 run 里原样交回 cx.signal:宿主补上这段的周边(笔记前后文 / 页面说明 / 标题),插件自己给的优先;
+                    // 出结果的模型记回去给结果卡署名(selectionRun.ts)。插件看不到这些字段。
+                    const run = selectionRunOf(req?.signal, pluginId)
+                    const full: TanguCompleteRequest = run
+                      ? {
+                          ...body,
+                          ...(body.before == null && run.before ? { before: run.before } : {}),
+                          ...(body.after == null && run.after ? { after: run.after } : {}),
+                          ...(run.title ? { title: run.title } : {}),
+                          ...(run.pagePath ? { pagePath: run.pagePath } : {}),
+                          ...(run.pageInstructions ? { pageInstructions: run.pageInstructions } : {}),
+                        }
+                      : body
+                    const r = await scoped(what, req, (o) => probe.complete!(full, o))
+                    const model = r.model ?? (body.modelId ? { id: body.modelId, name: body.modelId } : undefined)
+                    if (run && model) run.model = model
+                    return { text: r.text, ...(model ? { model } : {}) }
                   }
                   return {
                     // 行内补全(FIM,2026-10-26+):与 complete 同一道门、同一套关账;模型解析与 fim_unavailable 在探针里。

@@ -199,13 +199,15 @@ export function selectionAutoReachable(o: OwnedSelectionAction): boolean {
 
 /** 宿主的「翻译」这次出不出。plugins = 装着的(含停用的);registered = 这个窗口注册着的划线动作。
  *  不出的两种:翻译插件是宿主认的核心插件(随包 / 预装,停用也算);或它启用着、且真注册了划线动作。
- *  同名的普通插件只是装着、没注册动作,宿主翻译照旧 —— 别让一个空壳把翻译弄没了。 */
+ *  同名的普通插件只是装着、没注册动作,宿主翻译照旧 —— 别让一个空壳把翻译弄没了;宿主载不了它(blocked)也照旧。 */
 export function hostTranslateAllowed(
-  plugins: readonly { id: string; enabled?: boolean; builtin?: boolean; preinstalled?: boolean }[],
+  plugins: readonly { id: string; enabled?: boolean; builtin?: boolean; preinstalled?: boolean; blocked?: string }[],
   registered: readonly OwnedSelectionAction[],
 ): boolean {
   const p = plugins.find((x) => x.id === TRANSLATION_PLUGIN_ID)
   if (!p) return true
+  // 装着但这个宿主载不了(版本闸 / API / 清单坏):不是用户关的,别让条上一颗翻译都没有(11-22 Codex)
+  if (p.blocked) return true
   if (isCorePlugin(p)) return false
   return !(p.enabled !== false && registered.some((o) => o.pluginId === TRANSLATION_PLUGIN_ID))
 }

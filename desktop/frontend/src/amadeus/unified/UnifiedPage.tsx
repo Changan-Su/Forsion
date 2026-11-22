@@ -106,6 +106,7 @@ import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
 import { listSelectionActions, rememberSelectionLanguage, runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle } from '../../selectionActions'
+import { bindSelectionRun } from '../plugins/selectionRun'
 import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive } from '../../components/selectionBar/barModel'
 import { TtsSetupCard } from '../../components/selectionBar/TtsSetupCard'
 import { resolveIcon } from '../components/icons'
@@ -2198,7 +2199,15 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       const owned = usePluginStore.getState().selectionActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin)
       if (!owned) throw new Error(translate('selbar.err.gone'))
       // 返回值的校验(字符串、无控制字符)在 runSelectionAction 里:聊天、插件视图里跑同一个动作走的也是它。
-      return { text: await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) }) }
+      // 宿主侧上下文(selectionRun.ts):插件把 cx.signal 交给 ctx.tangu.translate / complete 时,请求照宿主翻译那样带上
+      // 前后文与页面说明(插件看不到),出结果的模型回来给卡头署名 —— 翻译改由核心插件接管后两样都不丢。
+      const ctxAround = aiContextOf(view.state.doc, target.from, target.to)
+      const ran = bindSelectionRun(signal, {
+        pluginId: owned.pluginId, title: noteTitle, pagePath: path, pageInstructions: instructionsOf(view.state.doc),
+        ...(ctxAround.before ? { before: ctxAround.before } : {}), ...(ctxAround.after ? { after: ctxAround.after } : {}),
+      })
+      const text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) })
+      return { text, ...(text && ran.model ? { model: { name: ran.model.name, mt: !!ran.model.mt } } : {}) }
     }
     const probe = readTangu()
     if (!probe?.complete) throw new Error(translate('inlineai.unavailable'))

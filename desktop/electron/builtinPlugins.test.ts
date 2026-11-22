@@ -200,6 +200,20 @@ describe('npm 暂存区(.pending)', () => {
   })
 })
 
+describe('目录名被占用', () => {
+  it('plugins/<id> 里是别的插件(manifest id 不同)或没有 manifest:不覆盖、整包跳过,用户的文件原样留着', async () => {
+    await write(path.join(root, 'tangu-computer-use'), { 'manifest.json': manifest('my-own-thing', '9.0.0'), 'notes.txt': 'mine' })
+    const r = await seed()
+    expect(r.installed).toEqual([])
+    expect(r.skipped).toEqual([src])
+    expect(await read(path.join(root, 'tangu-computer-use', 'notes.txt'))).toBe('mine')
+    await fs.rm(path.join(root, 'tangu-computer-use'), { recursive: true })
+    await write(path.join(root, 'tangu-computer-use'), { 'readme.md': 'no manifest here' })
+    expect((await seed()).skipped).toEqual([src])
+    expect(await read(path.join(root, 'tangu-computer-use', 'readme.md'))).toBe('no manifest here')
+  })
+})
+
 describe('activeBundleDir', () => {
   it('已装同 id(哪怕目录名不同)→ 用已装那份;没装 → 随包来源', async () => {
     expect(await activeBundleDir(root, src)).toBe(src)
@@ -211,26 +225,28 @@ describe('activeBundleDir', () => {
 describe('builtinBundleSources', () => {
   it('打包版走 resources/bundled-plugins/<name>,dev 走 node_modules/<pkg>;清单项原样带上', () => {
     const packaged = builtinBundleSources({ isPackaged: true, resourcesPath: '/App/Contents/Resources', appPath: '/x', platform: 'darwin' })
-    expect(packaged.map((s) => s.dir)).toEqual(['/App/Contents/Resources/bundled-plugins/tangu-computer-use', '/App/Contents/Resources/bundled-plugins/extend', '/App/Contents/Resources/bundled-plugins/calendar'])
+    expect(packaged.map((s) => s.dir)).toEqual(['/App/Contents/Resources/bundled-plugins/tangu-computer-use', '/App/Contents/Resources/bundled-plugins/extend', '/App/Contents/Resources/bundled-plugins/calendar', '/App/Contents/Resources/bundled-plugins/translation'])
     expect(packaged[1]).toMatchObject({ pkg: '@forsion/extend', id: 'forsion-extend', desktop: { entry: 'dist/desktop.mjs' } })
     expect(packaged[1].desktop?.signingKey).toMatch(/^-----BEGIN PUBLIC KEY-----\n/)
     expect(builtinBundleSources({ isPackaged: false, resourcesPath: '/x', appPath: '/repo/desktop', platform: 'win32' }).map((s) => s.dir))
-      .toEqual(['/repo/desktop/node_modules/@forsion/tangu-computer-use', '/repo/desktop/node_modules/@forsion/extend', '/repo/desktop/node_modules/@forsion/calendar'])
+      .toEqual(['/repo/desktop/node_modules/@forsion/tangu-computer-use', '/repo/desktop/node_modules/@forsion/extend', '/repo/desktop/node_modules/@forsion/calendar', '/repo/desktop/node_modules/@forsion/translation'])
   })
 
   it('按清单项自己声明的 platforms 过滤:电脑操作不进 Linux,Forsion Extend 全平台', () => {
-    expect(builtinBundleSources({ isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'linux' }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
+    expect(builtinBundleSources({ isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'linux' }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar', '@forsion/translation'])
     for (const b of BUILTIN_BUNDLES) expect(b.platforms.length, b.pkg).toBeGreaterThan(0)
   })
 
   it('按清单项 requires 过滤产品档案:电脑操作只进带 agent 后端的档案,Forsion Extend(云同步 / penzor / 登录态)全档案都进;缺省当作带', () => {
     const base = { isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'darwin' as const }
     expect(builtinBundleSources({ ...base, agentBackend: false }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
-    expect(builtinBundleSources({ ...base, agentBackend: true }).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar'])
-    expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar'])
+    expect(builtinBundleSources({ ...base, agentBackend: true }).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar', '@forsion/translation'])
+    expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar', '@forsion/translation'])
     expect(builtinBundleSources({ ...base, agentBackend: false, spaces: ['home'] }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
     expect(builtinBundleSources({ ...base, agentBackend: false, spaces: ['amadeus', 'calendar'] }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'tangu-computer-use')?.requires).toBe('agentBackend')
+    // 翻译插件只走宿主的 Tangu 翻译管线:没有 agent 后端的档案(Amadeus / Basic)没有 ctx.tangu,种进去只会多一颗点了必错的「翻译」
+    expect(BUILTIN_BUNDLES.find((b) => b.id === 'translation')?.requires).toBe('agentBackend')
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'forsion-extend')?.requires).toBeUndefined()
   })
 })

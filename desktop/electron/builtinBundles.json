@@ -41,6 +41,7 @@
       "win32",
       "linux"
     ],
-    "minVersion": "0.1.0"
+    "minVersion": "0.1.0",
+    "requires": "agentBackend"
   }
 ]
