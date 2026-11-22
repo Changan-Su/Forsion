@@ -78,6 +78,18 @@ describe('literal Markdown replacement', () => {
     expect(prepareLiteralReplacement('Visible old**Missing**]] tail', [8], 'old', '[[')).toBeNull()
     expect(prepareLiteralReplacement('old is normal', [0], 'old', '$20')?.after).toBe('$20 is normal')
   })
+  it('preserves actual editor comment and highlight spans across inline marks', () => {
+    for (const delimiter of ['%%', '==']) {
+      const source = 'Visible old**Missing**' + delimiter + ' tail'
+      expect(prepareLiteralReplacement(source, [8], 'old', delimiter)).toBeNull()
+    }
+    const source = 'old %%hide **old** here%% and ==**old**== old'
+    const hits = noteReplaceMatches('a.md', source, 'old')
+    expect(hits.map(m => m.from)).toEqual([0, source.lastIndexOf('**old') + 2, source.lastIndexOf('old')])
+    expect(noteReplaceMatches('a.md', source, '==')).toEqual([])
+    expect(prepareLiteralReplacement(source, hits.map(m => m.from), 'old', 'new')?.after)
+      .toBe('new %%hide **old** here%% and ==**new**== new')
+  })
   it('skips reserved paths, plugin metadata and newer formats but supports legacy prose', () => {
     expect(noteReplaceMatches('Demo.dashboard.md', 'old', 'old')).toEqual([])
     expect(noteReplaceMatches('Demo.md', '---\nmindmap: tree\n---\nold', 'old')).toEqual([])

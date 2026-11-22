@@ -136,8 +136,8 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   /** 同时持几条路径的写锁(Codex 复核返修 P0-3:改名 / 移动 / 删除要与同篇的 CAS 保存互斥)。按键排序后逐层嵌套取锁 ——
    *  所有多锁调用方都按同一顺序取,不会互等成死锁;单锁的保存只拿一把,也成不了环。不可重入:fn 里别再拿这几把。 */
   const withPathLocks = <T>(rels: string[], fn: () => Promise<T>): Promise<T> => {
-    const keys = [...new Set(rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } }))].sort()
-    return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
+    const files = rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } })
+    return withTextWriteLock(files, fn)
   }
   handle(IPC.migrateWorkFolder, async (_e, request: WorkFolderMigration) => {
     const result = await migrateWorkFolder(vault, request, withPathLocks)

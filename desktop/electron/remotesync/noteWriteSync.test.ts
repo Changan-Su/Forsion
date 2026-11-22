@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { IPC } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { withTextWriteLock } from '../amadeus/fs/textWriteLock'
 import { VaultManager } from '../amadeus/fs/vaultManager'
 import { VaultIndex } from '../amadeus/fs/vaultIndex'
 import { registerVaultHandlers, type VaultHandlerDependencies } from '../amadeus/fs/vaultHandlers'
@@ -25,9 +26,9 @@ afterEach(async () => { await fs.rm(scratch, {recursive: true, force: true}) })
 
 // Pause the real strict write after the handler has accepted the on-disk fingerprint,
 // immediately before its atomic write. The competing operation gets to run in that gap.
-async function raceStrictWrite<T>(competing: () => Promise<T>): Promise<T> {
+async function raceStrictWrite<T>(competing: () => Promise<T>, configuredRoot = root): Promise<T> {
   const vault = new VaultManager()
-  vault.setRoot(root)
+  vault.setRoot(configuredRoot)
   const handlers = new Map<string, Parameters<VaultHandlerDependencies['handle']>[1]>()
   registerVaultHandlers({
     vault, index: new VaultIndex(vault), handle: (id, fn) => { handlers.set(id, fn) },
@@ -43,7 +44,7 @@ async function raceStrictWrite<T>(competing: () => Promise<T>): Promise<T> {
     await real(...args)
   })
   const saving = handlers.get(IPC.writeTextFile)!(null, note, edit, {
-    strictExisting: true, base: textFingerprint(before), expectedRoot: root,
+    strictExisting: true, base: textFingerprint(before), expectedRoot: configuredRoot,
   })
   await ready
   const other = competing()
@@ -55,13 +56,16 @@ async function raceStrictWrite<T>(competing: () => Promise<T>): Promise<T> {
   return other
 }
 
-it.each(['pull', 'delete'] as const)('serializes a sync %s with a real strict note edit and retains the edits', async action => {
+it.each(['pull', 'delete'] as const)('serializes a sync %s through the real vault with a strict edit through a directory alias', async action => {
   const remote = createDirRemote(remoteRoot)
-  const sync = () => runSync({localRoot: root, remote, statePath: path.join(scratch, 'state.json'), fingerprint: 'fixture'})
+  const physicalRoot = await fs.realpath(root)
+  const aliasRoot = path.join(scratch, 'vault-alias')
+  await fs.symlink(physicalRoot, aliasRoot, 'junction')
+  const sync = () => runSync({localRoot: physicalRoot, remote, statePath: path.join(scratch, 'state.json'), fingerprint: 'fixture'})
   expect((await sync()).pushed).toBe(1)
   if (action === 'pull') await remote.writeFile(note, Buffer.from(cloud), Date.now())
   else await remote.rm(note)
-  const report = await raceStrictWrite(sync)
+  const report = await raceStrictWrite(sync, aliasRoot)
   expect(report.ok).toBe(true)
   if (action === 'delete') {
     expect(report.deletedLocal).toBe(0)
@@ -92,4 +96,31 @@ it.each(['write', 'remove'] as const)('serializes a folder-backend %s targeting 
   })
   if (action === 'write') expect(await fs.readFile(path.join(root, note), 'utf8')).toBe(cloud)
   else await expect(fs.access(path.join(root, note))).rejects.toMatchObject({code:'ENOENT'})
+})
+
+it('locks both names of a rename even before the destination directories exist', async () => {
+  const real = await fs.realpath(root)
+  const alias = path.join(scratch, 'alias')
+  await fs.symlink(real, alias, 'junction')
+  const dest = 'new/nested/renamed.md'
+  let entered!: () => void, finishMove!: () => void
+  const ready = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { finishMove = resolve })
+  const order: string[] = []
+  const moving = withTextWriteLock([path.join(alias, note), path.join(real, note), path.join(alias, dest)], async () => {
+    await fs.mkdir(path.join(real, 'new/nested'), {recursive: true})
+    entered()
+    await gate
+    await fs.rename(path.join(real, note), path.join(real, dest))
+    order.push('move')
+  })
+  await ready
+  const editing = withTextWriteLock(path.join(real, dest), async () => {
+    order.push(await fs.readFile(path.join(real, dest), 'utf8').catch(() => 'missing destination'))
+  })
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    expect(order).toEqual([])
+  } finally { finishMove(); await Promise.all([moving, editing]) }
+  expect(order).toEqual(['move', before])
 })

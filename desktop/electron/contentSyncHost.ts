@@ -54,7 +54,7 @@ export async function withContentWriteLock(abs:string|string[],memoryBase:string
   const memory=()=>bases.reduceRight<()=>void>((next,base)=>()=>withContentMemoryLock(base,next),()=>{for(const p of memoryFiles)refuseMidCommit(dirname(p));commit()})()
   const databases=paths.filter(p=>/\.db$/i.test(p)&&!bases.some(b=>p.startsWith(b+sep)))
   const db=()=>databases.reduceRight<()=>Promise<void>>((next,p)=>()=>withDbLock(p,next),async()=>memory())()
-  await paths.reduceRight<()=>Promise<void>>((next,p)=>()=>withTextWriteLock(p,next),db)()
+  await withTextWriteLock(paths,db)
 }
 
 /** External-engine mode has no running local engine. Persist the same ownership
