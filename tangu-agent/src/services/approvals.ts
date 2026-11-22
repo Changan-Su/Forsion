@@ -1092,6 +1092,7 @@ export interface GateCtx {
   remote?: RemoteInfo;
   /** 无人值守且无异步审批通道的 run(自动化:强制完全通行、没有订阅者):本该问人的保护路径写入直接拒,不挂死等。 */
   unattended?: boolean;
+  disableHooks?: boolean;
   /** 挂起而不等(托盘客户端的主循环,见 ParkedApproval):要问用户时发出请求就返回凭条。只有自己会在迭代边界
    *  兑现的调用方才能给;子代理 / 引擎中继 / TUI / 通道都是当场要结果的,不给。 */
   park?: boolean;
@@ -1324,7 +1325,7 @@ export async function gateToolCall(
   }, {
     profile: ctx.profile,
     execMode: ctx.execMode === 'host' ? 'host' : 'sandbox',
-    cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal,
+    cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal, disableHooks: ctx.disableHooks,
   });
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };

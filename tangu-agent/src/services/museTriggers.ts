@@ -393,13 +393,18 @@ export async function removeTrigger(id: string): Promise<boolean> {
 }
 
 /** 触发后写回 lastFiredAt(仅在动作真正执行后调用);event_seen 规则一并写回消费游标。 */
-export async function markTriggersFired(ids: string[], at = new Date(), cursors?: Record<string, EventCursor>): Promise<void> {
+export const triggerEpoch = (t: MuseTrigger): string => JSON.stringify([t.createdAt, t.cond]);
+
+export async function markTriggersFired(ids: string[], at = new Date(), cursors?: Record<string, EventCursor>, epochs?: ReadonlyMap<string, string>): Promise<void> {
   if (!ids.length) return;
   await withTriggersLock(async () => {
     const list = await loadTriggers();
     const iso = at.toISOString();
+    let changed = false;
     for (const t of list) {
-      if (!ids.includes(t.id)) continue;
+      // A long drafting step can finish after the user has replaced the schedule on this id.
+      if (!ids.includes(t.id) || (epochs?.has(t.id) && epochs.get(t.id) !== triggerEpoch(t))) continue;
+      changed = true;
       t.lastFiredAt = iso;
       if (cursors?.[t.id]) t.lastEventCursor = cursors[t.id];
       if (t.maxPerDay) {
@@ -408,7 +413,7 @@ export async function markTriggersFired(ids: string[], at = new Date(), cursors?
       }
       if (t.cond?.type === 'at') t.enabled = false; // 一次性:触发即熄(留痕;改期+启用即复用)
     }
-    await saveTriggers(list);
+    if (changed) await saveTriggers(list);
   });
 }
 

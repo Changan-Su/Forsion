@@ -4,7 +4,6 @@
  *  - 插件卡是信息,留在那条消息里(同对话里的插件卡组件,多一个「不感兴趣」);
  *  - 其余要点的进对话末尾的卡片堆(10-23 定的规矩),流里原处留一行:待处理指路,处理完是结局。
  */
-import '../automation/messages'
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
 import { AlarmClock, ArrowDown, CircleCheck, CircleX, Eye, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'

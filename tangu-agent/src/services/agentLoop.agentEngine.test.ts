@@ -25,6 +25,8 @@ import { query } from '../core/db.js';
 import { createRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
 import { abortRun, enqueueRun, waitForRunSettlement } from './agentLoop.js';
+import { AUTOMATION_DM_ORIGIN } from '../contracts/automationMessage.js';
+import { appendProactiveMessage } from './proactiveMessage.js';
 import type { EngineManager, EngineRunCtx } from '../engines/manager.js';
 
 type EngineStatus = 'available' | 'needs-signin' | 'not-installed';
@@ -165,6 +167,22 @@ describe('跑在外部引擎上的 Agent', () => {
     expect(calls[0].cwd).toBe(join(home, 'agents', 'ds', 'Library'));
     expect((await rows('P')).find((m) => m.role === 'model')?.agent_slug).toBe('ds');
     await vi.waitFor(() => expect(historian.calls).toEqual([{ sessionId: 'P', memScopeSlug: 'ds' }]));
+  }, 20_000);
+
+  it('私聊追加自动化消息后仍续接原引擎会话，每条只交给引擎一次', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES ('P', 'u1', 'tangu', 't', 'm1', 'user', ?)`,
+      [JSON.stringify({ soloAgentSlug: 'ds', agentSlug: 'ds' })]);
+    expect((await turn(1, {}, { origin: 'client' }, 'P')).done).toBe(true);
+    for (const content of ['First scheduled message', 'Second scheduled message']) {
+      await appendProactiveMessage({ sessionId: 'P', agentSlug: 'ds', content, origin: AUTOMATION_DM_ORIGIN, ask: false });
+    }
+    expect((await turn(2, {}, { origin: 'client' }, 'P')).done).toBe(true);
+    expect((await turn(3, {}, { origin: 'client' }, 'P')).done).toBe(true);
+    expect(calls.map((c) => c.resume)).toEqual([undefined, 'ext-1', 'ext-1']);
+    expect(calls[1].message).toContain('["First scheduled message","Second scheduled message"]');
+    expect(calls[1].message).toContain('q2');
+    expect(calls[2].message).toBe('q3');
+    expect((await rows('P')).filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['q1', 'q2', 'q3']);
   }, 20_000);
 
   it('普通对话:带了目录就用那个目录;没带目录落在它的 Library,没有就补建', async () => {

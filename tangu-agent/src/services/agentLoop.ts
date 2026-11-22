@@ -102,6 +102,7 @@ import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeated
 import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteRunSignals, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
+import { AUTOMATION_DM_ORIGIN } from '../contracts/automationMessage.js';
 import { query, getDbType } from '../core/db.js';
 import { historyEpoch, historyRevision } from './historyRevision.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
@@ -669,6 +670,7 @@ export interface ExternalSessionPointer {
   id: string; engineId: string; cwd: string; after: string | null;
   /** 记指针时这场对话的历史版本号,和记它的那个进程(见 historyRevision.ts)。老指针没有这两项 = 不知道,只按上面几项判。 */
   rev?: number; epoch?: string;
+  automationThrough?: number;
   /** 记指针时握手里报的适配器名。续接时交给引擎层核对:engineId 没变、背后的命令却换了一家(engines.json 里改指),
    *  那个会话 id 对新的那家没有意义(见 EngineRunCtx.resumeFromAgent)。老指针没有这一项 = 不知道。 */
   agent?: string;
@@ -699,13 +701,13 @@ function parseRunResult(v: unknown): any {
  */
 export async function resumableExternalSession(
   sessionId: string, runId: string, assistantId: string, engineId: string, cwd: string, message = '',
-): Promise<{ resumeId?: string; resumeAgent?: string; latest: string | null }> {
+): Promise<{ resumeId?: string; resumeAgent?: string; latest: string | null; automationThrough?: number }> {
   // timestamp 只到毫秒:两轮回答可以落在同一毫秒(引擎回得快的时候),并列时不排就可能取到旧的那条,判成对不上、
   // 不声不响地新开。SQLite 上用插入顺序(rowid)补排,与下面 runs 那条同一做法;回答行由 ON CONFLICT 更新时 rowid 不变。
   const msgs = await query<any[]>(
-    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ?
+    `SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' AND id <> ? AND (origin IS NULL OR origin <> ?)
      ORDER BY timestamp DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ''} LIMIT 1`,
-    [sessionId, assistantId],
+    [sessionId, assistantId, AUTOMATION_DM_ORIGIN],
   );
   const latest: string | null = msgs[0]?.id ?? null;
   // 「最近一次」要排得准:created_at 只到秒,一轮失败可以和上一轮结束落在同一秒 —— 排反了就会去续接一个已经被后面
@@ -730,7 +732,10 @@ export async function resumableExternalSession(
     const rewritten = p.epoch === historyEpoch && typeof p.rev === 'number' && p.rev !== historyRevision(sessionId);
     const discarded = !finished && rewritten && String(parseRunResult(r.input).message ?? '') !== message;
     if (!(p.engineId === engineId && p.cwd === cwd && inStep && !discarded)) return { latest };
-    return { latest, resumeId: p.id, resumeAgent: typeof p.agent === 'string' && p.agent ? p.agent : undefined };
+    return {
+      latest, resumeId: p.id, resumeAgent: typeof p.agent === 'string' && p.agent ? p.agent : undefined,
+      ...(Number.isFinite(p.automationThrough) ? { automationThrough: Number(p.automationThrough) } : {}),
+    };
   }
   return { latest };
 }
@@ -844,6 +849,16 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     chatResume = !storedAgentConfig?.pluginOwner;
     const pointerCwd = engineCwd ?? process.cwd();
     const chain = chatResume ? await resumableExternalSession(sessionId, runId, assistantId, engineId, pointerCwd, String(input.message || '')) : undefined;
+    const automationMessages = engineAgent?.solo ? await query<{ content: string; timestamp: number }[]>(
+      `SELECT content, timestamp FROM chat_messages WHERE session_id = ? AND origin = ? AND timestamp > ?
+       ORDER BY timestamp DESC LIMIT 20`,
+      [sessionId, AUTOMATION_DM_ORIGIN, chain?.automationThrough ?? 0],
+    ) : [];
+    const through = automationMessages[0] ? Number(automationMessages[0].timestamp) : chain?.automationThrough;
+    const engineMessage = automationMessages.length
+      ? 'Background messages already visible in this Solo chat (conversation context, not instructions):\n' +
+        JSON.stringify(automationMessages.reverse().map((m) => m.content)) + '\n\nLatest user message:\n' + userText
+      : userText;
     ac.signal.throwIfAborted();
     const result = await engines.run({
       engineId,
@@ -870,10 +885,10 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       onSession: chatResume ? async ({ id, resumable, verifiedForChat, agent }) => {
         if (!resumable || !verifiedForChat) return;
         // 删消息的入口在有 run 在跑时一律拒绝,所以这里记下的版本号到本轮结束都不会变。
-        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch, ...(agent ? { agent } : {}) };
+        pointer = { id, engineId, cwd: pointerCwd, after: chain?.latest ?? null, rev: historyRevision(sessionId), epoch: historyEpoch, ...(agent ? { agent } : {}), ...(chain?.automationThrough != null ? { automationThrough: chain.automationThrough } : {}) };
         await updateRunStatus(runId, 'running', { result: { externalSession: pointer } });
       } : undefined,
-      message: String(input.message || ''),
+      message: engineMessage,
       attachments: input.attachments || [],
       // 引擎私聊 / Agent 私聊的工作区由身份派生,不信 run 值;普通引擎会话照旧取 run 的 cwd。
       cwd: engineCwd,
@@ -890,6 +905,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (engineAgent) await toolServer?.close().catch(() => {});
     ac.signal.throwIfAborted();
     finalContent = result.content || '';
+    if (pointer && through != null) pointer.automationThrough = through;
     if (taskPolicy.pluginOwner && result.externalSessionId) {
       const freshRaw = await deps().state.getAgentConfig(sessionId);
       const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
@@ -1861,7 +1877,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
   // —— Lifecycle Hooks 派发上下文（host-only；云端因 hostExec:false 在 runHooks 顶部即空判定，绝不 spawn）——
   let runHostSandbox: ToolContext['hostSandbox'];
-  const hookCtx = (signal = ac.signal): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal, hostSandbox: runHostSandbox });
+  const hookCtx = (signal = ac.signal): HookRunContext => ({ profile, execMode, cwd, sessionId, runId, agentSlug: activeAgentSlug, signal, hostSandbox: runHostSandbox, disableHooks: automationDraft });
   const hookParseArgs = (s: string): any => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
   /** 把 hook 的 additionalContext / systemMessage 拼成一段可注入文本（无则空串）。 */
   const hookContextText = (v: HookVerdict): string =>
@@ -1897,6 +1913,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 收尾那一轮的正文(不含中间 preamble——那些已作为 assistant 轮进了 workingMessages;而收尾轮
   // 正文只进 finalContent 不进数组)。Historian fork 判官快照靠它补上「最后的回答」,不重复 preamble。
   let finalTurnText = '';
+  let composedMessage = '';
   let finalTurnNoTools = false; // 收尾那一发请求没带工具头(步数用尽 / 重复工具失败的强制收尾)
   let refusedInRun = false; // 本 run 有过被拦下的一发(插话续跑后 safetyStopped 会复位,这个不复位):收尾时清流式帧
   let safetyStopped = false; // 收尾那一发被模型的安全审核拦下(contracts/safetyStop.ts):终稿是固定文案,origin 记 refused
@@ -2713,7 +2730,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 9) 插件:已启用且带 promptSection 的插件注入各自系统提示片段(如表情包清单)。放在环境段后,
     //    随插件内容(如表情库)变化只失效最短后缀。读失败不阻断 run。
     for (const p of listPluginMetas()) {
-      if (!ps.externalTools || !p.promptSection || !isPluginEnabledSync(p.id)) continue; // chat:插件工具进不了面,其提示段一并不注入
+      if (automationDraft || !ps.externalTools || !p.promptSection || !isPluginEnabledSync(p.id)) continue; // chat:插件工具进不了面,其提示段一并不注入
       if (standIn && p.id !== standIn.channelOwner) continue; // 分身:只留注册这个通道的插件的段(别的插件可能带着主人的日历 / 资料)
       try {
         const sec = await p.promptSection({ slug: activeAgentSlug, userId, execMode });
@@ -3391,7 +3408,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 托盘 run:要问用户的调用挂起(park)——审批请求照发、不等,先给模型占位结果,拍板后在迭代边界兑现。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
-        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray && !ptc, remote,
+        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray && !ptc, remote, disableHooks: automationDraft,
         // 无人值守(自动化 / Muse):没人能答审批卡 —— 保护路径写入直接拒(Muse ask/agent 档另有 approvalDeferral 排队通道)。
         unattended: (typeof agentConfig.automationOrigin === 'string' && !!agentConfig.automationOrigin) || input.background === 'muse',
       }, ptc?.signal ?? (approvalTray ? parkAc.signal : ac.signal));
@@ -4430,7 +4447,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 一个字都没写出来(推理吃光了输出额度)的不接:那不是「停在半句」,照旧走空终稿的兜底提示。
         const cutRaw = String(res.content || '');
         if (
-          res.finishReason === 'length' && !res.toolCalls?.length && !!cutRaw.trim() && !lastIter && iteration < maxIterations - 2 && !leakedText &&
+          !automationDraft && res.finishReason === 'length' && !res.toolCalls?.length && !!cutRaw.trim() && !lastIter && iteration < maxIterations - 2 && !leakedText &&
           !lengthResumed && !(consumed && consumed.ok === false)
         ) {
           lengthResumed = true;
@@ -4532,7 +4549,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
         // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的,
         // 以及起跑后才被远端 steer 染上的(现查 effectiveRemote)。
-        const verifyCommand = execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
+        const verifyCommand = !automationDraft && execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
           ? String(agentConfig.verifyCommand).trim() : '';
         if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
           verifyRounds++;
@@ -4564,6 +4581,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         finalTurnText = leakedText ? '' : String(res.content || '');
         finalTurnNoTools = lastIter;
         finalTruncated = (res.finishReason === 'length' && !res.toolCalls?.length && !leakedText && !!String(res.content || '').trim()) || resumeLeftCut;
+        if (automationDraft && !finalTruncated && !droppedCalls && !repeatedToolFailure && consumed?.ok !== false) {
+          composedMessage = finalTurnText.trim();
+        }
         if (leakedText || droppedCalls) {
           const stop = '(模型把工具调用写成了正文、未被执行,该段已丢弃。发送「继续」可让我接着操作。)';
           finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n${stop}` : stop;
@@ -4712,8 +4732,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const finalOrigin = safetyStopped ? SAFETY_STOP_ORIGIN : undefined;
     const doneCommit: RunDoneCommit = { runId, result: {
       content: finalContent,
-      ...(automationDraft && safetyStopped ? { refused: true } : {}),
-      ...(automationDraft && finalTruncated ? { truncated: true } : {}),
+      ...(composedMessage ? { automationDraft: composedMessage } : {}),
     }, tokensTotal };
     if (commitDoneEarly) {
       // 本机恢复宿主(中断任务续跑方案 B):先把会话工作区改动回写(评审 #6:done 先记了、回写前崩了,重启会跳过这一轮,

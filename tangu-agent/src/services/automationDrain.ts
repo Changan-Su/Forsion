@@ -24,7 +24,7 @@
  *   「监听列被删 / 监听列不落盘 / where 列无效」→ disableTriggersWithReasons 写 disabledReason,面板可见)——
  *   20 轮 × 整文件落盘不值得。这些规则本轮一次也没起跑过(抛错的连候选行都算不出来),停用不丢事件。
  */
-import type { MuseTrigger, EvaluateEnv, EventCursor, TriggerContext, DbLike } from './museTriggers.js';
+import { triggerEpoch, type MuseTrigger, type EvaluateEnv, type EventCursor, type TriggerContext, type DbLike } from './museTriggers.js';
 import type { DbCursor } from './dbCursors.js';
 import type { TriggerHit, LaunchResult, TouchedDbs } from './automation.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
@@ -39,7 +39,7 @@ export interface DrainDeps {
   evaluate: (triggers: MuseTrigger[], env: EvaluateEnv) => Promise<MuseTrigger[]>;
   launch: (hits: TriggerHit[]) => Promise<LaunchResult>;
   advanceSelfCursors: (touched: Record<string, TouchedDbs>) => Promise<void>;
-  markTriggersFired: (ids: string[], at?: Date, cursors?: Record<string, EventCursor>) => Promise<void>;
+  markTriggersFired: (ids: string[], at?: Date, cursors?: Record<string, EventCursor>, epochs?: ReadonlyMap<string, string>) => Promise<void>;
   /** cap 命中时停用一批规则(写 disabledReason);缺省 = 不停用(老调用方 / 只想观测的测试)。 */
   disableTriggers?: (ids: string[], reason: string) => Promise<void>;
   /** 评估侧的**配置性**错误(监听列被删/不落盘、where 列无效)→ 停用 + 逐条写 disabledReason;
@@ -82,7 +82,8 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
   const trigCursors: Record<string, EventCursor> = {};
   const museMap = new Map<string, MuseTrigger>();
   const launchedAll = new Set<string>();
-  const firedAtOverlay = new Map<string, string>();
+  const firedAtOverlay = new Map<string, { at: string; epoch: string }>();
+  const launchedEpochs = new Map<string, string>();
   let rounds = 0;
   let capHit = false;
   const disabled: string[] = [];
@@ -93,7 +94,10 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
     let triggers = await deps.loadTriggers();
     if (rounds > 1) triggers = triggers.filter((t) => t.cond?.type === 'db_changed');
     // 在**进入 evaluate 之前**做覆盖:evaluate 之后的分流按引用相等,同一轮内必须是同一批对象。
-    triggers = triggers.map((t) => (firedAtOverlay.has(t.id) ? { ...t, lastFiredAt: firedAtOverlay.get(t.id)! } : t));
+    triggers = triggers.map((t) => {
+      const mark = firedAtOverlay.get(t.id);
+      return mark && mark.epoch === triggerEpoch(t) ? { ...t, lastFiredAt: mark.at } : t;
+    });
     if (!triggers.length) break;
     const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
     // ⚠️ **顺序依赖**:loadTriggers(上面)必须先于 loadCursors。upsertTrigger 是「先 dropCursors 再 saveTriggers」,
@@ -147,12 +151,19 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
       break;
     }
     deps.log(`agent 自动化命中 ${hits.length} 次(第 ${rounds} 轮):${[...new Set(agentFired.map((t) => t.id))].join(', ')}`);
+    // Check long-running completions against the schedule that was evaluated before dispatch.
+    const epochs = new Map(agentFired.map((t) => [t.id, triggerEpoch(t)]));
+    const waiting = agentFired.some((t) => !t.observe && t.actions?.some((a) => a.type === 'send_message' && a.source === 'agent'));
     const { launched, touched } = await deps.launch(hits);
+    const current = waiting ? new Map((await deps.loadTriggers()).map((t) => [t.id, triggerEpoch(t)])) : epochs;
     const iso = now().toISOString();
     for (const id of launched) {
+      const epoch = epochs.get(id);
+      if (epoch === undefined || epoch !== current.get(id)) continue;
       if (pendingCursors[id]) ackCursors[id] = pendingCursors[id];
       launchedAll.add(id);
-      firedAtOverlay.set(id, iso);
+      launchedEpochs.set(id, epoch);
+      firedAtOverlay.set(id, { at: iso, epoch });
     }
     if (Object.keys(ackCursors).length) await deps.setCursors(ackCursors);
     await deps.advanceSelfCursors(touched);
@@ -174,7 +185,7 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
       break;
     }
   }
-  if (launchedAll.size) await deps.markTriggersFired([...launchedAll], now(), trigCursors);
+  if (launchedAll.size) await deps.markTriggersFired([...launchedAll], now(), trigCursors, launchedEpochs);
   // 配置性错误 → 停用 + 写 disabledReason(循环外一次,与 markTriggersFired 同档:20 轮 × 整文件落盘不值得)。
   // 这些规则本轮一次也没起跑过(抛错的规则连候选行都算不出来),停用不会丢事件;游标同样没推进,
   // 用户修好配置后重新启用 → upsertTrigger 的 reEnabled 分支清游标重播种。

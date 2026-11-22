@@ -21,7 +21,7 @@ export async function automationSenderError(action: SendMessageAction): Promise<
 
 async function compose(
   action: Extract<SendMessageAction, { source: 'agent' }>,
-  def: NormalAgentDef, rule: MuseTrigger, userId: string, sessionId: string, deadline: number,
+  def: NormalAgentDef, rule: MuseTrigger, userId: string, { sessionId, deadline }: { sessionId: string; deadline: number },
 ): Promise<string> {
   if (agentEngineOf(def)) throw new Error(`Agent "${action.agentSlug}" is unavailable for unattended drafting.`);
   const modelId = def.model || await resolveBackgroundModelId('');
@@ -49,8 +49,10 @@ async function compose(
     if (!run || !['queued', 'running'].includes(run.status)) {
       if (run?.status !== 'done') throw new Error(run?.error || 'The Agent could not draft the automation message.');
       const result = typeof run.result === 'string' ? JSON.parse(run.result) : run.result;
-      if (result?.refused || result?.truncated) throw new Error('The Agent did not produce a complete message.');
-      return typeof result?.content === 'string' ? result.content.trim() : '';
+      if (typeof result?.automationDraft !== 'string' || !result.automationDraft.trim()) {
+        throw new Error('The Agent did not produce a complete message.');
+      }
+      return result.automationDraft.trim();
     }
     await delay(Math.min(400, Math.max(0, deadline - Date.now())));
   }
@@ -59,13 +61,14 @@ async function compose(
 }
 
 export async function deliverAutomationMessage(
-  action: SendMessageAction, rule: MuseTrigger, userId: string, sessionId: string, deadline: number, ctx?: TriggerContext,
+  action: SendMessageAction, rule: MuseTrigger, userId: string, draft: { sessionId: string; deadline: number } | undefined, ctx?: TriggerContext,
 ): Promise<string> {
   const def = await getAgent(action.agentSlug);
   if (!def) throw new Error(`Unknown sending Agent "${action.agentSlug}".`);
+  if (action.source === 'agent' && !draft) throw new Error('Missing automation draft session.');
   const content = action.source === 'fixed'
     ? expandTemplate(action.body, ctx).trim()
-    : await compose(action, def, rule, userId, sessionId, deadline);
+    : await compose(action, def, rule, userId, draft!);
   if (!content || content.length > AUTOMATION_MESSAGE_LIMIT[action.delivery]) {
     throw new Error(`Message must contain 1–${AUTOMATION_MESSAGE_LIMIT[action.delivery]} characters after preparation.`);
   }

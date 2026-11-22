@@ -68,11 +68,14 @@ export interface AutomationSessionRow {
 }
 
 /** 全部自动化会话(≤MAX_TRIGGERS 条,量小;triggerId 过滤在 JS 里做——见头注释双方言说明)。 */
-export async function listAutomationSessions(triggerId?: string): Promise<AutomationSessionRow[]> {
+export const listAutomationSessions = (triggerId?: string): Promise<AutomationSessionRow[]> =>
+  listSessions('automation', triggerId);
+
+async function listSessions(kind: 'automation' | 'automation_draft', triggerId?: string): Promise<AutomationSessionRow[]> {
   const rows = await query<any[]>(
     `SELECT id, title, agent_config, created_at, updated_at FROM chat_sessions
-     WHERE user_id = ? AND kind = 'automation' ORDER BY updated_at DESC`,
-    [automationUserId()],
+     WHERE user_id = ? AND kind = ? ORDER BY updated_at DESC`,
+    [automationUserId(), kind],
   );
   const out: AutomationSessionRow[] = [];
   for (const r of rows || []) {
@@ -91,15 +94,15 @@ export async function listAutomationSessions(triggerId?: string): Promise<Automa
   return out;
 }
 
-async function ensureAutomationSession(triggerKey: string, agentSlug: string, title: string, modelId: string): Promise<string> {
-  const existing = await listAutomationSessions(triggerKey);
+async function ensureAutomationSession(triggerKey: string, agentSlug: string, title: string, modelId: string, kind: 'automation' | 'automation_draft' = 'automation'): Promise<string> {
+  const existing = await listSessions(kind, triggerKey);
   if (existing.length) return existing[0].id;
   const id = uuidv4();
   const agentConfig = JSON.stringify({ agentSlug, automationTriggerId: triggerKey });
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config)
-     VALUES (?, ?, ?, ?, ?, 'automation', ?)`,
-    [id, automationUserId(), deps().profile.appId, title.slice(0, 80), modelId, agentConfig],
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, automationUserId(), deps().profile.appId, title.slice(0, 80), modelId, kind, agentConfig],
   );
   return id;
 }
@@ -298,8 +301,13 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
         if (!r.ok) { error = r.error || 'remind failed'; break; }
         if (!dm.ok) log(`规则 ${t.id} 提醒写进私聊失败:${dm.error}`);
       } else if (a.type === 'send_message') {
-        if (a.source === 'agent') composeDeadline ??= Date.now() + AUTOMATION_COMPOSE_TIMEOUT_MS;
-        const summary = await deliverAutomationMessage(a, t, userId, sessionId, composeDeadline ?? 0, tctx);
+        let draft: { sessionId: string; deadline: number } | undefined;
+        if (a.source === 'agent') {
+          composeDeadline ??= Date.now() + AUTOMATION_COMPOSE_TIMEOUT_MS;
+          const draftSessionId = await ensureAutomationSession(`draft:${t.id}:${a.agentSlug}`, a.agentSlug, t.desc, '', 'automation_draft');
+          draft = { sessionId: draftSessionId, deadline: composeDeadline };
+        }
+        const summary = await deliverAutomationMessage(a, t, userId, draft, tctx);
         steps.push({ type: a.type, ok: true, summary });
       } else if (a.type === 'agent_run') {
         const ok = await launchUnattendedRun({ agentSlug: a.agentSlug, triggerKey: t.id, title: String(t.desc), message: automationMessage(t, a.prompt) });

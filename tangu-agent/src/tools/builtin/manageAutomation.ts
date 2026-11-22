@@ -121,7 +121,7 @@ export const manageAutomationProvider: ToolProvider = {
             type: 'object',
             properties: {
               action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update, list, remove=delete by id' },
-              id: { type: 'string', description: 'set: update this rule; remove: rule id from list' },
+              id: { type: 'string', description: 'Rule id: list details, update or remove' },
               desc: { type: 'string', description: 'set: human-readable description shown to the user' },
               cond_type: { type: 'string', enum: listTriggerSources().map((s) => s.id), description: 'set: trigger type' },
               params: { type: 'object', description: 'set(computer.*, calendar.before, plugin triggers): trigger parameters, see the trigger list above' },
@@ -209,6 +209,11 @@ export const manageAutomationProvider: ToolProvider = {
         if (remoteDenied) return `Error: ${remoteDenied}`;
         if (action === 'list') {
           const list = await loadTriggers();
+          const id = String(args.id || '').trim();
+          if (id) {
+            const rule = list.find((t) => t.id === id);
+            return rule ? JSON.stringify(rule) : `Error: rule ${id} not found`;
+          }
           return list.length ? `${list.length} automation rule(s):\n${list.map(fmt).join('\n')}` : '(no automation rules)';
         }
         // ask / agent 档的 Muse:只能看、只能提。
