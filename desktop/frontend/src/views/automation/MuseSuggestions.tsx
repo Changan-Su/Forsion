@@ -60,6 +60,11 @@ function SourceRef({ s }: { s: MuseAutomationSuggestion }) {
   )
 }
 
+/** 动作摘要:没指定执行者的 agent_run 写「跑 Agent」(画布里要用户自己挑),别让 runnerName 的老缺省说成 Muse。 */
+const flowActions = (t: (k: string) => string, defs: Parameters<typeof actionsText>[1], d: ReturnType<typeof suggestionDraft>): string =>
+  d.actions?.length ? d.actions.map((a) => a.type === 'agent_run' && !a.agentSlug ? t('automation.step.agent_run') : actionsText(t, defs, { ...d, actions: [a] })).join(' → ')
+  : actionsText(t, defs, d)
+
 const REASONS = ['irrelevant', 'timing', 'exists', 'less'] as const
 
 function SuggestionRow({ s }: { s: MuseAutomationSuggestion }) {
@@ -81,7 +86,7 @@ function SuggestionRow({ s }: { s: MuseAutomationSuggestion }) {
       onKeyDown={(e) => { if (!asking && (e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); st.openSuggestion(s.id) } }}>
       <Icon size={20} />
       <strong>{s.title}</strong>
-      <span className="auto-sugg-flow">{condText(t, s.rule.cond)} → {actionsText(t, agentDefs, draft)}</span>
+      <span className="auto-sugg-flow">{condText(t, s.rule.cond)} → {flowActions(t, agentDefs, draft)}</span>
       <span className="auto-sugg-why">{s.why}<SourceRef s={s} /></span>
       {asking
         ? <div className="auto-sugg-reasons" onClick={(e) => e.stopPropagation()}>
