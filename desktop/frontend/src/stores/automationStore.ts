@@ -13,6 +13,7 @@ import {
   getMuseTriggers,
   getSpecialConfig,
   getMuseAutomationSuggestions,
+  listMuseCards,
   patchMuseAutomationSuggestion,
 } from '../services/backendService'
 import type {
@@ -26,6 +27,7 @@ import type {
   TanguDesktopConfig,
 } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import type { MuseCardInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 左栏选中项:系统自动化(muse/historian)、watch 规则或某条 agent 日程(auto 条目)。 */
 export type AutomationSel =
@@ -48,6 +50,8 @@ interface AutomationState {
   actionsCatalog: AutomationActionCatalogItem[]
   /** Muse 给首页的任务建议(11-22 方案 A;Muse 关着 / 旧引擎 → 空)。 */
   suggestions: MuseAutomationSuggestion[]
+  /** Muse 在私聊里提了、还没答的规则卡(引擎 muse_cards kind=rule, pending);首页「Muse 建议」一节最上面。 */
+  pendingRules: MuseCardInfo[]
   sel: AutomationSel | null
   /** suggestion:画布里是某条 Muse 建议的草稿(存一份快照:轮询把它换掉时画布不能跟着变),存成规则后把那条记 used。 */
   builder: null | { editingId?: string; starter?: Starter; suggestion?: MuseAutomationSuggestion }
@@ -88,6 +92,7 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   schedules: [],
   actionsCatalog: [],
   suggestions: [],
+  pendingRules: [],
   sel: null,
   builder: null,
   leaveGuard: null,
@@ -98,7 +103,7 @@ export const useAutomation = create<AutomationState>((set, get) => ({
     // 六源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
     // 端点在但响应形状不对(旧引擎 / 桩)时回落旧值,别把 undefined 存进列表字段 —— 列表 .map 会让整个 Space 崩掉。
     const list = <T,>(v: T[] | undefined, prev: T[]): T[] => (Array.isArray(v) ? v : prev)
-    const [special, status, triggers, autoSessions, schedules, actionsCatalog, suggestions] = await Promise.all([
+    const [special, status, triggers, autoSessions, schedules, actionsCatalog, suggestions, pendingRules] = await Promise.all([
       getSpecialConfig(homeTarget()).then((r) => r.config).catch(() => get().specialCfg),
       getMuseStatus(homeTarget()).catch(() => get().museStatus),
       getMuseTriggers(homeTarget()).then((v) => list(v, get().triggers)).catch(() => get().triggers),
@@ -106,12 +111,14 @@ export const useAutomation = create<AutomationState>((set, get) => ({
       getAgentSchedules(homeTarget()).then((v) => list(v, get().schedules)).catch(() => get().schedules),
       getAutomationActions(homeTarget()).then((v) => list(v, get().actionsCatalog)).catch(() => get().actionsCatalog),
       getMuseAutomationSuggestions(homeTarget()).then((v) => list(v, get().suggestions)).catch(() => get().suggestions),
+      // 读失败 ≠ 没有卡:留着上一份
+      listMuseCards(homeTarget(), 'pending').then((v) => list(v, get().pendingRules).filter((c) => c.kind === 'rule')).catch(() => get().pendingRules),
     ])
     // A poll started before a save must not erase the saved rule or its selection.
     if (get().refreshNonce !== revision) return
     // 本次会话里刚 × 掉 / 存成规则的那条:引擎还没收到或轮询拿的是旧快照时别让它闪回来
     const fresh = suggestions.filter((s) => !settledSuggestions.has(s.id))
-    set({ specialCfg: special, museStatus: status, triggers, autoSessions, schedules, actionsCatalog, suggestions: fresh, loaded: true })
+    set({ specialCfg: special, museStatus: status, triggers, autoSessions, schedules, actionsCatalog, suggestions: fresh, pendingRules, loaded: true })
     // 选中的规则/日程被删了 → 清选中
     const sel = get().sel
     if (sel?.kind === 'trigger' && !triggers.some((t) => t.id === sel.triggerId)) set({ sel: null })

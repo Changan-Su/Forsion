@@ -14,7 +14,7 @@ import { claimOnEngine, decideMuseCard, editMuseSummary, getMuseCard, getMuseSta
 import { currentClientId } from '../../services/agentRunService'
 import { useInbox } from '../../stores/inboxStore'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
-import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targets'
+import { HOME_REF, homeTarget, sameRef, targetForSession } from '../../services/engine/targets'
 import type { MuseCardInfo, MuseDismissReason, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MUSE_DISMISS_REASONS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { ReasonPrompt, canShareOriginal, sendOriginal, type ShareConsent } from './FeedbackReasons'
@@ -114,6 +114,8 @@ registerMessages({
   'museCard.ruleEditing': { zh: '已打开画布，规则暂停着', en: 'Opened in the canvas, rule paused' },
   'museCard.ruleDeclined': { zh: '不用这条规则', en: 'Rule declined' },
   'museCard.ruleObserve': { zh: '先观察', en: 'Observe first' },
+  'museCard.ruleWaiting': { zh: '等你答复', en: 'Waiting for you' },
+  'museCard.ruleFromChat': { zh: 'Muse 在私聊里提的规则，在这里答和在私聊里答是一回事', en: 'Muse proposed this rule in your chat. Answering here or there is the same.' },
   'museCard.ruleObserving': { zh: '规则已建好，先观察', en: 'Rule created. It only observes for now.' },
   'museCard.ruleObserved': { zh: '规则观察结果', en: 'Rule observation results' },
   'museCard.observedLine': { zh: '观察了 {days} 天，命中 {hits} 次，都只做了记录。', en: 'Observed for {days} d with {hits} matches. Nothing ran.' },
@@ -127,8 +129,9 @@ registerMessages({
   'museCard.observedGone': { zh: '这条规则已不在观察中', en: 'This rule is no longer being observed' },
 })
 
-/** 点完一张:流里那行与卡片堆一起重读(同一张卡的两处视图不共享组件状态)。 */
+/** 点完一张:流里那行与卡片堆一起重读(同一张卡的两处视图不共享组件状态)。自动化首页也订它(规则卡在那儿也能答)。 */
 const useDecided = create<{ n: number; bump: () => void }>((set) => ({ n: 0, bump: () => set((s) => ({ n: s.n + 1 })) }))
+export const useMuseCardsDecided = (): number => useDecided((s) => s.n)
 
 /** 卡片堆里的一张。不挂在哪条消息上:待处理的以引擎为准,旧消息没翻到也收得到(同 Muse 后台审批)。 */
 export interface MuseCardItem { kind: 'muse-card'; id: string; messageId: string; card: MuseCardInfo }
@@ -159,15 +162,17 @@ export function useMusePendingCards(on: boolean, sessionId: string | null, sig: 
   return on ? items : NO_CARDS
 }
 
-function useDecide(sessionId: string | undefined) {
+/** home=true:不在私聊里答(自动化首页),卡在本机引擎上,直接打本机。 */
+function useDecide(sessionId: string | undefined, home = false) {
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
   const send = async (call: (target: ReturnType<typeof targetForSession>) => Promise<unknown>): Promise<boolean> => {
-    if (!sessionId || busy) return false
+    if ((!sessionId && !home) || busy) return false
     setBusy(true)
     try {
-      await call(targetForSession(sessionId))
+      await call(home || !sessionId ? homeTarget() : targetForSession(sessionId))
       useDecided.getState().bump()
+      useAutomation.getState().bump() // 自动化首页与规则列表跟着重读(答「好」建出了规则)
       return true
     } catch (e: any) {
       if (e?.code === 'card_not_pending') useDecided.getState().bump() // 别处处理过了:跟着引擎的真状态走
@@ -216,9 +221,9 @@ function cardText(card: MuseCardInfo, t: Tr): string {
 }
 
 /** 「不感兴趣 / 不用」之后的理由行(帮助改进 P3):理由跟着 dismiss 那一次走;勾了「附上原文」,收卡成功之后再随账号发这张卡上的字。 */
-function DismissReasons({ card, sessionId, onCancel }: { card: MuseCardInfo; sessionId?: string; onCancel: () => void }) {
+function DismissReasons({ card, sessionId, home, onCancel }: { card: MuseCardInfo; sessionId?: string; home?: boolean; onCancel: () => void }) {
   const { t } = useI18n()
-  const { busy, decide } = useDecide(sessionId)
+  const { busy, decide } = useDecide(sessionId, home)
   const pick = async (reason: MuseDismissReason | null, share: ShareConsent | null): Promise<void> => {
     const ok = await decide(card, 'dismiss', reason ? { reason } : undefined)
     if (ok && share) void sendOriginal({ reasonLabel: reason ? t(`museReason.${reason}`) : null, tag: `muse-card:${card.kind}`, body: cardText(card, t), consent: share })
@@ -226,6 +231,32 @@ function DismissReasons({ card, sessionId, onCancel }: { card: MuseCardInfo; ses
   return (
     <ReasonPrompt reasons={MUSE_DISMISS_REASONS.map((id) => ({ id, label: t(`museReason.${id}`) }))}
       busy={busy} shareable={canShareOriginal()} onPick={(r, s) => void pick(r, s)} onCancel={onCancel} />
+  )
+}
+
+/** 自动化首页「Muse 建议」一节最上面那几行:私聊里还没答的规则卡(11-22 方案 A)。和私聊里那张是同一张卡、同一套动作,
+ *  在哪答都行,答完两边一起收(都以引擎的卡状态为准)。画法照首页的建议行,不是私聊里的卡片。 */
+export function MuseRuleRow({ card }: { card: MuseCardInfo }) {
+  const { t } = useI18n()
+  const { busy, decide } = useDecide(undefined, true)
+  const [asking, setAsking] = useState(false)
+  const r = card.payload.rule ?? {}
+  const only = onlyText(t, r, true)
+  return (
+    <div className="auto-starter auto-sugg auto-rulecard" data-muse-card="rule" data-card-id={card.id}>
+      <AlarmClock size={20} className="auto-sugg-mark" />
+      <strong>{r.desc || t('museCard.rule')}<span className="auto-rulecard-tag">{t('museCard.ruleWaiting')}</span></strong>
+      <span className="auto-sugg-flow">{r.cond ? condText(t, r.cond) : '—'} → {ruleActText(r, t)}{only ? ` · ${only}` : ''}</span>
+      <span className="auto-sugg-why">{t('museCard.ruleFromChat')}</span>
+      {asking
+        ? <div className="auto-sugg-reasons"><DismissReasons card={card} home onCancel={() => setAsking(false)} /></div>
+        : <div className="auto-rulecard-actions">
+            <button type="button" className="btn sm" disabled={busy} onClick={() => void decide(card, 'accept')}>{t('museCard.ruleOk')}</button>
+            {!!r.cond && canObserve(r.cond.type) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void decide(card, 'observe')}>{t('museCard.ruleObserve')}</button>}
+            <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') void useAutomation.getState().openRule(id) }) }}>{t('museCard.ruleEdit')}</button>
+            <button type="button" className="btn ghost sm" disabled={busy} onClick={() => setAsking(true)}>{t('museCard.ruleNo')}</button>
+          </div>}
+    </div>
   )
 }
 

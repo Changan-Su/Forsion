@@ -15,6 +15,8 @@ import { ReasonPrompt } from '../../components/FeedbackReasons'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { suggestionDraft, useAutomation } from '../../stores/automationStore'
 import type { MuseAutomationSuggestion } from '../../types'
+import type { MuseCardInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { MuseRuleRow } from '../chat2/MuseCards'
 import { actionsText, condText } from './lib'
 import './messages'
 
@@ -104,8 +106,11 @@ function SuggestionRow({ s }: { s: MuseAutomationSuggestion }) {
 }
 
 /** 首页那一节的节头 + 行。extra:建议多于格子数时折起来的条数(点了展开)。 */
+/** 首页「Muse 建议」一节里的一行:私聊里没答的规则卡,或一条建议。 */
+export type MuseHomeItem = { kind: 'rule'; card: MuseCardInfo } | { kind: 'suggestion'; s: MuseAutomationSuggestion }
+
 export function MuseSuggestionSection({ shown, extra, onMore, action }: {
-  shown: MuseAutomationSuggestion[]; extra: number; onMore: () => void; action?: React.ReactNode
+  shown: MuseHomeItem[]; extra: number; onMore: () => void; action?: React.ReactNode
 }) {
   const { t } = useI18n()
   return (
@@ -115,7 +120,7 @@ export function MuseSuggestionSection({ shown, extra, onMore, action }: {
         {action}
       </div>
       <div className="auto-starters">
-        {shown.map((s) => <SuggestionRow key={s.id} s={s} />)}
+        {shown.map((it) => it.kind === 'rule' ? <MuseRuleRow key={`rule:${it.card.id}`} card={it.card} /> : <SuggestionRow key={it.s.id} s={it.s} />)}
       </div>
       {extra > 0 && <button type="button" className="auto-sugg-more" onClick={onMore}>{t('automation.sugg.more', { n: extra })}</button>}
     </section>
