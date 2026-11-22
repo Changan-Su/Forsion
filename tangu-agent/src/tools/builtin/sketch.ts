@@ -94,17 +94,16 @@ export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDept
  * 同门禁,CLI run 不注入。视觉语法是从 lieflat-charts 里抽出的「数据诚实 + 编辑部密度」,
  * 但不把整份 skill 塞进每轮上下文;沙箱也无法用 gallery 的外链图库,故在此给出可执行的内联 SVG 配方。
  */
+const MECHANISM_CHOICE = 'When visuals are on auto and the user leaves the form open, use this test: would the reader have to mentally move parts or trace changing paths or directions to understand the answer? If so, call `intelligent_ui_html` before finishing and show the mechanism in action. Explicit requests for prose, a table, a static diagram or another format take precedence.';
+
 export const SKETCH_SECTION = `## Visual cards
 
 Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
-Do not wait for the user to say "draw" when visuals are on auto and the user leaves the form open.
-If the answer hinges on how a mechanism's positions, paths or directions change as an input varies,
-call \`intelligent_ui_html\`. Show what produces the outcome. For a few qualitatively different states,
-use labelled \`.fs-tabs\` with a directly drawn diagram per state on common axes; the host handles switching.
+Do not wait for the user to say "draw". ${MECHANISM_CHOICE}
+For a few qualitatively different states, use labelled \`.fs-tabs\` with a directly drawn diagram per state on common axes; the host handles switching.
 Use a continuous control when intermediate values matter. Derive fixed landmarks and moving marks
 from one coordinate system, including the orientation of the screen axes. Keep the takeaway in chat.
-Explicit requests for prose, a table, a static diagram or another format take precedence.
 Use Markdown for reading and normal project/file tools when the deliverable is an app or file.
 Never add a visualization just because an answer contains three values or steps.
 
@@ -241,8 +240,8 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
 
 // Advisory only: the model sees the task and history; keywords never require a card.
 export const PRESENTATION_CHOICE = `Choose the form afresh for the question the user is trying to answer. Honor their format and visual preference. Use a view when seeing or operating it materially helps.
-If the user leaves the form open and visuals are on auto, follow the Visual cards rule for explanations of changing geometry, paths or directions.
-For a one-off quantitative decision with fixed inputs, lead with the action and any threshold in the first sentence. Distinguish a tie from a strict advantage and check the adjacent attainable values when relevant. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
+${MECHANISM_CHOICE}
+For a one-off quantitative decision with fixed inputs, compute the result before composing the first sentence. Where a strict threshold is involved, substitute the candidate and the preceding attainable value and verify which satisfies the condition. Then lead with that verified action and value; a tie counts only if the question allows equality. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
 Use normal chat Markdown for reading, definitions, notes, derivations and static comparisons. Never invent controls to justify a card or repeat the full explanation in it.`;
 const SHAPE_NOTE = `## Presentation choice for this turn
 ${PRESENTATION_CHOICE}
