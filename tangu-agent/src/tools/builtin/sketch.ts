@@ -98,7 +98,7 @@ export const SKETCH_SECTION = `## Visual cards
 
 Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
-Do not wait for the user to say "draw" when interaction would help. Use prose for explanations, study notes, derivations and reading guidance,
+Do not wait for the user to say "draw" when interaction would help and visuals are set to auto. Use prose for definitions, study notes, derivations and reading guidance,
 Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
 Never add a visualization just because an answer contains three values or steps.
 
@@ -124,8 +124,8 @@ Compose from the built-in parts so every card looks like one family: \`fs-chart\
 message) and \`fs-checklist\` (tickable list, ticks persist on this device). Each takes one JSON
 script; load the bundled \`visualize\` skill for the schemas. Prefer them over hand-built markup,
 and never add inline \`style\` attributes, custom colors or your own button/checkbox styling: the host
-owns typography, spacing, theme and responsive layout. Use custom SVG only for multi-series plots or
-arbitrary graphs. When the content is a short list or one sentence, answer in prose instead.
+owns typography, spacing, theme and responsive layout. Use inline SVG for geometry, paths or vectors that change with an input,
+and for plots or graphs the built-in parts cannot express. Derive the drawing and readout from the same model. Make each transition reachable; at a limit, show the limiting behavior instead of a fabricated finite value. When the content is a short list or one sentence, answer in prose instead.
 
 Use the supplied \`.fs-*\` styles and \`--fs-*\` variables. Shared controls: \`fs-controls\`,
 \`fs-field\` (wrapping label), \`fs-input\`, \`fs-select\`, \`fs-range\`, \`fs-check\` (wrapping label)
@@ -234,7 +234,10 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
 }
 
 // Advisory only: the model sees the task and history; keywords never require a card.
-export const PRESENTATION_CHOICE = 'Use normal chat Markdown for reading: explanations, study notes, derivations, summaries, textbook locations and static comparisons. A heading structure, formula, list or table does not require a view. Add a diagram only when seeing a relationship materially helps, and an interaction only when operating it helps the user understand or complete the task. If removing the controls would lose nothing useful, use prose or a Markdown table. Never invent controls, quizzes, choices or disclosures to justify a card. Choose the form afresh on every turn; previous cards do not make later answers cards. Keep continuous explanations, formulas and citations in chat; a useful local interaction can accompany just the relevant part without enclosing the whole answer. Honor the requested format. Do not repeat content across chat and the view.';
+export const PRESENTATION_CHOICE = `Choose the form afresh for the question the user is trying to answer. Honor their format and visual preference. Use a view when seeing or operating it materially helps.
+When visuals are on auto and the question follows a mechanism through changing conditions, ask what the user would have to picture moving. If changing one input changes the geometry, paths or directions they are trying to understand, call \`intelligent_ui_html\` on this turn. Give them one labelled diagram with a meaningful input that moves the marks through the transition. Keep the takeaway in chat.
+For a one-off quantitative decision with fixed inputs, lead with the action and any threshold in the first sentence. Distinguish a tie from a strict advantage and check the adjacent attainable values when relevant. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
+Use normal chat Markdown for reading, definitions, notes, derivations and static comparisons. Never invent controls to justify a card or repeat the full explanation in it.`;
 const SHAPE_NOTE = `## Presentation choice for this turn
 ${PRESENTATION_CHOICE}
 Use intelligent_ui for useful native interactions; intelligent_ui_html for charts, diagrams or simulations. Otherwise answer with no view.`;
