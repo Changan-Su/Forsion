@@ -55,6 +55,8 @@ registerMessages({
 
 interface Props {
   query: string
+  triggerFrom: number
+  captureCaret: () => () => boolean
   left: number
   top: number
   /** 光标行上沿:下方放不下时翻到上方展开(见 lib/clampMenu → engine menuAnchor)。 */
@@ -141,7 +143,7 @@ function dirOf(p: string): string {
 /** 重名判定 key:页面剥 .md 小写(pageKey),文件含扩展名小写 —— 两命名空间天然分立。 */
 const candKey = (c: Cand): string => (c.file ? c.base.toLowerCase() : pageKey(c.base))
 
-export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false, undatedTask = false }: Props) {
+export function WikiSuggest({ query, triggerFrom, captureCaret, left, top, anchorTop, getPageNames, getFiles, onPick, onPickRaw, onClose, editorFocused, caretMidWord, sourcePath, agents = [], onPickAgent, allowCreate = true, dates = false, undatedTask = false }: Props) {
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const [, refreshAgents] = useState(0)
   const agentMentions = !!onPickAgent
@@ -171,14 +173,12 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   /** 「唯一即最短」:basename 全库唯一 → 裸名;重名 → `dir/Name|Name`(路径解析 + 别名显示)。
    *  别名候选 → `名|别名`(名同样按唯一即最短)。 */
   const linkInner = (c: Cand): string => {
-    if (c.alias) {
-      const page = { path: c.path, base: baseName(c.path), file: false }
-      const name = (dupes.get(candKey(page)) ?? 0) <= 1 ? page.base : c.path.replace(/\\/g, '/').replace(/\.md$/i, '')
-      return `${name}|${c.alias}`
-    }
-    if ((dupes.get(candKey(c)) ?? 0) <= 1) return c.base
+    const original = c.alias ? { ...c, base: baseName(c.path) } : c
+    if ((dupes.get(candKey(original)) ?? 0) <= 1) return c.alias ? `${original.base}|${c.alias}` : c.base
     const path = c.path.replace(/\\/g, '/')
-    return `${c.file ? path : path.replace(/\.md$/i, '')}|${c.base}`
+    let target = c.file ? path : path.replace(/\.md$/i, '')
+    if (!c.file && !target.includes('/') && resolvePageName(target, pageNames, sourcePath) !== c.path) target = '/' + target
+    return `${target}|${c.base}`
   }
 
   const rows: Row[] = []
@@ -263,9 +263,10 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
   const active = activeKey === null ? 0 : Math.max(0, shown.findIndex((row) => row.key === activeKey))
   const setActive = (index: number) => setActiveKey(shown[index]?.key ?? null)
   const waitingForNames = !sub && (cat === 'all' || cat === 'note') && ((pending && /[a-zü]/i.test(query)) || (!!q && aliasesPending))
-  const confirmDefault = useNameConfirmation(`${cat}\0${query}`, waitingForNames, () => {
+  const triggerKey = `${sourcePath ?? ''}\0${dates ? '@' : '[['}\0${triggerFrom}\0${query}`
+  const confirmDefault = useNameConfirmation(`${cat}\0${triggerKey}`, waitingForNames, () => {
     if (!editorFocused || editorFocused()) shown[0]?.pick()
-  })
+  }, captureCaret)
   // 哪一类都没有东西 → 面板整体不出现(同从前);只是当前这一类空着 → 留着分类条,好切回去。
   const visible = allRows.length > 0
   const tabsRef = useCapsuleSlide<HTMLDivElement>(tabbed && visible ? cat : '') // 分类条不在场时给空键:它出现的那一拍才重新量
@@ -282,7 +283,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
 
   useEffect(() => {
     setActiveKey(null)
-  }, [query])
+  }, [triggerKey])
 
   // ⚠️ useLayoutEffect 而非 useEffect:被动 effect 的 cleanup 排在提交之后的调度任务里,面板已经
   // 从 DOM 消失、旧监听器却还挂在 window 上 —— 那个窗口里的 Enter 仍会被吞,甚至按**过期的**
@@ -319,7 +320,7 @@ export function WikiSuggest({ query, left, top, anchorTop, getPageNames, getFile
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
         e.stopPropagation()
-        if (activeKey === null && shown[0]?.create) confirmDefault(undefined)
+        if (activeKey === null) confirmDefault(undefined)
         else shown[active]?.pick()
       } else if (e.key === 'Escape') {
         e.preventDefault()

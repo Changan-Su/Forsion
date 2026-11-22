@@ -114,6 +114,31 @@ const qfState = (page) => page.evaluate(() => ({
       check('别名到达重排后按已选笔记身份打开', before === '*hbxx' && after === before && (await qfState(p2)).nav[0]?.path === 'hbxx.md')
       await p2.close()
     })
+    await tryTest('pinyin-intent', async () => {
+      for (const compose of [false, true]) {
+        const page = await openQF(browser)
+        await page.evaluate(() => {
+          window.amadeus.pageAliases = () => new Promise((done) => { window.__finishAliases = () => done({ '报告.md': ['abc'] }) })
+          const store = window.__qf.usePageStore
+          store.setState({ pages: ['XABC.md', '报告.md'], linkGraphVersion: store.getState().linkGraphVersion + 1 })
+        })
+        await page.waitForFunction(() => !!window.__finishAliases)
+        await page.locator('.amx-qf-input').fill('abc')
+        const fuzzy = (await qfState(page)).rows[0]
+        await page.keyboard.press('Enter')
+        if (compose) await page.locator('.amx-qf-input').dispatchEvent('compositionstart')
+        await page.evaluate(() => window.__finishAliases())
+        if (compose) {
+          await page.waitForFunction(() => document.querySelector('.amx-qf-title')?.textContent === '报告')
+          check('快速查找延迟回车遇到组字不重放', (await qfState(page)).nav.length === 0)
+          await page.locator('.amx-qf-input').dispatchEvent('compositionend')
+          await page.keyboard.press('Enter')
+        }
+        await page.waitForFunction(() => window.__nav.length > 0)
+        check(`快速查找${compose ? '热' : '冷'}回车都打开晚到的精确别名`, fuzzy === '*XABC' && (await qfState(page)).nav[0]?.path === '报告.md')
+        await page.close()
+      }
+    })
     await tryTest('G4-11', async () => {
       // 源码台账:mod+p 只许一条命令持有(两条同绑 = 后注册的那条永远按不出来)。
       const files = ['bootstrapEngine.tsx', 'amadeusCommands.ts'].map((f) => path.join(SRC, f))

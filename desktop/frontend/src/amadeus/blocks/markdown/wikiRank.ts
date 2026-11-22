@@ -26,7 +26,7 @@ export const FILE_SLOTS = 2
 export function pickWikiResults(cands: Cand[], query: string, limit = WIKI_LIMIT, lookup?: PinyinReadings): Cand[] {
   // 空查询不列别名:每篇笔记会平白多出几行,冲掉最近优先的顺序。
   const pool = query.trim() ? cands : cands.filter((c) => !c.alias)
-  const ranked = rankNames(pool, query, (c) => c.base, (c) => c.path, lookup)
+  const ranked = rankNames(pool, query, (c) => c.base, (c) => c.alias ? undefined : c.path, lookup)
   const head = ranked.slice(0, limit)
   const spare = ranked.filter((c) => c.file && !head.includes(c)).slice(0, FILE_SLOTS)
   return spare.length ? [...head.slice(0, limit - spare.length), ...spare] : head

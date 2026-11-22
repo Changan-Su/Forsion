@@ -1618,6 +1618,17 @@ export function MilkdownInner({
     })
     return focused
   }
+  /** A deferred wiki pick belongs to this editor, document and caret even if another trigger has identical text. */
+  const captureCaret = (to: number): (() => boolean) => {
+    let current = () => false
+    getInstance()?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const { doc, selection } = view.state
+      current = () => !view.isDestroyed && !view.composing && view.hasFocus() && selection.head === to
+        && view.state.doc === doc && view.state.selection.eq(selection)
+    })
+    return current
+  }
   /** 光标后面紧跟着的是不是字(不是空白、`]`、段尾):`[[` 面板据此把 ←/→ 让给移光标(回到查询词中间改错字)。 */
   const caretMidWord = (): boolean => {
     let mid = false
@@ -1895,6 +1906,8 @@ export function MilkdownInner({
       {wiki && !readOnly && (
         <WikiSuggest
           query={wiki.query}
+          triggerFrom={wiki.from}
+          captureCaret={() => captureCaret(wiki.to)}
           left={wiki.left}
           top={wiki.top}
           anchorTop={wiki.anchorTop}
@@ -1914,6 +1927,9 @@ export function MilkdownInner({
       {!wiki && mention && !readOnly && (
         <WikiSuggest
           query={mention.query}
+          triggerFrom={mention.from}
+          captureCaret={() => captureCaret(mention.to)}
+          sourcePath={attachmentPagePath}
           left={mention.left}
           top={mention.top}
           anchorTop={mention.anchorTop}

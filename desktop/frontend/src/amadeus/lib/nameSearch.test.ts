@@ -31,6 +31,14 @@ describe('Chinese name search in Quick Find and wiki suggestions', () => {
     expect(pickWikiResults([alias, file], 'syjl', 8, readings)).toEqual([alias])
     expect(pickWikiResults([alias, file], 'xmfj', 8, readings)).toEqual([file])
   })
+  it('unrelated aliases cannot fill the wiki results with copies of a matching path', () => {
+    const first = { path: '工作/方案.md', base: '方案', file: false }
+    const second = { path: '工作/年终方案.md', base: '年终方案', file: false }
+    const aliases = Array.from({ length: 7 }, (_, i) => ({ ...first, base: `备选${i}`, alias: `备选${i}` }))
+    for (const q of ['gz fangan', '工作/方案']) {
+      expect(pickWikiResults([first, ...aliases, second], q, 8, readings)).toEqual([first, second])
+    }
+  })
   it('matches a note by its frontmatter aliases once, while preserving its title and path', () => {
     const note = { title: 'Alpha', path: '研究/Alpha.md', aliases: ['周报汇总', '周报汇总表'] }
     const exact = { title: 'ZBHZ', path: 'ZBHZ.md', aliases: [] }

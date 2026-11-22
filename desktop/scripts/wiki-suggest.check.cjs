@@ -140,6 +140,49 @@ async function main() {
     check('拼音表冷加载期间，无候选的 @ 提及仍能正常换行', typeof md === 'string' && md.includes('正文 @notamatch\n\nnext') && !md.includes('[['), JSON.stringify(md))
     await p2.close()
   })
+  await tryTest('pinyin-intent', async () => {
+    for (const action of ['confirm', 'compose', 'move']) {
+      const page = await open(browser, '# 测试\n\nfirst\n\nother [[abc\n', ['XABC.md', '报告.md'])
+      await page.evaluate(() => {
+        window.amadeus.pageAliases = () => new Promise((done) => { window.__finishAliases = () => done({ '报告.md': ['abc'] }) })
+      })
+      await clickEnd(page, `${PM} > p`)
+      await page.keyboard.type(' [[abc')
+      await page.waitForFunction(() => !!window.__finishAliases && document.querySelector('.wiki-item')?.textContent === 'XABC')
+      await page.keyboard.press('Enter')
+      if (action === 'compose') await page.locator(PM).dispatchEvent('compositionstart')
+      if (action === 'move') {
+        await page.evaluate(() => {
+          const v = window.__upage.probe.view(), st = v.state
+          let at
+          st.doc.descendants((n, pos) => { if (n.isTextblock && n.textContent.includes('other [[abc')) at = pos + 1 + n.content.size })
+          v.dispatch(st.tr.setSelection(st.selection.constructor.create(st.doc, at)))
+        })
+      }
+      await page.evaluate(() => window.__finishAliases())
+      if (action === 'confirm') {
+        await page.waitForFunction(() => window.__upage.probe.view().state.doc.textContent.includes('[[报告|abc]]'))
+        check('双链默认回车等待精确别名再插入', (await docText(page)).includes('first [[报告|abc]]'))
+      } else {
+        await page.waitForTimeout(150)
+        check(`待确认时${action === 'compose' ? '开始组字' : '移到另一处相同查询'}不会改写原文`, (await docText(page)).includes('first [[abc]]other [[abc') && !(await docText(page)).includes('报告'))
+      }
+      await page.close()
+    }
+  })
+  await tryTest('pinyin-root', async () => {
+    const pages = ['研究/项目周报.md', '项目周报.md', '研究/草稿.md']
+    const page = await open(browser, '# 初始\n\n正文\n', pages)
+    await page.evaluate(() => window.__upage.switchFile('研究/草稿.md', '# 草稿\n\n同名查找\n'))
+    await page.waitForFunction(() => window.__upage.probe.view().state.doc.textContent.includes('同名查找'))
+    await clickEnd(page, `${PM} > p`)
+    await page.keyboard.type(' [[xmzb')
+    const rootRow = page.locator('.wiki-item').filter({ hasText: /^项目周报\/$/ })
+    await rootRow.click()
+    const md = await saved(page)
+    check('同目录有同名文档时选库根候选会保存库根路径', md?.includes('[[/项目周报|项目周报]]'), JSON.stringify(md))
+    await page.close()
+  })
 
   // ── L-02:已闭合链接里改目标名 → 只替换目标名这一段 ──
   // 光标进链接 = 行首 Meta+← 再 → 若干格(`see [[` 共 6 格);在里面打字才弹(T38 契约)。

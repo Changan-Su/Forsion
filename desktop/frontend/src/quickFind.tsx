@@ -402,7 +402,11 @@ function QuickFindInner() {
 
   const waitingForNames = (pending && /[a-zü]/i.test(q)) || (!!q.trim() && aliasesPending && (cat === 'all' || cat === 'note'))
   const confirmSelection = useNameConfirmation(`${vaultRoot}\0${cat}\0${q}`, waitingForNames,
-    (newTab: boolean) => chooseAt(0, { newTab }))
+    (newTab: boolean) => chooseAt(0, { newTab }), () => {
+      const input = inputRef.current
+      const start = input?.selectionStart, end = input?.selectionEnd
+      return () => !!input && document.activeElement === input && input.selectionStart === start && input.selectionEnd === end
+    })
 
   const itemButton = (it: Item, i: number) => (
     <button
@@ -425,7 +429,7 @@ function QuickFindInner() {
     else if (e.key === 'Enter') {
       e.preventDefault()
       const newTab = e.metaKey || e.ctrlKey
-      if (selectedKey === null && !results.length && (showCreate || !total)) confirmSelection(newTab)
+      if (selectedKey === null) confirmSelection(newTab)
       else chooseAt(sel, { newTab })
     }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
