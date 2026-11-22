@@ -51,7 +51,7 @@ import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, on
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, readSpaceLayoutToldAt, type MuseSleep } from './museState.js';
-import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
+import { loadTriggers, evaluateTriggers, markTriggersFired, triggerEpoch, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
 import { readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -1142,7 +1142,10 @@ async function tick(): Promise<void> {
       else { wakeRequestedAt = 0; wakeBlocked = null; }
     }
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
-    if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
+    if (museFired.length) {
+      const epochs = new Map(museFired.map((t) => [t.id, triggerEpoch(t)]));
+      await markTriggersFired([...epochs.keys()], undefined, trigCursors, epochs);
+    }
     await markMuseEntriesFired(cycleRunId, dueMuse);
   } catch (e: any) {
     lastError = e?.message || String(e);

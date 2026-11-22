@@ -408,6 +408,21 @@ let seq = 0;
 const addRow = (db: DbLike, cells: Record<string, unknown> = {}): string => { const id = `n${++seq}`; db.rows.push({ id, cells }); return id; };
 
 describe('drainAutomation', () => {
+  it('同轮等 Agent 撰写期间改期的 Muse 规则不会按原定时间叫醒 Muse', async () => {
+    const due = { type: 'at', datetime: '2026-11-22T09:00' } as const;
+    const muse = rule({ id: 'wake', cond: due, actions: undefined });
+    const draft = rule({ id: 'draft', cond: due, actions: [
+      { type: 'send_message', agentSlug: 'desk', delivery: 'solo', source: 'agent', prompt: 'Share the update.' },
+    ] });
+    const w = world({}, [muse, draft], () => {
+      w.triggers[0] = { ...muse, cond: { type: 'at', datetime: '2026-11-23T09:00' } };
+      return {};
+    });
+    const result = await drainAutomation({ ...w.deps, now: () => new Date(2026, 10, 22, 9, 1) });
+    expect(result.launched).toEqual(['draft']);
+    expect(result.museFired).toEqual([]);
+  });
+
   it('自写不可见:规则 A 盯 A.db 又写 A.db → 只跑一次就停(2 轮);负对照:去掉自游标推进 → 一路跑到 cap', async () => {
     const mk = () => {
       const tables = { 'A.db': tbl([{ id: 'r1' }]) };

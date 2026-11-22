@@ -155,7 +155,14 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
     const epochs = new Map(agentFired.map((t) => [t.id, triggerEpoch(t)]));
     const waiting = agentFired.some((t) => !t.observe && t.actions?.some((a) => a.type === 'send_message' && a.source === 'agent'));
     const { launched, touched } = await deps.launch(hits);
-    const current = waiting ? new Map((await deps.loadTriggers()).map((t) => [t.id, triggerEpoch(t)])) : epochs;
+    const current = waiting ? new Map((await deps.loadTriggers()).filter((t) => t.enabled).map((t) => [t.id, triggerEpoch(t)])) : epochs;
+    if (waiting) {
+      for (const [id, t] of museMap) {
+        if (current.get(id) === triggerEpoch(t)) continue;
+        museMap.delete(id);
+        delete ackCursors[id];
+      }
+    }
     const iso = now().toISOString();
     for (const id of launched) {
       const epoch = epochs.get(id);
