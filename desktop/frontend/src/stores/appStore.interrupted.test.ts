@@ -295,6 +295,17 @@ describe('attaching to a run that is still going while its row is already persis
     expect(useApp.getState().runningBySession[SID]).toBe('run-live')
     await check('run-live')
   })
+  it('reattaches to the live answer while slow configuration is still pending', async () => {
+    vi.useRealTimers()
+    useApp.setState({ connState: 'ok' })
+    let release!: () => void
+    service.config.mockReturnValueOnce(new Promise(resolve => { release = () => resolve({}) }))
+    const opened = useApp.getState().loadSessionHistory(SID)
+    try {
+      await vi.waitFor(() => expect(useApp.getState().runningBySession[SID]).toBe('run-live'))
+      expect(useApp.getState().messagesBySession[SID].some(m => m.id === 'u1')).toBe(true)
+    } finally { release(); await opened }
+  })
   it('via pollSession', async () => {
     await useApp.getState().pollSession(SID)
     expect(useApp.getState().runningBySession[SID]).toBe('run-live')
@@ -308,5 +319,37 @@ describe('attaching to a run that is still going while its row is already persis
     const ev = useApp.getState().messagesBySession[SID][0].toolEvents![0]
     expect(ev).toMatchObject({ done: true, result: 'body' })
     expect(inflightOf(ev)).toBeUndefined()
+  })
+})
+
+describe('paged poll reconciliation', () => {
+  const numbers = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i)
+  const page = (keys: number[], details = keys, removed: number[] = []) => ({
+    page: { ids: keys.map(String), versions: Object.fromEntries(keys.map(n => [n, '0'])), older: true,
+      newer: false, missing: false, removed: removed.map(String) },
+    messages: details.map(n => ({ id: String(n), timestamp: 42, history_order: n, role: 'user', content: 'row' })),
+    failedRuns: [],
+  })
+  const open = async (sid: string, keys: number[]) => {
+    abortAllTanguRuns()
+    useApp.setState({ activeId: sid, connState: 'ok', runningBySession: {}, messagesBySession: {} })
+    service.history.mockResolvedValueOnce(page(keys))
+    await useApp.getState().loadSessionHistory(sid)
+  }
+  it('keeps same-ms messages in engine order as they age out of the tail', async () => {
+    const sid = 'page-ties'
+    await open(sid, numbers(1, 24))
+    service.history.mockResolvedValueOnce(page(numbers(2, 25), [25]))
+    await useApp.getState().pollSession(sid)
+    expect(useApp.getState().messagesBySession[sid].map(m => m.id)).toEqual(numbers(1, 25).map(String))
+  })
+  it('catches up after a burst even when the old last messages were deleted', async () => {
+    const sid = 'page-bridge'
+    await open(sid, numbers(77, 100))
+    service.history.mockResolvedValueOnce(page(numbers(107, 130), numbers(107, 130), [99, 100]))
+      .mockResolvedValueOnce(page(numbers(101, 130)))
+    await useApp.getState().pollSession(sid)
+    expect(service.history.mock.lastCall?.at(-1)).toEqual({ afterId: '98' })
+    expect(useApp.getState().messagesBySession[sid].map(m => m.id)).toEqual([...numbers(77, 98), ...numbers(101, 130)].map(String))
   })
 })

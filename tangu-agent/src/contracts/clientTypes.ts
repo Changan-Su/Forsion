@@ -542,6 +542,8 @@ export const sessionWorkspaceKey = (
 
 export interface MessageRecord {
   id: string
+  /** Same-timestamp order on a paged transcript. */
+  history_order?: number | string
   role: 'user' | 'model' | 'assistant' | string
   content: string | null
   reasoning: string | null
@@ -1178,6 +1180,8 @@ export interface UiMessage {
   truncated?: boolean
   /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
   lengthResumed?: boolean
+  /** Persisted tie-breaker within the same millisecond (SQLite rowid or PostgreSQL message id). */
+  historyOrder?: number | string
   timestamp: number
   /** 群聊模式:本条发言的发言人(Normal Agent slug;__host__=主持人)。缺省=普通单 agent 消息。 */
   agentId?: string

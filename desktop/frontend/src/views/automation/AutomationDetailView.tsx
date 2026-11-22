@@ -76,7 +76,7 @@ const SessionTranscript: React.FC<{ sessionId: string }> = ({ sessionId }) => {
   const { t } = useI18n()
   const messages = useApp((s) => s.messagesBySession[sessionId])
   useEffect(() => {
-    void useApp.getState().loadSessionHistory(sessionId)
+    void useApp.getState().ensureHistoryDepth(sessionId)
   }, [sessionId])
   if (!messages?.length) return <div className="auto-runs-empty">{t('automation.transcript.empty')}</div>
   // 只展示尾部 30 条(常驻会话随命中累积,详情页看最近即可)

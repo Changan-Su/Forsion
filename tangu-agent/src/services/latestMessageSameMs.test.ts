@@ -141,3 +141,38 @@ describe('同一毫秒落库的几行:按时间正序列出时保持落库先后
     expect(t.anchorMessageId).toBe('m1');
   });
 });
+
+describe('chat history windows', () => {
+  it('checks for a steer on the next page before restoring a failed answer', async () => {
+    const { chatHistoryPage } = await import('./chatHistoryPage.js');
+    await session('S');
+    await msg('u', 'S', 'user', 'question', TS);
+    await msg('a', 'S', 'model', 'partial', TS + 1);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, assistant_message_id, input)
+      VALUES ('r', 'S', 'u1', 'failed', 'a', ?)`, [JSON.stringify({ userMessageId: 'u' })]);
+    expect((await chatHistoryPage('S', 1, {})).failed[0]?.assistant_message_id).toBe('a');
+    await msg('steer', 'S', 'user', 'wait', TS + 2);
+    expect((await chatHistoryPage('S', 1, { beforeId: 'a' })).failed).toEqual([]);
+  });
+  it('opens the tail, pages in both directions and anchors inside same-millisecond siblings', async () => {
+    const { chatHistoryPage } = await import('./chatHistoryPage.js');
+    await session('S');
+    await session('other');
+    for (let i = 0; i < 260; i++) await msg('m' + i, 'S', i % 2 ? 'model' : 'user', 'row ' + i, TS);
+    const tail = await chatHistoryPage('S', 24, {});
+    expect(tail.page.ids).toEqual(Array.from({ length: 24 }, (_, i) => 'm' + (236 + i)));
+    const older = await chatHistoryPage('S', 24, { beforeId: 'm236' });
+    expect(older.page.ids[0]).toBe('m212');
+    const around = await chatHistoryPage('S', 24, { aroundId: 'm31' });
+    expect(around.page.ids[12]).toBe('m31');
+    expect((await chatHistoryPage('S', 24, { afterId: around.page.ids.at(-1) })).page.ids[0]).toBe('m43');
+    expect((await chatHistoryPage('other', 24, { aroundId: 'm31' })).page.missing).toBe(true);
+    expect((await chatHistoryPage('S', 24, { known: tail.page.versions })).rows).toEqual([]);
+    await query('UPDATE chat_messages SET content = ? WHERE id = ?', ['ROW 258', 'm258']);
+    await query('DELETE FROM chat_messages WHERE id = ?', ['m240']);
+    await msg('new', 'S', 'model', 'next reply', TS);
+    const changed = await chatHistoryPage('S', 24, { known: tail.page.versions });
+    expect(changed.rows.map(m => m.id)).toEqual(['m258', 'new']);
+    expect(changed.page.removed).toEqual(['m240']);
+  });
+});

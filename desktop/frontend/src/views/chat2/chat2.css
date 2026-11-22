@@ -306,6 +306,12 @@
   -webkit-mask-image: var(--t2-ufold-mask); mask-image: var(--t2-ufold-mask);
 }
 .t2-user-fold-hit { position: absolute; inset: auto 0 0; height: 64px; cursor: pointer; }
+.t2-history-page {
+  align-self: center; padding: 4px 8px; border: 0; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta); cursor: pointer;
+}
+.t2-history-page:hover { color: var(--text); }
+
 .t2-user-more {
   display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; background: none; cursor: pointer;
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap;

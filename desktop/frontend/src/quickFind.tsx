@@ -28,7 +28,7 @@ import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
 import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, useSegDir, type NativeChromeClaim } from '@lcl/engine'
 import { useSegFlow } from '@lcl/engine/segFlow'
-import { getSessionDetail, listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
+import { CHAT_PAGE_SIZE, getSessionDetail, listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
 import { countTelemetry } from './telemetrySend'
@@ -113,9 +113,15 @@ function ContentPreview({ hit, q }: { hit: SessionSearchHit; q: string }) {
   const [turns, setTurns] = useState<{ id: string; turns: Turns } | null>(null)
   useEffect(() => {
     let live = true
-    // 取一页 200 条(= 打开会话时 ChatView 那一页):过程消息也占条数,40 条会被一轮密集的工具调用占满,凑不出 3 轮(Codex 评审)。
-    // ponytail: 不缓存,换一条就重取一次;窄窗口里预览栏被 CSS 藏起来时也照取。工具更密的会话一页仍凑不满时就少几轮,要补再按 before 往前翻
-    listMessages(targetForSession(hit.id), hit.id, 200).then((ms) => { if (live) setTurns({ id: hit.id, turns: lastTurns(ms) }) }, () => {})
+    const target = targetForSession(hit.id)
+    void listMessages(target, hit.id, CHAT_PAGE_SIZE).then(async rows => {
+      if (!live) return
+      // Dense tool-only stretches may span the small tail. Preserve the original
+      // three-turn preview in that case, without downloading 200 rows for every hit.
+      const users = rows.filter(m => m.role === 'user' && m.content?.trim())
+      if (rows.length === CHAT_PAGE_SIZE && users.length < 3) rows = await listMessages(target, hit.id, 200)
+      if (live) setTurns({ id: hit.id, turns: lastTurns(rows) })
+    }).catch(() => {})
     return () => { live = false }
   }, [hit.id])
   return (
