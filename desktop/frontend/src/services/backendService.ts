@@ -1,3 +1,4 @@
+import { AUTOMATION_COMPOSE_TIMEOUT_MS } from '../../../../tangu-agent/src/contracts/automationMessage'
 /**
  * M3 数据 API 薄封装(sessions/models/memory/skills/tools/workspace)。
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
@@ -1344,6 +1345,7 @@ export const fireAutomationTrigger = (t: EngineTarget, id: string, origin: 'manu
   request<{ ok: boolean; execId?: string; status: string; steps?: AutomationExecutionInfo['steps'] }>(
     t, `/agent/special/automation/triggers/${encodeURIComponent(id)}/fire`,
     { method: 'POST', body: JSON.stringify({ origin }) },
+    { timeoutMs: AUTOMATION_COMPOSE_TIMEOUT_MS + 15_000 },
   )
 
 /** 踢一次巡检:桌面写完一张 .db 后调用,让 db_changed 触发从「最多等一个巡检周期」降到 ~2s。

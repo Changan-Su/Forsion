@@ -1,3 +1,4 @@
+import { AUTOMATION_MESSAGE_LIMIT } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import type { AutomationActionCatalogItem } from '../../types'
 import { blankStep, type StepDraft } from './lib'
 
@@ -17,6 +18,12 @@ export function starterSteps(starter: Starter | undefined, t: (key: string) => s
 export function stepIssue(s: StepDraft, kind: string, catalog: AutomationActionCatalogItem[]): string | null {
   if (s.type === 'notify' || s.type === 'remind') return s.title.trim() ? null : 'notify'
   if (s.type === 'agent_run') return !s.agentSlug ? 'agent' : !s.prompt.trim() ? 'prompt' : null
+  if (s.type === 'send_message') {
+    if (!s.agentSlug) return 'sender'
+    if (s.source === 'agent') return s.prompt.trim() ? null : 'prompt'
+    const length = s.body.trim().length
+    return !length ? 'message' : length > AUTOMATION_MESSAGE_LIMIT[s.delivery] ? 'messageLength' : null
+  }
   if (s.type === 'db_row_add' || s.type === 'db_row_edit') {
     if (!/\.db$/i.test(s.dbPath.trim())) return 'table'
     if (!s.cells.some((c) => c.k.trim())) return 'cells'

@@ -1,6 +1,22 @@
 import { registerMessages } from '../../i18n'
 
 registerMessages({
+  'automation.step.send_message': { zh: '发送消息', en: 'Send a message' },
+  'automation.send.sender': { zh: '发送人', en: 'Sender' },
+  'automation.send.pickSender': { zh: '选择 Agent', en: 'Choose an Agent' },
+  'automation.send.delivery': { zh: '发送方式', en: 'Delivery' },
+  'automation.send.inbox': { zh: '收件箱', en: 'Inbox' },
+  'automation.send.solo': { zh: 'Solo 私聊', en: 'Solo chat' },
+  'automation.send.source': { zh: '内容来源', en: 'Content source' },
+  'automation.send.fixed': { zh: '固定文案', en: 'Fixed text' },
+  'automation.send.agent': { zh: '由 Agent 撰写', en: 'Written by the Agent' },
+  'automation.send.body': { zh: '消息内容', en: 'Message' },
+  'automation.send.prompt': { zh: '撰写要求', en: 'Writing instructions' },
+  'automation.send.soloHint': { zh: '发到该 Agent 的私聊，可以在那里直接回复。', en: 'Sends to this Agent’s Solo chat, where you can reply directly.' },
+  'automation.ux.issue.senderEngine': { zh: '该 Agent 的外部引擎只能在对话中运行，请改用固定文案或换一个 Agent', en: 'This Agent’s external engine runs in conversations only. Use fixed text or choose another Agent.' },
+  'automation.ux.issue.sender': { zh: '选择发送消息的 Agent', en: 'Choose the sending Agent' },
+  'automation.ux.issue.message': { zh: '填写消息内容', en: 'Enter the message' },
+  'automation.ux.issue.messageLength': { zh: '消息过长，请缩短后保存', en: 'Shorten the message before saving' },
   'automation.cond.appOpened': { zh: '打开了 {app}', en: 'Opened {app}' },
   'automation.cond.appUsed': { zh: '{app} 连续用了 {n} 分钟', en: '{app} used for {n} min' },
   'automation.cond.returned': { zh: '离开电脑 {n} 分钟后回来', en: 'Back after {n} min away' },

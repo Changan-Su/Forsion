@@ -102,6 +102,8 @@ registerMessages({
   'museCard.ruleOnly': { zh: '只在', en: 'Only' },
   'museCard.ruleDo': { zh: '做', en: 'Do' },
   'museCard.ruleRemind': { zh: '直接提醒「{text}」（不叫模型、不花额度）', en: 'Remind you: “{text}” (no model, no budget)' },
+  'museCard.ruleSendFixed': { zh: '{agent} → {delivery} · {text}', en: '{agent} → {delivery} · {text}' },
+  'museCard.ruleSendAgent': { zh: '{agent} 撰写后发到{delivery} · {text}', en: '{agent} writes and sends to {delivery} · {text}' },
   'museCard.ruleNotify': { zh: '发通知「{text}」', en: 'Send a notification: “{text}”' },
   'museCard.ruleWake': { zh: '叫醒 Muse', en: 'Wake Muse' },
   'museCard.ruleWakeWith': { zh: '叫醒 Muse：{text}', en: 'Wake Muse: {text}' },
@@ -188,6 +190,13 @@ const openSettingsTab = (tab: string): void => useApp.getState().openSettings(ta
 /** 规则卡「做」那一行怎么念(卡上和附原文共用)。 */
 function ruleActText(r: any, t: Tr): string {
   const step = r.actions?.[0]
+  if (step?.type === 'send_message') {
+    const generated = step.source === 'agent'
+    return t(generated ? 'museCard.ruleSendAgent' : 'museCard.ruleSendFixed', {
+      agent: step.agentSlug, delivery: t(step.delivery === 'solo' ? 'automation.send.solo' : 'automation.send.inbox'),
+      text: generated ? step.prompt : step.body,
+    })
+  }
   return step?.type === 'remind' ? t('museCard.ruleRemind', { text: step.title })
     : step?.type === 'notify' ? t('museCard.ruleNotify', { text: step.title })
     : r.prompt ? t('museCard.ruleWakeWith', { text: r.prompt }) : t('museCard.ruleWake')

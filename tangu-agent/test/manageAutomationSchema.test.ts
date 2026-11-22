@@ -19,14 +19,15 @@ const text = JSON.stringify(def);
 describe('manage_automation definition', () => {
   it('keeps the parameter structure (descriptions aside)', () => {
     const fp = createHash('sha256').update(JSON.stringify(strip(def))).digest('hex').slice(0, 16);
-    expect(fp).toBe('5499fcca62457445');
+    expect(fp).toBe('fb5f1f4d22424d10');
   });
 
   it.each([
-    ['templates expand only in notify text and cells', 'ONLY in notify text and db cell values'],
+    ['fixed message text supports templates', 'send_message fixed text'],
     ['column ID, not name', 'NOT its name'],
     ['remind is skipped outside active hours', 'skipped outside Muse active hours'],
     ['notify is the timed-reminder route', 'the right way to deliver timed reminders'],
+    ['Solo delivery reuses the direct chat', 'existing direct chat (the user can reply there)'],
     ['at disables itself', 'disables itself after firing'],
     ['manual = button block', 'button block in a note'],
     ['computer.* needs Computer History', 'need Computer History on'],

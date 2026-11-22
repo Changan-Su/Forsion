@@ -72,6 +72,8 @@ export interface StreamResult {
    *  reasoning_tokens:completion 里的隐藏思考量(Responses output_tokens_details;计量拆账用)。 */
   usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
   finishReason?: string;
+  /** A direct provider stream reached EOF without a terminal event. */
+  streamEndedEarly?: true;
   /** Responses 协议的原始 output items(reasoning/message/function_call,按输出序):agentLoop 把它挂到
    *  该轮 assistant 消息(仅 in-memory),下一轮原样回灌以维持 reasoning 延续性(OpenAI:函数调用续轮
    *  必须带回 reasoning items,store:false 时靠 encrypted_content)。其他协议缺省 undefined。 */

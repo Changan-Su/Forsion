@@ -94,12 +94,17 @@ export async function activeSoloId(userId: string, appId: string, kind: SoloKind
   return (await activeSolo(userId, appId, kind, id))?.id ?? null;
 }
 
-/** 取 / 建该 Agent 或引擎的活动私聊会话(与 open 同一把锁、同一条查询)。Muse 主动发私聊用(services/museDm.ts)。 */
-export async function ensureSoloSession(userId: string, kind: SoloKind, id: string): Promise<any | null> {
+/** Deliver inside the same lock used to open or rotate this Agent's active Solo. */
+export async function withAgentSoloSession<T>(
+  userId: string, slug: string, use: (session: { id: string }) => Promise<T>,
+): Promise<T | null> {
   const appId = deps().profile.appId;
-  const r = await resolveSolo(kind, id);
+  const r = await resolveSolo('agent', slug);
   if (!r) return null;
-  return withKeyLock(`solo:${userId}:${r.kind}:${id}`, async () => (await activeSolo(userId, appId, r.kind, id)) ?? createSolo(userId, appId, r));
+  return withKeyLock(`solo:${userId}:agent:${slug}`, async () => {
+    const session = await activeSolo(userId, appId, 'agent', slug) ?? await createSolo(userId, appId, r);
+    return use(session);
+  });
 }
 
 router.post('/agent/solo/:kind/:id/open', authMiddleware, async (req: AuthRequest, res) => {

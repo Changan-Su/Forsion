@@ -13,11 +13,12 @@
  * 「当…」的校验 / 求值 / 摘要 / 下次时刻都查 triggerRegistry;老七种注册在本文件末尾,新源在 triggerSources.ts。
  */
 import { promises as fs } from 'node:fs';
+import { AUTOMATION_MESSAGE_LIMIT, AUTOMATION_MESSAGE_PROMPT_LIMIT, type SendMessageAction } from '../contracts/automationMessage.js';
 import { randomUUID, createHash } from 'node:crypto';
 import path, { join } from 'node:path';
 import os from 'node:os';
 import { agentsDir } from '../core/tanguHome.js';
-import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import { MUSE_AGENT_SLUG, isValidSlug } from '../agents/agentRegistry.js';
 import { dropCursors, CURSOR_V, type DbCursor } from './dbCursors.js';
 import type { CellValue, DbColumn, DbFile, DbRow } from './amadeusDb.js';
 import { computeRowLookups, isBackLookup } from './dbLookup.js';
@@ -142,6 +143,7 @@ export type ActionSpec =
   /** 直接提醒:不叫模型,弹系统通知 + Muse 私聊写一行;不转发到通道(「什么都不离开这台电脑」);Muse 运行时段外跳过、不补发。 */
   | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
+  | SendMessageAction
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /**
    * Amadeus 多维表写入(对标 Notion 的 Add page to… / Edit property…)。
@@ -164,6 +166,10 @@ export type ActionSpec =
       match?: { column: string; value: string };
       cells: Record<string, string>;
     };
+
+export function actionRunsAgent(a: ActionSpec): boolean {
+  return a.type === 'agent_run' || a.type === 'send_message' && a.source === 'agent';
+}
 
 /** 动作链步数上限。10 → 24:ERP 捆绑包「订单 row_added → 出库 db_row_add × 16 槽位」一条链要 16 步。 */
 export const MAX_ACTIONS = 24;
@@ -194,6 +200,27 @@ function parseActionsInput(raw: unknown, allowToolCall: boolean):
       if (!slug || !prompt) return { ok: false, error: 'agent_run 步骤需要 agentSlug 和 prompt' };
       if (slug === MUSE_AGENT_SLUG) return { ok: false, error: 'agent_run 不能指向 muse(full-auto 会绕穿其 planMode 安全设计)' };
       out.push({ type: 'agent_run', agentSlug: slug, prompt });
+    } else if (type === 'send_message') {
+      const agentSlug = typeof a.agentSlug === 'string' ? a.agentSlug.trim() : '';
+      const delivery: unknown = a.delivery;
+      const source: unknown = a.source;
+      if (!isValidSlug(agentSlug)) return { ok: false, error: 'send_message needs a valid agentSlug' };
+      if (delivery !== 'inbox' && delivery !== 'solo') return { ok: false, error: 'send_message delivery must be inbox or solo' };
+      if (source === 'fixed') {
+        const body = typeof a.body === 'string' ? a.body.trim() : '';
+        if (!body || body.length > AUTOMATION_MESSAGE_LIMIT[delivery]) {
+          return { ok: false, error: `send_message needs a body of 1–${AUTOMATION_MESSAGE_LIMIT[delivery]} characters` };
+        }
+        out.push({ type, agentSlug, delivery, source, body });
+      } else if (source === 'agent') {
+        const prompt = typeof a.prompt === 'string' ? a.prompt.trim() : '';
+        if (!prompt || prompt.length > AUTOMATION_MESSAGE_PROMPT_LIMIT) {
+          return { ok: false, error: `send_message needs a prompt of 1–${AUTOMATION_MESSAGE_PROMPT_LIMIT} characters` };
+        }
+        out.push({ type, agentSlug, delivery, source, prompt });
+      } else {
+        return { ok: false, error: 'send_message source must be fixed or agent' };
+      }
     } else if (type === 'tool_call') {
       if (!allowToolCall) return { ok: false, error: 'tool_call 步骤只能在桌面自动化构建器里创建(需人工授权)' };
       const tool = String(a.tool || '').trim();
@@ -236,7 +263,7 @@ function parseActionsInput(raw: unknown, allowToolCall: boolean):
         });
       }
     } else {
-      return { ok: false, error: 'action.type 须为 notify/remind/agent_run/tool_call/db_row_add/db_row_edit' };
+      return { ok: false, error: 'action.type 须为 notify/remind/send_message/agent_run/tool_call/db_row_add/db_row_edit' };
     }
   }
   return { ok: true, value: out };
@@ -366,13 +393,18 @@ export async function removeTrigger(id: string): Promise<boolean> {
 }
 
 /** 触发后写回 lastFiredAt(仅在动作真正执行后调用);event_seen 规则一并写回消费游标。 */
-export async function markTriggersFired(ids: string[], at = new Date(), cursors?: Record<string, EventCursor>): Promise<void> {
+export const triggerEpoch = (t: MuseTrigger): string => JSON.stringify([t.createdAt, t.cond]);
+
+export async function markTriggersFired(ids: string[], at = new Date(), cursors?: Record<string, EventCursor>, epochs?: ReadonlyMap<string, string>): Promise<void> {
   if (!ids.length) return;
   await withTriggersLock(async () => {
     const list = await loadTriggers();
     const iso = at.toISOString();
+    let changed = false;
     for (const t of list) {
-      if (!ids.includes(t.id)) continue;
+      // A long drafting step can finish after the user has replaced the schedule on this id.
+      if (!ids.includes(t.id) || (epochs?.has(t.id) && epochs.get(t.id) !== triggerEpoch(t))) continue;
+      changed = true;
       t.lastFiredAt = iso;
       if (cursors?.[t.id]) t.lastEventCursor = cursors[t.id];
       if (t.maxPerDay) {
@@ -381,7 +413,7 @@ export async function markTriggersFired(ids: string[], at = new Date(), cursors?
       }
       if (t.cond?.type === 'at') t.enabled = false; // 一次性:触发即熄(留痕;改期+启用即复用)
     }
-    await saveTriggers(list);
+    if (changed) await saveTriggers(list);
   });
 }
 
@@ -511,7 +543,7 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   if (actions?.length && agentSlug) return { ok: false, error: 'actions 与 agent_slug 互斥(动作链里用 agent_run 步骤指定执行者)' };
   // 含 LLM run 的规则(动作链 agent_run 或旧式 agentSlug)冷却下限 1h——自激回路唯一硬护栏;
   // 纯直执链(notify/tool_call)0 token,放宽到 15min。
-  const hasLLM = !!agentSlug || !!actions?.some((a) => a.type === 'agent_run');
+  const hasLLM = !!agentSlug || !!actions?.some(actionRunsAgent);
   const rawCd = Number(input.cooldown_hours);
   // db_changed 纯动作链(0 token,逐行事件):默认 0、下限 0(与 manual 同档)——它是按行触发的,
   // 冷却只会把「加了 3 行」吞成「每天处理 1 行」。显式传 0 必须认(`>= 0`,否则回落 24)。
@@ -1297,7 +1329,7 @@ async function evaluateDbChanged(t: MuseTrigger, io: TriggerEvalIo): Promise<voi
   //   第一个 hit 起了常驻会话后,余下 hit 会因 isRunning 被拒;若游标已把整表吞了,那 N-1 行就永久丢了。
   //   其余命中行留在游标外(row_added 剔出 rowIds;cell_changed 回填旧值),下一 tick 再成候选。
   // 调用方拿到的游标是 pending 的:动作被接受才提交(muse.ts / automationDrain 的 S0 语义)。
-  const hasLLM = (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run');
+  const hasLLM = (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some(actionRunsAgent);
   const taken = hasLLM ? hits.slice(0, 1) : hits;
   /** 没轮到处理的命中行 id(只可能出自「含 LLM 每 tick 一行」那条闸)—— 必须留在游标外,下个 tick 再成候选。 */
   const restIds = hits.slice(taken.length).map((h) => h.id);
@@ -1469,7 +1501,7 @@ export function buildTriggerKickoff(fired: MuseTrigger[]): string {
 
 /** 用到这个 Agent 的规则(旧式 agentSlug 或动作链里的 agent_run)。卸载确认框列它们,卸载时暂停。 */
 export const triggerUsesAgent = (t: MuseTrigger, slug: string): boolean =>
-  t.agentSlug === slug || !!t.actions?.some((a) => a.type === 'agent_run' && a.agentSlug === slug);
+  t.agentSlug === slug || !!t.actions?.some((a) => (a.type === 'agent_run' || a.type === 'send_message') && a.agentSlug === slug);
 
 export const AGENT_UNINSTALLED_REASON = 'agent_uninstalled';
 

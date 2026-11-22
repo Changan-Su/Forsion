@@ -7,6 +7,8 @@
  * 宿主照旧从 types.ts 取(那边转出),Tangu 界面直接从这里取。
  */
 
+import type { SendMessageAction } from './automationMessage.js'
+
 /** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14)。 */
 export type TargetRef = { kind: 'home' } | { kind: 'unit'; unitId: string }
 
@@ -212,6 +214,7 @@ export type AutomationActionSpec =
   /** 直接提醒:系统通知 + Muse 私聊一行,不叫模型。 */
   | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
+  | SendMessageAction
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} / {{= 算术 }} 模板)。
    *  db_row_add.skipIfEmpty = cells 里的一个键:该值展开后为空 → 本步跳过(记 skipped,不算失败)。

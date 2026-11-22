@@ -147,7 +147,7 @@ export async function executeHook(
 
 /** 派发点唯一入口。host-only 闸在最顶（云端/worker 直接空判定，绝不读 config、绝不 spawn）。 */
 export async function runHooks(event: HookEventName, input: HookInput, ctx: HookRunContext): Promise<HookVerdict> {
-  if (!ctx.profile?.capabilities?.hostExec || ctx.execMode !== 'host') return emptyVerdict();
+  if (ctx.disableHooks || !ctx.profile?.capabilities?.hostExec || ctx.execMode !== 'host') return emptyVerdict();
   if (isHostSandboxRestricted(ctx)) {
     return { ...emptyVerdict(), systemMessages: ['Shell hooks are disabled while local sandbox restrictions are active'] };
   }
