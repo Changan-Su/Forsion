@@ -1094,6 +1094,7 @@ function affectedTextblocks(doc: PMNode, ranges: MathRange[]): MathRange[] {
 function cachedMathDecorations(): (state: EditorState) => DecorationSet {
   let doc: PMNode | null = null
   let previous: MathRange | null = null
+  let formulaBlocks: MathRange | null = null
   let decorations = DecorationSet.empty
   return (state) => {
     const selection = editorFocused(state) ? state.selection : null
@@ -1101,14 +1102,24 @@ function cachedMathDecorations(): (state: EditorState) => DecorationSet {
     if (state.doc !== doc) {
       const all: Decoration[] = []
       collectMathDecorations(state.doc, selection, 0, state.doc.content.size, all)
+      // Blocks are visited in document order. Capture the bounds before create consumes the array.
+      // Empty trailing paragraphs and container boundaries are outside these bounds.
+      formulaBlocks = all.length ? {
+        from: state.doc.resolve(all[0].from).start(),
+        to: state.doc.resolve(all[all.length - 1].to).end(),
+      } : null
       decorations = DecorationSet.create(state.doc, all)
       doc = state.doc
-    } else {
+    } else if (formulaBlocks) {
       const ranges = changedSelectionRanges(previous, selection)
       for (const { from, to } of affectedTextblocks(doc, ranges)) {
         const fresh: Decoration[] = []
         collectMathDecorations(doc, selection, from, to, fresh)
-        decorations = decorations.remove(decorations.find(from, to)).add(doc, fresh)
+        // Select-all (or collapsing it) replaces every decorated block. Removing and adding
+        // thousands of entries first would walk the persistent decoration tree twice more.
+        decorations = from <= formulaBlocks.from && to >= formulaBlocks.to
+          ? DecorationSet.create(doc, fresh)
+          : decorations.remove(decorations.find(from, to)).add(doc, fresh)
       }
     }
     previous = selection

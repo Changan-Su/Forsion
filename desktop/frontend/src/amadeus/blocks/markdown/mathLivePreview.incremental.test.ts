@@ -2,7 +2,7 @@
 import { expect, it, vi } from 'vitest'
 import { AllSelection, EditorState, NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
 import { closeHistory, history, redo, undo } from '@milkdown/kit/prose/history'
-import type { DecorationSet } from '@milkdown/kit/prose/view'
+import { DecorationSet } from '@milkdown/kit/prose/view'
 import { editorFocusKey, editorFocusPlugin } from './editorFocus'
 import { mathLivePreviewPlugin } from './mathLivePreview'
 import { bootEditor } from './parseFidelity.testkit'
@@ -122,4 +122,50 @@ it('distant caret jumps and small changes to a large selection leave the interve
       expect(middle).not.toHaveBeenCalled()
     } finally { middle.mockRestore() }
   } finally { await b.destroy() }
+})
+
+it('builds once without removing all previous decorations when selecting or collapsing the full text', async () => {
+  const math = mathLivePreviewPlugin()
+  const focus = editorFocusPlugin()
+  const b = await bootEditor('seed', { extra: [focus, math] })
+  const oracle = mathLivePreviewPlugin()
+  const other = await bootEditor('seed', { extra: [oracle] })
+  try {
+    const { schema } = b.view.state
+    const rows = Array.from({ length: 64 }, (_, i) => schema.nodes.paragraph.create(null, schema.text(`row ${i} $x_${i}$`)))
+    const doc = schema.topNodeType.create(null, [...rows, schema.nodes.paragraph.create()])
+    const cursor = TextSelection.create(doc, 4 + rows.slice(0, 32).reduce((size, node) => size + node.nodeSize, 0))
+    let state = EditorState.create({ doc, selection: cursor, plugins: [focus.plugin(), math.plugin()] })
+    state = state.apply(state.tr.setMeta(editorFocusKey, true))
+    decorationsFor(math, state)
+    const create = vi.spyOn(DecorationSet, 'create')
+    const remove = vi.spyOn(DecorationSet.prototype, 'remove')
+    const add = vi.spyOn(DecorationSet.prototype, 'add')
+    try {
+      const lastTextEnd = doc.content.size - doc.lastChild!.nodeSize - 1
+      for (const selection of [
+        new AllSelection(doc), cursor,
+        TextSelection.create(doc, 1, doc.content.size - 1), cursor, // text caret in the empty tail
+        TextSelection.create(doc, lastTextEnd, 1), cursor, // select all text, excluding the empty tail
+      ]) {
+        state = state.apply(state.tr.setSelection(selection))
+        create.mockClear()
+        remove.mockClear()
+        add.mockClear()
+        const actual = decorationsFor(math, state)
+        expect(create).toHaveBeenCalledTimes(1)
+        expect(remove).not.toHaveBeenCalled()
+        expect(add).not.toHaveBeenCalled()
+        decorationsFor(oracle, other.view.state)
+        expect(describeSet(actual)).toEqual(describeSet(decorationsFor(oracle, state)))
+      }
+    } finally {
+      create.mockRestore()
+      remove.mockRestore()
+      add.mockRestore()
+    }
+  } finally {
+    await other.destroy()
+    await b.destroy()
+  }
 })

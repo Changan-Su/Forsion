@@ -72,7 +72,21 @@ async function measure(page, count) {
         toRafMs.push(frame - start)
       }
     }
-    return { mathMs, dispatchMs, toRafMs, unchangedDoc: view.state.doc === doc, warmup: 8, samples: mathMs.length }
+    // Select the whole text (including its trailing empty paragraph). Time the plugin only,
+    // after the cursor runs, without asking the browser to redraw thousands of source spans.
+    const selectAllMs = []
+    const first = Selection.atStart(doc).from, last = Selection.atEnd(doc).to
+    for (let i = 0; i < 16; i++) {
+      state = state.apply(state.tr.setSelection(makeSelection(first)))
+      get(state)
+      const start = performance.now()
+      state = state.apply(state.tr.setSelection(Selection.create(doc, first, last)))
+      const all = get(state)
+      const elapsed = performance.now() - start
+      if (all.find().filter(d => d.type.attrs?.class === 'math-source').length !== count) throw new Error('Whole selection did not expose every formula')
+      if (i >= 4) selectAllMs.push(elapsed)
+    }
+    return { mathMs, dispatchMs, toRafMs, selectAllMs, unchangedDoc: view.state.doc === doc, warmup: 8, samples: mathMs.length }
   }, { count })
 }
 
@@ -91,7 +105,7 @@ async function main() {
     const result = await measure(page, count)
     assert.equal(result.samples, 32)
     const summary = {}
-    for (const key of ['mathMs', 'dispatchMs', 'toRafMs']) {
+    for (const key of ['mathMs', 'dispatchMs', 'toRafMs', 'selectAllMs']) {
       const sorted = [...result[key]].sort((a, b) => a - b)
       summary[key] = { p50: sorted[Math.floor(sorted.length * 0.5)], p95: sorted[Math.floor(sorted.length * 0.95)] }
     }
