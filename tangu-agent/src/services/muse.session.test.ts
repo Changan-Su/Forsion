@@ -122,7 +122,9 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 10-30 放到 4400:加一句「按条件触发的用 manage_automation,用户在规则卡上点头」(触发源注册表),实测约 4330。
 // 同日放到 4500:合并时叠上「用户本人的事实记进 person 作用域」(用户画像写入),实测约 4436。
 // 同日放到 4600:再叠上开场建议那句「用 set_chat_starters 维护新对话页那几行,有更合时的再换」(Muse 预制提示词方案 A),实测约 4552。
-const MAX_KICKOFF = 4600;
+// 11-20 放到 4800:节奏规矩之后加一句「只在用户现在能审 / 用 / 拍板 / 解除阻塞时才发,例行进展记日志」(借鉴 dsh-superagent 第 3 条),
+// ask 档实测约 4712(11-13 的交付指引已把它推到 4572,只剩 28 字符)。三个判断与反例放在 add_muse_todo 的工具描述里,不进这里。
+const MAX_KICKOFF = 4800;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
@@ -140,6 +142,19 @@ describe('C1b kickoff 拆分', () => {
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space is a layout the desktop draws');
     expect(message).toContain('add_muse_todo');
+  });
+
+  it('发消息看内容(11-20,借鉴 dsh-superagent 第 3 条):原句在节奏规矩之后、「待办和审批已进私聊」之前;交付指引原样不动', () => {
+    const SENT = 'Message the user only if they can now review, use, decide or unblock something. Otherwise stay quiet: routine progress belongs in your log. ';
+    for (const mode of ['ask', 'agent', 'auto'] as const) for (const notify of ['immediate', 'digest'] as const) {
+      const { message } = buildCycleMessages({ ...cfg, mode, notify }, {});
+      const at = message.indexOf(SENT);
+      expect(at).toBeGreaterThan(0);
+      // 10-30:节奏规矩之前多一句,收尾就容易忘了 set_next_wake —— 这句只许在它之后
+      expect(at).toBeGreaterThan(message.indexOf('call set_next_wake to sleep'));
+      expect(message.indexOf('Todos and approval requests already post to your direct chat')).toBe(at + SENT.length);
+      expect(message).toContain(MUSE_DELIVERY_GUIDANCE);
+    }
   });
 
   it('开场建议开着时点名 set_chat_starters(留着别换);关掉就不提(10-25 Muse 预制提示词)', () => {

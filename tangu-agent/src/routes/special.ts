@@ -4,7 +4,7 @@
  *   GET      /agent/special/historian/activity?limit=  Historian 活动流（special_agent_log）
  *   POST     /agent/special/muse/intro                 首启引导答的第一次见面(作息 / 主动程度 / 关注),本机专用
  *   GET      /agent/special/muse/todos?status=         Muse TODO 列表
- *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮)
+ *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮;带 evidence 依据)
  *   PATCH    /agent/special/muse/todos/:id { status, from? }  改 TODO 状态(带 from = CAS,不符 409)
  *   POST     /agent/special/muse/todos/:id/approve     批准 TODO → 一次性、此刻到期的 Muse 日程(收件箱任务卡「交给 Muse 执行」)
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
@@ -68,6 +68,7 @@ import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } fro
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { parseStoredEvidence } from '../tools/builtin/museTodo.js';
 import { listAutomationSessions, fireTrigger, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
 import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -220,11 +221,11 @@ router.get('/agent/special/muse/todos', authMiddleware, async (req: AuthRequest,
     const userId = req.user!.userId;
     const status = typeof req.query.status === 'string' ? req.query.status : '';
     const rows = await query<any[]>(
-      `SELECT id, title, detail, status, source_session_id, created_at FROM muse_todos
+      `SELECT id, title, detail, status, source_session_id, created_at, evidence FROM muse_todos
        WHERE user_id = ?${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT 500`,
       status ? [userId, status] : [userId],
     );
-    res.json({ todos: rows || [] });
+    res.json({ todos: (rows || []).map((r) => ({ ...r, evidence: parseStoredEvidence(r.evidence) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'todos failed' });
   }
@@ -234,9 +235,10 @@ router.get('/agent/special/muse/todos', authMiddleware, async (req: AuthRequest,
 router.get('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const rows = await query<any[]>(`SELECT id, title, status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [req.params.id, req.user!.userId]);
+    // evidence:卡上「依据 · N 条」只从这里读(不进 forsion-task 围栏,正文冒充不了);老行 NULL → []。
+    const rows = await query<any[]>(`SELECT id, title, status, evidence FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [req.params.id, req.user!.userId]);
     if (!rows?.[0]) return res.status(404).json({ error: 'todo_not_found', detail: 'todo not found' });
-    res.json({ todo: rows[0] });
+    res.json({ todo: { ...rows[0], evidence: parseStoredEvidence(rows[0].evidence) } });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'todo failed' });
   }
