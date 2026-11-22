@@ -119,11 +119,15 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
     else previewLeaf.current = ws.openView(REVIEW_VIEW, {}, 'main', { newTab: true })?.id ?? ''
   }
 
+  function focusSearchWhenUnclaimed() {
+    if (!panel.current?.contains(document.activeElement)) input.current?.focus({ preventScroll: true })
+  }
+
   useEffect(() => {
     mounted.current = true
     // The search sidebar remains mounted while the independent, read-only main tab is open.
     if (!mobile) openPreview()
-    const frame = requestAnimationFrame(() => input.current?.focus())
+    const frame = requestAnimationFrame(focusSearchWhenUnclaimed)
     return () => {
       mounted.current = false
       cancelAnimationFrame(frame)
@@ -182,7 +186,7 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
     setError('')
     setRefresh(n => n + 1)
     if (!mobile) openPreview()
-    requestAnimationFrame(() => input.current?.focus())
+    requestAnimationFrame(focusSearchWhenUnclaimed)
   }
 
   async function run(action: 'apply' | 'undo' | 'resume') {

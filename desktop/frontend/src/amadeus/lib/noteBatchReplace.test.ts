@@ -192,7 +192,8 @@ describe('guarded note replacement and recovery', () => {
     for (let i = 0; i < 220; i++) world.disk.set('cloud-' + i + '.md', 'old')
     const groups = vi.fn(async (paths: string[]) => paths.map(path => ({ path, source: 'old', fileId: path })))
     amadeus.readNoteReplaceSources = groups
-    const individual = vi.spyOn(amadeus, 'readNoteReplaceSource')
+    const fixture = amadeus as Required<Pick<typeof amadeus, 'readNoteReplaceSource'>>
+    const individual = vi.spyOn(fixture, 'readNoteReplaceSource')
     try {
       const plan = await previewNoteReplace('/v', 'old')
       expect(plan.files).toHaveLength(220)
