@@ -16,7 +16,7 @@ import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { suggestionDraft, useAutomation } from '../../stores/automationStore'
 import type { MuseAutomationSuggestion } from '../../types'
 import type { MuseCardInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { MuseRuleRow } from '../chat2/MuseCards'
+import { MuseRuleRow } from './MuseRuleRow'
 import { actionsText, condText } from './lib'
 import './messages'
 

@@ -75,12 +75,22 @@ it('a failed dismiss puts the suggestion back; a 409 (already gone) keeps it hid
   expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4'])
 })
 
-it('pending rule cards from the Muse chat: only rule cards; a failed read keeps the last list', async () => {
+it('pending rule cards from the Muse chat: only rule cards; a failed read keeps the last list; an older reply cannot bring a card back', async () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0))
   const rule = { id: 'c1', kind: 'rule', status: 'pending', payload: { rule: { desc: 'Open Figma' } } }
   vi.mocked(listMuseCards).mockResolvedValueOnce([rule, { id: 'c2', kind: 'plugin', status: 'pending', payload: {} }] as any)
-  await useAutomation.getState().refresh({} as TanguDesktopConfig)
+  await useAutomation.getState().refresh({} as TanguDesktopConfig); await flush()
   expect(useAutomation.getState().pendingRules.map((c) => c.id)).toEqual(['c1'])
   vi.mocked(listMuseCards).mockRejectedValueOnce(new Error('offline'))
-  await useAutomation.getState().refresh({} as TanguDesktopConfig)
+  await useAutomation.getState().refresh({} as TanguDesktopConfig); await flush()
   expect(useAutomation.getState().pendingRules.map((c) => c.id)).toEqual(['c1'])
+  // 慢的旧读(还看得到 c1)晚于「答过了」之后的新读回来:不许把 c1 画回来
+  let slow!: (v: any) => void
+  vi.mocked(listMuseCards).mockImplementationOnce(() => new Promise((r) => { slow = r }))
+  void useAutomation.getState().refresh({} as TanguDesktopConfig)
+  vi.mocked(listMuseCards).mockResolvedValueOnce([])
+  useAutomation.getState().bumpCards(); await flush()
+  expect(useAutomation.getState().pendingRules).toEqual([])
+  slow([rule]); await flush()
+  expect(useAutomation.getState().pendingRules).toEqual([])
 })

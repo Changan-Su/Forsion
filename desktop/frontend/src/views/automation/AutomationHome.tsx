@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 import { ArrowRight, Bell, Bot, Database, MousePointerClick, Plus, Workflow } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { useAutomation } from '../../stores/automationStore'
 import { homeSlots } from './experience'
 import { MuseSuggestionSection, type MuseHomeItem } from './MuseSuggestions'
-import { useMuseCardsDecided } from '../chat2/MuseCards'
 import './messages'
 
 const icons = { reminder: Bell, briefing: Bot, table: Database, button: MousePointerClick }
@@ -15,9 +14,6 @@ export const AutomationHome: React.FC = () => {
   const suggestions = useAutomation((s) => s.suggestions)
   const pendingRules = useAutomation((s) => s.pendingRules)
   const [expanded, setExpanded] = useState(false)
-  // 私聊里答了一张规则卡 → 这里跟着重读(两处都以引擎的卡状态为准)
-  const decided = useMuseCardsDecided()
-  useEffect(() => { if (decided) useAutomation.getState().bump() }, [decided])
   // 等你答复的规则卡最前,然后是 Muse 建议;不满 HOME_SLOTS 格时用模板补位,都没有就是原来的四个模板
   const items: MuseHomeItem[] = [...pendingRules.map((card) => ({ kind: 'rule' as const, card })), ...suggestions.map((s) => ({ kind: 'suggestion' as const, s }))]
   const { shown, extra, starters } = homeSlots(items, expanded)
