@@ -297,13 +297,14 @@ describe('attaching to a run that is still going while its row is already persis
   })
   it('reattaches to the live answer while slow configuration is still pending', async () => {
     vi.useRealTimers()
-    useApp.setState({ connState: 'ok' })
+    const sid = 'slow-config-live'
+    useApp.setState({ connState: 'ok', activeId: sid })
     let release!: () => void
     service.config.mockReturnValueOnce(new Promise(resolve => { release = () => resolve({}) }))
-    const opened = useApp.getState().loadSessionHistory(SID)
+    const opened = useApp.getState().loadSessionHistory(sid)
     try {
-      await vi.waitFor(() => expect(useApp.getState().runningBySession[SID]).toBe('run-live'))
-      expect(useApp.getState().messagesBySession[SID].some(m => m.id === 'u1')).toBe(true)
+      await vi.waitFor(() => expect(useApp.getState().runningBySession[sid]).toBe('run-live'))
+      expect(useApp.getState().messagesBySession[sid].some(m => m.id === 'u1')).toBe(true)
     } finally { release(); await opened }
   })
   it('via pollSession', async () => {
