@@ -34,6 +34,7 @@ import { manageAgentProvider } from './builtin/manageAgent.js';
 import { manageSkillProvider } from './builtin/manageSkill.js';
 import { museTodoProvider } from './builtin/museTodo.js';
 import { museStartersProvider } from './builtin/museStarters.js';
+import { museAutomationSuggestionsProvider } from './builtin/museAutomationSuggestions.js';
 import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
@@ -638,3 +639,4 @@ registerToolProvider(museSpaceToolProvider); // 仅 Muse(周期与手聊,子代�
 registerToolProvider(readOnlyCodeProvider);
 
 registerToolProvider(readToolOutputProvider);
+registerToolProvider(museAutomationSuggestionsProvider); // 11-22 自动化首页的任务建议;仅 Muse run 且本机能跑自动化可见(append 末尾,保前缀缓存)

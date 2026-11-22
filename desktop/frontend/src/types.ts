@@ -94,6 +94,7 @@ export interface MuseConfig {
   escalateTo?: string
   /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
   chatStarters?: boolean
+  automationSuggestions?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -123,6 +124,15 @@ export interface MuseStarter {
   id: string
   text: string
   source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
+}
+/** GET /agent/special/muse/automation-suggestions 的一条(11-22 方案 A):Muse 觉得可以交给自动化的事 + 一份规则草稿。
+ *  rule 是引擎按 manage_automation 同一套校验过的触发与动作;桌面点开 = 拿它当草稿填画布,保存才建规则。 */
+export interface MuseAutomationSuggestion {
+  id: string
+  title: string
+  why: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'database' | 'computer' | 'muse'; label: string; ref?: string }
+  rule: Pick<MuseTriggerInfo, 'desc' | 'cond' | 'prompt' | 'cooldownHours' | 'actions' | 'only' | 'maxPerDay'>
 }
 export interface MuseTodo {
   id: string

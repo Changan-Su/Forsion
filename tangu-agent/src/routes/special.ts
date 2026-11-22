@@ -39,6 +39,8 @@
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *   GET      /agent/special/muse/starters               新对话页的开场建议(Muse 关着 / chatStarters 关着 → 空)
  *   PATCH    /agent/special/muse/starters/:id { status: dismissed|used, mute? }  用户点了 × / 点行发出去了(只认 active,写回 Muse 的 LOG)
+ *   GET      /agent/special/muse/automation-suggestions      自动化首页的任务建议(Muse 关着 → 空)
+ *   PATCH    /agent/special/muse/automation-suggestions/:id { status: dismissed|used, reason? }  用户点了 × / 草稿存成了规则(只认 active,写回 Muse 的 LOG)
  *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
  *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
  *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
@@ -63,6 +65,7 @@ import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PRO
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices, requestMuseWake, museRecentRounds } from '../services/muse.js';
 import { listActiveStarters, markStarter } from '../services/museStarters.js';
+import { listActiveSuggestions, markSuggestion } from '../services/museAutomationSuggestions.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, triggerRev, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
 import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
@@ -806,6 +809,42 @@ router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: Aut
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'starter update failed' });
+  }
+});
+
+// ── 自动化首页的任务建议(muse_automation_suggestions;方案 docs/ToBeImproved/自动化任务建议方案_2026-11-22) ──
+const SUGGESTION_REASONS = ['irrelevant', 'timing', 'exists', 'less'] as const;
+router.get('/agent/special/muse/automation-suggestions', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const m = loadSpecialAgentsConfig().muse;
+    if (!m.enabled || !m.automationSuggestions) return res.json({ suggestions: [] });
+    res.json({ suggestions: await listActiveSuggestions(req.user!.userId) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'suggestions failed' });
+  }
+});
+
+router.patch('/agent/special/muse/automation-suggestions/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const status = req.body?.status;
+  if (status !== 'dismissed' && status !== 'used') return res.status(400).json({ detail: 'status must be dismissed or used' });
+  const reason = (SUGGESTION_REASONS as readonly string[]).includes(req.body?.reason) ? String(req.body.reason) : null;
+  try {
+    const userId = req.user!.userId;
+    const title = await markSuggestion(userId, String(req.params.id), status);
+    if (title === null) return res.status(409).json({ detail: 'suggestion is not active' });
+    const quoted = `"${title.replace(/\s+/g, ' ').slice(0, 120)}"`;
+    const why = reason === 'irrelevant' ? '; reason: not useful to them'
+      : reason === 'timing' ? '; reason: wrong timing'
+      : reason === 'exists' ? '; reason: they already have this'
+      : reason === 'less' ? '; the user asked for fewer suggestions like this' : '';
+    void appendMuseFeedback(userId, status === 'used'
+      ? `[feedback] automation suggestion ${quoted} saved as a rule by user`
+      : `[feedback] automation suggestion ${quoted} dismissed by user${why}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'suggestion update failed' });
   }
 });
 

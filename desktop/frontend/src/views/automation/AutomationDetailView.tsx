@@ -14,7 +14,7 @@ import { automationListSource, saveRuleState, subscribeAutomation } from './auto
 import { CalendarClock, ChevronRight, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
-import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
+import { useAutomation, sessionForTrigger, suggestionDraft } from '../../stores/automationStore'
 import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
 import { formatRepeat } from '../../format/repeat'
@@ -246,9 +246,11 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
 
   if (st.builder) {
     const editing = st.builder.editingId ? st.triggers.find((x) => x.id === st.builder!.editingId) : undefined
+    const suggestion = st.builder.suggestion
     return (
       <div className="auto-detail auto-editor-detail">
-        <AutomationBuilder key={st.builder.editingId || st.builder.starter || 'new'} editing={editing} starter={st.builder.starter} extendView={extendView} />
+        <AutomationBuilder key={st.builder.editingId || (suggestion && `sugg:${suggestion.id}`) || st.builder.starter || 'new'} editing={editing}
+          draft={suggestion ? suggestionDraft(suggestion) : undefined} suggestion={suggestion} starter={st.builder.starter} extendView={extendView} />
       </div>
     )
   }

@@ -27,7 +27,8 @@ import { ArrowLeft, HelpCircle, Plus } from 'lucide-react'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { SelectField } from '../../components/SelectField'
 import { AutomationExtension } from './AutomationExtension'
-import type { MuseTriggerInfo, MuseTriggerUpsert, TriggerSourceInfo } from '../../types'
+import type { MuseAutomationSuggestion, MuseTriggerInfo, MuseTriggerUpsert, TriggerSourceInfo } from '../../types'
+import { SuggestionNote } from './MuseSuggestions'
 import { starterSteps, stepIssue, type Starter } from './experience'
 import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
 import { TemplateField } from './TemplateField'
@@ -41,6 +42,10 @@ type TimerMode = 'daily_at' | 'at' | 'every'
 /** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
 export interface AutomationBuilderProps {
   editing?: MuseTriggerInfo
+  /** Muse 建议的草稿(11-22 方案 A):只当初值填画布,不带 id —— 保存是新建,和模板同一约定。 */
+  draft?: MuseTriggerInfo
+  /** 草稿来自哪条 Muse 建议:标题下一行写依据与来源。 */
+  suggestion?: MuseAutomationSuggestion
   extendView?: ExtendViewController
   starter?: Starter
   /** true=锁死「手动(按钮)」触发,隐藏触发类型选择器。 */
@@ -62,18 +67,20 @@ function defaultDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
 }
 
-export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel, extendView }) => {
+export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, draft, suggestion, starter, fixedManual, onSaved, onCancel, extendView }) => {
   const { t } = useI18n()
   const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
   const catalog = st.actionsCatalog
 
-  const [desc, setDesc] = useState(editing?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
+  // 初值的来源:编辑既有规则,或 Muse 建议的草稿。id / rev / 启用态只认 editing(草稿保存是新建、先暂停)。
+  const seed = editing ?? draft
+  const [desc, setDesc] = useState(seed?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
   const [selected, setSelectedId] = useState('trigger')
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const setSelected = (id: string): void => { setSelectedId(id); setInspectorOpen(true) }
   const [enabled, setEnabled] = useState(editing?.enabled ?? !!fixedManual)
-  const initCond = editing?.cond
+  const initCond = seed?.cond
   const [kind, setKind] = useState<TriggerKind>(
     !initCond ? (fixedManual || starter === 'button' ? 'manual' : starter === 'table' ? 'db_changed' : 'timer')
     : initCond.type === 'event_seen' ? 'event_seen'
@@ -98,7 +105,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     if (kind !== 'param' || recentApps.length) return
     void window.tangu?.computerHistory?.recentApps().then(setRecentApps).catch(() => {})
   }, [kind, recentApps.length])
-  const [onlyDraft, setOnlyDraft] = useState<OnlyDraft>(() => onlyDraftFrom(editing))
+  const [onlyDraft, setOnlyDraft] = useState<OnlyDraft>(() => onlyDraftFrom(seed))
   const [timerMode, setTimerMode] = useState<TimerMode>(
     initCond?.type === 'at' ? 'at' : initCond?.type === 'every' ? 'every' : 'daily_at',
   )
@@ -141,16 +148,16 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   const dbColsRaw = useDbStore((s) => (kind === 'db_changed' && dbPath ? s.entries[dbPath]?.data?.columns : undefined))
   // 计算列(公式/引用)不落盘,引擎游标比对永远看不见它变 —— 列出来 = 一条永不触发的规则。
   const dbCols = useMemo(() => dbColsRaw?.filter((c) => c.type !== 'formula' && c.type !== 'lookup'), [dbColsRaw])
-  const [steps, setSteps] = useState<StepDraft[]>(() => editing ? stepsFrom(editing) : starterSteps(starter, t))
-  const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
+  const [steps, setSteps] = useState<StepDraft[]>(() => seed ? stepsFrom(seed) : starterSteps(starter, t))
+  const [musePrompt, setMusePrompt] = useState(seed && !seed.actions?.length && !seed.agentSlug ? seed.prompt || '' : '')
   // 「叫醒 Muse」是没有动作链的规则:和步骤互斥,选了就把步骤清掉。
-  const [wakeMuse, setWakeMuse] = useState(!!editing && !editing.actions?.length && !editing.agentSlug)
-  const [cooldown, setCooldown] = useState(() => initialCooldown(editing, kind))
+  const [wakeMuse, setWakeMuse] = useState(!!seed && !seed.actions?.length && !seed.agentSlug)
+  const [cooldown, setCooldown] = useState(() => initialCooldown(seed, kind))
   // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0,新触发源按注册表);用户已亲手改过的值不动。
   const cooldownTouched = useRef(false)
   useEffect(() => {
-    if (!editing && !cooldownTouched.current) setCooldown(initialCooldown(null, kind, kind === 'param' ? source?.defaultCooldownHours : undefined))
-  }, [kind, editing, source?.defaultCooldownHours])
+    if (!seed && !cooldownTouched.current) setCooldown(initialCooldown(null, kind, kind === 'param' ? source?.defaultCooldownHours : undefined))
+  }, [kind, seed, source?.defaultCooldownHours])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
@@ -314,7 +321,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         // where 对 row_added 也有效;空数组送 undefined(见 whereToUpsert 注释)。
         where: condType === 'db_changed' ? whereToUpsert(dbWhere) : undefined,
         // 编辑既有 db 规则:钉回建规则时的 vault(省略会被引擎重钉到**当前** vault,切库编辑会静默改靶)。
-        vault: condType === 'db_changed' && editing?.cond.type === 'db_changed' ? editing.cond.vault : undefined,
+        vault: condType === 'db_changed' && seed?.cond.type === 'db_changed' ? seed.cond.vault : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
         cooldown_hours: cooldownPayload(showCooldown ? kind : 'timer', cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
@@ -323,7 +330,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
       })
       if (!editing?.id) track('automation.create') // 只计新建,编辑保存不算
       if (onSaved) { st.bump(); onSaved(saved); return }
-      st.acceptSaved(saved)
+      st.acceptSaved(saved, suggestion?.id)
       useApp.getState().toast(t('automation.ux.saved'))
     } catch (e: any) {
       if (e?.status === 409) { setConflict(true); setError(t('automation.builder.conflict')); lastMode.current = mode }
@@ -369,6 +376,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
         <button className="btn ghost sm" disabled={busy} onClick={() => leave()}>{t('common.cancel')}</button>
       </div>
+      {suggestion && <SuggestionNote s={suggestion} />}
       <div className="auto-builder-workspace" hidden={!extendView && inspectorOpen}>
         <WorkflowCanvas nodes={flowNodes} selected={inspectorOpen ? selected : ''} onSelect={setSelected}>{additions}</WorkflowCanvas>
       </div>

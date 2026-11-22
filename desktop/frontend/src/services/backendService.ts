@@ -4,7 +4,7 @@ import { AUTOMATION_COMPOSE_TIMEOUT_MS } from '../../../../tangu-agent/src/contr
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseAutomationSuggestion, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   BuiltinUpdate, GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -1283,6 +1283,14 @@ export const getMuseStarters = (t: EngineTarget) =>
 /** 用户点了 × / 点行发出去了。mute = 右键「别再推这类」。 */
 export const patchMuseStarter = (t: EngineTarget, id: string, status: 'dismissed' | 'used', mute?: boolean) =>
   request<{ ok: boolean }>(t, `/agent/special/muse/starters/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(mute ? { status, mute: true } : { status }) })
+
+/** 自动化首页的 Muse 任务建议(Muse 关着 → 空;旧引擎 / 云端 404 由调用方当「没有」)。 */
+export const getMuseAutomationSuggestions = (t: EngineTarget) =>
+  request<{ suggestions: MuseAutomationSuggestion[] }>(t, '/agent/special/muse/automation-suggestions', undefined, { timeoutMs: 8000 }).then((r) => r.suggestions)
+
+/** 用户点了 × (reason 可选) / 草稿存成了规则。 */
+export const patchMuseAutomationSuggestion = (t: EngineTarget, id: string, status: 'dismissed' | 'used', reason?: string) =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/automation-suggestions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(reason ? { status, reason } : { status }) })
 
 /** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
 export const getMuseLibrary = (t: EngineTarget) =>

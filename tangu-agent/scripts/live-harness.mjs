@@ -277,7 +277,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('handoff', 'crosstree');
@@ -355,6 +355,7 @@ OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要
 OPT_IN.add('musechat');
 KEYS.push('musetodo'); OPT_IN.add('musetodo'); // --only musetodo:Muse 提待办必带依据(11-20,scripts/lib/muse-todo-live.mjs);--todo-neg = 只有随口抱怨,不该提;新 home 单独跑
 KEYS.push('musewakenow'); OPT_IN.add('musewakenow'); // --only musewakenow:面板「叫醒」(11-08)—— 时段外、心跳没到点,点一下就起一轮完整的周期
+OPT_IN.add('museautosugg'); // --only museautosugg:一个 Muse 周期之后,自动化首页有没有它放上的任务建议(--autosugg-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
@@ -6410,6 +6411,77 @@ Then reply with only the command output.`,
       starters.map((x) => `[${x.source?.kind}「${x.source?.label}」${x.source?.ref ? ` → ${x.source.ref}` : ''}] ${x.text}`).join(' | '),
     ].join(';');
     return { ok, detail, output: `${museSays}\n\n=== 开场建议 ===\n${starters.map((x) => `- ${x.text}`).join('\n')}`, status: done };
+  });
+  // ── museautosugg(11-22,opt-in,单独跑:`--only museautosugg`):Muse 给自动化首页的任务建议(方案 docs/ToBeImproved/自动化任务建议方案_2026-11-22,用户选 A)。
+  // 种一份「用户每周一上午都手动整理开发日志」的上下文(授权文件夹里的日志笔记 + 过去四个周一 9–10 点编辑它的活动行),起一个周期;
+  // 判据读引擎真状态:set_automation_suggestions 真被调过、GET /agent/special/muse/automation-suggestions 有 ≥1 条、每条带规则(cond)与依据。
+  // 只记不判:有没有一条是「每周 / 周一」的定时、标题用不用中文。--autosugg-off = 负对照(开关关掉:工具不给、接口回空 → 这条必须红)。
+  await scenario('museautosugg', `museautosugg Muse 自动化建议(${MUSE_MODE}${argv.includes('--autosugg-off') ? ',关掉的负对照' : ''})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    if (!(await until(async () => !(await status()).running, 600_000, 5000))) return { ok: false, detail: '前一个场景的 Muse 周期 600s 没收尾' };
+    const log = join(workspace, '开发日志.md');
+    writeFileSync(log, [
+      '# 开发日志',
+      '',
+      '每周一上午我都会把上周的日志翻一遍，手动整理成周报发给团队(挺花时间的)。',
+      '',
+      '## 上周',
+      '- 附件上传进度条合进 main',
+      '- 日历双击新建、默认 30 分钟',
+      '- 白板手写笔修补',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, '周报.md'), '# 周报\n\n(每周一手动从开发日志整理)\n');
+    const now = new Date();
+    for (let w = 1; w <= 4; w++) {
+      const d = new Date(now); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7 * w + 7 * (now.getDay() === 1 ? 1 : 0)); d.setHours(9, 20, 0, 0);
+      if (d.getTime() >= now.getTime()) continue;
+      appendUserActivity(d, `note.edit f="${log}" l=${w}`);
+      appendUserActivity(new Date(d.getTime() + 25 * 60_000), `note.edit f="${join(workspace, '周报.md')}" l=${w}`);
+    }
+    const off = argv.includes('--autosugg-off');
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate', automationSuggestions: !off } }) });
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败):${done.lastError || runFail}` };
+    await sleep(1500);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let calls = [];
+    let results = [];
+    try {
+      // 只算本场景起的周期(前面场景的 Muse 周期不算):runs 的 created_at 在 t0 之后
+      calls = db.prepare(`SELECT e.payload AS p, r.created_at AS at FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'set_automation_suggestions'`).all()
+        .filter((x) => { const at = Date.parse(String(x.at).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(x.at)) ? '' : 'Z')); return !Number.isFinite(at) || at >= t0 - 5000; }).map((x) => x.p);
+      const ids = new Set(calls.map((p) => { try { return JSON.parse(p).id; } catch { return null; } }).filter(Boolean));
+      results = db.prepare(`SELECT e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_result'`).all().map((x) => { try { const o = JSON.parse(x.p); return ids.has(o.id) ? String(o.result ?? '').slice(0, 200) : null; } catch { return null; } }).filter((x) => x !== null);
+    } finally { db.close(); }
+    let getFailed = false;
+    const list = asList(await api('/agent/special/muse/automation-suggestions').catch(() => { getFailed = true; return []; }), 'suggestions');
+    // 负对照(--autosugg-off):这一轮必须一次没调、接口成功回空。这里照样按「正向」判 → 负对照应当红,红的原因要是「调了 0 次 + 0 条」,不是接口挂了。
+    const shaped = list.every((x) => x.rule && x.rule.cond && x.title && x.why && x.source?.label);
+    const weekly = list.filter((x) => ['every', 'daily_at'].includes(x.rule?.cond?.type) || /周一|每周|weekly|monday/i.test(`${x.title} ${x.why}`)).length;
+    const zh = list.filter((x) => /[一-鿿]/.test(x.title)).length;
+    const ok = calls.length > 0 && list.length >= 1 && shaped;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `set_automation_suggestions 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
+      ...(getFailed ? ['GET 自动化建议失败(不是「没有」)← 红'] : []),
+      `工具回执:${results.join(' / ') || '(无)'}`,
+      `自动化首页 ${list.length} 条${list.length ? '' : ' ← 红'}${shaped ? '' : ';有条目缺规则 / 依据 ← 红'}`,
+      `像「每周整理日志」的 ${weekly}/${list.length}(只记)`,
+      `中文标题 ${zh}/${list.length}(只记)`,
+      list.map((x) => `[${x.rule?.cond?.type}${x.rule?.cond?.interval ? ` ${x.rule.cond.interval}` : x.rule?.cond?.time ? ` ${x.rule.cond.time}` : ''} → ${(x.rule?.actions || []).map((a) => a.type).join('+') || 'wake'}] ${x.title} —— ${x.why}(${x.source?.kind}「${x.source?.label}」)`).join(' | '),
+    ].join(';');
+    return { ok, detail, output: `${museSays}\n\n=== 自动化建议 ===\n${list.map((x) => `- ${x.title}: ${x.why}`).join('\n')}`, status: done };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
