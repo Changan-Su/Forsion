@@ -10,12 +10,15 @@ import { WIKILINK_RE } from '@amadeus-shared/links'
 import { CALLOUT_TOKEN_SRC } from '@amadeus-shared/calloutToken'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
-import { scanObsidian, type ObsSpan } from '../blocks/markdown/inlineTextSpans'
+import { ESCAPES, escapeRecorder, scanObsidian, type ObsSpan } from '../blocks/markdown/inlineTextSpans'
 import { displayRanges } from './noteReplaceDisplayRanges'
 import { splitFm } from '../unified/fm'
 
 const parser = unified().use(remarkParse).use(remarkGfm, { singleTilde: false })
-  .use(remarkMath).use(remarkCjkFriendly).use(remarkCjkStrike, { singleTilde: false })
+  .use(remarkMath).use(remarkCjkFriendly).use(remarkCjkStrike, { singleTilde: false }).use(function recordEscapes() {
+    const data = this.data()
+    ;(data.fromMarkdownExtensions ||= []).push(escapeRecorder)
+  })
 
 export interface ReplaceMatch { id: string; from: number; to: number; quote: boolean }
 export interface ReplaceFile { path: string; source: string; fileId?: string; matches: ReplaceMatch[] }
@@ -42,11 +45,17 @@ const textblock = (node: Nodes): boolean => node.type === 'paragraph' || node.ty
 
 // Match the editor's textblock projection: marks can split a delimiter pair, a hard break
 // is a newline, and code text takes up space without providing markup delimiters.
-function blockText(node: Nodes): string {
-  if (node.type === 'text') return node.value
+function blockText(node: Nodes, maskEscapes = false): string {
+  if (node.type === 'text') {
+    const escaped = maskEscapes ? (node.data as { [ESCAPES]?: [number, number][] } | undefined)?.[ESCAPES] : undefined
+    if (!escaped) return node.value
+    const units = node.value.split('')
+    for (const [i] of escaped) if ('%=$'.includes(units[i])) units[i] = '\u0002'
+    return units.join('')
+  }
   if (node.type === 'inlineCode') return ' '.repeat(node.value.length)
   if (node.type === 'break') return '\n'
-  if ('children' in node) return node.children.map(blockText).join('')
+  if ('children' in node) return node.children.map(child => blockText(child, maskEscapes)).join('')
   return '\uFFFC'
 }
 
@@ -63,7 +72,7 @@ export function noteReplaceMatches(path: string, source: string, query: string):
   let nextRange = 0
   function walk(node: Nodes, quote: boolean, decoration?: { hidden: ObsSpan[]; offset: number }): void {
     if (textblock(node)) {
-      const spans = scanObsidian(blockText(node))
+      const spans = scanObsidian(blockText(node, true))
       const hidden = spans.flatMap(sp => sp.kind === 'cmt' ? [sp] : [
         { ...sp, to: sp.from + 2 }, { ...sp, from: sp.to - 2 },
       ])
@@ -145,7 +154,7 @@ function treeSignature(source: string, marker = '', replacement = ''): string {
       if (textblock(node)) {
         const text = blockText(node)
         const literal = (raw: string): string => marker ? raw.split(marker).join(replacement) : raw
-        const decorations = scanObsidian(text).map(span => ({
+        const decorations = scanObsidian(blockText(node, true)).map(span => ({
           kind: span.kind, from: literal(text.slice(0, span.from)).length, value: literal(text.slice(span.from, span.to)),
         }))
         return { ...rest, children, tokens: text.match(noteTokens), decorations }

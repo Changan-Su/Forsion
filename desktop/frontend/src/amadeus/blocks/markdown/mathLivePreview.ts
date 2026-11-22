@@ -18,7 +18,7 @@ import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } 
 import { mathSourceHighlights } from './mathSourceHighlight'
 import { UI_ZOOM_EVENT } from '../../lib/clampMenu'
 
-import { scanMath, type MathSpan } from './inlineTextSpans'
+import { ESCAPES, escapeRecorder, scanMath, type MathSpan } from './inlineTextSpans'
 export { scanMath, type MathSpan } from './inlineTextSpans'
 
 registerMessages({
@@ -858,21 +858,8 @@ export function unescapeMathSource(md: string): string {
 //    公式里写网址 / 邮箱的转义不补,极边角。
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type MdNode = any
-const ESCAPES = 'amadeusEscapes'
 /** 公式体之外的转义:text.value 里的下标(已计入公式补回的反斜杠)。literalEscape.ts 据此拆出转义字面(D-11)。 */
 export const LITERAL_ESCAPES = 'amadeusLiteralEscapes'
-
-/** 默认 characterEscapeValue 出口(onexitdata)的照抄 + 记下 [value 下标, 源串偏移]。 */
-const escapeRecorder = {
-  exit: {
-    characterEscapeValue(this: any, token: any): void {
-      const tail = this.stack.pop()
-      ;((tail.data ||= {})[ESCAPES] ||= []).push([tail.value.length, token.start.offset])
-      tail.value += this.sliceSerialize(token)
-      tail.position.end = { line: token.end.line, column: token.end.column, offset: token.end.offset }
-    },
-  },
-}
 
 /** 按源串把树里公式内被吃掉的反斜杠补回(就地改 text.value;导出供单测)。source = 解析的那份原文(file.value)。 */
 export function restoreMathEscapes(tree: MdNode, source: string): void {

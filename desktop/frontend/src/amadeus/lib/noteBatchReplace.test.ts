@@ -81,7 +81,9 @@ describe('literal Markdown replacement', () => {
   it('preserves actual editor comment and highlight spans across inline marks', () => {
     for (const delimiter of ['%%', '==']) {
       const source = 'Visible old**Missing**' + delimiter + ' tail'
-      expect(prepareLiteralReplacement(source, [8], 'old', delimiter)).toBeNull()
+      const safe = prepareLiteralReplacement(source, [8], 'old', delimiter)
+      expect(safe?.after).toBe(source.replace('old', [...delimiter].map(c => '\\' + c).join('')))
+      expect(noteReplaceMatches('a.md', safe!.after, 'Missing')).toHaveLength(1)
     }
     const source = 'old %%hide **old** here%% and ==**old**== old'
     const hits = noteReplaceMatches('a.md', source, 'old')

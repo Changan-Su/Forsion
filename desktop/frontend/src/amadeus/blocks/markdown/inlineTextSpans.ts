@@ -76,3 +76,18 @@ export function scanObsidian(s: string): ObsSpan[] {
   }
   return out.sort((a, b) => a.from - b.from)
 }
+
+export const ESCAPES = 'amadeusEscapes'
+
+/** 默认 characterEscapeValue 出口(onexitdata)的照抄 + 记下 [value 下标, 源串偏移]。 */
+export const escapeRecorder = {
+  exit: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    characterEscapeValue(this: any, token: any): void {
+      const tail = this.stack.pop()
+      ;((tail.data ||= {})[ESCAPES] ||= []).push([tail.value.length, token.start.offset])
+      tail.value += this.sliceSerialize(token)
+      tail.position.end = { line: token.end.line, column: token.end.column, offset: token.end.offset }
+    },
+  },
+}
