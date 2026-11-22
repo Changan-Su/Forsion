@@ -4,7 +4,8 @@
  * 旧式 Muse 规则保留无动作链的行为；工具仍走既有白名单与参数契约。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Send, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
+import { AUTOMATION_MESSAGE_LIMIT, AUTOMATION_MESSAGE_PROMPT_LIMIT } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import { useApp } from '../../stores/appStore'
 import { track } from '../../achievements/store'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
@@ -192,7 +193,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     setKind(item.kind)
     if (item.kind === 'param') { setSourceId(item.id); setParamValues({}) }
   }
-  const hasAgentStep = steps.some((s) => s.type === 'agent_run')
+  const hasAgentStep = steps.some((s) => s.type === 'agent_run' || s.type === 'send_message' && s.source === 'agent')
   const patchStep = (key: number, patch: Partial<StepDraft>): void =>
     setSteps((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)))
   const moveStep = (i: number, dir: -1 | 1): void =>
@@ -250,8 +251,13 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   if (!desc.trim()) issues.push({ node: 'trigger', text: t('automation.ux.issue.name') })
   if (!triggerValid) issues.push({ node: 'trigger', text: t('automation.ux.issue.trigger') })
   if (!steps.length && !wakeMuse && (!editing || kind === 'manual')) issues.push({ node: 'review', text: t('automation.ux.issue.steps') })
-  steps.forEach((step, i) => {
+  const stepProblem = (step: StepDraft): string | null => {
     const issue = stepIssue(step, kind, catalog)
+    if (issue || step.type !== 'send_message' || step.source !== 'agent') return issue
+    return agentDefs.find((d) => d.slug === step.agentSlug)?.engine?.trim() ? 'senderEngine' : null
+  }
+  steps.forEach((step, i) => {
+    const issue = stepProblem(step)
     if (issue) issues.push({ node: String(step.key), text: `${i + 1}. ${t(`automation.ux.issue.${issue}`)}` })
   })
   const showCooldown = kind !== 'timer' && kind !== 'manual' && !source?.timed
@@ -328,21 +334,27 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   }
 
   const stepIcon = (ty: StepDraft['type']): React.ReactNode =>
-    ty === 'notify' || ty === 'remind' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} />
+    ty === 'notify' || ty === 'remind' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} /> : ty === 'send_message' ? <Send size={14} />
     : ty === 'db_row_add' || ty === 'db_row_edit' ? <Database size={14} /> : <Wrench size={14} />
 
   const sourceName = (s: TriggerSourceInfo): string => s.name[currentLocale() === 'zh' ? 'zh' : 'en']
   const kindLabel = (k: TriggerKind): string => t(`automation.builder.${k === 'timer' ? 'condTimer' : k === 'manual' ? 'condManual' : k === 'db_changed' ? 'condDb' : k === 'event_seen' ? 'condEvent' : 'condFile'}`)
   const flowNodes: FlowNode[] = [
     { id: 'trigger', title: t('automation.builder.trigger'), subtitle: kind === 'param' ? (source ? sourceName(source) : sourceId) : kindLabel(kind), icon: <Zap size={17} />, ready: triggerValid && !!desc.trim() },
-    ...steps.map((step, i) => ({ id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`, subtitle: step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'), icon: stepIcon(step.type), ready: !stepIssue(step, kind, catalog) })),
+    ...steps.map((step, i) => ({
+      id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`,
+      subtitle: step.type === 'send_message' && step.agentSlug
+        ? `${(agentName(agentDefs.find((d) => d.slug === step.agentSlug)) || step.agentSlug)} → ${t(`automation.send.${step.delivery}`)}`
+        : step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'),
+      icon: stepIcon(step.type), ready: !stepProblem(step),
+    })),
     ...(!steps.length && wakeMuse && kind !== 'manual' ? [{ id: 'muse', title: t('automation.step.wake'), subtitle: musePrompt || t('automation.step.wakeHint'), icon: <Sparkles size={17} />, ready: true }] : []),
     { id: 'review', title: t('automation.ux.finish'), subtitle: canSave ? t('automation.ux.allReady') : t('automation.ux.finishHint'), icon: <CheckCircle2 size={17} />, ready: canSave },
   ]
   const additions = <>
     <CapabilityMenu label={t('automation.ux.addStep')} className="btn ghost sm" disabled={busy || steps.length >= 24}
       items={[
-        ...(['remind', 'notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
+        ...(['remind', 'notify', 'send_message', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
           id: type, label: t(`automation.step.${type}`), icon: stepIcon(type), disabled: type === 'tool_call' && !catalog.length,
           onSelect: () => addStep(type),
         })),
@@ -593,6 +605,46 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
                 <TemplateField label={t('automation.builder.notifyTitle')} value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(title) => patchStep(s.key, { title })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <TemplateField label={t('automation.builder.notifyBody')} value={s.body} multiline onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <div className="auto-hint">{t('automation.builder.notifyHint')}</div>
+              </>
+            )}
+            {s.type === 'send_message' && (
+              <>
+                <div className="field">
+                  <label>{t('automation.send.sender')}</label>
+                  <SelectField size="sm" field="automation-sender" ariaLabel={t('automation.send.sender')} value={s.agentSlug}
+                    onChange={(agentSlug) => patchStep(s.key, { agentSlug })}
+                    options={[
+                      { value: '', label: t('automation.send.pickSender') },
+                      ...agentDefs.map((d) => ({ value: d.slug, label: agentName(d) })),
+                      ...(s.agentSlug && !agentDefs.some((d) => d.slug === s.agentSlug) ? [{ value: s.agentSlug, label: s.agentSlug }] : []),
+                    ]} />
+                </div>
+                <div className="field">
+                  <label>{t('automation.send.delivery')}</label>
+                  <SelectField size="sm" field="automation-delivery" ariaLabel={t('automation.send.delivery')} value={s.delivery}
+                    onChange={(delivery) => patchStep(s.key, { delivery: delivery === 'solo' ? 'solo' : 'inbox' })}
+                    options={(['inbox', 'solo'] as const).map((value) => ({ value, label: t(`automation.send.${value}`) }))} />
+                </div>
+                <div className="field">
+                  <label>{t('automation.send.source')}</label>
+                  <div className="auto-seg" role="group" aria-label={t('automation.send.source')}>
+                    {(['fixed', 'agent'] as const).map((source) => (
+                      <button key={source} type="button" className={s.source === source ? 'active' : ''} aria-pressed={s.source === source}
+                        onClick={() => patchStep(s.key, { source })}>{t(`automation.send.${source}`)}</button>
+                    ))}
+                  </div>
+                </div>
+                {s.source === 'fixed' ? (
+                  <TemplateField label={t('automation.send.body')} value={s.body} multiline maxLength={AUTOMATION_MESSAGE_LIMIT[s.delivery]}
+                    onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
+                ) : (
+                  <div className="field">
+                    <label htmlFor={`automation-send-prompt-${s.key}`}>{t('automation.send.prompt')}</label>
+                    <textarea id={`automation-send-prompt-${s.key}`} value={s.prompt} rows={3} maxLength={AUTOMATION_MESSAGE_PROMPT_LIMIT}
+                      onChange={(e) => patchStep(s.key, { prompt: e.target.value })} />
+                  </div>
+                )}
+                {s.delivery === 'solo' && <div className="auto-hint">{t('automation.send.soloHint')}</div>}
               </>
             )}
             {s.type === 'agent_run' && (

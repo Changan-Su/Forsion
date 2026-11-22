@@ -197,6 +197,7 @@ async function main() {
     await runner.click()
     await visibleNode.locator('[data-profile-field="automation-runner"] [role=option][data-value="writer"]').click()
     check('selecting an agent completes the template', await win.getByRole('button', { name: '保存为暂停', exact: true }).isEnabled())
+    win.once('dialog', (dialog) => dialog.accept()) // confirm discarding the edited template
     await win.getByRole('button', { name: '取消', exact: true }).click()
     await showGuide()
     await win.locator('.auto-starter').first().click()
@@ -248,6 +249,38 @@ async function main() {
     check('saving an edit keeps it observing without sending observe', requests.at(-1).enabled === true && !('observe' in requests.at(-1)))
     await pick('启用')
     check('only the user turns it on, with observe false', requests.at(-1).enabled === true && requests.at(-1).observe === false)
+    await showGuide()
+    await win.locator('.auto-starter').first().click()
+    const addMessage = async () => {
+      await win.getByRole('button', { name: '添加步骤', exact: true }).click()
+      await win.getByRole('menuitem', { name: '发送消息', exact: true }).click()
+      const sendField = visibleNode.locator('[data-profile-field="automation-sender"]')
+      await sendField.locator('.profile-model-trigger').click()
+      await sendField.locator('[role=option][data-value="writer"]').click()
+    }
+    await addMessage()
+    const delivery = visibleNode.locator('[data-profile-field="automation-delivery"]')
+    check('new send step defaults to 收件箱 and fixed text', (await delivery.innerText()).includes('收件箱') &&
+      (await visibleNode.getByRole('button', { name: '固定文案' }).getAttribute('aria-pressed')) === 'true')
+    await visibleNode.getByRole('textbox', { name: '消息内容', exact: true }).fill('Fixed note')
+    await addMessage()
+    await delivery.locator('.profile-model-trigger').click()
+    await delivery.locator('[role=option][data-value="solo"]').click()
+    await visibleNode.getByRole('button', { name: '由 Agent 撰写', exact: true }).click()
+    await visibleNode.getByRole('textbox', { name: '撰写要求' }).fill('Summarize the review agenda.')
+    await win.locator('.auto-flow-node').filter({ hasText: 'Writer → Solo 私聊' }).waitFor()
+    await win.screenshot({ path: path.join(OUT, 'send-solo-zh.png') })
+    await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
+    await win.screenshot({ path: path.join(OUT, 'send-solo-zh-dark.png') })
+    await win.evaluate(() => { document.documentElement.classList.remove('dark'); document.documentElement.dataset.mode = 'light' })
+    await win.getByRole('button', { name: '保存为暂停', exact: true }).click()
+    await win.locator('.auto-detail-flow').waitFor()
+    const actions = requests.at(-1).actions.filter((a) => a.type === 'send_message')
+    assert.deepEqual(actions, [
+      { type: 'send_message', agentSlug: 'writer', delivery: 'inbox', source: 'fixed', body: 'Fixed note' },
+      { type: 'send_message', agentSlug: 'writer', delivery: 'solo', source: 'agent', prompt: 'Summarize the review agenda.' },
+    ])
+    check('send steps preserve sender, destination and content for both modes on save', true)
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))

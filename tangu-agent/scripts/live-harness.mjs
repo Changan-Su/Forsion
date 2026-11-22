@@ -451,6 +451,7 @@ OPT_IN.add('resume'); KEYS.push('resume'); // --only resume:工具执行到一�
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
+OPT_IN.add('autosolo'); KEYS.push('autosolo'); // User asks an Agent to create a rule, then replies to the delivery in its existing Solo.
 OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
 OPT_IN.add('ruleobserve'); KEYS.push('ruleobserve'); // 一个 Muse 周期(--muse-mode auto):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察并如实告诉用户
 OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); // 一个 Muse 周期(muselogspace 11-08 退场:Space 不再装载 main.js,没有报错回写这条来路):第一个周期必撞每周装备巡检,看 LOG 里的活有没有被挤掉;动周期提示词 / 日程文案时跑
@@ -6125,6 +6126,45 @@ Then reply with only the command output.`,
     return run(session.id, text, 180_000);
   };
   const museRules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
+  await scenario('autosolo', 'autosolo Agent 建规则、主动投递与原私聊回复', async () => {
+    const slug = 'automation-writer';
+    const dir = join(home, 'agents', slug);
+    mkdirSync(join(dir, 'Library'), { recursive: true });
+    writeFileSync(join(dir, 'config.toml'), `name = "Automation Writer"\nmodel = ${JSON.stringify(MODEL)}\n`);
+    const open = () => api(`/agent/solo/agent/${slug}/open`, { method: 'POST', body: '{}' });
+    const { session } = await open();
+    const signalFile = join(dir, 'Library', 'notification-signal.txt');
+    const ruleName = 'Solo delivery fixture';
+    const setup = await run(session.id,
+      `Set up one active automation called "${ruleName}" using manage_automation. The trigger is when ${signalFile} reaches 10 non-whitespace characters (file_chars_gte, n 10). ` +
+      `Add two ordered send_message steps, both from Agent slug "${slug}". First, Solo direct chat, written by the Agent, with the instruction: "Send exactly this question: Should we proceed with GLACIER-42?" ` +
+      'Second, the Forsion Inbox, fixed text "FIXED-PINE-7". Please create the rule now. For this chat also note that my earlier reference is QUARTZ-19.',
+      180_000, { approvalMode: 'auto-edit' });
+    const rule = museRules().find((t) => t.desc === ruleName);
+    const [soloStep, inboxStep] = rule?.actions ?? [];
+    const configured = setup.toolCalls.includes('manage_automation') && rule?.enabled && rule.cond?.type === 'file_chars_gte' &&
+      soloStep?.type === 'send_message' && soloStep.agentSlug === slug && soloStep.delivery === 'solo' && soloStep.source === 'agent' &&
+      inboxStep?.type === 'send_message' && inboxStep.agentSlug === slug && inboxStep.delivery === 'inbox' && inboxStep.source === 'fixed';
+    if (!configured) return { ok: false, detail: `规则配置失败: ${JSON.stringify(rule)}`, output: setup.content + '\n' + JSON.stringify(setup.toolResults) };
+    writeFileSync(signalFile, 'trigger now with a real file change');
+    await api('/agent/special/automation/kick', { method: 'POST', body: '{}' });
+    const execution = await until(async () => (await api(`/agent/special/automation/executions?triggerId=${rule.id}`)).executions?.find((r) => r.origin === 'auto'), 150_000, 1000);
+    const messages = (await api(`/agent/sessions/${session.id}/messages?limit=50`)).messages || [];
+    const delivered = messages.filter((m) => m.origin === 'proactive:automation');
+    const unread = (await api('/agent/sessions/attention')).sessions?.find((s) => s.id === session.id);
+    const inbox = asList(await api('/agent/inbox?filter=all'), 'messages').find((m) => m.sender_id === slug && m.body === 'FIXED-PINE-7');
+    const same = (await open()).session.id === session.id;
+    if (execution?.status !== 'done' || delivered.length !== 1 || delivered[0]?.agent_slug !== slug || !delivered[0]?.content.includes('GLACIER-42') || !unread?.unread || !inbox || !same) {
+      return { ok: false, detail: JSON.stringify({ execution, delivered, unread, inbox: !!inbox, same }), output: setup.content };
+    }
+    const reply = await run(session.id, 'Please name both the earlier reference I gave you in this chat and the reference in your most recent automation message. No tools.', 120_000);
+    return {
+      ok: reply.done && /QUARTZ-19/i.test(reply.content) && /GLACIER-42/i.test(reply.content),
+      detail: `Agent 通过工具建规则;自动触发两个步骤成功;Solo id 复用,主动消息 ${delivered.length} 条,未读 ${unread.count};固定文案已进收件箱`,
+      output: delivered[0].content + '\n\n' + reply.content,
+    };
+  });
+
   // muserule(10-30):ask 档的 Muse 收到「每次打开 X 就提醒」→ 只发规则卡,triggers.json 一条不多;用户点「好」规则才出现。
   // 10-31 递话改走私聊:原来往 /muse/feedback 写「The user asked: …」,产品里没有这样的发送方([feedback] 只有回执和 Space 报错),
   // 这样递第一个周期漏掉 7/20(含 ruleobserve),同一句话走私聊 0/14(汇总 harness-runs/2026-10-31/Muse周期漏请求-live汇总.md)。

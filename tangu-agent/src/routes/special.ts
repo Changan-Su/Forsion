@@ -48,6 +48,7 @@
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
  */
+import { automationSenderError } from '../services/automationMessage.js';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
@@ -540,8 +541,17 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
     }
-    if (isPlugin && (v.value.agentSlug || v.value.actions?.some((a) => a.type === 'agent_run'))) {
-      return res.status(400).json({ detail: '插件规则不能起 agent run(只许 notify / db_row_add / db_row_edit)' });
+    if (isPlugin && (v.value.agentSlug || v.value.actions?.some((a) => a.type === 'agent_run' || a.type === 'send_message'))) {
+      return res.status(400).json({ detail: '插件规则不能起 agent run 或以 Agent 身份发消息' });
+    }
+    const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+    const senderActions = v.value.actions === undefined ? prev?.actions : v.value.actions;
+    if (v.value.enabled || !prev) {
+      for (const a of senderActions ?? []) {
+        if (a.type !== 'send_message') continue;
+        const error = await automationSenderError(a);
+        if (error) return res.status(400).json({ detail: error });
+      }
     }
     for (const a of v.value.actions || []) {
       if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
@@ -559,7 +569,6 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // **刻意不封顶**(关不掉 = 用户以为停了、引擎里照跑),400 会让它无限重试成风暴。
     // **关规则永远不许被预检挡住。**
     // 判据单源在 museTriggers.needsWatchColPrecheck(那里有断言;内联一份 = 两处会漂)。
-    const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
     if (needsWatchColPrecheck(prev, v.value)) {
       const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
       if (badCol) return res.status(400).json({ detail: badCol });

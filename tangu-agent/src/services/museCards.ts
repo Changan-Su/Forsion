@@ -7,6 +7,7 @@
  * 私聊消息 origin=proactive:card(只有引擎写得出这一列),正文带 ```forsion-muse-card {"id"} 围栏,流里按 id 读卡;
  * 别处(模型写的正文)的同名围栏客户端不认。
  */
+import { automationSenderError } from './automationMessage.js';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
@@ -294,7 +295,7 @@ export async function postObservedRuleCards(userId: string, now = Date.now()): P
 
 /** 规则到点会无人值守地跑 agent 或工具。这种规则不从手机启用:规则起的 run 是全放行,不带远程污点。 */
 const runsUnattended = (t: MuseTrigger): boolean =>
-  (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run' || a.type === 'tool_call');
+  (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run' || a.type === 'tool_call' || a.type === 'send_message');
 
 /** 第一次见面:引擎自己发,不等模型、不花 token。可跳过。 */
 export async function postIntroCard(userId: string): Promise<boolean> {
@@ -390,6 +391,11 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
   const observing = action === 'observe';
   const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', observe: observing || undefined }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
   if (!v.ok) return { ok: false, status: 400, error: 'bad_rule', detail: v.error };
+  for (const action of v.value.actions ?? []) {
+    if (action.type !== 'send_message') continue;
+    const error = await automationSenderError(action);
+    if (error) return { ok: false, status: 400, error: 'bad_rule', detail: error };
+  }
   if (!(await settle(userId, card.id, 'done', action === 'edit' ? 'editing' : observing ? 'observing' : 'accepted'))) return gone;
   const r = await upsertTrigger(v.value, undefined, { actor: 'user', ...(observing ? { observeBy: 'muse' as const } : {}) }).catch((e) => ({ ok: false as const, error: String(e?.message || e) }));
   if (!r.ok) {

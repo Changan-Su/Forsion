@@ -52,6 +52,7 @@ import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
 import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
+import { AUTOMATION_DRAFT_BACKGROUND, AUTOMATION_DRAFT_TOOLS } from './automationDraft.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { WIDGET_SECTION, widgetsEnabledFor } from '../tools/builtin/manageWidget.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
@@ -1557,6 +1558,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ? input.approvalCap : undefined;
   // 交回被移交命令结局的那一轮(steerHandoff.wakeNow 起的):起跑时现查会话污点 —— wakeNow 查污点与入队之间有 await,
   // 排在它前面的远端一轮可能刚把会话染上;染了就按远程上限钳(Codex 11-21 P0-2)。查不出按染了算。
+  const automationDraft = input.background === AUTOMATION_DRAFT_BACKGROUND;
   const bgTainted = input.backgroundUpdate === true && profile.capabilities.hostExec && !remote
     && (await sessionRemoteTainted(sessionId).catch(() => true));
   const runCap = minCapMode(bgTainted ? remoteApprovalCap() : undefined, sessionMsgCap);
@@ -1697,6 +1699,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     deps().brain.agents,
     remoteCap ? { approvalCap: remoteCap } : undefined,
   );
+  if (automationDraft) {
+    const allowed = new Set(Array.isArray(agentConfig.toolsList) ? agentConfig.toolsList.filter((tool: unknown): tool is string => typeof tool === 'string').map(canonicalToolName) : []);
+    const mode = agentConfig.toolsStrict ? 'allow' : agentConfig.toolsMode;
+    agentConfig.toolsStrict = true;
+    agentConfig.toolsMode = 'allow';
+    agentConfig.toolsList = AUTOMATION_DRAFT_TOOLS.filter((tool) => mode === 'allow' ? allowed.has(tool) : mode !== 'deny' || !allowed.has(tool));
+  }
   if (pluginReadOnly) {
     agentConfig.toolsStrict = true; agentConfig.toolsMode = 'allow';
     agentConfig.toolsList = ['read_file','list_dir','list_files','glob_files','search_files','view_image','calculator','get_datetime','load_tools'];
@@ -2569,7 +2578,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
     // 取在门禁字段之前(11-06):MCP 缺省按需加载,下面拼「Additional Tools」目录时就要知道有哪些 MCP 工具。
     let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode && ps.externalTools && !standIn) { // 分身不给 MCP
+    if (deps().mcp && !planMode && !automationDraft && ps.externalTools && !standIn) { // 分身不给 MCP
       const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
       await deps().mcp!.reloadConfig?.();
       const snapshot = deps().mcp!.toolsForRun(enabledMcp);
@@ -2584,7 +2593,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
     // 同 MCP 取在门禁字段之前(11-06):目录 / defs / load_tools 的撞名判定要看同一份自定义工具名。
     let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools && profile.features.customTools && !standIn) { // 分身不给自定义工具
+    if (!planMode && !automationDraft && ps.externalTools && profile.features.customTools && !standIn) { // 分身不给自定义工具
       try {
         const loaded = await loadCustomTools(appId, agentConfig);
         if (loaded.length) {
@@ -2608,6 +2617,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       supportsReadOnlyCode: true,
+      coreToolsOnly: automationDraft,
       toolsStrict: agentConfig.toolsStrict === true,
       toolsMode,
       toolsList,
@@ -4700,7 +4710,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     const finalOrigin = safetyStopped ? SAFETY_STOP_ORIGIN : undefined;
-    const doneCommit: RunDoneCommit = { runId, result: { content: finalContent }, tokensTotal };
+    const doneCommit: RunDoneCommit = { runId, result: {
+      content: finalContent,
+      ...(automationDraft && safetyStopped ? { refused: true } : {}),
+      ...(automationDraft && finalTruncated ? { truncated: true } : {}),
+    }, tokensTotal };
     if (commitDoneEarly) {
       // 本机恢复宿主(中断任务续跑方案 B):先把会话工作区改动回写(评审 #6:done 先记了、回写前崩了,重启会跳过这一轮,
       // 本地改过的文件下次 hydrate 被云端旧版盖掉),再把终稿与 done 同一事务提交(评审 #5:两次提交之间崩了 = 完整终稿在历史里、
