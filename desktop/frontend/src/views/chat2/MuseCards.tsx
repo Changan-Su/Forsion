@@ -146,6 +146,7 @@ const NO_CARDS: MuseCardInfo[] = []
 export function useMusePendingCards(on: boolean, sessionId: string | null, sig: unknown): MuseCardInfo[] {
   const cfg = useApp((s) => s.cfg)
   const decided = useDecided((s) => s.n)
+  const homeDecided = useAutomation((s) => s.cardsNonce) // 自动化首页答了规则卡 → 这里也重读
   const waitSig = useAttention((s) => Object.values(s.dm).filter((d) => d.awaiting || d.unread).length)
   const [items, setItems] = useState<MuseCardInfo[]>(NO_CARDS)
   useEffect(() => {
@@ -155,7 +156,7 @@ export function useMusePendingCards(on: boolean, sessionId: string | null, sig: 
       .then((list) => { if (alive) setItems(list.filter((c) => c.kind !== 'plugin')) })
       .catch(() => {}) // 读失败 ≠ 没有卡:留着上一份
     return () => { alive = false }
-  }, [cfg, decided, waitSig, on, sessionId, sig])
+  }, [cfg, decided, homeDecided, waitSig, on, sessionId, sig])
   return on ? items : NO_CARDS
 }
 
@@ -168,10 +169,13 @@ function useDecide(sessionId: string | undefined) {
     try {
       await call(targetForSession(sessionId))
       useDecided.getState().bump()
+      useAutomation.getState().bumpCards() // 自动化首页那行跟着收
       return true
     } catch (e: any) {
       if (e?.code === 'card_not_pending') useDecided.getState().bump() // 别处处理过了:跟着引擎的真状态走
       else useApp.getState().toast(t('museCard.failed', { e: e?.message || String(e) }), true)
+      // 别处先答了,或建规则失败卡被引擎放回待答:两边都按引擎现在的状态重读
+      if (e?.code === 'card_not_pending' || e?.code === 'rule_not_created') { useDecided.getState().bump(); useAutomation.getState().bumpCards() }
       return false
     } finally { setBusy(false) }
   }

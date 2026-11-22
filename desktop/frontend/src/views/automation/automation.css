@@ -226,6 +226,12 @@
   .auto-sugg-note-hint { display: none; }
 }
 
+/* 私聊里没答的规则卡(同一节最上面):整行不可点,按钮在下面一行;标签只用主题色字,不加底色、不描边 */
+.auto-starter.auto-rulecard { cursor: default; padding-right: 8px; }
+.auto-starter.auto-rulecard:hover { background: transparent; }
+.auto-rulecard-tag { margin-left: 8px; font-size: var(--ui-font-caption); font-weight: 400; color: var(--accent-ink, var(--accent)); }
+.auto-rulecard-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
 /* uiux-d: 执行账本首读 = 骨架 + 只给读屏的状态句(U-39)。 */
 .auto-runs-loading { padding: 4px 0; }
 .auto-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

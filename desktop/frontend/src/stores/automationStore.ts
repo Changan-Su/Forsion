@@ -13,6 +13,7 @@ import {
   getMuseTriggers,
   getSpecialConfig,
   getMuseAutomationSuggestions,
+  listMuseCards,
   patchMuseAutomationSuggestion,
 } from '../services/backendService'
 import type {
@@ -26,6 +27,7 @@ import type {
   TanguDesktopConfig,
 } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import type { MuseCardInfo } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 /** 左栏选中项:系统自动化(muse/historian)、watch 规则或某条 agent 日程(auto 条目)。 */
 export type AutomationSel =
@@ -48,6 +50,11 @@ interface AutomationState {
   actionsCatalog: AutomationActionCatalogItem[]
   /** Muse 给首页的任务建议(11-22 方案 A;Muse 关着 / 旧引擎 → 空)。 */
   suggestions: MuseAutomationSuggestion[]
+  /** Muse 在私聊里提了、还没答的规则卡(引擎 muse_cards kind=rule, pending);首页「Muse 建议」一节最上面。 */
+  pendingRules: MuseCardInfo[]
+  /** 私聊规则卡的「答过了」信号:首页或私聊任一处答了一张卡 → +1,两边都重读(私聊的卡片堆在 Tangu 界面包里,经这份宿主 store 共享)。 */
+  cardsNonce: number
+  bumpCards(): void
   sel: AutomationSel | null
   /** suggestion:画布里是某条 Muse 建议的草稿(存一份快照:轮询把它换掉时画布不能跟着变),存成规则后把那条记 used。 */
   builder: null | { editingId?: string; starter?: Starter; suggestion?: MuseAutomationSuggestion }
@@ -71,6 +78,21 @@ interface AutomationState {
   bump(): void
 }
 
+/** 私聊规则卡单独读(不拖住整份刷新;有超时),按发起顺序收:比已收下的那次早发的回包丢掉,
+ *  免得慢的旧回包把刚答掉的卡又画回来。读失败 ≠ 没有卡:留着上一份。 */
+let cardsSeq = 0
+let cardsApplied = 0
+async function refreshPendingRules(get: () => AutomationState, set: (p: Partial<AutomationState>) => void): Promise<void> {
+  const seq = ++cardsSeq
+  const nonce = get().cardsNonce
+  try {
+    const cards = await listMuseCards(homeTarget(), 'pending', { timeoutMs: 8000 })
+    if (!Array.isArray(cards) || seq < cardsApplied || get().cardsNonce !== nonce) return
+    cardsApplied = seq
+    set({ pendingRules: cards.filter((c) => c.kind === 'rule') })
+  } catch { /* 留着上一份 */ }
+}
+
 /** 本次运行里已经 × 掉 / 存成规则的建议 id(轮询回来的旧快照里滤掉,不闪回)。 */
 const settledSuggestions = new Set<string>()
 
@@ -88,6 +110,8 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   schedules: [],
   actionsCatalog: [],
   suggestions: [],
+  pendingRules: [],
+  cardsNonce: 0,
   sel: null,
   builder: null,
   leaveGuard: null,
@@ -98,6 +122,7 @@ export const useAutomation = create<AutomationState>((set, get) => ({
     // 六源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
     // 端点在但响应形状不对(旧引擎 / 桩)时回落旧值,别把 undefined 存进列表字段 —— 列表 .map 会让整个 Space 崩掉。
     const list = <T,>(v: T[] | undefined, prev: T[]): T[] => (Array.isArray(v) ? v : prev)
+    void refreshPendingRules(get, set)
     const [special, status, triggers, autoSessions, schedules, actionsCatalog, suggestions] = await Promise.all([
       getSpecialConfig(homeTarget()).then((r) => r.config).catch(() => get().specialCfg),
       getMuseStatus(homeTarget()).catch(() => get().museStatus),
@@ -151,7 +176,10 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   },
   async openRule(id) {
     if (get().builder && get().leaveGuard?.() === false) return
+    const before = get().builder
     const triggers = get().triggers.some((t) => t.id === id) ? get().triggers : await getMuseTriggers(homeTarget()).catch(() => [])
+    // 等列表的这段时间用户开了别的画布并动了手:换掉之前再问一次它的离开闸,答「否」就不换
+    if (get().builder !== before && get().builder && get().leaveGuard?.() === false) return
     if (triggers.some((t) => t.id === id)) set({ triggers, builder: { editingId: id } })
   },
   acceptSaved(trigger, fromSuggestion) {
@@ -170,6 +198,10 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   },
   bump() {
     set((s) => ({ refreshNonce: s.refreshNonce + 1 }))
+  },
+  bumpCards() {
+    set((s) => ({ cardsNonce: s.cardsNonce + 1 }))
+    void refreshPendingRules(get, set)
   },
 }))
 

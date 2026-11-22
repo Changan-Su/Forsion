@@ -1258,8 +1258,8 @@ export const decideMuseApproval = (t: EngineTarget, id: string, decision: 'appro
   }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
 
 /** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
-export const listMuseCards = (t: EngineTarget, status?: string) =>
-  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.cards)
+export const listMuseCards = (t: EngineTarget, status?: string, opts?: { timeoutMs?: number }) =>
+  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`, undefined, opts).then((r) => r.cards)
 
 export const getMuseCard = (t: EngineTarget, id: string) =>
   request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
