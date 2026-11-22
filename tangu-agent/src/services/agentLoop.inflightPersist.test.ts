@@ -24,6 +24,7 @@ import { isRetryableLlmError } from '../llm/retry.js';
 import { createRun, getRun } from './runStore.js';
 import { subscribe } from './eventBus.js';
 import { enqueueRun } from './agentLoop.js';
+import { AUTOMATION_DRAFT_BACKGROUND } from './automationDraft.js';
 
 const USER = 'u1';
 let home: string;
@@ -73,12 +74,12 @@ afterEach(() => {
 const fatal = (): LlmError => new LlmError(400, 'invalid request: upstream rejected the stream');
 
 let runSeq = 0;
-async function runToEnd(): Promise<{ runId: string; status: string; errors: any[] }> {
+async function runToEnd(background?: string): Promise<{ runId: string; status: string; errors: any[] }> {
   const runId = `IF${++runSeq}`;
   await createRun({
     id: runId, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${runId}-a`,
     // sandbox:gateToolCall 对非 mcp 工具直接放行,不依赖审批订阅者
-    input: { message: 'go', userMessageId: `${runId}-u`, attachments: [], agentConfig: { execMode: 'sandbox', cwd: home } },
+    input: { message: 'go', userMessageId: `${runId}-u`, attachments: [], background, agentConfig: { execMode: 'sandbox', cwd: home } },
   });
   const errors: any[] = [];
   const off = subscribe(runId, (ev) => { if (ev.type === 'error') errors.push(ev.payload); });
@@ -100,6 +101,25 @@ describe('inflight text is persisted when the run fails mid-stream', () => {
   it('precondition: the scripted error is non-retryable', () => {
     expect(isRetryableLlmError(fatal())).toBe(false);
   });
+
+  it('fails an interrupted automation draft instead of delivering a resumed fragment', async () => {
+    const outage = new LlmError(502, 'upstream disconnected');
+    expect(isRetryableLlmError(outage)).toBe(true);
+    script = [
+      async (o) => {
+        o.onToken('Your train departs');
+        throw outage;
+      },
+      async () => ({
+        content: 'at 9 a.m.', reasoning: '', finishReason: 'stop', toolCalls: [],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      }),
+    ];
+    const r = await runToEnd(AUTOMATION_DRAFT_BACKGROUND);
+    expect(r.status).toBe('failed');
+    expect(streamCalls).toBe(1);
+    expect((await getRun(r.runId))?.result).toBeNull();
+  }, 20_000);
 
   it('single iteration: tokens streamed then a non-retryable error → finalize and error event carry the streamed text', async () => {
     script = [

@@ -4108,7 +4108,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // Retry-After 超过 60s / 不合法:不续写;≤60s:照它等(不越过 60s)。等网时立即插话会叫醒它(插话在迭代顶注入)。
           // 每次真续写之前复查 run 成本闸。
           const steerWoke = (e: unknown): boolean => !ac.signal.aborted && sampling.signal.aborted && immediateSteers.has(runId) && (e as any)?.name === 'AbortError';
-          const midRa = emitted && isRetryableLlmError(err) ? retryAfterVerdict(err) : ({ kind: 'refuse' } as const);
+          // Drafts deliver a single complete body. Chat's midstream continuation would deliver only the resumed fragment.
+          const midRa = !automationDraft && emitted && isRetryableLlmError(err) ? retryAfterVerdict(err) : ({ kind: 'refuse' } as const);
           let pre: 'down' | 'woke' | 'no' = 'no';
           let steered = false;
           if (midRa.kind !== 'refuse') {

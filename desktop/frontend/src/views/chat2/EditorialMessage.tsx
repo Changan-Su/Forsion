@@ -995,7 +995,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
   const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
   const automationDm = msg.origin === AUTOMATION_DM_ORIGIN ? readAutomationDm(msg.content) : undefined
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(automationDm?.body ?? msg.content, msg.refused), { streaming, kinds: fenceKinds, todo: museTodo })
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(automationDm?.body ?? msg.content, msg.refused), { streaming, kinds: automationDm ? [] : fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // hand_off_task 挪出去的会话:过程行下面、正文前面单独一小块(不进下面的「从这里分出」)
   const handoffIds = handoffIdsOf(msg.toolEvents)
