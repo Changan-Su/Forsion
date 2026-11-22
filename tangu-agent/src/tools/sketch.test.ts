@@ -231,6 +231,13 @@ describe('sketch proactive turn signal', () => {
     expect(section).toContain('Never invent controls');
   });
 
+  it('makes mechanism guidance available even without native UI or a turn hint, subject to the requested format', () => {
+    expect(sketchTurnSignalFor('What happens as I rotate it?', 'auto', false)).toBeUndefined();
+    expect(SKETCH_SECTION).toContain('when visuals are on auto and the user leaves the form open');
+    expect(SKETCH_SECTION).toContain('static diagram or another format take precedence');
+    expect(SKETCH_SECTION).toContain('the host handles switching');
+  });
+
   it('names the native tool only when the client can render it', () => {
     const q = '下周要搬家，我需要提前准备些什么？';
     expect(sketchTurnSignalFor(q, 'auto', true)?.section).toContain('`intelligent_ui`');

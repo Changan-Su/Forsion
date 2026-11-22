@@ -98,8 +98,14 @@ export const SKETCH_SECTION = `## Visual cards
 
 Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
-Do not wait for the user to say "draw" when interaction would help and visuals are set to auto. Use prose for definitions, study notes, derivations and reading guidance,
-Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
+Do not wait for the user to say "draw" when visuals are on auto and the user leaves the form open.
+If the answer hinges on how a mechanism's positions, paths or directions change as an input varies,
+call \`intelligent_ui_html\`. Show what produces the outcome. For a few qualitatively different states,
+use labelled \`.fs-tabs\` with a directly drawn diagram per state on common axes; the host handles switching.
+Use a continuous control when intermediate values matter. Derive fixed landmarks and moving marks
+from one coordinate system, including the orientation of the screen axes. Keep the takeaway in chat.
+Explicit requests for prose, a table, a static diagram or another format take precedence.
+Use Markdown for reading and normal project/file tools when the deliverable is an app or file.
 Never add a visualization just because an answer contains three values or steps.
 
 ### Composition contract
@@ -235,7 +241,7 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
 
 // Advisory only: the model sees the task and history; keywords never require a card.
 export const PRESENTATION_CHOICE = `Choose the form afresh for the question the user is trying to answer. Honor their format and visual preference. Use a view when seeing or operating it materially helps.
-When visuals are on auto and the question follows a mechanism through changing conditions, ask what the user would have to picture moving. If changing one input changes the geometry, paths or directions they are trying to understand, call \`intelligent_ui_html\` on this turn. Give them one labelled diagram with a meaningful input that moves the marks through the transition. Keep the takeaway in chat.
+If the user leaves the form open and visuals are on auto, follow the Visual cards rule for explanations of changing geometry, paths or directions.
 For a one-off quantitative decision with fixed inputs, lead with the action and any threshold in the first sentence. Distinguish a tie from a strict advantage and check the adjacent attainable values when relevant. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
 Use normal chat Markdown for reading, definitions, notes, derivations and static comparisons. Never invent controls to justify a card or repeat the full explanation in it.`;
 const SHAPE_NOTE = `## Presentation choice for this turn
