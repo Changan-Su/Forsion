@@ -5,6 +5,17 @@ import { blankStep, type StepDraft } from './lib'
 export type Starter = 'reminder' | 'briefing' | 'table' | 'button'
 export const STARTERS: Starter[] = ['reminder', 'briefing', 'table', 'button']
 
+/** 首页一共几格(11-22 方案 A):Muse 建议排前面,不够的用模板补;建议多了收进「还有 N 条」。 */
+export const HOME_SLOTS = 4
+export function homeSlots<S>(suggestions: S[], expanded = false): { shown: S[]; extra: number; starters: Starter[] } {
+  const shown = expanded ? suggestions : suggestions.slice(0, HOME_SLOTS)
+  return {
+    shown,
+    extra: suggestions.length - shown.length,
+    starters: STARTERS.slice(0, Math.max(0, HOME_SLOTS - suggestions.length)),
+  }
+}
+
 /** Templates are editable drafts. Opening one never creates or enables a rule. */
 export function starterSteps(starter: Starter | undefined, t: (key: string) => string): StepDraft[] {
   if (!starter) return [blankStep('notify')]
