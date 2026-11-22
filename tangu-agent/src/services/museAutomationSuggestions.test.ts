@@ -12,10 +12,10 @@ vi.mock('../core/db.js', () => ({
     const T = 'muse_automation_suggestions';
     if (s.startsWith(`SELECT id, title, why`)) return db.rows.filter((r) => r.user_id === p[0] && r.status === 'active').sort((a, b) => a.seq - b.seq);
     if (s.startsWith(`SELECT title FROM ${T} WHERE user_id = ? AND status = 'dismissed'`)) return db.rows.filter((r) => r.user_id === p[0] && r.status === 'dismissed' && r.updated_at >= p[1]);
-    if (s.startsWith(`SELECT title FROM ${T} WHERE id = ?`)) return db.rows.filter((r) => r.id === p[0] && r.user_id === p[1] && r.status === 'active');
+    if (s.startsWith(`SELECT title, status FROM ${T} WHERE id = ?`)) { if (!s.includes("status IN ('active', 'replaced')")) throw new Error('mark reads active or replaced'); return db.rows.filter((r) => r.id === p[0] && r.user_id === p[1] && (r.status === 'active' || r.status === 'replaced')); }
     if (s.startsWith(`SELECT status FROM ${T} WHERE id = ?`)) return db.rows.filter((r) => r.id === p[0] && r.user_id === p[1]);
     if (s.startsWith(`UPDATE ${T} SET status = 'replaced'`)) { if (!s.includes("AND status = 'active'")) throw new Error('replace must be CAS on active'); db.rows.filter((r) => r.id === p[0] && r.user_id === p[1] && r.status === 'active').forEach((r) => { r.status = 'replaced'; }); return []; }
-    if (s.startsWith(`UPDATE ${T} SET status = ?`)) { db.rows.filter((r) => r.id === p[1] && r.user_id === p[2] && r.status === 'active').forEach((r) => { r.status = p[0]; r.updated_at = new Date().toISOString().slice(0, 19).replace('T', ' '); }); return []; }
+    if (s.startsWith(`UPDATE ${T} SET status = ?`)) { db.rows.filter((r) => r.id === p[1] && r.user_id === p[2] && r.status === p[3]).forEach((r) => { r.status = p[0]; r.updated_at = new Date().toISOString().slice(0, 19).replace('T', ' '); }); return []; }
     if (s.startsWith(`INSERT INTO ${T}`)) { db.rows.push({ id: p[0], user_id: p[1], title: p[2], why: p[3], source_kind: p[4], source_label: p[5], source_ref: p[6], rule_json: p[7], status: 'active', seq: db.clock++, updated_at: '' }); return []; }
     throw new Error(`unexpected SQL in test: ${s}`);
   }),
@@ -65,6 +65,9 @@ describe('validateSuggestions', () => {
     expect(V([{ ...away, rule: undefined }])).toEqual({ error: expect.stringMatching(/rule is required/) });
     expect(V([{ ...away, rule: { cond_type: 'daily_at', time: '09:00', actions: [{ type: 'tool_call', tool: 'run_bash', args: {} }] } }])).toHaveProperty('error');
   });
+  it('旧式 agent_slug 不收(画布会把它画成「叫醒 Muse」),要用 actions 里的 agent_run', () => {
+    expect(V([{ ...away, rule: { cond_type: 'daily_at', time: '09:00', agent_slug: 'xyra' } }])).toEqual({ error: expect.stringMatching(/agent_run step/) });
+  });
   it('笔记 / 表来源必须是真实存在的文件', () => {
     expect(V([{ ...weekly, source: { kind: 'note', label: 'x', ref: 'Log/missing.md' } }])).toEqual({ error: expect.stringMatching(/does not exist/) });
     const ok = V([{ ...away, source: { kind: 'database', label: '用户反馈', ref: 'feedback.db' } }]);
@@ -101,6 +104,13 @@ describe('setSuggestions / markSuggestion', () => {
     expect(await markSuggestion('u', shown[0].id, 'used')).toBe(away.title);
     expect(await markSuggestion('u', shown[0].id, 'dismissed')).toBeNull();
     expect(await listActiveSuggestions('u')).toEqual([]);
+  });
+  it('打开草稿后 Muse 换了一组:那条(replaced)照样能记 used / dismissed', async () => {
+    const { shown } = await setSuggestions('u', ok([weekly, away]));
+    await setSuggestions('u', ok([away]));
+    const old = shown.find((s) => s.title === weekly.title)!;
+    expect(await markSuggestion('u', old.id, 'dismissed')).toBe(weekly.title);
+    expect((await setSuggestions('u', ok([weekly, away]))).refused).toEqual([weekly.title]);
   });
   it('存进去的规则原样读回来(桌面按它填画布);读不出的那条当不存在', async () => {
     await setSuggestions('u', ok([away]));

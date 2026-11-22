@@ -321,7 +321,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, d
         // where 对 row_added 也有效;空数组送 undefined(见 whereToUpsert 注释)。
         where: condType === 'db_changed' ? whereToUpsert(dbWhere) : undefined,
         // 编辑既有 db 规则:钉回建规则时的 vault(省略会被引擎重钉到**当前** vault,切库编辑会静默改靶)。
-        vault: condType === 'db_changed' && editing?.cond.type === 'db_changed' ? editing.cond.vault : undefined,
+        vault: condType === 'db_changed' && seed?.cond.type === 'db_changed' ? seed.cond.vault : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
         cooldown_hours: cooldownPayload(showCooldown ? kind : 'timer', cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
@@ -330,7 +330,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, d
       })
       if (!editing?.id) track('automation.create') // 只计新建,编辑保存不算
       if (onSaved) { st.bump(); onSaved(saved); return }
-      st.acceptSaved(saved)
+      st.acceptSaved(saved, suggestion?.id)
       useApp.getState().toast(t('automation.ux.saved'))
     } catch (e: any) {
       if (e?.status === 409) { setConflict(true); setError(t('automation.builder.conflict')); lastMode.current = mode }

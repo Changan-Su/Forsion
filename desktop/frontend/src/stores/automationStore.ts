@@ -65,7 +65,8 @@ interface AutomationState {
   dismissSuggestion(id: string, reason?: string): Promise<void>
   /** 从 Automation Space 以外打开一条规则。构建器在 triggers 里找规则,找不到就是空白草稿,保存会把规则盖掉,所以先拉到再开。 */
   openRule(id: string): Promise<void>
-  acceptSaved(trigger: MuseTriggerInfo): void
+  /** fromSuggestion:保存开始那一刻画布里那条 Muse 建议的 id(慢保存期间用户换了草稿,不能记错那条)。 */
+  acceptSaved(trigger: MuseTriggerInfo, fromSuggestion?: string): void
   closeBuilder(): void
   bump(): void
 }
@@ -132,15 +133,16 @@ export const useAutomation = create<AutomationState>((set, get) => ({
     set({ builder: { suggestion } })
   },
   async dismissSuggestion(id, reason) {
-    const prev = get().suggestions
+    const row = get().suggestions.find((s) => s.id === id)
     settledSuggestions.add(id)
-    set({ suggestions: prev.filter((s) => s.id !== id) })
+    set({ suggestions: get().suggestions.filter((s) => s.id !== id) })
     try {
       await patchMuseAutomationSuggestion(homeTarget(), id, 'dismissed', reason)
     } catch (e: any) {
       if (e?.status === 409) return // 已经不在显示了(别处处理过 / 被 Muse 换掉),收着就对
       settledSuggestions.delete(id)
-      set({ suggestions: prev })
+      // 只放回这一条,插回原来的位置附近;期间轮询换来的新一组 / 别的已 × 的不动
+      if (row && !get().suggestions.some((s) => s.id === id)) set({ suggestions: [row, ...get().suggestions] })
       throw e
     }
   },
@@ -152,9 +154,9 @@ export const useAutomation = create<AutomationState>((set, get) => ({
     const triggers = get().triggers.some((t) => t.id === id) ? get().triggers : await getMuseTriggers(homeTarget()).catch(() => [])
     if (triggers.some((t) => t.id === id)) set({ triggers, builder: { editingId: id } })
   },
-  acceptSaved(trigger) {
+  acceptSaved(trigger, fromSuggestion) {
     // 草稿来自 Muse 建议:存成了规则 → 那条记 used(写回 Muse 的 LOG),首页不再显示。失败不挡保存,下次轮询会再画出来。
-    const suggestionId = get().builder?.suggestion?.id
+    const suggestionId = fromSuggestion
     if (suggestionId) {
       settledSuggestions.add(suggestionId)
       set((s) => ({ suggestions: s.suggestions.filter((x) => x.id !== suggestionId) }))

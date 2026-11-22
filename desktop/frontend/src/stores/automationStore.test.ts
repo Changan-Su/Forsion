@@ -52,18 +52,23 @@ it('a suggestion opens as an unsaved, paused draft and keeps its snapshot when M
 it('saving a suggestion draft marks it used and it does not come back on the next poll', async () => {
   useAutomation.setState({ suggestions: [sugg('s2'), sugg('s3')] })
   useAutomation.getState().openSuggestion('s2')
-  useAutomation.getState().acceptSaved(trigger)
+  useAutomation.getState().openSuggestion('s3') // 慢保存期间换了草稿:记 used 的仍是保存开始时那条
+  useAutomation.getState().acceptSaved(trigger, 's2')
   expect(vi.mocked(patchMuseAutomationSuggestion)).toHaveBeenCalledWith(expect.anything(), 's2', 'used')
   vi.mocked(getMuseAutomationSuggestions).mockResolvedValueOnce([sugg('s2'), sugg('s3')]) // 引擎还没收到时的旧快照
   await useAutomation.getState().refresh({} as TanguDesktopConfig)
   expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s3'])
+  expect(vi.mocked(patchMuseAutomationSuggestion)).not.toHaveBeenCalledWith(expect.anything(), 's3', 'used')
 })
 
 it('a failed dismiss puts the suggestion back; a 409 (already gone) keeps it hidden', async () => {
   useAutomation.setState({ suggestions: [sugg('s4'), sugg('s5')] })
   vi.mocked(patchMuseAutomationSuggestion).mockRejectedValueOnce(Object.assign(new Error('offline'), { status: 500 }))
-  await expect(useAutomation.getState().dismissSuggestion('s4', 'timing')).rejects.toThrow('offline')
-  expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4', 's5'])
+  const pending = useAutomation.getState().dismissSuggestion('s4', 'timing')
+  useAutomation.setState({ suggestions: [sugg('s5'), sugg('s9')] }) // 期间轮询换来了新一组
+  await expect(pending).rejects.toThrow('offline')
+  expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4', 's5', 's9'])
+  useAutomation.setState({ suggestions: [sugg('s4'), sugg('s5')] })
   vi.mocked(patchMuseAutomationSuggestion).mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 409 }))
   await useAutomation.getState().dismissSuggestion('s5')
   expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4'])

@@ -63,7 +63,7 @@ export const museAutomationSuggestionsProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const v = validateSuggestions(args.suggestions);
+        const v = validateSuggestions(args.suggestions, { cwd: ctx.cwd });
         if ('error' in v) return `Error: ${v.error}. Nothing was changed.`;
         try {
           const { shown, refused } = await setSuggestions(ctx.userId, v.suggestions);

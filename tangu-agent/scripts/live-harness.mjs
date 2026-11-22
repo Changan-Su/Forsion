@@ -6456,13 +6456,17 @@ Then reply with only the command output.`,
     let calls = [];
     let results = [];
     try {
-      calls = db.prepare(`SELECT e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
-        WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'set_automation_suggestions'`).all().map((x) => x.p);
+      // 只算本场景起的周期(前面场景的 Muse 周期不算):runs 的 created_at 在 t0 之后
+      calls = db.prepare(`SELECT e.payload AS p, r.created_at AS at FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'set_automation_suggestions'`).all()
+        .filter((x) => { const at = Date.parse(String(x.at).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(x.at)) ? '' : 'Z')); return !Number.isFinite(at) || at >= t0 - 5000; }).map((x) => x.p);
       const ids = new Set(calls.map((p) => { try { return JSON.parse(p).id; } catch { return null; } }).filter(Boolean));
       results = db.prepare(`SELECT e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
         WHERE s.kind = 'muse' AND e.type = 'tool_result'`).all().map((x) => { try { const o = JSON.parse(x.p); return ids.has(o.id) ? String(o.result ?? '').slice(0, 200) : null; } catch { return null; } }).filter((x) => x !== null);
     } finally { db.close(); }
-    const list = asList(await api('/agent/special/muse/automation-suggestions').catch(() => []), 'suggestions');
+    let getFailed = false;
+    const list = asList(await api('/agent/special/muse/automation-suggestions').catch(() => { getFailed = true; return []; }), 'suggestions');
+    // 负对照(--autosugg-off):这一轮必须一次没调、接口成功回空。这里照样按「正向」判 → 负对照应当红,红的原因要是「调了 0 次 + 0 条」,不是接口挂了。
     const shaped = list.every((x) => x.rule && x.rule.cond && x.title && x.why && x.source?.label);
     const weekly = list.filter((x) => ['every', 'daily_at'].includes(x.rule?.cond?.type) || /周一|每周|weekly|monday/i.test(`${x.title} ${x.why}`)).length;
     const zh = list.filter((x) => /[一-鿿]/.test(x.title)).length;
@@ -6470,6 +6474,7 @@ Then reply with only the command output.`,
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `set_automation_suggestions 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
+      ...(getFailed ? ['GET 自动化建议失败(不是「没有」)← 红'] : []),
       `工具回执:${results.join(' / ') || '(无)'}`,
       `自动化首页 ${list.length} 条${list.length ? '' : ' ← 红'}${shaped ? '' : ';有条目缺规则 / 依据 ← 红'}`,
       `像「每周整理日志」的 ${weekly}/${list.length}(只记)`,

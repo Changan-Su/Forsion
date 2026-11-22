@@ -281,7 +281,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/special/config', access: 'allow', src: 'routes/special.ts', why: 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)' },
   { method: 'POST', path: '/agent/special/config', access: 'deny-remote', src: 'routes/special.ts', why: 'special-agent config write (design appendix C)' },
   { method: 'GET', path: '/agent/special/historian/activity', access: 'allow', src: 'routes/special.ts', why: 'Historian activity' },
-  { method: 'GET', path: '/agent/special/muse/automation-suggestions', access: 'allow', src: 'routes/special.ts', why: 'Muse task suggestions on the Automation home page (read-only)' },
+  { method: 'GET', path: '/agent/special/muse/automation-suggestions', access: 'deny-remote', src: 'routes/special.ts', why: 'Muse task suggestions on the Automation home page: absolute file paths, activity-derived reasons and full draft prompts stay on this computer' },
   { method: 'PATCH', path: '/agent/special/muse/automation-suggestions/:id', access: 'deny-remote', src: 'routes/special.ts', why: 'marks a suggestion used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/cards', access: 'allow', src: 'routes/special.ts', why: 'Muse cards waiting in the direct chat' },
   { method: 'GET', path: '/agent/special/muse/cards/:id', access: 'allow', src: 'routes/special.ts', why: 'one Muse card' },

@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { resolveNoteRef } from './museStarters.js';
 import { validateTriggerInput, type TriggerInput, type ValidatedTrigger } from './museTriggers.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 
 export const SUGGESTION_SOURCE_KINDS = ['calendar', 'note', 'todo', 'database', 'computer', 'muse'] as const;
 export type SuggestionSourceKind = typeof SUGGESTION_SOURCE_KINDS[number];
@@ -35,7 +36,8 @@ export const suggestionKey = (title: string): string => oneLine(title).toLowerCa
 
 /** 校验模型给的一组(纯函数,单测钉)。逐条报错:一条坏了整组不收,免得用户看到缺一条、Muse 却以为都放上了。
  *  rule 走 manage_automation 同一个校验(validateTriggerInput);草稿里不许 tool_call(那要用户在画布里自己选工具)。 */
-export function validateSuggestions(raw: unknown, opts: { vaultPath?: string } = {}): { suggestions: SuggestionInput[] } | { error: string } {
+export function validateSuggestions(raw: unknown, opts: { vaultPath?: string; cwd?: string } = {}): { suggestions: SuggestionInput[] } | { error: string } {
+  const vaultPath = opts.vaultPath ?? amadeusVaultPath();
   if (!Array.isArray(raw)) return { error: 'suggestions must be an array (pass [] to clear)' };
   if (raw.length > MAX_SUGGESTIONS) return { error: `at most ${MAX_SUGGESTIONS} suggestions` };
   const out: SuggestionInput[] = [];
@@ -55,13 +57,15 @@ export function validateSuggestions(raw: unknown, opts: { vaultPath?: string } =
     if (!(SUGGESTION_SOURCE_KINDS as readonly string[]).includes(kind)) return { error: `${at}: source.kind must be one of ${SUGGESTION_SOURCE_KINDS.join(', ')}` };
     if (!label) return { error: `${at}: source.label is required (the name of the note, event, database… shown as a link)` };
     if (kind === 'note' || kind === 'database') {
-      const abs = resolveNoteRef(ref || '', opts.vaultPath);
+      const abs = resolveNoteRef(ref || '', vaultPath);
       if (!abs) return { error: `${at}: ${kind} "${ref || ''}" does not exist — pass the path of a file you actually read (absolute, or relative to the notes vault)` };
       ref = abs;
     }
     const ruleIn = (r?.rule && typeof r.rule === 'object' ? r.rule : null) as TriggerInput | null;
     if (!ruleIn) return { error: `${at}: rule is required (the same fields as manage_automation set)` };
-    const v = validateTriggerInput({ ...ruleIn, desc: oneLine(ruleIn.desc) || title }, { allowToolCall: false, vaultPath: opts.vaultPath });
+    // 画布只认动作链:旧式 agent_slug / agent 会在草稿里变成「叫醒 Muse」,改用 actions 里的 agent_run 步骤
+    if ((ruleIn as any).agent_slug || (ruleIn as any).agent) return { error: `${at}: rule: use an agent_run step in actions instead of agent_slug` };
+    const v = validateTriggerInput({ ...ruleIn, desc: oneLine(ruleIn.desc) || title }, { allowToolCall: false, vaultPath, cwd: opts.cwd });
     if (!v.ok) return { error: `${at}: rule: ${v.error}` };
     const { desc, cond, prompt, cooldownHours, actions, only, maxPerDay } = v.value;
     const key = suggestionKey(title);
@@ -129,12 +133,14 @@ export async function setSuggestions(userId: string, next: SuggestionInput[]): P
   return { shown: await listActiveSuggestions(userId), refused };
 }
 
-/** 用户处理了一条(× / 存成了规则):只认 active 的那条(CAS,点两下只算一次)。返回那条的标题,没有 = 不存在或已处理。 */
+/** 用户处理了一条(× / 存成了规则):认 active,也认刚被 Muse 换掉的 replaced(用户打开草稿后 Muse 换了一组,存下来照样算 used、× 照样拒收 30 天)。
+ *  只算第一次决定(CAS,点两下只算一次)。返回那条的标题,没有 = 不存在或已处理。 */
 export async function markSuggestion(userId: string, id: string, status: 'dismissed' | 'used'): Promise<string | null> {
-  const rows = await query<any[]>(`SELECT title FROM muse_automation_suggestions WHERE id = ? AND user_id = ? AND status = 'active'`, [id, userId]);
+  const rows = await query<any[]>(`SELECT title, status FROM muse_automation_suggestions WHERE id = ? AND user_id = ? AND status IN ('active', 'replaced')`, [id, userId]);
   const title = rows?.[0]?.title;
   if (!title) return null;
-  await query(`UPDATE muse_automation_suggestions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = 'active'`, [status, id, userId]);
+  const from = String(rows[0].status);
+  await query(`UPDATE muse_automation_suggestions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ? AND status = ?`, [status, id, userId, from]);
   const after = await query<any[]>(`SELECT status FROM muse_automation_suggestions WHERE id = ? AND user_id = ?`, [id, userId]);
   return after?.[0]?.status === status ? String(title) : null;
 }
@@ -144,8 +150,10 @@ export function buildSuggestionHint(active: Array<Pick<Suggestion, 'title' | 'so
   const shown = active.length
     ? active.map((s) => `- ${s.title} (source: ${s.source.kind} "${s.source.label}")`).join('\n')
     : '- (none yet: when you notice something the user keeps doing by hand on a schedule or in reaction to an event, suggest it via set_automation_suggestions)';
+  // 11-22 live:Muse 看到「每周一手动整理周报」后自己把这一次周报做了,却没提自动化。做一次不等于下周不用再做。
+  const once = '\nIf you do such a chore for the user this time, still suggest the automation: doing it once does not stop it coming back next time.';
   const gone = dismissed.length ? `\nDismissed by the user recently (do not suggest these or anything similar): ${dismissed.slice(0, 15).join('; ')}` : '';
-  return `\n\n[Automation suggestions currently shown on the Automation home page]\n${shown}${gone}`;
+  return `\n\n[Automation suggestions currently shown on the Automation home page]\n${shown}${once}${gone}`;
 }
 
 export async function suggestionHint(userId: string): Promise<string> {

@@ -9,7 +9,7 @@ import { setActiveSpace } from '@lcl/engine'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { usePageStore } from '../../amadeus/store/pageStore'
-import { openNote } from '../../amadeusNav'
+import { openFile, openNote } from '../../amadeusNav'
 import { hostTargetFor, openWsFile } from '../wsFileNav'
 import { ReasonPrompt } from '../../components/FeedbackReasons'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
@@ -44,7 +44,7 @@ function openSource(s: MuseAutomationSuggestion, vaultRoot: string | null | unde
   const ref = s.source.ref
   if ((s.source.kind === 'note' || s.source.kind === 'database') && ref) {
     const rel = vaultRel(ref, vaultRoot)
-    if (rel) void openNote(rel, { newTab: true })
+    if (rel) { if (s.source.kind === 'database') openFile(rel, { newTab: true }); else void openNote(rel, { newTab: true }) }
     else openWsFile(hostTargetFor(ref, ref.split(/[/\\]/).pop() || ref), { newTab: true })
     return
   }
