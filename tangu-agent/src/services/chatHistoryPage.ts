@@ -16,14 +16,18 @@ export async function chatHistoryPage(sid: string, limit: number, options: PageO
   const tie = sqlite ? 'rowid' : 'id';
   const revision = sqlite ? 'CAST(history_version AS TEXT)' : 'CAST(xmin AS TEXT)';
   const keys = `id, role, COALESCE(timestamp, 0) AS timestamp, ${tie} AS tie, ${revision} AS revision`;
+  // SQLite only uses the expression index for a timestamp range if it is
+  // explicit. The tuple then places the cut inside a same-millisecond group.
+  const cursorPredicate = (op: '<' | '>') =>
+    `COALESCE(timestamp, 0) ${op}= ? AND (COALESCE(timestamp, 0), ${tie}) ${op} (?, ?)`;
   const anchorId = options.beforeId || options.afterId || options.aroundId;
   const [anchor] = anchorId ? await query<any[]>(`SELECT ${keys} FROM chat_messages WHERE session_id = ? AND id = ?`, [sid, anchorId]) : [];
   const read = async (direction: 'ASC' | 'DESC', count: number) => {
     const op = direction === 'ASC' ? '>' : '<';
     return query<any[]>(`SELECT ${keys} FROM chat_messages WHERE session_id = ?
-      ${anchor ? `AND (COALESCE(timestamp, 0), ${tie}) ${op} (?, ?)` : ''}
+      ${anchor ? `AND ${cursorPredicate(op)}` : ''}
       ORDER BY COALESCE(timestamp, 0) ${direction}, ${tie} ${direction} LIMIT ${count}`,
-      anchor ? [sid, anchor.timestamp, anchor.tie] : [sid]);
+      anchor ? [sid, anchor.timestamp, anchor.timestamp, anchor.tie] : [sid]);
   };
   let rows: any[] = [];
   let older = false, newer = false;
@@ -63,14 +67,14 @@ export async function chatHistoryPage(sid: string, limit: number, options: PageO
   let failureRows = rows;
   if (boundary && boundary.role !== 'user') {
     const prior = await query<any[]>(`SELECT id, role, timestamp FROM chat_messages WHERE session_id = ? AND role = 'user'
-      AND (COALESCE(timestamp, 0), ${tie}) < (?, ?) ORDER BY COALESCE(timestamp, 0) DESC, ${tie} DESC LIMIT 1`,
-      [sid, boundary.timestamp, boundary.tie]);
+      AND ${cursorPredicate('<')} ORDER BY COALESCE(timestamp, 0) DESC, ${tie} DESC LIMIT 1`,
+      [sid, boundary.timestamp, boundary.timestamp, boundary.tie]);
     failureRows = [...prior, ...rows];
   }
   const end = rows.at(-1);
   if (newer && end) {
     const nextUser = await query<any[]>(`SELECT id, role, timestamp FROM chat_messages WHERE session_id = ? AND role = 'user'
-      AND (COALESCE(timestamp, 0), ${tie}) > (?, ?) ORDER BY COALESCE(timestamp, 0), ${tie} LIMIT 1`, [sid, end.timestamp, end.tie]);
+      AND ${cursorPredicate('>')} ORDER BY COALESCE(timestamp, 0), ${tie} LIMIT 1`, [sid, end.timestamp, end.timestamp, end.tie]);
     failureRows = [...failureRows, ...nextUser];
   }
   const visible = new Set(rows.map(r => r.id));
