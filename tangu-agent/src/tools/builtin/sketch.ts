@@ -175,6 +175,10 @@ export type SketchTurnSignal = {
 
 const SKETCH_OPTOUT_RE = /(?:不要|不用|无需|别)(?:画|绘制|图表|可视化|\s*sketch)|(?:只要?|仅)(?:用)?(?:文字|纯文字|代码)|\b(?:text[ -]?only|no (?:chart|diagram|visuals?|sketch))\b/i;
 const SKETCH_EXPLICIT_RE = /(?:画|绘制|生成|做|给我|用)[^。！？\n]{0,48}(?:图|图表|示意图|架构图|流程图|时序图|关系图|时间线|看板|可视化|sketch)|(?:请|帮我)?可视化|\b(?:draw|visuali[sz]e|make|create|render|show)\b.{0,32}\b(?:chart|diagram|flowchart|timeline|wireframe|mockup|visual|sketch)\b|\b(?:diagram|flowchart|wireframe)\s+(?:this|it|the)\b/i;
+// A changing condition plus an outcome question is a presentation cue. Neither a subject
+// name nor a change verb alone decides whether there is anything spatial to display.
+const VARY_CONDITION_RE = /(?:逐渐|渐渐|慢慢|逐步|移动|转动|旋转|改变|调节|穿过|越过|经过|从.{1,16}(?:移到|移向|转到|到达|到))|\b(?:gradually|vary|varying|rotate|rotating|move|moving|cross|crosses|crossing|increase|decrease|from.{1,40}to)\b/i;
+const ASK_EFFECT_RE = /(?:会.{0,14}(?:怎样|怎么样|如何|什么变化)|怎么变|有何变化|如何变化)|\b(?:what (?:happens|changes)|how (?:does|do|will|would))\b/i;
 const SKETCH_RELATION_RE = /(?:比较|对比|排名|趋势|变化|演变|分布|构成|前后|步骤|流程|架构|结构|层级|关系|状态机|生命周期|用户旅程|路线图|时间线|决策矩阵|布局|版式|配色)|\b(?:compare|comparison|versus|vs\.?|rank|ranking|trend|distribution|composition|before and after|steps?|flow|process|architecture|hierarchy|relationship|state machine|lifecycle|journey|roadmap|timeline|decision matrix|layout|palette)\b/i;
 const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|交互式)|\b(?:calculator|slider|filter|toggle|interactive)\b/i;
 const SKETCH_ANALYZE_RE = /(?:分析|对比|比较|趋势|增长|下降|变化|数据|指标)|\b(?:analy[sz]e|compare|trend|growth|decline|change|data|metric)\b/i;
@@ -209,6 +213,14 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   }
   // less:只认明确要求;隐式信号(比较 / 流程 / 数据形状)不再提醒,收尾补催也随之缺席(它只看这个信号)。
   if (visuals === 'less') return undefined;
+
+  if (VARY_CONDITION_RE.test(text) && ASK_EFFECT_RE.test(text) && !SKETCH_ACTIONABLE_SKIP_RE.test(text) && !SKETCH_CODE_FOCUS_RE.test(text)) {
+    return {
+      kind: 'implicit',
+      section: '## Changing conditions in this question\n' +
+        'Identify the variable being changed and the observable outcome. If the outcome involves position, alignment, direction, shape or paths, deliver its diagram now: call `intelligent_ui_html` before your final prose. Show the mechanism and its contrasting states on a common frame. Use the host tabs for distinct states, or continuous control for a meaningful sweep. For a purely scalar result or a requested text, table or other specific format, give that answer directly.',
+    };
+  }
 
   const relation = SKETCH_RELATION_RE.test(text);
   const interactive = SKETCH_INTERACTIVE_RE.test(text);
