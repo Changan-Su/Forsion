@@ -131,6 +131,25 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_muse_starters_user ON muse_starters(user_id, status)`);
 
+  // Muse 给自动化首页的任务建议(set_automation_suggestions 整组替换;本地特性,云端建空表零写入)。
+  // status:active = 正在显示;replaced = 被下一组顶掉;dismissed = 用户点了 ×(30 天内不许再提);used = 存成了规则。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS muse_automation_suggestions (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      title TEXT NOT NULL,
+      why TEXT NOT NULL,
+      source_kind VARCHAR(16) NOT NULL,
+      source_label TEXT NOT NULL,
+      source_ref TEXT,
+      rule_json TEXT NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_muse_auto_sugg_user ON muse_automation_suggestions(user_id, status)`);
+
   // Muse 发进私聊、要用户点的卡(services/museCards.ts):状态住引擎,手机与桌面看到同一份。target_key = 'plugin:<id>' / 'feature:<名>' 等,判「提过没」用。
   await query(ddl(`
     CREATE TABLE IF NOT EXISTS muse_cards (

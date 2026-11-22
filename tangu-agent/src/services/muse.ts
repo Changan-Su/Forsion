@@ -36,6 +36,7 @@ import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
 import { MAX_STARTERS, starterHint } from './museStarters.js';
+import { suggestionHint } from './museAutomationSuggestions.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
@@ -848,6 +849,8 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
     (cfg.chatStarters ? await starterHint(userId) : '') +
+    // 11-22 自动化首页的任务建议:用法只写在本周期简报与工具说明里,不进落库的稳定指令(长度预算 4800 已近满)
+    (await suggestionHint(userId)) +
     (await museDmHint(userId)) +
     (await recommendHint(userId)) +
     (await inboxHint(userId, cfg)) +
