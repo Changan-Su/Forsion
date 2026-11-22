@@ -850,7 +850,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await existingTodoHint(userId)) +
     (cfg.chatStarters ? await starterHint(userId) : '') +
     // 11-22 自动化首页的任务建议:用法只写在本周期简报与工具说明里,不进落库的稳定指令(长度预算 4800 已近满)
-    (await suggestionHint(userId)) +
+    (cfg.automationSuggestions ? await suggestionHint(userId) : '') +
     (await museDmHint(userId)) +
     (await recommendHint(userId)) +
     (await inboxHint(userId, cfg)) +

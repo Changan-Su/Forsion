@@ -817,7 +817,8 @@ const SUGGESTION_REASONS = ['irrelevant', 'timing', 'exists', 'less'] as const;
 router.get('/agent/special/muse/automation-suggestions', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    if (!loadSpecialAgentsConfig().muse.enabled) return res.json({ suggestions: [] });
+    const m = loadSpecialAgentsConfig().muse;
+    if (!m.enabled || !m.automationSuggestions) return res.json({ suggestions: [] });
     res.json({ suggestions: await listActiveSuggestions(req.user!.userId) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'suggestions failed' });

@@ -94,6 +94,7 @@ export interface MuseConfig {
   escalateTo?: string
   /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
   chatStarters?: boolean
+  automationSuggestions?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */

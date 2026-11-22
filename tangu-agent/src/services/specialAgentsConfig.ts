@@ -94,6 +94,9 @@ export interface MuseConfig {
   /** 新对话页的开场建议(10-25 用户选方案 A,docs/ToBeImproved/Muse预制提示词方案_2026-10-25):开 = Muse 看得见 set_chat_starters、
    *  桌面 GET /agent/special/muse/starters 有内容;关 = 工具不给、接口回空。缺省开(跟着 Muse 总开关走)。 */
   chatStarters: boolean;
+  /** 自动化首页的任务建议(11-22 用户选方案 A,docs/ToBeImproved/自动化任务建议方案_2026-11-22):开 = Muse 看得见 set_automation_suggestions、
+   *  GET /agent/special/muse/automation-suggestions 有内容;关 = 工具不给、接口回空、首页只剩模板。缺省开。 */
+  automationSuggestions: boolean;
   /** 收件箱里用户点过「好」、Muse 可以自动标已读的类别(services/inboxCategory.ts)。这是一次总的授权,「询问」档也不再逐封弹审批。 */
   inboxAutoRead: string[];
   /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
@@ -161,6 +164,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     notify: 'immediate',
     escalateTo: '',
     chatStarters: true,
+    automationSuggestions: true,
     inboxAutoRead: [],
     inboxIgnored: [],
     maxDmPerDay: 0,
@@ -227,6 +231,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
       chatStarters: asBool(m.chatStarters, d.muse.chatStarters),
+      automationSuggestions: asBool(m.automationSuggestions, d.muse.automationSuggestions),
       inboxAutoRead: asCategories(m.inboxAutoRead),
       inboxIgnored: asCategories(m.inboxIgnored),
       maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),

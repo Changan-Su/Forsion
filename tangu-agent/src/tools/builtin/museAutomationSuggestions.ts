@@ -1,9 +1,14 @@
 /**
  * set_automation_suggestions —— Muse 设定自动化首页上的任务建议(最多 6 条,整组替换)。实现与规矩见 services/museAutomationSuggestions.ts。
- * 可见性:仅 Muse run(ctx.muse)且本机能跑自动化(hostExec);列入 PLAN_MODE_TOOLS(只是向用户提议,不建规则、不碰用户资产)。
+ * 可见性:仅 Muse run(ctx.muse)、本机能跑自动化(hostExec)且 muse.automationSuggestions 开着;列入 PLAN_MODE_TOOLS(只是向用户提议,不建规则、不碰用户资产)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
+import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 import { MAX_SUGGESTIONS, SUGGESTION_SOURCE_KINDS, setSuggestions, validateSuggestions } from '../../services/museAutomationSuggestions.js';
+
+const suggestionsOn = (): boolean => {
+  try { return loadSpecialAgentsConfig().muse.automationSuggestions; } catch { return true; }
+};
 
 export const museAutomationSuggestionsProvider: ToolProvider = {
   id: 'builtin:set_automation_suggestions',
@@ -11,7 +16,7 @@ export const museAutomationSuggestionsProvider: ToolProvider = {
     {
       name: 'set_automation_suggestions',
       mode: 'both',
-      isEnabledFor: (profile, ctx) => !!(ctx as any).muse && !!profile.capabilities.hostExec,
+      isEnabledFor: (profile, ctx) => !!(ctx as any).muse && !!profile.capabilities.hostExec && suggestionsOn(),
       definition: {
         type: 'function',
         function: {
