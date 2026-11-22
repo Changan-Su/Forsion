@@ -6,7 +6,7 @@ import { create } from 'zustand'
 import { toString } from 'mdast-util-to-string'
 import { decodeString } from 'micromark-util-decode-string'
 import { splitFm } from './unified/fm'
-import type { ReplaceFile, ReplaceMatch } from '@amadeus/lib/noteBatchReplace'
+import type { ReplaceFile, ReplaceMatch, ReplacePlan } from '@amadeus/lib/noteBatchReplace'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { parseMarkdown, remarkCachedParse } from '../components/markdownParse'
 import { rehypeCachedKatex } from '../components/rehypeCachedKatex'
@@ -23,6 +23,27 @@ export interface NoteReplacePreview {
 }
 
 export const useReplacePreview = create<{ current: NoteReplacePreview | null }>(() => ({ current: null }))
+
+type SelectionPlan = Pick<ReplacePlan, 'scope' | 'query' | 'files'>
+export interface PreviousSelection { plan: SelectionPlan; selected: ReadonlySet<string> }
+
+/** A source offset only identifies one occurrence within a particular revision of a note. */
+export function reviewSelection(plan: SelectionPlan, previous: PreviousSelection | null) {
+  const selected = new Set<string>(), needsReview = new Set<string>()
+  const prior = previous?.plan.query === plan.query ? previous : null
+  const previousFiles = new Map(prior?.plan.files.map(file => [file.path, file]))
+  for (const file of plan.files) {
+    const old = previousFiles.get(file.path)
+    if (prior && (prior.plan.scope !== plan.scope || !old || old.source !== file.source || old.fileId !== file.fileId)) {
+      needsReview.add(file.path)
+      continue
+    }
+    for (const match of file.matches) {
+      if (prior ? prior.selected.has(match.id) : !match.quote) selected.add(match.id)
+    }
+  }
+  return { selected, needsReview }
+}
 
 export function noteTitle(path: string): string {
   return (path.split('/').pop() || path).replace(/\.md$/i, '')

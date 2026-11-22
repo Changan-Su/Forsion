@@ -1049,6 +1049,8 @@ export interface AmadeusApi {
   writeDrawing(drawingPath: string, source: string, base?: string): Promise<void | TextWriteResult>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
+  /** Authorized cloud preview snapshots, in groups of up to 24 paths. */
+  readNoteReplaceSources?(paths: string[]): Promise<Array<{ path: string; source: string; fileId: string }>>
   readNoteReplaceSource?(path: string): Promise<{ source: string; fileId?: string } | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。
    *  `create: true` = 新建意图(素文件出生等):云桥据此绕过「本会话见过、现 404 = 别处删了」的重建禁令;

@@ -42,8 +42,12 @@
 .amx-replace-body h2 { font-size: 1.4em; }
 .amx-replace-body h3 { font-size: 1.2em; }
 .amx-replace-mark { scroll-margin-block: 2em; }
-.amx-replace-mark del { color: var(--text-muted); }
-.amx-replace-mark ins { color: var(--accent-ink); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.amx-replace-source-context { margin: 0 0 1em; padding: .5em .75em; border-inline-start: 2px solid var(--accent-ink); }
+.amx-replace-source-context small { color: var(--text-muted); font: var(--ui-font-caption) var(--font-ui); }
+.amx-replace-source-context p { margin: .25em 0 0; }
+.amx-replace-mark del + ins { margin-inline-start: .2em; }
+:is(.amx-replace-mark, .amx-replace-source-context) del { color: var(--text-muted); }
+:is(.amx-replace-mark, .amx-replace-source-context) ins { color: var(--accent-ink); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .mb-shell[data-list-first] .amx-panel--inlist.amx-replace-panel { height: 100%; min-height: 0; overflow: hidden; }
 .mb-shell[data-list-first] .amx-tree:has(.amx-replace-panel) > :is(.pl-chips, .pl-fab) { display: none; }
 .mb-shell[data-list-first] .mb-drawer-body .amx-tree [data-under-dock]:has(.amx-replace-panel) { --under-dock-pad: 4px; }

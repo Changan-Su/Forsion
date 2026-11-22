@@ -48,8 +48,8 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { subscribeVaultEvents } from './vaultEvents'
-import { createPluginFileOps, probeAbsent } from './pluginFileOps'
-import { markPluginCreated } from './pluginCreated'
+import { createPluginFileOps, insideWorkFolder, probeAbsent } from './pluginFileOps'
+import { isPluginCreated, markPluginCreated } from './pluginCreated'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -323,14 +323,37 @@ const defaultWorkFolder = (pluginId: string): string => {
   return `${PLUGINS_ROOT}/${id}`
 }
 
+function configuredWorkFolder(pluginId: string): string | null {
+  let path = ''
+  try { path = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* no custom setting */ }
+  return path && !path.split('/').some(part => !part.trim() || part === '.' || part === '..') ? path : null
+}
+
+/** Use the actual plugin catalog and ownership ledger. Users may keep ordinary notes alongside plugin folders. */
+export function pluginNoteOwnership(root: string): (path: string) => boolean {
+  const plugins = usePluginStore.getState().plugins
+  const folders = new Set<string>()
+  for (const { id, name } of plugins) {
+    const custom = configuredWorkFolder(id)
+    if (custom) folders.add(custom)
+    else {
+      folders.add(defaultWorkFolder(id))
+      folders.add(`${PLUGINS_ROOT}/${sanitizeFolderName(name, id)}`)
+    }
+  }
+  return raw => {
+    const path = raw.replace(/\\/g, '/')
+    for (const folder of folders) if (insideWorkFolder(path, folder)) return true
+    return !!matchFileType(path) || plugins.some(plugin => isPluginCreated(plugin.id, path, root))
+  }
+}
+
 /** 卸载确认框用(10-28 手动卸载规范):这个插件在库里的工作文件夹(相对库根),与 ctx.app.workFolder() 同口径 ——
  *  用户自定义的优先,否则旧的显示名文件夹或按 id 的缺省;库里没有这个文件夹 → null(确认框就不列那一行)。 */
 export function pluginVaultFolder(pluginId: string, name: string): string | null {
-  let v = ''
-  try { v = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* ignore */ }
-  const custom = !!v && !v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
+  const custom = configuredWorkFolder(pluginId)
   const { folders } = usePageStore.getState()
-  return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
+  return (custom ? [custom] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
 }
 
 /** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*` + 同步状态与开关)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
@@ -663,11 +686,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // New defaults use stable ASCII identity; existing display-name folders stay readable
     // until the plugin opts into schema-aware migration. Never persist this as a user override.
     workFolder: (options) => {
-      let v = ''
-      try { v = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* ignore */ }
-      v = v.trim().replace(/^\/+|\/+$/g, '')
-      const bad = !v || v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
-      if (!bad) return v
+      const custom = configuredWorkFolder(pluginId)
+      if (custom) return custom
       const legacy = `${PLUGINS_ROOT}/${sanitizeFolderName(getName(), pluginId)}`
       const canonical = defaultWorkFolder(pluginId)
       const { vaultRoot, folders } = usePageStore.getState()

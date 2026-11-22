@@ -2008,10 +2008,10 @@ const vaultSlice = (s: PageState): VaultSlice =>
 /** 挪动 / 改名在途(holdNotePath 按住到交接落定)的次数。 */
 let movesInFlight = 0
 
-export async function flushNoteForReplace(path: string): Promise<void> {
+export async function flushNoteForReplace(path?: string): Promise<void> {
   if (movesInFlight) throw new Error('A note is being moved')
-  await Promise.all([flushUnifiedPath(path, true), ...[...stores.values()]
-    .map((store) => store.getState()).filter((state) => state.activePage === path)
+  await Promise.all([path ? flushUnifiedPath(path, true) : flushUnifiedScopes(true), ...[...stores.values()]
+    .map((store) => store.getState()).filter((state) => !path || state.activePage === path)
     .map((state) => state.flushSave(true))])
 }
 
@@ -2032,7 +2032,11 @@ export async function holdLegacyForReplace(path: string) {
     dirty: () => open.some(s => s.getState().activePage === path && s.getState().hasPendingSave()),
     release: async (wrote: boolean): Promise<void> => {
       try {
-        for (const release of releases) await release?.(wrote ? path : null)
+        let failure: unknown
+        for (const release of releases) {
+          try { await release?.(wrote ? path : null) } catch (error) { failure = error }
+        }
+        if (failure) throw failure
         if (wrote) {
           for (const s of stores.values()) {
             if (!open.includes(s) && s.getState().activePage === path) void s.getState().reconcileExternal(path)

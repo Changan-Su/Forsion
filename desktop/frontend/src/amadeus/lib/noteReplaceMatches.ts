@@ -99,6 +99,13 @@ export function spliceNoteText(source: string, offsets: number[], query: string,
 // Compare the resulting Markdown tree, including links, reference IDs and formatting, against the intended
 // literal text edit. For example, replacing “old” by “1” in “old. Example” must not create a numbered list.
 function treeSignature(source: string, marker = '', replacement = ''): string {
+  // Marks may split an editor textblock into several leaves. The editor's wiki-link and
+  // callout rules see their concatenated text, including text decoded from entities.
+  function blockText(node: Nodes): string {
+    if (node.type === 'text') return node.value
+    if ('children' in node) return node.children.map(blockText).join('')
+    return '\uFFFC' // inline atom
+  }
   function normalize(node: Nodes): unknown {
     const { position: _position, ...rest } = node
     if (node.type === 'text') {
@@ -108,6 +115,9 @@ function treeSignature(source: string, marker = '', replacement = ''): string {
     if ('children' in node) {
       const children = node.children.map(normalize).filter(x => x !== null)
       if (node.type === 'paragraph' && !children.length) return null
+      if (node.type === 'paragraph' || node.type === 'heading' || node.type === 'tableCell') {
+        return { ...rest, children, tokens: blockText(node).match(noteTokens) }
+      }
       return { ...rest, children }
     }
     return rest
@@ -122,9 +132,10 @@ export function prepareLiteralReplacement(source: string, offsets: number[], que
   // All three candidate encodings represent exactly the user's visible text. Prefer leaving source readable.
   const escaped = replacement.replace(/[!-/:-@\[-`{-~]/g, '\\$&')
   const entities = Array.from(replacement, c => '&#' + c.codePointAt(0) + ';').join('')
+  const originalFm = splitFm(source).fmText
   for (const encoded of new Set([replacement, escaped, entities])) {
     const after = spliceNoteText(source, offsets, query, encoded, false)
-    if (splitFm(after).fmText === splitFm(source).fmText && treeSignature(after) === expected) return { after, encoded: encoded === replacement ? undefined : encoded }
+    if (splitFm(after).fmText === originalFm && treeSignature(after) === expected) return { after, encoded: encoded === replacement ? undefined : encoded }
   }
   // E.g. deleting only “old” in “old# Title” would reinterpret untouched bytes as a heading.
   return null

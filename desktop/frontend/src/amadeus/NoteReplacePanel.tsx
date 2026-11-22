@@ -8,7 +8,7 @@ import {
   type ReplaceBatch, type ReplaceMatch, type ReplacePlan,
 } from '@amadeus/lib/noteBatchReplace'
 import { registerMessages, useI18n } from '../i18n'
-import { matchContext, noteTitle, NoteReplaceBody, REVIEW_VIEW, useReplacePreview } from './NoteReplacePreview'
+import { matchContext, noteTitle, NoteReplaceBody, REVIEW_VIEW, reviewSelection, useReplacePreview, type PreviousSelection } from './NoteReplacePreview'
 import './noteReplace.css'
 
 registerMessages({
@@ -26,6 +26,7 @@ registerMessages({
   'noteReplace.quoteKeep': { zh: '引用原文 · 保留', en: 'Quotation · keep original' },
   'noteReplace.quoteReplace': { zh: '引用原文 · 将替换', en: 'Quotation · replace' },
   'noteReplace.selectMatch': { zh: '选择这处匹配：{text}', en: 'Select match: {text}' },
+  'noteReplace.reselect': { zh: '请重新勾选这篇笔记中的匹配。', en: 'Review and select matches in this note again.' },
   'noteReplace.more': { zh: '显示更多匹配（余 {n} 处）', en: 'Show more matches ({n} remaining)' },
   'noteReplace.clear': { zh: '清除勾选', en: 'Clear selection' },
   'noteReplace.selectText': { zh: '勾选非引文', en: 'Select non-quotations' },
@@ -64,6 +65,7 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
   const [replacement, setReplacement] = useState('')
   const [plan, setPlan] = useState<ReplacePlan | null>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  const [needsReview, setNeedsReview] = useState<ReadonlySet<string>>(new Set())
   const [active, setActive] = useState('')
   const [phonePreview, setPhonePreview] = useState(false)
   const [composing, setComposing] = useState(false)
@@ -79,7 +81,7 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
   const mounted = useRef(false)
   const input = useRef<HTMLInputElement>(null)
   const panel = useRef<HTMLDivElement>(null)
-  const selectionBeforeRefresh = useRef<{ query: string; selected: ReadonlySet<string> } | null>(null)
+  const selectionBeforeRefresh = useRef<PreviousSelection | null>(null)
   const mobile = inline || narrow
   const listShown = useWorkspace(s => s.leftVisible)
   useEffect(() => {
@@ -89,6 +91,9 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
     return () => media.removeEventListener('change', change)
   }, [])
   const current = plan?.query === query && !composing && !showBatch ? plan : null
+  useEffect(() => {
+    if (current) selectionBeforeRefresh.current = { plan: current, selected }
+  }, [current, selected])
   const allHits = useMemo(() => current?.files.flatMap(file => file.matches) ?? [], [current])
   const visibleGroups = useMemo(() => {
     const groups = []
@@ -105,7 +110,14 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
   const view = useMemo(() => file ? { root, file, selected, replacement, activeId: active } : null,
     [root, file, selected, replacement, active])
   const closePreview = () => useWorkspace.getState().closeViewsOfType(REVIEW_VIEW)
-  const openPreview = () => useWorkspace.getState().openView(REVIEW_VIEW, {}, 'main', { newTab: true })
+  const previewLeaf = useRef('')
+  const openPreview = () => {
+    const ws = useWorkspace.getState()
+    const existing = ws.leafById(previewLeaf.current)
+    const tab = existing?.type === REVIEW_VIEW ? existing : ws.mainTabs.find(tab => tab.type === REVIEW_VIEW)
+    if (tab) ws.activateLeaf(tab.id)
+    else previewLeaf.current = ws.openView(REVIEW_VIEW, {}, 'main', { newTab: true })?.id ?? ''
+  }
 
   useEffect(() => {
     mounted.current = true
@@ -133,9 +145,10 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
     const timer = setTimeout(() => {
       void previewNoteReplace(root, search, controller.signal).then(result => {
         if (controller.signal.aborted) return
-        const old = selectionBeforeRefresh.current
+        const restored = reviewSelection(result, selectionBeforeRefresh.current)
         const hits = result.files.flatMap(file => file.matches)
-        setSelected(new Set(hits.filter(hit => old?.query === search ? old.selected.has(hit.id) : !hit.quote).map(hit => hit.id)))
+        setSelected(restored.selected)
+        setNeedsReview(restored.needsReview)
         setActive(hits[0]?.id ?? '')
         setVisibleLimit(120)
         setPlan(result)
@@ -163,6 +176,7 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
   }
 
   function reviewAgain() {
+    setBatch(loadNoteReplaceBatch(root))
     setShowBatch(false)
     if (remote) setRequested(query)
     setError('')
@@ -178,7 +192,6 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
     editing.current = true
     setBusy(true)
     setError('')
-    if (action === 'apply') selectionBeforeRefresh.current = { query, selected }
     try {
       const result = action === 'apply' ? await applyNoteReplace(current!, replacement, selected)
         : action === 'undo' ? await undoNoteReplace(batch!) : await resumeNoteReplace(batch!)
@@ -267,6 +280,7 @@ export function NoteReplacePanel({ root, initialQuery, inline, onClose, innerBac
         </button>}
         {visibleGroups.map(({ file, hits }) => <section className="amx-taghit-group amx-replace-group" key={file.path}>
           <div className="amx-replace-file"><b title={file.path}>{file.path.includes('/') ? file.path : noteTitle(file.path)}</b><small>{file.matches.filter(hit => selected.has(hit.id)).length} / {file.matches.length}</small></div>
+          {needsReview.has(file.path) && <small className="amx-replace-hint">{t('noteReplace.reselect')}</small>}
           {hits.map(hit => {
             const [before, word, after] = matchContext(file, hit)
             return <div key={hit.id} className="amx-replace-row" data-active={active === hit.id || undefined}>

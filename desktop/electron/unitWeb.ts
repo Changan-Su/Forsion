@@ -951,10 +951,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         const origin = String(body.client || '').slice(0, 64) || null
         try {
           const result = await vault.call(ch, decodeRpcArgs(Array.isArray(body.args) ? body.args : []), origin)
-          const payload = ch === IPC.restoreVault && result && typeof result === 'object'
-            ? { ...result, strictExistingWrites: true }
-            : result
-          json(res, 200, { ok: true, result: encodeRpcResult(payload) ?? null })
+          json(res, 200, { ok: true, result: encodeRpcResult(result) ?? null })
         } catch (e) {
           json(res, 200, { ok: false, error: String((e as Error)?.message || e) })
         }

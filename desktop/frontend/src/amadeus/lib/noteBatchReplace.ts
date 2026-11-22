@@ -1,7 +1,8 @@
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
-import { flushAllScopes, flushNoteForReplace, holdLegacyForReplace, usePageStore } from '../store/pageStore'
+import { pluginNoteOwnership } from '../plugins/pluginStore'
+import { flushNoteForReplace, holdLegacyForReplace, usePageStore } from '../store/pageStore'
 import { announceUnifiedWrite, hasDirtyUnifiedPath } from '../unified/lifecycle'
 import { readNoteLocked } from '../unified/viewMemory'
 import { readDraft } from '../unified/writeSafety'
@@ -61,26 +62,31 @@ export async function previewNoteReplace(root: string, query: string, signal?: A
   if (!query.trim() || /[\r\n]/.test(query)) return plan
 
   // Flush before asking the index, so the last uncommitted keystrokes can be found too.
-  await flushAllScopes(true)
+  await flushNoteForReplace()
   checkScope(root, scope, signal)
   const paths = amadeus.noteReplaceCandidates ? await amadeus.noteReplaceCandidates(query) : await amadeus.listPages()
-  const candidates = Array.from(new Set(paths)).filter(path => eligible(root, path)).sort()
-  // Cloud hosts without an exhaustive local index fetch authoritative sources with bounded parallelism.
-  for (let i = 0; i < candidates.length; i += 6) {
+  const managed = pluginNoteOwnership(root)
+  const candidates = Array.from(new Set(paths)).filter(path => eligible(root, path) && !managed(path)).sort()
+  const groupSize = amadeus.readNoteReplaceSources ? 24 : 6
+  for (let i = 0; i < candidates.length; i += groupSize) {
     checkScope(root, scope, signal)
-    const rows = await Promise.all(candidates.slice(i, i + 6).map(async path => {
-      try {
-        const snapshot = await readSource(path)
-        if (snapshot == null) return path
-        const { source, fileId } = snapshot
-        if (!source.includes(query)) return null
-        const matches = noteReplaceMatches(path, source, query)
-        return matches.length ? { path, source, fileId, matches } : null
-      } catch { return path }
-    }))
-    for (const file of rows) {
-      if (typeof file === 'string') plan.unavailable.push(file)
-      else if (file) plan.files.push(file)
+    const group = candidates.slice(i, i + groupSize)
+    let snapshots: Map<string, { source: string; fileId?: string } | null>
+    if (amadeus.readNoteReplaceSources) {
+      const rows = await amadeus.readNoteReplaceSources(group)
+      snapshots = new Map(rows.map(row => [row.path, row]))
+    } else {
+      snapshots = new Map(await Promise.all(group.map(async path =>
+        [path, await readSource(path).catch(() => null)] as const)))
+    }
+    checkScope(root, scope, signal)
+    for (const path of group) {
+      const snapshot = snapshots.get(path)
+      if (!snapshot) { plan.unavailable.push(path); continue }
+      const { source, fileId } = snapshot
+      if (!source.includes(query)) continue
+      const matches = noteReplaceMatches(path, source, query)
+      if (matches.length) plan.files.push({ path, source, fileId, matches })
     }
   }
   checkScope(root, scope, signal)
@@ -93,14 +99,51 @@ export async function previewNoteReplace(root: string, query: string, signal?: A
 function storage(): Storage {
   return navigator.locks ? localStorage : sessionStorage
 }
-function journalFor(scope: string): Journal | null {
-  const raw = storage().getItem(scope)
-  return raw ? JSON.parse(raw) as Journal : null
+// Alternate manifest slots so a fully skipped attempt cannot discard the last undoable batch.
+type Slot = 0 | 1
+const slotKey = (scope: string, slot: Slot): string => slot === 0 ? scope : scope + ':alternate'
+const other = (slot: Slot): Slot => slot === 0 ? 1 : 0
+const headKey = (scope: string): string => scope + ':head'
+function headSlot(scope: string): Slot { return storage().getItem(headKey(scope)) === '1' ? 1 : 0 }
+function journalFor(scope: string, slot: Slot): Journal | null {
+  const raw = storage().getItem(slotKey(scope, slot))
+  if (raw == null) return null
+  const j: Journal = JSON.parse(raw)
+  if (j?.scope !== scope || typeof j.root !== 'string' || typeof j.id !== 'string' ||
+    typeof j.query !== 'string' || !j.query || typeof j.replacement !== 'string' ||
+    !Array.isArray(j.files) || !j.files.length || !j.files.every(f =>
+      typeof f?.path === 'string' && typeof f.before === 'string' && typeof f.after === 'string' &&
+      Array.isArray(f.offsets) && f.offsets.length && f.offsets.every((at, i) =>
+        Number.isSafeInteger(at) && at >= 0 && (!i || at >= f.offsets[i - 1] + j.query.length)))) {
+    throw new Error('Invalid replacement journal')
+  }
+  return j
 }
 const progressKey = (j: Journal, index: number): string => j.scope + ':' + j.id + ':' + index
+const stages = new Set<Progress['stage']>(['pending', 'writing', 'applied', 'undoing', 'undone', 'changed', 'skipped', 'unsafe'])
 function progressOf(j: Journal, index: number): Progress {
   const raw = storage().getItem(progressKey(j, index))
-  return raw ? JSON.parse(raw) as Progress : { stage: 'pending' }
+  if (raw == null) return { stage: 'pending' }
+  const progress: Progress = JSON.parse(raw)
+  if (!stages.has(progress?.stage)) throw new Error('Invalid replacement progress')
+  return progress
+}
+function retained(scope: string): { slot: Slot; journal: Journal | null } {
+  const slot = headSlot(scope)
+  const journal = journalFor(scope, slot)
+  if (journal && journal.files.every((f, i) => {
+    const p = progressOf(journal, i)
+    return f.unsafe || p.stage === 'changed' || p.stage === 'skipped' || (p.stage === 'pending' && p.failed)
+  })) {
+    const prior = journalFor(scope, other(slot))
+    if (prior?.files.some((_, i) => ['applied','writing','undoing'].includes(progressOf(prior, i).stage))) {
+      return { slot: other(slot), journal: prior }
+    }
+  }
+  return { slot, journal }
+}
+function forgetProgress(j: Journal): void {
+  for (let i = -1; i < j.files.length; i++) storage().removeItem(progressKey(j, i))
 }
 function checkpoint(j: Journal, index: number, stage: Progress['stage'], failed = false): void {
   storage().setItem(progressKey(j, index), JSON.stringify({ stage, failed }))
@@ -117,7 +160,7 @@ function present(j: Journal): ReplaceBatch {
 }
 export function loadNoteReplaceBatch(root: string): ReplaceBatch | null {
   try {
-    const journal = journalFor(scopeOf(root))
+    const { journal } = retained(scopeOf(root))
     return journal ? present(journal) : null
   } catch { return null } // Storage may be denied or corrupt. Writes still require a working journal.
 }
@@ -135,8 +178,8 @@ async function exclusively<T>(scope: string, task: () => Promise<T>): Promise<T>
 export async function applyNoteReplace(plan: ReplacePlan, replacement: string, selected: ReadonlySet<string>): Promise<ReplaceBatch> {
   return exclusively(plan.scope, async () => {
     checkScope(plan.root, plan.scope)
-    const previous = journalFor(plan.scope)
-    if (previous?.id === plan.id) return present(previous) // repeated submit of the same frozen preview
+    const head = journalFor(plan.scope, headSlot(plan.scope))
+    if (head?.id === plan.id) return present(head) // repeated submit of the same frozen preview
     if (plan.query === replacement || /[\r\n]/.test(replacement)) throw new Error('Choose a different single-line replacement')
     const files: JournalFile[] = []
     for (const file of plan.files) {
@@ -149,8 +192,12 @@ export async function applyNoteReplace(plan: ReplacePlan, replacement: string, s
     if (!files.length) throw new Error('No matches selected')
     const journal: Journal = { id: plan.id, root: plan.root, scope: plan.scope, query: plan.query, replacement, files }
     // Persist the plan before the first write. A quota or storage failure leaves the notes untouched.
-    storage().setItem(plan.scope, JSON.stringify(journal))
-    if (previous) for (let i = -1; i < previous.files.length; i++) storage().removeItem(progressKey(previous, i))
+    const previous = retained(plan.scope)
+    const slot = previous.journal ? other(previous.slot) : previous.slot
+    const superseded = journalFor(plan.scope, slot)
+    storage().setItem(slotKey(plan.scope, slot), JSON.stringify(journal))
+    storage().setItem(headKey(plan.scope), String(slot))
+    if (superseded) forgetProgress(superseded)
     return execute(journal)
   })
 }
@@ -179,11 +226,12 @@ async function execute(j: Journal): Promise<ReplaceBatch> {
       const fingerprint = current == null ? null : textFingerprint(current)
       const expected = reverse ? file.after : file.before
       const target = reverse ? file.before : file.after
-      if (current == null || file.fileId !== snapshot?.fileId || held.dirty() || hasDirtyUnifiedPath(file.path) || readDraft(j.root, file.path, undefined, () => false) || !eligible(j.root, file.path)) {
+      if (current == null || file.fileId !== snapshot?.fileId || held.dirty() || hasDirtyUnifiedPath(file.path) || readDraft(j.root, file.path, undefined, () => false) || !eligible(j.root, file.path) || pluginNoteOwnership(j.root)(file.path)) {
         nextStage = 'changed'
       } else if (fingerprint === target && (stage === 'writing' || stage === 'undoing')) {
         // The renderer died or lost the acknowledgement between the CAS and its checkpoint.
         nextStage = reverse ? (stage === 'writing' ? 'skipped' : 'undone') : 'applied'
+        wrote = nextStage !== 'skipped'
       } else if (fingerprint !== expected) {
         nextStage = 'changed'
       } else {
@@ -206,15 +254,31 @@ async function execute(j: Journal): Promise<ReplaceBatch> {
     }
     checkpoint(j, i, nextStage)
   }
-  return present(j)
+  checkScope(j.root, j.scope)
+  const result = present(j)
+  if (result.files.some(file => file.status === 'applied' || file.status === 'undone')) {
+    const obsoleteSlot = other(headSlot(j.scope))
+    const obsolete = journalFor(j.scope, obsoleteSlot)
+    if (obsolete) {
+      storage().removeItem(slotKey(j.scope, obsoleteSlot))
+      forgetProgress(obsolete)
+    }
+  }
+  return result
 }
 
 function continueBatch(batch: ReplaceBatch, undo: boolean): Promise<ReplaceBatch> {
   const scope = scopeOf(batch.root)
   return exclusively(scope, async () => {
     checkScope(batch.root, scope)
-    const journal = journalFor(scope)
-    if (!journal || journal.id !== batch.id) throw new Error('The latest replacement batch changed')
+    const slot = headSlot(scope)
+    let journal = journalFor(scope, slot)
+    if (journal?.id !== batch.id) {
+      const previous = retained(scope)
+      if (previous.journal?.id !== batch.id) throw new Error('The latest replacement batch changed')
+      journal = previous.journal
+      storage().setItem(headKey(scope), String(previous.slot))
+    }
     if (undo) storage().setItem(progressKey(journal, -1), 'undo')
     return execute(journal)
   })

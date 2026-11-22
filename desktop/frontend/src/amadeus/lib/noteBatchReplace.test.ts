@@ -5,7 +5,7 @@ import { prepareLiteralReplacement, noteReplaceMatches } from './noteReplaceMatc
 
 const world = vi.hoisted(() => ({
   root: '/v', ids: new Map<string, string>(), disk: new Map<string, string>(), pending: new Map<string, string>(),
-  locked: new Set<string>(), notify: vi.fn(), beforeWrite: vi.fn<(path: string) => void>(),
+  managed: new Set<string>(), locked: new Set<string>(), notify: vi.fn(), beforeWrite: vi.fn<(path: string) => void>(),
   afterWrite: vi.fn<(path: string) => void>(),
 }))
 vi.mock('../api', () => ({ amadeus: {
@@ -23,10 +23,12 @@ vi.mock('../api', () => ({ amadeus: {
     return { ok: true }
   },
 } }))
+vi.mock('../plugins/pluginStore', () => ({pluginNoteOwnership: () => (path: string) => world.managed.has(path)}))
 vi.mock('../store/pageStore', () => ({
   usePageStore: { getState: () => ({ vaultRoot: world.root }) },
-  flushAllScopes: async () => { for (const [p, s] of world.pending) world.disk.set(p, s); world.pending.clear() },
-  flushNoteForReplace: async (p: string) => { if (world.pending.has(p)) world.disk.set(p, world.pending.get(p)!); world.pending.delete(p) },
+  flushNoteForReplace: async (path?: string) => {
+    for (const [p, text] of world.pending) if (!path || path === p) { world.disk.set(p, text); world.pending.delete(p) }
+  },
   holdLegacyForReplace: async () => ({ dirty: () => false, release: async () => {} }),
 }))
 vi.mock('../unified/lifecycle', () => ({ announceUnifiedWrite: world.notify, hasDirtyUnifiedPath: (p: string) => world.pending.has(p) }))
@@ -36,7 +38,7 @@ import { previewNoteReplace, applyNoteReplace, resumeNoteReplace, undoNoteReplac
 
 beforeEach(() => {
   world.root = '/v'
-  world.ids.clear(); world.disk.clear(); world.pending.clear(); world.locked.clear()
+  world.managed.clear(); world.ids.clear(); world.disk.clear(); world.pending.clear(); world.locked.clear()
   world.beforeWrite.mockReset(); world.afterWrite.mockReset(); world.notify.mockClear()
   setContentStorageScope('account-A')
   const map = new Map<string,string>()
@@ -71,7 +73,9 @@ describe('literal Markdown replacement', () => {
     for (const replacement of ['[[notes]]','![[note.png]]','^anchor','[!tip|blue]', '$x$']) {
       expect(prepareLiteralReplacement('old', [0], 'old', replacement)).toBeNull()
     }
+    expect(noteReplaceMatches('a.md','> [!tip|🚀 blue wide] prose', 'wide')).toEqual([])
     expect(noteReplaceMatches('a.md','> [!tip|blue] prose', 'blue')).toEqual([])
+    expect(prepareLiteralReplacement('Visible old**Missing**]] tail', [8], 'old', '[[')).toBeNull()
     expect(prepareLiteralReplacement('old is normal', [0], 'old', '$20')?.after).toBe('$20 is normal')
   })
   it('skips reserved paths, plugin metadata and newer formats but supports legacy prose', () => {
@@ -145,6 +149,36 @@ describe('guarded note replacement and recovery', () => {
     expect((await applyNoteReplace(p, 'new', selected(p))).files[0].status).toBe('changed')
     expect(world.beforeWrite).not.toHaveBeenCalled()
   })
+  it('retains the previous undo after fully conflicting and fully unsafe attempts, including reloads', async () => {
+    world.disk.set('a.md', 'original')
+    const first = await previewNoteReplace('/v', 'original')
+    await applyNoteReplace(first, 'modified', selected(first))
+    world.disk.set('b.md', 'old# title')
+    let next = await previewNoteReplace('/v', 'old')
+    expect((await applyNoteReplace(next, '', selected(next))).files[0].status).toBe('unsafe')
+    expect(loadNoteReplaceBatch('/v')?.id).toBe(first.id)
+    next = await previewNoteReplace('/v', 'old')
+    world.disk.set('b.md', 'changed old# title')
+    expect((await applyNoteReplace(next, 'new', selected(next))).files[0].status).toBe('changed')
+    expect(loadNoteReplaceBatch('/v')?.id).toBe(first.id)
+    expect((await undoNoteReplace(loadNoteReplaceBatch('/v')!)).files[0].status).toBe('undone')
+    expect(world.disk.get('a.md')).toBe('original')
+    expect(world.disk.get('b.md')).toBe('changed old# title')
+  })
+  it('skips files claimed by plugins since preview and rejects malformed persistent manifests', async () => {
+    world.disk.set('a.md', 'old')
+    world.disk.set('plugin.md', 'old')
+    world.managed.add('plugin.md')
+    const p = await previewNoteReplace('/v', 'old')
+    expect(p.files.map(f => f.path)).toEqual(['a.md'])
+    world.managed.add('a.md')
+    expect((await applyNoteReplace(p, 'new', selected(p))).files[0].status).toBe('changed')
+    const fresh = await previewNoteReplace('/v', 'old')
+    sessionStorage.setItem(fresh.scope, JSON.stringify({files:[]}))
+    expect(loadNoteReplaceBatch('/v')).toBeNull()
+    await expect(applyNoteReplace(fresh, 'x', selected(fresh))).rejects.toThrow('Invalid replacement journal')
+    expect(world.beforeWrite).not.toHaveBeenCalled()
+  })
   it('restores every byte after a literal replacement containing Markdown punctuation', async () => {
     world.disk.set('a.md', '[old](original) old')
     const p = await previewNoteReplace('/v', 'old')
@@ -152,6 +186,24 @@ describe('guarded note replacement and recovery', () => {
     expect(batch.files[0].status).toBe('applied')
     expect((await undoNoteReplace(batch)).files[0].status).toBe('undone')
     expect(world.disk.get('a.md')).toBe('[old](original) old')
+  })
+  it('previews 220 cloud notes in ten bounded requests without individual source reads', async () => {
+    const { amadeus } = await import('../api')
+    for (let i = 0; i < 220; i++) world.disk.set('cloud-' + i + '.md', 'old')
+    const groups = vi.fn(async (paths: string[]) => paths.map(path => ({ path, source: 'old', fileId: path })))
+    amadeus.readNoteReplaceSources = groups
+    const individual = vi.spyOn(amadeus, 'readNoteReplaceSource')
+    try {
+      const plan = await previewNoteReplace('/v', 'old')
+      expect(plan.files).toHaveLength(220)
+      expect(plan.unavailable).toEqual([])
+      expect(groups).toHaveBeenCalledTimes(10)
+      expect(groups.mock.calls.every(([paths]) => paths.length <= 24)).toBe(true)
+      expect(individual).not.toHaveBeenCalled()
+    } finally {
+      delete amadeus.readNoteReplaceSources
+      individual.mockRestore()
+    }
   })
   it('searches beyond fifty paths, aborts before reading, and refuses to commit without a saved journal', async () => {
     for (let i=0;i<64;i++) world.disk.set(`p${i}.md`,'tag:#test')

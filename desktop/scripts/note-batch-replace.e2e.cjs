@@ -12,8 +12,16 @@ const setup = '仪器设置.md'
 const analysis = '误差分析.md'
 const manual = '仪器说明摘录.md'
 const writing = '光谱复测记录.md'
+const observations = [
+  '遮住入射光，记录暗计数。这一组用同一积分时间再测一次。',
+  '把光纤重新固定在夹具里，核对狭缝宽度后读出峰位。',
+  '光源稳定后扫描两侧谱线，分别记录升程和回程的读数。',
+  '对照氖灯参考谱线，复核中心波长和两次读数的偏差。',
+  '交换左右读数的次序，检查不确定度是否随扫描方向变化。',
+  '保留原始计数，在副表里扣除背景；记录室温与光源电流。',
+]
 const originals = {
-  [writing]: Array.from({ length: 35 }, (_, i) => '第 ' + (i + 1) + ' 组。保持积分时间不变，重新固定光纤，记录峰位与不确定度。').join('\n\n') + '\n',
+  [writing]: Array.from({ length: 35 }, (_, i) => '第 ' + (i + 1) + ' 组。' + observations[i % observations.length]).join('\n\n') + '\n',
   [setup]: '开机后进行**零点校准**。\n\n第二次零点校准作对照。\n',
   [analysis]: '比较零点校准前后的偏差。\n\n零点校准的不确定度单列。\n',
   [manual]: '仪器说明书，第 14 页。\n\n> 打开光源前，请先完成零点校准。\n\n`零点校准`\n',
@@ -104,11 +112,13 @@ async function run() {
     assert.equal(read(setup), originals[setup])
     assert.equal(read(analysis), afterEdit)
     assert.equal(read(manual), originals[manual])
+    if (await panel.isVisible()) await win.keyboard.press(mod + '+Shift+f')
     const writer = await openNote(win, writing)
     await writer.locator('p').filter({ hasText: '第 18 组' }).click()
     await win.locator('.amx-toolbar:visible .amx-more-btn').click()
-    await win.locator('[data-pagestyle="centerLine"]:visible').click()
-    await win.locator('.amx-toolbar:visible .amx-more-btn').click()
+    const centerOption = win.locator('[data-pagestyle="centerLine"]:visible')
+    await centerOption.click()
+    if (await centerOption.isVisible()) await win.keyboard.press('Escape')
     await writer.locator('p').filter({ hasText: '第 18 组' }).click()
     await win.keyboard.insertText('复核')
     await until(() => writer.evaluate(body => {

@@ -1188,10 +1188,16 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     onPathGone: (cb) => { pathGoneCbs.add(cb); return () => { pathGoneCbs.delete(cb) } },
 
     // ---- 派生索引(服务端计算) ------------------------------------------------
+    readNoteReplaceSources: async (paths) => {
+      const root = await ensureVault()
+      const result = await patient(() => http.post<{ files: Array<{ path: string; source: string; fileId: string }> }>(
+        `/amadeus/vaults/${encodeURIComponent(root)}/replace-sources`, { paths }))
+      return result.files
+    },
     readNoteReplaceSource: async (path) => {
       await ensureVault()
       try {
-        const file = await getFile(path)
+        const file = await patient(() => getFile(path))
         return { source: file.content, fileId: file.id }
       } catch (error) {
         if (is404(error)) return null
