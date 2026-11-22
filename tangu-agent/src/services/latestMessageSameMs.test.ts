@@ -154,6 +154,14 @@ describe('chat history windows', () => {
     await msg('steer', 'S', 'user', 'wait', TS + 2);
     expect((await chatHistoryPage('S', 1, { beforeId: 'a' })).failed).toEqual([]);
   });
+  it('finds older task cards within the original 200-row range', async () => {
+    const { chatCardRows } = await import('./chatHistoryPage.js');
+    await session('S');
+    for (let i = 0; i < 210; i++) {
+      await msg('m' + i, 'S', 'model', [9, 10, 186].includes(i) ? 'forsion-task' : 'text', TS);
+    }
+    expect((await chatCardRows('S', 24)).map(r => r.id)).toEqual(['m10']);
+  });
   it('opens the tail, pages in both directions and anchors inside same-millisecond siblings', async () => {
     const { chatHistoryPage } = await import('./chatHistoryPage.js');
     await session('S');

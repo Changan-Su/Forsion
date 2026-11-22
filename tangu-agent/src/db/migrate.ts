@@ -411,7 +411,9 @@ export async function runMigration(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
 
-  await query('CREATE INDEX IF NOT EXISTS idx_chat_messages_time ON chat_messages(session_id, COALESCE(timestamp, 0))');
+  // A SQLite secondary index already includes rowid as its final tie-breaker.
+  const timeIndex = getDbType() === 'sqlite' ? 'COALESCE(timestamp, 0)' : 'COALESCE(timestamp, 0), id';
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_time ON chat_messages(session_id, ${timeIndex})`);
   if (getDbType() === 'sqlite') {
     // PG already exposes the row version through xmin. SQLite timestamps have second
     // precision, and multiple processes can edit the same row in that second.

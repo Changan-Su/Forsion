@@ -1,6 +1,6 @@
 // Read a bounded transcript window in the same order in both directions. An anchor
 // belongs to this session, including when two sessions contain the same timestamp.
-import { getDbType, messageTimeOrder, query } from '../core/db.js';
+import { getDbType, query } from '../core/db.js';
 import { failedRunsFor } from './failedRuns.js';
 
 const fields = 'id, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, timestamp, model_id, is_error';
@@ -82,9 +82,10 @@ export async function chatHistoryPage(sid: string, limit: number, options: PageO
 // Pending task/creation/collaboration cards used to derive from the latest 200
 // rows. Read just their candidate messages, independently of the reading window.
 export function chatCardRows(sid: string, tailLimit: number) {
+  const tie = getDbType() === 'sqlite' ? 'rowid' : 'id';
   return query<any[]>(`SELECT ${fields} FROM chat_messages WHERE session_id = ? AND id IN (
-    SELECT id FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('DESC')} LIMIT ${Math.max(0, 200 - tailLimit)} OFFSET ${tailLimit})
+    SELECT id FROM chat_messages WHERE session_id = ? ORDER BY COALESCE(timestamp, 0) DESC, ${tie} DESC LIMIT ${Math.max(0, 200 - tailLimit)} OFFSET ${tailLimit})
     AND role IN ('model','assistant') AND
     (content LIKE '%forsion-task%' OR content LIKE '%forsion-creation%' OR CAST(tool_calls AS TEXT) LIKE '%manage_human%')
-    ORDER BY ${messageTimeOrder('ASC')}`, [sid, sid]);
+    ORDER BY COALESCE(timestamp, 0), ${tie}`, [sid, sid]);
 }
