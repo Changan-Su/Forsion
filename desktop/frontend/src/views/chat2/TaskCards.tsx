@@ -3,12 +3,12 @@
  *  任务书默认折叠但**必须可展开**:点下去发出的是任务书而不是标题,不能让用户看不见自己在同意什么。 */
 import { useEffect, useState } from 'react'
 import { create } from 'zustand'
-import { ArrowDown, Check, ClipboardList, ChevronDown, ChevronRight, Clock, MessageSquarePlus, Play, Sparkles, X } from 'lucide-react'
+import { Activity, ArrowDown, Calendar, Check, ClipboardList, ChevronDown, ChevronRight, Clock, FileText, Globe, MessageCircle, MessageSquarePlus, Play, Quote, Sparkles, X, Zap } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { getMuseTodo } from '../../services/backendService'
 import { homeTarget } from '../../services/engine/targets'
-import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { MuseTodoEvidence, MuseTodoEvidenceKind, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { splitSuggestions, type TaskCard } from './suggest'
 import { ChildSessionsBlock, ModelChip } from './ChildSessions'
 import { markTaskHandled, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
@@ -32,6 +32,7 @@ registerMessages({
   'chat.task.todoHandled': { zh: '已处理', en: 'Handled' },
   'chat.task.todoGone': { zh: '已不存在', en: 'No longer exists' },
   'chat.task.todoReadFail': { zh: '状态读取失败', en: 'Couldn’t load its status' },
+  'chat.task.evidence': { zh: '依据 · {n} 条', en: 'Evidence · {n}' },
 })
 
 export { TASK_CARD_TTL_MS, type TaskLanding }
@@ -73,12 +74,18 @@ function useWithdrawn(sessionId?: string): Map<string, string> {
  *  卡片堆跟着进出(重试、换到这张卡时的重读、在别处处理掉)。按钮给不给仍按各自那一代的结果(见下),不读这份。 */
 export const useMuseTodoSeen = create<Record<string, string>>(() => ({}))
 const todoInflight = new Map<string, Promise<string>>()
-/** 读一条待办的状态并记进 useMuseTodoSeen;同一 id 并发只发一次。 */
+/** Muse 待办的依据(借鉴 dsh-superagent 第 2 条,11-20):和状态同一次按 id 读到,只记在这里 —— 卡片画的「依据 · N 条」
+ *  只认引擎库里那一列,不从信件正文 / forsion-task 围栏里解析(那是模型写的,冒充得了)。没有依据的老待办不记,卡上不画这一行。 */
+export const useMuseTodoEvidence = create<Record<string, MuseTodoEvidence[]>>(() => ({}))
+/** 读一条待办的状态并记进 useMuseTodoSeen(依据记进 useMuseTodoEvidence);同一 id 并发只发一次。 */
 export function fetchMuseTodoStatus(id: string): Promise<string> {
   let p = todoInflight.get(id)
   if (!p) {
     p = getMuseTodo(homeTarget(), id)
-      .then((t): string => t.status, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
+      .then((t): string => {
+        if (Array.isArray(t.evidence) && t.evidence.length) useMuseTodoEvidence.setState({ [id]: t.evidence })
+        return t.status
+      }, (e: any): string => (e?.code === 'todo_not_found' ? 'missing' : 'error'))
       .then((st) => { todoInflight.delete(id); useMuseTodoSeen.setState({ [id]: st }); return st })
     todoInflight.set(id, p)
   }
@@ -101,6 +108,26 @@ export function useMuseTodoStatus(ownerId: string, tasks: TaskCard[]): { status:
     return () => { alive = false }
   }, [cfg, gen, todoKey])
   return { status: todoKey ? (res.gen === gen ? res.map : {}) : undefined, retry: () => setTick((n) => n + 1) }
+}
+
+const EVIDENCE_ICON: Record<MuseTodoEvidenceKind, typeof Quote> = {
+  chat: MessageCircle, file: FileText, calendar: Calendar, activity: Activity, rule: Zap, web: Globe, other: Quote,
+}
+/** 卡上展开的依据:图标按 kind(认不出的落引用号),来源灰、短摘正文色,都按纯文本画。 */
+function EvidenceList({ items }: { items: MuseTodoEvidence[] }) {
+  return (
+    <ul className="t2-taskcard-evidence" data-motion="enter">
+      {items.map((e, i) => {
+        const Icon = EVIDENCE_ICON[e.kind] || Quote
+        return (
+          <li key={i} data-evidence-kind={e.kind}>
+            <Icon size={13} aria-hidden="true" />
+            <span><span className="t2-taskcard-evsrc">{e.source}</span>{e.quote}</span>
+          </li>
+        )
+      })}
+    </ul>
+  )
 }
 
 function doneTextOf(done: TaskLanding | undefined, c: TaskCard): string {
@@ -186,6 +213,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
   const [taskDone, setTaskDone] = useState<Record<string, TaskLanding>>({})
   const [taskBusy, setTaskBusy] = useState<string | null>(null)
   const [taskOpen, setTaskOpen] = useState<Record<string, boolean>>({})
+  const [evOpen, setEvOpen] = useState<Record<string, boolean>>({})
+  const evidenceById = useMuseTodoEvidence()
   const withdrawn = useWithdrawn(sessionId)
   useTaskHandledVersion() // 另一处(卡片堆 / 分屏)处理了同一张,这里跟着定格
   // 能开子会话:本机引擎在场 + 这条会话自己不是子会话(子会话 / @项目派遣出的会话不能再开;分支能开)。否则回落「新会话执行」(Codex 10-17 #8)。
@@ -210,6 +239,9 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
         const locked = todoState !== 'pending'
         const busy = taskBusy === key
         const open = !!taskOpen[key]
+        // 依据只给走了真状态读取的 Muse 待办卡(todoStatus 在 = MuseTodoCards / 收件箱):库里那一列,缺省收起
+        const evidence = c.todo && todoStatus ? evidenceById[c.todo] : undefined
+        const evShown = !!evOpen[key]
         // Muse 落点只在本地引擎在场时给(Web/移动端没有 /agent/special 端点,按钮只会失败)。
         const museOk = !!window.tangu?.backendStatus
         const pick = async (landing: TaskLanding): Promise<void> => {
@@ -251,6 +283,14 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
               {!done && !gone && !locked && (c.ask || createdAt) ? <span className="t2-taskcard-expire">{t(c.ask ? 'chat.task.askTag' : 'chat.task.valid')}</span> : null}
             </div>
             {c.tldr && <div className="t2-taskcard-tldr">{c.tldr}</div>}
+            {evidence?.length ? (
+              <>
+                <button className="t2-taskcard-toggle" data-evidence-toggle="" onClick={() => setEvOpen((p) => ({ ...p, [key]: !evShown }))} aria-expanded={evShown}>
+                  {evShown ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {t('chat.task.evidence', { n: evidence.length })}
+                </button>
+                {evShown && <EvidenceList items={evidence} />}
+              </>
+            ) : null}
             <button className="t2-taskcard-toggle" onClick={() => setTaskOpen((p) => ({ ...p, [key]: !open }))} aria-expanded={open}>
               {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {t(open ? 'chat.task.hidePrompt' : 'chat.task.showPrompt')}
             </button>
