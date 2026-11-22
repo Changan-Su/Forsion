@@ -127,6 +127,10 @@ function byRecency(path?: string): UnifiedPipeHandle[] {
   return hit.sort((a, b) => b.at - a.at || a.i - b.i).map((x) => x.h)
 }
 
+export function hasDirtyUnifiedPath(path: string): boolean {
+  return [...handles].some(h => h.path === path && h.dirty?.())
+}
+
 /** path 上最近用过的那个实例所属的 leaf(没有实例 / 实例不在面板里 = null)。openNote 用它挑「已开着这篇」的标签。 */
 export function unifiedScopeFor(path: string): string | null {
   return byRecency(path)[0]?.scope ?? null

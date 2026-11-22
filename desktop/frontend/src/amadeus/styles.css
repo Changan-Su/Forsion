@@ -4691,6 +4691,11 @@ body.amx-marquee-active * {
    锚在 UnifiedPage 自己的树里,零尺寸,只用来 closest('.amx-pane') 找本 pane。 */
 .am-app .amx-toolbar .amx-modeseg-slot { display: contents; }
 .am-app .amx-seg-anchor { display: none; }
+/* Editor-only space for the first and last typing lines. Print uses the note's ordinary geometry. */
+@media screen {
+  .am-app .amx-seg-anchor[data-center-line] { display: block; height: var(--amx-writing-lead); }
+  .am-app .unified-body > .page-tail { min-height: var(--amx-writing-tail, 0px); }
+}
 
 /* ── 移动端画布:底部悬浮编辑胶囊压着舞台工具栏(2026-08-20 真机台架截图查出)────────────
    `.amx-mbar` 是 z-index:5 的悬浮药丸(bottom:10px + 约 46px 高),舞台工具栏 z-index:4、

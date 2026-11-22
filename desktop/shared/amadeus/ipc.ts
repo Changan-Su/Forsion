@@ -702,6 +702,16 @@ export type DbReadResult =
  *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。
  *  current:null = 文件已经不在了(写发出之后被别处删除 / 挪走):宿主绝不按旧路径重建,由调用方另存 / 提示。
  *  只带 base 的写才会有它;真新建不带 base。 */
+export interface TextWriteOptions {
+  create?: boolean
+  base?: string
+  expectedRoot?: string
+  /** Update only the reviewed path and vault. Never follow moves, recreate, or save a recovery copy. */
+  strictExisting?: boolean
+  /** Stable cloud file row captured at preview, when advertised by the host. */
+  expectedFileId?: string
+}
+
 export type TextWriteResult = { ok: true } | { ok: false; current: string | null }
 
 /** `drawing:read` 的结果:同 DbReadResult 的「错误是数据」约定,但只回原文——
@@ -786,6 +796,8 @@ export interface LocalVaultRow {
 }
 
 export interface VaultInfo {
+  /** Advertised by a Unit host when its write handler supports strict existing-file CAS. */
+  strictExistingWrites?: true
   root: string
   /** Page paths relative to the vault root, e.g. "main.md", "Notes/ideas.md". */
   pages: string[]
@@ -798,6 +810,8 @@ export interface VaultInfo {
 /** The surface exposed on `window.amadeus` by the preload bridge. */
 /** 见 AmadeusApi.hostCaps。false = 这个宿主做不了。 */
 export interface AmadeusHostCaps {
+  /** Remote Units expose this only after negotiating the original-path write contract. */
+  batchReplace?: boolean
   /** 在系统文件管理器里显示(桌面才有文件管理器)。 */
   revealInFileManager?: boolean
   /** 导出 PDF(桌面走主进程 printToPDF;网页走浏览器打印)。 */
@@ -908,6 +922,8 @@ export interface AmadeusApi {
   onExternalChange(cb: (pagePath: string) => void): () => void
   /** Full-text search across the vault (main-process index). */
   search(query: string): Promise<SearchHit[]>
+  /** All literal body candidates from the local vault index, without the search panel’s result cap. */
+  noteReplaceCandidates?(query: string): Promise<string[]>
   /** Notes that link to `pagePath` via a [[wikilink]]. */
   backlinks(pagePath: string): Promise<BacklinkRef[]>
   /** 只被 `pagePath` 引用的附件(vault 相对路径),删除笔记时可一并清理;缺 = 该端不支持(云端/旧 preload)。 */
@@ -1033,6 +1049,9 @@ export interface AmadeusApi {
   writeDrawing(drawingPath: string, source: string, base?: string): Promise<void | TextWriteResult>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
+  /** Authorized cloud preview snapshots, in groups of up to 24 paths. */
+  readNoteReplaceSources?(paths: string[]): Promise<Array<{ path: string; source: string; fileId: string }>>
+  readNoteReplaceSource?(path: string): Promise<{ source: string; fileId?: string } | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。
    *  `create: true` = 新建意图(素文件出生等):云桥据此绕过「本会话见过、现 404 = 别处删了」的重建禁令;
    *  桌面/移动端本地写盘无此区分,忽略。
@@ -1046,13 +1065,13 @@ export interface AmadeusApi {
    *  (调用方按「没建成」处理,绝不当成已存在)。建成 → ok:true。桌面 / Unit 主进程 `wx`,移动桥锁内判存在,云桥 seq 0 的 PUT。 */
   migrateWorkFolder?(request: WorkFolderMigration): Promise<WorkFolderMigrationResult>
   scopedTextWrites?: true
-  writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }): Promise<void | TextWriteResult>
+  writeTextFile(path: string, text: string, opts?: TextWriteOptions): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */
   listPageProps(folder: string): Promise<PageProps[]>
   /** 外科式写笔记 frontmatter(值 = undefined 删该键):保留 amadeus_* 与正文,原子写。 */
   setPageFrontmatter(pagePath: string, patch: Record<string, unknown>): Promise<void>
   /** 同目录纯重命名笔记文件(不加载/不落 v3,外来 .md 不被收编);返回新 vault 相对路径。 */
-  renamePageFile(oldPath: string, newBaseName: string): Promise<string>
+  renamePageFile(oldPath: string, newBaseName: string, rememberOpened?: boolean): Promise<string>
   /** 同目录重命名 .db 文件:同步回写内部 name(=新 basename)并重写全 vault 的 [[/![[ 引用。
    *  rewrittenPages = 被改写的笔记(主进程已逐页发 externalChange,渲染端对 activePage 仍须显式 reconcile)。 */
   renameDbFile(oldPath: string, newBaseName: string): Promise<{ newPath: string; rewrittenPages: string[] }>

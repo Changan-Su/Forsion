@@ -1,4 +1,4 @@
-import { FileText, Database, PenTool, LayoutDashboard, FileImage, FileVideo, Link2, Search, Hash, Waypoints } from 'lucide-react'
+import { FileText, Database, PenTool, LayoutDashboard, FileImage, FileVideo, Link2, Replace, Search, Hash, Waypoints } from 'lucide-react'
 import { registerView } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { translate } from '../i18n'
@@ -11,6 +11,7 @@ import { AmadeusPdfView } from '../views/AmadeusPdfView'
 import { AmadeusImageView } from '../views/AmadeusImageView'
 import { AmadeusMediaView } from '../views/AmadeusMediaView'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from '../amadeusPanels'
+import { NoteReplacePreviewView, REVIEW_VIEW } from '../amadeus/NoteReplacePreview'
 import { VIEW_FILE_MATCH } from '../viewFileMatch'
 import { amadeusAvailable } from './runtime'
 import { installLeafPathFollow } from '../views/followPathGone'
@@ -76,6 +77,7 @@ export function registerAmadeusViews(): void {
     registerView({ type: 'amadeus-plugin-file', kind: 'entity', rightCompanions: FILE_RIGHT, idParam: 'filePath', displayName: () => translate('bootengine.view.pluginFile'), icon: FileText, factory: (props) => <AmadeusPluginFileView {...props} /> })
     registerView({ type: 'amadeus-backlinks', kind: 'aux', displayName: () => app().tr('amadeus.backlinks'), icon: Link2, factory: () => <AmadeusBacklinksView />, singleton: true })
     registerView({ type: 'amadeus-search', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.search'), icon: Search, factory: () => <AmadeusSearchView />, singleton: true })
+    registerView({ type: REVIEW_VIEW, kind: 'aux', displayName: () => translate('noteReplace.preview'), icon: Replace, factory: () => <NoteReplacePreviewView />, singleton: true })
     registerView({ type: 'amadeus-tags', kind: 'collection', embeddable: true, displayName: () => app().tr('amadeus.tags'), icon: Hash, factory: () => <AmadeusTagsView />, singleton: true })
     registerView({ type: 'amadeus-graph', kind: 'aux', displayName: () => app().tr('amadeus.graph'), icon: Waypoints, factory: () => <AmadeusLocalGraphView />, singleton: true })
     // Calendar Space 的三个视图已随「日历」内置插件走(builtins/calendar):随插件启停注册/反注册。

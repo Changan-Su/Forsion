@@ -1,7 +1,7 @@
 import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 import { Lock as LockIcon } from 'lucide-react'
 import { History as HistoryIcon } from 'lucide-react'
-import { ALargeSmall, Check, MoveHorizontal, Type, CircleAlert, RotateCw, X as XIcon } from 'lucide-react'
+import { Check, Type, CircleAlert, RotateCw, X as XIcon } from 'lucide-react'
 import { UploadRing } from '@lcl/components'
 import { forgetUpload, retryUpload, uploadFraction, useUploads } from './services/uploads'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
@@ -31,7 +31,7 @@ import { useMobileBackClose } from '@amadeus/lib/mobileBack'
 import { onNoteLockChange, readNoteLocked } from '@amadeus/unified/viewMemory'
 import { readForRemount, switchNoteLock, toastLockFailed } from '@amadeus/unified/noteLock'
 import { noteMarkdownBody } from '@amadeus/unified/copyMarkdown'
-import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle, type PageStyleEntry } from '@amadeus/unified/pageStyle'
+import { PAGE_TOGGLE_ICON, PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle, type PageStyleEntry } from '@amadeus/unified/pageStyle'
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
@@ -990,6 +990,7 @@ export function AmadeusPagesView() {
   // 「看过第几次」记在模块里:列表还没挂上时来的请求(冷启动直接在笔记里点了正文的标签),挂上后照样接住。
   const searchSeed = useSearchSeed((s) => (phone ? s.seed : null))
   const [listSearch, setListSearch] = useState(false)
+  const innerSearchBack = useRef<(() => void) | null>(null)
   // 换了智库:上一个库的检索不带过来。只在真换了的时候收(挂上那一次不算),并且排在下面那条前面 —— 挂上时正等着的请求照样接住。
   // 旧请求不会在新库上再触发一次:它的序号已经记在 phoneSeedSeen 里了。
   const searchVault = useRef(vaultRoot)
@@ -1013,7 +1014,9 @@ export function AmadeusPagesView() {
     if (!holdsBack) return
     const onBack = (e: Event): void => {
       e.preventDefault()
-      if (!(e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) setListSearch(false)
+      if ((e as CustomEvent<{ probe?: boolean } | null>).detail?.probe) return
+      if (innerSearchBack.current) innerSearchBack.current()
+      else setListSearch(false)
     }
     const report = (): void => { window.dispatchEvent(new Event('forsion:mobile-list-back-change')) }
     window.addEventListener('forsion:mobile-list-back', onBack)
@@ -1899,7 +1902,7 @@ export function AmadeusPagesView() {
           }}
         >
           {phone && <PullHint />}
-          {inListSearch ? <AmadeusSearchView onBack={() => setListSearch(false)} /> : tagsTab ? <AmadeusTagsView inList /> : null}
+          {inListSearch ? <AmadeusSearchView onBack={() => setListSearch(false)} innerBack={innerSearchBack} /> : tagsTab ? <AmadeusTagsView inList /> : null}
           {flatList && !inListSearch && <ListHint id="notes">{t('amxv.phone.hint')}</ListHint>}
           {flatList && !inListSearch && phoneTab === 'recent' && (recentList.length
             ? withSections(recentList, (x) => dayBucket(x.at)).map((x) => ('section' in x ? <ListSection key={`sec:${x.section}`} bucket={x.section} /> : flatRow(x.item.path, x.item.at)))
@@ -2019,9 +2022,11 @@ interface AmxAction {
 
 /** 页面排版入口(pageStyleEntries,桌面 ⋯ 菜单同一份)→ 移动端 sheet 的行。台架 `&umbar` 也用它(导出只为台架)。 */
 export function pageStyleSheetActions(entries: PageStyleEntry[]): AmxAction[] {
-  return entries.map((e) => e.kind === 'choice'
-    ? { id: `page-${e.id}`, icon: <Type size={16} />, label: e.label, run: () => {}, choices: e.options }
-    : { id: `page-${e.id}`, icon: e.id === 'wide' ? <MoveHorizontal size={16} /> : <ALargeSmall size={16} />, label: e.label, checked: e.on, run: e.run })
+  return entries.map((e) => {
+    if (e.kind === 'choice') return { id: `page-${e.id}`, icon: <Type size={16} />, label: e.label, run: () => {}, choices: e.options }
+    const Icon = PAGE_TOGGLE_ICON[e.id]
+    return { id: `page-${e.id}`, icon: <Icon size={16} />, label: e.label, checked: e.on, run: e.run }
+  })
 }
 
 /** 软键盘度量:`lift` = 浏览器里被键盘压掉的 visual viewport 高度;`kbHeight()` = 最近一次量到的
@@ -2726,7 +2731,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   // 页面排版选项(C-21,拍板 #14):只给 v4 笔记,锁定态照样生效、照样能改(视图偏好,不写 md)。
   const pageStyle = useNotePageStyle(vaultRoot, unifiedRoute ? notePath : null)
   const pageEntries: PageStyleEntry[] = unifiedRoute && notePath
-    ? pageStyleEntries(pageStyle, (patch) => setNotePageStyle(vaultRoot, notePath, patch), t)
+    ? pageStyleEntries(pageStyle, (patch) => setNotePageStyle(vaultRoot, notePath, patch), t, !lockOn && !readingMode?.on && !canvasSeg?.on && mode !== 'source')
     : []
 
   // 先跳转后加载:面板已认领笔记但内容未就绪(pendingPage 在途,或挂载首帧 effect① 还没发起加载)
@@ -3081,6 +3086,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           compact={!!leaf.params.miniSurface}
           key={`${routeRoot}\u0000${notePath}${lockOn ? '\u0000locked' : ''}`}
           readOnly={lockOn}
+          onExitCenterLine={pageStyle.centerLine ? () => setNotePageStyle(vaultRoot, notePath, { centerLine: false }) : undefined}
           initialReading={leaf.params.noteReading === true}
           onReadingMode={setReadingMode}
           onReadingChange={(noteReading) => leaf.setParams({ ...leaf.params, noteReading })}

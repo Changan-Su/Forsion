@@ -18,56 +18,13 @@ import { inlinePreviewCaret, inlinePreviewEdgeClick, inlinePreviewEdgeKeyDown } 
 import { mathSourceHighlights } from './mathSourceHighlight'
 import { UI_ZOOM_EVENT } from '../../lib/clampMenu'
 
+import { ESCAPES, escapeRecorder, scanMath, type MathSpan } from './inlineTextSpans'
+export { scanMath, type MathSpan } from './inlineTextSpans'
+
 registerMessages({
   'mathlive.renderFailedTitle': { zh: 'LaTeX 无法渲染', en: 'LaTeX could not be rendered' },
   'mathlive.renderFailedBadge': { zh: '公式无法渲染', en: 'Formula could not be rendered' },
 })
-
-export interface MathSpan { from: number; to: number; latex: string; display: boolean }
-
-/** 扫描「一块的文本」中的公式跨度(块级 `$$…$$` 优先,再行内 `$…$`)。
- *  入参 s 已由调用方把 code 文本/内联原子替成占位符、硬换行替成 '\n'(见 buildBlockString)。
- *  行内规则(仿 remark-math 核心):开 `$` 后不接空白、闭 `$` 前不接空白、内容非空、不跨行 —— 挡掉「$5 和 $10」这类货币误伤。
- *  ponytail: 不处理 `\$` 转义、不识别同段内 code 里的 `$`(调用方已抹掉 code 文本);够用,漏网是极边角。 */
-export function scanMath(s: string): MathSpan[] {
-  const spans: MathSpan[] = []
-  const n = s.length
-  const isSpace = (c: string | undefined): boolean => c === ' ' || c === '\t' || c === '\n' || c === undefined
-  let i = 0
-  while (i < n) {
-    if (s[i] === '$') {
-      if (s[i + 1] === '$') {
-        // 块级 $$…$$(可跨行);$$$ 三连(Yelp 价位/货币)不当块公式起手。
-        if (s[i + 2] !== '$') {
-          const close = s.indexOf('$$', i + 2)
-          if (close > i + 1) {
-            const latex = s.slice(i + 2, close).trim()
-            if (latex) { spans.push({ from: i, to: close + 2, latex, display: true }); i = close + 2; continue }
-          }
-        }
-        i += 2; continue // 未闭合 / $$$ → 整体跳过,避免退化成行内误配
-      }
-      // 行内 $…$:开 `$` 后不接空白;闭 `$` 前不接空白、且其后不接字母数字
-      // (否则「$5-$10」价位区间、「$HOME/$USER」环境变量会被吞成公式,污染正文)。
-      if (!isSpace(s[i + 1])) {
-        let j = i + 1
-        let found = -1
-        while (j < n) {
-          const c = s[j]
-          if (c === '\n') break              // 行内公式不跨行
-          if (c === '$') { if (!isSpace(s[j - 1]) && !/[A-Za-z0-9]/.test(s[j + 1] ?? '')) found = j; break }
-          j++
-        }
-        if (found > i + 1) {
-          spans.push({ from: i, to: found + 1, latex: s.slice(i + 1, found), display: false })
-          i = found + 1; continue
-        }
-      }
-    }
-    i++
-  }
-  return spans
-}
 
 const BREAK_NAMES = new Set(['hardbreak', 'hard_break', 'break'])
 
@@ -901,21 +858,8 @@ export function unescapeMathSource(md: string): string {
 //    公式里写网址 / 邮箱的转义不补,极边角。
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type MdNode = any
-const ESCAPES = 'amadeusEscapes'
 /** 公式体之外的转义:text.value 里的下标(已计入公式补回的反斜杠)。literalEscape.ts 据此拆出转义字面(D-11)。 */
 export const LITERAL_ESCAPES = 'amadeusLiteralEscapes'
-
-/** 默认 characterEscapeValue 出口(onexitdata)的照抄 + 记下 [value 下标, 源串偏移]。 */
-const escapeRecorder = {
-  exit: {
-    characterEscapeValue(this: any, token: any): void {
-      const tail = this.stack.pop()
-      ;((tail.data ||= {})[ESCAPES] ||= []).push([tail.value.length, token.start.offset])
-      tail.value += this.sliceSerialize(token)
-      tail.position.end = { line: token.end.line, column: token.end.column, offset: token.end.offset }
-    },
-  },
-}
 
 /** 按源串把树里公式内被吃掉的反斜杠补回(就地改 text.value;导出供单测)。source = 解析的那份原文(file.value)。 */
 export function restoreMathEscapes(tree: MdNode, source: string): void {

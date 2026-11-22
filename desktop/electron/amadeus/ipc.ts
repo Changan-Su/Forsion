@@ -294,7 +294,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
-  const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
+  const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string; strictExistingWrites: true }> => {
     vault.setRoot(root)
     watcher.start(root)
     // 只有默认库是我们种过的;失败不挡开库,下次再试
@@ -308,6 +308,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       root,
       pages,
       folders,
+      strictExistingWrites: true,
       lastPage: keepLastPage && lastPage && pages.includes(lastPage) ? lastPage : undefined,
     }
   }
@@ -391,7 +392,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const root = reuseActive === true ? vault.getRoot() : null
     if (root) {
       const [pages, folders] = await Promise.all([vault.listPages(), vault.listFolders()])
-      return { root, pages, folders }
+      return { root, pages, folders, strictExistingWrites: true }
     }
     let { lastVault } = await readConfig()
     if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
