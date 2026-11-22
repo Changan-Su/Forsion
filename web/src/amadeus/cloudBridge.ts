@@ -40,11 +40,12 @@ import type {
   PathGoneEvent,
   SearchHit,
   TagCount,
+  TextWriteOptions,
   TextWriteResult,
   TrashEntry,
   VaultInfo,
 } from '@amadeus-shared/ipc'
-import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { checkStrictTextWrite, textFingerprint } from '@amadeus-shared/writeConflict'
 import { pageKey, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { hasTagFilter, parseSearchQuery, tagSearchRemote } from '@amadeus-shared/tagQuery'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
@@ -81,7 +82,7 @@ interface TreeDto {
   /** 每个文件一行(含点开头的、含 binary):seq 是该文件自己的版本号,二进制比对交换写的基准取自这里。 */
   entries?: Array<{ path: string; kind: string; seq: number }>
 }
-interface FileDto { path: string; kind: string; content: string; seq: number; hash: string; updatedAt: string }
+interface FileDto { id?: string; path: string; kind: string; content: string; seq: number; hash: string; updatedAt: string }
 interface PutResultDto { seq: number; hash: string }
 interface MoveResultDto { path: string; seq: number }
 interface ConflictBody { code?: 'EXISTS' | 'CONFLICT'; seq?: number; content?: string }
@@ -519,8 +520,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return f
   }
 
-  const putFile = async (path: string, content: string, baseSeq: number, force = false, expectedHash?: string): Promise<PutResultDto> => {
-    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}) })
+  const putFile = async (path: string, content: string, baseSeq: number, force = false, expectedHash?: string, expectedFileId?: string): Promise<PutResultDto> => {
+    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}), ...(expectedFileId ? { expectedFileId } : {}) })
     noteSeq(path, r.seq)
     seqFp.set(path, { seq: r.seq, fp: textFingerprint(content) })
     pageCache.delete(path) // 单点咽喉:任何文本写(fm 外科写/画板/trash meta…)后缓存失效;savePage 随手回填
@@ -871,7 +872,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // 大库挪文件夹照样会撞限流,正解是服务端 /move 带 rewriteLinks。旧服务端没有这个端点 → 回落全库扫(行为同以前)。
   // 候选随附原文 + seq:改一篇被上百篇引用的笔记时一篇只剩一次 PUT(此前读 + 再读 + 写三次,台架 120 篇引用 → 59 篇没改上)。
   // 还撞限流(429)就等一等再发,等够一个限流窗才算失败:宁可改名慢,不留断链。
-  type Known = { content: string; seq: number; hash?: string }
+  type Known = { content: string; seq: number; hash?: string; id?: string }
   const patient = async <T,>(fn: () => Promise<T>): Promise<T> => {
     for (const ms of [2_000, 5_000, 10_000, 20_000, 30_000]) {
       try {
@@ -889,9 +890,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
    *  PUT 恒带取到的 seq(>0,服务端对不存在的路径只会 409 不会创建),409 就回头重取。
    *  known = 候选随附的那版:第一发直接拿它的 seq + content_hash 写,省掉现取;过期了就是 409,照常回头重取。
    *  只带 seq 不够(评审复现):那篇被换成另一份新文件也从 seq 1 数起,旧原文会把它盖掉 —— 没 hash 就不走这条捷径。 */
-  const updateExisting = (p: string, text: string, base: string, known?: Known): Promise<TextWriteResult | 'gone'> =>
+  const updateExisting = (p: string, text: string, base: string, known?: Known, strict?: TextWriteOptions): Promise<TextWriteResult | 'gone'> =>
     enqueue([p], async () => {
-      await ensureVault()
+      const root = await ensureVault()
+      if (strict) checkStrictTextWrite(strict, `cloud://${root}`)
+      let fileId = strict?.expectedFileId
       for (let attempt = 0; attempt < 3; attempt++) {
         let f: Known
         try {
@@ -900,9 +903,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           if (is404(e)) return 'gone' as const
           throw e
         }
-        if (textFingerprint(f.content) !== base) return { ok: false as const, current: f.content }
+        if (textFingerprint(f.content) !== base || (fileId && f.id !== fileId)) return { ok: false as const, current: f.content }
+        if (strict) fileId ??= f.id
         try {
-          await patient(() => putFile(p, text, f.seq, false, attempt === 0 ? known?.hash : undefined))
+          if (strict && (!fileId || !f.hash || f.seq <= 0)) throw new Error('Missing file identity or revision')
+          await patient(() => putFile(p, text, f.seq, false, f.hash, fileId))
           return { ok: true as const }
         } catch (e) {
           if (!is409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone')
@@ -1183,6 +1188,29 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     onPathGone: (cb) => { pathGoneCbs.add(cb); return () => { pathGoneCbs.delete(cb) } },
 
     // ---- 派生索引(服务端计算) ------------------------------------------------
+    readNoteReplaceSource: async (path) => {
+      await ensureVault()
+      try {
+        const file = await getFile(path)
+        return { source: file.content, fileId: file.id }
+      } catch (error) {
+        if (is404(error)) return null
+        throw error
+      }
+    },
+    noteReplaceCandidates: async (query) => {
+      const root = await ensureVault()
+      try {
+        const { paths } = await http.post<{ paths: string[] }>(
+          `/amadeus/vaults/${encodeURIComponent(root)}/replace-candidates`, { query })
+        return paths.filter(visiblePage)
+      } catch (error) {
+        if (!is404(error)) throw error
+        // The same server version introduced identity-checked PUTs. Older servers silently
+        // ignore expectedFileId, so a scan of the legacy tree cannot safely enable replacement.
+        throw Object.assign(new Error('Cloud note replacement requires a newer server'), { code: 'NOTE_REPLACE_SERVER_UPDATE' })
+      }
+    },
     search: async (query) => {
       await ensureVault()
       // 服务端按 path ILIKE 也算命中 → 点开头路径(.trash/、库标记)会漏进结果;与树同一把 visiblePath 尺子。
@@ -1617,6 +1645,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
     },
     writeTextFile: (p, text, opts) => {
+      if (opts?.strictExisting) {
+        if (!isCloudTextPath(p) || typeof opts.base !== 'string') throw new Error('Expected an existing text file and base')
+        return updateExisting(p, text, opts.base, undefined, opts).then((r) => r === 'gone' ? { ok: false as const, current: null } : r)
+      }
       if (!isCloudTextPath(p)) return writeBinaryText(p, text, opts)
       const held = keysFor(p)
       // 比对交换写(Codex g3#1,契约见 ipc.ts writeTextFile):调用方以为盘上是什么的指纹。云端的乐观并发是按 seq 的,
@@ -1768,7 +1800,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }),
 
     // 同目录纯重命名(不落 v3、外来 .md 不被收编 —— move 是纯移动,服务端不重写内容)。
-    renamePageFile: (oldPath, newBaseName) => {
+    renamePageFile: (oldPath, newBaseName, rememberOpened) => {
       let pagesBefore: string[] | null = null // G2-04 引用重写的「操作前」页表,须在移动前取
       return enqueue([oldPath, sanitizedSiblingPath(oldPath, newBaseName, translate('amxbridge.noteNameEmpty'))], async () => {
         await ensureVault()
@@ -1787,6 +1819,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         return newPath
       }).then(async (newPath) => {
         // 队列任务之外调用:任务占着 [oldPath, newPath],里面 writeTextFile(newPath) 会自锁(见 propagateRenames)。
+        if (rememberOpened) rememberPage(newPath)
         if (newPath !== oldPath && pagesBefore) await propagateRenames({ [oldPath]: newPath }, pagesBefore)
         return newPath
       })

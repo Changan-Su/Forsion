@@ -4,12 +4,12 @@
 import { promises as fs } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { IPC, type DbReadResult, type DrawingReadResult, type PageProps } from '@amadeus-shared/ipc'
+import { IPC, type DbReadResult, type DrawingReadResult, type PageProps, type TextWriteOptions } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { rebaseFileRefs } from '@amadeus-shared/assets'
-import { movedUnder } from '@amadeus-shared/propagateNoteRenames'
+import { createStructureQueue, movedUnder, STRUCTURE_OPS } from '@amadeus-shared/propagateNoteRenames'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage, type PageManifest } from '@amadeus-shared/compiler'
@@ -20,7 +20,7 @@ import type { VaultIndex } from './vaultIndex'
 import { withDbLock } from './dbLock'
 import { writeVaultText } from './pageWrite'
 import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
-import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { checkStrictTextWrite, textFingerprint } from '@amadeus-shared/writeConflict'
 import { vaultRel } from './vaultRel'
 import { migrateWorkFolder } from './workFolderMigration'
 import type { WorkFolderMigration } from '@amadeus-shared/ipc'
@@ -116,7 +116,22 @@ export function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise
 }
 
 export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
-  const { vault, index, handle, rememberPage: persistLastPage, notifyAll } = deps
+  const { vault, index, rememberPage: persistLastPage, notifyAll } = deps
+  const serializeStructure = createStructureQueue()
+  const structureChannels = new Set<string>(STRUCTURE_OPS.map((name) => IPC[name]))
+  const handle: VaultHandlerDependencies['handle'] = (channel, fn) => {
+    deps.handle(channel, (event, ...args) => {
+      const invoke = () => fn(event, ...args)
+      if (structureChannels.has(channel) || (channel === IPC.writeTextFile && args[2]?.strictExisting)) {
+        const root = vault.getRoot()
+        return serializeStructure(async () => {
+          if (vault.getRoot() !== root) throw new Error('Vault changed before queued operation')
+          return invoke()
+        })
+      }
+      return invoke()
+    })
+  }
   // The file operation has already committed when most callers remember its
   // location. A device preference failure must not masquerade as a failed move
   // and make the renderer resume writing the now-missing source path.
@@ -282,7 +297,11 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   )
 
   handle(IPC.saveVaultBytes, async (_e, filePath: string, bytes: Uint8Array) => {
-    await vault.writeVaultBytes(filePath, bytes)
+    const root = vault.getRoot()
+    await withPathLock(filePath, async () => {
+      if (vault.getRoot() !== root) throw new Error('Vault changed before byte write')
+      await vault.writeVaultBytes(filePath, bytes)
+    })
     logActivity('file.save', { f: filePath })
   })
 
@@ -393,12 +412,13 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       return null
     }
   })
-  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }) => {
+  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: TextWriteOptions) => {
     const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
       const expectedRoot = typeof opts?.expectedRoot === 'string' ? opts.expectedRoot : null
       const checkRoot = (): void => { if (expectedRoot !== null && vault.getRoot() !== expectedRoot) throw new Error('Vault changed before text save') }
       checkRoot()
+      if (opts?.strictExisting) checkStrictTextWrite(opts, vault.getRoot())
       if (opts?.create === true) {
         // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
         // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
@@ -491,7 +511,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   if (deps.pageHistory) registerPageHistoryHandlers({ vault, index, handle, withPathLock, notifyPeers: deps.notifyPeers, history: deps.pageHistory })
 
-  handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
+  handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string, rememberOpened?: boolean): Promise<string> => {
     const dir = path.dirname(oldPath)
     let base = newBaseName.trim().replace(/[\\/]/g, '')
     if (!base) throw new Error('笔记名不能为空')
@@ -507,6 +527,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       index.remove(oldPath)
       await index.update(newPath)
     })
+    if (rememberOpened) await rememberPage(newPath)
     await propagateRenames({ [oldPath]: newPath }, pagesBefore)
     return newPath
   })
@@ -571,7 +592,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     return { newPath, rewrittenPages }
   })
 
-  handle(IPC.search, (_e, query: string) => index.search(query))
+  handle(IPC.search, (_e, query: string, mode?: string) => mode === 'replace-candidates' ? index.noteReplaceCandidates(query) : index.search(query))
   handle(IPC.backlinks, (_e, pagePath: string) => index.backlinks(pagePath))
   handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
   handle(IPC.reindex, () => index.build())

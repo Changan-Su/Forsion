@@ -2429,6 +2429,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             key={`${st.path}${locked ? ':locked' : ''}`}
             path={st.path}
             initial={st.initial}
+            onExitCenterLine={pageStyle.centerLine ? () => setNotePageStyle(null, st.path, { centerLine: false }) : undefined}
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
@@ -2527,9 +2528,11 @@ if (new URLSearchParams(location.search).has('dock')) {
       //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
       const wb = new URLSearchParams(location.search).has('uwb')
       const pane = (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
-          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
-          <UPageHost onPath={setPath} onReading={setReading} />
+        <>
+          <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
+            {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
+            <UPageHost onPath={setPath} onReading={setReading} />
+          </div>
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
           {new URLSearchParams(location.search).has('umbar') && (
             <AmxMobileBar
@@ -2543,7 +2546,7 @@ if (new URLSearchParams(location.search).has('dock')) {
               canvas={null}
             />
           )}
-        </div>
+        </>
       )
       return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }

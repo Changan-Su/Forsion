@@ -209,8 +209,8 @@ export function onNoteLockChange(fn: () => void): () => void {
 // 不写 frontmatter。一篇一个键,全是缺省值就删键(同「解锁即删键」),所以不设 LRU:只有改过的笔记才占条目。
 
 export type NotePageFont = 'default' | 'serif' | 'mono'
-export interface NotePageStyle { wide: boolean; small: boolean; font: NotePageFont }
-export const DEFAULT_PAGE_STYLE: NotePageStyle = { wide: false, small: false, font: 'default' }
+export interface NotePageStyle { wide: boolean; small: boolean; centerLine: boolean; font: NotePageFont }
+export const DEFAULT_PAGE_STYLE: NotePageStyle = { wide: false, small: false, centerLine: false, font: 'default' }
 
 const PAGE_PREFIX = 'amx.notePage:'
 const PAGE_EVENT = 'amadeus:note-page-style'
@@ -219,8 +219,8 @@ const pageKey = (vaultRoot: string | null | undefined, path: string): string => 
 function parsePageStyle(raw: string | null): NotePageStyle {
   if (!raw) return DEFAULT_PAGE_STYLE
   try {
-    const v = JSON.parse(raw) as { w?: unknown; s?: unknown; f?: unknown }
-    return { wide: v.w === 1, small: v.s === 1, font: v.f === 'serif' || v.f === 'mono' ? v.f : 'default' }
+    const v = JSON.parse(raw) as { w?: unknown; s?: unknown; c?: unknown; f?: unknown }
+    return { wide: v.w === 1, small: v.s === 1, centerLine: v.c === 1, font: v.f === 'serif' || v.f === 'mono' ? v.f : 'default' }
   } catch {
     return DEFAULT_PAGE_STYLE
   }
@@ -238,9 +238,10 @@ export function writeNotePageStyle(vaultRoot: string | null | undefined, path: s
 }
 
 function storePageStyle(key: string, st: NotePageStyle): void {
-  const packed: { w?: 1; s?: 1; f?: NotePageFont } = {}
+  const packed: { w?: 1; s?: 1; c?: 1; f?: NotePageFont } = {}
   if (st.wide) packed.w = 1
   if (st.small) packed.s = 1
+  if (st.centerLine) packed.c = 1
   if (st.font !== 'default') packed.f = st.font
   try {
     if (Object.keys(packed).length) localStorage.setItem(key, JSON.stringify(packed))

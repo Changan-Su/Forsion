@@ -337,6 +337,10 @@ export class VaultIndex {
     return out
   }
 
+  noteReplaceCandidates(query: string): string[] {
+    return query ? [...this.entries.values()].filter((e) => e.text.includes(query)).map((e) => e.path) : []
+  }
+
   search(query: string): SearchHit[] {
     const parsed = parseSearchQuery(query)
     if (hasTagFilter(parsed)) {

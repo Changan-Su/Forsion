@@ -176,3 +176,23 @@ describe('mobile bridge: 挪笔记 / 文件夹之后图片与附件的相对引�
     expect(disk.get('archive/notes/a.md')).toBe('![](.amadeus/p.png) ![](../../media/x.png)\n')
   })
 })
+
+it('serializes an existing-file batch edit with a folder rename and checks the original vault', async () => {
+  const { bridge } = await boot({ 'sub/A.md': 'old' })
+  const options = { strictExisting: true, base: textFingerprint('old'), expectedRoot: '/vault' }
+  await expect(bridge.writeTextFile('sub/A.md', 'new', { ...options, expectedRoot: '/other' })).rejects.toThrow()
+  let release!: () => void
+  let writing = false
+  writeGate = async () => { writing = true; await new Promise<void>((resolve) => { release = resolve }) }
+  const save = bridge.writeTextFile('sub/A.md', 'new', options)
+  await vi.waitFor(() => expect(writing).toBe(true))
+  const fresh = createMobileAmadeusBridge()
+  await fresh.openVault()
+  const rename = fresh.renameFolder('sub', 'moved')
+  writeGate = null
+  release()
+  expect(await save).toEqual({ ok: true })
+  await rename
+  expect(await bridge.writeTextFile('sub/A.md', 'stale', options)).toEqual({ ok: false, current: null })
+  expect([...disk]).toEqual([['moved/A.md', 'new']])
+})

@@ -22,3 +22,24 @@ describe('searchTerms', () => {
     expect(hit('moc forsion', 'moc 索引')).toBe(false)
   })
 })
+
+it('enumerates literal replacement candidates beyond the display cap without interpreting tag operators', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { VaultIndex } = await import('./vaultIndex')
+  const { VaultManager } = await import('./vaultManager')
+  const dir = await mkdtemp(join(tmpdir(), 'forsion-replace-index-'))
+  try {
+    const files = Array.from({length: 63}, (_, i) => `sample-${i}.md`)
+    await Promise.all(files.map(p => writeFile(join(dir,p),'literal tag:#item with 0.20')))
+    const vault = new VaultManager()
+    vault.setRoot(dir)
+    const index = new VaultIndex(vault)
+    await index.build()
+    expect(index.search('literal')).toHaveLength(50)
+    expect(index.noteReplaceCandidates('tag:#item').sort()).toEqual(files.sort())
+    expect(index.noteReplaceCandidates('0.20')).toHaveLength(63)
+    expect(index.noteReplaceCandidates('TAG:')).toHaveLength(0)
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})

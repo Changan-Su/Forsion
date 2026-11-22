@@ -27,7 +27,7 @@ import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vault
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
 import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
-import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
+import { flushUnifiedPath, flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
 import { remapFileViews } from '../lib/fileViewMemory'
 import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } from '../unified/writeSafety'
@@ -410,6 +410,7 @@ interface PageState {
   save(): Promise<void>
   /** Force any pending debounced save to disk now, so the main index is fresh before navigating/searching. */
   flushSave(strict?: boolean): Promise<void>
+  hasPendingSave(): boolean
   reconcileExternal(path: string): Promise<void>
 
   /** 文档级撤销/重做(Cmd+Z / Cmd+Shift+Z / Cmd+Y):覆盖块内文字 + 块的增删/合并/移动/斜杠转换。 */
@@ -951,28 +952,25 @@ function makePageStore(opts: PageStoreOptions = {}) {
           }
         }
       }
-      if (saveTimer) {
-        clearTimeout(saveTimer) // cancel a pending save aimed at the OLD filename
-        saveTimer = null
-      }
-      // 改名会触发主进程全库引用重写(propagateRenames):**所有面板**先落盘 ——
-      // 别的面板 400ms 待存的旧文本会在重写完成后写回、把改好的 [[链接]] 盖掉;
-      // 本面板更早发出的在途写也要等(旧路径写盘晚于移动 = 旧文件复活)。(Codex 评审 P1)
-      await flushAllScopes()
-      // 快照必须在 flush **之后**取:标题回车改名的同一拍正文就可能继续输入,入口处的旧快照
-      // 会经 IPC 把 flush 期间的编辑覆写回旧内容(Codex 评审 P0)。页在 await 间被换掉则中止。
-      const { manifest, blocks, activePage: nowPage } = get()
-      if (!manifest || nowPage !== activePage) return false
-      const contents: Record<string, string> = {}
-      for (const [id, b] of Object.entries(blocks)) contents[id] = b.content
+      // A title change moves the bytes currently on disk. Sending this panel's compiled snapshot
+      // would overwrite a guarded replacement from another editor after its CAS already succeeded.
+      let release: ((to: string | null) => Promise<void>) | undefined
       try {
-        const { newPath, page } = await amadeus.renamePage(activePage, newName, manifest, contents)
-        set({ activePage: newPath, pendingPage: null, ...hydrate(page), status: 'ready', error: null })
-        remapScopePaths(activePage, newPath, 'file') // 分屏里同页的其他面板跟着换路径,防旧路径被写活
-        if (hasFd && newPath !== activePage) await cascadeFdAfterRename(activePage, newPath)
-        await get().refreshStructure() // 级联可能动了文件夹,pages+folders 一起刷
+        await flushAllScopes(true)
+        if (get().activePage !== activePage || !get().manifest) return false
+        release = await holdNotePath(activePage)
+        const newPath = await amadeus.renamePageFile(activePage, newName, true)
+        const handoff = release
+        release = undefined
+        await handoff(newPath === activePage ? null : newPath)
+        if (newPath !== activePage) {
+          remapScopePaths(activePage, newPath, 'file')
+          if (hasFd) await cascadeFdAfterRename(activePage, newPath)
+        }
+        await get().refreshStructure()
         return true
       } catch (e) {
+        await release?.(null)
         set({ error: String(e) })
         return false
       }
@@ -1741,6 +1739,8 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await inflightSave
     },
 
+    hasPendingSave: () => !!(saveTimer || inflightSave || heldDocs.has(get().activePage ?? '')),
+
     async flushSave(strict = false) {
       if (saveTimer || (strict && saveFailure?.path === get().activePage)) {
         if (saveTimer) clearTimeout(saveTimer)
@@ -1815,6 +1815,9 @@ function makePageStore(opts: PageStoreOptions = {}) {
       if (opts.sink || !activePage || !manifest || manifest.schemaTooNew || !hit(activePage)) return null
       const from = activePage
       const root = liveVaultRoot()
+      // A clean editor may still show the revision from before a peer's guarded write.
+      // Only keystrokes made since this local snapshot belong in the post-move merge.
+      const cleanBase = !saveTimer && !inflightSave && !saveFailure ? compile(manifest, contentsOf(blocks)) : null
       holds.push(hit)
       if (saveTimer) { // 待写不发去旧路径:字留在手里、记一份(之后切走时 flushSave 见不到计时器,Codex 复核 P1),放手时交接
         clearTimeout(saveTimer)
@@ -1823,8 +1826,10 @@ function makePageStore(opts: PageStoreOptions = {}) {
         heldDocs.set(from, { manifest, contents: contentsOf(blocks) })
       }
       await inflightSave?.catch(() => {}) // 已经发出的那发写先落定(在主进程动文件之前)
-      let base: string | null = null // 挪之前盘上的原文 = 交接时三方合并的基线(读不到 = 有字就落副本)
-      try { base = await amadeus.readTextFile(from) } catch { /* 同上 */ }
+      let base: string | null = cleanBase
+      if (base == null) {
+        try { base = await amadeus.readTextFile(from) } catch { /* a dirty editor with no base is preserved in a separate copy */ }
+      }
       return async (to) => {
         const skipped = heldSkipped
         try {
@@ -2002,6 +2007,41 @@ const vaultSlice = (s: PageState): VaultSlice =>
  */
 /** 挪动 / 改名在途(holdNotePath 按住到交接落定)的次数。 */
 let movesInFlight = 0
+
+export async function flushNoteForReplace(path: string): Promise<void> {
+  if (movesInFlight) throw new Error('A note is being moved')
+  await Promise.all([flushUnifiedPath(path, true), ...[...stores.values()]
+    .map((store) => store.getState()).filter((state) => state.activePage === path)
+    .map((state) => state.flushSave(true))])
+}
+
+/** A direct CAS can spend time on the network. Hold legacy whole-document writers, then merge only
+ * typing made during the hold into the acknowledged revision, as when a file is physically moved. */
+export async function holdLegacyForReplace(path: string) {
+  const open = [...stores.values()].filter(s => s.getState().activePage === path && !!s.getState().manifest)
+  if (open.length) movesInFlight++
+  const releases: Array<((to: string | null) => Promise<void>) | null> = []
+  try {
+    for (const s of open) releases.push(await s.getState()._holdForMove(path, 'file'))
+  } catch (error) {
+    await Promise.allSettled(releases.map(release => release?.(null)))
+    if (open.length) movesInFlight--
+    throw error
+  }
+  return {
+    dirty: () => open.some(s => s.getState().activePage === path && s.getState().hasPendingSave()),
+    release: async (wrote: boolean): Promise<void> => {
+      try {
+        for (const release of releases) await release?.(wrote ? path : null)
+        if (wrote) {
+          for (const s of stores.values()) {
+            if (!open.includes(s) && s.getState().activePage === path) void s.getState().reconcileExternal(path)
+          }
+        }
+      } finally { if (open.length) movesInFlight-- }
+    },
+  }
+}
 
 export async function flushAllScopes(strict = false): Promise<void> {
   // 严格冲洗(换库 / 切号屏障)要的是「全落盘」:有笔记正在挪,按住着的字还只在内存里(连按住途中关掉的面板),换了库

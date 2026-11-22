@@ -123,6 +123,7 @@ import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
 import { captureReadingPosition, prepareReadingSnapshot, readingCounterpart, readingSnapshot, restoreReadingPosition, type ReadingPosition } from './readingSnapshot'
 import type { NoteReadingSnapshot } from '../plugins/noteRenderers'
 import { registerReadingToggle } from './readingCommands'
+import { createCenterLine } from './centerLine'
 import { fromDisk, toDisk, type Eol } from './eol'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
@@ -1379,7 +1380,9 @@ export function UnifiedPage(props: Parameters<typeof UnifiedPageInner>[0]): Reac
   return <UnifiedPageInner {...props} {...prepared} />
 }
 
-function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, initialReading = false, onReadingMode, onReadingChange, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, onExitCenterLine, initialReading = false, onReadingMode, onReadingChange, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+  /** Present only while this note has opted into centering the typing line. */
+  onExitCenterLine?: () => void
   initialReading?: boolean
   onReadingMode?: (control: ReadingModeControl | null) => void
   onReadingChange?: (reading: boolean) => void
@@ -1862,8 +1865,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   const recoveryOpen = useRef(false) // 「恢复草稿」条还在等用户决定:那份草稿和本实例同一格,连打节拍不许盖掉它
   // 版块工具条(sections.ts):插件 + 小 store,工具条组件只订阅它。每个实例一份,稳定引用。
   const sectionTb = useMemo(() => createSectionToolbar(), [])
+  const exitCenterLine = useRef(onExitCenterLine)
+  exitCenterLine.current = onExitCenterLine
+  const centerLine = useMemo(() => createCenterLine(() => exitCenterLine.current?.(), () => segAnchorRef.current), [])
+  const following = !!onExitCenterLine && !readOnly && !reading && !canvasOn && mode === 'wysiwyg'
+  useLayoutEffect(() => { centerLine.setEnabled(following) }, [centerLine, following])
   const editorPlugins = useMemo(
     () => [
+      centerLine.plugin,
       ...layer.plugins,
       ...columnPlugins,
       sectionTb.plugin,
@@ -3922,7 +3931,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   return (
     <>
       {/* 顶栏胶囊的锚:恒在场(源码模式也在),只用来 `closest('.amx-pane')` 找本 pane 的插槽。
-          零尺寸、不吃指针 —— 它不参与任何布局。 */}
+          日常零尺寸;输入行居中时也借它在标题上方留出首行需要的滚动余量。 */}
       <span ref={segAnchorRef} className="amx-seg-anchor" aria-hidden />
       {mode === 'source' ? null : (
         <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} leafId={scope} />

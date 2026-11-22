@@ -1,0 +1,54 @@
+.amx-search-heading, .amx-replace-head, .amx-replace-file, .amx-replace-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.amx-search-heading > .amx-search-save { display: inline-flex; align-items: center; gap: 4px; }
+.amx-panel.amx-replace-panel { display: flex; flex-direction: column; min-height: 0; box-sizing: border-box; overflow: hidden; }
+.amx-replace-panel > :not(.amx-replace-scroll, .amx-replace-paper) { flex-shrink: 0; }
+.amx-replace-head { margin-bottom: 4px; }
+.amx-replace-back { display: inline-flex; align-items: center; min-width: 0; gap: 3px; background: none; border: none; cursor: pointer; }
+.amx-replace-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.amx-replace-panel .amx-search-box input { width: 100%; min-width: 0; }
+.amx-replace-group { margin: 0 4px 8px; }
+.amx-replace-file { padding: 5px 3px; color: var(--text); font-size: var(--ui-font-meta); }
+.amx-replace-file b, .amx-replace-result > span { overflow-wrap: anywhere; }
+.amx-replace-panel small, .amx-replace-context small {
+  font-size: var(--ui-font-caption); font-family: var(--font-ui); color: var(--text-muted);
+}
+.amx-replace-file small { flex: none; font-variant-numeric: tabular-nums; }
+.amx-replace-row { display: flex; align-items: flex-start; gap: 3px; border-radius: var(--radius-sm); }
+.amx-replace-row:is(:hover, :focus-within), .amx-replace-row[data-active] { background: var(--bg-hover); }
+.amx-replace-row > input { flex: none; align-self: flex-start; margin: 6px 2px 0 4px; accent-color: var(--accent-ink); cursor: pointer; }
+.amx-replace-context { display: block; flex: 1; min-width: 0; border: none; color: var(--text); background: transparent;
+  font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta, 1.5);
+  padding: 4px 3px; text-align: start; cursor: pointer; }
+.amx-replace-context > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.amx-replace-context :is(mark, small) { color: inherit; }
+.amx-replace-context mark, .amx-replace-mark { background: var(--accent-light); border-radius: var(--radius-sm); }
+.amx-replace-context small { display: block; color: var(--text-muted); }
+.amx-replace-hint, .amx-replace-result-title { display: block; padding: 6px 8px; }
+.amx-replace-result-title { font-size: var(--ui-font-body); }
+.amx-replace-result { padding: 5px 8px; font-size: var(--ui-font-meta); }
+.amx-replace-result small { display: block; line-height: 1.5; }
+.amx-replace-actions { border-top: 1px solid var(--border); padding: 8px 4px 0; flex-wrap: wrap; }
+.amx-replace-paper { height: 100%; min-height: 0; overflow: auto; color: var(--text); background: var(--bg); }
+.amx-replace-paper > article { padding-block: 24px 72px; }
+.amx-replace-path { margin: 0 0 4px; overflow-wrap: anywhere; color: var(--text-muted); font: var(--ui-font-caption) var(--font-ui); }
+.amx-replace-paper .amx-title-static { margin: 0 0 22px; }
+.amx-replace-body { font-family: var(--font-body); font-size: var(--note-font-size, 15px); line-height: var(--reading-line-height, 1.6); overflow-wrap: anywhere; }
+.amx-replace-body :is(p, li, td) { color: inherit; }
+.amx-replace-body p { margin: 0 0 var(--reading-paragraph-gap, .5em); }
+.amx-replace-body :is(h1, h2, h3, h4) { margin: var(--reading-heading-before, 1.5em) 0 var(--reading-heading-after, .35em); }
+.amx-replace-body h1 { font-size: 1.7em; }
+.amx-replace-body h2 { font-size: 1.4em; }
+.amx-replace-body h3 { font-size: 1.2em; }
+.amx-replace-mark { scroll-margin-block: 2em; }
+.amx-replace-mark del { color: var(--text-muted); }
+.amx-replace-mark ins { color: var(--accent-ink); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.mb-shell[data-list-first] .amx-panel--inlist.amx-replace-panel { height: 100%; min-height: 0; overflow: hidden; }
+.mb-shell[data-list-first] .amx-tree:has(.amx-replace-panel) > :is(.pl-chips, .pl-fab) { display: none; }
+.mb-shell[data-list-first] .mb-drawer-body .amx-tree [data-under-dock]:has(.amx-replace-panel) { --under-dock-pad: 4px; }
+.mb-shell[data-list-first] .amx-replace-actions { padding-bottom: 6px; }
+.mb-shell[data-list-first] .amx-replace-panel .amx-replace-context { min-height: calc(44 * var(--pl-dp)); }
+.mb-shell[data-list-first] .amx-replace-panel .amx-replace-row > input { margin-top: 12px; }
+.amx-panel--inlist .amx-replace-paper > article { padding: 12px 8px 32px; }
+.amx-replace-mark[data-active] { outline: 1px solid var(--accent-ink); outline-offset: 1px; }
