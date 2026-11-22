@@ -42,8 +42,9 @@ const tryTest = async (name, fn) => {
   }
 }
 
-async function openQF(browser) {
+async function openQF(browser, setup) {
   const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
+  if (setup) await setup(page)
   page.on('pageerror', (e) => console.log('  [pageerror]', e.message))
   await page.goto(`${BASE}?qf`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await page.waitForSelector('.amx-qf-input', { timeout: 120000 })
@@ -68,6 +69,76 @@ const qfState = (page) => page.evaluate(() => ({
 ;(async () => {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
+    await tryTest('pinyin', async () => {
+      const page = await openQF(browser)
+      await page.evaluate(() => window.__qf.usePageStore.setState({ pages: ['项目周报.md', 'XMZB.md', '工作/重庆调研.md'] }))
+      await page.locator('.amx-qf-input').fill('xmzb')
+      await page.waitForFunction(() => [...document.querySelectorAll('.amx-qf-title')].some((el) => el.textContent === '项目周报'))
+      check('拼音不抢英文同名笔记', (await qfState(page)).rows[0] === '*XMZB')
+      await page.locator('.amx-qf-input').fill('chongqingdiaoyan')
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(() => window.__nav.length > 0)
+      check('全拼回车按中文原路径打开', (await qfState(page)).nav[0]?.path === '工作/重庆调研.md')
+      await page.close()
+    })
+    await tryTest('pinyin-cold', async () => {
+      // Hold the real dictionary chunk. Enter on the default "create" row must wait for the title.
+      let release
+      const gate = new Promise((done) => { release = done })
+      const page = await openQF(browser, (p) => p.route('**/*pinyinlite*', async (route) => { await gate; await route.continue() }))
+      await page.evaluate(() => window.__qf.usePageStore.setState({ pages: ['项目周报.md'] }))
+      await page.locator('.amx-qf-input').fill('xmzb')
+      await page.keyboard.press('Enter')
+      const waiting = await qfState(page)
+      release()
+      await page.waitForFunction(() => window.__nav.length > 0)
+      check('冷字典到达前回车不新建，到达后打开原笔记', waiting.open && !waiting.nav.length && (await qfState(page)).nav[0]?.path === '项目周报.md')
+      await page.close()
+
+      // A late frontmatter alias ranks ahead of the two visible fuzzy title matches.
+      const p2 = await openQF(browser)
+      await p2.evaluate(() => {
+        window.amadeus.pageAliases = () => new Promise((resolve) => { window.__finishAliases = () => resolve({ '项目.md': ['hx'] }) })
+        const store = window.__qf.usePageStore
+        store.setState({ pages: ['hax.md', 'hbxx.md', '项目.md'], linkGraphVersion: store.getState().linkGraphVersion + 1 })
+      })
+      await p2.waitForFunction(() => !!window.__finishAliases)
+      await p2.locator('.amx-qf-input').fill('hx')
+      await p2.keyboard.press('ArrowDown')
+      const before = (await qfState(p2)).rows.find((r) => r.startsWith('*'))
+      await p2.evaluate(() => window.__finishAliases())
+      await p2.waitForFunction(() => document.querySelector('.amx-qf-title')?.textContent === '项目')
+      const after = (await qfState(p2)).rows.find((r) => r.startsWith('*'))
+      await p2.keyboard.press('Enter')
+      await p2.waitForFunction(() => window.__nav.length > 0)
+      check('别名到达重排后按已选笔记身份打开', before === '*hbxx' && after === before && (await qfState(p2)).nav[0]?.path === 'hbxx.md')
+      await p2.close()
+    })
+    await tryTest('pinyin-intent', async () => {
+      for (const compose of [false, true]) {
+        const page = await openQF(browser)
+        await page.evaluate(() => {
+          window.amadeus.pageAliases = () => new Promise((done) => { window.__finishAliases = () => done({ '报告.md': ['abc'] }) })
+          const store = window.__qf.usePageStore
+          store.setState({ pages: ['XABC.md', '报告.md'], linkGraphVersion: store.getState().linkGraphVersion + 1 })
+        })
+        await page.waitForFunction(() => !!window.__finishAliases)
+        await page.locator('.amx-qf-input').fill('abc')
+        const fuzzy = (await qfState(page)).rows[0]
+        await page.keyboard.press('Enter')
+        if (compose) await page.locator('.amx-qf-input').dispatchEvent('compositionstart')
+        await page.evaluate(() => window.__finishAliases())
+        if (compose) {
+          await page.waitForFunction(() => document.querySelector('.amx-qf-title')?.textContent === '报告')
+          check('快速查找延迟回车遇到组字不重放', (await qfState(page)).nav.length === 0)
+          await page.locator('.amx-qf-input').dispatchEvent('compositionend')
+          await page.keyboard.press('Enter')
+        }
+        await page.waitForFunction(() => window.__nav.length > 0)
+        check(`快速查找${compose ? '热' : '冷'}回车都打开晚到的精确别名`, fuzzy === '*XABC' && (await qfState(page)).nav[0]?.path === '报告.md')
+        await page.close()
+      }
+    })
     await tryTest('G4-11', async () => {
       // 源码台账:mod+p 只许一条命令持有(两条同绑 = 后注册的那条永远按不出来)。
       const files = ['bootstrapEngine.tsx', 'amadeusCommands.ts'].map((f) => path.join(SRC, f))

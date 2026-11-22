@@ -3,7 +3,7 @@
 // 源码可编辑。因此不再用 @milkdown/plugin-math 的原子节点(那套一敲完就变原子、无法再编辑)。
 //
 // 为什么用装饰而非节点:节点是原子,光标进不去、编辑=删了重打;装饰不动文档,源码就是原生文本,光标天然可编辑,
-// 序列化/撤销/其它插件全部无感。每个 Amadeus 块是独立 Milkdown 编辑器、文档极小 → 每次选区变化重算装饰的开销可忽略。
+// 序列化/撤销/其它插件全部无感。整页编辑器只在文档改变时重建全套装饰，移动选区只重画显隐或语法着色受影响的段落。
 import { $prose, $remark } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
@@ -1006,12 +1006,12 @@ export function formulaMarks(doc: PMNode, from: number, to: number): readonly Ma
 }
 const marksKey = (marks: readonly Mark[]): string => marks.map((m) => `${m.type.name}${JSON.stringify(m.attrs)}`).join('|')
 
-function buildDecorations(state: EditorState): DecorationSet {
-  const focus = editorFocused(state)
-  const decos: Decoration[] = []
-  const selFrom = state.selection.from
-  const selTo = state.selection.to
-  state.doc.descendants((node, pos) => {
+type MathRange = { from: number; to: number }
+
+function collectMathDecorations(doc: PMNode, selection: MathRange | null, from: number, to: number, decos: Decoration[]): void {
+  const selFrom = selection?.from ?? -1
+  const selTo = selection?.to ?? -1
+  doc.nodesBetween(from, to, (node, pos) => {
     if (!node.isTextblock) return true
     if (node.type.spec.code) return false // 代码块内不渲染公式
     const cs = pos + 1
@@ -1021,7 +1021,7 @@ function buildDecorations(state: EditorState): DecorationSet {
     if (!spans.length) return false
     for (const sp of spans) {
       const inside = selectionInside(selFrom, selTo, cs + sp.from, cs + sp.to, sp.display)
-      const editing = focus && (inside || (selFrom !== selTo && selFrom < cs + sp.to && selTo > cs + sp.from))
+      const editing = selection !== null && (inside || (selFrom !== selTo && selFrom < cs + sp.to && selTo > cs + sp.from))
       if (editing) {
         // Whole source, `$` included: the public styling hook (monospace, italic, code size). PM merges it
         // into every text span of the formula, so selectors are `.math-source.math-source-x`, not descendants.
@@ -1048,7 +1048,7 @@ function buildDecorations(state: EditorState): DecorationSet {
       //    整批销毁重建、逐个重跑 KaTeX(120 个公式每键 ~78ms)。位置改由 widget 的 getPos 在点击时现算。
       // 行内公式套上源码的标记(背景色划线要连公式一起);块公式独占一块,不套。行内的一律显式给 marks(交集空也给 []):
       // 不给的话 side -1 的 widget 沿用前一段文字的标记 —— `<mark>前文</mark>$x$` 里没划线的公式也被涂上底色(Codex 评审)。
-      const marks = display ? [] : formulaMarks(state.doc, from, to)
+      const marks = display ? [] : formulaMarks(node, sp.from, sp.to)
       decos.push(Decoration.widget(from, (v, getPos) => renderMath(v, latex, display, getPos), {
         side: -1,
         ignoreSelection: true,
@@ -1060,7 +1060,71 @@ function buildDecorations(state: EditorState): DecorationSet {
     }
     return false // 不深入内联
   })
-  return decos.length ? DecorationSet.create(state.doc, decos) : DecorationSet.empty
+}
+
+// The selection changes how intersected formulas are displayed and how partially selected
+// tokens are colored. A large common interior stays fully selected. Two distant carets
+// affect only their own blocks, even when thousands of paragraphs separate them.
+function changedSelectionRanges(old: MathRange | null, next: MathRange | null): MathRange[] {
+  if (!old) return next ? [next] : []
+  if (!next) return [old]
+  if (old.to < next.from || next.to < old.from) return old.from < next.from ? [old, next] : [next, old]
+  const ranges: MathRange[] = []
+  if (old.from !== next.from) ranges.push({ from: Math.min(old.from, next.from), to: Math.max(old.from, next.from) })
+  if (old.to !== next.to) ranges.push({ from: Math.min(old.to, next.to), to: Math.max(old.to, next.to) })
+  return ranges
+}
+
+function affectedTextblocks(doc: PMNode, ranges: MathRange[]): MathRange[] {
+  const blocks: MathRange[] = []
+  for (const range of ranges) {
+    const start = doc.resolve(range.from)
+    const end = doc.resolve(range.to)
+    const from = start.parent.isTextblock ? start.start() : range.from
+    const to = end.parent.isTextblock ? end.end() : range.to
+    const previous = blocks[blocks.length - 1]
+    if (previous && previous.to >= from) previous.to = Math.max(previous.to, to)
+    else blocks.push({ from, to })
+  }
+  return blocks
+}
+
+// Keep one persistent DecorationSet per mounted plugin. Reading the completed EditorState
+// here also handles editors without the focus plugin and changing plugin order on reconfigure.
+function cachedMathDecorations(): (state: EditorState) => DecorationSet {
+  let doc: PMNode | null = null
+  let previous: MathRange | null = null
+  let formulaBlocks: MathRange | null = null
+  let decorations = DecorationSet.empty
+  return (state) => {
+    const selection = editorFocused(state) ? state.selection : null
+    if (state.doc === doc && previous?.from === selection?.from && previous?.to === selection?.to) return decorations
+    if (state.doc !== doc) {
+      const all: Decoration[] = []
+      collectMathDecorations(state.doc, selection, 0, state.doc.content.size, all)
+      // Blocks are visited in document order. Capture the bounds before create consumes the array.
+      // Empty trailing paragraphs and container boundaries are outside these bounds.
+      formulaBlocks = all.length ? {
+        from: state.doc.resolve(all[0].from).start(),
+        to: state.doc.resolve(all[all.length - 1].to).end(),
+      } : null
+      decorations = DecorationSet.create(state.doc, all)
+      doc = state.doc
+    } else if (formulaBlocks) {
+      const ranges = changedSelectionRanges(previous, selection)
+      for (const { from, to } of affectedTextblocks(doc, ranges)) {
+        const fresh: Decoration[] = []
+        collectMathDecorations(doc, selection, from, to, fresh)
+        // Select-all (or collapsing it) replaces every decorated block. Removing and adding
+        // thousands of entries first would walk the persistent decoration tree twice more.
+        decorations = from <= formulaBlocks.from && to >= formulaBlocks.to
+          ? DecorationSet.create(doc, fresh)
+          : decorations.remove(decorations.find(from, to)).add(doc, fresh)
+      }
+    }
+    previous = selection
+    return decorations
+  }
 }
 
 export function mathLivePreviewPlugin() {
@@ -1073,7 +1137,7 @@ export function mathLivePreviewPlugin() {
           handleKeyDown: (view, event) => mathPairBackspace(view, event) || mathBracketBackspace(view, event) || inlinePreviewEdgeKeyDown(view, event),
           handleClick: (view, _pos, event) => inlinePreviewEdgeClick(view, event),
           // 失焦 → 全部渲染(每个 Amadeus 块独立编辑器:点别的块 = 本块失焦,公式即渲染)。焦点态读 editorFocus。
-          decorations: (state) => buildDecorations(state),
+          decorations: cachedMathDecorations(),
         },
         view: (view) => new InlineMathFloat(view),
       }),
