@@ -10,7 +10,7 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, CalendarDays, Cloud, Info, NotebookText, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Bot, CalendarDays, Cloud, Info, Languages, NotebookText, type LucideIcon } from 'lucide-react'
 import { useSpaceStore } from '@lcl/engine'
 import { pluginFootprint, pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { PluginUninstallDialog, SupersededCleanupDialog } from './UninstallDialog'
@@ -197,8 +197,9 @@ const CORE_DESCRIPTIONS: Record<string, string> = {
   'forsion-extend': 'plugins.core.extend',
   'tangu-computer-use': 'plugins.core.computerUse',
   'forsion-calendar': 'plugins.core.calendar',
+  translation: 'plugins.core.translation',
 }
-const CORE_ICONS: Record<string, LucideIcon> = { 'forsion-extend': Cloud, 'forsion-calendar': CalendarDays }
+const CORE_ICONS: Record<string, LucideIcon> = { 'forsion-extend': Cloud, 'forsion-calendar': CalendarDays, translation: Languages }
 
 function cascadeAfterToggle(p: AmadeusPlugin, onEngineReload?: () => void): void {
   void loadUserSpaces() // 无 bundle 时幂等无害

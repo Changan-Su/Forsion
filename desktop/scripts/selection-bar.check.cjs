@@ -83,8 +83,9 @@ ctx.registerView({ id: 'reader', title: 'Sel Probe', mount: function (el) {
 window.__selprobe.open = function () { return ctx.openView('reader') }
 `
 
-/** 第三个实例的探针插件:id 就叫 translation(契约 §5:装着它,宿主自己的翻译就不出)。一个支持自动 / 卡头语言 / 原文 / 小喇叭的
- *  「翻译」,四个要上条的(放不下的进 ⋯),一个缺省进 ⋯ 的。run 记下拿到的语言 / 是不是自动、被中止的次数;delay 可调(测「新划选中止旧请求」)。 */
+/** 第三个实例的探针插件:id 就叫 translation(契约 §5:装着它,宿主自己的翻译就不出)。只注册一个支持自动 / 卡头语言 / 原文 / 小喇叭的
+ *  「翻译」。11-22 翻译插件随包后,translation 是宿主认的核心插件(版本 1.0.0 高于随包版,播种不换它,但照样记成内置):
+ *  它的动作站在宿主那组、不占插件位,和装出去的产品一样。占位那几个放在另一个普通插件 pinprobe(SLOTS_MAIN)里。run 记下拿到的语言 / 是不是自动、被中止的次数;delay 可调(测「新划选中止旧请求」)。 */
 const PINS_MAIN = `
 window.__pins = { runs: [], aborted: 0, delay: 0 }
 function tr(cx) {
@@ -98,6 +99,9 @@ function tr(cx) {
   })
 }
 ctx.registerSelectionAction({ id: 'translate', title: { zh: '翻译', en: 'Translate' }, icon: 'languages', scope: 'all', placement: 'bar', auto: true, card: { language: true, source: true, speak: true }, run: tr })
+`
+/** 第三个实例的第二个探针插件 pinprobe(普通插件):四个要上条的(插件位 3 颗,放不下的进 ⋯),一个缺省进 ⋯ 的。 */
+const SLOTS_MAIN = `
 ;[['b1', '摘录到今日笔记', 'bookmark'], ['b2', '查词典', 'book-open'], ['b3', '生成闪卡', 'layout-grid'], ['b4', '做成分享图', 'image']].forEach(function (a) {
   ctx.registerSelectionAction({ id: a[0], title: a[1], icon: a[2], scope: 'all', placement: 'bar', run: function () { return a[0] } })
 })
@@ -337,6 +341,11 @@ async function launch(stubUrl, prefs, fixture = {}) {
   const plugin = path.join(home, 'plugins', pluginId); fs.mkdirSync(plugin, { recursive: true })
   fs.writeFileSync(path.join(plugin, 'main.js'), fixture.pluginMain || PLUGIN_MAIN)
   fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: pluginId, name: fixture.pluginName || pluginId, version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
+  for (const x of fixture.extraPlugins || []) {
+    const dir = path.join(home, 'plugins', x.id); fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'main.js'), x.main)
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id: x.id, name: x.name, version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
+  }
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
@@ -347,6 +356,9 @@ async function launch(stubUrl, prefs, fixture = {}) {
   }
   const app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl } })
   const win = await app.firstWindow()
+  // 2026-11-22 翻译插件随包:启动时真的 @forsion/translation 会被播种进 plugins/translation,宿主翻译随之让位。
+  // 前两个实例要证的是「没装翻译插件」那条宿主翻译路径(网页 / 手机 / 旧构建仍走它),这里把播种进来的那份拿掉,下面的重载按没装读。
+  if (pluginId !== 'translation' && !fixture.keepBundledTranslation) fs.rmSync(path.join(home, 'plugins', 'translation'), { recursive: true, force: true })
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))
   await win.waitForSelector('#root')
   await win.evaluate(({ prefs, zoom }) => {
@@ -693,7 +705,7 @@ async function main() {
     // ── 2026-11-21:插件常驻 / 朗读 / 自动 / 翻译归属(第三个实例,探针插件就是 translation)──
     await step('插件常驻 / 朗读 / 自动 / 翻译归属', async () => {
       await app.close().catch(() => {})
-      const third = await launch(stub.url, { tangu_locale: 'zh' }, { pluginId: 'translation', pluginName: '翻译', pluginMain: PINS_MAIN })
+      const third = await launch(stub.url, { tangu_locale: 'zh' }, { pluginId: 'translation', pluginName: '翻译', pluginMain: PINS_MAIN, extraPlugins: [{ id: 'pinprobe', name: '划线探针', main: SLOTS_MAIN }] })
       app = third.app
       win = third.win
       check('第三个实例离开首启引导', await skipOnboarding(win))
@@ -705,14 +717,16 @@ async function main() {
       await win.locator(CHAT, { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 15000 })
       check('探针插件(translation)已加载', (await until(() => win.evaluate(() => !!window.__pins), 15000)) === true)
       const K = (id) => `plugin:translation:${id}`
+      const P = (id) => `plugin:pinprobe:${id}`
 
-      // 放哪:宿主翻译让位;插件位 3 个;⋯ 顶上「还有 2 个放不下」、每行一颗钉
+      // 放哪:宿主翻译让位、核心翻译插件站宿主那组;普通插件位 3 个;⋯ 顶上「还有 1 个放不下」、每行一颗钉
       await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
       const b = await barReady(win)
       check('装着 translation 插件:宿主自己的翻译不出(条上恰好一颗翻译 = 插件那颗)', !!b && !b.row.includes('translate') && b.row.filter((x) => /translate/.test(x)).length === 1, b?.row.join(','))
-      check("placement:'bar' 上条:宿主那组 | 插件三颗,第 4、5 个进 ⋯", b?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b2')},more`, b?.row.join(','))
-      const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] [data-group="plugin"]')].map((x) => ({ t: x.textContent.trim(), icon: !!x.querySelector('svg') })))
-      check('条上插件按钮是「图标 + 字」,字跟着界面语言({ zh, en } 的 title)', labels.length === 3 && labels.every((l) => l.icon) && labels[0].t === '翻译', JSON.stringify(labels))
+      check("核心翻译插件站在宿主那组(竖线前、朗读前),不占插件位;placement:'bar' 的普通插件三颗,第 4 个进 ⋯", b?.row.join(',') === `quote,btw,${K('translate')},speak,|,${P('b1')},${P('b2')},${P('b3')},more`, b?.row.join(','))
+      const labels = await win.evaluate((t) => ({ plugin: [...document.querySelectorAll('[data-testid="selection-bar"] [data-group="plugin"]')].map((x) => ({ t: x.textContent.trim(), icon: !!x.querySelector('svg') })),
+        tr: (() => { const x = document.querySelector(`[data-testid="selection-bar"] [data-act="${t}"]`); return x ? { t: x.textContent.trim(), icon: !!x.querySelector('svg') } : null })() }), K('translate'))
+      check('条上插件按钮是「图标 + 字」;核心插件的字跟着界面语言({ zh, en } 的 title)', labels.plugin.length === 3 && labels.plugin.every((l) => l.icon) && labels.plugin[0].t === '摘录到今日笔记' && labels.tr?.icon && labels.tr?.t === '翻译', JSON.stringify(labels))
       await shot(win, path.join(shots, 'pins-bar.png'))
       await win.locator('[data-testid="selection-bar"] [data-act="more"]').click()
       await win.locator('[data-testid="selbar-more"]').waitFor({ timeout: 3000 })
@@ -721,24 +735,24 @@ async function main() {
         items: [...document.querySelectorAll('[data-testid="selbar-more"] [data-ai]')].map((x) => x.getAttribute('data-ai')),
         pins: [...document.querySelectorAll('[data-testid="selbar-more"] [data-pin]')].map((x) => `${x.getAttribute('data-pin')}=${x.getAttribute('aria-pressed')}`),
       }))
-      check('⋯:顶上「还有 2 个放不下 · 去管理」;放不下的两颗钉着、缺省进 ⋯ 的没钉', /还有 2 个放不下/.test(more.notice || '') && /去管理/.test(more.notice || '') && more.items.join(',') === `${K('b3')},${K('b4')},${K('m1')}` && more.pins.join(',') === `${K('b3')}=true,${K('b4')}=true,${K('m1')}=false`, JSON.stringify(more))
+      check('⋯:顶上「还有 1 个放不下 · 去管理」;放不下的那颗钉着、缺省进 ⋯ 的没钉', /还有 1 个放不下/.test(more.notice || '') && /去管理/.test(more.notice || '') && more.items.join(',') === `${P('b4')},${P('m1')}` && more.pins.join(',') === `${P('b4')}=true,${P('m1')}=false`, JSON.stringify(more))
       await shot(win, path.join(shots, 'pins-more.png'))
-      await win.locator(`[data-testid="selbar-more"] [data-pin="${K('m1')}"]`).click()
+      await win.locator(`[data-testid="selbar-more"] [data-pin="${P('m1')}"]`).click()
       await frames(win)
       const b2 = await barState(win)
-      check('⋯ 里钉上「搜索网页」:用户点名的先分到插件位(真的上条,先后照旧),缺省上条的挤下去进 ⋯', b2?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('m1')},more`, b2?.row.join(','))
-      await win.locator(`[data-testid="selection-bar"] [data-act="${K('m1')}"]`).click({ button: 'right' })
+      check('⋯ 里钉上「搜索网页」:用户点名的先分到插件位(真的上条,先后照旧),缺省上条的挤下去进 ⋯', b2?.row.join(',') === `quote,btw,${K('translate')},speak,|,${P('b1')},${P('b2')},${P('m1')},more`, b2?.row.join(','))
+      await win.locator(`[data-testid="selection-bar"] [data-act="${P('m1')}"]`).click({ button: 'right' })
       const menu = win.locator('.plugin-menu')
       await menu.waitFor({ timeout: 3000 })
       const menuText = await menu.textContent()
-      check('条上插件按钮右键:「搜索网页 · 翻译」+「收进 ⋯」+「管理划线菜单…」', /搜索网页 · 翻译/.test(menuText) && /收进 ⋯/.test(menuText) && /管理划线菜单/.test(menuText), menuText)
+      check('条上插件按钮右键:「搜索网页 · 划线探针」+「收进 ⋯」+「管理划线菜单…」', /搜索网页 · 划线探针/.test(menuText) && /收进 ⋯/.test(menuText) && /管理划线菜单/.test(menuText), menuText)
       await shot(win, path.join(shots, 'pins-ctx.png'))
       await menu.locator('button', { hasText: '收进 ⋯' }).click()
       await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
       const b3 = await barReady(win)
-      check('右键「收进 ⋯」之后它回到 ⋯,条上恢复原来三颗', b3?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b2')},more`, b3?.row.join(','))
+      check('右键「收进 ⋯」之后它回到 ⋯,条上恢复原来三颗', b3?.row.join(',') === `quote,btw,${K('translate')},speak,|,${P('b1')},${P('b2')},${P('b3')},more`, b3?.row.join(','))
       const prefs = await win.evaluate(() => JSON.parse(localStorage.getItem('forsion_selection_actions') || 'null'))
-      check('钉 / 收进 ⋯ 记进偏好(只记动过的那一项)', prefs?.placement?.[K('m1')] === 'more' && Object.keys(prefs.placement).length === 1, JSON.stringify(prefs))
+      check('钉 / 收进 ⋯ 记进偏好(只记动过的那一项)', prefs?.placement?.[P('m1')] === 'more' && Object.keys(prefs.placement).length === 1, JSON.stringify(prefs))
 
       // 朗读:没配模型 → 选区下的提示卡(不回落系统声音);配了 → 合成中 → 播放中 → 点停;放完回静止
       const speakBtn = win.locator('[data-testid="selection-speak"]')
@@ -856,13 +870,13 @@ async function main() {
         autos: [...document.querySelectorAll('[data-auto]')].map((x) => x.getAttribute('data-auto')),
       }))
       check('管理表:宿主那组(没有宿主翻译)+ 插件动作按条上的次序,放哪如实;只有支持的那个有自动开关并挂「先跑」',
-        table.rows.join(',') === `host:ask:bar,host:speak:bar,${K('translate')}:bar,${K('b1')}:bar,${K('b2')}:bar,${K('b3')}:bar,${K('b4')}:bar,${K('m1')}:more` && table.first.join(',') === K('translate') && table.autos.join(',') === K('translate'), JSON.stringify(table))
+        table.rows.join(',') === `host:ask:bar,${K('translate')}:bar,host:speak:bar,${P('b1')}:bar,${P('b2')}:bar,${P('b3')}:bar,${P('b4')}:bar,${P('m1')}:more` && table.first.join(',') === K('translate') && table.autos.join(',') === K('translate'), JSON.stringify(table))
       await fl.locator('[data-testid="selection-actions-table"]').screenshot({ path: path.join(shots, 'pins-settings-table.png') })
-      await fl.locator(`[data-selaction="${K('b2')}"] [data-place="hidden"]`).click()
+      await fl.locator(`[data-selaction="${P('b2')}"] [data-place="hidden"]`).click()
       await fl.close().catch(() => {})
       await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
       const b4 = await barReady(win)
-      check('管理表里设成「不显示」:条上没有它,下一个放得下的补上', b4?.row.join(',') === `quote,btw,speak,|,${K('translate')},${K('b1')},${K('b3')},more`, b4?.row.join(','))
+      check('管理表里设成「不显示」:条上没有它,下一个放得下的补上', b4?.row.join(',') === `quote,btw,${K('translate')},speak,|,${P('b1')},${P('b3')},${P('b4')},more`, b4?.row.join(','))
     })
 
     console.log(`\n${checks} checks passed, ${failed.length} failed${ZOOM !== 1 ? ` (ZOOM=${ZOOM})` : ''}`)

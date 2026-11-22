@@ -141,7 +141,7 @@ describe('放哪:插件给缺省、用户的永远优先、插件位最多 3 个
     expect(ks(r.plugins)).toEqual(['plugin:gamma:g1', 'plugin:alpha:a1', 'plugin:alpha:a2'])
   })
   it('核心插件的动作和宿主那组站一起(翻译之后、朗读之前),不占插件位', () => {
-    // 用已在核心名单里的日历做样本(翻译插件进 CORE_BUNDLE_IDS 是随包接入那一包的事)
+    // 用核心名单里的日历做样本(翻译插件的接管另见下一组)
     const cal = pluginSelectionEntry(act('forsion-calendar', 'todo', { placement: 'bar' }), 9, installed)
     const cal2 = pluginSelectionEntry(act('forsion-calendar', 'x'), 10, installed)
     expect(cal.kind).toBe('core')
@@ -172,6 +172,15 @@ describe('宿主翻译的归属:翻译插件是核心插件(停用也算),或启
     expect(placementOf(e, P({ placement: { [HOST_SELECTION_KEYS.translate]: 'hidden' } }))).toBe('hidden')
     expect(placementOf(e, P({ placement: { [HOST_SELECTION_KEYS.translate]: 'hidden', 'plugin:translation:translate': 'bar' } }))).toBe('bar')
     expect(pe(act('alpha', 'translate'), 0).alias).toBeUndefined()
+  })
+  it('随包的翻译插件是核心插件:停用了宿主也不出(条上零颗,不回落成两颗);动作站在宿主那组、不占插件位', () => {
+    expect(hostTranslateAllowed([{ id: 'translation', builtin: true, enabled: false }], [])).toBe(false)
+    expect(hostTranslateAllowed([{ id: 'translation', preinstalled: true }], [])).toBe(false)
+    const core = pluginSelectionEntry(act('translation', 'translate', { placement: 'bar' }), 0, [{ id: 'translation', builtin: true }])
+    expect(core.kind).toBe('core')
+    const r = arrangeSelectionActions([hostSelectionEntry(HOST_SELECTION_KEYS.ask), hostSelectionEntry(HOST_SELECTION_KEYS.speak), core, pluginSelectionEntry(act('alpha', 'a1', { placement: 'bar' }), 1, installed)], P())
+    expect(ks(r.lead)).toEqual(['host:ask', 'plugin:translation:translate', 'host:speak'])
+    expect(ks(r.plugins)).toEqual(['plugin:alpha:a1'])
   })
 })
 
