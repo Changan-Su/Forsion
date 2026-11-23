@@ -257,6 +257,7 @@ import { chanAgentModeLive } from './lib/chanagentmode-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
+import { COLLECTED_ID, startCollectedMarketFront } from './lib/market-collected-live.mjs';
 import { webPublishLive, startConnectLocal } from './lib/webpublish-live.mjs';
 import { cloudCalLive } from './lib/cloudcal-live.mjs';
 import { calTodoLive, plantCalendarSkill } from './lib/caltodo-live.mjs';
@@ -1500,6 +1501,8 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
 const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('healthsummary') || ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+// marketplace / marketplacechat(11-23):在 server 的商店夹具前挡一层,列表带 include=collected 时多一条 skills.sh 收录技能(lib/market-collected-live.mjs)。
+const MARKET_FRONT = (ONLY.has('marketplace') || ONLY.has('marketplacechat')) && process.env.TANGU_LIVE_CLOUD_URL ? await startCollectedMarketFront(process.env.TANGU_LIVE_CLOUD_URL) : null;
 
 // computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
 // (core/hostChannel.ts);只在跑这个场景时接管 stdin,别的场景的引擎环境不变
@@ -1525,7 +1528,7 @@ const chDecrypt = (line) => {
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
-  '--sandbox', SANDBOX, '--cloud-url', process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
+  '--sandbox', SANDBOX, '--cloud-url', MARKET_FRONT?.url || process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
@@ -2902,15 +2905,23 @@ try {
     const detail = successful(follow, 'get_marketplace_plugin').some(r => marketplaceItemsOf(r.full || r.result).some(i => i.id === selected?.id));
     const rejected = await leg(`${sessionId}-negative`, '有没有方案可以在 Forsion 里面获取小米运动健康 Mi Fitness 的数据？请现在重新查当前商店，之前查过也请重查。单纯能整理 PDF 笔记的插件不满足，需要实际读取小米运动健康的数据。');
     const searchedNoMatch = successful(rejected, 'search_marketplace').length > 0;
+    // 11-23 收录技能腿:商店里只有 skills.sh 收录的那条能帮上 —— 搜得到(引擎带了 include=collected)、推荐卡带出处与需要条件、话里说清出处 / 没经人工审核。
+    // 没给 TANGU_LIVE_CLOUD_URL(没有前置)时这条腿不跑,判据照旧。
+    const skill = MARKET_FRONT ? await leg(`${sessionId}-skill`, '我手上有个很大、方向还不清楚的项目，一次对话肯定做不完。想先把它拆成一张决策问题的地图，再一个一个问题地推进。商店里有没有能帮上忙的技能？挑一个最合适的推荐给我，装不装我自己决定。') : null;
+    const skillFound = successful(skill, 'search_marketplace').flatMap(r => marketplaceItemsOf(r.full || r.result)).find(i => i.id === COLLECTED_ID);
+    const skillCard = successful(skill, MARKETPLACE_RECOMMENDATION_TOOL).flatMap(r => marketplaceItemsOf(r.full || r.result)).find(i => i.id === COLLECTED_ID);
+    const toldSource = /skills\.sh|审核|review/i.test(skill?.content || '');
+    const skillOk = !skill || (skill.done && !skill.error && skillFound?.origin?.kind === 'collected' && skillCard?.origin?.sourceTitle === 'skills.sh' && !!skillCard?.requirements && toldSource && MARKET_FRONT.seen.listsWithCollected > 0);
     const redrawn = ev.toolResults.some(r => ['sketch', 'intelligent_ui'].includes(r.name) && !r.isError);
     const lookupOnly = successful(ev, 'search_marketplace').length > 0 && successful(ev, 'search_marketplace').every(r => JSON.parse(r.full || r.result).kind === 'marketplace_lookup');
     const ok = !redrawn && lookupOnly && ev.done && !ev.error
       && new Set(recommended.map(item => item.id)).size === 2
       && recommended.every(item => item.minAppVersion !== '99.0.0' && items.some(candidate => candidate.id === item.id))
       && detail && !follow.error && follow.done && !follow.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL)
-      && rejected.done && !rejected.error && searchedNoMatch && !rejected.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL);
-    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, rejected, items, recommended }, null, 2));
-    return { ok, detail: `lookups without cards=${lookupOnly}; selected IDs=${recommended.map(i => i.id).join(',')}; detail=${detail}; no-match search=${searchedNoMatch}, recommendations=${successful(rejected, MARKETPLACE_RECOMMENDATION_TOOL).length}`, output: [ev.content, follow?.content, rejected.content].filter(Boolean).join('\n\n'), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || []), ...rejected.toolCalls], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) + tokensOf(rejected) };
+      && rejected.done && !rejected.error && searchedNoMatch && !rejected.toolCalls.includes(MARKETPLACE_RECOMMENDATION_TOOL) && skillOk;
+    writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, rejected, skill, items, recommended, front: MARKET_FRONT?.seen }, null, 2));
+    const skillDetail = skill ? `; collected skill: lists with include=collected=${MARKET_FRONT.seen.listsWithCollected}/${MARKET_FRONT.seen.lists}, found=${!!skillFound}, card=${!!skillCard} origin=${skillCard?.origin?.kind || '-'} requirements=${!!skillCard?.requirements}, told source=${toldSource}` : '; collected skill: not run (no TANGU_LIVE_CLOUD_URL)';
+    return { ok, detail: `lookups without cards=${lookupOnly}; selected IDs=${recommended.map(i => i.id).join(',')}; detail=${detail}; no-match search=${searchedNoMatch}, recommendations=${successful(rejected, MARKETPLACE_RECOMMENDATION_TOOL).length}${skillDetail}`, output: [ev.content, follow?.content, rejected.content, skill?.content].filter(Boolean).join('\n\n'), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || []), ...rejected.toolCalls, ...(skill?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) + tokensOf(rejected) + (skill ? tokensOf(skill) : 0) };
   });
 
   // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
