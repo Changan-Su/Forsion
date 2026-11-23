@@ -112,7 +112,7 @@ function cursorEl(): HTMLElement {
   el.id = CURSOR_ID
   el.setAttribute('aria-hidden', 'true')
   // 只是画给录像看的:不接点击、不进读屏、压在最上面
-  el.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;z-index:2147483647;pointer-events:none;transform:translate(-40px,-40px);transition:transform 320ms cubic-bezier(.3,.7,.2,1);will-change:transform'
+  el.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;z-index:calc(var(--z-stage-overlay, 2147483646) + 1);pointer-events:none;transform:translate(-40px,-40px);transition:transform 320ms cubic-bezier(.3,.7,.2,1);will-change:transform'
   el.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.4 12.6 L16.6 12.6 Z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
   document.body.appendChild(el)
   return el
@@ -127,7 +127,7 @@ async function cursorTo(x: number, y: number): Promise<void> {
   if (far) await new Promise((r) => setTimeout(r, 360))
   const ring = document.createElement('div')
   ring.setAttribute('aria-hidden', 'true')
-  ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(17,17,17,.55);z-index:2147483646;pointer-events:none;transition:transform 420ms ease-out,opacity 420ms ease-out`
+  ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(17,17,17,.55);z-index:var(--z-stage-overlay, 2147483646);pointer-events:none;transition:transform 420ms ease-out,opacity 420ms ease-out`
   document.body.appendChild(ring)
   requestAnimationFrame(() => { ring.style.transform = 'scale(1.6)'; ring.style.opacity = '0' })
   setTimeout(() => ring.remove(), 500)
@@ -140,7 +140,7 @@ let recording: { rec: MediaRecorder; chunks: Blob[]; started: number; ext: 'mp4'
 function startFrameTicker(): () => void {
   const el = document.createElement('div')
   el.setAttribute('aria-hidden', 'true')
-  el.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:2147483646;pointer-events:none'
+  el.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:var(--z-stage-overlay, 2147483646);pointer-events:none'
   document.body.appendChild(el)
   let on = true
   let raf = 0

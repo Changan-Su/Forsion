@@ -75,6 +75,7 @@
   --z-palette: 1000;     /* 命令面板 */
   --z-object-menu: 1100; /* LCL 共用渲染器的右键菜单(objectMenu,挂在 body、不进发起者的容器):压在 Ribbon 收纳夹浮层(900)、
                             Space 收纳面板这些发起它的浮层上;原来是 Ribbon 菜单那层遮罩的 1100 */
+  --z-stage-overlay: 2147483646; /* 插件演示舞台录像用的假指针、点击涟漪与出帧点(sandboxWindow.ts):只画给录像看、不接点击,压在一切之上 */
   /* 分段控件选中滑块(5.11 A,10-25 用户定):凸起 —— 浅色卡面色 + 软阴影,暗色比轨道亮一档(:root.dark 那块)。
    * 侧栏胶囊 .t2s-vaultseg、LCL 看法胶囊 .lcl-vmode、Agent 标签条 .agent-section-nav 共用。 */
   --seg-thumb: var(--bg-card);

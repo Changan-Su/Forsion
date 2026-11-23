@@ -221,7 +221,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
   font-variant-numeric: tabular-nums;
 }
 .rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-label { padding-right: 24px; }
-.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-key { opacity: 0.55; transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
+.rb-expanded .rb-top .rb-slot:is(:hover, :has(:focus-visible)) .rb-key { opacity: 0.55; transition: opacity var(--duration-fast, 0.15s) var(--ease-surface, ease); }
 
 /* ===== 收纳夹 / 「…」浮层(悬停在 ribbon 右侧展开:icon + 文字行,可拖排/拖出) ===== */
 .rb-fly {
