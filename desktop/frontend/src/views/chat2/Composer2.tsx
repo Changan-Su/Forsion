@@ -52,6 +52,7 @@ import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
 import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
+import { isCaretOnEdgeLine } from './textareaLayout'
 import { findTokens, tokenTouching } from './composerTokens'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
@@ -2162,23 +2163,23 @@ export const Composer2: React.FC<{
                 })
                 return
               }
-              // steer 撤回优先于历史召回:等待区有货且未进召回态,空/首行 ↑ 先取回最新一条插话
-              // (prepend 进草稿,类 pi 的 Alt+Up;再按 ↑ 继续取更早的,取完自然落回历史召回)。
-              if (e.key === 'ArrowUp' && pendingSteer?.length && onWithdrawSteer && histPos === 0
-                && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1) {
-                e.preventDefault()
-                withdrawIntoDraft(pendingSteer[pendingSteer.length - 1].id)
-                return
-              }
-              // 历史召回:走到这里说明无浮层消费方向键(菜单激活时已 return)。空/首行 ↑ 取更旧、末行 ↓ 取更新。
-              if (e.key === 'ArrowUp' && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1 && sentHistory?.length) {
-                e.preventDefault(); recallHistory(true); return
-              }
-              if (e.key === 'ArrowDown' && histPos > 0 && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(e.currentTarget.selectionStart).indexOf('\n') === -1) {
-                e.preventDefault(); recallHistory(false); return
+              // 补全菜单已先处理方向键。光标到视觉首 / 末行才允许撤回插话或切换历史。
+              if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                if (e.key === 'ArrowUp') {
+                  // 等待中的插话优先取回，再往前才是已发送消息。
+                  const queued = histPos === 0 && onWithdrawSteer ? pendingSteer?.at(-1) : undefined
+                  if ((queued || sentHistory?.length) && isCaretOnEdgeLine(e.currentTarget, 'first')) {
+                    e.preventDefault()
+                    if (queued) void withdrawIntoDraft(queued.id)
+                    else recallHistory(true)
+                    return
+                  }
+                }
+                if (e.key === 'ArrowDown' && histPos > 0 && isCaretOnEdgeLine(e.currentTarget, 'last')) {
+                  e.preventDefault()
+                  recallHistory(false)
+                  return
+                }
               }
               // 运行中 ⌘/Ctrl+Enter = 另起话题(11-08);没在跑时 ⌘Enter 照旧就是发送
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (running && (isMacPlatform() ? e.metaKey : e.ctrlKey)) sendNewTopic(); else send() }
