@@ -190,16 +190,23 @@ export function isSteerDiscarded(ev: Pick<ToolEvent, 'isError' | 'startedAt' | '
 }
 
 const SEARCH_TOOLS = new Set(['grep', 'search_files', 'glob_files', 'web_search'])
-/** 判「同一个目标」用的键:文件类按完整路径(apply_patch 按动到的全部文件)、命令按整条命令、搜索按搜的词;认不出目标的按整段参数。
- *  不用过程行的 target:那只是文件名 / 命令第一行,不同目录的同名文件会被当成一个。导出给单测。 */
+/** 判「同一个目标」用的键(导出给单测):宁可认不出重试(照旧挂红叉),也不把另一件事的成功记成这次失败的重试。
+ *  文件类按完整路径(apply_patch 按动到的全部文件,含改名的目标)、命令按整条命令 + 工作目录、搜索按整段参数(词 + 范围);
+ *  认不出目标的按整段参数。不用过程行的 target:那只是文件名 / 命令第一行,不同目录的同名文件会被当成一个。 */
 export function retryTarget(ev: Pick<ToolEvent, 'name' | 'arguments'>): string {
   const raw = ev.arguments || ''
   let a: any
   try { a = raw ? JSON.parse(raw) : {} } catch { return raw }
-  if (!a || typeof a !== 'object') return raw
-  if (ev.name === 'apply_patch') return patchPaths(String(a.patch ?? a.input ?? a.diff ?? raw)).sort().join('\n') || raw
-  const fields = SEARCH_TOOLS.has(ev.name) ? ['pattern', 'query', 'glob', 'path'] : ['path', 'command', 'cmd', 'code', 'url', 'file']
-  for (const k of fields) if (typeof a[k] === 'string' && a[k]) return `${k}:${a[k]}`
+  if (!a || typeof a !== 'object' || SEARCH_TOOLS.has(ev.name)) return raw
+  if (ev.name === 'apply_patch') {
+    const patch = String(a.patch ?? a.input ?? a.diff ?? raw)
+    const moved = [...patch.matchAll(/^\*\*\* Move to: (.+)$/gm)].map((m) => `→${m[1].trim()}`)
+    return [...patchPaths(patch), ...moved].sort().join('\n') || raw
+  }
+  if (typeof a.path === 'string' && a.path) return `path:${a.path}`
+  const cmd = [a.command, a.cmd, a.code].find((v) => typeof v === 'string' && v)
+  if (cmd) return `cmd:${typeof a.cwd === 'string' ? a.cwd : ''}\n${cmd}`
+  for (const k of ['url', 'file']) if (typeof a[k] === 'string' && a[k]) return `${k}:${a[k]}`
   if (typeof a.from === 'string' || typeof a.to === 'string') return `${a.from ?? ''}→${a.to ?? ''}`
   return raw
 }

@@ -42,6 +42,16 @@ describe('stepOutcomes', () => {
     expect(retryTarget(bash('x', 'cd a\nnpm test'))).not.toBe(retryTarget(bash('y', 'cd a\nnpm run build')))
   })
 
+  it('a different rename destination, search scope or working directory is not the same target', () => {
+    const patch = (to: string): ToolEvent => ({ id: to, name: 'apply_patch', arguments: JSON.stringify({ patch: `*** Begin Patch\n*** Update File: old.ts\n*** Move to: ${to}\n*** End Patch` }), done: true, result: 'ok', startedAt: 1 })
+    expect(stepOutcomes([{ ...patch('first.ts'), ...fail() }, patch('second.ts')], false)).toEqual(['failed', 'ok'])
+    expect(stepOutcomes([{ ...patch('first.ts'), ...fail() }, patch('first.ts')], false)).toEqual(['retried', 'ok'])
+    const search = (id: string, include: string, extra: Partial<ToolEvent> = {}): ToolEvent => ({ id, name: 'search_files', arguments: JSON.stringify({ query: 'boot', include }), done: true, result: 'ok', startedAt: 1, ...extra })
+    expect(stepOutcomes([search('s1', 'src', fail()), search('s2', 'lib')], false)).toEqual(['failed', 'ok'])
+    const inDir = (id: string, cwd: string, extra: Partial<ToolEvent> = {}): ToolEvent => ({ ...bash(id, 'npm test'), arguments: JSON.stringify({ command: 'npm test', cwd }), ...extra })
+    expect(stepOutcomes([inDir('b1', 'a', fail('exit 1')), inDir('b2', 'b')], false)).toEqual(['failed', 'ok'])
+  })
+
   it('user rejections are recognised from the result text in every wording the engine writes, live and after reload alike', () => {
     for (const text of [USER_REJECT_REASON, PARKED_USER_REJECT_REASON, BRIDGE_USER_REJECT_REASON]) {
       expect(isUserRejectedToolResult(text)).toBe(true)

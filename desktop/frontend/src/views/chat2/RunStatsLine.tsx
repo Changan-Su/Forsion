@@ -34,7 +34,7 @@ export function RunStatsLine({ stats }: { stats: RunStats }) {
   if (output > 0) parts.push(t('chat.runStats.output', { n: fmtTokens(output) }))
   if (stats.thinkTracked && think >= 1000) parts.push(t(stats.thinkSince != null ? 'chat.runStats.thinking' : 'chat.runStats.thought', { t: fmtElapsed(think) }))
   const cached = stats.cached || 0
-  const title = output > 0
+  const title = output > 0 || (stats.input || 0) > 0
     ? t(cached > 0 ? 'chat.runStats.breakdownCached' : 'chat.runStats.breakdown', { input: fmtTokens(stats.input || 0), cached: fmtTokens(cached), output: fmtTokens(output) })
     : undefined
   return <div className="t2-dim t2-runstats" data-run-stats={live ? 'live' : 'done'} title={title}>{parts.join(' · ')}</div>
