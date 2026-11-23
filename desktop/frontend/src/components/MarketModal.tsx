@@ -979,7 +979,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       <div className="mk-card-content">
         <div className="mk-card-eyeline">
           <span>{kindLabel[c.type]}</span>
-          {!!requirementText(c.collected, t) && <span className="mk-tier" data-market-tier={c.id}>{requirementText(c.collected, t)}</span>}
+          {!!requirementText(c.collected, t) && <span className="mk-tier" data-market-tier={c.id} title={requirementText(c.collected, t)}>{requirementText(c.collected, t)}</span>}
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
           {gone(c) && <span className="mk-waiting-badge" data-market-upstream-deleted={c.id} title={t('market.upstreamDeletedHint')}>{t('market.upstreamDeleted')}</span>}
           {!gone(c) && delisted(c) && isInstalled(c) && <span className="mk-waiting-badge" data-market-delisted={c.id} title={t('market.delistedHint')}>{t('market.delisted')}</span>}

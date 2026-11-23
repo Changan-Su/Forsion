@@ -17,6 +17,10 @@
 .mk-card-eyeline .mk-tier { color: var(--text-faint); font-weight: 400; }
 .mk-card-eyeline .mk-tier::before { content: '·'; margin-right: 6px; }
 .mk-card-eyeline .mk-count { margin-left: auto; }
+/* 要求那段(「为 Claude Code 写 · 已适配」)太长时自己省略,不把右上角的安装数挤到第二行、标题跟着往下掉 */
+.mk-card-eyeline:has(> .mk-tier) { flex-wrap: nowrap; }
+.mk-card-eyeline:has(> .mk-tier) > * { flex: none; }
+.mk-card-eyeline:has(> .mk-tier) > .mk-tier { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mk-count { display: inline-flex; align-items: center; gap: 2px; color: var(--text-faint); font-weight: 400; white-space: nowrap; }
 .mk-count svg { flex: none; }
 .mk-detail-kind .mk-tier { color: var(--text-muted); font-weight: 500; }
