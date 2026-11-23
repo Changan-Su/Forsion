@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { extractZipToDir, MARKET_MANIFEST } from './marketInstall'
 import { prepareSkillPackage, skillTreeHash } from './skillPackage'
-import { createSourceSkillUpdater, type SkillUpdateDownload } from './sourceSkillUpdates'
+import { createSourceSkillUpdater, isSkillStageOf, type SkillUpdateDownload } from './sourceSkillUpdates'
 
 const ID = 'src_25aae625_trailmap', SLUG = 'src-25aae625-trailmap'
 const SKILL = (v: string) => `---\nname: trailmap\ndescription: v${v}\n---\nbody ${v}\n`
@@ -55,8 +55,10 @@ describe('source skill updates', () => {
     expect(await readFile(join(dir, '.forsion-adapt.md'), 'utf8')).toBe('v2 note\n')
     expect(recordInstall).toHaveBeenCalledWith(expect.objectContaining({ version: latest, path: 'skills/trailmap', tree: await skillTreeHash(dir) }))
     expect(changed).toHaveBeenCalledTimes(1)
-    // No staging / old copies left next to it.
-    expect(await readdir(root)).toEqual([SLUG])
+    // No staging copies left next to it; the version before is kept once as `.previous` (a file saved into the folder
+    // while the swap ran would be in there, not gone) and the next update replaces it.
+    expect((await readdir(root)).sort()).toEqual([`.skill-stage-${SLUG}.previous`, SLUG])
+    expect(await readFile(join(root, `.skill-stage-${SLUG}.previous`, 'old.md'), 'utf8')).toBe('old')
     expect(await make().check()).toEqual([{ cardId: ID, outcome: 'current' }])
   })
 
@@ -73,6 +75,46 @@ describe('source skill updates', () => {
     latest = rec.version!
     expect(await make().check()).toEqual([{ cardId: ID, outcome: 'current' }])
     expect(await readFile(join(dir, 'old.md'), 'utf8')).toBe('old')
+  })
+
+  it('puts back a folder an interrupted update left missing even with automatic updates off, but not after an uninstall', async () => {
+    await rename(dir, join(root, `.skill-stage-${SLUG}.old-1234`))
+    expect(await make(false).check()).toEqual([])
+    expect(await readFile(join(dir, 'old.md'), 'utf8')).toBe('old')
+    // Uninstalled after the pass listed it (record gone by the time the queue runs): a leftover copy is not brought back.
+    await rename(dir, join(root, `.skill-stage-${SLUG}.old-5678`))
+    const listed = [{ cardId: ID, type: 'skill', slug: SLUG, name: 'trailmap', version: rec.version, sourceId: '25aae625', sourceTitle: 'skills.sh', removed: false }]
+    await createSourceSkillUpdater({
+      sources: { installs: async () => listed, installRecord: async () => null, lookup: async () => { throw new Error('unused') }, updatesPaused: () => false, recordInstall } as never,
+      download, skillDir: () => dir, enabled: () => false, exclusive: (fn) => fn(), changed,
+    }).check()
+    expect(await readdir(root)).toEqual([`.skill-stage-${SLUG}.old-5678`])
+  })
+
+  it('reads the record again inside the install queue: a manual reinstall in between decides, not the stale copy', async () => {
+    let calls = 0
+    const stale = rec
+    const updater = createSourceSkillUpdater({
+      sources: {
+        installs: async () => [{ cardId: ID, type: 'skill', slug: SLUG, name: 'trailmap', version: stale.version, sourceId: '25aae625', sourceTitle: 'skills.sh', removed: false }],
+        // first read (outside the queue) = the old record; inside the queue a reinstall has replaced it (new consent, same tree)
+        installRecord: async () => (++calls <= 1 ? stale : { ...stale, version: '2026.11.19-200000', ack: { scripts: 0, audit: false } }),
+        lookup: async () => ({ id: ID, name: 'trailmap', type: 'skill', installSlug: SLUG, latestVersion: latest, summary: '', author: 'lanternworks' }),
+        updatesPaused: () => false,
+        recordInstall,
+      } as never,
+      download, skillDir: () => dir, enabled: () => true, exclusive: (fn) => fn(), changed,
+    })
+    expect(await updater.check()).toEqual([{ cardId: ID, outcome: 'paused' }])
+    expect(download).not.toHaveBeenCalled()
+  })
+
+  it('names only the update folders of that exact skill', () => {
+    expect(isSkillStageOf(`.skill-stage-${SLUG}.previous`, SLUG)).toBe(true)
+    expect(isSkillStageOf(`.skill-stage-${SLUG}.old-0b7e3a52-8f8e-4c51-9d55-2f0c5b1d6a10`, SLUG)).toBe(true)
+    expect(isSkillStageOf(`.skill-stage-${SLUG}-two.previous`, SLUG)).toBe(false)
+    expect(isSkillStageOf(`.skill-stage-${SLUG}.notes`, SLUG)).toBe(false)
+    expect(isSkillStageOf(SLUG, SLUG)).toBe(false)
   })
 
   it('leaves a folder the user edited alone (no download)', async () => {

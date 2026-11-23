@@ -92,7 +92,7 @@ import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPlugin
 import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
 import { ADAPT_FILE, auditWarns, BUILTIN_SKILLS_SH, isSourceCardId } from '../shared/storeSources'
 import { prepareSkillPackage, skillTreeHash } from './skillPackage'
-import { createSourceSkillUpdater } from './sourceSkillUpdates'
+import { createSourceSkillUpdater, isSkillStageOf } from './sourceSkillUpdates'
 import { assertInternalsRawApproved } from './marketInternals'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
@@ -5112,7 +5112,9 @@ app.whenReady().then(async () => {
         const a = expect?.ack as { scripts?: unknown; audit?: unknown } | undefined
         ack = a && typeof a === 'object' && typeof a.scripts === 'number' && Number.isInteger(a.scripts) && a.scripts >= 0 ? { scripts: a.scripts, audit: a.audit === true } : undefined
         // 更新 / 重装:装的时候确认过的照样算(新版多出来的脚本、新出现的审计警告仍要再问)。
-        const before = ack ? undefined : (await storeSources!.installRecord(id).catch(() => null))?.ack
+        // 只认同一个包(同一仓库 + 同一文件夹)上的确认:来源把这个编号改指到别的包,旧确认不算数。
+        const rec = ack ? null : await storeSources!.installRecord(id).catch(() => null)
+        const before = rec && rec.origin === (origin ?? '') && (rec.path ?? '') === (packagePath ?? '') ? rec.ack : undefined
         if (!ack && before) ack = before
         if ((skill.scripts > 0 && (!ack || ack.scripts < skill.scripts)) || (auditWarn && !ack?.audit)) throw new Error(`install: confirm-needed scripts=${skill.scripts} audit=${auditWarn ? 1 : 0}`)
       }
@@ -5125,7 +5127,11 @@ app.whenReady().then(async () => {
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
     // 解压是原地覆盖:先删掉上一版留下的适配说明(这一版没有就不该再被读到;是符号链接也只删链接,不写穿到别处)。
-    if (effType === 'skill') await rm(join(dest, ADAPT_FILE), { force: true })
+    if (effType === 'skill') {
+      // 技能文件夹本身是链接 / 联接点:删说明、解包都会落到别处,先拒(用户自己的文件夹不该被商店安装改写)
+      if ((await lstat(dest).catch(() => null))?.isSymbolicLink()) throw new Error('install: destination is a link')
+      await rm(join(dest, ADAPT_FILE), { force: true })
+    }
     const files = await installMarketZip(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
@@ -5244,6 +5250,8 @@ app.whenReady().then(async () => {
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
     const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
+    // 来源技能自动更新留在旁边的上一版 / 中断残留(.skill-stage-<slug>.*)一起删
+    if (type === 'skill') for (const n of await readdir(dirname(dir)).catch(() => [] as string[])) if (isSkillStageOf(n, slug)) await rm(join(dirname(dir), n), { recursive: true, force: true }).catch(() => {})
     await marketPluginUpdater.forget(type, slug)
     await storeSources?.forget(type, slug).catch(() => {})
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
@@ -5326,7 +5334,10 @@ app.whenReady().then(async () => {
     trusted(e)
     const r = sourcesChanged(await storeSources!.setDisabled(id, on === true))
     // 内置来源开关决定 Tangu 搜不搜得到收录技能(引擎启动时读):空闲时重启引擎生效,有任务在跑就等它跑完
-    if (id === BUILTIN_SKILLS_SH.id && (await loadConfig()).mode === 'managed') void ensureBackend('engine_restart', { defer: true })
+    if (id === BUILTIN_SKILLS_SH.id) {
+      const cfg = await loadConfig()
+      if (cfg.mode === 'managed' || cfg.unitHostEnabled) void ensureBackend('engine_restart', { defer: true }) // 「允许其他设备连接」开着时本机引擎也常驻
+    }
     return r
   })
   ipcMain.handle('marketSources:trust', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.trust(id)) })

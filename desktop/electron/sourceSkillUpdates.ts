@@ -47,9 +47,14 @@ export function createSourceSkillUpdater(o: {
   const STAGE = '.skill-stage-'
   let running: Promise<Array<{ cardId: string; outcome: SkillUpdateOutcome; error?: string }>> | undefined
   const exists = (p: string) => stat(p).then(() => true, () => false)
-  /** An update cut off between its two renames left the folder missing: put the kept copy back. */
-  async function recover(dir: string): Promise<void> {
+  /** The version before the last update, one per skill (replaced by the next update, removed on uninstall): the swap moves
+   *  the whole folder, so a file saved into it while the swap ran ends up here instead of being deleted. */
+  const previousOf = (dir: string) => join(dirname(dir), `${STAGE}${basename(dir)}.previous`)
+  /** An update cut off between its two renames left the folder missing: put the kept copy back. Run in the install queue,
+   *  and only for a skill that is still recorded (an uninstall removed folder and record together: nothing to bring back). */
+  async function recover(cardId: string, dir: string): Promise<void> {
     if (await exists(dir)) return
+    if (!(await o.sources.installRecord(cardId).catch(() => null))) return
     const prefix = `${STAGE}${basename(dir)}.old-`
     const kept = (await readdir(dirname(dir)).catch(() => [] as string[])).filter((n) => n.startsWith(prefix))
     const newest = (await Promise.all(kept.map(async (n) => ({ n, t: (await stat(join(dirname(dir), n)).catch(() => null))?.mtimeMs ?? 0 })))).sort((a, b) => b.t - a.t)[0]
@@ -62,17 +67,21 @@ export function createSourceSkillUpdater(o: {
     if (!rec || rec.type !== 'skill') return { outcome: 'paused' }
     const dir = o.skillDir(rec.slug)
     if (!dir) return { outcome: 'paused' }
-    await o.exclusive(() => recover(dir))
+    await o.exclusive(() => recover(cardId, dir))
     const latest = await o.sources.lookup(cardId)
     if ((compareMarketVersions(latest.latestVersion, rec.version) ?? 0) <= 0) return { outcome: 'current' }
     // Only a folder that is still exactly what the store installed (no fingerprint = installed before it was kept).
     if (!rec.tree || await skillTreeHash(dir) !== rec.tree) return { outcome: 'edited' }
     return o.exclusive(async () => {
+      // Read the record again inside the queue: a manual install / uninstall since the check above decides instead
+      // (its consent, its fingerprint). Anything changed = leave it for the next round.
+      const cur = await o.sources.installRecord(cardId)
+      if (!cur || cur.type !== 'skill' || cur.slug !== rec.slug || cur.version !== rec.version || cur.tree !== rec.tree) return { outcome: 'paused' as const }
       const dl = await o.download(cardId)
       if (dl.info.type !== 'skill' || dl.info.installSlug !== rec.slug) throw new Error('resolve: market identity changed')
       if ((compareMarketVersions(dl.info.version, rec.version) ?? 0) <= 0) return { outcome: 'current' as const }
       const skill = await prepareSkillPackage(dl.buf, { note: dl.adaptNote ?? null })
-      if (skill.scripts > (rec.ack?.scripts ?? 0) || (dl.auditWarn && !rec.ack?.audit)) return { outcome: 'needs-confirm' as const }
+      if (skill.scripts > (cur.ack?.scripts ?? 0) || (dl.auditWarn && !cur.ack?.audit)) return { outcome: 'needs-confirm' as const }
       // Replace the whole folder (an update may drop files). The old one is kept until the new version is recorded and
       // comes back if anything fails; a run cut off between the renames is put back by recover() next time.
       const staging = join(dirname(dir), `${STAGE}${basename(dir)}.update-${randomUUID()}`), old = join(dirname(dir), `${STAGE}${basename(dir)}.old-${randomUUID()}`)
@@ -95,7 +104,10 @@ export function createSourceSkillUpdater(o: {
         await rename(dir, failed).then(() => rename(old, dir)).then(() => rm(failed, { recursive: true, force: true })).catch(() => {})
         throw e
       }
-      await rm(old, { recursive: true, force: true }).catch(() => {})
+      // Keep the old version as `.previous` (replacing the one before); if that fails, drop it as before.
+      const prev = previousOf(dir)
+      await rm(prev, { recursive: true, force: true }).catch(() => {})
+      await rename(old, prev).catch(() => rm(old, { recursive: true, force: true }).catch(() => {}))
       return { outcome: 'updated' as const }
     })
   }
@@ -104,11 +116,17 @@ export function createSourceSkillUpdater(o: {
   function check(): Promise<Array<{ cardId: string; outcome: SkillUpdateOutcome; error?: string }>> {
     if (running) return running
     running = (async () => {
+      const recorded = (await o.sources.installs()).filter((r) => r.type === 'skill')
+      // A folder an interrupted update left missing comes back whether or not automatic updates are on.
+      for (const r of recorded) {
+        const dir = o.skillDir(r.slug)
+        if (dir) await o.exclusive(() => recover(r.cardId, dir)).catch(() => {})
+      }
       if (!o.enabled()) return []
       const out: Array<{ cardId: string; outcome: SkillUpdateOutcome; error?: string }> = []
-      for (const r of await o.sources.installs()) {
+      for (const r of recorded) {
         // Off / removed sources pause; an item the catalog no longer lists fails its lookup (and stays as it is).
-        if (r.type !== 'skill' || r.removed) continue
+        if (r.removed) continue
         try { out.push({ cardId: r.cardId, ...(await one(r.cardId)) }) }
         catch (e) { out.push({ cardId: r.cardId, outcome: 'error', error: e instanceof Error ? e.message : String(e) }) }
       }
@@ -118,4 +136,10 @@ export function createSourceSkillUpdater(o: {
     return running
   }
   return { check }
+}
+
+/** The folders an update keeps next to a skill (`.skill-stage-<slug>.previous / .old-<id> / .update-<id> / .failed-<id>`): removed with the skill. */
+export function isSkillStageOf(name: string, slug: string): boolean {
+  const p = `.skill-stage-${slug}.`
+  return name.startsWith(p) && /^(?:previous|(?:old|update|failed)-[0-9a-f-]{36})$/.test(name.slice(p.length))
 }

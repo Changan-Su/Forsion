@@ -18,7 +18,7 @@ import { ADAPT_FILE } from '../shared/storeSources'
 
 const MAX_SKILL_MD = 256 * 1024
 /** Extensions counted as scripts (besides anything under a `scripts/` or `bin/` folder and files with an executable bit). */
-const SCRIPT_EXT = /\.(sh|bash|zsh|fish|command|py|pyw|js|mjs|cjs|ts|mts|cts|rb|pl|php|lua|ps1|psm1|bat|cmd|exe|bin|jar|applescript|scpt)$/i
+const SCRIPT_EXT = /\.(sh|bash|zsh|fish|command|py|pyw|js|mjs|cjs|ts|mts|cts|rb|pl|php|lua|ps1|psm1|bat|cmd|exe|bin|jar|applescript|scpt|vbs|vbe|jse|wsf|wsh|hta|msi|scr)$/i
 /** Uncompressed size caps (a small archive can inflate to far more; this runs before anything is confirmed). */
 const MAX_ENTRY_BYTES = 64 * 1024 * 1024, MAX_TOTAL_BYTES = 256 * 1024 * 1024
 

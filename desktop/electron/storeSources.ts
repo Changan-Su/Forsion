@@ -317,6 +317,8 @@ export function createStoreSources(o: {
     if (!/^https?:\/\//i.test(base)) throw new StoreIndexError('fetch-failed')
     return `${base}${COLLECTED_CATALOG_PATH}`
   }
+  /** The built-in catalog's current address in the form memo entries carry ('' = no market server). */
+  const builtinUri = async (): Promise<string> => { try { return canonicalSource({ kind: 'url', url: await builtinUrl() }) } catch { return '' } }
   /** Last address the built-in was read from (shown as its address; '' until then). */
   let builtinLast = ''
   const fallbackTitle = (ref: StoreSourceRef): string =>
@@ -409,6 +411,7 @@ export function createStoreSources(o: {
     // The source's address changed while this was in flight: don't publish the old address's catalog under it.
     const uri = canonicalSource(ref), cur = find(id)
     if (cur && !isBuiltin(cur) && canonicalSource(refOf(cur)) !== uri) return index
+    if (cur && isBuiltin(cur) && await builtinUri() !== uri) return index // the market server changed meanwhile
     memo.set(id, { at: Date.now(), index, ...(got.who !== undefined ? { who: got.who } : {}), uri, read: true }); bases.set(id, got.base)
     if (cur && isBuiltin(cur)) builtinLast = uri
     // A private (Forsion Git) catalog stays in memory for the account that read it; it never goes to disk.
@@ -811,10 +814,10 @@ export function createStoreSources(o: {
     })
   }
   /** The install record of one item (the skill updater reads what was confirmed and the folder hash). */
-  async function installRecord(cardId: string): Promise<{ version: string | null; ack?: { scripts: number; audit: boolean }; tree?: string; type: string; slug: string } | null> {
+  async function installRecord(cardId: string): Promise<{ version: string | null; ack?: { scripts: number; audit: boolean }; tree?: string; type: string; slug: string; origin: string; path?: string } | null> {
     await load()
     const x = state.installs.find((r) => r.cardId === cardId)
-    return x ? { version: x.version, type: x.type, slug: x.slug, ...(x.ack ? { ack: x.ack } : {}), ...(typeof x.tree === 'string' ? { tree: x.tree } : {}) } : null
+    return x ? { version: x.version, type: x.type, slug: x.slug, origin: x.origin, ...(typeof x.path === 'string' ? { path: x.path } : {}), ...(x.ack ? { ack: x.ack } : {}), ...(typeof x.tree === 'string' ? { tree: x.tree } : {}) } : null
   }
   /** The updater downloaded `version` from `commit`: remember the pair (the installed version and commit stay as they are). */
   async function noteCommit(cardId: string, version: string, commit: string | null | undefined): Promise<void> {
@@ -833,6 +836,8 @@ export function createStoreSources(o: {
   }
   async function installs(locale = o.defaultLocale()): Promise<StoreSourceInstall[]> {
     await load()
+    // The built-in catalog follows the market server; a copy read from a previous server says nothing about this one.
+    const builtinNow = BUILTIN && state.installs.some((x) => splitSourceCardId(x.cardId)?.source === BUILTIN.id) ? await builtinUri() : ''
     return state.installs.map((x) => {
       const { source: sourceId, item } = splitSourceCardId(x.cardId)!
       const s = find(sourceId)
@@ -840,7 +845,7 @@ export function createStoreSources(o: {
       // Only a catalog that was actually read says anything about the item; no copy (or a failed read) = nothing known.
       // (A copy loaded from the disk cache may predate the install: it says nothing about the item either.)
       const read = s && isBuiltin(s) ? memo.get(sourceId) : undefined
-      const m = read?.read ? read : undefined
+      const m = read?.read && !!builtinNow && read.uri === builtinNow ? read : undefined
       const it = m ? listed(s!, m.index).find((y) => y.id === item) : undefined
       return {
         cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null,

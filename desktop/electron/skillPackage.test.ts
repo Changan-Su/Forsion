@@ -69,6 +69,8 @@ describe('prepareSkillPackage', () => {
     expect(isSkillScript('tools/bin/helper')).toBe(true)
     expect(isSkillScript('lib/native.bin')).toBe(true)
     expect(isSkillScript('docs/a.md', 0o100644)).toBe(false)
+    // Windows Script Host runs these on a double-click, whatever the Unix mode bits say
+    for (const f of ['helper.vbs', 'a.VBE', 'b.wsf', 'c.wsh', 'd.hta', 'e.jse', 'f.msi', 'g.scr']) expect(isSkillScript(`lib/${f}`, 0o100644)).toBe(true)
   })
 })
 

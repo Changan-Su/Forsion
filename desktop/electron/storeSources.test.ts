@@ -623,6 +623,20 @@ describe('built-in skills.sh source', () => {
     expect((await s.installs()).find((x) => x.slug === `src-${SH}-quiz-me`)).toMatchObject({ delisted: true, removed: false })
   })
 
+  it('after switching market servers, the previous server\'s catalog says nothing about installed items', async () => {
+    routes[SH_CAT] = () => json(shIndex([shItem('trailmap', { collected: collected({ upstreamDeleted: true }) })]))
+    let base = BASE
+    const s = makeSh(async () => base)
+    await s.recordInstall({ cardId: `src_${SH}_trailmap`, type: 'skill', slug: `src-${SH}-trailmap`, name: 'trailmap', version: '1', origin: 'github:lanternworks/skills' })
+    await s.catalog(SH)
+    expect((await s.installs())[0].upstreamDeleted).toBe(true)
+    base = 'https://other.test' // its catalog 404s
+    await s.catalog(SH, { refresh: true }).catch(() => {})
+    expect((await s.installs())[0]).toMatchObject({ removed: false })
+    expect((await s.installs())[0].upstreamDeleted).toBeUndefined()
+    expect((await s.installs())[0].delisted).toBeUndefined()
+  })
+
   it('no market server known: shows the last copy, whatever address it was read from', async () => {
     routes[SH_CAT] = () => json(shIndex([TRAILMAP]))
     await makeSh().catalog(SH)
