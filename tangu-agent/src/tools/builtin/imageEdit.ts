@@ -63,18 +63,34 @@ function decodeImage(url: string) {
   return { mime: match[1], b64: match[2] };
 }
 
+/** 客户端「标注修改」发来的标注副本(桌面 imageMarkupModel.ts 的 markup.copyName:「<原图名>-标注」/「<原图名>-marked」,JPEG)
+ *  只给对话模型看改哪里。工具说明叫模型别传它,模型偶尔仍当「位置参考」一起传(live imagemulti ② 12 次里 1 次),
+ *  标记就会被画进结果 —— 同一批里有它的原图时,来源一律换成原图、去重。没有原图(只发了副本)就照模型选的。 */
+const MARKUP_COPY = /^(.+)-(?:标注|marked)\.(?:jpe?g|png|webp)$/i;
+export function dropMarkupCopies(inputs: ReadonlyArray<{ name?: string }>, chosen: number[]): number[] {
+  const stem = (name?: string) => (name || '').replace(/\.[a-z0-9]+$/i, '');
+  const out: number[] = [];
+  for (const index of chosen) {
+    const copy = MARKUP_COPY.exec(inputs[index - 1]?.name || '');
+    const original = copy ? inputs.findIndex((x, j) => j !== index - 1 && !MARKUP_COPY.test(x.name || '') && stem(x.name) === copy[1]) : -1;
+    const use = original >= 0 ? original + 1 : index;
+    if (!out.includes(use)) out.push(use);
+  }
+  return out;
+}
+
 /** inputs = 看得见的图(按 image_indices 选);outputs = 已按名字查到的本会话产出图。带了 outputs 而没给 image_indices 时不默认带上附件。 */
-export function editInputs(inputs: ReadonlyArray<{ url: string }>, indices?: unknown, outputs: ReadonlyArray<{ url: string }> = []) {
+export function editInputs(inputs: ReadonlyArray<{ url: string; name?: string }>, indices?: unknown, outputs: ReadonlyArray<{ url: string }> = []) {
   // 没图时说清楚原因:旧报错「image_indices must refer to attached images」像是索引写错,模型会原样重试(2026-10-19 连试 5 次)。
   if (!inputs.length && !outputs.length) throw new Error(NO_IMAGES);
   const chosen = indices === undefined ? (outputs.length ? [] : inputs.map((_, i) => i + 1)) : indices;
   if (!Array.isArray(chosen) || (!chosen.length && !outputs.length) || chosen.length + outputs.length > 8 || new Set(chosen).size !== chosen.length)
     throw new Error('Use 1–8 source images in total and select distinct image_indices.');
+  for (const index of chosen) {
+    if (!Number.isInteger(index) || index < 1 || index > inputs.length) throw new Error(`image_indices must refer to the ${inputs.length} visible attached image(s), starting at 1.`);
+  }
   return [
-    ...chosen.map(index => {
-      if (!Number.isInteger(index) || index < 1 || index > inputs.length) throw new Error(`image_indices must refer to the ${inputs.length} visible attached image(s), starting at 1.`);
-      return decodeImage(inputs[index - 1].url);
-    }),
+    ...dropMarkupCopies(inputs, chosen as number[]).map(index => decodeImage(inputs[index - 1].url)),
     ...outputs.map(o => decodeImage(o.url)),
   ];
 }

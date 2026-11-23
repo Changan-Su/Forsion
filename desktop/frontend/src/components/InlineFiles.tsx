@@ -29,7 +29,7 @@ registerMessages({
   'inlineSet.markup': { zh: '标注修改', en: 'Mark up' },
   'inlineSet.useThis': { zh: '用这张继续', en: 'Continue with this' },
   'inlineSet.more': { zh: '再来 {count} 张', en: '{count} more' },
-  'inlineSet.moreMsg': { zh: '照这组再来 {count} 张。', en: 'Make {count} more like these.' },
+  'inlineSet.moreMsg': { zh: '照 {name} 这组再来 {count} 张。', en: 'Make {count} more like the set with {name}.' },
   'inlineSet.pick': { zh: '看第 {n} 张', en: 'Show image {n}' },
 })
 
@@ -168,22 +168,26 @@ const SetThumb: React.FC<{
   )
 }
 
+const fileKey = (f: DisplayFile): string => `${f.path || ''}|${f.name}`
+
 /** 1B:主图 + 缩略条。窄了缩略条换到下面横排(容器查询,见 base.css)。 */
 const ImageSet: React.FC<{ files: DisplayFile[]; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; open: (f: DisplayFile) => void }> = ({ files, cfg, sessionId, execMode, open }) => {
-  const [sel, setSel] = useState(0)
-  const [srcs, setSrcs] = useState<Array<string | null>>(() => files.map(() => null))
-  const [bad, setBad] = useState<boolean[]>(() => files.map(() => false))
-  const thumbs = useRef<Array<HTMLImageElement | null>>([])
+  // 选中项 / 字节 / 读失败都按文件认(不按序号):流式里第 3 张晚到,选中的第 2 张不跳、已读出的 blob 不重读
+  const [selKey, setSelKey] = useState<string | null>(null)
+  const [srcs, setSrcs] = useState<Record<string, string | null>>({})
+  const [bad, setBad] = useState<Record<string, boolean>>({})
+  const thumbs = useRef(new Map<string, HTMLImageElement | null>())
   const mainRef = useRef<HTMLImageElement>(null)
-  const good = files.map((_, i) => i).filter((i) => !bad[i])
-  const cur = bad[sel] ? (good[0] ?? 0) : Math.min(sel, files.length - 1)
-  const f = files[cur]
-  const mainSrc = srcs[cur]
+  const good = files.filter((x) => !bad[fileKey(x)])
+  const f = (selKey ? good.find((x) => fileKey(x) === selKey) : undefined) ?? good[0] ?? files[0]
+  const curKey = fileKey(f)
+  const mainSrc = srcs[curKey] ?? null
   const view = (markup = false): void => {
-    const el = thumbs.current[cur]
+    const el = thumbs.current.get(curKey)
     if (el) openImageViewer(el, { markup, flyEl: mainRef.current ?? undefined })
   }
-  const more = (): void => { void useApp.getState().send(translate('inlineSet.moreMsg', { count: files.length }), [], undefined, undefined, undefined, sessionId) }
+  // 带上这组第一张的名字:同一会话里几组张数一样时,模型分得清是哪一组
+  const more = (): void => { void useApp.getState().send(translate('inlineSet.moreMsg', { count: files.length, name: files[0].name }), [], undefined, undefined, undefined, sessionId) }
   return (
     <div className="inline-set">
       <div className="inline-set-row">
@@ -197,25 +201,28 @@ const ImageSet: React.FC<{ files: DisplayFile[]; cfg: TanguDesktopConfig; sessio
           )}
         </div>
         <div className="inline-set-strip" role="group">
-          {files.map((x, i) => (
-            <SetThumb key={i} f={x} cfg={cfg} sessionId={sessionId} execMode={execMode} on={i === cur} n={i + 1}
-              onSrc={(u, failed) => {
-                setSrcs((all) => (all[i] === u ? all : all.map((v, j) => (j === i ? u : v))))
-                setBad((all) => (all[i] === failed ? all : all.map((v, j) => (j === i ? failed : v))))
-              }}
-              onPick={() => setSel(i)} onOpenTab={() => open(x)} imgRef={(el) => { thumbs.current[i] = el }} />
-          ))}
+          {files.map((x, i) => {
+            const k = fileKey(x)
+            return (
+              <SetThumb key={k} f={x} cfg={cfg} sessionId={sessionId} execMode={execMode} on={k === curKey} n={i + 1}
+                onSrc={(u, failed) => {
+                  setSrcs((all) => (all[k] === u ? all : { ...all, [k]: u }))
+                  setBad((all) => (!!all[k] === failed ? all : { ...all, [k]: failed }))
+                }}
+                onPick={() => setSelKey(k)} onOpenTab={() => open(x)} imgRef={(el) => { thumbs.current.set(k, el) }} />
+            )
+          })}
         </div>
       </div>
       <div className="inline-set-meta">
-        <span className="inline-set-count">{good.indexOf(cur) + 1} / {good.length}</span>
+        <span className="inline-set-count">{good.indexOf(f) + 1} / {good.length}</span>
         <span className="inline-set-name" title={f.name}>{f.name}</span>
         {mainSrc && !/\.gif$/i.test(f.name) && (
           <button type="button" className="inline-set-link" onClick={() => void continueWithImage(mainSrc, f.name, sessionId)}><CornerDownRight size={12} />{translate('inlineSet.useThis')}</button>
         )}
         <button type="button" className="inline-set-link" onClick={more}><RefreshCw size={12} />{translate('inlineSet.more', { count: files.length })}</button>
       </div>
-      {files.map((x, i) => (bad[i] ? <FileCard key={i} f={x} onClick={() => open(x)} /> : null))}
+      {files.map((x) => (bad[fileKey(x)] ? <FileCard key={fileKey(x)} f={x} onClick={() => open(x)} /> : null))}
     </div>
   )
 }
@@ -234,7 +241,7 @@ export const InlineFiles: React.FC<{
   const rest = images.length >= 2 ? files.filter((f) => !images.includes(f)) : files
   return (
     <div className="inline-file-grid">
-      {images.length >= 2 && <ImageSet key={images.length} files={images} cfg={cfg} sessionId={sessionId} execMode={execMode} open={open} />}
+      {images.length >= 2 && <ImageSet files={images} cfg={cfg} sessionId={sessionId} execMode={execMode} open={open} />}
       {rest.map((f, i) => {
         const kind = previewKindFor(f.mime || '', f.name)
         if (kind === 'image' || kind === 'video' || kind === 'audio') {

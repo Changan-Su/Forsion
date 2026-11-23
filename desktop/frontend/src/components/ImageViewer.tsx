@@ -109,7 +109,10 @@ export function openImageViewer(from: HTMLImageElement, opts: { markup?: boolean
   document.body.append(host)
   const root = createRoot(host)
   opened = true
+  let finished = false
   const done = (last: Item): void => {
+    if (finished) return // 发送成功和关闭动画可能前后脚都走到这里:只卸一次
+    finished = true
     // 推到下一轮再卸:这里常在看图自己的点击 / 动画回调里被调
     window.setTimeout(() => {
       root.unmount()
@@ -294,9 +297,17 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
   // 手机返回:先关「更多」菜单,再关看图
   const closeRef = useRef(close)
   closeRef.current = close
-  useEffect(() => pushMobileBack(() => closeRef.current()), [])
+  // 返回键按层派发:标注层(它把自己的返回挂在 layerBack 上)→ 网格 → 关看图器。
+  // 不让标注层自己 pushMobileBack:从主图直进标注时子组件的 effect 先跑,这里的「关闭」会压到它上面(Codex 评审)
+  const layerBack = useRef<(() => void) | null>(null)
+  const gridRef = useRef(grid)
+  gridRef.current = grid
+  useEffect(() => pushMobileBack(() => {
+    if (layerBack.current) layerBack.current()
+    else if (gridRef.current) setGrid(false)
+    else closeRef.current()
+  }), [])
   useEffect(() => (menu ? pushMobileBack(() => setMenu(false)) : undefined), [menu])
-  useEffect(() => (grid ? pushMobileBack(() => setGrid(false)) : undefined), [grid])
 
   // 键盘(捕获相位:看图开着时 ← → Esc 不漏给底下的聊天)
   useEffect(() => {
@@ -304,11 +315,19 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
       if (markup || markIdx !== null) return // 标注态自己管键盘(ImageMarkup 也挂在捕获相位,后挂)
       const mod = e.metaKey || e.ctrlKey
       if (grid) {
-        // 网格里:Esc 回单张;输入框里打的字原样给输入框(不当快捷键),回车 = 发送;别的键都不碰
+        // 网格里:Esc 回单张;这一层输入框里打的字原样给它(不当快捷键),回车 = 发送;Tab 只在这一层转;发送途中什么都不动
         if (e.isComposing || e.keyCode === 229) return
+        if (busy) { e.preventDefault(); e.stopPropagation(); return }
         const t = e.target as HTMLElement | null
-        const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
+        const layer = document.querySelector<HTMLElement>('.ivg')
+        const typing = !!t && !!layer?.contains(t) && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (typing) t?.blur(); else setGrid(false) }
+        else if (e.key === 'Tab') {
+          e.preventDefault(); e.stopPropagation()
+          const els = [...(layer?.querySelectorAll<HTMLElement>('button:not(:disabled), input, img[tabindex]') ?? [])]
+          const i = els.indexOf(document.activeElement as HTMLElement)
+          els[e.shiftKey ? (i <= 0 ? els.length - 1 : i - 1) : (i < 0 || i === els.length - 1 ? 0 : i + 1)]?.focus()
+        }
         else if (typing) { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); void sendAllRef.current() } }
         return
       }
@@ -333,7 +352,7 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [menu, close, go, zoomTo, view, fit, item.src, markup, markIdx, grid, items.length])
+  }, [menu, close, go, zoomTo, view, fit, item.src, markup, markIdx, grid, items.length, busy])
 
   // 滚轮缩放:要 preventDefault,React 的 onWheel 是被动监听,只能自己挂
   useEffect(() => {
@@ -482,7 +501,8 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
   const sendAll = async (): Promise<void> => {
     const entries = entriesOf(picked)
     const sid = entries.length ? items[Math.min(...picked)].edit?.sessionId : undefined
-    if (!sid || busy || attachmentCount(entries) > MAX_ATTACHMENTS || !(overall.trim() || entries.some((e) => e.marks.length))) return
+    // 每张都得有改法:要么自己有标记,要么写了整体要求(只标了一张、整体留空时,另一张没有任何要求,Codex 评审)
+    if (!sid || busy || attachmentCount(entries) > MAX_ATTACHMENTS || !(overall.trim() || entries.every((e) => e.marks.length))) return
     setBusy(true)
     try {
       const atts = await buildAttachments(entries, resolveSignal(rootRef.current ?? document.body))
@@ -553,7 +573,7 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
       </div>
       {markup && (
         <ImageMarkup src={item.src} name={item.name} w={dims[idx].w} h={dims[idx].h} compact={compact} mode="send"
-          onCancel={() => { setMarkup(false); rootRef.current?.focus({ preventScroll: true }) }} onSubmit={sendMarkup} />
+          onCancel={() => { setMarkup(false); rootRef.current?.focus({ preventScroll: true }) }} onSubmit={sendMarkup} backRef={layerBack} />
       )}
       {grid && markIdx === null && (
         <ImageGrid items={items.map((it) => ({ src: it.src, name: it.name, editable: canEdit(it) }))} current={idx} picked={picked}
@@ -563,7 +583,7 @@ function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start:
       )}
       {markIdx !== null && (
         <ImageMarkup key={markIdx} src={items[markIdx].src} name={items[markIdx].name} w={dims[markIdx].w} h={dims[markIdx].h} compact={compact} mode="collect"
-          initial={collected[markIdx]} onCancel={() => setMarkIdx(null)} onCollect={(marks) => collect(markIdx, marks)} />
+          initial={collected[markIdx]} onCancel={() => setMarkIdx(null)} onCollect={(marks) => collect(markIdx, marks)} backRef={layerBack} />
       )}
     </div>
   )

@@ -2,6 +2,9 @@
    标记颜色 = --signal(指示色:米白 / 墨色配色是柔蓝,其余跟主题色);输入条照 Chat Box 卡面(不描边、--card-shadow);
    发送钮照 .t2c-send(--action-fill)。字号只用界面角色变量(check:uiscale),阴影只走 token(check:shadowcontract)。 */
 .imk { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; --imk-color: var(--signal); }
+.imk, .ivg { outline: none; }
+/* 发送途中整层不收指针(键盘在 ImageMarkup 里一并挡住):失败时标记原样回来,不会被中途的改动覆盖 */
+.imk.is-busy, .ivg.is-busy { pointer-events: none; }
 .imk-bar { justify-content: flex-start; }
 .imk-bar .iv-title { flex: 1 1 0; }
 .imk-bar .iv-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -19,9 +22,13 @@
 .imk-body { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: crosshair; user-select: none; }
 .imk-body.is-pan { cursor: grab; }
 .imk-body.is-pan:active { cursor: grabbing; }
-.imk-world { position: absolute; transform-origin: 0 0; border-radius: var(--radius-md, 12px); overflow: hidden; box-shadow: var(--card-shadow); }
-:root.dark .imk-world { box-shadow: none; }
-.imk-world img { display: block; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; pointer-events: none; }
+/* 图框 = 适应窗口时图的位置和大小;放大只在框里(is-zoomed 才裁切,不放大时贴边的编号不被切掉) */
+.imk-frame { position: absolute; border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow); }
+.imk-frame.is-zoomed { overflow: hidden; }
+:root.dark .imk-frame { box-shadow: none; }
+.imk-world { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+.imk-world img { display: block; width: 100%; height: 100%; border-radius: var(--radius-md, 12px); user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.imk-frame.is-zoomed .imk-world img { border-radius: 0; }
 .imk-world svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .imk-stroke { stroke: var(--imk-color); }
 .imk-fill { fill: var(--imk-color); }

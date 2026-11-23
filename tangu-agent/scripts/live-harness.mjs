@@ -4171,6 +4171,7 @@ try {
   // ① 「画 3 张…」:generate_image 合计正好 3 张。一次 n=3 或每张各调一次都算(话里「每张光线不一样」时分开调、各写提示词反而更对);
   //    拼成一张三联图(合计 1 张)不算。对话里按整条消息归组,分开调的图照样进同一条缩略条。
   // ② 客户端「标注修改」发出的那条:原图 + 带编号标注副本 + 编号清单 → edit_image 收到的只有原图(标注副本只给对话模型看,进了改图来源圈和编号会被画进结果)。
+  //    11-23 起引擎 imageEdit.dropMarkupCopies 兜底(同批有原图就把副本换成原图),这条红了先看是不是兜底坏了;模型自己传了哪几张看「参数」。
   // ③ 两张图「分别改」:两次 edit_image、每次恰好一张,两张都改到(多来源 = 合成,不是逐张改)。
   // ④ 看图器「全部图片」多选一起改的那条(1C):一张带标注、一张不带 → 附件 [A 原图, A 标注副本, B 原图];两次 edit_image,来源 A / B,标注副本永不出现。
   // 正文照搬客户端 imageMarkupModel.ts 的 buildMarkupMessage(zh)。真生图模型会不会把标记画进结果,假后端验证不了。
@@ -4193,7 +4194,7 @@ try {
     const got3 = calls3.map((c) => c.join('+')).sort().join(',');
     const ok3 = !ev3.error && calls3.length === 2 && calls3.every((c) => c.length === 1) && got3 === [sha(orig), sha(other)].sort().join(',');
     const e2 = IMGEDIT.calls.length;
-    const text4 = '分别改下面 2 张图，每张单独改一次、只拿它自己的原图（标注示意只用来看改哪里）：\n图 1（gen-7a03.png，附图 1；附图 2 是它的标注示意）：\n1 上方居中圈出的地方：把这里的数字改成红色\n图 2（gen-7a04.png，附图 3）：\n每张都要：背景换成浅黄色\n其余保持不变。';
+    const text4 = '分别改下面 2 张图，每张单独改一次、只拿它自己的原图（标注示意只用来看改哪里）：\n图 1（gen-7a03.png，附图 1；附图 2 是它的标注示意）：\n1 上方居中圈出的地方：把这里的数字改成红色\n另外：背景换成浅黄色\n图 2（gen-7a04.png，附图 3）：\n背景换成浅黄色\n其余保持不变。';
     const ev4 = await run(`live-imagemulti-mixed-${Date.now()}`, text4, 240_000, cfg, undefined, undefined, undefined, undefined,
       { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a03-标注.png', mimeType: 'image/png', data: marked.toString('base64') }, { name: 'gen-7a04.png', mimeType: 'image/png', data: other.toString('base64') }] });
     const calls4 = IMGEDIT.calls.slice(e2);

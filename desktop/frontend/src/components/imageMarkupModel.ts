@@ -30,7 +30,6 @@ registerMessages({
   'markup.msg.item': { zh: '图 {i}（{name}，附图 {a}）：', en: 'Image {i} ({name}, attached image {a}):' },
   'markup.msg.itemMarked': { zh: '图 {i}（{name}，附图 {a}；附图 {b} 是它的标注示意）：', en: 'Image {i} ({name}, attached image {a}; attached image {b} shows its marks):' },
   'markup.msg.also': { zh: '另外：{text}', en: 'Also: {text}' },
-  'markup.msg.all': { zh: '每张都要：{text}', en: 'For every image: {text}' },
   'markup.msg.keep': { zh: '其余保持不变。', en: 'Keep everything else the same.' },
   'markup.copyName': { zh: '{name}-标注', en: '{name}-marked' },
 })
@@ -105,9 +104,10 @@ export function buildMarkupMessage(entries: MarkupEntry[], overall: string): str
     entries.forEach((e, i) => {
       lines.push(e.marks.length ? tr('markup.msg.itemMarked', { i: i + 1, name: e.name, a, b: a + 1 }) : tr('markup.msg.item', { i: i + 1, name: e.name, a }))
       lines.push(...markLines(e.marks))
+      // 整体要求在每张下面各写一遍:放在末尾一行「每张都要」,模型会把它当成另一件事、对同一张多改一次(live imagemulti ④)
+      if (extra) lines.push(e.marks.length ? tr('markup.msg.also', { text: extra }) : extra)
       a += e.marks.length ? 2 : 1
     })
-    if (extra) lines.push(tr('markup.msg.all', { text: extra }))
   }
   lines.push(tr('markup.msg.keep'))
   return lines.join('\n')
@@ -153,11 +153,12 @@ async function canvasJpeg(c: HTMLCanvasElement, q: number): Promise<Blob> {
 }
 const stem = (name: string): string => name.replace(/\.[a-z0-9]+$/i, '') || 'image'
 
-export async function originalAttachment(src: string, name: string): Promise<Attachment> {
+/** shrink:整包超预算时强制重编码成 JPEG(长边 ≤ 2048) */
+export async function originalAttachment(src: string, name: string, shrink = false): Promise<Attachment> {
   const res = await fetch(src)
   if (!res.ok) throw new Error(`image fetch failed: ${res.status}`)
   const blob = await res.blob()
-  if (OK_MIME.test(blob.type) && blob.size * 4 / 3 < MAX_B64) return { name, mimeType: blob.type, data: await blobToB64(blob), size: blob.size }
+  if (!shrink && OK_MIME.test(blob.type) && blob.size * 4 / 3 < MAX_B64) return { name, mimeType: blob.type, data: await blobToB64(blob), size: blob.size }
   const { c } = canvasFor(await loadImage(src), 2048)
   const out = await canvasJpeg(c, 0.9)
   return { name: `${stem(name)}.jpg`, mimeType: 'image/jpeg', data: await blobToB64(out), size: out.size }
@@ -205,10 +206,11 @@ export async function markedAttachment(src: string, name: string, marks: Mark[],
       for (const [w, col] of [[7 * u, 'rgba(255,255,255,.9)'], [4 * u, color]] as const) { g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2); g.lineWidth = w; g.strokeStyle = col; g.stroke() }
       badge(cx + rx * 0.72, cy - ry * 0.72, m.id)
     } else if (m.kind === 'pin') {
-      const x = (m.x ?? 0.5) * W, y = (m.y ?? 0.5) * H, r = 15 * u
-      g.beginPath(); g.moveTo(x, y); g.lineTo(x - 10 * u, y - 22 * u); g.lineTo(x + 10 * u, y - 22 * u); g.closePath(); g.fillStyle = '#fff'; g.fill()
-      g.beginPath(); g.moveTo(x, y - 3 * u); g.lineTo(x - 7 * u, y - 20 * u); g.lineTo(x + 7 * u, y - 20 * u); g.closePath(); g.fillStyle = color; g.fill()
-      badge(x, y - 22 * u - r, m.id)
+      // 贴着上沿时箭头朝上、编号放到点的下面(同 ImageMarkup 的屏上画法),免得编号画出图外被裁掉
+      const x = (m.x ?? 0.5) * W, y = (m.y ?? 0.5) * H, r = 15 * u, f = y < 22 * u + 2 * r + 4 * u ? -1 : 1
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x - 10 * u, y - 22 * u * f); g.lineTo(x + 10 * u, y - 22 * u * f); g.closePath(); g.fillStyle = '#fff'; g.fill()
+      g.beginPath(); g.moveTo(x, y - 3 * u * f); g.lineTo(x - 7 * u, y - 20 * u * f); g.lineTo(x + 7 * u, y - 20 * u * f); g.closePath(); g.fillStyle = color; g.fill()
+      badge(x, y - (22 * u + r) * f, m.id)
     } else {
       const pts = m.points ?? []
       if (!pts.length) continue
@@ -222,12 +224,22 @@ export async function markedAttachment(src: string, name: string, marks: Mark[],
   return { name: `${tr('markup.copyName', { name: stem(name) })}.jpg`, mimeType: 'image/jpeg', data: await blobToB64(out), size: out.size }
 }
 
+/** 整包 base64 预算:本机引擎的请求体上限是 25 MB(standalone/main.ts),八张 3 MB 的 PNG 就超了 —— 超了从最大的原图起逐张重编码 */
+export const TOTAL_B64_BUDGET = 18_000_000
+
 /** 一次发出去的全部附件:每张图原图在前,有标记的紧跟标注副本 */
 export async function buildAttachments(entries: Array<MarkupEntry & { src: string }>, color: string): Promise<Attachment[]> {
-  const out: Attachment[] = []
+  const out: Array<Attachment & { src?: string }> = []
   for (const e of entries) {
-    out.push(await originalAttachment(e.src, e.name))
+    out.push({ ...(await originalAttachment(e.src, e.name)), src: e.src })
     if (e.marks.length) out.push(await markedAttachment(e.src, e.name, e.marks, color))
   }
-  return out
+  const total = (): number => out.reduce((n, a) => n + a.data.length, 0)
+  const originals = out.map((a, i) => i).filter((i) => out[i].src).sort((a, b) => out[b].data.length - out[a].data.length)
+  for (const i of originals) {
+    if (total() <= TOTAL_B64_BUDGET) break
+    const e = entries.find((x) => x.src === out[i].src)
+    if (e) out[i] = await originalAttachment(e.src, e.name, true)
+  }
+  return out.map(({ src: _src, ...a }) => a)
 }

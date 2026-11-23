@@ -30,7 +30,7 @@ describe('imageMarkup', () => {
     expect(lines).toContain('图 1（a.png，附图 1；附图 2 是它的标注示意）：')
     expect(lines).toContain('图 2（b.png，附图 3）：')
     expect(lines).toContain('图 3（c.png，附图 4；附图 5 是它的标注示意）：')
-    expect(lines).toContain('每张都要：背景换浅黄')
+    expect(lines.slice(1, 7)).toEqual(['图 1（a.png，附图 1；附图 2 是它的标注示意）：', '1 上方居中圈出的地方：换成红色的贝雷帽', '另外：背景换浅黄', '图 2（b.png，附图 3）：', '背景换浅黄', '图 3（c.png，附图 4；附图 5 是它的标注示意）：'])
     expect(attachmentCount(entries)).toBe(5)
   })
 

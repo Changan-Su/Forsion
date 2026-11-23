@@ -4,6 +4,7 @@
  * 选了图,底下一条「已选 N 张 · 每张都要… · 发送」把几张一起发回会话(每张单独改,见 imageMarkupModel.buildMarkupMessage)。
  * 状态(选了哪些、各自的标记、整体要求)在 ImageViewer 里,这里只画。
  */
+import { useEffect, useRef } from 'react'
 import { ArrowUp, Check, ChevronLeft, PenLine, X } from 'lucide-react'
 import { registerMessages, translate as tr } from '../i18n'
 import { MAX_ATTACHMENTS } from './imageMarkupModel'
@@ -43,10 +44,12 @@ interface Props {
 
 export function ImageGrid({ items, current, picked, marksOf, overall, count, busy, compact, onOverall, onOpen, onToggle, onMark, onSend, onBack, onClose }: Props) {
   const over = count > MAX_ATTACHMENTS
-  const anyMarks = picked.some((i) => marksOf(i) > 0)
-  const canSend = picked.length > 0 && !over && !busy && (anyMarks || !!overall.trim())
+  // 每张选中的图都得有改法:自己有标记,或者写了整体要求
+  const canSend = picked.length > 0 && !over && !busy && (!!overall.trim() || picked.every((i) => marksOf(i) > 0))
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { rootRef.current?.focus({ preventScroll: true }) }, [])
   return (
-    <div className={`ivg${compact ? ' is-compact' : ''}${picked.length ? ' has-picked' : ''}`} role="dialog" aria-modal="true" aria-label={tr('viewer.all')}>
+    <div ref={rootRef} tabIndex={-1} className={`ivg${compact ? ' is-compact' : ''}${picked.length ? ' has-picked' : ''}${busy ? ' is-busy' : ''}`} role="dialog" aria-modal="true" aria-label={tr('viewer.all')}>
       <div className="iv-bar ivg-bar">
         <div className="iv-title">
           <button type="button" className="iv-btn" title={tr('viewer.allBack')} aria-label={tr('viewer.allBack')} onClick={onBack}><ChevronLeft size={16} /></button>

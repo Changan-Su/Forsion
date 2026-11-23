@@ -5,10 +5,9 @@
  * 看图器的左右切图、点空白关闭、下拉关闭在这一态都停用 —— 标记在这里,误关就全丢。
  * 数据与发出去的正文见 imageMarkupModel.ts。方案页:docs/ToBeImproved/生图多张与标注改图方案_2026-11-23/index.html
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowUp, Brush, Circle, MapPin, Plus, Redo2, Undo2, X } from 'lucide-react'
 import { registerMessages, translate as tr } from '../i18n'
-import { pushMobileBack } from '../amadeus/lib/mobileBack'
 import { MAX_MARKS, STROKE_WIDTH, emptyHistory, kindLabel, markCenter, record, redo as redoH, renumber, undo as undoH, type History, type Mark, type MarkKind } from './imageMarkupModel'
 import './imageMarkup.css'
 
@@ -56,14 +55,19 @@ interface Props {
   onCancel: () => void
   onSubmit?: (marks: Mark[], overall: string) => Promise<boolean>
   onCollect?: (marks: Mark[]) => void
+  /** 手机系统返回由看图器统一派发(它的返回处理器挂在下面):这一层开着时,看图器把返回交给这里。
+   *  别在这里自己 pushMobileBack —— 从主图直进标注时子组件的 effect 先跑,看图器的「关闭」会压到它上面,返回一下整份标注就丢了 */
+  backRef?: MutableRefObject<(() => void) | null>
 }
 interface View { s: number; tx: number; ty: number }
-type Draft = { kind: MarkKind; x0: number; y0: number; pts: Array<[number, number]> }
+/** pid:落笔那根手指 / 鼠标;别的指针抬起不算这一笔结束 */
+type Draft = { kind: MarkKind; x0: number; y0: number; pts: Array<[number, number]>; pid: number }
 
 const PW = 280, GAP = 24, DOCK = 50, MAX_ZOOM = 6
 const TOOLS: Array<{ k: MarkKind; icon: typeof Circle }> = [{ k: 'ellipse', icon: Circle }, { k: 'pin', icon: MapPin }, { k: 'stroke', icon: Brush }]
 
-export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel, onSubmit, onCollect }: Props) {
+export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel, onSubmit, onCollect, backRef }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const sheetRef = useRef<HTMLDivElement>(null)
   const popInput = useRef<HTMLInputElement>(null)
@@ -122,15 +126,20 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
   /** 图上的归一坐标 → 舞台坐标 */
   const toStage = (nx: number, ny: number): [number, number] => (geo ? [geo.x + view.tx + nx * geo.iw * view.s, geo.y + view.ty + ny * geo.ih * view.s] : [0, 0])
 
+  /** 放大只在原图框里:平移不许把图拖出框(框外是右侧清单和输入条,图铺过去字会压在图上) */
+  const clampV = useCallback((v: View): View => {
+    if (!geo || v.s <= 1) return { s: 1, tx: 0, ty: 0 }
+    return { s: v.s, tx: Math.min(0, Math.max(geo.iw * (1 - v.s), v.tx)), ty: Math.min(0, Math.max(geo.ih * (1 - v.s), v.ty)) }
+  }, [geo])
   const zoomAt = useCallback((s: number, px: number, py: number) => {
     if (!geo) return
     setView((cur) => {
       const ns = Math.min(MAX_ZOOM, Math.max(1, s))
       if (ns <= 1.02) return { s: 1, tx: 0, ty: 0 }
       const ox = px - geo.x, oy = py - geo.y
-      return { s: ns, tx: ox - (ox - cur.tx) * (ns / cur.s), ty: oy - (oy - cur.ty) * (ns / cur.s) }
+      return clampV({ s: ns, tx: ox - (ox - cur.tx) * (ns / cur.s), ty: oy - (oy - cur.ty) * (ns / cur.s) })
     })
-  }, [geo])
+  }, [geo, clampV])
 
   // ── 标记的增删改(都过撤销栈) ──
   const change = (next: Mark[]): void => { setHist((hh) => record(hh, marks)); setMarks(renumber(next)) }
@@ -175,7 +184,13 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
   }
   const escRef = useRef(escape)
   escRef.current = escape
-  useEffect(() => pushMobileBack(() => escRef.current()), [])
+  useEffect(() => {
+    if (!backRef) return
+    backRef.current = () => escRef.current()
+    return () => { backRef.current = null }
+  }, [backRef])
+  // 焦点进这一层(Tab 只在这一层里转,见键盘那段)
+  useEffect(() => { rootRef.current?.focus({ preventScroll: true }) }, [])
 
   const submit = async (): Promise<void> => {
     if (busy) return
@@ -194,10 +209,18 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
   keyRef.current = (e: KeyboardEvent): void => {
     if (e.isComposing || e.keyCode === 229) return
     const t = e.target as HTMLElement | null
-    const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
+    // 只认这一层里的输入框:焦点若跑到底下的聊天输入框,回车不能当成这里的「发送」
+    const typing = !!t && rootRef.current?.contains(t) === true && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
     const mod = e.metaKey || e.ctrlKey
     let hit = true
-    if (e.key === 'Escape') {
+    if (busy) { e.preventDefault(); e.stopPropagation(); return } // 发送途中什么都不动(失败后标记原样回来)
+    if (e.key === 'Tab') {
+      // aria-modal 不会自己圈住焦点:Tab / ⇧Tab 只在这一层的按钮和输入框之间转
+      const els = [...(rootRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input') ?? [])]
+      const i = els.indexOf(document.activeElement as HTMLElement)
+      const n = e.shiftKey ? (i <= 0 ? els.length - 1 : i - 1) : (i < 0 || i === els.length - 1 ? 0 : i + 1)
+      els[n]?.focus()
+    } else if (e.key === 'Escape') {
       if (typing && t !== popInput.current) t?.blur()
       else escape()
     } else if (typing) {
@@ -206,7 +229,7 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
       else hit = false
       e.stopPropagation() // 输入框里打的字(包括 0 - + 和方向键)不给看图器、也不给聊天
     } else if (mod && e.key.toLowerCase() === 'z') { if (e.shiftKey) doRedo(); else doUndo() }
-    else if (e.key === ' ') { if (!space) setSpace(true) }
+    else if (e.key === ' ' && t?.tagName !== 'BUTTON') { if (!space) setSpace(true) } // 按钮上的空格照旧是「按下」
     else hit = false
     if (hit) { e.preventDefault(); e.stopPropagation() }
   }
@@ -225,7 +248,7 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
     const onWheel = (e: WheelEvent): void => {
       if ((e.target as HTMLElement).closest('.imk-notes, .imk-sheet, .imk-pop')) return
       e.preventDefault()
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) { setView((v) => (v.s > 1 ? { ...v, tx: v.tx - e.deltaX } : v)); return }
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) { setView((v) => (v.s > 1 ? clampV({ ...v, tx: v.tx - e.deltaX }) : v)); return }
       const [px, py] = local(e.clientX, e.clientY)
       zoomAt(view.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)), px, py)
     }
@@ -259,7 +282,7 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
     if (marks.length >= MAX_MARKS) return
     const [nx, ny] = toImg(lx, ly)
     if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return
-    setDraft({ kind: tool, x0: nx, y0: ny, pts: [[nx, ny]] })
+    setDraft({ kind: tool, x0: nx, y0: ny, pts: [[nx, ny]], pid: e.pointerId })
   }
   const onMove = (e: ReactPointerEvent): void => {
     if (!ptrs.current.has(e.pointerId) || !geo) return
@@ -270,10 +293,10 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
       const p = pinch.current
       const s = Math.min(MAX_ZOOM, Math.max(1, p.v0.s * (Math.hypot(ax - bx, ay - by) / p.d0)))
       const mx = (ax + bx) / 2, my = (ay + by) / 2
-      setView(s <= 1.02 ? { s: 1, tx: 0, ty: 0 } : { s, tx: mx - geo.x - p.ix * s, ty: my - geo.y - p.iy * s })
+      setView(s <= 1.02 ? { s: 1, tx: 0, ty: 0 } : clampV({ s, tx: mx - geo.x - p.ix * s, ty: my - geo.y - p.iy * s }))
       return
     }
-    if (pan.current) { const p = pan.current; setView({ ...p.v0, tx: p.v0.tx + lx - p.x0, ty: p.v0.ty + ly - p.y0 }); return }
+    if (pan.current) { const p = pan.current; setView(clampV({ ...p.v0, tx: p.v0.tx + lx - p.x0, ty: p.v0.ty + ly - p.y0 })); return }
     if (!draft) return
     // 一帧合并一次:长笔画每次 pointermove 都重画整层 SVG 会掉帧
     pending.current = toImg(lx, ly)
@@ -285,11 +308,21 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
       setDraft((d) => (d ? { ...d, pts: d.kind === 'stroke' ? [...d.pts, pt] : [d.pts[0], pt] } : d))
     })
   }
+  /** 系统打断的手势(来电、切走、丢了捕获):清掉,不落标记 */
+  const onPtrCancel = (e: ReactPointerEvent): void => {
+    ptrs.current.delete(e.pointerId)
+    if (ptrs.current.size < 2) pinch.current = null
+    if (!ptrs.current.size) pan.current = null
+    if (raf.current) { cancelAnimationFrame(raf.current); raf.current = 0 }
+    setDraft(null)
+  }
   const onUp = (e: ReactPointerEvent): void => {
+    if (!ptrs.current.has(e.pointerId)) return // 在清单 / 输入条上按下的那根手指(按下时就没收)
     ptrs.current.delete(e.pointerId)
     if (pinch.current) { if (ptrs.current.size < 2) pinch.current = null; return }
     if (pan.current) { pan.current = null; return }
     const d = draft
+    if (d && d.pid !== e.pointerId) return // 不是落笔那根
     setDraft(null)
     if (!d || !geo) return
     if (raf.current) { cancelAnimationFrame(raf.current); raf.current = 0 }
@@ -331,12 +364,13 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
       </g>
     }
     if (m.kind === 'pin') {
-      const x = (m.x ?? 0) * w, y = (m.y ?? 0) * h
+      // 贴着上沿时箭头朝上、编号放到点的下面(否则编号画出图外,发出去的副本也会裁掉)
+      const x = (m.x ?? 0) * w, y = (m.y ?? 0) * h, f = y < 46 * k ? -1 : 1
       return <g key={m.id}>
-        <path d={`M${x} ${y} l${-9 * k} ${-18 * k} h${18 * k} z`} fill="#fff" />
-        <path d={`M${x} ${y - 2.5 * k} l${-6.5 * k} ${-14.5 * k} h${13 * k} z`} className="imk-fill" />
+        <path d={`M${x} ${y} l${-9 * k} ${-18 * k * f} h${18 * k} z`} fill="#fff" />
+        <path d={`M${x} ${y - 2.5 * k * f} l${-6.5 * k} ${-14.5 * k * f} h${13 * k} z`} className="imk-fill" />
         <circle cx={x} cy={y} r={(hi ? 3.5 : 2.5) * k} fill="#fff" />
-        {badge(x, y - 18 * k - 11.5 * k, m.id, 'b')}
+        {badge(x, y - (18 * k + 11.5 * k) * f, m.id, 'b')}
       </g>
     }
     const pts = m.points ?? []
@@ -394,7 +428,7 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
   )
 
   return (
-    <div className={`imk${compact ? ' is-compact' : ''}`} role="dialog" aria-modal="true" aria-label={`${tr('markup.title')} ${name}`}>
+    <div ref={rootRef} tabIndex={-1} className={`imk${compact ? ' is-compact' : ''}${busy ? ' is-busy' : ''}`} role="dialog" aria-modal="true" aria-label={`${tr('markup.title')} ${name}`}>
       <div className="iv-bar imk-bar">
         <div className="iv-title"><b>{tr('markup.title')}</b><span title={name}>{name}</span></div>
         <div className="imk-tools" role="toolbar">
@@ -409,14 +443,16 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
         </div>
         <div className="iv-tools"><button type="button" className="imk-ghost" onClick={leave}>{tr('markup.cancel')}</button></div>
       </div>
-      <div ref={bodyRef} className={`imk-body${space ? ' is-pan' : ''}`} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+      <div ref={bodyRef} className={`imk-body${space ? ' is-pan' : ''}`} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onPtrCancel} onLostPointerCapture={onPtrCancel}>
         {geo && (
-          <div className="imk-world" style={{ left: geo.x, top: geo.y, width: geo.iw, height: geo.ih, transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.s})` }}>
-            <img src={src} alt={name} draggable={false} />
-            <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
-              {marks.map((m) => drawMark(m, hover === m.id || pop?.id === m.id))}
-              {draftMark && drawMark(draftMark, false, true)}
-            </svg>
+          <div className={`imk-frame${view.s > 1 ? ' is-zoomed' : ''}`} style={{ left: geo.x, top: geo.y, width: geo.iw, height: geo.ih }}>
+            <div className="imk-world" style={{ transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.s})` }}>
+              <img src={src} alt={name} draggable={false} />
+              <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden>
+                {marks.map((m) => drawMark(m, hover === m.id || pop?.id === m.id))}
+                {draftMark && drawMark(draftMark, false, true)}
+              </svg>
+            </div>
           </div>
         )}
         {geo && !compact && (

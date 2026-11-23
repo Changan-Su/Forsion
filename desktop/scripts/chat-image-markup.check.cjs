@@ -85,8 +85,13 @@ async function main() {
       ring: getComputedStyle(document.querySelectorAll('#tocmsg-a1 .inline-set-thumb')[1]).boxShadow,
     }))
     check('1B 点第 2 格:主图换成它、2 / 3、这格描选中框', picked.count === '2 / 3' && picked.on.join() === 'false,true,false' && picked.same && /2px/.test(picked.ring), picked)
-    await win.locator('#tocmsg-a1').scrollIntoViewIfNeeded()
-    if (shots) { await zoom110(true); await shot('1b-set-light'); await zoom110(false) }
+    if (shots) {
+      await zoom110(true)
+      await win.locator('#tocmsg-a1 .inline-set').evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' }))
+      await shot('1b-set-light')
+      await win.evaluate(() => document.documentElement.classList.add('dark')); await shot('1b-set-dark'); await win.evaluate(() => document.documentElement.classList.remove('dark'))
+      await zoom110(false)
+    }
 
     // 点主图 = 看图器,列表按缩略图收(3 张生图 + 2 张截图),从第 2 张开
     await win.locator('#tocmsg-a1 .inline-set-main img').click()
@@ -151,6 +156,8 @@ async function main() {
     await win.mouse.move(...at(0.5, 0.5)); await win.mouse.wheel(0, -300); await win.waitForTimeout(150)
     const tf = await win.locator('.imk-world').evaluate((e) => e.style.transform)
     check('滚轮以指针为中心放大', /scale\((1\.[1-9]|[2-6])/.test(tf), tf)
+    const clip = await win.evaluate(() => { const f = document.querySelector('.imk-frame'), n = document.querySelector('.imk-notes'); const fr = f.getBoundingClientRect(), nr = n.getBoundingClientRect(); return { overflow: getComputedStyle(f).overflow, gap: Math.round(nr.left - fr.right) } })
+    check('放大只在图框里:框裁切、右侧清单在框外', clip.overflow === 'hidden' && clip.gap > 0, clip)
     if (shots) { await zoom110(true); await shot('2b-zoomed-light'); await zoom110(false) }
     await win.mouse.wheel(0, 600); await win.waitForTimeout(150)
     // 有标记时 Esc 先问
@@ -181,7 +188,8 @@ async function main() {
     await win.locator('.iv').waitFor(); await win.waitForTimeout(400)
     await win.keyboard.press('g'); await win.waitForTimeout(300)
     const g0 = await win.evaluate(() => ({ cells: document.querySelectorAll('.ivg-cell').length, checks: document.querySelectorAll('.ivg-check').length, title: document.querySelector('.ivg-bar .iv-title b')?.textContent, ivHidden: getComputedStyle(document.querySelector('.iv > .iv-bar')).visibility }))
-    check('1C 按 G 进「全部图片」:5 格都能选,看图器顶栏藏起', g0.cells === 5 && g0.checks === 5 && g0.title === '全部图片' && g0.ivHidden === 'hidden', g0)
+    // 7 格 = 3 张生图 + 2 张截图 + 上面 2B 发出去那条用户消息里的两件附件(用户附件不带 edit,不能选)
+    check('1C 按 G 进「全部图片」:对话流里 7 张、能改的 5 张有选择钮,看图器顶栏藏起', g0.cells === 7 && g0.checks === 5 && g0.title === '全部图片' && g0.ivHidden === 'hidden', g0)
     await win.locator('.ivg-cell').nth(0).hover(); await win.locator('.ivg-cell').nth(0).locator('.ivg-check').click()
     await win.locator('.ivg-cell').nth(2).locator('.ivg-check').click()
     check('1C 选两张:底下一条「已选 2 张」', (await win.locator('.ivg-picked').textContent().catch(() => '')) === '已选 2 张')
@@ -196,6 +204,7 @@ async function main() {
     await win.locator('.imk-send').click(); await win.waitForTimeout(300)
     const g1 = await win.evaluate(() => ({ grid: !!document.querySelector('.ivg'), imk: !!document.querySelector('.imk'), mark: document.querySelectorAll('.ivg-mark')[0]?.textContent }))
     check('1C 网格里「标注」= 收集模式:按钮写「完成」,完成回网格、那格写「1 处」', collectBtn === '完成' && g1.grid && !g1.imk && g1.mark === '1 处', { collectBtn, g1 })
+    check('1C 只标了一张、整体要求留空:发送不可点(另一张没有改法)', await win.locator('.ivg-dock .imk-send').isDisabled())
     await win.locator('.ivg-dock .imk-overall').fill('背景换成浅黄色')
     const n2 = stub.seen.runs.length
     await win.locator('.ivg-dock .imk-send').click()
@@ -205,7 +214,7 @@ async function main() {
     const l2 = String(run2?.message || '').split('\n')
     check('1C 一起发:「分别改下面 2 张图」,图 1 带标注副本、图 2 是附图 3', l2[0] === '分别改下面 2 张图，每张单独改一次、只拿它自己的原图（标注示意只用来看改哪里）：'
       && l2[1] === '图 1（image-7a03-1.png，附图 1；附图 2 是它的标注示意）：' && /^1 .*点的位置：把这里换成一盆绿植$/.test(l2[2] || '')
-      && l2[3] === '图 2（image-7a03-3.png，附图 3）：' && l2.includes('每张都要：背景换成浅黄色'), l2)
+      && l2[3] === '另外：背景换成浅黄色' && l2[4] === '图 2（image-7a03-3.png，附图 3）：' && l2[5] === '背景换成浅黄色', l2)
     check('1C 附件三件、按图序:原图 1、原图 1 的标注副本、原图 3', (run2?.attachments || []).map((a) => a.name).join('|') === 'image-7a03-1.png|image-7a03-1-标注.jpg|image-7a03-3.png', run2?.attachments?.map((a) => a.name))
     // Esc 从网格回单张
     await win.locator('#tocmsg-a1 .inline-set-main img').click()
@@ -222,7 +231,35 @@ async function main() {
     const n1 = stub.seen.runs.length
     await win.locator('#tocmsg-a1 .inline-set-link').nth(1).click()
     await win.waitForTimeout(1200)
-    check('「再来 3 张」发出一句', stub.seen.runs.length > n1 && lastRun().message === '照这组再来 3 张。', stub.seen.runs.length > n1 ? lastRun().message : null)
+    check('「再来 3 张」发出一句', stub.seen.runs.length > n1 && lastRun().message === '照 image-7a03-1.png 这组再来 3 张。', stub.seen.runs.length > n1 ? lastRun().message : null)
+
+    // ── 窄窗(手机布局):缩略条换到下面横排;标注态图在上、清单和输入在底部抽屉
+    // 主窗最小宽 880(electron/main.ts):用视口模拟窄屏,同 agent-picker.check
+    await win.setViewportSize({ width: 430, height: 880 })
+    await win.waitForTimeout(900)
+    // 对话贴底:程序滚动会被拉回去,用真滚轮往上滚到这组露出来
+    for (let i = 0; i < 30; i++) {
+      const top = await win.locator('#tocmsg-a1 .inline-set').evaluate((el) => el.getBoundingClientRect().top)
+      if (top > 60 && top < 400) break
+      const sb = await win.locator('#tocmsg-a1').boundingBox()
+      await win.mouse.move(sb.x + sb.width / 2, 420); await win.mouse.wheel(0, top < 60 ? -160 : 160); await win.waitForTimeout(120)
+    }
+    await win.waitForTimeout(300)
+    const narrow = await win.evaluate(() => { const r = document.querySelector('#tocmsg-a1 .inline-set-row'); return { dir: r && getComputedStyle(r).flexDirection, w: Math.round(document.querySelector('#tocmsg-a1 .inline-set')?.getBoundingClientRect().width || 0) } })
+    check('窄窗:缩略条换到主图下面', narrow.dir === 'column', narrow)
+    await shot('narrow-1b')
+    await win.locator('#tocmsg-a1 .inline-set-main').hover()
+    await win.locator('#tocmsg-a1 .inline-set-act').click()
+    await win.locator('.imk').waitFor(); await win.waitForTimeout(500)
+    const nb = await win.locator('.imk-world').boundingBox()
+    await win.mouse.click(nb.x + nb.width * 0.5, nb.y + nb.height * 0.5); await win.waitForTimeout(150)
+    await win.keyboard.type('换成一只小鸟'); await win.keyboard.press('Enter'); await win.waitForTimeout(200)
+    const sheet = await win.evaluate(() => ({ compact: !!document.querySelector('.imk.is-compact'), sheet: !!document.querySelector('.imk-sheet'), notes: document.querySelectorAll('.imk-sheet .imk-note:not(.is-add)').length, dock: !!document.querySelector('.imk-sheet .imk-dock'), side: !!document.querySelector('.imk-notes') }))
+    check('窄窗标注态:抽屉在下、清单和输入在抽屉里、没有右侧清单', sheet.compact && sheet.sheet && sheet.notes === 1 && sheet.dock && !sheet.side, sheet)
+    await shot('narrow-2b')
+    await win.keyboard.press('Escape'); await win.waitForTimeout(150)
+    await win.locator('.imk-confirm .imk-send').click().catch(() => {}); await win.waitForTimeout(200)
+    await win.keyboard.press('Escape'); await win.waitForTimeout(500)
   } finally {
     await ctx.close()
   }
