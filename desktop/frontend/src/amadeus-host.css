@@ -1181,7 +1181,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-drawview .amx-draw.amx-draw-state { height: auto; }
 /* Desk 白板磁贴(走查续七 7.7 A,AmadeusDrawingView 的 params.preview):只画图 —— 引擎的工具条 / 菜单 / 提示 / 缩放栏全收,
    上面盖一层挡住选中、拖动和滚轮平移(双击 = 在白板中打开),右下角一颗「在白板中打开」。 */
-.amx-drawview:has(> .amx-drawpreview-shield) { position: relative; }
+/* isolation:遮罩(4)/ 按钮(5)关在磁贴自己的叠放上下文里,不跟外面比数字 —— 白板在 Desk 上格时,
+   铺满的遮罩原本会压住两格分界条(.agent-desk-split,3)的上半 3px。预览态没有会溢出的浮层,关住无副作用。 */
+.amx-drawview:has(> .amx-drawpreview-shield) { position: relative; isolation: isolate; }
 .amx-boardhost[data-preview] .excalidraw .layer-ui__wrapper,
 .amx-boardhost[data-preview] .excalidraw .LoadingMessage { display: none; }
 .amx-drawpreview-shield { position: absolute; inset: 0; z-index: 4; }
