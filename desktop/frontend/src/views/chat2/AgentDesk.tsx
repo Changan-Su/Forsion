@@ -360,12 +360,13 @@ function liveFreshLabel(sessionId: string, toolId: string, t: (k: string, v?: Re
  *  所以这里在格子上用**原生捕获**监听先接住(连格子里的编辑器也不先吃)。直播那格写完前不收:光标 not-allowed、不染色。
  *  dragover 读不到数据:会话 / 应用这类放不进 Desk 的引用到 drop 才知道,那时不拦,照旧冒泡给输入框变成引用。 */
 function useDeskDrop(ref: React.RefObject<HTMLDivElement | null>, sessionId: string, slot: number, enabled: boolean, locked: boolean): void {
-  useDeskPathDrop(ref, enabled, locked, (path) => useApp.getState().deskAct(sessionId, { type: 'pick', slot, item: deskItemFor(path, Date.now()) }))
+  useDeskPathDrop(ref, enabled, locked, (path) => useApp.getState().deskAct(sessionId, { type: 'pick', slot, item: deskItemFor(path, Date.now()) }), sessionId)
 }
 
 /** 拖一个文件 / 工作区引用到某块 Desk 上(格子、Human Desk 的卡与展开态共用):原生捕获监听先接住,解析出本机路径交给 onPath。
- *  ref 那块元素拖上去时挂 data-drop(染色由 CSS 画),聊天区挂 data-deskdrop 让出整片的淡染。 */
-export function useDeskPathDrop(ref: React.RefObject<HTMLElement | null>, enabled: boolean, locked: boolean, onPath: (path: string) => void): void {
+ *  ref 那块元素拖上去时挂 data-drop(染色由 CSS 画),聊天区挂 data-deskdrop 让出整片的淡染。
+ *  sessionId:这条会话的 Desk 自己那一样被拖过来(名字胶囊,#842)不在这里收。 */
+export function useDeskPathDrop(ref: React.RefObject<HTMLElement | null>, enabled: boolean, locked: boolean, onPath: (path: string) => void, sessionId?: string): void {
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const take = useRef(onPath)
   take.current = onPath
@@ -374,7 +375,7 @@ export function useDeskPathDrop(ref: React.RefObject<HTMLElement | null>, enable
     if (!el || !enabled) return
     const view = el.ownerDocument.defaultView
     const accepts = (e: DragEvent): boolean => {
-      if (isOwnDeskDrag(e, sessionId)) return false // Desk 自己那一样拖过来 = 对调,归 useDeskItemDrop(deskOpen.tsx)
+      if (sessionId && isOwnDeskDrag(e, sessionId)) return false // Desk 自己那一样拖过来 = 对调,归 useDeskItemDrop(deskOpen.tsx)
       const ts = Array.from(e.dataTransfer?.types ?? [])
       return ts.includes('Files') || ts.includes(REF_MIME) || ts.includes(PATHS_MIME)
     }
@@ -426,7 +427,7 @@ export function useDeskPathDrop(ref: React.RefObject<HTMLElement | null>, enable
       view?.removeEventListener('blur', clear)
       mark(false)
     }
-  }, [ref, enabled, locked, vaultRoot])
+  }, [ref, enabled, locked, vaultRoot, sessionId])
 }
 
 /** 展开态的一格 = 悬浮胶囊 + 内容(方案 B,两颗胶囊同 Mini 顶栏 lcl/engine/miniCard.css .mini-card-cap)。

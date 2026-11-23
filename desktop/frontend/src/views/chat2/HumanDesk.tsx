@@ -4,15 +4,12 @@
  *  发出去的 token 和 [[ 选择器同一份)。状态在 appStore.humanDeskBySession(纯决策 stores/humanDeskPlan.ts)。
  *  这一步不做:拿到主区 / 放到 Human Desk / 在外面的那张卡、引擎里的现场(<human_activity>)、停笔说一句、白板可画。 */
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Copy, Eye, FilePlus, FileText, FolderOpen, MapPin, Maximize2, Minimize2, NotebookPen, Pause, Play, Plus, Sparkles, X, ExternalLink } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
-import { getView } from '@lcl/engine'
+import { ChevronDown, Copy, Eye, FilePlus, FolderOpen, MapPin, Maximize2, Minimize2, NotebookPen, Pause, Play, Plus, Sparkles, X } from 'lucide-react'
 import { ViewModeSwitch } from '@lcl/components'
 import { useApp, type DeskItem } from '../../stores/appStore'
 import { deskItemFor } from '../../stores/deskPlan'
 import { deskSection, deskSideOf, humanMenuRows, humanWatching, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { registerMessages, translate, useI18n } from '../../i18n'
-import { iconForFile } from '../../services/fileKinds'
 import { usePageStore, birthNoteFile, onNotePathGone } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
@@ -21,6 +18,7 @@ import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
 import { DeskFilePane, DeskShimView, openDeskItemInMain, useDeskPathDrop, vaultRelOf } from './AgentDesk'
+import { DeskItemIcon, deskOpenItems } from './deskOpen'
 import { CardAction, DeskSqueezeContext, SummaryCard } from './TaskSummary'
 import { bumpOpen, openOf, setUserOpen, touchDesk, useSummaryOpen } from './summaryOpen'
 import { fileChip, refChipOf, viewChip, type RefChip } from './Composer2'
@@ -57,11 +55,6 @@ export function YouMark({ className }: { className?: string }): React.ReactEleme
 
 const isNote = (it: DeskItem | undefined): boolean => !!it && !it.view && /\.md$/i.test(it.path)
 
-/** 名字胶囊 / 卡头的图标跟着内容类型走:注册视图用视图自己登记的图标,文件按扩展名(services/fileKinds)。 */
-function itemIcon(it: DeskItem): LucideIcon {
-  if (it.view) return (getView(it.view.type)?.icon as LucideIcon | undefined) ?? FileText
-  return iconForFile('', it.name || it.path)
-}
 
 const put = (sessionId: string, item: DeskItem): void => {
   touchDesk(sessionId, 'humandesk')
@@ -334,12 +327,11 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
   const cardRef = useRef<HTMLElement | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => { ensureAmadeusReady() }, [])
-  useDeskPathDrop(cardRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())))
+  useDeskPathDrop(cardRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())), sessionId)
   const note = isNote(item) ? h?.section : undefined
   useFollowSection(bodyRef, note?.idx, open && !gone && hasContent)
   const pickRows = useHumanPickRows(sessionId)
   const expand = (): void => { touchDesk(sessionId, 'humandesk'); useApp.getState().setDeskSide(sessionId, 'human') }
-  const Icon = item ? itemIcon(item) : null
   // 右边是 Agent Desk 在演时卡片预览让出原生编辑器(同一时间只有一处能开,见 AgentDesk.useClaimKey)
   const allowNative = side !== 'agent'
   const pickable = (h?.recent?.length ?? 0) > 1
@@ -353,7 +345,7 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
       head={<>
         <YouMark />
         <span className="human-desk-card-name">{t('humanDesk.title')}</span>
-        {item && Icon && (pickable ? (
+        {item && (pickable ? (
           <span className="human-desk-card-pickwrap" onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
             <DeskPickButton className="human-desk-card-pick" title={item.path || item.name} rows={pickRows}>
               <span className="t2-card-hint human-desk-card-title">{item.name}</span><ChevronDown size={11} className="desk-cap-caret" />
@@ -405,7 +397,7 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
   const fileTypes = usePluginStore((s) => s.fileTypes)
   const pickRows = useHumanPickRows(sessionId)
   useEffect(() => { ensureAmadeusReady() }, [])
-  useDeskPathDrop(paneRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())))
+  useDeskPathDrop(paneRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())), sessionId)
   // 挂上时记下上次那一节(同一样东西才算):滚回去,并且不让「编辑器挂好那一下」按顶上那一节覆盖掉
   const back = useRef<{ key?: string; idx?: number }>({ key: item?.key, idx: h?.section?.idx })
   if (back.current.key !== item?.key) back.current = { key: item?.key, idx: undefined }
@@ -420,18 +412,20 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
     const mine: CtxItem[] = [
       ...addItems(sessionId, t),
       { label: t('humanDesk.remove'), icon: <X size={14} />, separatorBefore: true, run: () => useApp.getState().humanDeskAct(sessionId, { type: 'remove' }) },
-      { label: t('desk.openMain'), icon: <ExternalLink size={14} />, run: () => openDeskItemInMain(item, vaultRoot) },
     ]
+    // 打开的几项同 Agent Desk(#842 deskOpen.tsx):新标签页 / 拆分 / 新窗口,都是再开一份,Human Desk 上的留着
+    const opens = deskOpenItems({ item, rel, anchor: paneRef.current, openTab: () => openDeskItemInMain(item, vaultRoot), t })
     const orig: CtxItem[] = [
       ...more.current,
       ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
       ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
     ]
-    return [...mine, ...orig.map((x, i) => (i === 0 ? { ...x, separatorBefore: true } : x))]
+    const after = (xs: CtxItem[]): CtxItem[] => xs.map((x, i) => (i === 0 ? { ...x, separatorBefore: true } : x))
+    return [...mine, ...after(opens), ...after(orig)]
   }
-  const Icon = item ? itemIcon(item) : null
   const pickable = (h?.recent?.length ?? 0) > 1
-  const inner = item && Icon ? <><Icon size={13} className="desk-cap-ic" /><span className="desk-cap-label">{item.name || path.split(/[/\\]/).pop()}</span></> : null
+  // 图标跟着种类走,同 Agent Desk 的名字胶囊(#842 DeskItemIcon)
+  const inner = item ? <><DeskItemIcon item={item} rel={rel} size={13} className="desk-cap-ic" /><span className="desk-cap-label">{item.name || path.split(/[/\\]/).pop()}</span></> : null
   return (
     <div className="human-desk-body" data-human-desk-session={sessionId}>
       <div ref={paneRef} className="agent-desk-pane has-caps human-desk-pane">
