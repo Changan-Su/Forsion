@@ -15,6 +15,7 @@ import { addCommand } from '@lcl/engine'
 import { translate } from './i18n'
 import { installPluginCommandBridge } from './pluginCommandBridge'
 import { followMainWindowSpaceHealth, pluginProblemsForAgent, pluginReportForAgent } from './pluginSpaceHealth'
+import { followHostDenials } from '@amadeus/plugins/hostDenials'
 import { windowKind } from './windowKind'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
@@ -65,6 +66,7 @@ export function installAmadeusPlugins(): void {
   // 发方广播 extensions-changed(announceExtensionsChanged),这里各窗自己对账。
   window.tangu?.onMainAction?.((action, payload) => { if (action === 'extensions-changed') applyExtensionsChanged(payload) })
   if (windowKind() !== 'main') followMainWindowSpaceHealth() // Space 出没出现以主窗为准;必须早于本窗第一遍配方装载
+  followHostDenials({ owner: windowKind() === 'main' }) // 插件请求被宿主拒掉的记录:谁的窗口撞上的都记进同一份,设置浮窗里的插件详情也看得到(hostDenials.ts)
   // agent 面的只读命令:本窗宿主此刻对插件的记录(在不在跑 / 为什么没在跑 / 注册了哪些视图 / 哪个随包 Space 没出现及原因)。
   // 在它之前这些只进渲染端控制台,agent 只能请用户去翻。人从命令面板点它 = 打开插件设置页(同一份信息在卡片上)。
   // ⚠️ description 引擎截在 300 字符,回执截在 200:别往里加长文。
@@ -76,7 +78,7 @@ export function installAmadeusPlugins(): void {
     invoke: {
       description:
         "Read-only: what this window's plugin host recorded about installed plugins — running or not and why, the views each registered, "
-        + 'and bundled Spaces that are hidden with the reason. Call it first when a plugin, its Space or its view is missing, before asking the user for logs.',
+        + 'bundled Spaces that are hidden with the reason, and calls the host refused. Call it first when a plugin, its Space or its view is missing, before asking the user for logs.',
       params: { type: 'object', properties: { id: { type: 'string', description: 'Plugin id from its manifest.json (its name or install folder name usually resolves too). Omit to get whatever is wrong right now.' } } },
       run: (a) => pluginReportForAgent(typeof a.id === 'string' ? a.id.trim() : ''),
       state: pluginProblemsForAgent,

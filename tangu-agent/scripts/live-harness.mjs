@@ -40,6 +40,8 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params、
  *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
+ *   npm run live:harness -- --only taskskill                 # 改任务卡「在这里做」交技能的方式(desktop views/chat2/taskLanding.ts)或引擎 requestedSkillIds 的尾部指令后跑:
+ *                                                           #   只带任务书 + requestedSkillIds,模型须先 use_skill 取回 forsion-plugin,落库的用户消息就是原文。--taskskill-neg = 不带 id 的对照
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugininternals           # 改 skills/forsion-plugin 的 references/internals.md(ctx.internals)或正文指向它那行后跑:须读到那份参考并答出声明 / read·subscribe / 手机端没有
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
@@ -409,6 +411,7 @@ OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferr
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
+KEYS.push('taskskill'); OPT_IN.add('taskskill'); // 一个 run;只在动任务卡「在这里做」怎么把 skill: 交给模型(desktop taskLanding / 引擎的 requestedSkillIds 尾部指令)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 KEYS.push('plugininternals'); OPT_IN.add('plugininternals'); // 一个 run;只在动 forsion-plugin 的 references/internals.md 或正文里指向它那行时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
@@ -5089,6 +5092,25 @@ Then reply with only the command output.`,
   // ⚠️ 这一节必须留在技能正文的前 34k 字符里:工具结果入列有 48k 硬帽(contextBudget.capToolResult,只留头 34k + 尾 12k),
   //    forsion-plugin 已 73k 字符,中段模型默认看不到。10-05 实测:这一节在中段时本场景 1 红(模型只读了头部就答)、
   //    1 绿(模型自己又去读了落盘的全文,26s);挪进头部后 3/3 绿、8s。本场景变红先查这一节的位置,别先改措辞。
+  // 任务卡「在这里做」(11-23,插件开发优化方案第十节 1):卡头 skill: forsion-plugin 不再拼成用户气泡里的 `Load the … skill first.`,
+  // 改走 /skill 那条隐藏通道(agentConfig.requestedSkillIds → 引擎在尾部 user 消息后拼「本轮指定技能」指令,不落库)。
+  // 判据:模型第一件事就 use_skill 取回 forsion-plugin;落库的用户消息就是任务书原文(没有引导语、没有指令段)。
+  // 负对照 `--taskskill-neg`:同一份任务书不带 requestedSkillIds —— 看模型自己会不会去加载(结果如实记,不一定红)。
+  const TASKSKILL_NEG = argv.includes('--taskskill-neg');
+  await scenario('taskskill', `taskskill 任务卡技能走隐藏附注:use_skill 先行、气泡只有任务书${TASKSKILL_NEG ? '(负对照:不带 requestedSkillIds)' : ''}`, async () => {
+    const sid = `live-taskskill-${Date.now()}`;
+    const brief = 'Add a small status-bar counter to my notes app that shows how many notes I edited today. Reply with a three-bullet plan only; do not create or edit any files yet.';
+    const ev = await run(sid, brief, 240_000, TASKSKILL_NEG ? {} : { requestedSkillIds: ['local:forsion-plugin'] });
+    const firstTool = ev.toolCalls[0] || '';
+    const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const userTexts = msgs.filter((m) => m.role === 'user').map((m) => String(m.content || ''));
+    const clean = userTexts.length === 1 && userTexts[0].trim() === brief && !/Load the|Designated Skills/.test(userTexts[0]);
+    return { ok: !ev.error && ev.done && firstTool === 'use_skill' && loaded && clean,
+      detail: ev.error || `第一个工具 ${firstTool || '无'};use_skill ${loaded ? '取回正文' : '未取回'};落库用户消息${clean ? '就是任务书原文' : `不对:${JSON.stringify(userTexts).slice(0, 200)}`};工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
   await scenario('pluginlook', 'pluginlook 插件技能:外观开关一节经 use_skill 到达模型', async () => {
     const ev = await run(`live-pluginlook-${Date.now()}`, "I'm writing a Forsion desktop plugin with a left-sidebar list view and a long-form article view. Load your Forsion extension development skill first, then tell me in three short bullets what my CSS and markup must do so the plugin follows the user's appearance switches (dim surroundings, relaxed text, gentle transitions). Name the exact CSS variables and attributes.", 240_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true });
     const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);

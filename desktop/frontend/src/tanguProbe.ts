@@ -551,6 +551,14 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
   const pip = pipAgentClient()
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
+    // 和上面同一套判定,只是说出为什么不行(插件请求被拒时的诊断、设置卡上的注明;pluginStore / AmadeusPluginsTab)
+    hostExecutionBlock: () => {
+      const declared = window.tangu?.executionCapabilities?.host
+      if (declared === true) return null
+      if (declared === false) return 'no-local-engine'
+      const mode = useApp.getState().desktopConfig?.mode
+      return mode === 'managed' ? null : mode === 'external' ? 'external-engine' : 'pending'
+    },
     activeModel: readActiveModel,
     models: readModels,
     modelCatalog,
