@@ -528,7 +528,15 @@ async function main() {
     await step('l', async () => {
       const bytes = () => Object.fromEntries(Object.entries(V).map(([k, p]) => [k, fs.readFileSync(p).toString('base64')]))
       const before = bytes()
-      // 先清空 Desk:k 段留下了钉住的一格,present 会绕开钉住的格
+      const errs = []
+      win.on('pageerror', (e) => errs.push(String(e && e.stack || e).slice(0, 600)))
+      win.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 600)) })
+      // 哪一块塌成了错误边界(「这一页没能打开」),连同报错原文
+      const crashed = () => win.evaluate(() => [...document.querySelectorAll('[data-view-error]')].map((e) => (e.querySelector('pre')?.textContent || '').slice(0, 400)))
+      // k 段最后停在 notes.txt 标签上:先回到对话(Desk 住在对话里)
+      const chatTab = win.locator('.wb-tab[data-view-type="chat"]').first()
+      if (await chatTab.count()) { await chatTab.click(); await sleep(1200) }
+      // 再清空 Desk:k 段留下了钉住的一格,present 会绕开钉住的格
       for (let i = 0; i < 4 && (await info()).panes.length; i++) await moreIn(0, '从 Desk 拿掉')
       const presentViews = async (views, text) => {
         stub.script([
@@ -546,6 +554,8 @@ async function main() {
       const cellOf = (xs, re) => xs.find((c) => re.test(c.label || ''))
       await presentViews([ed('数据/任务.db', '任务.db'), ed('boards/草图.excalidraw.md', '草图')], '把任务库和草图摆上来')
       const c1 = await cells()
+      const boom1 = await crashed()
+      check('l 摆上来之后对话没塌成错误页', boom1.length === 0, { boom1, errs: errs.slice(0, 6) })
       const db = cellOf(c1, /任务\.db/), board = cellOf(c1, /草图/)
       check('l .db 给成笔记编辑器:格子挂数据库视图,没有笔记编辑器', !!db && db.db && !db.editor, c1)
       check('l 白板给成笔记编辑器:格子挂白板只读预览,没有笔记编辑器', !!board && board.draw && board.preview && !board.editor, c1)
