@@ -36,6 +36,8 @@ vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSp
 import Database from 'better-sqlite3';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { request as httpRequest } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { bootMultiAccount, canary, outboundAccount, randomUUID, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
 
@@ -177,6 +179,24 @@ describe('multi-account: closing idle account databases', () => {
     const db = dbOf('frank');
     try { expect((db.prepare('SELECT status FROM agent_runs WHERE id = ?').get(started.runId) as any).status).toBe('done'); } finally { db.close(); }
   }, 60_000);
+
+  it('an account with a request still in flight is not closed; once it ends the account can be', async () => {
+    expect((await E.client.call('ivan', 'GET', '/agent/sessions')).status).toBe(200);
+    const port = (E.server.address() as AddressInfo).port;
+    // a write whose body is still arriving: past the identity check, not finished
+    const req = httpRequest({ host: '127.0.0.1', port, method: 'POST', path: '/agent/memory', headers: {
+      Authorization: `Bearer ${process.env.TANGU_LOCAL_TOKEN}`, 'X-Forsion-User': 'ivan', 'Content-Type': 'application/json', 'Content-Length': '100000',
+    } });
+    req.on('error', () => {});
+    req.write('{"content":"');
+    await sleep(300);
+    try {
+      expect(E.accounts.evictIdleNow(0, 0)).not.toContain('ivan');
+      expect(E.accounts.open()).toContain('ivan');
+    } finally { req.destroy(); }
+    await sleep(300);
+    expect(E.accounts.evictIdleNow(0, 0)).toContain('ivan');
+  }, 30_000);
 
   it('a cap on open databases closes the least recently used idle ones first', async () => {
     const c = E.client;
