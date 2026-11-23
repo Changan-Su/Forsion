@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
+import { userInvokedOnly } from '../skills/invocation.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun, abortRun, enqueueSteer, cancelSteer } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
@@ -124,6 +125,8 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const sessionListRef = useRef<SessionRow[]>([]);
   /** 已就绪的群聊参与者 slug(/groupchat 设置;非空时每条消息走多 Agent 群聊;/groupchat off 清空)。 */
   const groupAgentsRef = useRef<string[] | null>(null);
+  // /skill 开了一个只许用户点名的技能(disable-model-invocation):下一条消息把它当作这一轮的点名(requestedSkillIds)带上,只带一次
+  const skillRequestOnce = useRef<Set<string>>(new Set());
 
   // 选择器(/model /think /approval /resume、Ctrl+P、完全放行确认):开着时键盘归它,输入框让出焦点但保持挂载。
   const [picker, setPicker] = useState<PickerRequest | null>(null);
@@ -433,6 +436,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     const sid = sessionIdRef.current;
     const c = cfgRef.current;
     const agentConfig = buildRunAgentConfig(c, groupAgentsRef.current);
+    if (skillRequestOnce.current.size) { agentConfig.requestedSkillIds = [...skillRequestOnce.current]; skillRequestOnce.current.clear(); }
     // 本端设置写进会话(按键合并,与桌面 PATCH 同锁):/resume 与桌面打开同一会话时才恢复得出来。
     // 审批档只写 TUI 专属键 —— 共享的 approvalMode 桌面审批时现读,写了就是跨端改档(见 runConfig TUI_APPROVAL_KEY)。
     // 先写完再起 run —— 引擎起跑时也会读改写同一份 agent_config(补 agentSlug / preset)。
@@ -1211,10 +1215,14 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         const cur = new Set(cfgRef.current.enabledSkillIds || []);
         if (cur.has(rest)) {
           cur.delete(rest);
+          skillRequestOnce.current.delete(rest);
           notice(`技能已停用:${rest}`, 'success');
         } else {
           cur.add(rest);
-          notice(`技能已启用:${rest}(本会话生效)`, 'success');
+          // 只许用户点名的技能不进模型的技能目录、模型自己也装不了:把这次 /skill 当成对下一条消息的点名
+          const userOnly = userInvokedOnly(await deps().brain.assets.getSkill(rest, userId).catch(() => null));
+          if (userOnly) skillRequestOnce.current.add(rest);
+          notice(`技能已启用:${rest}(本会话生效${userOnly ? ';它只在你点名时用,下一条消息会带上它' : ''})`, 'success');
         }
         setCfg((c) => ({ ...c, enabledSkillIds: [...cur] }));
         return;

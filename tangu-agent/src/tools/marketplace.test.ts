@@ -2,7 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn() }));
 vi.mock('../seams/runtime.js', () => ({ isConfigured: () => true, deps: () => ({ brain: { marketplace: fixture } }) }));
 import { marketplaceProvider } from './builtin/marketplace.js';
-import { hasMarketplaceCards, marketplaceCompatibility, marketplaceItemsOf } from '../shared/marketplace.js';
+import { createHash } from 'node:crypto';
+import { COLLECTED_SKILLS_SOURCE_ID, hasMarketplaceCards, marketplaceCompatibility, marketplaceItemsOf } from '../shared/marketplace.js';
 describe('Forsion marketplace tools', () => {
   const item = (id: string, name: string, tags = ['notes']) => ({ id, name, tags, installSlug: `market-${id}`, type: 'amadeus-plugin', source: 'zip', author: 'Author', summary: 'PDF notes', minAppVersion: '2.13.0', platforms: ['desktop'] });
   it('searches the entire catalog, preserves duplicate names, applies filters and propagates cancellation', async () => {
@@ -160,9 +161,18 @@ describe('collected skills (skills.sh) in store results', () => {
     expect(zh.instruction).toContain('search again with English keywords');
     const en = JSON.parse(String(await search.execute({ query: 'absent' }, {} as any)));
     expect(en.instruction).not.toContain('English keywords');
+    expect(JSON.parse(String(await search.execute({ query: '决策地图', type: 'plugin' }, {} as any))).instruction).not.toContain('English keywords');
+    fixture.list.mockResolvedValue([forsion('mine')]); // 老服务端:没有收录条目
+    expect(JSON.parse(String(await search.execute({ query: '决策地图' }, {} as any))).instruction).not.toContain('English keywords');
+    fixture.list.mockResolvedValue([collected('wayfinder')]);
     const hit = JSON.parse(String(await search.execute({ query: 'plan 项目' }, {} as any)));
     expect(hit.items.map((i: any) => i.id)).toEqual(['src_25aae625_wayfinder']);
     expect(hit.instruction).not.toContain('English keywords');
+  });
+
+  it('the built-in skills.sh source id is sha256("builtin:skills.sh").slice(0, 8) (contract §1)', () => {
+    expect(createHash('sha256').update('builtin:skills.sh').digest('hex').slice(0, 8)).toBe(COLLECTED_SKILLS_SOURCE_ID);
+    expect(COLLECTED_SKILLS_SOURCE_ID).toBe('25aae625');
   });
 
   it('tool descriptions name the source, say it is unreviewed and leave installing to the user', async () => {

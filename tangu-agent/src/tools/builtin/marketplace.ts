@@ -82,7 +82,9 @@ export const marketplaceProvider: ToolProvider = {
           const hit = Math.min(...hits);
           return hit >= 1400 && Number.isFinite(hit) ? { ...item, description: '…' + description.slice(Math.max(0, hit - 120), hit + 1100) } : item;
         });
-      return output(candidates, false, /[^\x00-\x7f]/.test(query) ? NON_ENGLISH_EMPTY : '');
+      // 只在目录里真有收录条目、且这次搜的类型包含技能时提醒(老服务端 / 搜插件主题时一个字节都不加)
+      const hint = /[^\x00-\x7f]/.test(query) && (!args.type || args.type === 'skill') && items.some(item => !isForsionMarketplaceItem(item));
+      return output(candidates, false, hint ? NON_ENGLISH_EMPTY : '');
     },
   }, {
     name: 'get_marketplace_plugin',
