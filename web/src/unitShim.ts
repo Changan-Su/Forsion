@@ -11,7 +11,7 @@ import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import { installScopedStorage } from './scopedStorage'
 import { parseRelayUrl } from '../../mobile/src/relayPaths'
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 

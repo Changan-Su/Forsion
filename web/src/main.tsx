@@ -30,7 +30,7 @@ async function bootstrap(): Promise<void> {
 
   if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) {
     const meta = (window as unknown as { __FORSION_UNIT_PAGE__: {
-      instanceId: string; capabilities?: UnitCloudCapabilities; account?: { apiBase: string; loginPath: string }
+      instanceId: string; capabilities?: UnitCloudCapabilities; account?: { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] }
       inheritWebAccount?: boolean
     } }).__FORSION_UNIT_PAGE__
     const projectionBase = new URL('.', document.baseURI)

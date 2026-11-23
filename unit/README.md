@@ -17,6 +17,28 @@ Each surface publishes only its selected packages; the backend and per-account s
 Hot updates validate every surface before committing. Official Extend packages must pass the pinned publisher signature.
 Legacy same-origin login inheritance is opt-in and never copies unattributed content caches.
 
+### 不和 Server 同进程的公开站点 / Public sites without an in-process Server
+
+公开 Unit 可以不装 Server 插件，改用 `"remoteAccount": { "origin": "https://api.example.com", "loginVia": "https://www.example.com/web/" }` 远程验登录：
+Unit 拿访客的令牌问 `GET <origin>/api/auth/unit-identity`，只有明确的 401 / 403 才算没登录；超时、5xx、断网回 503，不会让浏览器清掉登录。
+验过的身份缓存 30 秒（吊销最多晚 30 秒生效）。浏览器侧的 `/api` 仍是同源路径，要由站点前面的反向代理转给 `origin`。
+`loginVia` 是同一运营方另一个入口上的登录处：没登录的访客去那里登录（已经登录就直接回来），带回一张一次性交接码，本页用它换令牌；
+本页只认自己这一标签页发起的那次登录（一次性 state），别人发来的带码链接一律丢弃。提供登录的入口要在它的 `webEntries` 项里列出
+`"handoffTargets": ["https://ai.example.com/web/"]`（https 源加入口路径，码只送进这个路径下面，不会落到那个源上会跳转的别的路由），且只把码交给带着 state 回来要的页面。两边拿到的是同一枚令牌，在任一边退出两边一起退出。
+
+`"visitorEngine": { "plugin": "tangu" }` 让公开 Unit 用多账号模式拉起这个包的引擎（`TANGU_MULTI_ACCOUNT=1`，没有主人、没有单一数据库路径）。
+访客经 `<base>/engine/*` 访问：Unit 先用访客自己的令牌验身份，再重建请求头，只带引擎口令和 `X-Forsion-User: <server userId>`；
+入站的同名头、访客令牌都不转发。userId 不合 `^[a-z0-9][a-z0-9_-]{0,63}$`（不做大小写归一）或是受限的管理员令牌 → 403。
+公开 Unit 上只有这一个运行时会启动，智库、主人账号等单主人运行时一律不起。两个开关都只给公开 Unit，本机工作区（`workspace: local`）配了直接拒绝启动。
+
+A public Unit can verify Forsion logins remotely instead of hosting the Server plugin: `remoteAccount.origin` is asked
+`GET /api/auth/unit-identity` with the visitor's token; only an explicit 401 / 403 means signed out, every other failure is a 503
+that keeps the browser's login. Verified identities are reused for 30 seconds. `/api` stays a same-origin path, so a reverse proxy in
+front of the site forwards it to `origin`. With `loginVia`, visitors sign in on another entry of the same operator and come back with a
+one-time handoff code that only completes a login this tab started; that entry lists the receiving entry URLs (origin plus base path) in `handoffTargets`.
+`visitorEngine` starts the named package's engine in multi-account mode; `<base>/engine/*` resolves the visitor's own token and forwards
+with the engine credential and `X-Forsion-User` only. Both options are refused on a local workspace Unit.
+
 Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 
 The Desktop baseline is no longer hand-maintained: the build derives it from git, taking the newest `v*` stable tag contained in the checkout as the baseline and the number of commits since it as the Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.

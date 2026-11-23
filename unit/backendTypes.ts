@@ -32,7 +32,8 @@ export interface BackendIdentity {
 export interface BackendAccount {
   /** Public, same-origin endpoints used by the shared browser Account adapter. */
   metadata?: { apiBase: string; loginPath: string }
-  resolve: (token: string, options?: { signal?: AbortSignal; purpose?: 'administration' }) => Promise<BackendIdentity | null>
+  /** fresh: a re-check right before a write; providers that cache identities must ask again. */
+  resolve: (token: string, options?: { signal?: AbortSignal; purpose?: 'administration'; fresh?: boolean }) => Promise<BackendIdentity | null>
 }
 
 export interface BackendPlugin {
