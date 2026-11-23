@@ -40,7 +40,7 @@ import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootMultiAccount, canary, randomUUID, startRun, steps, type MaEngine, type Script } from './helpers/multiAccountHarness.js';
 import { DEFAULT_LIMITS, LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
-import { admissionSnapshot } from '../src/services/runAdmission.js';
+import { admissionSnapshot, admitRun, releaseRun } from '../src/services/runAdmission.js';
 import { __resetAccountStorageForTests, accountUsageBytes } from '../src/services/accountStorage.js';
 
 const accDir = (id: string) => join(env.home, 'accounts', id);
@@ -144,6 +144,18 @@ describe('multi-account limits: tasks at once', () => {
     a2.release();
     expect((await E.client.follow('alice', a2.runId, { timeoutMs: 15_000 })).status).toBe('done');
   }, 60_000);
+
+  it('a run whose queue time ran out is not started even if a slot frees before the next check', async () => {
+    setLimits({ concurrentRuns: 1, queueTimeoutMinutes: 0.01 }); // 600 ms; the queue is re-checked once a second
+    const first = new AbortController();
+    await admitRun('expiry-1', 'xavier', first.signal);
+    const second = admitRun('expiry-2', 'yara', new AbortController().signal);
+    const outcome = second.then(() => 'admitted', (e) => (e as { code?: string })?.code ?? 'other');
+    await sleep(750); // past the timeout, before the first once-a-second check
+    releaseRun('expiry-1'); // the slot frees now
+    expect(await outcome).toBe('ENGINE_BUSY');
+    releaseRun('expiry-2');
+  }, 30_000);
 
   it('an account cannot fill the queue: past queuedRunsPerAccount waiting tasks it gets ACCOUNT_QUEUE_FULL', async () => {
     setLimits({ queuedRunsPerAccount: 1 });
