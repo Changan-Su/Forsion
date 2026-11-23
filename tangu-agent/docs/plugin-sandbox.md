@@ -150,12 +150,33 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
 快照回滚、商店里「在沙箱里试」、多个插件同时开、云端沙箱、沙箱里起引擎(插件的引擎半身 / agent / 技能)、
 能力级沙箱(收窄插件能用的宿主 API)。沙箱里的设置页也起不了整机共享的东西:对外 MCP、设备互联、托管引擎、写系统图标在入口处一律跳过。
 
+## 6b. 演示舞台(2026-11-20+,插件的 `ctx.stage`)
+
+同一套「另起一份、目录隔离」的第二个槽位,给插件拍演示图 / 录演示视频(方案:仓根 `docs/ToBeImproved/沙箱开放给插件方案_2026-11-20`)。
+和开发沙箱互不挤占;父进程那侧 `desktop/electron/pluginStage.ts`(`createPluginSandbox({ base: 'stages' })` 的第二个实例 + 主人 / 确认 / 回放服务),
+参数与错误码 `desktop/shared/pluginStage.ts`,插件入口 `desktop/frontend/src/amadeus/plugins/stageCtx.ts`。
+
+- 目录 `<forsionHome>/stages/<插件 id>/`(和 `sandbox/` 分开,id 以 stage- 开头的插件撞不上);每次 open 先整个清空;同意记录 `stages/.grants.json`。
+- 子进程认 `FORSION_SANDBOX_INFO.stage`:不装开发副本、不监视目录、没有沙箱条、Ribbon 照旧;就绪 = 点名的插件都列出来且装载落定;
+  窗口内容区按参数(`useContentSize` + `enableLargerThanScreen`),像素密度用 `force-device-scale-factor`;不透明、玻璃关。
+- 装进去的是用户已安装插件的**包**(按 id 在 `plugins/` 里找、按真实目录拷,不带 `plugins-data/`);内置插件也要点名。演示库只拷 fixture/vault 里的普通文件。
+- 截图 `capture`:`capturePage` 原生密度 PNG 写进 `out/`,父进程核过路径读出来交给插件;录像:渲染层 `getDisplayMedia` 录本页签
+  (子进程的 `setDisplayMediaRequestHandler` 只给武装过的那一次、只给主窗顶层 frame),录完经 `pluginSandbox:saveRecording` 落盘。
+- `engine: 'scripted'`:父进程起 `stageEngine.ts` 的本机回放服务,舞台的引擎地址指向它(`tangu-desktop-config.json` 与 `TANGU_BACKEND_URL`)。
+  第 6 节的「沙箱里不起引擎」对舞台的这一档不成立:起的是回放,不是真引擎。
+- 互斥:同一时间一个舞台;别的插件 open → `busy`;闲置 5 分钟自停;插件停用 / 重载时宿主替它关。
+- 已知限制(11-20 Codex 评审,按方案「隔离的是数据和登录,不是权限」接受):插件 id 是渲染层的宿主入口填的,同一渲染层里冒用别的
+  插件 id 拦不住(主进程能做的:只收 id + 相对路径、按装着的 manifest 核 `stage` 能力、每次 open 带代号);舞台里装的插件照样有终端、
+  屏幕共享列表这些本机能力,和开发沙箱一样。截图 / 录像独占新建、录像只收正在收尾的那一段、码率上限 16 Mbit/s。
+
 ## 7. 仪器
 
 - 引擎:`src/tools/builtin/pluginSandbox.test.ts`、`src/tools/clientCapabilityGate.test.ts`(plugin.* 只给桌面);
 - 桌面主进程:`desktop/electron/pluginSandbox.test.ts`(假子进程走真 socket:握手 / 令牌负对照 / 就地重载 / 闲置自动停 / 安装与同意绑定 /
   起停排队 / spawn 失败马上报);
 - 子进程纯函数:`desktop/electron/sandboxChild.test.ts`(按键映射、files 路径门禁:软链 / `../` / 沙箱外);
+- 演示舞台:`desktop/electron/pluginStage.test.ts`(参数清洗、目录守卫、找插件、fixture 软链、只拷普通文件、同意记录、主人与互斥);
+  真 Electron `npm run check:pluginstage`(确认框两次、2560×1600 PNG、Space、时钟、隔离、selector 截图、录像能解码、脚本回放、busy、负对照、close);
 - 真 Electron:`desktop` 的 `npm run check:pluginsandbox`(父进程 + 它真起的沙箱:claim 电文、主题色跟随、隔离、保存即重载、命令、报告问题、
   对话卡、setup 抛错、安装、停止与不留孤儿、负对照;11-03 起加:插件 Space 列出来并落在上面、Ribbon 没有内置 Space、没播种内置插件、
   read → type → click → press 拿到插件的 console 与提示且截图是新的、files + `<input type=file>`、沙箱外路径负对照、右栏卡运行 / 停止两态);

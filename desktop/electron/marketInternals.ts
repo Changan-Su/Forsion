@@ -7,10 +7,17 @@
  * 再核一次,哪条路漏了都在这里拦住。只管官方商店:第三方来源、手动安装、开发副本照旧(那些不经过商店审核)。
  */
 export const RAW_UNAPPROVED = 'install: internals-raw-unapproved'
+/** 演示舞台(2026-11-20+,`stage`):同一道审核 —— 起一份另外的 Forsion 比别的能力重,先只给过了审的(首方)插件。 */
+export const STAGE_UNAPPROVED = 'install: stage-unapproved'
 
 export function declaresInternalsRaw(manifest: Record<string, unknown> | null): boolean {
   const caps = manifest?.capabilities
   return Array.isArray(caps) && caps.includes('internals-raw')
+}
+
+export function declaresStage(manifest: Record<string, unknown> | null): boolean {
+  const caps = manifest?.capabilities
+  return Array.isArray(caps) && caps.includes('stage')
 }
 
 /** 声明了 internals-raw 时,`approvedVersion` 必须和包里的 version 一字不差;否则抛 `RAW_UNAPPROVED`。
@@ -19,9 +26,10 @@ export async function assertInternalsRawApproved(
   manifest: Record<string, unknown> | null,
   approvedVersion: () => Promise<string | null | undefined>,
 ): Promise<void> {
-  if (!declaresInternalsRaw(manifest)) return
+  const raw = declaresInternalsRaw(manifest)
+  if (!raw && !declaresStage(manifest)) return
   const version = typeof manifest?.version === 'string' ? manifest.version.trim() : ''
   let approved: string | null | undefined
   try { approved = await approvedVersion() } catch { approved = null }
-  if (!version || typeof approved !== 'string' || approved.trim() !== version) throw new Error(RAW_UNAPPROVED)
+  if (!version || typeof approved !== 'string' || approved.trim() !== version) throw new Error(raw ? RAW_UNAPPROVED : STAGE_UNAPPROVED)
 }

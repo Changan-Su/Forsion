@@ -69,6 +69,30 @@ describe('parseStoreIndex', () => {
     expect(index.items[0].package).toEqual({ kind: 'github', repo: 'pixel-lab/image-skills', ref: 'v1.2.0', path: 'skills/poster' })
     expect(pickText(index.title, 'en')).toBe('图片 Skills 大全')
   })
+  it('pins GitHub / Forsion Git packages to a commit', () => {
+    const C = 'a'.repeat(40), D = 'b'.repeat(40)
+    const index = parseStoreIndex({
+      schema: 1,
+      items: [
+        item({ id: 'pinned', package: { github: 'a/b', ref: 'v1', commit: C.toUpperCase() } }),
+        item({ id: 'ref-is-commit', package: { forsionGit: 'acme/kit', ref: D } }),
+        item({ id: 'same', package: { github: 'a/b', ref: C, commit: C } }),
+        item({ id: 'short-commit', package: { github: 'a/b', ref: 'v1', commit: 'abc1234' } }),
+        item({ id: 'bad-commit', package: { github: 'a/b', ref: 'v1', commit: 42 } }),
+        item({ id: 'two-commits', package: { github: 'a/b', ref: C, commit: D } }),
+        item({ id: 'no-ref', package: { github: 'a/b', commit: C } }),
+        item({ id: 'upper-ref', package: { github: 'a/b', ref: C.toUpperCase() } }),
+        item({ id: 'upper-conflict', package: { github: 'a/b', ref: D.toUpperCase(), commit: C } }),
+      ],
+    })
+    // A malformed commit drops the item: falling back to the ref would let the author believe it is pinned.
+    expect(index.items.map((x) => x.id)).toEqual(['pinned', 'ref-is-commit', 'same', 'upper-ref'])
+    expect(index.items[3].package).toMatchObject({ ref: C.toUpperCase(), commit: C })
+    expect(index.items[0].package).toEqual({ kind: 'github', repo: 'a/b', ref: 'v1', commit: C })
+    expect(index.items[1].package).toEqual({ kind: 'forsion-git', repo: 'acme/kit', ref: D, commit: D })
+    // Pinning doesn't change where a package downloads from (an update to a new commit is not "moved").
+    expect(packageOrigin(index.items[0].package)).toBe('github:a/b')
+  })
   it('throws on a file that is not a catalog', () => {
     expect(() => parseStoreIndex([])).toThrow('source: index-invalid')
     expect(() => parseStoreIndex({ schema: 2, items: [] })).toThrow('source: index-schema')

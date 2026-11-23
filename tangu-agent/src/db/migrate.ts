@@ -391,6 +391,9 @@ export async function runMigration(): Promise<void> {
     // hydrate 时原样回放。两列皆空 = 老语义(整行边界)。
     ['session_summaries', 'through_message_id VARCHAR(36)'],
     ['session_summaries', 'through_tool_call_id VARCHAR(128)'],
+    // 与边界行同一毫秒、且整行进了摘要输入的其他行 id(JSON 数组,11-20)。NULL = 老检查点:同毫秒邻行一律原样回放(保守)。
+    // 老三列语义不变,这一列只会把行从「没覆盖」升级成「已覆盖」→ 不认识它的旧引擎 / 旧网关读写都只会多回放、不会吞行。
+    ['session_summaries', 'through_peer_ids TEXT'],
     // 待批行的预览口径版本(2026-09-26):NULL = 升级前的行(预览折叠 / 截断 / 写类只有一行摘要),永远批不了,
     // 由 pendingApprovals.retireLegacyPending 撤回;批准的抢占要求 ≥ PREVIEW_VERSION。
     ['pending_approvals', 'preview_version INTEGER'],

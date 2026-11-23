@@ -648,17 +648,33 @@ const compactedContextTokens = (summary: string, lastUsage: any): number =>
  * 那条 usage 是压缩前的,下个 run 回放的只剩 摘要 + 固定头(系统提示 + 工具定义,取上次实测的字节数),改报这个粗估。
  * 别把判据放宽成「检查点比 usage 新」:惰性检查点也满足,而它之后整个窗口照样回放,粗估会把 30 万报成 1 万。
  * ponytail: 手动压缩后紧跟一个没产生 usage 的失败 run(配额拒收)→ 多出的行让判据落空,退回压缩前的实测值,下一次成功调用自愈。
+ * tail = 时间戳不早于检查点边界的那几行(rowsFromBoundary);整行覆盖到最后 = 它们全部判 covered,且里面有锚点那一行。
+ * 空 / 查不到 / 缺锚点一律报实测值:空集合「全部已覆盖」恒真,惰性检查点之后的 30 万会被报成 1 万(11-20)。
+ * 传单行也收(只看这一行,#778 的测试这么用)。
  */
-export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, lastRow: { id: string; timestamp?: number | null } | undefined): number {
-  if (!cp || !lastRow || rowCoverage(lastRow, cp) !== 'covered') return Number(lastUsage?.prompt) || 0;
-  return compactedContextTokens(cp.summary, lastUsage);
+type TailRow = { id: string; timestamp?: number | null };
+export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, tail: TailRow | TailRow[] | undefined): number {
+  const rows = Array.isArray(tail) ? tail : tail ? [tail] : [];
+  const covered = !!cp && rows.length > 0
+    && (!cp.throughMessageId || rows.some((r) => r.id === cp.throughMessageId))
+    && rows.every((r) => rowCoverage(r, cp) === 'covered');
+  if (!covered) return Number(lastUsage?.prompt) || 0;
+  return compactedContextTokens(cp!.summary, lastUsage);
 }
 
-/** 本会话最后落库的一行(sessionContextTokens 拿它比检查点)。同一毫秒的几行要按落库先后取最后那条:手动压缩按升序走到的
- *  最后一行就是检查点边界,这里取成同毫秒里更早的那条 → 判成没覆盖,重开后环又回到压缩前的数(中止后 /compact 时常见,
- *  半截回答与打断标记多半同一毫秒)。thin worker 没有本地库 → 查不到就照旧(undefined)。
- *  ponytail: 检查点边界只记一个 id,rowCoverage 把边界同毫秒的其他行一律判没覆盖(hydrate 会再回放它们)—— 那几行不进这里的估算;
- *  要准得让检查点记下边界那一毫秒里覆盖了哪些行,压缩 / 回放 / 这里共用(Codex 11-20 评审 #1,另立)。 */
+/** 时间戳不早于检查点边界的行(sessionContextTokens 逐行比检查点)。同一毫秒的几行不论谁先谁后都在里面,
+ *  按 rowCoverage(含 through_peer_ids)逐行判 —— 不再只拿「最后一行」:那一毫秒有两行时只看其中一行判不准(11-20)。
+ *  thin worker 没有本地库 / 查询失败 → undefined(照旧报实测值)。 */
+export async function rowsFromBoundary(sessionId: string, cp: Checkpoint | null): Promise<TailRow[] | undefined> {
+  if (!cp || !(cp.throughTimestamp > 0)) return undefined;
+  return await query<any[]>(
+    // 时间戳缺失 / 非正的行 hydrate 照样回放,rowCoverage 判它没覆盖 → 一并取回,别让它们漏在判据外(Codex 11-20 #8)
+    `SELECT id, timestamp FROM chat_messages WHERE session_id = ? AND (timestamp >= ? OR timestamp IS NULL OR timestamp <= 0)`, [sessionId, cp.throughTimestamp],
+  ).catch(() => undefined);
+}
+
+/** 本会话最后落库的一行。同一毫秒的几行按落库先后取最后那条。/usage 11-20 起改用 rowsFromBoundary,这里留给只要「最后一句」的调用方。
+ *  thin worker 没有本地库 → 查不到就 undefined。 */
 export async function lastMessageRow(sessionId: string): Promise<{ id: string; timestamp?: number | null } | undefined> {
   const rows = await query<any[]>(
     `SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`, [sessionId],
@@ -683,7 +699,8 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
     // 整页都是后台事件就按游标继续往回翻(见 findMainLoopUsage 的上限说明)。
     const last = await lastMainLoopUsage(req.params.id);
     // 手动 /compact 不产生 usage:不看检查点的话,重开应用后环又回到压缩前那个数(09-20)。thin worker 没有本地库 → 查不到就照旧。
-    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), await lastMessageRow(req.params.id)) });
+    const cp = await getLatestSummary(req.params.id);
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, cp, await rowsFromBoundary(req.params.id, cp)) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
   }

@@ -7,6 +7,9 @@ export interface RuntimeContext {
   dataDir: string
   workspaceDir: string
   config: Record<string, unknown>
+  /** Set on a public Unit's visitor engine: one engine serves every signed-in visitor as their own account.
+   *  The runtime must then provide an engine only, never a vault or an owner account. */
+  multiAccount?: boolean
   log(message: string): void
 }
 /** The vault as the cloud host sees it. The lock must come from here: it is module state of the runtime bundle that owns the vault. */
@@ -23,7 +26,8 @@ export interface RuntimeVault extends VaultFace {
 export interface LocalRuntime {
   vault?: RuntimeVault
   engine?: {
-    endpoint(): { url: string | null; token: string }
+    /** multiAccount: the engine confirmed multi-account mode (required before a public Unit lets visitors in). */
+    endpoint(): { url: string | null; token: string; multiAccount?: boolean }
     status(): unknown
   }
   /** Reconcile installed/enabled bundles using the same loader as desktop. */

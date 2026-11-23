@@ -22,6 +22,8 @@ import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
+import { parseStageCalendar, parseStageScript, startStageEngine } from './stageEngine'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { miniSessionState, type MiniSessionEntry } from './miniSessionState'
@@ -65,6 +67,7 @@ import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, prepareInstall, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import { waitForNetwork } from './updaterUtil'
 import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -104,7 +107,7 @@ import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from
 import { externalCreationFor } from './productTrust'
 import { transcribeViaOpenAI, transcribeViaForsion, AUDIO_MIME_BY_EXT } from './asr'
 import { transcribeWavInChunks } from './asrCloudChunks'
-import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
+import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal, localStreamDecoder } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
 import { createAppRefs } from './appRefs'
 import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
@@ -168,6 +171,8 @@ setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔�
  *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
 const SANDBOX = sandboxSelf()
 if (SANDBOX) for (const sw of SANDBOX_SWITCHES) app.commandLine.appendSwitch(sw) // 压在底下的沙箱窗口照样出新帧(截图不截到旧画面)
+// 演示舞台:像素密度按参数定,和本机屏幕无关(1440×900 @2 截出来就是 2880×1800,11-20 探针实测)
+if (SANDBOX?.stage) app.commandLine.appendSwitch('force-device-scale-factor', String(SANDBOX.stage.window.scale))
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -1936,17 +1941,22 @@ function createWindow(): void {
   // 置空菜单让 Windows/Linux 与 macOS 观感一致(无窗口内菜单条);文本框的复制/粘贴等由 Chromium 原生处理,不依赖菜单。
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
 
+  // 演示舞台:内容区正好是参数给的尺寸(可以比屏幕大,macOS 不然会把高压到屏幕高);不透明(玻璃在舞台里关掉,截图不透出桌面)
+  const stage = SANDBOX?.stage
+  const stageDark = (SANDBOX?.ui as { storage?: Record<string, string> } | undefined)?.storage?.forsion_theme === 'dark'
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 820,
-    minWidth: 880,
-    minHeight: 600,
+    width: stage ? stage.window.width : 1200,
+    height: stage ? stage.window.height : 820,
+    minWidth: stage ? 640 : 880,
+    minHeight: stage ? 480 : 600,
+    // 尺寸定死:用户拖了 / 最大化了,截出来的就不是参数给的尺寸(Codex 11-20)
+    ...(stage ? { useContentSize: true, enableLargerThanScreen: true, resizable: false, maximizable: false, fullScreenable: false } : {}),
     ...tabTitleBarOptions(),
     autoHideMenuBar: true, // 即便保留了菜单也不在窗口内显示(Alt 不唤出);与置空菜单双保险
     // macOS 系统玻璃必须在建窗时具备透明能力;是否真的启用 vibrancy 由当前主题经 IPC 动态决定。
     // 其他平台保持原来的实色窗口,不改变稳定性/窗口行为。
-    transparent: process.platform === 'darwin',
-    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
+    transparent: process.platform === 'darwin' && !stage,
+    backgroundColor: stage ? (stageDark ? '#1b1b1a' : '#fbf8f5') : process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
     // Let the early HTML paint the saved light/dark splash before showing the native window.
     show: false,
     webPreferences: satelliteWebPreferences(),
@@ -3228,7 +3238,7 @@ async function installedPluginIds(type: 'plugin' | 'amadeus-plugin'): Promise<Ar
   return out
 }
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null }> {
   if (isSourceCardId(id)) return downloadSourcePackage(id, { version, report })
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
@@ -3513,8 +3523,10 @@ app.whenReady().then(async () => {
       return Array.isArray(data.items) ? data.items : []
     },
     download: async (item) => {
-      const { info, buf } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
+      const { info, buf, commit } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
+      // Keep which commit this version came from, so the same version from another commit later stops (storeSources.download).
+      if (isSourceCardId(item.id) && info.version) await sources.noteCommit(item.id, info.version, commit).catch((e) => console.warn('[store-sources] note commit:', e))
       return buf
     },
     broadcast: (status) => {
@@ -3535,8 +3547,9 @@ app.whenReady().then(async () => {
   const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
   // 插件沙箱只装被测插件 requiresPlugins 点名的内置包:别的(Extend / 日历 / 电脑操作)会把自己的 Space、Ribbon 图标带进来,
   // 沙箱里看到的就不是「只有这一个插件」(11-03 反馈)。旧版沙箱播种过的也撤掉 —— 删的是沙箱自己的 home。
-  const sandboxNeeds = SANDBOX ? await sandboxRequiredPlugins(SANDBOX.dir) : null
-  if (sandboxNeeds && /[\\/]sandbox[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
+  // 演示舞台:点名的插件就是要的那几个(父进程已把用户装的那份包拷进来;随包的更新才替换、不降级)
+  const sandboxNeeds = SANDBOX ? (SANDBOX.stage ? new Set(SANDBOX.stage.plugins) : await sandboxRequiredPlugins(SANDBOX.dir)) : null
+  if (sandboxNeeds && /[\\/](sandbox|stages)[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
   const bundleSources = sandboxNeeds ? allBundleSources.filter((s) => sandboxNeeds.has(s.id)) : allBundleSources
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
@@ -3757,6 +3770,17 @@ app.whenReady().then(async () => {
   })
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
+  // 唤醒 / 定时到点那一刻网络多半还没通(见 updaterUtil.waitForNetwork):先等网络再查;同一入口连着触发(DarkWake 一夜好多次)只留最后一次。
+  // 唤醒后 20 秒内一律当还没网:另一路已经在等网的检查(比如合盖前到点、正在轮询的定时检查)也不在刚唤醒时插队
+  const NET_SETTLE_MS = 20_000
+  let lastResumeAt = 0
+  const waitingFor = new Map<string, number>()
+  const whenNetworkSettles = (key: string, run: () => void): void => {
+    const gen = (waitingFor.get(key) ?? 0) + 1
+    waitingFor.set(key, gen)
+    const online = (): boolean => Date.now() - lastResumeAt >= NET_SETTLE_MS && net.isOnline()
+    void waitForNetwork({ isOnline: online, settleMs: NET_SETTLE_MS }).then((ok) => { if (ok && waitingFor.get(key) === gen) run() })
+  }
   const checkAllUpdates = () => {
     void corePluginUpdater.check()
     if (PRODUCT.market) void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
@@ -3767,7 +3791,7 @@ app.whenReady().then(async () => {
     setTimeout(() => {
       void corePluginUpdater.check()
       // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
-      setInterval(() => { void corePluginUpdater.check(); checkAppUpdateQuietly() }, 6 * 3600_000).unref()
+      setInterval(() => whenNetworkSettles('timer', () => { void corePluginUpdater.check(); checkAppUpdateQuietly() }), 6 * 3600_000).unref()
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
@@ -3851,7 +3875,8 @@ app.whenReady().then(async () => {
     keepAwake.rearm()
     computerHistory?.recheck()
     unitHub?.reconnect('resume')
-    if (app.isPackaged) checkAppUpdateQuietly() // 合盖一夜回来,新版本在这时候提示
+    lastResumeAt = Date.now()
+    if (app.isPackaged) whenNetworkSettles('resume', checkAppUpdateQuietly) // 合盖一夜回来,新版本在这时候提示(等网络通了再查)
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
@@ -4679,7 +4704,8 @@ app.whenReady().then(async () => {
 
   registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
     const cfg = await loadConfig()
-    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return null
+    // 本地离线模型也走流:主进程边收边解,和云端实时转写同一套事件(asrLocalStream.ts),说着就出字。
+    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return { local: true, decoder: () => localStreamDecoder() }
     const modelId = (requestedModel || cfg.asrModelId || '').trim()
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
@@ -5029,7 +5055,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf, origin } = await downloadMarketPackage(id, report, version)
+    const { info, buf, origin, commit } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -5076,7 +5102,7 @@ app.whenReady().then(async () => {
     // 来源装的(所有类型):先记下出处,再交给更新器 —— 没有出处记录的条目不会被自动更新(换出处保护靠它)。
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, summary: named?.summary, author: named?.author })
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
@@ -5841,7 +5867,7 @@ app.whenReady().then(async () => {
   app.on('child-process-gone', (_e, d) => {
     console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
     if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverRenderer(`gpu-gone:${d.reason}`)
-    const crash = processGoneProps('other', d, uptimeS())
+    const crash = isQuitting ? null : processGoneProps('other', d, uptimeS()) // 已经在退出:子进程跟着没了不算崩溃
     if (crash) telemetry.emit('crash', crash)
   })
   installHostTelemetry()
@@ -5929,11 +5955,72 @@ if (pluginSandbox) {
   ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
 }
 
+// ── 演示舞台(插件的 ctx.stage,pluginStage.ts):插件沙箱那套进程 / 目录隔离的第二个实例,父目录 stages/,闲置 5 分钟自停。
+// 和开发沙箱互不挤占;不广播给沙箱卡(pluginSandbox:changed)、不进 lastShot / 安装 / 重置
+const stageSandbox = SANDBOX ? null : createPluginSandbox({
+  forsionHome: forsionHomeDir,
+  spawn: (args, env) => spawn(process.execPath, args, { env, stdio: 'ignore' }),
+  appArgs: app.isPackaged ? [] : [app.getAppPath()],
+  platform: process.platform,
+  pid: process.pid,
+  ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: {} }), // 不用:舞台的首屏由 open 的参数定
+  onChange: (st) => pluginStage?.onState(st.running),
+  onChildEvent: (ev) => {
+    // 舞台窗口里没有沙箱条:只剩系统投错给它的链接 / 文件要转回来
+    if (ev.event !== 'forward') return
+    if (ev.kind === 'url') { if (isForsionUrl(ev.value) && !routeSpaceWindowLink(ev.value)) deliverDeepLink(ev.value) }
+    else deliverOpenFile(ev.value)
+  },
+  log: (m) => console.log(m.replace('[plugin-sandbox]', '[plugin-stage]')),
+  idleMs: 5 * 60_000,
+  base: 'stages',
+})
+const pluginStage = stageSandbox ? createPluginStage({
+  forsionHome: forsionHomeDir,
+  sandbox: stageSandbox,
+  confirm: async (owner, plugins) => {
+    showMainWindow()
+    // ⚠️ 必须挂父窗(同 installFromSandbox):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就当没同意
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+    if (!win) return false
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question', title: mt('main.pluginStage.title'),
+      message: mt('main.pluginStage.message', { name: owner.name }),
+      detail: mt('main.pluginStage.detail', { plugins: plugins.length ? plugins.join(', ') : mt('main.pluginStage.none') }),
+      buttons: [mt('main.pluginStage.allow'), mt('main.pluginStage.deny')], defaultId: 0, cancelId: 1, noLink: true,
+    })
+    return response === 0
+  },
+  startEngine: async (script, human) => {
+    const parsed = parseStageScript(script)
+    if ('error' in parsed) throw new StageError('fixture-invalid', `engine.json: ${parsed.error}`)
+    let calendar: Record<string, unknown> | undefined
+    if (human?.calendar !== undefined) {
+      const cal = parseStageCalendar(human.calendar)
+      if ('error' in cal) throw new StageError('fixture-invalid', cal.error)
+      calendar = cal.data
+    }
+    const token = randomBytes(24).toString('base64url') // 舞台独有:回放服务只认它
+    const e = await startStageEngine(parsed.script, { log: (m) => console.log(`[plugin-stage] ${m}`), token, ...(calendar ? { calendar } : {}) })
+    return { ...e, token }
+  },
+  log: (m) => console.log(m),
+}) : null
+void STAGE_MESSAGES // 文案片段在 pluginStage.ts 注册
+if (pluginStage) {
+  // 插件 id 由宿主的插件入口(ctx.stage)填;插件代码和宿主同一个渲染层,这里只能按 id 认,所以主进程只收 id + 相对路径(见 pluginStage.ts)
+  ipcMain.handle('pluginStage:exec', (e, pluginId: unknown, op: unknown, args: unknown) => {
+    if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
+    return pluginStage.exec(String(pluginId), String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, mainLocale())
+  })
+}
+
 /** 遥测的其余接线(whenReady 里调一次):各窗渲染进程崩溃、引擎意外退出 / 首次就绪、每小时的内存与卡顿、渲染层的上报通道。 */
 function installHostTelemetry(): void {
   // app 级:主窗、独立窗、Mini、浮窗一处都接到(各窗自己的 render-process-gone 只管自愈)
+  // 已经在退出(托盘退出 / ⌘Q / 装更新重启)时进程跟着没了不算崩溃;Windows 结束会话被系统强杀的由 processGoneProps 认出来
   app.on('render-process-gone', (_e, _wc, d) => {
-    const crash = processGoneProps('renderer', d, uptimeS())
+    const crash = isQuitting ? null : processGoneProps('renderer', d, uptimeS())
     if (crash) telemetry.emit('crash', crash)
   })
   if (PRODUCT.agentBackend && !SANDBOX) {
@@ -5942,7 +6029,10 @@ function installHostTelemetry(): void {
       telemetryStartup.engineReady(process.uptime() * 1000)
       offReady()
     })
-    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
+    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => {
+      const crash = isQuitting ? null : engineExitProps(code, signal, Math.round(uptimeMs / 1000))
+      if (crash) telemetry.emit('crash', crash)
+    })
   }
   // 安装包更新器的阶段 → update(只报有结论的几步;见 telemetryHost.appUpdateProps)
   onUpdaterPhase((st) => {
@@ -5992,6 +6082,7 @@ app.on('before-quit', (e) => {
   saveMiniLayouts()
   saveOpenMiniWindows()
   void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
+  void pluginStage?.dispose() // 舞台同理;回放服务一起关
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   computerUsePip.dispose() // 悬浮小画面跟着退,下次启动也不会回来(它从不落盘)

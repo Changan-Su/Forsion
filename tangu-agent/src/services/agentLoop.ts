@@ -76,7 +76,8 @@ import {
 } from './contextBudget.js';
 import {
   getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
-  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, summaryChunkBudget, type CompactBoundary, type CompactWorkingResult,
+  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, summaryChunkBudget, normalizePeerIds, type CompactBoundary, type CompactWorkingResult,
+  type MessageSource,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
 import { releaseRunCompaction, runCompactionOperation, type CompactionCommitResult } from './runCompaction.js';
@@ -1520,8 +1521,10 @@ export async function checkpointRowsOutsideWindow(
   const throughTs = Number(last?.timestamp) || 0;
   if (!throughTs) return;
   const prev = await getLatestSummary(sessionId);
-  // 已覆盖到窗口外最后一行(且不是只覆盖了它一半)→ 没有要做的
-  if (prev && prev.throughTimestamp >= throughTs && !(prev.throughMessageId && prev.throughTimestamp === throughTs)) return;
+  // 窗口外的行都已整行覆盖 → 没有要做的。按 rowCoverage 逐行认(11-20):原来「时间戳相等且有锚点就不跳过」会在窗口外
+  // 最后一行与边界同一毫秒时每轮收尾再压一次、另插一份同时间戳的检查点、锚点来回换。时间戳缺失的行(thin worker)不拦:
+  // compactSession 也不会推进到它们。
+  if (prev && outside.every((r) => !(Number(r.timestamp) > 0) || rowCoverage(r, prev) === 'covered')) return;
   const r = await compactSession(sessionId, modelId, appId, undefined, { throughTs, settings, runThinking });
   if (r.ok) console.info(`[agent-core] session=${sessionId} hydrate 窗口外 ${outside.length} 行已做持久压缩检查点(through=${throughTs})`);
   // thin worker 没有本地库:每个长会话 run 收尾都会 'load messages failed',那是 fail-safe 不是故障,别刷 warn
@@ -1546,7 +1549,7 @@ export async function checkpointImportedHistory(
   if (next <= HYDRATE_MAX) return;
   const start = Math.ceil((next - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK;
   const outside = await deps().state.listSessionMessagesWindow(sessionId, start, 0);
-  const covered = (await getLatestSummary(sessionId))?.throughTimestamp || 0;
+  const cp = await getLatestSummary(sessionId);
   // 一段的上限跟着摘要模型走:小窗口模型上固定 2.4 万也会超预算(Codex 11-16 第二轮复核);留两成给角色前缀与估算误差
   const chunkTokens = Math.min(IMPORT_CHECKPOINT_CHUNK_TOKENS, Math.floor((await summaryChunkBudget(modelId, settings, signal)) * 0.8));
   const bounds: number[] = [];
@@ -1555,7 +1558,7 @@ export async function checkpointImportedHistory(
   let lastTs = 0;
   for (const r of outside) {
     const ts = Number(r.timestamp) || 0;
-    if (!ts || ts <= covered) continue;
+    if (!ts || rowCoverage(r, cp) === 'covered') continue;
     const cost = estimateTokensRough(String(r.content || '')) + 8;
     // 一段至少两条:compactSession 对单条返回 nothing to compact(长消息在小窗口摘要模型上会一条一段)
     if (rows >= 2 && acc + cost > chunkTokens) { bounds.push(lastTs); acc = 0; rows = 0; }
@@ -1599,7 +1602,7 @@ export async function hydrateHistory(
   waitCheckpoint = true,
   signal?: AbortSignal,
 ): Promise<{
-  messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean };
+  messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean; peerIds?: string[] };
   /** 发给模型的那条带图消息的**原图**(缩图之前):本轮没附件时 edit_image 用它 —— 模型看得见什么就能改什么。 */
   contextImages?: { images: ReturnType<typeof normalizeImageAttachments>; rowId: string; ts: number };
 }> {
@@ -1621,7 +1624,10 @@ export async function hydrateHistory(
     const floor = Math.max(0, start - HYDRATE_EXTEND_MAX);
     while (start > floor) {
       const prev = await deps().state.listSessionMessagesWindow(sessionId, 1, start - 1);
-      if (!prev[0] || rowCoverage(prev[0], checkpoint) === 'covered') break;
+      // 窗口前那一行与边界同一毫秒时不能凭它一行就停:同一毫秒的几行谁先谁后没有保证,它的邻行可能排在它前面、
+      // 也没进摘要(检查点落下后才在这一毫秒落库的插话)→ 再扩一块,直到窗口前那一行严格早于边界(11-20)。
+      if (!prev[0]) break;
+      if (rowCoverage(prev[0], checkpoint) === 'covered' && Number(prev[0].timestamp) !== checkpoint.throughTimestamp) break;
       start = Math.max(floor, start - HYDRATE_BLOCK);
     }
   }
@@ -1681,7 +1687,10 @@ export async function hydrateHistory(
   }
   return {
     messages: out, currentUserIndex, contextImages,
-    checkpointThrough: { ts: through, rowId: checkpoint?.throughMessageId, partial: !!(checkpoint?.throughMessageId && checkpoint.throughToolCallId) },
+    checkpointThrough: {
+      ts: through, rowId: checkpoint?.throughMessageId, partial: !!(checkpoint?.throughMessageId && checkpoint.throughToolCallId),
+      ...(checkpoint?.throughPeerIds?.length ? { peerIds: checkpoint.throughPeerIds } : {}),
+    },
   };
 }
 
@@ -2993,12 +3002,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     workingMessages.push(...history);
 
     // ── run 内压缩的检查点账本(09-15 自动压缩持久化)────────────────────────────
-    // 从 hydrate 拿到的检查点起单调累积(时间戳 + 行 id + 是否行内切点);pending = 总结覆盖到了本 run
+    // 从 hydrate 拿到的检查点起单调累积(时间戳 + 行 id + 是否行内切点 + 同毫秒邻行);pending = 总结覆盖到了本 run
     // 尚未落库的助手段,等该段 finalize(收尾 / 中止落半截 / steer 拆段)后再落库 —— 那时才知道它的行时间戳。
     const checkpoint: {
-      throughTs: number; throughRowId?: string; partial: boolean;
-      pending?: { summary: string; toolCallId: string; messageId: string };
-    } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial };
+      throughTs: number; throughRowId?: string; partial: boolean; peerIds: string[];
+      pending?: { summary: string; toolCallId: string; messageId: string; wholeRows: MessageSource[] };
+    } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial, peerIds: checkpointThrough.peerIds ?? [] };
+    /** 账本上的检查点在 ts 这一毫秒里整行覆盖的行(锚点整行时含锚点)。新边界落在同一毫秒时要带上它们:
+     *  工作上下文开头那条摘要就是它们的摘要,新摘要见过 → 仍算覆盖;不带的话落库时不是超集,会被拒(11-20)。 */
+    const carriedWhole = (ts: number): string[] => (ts !== checkpoint.throughTs || !checkpoint.throughRowId ? [] :
+      [...(checkpoint.partial ? [] : [checkpoint.throughRowId]), ...checkpoint.peerIds]);
     // 本 run 兜底裁剪丢过消息(trimOldestToFit):之后的摘要都没见过那几条,边界却可能越过它们 → 本 run 起不再推进
     // 持久检查点(否则下个 run 的 hydrate 永远跳过那几行,Codex 10-26 #1)。下个 run 从 DB 原样 hydrate,照常落。
     let trimmedThisRun = false;
@@ -3008,22 +3021,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
       if (b.lossy || trimmedThisRun) { checkpoint.pending = undefined; return false; }
       if (b.pendingToolCallId) {
-        checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId };
+        // 同一段落库前连压两次:第一次整行总结掉的行已经在内存摘要里,第二次的范围里看不到它们 → 证明合并,不覆盖(Codex 11-20 #4)
+        const carried = checkpoint.pending?.messageId === currentAssistantId ? checkpoint.pending.wholeRows : [];
+        checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId, wholeRows: [...carried, ...(b.wholeRows ?? [])] };
         return false;
       }
       checkpoint.pending = undefined;
       if (b.partialRow) {
-        const ok = await persistCheckpoint(sessionId, summary, { ts: b.partialRow.ts, messageId: b.partialRow.id, toolCallId: b.partialRow.toolCallId });
-        if (ok) Object.assign(checkpoint, { throughTs: b.partialRow.ts, throughRowId: b.partialRow.id, partial: true });
+        const peerIds = normalizePeerIds(b.partialRow.id, carriedWhole(b.partialRow.ts), b.partialRow.peerIds);
+        const ok = await persistCheckpoint(sessionId, summary, { ts: b.partialRow.ts, messageId: b.partialRow.id, toolCallId: b.partialRow.toolCallId, peerIds });
+        if (ok) Object.assign(checkpoint, { throughTs: b.partialRow.ts, throughRowId: b.partialRow.id, partial: true, peerIds });
         return ok;
       }
       if (!b.through) return false;
-      // 更晚的时间戳,或同一时间戳上「更完整」(行内切点 → 整行 / 同一毫秒的邻行)才算前进
+      const carried = carriedWhole(b.through.ts);
+      const peerIds = normalizePeerIds(b.through.id, carried, b.through.peerIds);
+      // 更晚的时间戳,或同一时间戳上「更完整」(行内切点 → 整行 / 换了锚点 / 多覆盖了同一毫秒的邻行)才算前进;
+      // 是不是真超集由 persistCheckpoint 对着库里那份再判一次
       const advances = b.through.ts > checkpoint.throughTs
-        || (b.through.ts === checkpoint.throughTs && (checkpoint.partial || checkpoint.throughRowId !== b.through.id));
+        || (b.through.ts === checkpoint.throughTs && (checkpoint.partial || checkpoint.throughRowId !== b.through.id || peerIds.some((id) => !carried.includes(id))));
       if (!advances) return false;
-      const ok = await persistCheckpoint(sessionId, summary, { ts: b.through.ts, messageId: b.through.id });
-      if (ok) Object.assign(checkpoint, { throughTs: b.through.ts, throughRowId: b.through.id, partial: false });
+      const ok = await persistCheckpoint(sessionId, summary, { ts: b.through.ts, messageId: b.through.id, peerIds });
+      if (ok) Object.assign(checkpoint, { throughTs: b.through.ts, throughRowId: b.through.id, partial: false, peerIds });
       return ok;
     };
     /** 某 assistant 段刚落库:给它在 workingMessages 里的消息打上来源行(后续压缩把它们当已落库行算),
@@ -3037,8 +3056,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const p = checkpoint.pending;
       if (p?.messageId !== messageId) return;
       checkpoint.pending = undefined;
-      if (await persistCheckpoint(sessionId, p.summary, { ts, messageId, toolCallId: p.toolCallId })) {
-        Object.assign(checkpoint, { throughTs: ts, throughRowId: messageId, partial: true });
+      // 压缩当时整行在范围里的已落库行,落在这一段同一毫秒的算邻行(一般没有;有也只是更早落库的那几行)
+      const peerIds = normalizePeerIds(messageId, carriedWhole(ts), p.wholeRows.filter((r) => r.ts === ts).map((r) => r.id));
+      if (await persistCheckpoint(sessionId, p.summary, { ts, messageId, toolCallId: p.toolCallId, peerIds })) {
+        Object.assign(checkpoint, { throughTs: ts, throughRowId: messageId, partial: true, peerIds });
       }
     };
     // context 视图数据(H5/H8/B2):窗口值+来源、指令文件清单+截断、注入段分解、历史规模。

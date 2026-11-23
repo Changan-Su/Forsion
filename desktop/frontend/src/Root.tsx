@@ -297,7 +297,7 @@ export function Root() {
           卡片(z 100)压在浮层(z 55)上正常弹 —— 否则浮层开着时「发送测试通知」等于没按(Codex 评审 P1)。
           web 只有一个渲染进程,不存在与别的窗口重复;面板自己的操作结果照旧走面板提示条(panelToast)。 */}
       {!a.onboarding && <NotificationHost />}
-      {window.tangu?.sandbox && <SandboxChrome />}
+      {window.tangu?.sandbox && !window.tangu.sandbox.self.stage && <SandboxChrome />}
     </MobilePreviewFrame>
   )
 }
