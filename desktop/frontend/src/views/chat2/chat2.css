@@ -1149,11 +1149,11 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .ctx-menu.desk-pick-menu .desk-pick-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
 /* 上下分界:平时不画,悬停 / 拖动时变色、光标上下箭头(画法同左缘拖宽条 .agent-desk-grip) */
 .agent-desk-body { position: relative; }
-.agent-desk-split { position: absolute; left: 0; right: 0; height: 6px; margin-top: -3px; cursor: row-resize; z-index: 5; border-radius: 3px; touch-action: none; }
+.agent-desk-split { position: absolute; left: 0; right: 0; height: 6px; margin-top: -3px; cursor: row-resize; z-index: 3; border-radius: 3px; touch-action: none; }
 .agent-desk-split:hover, .agent-desk-split.active { background: var(--accent-ink); opacity: 0.3; }
 /* 拖文件到某一格:那一格原地淡入一层 5% 主题色(同聊天区拖入的画法),不画框 */
 .agent-desk-pane.has-caps::after {
-  content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 4;
+  content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 3;
   border-radius: var(--radius-lg, 12px);
   background: color-mix(in srgb, var(--signal) 5%, transparent);
   opacity: 0; transition: opacity var(--lcl-drop-fade, 130ms ease);
