@@ -4,11 +4,12 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ChevronDown, Copy, Eraser, Loader2, Maximize2, Minimize2, NotebookPen, Puzzle, Sparkles } from 'lucide-react'
-import { getView, subscribeViews } from '@lcl/engine'
+import { ArrowDown, ArrowUp, ChevronDown, Copy, Eraser, ExternalLink, Loader2, Maximize2, Minimize2, NotebookPen, Pin, Puzzle, Rows2, Sparkles, X } from 'lucide-react'
+import { getView, subscribeViews, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
-import { DESK_DRAFT_KEY, extractLiveBody } from '../../stores/deskPlan'
+import { DESK_DRAFT_KEY, clampSplit, deskItemFor, deskMenuRows, extractLiveBody, extractStreamingString, visibleSlots } from '../../stores/deskPlan'
+import { PATHS_MIME, REF_MIME, readChatRefs } from '../../components/chatDragRef'
 import { WsFileView } from '../WsFileView'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -18,9 +19,9 @@ import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
 import { iconForFile } from '../../services/fileKinds'
-import { openDb, openNote } from '../../amadeusNav'
+import { openDb, openFile, openNote, opensAsTab } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
-import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
+import { DeskChromeContext, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
 import { DeskToolCardPane } from './DeskToolCardPane'
 import { CardAction, SummaryCard } from './TaskSummary'
 import { bumpOpen, openOf, setUserOpen, useSummaryOpen } from './summaryOpen'
@@ -36,12 +37,30 @@ registerMessages({
   'desk.clear': { zh: '清空 Desk', en: 'Clear Desk' },
   'desk.more': { zh: '更多', en: 'More' },
   'desk.switch': { zh: '切换 Desk 上的内容', en: 'Switch Desk item' },
+  // 两格手动控制(11-23 方案 A)
+  'desk.solo': { zh: '只看这一格', en: 'Show only this' },
+  'desk.both': { zh: '恢复两格', en: 'Show both' },
+  'desk.moveUp': { zh: '移到上面', en: 'Move up' },
+  'desk.moveDown': { zh: '移到下面', en: 'Move down' },
+  'desk.remove': { zh: '从 Desk 拿掉', en: 'Remove from Desk' },
+  'desk.openMain': { zh: '在主区打开', en: 'Open in main area' },
+  'desk.pinned': { zh: '钉住', en: 'Pinned' },
+  'desk.unpin': { zh: '取消钉住', en: 'Unpin' },
+  'desk.fresh': { zh: 'Agent 刚放的', en: 'Just added by the agent' },
+  'desk.recent': { zh: '最近放过的', en: 'Recently shown' },
+  'desk.thisCell': { zh: '这一格', en: 'This cell' },
+  'desk.otherCell': { zh: '在另一格', en: 'In the other cell' },
+  'desk.justNow': { zh: '刚刚', en: 'Just now' },
+  'desk.resize': { zh: '拖动调整上下高度，双击恢复各半', en: 'Drag to resize, double-click to reset' },
 })
 
-/** 「清空 Desk」(idle 伴随面的回场键):条目清掉、侧板收回、说明一并作废 —— 卡片空态位交还伴随面。 */
-const clearDesk = (sessionId: string, keepOpen = false): void =>
+/** 「清空 Desk」(idle 伴随面的回场键):条目清掉、侧板收回、说明一并作废 —— 卡片空态位交还伴随面。
+ *  钉住、只看一格、▾ 上的点一起清(最近放过的留着)。 */
+const clearDesk = (sessionId: string, keepOpen = false): void => {
+  useApp.getState().deskAct(sessionId, { type: 'clear' })
   // keepOpen:有空闲面(Muse 私聊)时侧板不用收 —— 清掉条目,原地换回 Muse Space
-  useApp.getState().patchDesk(sessionId, { items: [], note: undefined, ...(keepOpen ? {} : { mode: undefined }) })
+  if (!keepOpen) useApp.getState().patchDesk(sessionId, { mode: undefined })
+}
 
 /** Muse 私聊的 Desk 空闲面(10-13 用户定):Desk 上没有任何条目时演 Muse Space,Agent 一往 Desk 上放东西就让位,
  *  「清空 Desk」把它请回来 —— 与 idle 伴随面同一套进出,只是内容是宿主的 `muse-library` 视图(Muse 自建插件的 home,
@@ -242,34 +261,154 @@ export function useDeskGrip(sessionId: string, rootRef: React.RefObject<HTMLDivE
   }, [sessionId, rootRef])
 }
 
+/** 「在主区打开」(方案 C 那一项):库内文件走 Amadeus 的打开方式(同「在 Amadeus 中打开」),库外文件开 wsfile 标签,
+ *  注册视图按类型开一个主区标签。插件工具卡没有主区对应物,不给这一项。 */
+function openDeskItemInMain(it: DeskItem, vaultRoot: string | null): void {
+  const rel = vaultRelOf(it.path, vaultRoot)
+  if (rel) {
+    if (opensAsTab(rel)) openFile(rel)
+    else if (/\.md$/i.test(rel)) void openNote(rel)
+    else openFile(rel)
+    return
+  }
+  const ws = useWorkspace.getState()
+  if (it.view) ws.openView(it.view.type, it.view.params ?? {}, 'main', { newTab: true })
+  else if (it.path) ws.openView('wsfile', { path: it.path, name: it.name }, 'main', { newTab: true })
+}
+
+/** 两格都钉着时 Agent 正在写的那份:「Agent 刚放的」那行显示「正在编辑 X」(路径没流完 =「正在起草…」)。 */
+function liveFreshLabel(sessionId: string, toolId: string, t: (k: string, v?: Record<string, string>) => string): string {
+  for (const m of useApp.getState().messagesBySession[sessionId] || []) {
+    const e = m.toolEvents?.find((x) => x.id === toolId)
+    if (!e) continue
+    const raw = extractStreamingString(e.arguments || '', 'path')
+    return raw?.done ? t('desk.writing', { name: raw.value.split(/[\\/]/).pop() || raw.value }) : t('desk.drafting')
+  }
+  return t('desk.drafting')
+}
+
+/** 拖进一格(11-23 方案 A ⑧⑨):文件 / 工作区引用拖到哪一格就放进哪一格(这一格钉住)。
+ *  聊天区的两个落区(Composer 的 OS 文件落区是 .t2-chat-view 上的原生监听,ChatView 的引用落区是 React)都在 Desk 外层,
+ *  所以这里在格子上用**原生捕获**监听先接住(连格子里的编辑器也不先吃)。直播那格写完前不收:光标 not-allowed、不染色。
+ *  dragover 读不到数据:会话 / 应用这类放不进 Desk 的引用到 drop 才知道,那时不拦,照旧冒泡给输入框变成引用。 */
+function useDeskDrop(ref: React.RefObject<HTMLDivElement | null>, sessionId: string, slot: number, enabled: boolean, locked: boolean): void {
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !enabled) return
+    const view = el.ownerDocument.defaultView
+    const accepts = (e: DragEvent): boolean => {
+      const ts = Array.from(e.dataTransfer?.types ?? [])
+      return ts.includes('Files') || ts.includes(REF_MIME) || ts.includes(PATHS_MIME)
+    }
+    const mark = (on: boolean): void => {
+      el.toggleAttribute('data-drop', on)
+      el.closest('.t2-chat-view')?.toggleAttribute('data-deskdrop', on)
+    }
+    const over = (e: DragEvent): void => {
+      if (!accepts(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = locked ? 'none' : 'copy'
+      if (!locked) mark(true)
+    }
+    const leave = (e: DragEvent): void => { if (!el.contains(e.relatedTarget as Node)) mark(false) }
+    const drop = (e: DragEvent): void => {
+      if (!accepts(e)) return
+      mark(false)
+      if (locked) { e.preventDefault(); e.stopPropagation(); return }
+      const dt = e.dataTransfer
+      let path = ''
+      for (const r of readChatRefs(dt)) {
+        if (r.kind === 'file') { path = r.path; break }
+        if (r.kind === 'note' && vaultRoot) { path = `${vaultRoot.replace(/[\\/]+$/, '')}/${r.path.replace(/^[\\/]+/, '')}`; break }
+      }
+      if (!path && dt?.files?.length && window.tangu?.getPathForFile) {
+        try { path = window.tangu.getPathForFile(dt.files[0]) || '' } catch { path = '' }
+      }
+      if (!path) return // 放不进 Desk 的(会话 / 应用 / 窗口引用):交回聊天区
+      e.preventDefault()
+      e.stopPropagation()
+      useApp.getState().deskAct(sessionId, { type: 'pick', slot, item: deskItemFor(path, Date.now()) })
+    }
+    const clear = (): void => mark(false)
+    el.addEventListener('dragenter', over, true)
+    el.addEventListener('dragover', over, true)
+    el.addEventListener('dragleave', leave, true)
+    el.addEventListener('drop', drop, true)
+    view?.addEventListener('dragend', clear)
+    view?.addEventListener('drop', clear, true)
+    view?.addEventListener('blur', clear)
+    return () => {
+      el.removeEventListener('dragenter', over, true)
+      el.removeEventListener('dragover', over, true)
+      el.removeEventListener('dragleave', leave, true)
+      el.removeEventListener('drop', drop, true)
+      view?.removeEventListener('dragend', clear)
+      view?.removeEventListener('drop', clear, true)
+      view?.removeEventListener('blur', clear)
+      mark(false)
+    }
+  }, [ref, sessionId, slot, enabled, locked, vaultRoot])
+}
+
 /** 展开态的一格 = 悬浮胶囊 + 内容(方案 B,两颗胶囊同 Mini 顶栏 lcl/engine/miniCard.css .mini-card-cap)。
- *  左胶囊:条目名(第一格且有得切 / 有 Agent 说明时带 ▾ 菜单);右胶囊:视图控件槽 │ ⋯ │ 面板级按钮。
- *  下面的格(panel=null)不要右胶囊,槽和 ⋯ 跟在名字后面。伴随面(item 缺省)只有右胶囊。 */
-function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
-  sessionId: string; item?: DeskItem; panel: React.ReactNode; switchable?: boolean; className?: string; children: React.ReactNode
+ *  左胶囊:条目名 + ▾(每一格都有:换成这条会话最近放过的 8 样)+ 钉住时一枚图钉(点了取消);
+ *  右胶囊:视图控件槽 │ ⋯ │ 面板级按钮。下面的格(panel=null)不要右胶囊,槽和 ⋯ 跟在名字后面。伴随面(item 缺省)只有右胶囊。
+ *  ⋯ 新加的四项在上(只看这一格 / 恢复两格、移到上面 / 下面、从 Desk 拿掉、在主区打开),原来的几项不动。 */
+function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
+  sessionId: string; item?: DeskItem; slot?: number; panel: React.ReactNode; className?: string; children: React.ReactNode
 }) {
   const { t } = useI18n()
-  const [slot, setSlot] = useState<HTMLElement | null>(null)
+  const [slotEl, setSlotEl] = useState<HTMLElement | null>(null)
   const more = useRef<CtxItem[]>([])
-  const chrome = useMemo<DeskChrome>(() => ({ slot, more }), [slot])
+  const chrome = useMemo<DeskChrome>(() => ({ slot: slotEl, more }), [slotEl])
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const fileTypes = usePluginStore((s) => s.fileTypes)
-  const note = useApp((s) => s.deskBySession[sessionId]?.note)
-  const all = useApp((s) => s.deskBySession[sessionId]?.items)
+  const desk = useApp((s) => s.deskBySession[sessionId])
+  const paneRef = useRef<HTMLDivElement>(null)
+  const note = desk?.note
+  const all = desk?.items ?? []
+  const own = !!item && all[slot]?.key === item.key // 空闲面(home)不是 Desk 自己的条目:没有这些控件
+  const two = all.length >= 2
+  const solo = two && (desk?.solo === 0 || desk?.solo === 1)
+  useDeskDrop(paneRef, sessionId, slot, own, !!item?.live)
   const path = item?.path || ''
   const rel = vaultRelOf(path, vaultRoot)
   // 「在 Amadeus 中打开」只给 Desk 自己会改道原生 view 的库内类型(与 DeskFilePane 同口径)
   const amadeus = rel && (/\.(md|db)$/i.test(rel) || isDrawingPath(rel) || !!findFileType(fileTypes, rel)) ? rel : null
-  const moreItems = (): CtxItem[] => [
-    ...more.current,
-    // .db 走 openDb:openNote 会把它塞进笔记编辑器,保存时把 Markdown 写回数据库(Codex P1)
-    ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
-    ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
-  ]
+  type Act = Parameters<ReturnType<typeof useApp.getState>['deskAct']>[1]
+  const act = (a: Act): void => useApp.getState().deskAct(sessionId, a)
+  // 菜单开着时摆法可能变了(Agent 落盘把这样挪到了另一格):动作执行那一刻按条目 key 重新找它在哪格,找不到就不动
+  const actHere = (make: (slot: number) => Act): void => {
+    const at = item ? (useApp.getState().deskBySession[sessionId]?.items ?? []).findIndex((x) => x.key === item.key) : -1
+    if (at >= 0) act(make(at))
+  }
+  const moreItems = (): CtxItem[] => {
+    const mine: CtxItem[] = !own || !item ? [] : [
+      ...(two ? [solo
+        ? { label: t('desk.both'), icon: <Rows2 size={14} />, run: () => act({ type: 'solo' }) }
+        : { label: t('desk.solo'), icon: <Maximize2 size={14} />, run: () => actHere((n) => ({ type: 'solo', slot: n })) }] : []),
+      ...(two && !solo ? [slot === 0
+        ? { label: t('desk.moveDown'), icon: <ArrowDown size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }
+        : { label: t('desk.moveUp'), icon: <ArrowUp size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }] : []),
+      { label: t('desk.remove'), icon: <X size={14} />, run: () => actHere((n) => ({ type: 'remove', slot: n })) },
+      ...(item.tool ? [] : [{ label: t('desk.openMain'), icon: <ExternalLink size={14} />, run: () => openDeskItemInMain(item, vaultRoot) }]),
+    ]
+    const orig: CtxItem[] = [
+      ...more.current,
+      // .db 走 openDb:openNote 会把它塞进笔记编辑器,保存时把 Markdown 写回数据库(Codex P1)
+      ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
+      ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
+    ]
+    return [...mine, ...orig.map((x, i) => (i === 0 && mine.length ? { ...x, separatorBefore: true } : x))]
+  }
   const tools = item && (
     <>
-      <span ref={setSlot} className="desk-cap-slot" />
-      {!item.live && (path || !item.view) && <DeskMoreButton items={moreItems} />}
+      <span ref={setSlotEl} className="desk-cap-slot" />
+      {/* 只看一格时:⋯ 左边一颗「恢复两格」,看得出另一格只是收起了(⋯ 里那项照旧留着) */}
+      {panel && solo && <button className="icon-btn" title={t('desk.both')} aria-label={t('desk.both')} onClick={() => act({ type: 'solo' })}><Rows2 size={14} /></button>}
+      {!item.live && (own || path || !item.view) && <DeskMoreButton items={moreItems} />}
     </>
   )
   let name: React.ReactNode = null
@@ -278,27 +417,51 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
     const label = item.live ? (path ? t('desk.writing', { name: item.name }) : t('desk.drafting')) : (item.name || path.split(/[/\\]/).pop() || '')
     const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
     const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
-    const others = (all ?? []).filter((x) => x.key !== item.key)
-    // 直播条目只认顶格(直播更新 / 落盘接棒 / 失败清场都按顶格做),有直播时不许换位
-    const liveNow = (all ?? []).some((x) => x.live)
-    name = switchable && (others.length || note) ? (
-      <DeskMenuButton
-        className="desk-cap-pick"
-        title={tip ?? t('desk.switch')}
-        items={() => [
-          ...(note ? [{ label: note, disabled: true, run: () => {} }] : []),
-          ...(all ?? []).map((x, i) => ({
-            label: x.name || x.path, separatorBefore: !!note && i === 0, disabled: x.key === item.key || liveNow,
-            run: () => useApp.getState().patchDesk(sessionId, { items: [x, ...(all ?? []).filter((y) => y.key !== x.key)] }),
-          })),
-        ]}
-      >
-        {inner}<ChevronDown size={12} className="desk-cap-caret" />
-      </DeskMenuButton>
-    ) : <span className="desk-cap-pick" title={tip}>{inner}</span>
+    const menu = own && desk ? deskMenuRows(desk, slot) : null
+    const dot = !!desk?.fresh && visibleSlots(desk)[0] === slot // 点只亮在最上面那格的 ▾ 上(方案图 ⑦)
+    const pickable = !!menu && (menu.rows.length > 1 || !!menu.fresh || !!note)
+    const rows = (): DeskPickRow[] => {
+      const d = useApp.getState().deskBySession[sessionId]
+      if (!d) return []
+      const m = deskMenuRows(d, slot)
+      const lockedNow = !!d.items[slot]?.live // 直播那格写完前不换内容
+      const out: DeskPickRow[] = []
+      if (d.note) out.push({ label: d.note, disabled: true, run: () => {} })
+      if (m.fresh) {
+        out.push({ head: t('desk.fresh'), separatorBefore: out.length > 0 })
+        const f = m.fresh
+        out.push('key' in f
+          ? { label: f.name || f.path, dot: true, hint: t('desk.justNow'), disabled: lockedNow, run: () => actHere((n) => ({ type: 'pick', slot: n, item: f })) }
+          : { label: liveFreshLabel(sessionId, f.liveToolId, t), dot: true, disabled: true, run: () => {} })
+      }
+      out.push({ head: t('desk.recent'), separatorBefore: out.length > 0 })
+      for (const r of m.rows) {
+        out.push({
+          label: r.item.name || r.item.path,
+          hint: r.where === 'this' ? t('desk.thisCell') : r.where === 'other' ? t('desk.otherCell') : undefined,
+          disabled: r.where === 'this' || lockedNow,
+          run: () => actHere((n) => ({ type: 'pick', slot: n, item: r.item })),
+        })
+      }
+      return out
+    }
+    name = (
+      <>
+        {pickable ? (
+          <DeskPickButton className="desk-cap-pick" title={tip ?? t('desk.switch')} rows={rows} onOpen={() => { if (useApp.getState().deskBySession[sessionId]?.fresh) act({ type: 'seen' }) }}>
+            {inner}<ChevronDown size={12} className="desk-cap-caret" />{dot && <span className="desk-cap-dot" aria-hidden="true" />}
+          </DeskPickButton>
+        ) : <span className="desk-cap-pick" title={tip}>{inner}</span>}
+        {own && item.pin && (
+          <button type="button" className="icon-btn desk-cap-pin" aria-pressed="true" aria-label={t('desk.pinned')} title={t('desk.unpin')} onClick={() => actHere((n) => ({ type: 'unpin', slot: n }))}>
+            <Pin size={13} />
+          </button>
+        )}
+      </>
+    )
   }
   return (
-    <div className={`agent-desk-pane has-caps${className ? ' ' + className : ''}`}>
+    <div ref={paneRef} className={`agent-desk-pane has-caps${className ? ' ' + className : ''}`} data-desk-slot={own ? slot : undefined} style={own && slot === 0 && two && !solo ? splitStyle(desk?.split) : undefined}>
       <div className="desk-caps">
         {name ? <div className="desk-cap desk-cap-name">{name}{!panel && tools}</div> : <span />}
         {panel && <div className="desk-cap">{tools}{item && <span className="desk-cap-div" />}{panel}</div>}
@@ -308,11 +471,59 @@ function DeskCaps({ sessionId, item, panel, switchable, className, children }: {
   )
 }
 
+/** 两格时上格的高度 = 分界比例(border-box 百分比,下格吃剩下的):两格内边距不同也一样高(原来差 46px:
+ *  md 格把胶囊让位挪进了自己的滚动区,另一格是外层 padding,flex-basis 0 时 padding 叠在外面)。 */
+const splitStyle = (split: number | undefined): React.CSSProperties => ({ flex: `0 0 ${((split ?? 0.5) * 100).toFixed(2)}%` })
+
+/** 上下两格之间的分界(⑴–⑶):平时不画,悬停变色、光标上下箭头(画法同左缘拖宽条 .agent-desk-grip);
+ *  拖动 = 上格占比(20%–80%,按比例存,对界面缩放免疫);双击回到各半。按会话记(deskBySession.split)。 */
+function DeskSplit({ sessionId, split }: { sessionId: string; split: number }) {
+  const { t } = useI18n()
+  const onDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    const body = e.currentTarget.parentElement
+    if (!body) return
+    e.preventDefault()
+    const el = e.currentTarget
+    el.setPointerCapture(e.pointerId)
+    el.classList.add('active')
+    const rect = body.getBoundingClientRect() // 拖动中盒子不变,只有分界在动
+    const move = (ev: PointerEvent): void => {
+      useApp.getState().patchDesk(sessionId, { split: clampSplit((ev.clientY - rect.top) / rect.height) })
+    }
+    const done = (): void => {
+      el.classList.remove('active')
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', done)
+      el.removeEventListener('pointercancel', done)
+      el.removeEventListener('lostpointercapture', done)
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', done)
+    el.addEventListener('pointercancel', done)
+    el.addEventListener('lostpointercapture', done)
+  }
+  return (
+    <div
+      className="agent-desk-split"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label={t('desk.resize')}
+      aria-valuenow={Math.round(split * 100)}
+      title={t('desk.resize')}
+      style={{ top: `${(split * 100).toFixed(2)}%` }}
+      onPointerDown={onDown}
+      onDoubleClick={() => useApp.getState().patchDesk(sessionId, { split: undefined })}
+    />
+  )
+}
+
 /** onQuote:Desk 里的插件结果卡片调 call.quote 时挂进哪个输入框(ChatView 传自己的;不传退回主对话)。 */
 export function AgentDesk({ sessionId, onQuote }: { sessionId: string; onQuote?: (text: string) => void }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])
-  const claimKey = useClaimKey(desk?.items?.slice(0, 2) ?? [])
+  const own = desk?.items.slice(0, 2) ?? []
+  const shownSlots = visibleSlots({ items: own, solo: desk?.solo })
+  const claimKey = useClaimKey(shownSlots.map((i) => own[i]))
   const rootRef = useRef<HTMLDivElement>(null)
   const onGrip = useDeskGrip(sessionId, rootRef)
   const comp = useDeskCompanion()
@@ -323,9 +534,8 @@ export function AgentDesk({ sessionId, onQuote }: { sessionId: string; onQuote?:
   if (!desk?.items.length && !always && !home) return null
   const open = desk?.mode === 'open'
   const frac = desk?.fraction ?? (desk?.size === 'wide' ? 0.62 : 0.46)
-  const own = desk?.items.slice(0, 2) ?? []
-  // 空闲面:自己没有条目时演它(见 useDeskHome)
-  const items = own.length || !home ? own : [home]
+  // 空闲面:自己没有条目时演它(见 useDeskHome)。只看一格时只演那一格。
+  const cells = own.length || !home ? shownSlots.map((i) => ({ it: own[i], slot: i })) : [{ it: home, slot: 0 }]
   const clearable = (comp?.mode === 'idle' || !!home) && !always && own.length > 0
   // 面板级按钮(清空 / 收起)住第一格的右胶囊末尾
   const panelBtns = (
@@ -354,14 +564,15 @@ export function AgentDesk({ sessionId, onQuote }: { sessionId: string; onQuote?:
                 <DeskCaps sessionId={sessionId} panel={panelBtns} className="agent-desk-companion">
                   <DeskCompanionHost key={comp.key} entry={comp} surface="desk-panel" sessionId={sessionId} />
                 </DeskCaps>
-              ) : items.map((it, i) => (
-                <DeskCaps key={it.key} sessionId={sessionId} item={it} panel={i === 0 ? panelBtns : null} switchable={i === 0}>
+              ) : cells.map(({ it, slot }, i) => (
+                <DeskCaps key={it.key} sessionId={sessionId} item={it} slot={slot} panel={i === 0 ? panelBtns : null}>
                   {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                     : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} onQuote={onQuote} />
                     : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
                       : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
                 </DeskCaps>
               ))}
+              {!always && cells.length === 2 && <DeskSplit sessionId={sessionId} split={desk?.split ?? 0.5} />}
             </div>
           </div>
         </>
@@ -413,7 +624,9 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const home = useDeskHome(sessionId)
   const own = desk?.items?.slice(0, 2) ?? []
   const always = comp?.mode === 'always'
-  const items = own.length || !home || always ? own : [home]
+  // 卡片显示摆好之后的样子:只看一格时只那一格,两格按分界比例
+  const vis = visibleSlots({ items: own, solo: desk?.solo }).map((i) => own[i])
+  const items = own.length || !home || always ? vis : [home]
   const claimKey = useClaimKey(items)
   const draft = sessionId === DESK_DRAFT_KEY
   const plan = deskCardPlan({ mode: desk?.mode, itemCount: own.length, companion: comp?.mode ?? null, draft, home: !!home })
@@ -423,7 +636,8 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const hasContent = items.length > 0 || !!companion
   const pref = useSummaryOpen((s) => openOf(s.by[sessionId], 'desk', true))
   const [peek, setPeek] = useState(false) // 空着时手动点开看一眼;不记
-  const top = own[0]?.key ?? null
+  // 「来了新东西」= Agent 那边的格子换了(没钉的格);你钉住 / 换位不算
+  const top = own.filter((x) => !x.pin).map((x) => x.key).join('|') || null
   const seen = useRef({ sessionId, top })
   const reveal = useRef(false) // 新条目到了、还没把卡露出来
   useEffect(() => {
@@ -475,8 +689,8 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
               <DeskCompanionHost key={companion.key} entry={companion} surface="desk-card" sessionId={draft ? null : sessionId} />
             </div>
           ) : items.length ? (
-            items.map((it) => (
-              <div className="agent-desk-pane" key={it.key}>
+            items.map((it, i) => (
+              <div className="agent-desk-pane" key={it.key} style={items.length === 2 && i === 0 ? splitStyle(desk?.split) : undefined}>
                 {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                   : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} />
                   : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />

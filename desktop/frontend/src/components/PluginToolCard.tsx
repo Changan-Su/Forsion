@@ -11,7 +11,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { MessageSquare, PanelRight, Puzzle } from 'lucide-react'
 import type { ToolEvent } from '../types'
 import { useApp, type DeskItem } from '../stores/appStore'
-import { replaceTop } from '../stores/deskPlan'
+import { deskReduce } from '../stores/deskPlan'
 import { registerMessages, useI18n } from '../i18n'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { pluginDisplayName } from '../amadeus/plugins/display'
@@ -48,19 +48,29 @@ const QUOTE_CAP = 20_000 // 同 quoteInMainChat
 
 export const deskItemsOf = (sessionId: string): DeskItem[] => useApp.getState().deskBySession[sessionId]?.items ?? []
 
-/** 放进 Desk 顶格并展开成半宽侧板(用户拖过宽度就不动宽度);同一次调用已在 Desk 里时只挪到顶格。 */
-export function showToolCardInDesk(sessionId: string, callId: string, name: string): void {
+/** 放进 Desk 并展开成半宽侧板(用户拖过宽度就不动宽度);同一次调用已在 Desk 里时只挪到顶格。
+ *  落位听钉住(deskPlan.deskReduce):byAgent = 结果直播到达时自动进(进没钉的那格,两格都钉 → 只亮点);
+ *  否则是用户点了卡片上的「放到 Desk」,按引用的规则落位。一格都没钉时两者都 = 原来的顶格。 */
+export function showToolCardInDesk(sessionId: string, callId: string, name: string, byAgent = false): void {
   const app = useApp.getState()
   const cur = app.deskBySession[sessionId]
   const item: DeskItem = { key: `tool:${callId}`, path: '', name, at: Date.now(), tool: { callId } }
-  const items = replaceTop(deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId), item)
-  app.patchDesk(sessionId, { items, mode: 'open', ...(cur?.userResized ? {} : { size: 'half' as const }) })
+  const rest = deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId)
+  const placed = deskReduce({ ...(cur ?? {}), items: rest }, byAgent
+    ? { type: 'land', item }
+    : { type: 'cite', path: '', item, sameView: () => false })
+  // Agent 自动放的卡片没上格(两格都钉着,只进了最近放过的、亮点)→ 别替你把侧板展开
+  const landed = !byAgent || placed.items.some((x) => x.tool?.callId === callId)
+  app.patchDesk(sessionId, { ...placed, ...(landed ? { mode: 'open' as const, ...(cur?.userResized ? {} : { size: 'half' as const }) } : {}) })
 }
 
 /** 从 Desk 拿掉;Desk 空了就收起侧板。 */
 export function returnToolCardToChat(sessionId: string, callId: string): void {
-  const items = deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId)
-  useApp.getState().patchDesk(sessionId, { items, ...(items.length ? {} : { mode: undefined }) })
+  // 走 deskAct 的「拿掉」:只看一格、说明这些跟着收拾(直接改 items 会留下指向空格的 solo)
+  const app = useApp.getState()
+  const slot = deskItemsOf(sessionId).findIndex((x) => x.tool?.callId === callId)
+  if (slot >= 0) app.deskAct(sessionId, { type: 'remove', slot })
+  if (!deskItemsOf(sessionId).length) app.patchDesk(sessionId, { mode: undefined })
 }
 
 // 落点 desk 的卡片只在结果**直播到达**那一刻自动进 Desk 一次(重载的历史不进);用户收回之后不再弹回去,SSE 重放也靠它去重。
@@ -78,7 +88,7 @@ export async function placeLiveToolCard(sessionId: string, callId: string): Prom
   }
   if (!claim || claim.item.surface !== 'desk') return
   autoPlaced.add(callId)
-  showToolCardInDesk(sessionId, callId, toolCardTitle(claim.item))
+  showToolCardInDesk(sessionId, callId, toolCardTitle(claim.item), true)
 }
 
 /** 仅供单测复位。 */

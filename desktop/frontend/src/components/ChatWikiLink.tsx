@@ -239,8 +239,8 @@ async function openPdfCitation(path: string, page?: number, quote?: string, nt?:
     // 由谁打开听「默认打开方式」:插件接管了 PDF,引用也进它的视图(落点经 file.onGoto 交给它),否则内置阅读器。
     const { matchFileType } = await import('../amadeus/plugins/pluginStore')
     const [type, idParam] = matchFileType(path) ? ['amadeus-plugin-file', 'filePath'] : ['amadeus-pdf', 'pdfPath']
-    const top = useApp.getState().deskBySession[activeId]?.items?.[0]
-    const same = top?.view?.type === type && top.view.params?.[idParam] === path
+    // 已经挂着的那格(不一定是顶格:钉住后引用可能落在下格)自己收落点
+    const same = (useApp.getState().deskBySession[activeId]?.items ?? []).some((top) => top?.view?.type === type && top.view.params?.[idParam] === path)
     // 落状态:deskShowFile 对同一份 PDF 复用原 key(不 remount 重下),params 的新页码供**下次冷挂载**
     // (刷新后从快照恢复)用;DeskShimView 的 leaf 只按 key 记忆,params 变化不会灌进已挂载的视图。
     const params: Record<string, unknown> = { [idParam]: path }
@@ -274,8 +274,8 @@ export async function openFileCitation(path: string, name: string, line: LineLoc
         return
       }
     }
-    const top = useApp.getState().deskBySession[activeId]?.items?.[0]
-    const same = top?.view?.type === 'wsfile' && top.view.params?.path === path
+    // 已经挂着的那格(不一定是顶格:钉住后引用可能落在下格)自己收落点
+    const same = (useApp.getState().deskBySession[activeId]?.items ?? []).some((top) => top?.view?.type === 'wsfile' && top.view.params?.path === path)
     const params: Record<string, unknown> = { path, name }
     if (line) { params.line = line.from; if (line.to) params.endLine = line.to }
     useApp.getState().deskShowFile(activeId, path, { type: 'wsfile', params })
@@ -306,8 +306,8 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
   if (await openElsewhere(activeId, m.abs, m.name, nt)) return
   if (m.vaultRel) {
     if (desk) {
-      const top = useApp.getState().deskBySession[desk]?.items?.[0]
-      const same = top?.view?.type === 'amadeus-media' && top.view.params?.path === m.vaultRel
+      // 已经挂着的那格(不一定是顶格:钉住后引用可能落在下格)自己收落点
+      const same = (useApp.getState().deskBySession[desk]?.items ?? []).some((top) => top?.view?.type === 'amadeus-media' && top.view.params?.path === m.vaultRel)
       const params: Record<string, unknown> = { path: m.vaultRel }
       if (m.loc) { params.at = m.loc.at; if (m.loc.to) params.to = m.loc.to }
       useApp.getState().deskShowFile(desk, m.vaultRel, { type: 'amadeus-media', params }, m.name)
@@ -321,8 +321,8 @@ async function openMediaCitation(m: { abs: string; vaultRel: string | null; name
     return
   }
   if (desk) {
-    const top = useApp.getState().deskBySession[desk]?.items?.[0]
-    const same = top?.view?.type === 'wsfile' && top.view.params?.path === m.abs
+    // 已经挂着的那格(不一定是顶格:钉住后引用可能落在下格)自己收落点
+    const same = (useApp.getState().deskBySession[desk]?.items ?? []).some((top) => top?.view?.type === 'wsfile' && top.view.params?.path === m.abs)
     // 区间锚 `#t=95,120` 的终点也要带上 —— 只传 at 的话「到点暂停」在库外媒体上静默失效
     // (库内那条走 MediaPlayer 本来就有,两边不对称才是坑)。
     const params: Record<string, unknown> = { path: m.abs, name: m.name }
@@ -394,8 +394,8 @@ async function openWebCitation(href: string, quote: string): Promise<boolean> {
   if (!document.querySelector(`[data-desk-session="${CSS.escape(activeId)}"]`)) return false
   const url = withTextFragment(href, quote)
   const key = webCiteKey(href)
-  const top = useApp.getState().deskBySession[activeId]?.items?.[0]
-  const same = top?.view?.type === 'browser' && top.view.params?.path === key
+  // 已经挂着的那格(不一定是顶格:钉住后引用可能落在下格)自己收落点
+  const same = (useApp.getState().deskBySession[activeId]?.items ?? []).some((top) => top?.view?.type === 'browser' && top.view.params?.path === key)
   useApp.getState().deskShowFile(activeId, key, { type: 'browser', params: { url, path: key } }, hostLabel(key))
   if (same) window.dispatchEvent(new CustomEvent('amadeus:browser-goto', { detail: { path: key, url } }))
   return true
