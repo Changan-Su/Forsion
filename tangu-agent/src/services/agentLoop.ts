@@ -4114,6 +4114,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       try { requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf-8'); } catch { /* ignore */ }
       let llmTiming: { ttftMs?: number; uploadMs?: number; llmMs?: number } = {};
       const retryChain = new LlmRetryChain(); // 本次模型调用的重试链:次数、预算、等网络(llm/retry.ts)
+      retryChain.gated = true; // 限流的重发不自己睡,回闸前排队首(llm/retry.ts LlmRetryChain.gated)
       let rateLimitedLast = false; // 上一次尝试撞了秒级限流:这次在通道闸前排队首
       for (;;) {
         if (immediateSteers.has(runId) && steerQueue.get(runId)?.length) {

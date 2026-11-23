@@ -246,6 +246,12 @@ export class LlmRetryChain {
   private readonly startedAt = Date.now();
   private readonly excluded: Array<{ start: number; end: number }> = [];
   private readonly ownLedger = createRunNetLedger();
+  /**
+   * 调用方过通道闸(llm/channelGate.ts):秒级限流的重发不自己睡退避,直接回闸前排队首,由闸等到暂停结束再放它当试探。
+   * 自己睡的话会比闸的暂停多睡出抖动那截,醒来时窗口已被排队的别人用掉,又撞一次(live 11-23 第 2 轮:一个会话连撞 3 次失败)。
+   * 次数照记(#796),排队那段由调用方 excludeQueued 扣出预算。
+   */
+  gated = false;
   constructor(private readonly rng: () => number = Math.random) {}
 
   /** 这条链已经花掉的预算(醒着、且不在不计预算的等待里的时间)。 */
@@ -275,8 +281,9 @@ export class LlmRetryChain {
     const max = overload ? MODEL_OVERLOAD_MAX_RETRIES : MODEL_MAX_RETRIES;
     if (this.retries >= max) return null;
     const attempt = this.retries + 1;
-    const waitMs = ra.kind === 'wait' ? ra.ms : llmBackoffMs(attempt, this.rng);
-    const excludedFromBudget = ra.kind === 'wait' || overload;
+    const gateWaits = this.gated && isRateLimitedLlmError(err);
+    const waitMs = gateWaits ? 0 : ra.kind === 'wait' ? ra.ms : llmBackoffMs(attempt, this.rng);
+    const excludedFromBudget = ra.kind === 'wait' || overload || gateWaits;
     if (this.budgetExceeded(excludedFromBudget ? 0 : waitMs)) return null;
     this.retries = attempt;
     return { attempt, max, waitMs, overload, ...(ra.kind === 'wait' ? { retryAfterMs: ra.retryAfterMs } : {}), excludedFromBudget };

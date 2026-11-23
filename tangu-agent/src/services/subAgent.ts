@@ -557,7 +557,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
     });
-    }), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.(), undefined, (c) => { chain = c; }); } // 退避期间被兄弟推过成本上限:等完不再发
+    }), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.(), undefined, (c) => { chain = c; c.gated = true; }); } // 退避期间被兄弟推过成本上限:等完不再发
     catch (e) { if (e instanceof SubAgentBudgetStop) { overBudget = true; break; } throw e; }
 
     if (runId) {

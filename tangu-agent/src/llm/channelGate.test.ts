@@ -232,3 +232,16 @@ describe('⑥ 评审补丁(11-23 Codex)', () => {
     expect(__channelState(key)?.inflight ?? 0).toBe(0);
   });
 });
+
+describe('⑦ 过闸的重试链', () => {
+  it('限流的重发不自己睡(闸来等),次数照记;别的错照旧退避', () => {
+    const c = new LlmRetryChain(() => 0.5);
+    c.gated = true;
+    const p = c.plan(new LlmError(429, 'Rate limit reached. Please try again in 7.885s'));
+    expect(p?.waitMs).toBe(0);
+    expect(p?.attempt).toBe(1);
+    expect(c.plan(new LlmError(502, 'Bad gateway'))!.waitMs).toBeGreaterThan(0);
+    const plain = new LlmRetryChain(() => 0.5);
+    expect(plain.plan(new LlmError(429, 'Rate limit reached. Please try again in 7.885s'))!.waitMs).toBeGreaterThan(7000);
+  });
+});
