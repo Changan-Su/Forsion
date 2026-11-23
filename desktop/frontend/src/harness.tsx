@@ -48,7 +48,7 @@ import { switchNoteLock } from './amadeus/unified/noteLock'
 import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
 import { PageHistoryHost } from './amadeus/unified/pageHistory'
 import { canPageHistory } from './amadeus/lib/hostCaps'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, setDetachApi } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
@@ -924,6 +924,16 @@ if (new URLSearchParams(location.search).has('dock')) {
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
+  // &pointer:Windows 那条指针拖拽(ribbonPointerDrag,只给 space: 条目)。上区换成 9 个 Space,撕出开窗记进 __rbTorn
+  // (scripts/ribbon-overflow-drag.e2e.cjs 的指针一组)。
+  if (new URLSearchParams(location.search).has('pointer')) {
+    const torn: string[] = []
+    ;(window as unknown as { __rbTorn: string[] }).__rbTorn = torn
+    setDetachApi({ detach: () => {}, ribbonPointerDrag: true, openSpace: (id) => { torn.push(id) } })
+    const ids = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9'].map((n) => `space:${n}`)
+    for (const id of ids) mk(id, 'top', id.slice(6).toUpperCase())
+    useRibbonStore.setState({ order: ids })
+  }
   // 开关类命令(Command.checked):钉进命令区后按钮要带 aria-pressed / .is-on(ribbon-dnd.e2e 的 O 组)。
   const toggle = { on: false }
   ;(window as unknown as { __rbToggle: typeof toggle }).__rbToggle = toggle

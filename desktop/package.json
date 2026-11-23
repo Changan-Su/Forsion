@@ -67,6 +67,7 @@
     "e2e:detached-workflow": "node scripts/detached-workflow.e2e.cjs",
     "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
     "e2e:ribbon-overflow": "node scripts/ribbon-overflow.e2e.cjs",
+    "e2e:ribbon-overflow-drag": "node scripts/ribbon-overflow-drag.e2e.cjs",
     "e2e:droplet-reuse": "node scripts/droplet-reuse.e2e.cjs",
     "e2e:panelthemes": "node scripts/panel-themes.e2e.cjs",
     "probe:motion": "node scripts/motion-r3.probe.cjs",
