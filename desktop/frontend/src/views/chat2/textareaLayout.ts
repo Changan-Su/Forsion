@@ -19,15 +19,22 @@ export function isCaretOnEdgeLine(textarea: HTMLTextAreaElement, edge: 'first' |
   if (newline !== -1 && (first ? selectionStart > newline : selectionStart <= newline)) return false
 
   // A textarea exposes the caret offset, but no row geometry. Measure the full text so
-  // the words after the caret still participate in wrapping. Use clientWidth to account
-  // for the actual space available when the textarea has a scrollbar.
+  // the words after the caret still participate in wrapping.
   const doc = textarea.ownerDocument
   const mirror = doc.createElement('div')
   const styles = getComputedStyle(textarea)
+  // Keep fractional widths, which can change where the browser wraps a line.
+  // Use clientWidth only to measure the space taken by a classic scrollbar.
+  const px = (property: string) => parseFloat(styles.getPropertyValue(property)) || 0
+  const paddingBoxWidth = px('width') + (styles.boxSizing === 'border-box'
+    ? -px('border-left-width') - px('border-right-width')
+    : px('padding-left') + px('padding-right'))
+  const scrollbarWidth = Math.max(0, Math.round(paddingBoxWidth) - textarea.clientWidth)
   copyTextareaTextStyles(styles, mirror)
   Object.assign(mirror.style, {
     position: 'fixed', left: '0', top: '0', visibility: 'hidden', boxSizing: 'border-box',
-    width: `${textarea.clientWidth}px`,
+    width: `${paddingBoxWidth - scrollbarWidth}px`,
+    zoom: (textarea.currentCSSZoom || 1) / (doc.body.currentCSSZoom || 1),
     whiteSpace: styles.whiteSpace, overflowWrap: styles.overflowWrap, unicodeBidi: styles.unicodeBidi,
   })
   const text = doc.createTextNode(value)
