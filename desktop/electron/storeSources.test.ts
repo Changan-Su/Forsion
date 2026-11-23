@@ -534,3 +534,136 @@ describe('archiveCommit', () => {
     await expect(archiveCommit(Buffer.from('tiny'))).rejects.toThrow()
   })
 })
+
+describe('built-in skills.sh source', () => {
+  const BASE = 'https://forsion.test'
+  const SH_CAT = `${BASE}/api/market/collected/skills-sh/forsion-store.json`
+  const SH = '25aae625'
+  const makeSh = (base: string | (() => Promise<string>) = BASE) => createStoreSources({
+    home, mirror: async () => '', defaultLocale: () => 'zh',
+    marketBase: typeof base === 'string' ? async () => base : base,
+    fetchFor: () => async (url) => { hits.push(url); const r = routes[url]; if (!r) return new Response('nope', { status: 404 }); return r() },
+  })
+  const collected = (over: Record<string, unknown> = {}) => ({
+    installs: 841892, rank: 12, trendingRank: null, audit: { gen: 'safe', socket: 'safe', snyk: 'low' }, override: false, license: 'MIT',
+    scripts: 0, files: 2, requirements: { cli: false, apiKeys: [], desktopOnly: false }, upstreamDeleted: false, pageUrl: null, ...over,
+  })
+  const shItem = (id: string, over: Record<string, unknown> = {}, pkgOver: Record<string, unknown> = {}) => ({
+    id, type: 'skill', name: id, version: '2026.11.20-148210', package: { github: 'mattpocock/skills', ref: 'main', commit: C1, path: `skills/${id}`, ...pkgOver }, collected: collected(), ...over,
+  })
+  const shIndex = (items: unknown[]) => ({ schema: 1, title: 'skills.sh', items })
+  const WAYFINDER = shItem('wayfinder', { collected: collected({ adapted: true, adaptCount: 4, writtenFor: ['claude-code'], requires: ['grill-me', 'not-collected'] }) })
+  const GRILL = shItem('grill-me', { collected: collected({ scripts: 2, audit: { gen: 'safe', socket: 'safe', snyk: 'medium' } }) })
+  const ADAPT = (commit = C1) => ({ note: 'Written for Claude Code. In Tangu, "/grill-me" means use_skill grill-me.', commit, entries: [], unsupported: [], requires: ['grill-me'], external: [] })
+
+  it('is listed first, trusted, and reads its catalog from the market server', async () => {
+    routes[CATALOG] = () => json(index([poster()]))
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER, GRILL, shItem('npm-one', {}, { github: undefined, npm: '@x/y', commit: undefined }), { ...shItem('agent-one'), type: 'agent' }, shItem('unpinned', {}, { commit: undefined })]))
+    const s = makeSh()
+    await s.add('github:pixel-lab/image-skills')
+    const list = await s.list()
+    expect(list[0]).toMatchObject({ id: SH, title: 'skills.sh', origin: 'builtin', trusted: true, disabled: false })
+    const cat = await s.catalog(SH)
+    expect(hits).toContain(SH_CAT)
+    // Only skills pinned to a GitHub commit are offered.
+    expect(cat.items.map((x) => x.id)).toEqual([`src_${SH}_wayfinder`, `src_${SH}_grill-me`])
+    const wf = cat.items[0]
+    expect(wf).toMatchObject({ downloads: 841892, commit: C1, collected: { adapted: true, requires: ['grill-me', 'not-collected'] } })
+    expect(wf.prereqs).toEqual([
+      { id: `src_${SH}_grill-me`, itemId: 'grill-me', name: 'grill-me', installSlug: `src-${SH}-grill-me`, scripts: 2, auditWarn: true },
+      expect.objectContaining({ itemId: 'not-collected', missing: true }),
+    ])
+    // Always trusted, can't be removed or added again under its id.
+    await s.trust(SH)
+    expect((await s.list())[0].trusted).toBe(true)
+  })
+
+  it('a failed or 404 catalog read keeps the last copy and never marks installed items removed, deleted upstream or delisted', async () => {
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER]))
+    const s = makeSh()
+    await s.catalog(SH)
+    await s.recordInstall({ cardId: `src_${SH}_wayfinder`, type: 'skill', slug: `src-${SH}-wayfinder`, name: 'wayfinder', version: '2026.11.20-148210', origin: 'github:mattpocock/skills', commit: C1, path: 'skills/wayfinder' })
+    routes[SH_CAT] = () => new Response('down', { status: 500 })
+    const again = await makeSh().catalog(SH, { refresh: true })
+    expect(again.stale).toBe(true)
+    expect(again.items.map((x) => x.id)).toEqual([`src_${SH}_wayfinder`])
+    delete routes[SH_CAT] // 404: an old server without the collected catalog
+    const fresh = makeSh()
+    await fresh.catalog(SH, { refresh: true })
+    const [rec] = await fresh.installs()
+    expect(rec).toMatchObject({ cardId: `src_${SH}_wayfinder`, removed: false })
+    expect(rec.upstreamDeleted).toBeUndefined()
+    expect(rec.delisted).toBeUndefined()
+    // No copy at all and nothing read: still nothing said about the installed item.
+    await rm(join(home, '.store-sources', 'cache'), { recursive: true, force: true })
+    const none = makeSh()
+    const empty = await none.catalog(SH, { refresh: true })
+    expect(empty.items).toEqual([])
+    expect(empty.error).toBeTruthy()
+    const [rec2] = await none.installs()
+    expect(rec2.removed).toBe(false)
+    expect(rec2.upstreamDeleted ?? rec2.delisted).toBeUndefined()
+  })
+
+  it('a successful read says when an installed item is deleted upstream or no longer listed', async () => {
+    routes[SH_CAT] = () => json(shIndex([shItem('wayfinder', { collected: collected({ upstreamDeleted: true }) }), GRILL]))
+    const s = makeSh()
+    for (const id of ['wayfinder', 'grill-me']) await s.recordInstall({ cardId: `src_${SH}_${id}`, type: 'skill', slug: `src-${SH}-${id}`, name: id, version: '1', origin: 'github:mattpocock/skills' })
+    await s.catalog(SH)
+    expect((await s.installs()).map((x) => [x.slug, !!x.upstreamDeleted, !!x.delisted])).toEqual([[`src-${SH}-wayfinder`, true, false], [`src-${SH}-grill-me`, false, false]])
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER]))
+    await s.catalog(SH, { refresh: true })
+    expect((await s.installs()).find((x) => x.slug === `src-${SH}-grill-me`)).toMatchObject({ delisted: true, removed: false })
+  })
+
+  it('no market server known: shows the last copy, whatever address it was read from', async () => {
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER]))
+    await makeSh().catalog(SH)
+    const offline = makeSh(async () => '')
+    const cat = await offline.catalog(SH, { refresh: true })
+    expect(cat.stale).toBe(true)
+    expect(cat.items).toHaveLength(1)
+  })
+
+  it('reads the adaptation note for exactly the commit it installs', async () => {
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER]))
+    const DETAIL = `${BASE}/api/market/collected/skills-sh/items/wayfinder`
+    routes[DETAIL] = () => json({ ...WAYFINDER, readme: '---\nname: wayfinder\ndescription: d\n---\nbody', adapt: ADAPT() })
+    const s = makeSh()
+    expect(await s.adaptNote(`src_${SH}_wayfinder`, C1)).toMatch(/use_skill grill-me/)
+    await expect(s.adaptNote(`src_${SH}_wayfinder`, C2)).rejects.toThrow('resolve: collected-adapt-mismatch')
+    const d = await s.detail(`src_${SH}_wayfinder`)
+    expect(d.readme).toMatch(/^---\nname: wayfinder/)
+    expect(d.adapt?.commit).toBe(C1)
+    // An adaptation made for another commit isn't shown as this item's.
+    routes[DETAIL] = () => json({ readme: 'x', adapt: ADAPT(C2) })
+    expect((await s.detail(`src_${SH}_wayfinder`)).adapt).toBeNull()
+    delete routes[DETAIL]
+    await expect(s.adaptNote(`src_${SH}_wayfinder`, C1)).rejects.toThrow('resolve: collected-adapt-unavailable')
+    // User sources have no adaptation.
+    await expect(s.adaptNote('src_0a1b2c3d_poster', C1)).rejects.toThrow('resolve: collected-adapt-unavailable')
+  })
+
+  it('downloads the pinned commit, and an automatic update stops when the package moved to another folder', async () => {
+    routes[SH_CAT] = () => json(shIndex([GRILL]))
+    const PINNED = `https://github.com/mattpocock/skills/archive/${C1}.zip`
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf({ 'skills-x/skills/grill-me/SKILL.md': '---\nname: grill-me\ndescription: d\n---\n', 'skills-x/skills/other/SKILL.md': 'x' }, C1)))
+    const s = makeSh()
+    const cardId = `src_${SH}_grill-me`
+    const got = await s.download(cardId)
+    expect(got).toMatchObject({ commit: C1, path: 'skills/grill-me', collected: { scripts: 2 } })
+    expect(Object.keys((await JSZip.loadAsync(got.buf)).files)).toEqual(['SKILL.md'])
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${SH}-grill-me`, name: 'grill-me', version: '2026.11.19-1', origin: got.origin, commit: C1, path: got.path, ack: { scripts: 2, audit: true }, tree: 'f'.repeat(64) })
+    expect(await s.installRecord(cardId)).toMatchObject({ ack: { scripts: 2, audit: true }, tree: 'f'.repeat(64), type: 'skill' })
+    // An update keeps what the user confirmed unless a new confirmation replaces it.
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${SH}-grill-me`, name: 'grill-me', version: '2026.11.20-148210', origin: got.origin, commit: C1, path: got.path })
+    expect((await s.installRecord(cardId))?.ack).toEqual({ scripts: 2, audit: true })
+    routes[SH_CAT] = () => json(shIndex([shItem('grill-me', { version: '2026.11.21-100000', collected: GRILL.collected }, { path: 'skills/renamed' })]))
+    await s.catalog(SH, { refresh: true })
+    await expect(s.download(cardId, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    expect(s.updatesPaused(cardId)).toBe(false)
+    await s.setDisabled(SH, true)
+    expect(s.updatesPaused(cardId)).toBe(true)
+    await expect(s.item(cardId)).rejects.toThrow('resolve: source-removed')
+  })
+})
