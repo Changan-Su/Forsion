@@ -172,7 +172,8 @@ export interface MemoryBrain {
 }
 
 export interface AssetsBrain {
-  getSkill(id: string): Promise<SkillRecord | null>;
+  getSkill(id: string, forUser?: string): Promise<SkillRecord | null>;
+  getSkillPackage?(userId: string, id: string): Promise<{ files: { path: string; base64: string }[] } | null>;
   listCustomTools(filter?: ListFilter): Promise<CustomToolRecord[]>;
   listForcedCustomTools(appId?: string): Promise<CustomToolRecord[]>;
   /** 技能目录(桌面/TUI 的技能面板用)。可选:旧版云端未实现时调用方降级空列表。 */

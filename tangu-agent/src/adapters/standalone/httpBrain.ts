@@ -408,6 +408,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
     assets: {
+      getSkillPackage: async (_userId, id) => getJson(`/api/brain/skills/${encodeURIComponent(id)}/package`),
       getSkill: async (id: string) => getJson<any>(`/api/brain/skills/${encodeURIComponent(id)}`),
       listCustomTools: async (filter) =>
         getJson<any[]>(`/api/brain/custom-tools?appId=${encodeURIComponent(filter?.appId || '')}&visibleOnly=${filter?.visibleOnly ? 'true' : 'false'}`),

@@ -2401,7 +2401,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const harnessEntries = harnessTagged.kept.map((e) => { const b = filterTaggedText(e.body, tagCtx); harnessTagged.skipped.push(...b.skipped); return b.skipped.length ? { ...e, body: b.text } : e; }); // 别台的装备条目也不收起本机的工具
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
-    const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
+    const skillLoadout = await loadSkillLoadout(userId, appId, { ...agentConfig, execMode }, shelved.skills);
     const enabledSkillIds = skillLoadout.enabledSkillIds;
 
     // C-4:易变上下文(记忆 §2/§3 + sketch 本轮信号)的落点。tail=对话尾部 user 通道(缺省);

@@ -14,6 +14,8 @@ import './globalSkillsLibrary.css'
 import { homeTarget } from '../services/engine/targets'
 import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { SkillUninstallDialog } from './UninstallDialog'
+import { currentPlatform, usesClientInbox } from '../services/platform'
+import { GithubSkillImport } from './GithubSkillImport'
 import { agentName } from '../agentName'
 
 registerMessages({
@@ -25,6 +27,8 @@ registerMessages({
   'globalSkills.allSources': { zh: '全部来源', en: 'All sources' },
   'globalSkills.mine': { zh: '我的技能', en: 'My skills' },
   'globalSkills.packaged': { zh: '随包提供', en: 'Included with Forsion' },
+  'globalSkills.github': { zh: 'GitHub 技能', en: 'GitHub skills' },
+  'globalSkills.githubReady': { zh: '正文和随包文件在云端技能会话中可用。', en: 'The instructions and package files are available in cloud sessions with skills enabled.' },
   'globalSkills.cloud': { zh: '我的云端正文副本', en: 'My cloud text copies' },
   'globalSkills.fromUser': { zh: '自建或导入', en: 'Created or imported' },
   'globalSkills.fromBuiltin': { zh: '内置', en: 'Built in' },
@@ -143,6 +147,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   const [deleting, setDeleting] = useState<SkillCatalogEntry | null>(null)
   // 委托管理员:全局技能只能看清单 —— 详情、新建、改、复制、发布、暂停全局都在那台设备的白名单外;按 Agent 启停在 Agent 的技能页。
   const delegated = isDelegatedAdmin()
+  const githubEnabled = currentPlatform() === 'web' && usesClientInbox() && !delegated
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -155,9 +160,9 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       const error = localResult.reason as Error & { status?: number }
       setCatalogError(error.status === 404 ? '' : t('globalSkills.loadFailed', { error: error.message }))
     }
-    setCloud(CLOUD_SKILLS_ENABLED && cloudResult.status === 'fulfilled' ? cloudResult.value.filter((skill) => skill.source === 'user') : [])
+    setCloud(cloudResult.status === 'fulfilled' ? cloudResult.value.filter((skill) => (CLOUD_SKILLS_ENABLED && skill.source === 'user') || (githubEnabled && skill.id.startsWith('usr_gh_'))) : [])
     setLoading(false)
-  }, [cfg, t])
+  }, [cfg, githubEnabled, t])
 
   useEffect(() => { void refresh() }, [refresh])
   useEffect(() => {
@@ -206,7 +211,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   const showMine = filter === 'all' || filter === 'user'
   const showPackaged = filter === 'all' || filter === 'builtin' || filter === 'bundle'
   const shownPackaged = filter === 'builtin' ? packaged.filter((s) => s.provenance === 'builtin' || s.provenance === 'builtin-mirror') : filter === 'bundle' ? packaged.filter((s) => s.provenance === 'bundle') : packaged
-  const showCloud = filter === 'all' || filter === 'cloud'
+  const showCloud = filter === 'all' || filter === 'cloud' || (githubEnabled && filter === 'user')
   const anyMatches = (showMine && mine.length > 0) || (showPackaged && shownPackaged.length > 0) || (showCloud && cloudMatches.length > 0)
 
   const choose = (item: Selected): void => { setSelected(item); setEditor(null); setMessage('') }
@@ -287,13 +292,14 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   </button>
 
   return <div className="gsk-library">
+    {githubEnabled && <GithubSkillImport />}
     {deleting && <SkillUninstallDialog skillKey={deleting.key} name={deleting.name} onClose={() => setDeleting(null)}
       onDone={() => { setSelected(null); setEditor(null); void refresh() }} />}
     <div className="gsk-toolbar">
       <div className="gsk-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('globalSkills.search')} aria-label={t('globalSkills.search')} /></div>
       <CapabilityMenu label={t('globalSkills.source')} selection items={([
         ['all', 'globalSkills.allSources'], ['user', 'globalSkills.mine'], ['builtin', 'globalSkills.fromBuiltin'], ['bundle', 'globalSkills.fromBundle'], ['cloud', 'globalSkills.cloud'],
-      ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || id !== 'cloud').map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
+      ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || githubEnabled || id !== 'cloud').map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
         <span>{t(({ all: 'globalSkills.allSources', user: 'globalSkills.mine', builtin: 'globalSkills.fromBuiltin', bundle: 'globalSkills.fromBundle', cloud: 'globalSkills.cloud' } as const)[filter])}</span><ChevronDown size={13} />
       </CapabilityMenu>
       {catalog !== null && !delegated && <CapabilityMenu label={t('globalSkills.add')} className="btn primary sm" items={[
@@ -311,7 +317,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
         {catalog === null && <p className="gsk-list-message">{loading ? t('globalSkills.loading') : catalogError || t('globalSkills.unavailable')}</p>}
         {catalog !== null && showMine && <section className="gsk-group"><div className="gsk-group-head"><strong>{t('globalSkills.mine')}</strong><span>{mine.length}</span></div>{mine.length ? mine.map(catalogRow) : !lowerQuery && <p className="gsk-empty">{t('globalSkills.empty')}</p>}</section>}
         {catalog !== null && showPackaged && !!shownPackaged.length && <section className="gsk-group"><button className="gsk-group-head gsk-group-toggle" type="button" aria-expanded={packagedOpen || !!lowerQuery || filter !== 'all'} onClick={() => setPackagedOpen((open) => !open)}><strong>{t('globalSkills.packaged')}</strong><span>{shownPackaged.length}</span>{packagedOpen || !!lowerQuery || filter !== 'all' ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>{(packagedOpen || !!lowerQuery || filter !== 'all') && shownPackaged.map(catalogRow)}</section>}
-        {showCloud && !!cloudMatches.length && <section className="gsk-group"><div className="gsk-group-head"><strong>{t('globalSkills.cloud')}</strong><span>{cloudMatches.length}</span></div>{cloudMatches.map((skill) => <button type="button" key={skill.id} className={`gsk-row${selected?.kind === 'cloud' && selected.id === skill.id ? ' selected' : ''}`} onClick={() => choose({ kind: 'cloud', id: skill.id })} aria-pressed={selected?.kind === 'cloud' && selected.id === skill.id}><span className="gsk-row-icon"><UploadCloud size={15} /></span><span className="gsk-row-copy"><strong>{skill.name}</strong><small>{skill.description || skill.id}</small></span><ChevronRight size={14} className="gsk-chevron" /></button>)}</section>}
+        {showCloud && !!cloudMatches.length && <section className="gsk-group"><div className="gsk-group-head"><strong>{t(githubEnabled ? 'globalSkills.github' : 'globalSkills.cloud')}</strong><span>{cloudMatches.length}</span></div>{cloudMatches.map((skill) => <button type="button" key={skill.id} className={`gsk-row${selected?.kind === 'cloud' && selected.id === skill.id ? ' selected' : ''}`} onClick={() => choose({ kind: 'cloud', id: skill.id })} aria-pressed={selected?.kind === 'cloud' && selected.id === skill.id}><span className="gsk-row-icon"><UploadCloud size={15} /></span><span className="gsk-row-copy"><strong>{skill.name}</strong><small>{skill.description || skill.id}</small></span><ChevronRight size={14} className="gsk-chevron" /></button>)}</section>}
         {!loading && catalog !== null && !anyMatches && (lowerQuery || !showMine) && <p className="gsk-list-message">{t(lowerQuery ? 'globalSkills.noResults' : 'globalSkills.empty')}</p>}
       </div>
       <div className="gsk-detail" key={editor ? `editor:${editor.kind}` : JSON.stringify(selected)}>
@@ -348,8 +354,8 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
           <div className="gsk-meta"><span>{t('globalSkills.path')}</span><code title={selectedCatalog.path}>{selectedCatalog.path}</code></div>
           {detailError ? <p className="gsk-message" role="alert">{detailError}</p> : detailLoading || !currentDetail ? <p className="gsk-detail-loading"><Loader2 size={14} className="spin" />{t('globalSkills.loading')}</p> : <><section className="gsk-content"><h4>{t('globalSkills.content')}</h4><div className="gsk-content-body md-body">{currentDetail.content ? <Markdown content={currentDetail.content} allowRun={false} /> : <p>{t('globalSkills.noContent')}</p>}</div></section>{!!currentDetail.files?.length && <section className="gsk-files"><h4>{t('globalSkills.files')} · {currentDetail.files.length}</h4><div>{currentDetail.files.map((file) => <span key={file.path}><FileText size={12} />{file.path}</span>)}</div></section>}</>}
         </> : selectedCloud ? <>
-          <div className="gsk-detail-head"><div><span>{t('globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
-          <p className="gsk-cloud-note">{t('globalSkills.cloudExplanation')}</p><p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>
+          <div className="gsk-detail-head"><div><span>{t(githubEnabled ? 'globalSkills.github' : 'globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
+          <p className="gsk-cloud-note">{t(githubEnabled ? 'globalSkills.githubReady' : 'globalSkills.cloudExplanation')}</p>{!githubEnabled && <p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>}
           <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t('globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(homeTarget(), selectedCloud.id), t('globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
         </> : catalog !== null && !catalog.length && !cloud.length
           ? <EmptyState icon={Sparkles} title={t('globalSkills.emptyTitle')} line={t('globalSkills.emptyLine')} data-gsk-empty=""

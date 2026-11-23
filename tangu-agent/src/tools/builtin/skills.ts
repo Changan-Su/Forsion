@@ -6,7 +6,7 @@
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
-const getSkill = (id: string) => deps().brain.assets.getSkill(id);
+import { stageSessionSkill } from '../../sandbox/sessionSandbox.js';
 
 const USE_SKILL_MAX_CHARS = 120_000;
 
@@ -114,9 +114,16 @@ export const skillsProvider: ToolProvider = {
         if (!ctx.enabledSkillIds || !ctx.enabledSkillIds.includes(id)) {
           return `Skill "${id}" is not available in this session.`;
         }
-        const s = await getSkill(id);
+        const s = await deps().brain.assets.getSkill(id, ctx.userId);
         if (!s) return `Skill "${id}" not found.`;
         // 文档类技能：云端 Python 沙箱用精简 python 库速查表替代官方 docx-js/OOXML 长正文（生成量降一个数量级）。
+        if (id.startsWith('usr_gh_')) {
+          if (ctx.execMode !== 'sandbox') return 'This cloud skill package is available in cloud sandbox sessions.';
+          const load = deps().brain.assets.getSkillPackage;
+          if (!load) return 'Error: this backend cannot load cloud skill packages.';
+          const folder = await stageSessionSkill(ctx, id, () => load(ctx.userId, id), ctx.signal);
+          return `# Skill: ${s.name}\n\nSkill folder in the Python sandbox: /workspace/${folder}\nResolve scripts and references relative to this folder.\n\n${s.content?.slice(0, USE_SKILL_MAX_CHARS)}`;
+        }
         const cheat = CLOUD_SKILL_CHEATSHEETS.find((c) => c.test.test(String(s.name || '')));
         if (cheat) return `# Skill: ${cheat.title}\n\n${cheat.body}`;
         const body = (s.content && String(s.content).trim()) || (s.description && String(s.description).trim()) || '';

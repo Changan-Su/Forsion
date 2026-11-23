@@ -31,7 +31,7 @@ import {
   runPython, DEFAULT_TIMEOUT_MS, MAX_CAPTURE, type ExecResult,
 } from './dockerProvider.js';
 import { hydrateWorkspaceToDir, snapshotDirToWorkspace, scopeOf } from '../tools/fileWorkspace.js';
-import { readConfined, unlinkConfined } from './confinedFs.js';
+import { readConfined, unlinkConfined, writeConfined } from './confinedFs.js';
 
 export interface SessionKey {
   userId: string;
@@ -193,6 +193,7 @@ class PythonKernel {
 
 // ── 会话状态 ──────────────────────────────────────────────────────────────
 interface Session {
+  skillFolders?: Map<string, string>;
   ks: string;
   key: SessionKey;
   id: string;            // 容器/目录名用的短 hash
@@ -359,6 +360,29 @@ async function ensureContainerKernel(s: Session, signal?: AbortSignal): Promise<
 export async function getSessionDir(k: SessionKey): Promise<string> {
   const s = await getOrCreateSession(k);
   return s.dir;
+}
+
+/** Stage a user-owned package once in this sandbox. Dot directories are excluded from workspace snapshots. */
+export async function stageSessionSkill(k: SessionKey, id: string, load: () => Promise<{ files: { path: string; base64: string }[] } | null>, signal?: AbortSignal): Promise<string> {
+  const session = await getOrCreateSession(k, signal);
+  return withSessionLock(session, async () => {
+    const folders = session.skillFolders ??= new Map();
+    const cached = folders.get(id);
+    if (cached && (await fsp.lstat(path.join(session.dir, cached)).catch(() => null))?.isDirectory()) return cached;
+    const pkg = await load();
+    if (!pkg?.files.length) throw new Error('Cloud skill package is unavailable');
+    const dir = await fsp.mkdtemp(path.join(session.dir, '.forsion-skill-'));
+    const folder = path.basename(dir);
+    try {
+      for (const file of pkg.files) {
+        signal?.throwIfAborted();
+        if (!file.path.split('/').every(part => part && part !== '.' && part !== '..' && !part.includes('\\'))) throw new Error('Invalid skill file path');
+        await writeConfined(session.dir, folder + '/' + file.path, Buffer.from(file.base64, 'base64'));
+      }
+      folders.set(id, folder);
+      return folder;
+    } catch (e) { await fsp.rm(dir, { recursive: true, force: true }); throw e; }
+  }, signal);
 }
 
 /** 标记会话工作区有未回写改动（write_file 后调用），驱动 run 末 snapshot。 */
