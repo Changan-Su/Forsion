@@ -17,8 +17,29 @@ import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/ses
 import { listConfined, readConfined, writeConfined, unlinkConfined, anchoredRoot, joinInside } from '../sandbox/confinedFs.js';
 import { noteWorkspaceUpload, forgetWorkspaceUpload } from '../services/workspaceUploads.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
+import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
+import { assertAccountStorage, markAccountUsageDirty, StorageLimitError } from '../services/accountStorage.js';
+import { mkdirSync } from 'node:fs';
 
 const router = Router();
+
+// ── 多账号模式(core/accountScope.ts):会话的工作区文件 / 上传落在这个账号自己的文件夹里 ──────────────────────────────
+// `<accountHome>/uploads/<sessionId>/`:文件工具读得到(账号域)、算进账号的磁盘上限,不碰进程级的会话沙箱目录(那在 os.tmpdir() 下、
+// 全进程共用一个淘汰池)和云端存储(进程那一份凭据)。客户端给的 project / appId 一概不认 —— 这里只有「这个账号的这个会话」。
+// 会话 id 由多账号的接口层先核过:必须是 UUID;上传会当场替当前账号认领(已是别人的 → 404,同 POST /agent/runs);
+// 只读 / 删除不认领,别人的 id 与没人用过的 id 回一样的结果(req.foreignSession 时一律按空的会话回)。
+const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function accountSessionDir(sessionId: string, create: boolean): string {
+  if (!SESSION_UUID_RE.test(sessionId)) throw Object.assign(new Error('sessionId must be a UUID'), { status: 400 });
+  const dir = path.join(accountHome(requireAccountId('workspace files')), 'uploads', sessionId.toLowerCase());
+  if (create) mkdirSync(dir, { recursive: true });
+  return dir;
+}
+const foreignSession = (req: any): boolean => req?.foreignSession === true;
+const maError = (res: any, e: any, what: string): void => {
+  if (typeof e?.status === 'number' && e.status < 500) return void res.status(e.status).json({ detail: e.message });
+  res.status(500).json({ detail: `${what} failed` });
+};
 
 /** appId 缺省回退本进程 profile(microserver='ai-studio' 与旧硬编码等价;standalone='tangu')。 */
 const defaultAppId = (v: unknown): string =>
@@ -107,12 +128,20 @@ router.get('/agent/workspace/list', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const sessionId = String(req.query.sessionId || '');
     if (!sessionId) return res.status(400).json({ detail: 'sessionId is required' });
+    if (isMultiAccount()) {
+      const dir = accountSessionDir(sessionId, false);
+      const files = foreignSession(req) ? [] : (await listConfined(dir)).map((e) => ({
+        path: '/' + e.rel, size: e.size, mimeType: mimeForName(path.basename(e.rel)), updatedAt: e.mtimeMs,
+      }));
+      return res.json({ files, project: null });
+    }
     const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
     const files = (await isCloudStorageUp(userId, r.appId))
       ? await listWorkspaceMetas(userId, r.appId, r.scope)
       : await localList(r.key);
     res.json({ files, project: r.scope.project || null });
   } catch (e: any) {
+    if (isMultiAccount()) return maError(res, e, 'list');
     res.status(500).json({ detail: e?.message || 'list failed' });
   }
 });
@@ -124,13 +153,21 @@ router.get('/agent/workspace/read', authMiddleware, async (req: AuthRequest, res
     const sessionId = String(req.query.sessionId || '');
     const p = String(req.query.path || '');
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
-    const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
-    const f = (await isCloudStorageUp(userId, r.appId))
-      ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
-      : await localRead(r.key, p);
+    let f: { content: Buffer; mimeType: string } | null;
+    if (isMultiAccount()) {
+      const dir = accountSessionDir(sessionId, false);
+      const content = foreignSession(req) ? null : await readConfined(dir, p);
+      f = content ? { content, mimeType: mimeForName(path.basename(p)) } : null;
+    } else {
+      const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
+      f = (await isCloudStorageUp(userId, r.appId))
+        ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
+        : await localRead(r.key, p);
+    }
     if (!f) return res.status(404).json({ detail: 'file not found' });
     res.json({ path: p, mimeType: f.mimeType, content: f.content.toString('base64'), encoding: 'base64', size: f.content.length });
   } catch (e: any) {
+    if (isMultiAccount()) return maError(res, e, 'read');
     res.status(500).json({ detail: e?.message || 'read failed' });
   }
 });
@@ -142,16 +179,24 @@ router.get('/agent/workspace/download', authMiddleware, async (req: AuthRequest,
     const sessionId = String(req.query.sessionId || '');
     const p = String(req.query.path || '');
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
-    const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
-    const f = (await isCloudStorageUp(userId, r.appId))
-      ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
-      : await localRead(r.key, p);
+    let f: { content: Buffer; mimeType: string } | null;
+    if (isMultiAccount()) {
+      const dir = accountSessionDir(sessionId, false);
+      const content = foreignSession(req) ? null : await readConfined(dir, p);
+      f = content ? { content, mimeType: mimeForName(path.basename(p)) } : null;
+    } else {
+      const r = await resolveScope(userId, sessionId, req.query.project, req.query.appId);
+      f = (await isCloudStorageUp(userId, r.appId))
+        ? await readWorkspaceFileRaw(userId, r.appId, r.scope, p)
+        : await localRead(r.key, p);
+    }
     if (!f) return res.status(404).json({ detail: 'file not found' });
     const filename = p.split('/').filter(Boolean).pop() || 'file';
     res.setHeader('Content-Type', f.mimeType || 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.send(f.content);
   } catch (e: any) {
+    if (isMultiAccount()) return maError(res, e, 'download');
     res.status(500).json({ detail: e?.message || 'download failed' });
   }
 });
@@ -162,6 +207,17 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
     const userId = req.user!.userId;
     const { sessionId, appId, path: p, project } = req.body || {};
     if (!sessionId || !p) return res.status(400).json({ detail: 'sessionId and path are required' });
+    if (isMultiAccount()) {
+      const dir = accountSessionDir(String(sessionId), false);
+      const ok = foreignSession(req) ? false : await unlinkConfined(dir, String(p));
+      if (ok) {
+        markAccountUsageDirty(requireAccountId('workspace delete'));
+        const root = await anchoredRoot(dir);
+        const abs = root && joinInside(root, String(p));
+        if (abs) forgetWorkspaceUpload(String(sessionId), abs);
+      }
+      return res.json({ ok });
+    }
     const r = await resolveScope(userId, String(sessionId), project, appId);
     let ok: boolean;
     if (await isCloudStorageUp(userId, r.appId)) {
@@ -179,6 +235,7 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
     }
     res.json({ ok });
   } catch (e: any) {
+    if (isMultiAccount()) return maError(res, e, 'delete');
     res.status(500).json({ detail: e?.message || 'delete failed' });
   }
 });
@@ -189,6 +246,29 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
     const { sessionId, appId, files, project } = req.body || {};
     if (!sessionId || !Array.isArray(files)) {
       return res.status(400).json({ detail: 'sessionId and files[] are required' });
+    }
+    if (isMultiAccount()) {
+      const me = requireAccountId('workspace upload');
+      const dir = accountSessionDir(String(sessionId), true);
+      const remote = !!parseRemoteOrigin(req.headers);
+      let saved = 0;
+      const errors: string[] = [];
+      for (const f of files) {
+        if (!f || typeof f.path !== 'string') continue;
+        try {
+          const buf = f.encoding === 'base64' ? Buffer.from(String(f.content || ''), 'base64') : Buffer.from(String(f.content || ''), 'utf-8');
+          await assertAccountStorage(me, buf.length); // 每个文件按它的大小再判一次(请求体那道只看总大小)
+          const abs = await writeConfined(dir, f.path, buf);
+          markAccountUsageDirty(me);
+          noteWorkspaceUpload(String(sessionId), abs, { remote });
+          saved++;
+        } catch (e: any) {
+          if (e instanceof StorageLimitError) { errors.push(`${f.path}: ${e.message}`); break; }
+          errors.push(`${f.path}: ${e?.message === 'invalid path' ? 'invalid path' : 'could not be saved'}`);
+        }
+      }
+      if (!saved && errors.length && errors.every((x) => x.includes('Storage limit'))) return res.status(507).json({ code: 'STORAGE_LIMIT', detail: errors[0] });
+      return res.json({ success: true, saved, total: files.length, errors });
     }
     const r = await resolveScope(userId, String(sessionId), project, appId);
     // 登记记下来源:远端上传只报给带远程污点的 run,本机上传只报给本机 run(见 workspaceUploads.ts)
@@ -218,6 +298,7 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
     }
     res.json({ success: true, saved, total: files.length, errors });
   } catch (e: any) {
+    if (isMultiAccount()) return maError(res, e, 'upload');
     res.status(500).json({ detail: e?.message || 'upload failed' });
   }
 });

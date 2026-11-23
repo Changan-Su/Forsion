@@ -54,7 +54,10 @@ type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 /** 碰 id 之前的核对。run / session = 这个账号的库里查得到这条 run / 会话(查不到 404,别人的和不存在的一样;先于工作目录钳制,
  *  与 handler 自己「先查会话、再看请求体」的次序一致)。
  *  newSession = 会新建会话的接口里客户端给的会话 id:必须是 UUID(400);当场替当前账号认领,已被别的账号认领过 → 404(认领表见 multiAccountSqliteHost)。 */
-type Own = { kind: 'run'; param: string } | { kind: 'session'; param: string } | { kind: 'newSession'; body: string };
+type Own = { kind: 'run'; param: string } | { kind: 'session'; param: string } | { kind: 'newSession'; body: string }
+  /** sessionRef = 只读 / 删除接口里客户端给的会话 id(查询串或请求体):必须是 UUID(400);不认领。属于别的账号 → 标 req.foreignSession,
+   *  handler 按「空的、没人用过的会话」回(与不存在的 id 一模一样)。 */
+  | { kind: 'sessionRef'; query?: string; body?: string };
 /** 客户端给的新会话 id 的格式:UUID(8-4-4-4-12 十六进制,大小写不限)。引擎内部建的会话一律 randomUUID,不受影响。 */
 const SESSION_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 客户端给的工作目录:必须在账号文件夹里。where = 'body'(建会话 / 改会话:project_path + agent_config.cwd / extraRoots)、
@@ -103,6 +106,16 @@ const ROUTE_ALLOWLIST: ReadonlyArray<RouteRule> = [
   { quota: true, method: 'POST', path: '/agent/log', why: 'local memory brain under this account agents/<slug>/LOG' },
   // ── 技能 ──
   { method: 'GET', path: '/agent/skills', why: 'local skills from this account skills/ + packaged / bundle skills (read-only); cloud skills off' },
+  // ── 会话的工作区文件 / 上传(routes/workspace.ts 的多账号分支:<accountHome>/uploads/<sessionId>/,不碰进程级会话沙箱与云端存储)──
+  { method: 'GET', path: '/agent/workspace/list', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'lists <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (empty)' },
+  { method: 'GET', path: '/agent/workspace/read', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'reads inside <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (404)' },
+  { method: 'GET', path: '/agent/workspace/download', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'same as read, as a download' },
+  { method: 'POST', path: '/agent/workspace/delete', own: [{ kind: 'sessionRef', body: 'sessionId' }], why: 'unlinks inside <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (ok:false)' },
+  { quota: true, method: 'POST', path: '/agent/workspace/upload', own: [{ kind: 'newSession', body: 'sessionId' }], why: 'client session id must be a UUID and is claimed for this account (taken by another account = 404); writes inside <accountHome>/uploads/<sessionId> via confinedFs; storage limit per file' },
+  // ── 模型目录:进程那一份(同一份目录给所有人看);多账号模式去掉直连 provider 的 baseUrl,不报覆盖可写 ──
+  { method: 'GET', path: '/agent/models', why: 'process model catalogue (the same for every account); direct provider baseUrl stripped in multi-account mode; per-model overrides read from this account config only' },
+  // ── 待处理的审批 / 询问计数(services/pendingPromptIndex.ts 按账号分:条目记属主、只列当前账号的、清理只看当前账号的、版本号按账号数)──
+  { method: 'GET', path: '/agent/approvals/pending', why: 'per-account view of the pending prompt index (entries tagged with their account; sweep and rev per account)' },
 ];
 
 // ── brain:只留按人无关或按人本地的能力 ─────────────────────────────────────────────────────────────
@@ -184,6 +197,12 @@ function ownershipGuard(host: MultiAccountHost, own: Own[] | undefined): Request
         } else if (o.kind === 'session') {
           const id = req.params[o.param];
           if (typeof id !== 'string' || (await deps().state.getSessionOwner(id)) !== me) return void res.status(404).json({ detail: 'Session not found' });
+        } else if (o.kind === 'sessionRef') {
+          const raw = o.query ? req.query[o.query] : (req.body || {})[o.body!];
+          if (raw === undefined || raw === null || raw === '') continue; // 缺 id:交给 handler 照常 400
+          if (typeof raw !== 'string' || !SESSION_ID_UUID_RE.test(raw)) return void res.status(400).json({ detail: 'sessionId must be a UUID' });
+          const owner = host.sessionOwner(raw);
+          if (owner !== undefined && owner !== me) (req as any).foreignSession = true;
         } else {
           const raw = (req.body || {})[o.body];
           if (raw === undefined || raw === null || raw === '') continue; // 缺 id:交给 handler 照常 400

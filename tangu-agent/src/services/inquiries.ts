@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
+import { waitingOnUser } from './runAdmission.js';
 import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun } from './remoteActivity.js';
 
 export interface InquiryRequestPayload {
@@ -66,7 +67,8 @@ export function requestInquiry(
   }
   if (isSiblingMessageRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_SIBLING_ANSWER);
   const inquiryId = nextInquiryId();
-  return new Promise<string>((resolve) => {
+  // 多账号模式:等用户回答时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样
+  return waitingOnUser(runId, new Promise<string>((resolve) => {
     const onAbort = (): void => {
       pending.delete(inquiryId);
       untrackPrompt(inquiryId, 'expired'); // 中止不发 inquiry_result:索引(通知 / 角标)在这里撤(P1 · K3)
@@ -82,7 +84,7 @@ export function requestInquiry(
     });
     void publish(runId, 'inquiry_request', { inquiryId, ...payload });
     trackPrompt({ id: inquiryId, kind: payload.kind === 'plan' ? 'plan' : 'inquiry', runId });
-  });
+  }), signal);
 }
 
 /** TUI 直调 / HTTP 端点调用:兑现某询问。false = 该 id 已不在等待(重复/过期)。

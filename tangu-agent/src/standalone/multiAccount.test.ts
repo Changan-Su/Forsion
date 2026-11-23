@@ -100,7 +100,7 @@ describe('createMultiAccountApp', () => {
   });
 
   it('closes everything outside the route allowlist with 403', async () => {
-    for (const [m, p] of [['GET', '/agent/tools'], ['GET', '/agent/models'], ['GET', '/agent/workspace/list?sessionId=x'], ['GET', '/agent/approvals/pending'], ['PUT', '/agent/compaction'], ['GET', '/agent/human/CALENDAR.db'], ['GET', '/agent/plugins'], ['GET', '/agent/nope']]) {
+    for (const [m, p] of [['GET', '/agent/tools'], ['GET', '/agent/models/quota?model=x'], ['PUT', '/agent/models/overrides'], ['GET', '/agent/projects'], ['GET', '/agent/approvals/stream'], ['GET', '/agent/approval-rules'], ['PUT', '/agent/compaction'], ['GET', '/agent/human/CALENDAR.db'], ['GET', '/agent/plugins'], ['GET', '/agent/nope']]) {
       expect((await call(m, p)).status, `${m} ${p}`).toBe(403);
     }
   });

@@ -1,4 +1,5 @@
 import { standInOf, type StandInDomain } from './accessDomain.js';
+import { waitingOnUser } from './runAdmission.js';
 import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
@@ -674,7 +675,8 @@ function requestApprovalNow(
   const approvalId = nextApprovalId();
   // P1 · K3:受保护路径的审批只在执行设备本机批准 —— 兑现路由 / 异步审批 / 通道据此拒远端「批准」,卡片据此不给远端批准键。
   const localOnly = reason?.kind === 'protected';
-  return new Promise<ApprovalDecision>((resolve) => {
+  // 多账号模式:等用户批准时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样
+  return waitingOnUser(runId, new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
       untrackPrompt(approvalId, 'expired'); // 中止分支不发 approval_result:索引(通知 / 角标)要在这里撤,否则残留
@@ -701,7 +703,7 @@ function requestApprovalNow(
       toolCallId: call.id, // 客户端据此把审批挂回对应的工具卡(挂起的调用在卡上显示「等你批准」)
     });
     trackPrompt({ id: approvalId, kind: 'approval', runId, tool: call.function.name, localOnly, origin });
-  });
+  }), signal);
 }
 
 /**

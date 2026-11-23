@@ -18,6 +18,7 @@
  * ⚠️ 本模块不起任何定时器:sweepTerminal 只在路由里惰性调用(≤ 每 30s 一次),否则会拖住测试进程与引擎退出。
  */
 import { randomUUID } from 'node:crypto';
+import { currentAccountId, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { getRun } from './runStore.js';
 import { query } from '../core/db.js';
 import { effectiveRemote, remoteOf, type RemoteCallerKind, type RemoteInfo, type RemoteVia } from './remoteOrigin.js';
@@ -61,13 +62,30 @@ interface Tracked {
   createdAt: number;
   /** 解析完成、已发 added 的条目;未解析 = null。 */
   item: PendingPrompt | null;
+  /** 多账号模式:登记时所在的账号(属主)。列表 / 计数 / 清理 / 版本号都只看当前账号的。单人模式 undefined。 */
+  account?: string;
 }
 const entries = new Map<string, Tracked>();
 const listeners = new Set<(c: PromptChange) => void>();
 
-const nextRev = (): string => `${BOOT_ID}:${++seq}`;
+// 多账号模式:版本号按账号各数各的 —— 别的账号的审批来去不改变我的版本号(否则轮询这个号就能看出别人什么时候在等审批)。
+const seqByAccount = new Map<string, number>();
+const nextRev = (account?: string): string => {
+  if (isMultiAccount() && account) {
+    const n = (seqByAccount.get(account) ?? 0) + 1;
+    seqByAccount.set(account, n);
+    return `${BOOT_ID}:${n}`;
+  }
+  return `${BOOT_ID}:${++seq}`;
+};
 export function promptsRev(): string {
+  if (isMultiAccount()) return `${BOOT_ID}:${seqByAccount.get(requireAccountId('promptsRev')) ?? 0}`;
   return `${BOOT_ID}:${seq}`;
+}
+/** 多账号模式下这一条是不是当前账号的(单人模式恒 true)。 */
+function visible(t: Tracked): boolean {
+  if (!isMultiAccount()) return true;
+  return t.account !== undefined && t.account === requireAccountId('pending prompts');
 }
 
 function emit(c: PromptChange): void {
@@ -118,7 +136,7 @@ async function resolveMeta(t: Tracked): Promise<Pick<PendingPrompt, 'sessionId' 
 /** 登记一条正在等人的提示(approvals.ts / inquiries.ts 在发出请求事件之后调)。解析是异步的,完成后才发 added。 */
 export function trackPrompt(p: { id: string; kind: PromptKind; runId: string; tool?: string; localOnly?: boolean; origin?: RemoteInfo }): void {
   if (!p?.id || entries.has(p.id)) return;
-  const t: Tracked = { input: p, createdAt: Date.now(), item: null };
+  const t: Tracked = { input: p, createdAt: Date.now(), item: null, ...(isMultiAccount() ? { account: currentAccountId() } : {}) };
   entries.set(p.id, t);
   // Promise.resolve().then:deps() 没装配时 getRun 会**同步**抛,不包一层就漏成未处理的 rejection(审批单测不装配引擎)。
   void Promise.resolve()
@@ -131,7 +149,7 @@ export function trackPrompt(p: { id: string; kind: PromptKind; runId: string; to
         tool: p.kind === 'approval' ? (p.tool || null) : null, localOnly: p.localOnly === true, remote: meta.remote, createdAt: t.createdAt,
       };
       t.item = item;
-      emit({ type: 'added', rev: nextRev(), item });
+      emit({ type: 'added', rev: nextRev(t.account), item });
     });
 }
 
@@ -141,13 +159,13 @@ export function untrackPrompt(id: string, outcome: PromptOutcome, by?: AnswerBy)
   if (!t) return;
   entries.delete(id);
   if (!t.item) return;
-  emit({ type: 'removed', rev: nextRev(), id, sessionId: t.item.sessionId, outcome, ...(by ? { by } : {}) });
+  emit({ type: 'removed', rev: nextRev(t.account), id, sessionId: t.item.sessionId, outcome, ...(by ? { by } : {}) });
 }
 
 /** 已上架(解析完)的条目快照,按登记时间升序。 */
 export function listPrompts(): PendingPrompt[] {
   const out: PendingPrompt[] = [];
-  for (const t of entries.values()) if (t.item) out.push({ ...t.item, remote: t.item.remote ? { ...t.item.remote } : null });
+  for (const t of entries.values()) if (t.item && visible(t)) out.push({ ...t.item, remote: t.item.remote ? { ...t.item.remote } : null });
   return out.sort((a, b) => a.createdAt - b.createdAt);
 }
 
@@ -156,7 +174,7 @@ export function sessionAttention(): SessionAttention[] {
   const by = new Map<string, { approvals: number; inquiries: number; localOnly: number; oldest: number; remote: boolean }>();
   for (const t of entries.values()) {
     const it = t.item;
-    if (!it || !it.sessionId) continue;
+    if (!it || !it.sessionId || !visible(t)) continue;
     const s = by.get(it.sessionId) ?? { approvals: 0, inquiries: 0, localOnly: 0, oldest: it.createdAt, remote: false };
     if (it.kind === 'approval') s.approvals++;
     else s.inquiries++;
@@ -187,6 +205,8 @@ let sweeping: Promise<void> | null = null;
  * 正常的中止分支由 approvals.ts / inquiries.ts 的 onAbort 显式撤下。≤ 每 30s 真跑一次;库读失败什么都不撤。
  */
 export function sweepTerminal(): Promise<void> {
+  // 多账号模式:只清当前账号的条目(查的是当前账号的库 —— 拿别人的 run id 去查,查不到会被误当成「已不存在」撤掉),节流也按账号。
+  if (isMultiAccount()) return sweepAccount(requireAccountId('sweepTerminal'));
   if (sweeping) return sweeping;
   const now = Date.now();
   if (now - lastSweep < SWEEP_EVERY_MS) return Promise.resolve();
@@ -207,10 +227,38 @@ export function sweepTerminal(): Promise<void> {
   return sweeping;
 }
 
+const sweepingByAccount = new Map<string, Promise<void>>();
+const lastSweepByAccount = new Map<string, number>();
+function sweepAccount(account: string): Promise<void> {
+  const running = sweepingByAccount.get(account);
+  if (running) return running;
+  const now = Date.now();
+  if (now - (lastSweepByAccount.get(account) ?? 0) < SWEEP_EVERY_MS) return Promise.resolve();
+  lastSweepByAccount.set(account, now);
+  const old = [...entries.entries()].filter(([, t]) => t.account === account && now - t.createdAt >= SWEEP_MIN_AGE_MS);
+  if (!old.length) return Promise.resolve();
+  const runIds = [...new Set(old.map(([, t]) => t.input.runId))];
+  const p = (async () => {
+    try {
+      const rows = await query<any[]>(`SELECT id, status FROM agent_runs WHERE id IN (${runIds.map(() => '?').join(', ')})`, runIds);
+      const status = new Map<string, string>((rows || []).map((r: any) => [String(r.id), String(r.status)]));
+      for (const [id, t] of old) {
+        const st = status.get(t.input.runId);
+        if (st === undefined || TERMINAL.has(st)) untrackPrompt(id, 'expired');
+      }
+    } catch { /* 读失败:不撤任何条目 */ }
+  })().finally(() => { sweepingByAccount.delete(account); });
+  sweepingByAccount.set(account, p);
+  return p;
+}
+
 /** @internal 测试用:清空登记表与节流时钟(不发任何事件)。 */
 export function __resetPromptIndexForTests(): void {
   entries.clear();
   listeners.clear();
   lastSweep = 0;
   sweeping = null;
+  seqByAccount.clear();
+  sweepingByAccount.clear();
+  lastSweepByAccount.clear();
 }

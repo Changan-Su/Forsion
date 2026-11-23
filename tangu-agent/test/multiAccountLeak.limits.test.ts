@@ -63,8 +63,9 @@ afterAll(async () => { await E?.dispose(); rmSync(env.root, { recursive: true, f
 afterEach(async () => {
   // every slot taken is given back
   const until = Date.now() + 10_000;
-  while (Date.now() < until && (admissionSnapshot().running.length || admissionSnapshot().waiting.length)) await sleep(50);
-  expect(admissionSnapshot()).toEqual({ running: [], waiting: [] });
+  const busy = () => { const a = admissionSnapshot(); return a.running.length + a.waiting.length + a.onUser.length; };
+  while (Date.now() < until && busy()) await sleep(50);
+  expect(admissionSnapshot()).toEqual({ running: [], waiting: [], onUser: [] });
   setLimits(null);
 });
 
@@ -193,6 +194,55 @@ describe('multi-account limits: tasks at once', () => {
     a2.release();
     expect((await E.client.follow('alice', a2.runId, { timeoutMs: 15_000 })).status).toBe('done');
   }, 60_000);
+});
+
+describe('multi-account limits: waiting on the person', () => {
+  /** a run that asks the user a question first and finishes once answered */
+  async function asking(account: string, label: string) {
+    const s = E.fake.script(account, label, steps([{ calls: [{ name: 'ask_user', args: { question: `${label}?` } }] }], `${label} done`));
+    const r = await startRun(E.client, account, s);
+    expect(r.resp.status, r.resp.text).toBe(200);
+    const f = await E.client.follow(account, r.runId!, { timeoutMs: 10_000, autoAnswer: false, until: (ev) => ev.type === 'inquiry_request' });
+    expect(f.status).toBe('until');
+    const inquiry = String(f.events.find((e) => e.type === 'inquiry_request')?.payload?.inquiryId);
+    return { runId: r.runId!, answer: (text = 'yes') => E.client.call(account, 'POST', `/agent/runs/${r.runId}/inquiries/${inquiry}`, { body: { answer: text } }) };
+  }
+
+  it('a run waiting for an answer gives its slot back; once answered it takes it again before going on', async () => {
+    const q = await asking('alice', 'asks-1');
+    expect(admissionSnapshot().onUser.map((x) => x.runId)).toContain(q.runId);
+    const a2 = await held('alice', 'while-asking');
+    expect(await within(a2.reached, 5_000)).toBe(true); // alice's only slot was free
+    expect((await q.answer()).status).toBe(200);
+    await sleep(300);
+    expect(admissionSnapshot().waiting.find((x) => x.runId === q.runId)?.waitingFor).toBe('account');
+    a2.release();
+    expect((await E.client.follow('alice', a2.runId, { timeoutMs: 15_000 })).status).toBe('done');
+    expect((await E.client.follow('alice', q.runId, { timeoutMs: 15_000 })).status).toBe('done');
+  }, 60_000);
+
+  it('runs waiting for answers do not fill the engine: with three accounts asking, a fourth runs at once', async () => {
+    setLimits({ concurrentRuns: 3 });
+    const qs = [await asking('alice', 'e-a'), await asking('bob', 'e-b'), await asking('carol', 'e-c')];
+    const d = await held('dave', 'e-d');
+    expect(await within(d.reached, 5_000)).toBe(true);
+    d.release();
+    await E.client.follow('dave', d.runId, { timeoutMs: 15_000 });
+    for (const [i, q] of qs.entries()) {
+      const acct = ['alice', 'bob', 'carol'][i];
+      expect((await q.answer()).status).toBe(200);
+      expect((await E.client.follow(acct, q.runId, { timeoutMs: 15_000 })).status).toBe('done');
+    }
+  }, 60_000);
+
+  it('the turn clock stops while waiting for an answer', async () => {
+    setLimits({ runMinutes: 0.02 }); // 1.2 s
+    const q = await asking('alice', 'slow-answer');
+    await sleep(2_500);
+    expect((await q.answer()).status).toBe(200);
+    expect((await E.client.follow('alice', q.runId, { timeoutMs: 15_000 })).status).toBe('done');
+    expect(runStatus('alice', q.runId)).toBe('done');
+  }, 30_000);
 });
 
 describe('multi-account limits: storage', () => {
