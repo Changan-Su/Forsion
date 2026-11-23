@@ -52,6 +52,7 @@ describe('finishedReplyCount', () => {
   it('counts only finished visible answers', () => {
     const msgs = [u('u1'), a('a1'), a('sum', { teamSummary: true }), a('sys', { role: 'system' } as any), u('u2'), a('a2', { status: 'streaming', content: '' })]
     expect(finishedReplyCount(msgs, (m) => !!m.teamSummary)).toBe(1)
+    expect(finishedReplyCount([u('u1'), a('err', { content: '', status: 'error' })], () => false)).toBe(0)
   })
 })
 
@@ -60,10 +61,12 @@ describe('todosFromArgs (rebuild the list from history)', () => {
     expect(todosFromArgs(JSON.stringify({ todos: list('completed', 'pending') }))).toEqual(list('completed', 'pending'))
     expect(todosFromArgs(JSON.stringify({ todos: [] }))).toEqual([])
   })
-  it('treats malformed arguments as "not written", never as an empty list', () => {
+  it('treats unparsable arguments as "not written", never as an empty list', () => {
     expect(todosFromArgs('{"todos": [{"content": "x"')).toBeUndefined()
-    expect(todosFromArgs(JSON.stringify({ todos: [{ content: 'x', status: 'weird' }] }))).toBeUndefined()
     expect(todosFromArgs(JSON.stringify({ plan: 'x' }))).toBeUndefined()
+  })
+  it('normalizes like the engine (unknown status -> pending, empty content dropped) so history matches the live list', () => {
+    expect(todosFromArgs(JSON.stringify({ todos: [{ content: 'x', status: 'weird' }, { content: '', status: 'completed' }] }))).toEqual([{ content: 'x', status: 'pending' }])
   })
 })
 

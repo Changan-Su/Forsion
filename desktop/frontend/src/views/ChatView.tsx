@@ -363,7 +363,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 对话末尾那一行任务清单:只放这一轮的(在跑那条回答自己的;没在跑时最后一条回答还没做完的),其余几份在各自回答里收成一行。见 tailTodo.ts
   const tailTodo = useMemo(() => tailTodoOf(activeMessages, running, isHiddenInList), [activeMessages, running])
   // 团队总结只画最新那份,画在它在对话里的位置(原来钉在末尾:新一轮在出的回答上面压着上一轮的总结,翻到旧页也挂在页底)
-  const latestSummaryId = useMemo(() => { for (let i = activeMessages.length - 1; i >= 0; i--) if (activeMessages[i].teamSummary) return activeMessages[i].id; return null }, [activeMessages])
+  const latestSummaryId = useMemo(() => { for (let i = shownMessages.length - 1; i >= 0; i--) if (shownMessages[i].teamSummary) return shownMessages[i].id; return null }, [shownMessages])
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
@@ -955,8 +955,6 @@ export function ChatView({ leaf, params }: ViewProps) {
             )}
             {/* 借 Comma:没发出去的那几条留在末尾,淡掉的气泡 + 原因 · 丢弃 · 重试(原因的原文在悬停提示里) */}
             {transcript.hasNewer && !canvasOn && <button type="button" className="t2-history-page" data-history-newer onClick={transcript.newer}>{t('chat.history.newer')}</button>}
-            {/* 末尾区(失败气泡 / 运行状态 / 清单与卡片堆)跟着对话最新处走:翻到较早的一页时不画在那页底下 */}
-            {!transcript.hasNewer && <>
             {s.failedSends.map((f) => (
               <EditorialMessage
                 key={f.id}
@@ -992,13 +990,13 @@ export function ChatView({ leaf, params }: ViewProps) {
               </div>
             )}
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
-            {!canvasOn && (tailTodo || deck) && (
+            {/* 翻到较早的一页时清单那行不画在页底(它说的是最新这一轮);卡片堆和失败气泡照画:里面有没发出去的草稿和要你点的重试 */}
+            {!canvasOn && ((tailTodo && !transcript.hasNewer) || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList key={tailTodo.id} todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
+                {tailTodo && !transcript.hasNewer && <TodoList key={tailTodo.id} todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}
-            </>}
             </div>
           </div>
           <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => { transcript.reset(); scrollToBottom(true) }} />
@@ -1095,7 +1093,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 「N 件等你」与子会话药丸(借鉴 Comma 2.2)同一排;两颗都不露时这一排是空的(CSS :empty 收掉)
           approvalTray={canvasOn ? (deck ?? undefined) : (
             <div className="t2-deckpill-row">
-              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} offPage={transcript.hasNewer && !canvasOn} onClick={() => { transcript.reset(); scrollToBottom(true) }} />}
+              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => { transcript.reset(); scrollToBottom(true) }} />}
               <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} onJump={jumpToChildBlock} />
             </div>
           )}

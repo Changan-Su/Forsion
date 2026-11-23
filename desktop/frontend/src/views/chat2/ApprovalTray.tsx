@@ -224,8 +224,7 @@ function EngineNoticeCard({ item, sessionId }: { item: EngineNoticeItem; session
 /** 卡片堆滚出视野时(往上翻历史)输入框上方一枚药丸:「↓ N 件等你 · 任务清单 x/y」,点了回到对话末尾。
  *  卡片堆跟着内容走,新来一张不把人拽下去(在底部时照旧吸底),所以要这枚药丸告诉你底下有事。
  *  自己盯卡片堆进没进视口(IntersectionObserver),不让整个 ChatView 跟着滚动重渲。 */
-/** offPage:正在看较早的一页,卡片堆没画在这页里 —— 直接当滚走了。 */
-export function DeckPill({ rootRef, count, todos, offPage = false, onClick }: { rootRef: RefObject<HTMLElement | null>; count: number; todos?: TodoItem[]; offPage?: boolean; onClick: () => void }) {
+export function DeckPill({ rootRef, count, todos, onClick }: { rootRef: RefObject<HTMLElement | null>; count: number; todos?: TodoItem[]; onClick: () => void }) {
   const { t } = useI18n()
   const [away, setAway] = useState(false)
   useEffect(() => {
@@ -237,8 +236,8 @@ export function DeckPill({ rootRef, count, todos, offPage = false, onClick }: { 
     const io = new IntersectionObserver(([e]) => setAway(!e.isIntersecting), { root, rootMargin: `0px 0px -${Math.round(cover)}px 0px` })
     io.observe(deck)
     return () => io.disconnect()
-  }, [rootRef, count, offPage])
-  if (!away && !offPage) return null
+  }, [rootRef, count])
+  if (!away) return null
   const done = todos?.filter((x) => x.status === 'completed').length ?? 0
   // 外面那一排 .t2-deckpill-row 由 ChatView 包(和子会话药丸同排)
   return (

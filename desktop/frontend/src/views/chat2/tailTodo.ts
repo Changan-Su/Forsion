@@ -27,9 +27,9 @@ export function tailTodoOf(messages: readonly UiMessage[], running: boolean, hid
   return null
 }
 
-/** 「↓ N 条新消息」数的东西:画出来、已经说完的回答。在跑的空气泡、团队成员占位、团队总结都不算。 */
+/** 「↓ N 条新消息」数的东西:画出来、已经说完、真说了点什么的回答。在跑的空气泡、团队成员占位、团队总结、只有报错 / 停止提示的空行都不算。 */
 export function finishedReplyCount(messages: readonly UiMessage[], hidden: (m: UiMessage) => boolean): number {
   let n = 0
-  for (const m of messages) if (m.role === 'assistant' && m.status !== 'streaming' && !hidden(m)) n++
+  for (const m of messages) if (m.role === 'assistant' && m.status !== 'streaming' && !hidden(m) && (m.content.trim() || m.toolEvents?.length)) n++
   return n
 }

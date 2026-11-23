@@ -42,6 +42,19 @@ describe('confirmed stop and restart', () => {
     expect(a.todos).toBeUndefined()
     expect(next).toMatchObject({ id: 'next', status: 'stopped', todos })
   })
+  it('moves the list onto a steered segment that already exists in history (reattach replay)', () => {
+    const todos = [{ content: 'step 1', status: 'completed' }, { content: 'step 2', status: 'in_progress' }]
+    useApp.setState({ messagesBySession: { s: [
+      { id: 'a', role: 'assistant', content: 'part', status: 'streaming', timestamp: 1, todos },
+      { id: 'q', role: 'user', content: 'why?', status: 'done', timestamp: 2 },
+      { id: 'next', role: 'assistant', content: 'persisted half', status: 'done', timestamp: 3 },
+    ] as any } })
+    const ref = { current: 'a' }
+    useApp.getState().reduceEvent('s', 'r', ref, { seq: 1, type: 'turn_boundary', payload: { finalizedAssistantId: 'a', userMessages: [{ id: 'q', content: 'why?' }], newAssistantId: 'next' } })
+    const list = useApp.getState().messagesBySession.s
+    expect(list.find((m) => m.id === 'a')?.todos).toBeUndefined()
+    expect(list.find((m) => m.id === 'next')).toMatchObject({ status: 'streaming', todos })
+  })
   it('expedites the same run without stopping, withdrawing or resending pending attachments', async () => {
     const item = { id: 'draft', text: 'look at this', attachments: [{ name: 'image.png', mimeType: 'image/png', data: 'AAAA', size: 3 }] }
     useApp.setState({ steerPendingBySession: { s: [item] }, send: vi.fn(async () => true) })
