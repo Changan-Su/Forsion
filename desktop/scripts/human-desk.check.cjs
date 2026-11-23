@@ -230,9 +230,9 @@ async function main() {
         const sr = await st()
         check('b 改标题 → 文件改名,Human Desk 跟到新名字、引用也跟', fs.existsSync(path.join(vault, '会议记录.md')) && /会议记录/.test(sr.hname || '') && sr.live.some((x) => /会议记录/.test(x)), { files: fs.readdirSync(vault), name: sr.hname, live: sr.live })
         const body = win.locator('.human-desk-body [contenteditable="true"]').last()
-        await body.click(); await win.keyboard.type('改名后接着写的一句 RENAME_PROBE'); await sleep(2500)
+        await body.click(); await win.keyboard.type('改名后接着写的一句 RENAMEPROBE42'); await sleep(2500)
         const disk = fs.existsSync(path.join(vault, '会议记录.md')) ? fs.readFileSync(path.join(vault, '会议记录.md'), 'utf8') : ''
-        check('b 改名后接着打的字落进改了名的那篇(没丢)', disk.includes('RENAME_PROBE'), disk.slice(0, 200))
+        check('b 改名后接着打的字落进改了名的那篇(没丢)', disk.includes('RENAMEPROBE42'), disk.slice(0, 200))
       } else check('b 新笔记有标题框可改名', false, null)
       // ⋯ 里也有 ＋ 那两项;「选一个文件」走系统选择框(台架把主进程的 showOpenDialog 换成直接回 prices.csv)
       await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }) }, F.C)
