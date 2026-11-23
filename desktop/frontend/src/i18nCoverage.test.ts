@@ -446,7 +446,8 @@ describe('i18n 覆盖', () => {
     const NUMBER_OK: Record<string, [count: number, reason: string]> = {
       'tangu/store/tanguSlice.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
       'tangu/store/tanguSlice.ts  costLimit': [1, '费用上限(数字)'],
-      'components/AccountCard.tsx  r.balance': [1, '积分余额经数值校验，按当前界面语言格式化'],
+      'components/AccountCard.tsx  n': [1, '积分余额经数值校验，按当前界面语言格式化'],
+      'components/AccountCard.tsx  points': [1, '额度详情里的积分余额(pointsOf 经数值校验)，按当前界面语言格式化'],
       'components/QuotaAdvisoryBanner.tsx  balance': [1, '积分余额经 pointsBalanceOf 校验为有限数，按当前界面语言格式化'],
       'tangu/store/tanguSlice.ts  (Number(pl.savedChars) || 0)': [2, '压缩省下的字数(数字)'],
       'tangu/store/tanguSlice.ts  (Number(pl.budgetTokens) || 0)': [1, '上下文预算 token 数(数字)'],
@@ -464,6 +465,7 @@ describe('i18n 覆盖', () => {
       'views/chat2/Composer2.tsx  costLimit': [2, '费用上限(数字)'],
       'views/chat2/ContextUsagePop.tsx  Math.round(runCost)': [1, '单次运行费用(数字)'],
       'views/chat2/ContextUsagePop.tsx  costLimit': [1, '费用上限(数字)'],
+      'views/chat2/ContextUsagePop.tsx  points': [1, '积分余额(pointsBalanceOf 经数值校验)'],
       'views/chat2/Composer2.tsx  outgoing.length': [1, '输入字数(数字)'],
       'views/chat2/Composer2.tsx  MAX_INPUT_CHARS': [1, '输入字数上限常量(数字)'],
       'amadeus/blocks/database/DatabaseEmbed.tsx  number': [1, '数字列的纯文本值(前面已判 number !== null)'],

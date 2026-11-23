@@ -71,8 +71,11 @@ export async function readSandboxManifest(dir: string): Promise<SandboxManifest>
   return { pluginId, name: str(m.name, 120) || pluginId, version: str(m.version, 40), ...(network.length ? { network } : {}) }
 }
 
-export function sandboxPaths(forsionHome: string, pluginId: string) {
-  const root = join(forsionHome, 'sandbox', pluginId)
+/** 两种槽位各占一个父目录:开发沙箱在 sandbox/<插件 id>,演示舞台在 stages/<插件 id>(分开放:id 以 stage- 开头的插件不会撞上舞台)。 */
+export type SandboxBase = 'sandbox' | 'stages'
+
+export function sandboxPaths(forsionHome: string, pluginId: string, base: SandboxBase = 'sandbox') {
+  const root = join(forsionHome, base, pluginId)
   return { root, userData: join(root, 'userdata'), home: join(root, 'home'), workspace: join(root, 'workspace'), vault: join(root, 'vault') }
 }
 
@@ -82,7 +85,7 @@ export function sandboxSockPath(platform: NodeJS.Platform, pid: number, rand: st
 }
 
 /** 子进程的环境:父进程自己的 TANGU_HOME(dev 会被 bindDevTanguHome 设上)等一律换成沙箱的。 */
-export function sandboxEnv(base: NodeJS.ProcessEnv, p: ReturnType<typeof sandboxPaths>, extra: { dir: string; sock: string; token: string; info: string }): NodeJS.ProcessEnv {
+export function sandboxEnv(base: NodeJS.ProcessEnv, p: ReturnType<typeof sandboxPaths>, extra: { dir: string; sock: string; token: string; info: string; backendUrl?: string }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) if (!/^(TANGU_HOME|FORSION_WORKSPACE_DIR|FORSION_SANDBOX.*|PI_CU_SOCKET_PATH|TANGU_BACKEND_URL)$/.test(k)) env[k] = v
   return {
@@ -94,8 +97,9 @@ export function sandboxEnv(base: NodeJS.ProcessEnv, p: ReturnType<typeof sandbox
     FORSION_SANDBOX_INFO: extra.info,
     TANGU_HOME: p.home,
     FORSION_WORKSPACE_DIR: p.workspace,
-    // 引擎指向死端口:沙箱不起、不连任何引擎(界面照常,Tangu 那几页显示连不上)
-    TANGU_BACKEND_URL: 'http://127.0.0.1:1',
+    // 引擎指向死端口:沙箱不起、不连任何引擎(界面照常,Tangu 那几页显示连不上)。
+    // 舞台选了脚本回放(engine: 'scripted')时指向父进程起的回放服务(stageEngine.ts),只在本机回环上
+    TANGU_BACKEND_URL: extra.backendUrl ?? 'http://127.0.0.1:1',
     // 电脑操作助手的 socket 指到不存在的地方:沙箱绝不连上用户那份助手
     PI_CU_SOCKET_PATH: join(p.root, 'no-computer-use.sock'),
     // 子进程的窗口一律 showInactive:不抢用户前台(用户从卡片 / Coding Studio 点「打开沙箱窗口」才叫到前面)
@@ -110,18 +114,20 @@ export async function sandboxRequiredPlugins(dir: string): Promise<Set<string>> 
   return new Set((sanitizeRequiresPlugins(m?.requiresPlugins, typeof m?.id === 'string' ? m.id : undefined) ?? []).map((d) => d.id))
 }
 
-/** 删沙箱目录前的最后一道:只删 <forsionHome>/sandbox/<合法 id>。 */
-export function isSandboxRoot(forsionHome: string, p: string): boolean {
-  const base = normalize(join(forsionHome, 'sandbox')) + sep
+/** 删沙箱目录前的最后一道:只删 <forsionHome>/sandbox/<合法 id>(舞台:stages/<合法 id>)。 */
+export function isSandboxRoot(forsionHome: string, p: string, folder: SandboxBase = 'sandbox'): boolean {
+  const base = normalize(join(forsionHome, folder)) + sep
   const n = normalize(p)
   return n.startsWith(base) && /^[a-z0-9][a-z0-9-]{0,63}$/.test(n.slice(base.length))
 }
 
 /** 删 / 写沙箱目录前再按真实路径核一遍:<forsionHome> 自己是软链没关系(dev 的 ~/.forsion-dev 就是),sandbox/<id> 和下面那几层不能是。 */
-async function insideSandbox(forsionHome: string, p: ReturnType<typeof sandboxPaths>, dirs: string[] = []): Promise<boolean> {
-  if (!isSandboxRoot(forsionHome, p.root)) return false
-  const base = await realpath(join(forsionHome, 'sandbox')).catch(() => null)
-  if (!base) return false
+export async function insideSandbox(forsionHome: string, p: ReturnType<typeof sandboxPaths>, dirs: string[] = [], folder: SandboxBase = 'sandbox'): Promise<boolean> {
+  if (!isSandboxRoot(forsionHome, p.root, folder)) return false
+  const base = await realpath(join(forsionHome, folder)).catch(() => null)
+  // 父目录本身也不能是软链(Codex 11-20:stages 若被链到 plugins,清空舞台就成了删真插件目录):它的真实路径必须正好是 <home 的真实路径>/<folder>
+  const homeReal = await realpath(forsionHome).catch(() => null)
+  if (!base || !homeReal || base !== join(homeReal, folder)) return false
   const root = join(base, basename(p.root))
   for (const d of [p.root, ...dirs]) if ((await realpath(d).catch(() => null)) !== join(root, relative(p.root, d))) return false
   return true
@@ -145,6 +151,20 @@ export interface SandboxDeps {
   log(msg: string): void
   /** 闲置多久自动停(缺省 15 分钟;测试注入)。 */
   idleMs?: number
+  /** 槽位的父目录(缺省 sandbox = 开发沙箱;演示舞台另起一个实例,用 stages)。 */
+  base?: SandboxBase
+}
+
+/** 演示舞台(pluginStage.ts)起子进程时额外带的:写进 FORSION_SANDBOX_INFO 的 stage 段、起进程前的准备(拷演示库 / 插件包)、
+ *  首屏界面(不跟用户的主题走)、多给的命令行开关、引擎地址(脚本回放)。 */
+export interface StageSpawn {
+  info: Record<string, unknown>
+  prepare(paths: ReturnType<typeof sandboxPaths>): Promise<void>
+  ui: PluginSandboxUiSeed
+  args: string[]
+  backendUrl?: string
+  /** 回放服务只认的令牌(每次起舞台现生成);没有 = 'sandbox'。 */
+  backendToken?: string
 }
 
 export interface SandboxPublicState {
@@ -208,6 +228,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
   let child: Child | null = null
   let disposed = false
   const idleMs = deps.idleMs ?? 15 * 60_000
+  const folder: SandboxBase = deps.base ?? 'sandbox'
 
   // 起 / 停 / 重置 / 安装 / 闲置停 / 退出排成一队,一件做完再做下一件:agent、卡片、沙箱窗口三处都能点,
   // 交错起来会出「停先返回、起后落地」或「重置删数据时另一次 start 已经起在同一个目录上」。
@@ -296,17 +317,18 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (ev === 'forward' && (msg.kind === 'url' || msg.kind === 'file') && typeof msg.value === 'string') deps.onChildEvent({ event: 'forward', kind: msg.kind, value: msg.value.slice(0, 4096) })
   }
 
-  async function spawnChild(dir: string, manifest: SandboxManifest, sessionId?: string): Promise<Child> {
+  async function spawnChild(dir: string, manifest: SandboxManifest, sessionId?: string, stage?: StageSpawn): Promise<Child> {
     const home = deps.forsionHome()
-    const paths = sandboxPaths(home, manifest.pluginId)
+    const paths = sandboxPaths(home, manifest.pluginId, folder)
     const dirs = [paths.userData, `${paths.userData}-dev`, paths.home, paths.workspace, paths.vault]
     for (const d of dirs) await mkdir(d, { recursive: true })
-    if (!(await insideSandbox(home, paths, dirs))) throw new SandboxError('error', `refusing to use ${paths.root}: it links outside the sandbox folder`)
+    if (!(await insideSandbox(home, paths, dirs, folder))) throw new SandboxError('error', `refusing to use ${paths.root}: it links outside the sandbox folder`)
+    if (stage) await stage.prepare(paths)
     // 先删再写:配置文件若是软链,写穿到别处
     const put = async (f: string, data: unknown): Promise<void> => { await rm(f, { force: true }); await writeFile(f, JSON.stringify(data)) }
     // 两份 userData 都写:dev 态的 Electron 会给 --user-data-dir 再挂一个 -dev(main.ts)
     for (const d of [paths.userData, `${paths.userData}-dev`]) {
-      await put(join(d, 'tangu-desktop-config.json'), { mode: 'external', backendUrl: 'http://127.0.0.1:1', token: 'sandbox' })
+      await put(join(d, 'tangu-desktop-config.json'), { mode: 'external', backendUrl: stage?.backendUrl ?? 'http://127.0.0.1:1', token: stage?.backendToken ?? 'sandbox' })
       for (const f of ['amadeus-config.json', 'amadeus-config.dev.json']) await put(join(d, f), { localVault: paths.vault, lastVault: paths.vault })
       // 不放开屏:沙箱窗口压在普通窗口之下,开屏等不到「窗口已显示」会一直盖到 10 秒上限,第一张截图拍到的全是它
       await put(join(d, 'startup-appearance.json'), { ...DEFAULT_APPEARANCE, showSplash: false })
@@ -316,13 +338,13 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (deps.platform !== 'win32') await rm(sockPath, { force: true })
     const server = createServer()
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(sockPath, () => { server.off('error', reject); resolve() }) })
-    const ui = deps.ui()
-    const info = JSON.stringify({ pluginId: manifest.pluginId, name: manifest.name, version: manifest.version, dir, vault: paths.vault, root: paths.root, ui })
-    const args = [...deps.appArgs, `--user-data-dir=${paths.userData}`, `--lang=${ui.locale === 'en' ? 'en' : 'zh-CN'}`, ...(deps.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : [])]
+    const ui = stage ? stage.ui : deps.ui()
+    const info = JSON.stringify({ pluginId: manifest.pluginId, name: manifest.name, version: manifest.version, dir, vault: paths.vault, root: paths.root, ui, ...(stage ? { stage: stage.info } : {}) })
+    const args = [...deps.appArgs, `--user-data-dir=${paths.userData}`, `--lang=${ui.locale === 'en' ? 'en' : 'zh-CN'}`, ...(stage?.args ?? []), ...(deps.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : [])]
     const dropServer = (): void => { server.close(); if (deps.platform !== 'win32') void rm(sockPath, { force: true }) }
     let proc: ChildProcess
     try {
-      proc = deps.spawn(args, sandboxEnv(process.env, paths, { dir, sock: sockPath, token, info }))
+      proc = deps.spawn(args, sandboxEnv(process.env, paths, { dir, sock: sockPath, token, info, ...(stage?.backendUrl ? { backendUrl: stage.backendUrl } : {}) }))
     } catch (e) {
       dropServer()
       throw new SandboxError('error', `could not start the sandbox: ${e instanceof Error ? e.message : String(e)}`)
@@ -431,7 +453,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     await stop()
     const home = deps.forsionHome()
     const there = await lstat(paths.root).then(() => true, () => false)
-    if (there && !(await insideSandbox(home, paths))) return { ok: false, code: 'error', error: 'refusing to wipe an unexpected folder' }
+    if (there && !(await insideSandbox(home, paths, [], folder))) return { ok: false, code: 'error', error: 'refusing to wipe an unexpected folder' }
     if (there) await rm(paths.root, { recursive: true, force: true })
     return start(dir, sessionId)
   }
@@ -489,6 +511,36 @@ export function createPluginSandbox(deps: SandboxDeps) {
     } catch (e) {
       return fail(e)
     }
+  }
+
+  /**
+   * 演示舞台(pluginStage.ts)起一份:先停掉同一槽位里的前一份、清空舞台目录(每次都从演示库重新开始,上一次留下的标签页、
+   * localStorage 不带过来),再按 stage 带的准备 / 开关 / 首屏起。等子进程报就绪:渲染层判「点名的插件都列出来、装载落定」。
+   * dir = 舞台根目录:子进程在舞台模式下不装开发副本、不监视目录。
+   */
+  function openStage(owner: SandboxManifest, stage: StageSpawn): Promise<SandboxResult> {
+    return serial(async () => {
+      if (disposed) return { ok: false, code: 'error', error: 'Forsion is quitting' }
+      await stop()
+      const home = deps.forsionHome()
+      const paths = sandboxPaths(home, owner.pluginId, folder)
+      const there = await lstat(paths.root).then(() => true, () => false)
+      if (there && !(await insideSandbox(home, paths, [], folder))) return { ok: false, code: 'error', error: 'refusing to wipe an unexpected folder' }
+      if (there) await rm(paths.root, { recursive: true, force: true })
+      const c = await spawnChild(paths.root, owner, undefined, stage)
+      const st = await settle(c)
+      return note(c, 'start', ok(st))
+    }).catch(fail)
+  }
+
+  /** 舞台自己的动作(capture / recordStart / recordStop):原样转给子进程、原样回,和动手的动作排同一队。 */
+  function raw(op: string, args: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+    return serial(async () => {
+      const c = child && !child.exited ? child : null
+      if (!c || !c.sock) throw new SandboxError('no_sandbox', 'no sandbox is running')
+      c.lastUsed = Date.now()
+      return request(c, op, args, timeoutMs)
+    })
   }
 
   /** 把沙箱窗口叫到前面(卡片 / Coding Studio 的「打开沙箱窗口」)。 */
@@ -581,6 +633,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     reset: () => revealed(serial(() => reset().catch(fail)), true),
     install: (expect: { pluginId?: string; dir?: string }) => serial(() => install(expect)),
     state: publicState,
+    openStage,
+    raw,
     /** 最近一张截图(右栏卡的缩略图):只给发起这个沙箱的对话。 */
     lastShot: (sessionId?: string): { image: string; at: number } | null => {
       const c = child && !child.exited ? child : null

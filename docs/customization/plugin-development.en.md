@@ -133,14 +133,15 @@ Declare it in the manifest (up to 4 per plugin):
       "summary": "Lays out an event poster by size and hierarchy rules.",
       "tags": ["poster", "layout"], "icon": "icons/poster.png", "readme": "# Poster layout\n…",
       "minAppVersion": "2.13.8",
-      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "path": "skills/poster" }
+      "package": { "github": "pixel-lab/image-skills", "ref": "v1.2.0", "commit": "3b1f0c9e5a7d2e4b6c8a0f1e3d5b7a9c2e4f6a8b", "path": "skills/poster" }
     }
   ]
 }
 ```
 
 - `type` uses the same set as store submissions: `skill` / `amadeus-plugin` / `plugin` / `agent` / `space` / `theme`. `id` is unique within the catalog, `^[a-z0-9][a-z0-9-]{0,47}$`. **Don't change it once published**: the local install folder and updates are both keyed on it.
-- `package` is one of: `{ "github", "ref", "path"? }` downloads the repository archive at that ref, and `path` keeps just one folder of it. `{ "npm", "version", "integrity"? }` must match the item's `version`; without `integrity`, the registry's sha512 for that version is used. `{ "url", "sha256" }` requires the sha256. `{ "forsionGit": "owner/repo", "ref", "path"? }` is a private Forsion Git repository: the server downloads the archive at that ref as the installing user, and `path` keeps just one folder of it. That user must be signed in and able to read the repository. `ref` is a branch, tag or commit; a missing one reports that the branch or tag isn't there.
+- `package` is one of: `{ "github", "ref", "path"? }` downloads the repository archive at that ref, and `path` keeps just one folder of it. `{ "npm", "version", "integrity"? }` must match the item's `version`; without `integrity`, the registry's sha512 for that version is used. `{ "url", "sha256" }` requires the sha256. `{ "forsionGit": "owner/repo", "ref", "path"? }` is a private Forsion Git repository: the server downloads the archive at that ref as the installing user, and `path` keeps just one folder of it. That user must be signed in and able to read the repository. `ref` is a branch, tag or commit; a missing one reports that the branch, tag or commit isn't there.
+- **Pinning a commit (`commit`, 2026-11-21+)**: GitHub and Forsion Git packages can add `commit`, a full 40-character lowercase hex commit id. With it, the app downloads that commit and checks it against the commit id the archive carries (the one `git archive` writes as the zip comment), and doesn't install on a mismatch. A `ref` that is itself a full commit id pins too. Without `commit`, one push to the branch or tag changes what new installs get while the catalog's version stays the same, so write it when you publish. `ref` is still required: older app versions don't know `commit` and install from `ref`. A malformed `commit` (a short id, not a string) skips the item; it never falls back to `ref`. For an unpinned item, the commit actually installed is recorded with where it came from; if the same version number later comes from another commit, automatic updates stop and wait for the user. This check catches "not the commit named", it isn't a checksum against forged archives.
 - A relative `icon` resolves against where the catalog lives. npm sources and private Forsion Git repositories have no public location, so use a full `https://` address there. Up to 1000 items and 64 KB of README per item are read; a broken item is skipped without affecting the rest. Version and platform requirements in the package manifest still apply, the same as for store items.
 - Updates: change the item's `version` and `package` in the catalog. The store updates it according to the user's auto-update settings. **If the package's origin changes (another repository, npm package name or download host), the automatic update stops** and waits for the user to click.
 - The local identity is `src-<source hash>-<item id>`, so the `market` field in `requiresPlugins` can't point at source items. The store asks once in the detail sidebar before the first install from a source, and before each item that runs code (plugins, Agents, Spaces). Source items are marked "Not reviewed by Forsion".
@@ -459,6 +460,45 @@ const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/s
 **Store listing**: level one is reviewed as usual. Level two needs an application: in the submission's internal APIs reason field, say which modules you need and why the public APIs are not enough. Review is per version, so each new version is reviewed again before users get it. The desktop app won't install an unapproved version from the official store. Development loads, manual installs and third-party store sources aren't affected.
 
 Check it with `node check-plugin.mjs <plugin folder>`: it reports use without declaring, declaring level two alone and reaching into React's internals, and lists the level-two modules the plugin takes.
+
+## Demo stage: `ctx.stage` (2026-11-20+, experimental)
+
+To make demo images or videos of a feature (store screenshots, release notes, promo material), you can ask Forsion to start a **demo stage**: a separate, isolated copy of Forsion that only holds the demo content your plugin package ships and the plugins you name. It is not signed in and never touches the user's vault or plugin data. You drive it step by step, then take full-resolution screenshots or record video. Desktop only; declare it in the manifest:
+
+```json
+{ "capabilities": ["stage"] }
+```
+
+```js
+const stage = await ctx.stage?.open({
+  fixture: 'fixtures/calendar-demo',  // folder in your plugin package: vault/ becomes the stage's vault, engine.json drives chat replay, human/CALENDAR.db is My calendar
+  plugins: ['calendar'],              // installed plugins to bring in (package only, not their data)
+  theme: 'light', locale: 'en',
+  window: [1440, 900, 2],             // 1440×900 content at density 2: captures are 2880×1800 whatever the user's screen
+  clock: '2026-11-20T10:00',          // where "now" starts in the stage (local time), so dates look the same every take
+  engine: 'scripted',                 // optional: replay chats from engine.json, no model quota; default is no engine
+})
+await stage.space('calendar')
+await stage.click('Friday')            // a reference from read (e12), css:<selector>, or the control's visible text
+await stage.type('Launch event'); await stage.press('Enter')
+const { outline } = await stage.read()
+const shot = await stage.capture({ selector: 'main' })   // { bytes, width, height, mime: 'image/png' }
+const rec = await stage.record({ fps: 30 })               // records this window; a pointer moves to each click first
+await stage.click('New event')
+const video = await rec.stop()                             // { bytes, mime, width, height, durationMs }
+await stage.close()
+```
+
+- **The first `open` asks the user** for permission; once allowed it does not ask again. If they decline → `denied`.
+- There is one stage per computer at a time: while another plugin has it open → `busy`. Opening again from your own plugin closes the previous one first. The host closes it when your plugin is disabled or reloaded; after 5 idle minutes it stops on its own.
+- Every `open` starts fresh from the demo content; tabs and settings from the last run are not carried over.
+- `fixture` only accepts a relative path inside your plugin package, and symlinks in it are not copied. Only installed plugins can open a stage (not the copy running in the plugin sandbox).
+- Screenshot pixels = window size × density; `rect` is in CSS pixels. Recordings are at most 3840 pixels wide and 120 seconds long (they stop on their own at the limit and `stop()` still returns them). The default is mp4; pass `format: 'webm'` for WebM.
+- `engine.json`: `{ "models": [...], "runs": [{ "match": "text from the user's message (optional)", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`. Each message sent in the stage replays the first matching entry in `runs`.
+- The personal calendar (My calendar) is not in the vault: the calendar asks the engine for `human/CALENDAR.db`. To film a calendar with events, put `human/CALENDAR.db` in the fixture and use `engine: 'scripted'` (for a calendar-only shot, `engine.json` can be `{ "runs": [] }`). The replay engine serves it in place of the file in the real engine home. The format is the same as the real one, a plain database table up to 8 MB; every column needs `id` / `name` / `type` and every row `id` / `cells`, and in a table with a checkbox column every row is drawn as a to-do with a tick box: `{ "version": 2, "name": "My calendar", "columns": [{ "id": "name", "name": "Name", "type": "text" }, { "id": "date", "name": "Date", "type": "calendarDate" }, { "id": "done", "name": "Done", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "Launch review", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`. Edits to the calendar on the stage stay in that stage only. Without the file the stage shows an empty personal calendar; with `engine: 'none'` there is no engine, so the personal calendar can't be loaded. A link, something that is not a file, or a bad format makes `open` fail with `fixture-invalid`.
+- Every failure rejects with an error that has a `code`: `unsupported`, `invalid`, `denied`, `busy`, `fixture-invalid`, `plugin-missing`, `timeout`, `closed`, `error`.
+- **Publishing**: plugins that declare `stage` must pass store review before the official store installs them (the same per-version review as `internals-raw`). Dev loading and manual installs are not affected.
+- ⚠️ `window.tangu.pluginSandbox` and `window.tangu.pluginStage` are internal host channels. Do not call them from a plugin; use `ctx.stage`.
 
 ## Removing commands and default shortcuts
 

@@ -19,10 +19,10 @@ export type StoreSourceRef =
   | { kind: 'forsion-git'; repo: string; ref?: string; dir?: string }
 
 export type StorePackage =
-  | { kind: 'github'; repo: string; ref: string; path?: string }
+  | { kind: 'github'; repo: string; ref: string; path?: string; commit?: string }
   | { kind: 'npm'; name: string; version: string; integrity?: string }
   | { kind: 'url'; url: string; sha256: string }
-  | { kind: 'forsion-git'; repo: string; ref: string; path?: string }
+  | { kind: 'forsion-git'; repo: string; ref: string; path?: string; commit?: string }
 
 export const STORE_ITEM_TYPES = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin'] as const
 export type StoreItemType = typeof STORE_ITEM_TYPES[number]
@@ -119,6 +119,8 @@ const REPO = /^[A-Za-z0-9._-]{1,100}$/
 const NPM_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 const SHA256 = /^[0-9a-f]{64}$/
+/** A full git commit id (SHA-1, 40 lowercase hex). Short ids are refused: they can become ambiguous. */
+const COMMIT = /^[0-9a-f]{40}$/
 const SHA512 = /^sha512-[A-Za-z0-9+/]{86}==$/
 const DECLARED_ID = /^[a-z0-9][a-z0-9-]{0,31}$/
 const FORSION_GIT_HOST = 'git.forsion.net'
@@ -132,6 +134,7 @@ export function splitSourceCardId(id: string): { source: string; item: string } 
   return { source: id.slice(4, 12), item: id.slice(13) }
 }
 export const isSourceId = (id: unknown): id is string => typeof id === 'string' && SOURCE_HASH.test(id)
+export const isCommitId = (s: unknown): s is string => typeof s === 'string' && COMMIT.test(s)
 
 export function pickText(text: LocalText | undefined, locale: string): string {
   if (!text) return ''
@@ -255,7 +258,16 @@ function parsePackage(v: unknown): StorePackage | null {
     if (typeof o.ref !== 'string' || !isRef(o.ref)) return null
     if (o.path !== undefined && (typeof o.path !== 'string' || !isDir(o.path.replace(/^\/+|\/+$/g, '')))) return null
     const path = typeof o.path === 'string' ? o.path.replace(/^\/+|\/+$/g, '') : ''
-    return { kind, repo: `${owner}/${name}`, ref: o.ref, ...(path ? { path } : {}) }
+    // `commit` pins the package to one commit (`ref` stays required: older apps ignore `commit` and follow `ref`).
+    // A ref that is itself a full commit id pins too. A malformed commit drops the item rather than falling back
+    // to the unpinned ref: the author would believe it is pinned.
+    let commit: string | undefined
+    if (o.commit !== undefined) {
+      if (typeof o.commit !== 'string' || !isCommitId(o.commit.toLowerCase())) return null
+      commit = o.commit.toLowerCase()
+      if (isCommitId(o.ref.toLowerCase()) && o.ref.toLowerCase() !== commit) return null
+    } else if (isCommitId(o.ref.toLowerCase())) commit = o.ref.toLowerCase()
+    return { kind, repo: `${owner}/${name}`, ref: o.ref, ...(path ? { path } : {}), ...(commit ? { commit } : {}) }
   }
   if (o.github !== undefined) return repoPkg('github', o.github)
   if (o.forsionGit !== undefined) return repoPkg('forsion-git', o.forsionGit)

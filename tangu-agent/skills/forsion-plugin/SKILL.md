@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.135.0
+  version: 1.137.0
   author: Forsion
   category: Forsion
 ---
@@ -37,7 +37,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-reading-renderers.md](references/note-reading-renderers.md): `ctx.registerNoteRenderer`; staged read-only rendering, immutable snapshots, hot update rollback and host-owned persistence.
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown / insertMarkdownAt (insert at the caret, cursor marker, refusal reasons); ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
-- [references/store-sources.md](references/store-sources.md): 商店来源 `storeSources` 与 `forsion-store.json` 目录格式、四种包出处、Forsion Git 私有仓
+- [references/store-sources.md](references/store-sources.md): 商店来源 `storeSources` 与 `forsion-store.json` 目录格式、四种包出处、钉提交 `commit`、Forsion Git 私有仓
 - [references/local-plugin-tasks.md](references/local-plugin-tasks.md): local plugin task APIs (Dispatch host branch) and recording model choices
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 - [references/calendar-overlays.md](references/calendar-overlays.md): ctx.calendar 的 `"calendar"` 档:订阅快照(成员、只读叠加源、颜色、隐藏、默认表、`myCalendar`、.ics 的地点 / 说明 / 链接列)、设置写口、.ics 订阅管理
@@ -51,6 +51,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
 - [references/network.md](references/network.md): `ctx.net` (`PluginNetApi`) and manifest `network`: host-side requests for APIs without CORS headers, rules and error codes
 - [references/internals.md](references/internals.md): `ctx.internals` (2026-11-16+, unstable, desktop only): manifest `internals` (read-only copies, subscribe) / `internals-raw` (real host modules), `internalsVerified`, failure cut-off, store review per version.
+- [references/stage.md](references/stage.md): `ctx.stage` demo stage (2026-11-20+, experimental, desktop only): manifest `stage`, isolated Forsion with fixture vault + named plugins, window size / density / theme / clock, full-resolution capture, window recording with pointer, scripted chat replay (`engine.json`) and personal calendar (`human/CALENDAR.db`), permission prompt, error codes, store review.
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
 

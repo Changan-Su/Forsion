@@ -33,6 +33,7 @@ registerMessages({
   'ctx.limit.resetsIn': { zh: '{h} 小时 {m} 分钟后重置', en: 'Resets in {h} hr {m} min' },
   'ctx.limit.resetsAt': { zh: '{when} 重置', en: 'Resets {when}' },
   'ctx.limit.used': { zh: '已用 {pct}%', en: '{pct}% used' },
+  'ctx.limit.points': { zh: '积分', en: 'Points' },
   'ctx.quota.title': { zh: '{provider} 额度', en: '{provider} usage limits' },
   'ctx.quota.5h': { zh: '5 小时', en: '5 hours' },
   'ctx.quota.week': { zh: '本周', en: 'This week' },
@@ -182,7 +183,10 @@ export function ContextUsagePop({ open, contextWindow, ctxTokens, sessionTokens,
   )
 }
 
-/** 登录 Forsion 才有:今日 / 本周托管额度(用量口径同账号菜单;后台 Agent 额度与重置卡仍只在账号菜单)。 */
+/**
+ * 登录 Forsion 才有:今日 / 本周托管额度(用量口径同账号菜单;后台 Agent 额度与重置卡仍只在账号菜单)。
+ * 不限的那一档不画(11-20 用户定:写一行「不限」没信息量);积分余额跟在后面(额度用完可用积分继续),服务端没给就不画。
+ */
 function QuotaLimits({ open }: { open: boolean }) {
   const { t, locale } = useI18n()
   // 账号身份进依赖:A 直接切到 B 时清掉 A 的额度、作废 A 在途的请求(只看「登没登录」会串号)
@@ -210,17 +214,19 @@ function QuotaLimits({ open }: { open: boolean }) {
   const weekly = weeklyResetTime(quota.weeklyResetAt)
   const rows = [
     {
-      key: 'daily', label: t('sidebar.account.menu.daily'), limit: Number(quota.dailyLimit),
+      key: 'daily', label: t('sidebar.account.menu.daily'),
       rem: remainingPercent(quota.dailyLimit, quota.dailyRemaining, quota.dailyPercent),
       reset: t('ctx.limit.resetsIn', { h: Math.floor(left / 3600e3), m: Math.floor((left % 3600e3) / 60e3) }),
     },
     {
-      key: 'weekly', label: t('sidebar.account.menu.weekly'), limit: Number(quota.weeklyLimit),
+      key: 'weekly', label: t('sidebar.account.menu.weekly'),
       rem: remainingPercent(quota.weeklyLimit, quota.weeklyRemaining, quota.weeklyPercent),
       reset: weekly ? t('ctx.limit.resetsAt', { when: formatDateTime(weekly, { locale }) }) : '',
     },
-  ].filter((r) => r.limit < 0 || r.rem !== null)
-  if (!rows.length) return null
+  ].flatMap((r) => (r.rem === null ? [] : [{ ...r, rem: r.rem }]))
+  // 不用 pointsBalanceOf:它夹到 0,后台调成负数时这里要照实写(和账号菜单的背包那行一致)
+  const points = typeof quota.pointsBalance === 'number' && Number.isFinite(quota.pointsBalance) ? quota.pointsBalance : null
+  if (!rows.length && points === null) return null
   return (
     <span className="t2c-cu-limits">
       <span className="t2c-cu-limits-title">{t('ctx.limit.title')}<TierBadge tier={tier} /></span>
@@ -228,14 +234,20 @@ function QuotaLimits({ open }: { open: boolean }) {
         <span key={r.key} className="t2c-cu-limit" data-limit={r.key}>
           <span className="t2c-cu-limit-line">
             <span className="t2c-cu-limit-name">{r.label}</span>
-            {r.rem !== null && <span className="t2c-cu-limit-reset">{r.reset}</span>}
-            <span>{r.rem === null ? t('sidebar.account.menu.unlimited') : t('ctx.limit.used', { pct: Math.round(100 - r.rem) })}</span>
+            <span className="t2c-cu-limit-reset">{r.reset}</span>
+            <span>{t('ctx.limit.used', { pct: Math.round(100 - r.rem) })}</span>
           </span>
-          {r.rem !== null && (
-            <span className="t2c-cu-bar" data-warn={r.rem <= 15 || undefined} aria-hidden="true"><span style={{ width: `${100 - r.rem}%` }} /></span>
-          )}
+          <span className="t2c-cu-bar" data-warn={r.rem <= 15 || undefined} aria-hidden="true"><span style={{ width: `${100 - r.rem}%` }} /></span>
         </span>
       ))}
+      {points !== null && (
+        <span className="t2c-cu-limit" data-limit="points">
+          <span className="t2c-cu-limit-line">
+            <span className="t2c-cu-limit-name">{t('ctx.limit.points')}</span>
+            <span>{points.toLocaleString(locale === 'zh' ? 'zh-CN' : 'en-US')}</span>
+          </span>
+        </span>
+      )}
     </span>
   )
 }

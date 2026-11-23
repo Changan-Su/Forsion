@@ -15,7 +15,7 @@ async function until(check, description) {
   const deadline = Date.now() + 45000
   while (!await check()) { assert.ok(Date.now() < deadline, `Timed out: ${description}`); await new Promise((r) => setTimeout(r, 100)) }
 }
-const zipOf = async (files) => { const z = new JSZip(); for (const [k, v] of Object.entries(files)) z.file(k, v); return z.generateAsync({ type: 'nodebuffer' }) }
+const zipOf = async (files, comment) => { const z = new JSZip(); for (const [k, v] of Object.entries(files)) z.file(k, v); return z.generateAsync({ type: 'nodebuffer', ...(comment ? { comment } : {}) }) }
 const sha = (buf) => createHash('sha256').update(buf).digest('hex')
 
 async function main() {
@@ -33,10 +33,12 @@ async function main() {
       { id: 'palette', type: 'amadeus-plugin', name: '取色板', version: '0.4.2', package: { url: `${base}/pkg/palette.zip`, sha256: sha(files['palette.zip']) } },
     ],
   })
+  // Like git archive, the zip comment carries the commit; an unpinned install records it.
+  const TEAM_KIT_COMMIT = 'c0ffee'.repeat(6) + 'c0ff'
   // Forsion Git: the Forsion server reads as the signed-in user. Gitea's archive wraps everything in `<repo>/`.
   const TOKEN = 'e2e-forsion-sign-in'
   const gitAuth = []
-  const teamKit = await zipOf({ 'team-kit/skills/brief/SKILL.md': '---\nname: weekly-brief\ndescription: Weekly brief\nversion: 1.0.0\n---\n# Weekly brief\n', 'team-kit/forsion-store.json': '{}' })
+  const teamKit = await zipOf({ 'team-kit/skills/brief/SKILL.md': '---\nname: weekly-brief\ndescription: Weekly brief\nversion: 1.0.0\n---\n# Weekly brief\n', 'team-kit/forsion-store.json': '{}' }, TEAM_KIT_COMMIT)
   const gitCatalog = { schema: 1, title: 'Team kit', items: [{ id: 'brief', type: 'skill', name: '周报', version: '1.0.0', package: { forsionGit: 'acme/team-kit', ref: 'v1.0.0', path: 'skills/brief' } }] }
   const hits = []
   const server = http.createServer((req, res) => {
@@ -111,7 +113,9 @@ async function main() {
     assert.ok(!fs.existsSync(path.join(home, '.store-sources', 'cache', `${git.id}.json`)), 'private catalog not cached on disk')
     const brief = await win.evaluate((id) => window.tangu.marketInstall(id, undefined, { type: 'skill' }), `src_${git.id}_brief`)
     assert.ok(fs.readFileSync(path.join(brief.path, 'SKILL.md'), 'utf8').includes('Weekly brief'), 'package folder cut out of <repo>/')
-    assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).installs.find((x) => x.slug === brief.slug)?.origin, 'forsion-git:acme/team-kit')
+    const briefRecord = JSON.parse(fs.readFileSync(statePath, 'utf8')).installs.find((x) => x.slug === brief.slug)
+    assert.equal(briefRecord?.origin, 'forsion-git:acme/team-kit')
+    assert.equal(briefRecord?.commit, TEAM_KIT_COMMIT, 'the install record keeps the commit the archive was made from')
     assert.ok(gitAuth.length >= 2 && gitAuth.every((a) => a === `Bearer ${TOKEN}`), `sign-in on every Forsion Git read: ${gitAuth}`)
     await win.evaluate((slug) => window.tangu.marketUninstall('skill', slug), brief.slug)
     await win.evaluate((id) => window.tangu.marketSourcesRemove(id), git.id)
