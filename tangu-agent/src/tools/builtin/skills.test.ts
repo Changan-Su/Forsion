@@ -217,10 +217,10 @@ describe('use_skill:商店收录技能的适配说明与「只许用户点名」
   };
 
   it('适配说明放在「Forsion adaptation」下、正文之前;装好之后才写的说明也读得到', async () => {
-    await write('src-25aae625-wayfinder', '---\nname: wayfinder\ndescription: Plan big ambiguous work\n---\nResolved by a subagent that calls the Skill tool with "research".\n');
-    expect(await load('local:src-25aae625-wayfinder')).not.toContain('## Forsion adaptation'); // 先扫一次进缓存,还没有说明
-    await fs.writeFile(path.join(skillDir('src-25aae625-wayfinder'), '.forsion-adapt.md'), '- Line 5 ("a subagent that calls the Skill tool"): use the delegate tool for subagents and use_skill to load skills.\r\n');
-    const out = await load('local:src-25aae625-wayfinder');
+    await write('src-25aae625-trailmap', '---\nname: trailmap\ndescription: Plan big ambiguous work\n---\nResolved by a subagent that calls the Skill tool with "research".\n');
+    expect(await load('local:src-25aae625-trailmap')).not.toContain('## Forsion adaptation'); // 先扫一次进缓存,还没有说明
+    await fs.writeFile(path.join(skillDir('src-25aae625-trailmap'), '.forsion-adapt.md'), '- Line 5 ("a subagent that calls the Skill tool"): use the delegate tool for subagents and use_skill to load skills.\r\n');
+    const out = await load('local:src-25aae625-trailmap');
     const at = out.indexOf('## Forsion adaptation\n- Line 5 ("a subagent that calls the Skill tool"): use the delegate tool');
     expect(at).toBeGreaterThan(out.indexOf('Skill folder:'));
     expect(at).toBeLessThan(out.indexOf('Resolved by a subagent'));

@@ -4,19 +4,19 @@
  *  服务端那边以后自己能出收录条目时,这里看到列表里已有 `src_25aae625_*` 就不再追加。 */
 import { createServer, request } from 'node:http';
 
-export const COLLECTED_ID = 'src_25aae625_wayfinder';
-/** 公开排行榜上的真实条目(mattpocock/skills,MIT);简介是 SKILL.md 的 description,README 是台架自己写的一段。 */
+export const COLLECTED_ID = 'src_25aae625_trailmap';
+/** 公开排行榜上的真实条目(lanternworks/skills,MIT);简介是 SKILL.md 的 description,README 是台架自己写的一段。 */
 const COLLECTED = {
-  id: COLLECTED_ID, type: 'skill', source: 'github', name: 'wayfinder', author: 'mattpocock',
+  id: COLLECTED_ID, type: 'skill', source: 'github', name: 'trailmap', author: 'lanternworks',
   summary: 'Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.',
-  tags: [], installSlug: 'src-25aae625-wayfinder', latestVersion: '2026.10.29-148210', downloads: 840000, platforms: ['macos', 'windows', 'linux'],
+  tags: [], installSlug: 'src-25aae625-trailmap', latestVersion: '2026.10.29-148210', downloads: 840000, platforms: ['macos', 'windows', 'linux'],
   origin: { kind: 'collected', sourceId: '25aae625', sourceTitle: 'skills.sh' },
   requirements: { cli: false, apiKeys: [], desktopOnly: false, scripts: 0, auditWarn: true },
 };
 const DETAIL = {
   ...COLLECTED,
   description: COLLECTED.summary,
-  readme: '# wayfinder\n\nCharts a large, foggy effort as a map of decision tickets on the issue tracker (GitHub Issues via gh), then works the tickets one at a time until the route to the destination is clear. Plans; does not build.',
+  readme: '# trailmap\n\nCharts a large, foggy effort as a map of decision tickets on the issue tracker (GitHub Issues via gh), then works the tickets one at a time until the route to the destination is clear. Plans; does not build.',
 };
 
 export async function startCollectedMarketFront(upstream) {
