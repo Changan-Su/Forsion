@@ -43,7 +43,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/amadeus/unified/canvasStage.tsx': [1, '画布可见区与视口求交'],
   'desktop/frontend/src/components/ImageViewer.tsx': [1, '判断原图是否在视口里(缩放动画起点)'],
   'desktop/frontend/src/lib/nearViewport.ts': [1, 'IntersectionObserver 的一屏余量'],
-  'desktop/frontend/src/sandbox/sandboxWindow.ts': [2, '插件沙箱 inspect:判断 / 滚动元素进视口'],
+  'desktop/frontend/src/sandbox/sandboxWindow.ts': [4, '插件沙箱 inspect:判断 / 滚动元素进视口;演示舞台:元素截图与视口求交、录像按视口算帧尺寸'],
   'desktop/frontend/src/services/sessionLog.ts': [1, '日志里记视口尺寸'],
   'desktop/frontend/src/smoothCaret.ts': [2, '自绘光标的裁剪框与软键盘判定'],
   'desktop/frontend/src/theme/spaceAmbient.ts': [1, '氛围背景取样区与视口求交'],
