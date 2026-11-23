@@ -2738,6 +2738,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
+      userInvokedSkillIds: skillLoadout.requested.map((s) => s.id),
       remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,

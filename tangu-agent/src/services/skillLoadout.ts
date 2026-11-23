@@ -13,7 +13,7 @@
 import { presetOf } from '../core/presetTable.js';
 import { deps } from '../seams/runtime.js';
 import { materializeSkill } from '../tools/fileWorkspace.js';
-import { listSharedAgentSkills } from '../skills/localSkills.js';
+import { listSharedAgentSkills, userInvokedOnly } from '../skills/localSkills.js';
 import { currentDisplayAgentSlug } from '../seams/runContext.js';
 
 
@@ -33,6 +33,8 @@ export interface SkillLoadout {
   catalog: Array<{ id: string; name: string; bytes: number }>;
 }
 
+/** frontmatter `disable-model-invocation: true` 的技能(userInvokedOnly)只许用户点名:不进目录段、不进 catalog,
+ *  但留在 enabledSkillIds 里(准许清单不变),由 use_skill 对照 requested 拒绝模型自己装载。 */
 /** shelved = 本 agent 自己收起的技能 id(HARNESS.md 的 equip 条目):**只从目录里摘掉那一行**,
  *  enabledSkillIds 不动 —— use_skill 按 id 照常放行(笔记段里列着它收起了哪些)。/skill 点名的不受影响。 */
 export async function loadSkillLoadout(
@@ -58,7 +60,7 @@ export async function loadSkillLoadout(
       const prefix = agentConfig.execMode === 'sandbox' ? 'usr_gh_' : 'local:';
       const local = all.filter((s) => s.id.startsWith(prefix));
       enabledSkillIds = local.map((s) => s.id);
-      deferredSkills = local.map((s) => ({
+      deferredSkills = local.filter((s) => !userInvokedOnly(s)).map((s) => ({
         id: s.id,
         name: s.name,
         description: String(s.description || '').trim(),
@@ -72,7 +74,7 @@ export async function loadSkillLoadout(
     ).filter(Boolean) as any[];
     for (const s of skills) {
       const description = String(s.description || '').trim();
-      if (String(s.content || '').trim() || description) deferredSkills.push({ id: s.id, name: s.name, description });
+      if ((String(s.content || '').trim() || description) && !userInvokedOnly(s)) deferredSkills.push({ id: s.id, name: s.name, description });
       if (s.content) void materializeSkill(userId, appId, s.id, s.content).catch(() => {});
     }
   }
@@ -119,7 +121,7 @@ export async function loadSkillLoadout(
   // 借用方的 enabledSkillIds 追加这些 id → use_skill 放行。谁都没开共享时这一段不出现,前面各段字节不变。
   // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
   if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
-    const shared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
+    const shared = (await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => [])).filter((s) => !userInvokedOnly(s));
     const sharedLine = (s: (typeof shared)[number]): string => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`;
     for (const s of shared) catalog.push({ id: s.id, name: s.name, bytes: Buffer.byteLength(sharedLine(s)) });
     const listed = shelved?.size ? shared.filter((s) => !shelved.has(s.id)) : shared;

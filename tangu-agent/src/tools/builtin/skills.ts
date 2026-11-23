@@ -3,12 +3,32 @@
  * use_skill 的「无启用技能时不暴露给 LLM」过滤仍在 registry.getToolDefinitions(语义:
  * 不暴露但可执行,返回 session 级提示),不放 isEnabledFor(后者会让 executeTool 也查不到)。
  */
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
+import { userInvokedOnly } from '../../skills/localSkills.js';
 
 import { stageSessionSkill } from '../../sandbox/sessionSandbox.js';
 
 const USE_SKILL_MAX_CHARS = 120_000;
+/** 商店收录技能的适配说明:安装时由宿主写进技能文件夹(服务端按核过的条目渲染,不是仓库原文)。 */
+const ADAPT_NOTE_FILE = '.forsion-adapt.md';
+const ADAPT_NOTE_MAX_CHARS = 1200;
+
+/** 读 `<技能文件夹>/.forsion-adapt.md`。每次 use_skill 现读:技能扫描的缓存只看 SKILL.md 的修改时间,
+ *  而宿主是在解包之后才写这份说明的。只认普通文件(不跟软链,免得把别处的文件带进上下文),读不到 / 空 = 没有。 */
+async function adaptNote(dir: string): Promise<string> {
+  const file = path.join(dir, ADAPT_NOTE_FILE);
+  try {
+    const st = await fs.lstat(file);
+    if (!st.isFile() || st.size > 64 * 1024) return '';
+    const text = (await fs.readFile(file, 'utf8')).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
+    return text.slice(0, ADAPT_NOTE_MAX_CHARS).trim();
+  } catch {
+    return '';
+  }
+}
 
 // 云端纯 Python 沙箱的文档技能「精简速查表」：覆盖 docx/xlsx/pptx/pdf。
 // 这些技能的官方正文是给 docx-js/pandoc/OOXML 写的（10万+字），会把模型带成生成超长 verbose 代码、
@@ -131,6 +151,10 @@ export const skillsProvider: ToolProvider = {
         }
         const s = await deps().brain.assets.getSkill(id, ctx.userId);
         if (!s) return `Skill "${id}" not found.`;
+        // frontmatter disable-model-invocation: true —— 只有用户这一轮亲手点名(/skill)才放行。
+        if (userInvokedOnly(s) && !ctx.userInvokedSkillIds?.includes(id)) {
+          return `Skill "${id}" runs only when the user invokes it. Do not load it yourself; if it would help, ask the user to invoke it with /skill.`;
+        }
         if (id.startsWith('usr_gh_')) {
           if (ctx.execMode !== 'sandbox') return 'This cloud skill package is available in cloud sandbox sessions.';
           const load = deps().brain.assets.getSkillPackage;
@@ -146,7 +170,10 @@ export const skillsProvider: ToolProvider = {
         // 技能自带的文件(scripts/ references/ assets/)在正文里写的是相对路径:把文件夹告诉模型,它才找得到。
         // 只对本机会话里的本地技能给:云端技能没有文件夹,沙箱里也够不着这个路径。
         const dir = ctx.execMode === 'host' ? String((s as { dir?: string }).dir || '') : '';
-        const head = `# Skill: ${s.name}\n\n` + (dir ? `Skill folder: ${dir}\nRelative paths in this skill (scripts/, references/, assets/ …) resolve against that folder.\n\n` : '');
+        // 商店收录的技能多是写给 Claude Code / Codex 的:适配说明放在正文前面(工具结果超长时保头部)。
+        const note = dir ? await adaptNote(dir) : '';
+        const head = `# Skill: ${s.name}\n\n` + (dir ? `Skill folder: ${dir}\nRelative paths in this skill (scripts/, references/, assets/ …) resolve against that folder.\n\n` : '')
+          + (note ? `## Forsion adaptation\n${note}\n\n` : '');
         return head + body.slice(0, USE_SKILL_MAX_CHARS) + (body.length > USE_SKILL_MAX_CHARS ? '\n\n…(truncated)' : '');
       },
     },

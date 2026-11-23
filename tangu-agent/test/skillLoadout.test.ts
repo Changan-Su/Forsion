@@ -140,3 +140,32 @@ describe('loadSkillLoadout — coding 预设技能目录降位(07-30:WB-Bench 80
     expect(normal.sections.join('\n')).toContain('No need to call it for unrelated simple questions.');
   });
 });
+
+// 11-23:frontmatter disable-model-invocation: true(Claude Code 的「只许用户点名」)。不进模型看到的目录、不进巡检 catalog;
+// 准许清单照旧带着它(use_skill 对照用户这一轮点名的 requested 拒绝模型自己装载);/skill 点名照常进 requested。
+describe('loadSkillLoadout — 只许用户点名的技能不进目录', () => {
+  const FLAGGED = [...CATALOG, { id: 'local:setup', name: 'Setup', description: 'one-time setup', content: 'SETUP BODY', disableModelInvocation: true }];
+  beforeEach(() => {
+    const assets: any = {
+      listSkills: async () => FLAGGED.map(({ content: _c, ...s }) => s),
+      getSkill: async (id: string) => FLAGGED.find((s) => s.id === id) || null,
+    };
+    configureTangu({ host: hostStub, brain: { assets } as any, billing: {} as any, profile, state: {} as any });
+  });
+
+  it('全部模式与指定清单:目录与 catalog 里都没有它,准许清单里还在', async () => {
+    for (const cfg of [{ execMode: 'host' }, { execMode: 'host', enabledSkillIds: FLAGGED.map((s) => s.id) }]) {
+      const { enabledSkillIds, sections, catalog } = await loadSkillLoadout('u', 'tangu', cfg);
+      expect(enabledSkillIds).toContain('local:setup');
+      expect(sections.join('\n')).not.toContain('local:setup');
+      expect(sections.join('\n')).toContain('local:foo');
+      expect(catalog.map((c) => c.id)).not.toContain('local:setup');
+    }
+  });
+
+  it('用户 /skill 点了它:进 requested(尾部强指令照常),仍不进目录', async () => {
+    const { requested, sections } = await loadSkillLoadout('u', 'tangu', { execMode: 'host', requestedSkillIds: ['local:setup'] });
+    expect(requested.map((r) => r.id)).toEqual(['local:setup']);
+    expect(sections.join('\n')).not.toContain('local:setup');
+  });
+});
