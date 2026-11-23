@@ -90,7 +90,7 @@ import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
-import { ADAPT_FILE, auditWarns, isSourceCardId } from '../shared/storeSources'
+import { ADAPT_FILE, auditWarns, BUILTIN_SKILLS_SH, isSourceCardId } from '../shared/storeSources'
 import { prepareSkillPackage, skillTreeHash } from './skillPackage'
 import { createSourceSkillUpdater } from './sourceSkillUpdates'
 import { assertInternalsRawApproved } from './marketInternals'
@@ -1698,6 +1698,8 @@ function ensureBackend(reason: EngineStopReason, opts?: { defer?: boolean }): Pr
     deferredEngineRestart.markCovered() // 到这一刻登记过的改动,都由下面这次读配置 / 拉起带上
     const stored = await loadConfig()
     backend.setAutoResume(stored.autoResumeInterrupted !== false)
+    // 商店里内置的 skills.sh 来源开着,Tangu 才搜得到收录技能;读不到来源状态按关算
+    backend.setMarketCollected(storeSources ? await storeSources.collectedOn().catch(() => false) : false)
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
@@ -5320,7 +5322,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('marketSources:probe', (e, input: string, locale?: string) => { trusted(e); return storeSources!.probe(input, sourceLocale(locale)) })
   ipcMain.handle('marketSources:add', async (e, input: string, locale?: string) => { trusted(e); return sourcesChanged(await storeSources!.add(input, sourceLocale(locale))) })
   ipcMain.handle('marketSources:remove', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.remove(id)) })
-  ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => { trusted(e); return sourcesChanged(await storeSources!.setDisabled(id, on === true)) })
+  ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => {
+    trusted(e)
+    const r = sourcesChanged(await storeSources!.setDisabled(id, on === true))
+    // 内置来源开关决定 Tangu 搜不搜得到收录技能(引擎启动时读):空闲时重启引擎生效,有任务在跑就等它跑完
+    if (id === BUILTIN_SKILLS_SH.id && (await loadConfig()).mode === 'managed') void ensureBackend('engine_restart', { defer: true })
+    return r
+  })
   ipcMain.handle('marketSources:trust', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.trust(id)) })
   // Only the main window has the full plugin inventory; any other window would report a partial (or empty) list.
   ipcMain.handle('marketSources:setDeclared', async (e, list: unknown) => {

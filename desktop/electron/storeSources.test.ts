@@ -556,6 +556,15 @@ describe('built-in skills.sh source', () => {
   const GRILL = shItem('grill-me', { collected: collected({ scripts: 2, audit: { gen: 'safe', socket: 'safe', snyk: 'medium' } }) })
   const ADAPT = (commit = C1) => ({ note: 'Written for Claude Code. In Tangu, "/grill-me" means use_skill grill-me.', commit, entries: [], unsupported: [], requires: ['grill-me'], external: [] })
 
+  it('tells the engine whether Tangu may list collected skills: on by default, off when disabled or unreadable', async () => {
+    expect(await makeSh().collectedOn()).toBe(true)
+    await makeSh().setDisabled(SH, true)
+    expect(await makeSh().collectedOn()).toBe(false)
+    await writeFile(statePath(), '{broken')
+    expect(await makeSh().collectedOn()).toBe(false)
+    expect(await make().collectedOn()).toBe(false) // no market server, no built-in source
+  })
+
   it('is listed first, trusted, and reads its catalog from the market server', async () => {
     routes[CATALOG] = () => json(index([poster()]))
     routes[SH_CAT] = () => json(shIndex([WAYFINDER, GRILL, shItem('npm-one', {}, { github: undefined, npm: '@x/y', commit: undefined }), { ...shItem('agent-one'), type: 'agent' }, shItem('unpinned', {}, { commit: undefined }), shItem('facts-broken', { collected: collected({ audit: { snyk: 'meh' } }) })]))

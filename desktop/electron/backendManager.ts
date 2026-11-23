@@ -224,6 +224,14 @@ export class BackendManager {
     this.autoResume = on
   }
 
+  /** 内置 skills.sh 来源开着 = 引擎可以把收录技能列给 Tangu(TANGU_MARKET_COLLECTED)。引擎只在启动时读;
+   *  缺省关:没告诉引擎就不列 —— 老外壳里热更上来的新引擎同理,老外壳的卡片安装认不了 src_ 编号。 */
+  private marketCollected = false
+
+  setMarketCollected(on: boolean): void {
+    this.marketCollected = on
+  }
+
   /** 钥匙就绪:记下(之后每次拉起都带上),引擎在跑就当场发。 */
   setComputerHistoryKey(hex: string): void {
     if (hex === this.computerHistoryKeyHex) return
@@ -447,6 +455,7 @@ export class BackendManager {
       env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`
       // 中断任务续跑方案 B:引擎启动时读一次,'0' = 被打断的任务不自动接着做(只给「继续生成」)
       env.TANGU_AUTO_RESUME = this.autoResume ? '1' : '0'
+      env.TANGU_MARKET_COLLECTED = this.marketCollected ? '1' : '0'
       // 通道回复 / TUI 的界面语言:用户 env 里没有任何可用的语言变量才按系统界面语言注入(见 injectEngineLang)
       injectEngineLang(env, app.getLocale?.() || '')
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'

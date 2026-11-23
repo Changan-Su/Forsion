@@ -543,6 +543,13 @@ export function createStoreSources(o: {
     await rm(cacheFile(id), { force: true }).catch(() => {})
   }
 
+  /** Whether Tangu may list the built-in source's skills (the engine gets TANGU_MARKET_COLLECTED from this when it starts).
+   *  Unreadable state = unknown = off: a source the user turned off must not come back because its record failed to load. */
+  async function collectedOn(): Promise<boolean> {
+    await load()
+    return !!BUILTIN && readable && !state.disabled.includes(BUILTIN.id)
+  }
+
   async function setDisabled(id: string, on: boolean): Promise<void> {
     await load()
     if (!find(id)) throw new StoreIndexError('not-found')
@@ -843,6 +850,6 @@ export function createStoreSources(o: {
     })
   }
 
-  return { load, list, probe, add, remove, setDisabled, trust, setDeclared, catalog, detail, item, adaptNote, lookup, updatesPaused, download, recordInstall, installRecord, noteCommit, forget, installs }
+  return { load, list, probe, add, remove, setDisabled, collectedOn, trust, setDeclared, catalog, detail, item, adaptNote, lookup, updatesPaused, download, recordInstall, installRecord, noteCommit, forget, installs }
 }
 export type StoreSources = ReturnType<typeof createStoreSources>
