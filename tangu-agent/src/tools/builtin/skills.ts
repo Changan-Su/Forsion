@@ -23,9 +23,12 @@ async function adaptNote(dir: string): Promise<string> {
   const file = path.join(dir, ADAPT_NOTE_FILE);
   let handle: import('node:fs/promises').FileHandle | undefined;
   try {
-    if (!(await fs.lstat(file)).isFile()) return ''; // 没有 O_NOFOLLOW 的平台(Windows)靠这一道
+    const before = await fs.lstat(file);
+    if (!before.isFile()) return ''; // 没有 O_NOFOLLOW 的平台(Windows)靠这一道
     handle = await fs.open(file, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
-    if (!(await handle.stat()).isFile()) return '';
+    const opened = await handle.stat();
+    // lstat 与 open 之间被换成指向别处的链接:打开的不是刚才看的那个文件(Windows 没有 O_NOFOLLOW,只能比身份)
+    if (!opened.isFile() || opened.ino !== before.ino || opened.dev !== before.dev) return '';
     const buf = Buffer.alloc(8 * 1024); // 1200 字(多字节)以内,读这么多足够
     const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
     const text = buf.subarray(0, bytesRead).toString('utf8').replace(/\uFFFD+$/, '')
