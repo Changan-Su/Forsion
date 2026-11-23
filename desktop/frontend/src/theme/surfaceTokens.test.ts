@@ -104,8 +104,9 @@ function rules(): Rule[] {
       const tokens = /background(-color)?:\s*var\(--surface-(menu|float)\b/.test(body)
       const glassy = /var\(--(bg-glass|panel-blur)\b/.test(body)
       const blurred = /backdrop-filter:\s*var\(--surface-blur\b/.test(body)
-      const softFallback = /background(-color)?:\s*var\(--surface-(menu|float),\s*(color-mix|rgba|hsla|transparent)/.test(body)
-      const mixed = /color-mix\([^;]*var\(--surface-(menu|float)\b/.test(body)
+      const softFallback = /background(-color)?:\s*var\(--surface-(menu|float),\s*(color-mix|rgba|hsla|transparent|(rgb|hsl)\([^)]*\/)/.test(body)
+      // 只认 color-mix 自己括号里(允许一层嵌套)的 token:「渐变, var(--surface-menu)」这种多层背景是合法的
+      const mixed = /color-mix\((?:[^()]|\([^()]*\))*?var\(--surface-(menu|float)\b/.test(body)
       for (const part of m[1].split(',')) {
         const selector = part.trim().replace(/\s+/g, ' ')
         const cls = (selector.match(/\.[a-zA-Z][\w-]*/g) || []).pop()

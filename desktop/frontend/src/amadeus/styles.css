@@ -1546,9 +1546,10 @@ body.amx-marquee-active * {
 .am-app .slash-preview .sp-h[data-level='h2'] { font-size: var(--ui-font-title); }
 .am-app .slash-preview .sp-h[data-level='h3'] { font-size: var(--ui-font-heading); }
 .am-app .slash-preview .sp-h[data-level='hn'] { font-size: var(--ui-font-body); }
-/* 标注预览是预览卡里的一抹色,不是浮层:往透明里混,叠在卡面上。别拿 --surface-menu 当混色底 ——
-   Glass 下它是「高光渐变, 底色」两层背景列表,color-mix 整条失效、底色丢掉(11-23)。Genesis 下叠出来的颜色不变。 */
-.am-app .slash-preview .sp-callout { margin: -2px -4px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, #448aff 10%, transparent); }
+/* 标注预览是预览卡里的一块样张,不是浮层:底取实色 --surface-2(= 预览卡在 Genesis 下的回落,颜色与之前逐字一样,
+   也盖住样张框的 --overlay-light 那层淡底)。别拿 --surface-menu 当混色底 —— Glass 下它是「高光渐变, 底色」
+   两层背景列表,color-mix 整条失效、底色丢掉(11-23)。 */
+.am-app .slash-preview .sp-callout { margin: -2px -4px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, #448aff 10%, var(--surface-2)); }
 .am-app .slash-preview .sp-callout-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
 .am-app .slash-preview .sp-callout-icon { display: inline-flex; color: #448aff; }
 .am-app .slash-preview .sp-table { width: 100%; border-collapse: collapse; }

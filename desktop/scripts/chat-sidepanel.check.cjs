@@ -118,9 +118,12 @@ async function main() {
     const r = (s) => { const e = colEl && colEl.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, h: b.height } }
     const col = colEl && colEl.getBoundingClientRect(), mark = r('.t2-empty-mark'), sub = r('.t2-empty-sub'), anchor = r(':scope > .composer-anchor')
     const inCol = !!document.querySelector('.t2-chat-col > .t2-empty')
-    if (!col || !mark || !sub || !anchor) return { col: !!col, mark, sub, anchor, inCol }
+    // 放不下时 EmptyState2 用 visibility:hidden 藏起空状态(几何照旧) —— 藏着的不算「在中心」
+    const emptyEl = colEl && colEl.querySelector(':scope > .t2-empty')
+    const visible = !!emptyEl && getComputedStyle(emptyEl).visibility !== 'hidden' && !!mark && mark.h > 0
+    if (!col || !mark || !sub || !anchor || !visible) return { col: !!col, mark, sub, anchor, inCol, visible }
     return {
-      inCol, colMid: (col.top + col.bottom) / 2, contentMid: (mark.top + sub.bottom) / 2,
+      inCol, visible, colMid: (col.top + col.bottom) / 2, contentMid: (mark.top + sub.bottom) / 2,
       topGap: Math.round(mark.top - col.top), bottomGap: Math.round(col.bottom - anchor.bottom),
       lift: (colEl.querySelector(':scope > .composer-anchor').style.translate || ''),
     }
@@ -693,11 +696,12 @@ async function main() {
     await win.waitForTimeout(900)
   }
   const dragged = await win.evaluate(groupRect)
-  check('12 右栏 sash 拖得动(前置)', !!sash && Math.abs(dragged - before) > 40, `${before}px → ${dragged}px`)
+  check('12 右栏 sash 拖得动(前置)', !!sash && dragged - before > 40, `${before}px → ${dragged}px(往左拖 = 右栏变宽)`)
   await win.click('.dv-edge-right'); await win.waitForTimeout(1200) // 折叠
+  const folded = await win.evaluate(groupRect) // 真折起来了:看得见的侧栏对话没了 → 0(两次点击都落空时 13 会拿「没动过」空过)
   await win.click('.dv-edge-right'); await win.waitForTimeout(1600) // 再展开
   const restored = await win.evaluate(groupRect)
-  check('13 折叠再展开后宽度仍是拖出来的那个', dragged > 0 && Math.abs(restored - dragged) <= 6, `拖后 ${dragged}px → 折返 ${restored}px(旧行为会打回黄金分割 ≈${before}px)`)
+  check('13 折叠再展开后宽度仍是拖出来的那个', dragged > 0 && folded < 40 && Math.abs(restored - dragged) <= 6, `拖后 ${dragged}px → 折起 ${folded}px → 折返 ${restored}px(旧行为会打回黄金分割 ≈${before}px)`)
 
   // ── 23-24 卡片不描边 / glass 输入卡真的是磨砂 ─────────────────────────────────
   // 颜色可能被 Chrome 报成 `color(srgb r g b / a)`(color-mix 的结果),不只有 rgba() 那一种写法。
@@ -737,8 +741,12 @@ async function main() {
     let host = document.body
     const made = []
     for (const cls of chain) { const el = document.createElement('div'); el.className = cls; host.appendChild(el); made.push(el); host = el }
-    const cs = getComputedStyle(host, '::before')
-    auto['.' + chain.join(' .') + '::before'] = { b: (cs.backdropFilter || cs.webkitBackdropFilter) !== 'none', a: cs.content === 'none' ? 0 : alphaOf(cs.backgroundColor), tier: tierName }
+    const cs = getComputedStyle(host, '::before'), own = getComputedStyle(host)
+    // 伪元素没画出来(content / display 为 none),或材质又挂回条自己身上(条成了弹层的 backdrop root,弹层糊不到页面),
+    // 都按 alpha 0 记:25d / 25b 一起红。
+    const drawn = cs.content !== 'none' && cs.display !== 'none'
+    const ownMaterial = (own.backdropFilter || own.webkitBackdropFilter || 'none') !== 'none' || own.filter !== 'none'
+    auto['.' + chain.join(' .') + '::before'] = { b: (cs.backdropFilter || cs.webkitBackdropFilter) !== 'none', a: drawn && !ownMaterial ? alphaOf(cs.backgroundColor) : 0, tier: tierName }
     made[0].remove()
   }
   return auto
