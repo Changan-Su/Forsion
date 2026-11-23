@@ -53,6 +53,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
+ *                                                           #   11-22 起含传话:要它带话时末尾出 ```relay 稿、不说「不能带回去」,普通提问不出
  *                                                           #   10-24 起含附件:图里的随机数字 / txt 里的口令 / PDF 里的编码要答得出,落库只留记录。--btw-no-attach = 负对照(同样的问题不带附件,必须红)
  *   npm run live:harness -- --only suggest                   # 输入建议(10-10):一轮结束后猜用户下一句。须是一句短话、跟用户的语言、一轮只调一次,且那次调用吃到主循环的前缀缓存;改 services/promptSuggestion.ts 或主循环收尾处的快照后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
@@ -5256,6 +5257,13 @@ Then reply with only the command output.`,
     const a5 = await aside({ question: 'What 4-digit number is shown in the attached image? Reply with just the number.', ...with_([{ name: 'number.png', mimeType: 'image/png', data: pngB64, thumb: `data:image/png;base64,${thumbB64}` }]) });
     const a6 = await aside({ question: 'What is the passphrase written in the attached notes.txt? Reply with just the passphrase.', ...with_([{ name: 'notes.txt', mimeType: 'text/plain', data: notesB64 }]) });
     const a7 = await aside({ question: 'What code is printed in the attached PDF? Reply with just the code.', ...with_([{ name: 'code.pdf', mimeType: 'application/pdf', data: pdfB64 }]) });
+    // 传话(11-22):用户要它带话 → 末尾写一个 ```relay 块(稿子),不说「不能带回去」;普通提问不出块。
+    // 中文那问照用户 11-22 实报的说法(「你帮我带回去不行吗」),英文那问换个说法。
+    const a8 = await aside({ question: '你帮我带回去跟主对话说一声:以后代号统一写成 AZURE-FALCON-8。' });
+    const a9 = await aside({ question: 'Can you remind the main agent to add a changelog entry for the codename change?' });
+    const RELAY_RE = /```[ \t]*relay[ \t]*\n([\s\S]*?)\n[ \t]*```/i;
+    const CANT_RE = /不能(直接)?(带回|替你发|转达|传)|can(?:'|’)?t (?:pass|send|relay|forward|bring)|cannot (?:pass|send|relay|forward|bring)|unable to (?:pass|send|relay|forward)/i;
+    const relayOf = (a) => (a.content.match(RELAY_RE) || [])[1] || '';
     const saved = asList(await api(`/agent/sessions/${sid}/asides`).catch(() => []), 'asides');
     const savedTurn = saved.flatMap((a) => a.turns || []).find((t) => String(t.question).startsWith('What 4-digit number'));
     const savedJson = JSON.stringify(saved);
@@ -5272,14 +5280,17 @@ Then reply with only the command output.`,
       attachImage: !a5.error && a5.content.replace(/\D/g, '').includes(imgDigits) && a5.attached?.images === 1,
       attachFile: !a6.error && back(a6.content).includes(back(fileWord)) && a6.attached?.files?.includes('notes.txt'),
       attachPdf: !a7.error && back(a7.content).includes(pdfWord) && a7.attached?.files?.includes('code.pdf'),
+      relayZh: !a8.error && /AZURE-FALCON-8/.test(relayOf(a8)) && !CANT_RE.test(a8.content),
+      relayEn: !a9.error && /changelog/i.test(relayOf(a9)) && !CANT_RE.test(a9.content),
+      noStrayRelay: [a1, a2, a3, a4, a5, a6, a7].every((a) => !/```[ \t]*relay/i.test(a.content)),
       savedMeta: savedTurn?.attachments?.[0]?.name === 'number.png' && savedTurn.attachments[0].thumb === `data:image/png;base64,${thumbB64}` && !('data' in savedTurn.attachments[0]) && leaked === 0,
     };
     const ok = Object.values(checks).every(Boolean) && !a1.error && !a2.error && !mainEv.error;
     return {
       ok,
-      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;传话稿 zh「${relayOf(a8).slice(0, 80)}」en「${relayOf(a9).slice(0, 80)}」;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7, a8, a9].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
       inconclusive: ok && !mainBusy,
-      output: [a1, a2, a3, a4, a5, a6, a7].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
+      output: [a1, a2, a3, a4, a5, a6, a7, a8, a9].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
     };
   });
 

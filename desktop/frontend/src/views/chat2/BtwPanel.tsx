@@ -1,19 +1,31 @@
 /** 旁聊(/btw)面板:主窗挂在对话右边的子会话面板(ChildChatPanel),卫星窗挂原生 Floating Panel(FloatingRoot),
  *  Web / 手机经 BtwHost 挂在本页。输入区是共用 Chat Box(components/chatbox):「+」/ 粘贴 / 拖入加图片和文件,
- *  附件只给这一问(10-24 方案 A)。数据与形态说明见 btwStore.ts。 */
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
+ *  附件只给这一问(10-24 方案 A)。数据与形态说明见 btwStore.ts。
+ *
+ *  11-22 改版(docs/ToBeImproved/顺便问面板方案_2026-11-22,用户选 A + 传话):
+ *  - 头压成一行:「顺便问」+ 段落胶囊(这条回答上存下来的几段收进它的下拉)+ ＋ 新的一段 + ✕。原来常驻的
+ *    「当前对话 / 说明 / 段落列表」三层去掉;说明只在空的时候出现。
+ *  - 顶上一张挂点卡:这一段挂在哪条回答上,点了主对话滚到那条。
+ *  - 回答里的 ```relay 块画成「转给主对话」卡(btwRelay.ts):模型只拟稿,发不发由用户点。
+ *  chrome='own' = 宿主没有自己的标题栏(主窗右边那块面板、手机全屏页),头里画标题和 ✕;
+ *  'framed' = 宿主已有标题栏(原生浮窗、网页窄浮层、右侧栏视图),头里只放段落胶囊和 ＋。 */
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Check, Copy, Eraser, Loader2, MessageCircleQuestion, MessageSquareQuote, Plus, Quote, Square, X } from 'lucide-react'
+import { Check, ChevronDown, Copy, CornerUpLeft, Loader2, MessageCircleQuestion, MessageSquareQuote, Plus, Quote, Send, Square, Trash2, X } from 'lucide-react'
+import { OverlayAt } from '@lcl/engine'
 import { useI18n } from '../../i18n'
 import { activeChatModelId, newChatModelId, useApp } from '../../stores/appStore'
 import { Markdown } from '../../components/Markdown'
 import { FloatingPanelFrame } from '../../components/FloatingPanelFrame'
+import { RemoveDialog } from '../../components/RemoveDialog'
 import { AttachmentTile, isLeaving, tileKey, type TileFile } from '../../components/AttachmentTile'
 import { ChatBox, type ChatBoxSelection } from '../../components/chatbox'
+import { windowKind } from '../../windowKind'
 import {
   asidesOnMessage, btwWebVisible, consumeSeed, mergeBtwAttachments, quoteInMainChat, readBtwFiles, useBtw,
   type BtwAttachment, type BtwAttachmentMeta, type BtwSeed, type BtwTurn,
 } from './btwStore'
+import { canSendRelay, composeRelay, onRelaysChanged, openRelayTarget, relaySentFrom, relayTargets, sendRelay, splitRelay } from './btwRelay'
 import './btw.css'
 
 const EMPTY: BtwTurn[] = []
@@ -25,7 +37,103 @@ const tileOf = (a: BtwAttachmentMeta): TileFile => {
   return m ? { name: a.name, mimeType: m[1], data: m[2], size: a.size } : { name: a.name, mimeType: a.mimeType, size: a.size }
 }
 
-function TurnView({ turn, onQuoted }: { turn: BtwTurn; onQuoted?: () => void }) {
+/** 一行纯文字摘要(挂点卡、菜单副标题):去掉 markdown 记号与多余空白。 */
+const plain = (s: string): string => s.replace(/```[\s\S]*?```/g, ' ').replace(/^\s*(?:[-+*]|\d+[.)])\s+/gm, '').replace(/[#*`>_~[\]|]/g, '').replace(/\s+/g, ' ').trim()
+
+/** 点在 el 外面 / 按 Esc 就关(菜单)。 */
+function useDismiss(open: boolean, refs: Array<{ current: HTMLElement | null }>, close: () => void): void {
+  useEffect(() => {
+    if (!open) return
+    const down = (e: PointerEvent): void => { if (!refs.some((r) => r.current?.contains(e.target as Node))) close() }
+    const key = (e: globalThis.KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close() } }
+    window.addEventListener('pointerdown', down, true)
+    window.addEventListener('keydown', key, true)
+    return () => { window.removeEventListener('pointerdown', down, true); window.removeEventListener('keydown', key, true) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+}
+
+const useRelaySent = (from: string, text: string | undefined) =>
+  useSyncExternalStore(onRelaysChanged, () => (text ? relaySentFrom(from, text) : undefined))
+
+/** 「转给主对话」卡:模型拟好的一句,三个去处;发出去之后变成一行「已发 · 跳过去看」。 */
+function RelayCard({ sessionId, text }: { sessionId: string; text: string }) {
+  const { t } = useI18n()
+  const title = useApp((s) => (s.sessions.find((x) => x.id === sessionId) || s.archivedSessions.find((x) => x.id === sessionId))?.title || '')
+  const running = useApp((s) => !!s.runningBySession[sessionId])
+  const sent = useRelaySent(sessionId, text)
+  const sentTitle = useApp((s) => (sent && sent.to !== sessionId ? s.sessions.find((x) => x.id === sent.to)?.title || '' : ''))
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [composed, setComposed] = useState(false)
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const otherRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  useDismiss(!!menu, [menuRef, otherRef], () => setMenu(null))
+  useEffect(() => {
+    if (!composed) return
+    const id = setTimeout(() => setComposed(false), 1600)
+    return () => clearTimeout(id)
+  }, [composed])
+  const anchor = useBtw((s) => s.anchors[sessionId])
+  const sendable = canSendRelay()
+  const send = async (to: string): Promise<void> => {
+    setMenu(null)
+    setBusy(true); setFailed(false)
+    const how = await sendRelay({ from: sessionId, to, text, asideId: anchor?.asideId, messageId: anchor?.messageId })
+    setBusy(false)
+    if (!how) setFailed(true)
+  }
+  const openMenu = (): void => {
+    const el = otherRef.current
+    if (!el) return
+    if (menu) { setMenu(null); return }
+    const r = el.getBoundingClientRect()
+    setMenu({ x: r.left, y: r.bottom + 4 })
+  }
+  return (
+    <div className="btw-relay" data-testid="btw-relay" data-sent={sent ? sent.how : undefined}>
+      <div className="btw-relay-k"><Send size={12} />{t('btw.relay.to', { title: title || t('btw.relay.untitled') })}</div>
+      <div className="btw-relay-text t2-content"><Markdown content={text} /></div>
+      {sent ? (
+        <div className="btw-relay-row">
+          <span className="btw-relay-done"><Check size={13} />{sent.to !== sessionId ? t('btw.relay.sentTo', { title: sentTitle || t('btw.relay.untitled') }) : t(sent.how === 'steer' ? 'btw.relay.steered' : 'btw.relay.sent')}</span>
+          <span className="btw-grow" />
+          {sendable && <button type="button" className="btw-act" onClick={() => openRelayTarget(sent.to)}>{t('btw.relay.open')}</button>}
+        </div>
+      ) : (
+        <div className="btw-relay-row">
+          {sendable && (
+            <button type="button" className="btw-relay-send" data-testid="btw-relay-send" disabled={busy} onClick={() => void send(sessionId)}>
+              {busy ? <Loader2 className="spin" size={12} /> : <Send size={12} />}{t(running ? 'btw.relay.steer' : 'btw.relay.send')}
+            </button>
+          )}
+          <button type="button" className="btw-act" data-testid="btw-relay-compose" onClick={() => { composeRelay(text); setComposed(true) }}>
+            {composed ? <Check size={12} /> : null}{t(composed ? 'btw.relay.composed' : 'btw.relay.compose')}
+          </button>
+          {sendable && (
+            <button ref={otherRef} type="button" className="btw-act" data-testid="btw-relay-other" aria-expanded={!!menu} disabled={busy} onClick={openMenu}>
+              {t('btw.relay.other')}<ChevronDown size={12} />
+            </button>
+          )}
+        </div>
+      )}
+      {failed && !sent && <div className="btw-error" role="alert">{t('btw.relay.failed')}</div>}
+      {menu && (
+        <OverlayAt className="ctx-menu btw-menu" x={menu.x} y={menu.y} innerRef={(el) => { menuRef.current = el }} data-testid="btw-relay-menu">
+          <div className="ctx-head">{t('btw.relay.pick')}</div>
+          {relayTargets(sessionId).map((x) => (
+            <button key={x.id} type="button" onClick={() => void send(x.id)}>
+              <span className="ctx-text"><span>{x.title || t('btw.relay.untitled')}</span>{x.running && <span className="ctx-detail">{t('btw.relay.running')}</span>}</span>
+            </button>
+          ))}
+        </OverlayAt>
+      )}
+    </div>
+  )
+}
+
+function TurnView({ turn, sessionId, onQuoted }: { turn: BtwTurn; sessionId: string; onQuoted?: () => void }) {
   const { t } = useI18n()
   const [done, setDone] = useState<'copy' | 'quote' | null>(null)
   useEffect(() => {
@@ -33,8 +141,9 @@ function TurnView({ turn, onQuoted }: { turn: BtwTurn; onQuoted?: () => void }) 
     const id = setTimeout(() => setDone(null), 1600)
     return () => clearTimeout(id)
   }, [done])
-  const copy = (): void => { void navigator.clipboard.writeText(turn.answer).then(() => setDone('copy'), () => {}) }
-  const quote = (): void => { quoteInMainChat(turn.answer); setDone('quote'); onQuoted?.() }
+  const split = useMemo(() => splitRelay(turn.answer, turn.status === 'streaming'), [turn.answer, turn.status])
+  const copy = (): void => { void navigator.clipboard.writeText(split.body).then(() => setDone('copy'), () => {}) }
+  const quote = (): void => { quoteInMainChat(split.body); setDone('quote'); onQuoted?.() }
   return (
     <article className="btw-turn" data-status={turn.status}>
       {turn.quote && <blockquote className="btw-turn-quote">{turn.quote}</blockquote>}
@@ -44,14 +153,16 @@ function TurnView({ turn, onQuoted }: { turn: BtwTurn; onQuoted?: () => void }) 
         </div>
       )}
       <div className="btw-turn-q">{turn.question}</div>
-      {turn.answer
-        ? <div className="t2-content btw-turn-a"><Markdown content={turn.answer} codeHead /></div>
-        : turn.status === 'streaming' && <div className="btw-note"><Loader2 className="spin" size={13} /> {t(turn.describing ? 'btw.describing' : 'btw.thinking')}</div>}
+      {split.body
+        ? <div className="t2-content btw-turn-a"><Markdown content={split.body} codeHead /></div>
+        : turn.status === 'streaming' && !split.partial && <div className="btw-note"><Loader2 className="spin" size={13} /> {t(turn.describing ? 'btw.describing' : 'btw.thinking')}</div>}
+      {split.partial && <div className="btw-note"><Loader2 className="spin" size={13} /> {t('btw.relay.drafting')}</div>}
+      {split.relay && turn.status === 'done' && <RelayCard sessionId={sessionId} text={split.relay} />}
       {turn.status === 'error' && <div className="btw-error" role="alert">{turn.error}</div>}
       {turn.status === 'stopped' && <div className="btw-note">{t('btw.stopped')}</div>}
       {turn.toolCallText && <div className="btw-note">{t('btw.noTools')}</div>}
       {turn.attachNote && <div className="btw-note" data-attach-note={turn.attachNote}>{t(turn.attachNote === 'ignored' ? 'btw.att.ignored' : 'btw.att.transcribed')}</div>}
-      {turn.status === 'done' && turn.answer && (
+      {turn.status === 'done' && split.body && (
         <div className="btw-turn-actions">
           <button type="button" className="btw-act" onClick={copy}>
             {done === 'copy' ? <Check size={12} /> : <Copy size={12} />} {t(done === 'copy' ? 'btw.copied' : 'btw.copy')}
@@ -65,45 +176,122 @@ function TurnView({ turn, onQuoted }: { turn: BtwTurn; onQuoted?: () => void }) 
   )
 }
 
-/** 面板头上的列表:挂在这条回答上、已经存下来的那几段(来源同「从这里分出」ForkBlock:saved 按 message_id 筛)。
- *  第一行永远是「新的一段」;一段都没有就不画。点一段 = 载回那段接着问;上一问还在流时不能换。 */
-function AsideList({ sessionId, busy }: { sessionId: string; busy: boolean }) {
+/** 头上的段落胶囊:这条回答上存下来的几段(来源同「从这里分出」ForkBlock),点开是下拉;当前这段没存过就写「新的一段」。
+ *  上一问还在流时不能换段。下拉底部「删掉这一段」(确认后删记录,同原来的橡皮擦)。 */
+function SegPill({ sessionId, busy }: { sessionId: string; busy: boolean }) {
   const { t } = useI18n()
   const saved = useBtw((s) => s.saved[sessionId])
   const anchor = useBtw((s) => s.anchors[sessionId])
   const items = useMemo(() => asidesOnMessage(saved, anchor?.messageId), [saved, anchor?.messageId])
-  if (!items.length) return null
-  const current = anchor?.asideId
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [confirm, setConfirm] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  useDismiss(!!menu, [menuRef, btnRef], () => setMenu(null))
+  const idx = anchor?.asideId ? items.findIndex((a) => a.id === anchor.asideId) : -1
+  const label = idx >= 0 ? t('btw.seg.n', { i: String(idx + 1), n: String(items.length) }) : t('btw.list.new')
+  if (!items.length) return <span className="btw-seg" data-testid="btw-seg">{label}</span>
+  const toggle = (): void => {
+    if (menu) { setMenu(null); return }
+    const el = btnRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    setMenu({ x: r.left, y: r.bottom + 4 })
+  }
   const open = (id: string, messageId: string | null): void => {
+    setMenu(null)
     useBtw.getState().applySeed({ sessionId, asideId: id, messageId: messageId || undefined, nonce: `list:${id}:${Date.now().toString(36)}` })
   }
   return (
-    <div className="btw-list" data-testid="btw-aside-list">
-      <div className="btw-list-head">{t('btw.list.head', { n: String(items.length) })}</div>
-      <div className="btw-list-rows">
-        <button type="button" className="btw-list-row" data-new="" aria-current={!current || undefined} disabled={busy} onClick={() => useBtw.getState().startNew(sessionId)}>
-          <span className="btw-list-lead"><Plus size={14} /></span>
-          <span className="btw-list-title">{t('btw.list.new')}</span>
+    <>
+      <button ref={btnRef} type="button" className="btw-seg" data-testid="btw-seg" aria-expanded={!!menu} disabled={busy} onClick={toggle}>
+        <span>{label}</span><ChevronDown size={12} />
+      </button>
+      {menu && (
+        <OverlayAt className="ctx-menu btw-menu" x={menu.x} y={menu.y} innerRef={(el) => { menuRef.current = el }} data-testid="btw-aside-list">
+          <div className="ctx-head">{t('btw.seg.menu')}</div>
+          {items.map((a) => {
+            const first = a.turns[0]
+            const last = a.turns[a.turns.length - 1]
+            const cur = a.id === anchor?.asideId
+            return (
+              <button key={a.id} type="button" data-aside={a.id} aria-current={cur || undefined} className={cur ? 'btw-menu-cur' : undefined} onClick={() => open(a.id, a.message_id)}>
+                <MessageCircleQuestion size={14} />
+                <span className="ctx-text">
+                  <span>{first?.question || t('btw.title')}</span>
+                  {last?.answer && <span className="ctx-detail">{plain(splitRelay(last.answer).body)}</span>}
+                </span>
+                {a.turns.length > 1 && <span className="ctx-check">{a.turns.length}</span>}
+              </button>
+            )
+          })}
+          {idx >= 0 && (
+            <>
+              <div className="ctx-separator" />
+              <button type="button" className="danger" data-testid="btw-seg-delete" onClick={() => { setMenu(null); setConfirm(true) }}>
+                <Trash2 size={14} />{t('btw.seg.delete')}
+              </button>
+            </>
+          )}
+        </OverlayAt>
+      )}
+      {confirm && (
+        <RemoveDialog title={t('btw.seg.deleteTitle')} message={t('btw.seg.deleteMsg')} confirmLabel={t('btw.seg.delete')}
+          onConfirm={() => { setConfirm(false); useBtw.getState().clear(sessionId) }} onClose={() => setConfirm(false)} />
+      )}
+    </>
+  )
+}
+
+/** 一行头。own:画标题 + ✕(宿主没有标题栏);framed:只放段落胶囊和 ＋。 */
+function BtwHead({ sessionId, busy, own, onClose }: { sessionId: string; busy: boolean; own: boolean; onClose?: () => void }) {
+  const { t } = useI18n()
+  const hasTurns = useBtw((s) => (s.threads[sessionId] || EMPTY).length > 0)
+  return (
+    <div className={own ? 'agent-desk-head btw-head' : 'btw-head'} data-own={own || undefined}>
+      {own && <MessageCircleQuestion size={15} />}
+      {own && <strong className="agent-desk-title">{t('btw.title')}</strong>}
+      <SegPill sessionId={sessionId} busy={busy} />
+      <span className="btw-grow" />
+      {hasTurns && (
+        <button type="button" className="icon-btn" data-testid="btw-new" title={t('btw.list.new')} aria-label={t('btw.list.new')} disabled={busy} onClick={() => useBtw.getState().startNew(sessionId)}>
+          <Plus size={15} />
         </button>
-        {items.map((a) => {
-          const first = a.turns[0]
-          const last = a.turns[a.turns.length - 1]
-          return (
-            <button key={a.id} type="button" className="btw-list-row" data-aside={a.id} aria-current={current === a.id || undefined} disabled={busy} onClick={() => open(a.id, a.message_id)}>
-              <span className="btw-list-lead"><MessageCircleQuestion size={14} /></span>
-              <span className="btw-list-title">{first?.question || t('btw.title')}</span>
-              {a.turns.length > 1 && <span className="btw-list-n">{a.turns.length}</span>}
-              {last?.answer && <span className="btw-list-sub">{last.answer.replace(/[#*`>_~[\]]/g, '').replace(/\s+/g, ' ').trim()}</span>}
-            </button>
-          )
-        })}
-      </div>
+      )}
+      {own && onClose && (
+        <button type="button" className="icon-btn" aria-label={t('btw.close')} title={t('btw.close')} onClick={onClose}><X size={16} /></button>
+      )}
     </div>
   )
 }
 
+/** 挂点卡:这一段挂在哪条回答上。没挂点(输入框 /btw 还没答)= 引擎会挂到最近一条回答,这里也显示那一条。
+ *  消息还没载到本窗口(浮窗)就不画;载到了却找不到 = 被删了。 */
+function AnchorCard({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n()
+  const messageId = useBtw((s) => s.anchors[sessionId]?.messageId)
+  const messages = useApp((s) => s.messagesBySession[sessionId])
+  const target = useMemo(() => {
+    if (!messages?.length) return null
+    if (messageId) return messages.find((m) => m.id === messageId) || 'gone' as const
+    for (let i = messages.length - 1; i >= 0; i--) if (messages[i].role === 'assistant' && messages[i].content.trim()) return messages[i]
+    return null
+  }, [messages, messageId])
+  if (!target) return null
+  if (target === 'gone') return <div className="btw-anchor" data-gone=""><span className="btw-anchor-k"><CornerUpLeft size={12} />{t('btw.anchor.gone')}</span></div>
+  const jumpable = windowKind() === 'main'
+  const text = plain(target.content).slice(0, 240)
+  return (
+    <button type="button" className="btw-anchor" data-testid="btw-anchor" disabled={!jumpable} title={jumpable ? t('btw.anchor.jump') : undefined}
+      onClick={() => useApp.getState().setJumpTarget(sessionId, target.id)}>
+      <span className="btw-anchor-k"><CornerUpLeft size={12} />{t('btw.anchor.about')}</span>
+      <span className="btw-anchor-t">{text}</span>
+    </button>
+  )
+}
+
 /** onClose:Esc 且没有在流的回答时关掉宿主;onQuoted:回答被引用回主对话之后(Web / 手机据此收起,好让用户看见输入框)。 */
-export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?: () => void; onQuoted?: () => void }) {
+export function BtwPanel({ seed, onClose, onQuoted, chrome = 'framed' }: { seed: BtwSeed; onClose?: () => void; onQuoted?: () => void; chrome?: 'own' | 'framed' }) {
   const { t } = useI18n()
   const sessionId = seed.sessionId
   const turns = useBtw((s) => s.threads[sessionId] || EMPTY)
@@ -152,7 +340,7 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed.nonce])
 
-  // 头上的列表要存下来的那几段:新开的浮窗 / 手机页里 store 还是空的,取一次(同 ForkBlock)
+  // 头上的段落胶囊要存下来的那几段:新开的浮窗 / 手机页里 store 还是空的,取一次(同 ForkBlock)
   useEffect(() => { useBtw.getState().loadSaved(sessionId) }, [sessionId])
 
   const last = turns[turns.length - 1]
@@ -280,23 +468,13 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   ) : null
 
   return (
-    <div ref={rootRef} className="btw-panel" data-btw-session={sessionId} data-dragover={dragOver || undefined}>
-      <div className="btw-bar">
-        <div className="btw-bar-copy">
-          <div className="btw-context"><span>{t('btw.context')}</span><strong title={seed.title || t('btw.title')}>{seed.title || t('btw.title')}</strong></div>
-          <span className="btw-hint">{t('btw.hint')}</span>
-        </div>
-        {turns.length > 0 && (
-          <button type="button" className="icon-btn" title={t('btw.clear')} aria-label={t('btw.clear')} onClick={() => useBtw.getState().clear(sessionId)}>
-            <Eraser size={14} />
-          </button>
-        )}
-      </div>
-      <AsideList sessionId={sessionId} busy={busy} />
+    <div ref={rootRef} className="btw-panel" data-btw-session={sessionId} data-chrome={chrome} data-dragover={dragOver || undefined}>
+      <BtwHead sessionId={sessionId} busy={busy} own={chrome === 'own'} onClose={onClose} />
       <div className="btw-body" ref={bodyRef}>
+        <AnchorCard sessionId={sessionId} />
         {turns.length
-          ? turns.map((turn) => <TurnView key={turn.id} turn={turn} onQuoted={onQuoted} />)
-          : <div className="btw-empty">{t('btw.empty')}</div>}
+          ? turns.map((turn) => <TurnView key={turn.id} turn={turn} sessionId={sessionId} onQuoted={onQuoted} />)
+          : <div className="btw-empty">{t('btw.empty')}<br />{t('btw.hint')}</div>}
       </div>
       <div className="btw-compose">
         <ChatBox
@@ -339,7 +517,7 @@ export function BtwSideView() {
 }
 
 /** Web / 手机:没有原生浮窗,旁聊挂在本页。只在它归属的会话仍是当前会话时显示 —— 切走即隐、切回再现(线程在 store 里)。
- *  page = 手机全屏二级页(同设置 / 成就);否则 Web 居中窄浮层。 */
+ *  page = 手机全屏二级页(同设置 / 成就),头由面板自己画(一行:标题 + 段落胶囊 + ＋ + ✕);否则 Web 居中窄浮层。 */
 export function BtwHost({ page = false }: { page?: boolean }) {
   const { t } = useI18n()
   const seed = useBtw((s) => s.webOpen)
@@ -351,11 +529,7 @@ export function BtwHost({ page = false }: { page?: boolean }) {
       {btwWebVisible(seed, activeId) && (page
         ? (
           <motion.div key="btw" className="btw-page" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} transition={{ duration: 0.2 }}>
-            <header className="btw-page-head">
-              <span>{title}</span>
-              <button type="button" className="icon-btn" aria-label={t('btw.close')} onClick={close}><X size={16} /></button>
-            </header>
-            <BtwPanel seed={seed} onClose={close} onQuoted={close} />
+            <BtwPanel seed={seed} chrome="own" onClose={close} onQuoted={close} />
           </motion.div>
         )
         : (

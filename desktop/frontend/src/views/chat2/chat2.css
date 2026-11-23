@@ -247,6 +247,14 @@
 .t2-user-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 76%; min-width: 0; }
 .t2-username { font-size: var(--ui-font-caption, 11px); letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
 .t2-user-avatar { color: var(--text-light, var(--text)); }
+/* 「来自顺便问」小标(11-22 传话):这条是从顺便问里拟稿后发过来的,点了打开那段 */
+.t2-relay-tag {
+  align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; border: 0; background: transparent;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); line-height: 1.6; cursor: pointer;
+  transition: color var(--duration-fast, .15s);
+}
+.t2-relay-tag:hover { color: var(--text); }
+.t2-relay-tag:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; border-radius: var(--radius-sm, 6px); }
 .t2-user {
   max-width: 100%;
   background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
@@ -1479,6 +1487,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   transition: background var(--duration-fast, .15s);
 }
 .t2-child-row:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+/* 顺便问那一行:右边面板里正开着的就是它(11-22 方案 A) */
+.t2-child-row[aria-current='true'] { background: var(--overlay-light, rgba(127,127,127,.1)); }
 .t2-child-lead { width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-muted); }
 .t2-child-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-child-state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; }
