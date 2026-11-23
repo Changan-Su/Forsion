@@ -12,32 +12,43 @@
  */
 import { contentStorageKey, useWorkspace } from '@lcl/engine'
 import { useApp } from '../../stores/appStore'
+import { onSteerDropped } from '../../tangu/store/steerDropped'
 import { windowKind } from '../../windowKind'
 
 /** 回答里拆出来的传话稿。partial = 还在流、块没写完(先别画按钮)。 */
 export interface RelaySplit { body: string; relay?: string; partial?: boolean }
 
-const OPEN_RE = /(^|\n)[ \t]*```[ \t]*relay[ \t]*\n/gi
+/** 一行围栏(同 CommonMark):行首至多 3 个空格,再是反引号 / 波浪号串 + 信息串;闭合要同一种字符、不短于开串。缩进 4 格的是代码行,不算围栏(Codex 11-23 复审)。 */
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 
-/** 拆最后一个 ```relay 块:块之前(和之后,一般没有)的字照常画,块里的字进卡片。没闭合时:流着 = 先藏起来(partial),流完 = 当正文。
+/** 拆最后一个**顶层** ```relay 块:块之前(和之后,一般没有)的字照常画,块里的字进卡片。没闭合时:流着 = 先藏起来(partial),流完 = 当正文。
+ *  按行走一遍围栏:别的代码块(含四个反引号包着的 relay 示例)里的 ```relay 不认(Codex 11-23 #3 的后半)。
  *  只该对「答完」和「还在流」的回答调:停掉 / 出错的回答原样显示,别把半截稿吞掉(Codex 11-23 #3)。 */
 export function splitRelay(raw: string, streaming = false): RelaySplit {
-  const answer = raw.replace(/\r\n?/g, '\n')
-  let open: RegExpExecArray | null = null
-  for (let m = OPEN_RE.exec(answer); m; m = OPEN_RE.exec(answer)) open = m
-  OPEN_RE.lastIndex = 0
-  if (!open) return { body: raw }
-  const start = open.index + open[1].length
-  const inner = open.index + open[0].length
-  const close = /\n[ \t]*```[ \t]*(?=\n|$)/.exec(answer.slice(inner - 1))
-  if (!close) {
-    return streaming ? { body: answer.slice(0, start).trimEnd(), partial: true } : { body: raw }
+  const lines = raw.replace(/\r\n?/g, '\n').split('\n')
+  let open: { ch: string; len: number; relay: boolean; at: number } | null = null
+  let last: { from: number; to: number } | null = null
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE_RE.exec(lines[i])
+    if (!m) continue
+    const ch = m[1][0]
+    const info = m[2].trim()
+    if (!open) {
+      if (ch === '`' && info.includes('`')) continue // 行内代码,不是围栏
+      open = { ch, len: m[1].length, relay: ch === '`' && /^relay$/i.test(info), at: i }
+    } else if (ch === open.ch && m[1].length >= open.len && !info) {
+      if (open.relay) last = { from: open.at, to: i }
+      open = null
+    }
   }
-  const innerEnd = inner - 1 + close.index
-  const relay = answer.slice(inner, innerEnd).trim()
-  const after = answer.slice(innerEnd + close[0].length)
-  const body = `${answer.slice(0, start).trimEnd()}${after.trim() ? `\n\n${after.trim()}` : ''}`
-  return relay ? { body, relay } : { body: raw }
+  if (open?.relay) {
+    return streaming ? { body: lines.slice(0, open.at).join('\n').trimEnd(), partial: true } : { body: raw }
+  }
+  if (!last) return { body: raw }
+  const relay = lines.slice(last.from + 1, last.to).join('\n').trim()
+  const before = lines.slice(0, last.from).join('\n').trimEnd()
+  const after = lines.slice(last.to + 1).join('\n').trim()
+  return relay ? { body: `${before}${after ? `\n\n${after}` : ''}`, relay } : { body: raw }
 }
 
 /* ── 本机记录:哪些消息是从顺便问传过去的(小标 + 卡片的「已发」状态) ── */
@@ -51,6 +62,8 @@ export interface RelayRecord {
   text: string
   at: number
   how: 'sent' | 'steer'
+  /** 发出时进了等待区(插话 / 排队)的那一项 id:撤回 / 退回时按它认是哪一次(同一句从两段顺便问各发一次也分得开)。 */
+  pendingId?: string
 }
 const BASE_KEY = 'forsion_btw_relays_v1'
 const MAX = 300
@@ -89,6 +102,36 @@ export function recordRelay(rec: RelayRecord): void {
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (e) => { if (e.key?.startsWith(BASE_KEY)) { cache = null; listeners.forEach((l) => l()) } })
 }
+/** 发出去的那句没进对话(用户从等待区撤回 / run 中止退回输入框):撤掉那笔记录,卡片恢复成可发、小标不画。
+ *  先按等待项 id 认;对不上(排队项发不出去换了 id)再按正文认最近一笔 —— 这时同字的那句在这笔之后已落进对话
+ *  (早先真送达的那次)就不撤,撤回的是用户另打的同一句。 */
+export function dropRelay(to: string, text: string, pendingId?: string): boolean {
+  const c = norm(text)
+  if (!c) return false
+  const k = key()
+  const fresh = readAll(k)
+  let i = pendingId ? fresh.findIndex((r) => r.to === to && r.pendingId === pendingId) : -1
+  if (i < 0) {
+    const live = new Set((useApp.getState().steerPendingBySession?.[to] || []).map((p) => p.id))
+    for (i = fresh.length - 1; i >= 0; i--) {
+      const r = fresh[i]
+      // 还挂在等待区里的那次不是这回撤掉的
+      if (r.to === to && norm(r.text) === c && !(r.pendingId && live.has(r.pendingId))) break
+    }
+    if (i < 0) return false
+    const at = fresh[i].at
+    const landed = (useApp.getState().messagesBySession?.[to] || []).some((m) =>
+      m.role === 'user' && norm(String(m.content || '')) === c && (m.timestamp ?? 0) >= at)
+    if (landed) return false
+  }
+  const next = fresh.filter((_, j) => j !== i)
+  cache = { key: k, rows: next }
+  try { localStorage.setItem(k, JSON.stringify(next)) } catch { /* 存不下:本窗口缓存已撤,够这次用 */ }
+  listeners.forEach((l) => l())
+  return true
+}
+onSteerDropped((sessionId, items) => { items.forEach((p) => dropRelay(sessionId, p.text, p.id)) })
+
 export function onRelaysChanged(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn) } }
 
 /** 这条用户消息是不是从顺便问传过来的。带上消息时间戳时,比记录早出 SKEW_MS 以上的(手打的老消息碰巧同字)不认。 */
@@ -120,7 +163,10 @@ export async function sendRelay(opts: { from: string; to: string; text: string; 
   const at = Date.now()
   const ok = await app.send(text, [], undefined, undefined, undefined, opts.to).catch(() => false)
   if (!ok) return null
-  recordRelay({ to: opts.to, from: opts.from, asideId: opts.asideId, messageId: opts.messageId, text, at, how })
+  // 进了等待区(插话 / 排队)就记下是哪一项:取同字、还没被别的记录认领的最新一项
+  const claimed = new Set(all().map((r) => r.pendingId).filter(Boolean))
+  const pend = [...(useApp.getState().steerPendingBySession?.[opts.to] || [])].reverse().find((p) => norm(p.text) === norm(text) && !claimed.has(p.id))
+  recordRelay({ to: opts.to, from: opts.from, asideId: opts.asideId, messageId: opts.messageId, text, at, how, ...(pend ? { pendingId: pend.id } : {}) })
   return how
 }
 

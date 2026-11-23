@@ -46,6 +46,7 @@ const SAVED = [
   { id: 'on-a0', message_id: 'a0', turns: [{ question: '别处的一段', answer: '不该出现在 a1 的列表里' }], created_at: '', updated_at: '' },
 ]
 const RELAY = '把词法阶段的运算符表按长度倒序排。'
+const RELAY2 = '先停一下,把 tokenizer 的测试补上。'
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 150)) } }
 
 async function main() {
@@ -55,6 +56,8 @@ async function main() {
   const vault = path.join(home, 'vault'); fs.mkdirSync(vault)
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const asides = []
+  const steers = []
+  const steerCancels = []
   const stub = await startStubEngine({
     sessions: SESSIONS,
     messages: MESSAGES,
@@ -62,13 +65,18 @@ async function main() {
       if (route === '/agent/runs') return { runs: [] }
       if (route === '/api/brain/users/me') return { id: 'test-btw', username: 'BTW tester' }
       if (route === '/agent/sessions/sess-main/asides' && method === 'GET') return { asides: SAVED }
+      // 插话(主对话在跑时传话走这条)与撤回:同真引擎的形状,记下来给断言用
+      const st = /^\/agent\/runs\/([^/]+)\/steer$/.exec(route)
+      if (st && method === 'POST') { const b = await body(); if (b.flush) return { ok: true }; steers.push({ runId: st[1], ...b }); return { ok: true, userMessageId: `steer-${steers.length}` } }
+      const sc = /^\/agent\/runs\/([^/]+)\/steer\/([^/]+)$/.exec(route)
+      if (sc && method === 'DELETE') { steerCancels.push(decodeURIComponent(sc[2])); return { ok: true } }
       const m = /^\/agent\/sessions\/([^/]+)\/aside$/.exec(route)
       if (m && method === 'POST') {
         const b = await body()
         asides.push({ sessionId: m[1], ...b })
         if (String(b.question).includes('慢')) await new Promise((r) => setTimeout(r, 2500)) // 让这一问在流里多待一会儿
         const atts = b.attachments || []
-        const answer = String(b.question).includes('带话') ? '好,我拟了一句:\n\n```relay\n' + RELAY + '\n```' : atts.length ? `收到 ${atts.length} 个附件:${atts.map((a) => a.name).join('、')}。` : b.thread?.length ? '倒过来是 **NOCLAF-ERUZA**。' : b.quote ? `这段在说代号:\`${b.quote.slice(0, 12)}\`。` : '项目代号是 **AZURE-FALCON**。'
+        const answer = String(b.question).includes('插话') ? '可以,这句插进去:\n\n```relay\n' + RELAY2 + '\n```' : String(b.question).includes('带话') ? '好,我拟了一句:\n\n```relay\n' + RELAY + '\n```' : atts.length ? `收到 ${atts.length} 个附件:${atts.map((a) => a.name).join('、')}。` : b.thread?.length ? '倒过来是 **NOCLAF-ERUZA**。' : b.quote ? `这段在说代号:\`${b.quote.slice(0, 12)}\`。` : '项目代号是 **AZURE-FALCON**。'
         // 同真引擎:没给挂点 → 挂到最近一条回答(a1),done 回记录 id 与挂点;带了附件就报 attached(新引擎才有)
         const attached = atts.length ? { attached: { images: atts.filter((a) => a.mimeType.startsWith('image/')).length, files: atts.filter((a) => !a.mimeType.startsWith('image/')).map((a) => a.name), transcribed: false } } : {}
         return sse([...answer.match(/.{1,6}/g).map((text) => ({ type: 'delta', text })), { type: 'done', content: answer, toolCallText: false, asideId: b.aside_id || `x-${m[1]}`, asideMessageId: b.message_id || 'a1', ...attached }])
@@ -364,6 +372,34 @@ async function main() {
     const tag = win.locator('.t2-userwrap', { hasText: RELAY }).locator('[data-testid="btw-relay-tag"]')
     check('主对话里那条消息带「来自顺便问」小标', (await until(async () => (await tag.count()) === 1, 8000)) === true)
     await win.screenshot({ path: path.join(shots, 'btw-relay.png') })
+
+    // ── 撤回:主对话在跑时传话 = 插话;从对话末尾「撤回」后那句没进对话 → 卡片恢复可发、不画小标(Codex 11-23 #5) ──
+    await win.waitForTimeout(600) // 上一条 run 收尾
+    stub.script([{ type: 'token', payload: { delta: '在跑着。' } }, { type: '__hold' }])
+    const holdRun = `r${stub.seen.runs.length + 1}`
+    await input.fill('先跑一会儿')
+    await input.press('Enter')
+    await win.locator('.t2c-stop').first().waitFor({ timeout: 10000 })
+    await box.fill('帮我插话一句')
+    await box.press('Enter')
+    const relay2 = btw.locator('[data-testid="btw-relay"]', { hasText: RELAY2 })
+    await relay2.waitFor({ timeout: 15000 })
+    await relay2.locator('[data-testid="btw-relay-send"]').click()
+    await until(async () => steers.length === 1, 8000)
+    check('主对话在跑:传话走插话,发到那条 run', steers[0]?.runId === holdRun && steers[0]?.message === RELAY2 && stub.seen.runs.length === Number(holdRun.slice(1)), JSON.stringify({ steers, runs: stub.seen.runs.length }))
+    check('卡片写「已作为插话发出」', await until(async () => (await relay2.locator('[data-testid="btw-relay-send"]').count()) === 0, 5000))
+    const pendingBubble = win.locator('.t2-stream .t2-userwrap--pending', { hasText: RELAY2 })
+    await pendingBubble.waitFor({ timeout: 5000 })
+    await pendingBubble.hover() // 撤回 / 立即插话桌面悬停才出
+    await pendingBubble.locator('.t2-pending-btn', { hasText: '撤回' }).click()
+    await until(async () => steerCancels.length === 1, 5000)
+    check('从对话末尾撤回:引擎收到撤回那条', steerCancels[0] === 'steer-1', JSON.stringify(steerCancels))
+    check('撤回后卡片恢复成可发', await until(async () => (await relay2.locator('[data-testid="btw-relay-send"]').count()) === 1, 5000))
+    check('撤回的那句不画「来自顺便问」小标', (await win.locator('.t2-userwrap', { hasText: RELAY2 }).locator('[data-testid="btw-relay-tag"]').count()) === 0)
+    check('先前真送达的那条小标还在', (await tag.count()) === 1)
+    await input.fill('')
+    stub.finish(holdRun)
+    await until(async () => (await win.locator('.t2c-stop').count()) === 0, 8000)
 
     // ── 观感自查(DESIGN §8):英文界面 + 深色各截一张,人看 ──
     await win.evaluate(() => localStorage.setItem('tangu_locale', 'en'))

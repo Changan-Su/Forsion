@@ -46,6 +46,7 @@ import type { StoreApi } from 'zustand'
 import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
+import { notifySteerDropped } from './steerDropped'
 import { cancelQuotaReminder } from './quotaReminders'
 import { sourcesFromMetadata } from '../../../../../tangu-agent/src/contracts/citeSources'
 import type { WebSource } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -3406,6 +3407,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (!r.ok) return null
     }
     set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== msgId) } }))
+    if (item.kind !== 'compact' && item.kind !== 'retry') notifySteerDropped(sessionId, [{ id: item.id, text: item.text }])
     tanguCount('chatSteerWithdraw')
     return { text: item.text, attachments: item.attachments }
   },
@@ -4164,6 +4166,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   let ended = false
+  let dropped: Array<{ id: string; text: string }> = []
   set((s) => {
     // 迟到的旧 run 终结事件不碰任何状态(尤其不许动等待区——新 run 的插话还排着队)。
     if (s.runningBySession[sessionId] !== runId) return {}
@@ -4175,6 +4178,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     const pending = s.steerPendingBySession[sessionId] || []
     const localDrafts = pending.filter((p) => p.localOnly)
     const leftover = pending.filter((p) => !p.localOnly)
+    dropped = leftover.map((p) => ({ id: p.id, text: p.text }))
     const rs = s.runStatsBySession[sessionId]
     return {
       runningBySession: next,
@@ -4197,6 +4201,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
       } : {}),
     }
   })
+  notifySteerDropped(sessionId, dropped) // 退回输入框的插话没进对话(顺便问传话卡据此恢复成可发)
   if (get().activeId !== sessionId) {
     const next = new Set(get().unread)
     next.add(sessionId)
