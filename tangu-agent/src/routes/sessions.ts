@@ -9,6 +9,8 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
  *   POST   /agent/sessions/:id/messages/delete { ids }  按 id 截断消息(编辑重发 / 重新生成前清掉该点及之后)
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
+ *   GET    /agent/sessions/:id/card-marks          任务卡 / 作品卡「处理过了」的记录 { marks }(services/cardMarks.ts)
+ *   POST   /agent/sessions/:id/card-marks { marks }  按键并进(只加不减),回并好的整表 { marks }
  *   POST   /agent/sessions/:id/aside { question, quote?, thread?, attachments?, model_id?, thinking_level?, vision_mode?, vision_model_id? }  旁聊 /btw(SSE;答完存进 chat_asides)
  *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
@@ -48,6 +50,7 @@ import { answerAside, asideAttachmentsTooLarge, asideThinkingLevel, attachmentMe
 import { suggestNextPrompt } from '../services/promptSuggestion.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
+import { CardMarksFullError, liveCardMarks, mergeCardMarks, parseStoredCardMarks, readCardMarksBody } from '../services/cardMarks.js';
 
 const router = Router();
 
@@ -1215,6 +1218,52 @@ router.patch('/agent/sessions/:id/config', authMiddleware, async (req: AuthReque
     await writeSessionConfig(req, res, req.body, true);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'patch config failed' });
+  }
+});
+
+// 任务卡 / 作品卡「处理过了」的记录(chat_sessions.card_marks,services/cardMarks.ts):同一台引擎的各端(本机 / 手机 / 网页 /
+// 连过来的电脑)共用,客户端 localStorage 只当缓存。会话不存在 / 不是本人的 → 404 带 error: 'session_not_found'(客户端据此把它和
+// 「老引擎没这条路由」的 404 分开)。存值读不出来 → 500,不当空表,也不往回写。读写都带 user_id(核过归属之后会话被删、
+// 同 id 被别人建回来,也碰不到别人那行)。
+const cardMarksRow = async (id: string, userId: string): Promise<{ card_marks: unknown } | undefined> =>
+  (await query<any[]>(`SELECT card_marks FROM chat_sessions WHERE id = ? AND user_id = ?`, [id, userId]))[0];
+const sessionNotFound = { detail: 'Session not found', error: 'session_not_found' } as const;
+
+router.get('/agent/sessions/:id/card-marks', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json(sessionNotFound);
+    const row = await cardMarksRow(req.params.id, req.user!.userId);
+    if (!row) return res.status(404).json(sessionNotFound);
+    res.json({ marks: liveCardMarks(parseStoredCardMarks(row.card_marks), Date.now()) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'get card marks failed' });
+  }
+});
+
+router.post('/agent/sessions/:id/card-marks', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const now = Date.now();
+    const userId = req.user!.userId;
+    const incoming = readCardMarksBody(req.body, now);
+    if (typeof incoming === 'string') return res.status(400).json({ detail: incoming });
+    // 读存值 → 合并 → 落库按会话串行(两个客户端同时记不同的卡,谁也不能拿旧表把对方那条盖掉)。只动这一列,不碰 updated_at:
+    // 记一张卡不是消息活动,不该把会话顶到列表最上面。
+    // ponytail: 锁是进程内的(同 writeSessionConfig);多个进程共用一个 PG 时两次写仍可能互相盖掉一条 ——
+    // 被盖掉的那条还在记它的那台客户端本机,下次读成功时补传(pendingTasks reconcile)。要严格再上行锁 / CAS。
+    await withKeyLock(`session:card-marks:${req.params.id}`, async () => {
+      const s = await getOwnSession(req.params.id, userId);
+      if (!s) return void res.status(404).json(sessionNotFound);
+      const row = await cardMarksRow(req.params.id, userId);
+      if (!row) return void res.status(404).json(sessionNotFound);
+      const merged = mergeCardMarks(parseStoredCardMarks(row.card_marks), incoming, now);
+      await query(`UPDATE chat_sessions SET card_marks = ? WHERE id = ? AND user_id = ?`, [JSON.stringify(merged), req.params.id, userId]);
+      res.json({ marks: merged });
+    });
+  } catch (e: any) {
+    if (res.headersSent) return;
+    if (e instanceof CardMarksFullError) return void res.status(413).json({ detail: e.message, error: 'card_marks_full' });
+    res.status(500).json({ detail: e?.message || 'mark cards failed' });
   }
 });
 
