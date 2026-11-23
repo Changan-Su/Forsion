@@ -13,7 +13,7 @@ import { deskItemFor } from '../../stores/deskPlan'
 import { deskSection, deskSideOf, humanMenuRows, humanWatching, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { iconForFile } from '../../services/fileKinds'
-import { usePageStore, birthNoteFile } from '@amadeus/store/pageStore'
+import { usePageStore, birthNoteFile, onNotePathGone } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
@@ -127,6 +127,25 @@ function useHumanPickRows(sessionId: string): () => DeskPickRow[] {
     ]
   }
 }
+
+// ── 库里改名 / 挪走 / 删掉:Human Desk 上放着的跟过去 ──
+// 在 store 层跟(同 followPathGone 之于工作区标签):卡和展开态没挂着时也收得到。不跟的话,笔记改了名(新建的「未命名」改标题
+// 就会改文件名)之后 Desk 里的编辑器攥着已退休的旧路径,再打的字不落盘。广播的是库相对路径,条目存的是绝对路径。
+let pathFollowInstalled = false
+function installHumanDeskPathFollow(): void {
+  if (pathFollowInstalled) return
+  pathFollowInstalled = true
+  onNotePathGone((from, kind, to) => {
+    const root = usePageStore.getState().vaultRoot
+    if (!root) return
+    const abs = (rel: string): string => `${root.replace(/[\\/]+$/, '')}/${rel.replace(/^[\\/]+/, '')}`
+    const app = useApp.getState()
+    for (const sid of Object.keys(app.humanDeskBySession)) {
+      app.humanDeskAct(sid, { type: 'retarget', from: abs(from), to: to ? abs(to) : null, prefix: kind === 'prefix' })
+    }
+  })
+}
+installHumanDeskPathFollow()
 
 // ── 切换件「你 / Agent」(两块展开态最左上;LCL 看法胶囊装在 Desk 的浮动胶囊皮里) ──
 
@@ -285,7 +304,8 @@ export function useHumanLiveChip(sessionId: string | null | undefined): RefChip 
   return useMemo(() => {
     if (!sessionId || !humanWatching(h) || !h?.item) return null
     const it = h.item
-    if (it.view) return viewChip(it.view.type, it.name)
+    // 带路径的视图(引用点开的 PDF 等)照文件给路径;纯视图才给 <forsion-view>(否则 Agent 只看到一个没有路径的视图名)
+    if (it.view && !it.path) return viewChip(it.view.type, it.name)
     const rel = vaultRoot ? vaultRelOf(it.path, vaultRoot) : null
     const chip = rel && /\.md$/i.test(rel) ? refChipOf({ kind: 'note', path: rel }, vaultRoot!) : fileChip(it.path)
     return isNote(it) && h.section ? { ...chip, name: t('humanDesk.live', { name: chip.name, n: String(h.section.n) }) } : chip

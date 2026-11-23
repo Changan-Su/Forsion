@@ -3415,6 +3415,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     // 你往 Human Desk 放东西 = 你的动作:右边切到 Human Desk(r3 §5)
     if (action.type === 'put') { get().setDeskSide(sessionId, 'human'); return }
+    if (action.type === 'retarget') return // 改名跟路径:在不在场、离开的表都不动
     disarmHumanPause(sessionId)
     // 不在 Human Desk 上点的「继续看」(卡片上):接着看,离开的表重新起
     if (action.type === 'resume' && deskSideOf(get().deskBySession[sessionId]?.mode, get().humanDeskBySession[sessionId]?.open) !== 'human') armHumanPause(sessionId)

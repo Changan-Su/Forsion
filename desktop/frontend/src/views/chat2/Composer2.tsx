@@ -1386,7 +1386,8 @@ export const Composer2: React.FC<{
     return chip
   }, [appRef, localFs, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   // Human Desk 的那枚排最前;与主区自动那枚 / 显式加的是同一个(token 相同)就只留一枚
-  const liveChip = useMemo<RefChip | null>(() => (liveRef && !refChips.some((c) => c.token === liveRef.token) ? liveRef : null), [liveRef, refChips])
+  // 同主区自动那枚:只在本机 host 会话挂(别的电脑 / 云端的会话读不到本机路径)
+  const liveChip = useMemo<RefChip | null>(() => (liveRef && localFs ? liveRef : null), [liveRef, localFs])
   const rawRefChips = useMemo(() => {
     const auto = autoChip && autoChip.token !== liveChip?.token ? autoChip : null
     return [...(liveChip ? [liveChip] : []), ...(auto ? [auto] : []), ...refChips]
@@ -1403,8 +1404,10 @@ export const Composer2: React.FC<{
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
     const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
-    return rawRefChips.filter((c) => !c.inline || inText.has(c.token))
-  }, [rawRefChips, inlineRuns, runChips])
+    const eff = rawRefChips.filter((c) => !c.inline || inText.has(c.token))
+    // 你自己也引了同一篇(且还算数)→ 只留你那枚;句子里那段删掉了就不算,Human Desk 那枚照旧挂
+    return liveChip && eff.some((c) => c !== liveChip && c.token === liveChip.token) ? eff.filter((c) => c !== liveChip) : eff
+  }, [rawRefChips, inlineRuns, runChips, liveChip])
   /** 把草稿的 [start, end) 换成 piece,光标落在它后面。直接改文本框再把值交给 React(值相同它就不再动 DOM),
    *  光标当场就位;等下一帧再摆光标的话,这一帧里敲的字会落到错的位置(台架连打时把 `[[` 拆散过)。 */
   const spliceDraft = (start: number, end: number, piece: string): void => {
@@ -1999,7 +2002,7 @@ export const Composer2: React.FC<{
                 <RefChipView
                   key={c.token}
                   chip={c}
-                  live={!!liveChip && c.token === liveChip.token}
+                  live={c === liveChip}
                   removeTitle={t('input.remove')}
                   inlineTitle={t('input.ref.shiftInline')}
                   onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length, true) } : undefined}
@@ -2007,7 +2010,7 @@ export const Composer2: React.FC<{
                     // 句子里那几段还原成普通文字:话还在,只是不再是引用
                     if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }
                     // Human Desk 那枚:× = 停止在看(小眼睛跟着灭,不另记「这一篇先别挂」)
-                    if (liveChip && c.token === liveChip.token) onLiveRefRemove?.()
+                    if (c === liveChip) onLiveRefRemove?.()
                     // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
                     else if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
                     else setRefChips((prev) => prev.filter((x) => x.token !== c.token))

@@ -1,7 +1,7 @@
 /** Human Desk 纯决策(2026-11-23 用户定第三轮:两张卡各自独立、右边一次只展开一块;方案页仓根
  *  docs/ToBeImproved/HumanTask实时协作方案_2026-11-20/r3.html)。Agent Desk 的摆法在 deskPlan.ts,这里只管 Human Desk:
  *  一样东西 + 在看 / 停止 + 最近放过的几样;右边展开的是哪一块由 deskSideOf 一处判定。appStore 只执行。 */
-import { deskIdentity, rememberRecent, DESK_RECENT_CAP, HUMAN_DESK_PERSIST_KEY, type DeskItem } from './deskPlan'
+import { deskIdentity, deskItemFor, rememberRecent, DESK_RECENT_CAP, HUMAN_DESK_PERSIST_KEY, type DeskItem } from './deskPlan'
 
 /** 跨窗同步、落盘的那部分:放着的那样东西、最近放过的、你点过「停止」。 */
 export interface HumanDeskCore {
@@ -33,6 +33,9 @@ export type HumanDeskAction =
   | { type: 'remove' }
   | { type: 'stop' }
   | { type: 'resume' }
+  /** 库里的文件被改名 / 挪走(to = 新路径)或删掉(to = null):放着的那样和「最近放过的」跟过去 / 拿掉。
+   *  prefix = 整个文件夹(子树里的都算)。不跟的话编辑器攥着已退休的旧路径,之后打的字不落盘。 */
+  | { type: 'retarget'; from: string; to: string | null; prefix?: boolean }
 
 /** 东西在 Human Desk 上才算在看:没停、也没因为离开太久自动暂停。 */
 export const humanWatching = (s: HumanDeskState | undefined): boolean => !!s?.item && !s.stopped && !s.paused
@@ -59,6 +62,22 @@ export function humanDeskReduce(core: HumanDeskCore, a: HumanDeskAction): HumanD
       return core.item && !core.stopped ? { ...core, stopped: true } : core
     case 'resume':
       return core.stopped ? { ...core, stopped: undefined } : core
+    case 'retarget': {
+      const norm = (x: string): string => x.replace(/\\/g, '/')
+      const from = norm(a.from)
+      const hit = (p: string): boolean => { const q = norm(p); return q === from || (!!a.prefix && q.startsWith(from + '/')) }
+      const move = (it: DeskItem): DeskItem | null => {
+        if (!it.path || !hit(it.path)) return it
+        if (a.to === null) return null
+        const to = a.prefix ? a.to + norm(it.path).slice(from.length) : a.to
+        return deskItemFor(to, it.at)
+      }
+      const item = core.item ? move(core.item) : undefined
+      const recent = core.recent?.map(move).filter((x): x is DeskItem => !!x)
+      const same = item === core.item && (recent?.length ?? 0) === (core.recent?.length ?? 0) && (recent ?? []).every((x, i) => x === core.recent![i])
+      if (same) return core
+      return { ...core, item: item ?? undefined, recent, ...(item ? {} : { stopped: undefined }) }
+    }
   }
 }
 
@@ -187,11 +206,14 @@ export function adoptHumanDesk(cur: HumanDeskState | undefined, theirs: HumanDes
   const sameRest = JSON.stringify(base.recent ?? null) === JSON.stringify(theirs.recent ?? null) && !!base.stopped === !!theirs.stopped
   if (sameItem && sameRest) return base
   const changedThing = !sameItem && !(base.item && theirs.item && deskIdentity(base.item) === deskIdentity(theirs.item))
+  // 对面点了「继续看」而本窗没展开 Human Desk:本窗同样不算在场(否则本窗的引用一直挂着,也没有计时来暂停它)
+  const resumedThere = !!base.stopped && !theirs.stopped && !base.open
   return {
     ...base,
     item: sameItem ? base.item : theirs.item,
     recent: theirs.recent,
     stopped: theirs.stopped,
-    ...(changedThing ? { section: undefined, ...(base.open ? {} : { paused: true as const }) } : {}),
+    ...(changedThing ? { section: undefined } : {}),
+    ...((changedThing || resumedThere) && !base.open ? { paused: true as const } : {}),
   }
 }

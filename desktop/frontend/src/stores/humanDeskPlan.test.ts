@@ -50,6 +50,30 @@ describe('humanDeskReduce', () => {
   })
 })
 
+describe('humanDeskReduce retarget(库里改名 / 挪走 / 删掉)', () => {
+  const N = deskItemFor('/v/未命名.md', 5)
+  it('改名:放着的那样和最近放过的都换成新路径(新 key → 编辑器按新路径重挂)', () => {
+    const out = humanDeskReduce({ item: N, recent: [N, B] }, { type: 'retarget', from: '/v/未命名.md', to: '/v/定价调研.md' })
+    expect(out.item?.path).toBe('/v/定价调研.md')
+    expect(out.item?.name).toBe('定价调研.md')
+    expect(out.item?.key).not.toBe(N.key)
+    expect(out.recent?.map((x) => x.path)).toEqual(['/v/定价调研.md', B.path])
+  })
+  it('挪文件夹(prefix):子树里的跟过去;反斜杠路径也认', () => {
+    const W = deskItemFor('C:\\v\\d\\a.md', 1)
+    const out = humanDeskReduce({ item: W }, { type: 'retarget', from: 'C:/v/d', to: 'C:/v/e', prefix: true })
+    expect(out.item?.path).toBe('C:/v/e/a.md')
+  })
+  it('删掉:放着的那样拿掉、最近放过的里也去掉;不相干 → 原对象', () => {
+    const out = humanDeskReduce({ item: N, recent: [N, B], stopped: true }, { type: 'retarget', from: '/v/未命名.md', to: null })
+    expect(out.item).toBeUndefined()
+    expect(out.stopped).toBeUndefined()
+    expect(out.recent).toEqual([B])
+    const cur: HumanDeskCore = { item: B, recent: [B] }
+    expect(humanDeskReduce(cur, { type: 'retarget', from: '/v/x.md', to: '/v/y.md' })).toBe(cur)
+  })
+})
+
 describe('humanWatching', () => {
   it('有东西、没停、没自动暂停才算在看', () => {
     expect(humanWatching(undefined)).toBe(false)
@@ -155,6 +179,10 @@ describe('两扇窗同步', () => {
     expect(out.stopped).toBe(true)
     expect(out.paused).toBe(true)
     expect(adoptHumanDesk(cur, { item: A, recent: [A] })).toBe(cur)
+  })
+  it('对面点了「继续看」、本窗没展开 → 本窗算暂停(不挂引用);本窗展开着 → 照看', () => {
+    expect(adoptHumanDesk({ item: A, stopped: true }, { item: A }).paused).toBe(true)
+    expect(adoptHumanDesk({ item: A, stopped: true, open: true }, { item: A }).paused).toBeUndefined()
   })
   it('对面拿掉了 → 本窗也空', () => {
     const out = adoptHumanDesk({ item: A, open: true }, { recent: [A] })
