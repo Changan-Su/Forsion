@@ -46,7 +46,6 @@ registerMessages({
   'desk.moveDown': { zh: '移到下面', en: 'Move down' },
   'desk.remove': { zh: '从 Desk 拿掉', en: 'Remove from Desk' },
   // 旧叫法:Agent Desk 已换成 deskOpen.tsx 的四项(11-23);Human Desk 分支还在用,它换过去之后删
-  'desk.openMain': { zh: '在主区打开', en: 'Open in main area' },
   'desk.pinned': { zh: '钉住', en: 'Pinned' },
   'desk.unpin': { zh: '取消钉住', en: 'Unpin' },
   'desk.fresh': { zh: 'Agent 刚放的', en: 'Just added by the agent' },
