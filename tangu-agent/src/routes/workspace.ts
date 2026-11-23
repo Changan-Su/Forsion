@@ -19,7 +19,7 @@ import { noteWorkspaceUpload, forgetWorkspaceUpload } from '../services/workspac
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { assertAccountStorage, markAccountUsageDirty, StorageLimitError } from '../services/accountStorage.js';
-import { mkdirSync } from 'node:fs';
+import { lstatSync, mkdirSync } from 'node:fs';
 
 const router = Router();
 
@@ -31,7 +31,14 @@ const router = Router();
 const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function accountSessionDir(sessionId: string, create: boolean): string {
   if (!SESSION_UUID_RE.test(sessionId)) throw Object.assign(new Error('sessionId must be a UUID'), { status: 400 });
-  const dir = path.join(accountHome(requireAccountId('workspace files')), 'uploads', sessionId.toLowerCase());
+  const uploads = path.join(accountHome(requireAccountId('workspace files')), 'uploads');
+  // uploads 本身(以及会话那一层)必须是真目录:是链接就不认(账号的写接口从来不建链接;插件脚本留下的会被扫掉)
+  for (const p of [uploads, path.join(uploads, sessionId.toLowerCase())]) {
+    let st;
+    try { st = lstatSync(p); } catch { continue; }
+    if (!st.isDirectory()) throw Object.assign(new Error('the uploads folder of this account is not a plain folder'), { status: 409 });
+  }
+  const dir = path.join(uploads, sessionId.toLowerCase());
   if (create) mkdirSync(dir, { recursive: true });
   return dir;
 }

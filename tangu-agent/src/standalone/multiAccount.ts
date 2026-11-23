@@ -92,8 +92,8 @@ const ROUTE_ALLOWLIST: ReadonlyArray<RouteRule> = [
   { method: 'DELETE', path: '/agent/sessions/:id', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cascade delete in this account DB + checkpoints under this account home' },
   { method: 'GET', path: '/agent/sessions/:id/messages', own: [{ kind: 'session', param: 'id' }], why: 'session looked up in this account DB first (another account id = unknown id = 404); messages from this account DB' },
   { method: 'GET', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404)' },
-  { method: 'PUT', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
-  { method: 'PATCH', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
+  { quota: true, method: 'PUT', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
+  { quota: true, method: 'PATCH', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
   // ── Agent ──
   { method: 'GET', path: '/agent/agents', why: 'listAgents() over this account agents/ (roster cache per account); cloud sync scope absent (no agentFiles brain)' },
   { quota: true, method: 'POST', path: '/agent/agents', why: 'saveAgent under this account agents/; cloud sync refused without an agentFiles brain' },
@@ -148,7 +148,8 @@ function multiAccountBrain(b: CloudBrainServices): CloudBrainServices {
 
 function multiAccountProfile(defaultModelId?: string): AppProfile {
   const base = createTanguProfile({ sandboxMode: 'none', defaultModelId, toolBuiltins: [...MULTI_ACCOUNT_TOOL_ALLOWLIST] });
-  return { ...base, features: { ...base.features, sandbox: false, webSearch: false, historian: false, customTools: false } };
+  // 群聊不开:协调 run 拿着这个账号的名额等成员 run,成员 run 又排在同一个账号的名额后面(services/runAdmission.ts)→ 等到超时
+  return { ...base, capabilities: { ...base.capabilities, groupChat: false }, features: { ...base.features, sandbox: false, webSearch: false, historian: false, customTools: false } };
 }
 
 // ── 白名单路由器:按注册的路由模式从各路由器栈里摘 ──────────────────────────────────────────────────

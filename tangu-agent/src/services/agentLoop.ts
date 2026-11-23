@@ -1,6 +1,6 @@
 import { accountWorkspaceDir, bindAccount, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
 import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
-import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, startRunClock, type WaitingFor } from './runAdmission.js';
+import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, startRunClock, waitingOnUser, type WaitingFor } from './runAdmission.js';
 import { disposeRunScratch } from './pluginScripts.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
@@ -491,6 +491,11 @@ function startRunInAccount(runId: string): void {
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
     try {
       const code = err instanceof RunAdmissionError ? { code: err.code } : {};
+      // 没拿到名额就失败的(回忙 / 排满):这一轮还没开跑、用户这句还没落库 —— 补回来,历史里才看得到这句和它为什么没跑(幂等)
+      if (err instanceof RunAdmissionError) {
+        const row = await query<any[]>(`SELECT session_id, model_id, input FROM agent_runs WHERE id = ?`, [runId]).then((r) => r?.[0]).catch(() => null);
+        if (row) await ensureUserRow(row, runInput(row)).catch(() => {});
+      }
       await publish(runId, 'error', { error: message, aborted, content: '', ...code, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
       await drain(runId).catch(() => {});
       await updateRunStatus(runId, status, { error: message }).catch(() => {});
@@ -3833,7 +3838,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 被移交的命令收尾了也算有东西可交(否则要等用户拍板才交得出去,Codex 11-21 P1-5);末轮不取(见 takeBgRows)
       const bgReady = (): boolean => !finalIter && handoffAllowed() && hasHandoffUpdates(sessionId);
       while (![...parked.values()].some(parkedReady) && !steerQueue.get(runId)?.length && !bgReady()) {
-        await new Promise<void>((resolve, reject) => {
+        // 多账号模式:这里才是托盘 run 真正停下来等人的地方 —— 名额先还、时长暂停,有东西可交了再拿回名额(services/runAdmission.ts)
+        await waitingOnUser(runId, new Promise<void>((resolve, reject) => {
           const offBg = onHandoffClosed((p) => { if (p.sessionId === sessionId) parkedWake?.(); });
           const settle = (): void => { parkedWake = null; offBg(); ac.signal.removeEventListener('abort', onAbort); };
           const onAbort = (): void => { settle(); reject(new AbortLikeError()); };
@@ -3841,7 +3847,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (ac.signal.aborted) return onAbort();
           ac.signal.addEventListener('abort', onAbort, { once: true });
           void waitSteer(runId).then(() => parkedWake?.());
-        });
+        }), ac.signal);
       }
     };
 

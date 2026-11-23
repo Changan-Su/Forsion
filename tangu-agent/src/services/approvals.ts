@@ -1,5 +1,7 @@
 import { standInOf, type StandInDomain } from './accessDomain.js';
 import { waitingOnUser } from './runAdmission.js';
+
+const passThrough = <T>(_runId: string, p: Promise<T>): Promise<T> => p;
 import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
@@ -633,6 +635,10 @@ const approvalQueues = new Map<string, Promise<unknown>>(); // runId -> 队尾
 // 审批托盘客户端起的 run(POST /agent/runs 带 approval_tray,agentLoop 登记):桌面把待批卡攒在输入框上方、
 // 按 approvalId 各自兑现,不怕互相顶掉 → 同 run 的审批一起发出去,不再排队。TUI / 通道 / 其它入口照旧串行。
 const trayRuns = new Set<string>();
+/** 托盘 run:提问 / 审批挂起后这一轮照常往下跑,不在这里等 —— 多账号模式的名额由 agentLoop 真正停下来等(waitForParked)时才还。 */
+export function isApprovalTrayRun(runId: string): boolean {
+  return trayRuns.has(runId);
+}
 export function setApprovalTray(runId: string, on: boolean): void {
   if (on) trayRuns.add(runId);
   else trayRuns.delete(runId);
@@ -675,8 +681,9 @@ function requestApprovalNow(
   const approvalId = nextApprovalId();
   // P1 · K3:受保护路径的审批只在执行设备本机批准 —— 兑现路由 / 异步审批 / 通道据此拒远端「批准」,卡片据此不给远端批准键。
   const localOnly = reason?.kind === 'protected';
-  // 多账号模式:等用户批准时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样
-  return waitingOnUser(runId, new Promise<ApprovalDecision>((resolve) => {
+  // 多账号模式:等用户批准时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样。
+  // 托盘 run 不在这里还:审批挂起后这一轮还在跑,真正停下来等的地方是 agentLoop 的 waitForParked。
+  return (trayRuns.has(runId) ? passThrough : waitingOnUser)(runId, new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
       untrackPrompt(approvalId, 'expired'); // 中止分支不发 approval_result:索引(通知 / 角标)要在这里撤,否则残留

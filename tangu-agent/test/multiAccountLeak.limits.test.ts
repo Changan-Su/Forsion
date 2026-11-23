@@ -36,7 +36,7 @@ vi.mock('node:child_process', async (orig) => (await import('./helpers/multiAcco
 vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 
 import Database from 'better-sqlite3';
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootMultiAccount, canary, randomUUID, startRun, steps, type MaEngine, type Script } from './helpers/multiAccountHarness.js';
 import { DEFAULT_LIMITS, LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
@@ -52,6 +52,10 @@ function setLimits(v: Record<string, unknown> | string | null): void {
   // the file is checked by size + mtime; make sure two writes within one clock tick are still seen as different
   reloadMultiAccountLimits();
 }
+const userRows = (account: string, sessionId: string): number => {
+  const db = new Database(join(accDir(account), 'state.db'), { readonly: true, fileMustExist: true });
+  try { return (db.prepare(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND role = 'user'`).get(sessionId) as any).n; } finally { db.close(); }
+};
 const runStatus = (account: string, runId: string): string => {
   const db = new Database(join(accDir(account), 'state.db'), { readonly: true, fileMustExist: true });
   try { return (db.prepare('SELECT status FROM agent_runs WHERE id = ?').get(runId) as any)?.status; } finally { db.close(); }
@@ -121,6 +125,7 @@ describe('multi-account limits: tasks at once', () => {
     expect(err?.payload?.code).toBe('ENGINE_BUSY');
     expect(String(err?.payload?.error)).toMatch(/busy/i);
     expect(runStatus('carol', c.runId)).toBe('failed');
+    expect(userRows('carol', c.sessionId), 'what carol said stays in her history next to the failure').toBe(1);
     expect(E.fake.outbound.some((r) => r.runId === c.runId)).toBe(false);
     a.release(); b.release();
     await E.client.follow('alice', a.runId, { timeoutMs: 15_000 });
@@ -149,6 +154,7 @@ describe('multi-account limits: tasks at once', () => {
     const f = await E.client.follow('alice', a3.runId, { timeoutMs: 10_000 });
     expect(f.status).toBe('error');
     expect(f.events.find((e) => e.type === 'error')?.payload?.code).toBe('ACCOUNT_QUEUE_FULL');
+    expect(userRows('alice', a3.sessionId)).toBe(1);
     // another account is not affected by alice's queue
     const b = await held('bob', 'q-b');
     expect(await within(b.reached, 5_000)).toBe(true);
@@ -235,6 +241,27 @@ describe('multi-account limits: waiting on the person', () => {
     }
   }, 60_000);
 
+  it('a tray run keeps its slot while it goes on after asking; it gives it back only when it stops to wait', async () => {
+    const s = E.fake.script('erin', 'tray', steps([{ calls: [{ name: 'ask_user', args: { question: 'tray?' } }] }], 'tray waits'));
+    const g = E.fake.gate(s.token, 1); // the model call made right after the question is parked
+    const sessionId = randomUUID();
+    const resp = await E.client.call('erin', 'POST', '/agent/runs', { body: { session_id: sessionId, model_id: 'fake/model-1', message: s.marker, approval_tray: true } });
+    expect(resp.status, resp.text).toBe(200);
+    const runId = resp.json.runId as string;
+    s.bindRun(runId);
+    await g.reached;
+    expect(admissionSnapshot().running.map((x) => x.runId), 'still working: keeps the slot').toContain(runId);
+    expect(admissionSnapshot().onUser.map((x) => x.runId)).not.toContain(runId);
+    const f = await E.client.follow('erin', runId, { timeoutMs: 10_000, autoAnswer: false, until: (ev) => ev.type === 'inquiry_request' });
+    const inquiry = String(f.events.find((e) => e.type === 'inquiry_request')?.payload?.inquiryId);
+    g.release();
+    const until = Date.now() + 5_000;
+    while (Date.now() < until && !admissionSnapshot().onUser.some((x) => x.runId === runId)) await sleep(50);
+    expect(admissionSnapshot().onUser.map((x) => x.runId), 'nothing left to do but wait: slot given back').toContain(runId);
+    expect((await E.client.call('erin', 'POST', `/agent/runs/${runId}/inquiries/${inquiry}`, { body: { answer: 'yes' } })).status).toBe(200);
+    expect((await E.client.follow('erin', runId, { timeoutMs: 15_000 })).status).toBe('done');
+  }, 60_000);
+
   it('the turn clock stops while waiting for an answer', async () => {
     setLimits({ runMinutes: 0.02 }); // 1.2 s
     const q = await asking('alice', 'slow-answer');
@@ -282,6 +309,7 @@ describe('multi-account limits: storage', () => {
     expect(blocked.status).toBe(507);
     expect(blocked.json?.code).toBe('STORAGE_LIMIT');
     expect((await c.call('dave', 'POST', '/agent/memory', { body: { content: canary('dave', 'mem') } })).status).toBe(507);
+    expect((await c.call('dave', 'PATCH', `/agent/sessions/${r.sessionId}/config`, { body: { note: 'x'.repeat(4096) } })).status).toBe(507);
     expect((await c.call('dave', 'GET', '/agent/sessions')).status).toBe(200);
     expect((await c.call('dave', 'DELETE', `/agent/sessions/${r.sessionId}`)).status).toBe(200);
     // bob is under his own limit and keeps working
@@ -321,5 +349,17 @@ describe('multi-account limits: the limits file', () => {
     expect(reloadMultiAccountLimits()).toMatchObject({ runsPerAccount: DEFAULT_LIMITS.runsPerAccount, concurrentRuns: DEFAULT_LIMITS.concurrentRuns, runMinutes: 3, maxOpenAccounts: DEFAULT_LIMITS.maxOpenAccounts });
     setLimits({ concurrentRuns: 1_000_000 });
     expect(reloadMultiAccountLimits().concurrentRuns).toBeLessThan(1_000_000);
+  });
+
+  it('a file that cannot be read keeps the last good values and is read again once it can be', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // file modes do not stop root / Windows
+    setLimits({ runsPerAccount: 2 });
+    expect(reloadMultiAccountLimits().runsPerAccount).toBe(2);
+    writeFileSync(limitsPath, JSON.stringify({ runsPerAccount: 3 }));
+    chmodSync(limitsPath, 0o000);
+    try {
+      expect(reloadMultiAccountLimits().runsPerAccount).toBe(2);
+    } finally { chmodSync(limitsPath, 0o644); }
+    expect(reloadMultiAccountLimits().runsPerAccount, 'same size and time as the unreadable version, read again').toBe(3);
   });
 });

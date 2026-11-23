@@ -102,6 +102,7 @@ function sanitize(raw: Record<string, unknown>, file: string): MultiAccountLimit
   return out;
 }
 
+let warnedUnreadable: string | null = null;
 function reload(): void {
   const file = limitsFile();
   let sig: string | null;
@@ -119,9 +120,19 @@ function reload(): void {
     return;
   }
   if (sig === lastSig) return;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    // 读不出来(权限等)≠ 坏文件:不记这一版的签名,下次照样再读;只报一次
+    if (warnedUnreadable !== sig) console.warn(`[tangu] multi-account: cannot read ${file} (${(e as Error)?.message || e}); keeping the previous limits`);
+    warnedUnreadable = sig;
+    return;
+  }
+  warnedUnreadable = null;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, 'utf8'));
+    raw = JSON.parse(text);
   } catch (e) {
     console.warn(`[tangu] multi-account: cannot parse ${file} (${(e as Error)?.message || e}); keeping the previous limits`);
     lastSig = sig; // 同一份坏文件不反复报;改了再读

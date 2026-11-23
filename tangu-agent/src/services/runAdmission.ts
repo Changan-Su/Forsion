@@ -85,13 +85,14 @@ function pump(): void {
       note(w, 'account');
       continue;
     }
+    const waited = w.engineWaited + (w.engineSince === null ? 0 : now - w.engineSince);
+    if (!w.resuming && waited >= timeout) { // 到点了:哪怕这一刻刚空出名额也不放(两次每秒检查之间到的期)
+      remove(w);
+      w.reject(new RunAdmissionError('ENGINE_BUSY', ENGINE_BUSY_MESSAGE));
+      continue;
+    }
     if (holders.size >= l.concurrentRuns) {
       if (w.engineSince === null) w.engineSince = now;
-      if (!w.resuming && w.engineWaited + (now - w.engineSince) >= timeout) {
-        remove(w);
-        w.reject(new RunAdmissionError('ENGINE_BUSY', ENGINE_BUSY_MESSAGE));
-        continue;
-      }
       note(w, 'engine');
       continue;
     }

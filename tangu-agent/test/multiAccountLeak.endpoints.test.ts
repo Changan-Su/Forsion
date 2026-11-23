@@ -32,7 +32,7 @@ const env = await vi.hoisted(async () => {
 vi.mock('node:child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootMultiAccount, canary, leakHits, randomUUID, respLeaks, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
@@ -120,6 +120,25 @@ describe('multi-account: session files and uploads', () => {
     expect((await c.call('bob', 'GET', '/agent/workspace/list', { query: { sessionId: '__project__', project: 'Tangu' } })).status).toBe(400);
     expect((await c.call('bob', 'GET', '/agent/workspace/list', { query: { sessionId: '../alice' } })).status).toBe(400);
   });
+});
+
+describe('multi-account: uploads folder that is a link', () => {
+  it('a link in place of the uploads folder is refused and nothing lands where it points', async () => {
+    const c = E.client;
+    expect((await c.call('frank', 'GET', '/agent/sessions')).status).toBe(200);
+    expect((await c.call('grace', 'GET', '/agent/sessions')).status).toBe(200);
+    const target = join(accDir('grace'), 'workspace');
+    mkdirSync(target, { recursive: true });
+    rmSync(join(accDir('frank'), 'uploads'), { recursive: true, force: true });
+    symlinkSync(target, join(accDir('frank'), 'uploads'));
+    try {
+      const sid = randomUUID();
+      const up = await c.call('frank', 'POST', '/agent/workspace/upload', { body: { sessionId: sid, files: [{ path: 'x.txt', content: 'frank' }] } });
+      expect(up.status).toBe(409);
+      expect(readdirSync(target)).not.toContain(sid);
+      expect((await c.call('frank', 'GET', `/agent/workspace/list?sessionId=${sid}`)).status).toBe(409);
+    } finally { rmSync(join(accDir('frank'), 'uploads'), { force: true }); }
+  }, 30_000);
 });
 
 describe('multi-account: model catalogue', () => {
