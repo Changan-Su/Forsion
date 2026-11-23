@@ -42,8 +42,6 @@ export function skillFrontmatter(text: string): { name: string; description: str
       const body: string[] = []
       while (i + 1 < lines.length && (/^\s/.test(lines[i + 1]) || lines[i + 1].trim() === '')) body.push(lines[++i].trim())
       v = body.join(' ').trim()
-    } else if (/^[[{]/.test(v)) {
-      v = '' // a YAML list / map is not text
     } else if ((v.startsWith('"') && v.endsWith('"') && v.length >= 2)) {
       try { v = JSON.parse(v) } catch { v = v.slice(1, -1) }
     } else if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) v = v.slice(1, -1).replace(/''/g, "'")

@@ -25,9 +25,8 @@ describe('skillFrontmatter', () => {
     expect(skillFrontmatter('---\nname: x\n---\n')).toBeNull()
     expect(skillFrontmatter('---\nname: ""\ndescription: d\n---\n')).toBeNull()
     expect(skillFrontmatter('---\nname: x\ndescription: d\n')).toBeNull()
-    // A YAML list or map isn't a description.
-    expect(skillFrontmatter('---\nname: x\ndescription: []\n---\n')).toBeNull()
-    expect(skillFrontmatter('---\nname: x\ndescription: { a: 1 }\n---\n')).toBeNull()
+    // Read as text, the way the engine reads it (a hand-written `[Beta] …` description is common).
+    expect(skillFrontmatter('---\nname: x\ndescription: [Beta] does things\n---\n')).toEqual({ name: 'x', description: '[Beta] does things' })
   })
 })
 

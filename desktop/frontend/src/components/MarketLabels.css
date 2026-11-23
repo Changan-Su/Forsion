@@ -3,7 +3,7 @@
  * 只用产品 token;字号一律走 --ui-font-*(check:uiscale)。方案:docs/ToBeImproved/商店技能来源方案_2026-11-23 */
 
 /* 作者旁的标签:作者名先截,标签不截 */
-.mk-pub { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 18px; padding: 0 6px; border-radius: var(--radius-xs); background: var(--overlay-light); color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+.mk-pub { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 18px; padding: 0 6px; border-radius: var(--radius-xs, 4px); background: var(--overlay-light); color: var(--text-muted); font-weight: 500; white-space: nowrap; }
 .mk-pub svg { flex: none; }
 .mk-pub.is-official { color: var(--text); }
 .mk-pub.is-official svg { color: var(--accent-ink); }

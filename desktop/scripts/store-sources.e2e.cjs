@@ -151,6 +151,12 @@ async function main() {
     const shCat = await win.evaluate((id) => window.tangu.marketSourcesCatalog(id, { locale: 'zh' }), SH)
     assert.deepEqual(shCat.items.map((x) => x.id), [`src_${SH}_wayfinder`, `src_${SH}_grill-me`, `src_${SH}_broken`])
     assert.deepEqual(shCat.items[0].prereqs.map((p) => p.id), [`src_${SH}_grill-me`])
+    // The card the chat reads and the detail page: same facts, and the server-verified note for this commit.
+    const wfItem = await win.evaluate((id) => window.tangu.marketSourcesItem(id, 'zh'), `src_${SH}_wayfinder`)
+    assert.deepEqual(wfItem?.prereqs?.map((p) => p.id), [`src_${SH}_grill-me`])
+    assert.equal(wfItem?.commit, SH_COMMIT); assert.equal(wfItem?.collected?.adapted, true)
+    const wfDetail = await win.evaluate((id) => window.tangu.marketDetail(id), `src_${SH}_wayfinder`)
+    assert.equal(wfDetail?.adapt?.note, NOTE); assert.equal(wfDetail?.adapt?.commit, SH_COMMIT)
     // Scripts nobody confirmed: refused in main before anything is written; with the confirmation it installs.
     const unconfirmed = await win.evaluate((id) => window.tangu.marketInstall(id, undefined, { type: 'skill' }).then(() => 'installed', (e) => String(e.message)), `src_${SH}_grill-me`)
     assert.match(unconfirmed, /install: confirm-needed scripts=1 audit=0/)
