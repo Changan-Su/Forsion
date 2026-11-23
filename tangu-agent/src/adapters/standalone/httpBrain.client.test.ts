@@ -118,3 +118,16 @@ describe('httpBrain 上报宿主客户端与系统', () => {
     expect(hostOriginHeaders({}, 'linux')).toEqual({})
   })
 })
+
+// 11-23:商店列表带 include=collected(老服务端忽略这个参数);收录条目的详情仍是同一路径 /api/market/items/src_25aae625_<itemId>。
+describe('marketplace 请求', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  it('列表要上收录条目,详情按卡片 ID 原样取', async () => {
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(String(url)); return new Response(JSON.stringify({ items: [] }), { status: 200 }) }))
+    const brain = createHttpBrain({ cloudUrl: 'http://127.0.0.1:1', token: 't' })
+    await brain.marketplace!.list()
+    await brain.marketplace!.detail('src_25aae625_wayfinder')
+    expect(urls).toEqual(['http://127.0.0.1:1/api/market/items?include=collected', 'http://127.0.0.1:1/api/market/items/src_25aae625_wayfinder'])
+  })
+})

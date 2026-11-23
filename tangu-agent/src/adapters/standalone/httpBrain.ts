@@ -363,7 +363,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
 
   const brain: CloudBrainServices = {
     marketplace: {
-      list: async (signal) => (await getJson<{ items: unknown[] }>('/api/market/items', signal))?.items || [],
+      // include=collected: also the skills Forsion collected from skills.sh (older servers ignore the parameter).
+      list: async (signal) => (await getJson<{ items: unknown[] }>('/api/market/items?include=collected', signal))?.items || [],
       detail: (id, signal) => getJson(`/api/market/items/${encodeURIComponent(id)}`, signal),
     },
     llm: {
