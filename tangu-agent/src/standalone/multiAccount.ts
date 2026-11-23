@@ -38,7 +38,8 @@ import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
 import { remoteLockGuard } from './remoteLockGuard.js';
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { accountHasRuns, drainRunsForExit, recoverAccountRuns } from '../services/agentLoop.js';
+import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import type { StandaloneConfig } from './config.js';
 
 export interface MultiAccountAppOptions {
@@ -222,6 +223,8 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   dispose: () => Promise<void>;
   routeAllowlist: ReadonlyArray<{ method: string; path: string }>;
   toolAllowlist: ReadonlyArray<string>;
+  /** 账号库的打开 / 开户情况与立即淘汰一次(测试 / 诊断)。 */
+  accounts: { open(): string[]; provisioned(): string[]; evictIdleNow(idleMs?: number, maxOpen?: number): string[] };
 }> {
   if (!isMultiAccount()) throw new Error('createMultiAccountApp requires TANGU_MULTI_ACCOUNT=1 in the real environment');
   if (!opts.localToken) throw new Error('multi-account mode requires a host credential (TANGU_LOCAL_TOKEN)');
@@ -236,12 +239,10 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     provision: async (id) => {
       mkdirSync(accountWorkspaceDir(id), { recursive: true });
       await runMigration();
-      // 收敛上次进程留下的 run:开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。标成失败
-      //(与启动时清陈旧行同一种写法),不重新入队、不自动续跑 —— 多账号模式没有启动恢复。
-      const stale = await mh.host.query<any[]>(
-        `UPDATE agent_runs SET status = 'failed', error = 'engine restarted', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'running') RETURNING id`,
-      );
-      if (stale.length) console.log(`[tangu] multi-account: marked ${stale.length} run(s) of ${id} left by the previous engine as failed`);
+      // 上次进程留下的 run(崩溃 / 被强杀 / 退出时还在排队):开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。
+      // 标成中断、补回这一轮用户说的话和一条说明行,不重放、不续跑(services/agentLoop.ts 的 recoverAccountRuns)。
+      const recovered = await recoverAccountRuns();
+      if (recovered) console.log(`[tangu] multi-account: settled ${recovered} run(s) of ${id} left by the previous engine as interrupted`);
       await seedBuiltinSkills().catch((e) => console.warn(`[tangu] multi-account: seeding built-in skills for ${id} failed:`, e?.message || e));
       try { seedExampleCommand(); } catch { /* best-effort */ }
       await seedBundleAgents().catch(() => []);
@@ -265,6 +266,16 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     (allowRouter as any)[rule.method.toLowerCase()](rule.path, ownershipGuard(mh, rule.own), cwdClamp(rule.clamp), ...handlers);
   }
 
+  // 账号库淘汰:手上没事(没有在途请求 / SSE、没有 run)且闲了一阵的账号关掉库句柄,下次用时原地重开(开户与恢复不重跑)。
+  const inflight = new Map<string, number>();
+  const busy = (id: string): boolean => (inflight.get(id) ?? 0) > 0 || accountHasRuns(id);
+  const evictTimer = setInterval(() => {
+    const l = multiAccountLimits();
+    const closed = mh.evictIdle({ idleMs: minutesMs(l.idleCloseMinutes), maxOpen: l.maxOpenAccounts, isBusy: busy });
+    if (closed.length) console.log(`[tangu] multi-account: closed ${closed.length} idle account database(s)`);
+  }, 60_000);
+  evictTimer.unref?.();
+
   const app = express();
   app.disable('x-powered-by');
   app.get('/health', (_req, res) => res.json({ ok: true, mode: 'multi-account' }));
@@ -274,6 +285,15 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     if (!who.ok) return void res.status(who.status).json({ detail: who.detail });
     (req as any).accountId = who.accountId;
     (req as any).user = { userId: who.accountId, username: who.accountId, role: 'USER' };
+    // 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库
+    inflight.set(who.accountId, (inflight.get(who.accountId) ?? 0) + 1);
+    let counted = true;
+    res.once('close', () => {
+      if (!counted) return;
+      counted = false;
+      const left = (inflight.get(who.accountId) ?? 1) - 1;
+      if (left > 0) inflight.set(who.accountId, left); else inflight.delete(who.accountId);
+    });
     next();
   });
   // ② 白名单先判(先于读请求体、先于开户):按原始 method + 注册的路由模式。HEAD 不当 GET、OPTIONS 不自动应答 ——
@@ -310,6 +330,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   return {
     app,
     dispose: async () => {
+      clearInterval(evictTimer);
       try { mod.dispose(); } catch { /* ignore */ }
       mh.close();
       setMultiAccountBundleDirs(null);
@@ -317,6 +338,14 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     },
     routeAllowlist: ROUTE_ALLOWLIST.map(({ method, path }) => ({ method, path })),
     toolAllowlist: [...MULTI_ACCOUNT_TOOL_ALLOWLIST],
+    accounts: {
+      open: () => mh.openAccounts(),
+      provisioned: () => mh.provisionedAccounts(),
+      evictIdleNow: (idleMs, maxOpen) => {
+        const l = multiAccountLimits();
+        return mh.evictIdle({ idleMs: idleMs ?? minutesMs(l.idleCloseMinutes), maxOpen: maxOpen ?? l.maxOpenAccounts, isBusy: busy });
+      },
+    },
   };
 }
 

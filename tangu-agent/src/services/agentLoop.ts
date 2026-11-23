@@ -328,6 +328,12 @@ function scheduleRunCleanup(runId: string, unref = false): void {
 /** 测试用:run 的属主登记(多账号模式)。 */
 export function __runOwnerForTests(runId: string): string | undefined { return runAccount.get(runId); }
 
+/** 多账号模式:这个账号在本进程里还有没有 run(在跑 / 排队 / 收尾后 30 秒保留期内)。账号库淘汰据此跳过手上有事的账号。 */
+export function accountHasRuns(accountId: string): boolean {
+  for (const owner of runAccount.values()) if (owner === accountId) return true;
+  return false;
+}
+
 function inRunAccount<T>(runId: string, fn: () => T): T {
   if (!isMultiAccount() || currentAccountId()) return fn();
   const owner = runAccount.get(runId);
@@ -1332,6 +1338,50 @@ export async function recoverQueuedRuns(): Promise<number> {
   } finally {
     // 意图只在写它的进程已经没了、它名下的行都处理完时才删:那个引擎还活着(别的桌面实例正停它)就留给它
     if (intent && !intentRowsLeft && !pidAlive(intent.pid)) clearShutdownIntent();
+  }
+  return n;
+}
+
+/**
+ * 多账号模式的启动恢复,按账号做:本进程第一次打开这个账号的库时(开户)调,在该账号的上下文里跑。那一刻本进程还没替这个账号
+ * 起过任何 run,库里还是 queued / running / 没处理过的 interrupted 的行都是上一个进程留下的。一律**不重放、不续跑**:
+ *  - running(跑到一半,进程没了)→ interrupted:crash;queued(从没开跑)→ interrupted:engine_restart;
+ *  - 两种都把这一轮用户的那句补回库里(它在 run 真正开跑时才落库),再补一条说明原因的中断行(认领 resumed_by = '-',只处理一次);
+ *  - 有取消请求的(用户按停 / 级联)按 aborted 收尾;上次就停下、还没处理过的 interrupted 只补说明行。
+ * 返回处理的行数。多账号模式没有 recoverQueuedRuns(它扫的是「那一个」库、会自动续跑)。
+ */
+export async function recoverAccountRuns(): Promise<number> {
+  requireAccountId('recoverAccountRuns');
+  let n = 0;
+  const rows = await query<any[]>(
+    `SELECT * FROM agent_runs WHERE status IN ('queued', 'running') OR (status = 'interrupted' AND resumed_by IS NULL) ORDER BY created_at ASC`,
+  );
+  for (const run of rows) {
+    try {
+      if (run.cancel_requested && run.status !== 'interrupted') { if (await settleCancelled(run, run.status)) n++; continue; }
+      let reason: InterruptReason;
+      if (run.status === 'running') {
+        if ((await markOrphanInterrupted(run.id, 'crash')) !== 'marked') continue;
+        reason = 'crash';
+      } else if (run.status === 'queued') {
+        const marked = await query<any[]>(
+          `UPDATE agent_runs SET status = 'interrupted', error = 'interrupted:engine_restart', interrupted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'queued' RETURNING id`,
+          [run.id],
+        );
+        if (!marked.length) continue;
+        await publish(run.id, 'error', { error: 'interrupted', aborted: true, interrupted: 'engine_restart' }).catch(() => {});
+        await drain(run.id).catch(() => {});
+        scheduleRunCleanup(run.id);
+        reason = 'engine_restart';
+      } else {
+        reason = reasonFromError(run.error) ?? 'engine_stop';
+      }
+      await ensureUserRow(run, runInput(run));
+      if (await commitNotice({ ...run, status: 'interrupted' }, reason)) n++;
+    } catch (e: any) {
+      console.warn(`[agent-core] multi-account: recovering run ${run?.id} failed:`, e?.message || e);
+    }
   }
   return n;
 }

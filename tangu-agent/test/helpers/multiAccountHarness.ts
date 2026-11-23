@@ -737,6 +737,8 @@ export interface MaEngine {
   toolAllowlist: ReadonlyArray<string>;
   routes: RouteEntry[];
   scope: any;
+  /** open / provisioned account databases; evict idle ones now */
+  accounts: { open(): string[]; provisioned(): string[]; evictIdleNow(idleMs?: number, maxOpen?: number): string[] };
   dispose: () => Promise<void>;
 }
 
@@ -773,6 +775,7 @@ export async function bootMultiAccount(o: { bundleDirs?: string[] } = {}): Promi
     toolAllowlist: created.toolAllowlist,
     routes,
     scope,
+    accounts: created.accounts,
     dispose: async () => {
       try { (server as any).closeAllConnections?.(); } catch { /* ignore */ }
       await new Promise<void>((r) => server.close(() => r()));

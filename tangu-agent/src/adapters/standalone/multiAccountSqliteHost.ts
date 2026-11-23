@@ -53,6 +53,13 @@ export interface MultiAccountHost {
   claimSession(sessionId: string): boolean;
   /** 已打开库的账号(测试 / 诊断)。 */
   openAccounts(): string[];
+  /** 已开过户的账号(本进程里;关掉库不算销户,重开不再跑开户)。 */
+  provisionedAccounts(): string[];
+  /**
+   * 关掉闲着的账号库:手上没事(isBusy 为 false)且超过 idleMs 没碰过的一律关;仍超过 maxOpen 个时,再按最久没用的关手上没事的。
+   * 只关句柄、从缓存里拿掉 —— 开户状态留着,下次碰到时 dbFor 原地重开(不重跑开户 / 恢复)。返回关掉的账号。
+   */
+  evictIdle(opts: { idleMs: number; maxOpen: number; isBusy: (accountId: string) => boolean; now?: number }): string[];
   close(): void;
 }
 
@@ -110,6 +117,7 @@ export function assertAccountPaths(id: string): void {
 export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): MultiAccountHost {
   const dbs = new Map<string, Database.Database>();
   const ready = new Map<string, Promise<void>>();
+  const lastUsed = new Map<string, number>(); // 账号 → 最近一次碰它的库的时刻(淘汰用)
 
   mkdirSync(engineRoot(), { recursive: true });
   const owners = new Database(join(engineRoot(), 'session-owners.db'));
@@ -151,6 +159,7 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
   };
 
   const dbFor = (id: string): Database.Database => {
+    lastUsed.set(id, Date.now());
     let db = dbs.get(id);
     if (db) return db;
     assertAccountPaths(id); // 账号 home / 库文件不许是软链、不许落到 accounts/<id> 之外
@@ -238,10 +247,34 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
     sessionOwner,
     claimSession: (sessionId) => claimFor(accountOrThrow('claimSession'), sessionId),
     openAccounts: () => [...dbs.keys()],
+    provisionedAccounts: () => [...ready.keys()],
+    evictIdle: ({ idleMs, maxOpen, isBusy, now = Date.now() }) => {
+      const closed: string[] = [];
+      const closeOne = (id: string): void => {
+        const db = dbs.get(id);
+        if (!db) return;
+        dbs.delete(id);
+        try { db.close(); } catch (e) { console.warn(`[tangu] multi-account: closing the database of ${id} failed:`, (e as Error)?.message || e); }
+        closed.push(id);
+      };
+      const idle = (id: string): boolean => { try { return !isBusy(id); } catch { return false; } }; // 判不出 = 当它忙
+      for (const id of [...dbs.keys()]) {
+        if (now - (lastUsed.get(id) ?? 0) >= idleMs && idle(id)) closeOne(id);
+      }
+      if (dbs.size > maxOpen) {
+        const byAge = [...dbs.keys()].sort((a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0));
+        for (const id of byAge) {
+          if (dbs.size <= maxOpen) break;
+          if (idle(id)) closeOne(id);
+        }
+      }
+      return closed;
+    },
     close: () => {
       for (const db of dbs.values()) { try { db.close(); } catch { /* ignore */ } }
       dbs.clear();
       ready.clear();
+      lastUsed.clear();
       try { owners.close(); } catch { /* ignore */ }
     },
   };
