@@ -133,9 +133,12 @@ export const ImageView: React.FC<{ src: string; alt: string; view: ImgView; setV
         const viewportWidth = el.clientWidth
         setView((p) => {
           const overflow = (width * p.s - viewportWidth) / 2
-          // A fitted image stays put. Use the same limits as the viewport when it overflows.
           if (overflow <= 0) return p
-          return { ...p, x: Math.max(-overflow, Math.min(overflow, p.x - dx)) }
+          // Pointer dragging can leave the image beyond a wheel limit. A wheel step may bring
+          // it back, but must never flip direction just to reach the limit.
+          const min = Math.min(-overflow, p.x)
+          const max = Math.max(overflow, p.x)
+          return { ...p, x: Math.max(min, Math.min(max, p.x - dx)) }
         })
         return
       }

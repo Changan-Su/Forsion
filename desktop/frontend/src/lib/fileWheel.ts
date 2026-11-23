@@ -5,7 +5,8 @@ import { zoomOf } from '@lcl/engine/menuAnchor'
 export function horizontalWheelDelta(event: WheelEvent, viewport: HTMLElement): number {
   if (event.ctrlKey || event.metaKey) return 0
   const mode = event.deltaMode
-  const dx = event.shiftKey ? event.deltaX || event.deltaY : event.deltaY ? 0 : event.deltaX
+  const { deltaX, deltaY } = event
+  const dx = event.shiftKey ? deltaX || deltaY : Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : 0
   if (!dx) return 0
   if (mode === WheelEvent.DOM_DELTA_LINE) return dx * (parseFloat(getComputedStyle(viewport).lineHeight) || 16)
   if (mode === WheelEvent.DOM_DELTA_PAGE) return dx * viewport.clientWidth
@@ -20,16 +21,24 @@ export function scrollFileOnShiftWheel(event: WheelEvent, viewport: HTMLElement)
   viewport.scrollBy(dx, 0)
 }
 
+/** Side-by-side diffs and other previews can have their own scroller inside the file pane. */
+function scrollTarget(target: Element, pane: HTMLElement): HTMLElement {
+  for (let el: Element | null = target; el && el !== pane; el = el.parentElement) {
+    if (!(el instanceof HTMLElement) || el.scrollWidth <= el.clientWidth) continue
+    const { overflowX } = getComputedStyle(el)
+    if (overflowX === 'auto' || overflowX === 'scroll') return el
+  }
+  return pane
+}
+
 export function useFileShiftWheel(ref: RefObject<HTMLElement | null>, selector?: string): void {
   useEffect(() => {
     const host = ref.current
     if (!host) return
     const onWheel = (event: WheelEvent): void => {
-      if (!event.shiftKey) return
-      const viewport = selector && event.target instanceof Element
-        ? event.target.closest<HTMLElement>(selector)
-        : host
-      if (viewport && host.contains(viewport)) scrollFileOnShiftWheel(event, viewport)
+      if (!event.shiftKey || !(event.target instanceof Element)) return
+      const pane = selector ? event.target.closest<HTMLElement>(selector) : host
+      if (pane && host.contains(pane)) scrollFileOnShiftWheel(event, scrollTarget(event.target, pane))
     }
     host.addEventListener('wheel', onWheel, { passive: false })
     return () => host.removeEventListener('wheel', onWheel)

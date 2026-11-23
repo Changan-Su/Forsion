@@ -92,6 +92,8 @@ async function main() {
   const wideTable = path.join(outside, '宽表.csv')
   const cells = Array.from({ length: 40 }, (_, i) => `Column_${i}_keep_reading`).join(',')
   fs.writeFileSync(wideTable, Array(80).fill(cells).join('\n'))
+  const wideDiff = path.join(outside, '宽文本.diff')
+  fs.writeFileSync(wideDiff, `diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-${'old '.repeat(400)}\n+${'new '.repeat(400)}\n`)
   /** 库里有没有出现外部文件的副本(应用自己会在库里建 Sessions/ 之类,不能比整份目录)。 */
   const copiedIntoVault = (dir = vaultDir) => fs.readdirSync(dir, { withFileTypes: true }).some((d) =>
     d.isDirectory() ? copiedIntoVault(path.join(dir, d.name)) : d.name.includes('外部'))
@@ -209,7 +211,7 @@ async function main() {
     }
     const openPreview = async (file, selector) => {
       await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, file)
-      const viewport = win.locator(`${selector}:visible`)
+      const viewport = win.locator(`${selector}:visible`).first()
       await viewport.hover({ timeout: 15000 })
       return viewport
     }
@@ -226,6 +228,18 @@ async function main() {
     check('文件图片预览 Shift+滚轮只横移，保持缩放', imageAfter.x < imageBefore.x - 10
       && Math.abs(imageAfter.y - imageBefore.y) < 1 && Math.abs(imageAfter.width - imageBefore.width) < 1,
     JSON.stringify({ imageBefore, imageAfter }))
+    const stage = await win.locator('.wsfile-imgwrap:visible').boundingBox()
+    const midY = stage.y + stage.height / 2
+    await win.mouse.move(stage.x + stage.width * 0.9, midY)
+    await win.mouse.down()
+    await win.mouse.move(stage.x + stage.width * 0.1, midY, { steps: 8 })
+    await win.mouse.up()
+    const dragged = await image.boundingBox()
+    await shiftWheel()
+    const beyondEdge = await image.boundingBox()
+    check('图片拖过边缘后继续横滚，图片保持当前位置',
+      dragged.x < imageAfter.x - stage.width / 2 && Math.abs(beyondEdge.x - dragged.x) < 1,
+      JSON.stringify({ dragged, beyondEdge }))
     const table = await openPreview(wideTable, '.wsfile-tab .wsfile-doc:has(.wsfile-table)')
     await table.evaluate(el => { el.scrollTop = 200 })
     const position = () => table.evaluate(el => ({ left: el.scrollLeft, top: el.scrollTop }))
@@ -234,6 +248,10 @@ async function main() {
     const tableAfter = await position()
     check('文件表格预览 Shift+滚轮只横移', tableAfter.left > tableBefore.left + 10 && tableAfter.top === tableBefore.top,
       JSON.stringify({ tableBefore, tableAfter }))
+    const diff = await openPreview(wideDiff, '.wsfile-diff .d2h-file-side-diff')
+    await shiftWheel()
+    const diffLeft = await diff.evaluate(el => el.scrollLeft)
+    check('并排差异预览 Shift+滚轮横移指针下的列', diffLeft > 10, `left=${diffLeft}`)
   } finally {
     await app.close().catch(() => {})
     try { await stub.close() } catch { /* ignore */ }

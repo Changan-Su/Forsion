@@ -411,7 +411,8 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed, memory
     // pdf.js **组件包不含**滚轮缩放(那是 Firefox 完整 viewer 的 webViewerWheel)→ 必须自己接。
     const onWheel = (ev: WheelEvent): void => {
       if (!ev.ctrlKey && !ev.metaKey) {
-        scrollFileOnShiftWheel(ev, container)
+        // Embedded PDFs share the note's wheel gestures (including canvas panning).
+        if (!embed) scrollFileOnShiftWheel(ev, container)
         return
       }
       ev.preventDefault() // 否则整个界面被浏览器缩放

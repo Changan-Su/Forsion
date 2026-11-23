@@ -155,6 +155,11 @@ async function main() {
     const afterPan = await image.boundingBox()
     check('Shift+滚轮只横移，保持缩放', Math.abs(afterPan.y - beforePan.y) < 1
       && Math.abs(afterPan.width - beforePan.width) < 1, { beforePan, afterPan })
+    await win.mouse.wheel(-80, 4)
+    await win.waitForFunction((x) => document.querySelector('.iv-img:not(.is-side)').getBoundingClientRect().left > x + 10, afterPan.x)
+    const afterDiagonal = await image.boundingBox()
+    check('横向为主的触控板滚动保持缩放', Math.abs(afterDiagonal.y - afterPan.y) < 1
+      && Math.abs(afterDiagonal.width - afterPan.width) < 1, { afterPan, afterDiagonal })
     if (shots) { await zoom110(true); await win.keyboard.press('0'); await win.keyboard.press('+'); await win.keyboard.press('+'); await win.keyboard.press('+'); await shot('viewer-zoomed'); await zoom110(false) }
     await win.mouse.dblclick(stage.x + stage.width / 2, stage.y + stage.height / 2)
     s = await state()
