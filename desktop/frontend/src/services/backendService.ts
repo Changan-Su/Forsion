@@ -280,12 +280,14 @@ const cardMarksOf = (r: { marks?: unknown } | null | undefined): Record<string, 
   if (!m || typeof m !== 'object' || Array.isArray(m)) throw Object.assign(new Error('bad card-marks response'), { status: 0 })
   return m as Record<string, CardMarkRecord>
 }
+/** 卡住的请求不能一直占着(客户端按会话去重,一条挂死的读会挡住后面所有的读):两条都带超时。 */
+const CARD_MARKS_TIMEOUT_MS = 15_000
 export const getSessionCardMarks = (t: EngineTarget, sessionId: string) =>
-  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`).then(cardMarksOf)
+  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`, undefined, { timeoutMs: CARD_MARKS_TIMEOUT_MS }).then(cardMarksOf)
 
 /** 按键并进(只加不减),回并好的整表。只发这次要记的几条,不发整表。 */
 export const postSessionCardMarks = (t: EngineTarget, sessionId: string, marks: Record<string, CardMarkRecord>) =>
-  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`, { method: 'POST', body: JSON.stringify({ marks }) }).then(cardMarksOf)
+  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`, { method: 'POST', body: JSON.stringify({ marks }) }, { timeoutMs: CARD_MARKS_TIMEOUT_MS }).then(cardMarksOf)
 
 /** 某会话名下的 Background Session(@讨论 / Historian 辅助讨论等隐藏子会话,含最新 run 供回放)。 */
 export interface BackgroundSessionInfo {

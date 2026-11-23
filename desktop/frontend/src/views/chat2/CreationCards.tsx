@@ -15,7 +15,7 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
 import { resolveInside } from './creationPath'
 import type { CreationCard } from './suggest'
-import { creationDoneKey, markTaskHandled, refreshCardMarks, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS } from './pendingTasks'
+import { creationDoneKey, markTaskHandled, refreshCardMarks, syncCardMarks, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS } from './pendingTasks'
 
 registerMessages({
   'creation.card.createTitle': { zh: '做成作品：{name}', en: 'Make it a creation: {name}' },
@@ -139,6 +139,8 @@ export function CreationCardView({ card, sessionId }: { card: CreationCard; sess
   const defaultWs = useApp((s) => s.defaultWsDir)
   const { cwd, inCreation } = useSessionCreation(sessionId)
   const doneKey = sessionId ? creationDoneKey(sessionId, card) : ''
+  // 超过 7 天的作品卡不进卡片堆(那边才会去引擎读),原处照旧能点:这里也读一下,别的端处理过就别再给按钮
+  useEffect(() => { if (sessionId) syncCardMarks(sessionId) }, [sessionId])
   const rec = doneKey ? taskHandled(doneKey) : undefined
   const dismissed = rec?.landing === 'ignore'
   // 记过「做成了」的(没挪成、已切到新对话那种,工作目录不是造物):定格,不再给按钮 —— 再点会多建一个作品(Codex 10-23)

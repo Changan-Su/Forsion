@@ -22,7 +22,7 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import sessionsRouter from '../src/routes/sessions.js';
-import { CARD_MARK_TTL_MS, CARD_MARKS_MAX, mergeCardMarks, pruneCardMarks } from '../src/services/cardMarks.js';
+import { CARD_MARK_TTL_MS, CARD_MARKS_MAX, CardMarksFullError, capCardMarks, mergeCardMarks } from '../src/services/cardMarks.js';
 
 let srv: Server;
 let base: string;
@@ -107,6 +107,36 @@ describe('card-marks 路由', () => {
     expect(Object.keys(await marksOf('C6')).sort()).toEqual(['creation:old', 'id:new']);
   });
 
+  it('同键的过期记录挡不住重新写出的卡;过期的来记录也换不掉还有效的「忽略」', async () => {
+    await addSession('C9');
+    const old = Date.now() - CARD_MARK_TTL_MS - 60_000;
+    await query(`UPDATE chat_sessions SET card_marks = ? WHERE id = ?`, [JSON.stringify({ 'h1': { l: 'child', t: old, c: 'old-kid' }, 'h2': { l: 'ignore', t: Date.now() } }), 'C9']);
+    const r = await call('POST', 'C9', { marks: { 'h1': { l: 'here', t: Date.now() }, 'h2': { l: 'here', t: old } } });
+    expect(r.body.marks['h1'].l).toBe('here');
+    expect(r.body.marks['h1'].c).toBeUndefined();
+    expect(r.body.marks['h2'].l).toBe('ignore');
+  });
+
+  it('读不懂的存值条目(以后的版本写的)原样留着,写别的卡时照样写回去', async () => {
+    await addSession('C10');
+    const future = { l: 'cloud', t: Date.now(), extra: { a: 1 } };
+    await query(`UPDATE chat_sessions SET card_marks = ? WHERE id = ?`, [JSON.stringify({ 'id:f': future, 'id:g': 'opaque' }), 'C10']);
+    expect((await call('GET', 'C10')).body.marks).toMatchObject({ 'id:f': future, 'id:g': 'opaque' });
+    const r = await call('POST', 'C10', { marks: { 'id:f': { l: 'here' }, 'id:n': { l: 'here' } } });
+    expect(r.status).toBe(200);
+    expect(await marksOf('C10')).toMatchObject({ 'id:f': future, 'id:g': 'opaque', 'id:n': { l: 'here' } });
+  });
+
+  it('作品卡记录满了:整次写 413,一条都不挤掉', async () => {
+    await addSession('C11');
+    const full = Object.fromEntries(Array.from({ length: CARD_MARKS_MAX }, (_, i) => [`creation:${i}`, { l: 'here', t: i + 1 }]));
+    await query(`UPDATE chat_sessions SET card_marks = ? WHERE id = ?`, [JSON.stringify(full), 'C11']);
+    const r = await call('POST', 'C11', { marks: { 'creation:new': { l: 'ignore' } } });
+    expect(r.status).toBe(413);
+    expect(r.body.error).toBe('card_marks_full');
+    expect(Object.keys(await marksOf('C11')).length).toBe(CARD_MARKS_MAX);
+  });
+
   it('会话不存在 / 不是本人的 → 404 session_not_found,不建行', async () => {
     await addSession('C7', 'someone-else');
     for (const id of ['C7', 'nope']) {
@@ -131,15 +161,17 @@ describe('card-marks 路由', () => {
 });
 
 describe('cardMarks 纯函数', () => {
-  it('封顶:先丢最旧的任务卡记录,作品卡记录留着', () => {
+  it('封顶:只挤最旧的任务卡记录;作品卡记录挤不动就抛', () => {
     const now = Date.now();
-    const m: Record<string, any> = { 'creation:keep': { l: 'here', t: now - 10_000_000 } };
+    const m: Record<string, any> = { 'creation:keep': { l: 'here', t: 1 } };
     for (let i = 0; i < CARD_MARKS_MAX; i++) m[`id:${i}`] = { l: 'here', t: now - (CARD_MARKS_MAX - i) };
-    const out = pruneCardMarks(m, now);
+    const out = capCardMarks(m);
     expect(Object.keys(out).length).toBe(CARD_MARKS_MAX);
     expect(out['creation:keep']).toBeDefined();
     expect(out['id:0']).toBeUndefined(); // 最旧的那条任务卡记录被挤掉
     expect(out[`id:${CARD_MARKS_MAX - 1}`]).toBeDefined();
+    const creations = Object.fromEntries(Array.from({ length: CARD_MARKS_MAX + 1 }, (_, i) => [`creation:${i}`, { l: 'here', t: i }]));
+    expect(() => capCardMarks(creations)).toThrow(CardMarksFullError);
   });
 
   it('merge 不改入参', () => {

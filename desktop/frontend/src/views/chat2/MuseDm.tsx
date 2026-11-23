@@ -62,7 +62,8 @@ export function MuseTodoCards({ tasks, ownerId, sessionId, createdAt, onTask }: 
       tasks={tasks} ownerId={ownerId} sessionId={sessionId} createdAt={createdAt}
       todoStatus={todo.status} onTodoRetry={todo.retry}
       onTask={async (card, landing) => {
-        const r = await onTask?.(card, landing)
+        if (!onTask) return false // 没有执行入口:什么也没做,不记成已处理
+        const r = await onTask(card, landing)
         if (card.todo) todo.retry() // 以引擎真状态为准
         return r
       }}

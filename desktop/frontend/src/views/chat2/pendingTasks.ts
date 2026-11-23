@@ -71,7 +71,9 @@ const bump = (): void => { version++; for (const f of listeners) f() }
 // 别的窗口(Mini / 分离窗口各是一个渲染进程)记了一笔:作废缓存,跟着重渲
 if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY || e.key === null) { recs = null; bump() } })
 export function taskHandled(key: string): { landing: TaskLanding; childId?: string } | undefined {
-  const r = pickMark(load()[key], engineRecOf(key))
+  // 长开着的窗口里缓存不会自己过期:查的时候再按 TTL 筛一遍(重新写出的同键卡不能被一条过期记录挡住)
+  const local = load()[key]
+  const r = pickMark(local && markLive(key.includes(':creation:'), local, Date.now()) ? local : undefined, engineRecOf(key))
   return r ? { landing: r.l, childId: r.c } : undefined
 }
 /** 记一张卡处理过了。sessionId = 卡所在的聊天会话(键以「会话 id:」开头):同时记到那台引擎上;收件箱不传,只记本机。 */
@@ -105,30 +107,40 @@ const POST_BATCH = 200
 let activeSid: string | null = null
 const sessionsWithCards = new Set<string>()
 
+/** 引擎缓存里这一条还算数的记录(过期的当没有)。 */
+function liveEngineRec(entry: EngineEntry | undefined, rest: string, now = Date.now()): Rec | undefined {
+  const r = entry?.marks[rest]
+  return r && markLive(rest.startsWith('creation:'), r, now) ? r : undefined
+}
 function engineRecOf(key: string): Rec | undefined {
   const i = key.indexOf(':')
   if (i <= 0) return undefined
-  return engine.get(key.slice(0, i))?.marks[key.slice(i + 1)]
+  return liveEngineRec(engine.get(key.slice(0, i)), key.slice(i + 1))
 }
 
-/** 引擎回来的表并进缓存(只加不减;坏条目 / 过期的任务卡记录不收)。有变化返回 true。 */
+/** 引擎回来的表并进缓存(只加不减;坏条目 / 过期的任务卡记录不收,缓存里过期的那条让位)。有变化返回 true。 */
 function absorb(entry: EngineEntry, got: Record<string, CardMarkRecord>): boolean {
   const now = Date.now()
   let changed = false
   for (const [k, v] of Object.entries(got)) {
     if (!validRec(v) || !markLive(k.startsWith('creation:'), v, now)) continue
-    const next = pickMark(entry.marks[k], v)
-    if (next !== entry.marks[k]) { entry.marks[k] = next!; changed = true }
+    const have = liveEngineRec(entry, k, now)
+    const next = pickMark(have, v)!
+    if (next !== entry.marks[k]) { entry.marks[k] = next; changed = true }
   }
   return changed
 }
 
 type Failure = 'session' | 'unsupported' | 'transient'
+/** 读失败归类。只有认得出的「没这条路由」才算不支持(老引擎 404 无错误码 / 405 / 501 / 远端宿主 403 LOCAL_ONLY、多账号模式 403 无码);
+ *  别的 403(远端拒了这次请求,REMOTE_*)只是这一次不行。 */
 function failureOf(e: unknown): Failure {
   const x = e as { status?: unknown; code?: unknown } | null
   const status = typeof x?.status === 'number' ? x.status : 0
-  if (status === 404 && x?.code === 'session_not_found') return 'session'
-  if (status === 404 || status === 405 || status === 403 || status === 501) return 'unsupported'
+  const code = typeof x?.code === 'string' ? x.code : ''
+  if (status === 404 && code === 'session_not_found') return 'session'
+  if ((status === 404 && !code) || status === 405 || status === 501) return 'unsupported'
+  if (status === 403 && (code === 'LOCAL_ONLY' || !code)) return 'unsupported'
   return 'transient'
 }
 
@@ -152,22 +164,25 @@ function ensureEngine(sid: string, maxAge?: number): Promise<void> | undefined {
   const entry: EngineEntry = had ?? { state: 'loading', at: now, marks: {} }
   engine.set(sid, entry)
   const run = (async () => {
+    let got: Record<string, CardMarkRecord>
     try {
-      const got = await getSessionCardMarks(t, sid)
-      unsupported.delete(t.key)
-      absorb(entry, got)
-      // 先置 ok 再补传:此后新记的直接 POST;此前记的在下面 reconcile 读本机时一并带上
-      entry.state = 'ok'; entry.at = Date.now()
-      bump()
-      await reconcile(sid, t, entry)
+      got = await getSessionCardMarks(t, sid)
+      if (!got || typeof got !== 'object' || Array.isArray(got)) throw Object.assign(new Error('bad card-marks response'), { status: 0 })
     } catch (e) {
       const f = failureOf(e)
       if (f === 'unsupported') unsupported.set(t.key, Date.now())
       entry.state = f === 'session' ? 'absent' : 'error'
       entry.at = Date.now()
-    } finally {
       entry.loading = undefined
+      return
     }
+    unsupported.delete(t.key)
+    absorb(entry, got)
+    // 先置 ok、放开读,再补传:此后新记的直接 POST;此前记的在 reconcile 读本机时一并带上。
+    // 补传另走一条(不挂在 loading 上):POST 卡住 / 被拒不能挡住下一次读,也不把这台当成不支持。
+    entry.state = 'ok'; entry.at = Date.now(); entry.loading = undefined
+    bump()
+    void reconcile(sid, t, entry).catch(() => { /* 下次读成功时再补 */ })
   })()
   entry.loading = run
   return run
@@ -176,12 +191,14 @@ function ensureEngine(sid: string, maxAge?: number): Promise<void> | undefined {
 /** 本机有、引擎没有(或引擎只记了「忽略」而本机是做了的)的这个会话的记录 → 补传。失败就算了,下次读成功再补。 */
 async function reconcile(sid: string, t: EngineTarget, entry: EngineEntry): Promise<void> {
   const prefix = `${sid}:`
+  const now = Date.now()
   const local = { ...read(), ...(recs || {}) }
   const missing = Object.entries(local).filter(([k, v]) => {
-    if (!k.startsWith(prefix)) return false
+    if (!k.startsWith(prefix) || !markLive(k.includes(':creation:'), v, now)) return false
     const rest = k.slice(prefix.length)
     if (!rest || rest.length > ENGINE_KEY_MAX) return false
-    return pickMark(entry.marks[rest], v) !== entry.marks[rest]
+    const have = liveEngineRec(entry, rest, now)
+    return pickMark(have, v) !== have
   }).map(([k, v]) => [k.slice(prefix.length), v] as const)
   for (let i = 0; i < missing.length; i += POST_BATCH) {
     const got = await postSessionCardMarks(t, sid, Object.fromEntries(missing.slice(i, i + POST_BATCH)))
@@ -202,6 +219,11 @@ function pushMark(sid: string, rest: string, rec: Rec): void {
 function watchSession(sid: string, hasCards: boolean): void {
   activeSid = sid
   if (!hasCards) return
+  sessionsWithCards.add(sid)
+  void ensureEngine(sid)
+}
+/** 画出一张还能点的卡的地方调(超过 7 天的作品卡不进卡片堆,但原处照旧能点):去引擎读一下这个会话。 */
+export function syncCardMarks(sid: string): void {
   sessionsWithCards.add(sid)
   void ensureEngine(sid)
 }

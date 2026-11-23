@@ -59,8 +59,8 @@ it('① 另一端处理过的卡不再回到卡片堆', async () => {
 it('② 读引擎失败 = 不知道:本机记录照算,不发 POST,也不清本机', async () => {
   const P = await import('./pendingTasks')
   const list = [msg('m1', `${card('A', 'id: a\n')}\n${card('B', 'id: b\n')}`)]
-  P.markTaskHandled('s1:id:a', 'here', undefined, 's1')
   getMock.mockRejectedValue(httpErr(500))
+  P.markTaskHandled('s1:id:a', 'here', undefined, 's1')
   await flush()
   P.pendingTaskCardsOf(list, 's1'); await flush()
   expect(postMock).not.toHaveBeenCalled()
@@ -186,5 +186,63 @@ it('⑧ 点卡执行前跟引擎再对一下:另一端刚处理过就不执行',
   expect(onTask).not.toHaveBeenCalled()
   expect(host.querySelector('[data-task-state="here"]')).toBeTruthy()
   expect(getMock).toHaveBeenCalledTimes(1)
+  await act(async () => root.unmount())
+})
+
+it('⑨ 补传被拒(远端 403 REMOTE_*)/ 卡住:不把这台当成不支持,也不挡下一次读', async () => {
+  const P = await import('./pendingTasks')
+  getMock.mockResolvedValue({})
+  postMock.mockRejectedValue(httpErr(403, 'REMOTE_SESSIONS_OFF'))
+  P.markTaskHandled('s1:id:a', 'here', undefined, 's1') // 还没读过:先读,读成功后补传(被拒)
+  P.pendingTaskCardsOf([msg('m1', card('A', 'id: a\n'))], 's1'); await flush()
+  expect(postMock).toHaveBeenCalledTimes(1)
+  P.pendingTaskCardsOf([msg('m2', card('B', 'id: b\n'))], 's2'); await flush()
+  expect(getMock, '同一台的别的会话照样读').toHaveBeenCalledTimes(2)
+  // 补传挂住不回:下一次读照常发
+  postMock.mockReturnValue(new Promise(() => {}))
+  await P.refreshCardMarks('s1', 0); await flush()
+  await P.refreshCardMarks('s1', 0); await flush()
+  expect(getMock).toHaveBeenCalledTimes(4)
+})
+
+it('⑩ 长开着的窗口:缓存里过期的记录让位给引擎回来的新记录,也不挡补传', async () => {
+  const realNow = Date.now
+  let now = realNow()
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  try {
+    const P = await import('./pendingTasks')
+    getMock.mockResolvedValue({ 'id:a': { l: 'child', t: now, c: 'old-kid' } })
+    P.pendingTaskCardsOf([msg('m1', card('A', 'id: a\n'))], 's1'); await flush()
+    expect(P.taskHandled('s1:id:a')?.childId).toBe('old-kid')
+    now += 9 * 24 * 3600_000 // 同一张卡(同 id)9 天后重新写出
+    expect(P.taskHandled('s1:id:a'), '过期的那条不再算').toBeUndefined()
+    getMock.mockResolvedValue({ 'id:a': { l: 'here', t: now } })
+    await P.refreshCardMarks('s1', 0); await flush()
+    expect(P.taskHandled('s1:id:a')).toEqual({ landing: 'here', childId: undefined })
+    // 引擎回空表、本机有新记录:照样补传(不被缓存里那条旧的挡住)
+    getMock.mockResolvedValue({})
+    now += 9 * 24 * 3600_000
+    P.markTaskHandled('s1:id:a', 'new', undefined, 's1'); await flush()
+    expect(postMock.mock.calls.some((c) => c[2]['id:a']?.l === 'new')).toBe(true)
+  } finally { vi.restoreAllMocks() }
+})
+
+it('⑪ 没有执行入口(画布视图)点了不算处理过,也不同步', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const React = (await import('react')).default
+  const { act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+  const { TaskCards } = await import('./TaskCards')
+  const { splitSuggestions } = await import('./suggest')
+  const P = await import('./pendingTasks')
+  getMock.mockResolvedValue({})
+  const tasks = splitSuggestions(card('A', 'id: a\n'), { kinds: ['task'] }).tasks
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host)
+  await act(async () => root.render(React.createElement(TaskCards, { tasks, ownerId: 'm1', sessionId: 's1', createdAt: Date.now() })))
+  const btn = [...host.querySelectorAll('button')].find((b) => /在这里做|在此执行|Run here/.test(b.textContent || ''))
+  await act(async () => { btn!.click(); await flush() })
+  expect(P.taskHandled('s1:id:a')).toBeUndefined()
+  expect(postMock).not.toHaveBeenCalled()
   await act(async () => root.unmount())
 })

@@ -257,7 +257,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
           let ok = false
           let child: string | undefined
           try {
-            const r = await onTask?.(c, landing)
+            // 没有执行入口(如画布视图)= 什么也没做:不能记成「已处理」(现在这条记录会同步到别的端,卡在那边也会消失)
+            const r = onTask ? await onTask(c, landing) : false
             ok = r !== false
             if (r && typeof r === 'object') child = r.childId
           } catch { ok = false }

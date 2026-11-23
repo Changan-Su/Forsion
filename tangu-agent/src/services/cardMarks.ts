@@ -12,7 +12,9 @@
  *   - 没有 → 收下;
  *   - 已有「不用了 / 忽略」(ignore),来的是真做了的落点 → 换成做了的(另一端同时点了忽略和执行,执行才是事实);
  *   - 其余一律留已有的(先到先得,保住先开出的子会话 id;「忽略」盖不掉已执行)。
- * 过期:任务卡 7 天有效,记录多留一天(TTL 8 天,和客户端同一条);作品卡记录一直留。条数封顶,先丢最旧的任务卡记录。
+ * 过期:任务卡 7 天有效,记录多留一天(TTL 8 天,和客户端同一条);作品卡记录一直留。比较之前两边都先去掉过期的。
+ * 封顶:只挤最旧的任务卡记录;作品卡记录挤不动就整次写拒掉(413),不悄悄丢。
+ * 读不懂的存值条目(以后的版本写的)原样留着、照样写回去,不在这一版手里丢掉。
  */
 import type { CardMarkRecord, CardMarkLanding } from '../contracts/clientTypes.js';
 
@@ -29,29 +31,37 @@ const CHILD_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CONTROL_RE = /[\u0000-\u001f\u007f]/;
 
 export type CardMarks = Record<string, CardMarkRecord>;
+/** 存值:读得懂的是 CardMarkRecord;读不懂的条目(以后的版本加了新落点 / 新字段之类)原样保留,不解释、不丢。 */
+export type StoredCardMarks = Record<string, unknown>;
 
 /** 存值读不出来(非 NULL 却不是 JSON 对象)。路由按 500 报,**不**当空表往回写 —— 读失败 ≠ 没有记录。 */
 export class CardMarksCorruptError extends Error {
   constructor() { super('card_marks is unreadable'); this.name = 'CardMarksCorruptError'; }
 }
+/** 读得懂的作品卡记录(一直留)已经超过封顶:不挤掉任何一条,整次写拒掉(路由回 413)。 */
+export class CardMarksFullError extends Error {
+  constructor() { super('too many card marks in this session'); this.name = 'CardMarksFullError'; }
+}
 
 const isCreationKey = (k: string): boolean => k.startsWith('creation:');
 
-/** 列原值 → 记录表。NULL / undefined = 还没有记录(空表);PG 给对象、SQLite 给 JSON 串;别的形状一律抛 CardMarksCorruptError。
- *  表里单条坏记录(落点不认识之类)只跳过,不连累整表。 */
-export function parseStoredCardMarks(raw: unknown, now: number): CardMarks {
+/** 列原值 → 存值表。NULL / undefined = 还没有记录(空表);PG 给对象、SQLite 给 JSON 串;根不是对象一律抛 CardMarksCorruptError。
+ *  条目不在这里筛:读不懂的原样留着(新版本写的、这版不认识的落点),下次写时照样写回去。 */
+export function parseStoredCardMarks(raw: unknown): StoredCardMarks {
   if (raw == null) return {};
   let v: unknown = raw;
   if (typeof raw === 'string') {
     try { v = JSON.parse(raw); } catch { throw new CardMarksCorruptError(); }
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new CardMarksCorruptError();
-  const out: CardMarks = {};
-  for (const [k, rec] of Object.entries(v as Record<string, unknown>)) {
-    const ok = cleanRecord(k, rec, now);
-    if (ok) out[k] = ok;
-  }
-  return out;
+  return { ...(v as StoredCardMarks) };
+}
+
+/** 读得懂的一条存值(落点认识、t 是数);否则 null。 */
+export function readableCardMark(v: unknown): CardMarkRecord | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as { l?: unknown; t?: unknown };
+  return typeof r.l === 'string' && LANDINGS.has(r.l) && typeof r.t === 'number' && Number.isFinite(r.t) ? (v as CardMarkRecord) : null;
 }
 
 /** 单条记录的校验 + 归一:不合格 → null。t 缺 / 非数 → now;比 now 还晚 → now(客户端钟快了不能让记录永不过期)。 */
@@ -81,9 +91,11 @@ export function readCardMarksBody(body: unknown, now: number): CardMarks | strin
   return out;
 }
 
-/** 一条记录还算不算数:任务卡过了 TTL 就不算(卡本身也过期了),作品卡记录一直算。 */
-export function cardMarkLive(key: string, rec: CardMarkRecord, now: number): boolean {
-  return isCreationKey(key) || rec.t > now - CARD_MARK_TTL_MS;
+/** 过期了没:任务卡记录(带数字 t)过了 TTL 算过期(卡本身也过期了);作品卡记录、看不出时刻的条目都不算过期。 */
+export function cardMarkExpired(key: string, v: unknown, now: number): boolean {
+  if (isCreationKey(key) || !v || typeof v !== 'object') return false;
+  const t = (v as { t?: unknown }).t;
+  return typeof t === 'number' && t <= now - CARD_MARK_TTL_MS;
 }
 
 /** 两条同键记录取哪条(见文件头):ignore 被真执行的换掉;其余留已有的。 */
@@ -93,27 +105,36 @@ export function pickCardMark(existing: CardMarkRecord | undefined, incoming: Car
   return existing;
 }
 
-/** 按键并进存值(只加不减,除了过期 / 封顶)。返回新表,不改入参。 */
-export function mergeCardMarks(stored: CardMarks, incoming: CardMarks, now: number): CardMarks {
-  const out: CardMarks = { ...stored };
-  for (const [k, rec] of Object.entries(incoming)) out[k] = pickCardMark(out[k], rec);
-  return pruneCardMarks(out, now);
+/** 按键并进存值(只加不减,除了过期 / 封顶)。两边都先去掉过期的再比(重新写出的同键卡不能被一条过期记录挡住)。
+ *  已有的读不懂的条目原样留着,不被覆盖。返回新表,不改入参。 */
+export function mergeCardMarks(stored: StoredCardMarks, incoming: CardMarks, now: number): StoredCardMarks {
+  const out = liveCardMarks(stored, now);
+  for (const [k, rec] of Object.entries(incoming)) {
+    if (cardMarkExpired(k, rec, now)) continue;
+    if (!(k in out)) { out[k] = rec; continue; }
+    const have = readableCardMark(out[k]);
+    if (have) out[k] = pickCardMark(have, rec);
+  }
+  return capCardMarks(out);
 }
 
-/** 丢掉过期的任务卡记录;超过封顶再按时间丢最旧的(先任务卡,还超才动作品卡)。 */
-export function pruneCardMarks(marks: CardMarks, now: number): CardMarks {
-  const live = Object.entries(marks).filter(([k, r]) => cardMarkLive(k, r, now));
-  if (live.length <= CARD_MARKS_MAX) return Object.fromEntries(live);
-  const byAge = (a: [string, CardMarkRecord], b: [string, CardMarkRecord]): number => a[1].t - b[1].t;
-  const tasks = live.filter(([k]) => !isCreationKey(k)).sort(byAge);
-  const creations = live.filter(([k]) => isCreationKey(k)).sort(byAge);
-  let drop = live.length - CARD_MARKS_MAX;
-  const dropTasks = Math.min(drop, tasks.length);
-  drop -= dropTasks;
-  return Object.fromEntries([...tasks.slice(dropTasks), ...creations.slice(drop)]);
+/** 封顶:超了只挤掉最旧的、读得懂的任务卡记录;作品卡记录和读不懂的条目不挤(挤掉 = 卡回到「等你」/ 丢数据),
+ *  挤完还超就抛 CardMarksFullError(整次写不落)。 */
+export function capCardMarks(marks: StoredCardMarks): StoredCardMarks {
+  const keys = Object.keys(marks);
+  if (keys.length <= CARD_MARKS_MAX) return marks;
+  const tasks = keys
+    .map((k) => [k, isCreationKey(k) ? null : readableCardMark(marks[k])] as const)
+    .filter((e): e is readonly [string, CardMarkRecord] => !!e[1])
+    .sort((a, b) => a[1].t - b[1].t);
+  const drop = keys.length - CARD_MARKS_MAX;
+  if (drop > tasks.length) throw new CardMarksFullError();
+  const out = { ...marks };
+  for (const [k] of tasks.slice(0, drop)) delete out[k];
+  return out;
 }
 
-/** 给 GET 用:只回还算数的(不写回;清理在下一次写时顺带做)。 */
-export function liveCardMarks(marks: CardMarks, now: number): CardMarks {
-  return Object.fromEntries(Object.entries(marks).filter(([k, r]) => cardMarkLive(k, r, now)));
+/** 去掉过期的任务卡记录(GET 回这个;写时先过一遍)。 */
+export function liveCardMarks(marks: StoredCardMarks, now: number): StoredCardMarks {
+  return Object.fromEntries(Object.entries(marks).filter(([k, v]) => !cardMarkExpired(k, v, now)));
 }
