@@ -364,7 +364,11 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const brain: CloudBrainServices = {
     marketplace: {
       // include=collected: also the skills Forsion collected from skills.sh (older servers ignore the parameter).
-      list: async (signal) => (await getJson<{ items: unknown[] }>('/api/market/items?include=collected', signal))?.items || [],
+      // Only when the host says it can install them and the built-in source is on (TANGU_MARKET_COLLECTED=1): the engine
+      // hot-updates without the desktop shell, and an older shell's card install rejects src_ ids. No host (CLI, cloud
+      // node) = no local install path = not listed. Read per call so a host restart is the only thing that changes it.
+      list: async (signal) => (await getJson<{ items: unknown[] }>(
+        process.env.TANGU_MARKET_COLLECTED === '1' ? '/api/market/items?include=collected' : '/api/market/items', signal))?.items || [],
       detail: (id, signal) => getJson(`/api/market/items/${encodeURIComponent(id)}`, signal),
     },
     llm: {

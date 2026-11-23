@@ -1531,6 +1531,8 @@ const child = spawn(process.execPath, [
   '--sandbox', SANDBOX, '--cloud-url', MARKET_FRONT?.url || process.env.TANGU_LIVE_CLOUD_URL || FAKE_CLOUD?.url || 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  // 桌面宿主会注入(内置 skills.sh 来源开着时):台架照桌面的样子起引擎,收录技能腿才有东西可搜
+  TANGU_MARKET_COLLECTED: process.env.TANGU_MARKET_COLLECTED ?? '1',
   ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   FORSION_DESKTOP_CONFIG: desktopCfg,
