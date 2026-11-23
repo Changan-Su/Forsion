@@ -6,7 +6,7 @@ it('captures a script’s native stdout and stderr and preserves the next Python
   const turns = [
     'import subprocess, sys\nvalue = 40\nsubprocess.run([sys.executable, "-c", "import sys; print(42); print(24, file=sys.stderr)"], check=True)',
     'print(value + 3)',
-    'print(chr(0) * 3000)',
+    'subprocess.run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes(4 * 1024 * 1024))"], check=True)',
     'print("finished")',
   ];
   const input = turns.map(code => String(Buffer.byteLength(code)).padStart(10, '0') + code).join('');
