@@ -118,11 +118,19 @@ async function main() {
     check('↑ 在自动折行间移动光标', (await value()) === wrappedText && (await caret()) < wrappedText.length)
     await setCaret(3)
     await win.keyboard.press('Shift+ArrowUp')
-    check('Shift+↑ 保留原生选择行为', (await value()) === wrappedText)
+    const selection = await ta.evaluate(el => ({ start: el.selectionStart, end: el.selectionEnd }))
+    check('Shift+↑ 保留原生选择行为', (await value()) === wrappedText && selection.start === 0 && selection.end === 3, JSON.stringify(selection))
     await setCaret(3)
     await win.keyboard.press('ArrowUp')
     check('↑ 在自动折行草稿的首行召回历史', (await value()) === historyText)
     if ((await value()) === historyText) {
+      await win.waitForFunction(() => {
+        const el = document.activeElement
+        return el instanceof HTMLTextAreaElement && el.selectionStart === el.value.length
+      })
+      await setCaret(3)
+      await win.keyboard.press('ArrowUp')
+      check('↑ 到最早一条后保留原生光标操作', (await value()) === historyText && (await caret()) === 0)
       const wrappedHistoryStart = historyText.indexOf('\n') + 2
       await setCaret(wrappedHistoryStart)
       await win.keyboard.press('ArrowDown')

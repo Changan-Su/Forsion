@@ -2168,7 +2168,8 @@ export const Composer2: React.FC<{
                 if (e.key === 'ArrowUp') {
                   // 等待中的插话优先取回，再往前才是已发送消息。
                   const queued = histPos === 0 && onWithdrawSteer ? pendingSteer?.at(-1) : undefined
-                  if ((queued || sentHistory?.length) && isCaretOnEdgeLine(e.currentTarget, 'first')) {
+                  const hasOlder = histPos < (sentHistory?.length ?? 0)
+                  if ((queued || hasOlder) && isCaretOnEdgeLine(e.currentTarget, 'first')) {
                     e.preventDefault()
                     if (queued) void withdrawIntoDraft(queued.id)
                     else recallHistory(true)
