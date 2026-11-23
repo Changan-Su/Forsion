@@ -2087,14 +2087,14 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .human-desk-card-pickwrap { display: inline-flex; min-width: 0; }
 .human-desk-card-pick {
   display: inline-flex; align-items: center; gap: 2px; min-width: 0; height: 20px; padding: 0 4px; margin: 0 0 0 -4px;
-  border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: inherit; font: inherit; cursor: pointer;
+  border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: inherit; font: inherit; cursor: pointer;
 }
 .human-desk-card-pick:hover, .human-desk-card-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .human-desk-addwrap { display: inline-flex; }
 .human-desk-card-frame {
   height: 380px; max-height: none; margin: 8px -14px -12px; gap: 0; display: flex; flex-direction: column;
   overflow: hidden; mask-image: none; animation: none;
-  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 20px)) var(--t2-card-r, var(--radius-chat-surface, 20px));
+  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 16px)) var(--t2-card-r, var(--radius-chat-surface, 16px));
 }
 .human-desk-card-frame.act { cursor: zoom-in; }
 .human-desk-card:has(> .human-desk-card-frame.act:hover) { border-color: color-mix(in srgb, var(--accent-ink) 45%, var(--border)); }
