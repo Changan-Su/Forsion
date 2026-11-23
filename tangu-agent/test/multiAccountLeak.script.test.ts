@@ -163,6 +163,19 @@ describe('multi-account: plugin scripts — what may run', () => {
     }
   }, 60_000);
 
+  it('a skill id with its source prefix works; a wrong script name lists only the skill\'s own runnable scripts', async () => {
+    const { outputs } = await scriptRun('alice', [
+      { skill: `local:${SKILL}`, script: 'scripts/env.mjs' },
+      { skill: SKILL, script: 'scripts/word_stats.py' },
+    ]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    expect(outputs[1]).toMatch(/^Error: The skill "probe-skill" has no script "scripts\/word_stats\.py"\. Its scripts: /);
+    const listed = outputs[1].split('Its scripts: ')[1].split(', ');
+    expect(listed).toContain('scripts/env.mjs');
+    expect(listed, 'a link out of the package is not offered').not.toContain('scripts/outlink.mjs');
+    expect(listed, 'non-script files are not offered').not.toContain('scripts/notes.txt');
+  }, 60_000);
+
   it("the account's own copy of a seeded skill never runs: its path runs the package original", async () => {
     const copy = join(accDir('alice'), 'agents', 'probe-agent', 'skills', AGENT_SKILL, 'scripts', 'hello.mjs');
     expect(existsSync(copy), 'the package agent was seeded into the account').toBe(true);

@@ -81,6 +81,35 @@ function findInBundles(skill: string, rel: string): { file: string; bundle: stri
   return null;
 }
 
+/** 这个技能在插件包里能跑的脚本(技能目录下、支持的扩展名、真实路径不出包;找不到脚本时报给模型,最多 20 个)。 */
+function listBundleScripts(skill: string): string[] {
+  const out: string[] = [];
+  for (const bundle of bundles()) {
+    let agents: string[] = [];
+    try { agents = readdirSync(path.join(bundle, 'agents')).sort(); } catch { agents = []; }
+    for (const dir of [path.join(bundle, 'skills', skill), ...agents.map((a) => path.join(bundle, 'agents', a, 'skills', skill))]) {
+      const root = real(dir);
+      if (!root || !inside(root, bundle)) continue;
+      const walk = (d: string, depth: number): void => {
+        if (out.length >= 20 || depth > 3) return;
+        let ents: import('node:fs').Dirent[] = [];
+        try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+        for (const e of ents.sort((a, b) => a.name.localeCompare(b.name))) {
+          if (out.length >= 20) return;
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) walk(p, depth + 1);
+          else if (e.isFile() && INTERPRETERS[path.extname(e.name).toLowerCase()]) {
+            const rel = path.relative(root, p).split(path.sep).join('/');
+            if (!out.includes(rel)) out.push(rel);
+          }
+        }
+      };
+      walk(root, 0);
+    }
+  }
+  return out;
+}
+
 /**
  * 解析要跑的脚本。skill + script(技能目录里的相对路径),或者 script 是绝对路径(插件包里的原件 / 账号文件夹里的技能副本)。
  * 返回插件包里那份原件的真实路径;找不到 / 不许跑 → PluginScriptError(给模型看的英文原因)。
@@ -103,11 +132,18 @@ export function resolvePluginScript(skill: unknown, script: unknown): { file: st
     }
     if (!found) throw new PluginScriptError(`${s} is not a script of an installed plugin. Only scripts that ship inside a plugin's skill folder can run; pass the skill name and the script path inside it.`);
   } else {
-    if (typeof skill !== 'string' || !SKILL_NAME_RE.test(skill.trim())) throw new PluginScriptError('skill is required: the name of the plugin skill the script belongs to');
+    // 技能目录里的 id 带来源前缀(`local:<名字>`),模型常原样照抄:去掉前缀按名字找
+    const name = typeof skill === 'string' ? skill.trim().replace(/^[a-z][a-z0-9_-]*:/i, '') : '';
+    if (!SKILL_NAME_RE.test(name)) throw new PluginScriptError('skill is required: the name of the plugin skill the script belongs to');
     const rel = s.replace(/^\.\//, '');
     if (!cleanRel(rel)) throw new PluginScriptError('script must be a path inside the skill folder (no "..", no absolute path)');
-    found = findInBundles(skill.trim(), rel);
-    if (!found) throw new PluginScriptError(`No installed plugin has a script "${rel}" in a skill named "${skill.trim()}".`);
+    found = findInBundles(name, rel);
+    if (!found) {
+      const have = listBundleScripts(name);
+      throw new PluginScriptError(have.length
+        ? `The skill "${name}" has no script "${rel}". Its scripts: ${have.join(', ')}`
+        : `No installed plugin has a script "${rel}" in a skill named "${name}".`);
+    }
   }
   const ext = path.extname(found.file).toLowerCase();
   const interp = INTERPRETERS[ext];

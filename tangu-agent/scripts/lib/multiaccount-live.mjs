@@ -1,10 +1,10 @@
 /**
  * multiaccount(2026-11-23,多账号模式第二步):一台多账号引擎(TANGU_MULTI_ACCOUNT=1)上两个账号,真模型。
  *
- *  自己起一台引擎(独立隔离 home,主台架那台不参与),带一个夹具插件包(技能 word-stats,脚本 scripts/stats.py)。三条腿:
+ *  自己起一台引擎(独立隔离 home,主台架那台不参与),带一个夹具插件包(技能 text-stats,脚本 scripts/stats.py)。三条腿:
  *   ① 文件与搜索:alice 在自己的工作目录建 notes/plan.md(内容带一串只有 alice 那边有的随机码),再用搜索工具找回它;
  *      bob 去搜同一个前缀、再试着读 alice 那份文件的绝对路径。
- *   ② 插件脚本:alice 用 word-stats 技能统计 notes/plan.md,把脚本输出的 digest 说出来(digest 由台架独立算,模型不跑脚本猜不到)。
+ *   ② 插件脚本:alice 用 text-stats 技能统计 notes/plan.md,把脚本输出的 digest 说出来(digest 由台架独立算,模型不跑脚本猜不到)。
  *   ③ 自己写的脚本:bob 写一个 hello.py(运行时会在工作目录里写 ran-by-bob.txt),再试着用 run_plugin_script 跑它。
  *
  * 判据(只看磁盘和账号库,不信模型自述):
@@ -44,10 +44,10 @@ print(json.dumps(out))
 `;
 
 function skillMd(offScript) {
-  const head = '---\nname: word-stats\ndescription: Count lines and words of a text file and give its content digest.\n---\n\n';
-  if (offScript) return `${head}# Word stats\n\nRead the file and count lines and words yourself. Report a digest of the content as well.\n`;
-  return `${head}# Word stats\n\nThis skill ships a script that does the work: \`scripts/stats.py <file>\`. It prints one JSON line with \`lines\`, \`words\` and \`digest\`, and writes \`stats.json\` in the working directory.\n\n`
-    + '- With the `run_plugin_script` tool: `run_plugin_script({ "skill": "word-stats", "script": "scripts/stats.py", "args": ["<file>"] })`.\n'
+  const head = '---\nname: text-stats\ndescription: Count lines and words of a text file and give its content digest.\n---\n\n';
+  if (offScript) return `${head}# Text stats\n\nRead the file and count lines and words yourself. Report a digest of the content as well.\n`;
+  return `${head}# Text stats\n\nThis skill ships a script that does the work: \`scripts/stats.py <file>\`. It prints one JSON line with \`lines\`, \`words\` and \`digest\`, and writes \`stats.json\` in the working directory.\n\n`
+    + '- With the `run_plugin_script` tool: `run_plugin_script({ "skill": "text-stats", "script": "scripts/stats.py", "args": ["<file>"] })`.\n'
     + '- Without it: run `python3 <this skill folder>/scripts/stats.py <file>` in a shell.\n\n'
     + 'Always run the script; never estimate the digest yourself. Report the digest exactly as printed.\n';
 }
@@ -93,13 +93,13 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
 
   const root = join(OUT, 'multiaccount-home');
   const home = join(root, 'engine');
-  const bundle = join(root, 'bundles', 'word-stats-plugin');
+  const bundle = join(root, 'bundles', 'text-stats-plugin');
   const ev = join(OUT, 'multiaccount-evidence');
   mkdirSync(home, { recursive: true }); mkdirSync(ev, { recursive: true });
-  mkdirSync(join(bundle, 'skills', 'word-stats', 'scripts'), { recursive: true });
-  writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ id: 'word-stats-plugin', name: 'Word stats', version: '1.0.0' }));
-  writeFileSync(join(bundle, 'skills', 'word-stats', 'SKILL.md'), skillMd(offScript));
-  writeFileSync(join(bundle, 'skills', 'word-stats', 'scripts', 'stats.py'), STATS_PY);
+  mkdirSync(join(bundle, 'skills', 'text-stats', 'scripts'), { recursive: true });
+  writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ id: 'text-stats-plugin', name: 'Text stats', version: '1.0.0' }));
+  writeFileSync(join(bundle, 'skills', 'text-stats', 'SKILL.md'), skillMd(offScript));
+  writeFileSync(join(bundle, 'skills', 'text-stats', 'scripts', 'stats.py'), STATS_PY);
 
   // 凭证:系统临时目录里的 providers 文件(0600),不进 OUT
   const credDir = mkdtempSync(join(tmpdir(), 'tangu-ma-live-'));
@@ -191,7 +191,7 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
     // ── ② 插件脚本 ──
     const planBytes = planPath ? readFileSync(planPath) : null;
     const expectDigest = planBytes ? createHash('sha256').update(planBytes).digest('hex').slice(0, 12) : null;
-    const a2 = await turn('alice', '用 word-stats 技能统计一下工作目录里 notes/plan.md 的行数和字数,并把它给出的 digest 原样告诉我。', a1.sessionId);
+    const a2 = await turn('alice', '用 text-stats 技能统计一下工作目录里 notes/plan.md 的行数和字数,并把它给出的 digest 原样告诉我。', a1.sessionId);
     const scriptCalls = a2.results.filter((r) => r.name === 'run_plugin_script');
     const scriptOk = scriptCalls.some((r) => !r.isError && /exit code: 0/.test(r.result));
     const statsHits = grepTree(acctHome('alice'), '"digest"').filter((p) => p.endsWith('stats.json'));
@@ -227,7 +227,7 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
       + `插件脚本 ${scriptCalls.length} 次(${scriptOk ? '退出码 0' : '没成功'})、stats.json ${statsHits.length} 份、digest ${digestSaid ? '对' : `不对(应为 ${expectDigest})`};`
       + `bob 自写脚本 ${bobRan ? '跑起来了' : '没跑'}(run_plugin_script ${bobScriptCalls.length} 次${bobRefused ? '、均被拒' : ''})`;
     const output = turns.map((t) => `【${t.who}】${t.answer.slice(0, 600)}\n  调用:${t.calls.map((x) => `${x.name} ${x.args.slice(0, 140)}`).join('\n        ') || '无'}`).join('\n\n');
-    return { ok, detail, output, checks, toolCalls: turns.reduce((n, t) => n + t.calls.length, 0) };
+    return { ok, detail, output, checks, toolCalls: turns.flatMap((t) => t.calls.map((c) => `${t.who}:${c.name}`)) };
   } finally {
     rmSync(credDir, { recursive: true, force: true });
     if (child.exitCode === null && !child.signalCode) {
