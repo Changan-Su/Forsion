@@ -213,7 +213,8 @@ function startsWorkspaceSession(path: string): boolean {
 
 export interface UnitWebDeps {
   account?: {
-    metadata: () => { apiBase: string; loginPath: string } | undefined
+    /** loginVia:另一个公开入口上的登录处(同一运营方),没登录的访客去那里登、带一次性交接码回来。 */
+    metadata: () => { apiBase: string; loginPath: string; loginVia?: string } | undefined
     handle: (path: string, req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>
   }
   /** Optional generic backend contributions. true means the request was accepted. */
@@ -281,6 +282,12 @@ export interface UnitWebDeps {
   // P1-K2 ── 急停后的远程锁定(remoteSafety.isLocked,同步内存镜像;每请求现查)。缺省 = 未锁(便携 Unit 不传)。
   //   锁定时非本机入口只剩读 + 中止(remoteLockGate.ts);工作区主人(projection local)不受影响。
   remoteLock?: () => boolean
+  /** 公开投影的访客引擎(多账号模式的本机引擎,缺省无):/engine 用访客自己的登录换出账号,
+   *  只按验过的身份填 X-Forsion-User。identify:null = 没登录(401);forbidden = 这个身份不能用引擎(403);
+   *  抛错 = 账号服务答不上来(503,渲染层不会因此清掉登录)。 */
+  visitorEngine?: {
+    identify: (bearer: string, signal: AbortSignal) => Promise<{ account: string } | { forbidden: true } | null>
+  }
   /** 委托管理员档的本机开关(独立 Unit 的 unit.json cloud.delegatedAdmin;每请求现读)。缺省 / false = 关:
    *  隧道断言里的操作者声明一律无视,按今天的隧道档。桌面不传。 */
   delegatedAdmin?: () => boolean
@@ -522,7 +529,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
    *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
    *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。
    *  caller = resolveCaller 验过的调用方:只在隧道来路盖 x-forsion-remote-caller(引擎在 marked && tunnel 时才读)。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null, delegated = false): void => {
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null, delegated = false, visitor?: string): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -539,6 +546,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (via === 'tunnel' && caller) headers[ENGINE_CALLER_HEADER] = encodeEngineCaller(caller)
       if (via === 'tunnel' && delegated) headers[ENGINE_ROLE_HEADER] = DELEGATED_ADMIN_ROLE
     }
+    // 访客引擎:账号只来自 identify 验过的身份;入站同名头在上面的白名单拷贝里根本带不过来。
+    if (visitor !== undefined) headers['x-forsion-user'] = visitor
     const route = path.split('?', 1)[0]
     const changesSessions = via && !delegated && deps.onSessionsChanged && (
       (req.method === 'POST' && startsWorkspaceSession(route)) ||
@@ -568,6 +577,28 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     req.pipe(up)
   }
 
+  /** 公开投影的 /engine/*:先用访客自己的令牌换出账号,再按那个账号转给多账号引擎。
+   *  入站的 Authorization 只拿来验身份、不转发;转出去的是引擎口令 + X-Forsion-User。 */
+  const proxyVisitorEngine = async (req: http.IncomingMessage, res: http.ServerResponse, afterEngine: string): Promise<void> => {
+    const target = engineTarget(afterEngine || '/')
+    if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+    const bearer = /^Bearer (\S+)$/i.exec(String(req.headers.authorization || ''))?.[1]
+    if (!bearer) { json(res, 401, { detail: 'Authentication required', code: 'AUTH_REQUIRED' }); return }
+    const controller = new AbortController()
+    const onClose = () => { if (!res.writableEnded) controller.abort() }
+    res.once('close', onClose)
+    let who: Awaited<ReturnType<NonNullable<UnitWebDeps['visitorEngine']>['identify']>>
+    try { who = await deps.visitorEngine!.identify(bearer, controller.signal) }
+    catch {
+      if (!res.headersSent && !res.destroyed) json(res, 503, { detail: 'Account service unavailable', code: 'ACCOUNT_UNAVAILABLE' })
+      return
+    } finally { res.off('close', onClose) }
+    if (controller.signal.aborted || res.destroyed) return
+    if (!who) { json(res, 401, { detail: 'Authentication required', code: 'AUTH_REQUIRED' }); return }
+    if ('forbidden' in who) { json(res, 403, { detail: 'This account cannot use the engine here', code: 'ACCOUNT_NOT_ALLOWED' }); return }
+    proxyEngine(req, res, target.path + target.query, null, null, false, who.account)
+  }
+
   /** baseHref:index.html 的 <base>;缺省 = 投影的绝对基址(本机 / 局域网来路,与改版前逐字节一致),隧道来路传相对基址。 */
   const serveStatic = async (res: http.ServerResponse, urlPath: string, baseHref?: string): Promise<void> => {
     const dist = deps.webDistDir()
@@ -589,7 +620,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
         const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
-        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', inheritWebAccount: deps.projection.inheritWebAccount === true, account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', inheritWebAccount: deps.projection.inheritWebAccount === true, account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined, ...(deps.projection.mode === 'public' && deps.visitorEngine ? { visitorEngine: true } : {}) } : {}) }
         const baseTag = deps.projection ? `<base href="${baseHref ?? deps.projection.basePath}">` : ''
         const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
@@ -723,6 +754,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     // A published shell is a website. It publishes installed plugin code and layouts,
     // never the publisher's vault, engine, credentials, settings, or pairing endpoints.
     if (deps.projection?.mode === 'public') {
+      if (deps.visitorEngine && (path === '/engine' || path.startsWith('/engine/'))) { await proxyVisitorEngine(req, res, url.slice('/engine'.length)); return }
       if (await deps.account?.handle(path, req, res)) return
       if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { detail: 'Read-only projection' }); return }
       if (path === '/unit/whoami') { json(res, 200, { ok: true, scope: 'shell' }); return }
@@ -730,7 +762,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (path === '/unit/spaces') { json(res, 200, { spaces: await deps.readSpaces() }); return }
       if (path === '/unit/config') { json(res, 200, { config: {} }); return }
       if (path === '/unit/providers') { json(res, 200, { providers: [] }); return }
-      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public', account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.() }); return }
+      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public', account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.(), ...(deps.visitorEngine ? { visitorEngine: true } : {}) }); return }
       if (/^\/(?:unit|vault|engine)(?:\/|$)/.test(path)) { json(res, 403, { detail: 'Host capability is not published' }); return }
     }
 

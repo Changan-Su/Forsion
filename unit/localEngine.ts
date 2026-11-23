@@ -14,6 +14,10 @@ export interface LocalEngineOptions {
   initialConfig?: Record<string, unknown>
   log?: (message: string) => void
   startupTimeoutMs?: number
+  /** One engine for many accounts (TANGU_MULTI_ACCOUNT=1): each request names its account in X-Forsion-User,
+   *  every account keeps its own folder and database under the engine home. There is no owner, so no
+   *  single database path, user id, owner config or remote mark. */
+  multiAccount?: boolean
 }
 
 export interface LocalEngine {
@@ -70,15 +74,20 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     if (!force && state === 'ready' && fingerprint === nextFingerprint) return
     await stopChild()
     await mkdir(join(dataDir, 'tangu'), { recursive: true })
-    await mkdir(join(dataDir, 'workspace'), { recursive: true })
-    try {
-      await writeFile(configFile, JSON.stringify({ workspace: join(dataDir, 'workspace'), ...options.initialConfig }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
-    } catch (error: any) { if (error.code !== 'EEXIST') throw error }
+    if (!options.multiAccount) {
+      await mkdir(join(dataDir, 'workspace'), { recursive: true })
+      try {
+        await writeFile(configFile, JSON.stringify({ workspace: join(dataDir, 'workspace'), ...options.initialConfig }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+      } catch (error: any) { if (error.code !== 'EEXIST') throw error }
+    }
     // Never inherit a different desktop/server instance's credentials, database or
     // plugin overrides. Explicit configuration inside this instance remains native.
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('TANGU_') && key !== 'DATABASE_URL'))
     token = randomBytes(32).toString('base64url')
-    Object.assign(env, {
+    Object.assign(env, options.multiAccount ? {
+      TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_MULTI_ACCOUNT: '1',
+      TANGU_HOST: '127.0.0.1', TANGU_PORT: '0', TANGU_BUNDLE_DIRS: JSON.stringify(roots),
+    } : {
       TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_REMOTE_MARK_SECRET: remoteMark,
       TANGU_DATABASE_URL: '', TANGU_DATA_DIR: join(dataDir, 'tangu/state.db'),
       TANGU_HOST: '127.0.0.1', TANGU_PORT: '0', TANGU_USER_ID: 'local',
@@ -129,7 +138,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
 
   return {
     configFile,
-    endpoint: () => (url ? { url, token, remoteMark } : { url, token }),
+    endpoint: () => (url ? (options.multiAccount ? { url, token } : { url, token, remoteMark }) : { url, token }),
     status: () => ({ state, pid: child?.pid ?? null, lastError }),
     start: (roots) => serialize(() => run(roots)),
     setPackages: (roots, force) => serialize(() => run(roots, force)),

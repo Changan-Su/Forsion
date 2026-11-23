@@ -12,10 +12,12 @@ import { startBackend, migrateBackend } from './backendRunner'
 import { createAccountHttp } from './accountHttp'
 import { createLocalWorkspace } from './localWorkspace'
 import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
+import type { BackendAccount } from './backendTypes'
 import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
 import { OperationError, RollbackIncomplete } from './errors'
 import { validateWebEntries, type WebEntry } from './webEntries'
 import { cloudBundle, createCloudRuntime, DELEGATED_ADMIN_FEATURE } from './cloudHost'
+import { createRemoteAccount, validateRemoteAccount, type RemoteAccountConfig } from './remoteAccount'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -31,7 +33,15 @@ export interface UnitConfig {
   /** trustedKeys: ed25519 public keys (PEM) whose signed releases remote install / update accept. */
   management?: { enabled: boolean; trustedKeys?: string[] }
   webEntries?: WebEntry[]
+  /** Public Units only: verify Forsion logins with a Forsion server over HTTPS instead of a backend plugin authority. */
+  remoteAccount?: RemoteAccountConfig
+  /** Public Units only: run this package's engine runtime in multi-account mode. Signed-in visitors reach it at
+   *  <base>/engine as their own account (the account id is their server user id); nobody is its owner. */
+  visitorEngine?: { plugin: string }
 }
+
+/** Same rule as the engine's multi-account mode. No case folding: ids that differ only in case are refused, not merged. */
+const VISITOR_ACCOUNT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/
 type Backend = Awaited<ReturnType<typeof startBackend>>
 type State = 'disabled' | 'starting' | 'active' | 'stopping' | 'failed'
 interface RecordState { package: InstalledPackage; installation: PluginInstallation; state: State; backend?: Backend; runtime?: LocalRuntime; mounts: string[]; unclean?: boolean }
@@ -46,6 +56,10 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   const workerFile = config.workerFile || fileURLToPath(new URL('./backendWorker.mjs', import.meta.url))
   if (config.workspace && config.workspace.mode !== 'local') throw new Error('Invalid workspace mode')
   const local = config.workspace?.mode === 'local'
+  if (local && (config.remoteAccount || config.visitorEngine)) throw new Error('remoteAccount and visitorEngine require a public Unit')
+  const remoteAccount = config.remoteAccount ? createRemoteAccount(validateRemoteAccount(config.remoteAccount)) : undefined
+  const visitorEnginePlugin = config.visitorEngine?.plugin
+  if (config.visitorEngine && (typeof visitorEnginePlugin !== 'string' || !visitorEnginePlugin)) throw new Error('visitorEngine.plugin must name an installed plugin')
   const workspaceDir = resolve(config.workspace?.path || resolve(dataDir, 'workspace'))
   const records = new Map<string, RecordState>()
   const runtimeVault = () => [...records.values()].find((r) => usable(r) && r.runtime?.vault)?.runtime?.vault || null
@@ -87,6 +101,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     spaceOwners.add(id)
   }
   if (config.defaultSpace && !spaceOwners.has(config.defaultSpace)) throw new Error('The default Space must be supplied by an installed plugin')
+  if (visitorEnginePlugin && !records.get(visitorEnginePlugin)?.package.runtimeEntry) throw new Error('visitorEngine.plugin must name an installed plugin with a local runtime')
   // Native features belong to installed packages, never to the Basic profile.
   const validateFeatures = (replacement?: { id: string; package: InstalledPackage }) => {
     const packs = [...records.entries()].map(([id, rec]) => replacement?.id === id ? replacement.package : rec.package)
@@ -117,7 +132,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     if (local) return services
     for (const rec of visible) Object.assign(services, rec.package.manifest.frontend?.services)
     // A cloud adapter is only usable with an active authority on this Unit.
-    const account = [...records.values()].find((r) => usable(r) && r.backend?.account)?.backend?.account
+    const account = accountProvider()?.account
     if (!account?.metadata) return {}
     for (const [id, service] of Object.entries(services)) {
       const base = account.metadata.apiBase.replace(/\/$/, '')
@@ -174,13 +189,18 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     rec.state = 'starting'
     let backend: Backend | undefined, runtime: LocalRuntime | undefined
     try {
-      if (local && rec.package.runtimeEntry) {
+      // A public Unit hosts exactly one runtime: the visitor engine it names. Vaults, accounts and every other
+      // single-owner runtime stay off, because a public Unit has no owner.
+      const visitorEngineHost = !local && id === visitorEnginePlugin
+      if ((local || visitorEngineHost) && rec.package.runtimeEntry) {
         const module = await import(pathToFileURL(rec.package.runtimeEntry).href + '?generation=' + randomUUID())
         const factory: RuntimeFactory = module.createRuntime || module.default
         if (typeof factory !== 'function') throw new Error('Local runtime has no factory')
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
-        runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {}, log: (m) => console.log(`[plugin:${id}] ${m}`) })
+        runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {},
+          ...(visitorEngineHost ? { multiAccount: true } : {}), log: (m) => console.log(`[plugin:${id}] ${m}`) })
         if (!runtime || typeof runtime.close !== 'function') throw new Error('Invalid local runtime')
+        if (visitorEngineHost && (!runtime.engine || runtime.vault || runtime.account)) throw new Error('A visitor engine runtime must provide an engine and nothing else')
         if ((runtime.vault && runtimeVault()) || (runtime.engine && runtimeEngine())) throw new Error('Local capability already has a provider')
       }
       if (local && cloudBundle(id)) {
@@ -193,7 +213,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       if (rec.package.backendEntry) {
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         backend = await startBackend(options(id, rec))
-        if (backend.account && [...records.values()].some((r) => r !== rec && usable(r) && r.backend?.account)) {
+        if (backend.account && (remoteAccount || [...records.values()].some((r) => r !== rec && usable(r) && r.backend?.account))) {
           throw new Error('A Unit can activate only one account authority')
         }
         if (rec.state as State === 'failed') throw new Error('Plugin stopped during startup')
@@ -252,7 +272,14 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   refreshProduct()
   const accountProvider = () => {
     const record = [...records.entries()].find(([, r]) => usable(r) && r.backend?.account)
-    return record ? { id: record[0], account: record[1].backend!.account! } : undefined
+    if (record) return { id: record[0], account: record[1].backend!.account! }
+    return remoteAccount ? { id: 'remote-account', account: remoteAccount as BackendAccount } : undefined
+  }
+  const accountMetadata = () => {
+    const provider = accountProvider()
+    if (!provider?.account.metadata) return undefined
+    return provider.account === remoteAccount && remoteAccount.loginVia
+      ? { ...provider.account.metadata, loginVia: remoteAccount.loginVia } : provider.account.metadata
   }
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
     pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
@@ -266,7 +293,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
           requires: r.package.manifest.requires || [], protected: r.package.manifest.id === authority })) }
     } })
   const mountedEntries = await Promise.all(webEntries.map(async (entry) => ({ entry, web: await startUnitWeb({
-    account: { metadata: () => accountProvider()?.account.metadata, handle: (path, req, res) => {
+    account: { metadata: accountMetadata, handle: (path, req, res) => {
       if (path.startsWith('/unit/plugin-data/') && !entry.plugins.includes(path.slice('/unit/plugin-data/'.length))) {
         res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Plugin is not published"}'); return Promise.resolve(true)
       }
@@ -284,7 +311,17 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   }, { port: 0, mountOnly: true }) })))
   const web = await startUnitWeb({
     delegatedAdmin,
-    account: local ? undefined : { metadata: () => accountProvider()?.account.metadata, handle: accountHttp },
+    account: local ? undefined : { metadata: accountMetadata, handle: accountHttp },
+    visitorEngine: visitorEnginePlugin ? { identify: async (bearer, signal) => {
+      const provider = accountProvider()
+      if (!provider) throw new Error('No account authority is active')
+      const identity = await provider.account.resolve(bearer, { signal })
+      if (!identity) return null
+      if (accountProvider()?.account !== provider.account) throw new Error('Account provider changed')
+      // MCP-style scoped administrator tokens and ids the engine would refuse never reach it.
+      if (identity.role === 'ADMIN_SCOPED' || !VISITOR_ACCOUNT_ID.test(identity.userId)) return { forbidden: true as const }
+      return { account: identity.userId }
+    } } : undefined,
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities: () => capabilities(), localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
     routeRequest: (req, res) => {
