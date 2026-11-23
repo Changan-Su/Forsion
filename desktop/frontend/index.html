@@ -7,8 +7,11 @@
          'unsafe-eval' 是 Forsion 外置插件的求值通道(pluginStore new Function;信任模型 Obsidian 式「装=信任」,
          且 'unsafe-inline' 已在,eval 不扩大 XSS 面),删掉它=所有外置插件 setup 失败。
          forsion-iui: 是 Intelligent UI 卡的随包库(three / d3 / chart.js / gsap,electron/iuiLibProtocol.ts):卡的 srcdoc 继承本 CSP,
-         卡内自己那份 SKETCH_CSP 也得放行,两层都在 import 才过得去。 -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' forsion-iui:; worker-src 'self' blob:; connect-src 'self' amadeus-asset: blob: data: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https: http://localhost:* http://127.0.0.1:*; media-src 'self' blob: amadeus-asset: https:; frame-src 'self' amadeus-asset: https://www.youtube-nocookie.com https://player.bilibili.com http://127.0.0.1:* http://localhost:* http://*.localhost:*;" />
+         卡内自己那份 SKETCH_CSP 也得放行,两层都在 import 才过得去。
+         frame-src 的 open.weixin.qq.com + api.forsion.net 是 Extend 安全页内嵌的微信扫码框(应用内绑定):扫完那一跳在框里导航到
+         api.forsion.net 的回调,两个源缺一个,回调请求就发不出去(frame-src 管框里的每一跳)。Extend 读这里的 frame-src 判断能不能嵌,
+         不能就回落去网页账户中心;删掉它们不会报错,只是又变回跳网页。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' forsion-iui:; worker-src 'self' blob:; connect-src 'self' amadeus-asset: blob: data: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: wss:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: amadeus-asset: https: http://localhost:* http://127.0.0.1:*; media-src 'self' blob: amadeus-asset: https:; frame-src 'self' amadeus-asset: https://www.youtube-nocookie.com https://player.bilibili.com http://127.0.0.1:* http://localhost:* http://*.localhost:* https://open.weixin.qq.com https://api.forsion.net;" />
     <title>Forsion</title>
     <!-- 相对路径:生产走 file://(Electron loadFile),绝对 /… 会 404。文件来自 frontend/public/。 -->
     <link rel="icon" type="image/svg+xml" href="./Forsion-LOGO3.svg" />
