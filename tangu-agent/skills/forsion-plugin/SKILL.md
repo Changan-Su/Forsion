@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.135.0
+  version: 1.136.0
   author: Forsion
   category: Forsion
 ---
@@ -282,6 +282,13 @@ A Space that should also open as a small floating window gets a `mini` block in 
 ```
 
 **多账号模式(一台机器上多个账号共用一个引擎进程)**:引擎只从 bundle 里取 `agents/` 的人设和 `skills/` 的技能(只读),`tangu-plugins/` 引擎代码不加载、插件自带的 MCP 与 hooks 不启动。要在这种模式下可用,核心能力放进人设和技能,别依赖引擎插件。缺省单人模式照旧全部加载。
+
+**多账号模式下技能要跑脚本(2026-11-23 起)**:这种模式没有 `run_bash`,Agent 用 `run_plugin_script({ skill, script, args })` 跑**包里技能目录下**的脚本(如 `skills/<slug>/scripts/transcribe.py`)。在 SKILL.md 里把两种调法都写上:有 `run_plugin_script` 用它,没有(单人模式)用 `run_bash`。规矩:
+- 只跑包里的原件:账号文件夹里的技能副本、Agent 自己写的脚本不跑,包里指向包外的软链不跑(传副本的绝对路径会换成包里原件)。
+- 类型:`.py`(python3)、`.js` / `.mjs` / `.cjs`(引擎的 Node)、`.sh`(sh)。不经 shell,`args` 是字符串数组、原样传。
+- 工作目录 = 这一轮的工作目录(在账号文件夹里);像路径的参数(绝对路径、带 `..`)必须在账号文件夹里,`~` 不收,网址不管。输入输出文件都放账号文件夹。
+- 环境只传 `PATH` 与语言 / 时区;`HOME` / `TMPDIR` / `XDG_CACHE_HOME` 指这次运行的临时目录(`FORSION_SCRIPT_SCRATCH`),跑完删。**拿不到登录信息和 API key**;Python 不写 `.pyc`、不读用户 site-packages,依赖要么机器上装好、要么随包带。
+- 整个引擎同时只跑一个,其余排队;缺省每个最多 5 分钟、临时目录 2 GB、stdout 1 MB,超了连子进程一起结束。写进账号文件夹的算账号磁盘上限;跑完删掉它在账号文件夹留下的软链 / 硬链接。退出码非 0 = 失败。
 
 **三种生命周期,发包前必须分清**:
 
