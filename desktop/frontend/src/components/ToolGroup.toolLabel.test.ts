@@ -188,7 +188,7 @@ describe('③④ 在过程行里', () => {
 
   it('做完:折叠头照旧汇总;展开每行 done 的句子;describe 返回空的 observe 行照旧', async () => {
     await render({ events: [observe, { ...clicking, done: true, result: 'Attempted 1 UI actions in Chatter — Inbox.' }], context: [observe, clicking] })
-    expect(host.querySelector('.tool-group-sum-long')?.textContent).toBe('2 个工具')
+    expect(host.querySelector('.tool-group-sum-long')?.textContent).toBe('2 步')
     await act(async () => head().click())
     expect(rows()).toEqual(['电脑操作 · observe ui{}', '已在 Chatter 中点击「发送」']) // describe 返回空的照旧:插件名 · 工具 + 参数
   })

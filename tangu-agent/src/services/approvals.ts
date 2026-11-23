@@ -619,9 +619,9 @@ export function deferredSummary(tool: string, stored: unknown): string {
  *   - 中止(用户停了 run、审批还挂着):ABORTED_REJECT_REASON;
  *   - 用户在审批卡 / 通道里点了拒绝:决定体不带 rejectReason → 消费方回落 USER_REJECT_REASON。
  * 旧文案是写死的中文「用户拒绝了该操作。」,且三种原因共用,模型分不清是被拒、被停还是被规则挡。
+ * 「用户拒绝」那句放在 contracts/toolRejection(桌面的过程行据此认出「已拒绝」,不当失败)。
  */
-export const USER_REJECT_REASON =
-  'The user rejected this tool call, so it was NOT run. Do not retry the same call; ask the user how to proceed or continue with other work.';
+export { USER_REJECT_REASON } from '../contracts/toolRejection.js';
 export const ABORTED_REJECT_REASON =
   'The run was stopped while this tool call was waiting for approval, so it was NOT run.';
 export const UNATTENDED_REJECT_REASON = 'This unattended run cannot ask for approval, so the action was not performed.';

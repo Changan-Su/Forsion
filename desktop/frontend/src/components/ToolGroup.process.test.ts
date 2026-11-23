@@ -43,7 +43,7 @@ describe('ToolGroup as the process line', () => {
   it('thinking + tools fold into one summary; done shows no check mark, the step list starts with the thought', async () => {
     await render({ events: [read, { ...run, done: true, result: 'ok' }], reasoning: '先看日志', reasoningMs: 3_000 })
     expect(longSum()).toBe('思考 3 秒 · 运行 1 命令 · 读取 1 项')
-    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('思考 3 秒 · 2 个工具')
+    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('思考 3 秒 · 2 步')
     expect(host.querySelector('.tool-group-status svg')).toBeNull()
     await act(async () => head().click())
     const rows = [...host.querySelectorAll('.tool-group-list > .tool-row')]
@@ -100,6 +100,6 @@ describe('ToolGroup as the process line', () => {
     // 和别的工具混在一组:长摘要各报各的,短摘要只报个数
     await render({ events: [read, ev('hand_off_task', { title: '写草稿', brief: 'b' })] })
     expect(longSum()).toBe('读取 1 项 · 把手头的活挪到了子会话')
-    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('2 个工具')
+    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('2 步')
   })
 })
