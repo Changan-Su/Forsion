@@ -161,7 +161,8 @@ export function summarizeTask(messages: UiMessage[], running: boolean, cwd?: str
     const cites = m.role === 'assistant' ? citeIndexOf(m) : null
     // 新一轮开始:上一轮摁停留下的「未结束」工具不属于这一轮,必须清掉,
     // 否则新 run 刚起步(还没发工具)时会把上一轮那个残留动作重新显示成「正在做」。
-    if (m.role === 'user') { startedAt = m.timestamp; action = null }
+    // 清单同理只看这一轮:这一轮没写清单,右栏「进度」不挂上一轮那份(插话切段时清单随新段走,见 tanguSlice turn_boundary)
+    if (m.role === 'user') { startedAt = m.timestamp; action = null; todos = [] }
     for (const a of m.approvals || []) if (a.status === 'pending') attention.push({ kind: 'approval', text: a.name })
     for (const q of m.inquiries || []) if (q.status === 'pending') attention.push({ kind: 'inquiry', text: q.question })
     // 判存在而非判长度:`todo_write([])` 是合法的「清空清单」,用 ?.length 会把它当没发生、继续显示旧计划。
