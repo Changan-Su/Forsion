@@ -1220,7 +1220,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           costLimit={activeUsage.costLimit}
           onCompact={(focus) => void s.compact(activeId, focus)}
           seedText={s.steerRestore ?? (params.childSurface ? null : s.pendingDraft)}
-          seedShare={params.childSurface || leaf.type === 'chat-panel' ? null : s.pendingShare}
+          seedShare={params.childSurface || leaf.type === 'chat-panel' || (s.pendingShare?.sessionId && s.pendingShare.sessionId !== activeId) ? null : s.pendingShare}
           takeSeedShare={s.takePendingShare}
           appendRefs={params.childSurface ? null : s.draftRefs}
           onAppendRefsConsumed={s.clearDraftRefs}
