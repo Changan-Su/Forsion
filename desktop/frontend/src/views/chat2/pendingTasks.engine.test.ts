@@ -227,7 +227,7 @@ it('⑩ 长开着的窗口:缓存里过期的记录让位给引擎回来的新�
   } finally { vi.restoreAllMocks() }
 })
 
-it('⑪ 没有执行入口(画布视图)点了不算处理过,也不同步', async () => {
+it('⑪ 没有执行入口(画布视图)不摆按钮,不记处理过,也不同步', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   const React = (await import('react')).default
   const { act } = await import('react')
@@ -240,8 +240,8 @@ it('⑪ 没有执行入口(画布视图)点了不算处理过,也不同步', asy
   const host = document.createElement('div'); document.body.append(host)
   const root = createRoot(host)
   await act(async () => root.render(React.createElement(TaskCards, { tasks, ownerId: 'm1', sessionId: 's1', createdAt: Date.now() })))
-  const btn = [...host.querySelectorAll('button')].find((b) => /在这里做|在此执行|Run here/.test(b.textContent || ''))
-  await act(async () => { btn!.click(); await flush() })
+  expect(host.querySelector('.t2-taskcard-actions')).toBeNull()
+  await act(async () => { await flush() })
   expect(P.taskHandled('s1:id:a')).toBeUndefined()
   expect(postMock).not.toHaveBeenCalled()
   await act(async () => root.unmount())

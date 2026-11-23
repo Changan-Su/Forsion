@@ -312,7 +312,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
                     {todoState === 'error' && onTodoRetry && <> <button className="t2-taskcard-toggle" onClick={onTodoRetry}>{t('inbox.approval.retry')}</button></>}
                   </div>
                 )
-                : (
+                // 没有执行入口(画布视图)就不摆按钮:摆了点下去什么也不做(只读的卡,要处理回对话里)
+                : !onTask ? null : (
                 <>
                 <div className="t2-taskcard-actions">
                   {c.ask ? [child ?? fresh, here] : musePrimary ? [muse, child, here, fresh] : [child, here, fresh, muse]}
