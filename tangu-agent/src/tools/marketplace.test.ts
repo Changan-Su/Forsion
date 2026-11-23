@@ -134,6 +134,19 @@ describe('collected skills (skills.sh) in store results', () => {
     expect(marketplaceItemsOf(await tools[0].execute({ query: 'plan' }, { client: 'desktop/2.14.3' } as any)).map(i => i.id)).toEqual([entry.id]);
   });
 
+  it('an empty search with non-English keywords is told to retry in English (collected skills are described in English)', async () => {
+    fixture.list.mockResolvedValue([collected('wayfinder')]);
+    const search = (await marketplaceProvider.tools({} as any))[0];
+    const zh = JSON.parse(String(await search.execute({ query: '决策地图 项目规划' }, {} as any)));
+    expect(zh.items).toEqual([]);
+    expect(zh.instruction).toContain('search again with English keywords');
+    const en = JSON.parse(String(await search.execute({ query: 'absent' }, {} as any)));
+    expect(en.instruction).not.toContain('English keywords');
+    const hit = JSON.parse(String(await search.execute({ query: 'plan 项目' }, {} as any)));
+    expect(hit.items.map((i: any) => i.id)).toEqual(['src_25aae625_wayfinder']);
+    expect(hit.instruction).not.toContain('English keywords');
+  });
+
   it('tool descriptions name the source, say it is unreviewed and leave installing to the user', async () => {
     const [search, , recommend] = await marketplaceProvider.tools({} as any);
     expect(search.definition.function.description).toContain('skills.sh');

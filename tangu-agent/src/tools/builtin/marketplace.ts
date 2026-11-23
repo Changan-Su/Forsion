@@ -2,7 +2,9 @@ import { deps, isConfigured } from '../../seams/runtime.js';
 import { isForsionMarketplaceItem, marketplaceId, marketplaceItemsOf, marketplaceCompatibility, MARKETPLACE_CARDS_CAPABILITY, MARKETPLACE_RECOMMENDATION_TOOL, type MarketplaceItem } from '../../shared/marketplace.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
-const output = (raw: unknown[], recommend = false) => {
+// 收录的 skills.sh 技能只有英文简介:非英文关键词搜空时提醒换英文再搜一次(11-23 真模型实测:中文关键词搜不到 wayfinder,转去网上找了)。
+const NON_ENGLISH_EMPTY = ' Nothing matched. Skills collected from skills.sh are described in English, so search again with English keywords before concluding that nothing fits.';
+const output = (raw: unknown[], recommend = false, emptyHint = '') => {
   const items = marketplaceItemsOf({ kind: 'marketplace', version: 1, items: raw });
   const data = {
     kind: recommend ? 'marketplace' : 'marketplace_lookup', version: 1, items,
@@ -13,7 +15,8 @@ const output = (raw: unknown[], recommend = false) => {
       // 只在结果里真有收录条目时才加这句:老路径的结果逐字节不变。
       + (items.some(item => !isForsionMarketplaceItem(item))
         ? ' Entries whose origin.kind is not "forsion" come from an outside catalog (origin.sourceTitle, e.g. skills.sh) and were not manually reviewed by Forsion; when you present one, say where it comes from and mention its requirements (command-line tool, API keys, scripts, audit warning).'
-        : ''),
+        : '')
+      + (items.length ? '' : emptyHint),
   };
   let text = JSON.stringify(data);
   while (text.length > 40000 && data.items.length > 1) { data.items.pop(); text = JSON.stringify(data); }
@@ -84,7 +87,7 @@ export const marketplaceProvider: ToolProvider = {
           const hit = Math.min(...hits);
           return hit >= 1400 && Number.isFinite(hit) ? { ...item, description: '…' + description.slice(Math.max(0, hit - 120), hit + 1100) } : item;
         });
-      return output(candidates);
+      return output(candidates, false, /[^\x00-\x7f]/.test(query) ? NON_ENGLISH_EMPTY : '');
     },
   }, {
     name: 'get_marketplace_plugin',
