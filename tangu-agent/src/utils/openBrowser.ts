@@ -1,3 +1,4 @@
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn } from 'node:child_process';
 
 /**
@@ -16,6 +17,7 @@ export function browserOpenCommand(url: string, platform: NodeJS.Platform = proc
 export function openBrowser(url: string): void {
   try {
     const { cmd, args } = browserOpenCommand(url);
+    assertHostSpawnAllowed('open browser');
     const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
     p.on('error', () => {});
     p.unref();

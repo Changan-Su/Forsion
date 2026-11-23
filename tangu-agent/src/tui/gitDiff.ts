@@ -9,6 +9,7 @@
  * 利用它得先能写 .git/config:clone 带不过来,agent 写 .git 被 fsPolicy 拦 —— 暴露面与用户自己敲 `git status` 相同。
  * (status / diff 本不跑 hooks;core.hooksPath 置空只是给以后加的子命令兜底。)
  */
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { existsSync, lstatSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
@@ -32,6 +33,7 @@ interface GitOut {
 }
 
 function git(cwd: string, args: string[]): Promise<GitOut> {
+  assertHostSpawnAllowed('git diff');
   return new Promise((resolve) => {
     execFile(
       'git',

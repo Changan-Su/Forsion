@@ -15,6 +15,7 @@
  * 占位符:`$ARGUMENTS` = 整串参数;`$1`..`$9` = 空白分割的第 n 个。都不出现时参数追加到正文末尾
  * (否则 `/cmd 参数` 的参数会被静默吞掉——那是最容易踩的坑)。
  */
+import { perAccount } from '../core/accountScope.js';
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
@@ -57,15 +58,17 @@ function validName(name: string): boolean {
  * 3 秒 TTL:改完 .md 最多 3 秒后生效,对手改文件的场景完全够,又不至于把补全拖慢。
  * ponytail: TTL 缓存足够;真要即时生效再上 fs.watch。
  */
-let cache: { at: number; items: CustomCommand[] } | null = null;
+// 多账号模式按账号分(core/accountScope.ts:命令目录在账号 home 里);单人模式一个槽,行为不变。
+const cacheSlot = perAccount((): { v: { at: number; items: CustomCommand[] } | null } => ({ v: null }));
 const CACHE_TTL_MS = 3000;
 
 /** 列出全部自定义命令。目录不存在 / 读失败 → 空数组(这是可选功能,绝不能拖垮输入框)。 */
 export function listCustomCommands(): CustomCommand[] {
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.items;
+  const hit = cacheSlot().v;
+  if (hit && now - hit.at < CACHE_TTL_MS) return hit.items;
   const items = readCustomCommands();
-  cache = { at: now, items };
+  cacheSlot().v = { at: now, items };
   return items;
 }
 

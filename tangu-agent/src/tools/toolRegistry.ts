@@ -6,6 +6,7 @@
  * 内置 provider 由 registry.ts(门面)按固定顺序注册;app 自带工具经
  * AppProfile.toolLoadout.providers 注入(resolve 时排在内置之后,不受 builtins 白名单约束)。
  */
+import { multiAccountToolAllowed } from './multiAccountTools.js';
 import { standInOf, standInToolDenied } from '../services/accessDomain.js';
 import type { ToolImpl, ToolContext } from './toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -409,6 +410,8 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
   const out = new Map<string, ToolDef>();
   const standIn = standInOf(ctx);
   const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false, official = false, ownerPlugin?: string): void => {
+    // 多账号模式(tools/multiAccountTools.ts):工具名白名单,缺省拒绝 —— 放在一切闸之前,defs / 目录 / load_tools / 执行四处同时生效。
+    if (!multiAccountToolAllowed(t.name, t.mode)) return;
     // 分身闸(11-09)和子代理硬闸一样放在**最前**:内置只给白名单,插件只给注册这个通道的那个插件的,一处拒 = 四处都没有。
     if (standIn && standInToolDenied(standIn, t.name, { isBuiltin, fromPlugin, ownerPlugin })) return;
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析

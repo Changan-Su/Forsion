@@ -17,8 +17,11 @@
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { accountHome, engineRoot, isMultiAccount, requireAccountId } from './accountScope.js';
 
 export function tanguHome(): string {
+  // 多账号模式:每个账号一个 home(<engineRoot>/accounts/<id>);不在账号上下文里就抛,绝不落进共用目录(core/accountScope.ts)。
+  if (isMultiAccount()) return accountHome(requireAccountId('tanguHome'));
   return process.env.TANGU_HOME || join(homedir(), '.tangu');
 }
 
@@ -31,19 +34,27 @@ export function tanguHome(): string {
  * 两边解析出不同的 config.json,跨进程写锁 `<config.json>.lock` 就各锁各的(两边 test 同形态对照)。
  */
 export function forsionSharedDir(): string {
+  // 多账号模式:共享域 = 账号 home 自身(不走「目录名叫 tangu 就跳父目录」:账号 id 叫 tangu 也不能跳到 accounts/)。
+  // config.json / auth.json / provider-auth.json / connector-auth.json 因此都是每人一份。
+  if (isMultiAccount()) return tanguHome();
   const h = tanguHome();
   let real = h;
   try { real = realpathSync(h); } catch { /* home 尚不存在:按字面路径判断 */ }
   return basename(real) === 'tangu' ? dirname(real) : h;
 }
 
-export const envFile = (): string => join(tanguHome(), '.env');
+/** `.env` 是引擎级的(多账号模式下在引擎根,不在任何账号的 home 里)。 */
+export const envFile = (): string => join(isMultiAccount() ? engineRoot() : tanguHome(), '.env');
 
 /**
  * 加载 ~/.tangu/.env(KEY=VALUE 行;# 注释;引号可选)进 process.env——**已存在的环境变量不覆盖**
  * (真实 shell 环境 > .env 文件)。须在 parseConfig 之前调用;模板见包根 example.env。
  * 注:TANGU_HOME 本身只能来自真实环境(鸡生蛋:定位 .env 要先有 home)。
+ * 多账号模式下 `.env` 里的 TANGU_HOME / TANGU_MULTI_ACCOUNT 一律跳过(打一行 warn):引擎根和开关只认真实环境 ——
+ * 否则真实环境没给 TANGU_HOME 时,.env 会在启动途中把引擎根(账号库、登记表的位置)挪走。
  */
+const ENGINE_ONLY_ENV_KEYS = new Set(['TANGU_HOME', 'TANGU_MULTI_ACCOUNT']);
+
 export function loadTanguEnv(): void {
   let raw: string;
   try {
@@ -59,6 +70,10 @@ export function loadTanguEnv(): void {
     const k = t.slice(0, i).trim();
     let v = t.slice(i + 1).trim();
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    if (isMultiAccount() && ENGINE_ONLY_ENV_KEYS.has(k)) {
+      console.warn(`[tangu] multi-account mode: ignoring ${k} in ${envFile()} (only the real environment can set it)`);
+      continue;
+    }
     if (k && process.env[k] === undefined) process.env[k] = v;
   }
 }

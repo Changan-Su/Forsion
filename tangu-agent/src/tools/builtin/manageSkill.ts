@@ -12,6 +12,7 @@
  * create / update 返回技能文件夹的绝对路径:带脚本 / 资料的技能要往那里放文件,模型得知道在哪。
  * 返回给模型的话一律英文(模型读的)。
  */
+import { firstLink, isMultiAccount } from '../../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
@@ -181,6 +182,9 @@ export const manageSkillProvider: ToolProvider = {
             const shown = givenName || prevName || slug;
 
             const dir = path.join(root, slug);
+            // 多账号模式:技能根 / 技能文件夹 / SKILL.md 已存在且是软链 → 拒,不经它写到别处
+            const linked = isMultiAccount() ? firstLink(root, dir, skillMdPath(root, slug)) : null;
+            if (linked) return `Error: refusing to write skill "${slug}": ${linked} is a symbolic link`;
             await fs.mkdir(dir, { recursive: true });
             await fs.writeFile(skillMdPath(root, slug), composeSkillMd(raw, set, body), 'utf-8');
             return action === 'create'

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { getDeviceId } from '../../core/deviceId.js';
+import { isMultiAccount } from '../../core/accountScope.js';
 import type { MemoryBrain } from '../../seams/cloudBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, readMemoryFile, atomicWriteMemoryFile, safeMemoryPath, memoryContentVersion, memoryVersionConflict, MemoryRepositoryError, normalizeMemoryFact, MEMORY_CHAR_BUDGET, type MemorySnapshot } from '../../services/memoryRepository.js';
 import { deviceTagContext } from '../../services/deviceTagContext.js';
@@ -172,11 +173,13 @@ export interface LocalMemoryBrain extends MemoryBrain {
 /** 构造本地 MemoryBrain(userId 忽略——本地库单用户/per-install)。 */
 export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: string; /** 日志块标题上的设备名;缺省 = 同步页上这台的名字。null = 不写(测试) */ deviceName?: string | null }): LocalMemoryBrain {
   const store = createLocalMemoryStore(opts?.baseDir);
-  const deviceId = opts?.deviceId ?? getDeviceId();
+  // 多账号模式:设备号在账号 home 里,构造时没有账号上下文 → 每次用时按当前账号取(core/accountScope.ts)。
+  const fixedDeviceId = opts?.deviceId ?? (isMultiAccount() ? null : getDeviceId());
+  const currentDeviceId = (): string => fixedDeviceId ?? getDeviceId();
 
   return {
     store,
-    deviceId,
+    get deviceId() { return currentDeviceId(); },
     async getMemorySnapshot() { return createMemoryRepository(store.baseDir).snapshot(); },
     async getMemoryLayers() { const baseDir = store.baseDir; return { ...readAgentLayers(baseDir), baseDir }; },
     async commitMemory(_userId, proposal) { return createMemoryRepository(store.baseDir).commit(proposal); },
@@ -217,7 +220,7 @@ export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: str
       // 条目格式:heading `### HH:MM`(服务端兼容)+ 正文首行 `@<deviceId> <text>`(打标且可合并去重)。
       // 11-06:标题尾巴带上这台的名字(`### 09:30 · MacBook Pro`),界面上显示设备名而不是设备号;合并去重不看这条尾巴(contentMerge.blockKey)。
       const name = opts?.deviceName === undefined ? deviceTagContext().self : opts.deviceName;
-      const entry = `### ${time}${name ? ` · ${name.replace(/\s+/g, ' ').trim()}` : ''}\n@${deviceId} ${trimmed}\n`;
+      const entry = `### ${time}${name ? ` · ${name.replace(/\s+/g, ' ').trim()}` : ''}\n@${currentDeviceId()} ${trimmed}\n`;
       return withMemoryDirectoryLock(store.baseDir, () => {
       const existing = store.readLog(date);
       const next = existing

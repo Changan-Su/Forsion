@@ -13,6 +13,7 @@
  *   ——反正模型要的是「格子 ↔ 秒」映射,文本比像素更可靠。
  * - 帧取窗口中点(避开 t=0 黑场/片尾死帧);抽帧用输入侧 -ss(关键帧快跳),时长无关 O(N)。
  */
+import { assertHostSpawnAllowed } from '../../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -26,7 +27,9 @@ import { amadeusVaultPath } from './amadeus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 
-const run = promisify(execFile);
+const runRaw = promisify(execFile);
+// 多账号模式不起子进程(core/hostSpawn.ts):ffprobe / ffmpeg 每次调用前都过闸。
+const run: typeof runRaw = ((...a: Parameters<typeof runRaw>) => { assertHostSpawnAllowed('view_video'); return runRaw(...a); }) as typeof runRaw;
 
 const MAX_FRAMES = 16;
 const GRID_COLS = 4;
