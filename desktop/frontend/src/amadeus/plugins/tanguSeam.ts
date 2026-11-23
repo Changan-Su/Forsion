@@ -455,7 +455,7 @@ export function readTanguPrefs(): TanguPrefs | null {
 }
 
 /** 输入框里没发出去的纯文本(手机系统还原用,mobile/src/restoreSnapshot.ts):Tangu 在激活时交出来。**宿主内部接缝**。
- *  只有文字和长粘贴 —— 附件是 base64,不出这道缝。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
+ *  只有文字和长粘贴 —— 附件是 base64,读不出这道缝(attach 只往里放)。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
 export interface TanguDraftText { text: string; pastes: string[] }
 export interface TanguDrafts {
   read(): Record<string, TanguDraftText>
@@ -463,6 +463,8 @@ export interface TanguDrafts {
   fill(key: string, d: TanguDraftText): void
   /** 整份换掉文字和长粘贴(附件、引用芯片不动)。只给调用方自己先问过用户、或确认里面是它自己填的那句时用;fill 照旧不覆盖。 */
   replace(key: string, d: TanguDraftText): void
+  /** 往那份草稿的附件末尾加一件(看图器 / 对话缩略条的「用这张继续」,11-23)。只进不出:读还是只给文字。 */
+  attach?(key: string, att: Attachment): void
   subscribe(fn: () => void): () => void
 }
 

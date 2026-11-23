@@ -28,7 +28,7 @@ import { horizontalWheelDelta } from '../lib/fileWheel'
 import { ImageMarkup } from './ImageMarkup'
 import { MAX_ATTACHMENTS, attachmentCount, buildAttachments, buildMarkupMessage, originalAttachment, resolveSignal, type Mark } from './imageMarkupModel'
 import { ImageGrid } from './ImageGrid'
-import { setDraftField } from '../views/chat2/composerDrafts'
+import { readTanguDrafts } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
   'viewer.open': { zh: '查看图片 {name}', en: 'View image {name}' },
@@ -84,8 +84,9 @@ export function viewableProps(meta: ViewMeta) {
 /** 把一张图放进某个会话输入框的附件(「用这张继续」:对话里的缩略条和看图器共用)。成功返回 true。 */
 export async function continueWithImage(src: string, name: string, sessionId: string): Promise<boolean> {
   try {
-    const att = await originalAttachment(src, name)
-    setDraftField(sessionId, 'attachments', (list) => [...list, att])
+    const attach = readTanguDrafts()?.attach
+    if (!attach) throw new Error('no_drafts')
+    attach(sessionId, await originalAttachment(src, name))
     return true
   } catch {
     useApp.getState().toast(tr('viewer.useThisFailed'), true)
