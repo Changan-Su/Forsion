@@ -190,9 +190,17 @@ export interface AssetsBrain {
   deleteUserSkill?(userId: string, id: string): Promise<boolean>;
 }
 
+export interface WebSearchContext {
+  userId: string;
+  modelId?: string;
+  appId: string;
+  client?: string;
+  signal?: AbortSignal;
+}
+
 export interface SearchBrain {
   /** 返回 { provider, text, results } 或字符串(见 ai-studio webSearchService.runSearch)。 */
-  runSearch(query: string, maxResults: number): Promise<any>;
+  runSearch(query: string, maxResults: number, context?: WebSearchContext): Promise<any>;
 }
 
 /** 模型目录(admin 列表用)。 */

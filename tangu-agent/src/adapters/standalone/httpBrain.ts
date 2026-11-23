@@ -443,8 +443,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
     search: {
-      runSearch: async (query: string, maxResults: number) =>
-        postJson('/api/brain/search', { query, maxResults }),
+      runSearch: async (query, maxResults, context) => postJson('/api/brain/search', {
+        query, maxResults, modelId: context?.modelId, appId: context?.appId,
+        client: context?.client,
+      }, context?.signal, 60000),
     },
     models: {
       // 列出云端 admin 配的可用模型(供 TUI 的 /model 浏览);失败降级空列表(不阻断)。

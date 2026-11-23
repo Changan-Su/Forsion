@@ -6,8 +6,6 @@ import { formatToolOutput } from '../outputPersist.js';
 import { webSourcesOf } from '../webSources.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
-const runSearch = (query: string, maxResults: number) => deps().brain.search.runSearch(query, maxResults);
-
 export const webSearchProvider: ToolProvider = {
   id: 'builtin:web-search',
   tools: () => [
@@ -35,7 +33,10 @@ export const webSearchProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         try {
-          const r: any = await runSearch(String(args.query ?? ''), Number(args.max_results) || 5);
+          const { userId, modelId, appId, client, signal } = ctx;
+          const r = await deps().brain.search.runSearch(String(args.query ?? ''), Number(args.max_results) || 5, {
+            userId, modelId, appId, client, signal,
+          });
           // runSearch 返回 { provider, text, results }：落可读 text（而非盲 JSON dump）；超限则落盘+预览。
           const text = typeof r === 'string' ? r : (r?.text || JSON.stringify(r));
           // 引用锚点:与 read_file / read_document / web_fetch 同款「把可复制的具体形态印出来」——
