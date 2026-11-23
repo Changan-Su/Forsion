@@ -2,11 +2,18 @@ import { randomUUID } from 'node:crypto'
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import WebSocket from 'ws'
 import { VOICE_INPUT_FRAME_LIMIT, VOICE_INPUT_RATE, type VoiceInputStreamEvent } from '../shared/voiceInputStream'
+import { createLocalDictation, type LocalDictation } from './asrLocalStream'
 
 export interface VoiceInputEndpoint {
   url: string
   token: string
   direct?: true
+}
+
+/** 本机离线模型(SenseVoice):不连网,主进程自己边收边解(asrLocalStream.ts)。`decoder()` 备好模型后交出解码函数。 */
+export interface LocalVoiceInputEndpoint {
+  local: true
+  decoder(): Promise<(samples: Float32Array, wanted: () => boolean) => Promise<string>>
 }
 
 /** Only match the documented vendor protocol on vendor hosts. */
@@ -20,7 +27,7 @@ export function qwenVoiceInputUrl(baseUrl: string, model: string): string | null
 
 export function registerVoiceInputStream(
   trusted: (event: IpcMainEvent | IpcMainInvokeEvent) => boolean,
-  resolveEndpoint: (modelId?: string) => Promise<VoiceInputEndpoint | null>,
+  resolveEndpoint: (modelId?: string) => Promise<VoiceInputEndpoint | LocalVoiceInputEndpoint | null>,
 ): void {
   interface Connection {
     id: string
@@ -34,6 +41,7 @@ export function registerVoiceInputStream(
     const senderId = sender.id
     connections.get(senderId)?.close(true)
     let socket: WebSocket | undefined
+    let local: LocalDictation | undefined
     let direct = false
     let finished = false
     let closed = false
@@ -47,6 +55,13 @@ export function registerVoiceInputStream(
     const connection: Connection = {
       id,
       send(pcm) {
+        if (local) {
+          if (finished) return
+          finished = pcm === 'finish'
+          if (pcm === 'finish') local.finish()
+          else local.write(pcm)
+          return
+        }
         if (finished || socket?.readyState !== WebSocket.OPEN) return
         if (socket.bufferedAmount > 256 * 1024) { connection.close(true); return }
         finished = pcm === 'finish'
@@ -61,6 +76,7 @@ export function registerVoiceInputStream(
         if (connections.get(senderId) === connection) connections.delete(senderId)
         sender.removeListener('did-start-navigation', navigating)
         sender.removeListener('destroyed', destroyed)
+        local?.close()
         if (socket?.readyState === WebSocket.CONNECTING) socket.terminate()
         else socket?.close()
         if (notify) emit({ type: 'closed' })
@@ -72,6 +88,18 @@ export function registerVoiceInputStream(
     try {
       const endpoint = await resolveEndpoint(modelId)
       if (closed || !endpoint) { connection.close(); return false }
+      if ('local' in endpoint) {
+        // 不发 'supported':本地不是「只能实时」的模型,模型加载慢过渲染层的握手等待时它照旧退回整段转写。
+        const decode = await endpoint.decoder()
+        if (closed) return false
+        local = createLocalDictation({
+          decode,
+          send: (message) => { if (!closed) emit({ type: 'message', data: JSON.stringify(message) }) },
+          fail: () => connection.close(true),
+        })
+        emit({ type: 'message', data: JSON.stringify({ type: 'session.updated' }) })
+        return true
+      }
       direct = !!endpoint.direct
       if (direct) emit({ type: 'supported' })
       socket = new WebSocket(endpoint.url, { headers: { Authorization: `Bearer ${endpoint.token}` }, handshakeTimeout: 5000, maxPayload: 64 * 1024 })

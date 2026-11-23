@@ -133,7 +133,8 @@ async function main() {
     await stop.waitFor()
     await win.locator('.t2s-srow').filter({ hasText: 'Probe session two' }).first().click()
     await assertValue('')
-    assert.equal(await view.locator('.t2c-voicestop').count(), 0)
+    // 录音条收起有倒放动画(#718 Chat Box 水滴):停止钮等动画放完才卸,不是当场没有
+    await view.locator('.t2c-voicestop').waitFor({ state: 'detached', timeout: 2000 })
     await win.locator('.t2s-srow').filter({ hasText: 'Probe session one' }).first().click()
     await assertValue('我修改了整段草稿。')
     console.log('PASS: recording cleanup and draft ownership on session change')
