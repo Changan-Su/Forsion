@@ -15,6 +15,8 @@ registerMessages({
   },
   'settings.amadeusPlugins.capAgentImport': { zh: '新建 Agent、导入聊天记录', en: 'create agents and import chats' },
   'settings.amadeusPlugins.capActiveWindow': { zh: '读取前台窗口', en: 'see which window is in front' },
+  // 演示舞台(2026-11-20+,electron/pluginStage.ts):另起一份 Forsion 来截图录像,第一次用时还会再问
+  'settings.amadeusPlugins.capStage': { zh: '另起一份隔离的 Forsion 来演示、截图和录屏', en: 'start a separate, isolated copy of Forsion for demos, screenshots and recordings' },
   // 内部口子(2026-11-16+,amadeus/plugins/pluginInternals.ts):两级轻重不同,用户启用前有权知道
   'settings.amadeusPlugins.capInternals': { zh: '读取 Forsion 的内部状态', en: 'read Forsion internals' },
   'settings.amadeusPlugins.capInternalsRaw': { zh: '直接操作 Forsion 的内部对象', en: 'work on Forsion internals directly' },
@@ -28,6 +30,7 @@ export const CAP_LABELS: Array<[PluginCapability, string]> = [
   ['spaces', 'settings.amadeusPlugins.capSpaces'],
   ['agentImport', 'settings.amadeusPlugins.capAgentImport'],
   ['activeWindow', 'settings.amadeusPlugins.capActiveWindow'],
+  ['stage', 'settings.amadeusPlugins.capStage'],
   ['internals', 'settings.amadeusPlugins.capInternals'],
   ['internals-raw', 'settings.amadeusPlugins.capInternalsRaw'],
 ]

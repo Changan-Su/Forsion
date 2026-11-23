@@ -22,3 +22,20 @@ if (self) {
     if (self.appVersion) localStorage.setItem(ONBOARDING_VERSION_KEY, self.appVersion)
   } catch { /* 存不下:照常启动,只是会看到引导 */ }
 }
+
+// 演示舞台(插件的 ctx.stage):「现在」的起点定在参数给的那一刻 —— 日历的今天、相对时间、时间戳每次拍都一样;之后照常往前走。
+// 得在这里换:别的模块一 import 就可能记下 Date.now()。只换本页面的 Date(Worker / iframe 各有各的,不管)
+const stageClock = self?.stage?.clock
+if (stageClock) {
+  const target = new Date(stageClock).getTime() // 不带时区 = 舞台本机的本地时间
+  if (Number.isFinite(target)) {
+    const RealDate = Date
+    const offset = target - RealDate.now()
+    const now = (): number => RealDate.now() + offset
+    ;(globalThis as { Date: DateConstructor }).Date = new Proxy(RealDate, {
+      construct: (T, args, nt) => Reflect.construct(T, args.length ? args : [now()], nt),
+      apply: () => new RealDate(now()).toString(),
+      get: (T, k, r) => (k === 'now' ? now : Reflect.get(T, k, r)),
+    })
+  }
+}

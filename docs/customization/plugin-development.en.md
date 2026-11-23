@@ -460,6 +460,45 @@ const { usePageStore } = await ctx.internals.raw.import('host:desktop/frontend/s
 
 Check it with `node check-plugin.mjs <plugin folder>`: it reports use without declaring, declaring level two alone and reaching into React's internals, and lists the level-two modules the plugin takes.
 
+## Demo stage: `ctx.stage` (2026-11-20+, experimental)
+
+To make demo images or videos of a feature (store screenshots, release notes, promo material), you can ask Forsion to start a **demo stage**: a separate, isolated copy of Forsion that only holds the demo content your plugin package ships and the plugins you name. It is not signed in and never touches the user's vault or plugin data. You drive it step by step, then take full-resolution screenshots or record video. Desktop only; declare it in the manifest:
+
+```json
+{ "capabilities": ["stage"] }
+```
+
+```js
+const stage = await ctx.stage?.open({
+  fixture: 'fixtures/calendar-demo',  // folder in your plugin package: vault/ becomes the stage's vault, engine.json drives chat replay, human/CALENDAR.db is My calendar
+  plugins: ['calendar'],              // installed plugins to bring in (package only, not their data)
+  theme: 'light', locale: 'en',
+  window: [1440, 900, 2],             // 1440×900 content at density 2: captures are 2880×1800 whatever the user's screen
+  clock: '2026-11-20T10:00',          // where "now" starts in the stage (local time), so dates look the same every take
+  engine: 'scripted',                 // optional: replay chats from engine.json, no model quota; default is no engine
+})
+await stage.space('calendar')
+await stage.click('Friday')            // a reference from read (e12), css:<selector>, or the control's visible text
+await stage.type('Launch event'); await stage.press('Enter')
+const { outline } = await stage.read()
+const shot = await stage.capture({ selector: 'main' })   // { bytes, width, height, mime: 'image/png' }
+const rec = await stage.record({ fps: 30 })               // records this window; a pointer moves to each click first
+await stage.click('New event')
+const video = await rec.stop()                             // { bytes, mime, width, height, durationMs }
+await stage.close()
+```
+
+- **The first `open` asks the user** for permission; once allowed it does not ask again. If they decline → `denied`.
+- There is one stage per computer at a time: while another plugin has it open → `busy`. Opening again from your own plugin closes the previous one first. The host closes it when your plugin is disabled or reloaded; after 5 idle minutes it stops on its own.
+- Every `open` starts fresh from the demo content; tabs and settings from the last run are not carried over.
+- `fixture` only accepts a relative path inside your plugin package, and symlinks in it are not copied. Only installed plugins can open a stage (not the copy running in the plugin sandbox).
+- Screenshot pixels = window size × density; `rect` is in CSS pixels. Recordings are at most 3840 pixels wide and 120 seconds long (they stop on their own at the limit and `stop()` still returns them). The default is mp4; pass `format: 'webm'` for WebM.
+- `engine.json`: `{ "models": [...], "runs": [{ "match": "text from the user's message (optional)", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`. Each message sent in the stage replays the first matching entry in `runs`.
+- The personal calendar (My calendar) is not in the vault: the calendar asks the engine for `human/CALENDAR.db`. To film a calendar with events, put `human/CALENDAR.db` in the fixture and use `engine: 'scripted'` (for a calendar-only shot, `engine.json` can be `{ "runs": [] }`). The replay engine serves it in place of the file in the real engine home. The format is the same as the real one, a plain database table up to 8 MB; every column needs `id` / `name` / `type` and every row `id` / `cells`, and in a table with a checkbox column every row is drawn as a to-do with a tick box: `{ "version": 2, "name": "My calendar", "columns": [{ "id": "name", "name": "Name", "type": "text" }, { "id": "date", "name": "Date", "type": "calendarDate" }, { "id": "done", "name": "Done", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "Launch review", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`. Edits to the calendar on the stage stay in that stage only. Without the file the stage shows an empty personal calendar; with `engine: 'none'` there is no engine, so the personal calendar can't be loaded. A link, something that is not a file, or a bad format makes `open` fail with `fixture-invalid`.
+- Every failure rejects with an error that has a `code`: `unsupported`, `invalid`, `denied`, `busy`, `fixture-invalid`, `plugin-missing`, `timeout`, `closed`, `error`.
+- **Publishing**: plugins that declare `stage` must pass store review before the official store installs them (the same per-version review as `internals-raw`). Dev loading and manual installs are not affected.
+- ⚠️ `window.tangu.pluginSandbox` and `window.tangu.pluginStage` are internal host channels. Do not call them from a plugin; use `ctx.stage`.
+
 ## Removing commands and default shortcuts
 
 `ctx.registerCommand` returns a function that removes exactly this registration (2026-11-16+). Registering the same `id` again from the same plugin replaces the earlier command in place (title, action and shortcut all updated), and the replaced registration's remover no longer does anything. So a plugin can add and remove commands while it runs (one per enabled template, say) without being reloaded. Disabling the plugin still removes all of its commands. Older hosts return `undefined` and add a duplicate when an `id` is registered again, so write `off?.()` and register each `id` only once there.

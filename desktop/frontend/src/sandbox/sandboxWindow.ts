@@ -31,6 +31,7 @@ type HostFields = 'windowVisible' | 'vault' | 'dialog' | 'filesArmed'
 /** 一份状态(形状 = SandboxStatus,主进程补 HostFields,父进程再过一道 parseSandboxStatus)。 */
 function status(pluginId: string): Omit<SandboxStatus, HostFields> {
   const self = sandboxSelf()!
+  if (self.stage) return stageStatus(self.stage.plugins)
   const s = usePluginStore.getState()
   const p = s.plugins.find((x) => x.id === pluginId)
   const dev = getDevPluginState(pluginId)
@@ -61,6 +62,138 @@ function status(pluginId: string): Omit<SandboxStatus, HostFields> {
     activeSpace: useSpaceStore.getState().activeSpaceId || null,
     notices: notices.slice(-8).map(({ level, text }) => ({ level, text })),
   }
+}
+
+/** 演示舞台的状态:没有开发副本;就绪 = 点名的插件都列出来、装载落定。有没装上的 / setup 抛了的 → failed,setupError 写明是谁。 */
+function stageStatus(want: string[]): Omit<SandboxStatus, HostFields> {
+  const self = sandboxSelf()!
+  const s = usePluginStore.getState()
+  const listed = (id: string) => s.plugins.find((p) => p.id === id)
+  const missing = settled ? want.filter((id) => !listed(id)) : []
+  const inactive = settled ? want.filter((id) => listed(id) && !s.activeIds.includes(id)) : []
+  const errors = settled ? want.filter((id) => s.lastSetupError[id]).map((id) => `${id}: ${s.lastSetupError[id]}`) : []
+  const pending = want.some((id) => s.activeIds.includes(id) && !pluginSetupSettled(id) && !s.lastSetupError[id])
+  const problems = [
+    ...(missing.length ? [`not installed in the stage: ${missing.join(', ')}`] : []),
+    ...(inactive.length ? [`did not start in the stage (disabled or missing a dependency): ${inactive.join(', ')}`] : []),
+    ...errors,
+  ]
+  return {
+    v: 1,
+    state: !settled || pending ? 'starting' : problems.length ? 'failed' : 'running',
+    pluginId: self.pluginId, name: self.name, version: self.version, dir: self.dir,
+    views: [], spaces: [], hiddenSpaces: [],
+    setupError: problems.length ? problems.join('; ').slice(0, 1000) : null,
+    blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0,
+    loads,
+    activeSpace: useSpaceStore.getState().activeSpaceId || null,
+    notices: notices.slice(-8).map(({ level, text }) => ({ level, text })),
+  }
+}
+
+// ── 演示舞台:截图区域、录像、录像里的假指针(主进程 sandboxChild.ts 经钩子调) ──
+/** 选择器 → 舞台窗口里的 CSS 像素矩形(截图用)。找不到 / 不可见 → error。 */
+function rectOf(selector: string): { x: number; y: number; width: number; height: number } | { error: string } {
+  let el: Element | null = null
+  try { el = document.querySelector(selector) } catch { return { error: `"${selector}" is not a valid CSS selector` } }
+  if (!el) return { error: `nothing matches "${selector}" in the stage window` }
+  const r = el.getBoundingClientRect()
+  const x = Math.max(0, Math.floor(r.left)), y = Math.max(0, Math.floor(r.top))
+  const width = Math.min(innerWidth, Math.ceil(r.right)) - x, height = Math.min(innerHeight, Math.ceil(r.bottom)) - y
+  if (width < 1 || height < 1) return { error: `"${selector}" is not visible in the stage window` }
+  return { x, y, width, height }
+}
+
+const CURSOR_ID = '__forsion-stage-cursor'
+function cursorEl(): HTMLElement {
+  let el = document.getElementById(CURSOR_ID)
+  if (el) return el
+  el = document.createElement('div')
+  el.id = CURSOR_ID
+  el.setAttribute('aria-hidden', 'true')
+  // 只是画给录像看的:不接点击、不进读屏、压在最上面
+  el.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;z-index:2147483647;pointer-events:none;transform:translate(-40px,-40px);transition:transform 320ms cubic-bezier(.3,.7,.2,1);will-change:transform'
+  el.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.4 12.6 L16.6 12.6 Z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
+  document.body.appendChild(el)
+  return el
+}
+let cursorAt: { x: number; y: number } | null = null
+/** 假指针挪到 (x, y),等它到位再回(主进程接着发真点击);点下去时一圈涟漪。 */
+async function cursorTo(x: number, y: number): Promise<void> {
+  const el = cursorEl()
+  const far = !cursorAt || Math.hypot(x - cursorAt.x, y - cursorAt.y) > 4
+  el.style.transform = `translate(${x - 3}px, ${y - 2}px)`
+  cursorAt = { x, y }
+  if (far) await new Promise((r) => setTimeout(r, 360))
+  const ring = document.createElement('div')
+  ring.setAttribute('aria-hidden', 'true')
+  ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(17,17,17,.55);z-index:2147483646;pointer-events:none;transition:transform 420ms ease-out,opacity 420ms ease-out`
+  document.body.appendChild(ring)
+  requestAnimationFrame(() => { ring.style.transform = 'scale(1.6)'; ring.style.opacity = '0' })
+  setTimeout(() => ring.remove(), 500)
+}
+
+let recording: { rec: MediaRecorder; chunks: Blob[]; started: number; ext: 'mp4' | 'webm'; mime: string; width: number; height: number; stopped: Promise<void>; timer: ReturnType<typeof setTimeout>; tick: () => void } | null = null
+
+/** 页签录制只在画面有变化时出帧:窗口静着的那几秒没有帧,录出来的视频比实际短、结尾停住的画面被截掉(11-20 台架实测 2.6 秒录成 1.8 秒)。
+ *  录着的时候在右下角放一块 2px、透明度只有 1/255 上下的小块,每帧换一下,让窗口一直出帧(肉眼看不见,截图里也看不出)。 */
+function startFrameTicker(): () => void {
+  const el = document.createElement('div')
+  el.setAttribute('aria-hidden', 'true')
+  el.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:2147483646;pointer-events:none'
+  document.body.appendChild(el)
+  let on = true
+  let raf = 0
+  const step = (): void => { el.style.background = (on = !on) ? 'rgba(0,0,0,0.004)' : 'rgba(0,0,0,0.008)'; raf = requestAnimationFrame(step) }
+  raf = requestAnimationFrame(step)
+  return () => { cancelAnimationFrame(raf); el.remove() }
+}
+/** 录本页签:主进程那头把这个顶层 frame 交给 getDisplayMedia(不录屏幕、不要系统权限);尺寸 = 窗口像素(上限 3840 宽,Chromium 页签录制的帽)。 */
+async function recordStart(o: { fps: number; maxMs: number; cursor: boolean; format: 'mp4' | 'webm' }): Promise<{ mime: string } | { error: string }> {
+  if (recording) return { error: 'already recording' }
+  const W = Math.round(innerWidth * devicePixelRatio), H = Math.round(innerHeight * devicePixelRatio)
+  let stream: MediaStream
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: o.fps, width: { ideal: W, max: W }, height: { ideal: H, max: H } }, audio: false })
+  } catch (e) {
+    return { error: `could not start recording the stage window: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  const prefer = o.format === 'webm' ? ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'] : ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+  const mime = prefer.find((t) => MediaRecorder.isTypeSupported(t))
+  if (!mime) { stream.getTracks().forEach((t) => t.stop()); return { error: 'this Forsion cannot encode video' } }
+  // 码率上限 16 Mbit/s:2880×1800@30 够清楚,120 秒封顶约 240 MB(整段经 IPC 交给主进程落盘)
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: Math.min(16e6, Math.max(4e6, W * H * o.fps * 0.08)) })
+  const chunks: Blob[] = []
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
+  const stopped = new Promise<void>((r) => { rec.onstop = () => { stream.getTracks().forEach((t) => t.stop()); r() } })
+  const st = stream.getVideoTracks()[0]?.getSettings() ?? {}
+  const tick = startFrameTicker()
+  rec.start(1000)
+  if (o.cursor) cursorEl()
+  recording = {
+    rec, chunks, started: performance.now(), ext: mime.includes('mp4') ? 'mp4' : 'webm', mime: mime.split(';')[0],
+    width: Number(st.width) || W, height: Number(st.height) || H, stopped,
+    // 到点自己停:recordStop 照样拿得到这一段
+    timer: setTimeout(() => { if (rec.state !== 'inactive') rec.stop() }, o.maxMs),
+    tick,
+  }
+  return { mime: recording.mime }
+}
+async function recordStop(): Promise<Record<string, unknown>> {
+  const r = recording
+  if (!r) return { error: 'not recording' }
+  recording = null
+  clearTimeout(r.timer)
+  if (r.rec.state !== 'inactive') r.rec.stop()
+  await r.stopped
+  r.tick()
+  const durationMs = Math.round(performance.now() - r.started)
+  document.getElementById(CURSOR_ID)?.remove()
+  cursorAt = null
+  const bytes = await new Blob(r.chunks, { type: r.mime }).arrayBuffer()
+  const path = await window.tangu?.sandbox?.saveRecording?.(bytes, r.ext)
+  if (!path) return { error: 'the recording could not be saved' }
+  return { path, mime: r.mime, width: r.width, height: r.height, durationMs }
 }
 
 // ── 提示(toast):插件「保存成功」「出错了」这类反馈多半只在这里,agent 截图慢一拍就看不到 ──
@@ -261,10 +394,11 @@ function scroll(target: string, amount: number): { did: string; label: string } 
 
 /** space:切到插件带的那个 Space(按 id 或名字)。 */
 function space(pluginId: string, want: string): { did: string; label: string } | { error: string } {
-  const own = ownSpaces(pluginId)
+  // 舞台:哪个 Space 都能切(内置的 Tangu / 笔记 / 日历,和点名插件带的);开发沙箱只切被测插件自己的
+  const own = sandboxSelf()?.stage ? useSpaceStore.getState().spaces.map((x) => x.id) : ownSpaces(pluginId)
   // 配方的名字注册成按语言求值的函数:String() 出来是函数源码(Codex 评审),按引擎的 label() 取
   const sp = useSpaceStore.getState().spaces.find((x) => own.includes(x.id) && (x.id === want || spaceLabel(x.name).toLowerCase() === want.trim().toLowerCase()))
-  if (!sp) return { error: `this plugin has no Space "${want}"; its Spaces: ${own.join(', ') || 'none'}` }
+  if (!sp) return { error: sandboxSelf()?.stage ? `no Space "${want}" on the stage; Spaces: ${own.join(', ') || 'none'}` : `this plugin has no Space "${want}"; its Spaces: ${own.join(', ') || 'none'}` }
   setActiveSpace(sp.id)
   return { did: 'switched Space', label: `${sp.id} "${spaceLabel(sp.name)}"` }
 }
@@ -394,8 +528,8 @@ export function sandboxPluginsLoaded(): void {
   if (!self || settled) return
   settled = true
   loads += 1
-  pureRibbon(self.pluginId)
-  land(self.pluginId)
+  // 舞台是一份「正常的」Forsion:Ribbon 照旧、不自动落到哪个 Space(导演的步骤自己切)
+  if (!self.stage) { pureRibbon(self.pluginId); land(self.pluginId) }
   window.tangu?.sandbox?.changed()
 }
 
@@ -405,7 +539,7 @@ export function installSandboxHook(): void {
   const pid = self.pluginId
   const main = windowKind() === 'main'
   watchNotices()
-  if (main) {
+  if (main && !self.stage) {
     pureRibbon(pid)
     // 条目随 Space 注册 / 插件 Space 装卸而变,每变一次对一遍;pureRibbon 自己的增删会再触发一次,那一次什么也不改
     useRibbonStore.subscribe((st, prev) => { if (st.items !== prev.items) pureRibbon(pid) })
@@ -433,7 +567,13 @@ export function installSandboxHook(): void {
     settle,
     begin: () => begin(pid),
     end: () => end(pid),
+    // 演示舞台(sandboxChild.ts 只在舞台模式下调)
+    rectOf,
+    cursorTo,
+    recordStart,
+    recordStop,
     reload: async () => {
+      if (self.stage) return // 舞台没有开发副本可重载
       const before = usePluginStore.getState().views.some((v) => v.pluginId === pid)
       const hadSpace = ownSpaces(pid).length > 0
       const wasOn = useSpaceStore.getState().activeSpaceId
