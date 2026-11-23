@@ -9,6 +9,7 @@
  *
  * 判据(只看磁盘和账号库,不信模型自述):
  *   - plan.md 落在 alice 的账号文件夹里;alice 的搜索工具调用成功、结果里有 plan.md;
+ *   - bob 真的调了搜索 / 读文件(没调 = 这条腿没测到,算红);bob 读 alice 那份文件的绝对路径被拒;
  *   - bob 的任何工具结果和回答里都没有 alice 的随机码;bob 的账号文件夹里也没有;
  *   - alice 的 run_plugin_script 调用退出码 0,stats.json 落在 alice 的工作目录里,回答里有正确的 digest;
  *   - ran-by-bob.txt 不存在(bob 自己写的脚本没跑起来),bob 那次 run_plugin_script 回的是错误;
@@ -210,6 +211,9 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
       allDone: turns.every((t) => t.status === 'done'),
       planInAlice: !!planPath && relative(acctHome('alice'), planPath).split(/[\\/]/)[0] !== '..',
       aliceSearchFound: aliceSearch.some((r) => !r.isError && r.result.includes('plan.md')),
+      bobTriedToLook: b1.calls.some((c) => /^(search_files|glob_files|read_file)$/.test(c.name)), // 模型不肯替 bob 去搜 = 这条腿没测到,算红
+      bobReadRefused: b1.results.filter((r) => r.name === 'read_file' && r.result.includes(secret.slice(0, 10))).length === 0
+        && b1.results.filter((r) => r.name === 'read_file').every((r) => r.isError || /^Error|denied|not found|outside/i.test(r.result)),
       bobSawNothing: !bobSaw,
       bobDiskClean: bobDisk.length === 0,
       scriptRanOk: scriptOk,
