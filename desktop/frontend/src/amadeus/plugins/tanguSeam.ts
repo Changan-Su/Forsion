@@ -622,6 +622,7 @@ export function readTanguChatViews(): TanguChatViews | null {
 /** Tangu 交给宿主外壳的界面件(界面热更新 3d):宿主不再直引 Tangu 模块,Tangu 激活时交进来。不看档案一律交 ——
  *  这些以前是宿主静态 import 的,任何档案都有。**宿主内部接缝,不进 `ctx.tangu`**。没交(不走激活的台架页)→ 外壳不画旁聊 / 文件树。 */
 export interface TanguShell {
+  GithubSkillImport?: ComponentType<{ source?: string }>
   /** 旁聊:主窗 / 手机挂的宿主(page = 手机全屏页)、设置浮窗式的独立旁聊窗口、浮窗参数 → 种子、把回答投成主区对话的引用 */
   BtwHost: ComponentType<{ page?: boolean }>
   BtwPanel: ComponentType<{ seed: BtwSeed; onClose?: () => void }>

@@ -103,9 +103,9 @@ import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
 import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
-import { GithubSkillImport } from '../../components/GithubSkillImport'
+import { GithubSkillImport } from './GithubSkillImport'
 import { currentPlatform, usesClientInbox } from '../../services/platform'
-import { isDelegatedAdmin } from '../../services/delegatedAdmin'
+import { tanguDelegatedAdmin } from '../../tangu/delegatedRole'
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { AUTOMATION_DM_ORIGIN, readAutomationDm } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
@@ -1127,7 +1127,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ))}
           </div>
         )}
-        {!streaming && !elsewhere && currentPlatform() === 'web' && usesClientInbox() && !isDelegatedAdmin() &&
+        {!streaming && !elsewhere && currentPlatform() === 'web' && usesClientInbox() && !tanguDelegatedAdmin() &&
           [...new Set(msg.content.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/blob\/[\w.%+\/-]+\/SKILL\.md\b/g))].slice(0, 8)
             .map(source => <GithubSkillImport key={source} source={source} />)}
         {/* 从这条分出去的:分支 / 顺便问 / start_session 开出的子会话,一块「从这里分出」(ChildSessions.tsx ForkBlock)。 */}

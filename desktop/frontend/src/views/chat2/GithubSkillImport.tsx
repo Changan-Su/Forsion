@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { registerMessages, useI18n } from '../i18n'
-import { request } from '../services/backendService'
-import { homeTarget } from '../services/engine/targets'
+import { registerMessages, useI18n } from '../../i18n'
+import { request } from '../../services/backendService'
+import { homeTarget } from '../../services/engine/targets'
 
 registerMessages({
   'githubSkill.open': { zh: '从 GitHub 导入', en: 'Import from GitHub' },

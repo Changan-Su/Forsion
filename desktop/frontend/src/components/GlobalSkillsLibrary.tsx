@@ -15,7 +15,7 @@ import { homeTarget } from '../services/engine/targets'
 import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { SkillUninstallDialog } from './UninstallDialog'
 import { currentPlatform, usesClientInbox } from '../services/platform'
-import { GithubSkillImport } from './GithubSkillImport'
+import { readTanguShell } from '../amadeus/plugins/tanguSeam'
 import { agentName } from '../agentName'
 
 registerMessages({
@@ -147,6 +147,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   const [deleting, setDeleting] = useState<SkillCatalogEntry | null>(null)
   // 委托管理员:全局技能只能看清单 —— 详情、新建、改、复制、发布、暂停全局都在那台设备的白名单外;按 Agent 启停在 Agent 的技能页。
   const delegated = isDelegatedAdmin()
+  const GithubSkillImport = readTanguShell()?.GithubSkillImport
   const githubEnabled = currentPlatform() === 'web' && usesClientInbox() && !delegated
 
   const refresh = useCallback(async () => {
@@ -292,7 +293,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
   </button>
 
   return <div className="gsk-library">
-    {githubEnabled && <GithubSkillImport />}
+    {githubEnabled && GithubSkillImport && <GithubSkillImport />}
     {deleting && <SkillUninstallDialog skillKey={deleting.key} name={deleting.name} onClose={() => setDeleting(null)}
       onDone={() => { setSelected(null); setEditor(null); void refresh() }} />}
     <div className="gsk-toolbar">
