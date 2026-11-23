@@ -246,11 +246,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     search: {
       // 搜索分发:本地配了 provider(config.json webSearch 段)→ 本地直搜(BYO-key);
       // 否则走云 brain;云不可用(未登录/断网/云侧全败)→ 本地 DuckDuckGo 免费兜底。
-      runSearch: async (query: string, maxResults: number) => {
+      runSearch: async (query, maxResults, context) => {
+        context?.signal?.throwIfAborted();
         if (hasLocalSearchProvider(loadLocalWebSearchConfig())) return runLocalSearch(query, maxResults);
+        // A direct model ID belongs to the local provider registry, not the hosted catalog.
+        const hosted = context?.modelId && registry.has(context.modelId) ? { ...context, modelId: undefined } : context;
         try {
-          return await httpBrain.search.runSearch(query, maxResults);
+          return await httpBrain.search.runSearch(query, maxResults, hosted);
         } catch (e) {
+          context?.signal?.throwIfAborted();
           const out = await runLocalSearch(query, maxResults, { provider: 'duckduckgo' });
           out.text = `[web_search note] cloud search unavailable (${e instanceof Error ? e.message : String(e)}); results served by local ${out.provider}.\n\n${out.text}`;
           return out;
