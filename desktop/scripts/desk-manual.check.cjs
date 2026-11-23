@@ -16,9 +16,13 @@
  *      在新窗口中打开(Desk 两格留着)
  *   k  名字胶囊拖出去(合成拖拽事件,同 f):标签栏 = 落点线 + 在那开、同一份拖两次只一个标签;输入框 = 引用;另一格 = 对调并钉住;
  *      自己那格不接;没有文件的视图拖到对话正文不画「拆开对话组」;拖出窗外 = 交主进程 window:dropView(被别的程序接走就不交)
+ *   l  防毁档(11-23):Agent 直接给出笔记编辑器(desk_present {type:'view', view:'amadeus-editor'})却指着 .db / 白板 / .csv ——
+ *      格子按文件重新分派(数据库视图 / 白板只读预览 / 通用预览),没有笔记编辑器,文件字节不变;真笔记照旧进编辑器。
+ *      插件文件类型(.mindmap.md)这里没装插件,覆盖在单测 agentDesk.viewReroute.test.ts
  *   shots 亮 / 暗各一张两格 + 钉住的整窗,与方案图 v-a-light / v-a-dark 对照
  *
  * 跑(必须经 devlock):node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="Desk 手动控制" --eta=6 -- npm run check:deskmanual
+ * 只跑某几段:ONLY=l npm run check:deskmanual(逗号分隔;段与段之间有前后依赖的,自己挑齐)
  * 先 npm run build。截图写到 OUT(缺省系统临时目录下 desk-manual-check/),不入库。
  */
 const fs = require('fs'); const os = require('os'); const path = require('path')
@@ -39,6 +43,14 @@ async function main() {
   for (const d of [userData, `${userData}-dev`, vault, proj]) fs.mkdirSync(d, { recursive: true })
   const F = { A: path.join(proj, 'pricing-report.md'), B: path.join(proj, 'notes.txt'), T: path.join(proj, 'todo.md'), D: path.join(proj, 'data.csv'), E: path.join(proj, 'draft.md'), G: path.join(proj, 'draft2.md') }
   fs.writeFileSync(F.A, REPORT); fs.writeFileSync(F.B, NOTES); fs.writeFileSync(F.T, '- [ ] 补 Gamma 阶梯价\n- [ ] 对照三档套餐\n')
+  // l 段:库里的几份「不是笔记」的文件(+ 一篇真笔记做对照)
+  const V = { db: path.join(vault, '数据', '任务.db'), board: path.join(vault, 'boards', '草图.excalidraw.md'), csv: path.join(vault, '数据', '表.csv'), note: path.join(vault, 'notes', '会议.md') }
+  for (const p of Object.values(V)) fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(V.db, JSON.stringify({ version: 1, name: '任务', columns: [{ id: 'title', name: '标题', type: 'text' }], rows: [{ id: 'r1', cells: { title: '补 Gamma 阶梯价' } }], views: [] }))
+  fs.writeFileSync(V.board, ['---', 'excalidraw-plugin: parsed', '---', '', '## Drawing', '```json',
+    JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: { viewBackgroundColor: '#ffffff' }, files: {} }), '```', '%%'].join('\n'))
+  fs.writeFileSync(V.csv, 'product,personal,team\nAlpha,12,30\nBeta,10,28\n')
+  fs.writeFileSync(V.note, '# 会议\n\n- 定价对齐\n')
   const S = { id: 'dm-s1', title: '竞品定价调研', summary: '', archived: false, model_id: 'm1', project_path: proj, project_name: 'pricing', projectless: false,
     agent_config: { execMode: 'host', cwd: proj }, created_at: '2026-11-23 10:00:00', updated_at: '2026-11-23 10:00:00' }
   const HISTORY = [
@@ -61,7 +73,7 @@ async function main() {
     args: [`--user-data-dir=${userData}`, '--lang=zh-CN', DESK], cwd: DESK,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' },
   })
-  const out = { checks: [], errors: [], shots: [] }
+  const out = { checks: [], errors: [], shots: [], ran: [] }
   const save = () => fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(out, null, 2))
   const check = (name, ok, got) => { out.checks.push({ name, ok: !!ok, got }); console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify(got ?? null).slice(0, 300)) }
   try {
@@ -84,7 +96,10 @@ async function main() {
     win.setDefaultTimeout(4000)
 
     const shot = async (name, page = win) => { await page.mouse.move(150, 800).catch(() => {}); await sleep(450); const p = path.join(OUT, `${name}.png`); await page.screenshot({ path: p }); out.shots.push(p) }
+    const only = process.env.ONLY ? process.env.ONLY.split(',') : null // ONLY=l 只跑这几段(负对照 / 单段复跑用)
     const step = async (name, fn) => {
+      if (only && !only.includes(name)) return
+      out.ran.push(name)
       try { await fn() } catch (e) { out.errors.push({ step: name, err: String(e && e.stack || e).slice(0, 700) }); console.log('ERROR', name, String(e && e.message || e).slice(0, 300)) }
       save()
     }
@@ -508,12 +523,52 @@ async function main() {
       check('k 窗里松手的不交主进程', (await app.evaluate(() => globalThis.__dkDrops.length)) === 1, await app.evaluate(() => globalThis.__dkDrops.length))
       await shot('k-after')
     })
+
+    // ══ l:防毁档 —— Agent 给的笔记编辑器指着不是笔记的文件,格子按文件重新分派 ══
+    await step('l', async () => {
+      const bytes = () => Object.fromEntries(Object.entries(V).map(([k, p]) => [k, fs.readFileSync(p).toString('base64')]))
+      const before = bytes()
+      // 先清空 Desk:k 段留下了钉住的一格,present 会绕开钉住的格
+      for (let i = 0; i < 4 && (await info()).panes.length; i++) await moreIn(0, '从 Desk 拿掉')
+      const presentViews = async (views, text) => {
+        stub.script([
+          { type: 'status', payload: { phase: 'llm_call', stage: 'sending', iteration: 0 }, delay: 150 },
+          { type: 'desk_present', payload: { views, size: 'half' }, delay: 200 },
+          { type: 'done', payload: { content: '' }, delay: 200 },
+        ])
+        await send(text); await sleep(4000)
+      }
+      const ed = (notePath, name) => ({ type: 'view', view: 'amadeus-editor', params: { notePath }, name })
+      const cells = () => win.evaluate(() => [...document.querySelectorAll('.agent-desk .agent-desk-body > .agent-desk-pane')].map((p) => ({
+        label: p.querySelector('.desk-cap-label')?.textContent || null, editor: !!p.querySelector('.amx-editor'), db: !!p.querySelector('.amx-dbview'),
+        draw: !!p.querySelector('.amx-drawview'), preview: !!p.querySelector('.amx-drawpreview-open'), wsfile: !!p.querySelector('.wsfile-tab .wsfile-table'),
+      })))
+      const cellOf = (xs, re) => xs.find((c) => re.test(c.label || ''))
+      await presentViews([ed('数据/任务.db', '任务.db'), ed('boards/草图.excalidraw.md', '草图')], '把任务库和草图摆上来')
+      const c1 = await cells()
+      const db = cellOf(c1, /任务\.db/), board = cellOf(c1, /草图/)
+      check('l .db 给成笔记编辑器:格子挂数据库视图,没有笔记编辑器', !!db && db.db && !db.editor, c1)
+      check('l 白板给成笔记编辑器:格子挂白板只读预览,没有笔记编辑器', !!board && board.draw && board.preview && !board.editor, c1)
+      await shot('l-db-board')
+      await presentViews([ed('数据/表.csv', '表.csv'), ed('notes/会议.md', '会议')], '把表格和会议记录摆上来')
+      const c2 = await cells()
+      const csv = cellOf(c2, /表\.csv/), note = cellOf(c2, /会议/)
+      check('l 认不出的(.csv)给成笔记编辑器:回落通用预览(表格),没有笔记编辑器', !!csv && csv.wsfile && !csv.editor, c2)
+      check('l 真笔记照旧进笔记编辑器(对照)', !!note && note.editor, c2)
+      await sleep(3000) // 过了编辑器的存盘防抖再比字节
+      const after = bytes()
+      const changed = ['db', 'board', 'csv'].filter((k) => before[k] !== after[k])
+      check('l .db / 白板 / .csv 的字节都没变', changed.length === 0, { changed })
+      await shot('l-after')
+    })
   } finally {
     save()
     await app.close().catch(() => {}); stub.close(); fs.rmSync(home, { recursive: true, force: true })
   }
   const failed = out.checks.filter((c) => !c.ok)
-  console.log(`checks: ${out.checks.length - failed.length}/${out.checks.length} passed; errors: ${out.errors.length}; shots → ${OUT}`)
-  process.exit(failed.length || out.errors.length ? 1 : 0)
+  // ONLY 写错了段名 = 一段没跑、0/0 也不能算过
+  const missed = process.env.ONLY ? process.env.ONLY.split(',').filter((n) => !out.ran.includes(n)) : []
+  console.log(`checks: ${out.checks.length - failed.length}/${out.checks.length} passed; errors: ${out.errors.length}; shots → ${OUT}${missed.length ? `; ONLY 里没跑到的段: ${missed.join(',')}` : ''}`)
+  process.exit(failed.length || out.errors.length || missed.length || !out.checks.length ? 1 : 0)
 }
 main().catch((e) => { console.error(e); process.exit(1) })
