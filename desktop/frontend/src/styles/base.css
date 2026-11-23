@@ -40,7 +40,13 @@
   --overlay-light: rgba(28, 28, 28, 0.04);
   --overlay-medium: rgba(28, 28, 28, 0.07);
   --overlay-strong: rgba(28, 28, 28, 0.14);
-  --radius-sm: 6px;
+  /* 圆角契约(DESIGN §3「全局界面字号与圆角」;棘轮 npm run check:radius):
+     xs 小件(短边 ≤ 18px 的徽标 / 计数 / kbd / 行内代码 / 色块)· sm 控件(按钮、输入、下拉、菜单行、芯片)·
+     md 浮层与普通卡 · lg 大面板 · pill 胶囊 · 50% 圆。组件只消费 token,不写数字(≤ 3px 的笔画几何除外)。
+     控件档 8px 是 2026-07-25 用户定的(对齐 Genesis Glass);9 月下旬的归一曾把它改回 6,11-23 用户确认恢复。
+     主题只声明 sm / md / lg;xs 由 sm 派生,别在主题或组件里另写。 */
+  --radius-sm: 8px;
+  --radius-xs: calc(var(--radius-sm) / 2);
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-chat-surface: var(--radius-lg);

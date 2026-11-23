@@ -23,10 +23,6 @@
   --drop: var(--accent-soft);
   --primary-soft: var(--accent-soft);
   --shadow-panel: var(--shadow);
-  --radius-md: var(--radius);
-  --radius-lg: var(--radius);
-  --radius-xl: var(--radius);
-  --radius-pill: 9999px;
   --font-ui: var(--font);
   --font-mono: var(--mono);
 }
@@ -48,7 +44,4 @@
   --drop: var(--accent-light);
   --primary-soft: var(--accent-light);
   --shadow-panel: var(--card-shadow);
-  --radius-xs: var(--radius-sm);
-  --radius-xl: var(--radius-lg);
-  --radius-pill: 9999px;
 }
