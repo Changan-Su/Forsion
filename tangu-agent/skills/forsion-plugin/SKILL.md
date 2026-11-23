@@ -335,7 +335,7 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 - 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
 - Tangu 用 `search_marketplace` 查候选，确认适合后用 `recommend_marketplace_plugin` 展示卡片。用户可在卡片上选择安装，所以标签和描述应写清实际能力。
 - 结果和卡片里每条带 `origin`(出处:`{ kind: 'forsion', publisher: 'official' | 'developer' }`,或 `{ kind: 'collected' | 'source', sourceId, sourceTitle }`;老服务端不带 = Forsion 开发者)和可选的 `requirements`(`{ cli, apiKeys, desktopOnly, scripts, auditWarn }`)。同样命中的 Forsion 条目排在前面;`collected` 是 Forsion 从 skills.sh 收录的技能,没经人工审核(2026-11-23 起)。
-- 技能 frontmatter 写 `disable-model-invocation: true` = 只在用户点名(`/skill`)时用:不进模型看到的技能目录,`use_skill` 只在用户这一轮点了它时才放行。技能文件夹里的 `.forsion-adapt.md` 是保留名:收录技能的适配说明,由安装流程写入、`use_skill` 放在正文前面;包里自带的同名文件安装时会被删掉,别用这个名字(2026-11-23 起)。
+- 技能 frontmatter 写 `disable-model-invocation: true` = 只在用户点名(`/skill`)时用:不进模型看到的技能目录,`use_skill` 只在用户这一轮点了它时才放行。技能文件夹里的 `.forsion-adapt.md` 是保留名:收录技能的适配说明,由安装流程写入、`use_skill` 放在正文前面,只对商店来源装的技能(文件夹 `src-<来源 id>-…`)算数;包里自带的同名文件安装时会被删掉,别用这个名字(2026-11-23 起)。
 
 ### Android App 与 `isDesktopOnly`(2026-10-02 起)
 

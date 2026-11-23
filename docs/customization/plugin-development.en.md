@@ -161,7 +161,7 @@ A malformed `origin` or `requirements` drops just that field, never the entry. A
 
 Two related conventions for skill authors:
 - `disable-model-invocation: true` in SKILL.md frontmatter (same meaning as in Claude Code) = use only when the user names it: the skill stays out of the skills list Agents see, an Agent's own `use_skill` call is refused, and it loads only in a turn where the user picked it with `/skill`. Settings and the skill picker still list it.
-- `.forsion-adapt.md` in a skill folder is a reserved file name: the "adaptation note" of a collected skill (how the parts written for Claude Code / Codex map to Tangu). The installer writes it and `use_skill` puts it before the instructions in local sessions (up to 1200 characters). A file of that name shipped inside a package is deleted on install.
+- `.forsion-adapt.md` in a skill folder is a reserved file name: the "adaptation note" of a collected skill (how the parts written for Claude Code / Codex map to Tangu). The installer writes it and `use_skill` puts it before the instructions in local sessions (up to 1200 characters). It only counts for skills installed from a store source (folder `src-<source id>-…`); a file of that name shipped inside a package is deleted on install, and one in a project or plugin-package skill is ignored.
 
 ## Platform accounts and sign-ins (desktop 2.13.8+)
 

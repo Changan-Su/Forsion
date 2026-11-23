@@ -161,7 +161,7 @@ Tangu 的 `search_marketplace` / `get_marketplace_plugin` / `recommend_marketpla
 
 写技能时两条相关约定：
 - SKILL.md frontmatter 写 `disable-model-invocation: true`（和 Claude Code 同义）= 只在用户点名时用：它不进 Agent 看到的技能目录，Agent 自己 `use_skill` 会被拒；用户在对话里用 `/skill` 点了它的那一轮才放行。设置和技能选择器里照常列出。
-- 技能文件夹里的 `.forsion-adapt.md` 是保留文件名：收录技能的「适配说明」（原文写给 Claude Code / Codex 的地方在 Tangu 里怎么对应），由安装流程写入，`use_skill` 在本机会话里把它放在正文前面（最多 1200 字）。包里自带的同名文件安装时会被删掉。
+- 技能文件夹里的 `.forsion-adapt.md` 是保留文件名：收录技能的「适配说明」（原文写给 Claude Code / Codex 的地方在 Tangu 里怎么对应），由安装流程写入，`use_skill` 在本机会话里把它放在正文前面（最多 1200 字）。只对从商店来源装进来的技能（文件夹名 `src-<来源 id>-…`）算数；包里自带的同名文件安装时会被删掉，项目目录或插件包里的技能放这个文件不起作用。
 
 ## 平台账号与登录信息（桌面 2.13.8 起）
 
