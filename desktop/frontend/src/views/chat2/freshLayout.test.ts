@@ -3,8 +3,35 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('../../services/backendService', () => ({ getMuseStarters: vi.fn(async () => []), patchMuseStarter: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../services/engine/targets', () => ({ homeTarget: () => ({}) }))
 
-import { DROP_EASE, DROP_MS, FRESH_GAP, FRESH_MIN_TOP, freshPlacement } from './freshLayout'
+import { DROP_EASE, DROP_MS, FRESH_GAP, FRESH_MIN_TOP, freshCenterOn, freshPlacement, startersPlace } from './freshLayout'
 import { splitStarter } from './museStarterStore'
+
+describe('居中与否和画不画 Muse 建议读同一个位置判定(11-23)', () => {
+  const MAIN = { loc: 'main', type: 'chat' }
+  const RIGHT = { loc: 'right', type: 'chat-panel' } // Tangu「显示对话面板」/ 笔记 Space 右栏
+  const COMPANION = { loc: 'main', type: 'chat-panel' } // 插件摆在主区旁的伴随对话(mainCompanions)
+  const LEFT = { loc: 'left', type: 'chat' }
+  it('主区对话:画建议、居中(宽窄都是,不看宽度)', () => {
+    expect(startersPlace(MAIN)).toBe(true)
+    expect(freshCenterOn(MAIN)).toBe(true)
+  })
+  it('右栏 / 伴随 / 左栏的对话:不画建议,输入框贴底不居中', () => {
+    for (const leaf of [RIGHT, COMPANION, LEFT]) {
+      expect(startersPlace(leaf)).toBe(false)
+      expect(freshCenterOn(leaf)).toBe(false)
+    }
+  })
+  it('不画建议就不居中:没有一处「不画建议却居中」', () => {
+    for (const loc of ['main', 'left', 'right', 'bottom']) for (const type of ['chat', 'chat-panel']) {
+      if (!startersPlace({ loc, type })) expect(freshCenterOn({ loc, type })).toBe(false)
+    }
+  })
+  it('小窗 / 子会话面板 / 手机照旧不居中', () => {
+    expect(freshCenterOn({ ...MAIN, mini: true })).toBe(false)
+    expect(freshCenterOn({ ...MAIN, child: true })).toBe(false)
+    expect(freshCenterOn({ ...MAIN, mobile: true })).toBe(false)
+  })
+})
 
 describe('freshPlacement:空对话时空状态 + 输入区整块居中', () => {
   it('放得下:整块上下居中,输入区抬到空状态下面隔一个 gap', () => {

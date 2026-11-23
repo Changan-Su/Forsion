@@ -50,6 +50,7 @@ import { ExtraFolders } from '../components/ExtraFolders'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { MuseStarters } from './chat2/MuseStarters'
+import { freshCenterOn, startersPlace } from './chat2/freshLayout'
 import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
@@ -734,8 +735,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   // 空对话居中 → 首发落底(freshLayout.ts):小窗 / 子会话面板 / 手机不居中 —— 手机一点输入框键盘就把它顶到键盘上沿,先居中再被顶走等于跳两次。
+  // 不画 Muse 建议的地方(右栏对话)也不居中,贴底:与下面画不画建议读同一个 startersPlace。
   // 原生手机包里 UI_MODE 恒为 desktop,判手机还要看 window.tangu?.mobile。
-  const freshCenter = !params.miniSurface && !params.childSurface && UI_MODE !== 'mobile' && !window.tangu?.mobile
+  const startersHere = startersPlace(leaf)
+  const freshCenter = freshCenterOn({ loc: leaf.loc, type: leaf.type, mini: !!params.miniSurface, child: !!params.childSurface, mobile: UI_MODE === 'mobile' || !!window.tangu?.mobile })
   // 从有消息的会话点「新对话」进来:输入区从底部升回中间(只认挂载那一刻,EmptyState2 自己记)
   const hadMessagesRef = useRef(false)
   const freshRise = hadMessagesRef.current && !hasMessages && !activeId
@@ -1239,7 +1242,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
         {/* Muse 的开场建议(新对话、没消息时;开场那一行出现的同一组条件):Chat Box 正下方最多三行 */}
-        {openingOn && !studioChat && leaf.loc === 'main' && leaf.type !== 'chat-panel' && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
+        {openingOn && !studioChat && startersHere && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
       </div>
       {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
         * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。

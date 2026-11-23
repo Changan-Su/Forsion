@@ -23,6 +23,18 @@ export function freshPlacement(colH: number, emptyH: number, anchorTop: number, 
   return { emptyTop: top, lift: Math.max(0, Math.round(anchorTop - anchorAt)) }
 }
 
+/** Muse 的开场建议画在哪:只在主区的对话视图;侧栏 / 右栏的对话(chat-panel,含插件摆在主区旁的伴随对话)不画(11-02 #431)。
+ *  居中也读这一个判定(11-23 用户:不画建议的窄对话页,输入框该和已开始的对话一样待在底部)—— 别再各写一份条件。 */
+export function startersPlace(leaf: { loc: string; type: string }): boolean {
+  return leaf.loc === 'main' && leaf.type !== 'chat-panel'
+}
+
+/** 新对话页「空状态 + 输入区」整块居中:这一处画得了建议,且不是小窗 / 子会话面板 / 手机(手机一点输入框,键盘就把它顶走)。
+ *  不画建议的地方贴底:没有居中的那一块,首发也就没有落底那段动画。 */
+export function freshCenterOn(o: { loc: string; type: string; mini?: boolean; child?: boolean; mobile?: boolean }): boolean {
+  return startersPlace(o) && !o.mini && !o.child && !o.mobile
+}
+
 /** press = 按下发送;drop = 没发出去;sent = 引擎受理了(这句真的成了一条对话)。 */
 export type SendPhase = 'press' | 'drop' | 'sent'
 const EVENT = 't2-fresh-send'
