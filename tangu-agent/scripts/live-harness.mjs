@@ -278,7 +278,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui', 'pluginplan'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('handoff', 'crosstree');
@@ -336,7 +336,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginplan', 'pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
 KEYS.push('heic'); OPT_IN.add('heic'); // --only heic: real HEIC photo through attachment hydration and the live vision model
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
@@ -9039,7 +9039,7 @@ Then reply with only the command output.`,
       views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
     const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
     await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
-      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
+      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。不用先给我计划,直接做。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
       const ev = await run(`live-pluginui-${Date.now()}`, msg, 900_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: desktop });
       const tool = join(root, 'skills', 'forsion-plugin', 'tools', 'ui-reinvent.mjs');
       // 负对照里技能目录没有这份文件(那时还没有):判据照样要用它扫产物,从这份脚本旁边的检出拿一份
@@ -9062,6 +9062,28 @@ Then reply with only the command output.`,
       return {
         ok, detail: ev.error || `${main ? `main.js ${main.split('\n').length} 行` : '✗ 没写出 main.js'};零件 ${Object.entries(used).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}(${nUsed}/4);`
           + `自画 ${notes.map((g) => `${g.kind}×${g.count}`).join(' ') || '0 条'}${bad.length ? ' ←' : ''};沙箱 ${sbx} 次${sawCheck ? ',看到过 UI check' : ''};工具 ${ev.toolCalls.length} 次`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+      };
+    });
+  }
+  // pluginplan(11-23):forsion-plugin 技能的缺省流程 = 写插件先交一页计划(文件 / 宿主接口与数据来源 / 宿主缺口 / 验收 / 要用户定的事),
+  // 用户确认前不写文件、不起沙箱。负对照 = 同一台架换回 11-23 之前的 SKILL.md(没有这一节)。
+  if (ONLY.has('pluginplan')) {
+    const DIR = join(workspace, 'bookmark-notes');
+    await scenario('pluginplan', 'pluginplan 写插件的请求 → 先交一页计划(文件 / 依赖的宿主数据 / 验收 / 要我定的事),不写文件、不起沙箱', async () => {
+      const msg = '在当前文件夹里新建一个 bookmark-notes 文件夹,给我写一个 Forsion 桌面插件「书签笔记」:带一个 Space,左栏列出我的书签,点开一条在主区看详情,旁边能和 Tangu 聊这条书签;书签的提醒日期要出现在我的日历里。';
+      const ev = await run(`live-pluginplan-${Date.now()}`, msg, 600_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: { ns: 'plugin', respond: () => ({ ok: true, text: '{"v":1,"state":"running"}' }) } });
+      const written = existsSync(DIR) ? readdirSync(DIR, { recursive: true }).filter((f) => !String(f).startsWith('.git')) : [];
+      const usedSkill = ev.toolCalls.includes('use_skill');
+      const sbx = ev.toolCalls.filter((n) => n.startsWith('plugin_sandbox')).length;
+      const out = String(ev.content || '');
+      const files = /manifest\.json|main\.js|space\.json/.test(out);
+      const asks = /确认|同意|开工|开始写|可以吗|行吗|要你定|需要你|confirm|go ahead|approve/i.test(out);
+      const data = /CALENDAR\.db|human\/|mountChat|真(实)?会话|real session|ctx\.calendar/i.test(out);
+      const ok = !ev.error && usedSkill && !written.length && !sbx && files && asks;
+      return {
+        ok, detail: ev.error || `${usedSkill ? '读了技能' : '✗ 没读技能'};${written.length ? `✗ 已写 ${written.length} 个文件` : '没写文件'};${sbx ? `✗ 起了沙箱 ${sbx} 次` : '没起沙箱'};`
+          + `${files ? '计划点了文件' : '✗ 没列文件'};${asks ? '等确认' : '✗ 没请确认'};${data ? '点了数据来源(日历 / 会话)' : '没点数据来源'};工具 ${ev.toolCalls.join('→') || '无'}`,
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
       };
     });
