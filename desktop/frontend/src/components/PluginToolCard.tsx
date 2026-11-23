@@ -59,13 +59,18 @@ export function showToolCardInDesk(sessionId: string, callId: string, name: stri
   const placed = deskReduce({ ...(cur ?? {}), items: rest }, byAgent
     ? { type: 'land', item }
     : { type: 'cite', path: '', item, sameView: () => false })
-  app.patchDesk(sessionId, { ...placed, mode: 'open', ...(cur?.userResized ? {} : { size: 'half' as const }) })
+  // Agent 自动放的卡片没上格(两格都钉着,只进了最近放过的、亮点)→ 别替你把侧板展开
+  const landed = !byAgent || placed.items.some((x) => x.tool?.callId === callId)
+  app.patchDesk(sessionId, { ...placed, ...(landed ? { mode: 'open' as const, ...(cur?.userResized ? {} : { size: 'half' as const }) } : {}) })
 }
 
 /** 从 Desk 拿掉;Desk 空了就收起侧板。 */
 export function returnToolCardToChat(sessionId: string, callId: string): void {
-  const items = deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId)
-  useApp.getState().patchDesk(sessionId, { items, ...(items.length ? {} : { mode: undefined }) })
+  // 走 deskAct 的「拿掉」:只看一格、说明这些跟着收拾(直接改 items 会留下指向空格的 solo)
+  const app = useApp.getState()
+  const slot = deskItemsOf(sessionId).findIndex((x) => x.tool?.callId === callId)
+  if (slot >= 0) app.deskAct(sessionId, { type: 'remove', slot })
+  if (!deskItemsOf(sessionId).length) app.patchDesk(sessionId, { mode: undefined })
 }
 
 // 落点 desk 的卡片只在结果**直播到达**那一刻自动进 Desk 一次(重载的历史不进);用户收回之后不再弹回去,SSE 重放也靠它去重。

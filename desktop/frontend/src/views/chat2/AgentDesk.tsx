@@ -377,16 +377,22 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
   const rel = vaultRelOf(path, vaultRoot)
   // 「在 Amadeus 中打开」只给 Desk 自己会改道原生 view 的库内类型(与 DeskFilePane 同口径)
   const amadeus = rel && (/\.(md|db)$/i.test(rel) || isDrawingPath(rel) || !!findFileType(fileTypes, rel)) ? rel : null
-  const act = (a: Parameters<ReturnType<typeof useApp.getState>['deskAct']>[1]): void => useApp.getState().deskAct(sessionId, a)
+  type Act = Parameters<ReturnType<typeof useApp.getState>['deskAct']>[1]
+  const act = (a: Act): void => useApp.getState().deskAct(sessionId, a)
+  // 菜单开着时摆法可能变了(Agent 落盘把这样挪到了另一格):动作执行那一刻按条目 key 重新找它在哪格,找不到就不动
+  const actHere = (make: (slot: number) => Act): void => {
+    const at = item ? (useApp.getState().deskBySession[sessionId]?.items ?? []).findIndex((x) => x.key === item.key) : -1
+    if (at >= 0) act(make(at))
+  }
   const moreItems = (): CtxItem[] => {
     const mine: CtxItem[] = !own || !item ? [] : [
       ...(two ? [solo
         ? { label: t('desk.both'), icon: <Rows2 size={14} />, run: () => act({ type: 'solo' }) }
-        : { label: t('desk.solo'), icon: <Maximize2 size={14} />, run: () => act({ type: 'solo', slot }) }] : []),
+        : { label: t('desk.solo'), icon: <Maximize2 size={14} />, run: () => actHere((n) => ({ type: 'solo', slot: n })) }] : []),
       ...(two && !solo ? [slot === 0
-        ? { label: t('desk.moveDown'), icon: <ArrowDown size={14} />, run: () => act({ type: 'move', slot }) }
-        : { label: t('desk.moveUp'), icon: <ArrowUp size={14} />, run: () => act({ type: 'move', slot }) }] : []),
-      { label: t('desk.remove'), icon: <X size={14} />, run: () => act({ type: 'remove', slot }) },
+        ? { label: t('desk.moveDown'), icon: <ArrowDown size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }
+        : { label: t('desk.moveUp'), icon: <ArrowUp size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }] : []),
+      { label: t('desk.remove'), icon: <X size={14} />, run: () => actHere((n) => ({ type: 'remove', slot: n })) },
       ...(item.tool ? [] : [{ label: t('desk.openMain'), icon: <ExternalLink size={14} />, run: () => openDeskItemInMain(item, vaultRoot) }]),
     ]
     const orig: CtxItem[] = [
@@ -425,7 +431,7 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
         out.push({ head: t('desk.fresh'), separatorBefore: out.length > 0 })
         const f = m.fresh
         out.push('key' in f
-          ? { label: f.name || f.path, dot: true, hint: t('desk.justNow'), disabled: lockedNow, run: () => act({ type: 'pick', slot, item: f }) }
+          ? { label: f.name || f.path, dot: true, hint: t('desk.justNow'), disabled: lockedNow, run: () => actHere((n) => ({ type: 'pick', slot: n, item: f })) }
           : { label: liveFreshLabel(sessionId, f.liveToolId, t), dot: true, disabled: true, run: () => {} })
       }
       out.push({ head: t('desk.recent'), separatorBefore: out.length > 0 })
@@ -434,7 +440,7 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
           label: r.item.name || r.item.path,
           hint: r.where === 'this' ? t('desk.thisCell') : r.where === 'other' ? t('desk.otherCell') : undefined,
           disabled: r.where === 'this' || lockedNow,
-          run: () => act({ type: 'pick', slot, item: r.item }),
+          run: () => actHere((n) => ({ type: 'pick', slot: n, item: r.item })),
         })
       }
       return out
@@ -447,7 +453,7 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
           </DeskPickButton>
         ) : <span className="desk-cap-pick" title={tip}>{inner}</span>}
         {own && item.pin && (
-          <button type="button" className="icon-btn desk-cap-pin" aria-pressed="true" aria-label={t('desk.pinned')} title={t('desk.unpin')} onClick={() => act({ type: 'unpin', slot })}>
+          <button type="button" className="icon-btn desk-cap-pin" aria-pressed="true" aria-label={t('desk.pinned')} title={t('desk.unpin')} onClick={() => actHere((n) => ({ type: 'unpin', slot: n }))}>
             <Pin size={13} />
           </button>
         )}

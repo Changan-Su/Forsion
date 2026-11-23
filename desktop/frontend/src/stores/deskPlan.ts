@@ -247,7 +247,9 @@ export function packDeskMap(map: Record<string, DeskSnapshot>, cap = DESK_PERSIS
   const entries = Object.entries(map)
     .map(([sid, s]) => {
       const recent = (s.recent || []).filter(persistable)
-      const out: DeskSnapshot = { ...s, items: (s.items || []).filter(persistable) }
+      // 钉住格里的直播(两格都钉时点「正在编辑」请进来的):落盘它顶掉的那样(带钉住),别把钉住的格从快照里丢了
+      const items = (s.items || []).map((it) => (it.live && it.pin && it.live.bumped ? { ...unpinned(it.live.bumped), pin: true as const } : it))
+      const out: DeskSnapshot = { ...s, items: items.filter(persistable) }
       if (recent.length) out.recent = recent; else delete out.recent
       if (out.fresh?.startsWith('live:')) delete out.fresh // 直播的那颗点是瞬态,同直播格一样不落盘
       return [sid, out] as const
@@ -409,7 +411,8 @@ export function deskLand(items: DeskItem[], item: DeskItem, toolId?: string): De
   // 钉住的格正演着这份文件 → 原地刷新(钉住照旧);直播格把位置还回去
   const p = items.findIndex((x, j) => j !== at && x.pin && !x.live && sameThing(x, item))
   if (p >= 0) {
-    const out = setAt(items, p, { ...item, pin: true })
+    // 只换 key / at(重挂读新内容),视图、引用参数、名字照留
+    const out = setAt(items, p, { ...items[p], key: item.key, at: item.at })
     return at >= 0 ? giveBack(out, at, item) : out
   }
   if (at >= 0) {
@@ -548,19 +551,24 @@ export function deskReduce(core: DeskCore, a: DeskAction): DeskCore {
       let next = items
       let slot = agentSlot(items)
       const rest: DeskItem[] = []
-      let firstHidden: DeskItem | undefined
+      let placed: DeskItem | undefined
+      let shownAlready = false
       for (const it of a.items.slice(0, 2)) {
-        if (next.some((x) => x.pin && sameThing(x, it))) continue // 钉住的格已经在演它了
-        if (slot >= 0) { next = setAt(next, slot, it); slot = -1; continue }
+        if (next.some((x) => x.pin && sameThing(x, it))) { shownAlready = true; continue } // 钉住的格已经在演它了
+        if (slot >= 0) { next = setAt(next, slot, it); slot = -1; placed = it; continue }
         rest.push(it)
-        firstHidden ??= it
       }
-      const placedAll = rest.length < a.items.slice(0, 2).length
-      const fresh = !placedAll && firstHidden ? deskIdentity(firstHidden) : core.fresh
+      // 一样都没上格 → 第一样亮点;上了格但那格被「只看一格」收着 → 也亮点
+      const fresh = placed ? noteFresh(core, deskIdentity(placed), next) : !shownAlready && rest[0] ? deskIdentity(rest[0]) : core.fresh
       return settle(core, { ...core, items: next, recent: rest.length ? rememberRecent(core.recent, rest) : core.recent, fresh, note, noteFor })
     }
-    case 'cite':
-      return settle(core, { ...core, items: deskCite(items, a.path, a.item, a.sameView) })
+    case 'cite': {
+      const next = deskCite(items, a.path, a.item, a.sameView)
+      // 点了引用,落到的那格被「只看一格」收着 → 恢复两格,别让你点了看不见
+      const at = next.findIndex((x) => a.sameView(x) || sameThing(x, a.item) || samePath(x.path, a.path))
+      const solo = (core.solo === 0 || core.solo === 1) && at >= 0 && at !== core.solo ? undefined : core.solo
+      return settle(core, { ...core, items: next, solo })
+    }
     case 'pick': {
       const cur = items[a.slot]
       if (cur?.live) return core // 直播那格写完前不换内容
@@ -624,4 +632,27 @@ export function deskMenuRows(core: DeskCore, slot: number): {
   push(other, 'other')
   for (const it of core.recent || []) push(it, null)
   return { fresh, rows }
+}
+
+/** 另一扇窗写了快照(storage 事件):只认**这次写入真改了**的会话(旧值与新值不同)——别的会话照旧是对面盘上的旧样子,
+ *  收下会把本窗还没落盘的改动退回去。会话从快照里消失(超容量被挤出)不当删除。 */
+export function deskSessionsChanged(before: Record<string, DeskSnapshot>, incoming: Record<string, DeskSnapshot>): string[] {
+  return Object.keys(incoming).filter((sid) => JSON.stringify(before[sid] ?? null) !== JSON.stringify(incoming[sid]))
+}
+
+const DESK_SYNC_FIELDS = ['recent', 'fresh', 'solo', 'note', 'noteFor', 'split'] as const
+/** 收下对面这条会话的摆法(条目、钉住、最近放过的、点、说明、分界、只看一格);形态与宽度(mode / fraction / size)
+ *  是每扇窗自己的,不跟。条目完全相同(key、视图参数、钉住都一样)才沿用本窗的对象,否则用对面的(重挂读新内容 / 新落点)。
+ *  本窗自己的直播格按 Agent 落位规则重新摆回去(直播格不落盘,对面看不见它)。没变 → 原对象。 */
+export function adoptDeskArrangement<T extends DeskSnapshot>(cur: T | undefined, theirs: DeskSnapshot): T {
+  const base = (cur ?? { items: [], size: theirs.size || 'half', ...(theirs.mode ? { mode: theirs.mode } : {}) }) as T
+  const lives = base.items.filter((x) => x.live)
+  let items = theirs.items.map((t) => base.items.find((x) => !x.live && JSON.stringify(x) === JSON.stringify(t)) ?? t)
+  for (const lv of lives) items = deskLivePlace(items, { ...lv, live: { ...lv.live!, bumped: undefined } })
+  const sameItems = items.length === base.items.length && items.every((x, i) => x === base.items[i])
+  const sameRest = DESK_SYNC_FIELDS.every((k) => JSON.stringify(base[k] ?? null) === JSON.stringify(theirs[k] ?? null))
+  if (sameItems && sameRest) return base
+  const out = { ...base, items: sameItems ? base.items : items } as T
+  for (const k of DESK_SYNC_FIELDS) (out as unknown as Record<string, unknown>)[k] = theirs[k]
+  return out
 }

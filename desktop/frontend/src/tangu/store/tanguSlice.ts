@@ -29,7 +29,7 @@ import { track } from '../../achievements/store'
 import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
 import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskIdentity, deskItemFor, deskLivePlace, deskPathId, deskReduce, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
@@ -943,37 +943,19 @@ function installDeskSync(): void {
   window.addEventListener('storage', (e: StorageEvent) => {
     if (e.key !== DESK_PERSIST_KEY || e.newValue === null) return
     const incoming = unpackDeskMap(e.newValue)
-    const before = unpackDeskMap(e.oldValue)
+    const touched = deskSessionsChanged(unpackDeskMap(e.oldValue), incoming)
+    if (!touched.length) return
     store.set((s) => {
       let changed = false
       const next = { ...s.deskBySession }
-      for (const sid of new Set([...Object.keys(incoming), ...Object.keys(before)])) {
-        const theirs = incoming[sid]
+      for (const sid of touched) {
         const cur = next[sid]
-        if (!theirs && !before[sid]) continue
-        const adopted = adoptDeskArrangement(cur, theirs ?? { items: [], size: 'half' })
+        const adopted = adoptDeskArrangement(cur, incoming[sid])
         if (adopted !== cur) { next[sid] = adopted; changed = true }
       }
       return changed ? { deskBySession: next } : {}
     })
   })
-}
-const DESK_SYNC_FIELDS = ['recent', 'fresh', 'solo', 'note', 'noteFor', 'split'] as const
-export function adoptDeskArrangement(cur: DeskState | undefined, theirs: DeskSnapshot): DeskState {
-  const base: DeskState = cur ?? { items: [], size: theirs.size || 'half', ...(theirs.mode ? { mode: theirs.mode } : {}) }
-  const lives = base.items.filter((x) => x.live)
-  // 同一样(身份 + 钉住都相同)沿用本窗的条目对象
-  let items = theirs.items.map((t) => base.items.find((x) => !x.live && deskIdentity(x) === deskIdentity(t) && !!x.pin === !!t.pin) ?? t)
-  for (const lv of lives) items = deskLivePlace(items, { ...lv, live: { ...lv.live!, bumped: undefined } })
-  const sameItems = items.length === base.items.length && items.every((x, i) => x === base.items[i])
-  const sameRest = DESK_SYNC_FIELDS.every((k) => JSON.stringify(base[k] ?? null) === JSON.stringify(theirs[k] ?? null))
-  if (sameItems && sameRest) return base
-  const out: DeskState = { ...base, items: sameItems ? base.items : items }
-  for (const k of DESK_SYNC_FIELDS) {
-    if (theirs[k] === undefined) delete out[k]
-    else (out as unknown as Record<string, unknown>)[k] = theirs[k]
-  }
-  return out
 }
 
 const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>>()

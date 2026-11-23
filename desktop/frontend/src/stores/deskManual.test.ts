@@ -2,7 +2,7 @@
  *  #790 的那几条(没钉时的 replaceTop / placeLiveItem / clearLiveTop / liveKeepsDesk)在 deskPlan.test.ts,这里不重复。 */
 import { describe, expect, it } from 'vitest'
 import {
-  agentSlot, deskIdentity, deskItemFor, deskMenuRows, deskReduce, packDeskMap, rememberRecent, replaceTop, unpackDeskMap, visibleSlots,
+  adoptDeskArrangement, agentSlot, deskIdentity, deskSessionsChanged, deskItemFor, deskMenuRows, deskReduce, packDeskMap, rememberRecent, replaceTop, unpackDeskMap, visibleSlots,
   type DeskCore, type DeskItem,
 } from './deskPlan'
 
@@ -265,5 +265,51 @@ describe('结果铺在旧状态上(store 是 { ...cur, ...next })也清得掉', 
     const m2 = { ...base, ...deskReduce(base, { type: 'remove', slot: 0 }) }
     expect(m2.solo).toBeUndefined()
     expect(m2.note).toBeUndefined() // noteFor 指的那样不在 Desk 上了
+  })
+})
+
+describe('Codex 评审返修(11-23)', () => {
+  it('钉住格里的直播(两格都钉时请进来的)落盘时存它顶掉的那样,带钉住', () => {
+    const lv: DeskItem = { ...live('t1', '/p/c.md'), pin: true, live: { ...live('t1', '/p/c.md').live!, bumped: notes } }
+    const out = unpackDeskMap(packDeskMap({ a: { items: [lv, pin(report)], size: 'half' as const } })).a
+    expect(names(out.items)).toEqual(['notes.txt📌', 'report.md📌'])
+  })
+  it('Agent 改钉住那格的文件:只换 key / at,视图参数和名字照留', () => {
+    const cited: DeskItem = { ...deskItemFor('/p/report.md', 20), name: '报告', view: { type: 'wsfile', params: { path: '/p/report.md', line: 7 } }, pin: true }
+    const fresh = deskItemFor('/p/report.md', 80)
+    const out = deskReduce(core([notes, cited]), { type: 'land', item: fresh }).items[1]
+    expect(out).toMatchObject({ key: fresh.key, at: 80, name: '报告', pin: true, view: { type: 'wsfile', params: { line: 7 } } })
+  })
+  it('点引用落到被「只看一格」收着的那格 → 恢复两格', () => {
+    const v = (line: number): DeskItem => ({ ...deskItemFor('/p/a.pdf', line), view: { type: 'amadeus-pdf', params: { pdfPath: '/p/a.pdf', page: line } } })
+    const s = core([pin(notes), v(1)], { solo: 0 })
+    const out = deskReduce(s, { type: 'cite', path: '/p/a.pdf', item: v(7), sameView: (x) => x.view?.type === 'amadeus-pdf' && x.view.params?.pdfPath === '/p/a.pdf' })
+    expect(out.solo).toBeUndefined()
+    expect(out.items[1].view?.params?.page).toBe(7)
+  })
+  it('desk_present 放进了被收着的那格 → 亮点', () => {
+    const out = deskReduce(core([pin(notes), report], { solo: 0 }), { type: 'present', items: [data] })
+    expect(names(out.items)).toEqual(['notes.txt📌', 'data.csv'])
+    expect(out.fresh).toBe(deskIdentity(data))
+  })
+  it('两扇窗:只收这次写入真改了的会话;被挤出快照不当删除', () => {
+    const a = { items: [notes], size: 'half' as const }
+    const b1 = { items: [report], size: 'half' as const }
+    const b2 = { items: [report], size: 'half' as const, split: 0.7 }
+    expect(deskSessionsChanged({ A: a, B: b1 }, { A: a, B: b2 })).toEqual(['B'])
+    expect(deskSessionsChanged({ A: a, B: b1 }, { B: b1 })).toEqual([])
+  })
+  it('两扇窗:同一份文件但落点 / key 变了 → 用对面那份(重挂);完全相同才沿用本窗对象;本窗直播格摆回去', () => {
+    const p2: DeskItem = { ...deskItemFor('/p/a.pdf', 1), view: { type: 'amadeus-pdf', params: { pdfPath: '/p/a.pdf', page: 2 } } }
+    const p7: DeskItem = { ...p2, view: { type: 'amadeus-pdf', params: { pdfPath: '/p/a.pdf', page: 7 } } }
+    const mine = { items: [notes, p2], size: 'half' as const }
+    const got = adoptDeskArrangement(mine, { items: [{ ...notes }, p7], size: 'half' })
+    expect(got.items[0]).toBe(notes)
+    expect(got.items[1].view?.params?.page).toBe(7)
+    expect(adoptDeskArrangement(mine, { items: [{ ...notes }, { ...p2 }], size: 'half' })).toBe(mine)
+    const withLive = { items: [live('t1', '/p/d.md'), pin(report)], size: 'half' as const, mode: 'open' as const }
+    const adopted = adoptDeskArrangement(withLive, { items: [notes, pin(report)], size: 'half', split: 0.3 })
+    expect(names(adopted.items)).toEqual(['d.md(live)', 'report.md📌'])
+    expect(adopted).toMatchObject({ mode: 'open', split: 0.3 })
   })
 })
