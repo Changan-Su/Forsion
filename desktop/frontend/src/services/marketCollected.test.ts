@@ -14,7 +14,7 @@ describe('publisherOf', () => {
     expect(publisherOf({ id: 'latex-suite', publisher: 'official' })).toEqual({ kind: 'official' })
     expect(publisherOf({ id: 'latex-suite', origin: { kind: 'forsion', publisher: 'official' } })).toEqual({ kind: 'official' })
     expect(publisherOf({ id: 'x' })).toEqual({ kind: 'developer' })
-    expect(publisherOf({ id: `src_${SH}_wayfinder` }, sources)).toEqual({ kind: 'builtin' })
+    expect(publisherOf({ id: `src_${SH}_trailmap` }, sources)).toEqual({ kind: 'builtin' })
     expect(publisherOf({ id: 'src_0a1b2c3d_poster' }, sources)).toEqual({ kind: 'source', title: '图片 Skills 大全' })
     expect(publisherOf({ id: 'src_9c9c9c9c_meme' }, sources)).toEqual({ kind: 'removed' })
     // Without the desktop's source table (web), the item's own title stands in.

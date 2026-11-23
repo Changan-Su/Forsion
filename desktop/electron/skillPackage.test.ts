@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { isSkillScript, prepareSkillPackage, skillFrontmatter, skillTreeHash } from './skillPackage'
 
-const SKILL = '---\nname: wayfinder\ndescription: Map a big task into decisions.\n---\n\n# Wayfinder\n'
+const SKILL = '---\nname: trailmap\ndescription: Map a big task into decisions.\n---\n\n# Trailmap\n'
 async function zipOf(files: Record<string, string | { text: string; mode: number }>): Promise<Buffer> {
   const z = new JSZip()
   for (const [k, v] of Object.entries(files)) typeof v === 'string' ? z.file(k, v) : z.file(k, v.text, { unixPermissions: v.mode })
@@ -15,7 +15,7 @@ const namesOf = async (buf: Buffer) => Object.keys((await JSZip.loadAsync(buf)).
 
 describe('skillFrontmatter', () => {
   it('reads name and description in the spellings skills use', () => {
-    expect(skillFrontmatter(SKILL)).toEqual({ name: 'wayfinder', description: 'Map a big task into decisions.' })
+    expect(skillFrontmatter(SKILL)).toEqual({ name: 'trailmap', description: 'Map a big task into decisions.' })
     expect(skillFrontmatter('﻿---\r\nname: "x y"\r\ndescription: \'it\'\'s\'\r\n---\r\nbody')).toEqual({ name: 'x y', description: 'it\'s' })
     expect(skillFrontmatter('---\nname: x\ndescription: >-\n  first line\n  second line\nlicense: MIT\n---\n')).toEqual({ name: 'x', description: 'first line second line' })
     expect(skillFrontmatter('---\nname: x # comment\ndescription:\n  on the next line\n---')).toEqual({ name: 'x', description: 'on the next line' })
@@ -33,11 +33,11 @@ describe('skillFrontmatter', () => {
 describe('prepareSkillPackage', () => {
   it('re-roots at SKILL.md, counts scripts and keeps executable bits', async () => {
     const buf = await zipOf({
-      'repo-abc/skills/wayfinder/SKILL.md': SKILL, 'repo-abc/skills/wayfinder/scripts/run.txt': 'x', 'repo-abc/skills/wayfinder/tool.py': 'print(1)',
-      'repo-abc/skills/wayfinder/bin/helper': { text: '#!/bin/sh', mode: 0o755 }, 'repo-abc/skills/wayfinder/docs/guide.md': '# guide',
+      'repo-abc/skills/trailmap/SKILL.md': SKILL, 'repo-abc/skills/trailmap/scripts/run.txt': 'x', 'repo-abc/skills/trailmap/tool.py': 'print(1)',
+      'repo-abc/skills/trailmap/bin/helper': { text: '#!/bin/sh', mode: 0o755 }, 'repo-abc/skills/trailmap/docs/guide.md': '# guide',
     })
     const got = await prepareSkillPackage(buf)
-    expect(got).toMatchObject({ name: 'wayfinder', scripts: 3, files: 5 })
+    expect(got).toMatchObject({ name: 'trailmap', scripts: 3, files: 5 })
     expect(await namesOf(got.buf)).toEqual(['SKILL.md', 'bin/helper', 'docs/guide.md', 'scripts/run.txt', 'tool.py'])
     expect(((await JSZip.loadAsync(got.buf)).files['bin/helper'].unixPermissions as number) & 0o111).toBeTruthy()
   })
@@ -57,7 +57,7 @@ describe('prepareSkillPackage', () => {
     await expect(prepareSkillPackage(await zipOf({ 'SKILL.md': SKILL, 'Notes.md': 'a', 'notes.md': 'b' }))).rejects.toThrow('install: duplicate path in archive')
     // skill.md spelled in lower case is still the skill's file, written under the name the engine opens.
     const lower = await prepareSkillPackage(await zipOf({ 'x/skill.md': SKILL }))
-    expect(lower.name).toBe('wayfinder')
+    expect(lower.name).toBe('trailmap')
     expect(await namesOf(lower.buf)).toEqual(['SKILL.md'])
   })
   it('counts scripts by folder, extension and executable bit', () => {

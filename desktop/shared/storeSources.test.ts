@@ -137,7 +137,7 @@ describe('collected skills (built-in skills.sh source)', () => {
   const collected = (over: Record<string, unknown> = {}) => ({
     installs: 840000, rank: 12, trendingRank: null, audit: { gen: 'safe', socket: 'low', snyk: 'medium' }, override: false, license: 'MIT',
     scripts: 2, files: 5, requirements: { cli: true, apiKeys: ['OPENAI_API_KEY'], desktopOnly: true }, writtenFor: ['claude-code'],
-    adapted: true, adaptCount: 4, unsupportedCount: 1, requires: ['grill-me'], upstreamDeleted: false, pageUrl: 'https://skills.sh/mattpocock/skills/wayfinder', ...over,
+    adapted: true, adaptCount: 4, unsupportedCount: 1, requires: ['quiz-me'], upstreamDeleted: false, pageUrl: 'https://skills.sh/lanternworks/skills/trailmap', ...over,
   })
   it('the built-in id is the one both sides hard-code', () => {
     expect(createHash('sha256').update(`builtin:${BUILTIN_SKILLS_SH.title}`).digest('hex').slice(0, 8)).toBe(BUILTIN_SKILLS_SH.id)
@@ -145,7 +145,7 @@ describe('collected skills (built-in skills.sh source)', () => {
     expect(isBuiltinSourceId('0a1b2c3d')).toBe(false)
   })
   it('reads the collected block and fills absent optional fields', () => {
-    expect(parseCollected(collected())).toMatchObject({ installs: 840000, rank: 12, trendingRank: null, scripts: 2, requires: ['grill-me'], missingPrereq: false, writtenFor: ['claude-code'] })
+    expect(parseCollected(collected())).toMatchObject({ installs: 840000, rank: 12, trendingRank: null, scripts: 2, requires: ['quiz-me'], missingPrereq: false, writtenFor: ['claude-code'] })
     const { writtenFor: _w, requires: _r, license: _l, adaptCount: _a, unsupportedCount: _u, ...minimal } = collected()
     expect(parseCollected(minimal)).toMatchObject({ writtenFor: [], requires: [], license: null, adaptCount: 0, unsupportedCount: 0 })
     // A provider the audit doesn't name yet is unknown, not safe.
@@ -165,18 +165,18 @@ describe('collected skills (built-in skills.sh source)', () => {
     expect(auditWarns(undefined)).toBe(false)
   })
   it('keeps a valid collected block on a catalog item and drops a broken one without dropping the item', () => {
-    const pinned = { github: 'mattpocock/skills', ref: 'main', commit: 'a'.repeat(40), path: 'skills/wayfinder' }
-    const idx = parseStoreIndex({ schema: 1, title: 'skills.sh', items: [item({ id: 'wayfinder', package: pinned, collected: collected() }), item({ id: 'tdd', package: pinned, collected: collected({ installs: 'many' }) })] })
-    expect(idx.items.map((x) => x.id)).toEqual(['wayfinder', 'tdd'])
+    const pinned = { github: 'lanternworks/skills', ref: 'main', commit: 'a'.repeat(40), path: 'skills/trailmap' }
+    const idx = parseStoreIndex({ schema: 1, title: 'skills.sh', items: [item({ id: 'trailmap', package: pinned, collected: collected() }), item({ id: 'tdd', package: pinned, collected: collected({ installs: 'many' }) })] })
+    expect(idx.items.map((x) => x.id)).toEqual(['trailmap', 'tdd'])
     expect(idx.items[0].collected?.adapted).toBe(true)
     expect(idx.items[1].collected).toBeUndefined()
   })
   it('reads an adaptation view entry by entry, and refuses one without a note or commit', () => {
     const view = parseAdaptView({
-      note: 'In Tangu: "/grill-me" means use_skill grill-me.', commit: 'B'.repeat(40), requires: ['grill-me', 'grill-me', 'Bad Id'], setup: 'setup-x', external: ['GitHub CLI (gh)', 'x'.repeat(81)],
+      note: 'In Tangu: "/quiz-me" means use_skill quiz-me.', commit: 'B'.repeat(40), requires: ['quiz-me', 'quiz-me', 'Bad Id'], setup: 'setup-x', external: ['GitHub CLI (gh)', 'x'.repeat(81)],
       entries: [
-        { line: 12, quote: 'use the /grill-me skill', action: 'use-skill', target: 'grill-me', by: 'table' },
-        { line: 12, quote: 'dup', action: 'use-skill', target: 'grill-me', by: 'ai' },
+        { line: 12, quote: 'use the /quiz-me skill', action: 'use-skill', target: 'quiz-me', by: 'table' },
+        { line: 12, quote: 'dup', action: 'use-skill', target: 'quiz-me', by: 'ai' },
         { line: 13, quote: 'use a skill', action: 'use-skill', by: 'table' },
         { line: 0, quote: 'line zero', action: 'todo', by: 'ai' },
         { line: 20, quote: 'TodoWrite', action: 'todo', by: 'ai' },
@@ -185,9 +185,9 @@ describe('collected skills (built-in skills.sh source)', () => {
       unsupported: [{ line: 30, quote: 'hooks:', feature: 'hooks' }, { line: 31, quote: 'y', feature: 'magic' }],
     })
     expect(view).toEqual({
-      entries: [{ line: 12, quote: 'use the /grill-me skill', action: 'use-skill', target: 'grill-me', by: 'table' }, { line: 20, quote: 'TodoWrite', action: 'todo', by: 'ai' }],
-      unsupported: [{ line: 30, quote: 'hooks:', feature: 'hooks' }], requires: ['grill-me'], setup: 'setup-x', external: ['GitHub CLI (gh)'],
-      note: 'In Tangu: "/grill-me" means use_skill grill-me.', commit: 'b'.repeat(40),
+      entries: [{ line: 12, quote: 'use the /quiz-me skill', action: 'use-skill', target: 'quiz-me', by: 'table' }, { line: 20, quote: 'TodoWrite', action: 'todo', by: 'ai' }],
+      unsupported: [{ line: 30, quote: 'hooks:', feature: 'hooks' }], requires: ['quiz-me'], setup: 'setup-x', external: ['GitHub CLI (gh)'],
+      note: 'In Tangu: "/quiz-me" means use_skill quiz-me.', commit: 'b'.repeat(40),
     })
     expect(parseAdaptView({ note: 'x', commit: 'short' })).toBeNull()
     expect(parseAdaptView({ note: '', commit: 'a'.repeat(40) })).toBeNull()

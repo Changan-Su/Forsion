@@ -74,7 +74,7 @@ async function main() {
     page.on('pageerror', (error) => errors.push(error.message))
     // 技能详情会问引擎「装给谁」(SkillAgentPicker);台架没有引擎,给空名单,免得连接被拒记成页面错误。
     // 目录里放上本轮从来源装的两项,「装给谁」那步才找得到它们(真引擎装完就在目录里)。
-    const SRC_SKILLS = ['src-0a1b2c3d-poster', 'src-0a1b2c3d-ecommerce', 'src-0a1b2c3d-storyboard', 'src-25aae625-grill-me', 'src-25aae625-wayfinder', 'src-25aae625-hyperframes'].map((slug) => ({ key: slug, id: slug, slug, scope: 'user', name: slug }))
+    const SRC_SKILLS = ['src-0a1b2c3d-poster', 'src-0a1b2c3d-ecommerce', 'src-0a1b2c3d-storyboard', 'src-25aae625-quiz-me', 'src-25aae625-trailmap', 'src-25aae625-framecraft'].map((slug) => ({ key: slug, id: slug, slug, scope: 'user', name: slug }))
     await page.route(/:8787\/agent\/(agents|skills\/catalog)(\?|$)/, (route) => route.fulfill({ json: /agents/.test(route.request().url()) ? { agents: [] } : { skills: SRC_SKILLS } }))
     await page.goto(`${ORIGIN}/market-harness.html`, { waitUntil: 'networkidle' })
     await page.locator('.mk-featured').waitFor({ state: 'visible' })
@@ -355,7 +355,7 @@ async function main() {
 
     // 内置 skills.sh 收录(2026-11-23 方案 B,docs/ToBeImproved/商店技能来源方案_2026-11-23):技能分类「全部」按来源分区,
     // 收录技能标 skills.sh、角上是 skills.sh 的安装数;详情第三种信任状态 + 适配说明;带脚本 / 审计警告的逐个确认,前置一起装。
-    // 剧本见 marketHarnessBridge 的 shItems(hyperframes 9 个脚本 + Snyk 中风险,wayfinder 带前置 grill-me,漫画分镜包里多 1 个脚本)。
+    // 剧本见 marketHarnessBridge 的 shItems(framecraft 9 个脚本 + Snyk 中风险,trailmap 带前置 quiz-me,漫画分镜包里多 1 个脚本)。
     const installedSlugs = () => page.evaluate(async () => (await window.tangu.marketInstalled()).skill.map((x) => x.slug))
     const waitInstalled = async (slug) => { for (let i = 0; i < 40; i++) { if ((await installedSlugs()).includes(slug)) return true; await page.waitForTimeout(150) } return false }
     await page.getByRole('button', { name: '技能', exact: true }).click()
@@ -382,7 +382,7 @@ async function main() {
     await page.locator('[data-market-source-chip="25aae625"]').click()
     const only = await page.locator('.mk-grid .mk-card').count()
     check('点 skills.sh 筛选只看收录的那 9 项', only === 9 && await page.locator('[data-market-section]').count() === 0, String(only))
-    await page.locator('.mk-grid .mk-card-title', { hasText: 'wayfinder' }).click()
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'trailmap' }).click()
     await page.locator('[data-store-collected-trust]').waitFor()
     const wf = await page.evaluate(() => ({
       tabs: [...document.querySelectorAll('.mk-detail-tabs button')].map((el) => el.textContent?.trim()),
@@ -397,19 +397,19 @@ async function main() {
     check('带前置的安装按钮写明连同前置', /连同 1 个前置/.test(wf.btn || ''), String(wf.btn))
     await page.locator('[data-market-detail-tab="adapt"]').click()
     const adapt = await page.evaluate(() => ({ rows: document.querySelectorAll('[data-market-adapt] tbody tr').length, note: document.querySelector('[data-market-adapt] pre')?.textContent || '', prereq: document.querySelector('[data-market-adapt] .mk-tags')?.textContent || '' }))
-    check('「适配说明」页签列出逐行对应、前置与 Tangu 读的说明', adapt.rows === 4 && /Tangu/.test(adapt.note) && adapt.prereq.includes('grill-me'), JSON.stringify(adapt))
+    check('「适配说明」页签列出逐行对应、前置与 Tangu 读的说明', adapt.rows === 4 && /Tangu/.test(adapt.note) && adapt.prereq.includes('quiz-me'), JSON.stringify(adapt))
     await page.screenshot({ path: SHOTS.skillDetail, fullPage: true })
     await page.locator('.mk-detail-actions [data-market-install]').first().click()
-    check('装 wayfinder 连同前置 grill-me 一起装上(没脚本不问)', await waitInstalled('src-25aae625-wayfinder') && (await installedSlugs()).includes('src-25aae625-grill-me') && await page.locator('[data-store-source-confirm-install]').count() === 0)
+    check('装 trailmap 连同前置 quiz-me 一起装上(没脚本不问)', await waitInstalled('src-25aae625-trailmap') && (await installedSlugs()).includes('src-25aae625-quiz-me') && await page.locator('[data-store-source-confirm-install]').count() === 0)
     await page.locator('.mk-detail-back').click()
-    await page.locator('.mk-grid .mk-card-title', { hasText: 'hyperframes' }).click()
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'framecraft' }).click()
     await page.locator('[data-store-collected-trust]').waitFor()
     await page.locator('.mk-detail-actions [data-market-install]').first().click()
     const hfText = await page.locator('[data-store-source-confirm-install]').waitFor({ timeout: 3000 }).then(() => page.locator('[data-store-source-confirm-install]').textContent(), () => '')
     check('带脚本、审计有警告的收录技能逐个确认:写明脚本数与审计', /带 9 个脚本/.test(hfText || '') && /Snyk 评为中风险/.test(hfText || '') && /仍然安装/.test(hfText || ''), (hfText || '').slice(0, 120))
     await page.screenshot({ path: SHOTS.skillConfirm, fullPage: true })
     await page.locator('[data-store-source-install]').click()
-    check('确认后装上', await waitInstalled('src-25aae625-hyperframes'))
+    check('确认后装上', await waitInstalled('src-25aae625-framecraft'))
     await page.locator('.mk-detail-back').click()
     // 目录没写、主进程在包里数出来的脚本(用户来源):先装,被拒后按数出来的在侧栏再问一次
     await page.locator('[data-market-source-chip="0a1b2c3d"]').click()

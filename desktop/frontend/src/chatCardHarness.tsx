@@ -26,7 +26,7 @@ void (async () => {
   const pick = (id: string) => forsion(list.find((r) => r.id === id)!)
   const src = async (id: string) => collected(await tangu.marketSourcesItem(id))
   const first = [pick('source-check'), await src('src_25aae625_frontend-design')]
-  const second = [await src('src_25aae625_hyperframes'), await src('src_25aae625_wayfinder'), await src('src_0a1b2c3d_poster')]
+  const second = [await src('src_25aae625_framecraft'), await src('src_25aae625_trailmap'), await src('src_0a1b2c3d_poster')]
   document.body.style.margin = '0'
   createRoot(document.getElementById('root')!).render(
     <LocaleProvider>

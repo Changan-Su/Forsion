@@ -7,8 +7,8 @@ import { extractZipToDir, MARKET_MANIFEST } from './marketInstall'
 import { prepareSkillPackage, skillTreeHash } from './skillPackage'
 import { createSourceSkillUpdater, type SkillUpdateDownload } from './sourceSkillUpdates'
 
-const ID = 'src_25aae625_wayfinder', SLUG = 'src-25aae625-wayfinder'
-const SKILL = (v: string) => `---\nname: wayfinder\ndescription: v${v}\n---\nbody ${v}\n`
+const ID = 'src_25aae625_trailmap', SLUG = 'src-25aae625-trailmap'
+const SKILL = (v: string) => `---\nname: trailmap\ndescription: v${v}\n---\nbody ${v}\n`
 async function zipOf(files: Record<string, string>): Promise<Buffer> {
   const z = new JSZip()
   for (const [k, v] of Object.entries(files)) z.file(k, v)
@@ -21,12 +21,12 @@ let latest: string, pkg: Record<string, string>, audit: boolean, note: string | 
 let lookupFails: Error | null, removed: boolean, paused: boolean
 const recordInstall = vi.fn(async (r: { version: string | null; tree?: string | null }) => { rec = { ...rec, version: r.version, ...(r.tree ? { tree: r.tree } : {}) } })
 const changed = vi.fn()
-const download = vi.fn(async (): Promise<SkillUpdateDownload> => ({ info: { type: 'skill', installSlug: SLUG, version: latest }, buf: await zipOf(pkg), origin: 'github:mattpocock/skills', commit: 'a'.repeat(40), path: 'skills/wayfinder', adaptNote: note, auditWarn: audit }))
+const download = vi.fn(async (): Promise<SkillUpdateDownload> => ({ info: { type: 'skill', installSlug: SLUG, version: latest }, buf: await zipOf(pkg), origin: 'github:lanternworks/skills', commit: 'a'.repeat(40), path: 'skills/trailmap', adaptNote: note, auditWarn: audit }))
 const make = (enabled = true) => createSourceSkillUpdater({
   sources: {
-    installs: async () => [{ cardId: ID, type: 'skill', slug: SLUG, name: 'wayfinder', version: rec.version, sourceId: '25aae625', sourceTitle: 'skills.sh', removed }],
+    installs: async () => [{ cardId: ID, type: 'skill', slug: SLUG, name: 'trailmap', version: rec.version, sourceId: '25aae625', sourceTitle: 'skills.sh', removed }],
     installRecord: async () => rec,
-    lookup: async () => { if (lookupFails) throw lookupFails; return { id: ID, name: 'wayfinder', type: 'skill', installSlug: SLUG, latestVersion: latest, summary: '', author: 'mattpocock' } },
+    lookup: async () => { if (lookupFails) throw lookupFails; return { id: ID, name: 'trailmap', type: 'skill', installSlug: SLUG, latestVersion: latest, summary: '', author: 'lanternworks' } },
     updatesPaused: () => paused,
     recordInstall,
   } as never,
@@ -53,7 +53,7 @@ describe('source skill updates', () => {
     expect(await make().check()).toEqual([{ cardId: ID, outcome: 'updated' }])
     expect((await readdir(dir)).sort()).toEqual(['.forsion-adapt.md', 'SKILL.md', 'new.md'])
     expect(await readFile(join(dir, '.forsion-adapt.md'), 'utf8')).toBe('v2 note\n')
-    expect(recordInstall).toHaveBeenCalledWith(expect.objectContaining({ version: latest, path: 'skills/wayfinder', tree: await skillTreeHash(dir) }))
+    expect(recordInstall).toHaveBeenCalledWith(expect.objectContaining({ version: latest, path: 'skills/trailmap', tree: await skillTreeHash(dir) }))
     expect(changed).toHaveBeenCalledTimes(1)
     // No staging / old copies left next to it.
     expect(await readdir(root)).toEqual([SLUG])

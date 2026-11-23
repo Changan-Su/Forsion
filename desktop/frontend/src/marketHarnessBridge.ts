@@ -68,8 +68,8 @@ const sourceItems: Record<string, MarketDetail[]> = {
   [SRC_URL]: [],
   [SRC_GIT]: [srcItem(SRC_GIT, EN ? 'Team kit' : '团队工具箱', 'brief', 'skill', '周报', '按团队模板整理一周进展、风险与下周计划。', '1.0.0', ['团队'])],
 }
-// 内置 skills.sh 收录的技能:装机数是 skills.sh 的统计;hyperframes 带 9 个脚本且 Snyk 中风险(逐个确认),
-// wayfinder 为 Claude Code 写、已适配且要连同前置 grill-me 一起装,pdf 带 4 个脚本。
+// 内置 skills.sh 收录的技能:装机数是 skills.sh 的统计;framecraft 带 9 个脚本且 Snyk 中风险(逐个确认),
+// trailmap 为 Claude Code 写、已适配且要连同前置 quiz-me 一起装,pdf 带 4 个脚本。
 const COMMIT = '3f9c2d1e8b7a6c5d4e3f2a1b0c9d8e7f6a5b4c3d'
 const collected = (o: Partial<CollectedInfo>): CollectedInfo => ({
   installs: 0, rank: null, trendingRank: null, audit: { gen: 'safe', socket: 'safe', snyk: 'low' }, override: false, license: 'MIT', scripts: 0, files: 1,
@@ -83,26 +83,26 @@ const shItem = (repo: string, id: string, installs: number, rank: number, summar
   readme: `---\nname: ${id}\ndescription: ${summary}\n---\n\n# ${id}\n\n${summary}`,
 })
 const shItems: MarketDetail[] = [
-  shItem('vercel-labs/agent-browser', 'agent-browser', 1665662, 1, '用命令行操作浏览器：打开网页、填表、点按钮、截图、抓数据。', ['浏览器', '自动化'], { license: 'Apache-2.0', files: 3, requirements: { cli: true, apiKeys: [], desktopOnly: true } }),
-  shItem('heygen-com/hyperframes', 'hyperframes', 1650274, 2, '用 HTML 制作、编辑并渲染视频。', ['视频', 'HTML'], { license: 'Apache-2.0', scripts: 9, files: 14, audit: { gen: 'safe', socket: 'safe', snyk: 'medium' }, requirements: { cli: true, apiKeys: [], desktopOnly: true } }),
-  shItem('mattpocock/skills', 'grill-me', 1599965, 3, '对你的计划或设计连环追问，直到把模糊处问清楚。', ['规划', '设计评审']),
-  shItem('mattpocock/skills', 'tdd', 1274878, 5, '测试先行地做功能、修 bug：红 → 绿 → 重构。', ['测试', '开发']),
-  shItem('mattpocock/skills', 'handoff', 1170218, 6, '把当前进展写成交接文档，换人或换会话也能接着做。', ['交接', '协作']),
-  shItem('anthropics/skills', 'frontend-design', 1158650, 7, '为新界面或改版做有辨识度、有意图的视觉设计。', ['前端', '设计'], { license: 'Apache-2.0' }),
-  shItem('mattpocock/skills', 'wayfinder', 841892, 12, '把一件一次会话装不下的大事拆成 issue 上的决策地图，一个个解决。', ['规划', '项目管理'], { writtenFor: ['claude-code'], adapted: true, adaptCount: 4, requires: ['grill-me'], files: 2 }),
+  shItem('acme-labs/agent-browser', 'agent-browser', 1665662, 1, '用命令行操作浏览器：打开网页、填表、点按钮、截图、抓数据。', ['浏览器', '自动化'], { license: 'Apache-2.0', files: 3, requirements: { cli: true, apiKeys: [], desktopOnly: true } }),
+  shItem('reelhouse/framecraft', 'framecraft', 1650274, 2, '用 HTML 制作、编辑并渲染视频。', ['视频', 'HTML'], { license: 'Apache-2.0', scripts: 9, files: 14, audit: { gen: 'safe', socket: 'safe', snyk: 'medium' }, requirements: { cli: true, apiKeys: [], desktopOnly: true } }),
+  shItem('lanternworks/skills', 'quiz-me', 1599965, 3, '对你的计划或设计连环追问，直到把模糊处问清楚。', ['规划', '设计评审']),
+  shItem('lanternworks/skills', 'tdd', 1274878, 5, '测试先行地做功能、修 bug：红 → 绿 → 重构。', ['测试', '开发']),
+  shItem('lanternworks/skills', 'handoff', 1170218, 6, '把当前进展写成交接文档，换人或换会话也能接着做。', ['交接', '协作']),
+  shItem('acme/skills', 'frontend-design', 1158650, 7, '为新界面或改版做有辨识度、有意图的视觉设计。', ['前端', '设计'], { license: 'Apache-2.0' }),
+  shItem('lanternworks/skills', 'trailmap', 841892, 12, '把一件一次会话装不下的大事拆成 issue 上的决策地图，一个个解决。', ['规划', '项目管理'], { writtenFor: ['claude-code'], adapted: true, adaptCount: 4, requires: ['quiz-me'], files: 2 }),
   shItem('gencraft-labs/skills', 'ai-image-generation', 692254, 15, '用 RunComfy 的命令行生成和修改图片。', ['图片', '生成'], { requirements: { cli: false, apiKeys: ['RUNCOMFY_API_KEY'], desktopOnly: false } }),
-  shItem('anthropics/skills', 'pdf', 235935, 31, '读、拆、合、填 PDF，提取文字和表格。', ['PDF', '文档'], { license: 'Apache-2.0', scripts: 4, files: 9 }),
+  shItem('acme/skills', 'pdf', 235935, 31, '读、拆、合、填 PDF，提取文字和表格。', ['PDF', '文档'], { license: 'Apache-2.0', scripts: 4, files: 9 }),
 ]
 const shAdapt: Record<string, AdaptView> = {
-  wayfinder: {
+  trailmap: {
     entries: [
-      { line: 12, quote: 'use the /grill-me skill', action: 'use-skill', target: 'grill-me', by: 'table' },
+      { line: 12, quote: 'use the /quiz-me skill', action: 'use-skill', target: 'quiz-me', by: 'table' },
       { line: 27, quote: 'spawn a subagent', action: 'delegate', by: 'table' },
       { line: 41, quote: 'AskUserQuestion', action: 'ask-user', by: 'table' },
       { line: 58, quote: 'TodoWrite', action: 'todo', by: 'ai' },
     ],
-    unsupported: [], requires: ['grill-me'], external: ['GitHub CLI (gh)'], commit: COMMIT,
-    note: 'Written for Claude Code. In Tangu: "/grill-me" means use_skill grill-me; "spawn a subagent" means delegate; AskUserQuestion means ask the user in chat; TodoWrite means the todo tool.',
+    unsupported: [], requires: ['quiz-me'], external: ['GitHub CLI (gh)'], commit: COMMIT,
+    note: 'Written for Claude Code. In Tangu: "/quiz-me" means use_skill quiz-me; "spawn a subagent" means delegate; AskUserQuestion means ask the user in chat; TodoWrite means the todo tool.',
   },
 }
 const prereqsOf = (it: MarketDetail): StorePrereq[] => (it.collected?.requires ?? []).map((rid) => {
