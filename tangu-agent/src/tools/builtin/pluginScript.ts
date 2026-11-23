@@ -17,7 +17,8 @@ const STOPPED_TEXT: Record<string, (min: number) => string> = {
 
 export const pluginScriptProvider: ToolProvider = {
   id: 'builtin:plugin-script',
-  tools: () => isMultiAccount() ? [
+  // Windows 上不给:解释器按名字找时会先找工作目录(在账号文件夹里),USERPROFILE 等也会被 libuv 补回引擎自己的
+  tools: () => isMultiAccount() && process.platform !== 'win32' ? [
     {
       name: 'run_plugin_script',
       mode: 'host',

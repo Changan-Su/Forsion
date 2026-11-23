@@ -7,7 +7,11 @@
  *     scratch folder inside the account, cwd in the account; path-like arguments must stay in the account folder
  *   - one script at a time across all accounts (two accounts' scripts never overlap)
  *   - a script past `scriptMinutes`, or over `scriptScratchMB` of temporary data, is ended with its whole process group
- *   - links a script leaves in the account folder are removed; the scratch folder is gone when the turn ends
+ *   - links a script leaves in the account folder are removed (two names inside the account are kept; an existing file given a
+ *     name outside keeps its name and content but no longer shares it); the scratch folder is gone when the turn ends and the
+ *     account's own tools cannot write into it
+ *   - package code outside skill folders (engine plugins) never runs; an agent's seeded copy maps to that agent's original
+ *   - a detached grandchild holding the output pipe does not hold the engine-wide queue
  *   - every process started is a package script (spawn spy)
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
@@ -92,6 +96,35 @@ function writeBundle(): void {
     fs.linkSync(target, 'hard-link-out');
     console.log('linked');
   `);
+  // two names for one file, both inside the account (write-then-rename style): left alone
+  writeFileSync(join(sdir, 'pair.mjs'), `
+    import fs from 'node:fs';
+    fs.writeFileSync('pair-a.txt', 'pair content');
+    fs.linkSync('pair-a.txt', 'pair-b.txt');
+    console.log('paired');
+  `);
+  // gives an existing account file a second name outside the account
+  writeFileSync(join(sdir, 'linkback.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    const target = fs.readFileSync(new URL('./target.txt', import.meta.url), 'utf8');
+    fs.linkSync(process.argv[2], path.join(path.dirname(target), 'linked-from-account.csv'));
+    console.log('linked back');
+  `);
+  // exits while a detached grandchild keeps its output pipe open
+  writeFileSync(join(sdir, 'escape.mjs'), `
+    import { spawn } from 'node:child_process';
+    import fs from 'node:fs';
+    const kid = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    fs.writeFileSync('escaped.json', JSON.stringify([kid.pid]));
+    kid.unref();
+    console.log('bye');
+    process.exit(0);
+  `);
+  // engine-plugin code in the package (not loaded in this mode) and a skill link pointing at it
+  mkdirSync(join(env.bundle, 'tangu-plugins', 'probe'), { recursive: true });
+  writeFileSync(join(env.bundle, 'tangu-plugins', 'probe', 'index.mjs'), 'console.log("ENGINE PLUGIN RAN")');
+  symlinkSync(join(env.bundle, 'tangu-plugins', 'probe', 'index.mjs'), join(sdir, 'plug.mjs'));
   writeFileSync(join(sdir, 'notes.txt'), 'not a script');
   // a link inside the package pointing out of it
   writeFileSync(join(env.root, 'outside-script.mjs'), 'console.log("OUTSIDE SCRIPT RAN")');
@@ -103,6 +136,13 @@ function writeBundle(): void {
   writeFileSync(join(ag, 'SOUL.md'), 'You are a probe.');
   writeFileSync(join(ag, 'skills', AGENT_SKILL, 'SKILL.md'), '---\nname: agent-skill\ndescription: agent skill\n---\nRun scripts/hello.mjs.\n');
   writeFileSync(join(ag, 'skills', AGENT_SKILL, 'scripts', 'hello.mjs'), 'console.log("ORIGINAL HELLO")');
+  // a second agent whose skill has the same name and script path
+  const ag2 = join(env.bundle, 'agents', 'probe-agent-2');
+  mkdirSync(join(ag2, 'skills', AGENT_SKILL, 'scripts'), { recursive: true });
+  writeFileSync(join(ag2, 'config.toml'), 'name = "Probe agent two"\ndescription = "test"\n');
+  writeFileSync(join(ag2, 'SOUL.md'), 'You are another probe.');
+  writeFileSync(join(ag2, 'skills', AGENT_SKILL, 'SKILL.md'), '---\nname: agent-skill\ndescription: agent skill\n---\nRun scripts/hello.mjs.\n');
+  writeFileSync(join(ag2, 'skills', AGENT_SKILL, 'scripts', 'hello.mjs'), 'console.log("SECOND HELLO")');
 }
 
 let E: MaEngine;
@@ -187,6 +227,35 @@ describe('multi-account: plugin scripts — what may run', () => {
     }
   }, 60_000);
 
+  it('package code outside skill folders never runs, by absolute path or through a link in a skill', async () => {
+    const { outputs } = await scriptRun('alice', [
+      { script: join(env.bundle, 'tangu-plugins', 'probe', 'index.mjs') },
+      { skill: SKILL, script: 'scripts/plug.mjs' },
+      { script: join(sdir, 'plug.mjs') },
+    ]);
+    for (const o of outputs) {
+      expect(o).toMatch(/^Error:/);
+      expect(o).not.toContain('ENGINE PLUGIN RAN');
+    }
+  }, 60_000);
+
+  it("an agent's seeded copy runs that same agent's original, not another agent's script of the same name", async () => {
+    const copy2 = join(accDir('alice'), 'agents', 'probe-agent-2', 'skills', AGENT_SKILL, 'scripts', 'hello.mjs');
+    expect(existsSync(copy2), 'the second package agent was seeded into the account').toBe(true);
+    const { outputs } = await scriptRun('alice', [{ script: copy2 }]);
+    expect(outputs[0]).toContain('SECOND HELLO');
+    expect(outputs[0]).not.toContain('ORIGINAL HELLO');
+  }, 60_000);
+
+  it("the scripts' temporary folder cannot be written by the account's own tools", async () => {
+    const target = join(accDir('alice'), '.scratch', 'mine.txt');
+    const s = E.fake.script('alice', 'scratch-write', steps([{ calls: [{ name: 'write_file', args: { path: target, content: 'x'.repeat(100) } }] }], 'done'));
+    const r = await runToEnd(E.client, 'alice', s, { timeoutMs: 30_000 });
+    expect(r.follow?.status).toBe('done');
+    expect(s.results.find((x) => x.name === 'write_file')?.output).toMatch(/temporary files of plugin scripts/);
+    expect(existsSync(target)).toBe(false);
+  }, 60_000);
+
   it('path-like arguments must stay inside the account folder', async () => {
     mkdirSync(accDir('bob'), { recursive: true });
     const { outputs } = await scriptRun('alice', [
@@ -241,6 +310,35 @@ describe('multi-account: plugin scripts — one at a time, bounded', () => {
     expect(outputs[0]).toMatch(/removed 2 link/);
     for (const n of ['soft-link-out', 'hard-link-out']) expect(() => lstatSync(join(accDir('alice'), 'workspace', n))).toThrow();
     expect(readFileSync(OUTSIDE, 'utf8')).toBe('outside content');
+  }, 60_000);
+
+  it('two names a script gives one file inside the account are kept', async () => {
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/pair.mjs' }]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    expect(outputs[0]).not.toMatch(/removed \d+ link/);
+    for (const n of ['pair-a.txt', 'pair-b.txt']) expect(readFileSync(join(accDir('alice'), 'workspace', n), 'utf8')).toBe('pair content');
+  }, 60_000);
+
+  it('an existing account file given a name outside the account keeps its name and content, and no longer shares the outside copy', async () => {
+    const keep = join(accDir('alice'), 'workspace', 'keep.csv');
+    writeFileSync(keep, 'a,b\n1,2\n');
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/linkback.mjs', args: ['keep.csv'] }]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    expect(readFileSync(keep, 'utf8')).toBe('a,b\n1,2\n');
+    expect(lstatSync(keep).nlink).toBe(1);
+    const outside = join(env.root, 'linked-from-account.csv');
+    expect(lstatSync(outside).ino).not.toBe(lstatSync(keep).ino);
+  }, 60_000);
+
+  it('a script that exits while a detached child holds its output does not hold the queue', async () => {
+    const t0 = Date.now();
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/escape.mjs' }]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(pluginScriptQueue()).toEqual({ running: 0, waiting: 0 });
+    for (const pid of JSON.parse(readFileSync(join(accDir('alice'), 'workspace', 'escaped.json'), 'utf8')) as number[]) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+    }
   }, 60_000);
 
   it('a stopped turn stops its waiting or running script', async () => {

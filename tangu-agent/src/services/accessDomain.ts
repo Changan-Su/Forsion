@@ -221,6 +221,8 @@ export function accountReadDenied(abs: string): string | null {
 export function accountWriteDenied(abs: string): string | null {
   if (!isMultiAccount()) return null;
   const root = currentAccountRoot();
+  // 插件脚本的临时目录(services/pluginScripts.ts)归引擎管:不算磁盘上限、开户时整个清掉,账号自己不能往里写
+  if (insidePlain(abs, path.join(root, '.scratch'))) return 'Access denied: that folder holds temporary files of plugin scripts and cannot be written.';
   if (insidePlain(abs, root)) return null;
   return `Access denied: you can only write inside your account folder (${root}); ${abs} is outside it.`;
 }
