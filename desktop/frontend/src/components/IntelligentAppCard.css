@@ -4,7 +4,7 @@
 .iui-app-card > header { display: flex; align-items: center; gap: 8px; min-height: 39px; padding: 9px 9px 4px 14px; }
 .iui-app-card > header strong { min-width: 0; font-size: var(--ui-font-body); font-weight: 600; }
 .iui-app-icon { flex: none; color: var(--text-muted); }
-.iui-app-card > header .plugin-logo { border: 0; border-radius: 4px; background: none; }
+.iui-app-card > header .plugin-logo { border: 0; border-radius: var(--radius-xs); background: none; }
 .iui-live { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-caption); color: var(--text-faint, var(--text-muted)); }
 .iui-live > i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .iui-app-card button { font: inherit; color: var(--text); cursor: pointer; }

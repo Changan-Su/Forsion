@@ -178,7 +178,7 @@
 .rb-slot { -webkit-app-region: no-drag; position: relative; display: flex; justify-content: center; border-radius: var(--radius-sm, 8px); transition: opacity var(--duration-fast, 0.15s) var(--ease-out, ease); }
 .rb-slot.dragging { opacity: 0.4; }
 html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !important; user-select: none !important; }
-.rb-pointer-ghost { position: fixed; z-index: 2147483647; pointer-events: none; opacity: .75; background: var(--surface, #fbf8f5); border-radius: 8px; }
+.rb-pointer-ghost { position: fixed; z-index: 2147483647; pointer-events: none; opacity: .75; background: var(--surface, #fbf8f5); border-radius: var(--radius-sm); }
 .rb-pointer-shield { position: fixed; inset: 0; z-index: 2147483646; -webkit-app-region: no-drag; }
 /* 落点提示 = 让位动画本身(手机桌面那套排斥占位):图标整槽平移让出空位,ghost 滑进去,松手即落。
  * transition 只在 .rb-dragging 期间挂 —— 松手那一帧 DOM 顺序变了、transform 归零,带着过渡会从错位飞回来。 */
@@ -342,7 +342,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
   padding: var(--menu-shell-padding, 4px);
   background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
   display: flex;
   flex-direction: column;
@@ -380,7 +380,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
   padding: 6px;
   background: var(--surface-menu, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
   border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
 }
 .rb-iconpick-reset {
@@ -431,7 +431,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
 .sb-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 /* 项目内容的两种形态:sb-plain(纯展示)/ sb-click(可点,hover 提亮)。 */
 .sb .sb-plain, .sb .sb-click { display: inline-flex; align-items: center; gap: 4px; }
-.sb .sb-click { cursor: pointer; border-radius: 4px; padding: 1px 6px; margin: -1px -6px; }
+.sb .sb-click { cursor: pointer; border-radius: var(--radius-xs); padding: 1px 6px; margin: -1px -6px; }
 .sb .sb-click:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 
 /* ===== 视图容器 ===== */
@@ -519,7 +519,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
   font-size: var(--ui-font-caption, 11px);
   color: var(--text-faint, var(--text-muted));
   background: var(--overlay-light, rgba(127, 127, 127, 0.12));
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   padding: 1px 5px;
 }
 .cmd-empty { padding: 16px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
@@ -598,7 +598,7 @@ html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
   padding: 0 8px calc(4px + var(--sb-h, 0px));
 }
 .dockview-theme-lcl .dv-groupview:not(:has(.wb-tab--icon)) .dv-content-container > .dv-react-part {
-  border-radius: var(--radius-lg, 14px);
+  border-radius: var(--radius-lg, 16px);
   overflow: hidden;
   background: var(--bg);
 }
@@ -695,7 +695,7 @@ html[data-lcl-sash-drag='row'], html[data-lcl-sash-drag='row'] * { cursor: row-r
 /* 命名标签(非图标 tab)圆角胶囊本体在 .wb-tab 上 */
 .dockview-theme-lcl .dv-tab:not(:has(.wb-tab--icon)) .wb-tab {
   padding: 5px 12px;
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .dockview-theme-lcl .dv-tab:not(:has(.wb-tab--icon)):hover .wb-tab { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
@@ -731,7 +731,7 @@ html[data-lcl-sash-drag='row'], html[data-lcl-sash-drag='row'] * { cursor: row-r
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; margin-right: -4px;
   border: none; background: transparent; color: inherit;
-  border-radius: var(--radius-sm, 6px); cursor: pointer;
+  border-radius: var(--radius-sm, 8px); cursor: pointer;
   opacity: 0; pointer-events: none;
   transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
@@ -749,7 +749,7 @@ html[data-lcl-sash-drag='row'], html[data-lcl-sash-drag='row'] * { cursor: row-r
 /* 面板内分屏落点:半屏 accent 磨砂高亮(低调),盖在目标组正文对应半边。pointer-events:none 免挡 computeDropTarget 的 elementFromPoint。
  * transition 让高亮在上下左右半边之间平滑滑移。z-index 略低于竖线。 */
 .wb-drop-zone {
-  position: fixed; border-radius: var(--radius-md, 10px);
+  position: fixed; border-radius: var(--radius-md, 12px);
   background: var(--accent-ink); opacity: 0.14;
   outline: 1.5px solid var(--signal-line, var(--accent-ink)); outline-offset: -1.5px;
   pointer-events: none; z-index: 9998; display: none;
@@ -858,7 +858,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   height: 28px;
   padding: 0;
   justify-content: center;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .dockview-theme-lcl .dv-tab:hover .wb-tab--icon {
@@ -1102,7 +1102,7 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
   padding: 0 8px calc(4px + var(--sb-h, 0px));
 }
 .dockview-theme-lcl .dv-render-overlay:is([data-lcl-loc='main'], [data-lcl-loc='bottom']) > .dv-react-part {
-  border-radius: var(--radius-lg, 14px); overflow: hidden; background: var(--bg);
+  border-radius: var(--radius-lg, 16px); overflow: hidden; background: var(--bg);
 }
 /* Upstream's GPU hint/containment would rebase fixed menus inside a View. Geometry already
  * moves via native layout; these contents need the same fixed-position semantics as before. */

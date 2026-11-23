@@ -70,7 +70,7 @@
 .chat-pick-sheet {
   position: relative; display: flex; flex-direction: column; max-height: 76%;
   padding: 6px 10px calc(14px + env(safe-area-inset-bottom)); box-sizing: border-box;
-  border-radius: 16px 16px 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow);
   animation: chat-pick-up var(--duration-slow) var(--ease-drawer);
 }
 .chat-pick-grip { flex: none; width: 40px; height: 4px; margin: 6px auto 8px; border-radius: 2px; background: var(--border); }

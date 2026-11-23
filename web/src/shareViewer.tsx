@@ -67,7 +67,7 @@ const CSS = `
 .shv-toolbar { justify-content: flex-start; }
 .shv-crumb { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .shv-spacer { flex: 1; }
-.shv-ro { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--overlay-light, rgba(127,127,127,.12)); color: var(--text-muted); }
+.shv-ro { font-size: 11.5px; padding: 1px 8px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127,127,127,.12)); color: var(--text-muted); }
 .shv-doc { max-width: 920px; margin: 0 auto; padding: 8px 48px 0; }
 .shv-doc pre { background: rgba(127,127,127,.09); padding: 12px 14px; border-radius: 10px; overflow-x: auto; font-size: 13px; }
 .shv-doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
@@ -81,7 +81,7 @@ const CSS = `
 .shv-db-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .shv-db-table th, .shv-db-table td { border: 1px solid rgba(127,127,127,.18); padding: 5px 10px; text-align: left; vertical-align: top; }
 .shv-db-table th { font-weight: 600; background: rgba(127,127,127,.05); white-space: nowrap; }
-.shv-db-chip { display: inline-block; padding: 0 8px; margin: 1px 3px 1px 0; border-radius: 999px; background: rgba(76,110,245,.16); color: #4c6ef5; font-size: 12px; }
+.shv-db-chip { display: inline-block; padding: 0 8px; margin: 1px 3px 1px 0; border-radius: var(--radius-pill, 999px); background: rgba(76,110,245,.16); color: #4c6ef5; font-size: 12px; }
 .shv-db-check { font-size: 14px; }
 .shv-db-foot { padding: 6px 12px; font-size: 12px; opacity: .6; }
 .shv-db-err { padding: 10px 12px; font-size: 12.5px; opacity: .7; }

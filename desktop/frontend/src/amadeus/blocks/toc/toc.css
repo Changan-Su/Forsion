@@ -26,7 +26,7 @@
   display: block;
   padding-block: 5px;
   padding-inline: calc(var(--toc-depth, 0) * 1.5em + 2px) 2px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   color: var(--text-muted);
   line-height: 1.5;
   text-decoration: none;

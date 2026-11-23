@@ -84,7 +84,7 @@
 .t2c-input-wrap[data-suggestion] .t2c-ta { position: absolute; inset: 0; height: 100% !important; max-height: none; }
 .t2c-input-wrap[data-suggestion] .t2c-ta::placeholder { color: transparent; }
 .t2c-suggestion { font: var(--t2c-font-body, 13px)/1.6 var(--font-ui); color: var(--text-faint, var(--text-muted)); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
-.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
+.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
 
 /* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
    ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */
@@ -93,7 +93,7 @@
    对照页 docs/ToBeImproved/强调色补全方案_2026-11-04)。字色是这层把同一段字用强调色再描一遍,盖在文本框的原字上。 */
 .t2c-inref, .t2c-tok {
   --t2c-tok-wash: color-mix(in srgb, var(--signal) 14%, transparent);
-  border-radius: var(--radius-sm, 6px); background: var(--t2c-tok-wash); box-shadow: 0 0 0 1.5px var(--t2c-tok-wash); color: var(--signal);
+  border-radius: var(--radius-sm, 8px); background: var(--t2c-tok-wash); box-shadow: 0 0 0 1.5px var(--t2c-tok-wash); color: var(--signal);
   -webkit-box-decoration-break: clone; box-decoration-break: clone;
 }
 .t2c-inref-slot { position: relative; }
@@ -384,7 +384,7 @@
 .t2c-voicebar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; animation: t2c-voicebar-in 0.22s var(--ease-out, ease); }
 /* 底排里的录音条 = 麦克风拉成的那条胶囊(11-16 Chat Box 水滴方案 3.3,useVoiceBarFlow 按裁切长开 / 缩回):多一块浅底,
    不加就没有东西可以拉;进场由脚本放,原来的右滑淡入撤掉。 */
-.t2c-row > .t2c-voicebar { align-self: stretch; padding: 0 2px 0 12px; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); animation: none; }
+.t2c-row > .t2c-voicebar { align-self: stretch; padding: 0 2px 0 12px; border-radius: var(--radius-pill); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); animation: none; }
 @keyframes t2c-voicebar-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 .t2c-voicewave { flex: 1; min-width: 0; height: 30px; display: block; }
 .t2c-voicelabel { flex-shrink: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-family: var(--font-ui); }
@@ -467,7 +467,7 @@
 .t2c-apv-chev { flex-shrink: 0; margin-left: auto; transition: transform var(--duration-fast, 0.15s); }
 .t2c-apv-n { flex-shrink: 0; margin-left: 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .t2c-apv-nav {
-  display: inline-flex; flex-shrink: 0; padding: 2px; border: none; border-radius: var(--radius-sm, 6px);
+  display: inline-flex; flex-shrink: 0; padding: 2px; border: none; border-radius: var(--radius-sm, 8px);
   background: none; color: var(--text-muted); cursor: pointer;
 }
 .t2c-apv-nav:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }

@@ -244,7 +244,7 @@
   height: 16px;
   display: grid;
   place-items: center;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   flex: 0 0 auto;
 }
 .am-app .tree-name {
@@ -263,7 +263,7 @@
   font-size: var(--ui-font-body, 13px);
   line-height: 1;
   padding: 2px 5px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   opacity: 0;
   flex: 0 0 auto;
   transition: opacity var(--dur-fast) var(--ease-apple), background var(--dur-fast);
@@ -307,7 +307,7 @@
   font-family: var(--font-mono);
   background: var(--surface-2);
   padding: 1px 6px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   font-size: 0.9em;
 }
 
@@ -520,7 +520,7 @@
   background: transparent;
   color: var(--text-muted);
   line-height: 1;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-apple), color var(--dur-fast), background var(--dur-fast);
 }
@@ -940,7 +940,7 @@
 }
 .am-app .amx-code-lang {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font: inherit;
@@ -950,7 +950,7 @@
 }
 .am-app .amx-code-btn {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font: inherit;
@@ -1000,7 +1000,7 @@
 /* 块选中(Notion 式):accent 描边 + 淡底,非编辑态。只圈正文(.block-body),
    手柄泳道在其左侧不进框(用户要求「选中框贴正文」)。 */
 .am-app .block-host[data-selected] > .block-body:not(.embed-src-line) {
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: color-mix(in srgb, var(--primary) 14%, transparent); /* 用户:只留淡底纹,不要描边框 */
 }
 /* 空白处框选矩形(fixed,跟视口坐标)。⚠️ 选择器不带 `.am-app`:v4 的块框选(blockLayer)把它挂在 body 上,
@@ -1122,7 +1122,7 @@ body.amx-marquee-active * {
   width: 62%;
   height: 62%;
   object-fit: contain;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
 }
 .am-app .amx-bm-tools {
   position: absolute;
@@ -1136,7 +1136,7 @@ body.amx-marquee-active * {
 }
 .am-app .amx-bm-tool {
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font-size: var(--ui-font-caption, 11px);
@@ -1208,7 +1208,7 @@ body.amx-marquee-active * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   vertical-align: middle;
   user-select: none;
   transition: background 0.12s ease, color 0.12s ease;
@@ -1269,7 +1269,7 @@ body.amx-marquee-active * {
   height: 18px;
   flex: none;
   border: none;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-faint, var(--text-muted));
   font-size: var(--ui-font-body, 13px);
@@ -1756,7 +1756,7 @@ body.amx-marquee-active * {
 .am-app .itb-swatch-bg {
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   border: 1px solid var(--border);
 }
 
@@ -1848,7 +1848,7 @@ body.amx-marquee-active * {
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-muted);
   font-size: var(--ui-font-caption, 11px);
@@ -2312,7 +2312,7 @@ body.amx-marquee-active * {
   font-size: var(--ui-font-caption, 11px);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   padding: 1px 5px;
   color: var(--text-sec);
 }
@@ -2374,7 +2374,7 @@ body.amx-marquee-active * {
   font-size: 0.82em;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   padding: 1px 6px;
   color: var(--text-sec);
 }
@@ -2834,7 +2834,7 @@ body.amx-marquee-active * {
   font-size: 0.86em;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   padding: 0 5px;
 }
 .am-app .plugin-desc {
@@ -2988,7 +2988,7 @@ body.amx-marquee-active * {
   margin: 0 2px;
   padding: 0 4px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.75em;
@@ -3004,7 +3004,7 @@ body.amx-marquee-active * {
   background: var(--surface);
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   padding: 0 4px;
 }
 /* 脚注(R-18,blocks/markdown/footnote.ts):上标显示编号(按首次引用次序,只是装饰;label 才是落盘数据),点 = 跳到定义;
@@ -3130,7 +3130,7 @@ body.amx-marquee-active * {
 }
 .amx-btnblock-cancel, .amx-btnblock-gear {
   border: none; background: transparent; cursor: pointer; font-size: var(--ui-font-meta, 12px);
-  padding: 3px 6px; border-radius: var(--radius-sm, 6px); color: var(--text-muted);
+  padding: 3px 6px; border-radius: var(--radius-sm, 8px); color: var(--text-muted);
 }
 .amx-btnblock-gear { opacity: 0; transition: opacity var(--dur-fast, 180ms) var(--ease-apple, ease); }
 .block-host:hover .amx-btnblock-gear, .block-host[data-selected] .amx-btnblock-gear { opacity: 1; }
@@ -3420,7 +3420,7 @@ body.amx-marquee-active * {
   height: 26px;
   padding: 0 6px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
@@ -3456,7 +3456,7 @@ body.amx-marquee-active * {
   height: 30px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -3474,7 +3474,7 @@ body.amx-marquee-active * {
   height: 28px;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   cursor: pointer;
 }
@@ -3523,7 +3523,7 @@ body.amx-marquee-active * {
   display: block;
   max-width: 100%;
   max-height: 480px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
 }
 
 /* 标题小节折叠(unified,会话内纯装饰,headingFold.ts):隐藏块 + 折叠标题的常驻展开钮。 */
@@ -3537,7 +3537,7 @@ body.amx-marquee-active * {
 .am-app .amx-fold-caret {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; margin-right: 4px; padding: 0;
-  border: none; border-radius: 4px; background: transparent;
+  border: none; border-radius: var(--radius-xs); background: transparent;
   color: var(--text-muted); cursor: pointer; font-size: var(--ui-font-caption, 11px); vertical-align: baseline;
 }
 .am-app .amx-fold-caret:hover { background: var(--surface-2); color: var(--text); }
@@ -3620,7 +3620,7 @@ body.amx-marquee-active * {
   display: none;
   z-index: 3;
   pointer-events: none;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: color-mix(in srgb, var(--primary) 9%, transparent);
   animation: amx-press-in 120ms cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -3686,7 +3686,7 @@ body.amx-marquee-active * {
 .am-app .amx-lightbox img {
   max-width: 100%;
   max-height: 100%;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   box-shadow: var(--card-shadow);
 }
 
@@ -3700,7 +3700,7 @@ body.amx-marquee-active * {
   align-items: center;
   gap: 2px;
   padding: 4px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-elevated, var(--bg));
   border: 1px solid var(--border);
   box-shadow: var(--card-shadow);
@@ -3709,7 +3709,7 @@ body.amx-marquee-active * {
 .am-app .amx-linkcard button {
   padding: 4px 8px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -3753,13 +3753,13 @@ body.amx-marquee-active * {
 .am-app .amx-linkedit label { display: flex; flex-direction: column; gap: 4px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .am-app .amx-linkedit input {
   padding: 6px 8px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
 }
 .am-app .amx-linkedit-row { display: flex; justify-content: flex-end; gap: 8px; }
-.am-app .amx-linkedit-row button { padding: 5px 12px; border-radius: var(--radius-sm, 6px); border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
+.am-app .amx-linkedit-row button { padding: 5px 12px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
 .am-app .amx-linkedit-row button.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary, #fff); }
 .am-app .amx-linkedit-row button:disabled { opacity: 0.5; cursor: not-allowed; }
 
@@ -4153,7 +4153,7 @@ body.amx-marquee-active * {
   justify-content: center;
   padding: 6px 8px;
   border: 1.5px solid var(--text-muted);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   font-size: var(--ui-font-body, 13px);
   line-height: 1.4;
   color: var(--text);
@@ -4193,7 +4193,7 @@ body.amx-marquee-active * {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-sec);
@@ -4283,7 +4283,7 @@ body.amx-marquee-active * {
   height: 24px;
   min-height: 0;
   padding: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   color: var(--text-sec);
 }
 .am-app .amx-canvas-menu .amx-end-row .amx-end-btn[aria-pressed='true'] { background: var(--menu-hover); color: var(--text); }
@@ -4315,7 +4315,7 @@ body.amx-marquee-active * {
   max-width: 100%;
   padding: 1px 8px;
   border: 1px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg);
   color: var(--text-muted);
   font-size: var(--ui-font-meta, 12px);
@@ -4451,7 +4451,7 @@ body.amx-marquee-active * {
   position: absolute;
   transform: translate(-50%, -50%);
   padding: 1px 6px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg);
   border: 1px solid var(--border);
   font-size: var(--ui-font-caption, 11px);
@@ -4590,7 +4590,7 @@ body.amx-marquee-active * {
   color: inherit;
   cursor: pointer;
   padding: 2px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
 }
 .am-app .amx-stage-hud button:hover { background: var(--surface-2); color: var(--text); }
 /* 百分比按钮(V-06):按钮的 UA 字体是 13.33px,不继承就比两侧的 caption 字大一号;等宽数字防跳宽。 */
@@ -4621,7 +4621,7 @@ body.amx-marquee-active * {
   width: 28px;
   height: 26px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-sec);
   cursor: pointer;
@@ -4878,7 +4878,7 @@ body.amx-marquee-active * {
    失败只垫红、不描边(同 Tangu 磁贴)。环 / 条是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示。 */
 /* 自成一行(锚在段尾时也换到段下):传完插在这一块之后,占位先站在那个位置上,完成时不跳 */
 .am-app .amx-upph { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; margin: 6px 0; user-select: none; }
-.am-app .amx-upph-img { position: relative; display: block; max-width: min(100%, 360px); border-radius: var(--radius-md, 10px); overflow: hidden; }
+.am-app .amx-upph-img { position: relative; display: block; max-width: min(100%, 360px); border-radius: var(--radius-md, 12px); overflow: hidden; }
 .am-app .amx-upph-img > img { display: block; max-width: 100%; max-height: 320px; }
 .am-app .amx-upph-veil { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-card) 50%, transparent); }
 .am-app .amx-upph-img > .lcl-upring { position: absolute; inset: 0; margin: auto; }
@@ -4892,7 +4892,7 @@ body.amx-marquee-active * {
 .am-app .amx-upph-status { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
 .am-app .amx-upph-acts { display: inline-flex; gap: 2px; }
 .am-app .amx-upph-act {
-  border: 0; background: none; padding: 0 4px; border-radius: var(--radius-sm, 4px); cursor: pointer;
+  border: 0; background: none; padding: 0 4px; border-radius: var(--radius-sm, 8px); cursor: pointer;
   font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text);
 }
 .am-app .amx-upph-act:hover { background: var(--menu-hover); }
@@ -5033,7 +5033,7 @@ body.amx-marquee-active * {
 .slash-color-glyph[data-fg='accent'] { color: var(--signal); }
 .slash-color-glyph {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 1.3em; height: 1.3em; border-radius: 4px;
+  width: 1.3em; height: 1.3em; border-radius: var(--radius-xs);
   font-weight: 600; line-height: 1; color: var(--text);
   box-shadow: inset 0 0 0 1px var(--border);
 }

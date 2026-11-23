@@ -23,7 +23,7 @@
 .art-card-main:disabled { cursor: default; }
 .art-card-name { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
-.art-badge { padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.art-badge { padding: 1px 6px; border-radius: var(--radius-pill); background: var(--overlay-light); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 
 /* 卡脚:时间 / 徽标 + 「⋯」。⋯ 常显(压暗),hover / 键盘聚焦时拉满 —— 藏到 hover 里触屏就永远摸不到。 */
 .art-card-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; min-width: 0; }

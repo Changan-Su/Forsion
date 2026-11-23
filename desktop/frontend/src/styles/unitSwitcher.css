@@ -96,7 +96,7 @@
 .unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--signal-mark); }
 .unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
 .unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); user-select: text; }
-.unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
+.unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: var(--radius-xs); }
 .unitsw-refresh:hover { background: var(--overlay-light); color: var(--text-muted); }
 
 /* P1-K5 设备凭据存储提示(SecretStorageNotice):降级 / 锁定时挂在「允许其他设备连接本机」之下。只用已有 token。 */
@@ -116,7 +116,7 @@
 .unitsw-paired-head { font-size: var(--ui-font-caption, 11px); color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 0; }
 .unitsw-paired-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .unitsw-paired-name { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.unitsw-paired-x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
+.unitsw-paired-x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: var(--radius-xs); }
 .unitsw-paired-x:hover { background: var(--danger-light); color: var(--danger); }
 
 /* ── 设备远程面(整个主区切过去)──

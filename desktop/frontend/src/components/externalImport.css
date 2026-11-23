@@ -14,10 +14,10 @@
 .imp-row.is-off { opacity: .5; }
 .imp-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: var(--ui-font-body); line-height: 1.45; }
 .imp-copy small { color: var(--text-muted); font-size: var(--ui-font-caption); overflow-wrap: anywhere; }
-.imp-text { all: unset; cursor: text; overflow-wrap: anywhere; border-radius: 4px; }
+.imp-text { all: unset; cursor: text; overflow-wrap: anywhere; border-radius: var(--radius-xs); }
 .imp-text:hover { background: var(--overlay-light); }
 .imp-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.imp-edit { font: inherit; color: inherit; width: 100%; resize: vertical; border: 0; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); padding: 4px 6px; outline: none; }
+.imp-edit { font: inherit; color: inherit; width: 100%; resize: vertical; border: 0; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); padding: 4px 6px; outline: none; }
 .imp-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .imp-chip { font-size: var(--ui-font-caption); color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-pill); padding: 1px 7px; white-space: nowrap; line-height: 1.5; }
 .imp-flag { font-size: var(--ui-font-caption); color: var(--accent-ink); background: var(--accent-light); border-radius: var(--radius-pill); padding: 1px 7px; line-height: 1.5; }

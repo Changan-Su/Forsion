@@ -121,7 +121,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 12px)', padding: 18, width: 'min(680px, 92vw)', maxHeight: '86vh', overflow: 'auto', boxShadow: 'var(--card-shadow)' }}
+        style={{ background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 18, width: 'min(680px, 92vw)', maxHeight: '86vh', overflow: 'auto', boxShadow: 'var(--card-shadow)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <b>{t('settings.agents.memTitle', { name })}</b>
@@ -178,7 +178,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
                   ? (
                     <>
                       {libPreview
-                        ? <img src={libPreview} alt={libSel} style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 'var(--radius-sm, 6px)', display: 'block' }} />
+                        ? <img src={libPreview} alt={libSel} style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 'var(--radius-sm, 8px)', display: 'block' }} />
                         : <div className="hint">{t('settings.agents.libraryBinaryHint')}</div>}
                     </>
                   )

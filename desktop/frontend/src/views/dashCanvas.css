@@ -49,7 +49,7 @@
   min-width: 0; min-height: 0;
   z-index: 1;
   border: var(--border-width, 1px) solid transparent;
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   /* ⚠️ 不能写 overflow:hidden —— 八向把手有一半骑在描边外侧,会被整片剪掉(点不着)。
      内容的溢出由 `.dash2-card-body` 自己管。 */
 }
@@ -91,7 +91,7 @@
   position: absolute; top: 4px; right: 4px; z-index: 2;
   border: none; background: var(--overlay-light, rgba(127, 127, 127, 0.10));
   color: var(--text-faint, var(--text-muted));
-  cursor: pointer; padding: 2px 4px; border-radius: var(--radius-sm, 6px); display: inline-flex;
+  cursor: pointer; padding: 2px 4px; border-radius: var(--radius-sm, 8px); display: inline-flex;
   opacity: 0;
 }
 .dash2-card:hover .dash2-del { opacity: 1; }
@@ -112,7 +112,7 @@
 }
 .dash2-list-card {
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   background: var(--bg-card, var(--bg));
   overflow: hidden;
   min-height: 120px; max-height: 420px;

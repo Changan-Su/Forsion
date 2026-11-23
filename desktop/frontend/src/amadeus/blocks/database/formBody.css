@@ -6,7 +6,7 @@
 .amx-db-form-label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .amx-db-form-req { color: var(--danger, #e5484d); font-weight: 600; }
 .amx-db-form-desc { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
-.amx-db-form-cell { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm, 6px); padding: 2px 6px; min-height: 30px; display: flex; align-items: center; background: var(--surface-1, transparent); }
+.amx-db-form-cell { border: 1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius: var(--radius-sm, 8px); padding: 2px 6px; min-height: 30px; display: flex; align-items: center; background: var(--surface-1, transparent); }
 .amx-db-form-field[data-err] .amx-db-form-cell { border-color: var(--danger, #e5484d); }
 .amx-db-form-err { color: var(--danger, #e5484d); font-size: var(--ui-font-caption, 11px); }
 .amx-db-form-foot { display: flex; align-items: center; gap: 10px; padding-top: 4px; }

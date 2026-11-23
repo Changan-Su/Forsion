@@ -29,7 +29,7 @@
   position: relative;
   display: block;
   overflow: hidden;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--sk-base);
   height: 12px;
   flex: none;
@@ -44,7 +44,7 @@
 }
 @keyframes sk-shimmer { to { transform: translateX(100%); } }
 
-.sk-title { height: 26px; border-radius: var(--radius-sm, 6px); margin-bottom: 8px; }
+.sk-title { height: 26px; border-radius: var(--radius-sm, 8px); margin-bottom: 8px; }
 .sk-thin { height: 9px; }
 .sk-gap { height: 10px; flex: none; }
 .sk-dot { width: 26px; height: 26px; border-radius: 50%; }
@@ -89,7 +89,7 @@
   min-height: 35px;
   padding: 8px 13px;
   box-sizing: border-box;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   border: var(--border-width, 1px) solid var(--overlay-strong, #ddd);
   background: transparent;
   color: var(--text, #333);
@@ -108,7 +108,7 @@
   max-height: calc(12 * 1.5em);
   overflow: auto;
   padding: 8px 10px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--overlay-light, rgba(0, 0, 0, 0.04));
   color: var(--text-muted, #666);
   font-family: var(--font-mono, ui-monospace, monospace);

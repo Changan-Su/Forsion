@@ -119,7 +119,7 @@ export const PluginsTab: React.FC<{
           {rescanning ? t('settings.plugins.rescanning') : t('settings.plugins.rescan')}
         </button>
       </div>
-      <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
@@ -147,7 +147,7 @@ export const PluginsTab: React.FC<{
         : !shown.length
           ? <div className="hint">{t('settings.plugins.empty')}</div>
           : shown.map((p) => (
-        <div key={p.id} data-engine-plugin={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12 }}>
+        <div key={p.id} data-engine-plugin={p.id} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <PluginLogo url={p.iconUrl} />
             <div style={{ flex: 1, minWidth: 0 }}>

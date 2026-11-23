@@ -9,7 +9,7 @@
 .project-profile .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
 .project-profile .agent-section-nav button { flex: 1 1 0; flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
 /* 分支是状态行里的一枚芯片:换行时自成一段,不靠前面的「·」分隔。 */
-.project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 1px 7px; border-radius: 999px; background: var(--overlay-medium); }
+.project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--overlay-medium); }
 .project-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-section { display: grid; gap: 10px; padding-top: 16px; }
 .project-card { display: grid; gap: 10px; padding: 12px; background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
@@ -22,7 +22,7 @@
 .project-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .project-card-actions .btn { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; }
 .project-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.project-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.project-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: var(--radius-pill); background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
 .project-chip.ok { color: var(--accent-ink); }
 .project-chip.warn { color: var(--danger); }
 .project-list { display: grid; gap: 2px; }
@@ -74,7 +74,7 @@
 .project-executor .team-member-open > strong { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; min-width: 0; }
 .project-executor .team-member-open > strong > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-executor-tags { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-.project-executor-tag { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
+.project-executor-tag { flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-pill); background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
 .project-executor-tag.is-text { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 行内动作(执行者卡的两个动作 / Git 卡的四个动作):无边框小字按钮,窄栏里换行也不显重。 */
 .project-inline-actions { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; padding-top: 6px; }

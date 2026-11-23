@@ -37,7 +37,7 @@
 .am-app .git-add-remote-bad { color: var(--danger); font-size: var(--ui-font-caption, 11px); }
 .am-app .git-add-remote-target { position: relative; display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: start; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .am-app .git-add-remote-target input { position: absolute; opacity: 0; pointer-events: none; }
-.am-app .git-add-remote-box { width: 14px; height: 14px; margin-top: 2px; border-radius: 4px; display: grid; place-items: center; box-shadow: inset 0 0 0 1.5px var(--overlay-strong); color: var(--on-accent, #fff); }
+.am-app .git-add-remote-box { width: 14px; height: 14px; margin-top: 2px; border-radius: var(--radius-xs); display: grid; place-items: center; box-shadow: inset 0 0 0 1.5px var(--overlay-strong); color: var(--on-accent, #fff); }
 .am-app .git-add-remote-target input:checked + .git-add-remote-box { background: var(--accent); box-shadow: none; }
 .am-app .git-add-remote-target input:focus-visible + .git-add-remote-box { outline: 2px solid var(--accent); outline-offset: 2px; }
 .am-app .git-add-remote-target strong { display: block; font-weight: 500; }

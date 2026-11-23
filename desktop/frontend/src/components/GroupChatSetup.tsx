@@ -167,7 +167,7 @@ export const GroupChatSetup: React.FC<{
                     const on = selectedSaved.includes(a.slug)
                     return (
                       <button key={a.slug} onClick={() => toggleSaved(a.slug)} style={{
-                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)',
+                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius-sm, 8px)',
                         border: `1px solid ${on ? 'var(--accent-ink)' : 'var(--border)'}`,
                         background: on ? 'var(--accent-soft)' : 'transparent', color: 'inherit', cursor: 'pointer',
                       }}>
@@ -190,7 +190,7 @@ export const GroupChatSetup: React.FC<{
             {tempAgents.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
                 {tempAgents.map((a) => (
-                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
+                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 8px)', border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
                     <UserPlus size={14} style={{ flexShrink: 0, opacity: 0.8 }} />
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{agentName(a)}</span>
