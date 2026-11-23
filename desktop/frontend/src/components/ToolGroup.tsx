@@ -216,14 +216,16 @@ export function stepOutcomes(events: readonly ToolEvent[], running: boolean): St
   // 断在半截的占位只在这条回答已不在跑时算(与 ToolRow 同一口径):接上在跑的 run 时它会被回放的真事件换掉
   const cut = (e: ToolEvent): boolean => !running && !!inflightOf(e)
   const madeIt = (e: ToolEvent): boolean => e.done && !e.isError && !e.parked && !cut(e)
-  const keys = events.map(retryTarget)
+  // 参数只在真有待判的失败时才解析(多数组没有失败)
+  const keys: Array<string | undefined> = []
+  const keyAt = (i: number): string => (keys[i] ??= retryTarget(events[i]))
   return events.map((e, i) => {
     if (cut(e)) return 'cut'
     if (!e.done || !e.isError) return 'ok'
     if (isSteerDiscarded(e)) return 'skipped'
     if (isUserRejectedToolResult(e.result)) return 'rejected'
     for (let j = i + 1; j < events.length; j++) {
-      if (events[j].name === e.name && keys[j] === keys[i] && madeIt(events[j])) return 'retried'
+      if (events[j].name === e.name && madeIt(events[j]) && keyAt(j) === keyAt(i)) return 'retried'
     }
     return 'failed'
   })

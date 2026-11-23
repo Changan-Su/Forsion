@@ -168,7 +168,7 @@ registerMessages({
   'tool.sum.searched': { zh: '搜索 {n} 次', en: 'Searched {n}×' },
   'tool.sum.browsed': { zh: '浏览 {n} 次', en: 'Browsed {n}×' },
   // 归不进上面几类的调用(todo_write 这类):「另 N 步」;整组只有这一类时 ToolGroup 改用 tool.sumN(「N 步」)
-  'tool.sum.other': { zh: '另 {n} 步', en: '{n} more steps' },
+  'tool.sum.other': { zh: '另 {n} 步', en: '{n} more step(s)' },
   'settings.agents.selfAuthored': { zh: '自建', en: 'Self-authored' },
   'settings.agents.sharedSkill': { zh: '共享', en: 'Shared' },
   'special.action.title_updated': { zh: '更新标题', en: 'title updated' },
