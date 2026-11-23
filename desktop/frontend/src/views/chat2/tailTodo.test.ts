@@ -77,3 +77,16 @@ describe('recordToUi rebuilds the list from todo_write', () => {
     expect(m.todos).toEqual(list('completed', 'completed'))
   })
 })
+
+describe('continuation rows do not start a new turn', () => {
+  const machine = (id: string, content: string): UiMessage => ({ id, role: 'user', content, status: 'done', timestamp: 0 })
+  it('an unfinished list keeps following through an approval-update continuation run', () => {
+    const msgs = [u('u1'), a('a1', { todos: list('completed', 'in_progress') }), machine('m', '<approval_update>\nok'), a('a2', { status: 'streaming' })]
+    expect(tailTodoOf(msgs, true)?.id).toBe('a1')
+    expect(summarizeTask(msgs, true).todos).toHaveLength(2)
+  })
+  it('a finished list still stays home during a continuation run', () => {
+    const msgs = [u('u1'), a('a1', { todos: list('completed', 'completed') }), machine('m', '<inquiry_update>\nx'), a('a2', { status: 'streaming' })]
+    expect(tailTodoOf(msgs, true)).toBeNull()
+  })
+})
