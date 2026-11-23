@@ -109,10 +109,30 @@ describe('importConversations on Postgres with the chat_messages → chat_sessio
   });
 
   it('concurrent imports of the same conversation: one creates it, the other reports exists, no duplicate rows', async () => {
-    const [[a], [b]] = await Promise.all([importConversations(req([conv('race')])), importConversations(req([conv('race')]))]);
+    // 两份内容不同(消息 id 不同):输的那一份若还往里写,会多出两条 —— 相同输入会被消息表的 DO NOTHING 吞掉、测不出来
+    const other = { ...conv('race'), messages: conv('race').messages.map((m) => ({ ...m, content: `${m.content}-other` })) };
+    const [[a], [b]] = await Promise.all([importConversations(req([conv('race')])), importConversations(req([other]))]);
     expect([a.status, b.status].sort()).toEqual(['created', 'exists']);
     expect(await count('chat_sessions')).toBe(1);
-    expect(await count('chat_messages')).toBe(2);
+    const contents = (await db.query<any>('SELECT content FROM chat_messages ORDER BY timestamp')).rows.map((r) => r.content);
+    expect(contents).toEqual(a.status === 'created' ? ['m0', 'm1'] : ['m0-other', 'm1-other']);
+  });
+
+  it('orphan leftovers from an earlier non-transactional run survive a failed retry with different content', async () => {
+    // 老宿主(没有事务、表上也没外键)留下的半截导入:在这里用一张无外键的临时消息形状模拟 —— 先关外键检查插孤儿行
+    const sid = importedSessionId('u1', 'tangu', 'deepseek', 'orphan');
+    await db.exec(`SET session_replication_role = replica`);
+    await db.query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, origin) VALUES ('left-1', $1, 'user', 'old', 1, 'import')`, [sid]);
+    await db.exec(`SET session_replication_role = DEFAULT`);
+    failMessagesAt = 0; // 新内容的第一块就失败
+    const [r] = await importConversations(req([conv('orphan')]));
+    expect(r.status).toBe('error');
+    expect(await count('chat_messages')).toBe(1); // 清残留与失败的写同一事务,一起回滚
+    failMessagesAt = -1;
+    const [ok] = await importConversations(req([conv('orphan')]));
+    expect(ok).toMatchObject({ status: 'created', messages: 2 });
+    const rows = (await db.query<any>('SELECT id, content FROM chat_messages WHERE session_id = $1 ORDER BY timestamp', [sid])).rows;
+    expect(rows.map((x) => x.content)).toEqual(['m0', 'm1']); // 换了内容的残留被清掉,没混进来
   });
 
   it('the same external id from another user lands in a separate session', async () => {

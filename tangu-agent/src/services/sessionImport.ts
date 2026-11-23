@@ -170,16 +170,17 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
       // 会话行还没建 = 只有之前断掉的导入留下的残留(谁也看不见、没人能往里写):换了内容的那批先清掉,别混进这一份。
       // 同一份内容的残留 id 一样,不删,下面 DO NOTHING 直接复用。会话行一旦存在就绝不删(上面已按 exists 返回)。
       // 残留按块从第 0 条写起:第 0 条的 id 对得上 = 同一份内容的残留(DO NOTHING 复用);对不上 = 换过内容,整批清掉。
-      const leftovers = await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? LIMIT 1`, [sessionId]);
-      if (leftovers[0]) {
-        const same = await query<any[]>(`SELECT 1 FROM chat_messages WHERE id = ? LIMIT 1`, [importedMessageId(sessionId, 0, fp)]);
-        if (!same[0]) {
-          await query(
-            `DELETE FROM chat_messages WHERE session_id = ? AND origin = 'import' AND NOT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)`,
-            [sessionId, sessionId],
-          );
-        }
-      }
+      // (有宿主事务时放进事务里做:清掉了、后面又失败,回滚把残留一并还原,不会因一次失败的重试丢掉上回写进去的那批。)
+      const clearStaleLeftovers = async (run: TxQuery) => {
+        const leftovers = await run<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? LIMIT 1`, [sessionId]);
+        if (!leftovers[0]) return;
+        const same = await run<any[]>(`SELECT 1 FROM chat_messages WHERE id = ? LIMIT 1`, [importedMessageId(sessionId, 0, fp)]);
+        if (same[0]) return;
+        await run(
+          `DELETE FROM chat_messages WHERE session_id = ? AND origin = 'import' AND NOT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)`,
+          [sessionId, sessionId],
+        );
+      };
       const sessionSql = `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?) ON CONFLICT (id) DO NOTHING`;
       const sessionParams = [sessionId, req.userId, req.appId, title, true, req.modelId, JSON.stringify(cfg), req.projectless,
@@ -190,6 +191,7 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
         // 同一个事务里先建会话行、再写消息:提交之前别人看不见这条会话,失败整段回滚 —— 与下面逐条写的「写一半谁也看不见」同一个不变量。
         // 会话行没插进去 = 这期间别人(同一次导入的并发请求)建了它:不往里写消息,按 exists / 撞号回报。
         const created = await tx(async (q) => {
+          await clearStaleLeftovers(q); // 先于建会话行:它的 NOT EXISTS 闸认的就是「会话行还没建」
           const inserted = await q<any[]>(`${sessionSql} RETURNING id`, sessionParams);
           if (!inserted?.[0]) return false;
           await insertMessages(q, sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
@@ -197,12 +199,16 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
         });
         if (!created) {
           const owner = await query<any[]>(`SELECT user_id FROM chat_sessions WHERE id = ? LIMIT 1`, [sessionId]);
-          results.push(owner[0]?.user_id === req.userId
-            ? { external_id: c.external_id, status: 'exists', session_id: sessionId }
-            : { external_id: c.external_id, status: 'error', error: 'id collision' });
+          // 回查时已经没了 = 并发建它的那一份刚被删掉:既不是 exists 也不是撞号,让调用方重试。
+          results.push(!owner[0]
+            ? { external_id: c.external_id, status: 'error', error: 'session changed during import, retry' }
+            : owner[0].user_id === req.userId
+              ? { external_id: c.external_id, status: 'exists', session_id: sessionId }
+              : { external_id: c.external_id, status: 'error', error: 'id collision' });
           continue;
         }
       } else {
+        await clearStaleLeftovers(query);
         await insertMessages(query, sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
         await query(sessionSql, sessionParams);
       }
