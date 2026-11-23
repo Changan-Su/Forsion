@@ -14,7 +14,7 @@ import { splitSuggestions, type CreationCard, type TaskCard } from './suggest'
 import { humanAcked, humanChanges, type HumanChange } from '../../services/humanCollaboration'
 import { getSessionCardMarks, postSessionCardMarks } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
-import type { EngineTarget } from '../../services/engine/target'
+type EngineTarget = ReturnType<typeof targetForSession>
 
 /** 任务卡落点:开个子会话 / 在这里做 / 新会话执行(收件箱,没有当前会话)/ 交给 Muse / 忽略(spawn_task 的 worktree、云端两档刻意不搬)。 */
 export type TaskLanding = 'child' | 'here' | 'new' | 'muse' | 'ignore'
