@@ -66,6 +66,42 @@ function copiedParams(type: string, params: Record<string, unknown>): Record<str
   try { return copy({ ...params }) } catch { return params }
 }
 
+/** 这个 View 能不能再开一份到旁边(拆分)/ 新窗口 —— 标签右键菜单与 Desk ⋯ 共用这一套条件(11-23 Desk 标签栏互通)。
+ *  单例视图只有声明了 copyParams(知道怎样做出一份不同的副本,如对话钉住会话)才给拆分,否则拆出来的是第二个「唯一」实例;
+ *  没注册的(占位)不给新窗口:对面窗口开不出它(Codex 3a 评审)。没有 OS 窗口的宿主(web)没有新窗口。 */
+export function viewCopyable(type: string): { split: boolean; window: boolean } {
+  const def = getView(type)
+  return { split: !!def && (def.singleton !== true || !!def.copyParams), window: !!def && !!getDetachApi() }
+}
+
+/** 在某个主区标签所在的组旁边(右 / 下)拆出一组,开这个 View(Desk ⋯ 的「向右 / 向下拆分」)。参照组 = 那个标签的组,
+ *  不是聚焦组;新组各半,同标签右键拆分。走法同跨窗落子(acceptCrossWindowDrop):先在那组开一个新标签,再落到它的右 / 下半边。
+ *  拆完那组的前台还是原来那个标签(对话不被新标签盖住),焦点给新开的。开不出来 / 那个标签不在主区回 false。 */
+export function openViewSplit(view: ViewRef, besideLeafId: string, dir: 'right' | 'down'): boolean {
+  const ws = useWorkspace.getState()
+  const group = ws.api?.getPanel(besideLeafId)?.group
+  if (!group || locOf(group) !== 'main' || !viewCopyable(view.type).split) return false
+  const leaf = ws.openView(view.type, view.params ?? {}, 'main', { newTab: true, groupId: group.id })
+  if (!leaf) return false
+  ws.dropView(leaf.id, { mode: 'split', group, dir: dir === 'right' ? 'right' : 'bottom', rect: { left: 0, top: 0, width: 0, height: 0 } })
+  ws.activateLeaf(besideLeafId)
+  ws.activateLeaf(leaf.id)
+  return true
+}
+
+/** 再开一份这个 View 时带的描述(拆分 / 新窗口 / 拖出窗外):经它声明的 copyParams 钉住此刻看着的东西,同标签右键;
+ *  做不出不同的副本(copyParams 回 null)就是 null。 */
+export function copyOfView(view: ViewRef): ViewRef | null {
+  const params = copiedParams(view.type, { ...(view.params ?? {}) })
+  return params ? { type: view.type, params } : null
+}
+
+/** 落点即开的拖拽被里层落区接走了(停了冒泡,onListDrop 收不到):收尾,同 drop / dragend 里那一次。重复调用无害。 */
+export function endOpenDrag(): void { clearDragState() }
+
+/** 指针移到不归 LCL 管的落区(停了冒泡)时撤掉落点线 / 半屏高亮,不然上一处的提示会留在那里(Codex 评审)。 */
+export function hideDropCue(): void { hideIndicator() }
+
 /** 引擎占位视图:不是内容,不给右键菜单、不能拆分 / 搬走。 */
 const PLACEHOLDER_TABS = new Set(['home', 'sidebar-empty'])
 const tabTypeOf = (p: { params?: unknown; api: unknown }): string =>
@@ -219,9 +255,10 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
     if (move) releaseLeaf(api.id)
   }
   // 单例视图只有声明了 copyParams(知道怎样做出一份不同的副本,如对话钉住会话)才给拆分;否则拆出来的是第二个「唯一」实例。
-  const canSplit = !!def && (def.singleton !== true || !!def.copyParams)
+  const can = viewCopyable(type)
+  const canSplit = can.split
   const copy = menu?.copy ?? null
-  const canWindow = !!def && !!getDetachApi() // 占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)
+  const canWindow = can.window // 占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)
   const tabRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!menu) return
@@ -374,7 +411,9 @@ let draggingView: ViewRef | null = null // 跨窗撕拽:源视图的可重建描
 //    只落主区。条目本来就是别的落区的拖源(拖进聊天 = 插引用、树里拖 = 移动、拖进编辑器 = 插文字),所以它走冒泡阶段,
 //    里层落区接了(preventDefault)就让给它。
 // 与 draggingId(搬面板)互斥;同一套 dragover 提示 + computeDropTarget 落点。
-type OpenDrag = { type: string; params?: Record<string, unknown> } | { open(): void }
+//  · 列表条目可以再带一份可重建的视图(view,目前只有 Desk 的名字胶囊):拖出窗外 = 在新窗口打开(或落进光标下的另一扇窗),同拖标签;
+//    源不动(Desk 那格留着,11-23 用户定)。不带 view 的(文件面板、会话行)拖出窗外照旧什么都不发生。
+type OpenDrag = { type: string; params?: Record<string, unknown> } | { open(): void; view?: ViewRef }
 let draggingOpen: OpenDrag | null = null
 // 拖拽载荷里带上这个类型才认 draggingOpen:源元素拖到一半被卸掉(dragend 到不了 window)时,残留的 draggingOpen
 // 不能被下一次无关的拖入(系统文件、别的 app 的文字)借走。
@@ -453,8 +492,14 @@ function clearDragState(): void {
 /** 新建标签页视图卡片发起「落点即开」拖拽:记下要开的视图 + 抑制 tab 栏窗拖区(同 onTabDragStart,否则
  *  macOS 下 tab 栏吞掉 dragover/drop)。落点由全局 drop 监听经 computeDropTarget 决定(见 onDrop)。 */
 export function startOpenDrag(dt: DataTransfer | null, spec: OpenDrag): void {
+  if (draggingView) getDetachApi()?.trackDrag?.(null) // 上一次带视图的拖拽没收尾:主进程那边的跟踪也撤掉(Codex 评审)
   draggingId = null; draggingView = null // 上一次的 dragend 没到(源被卸掉)时的残留,不跟着这一次走
   draggingOpen = spec
+  // 带了视图的列表条目:同 onTabDragStart,先让主进程跟上光标 —— window:dropView 只认 trackDrag 报过的那次拖拽
+  if ('open' in spec && spec.view && getView(spec.view.type)) {
+    draggingView = spec.view
+    getDetachApi()?.trackDrag?.(spec.view.type)
+  }
   if (dt) {
     if (!('open' in spec)) dt.effectAllowed = 'copy' // 列表条目的 effectAllowed 归它自己(树里拖要 move)
     try { dt.setData(OPEN_MIME, 'open' in spec ? 'item' : spec.type) } catch { /* ignore */ }
@@ -675,6 +720,12 @@ export const WorkspaceHost: React.FC<{
         void d.drop(view).then((routed) => {
           if (routed && api?.getPanel(id)?.params === params) releaseLeaf(id)
         }).catch(() => {})
+      }
+      // 带视图的列表条目(Desk 名字胶囊)拖出窗外:开成新窗口 / 落进光标下的另一扇窗,源不关。dropEffect 不是 none =
+      // 被别的程序接走了(它带着引用载荷,拖进 Finder、编辑器能被接住),那就不再开窗。窗里松手的早在 onListDrop 收尾、view 已清。
+      // isListDrag:只认带着落点即开载荷的这一次 —— 源卸掉、dragend 没到留下的残留,不能被下一次无关拖拽带出窗外(Codex 评审)
+      else if (!id && view && isListDrag(e) && d?.drop && outside && (e.dataTransfer?.dropEffect ?? 'none') === 'none' && getView(view.type)) {
+        void d.drop(view).catch(() => {})
       }
       clearDragState()
     }
