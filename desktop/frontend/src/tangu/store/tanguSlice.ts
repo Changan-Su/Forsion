@@ -1414,7 +1414,7 @@ export interface TanguState {
   deskAct(sessionId: string, action: DeskAction): void
   /** Human Desk 动作:放上来(顺带把右边切到 Human Desk)/ 拿掉 / 停止 / 继续看(纯决策在 humanDeskPlan.humanDeskReduce,立刻落盘);
    *  section = 展开态算出的「你在第几节」(内存)。 */
-  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] }): void
+  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] } | { type: 'agentNews' }): void
   /** 右边展开哪一块(两块共用、一次一块):'agent' / 'human' / null = 都收起。切走 Human Desk 满一分钟自动暂停在看。 */
   setDeskSide(sessionId: string, side: DeskSide): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
@@ -3391,6 +3391,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     else if ('mode' in patch) armHumanPause(sessionId)
   },
   humanDeskAct: (sessionId, action) => {
+    if (action.type === 'agentNews') { humanSeesAgentNews(sessionId); return } // 插件结果卡片那条落点(PluginToolCard)
     if (action.type === 'section') {
       const h = get().humanDeskBySession[sessionId]
       if (!h || JSON.stringify(h.section ?? null) === JSON.stringify(action.section ?? null)) return

@@ -778,7 +778,7 @@
 /* 进出场:整卡作为一个视觉层统一缩放+位移+渐隐,不做逐项 stagger。
  * display 挂 allow-discrete 才有**离场**动画(否则收起是硬切);进场靠 @starting-style 起手。
  * 用独立的 scale/translate 属性而非 transform:两者能各自过渡,也不会互相覆盖。 */
-.t2-tsum, .agent-desk-card {
+.t2-tsum, .agent-desk-card, .human-desk-card {
   opacity: 0;
   scale: 0.8;
   translate: 100% 0;
@@ -790,7 +790,7 @@
     display 0.3s allow-discrete;
 }
 /* 8.9:挂上 / 换会话后用户还没动过(data-still)、或主区 DOM 刚被 dockview 搬家(data-moved,⌘J 开底栏)→ 栈与 Desk 卡直接到位,不重放进场 */
-.t2-tsum:is([data-still], [data-moved]), .t2-tsum:is([data-still], [data-moved]) > .agent-desk-card { transition: none; }
+.t2-tsum:is([data-still], [data-moved]), .t2-tsum:is([data-still], [data-moved]) > :is(.agent-desk-card, .human-desk-card) { transition: none; }
 /* 开合按会话存(summaryOpen.ts):换会话时同一张内置卡的 open 会跟着变,刚换过来那一下也直接到位,不播展开 / 收起和封顶过渡 */
 .t2-tsum:is([data-still], [data-moved]) > .t2-card::details-content,
 .t2-tsum:is([data-still], [data-moved]) .t2-card-body { transition: none; }
@@ -805,10 +805,10 @@
 }
 @container (min-width: 760px) {
   /* .show = Desk 之外有卡在场;只有 Desk 时看它在不在演(.gone = 展开侧板期间卡片隐身) */
-  .t2-tsum.show, .t2-tsum:has(> .agent-desk-card:not(.gone)) { display: flex; }
-  .t2-tsum.show, .t2-tsum:has(> .agent-desk-card:not(.gone)), .agent-desk-card { opacity: 1; scale: 1; translate: none; }
+  .t2-tsum.show, .t2-tsum:has(> :is(.agent-desk-card, .human-desk-card):not(.gone)) { display: flex; }
+  .t2-tsum.show, .t2-tsum:has(> :is(.agent-desk-card, .human-desk-card):not(.gone)), .agent-desk-card, .human-desk-card { opacity: 1; scale: 1; translate: none; }
   @starting-style {
-    .t2-tsum.show, .t2-tsum:has(> .agent-desk-card:not(.gone)), .agent-desk-card { opacity: 0; scale: 0.8; translate: 100% 0; }
+    .t2-tsum.show, .t2-tsum:has(> :is(.agent-desk-card, .human-desk-card):not(.gone)), .agent-desk-card, .human-desk-card { opacity: 0; scale: 0.8; translate: 100% 0; }
   }
   /* 原来两卡高度固定 50/50(用户定稿)、Desk 卡钉在下半;2026-10-25 用户改为卡片栈:
    * 大窗口下 Desk 被拉得很长不好看 → 每张卡 hug 内容,列表卡正文封顶 240、Desk 展开固定 380。 */
@@ -849,21 +849,21 @@
     transition-duration: 0.45s, var(--duration-fast, 0.15s), var(--duration-fast, 0.15s);
   }
   /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文 */
-  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-stream { padding-right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .composer-anchor { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone), .human-desk-card:not(.gone))) .t2-stream { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone), .human-desk-card:not(.gone))) .composer-anchor { padding-right: var(--tsum-w); }
   /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
-  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone), .human-desk-card:not(.gone))) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone), .human-desk-card:not(.gone))) .t2-jump { right: calc(var(--tsum-w) + 22px); }
   /* toast 落点跟输入卡同一条中线(走查续六 6.5) */
-  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-toast-dock { right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone), .human-desk-card:not(.gone))) .t2-toast-dock { right: var(--tsum-w); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
 @container (max-width: 759.9px) {
   .t2-tsum, .t2-tsum > .t2-card { pointer-events: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .t2-tsum, .agent-desk-card, .t2-jump, .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty { transition: none; }
-  .t2-tsum, .agent-desk-card { scale: 1; translate: none; }
+  .t2-tsum, .agent-desk-card, .human-desk-card, .t2-jump, .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty { transition: none; }
+  .t2-tsum, .agent-desk-card, .human-desk-card { scale: 1; translate: none; }
 }
 /* 一张卡(原生 <details>):hug 内容的浮卡,对齐 Codex / Claude 右侧那种贴边小卡。 */
 .t2-card {
@@ -937,8 +937,8 @@
 .t2-card-body:empty { display: none; }
 /* 子元素不被 flex 压扁:限长给正文加封顶(bodyCap)时,scrollHeight 得照旧报自然高度,否则量出来变矮 → 撤封顶 → 又变高,来回翻
  * (插件根自带 overflow:auto 时最容易压扁)。Desk 的正文是固定 380 的预览框,不参与限长,不管。 */
-.t2-card:not(.agent-desk-card) > .t2-card-body > * { flex-shrink: 0; }
-.t2-card:not(.agent-desk-card):has(> .t2-card-body:empty) .t2-tsum-chev { visibility: hidden; }
+.t2-card:not(.agent-desk-card):not(.human-desk-card) > .t2-card-body > * { flex-shrink: 0; }
+.t2-card:not(.agent-desk-card):not(.human-desk-card):has(> .t2-card-body:empty) .t2-tsum-chev { visibility: hidden; }
 /* 展开/收起动画:::details-content 是 <details> 内容区的 UA 伪元素,高度从 0 过渡到 auto 靠上面的 interpolate-size;
    content-visibility 得 allow-discrete 才会等动画跑完再切,否则收起是硬闪。 */
 .t2-card::details-content {
@@ -1065,7 +1065,7 @@
 @starting-style { .agent-desk.open { flex-basis: 0%; } }
 .agent-desk.no-anim { transition: none; }
 /* 展开侧板期间卡片隐身但常驻:借既有 scale/translate/display allow-discrete 机关做进出动画 */
-.agent-desk-card.gone { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
+.agent-desk-card.gone, .human-desk-card.gone { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
 @media (prefers-reduced-motion: reduce) { .agent-desk { transition: none; } }
 .agent-desk-grip { flex: 0 0 6px; margin-left: -3px; cursor: col-resize; z-index: 3; border-radius: 3px; }
 .agent-desk-grip:hover, .agent-desk-grip:active { background: var(--accent-ink); opacity: 0.3; }
@@ -1308,7 +1308,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
  * 刻意**没动**:.tool-card.err(报错红圈)、.approval-card/.inquiry-card(等你拍板的动作卡,
  * 不是被动折叠块)、.thinking-block 左侧那条 2px 竖条(引用条,不是轮廓)。
  * 过程行(.tool-group)10-17 起本来就不垫底不描边,这里留着只为别的主题里那圈边也收掉。 */
-.t2-tool, .t2-todo, .t2-panelcard, .t2-card, .agent-desk-card,
+.t2-tool, .t2-todo, .t2-panelcard, .t2-card, .agent-desk-card, .human-desk-card,
 .t2-chat-col .tool-card:not(.err), .t2-chat-col .tool-group { border-color: transparent; }
 
 /* 搜索命中 / 引用磁贴跳回原文:闪两下,第二下更淡(10-23 借鉴 Comma,1.1s;原来 1.6s 闪一下) */
@@ -1937,7 +1937,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv[data-switch="exit"] .t2cv-turn:not([data-anchor]), .t2cv[data-switch="exit"] .t2cv-edges, .t2cv[data-switch="exit"] .amx-stage-hud,
 .t2cv[data-switch="exit"] .amx-stage-minimap, .t2cv[data-switch="exit"] .t2cv-hints, .t2cv[data-switch="exit"] .t2cv-read { animation: t2cv-out var(--canvas-switch-fade) ease-in both; }
 /* 右边车道:刚切到画布那一下卡片收起(走它们自己的离场过渡:缩小 + 往右),收完 ChatView 再卸掉它 */
-.t2-rail[data-off] .t2-tsum, .t2-rail[data-off] .agent-desk-card { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
+.t2-rail[data-off] .t2-tsum, .t2-rail[data-off] .agent-desk-card, .t2-rail[data-off] .human-desk-card { display: none; opacity: 0; scale: 0.8; translate: 100% 0; }
 /* 额度用完接力 / 服务端停用模型:回答前面那一行「改用了」(QuotaRelay.tsx) */
 .t2-fallback-line { display: flex; align-items: center; justify-content: center; gap: 6px; }
 .t2-fallback-line > span { color: var(--text-muted); }
@@ -2066,3 +2066,97 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 /* 带原因的中断行(<turn_interrupted>[reason],中断任务续跑方案 B):细线下面那排「继续生成 / 重试」跟着线居中。
    .t2-retry-row 本身是给回答气泡用的(左对齐、左边距 -8px),这里 (0,2,0) 抬过它,不靠源码顺序。 */
 .t2-retry-row.t2-interrupted-actions { justify-content: center; margin: 2px 0 0; }
+
+/* ====== Human Desk(11-23 第三轮:两张卡各自独立、右边一次只展开一块;HumanDesk.tsx)—— 留在文件最末 ======
+ * 卡片态复用 Agent Desk 卡的那套(栈里的进出场、.gone、让位都在上面并进了 .human-desk-card);展开态复用 .agent-desk-pane.has-caps
+ * (胶囊让位、拖入染色),只是装在 .human-desk-body 里(desk_screenshot 按 .agent-desk-body 认 Agent Desk,别混)。
+ * 胶囊之外不另造颜色:「你」= 对话里的用户头像缩小,点 = 方案 A 那颗 --accent-ink。 */
+.hd-you {
+  width: 16px; height: 16px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center; overflow: hidden;
+  font-family: var(--font-ui, sans-serif); font-weight: 600; font-size: var(--ui-font-caption, 11px); line-height: 1; color: var(--text-light, var(--text));
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent); user-select: none;
+}
+.hd-you > img { width: 100%; height: 100%; object-fit: cover; }
+.human-desk-eye { display: inline-flex; align-items: center; flex: none; color: var(--text-muted); }
+
+/* 卡片态:卡头「你」+ Human Desk + 名字 ▾ + 小眼睛 + 停止 + 展开;正文 = 「你在第几节」一行 + 小预览(同 Agent Desk 卡 0.75 缩镜) */
+.human-desk-card .t2-card-title > .human-desk-card-name { flex-shrink: 0; }
+.human-desk-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.human-desk-card-pickwrap { display: inline-flex; min-width: 0; }
+.human-desk-card-pick {
+  display: inline-flex; align-items: center; gap: 2px; min-width: 0; height: 20px; padding: 0 4px; margin: 0 0 0 -4px;
+  border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.human-desk-card-pick:hover, .human-desk-card-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+.human-desk-addwrap { display: inline-flex; }
+.human-desk-card-frame {
+  height: 380px; max-height: none; margin: 8px -14px -12px; gap: 0; display: flex; flex-direction: column;
+  overflow: hidden; mask-image: none; animation: none;
+  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 20px)) var(--t2-card-r, var(--radius-chat-surface, 20px));
+}
+.human-desk-card-frame.act { cursor: zoom-in; }
+.human-desk-card:has(> .human-desk-card-frame.act:hover) { border-color: color-mix(in srgb, var(--accent-ink) 45%, var(--border)); }
+.human-desk-where {
+  flex: none; display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 14px 8px;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap;
+}
+.human-desk-where > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.human-desk-card.empty .human-desk-card-frame { height: 120px; }
+.human-desk-card-body {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+  pointer-events: none; zoom: 0.75; /* 同 .agent-desk-card-body:预览缩镜,正文不可交互 */
+  border-top: var(--border-width, 1px) solid var(--border);
+}
+.human-desk-card-body > .agent-desk-pane { flex: 1 1 0; }
+.human-desk-card-body .wsfile-head, .human-desk-card-body .amx-toolbar { display: none; }
+.human-desk-card-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 16px;
+  color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); text-align: center;
+  border-top: var(--border-width, 1px) solid var(--border);
+}
+/* 拖文件到卡上:描边换主题色 + 原地淡入一层 5%(同聊天区拖入的画法,不画虚线框) */
+.human-desk-card::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: color-mix(in srgb, var(--signal) 5%, transparent);
+  opacity: 0; transition: opacity var(--lcl-drop-fade, 130ms ease);
+}
+.human-desk-card[data-drop] { border-color: var(--accent-ink); }
+.human-desk-card[data-drop]::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .human-desk-card::after { transition: none; } }
+
+/* 展开态:一块占满,只放一样东西 */
+.human-desk-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.desk-caps-left { display: flex; align-items: flex-start; gap: 6px; min-width: 0; flex: 0 1 auto; pointer-events: none; }
+.desk-caps-left > .desk-cap { pointer-events: auto; }
+.desk-cap.human-desk-name { gap: 0; padding-left: 6px; }
+.desk-cap.human-desk-name > .human-desk-eye { padding: 0 8px 0 2px; }
+.human-desk-empty {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  padding: 0 24px; text-align: center; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body, 13px);
+}
+.human-desk-empty-tx { color: var(--text-muted); font-weight: 500; }
+.human-desk-empty .icon-btn.human-desk-plus {
+  width: 34px; height: 34px; border-radius: 50%; border: var(--border-width, 1px) solid var(--border);
+  background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow-low, none);
+}
+/* Agent Desk 经切换件切过去、还空着:整块空态(Agent 会在这里展示成果) */
+.agent-desk-card-empty.agent-desk-empty-open { flex: 1 1 auto; min-height: 0; font-size: var(--ui-font-body, 13px); }
+
+/* 切换件「你 / Agent」:LCL 看法胶囊(.lcl-vmode)装进 Desk 的浮动胶囊皮。宽档:「Agent」带卡头同一个 ✦,「你」在你切走了还在看时
+ * 字后面带小眼睛;紧凑档(胶囊条 < 420,DeskSwitch 量)只留图标:「你」= 头像、「Agent」= ✦。点 = Human Desk 展开时 Agent 放了新东西。 */
+.desk-cap.desk-switch { flex: none; padding: 4px; }
+.desk-switch .lcl-vmode-pill { height: 24px; grid-auto-columns: minmax(52px, auto); }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button { padding: 0 9px; gap: 4px; }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button .lcl-vmode-ic { display: inline-flex; align-items: center; gap: 3px; }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button .desk-seg-you { order: 1; }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button .desk-seg-you > .hd-you { display: none; }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button .desk-seg-you:not(:has(.desk-seg-eye)) { display: none; }
+.desk-switch .lcl-vmode .lcl-vmode-pill > button.on .desk-seg-spark { color: var(--accent-ink); }
+.desk-switch .lcl-vmode[data-compact] .lcl-vmode-pill { grid-auto-columns: 34px; }
+.desk-switch .lcl-vmode[data-compact] .lcl-vmode-pill > button .desk-seg-you { order: 0; display: inline-flex; }
+.desk-switch .lcl-vmode[data-compact] .lcl-vmode-pill > button .desk-seg-you > .hd-you { display: inline-flex; width: 14px; height: 14px; }
+.desk-switch .lcl-vmode[data-compact] .lcl-vmode-pill > button .desk-seg-eye { display: none; }
+.desk-switch-dot {
+  position: absolute; top: 2px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent-ink); box-shadow: 0 0 0 1.5px var(--bg-card, var(--bg)); pointer-events: auto;
+}

@@ -27,7 +27,7 @@ import { hasFacts, summarizeTask, type TaskSourceResult } from './taskFacts'
 import { enterCite, leaveCite, useCiteHover } from './citeHover'
 import { ChatWebLink } from '../../components/ChatWikiLink'
 import { fullOrder, moveCard, orderCards, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
-import { fitCards, setUserOpen, stepOpen, syncOpen, useSummaryOpen, type CardSig, type FitCard } from './summaryOpen'
+import { deskPairTight, fitCards, setUserOpen, squeezedDeskCard, stepOpen, syncOpen, useDeskTouch, useSummaryOpen, type CardSig, type FitCard } from './summaryOpen'
 import { flipSiblings, watchStackMotion } from './summaryMotion'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
@@ -112,6 +112,12 @@ function SourceResultRow({ r }: { r: TaskSourceResult }) {
 /** 栈里的卡片(含 Desk)向栈要的两样:拖动块按下、卡头右键菜单。 */
 interface RailApi { grip(id: string, e: React.PointerEvent): void; menu(id: string, e: React.MouseEvent): void }
 const RailCtx = createContext<RailApi | null>(null)
+/** 两张 Desk 卡一起开着放不下时被收成卡头的那张('desk' / 'humandesk' / null),见 summaryOpen.squeezedDeskCard。 */
+export const DeskSqueezeContext = createContext<string | null>(null)
+/** 两张 Desk 卡(Human Desk、Agent Desk):卡片自己管开合,栈只量高度、判两张一起开放不放得下。 */
+const isDeskCard = (id: string): boolean => id === 'desk' || id === 'humandesk'
+/** 收着、还没开过的 Desk 卡正文按这么高估(Agent Desk 卡展开固定 380 + 上边距;Human Desk 卡多一行「你在第几节」)。 */
+const DESK_BODY_GUESS = 400
 
 /** 一张卡:原生 <details>(折叠语义、键盘可达、读屏全白拿)。点卡头折叠;卡头里的按钮自己拦住事件,不顺带折叠。
  *  卡头(10-29 用户定):标题 → 紧挨着的折叠箭头;动作 + 计数收在卡头末尾的 .t2-card-end(只有它带 margin-left:auto ——
@@ -325,7 +331,7 @@ function RailWidgetCard({ id, open, onToggle, bodyCap, squeezed }: { id: string;
   )
 }
 
-export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry, onContinue }: {
+export function TaskSummary({ sessionId, desk, humanDesk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry, onContinue }: {
   /** 失败卡的「重试」(同 /retry);只读视图不传。 */
   onRetry?: () => void
   /** 失败卡的「继续生成」(store.continueRun);这一轮有产出才传,传了「重试」就改叫「重新生成」退居次位。 */
@@ -334,6 +340,8 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   sessionId?: string | null
   /** Agent Desk 卡(DeskCard);栈里的一张,和别的卡一起排序。 */
   desk?: React.ReactNode
+  /** Human Desk 卡(HumanDeskCard);缺省排在 Agent Desk 卡上面。 */
+  humanDesk?: React.ReactNode
   teamStatus?: React.ReactNode
   messages: UiMessage[]
   running: boolean
@@ -430,7 +438,8 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const [hoverAt, setHover] = useState<{ k: string; id: string } | null>(null)
   const hover = hoverAt?.k === sessKey ? hoverAt.id : null
   const shownOpen = useRef<Record<string, boolean>>({})
-  const [fit, setFit] = useState<{ squeezed: string[]; cap: Record<string, number> }>({ squeezed: [], cap: {} })
+  const [fit, setFit] = useState<{ squeezed: string[]; cap: Record<string, number>; pairTight?: boolean }>({ squeezed: [], cap: {} })
+  const deskTouched = useDeskTouch((st) => st.by[sessKey])
   const isOpen = (id: string, dflt: boolean): boolean =>
     sess.user[id] ?? ((hover === id && !!shownOpen.current[id]) || ((sess.auto[id] ?? dflt) && !fit.squeezed.includes(id)))
   const toggle = (id: string) => (o: boolean) => setUserOpen(sessKey, id, o)
@@ -603,15 +612,16 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     const k = `widget:${ref.id}`
     cards[k] = <RailWidgetCard key={k} id={ref.id} open={isOpen(k, true)} onToggle={toggle(k)} bodyCap={fit.cap[k]} squeezed={fit.squeezed.includes(k)} />
   }
+  if (humanDesk) cards.humandesk = humanDesk
   if (desk) cards.desk = desk
 
   const widgetKeys = railWidgets.map((w) => `widget:${w.ref.id}`)
-  const defaults = [...BUILTIN, ...(sessionId ? plugins.map((p) => p.key) : []), ...widgetKeys, 'desk']
+  const defaults = [...BUILTIN, ...(sessionId ? plugins.map((p) => p.key) : []), ...widgetKeys, 'humandesk', 'desk']
   // 小组件之间的先后只认板上的顺序(拖动写回板),和别的卡的相对位置照旧记在本机
   let wi = 0
   const ordered = orderCards(Object.keys(cards), defaults, prefs.order).map((k) => (k.startsWith('widget:') ? widgetKeys[wi++] : k))
   // .show = 有 Desk 之外的卡在场(藏起来的插件卡不算);Desk 自己在不在场由 CSS 的 :has(.agent-desk-card:not(.gone)) 判
-  const show = ordered.some((k) => k !== 'desk' && !pluginState[k]?.hidden)
+  const show = ordered.some((k) => !isDeskCard(k) && !pluginState[k]?.hidden)
 
   const stackRef = useRef<HTMLElement>(null)
   const elevation = useSummaryElevation((st) => st.elevation)
@@ -674,13 +684,21 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
       let extra = 0
       if (body && getComputedStyle(body).display !== 'none') {
         const mt = mts[id] = px(getComputedStyle(body).marginTop)
-        if (el.open) bodyH.current[id] = extra = mt + (id === 'desk' ? body.offsetHeight : Math.min(body.scrollHeight, BODY_MAX))
-        else extra = bodyH.current[id] ?? mt + Math.min(BODY_MAX, body.childElementCount * 30)
-      }
-      const want = id === 'desk' ? el.open : (s.user[id] ?? ((hv === id && el.open) || (s.auto[id] ?? el.open)))
-      list.push({ id, open: want, squeezable: id !== 'progress' && id !== 'desk' && s.user[id] === undefined && hv !== id, last: s.last[id] ?? 0, head: headH, body: extra })
+        if (el.open) bodyH.current[id] = extra = mt + (isDeskCard(id) ? body.offsetHeight : Math.min(body.scrollHeight, BODY_MAX))
+        else extra = bodyH.current[id] ?? mt + (isDeskCard(id) ? DESK_BODY_GUESS : Math.min(BODY_MAX, body.childElementCount * 30))
+      } else if (isDeskCard(id)) extra = bodyH.current[id] ?? DESK_BODY_GUESS
+      // Desk 卡:想不想开看卡片自己报的 data-want(被两卡互斥收起时 DOM 是收着的,不能拿它当「不想开」,否则来回翻)
+      const want = isDeskCard(id) ? el.dataset.want === '1' : (s.user[id] ?? ((hv === id && el.open) || (s.auto[id] ?? el.open)))
+      list.push({ id, open: want, squeezable: id !== 'progress' && !isDeskCard(id) && s.user[id] === undefined && hv !== id, last: s.last[id] ?? 0, head: headH, body: extra })
     }
-    const next = fitCards(list, avail, px(scs.rowGap), cur.squeezed)
+    const gap = px(scs.rowGap)
+    // 两张 Desk 卡都想开:先照旧收别的卡;还放不下 → 收掉没碰过的那张 Desk 卡(squeezedDeskCard),别的卡按腾出来的地方再排一次
+    const fitted = fitCards(list, avail, gap, cur.squeezed)
+    const desks = list.filter((c) => isDeskCard(c.id) && c.open)
+    const rest = list.reduce((t, c) => t + c.head + (!isDeskCard(c.id) && c.open && !fitted.squeezed.includes(c.id) ? c.body : 0), 0) + gap * Math.max(0, list.length - 1)
+    const pairTight = desks.length === 2 && deskPairTight(rest, desks[0].body + desks[1].body, avail, !!cur.pairTight)
+    const shut = squeezedDeskCard(pairTight, useDeskTouch.getState().by[sessKey])
+    const next = { ...(shut ? fitCards(list.map((c) => (c.id === shut ? { ...c, open: false } : c)), avail, gap, cur.squeezed) : fitted), ...(pairTight ? { pairTight: true } : {}) }
     for (const id in next.cap) next.cap[id] -= mts[id] ?? 0 // fitCards 按「开着多出来的高度」(含正文上边距)算,封顶写在正文自己的 max-height 上
     if (JSON.stringify(next) !== JSON.stringify(cur)) setFit(next)
   }
@@ -752,8 +770,10 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
       <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`}
         onPointerOver={(e) => { const id = (e.target as Element).closest<HTMLElement>('[data-card]')?.dataset.card ?? null; if (id !== hover) setHover(id ? { k: sessKey, id } : null) }}
         onPointerLeave={() => setHover(null)}
-        data-elev={elevation} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
-        {ordered.map((k) => cards[k])}
+        data-elev={elevation} data-still={still || undefined} aria-hidden={!show && !desk && !humanDesk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
+        <DeskSqueezeContext.Provider value={squeezedDeskCard(!!fit.pairTight, deskTouched)}>
+          {ordered.map((k) => cards[k])}
+        </DeskSqueezeContext.Provider>
       </aside>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} autoFocus />}
     </RailCtx.Provider>

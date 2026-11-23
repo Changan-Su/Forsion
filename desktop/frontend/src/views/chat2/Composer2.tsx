@@ -466,6 +466,10 @@ export const Composer2: React.FC<{
   /** 聊天开在侧栏(left/right)时为 true:自动把**主区当前打开的那篇笔记**作为默认引用挂上
    *  「已选择」条(用户可 ×,换一篇即复活)。聊天自己就是主区时无「另一个主区文件」可言,恒 false。 */
   autoRefFromMain?: boolean
+  /** Human Desk 在看的那样东西(11-23 第三轮):挂成「已选择」里的第一枚引用,× 它 = onLiveRefRemove(停止在看)。
+   *  与 autoRefFromMain 同一套芯片和 token,只是来源换成右边那块 Human Desk。 */
+  liveRef?: RefChip | null
+  onLiveRefRemove?: () => void
   /** 侧边拼接面板里:贴着的那扇 App 窗口。挂成默认引用(用户可 ×),优先于主区笔记。 */
   appRef?: { app: string; bundleId?: string; pid: number; windowId: number; title: string } | null
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
@@ -498,7 +502,7 @@ export const Composer2: React.FC<{
   onExecConfigChange, onSend, onStop,
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
-  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
+  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, liveRef, onLiveRefRemove, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow, steerInline = false, withdrawSteerRequest, onWithdrawSteerRequestDone,
 }) => {
   const { t, locale } = useI18n()
@@ -1381,7 +1385,12 @@ export const Composer2: React.FC<{
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
     return chip
   }, [appRef, localFs, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
-  const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
+  // Human Desk 的那枚排最前;与主区自动那枚 / 显式加的是同一个(token 相同)就只留一枚
+  const liveChip = useMemo<RefChip | null>(() => (liveRef && !refChips.some((c) => c.token === liveRef.token) ? liveRef : null), [liveRef, refChips])
+  const rawRefChips = useMemo(() => {
+    const auto = autoChip && autoChip.token !== liveChip?.token ? autoChip : null
+    return [...(liveChip ? [liveChip] : []), ...(auto ? [auto] : []), ...refChips]
+  }, [autoChip, liveChip, refChips])
   const runChips = useMemo(() => runChipOwners(refChips), [refChips])
   const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
   // 认得出的斜杠命令 / 选过的 @ 提及:输入框里画成一枚(InlineRefMirror),退格整枚删(见 ./composerTokens)
@@ -1990,14 +1999,17 @@ export const Composer2: React.FC<{
                 <RefChipView
                   key={c.token}
                   chip={c}
+                  live={!!liveChip && c.token === liveChip.token}
                   removeTitle={t('input.remove')}
                   inlineTitle={t('input.ref.shiftInline')}
                   onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length, true) } : undefined}
                   onRemove={() => {
                     // 句子里那几段还原成普通文字:话还在,只是不再是引用
                     if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }
+                    // Human Desk 那枚:× = 停止在看(小眼睛跟着灭,不另记「这一篇先别挂」)
+                    if (liveChip && c.token === liveChip.token) onLiveRefRemove?.()
                     // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
-                    if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
+                    else if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
                     else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
                   }}
                 />
