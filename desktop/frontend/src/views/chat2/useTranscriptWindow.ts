@@ -6,6 +6,7 @@ import type { UiMessage } from '../../types'
 import { registerMessages } from '../../i18n'
 import { captureChatPosition, restoreChatPosition, type ChatReadingPosition } from './chatReadingPosition'
 import type { ChatPageCursor } from '../../services/backendService'
+import '../../tangu/messages' // Tangu 自己的文案片段(app.historyLoadFail)
 
 registerMessages({
   'chat.history.editRecovered': { zh: '原消息已删除，编辑中的文字已放回输入框。', en: 'The original message was deleted. Your edit is in the composer.' },
