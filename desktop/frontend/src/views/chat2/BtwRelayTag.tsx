@@ -7,9 +7,9 @@ import { useApp } from '../../stores/appStore'
 import { openBtw } from './btwStore'
 import { onRelaysChanged, relayFor } from './btwRelay'
 
-export function BtwRelayTag({ sessionId, content }: { sessionId?: string; content: string }) {
+export function BtwRelayTag({ sessionId, content, timestamp }: { sessionId?: string; content: string; timestamp?: number }) {
   const { t } = useI18n()
-  const rec = useSyncExternalStore(onRelaysChanged, () => relayFor(sessionId, content))
+  const rec = useSyncExternalStore(onRelaysChanged, () => relayFor(sessionId, content, timestamp))
   const title = useApp((s) => (rec ? s.sessions.find((x) => x.id === rec.from)?.title : undefined))
   if (!rec) return null
   return (

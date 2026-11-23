@@ -21,7 +21,8 @@ button.btw-seg { cursor: pointer; transition: background var(--duration-fast, .1
 button.btw-seg:hover:not(:disabled), button.btw-seg[aria-expanded='true'] { background: var(--overlay-medium); color: var(--text); }
 button.btw-seg:disabled { cursor: default; opacity: .55; }
 button.btw-seg:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
-.btw-menu { width: var(--menu-select-width); max-width: min(var(--menu-select-width), calc(100vw - 16px)); }
+/* 段数不定:限高自己滚(同 .ctx-menu-scroll),矮窗口里「删掉这一段」也够得着 */
+.btw-menu { width: var(--menu-select-width); max-width: min(var(--menu-select-width), calc(100vw - 16px)); max-height: min(60vh, 420px); overflow-y: auto; }
 .btw-menu button.btw-menu-cur { background: var(--overlay-light); color: var(--text); }
 
 /* 挂点卡:这一段挂在哪条回答上(点了主对话滚到那条)。平卡:底色 + 圆角,不描边不凹 */
@@ -98,9 +99,7 @@ button.btw-anchor:focus-visible { outline: var(--focus-ring) solid var(--signal-
 /* 传话卡(btwRelay.ts):模型拟好的一句,用户点了才发。平卡,同挂点卡 */
 .btw-relay { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md, 10px); background: var(--overlay-light); min-width: 0; }
 .btw-relay-k { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
-.btw-relay .btw-relay-text { max-width: none; font-size: var(--ui-font-body, 13px); }
-.btw-relay-text > :first-child { margin-top: 0; }
-.btw-relay-text > :last-child { margin-bottom: 0; }
+.btw-relay-text { color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .btw-relay-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 /* 主按钮:同 Chat Box 发送钮的配色(--action-fill / --on-action) */
 .btw-relay-send {

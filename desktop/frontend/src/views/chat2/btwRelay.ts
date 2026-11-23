@@ -3,12 +3,14 @@
  * 它在回答末尾写一个 ```relay 块(提示词见 tangu-agent services/aside.ts)。这里把块拆出来画成「转给主对话」卡,
  * **模型只拟稿,发不发由用户点**:
  *  - 发给主对话 = 一条普通用户消息(主对话在跑时照主输入框的规矩走插话 / 排队,useApp.send 自己判);
- *  - 放进输入框 = 接在主输入框已有草稿后面(pendingShare,不覆盖打了一半的字);
+ *  - 放进输入框 = 接在那个会话主输入框已有草稿后面(pendingShare 带会话 id,别的聊天视图不接;不覆盖打了一半的字);
  *  - 发给别的会话 = 最近的会话里挑一个,同样走 send。
- * 发出去的那条在主对话里画一枚「来自顺便问」小标:记在本机(localStorage),按 会话 + 正文 认。换设备看不到小标,消息本身照常同步。
+ * 卡片上显示的就是要发的原文(纯文本,不渲染 Markdown:Codex 11-23 #1,渲染会藏掉引用定义一类的字、图片还会当场外连)。
+ * 发出去的那条在主对话里画一枚「来自顺便问」小标:记在本机(localStorage,按账号分),按 会话 + 正文 + 时间 认。
+ * 换设备看不到小标,消息本身照常同步。
  * 卫星窗(独立窗 / Mini 里的原生浮窗)各握一份 store、不该替主窗发消息:那里只给「放进输入框」(经主窗的 chat-quote)。
  */
-import { useWorkspace } from '@lcl/engine'
+import { contentStorageKey, useWorkspace } from '@lcl/engine'
 import { useApp } from '../../stores/appStore'
 import { windowKind } from '../../windowKind'
 
@@ -17,23 +19,25 @@ export interface RelaySplit { body: string; relay?: string; partial?: boolean }
 
 const OPEN_RE = /(^|\n)[ \t]*```[ \t]*relay[ \t]*\n/gi
 
-/** 拆最后一个 ```relay 块:块之前(和之后,一般没有)的字照常画,块里的字进卡片。没闭合时:流着 = 先藏起来(partial),流完 = 当正文。 */
-export function splitRelay(answer: string, streaming = false): RelaySplit {
+/** 拆最后一个 ```relay 块:块之前(和之后,一般没有)的字照常画,块里的字进卡片。没闭合时:流着 = 先藏起来(partial),流完 = 当正文。
+ *  只该对「答完」和「还在流」的回答调:停掉 / 出错的回答原样显示,别把半截稿吞掉(Codex 11-23 #3)。 */
+export function splitRelay(raw: string, streaming = false): RelaySplit {
+  const answer = raw.replace(/\r\n?/g, '\n')
   let open: RegExpExecArray | null = null
   for (let m = OPEN_RE.exec(answer); m; m = OPEN_RE.exec(answer)) open = m
   OPEN_RE.lastIndex = 0
-  if (!open) return { body: answer }
+  if (!open) return { body: raw }
   const start = open.index + open[1].length
   const inner = open.index + open[0].length
   const close = /\n[ \t]*```[ \t]*(?=\n|$)/.exec(answer.slice(inner - 1))
   if (!close) {
-    return streaming ? { body: answer.slice(0, start).trimEnd(), partial: true } : { body: answer }
+    return streaming ? { body: answer.slice(0, start).trimEnd(), partial: true } : { body: raw }
   }
   const innerEnd = inner - 1 + close.index
   const relay = answer.slice(inner, innerEnd).trim()
   const after = answer.slice(innerEnd + close[0].length)
   const body = `${answer.slice(0, start).trimEnd()}${after.trim() ? `\n\n${after.trim()}` : ''}`
-  return relay ? { body, relay } : { body }
+  return relay ? { body, relay } : { body: raw }
 }
 
 /* ── 本机记录:哪些消息是从顺便问传过去的(小标 + 卡片的「已发」状态) ── */
@@ -48,76 +52,86 @@ export interface RelayRecord {
   at: number
   how: 'sent' | 'steer'
 }
-const KEY = 'forsion_btw_relays_v1'
+const BASE_KEY = 'forsion_btw_relays_v1'
 const MAX = 300
+/** 小标认消息时容许的时差:消息时间戳(引擎落库)比本机记下的时刻早这么多以内都算。 */
+const SKEW_MS = 2 * 60_000
 const norm = (s: string): string => s.replace(/\s+/g, ' ').trim()
+/** 按账号分(切账号不串);每次现取,账号换了缓存跟着作废。 */
+const key = (): string => contentStorageKey(BASE_KEY)
 
-function readAll(): RelayRecord[] {
+function readAll(k: string): RelayRecord[] {
   try {
-    const raw = localStorage.getItem(KEY)
+    const raw = localStorage.getItem(k)
     const arr = raw ? JSON.parse(raw) : []
-    return Array.isArray(arr) ? arr.filter((r) => r && typeof r.to === 'string' && typeof r.text === 'string') : []
+    return Array.isArray(arr) ? arr.filter((r) => r && typeof r.to === 'string' && typeof r.text === 'string' && typeof r.at === 'number') : []
   } catch { return [] }
 }
 const listeners = new Set<() => void>()
-let cache: RelayRecord[] | null = null
-const all = (): RelayRecord[] => (cache ??= readAll())
+let cache: { key: string; rows: RelayRecord[] } | null = null
+const all = (): RelayRecord[] => {
+  const k = key()
+  if (!cache || cache.key !== k) cache = { key: k, rows: readAll(k) }
+  return cache.rows
+}
 
+/** 记一条(只在真发出去之后调)。写前从 localStorage 重读,别拿本窗口的旧缓存盖掉别的窗口刚写的(Codex 11-23 #6)。 */
 export function recordRelay(rec: RelayRecord): void {
-  const next = [...all().filter((r) => !(r.to === rec.to && norm(r.text) === norm(rec.text))), rec].slice(-MAX)
-  cache = next
-  try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { /* 存不下:小标只是这次看不到,消息照常 */ }
+  const k = key()
+  const fresh = readAll(k)
+  const next = [...fresh.filter((r) => !(r.to === rec.to && r.at === rec.at)), rec].slice(-MAX)
+  cache = { key: k, rows: next }
+  try { localStorage.setItem(k, JSON.stringify(next)) } catch { /* 存不下:小标只是这次看不到,消息照常 */ }
   listeners.forEach((l) => l())
 }
 
 /** 别的窗口写了记录(storage 事件):丢掉缓存重读。 */
 if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (e) => { if (e.key === KEY) { cache = null; listeners.forEach((l) => l()) } })
+  window.addEventListener('storage', (e) => { if (e.key?.startsWith(BASE_KEY)) { cache = null; listeners.forEach((l) => l()) } })
 }
 export function onRelaysChanged(fn: () => void): () => void { listeners.add(fn); return () => { listeners.delete(fn) } }
 
-/** 这条用户消息是不是从顺便问传过来的。 */
-export function relayFor(sessionId: string | null | undefined, content: string): RelayRecord | undefined {
+/** 这条用户消息是不是从顺便问传过来的。带上消息时间戳时,比记录早出 SKEW_MS 以上的(手打的老消息碰巧同字)不认。 */
+export function relayFor(sessionId: string | null | undefined, content: string, timestamp?: number): RelayRecord | undefined {
   if (!sessionId || !content) return undefined
   const c = norm(content)
-  return all().find((r) => r.to === sessionId && norm(r.text) === c)
+  return all().find((r) => r.to === sessionId && norm(r.text) === c && !(timestamp && timestamp < r.at - SKEW_MS))
 }
-/** 这张卡(某段顺便问里的这句稿)发过没有、发到了哪。 */
-export function relaySentFrom(from: string, text: string): RelayRecord | undefined {
+/** 这张卡(某段顺便问里的这句稿)发过没有、发到了哪。两边都有记录 id 时要对上,别的段同一句稿不算。 */
+export function relaySentFrom(from: string, text: string, asideId?: string): RelayRecord | undefined {
   const c = norm(text)
-  return [...all()].reverse().find((r) => r.from === from && norm(r.text) === c)
+  const rows = all()
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r.from === from && norm(r.text) === c && (!asideId || !r.asideId || r.asideId === asideId)) return r
+  }
+  return undefined
 }
 
 /** 当前窗口能不能替主对话发消息(主窗 / 网页 / 手机能;卫星窗不能)。 */
 export const canSendRelay = (): boolean => windowKind() === 'main'
 
-/** 发:走主输入框同一条路(在跑 → 插话 / 排队,没跑 → 起 run)。成功才记,返回去向。 */
+/** 发:走主输入框同一条路(在跑 → 插话 / 排队,没跑 → 起 run)。发成功才记(失败的重试不碰之前那条成功的记录),返回去向。 */
 export async function sendRelay(opts: { from: string; to: string; text: string; asideId?: string; messageId?: string }): Promise<'sent' | 'steer' | null> {
   const text = opts.text.trim()
   if (!text || !canSendRelay()) return null
   const app = useApp.getState()
   const how = app.runningBySession[opts.to] ? 'steer' as const : 'sent' as const
-  // 先记再发:send 里用户消息一上屏就会渲染,先记小标才不闪一下
-  const rec: RelayRecord = { to: opts.to, from: opts.from, asideId: opts.asideId, messageId: opts.messageId, text, at: Date.now(), how }
-  recordRelay(rec)
+  const at = Date.now()
   const ok = await app.send(text, [], undefined, undefined, undefined, opts.to).catch(() => false)
-  if (!ok) { forgetRelay(rec); return null }
+  if (!ok) return null
+  recordRelay({ to: opts.to, from: opts.from, asideId: opts.asideId, messageId: opts.messageId, text, at, how })
   return how
 }
 
-function forgetRelay(rec: RelayRecord): void {
-  const next = all().filter((r) => r !== rec && !(r.to === rec.to && r.at === rec.at))
-  cache = next
-  try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { /* ignore */ }
-  listeners.forEach((l) => l())
-}
-
-/** 放进主输入框:主窗接在已有草稿后面(不覆盖);卫星窗请主窗挂成引用(chat-quote,同「带回这里」)。 */
-export function composeRelay(text: string): void {
+/** 放进主输入框:主窗接在那个会话的已有草稿后面(不覆盖;别的聊天视图不接);卫星窗请主窗挂成引用(chat-quote,同「带回这里」)。 */
+export function composeRelay(text: string, sessionId: string): void {
   const body = text.trim().slice(0, 20000)
   if (!body) return
   if (!canSendRelay()) { window.tangu?.requestMainAction?.('chat-quote', body); return }
-  useApp.getState().setPendingShare({ text: body, files: [] })
+  const app = useApp.getState()
+  app.setPendingShare({ text: body, files: [], sessionId })
+  if (app.activeId !== sessionId) app.setActiveId(sessionId)
   useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
 }
 

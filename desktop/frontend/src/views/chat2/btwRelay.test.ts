@@ -28,6 +28,10 @@ describe('splitRelay', () => {
     expect(splitRelay('拟稿:\n```relay\n把运算', true)).toEqual({ body: '拟稿:', partial: true })
     expect(splitRelay('拟稿:\n```relay\n把运算', false)).toEqual({ body: '拟稿:\n```relay\n把运算' })
   })
+  it('CRLF 换行也认', async () => {
+    const { splitRelay } = await load()
+    expect(splitRelay('好:\r\n```relay\r\n改一下\r\n```\r\n').relay).toBe('改一下')
+  })
   it('空块不出卡;大小写 / 行首空格都认', async () => {
     const { splitRelay } = await load()
     expect(splitRelay('x\n```relay\n\n```').relay).toBeUndefined()
@@ -55,12 +59,20 @@ describe('传话记录', () => {
     m = await load()
     expect(m.relayFor('s1', 'hello')).toBeUndefined()
   })
-  it('同一句发到同一会话只留一条(最新的)', async () => {
+  it('写前从 localStorage 重读:别的窗口刚写的那条不被本窗口的旧缓存盖掉', async () => {
     const { recordRelay, relayFor } = await load()
-    recordRelay({ to: 's1', from: 's1', text: 'same', at: 1, how: 'sent' })
-    recordRelay({ to: 's1', from: 's1', text: 'same', at: 2, how: 'steer' })
-    expect(relayFor('s1', 'same')?.at).toBe(2)
-    expect(JSON.parse(localStorage.getItem('forsion_btw_relays_v1') || '[]')).toHaveLength(1)
+    expect(relayFor('s1', 'x')).toBeUndefined() // 先把缓存读成空的
+    localStorage.setItem('forsion_btw_relays_v1', JSON.stringify([{ to: 's9', from: 's9', text: 'other window', at: 5, how: 'sent' }]))
+    recordRelay({ to: 's1', from: 's1', text: 'mine', at: 6, how: 'sent' })
+    expect(JSON.parse(localStorage.getItem('forsion_btw_relays_v1') || '[]').map((r: { text: string }) => r.text)).toEqual(['other window', 'mine'])
+  })
+  it('小标:比记录早两分钟以上的同字老消息不认;卡片:两边都有段 id 时要对上', async () => {
+    const { recordRelay, relayFor, relaySentFrom } = await load()
+    recordRelay({ to: 's1', from: 's1', asideId: 'a1', text: 'check the tests', at: 1_000_000, how: 'sent' })
+    expect(relayFor('s1', 'check the tests', 1_000_500)).toBeDefined()
+    expect(relayFor('s1', 'check the tests', 1_000_000 - 5 * 60_000)).toBeUndefined()
+    expect(relaySentFrom('s1', 'check the tests', 'a1')).toBeDefined()
+    expect(relaySentFrom('s1', 'check the tests', 'a2')).toBeUndefined()
   })
 })
 
@@ -78,6 +90,10 @@ describe('sendRelay', () => {
     send.mockResolvedValueOnce(false)
     expect(await m.sendRelay({ from: 's1', to: 's1', text: 'fails' })).toBeNull()
     expect(m.relayFor('s1', 'fails')).toBeUndefined()
+    // 同一句重发失败:之前那条成功的记录还在
+    send.mockResolvedValueOnce(false)
+    expect(await m.sendRelay({ from: 's1', to: 's1', text: 'do it' })).toBeNull()
+    expect(m.relayFor('s1', 'do it')?.how).toBe('sent')
     expect(m.relayFor('s2', 'steer me')?.how).toBe('steer')
   })
 })

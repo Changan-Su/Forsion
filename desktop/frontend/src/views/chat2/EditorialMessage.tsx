@@ -906,7 +906,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle} data-quiet={quiet}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
-          {msg.role === 'user' && <BtwRelayTag sessionId={runSid} content={msg.content} />}
+          {msg.role === 'user' && <BtwRelayTag sessionId={runSid} content={msg.content} timestamp={msg.timestamp} />}
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
             // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠。

@@ -53,15 +53,16 @@ function useDismiss(open: boolean, refs: Array<{ current: HTMLElement | null }>,
   }, [open])
 }
 
-const useRelaySent = (from: string, text: string | undefined) =>
-  useSyncExternalStore(onRelaysChanged, () => (text ? relaySentFrom(from, text) : undefined))
+const useRelaySent = (from: string, text: string | undefined, asideId?: string) =>
+  useSyncExternalStore(onRelaysChanged, () => (text ? relaySentFrom(from, text, asideId) : undefined))
 
 /** 「转给主对话」卡:模型拟好的一句,三个去处;发出去之后变成一行「已发 · 跳过去看」。 */
 function RelayCard({ sessionId, text }: { sessionId: string; text: string }) {
   const { t } = useI18n()
   const title = useApp((s) => (s.sessions.find((x) => x.id === sessionId) || s.archivedSessions.find((x) => x.id === sessionId))?.title || '')
   const running = useApp((s) => !!s.runningBySession[sessionId])
-  const sent = useRelaySent(sessionId, text)
+  const anchor = useBtw((s) => s.anchors[sessionId])
+  const sent = useRelaySent(sessionId, text, anchor?.asideId)
   const sentTitle = useApp((s) => (sent && sent.to !== sessionId ? s.sessions.find((x) => x.id === sent.to)?.title || '' : ''))
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -75,7 +76,6 @@ function RelayCard({ sessionId, text }: { sessionId: string; text: string }) {
     const id = setTimeout(() => setComposed(false), 1600)
     return () => clearTimeout(id)
   }, [composed])
-  const anchor = useBtw((s) => s.anchors[sessionId])
   const sendable = canSendRelay()
   const send = async (to: string): Promise<void> => {
     setMenu(null)
@@ -94,7 +94,8 @@ function RelayCard({ sessionId, text }: { sessionId: string; text: string }) {
   return (
     <div className="btw-relay" data-testid="btw-relay" data-sent={sent ? sent.how : undefined}>
       <div className="btw-relay-k"><Send size={12} />{t('btw.relay.to', { title: title || t('btw.relay.untitled') })}</div>
-      <div className="btw-relay-text t2-content"><Markdown content={text} /></div>
+      {/* 原文照发什么就显示什么:纯文本,不渲染 Markdown(渲染会藏字、图片会外连) */}
+      <div className="btw-relay-text" data-testid="btw-relay-text">{text}</div>
       {sent ? (
         <div className="btw-relay-row">
           <span className="btw-relay-done"><Check size={13} />{sent.to !== sessionId ? t('btw.relay.sentTo', { title: sentTitle || t('btw.relay.untitled') }) : t(sent.how === 'steer' ? 'btw.relay.steered' : 'btw.relay.sent')}</span>
@@ -108,7 +109,7 @@ function RelayCard({ sessionId, text }: { sessionId: string; text: string }) {
               {busy ? <Loader2 className="spin" size={12} /> : <Send size={12} />}{t(running ? 'btw.relay.steer' : 'btw.relay.send')}
             </button>
           )}
-          <button type="button" className="btw-act" data-testid="btw-relay-compose" onClick={() => { composeRelay(text); setComposed(true) }}>
+          <button type="button" className="btw-act" data-testid="btw-relay-compose" onClick={() => { composeRelay(text, sessionId); setComposed(true) }}>
             {composed ? <Check size={12} /> : null}{t(composed ? 'btw.relay.composed' : 'btw.relay.compose')}
           </button>
           {sendable && (
@@ -141,7 +142,8 @@ function TurnView({ turn, sessionId, onQuoted }: { turn: BtwTurn; sessionId: str
     const id = setTimeout(() => setDone(null), 1600)
     return () => clearTimeout(id)
   }, [done])
-  const split = useMemo(() => splitRelay(turn.answer, turn.status === 'streaming'), [turn.answer, turn.status])
+  // 只拆答完 / 还在流的;停掉 / 出错的原样显示(不给卡,也别把半截稿吞掉)
+  const split = useMemo(() => (turn.status === 'done' || turn.status === 'streaming' ? splitRelay(turn.answer, turn.status === 'streaming') : { body: turn.answer, relay: undefined, partial: false }), [turn.answer, turn.status])
   const copy = (): void => { void navigator.clipboard.writeText(split.body).then(() => setDone('copy'), () => {}) }
   const quote = (): void => { quoteInMainChat(split.body); setDone('quote'); onQuoted?.() }
   return (
@@ -283,7 +285,12 @@ function AnchorCard({ sessionId }: { sessionId: string }) {
   const text = plain(target.content).slice(0, 240)
   return (
     <button type="button" className="btw-anchor" data-testid="btw-anchor" disabled={!jumpable} title={jumpable ? t('btw.anchor.jump') : undefined}
-      onClick={() => useApp.getState().setJumpTarget(sessionId, target.id)}>
+      onClick={() => {
+        // 这段的会话不是当前看着的(从别处的小标打开的):先切过去,跳转只在当前会话的聊天里生效
+        const app = useApp.getState()
+        if (app.activeId !== sessionId) app.setActiveId(sessionId)
+        app.setJumpTarget(sessionId, target.id)
+      }}>
       <span className="btw-anchor-k"><CornerUpLeft size={12} />{t('btw.anchor.about')}</span>
       <span className="btw-anchor-t">{text}</span>
     </button>
