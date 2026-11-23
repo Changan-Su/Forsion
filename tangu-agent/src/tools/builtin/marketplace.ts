@@ -2,7 +2,7 @@ import { deps, isConfigured } from '../../seams/runtime.js';
 import { isForsionMarketplaceItem, marketplaceId, marketplaceItemsOf, marketplaceCompatibility, MARKETPLACE_CARDS_CAPABILITY, MARKETPLACE_RECOMMENDATION_TOOL, type MarketplaceItem } from '../../shared/marketplace.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
-// 收录的 skills.sh 技能只有英文简介:非英文关键词搜空时提醒换英文再搜一次(11-23 真模型实测:中文关键词搜不到 wayfinder,转去网上找了)。
+// 收录的 skills.sh 技能只有英文简介:非英文关键词搜空时提醒换英文再搜一次(11-23 真模型实测:中文关键词搜不到那条收录技能,转去网上找了)。
 const NON_ENGLISH_EMPTY = ' Nothing matched. Skills collected from skills.sh are described in English, so search again with English keywords before concluding that nothing fits.';
 const OUTSIDE_SOURCE = ' Entries whose origin.kind is not "forsion" come from an outside catalog (origin.sourceTitle, e.g. skills.sh) and were not manually reviewed by Forsion; when you present one, say where it comes from and mention its requirements (command-line tool, API keys, scripts, audit warning).';
 const output = (raw: unknown[], recommend = false, emptyHint = '') => {
