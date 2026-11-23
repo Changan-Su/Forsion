@@ -255,7 +255,8 @@ export function createStoreSources(o: {
   let loaded: Promise<void> | undefined
   // `who` = the account a Forsion Git catalog was read as (other sources: undefined). A copy read as someone else is never used.
   // `uri` = where it was read (the built-in's address follows the market base, which can change).
-  const memo = new Map<string, { at: number; index: StoreIndex; who?: string; uri?: string }>()
+  /** `read` = this copy came from a successful read in this run (not the disk cache): only that says an item is gone. */
+  const memo = new Map<string, { at: number; index: StoreIndex; who?: string; uri?: string; read?: boolean }>()
   const inflight = new Map<string, Promise<StoreIndex>>()
 
   const load = () => loaded ??= (async () => {
@@ -337,7 +338,8 @@ export function createStoreSources(o: {
     }
   /** The built-in source only lists skills pinned to one GitHub commit (the server assigns them; anything else is a bad row). */
   const listed = (s: AnySource, index: StoreIndex): StoreIndexItem[] => isBuiltin(s)
-    ? index.items.filter((it) => it.type === 'skill' && it.package.kind === 'github' && !!it.package.commit)
+    // A collected item whose facts didn't parse isn't offered: its audit / adaptation decide the confirmation and the note.
+    ? index.items.filter((it) => it.type === 'skill' && it.package.kind === 'github' && !!it.package.commit && !!it.collected)
     : index.items
 
   // ── Catalog fetching ──
@@ -407,7 +409,7 @@ export function createStoreSources(o: {
     // The source's address changed while this was in flight: don't publish the old address's catalog under it.
     const uri = canonicalSource(ref), cur = find(id)
     if (cur && !isBuiltin(cur) && canonicalSource(refOf(cur)) !== uri) return index
-    memo.set(id, { at: Date.now(), index, ...(got.who !== undefined ? { who: got.who } : {}), uri }); bases.set(id, got.base)
+    memo.set(id, { at: Date.now(), index, ...(got.who !== undefined ? { who: got.who } : {}), uri, read: true }); bases.set(id, got.base)
     if (cur && isBuiltin(cur)) builtinLast = uri
     // A private (Forsion Git) catalog stays in memory for the account that read it; it never goes to disk.
     if (got.who !== undefined) return index
@@ -829,7 +831,9 @@ export function createStoreSources(o: {
       const s = find(sourceId)
       const text = (v: unknown, max: number) => (typeof v === 'string' && v ? v.slice(0, max) : undefined)
       // Only a catalog that was actually read says anything about the item; no copy (or a failed read) = nothing known.
-      const m = s && isBuiltin(s) ? memo.get(sourceId) : undefined
+      // (A copy loaded from the disk cache may predate the install: it says nothing about the item either.)
+      const read = s && isBuiltin(s) ? memo.get(sourceId) : undefined
+      const m = read?.read ? read : undefined
       const it = m ? listed(s!, m.index).find((y) => y.id === item) : undefined
       return {
         cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null,

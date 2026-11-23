@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -58,6 +58,21 @@ describe('source skill updates', () => {
     // No staging / old copies left next to it.
     expect(await readdir(root)).toEqual([SLUG])
     expect(await make().check()).toEqual([{ cardId: ID, outcome: 'current' }])
+  })
+
+  it('a recorded version that fails to save puts the old folder back', async () => {
+    recordInstall.mockRejectedValueOnce(new Error('disk full'))
+    expect(await make().check()).toEqual([{ cardId: ID, outcome: 'error', error: 'disk full' }])
+    expect(await readFile(join(dir, 'old.md'), 'utf8')).toBe('old')
+    expect(await skillTreeHash(dir)).toBe(rec.tree)
+    expect(await readdir(root)).toEqual([SLUG])
+  })
+
+  it('an update cut off between its two renames is put back before anything else', async () => {
+    await rename(dir, join(root, `.skill-stage-${SLUG}.old-1234`))
+    latest = rec.version!
+    expect(await make().check()).toEqual([{ cardId: ID, outcome: 'current' }])
+    expect(await readFile(join(dir, 'old.md'), 'utf8')).toBe('old')
   })
 
   it('leaves a folder the user edited alone (no download)', async () => {

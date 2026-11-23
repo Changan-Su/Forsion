@@ -167,6 +167,12 @@ async function main() {
     assert.deepEqual(grillRec?.ack, { scripts: 1, audit: false }, 'the confirmation is kept with the record')
     const installedNow = await win.evaluate(() => window.tangu.marketInstalled())
     assert.equal(installedNow.skill.find((x) => x.slug === `src-${SH}-wayfinder`)?.version, '2026.11.20-148210', 'installed version comes from the record')
+    // Reinstalled over a folder the user added a file to: the file stays, and no fingerprint is recorded (automatic
+    // updates replace the whole folder and would delete it).
+    fs.writeFileSync(path.join(wf.path, 'notes.md'), 'mine')
+    await win.evaluate((id) => window.tangu.marketInstall(id, undefined, { type: 'skill' }), `src_${SH}_wayfinder`)
+    assert.equal(fs.readFileSync(path.join(wf.path, 'notes.md'), 'utf8'), 'mine')
+    assert.equal(JSON.parse(fs.readFileSync(statePath, 'utf8')).installs.find((x) => x.cardId === `src_${SH}_wayfinder`)?.tree, undefined, 'no fingerprint for a folder that is more than the package')
     // No valid SKILL.md: refused, nothing written.
     const broken = await win.evaluate((id) => window.tangu.marketInstall(id, undefined, { type: 'skill' }).then(() => 'installed', (e) => String(e.message)), `src_${SH}_broken`)
     assert.match(broken, /install: skill-invalid/)

@@ -17,8 +17,10 @@ import { isJunkPath, MARKET_MANIFEST, planZipFiles } from '../shared/marketPacka
 import { ADAPT_FILE } from '../shared/storeSources'
 
 const MAX_SKILL_MD = 256 * 1024
-/** Extensions counted as scripts (besides anything under `scripts/` and files with an executable bit). */
-const SCRIPT_EXT = /\.(sh|bash|zsh|fish|command|py|pyw|js|mjs|cjs|ts|mts|cts|rb|pl|php|lua|ps1|psm1|bat|cmd|exe|jar|applescript|scpt)$/i
+/** Extensions counted as scripts (besides anything under a `scripts/` or `bin/` folder and files with an executable bit). */
+const SCRIPT_EXT = /\.(sh|bash|zsh|fish|command|py|pyw|js|mjs|cjs|ts|mts|cts|rb|pl|php|lua|ps1|psm1|bat|cmd|exe|bin|jar|applescript|scpt)$/i
+/** Uncompressed size caps (a small archive can inflate to far more; this runs before anything is confirmed). */
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024, MAX_TOTAL_BYTES = 256 * 1024 * 1024
 
 /**
  * `name` and `description` from SKILL.md's frontmatter. Accepts a BOM, CRLF, quoted values and YAML block scalars
@@ -40,6 +42,8 @@ export function skillFrontmatter(text: string): { name: string; description: str
       const body: string[] = []
       while (i + 1 < lines.length && (/^\s/.test(lines[i + 1]) || lines[i + 1].trim() === '')) body.push(lines[++i].trim())
       v = body.join(' ').trim()
+    } else if (/^[[{]/.test(v)) {
+      v = '' // a YAML list / map is not text
     } else if ((v.startsWith('"') && v.endsWith('"') && v.length >= 2)) {
       try { v = JSON.parse(v) } catch { v = v.slice(1, -1) }
     } else if (v.startsWith("'") && v.endsWith("'") && v.length >= 2) v = v.slice(1, -1).replace(/''/g, "'")
@@ -56,11 +60,24 @@ const modeOf = (p: unknown): number | null => {
 /** Is this package file a script? (`rel` is the path inside the skill folder.) */
 export function isSkillScript(rel: string, unixPermissions?: unknown): boolean {
   const mode = modeOf(unixPermissions)
-  return /^scripts\//i.test(rel) || SCRIPT_EXT.test(rel) || (mode !== null && (mode & 0o111) !== 0)
+  return /(^|\/)(scripts|bin)\//i.test(rel) || SCRIPT_EXT.test(rel) || (mode !== null && (mode & 0o111) !== 0)
 }
 const isAdaptFile = (rel: string): boolean => (rel.split('/').pop() || '').toLowerCase() === ADAPT_FILE
 
-export interface PreparedSkill { buf: Buffer; name: string; scripts: number; files: number }
+/** `tree` = the fingerprint skillTreeHash gives the folder this package extracts to (nothing else in it). */
+export interface PreparedSkill { buf: Buffer; name: string; scripts: number; files: number; tree: string }
+
+/** Files that come and go by themselves (Finder, Windows Explorer, Python byte-code) and say nothing about an edit. */
+const NOISE = /^(\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|__MACOSX)$|\.pyc$/
+const noisy = (rel: string): boolean => rel.split('/').some((seg) => NOISE.test(seg) || isJunkPath(seg))
+/** The same fingerprint skillTreeHash computes, over (path, content) pairs. */
+function treeOf(entries: Array<{ rel: string; data: Buffer }>): string {
+  const h = createHash('sha256')
+  for (const f of [...entries].filter((e) => !noisy(e.rel)).sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0))) {
+    h.update(f.rel).update('\0').update(createHash('sha256').update(f.data).digest('hex')).update('\n')
+  }
+  return h.digest('hex')
+}
 
 /**
  * Check a skill package and rebuild it rooted at its SKILL.md: refuses a missing / unreadable SKILL.md (`install:
@@ -85,28 +102,39 @@ export async function prepareSkillPackage(buf: Buffer, opts: { note?: string | n
   const fm = skillFrontmatter(raw.toString('utf8'))
   if (!fm) throw new Error('install: skill-invalid')
   const out = new JSZip()
-  let scripts = 0, files = 0
+  const written: Array<{ rel: string; data: Buffer }> = []
+  let scripts = 0, files = 0, total = 0
   for (const p of plan) {
     if (isAdaptFile(p.rel)) continue
     const f = zip.files[p.name]
+    const declared = (f as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize
+    if (typeof declared === 'number' && (declared > MAX_ENTRY_BYTES || total + declared > MAX_TOTAL_BYTES)) throw new Error('install: package too large')
     if (isSkillScript(p.rel, f.unixPermissions)) scripts++
     files++
-    // Keep the rel the plan gives (SKILL.md under its own spelling) and the permission bits (helpers stay executable).
-    out.file(p.rel, await f.async('nodebuffer'), { unixPermissions: f.unixPermissions ?? undefined })
+    const data = await f.async('nodebuffer')
+    total += data.length
+    if (data.length > MAX_ENTRY_BYTES || total > MAX_TOTAL_BYTES) throw new Error('install: package too large')
+    // The skill's file under the name the engine opens (SKILL.md, also on case-sensitive disks); the permission bits
+    // stay (helpers stay executable).
+    const rel = p === md ? 'SKILL.md' : p.rel
+    out.file(rel, data, { unixPermissions: f.unixPermissions ?? undefined })
+    written.push({ rel, data })
   }
-  if (opts.note) out.file(ADAPT_FILE, `${opts.note.trim()}\n`)
-  return { buf: await out.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }), name: fm.name, scripts, files }
+  if (opts.note) {
+    const note = Buffer.from(`${opts.note.trim()}\n`, 'utf8')
+    out.file(ADAPT_FILE, note)
+    written.push({ rel: ADAPT_FILE, data: note })
+  }
+  return { buf: await out.generateAsync({ type: 'nodebuffer', platform: 'UNIX' }), name: fm.name, scripts, files, tree: treeOf(written) }
 }
 
-/** Files that come and go by themselves (Finder, Windows Explorer, Python byte-code) and say nothing about an edit. */
-const NOISE = /^(\.DS_Store|Thumbs\.db|desktop\.ini|__pycache__|__MACOSX)$|\.pyc$/
 const MAX_TREE_FILES = 2000
 const MAX_TREE_BYTES = 50 * 1024 * 1024
 
 /**
- * Fingerprint of an installed skill folder (paths + contents, the adaptation note left out). Taken right after the store
- * installs it; an automatic update only replaces a folder that still has it (the user didn't edit it). null = can't tell
- * (missing, a link, or too large to read).
+ * Fingerprint of an installed skill folder (paths + contents, the adaptation note included). The store records it only
+ * when the folder is exactly the package it installed; an automatic update only replaces a folder that still has it (the
+ * user didn't edit or add anything). null = can't tell (missing, a link, or too large to read).
  */
 export async function skillTreeHash(dir: string): Promise<string | null> {
   const files: Array<{ rel: string; abs: string }> = []
@@ -114,7 +142,6 @@ export async function skillTreeHash(dir: string): Promise<string | null> {
     for (const e of await readdir(d, { withFileTypes: true })) {
       if (NOISE.test(e.name) || isJunkPath(e.name)) continue
       const r = rel ? `${rel}/${e.name}` : e.name
-      if (!rel && e.name.toLowerCase() === ADAPT_FILE) continue
       if (e.isSymbolicLink()) return false
       if (e.isDirectory()) { if (!await walk(join(d, e.name), r)) return false }
       else if (e.isFile()) { files.push({ rel: r, abs: join(d, e.name) }); if (files.length > MAX_TREE_FILES) return false }

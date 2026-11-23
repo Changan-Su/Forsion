@@ -5101,9 +5101,11 @@ app.whenReady().then(async () => {
     // 只写 Forsion 服务器按这个提交核过的那份。来源技能带脚本 / 审计有警告:用户在这一项上确认过(ack 覆盖得到)才装 ——
     // 脚本数按包实数,不信目录或对话卡片的说法(用户加的来源本来就不给)。
     let ack: { scripts: number; audit: boolean } | undefined
+    let packageTree: string | null = null
     if (effType === 'skill') {
       const skill = await prepareSkillPackage(downloaded, { note: adaptNote ?? null })
       buf = skill.buf
+      packageTree = skill.tree
       if (isSourceCardId(id)) {
         const a = expect?.ack as { scripts?: unknown; audit?: unknown } | undefined
         ack = a && typeof a === 'object' && typeof a.scripts === 'number' && Number.isInteger(a.scripts) && a.scripts >= 0 ? { scripts: a.scripts, audit: a.audit === true } : undefined
@@ -5120,9 +5122,9 @@ app.whenReady().then(async () => {
     }
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
+    // 解压是原地覆盖:先删掉上一版留下的适配说明(这一版没有就不该再被读到;是符号链接也只删链接,不写穿到别处)。
+    if (effType === 'skill') await rm(join(dest, ADAPT_FILE), { force: true })
     const files = await installMarketZip(buf, dest, MARKET_MANIFEST[effType] || [])
-    // 解压是原地覆盖:这一版没有适配说明时,上一版留下的那份要删掉(否则 Tangu 照旧读到旧说明)。
-    if (effType === 'skill' && !adaptNote) await rm(join(dest, ADAPT_FILE), { force: true })
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
     // 绝不删 —— 宁可留一份陈旧也不误删他人插件(install_slug 无全局唯一约束,跨类型可能撞名)。
@@ -5150,7 +5152,8 @@ app.whenReady().then(async () => {
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
       // 技能另记包所在目录(换目录 = 换了东西,自动更新停)、确认过的脚本 / 审计、装好后的目录指纹(用户改过就不自动更新)。
-      const tree = effType === 'skill' ? await skillTreeHash(dest) : null
+      // 指纹只在目录恰好等于这个包时记(原地覆盖会留下用户自己加的文件:那就不记,自动更新整目录替换时不会把它们删掉)。
+      const tree = effType === 'skill' && packageTree && await skillTreeHash(dest) === packageTree ? packageTree : null
       await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author, ...(packagePath !== undefined ? { path: packagePath } : {}), ...(ack ? { ack } : {}), tree })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }

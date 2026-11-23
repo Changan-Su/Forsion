@@ -25,6 +25,9 @@ describe('skillFrontmatter', () => {
     expect(skillFrontmatter('---\nname: x\n---\n')).toBeNull()
     expect(skillFrontmatter('---\nname: ""\ndescription: d\n---\n')).toBeNull()
     expect(skillFrontmatter('---\nname: x\ndescription: d\n')).toBeNull()
+    // A YAML list or map isn't a description.
+    expect(skillFrontmatter('---\nname: x\ndescription: []\n---\n')).toBeNull()
+    expect(skillFrontmatter('---\nname: x\ndescription: { a: 1 }\n---\n')).toBeNull()
   })
 })
 
@@ -53,14 +56,19 @@ describe('prepareSkillPackage', () => {
     await expect(prepareSkillPackage(await zipOf({ 'SKILL.md': `${SKILL}${'x'.repeat(256 * 1024)}` }))).rejects.toThrow('install: skill-invalid')
     // Case-insensitive disks would write these two to one file.
     await expect(prepareSkillPackage(await zipOf({ 'SKILL.md': SKILL, 'Notes.md': 'a', 'notes.md': 'b' }))).rejects.toThrow('install: duplicate path in archive')
-    // skill.md spelled in lower case is still the skill's file.
-    expect((await prepareSkillPackage(await zipOf({ 'x/skill.md': SKILL }))).name).toBe('wayfinder')
+    // skill.md spelled in lower case is still the skill's file, written under the name the engine opens.
+    const lower = await prepareSkillPackage(await zipOf({ 'x/skill.md': SKILL }))
+    expect(lower.name).toBe('wayfinder')
+    expect(await namesOf(lower.buf)).toEqual(['SKILL.md'])
   })
   it('counts scripts by folder, extension and executable bit', () => {
     expect(isSkillScript('scripts/README')).toBe(true)
     expect(isSkillScript('lib/run.PS1')).toBe(true)
     expect(isSkillScript('bin/tool', 0o100755)).toBe(true)
     expect(isSkillScript('bin/tool', '755')).toBe(true)
+    expect(isSkillScript('tools/scripts/run.txt')).toBe(true)
+    expect(isSkillScript('tools/bin/helper')).toBe(true)
+    expect(isSkillScript('lib/native.bin')).toBe(true)
     expect(isSkillScript('docs/a.md', 0o100644)).toBe(false)
   })
 })
@@ -69,13 +77,21 @@ describe('skillTreeHash', () => {
   let dir: string
   beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'skill-tree-')) })
   afterEach(async () => { await rm(dir, { recursive: true, force: true }) })
-  it('changes with an edit, ignores the adaptation note and OS noise, and gives up on links', async () => {
+  it('the package fingerprint is the fingerprint of the folder it extracts to', async () => {
+    const prepared = await prepareSkillPackage(await zipOf({ 'repo/skills/w/SKILL.md': SKILL, 'repo/skills/w/docs/a.md': 'a', 'repo/skills/w/__pycache__/m.pyc': 'x' }), { note: 'note' })
+    const { extractZipToDir, MARKET_MANIFEST } = await import('./marketInstall')
+    await extractZipToDir(prepared.buf, join(dir, 'w'), MARKET_MANIFEST.skill)
+    expect(await skillTreeHash(join(dir, 'w'))).toBe(prepared.tree)
+    // A file the user added next to it: no longer the package.
+    await writeFile(join(dir, 'w', 'notes.md'), 'mine')
+    expect(await skillTreeHash(join(dir, 'w'))).not.toBe(prepared.tree)
+  })
+  it('changes with an edit (the adaptation note too), ignores OS noise, and gives up on links', async () => {
     await writeFile(join(dir, 'SKILL.md'), SKILL)
     await mkdir(join(dir, 'docs'))
     await writeFile(join(dir, 'docs', 'a.md'), 'a')
     const h = await skillTreeHash(dir)
     expect(h).toMatch(/^[0-9a-f]{64}$/)
-    await writeFile(join(dir, '.forsion-adapt.md'), 'note')
     await writeFile(join(dir, '.DS_Store'), 'x')
     await mkdir(join(dir, '__pycache__'))
     await writeFile(join(dir, '__pycache__', 'm.pyc'), 'x')
@@ -84,6 +100,9 @@ describe('skillTreeHash', () => {
     expect(await skillTreeHash(dir)).not.toBe(h)
     await writeFile(join(dir, 'docs', 'a.md'), 'a')
     expect(await skillTreeHash(dir)).toBe(h)
+    await writeFile(join(dir, '.forsion-adapt.md'), 'edited note')
+    expect(await skillTreeHash(dir)).not.toBe(h)
+    await rm(join(dir, '.forsion-adapt.md'))
     await writeFile(join(dir, 'docs', 'new.md'), 'n')
     expect(await skillTreeHash(dir)).not.toBe(h)
     await symlink(join(dir, 'SKILL.md'), join(dir, 'link.md'))

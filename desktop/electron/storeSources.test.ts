@@ -558,14 +558,14 @@ describe('built-in skills.sh source', () => {
 
   it('is listed first, trusted, and reads its catalog from the market server', async () => {
     routes[CATALOG] = () => json(index([poster()]))
-    routes[SH_CAT] = () => json(shIndex([WAYFINDER, GRILL, shItem('npm-one', {}, { github: undefined, npm: '@x/y', commit: undefined }), { ...shItem('agent-one'), type: 'agent' }, shItem('unpinned', {}, { commit: undefined })]))
+    routes[SH_CAT] = () => json(shIndex([WAYFINDER, GRILL, shItem('npm-one', {}, { github: undefined, npm: '@x/y', commit: undefined }), { ...shItem('agent-one'), type: 'agent' }, shItem('unpinned', {}, { commit: undefined }), shItem('facts-broken', { collected: collected({ audit: { snyk: 'meh' } }) })]))
     const s = makeSh()
     await s.add('github:pixel-lab/image-skills')
     const list = await s.list()
     expect(list[0]).toMatchObject({ id: SH, title: 'skills.sh', origin: 'builtin', trusted: true, disabled: false })
     const cat = await s.catalog(SH)
     expect(hits).toContain(SH_CAT)
-    // Only skills pinned to a GitHub commit are offered.
+    // Only skills pinned to a GitHub commit, with facts that parse (they decide the confirmation and the note), are offered.
     expect(cat.items.map((x) => x.id)).toEqual([`src_${SH}_wayfinder`, `src_${SH}_grill-me`])
     const wf = cat.items[0]
     expect(wf).toMatchObject({ downloads: 841892, commit: C1, collected: { adapted: true, requires: ['grill-me', 'not-collected'] } })
@@ -583,6 +583,8 @@ describe('built-in skills.sh source', () => {
     const s = makeSh()
     await s.catalog(SH)
     await s.recordInstall({ cardId: `src_${SH}_wayfinder`, type: 'skill', slug: `src-${SH}-wayfinder`, name: 'wayfinder', version: '2026.11.20-148210', origin: 'github:mattpocock/skills', commit: C1, path: 'skills/wayfinder' })
+    // Installed after the copy on disk was written (e.g. that write failed later): the old copy doesn't list it.
+    await s.recordInstall({ cardId: `src_${SH}_grill-me`, type: 'skill', slug: `src-${SH}-grill-me`, name: 'grill-me', version: '1', origin: 'github:mattpocock/skills' })
     routes[SH_CAT] = () => new Response('down', { status: 500 })
     const again = await makeSh().catalog(SH, { refresh: true })
     expect(again.stale).toBe(true)
@@ -590,19 +592,15 @@ describe('built-in skills.sh source', () => {
     delete routes[SH_CAT] // 404: an old server without the collected catalog
     const fresh = makeSh()
     await fresh.catalog(SH, { refresh: true })
-    const [rec] = await fresh.installs()
-    expect(rec).toMatchObject({ cardId: `src_${SH}_wayfinder`, removed: false })
-    expect(rec.upstreamDeleted).toBeUndefined()
-    expect(rec.delisted).toBeUndefined()
+    const recs = await fresh.installs()
+    expect(recs.map((r) => [r.cardId, r.removed, r.upstreamDeleted, r.delisted])).toEqual([[`src_${SH}_wayfinder`, false, undefined, undefined], [`src_${SH}_grill-me`, false, undefined, undefined]])
     // No copy at all and nothing read: still nothing said about the installed item.
     await rm(join(home, '.store-sources', 'cache'), { recursive: true, force: true })
     const none = makeSh()
     const empty = await none.catalog(SH, { refresh: true })
     expect(empty.items).toEqual([])
     expect(empty.error).toBeTruthy()
-    const [rec2] = await none.installs()
-    expect(rec2.removed).toBe(false)
-    expect(rec2.upstreamDeleted ?? rec2.delisted).toBeUndefined()
+    for (const r of await none.installs()) expect([r.removed, r.upstreamDeleted, r.delisted]).toEqual([false, undefined, undefined])
   })
 
   it('a successful read says when an installed item is deleted upstream or no longer listed', async () => {
