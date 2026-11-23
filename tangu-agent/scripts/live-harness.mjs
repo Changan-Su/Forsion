@@ -1102,7 +1102,7 @@ if (BLUEBIRD_SRC) {
 
 if (ONLY.has('healthsummary')) {
   if (process.env.TANGU_LIVE_CLOUD_URL) throw new Error('healthsummary requires the local fixture cloud');
-  cpSync(resolve(root, '../extensions/forsion-health'), join(shared, 'plugins/forsion-health'), { recursive: true });
+  cpSync(resolve(root, '../extensions/forsion-health'), join(shared, 'plugins/market-8d6fac48-fb63-483a-a8cb-5603a8ca1c8a'), { recursive: true });
 }
 if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat') || ONLY.has('agentfeedback')) {
   const bundle = opt('extend-plugin', '');

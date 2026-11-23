@@ -54,7 +54,7 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
-import { createOfficialCloud, isOfficialEnginePlugin } from './official.js';
+import { createOfficialCloud, isOfficialEnginePlugin, officialBundleId } from './official.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
 import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
@@ -243,7 +243,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
-    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed, path.basename(path.dirname(path.dirname(d.dir)))) } : {}),
+    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed, officialBundleId(path.basename(path.dirname(path.dirname(d.dir))))) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {

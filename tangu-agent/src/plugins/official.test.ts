@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canonicalFiles, cloudPathAllowed, createOfficialCloud, isOfficialEnginePlugin, verifyBundleSignature } from './official.js';
+import { HEALTH_MARKET_DIR, canonicalFiles, cloudPathAllowed, createOfficialCloud, isOfficialEnginePlugin, verifyBundleSignature } from './official.js';
 import type { DiscoveredPlugin } from './loader.js';
 
 const pem = (k: import('node:crypto').KeyObject): string => k.export({ type: 'spki', format: 'pem' }).toString();
@@ -372,6 +372,15 @@ describe('钉的公钥与桌面同一把', () => {
     const reader = discovered(health, 'health-reader');
     reader.manifest.entry = 'index.mjs';
     expect(await isOfficialEnginePlugin(reader, OFFICIAL_BUNDLE_KEYS)).toBe(true);
+    for (const [folder, trusted] of [[HEALTH_MARKET_DIR, true], ['market-11111111-1111-4111-8111-111111111111', false]] as const) {
+      const installed = path.join(tmp, folder);
+      cpSync(health, installed, { recursive: true });
+      const entry = discovered(installed, 'health-reader');
+      entry.manifest.entry = 'index.mjs';
+      expect(await isOfficialEnginePlugin(entry, OFFICIAL_BUNDLE_KEYS)).toBe(trusted);
+      writeFileSync(path.join(entry.dir, 'index.mjs'), 'export default {};');
+      expect(await isOfficialEnginePlugin(entry, OFFICIAL_BUNDLE_KEYS)).toBe(false);
+    }
     for (const [id, key] of Object.entries(OFFICIAL_BUNDLE_KEYS).filter(([id]) => id !== 'forsion-health')) {
       expect(bundles.find((b) => b.id === id)?.desktop?.signingKey, id).toBe(key);
     }

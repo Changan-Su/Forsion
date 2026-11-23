@@ -5,7 +5,8 @@ const { createServer } = require('node:net');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const desktop = resolve(process.env.HEALTH_TEST_DESKTOP || join(__dirname, '../../desktop'));
-const bundle = resolve(__dirname, '../forsion-health');
+const bundle = resolve(process.env.HEALTH_TEST_BUNDLE || resolve(__dirname, '../forsion-health'));
+const pluginId = require('node:path').basename(bundle);
 const electron = require(join(desktop, 'scripts/lib/launch-electron.cjs'));
 
 (async () => {
@@ -15,7 +16,7 @@ const electron = require(join(desktop, 'scripts/lib/launch-electron.cjs'));
   await new Promise((r) => server.listen(socket, r));
   const vault = join(tmp, 'vault');
   mkdirSync(vault);
-  cpSync(bundle, join(tmp, 'plugins/forsion-health'), { recursive: true });
+  cpSync(bundle, join(tmp, 'plugins', pluginId), { recursive: true });
   for (const config of ['config', 'config-dev']) {
     const dir = join(tmp, config);
     mkdirSync(dir);
@@ -39,7 +40,7 @@ const electron = require(join(desktop, 'scripts/lib/launch-electron.cjs'));
         FORSION_SANDBOX_SOCK: socket,
         FORSION_SANDBOX_TOKEN: 'fixture',
         FORSION_SANDBOX_INFO: JSON.stringify({
-          pluginId: 'forsion-health',
+          pluginId,
           name: '健康',
           version: '0.1.0',
           root: tmp,

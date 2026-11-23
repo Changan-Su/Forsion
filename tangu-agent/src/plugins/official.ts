@@ -9,7 +9,7 @@
  * 判定在每次激活时现做(bootstrap.startEntry,首次 import 之前):升级 / 重扫换了代码就重新核。
  * 只信磁盘与签名,不信 manifest 里的 id 或目录名本身:manifest.json 必须在签名里(它的 id 才可信),
  * 目录名必须等于这个 id(桌面播种内置包就落在 plugins/<id>,见 desktop/electron/builtinPlugins.ts),
- * 商店装的(market-* 目录、带 packageId 的改名身份)一律不是官方。
+ * 健康插件另支持其登记的商店安装目录。两种目录都必须验证对应签名。
  *
  * ⚠️ 威胁模型:引擎插件是同进程的原生代码,这道判定挡的是「第三方插件拿到账号出口 / 冒充审批文案 / 混进聊天」这条契约面,
  * 不是沙箱 —— 能写用户插件目录、或已经在进程里跑的代码本来就什么都做得了。
@@ -80,13 +80,19 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
   return { ok: true, files: entries.map(([rel]) => rel) };
 }
 
+// Store assigns a stable directory to each listing. A name only selects the expected key.
+export const HEALTH_MARKET_DIR = 'market-8d6fac48-fb63-483a-a8cb-5603a8ca1c8a';
+export function officialBundleId(directory: string): string {
+  return directory === HEALTH_MARKET_DIR ? 'forsion-health' : directory;
+}
+
 /** 官方判定。keys 可注入只为单测(生产恒用引擎钉的那张表);任何一步不满足都是 false,永不抛。 */
 export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<boolean> {
   try {
     if (!d.bundled || d.packageId !== undefined) return false;
     const root = path.dirname(path.dirname(d.dir)); // <shared>/plugins/<bundle>(d.dir = <bundle>/tangu-plugins/<pid>)
     const name = path.basename(root);
-    if (path.basename(path.dirname(d.dir)) !== 'tangu-plugins' || name.startsWith('market-')) return false;
+    if (path.basename(path.dirname(d.dir)) !== 'tangu-plugins' || (name.startsWith('market-') && name !== HEALTH_MARKET_DIR)) return false;
     let bundleId: unknown;
     try {
       bundleId = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'))?.id;
@@ -98,7 +104,7 @@ export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly
       console.warn(`[tangu] 捆绑包 ${name} 的引擎插件 ${d.manifest.id} 不按官方插件对待:${reason}`);
       return false;
     };
-    if (name !== bundleId) return fail(`folder name "${name}" is not the bundle id "${bundleId}"`);
+    if (officialBundleId(name) !== bundleId) return fail(`folder name "${name}" is not the bundle id "${bundleId}"`);
     // 所有要核的文件都必须真的落在捆绑包目录里:中间任何一层是符号链接(含 tangu-plugins/<pid> 本身)realpath 就对不上。
     const realRoot = await fs.realpath(root);
     const pluginRel = path.relative(root, d.dir).split(path.sep).join('/');
