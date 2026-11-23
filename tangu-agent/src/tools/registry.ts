@@ -1,6 +1,7 @@
 import { readToolOutputProvider } from './builtin/readToolOutput.js';
-import { isMultiAccount } from '../core/accountScope.js';
-import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from './multiAccountTools.js';
+import { isMultiAccount, requireAccountId } from '../core/accountScope.js';
+import { assertAccountStorage, markAccountUsageDirty, StorageLimitError } from '../services/accountStorage.js';
+import { MULTI_ACCOUNT_STORAGE_TOOLS, MULTI_ACCOUNT_TOOL_ALLOWLIST } from './multiAccountTools.js';
 import { readOnlyCodeProvider } from './builtin/readOnlyCode.js';
 /**
  * 工具系统门面(G3 拆分后)。工具实现按域拆在 builtin/* 各 provider,经 toolRegistry 自注册;
@@ -459,6 +460,16 @@ export function toolPluginOwnerOf(name: string, ctx: ToolContext): { pluginId?: 
   return o?.ownerPlugin ? { pluginId: o.ownerPlugin, pluginOfficial: o.official === true } : {};
 }
 
+/** 这次调用打算写进去的字节数(大致):写文件的正文、改文件的新串。判磁盘上限用,不求精确。 */
+function incomingBytes(args: Record<string, any>): number {
+  let n = 0;
+  const add = (v: unknown): void => { if (typeof v === 'string') n += Buffer.byteLength(v); };
+  add(args.content);
+  add(args.new_string);
+  if (Array.isArray(args.edits)) for (const e of args.edits) add(e?.new_string);
+  return n;
+}
+
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
   ctx.signal?.throwIfAborted();
@@ -499,6 +510,18 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       result: `Error: the arguments for "${name}" ${badArgs}. Nothing was executed. Resend the call with one JSON object that matches the tool's parameter schema.`,
       isError: true,
     };
+  }
+
+  // 多账号模式:往账号文件夹里写东西的工具先看磁盘上限(services/accountStorage.ts);超了不执行,告诉模型怎么回事。
+  if (isMultiAccount() && MULTI_ACCOUNT_STORAGE_TOOLS.has(name)) {
+    const id = requireAccountId('executeTool storage');
+    try {
+      await assertAccountStorage(id, incomingBytes(args));
+    } catch (e) {
+      if (!(e instanceof StorageLimitError)) throw e;
+      return { toolCallId: call.id, name, result: `Error: ${e.message} Nothing was written. Tell the user; do not retry.`, isError: true };
+    }
+    markAccountUsageDirty(id);
   }
 
   const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);

@@ -1,4 +1,6 @@
-import { accountWorkspaceDir, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
+import { accountWorkspaceDir, bindAccount, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
+import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
+import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, type WaitingFor } from './runAdmission.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
@@ -448,16 +450,29 @@ function startRunInAccount(runId: string): void {
   const mcpReady = deps().mcp?.reloadConfig?.() ?? Promise.resolve();
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  const task = withTaskProjectQueue(runId, ac.signal, async () => {
+  // 多账号模式:先拿准入名额(每账号 / 整个引擎同时几个任务,services/runAdmission.ts),拿到才开跑,并从这一刻起计这一轮的时长上限。
+  // 名额在下面的 finally 里还 —— 那是这个任务唯一一定会跑到的出口。
+  let runClock: ReturnType<typeof setTimeout> | undefined;
+  const admitted = isMultiAccount()
+    ? admitRun(runId, requireAccountId('admitRun'), ac.signal, bindAccount((why: WaitingFor) => {
+        void publish(runId, 'status', { state: 'queued', waitingFor: why }).catch(() => {});
+      })).then(() => {
+        runClock = setTimeout(() => abortRun(runId, { reason: 'time_limit' }), minutesMs(multiAccountLimits().runMinutes));
+        runClock.unref?.();
+      })
+    : Promise.resolve();
+  const task = admitted.then(() => withTaskProjectQueue(runId, ac.signal, async () => {
     await waitMcpAdmission(mcpReady, ac.signal);
     return dispatchRun(runId, ac);
-  }).catch(async (err) => {
+  })).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
-    const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
+    const aborted = !(err instanceof DockerCleanupError) && !(err instanceof RunAdmissionError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
     // 退出时(drainRunsForExit 记了原因)还在准备阶段 = 主循环还没开跑、什么都没做(连用户这句都还没落库):
     // 退回 queued,下次启动按「持有者已死的排队行」认领后照原输入起跑 —— 从没开跑的 run 重跑不会重复任何副作用。
-    if (aborted && interruptReasons.has(runId) && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)) {
+    // 多账号模式:退出时还在排准入的(没拿到名额 = 从没开跑)同样留在 queued,下次开户时收成中断并补回用户这句(recoverAccountRuns)。
+    const leftQueued = (interruptReasons.has(runId) && isRecoveryHost()) || (isMultiAccount() && exiting && !holdsAdmission(runId));
+    if (aborted && leftQueued && !userStopped.has(ac) && !abortReasons.has(runId)) {
       console.warn(`[agent-core] run preparation interrupted run=${runId} (${interruptReasons.get(runId)}): left queued for the next start`);
       try {
         await updateRunStatus(runId, 'queued').catch(() => {});
@@ -475,7 +490,8 @@ function startRunInAccount(runId: string): void {
     const message = aborted ? 'aborted' : err?.message || String(err);
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
     try {
-      await publish(runId, 'error', { error: message, aborted, content: '', ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+      const code = err instanceof RunAdmissionError ? { code: err.code } : {};
+      await publish(runId, 'error', { error: message, aborted, content: '', ...code, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
       await drain(runId).catch(() => {});
       await updateRunStatus(runId, status, { error: message }).catch(() => {});
     } finally {
@@ -490,6 +506,8 @@ function startRunInAccount(runId: string): void {
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
+    if (runClock) clearTimeout(runClock);
+    releaseRun(runId); // 多账号模式的准入名额(没拿过 = no-op)
     runTasks.delete(runId);
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));

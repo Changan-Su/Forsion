@@ -19,6 +19,11 @@ export const MULTI_ACCOUNT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   'read_file', 'write_file', 'edit_file', 'multi_edit', 'list_dir',
 ]);
 
+/** 会往账号文件夹 / 账号库里写东西的工具:执行前先看这个账号的磁盘上限(tools/registry.ts 的 executeTool)。 */
+export const MULTI_ACCOUNT_STORAGE_TOOLS: ReadonlySet<string> = new Set([
+  'write_file', 'edit_file', 'multi_edit', 'remember', 'log_event', 'manage_agent', 'manage_skill', 'todo_write',
+]);
+
 /** 多账号模式下这件工具能不能出现 / 执行。单人模式恒 true。 */
 export function multiAccountToolAllowed(name: string, mode?: 'host' | 'sandbox' | 'both'): boolean {
   if (!isMultiAccount()) return true;
