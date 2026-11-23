@@ -11,12 +11,13 @@
  *  - HandoffBlock:hand_off_task 把手头的活挪出去的会话(11-08「另起话题」),过程行下面单独一小块,不进 ForkBlock。
  */
 import React, { createContext, useContext, useEffect, useState, type RefObject } from 'react'
-import { ChevronRight, CornerDownRight, CornerUpLeft, Cpu, GitBranch, MessageCircleQuestion, MessageSquare, ShieldCheck, Sparkles, Split } from 'lucide-react'
+import { ChevronRight, CornerDownRight, CornerUpLeft, Cpu, GitBranch, MessageCircleQuestion, MessageSquare, RotateCcw, ShieldCheck, Sparkles, Split } from 'lucide-react'
 import type { SessionRecord, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
 import { useSessionAttention } from '../../stores/attentionStore'
 import { useChildChat } from '../../stores/childChatStore'
-import { listMessages, type SavedAside } from '../../services/backendService'
+import { listMessages, retryChildSession, type SavedAside } from '../../services/backendService'
+import { isRunErrorKind, type RunErrorKind } from '../../../../../tangu-agent/src/contracts/runErrorKind'
 import { targetForSession } from '../../services/engine/targets'
 import { openSession } from '../../sessionNav'
 import { registerMessages, useI18n } from '../../i18n'
@@ -34,6 +35,17 @@ registerMessages({
   'childs.st.run': { zh: '在跑', en: 'Running' },
   'childs.st.wait': { zh: '等你回复', en: 'Waiting for you' },
   'childs.st.done': { zh: '做完了', en: 'Finished' },
+  'childs.st.queued': { zh: '排队中', en: 'Queued' },
+  'childs.st.failed': { zh: '失败', en: 'Failed' },
+  'childs.retry': { zh: '重试', en: 'Retry' },
+  'childs.retryFailed': { zh: '没能重试：{e}', en: 'Couldn’t retry: {e}' },
+  'childs.why.rate_limit': { zh: '被限流', en: 'rate limited' },
+  'childs.why.quota': { zh: '额度或余额用完了', en: 'out of quota or credits' },
+  'childs.why.auth': { zh: '登录失效了', en: 'sign-in expired' },
+  'childs.why.network': { zh: '网络不通', en: 'network error' },
+  'childs.why.context': { zh: '对话太长', en: 'conversation too long' },
+  'childs.why.other': { zh: '出错了', en: 'something went wrong' },
+  'childs.upd.failedWhy': { zh: '{title} 失败了：{why}', en: '{title} failed: {why}' },
   'childs.reply': { zh: '去回复', en: 'Reply' },
   'childs.letAnswer': { zh: '让 Tangu 回答', en: 'Let Tangu answer' },
   'childs.letAnswerMsg': { zh: '子会话「{title}」在等回答，你替我回答它吧。', en: 'The child session "{title}" is waiting for an answer. Please answer it for me.' },
@@ -85,9 +97,43 @@ export function handoffIdsOf(events: ToolEvent[] | undefined): string[] {
 }
 
 const unescape = (s: string): string => s.replace(/&lt;/g, '<').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
-/** <child_sessions_update> 里每个 <child id title status>(引擎 services/childSessions.ts 写的)。 */
-export function parseChildUpdate(content: string): Array<{ id: string; title: string; status: string }> {
-  return [...content.matchAll(/<child id="([^"]*)" title="([^"]*)" status="([a-z_]+)">/g)].map((m) => ({ id: unescape(m[1]), title: unescape(m[2]), status: m[3] }))
+/** <child_sessions_update> 里每个 <child id title status>(引擎 services/childSessions.ts 写的)。
+ *  失败的那条元素里第一行是 `Failed (<类别>): <原文一行>`(11-23 起;不加属性,旧桌面照样认得出这一行) → failure。 */
+export function parseChildUpdate(content: string): Array<{ id: string; title: string; status: string; failure?: { kind: RunErrorKind; error: string } }> {
+  return [...content.matchAll(/<child id="([^"]*)" title="([^"]*)" status="([a-z_]+)">(?:\nFailed \(([a-z_]+)\): ([^\n]*))?/g)].map((m) => ({
+    id: unescape(m[1]), title: unescape(m[2]), status: m[3],
+    ...(m[3] === 'failed' && m[4] ? { failure: { kind: isRunErrorKind(m[4]) ? m[4] : 'other' as RunErrorKind, error: m[5] || '' } } : {}),
+  }))
+}
+
+const refreshList = (): void => { const st = useApp.getState(); if (st.cfg) void st.refreshSessions(st.cfg).catch(() => {}) }
+
+/** 有子会话在通道闸前排队时,每 5 秒拉一次会话列表(排队通常几秒就过去,不刷会一直停在「排队中」);没人排队不轮询。 */
+function useQueuedRefresh(anyQueued: boolean): void {
+  useEffect(() => {
+    if (!anyQueued) return
+    const id = setInterval(refreshList, 5000)
+    return () => clearInterval(id)
+  }, [anyQueued])
+}
+
+/** 子会话失败的原因(一个短语)。 */
+const whyKey = (kind: RunErrorKind | undefined): string => `childs.why.${kind || 'other'}`
+
+/** 父会话里「重试」一个失败的子会话:引擎以主会话的名义再发一轮,做完照常回报。 */
+function useRetryChild(parentId: string | undefined, childId: string): { retry: (e?: React.MouseEvent) => void; busy: boolean } {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const retry = (e?: React.MouseEvent): void => {
+    e?.stopPropagation()
+    if (!parentId || busy) return
+    setBusy(true)
+    void retryChildSession(targetForSession(parentId), parentId, childId)
+      .then(() => refreshList())
+      .catch((err: any) => useApp.getState().toast(t('childs.retryFailed', { e: err?.message || String(err) }), true))
+      .finally(() => setBusy(false))
+  }
+  return { retry, busy }
 }
 
 /** 最后一句话的摘要(去掉 markdown 记号,一行)。 */
@@ -134,16 +180,26 @@ function ChildRow({ parentId, fromId, s, status, onSuggest }: { parentId: string
     if (e.metaKey || e.ctrlKey) { openSession(s.id, { newTab: true }); return }
     useChildChat.getState().open(parentId, { id: s.id, sessionId: s.id, title })
   }
-  const label = status === 'run' ? 'childs.st.run' : status === 'wait' ? 'childs.st.wait' : 'childs.st.done'
+  // 排队中 = 在跑、但模型请求在通道闸前等(同一通道撞了限流 / 到了并发上限);失败 = 没在跑、最近一轮失败了(引擎会话列表 last_failure)
+  const failed = status !== 'run' && status !== 'wait' && !!s.last_failure
+  const label = status === 'run' ? (s.queued ? 'childs.st.queued' : 'childs.st.run') : status === 'wait' ? 'childs.st.wait' : failed ? 'childs.st.failed' : 'childs.st.done'
+  const { retry, busy } = useRetryChild(openerId, s.id)
   return (
-    <div className="t2-child-row" role="button" tabIndex={0} data-child-session={s.id} data-status={status || 'seen'} onClick={open}
+    <div className="t2-child-row" role="button" tabIndex={0} data-child-session={s.id} data-status={failed ? 'failed' : status === 'run' && s.queued ? 'queued' : status || 'seen'} onClick={open}
       onKeyDown={(e) => { if (e.key === 'Enter') useChildChat.getState().open(parentId, { id: s.id, sessionId: s.id, title }) }}>
       <span className="t2-child-lead"><MessageSquare size={15} /></span>
       <span className="t2-child-title">{title}</span>
       {/* 芯片放在状态格里(行是四列 grid,另起一格会把下一行的 grid-column 2/4 挤歪) */}
-      <span className={`t2-child-state${status === 'wait' ? ' wait' : ''}`}>{ownModel && <ModelChip model={ownModel} />}{t(label)}<StatusMark status={status} /></span>
+      <span className={`t2-child-state${status === 'wait' ? ' wait' : failed ? ' failed' : ''}`} title={failed ? s.last_failure!.error : undefined}>{ownModel && <ModelChip model={ownModel} />}{t(label)}<StatusMark status={status} /></span>
       <span className="t2-child-chev"><ChevronRight size={13} /></span>
-      {sub && status !== 'run' && <span className="t2-child-sub">{sub}</span>}
+      {failed
+        ? <span className="t2-child-sub" title={s.last_failure!.error}>{t(whyKey(s.last_failure!.kind))}</span>
+        : sub && status !== 'run' && <span className="t2-child-sub">{sub}</span>}
+      {failed && (
+        <div className="t2-taskcard-actions t2-child-actions">
+          <button type="button" className="primary" disabled={busy} data-testid="child-retry" onClick={retry}><RotateCcw size={12} /> {t('childs.retry')}</button>
+        </div>
+      )}
       {status === 'wait' && (
         <div className="t2-taskcard-actions t2-child-actions">
           <button type="button" className="primary" onClick={(e) => { e.stopPropagation(); open(e) }}><CornerDownRight size={12} /> {t('childs.reply')}</button>
@@ -161,6 +217,7 @@ export function ChildSessionsBlock({ parentId, ids, onSuggest }: { parentId: str
   const unread = useApp((s) => s.unread)
   const attention = useSessionAttention()
   const kids = ids.map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
+  useQueuedRefresh(kids.some((k) => k.queued))
   if (!kids.length) return null // 子会话都归档 / 删掉了:块也不留
   const st = kids.map((k) => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id)))
   const waiting = st.filter((x) => x === 'wait').length
@@ -374,15 +431,30 @@ export function ChildSessionsPill({ rootRef, sessionId, onJump }: {
   )
 }
 
-export function ChildUpdateLine({ content }: { content: string }) {
+export function ChildUpdateLine({ content, parentId }: { content: string; parentId?: string }) {
   const { t } = useI18n()
   const rows = parseChildUpdate(content)
   return (
     <div className="t2-sys t2-child-update" data-child-update={rows.length}>
       <CornerDownRight size={12} />
       <span>{t('childs.update')}</span>
-      {rows.map((r) => <span key={r.id} className="t2-child-update-item" data-status={r.status}>{t(`childs.upd.${r.status in UPD ? r.status : 'finished'}`, { title: r.title })}</span>)}
+      {rows.map((r) => r.status === 'failed'
+        ? <FailedChildItem key={r.id} parentId={parentId} row={r} />
+        : <span key={r.id} className="t2-child-update-item" data-status={r.status}>{t(`childs.upd.${r.status in UPD ? r.status : 'finished'}`, { title: r.title })}</span>)}
     </div>
+  )
+}
+
+/** 回报行里失败的那条:写明原因(原文在悬停里),带「重试」。子会话已经又在跑(重试过了 / 用户进去接着聊)就不再给按钮。 */
+function FailedChildItem({ parentId, row }: { parentId?: string; row: ReturnType<typeof parseChildUpdate>[number] }) {
+  const { t } = useI18n()
+  const running = useApp((s) => !!s.runningBySession[row.id] || !!s.sessions.find((x) => x.id === row.id)?.busy)
+  const { retry, busy } = useRetryChild(parentId, row.id)
+  return (
+    <span className="t2-child-update-item" data-status="failed" title={row.failure?.error}>
+      {row.failure ? t('childs.upd.failedWhy', { title: row.title, why: t(whyKey(row.failure.kind)) }) : t('childs.upd.failed', { title: row.title })}
+      {parentId && !running && <button type="button" className="t2-child-update-retry" disabled={busy} data-testid="child-update-retry" onClick={retry}><RotateCcw size={11} /> {t('childs.retry')}</button>}
+    </span>
   )
 }
 const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }

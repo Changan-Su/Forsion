@@ -110,6 +110,9 @@ registerMessages({
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
   // 团队模式下没有计划模式(成员不吃它,10-05 用户定):那一项置灰,原因直接写在项上 —— 触屏没有悬停说明。
   'input.planModeTeamOff': { zh: '团队模式下不可用', en: 'Not available in team mode' },
+  'input.childSection': { zh: '子会话', en: 'Child sessions' },
+  'input.noChildSessions': { zh: '不开子会话', en: 'No child sessions' },
+  'input.noChildSessionsHint': { zh: '开着时这个对话里的 Agent 不能开子会话或派子代理，只在这里串行做', en: 'When on, the Agent in this chat can’t start child sessions or sub-agents; it works here, one step at a time' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -399,6 +402,9 @@ export const Composer2: React.FC<{
   onVerifyCommandChange?: (cmd: string) => void
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
+  /** 不开子会话(会话设置,缺省允许):开着时引擎从工具表里拿掉 start_session 和 delegate。会话进行中也能改。 */
+  noChildSessions?: boolean
+  onNoChildSessionsChange?: (on: boolean) => void
   /** 工作预设(会话事实):'chat' 轻聊天 / 缺省 work。onPresetChange 仅供空态 /chat、/work 命令;可见切换在侧栏胶囊。 */
   preset?: AgentConfig['preset']
   onPresetChange?: (p: 'chat' | 'work') => void
@@ -492,7 +498,7 @@ export const Composer2: React.FC<{
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
-  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
+  preset, onPresetChange, planMode, onPlanModeChange, noChildSessions, onNoChildSessionsChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, recipientChip, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
@@ -1872,6 +1878,18 @@ export const Composer2: React.FC<{
       run: () => { onPlanModeChange(!planMode); closeModeMenu() },
     }],
   } : null
+  // 「不开子会话」和计划模式放在一起(插件开发优化方案 11-23 第四节 A):开着时引擎从工具表拿掉 start_session / delegate。
+  // 团队模式下成员本来就开不了子会话,这一项置灰。Web 菜单与原生半屏同一份。
+  const childSection: SheetMenuSection | null = onNoChildSessionsChange && !isChat && !isEngine ? {
+    title: t('input.childSection'),
+    items: [{
+      id: 'no-child-sessions', icon: <Split size={14} />,
+      label: groupChat ? `${t('input.noChildSessions')} · ${t('input.planModeTeamOff')}` : t('input.noChildSessions'),
+      detail: t('input.noChildSessionsHint'),
+      checked: !!noChildSessions && !groupChat, disabled: !!groupChat,
+      run: () => { onNoChildSessionsChange(!noChildSessions); closeModeMenu() },
+    }],
+  } : null
   const groupSection: SheetMenuSection | null = onGroupChange && !isEngine && !isChat ? {
     title: t('group.menu.section'),
     items: [{ id: 'group-chat', label: groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable'), icon: <Users size={14} />, checked: groupActive, run: () => { setGroupSetupOpen(true); closeModeMenu() } }],
@@ -1893,6 +1911,7 @@ export const Composer2: React.FC<{
       sections: [
         { items: normal ? [normal.normal, ...(normal.agentSwitch ? [normal.agentSwitch] : [])] : [] },
         ...(planSection ? [planSection] : []),
+        ...(childSection ? [childSection] : []),
         ...(groupSection ? [groupSection] : []),
         ...(isHost ? [{ title: t(teamApproval ? 'input.approvalSection.team' : 'input.approvalSection'), items: [...approvalItems, ...(editRulesItem ? [editRulesItem] : [])] }] : []),
       ],
@@ -2308,11 +2327,11 @@ export const Composer2: React.FC<{
                   <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode t2c-pour" style={modeFix.style}>
                     {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { capsule.dismiss(); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
                     {onNormalWork && !isChat && <NormalModeItem {...normalProps} inline={layout.compact} />}
-                    {[planSection, groupSection].map((sec) => sec && (
+                    {[planSection, childSection, groupSection].map((sec) => sec && (
                       <React.Fragment key={sec.items[0].id}>
                         <div className="menu-section">{sec.title}</div>
                         {sec.items.map((it) => (
-                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} disabled={it.disabled} onClick={it.run}>
+                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} disabled={it.disabled} onClick={it.run} title={it.detail} data-menu-item={it.id}>
                             {it.icon}
                             <span className="grow">{it.label}</span>
                             {it.checked && <Check size={13} />}

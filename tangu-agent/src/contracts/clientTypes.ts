@@ -1191,6 +1191,8 @@ export interface UiMessage {
   work?: TeamWork
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
+  /** 失败的类别(引擎 error 事件带,contracts/runErrorKind.ts):按它出文案,原文收进「看原文」。旧引擎 / 回放的行没有 → 按原文认。 */
+  errorKind?: RunErrorKind
   /** 收尾那一发写到了输出上限、停在半句(done 的 truncated):画「停在了半句」+「继续生成」。只在本次运行里有,重载即无。 */
   truncated?: boolean
   /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
@@ -1316,10 +1318,14 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   quotaFallbackModelId?: string
   /** 换之前先问我(models.quotaFallbackAsk)。 */
   quotaFallbackAsk?: boolean
+  /** 同一通道(提供方 + 密钥)同时在飞的模型请求上限(config.json models.channelConcurrency,1–16;缺省 3)。引擎 llm/channelGate.ts 读。 */
+  channelConcurrency?: number
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel?: ThinkingLevel
+  /** 按 Agent 记的上次思考档(work 会话;插件开发优化方案 11-23 第五节):新对话按这次的 Agent 起步,没记过的 Agent 回落 lastThinkingLevel。 */
+  lastThinkingByAgent?: Record<string, ThinkingLevel>
   /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省「中」(09-19 前是 off);在 chat 里改档不污染下一个 work 会话。 */
   lastChatThinkingLevel?: ThinkingLevel
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */

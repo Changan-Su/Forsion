@@ -13,7 +13,12 @@
  *   { mode: 'length_after', match, chars, times } —— 同 cut_after 的前 times 次(缺省 1)主对话请求:正文攒够 chars 字后补一条
  *        response.incomplete(incomplete_details.reason = max_output_tokens)收尾,等于「写到输出上限」(11-15 lengthcut 场景)。
  *        引擎自动接写的那一发历史里也带 match:times = 2 时它也被截,用来造「接了还撞上限」。
- * 每个 /responses 请求往 `<规则文件>.log` 记一行 { t, fired, bytes, encrypted, match },场景据此断言「拒了几次、重发长什么样」。
+ *   { mode: 'rate_window', match, max, windowMs, variant } —— 11-23 通道闸(channelgate 场景):像真实的 TPM 窗口。带 match 且带工具头的主对话请求,
+ *        windowMs 内已放行 max 个时,后来的回限流:厂商原文「Rate limit reached … Please try again in X.XXXs」,X = 窗口里最早那个放行到期还剩多久;
+ *        **不带 Retry-After 响应头**(Codex 流里的错就没有头)。variant: 'http'(429 JSON)/ 'stream'(200 + 流里 error / response.failed,
+ *        code rate_limit_exceeded)/ 'mixed'(两种轮流,缺省)。
+ *   { mode: 'observe', match } —— 什么都不注入,只记日志(nochild 场景看请求体里带没带 start_session / delegate)。
+ * 每个 /responses 请求往 `<规则文件>.log` 记一行 { t, fired, bytes, encrypted, match, startSession, delegate },场景据此断言「拒了几次、重发长什么样、给了哪些工具」。
  * 报文取自 magpie 的厂商原文夹具(overflow_stream_test.go、foreign_seal_test.go,MIT)。
  */
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -23,7 +28,8 @@ const realFetch = globalThis.fetch;
 const OVERFLOW = { type: 'invalid_request_error', code: 'context_length_exceeded', message: 'Your input exceeds the context window of this model. Please adjust your input and try again.', param: 'input' };
 const UNVERIFIABLE = { message: 'The encrypted content for item rs_ could not be verified. Reason: Encrypted content could not be decrypted or parsed.', type: 'invalid_request_error', param: null, code: 'invalid_encrypted_content' };
 const QUOTA = { type: 'insufficient_quota', code: 'insufficient_quota', message: 'You exceeded your current quota, please check your plan and billing details.', param: null };
-const state = { rule: '', limit: 0, foreign: new Set(), cut: false, lengthCuts: 0 };
+const state = { rule: '', limit: 0, foreign: new Set(), cut: false, lengthCuts: 0, admitted: [], rejected: 0 };
+const rateMsg = (ms) => `Rate limit reached for gpt-6.2-sol in organization org-live on tokens per min (TPM): Limit 1000000, Used 955313, Requested 109292. Please try again in ${(ms / 1000).toFixed(3)}s. Visit https://platform.openai.com/account/rate-limits to learn more.`;
 
 /** 原样转发真上游的 SSE,正文攒够 chars 字后在事件边界补额度报错(tail = 'length' 时补 response.incomplete)并收尾(上游那条连接随之取消)。 */
 function cutStream(res, chars, tail = 'quota') {
@@ -70,7 +76,7 @@ if (FILE) {
     let rule = null;
     try { rule = JSON.parse(readFileSync(FILE, 'utf8')); } catch { /* 没有规则 = 不注入 */ }
     const key = rule ? JSON.stringify(rule) : '';
-    if (key !== state.rule) Object.assign(state, { rule: key, limit: 0, foreign: new Set(), cut: false, lengthCuts: 0 }); // 换了规则从头记
+    if (key !== state.rule) Object.assign(state, { rule: key, limit: 0, foreign: new Set(), cut: false, lengthCuts: 0, admitted: [], rejected: 0 }); // 换了规则从头记
     const blobs = [...body.matchAll(/"encrypted_content":"([^"]+)"/g)].map((m) => m[1]);
     const match = !!rule?.match && body.includes(rule.match);
     let fired = null;
@@ -83,11 +89,33 @@ if (FILE) {
     } else if (rule?.mode === 'length_after' && match && state.lengthCuts < (Number(rule.times) || 1) && body.includes('"tools":[')) {
       state.lengthCuts += 1;
       fired = 'length_after';
+    } else if (rule?.mode === 'rate_window' && match && body.includes('"tools":[')) {
+      const now = Date.now();
+      const win = Number(rule.windowMs) || 10_000;
+      state.admitted = state.admitted.filter((t) => now - t < win);
+      if (state.admitted.length >= (Number(rule.max) || 1)) {
+        state.rejected += 1;
+        const variant = rule.variant === 'http' || rule.variant === 'stream' ? rule.variant : state.rejected % 2 ? 'http' : 'stream';
+        fired = `rate_${variant}`;
+        state.waitMs = Math.max(1, state.admitted[0] + win - now);
+      } else state.admitted.push(now);
     } else if (rule?.mode === 'invalid_encrypted_content') {
       if (!state.foreign.size && match && blobs.length) blobs.forEach((b) => state.foreign.add(b));
       if (blobs.some((b) => state.foreign.has(b))) fired = 'invalid_encrypted_content';
     }
-    appendFileSync(`${FILE}.log`, `${JSON.stringify({ t: Date.now(), fired, bytes: body.length, encrypted: blobs.length, match })}\n`);
+    appendFileSync(`${FILE}.log`, `${JSON.stringify({ t: Date.now(), fired, bytes: body.length, encrypted: blobs.length, match, tools: body.includes('"tools":['), startSession: body.includes('"name":"start_session"'), delegate: body.includes('"name":"delegate"') })}\n`);
+    if (fired === 'rate_http') {
+      const error = { message: rateMsg(state.waitMs), type: 'tokens', param: null, code: 'rate_limit_exceeded' };
+      return new Response(JSON.stringify({ error }), { status: 429, headers: { 'content-type': 'application/json' } });
+    }
+    if (fired === 'rate_stream') {
+      const error = { type: 'tokens', code: 'rate_limit_exceeded', message: rateMsg(state.waitMs), param: null };
+      return sse([
+        { type: 'response.created', sequence_number: 0, response: { id: 'resp_fault', object: 'response', status: 'in_progress', error: null } },
+        { type: 'error', error, sequence_number: 1 },
+        { type: 'response.failed', sequence_number: 2, response: { id: 'resp_fault', object: 'response', status: 'failed', error: { code: error.code, message: error.message } } },
+      ]);
+    }
     if (fired === 'stream_overflow') {
       return sse([
         { type: 'response.created', sequence_number: 0, response: { id: 'resp_fault', object: 'response', status: 'in_progress', error: null } },

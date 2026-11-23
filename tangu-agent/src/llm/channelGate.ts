@@ -6,7 +6,8 @@
  *  - **暂停**:任何一个请求撞上秒级限流(retry.ts isRateLimitedLlmError),整个通道暂停到报错给出的时刻(响应头 Retry-After 或正文「try again in Xs」;
  *    没给按 2 秒)。暂停期间别的请求排队,不再各自去撞 —— 第一轮 dogfood 四路并发各自退避 1/2/4 秒后一起撞上去,3 次用完照样失败。
  *    超过 60 秒的点名等待不暂停:撞上它的那一轮照旧按失败处理(retry.ts RETRY_AFTER_MAX_MS),别的会话不跟着干等。
- *  - **试探**:暂停结束只先放一个请求出去,它拿到响应头(或第一帧、或 5 秒没动静、或结束)再放其余的 —— 一起放会重演「退避完一起撞」。
+ *  - **逐个恢复**:暂停结束后一次只放一个出去,它拿到响应头(或第一帧、或 5 秒没动静、或结束)再放下一个,直到排队的都放完 ——
+ *    一起放会重演「退避完一起撞」;只试探一个再全放,窗口刚开就又撞满。恢复期间又撞了限流 → 重新暂停,接着逐个放。
  *  - **并发上限**:同一通道同时在飞的请求缺省 3 路(config.json models.channelConcurrency,设置里能改),超出的排队(先来先得)。
  *
  * 槽位只在一次请求的流里持有:退避、等网、工具执行期间都不占(调用方在拿到结果 / 失败后立刻 release,再去重试链里等)。
@@ -59,8 +60,8 @@ interface Waiter {
 
 interface Channel {
   pausedUntil: number;
-  /** 暂停结束后先放一个出去试探 */
-  needsProbe: boolean;
+  /** 撞过限流、还在逐个恢复:一次只放一个,它开了口再放下一个;排队的放完就回到正常 */
+  recovering: boolean;
   probeOut: boolean;
   inflight: number;
   waiters: Waiter[];
@@ -71,7 +72,7 @@ const channels = new Map<string, Channel>();
 
 const channelOf = (key: string): Channel => {
   let c = channels.get(key);
-  if (!c) { c = { pausedUntil: 0, needsProbe: false, probeOut: false, inflight: 0, waiters: [] }; channels.set(key, c); }
+  if (!c) { c = { pausedUntil: 0, recovering: false, probeOut: false, inflight: 0, waiters: [] }; channels.set(key, c); }
   return c;
 };
 
@@ -99,14 +100,15 @@ function pump(key: string): void {
   }
   if (c.probeOut) return;
   const limit = channelConcurrency();
+  if (c.recovering && !c.waiters.length) c.recovering = false;
   while (c.waiters.length && c.inflight < limit) {
     const w = c.waiters.shift()!;
     c.inflight++;
-    if (c.needsProbe) { c.needsProbe = false; c.probeOut = true; w.grant(true); break; }
+    if (c.recovering) { c.probeOut = true; w.grant(true); break; }
     w.grant(false);
   }
   if (c.waiters.length) notify(c, limit);
-  if (!c.waiters.length && !c.inflight && c.pausedUntil <= now && !c.probeOut) channels.delete(key);
+  if (!c.waiters.length && !c.inflight && c.pausedUntil <= now && !c.probeOut && !c.recovering) channels.delete(key);
 }
 
 export interface ChannelSlot {
@@ -116,11 +118,11 @@ export interface ChannelSlot {
   failed(err: unknown): void;
   /** 请求结束(成功或失败都要调,只算一次) */
   release(): void;
-  /** 这个槽位是暂停之后的试探请求 */
+  /** 这个槽位是逐个恢复期间放出去的那一个 */
   readonly probe: boolean;
 }
 
-/** 通道暂停到 now + ms(只延长,不缩短);暂停结束后先放一个试探。 */
+/** 通道暂停到 now + ms(只延长,不缩短);暂停结束后逐个恢复。 */
 export function pauseChannel(key: string, ms: number): void {
   const c = channelOf(key);
   const until = Date.now() + Math.max(0, ms);
@@ -128,7 +130,7 @@ export function pauseChannel(key: string, ms: number): void {
     c.pausedUntil = until;
     if (c.timer) { clearTimeout(c.timer); c.timer = undefined; }
   }
-  c.needsProbe = true;
+  c.recovering = true;
   notify(c, channelConcurrency());
   pump(key);
 }
@@ -168,7 +170,7 @@ export function acquireChannel(key: string, opts: { signal?: AbortSignal; sessio
         failed: (err) => {
           const ms = pauseMsFor(err);
           if (ms !== null) {
-            // 试探又撞了:不放其余的,重新暂停(再来一个试探)
+            // 恢复中的这一个又撞了:不放下一个,重新暂停(之后接着逐个放)
             if (isProbe && !opened) { opened = true; if (probeTimer) clearTimeout(probeTimer); c.probeOut = false; }
             pauseChannel(key, ms);
           }

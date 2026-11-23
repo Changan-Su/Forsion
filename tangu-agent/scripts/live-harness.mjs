@@ -441,6 +441,8 @@ OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
 OPT_IN.add('lengthcut'); KEYS.push('lengthcut'); // 注入:真 Codex 回答写到一半补一条 response.incomplete(max_output_tokens),看引擎自动接写一次 / 接了还撞上限给 truncated,以及用户按停后「继续生成」;改截断续写(agentLoop 那段 / turnResume 的 length·stopped 两句)后跑。自带负对照腿
+OPT_IN.add('channelgate'); KEYS.push('channelgate'); // 注入(11-23 通道闸):四个会话同时跑,上游按时间窗限流(lib/llm-fault-preload.mjs rate_window,正文带 try again in、不带响应头);动 llm/channelGate.ts / retry.ts 的限流认法时跑。负对照 = 旧引擎(--kind base)
+OPT_IN.add('nochild'); KEYS.push('nochild'); // 「不开子会话」开关(11-23):开着时请求体里没有 start_session / delegate、模型开不了子会话;对照腿和计划模式腿只看工具表。动 toolRegistry 的子会话门控时跑
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -1035,7 +1037,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') || ONLY.has('channelgate') || ONLY.has('nochild') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -3636,6 +3638,64 @@ try {
       && compacting.some((x) => x.reason === 'overflow') && compacted.length >= 1 && retries.length === 0;
     const detail = `被拒 ${fired.length} 次(${fired[0]?.bytes ?? '-'}B)、放行 ${passed.length} 次(${passed[0]?.bytes ?? '-'}B);压缩 ${compacting.map((x) => x.reason).join(',') || '无'} → ${compacted.length ? (compacted[0].fallback ? '机械折叠' : `摘要 ${compacted[0].summarized ?? '?'} 条`) : '无'};llm_retry ${retries.length} 次;${b.error ? `报错:${b.error.slice(0, 140)}` : `答${b.content.includes(tok) ? '对' : '错'}`}`;
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
+  });
+
+  // channelgate(11-23,插件开发优化方案第三节 A + 四节 B):四个会话同时各读一个文件再作答(每个会话两次模型调用),
+  //   上游像真实的 TPM 窗口:10 秒内只放行 2 个主对话请求,多的回厂商原文限流(正文「Please try again in X.XXXs」、不带 Retry-After 头,
+  //   HTTP 429 和流里 rate_limit_exceeded 轮流)。修好 = 认出正文里的等待、整条通道暂停、别的会话排队(status llm_queue)、四个全答对。
+  //   负对照(--kind base,旧引擎):正文里的等待没人读,各自 1/2/4 秒退避一起撞回去,7 秒 < 10 秒窗口 → 至少一个会话失败。
+  await scenario('channelgate', 'channelgate 同一通道四路并发撞限流:排队而不连锁失败', async () => {
+    const tag = `GATE-${randomUUID().slice(0, 6)}`;
+    const dir = join(workspace, 'gate');
+    mkdirSync(dir, { recursive: true });
+    const codes = [0, 1, 2, 3].map((i) => `${tag}-${i}-${randomUUID().slice(0, 4)}`);
+    codes.forEach((c, i) => writeFileSync(join(dir, `note-${i}.txt`), `${c}\n`));
+    armFault({ mode: 'rate_window', match: tag, max: 2, windowMs: 10_000, variant: 'mixed' });
+    const t0 = Date.now();
+    const evs = await Promise.all(codes.map((c, i) => run(`live-gate-${i}-${Date.now()}`, `[${tag}] Read the file gate/note-${i}.txt with read_file and reply with exactly the code written in it, nothing else.`, 420_000)))
+      .finally(disarmFault);
+    const wall = Date.now() - t0;
+    const log = faultLog().filter((l) => l.match && l.tools);
+    const fired = log.filter((l) => l.fired);
+    const queued = evs.map((e) => e.statuses.filter((x) => x.phase === 'llm_queue'));
+    const retries = evs.map((e) => e.statuses.filter((x) => x.phase === 'llm_retry'));
+    const right = evs.map((e, i) => !e.error && e.content.includes(codes[i]));
+    writeFileSync(join(OUT, 'channelgate-evidence.json'), JSON.stringify({ codes, wall, log, runs: evs.map((e, i) => ({ error: e.error, content: e.content, toolCalls: e.toolCalls, queue: queued[i], retry: retries[i] })) }, null, 2));
+    const ok = right.every(Boolean) && fired.length >= 1 && queued.some((q) => q.length > 0);
+    const detail = `四个会话 ${right.filter(Boolean).length}/4 答对${evs.some((e) => e.error) ? `(失败:${evs.filter((e) => e.error).map((e) => e.error.slice(0, 90)).join(' | ')})` : ''};`
+      + `上游放行 ${log.length - fired.length} 次、限流 ${fired.length} 次(HTTP ${fired.filter((l) => l.fired === 'rate_http').length} / 流里 ${fired.filter((l) => l.fired === 'rate_stream').length});`
+      + `排队行 ${queued.map((q) => q.length).join('/')}(${[...new Set(queued.flat().map((x) => x.reason))].join(',') || '无'});重试行 ${retries.map((r) => r.length).join('/')};墙钟 ${sec(wall)}`;
+    return { ok, detail, output: evs.map((e, i) => `【会话 ${i}】${e.error ? `报错:${e.error}` : e.content}`).join('\n'), toolCalls: evs.flatMap((e) => e.toolCalls), tokens: evs.reduce((a, e) => a + (tokensOf(e) || 0), 0) || null };
+  });
+
+  // nochild(11-23,方案第四节 A):会话设置「不开子会话」开着时,引擎从工具表拿掉 start_session 和 delegate。
+  //   ① 开着,明令要它开两个子会话并行查 → 发给模型的每个请求里都没有这两个工具、它也没开出子会话(请求体由 preload 记下);
+  //   ② 对照腿:同一个会话设置不开,只让它回一句 → 请求里有 start_session(证明 ① 的「没有」不是台架看错);
+  //   ③ 计划模式(不开开关)→ 请求里也没有 delegate、start_session(计划模式顺手拿掉 delegate)。
+  //   负对照(--kind base,旧引擎):① 的请求里两个工具都在(旧引擎不认这个开关),③ 里 delegate 还在。
+  await scenario('nochild', 'nochild 不开子会话:工具表里拿掉 start_session / delegate', async () => {
+    const leg = async (name, cfg, prompt) => {
+      const tag = `NOCHILD-${name}-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'observe', match: tag });
+      const sid = `live-nochild-${name}-${Date.now()}`;
+      const ev = await run(sid, `[${tag}] ${prompt}`, 300_000, cfg).finally(disarmFault);
+      const reqs = faultLog().filter((l) => l.match && l.tools);
+      const kids = (await api('/agent/sessions?limit=500')).sessions.filter((x) => x.parent_session_id === sid);
+      return { ev, reqs, kids, sid };
+    };
+    const FAN = 'Open two child sessions with start_session and run them in parallel: one lists the files in the current folder, the other tells me today\'s date. Then summarize both. If you cannot start child sessions or delegate, do the work yourself here instead and say so.';
+    const a = await leg('on', { noChildSessions: true }, FAN);
+    const b = await leg('off', {}, 'Reply with exactly "OK". Do not call any tools.');
+    const c = await leg('plan', { planMode: true }, 'Reply with exactly "OK". Do not call any tools.');
+    const offered = (r, k) => r.reqs.some((l) => l[k]);
+    const aClean = a.reqs.length > 0 && !offered(a, 'startSession') && !offered(a, 'delegate') && !a.ev.toolCalls.some((n) => n === 'start_session' || n === 'delegate') && a.kids.length === 0;
+    const bHas = b.reqs.length > 0 && offered(b, 'startSession');
+    const cClean = c.reqs.length > 0 && !offered(c, 'delegate') && !offered(c, 'startSession');
+    writeFileSync(join(OUT, 'nochild-evidence.json'), JSON.stringify({ on: { reqs: a.reqs, toolCalls: a.ev.toolCalls, kids: a.kids.map((k) => k.id), content: a.ev.content, error: a.ev.error }, off: { reqs: b.reqs, content: b.ev.content }, plan: { reqs: c.reqs, content: c.ev.content } }, null, 2));
+    const fmt = (r) => `${r.reqs.length} 个请求,start_session ${offered(r, 'startSession') ? '在' : '无'}、delegate ${offered(r, 'delegate') ? '在' : '无'}`;
+    const detail = `【开着】${fmt(a)};工具序列 ${a.ev.toolCalls.join(' → ') || '无'};子会话 ${a.kids.length} 个${a.ev.error ? `;报错:${a.ev.error.slice(0, 100)}` : ''}`
+      + ` 【对照(没开)】${fmt(b)} 【计划模式】${fmt(c)}`;
+    return { ok: aClean && bHas && cClean && !a.ev.error, detail, output: `【开着】${a.ev.content}\n\n【对照】${b.ev.content}\n\n【计划模式】${c.ev.content}`, toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls, ...c.ev.toolCalls], tokens: (tokensOf(a.ev) || 0) + (tokensOf(b.ev) || 0) + (tokensOf(c.ev) || 0) || null };
   });
 
   // resume(11-20,中断任务续跑方案 B):工具执行到一半强杀引擎 → 同一 home 重启 → 自动续一轮跑完,不重跑已经开始的那条命令。

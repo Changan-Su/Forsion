@@ -409,6 +409,17 @@
 
 .t2-status-ok { color: var(--accent-ink); }
 .t2-status-err { color: var(--danger); }
+/* 失败那一行:人话在前,原文收进「看原文」(11-23 报错归类)。按钮是文字按钮,原文块等宽、可选中、长了换行不撑宽气泡。 */
+.t2-err-raw-toggle {
+  flex: none; height: 22px; padding: 0 6px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.t2-err-raw-toggle:hover { background: var(--overlay-light); color: var(--text); }
+.t2-err-raw {
+  margin: 2px 0 6px; padding: 6px 10px; border-radius: var(--radius-sm); background: var(--overlay-light);
+  font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; max-height: 160px; overflow: auto;
+}
 
 /* ====== 待办 ====== */
 .t2-todo {
@@ -1522,6 +1533,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-child-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-child-state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; }
 .t2-child-state.wait { color: var(--warning); }
+.t2-child-state.failed { color: var(--danger); }
 .t2-child-chev { display: grid; color: var(--text-faint, var(--text-muted)); opacity: 0; transition: opacity var(--duration-fast, .15s); }
 .t2-child-row:hover .t2-child-chev { opacity: 1; }
 .t2-child-sub { grid-column: 2 / 4; margin-top: 2px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1542,6 +1554,11 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-child-update > svg { color: var(--accent-ink); flex: none; }
 .t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
 .t2-child-update-item[data-status='failed'] { color: var(--danger); }
+.t2-child-update-retry {
+  height: 22px; padding: 0 6px; margin-left: 4px; border: 0; border-radius: var(--radius-sm); background: transparent;
+  color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.t2-child-update-retry:hover { background: var(--overlay-light); }
 .t2-child-update-item + .t2-child-update-item::before { content: '·'; margin-right: 8px; color: var(--text-faint, var(--text-muted)); }
 /* <session_message> 落库行(别的会话发来的消息):一行谁发的 + 正文(最多 4 行,悬停看全文) */
 .t2-session-msg { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 4px 0; }

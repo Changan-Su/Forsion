@@ -102,7 +102,7 @@ describe('④ 通道闸', () => {
     expect(__channelState('k')).toMatchObject({ inflight: 3, waiting: 0 });
   });
 
-  it('撞了限流:整条通道暂停到点名时刻,其余排队报 rate_limit;到点只放一个试探,它拿到响应头再放其余', async () => {
+  it('撞了限流:整条通道暂停到点名时刻,其余排队报 rate_limit;到点逐个放,前一个拿到响应头再放下一个', async () => {
     vi.useFakeTimers();
     const first = await acquireChannel('k');
     first.failed(new LlmError(429, TPM_MS)); // 928ms
@@ -120,7 +120,16 @@ describe('④ 通道闸', () => {
     expect(slots.a.probe).toBe(true);
     slots.a.opened();
     await flush();
+    expect(got).toEqual(['a', 'b']);
+    slots.b.opened();
+    await flush();
     expect(got).toEqual(['a', 'b', 'c']);
+    // 排队的放完了:回到正常(新来的直接放,不再逐个)
+    slots.c.opened();
+    for (const id of ['a', 'b', 'c']) slots[id].release();
+    await flush();
+    const d = await acquireChannel('k');
+    expect(d.probe).toBe(false);
   });
 
   it('试探又撞限流:重新暂停,其余不放;试探 5 秒没动静也当放行', async () => {
