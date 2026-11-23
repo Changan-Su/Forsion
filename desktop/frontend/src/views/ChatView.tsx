@@ -74,6 +74,7 @@ import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { ChatCanvas, armCanvasEnter, chatAnchor, useCanvasKids, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
+import { finishedReplyCount, tailTodoOf } from './chat2/tailTodo'
 import { useI18n } from '../i18n'
 import { effectiveTtsConfig, speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import { homeTarget, useComposerRef } from '../services/engine/targets'
@@ -298,7 +299,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
-  const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
+  // 「↓ N 条新消息」:只数画出来、已经说完的回答(在跑的空气泡、成员占位、团队总结、系统行都不算)
+  const replyCount = useMemo(() => finishedReplyCount(activeMessages, isHiddenInList), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断仍看活跃尾部。搜索和阅读位置按消息 id 加载附近的一页。
   const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
@@ -358,17 +360,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(cardRows) : []), [cardRows, activeId, humanAckV])
   const sessionInCreation = useSessionCreation(activeId ?? undefined).inCreation
   const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(cardRows, activeId) : []), [cardRows, activeId, taskHandledV, sessionInCreation])
-  // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
-  const tailTodo = useMemo(() => {
-    let last = true
-    for (let i = activeMessages.length - 1; i >= 0; i--) {
-      const m = activeMessages[i]
-      if (m.role !== 'assistant') continue
-      if (m.todos?.length) return running || (last && m.todos.some((x) => x.status !== 'completed')) ? m : null
-      last = false
-    }
-    return null
-  }, [activeMessages, running])
+  // 对话末尾那一行任务清单:只放这一轮的(在跑那条回答自己的;没在跑时最后一条回答还没做完的),其余几份在各自回答里收成一行。见 tailTodo.ts
+  const tailTodo = useMemo(() => tailTodoOf(activeMessages, running, isHiddenInList), [activeMessages, running])
+  // 团队总结只画最新那份,画在它在对话里的位置(原来钉在末尾:新一轮在出的回答上面压着上一轮的总结,翻到旧页也挂在页底)
+  const latestSummaryId = useMemo(() => { for (let i = shownMessages.length - 1; i >= 0; i--) if (shownMessages[i].teamSummary) return shownMessages[i].id; return null }, [shownMessages])
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
@@ -917,12 +912,12 @@ export function ChatView({ leaf, params }: ViewProps) {
             ) : (
               // 待读插话和正文放进同一个数组:读到后同 id 的真消息接替它时 React 认成同一个节点
               // 已经进了正文的(turn_boundary 抢在 POST 应答前到)不再画一份,免得同 key 两个节点
-              (pendingSend.msgs.length && !canvasOn ? [...shownMessages, ...pendingSend.msgs.filter((p) => !activeMessages.some((x) => x.id === p.id))] : shownMessages).map((m) => {
+              (pendingSend.msgs.length && !canvasOn && !transcript.hasNewer ? [...shownMessages, ...pendingSend.msgs.filter((p) => !activeMessages.some((x) => x.id === p.id))] : shownMessages).map((m) => {
                 const pend = pendingSend.props.get(m.id)
                 if (pend && !activeMessages.some((x) => x.id === m.id)) {
                   return <EditorialMessage key={m.id} msg={m} pending={pend} userName={userName} userAvatar={userAvatar} fileCtx={fileCtx} handlers={pendingHandlers} />
                 }
-                if (isHiddenInList(m)) return null
+                if (isHiddenInList(m)) return m.id === latestSummaryId ? <TeamSummary key={m.id} message={m} /> : null
                 if (m.role === 'user' && m.id === editingId) {
                   return <EditBubble key={m.id} original={m.content} value={editText} onChange={setEditText} userName={userName} userAvatar={userAvatar}
                     onSend={saveEdit} onCancel={() => setEditingId(null)} />
@@ -978,7 +973,6 @@ export function ChatView({ leaf, params }: ViewProps) {
               />
             ))}
             {running && runStats && !runStatsMsgId && runStats.finishedAt == null && <div className="t2-runstats-solo"><RunStatsLine stats={runStats} /></div>}
-            {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
@@ -996,9 +990,10 @@ export function ChatView({ leaf, params }: ViewProps) {
               </div>
             )}
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
-            {!canvasOn && (tailTodo || deck) && (
+            {/* 翻到较早的一页时清单那行不画在页底(它说的是最新这一轮);卡片堆和失败气泡照画:里面有没发出去的草稿和要你点的重试 */}
+            {!canvasOn && ((tailTodo && !transcript.hasNewer) || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
+                {tailTodo && !transcript.hasNewer && <TodoList key={tailTodo.id} todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}
@@ -1098,7 +1093,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 「N 件等你」与子会话药丸(借鉴 Comma 2.2)同一排;两颗都不露时这一排是空的(CSS :empty 收掉)
           approvalTray={canvasOn ? (deck ?? undefined) : (
             <div className="t2-deckpill-row">
-              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => { transcript.reset(); scrollToBottom(true) }} />}
               <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} onJump={jumpToChildBlock} />
             </div>
           )}

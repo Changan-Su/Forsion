@@ -30,7 +30,7 @@ describe('confirmed stop and restart', () => {
     expect(old.toolEvents?.[0].result).toContain('尚未执行')
     expect(useApp.getState().runningBySession.s).toBe('r')
   })
-  it('carries the to-do list into the steered segment, so stopping there still marks the latest snapshot stopped', () => {
+  it('moves the to-do list into the steered segment (the old segment keeps no frozen copy), so stopping there marks it stopped', () => {
     const ref = { current: 'a' }
     const ev = (type: string, payload: any = {}) => useApp.getState().reduceEvent('s', 'r', ref, { seq: 1, type, payload })
     const todos = [{ content: 'step 1', status: 'completed' }, { content: 'step 2', status: 'in_progress' }]
@@ -38,8 +38,22 @@ describe('confirmed stop and restart', () => {
     ev('turn_boundary', { finalizedAssistantId: 'a', finalizedContent: 'partial work', userMessages: [{ id: 'q', content: 'why?' }], newAssistantId: 'next' })
     ev('error', { aborted: true })
     const [a, , next] = useApp.getState().messagesBySession.s
-    expect(a).toMatchObject({ id: 'a', status: 'done', todos })
+    expect(a).toMatchObject({ id: 'a', status: 'done' })
+    expect(a.todos).toBeUndefined()
     expect(next).toMatchObject({ id: 'next', status: 'stopped', todos })
+  })
+  it('moves the list onto a steered segment that already exists in history (reattach replay)', () => {
+    const todos = [{ content: 'step 1', status: 'completed' }, { content: 'step 2', status: 'in_progress' }]
+    useApp.setState({ messagesBySession: { s: [
+      { id: 'a', role: 'assistant', content: 'part', status: 'streaming', timestamp: 1, todos },
+      { id: 'q', role: 'user', content: 'why?', status: 'done', timestamp: 2 },
+      { id: 'next', role: 'assistant', content: 'persisted half', status: 'done', timestamp: 3 },
+    ] as any } })
+    const ref = { current: 'a' }
+    useApp.getState().reduceEvent('s', 'r', ref, { seq: 1, type: 'turn_boundary', payload: { finalizedAssistantId: 'a', userMessages: [{ id: 'q', content: 'why?' }], newAssistantId: 'next' } })
+    const list = useApp.getState().messagesBySession.s
+    expect(list.find((m) => m.id === 'a')?.todos).toBeUndefined()
+    expect(list.find((m) => m.id === 'next')).toMatchObject({ status: 'streaming', todos })
   })
   it('expedites the same run without stopping, withdrawing or resending pending attachments', async () => {
     const item = { id: 'draft', text: 'look at this', attachments: [{ name: 'image.png', mimeType: 'image/png', data: 'AAAA', size: 3 }] }
