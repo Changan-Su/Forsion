@@ -2,6 +2,19 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.3-beta.2 (2026-11-23)
+
+Preview build, available only to users on the preview channel.
+
+- **Chat**: Tasks that stopped for reasons other than you continue after the app restarts, and failed model calls retry based on network conditions. You can interject while the agent runs a long command. Replies that hit the length limit continue automatically, or you can click Continue. Long conversations load around where you are reading, so they open faster. The By the way panel is redesigned, and you can send its answer back to the main chat. Offline local voice now transcribes as you speak, and cloud transcription of long recordings is more reliable.
+- **Notes and whiteboards**: Notes can be organized into sections, and dragging blocks and images feels more direct. The selection bar can hold plugin actions and read text aloud, and translation is now a bundled core plugin. Notes and links support Pinyin search, and replacing across notes lets you confirm each match. Highlights cover inline formulas and keep the text color in dark mode. Whiteboards no longer get stuck in pan and zoom after an interrupted stylus stroke.
+- **Muse and automation**: The automation home shows Muse task suggestions, with unanswered rule cards at the top. Automations can send messages as an agent. Muse explains the evidence behind suggested to-dos and waits a moment after the computer wakes. Upgrades no longer overwrite the built-in Coding and Muse instructions you have edited.
+- **Agent Desk**: Pin, pick content for, split, or focus either of the two cells. When the agent edits a file, the other cell stays put.
+- **Interface and account**: The labeled Ribbon is more compact, and items in the +N overflow can be dragged to reorder. The quota page hides unlimited periods and shows your points balance. Scan to link WeChat directly in Account → Security.
+- **Plugin development**: The new demo stage `ctx.stage` takes screenshots, records video, and replays scripts in an isolated window. Store sources can pin GitHub and Forsion Git packages to a commit. Chat Box offers an @ panel and inline formatting.
+- **Windows**: Fixed bundled engines rejecting compatible hot updates.
+- Bundles Tangu engine 2.14.9, Calendar 0.1.13, and Translation 0.1.0. The default desktop edition includes Forsion Extend 0.10.11.
+
 ## 2.14.3-beta.1 (2026-11-19)
 
 This build is available on the preview channel.
