@@ -46,7 +46,9 @@ export { quotaExhaustedText };
  *  通道闸(llm/channelGate.ts)据此让整条通道暂停、别的会话排队。 */
 export function isRateLimitedLlmError(err: unknown): boolean {
   if (!(err instanceof LlmError) || quotaExhaustedErr(err) || isOverloadedLlmError(err)) return false;
-  return err.status === 429 || RATE_LIMIT_RE.test(`${err.message} ${(err as { code?: string }).code || ''}`);
+  if (err.status === 429) return true;
+  // 正文 / code 认限流只对 0 / 5xx(Codex 流里的限流包成 502):4xx 的「invalid rate_limit parameter」是请求错,别让整条通道停
+  return (err.status === 0 || err.status >= 500) && RATE_LIMIT_RE.test(`${err.message} ${(err as { code?: string }).code || ''}`);
 }
 
 export const MODEL_MAX_RETRIES = 3; // 首次 + 至多 3 次重试 = 4 次尝试

@@ -49,7 +49,7 @@ const CONTEXT_RE = /context[_ ]length[_ ]exceeded|exceeds the context window|max
 export function classifyRunErrorText(raw: string | undefined | null): RunErrorKind {
   const t = String(raw || '')
   if (!t) return 'other'
-  if (quotaExhaustedText(t) || /token_quota_exceeded/i.test(t)) return 'quota'
+  if (quotaExhaustedText(t) || /token_quota_exceeded|payment required|(?:^|\D)402(?:\D|$)/i.test(t)) return 'quota'
   if (RATE_LIMIT_RE.test(t) || /(?:^|\D)429(?:\D|$)/.test(t)) return 'rate_limit'
   if (AUTH_RE.test(t)) return 'auth'
   if (CONTEXT_RE.test(t)) return 'context'

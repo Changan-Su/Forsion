@@ -241,8 +241,8 @@ export async function withChannelSlot<T>(
   const start = Date.now();
   let queued = false;
   const slot = await acquireChannel(key, { ...opts, front: !!opts.ticket?.front, onQueued: (q) => { queued = true; opts.onQueued?.(q); } });
-  if (queued) opts.onWaited?.(start, Date.now());
   try {
+    if (queued) opts.onWaited?.(start, Date.now());
     const r = await fn(slot);
     if (opts.ticket) opts.ticket.front = false;
     return r;

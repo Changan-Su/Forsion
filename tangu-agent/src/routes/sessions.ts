@@ -412,6 +412,11 @@ router.post('/agent/sessions/:id/children/:childId/retry', authMiddleware, async
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
+    // 只重试「最近一轮失败、眼下没在跑」的子会话:失败行是列表快照,重试成功后再点(或两台设备各点一次)不能再开一轮重复副作用。
+    // 读不到最近一轮(查询失败)按不知道处理,同样拒绝。
+    if (activeSessionIds().has(req.params.childId) || !(await childFailures([req.params.childId])).has(req.params.childId)) {
+      return res.status(409).json({ detail: 'child session is not in a failed state' });
+    }
     const remote = parseRemoteOrigin(req.headers);
     const r = await sendToChildSession({ parentId: s.id, userId, childId: req.params.childId, message: CHILD_RETRY_MESSAGE, ...(remote ? { remote } : {}) });
     res.json({ runId: r.runId, queued: r.queued });

@@ -46,6 +46,9 @@ import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { effectiveRemote } from './remoteOrigin.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 
+/** 子代理排队拿到槽位时 run 已过成本上限:不发这一次(不是模型错,不重试、不算限流)。 */
+class SubAgentBudgetStop extends Error { constructor() { super('sub-agent run cost ceiling reached while queued'); this.name = 'SubAgentBudgetStop'; } }
+
 // 24(原 8):8 轮连一条常规链路都跑不完 —— 09-06 青鸟视频那次,子代理第 8 轮刚诊断出根因就被截断
 // (use_skill → 定位脚本 → 转录 → ASR → 落盘 → 报告 已占 7 轮,一次报错就没了)。
 // 为什么不照父循环的 90:父循环有 TANGU_MAX_RUN_COST 逐轮累加兜底,而子代理走 noopBilling、
@@ -529,13 +532,17 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // 通道闸(llm/channelGate.ts):子代理和主会话、别的子会话共用同一条通道的限流暂停与并发上限;排队那段不算重试预算。
     let chain: LlmRetryChain | undefined;
     const ticket = { front: false }; // 撞了限流的重发在通道闸前排队首
-    const res = await withLlmRetry(() => withChannelSlot(channelKeyOf(model, baseUrl, apiKey, effModelId), {
+    let res: Awaited<ReturnType<typeof llm.streamProviderCompletion>>;
+    try { res = await withLlmRetry(() => withChannelSlot(channelKeyOf(model, baseUrl, apiKey, effModelId), {
       signal: parentCtx.signal,
       sessionId: parentCtx.sessionId,
       onQueued: (q) => { if (runId) void publish(runId, 'subagent', { phase: 'queue', subId, reason: q.reason, position: q.position, ...(q.waitMs !== undefined ? { waitMs: q.waitMs } : {}) }); },
       onWaited: (a, b) => chain?.excludeQueued(a, b),
       ticket,
-    }, (slot) => llm.streamProviderCompletion({
+    }, (slot) => {
+      // 排队期间兄弟子代理可能已把 run 推过成本上限:拿到槽位、真发之前再查一次
+      if (parentCtx.runCostExceeded?.()) throw new SubAgentBudgetStop();
+      return llm.streamProviderCompletion({
       apiKey,
       baseUrl,
       payload,
@@ -549,7 +556,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         slot.opened();
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
-    })), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.(), undefined, (c) => { chain = c; }); // 退避期间被兄弟推过成本上限:等完不再发
+    });
+    }), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.(), undefined, (c) => { chain = c; }); } // 退避期间被兄弟推过成本上限:等完不再发
+    catch (e) { if (e instanceof SubAgentBudgetStop) { overBudget = true; break; } throw e; }
 
     if (runId) {
       void publish(runId, 'subagent', {

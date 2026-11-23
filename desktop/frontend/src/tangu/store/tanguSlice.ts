@@ -3948,7 +3948,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。chat 槽没有 Ultra。
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
     // work 槽再按 Agent 分(11-23):这一轮的 Agent 记一份,全局那份照写(没记过的 Agent 回落它)
-    const agent = preset === 'chat' ? undefined : sid ? (get().configBySession[sid]?.agentSlug || get().defaultAgentSlug) : (get().newChatCfg.agentSlug || get().defaultAgentSlug)
+    // 草稿的 Agent 与建会话同序:显式选择 > 项目默认(同步缓存,setNewChatWs 已预取)> 全局默认
+    const draftProject = sid ? null : newChatProjectPath(get(), currentPlatform())
+    const draftProjectAgent = draftProject ? projectDefaultsForNewSession(get().projectSettingsByPath[draftProject], get().teams).config.agentSlug : undefined
+    const agent = preset === 'chat' ? undefined : sid ? (get().configBySession[sid]?.agentSlug || get().defaultAgentSlug) : (get().newChatCfg.agentSlug || draftProjectAgent || get().defaultAgentSlug)
     const byAgent = agent ? { lastThinkingByAgent: { ...(get().desktopConfig?.lastThinkingByAgent || {}), [agent]: level } } : {}
     if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...byAgent, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
     // 草稿里显式记 false(而不是删键):建会话时 sticky 只补缺席的键,删掉的话上次的 Ultra 会被补回来。

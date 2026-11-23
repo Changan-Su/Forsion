@@ -205,3 +205,30 @@ describe('⑤ 失败类别', () => {
     expect(errorKindOfRun({ result: null, error: TPM_STREAM })).toBe('rate_limit');
   });
 });
+
+describe('⑥ 评审补丁(11-23 Codex)', () => {
+  it('4xx 正文里带 rate_limit 字样不算限流;429 / 502 流里的照算', () => {
+    expect(isRateLimitedLlmError(new LlmError(400, 'invalid rate_limit parameter'))).toBe(false);
+    expect(isRateLimitedLlmError(new LlmError(502, 'Rate limit reached for gpt. Please try again in 2s'))).toBe(true);
+    expect(isRateLimitedLlmError(new LlmError(429, 'slow down'))).toBe(true);
+  });
+  it('落库原文里的 402 / Payment Required 归额度', () => {
+    expect(classifyRunErrorText('HTTP 402: Payment Required')).toBe('quota');
+    expect(classifyRunErrorText('Payment Required')).toBe('quota');
+    expect(errorKindOfRun({ error: 'upstream 402' })).toBe('quota');
+  });
+  it('onWaited 抛错也放槽位(并发 1 时通道不卡死)', async () => {
+    const key = 'test:onwaited';
+    const { withChannelSlot } = await import('./channelGate.js');
+    const held = await acquireChannel(key);
+    const extra: ChannelSlot[] = [];
+    // 先把剩下的并发占满,让下面那个必须排队
+    while ((__channelState(key)?.inflight ?? 0) < 3) extra.push(await acquireChannel(key));
+    const p = withChannelSlot(key, { onWaited: () => { throw new Error('boom'); } }, async () => 'x');
+    held.release();
+    await expect(p).rejects.toThrow('boom');
+    expect(__channelState(key)?.inflight).toBe(extra.length);
+    for (const s of extra) s.release();
+    expect(__channelState(key)?.inflight ?? 0).toBe(0);
+  });
+});
