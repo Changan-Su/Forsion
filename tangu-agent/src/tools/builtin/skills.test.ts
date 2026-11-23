@@ -28,7 +28,8 @@ const DOC_LONG = 'Use docx-js to build OOXML …';
 const EXTRA: Record<string, Record<string, unknown>> = Object.fromEntries([
   { id: 'skill_1717', name: 'docx', content: DOC_LONG, owner_user_id: null }, // 管理员上传的官方技能:id 是自动生成的
   { id: 'ai-studio:pptx', name: 'Slides', content: DOC_LONG, owner_user_id: null }, // 名字不对,id 去掉应用前缀是 pptx
-  { id: 'xlsx', name: 'XLSX', content: DOC_LONG }, // 大小写不同的整名
+  { id: 'skill_2002', name: ' XLSX ', content: DOC_LONG }, // 大小写 / 空白不同的整名
+  { id: 'ai-studio:word', name: 'xlsx', content: DOC_LONG }, // 名字和 id 指向不同的速查表:以名字为准
   { id: 'cloud-notes', name: 'presentation-notes', content: 'Summarise talks into speaker notes.', owner_user_id: null },
   { id: 'usr_k3_a1b2c3', name: 'docx', content: 'My own docx house style.', owner_user_id: 'u1' }, // 用户自己上传的同名技能
   { id: 'local:plugin/demo/word-tools', name: 'word-tools', content: 'Run scripts/wc.py.', source: 'plugin' }, // 插件技能
@@ -155,7 +156,8 @@ describe('use_skill:文档速查表只给云端官方文档技能', () => {
     expect(docx).toMatch(/^# Skill: docx \(use python-docx/);
     expect(docx).not.toContain(DOC_LONG);
     expect(await load('ai-studio:pptx')).toMatch(/^# Skill: pptx \(use python-pptx/);
-    expect(await load('xlsx')).toMatch(/^# Skill: xlsx \(use openpyxl/);
+    expect(await load('skill_2002')).toMatch(/^# Skill: xlsx \(use openpyxl/);
+    expect(await load('ai-studio:word')).toMatch(/^# Skill: xlsx \(use openpyxl/);
   });
 });
 

@@ -96,8 +96,8 @@ const CLOUD_SKILL_CHEATSHEETS: Array<{ names: readonly string[]; title: string; 
 function cloudDocCheatsheet(id: string, s: { name?: unknown; owner_user_id?: unknown; source?: unknown }) {
   if (id.startsWith('local:') || id.startsWith('usr_')) return undefined;
   if (s.owner_user_id || (s.source != null && s.source !== 'cloud')) return undefined;
-  const keys = [String(s.name ?? ''), id.replace(/^[\w-]+:/, '')].map((k) => k.trim().toLowerCase());
-  return CLOUD_SKILL_CHEATSHEETS.find((c) => keys.some((k) => c.names.includes(k)));
+  const byKey = (k: string) => CLOUD_SKILL_CHEATSHEETS.find((c) => c.names.includes(k.trim().toLowerCase()));
+  return byKey(String(s.name ?? '')) ?? byKey(id.replace(/^[^:]*:/, '')); // 名字优先;名字对不上再看 id
 }
 
 export const skillsProvider: ToolProvider = {
