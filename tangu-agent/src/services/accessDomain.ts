@@ -218,11 +218,14 @@ export function accountReadDenied(abs: string): string | null {
 }
 
 /** 账号写这个路径:null = 可以(之后照常过 fsPolicy 的其余判定);否则是硬拒原因。只认账号自己的文件夹。 */
+const ACCOUNT_DB_FILES = ['state.db', 'state.db-wal', 'state.db-shm', 'state.db-journal'];
 export function accountWriteDenied(abs: string): string | null {
   if (!isMultiAccount()) return null;
   const root = currentAccountRoot();
   // 插件脚本的临时目录(services/pluginScripts.ts)归引擎管:不算磁盘上限、开户时整个清掉,账号自己不能往里写
   if (insidePlain(abs, path.join(root, '.scratch'))) return 'Access denied: that folder holds temporary files of plugin scripts and cannot be written.';
+  // 账号自己的库文件(services/accountStorage.ts 不把 -wal / -shm / -journal 算进磁盘上限):文件工具不许碰
+  if (ACCOUNT_DB_FILES.some((n) => insidePlain(abs, path.join(root, n)))) return 'Access denied: that is the account database and cannot be written with file tools.';
   if (insidePlain(abs, root)) return null;
   return `Access denied: you can only write inside your account folder (${root}); ${abs} is outside it.`;
 }

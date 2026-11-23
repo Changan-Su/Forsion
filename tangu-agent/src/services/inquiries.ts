@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
 import { waitingOnUser } from './runAdmission.js';
-import { isApprovalTrayRun } from './approvals.js';
 
 const passThrough = <T>(_runId: string, p: Promise<T>): Promise<T> => p;
 import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun } from './remoteActivity.js';
@@ -59,6 +58,8 @@ export function requestInquiry(
   runId: string,
   payload: InquiryRequestPayload,
   signal?: AbortSignal,
+  /** parked:调用方不等这个答案、这一轮照常往下跑(托盘 run 挂起的 ask_user,agentLoop)—— 名额不在这里还。 */
+  opts?: { parked?: boolean },
 ): Promise<string> {
   if (signal?.aborted) return Promise.resolve('(用户中止了运行)');
   if (isUnattendedRun(runId)) return Promise.resolve(INQUIRY_UNATTENDED_ANSWER);
@@ -71,8 +72,8 @@ export function requestInquiry(
   if (isSiblingMessageRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_SIBLING_ANSWER);
   const inquiryId = nextInquiryId();
   // 多账号模式:等用户回答时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样。
-  // 托盘 run 的提问是挂起的(这一轮照常往下跑),不在这里还名额:agentLoop 的 waitForParked 真正停下来等时才还。
-  return (isApprovalTrayRun(runId) ? passThrough : waitingOnUser)(runId, new Promise<string>((resolve) => {
+  // 挂起的提问(这一轮照常往下跑)不在这里还名额:agentLoop 的 waitForParked 真正停下来等时才还。计划审阅等当场等的照常还。
+  return (opts?.parked ? passThrough : waitingOnUser)(runId, new Promise<string>((resolve) => {
     const onAbort = (): void => {
       pending.delete(inquiryId);
       untrackPrompt(inquiryId, 'expired'); // 中止不发 inquiry_result:索引(通知 / 角标)在这里撤(P1 · K3)

@@ -3577,7 +3577,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
         parked.set(call.id, entry);
-        void requestInquiry(runId, ask, parkAc.signal).then((raw) => {
+        void requestInquiry(runId, ask, parkAc.signal, { parked: true }).then((raw) => {
           const answer = normalizeInquiryAnswer(raw, parkAc.signal); // run 停了没答 → 英文系统说明,不冒充用户
           // 落库那半当场改:答了之后、兑现之前被停,答案也得留在历史里;停了没答的写成「没等到回答」,不留「还在等」的占位(Codex 10-23 P1)。
           // 模型上下文那半仍在迭代边界换(settleParkedCalls),不在模型调用途中动它。

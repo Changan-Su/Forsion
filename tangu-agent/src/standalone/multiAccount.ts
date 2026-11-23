@@ -38,6 +38,7 @@ import { accountCwdDenied, setAccountReadOnlyRoots } from '../services/accessDom
 import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
+import { createProfileStore } from '../profiles/profileStore.js';
 import { remoteLockGuard } from './remoteLockGuard.js';
 import { accountHasRuns, drainRunsForExit, recoverAccountRuns } from '../services/agentLoop.js';
 import { clearAccountScratch } from '../services/pluginScripts.js';
@@ -290,11 +291,14 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
 
   setSessionClaimer((sessionId) => mh.claimSession(sessionId)); // enqueueRun 入队前核会话归属(core/accountScope.ts)
 
+  const maProfile = multiAccountProfile(opts.defaultModelId);
   const mod = createTanguModule({
     host: mh.host,
     brain: multiAccountBrain(opts.brain),
     billing: createNoopBilling(),
-    profile: multiAccountProfile(opts.defaultModelId),
+    profile: maProfile,
+    // 这个模式的 profile 就是上面这份:不叠仓里给 tangu 的文件覆盖(那份会把群聊、联网搜索重新打开),也不读覆盖表
+    profileStore: createProfileStore({ baseline: maProfile, fileOverrides: {}, fetchOverrideRows: async () => [] }),
     // 不给 MCP 管理器、外部引擎管理器:这两样在多账号模式下不存在
   });
   mod.startBackgroundTasks(); // 多账号分支只起睡眠检测(index.ts)

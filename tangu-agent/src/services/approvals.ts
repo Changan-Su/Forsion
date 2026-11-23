@@ -635,10 +635,6 @@ const approvalQueues = new Map<string, Promise<unknown>>(); // runId -> 队尾
 // 审批托盘客户端起的 run(POST /agent/runs 带 approval_tray,agentLoop 登记):桌面把待批卡攒在输入框上方、
 // 按 approvalId 各自兑现,不怕互相顶掉 → 同 run 的审批一起发出去,不再排队。TUI / 通道 / 其它入口照旧串行。
 const trayRuns = new Set<string>();
-/** 托盘 run:提问 / 审批挂起后这一轮照常往下跑,不在这里等 —— 多账号模式的名额由 agentLoop 真正停下来等(waitForParked)时才还。 */
-export function isApprovalTrayRun(runId: string): boolean {
-  return trayRuns.has(runId);
-}
 export function setApprovalTray(runId: string, on: boolean): void {
   if (on) trayRuns.add(runId);
   else trayRuns.delete(runId);
@@ -655,12 +651,14 @@ export function requestApproval(
   reason?: ApprovalReason,
   origin?: RemoteInfo,
   previewI18n?: ApprovalPreviewI18n,
+  /** parked:调用方不等这个决定、这一轮照常往下跑(gateToolCall 带 park)—— 多账号模式的名额不在这里还。 */
+  opts?: { parked?: boolean },
 ): Promise<ApprovalDecision> {
   // 无人值守 run 没人答:当场拒(gateToolCall 的同名分支只管自己那条路;引擎委派中继 / 外部引擎主循环直调这里)。
   if (isUnattendedRun(runId)) return Promise.resolve({ action: 'reject', rejectReason: UNATTENDED_REJECT_REASON });
-  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n);
+  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n, opts);
   const tail = approvalQueues.get(runId) || Promise.resolve();
-  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n));
+  const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason, origin, previewI18n, opts));
   const entry = mine.then(() => undefined, () => undefined);
   approvalQueues.set(runId, entry);
   void entry.then(() => { if (approvalQueues.get(runId) === entry) approvalQueues.delete(runId); });
@@ -675,6 +673,7 @@ function requestApprovalNow(
   reason?: ApprovalReason,
   origin?: RemoteInfo,
   previewI18n?: ApprovalPreviewI18n,
+  opts?: { parked?: boolean },
 ): Promise<ApprovalDecision> {
   // 中止 ≠ 用户拒绝:按拒绝兑现,但原因写清(主 loop 随后抛 AbortLikeError 不会读到;子代理等其它消费方会)
   if (signal?.aborted) return Promise.resolve({ action: 'reject', rejectReason: ABORTED_REJECT_REASON });
@@ -682,8 +681,8 @@ function requestApprovalNow(
   // P1 · K3:受保护路径的审批只在执行设备本机批准 —— 兑现路由 / 异步审批 / 通道据此拒远端「批准」,卡片据此不给远端批准键。
   const localOnly = reason?.kind === 'protected';
   // 多账号模式:等用户批准时不占任务名额、不计这一轮的时长(services/runAdmission.ts);单人模式原样。
-  // 托盘 run 不在这里还:审批挂起后这一轮还在跑,真正停下来等的地方是 agentLoop 的 waitForParked。
-  return (trayRuns.has(runId) ? passThrough : waitingOnUser)(runId, new Promise<ApprovalDecision>((resolve) => {
+  // 挂起的审批不在这里还:这一轮还在跑,真正停下来等的地方是 agentLoop 的 waitForParked。当场等的(含托盘 run 里不挂起的)照常还。
+  return (opts?.parked ? passThrough : waitingOnUser)(runId, new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
       untrackPrompt(approvalId, 'expired'); // 中止分支不发 approval_result:索引(通知 / 角标)要在这里撤,否则残留
@@ -1105,6 +1104,8 @@ export interface GateCtx {
   /** 挂起而不等(托盘客户端的主循环,见 ParkedApproval):要问用户时发出请求就返回凭条。只有自己会在迭代边界
    *  兑现的调用方才能给;子代理 / 引擎中继 / TUI / 通道都是当场要结果的,不给。 */
   park?: boolean;
+  /** 内部:这次审阅属于一张挂起的卡(主循环不等它),多账号模式的名额不在审批这里还。 */
+  parkedWait?: boolean;
 }
 
 /** child 是否在 parent 之内(含相等);两侧都应是 canonicalFuturePath 归一过的绝对路径。 */
@@ -1375,7 +1376,9 @@ export async function gateToolCall(
     // 而 H1 的约定是这类调用必须由用户本人点头 → 'agent' 档也按 'queue' 排队进收件箱。
     return deferApproval(runId, call, preview, reason, control ? { ...ctx, approvalDeferral: 'queue' } : ctx);
   }
-  const decided = requestApproval(runId, call, preview, signal, reason, remote, previewI18n).then(async (d): Promise<ApprovalDecision> => {
+  // 挂起(park)的这张,以及它兑现途中改参数后的重闸(主循环同样不等它):名额不在审批这里还(services/runAdmission.ts)
+  const parkedWait = !!ctx.park || !!ctx.parkedWait;
+  const decided = requestApproval(runId, call, preview, signal, reason, remote, previewI18n, { parked: parkedWait }).then(async (d): Promise<ApprovalDecision> => {
     if (d.action === 'reject') return d;
     let out: ApprovalDecision = { action: 'approve' };
     if (d.argsOverride) {
@@ -1384,7 +1387,7 @@ export async function gateToolCall(
       // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
       // 重闸一律当场等(park:false):挂起的那张卡正由这条 decided 兑现,重闸再挂一次就没人兑现了。
       const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
-      const again = await gateToolCall(runId, edited, { ...ctx, park: false }, signal, true);
+      const again = await gateToolCall(runId, edited, { ...ctx, park: false, parkedWait }, signal, true);
       if (again.action === 'reject') return again;
       out = { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
     }

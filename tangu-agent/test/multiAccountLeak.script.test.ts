@@ -247,13 +247,20 @@ describe('multi-account: plugin scripts — what may run', () => {
     expect(outputs[0]).not.toContain('ORIGINAL HELLO');
   }, 60_000);
 
-  it("the scripts' temporary folder cannot be written by the account's own tools", async () => {
+  it("the scripts' temporary folder and the account database files cannot be written by the account's own tools", async () => {
     const target = join(accDir('alice'), '.scratch', 'mine.txt');
-    const s = E.fake.script('alice', 'scratch-write', steps([{ calls: [{ name: 'write_file', args: { path: target, content: 'x'.repeat(100) } }] }], 'done'));
+    const wal = join(accDir('alice'), 'state.db-journal');
+    const s = E.fake.script('alice', 'scratch-write', steps([
+      { calls: [{ name: 'write_file', args: { path: target, content: 'x'.repeat(100) } }] },
+      { calls: [{ name: 'write_file', args: { path: wal, content: 'x'.repeat(100) } }] },
+    ], 'done'));
     const r = await runToEnd(E.client, 'alice', s, { timeoutMs: 30_000 });
     expect(r.follow?.status).toBe('done');
-    expect(s.results.find((x) => x.name === 'write_file')?.output).toMatch(/temporary files of plugin scripts/);
+    const outs = s.results.filter((x) => x.name === 'write_file').map((x) => x.output);
+    expect(outs[0]).toMatch(/temporary files of plugin scripts/);
+    expect(outs[1]).toMatch(/account database/);
     expect(existsSync(target)).toBe(false);
+    expect(existsSync(wal)).toBe(false);
   }, 60_000);
 
   it('path-like arguments must stay inside the account folder', async () => {

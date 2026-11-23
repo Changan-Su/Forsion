@@ -34,6 +34,8 @@ const env = await vi.hoisted(async () => {
 
 vi.mock('node:child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
+// group chat is off in this mode: watch whether its orchestration is ever entered
+vi.mock('../src/services/groupChat.js', async (orig) => { const m: any = await orig(); return { ...m, runGroupChat: vi.fn(m.runGroupChat) }; });
 
 import Database from 'better-sqlite3';
 import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,6 +44,8 @@ import { bootMultiAccount, canary, randomUUID, startRun, steps, type MaEngine, t
 import { DEFAULT_LIMITS, LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
 import { admissionSnapshot, admitRun, releaseRun } from '../src/services/runAdmission.js';
 import { __resetAccountStorageForTests, accountUsageBytes } from '../src/services/accountStorage.js';
+import { runGroupChat } from '../src/services/groupChat.js';
+import { resolveProfile } from '../src/seams/appProfile.js';
 
 const accDir = (id: string) => join(env.home, 'accounts', id);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -274,6 +278,22 @@ describe('multi-account limits: waiting on the person', () => {
     expect((await E.client.follow('erin', runId, { timeoutMs: 15_000 })).status).toBe('done');
   }, 60_000);
 
+  it('a tray run blocked on plan review gives its slot back like any other wait', async () => {
+    const s = E.fake.script('fay', 'tray-plan', steps([{ calls: [{ name: 'exit_plan_mode', args: { plan: '1. do it' } }] }], 'plan answered'));
+    const sessionId = randomUUID();
+    const resp = await E.client.call('fay', 'POST', '/agent/runs', { body: { session_id: sessionId, model_id: 'fake/model-1', message: s.marker, approval_tray: true, agent_config: { planMode: true } } });
+    expect(resp.status, resp.text).toBe(200);
+    const runId = resp.json.runId as string;
+    s.bindRun(runId);
+    const f = await E.client.follow('fay', runId, { timeoutMs: 10_000, autoAnswer: false, until: (ev) => ev.type === 'inquiry_request' });
+    expect(f.status).toBe('until');
+    const inquiry = String(f.events.find((e) => e.type === 'inquiry_request')?.payload?.inquiryId);
+    await sleep(100);
+    expect(admissionSnapshot().onUser.map((x) => x.runId), 'blocked on the plan card: slot given back').toContain(runId);
+    expect((await E.client.call('fay', 'POST', `/agent/runs/${runId}/inquiries/${inquiry}`, { body: { answer: 'no, keep planning' } })).status).toBe(200);
+    expect((await E.client.follow('fay', runId, { timeoutMs: 15_000 })).status).toBe('done');
+  }, 60_000);
+
   it('the turn clock stops while waiting for an answer', async () => {
     setLimits({ runMinutes: 0.02 }); // 1.2 s
     const q = await asking('alice', 'slow-answer');
@@ -281,6 +301,24 @@ describe('multi-account limits: waiting on the person', () => {
     expect((await q.answer()).status).toBe(200);
     expect((await E.client.follow('alice', q.runId, { timeoutMs: 15_000 })).status).toBe('done');
     expect(runStatus('alice', q.runId)).toBe('done');
+  }, 30_000);
+});
+
+describe('multi-account limits: group chat', () => {
+  // a group chat's coordinating run holds the account's only slot while its member runs queue behind that same slot
+  it('a run asking for a group chat runs as a single agent', async () => {
+    // the profile a run reads is this mode's own, not the checked-in per-app overrides that switch group chat and web search back on
+    for (const appId of [null, 'tangu']) {
+      const p = resolveProfile(appId);
+      expect([p?.capabilities.groupChat, p?.features.webSearch, p?.features.customTools]).toEqual([false, false, false]);
+    }
+    vi.mocked(runGroupChat).mockClear();
+    const s = E.fake.script('gina', 'group', steps([], 'group solo reply'));
+    const r = await startRun(E.client, 'gina', s, { agentConfig: { groupChat: true, groupAgents: ['tangu', 'tangu-2'] } });
+    expect(r.resp.status, r.resp.text).toBe(200);
+    const f = await E.client.follow('gina', r.runId!, { timeoutMs: 15_000 });
+    expect(vi.mocked(runGroupChat)).not.toHaveBeenCalled();
+    expect(f.status, JSON.stringify(f.events.filter((e) => e.type === 'error'))).toBe('done');
   }, 30_000);
 });
 
