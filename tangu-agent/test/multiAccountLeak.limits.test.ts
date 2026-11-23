@@ -278,6 +278,30 @@ describe('multi-account limits: waiting on the person', () => {
     expect((await E.client.follow('erin', runId, { timeoutMs: 15_000 })).status).toBe('done');
   }, 60_000);
 
+  it('a tray run keeps its slot while an approval card is parked; it gives it back only when it stops to wait', async () => {
+    const target = join(accDir('hana'), 'tray-approval.txt');
+    const s = E.fake.script('hana', 'tray-appr', steps([{ calls: [{ name: 'write_file', args: { path: target, content: 'approved' } }] }], 'tray approval done'));
+    const g = E.fake.gate(s.token, 1); // the model call made right after the card is parked
+    const sessionId = randomUUID();
+    const resp = await E.client.call('hana', 'POST', '/agent/runs', { body: { session_id: sessionId, model_id: 'fake/model-1', message: s.marker, approval_tray: true, agent_config: { approvalMode: 'read-only' } } });
+    expect(resp.status, resp.text).toBe(200);
+    const runId = resp.json.runId as string;
+    s.bindRun(runId);
+    await g.reached;
+    expect(admissionSnapshot().running.map((x) => x.runId), 'still working: keeps the slot').toContain(runId);
+    expect(admissionSnapshot().onUser.map((x) => x.runId)).not.toContain(runId);
+    const f = await E.client.follow('hana', runId, { timeoutMs: 10_000, autoApprove: false, until: (ev) => ev.type === 'approval_request' });
+    expect(f.status).toBe('until');
+    const approvalId = String(f.events.find((e) => e.type === 'approval_request')?.payload?.approvalId);
+    g.release();
+    const until = Date.now() + 5_000;
+    while (Date.now() < until && !admissionSnapshot().onUser.some((x) => x.runId === runId)) await sleep(50);
+    expect(admissionSnapshot().onUser.map((x) => x.runId), 'nothing left to do but wait: slot given back').toContain(runId);
+    expect((await E.client.call('hana', 'POST', `/agent/runs/${runId}/approvals/${approvalId}`, { body: { action: 'approve' } })).status).toBe(200);
+    expect((await E.client.follow('hana', runId, { timeoutMs: 15_000 })).status).toBe('done');
+    expect(existsSync(target)).toBe(true);
+  }, 60_000);
+
   it('a tray run blocked on plan review gives its slot back like any other wait', async () => {
     const s = E.fake.script('fay', 'tray-plan', steps([{ calls: [{ name: 'exit_plan_mode', args: { plan: '1. do it' } }] }], 'plan answered'));
     const sessionId = randomUUID();
