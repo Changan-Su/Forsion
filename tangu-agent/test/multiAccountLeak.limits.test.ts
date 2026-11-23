@@ -202,16 +202,17 @@ describe('multi-account limits: storage', () => {
     expect((await c.call('bob', 'GET', '/agent/sessions')).status).toBe(200);
     __resetAccountStorageForTests();
     const base = await accountUsageBytes('dave');
-    expect(await accountUsageBytes('bob')).toBeLessThan(base + 100 * 1024); // bob has headroom under the same limit
-    const baseMB = base / 1024 / 1024;
-    // room for about 200 KB more than dave has now (bob is a separate account under the same per-account limit;
-    // he is not affected because dave's limit is counted on dave's folder only)
-    setLimits({ accountStorageMB: baseMB + 0.2 });
+    const bobBase = await accountUsageBytes('bob');
+    // the limit leaves dave about 200 KB (and bob at least that much too, under the same per-account limit)
+    const limit = Math.max(base, bobBase) + 200 * 1024;
+    setLimits({ accountStorageMB: limit / 1024 / 1024 });
     __resetAccountStorageForTests();
 
     // a tool write that fits goes through; one that does not is refused and nothing is written
+    const headroom = limit - base;
     const small = 'x'.repeat(40 * 1024);
-    const big = 'y'.repeat(300 * 1024); // kept small enough for the fake model's context window
+    const big = 'y'.repeat(headroom + 60 * 1024);
+    expect(big.length).toBeLessThan(500 * 1024); // kept small enough for the fake model's context window
     const s = E.fake.script('dave', 'writes', steps([
       { calls: [{ name: 'write_file', args: { path: 'small.txt', content: small } }] },
       { calls: [{ name: 'write_file', args: { path: 'big.txt', content: big } }] },
