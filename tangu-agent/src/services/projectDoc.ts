@@ -16,6 +16,7 @@
  *     这种常见摆法下,指路的那份进了系统提示、被指的那份永远读不到(10-14 用户报「只读 AGENTS.md」)。
  *   - `AGENTS.override.md` 那种「本地覆盖」我们不做(它服务的是 Codex 的多层 config 体系)。
  */
+import { withinAccountRoot } from '../core/accountScope.js';
 import { closeSync, constants as fsConstants, lstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -100,6 +101,7 @@ export function findProjectRoot(cwd: string, markers: string[] = PROJECT_ROOT_MA
   let cur = path.resolve(cwd);
   for (;;) {
     if (realDir(cur) === home) return null;
+    if (!withinAccountRoot(cur)) return null; // 多账号模式:上溯在账号文件夹停住(core/accountScope.ts)
     for (const m of markers) {
       const p = path.join(cur, m);
       if (isDir(p) || isPlainFile(p)) return cur;
@@ -119,6 +121,7 @@ export function projectDocPaths(cwd: string): string[] {
 function projectDocLayers(cwd: string): string[][] {
   const dir = path.resolve(cwd);
   if (!isDir(dir)) return [];
+  if (!withinAccountRoot(dir)) return []; // 多账号模式:账号文件夹之外(含经软链指出去)的目录不读项目文档;单人模式恒放行
   const root = findProjectRoot(dir);
   const dirs: string[] = [];
   if (root) {

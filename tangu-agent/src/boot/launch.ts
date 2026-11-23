@@ -9,12 +9,13 @@
  * 用户目录往上若有野的 node_modules(~/node_modules 很常见),退回式会先命中它,原生模块的 ABI 就对不上了。
  *
  * 环境变量 TANGU_ENGINE_OVERLAY:off = 只跑安装包自带的;verbose = 终端里的 tangu 也把挑选过程打出来。
+ * 多账号模式(真实环境 TANGU_MULTI_ACCOUNT=1)一律跑安装包自带的(overlay.ts 的 overlaySkipReason)。
  */
 import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { forsionSharedDir } from '../core/tanguHome.js';
-import { ENGINE_ENTRIES, engineOverlayRoot, markBad, selectOverlay, type SelectedOverlay } from './overlay.js';
+import { ENGINE_ENTRIES, engineOverlayRoot, markBad, overlaySkipReason, selectOverlay, type SelectedOverlay } from './overlay.js';
 
 type ResolveResult = { url: string; shortCircuit?: boolean; format?: string | null };
 type ResolveContext = { parentURL?: string; conditions?: string[] };
@@ -52,8 +53,12 @@ function redirectBareImports(overlayUrl: string): boolean {
 }
 
 let overlay: SelectedOverlay | null = null;
-const engineRoot = engineOverlayRoot(forsionSharedDir());
-if (process.env.TANGU_ENGINE_OVERLAY !== 'off') {
+// 多账号模式不挑新版:覆盖层可能不认识这个开关,会按单人模式跑、用共用库。也不算覆盖层目录(forsionSharedDir 在那里没有账号上下文会抛)。
+const skip = overlaySkipReason();
+const engineRoot = skip === 'multi-account' ? '' : engineOverlayRoot(forsionSharedDir());
+if (skip === 'multi-account') {
+  log('multi-account mode: running the bundled engine (engine updates are not used)');
+} else if (skip !== 'off') {
   try {
     overlay = selectOverlay(engineRoot, bundledRoot, {
       onReject: (version, code, reason) => log(`${version} skipped (${code}): ${reason}`, code === 'signature'),

@@ -33,3 +33,8 @@ export function canOpenPluginsFolder(): boolean {
 export function canPageHistory(): boolean {
   return typeof window.amadeus?.listPageHistory === 'function'
 }
+
+/** Older remote Units cannot guarantee conditional writes for a batch. */
+export function canBatchReplace(): boolean {
+  return window.amadeus?.hostCaps?.batchReplace !== false
+}

@@ -17,11 +17,13 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { closeOpenFence, museTodoProvider, todoMailBody } from '../src/tools/builtin/museTodo.js';
+import { closeOpenFence, museTodoProvider, normalizeEvidence, parseStoredEvidence, todoMailBody, EVIDENCE_REQUIRED_ERROR } from '../src/tools/builtin/museTodo.js';
 
 const USER = 'u1';
 const tool = museTodoProvider.tools()[0];
 const ctx: any = { userId: USER, sessionId: 's1', appId: 'tangu', muse: true };
+/** add_muse_todo 必填依据(11-20);只测投影的用例带一条就够。 */
+const EV = [{ kind: 'chat', source: 'You, in chat · 2026-11-20 10:12', quote: 'Fix it this week' }];
 const FIXTURES = {
   'muse-todo-mail.md': {
     id: 'todo-fixture-1',
@@ -61,7 +63,7 @@ const todos = (): Promise<any[]> => query<any[]>(`SELECT * FROM muse_todos WHERE
 
 describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
   it('信 = detail + 末尾 forsion-task 卡:todo 头 = TODO 行 id,任务书 = 标题 + detail', async () => {
-    expect(String(await tool.execute({ title: FIXTURE_INPUT.title, detail: FIXTURE_INPUT.detail }, ctx))).toContain('已记录');
+    expect(String(await tool.execute({ title: FIXTURE_INPUT.title, detail: FIXTURE_INPUT.detail, evidence: EV }, ctx))).toContain('已记录');
     const [t] = await todos();
     const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: t.title, detail: t.detail }));
@@ -87,7 +89,7 @@ describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
 
   it('detail 是 4000 个连续反引号:围栏 4001,整封照实落库不截(卡在最后)', async () => {
     const detail = '`'.repeat(4000);
-    await tool.execute({ title: 'ticks', detail }, ctx);
+    await tool.execute({ title: 'ticks', detail, evidence: EV }, ctx);
     const [t] = await todos();
     const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: 'ticks', detail }));
@@ -96,7 +98,7 @@ describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
 
   it('4000 字 detail:收件箱 4000 上限不截掉卡(卡在最后、任务书完整)', async () => {
     const detail = 'd'.repeat(4000);
-    await tool.execute({ title: 'long', detail }, ctx);
+    await tool.execute({ title: 'long', detail, evidence: EV }, ctx);
     const [t] = await todos();
     const [m] = await dms();
     expect(m.body).toBe(todoMailBody({ id: t.id, title: 'long', detail }));
@@ -105,7 +107,7 @@ describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
 
   it('digest 档:TODO 照落、照进私聊,不发信(notify 只管日报)', async () => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { muse: { notify: 'digest' } } }), 'utf8');
-    await tool.execute({ title: 't', detail: 'd' }, ctx);
+    await tool.execute({ title: 't', detail: 'd', evidence: EV }, ctx);
     expect((await todos()).length).toBe(1);
     expect((await dms()).length).toBe(1);
     expect((await mails()).length).toBe(0);
@@ -118,5 +120,75 @@ describe('add_muse_todo → 私聊里的待办消息带任务卡', () => {
       if (process.env.UPDATE_FIXTURES) { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, body, 'utf8'); }
       expect(readFileSync(p, 'utf8'), file).toBe(body);
     }
+  });
+});
+
+describe('add_muse_todo 必填依据(借鉴 dsh-superagent 第 2 条,11-20)', () => {
+  it('没给依据 / 依据全无效 → 报错、不落库、不发私聊,也不占这一时段的名额', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { muse: { maxTodosPerWindow: 1 } } }), 'utf8');
+    for (const evidence of [undefined, [], [{ source: '', quote: 'x' }], [{ source: 'a.md' }], 'not json', 42]) {
+      expect(await tool.execute({ title: 't', detail: 'd', evidence }, ctx)).toBe(EVIDENCE_REQUIRED_ERROR);
+    }
+    expect((await todos()).length).toBe(0);
+    expect((await dms()).length).toBe(0);
+    // 上限 1:被拒的六次没占名额,这一条照样进得去
+    expect(String(await tool.execute({ title: 't', detail: 'd', evidence: EV }, ctx))).toContain('已记录');
+  });
+
+  it('依据存在待办行上(JSON),正文和任务卡里都没有它 —— 卡片按 id 读,正文冒充不了', async () => {
+    const evidence = [
+      { kind: 'chat', source: 'You, in chat · 2026-11-20 10:12', quote: 'Keep an eye on my linear algebra homework this week' },
+      { kind: 'file', source: '/Users/me/Notes/LinAlg/ch3.md', quote: 'Done up to Q12 of 30' },
+      { kind: 'calendar', source: 'Calendar · Fri 2026-11-21 23:59', quote: 'Linear algebra homework due' },
+    ];
+    await tool.execute({ title: 'Split the homework', detail: 'Six a day.', evidence }, ctx);
+    const [t] = await todos();
+    expect(JSON.parse(t.evidence)).toEqual(evidence);
+    const [m] = await dms();
+    for (const e of evidence) expect(m.body).not.toContain(e.quote);
+    expect(m.body).toBe(todoMailBody({ id: t.id, title: t.title, detail: t.detail }));
+  });
+
+  it('宽松收:JSON 串照解、单个对象当一条、多于 3 条取前 3、过长截断到上限(按字符)、kind 认不出落 other', () => {
+    const long = '字'.repeat(100);
+    expect(normalizeEvidence(JSON.stringify([{ source: 'a', quote: 'b' }]))).toEqual([{ kind: 'other', source: 'a', quote: 'b' }]);
+    expect(normalizeEvidence({ kind: 'FILE', source: ' a.md ', quote: ' x\n y ' })).toEqual([{ kind: 'file', source: 'a.md', quote: 'x y' }]);
+    expect(normalizeEvidence([1, 2, 3, 4].map((i) => ({ source: `s${i}`, quote: `q${i}` }))).map((e) => e.source)).toEqual(['s1', 's2', 's3']);
+    const [e] = normalizeEvidence([{ kind: 'nope', source: long + long, quote: long }]);
+    expect(e.kind).toBe('other');
+    expect(Array.from(e.quote)).toHaveLength(80);
+    expect(e.quote.endsWith('…')).toBe(true);
+    expect(Array.from(e.source)).toHaveLength(120);
+    // 前面几条无效、后面有效:只收有效的,仍最多 3 条
+    expect(normalizeEvidence([{ source: 'x' }, ...[1, 2, 3].map((i) => ({ source: `s${i}`, quote: 'q' }))])).toHaveLength(3);
+    // 老行 NULL / 空串 / 坏 JSON → 空(卡上不画)
+    for (const v of [null, undefined, '', '{bad']) expect(parseStoredEvidence(v)).toEqual([]);
+    // 非字符串不收(不 String() 成「[object Object]」「false」);库里被改坏的行(toString 不是函数)也不抛
+    expect(normalizeEvidence([{ source: {}, quote: false }, { source: 1, quote: 'x' }, { kind: {}, source: 'a', quote: 'b' }])).toEqual([{ kind: 'other', source: 'a', quote: 'b' }]);
+    expect(parseStoredEvidence(JSON.stringify([{ source: { toString: 0 }, quote: 'q' }, { source: 's', quote: 'q' }]))).toEqual([{ kind: 'other', source: 's', quote: 'q' }]);
+  });
+
+  it('工具定义:evidence 必填、条数 1–3;三个判断与原则式反例在 evidence 字段说明里、不在工具描述里、不点具体场景(英文,进模型)', () => {
+    const fn = (tool.definition as any).function;
+    expect(fn.parameters.required).toEqual(['title', 'evidence']);
+    expect(fn.parameters.properties.evidence).toMatchObject({ type: 'array', minItems: 1, maxItems: 3 });
+    expect(fn.parameters.properties.evidence.items.required).toEqual(['source', 'quote']);
+    const d: string = fn.description;
+    const e: string = fn.parameters.properties.evidence.description;
+    for (const phrase of ["the user's own matter", 'no choice made on their behalf', 'not by themselves a request to act', 'watch rule the user set'])
+      expect(d).not.toContain(phrase);
+    expect(e).toContain("Propose a todo only when it is the user's own matter, they want it, and carrying it out needs no choice made on their behalf");
+    expect(e).toContain('Interest, complaints, and open discussion are not by themselves a request to act');
+    expect(e).toContain('A watch rule the user set that fired counts as evidence');
+    expect(e).toContain('This bar is for proposing todos only; finished work still goes to the inbox as usual');
+    // 11-21 live 负对照:点名具体场景的反例会被当成提示(同批 main 0/6、点名版 2/6),工具定义里一律不点
+    const all = JSON.stringify(tool.definition);
+    for (const named of ['reading about a topic', 'screen looks bad', 'discussing a plan', 'plan is decided'])
+      expect(all).not.toContain(named);
+    // 依据只证明「用户想要」,不要求依据去证明「不用替他选」(Codex 评审)
+    const evidencePart = e.slice(0, e.indexOf('Propose a todo'));
+    expect(evidencePart).toContain('showing the user wants this todo');
+    expect(evidencePart).not.toContain('choice');
+    for (const s of [d, e, EVIDENCE_REQUIRED_ERROR]) expect(/[一-鿿]/.test(s)).toBe(false);
   });
 });

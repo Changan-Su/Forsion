@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { ArrowRight, Bell, Bot, Database, MousePointerClick, Plus, Workflow } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { useAutomation } from '../../stores/automationStore'
-import { STARTERS } from './experience'
+import { homeSlots } from './experience'
+import { MuseSuggestionSection, type MuseHomeItem } from './MuseSuggestions'
 import './messages'
 
 const icons = { reminder: Bell, briefing: Bot, table: Database, button: MousePointerClick }
@@ -10,6 +11,13 @@ const icons = { reminder: Bell, briefing: Bot, table: Database, button: MousePoi
 export const AutomationHome: React.FC = () => {
   const { t } = useI18n()
   const openBuilder = useAutomation((s) => s.openBuilder)
+  const suggestions = useAutomation((s) => s.suggestions)
+  const pendingRules = useAutomation((s) => s.pendingRules)
+  const [expanded, setExpanded] = useState(false)
+  // 等你答复的规则卡最前,然后是 Muse 建议;不满 HOME_SLOTS 格时用模板补位,都没有就是原来的四个模板
+  const items: MuseHomeItem[] = [...pendingRules.map((card) => ({ kind: 'rule' as const, card })), ...suggestions.map((s) => ({ kind: 'suggestion' as const, s }))]
+  const { shown, extra, starters } = homeSlots(items, expanded)
+  const blank = <button className="btn ghost sm" onClick={() => openBuilder()}><Plus size={13} />{t('automation.ux.blank')}</button>
   return (
     <div className="auto-home">
       <div className="auto-home-kicker"><Workflow size={16} /> {t('automation.ux.workspace')}</div>
@@ -20,9 +28,10 @@ export const AutomationHome: React.FC = () => {
           <li key={key}><span>{i + 1}</span><div><strong>{t(`automation.ux.guide.${key}`)}</strong><p>{t(`automation.ux.guide.${key}Hint`)}</p></div></li>
         ))}
       </ol></details>
-      <div className="auto-home-section"><h2>{t('automation.ux.startWith')}</h2><button className="btn ghost sm" onClick={() => openBuilder()}><Plus size={13} />{t('automation.ux.blank')}</button></div>
+      {shown.length > 0 && <MuseSuggestionSection shown={shown} extra={extra} onMore={() => setExpanded(true)} action={starters.length ? undefined : blank} />}
+      {starters.length > 0 && <div className="auto-home-section">{shown.length > 0 ? <h2>{t('automation.ux.orTemplate')}</h2> : <h2>{t('automation.ux.startWith')}</h2>}{blank}</div>}
       <div className="auto-starters">
-        {STARTERS.map((starter) => {
+        {starters.map((starter) => {
           const Icon = icons[starter]
           return <button key={starter} className="auto-starter" onClick={() => openBuilder(undefined, starter)}>
             <Icon size={20} /><strong>{t(`automation.ux.${starter}.name`)}</strong>

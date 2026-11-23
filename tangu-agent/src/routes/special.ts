@@ -4,7 +4,7 @@
  *   GET      /agent/special/historian/activity?limit=  Historian 活动流（special_agent_log）
  *   POST     /agent/special/muse/intro                 首启引导答的第一次见面(作息 / 主动程度 / 关注),本机专用
  *   GET      /agent/special/muse/todos?status=         Muse TODO 列表
- *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮)
+ *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮;带 evidence 依据)
  *   PATCH    /agent/special/muse/todos/:id { status, from? }  改 TODO 状态(带 from = CAS,不符 409)
  *   POST     /agent/special/muse/todos/:id/approve     批准 TODO → 一次性、此刻到期的 Muse 日程(收件箱任务卡「交给 Muse 执行」)
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
@@ -39,6 +39,8 @@
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *   GET      /agent/special/muse/starters               新对话页的开场建议(Muse 关着 / chatStarters 关着 → 空)
  *   PATCH    /agent/special/muse/starters/:id { status: dismissed|used, mute? }  用户点了 × / 点行发出去了(只认 active,写回 Muse 的 LOG)
+ *   GET      /agent/special/muse/automation-suggestions      自动化首页的任务建议(Muse 关着 → 空)
+ *   PATCH    /agent/special/muse/automation-suggestions/:id { status: dismissed|used, reason? }  用户点了 × / 草稿存成了规则(只认 active,写回 Muse 的 LOG)
  *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
  *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
  *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
@@ -48,6 +50,7 @@
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
  */
+import { automationSenderError } from '../services/automationMessage.js';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
@@ -62,12 +65,14 @@ import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PRO
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices, requestMuseWake, museRecentRounds } from '../services/muse.js';
 import { listActiveStarters, markStarter } from '../services/museStarters.js';
+import { listActiveSuggestions, markSuggestion } from '../services/museAutomationSuggestions.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, triggerRev, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
 import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { parseStoredEvidence } from '../tools/builtin/museTodo.js';
 import { listAutomationSessions, fireTrigger, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
 import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -220,11 +225,11 @@ router.get('/agent/special/muse/todos', authMiddleware, async (req: AuthRequest,
     const userId = req.user!.userId;
     const status = typeof req.query.status === 'string' ? req.query.status : '';
     const rows = await query<any[]>(
-      `SELECT id, title, detail, status, source_session_id, created_at FROM muse_todos
+      `SELECT id, title, detail, status, source_session_id, created_at, evidence FROM muse_todos
        WHERE user_id = ?${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT 500`,
       status ? [userId, status] : [userId],
     );
-    res.json({ todos: rows || [] });
+    res.json({ todos: (rows || []).map((r) => ({ ...r, evidence: parseStoredEvidence(r.evidence) })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'todos failed' });
   }
@@ -234,9 +239,10 @@ router.get('/agent/special/muse/todos', authMiddleware, async (req: AuthRequest,
 router.get('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const rows = await query<any[]>(`SELECT id, title, status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [req.params.id, req.user!.userId]);
+    // evidence:卡上「依据 · N 条」只从这里读(不进 forsion-task 围栏,正文冒充不了);老行 NULL → []。
+    const rows = await query<any[]>(`SELECT id, title, status, evidence FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [req.params.id, req.user!.userId]);
     if (!rows?.[0]) return res.status(404).json({ error: 'todo_not_found', detail: 'todo not found' });
-    res.json({ todo: rows[0] });
+    res.json({ todo: { ...rows[0], evidence: parseStoredEvidence(rows[0].evidence) } });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'todo failed' });
   }
@@ -538,8 +544,17 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
       return res.status(400).json({ detail: `agent "${v.value.agentSlug}" 不存在` });
     }
-    if (isPlugin && (v.value.agentSlug || v.value.actions?.some((a) => a.type === 'agent_run'))) {
-      return res.status(400).json({ detail: '插件规则不能起 agent run(只许 notify / db_row_add / db_row_edit)' });
+    if (isPlugin && (v.value.agentSlug || v.value.actions?.some((a) => a.type === 'agent_run' || a.type === 'send_message'))) {
+      return res.status(400).json({ detail: '插件规则不能起 agent run 或以 Agent 身份发消息' });
+    }
+    const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+    const senderActions = v.value.actions === undefined ? prev?.actions : v.value.actions;
+    if (v.value.enabled || !prev) {
+      for (const a of senderActions ?? []) {
+        if (a.type !== 'send_message') continue;
+        const error = await automationSenderError(a);
+        if (error) return res.status(400).json({ detail: error });
+      }
     }
     for (const a of v.value.actions || []) {
       if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
@@ -557,7 +572,6 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // **刻意不封顶**(关不掉 = 用户以为停了、引擎里照跑),400 会让它无限重试成风暴。
     // **关规则永远不许被预检挡住。**
     // 判据单源在 museTriggers.needsWatchColPrecheck(那里有断言;内联一份 = 两处会漂)。
-    const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
     if (needsWatchColPrecheck(prev, v.value)) {
       const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
       if (badCol) return res.status(400).json({ detail: badCol });
@@ -795,6 +809,42 @@ router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: Aut
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'starter update failed' });
+  }
+});
+
+// ── 自动化首页的任务建议(muse_automation_suggestions;方案 docs/ToBeImproved/自动化任务建议方案_2026-11-22) ──
+const SUGGESTION_REASONS = ['irrelevant', 'timing', 'exists', 'less'] as const;
+router.get('/agent/special/muse/automation-suggestions', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const m = loadSpecialAgentsConfig().muse;
+    if (!m.enabled || !m.automationSuggestions) return res.json({ suggestions: [] });
+    res.json({ suggestions: await listActiveSuggestions(req.user!.userId) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'suggestions failed' });
+  }
+});
+
+router.patch('/agent/special/muse/automation-suggestions/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const status = req.body?.status;
+  if (status !== 'dismissed' && status !== 'used') return res.status(400).json({ detail: 'status must be dismissed or used' });
+  const reason = (SUGGESTION_REASONS as readonly string[]).includes(req.body?.reason) ? String(req.body.reason) : null;
+  try {
+    const userId = req.user!.userId;
+    const title = await markSuggestion(userId, String(req.params.id), status);
+    if (title === null) return res.status(409).json({ detail: 'suggestion is not active' });
+    const quoted = `"${title.replace(/\s+/g, ' ').slice(0, 120)}"`;
+    const why = reason === 'irrelevant' ? '; reason: not useful to them'
+      : reason === 'timing' ? '; reason: wrong timing'
+      : reason === 'exists' ? '; reason: they already have this'
+      : reason === 'less' ? '; the user asked for fewer suggestions like this' : '';
+    void appendMuseFeedback(userId, status === 'used'
+      ? `[feedback] automation suggestion ${quoted} saved as a rule by user`
+      : `[feedback] automation suggestion ${quoted} dismissed by user${why}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'suggestion update failed' });
   }
 });
 

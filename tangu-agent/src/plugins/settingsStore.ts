@@ -6,6 +6,7 @@
  * 运行时解析作用域:标量 全局 ⊕ 按 agent(agent 覆盖);image-list「该 agent 有非空则整组用其,否则全局」。
  * 同步缓存(sync 读供工具门禁 / wechatRemote);写后更新缓存(单进程)。
  */
+import { perAccount } from '../core/accountScope.js';
 import { promises as fsp } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -54,7 +55,8 @@ function cacheKey(id: string, scope: Scope): string {
   return scope === 'global' ? id : `${id}:${scope.agentSlug}`;
 }
 
-const cache = new Map<string, Record<string, any>>();
+// 多账号模式按账号分(core/accountScope.ts);单人模式一张表,行为不变。
+const cacheOf = perAccount(() => new Map<string, Record<string, any>>());
 
 // 全局插件设置(含 __enabled)→ config.json 的 plugins.global[id](唯一真源);per-agent 留 agent 文件夹。
 // 惰性迁移:某 id 未入 config → 回落 legacy ~/.tangu/plugins-config/<id>/settings.json,写时落 config。
@@ -64,7 +66,7 @@ function globalFrom(id: string, fromCfg: unknown): Record<string, any> {
 }
 function readRaw(id: string, scope: Scope): Record<string, any> {
   const k = cacheKey(id, scope);
-  const c = cache.get(k);
+  const c = cacheOf().get(k);
   if (c) return c;
   let obj: Record<string, any> = {};
   if (scope === 'global') {
@@ -72,7 +74,7 @@ function readRaw(id: string, scope: Scope): Record<string, any> {
   } else {
     try { obj = JSON.parse(readFileSync(settingsFileOf(id, scope), 'utf8')) || {}; } catch { obj = {}; }
   }
-  cache.set(k, obj);
+  cacheOf().set(k, obj);
   return obj;
 }
 /** 把 patch 合并进某作用域的设置并落盘。global 在 config.json 锁内以磁盘最新值为底合并:本进程缓存可能已被
@@ -84,14 +86,14 @@ async function writeRaw(id: string, scope: Scope, patch: Record<string, any>): P
       obj = { ...globalFrom(id, sec?.global?.[id]), ...patch };
       return { ...(sec || {}), global: { ...(sec?.global || {}), [id]: obj } };
     });
-    cache.set(cacheKey(id, scope), obj);
+    cacheOf().set(cacheKey(id, scope), obj);
     return;
   }
   const obj = { ...readRaw(id, scope), ...patch };
   const f = settingsFileOf(id, scope);
   await fsp.mkdir(path.dirname(f), { recursive: true });
   await fsp.writeFile(f, JSON.stringify(obj, null, 2), 'utf8');
-  cache.set(cacheKey(id, scope), obj);
+  cacheOf().set(cacheKey(id, scope), obj);
 }
 
 function schemaDefaults(id: string): Record<string, any> {
@@ -210,8 +212,8 @@ export async function takePluginData(id: string): Promise<{ paths: string[]; glo
     slugs = (await fsp.readdir(agentsDir(), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch { /* 无 agents 目录 */ }
   for (const slug of slugs) paths.push(path.join(agentsDir(), slug, 'plugins', `${id}.json`), path.join(agentsDir(), slug, 'plugins', `${id}-files`));
-  for (const k of [...cache.keys()]) {
-    if (k === id || k.startsWith(`${id}:`)) cache.delete(k);
+  for (const k of [...cacheOf().keys()]) {
+    if (k === id || k.startsWith(`${id}:`)) cacheOf().delete(k);
   }
   return { paths, global };
 }
@@ -226,7 +228,7 @@ export function restorePluginGlobal(id: string, value: unknown): void {
   sanitizeId(id);
   if (value === undefined) return;
   updateSection('plugins', (sec: any) => ({ ...(sec || {}), global: { ...(sec?.global || {}), [id]: value } }));
-  for (const k of [...cache.keys()]) if (k === id || k.startsWith(`${id}:`)) cache.delete(k);
+  for (const k of [...cacheOf().keys()]) if (k === id || k.startsWith(`${id}:`)) cacheOf().delete(k);
 }
 
 /** 路由层解析 ?scope=global|agent:<slug> → Scope。 */

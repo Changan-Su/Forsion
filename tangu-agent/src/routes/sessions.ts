@@ -15,8 +15,9 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
 import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { messageTimeOrder, query } from '../core/db.js';
+import { getDbType, messageTimeOrder, query } from '../core/db.js';
 import { liveRunStatus } from '../services/runStatus.js';
+import { chatCardRows, chatHistoryPage } from '../services/chatHistoryPage.js';
 import { failedRunsFor } from '../services/failedRuns.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
@@ -499,9 +500,22 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
     const before = Number(req.query.before) || 0;
-    const rows = await listMessagesPage(req.params.id, limit, before);
+    const idParam = (key: string) => typeof req.query[key] === 'string' ? String(req.query[key]) : undefined;
+    let known: Record<string, string> | undefined;
+    if (req.query.known) {
+      try { known = JSON.parse(String(req.query.known)); } catch { return res.status(400).json({ detail: 'Invalid message versions' }); }
+      if (!known || typeof known !== 'object' || Array.isArray(known) || Object.keys(known).length > 500
+        || Object.entries(known).some(([id, rev]) => !id || id.length > 128 || typeof rev !== 'string')) {
+        return res.status(400).json({ detail: 'Invalid message versions' });
+      }
+    }
+    const window = req.query.view === 'page' ? await chatHistoryPage(req.params.id, limit, {
+      beforeId: idParam('before_id'), afterId: idParam('after_id'), aroundId: idParam('around_id'), known,
+    }) : undefined;
+    const rows = window ? window.rows : req.query.view === 'cards' ? await chatCardRows(req.params.id, limit) : await listMessagesPage(req.params.id, limit, before);
     res.json({
-      failed_runs: await failedRunsFor(req.params.id, rows),
+      ...(window && { page: window.page }),
+      failed_runs: window ? window.failed : await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
         ...r,
         tool_calls: parseMaybeJson(r.tool_calls),
@@ -525,7 +539,7 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const sid = req.params.id;
     const ids: string[] = Array.isArray(req.body?.ids)
-      ? req.body.ids.filter((x: any) => typeof x === 'string' && x).slice(0, 1000)
+      ? req.body.ids.filter((x: any) => typeof x === 'string' && x)
       : [];
     if (!ids.length) return res.json({ ok: true, deleted: 0 });
     // 在飞/排队 run 时拒绝:跨端共享同一会话时,删消息会让在跑的 run hydrate 出残缺历史 → 污染/重复轮次。
@@ -534,16 +548,17 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
       [sid],
     );
     if (inflight.length || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'run in progress' });
-    const placeholders = ids.map(() => '?').join(',');
+    const idQuery = getDbType() === 'sqlite' ? 'SELECT value FROM json_each(?)' : 'SELECT json_array_elements_text(CAST(? AS json))';
+    const idList = JSON.stringify(ids);
     // 删前取被删消息的最早时间戳:若落在某压缩检查点覆盖区内,该检查点摘要会继续叙述已删轮次 → 连带失效。
     const tsRows = await query<any[]>(
-      `SELECT MIN(timestamp) AS mn FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
-      [sid, ...ids],
+      `SELECT MIN(timestamp) AS mn FROM chat_messages WHERE session_id = ? AND id IN (${idQuery})`,
+      [sid, idList],
     );
     const minTs = Number(tsRows[0]?.mn) || 0;
     await query(
-      `DELETE FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
-      [sid, ...ids],
+      `DELETE FROM chat_messages WHERE session_id = ? AND id IN (${idQuery})`,
+      [sid, idList],
     );
     // 失效覆盖到被删区间的压缩检查点(消息已删,摘要不能再吞失败,故吞错保响应)。
     if (minTs) {

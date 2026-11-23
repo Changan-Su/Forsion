@@ -7,6 +7,7 @@
  * 没配后台模型:自动的不排,手点的回 no_model,界面给提示(保留第一步的行为)。
  * 画像的应用在 agents/portraitLayers.ts,Agent 记忆的应用(跨文件事务)在 services/agentMemoryLayers.ts。
  */
+import { currentAccountId, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { scheduleAgentFilesSync } from './agentFileSync.js';
 import { join } from 'node:path';
 import { deps } from '../seams/runtime.js';
@@ -210,7 +211,8 @@ async function organizeAgent(userId: string, slug: string, manual: boolean): Pro
   }
 }
 
-const keyOf = (t: OrganizeTarget): string => (t.kind === 'portrait' ? 'portrait' : `agent:${t.slug}`);
+// 多账号模式(core/accountScope.ts):键前面带账号,jobs / retryAt / lastRun / timers 各账号一份;单人模式键不变。
+const keyOf = (t: OrganizeTarget): string => (isMultiAccount() ? `${requireAccountId('memory organize')}:` : '') + (t.kind === 'portrait' ? 'portrait' : `agent:${t.slug}`);
 const jobs = new Map<string, Promise<OrganizeOutcome>>();
 const retryAt = new Map<string, number>();
 const lastRun = new Map<string, { at: number; outcome: OrganizeOutcome }>();
@@ -219,8 +221,9 @@ function log(msg: string): void { try { deps().host.log(`[memory-organize] ${msg
 
 /** 整理一次。同一份同时只跑一次(第二个调用方等同一次的结果);自动排的没成,30 分钟内不再自动试(手点的不受限)。 */
 export function runOrganize(target: OrganizeTarget, opts: { userId?: string; manual?: boolean } = {}): Promise<OrganizeOutcome> {
-  const userId = opts.userId ?? currentRunUserId() ?? lastUserId;
-  if (userId) lastUserId = userId;
+  // 多账号模式不借「上一次的用户」:那可能是别的账号
+  const userId = opts.userId ?? currentRunUserId() ?? (isMultiAccount() ? currentAccountId() : lastUserId);
+  if (userId && !isMultiAccount()) lastUserId = userId;
   const key = keyOf(target);
   const running = jobs.get(key);
   if (running) return running;
@@ -244,7 +247,7 @@ export function runOrganize(target: OrganizeTarget, opts: { userId?: string; man
 /** 常驻写过线之后排一次(稍等几秒,让同一轮里接连的几笔写完)。不等结果、不抛。 */
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 export function scheduleOrganize(target: OrganizeTarget, userId?: string): void {
-  if (userId) lastUserId = userId;
+  if (userId && !isMultiAccount()) lastUserId = userId;
   const key = keyOf(target);
   if (timers.has(key) || jobs.has(key)) return;
   const t = setTimeout(() => { timers.delete(key); void runOrganize(target, { userId }); }, 3_000);

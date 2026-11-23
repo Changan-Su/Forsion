@@ -1,6 +1,6 @@
 // 插件工作文件夹的缺省值(2026-10-14 用户定):所有插件的产物收进库里的 `Plugins/` 一个文件夹,库根只多这一项。
 import { beforeEach, expect, it, vi } from 'vitest'
-import { usePluginStore } from './pluginStore'
+import { pluginNoteOwnership, usePluginStore } from './pluginStore'
 import type { AmadeusPlugin } from './types'
 import { usePageStore } from '../store/pageStore'
 
@@ -54,4 +54,19 @@ it('existing display-name folders stay readable per vault until schema-aware mig
   expect(getFolder()).toBe('Plugins/稍后读')
   mem.set('plugin.readflow.workFolder', 'My folders/中文')
   expect(getFolder({ preferId: true })).toBe('My folders/中文')
+})
+
+it('normal Markdown beside plugin directories stays in note search; user-selected working folders are protected', () => {
+  const root = '/notes'
+  usePageStore.setState({ vaultRoot: root, folders: ['Plugins/稍后读'] })
+  usePluginStore.getState().init([{ id: 'readflow', name: '稍后读', version: '0', setup: () => {} }])
+  let owns = pluginNoteOwnership(root)
+  expect(owns('Plugins/readflow/data.md')).toBe(true)
+  expect(owns('Plugins/稍后读/data.md')).toBe(true)
+  expect(owns('Plugins/My notes/journal.md')).toBe(false)
+  expect(owns('Plugins/README.md')).toBe(false)
+  mem.set('plugin.readflow.workFolder', 'Reading')
+  owns = pluginNoteOwnership(root)
+  expect(owns('Reading/nested/data.md')).toBe(true)
+  expect(owns('Reading list/book.md')).toBe(false)
 })

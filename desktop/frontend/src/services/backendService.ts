@@ -1,9 +1,10 @@
+import { AUTOMATION_COMPOSE_TIMEOUT_MS } from '../../../../tangu-agent/src/contracts/automationMessage'
 /**
  * M3 数据 API 薄封装(sessions/models/memory/skills/tools/workspace)。
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, FailedRunRecord, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseAutomationSuggestion, MuseLibraryEntry, MuseStarter, MuseRoundInfo, MuseSpaceView, MusePlacementOp, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   BuiltinUpdate, GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig, StandInInfo,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -301,10 +302,37 @@ export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, be
   listHistory(t, sessionId, limit, before).then((r) => r.messages)
 
 /** 同一个接口,连同失败的那几轮一起(引擎 services/failedRuns.ts):重开对话时据此补回失败行。老引擎不带 = 空,不是「没有失败」以外的意思。 */
-export const listHistory = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
-  request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }>(
-    t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
-  ).then((r) => ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] }))
+export const CHAT_PAGE_SIZE = 24
+export interface ChatPageCursor {
+  cards?: boolean
+  beforeId?: string
+  afterId?: string
+  aroundId?: string
+  known?: Record<string, string>
+}
+export interface ChatPage {
+  removed?: string[]
+  ids: string[]
+  versions: Record<string, string>
+  older: boolean
+  newer: boolean
+  missing: boolean
+}
+
+export async function listHistory(t: EngineTarget, sessionId: string, limit = 200, before?: number, cursor?: ChatPageCursor) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (before) q.set('before', String(before))
+  if (cursor) {
+    q.set('view', cursor.cards ? 'cards' : 'page')
+    if (cursor.beforeId) q.set('before_id', cursor.beforeId)
+    if (cursor.afterId) q.set('after_id', cursor.afterId)
+    if (cursor.aroundId) q.set('around_id', cursor.aroundId)
+    if (cursor.known) q.set('known', JSON.stringify(cursor.known))
+  }
+  const r = await request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[]; page?: ChatPage }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?${q}`)
+  return { messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [], page: r.page }
+}
 
 /**
  * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。
@@ -1218,7 +1246,7 @@ export const patchMuseTodo = (t: EngineTarget, id: string, status: MuseTodo['sta
 /** 单条 TODO(收件箱任务卡按真状态决定给不给按钮);404 → Error.code = 'todo_not_found'。
  *  12s 超时:authFetch 缺省不超时,挂住的请求会让卡片一直停在「正在确认」—— 超时按读失败处理(给重试)。 */
 export const getMuseTodo = (t: EngineTarget, id: string) =>
-  request<{ todo: Pick<MuseTodo, 'id' | 'title' | 'status'> }>(t, `/agent/special/muse/todos/${encodeURIComponent(id)}`, undefined, { timeoutMs: 12_000 }).then((r) => r.todo)
+  request<{ todo: Pick<MuseTodo, 'id' | 'title' | 'status' | 'evidence'> }>(t, `/agent/special/muse/todos/${encodeURIComponent(id)}`, undefined, { timeoutMs: 12_000 }).then((r) => r.todo)
 
 /** 批准 Muse TODO(收件箱任务卡「交给 Muse 执行」):引擎按 id 读库里的任务书、CAS pending→injected、建一次性 Muse 日程。
  *  409 的 error 码:muse_disabled / todo_not_pending(request() 把它挂在 Error.code 上)。 */
@@ -1257,8 +1285,8 @@ export const decideMuseApproval = (t: EngineTarget, id: string, decision: 'appro
   }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
 
 /** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
-export const listMuseCards = (t: EngineTarget, status?: string) =>
-  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.cards)
+export const listMuseCards = (t: EngineTarget, status?: string, opts?: { timeoutMs?: number }) =>
+  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`, undefined, opts).then((r) => r.cards)
 
 export const getMuseCard = (t: EngineTarget, id: string) =>
   request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
@@ -1282,6 +1310,14 @@ export const getMuseStarters = (t: EngineTarget) =>
 /** 用户点了 × / 点行发出去了。mute = 右键「别再推这类」。 */
 export const patchMuseStarter = (t: EngineTarget, id: string, status: 'dismissed' | 'used', mute?: boolean) =>
   request<{ ok: boolean }>(t, `/agent/special/muse/starters/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(mute ? { status, mute: true } : { status }) })
+
+/** 自动化首页的 Muse 任务建议(Muse 关着 → 空;旧引擎 / 云端 404 由调用方当「没有」)。 */
+export const getMuseAutomationSuggestions = (t: EngineTarget) =>
+  request<{ suggestions: MuseAutomationSuggestion[] }>(t, '/agent/special/muse/automation-suggestions', undefined, { timeoutMs: 8000 }).then((r) => r.suggestions)
+
+/** 用户点了 × (reason 可选) / 草稿存成了规则。 */
+export const patchMuseAutomationSuggestion = (t: EngineTarget, id: string, status: 'dismissed' | 'used', reason?: string) =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/automation-suggestions/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(reason ? { status, reason } : { status }) })
 
 /** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
 export const getMuseLibrary = (t: EngineTarget) =>
@@ -1344,6 +1380,7 @@ export const fireAutomationTrigger = (t: EngineTarget, id: string, origin: 'manu
   request<{ ok: boolean; execId?: string; status: string; steps?: AutomationExecutionInfo['steps'] }>(
     t, `/agent/special/automation/triggers/${encodeURIComponent(id)}/fire`,
     { method: 'POST', body: JSON.stringify({ origin }) },
+    { timeoutMs: AUTOMATION_COMPOSE_TIMEOUT_MS + 15_000 },
   )
 
 /** 踢一次巡检:桌面写完一张 .db 后调用,让 db_changed 触发从「最多等一个巡检周期」降到 ~2s。

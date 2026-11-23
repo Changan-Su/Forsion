@@ -357,6 +357,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
+  let doneFrame = false;
   // 可选字段必须在字面量里预置类型,否则后面按需赋值会 TS2339。
   const usage: {
     prompt_tokens: number;
@@ -382,7 +383,8 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
       const trimmed = line.trim();
       if (!trimmed.startsWith('data:')) continue;
       const data = trimmed.slice(5).replace(/^ /, '');
-      if (data === '[DONE]' || data === '') continue;
+      if (data === '[DONE]') { doneFrame = true; continue; }
+      if (!data) continue;
       let json: any;
       try {
         json = JSON.parse(data);
@@ -475,5 +477,5 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     }
   }
 
-  return { content: outContent, reasoning, toolCalls, usage, finishReason };
+  return { content: outContent, reasoning, toolCalls, usage, finishReason, ...(!doneFrame && !finishReason ? { streamEndedEarly: true } : {}) };
 }

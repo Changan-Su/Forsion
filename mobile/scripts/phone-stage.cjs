@@ -277,7 +277,8 @@ const moduleUrl = (rel) => {
 
 /** Installs the stand-in native chrome and returns once the shell has taken it (no web top bar, list-first). */
 async function installChrome(page) {
-  await page.evaluate(async ({ engineUrl, hostUrl, layout }) => {
+  const url = page.url()
+  const attach = () => page.evaluate(async ({ engineUrl, hostUrl, layout }) => {
     const engine = await import(/* @vite-ignore */ engineUrl)
     const host = await import(/* @vite-ignore */ hostUrl)
     const stage = (window.__stage = { engine, state: null, renders: 0 })
@@ -290,6 +291,15 @@ async function installChrome(page) {
     engine.installNativeChromeHost({ spaces: true, render(state) { stage.state = state; stage.renders++; host.applyChromeLayout(state.mode !== 'shell' ? plain : state.leftBack ? detail : layout) } })
     host.applyChromeLayout(layout)
   }, { engineUrl: moduleUrl('../lcl/engine/nativeChrome.ts'), hostUrl: moduleUrl('src/nativeChrome.ts'), layout: LAYOUT })
+  try {
+    await attach()
+  } catch (error) {
+    // A same-URL reload can replace the document between the shell appearing and these dynamic
+    // imports resolving. Mount once on the replacement shell; real module/bridge errors still fail.
+    if (page.isClosed() || page.url() !== url || !/Execution context was destroyed/.test(error.message)) throw error
+    await page.locator('.mb-shell').waitFor({ timeout: 10_000 })
+    await attach()
+  }
   await page.waitForFunction(() => document.querySelector('.mb-shell')?.hasAttribute('data-native-chrome') && !!window.__stage?.state, null, { timeout: 10_000 })
     .catch(() => { throw new Error('the shell did not take the stand-in chrome: the engine module reached from the page is not the app\'s instance') })
   // the capsules are native; here only their plates exist — tint them so a screenshot shows where they are
@@ -1881,6 +1891,68 @@ const SCENES = {
       ['the body was saved', /全文探针词/.test(disk || ''), JSON.stringify(disk)],
       ['its tag is in the tag list right away', tags.includes('待买'), tags.join('、')],
       ['the full-text search finds it by a word of its body', found.some((t) => /采购单/.test(t)), JSON.stringify(found)],
+    ]
+  },
+  'notes-batch-replace': async (page) => {
+    await backPath(page) // prime the Capacitor probe before opening the nested preview
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    await chip(page, 'recent')
+    const note = '实验/标定记录.md', reference = '实验/说明书.md'
+    await page.evaluate(async ([note, reference]) => {
+      const a = window.amadeus
+      await a.writeTextFile(note, '## 光谱记录\n\n开机做**零点校准**，保存读数。\n\n再做零点校准。\n')
+      await a.writeTextFile(reference, '> 原话：零点校准。\n')
+      await a.reindex()
+    }, [note, reference])
+    await page.locator(`${LIST} .amx-fulltext-entry`).tap()
+    await page.locator(`${LIST} .amx-search-heading .amx-search-save`).tap()
+    const pane = page.locator(`${LIST} .amx-replace-panel`)
+    await pane.getByRole('textbox', { name: '查找正文' }).fill('零点校准')
+    await pane.getByRole('textbox', { name: '替换为' }).fill('零位校准')
+    await pane.getByRole('button', { name: '替换 2 处', exact: true }).waitFor()
+    const quotes = pane.locator('.amx-replace-row', { hasText: '引用原文' })
+    const quoteKept = !(await quotes.getByRole('checkbox').isChecked())
+    const checks = pane.getByRole('checkbox')
+    const initial = await checks.count()
+    const first = pane.locator('.amx-replace-row', { hasText: '开机' })
+    const last = pane.locator('.amx-replace-row', { hasText: '再做' })
+    await last.getByRole('checkbox').uncheck()
+    const footer = await pane.locator('.amx-replace-actions .btn').boundingBox()
+    await page.screenshot({ path: path.join(OUT, 'batch-replace-list.png') })
+    await first.getByRole('button').tap()
+    await pane.locator('.amx-replace-paper ins').waitFor()
+    const rendered = await pane.locator('.amx-replace-paper').evaluate(el => ({
+      title: el.querySelector('h1')?.textContent,
+      section: el.querySelector('h2')?.textContent,
+      old: el.querySelector('strong del')?.textContent,
+      next: el.querySelector('strong ins')?.textContent,
+      count: el.querySelectorAll('ins').length,
+    }))
+    await page.screenshot({ path: path.join(OUT, 'batch-replace-preview.png') })
+    await systemBack(page)
+    await pane.locator('.amx-replace-actions').waitFor({ timeout: 5000 })
+    const kept = !(await last.getByRole('checkbox').isChecked()) && (await first.getByRole('checkbox').isChecked())
+    await pane.getByRole('button', { name: '替换 1 处', exact: true }).tap()
+    await pane.getByRole('button', { name: '撤销这次替换' }).waitFor()
+    const read = async () => page.evaluate(async ([a,b]) => [await window.amadeus.readTextFile(a), await window.amadeus.readTextFile(b)], [note, reference])
+    const [changed, quoted] = await read()
+    await pane.getByRole('button', { name: '重新预览' }).tap()
+    await pane.getByText('请重新勾选这篇笔记中的匹配。', { exact: true }).waitFor()
+    const reviewed = await checks.count() === 2 && !(await last.getByRole('checkbox').isChecked())
+      && !(await quotes.getByRole('checkbox').isChecked()) && await pane.getByRole('button', { name: '替换 0 处' }).isDisabled()
+    await pane.getByRole('button', { name: '上次替换' }).tap()
+    await pane.getByRole('button', { name: '撤销这次替换' }).tap()
+    await pane.getByText('已撤销 1 处', { exact: true }).waitFor()
+    const [undone] = await read()
+    await pane.getByRole('button', { name: '返回全文搜索' }).tap()
+    await page.locator(`${LIST} .amx-panel-back`).tap()
+    return [
+      ['replacement list opens from real search and leaves quotations unchecked', initial === 3 && quoteKept],
+      ['commit is above the floating native dock', footer && footer.y + footer.height <= LAYOUT.plates.find(p => p.id === 'dock').y, JSON.stringify(footer)],
+      ['tap opens full formatted note with exact inline change; system Back preserves unchecked hit', rendered.title === '标定记录' && rendered.section === '光谱记录' && rendered.old === '零点校准' && rendered.next === '零位校准' && rendered.count === 1 && kept, JSON.stringify(rendered)],
+      ['reviewing again clears matches in a changed note and keeps choices in unchanged notes', reviewed],
+      ['mobile vault writes only selected text and can undo the batch', changed.includes('**零位校准**') && changed.includes('再做零点校准') && quoted.includes('零点校准') && undone.includes('**零点校准**') && !undone.includes('零位校准')],
     ]
   },
 }

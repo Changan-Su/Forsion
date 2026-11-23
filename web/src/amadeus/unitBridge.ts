@@ -21,7 +21,7 @@
  */
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { IPC } from '@amadeus-shared/ipc'
-import type { AmadeusApi } from '@amadeus-shared/ipc'
+import type { AmadeusApi, VaultInfo } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import { LOCAL_ONLY_CODE, localOnlyMessage } from '@/services/localOnly'
 import { translate } from '@/i18n'
@@ -43,6 +43,7 @@ export interface UnitBridgeCfg {
 export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<AmadeusApi> {
   let lastLoadedPage: string | null = null
   let assetToken = ''
+  let strictRoot: string | null = null
   /** 本桥身份:随每次 RPC 发出(body.client),B 侧把它标进对应事件的 origin。
    *  ⚠️ T1 是明文 http://<LAN IP>(非安全上下文),crypto.randomUUID 在那里**不存在**——
    *  直接调会在挂桥前抛掉整页(getRandomValues 不限安全上下文,用它兜底)。 */
@@ -206,7 +207,11 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
 
   return {
     openVault: async () => null, // 换库是 B 自己的事,远程页不弹对方的目录选择框
-    restoreVault: () => rpc(IPC.restoreVault),
+    restoreVault: async () => {
+      const info = await rpc<VaultInfo | null>(IPC.restoreVault)
+      strictRoot = info?.strictExistingWrites ? info.root : null
+      return info
+    },
     listPages: () => rpc(IPC.listPages),
     listFiles: () => rpc(IPC.listFiles),
     loadPage: async (pagePath) => {
@@ -268,7 +273,7 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     scaffoldSamplePlugin: notSupported(() => translate('amxbridge.op.scaffoldSamplePlugin')),
     uninstallPlugin: notSupported(() => translate('amxbridge.op.uninstallPlugin')),
     revealInFileManager: notSupported(() => translate('amxbridge.op.reveal')),
-    hostCaps: { revealInFileManager: false }, // 远端设备的文件管理器够不着:入口不渲染(G2-13)
+    hostCaps: { revealInFileManager: false, get batchReplace() { return strictRoot !== null } }, // 远端设备的文件管理器够不着:入口不渲染(G2-13)
     readDatabase: (pagePath, ref) => rpc(IPC.dbRead, [pagePath, ref]),
     writeDatabase: (dbPath, data) => rpc(IPC.dbWrite, [dbPath, data]),
     writeDatabaseCas: (dbPath, data, baseVersion) => rpc(IPC.dbWriteCas, [dbPath, data, baseVersion]),
@@ -276,10 +281,15 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     writeDrawing: (drawingPath, source, base) => rpc(IPC.drawingWrite, [drawingPath, source, base]),
     readTextFile: (filePath) => rpc(IPC.readTextFile, [filePath]),
     // opts 原样转给本机宿主:base(CAS,G1-01)由桌面主进程比对,冲突结果 { ok:false, current } 原样回来。
-    writeTextFile: (filePath, text, opts) => rpc(IPC.writeTextFile, opts ? [filePath, text, opts] : [filePath, text]),
+    writeTextFile: (filePath, text, opts) => {
+      if (opts?.strictExisting && (!strictRoot || opts.expectedRoot !== strictRoot)) {
+        return Promise.reject(new Error('Unit has not confirmed support for a guarded write to this vault'))
+      }
+      return rpc(IPC.writeTextFile, opts ? [filePath, text, opts] : [filePath, text])
+    },
     listPageProps: (folder) => rpc(IPC.listPageProps, [folder]),
     setPageFrontmatter: (pagePath, patch) => rpc(IPC.setPageFrontmatter, [pagePath, patch]),
-    renamePageFile: (oldPath, newBaseName) => rpc(IPC.renamePageFile, [oldPath, newBaseName]),
+    renamePageFile: (oldPath, newBaseName, rememberOpened) => rpc(IPC.renamePageFile, [oldPath, newBaseName, rememberOpened]),
     renameDbFile: (oldPath, newBaseName) => rpc(IPC.renameDbFile, [oldPath, newBaseName]),
   }
 }

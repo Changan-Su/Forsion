@@ -10,6 +10,7 @@
  *  - 落库(10-18 用户「顺便问留下来」):每答完一问引擎写进 chat_asides,挂在某条消息上(anchors 记本会话当前这段挂在哪、记录 id);
  *    「从这里分出」里的那一行重开 = 把存下来的往返载回 threads。仍不进主对话的上下文、不进左栏、无工具。
  *  - 不写回主对话。要带回去由用户点「带回这里」:主窗输入框挂成引用,不动草稿(MainAction 'chat-quote')。
+ *    11-22 传话:用户要它带话时,模型在回答末尾拟一个 ```relay 稿,面板画成「转给主对话」卡,用户点了才发(btwRelay.ts)。
  *  - 附件(10-24 方案 A):输入区是共用 Chat Box,「+」/ 粘贴 / 拖入加图片和文件。附件只给这一问 —— 不进主对话、不进工作区;
  *    图片随请求走引擎的主对话同一条图片路,PDF / docx / 文本由引擎抽成文字。落库那一轮只留名字 + 小缩略图(引擎存);
  *    追问时之前的附件只当记录带上(名字 / 类型 / 大小),内容不再发。
@@ -30,15 +31,13 @@ import { isTierLockedError, tierLockedText } from '../../services/accountQuota'
 registerMessages({
   'btw.title': { zh: '顺便问', en: 'By the way' },
   'btw.windowTitle': { zh: '顺便问 · {title}', en: 'By the way · {title}' },
-  'btw.context': { zh: '当前对话', en: 'Conversation' },
-  'btw.hint': { zh: '带着本会话上下文提问，不会加入对话，也不打断正在跑的任务', en: 'Uses this conversation as context. Not added to it, and never interrupts a running task.' },
+  'btw.hint': { zh: '不会加进对话，也不会打断正在跑的任务。', en: 'It isn’t added to the chat and never interrupts a running task.' },
   'btw.sideEmpty': { zh: '打开一个对话后，可以在这里顺便问', en: 'Open a conversation to ask side questions here' },
-  'btw.empty': { zh: '问点与当前对话有关的事：概念、代码、刚才那步为什么这么做……', en: 'Ask about anything in this conversation: a concept, some code, why a step was taken…' },
-  'btw.placeholder': { zh: '顺便问点什么…', en: 'Ask a side question…' },
+  'btw.empty': { zh: '带着这段对话问点别的：概念、代码、刚才那步为什么这么做。', en: 'Ask about anything in this conversation: a concept, some code, why a step was taken.' },
+  'btw.placeholder': { zh: '顺便问点什么（不会进对话）…', en: 'Ask a side question (not added to the chat)…' },
   'btw.defaultQuestion': { zh: '解释一下这段', en: 'Explain this' },
   'btw.send': { zh: '发送', en: 'Send' },
   'btw.stop': { zh: '停止', en: 'Stop' },
-  'btw.clear': { zh: '清空旁聊', en: 'Clear side chat' },
   'btw.copy': { zh: '复制', en: 'Copy' },
   'btw.copied': { zh: '已复制', en: 'Copied' },
   'btw.quoteToChat': { zh: '带回这里', en: 'Bring back' },
@@ -65,9 +64,34 @@ registerMessages({
   'btw.att.ignored': { zh: '当前引擎没有收到附件，回答没有用到它们。请更新 Forsion', en: 'This engine did not receive the attachments, so the answer does not use them. Update Forsion.' },
   'btw.att.transcribed': { zh: '当前模型不能直接看图，图片先转成了文字', en: 'This model can’t view images, so they were described as text first' },
   'btw.describing': { zh: '正在把图片转成文字…', en: 'Describing the images as text…' },
-  'btw.list.head': { zh: '这条回答上的顺便问 · {n}', en: 'Side questions on this answer · {n}' },
   'btw.list.new': { zh: '新的一段', en: 'New side question' },
   'btw.listSep': { zh: '、', en: ', ' },
+  // 11-22 面板改版(方案 A):一行头 + 段落胶囊 + 挂点卡
+  'btw.seg.n': { zh: '第 {i} 段 · 共 {n}', en: 'Part {i} of {n}' },
+  'btw.seg.menu': { zh: '这条回答上的顺便问', en: 'Side questions on this reply' },
+  'btw.seg.delete': { zh: '删掉这一段', en: 'Delete this side question' },
+  'btw.seg.deleteTitle': { zh: '删掉这一段顺便问？', en: 'Delete this side question?' },
+  'btw.seg.deleteMsg': { zh: '这一段的问答会一起删掉，「从这里分出」里也不再列出。删了找不回来。', en: 'Its questions and answers are deleted too, and it leaves “Branched from here”. This can’t be undone.' },
+  'btw.anchor.about': { zh: '关于这条回答', en: 'About this reply' },
+  'btw.anchor.gone': { zh: '原回答已删除', en: 'The original reply was deleted' },
+  'btw.anchor.jump': { zh: '跳到这条回答', en: 'Go to this reply' },
+  // 传话(relay.html):模型拟稿,用户点了才发
+  'btw.relay.to': { zh: '转给主对话 · {title}', en: 'For the main chat · {title}' },
+  'btw.relay.send': { zh: '发给主对话', en: 'Send to main chat' },
+  'btw.relay.steer': { zh: '排进插话', en: 'Send as steer' },
+  'btw.relay.compose': { zh: '放进输入框', en: 'Put in chat box' },
+  'btw.relay.composed': { zh: '已放进输入框', en: 'Added to the chat box' },
+  'btw.relay.other': { zh: '发给别的会话', en: 'Send to another chat' },
+  'btw.relay.pick': { zh: '发给哪个会话', en: 'Send to which chat' },
+  'btw.relay.running': { zh: '正在跑，会排进插话', en: 'Running, sent as a steer' },
+  'btw.relay.untitled': { zh: '未命名会话', en: 'Untitled chat' },
+  'btw.relay.sent': { zh: '已发给主对话', en: 'Sent to the main chat' },
+  'btw.relay.steered': { zh: '已排进插话', en: 'Sent as a steer' },
+  'btw.relay.sentTo': { zh: '已发给「{title}」', en: 'Sent to “{title}”' },
+  'btw.relay.failed': { zh: '没发出去，稿子还在这里', en: 'Not sent. The draft is still here' },
+  'btw.relay.open': { zh: '跳过去看', en: 'Go to chat' },
+  'btw.relay.drafting': { zh: '正在拟稿…', en: 'Drafting…' },
+  'btw.relay.tag': { zh: '来自顺便问', en: 'From a side question' },
 })
 
 /** 这一问要带的附件:与主输入框的 Attachment 同形({name, mimeType, data: base64, size}),图片另带一张小缩略图(落库用)。 */

@@ -23,6 +23,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
 import { resetAssetUrlBuilder, toDisplayMarkdown } from '@amadeus-shared/assets'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { pageKey } from '@amadeus-shared/links'
 
 class FakeES {
@@ -42,6 +43,8 @@ let limitPut: (path: string) => boolean = () => false
 let afterGet: (path: string) => void = () => {}
 let getDelay: (path: string) => number = () => 0
 const fileGets: string[] = []
+let replaceIndexAvailable = true
+let strictFileId: string | undefined
 let refCandidatesOn = true // false = 旧服务端,没有 /ref-candidates(404)
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status })
@@ -66,6 +69,8 @@ const movePrefix = (from: string, to: string): void => {
 beforeEach(() => {
   files.clear(); puts.length = 0; toasts.length = 0; trees = 0; fileGets.length = 0; refCandidatesOn = true
   beforePut = () => {}
+  replaceIndexAvailable = true
+  strictFileId = 'existing-file'
   failPut = () => false
   limitPut = () => false
   afterGet = () => {}
@@ -103,11 +108,16 @@ beforeEach(() => {
       if (limitPut(body.path)) return json({ detail: '请求过于频繁，请稍后再试', code: 'RATE_LIMITED' }, 429)
       const cur = files.get(body.path)
       if (!body.force && (cur?.seq ?? 0) !== body.baseSeq) return json({ code: 'CONFLICT', seq: cur?.seq ?? 0, content: cur?.content ?? '' }, 409)
+      if (body.expectedFileId && body.expectedFileId !== strictFileId) return json({ code: 'CONFLICT' }, 409)
       if (body.expectedHash !== undefined && fakeHash(cur?.content) !== body.expectedHash) return json({ code: 'CONFLICT', detail: 'Content generation changed' }, 409)
       const seq = (cur?.seq ?? 0) + 1
       files.set(body.path, { content: body.content, seq })
       puts.push(body.path)
       return json({ seq, hash: 'h' })
+    }
+    if (p.endsWith('/replace-candidates')) {
+      return replaceIndexAvailable ? json({ paths: [...files].filter(([, f]) => f.content.includes(body.query)).map(([path]) => path) })
+        : json({ detail: 'not found' }, 404)
     }
     if (p.endsWith('/ref-candidates')) {
       if (!refCandidatesOn) return json({ detail: 'not found' }, 404)
@@ -123,7 +133,7 @@ beforeEach(() => {
       if (d) await new Promise((r) => setTimeout(r, d))
       const f = files.get(path)
       afterGet(path)
-      return f ? json({ path, kind: 'page', content: f.content, seq: f.seq, hash: 'h', updatedAt: '' }) : json({ detail: 'not found' }, 404)
+      return f ? json({ path, kind: 'page', content: f.content, seq: f.seq, hash: fakeHash(f.content), id: strictFileId, updatedAt: '' }) : json({ detail: 'not found' }, 404)
     }
     if (p.endsWith('/move') && !p.endsWith('/folders/move')) {
       const f = files.get(body.from)!
@@ -411,4 +421,43 @@ describe('cloud bridge: 单篇改名先问服务端候选,不逐篇读全库(11-
     expect(files.get('A.md')!.content).toBe('x [[Temp]]\n')
     expect(others().length).toBeGreaterThanOrEqual(31)
   })
+})
+
+it('batch CAS stays on the reviewed path and refuses a replacement with a reused cloud sequence', async () => {
+  seed({ 'a.md': 'original' })
+  const { bridge } = await boot()
+  const options = { strictExisting: true, base: textFingerprint('original'), expectedRoot: 'cloud://v1' }
+  await expect(bridge.writeTextFile('a.md', 'new', { ...options, expectedRoot: 'cloud://v2' })).rejects.toThrow()
+  beforePut = () => { files.set('a.md', { content: 'different note', seq: 1 }) }
+  expect(await bridge.writeTextFile('a.md', 'new', options)).toEqual({ ok: false, current: 'different note' })
+  beforePut = () => {}
+  files.delete('a.md')
+  expect(await bridge.writeTextFile('a.md', 'new', options)).toEqual({ ok: false, current: null })
+  expect(puts).toEqual([])
+  seed({ 'a.md': 'original' })
+  expect(await bridge.writeTextFile('a.md', 'new', options)).toEqual({ ok: true })
+  expect([...files.keys()]).toEqual(['a.md'])
+})
+
+it('cloud candidate lookup uses literal raw text and detects servers without identity-checked writes', async () => {
+  seed({ 'a.md': 'tag:%_WORD', 'b.md': 'other', '.trash/a.md': 'tag:%_WORD' })
+  const { bridge } = await boot()
+  expect(await bridge.noteReplaceCandidates!('tag:%_WORD')).toEqual(['a.md'])
+  expect(fileGets).toEqual([])
+  replaceIndexAvailable = false
+  await expect(bridge.noteReplaceCandidates!('tag:%_WORD')).rejects.toMatchObject({ code: 'NOTE_REPLACE_SERVER_UPDATE' })
+})
+
+it('a new cloud file with identical bytes stays untouched after the previewed file is replaced', async () => {
+  seed({ 'a.md': 'unchanged' })
+  strictFileId = 'first'
+  const { bridge } = await boot()
+  const snapshot = await bridge.readNoteReplaceSource!('a.md')
+  expect(snapshot).toEqual({ source: 'unchanged', fileId: 'first' })
+  beforePut = () => { strictFileId = 'second' }
+  const result = await bridge.writeTextFile('a.md', 'modified', {
+    base: textFingerprint('unchanged'), strictExisting: true, expectedRoot: 'cloud://v1', expectedFileId: snapshot!.fileId,
+  })
+  expect(result).toEqual({ ok: false, current: 'unchanged' })
+  expect(puts).toEqual([])
 })

@@ -7,8 +7,9 @@ import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
+import type { MuseTodoEvidence } from '../../../tangu-agent/src/contracts/clientTypes'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, BuiltinUpdate, BuiltinUpdateField, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, BuiltinUpdate, BuiltinUpdateField, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, MuseTodoEvidence, MuseTodoEvidenceKind, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -93,6 +94,7 @@ export interface MuseConfig {
   escalateTo?: string
   /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
   chatStarters?: boolean
+  automationSuggestions?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -123,6 +125,15 @@ export interface MuseStarter {
   text: string
   source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
 }
+/** GET /agent/special/muse/automation-suggestions 的一条(11-22 方案 A):Muse 觉得可以交给自动化的事 + 一份规则草稿。
+ *  rule 是引擎按 manage_automation 同一套校验过的触发与动作;桌面点开 = 拿它当草稿填画布,保存才建规则。 */
+export interface MuseAutomationSuggestion {
+  id: string
+  title: string
+  why: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'database' | 'computer' | 'muse'; label: string; ref?: string }
+  rule: Pick<MuseTriggerInfo, 'desc' | 'cond' | 'prompt' | 'cooldownHours' | 'actions' | 'only' | 'maxPerDay'>
+}
 export interface MuseTodo {
   id: string
   title: string
@@ -130,6 +141,8 @@ export interface MuseTodo {
   status: 'pending' | 'injected' | 'done' | 'dismissed'
   source_session_id: string | null
   created_at: string
+  /** 依据(11-20 起 add_muse_todo 必填);老待办 / 老引擎没有 → 空数组或缺省。 */
+  evidence?: MuseTodoEvidence[]
 }
 export interface MuseStatusInfo {
   enabled: boolean
@@ -299,6 +312,9 @@ export const DEFAULT_AGENT_SLUG = 'xyra'
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
 /** 划线条的排法(localStorage,**缺席 = 'tools'**:本视图的工具在前;'actions' = 动作在前。selectionActions.ts + 设置→外观)。 */
 export const SELECTION_BAR_ORDER_KEY = 'forsion_selection_bar_order'
+/** 划线条上每个动作放哪 / 排序 / 划选后自动 / 结果卡上次选的语言(JSON;2026-11-21,selectionActions.ts + 设置→外观「划线菜单」管理表)。
+ *  只存用户动过的;读不出来 ≠ 空(按缺省显示、不写回,用户再改时先把原件留到 `<键>.unreadable`)。 */
+export const SELECTION_ACTION_PREFS_KEY = 'forsion_selection_actions'
 /** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
 export const UI_ZOOM_KEY = 'forsion_ui_zoom'
 /** 界面语言(i18n.tsx 真源;同上)。 */

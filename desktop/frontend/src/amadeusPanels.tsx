@@ -1,6 +1,6 @@
 /** Amadeus 侧栏面板(Tangu 原生 amx- 外观,只复用 vendored 组件的逻辑):全文搜索 / 标签 / 局部关系图。 */
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { ChevronLeft, ChevronRight, Replace, Search } from 'lucide-react'
 import { AnimatedCollapse } from '@lcl/components'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
@@ -10,6 +10,9 @@ import { noteLinkTargets } from '@amadeus-shared/linkIndex'
 import { TAG_LINE_HITS_MAX, buildTagTree, filterTagTree, hasTagFilter, matchedTagInLine, parseSearchQuery, sortTagTree, splitTagText, tagTreeKey, type TagTreeNode, type TagTreeSort } from '@amadeus-shared/tagQuery'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileLink } from '@amadeus/lib/vaultFiles'
+import { canBatchReplace } from '@amadeus/lib/hostCaps'
+import { NoteReplacePanel } from './amadeus/NoteReplacePanel'
+import { useSharedVault } from './stores/sharedVaultStore'
 import { openNote, revealLineWhenReady, revealTextWhenReady } from './amadeusNav'
 import { newTabOf } from './views/itemSelect'
 import { create } from 'zustand'
@@ -68,15 +71,24 @@ export function openListSearch(): boolean {
 
 /** `onBack`:画在手机的笔记列表里(AmadeusPagesView:点标签 / 检索集合出来的结果、「全文搜索」那一行就地显示,那一层只画笔记列表
  *  这一个左栏视图)—— 标题那一行是「回到列表」,滚动交给外面的列表。带着查询进来(点了标签)不弹键盘;空查询进来是要打字,光标给输入框。 */
-export function AmadeusSearchView({ onBack }: { onBack?: () => void } = {}) {
+export function AmadeusSearchView({ onBack, innerBack }: { onBack?: () => void; innerBack?: MutableRefObject<(() => void) | null> } = {}) {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const [query, setQuery] = useState('')
+  const [replaceRoot, setReplaceRoot] = useState<string | null>(null)
+  useEffect(() => { setReplaceRoot(null) }, [vaultRoot])
+  const readOnlyShare = useSharedVault(s => !!s.activeVault && vaultRoot === `cloud://${s.activeVault}` && !s.ownVaults.includes(s.activeVault)
+    && s.items.some(item => item.vaultId === s.activeVault)
+    && !s.items.some(item => item.vaultId === s.activeVault && item.role === 'editor'))
+  const writableRoot = vaultRoot && canBatchReplace() && !vaultRoot.startsWith('share:') && !readOnlyShare ? vaultRoot : null
+  const replacing = !!writableRoot && writableRoot === replaceRoot
+  const replaceButton = useRef<HTMLButtonElement>(null)
   const seed = useSearchSeed((s) => s.seed)
   const inputRef = useRef<HTMLInputElement>(null)
   const inList = !!onBack
   useEffect(() => {
     if (!seed) return
+    setReplaceRoot(null)
     setQuery(seed.q)
     if (inList && !seed.q && seed.n !== listSearchFocused) { listSearchFocused = seed.n; inputRef.current?.focus() }
   }, [seed, inList])
@@ -91,11 +103,11 @@ export function AmadeusSearchView({ onBack }: { onBack?: () => void } = {}) {
   useEffect(() => { void ps().flushSave() }, [])
   useEffect(() => {
     const q = query.trim()
-    if (!q) { setHits([]); return }
+    if (replacing || !q) { setHits([]); return }
     const id = ++seq.current
     const timer = setTimeout(() => { void amadeus.search(q).then((r) => { if (id === seq.current) setHits(r) }) }, 120)
-    return () => clearTimeout(timer)
-  }, [query])
+    return () => { clearTimeout(timer); seq.current++ }
+  }, [query, vaultRoot, replacing])
 
   // v3 笔记的定位:首个含 needle 的块滚到中间并短暂高亮。找不到块 / 块不在 DOM 里 → false。
   // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
@@ -143,11 +155,21 @@ export function AmadeusSearchView({ onBack }: { onBack?: () => void } = {}) {
   }
   const lineTotal = hits.reduce((n, h) => n + (h.hits?.length ?? 0), 0)
 
+  if (replacing) return <NoteReplacePanel key={writableRoot} root={writableRoot} initialQuery={query} inline={inList} innerBack={innerBack}
+    onClose={value => {
+      setQuery(value)
+      setReplaceRoot(null)
+      requestAnimationFrame(() => replaceButton.current?.focus())
+    }} />
   return (
     <div className={`amx-panel${onBack ? ' amx-panel--inlist' : ''}`}>
-      {onBack
-        ? <button type="button" className="amx-panel-head amx-panel-back" onClick={onBack}><ChevronLeft size={14} />{t('amxpanel.searchHead')}</button>
-        : <div className="amx-panel-head">{t('amxpanel.searchHead')}</div>}
+      <div className="amx-search-heading">
+        {onBack
+          ? <button type="button" className="amx-panel-head amx-panel-back" onClick={onBack}><ChevronLeft size={14} />{t('amxpanel.searchHead')}</button>
+          : <div className="amx-panel-head">{t('amxpanel.searchHead')}</div>}
+        {writableRoot && <button type="button" className="amx-search-save" ref={replaceButton}
+          onClick={() => setReplaceRoot(vaultRoot)}><Replace size={13} />{t('noteReplace.title')}</button>}
+      </div>
       <div className="t2s-search amx-search-box">
         <Search size={13} className="t2s-dim" />
         <input ref={inputRef} autoFocus={!onBack} value={query} placeholder={t('amxpanel.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />

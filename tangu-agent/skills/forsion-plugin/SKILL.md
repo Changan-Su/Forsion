@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.133.0
+  version: 1.136.0
   author: Forsion
   category: Forsion
 ---
@@ -282,6 +282,8 @@ A Space that should also open as a small floating window gets a `mini` block in 
      spaces/<slug>/space.json          ← 内嵌 Space:随插件启停显隐(图标见上文 `iconFile`)
 ```
 
+**多账号模式(一台机器上多个账号共用一个引擎进程)**:引擎只从 bundle 里取 `agents/` 的人设和 `skills/` 的技能(只读),`tangu-plugins/` 引擎代码不加载、插件自带的 MCP 与 hooks 不启动。要在这种模式下可用,核心能力放进人设和技能,别依赖引擎插件。缺省单人模式照旧全部加载。
+
 **三种生命周期,发包前必须分清**:
 
 | | 谁 | 升级时 |
@@ -358,7 +360,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 |---|---|---|
 | `registerCommand` | 命令面板(+ 可选 agent 面) | `title` 可传 `() => string` 跟随界面语言(2026-10-02+,老宿主只认字符串);id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下)。2026-11-16 起返回 disposer(只撤这一次注册;被替换掉的旧 disposer 什么都不做),同 id 再注册 = 原地替换(运行时增删命令不用重载插件);老宿主返回 `undefined`、重注册会多出一条 → `off?.()`、每个 id 只注册一次。`hotkey: 'Mod+Shift+Y'` 缺省键位:必须带 `Mod`;带 `Shift` 时只能配字母、`[` `]` 或具名键(ArrowUp、F5、Enter…),不支持 `Space`,写错的忽略并在控制台警告;只在没有任何别的绑定占着时生效(内置命令、系统 / 编辑器快捷键、用户给别的命令设的键、别的插件的同一缺省键 —— 两个插件撞同一个键,谁都拿不到);用户给这条命令设的键永远优先;没生效的列在 设置 → 快捷键,写「插件默认键 {key} 与「{other}」冲突，未生效」,键空出来后自动生效。老宿主忽略 `hotkey` |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法);`label` / `group` 传函数则跟随界面语言 |
-| `registerSelectionAction` | 选中文字后浮出的那一条(划线条)里「⋯ → 插件」 | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记),见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
+| `registerSelectionAction` | 选中文字后浮出的那一条(划线条):缺省在「⋯ → 插件」,`placement: 'bar'` 要一个条上的位置(2026-11-21 起;条上插件位最多 3 个,用户钉 / 收进 ⋯ / 设置里改的永远优先) | `run(cx)` 返回要给人看的 markdown,**只进宿主的结果卡**:笔记里用户点「替换 / 插入下方」才写,别处只读;`scope` 决定出现在哪些视图(缺省只在笔记);`title` 收 string / 函数 / `{ zh, en }`(11-21 起,旧宿主只收字符串);`auto: true` 只声明**支持**划选后自动跑(开关归用户、缺省关);`card: { language, source, speak }` 让宿主在结果卡上画目标语言、原文、小喇叭;见下「Selection bar」。桌面 2.13.3 及更早在「AI ▾ → 插件」、只有笔记里有 |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | `title` 2026-10-26 起收 PluginText;**DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `rightCompanions` 声明它到前台时右栏要的那组(见「右栏:主视图规则」);`workspaceSource` 只对没写 `mode` 的老配方的左栏生效。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | Mini Panel（默认 320×420，用户可改大小；2.13.8 起可多开） | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；同一 `viewId` + `key` 复用一扇，不同 `key` 各开一扇（见 references/mini-panel.md「多开」）；仅原生桌面宿主提供 |
@@ -379,7 +381,7 @@ Muse's Space no longer loads `main.js` (it stays on disk; do not edit it): the d
 | `ctx.ui.setViewModes(el, spec)` | 视图的几种「看法」(转写 / 笔记 / 纪要、文档 / 画布这类同一份东西换摆法) | 2026-10-19 起;宿主把胶囊画在视图头行最左,⌥⌘V、命令面板「看法：X」、窄宽变形、手机顶栏都归宿主;2–4 种,`icon` 用图标词表名;句柄 `actions` = 同一行右边,把自己栏里的按钮挪进去;记忆归你(按记录 / 文件记);老宿主没有 → 可选链,保留自己的标签。见下「View modes」 |
 | `ctx.ui.attachTooltip(el, content, opts?)` | 按钮 / 图标的悬停提示,和宿主自己的按钮同一个 | 2026-10-23 起;300ms 才出、弹着移到相邻触发点直接接力、键盘聚焦立刻出不做动画、按下 / 滚动即收;`content` = 一行或几行(首行标题);`side` 缺省 top、放不下翻面;句柄 `{ update, dispose }`,禁用时宿主统一收;留 `aria-label`、去掉 `title`;老宿主没有 → 可选链,照旧 `title`。见下「Tooltips」 |
 | `ctx.ui.dropIndicator(opts?)` | 自己视图里拖动排序 / 拖进去时的落点线、「放进去」描边,和宿主编辑器 / 侧栏 / 标签条同一个 | 2026-10-24 起;句柄 `{ line, zone, hide, dispose }`,传视口坐标(`line({x,y,w})` 横线 y=上沿、`{axis:'v'}` 竖线、`zone({x,y,w,h})` 描边);换落点原地淡出淡入、颜色 `--signal-line`;给 `key`(行 id)滚动才不算换落点;dragleave / drop 时 `hide()`,禁用时宿主统一收;老宿主没有 → 可选链,照旧自己画。2026-10-25 起句柄多一个 `land?(行或找它的函数, 松手处)`:挪完之后被拖的那一行从松手处滑进新位置(160ms,减少动态效果下直接到位),邻居不让位。见下「Drop indicators」 |
-| `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单;11-08 起跟着字走,自报选区可给 `getRect`(见 references) |
+| `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / 朗读 / ⋯」和条上的插件动作,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单;11-08 起跟着字走,自报选区可给 `getRect`(见 references) |
 | `ctx.ui.mountToolIsland` | 「拿着工具干活」的视图(PDF 批注一类)换工具的那颗胶囊 | 2026-11-04 起;顶部居中、`root` 窄于 520px 停底部,宿主管位置 / 皮 / 滑过去的选中底块;**选中受控**(`onPick` 里自己 `setActive`),`key` 只画字母不绑键;句柄的 `row` 是岛下那一排、归插件画,`slots` 放四角;老宿主没有 → 可选链,保留自己的那条(见 references「Tool island」) |
 | `ctx.ui.float(opts)` | 浮起来的一块:传输进度卡、导出完成的小条、录音计时胶囊这类 | 2026-11-07 起;`scope` 说浮在谁之上(`view` 自己的视图里 / `space` 整个 Space、切走就藏 / `window` 整个窗口),`anchor` 四角 + 上下居中,`role` `panel` 停在角上、`notice` 同角叠放并读屏;宿主管位置、层级、入场退场、拖动吸附(`data-float-drag` 把手,给 `id` 记住角);**别再自己写 fixed + z-index**;老宿主没有 → 可选链,保留自己画的(见 references「Floats」) |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
@@ -557,6 +559,7 @@ ctx.registerCommand({
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;2026-11-13 起有 `stop(target?)` 停掉一轮,`agentStatus` / `subscribeAgentStatus` / `stop` 的会话参数可传 `{ runId }`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
+| `ctx.tts` | 用用户在「设置 → 模型 → 语音」选的朗读模型念一段(`speak(text, { signal })` 念完 / 被停才兑现、`stop()` 只停自己起的、`available()`) | 2026-11-21 起;和 `ctx.tangu` 同一道门(非 Tangu 宿主 / 旧宿主没有 → `ctx.tts?.`);全应用一个播放器(和聊天朗读共用,新的顶掉旧的);没配模型 reject `tts_no_model`(宿主自己出「去设置」提示)、这个宿主没朗读(网页端)reject `tts_unavailable`;不回落系统声音;停用时宿主停掉你那段 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
 | `ctx.widgets` | 主页小组件的数据(`provide(id, fn)` 喂行 / `invalidate(id?)` 请宿主重拿);卡声明在 manifest `widgets`,宿主画,只读 | 2026-11-07 起;**所有插件可用**,不用声明能力 → `ctx.widgets?.`;见下「主页小组件」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
@@ -649,7 +652,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - View modes: ctx.ui.setViewModes (2026-10-19+)
 - Tooltips and motion tokens: ctx.ui.attachTooltip (2026-10-23+)
 - Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
-- Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
+- Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+); placement / auto / card / ctx.tts (2026-11-21+)
 - Tool island: ctx.ui.mountToolIsland (2026-11-04+)
 - Floats: ctx.ui.float (2026-11-07+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)

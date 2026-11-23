@@ -145,3 +145,81 @@ describe('ctx.registerSelectionAction', () => {
     expect(usePluginStore.getState().selectionActions).toEqual([])
   })
 })
+
+describe('ctx.registerSelectionAction:2026-11-21 新字段', () => {
+  beforeEach(() => setTanguProbe(baseProbe()))
+  it('title 收 string / 函数 / { zh, en };别的形状照旧忽略整个动作', () => {
+    const ctx = ctxOf('p5')
+    const run = () => 'x'
+    ctx.registerSelectionAction({ id: 'a', title: { zh: '翻译', en: 'Translate' }, run, placement: 'bar', auto: true, card: { language: true, source: true, speak: true } })
+    ctx.registerSelectionAction({ id: 'b', title: () => 'Fn', run })
+    ctx.registerSelectionAction({ id: 'c', title: 42 as never, run })
+    const list = usePluginStore.getState().selectionActions
+    expect(list.map((o) => o.item.id)).toEqual(['a', 'b'])
+    expect(list[0].item).toMatchObject({ placement: 'bar', auto: true, card: { language: true, source: true, speak: true } })
+  })
+})
+
+describe('ctx.tts', () => {
+  type Tts = NonNullable<Probe['tts']>
+  type Fake = Tts & { stopped: (string | undefined)[]; current: { key: string; phase: 'loading' | 'playing' } | null }
+  const fakeTts = (over: Partial<Tts> = {}): Fake => {
+    const me: Fake = {
+      stopped: [],
+      current: null,
+      available: () => true,
+      speak: (key: string, _t: string, o?: { signal?: AbortSignal }) => new Promise<void>((res) => {
+        me.current = { key, phase: 'playing' }
+        o?.signal?.addEventListener('abort', () => { me.current = null; res() })
+      }),
+      stop: (key?: string) => { me.stopped.push(key); if (!key || me.current?.key === key) me.current = null },
+      state: () => me.current,
+      subscribe: () => () => {},
+      openSettings: () => {},
+      ...over,
+    }
+    return me
+  }
+  it('只在 Tangu 宿主上有;探针没有朗读 → speak 回 tts_unavailable、available 为假', async () => {
+    setTanguProbe(null)
+    expect(ctxOf('t0').tts).toBeUndefined()
+    setTanguProbe(baseProbe())
+    const ctx = ctxOf('t1')
+    expect(ctx.tts!.available()).toBe(false)
+    await expect(ctx.tts!.speak('hi')).rejects.toThrow('tts_unavailable')
+  })
+  it('key 带插件前缀;stop 只停自己的那段;停用时中止在飞的那段', async () => {
+    const tts = fakeTts()
+    setTanguProbe(baseProbe({ tts }))
+    const ctx = ctxOf('t2')
+    const p = ctx.tts!.speak('hello')
+    expect(tts.current?.key).toMatch(/^plugin:t2:/)
+    // 别人(聊天朗读)在念的那段,插件的 stop 不碰
+    tts.current = { key: 'msg-1', phase: 'playing' }
+    ctx.tts!.stop()
+    expect(tts.current?.key).toBe('msg-1')
+    usePluginStore.getState().disable('t2')
+    await expect(p).resolves.toBeUndefined() // 中止 = 兑现(和被停一样),不是报错
+    await expect(ctx.tts!.speak('again')).rejects.toThrow(/plugin disabled/)
+  })
+  it('停用 / 重载后旧 ctx 的 stop 停不了新那一代的;传错 signal 先拒、不留清理记录', async () => {
+    const tts = fakeTts()
+    setTanguProbe(baseProbe({ tts }))
+    const old = ctxOf('t4')
+    usePluginStore.getState().disable('t4')
+    const fresh = ctxOf('t4') // 同一个插件重新起一代
+    void fresh.tts!.speak('new one')
+    const key = tts.current?.key
+    expect(key).toMatch(/^plugin:t4:/)
+    old.tts!.stop()
+    expect(tts.current?.key).toBe(key) // 旧 ctx 已停用:不动
+    tts.stopped.length = 0
+    await expect(fresh.tts!.speak('x', { signal: {} as AbortSignal })).rejects.toThrow(/signal must be an AbortSignal/)
+    usePluginStore.getState().disable('t4')
+    expect(tts.stopped.filter((k) => k && k !== key)).toEqual([]) // 被拒的那次没登记过要清理的东西
+  })
+  it('没配模型:原样 reject tts_no_model', async () => {
+    setTanguProbe(baseProbe({ tts: fakeTts({ speak: async () => { throw new Error('tts_no_model') } }) }))
+    await expect(ctxOf('t3').tts!.speak('x')).rejects.toThrow('tts_no_model')
+  })
+})

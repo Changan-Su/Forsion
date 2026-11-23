@@ -12,6 +12,7 @@ updates:
       - dependency-name: '@forsion/tangu-computer-use'
       - dependency-name: '@forsion/extend'
       - dependency-name: '@forsion/calendar'
+      - dependency-name: '@forsion/translation'
     commit-message:
       prefix: 'chore(desktop)'
   - package-ecosystem: npm
@@ -22,6 +23,7 @@ updates:
       - dependency-name: '@forsion/tangu-computer-use'
       - dependency-name: '@forsion/extend'
       - dependency-name: '@forsion/calendar'
+      - dependency-name: '@forsion/translation'
     groups:
       compatible-updates:
         update-types: [minor, patch]

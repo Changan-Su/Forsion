@@ -112,6 +112,8 @@ export interface ToolContext {
   automationOrigin?: string;
   /** 内置工具黑白名单(config.toml tools_mode/tools_list):'deny'=名单内禁用,'allow'=仅名单内可用;
    *  缺省=不限制。只约束无门禁的内置工具,见 resolveTools。 */
+  /** Only registered core tools, even when a plugin claims the same name. */
+  coreToolsOnly?: boolean;
   toolsStrict?: boolean;
   toolsMode?: 'allow' | 'deny';
   toolsList?: string[];

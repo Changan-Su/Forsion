@@ -18,6 +18,7 @@ import type { FimCompletionOpts, LlmBrain, StreamOpts, StreamResult } from '../s
 import { DIRECT_MARK, SESSION_MARK } from './openaiCompat.js';
 import { getRawSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
+import { perAccount } from '../core/accountScope.js';
 
 export type MaskAction = 'mask' | 'warn' | 'block';
 export interface MaskSettings { secrets: boolean; personal: boolean; action: MaskAction }
@@ -210,15 +211,23 @@ export function removeAllow(hash: string): void {
 export interface MaskLogLine { t: number; sid: string; action: MaskAction; hits: MaskHit[] }
 const logFile = () => join(maskDir(), 'log.jsonl');
 const LOG_DAYS = 7;
-const logged = new Set<string>(); // 同一会话同一个值只记一次(每轮都会重发历史)
-let prunedAt = 0;
+// 多账号模式按账号分(core/accountScope.ts):去重表、原文 ↔ 占位符对照表都是每个账号一份;单人模式一份,行为不变。
+const maskState = perAccount(() => ({
+  logged: new Set<string>(), // 同一会话同一个值只记一次(每轮都会重发历史)
+  prunedAt: 0,
+  /** 进程内:占位符 → 原值(换回用),原值 → 占位符(之后哪里再出现这个值都换,哪怕没有上下文能让规则认出它)。只在内存。 */
+  phValue: new Map<string, string>(),
+  known: new Map<string, { kind: string; ph: string }>(),
+}));
 function appendLog(sid: string, action: MaskAction, hits: MaskHit[]): void {
+  const st = maskState();
+  const logged = st.logged;
   const fresh = hits.filter((h) => !logged.has(`${sid}\0${h.ph}`));
   if (!fresh.length) return;
   fresh.forEach((h) => logged.add(`${sid}\0${h.ph}`));
   mkdirSync(maskDir(), { recursive: true });
   // 一天修剪一次 7 天前的;去重表跟着清,过期的值再出现时重新记一笔
-  if (Date.now() - prunedAt > 86400_000) { prunedAt = Date.now(); readMaskLog(); logged.clear(); fresh.forEach((h) => logged.add(`${sid}\0${h.ph}`)); }
+  if (Date.now() - st.prunedAt > 86400_000) { st.prunedAt = Date.now(); readMaskLog(); logged.clear(); fresh.forEach((h) => logged.add(`${sid}\0${h.ph}`)); }
   appendFileSync(logFile(), JSON.stringify({ t: Date.now(), sid, action, hits: fresh } satisfies MaskLogLine) + '\n', { mode: 0o600 });
 }
 /** 读最近 7 天(顺手把更早的删掉)。 */
@@ -239,14 +248,13 @@ const SKIP_KEYS = new Set(['tools', 'tool_choice', 'model', 'modelId', 'response
 const BLOB_RE = /^(?:data:[\w/+.-]{1,80};base64,)?[A-Za-z0-9+/=_-]+$/;
 const isBlob = (s: string) => s.length > 2000 && BLOB_RE.test(s);
 const SEALED_TYPES = new Set(['thinking', 'redacted_thinking', 'reasoning']);
-/** 进程内:占位符 → 原值(换回用),原值 → 占位符(之后哪里再出现这个值都换,哪怕没有上下文能让规则认出它)。只在内存。 */
-const phValue = new Map<string, string>();
-const known = new Map<string, { kind: string; ph: string }>();
+/** 原文 ↔ 占位符对照表(maskState 里,每个账号一份)的上限。 */
 const KNOWN_MAX = 2000;
 const KNOWN_MIN_LEN = 8;
 /** 同一个值的类型按第一次认出的算:换了上下文(连接串里的密码 / 配置里的 SECRET)也是同一个占位符,缓存不断、换回对得上。 */
-const canonicalKind = (value: string, kind: string): string => known.get(value)?.kind ?? kind;
+const canonicalKind = (value: string, kind: string): string => maskState().known.get(value)?.kind ?? kind;
 function remember(value: string, kind: string, ph: string): void {
+  const { phValue, known } = maskState();
   phValue.set(ph, value);
   if (value.length < KNOWN_MIN_LEN) return;
   const prev = known.get(value);
@@ -256,7 +264,7 @@ function remember(value: string, kind: string, ph: string): void {
 }
 /** 之前认出的值,按它那一类现在开没开过滤(关掉个人信息后,记住的邮箱不再遮)。 */
 const knownFor = (settings: Pick<MaskSettings, 'secrets' | 'personal'>) =>
-  [...known.entries()].filter(([, k]) => (PERSONAL_KINDS.has(k.kind) ? settings.personal : settings.secrets));
+  [...maskState().known.entries()].filter(([, k]) => (PERSONAL_KINDS.has(k.kind) ? settings.personal : settings.secrets));
 
 export interface MaskResult { payload: any; hits: MaskHit[]; map: Map<string, string> }
 

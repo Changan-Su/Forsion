@@ -11,6 +11,15 @@
  *   「漏判一次冲突」(= 退回旧的盲写行为),不是写坏。
  */
 
+import type { TextWriteOptions } from './ipc'
+
+/** The host checks the scope at the point it dequeues the write. */
+export function checkStrictTextWrite(options: TextWriteOptions, root: string | null): void {
+  if (typeof options.base !== 'string' || options.create || !root || options.expectedRoot !== root) {
+    throw new Error('Existing-file write needs the reviewed vault and base')
+  }
+}
+
 /** 冲突副本路径:`a/b/Note.md` → `a/b/Note (conflict 2026-07-10 1532).md`。 */
 export function conflictCopyPath(serverPath: string, now: Date): string {
   const slash = serverPath.lastIndexOf('/')

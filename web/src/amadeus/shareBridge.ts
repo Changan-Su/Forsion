@@ -187,6 +187,7 @@ export function createShareBridge(cfg: ShareBridgeCfg): AmadeusApi {
   const vaultInfo = (): VaultInfo => ({ root: `share:${cfg.token}`, pages: pages(), folders: cfg.tree().folders })
 
   const api: AmadeusApi = {
+    hostCaps: { batchReplace: false },
     openVault: async () => vaultInfo(),
     restoreVault: async () => vaultInfo(),
     listPages: async () => pages(),

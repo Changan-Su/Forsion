@@ -73,3 +73,85 @@
 /* Formula layout is atomic. Wide equations/tables scroll inside the preview, never stretch the overlay. */
 .am-ai-panel .am-ai-preview .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-block: 2px; }
 .am-ai-panel .am-ai-preview .katex { overflow-wrap: normal; word-break: normal; white-space: nowrap; }
+/* 插件结果卡宿主画的几样(2026-11-21 划线插件常驻 / 朗读):原文(收成 3 行,点开)、原文 / 结果的小标签与小喇叭、
+   卡头「划选后自动」开关和它下面那行额度提示。 */
+.am-ai-panel .am-ai-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: -4px;
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  color: var(--text-muted);
+}
+.am-ai-panel .am-ai-source {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  padding: 2px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-light, var(--text));
+  font: inherit;
+  font-family: var(--font-body);
+  font-size: var(--ui-font-body, 13px);
+  line-height: var(--ui-line-body, 1.5);
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.am-ai-panel .am-ai-source.open { display: block; max-height: 160px; overflow-y: auto; cursor: text; }
+.am-ai-panel .am-ai-speak {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.am-ai-panel .am-ai-speak:hover,
+.am-ai-panel .am-ai-speak.on { background: var(--menu-hover); color: var(--text); }
+.am-ai-panel .am-ai-auto { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: 8px; color: var(--text-muted); cursor: pointer; }
+.am-ai-panel .am-ai-switch {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--border-strong, var(--border));
+  cursor: pointer;
+  transition: background var(--duration-fast, 120ms) var(--ease-surface, ease);
+}
+.am-ai-panel .am-ai-switch > span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  transition: left var(--duration-fast, 120ms) var(--ease-surface, ease);
+}
+.am-ai-panel .am-ai-switch.on { background: var(--signal-mark); }
+.am-ai-panel .am-ai-switch.on > span { left: 14px; }
+.am-ai-panel .am-ai-switch:focus-visible,
+.am-ai-panel .am-ai-speak:focus-visible,
+.am-ai-panel .am-ai-source:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -2px; }
+.am-ai-panel .am-ai-note {
+  margin-top: -4px;
+  font-size: var(--ui-font-meta, 12px);
+  line-height: var(--ui-line-meta, 1.5);
+  color: var(--text-muted);
+}
+.am-tts-setup { width: min(340px, calc(100vw - 32px)); }
+.am-tts-setup .am-tts-setup-title { font-size: var(--ui-font-body, 13px); font-weight: 500; color: var(--text); margin-bottom: -4px; }
+.am-tts-setup .am-ai-note { margin-top: 0; }

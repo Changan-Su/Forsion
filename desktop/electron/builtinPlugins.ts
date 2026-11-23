@@ -255,8 +255,16 @@ async function seedUnlocked(
         continue
       }
       if (!installed) {
+        // 目录名被别的东西占着(用户自己的同名插件、没有 manifest 的文件夹):不覆盖,整包跳过 —— 那是用户的数据。
+        // 11-22 翻译插件随包时 Codex 指出:`translation` 这种通用名比 forsion-calendar 容易撞得多。
+        const target = path.join(pluginsRoot, bundled.id)
+        if (await fs.lstat(target).then(() => true, () => false)) {
+          report.skipped.push(src)
+          log(`[builtin-plugins] ${target} 已被别的内容占用(不是 ${bundled.id}),不覆盖,跳过内置 ${bundled.id}`)
+          continue
+        }
         await fs.mkdir(pluginsRoot, { recursive: true })
-        await replaceDir(from, path.join(pluginsRoot, bundled.id))
+        await replaceDir(from, target)
         report.installed.push(bundled.id)
         log(`[builtin-plugins] 已内置 ${bundled.id}@${offered.version}(${how})`)
       } else if (replace) {

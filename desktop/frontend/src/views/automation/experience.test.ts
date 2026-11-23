@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blankStep, buildToolArgs, toSpec } from './lib'
-import { starterSteps, stepIssue, templateVariables } from './experience'
+import { HOME_SLOTS, STARTERS, homeSlots, starterSteps, stepIssue, templateVariables } from './experience'
 import type { AutomationActionCatalogItem } from '../../types'
 
 describe('workflow setup', () => {
@@ -42,5 +42,19 @@ describe('workflow setup', () => {
   it('inserts stable IDs even when display names are not valid variable names', () => {
     expect(templateVariables([{ id: 'c-123', name: 'Client name / 客户名称' }])).toEqual([{ value: '{{row.c-123}}', label: 'Client name / 客户名称' }])
     expect(templateVariables()).toEqual([])
+  })
+})
+
+describe('home slots (Muse suggestions first, templates fill the rest)', () => {
+  it('no suggestions = the four templates, as before', () => {
+    expect(homeSlots([])).toEqual({ shown: [], extra: 0, starters: STARTERS })
+  })
+  it('a few suggestions take the first slots; templates fill what is left', () => {
+    expect(homeSlots(['a', 'b'])).toEqual({ shown: ['a', 'b'], extra: 0, starters: STARTERS.slice(0, HOME_SLOTS - 2) })
+  })
+  it('enough suggestions hide the templates; extras fold behind a count until expanded', () => {
+    const six = ['a', 'b', 'c', 'd', 'e', 'f']
+    expect(homeSlots(six)).toEqual({ shown: six.slice(0, HOME_SLOTS), extra: 2, starters: [] })
+    expect(homeSlots(six, true)).toEqual({ shown: six, extra: 0, starters: [] })
   })
 })

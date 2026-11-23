@@ -37,10 +37,10 @@ afterEach(() => { vi.unstubAllGlobals() })
 describe('remapScopePaths 搬本机视图记忆', () => {
   it('改名 / 移动(file):排版选项与锁定跟到新路径,旧路径清空', async () => {
     const { remapScopePaths, vm } = await freshStore()
-    vm.writeNotePageStyle('/v', 'a.md', { wide: true, font: 'serif' })
+    vm.writeNotePageStyle('/v', 'a.md', { wide: true, font: 'serif', centerLine: true })
     vm.writeNoteLocked('/v', 'a.md', true)
     remapScopePaths('a.md', 'dir/a.md', 'file')
-    expect(vm.readNotePageStyle('/v', 'dir/a.md')).toEqual({ wide: true, small: false, font: 'serif' })
+    expect(vm.readNotePageStyle('/v', 'dir/a.md')).toEqual({ ...vm.DEFAULT_PAGE_STYLE, wide: true, font: 'serif', centerLine: true })
     expect(vm.readNoteLocked('/v', 'dir/a.md')).toBe(true)
     expect(vm.readNotePageStyle('/v', 'a.md')).toEqual(vm.DEFAULT_PAGE_STYLE)
     expect(vm.readNoteLocked('/v', 'a.md')).toBe(false)

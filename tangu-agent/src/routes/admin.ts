@@ -11,6 +11,7 @@
  *   GET  /resources              活跃沙箱容器真实 CPU/内存（docker stats 快照，尽力而为）
  *   GET  /runs                   扁平 run 列表（兼容/调试）
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { Router } from 'express';
 import { execFile } from 'node:child_process';
 import { query } from '../core/db.js';
@@ -223,6 +224,7 @@ router.get('/client-stats', async (_req, res) => {
 // ── 真实资源占用：活跃沙箱容器（agent-sbx-*）的 docker stats 快照（尽力而为） ──
 function dockerAgentStats(): Promise<Array<{ name: string; cpu: string; mem: string; memPerc: string }>> {
   return new Promise((resolve) => {
+    if (hostSpawnDenied('docker stats')) { resolve([]); return; }
     execFile(
       'docker',
       ['stats', '--no-stream', '--format', '{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}'],

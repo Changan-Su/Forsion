@@ -48,6 +48,7 @@ import { connectionTarget } from './services/engine/targets'
 import { CATALOG_TTL_MS, catalogFor, ensureCatalog, ensureCatalogModels } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
 import { agentName } from './agentName'
+import { createSelectionTts, ttsHostAvailable } from './selectionTts'
 
 /** 这次翻译用哪个模型。「翻译」模型槽(设置 → 模型;config.json models.translate)设了、**本机引擎**的目录里也还有 → 用它。
  *  没设、读不到、或目录里已经没有这个模型(下架 / 换了账号)→ 目录里有机器翻译模型(translateModels)就自动用第一个
@@ -608,6 +609,8 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => (req.action === 'translate' && !req.modelId ? translateInline(req, opts) : completeInline(req, readActiveModel()?.id ?? null, opts)) } : {}),
     // 行内补全(FIM,2026-10-26+):同一门控、同一条 /agent/inline;模型取 fimModelChoice(),做不了一律 fim_unavailable。
     ...(hasNativeFeature('tangu') ? { fim: fimViaProbe } : {}),
+    // 朗读(2026-11-21,划线条 / 结果卡 / ctx.tts):能配朗读模型的宿主才给(和设置「模型 → 语音」同一条件),同 Tangu 产品门控。
+    ...(hasNativeFeature('tangu') && ttsHostAvailable() ? { tts: createSelectionTts() } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

@@ -136,6 +136,7 @@ try {
   const pull = await json('engine/agent/inbox/pull', { method: 'POST' })
   check('unconfigured cloud broadcast capability remains absent', pull.pulled === false && pull.added === 0)
   const boot = await rpc('vault:restore')
+  check('advertises guarded updates to the paired web client', boot.strictExistingWrites === true)
   check('vault belongs to this fresh isolated workspace', boot.root.startsWith(await realpath(join(instanceDir, 'data/workspace'))))
   const marker = `UNIT_LOCAL_${randomUUID()}`
   const note = '# Offline Unit note\n\n' + marker + '\n\nNo Forsion Server or account is configured.\n'
