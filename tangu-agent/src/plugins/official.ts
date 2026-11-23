@@ -33,12 +33,12 @@ const MAX_FILES = 5000;
 export const canonicalFiles = (files: Record<string, string>): string =>
   JSON.stringify(Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 
-export type SignatureVerdict = { ok: true; files: string[] } | { ok: false; reason: string };
+export type SignatureVerdict = { ok: true; files: string[]; entry?: Buffer } | { ok: false; reason: string };
 
 const SAFE_REL = /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0\\]+$/;
 
 /** 核对 dir 下的 SIGNATURE(桌面 bundleSignature.verifyBundleSignature 的引擎侧移植)。require = 必须被签到的文件(posix 相对路径)。 */
-export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = []): Promise<SignatureVerdict> {
+export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = [], capture?: string): Promise<SignatureVerdict> {
   let parsed: { alg?: unknown; files?: unknown; sig?: unknown };
   try {
     parsed = JSON.parse(await fs.readFile(path.join(dir, SIGNATURE_FILE), 'utf8'));
@@ -65,6 +65,7 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
   for (const rel of require) {
     if (!Object.prototype.hasOwnProperty.call(digests, rel)) return { ok: false, reason: `${rel} is not covered by ${SIGNATURE_FILE}` };
   }
+  let entry: Buffer | undefined;
   for (const [rel, digest] of entries) {
     const file = path.join(dir, ...rel.split('/'));
     let stat: import('node:fs').Stats;
@@ -74,10 +75,12 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
       return { ok: false, reason: `${rel} is missing` };
     }
     if (!stat.isFile()) return { ok: false, reason: `${rel} is not a regular file` };
-    const actual = createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    const bytes = await fs.readFile(file);
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (rel === capture) entry = bytes;
     if (actual !== digest) return { ok: false, reason: `${rel} does not match its signed hash` };
   }
-  return { ok: true, files: entries.map(([rel]) => rel) };
+  return { ok: true, files: entries.map(([rel]) => rel), ...(entry ? { entry } : {}) };
 }
 
 // Store assigns a stable directory to each listing. A name only selects the expected key.
@@ -87,7 +90,7 @@ export function officialBundleId(directory: string): string {
 }
 
 /** 官方判定。keys 可注入只为单测(生产恒用引擎钉的那张表);任何一步不满足都是 false,永不抛。 */
-export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<boolean> {
+export async function inspectOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<false | { entry?: Buffer }> {
   try {
     if (!d.bundled || d.packageId !== undefined) return false;
     const root = path.dirname(path.dirname(d.dir)); // <shared>/plugins/<bundle>(d.dir = <bundle>/tangu-plugins/<pid>)
@@ -116,12 +119,18 @@ export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly
       try { real = await fs.realpath(path.join(root, ...rel.split('/'))); } catch { return fail(`${rel} is missing`); }
       if (real !== path.join(realRoot, ...rel.split('/'))) return fail(`${rel} goes through a symbolic link`);
     }
-    const verdict = await verifyBundleSignature(root, keys[bundleId], required);
-    return verdict.ok ? true : fail(verdict.reason);
+    const health = bundleId === 'forsion-health';
+    if (health && (required[2] !== 'tangu-plugins/health-reader/index.mjs' || d.manifest.id !== 'health-reader')) return fail('unexpected health entry');
+    const verdict = await verifyBundleSignature(root, keys[bundleId], required, health ? required[2] : undefined);
+    return verdict.ok ? { entry: verdict.entry } : fail(verdict.reason);
   } catch (e) {
     console.warn(`[tangu] 官方插件判定出错(按非官方处理):${(e as Error)?.message || e}`);
     return false;
   }
+}
+
+export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<boolean> {
+  return !!(await inspectOfficialEnginePlugin(d, keys));
 }
 
 // 按签名捆绑包分配账号接口。新增路由须核对服务端权限,并在此精确匹配。

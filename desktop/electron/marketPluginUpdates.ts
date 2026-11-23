@@ -16,7 +16,7 @@ import { join, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { createSerialQueue, writePrivateJson } from './configWrite'
-import { detectMarketType, extractZipToDir, isSafeSlug, marketItemDir, MARKET_MANIFEST, MARKET_SUBDIR } from './marketInstall'
+import { checkHealthStoreDirectory, detectMarketType, extractZipToDir, isSafeSlug, marketItemDir, MARKET_MANIFEST, MARKET_SUBDIR } from './marketInstall'
 import {
   compareMarketVersions, type KeptPluginVersion, type LocalPluginVersions, type MarketPluginType, type MarketPluginUpdate,
   type MarketPluginUpdates, type PluginRollbackResult,
@@ -270,6 +270,7 @@ export function createMarketPluginUpdater(o: {
         // ("don't know" is not "gone"): don't swap it in, and don't delete it either. An explicit rollback still goes through.
         if (x.pendingVersion && !x.pendingRollback && o.paused?.(x.id)) { x.phase = 'staged'; continue }
         if (!x.pendingVersion) continue
+        await checkHealthStoreDirectory(x.slug, pending(x))
         const next = await manifest(x.type, pending(x))
         if (compareMarketVersions(next.version, old.version) === 0) {
           await rm(pending(x), { recursive: true, force: true }); x.pendingVersion = undefined; x.pendingRollback = undefined; x.phase = 'current'; continue
@@ -406,6 +407,7 @@ export function createMarketPluginUpdater(o: {
             const buf = await o.download(item)
             if (await detectMarketType(buf, item.type) !== x.type) throw new Error('install: plugin type changed')
             await extractZipToDir(buf, staging, MARKET_MANIFEST[x.type])
+            await checkHealthStoreDirectory(x.slug, staging)
             const next = await manifest(x.type, staging)
             validate(x, old, next)
             if (compareMarketVersions(next.version, item.latestVersion) !== 0) throw new Error('install: advertised version mismatch')
@@ -488,6 +490,7 @@ export function createMarketPluginUpdater(o: {
     const x = items.find((it) => it.type === type && it.slug === slug)
     const old = await manifest(type, target)
     if (compareMarketVersions(old.version, version) === 0) throw new Error('rollback: already installed')
+    await checkHealthStoreDirectory(slug, stored)
     const next = await manifest(type, stored).catch(() => { throw new Error('rollback: version not kept') })
     if (next.version !== version || next.id !== old.id) throw new Error('install: plugin identity changed')
     assertCompatible(type, next)
