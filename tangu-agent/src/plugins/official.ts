@@ -118,13 +118,14 @@ export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly
   }
 }
 
-// ponytail: 白名单 = 商店「我的条目」与提交更新两条。要开新的账号接口,在这里加一条精确匹配(别改成前缀 / 正则放宽),
-// 并在 server 侧确认那条路由只做插件该做的事;再往上走是按捆绑包分档的能力表(Forsion-Extend 之外的官方包出现时再做)。
+// 按签名捆绑包分配账号接口。新增路由须核对服务端权限,并在此精确匹配。
 const MINE_PATH = '/api/market/mine';
 const UPDATE_PATH = /^\/api\/market\/mine\/[A-Za-z0-9_-]{1,128}\/update$/;
 
 /** ctx.cloud 的路径闸:按原串精确匹配(不解码、不规整),通过的就是原样发出去的那串。 */
-export function cloudPathAllowed(rawPath: unknown, method: unknown): boolean {
+export function cloudPathAllowed(rawPath: unknown, method: unknown, bundleId = 'forsion-extend'): boolean {
+  if (bundleId === 'forsion-health') return method === 'POST' && rawPath === '/api/wellness/agent/summary';
+  if (bundleId !== 'forsion-extend') return false;
   if (typeof rawPath !== 'string') return false;
   const q = rawPath.indexOf('?');
   const pathname = q < 0 ? rawPath : rawPath.slice(0, q);
@@ -137,12 +138,12 @@ export function cloudPathAllowed(rawPath: unknown, method: unknown): boolean {
 const MAX_TIMEOUT_MS = 120_000;
 
 /** 给一个官方插件实例造 ctx.cloud。live() = 这次激活还没停用(停用后的迟到调用一律拒,不发)。 */
-export function createOfficialCloud(live: () => boolean): { request(req: PluginCloudRequest): Promise<CloudResponse> } {
+export function createOfficialCloud(live: () => boolean, bundleId = 'forsion-extend'): { request(req: PluginCloudRequest): Promise<CloudResponse> } {
   return {
     async request(req) {
       const method = req?.method ?? 'GET';
       const p = req?.path;
-      if (!cloudPathAllowed(p, method)) return { status: 403, error: 'path_not_allowed' };
+      if (!cloudPathAllowed(p, method, bundleId)) return { status: 403, error: 'path_not_allowed' };
       if (!live()) return { status: 0, error: 'plugin_disabled' };
       let cloud: CloudAccountBrain | undefined;
       try { cloud = deps().brain?.cloud; } catch { cloud = undefined; }

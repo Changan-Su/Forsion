@@ -1,0 +1,8 @@
+{
+  "id": "health-reader",
+  "apiVersion": 1,
+  "name": "Health",
+  "version": "0.1.0",
+  "entry": "index.mjs",
+  "description": "Read the signed-in user's authorized daily health summary."
+}

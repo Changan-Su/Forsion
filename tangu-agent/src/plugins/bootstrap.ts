@@ -243,7 +243,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
-    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
+    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed, path.basename(path.dirname(path.dirname(d.dir)))) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {
