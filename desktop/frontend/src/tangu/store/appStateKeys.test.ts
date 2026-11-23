@@ -12,7 +12,7 @@ const EXPECTED = [
   'clearJumpTarget', 'clearPendingChatQuote', 'clearSteerRestore', 'cloneGitProject', 'closeAchievements',
   'closeFeedback', 'closeMarket', 'closeSettings', 'cloudProjects', 'compact', 'compactingBySession',
   'configBySession', 'connMessage', 'connState', 'connect', 'connectOnce', 'continueRun', 'createInWorkspace', 'ctxInfoBySession',
-  'decideApproval', 'defaultAgentSlug', 'defaultWorkspace', 'defaultWsDir', 'deleteSession', 'deskAutoShow',
+  'decideApproval', 'defaultAgentSlug', 'defaultWorkspace', 'defaultWsDir', 'deleteSession', 'deskAct', 'deskAutoShow',
   'deskBySession', 'deskLiveClear', 'deskLiveSync', 'deskPresent', 'deskShowFile', 'desktopConfig', 'desktopMode',
   'detailWsKey', 'discardFailed', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engineNoticesBySession', 'engines', 'ensureEngineCaps',
   'ensureHistoryDepth', 'ensureProjectSettings', 'ensureSoloSession', 'ensureTeamSession', 'failedBySession', 'feedbackDraft', 'feedbackOpen', 'filePreview',
