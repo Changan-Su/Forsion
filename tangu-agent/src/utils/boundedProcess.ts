@@ -1,3 +1,4 @@
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -94,6 +95,7 @@ export function runBoundedProcess(
     const close = new Promise<void>(r => { closeResolve = r; });
     let child: ChildProcessWithoutNullStreams;
     try {
+      assertHostSpawnAllowed('bounded process');
       child = spawn(executable, args, {
         cwd: options.cwd, env: options.env, shell: false,
         detached: process.platform !== 'win32', windowsHide: true, stdio: 'pipe',

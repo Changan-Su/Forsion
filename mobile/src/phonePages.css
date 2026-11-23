@@ -1,0 +1,41 @@
+/* 手机 Dock 的「应用」「我」两整页(phonePages.tsx)。外层的让位(胶囊之下、Dock 之上)与滚动是外壳的 .mb-phonepage
+   (lcl/engine/singleColumn.css)。只用主题变量、六档界面字号;壳里的 px 被 body zoom 放大过,这里按 CSS px 写、不折 dp。
+   样子照方案页 E5 / E6:平铺在页面底色上,几节之间一条细线;格子 4 列、图标块 56;行高 52,右边是取值和 ›。 */
+.pp-page { padding: 4px 12px 16px; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); }
+.pp-section + .pp-section { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.pp-section-title { padding: 10px 12px 6px; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 500; }
+.pp-note { padding: 6px 14px 4px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+
+.pp-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 2px 0; }
+.pp-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 8px 2px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.pp-tile:active { background: var(--bg-hover); }
+.pp-tile-icon { position: relative; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 18px; background: color-mix(in srgb, var(--text) 6%, transparent); }
+.pp-tile-icon > img, .pp-tile-icon > svg { width: 26px; height: 26px; }
+.pp-tile-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta); }
+
+.pp-row { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 52px; padding: 8px 14px; border: 0; border-radius: 14px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; box-sizing: border-box; }
+.pp-row:active:not(:disabled) { background: var(--bg-hover); }
+.pp-row:disabled { color: var(--text-muted); cursor: default; }
+.pp-row[data-danger] { color: var(--danger); }
+.pp-row-icon { flex: none; display: grid; place-items: center; width: 24px; height: 24px; color: inherit; }
+.pp-row-icon svg { width: 22px; height: 22px; }
+.pp-row-copy { flex: 1; min-width: 0; }
+.pp-row-title { display: block; overflow-wrap: anywhere; font-size: var(--ui-font-heading); line-height: 1.3; }
+.pp-row-copy > small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: 1.3; }
+.pp-row-value { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.pp-row-chevron { flex: none; color: var(--text-muted); }
+
+/* 红点:入口的点 = 危险色(同「⋯」上那颗);Space 的点照会话列表的三种(运行中 / 等你 / 未读) */
+.pp-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+.pp-tile-icon > .pp-dot { position: absolute; top: 6px; right: 6px; box-shadow: 0 0 0 1.5px var(--bg); }
+.pp-dot[data-kind='running'] { background: var(--accent); }
+.pp-dot[data-kind='attention'] { background: var(--warning); }
+
+.pp-me-head { display: flex; align-items: center; gap: 14px; width: 100%; padding: 6px 12px 14px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; box-sizing: border-box; }
+button.pp-me-head { cursor: pointer; border-radius: 14px; }
+button.pp-me-head:active { background: var(--bg-hover); }
+.pp-me-avatar { flex: none; display: grid; place-items: center; width: 56px; height: 56px; overflow: hidden; border-radius: 50%; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: var(--ui-font-display); font-weight: 600; }
+.pp-me-avatar > img { width: 100%; height: 100%; object-fit: cover; }
+.pp-me-name { flex: 1; min-width: 0; }
+.pp-me-name > strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-display); font-weight: 600; }
+.pp-me-name > small { display: block; margin-top: 3px; color: var(--text-muted); font-size: var(--ui-font-meta); }

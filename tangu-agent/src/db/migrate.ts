@@ -131,6 +131,25 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_muse_starters_user ON muse_starters(user_id, status)`);
 
+  // Muse 给自动化首页的任务建议(set_automation_suggestions 整组替换;本地特性,云端建空表零写入)。
+  // status:active = 正在显示;replaced = 被下一组顶掉;dismissed = 用户点了 ×(30 天内不许再提);used = 存成了规则。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS muse_automation_suggestions (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      title TEXT NOT NULL,
+      why TEXT NOT NULL,
+      source_kind VARCHAR(16) NOT NULL,
+      source_label TEXT NOT NULL,
+      source_ref TEXT,
+      rule_json TEXT NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_muse_auto_sugg_user ON muse_automation_suggestions(user_id, status)`);
+
   // Muse 发进私聊、要用户点的卡(services/museCards.ts):状态住引擎,手机与桌面看到同一份。target_key = 'plugin:<id>' / 'feature:<名>' 等,判「提过没」用。
   await query(ddl(`
     CREATE TABLE IF NOT EXISTS muse_cards (
@@ -372,6 +391,9 @@ export async function runMigration(): Promise<void> {
     // hydrate 时原样回放。两列皆空 = 老语义(整行边界)。
     ['session_summaries', 'through_message_id VARCHAR(36)'],
     ['session_summaries', 'through_tool_call_id VARCHAR(128)'],
+    // 与边界行同一毫秒、且整行进了摘要输入的其他行 id(JSON 数组,11-20)。NULL = 老检查点:同毫秒邻行一律原样回放(保守)。
+    // 老三列语义不变,这一列只会把行从「没覆盖」升级成「已覆盖」→ 不认识它的旧引擎 / 旧网关读写都只会多回放、不会吞行。
+    ['session_summaries', 'through_peer_ids TEXT'],
     // 待批行的预览口径版本(2026-09-26):NULL = 升级前的行(预览折叠 / 截断 / 写类只有一行摘要),永远批不了,
     // 由 pendingApprovals.retireLegacyPending 撤回;批准的抢占要求 ≥ PREVIEW_VERSION。
     ['pending_approvals', 'preview_version INTEGER'],
@@ -385,10 +407,26 @@ export async function runMigration(): Promise<void> {
     ['agent_runs', 'interrupted_at TIMESTAMP'],
     // 用户按停 / 急停 / 级联取消 / 通道下线(评审 #2):abortRun 当场记下,强杀后重启据此按 aborted 收尾、不续跑。
     ['agent_runs', 'cancel_requested VARCHAR(32)'],
+    // Muse 待办的依据(2026-11-20,add_muse_todo 必填):JSON 数组 [{kind, source, quote}],卡片按 id 读。NULL = 升级前的行,卡上不画。
+    ['muse_todos', 'evidence TEXT'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
+
+  // A SQLite secondary index already includes rowid as its final tie-breaker.
+  const timeIndex = getDbType() === 'sqlite' ? 'COALESCE(timestamp, 0)' : 'COALESCE(timestamp, 0), id';
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_time ON chat_messages(session_id, ${timeIndex})`);
+  if (getDbType() === 'sqlite') {
+    // PG already exposes the row version through xmin. SQLite timestamps have second
+    // precision, and multiple processes can edit the same row in that second.
+    await addColumnIfMissing('chat_messages', 'history_version INTEGER NOT NULL DEFAULT 0');
+    await query(`CREATE TRIGGER IF NOT EXISTS chat_messages_history_insert AFTER INSERT ON chat_messages
+      BEGIN UPDATE chat_messages SET history_version = random() WHERE rowid = NEW.rowid; END`);
+    await query(`CREATE TRIGGER IF NOT EXISTS chat_messages_history_version AFTER UPDATE OF
+      timestamp, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, model_id, is_error
+      ON chat_messages BEGIN UPDATE chat_messages SET history_version = random() WHERE rowid = NEW.rowid; END`);
+  }
 
   // ── 以下仅共享云库 / 外部 Postgres / PGlite(getDbType()='postgres')────────
   // sqlite 无 pg_constraint 目录;app_id 归位在 standalone 由 fixLegacyAppIds 无条件迁。

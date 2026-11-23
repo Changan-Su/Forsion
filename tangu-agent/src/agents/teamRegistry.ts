@@ -4,6 +4,7 @@
  * 解析/序列化是纯函数(本地云端共用一份)。项目轨道的「团队模式」不落盘、与本文件无关。
  * 发现:v1 单源 = teamsDir(),不扫 cwd;'teams' / .tangu / .forsion 绝不进 PROJECT_ROOT_MARKERS。
  */
+import { perAccount } from '../core/accountScope.js';
 import { promises as fs, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
@@ -78,7 +79,8 @@ async function parseTeamFolder(slug: string, dir: string): Promise<TeamDef> {
 }
 
 // ── mtime 缓存(config.toml + TEAM.md + .meta.json 指纹)──
-let cache: { stamp: string; defs: TeamDef[] } | null = null;
+// 多账号模式按账号分(core/accountScope.ts);单人模式一个槽,行为不变。
+const cacheSlot = perAccount((): { v: { stamp: string; defs: TeamDef[] } | null } => ({ v: null }));
 async function dirStamp(dir: string): Promise<string> {
   let entries;
   try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { return 'missing'; }
@@ -108,17 +110,18 @@ export async function writeTeamsMeta(patch: Partial<TeamsMeta>): Promise<TeamsMe
   const next: TeamsMeta = { order: Array.isArray(patch.order) ? patch.order.filter((s) => typeof s === 'string' && isValidSlug(s)) : readTeamsMeta().order };
   mkdirSync(teamsDir(), { recursive: true });
   await fs.writeFile(metaFile(), JSON.stringify(next, null, 2), 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
   return next;
 }
 
 export async function listTeams(): Promise<TeamDef[]> {
   const dir = teamsDir();
   const stamp = await dirStamp(dir);
-  if (cache && cache.stamp === stamp) return cache.defs;
+  const cached = cacheSlot().v;
+  if (cached && cached.stamp === stamp) return cached.defs;
   const defs: TeamDef[] = [];
   let entries;
-  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { cache = { stamp, defs }; return defs; }
+  try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { cacheSlot().v = { stamp, defs }; return defs; }
   for (const e of entries) {
     if (!e.isDirectory() || !isValidSlug(e.name)) continue;
     if (!existsSync(path.join(dir, e.name, 'config.toml'))) continue;
@@ -127,7 +130,7 @@ export async function listTeams(): Promise<TeamDef[]> {
   const order = readTeamsMeta().order;
   const idx = (s: string): number => { const i = order.indexOf(s); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
   defs.sort((a, b) => { const d = idx(a.slug) - idx(b.slug); return d !== 0 ? d : a.name.localeCompare(b.name); });
-  cache = { stamp, defs };
+  cacheSlot().v = { stamp, defs };
   return defs;
 }
 
@@ -181,13 +184,13 @@ export async function saveTeam(input: SaveTeamInput): Promise<TeamDef> {
   mkdirSync(path.join(dir, 'Library'), { recursive: true });
   await fs.writeFile(path.join(dir, 'config.toml'), serializeTeamConfig(def), 'utf-8');
   await fs.writeFile(path.join(dir, 'TEAM.md'), def.doc, 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
   return def;
 }
 
 export async function deleteTeam(slug: string): Promise<boolean> {
   if (!isValidSlug(slug)) return false;
-  try { await fs.rm(teamDirOf(slug), { recursive: true, force: true }); cache = null; return true; } catch { return false; }
+  try { await fs.rm(teamDirOf(slug), { recursive: true, force: true }); cacheSlot().v = null; return true; } catch { return false; }
 }
 
 const TEAM_AVATAR_FILE = /^avatar\.(png|jpe?g|gif|webp)$/i;

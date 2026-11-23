@@ -9,7 +9,14 @@ vi.mock('../core/db.js', async () => {
   h.db.exec(`CREATE TABLE chat_messages (id TEXT, session_id TEXT, role TEXT, content TEXT, timestamp BIGINT, model_id TEXT, is_error INT, agent_slug TEXT, origin TEXT)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params.map((p) => (typeof p === 'boolean' ? Number(p) : p))), []); } };
 });
-vi.mock('../routes/solo.js', () => ({ ensureSoloSession: async () => ({ id: 's' }) }));
+vi.mock('../routes/solo.js', async () => {
+  const { withKeyLock } = await import('../core/keyLock.js');
+  return { withAgentSoloSession: (userId: string, slug: string, use: (s: { id: string }) => Promise<unknown>) =>
+    withKeyLock(`solo:${userId}:${slug}`, () => use({ id: 's' })) };
+});
+vi.mock('../seams/runtime.js', async (orig) => ({
+  ...(await orig<object>()), deps: () => ({ host: {} }),
+}));
 vi.mock('./childSessions.js', () => ({ endsWithQuestion: () => false }));
 vi.mock('../agents/agentRegistry.js', () => ({ MUSE_AGENT_SLUG: 'muse' }));
 vi.mock('./specialAgentsConfig.js', () => ({

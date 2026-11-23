@@ -191,3 +191,18 @@ describe('POST /agent/special/muse/todos/:id/approve', () => {
     expect(logs).toContain('[feedback] todo "不想做的" marked dismissed by user');
   });
 });
+
+describe('GET /agent/special/muse/todos/:id 带依据(11-20)', () => {
+  it('有依据的行回数组;老行(NULL)回 [];列表接口同样解析', async () => {
+    const ev = [{ kind: 'file', source: '/tmp/a.md', quote: 'Due Friday' }];
+    await query(`INSERT INTO muse_todos (id, user_id, title, detail, status, evidence) VALUES ('ev1', ?, 't', 'd', 'pending', ?)`, [USER, JSON.stringify(ev)]);
+    await seedTodo('ev0', 'old', 'd');
+    const a = await call('GET', '/agent/special/muse/todos/ev1');
+    expect(a.status).toBe(200);
+    expect(a.body.todo).toMatchObject({ id: 'ev1', status: 'pending', evidence: ev });
+    expect((await call('GET', '/agent/special/muse/todos/ev0')).body.todo.evidence).toEqual([]);
+    const list = (await call('GET', '/agent/special/muse/todos')).body.todos;
+    expect(list.find((x: any) => x.id === 'ev1').evidence).toEqual(ev);
+    expect(list.find((x: any) => x.id === 'ev0').evidence).toEqual([]);
+  });
+});

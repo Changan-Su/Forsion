@@ -1,7 +1,7 @@
 // 官方商店安装的第二级审核兜底(2026-11-16):声明了 internals-raw 的包,这一版过了审核才装。
 // 负对照(已实跑红):assertInternalsRawApproved 里把「读失败 ≠ 放行」那行改成 catch 后 return → 「条目详情拿不到按没过审处理」红。
 import { describe, expect, it } from 'vitest'
-import { RAW_UNAPPROVED, assertInternalsRawApproved, declaresInternalsRaw } from './marketInternals'
+import { RAW_UNAPPROVED, STAGE_UNAPPROVED, assertInternalsRawApproved, declaresInternalsRaw, declaresStage } from './marketInternals'
 
 const raw = (version = '1.2.0') => ({ id: 'x', version, capabilities: ['internals', 'internals-raw'] })
 
@@ -24,5 +24,13 @@ describe('assertInternalsRawApproved', () => {
   })
   it('包里没写版本:拒', async () => {
     await expect(assertInternalsRawApproved({ capabilities: ['internals-raw'] }, async () => '')).rejects.toThrow(RAW_UNAPPROVED)
+  })
+
+  it('stage (demo stage) needs the same store review, with its own error', async () => {
+    expect(declaresStage({ capabilities: ['stage'] })).toBe(true)
+    expect(declaresStage({ capabilities: ['internals'] })).toBe(false)
+    await expect(assertInternalsRawApproved({ version: '1.0.0', capabilities: ['stage'] }, async () => null)).rejects.toThrow(STAGE_UNAPPROVED)
+    await expect(assertInternalsRawApproved({ version: '1.0.0', capabilities: ['stage'] }, async () => '1.0.0')).resolves.toBeUndefined()
+    await expect(assertInternalsRawApproved({ version: '1.0.0', capabilities: ['stage', 'internals-raw'] }, async () => null)).rejects.toThrow(RAW_UNAPPROVED)
   })
 })

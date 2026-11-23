@@ -31,7 +31,8 @@ import { PluginEnableSwitch, canTurnOnPlugin, turnOnPlugin } from './AmadeusPlug
 import { PluginLogo } from './PluginLogo'
 import { PluginSettingsPage } from './PluginSettingsPage'
 import { SettingsPage } from './SettingsPage'
-import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
+import { ReasonSwitch, reportEnginePluginToggle, type LifecycleReason } from './PluginReasons'
 import { panelToast } from './PanelNotice'
 import { forsionSettingsGroup, settingsViewGroups } from './pluginSettingsSchema'
 import { matchPluginSettingsEntry, type PluginSettingsEntry } from './pluginSettingsNav'
@@ -265,17 +266,21 @@ export function EnginePluginSettingsHostPage({ plugin: pl, plugins, agents, cfg,
   const running = (x: PluginInfo): boolean => x.active ?? x.enabled
   const self = nodes.find((n) => n.id === pl.id)
   const missing = !pl.enabled && self ? unmetDependencies(self, nodes, (id) => { const q = byId(id); return !!q && running(q) }, (id) => !!byId(id)?.enabled) : []
-  const flip = async (): Promise<void> => {
+  const flip = async (reason?: LifecycleReason): Promise<void> => {
     const deps = pl.enabled ? dependentsOf(pl.id, nodes).map((n) => byId(n.id)).filter((x): x is PluginInfo => !!x && running(x)) : []
     if (deps.length && !window.confirm(t('settings.plugins.disableDependents', { name: nm(pl), list: deps.map(nm).join(t('common.listSep')) }))) return
     setBusy(true)
-    try { await setPluginEnabled(homeTarget(), pl.id, !pl.enabled); onReload() } catch (e) { panelToast(e instanceof Error ? e.message : String(e), true) } finally { setBusy(false) }
+    try {
+      await setPluginEnabled(homeTarget(), pl.id, !pl.enabled)
+      reportEnginePluginToggle(pl, !pl.enabled, reason) // 匿名遥测 plugin_lifecycle(v3 补漏)
+      onReload()
+    } catch (e) { panelToast(e instanceof Error ? e.message : String(e), true) } finally { setBusy(false) }
   }
   const canFlip = !bundleOwned && !(missing.length > 0)
   const identity = (
     <PluginIdentityCard pluginId={pl.id} logo={<PluginLogo url={pl.iconUrl} size={40} />} name={nm(pl)}
       meta={pluginMetaLine(t, pl.version, enginePluginSource(pl))}
-      toggle={bundleOwned ? undefined : <SettingsSwitch data-plugin-switch="" checked={pl.enabled} disabled={busy || !canFlip && !pl.enabled} label={nm(pl)} onChange={() => void flip()} />} />
+      toggle={bundleOwned ? undefined : <ReasonSwitch data-plugin-switch="" checked={pl.enabled} disabled={busy || !canFlip && !pl.enabled} label={nm(pl)} onChange={(_on, reason) => void flip(reason)} />} />
   )
   return (
     <div className="plugin-settings-host" data-plugin-settings={`engine:${pl.id}`}>
@@ -285,7 +290,7 @@ export function EnginePluginSettingsHostPage({ plugin: pl, plugins, agents, cfg,
         : <StateCard kind="disabled" state={{
           kind: 'empty', icon: 'lock', title: t('plugsettings.disabled.title'),
           desc: bundleOwned ? t('plugsettings.disabled.bundle') : t('plugsettings.disabled.desc'),
-          ...(canFlip ? { action: { label: t('plugsettings.enable'), kind: 'primary' as const, onClick: flip } } : {}),
+          ...(canFlip ? { action: { label: t('plugsettings.enable'), kind: 'primary' as const, onClick: () => void flip() } } : {}),
         }} />}
     </div>
   )

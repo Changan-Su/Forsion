@@ -339,11 +339,13 @@ async function main(): Promise<void> {
     const phone = await context.newPage()
     await phone.setViewportSize({ width: 390, height: 844 })
     await phone.goto(`${base}/web/?ui=mobile`)
-    const phoneAccount = phone.locator('[data-chrome-action="account"]')
-    await phoneAccount.locator('img').waitFor()
-    check('⑨ 手机网页顶栏显示账号头像', await phoneAccount.locator('img').evaluate((el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0))
-    await phoneAccount.click()
-    const phoneQuota = phone.locator('[data-sheet-item="quota"]')
+    // 手机竖屏的 Dock 是五格固定(主页·对话·笔记·应用·我):账号在「我」那一页,顶栏不再有头像
+    await phone.locator('.bmc-dock [data-space="@me"]').click()
+    const phoneMe = phone.locator('.mb-phonepage[data-phone-page="me"]')
+    const phoneAvatar = phoneMe.locator('.pp-me-avatar img')
+    await phoneAvatar.waitFor()
+    check('⑨ 手机网页「我」页显示账号头像', await phoneAvatar.evaluate((el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0))
+    const phoneQuota = phoneMe.locator('[data-row="quota"]')
     await phoneQuota.getByText('今日 70% · 本周 76%').waitFor()
     check('⑨ 手机网页额度行可以进入会员与用量', await phoneQuota.isEnabled())
     await phone.waitForTimeout(400) // Capture the sheet after its entrance animation.

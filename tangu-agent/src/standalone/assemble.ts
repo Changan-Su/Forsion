@@ -2,6 +2,7 @@
  * standalone 形态的共享装配:host(嵌入式 PGlite / 外部 PG)、brain(httpBrain / multiBrain)、
  * 沙箱探测。被 standalone/main.ts(server 前端)与 cli/main.ts(终端前端)共用,杜绝漂移。
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { query } from '../core/db.js';
@@ -74,6 +75,7 @@ export function loadProviders(cfg: StandaloneConfig): DirectProvider[] {
 
 function dockerAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
+    if (hostSpawnDenied('docker probe')) { resolve(false); return; }
     const p = execFile('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true }, (err) => resolve(!err));
     p.on('error', () => resolve(false));
   });
@@ -144,6 +146,19 @@ export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; 
   // 绑定的 GitHub 账号:远端在 github.com 时用它推拉(同一个接缝上的另一个提供方)。没登录 / 云端没开绑定 → 照现状。
   installGithubGit(httpBrain.github);
   return { brain, providers };
+}
+
+/**
+ * 多账号模式(standalone/multiAccount.ts)的底层 brain:只从 env / CLI 来(不读任何账号的 config.json、不读 auth.json、
+ * 不接 OAuth 订阅),没有副作用(不装同步源、不装 git 凭据、不登记云端账号源)。**不包**脱敏 / 本地记忆 / 本地技能 ——
+ * 那几层在 createMultiAccountApp 里包,测试注入的假 brain 走同一条路。
+ */
+export function buildMultiAccountBaseBrain(cfg: StandaloneConfig): CloudBrainServices {
+  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
+  const seen = new Set<string>();
+  const providers = [...cfg.providers, ...(cfg.providersFile ? readProvidersJson(cfg.providersFile, 'providers-file', true) : [])]
+    .filter((p) => !!p?.providerId && !!p?.baseUrl && !seen.has(p.providerId) && !!seen.add(p.providerId));
+  return providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain;
 }
 
 /**

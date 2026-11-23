@@ -1,5 +1,6 @@
 import { PluginSettingsCard, pluginSettingsReport } from './PluginSettingsCard'
 import { CompactionNotice } from './CompactionNotice'
+import { BtwRelayTag } from './BtwRelayTag'
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
 import { GitToolCard, gitRepoKey, gitStatusSuperseded, isGitTool, splitGitRuns } from './GitToolCard'
@@ -20,6 +21,7 @@ import { isInterruptedRunError, isLatestAnswer, isLatestRow, turnHasOutput } fro
 import { isInflightTool } from '../../tangu/inflightTool'
 import { isModelTierLocked, isTierLockedError, recentlyEndedTrial, tierLockedText, trialEndedAtOf } from '../../services/accountQuota'
 import { useQuotaTierLock } from '../../tangu/quotaCap'
+import { tanguQuotaPrompt, tanguQuotaPromptShownOnce } from '../../tangu/telemetry'
 import { TURN_RESUME_OPEN, parseAutoResume, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { isEngineModelNoApiKey, parseEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { useNoteInsertState } from './insertToNote'
@@ -68,12 +70,22 @@ registerMessages({
   // M1B:别处答的(执行的电脑本机 / 另一台设备 / 消息通道)—— {where} = approval.byHost* / byDevice … 的「在哪」短语
   'chat.approval.update.byApproved': { zh: '{where}批准', en: 'Approved {where}' },
   'chat.approval.update.byRejected': { zh: '{where}拒绝', en: 'Rejected {where}' },
+  // <background_update>(11-20):用户插话时被移到后台的命令结束了
+  'chat.background.update.finished': { zh: '后台命令已结束（退出码 {code}）', en: 'Background command finished (exit code {code})' },
+  'chat.background.update.ended': { zh: '后台命令已结束', en: 'Background command ended' },
+  'chat.background.update.failed': { zh: '后台命令出错', en: 'Background command failed' },
+  'chat.background.update.timedOut': { zh: '后台命令超过时限，已停止', en: 'Background command hit the time limit and was stopped' },
+  'chat.background.update.stopped': { zh: '后台命令已停止', en: 'Background command stopped' },
 })
 const UPDATE_KEY = {
   approved: 'chat.approval.update.approved',
   failed: 'chat.approval.update.failed',
   rejected: 'chat.approval.update.rejected',
 } as const
+const backgroundKey = (r: BackgroundOutcome): string => r.status === 'finished'
+  ? (r.exitCode === null ? 'chat.background.update.ended' : 'chat.background.update.finished')
+  : r.status === 'timed_out' ? 'chat.background.update.timedOut'
+    : r.status === 'failed' ? 'chat.background.update.failed' : 'chat.background.update.stopped'
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
 import { playSendFlight } from './sendFlight'
@@ -91,12 +103,16 @@ import { replyText } from './replyText'
 import { CreationCards } from './CreationCards'
 import { formatDate, formatDateTime, formatMessageTime } from '../../format/time'
 
+import { GithubSkillImport } from './GithubSkillImport'
+import { currentPlatform, usesClientInbox } from '../../services/platform'
+import { tanguDelegatedAdmin } from '../../tangu/delegatedRole'
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
+import { AUTOMATION_DM_ORIGIN, readAutomationDm } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, HandoffBlock, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf, handoffIdsOf } from './ChildSessions'
-import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, BACKGROUND_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseBackgroundUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome, type BackgroundOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
 import { refForSession, targetForSession, useSessionHostName } from '../../services/engine/targets'
@@ -345,12 +361,22 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   )
 }
 
+/** Forsion 额度用尽那条错误(和会员档位锁住的错误分开:只有前者算额度提示,匿名计数 quota_prompt 的 run-error 入口)。 */
+const isQuotaExhaustedError = (error?: string): boolean => !!error && /token_quota_exceeded/i.test(error)
+/** 运行出错那行的额度提示露出:每条消息只计一次(芯片随滚动 / 切会话重挂不重复计);两颗芯片同一条消息共用一次。 */
+function useRunErrorQuotaShown(show: boolean, msgId: string | undefined): void {
+  useEffect(() => { if (show && msgId) tanguQuotaPromptShownOnce('run-error', msgId) }, [show, msgId])
+}
+
 /** 额度用尽 / 会员档位用不了这个模型那两条错误后面的「升级会员」:打开支付中心。宿主没有支付中心(没装云账号扩展)就不给。 */
-export function UpgradeChip({ error }: { error?: string }) {
+export function UpgradeChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
-  if (!error || !(isTierLockedError(error) || /token_quota_exceeded/i.test(error)) || !window.tangu?.openPayCenter) return null
+  const quota = isQuotaExhaustedError(error)
+  const show = !!error && (isTierLockedError(error) || quota) && !!window.tangu?.openPayCenter
+  useRunErrorQuotaShown(show && quota, msgId)
+  if (!show) return null
   return (
-    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+    <button type="button" className="t2-relogin" data-testid="msg-upgrade" onClick={() => { if (quota) tanguQuotaPrompt('run-error', 'upgrade'); void window.tangu?.openPayCenter?.({ entry: 'run-error' }) }}>
       <ArrowUpRight size={12} /> {t('chat.err.upgrade')}
     </button>
   )
@@ -358,14 +384,16 @@ export function UpgradeChip({ error }: { error?: string }) {
 
 /** 额度用尽那条错误后面的「额度与积分」:打开云账号扩展画的那一页(「用积分继续」开关、重置卡、积分余额都在那)。
  *  扩展没注册这一页(没装 / 旧宿主 / 没登录云账号)就不给。 */
-export function QuotaPageChip({ error }: { error?: string }) {
+export function QuotaPageChip({ error, msgId }: { error?: string; msgId?: string }) {
   const { t } = useI18n()
   const hasPage = usePluginStore((s) => s.activeIds.includes('forsion-extend') &&
     s.settingsViews.some((v) => v.pluginId === 'forsion-extend' && v.item.id === 'quota' && v.item.category === 'forsion'))
-  if (!error || !/token_quota_exceeded/i.test(error) || !hasPage) return null
+  const show = isQuotaExhaustedError(error) && hasPage
+  useRunErrorQuotaShown(show, msgId)
+  if (!show) return null
   return (
     <button type="button" className="t2-relogin" data-testid="msg-quota-page"
-      onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+      onClick={() => { tanguQuotaPrompt('run-error', 'more'); useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]) }}>
       <Gauge size={12} /> {t('chat.err.quotaPage')}
     </button>
   )
@@ -503,8 +531,8 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
       <div className="t2-tool err">
         <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
         <ReloginChip error={msg.error} modelId={modelId} />
-        <QuotaPageChip error={msg.error} />
-        <UpgradeChip error={msg.error} />
+        <QuotaPageChip error={msg.error} msgId={msg.id} />
+        <UpgradeChip error={msg.error} msgId={msg.id} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>
@@ -795,6 +823,27 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         </div>
       )
     }
+    // 被移到后台的命令结束了(<background_update>,11-20):同理是机器行,每条命令一行;输出不在这行里(模型自己去读)。
+    // 复用审批结局那一行的排法:退出码 0 记成 approved 那档的绿勾,其余红叉。
+    // 一条都解析不出来(用户自己打了这个标记开头的话)→ 照普通消息画,别画成一行空白
+    const bgRows = msg.content.startsWith(BACKGROUND_UPDATE_OPEN) ? parseBackgroundUpdate(msg.content) : []
+    if (bgRows.length) {
+      const rows = bgRows
+      return (
+        <div ref={rootRef} className="t2-sys t2-apv-update" data-background-update={rows.length}>
+          {rows.map((r) => {
+            const ok = r.status === 'finished' && r.exitCode === 0
+            return (
+              <div key={r.processId} className="t2-apv-update-row" data-status={ok ? 'approved' : 'failed'}>
+                {ok ? <CircleCheck size={12} /> : <CircleX size={12} />}
+                <span className="t2-apv-update-what">{t(backgroundKey(r), { code: String(r.exitCode ?? '') })}</span>
+                <span className="t2-apv-update-preview" title={r.command}>{r.command}</span>
+              </div>
+            )
+          })}
+        </div>
+      )
+    }
     if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
       const rows = parseApprovalUpdate(msg.content)
       return (
@@ -860,6 +909,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle} data-quiet={quiet}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
+          {msg.role === 'user' && <BtwRelayTag sessionId={runSid} content={msg.content} timestamp={msg.timestamp} />}
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
             // 附件磁贴(B2)挪到气泡上方、右对齐:图片一行在前,文件一行在后;不参与长提问折叠。
@@ -949,7 +999,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museApproval = msg.origin === 'proactive:approval'
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
   const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(msg.content, msg.refused), { streaming, kinds: fenceKinds, todo: museTodo })
+  const automationDm = msg.origin === AUTOMATION_DM_ORIGIN ? readAutomationDm(msg.content) : undefined
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : refusedBody(automationDm?.body ?? msg.content, msg.refused), { streaming, kinds: automationDm ? [] : fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // hand_off_task 挪出去的会话:过程行下面、正文前面单独一小块(不进下面的「从这里分出」)
   const handoffIds = handoffIdsOf(msg.toolEvents)
@@ -987,7 +1038,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
         <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
-        {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
+        {isProactive(msg) && <ProactiveMark at={msg.timestamp} rule={automationDm?.rule} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
           // 思考原文整条消息只有一份:挂在第一条过程行上(前面还没有正文时);否则单独一行过程行放最前(只剩思考那一步)。
@@ -1076,6 +1127,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ))}
           </div>
         )}
+        {!streaming && !elsewhere && currentPlatform() === 'web' && usesClientInbox() && !tanguDelegatedAdmin() &&
+          [...new Set(msg.content.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/blob\/[\w.%+\/-]+\/SKILL\.md\b/g))].slice(0, 8)
+            .map(source => <GithubSkillImport key={source} source={source} />)}
         {/* 从这条分出去的:分支 / 顺便问 / start_session 开出的子会话,一块「从这里分出」(ChildSessions.tsx ForkBlock)。 */}
         {runSid && forkScope.inline && <ForkBlock sessionId={runSid} messageId={msg.id} childIds={childIds} onSuggest={handlers?.onSuggest} />}
         {/* 任务卡:顺手发现的、塞进当前对话会撑爆的活。track=true 的卡主按钮是「交给 Muse 追踪」。同样只在 done 上渲染。

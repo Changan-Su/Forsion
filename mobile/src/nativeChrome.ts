@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { ArrowLeft, ChevronDown, LayoutGrid, MoreHorizontal, PanelLeft, PanelRight, Search, UserRound, X } from 'lucide-react'
 import {
   dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, listFirstNow, readNativeTheme, renderNativeIcons, useSpaceStore, useWorkspace,
+  PHONE_APPS, PHONE_GLYPHS, PHONE_ME,
   type NativeChromeAction, type NativeChromeSpace, type NativeChromeState, type NativeHaptic, type NativeIcon, type NativeSheetTheme,
 } from '@lcl/engine'
 import { registerMessages, translate } from '@/i18n'
@@ -37,9 +38,12 @@ interface ChromeIcons { left?: NativeIcon; right?: NativeIcon; more?: NativeIcon
 /** `png` = the picture as base64, cropped square and downscaled here (Kotlin only decodes and clips it to a circle);
  *  `icon` = what the bar draws without one: the initial, or a person glyph when signed out. */
 interface ChromeAccount { label: string; icon?: NativeIcon; png?: string }
-/** The session list's three dots (sidebar2.css `.t2s-dot`), one per Space cell. `label` is for screen readers. */
+/** The session list's three dots (sidebar2.css `.t2s-dot`), one per Space cell. `label` is for screen readers.
+ *  `notice` = not a Space's own state: a launcher on the page behind the cell wants a look (a phone's Apps / Me cells,
+ *  2026-11-19); drawn danger red like the dot "More" carries. An older Kotlin build does not know the word and draws no dot. */
 type SpaceBadgeKind = 'running' | 'attention' | 'unread'
-interface ChromeBadge { kind: SpaceBadgeKind; label: string }
+export type DockBadgeKind = SpaceBadgeKind | 'notice'
+interface ChromeBadge { kind: DockBadgeKind; label: string }
 /** Where the native chrome lies over the page, in dp (see NativeChromePlugin.reportLayout). All zero / empty unless floating. */
 export interface ChromeLayout {
   floating: boolean
@@ -107,6 +111,26 @@ export function spaceBadges(): Record<string, SpaceBadgeKind> {
   else if (Object.keys(app.runningBySession).length) out.tangu = 'running'
   else if ((app.unread.size && app.sessions.some((x) => app.unread.has(x.id))) || dmHas('unread')) out.tangu = 'unread'
   if (useInbox.getState().unreadCount > 0) out.inbox = 'unread'
+  return out
+}
+
+const PRESSING: readonly DockBadgeKind[] = ['attention', 'running', 'unread', 'notice']
+/** The dot each dock cell wears. A Space's own (spaceBadges); a phone's fixed dock (lcl phoneDock.ts) also has two cells
+ *  that are pages, not Spaces: Apps rolls up the most pressing dot of the Spaces it lists (what the old "all" cell did) and
+ *  then its own `notice`; Me shows its `notice`. Both hosts (Android bridge, browser DOM) use this one rule. */
+export function dockBadges(cells: readonly NativeChromeSpace[], badges: Record<string, SpaceBadgeKind>, spaceIds: readonly string[]): Record<string, { kind: DockBadgeKind; label?: string }> {
+  const out: Record<string, { kind: DockBadgeKind; label?: string }> = {}
+  const inDock = new Set(cells.map((c) => c.id))
+  for (const c of cells) {
+    if (c.id === PHONE_APPS) {
+      const behind = spaceIds.filter((id) => !inDock.has(id)).map((id) => badges[id]).filter((k): k is SpaceBadgeKind => !!k)
+      const kind = PRESSING.find((k) => behind.includes(k as SpaceBadgeKind))
+      if (kind) out[c.id] = { kind }
+      else if (c.notice) out[c.id] = { kind: 'notice', label: c.notice.label }
+    } else if (c.id === PHONE_ME) {
+      if (c.notice) out[c.id] = { kind: 'notice', label: c.notice.label }
+    } else if (badges[c.id]) out[c.id] = { kind: badges[c.id] }
+  }
   return out
 }
 
@@ -242,7 +266,8 @@ export function installNativeChrome(): void {
     // far beyond any real Space count; a rejected setState would instead take the whole native chrome down.
     const list = all.slice(0, MAX_SPACES)
     const defs = useSpaceStore.getState().spaces
-    const sources = list.map((sp) => defs.find((d) => d.id === sp.id)?.icon)
+    // a phone's fixed dock: Chats / Apps / Me carry their own glyph (lcl phoneDock.ts), the other cells their Space's icon
+    const sources = list.map((sp) => (sp.glyph ? PHONE_GLYPHS[sp.glyph] : defs.find((d) => d.id === sp.id)?.icon) as (typeof defs)[number]['icon'])
     const drawn = sources.map((src) => (src?.imageUrl ? src.nativeFallback : src))
     // pictures of Spaces that are gone (a plugin was updated or removed) do not stay cached for the rest of the session
     const live = new Set(sources.map((src) => src?.imageUrl))
@@ -256,7 +281,9 @@ export function installNativeChrome(): void {
       const fits = !!png && png.length <= budget
       if (fits) budget -= png.length
       // A Space's name can now come from a plugin's recipe: Kotlin refuses a label over 128 — and with it the whole bar.
-      return { ...sp, label: String(sp.label ?? '').slice(0, 120), ...(icon ? { icon } : {}), ...(fits ? { png } : {}) }
+      // `glyph` / `notice` are the page's words: resolved here (icon) and in withBadges (dot), not sent.
+      const { glyph: _glyph, notice: _notice, ...rest } = sp
+      return { ...rest, label: String(sp.label ?? '').slice(0, 120), ...(icon ? { icon } : {}), ...(fits ? { png } : {}) }
     })
   }
   // Account avatar: the picture (converted once per source string), else the initial, else — signed out — a person glyph.
@@ -275,9 +302,13 @@ export function installNativeChrome(): void {
     const icon = chip.loggedIn ? { kind: 'text' as const, text: chip.initial } : await guest
     return { label: chip.label.slice(0, 120), ...(icon ? { icon } : {}), ...(png ? { png } : {}) } // Kotlin refuses a label over 128
   }
-  const withBadges = <T extends NativeChromeSpace>(list: T[]): Array<T & { badge?: ChromeBadge }> => {
-    const badges = spaceBadges()
-    return list.map((sp) => { const kind = badges[sp.id]; return kind ? { ...sp, badge: { kind, label: BADGE_LABEL[kind]() } } : sp })
+  const withBadges = <T extends NativeChromeSpace>(cells: readonly NativeChromeSpace[], list: T[]): Array<T & { badge?: ChromeBadge }> => {
+    const dots = dockBadges(cells, spaceBadges(), useSpaceStore.getState().spaces.map((x) => x.id))
+    return list.map((sp) => {
+      const dot = dots[sp.id]
+      if (!dot) return sp
+      return { ...sp, badge: { kind: dot.kind, label: (dot.kind === 'notice' ? dot.label ?? '' : BADGE_LABEL[dot.kind]()).slice(0, 120) } }
+    })
   }
   let state: NativeChromeState | null = null
   let lastSent = ''
@@ -293,12 +324,13 @@ export function installNativeChrome(): void {
       if (!state || !uninstall) return
       const current = state
       const base = await icons
-      // The shell sends `spaces` exactly on first-level pages (a Space's list, a root page): the avatar lives there too.
-      const avatar = current.mode === 'shell' && current.spaces ? await account() : null
+      // The shell sends `spaces` exactly on first-level pages (a Space's list, a root page): the avatar lives there too —
+      // unless the dock has a Me cell (a phone's fixed dock): the account is that cell's page then.
+      const avatar = current.mode === 'shell' && current.spaces && !current.spaces.some((sp) => sp.id === PHONE_ME) ? await account() : null
       const payload = {
         // two-level navigation, detail level: the left button goes back to the Space's list → back arrow, not the panel icon
         ...current, theme: readNativeTheme(), icons: current.mode === 'shell' && current.leftBack ? { ...base, left: base.back } : base,
-        ...(current.mode === 'shell' && current.spaces ? { spaces: withBadges(await withIcons(current.spaces)) } : {}),
+        ...(current.mode === 'shell' && current.spaces ? { spaces: withBadges(current.spaces, await withIcons(current.spaces)) } : {}),
         ...(avatar ? { account: avatar } : {}),
         // The shell's own pages run under the chrome. A page / overlay that took the bar does not: it never learned to
         // keep clear of the capsules, so Kotlin keeps the WebView between two strips for it.
@@ -324,7 +356,7 @@ export function installNativeChrome(): void {
     if ((e.action === 'space' || e.action === 'spaceLong') && typeof e.id === 'string') dispatchNativeChromeSpace(e.id, e.action === 'spaceLong')
     // The avatar exists only on a first-level shell page: a tap that arrives after a page / overlay took the bar
     // (settings, a sheet) or after the shell went one level down must not open the account menu over it.
-    else if (e.action === 'account') { if (state?.mode === 'shell' && state.spaces) accountChip()?.activate() }
+    else if (e.action === 'account') { if (state?.mode === 'shell' && state.spaces && !state.spaces.some((sp) => sp.id === PHONE_ME)) accountChip()?.activate() }
     else if ((ACTIONS as readonly string[]).includes(e.action)) dispatchNativeChromeAction(e.action as NativeChromeAction)
   }).catch(() => {})
   // After a fallback to the web bar (uninstall === null) a late report must not bring the capsules' room back.

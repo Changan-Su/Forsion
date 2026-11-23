@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:* https://liteapp.weixin.qq.com; media-src 'self' blob: data: https: http://localhost:* http://127.0.0.1:*;" />
+    <!-- frame-src:Extend 安全页内嵌的微信扫码框(应用内绑定),扫完在框里导航到 api.forsion.net 的回调,两个源都要;同桌面 frontend/index.html。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self' http://localhost:* http://127.0.0.1:* https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:* https://liteapp.weixin.qq.com; media-src 'self' blob: data: https: http://localhost:* http://127.0.0.1:*; frame-src 'self' https://open.weixin.qq.com https://api.forsion.net" />
     <title>Forsion</title>
     <!-- /shared 由 dev 代理与 nginx 一并转到 server(同 auth/pay 等页),省一份副本、永不走样。 -->
     <link rel="icon" type="image/svg+xml" href="/shared/Forsion-LOGO3.svg" />

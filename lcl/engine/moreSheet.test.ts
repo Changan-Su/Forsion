@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountMenuItems, allSheetItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
+import { accountMenuItems, allSheetItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, phonePageItems, presentedCommand } from './moreSheet'
 import { useCommandStore } from './commandRegistry'
 import type { Command, RibbonItem } from './types'
 
@@ -183,5 +183,43 @@ describe('on a phone ⋯ holds only the page\'s own things: where the app-wide e
     asked = 0
     expect(moreCommandGroups(cmds).map((g) => g.id)).toEqual(['amadeus:p', 'lcl-view-mode', 'amadeus:q'])
     expect(asked).toBe(0)
+  })
+})
+
+describe('a phone with the Apps / Me pages (fixed five-cell dock, 2026-11-19): the avatar menu and the all-Spaces sheet are gone', () => {
+  const rb = (id: string, extra: Partial<RibbonItem> = {}): RibbonItem => ({ id, side: 'bottom', onClick: () => {}, ...extra })
+  const ALL = [
+    rb('rb-achievements'), rb('rb-mode'), rb('rb-plugin-events'), rb('rb-plugin-biz'), rb('rb-market'), rb('rb-feedback'), rb('rb-cmd'),
+    rb('rb-settings'), rb('rb-units', { mobileFoot: true }), rb('rb-account'), rb('rb-widget', { component: () => null }), rb('rb-dead', { onClick: undefined }),
+    rb('space:x', { side: 'top' }),
+  ]
+  const ids = (list: RibbonItem[]): string[] => list.map((i) => i.id)
+  const PAGES = { phone: true, allCell: true, pages: true }
+
+  it('Me = settings, where it runs, the two switches, then achievements / events / feedback; Apps = the store first, then every other launcher', () => {
+    const p = phonePageItems(ALL, PAGES)
+    expect(ids(p.me.settings)).toEqual(['rb-settings', 'rb-units', 'rb-mode', 'rb-cmd'])
+    expect(ids(p.me.launchers)).toEqual(['rb-achievements', 'rb-plugin-events', 'rb-feedback'])
+    expect(ids(p.apps)).toEqual(['rb-market', 'rb-plugin-biz'])
+    expect(accountMenuItems(ALL, true, true, true)).toEqual([]) // no avatar menu on such a phone: the rows are on the Me page
+    expect(allSheetItems(ALL, PAGES)).toEqual([])
+    expect(ids(moreItems(ALL, true, PAGES))).toEqual(['rb-widget', 'rb-dead']) // what no page can draw stays in ⋯
+  })
+
+  it('nothing is lost and nothing shows twice: every bottom item but the account is in exactly one of Apps, Me or ⋯', () => {
+    for (const list of [ALL, ALL.filter((i) => i.id !== 'rb-account'), ALL.filter((i) => i.id !== 'rb-market' && i.id !== 'rb-settings')]) {
+      const p = phonePageItems(list, PAGES)
+      const placed = [...ids(p.apps), ...ids(p.me.settings), ...ids(p.me.launchers), ...ids(moreItems(list, true, PAGES))]
+      expect(new Set(placed).size).toBe(placed.length)
+      expect([...placed].sort()).toEqual(list.filter((i) => i.side === 'bottom' && i.id !== 'rb-account').map((i) => i.id).sort())
+    }
+  })
+
+  it('not this layout (no pages installed, a tablet on its side): the pages hold nothing and the old seats apply', () => {
+    for (const seats of [{ phone: true, allCell: true }, { phone: false, allCell: true, pages: true }]) {
+      const p = phonePageItems(ALL, seats)
+      expect([...p.apps, ...p.me.settings, ...p.me.launchers]).toEqual([])
+    }
+    expect(ids(accountMenuItems(ALL, true, false, true))).toEqual(['rb-settings', 'rb-units']) // the rail's avatar menu is unchanged
   })
 })

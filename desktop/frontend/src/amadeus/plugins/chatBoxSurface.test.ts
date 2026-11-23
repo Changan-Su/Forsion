@@ -5,7 +5,8 @@ import { mountPluginChatBox } from './chatBoxSurface'
 import { usePluginStore } from './pluginStore'
 import { setLocaleGlobal } from '../../i18n'
 import { useApp } from '../../stores/appStore'
-import { matchChatBoxSuggest, type PluginChatBoxHandle } from '../../../../shared/chatBox'
+import { matchChatBoxMention, matchChatBoxSuggest, type PluginChatBoxHandle } from '../../../../shared/chatBox'
+import { usePageStore } from '../store/pageStore'
 import type { PluginContext } from './types'
 import { installModelPickerPresenter, type ModelPickerValues } from '../../components/modelPickerHost'
 import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
@@ -147,7 +148,9 @@ describe('public Chat Box mount', () => {
     let ctx!: PluginContext
     await act(async () => { usePluginStore.getState().init([{ id: 'chatbox-caps', name: 'Caps', version: '1', setup(c) { ctx = c } }]) })
     // Arrays are exercised in 'takes several triggers' below; the upward menu needs layout, which jsdom doesn't have.
-    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove'])
+    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove', 'mentions', 'format'])
+    // 'format' comes with the reader for what that box writes.
+    expect(ctx.ui!.parseInlineMarkdown?.('**a** b')).toEqual([{ text: 'a', strong: true, from: 2, to: 3 }, { text: ' b', from: 5, to: 7 }])
   })
 })
 
@@ -342,6 +345,172 @@ describe('public Chat Box slots', () => {
       await new Promise(resolve => setTimeout(resolve, 10))
     })
     expect(input().value).toBe('Hello world')
+  })
+})
+
+describe('host @ mentions', () => {
+  const typeText = async (value: string, caret = value.length) => {
+    const t = input()
+    await act(async () => {
+      t.focus()
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(t, value)
+      t.selectionStart = t.selectionEnd = caret
+      t.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+  }
+  const press = async (key: string) => {
+    await act(async () => { input().dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
+  }
+  const menu = () => [...document.querySelectorAll('.chat-box-suggest .wiki-item, .chat-box-suggest .slash-group-label')].map(r => r.className.includes('slash-group-label') ? `[${r.textContent}]` : r.querySelector('.wiki-item-name')!.textContent)
+  const ymd = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+  beforeEach(() => { usePageStore.setState({ pages: ['评审议程.md', 'Work/周计划.md', 'A/重名.md', 'B/重名.md'] }) })
+
+  it('lists dates, then notes, under the notes panel labels, without the reminder row', async () => {
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['date', 'page'], onSubmit: () => false }) })
+    await typeText('评审前订会议室 @')
+    expect(menu()).toEqual(['[日期]', '今天', '明天', '[链接到页面]', '评审议程', '周计划', '重名', '重名'])
+  })
+  it('inserts the canonical date mark with a space, and the plugin can take the pick instead', async () => {
+    const onMention = vi.fn(() => undefined)
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onSubmit: () => false }) })
+    await typeText('交周报 @明')
+    expect(menu()).toEqual(['[日期]', '明天'])
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledWith({ kind: 'date', value: ymd(1) })
+    expect(input().value).toBe(`交周报 @${ymd(1)} `)
+
+    onMention.mockReturnValue(true as never)
+    await typeText('订会议室 @11/28')
+    await press('Enter')
+    expect(onMention).toHaveBeenLastCalledWith({ kind: 'date', value: expect.stringMatching(/^\d{4}-11-28$/) })
+    expect(input().value).toBe('订会议室 ')
+  })
+  it('links notes by bare name, or by path when the name is not unique', async () => {
+    const onMention = vi.fn()
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['page'], onMention, onSubmit: () => false }) })
+    await typeText('看 @重')
+    await press('ArrowDown')
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledWith({ kind: 'page', path: 'B/重名.md', link: 'B/重名' })
+    expect(input().value).toBe('看 [[B/重名]] ')
+    await typeText('看 @周')
+    await press('Enter')
+    expect(input().value).toBe('看 [[周计划]] ')
+  })
+  it('a plugin @ suggest steps aside, other triggers keep working, and a throwing onMention still inserts', async () => {
+    const own = { trigger: '@', mention: true, items: () => [{ label: 'own', value: '@own' }] }
+    const links = { trigger: '[[', mention: true, items: () => [{ label: '笔记', value: '[[笔记]]' }] }
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['date'], suggest: [own, links], onMention: () => { throw new Error('x') }, onSubmit: () => false }) })
+    await typeText('@')
+    expect(menu()).toEqual(['[日期]', '今天', '明天'])
+    await press('Enter')
+    expect(input().value).toBe(`@${ymd(0)} `)
+    expect(error).toHaveBeenCalledTimes(1)
+    await typeText('见 [[笔')
+    expect(menu()).toEqual(['笔记'])
+    error.mockRestore()
+  })
+  it('without mentions the plugin @ suggest is used as before', async () => {
+    const own = { trigger: '@', mention: true, items: () => [{ label: 'own', value: '@own' }] }
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, suggest: own, onSubmit: () => false }) })
+    await typeText('@')
+    expect(menu()).toEqual(['own'])
+  })
+  it('an onMention that swaps the draft is not overwritten by the stale range', async () => {
+    const onMention = vi.fn(() => { box!.update({ value: 'ABCDEFGHIJK' }); return true })
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onSubmit: () => false }) })
+    await typeText('Call @tom')
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledTimes(1)
+    expect(input().value).toBe('ABCDEFGHIJK')
+  })
+  it('an onMention that disposes the box gets no onChange afterwards', async () => {
+    const onChange = vi.fn()
+    const onMention = vi.fn(() => { box!.dispose(); return true })
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onChange, onSubmit: () => false }) })
+    await typeText('Call @tom')
+    onChange.mockClear()
+    await press('Enter')
+    expect(onMention).toHaveBeenCalledTimes(1)
+    expect(onChange).not.toHaveBeenCalled()
+    box = undefined
+  })
+  it('date rows never act on another trigger\'s range while its items load', async () => {
+    const onMention = vi.fn(() => true)
+    const tags = { trigger: '#', items: () => new Promise<never>(() => {}) } // still loading
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], suggest: tags, onMention, onSubmit: () => false }) })
+    await typeText('Call @')
+    expect(menu()).toEqual(['[日期]', '今天', '明天'])
+    await typeText('Call @ #a')
+    expect(menu()).toEqual([])
+    await press('Enter')
+    expect(onMention).not.toHaveBeenCalled()
+    expect(input().value).toBe('Call @ #a')
+  })
+  it('turning mentions off disarms an open @ menu', async () => {
+    const onMention = vi.fn(() => true)
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onSubmit: () => false }) })
+    await typeText('Call @tom')
+    await act(async () => { box!.update({ mentions: [] }) })
+    await press('Enter')
+    expect(onMention).not.toHaveBeenCalled()
+    expect(input().value).toBe('Call @tom')
+  })
+  it('names that differ only in case link by path', async () => {
+    usePageStore.setState({ pages: ['A/Plan.md', 'B/plan.md'] })
+    const onMention = vi.fn()
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['page'], onMention, onSubmit: () => false }) })
+    await typeText('看 @plan')
+    await press('ArrowDown')
+    await press('Enter')
+    expect(onMention).toHaveBeenLastCalledWith({ kind: 'page', path: 'B/plan.md', link: 'B/plan' })
+  })
+  it('`@constructor` is not a date', async () => {
+    usePageStore.setState({ pages: ['Constructor.md'] })
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['date', 'page'], onSubmit: () => false }) })
+    await typeText('@constructor')
+    expect(menu()).toEqual(['[链接到页面]', 'Constructor'])
+  })
+  it('a time passes through as YYYY-MM-DDTHH:mm', async () => {
+    const onMention = vi.fn(() => true)
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, submitOn: 'enter', mentions: ['date'], onMention, onSubmit: () => false }) })
+    await typeText('交周报 @22:00')
+    await press('Enter')
+    expect(onMention).toHaveBeenLastCalledWith({ kind: 'date', value: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T22:00$/) })
+    await typeText('交周报 @2200')
+    await press('Enter')
+    expect(onMention).toHaveBeenLastCalledWith({ kind: 'date', value: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T22:00$/) })
+    expect(input().value).toBe('交周报 ')
+  })
+  it('stays closed in an e-mail address and after Esc for the same @', async () => {
+    await act(async () => { box = mountPluginChatBox(el, { modelPicker: false, mentions: ['date'], onSubmit: () => false }) })
+    await typeText('mail a@b')
+    expect(menu()).toEqual([])
+    await typeText('交周报 @')
+    expect(menu().length).toBeGreaterThan(0)
+    await press('Escape')
+    await typeText('交周报 @明')
+    expect(menu()).toEqual([])
+  })
+})
+
+describe('matchChatBoxMention', () => {
+  it('follows the notes rule: bare @, after CJK, dates and times with / and :', () => {
+    expect(matchChatBoxMention('交周报 @', 5)).toEqual({ query: '', from: 4, to: 5 })
+    expect(matchChatBoxMention('交周报@明', 5)).toEqual({ query: '明', from: 3, to: 5 })
+    expect(matchChatBoxMention('@11/28', 6)?.query).toBe('11/28')
+    expect(matchChatBoxMention('x @22:00', 8)?.query).toBe('22:00')
+    expect(matchChatBoxMention('第一行 @\n第二行', 10)).toBeNull()
+  })
+  it('refuses e-mail, whitespace or brackets in the query, long queries and a caret mid-word', () => {
+    expect(matchChatBoxMention('a@b', 3)).toBeNull()
+    expect(matchChatBoxMention('@11 28', 6)).toBeNull()
+    expect(matchChatBoxMention('@[[x', 4)).toBeNull()
+    expect(matchChatBoxMention(`@${'x'.repeat(31)}`, 32)).toBeNull()
+    expect(matchChatBoxMention('@明天下午', 2)).toBeNull()
+    expect(matchChatBoxMention('@1/28', 2)).toBeNull() // caret mid-token: a pick would leave `/28` behind
   })
 })
 

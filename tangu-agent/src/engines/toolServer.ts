@@ -29,7 +29,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { isComputerUseTool, resolveTools, visibleMcpTools } from '../tools/toolRegistry.js';
-import { executeTool, getToolCapabilities, toolSourceOf } from '../tools/registry.js';
+import { executeTool, getToolCapabilities, toolPluginOwnerOf, toolSourceOf } from '../tools/registry.js';
 import { gateToolCall, type ApprovalDecision } from '../services/approvals.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { deps } from '../seams/runtime.js';
@@ -39,6 +39,9 @@ import { computerUseUnavailableText } from '../contracts/agentEngine.js';
 import { fitImageForModel } from '../services/imageShrink.js';
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
+/** 工具卡片事件的来源字段(registry.toolOriginOf 的形状):builtin / mcp 只有 source,插件工具可带主人。 */
+type ToolEventOrigin = { source: 'builtin' | 'mcp' | 'plugin'; pluginId?: string; pluginOfficial?: boolean };
+
 export const WAIT_TOOL = 'forsion_wait';
 /** 读这个 Agent 的一个技能(只在带 skills 的桥上有:交给常驻引擎时技能没有按会话的目录可放,见 residentAcp.ts)。 */
 export const SKILL_TOOL = 'forsion_skill';
@@ -184,12 +187,12 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
   const calls: any[] = [];
   const results: any[] = [];
   /** 已经有终态卡片的调用(id → 开始时刻的表里删掉):每次调用恰好一条结果,收尾补的和迟到的不会重复。 */
-  const unsettled = new Map<string, { name: string; startedAt: number; source: string }>();
-  const settleCard = (id: string, name: string, startedAt: number, source: string, text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): void => {
+  const unsettled = new Map<string, { name: string; startedAt: number; origin: ToolEventOrigin }>();
+  const settleCard = (id: string, name: string, startedAt: number, origin: ToolEventOrigin, text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): void => {
     if (!opts.cards || !unsettled.delete(id)) return;
     const elapsedMs = Date.now() - startedAt;
     results.push({ tool_call_id: id, name, content: text, isError, startedAt, elapsedMs, outputChars: text.length, ...(extra.artifactPath ? { artifactPath: extra.artifactPath } : {}) });
-    opts.cards.publish('tool_result', { id, name, result: text, isError, startedAt, elapsedMs, outputChars: text.length, source, ...extra });
+    opts.cards.publish('tool_result', { id, name, result: text, isError, startedAt, elapsedMs, outputChars: text.length, ...origin, ...extra });
   };
   const budget = opts.budgetMs && opts.budgetMs > 0 ? opts.budgetMs : undefined;
   // 同一个并发键(一次只驱动一个浏览器 / 一台电脑)的执行排队:引擎可能一次发几个调用,Tangu 循环里它们本来就一个接一个跑
@@ -219,11 +222,18 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     const id = randomUUID();
     const call = { id, type: 'function' as const, function: { name, arguments: JSON.stringify(args || {}) } };
     const startedAt = Date.now();
-    const source = (() => { try { return toolSourceOf(name, toolCtx); } catch { return 'plugin' as const; } })();
+    // source 同 agentLoop(遥测 v2);插件工具另带 pluginId + pluginOfficial(遥测 v3)
+    const origin = ((): ToolEventOrigin => {
+      try {
+        const source = toolSourceOf(name, toolCtx);
+        if (source !== 'plugin') return { source };
+        try { return { source, ...toolPluginOwnerOf(name, toolCtx) }; } catch { return { source }; }
+      } catch { return { source: 'plugin' }; }
+    })();
     if (opts.cards) {
       calls.push({ ...call, function: { ...call.function, name: wireName(name) }, ui_content_offset: opts.cards.contentOffset() });
-      unsettled.set(id, { name: wireName(name), startedAt, source });
-      opts.cards.publish('tool_call', { id, name: wireName(name), arguments: call.function.arguments, startedAt, source });
+      unsettled.set(id, { name: wireName(name), startedAt, origin });
+      opts.cards.publish('tool_call', { id, name: wireName(name), arguments: call.function.arguments, startedAt, ...origin });
     }
     // 这次调用交回的图(截图类工具;只在开了 images 的桥上收)
     const images: BridgeImage[] = [];
@@ -237,7 +247,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
     const finish = (text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): Outcome => {
       // 截断只给交接的桥(卡片 + 落库);插件任务那条路原样回,别把它原来能拿到的长输出截掉
       const capped = opts.cards && text.length > MAX_TEXT_CHARS ? `${text.slice(0, MAX_TEXT_CHARS)}\n\n[Output truncated: ${text.length} characters in total.]` : text;
-      settleCard(id, wireName(name), startedAt, source, capped, isError, extra);
+      settleCard(id, wireName(name), startedAt, origin, capped, isError, extra);
       return { text: capped, isError, ...(images.length ? { images: [...images] } : {}) };
     };
     const caps = (() => { try { return getToolCapabilities(name, toolCtx); } catch { return undefined; } })();
@@ -385,7 +395,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       await Promise.race([Promise.allSettled([...active]), new Promise((r) => { const x = setTimeout(r, 3000); x.unref?.(); })]);
       // 不听中止、3 秒内还没停下的:当场记成「这一轮结束了」,落库的消息里每个调用都配得上结果(换回 Tangu 读这段历史时
       // 调用没有结果会被模型方拒);它迟到的结果不再记、不再发。
-      for (const [id, u] of [...unsettled]) settleCard(id, u.name, u.startedAt, u.source, STOPPED_TEXT, true);
+      for (const [id, u] of [...unsettled]) settleCard(id, u.name, u.startedAt, u.origin, STOPPED_TEXT, true);
       await Promise.allSettled([...open].map(s => s.close())); http.closeAllConnections(); await new Promise<void>(r => http.close(() => r()));
     },
   };

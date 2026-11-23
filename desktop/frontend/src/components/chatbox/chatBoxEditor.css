@@ -1,0 +1,32 @@
+/* Chat Box 编辑器输入(format 档):量体与文本框 .t2c-ta 一致 —— 同字体字号行高、最少一行、最高 200px 之后内部滚动。
+   外壳不叫 .milkdown(笔记排版 `.milkdown .ProseMirror p` 不进来),这里只给档位里有的几样东西最小的样子。 */
+.t2c-ed-host { width: 100%; min-width: 0; }
+.t2c-ed-shell > .t2c-ed {
+  width: 100%; border: none; outline: none; background: transparent;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--t2c-font-body, 13px); line-height: 1.6;
+  min-height: 1.6em; max-height: 200px; overflow-y: auto; overflow-wrap: anywhere; white-space: pre-wrap;
+  padding: 0; margin: 0; cursor: text;
+}
+.t2c-card .t2c-ed-shell > .t2c-ed:focus-visible { outline: none; }
+.t2c-ed-shell > .t2c-ed[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+.t2c-ed > p, .t2c-ed li > p { margin: 0; }
+.t2c-ed > * + * { margin-top: 0.4em; }
+.t2c-ed .t2c-ed-empty { position: relative; }
+.t2c-ed .t2c-ed-empty::before {
+  content: attr(data-placeholder); position: absolute; left: 0; right: 0; top: 0;
+  color: var(--text-faint, var(--text-muted)); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.t2c-ed strong { font-weight: 600; }
+.t2c-ed code {
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em;
+  padding: 0.05em 0.3em; border-radius: var(--radius-sm, 4px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+}
+.t2c-ed a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+.t2c-ed del { color: var(--text-muted); }
+.t2c-ed ul, .t2c-ed ol { margin: 0; padding-left: 1.4em; }
+.t2c-ed blockquote { margin: 0; padding-left: 0.8em; border-left: 2px solid var(--border, rgba(127, 127, 127, 0.3)); color: var(--text-muted); }
+.t2c-ed pre {
+  margin: 0; padding: 6px 8px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; white-space: pre-wrap;
+}
+.t2c-ed li[data-item-type="task"] { list-style: none; }

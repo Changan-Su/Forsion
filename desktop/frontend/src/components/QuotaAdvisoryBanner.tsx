@@ -20,6 +20,10 @@ import { pointsAutoDeductAvailable, pointsPhaseBusy, pointsPhaseUnknown, pointsW
 import { museAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
+import { tanguQuotaPrompt, tanguQuotaPromptVisible } from '../tangu/telemetry'
+
+/** 这条提醒在额度操作 / 下单请求里的入口(服务端随账号记),也是匿名计数 quota_prompt 的入口。 */
+const ENTRY = 'chat-banner'
 
 /** 横幅上「从 AI 额度转入」一次转限额的这个百分比(本周期有效;「Forsion 云端 → 额度与积分」另有 5 / 10 / 20 可选)。 */
 const BANNER_CONVERT_PERCENT = 10
@@ -161,6 +165,9 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
     setConfirmPoints(false)
     if (!advisoryKey) setDismissedKey(null)
   }, [advisoryKey])
+  // 匿名遥测 v3:「从不显示变成显示」计一次露出(分栏里几条同时挂着、重渲染都不重复计;等级变了算新的一次)
+  const shownKey = loggedIn && quota && advisoryKey && dismissedKey !== advisoryKey ? advisoryKey : null
+  useEffect(() => (shownKey ? tanguQuotaPromptVisible(ENTRY, shownKey) : undefined), [shownKey])
 
   const ceremonyEl = ceremony && <ResetCardCeremony result={ceremony} onClose={() => setCeremony(null)} returnFocusSelector=".t2c-ta" />
   if (!loggedIn || !quota || !advisory) return ceremonyEl
@@ -189,10 +196,11 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       return
     }
     setResetting(true)
+    tanguQuotaPrompt(ENTRY, 'card')
     const id = ++resetRequest.current
     const token = pointsReadToken()
     try {
-      const response = await window.tangu.accountUseResetCard('both')
+      const response = await window.tangu.accountUseResetCard('both', ENTRY)
       if (id !== resetRequest.current) return
       if (response?.status === 200 && response.json?.success) {
         const next = reconcilePointsRead(mergeQuotaView(quota, response.json.quota, { resetCards: response.json.resetCards }), token)
@@ -220,9 +228,10 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       return
     }
     setConverting(true)
+    tanguQuotaPrompt(ENTRY, 'bgConvert')
     const id = ++resetRequest.current
     try {
-      const response = await window.tangu.accountBgConvert(BANNER_CONVERT_PERCENT)
+      const response = await window.tangu.accountBgConvert(BANNER_CONVERT_PERCENT, ENTRY)
       if (id !== resetRequest.current) return
       if (response?.status === 200 && response.json?.success) {
         const next = mergeQuotaView(quota, response.json.quota)
@@ -252,8 +261,9 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       return
     }
     const id = ++pointsRequest.current
+    tanguQuotaPrompt(ENTRY, 'points')
     try {
-      const result = await setPointsAutoDeduct(true, quota)
+      const result = await setPointsAutoDeduct(true, quota, ENTRY)
       if (result.ok) {
         // 已在模块里确认;广播给所有读额度的人(本条提醒条也经订阅收到)
         publishAccountQuota(result.quota)
@@ -281,12 +291,12 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
 
   const level = pointsState === 'on' ? 'info' : advisory.critical ? 'critical' : advisory.threshold === 10 ? 'near' : 'low'
   const upgradeButton = canPay && (
-    <button className="t2-quota-action upgrade" onClick={() => void window.tangu?.openPayCenter?.()}>
+    <button className="t2-quota-action upgrade" onClick={() => { tanguQuotaPrompt(ENTRY, 'upgrade'); void window.tangu?.openPayCenter?.({ entry: ENTRY }) }}>
       {t('quota.banner.upgrade')} <ArrowUpRight size={12} aria-hidden="true" />
     </button>
   )
   const rechargeButton = canPay && (
-    <button className="t2-quota-action recharge" onClick={() => void window.tangu?.openPayCenter?.()}>
+    <button className="t2-quota-action recharge" onClick={() => { tanguQuotaPrompt(ENTRY, 'topup'); void window.tangu?.openPayCenter?.({ entry: ENTRY }) }}>
       <Coins size={12} aria-hidden="true" /> {t('quota.banner.recharge')}
     </button>
   )
@@ -324,7 +334,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
             {confirmConvert ? t('quota.banner.confirmReset') : t('quota.banner.bg.convert', { percent: String(BANNER_CONVERT_PERCENT) })}
           </button>
         )}
-        <button className="t2-quota-action settings" onClick={() => useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])}>
+        <button className="t2-quota-action settings" onClick={() => { tanguQuotaPrompt(ENTRY, 'bgSettings'); useApp.getState().openSettings('forsion/fx:forsion-extend:quota' as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]) }}>
           <Settings2 size={12} aria-hidden="true" /> {t('quota.banner.bg.settings')}
         </button>
       </span> : <span className="t2-quota-advisory-actions">
@@ -348,7 +358,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
           </button>
         )}
       </span>}
-      <button className="t2-quota-dismiss" title={t('quota.banner.close')} aria-label={t('quota.banner.close')} onClick={() => setDismissedKey(advisoryKey)}>
+      <button className="t2-quota-dismiss" title={t('quota.banner.close')} aria-label={t('quota.banner.close')} onClick={() => { tanguQuotaPrompt(ENTRY, 'dismiss'); setDismissedKey(advisoryKey) }}>
         <X size={13} aria-hidden="true" />
       </button>
     </div>

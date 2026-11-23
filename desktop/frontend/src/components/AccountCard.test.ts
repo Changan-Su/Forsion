@@ -227,6 +227,45 @@ it('expands the AI quota row into today, this week, a reset card, upgrade and th
   expect(openSettings).toHaveBeenLastCalledWith('forsion/fx:forsion-extend:account')
 })
 
+// 11-20 用户定:不限的那档不写「不限」,积分跟在额度里
+it('leaves out unlimited periods and shows the points balance in the quota rows', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { ...QUOTA, dailyLimit: -1, dailyRemaining: -1, pointsBalance: 1280 } }) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.body.textContent).toContain('本周 72%')
+  expect(document.body.textContent).not.toContain('今日')
+  expect(document.body.textContent).not.toContain('不限')
+  await click('AI 额度')
+  const detail = document.querySelector('[data-testid="account-quota-detail"]')!
+  expect(detail.querySelector('[data-row="daily"]')).toBeNull()
+  expect(detail.querySelector('[data-row="weekly"]')!.textContent).toContain('72%')
+  expect(detail.querySelector('[data-row="points"]')!.textContent).toContain('1,280') // 没有背包页:积分补在额度里
+})
+
+it('does not repeat the points in the quota rows when the backpack row already shows them, and keeps a negative balance', async () => {
+  rewardsBridge(-23)
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { ...QUOTA, dailyLimit: -1, weeklyLimit: -1, pointsBalance: 0 } }) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  const row = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('AI 额度'))!
+  expect(row.textContent).toContain('-23 积分') // 背包读到的优先,和背包那行同一个数
+  await click('AI 额度')
+  expect(document.querySelector('[data-testid="account-quota-detail"] [data-row="points"]')).toBeNull()
+  expect(document.querySelector('[data-testid="account-points"]')!.textContent).toContain('-23')
+})
+
+it('falls back to the points balance when every period is unlimited', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { ...QUOTA, dailyLimit: -1, weeklyLimit: -1, pointsBalance: 1280 } }) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  const row = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('AI 额度'))!
+  expect(row.textContent).toContain('1,280 积分')
+  expect(row.textContent).not.toContain('不限')
+})
+
 it('uses a reset card only on the second click and plays the ceremony', async () => {
   window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: QUOTA }) as any
   window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({
@@ -243,7 +282,7 @@ it('uses a reset card only on the second click and plays the ceremony', async ()
   expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
   await click('再点一次确认使用')
   await tick()
-  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both')
+  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both', 'avatar-menu') // 末位 entry(遥测 v3)
   expect(document.querySelector('.account-pop')).toBeNull() // 用完关菜单
   const dialog = document.querySelector('.reset-ceremony[role="dialog"]')!
   expect(dialog.textContent).toContain('额度已焕新')

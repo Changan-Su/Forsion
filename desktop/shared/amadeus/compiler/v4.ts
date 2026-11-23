@@ -230,6 +230,11 @@ const FOREIGN_ID_TREE_KEY = /^["']?(mindmap|mindmap_rel|dashboard|canvas)["']?\s
  *  存量插件格式文件由上面的 fm 键闸兜住,不会被这一刀带走。 */
 const PLUGIN_FILETYPE = /\.(mindmap|excalidraw)\.md$/i
 
+/** Body edits must respect the same legacy plugin ownership as the format upgrader. */
+export function hasPluginPageStructure(path: string, fm: string): boolean {
+  return PLUGIN_FILETYPE.test(path) || FOREIGN_ID_TREE_KEY.test(fm)
+}
+
 /** 把一份 v3 源文升级为 v4 源文(纯函数,不落盘;调用方负责「首次编辑才升」的时机)。
  *  平凡布局(无分栏)→ 素文件:剥全部标记与 amadeus_* 键;含分栏 → 仅保留分栏行内块的
  *  锚(id 原样,历史引用不断)+ v4 布局。amadeus_page/amadeus_next_id 一律不再携带。 */

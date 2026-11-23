@@ -10,7 +10,10 @@
 
 import { isSourceCardId } from '../shared/storeSources'
 import type { CloudHost, HostTelemetryEvent } from './cloudHost'
-import { COMMAND_SOURCES, classifyUpdateError, isAppCountKey, settingChange, type AppCountKey } from '../shared/telemetryKeys'
+import {
+  COMMAND_SOURCES, LIFECYCLE_REASONS, MODEL_COUNT_KEYS, QUOTA_PROMPT_ACTIONS, QUOTA_PROMPT_ENTRIES, classifyUpdateError, isAppCountKey, providerKindOf, runErrorClass,
+  settingChange, type AppCountKey, type ModelCountKey, type QuotaPromptAction, type QuotaPromptEntry,
+} from '../shared/telemetryKeys'
 
 export type { HostTelemetryEvent }
 /** CloudHost.telemetry 接缝本身(声明在 cloudHost.ts,Extend host.d.ts 镜像那一份)。 */
@@ -22,11 +25,22 @@ export { RENDERER_REPORT_KINDS, type RendererReportKind } from '../shared/teleme
 export const BUFFER_CAP = 50
 /** 跨 IPC 的原文封顶(Extend 再按白名单截到 300 / 4000)。 */
 export const STACK_CAP = 8000
-/** 汇总事件(perf / app_counts / command_use)本身按小时一条,不设上限;其余每小时每类的上限:渲染层报错死循环 / 来回切 View 不能把队列灌满。超出的直接丢。 */
-type CappedEvent = Exclude<HostEventName, 'perf' | 'app_counts' | 'command_use'>
+/** 汇总事件(perf / app_counts / command_use / quota_prompt / model_feedback)本身按小时攒成一条(一组),不设上限,组数另有封顶;
+ *  其余每小时每类的上限:渲染层报错死循环 / 来回切 View 不能把队列灌满。超出的直接丢。 */
+type AggregateEvent = 'perf' | 'app_counts' | 'command_use' | 'quota_prompt' | 'model_feedback'
+type CappedEvent = Exclude<HostEventName, AggregateEvent>
+const AGGREGATE_EVENTS: ReadonlySet<string> = new Set<AggregateEvent>(['perf', 'app_counts', 'command_use', 'quota_prompt', 'model_feedback'])
 export const HOURLY_CAP: Record<CappedEvent, number> = {
   crash: 60, feature: 600, plugin_install: 120, plugin_deps: 60, plugin_lifecycle: 200, plugin_load: 200, update: 60, onboarding: 10, guide_tip: 60,
+  // v3:插件清单一天一份、一份最多 INVENTORY_CAP 条(单列上限,不和别的事件抢);首次运行一台一次
+  plugin_inventory: 160, first_run: 5,
 }
+/** 一份插件清单最多展开成多少条事件(契约 §19:≤ 150);超出的截掉并在本机日志记一笔。 */
+export const INVENTORY_CAP = 150
+/** 一小时里最多攒多少个不同的模型(model_feedback):超出的新模型这一小时不记。 */
+export const MODEL_PAIR_CAP = 100
+/** 模型 id 交给 Extend 之前的形状封顶(公开化在 Extend:托管 / Codex 原样,自带 key 与本地只留最后一段模型名)。 */
+const MODEL_ID_MAX = 160
 /** 一小时里最多攒多少个不同的 (命令 id, 来源):超出的新组合这一小时不记(已记下的照常累加)。 */
 export const COMMAND_PAIR_CAP = 300
 /** 渲染层一次 count 最多加多少(成就 track 可以一次加 n)。 */
@@ -100,24 +114,42 @@ export function crashFromError(proc: string, reason: 'exception' | 'rejection', 
   })
 }
 
-/** 引擎进程意外退出 → crash props。Windows 的 NTSTATUS(0xC0000005 …)超出 int,改记进 errorName。 */
-export function engineExitProps(code: number | null, signal: string | null, uptimeS?: number): Record<string, unknown> {
+/**
+ * Windows 结束会话(关机 / 重启 / 注销)时,系统把没及时退出的进程一起强杀,退出码是 0x40010004(DBG_TERMINATE_PROCESS)。
+ * 那不是崩溃:11-20 查生产遥测,21 次 crash 里 12 次是它,每一次都是所在那次运行的最后一条事件(主进程也跟着没了)。
+ * Electron 42+ 才在会话结束时自己先退(electron#52604),本仓的 40 还会撞上。
+ */
+export const WIN_SESSION_END_EXIT = 0x40010004
+export const killedBySessionEnd = (code: unknown, platform: string = process.platform): boolean =>
+  platform === 'win32' && typeof code === 'number' && (code >>> 0) === WIN_SESSION_END_EXIT
+/** 退出码超出白名单 int 时(Windows NTSTATUS 0xC0000005 …,Electron 给的还常是负数)换成十六进制串。 */
+const hexCode = (code: unknown): string | undefined =>
+  typeof code === 'number' && Number.isInteger(code) && int(code) === undefined ? `0x${(code >>> 0).toString(16).toUpperCase()}` : undefined
+
+/** 引擎进程意外退出 → crash props;Windows 结束会话被强杀的不算,返回 null。Windows 的 NTSTATUS 超出 int,改记进 errorName。 */
+export function engineExitProps(code: number | null, signal: string | null, uptimeS?: number, platform: string = process.platform): Record<string, unknown> | null {
+  if (killedBySessionEnd(code, platform)) return null
   const exitCode = int(code)
   const fatal = /^SIG(SEGV|BUS|ABRT|ILL|FPE)$/.test(signal ?? '')
   return compact({
     process: 'engine',
     reason: signal ? (fatal ? 'crashed' : signal === 'SIGKILL' || signal === 'SIGTERM' ? 'killed' : 'abnormal-exit') : 'abnormal-exit',
     exitCode,
-    errorName: signal ? errorName(signal) : exitCode === undefined && typeof code === 'number' ? `0x${(code >>> 0).toString(16).toUpperCase()}` : undefined,
+    errorName: signal ? errorName(signal) : hexCode(code),
     uptimeS: int(uptimeS),
   })
 }
 
-/** 渲染进程 / 子进程没了 → crash props(clean-exit 返回 null)。child-process-gone 的类型(GPU / Utility …)记进 errorName。 */
-export function processGoneProps(proc: 'renderer' | 'other', details: { reason?: unknown; exitCode?: unknown; type?: unknown }, uptimeS?: number): Record<string, unknown> | null {
+/**
+ * 渲染进程 / 子进程没了 → crash props(clean-exit、Windows 结束会话被强杀的返回 null)。child-process-gone 的类型(GPU / Utility …)
+ * 记进 errorName;退出码超出 int 的(Windows 崩溃码)也进 errorName:渲染进程就是那串码,子进程是「类型:码」。
+ */
+export function processGoneProps(proc: 'renderer' | 'other', details: { reason?: unknown; exitCode?: unknown; type?: unknown }, uptimeS?: number, platform: string = process.platform): Record<string, unknown> | null {
   const reason = goneReason(details.reason)
-  if (!reason) return null
-  return compact({ process: proc, reason, exitCode: int(details.exitCode), errorName: errorName(details.type), uptimeS: int(uptimeS) })
+  if (!reason || killedBySessionEnd(details.exitCode, platform)) return null
+  const hex = hexCode(details.exitCode)
+  const type = errorName(details.type)
+  return compact({ process: proc, reason, exitCode: int(details.exitCode), errorName: type && hex ? errorName(`${type}:${hex}`) : type ?? hex, uptimeS: int(uptimeS) })
 }
 
 // ── update(契约 §9):安装包、引擎 npm 热更新、界面热更新退回、内置插件 npm 更新、首启预取。报错原文只拿来归类,不转发 ──
@@ -184,10 +216,13 @@ const ONBOARDING_INTS = ['screens', 'backJumps', 'msStart', 'msTheme', 'msYou', 
 const pluginRef = (p: Record<string, unknown>, max = 80): string => publicPluginId(p.pluginId, p.pluginOfficial, max)
 
 export type ShapedReport =
-  | { event: Exclude<HostEventName, 'perf' | 'update' | 'app_counts' | 'command_use'>; props: Record<string, unknown> }
+  | { event: Exclude<HostEventName, AggregateEvent | 'update' | 'plugin_inventory'>; props: Record<string, unknown> }
   | { longTasks: number }
   | { count: AppCountKey; n: number; once?: string }
   | { command: { id: string; source: string } }
+  | { quotaPrompt: { entry: QuotaPromptEntry; action: QuotaPromptAction } }
+  | { modelCount: { key: ModelCountKey; modelId: string; providerKind: string } }
+  | { inventory: Array<Record<string, unknown>>; truncated: number }
 
 /**
  * 渲染层报上来的一条 → 契约形状。返回:
@@ -267,6 +302,8 @@ export function shapeRendererReport(kind: unknown, raw: unknown): ShapedReport |
           action,
           blockedReason: action === 'blocked' ? oneOf(p.blockedReason, BLOCKED_REASONS) ?? 'other' : undefined,
           daysSinceInstall: int(p.daysSinceInstall),
+          // v3:卸载 / 停用时用户选的理由(可跳过);别的动作不带
+          reason: action === 'uninstall' || action === 'disable' ? oneOf(p.reason, LIFECYCLE_REASONS) : undefined,
         }),
       }
     }
@@ -291,8 +328,60 @@ export function shapeRendererReport(kind: unknown, raw: unknown): ShapedReport |
       const result = oneOf(p.result, ['ok', 'learned', 'mute', 'gone', 'missing', 'replaced', 'closed'] as const)
       return pluginId !== 'local' && tipId && result ? { event: 'guide_tip', props: { pluginId, tipId, result } } : null
     }
+    case 'quotaPrompt': {
+      // 额度提示的露出 / 动作(契约 §19):不带提示文案、不带额度数值,只有入口 × 动作;主进程按小时按入口攒成 quota_prompt
+      const entry = oneOf(p.entry, QUOTA_PROMPT_ENTRIES)
+      const action = oneOf(p.action, QUOTA_PROMPT_ACTIONS)
+      return entry && action ? { quotaPrompt: { entry, action } } : null
+    }
+    case 'modelCount': {
+      // 重新生成 / 停止 / 改了再发 × 模型(契约 §19):模型 id 原样交给 Extend,由它公开化(publicModelId);来源类别在这里按 id 算
+      const key = oneOf(p.key, MODEL_COUNT_KEYS)
+      const modelId = safeId(p.modelId, MODEL_ID_MAX)
+      return key && modelId ? { modelCount: { key, modelId, providerKind: providerKindOf(modelId) } } : null
+    }
+    case 'pluginInventory': return shapeInventory(p)
+    case 'firstRun': {
+      // 首次运行的结果(契约 §19):报错原文只拿来归类,不转发
+      const outcome = oneOf(p.outcome, ['done', 'error', 'aborted'] as const)
+      if (!outcome) return null
+      return {
+        event: 'first_run',
+        props: compact({
+          outcome,
+          errorClass: outcome === 'done' ? undefined : runErrorClass(typeof p.error === 'string' ? p.error.slice(0, 2000) : '', outcome === 'aborted'),
+          sinceFirstLaunchS: int(p.sinceFirstLaunchS),
+          durationMs: int(p.durationMs),
+        }),
+      }
+    }
     default: return null
   }
+}
+
+/**
+ * 插件清单(契约 §19 plugin_inventory):渲染层给 `{ plugins: [{ pluginId, pluginOfficial, source, enabled }], localCount }`,
+ * id 已按 telemetryPluginRef 换好;这里再按 publicPluginId 核一遍 —— 核不过的(侧载 / 开发副本 / 形状不对)并进 local 计数,id 不发。
+ * 同一个 id 出现两次(内置包的 Forsion 插件 + 它带的引擎插件)合成一条,开着取「有一处开着」。day 由宿主按 UTC 填。
+ */
+function shapeInventory(p: Record<string, unknown>): ShapedReport | null {
+  if (!Array.isArray(p.plugins)) return null
+  const byId = new Map<string, { source: 'store' | 'builtin'; enabled: boolean }>()
+  let local = int(p.localCount) ?? 0
+  for (const raw of p.plugins as unknown[]) {
+    if (!raw || typeof raw !== 'object') continue
+    const x = raw as Record<string, unknown>
+    const id = publicPluginId(x.pluginId, x.pluginOfficial)
+    const source = oneOf(x.source, ['store', 'builtin'] as const)
+    if (id === 'local' || !source) { local++; continue }
+    const prev = byId.get(id)
+    byId.set(id, { source: prev?.source ?? source, enabled: !!prev?.enabled || x.enabled === true })
+  }
+  const items: Array<Record<string, unknown>> = [...byId].map(([id, v]) => ({ id, source: v.source, installed: 1, enabled: v.enabled ? 1 : 0 }))
+  if (local > 0) items.unshift({ id: 'local', source: 'local', localCount: Math.min(local, INT_MAX) }) // 排最前:截断时不丢本地插件的个数
+  if (!items.length) return null
+  const truncated = Math.max(0, items.length - INVENTORY_CAP)
+  return { inventory: items.slice(0, INVENTORY_CAP), truncated }
 }
 
 /** 长得像密钥 / 一长串十六进制的 id 不收(Extend 与 server 照样会丢,这里先挡,免得占掉每小时的配额)。 */
@@ -353,6 +442,14 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
   let counts = new Map<AppCountKey, number>()
   /** 本小时的命令使用:`<来源>\n<id>` → 次数。 */
   let commands = new Map<string, number>()
+  /** 本小时的额度提示:入口 → { 动作 → 次数 }(v3 quota_prompt)。 */
+  let quotaPrompts = new Map<QuotaPromptEntry, Partial<Record<QuotaPromptAction, number>>>()
+  /** 本小时按模型的计数:`<来源类别>\n<模型 id>` → { regenerate / stop / editResend → 次数 }(v3 model_feedback)。 */
+  let modelCounts = new Map<string, Partial<Record<ModelCountKey, number>>>()
+  /** 插件清单这次启动已经交出的 UTC 日(渲染层按天记,这里再挡一道:多个窗口 / 重载各报一次也只交一份)。 */
+  let inventoryDay: string | null = null
+  /** 首次运行一个进程只交一次(渲染层另在本机记已发)。 */
+  let firstRunSent = false
   /** plugin_load 同一插件同一次启动只报一次;被挡下的(blocked)同一插件同一原因也只报一次。local 不去重(分不出是哪个)。 */
   const loadedOnce = new Set<string>()
   /** 引擎事件派生的计数已经数过的事件 id(见 ONCE_CAP)。 */
@@ -365,16 +462,18 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
     }
   }
   const emit = (event: HostEventName, props: Record<string, unknown>): void => {
-    if (event !== 'perf' && event !== 'app_counts' && event !== 'command_use') {
-      const n = sent[event] ?? 0
-      if (n >= HOURLY_CAP[event]) return
-      sent[event] = n + 1
+    if (!AGGREGATE_EVENTS.has(event)) {
+      const k = event as CappedEvent
+      const n = sent[k] ?? 0
+      if (n >= HOURLY_CAP[k]) return
+      sent[k] = n + 1
     }
     const ev: HostTelemetryEvent = { event, ts: new Date(now()).toISOString(), props }
     if (o.tap) try { o.tap(ev) } catch { /* 旁路出错不影响上报 */ }
     if (buffer) { if (buffer.length < BUFFER_CAP) buffer.push(ev); return } // 留最早的:启动耗时 / 启动期崩溃最要紧
     deliver(ev)
   }
+  const bump = <K extends string>(rec: Partial<Record<K, number>>, k: K): void => { rec[k] = Math.min(INT_MAX, (rec[k] ?? 0) + 1) }
   const count = (key: AppCountKey, n = 1): void => {
     counts.set(key, Math.min(INT_MAX, (counts.get(key) ?? 0) + n))
   }
@@ -428,6 +527,42 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
         return
       }
       if ('command' in shaped) { command(shaped.command.id, shaped.command.source); return }
+      if ('quotaPrompt' in shaped) {
+        const { entry, action } = shaped.quotaPrompt
+        const rec = quotaPrompts.get(entry) ?? {}
+        bump(rec, action)
+        quotaPrompts.set(entry, rec)
+        return
+      }
+      if ('modelCount' in shaped) {
+        const { key, modelId, providerKind } = shaped.modelCount
+        const k = `${providerKind}\n${modelId}`
+        const rec = modelCounts.get(k)
+        if (!rec && modelCounts.size >= MODEL_PAIR_CAP) return
+        const next = rec ?? {}
+        bump(next, key)
+        modelCounts.set(k, next)
+        return
+      }
+      if ('inventory' in shaped) {
+        // 一天一份,不进启动缓冲:渲染层只在 Extend 报 active 之后才报,这时还没有订阅者 = Extend 没接上,这份丢掉(明天 / 下次启动再报)
+        const day = new Date(now()).toISOString().slice(0, 10)
+        if (inventoryDay === day) return
+        if (buffer) { o.log?.('[telemetry] plugin_inventory dropped: no subscriber yet'); return }
+        inventoryDay = day
+        if (shaped.truncated) o.log?.(`[telemetry] plugin_inventory truncated: ${shaped.truncated} item(s) over ${INVENTORY_CAP}`)
+        let capped = 0
+        for (const props of shaped.inventory) {
+          if ((sent.plugin_inventory ?? 0) >= HOURLY_CAP.plugin_inventory) { capped++; continue }
+          emit('plugin_inventory', { day, ...props })
+        }
+        if (capped) o.log?.(`[telemetry] plugin_inventory hourly cap: ${capped} item(s) dropped`)
+        return
+      }
+      if (shaped.event === 'first_run') {
+        if (firstRunSent) return
+        firstRunSent = true
+      }
       const id = shaped.props.id
       if (shaped.event === 'plugin_load' && id !== 'local') {
         if (loadedOnce.has(String(id))) return
@@ -447,8 +582,16 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
         const i = k.indexOf('\n')
         emit('command_use', { id: k.slice(i + 1), source: k.slice(0, i), n })
       }
+      // v3:每个入口一条 quota_prompt、每个模型一条 model_feedback(只带非零的计数字段)
+      for (const [entry, rec] of quotaPrompts) emit('quota_prompt', { entry, ...rec })
+      for (const [k, rec] of modelCounts) {
+        const i = k.indexOf('\n')
+        emit('model_feedback', { modelId: k.slice(i + 1), providerKind: k.slice(0, i), ...rec })
+      }
       counts = new Map()
       commands = new Map()
+      quotaPrompts = new Map()
+      modelCounts = new Map()
     },
     /** 每小时一次:读走本小时的长任务数并清零,同时重置每小时的事件上限。 */
     takeHour(): { longTasks: number } {

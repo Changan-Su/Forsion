@@ -22,6 +22,7 @@ import {
   HumanCalendarConflictError,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
+import { withRetryAfter } from '../../llm/retry.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
 import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
@@ -130,10 +131,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     const body = bytes > 512 * 1024 ? `,body ${(bytes / 1024 / 1024).toFixed(1)}MB` : '';
     if (e?.name === 'TimeoutError') {
       const secs = Math.round(Math.max(sizedTimeoutMs(bytes), floorMs) / 1000);
-      return new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`);
+      // 本地计时器判的超时(不是云端回的 504):标 localTransport,重试链按本地传输中断处理
+      return Object.assign(new LlmError(504, `云端 ${path} 超时(${secs}s${body}):请求未在时限内完成，可能发生在上传、云端处理或下载阶段`), { localTransport: true });
     }
     if (e instanceof LlmError) return e;
-    return new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`);
+    // 原错留在 cause 上:重试链据它的 code(ENOTFOUND / ENETUNREACH …)认出「本机断网」进入等网络(llm/netWait.ts)
+    return Object.assign(new LlmError(0, `云端 ${path} 连接失败(${e?.message || e}${body}):检查本机网络与 ${base} 的连通性`), { cause: e });
   };
   const toB64 = (c: Buffer | string): string =>
     (Buffer.isBuffer(c) ? c : Buffer.from(String(c), 'utf-8')).toString('base64');
@@ -283,7 +286,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         const detail = await r.text().catch(() => '');
         const special = rejectAs?.(r.status, detail);
         if (special) throw special;
-        throw new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail));
+        throw withRetryAfter(new LlmError(r.status || 502, friendlyUpstreamError(r.status, detail)), r.headers);
       }
 
       const result: StreamResult = {
@@ -405,6 +408,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
     assets: {
+      getSkillPackage: async (_userId, id) => getJson(`/api/brain/skills/${encodeURIComponent(id)}/package`),
       getSkill: async (id: string) => getJson<any>(`/api/brain/skills/${encodeURIComponent(id)}`),
       listCustomTools: async (filter) =>
         getJson<any[]>(`/api/brain/custom-tools?appId=${encodeURIComponent(filter?.appId || '')}&visibleOnly=${filter?.visibleOnly ? 'true' : 'false'}`),
@@ -439,8 +443,10 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       },
     },
     search: {
-      runSearch: async (query: string, maxResults: number) =>
-        postJson('/api/brain/search', { query, maxResults }),
+      runSearch: async (query, maxResults, context) => postJson('/api/brain/search', {
+        query, maxResults, modelId: context?.modelId, appId: context?.appId,
+        client: context?.client,
+      }, context?.signal, 60000),
     },
     models: {
       // 列出云端 admin 配的可用模型(供 TUI 的 /model 浏览);失败降级空列表(不阻断)。

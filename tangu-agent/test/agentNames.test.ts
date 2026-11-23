@@ -135,6 +135,9 @@ describe('本地迁移(旧安装升级)', () => {
     write('aria', `# 我的笔记\n${toml('小雅', 'future_key = "keep me"\n')}`);
     write('recita', toml('Recita'));
     write('coding', toml('码农', 'version = "1.0.0"\n'));
+    // 11-20 起升版本只换「没改过」的指令(builtinBaseline.ts):给一份基线说明 'p' 就是 1.0.0 的出厂文本,
+    // 这样走的是「换新」那条路 —— 本用例钉的是换新时名字(用户改成「码农」)不跟着被换掉。
+    writeFileSync(path.join(home, 'agents', 'coding', '.builtin-baseline.json'), JSON.stringify({ format: 1, systemPrompt: { text: 'p', version: '1.0.0' } }));
     write('broken', 'approval_mode = readonly\nname = "坏"\n');
     write('emptykey', `name_zh = ""\n${toml('Helper')}`);
     write('helper', toml('Helper'));

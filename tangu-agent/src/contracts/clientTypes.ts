@@ -7,6 +7,8 @@
  * 宿主照旧从 types.ts 取(那边转出),Tangu 界面直接从这里取。
  */
 
+import type { SendMessageAction } from './automationMessage.js'
+
 /** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14)。 */
 export type TargetRef = { kind: 'home' } | { kind: 'unit'; unitId: string }
 
@@ -151,6 +153,12 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
   return !s.location || s.location.kind === 'home'
 }
 
+/** Muse 待办的一条依据(add_muse_todo 必填 1–3 条,存在 muse_todos.evidence,GET /agent/special/muse/todos/:id 回)。
+ *  kind 只管卡上的图标,认不出的引擎落成 'other';source / quote 是模型写的纯文本,按文本渲染。 */
+export const MUSE_TODO_EVIDENCE_KINDS = ['chat', 'file', 'calendar', 'activity', 'rule', 'web', 'other'] as const
+export type MuseTodoEvidenceKind = (typeof MUSE_TODO_EVIDENCE_KINDS)[number]
+export interface MuseTodoEvidence { kind: MuseTodoEvidenceKind; source: string; quote: string }
+
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
 export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule' | 'rule-observed'
@@ -206,6 +214,7 @@ export type AutomationActionSpec =
   /** 直接提醒:系统通知 + Muse 私聊一行,不叫模型。 */
   | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
+  | SendMessageAction
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} / {{= 算术 }} 模板)。
    *  db_row_add.skipIfEmpty = cells 里的一个键:该值展开后为空 → 本步跳过(记 skipped,不算失败)。
@@ -363,6 +372,24 @@ export interface NormalAgentDef {
 }
 
 /** GET /agent/stand-ins、/agent/agents/:slug/stand-ins 的一行。 */
+/** 内置 Agent(Coding / Muse)的指令有新版本、而用户改过(引擎 agents/builtinBaseline.ts):配置页上方「内置指令改了什么」。 */
+export interface BuiltinUpdateField {
+  field: 'systemPrompt' | 'soul'
+  /** 用户现在的文本。 */
+  current: string
+  newDefault: string
+  /** 用户当初是在哪份默认上改的;null = 这台设备没记下(老用户),界面改比「你的版本 vs 新默认」。 */
+  oldDefault: string | null
+  fromVersion?: string
+}
+export interface BuiltinUpdate {
+  slug: string
+  toVersion?: string
+  fields: BuiltinUpdateField[]
+  /** 「保留 / 换新」要带回去的凭据(用户看到的那份现状);对不上引擎回 409。 */
+  token: string
+}
+
 export interface StandInInfo {
   slug: string
   name: string
@@ -515,6 +542,8 @@ export const sessionWorkspaceKey = (
 
 export interface MessageRecord {
   id: string
+  /** Same-timestamp order on a paged transcript. */
+  history_order?: number | string
   role: 'user' | 'model' | 'assistant' | string
   content: string | null
   reasoning: string | null
@@ -1151,6 +1180,8 @@ export interface UiMessage {
   truncated?: boolean
   /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
   lengthResumed?: boolean
+  /** Persisted tie-breaker within the same millisecond (SQLite rowid or PostgreSQL message id). */
+  historyOrder?: number | string
   timestamp: number
   /** 群聊模式:本条发言的发言人(Normal Agent slug;__host__=主持人)。缺省=普通单 agent 消息。 */
   agentId?: string

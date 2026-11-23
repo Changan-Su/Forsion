@@ -1,0 +1,62 @@
+/* 划线菜单管理表(设置 → 外观 →「大小、阅读与输入」,2026-11-21)。字号只用 --ui-font-* 角色;落点提示是实线(不画虚线框)。 */
+.selactions { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 2px; }
+.selactions-cap { display: flex; align-items: baseline; gap: 10px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.selactions-cap b { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
+.selactions-grid { display: flex; flex-direction: column; }
+.selactions-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1.6fr) minmax(0, 1fr) auto minmax(96px, auto);
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 4px;
+  border-bottom: var(--border-width, 1px) solid var(--border);
+  font-size: var(--ui-font-body, 13px);
+  color: var(--text);
+}
+.selactions-th { min-height: 28px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.selactions-row.dragging { opacity: 0.45; }
+.selactions-row.drop-before::before,
+.selactions-row.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.selactions-row.drop-before::before { top: -1px; }
+.selactions-row.drop-after::after { bottom: -1px; }
+.selactions-grip {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+}
+.selactions-grip:hover { background: var(--overlay-light); color: var(--text); }
+.selactions-grip:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -2px; }
+.selactions-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.selactions-name > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selactions-ico { display: inline-grid; place-items: center; flex: 0 0 auto; width: 16px; color: var(--text-light, var(--text)); }
+.selactions-ico svg { width: 15px; height: 15px; }
+.selactions-ico-blank { display: inline-block; width: 15px; }
+.selactions-src { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.selactions-auto-col { justify-self: end; text-align: right; }
+.selactions-auto { display: inline-flex; align-items: center; gap: 8px; }
+.selactions-first { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.selactions-none { color: var(--text-muted); }
+.selactions-foot { margin: 2px 0 0; font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); color: var(--text-muted); }
+/* 窄设置窗:来源列收起(名字够用) */
+@media (max-width: 640px) {
+  .selactions-row { grid-template-columns: 24px minmax(0, 1fr) auto minmax(52px, auto); }
+  .selactions-src { display: none; }
+}

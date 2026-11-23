@@ -5,6 +5,7 @@ import { ArrowDown, CircleAlert, Folder, MessageCircleQuestion, MessageSquare, Q
 import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
 import type { FailedSend } from '../tangu/store/failedSend'
 import { trackChatReadReceipt } from './chat2/chatReadReceipt'
+import { setDraftField } from './chat2/composerDrafts'
 import { Composer2 } from './chat2/Composer2'
 import { chatReadingKey, readChatPosition, trackChatReading, type ChatReadingController } from './chat2/chatReadingPosition'
 import { agentEngineOf, agentEnginePlaceholder, agentEngineState, chatEngineOf } from '../tangu/agentEngine'
@@ -38,7 +39,7 @@ import { creationCardsSupported, useSessionCreation } from './chat2/CreationCard
 import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
 import { useMusePendingCards } from './chat2/MuseCards'
-import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
+import { APPROVAL_UPDATE_OPEN, BACKGROUND_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { isContinuationRow, type TurnResumeReason } from '../../../../tangu-agent/src/contracts/turnResume'
 import { turnHasOutput } from './chat2/continueTurn'
 import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill, SESSION_MESSAGE_OPEN } from './chat2/ChildSessions'
@@ -62,6 +63,7 @@ import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancelScrollToElement, SCROLL_TO_ELEMENT_EVENT, useViewModes, ViewHead, inSingleColumnShell, useWideLayout } from '@lcl/engine'
+import { useTranscriptWindow } from './chat2/useTranscriptWindow'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
@@ -83,6 +85,7 @@ import { useCodeStudio } from '../stores/codeStudioStore'
 import { projectName } from './coding/studioModel'
 import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
+import { llmRetryLine, llmRetryErrorTail } from './chat2/llmRetryLine'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
@@ -296,13 +299,20 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeMessages = s.activeMessages
   const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
-  // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
+  // 数据层的判断仍看活跃尾部。搜索和阅读位置按消息 id 加载附近的一页。
   const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
-  const restoringEarlierMessages = !!readingKey && readChatPosition(readingKey)?.follow === false
+  const savedReading = useMemo(() => readingKey ? readChatPosition(readingKey) : undefined, [readingKey])
+  const jumpId = s.jumpTarget?.sessionId === activeId ? s.jumpTarget?.messageId : undefined
+  const restore = useMemo(() => ({ done: false, id: !savedReading?.follow ? savedReading?.messageId?.replace(/^tocmsg-/, '') : undefined }), [readingKey, savedReading])
+  const restoreId = restore.done ? undefined : restore.id
+  const transcript = useTranscriptWindow(activeId, activeMessages, jumpId || restoreId, chatScrollRef, stickToBottom)
+  useEffect(() => {
+    if (jumpId || (!transcript.awaiting && !historyLoading)) restore.done = true
+  }, [restore, jumpId, transcript.awaiting, historyLoading])
   const singleColumnShell = inSingleColumnShell()
   const wideLayout = useWideLayout(singleColumnShell)
   const deferFirstBatch = singleColumnShell && !wideLayout
-  const shownMessages = useTailFirst(activeMessages, activeId || null, !restoringEarlierMessages && s.jumpTarget?.sessionId !== activeId, deferFirstBatch)
+  const shownMessages = useTailFirst(transcript.rows, activeId || null, !restoreId && !jumpId && !transcript.browsing, deferFirstBatch)
   const waitingForTail = deferFirstBatch && activeMessages.length > 0 && shownMessages.length === 0
   // 运行中发出、Agent 还没读到的插话:按下 Enter 就画进对话末尾(像 Codex / Claude 那样「发出去了」),不再挂在输入框上方排队。
   // 引擎读到时 turn_boundary 带回**同一个 id** 的用户消息,插在收尾那段之后 —— 和这里的位置一样,同 key 原地转正、不重挂。
@@ -338,14 +348,15 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 对话末尾的卡片堆(10-23 方案「待确认卡片」B):挡着 agent 的在前,还在等你选的任务卡垫底
   const taskHandledV = useTaskHandledVersion()
   // Muse 私聊里它提的待办:引擎确认还 pending 的才进卡片堆
-  const museTodoIds = useMemo(() => activeMessages.filter((m) => m.origin === 'proactive:todo').flatMap((m) => tasksOf(m).map((c) => c.todo || '')).filter(Boolean).join(','), [activeMessages])
+  const cardRows = transcript.cardRows
+  const museTodoIds = useMemo(() => cardRows.filter((m) => m.origin === 'proactive:todo').flatMap((m) => tasksOf(m).map((c) => c.todo || '')).filter(Boolean).join(','), [cardRows])
   const musePendingTodos = useMusePendingTodos(museTodoIds, taskHandledV)
-  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(activeMessages, activeId, Date.now(), musePendingTodos) : []), [activeMessages, activeId, taskHandledV, musePendingTodos])
+  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(cardRows, activeId, Date.now(), musePendingTodos) : []), [cardRows, activeId, taskHandledV, musePendingTodos])
   // 协作请求卡(Agent 改了协作说明)与作品卡也是交互卡片(10-23 用户定):没处理的进卡片堆,垫在任务卡后面
   const humanAckV = useHumanAckVersion()
-  const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(activeMessages) : []), [activeMessages, activeId, humanAckV])
+  const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(cardRows) : []), [cardRows, activeId, humanAckV])
   const sessionInCreation = useSessionCreation(activeId ?? undefined).inCreation
-  const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(activeMessages, activeId) : []), [activeMessages, activeId, taskHandledV, sessionInCreation])
+  const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(cardRows, activeId) : []), [cardRows, activeId, taskHandledV, sessionInCreation])
   // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
   const tailTodo = useMemo(() => {
     let last = true
@@ -427,7 +438,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !isContinuationRow(m.content) && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !isContinuationRow(m.content) && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(BACKGROUND_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x) && !isContinuationRow(x))]
   }, [activeMessages, s.steerSent])
@@ -494,7 +505,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 历史是异步拉的,早滚一次会落在错的位置;拉完仍找不到 = 命中落在更早的分页里,如实提示而不是假装跳了。
   useEffect(() => {
     const jt = s.jumpTarget
-    if (!jt || jt.sessionId !== activeId || historyLoading) return
+    if (!jt || jt.sessionId !== activeId || historyLoading || transcript.awaiting) return
     const el = [...(chatScrollRef.current?.querySelectorAll<HTMLElement>('[id^="tocmsg-"]') ?? [])].find(item => item.id === `tocmsg-${jt.messageId}`)
     if (!el) {
       if (activeMessages.length) { s.toast(t('search.jumpOutOfWindow'), true); s.clearJumpTarget() }
@@ -513,7 +524,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     } else flash()
     s.clearJumpTarget()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
+  }, [s.jumpTarget?.seq, activeId, historyLoading, transcript.awaiting, shownMessages])
 
   // 子会话药丸(2.2)点了:滚回那块子会话块、到位后闪两下(同搜索跳转的落点双闪,闪的是块本身不是整条消息)
   const jumpToChildBlock = useCallback((el: HTMLElement): void => {
@@ -544,10 +555,10 @@ export function ChatView({ leaf, params }: ViewProps) {
     const controller = trackChatReading(readingKey, root, stickToBottom, !!s.jumpTarget)
     readingPosition.current = controller
     setShowJump(!stickToBottom.current)
-    controller.restore(historyLoading)
+    controller.restore(historyLoading || transcript.awaiting)
     return () => { controller.dispose(); if (readingPosition.current === controller) readingPosition.current = null }
   }, [activeId, readingKey]) // eslint-disable-line react-hooks/exhaustive-deps
-  useLayoutEffect(() => { readingPosition.current?.restore(historyLoading || shownMessages.length < activeMessages.length) }, [activeMessages, historyLoading, shownMessages.length])
+  useLayoutEffect(() => { readingPosition.current?.restore(historyLoading || transcript.awaiting || shownMessages.length < transcript.rows.length) }, [shownMessages, historyLoading, transcript.awaiting, transcript.rows.length])
   useEffect(() => {
     const el = chatScrollRef.current
     const content = el?.querySelector('.t2-stream-inner')
@@ -566,9 +577,9 @@ export function ChatView({ leaf, params }: ViewProps) {
         if (top < previousTop) release()
         else if (top > previousTop) resumeOnDown = true
       }
-      if (atBottom && resumeOnDown) stickToBottom.current = true
+      if (atBottom && resumeOnDown && !el.querySelector('[data-history-newer]')) stickToBottom.current = true
       previousTop = top
-      setShowJump(!atBottom && !stickToBottom.current)
+      setShowJump((!atBottom || !!el.querySelector('[data-history-newer]')) && !stickToBottom.current)
     }
     const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) release(); else if (e.deltaY > 0) resumeOnDown = true }
     let touchY = 0
@@ -641,18 +652,31 @@ export function ChatView({ leaf, params }: ViewProps) {
   const ttsCfg = effectiveTtsConfig(s.desktopConfig, s.modelsResp, !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false)
   const ttsEnabled = !!ttsCfg?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
-    if (tts?.msgId === id) { stopSpeaking(); return }
+    if (tts?.key === id) { stopSpeaking(); return }
     speakMessage(homeTarget(), ttsCfg, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
   }
-  const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
-  const saveEdit = (text: string): void => { if (editingId && text.trim()) { s.editUserMessage(editingId, text.trim(), activeId) } setEditingId(null) }
+  const editSession = useRef<string | null>(null)
+  const startEdit = (id: string, content: string): void => {
+    editSession.current = activeId
+    setEditingId(id)
+    setEditText(content)
+  }
+  useEffect(() => {
+    if (!activeId || activeId !== editSession.current || !editingId || activeMessages.some(m => m.id === editingId)) return
+    // Rewound by another device while this editor was open. Keep its unsent text
+    // alongside the existing composer draft.
+    if (editText) setDraftField(activeId, 'text', previous => [previous, editText].filter(Boolean).join('\n\n'))
+    setEditingId(null)
+    s.toast(t('chat.history.editRecovered'))
+  }, [activeId, activeMessages, editingId, editText, s.toast, t])
+  const saveEdit = (text: string): void => { if (editingId && text.trim()) { s.editUserMessage(editingId, text.trim(), activeId); transcript.reset(); scrollToBottom() } setEditingId(null) }
 
   // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
   // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
-  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId })
-  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId } })
+  const handlerEnv = useRef({ s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId, transcript, scrollToBottom })
+  useLayoutEffect(() => { handlerEnv.current = { s, activeId, activeMessages, copy, speak, startEdit, activeSession, mvModelId, transcript, scrollToBottom } })
   const readOnly = !!params.readOnly
   const childSurface = !!params.childSurface
   const canInsertNote = amadeusAvailable()
@@ -663,22 +687,38 @@ export function ChatView({ leaf, params }: ViewProps) {
     const hit = handlerCache.get(id)
     if (hit) return hit
     const env = (): typeof handlerEnv.current => handlerEnv.current
+    const withHistory = async (action: () => void) => {
+      const sid = env().activeId
+      if (!sid) return
+      if (!env().activeMessages.some(m => m.id === id) && !await useApp.getState().ensureHistoryDepth(sid, id)) return
+      if (env().activeId === sid) action()
+    }
     const h: MessageHandlers = {
       onCopy: (text) => env().copy(text),
-      onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
+      onRegenerate: readOnly ? undefined : () => void withHistory(() => {
+        const e = env()
+        e.s.regenerate(id, e.activeId)
+        if (e.transcript.browsing) { e.transcript.reset(); e.scrollToBottom() }
+      }),
       onRetry: readOnly ? undefined : () => retryOnce(env().activeId),
       onContinue: readOnly ? undefined : (reason) => retryOnce(env().activeId, 'continue', reason),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
       // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
       onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
-      onEdit: readOnly ? undefined : () => env().startEdit(id, env().activeMessages.find((m) => m.id === id)?.content ?? ''),
-      onRewind: readOnly ? undefined : (mode) => void env().s.rewindTo(id, mode, env().activeId),
+      onEdit: readOnly ? undefined : () => void withHistory(() => env().startEdit(id, useApp.getState().messagesBySession[env().activeId!]?.find(m => m.id === id)?.content ?? '')),
+      onRewind: readOnly ? undefined : (mode) => void withHistory(async () => {
+        const e = env()
+        await e.s.rewindTo(id, mode, e.activeId)
+        if (e.activeId && env().activeId === e.activeId && !useApp.getState().messagesBySession[e.activeId]?.some(m => m.id === id)) {
+          e.transcript.reset(); e.scrollToBottom()
+        }
+      }),
       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
       onSuggest: readOnly ? undefined : (text) => void env().s.send(text, [], undefined, undefined, undefined, env().activeId),
       onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
       onJumpDeck: () => scrollToBottom(true),
       // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
-      onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
+      onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().transcript.rows, id)) : undefined,
       // 插件结果卡片的 call.quote:同划线「引用」,挂进这块输入框
       onQuote: (text) => { const sid = env().activeId ?? null; setQuoteDraft((prev) => quoteAdded(prev, sid, text)) },
       ...(ttsEnabled ? { onSpeak: (text: string) => env().speak(id, text) } : {}),
@@ -865,6 +905,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                 会话不算 —— 对齐原来的 `:has(> .t2-asst, > .t2-userwrap)`。
                 别改回 `:has(…)` 再接 `> :first-child`:那种写法让页面上**任何地方**插入 / 移除一个元素都把整段对话的样式重算一遍。 */}
             <div className="t2-stream-inner" data-has-messages={anyShown ? '' : undefined}>
+            {transcript.hasEarlier && !canvasOn && <button type="button" className="t2-history-page" onClick={transcript.earlier}>{t('chat.history.earlier')}</button>}
             {hasMessages && <ChildFromLine session={activeSession} />}
             {!hasMessages || waitingForTail ? (
               // 空状态本身不在流里(见下面 .t2-chat-col 直属的那份):流只占输入框以上,
@@ -906,7 +947,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     userAvatar={userAvatar}
                     fileCtx={fileCtx}
                     modelId={mvModelId}
-                    speakState={tts?.msgId === m.id ? tts.phase : undefined}
+                    speakState={tts?.key === m.id ? tts.phase : undefined}
                     voice={voice}
                     handlers={handlersFor(m.id)}
                     todoInTail={m.id === tailTodo?.id}
@@ -915,6 +956,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               })
             )}
             {/* 借 Comma:没发出去的那几条留在末尾,淡掉的气泡 + 原因 · 丢弃 · 重试(原因的原文在悬停提示里) */}
+            {transcript.hasNewer && !canvasOn && <button type="button" className="t2-history-page" data-history-newer onClick={transcript.newer}>{t('chat.history.newer')}</button>}
             {s.failedSends.map((f) => (
               <EditorialMessage
                 key={f.id}
@@ -937,8 +979,8 @@ export function ChatView({ leaf, params }: ViewProps) {
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
-                ⟳ {t('chat.llmRetrying', { s: (s.llmRetry.waitMs / 1000).toFixed(1), n: s.llmRetry.attempt, max: s.llmRetry.max || '?' })}
-                {s.llmRetry.error ? <span className="t2-retry-err">{s.llmRetry.error}</span> : null}
+                ⟳ {llmRetryLine(s.llmRetry, t)}
+                {llmRetryErrorTail(s.llmRetry) ? <span className="t2-retry-err">{llmRetryErrorTail(s.llmRetry)}</span> : null}
               </div>
             )}
             {s.compacting !== undefined && (
@@ -959,7 +1001,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             )}
             </div>
           </div>
-          <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => scrollToBottom(true)} />
+          <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => { transcript.reset(); scrollToBottom(true) }} />
           {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
@@ -1178,7 +1220,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           costLimit={activeUsage.costLimit}
           onCompact={(focus) => void s.compact(activeId, focus)}
           seedText={s.steerRestore ?? (params.childSurface ? null : s.pendingDraft)}
-          seedShare={params.childSurface || leaf.type === 'chat-panel' ? null : s.pendingShare}
+          seedShare={params.childSurface || leaf.type === 'chat-panel' || (s.pendingShare?.sessionId && s.pendingShare.sessionId !== activeId) ? null : s.pendingShare}
           takeSeedShare={s.takePendingShare}
           appendRefs={params.childSurface ? null : s.draftRefs}
           onAppendRefsConsumed={s.clearDraftRefs}

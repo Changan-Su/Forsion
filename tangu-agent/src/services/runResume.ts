@@ -189,8 +189,8 @@ export function newerStatements(run: ResumeRun): Array<SqlStmt & { kind: 'newer_
   ];
 }
 
-/** 机器写的 user 行的开头(续跑 / 中断说明 / 审批与提问的回灌,同 isContinuationRow 再加两种回灌):不算「用户又说了新话」。 */
-const MACHINE_PREFIXES = ['<turn_resume>', '<turn_interrupted>', '<approval_update>', '<inquiry_update>'];
+/** 机器写的 user 行的开头(续跑 / 中断说明 / 审批与提问的回灌 / 后台命令结局,同 isContinuationRow 再加三种回灌):不算「用户又说了新话」。 */
+const MACHINE_PREFIXES = ['<turn_resume>', '<turn_interrupted>', '<approval_update>', '<inquiry_update>', '<background_update>'];
 
 /** 续跑沿用旧 run 那一份输入(同一个 Agent / 模型 / 审批档 / 计划模式 / 托盘握手 / cwd / 远程污点…),只换消息与续跑标记;
  *  附件、一次性的语音提示与「这一轮改用后备」不带。审批档只会更窄:没有上限的,按旧 run 启动时的档设上限。 */

@@ -8,12 +8,13 @@
  * 混进目录与 system prompt 被 use_skill 直接调用。改由「设置 → Agent CLIs」逐个显式导入
  * (整夹复制进 ~/.tangu/skills/),导入后才以 `local:` 出现。见 engines/assets.ts。
  */
+import { firstLink, isMultiAccount, perAccount } from '../core/accountScope.js';
 import { promises as fs, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
-import { bundleSkillRoots } from '../plugins/bundles.js';
+import { bundleSkillRoots, skipLinks } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd, currentStandIn } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { pathWithin } from '../sandbox/hostSandboxProtection.js';
@@ -154,14 +155,17 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
   const skills: SkillRecord[] = [];
   let entries;
   try {
+    // 多账号模式:技能目录本身是软链就当空(不跟链读到账号文件夹之外)
+    if (isMultiAccount() && firstLink(dir)) throw new Error('linked skills folder');
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
     cache.set(dir, { stamp, skills });
     return skills;
   }
   for (const e of entries) {
-    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue;
+    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue; // 软链条目的 Dirent 不是目录,本来就跳过
     const file = path.join(dir, e.name, 'SKILL.md');
+    if (isMultiAccount() && firstLink(file)) continue; // 多账号模式:SKILL.md 是软链 → 跳过
     let raw: string;
     try {
       raw = await fs.readFile(file, 'utf-8');
@@ -174,7 +178,8 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
   return skills;
 }
 
-let seeding: Promise<SeedReport> | null = null;
+// 多账号模式每个账号各播一次(core/accountScope.ts);单人模式一个槽,行为不变。
+const seedingSlot = perAccount((): { p: Promise<SeedReport> | null } => ({ p: null }));
 
 /**
  * 播种指纹:**与被描述的东西同住**——写在技能目录里的 `.seed-stamp`,内容 = 我们写下去时**整棵目录树**的哈希。
@@ -257,7 +262,8 @@ async function replaceDir(srcDir: string, destDir: string, stamp: string): Promi
   const trash = `${destDir}.seed-old-${process.pid}`;
   try {
     await fs.rm(staging, { recursive: true, force: true });
-    await fs.cp(srcDir, staging, { recursive: true });
+    // 多账号模式:播种进账号文件夹时不复制软链条目
+    await fs.cp(srcDir, staging, isMultiAccount() ? { recursive: true, filter: skipLinks } : { recursive: true });
     await fs.writeFile(path.join(staging, SEED_STAMP), stamp, 'utf8');
     let hadOld = false;
     try {
@@ -357,13 +363,14 @@ export async function seedSkillsInto(srcDir: string, destRoot: string): Promise<
 export async function seedBuiltinSkills(): Promise<SeedReport> {
   // ⚠️共享 Promise,不是布尔闩:布尔闩的语义其实是「后来的调用**不等**第一次跑完」——并发首调会去扫
   // 一个正在被写的目录,读到半个技能;而且第一次抛错后闩仍为 true,本进程永不重试(codex)。
-  if (!seeding) {
-    seeding = seedSkillsInto(builtinSkillsDir(), userSkillsDir()).catch((e) => {
-      seeding = null; // 失败允许下次重试
+  const slot = seedingSlot();
+  if (!slot.p) {
+    slot.p = seedSkillsInto(builtinSkillsDir(), userSkillsDir()).catch((e) => {
+      slot.p = null; // 失败允许下次重试
       throw e;
     });
   }
-  const r = await seeding;
+  const r = await slot.p;
   // 有新版却被保护住的,说出来 —— 静默停更就是这次事故的成因(用户看不到内置技能已经修好了)。
   if (r.protectedStale.length) {
     console.warn(

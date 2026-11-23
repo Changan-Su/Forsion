@@ -24,6 +24,13 @@
  *      DSH 跑的对话右栏「详情 / 文件 / 大纲」后面多一页 DSH(前台不动)→ 点开是 DSH 的文件页 → 在它自己那排页签里开插件页
  *      → 换到 Tangu 的新对话这页就关 → 回到 DSH 那场它回来、前台不抢,点开还是刚才那页插件页 → 选了 DSH Agent 还没发的新对话:说明。
  *
+ *   ⑨(--discover,DSH 自带的「发现」= 自定义插件索引)从 Harness 卡打开工作台 → DSH 插件页里打开「自定义插件索引」(只往
+ *      forsion 组合加一行,不过装插件闸)→ Harness 卡「重启 DSH」→ 插件页多出「发现」→ 加本地测试索引(假模型服务的
+ *      /market/index.json,只列 dsh-genui@0.3.3)→ 安装 → DSH 自己的确认框(软件包必须是 dsh-genui@0.3.3,否则取消并判失败)
+ *      → Forsion 的体检卡 → 「装」→「立即启用」→ 再重启 → 装上的和索引源都还在,Harness 卡「DSH 插件」1 个,Forsion 里的对话用上 genui。
+ *      加 --dshgo 时最后再加 DSH Go 的线上索引(go.dshtui.com),只点到 DSH 的确认框就取消,一个包都不装。
+ *      ⚠️ 体检会带着包启动一次 DSH:第三方代码在体检时就跑了,不是点「装」之后。别把这里的包换成没征得同意的。
+ *
  * 假模型:常驻 DSH 由插件起、环境走白名单(不带 provider key),所以地址和 key 写进隔离 DSH 目录的 .env —— 和用户自己配 DSH 是同一层。
  *
  * 用法:先 npm run build(桌面)+ tangu-agent 的 npm run build + DSH2Forsion 的 npm run build;
@@ -44,12 +51,14 @@ const ROOT = path.resolve(__dirname, '..')
 const argv = process.argv.slice(2)
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : '' }
 const PLUGIN = opt('plugin'), RUNTIME = opt('runtime'), ROOT_ARG = opt('root'), HOLD = argv.includes('--hold')
-const MODE = argv.includes('--approvals-fallback') ? 'fallback' : argv.includes('--approvals') ? 'approvals' : 'full'
+const MODE = argv.includes('--discover') ? 'discover' : argv.includes('--approvals-fallback') ? 'fallback' : argv.includes('--approvals') ? 'approvals' : 'full'
+const DSHGO = argv.includes('--dshgo')
 const RAIL = argv.includes('--rail')
 const RAIL_FIXTURE = opt('rail-fixture') || path.join(PLUGIN || '.', '..', 'tests', 'fixtures', 'rail-page')
 const RAIL_TYPE = 'plugin:dsh2forsion:rail'
 const RENAMED_EVENT = 'approval/request-renamed-by-e2e'
 if (!PLUGIN || !RUNTIME || !ROOT_ARG) { console.error('用法见文件头'); process.exit(2) }
+if (MODE === 'discover' && RAIL) { console.error('--discover 不和 --rail 一起跑(⑨ 只装同意过的 dsh-genui@0.3.3)'); process.exit(2) }
 for (const f of ['out/main/main.js', '../tangu-agent/dist/standalone/main.js']) if (!fs.existsSync(path.join(ROOT, f))) { console.error(`缺 ${f} —— 先 build`); process.exit(2) }
 if (!fs.existsSync(path.join(PLUGIN, 'tangu-plugins/dsh2forsion/dist/index.js'))) { console.error('--plugin 要指向 DSH2Forsion 构建好的 plugin/'); process.exit(2) }
 fs.mkdirSync(ROOT_ARG, { recursive: true })
@@ -125,6 +134,7 @@ const server = http.createServer((req, res) => {
       const chunk = (delta, finish = null, extra = {}) => res.write(`data: ${JSON.stringify({ ...base, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }], ...extra })}\n\n`)
       chunk({ role: 'assistant', content: 'OK' }); chunk({}, 'stop', { usage }); res.write('data: [DONE]\n\n'); return res.end()
     }
+    if (req.method === 'GET' && p === '/market/index.json') return json(DISCOVER_INDEX)
     if (!(req.method === 'POST' && /\/messages$/.test(p))) { res.writeHead(404, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { message: `stub: no such route ${p}` } })) }
     const withTools = Array.isArray(body?.tools) && body.tools.length > 0
     if (withTools) stub.calls++
@@ -536,6 +546,255 @@ async function railWalk(app, win) {
   await dshTitle.click(); await sleep(1500)
 }
 
+// ⑨ DSH 自带的「发现」。本地测试索引照 DSH 参考生成器的规矩写(manifest 没有 engines.dsh 时取 @deepseek-ai/dsh-* peer 范围的合取)
+const DISCOVER_INDEX = {
+  format: 1,
+  title: { en: 'Probe index', zh: '探针索引' },
+  plugins: [{
+    name: 'dsh-genui', title: 'GenUI', author: 'probe',
+    description: { en: 'Local probe entry (the package the fusion e2e installs)', zh: '本地测试条目(融合台架装的同一个包)' },
+    'dist-tags': { latest: '0.3.3' },
+    versions: [{ version: '0.3.3', publishTimestamp: Math.floor(Date.parse('2026-11-06T06:29:02.830Z') / 1000), source: { type: 'npm' }, engines: { dsh: '>=0.0.1-rc.1 <0.1.0 || >=0.1.0-rc.1 <0.3.0-0' } }],
+  }],
+}
+const DSHGO_INDEX = 'https://go.dshtui.com/market/index.json'
+const MARKET_BUNDLE = '@deepseek-ai/dsh-experimental-plugin-market-bundle'
+const VIS = `(e) => !!e && e.getClientRects().length > 0 && e.getBoundingClientRect().width > 0`
+async function guestMouse(app, p) {
+  await app.evaluate(({ webContents, session }, p) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()) && w.session !== session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
+    if (!wc) return
+    wc.sendInputEvent({ type: 'mouseMove', x: p.x, y: p.y })
+    wc.sendInputEvent({ type: 'mouseDown', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+    wc.sendInputEvent({ type: 'mouseUp', x: p.x, y: p.y, button: 'left', clickCount: 1 })
+  }, p)
+}
+/** pick = 网页里跑的 `(vis) => 元素` 源码。滚到视野里,用真实鼠标事件点中心;找不到回 null。 */
+async function guestPick(app, pick, click = true) {
+  const pt = (await guestEval(app, `(() => { const vis = ${VIS}; const e = (${pick})(vis); if (!e) return null; e.scrollIntoView({ block: 'center' }); const b = e.getBoundingClientRect(); return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2), tag: e.tagName, label: (e.getAttribute('aria-label') || e.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 60), state: e.getAttribute('aria-checked') ?? e.getAttribute('aria-pressed') ?? (e.type === 'checkbox' ? String(e.checked) : null) } })()`)).value
+  if (pt && click) { await sleep(250); await guestMouse(app, pt) }
+  return pt || null
+}
+/** 按文字(或 aria-label / title)找可见的按钮;within = 只在含这段文字的最近容器里找。取最后一个(弹出的对话框在后面)。 */
+const buttonPick = (re, within = null) => `(vis) => {
+  const re = ${re}; const hit = (b) => [(b.textContent || '').trim(), b.getAttribute('aria-label') || '', b.getAttribute('title') || ''].some((s) => s && re.test(s))
+  let scope = document
+  if (${within ? 'true' : 'false'}) { const t = [...document.querySelectorAll('body *')].filter((e) => ${within}.test((e.textContent || '').trim()) && vis(e)).pop(); scope = t?.closest('[role=dialog], [role=alertdialog], dialog') || t?.parentElement?.parentElement || null; if (!scope) return null }
+  return [...scope.querySelectorAll('button, [role=button], [role=tab], [role=menuitem], [role=option]')].filter((b) => vis(b) && hit(b)).pop() || null
+}`
+const guestButtons = async (app) => (await guestEval(app, `[...document.querySelectorAll('button, [role=button], [role=switch], [role=tab], input[type=checkbox]')].filter(${VIS}).map((e) => (e.textContent || e.getAttribute('aria-label') || e.getAttribute('title') || e.tagName).trim().replace(/\\s+/g, ' ').slice(0, 28)).filter(Boolean).slice(-50).join(' · ')`)).value || ''
+async function guestInsert(app, inputPick, text) {
+  const ok = (await guestEval(app, `(() => { const vis = ${VIS}; const e = (${inputPick})(vis); if (!e) return false; e.focus(); return document.activeElement === e })()`)).value
+  if (!ok) return false
+  await app.evaluate(({ webContents, session }, t) => {
+    const wc = webContents.getAllWebContents().find((w) => w.getType() === 'webview' && /^http:\/\/127\.0\.0\.1:\d+\//.test(w.getURL()) && w.session !== session.fromPartition('persist:plugin-surface-dsh2forsion-rail'))
+    wc?.focus(); wc?.insertText(t)
+  }, text)
+  return true
+}
+const d2fCall = (win, p, method = 'GET') => win.evaluate(async ({ p, method }) => {
+  const c = await window.tangu.getConfig()
+  const r = await fetch(`${c.backendUrl}/extensions/dsh2forsion/dsh2forsion${p}`, { method, headers: { Authorization: `Bearer ${c.token}`, 'content-type': 'application/json' }, ...(method === 'POST' ? { body: '{}' } : {}) })
+  return { status: r.status, body: await r.json().catch(() => null) }
+}, { p, method }).catch((e) => ({ status: 0, body: String(e?.message ?? e).slice(0, 200) }))
+const profileBundles = () => { try { return JSON.parse(fs.readFileSync(path.join(R, 'dsh/profiles/forsion/package.json'), 'utf8'))?.dsh?.profile?.bundles ?? [] } catch { return null } }
+const residentPid = () => dshProcs().filter((l) => l.includes('--profile forsion')).map((l) => l.split(' ')[0]).join(',')
+const guestPort = async (app) => (await guestEval(app, 'location.port')).value || ''
+async function openWorkbenchFromCard(app, win) {
+  await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
+  await pluginRow(win, 'runtime').locator('button', { hasText: '打开工作台' }).first().click()
+  const up = await until(async () => (await win.locator('[data-d2f="workbench"] webview').count()) > 0 && (await guestEval(app, 'document.readyState')).value === 'complete', 30_000, 500)
+  const notice = await until(async () => (await guestEval(app, `(() => { const b = [...document.querySelectorAll('button')].find((e) => /^(继续|Continue)$/.test((e.textContent || '').trim())); b?.click(); return !!b })()`)).value, 5_000, 500)
+  if (notice) await sleep(800)
+  return !!up
+}
+async function restartFromCard(win) {
+  const oldPid = residentPid()
+  await openAgents(win); await rosterRow(win, AGENT).click(); await sleep(1500)
+  await pluginRow(win, 'runtime').locator('button', { hasText: '重启 DSH' }).first().click()
+  const pid = await until(async () => { const p = residentPid(); return p && p !== oldPid && !p.includes(',') && /在运行/.test(await pluginRow(win, 'runtime').innerText().catch(() => '')) ? p : null }, 90_000, 1000)
+  return { oldPid, pid }
+}
+async function toGuestPluginPage(app) {
+  const nav = await guestClickText(app, '/^(插件|Plugins)$/')
+  const t = await until(async () => { const s = (await guestEval(app, 'document.body.innerText')).value || ''; return /实验性插件|Experimental plugins|已安装|Installed/.test(s) ? s : null }, 20_000, 500)
+  return { nav, text: t || '' }
+}
+const reviewText = (win) => win.locator('[data-d2f="review"]').first().innerText().catch(() => '')
+
+async function discoverWalk(app, win, guestLogs) {
+  const T = '⑨'
+  const card = win.locator('[data-d2f="review"]').first()
+  // ⑨-1 从 Harness 卡打开工作台,在 DSH 自己的插件页打开「自定义插件索引」
+  check(`${T} 从 Harness 卡「打开工作台」进 DSH 工作台`, await openWorkbenchFromCard(app, win), (await guestLogs()).slice(-4).join(' | '))
+  const page = await toGuestPluginPage(app)
+  check(`${T} 工作台里点「插件」到 DSH 自己的插件页`, !!page.text, page.nav ? '' : `没找到「插件」入口;按钮 ${await guestButtons(app)}`)
+  const togglePick = `(vis) => {
+    const title = [...document.querySelectorAll('body *')].filter((e) => /^(自定义插件索引|Custom plugin indexes)$/.test((e.textContent || '').trim()) && vis(e)).pop()
+    let row = title
+    for (let i = 0; row && i < 8; i++, row = row.parentElement) {
+      const sw = [...row.querySelectorAll('[role=switch], input[type=checkbox], button[aria-checked], button[aria-pressed]')].filter(vis)
+      if (sw.length === 1) return sw[0]
+      if (sw.length > 1) return null
+    }
+    return null
+  }`
+  let sw = await guestPick(app, togglePick, false)
+  if (!sw) { await guestPick(app, buttonPick('/^(实验性插件|Experimental plugins)/')); await sleep(800); sw = await guestPick(app, togglePick, false) }
+  await shot(win, '50-discover-toggle-before')
+  check(`${T} 插件页里有「自定义插件索引」的开关,缺省关`, !!sw && sw.state === 'false', sw ? JSON.stringify(sw) : `没找到;按钮 ${await guestButtons(app)}`)
+  if (!sw) return
+  const bundlesBefore = profileBundles()
+  await guestPick(app, togglePick)
+  const notice = await until(async () => /请重启 DSH 使更改生效|Restart DSH to apply the change/.test((await guestEval(app, 'document.body.innerText')).value || ''), 15_000, 500)
+  // 开关等写完组合文件才翻过来(提示比它先出):等它翻
+  const swAfter = await until(async () => { const s = await guestPick(app, togglePick, false); return s?.state === 'true' ? s : null }, 10_000, 400) || await guestPick(app, togglePick, false)
+  const added = await until(() => (profileBundles() || []).includes(MARKET_BUNDLE), 15_000, 500)
+  await sleep(3000) // 给装插件闸留时间:它要是拦了,体检卡这时该出来了
+  const rev = await d2fCall(win, '/reviews')
+  const cardNow = await reviewText(win)
+  await shot(win, '51-discover-toggled')
+  check(`${T} 打开开关:DSH 提示重启生效,开关变成开`, !!notice && swAfter?.state === 'true', JSON.stringify(swAfter))
+  check(`${T} 打开开关只往 forsion 组合加了一行实验包(之前没有)`, !!added && Array.isArray(bundlesBefore) && !bundlesBefore.includes(MARKET_BUNDLE), JSON.stringify(profileBundles()))
+  check(`${T} 打开开关不过装插件闸:没有体检卡,引擎半身的待审为空`, !/体检|要装/.test(cardNow) && rev.status === 200 && Array.isArray(rev.body?.reviews) && rev.body.reviews.length === 0, `卡片「${cardNow.slice(0, 80)}」;/reviews ${rev.status} ${JSON.stringify(rev.body).slice(0, 160)}`)
+
+  // ⑨-2 Harness 卡「重启 DSH」;记下已经开着的工作台页签怎么样了(端口会换)
+  const portBefore = await guestPort(app)
+  await guestLogs()
+  const r1 = await restartFromCard(win)
+  check(`${T} Harness 卡「重启 DSH」:换成新的一个常驻进程`, !!r1.pid, `${r1.oldPid} → ${residentPid()}`)
+  await sleep(5000)
+  const navs = (await guestLogs()).filter((l) => /navigate/.test(l))
+  const portStale = await guestPort(app)
+  console.log(`   ${T} 重启后原来那个工作台页签:端口 ${portBefore} → ${portStale || '(没有页面)'};这期间的导航 ${navs.length ? navs.join(' | ') : '无'}`.replace(/token=[^&#\s]+/g, 'token=<redacted>'))
+  check(`${T} 重启后从 Harness 卡再「打开工作台」:落到新进程的网页`, await openWorkbenchFromCard(app, win) && !!(await guestPort(app)) && (await guestPort(app)) !== portBefore, `端口 ${portBefore} → ${await guestPort(app)}`)
+
+  // ⑨-3 插件页多出「发现」;加本地测试索引
+  const page2 = await toGuestPluginPage(app)
+  const discoverTab = await guestPick(app, buttonPick('/^(发现|Discover)$/'))
+  const empty = await until(async () => /添加索引源|Add index source/.test((await guestEval(app, 'document.body.innerText')).value || ''), 15_000, 500)
+  await shot(win, '52-discover-empty')
+  check(`${T} 重启后插件页多出「发现」页签,点开是空的、让你加索引源`, !!page2.text && !!discoverTab && !!empty, discoverTab ? '' : `按钮 ${await guestButtons(app)}`)
+  if (!discoverTab || !empty) return
+  await guestPick(app, buttonPick('/^(添加索引源|Add index source)$/'))
+  const inputPick = `(vis) => [...document.querySelectorAll('input')].filter((e) => vis(e) && (e.placeholder === 'https://example.com/index.json' || e.type === 'url')).pop() || null`
+  await until(async () => !!(await guestPick(app, inputPick, false)), 8_000, 400)
+  const typed = await guestInsert(app, inputPick, `${STUB}/market/index.json`)
+  await sleep(500)
+  const addBtn = await guestPick(app, buttonPick('/^(添加|Add)$/', '/^(索引源|Index sources)$/')) || await guestPick(app, buttonPick('/^(添加|Add)$/'))
+  const listed = await until(async () => { const s = (await guestEval(app, 'document.body.innerText')).value || ''; return /GenUI/.test(s) && /探针索引|Probe index/.test(s) ? s : null }, 20_000, 600)
+  await shot(win, '53-discover-source-added')
+  if (listed) { const close = await guestPick(app, buttonPick('/^(关闭|Close)$/'), false); if (close && /索引源|Index sources/.test((await guestEval(app, 'document.body.innerText')).value || '')) { await guestMouse(app, close); await sleep(600) } }
+  check(`${T} 加本地测试索引:读进来,列出 GenUI`, !!typed && !!addBtn && !!listed, `${typed ? '' : '没找到地址输入框;'}${addBtn ? '' : '没找到「添加」;'}按钮 ${listed ? '' : await guestButtons(app)}`)
+  if (!listed) return
+
+  // ⑨-4 安装:DSH 自己的确认框(软件包必须是 dsh-genui@0.3.3)→ Forsion 的体检卡 → 装 →「立即启用」
+  const installPick = `(vis) => {
+    const btns = [...document.querySelectorAll('button')].filter(vis)
+    const byLabel = btns.find((b) => /^(安装|Install) GenUI/.test(b.getAttribute('aria-label') || b.getAttribute('title') || ''))
+    if (byLabel) return byLabel
+    return btns.filter((b) => /^(安装|Install)$/.test((b.textContent || '').trim())).find((b) => { for (let p = b.parentElement, i = 0; p && i < 6; p = p.parentElement, i++) { if (/GenUI/.test(p.textContent || '')) return [...p.querySelectorAll('button')].filter((x) => /^(安装|Install)$/.test((x.textContent || '').trim())).length === 1 } return false }) || null
+  }`
+  const inst = await guestPick(app, installPick)
+  const dialogPick = `(vis) => { const t = [...document.querySelectorAll('body *')].filter((e) => /^(安装「GenUI」？|Install "GenUI"\\?)$/.test((e.textContent || '').trim()) && vis(e)).pop(); if (!t) return null
+    for (let d = t, i = 0; d && i < 10; d = d.parentElement, i++) { const bs = [...d.querySelectorAll('button')].filter(vis).map((b) => (b.textContent || '').trim()); if (bs.some((x) => /^(取消|Cancel)$/.test(x)) && bs.some((x) => /^(安装|Install)$/.test(x))) return d }
+    return null }`
+  const dialogText = await until(async () => (await guestEval(app, `(() => { const vis = ${VIS}; const d = (${dialogPick})(vis); return d ? d.innerText : null })()`)).value, 10_000, 400)
+  await shot(win, '54-discover-dsh-confirm')
+  // 整词比对:dsh-genui@0.3.30、@x/dsh-genui@0.3.3 都不算
+  const pkgOk = !!dialogText && /(?:^|\s)dsh-genui@0\.3\.3(?:\s|$)/.test(dialogText)
+  check(`${T} 点「安装」:DSH 先弹自己的确认框,软件包是 dsh-genui@0.3.3,带信任提示`, !!inst && pkgOk && /以你的权限运行|with your permissions/.test(dialogText), (dialogText || `没弹;按钮 ${await guestButtons(app)}`).replace(/\s+/g, ' ').slice(0, 300))
+  if (!pkgOk) { // 不是同意过的那个包:取消,不往下装
+    await guestPick(app, `(vis) => [...document.querySelectorAll('button')].filter((b) => vis(b) && /^(取消|Cancel)$/.test((b.textContent || '').trim())).pop() || null`)
+    return
+  }
+  await guestPick(app, `(vis) => { const d = (${dialogPick})(vis); return d ? [...d.querySelectorAll('button')].filter((b) => vis(b) && /^(安装|Install)$/.test((b.textContent || '').trim())).pop() : null }`)
+  const checking = await until(async () => /正在体检/.test(await reviewText(win)), 30_000, 400)
+  await shot(win, '55-discover-review-checking')
+  check(`${T} 确认后被装插件闸停住:Forsion 的体检卡出来,正在体检`, !!checking, await reviewText(win) || (await guestLogs()).slice(-6).join(' | '))
+  const report = await until(async () => { const t = await reviewText(win); return /要装 dsh-genui/.test(t) ? t : null }, 240_000, 1000)
+  await shot(win, '56-discover-review-report')
+  check(`${T} 体检报告出来(要装 dsh-genui 0.3.3,写明提示词多了多少字)`, !!report && /dsh-genui 0\.3\.3/.test(report) && /提示词多了 \d+ 字/.test(report), report)
+  if (!report) return
+  // 卡片里不该有字面的 null(可选的几段没出现时被当成文字塞进去过:「nullnull」)
+  check(`${T} 体检卡里没有多余的「null」文字`, !/null/.test(report), report.replace(/\s+/g, ' ').slice(0, 300))
+  if (!/要装 dsh-genui 0\.3\.3 吗/.test(report)) { await card.locator('[data-act="review-deny"]').click(); return } // 不是同意过的那个版本:不装
+  await card.locator('[data-act="review-allow"]').click()
+  const done = await until(async () => { const s = (await guestEval(app, 'document.body.innerText')).value || ''; return /已安装，请重启 DSH 加载它|Installed; restart DSH to load it/.test(s) ? s : null }, 180_000, 1000)
+  const notEnabled = !(profileBundles() || []).includes('dsh-genui')
+  await shot(win, '57-discover-installed')
+  check(`${T} 放行后装上:DSH 说「已安装,请重启加载」,还没启用(组合 bundles 里没有它)`, !!done && notEnabled, JSON.stringify(profileBundles()))
+  const enable = await guestPick(app, buttonPick('/^(立即启用|Enable now)$/'))
+  const enabled = await until(() => (profileBundles() || []).includes('dsh-genui'), 15_000, 500)
+  await sleep(2000)
+  const rev2 = await d2fCall(win, '/reviews')
+  check(`${T} 点「立即启用」:组合 bundles 加上 dsh-genui,这一步不再体检`, !!enable && !!enabled && !/正在体检/.test(await reviewText(win)) && rev2.status === 200 && !(rev2.body?.reviews ?? []).some((r) => r.state === 'checking'), `${enable ? '' : '没找到「立即启用」;'}${JSON.stringify(profileBundles())}`)
+
+  // ⑨-5 再重启:装上的、开关、索引源都还在;Harness 卡「DSH 插件」1 个;Forsion 里的对话用上 genui
+  const r2 = await restartFromCard(win)
+  check(`${T} 再「重启 DSH」:新的一个常驻进程`, !!r2.pid, `${r2.oldPid} → ${residentPid()}`)
+  const count = await until(async () => { const t = await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''); return /(?:^|\D)1 个/.test(t) ? t : null }, 20_000, 800)
+  await shot(win, '58-discover-harness-count')
+  check(`${T} Harness 卡「DSH 插件」变成 1 个(实验包随 DSH 提供,不算)`, !!count, count || await pluginRow(win, 'dsh-plugins').innerText().catch(() => ''))
+  await openWorkbenchFromCard(app, win)
+  const page3 = await toGuestPluginPage(app)
+  await guestPick(app, buttonPick('/^(发现|Discover)$/'))
+  // 「已安装」要在 GenUI 那一行里(不是页签「已安装」)
+  const still = await until(async () => (await guestEval(app, `[...document.querySelectorAll('body *')].filter((e) => (e.textContent || '').trim() === 'GenUI').some((t) => { for (let p = t.parentElement, i = 0; p && i < 5; p = p.parentElement, i++) { const s = p.textContent || ''; if (/已安装|Installed/.test(s)) return !/发现|Discover/.test(s) } return false })`)).value, 20_000, 600)
+  const patch = (() => { try { return fs.readFileSync(path.join(R, 'dsh/profiles/forsion/cordis.patch.yml'), 'utf8') } catch { return '' } })()
+  await shot(win, '59-discover-after-restart')
+  check(`${T} 重启后「发现」里还列着这个索引,GenUI 标成已安装;索引源存在组合自己的 cordis.patch.yml`, !!page3.text && !!still && patch.includes('/market/index.json'), `patch 里${patch.includes('/market/index.json') ? '有' : '没有'}索引源`)
+  check(`${T} DSH 目录顶层的 cordis.patch.yml 没被写`, !fs.existsSync(path.join(R, 'dsh/cordis.patch.yml')) || !fs.readFileSync(path.join(R, 'dsh/cordis.patch.yml'), 'utf8').includes('market'))
+  await enterSpace(win, 'tangu'); await sleep(1000)
+  const before = stub.systems.length
+  await win.getByText('新会话', { exact: true }).first().click(); await sleep(1000)
+  // 走查开始前那张新会话草稿已经选过浣溪沙,回来时还是它:再点一次同一行会把它取消(落回缺省 Agent),所以只在不是它时选
+  const pickedName = async () => (await win.locator('.agent-select-strip .compact-chat-picker-name').first().innerText().catch(() => '')).trim()
+  if (!(await pickedName()).includes(AGENT)) {
+    await (await pickAgent(win, AGENT)).click(); await sleep(800)
+    if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(500) }
+  }
+  const pickedNow = await pickedName()
+  await sendSure(win, 'Hello DSH, please say hello.')
+  await until(async () => stub.systems.length > before && (await lastAsst(win)).includes(MARK), 90_000)
+  const sys = stub.systems.slice(before).join('\n')
+  await shot(win, '60-discover-chat')
+  check(`${T} 从「发现」装上的 genui 对 Forsion 里的对话生效(系统提示里有 genui 那一节)`, /genui/i.test(sys) && (await lastAsst(win)).includes(MARK), `发给「${pickedNow}」;${sys.length} 字;${await lastAsst(win)}`)
+
+  // ⑨-6(--dshgo)DSH Go 的线上索引:读得进来;点一个条目的安装只到 DSH 的确认框,取消,不体检、不装
+  if (!DSHGO) return
+  await openWorkbenchFromCard(app, win)
+  await toGuestPluginPage(app)
+  await guestPick(app, buttonPick('/^(发现|Discover)$/')); await sleep(1000)
+  // 「管理索引源…」在索引菜单里(菜单按钮的 aria-label 是「切换插件索引,当前为 …」)
+  const manageRe = '/^(管理索引源…|Manage .*sources…)$/'
+  let manage = await guestPick(app, buttonPick(manageRe))
+  if (!manage) { await guestPick(app, buttonPick('/^(切换插件索引|Switch plugin index)/')); await sleep(600); manage = await guestPick(app, buttonPick(manageRe)) }
+  await until(async () => !!(await guestPick(app, inputPick, false)), 8_000, 400)
+  const typed2 = await guestInsert(app, inputPick, DSHGO_INDEX)
+  await sleep(400)
+  await guestPick(app, buttonPick('/^(添加|Add)$/', '/^(索引源|Index sources)$/'))
+  await sleep(1500)
+  const close2 = await guestPick(app, buttonPick('/^(关闭|Close)$/'), false); if (close2) { await guestMouse(app, close2); await sleep(600) }
+  // 切到 DSH Go 那份(索引菜单)
+  await guestPick(app, buttonPick('/^(切换插件索引|Switch plugin index)/')); await sleep(600)
+  await guestPick(app, buttonPick('/DSH Go/')); await sleep(800)
+  const go = await until(async () => { const s = (await guestEval(app, 'document.body.innerText')).value || ''; return /DSH Go/.test(s) && !/正在读取索引|Loading/.test(s) ? s : null }, 30_000, 800)
+  const installs = (await guestEval(app, `[...document.querySelectorAll('button')].filter(${VIS}).filter((b) => /^(安装|Install)$/.test((b.textContent || '').trim())).map((b) => (b.disabled || b.getAttribute('aria-disabled') === 'true') ? 0 : 1)`)).value || []
+  await shot(win, '61-dshgo-listed')
+  if (!manage || !typed2 || !go) { console.log(`未验  ${T} DSH Go 线上索引(${!manage ? '没找到管理索引源' : !typed2 ? '没找到地址输入框' : '没读进来,可能是网络'};按钮 ${await guestButtons(app)})`); return }
+  check(`${T} DSH Go 线上索引读得进来`, installs.length > 0, `安装按钮 ${installs.length} 个,可点 ${installs.filter(Boolean).length} 个`)
+  const pickedGo = await guestPick(app, `(vis) => [...document.querySelectorAll('button')].filter((b) => vis(b) && !b.disabled && b.getAttribute('aria-disabled') !== 'true' && /^(安装|Install)$/.test((b.textContent || '').trim())).find((b) => !/GenUI/.test(b.parentElement?.parentElement?.textContent || '')) || null`)
+  const goDialog = await until(async () => (await guestEval(app, `(() => { const vis = ${VIS}; const t = [...document.querySelectorAll('body *')].filter((e) => /^(安装「.+」？|Install ".+"\\?)$/.test((e.textContent || '').trim()) && vis(e)).pop(); if (!t) return null; for (let d = t, i = 0; d && i < 10; d = d.parentElement, i++) if ([...d.querySelectorAll('button')].some((b) => /^(取消|Cancel)$/.test((b.textContent || '').trim()))) return d.innerText; return null })()`)).value, 10_000, 400)
+  await shot(win, '62-dshgo-confirm')
+  // 取消(不论包名是什么都取消)
+  await guestPick(app, `(vis) => [...document.querySelectorAll('button')].filter((b) => vis(b) && /^(取消|Cancel)$/.test((b.textContent || '').trim())).pop() || null`)
+  await sleep(6000)
+  const goClosed = !(await guestEval(app, `[...document.querySelectorAll('body *')].some((e) => /^(安装「.+」？|Install ".+"\\?)$/.test((e.textContent || '').trim()) && e.getClientRects().length > 0)`)).value
+  const rev3 = await d2fCall(win, '/reviews')
+  check(`${T} DSH Go 条目点「安装」只到 DSH 的确认框,取消后框关了、没体检、没装`, !!pickedGo && !!goDialog && goClosed && rev3.status === 200 && !(rev3.body?.reviews ?? []).some((r) => r.state === 'checking' || r.state === 'ready') && !/正在体检/.test(await reviewText(win)), `${(goDialog || '没弹确认框').replace(/\s+/g, ' ').slice(0, 200)};bundles ${JSON.stringify(profileBundles())}`)
+}
+
 async function main() {
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   STUB = `http://127.0.0.1:${server.address().port}`
@@ -619,7 +878,8 @@ async function main() {
     await win.getByText('新会话', { exact: true }).first().click(); await sleep(1200)
     await (await pickAgent(win, AGENT)).click(); await sleep(900)
     if (await win.locator('.ui-popover-backdrop').count()) { await win.keyboard.press('Escape'); await sleep(500) }
-    if (MODE !== 'full') await approvalsWalk(app, win, guestLogs)
+    if (MODE === 'discover') await discoverWalk(app, win, guestLogs)
+    else if (MODE !== 'full') await approvalsWalk(app, win, guestLogs)
     else {
     const perTurnBefore = dshProcs().filter((l) => l.includes('--profile acp')).length
     let perTurnSeen = 0

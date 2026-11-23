@@ -1225,8 +1225,8 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 }
 
 /* ── 手机(Android 原生外壳画 Dock;HomepageView 在根上挂 .hp-phone)。布局「二」,2026-10-09 用户选定:
- *    问候在上(小字标语 + 一行大字问候 + 日期 · 时刻),四张带一行近况的大卡片与收起的输入条沉到下半屏 —— 拇指够得到的地方。
- *    点输入条展开成完整的输入区(模型、模式、附件都在里面),卡片让位。
+ *    问候在上(小字标语 + 一行大字问候 + 日期 · 时刻),「继续」(2026-11-19 起替掉四张近况卡片)与收起的输入条沉到下半屏 ——
+ *    拇指够得到的地方。点输入条展开成完整的输入区(模型、模式、附件都在里面),「继续」让位。
  *    尺寸按屏幕 dp 写:--hp-dp = 1dp 折合的 CSS px(壳里的 px 被 body zoom 放大过)。字号只用六档界面角色。
  *    每条都带 .hp-phone,比它覆盖的基础规则和上面几档媒体查询都多一段;放文件末尾(DESIGN §7.2)。 ── */
 .hp-root.hp-phone { --hp-dp: calc(1px / var(--uiz, 1)); --hp-padding-block: calc(18 * var(--hp-dp)); padding-inline: calc(18 * var(--hp-dp)); }
@@ -1240,22 +1240,36 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-root.hp-phone[data-wallpaper='true'] .hp-greet { opacity: 1; }
 .hp-root.hp-phone[data-wallpaper='true'] .hp-clock { color: var(--text); opacity: 0.7; }
 
-.hp-phone .hp-cards { order: 2; display: grid; grid-template-columns: 1fr 1fr; gap: calc(12 * var(--hp-dp)); }
-.hp-phone .hp-card {
-  display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; align-content: space-between;
-  column-gap: calc(10 * var(--hp-dp)); row-gap: calc(8 * var(--hp-dp));
-  min-height: calc(104 * var(--hp-dp)); padding: calc(16 * var(--hp-dp));
-  border: 0; border-radius: var(--radius-lg, 16px);
+/* 「继续」(方向 E 第 1 步,2026-11-19;homeContinue.tsx):最近三项一张卡,沉在输入条上面;一行 = 图标 · 名字和出处 · 多久以前。 */
+.hp-phone .hp-continue {
+  order: 2; display: flex; flex-direction: column;
+  padding: calc(8 * var(--hp-dp)) calc(10 * var(--hp-dp));
+  border-radius: var(--radius-lg, 16px);
   background: var(--hp-glass-sheen), var(--hp-glass-tint);
   backdrop-filter: var(--hp-glass-filter); -webkit-backdrop-filter: var(--hp-glass-filter);
   box-shadow: var(--card-shadow);
-  color: var(--text); font-family: var(--font-ui); text-align: left;
+  font-family: var(--font-ui);
 }
-.hp-phone .hp-card:active { transform: scale(0.98); }
-.hp-phone .hp-card-icon { display: inline-flex; align-self: center; color: var(--text-muted); }
-.hp-phone .hp-card-icon > svg { width: calc(24 * var(--hp-dp)); height: calc(24 * var(--hp-dp)); }
-.hp-phone .hp-card-name { align-self: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-heading, 14px); font-weight: 600; }
-.hp-phone .hp-card-status { grid-column: 1 / -1; min-width: 0; min-height: 1.3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); line-height: 1.3; color: var(--text-muted); }
+.hp-phone .hp-continue-title { padding: calc(2 * var(--hp-dp)) calc(6 * var(--hp-dp)) calc(4 * var(--hp-dp)); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.hp-phone .hp-continue-row {
+  display: flex; align-items: center; gap: calc(10 * var(--hp-dp)); min-width: 0;
+  min-height: calc(52 * var(--hp-dp)); padding: calc(8 * var(--hp-dp)) calc(6 * var(--hp-dp));
+  border: 0; border-radius: var(--radius-md, 10px); background: transparent;
+  color: var(--text); font: inherit; text-align: left;
+}
+.hp-phone .hp-continue-row:active { background: var(--bg-hover); }
+.hp-phone .hp-continue-lead {
+  flex: none; display: grid; place-items: center; width: calc(32 * var(--hp-dp)); height: calc(32 * var(--hp-dp));
+  border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-muted);
+}
+.hp-phone .hp-continue-lead > svg { width: calc(18 * var(--hp-dp)); height: calc(18 * var(--hp-dp)); }
+.hp-phone .hp-continue-emoji { font-size: var(--ui-font-heading, 14px); line-height: 1; }
+.hp-phone .hp-continue-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: calc(2 * var(--hp-dp)); }
+.hp-phone .hp-continue-name,
+.hp-phone .hp-continue-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-phone .hp-continue-name { font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.hp-phone .hp-continue-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.hp-phone .hp-continue-when { flex: none; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 
 .hp-phone .hp-pill {
   order: 3; display: flex; align-items: center; gap: calc(12 * var(--hp-dp));
@@ -1279,7 +1293,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-phone .hp-composer { order: 3; }
 .hp-root.hp-phone:not(.hp-composer-focused) .hp-composer { display: none; }
 .hp-root.hp-phone.hp-composer-focused .hp-pill,
-.hp-root.hp-phone.hp-composer-focused .hp-cards { display: none; }
+.hp-root.hp-phone.hp-composer-focused .hp-continue { display: none; }
 .hp-root.hp-phone.hp-composer-focused .hp-composer { transform: none; }
 .hp-root.hp-phone.hp-composer-focused .hp-title { opacity: 1; transform: none; }
 
@@ -1670,12 +1684,12 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
 .lcl-drop-ind.hp-drop-ind.lcl-drop-ind--zone { border-radius: var(--radius-lg); }
 
 /* ── 手机主页:走完手机引导后的四条起步建议(HomepageView 的 HomeSuggest;方案在仓根 docs/ToBeImproved/手机首次引导方案_2026-11-13)。
- *    放在四张大卡片上面(order 同卡片,DOM 在前);卡色实底、不描边、低阴影,字用正文角色,最多两行(英文长句不截成半句)。
- *    尺寸照上面 .hp-phone 那段按 dp 写;输入区展开时和卡片一起让位。
+ *    放在「继续」上面(DOM 在前;新用户没有「继续」);卡色实底、不描边、低阴影,字用正文角色,最多两行(英文长句不截成半句)。
+ *    尺寸照上面 .hp-phone 那段按 dp 写;输入区展开时和「继续」一起让位。
  *    一屏放不下时逐级让(HomepageView 量过后写在根的 data-suggest-fit 上,档位见 homeSuggest.ts 的 SUGGEST_FITS):
- *    卡片只画前两行 → 建议只留前两条 → 这一块不出;不把输入条往 Dock 底下挤(台架钉着「输入条底边在 Dock 之上、在最后一张画出来的卡之下」)。
- *    主页一列 = 问候约 80 + 卡片(两行 220 / 三行 336)+ 输入条 54 + 间距 14×2,外加胶囊、Dock 与上下留白约 270;
- *    这一块约 113–161(中文一行 / 英文两行)+ 间距 14。不按屏高写媒体查询:卡片张数、问候折行、导航条高度都算不准,一律实量。 ── */
+ *    「继续」只画前两行 → 建议只留前两条 → 这一块不出;不把输入条往 Dock 底下挤(phone-guide 台架钉着「输入条底边在 Dock 之上、在最后一行画出来的「继续」之下」)。
+ *    主页一列 = 问候约 80 + 「继续」(三行约 190)+ 输入条 54 + 间距 14×2,外加胶囊、Dock 与上下留白约 270;
+ *    这一块约 113–161(中文一行 / 英文两行)+ 间距 14。不按屏高写媒体查询:「继续」行数、问候折行、导航条高度都算不准,一律实量。 ── */
 .hp-phone .hp-suggest { order: 2; display: flex; flex-direction: column; gap: calc(8 * var(--hp-dp)); }
 .hp-phone .hp-suggest-title { display: flex; align-items: center; gap: calc(6 * var(--hp-dp)); color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); line-height: 1.4; }
 .hp-phone .hp-suggest-title > svg { flex: none; width: calc(14 * var(--hp-dp)); height: calc(14 * var(--hp-dp)); }
@@ -1691,7 +1705,8 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
 /* 折成两行时两行差不多长(不留一个字的尾巴);四条文案都按 360 宽两行以内写,截断只是兜底 */
 .hp-phone .hp-suggest-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-width: 0; text-wrap: balance; }
 .hp-root.hp-phone.hp-composer-focused .hp-suggest { display: none; }
-.hp-root.hp-phone[data-suggest-fit='rows'] .hp-cards > .hp-card:nth-child(n + 5),
-.hp-root.hp-phone[data-suggest-fit='two'] .hp-cards > .hp-card:nth-child(n + 5) { display: none; }
+/* 「继续」替掉卡片之后(2026-11-19):挤的那两档让「继续」只留前两行(第一个子节点是标题) */
+.hp-root.hp-phone[data-suggest-fit='rows'] .hp-continue > .hp-continue-row:nth-child(n + 4),
+.hp-root.hp-phone[data-suggest-fit='two'] .hp-continue > .hp-continue-row:nth-child(n + 4) { display: none; }
 .hp-root.hp-phone[data-suggest-fit='two'] .hp-suggest-chip:nth-child(n + 3) { display: none; }
 .hp-root.hp-phone[data-suggest-fit='none'] .hp-suggest { display: none; }

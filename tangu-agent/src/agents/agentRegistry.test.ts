@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseAgentFile, serializeAgent, slugify, isValidSlug, parseAgentConfig, serializeAgentConfig, buildAgentDef, AGENT_MAX_ITERATIONS_MIN, type NormalAgentDef } from './agentRegistry.js';
+import { parseAgentFile, serializeAgent, slugify, isValidSlug, parseAgentConfig, serializeAgentConfig, buildAgentDef, AGENT_MAX_ITERATIONS_MIN, __agentDirStampForTests, type NormalAgentDef } from './agentRegistry.js';
 
 describe('slugify / isValidSlug', () => {
   it('lowercases + hyphenates + strips', () => {
@@ -180,5 +180,20 @@ describe('config.toml [compaction] 表(09-15 压缩旋钮 per-agent 层)', () =>
     // 单行 developer_instructions 那条路同样不被表头吞掉
     const single = serializeAgentConfig({ ...def, systemPrompt: 'one line' } as NormalAgentDef);
     expect(parseAgentConfig('r', single, '')).toMatchObject({ systemPrompt: 'one line', compaction });
+  });
+});
+
+describe('agent folder fingerprint (single-user mode keeps its format)', () => {
+  it('a missing folder is plain "missing" and the fingerprint does not carry the folder path', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    expect(await __agentDirStampForTests(path.join(os.tmpdir(), 'no-such-agents-dir-' + Date.now()))).toBe('missing');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stamp-'));
+    fs.mkdirSync(path.join(dir, 'a1'));
+    fs.writeFileSync(path.join(dir, 'a1', 'config.toml'), 'name = "A"\n');
+    const stamp = await __agentDirStampForTests(dir);
+    expect(stamp).not.toContain(dir);
+    expect(stamp.startsWith('dir:')).toBe(false);
   });
 });

@@ -15,8 +15,9 @@ import { acknowledgeSessionRead } from '../services/sessionRead.js';
 import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { messageTimeOrder, query } from '../core/db.js';
+import { getDbType, messageTimeOrder, query } from '../core/db.js';
 import { liveRunStatus } from '../services/runStatus.js';
+import { chatCardRows, chatHistoryPage } from '../services/chatHistoryPage.js';
 import { failedRunsFor } from '../services/failedRuns.js';
 import { normalizeSessionEmoji } from '../core/sessionEmoji.js';
 import { resolveProfile } from '../seams/appProfile.js';
@@ -499,9 +500,22 @@ router.get('/agent/sessions/:id/messages', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
     const before = Number(req.query.before) || 0;
-    const rows = await listMessagesPage(req.params.id, limit, before);
+    const idParam = (key: string) => typeof req.query[key] === 'string' ? String(req.query[key]) : undefined;
+    let known: Record<string, string> | undefined;
+    if (req.query.known) {
+      try { known = JSON.parse(String(req.query.known)); } catch { return res.status(400).json({ detail: 'Invalid message versions' }); }
+      if (!known || typeof known !== 'object' || Array.isArray(known) || Object.keys(known).length > 500
+        || Object.entries(known).some(([id, rev]) => !id || id.length > 128 || typeof rev !== 'string')) {
+        return res.status(400).json({ detail: 'Invalid message versions' });
+      }
+    }
+    const window = req.query.view === 'page' ? await chatHistoryPage(req.params.id, limit, {
+      beforeId: idParam('before_id'), afterId: idParam('after_id'), aroundId: idParam('around_id'), known,
+    }) : undefined;
+    const rows = window ? window.rows : req.query.view === 'cards' ? await chatCardRows(req.params.id, limit) : await listMessagesPage(req.params.id, limit, before);
     res.json({
-      failed_runs: await failedRunsFor(req.params.id, rows),
+      ...(window && { page: window.page }),
+      failed_runs: window ? window.failed : await failedRunsFor(req.params.id, rows),
       messages: rows.map((r) => ({
         ...r,
         tool_calls: parseMaybeJson(r.tool_calls),
@@ -525,7 +539,7 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const sid = req.params.id;
     const ids: string[] = Array.isArray(req.body?.ids)
-      ? req.body.ids.filter((x: any) => typeof x === 'string' && x).slice(0, 1000)
+      ? req.body.ids.filter((x: any) => typeof x === 'string' && x)
       : [];
     if (!ids.length) return res.json({ ok: true, deleted: 0 });
     // 在飞/排队 run 时拒绝:跨端共享同一会话时,删消息会让在跑的 run hydrate 出残缺历史 → 污染/重复轮次。
@@ -534,16 +548,17 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
       [sid],
     );
     if (inflight.length || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'run in progress' });
-    const placeholders = ids.map(() => '?').join(',');
+    const idQuery = getDbType() === 'sqlite' ? 'SELECT value FROM json_each(?)' : 'SELECT json_array_elements_text(CAST(? AS json))';
+    const idList = JSON.stringify(ids);
     // 删前取被删消息的最早时间戳:若落在某压缩检查点覆盖区内,该检查点摘要会继续叙述已删轮次 → 连带失效。
     const tsRows = await query<any[]>(
-      `SELECT MIN(timestamp) AS mn FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
-      [sid, ...ids],
+      `SELECT MIN(timestamp) AS mn FROM chat_messages WHERE session_id = ? AND id IN (${idQuery})`,
+      [sid, idList],
     );
     const minTs = Number(tsRows[0]?.mn) || 0;
     await query(
-      `DELETE FROM chat_messages WHERE session_id = ? AND id IN (${placeholders})`,
-      [sid, ...ids],
+      `DELETE FROM chat_messages WHERE session_id = ? AND id IN (${idQuery})`,
+      [sid, idList],
     );
     // 失效覆盖到被删区间的压缩检查点(消息已删,摘要不能再吞失败,故吞错保响应)。
     if (minTs) {
@@ -633,17 +648,33 @@ const compactedContextTokens = (summary: string, lastUsage: any): number =>
  * 那条 usage 是压缩前的,下个 run 回放的只剩 摘要 + 固定头(系统提示 + 工具定义,取上次实测的字节数),改报这个粗估。
  * 别把判据放宽成「检查点比 usage 新」:惰性检查点也满足,而它之后整个窗口照样回放,粗估会把 30 万报成 1 万。
  * ponytail: 手动压缩后紧跟一个没产生 usage 的失败 run(配额拒收)→ 多出的行让判据落空,退回压缩前的实测值,下一次成功调用自愈。
+ * tail = 时间戳不早于检查点边界的那几行(rowsFromBoundary);整行覆盖到最后 = 它们全部判 covered,且里面有锚点那一行。
+ * 空 / 查不到 / 缺锚点一律报实测值:空集合「全部已覆盖」恒真,惰性检查点之后的 30 万会被报成 1 万(11-20)。
+ * 传单行也收(只看这一行,#778 的测试这么用)。
  */
-export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, lastRow: { id: string; timestamp?: number | null } | undefined): number {
-  if (!cp || !lastRow || rowCoverage(lastRow, cp) !== 'covered') return Number(lastUsage?.prompt) || 0;
-  return compactedContextTokens(cp.summary, lastUsage);
+type TailRow = { id: string; timestamp?: number | null };
+export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, tail: TailRow | TailRow[] | undefined): number {
+  const rows = Array.isArray(tail) ? tail : tail ? [tail] : [];
+  const covered = !!cp && rows.length > 0
+    && (!cp.throughMessageId || rows.some((r) => r.id === cp.throughMessageId))
+    && rows.every((r) => rowCoverage(r, cp) === 'covered');
+  if (!covered) return Number(lastUsage?.prompt) || 0;
+  return compactedContextTokens(cp!.summary, lastUsage);
 }
 
-/** 本会话最后落库的一行(sessionContextTokens 拿它比检查点)。同一毫秒的几行要按落库先后取最后那条:手动压缩按升序走到的
- *  最后一行就是检查点边界,这里取成同毫秒里更早的那条 → 判成没覆盖,重开后环又回到压缩前的数(中止后 /compact 时常见,
- *  半截回答与打断标记多半同一毫秒)。thin worker 没有本地库 → 查不到就照旧(undefined)。
- *  ponytail: 检查点边界只记一个 id,rowCoverage 把边界同毫秒的其他行一律判没覆盖(hydrate 会再回放它们)—— 那几行不进这里的估算;
- *  要准得让检查点记下边界那一毫秒里覆盖了哪些行,压缩 / 回放 / 这里共用(Codex 11-20 评审 #1,另立)。 */
+/** 时间戳不早于检查点边界的行(sessionContextTokens 逐行比检查点)。同一毫秒的几行不论谁先谁后都在里面,
+ *  按 rowCoverage(含 through_peer_ids)逐行判 —— 不再只拿「最后一行」:那一毫秒有两行时只看其中一行判不准(11-20)。
+ *  thin worker 没有本地库 / 查询失败 → undefined(照旧报实测值)。 */
+export async function rowsFromBoundary(sessionId: string, cp: Checkpoint | null): Promise<TailRow[] | undefined> {
+  if (!cp || !(cp.throughTimestamp > 0)) return undefined;
+  return await query<any[]>(
+    // 时间戳缺失 / 非正的行 hydrate 照样回放,rowCoverage 判它没覆盖 → 一并取回,别让它们漏在判据外(Codex 11-20 #8)
+    `SELECT id, timestamp FROM chat_messages WHERE session_id = ? AND (timestamp >= ? OR timestamp IS NULL OR timestamp <= 0)`, [sessionId, cp.throughTimestamp],
+  ).catch(() => undefined);
+}
+
+/** 本会话最后落库的一行。同一毫秒的几行按落库先后取最后那条。/usage 11-20 起改用 rowsFromBoundary,这里留给只要「最后一句」的调用方。
+ *  thin worker 没有本地库 → 查不到就 undefined。 */
 export async function lastMessageRow(sessionId: string): Promise<{ id: string; timestamp?: number | null } | undefined> {
   const rows = await query<any[]>(
     `SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY ${messageTimeOrder('DESC')} LIMIT 1`, [sessionId],
@@ -668,7 +699,8 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
     // 整页都是后台事件就按游标继续往回翻(见 findMainLoopUsage 的上限说明)。
     const last = await lastMainLoopUsage(req.params.id);
     // 手动 /compact 不产生 usage:不看检查点的话,重开应用后环又回到压缩前那个数(09-20)。thin worker 没有本地库 → 查不到就照旧。
-    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), await lastMessageRow(req.params.id)) });
+    const cp = await getLatestSummary(req.params.id);
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, cp, await rowsFromBoundary(req.params.id, cp)) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
   }

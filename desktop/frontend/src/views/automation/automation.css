@@ -197,6 +197,41 @@
   .auto-card .auto-card-head { align-items: flex-start; }
 }
 
+/* 11-22 方案 A:首页「Muse 建议」。行 = 模板行 + 两行小字;悬停出「打开草稿 →」与 ×;不描边、不加阴影,主题色只给星标与来源链接。 */
+.auto-sugg-section { margin-bottom: 26px; }
+.auto-sugg-section .auto-home-section h2 { display: flex; align-items: center; gap: 7px; }
+.auto-sugg-mark { flex-shrink: 0; color: var(--accent-ink, var(--accent)); }
+.auto-starter.auto-sugg { position: relative; gap: 3px 12px; padding-right: 128px; }
+.auto-starter.auto-sugg > svg { grid-row: span 3; }
+.auto-sugg-flow { font-size: var(--ui-font-meta); color: var(--text-light); }
+.auto-sugg-why { font-size: var(--ui-font-meta); color: var(--text-faint); line-height: 1.5; }
+.auto-sugg-src { margin-left: 8px; color: var(--text-light); }
+.auto-sugg-src.link { color: var(--accent-ink, var(--accent)); cursor: pointer; }
+.auto-sugg-src.link:hover { text-decoration: underline; }
+.auto-sugg-tools { position: absolute; right: 8px; top: 10px; display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity var(--duration-fast) ease; }
+.auto-starter.auto-sugg:hover .auto-sugg-tools, .auto-starter.auto-sugg:focus-within .auto-sugg-tools { opacity: 1; }
+.auto-sugg-open { display: inline-flex; align-items: center; gap: 4px; font-size: var(--ui-font-meta); color: var(--text-light); padding: 3px 6px; }
+.auto-sugg-tools .icon-btn { color: var(--text-faint); }
+.auto-sugg-reasons { grid-column: 2; margin-top: 6px; cursor: default; }
+.auto-sugg-more { border: 0; background: none; padding: 10px 8px 0; font: inherit; font-size: var(--ui-font-meta); color: var(--text-light); cursor: pointer; }
+.auto-sugg-more:hover { color: var(--text); }
+.auto-sugg-note { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: var(--ui-font-meta); color: var(--text-light); border-bottom: var(--border-width) solid var(--border); min-width: 0; }
+.auto-sugg-note-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-sugg-note .auto-sugg-src { margin-left: 0; flex-shrink: 0; }
+.auto-sugg-note-hint { margin-left: auto; flex-shrink: 0; color: var(--text-faint); }
+@media (prefers-reduced-motion: reduce) { .auto-sugg-tools { transition: none; } }
+@container (max-width: 500px) {
+  .auto-starter.auto-sugg { padding-right: 8px; }
+  .auto-sugg-tools { position: static; grid-column: 2; opacity: 1; }
+  .auto-sugg-note-hint { display: none; }
+}
+
+/* 私聊里没答的规则卡(同一节最上面):整行不可点,按钮在下面一行;标签只用主题色字,不加底色、不描边 */
+.auto-starter.auto-rulecard { cursor: default; padding-right: 8px; }
+.auto-starter.auto-rulecard:hover { background: transparent; }
+.auto-rulecard-tag { margin-left: 8px; font-size: var(--ui-font-caption); font-weight: 400; color: var(--accent-ink, var(--accent)); }
+.auto-rulecard-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
 /* uiux-d: 执行账本首读 = 骨架 + 只给读屏的状态句(U-39)。 */
 .auto-runs-loading { padding: 4px 0; }
 .auto-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

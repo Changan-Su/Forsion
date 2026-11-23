@@ -401,6 +401,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // ctx.requestClientAction —— 子代理的任务正文是模型生成的,不该成为驱动用户手机的入口。
     requestClientAction: undefined,
     clientCapabilities: undefined,
+    // 长命令不挡插话只给主循环:子代理的 run_bash 结局交不回父 run 的上下文
+    steerHandoff: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
     // 收起的装备是父代理写在自己工作笔记里的选择,子代理的提示里没有那段笔记,也不该替它少带工具(Codex 10-04)
@@ -536,7 +538,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         emitted = true;
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
-    }), undefined, parentCtx.signal, () => !emitted);
+    }), undefined, parentCtx.signal, () => !emitted && !parentCtx.runCostExceeded?.()); // 退避期间被兄弟推过成本上限:等完不再发
 
     if (runId) {
       void publish(runId, 'subagent', {

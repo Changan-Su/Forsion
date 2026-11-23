@@ -1,5 +1,5 @@
 /** Host-owned classification. Third-party manifests cannot promote themselves to core plugins. */
-export const CORE_BUNDLE_IDS: readonly string[] = ['forsion-extend', 'tangu-computer-use', 'forsion-calendar']
+export const CORE_BUNDLE_IDS: readonly string[] = ['forsion-extend', 'tangu-computer-use', 'forsion-calendar', 'translation']
 
 export function isCorePlugin(plugin: { id: string; builtin?: boolean; preinstalled?: boolean }): boolean {
   return !!(plugin.builtin || plugin.preinstalled) && CORE_BUNDLE_IDS.includes(plugin.id)

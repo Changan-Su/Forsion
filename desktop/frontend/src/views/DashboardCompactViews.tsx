@@ -24,6 +24,8 @@ import { useInbox, parseUtc, type InboxMessage } from '../stores/inboxStore'
 import { inboxSubtitle } from './inbox/inboxListSource'
 import { SenderGlyph } from './inbox/SenderGlyph'
 import { registerMessages, useI18n } from '../i18n'
+import { InlineMarkdownText, todoTitleCol } from '../amadeus/blocks/database/todoTitle'
+import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 import { formatMonthDay } from '../format/time'
 
 registerMessages({
@@ -53,14 +55,14 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
   const today = useMemo(() => startOfDay(new Date()), [])
   // 摘要卡不认时间窗偏好(todoPrefs 已随待办视图重构下线):列出全部未完成,按到期排序。
   const rows = useMemo(() => {
-    const out: Array<{ key: string; name: string; complete: () => void; due: ReturnType<typeof todoDueMeta> }> = []
+    const out: Array<{ key: string; name: string; md?: true; complete: () => void; due: ReturnType<typeof todoDueMeta> }> = []
     for (const member of members) {
       if (!member.checkboxCol) continue
       const checkCol = member.checkboxCol
       for (const row of todoRowsOf(member)) {
         if (row.cells[checkCol] === true) continue
         const raw = typeof row.cells[member.dateCol] === 'string' ? String(row.cells[member.dateCol]) : ''
-        out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
+        out.push({ key: `db:${member.db.path}:${row.rowId}`, name: row.name, ...(todoTitleCol(member.db.columns, checkCol) ? { md: true as const } : {}), complete: () => setAggCell(member.db, row.rowId, checkCol, true), due: todoDueMeta(raw, today) })
       }
     }
     for (const mark of marks) if (mark.isTask && !mark.checked) {
@@ -68,7 +70,8 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
         if (!patchMark(mark, { checked: true })) void openNoteAtHeading(mark.path, mark.heading)
       } })
     }
-    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || a.name.localeCompare(b.name, 'zh'))
+    const plain = (r: { name: string; md?: true }): string => (r.md ? inlineMarkdownToPlain(r.name) : r.name)
+    return out.sort((a, b) => a.due.sortTime - b.due.sortTime || plain(a).localeCompare(plain(b), 'zh'))
   }, [members, marks, today])
   const undone = rows.length
   const shown = rows.slice(0, limitFor(size, 4))
@@ -77,7 +80,7 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
       <div className="dash-compact-kpi"><strong>{undone}</strong><span>{t('dashcompact.todoKpi')}</span></div>
       <div className="dash-compact-rows">
         {shown.map(row => <button key={row.key} className="dash-compact-row" onClick={row.complete}>
-          <Circle size={14} /><span>{row.name || t('dashcompact.untitled')}</span><em className={row.due.tone}>{row.due.label}</em>
+          <Circle size={14} /><span>{row.name ? (row.md ? <InlineMarkdownText md={row.name} /> : row.name) : t('dashcompact.untitled')}</span><em className={row.due.tone}>{row.due.label}</em>
         </button>)}
         {!shown.length && <div className="dash-compact-empty">{t('dashcompact.todoEmpty')}</div>}
       </div>
@@ -86,7 +89,8 @@ export function TodoDashboardCard({ size }: { size: DashboardCardSize }) {
   )
 }
 
-export interface AgendaItem { key: string; title: string; start: Date; end: number; allDay: boolean; color: string; source: string }
+/** `md`: the title is a to-do list's inline Markdown (the to-do box writes it, 11-21): draw it with `InlineMarkdownText`, read it with `inlineMarkdownToPlain`. */
+export interface AgendaItem { key: string; title: string; start: Date; end: number; allDay: boolean; color: string; source: string; md?: true }
 
 /** 未来 31 天(含正在进行的)日程,按开始时间排。主页的日历近况卡也读它 —— 那边不开 Agent 日程轮询、只用已经拉到的,
  *  所以 useAgentSchedulePolling 留在下面的卡片里,不放进这里。 */
@@ -101,7 +105,7 @@ export function useAgendaItems(): AgendaItem[] {
   useStableCalendarColors()
   return useMemo(() => {
     const sources = [
-      ...members.map((member) => ({ db: member.db, dateCol: member.dateCol })),
+      ...members.map((member) => ({ db: member.db, dateCol: member.dateCol, md: todoTitleCol(member.db.columns, member.checkboxCol) !== null })),
       ...[...agent, ...other, ...ics, ...md]
         .map((db) => ({ db, dateCol: firstDateCol(db)?.id ?? '' }))
         .filter((source) => source.dateCol),
@@ -109,7 +113,7 @@ export function useAgendaItems(): AgendaItem[] {
     const now = Date.now()
     const end = now + 31 * 86400_000
     const out: AgendaItem[] = []
-    sources.forEach(({ db, dateCol }, index) => {
+    sources.forEach(({ db, dateCol, md }: { db: (typeof sources)[number]['db']; dateCol: string; md?: boolean }, index) => {
       if (isHidden(vault, byVault, db.path)) return
       for (const row of db.rows) {
         const raw = typeof row.cells[dateCol] === 'string' ? String(row.cells[dateCol]) : ''
@@ -119,7 +123,7 @@ export function useAgendaItems(): AgendaItem[] {
         const eventEnd = parsed.end ? toLocalDate(parsed.end).getTime() : start.getTime() + 86400_000
         if (eventEnd < now || start.getTime() > end) continue
         // title 留空串,占位文案在渲染期用 t() 补 —— 写进 memo 会被 deps 冻住,切语言不跟。
-        out.push({ key: `${db.path}:${row.rowId}`, title: row.name, start, end: eventEnd, allDay: parsed.allDay, source: db.name, color: colorForDb(vault, byVault, db.path, index) })
+        out.push({ key: `${db.path}:${row.rowId}`, title: row.name, start, end: eventEnd, allDay: parsed.allDay, source: db.name, color: colorForDb(vault, byVault, db.path, index), ...(md ? { md: true as const } : {}) })
       }
     })
     return out.sort((a, b) => a.start.getTime() - b.start.getTime())
@@ -138,7 +142,7 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
         {shown.map((item) => (
           <div key={item.key} className="dash-compact-row dash-agenda-row">
             <i style={{ background: item.color }} />
-            <span>{item.title || t('dashcompact.untitled')}</span>
+            <span>{item.title ? (item.md ? <InlineMarkdownText md={item.title} /> : item.title) : t('dashcompact.untitled')}</span>
             <em>{formatMonthDay(item.start)}</em>
           </div>
         ))}

@@ -7,8 +7,9 @@ import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
+import type { MuseTodoEvidence } from '../../../tangu-agent/src/contracts/clientTypes'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, StandInInfo, BuiltinUpdate, BuiltinUpdateField, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, FailedRunRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectMemoryOrganizeOutcome, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, MuseTodoEvidence, MuseTodoEvidenceKind, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
 import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
@@ -93,6 +94,7 @@ export interface MuseConfig {
   escalateTo?: string
   /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
   chatStarters?: boolean
+  automationSuggestions?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -123,6 +125,15 @@ export interface MuseStarter {
   text: string
   source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
 }
+/** GET /agent/special/muse/automation-suggestions 的一条(11-22 方案 A):Muse 觉得可以交给自动化的事 + 一份规则草稿。
+ *  rule 是引擎按 manage_automation 同一套校验过的触发与动作;桌面点开 = 拿它当草稿填画布,保存才建规则。 */
+export interface MuseAutomationSuggestion {
+  id: string
+  title: string
+  why: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'database' | 'computer' | 'muse'; label: string; ref?: string }
+  rule: Pick<MuseTriggerInfo, 'desc' | 'cond' | 'prompt' | 'cooldownHours' | 'actions' | 'only' | 'maxPerDay'>
+}
 export interface MuseTodo {
   id: string
   title: string
@@ -130,6 +141,8 @@ export interface MuseTodo {
   status: 'pending' | 'injected' | 'done' | 'dismissed'
   source_session_id: string | null
   created_at: string
+  /** 依据(11-20 起 add_muse_todo 必填);老待办 / 老引擎没有 → 空数组或缺省。 */
+  evidence?: MuseTodoEvidence[]
 }
 export interface MuseStatusInfo {
   enabled: boolean
@@ -299,6 +312,9 @@ export const DEFAULT_AGENT_SLUG = 'xyra'
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
 /** 划线条的排法(localStorage,**缺席 = 'tools'**:本视图的工具在前;'actions' = 动作在前。selectionActions.ts + 设置→外观)。 */
 export const SELECTION_BAR_ORDER_KEY = 'forsion_selection_bar_order'
+/** 划线条上每个动作放哪 / 排序 / 划选后自动 / 结果卡上次选的语言(JSON;2026-11-21,selectionActions.ts + 设置→外观「划线菜单」管理表)。
+ *  只存用户动过的;读不出来 ≠ 空(按缺省显示、不写回,用户再改时先把原件留到 `<键>.unreadable`)。 */
+export const SELECTION_ACTION_PREFS_KEY = 'forsion_selection_actions'
 /** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
 export const UI_ZOOM_KEY = 'forsion_ui_zoom'
 /** 界面语言(i18n.tsx 真源;同上)。 */
@@ -519,6 +535,8 @@ export interface PluginSandboxSelf {
   dir: string
   appVersion: string
   ui?: PluginSandboxUi
+  /** 演示舞台(插件的 ctx.stage 起的那份):不装开发副本、没有沙箱条;普通沙箱没有这一段。 */
+  stage?: import('../../shared/pluginStage').StageChildInfo
 }
 
 /** preload 注入的 window.tangu(浏览器内调试时缺省,backend/auth 能力按需探测)。 */
@@ -542,7 +560,9 @@ declare global {
       /** 插件沙箱的控制面:只有用户那份桌面 Forsion 有(沙箱自己、web、mobile 都没有)。 */
       pluginSandbox?: PluginSandboxApi
       /** 本进程就是插件沙箱:自身信息 + 沙箱条上的按钮(报告问题 / 安装 / 重置)转给父进程。普通实例没有这个键。 */
-      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void }
+      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void; saveRecording?(bytes: ArrayBuffer, ext: string): Promise<string | null> }
+      /** 演示舞台的通道(宿主的 ctx.stage 按插件 id 调;插件别直接调)。 */
+      pluginStage?: { exec(pluginId: string, op: string, args: Record<string, unknown>): Promise<{ ok: boolean; code?: string; error?: string } & Record<string, unknown>> }
       /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */
       computerHistory?: ComputerHistoryApi
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
@@ -654,19 +674,21 @@ declare global {
       authProviders?(): Promise<Array<{ id: string; loggedIn: boolean }>>
       providerLogin?(id: string): Promise<{ ok: boolean; id: string }>
       openAccountCenter?(section?: string): Promise<{ ok: boolean }>
-      /** 打开会员购买页({cloudUrl}/pay?tab=membership,token 主进程拼接)。 */
-      openPayCenter?(): Promise<{ ok: boolean }>
+      /** 打开会员购买页({cloudUrl}/pay?tab=membership,token 主进程拼接)。
+       *  entry(遥测 v3 契约 §17):从哪个入口点的,随下单记;宿主追加在通道参数末尾(老宿主 / 老 Extend 忽略),表外的值不带。 */
+      openPayCenter?(opts?: { entry?: string }): Promise<{ ok: boolean }>
       /** 头像菜单额度视图(GET /api/token-quota/my 透传,含 resetCards)。 */
       accountQuota?(): Promise<{ status: number; json: any }>
       /** Official Web visitor: fixed read-only points/invite presentation, no generic cloud access. */
       accountRewards?(): Promise<{ balance: { status: number; json: any }; invite: { status: number; json: any } }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
       /** 周卡 2026-08-05 下线,只收缺省或 'both'。 */
-      accountUseResetCard?(type?: 'both'): Promise<{ status: number; json: any }>
+      /** entry(遥测 v3):额度操作的入口,追加在末尾(下同);老接收方忽略,表外的值不带。 */
+      accountUseResetCard?(type?: 'both', entry?: string): Promise<{ status: number; json: any }>
       /** 后台额度:从主额度等额转入 limit×percent%(本周期有效;POST /api/token-quota/background/convert)。 */
-      accountBgConvert?(percent: number): Promise<{ status: number; json: any }>
+      accountBgConvert?(percent: number, entry?: string): Promise<{ status: number; json: any }>
       /** 后台额度用尽后改用主额度继续(开关;POST /api/token-quota/background/auto-main)。 */
-      accountBgAutoMain?(enabled: boolean): Promise<{ status: number; json: any }>
+      accountBgAutoMain?(enabled: boolean, entry?: string): Promise<{ status: number; json: any }>
       /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
        *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
       cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>

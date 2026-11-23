@@ -3,25 +3,44 @@
    内容卡不描边(DESIGN §5):输入卡靠底色 + 圆角 + 淡阴影分层,1px 透明边留给聚焦态。 */
 .btw-panel { flex: 1; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 
-.btw-bar {
-  display: flex; align-items: flex-start; gap: 8px;
-  box-sizing: border-box; min-height: 76px;
-  padding: 14px 14px 12px 18px;
-  border-bottom: var(--border-width, 1px) solid var(--border);
+/* 一行头(11-22 方案 A):own = 宿主没有标题栏(主窗右边那块面板、手机全屏页),带 agent-desk-head 的底线与内距;
+   framed = 宿主已有标题栏,只放段落胶囊和 ＋,不再画底线。 */
+.btw-head { flex: none; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.btw-head:not([data-own]) { padding: 6px 10px 2px 14px; }
+.btw-head > .agent-desk-title { flex: none; }
+.btw-grow { flex: 1; min-width: 0; }
+/* 段落胶囊:这条回答上的几段收进它的下拉;没存过的段只是一枚静态签 */
+.btw-seg {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%;
+  height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light); color: var(--text-muted);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); white-space: nowrap;
 }
-.btw-bar-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.btw-context { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text); font-size: var(--ui-font-heading, 14px); line-height: 1.35; }
-.btw-context > span { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-weight: 400; }
-.btw-context > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.btw-hint { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.45; }
-.btw-bar > .icon-btn { flex: none; margin-top: -4px; }
+.btw-seg > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+button.btw-seg { cursor: pointer; transition: background var(--duration-fast, .15s), color var(--duration-fast, .15s); }
+button.btw-seg:hover:not(:disabled), button.btw-seg[aria-expanded='true'] { background: var(--overlay-medium); color: var(--text); }
+button.btw-seg:disabled { cursor: default; opacity: .55; }
+button.btw-seg:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+/* 段数不定:限高自己滚(同 .ctx-menu-scroll),矮窗口里「删掉这一段」也够得着 */
+.btw-menu { width: var(--menu-select-width); max-width: min(var(--menu-select-width), calc(100vw - 16px)); max-height: min(60vh, 420px); overflow-y: auto; }
+.btw-menu button.btw-menu-cur { background: var(--overlay-light); color: var(--text); }
 
-.btw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 18px 12px; display: flex; flex-direction: column; gap: 20px; }
-.btw-empty { margin: auto 12px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+/* 挂点卡:这一段挂在哪条回答上(点了主对话滚到那条)。平卡:底色 + 圆角,不描边不凹 */
+.btw-anchor {
+  flex: none; box-sizing: border-box; width: 100%; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 12px; border: 0; border-radius: var(--radius-md, 10px);
+  background: var(--overlay-light); color: var(--text); text-align: left; font-family: var(--font-ui);
+}
+button.btw-anchor:not(:disabled) { cursor: pointer; transition: background var(--duration-fast, .15s); }
+button.btw-anchor:not(:disabled):hover { background: var(--overlay-medium); }
+button.btw-anchor:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.btw-anchor-k { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.btw-anchor-t { font-size: var(--ui-font-meta, 12px); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+
+.btw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 12px; display: flex; flex-direction: column; gap: 18px; }
+.btw-empty { margin: auto 12px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.7; }
 
 .btw-turn { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* 短旁聊贴近输入区，长线程仍从顶部滚动。 */
-.btw-body > .btw-turn:first-child { margin-top: auto; }
 .btw-turn-quote {
   margin: 0; padding: 1px 0 1px 10px;
   border-left: 2px solid var(--border);
@@ -77,24 +96,21 @@
 /* 已发的那一问附过什么:缩略图 / 文件条,靠右跟着问题气泡 */
 .btw-turn-files { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; max-width: 88%; }
 
-/* 面板头下面:这条回答上存下来的几段。第一行永远是「新的一段」;太多就在自己的框里滚,不把对话挤没 */
-.btw-list { flex: none; padding: 8px 10px 10px; border-bottom: var(--border-width, 1px) solid var(--border); }
-.btw-list-head { padding: 0 8px 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.4; }
-.btw-list-rows { display: flex; flex-direction: column; gap: 2px; max-height: 172px; overflow-y: auto; }
-.btw-list-row {
-  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 1px;
-  width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-sm, 6px);
-  background: transparent; color: var(--text); text-align: left; cursor: pointer;
-  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.45;
+/* 传话卡(btwRelay.ts):模型拟好的一句,用户点了才发。平卡,同挂点卡 */
+.btw-relay { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md, 10px); background: var(--overlay-light); min-width: 0; }
+.btw-relay-k { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.btw-relay-text { color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.btw-relay-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+/* 主按钮:同 Chat Box 发送钮的配色(--action-fill / --on-action) */
+.btw-relay-send {
+  display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; margin-right: 4px;
+  border: 0; border-radius: var(--radius-pill, 999px); background: var(--action-fill); color: var(--on-action, #fff);
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); cursor: pointer;
+  transition: opacity var(--duration-fast, .15s);
 }
-.btw-list-row:hover:not(:disabled) { background: var(--overlay-light); }
-.btw-list-row[aria-current='true'] { background: var(--overlay-light); }
-.btw-list-row:disabled { cursor: default; opacity: 0.55; }
-.btw-list-row:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: -1px; }
-.btw-list-lead { display: inline-flex; color: var(--text-muted); }
-.btw-list-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btw-list-n { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
-.btw-list-sub { grid-column: 2 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.btw-relay-send:disabled { opacity: .55; cursor: default; }
+.btw-relay-send:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.btw-relay-done { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 
 .btw-quote-chip {
   display: flex; align-items: flex-start; gap: 6px;
@@ -109,12 +125,7 @@
 
 /* 手机:全屏二级页(同设置 / 成就那套 z 50) */
 .btw-page { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
-.btw-page-head {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 10px 8px 16px;
-  border-bottom: var(--border-width, 1px) solid var(--border);
-  font-size: var(--ui-font-heading, 14px); font-weight: 600; color: var(--text);
-}
-.btw-page-head > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 头由面板自己画(chrome=own);顶上让出状态栏(只改上边,别用简写抹掉左右内距) */
+.btw-page .btw-head { padding-top: calc(env(safe-area-inset-top, 0px) + 10px); }
 /* 二级页贴着屏幕底:输入卡让出底部安全区(只改下边,别用简写抹掉上面的 padding) */
 .btw-page .btw-compose { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }

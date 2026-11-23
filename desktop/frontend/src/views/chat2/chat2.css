@@ -247,6 +247,14 @@
 .t2-user-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 76%; min-width: 0; }
 .t2-username { font-size: var(--ui-font-caption, 11px); letter-spacing: .05em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
 .t2-user-avatar { color: var(--text-light, var(--text)); }
+/* 「来自顺便问」小标(11-22 传话):这条是从顺便问里拟稿后发过来的,点了打开那段 */
+.t2-relay-tag {
+  align-self: flex-end; display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; border: 0; background: transparent;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); line-height: 1.6; cursor: pointer;
+  transition: color var(--duration-fast, .15s);
+}
+.t2-relay-tag:hover { color: var(--text); }
+.t2-relay-tag:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; border-radius: var(--radius-sm, 6px); }
 .t2-user {
   max-width: 100%;
   background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
@@ -306,6 +314,12 @@
   -webkit-mask-image: var(--t2-ufold-mask); mask-image: var(--t2-ufold-mask);
 }
 .t2-user-fold-hit { position: absolute; inset: auto 0 0; height: 64px; cursor: pointer; }
+.t2-history-page {
+  align-self: center; padding: 4px 8px; border: 0; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta); cursor: pointer;
+}
+.t2-history-page:hover { color: var(--text); }
+
 .t2-user-more {
   display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; background: none; cursor: pointer;
   font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap;
@@ -1354,6 +1368,12 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   font-family: var(--font-mono, monospace); font-size: var(--ui-font-meta, 12px); line-height: 1.5;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
 }
+/* Muse 待办的依据(add_muse_todo 必填,卡片按 id 读,缺省收起):一行一条,来源灰、短摘正文色;字号跟卡面(meta)走,不另写 */
+.t2-taskcard-evidence { list-style: none; margin: 0; padding: 0 0 2px 18px; display: flex; flex-direction: column; gap: 5px; }
+.t2-taskcard-evidence > li { display: flex; align-items: flex-start; gap: 8px; min-width: 0; line-height: 1.55; }
+.t2-taskcard-evidence > li > svg { flex: none; margin-top: 3px; color: var(--text-faint, var(--text-muted)); }
+.t2-taskcard-evidence > li > span { min-width: 0; overflow-wrap: anywhere; }
+.t2-taskcard-evsrc { color: var(--text-muted); margin-right: 1em; }
 
 /* ====== Agent Desk 伴随面(ctx.desk.registerCompanion)—— 必须留在文件最末 ======
  * 卡片正文的 0.75 预览缩镜是给「文件缩略」用的;伴随面自绘(WebGL 画布),缩镜只会让它按 0.75 的
@@ -1473,6 +1493,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   transition: background var(--duration-fast, .15s);
 }
 .t2-child-row:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
+/* 顺便问那一行:右边面板里正开着的就是它(11-22 方案 A) */
+.t2-child-row[aria-current='true'] { background: var(--overlay-light, rgba(127,127,127,.1)); }
 .t2-child-lead { width: 20px; height: 20px; display: grid; place-items: center; color: var(--text-muted); }
 .t2-child-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2-child-state { display: inline-flex; align-items: center; gap: 5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; }

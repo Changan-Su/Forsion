@@ -23,6 +23,7 @@ async function main() {
     </style></head><body><div id="root"></div><script src="app.js"></script></body></html>`)
   const server = http.createServer((req, res) => {
     const file = path.join(out, req.url === '/' ? 'index.html' : req.url.split('?')[0])
+    if (req.url === '/blank.html') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>blank</title>'); return }
     if (!fs.existsSync(file)) { res.writeHead(404); res.end(); return }
     res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html')
     res.end(fs.readFileSync(file))
@@ -34,19 +35,33 @@ async function main() {
     const errors = []
     page.on('pageerror', error => errors.push(error.message))
     const settled = () => page.waitForFunction(() => probe.coordinator() && !probe.coordinator().busy && document.querySelector('.wb-workspace-viewport')?.dataset.layoutPhase === 'settled')
-    // Seed once; a reload must prove that reset actually changed persistent storage.
-    await page.goto(`http://127.0.0.1:${server.address().port}/`)
-    await settled()
-    await page.evaluate(({ key, remembered }) => {
+    const app = `http://127.0.0.1:${server.address().port}/`
+    // Seed storage from a same-origin blank page: on the app page the debounced layout save can land after
+    // localStorage.clear(), so the next load silently took the restore path instead of the default build.
+    const seed = async (fn, arg) => { await page.goto(`${app}blank.html`); await page.evaluate(fn, arg); await page.goto(app); await settled() }
+    const measure = () => page.evaluate(key => ({ widths: { ...probe.ws.getState().sideWidths },
+      groups: Object.fromEntries(probe.ws.getState().api.groups.map(g => [g.panels[0]?.params.__loc, g.api.width])),
+      saved: JSON.parse(localStorage.getItem(key)), other: localStorage.getItem('lcl.sideWidth2.other-space') }), key)
+    // 1. No saved layout: the default builder runs.
+    await seed(({ key, remembered }) => {
       localStorage.clear()
       localStorage.setItem(key, JSON.stringify(remembered))
       localStorage.setItem('lcl.sideWidth2.other-space', JSON.stringify({ left: 450 }))
     }, { key, remembered })
-    await page.reload()
-    const measure = () => page.evaluate(key => ({ widths: { ...probe.ws.getState().sideWidths },
-      groups: Object.fromEntries(probe.ws.getState().api.groups.map(g => [g.panels[0]?.params.__loc, g.api.width])),
-      saved: JSON.parse(localStorage.getItem(key)), other: localStorage.getItem('lcl.sideWidth2.other-space') }), key)
-    await settled()
+    assert.equal(await page.evaluate(() => probe.bootFellThrough()), true, 'first load builds the default layout')
+    assert.equal((await measure()).groups.left, 606, 'default build preserves a saved width')
+    // 2. Saved layout (the ordinary restart): restore skips the builder, the remembered width still wins over
+    // the width serialized in the layout.
+    const layoutKey = await page.evaluate(() => probe.layoutKey)
+    await page.waitForFunction(layoutKey => localStorage.getItem(layoutKey) !== null, layoutKey)
+    await seed(({ key, layoutKey }) => {
+      if (localStorage.getItem(layoutKey) === null) throw new Error('layout was not saved')
+      localStorage.setItem(key, JSON.stringify({ left: 520 }))
+    }, { key, layoutKey })
+    assert.equal(await page.evaluate(() => probe.bootFellThrough()), false, 'second load restores the saved layout')
+    assert.equal((await measure()).groups.left, 520, 'restored layout uses the remembered width')
+    await seed(({ key, remembered }) => localStorage.setItem(key, JSON.stringify(remembered)), { key, remembered })
+    assert.equal(await page.evaluate(() => probe.bootFellThrough()), false)
     assert.equal((await measure()).groups.left, 606, 'ordinary load preserves a saved width')
     await page.screenshot({ path: path.join(out, 'before.png'), scale: 'css' })
     await page.locator('.dv-edge-reset').click()

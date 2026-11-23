@@ -48,7 +48,7 @@ import { switchNoteLock } from './amadeus/unified/noteLock'
 import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
 import { PageHistoryHost } from './amadeus/unified/pageHistory'
 import { canPageHistory } from './amadeus/lib/hostCaps'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, setDetachApi } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
@@ -516,6 +516,7 @@ function BoardHarness() {
   // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   // 真 App 里写设置是异步的(drawingStore 先 flush、预读盘面再写):lag > 0 模拟那段「props 还是旧值」的窗口
+  const viewport = useRef({ x: 0, y: 0, z: 1 })
   const lag = useRef(0)
   const patches = useRef<Partial<BoardSettings>[]>([])
   const cur = useRef(settings)
@@ -528,6 +529,7 @@ function BoardHarness() {
       setLag: (ms: number) => { lag.current = ms },
       patches: patches.current,
       get: () => cur.current,
+      getViewport: () => viewport.current,
     }
   }, [])
   return (
@@ -544,6 +546,7 @@ function BoardHarness() {
             if (lag.current) setTimeout(apply, lag.current)
             else apply()
           }}
+          onViewportChange={(next) => { viewport.current = next }}
           onSceneChange={(json: string) => {
             ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
           }}
@@ -921,6 +924,16 @@ if (new URLSearchParams(location.search).has('dock')) {
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
+  // &pointer:Windows 那条指针拖拽(ribbonPointerDrag,只给 space: 条目)。上区换成 9 个 Space,撕出开窗记进 __rbTorn
+  // (scripts/ribbon-overflow-drag.e2e.cjs 的指针一组)。
+  if (new URLSearchParams(location.search).has('pointer')) {
+    const torn: string[] = []
+    ;(window as unknown as { __rbTorn: string[] }).__rbTorn = torn
+    setDetachApi({ detach: () => {}, ribbonPointerDrag: true, openSpace: (id) => { torn.push(id) } })
+    const ids = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9'].map((n) => `space:${n}`)
+    for (const id of ids) mk(id, 'top', id.slice(6).toUpperCase())
+    useRibbonStore.setState({ order: ids })
+  }
   // 开关类命令(Command.checked):钉进命令区后按钮要带 aria-pressed / .is-on(ribbon-dnd.e2e 的 O 组)。
   const toggle = { on: false }
   ;(window as unknown as { __rbToggle: typeof toggle }).__rbToggle = toggle
@@ -2426,6 +2439,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             key={`${st.path}${locked ? ':locked' : ''}`}
             path={st.path}
             initial={st.initial}
+            onExitCenterLine={pageStyle.centerLine ? () => setNotePageStyle(null, st.path, { centerLine: false }) : undefined}
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
@@ -2524,9 +2538,11 @@ if (new URLSearchParams(location.search).has('dock')) {
       //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
       const wb = new URLSearchParams(location.search).has('uwb')
       const pane = (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
-          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
-          <UPageHost onPath={setPath} onReading={setReading} />
+        <>
+          <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
+            {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
+            <UPageHost onPath={setPath} onReading={setReading} />
+          </div>
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
           {new URLSearchParams(location.search).has('umbar') && (
             <AmxMobileBar
@@ -2540,7 +2556,7 @@ if (new URLSearchParams(location.search).has('dock')) {
               canvas={null}
             />
           )}
-        </div>
+        </>
       )
       return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }

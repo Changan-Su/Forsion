@@ -48,8 +48,8 @@ const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? wi
 const automationHost = (): boolean => !!readTangu()?.waitBackend && hostTangu()?.executionCapabilities?.host !== false
 import { noteOf, usePageStore } from '../store/pageStore'
 import { subscribeVaultEvents } from './vaultEvents'
-import { createPluginFileOps, probeAbsent } from './pluginFileOps'
-import { markPluginCreated } from './pluginCreated'
+import { createPluginFileOps, insideWorkFolder, probeAbsent } from './pluginFileOps'
+import { isPluginCreated, markPluginCreated } from './pluginCreated'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
 import { amadeus } from '../api'
@@ -149,6 +149,7 @@ import { createEffectScope, type EffectHandle, type EffectRecord, type EffectSco
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
+import { parseInlineMarkdown } from '../../components/chatbox/chatBoxMarkdown'
 import { isLoopbackHttpUrl, pluginSurfacePartitionFor } from '../../../../shared/pluginSurface'
 import { registerEngineHarness } from './engineHarness'
 import { isElectronHost } from '../unified/writeSafety'
@@ -157,6 +158,7 @@ import { reloadWindow } from '../../reloadWindow'
 import {
   FAULT_LIMIT, createInternalsApi, dropInternalsLive, internalsAvailable, markInternalsLive, nextInternalsSourceUrl, setInternalsTrip, takeRawUsage,
 } from './pluginInternals'
+import { createStageApi } from './stageCtx'
 import { addRibbonAction } from './ribbonAction'
 import { provideFeedbackChannel } from '../../feedbackChannel'
 import { provideInboxChannel } from '../../services/inboxChannel'
@@ -166,11 +168,15 @@ import { connectionTarget, homeTarget } from '../../services/engine/targets'
 import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
 import { unitAuthHeader } from '../../services/unitToken'
+import { selectionRunOf } from './selectionRun'
+import { TRANSLATION_PLUGIN_ID } from '../../selectionActions'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
+  'pluginhost.ttsNoModel': { zh: '还没选朗读模型：在「设置 → 模型 → 语音」里选一个', en: 'No read-aloud model yet: pick one in Settings → Models → Voice' },
+  'pluginhost.ttsNoModel.action': { zh: '去设置', en: 'Open settings' },
   'pluginhost.workFolder.desc': {
     zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/<英文插件 ID>）',
     en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>)',
@@ -282,8 +288,10 @@ interface PluginState {
   initialized: boolean
   /** 注册并按偏好启用一组插件;缺省 = 全部 builtins(独立版);桌面壳传自己的选择性子集。 */
   init(plugins?: AmadeusPlugin[]): void
-  enable(id: string): void
-  disable(id: string): void
+  /** opts.quiet:调用方自己报了 plugin_lifecycle(带主进程半身的内置包开关),这里不再报。 */
+  enable(id: string, opts?: { quiet?: boolean }): void
+  /** opts.reason:用户手拨停用时选的理由(遥测 v3,可不选);opts.quiet 同上。熔断等自动停用不带。 */
+  disable(id: string, opts?: { reason?: string; quiet?: boolean }): void
   toggle(id: string): void
   /** Reconcile another window's persisted preference without replaying user-side automation effects. */
   syncDisabledPreferences(): void
@@ -320,14 +328,37 @@ const defaultWorkFolder = (pluginId: string): string => {
   return `${PLUGINS_ROOT}/${id}`
 }
 
+function configuredWorkFolder(pluginId: string): string | null {
+  let path = ''
+  try { path = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* no custom setting */ }
+  return path && !path.split('/').some(part => !part.trim() || part === '.' || part === '..') ? path : null
+}
+
+/** Use the actual plugin catalog and ownership ledger. Users may keep ordinary notes alongside plugin folders. */
+export function pluginNoteOwnership(root: string): (path: string) => boolean {
+  const plugins = usePluginStore.getState().plugins
+  const folders = new Set<string>()
+  for (const { id, name } of plugins) {
+    const custom = configuredWorkFolder(id)
+    if (custom) folders.add(custom)
+    else {
+      folders.add(defaultWorkFolder(id))
+      folders.add(`${PLUGINS_ROOT}/${sanitizeFolderName(name, id)}`)
+    }
+  }
+  return raw => {
+    const path = raw.replace(/\\/g, '/')
+    for (const folder of folders) if (insideWorkFolder(path, folder)) return true
+    return !!matchFileType(path) || plugins.some(plugin => isPluginCreated(plugin.id, path, root))
+  }
+}
+
 /** 卸载确认框用(10-28 手动卸载规范):这个插件在库里的工作文件夹(相对库根),与 ctx.app.workFolder() 同口径 ——
  *  用户自定义的优先,否则旧的显示名文件夹或按 id 的缺省;库里没有这个文件夹 → null(确认框就不列那一行)。 */
 export function pluginVaultFolder(pluginId: string, name: string): string | null {
-  let v = ''
-  try { v = (localStorage.getItem(`plugin.${pluginId}.workFolder`) || '').trim().replace(/^\/+|\/+$/g, '') } catch { /* ignore */ }
-  const custom = !!v && !v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
+  const custom = configuredWorkFolder(pluginId)
   const { folders } = usePageStore.getState()
-  return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
+  return (custom ? [custom] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
 }
 
 /** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*` + 同步状态与开关)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
@@ -660,11 +691,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // New defaults use stable ASCII identity; existing display-name folders stay readable
     // until the plugin opts into schema-aware migration. Never persist this as a user override.
     workFolder: (options) => {
-      let v = ''
-      try { v = localStorage.getItem(`plugin.${pluginId}.workFolder`) || '' } catch { /* ignore */ }
-      v = v.trim().replace(/^\/+|\/+$/g, '')
-      const bad = !v || v.split('/').some((seg) => !seg.trim() || seg === '.' || seg === '..')
-      if (!bad) return v
+      const custom = configuredWorkFolder(pluginId)
+      if (custom) return custom
       const legacy = `${PLUGINS_ROOT}/${sanitizeFolderName(getName(), pluginId)}`
       const canonical = defaultWorkFolder(pluginId)
       const { vaultRoot, folders } = usePageStore.getState()
@@ -2013,7 +2041,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
-      if (!action || typeof action.id !== 'string' || typeof action.title !== 'string' || typeof action.run !== 'function') {
+      // title:字符串 / 函数 / { zh, en }(2026-11-21+,PluginText,画的那一刻求值)
+      if (!action || typeof action.id !== 'string' || !isPluginText(action.title) || typeof action.run !== 'function') {
         console.warn(`[amadeus] 插件 ${pluginId} 的 registerSelectionAction 缺 id / title / run,已忽略`)
         return
       }
@@ -2024,6 +2053,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       if (when != null && typeof when !== 'function') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」when 不是函数,已当作没写`)
       if (output != null && output !== 'preview' && output !== 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」output 只认 'preview' | 'none',已当作 'preview'`)
+      const { placement, auto, card } = action
+      if (placement != null && placement !== 'bar' && placement !== 'more') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」placement 只认 'bar' | 'more',已当作 'more'`)
+      if (auto != null && typeof auto !== 'boolean') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」auto 不是布尔,已当作没写`)
+      if (auto === true && output === 'none') console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」auto 要 output 'preview',output: 'none' 的动作不会自动跑`)
+      if (card != null && (typeof card !== 'object' || Array.isArray(card))) console.warn(`[amadeus] 插件 ${pluginId} 的划线动作「${action.id}」card 不是对象,已当作没写`)
       set((s) => ({ selectionActions: [...s.selectionActions.filter((o) => !(o.pluginId === pluginId && o.item.id === action.id)), { pluginId, item: action }] }))
     },
     // 2026-11-16+:回一个只撤这一次登记的 disposer;同插件同 id 再登记 = 原位替换(命令面板一行,不是两行)。
@@ -2538,28 +2572,36 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ...(isElectronHost() ? { mountWebSurface: uiMountWebSurface } : {}),
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
-      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
+      // The formatting editor isn't verified on the phone yet (soft keyboard Enter, Gboard composition): the phone keeps the
+      // textarea and doesn't report 'format'. The reader stays, so stored titles still show formatted there (11-21).
+      chatBoxCapabilities: hostTangu()?.mobile ? CHAT_BOX_CAPABILITIES.filter((c) => c !== 'format') : CHAT_BOX_CAPABILITIES,
+      parseInlineMarkdown: (md) => parseInlineMarkdown(String(md ?? '')),
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
         let cancelled = false, focusPending = false
-        const pending = { ...opts }
+        const noFormat = !!hostTangu()?.mobile // see chatBoxCapabilities: the phone ignores `format`, as an older host would
+        const strip = <T extends { format?: unknown }>(o: T): T => { if (!noFormat || !('format' in o)) return o; const { format: _drop, ...rest } = o; return rest as T }
+        const pending = strip({ ...opts })
+        const early: string[] = [] // format boxes: the value is Markdown, so text typed in before the mount goes in as text
         const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'chatBox')
         const mine = cancelled ? () => false : claimHostMount(el) // 已吊销的上下文不许认领:会把新上下文那次请求挤掉
         void import('./chatBoxSurface').then(m => {
           if (cancelled) return
           if (!mine()) { dispose(); return }
           mounted = m.mountPluginChatBox(el, pending)
+          for (const t of early.splice(0)) mounted.insertText(t)
           if (focusPending) requestAnimationFrame(() => mounted?.focus())
         }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
         return {
-          update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
+          update(patch) { if (!cancelled) { const p = strip({ ...patch }); Object.assign(pending, p); mounted?.update(p) } },
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
           insertText(text) {
             if (cancelled) return
             if (mounted) mounted.insertText(text)
+            else if (pending.format === 'inline' || pending.format === 'basic') { early.push(String(text)); focusPending = true }
             else { pending.value = (pending.value ?? '') + String(text); focusPending = true }
           },
           dispose,
@@ -3181,8 +3223,26 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   const oneShot = async (what: 'complete' | 'translate', body: TanguCompleteRequest, req: OneShot): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }> => {
                     const probe = readTangu()
                     if (!probe?.complete) throw new Error(`${what} is not available on this host`)
-                    const r = await scoped(what, req, (o) => probe.complete!(body, o))
-                    return { text: r.text, ...(r.model ? { model: r.model } : body.modelId ? { model: { id: body.modelId, name: body.modelId } } : {}) }
+                    // 划线动作 run 里原样交回 cx.signal:宿主补上这段的周边(笔记前后文 / 页面说明 / 标题),插件自己给的优先;
+                    // 出结果的模型记回去给结果卡署名(selectionRun.ts)。插件看不到这些字段。
+                    const run = selectionRunOf(req?.signal, pluginId)
+                    // 周边内容只补给核心翻译插件的 translate(宿主的翻译提示词、输出就是选区的译文);第三方插件自写提示词的
+                    // complete 不补 —— 模型可能把没选中的笔记原文回给插件(11-22 Codex 复核)。署名谁都给。
+                    const withContext = !!run && what === 'translate' && pluginId === TRANSLATION_PLUGIN_ID
+                    const full: TanguCompleteRequest = run && withContext
+                      ? {
+                          ...body,
+                          ...(body.before == null && run.before ? { before: run.before } : {}),
+                          ...(body.after == null && run.after ? { after: run.after } : {}),
+                          ...(run.title ? { title: run.title } : {}),
+                          ...(run.pagePath ? { pagePath: run.pagePath } : {}),
+                          ...(run.pageInstructions ? { pageInstructions: run.pageInstructions } : {}),
+                        }
+                      : body
+                    const r = await scoped(what, req, (o) => probe.complete!(full, o))
+                    const model = r.model ?? (body.modelId ? { id: body.modelId, name: body.modelId } : undefined)
+                    if (run && model && !run.model) run.model = model // 一次 run 里先出的那个算(插件再调别的模型做校对不改署名)
+                    return { text: r.text, ...(model ? { model } : {}) }
                   }
                   return {
                     // 行内补全(FIM,2026-10-26+):与 complete 同一道门、同一套关账;模型解析与 fim_unavailable 在探针里。
@@ -3223,6 +3283,55 @@ export const usePluginStore = create<PluginState>((set, get) => {
               : {}),
           },
         }
+      : {}),
+    // 朗读(2026-11-21,ctx.tts):和 ctx.tangu 同一道门(Tangu 宿主)。这个宿主配不了朗读(网页端)→ 探针没有 tts,speak 回
+    // tts_unavailable。插件只停得了自己起的那段;停用 / 重载时中止它在飞的合成、停掉它在放的那段。
+    ...(readTangu()
+      ? (() => {
+          let n = 0
+          // 这一次激活的代际:同一个插件重载后旧 ctx 还被谁拿着,它的 stop 也只认自己这一代起的那段
+          const gen = Math.random().toString(36).slice(2, 10)
+          const prefix = `plugin:${pluginId}:${gen}:`
+          const mine = (k: string | undefined): boolean => !!k && k.startsWith(prefix)
+          return {
+            tts: {
+              speak: async (text: string, o?: { signal?: AbortSignal }): Promise<void> => {
+                if (!ctxAlive()) throw new Error('plugin disabled')
+                const probe = readTangu()?.tts
+                if (!probe) throw new Error('tts_unavailable')
+                if (typeof text !== 'string' || !text.trim()) throw new Error('ctx.tts.speak: text is required')
+                // 先验参数再登记资源:传错了不留一笔清理记录
+                const outer = o?.signal
+                if (outer != null && !(outer instanceof AbortSignal)) throw new Error('ctx.tts.speak: signal must be an AbortSignal')
+                const key = `${prefix}${++n}`
+                const ac = new AbortController()
+                const own = scope.own('request', () => { ac.abort(); probe.stop(key) }, 'tts')
+                const onOuter = (): void => ac.abort()
+                try {
+                  outer?.addEventListener('abort', onOuter)
+                  if (outer?.aborted) ac.abort()
+                  await probe.speak(key, text, { signal: ac.signal })
+                } catch (e) {
+                  // 没配模型:宿主自己出「去设置」的提示(契约),插件照样拿到 tts_no_model 自己决定要不要再说什么
+                  if ((e as Error)?.message === 'tts_no_model' && ctxAlive()) {
+                    notifyApp({ text: translate('pluginhost.ttsNoModel'), level: 'info', inAppOnly: true, dedupeKey: 'tts.noModel',
+                      action: { label: translate('pluginhost.ttsNoModel.action'), run: () => readTangu()?.tts?.openSettings() } })
+                  }
+                  throw e
+                } finally {
+                  try { outer?.removeEventListener('abort', onOuter) } finally { own.forget() }
+                }
+              },
+              stop: (): void => {
+                if (!ctxAlive()) return // 停用 / 重载后的旧 ctx:停不了任何人的
+                const probe = readTangu()?.tts
+                const cur = probe?.state()?.key
+                if (mine(cur)) probe!.stop(cur)
+              },
+              available: (): boolean => !!readTangu()?.tts?.available(),
+            },
+          }
+        })()
       : {}),
     ...agentSurface(),
     // Agent Desk 伴随面(2026-09-19):**只在有 Agent Desk 的宿主上注入** —— 桌面 Tangu。判据与 ChatView 的
@@ -3289,6 +3398,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
           alive: ctxAlive,
           own: (kind, off, label) => scope.own(kind, off, label),
         }) }
+      : {}),
+    // 演示舞台(2026-11-20+,stageCtx.ts):声明了 'stage' 才有,而且只在桌面版(window.tangu.pluginStage 在);停用 / 重载时替它关
+    ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('stage') && window.tangu?.pluginStage
+      ? { stage: createStageApi({ pluginId, alive: ctxAlive, own: (off) => scope.own('subscription', off, 'stage') }) }
       : {}),
     // 前台窗口采样:**manifest 声明过才注入**(没声明的插件连 ctx.system 都看不到)。
     // 第二道闸在主进程:config.activeWindowEnabled 默认关,关着时下面这个调用恒回 null。
@@ -3584,13 +3697,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    enable(id) {
+    enable(id, opts) {
       const plugin = get().plugins.find((p) => p.id === id)
       if (!plugin || plugin.blocked) return // 门禁挡下的插件(apiVersion/minAppVersion 不符)任何路径都不得激活
       if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
       noteExplicitEnable(id) // 用户重开 = 重试
-      if (get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
+      if (!opts?.quiet && get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
       try {
         localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
       } catch {
@@ -3601,11 +3714,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile()
     },
 
-    disable(id) {
+    disable(id, opts) {
       clearNoteRendererReload(id)
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
-      if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
+      if (plugin && !opts?.quiet && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable', ...(opts?.reason ? { reason: opts.reason } : {}) })
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       const before = get().activeIds

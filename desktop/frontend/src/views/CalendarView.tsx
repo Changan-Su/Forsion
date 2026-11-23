@@ -22,6 +22,7 @@ import {
   type DragEvent as ReactDragEvent,
   type RefObject,
   type MutableRefObject,
+  type ReactNode,
 } from 'react'
 import { Check, ChevronLeft, ChevronRight, MoreHorizontal, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@astryxdesign/core/Button'
@@ -59,6 +60,8 @@ import { agendaOrder, byStart, layoutMonthWeek, layoutTimedEvents } from './cale
 import { calendarScope, deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit, redoLastCalendarEdit } from './calendar/eventActions'
 import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
 import { armLongPress, longPressTarget } from './calendar/longPress'
+import { InlineMarkdownText, todoTitleCol } from '../amadeus/blocks/database/todoTitle'
+import { inlineMarkdownToPlain } from '../components/chatbox/chatBoxMarkdown'
 import {
   HOURS,
   weekdays,
@@ -155,6 +158,8 @@ interface CalEvent {
   /** 这张表是待办来源(成员映射了勾选列)→ 列 id;块里画方框,在日历里就能勾。 */
   check?: string
   done?: boolean
+  /** The title is a to-do list's inline Markdown (todoTitleCol: the Done column still is a checkbox, the first column text). */
+  md?: boolean
 }
 type DraftGeom = Omit<CalDraft, 'title' | 'dbPath'>
 
@@ -183,6 +188,7 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
         readonly: (!!db.readonly && !db.writeCell) || isStamped(db.columns.find((c) => c.id === dateCol)?.type ?? ''),
         check: checkboxCol,
         done: checkboxCol ? r.cells[checkboxCol] === true : undefined,
+        md: todoTitleCol(db.columns, checkboxCol) !== null,
       })
     }
   })
@@ -191,6 +197,10 @@ function buildEvents(entries: CalEntry[], vault: string, byVault: Parameters<typ
 /** 只有日期的待办(勾选列 + 单天全天)住右栏的待办,不进周 / 日视图的全天行(方案页「待办」那节)。
  *  只在桌面:手机这轮没动,待办不在右栏,滤掉就看不到了(Codex 评审)。 */
 const dateOnlyTodo = (e: CalEvent): boolean => DESK && !!e.check && e.allDay && !e.end
+/** A to-do's title is inline Markdown (the to-do box writes it, 11-21): drawn with its marks; labels, tooltips and the drag
+ *  preview read the plain text. Links and wiki links aren't clickable in a chip (the whole chip is the drag / open target). */
+const titleOf = (e: CalEvent): string => (e.md ? inlineMarkdownToPlain(e.title) : e.title)
+const titleView = (e: CalEvent): ReactNode => (e.md ? <InlineMarkdownText md={e.title} /> : e.title)
 
 const hhmm = (d: Date): string => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 const fmtMin = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
@@ -1068,7 +1078,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
           preview.style.width = `${colw - 8}px`
           preview.style.top = `${sc.scrollTop + HEAD_H + 14 + 3}px`
           preview.style.height = '20px'
-          preview.textContent = `${d.ev.title} · ${t('calview.allDay')}`
+          preview.textContent = `${titleOf(d.ev)} · ${t('calview.allDay')}`
         }
         const start = days[p.col], span = Math.max(0, diffDays(startOfDay(d.ev.end ?? d.ev.start), startOfDay(d.ev.start)))
         onGesture?.({ ...d.ev, raw: eventValue(start, span ? addDays(start, span) : null, true) })
@@ -1408,14 +1418,14 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                   data-key={e.key}
                   className={`amx-cal-chip-ev amx-cal-alldrag${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${+startOfDay(e.end ?? e.start) < +today ? ' past' : ''}${daySpanClass(e.start, e.end, d)}`}
                   style={eventColorStyle(e.color)}
-                  aria-label={t('calview.a11yAllDayEvent', { title: e.title })}
-                  title={e.readonly ? e.title : t('calview.allDayDragHint', { title: e.title })}
+                  aria-label={t('calview.a11yAllDayEvent', { title: titleOf(e) })}
+                  title={e.readonly ? titleOf(e) : t('calview.allDayDragHint', { title: titleOf(e) })}
                   onPointerDown={(pe) => allDown(e, pe)}
                   onPointerUp={(pe) => allUp(e, pe)}
                   onPointerCancel={() => { allDrag.current = null }}
                   onClick={(ce) => { if (e.readonly || (!DESK && selectedKey !== e.key) || ce.detail === 0) onPick(e.key, rectOf(ce)) }}
                 >
-                  {e.title}
+                  {titleView(e)}
                 </button>
               ) : <span key={`gap${i}`} className="amx-cal-chip-gap" />)}
               {draftCovers(d) && <DraftChip day={d} colorOf={colorOf} />}
@@ -1457,9 +1467,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                       width: `calc((100% - ${layout.indentPx}px) / ${layout.cols} - 4px)`,
                     }}
                     aria-label={e.end
-                      ? t('calview.a11yEventRange', { title: e.title, start: hhmm(e.start), end: hhmm(e.end) })
-                      : t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })}
-                    title={e.title}
+                      ? t('calview.a11yEventRange', { title: titleOf(e), start: hhmm(e.start), end: hhmm(e.end) })
+                      : t('calview.a11yEvent', { title: titleOf(e), time: hhmm(e.start) })}
+                    title={titleOf(e)}
                     ref={DESK ? undefined : longPressTarget}
                     onPointerDown={(pe) => down(e, pe)}
                     onPointerMove={move}
@@ -1473,12 +1483,12 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                         className="amx-cal-event-check"
                         role="checkbox"
                         aria-checked={!!e.done}
-                        aria-label={t('calview.a11yDone', { title: e.title })}
+                        aria-label={t('calview.a11yDone', { title: titleOf(e) })}
                         onPointerDown={(pe) => pe.stopPropagation()}
                         onClick={(ce) => { ce.stopPropagation(); if (!e.db.readonly) { setAggCell(e.db, e.row.rowId, e.check!, e.done ? undefined : true); if (!e.done) track('todo.done') } }}
                       />
                     )}
-                    <span className="amx-cal-event-title">{e.title}</span>
+                    <span className="amx-cal-event-title">{titleView(e)}</span>
                     <span className="amx-cal-event-t">{short || !e.end ? hhmm(e.start) : `${hhmm(e.start)}–${hhmm(e.end)}`}</span>
                     {!DESK && selectedKey === e.key && !e.readonly && (colw - layout.indentPx) / layout.cols >= 88 && <>
                       <span className="amx-cal-handle start" aria-label={t('calview.resizeStart')} onPointerDown={(pe) => down(e, pe, 'start')} />
@@ -1709,17 +1719,17 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                       data-key={e.key}
                       className={`amx-cal-chip-ev${e.readonly ? ' readonly' : ''}${selectedKey === e.key ? ' selected' : ''}${daySpanClass(e.start, e.end, day)}`}
                       style={eventColorStyle(e.color)}
-                      title={e.title}
+                      title={titleOf(e)}
                       aria-label={!e.allDay && sameDay(e.start, day)
-                        ? t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })
-                        : e.title}
+                        ? t('calview.a11yEvent', { title: titleOf(e), time: hhmm(e.start) })
+                        : titleOf(e)}
                       ref={DESK ? undefined : longPressTarget}
                       onPointerDown={(pe) => chipDown(e, pe)}
                       onPointerUp={(pe) => chipUp(e, pe)}
                       onPointerCancel={() => { chipDrag.current = null }}
                       onClick={(ce) => { if (e.readonly || (!DESK && selectedKey !== e.key) || ce.detail === 0) onPick(e.key, rectOf(ce)) }}
                     >
-                      {!e.allDay && sameDay(e.start, day) && <span className="amx-cal-chip-t">{hhmm(e.start)}</span>} {e.title}
+                      {!e.allDay && sameDay(e.start, day) && <span className="amx-cal-chip-t">{hhmm(e.start)}</span>} {titleView(e)}
                     </button>
                   ) : <span key={`gap${i}`} className="amx-cal-chip-gap" />)}
                   {hidden > 0 && (
@@ -1802,7 +1812,7 @@ function DayAgendaPopover({
           {agendaOrder(events).map((ev) => (
             <button key={ev.key} style={eventColorStyle(ev.color)} onClick={(e) => onPick(ev.key, rectOf(e))}>
               <span className="amx-cal-agenda-time">{ev.allDay ? t('calview.allDay') : hhmm(ev.start)}</span>
-              <span>{ev.title}</span>
+              <span>{titleView(ev)}</span>
             </button>
           ))}
         </div>

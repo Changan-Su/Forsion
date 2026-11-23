@@ -162,7 +162,10 @@ async function main() {
   page = await open('unlimited&capped')
   await page.waitForSelector('.t2c-cu-limit')
   s = await info(page)
-  check('今日不限:显示「不限」、无条、无倒计时', /不限/.test(s.limits[0].text) && !/重置/.test(s.limits[0].text) && s.limits[0].key === 'daily', s.limits)
+  // 11-20 用户定:不限的那档整行不画,积分跟在额度后面
+  check('今日不限:今日那行不画、本周照常、不出现「不限」', s.limits[0]?.key === 'weekly' && !s.limits.some((l) => l.key === 'daily') && !/不限/.test(s.text), s.limits)
+  check('积分:跟在额度后面、千分位、无条', s.limits.at(-1)?.key === 'points' && /积分[\s\S]*1,280/.test(s.limits.at(-1).text) && !s.limits.at(-1).warn, s.limits)
+  if (SHOT) await page.locator('.t2c-ctxring-pop').screenshot({ path: path.join(OUT, 'zh-unlimited-points.png') })
   check('封顶说明不藏进详情(ctxlimit T7 依赖)', /模型最大 1M，默认只用到 272k/.test(s.text), s.text)
   await page.close()
 

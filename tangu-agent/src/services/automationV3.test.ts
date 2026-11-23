@@ -16,7 +16,8 @@ import { expandTemplate, expandCells } from './automationTemplate.js';
 import { applyDbAction, emptyTouch, mergeTouch, stampNewRow, type DbActionIo, type DbActionSpec, type DbTouch } from './automationDbAction.js';
 import { drainAutomation, DRAIN_MAX_ROUNDS, type DrainDeps } from './automationDrain.js';
 import {
-  evaluateTriggers, materializeRow, triggerRowOf, validateTriggerInput, upsertTrigger, loadTriggers, normalizeVaultRel, cursorFor, MAX_TRIGGERS,
+  evaluateTriggers, materializeRow, triggerRowOf, validateTriggerInput, upsertTrigger, loadTriggers, markTriggersFired, triggerEpoch,
+  normalizeVaultRel, cursorFor, MAX_TRIGGERS,
   type MuseTrigger, type DbLike, type TriggerContext, type ActionSpec,
 } from './museTriggers.js';
 import type { DbCursor } from './dbCursors.js';
@@ -407,6 +408,21 @@ let seq = 0;
 const addRow = (db: DbLike, cells: Record<string, unknown> = {}): string => { const id = `n${++seq}`; db.rows.push({ id, cells }); return id; };
 
 describe('drainAutomation', () => {
+  it('同轮等 Agent 撰写期间改期的 Muse 规则不会按原定时间叫醒 Muse', async () => {
+    const due = { type: 'at', datetime: '2026-11-22T09:00' } as const;
+    const muse = rule({ id: 'wake', cond: due, actions: undefined });
+    const draft = rule({ id: 'draft', cond: due, actions: [
+      { type: 'send_message', agentSlug: 'desk', delivery: 'solo', source: 'agent', prompt: 'Share the update.' },
+    ] });
+    const w = world({}, [muse, draft], () => {
+      w.triggers[0] = { ...muse, cond: { type: 'at', datetime: '2026-11-23T09:00' } };
+      return {};
+    });
+    const result = await drainAutomation({ ...w.deps, now: () => new Date(2026, 10, 22, 9, 1) });
+    expect(result.launched).toEqual(['draft']);
+    expect(result.museFired).toEqual([]);
+  });
+
   it('自写不可见:规则 A 盯 A.db 又写 A.db → 只跑一次就停(2 轮);负对照:去掉自游标推进 → 一路跑到 cap', async () => {
     const mk = () => {
       const tables = { 'A.db': tbl([{ id: 'r1' }]) };
@@ -645,6 +661,24 @@ describe('真 io', () => {
     writeFileSync(join(vault, 'erp', '订单.db'), amadeus.serializeDb(erp(orders())));
   });
   const readTable = (name: string): DbFile => JSON.parse(readFileSync(join(vault, 'erp', name), 'utf8'));
+
+  it('一次性规则在撰写期间改期，旧运行结束时保留新时间和启用状态', async () => {
+    const original = await upsertTrigger({
+      desc: 'One-time note', cond: { type: 'at', datetime: '2030-01-01T09:00' }, enabled: true, cooldownHours: 0,
+      actions: [{ type: 'send_message', agentSlug: 'desk', delivery: 'solo', source: 'agent', prompt: 'Summarize the update.' }],
+    });
+    if (!original.ok) throw new Error(original.error);
+    const { id } = original.trigger;
+    const epochs = new Map([[id, triggerEpoch(original.trigger)]]);
+    const changed = await upsertTrigger({ ...original.trigger, cond: { type: 'at', datetime: '2030-01-02T09:00' } }, id);
+    if (!changed.ok) throw new Error(changed.error);
+    await markTriggersFired([id], new Date(), undefined, epochs);
+    expect((await loadTriggers()).find((t) => t.id === id)).toMatchObject({
+      enabled: true, lastFiredAt: null, cond: { type: 'at', datetime: '2030-01-02T09:00' },
+    });
+    await markTriggersFired([id], new Date(), undefined, new Map([[id, triggerEpoch(changed.trigger)]]));
+    expect((await loadTriggers()).find((t) => t.id === id)?.enabled).toBe(false);
+  });
 
   it('runActions → touched 只含真写过的表及精确因果(skipped 不算);launchAutomationTriggers 回报 launched/touched', async () => {
     const t = rule({

@@ -13,7 +13,7 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { PluginLogo } from './PluginLogo'
-import { SettingsSwitch } from './SettingsPrimitives'
+import { ReasonSwitch, reportEnginePluginToggle, type LifecycleReason } from './PluginReasons'
 import { homeTarget } from '../services/engine/targets'
 import { dependentsOf, unmetDependencies } from '@amadeus/plugins/pluginDeps'
 
@@ -62,10 +62,14 @@ export const PluginsTab: React.FC<{
   const runningDependents = (p: PluginInfo): PluginInfo[] =>
     dependentsOf(p.id, nodes).map((n) => byId(n.id)!).filter((x) => x && running(x))
 
-  const toggle = async (p: PluginInfo): Promise<void> => {
+  const toggle = async (p: PluginInfo, reason?: LifecycleReason): Promise<void> => {
     const deps = p.enabled ? runningDependents(p) : []
     if (deps.length && !window.confirm(t('settings.plugins.disableDependents', { name: nm(p), list: deps.map(nm).join(sep) }))) return
-    try { await setPluginEnabled(homeTarget(), p.id, !p.enabled); onReload() } catch { /* ignore */ }
+    try {
+      await setPluginEnabled(homeTarget(), p.id, !p.enabled)
+      reportEnginePluginToggle(p, !p.enabled, reason) // 匿名遥测 plugin_lifecycle(v3 补上引擎插件开关的漏报)
+      onReload()
+    } catch { /* ignore */ }
   }
 
   // 运行期重扫:新装 / 更新 / 移除的插件即时生效(引擎 10-02 起热插拔;破不了模块缓存的更新仍要重启,needsRestart 会说)。
@@ -85,7 +89,7 @@ export const PluginsTab: React.FC<{
 
   // 卸载走统一确认框(components/UninstallDialog):插件文件与设置由引擎挪进回收站(?trash=1;可勾「保留设置」),删完 6 秒内可撤销。
   const [asking, setAsking] = useState<PluginInfo | null>(null)
-  const uninstall = async (p: PluginInfo, opts: { keepSettings: boolean }): Promise<void> => {
+  const uninstall = async (p: PluginInfo, opts: { keepSettings: boolean; reason?: string }): Promise<void> => {
     if (await uninstallEnginePlugin(p.id, nm(p), opts)) onReload()
   }
 
@@ -185,7 +189,7 @@ export const PluginsTab: React.FC<{
               const blocked = !p.enabled && missingFor(p).length > 0 // 关着、前置又没齐 → 开不了
               return (
                 <span title={blocked ? t('settings.plugins.needsDepsToEnable', { list: missingFor(p).map(label).join(sep) }) : undefined}>
-                  <SettingsSwitch checked={p.enabled} disabled={blocked} label={nm(p)} onChange={() => void toggle(p)} />
+                  <ReasonSwitch checked={p.enabled} disabled={blocked} label={nm(p)} onChange={(_on, reason) => void toggle(p, reason)} />
                 </span>
               )
             })()}
