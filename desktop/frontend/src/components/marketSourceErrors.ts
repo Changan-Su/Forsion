@@ -70,6 +70,7 @@ registerMessages({
   'market.sources.err.collected-adapt-mismatch': { zh: '适配说明和要装的提交对不上，这次没有安装，稍后再试。', en: 'The adaptation notes don\'t match the commit being installed, so it wasn\'t installed. Try again later.' },
   'market.sources.err.collected-detail-unavailable': { zh: '暂时读不到 Forsion 服务器上的收录详情，稍后再试。', en: 'Couldn\'t read the collected details from the Forsion server. Try again later.' },
   'market.sources.err.skill-invalid': { zh: '这个技能的 SKILL.md 缺少名称或说明，没有安装。', en: 'This skill\'s SKILL.md has no name or description, so it wasn\'t installed.' },
+  'market.sources.err.destination-link': { zh: '这个技能的安装文件夹是指向别处的链接，为免改到别的文件夹，没有安装。', en: 'This skill\'s install folder is a link to somewhere else, so it wasn\'t installed to avoid changing that folder.' },
 })
 
 const ERROR_CODES: Array<[RegExp, string]> = [
@@ -77,6 +78,7 @@ const ERROR_CODES: Array<[RegExp, string]> = [
   [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|collected-(?:adapt-unavailable|adapt-mismatch|detail-unavailable)|forsion-git-(?:unsupported|signin|no-access|needs-setup|ref-missing))\b/, '$1'],
   [/install: duplicate path in archive/, 'duplicate-path'],
   [/install: skill-invalid/, 'skill-invalid'],
+  [/install: destination is a link/, 'destination-link'],
   [/install: plugin id taken/, 'plugin-id-taken'],
   [/install: internals-raw-unapproved/, 'internals-raw-unapproved'],
   [/install: stage-unapproved/, 'stage-unapproved'],
