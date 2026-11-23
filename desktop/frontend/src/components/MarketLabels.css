@@ -1,0 +1,62 @@
+/* 商店条目的来源标签、角上的数、要求、收录技能的信任栏 / 审计 / 适配说明,以及来源条目的确认块
+ * (商店页与对话里的商店卡片共用,所以跟 MarketLabels.tsx 走,不放 MarketSources.css)。
+ * 只用产品 token;字号一律走 --ui-font-*(check:uiscale)。方案:docs/ToBeImproved/商店技能来源方案_2026-11-23 */
+
+/* 作者旁的标签:作者名先截,标签不截 */
+.mk-pub { display: inline-flex; align-items: center; gap: 3px; flex: none; height: 18px; padding: 0 6px; border-radius: var(--radius-xs); background: var(--overlay-light); color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+.mk-pub svg { flex: none; }
+.mk-pub.is-official { color: var(--text); }
+.mk-pub.is-official svg { color: var(--accent-ink); }
+.mk-pub.is-removed { padding: 0; background: transparent; color: var(--text-faint); }
+
+/* 卡片底行:作者 + 标签(第三方来源写版本) */
+.mk-card-meta.mk-card-by { display: inline-flex; align-items: center; gap: 4px; }
+.mk-card-by .mk-card-author { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* 卡片顶行:类型 · 要求,数靠右 */
+.mk-card-eyeline .mk-tier { color: var(--text-faint); font-weight: 400; }
+.mk-card-eyeline .mk-tier::before { content: '·'; margin-right: 6px; }
+.mk-card-eyeline .mk-count { margin-left: auto; }
+.mk-count { display: inline-flex; align-items: center; gap: 2px; color: var(--text-faint); font-weight: 400; white-space: nowrap; }
+.mk-count svg { flex: none; }
+.mk-detail-kind .mk-tier { color: var(--text-muted); font-weight: 500; }
+
+/* 详情侧栏:要求 / 已适配,第三种信任状态,审计 */
+.mk-needs { display: flex; align-items: flex-start; gap: 9px; margin-top: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta, 1.5); }
+.mk-needs > svg { flex: none; margin-top: 2px; }
+.mk-needs b { display: block; color: var(--text); font-weight: 600; }
+.mk-trust-row.mk-collected-trust { color: var(--text-muted); }
+.mk-trust-row.mk-collected-trust > svg { flex: none; }
+.mk-audit { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 8px; }
+.mk-audit > span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.mk-audit > .is-ok { color: var(--text-muted); }
+.mk-audit > .is-warn { color: var(--warning); }
+
+/* 「适配说明」页签 */
+.mk-adapt { display: grid; gap: 10px; color: var(--text); font-size: var(--ui-font-body); line-height: 1.6; }
+.mk-adapt p { margin: 0; color: var(--text-muted); }
+.mk-adapt table { width: 100%; border-collapse: collapse; font-size: var(--ui-font-meta); }
+.mk-adapt th, .mk-adapt td { padding: 7px 10px 7px 0; border-bottom: var(--border-width) solid var(--border); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.mk-adapt th { color: var(--text-faint); font-weight: 500; }
+.mk-adapt td small { color: var(--text-faint); white-space: nowrap; }
+.mk-adapt code { font-size: var(--ui-font-caption); }
+.mk-adapt .mk-adapt-by { color: var(--text-muted); white-space: nowrap; overflow-wrap: normal; }
+.mk-adapt tr.is-unsupported td { color: var(--text-muted); }
+.mk-adapt .mk-adapt-sub { margin-top: 6px; font-size: var(--ui-font-meta); font-weight: 600; }
+.mk-adapt .mk-tags span { display: inline-flex; align-items: center; gap: 3px; max-width: none; }
+.mk-adapt pre { margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-caption); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 来源条目装前确认:详情侧栏里原地占住安装按钮;对话卡片里换下按钮那一行 */
+.mk-src-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta, 1.5); }
+.mk-src-confirm .mk-src-acts { display: flex; justify-content: flex-end; gap: 8px; }
+.mk-src-confirm .mk-src-acts .btn { flex: 1; justify-content: center; }
+.mk-confirm-text { display: grid; gap: 2px; }
+.mk-confirm-text b { color: var(--text); font-weight: 600; }
+.mk-confirm-text span { color: var(--text-muted); }
+
+/* 对话里的商店卡片:作者行与确认块(放末尾:要压过 MarketUpgrade.css 里 .mk-chat-card-top span 的通用颜色) */
+.mk-chat-card-top .mk-chat-meta { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.mk-chat-card-top .mk-pub.is-official { color: var(--text); }
+.mk-chat-card-top .mk-pub.is-removed { color: var(--text-faint); }
+.mk-chat-confirm { margin-top: 12px; }
+.mk-chat-confirm .mk-src-confirm .mk-src-acts .btn { flex: none; }
