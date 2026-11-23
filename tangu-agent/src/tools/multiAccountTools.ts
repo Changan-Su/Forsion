@@ -2,7 +2,8 @@
  * 多账号模式(core/accountScope.ts)的工具白名单:缺省拒绝,只放这一段审过的。不在名单里的工具既不进给模型的清单,
  * 执行时也再拒一次(toolRegistry.resolveTools 最前一道 + registry.executeTool 开头一道;自定义工具与 MCP 在多账号模式下一律不给)。
  * 口径:对话必需、记忆、Agent 管理、技能、文件读写 / 列目录 / 搜索(搜索不起 ripgrep,走 Node 扫描)、过去的会话。
- * 会起子进程的(run_bash、run_background、git、view_video、read_document 的转换、view_image 的缩图…)一律不进;用进程那一份云端凭据替人办事的(账号、发布、商店、
+ * 会起子进程的(run_bash、run_background、git、view_video、read_document 的转换、view_image 的缩图…)一律不进;唯一的例外是
+ * run_plugin_script:只跑插件包目录里自带的脚本(services/pluginScripts.ts)。用进程那一份云端凭据替人办事的(账号、发布、商店、
  * 收件箱、生图、网页搜索 / 抓取)也不进。文件工具另受账号文件夹的读写根约束(services/accessDomain.ts 的账号域)。
  * 加一个名字之前:读过它的实现,确认它只经按人分流的库 / 路径 / 缓存拿数据、不起子进程、不用进程级云端凭据。
  */
@@ -19,11 +20,13 @@ export const MULTI_ACCOUNT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   'read_file', 'write_file', 'edit_file', 'multi_edit', 'list_dir',
   // 搜索:文件名 / 内容(Node 扫描,不起 ripgrep,搜索根在账号文件夹里)、过去的会话(这个账号自己的库)
   'search_files', 'glob_files', 'search_sessions', 'read_session',
+  // 插件包里自带的脚本(唯一会起子进程的:只跑插件包目录里的、不经 shell、一次一个,services/pluginScripts.ts)
+  'run_plugin_script',
 ]);
 
 /** 会往账号文件夹 / 账号库里写东西的工具:执行前先看这个账号的磁盘上限(tools/registry.ts 的 executeTool)。 */
 export const MULTI_ACCOUNT_STORAGE_TOOLS: ReadonlySet<string> = new Set([
-  'write_file', 'edit_file', 'multi_edit', 'remember', 'log_event', 'manage_agent', 'manage_skill', 'todo_write',
+  'write_file', 'edit_file', 'multi_edit', 'remember', 'log_event', 'manage_agent', 'manage_skill', 'todo_write', 'run_plugin_script',
 ]);
 
 /** 多账号模式下这件工具能不能出现 / 执行。单人模式恒 true。 */

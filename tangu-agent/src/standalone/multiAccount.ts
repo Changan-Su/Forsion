@@ -40,6 +40,7 @@ import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
 import { remoteLockGuard } from './remoteLockGuard.js';
 import { accountHasRuns, drainRunsForExit, recoverAccountRuns } from '../services/agentLoop.js';
+import { clearAccountScratch } from '../services/pluginScripts.js';
 import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import type { StandaloneConfig } from './config.js';
 
@@ -274,6 +275,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     // 开户:建目录、迁移、播种内置技能 / 示例命令 / 插件包带的人设。在该账号的上下文里跑,同账号并发首请求共用一次。
     provision: async (id) => {
       mkdirSync(accountWorkspaceDir(id), { recursive: true });
+      clearAccountScratch(id); // 上次进程留下的插件脚本临时目录(这一轮结束时本该删掉的)
       await runMigration();
       // 上次进程留下的 run(崩溃 / 被强杀 / 退出时还在排队):开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。
       // 标成中断、补回这一轮用户说的话和一条说明行,不重放、不续跑(services/agentLoop.ts 的 recoverAccountRuns)。

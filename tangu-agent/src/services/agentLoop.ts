@@ -1,6 +1,7 @@
 import { accountWorkspaceDir, bindAccount, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
 import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, startRunClock, type WaitingFor } from './runAdmission.js';
+import { disposeRunScratch } from './pluginScripts.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
@@ -506,6 +507,7 @@ function startRunInAccount(runId: string): void {
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
     releaseRun(runId); // 多账号模式的准入名额与时长计时(没拿过 = no-op)
+    disposeRunScratch(runId); // 多账号模式:这一轮插件脚本的临时目录(没有 = no-op)
     runTasks.delete(runId);
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));

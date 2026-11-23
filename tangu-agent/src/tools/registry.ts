@@ -26,6 +26,7 @@ import { skillsProvider } from './builtin/skills.js';
 import { sandboxPythonProvider } from './builtin/sandboxPython.js';
 import { hostExecProvider } from './hostExec.js';
 import { fileSearchProvider } from './builtin/fileSearch.js';
+import { pluginScriptProvider } from './builtin/pluginScript.js';
 import { webFetchProvider } from './builtin/webFetch.js';
 import { browserToolsProvider, browserTabsProvider } from './builtin/browserTools.js';
 import { todoProvider } from './builtin/todo.js';
@@ -188,6 +189,7 @@ registerToolProvider(hostExecProvider);
 //    这样无论 sandbox 还是 host 模式,新工具都**追加在既有 defs 末尾**(严格 append-only,
 //    旧会话的 prompt 前缀缓存只在部署边界失效一次)。后续新增 provider 继续往这里追加。──
 registerToolProvider(fileSearchProvider);
+registerToolProvider(pluginScriptProvider); // 多账号模式才有(插件包里的脚本,services/pluginScripts.ts)
 registerToolProvider(webFetchProvider);
 registerToolProvider(browserToolsProvider);
 registerToolProvider(todoProvider);
