@@ -12,10 +12,11 @@ const USE_SKILL_MAX_CHARS = 120_000;
 
 // 云端纯 Python 沙箱的文档技能「精简速查表」：覆盖 docx/xlsx/pptx/pdf。
 // 这些技能的官方正文是给 docx-js/pandoc/OOXML 写的（10万+字），会把模型带成生成超长 verbose 代码、
-// 每步 8000+ token、几分钟。这里改喂极简 python 库用法，生成量降一个数量级。按技能 name 匹配。
-const CLOUD_SKILL_CHEATSHEETS: Array<{ test: RegExp; title: string; body: string }> = [
+// 每步 8000+ token、几分钟。这里改喂极简 python 库用法，生成量降一个数量级。
+// 只给云端目录里的那几个文档技能(见 cloudDocCheatsheet):`names` 是整串比对的技能名 / id,不是子串。
+const CLOUD_SKILL_CHEATSHEETS: Array<{ names: readonly string[]; title: string; body: string }> = [
   {
-    test: /docx|word/i,
+    names: ['docx', 'word'],
     title: 'docx (use python-docx, cloud Python sandbox)',
     body: [
       'Use python-docx to write the .docx in one step and save it to the current directory (it flows back to the workspace).',
@@ -37,7 +38,7 @@ const CLOUD_SKILL_CHEATSHEETS: Array<{ test: RegExp; title: string; body: string
     ].join('\n'),
   },
   {
-    test: /xlsx|excel|spreadsheet/i,
+    names: ['xlsx', 'excel', 'spreadsheet'],
     title: 'xlsx (use openpyxl, cloud Python sandbox)',
     body: [
       'Use openpyxl to write the .xlsx (for large data, use pandas df.to_excel).',
@@ -51,7 +52,7 @@ const CLOUD_SKILL_CHEATSHEETS: Array<{ test: RegExp; title: string; body: string
     ].join('\n'),
   },
   {
-    test: /pptx|powerpoint|presentation|ppt/i,
+    names: ['pptx', 'powerpoint', 'presentation', 'ppt'],
     title: 'pptx (use python-pptx, cloud Python sandbox)',
     body: [
       'Use python-pptx to write the .pptx.',
@@ -66,7 +67,7 @@ const CLOUD_SKILL_CHEATSHEETS: Array<{ test: RegExp; title: string; body: string
     ].join('\n'),
   },
   {
-    test: /\bpdf\b/i,
+    names: ['pdf'],
     title: 'pdf (use reportlab, cloud Python sandbox)',
     body: [
       'Use reportlab to write the .pdf (for CJK text, use the built-in CID font STSong-Light).',
@@ -84,6 +85,20 @@ const CLOUD_SKILL_CHEATSHEETS: Array<{ test: RegExp; title: string; body: string
     ].join('\n'),
   },
 ];
+
+/**
+ * 速查表只替换云端目录里那几个文档技能(管理员上传的官方 docx / xlsx / pptx / pdf)的正文。
+ * 先认来源:本地技能(`local:`,含插件技能 `local:plugin/…` 与本机导入的同名技能)、用户自己上传的
+ * (`usr_*` / 带 owner_user_id)都不是,一律给它自己的正文。再认名字:技能名或去掉 `<appId>:` 前缀的 id
+ * 整串等于 `names` 之一才算。曾按子串匹配(/docx|word/i 之类),名字里带 word / presentation 的技能
+ * (如 word-count、presentation-notes)拿到的是速查表,不是它自己的 SKILL.md。
+ */
+function cloudDocCheatsheet(id: string, s: { name?: unknown; owner_user_id?: unknown; source?: unknown }) {
+  if (id.startsWith('local:') || id.startsWith('usr_')) return undefined;
+  if (s.owner_user_id || (s.source != null && s.source !== 'cloud')) return undefined;
+  const keys = [String(s.name ?? ''), id.replace(/^[\w-]+:/, '')].map((k) => k.trim().toLowerCase());
+  return CLOUD_SKILL_CHEATSHEETS.find((c) => keys.some((k) => c.names.includes(k)));
+}
 
 export const skillsProvider: ToolProvider = {
   id: 'builtin:skills',
@@ -116,7 +131,6 @@ export const skillsProvider: ToolProvider = {
         }
         const s = await deps().brain.assets.getSkill(id, ctx.userId);
         if (!s) return `Skill "${id}" not found.`;
-        // 文档类技能：云端 Python 沙箱用精简 python 库速查表替代官方 docx-js/OOXML 长正文（生成量降一个数量级）。
         if (id.startsWith('usr_gh_')) {
           if (ctx.execMode !== 'sandbox') return 'This cloud skill package is available in cloud sandbox sessions.';
           const load = deps().brain.assets.getSkillPackage;
@@ -124,7 +138,8 @@ export const skillsProvider: ToolProvider = {
           const folder = await stageSessionSkill(ctx, id, () => load(ctx.userId, id), ctx.signal);
           return `# Skill: ${s.name}\n\nSkill folder in the Python sandbox: /workspace/${folder}\nResolve scripts and references relative to this folder.\n\n${s.content?.slice(0, USE_SKILL_MAX_CHARS)}`;
         }
-        const cheat = CLOUD_SKILL_CHEATSHEETS.find((c) => c.test.test(String(s.name || '')));
+        // 云端目录里的文档技能：用精简 python 库速查表替代官方 docx-js/OOXML 长正文（生成量降一个数量级）。
+        const cheat = cloudDocCheatsheet(id, s as { name?: unknown; owner_user_id?: unknown; source?: unknown });
         if (cheat) return `# Skill: ${cheat.title}\n\n${cheat.body}`;
         const body = (s.content && String(s.content).trim()) || (s.description && String(s.description).trim()) || '';
         if (!body) return `Skill "${s.name}" has no instructions.`;
