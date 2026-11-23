@@ -302,10 +302,37 @@ export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, be
   listHistory(t, sessionId, limit, before).then((r) => r.messages)
 
 /** 同一个接口,连同失败的那几轮一起(引擎 services/failedRuns.ts):重开对话时据此补回失败行。老引擎不带 = 空,不是「没有失败」以外的意思。 */
-export const listHistory = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
-  request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[] }>(
-    t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}${before ? `&before=${before}` : ''}`,
-  ).then((r) => ({ messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [] }))
+export const CHAT_PAGE_SIZE = 24
+export interface ChatPageCursor {
+  cards?: boolean
+  beforeId?: string
+  afterId?: string
+  aroundId?: string
+  known?: Record<string, string>
+}
+export interface ChatPage {
+  removed?: string[]
+  ids: string[]
+  versions: Record<string, string>
+  older: boolean
+  newer: boolean
+  missing: boolean
+}
+
+export async function listHistory(t: EngineTarget, sessionId: string, limit = 200, before?: number, cursor?: ChatPageCursor) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (before) q.set('before', String(before))
+  if (cursor) {
+    q.set('view', cursor.cards ? 'cards' : 'page')
+    if (cursor.beforeId) q.set('before_id', cursor.beforeId)
+    if (cursor.afterId) q.set('after_id', cursor.afterId)
+    if (cursor.aroundId) q.set('around_id', cursor.aroundId)
+    if (cursor.known) q.set('known', JSON.stringify(cursor.known))
+  }
+  const r = await request<{ messages: MessageRecord[]; failed_runs?: FailedRunRecord[]; page?: ChatPage }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/messages?${q}`)
+  return { messages: r.messages, failedRuns: Array.isArray(r.failed_runs) ? r.failed_runs : [], page: r.page }
+}
 
 /**
  * 整段对话:接口单页硬限 500 且只回最近一页,必须用 before 游标向前翻页,否则早期内容静默丢失。

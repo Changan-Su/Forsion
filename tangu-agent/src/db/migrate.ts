@@ -411,6 +411,20 @@ export async function runMigration(): Promise<void> {
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_historian ON chat_sessions(app_id, archived, updated_at)`);
 
+  // A SQLite secondary index already includes rowid as its final tie-breaker.
+  const timeIndex = getDbType() === 'sqlite' ? 'COALESCE(timestamp, 0)' : 'COALESCE(timestamp, 0), id';
+  await query(`CREATE INDEX IF NOT EXISTS idx_chat_messages_time ON chat_messages(session_id, ${timeIndex})`);
+  if (getDbType() === 'sqlite') {
+    // PG already exposes the row version through xmin. SQLite timestamps have second
+    // precision, and multiple processes can edit the same row in that second.
+    await addColumnIfMissing('chat_messages', 'history_version INTEGER NOT NULL DEFAULT 0');
+    await query(`CREATE TRIGGER IF NOT EXISTS chat_messages_history_insert AFTER INSERT ON chat_messages
+      BEGIN UPDATE chat_messages SET history_version = random() WHERE rowid = NEW.rowid; END`);
+    await query(`CREATE TRIGGER IF NOT EXISTS chat_messages_history_version AFTER UPDATE OF
+      timestamp, role, content, reasoning, tool_calls, tool_results, attachments, display_files, agent_slug, origin, model_id, is_error
+      ON chat_messages BEGIN UPDATE chat_messages SET history_version = random() WHERE rowid = NEW.rowid; END`);
+  }
+
   // ── 以下仅共享云库 / 外部 Postgres / PGlite(getDbType()='postgres')────────
   // sqlite 无 pg_constraint 目录;app_id 归位在 standalone 由 fixLegacyAppIds 无条件迁。
   if (getDbType() === 'postgres') {

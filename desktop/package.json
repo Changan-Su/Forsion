@@ -169,6 +169,7 @@
     "check:agentpicker": "node scripts/e2e-editor.cjs --check=agent-picker",
     "check:account-rewards": "node scripts/account-rewards.check.cjs",
     "check:reading-mode": "node scripts/reading-mode.check.cjs",
+    "check:chathistory": "node scripts/chat-history-page.check.cjs",
     "check:chatscrollhold": "node scripts/chat-scroll-hold.check.cjs",
     "check:chatcanvasjump": "node scripts/chat-canvas-jump.check.cjs",
     "check:sendflight": "node scripts/send-flight.check.cjs",
