@@ -115,6 +115,13 @@ export interface SubChat {
 
 // ── M3 数据 API 形状 ──────────────────────────────────────────────────────────
 
+/** 任务卡 / 作品卡的落点(处理记录里的 l):开子会话 / 在这里做 / 新会话执行 / 交给 Muse / 忽略(作品卡:here = 做成了)。 */
+export type CardMarkLanding = 'child' | 'here' | 'new' | 'muse' | 'ignore'
+/** 一张卡的「处理过了」记录(GET / POST /agent/sessions/:id/card-marks,引擎 chat_sessions.card_marks;见 services/cardMarks.ts)。
+ *  t = 记下的时刻(ms);c = 开出的子会话 id(l = 'child' 时)。 */
+export interface CardMarkRecord { l: CardMarkLanding; t: number; c?: string }
+
+
 export interface SessionRecord {
   id: string
   title: string | null

@@ -15,7 +15,7 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
 import { resolveInside } from './creationPath'
 import type { CreationCard } from './suggest'
-import { creationDoneKey, markTaskHandled, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS } from './pendingTasks'
+import { creationDoneKey, markTaskHandled, refreshCardMarks, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS } from './pendingTasks'
 
 registerMessages({
   'creation.card.createTitle': { zh: '做成作品：{name}', en: 'Make it a creation: {name}' },
@@ -156,6 +156,11 @@ export function CreationCardView({ card, sessionId }: { card: CreationCard; sess
     const api = window.tangu
     if (!api?.productsCreate || !api.productsRegister || busy) return
     setBusy(true); setError('')
+    // 另一端可能刚做成 / 点了不用了:先跟引擎对一下(最多等 1.5s),已处理就不再建一个作品
+    if (sessionId && doneKey) {
+      await refreshCardMarks(sessionId)
+      if (taskHandled(doneKey)) { setBusy(false); return }
+    }
     // 跑着 / 正在发送 / 另一张作品卡正在挪它的时候不动:agent 正往原目录写,挪过去续话还会被当成插话塞进这一轮。
     // 占住之后到挪完(含复制那几秒)这条会话发不了新消息
     if (sessionId && (useApp.getState().runningBySession[sessionId] || !lockSessionMove(sessionId))) { setError(t('creation.err.running')); setBusy(false); return }
@@ -178,7 +183,7 @@ export function CreationCardView({ card, sessionId }: { card: CreationCard; sess
       if (!moved) { app.setNewChatWs({ key: dir, name, kind: 'local', path: dir }); app.setActiveId(null) }
       setMade({ dir, name, moved })
       created = name
-      if (doneKey) markTaskHandled(doneKey, 'here') // 卡片堆据此把它拿走,流里那行写结局
+      if (doneKey) markTaskHandled(doneKey, 'here', undefined, sessionId) // 卡片堆据此把它拿走,流里那行写结局
     } catch (e: any) {
       setError(String(e?.message || e))
     } finally {
@@ -222,7 +227,7 @@ export function CreationCardView({ card, sessionId }: { card: CreationCard; sess
                 {busy ? <Loader2 size={12} className="spin" /> : adding ? <FolderInput size={12} /> : <Sparkles size={12} />} {t(adding ? 'creation.card.add' : 'creation.card.create')}
               </button>
             )}
-            {doneKey && <button disabled={busy} onClick={() => markTaskHandled(doneKey, 'ignore')} data-creation-dismiss><X size={12} /> {t('creation.card.dismiss')}</button>}
+            {doneKey && <button disabled={busy} onClick={() => markTaskHandled(doneKey, 'ignore', undefined, sessionId)} data-creation-dismiss><X size={12} /> {t('creation.card.dismiss')}</button>}
           </div>
         </>
       )}

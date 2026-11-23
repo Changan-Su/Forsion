@@ -11,7 +11,7 @@ import { homeTarget } from '../../services/engine/targets'
 import type { MuseTodoEvidence, MuseTodoEvidenceKind, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { splitSuggestions, type TaskCard } from './suggest'
 import { ChildSessionsBlock, ModelChip } from './ChildSessions'
-import { markTaskHandled, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
+import { markTaskHandled, refreshCardMarks, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
@@ -249,6 +249,11 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
           if (createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS) { rerender((n) => n + 1); return } // 挂着跨过 7 天:点的这一下定格成已过期
           inFlightTaskCards.add(doneKey)
           setTaskBusy(key)
+          // 另一端(手机 / 网页 / 连过来的电脑)可能刚处理过这张:执行前跟引擎再对一下(最多等 1.5s,等不到照旧执行)
+          if (sessionId) {
+            await refreshCardMarks(sessionId)
+            if (taskHandled(doneKey)) { inFlightTaskCards.delete(doneKey); setTaskBusy((b) => (b === key ? null : b)); return }
+          }
           let ok = false
           let child: string | undefined
           try {
@@ -258,7 +263,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
           } catch { ok = false }
           inFlightTaskCards.delete(doneKey)
           setTaskBusy((b) => (b === key ? null : b))
-          if (ok) { markTaskHandled(doneKey, landing, child); setTaskDone((p) => ({ ...p, [key]: landing })) }
+          if (ok) { markTaskHandled(doneKey, landing, child, sessionId); setTaskDone((p) => ({ ...p, [key]: landing })) }
         }
         const btn = (landing: TaskLanding, icon: React.ReactNode, label: string, primary = false): React.ReactNode => (
           <button key={landing} className={primary ? 'primary' : ''} disabled={busy} onClick={() => void pick(landing)}>{icon} {label}</button>
