@@ -528,18 +528,19 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     const streamedAt = transcript.mark(); // 安全审核拦下时子会话转写退回到这里
     // 通道闸(llm/channelGate.ts):子代理和主会话、别的子会话共用同一条通道的限流暂停与并发上限;排队那段不算重试预算。
     let chain: LlmRetryChain | undefined;
+    const ticket = { front: false }; // 撞了限流的重发在通道闸前排队首
     const res = await withLlmRetry(() => withChannelSlot(channelKeyOf(model, baseUrl, apiKey, effModelId), {
       signal: parentCtx.signal,
       sessionId: parentCtx.sessionId,
       onQueued: (q) => { if (runId) void publish(runId, 'subagent', { phase: 'queue', subId, reason: q.reason, position: q.position, ...(q.waitMs !== undefined ? { waitMs: q.waitMs } : {}) }); },
       onWaited: (a, b) => chain?.excludeQueued(a, b),
+      ticket,
     }, (slot) => llm.streamProviderCompletion({
       apiKey,
       baseUrl,
       payload,
       provider: (model as any)?.provider,
       signal: parentCtx.signal,
-      onResponseStart: () => slot.opened(),
       // 流式回灌子聊天区(tag subId);主聊天不渲染 `subagent` 事件,故不会串进主气泡。
       onToken: (d) => { emitted = true; slot.opened(); transcript.token(d); if (runId) void publish(runId, 'subagent', { phase: 'token', subId, delta: d }); },
       onReasoning: (d) => { emitted = true; slot.opened(); transcript.reasoning(d); if (runId) void publish(runId, 'subagent', { phase: 'reasoning', subId, delta: d }); },

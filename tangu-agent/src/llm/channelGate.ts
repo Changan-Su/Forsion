@@ -6,7 +6,8 @@
  *  - **暂停**:任何一个请求撞上秒级限流(retry.ts isRateLimitedLlmError),整个通道暂停到报错给出的时刻(响应头 Retry-After 或正文「try again in Xs」;
  *    没给按 2 秒)。暂停期间别的请求排队,不再各自去撞 —— 第一轮 dogfood 四路并发各自退避 1/2/4 秒后一起撞上去,3 次用完照样失败。
  *    超过 60 秒的点名等待不暂停:撞上它的那一轮照旧按失败处理(retry.ts RETRY_AFTER_MAX_MS),别的会话不跟着干等。
- *  - **逐个恢复**:暂停结束后一次只放一个出去,它拿到响应头(或第一帧、或 5 秒没动静、或结束)再放下一个,直到排队的都放完 ——
+ *  - **逐个恢复**:暂停结束后一次只放一个出去,它出了第一帧(或 5 秒没动静、或结束)再放下一个,直到排队的都放完 ——
+ *    不认响应头:Codex 流里的限流是先回 200 再在流里报错(live 11-23 实测,认响应头就放早了、下一个照撞)。
  *    一起放会重演「退避完一起撞」;只试探一个再全放,窗口刚开就又撞满。恢复期间又撞了限流 → 重新暂停,接着逐个放。
  *  - **并发上限**:同一通道同时在飞的请求缺省 3 路(config.json models.channelConcurrency,设置里能改),超出的排队(先来先得)。
  *
@@ -52,6 +53,8 @@ export interface ChannelQueueInfo {
 
 interface Waiter {
   grant: (probe: boolean) => void;
+  /** 上一次尝试撞了限流的重发:排到队首,别被后来的挤到窗口外再撞一次(重试次数是它自己的) */
+  front?: boolean;
   fail: (e: Error) => void;
   sessionId?: string;
   onQueued?: (q: ChannelQueueInfo) => void;
@@ -112,7 +115,7 @@ function pump(key: string): void {
 }
 
 export interface ChannelSlot {
-  /** 响应开始(响应头到了 / 第一帧):是试探请求的话,放其余排队的 */
+  /** 出了第一帧(正文 / 推理 / 工具参数):逐个恢复时据此放下一个。别在响应头到达时调 —— 流里的限流晚于响应头 */
   opened(): void;
   /** 这次请求失败:是秒级限流就暂停整个通道 */
   failed(err: unknown): void;
@@ -147,7 +150,7 @@ export function pauseMsFor(err: unknown): number | null {
  * 拿一个槽位(排队时 onQueued 报原因)。signal 中止 → 出队并抛 AbortError。
  * 拿到之后调用方必须 release();请求失败先 failed(err)。
  */
-export function acquireChannel(key: string, opts: { signal?: AbortSignal; sessionId?: string; onQueued?: (q: ChannelQueueInfo) => void } = {}): Promise<ChannelSlot> {
+export function acquireChannel(key: string, opts: { signal?: AbortSignal; sessionId?: string; onQueued?: (q: ChannelQueueInfo) => void; front?: boolean } = {}): Promise<ChannelSlot> {
   const { signal } = opts;
   if (signal?.aborted) return Promise.reject(abortError());
   const c = channelOf(key);
@@ -201,7 +204,9 @@ export function acquireChannel(key: string, opts: { signal?: AbortSignal; sessio
       pump(key);
     };
     signal?.addEventListener('abort', onAbort, { once: true });
-    c.waiters.push(w);
+    // 撞过限流的重发排在其它「撞过的」后面、所有新来的前面
+    if (opts.front) { const i = c.waiters.findIndex((x) => !x.front); w.front = true; c.waiters.splice(i < 0 ? c.waiters.length : i, 0, w); }
+    else c.waiters.push(w);
     pump(key);
     if (c.waiters.includes(w)) notify(c, channelConcurrency());
   });
@@ -230,17 +235,21 @@ export function __resetChannels(): void {
  */
 export async function withChannelSlot<T>(
   key: string,
-  opts: { signal?: AbortSignal; sessionId?: string; onQueued?: (q: ChannelQueueInfo) => void; onWaited?: (start: number, end: number) => void },
+  opts: { signal?: AbortSignal; sessionId?: string; onQueued?: (q: ChannelQueueInfo) => void; onWaited?: (start: number, end: number) => void; ticket?: { front: boolean } },
   fn: (slot: ChannelSlot) => Promise<T>,
 ): Promise<T> {
   const start = Date.now();
   let queued = false;
-  const slot = await acquireChannel(key, { ...opts, onQueued: (q) => { queued = true; opts.onQueued?.(q); } });
+  const slot = await acquireChannel(key, { ...opts, front: !!opts.ticket?.front, onQueued: (q) => { queued = true; opts.onQueued?.(q); } });
   if (queued) opts.onWaited?.(start, Date.now());
   try {
-    return await fn(slot);
+    const r = await fn(slot);
+    if (opts.ticket) opts.ticket.front = false;
+    return r;
   } catch (err) {
     slot.failed(err);
+    // ticket:同一次调用的若干次尝试共用一张;撞了限流的下一次重发排队首
+    if (opts.ticket) opts.ticket.front = isRateLimitedLlmError(err);
     throw err;
   } finally {
     slot.release();

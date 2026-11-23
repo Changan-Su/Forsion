@@ -99,7 +99,7 @@ import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, isOverloadedLlmError, retryAfterVerdict, probeBeforeResume, awaitNetwork, createRunNetLedger, MIDSTREAM_MAX_FREE_RESUMES, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, isRateLimitedLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, isOverloadedLlmError, retryAfterVerdict, probeBeforeResume, awaitNetwork, createRunNetLedger, MIDSTREAM_MAX_FREE_RESUMES, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { acquireChannel, channelKeyOf, type ChannelSlot } from '../llm/channelGate.js';
 import { classifyRunError } from '../llm/runErrorKind.js';
@@ -4114,6 +4114,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       try { requestBytes = Buffer.byteLength(JSON.stringify(payload), 'utf-8'); } catch { /* ignore */ }
       let llmTiming: { ttftMs?: number; uploadMs?: number; llmMs?: number } = {};
       const retryChain = new LlmRetryChain(); // 本次模型调用的重试链:次数、预算、等网络(llm/retry.ts)
+      let rateLimitedLast = false; // 上一次尝试撞了秒级限流:这次在通道闸前排队首
       for (;;) {
         if (immediateSteers.has(runId) && steerQueue.get(runId)?.length) {
           await applySteering(drainSteer(runId));
@@ -4146,6 +4147,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             slot = await acquireChannel(chKey, {
               signal: sampling.signal,
               sessionId,
+              front: rateLimitedLast, // 上一次尝试撞了限流:排队首,别被后来的挤到窗口外再撞(重试次数照 #796)
               onQueued: (q) => {
                 queued = true;
                 void publish(runId, 'status', { phase: 'llm_queue', reason: q.reason, position: q.position, limit: q.limit, ...(q.waitMs !== undefined ? { waitMs: q.waitMs } : {}), iteration });
@@ -4169,7 +4171,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             maskScope: sessionId,
             onMasked: (hits, action) => { void publish(runId, 'status', { phase: 'masked', iteration, action, n: hits.length, kinds: [...new Set(hits.map((h) => h.kind))] }); },
             onResponseStart: () => {
-              heldSlot.opened();
+              // 不在这里 heldSlot.opened():流里的限流晚于响应头(Codex 先回 200 再在流里 response.failed),第一帧(markFrame)才算放行
               if (sampling.signal.aborted) return;
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
@@ -4214,6 +4216,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         } catch (err) {
           // 先放掉槽位:秒级限流 → 整条通道暂停到报错给出的时刻(别的会话排队,不各自去撞);然后才去退避 / 等网 / 续写
           if (slot) { slot.failed(err); slot.release(); slot = undefined; }
+          rateLimitedLast = isRateLimitedLlmError(err);
           if (ac.signal.aborted) throw err;
           // 失败尝试已知的用量(流里先报了 usage 再断,如 Anthropic message_start 之后断流):记进本 run 成本,重发前的成本闸据此判
           const failedUsage = (err as LlmError)?.partialUsage;
