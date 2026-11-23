@@ -21,7 +21,7 @@
  * soft: the middle column becomes a single floating writing card (header bar + open flow);
  * lovable: .main gets the card-bg writing surface, content flows full width.
  * ════════════════════════════════════════════════════════════════════════════ */
-.tangu-soft .ts-col-mid { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); gap: 0; overflow: hidden; }
+.tangu-soft .ts-col-mid { background: var(--card); border-radius: var(--radius-lg); box-shadow: var(--shadow); gap: 0; overflow: hidden; }
 .tangu-soft .ts-col-mid .ts-header { background: transparent; box-shadow: none; border-radius: 0; border-bottom: 1px solid var(--card-2); flex: 0 0 auto; }
 .tangu-soft .ts-chat { background: transparent; gap: 0; padding: 22px 34px 60px; }
 
