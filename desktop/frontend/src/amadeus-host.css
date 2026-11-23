@@ -265,7 +265,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-mention mark { background: var(--accent-light, rgba(127, 127, 127, 0.25)); color: inherit; border-radius: 3px; padding: 0 1px; }
 .amx-backlink-link {
   flex: 0 0 auto; align-self: center; border: 1px solid var(--border); background: transparent; color: var(--text-muted);
-  font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.4; padding: 1px 8px; border-radius: var(--radius-xs, 4px);
+  font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.4; padding: 1px 8px; border-radius: var(--radius-sm, 8px);
   cursor: pointer; opacity: 0;
 }
 .amx-mention:hover .amx-backlink-link, .amx-backlink-link:focus-visible { opacity: 1; }
@@ -1266,7 +1266,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-boardhost .excalidraw .amx-tool {
   position: relative; display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--border-radius-lg, 10px);
+  width: 36px; height: 36px; padding: 0; border: 0; border-radius: var(--border-radius-lg, var(--radius-lg));
   background: transparent; color: var(--color-on-surface, inherit); cursor: pointer;
   touch-action: none; /* 指针拖拽排序:不让浏览器把移动当成滚动手势抢走 */
   -webkit-user-select: none; user-select: none;
@@ -1314,7 +1314,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-boardhost .excalidraw .amx-penrow > label,
 .amx-boardhost .excalidraw .amx-panelrow > label {
   display: flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: var(--border-radius-md, 8px); cursor: pointer;
+  width: 28px; height: 28px; border-radius: var(--border-radius-md, var(--radius-md)); cursor: pointer;
   color: var(--color-on-surface, inherit);
 }
 .amx-boardhost .excalidraw .amx-penrow > label:hover,
@@ -1336,7 +1336,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-bs-row { display: flex; flex-wrap: wrap; gap: 4px; }
 .amx-bs-chip {
   border: 1px solid var(--input-border-color, rgba(127, 127, 127, 0.35)); background: transparent;
-  color: inherit; font: inherit; font-size: var(--ui-font-caption, 11px); padding: 2px 8px; border-radius: var(--radius-xs, 4px); cursor: pointer;
+  color: inherit; font: inherit; font-size: var(--ui-font-caption, 11px); padding: 2px 8px; border-radius: var(--radius-sm, 8px); cursor: pointer;
 }
 .amx-bs-chip:hover { background: var(--button-hover-bg, rgba(127, 127, 127, 0.12)); }
 /* --color-* 是 excalidraw 的 token;askNewDrawing 的弹窗不在它作用域内 → 回落到 LCL 的 --primary。 */
@@ -1564,7 +1564,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-coll-del { flex: 0 0 auto; border: none; background: transparent; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); width: 16px; height: 16px; border-radius: var(--radius-xs); cursor: pointer; opacity: 0; }
 .amx-coll-row:hover .amx-coll-del { opacity: 1; }
 .amx-coll-del:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--danger, #e5484d); }
-.amx-search-save { flex: 0 0 auto; border: none; background: transparent; color: var(--accent-ink, var(--accent, #6c5ce7)); font: inherit; font-size: var(--ui-font-caption, 11px); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-xs, 4px); white-space: nowrap; }
+.amx-search-save { flex: 0 0 auto; border: none; background: transparent; color: var(--accent-ink, var(--accent, #6c5ce7)); font: inherit; font-size: var(--ui-font-caption, 11px); cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm, 8px); white-space: nowrap; }
 .amx-search-save:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 /* 回收站:树底入口(淡显)+ 居中浮层 */
 .amx-trash-entry { margin-top: 10px; opacity: 0.65; }

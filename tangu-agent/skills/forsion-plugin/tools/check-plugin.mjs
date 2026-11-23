@@ -580,7 +580,8 @@ if (argv.includes('--style')) {
       const v = stripVars(raw);
       if (prop === 'box-shadow' && COLOR.test(v)) note(at, `box-shadow with a hard-coded color: use --card-shadow / --shadow-sm / --shadow-panel`);
       else if (COLOR.test(v)) note(at, `${prop}: hard-coded color ${(v.match(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\([^)]*\)?/i) || [''])[0]}: use a color token (a wash: color-mix(in srgb, var(--danger) 14%, transparent))`);
-      else if (prop === 'border-radius' && /(?<![\w.])(?:[4-9]|[1-9]\d+)(?:\.\d+)?px\b/.test(v)) note(at, `border-radius written by hand: use --radius-xs … --radius-pill`);
+      // calc(var(--radius-md) - 4px): an offset paired with a token (inner radius of a framed box) is not a hand-written radius
+      else if (prop === 'border-radius' && /(?<![\w.])(?:[4-9]|[1-9]\d+)(?:\.\d+)?px\b/.test(/calc\(/.test(raw) ? v.replace(/[-+*/]\s*\d*\.?\d+px/g, ' ') : v)) note(at, `border-radius written by hand: use --radius-xs … --radius-pill`);
     }
   });
   say();

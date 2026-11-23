@@ -3349,7 +3349,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-theme-live-brand { display: flex; align-items: center; gap: 7px; padding: 0 7px 13px; color: var(--text); font-size: var(--ui-font-caption, 11px); }
 .settings-theme-live-brand strong { font-weight: 660; }
 .settings-theme-live-nav { display: flex; flex-direction: column; gap: 3px; }
-.settings-theme-live-nav span { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 8px; border-radius: var(--radius-xs); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.settings-theme-live-nav span { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .settings-theme-live-nav span.active { color: var(--accent-ink); background: var(--accent-light); font-weight: 620; }
 .settings-theme-live-paper { display: flex; flex-direction: column; min-width: 0; padding: 22px 25px 18px; background: var(--bg); }
 .settings-theme-live-kicker { color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
@@ -4710,7 +4710,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
 .wsfile-ext { font-size: var(--ui-font-caption, 11px); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-faint); font-family: var(--font-mono); flex-shrink: 0; }
 .wsfile-head .icon-btn { width: 26px; height: 26px; flex-shrink: 0; }
 .wsfile-seg { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; }
-.wsfile-seg button { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 2px 8px; border-radius: var(--radius-xs); display: inline-flex; align-items: center; gap: 4px; }
+.wsfile-seg button { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 2px 8px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 4px; }
 .wsfile-seg button:hover { background: var(--overlay-light); color: var(--text); }
 .wsfile-seg button.active { background: var(--overlay-light); color: var(--accent-ink); }
 .wsfile-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }

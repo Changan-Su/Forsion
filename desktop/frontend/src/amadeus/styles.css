@@ -940,7 +940,7 @@
 }
 .am-app .amx-code-lang {
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font: inherit;
@@ -950,7 +950,7 @@
 }
 .am-app .amx-code-btn {
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font: inherit;
@@ -1136,7 +1136,7 @@ body.amx-marquee-active * {
 }
 .am-app .amx-bm-tool {
   border: 1px solid var(--border);
-  border-radius: var(--radius-xs, 4px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   font-size: var(--ui-font-caption, 11px);

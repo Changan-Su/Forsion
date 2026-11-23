@@ -3,14 +3,14 @@
  * and soft shadows. (Source: Forsion-LCL #/tangu-soft, soft/暖桃 theme.)
  *
  * Overrides Origin via [data-theme='dreamer']. Non-mode tokens (radii/font) use
- * :root[data-theme='dreamer'] so they out-specify Origin's :root regardless of load order. */
+ * :root[data-theme='dreamer'] so they out-specify Origin's :root regardless of load order.
+ * Radii: only sm / md / lg here; --radius-xs (= sm / 2) and the deprecated --radius-xl (= lg) derive from them in
+ * Genesis base.css (DESIGN §3 radius contract, npm run check:radius). */
 
 :root[data-theme='dreamer'] {
-  --radius-xs: 8px;
   --radius-sm: 12px;
   --radius-md: 16px;
   --radius-lg: 20px;
-  --radius-xl: 26px;
 
   --font-ui: 'Plus Jakarta Sans', 'Nunito', 'ui-rounded', -apple-system, BlinkMacSystemFont,
     'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;

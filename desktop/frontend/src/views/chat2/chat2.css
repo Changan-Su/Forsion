@@ -644,7 +644,7 @@
 .t2-composer {
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: var(--radius-chat-surface, 20px);
+  border-radius: var(--radius-chat-surface, 16px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0,0,0,.08));
   padding: 12px 14px;
   display: flex; flex-direction: column; gap: 8px;
@@ -871,7 +871,7 @@
   width: 100%; box-sizing: border-box;
   padding: 11px 14px 12px;
   /* 「浮」档与并排浮着的输入框同族圆角;「半浮」降一档(见下方 data-elev),Desk 预览框的下圆角跟着同一个变量 */
-  border-radius: var(--t2-card-r, var(--radius-chat-surface, 20px));
+  border-radius: var(--t2-card-r, var(--radius-chat-surface, 16px));
   background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border);
   box-shadow: var(--card-shadow);
@@ -1174,7 +1174,7 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .agent-desk-card-frame {
   height: 380px; max-height: none; margin: 8px -14px -12px; gap: 0;
   overflow: hidden; mask-image: none; animation: none;
-  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 20px)) var(--t2-card-r, var(--radius-chat-surface, 20px));
+  border-radius: 0 0 var(--t2-card-r, var(--radius-chat-surface, 16px)) var(--t2-card-r, var(--radius-chat-surface, 16px));
 }
 .agent-desk-card.empty .agent-desk-card-frame { height: 120px; }
 .agent-desk-card-frame.act { cursor: zoom-in; }
@@ -1444,7 +1444,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   min-height: 34px; display: flex; align-items: center; gap: 9px;
   margin: -12px -14px 10px; padding: 6px 7px 6px 12px; box-sizing: border-box;
   border-bottom: var(--border-width, 1px) solid var(--border);
-  border-radius: calc(var(--radius-chat-surface, 20px) - var(--border-width, 1px)) calc(var(--radius-chat-surface, 20px) - var(--border-width, 1px)) 0 0;
+  border-radius: calc(var(--radius-chat-surface, 16px) - var(--border-width, 1px)) calc(var(--radius-chat-surface, 16px) - var(--border-width, 1px)) 0 0;
   background: var(--overlay-light);
   color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); line-height: 1.35;
 }

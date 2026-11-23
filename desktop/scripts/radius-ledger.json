@@ -1,38 +1,66 @@
 {
   "desktop/frontend/src/components/chatLinkCard.css": {
-    "n": 1,
-    "why": "行内引用胶片 0.4em:跟着正文字号缩放,不是界面控件"
+    "why": "行内引用胶片 0.4em:跟着正文字号缩放,不是界面控件",
+    "items": [
+      ".t2-content a.citelink[data-cite-n][href]::after | 写死 0.4em(用 token)"
+    ]
   },
   "desktop/frontend/src/styles/base.css": {
-    "n": 1,
-    "why": "外观设置里的主题缩略图(迷你窗口),按缩略比例画的 4px,不是真控件"
+    "why": "外观设置里的主题缩略图(迷你窗口),按缩略比例画的 4px,不是真控件",
+    "items": [
+      ".theme-preview-rail i:first-child | 写死 4px(用 token)"
+    ]
   },
   "desktop/frontend/src/styles/sidebar2.css": {
-    "n": 1,
-    "why": "左栏树的连接线拐角(border 画的弧),跟缩进几何配套,不是控件"
+    "why": "左栏树的连接线拐角(border 画的弧),跟缩进几何配套,不是控件",
+    "items": [
+      ".t2s-srow.t2s-kid.last::after | 写死 6px(用 token)"
+    ]
   },
   "desktop/frontend/src/userSpaces.tsx": {
-    "n": 1,
-    "why": "用户 Space 图标的 squircle 比例 22%,跟 Ribbon 图标同一比例,不是控件档"
+    "why": "用户 Space 图标的 squircle 比例 22%,跟 Ribbon 图标同一比例,不是控件档",
+    "items": [
+      ": ({ size = 18 }) => <img aria-hidden=\"true\" alt=\"\" src={url} width={s | 写死 22%(用 token)"
+    ]
   },
   "desktop/frontend/src/views/chat2/composer2.css": {
-    "n": 4,
-    "why": "输入区上沿露出的半截卡片边(7px / 6px 细条),圆角跟细条高度配套"
+    "why": "输入区上沿露出的半截卡片边(7px / 6px 细条),圆角跟细条高度配套",
+    "items": [
+      ".t2c-apv[data-peek=\"2\"]::after | 写死 6px(用 token)",
+      ".t2c-apv[data-peek=\"2\"]::after | 写死 6px(用 token)",
+      ".t2c-apv[data-peek]::before, .t2c-apv[data-peek=\"2\"]::after | 写死 7px(用 token)",
+      ".t2c-apv[data-peek]::before, .t2c-apv[data-peek=\"2\"]::after | 写死 7px(用 token)"
+    ]
   },
   "mobile/src/nativePreview.css": {
-    "n": 5,
-    "why": "手机原生壳的预览几何(对话气泡 20/5、系统卡 22),照系统原生控件画"
+    "why": "手机原生壳的预览几何(对话气泡 20/5、系统卡 22),照系统原生控件画",
+    "items": [
+      ".np-app .t2c-card | 写死 22px(用 token)",
+      ".np-user | 写死 20px(用 token)",
+      ".np-user | 写死 20px(用 token)",
+      ".np-user | 写死 20px(用 token)",
+      ".np-user | 写死 5px(用 token)"
+    ]
   },
   "mobile/src/phonePages.css": {
-    "n": 3,
-    "why": "手机首页的应用图块(18px)与设置行(14px),照 iOS / Android 原生列表的圆角"
+    "why": "手机首页的应用图块(18px)与设置行(14px),照 iOS / Android 原生列表的圆角",
+    "items": [
+      ".pp-row | 写死 14px(用 token)",
+      ".pp-tile-icon | 写死 18px(用 token)",
+      "button.pp-me-head | 写死 14px(用 token)"
+    ]
   },
   "web/src/unitOwnerAccess.ts": {
-    "n": 2,
-    "why": "Unit 访问密钥页:主界面加载前的独立小页,拿不到 base.css token,数值照缺省 sm 写"
+    "why": "Unit 访问密钥页:主界面加载前的独立小页,拿不到 base.css token,数值照缺省 sm 写",
+    "items": [
+      "button.style.cssText = 'padding:10px 18px;border:1px solid #aaa;border | 写死 8px(用 token)",
+      "input.style.cssText = 'display:block;width:100%;box-sizing:border-box; | 写死 8px(用 token)"
+    ]
   },
   "web/src/unitShim.ts": {
-    "n": 1,
-    "why": "Unit 入口的加载 / 出错卡:主界面加载前的独立小页,拿不到 token,数值照缺省 lg 写"
+    "why": "Unit 入口的加载 / 出错卡:主界面加载前的独立小页,拿不到 token,数值照缺省 lg 写",
+    "items": [
+      "card.setAttribute('style', 'max-width:380px;padding:32px;border-radius | 写死 16px(用 token)"
+    ]
   }
 }
