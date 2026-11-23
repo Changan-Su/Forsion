@@ -29,7 +29,7 @@ import { track } from '../../achievements/store'
 import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
 import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskIdentity, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { HUMAN_DESK_PERSIST_KEY, adoptHumanDesk, deskSideOf, humanDeskPauseMs, humanDeskReduce, humanDeskSessionsChanged, humanWatching, packHumanDeskMap, unpackHumanDeskMap, type DeskSide, type HumanDeskAction, type HumanDeskCore, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { usePageStore } from '../../amadeus/store/pageStore'
@@ -966,16 +966,22 @@ function installDeskSync(): void {
     const incoming = unpackDeskMap(e.newValue)
     const touched = deskSessionsChanged(unpackDeskMap(e.oldValue), incoming)
     if (!touched.length) return
+    const news: string[] = []
     store.set((s) => {
       let changed = false
       const next = { ...s.deskBySession }
       for (const sid of touched) {
         const cur = next[sid]
-        const adopted = adoptDeskArrangement(cur, incoming[sid])
+        let adopted = adoptDeskArrangement(cur, incoming[sid])
+        // 本窗 Human Desk 展开着:对面的「展开」不带过来(本窗还没有这条摆法时 adopt 会借对面的 mode;右边一次只展开一块)
+        if (adopted.mode === 'open' && cur?.mode !== 'open' && s.humanDeskBySession[sid]?.open) adopted = { ...adopted, mode: undefined }
         if (adopted !== cur) { next[sid] = adopted; changed = true }
+        const had = new Set((cur?.items || []).map(deskIdentity))
+        if (adopted.items.some((x) => !had.has(deskIdentity(x))) || (adopted.fresh && adopted.fresh !== cur?.fresh)) news.push(sid)
       }
       return changed ? { deskBySession: next } : {}
     })
+    for (const sid of news) humanSeesAgentNews(sid)
   })
 }
 

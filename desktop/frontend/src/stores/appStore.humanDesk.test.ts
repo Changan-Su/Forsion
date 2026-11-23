@@ -140,6 +140,18 @@ describe('Human Desk × 真 store', () => {
     expect(humanWatching(human())).toBe(true)
   })
 
+  it('插件工具卡:Agent 自动放进 Desk 时 Human Desk 展开着 → 不撑开、只亮点;你点「放到 Desk」照样切过去', async () => {
+    const { showToolCardInDesk } = await import('../components/PluginToolCard')
+    useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
+    showToolCardInDesk(SID, 'c1', 'card', true)
+    expect(side()).toBe('human')
+    expect(agentDesk().items.some((x) => x.tool?.callId === 'c1')).toBe(true)
+    expect(human().agentDot).toBe(true)
+    showToolCardInDesk(SID, 'c2', 'card 2', false)
+    expect(side()).toBe('agent')
+    expect(human().agentDot).toBeUndefined()
+  })
+
   it('Human Desk 的状态不进 deskBySession', () => {
     useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
     expect(JSON.stringify(agentDesk())).not.toContain('定价调研')

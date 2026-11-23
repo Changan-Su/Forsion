@@ -26,7 +26,7 @@ import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask, type TaskSourceResult } from './taskFacts'
 import { enterCite, leaveCite, useCiteHover } from './citeHover'
 import { ChatWebLink } from '../../components/ChatWikiLink'
-import { fullOrder, moveCard, orderCards, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
+import { fullOrder, moveCard, orderCards, setCardOrder, useSummaryElevation, useSummaryPrefs, withHumanDeskSlot } from './summaryPrefs'
 import { deskPairTight, fitCards, setUserOpen, squeezedDeskCard, stepOpen, syncOpen, useDeskTouch, useSummaryOpen, type CardSig, type FitCard } from './summaryOpen'
 import { flipSiblings, watchStackMotion } from './summaryMotion'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
@@ -619,7 +619,7 @@ export function TaskSummary({ sessionId, desk, humanDesk, messages, running, cwd
   const defaults = [...BUILTIN, ...(sessionId ? plugins.map((p) => p.key) : []), ...widgetKeys, 'humandesk', 'desk']
   // 小组件之间的先后只认板上的顺序(拖动写回板),和别的卡的相对位置照旧记在本机
   let wi = 0
-  const ordered = orderCards(Object.keys(cards), defaults, prefs.order).map((k) => (k.startsWith('widget:') ? widgetKeys[wi++] : k))
+  const ordered = orderCards(Object.keys(cards), defaults, withHumanDeskSlot(prefs.order)).map((k) => (k.startsWith('widget:') ? widgetKeys[wi++] : k))
   // .show = 有 Desk 之外的卡在场(藏起来的插件卡不算);Desk 自己在不在场由 CSS 的 :has(.agent-desk-card:not(.gone)) 判
   const show = ordered.some((k) => !isDeskCard(k) && !pluginState[k]?.hidden)
 
@@ -730,7 +730,7 @@ export function TaskSummary({ sessionId, desk, humanDesk, messages, running, cwd
   const railScopeRef = useRef<Record<string, 'all' | undefined>>({})
   railScopeRef.current = Object.fromEntries(railWidgets.map((w) => [`widget:${w.ref.id}`, w.ref.scope]))
   const api = useMemo<RailApi>(() => {
-    const seq = (): string[] => fullOrder(defaultsRef.current, useSummaryPrefs.getState().order)
+    const seq = (): string[] => fullOrder(defaultsRef.current, withHumanDeskSlot(useSummaryPrefs.getState().order))
     return {
       grip: (id, e) => {
         dragOff.current?.()
