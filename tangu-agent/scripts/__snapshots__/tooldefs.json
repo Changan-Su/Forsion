@@ -16,7 +16,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -24,26 +24,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -648,7 +637,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -656,26 +645,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -2244,7 +2222,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: Computer- or OS-specific environment facts use \"agent\" with appliesTo, even when they describe the user’s setup. Reserve \"person\" for cross-device facts. \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (scope \"agent\"): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2252,43 +2230,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list for that scope; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "person"
-              ],
-              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other cross-device fact about the user goes to \"person\" even if the old one was in your own memory."
-            },
-            "appliesTo": {
-              "type": "string",
-              "enum": [
-                "all",
-                "this-computer",
-                "this-os"
-              ],
-              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -3128,7 +3078,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: Computer- or OS-specific environment facts use \"agent\" with appliesTo, even when they describe the user’s setup. Reserve \"person\" for cross-device facts. \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (scope \"agent\"): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3136,43 +3086,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list for that scope; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "person"
-              ],
-              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other cross-device fact about the user goes to \"person\" even if the old one was in your own memory."
-            },
-            "appliesTo": {
-              "type": "string",
-              "enum": [
-                "all",
-                "this-computer",
-                "this-os"
-              ],
-              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -6702,7 +6624,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: Computer- or OS-specific environment facts use \"agent\" with appliesTo, even when they describe the user’s setup. Reserve \"person\" for cross-device facts. \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (scope \"agent\"): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6710,43 +6632,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list for that scope; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "person"
-              ],
-              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other cross-device fact about the user goes to \"person\" even if the old one was in your own memory."
-            },
-            "appliesTo": {
-              "type": "string",
-              "enum": [
-                "all",
-                "this-computer",
-                "this-os"
-              ],
-              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -7545,7 +7439,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: Computer- or OS-specific environment facts use \"agent\" with appliesTo, even when they describe the user’s setup. Reserve \"person\" for cross-device facts. \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (scope \"agent\"): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7553,43 +7447,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list for that scope; include when modifying an existing entry."
-            },
-            "scope": {
-              "type": "string",
-              "enum": [
-                "agent",
-                "person"
-              ],
-              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other cross-device fact about the user goes to \"person\" even if the old one was in your own memory."
-            },
-            "appliesTo": {
-              "type": "string",
-              "enum": [
-                "all",
-                "this-computer",
-                "this-os"
-              ],
-              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -12462,7 +12328,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12470,26 +12336,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -12793,7 +12648,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12801,26 +12656,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
@@ -13448,7 +13292,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13456,26 +13300,15 @@
               "type": "string",
               "enum": [
                 "add",
-                "list",
-                "update",
-                "forget"
-              ],
-              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+                "list"
+              ]
             },
             "fact": {
               "type": [
                 "string",
                 "null"
               ],
-              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
-            },
-            "id": {
-              "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
-            },
-            "expectedVersion": {
-              "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "The durable fact to save, or null when reading."
             }
           },
           "required": [
