@@ -275,7 +275,7 @@ describe('multiBrain 搜索分发', () => {
     const mb = createMultiBrain(brain, emptyRegistry);
     const out = await mb.search.runSearch('q', 3);
     expect(out.provider).toBe('cloud');
-    expect(runSearch).toHaveBeenCalledWith('q', 3);
+    expect(runSearch).toHaveBeenCalledWith('q', 3, undefined);
   });
 
   it('云不可用 → 本地 DDG 免费兜底,注记云侧错误', async () => {
