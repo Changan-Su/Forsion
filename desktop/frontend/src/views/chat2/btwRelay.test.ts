@@ -39,6 +39,74 @@ describe('splitRelay', () => {
   })
 })
 
+describe('splitRelay 只认顶层围栏', () => {
+  it('四个反引号 / 波浪号包着的 relay 示例不当稿,原样留在正文', async () => {
+    const { splitRelay } = await load()
+    const ex = '格式是这样:\n````md\n```relay\n示例\n```\n````\n就这些'
+    expect(splitRelay(ex)).toEqual({ body: ex })
+    const tilde = '~~~\n```relay\n示例\n```\n~~~'
+    expect(splitRelay(tilde)).toEqual({ body: tilde })
+    // 示例之后真有一个顶层块:取那个,示例原样
+    const both = `${ex}\n\n\`\`\`relay\n真的那句\n\`\`\``
+    expect(splitRelay(both)).toEqual({ body: ex, relay: '真的那句' })
+  })
+  it('普通代码块后面的 relay 照认;流着时示例里的未闭合 relay 不当 partial', async () => {
+    const { splitRelay } = await load()
+    expect(splitRelay('```ts\nx\n```\n```relay\nhi\n```').relay).toBe('hi')
+    expect(splitRelay('看:\n````\n```relay\n写到一半', true)).toEqual({ body: '看:\n````\n```relay\n写到一半' })
+  })
+  it('缩进 4 格的围栏行是代码行,不闭合外层(Codex 复审)', async () => {
+    const { splitRelay } = await load()
+    const ex = '````md\n    ````\n```relay\n示例\n```\n````'
+    expect(splitRelay(ex)).toEqual({ body: ex })
+  })
+})
+
+describe('撤回 / 退回的插话撤掉「已发」', () => {
+  beforeEach(() => localStorage.clear())
+  afterEach(() => localStorage.clear())
+  it('从等待区撤回:记录撤掉,卡片恢复可发、小标不画;别的会话的同字记录不动', async () => {
+    const m = await load()
+    const { useApp } = await import('../../stores/appStore')
+    const { notifySteerDropped } = await import('../../tangu/store/steerDropped')
+    useApp.setState({ messagesBySession: {} } as never)
+    m.recordRelay({ to: 's1', from: 's0', asideId: 'a1', text: 'check tests', at: Date.now(), how: 'steer' })
+    m.recordRelay({ to: 's2', from: 's0', asideId: 'a1', text: 'check tests', at: Date.now() + 1, how: 'steer' })
+    notifySteerDropped('s1', [{ id: 'q-x', text: 'check  tests' }])
+    expect(m.relayFor('s1', 'check tests')).toBeUndefined()
+    expect(m.relayFor('s2', 'check tests')).toBeDefined()
+    expect(JSON.parse(localStorage.getItem('forsion_btw_relays_v1') || '[]')).toHaveLength(1)
+  })
+  it('同一句早先已经落进对话:撤回的是用户另打的那句,记录留着', async () => {
+    const m = await load()
+    const { useApp } = await import('../../stores/appStore')
+    const { notifySteerDropped } = await import('../../tangu/store/steerDropped')
+    const at = Date.now()
+    useApp.setState({ messagesBySession: { s1: [{ id: 'u1', role: 'user', content: 'check tests', status: 'done', timestamp: at + 50 }] } } as never)
+    m.recordRelay({ to: 's1', from: 's0', text: 'check tests', at, how: 'steer' })
+    notifySteerDropped('s1', [{ id: 'q-x', text: 'check tests' }])
+    expect(m.relayFor('s1', 'check tests')).toBeDefined()
+    // 早于这笔记录的同字消息不算送达(Codex 复审):撤回照撤
+    useApp.setState({ messagesBySession: { s1: [{ id: 'u0', role: 'user', content: 'check tests', status: 'done', timestamp: at - 30_000 }] } } as never)
+    notifySteerDropped('s1', [{ id: 'q-x', text: 'check tests' }])
+    expect(m.relayFor('s1', 'check tests')).toBeUndefined()
+  })
+  it('同一句从两段顺便问各插话一次:撤回哪项就撤哪笔(按等待项 id)', async () => {
+    const m = await load()
+    const { useApp } = await import('../../stores/appStore')
+    const { notifySteerDropped } = await import('../../tangu/store/steerDropped')
+    const pending: Array<{ id: string; text: string }> = []
+    const send = vi.fn(async (text: string) => { pending.push({ id: `steer-${pending.length + 1}`, text }); useApp.setState({ steerPendingBySession: { s1: [...pending] } } as never); return true })
+    useApp.setState({ send, runningBySession: { s1: 'r1' }, messagesBySession: {}, steerPendingBySession: {} } as never)
+    await m.sendRelay({ from: 's0', to: 's1', asideId: 'a1', text: 'check tests' })
+    await m.sendRelay({ from: 's0', to: 's1', asideId: 'a2', text: 'check tests' })
+    useApp.setState({ steerPendingBySession: { s1: [pending[1]] } } as never)
+    notifySteerDropped('s1', [{ id: 'steer-1', text: 'check tests' }])
+    expect(m.relaySentFrom('s0', 'check tests', 'a1')).toBeUndefined()
+    expect(m.relaySentFrom('s0', 'check tests', 'a2')?.pendingId).toBe('steer-2')
+  })
+})
+
 describe('传话记录', () => {
   beforeEach(() => localStorage.clear())
   afterEach(() => localStorage.clear())
