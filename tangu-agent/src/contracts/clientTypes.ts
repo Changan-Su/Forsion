@@ -941,6 +941,8 @@ export interface DisplayFile {
   path?: string
   /** 内联数据 URL(data:<mime>;base64,...);无工作区路径的小文件用(表情包 / 沙箱生图)。 */
   dataUrl?: string
+  /** 生图工具自己产出的图才有(同引擎 DisplayFileItem.source);对话里多张成组(主图 + 缩略条)只认它。 */
+  source?: 'generate_image' | 'edit_image'
 }
 
 // ── 聊天流 UI 模型(由历史 + SSE 事件归约) ─────────────────────────────────────

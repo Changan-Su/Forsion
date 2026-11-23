@@ -2672,6 +2672,35 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .inline-file-card:hover { border-color: var(--accent-ink); color: var(--text); }
 .inline-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 一条消息里 ≥2 张图(生图多张与标注改图 1B):主图 + 右侧缩略条,选中那格描指示色;窄了(<420)缩略条换到下面横排。
+   主图悬停出「标注修改」(触屏常显);下面一行「n / N · 名字 · 用这张继续 · 再来 N 张」。 */
+.inline-set { container-type: inline-size; width: 100%; max-width: 620px; }
+.inline-set-row { display: flex; align-items: flex-start; gap: 8px; }
+.inline-set-main { position: relative; min-width: 0; flex: 0 1 auto; }
+.inline-set-main img { display: block; max-width: 100%; max-height: 440px; border-radius: var(--radius-md, 10px); border: var(--border-width) solid var(--border); background: var(--overlay-light); cursor: zoom-in; }
+.inline-set-main-empty { display: block; width: 280px; height: 280px; max-width: 100%; border-radius: var(--radius-md, 10px); background: var(--overlay-light); }
+.inline-set-act { position: absolute; top: 8px; right: 8px; height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius-pill, 999px); display: inline-flex; align-items: center; gap: 5px; background: var(--bg-card); color: var(--text); font-size: var(--ui-font-meta, 12px); box-shadow: var(--btn-shadow); cursor: pointer; opacity: 0; transition: opacity var(--duration-fast, .15s); }
+.inline-set-main:hover .inline-set-act, .inline-set-act:focus-visible { opacity: 1; }
+.inline-set-act:focus-visible, .inline-set-thumb:focus-visible, .inline-set-link:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
+.inline-set-strip { flex: none; display: flex; flex-direction: column; gap: 6px; }
+.inline-set-thumb { width: 64px; height: 64px; padding: 0; border: 0; border-radius: var(--radius-sm, 6px); overflow: hidden; background: var(--overlay-light); box-shadow: 0 0 0 2px transparent; opacity: .72; cursor: pointer; transition: opacity var(--duration-fast, .15s), box-shadow var(--duration-fast, .15s); }
+.inline-set-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.inline-set-thumb:hover { opacity: 1; }
+.inline-set-thumb.is-on { opacity: 1; box-shadow: 0 0 0 2px var(--signal); }
+.inline-set-thumb-empty { display: block; width: 100%; height: 100%; }
+.inline-set > .inline-file-card { margin-top: 6px; }
+.inline-set-meta { display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.inline-set-count { flex: none; margin-right: 4px; font-variant-numeric: tabular-nums; }
+.inline-set-name { min-width: 0; flex: 0 1 auto; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inline-set-link { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: var(--radius-sm, 6px); background: none; color: var(--text-muted); font-size: inherit; cursor: pointer; }
+.inline-set-link:hover { background: var(--overlay-light); color: var(--text); }
+@media (hover: none) { .inline-set-act { opacity: 1; } }
+@container (max-width: 420px) {
+  .inline-set-row { flex-direction: column; }
+  .inline-set-strip { flex-direction: row; max-width: 100%; overflow-x: auto; padding: 2px; }
+  .inline-set-thumb { width: 52px; height: 52px; }
+  .inline-set-name { display: none; }
+}
 
 /* 模式选择器(执行环境 / 审批档;保留供其它处复用) */
 .mode-select {

@@ -35,6 +35,8 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
  *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only imagemulti                # 生图多张 + 标注改(11-23,生图多张与标注改图方案 1B/1C/2B):①「画 3 张…」= generate_image 合计正好 3 张(一次 n=3 或逐张各调一次都行,拼成一张不算);② 原图 + 带编号标注副本 + 编号清单 → edit_image 只拿原图(标注副本不进改图来源);
+ *                                                           #   ③ 两张图「分别改」→ 两次 edit_image、每次一张;④ 一张带标注 + 一张不带的多张消息(1C)→ 两次、来源 [1] / [3]。假生图后端同 imageedit。改 imageTools / imageEdit 的工具说明、客户端标注发送的正文后跑
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params、
@@ -317,6 +319,7 @@ KEYS.push('projcompact');
 KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
+KEYS.push('imagemulti');
 KEYS.push('titlelang');
 KEYS.push('titlemanual');
 KEYS.push('windowscmd');
@@ -362,6 +365,7 @@ OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
+OPT_IN.add('imagemulti'); // --only imagemulti:张数照话填 n、标注副本不进改图来源、两张分别改(三个会话;假生图后端)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
 OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
@@ -1234,6 +1238,8 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
 // imageedit(10-19,改图跨轮取图方案 B1 + B2):假的直连生图 provider。收 multipart,按到达顺序记下每次收到的图(sha256),
 // 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
 const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
+// imagemulti:原图 / 带编号标注的副本 / 另一张图(三张数字各不相同,按 sha256 认)
+const IMGMULTI_PNGS = ONLY.has('imagemulti') ? [randDigits(), randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 // relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
 const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
@@ -1255,10 +1261,17 @@ const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
   });
   srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
 }) : null;
-const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
-  const state = { calls: [], outputs: [] };
+const IMGEDIT = ONLY.has('imageedit') || ONLY.has('imagemulti') ? await new Promise((resolve) => {
+  const state = { calls: [], outputs: [], gens: [] };
   const srv = createHttpServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
+    if (req.url.endsWith('/images/generations')) { // imagemulti ①:记下 n,回 n 张
+      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      const n = Math.max(1, Number(body.n) || 1);
+      state.gens.push({ n, prompt: String(body.prompt || '') });
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: Array.from({ length: n }, () => ({ b64_json: digitsPng(randDigits(), 6).toString('base64') })) }));
+      return;
+    }
     if (!req.url.endsWith('/images/edits')) { res.writeHead(404).end(); return; }
     const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': req.headers['content-type'] || '' } }).formData();
     const parts = [...form.getAll('image[]'), ...form.getAll('image')];
@@ -1267,7 +1280,7 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     state.outputs.push(sha(out));
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ b64_json: out.toString('base64') }] }));
   });
-  srv.listen(0, '127.0.0.1', () => resolve({ ...state, port: srv.address().port, server: srv }));
+  srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
 }) : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
@@ -4152,6 +4165,50 @@ try {
         `第三轮 previous_outputs ${args3.some((a) => /previous_outputs/.test(a)) ? '有' : '没有'}、后端收到上一张产出 ${usedOutput ? '✓' : '✗'}${extra ? '(还多带了别的图)' : ''}`,
       output: `第二轮回复:${ev2.content}\n第二轮 edit_image:${shortRes(ev2)}\n\n第三轮参数:${args3.join(' | ')}\n第三轮回复:${ev3.content}\n第三轮 edit_image:${shortRes(ev3)}`,
       ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0), toolCalls: [...ev2.toolCalls, ...ev3.toolCalls] };
+  });
+
+  // ── imagemulti(11-23,opt-in,生图多张与标注改图方案 1B/1C/2B):三个会话。
+  // ① 「画 3 张…」:generate_image 合计正好 3 张。一次 n=3 或每张各调一次都算(话里「每张光线不一样」时分开调、各写提示词反而更对);
+  //    拼成一张三联图(合计 1 张)不算。对话里按整条消息归组,分开调的图照样进同一条缩略条。
+  // ② 客户端「标注修改」发出的那条:原图 + 带编号标注副本 + 编号清单 → edit_image 收到的只有原图(标注副本只给对话模型看,进了改图来源圈和编号会被画进结果)。
+  // ③ 两张图「分别改」:两次 edit_image、每次恰好一张,两张都改到(多来源 = 合成,不是逐张改)。
+  // ④ 看图器「全部图片」多选一起改的那条(1C):一张带标注、一张不带 → 附件 [A 原图, A 标注副本, B 原图];两次 edit_image,来源 A / B,标注副本永不出现。
+  // 正文照搬客户端 imageMarkupModel.ts 的 buildMarkupMessage(zh)。真生图模型会不会把标记画进结果,假后端验证不了。
+  await scenario('imagemulti', 'imagemulti 话里几张就填 n;标注副本不进改图来源;两张分别改是逐张改;多张混排逐张改', async () => {
+    const cfg = { imageModelId: 'fakeimg/fake-edit' };
+    const [orig, marked, other] = IMGMULTI_PNGS;
+    const g0 = IMGEDIT.gens.length;
+    const ev1 = await run(`live-imagemulti-n-${Date.now()}`, '画 3 张窗边打盹的橘猫，每张光线不一样。', 240_000, cfg);
+    const gens = IMGEDIT.gens.slice(g0);
+    const ok1 = !ev1.error && gens.length >= 1 && gens.reduce((sum, g) => sum + g.n, 0) === 3;
+    const e0 = IMGEDIT.calls.length;
+    const text2 = '按标注改附图 1（附图 2 是标注示意，只用来看改哪里）：\n1 上方居中圈出的地方：换成红色的贝雷帽\n2 右下点的位置：换成透明玻璃杯，装冰美式\n其余保持不变。';
+    const ev2 = await run(`live-imagemulti-mark-${Date.now()}`, text2, 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a03-标注.png', mimeType: 'image/png', data: marked.toString('base64') }] });
+    const calls2 = IMGEDIT.calls.slice(e0); const e1 = IMGEDIT.calls.length;
+    const ok2 = !ev2.error && calls2.length >= 1 && calls2.every((c) => c.length === 1 && c[0] === sha(orig));
+    const ev3 = await run(`live-imagemulti-two-${Date.now()}`, '这两张图分别改：都把背景换成浅黄色，别的不动。', 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a04.png', mimeType: 'image/png', data: other.toString('base64') }] });
+    const calls3 = IMGEDIT.calls.slice(e1);
+    const got3 = calls3.map((c) => c.join('+')).sort().join(',');
+    const ok3 = !ev3.error && calls3.length === 2 && calls3.every((c) => c.length === 1) && got3 === [sha(orig), sha(other)].sort().join(',');
+    const e2 = IMGEDIT.calls.length;
+    const text4 = '分别改下面 2 张图，每张单独改一次、只拿它自己的原图（标注示意只用来看改哪里）：\n图 1（gen-7a03.png，附图 1；附图 2 是它的标注示意）：\n1 上方居中圈出的地方：把这里的数字改成红色\n图 2（gen-7a04.png，附图 3）：\n每张都要：背景换成浅黄色\n其余保持不变。';
+    const ev4 = await run(`live-imagemulti-mixed-${Date.now()}`, text4, 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a03-标注.png', mimeType: 'image/png', data: marked.toString('base64') }, { name: 'gen-7a04.png', mimeType: 'image/png', data: other.toString('base64') }] });
+    const calls4 = IMGEDIT.calls.slice(e2);
+    const got4 = calls4.map((c) => c.join('+')).sort().join(',');
+    const ok4 = !ev4.error && calls4.length === 2 && calls4.every((c) => c.length === 1) && got4 === [sha(orig), sha(other)].sort().join(',');
+    const name = (h) => (h === sha(orig) ? '原图' : h === sha(marked) ? '标注副本' : h === sha(other) ? '第二张' : '别的');
+    const args = (ev, n) => ev.toolArgs.filter((a) => a.name === n).map((a) => a.arguments).join(' | ') || `(没调 ${n})`;
+    return { ok: ok1 && ok2 && ok3 && ok4,
+      detail: ev1.error || ev2.error || ev3.error || ev4.error ||
+        `① generate_image ${gens.length} 次、n=${gens.map((g) => g.n).join('/') || '-'} ${ok1 ? '✓' : '✗'};` +
+        `② edit_image ${calls2.length} 次,来源 ${calls2.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok2 ? '✓' : '✗'};` +
+        `③ edit_image ${calls3.length} 次,来源 ${calls3.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok3 ? '✓' : '✗'};` +
+        `④ edit_image ${calls4.length} 次,来源 ${calls4.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok4 ? '✓' : '✗'}`,
+      output: `① 参数:${args(ev1, 'generate_image')}\n① 回复:${ev1.content}\n\n② 参数:${args(ev2, 'edit_image')}\n② 回复:${ev2.content}\n\n③ 参数:${args(ev3, 'edit_image')}\n③ 回复:${ev3.content}\n\n④ 参数:${args(ev4, 'edit_image')}\n④ 回复:${ev4.content}`,
+      ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) + (tokensOf(ev4) || 0), toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls, ...ev4.toolCalls] };
   });
 
   // novision(10-07,反馈 dbb04870:deepseek × Computer Use 操作微信):主模型没有图像输入 × 一个要按坐标点的任务。

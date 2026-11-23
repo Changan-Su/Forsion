@@ -14,6 +14,11 @@
 .iv-btn:hover:not(:disabled) { background: var(--overlay-light); color: var(--text); }
 .iv-btn:disabled { opacity: .35; cursor: default; }
 .iv-btn:focus-visible, .iv-arrow:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
+.iv-act { height: 28px; padding: 0 10px; border: 0; border-radius: var(--radius-pill, 999px); display: inline-flex; align-items: center; gap: 5px; background: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; cursor: pointer; }
+.iv-act:hover { background: var(--overlay-light); color: var(--text); }
+.iv-act:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
+/* 标注态(ImageMarkup)盖在上面:看图器的顶栏和舞台藏起来但不卸(量尺寸的 ResizeObserver 挂在舞台上) */
+.iv.is-markup > .iv-bar, .iv.is-markup > .iv-stage { visibility: hidden; }
 .iv-zoom { min-width: 46px; text-align: center; color: var(--text); font-variant-numeric: tabular-nums; }
 .iv-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--border); }
 

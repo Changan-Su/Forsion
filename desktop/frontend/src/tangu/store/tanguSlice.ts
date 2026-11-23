@@ -1629,7 +1629,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       }
       case 'display_file':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl }],
+          ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl, ...(pl.source ? { source: pl.source } : {}) }],
         }))
         break
       case 'desk_present':
