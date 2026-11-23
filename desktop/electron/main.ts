@@ -90,7 +90,9 @@ import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
-import { isSourceCardId } from '../shared/storeSources'
+import { ADAPT_FILE, auditWarns, isSourceCardId } from '../shared/storeSources'
+import { prepareSkillPackage, skillTreeHash } from './skillPackage'
+import { createSourceSkillUpdater } from './sourceSkillUpdates'
 import { assertInternalsRawApproved } from './marketInternals'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
@@ -3215,14 +3217,19 @@ const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.p
 
 /** Store sources (third-party catalogs in the store's left column): created at startup, before the plugin updater. */
 let storeSources: StoreSources | undefined
-/** Download an item from a store source and run the same package checks as a Forsion store item. */
+/**
+ * Download an item from a store source and run the same package checks as a Forsion store item. A collected skill that
+ * Forsion adapted also gets its adaptation note, read from the Forsion server for exactly this commit: if that read
+ * fails the install fails (try again later) rather than installing a Claude Code skill that reads wrong in Tangu.
+ */
 async function downloadSourcePackage(id: string, opts: { version?: string; auto?: boolean; report?: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void } = {}) {
   if (!storeSources) throw new Error('resolve: source-removed')
   const report = opts.report ?? (() => {})
   const r = await storeSources.download(id, { version: opts.version, auto: opts.auto, onProgress: (p) => report('download', p) })
   assertMarketplaceRequirements(r.info, app.getVersion(), marketPlatform())
   await checkMarketPackage(r.buf, await detectMarketType(r.buf, r.info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
-  return r
+  const adaptNote = r.collected?.adapted && r.info.type === 'skill' ? await storeSources.adaptNote(id, r.commit) : null
+  return { ...r, adaptNote, auditWarn: auditWarns(r.collected) }
 }
 
 /** Loader ids of the plugins installed in one plugin root (folder names can differ from ids). */
@@ -3238,7 +3245,7 @@ async function installedPluginIds(type: 'plugin' | 'amadeus-plugin'): Promise<Ar
   return out
 }
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null; path?: string; adaptNote?: string | null; auditWarn?: boolean }> {
   if (isSourceCardId(id)) return downloadSourcePackage(id, { version, report })
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
@@ -3500,6 +3507,8 @@ app.whenReady().then(async () => {
       return base ? { base, token: creds.token } : null
     },
     forsionSignedIn: () => !!loadTanguCreds().token,
+    // The built-in skills.sh source: its catalog lives on the same Forsion server as the store (a dev server works too).
+    marketBase: () => marketBase(),
   })
   const sources = storeSources
   const marketPluginUpdater = createMarketPluginUpdater({
@@ -3534,6 +3543,24 @@ app.whenReady().then(async () => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
+  // 来源装的技能也自动更新(插件更新器只认 JSON manifest):按出处下载、同一套技能检查、整目录替换;
+  // 用户改过的、换了仓库 / 目录的、多出脚本或审计警告的不动,留在「可更新」里手动更新。跟着商店的「自动更新」总开关。
+  const sourceSkillUpdater = createSourceSkillUpdater({
+    sources,
+    download: (cardId) => downloadSourcePackage(cardId, { auto: true }),
+    skillDir: (slug) => marketItemDir(tanguHomeDir(), 'skill', slug),
+    enabled: () => marketPluginUpdater.snapshot().autoUpdateAll,
+    exclusive: (fn) => marketPluginUpdater.exclusive(fn),
+    changed: () => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+        w.webContents.send('window:mainAction', 'skills-changed', undefined)
+        w.webContents.send('market:updateStatus', marketPluginUpdater.snapshot()) // 商店据此重读已装版本
+      }
+    },
+  })
+  const checkSourceSkills = (): Promise<void> => sourceSkillUpdater.check()
+    .then((r) => { for (const x of r) if (x.outcome === 'error') console.warn('[store-sources] skill update:', x.cardId, x.error) })
+    .catch((e) => console.warn('[store-sources] skill updates:', e))
   // The updater asks the source table whether an item's source is gone before swapping in a staged update.
   if (PRODUCT.market) await sources.load()
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
@@ -5045,7 +5072,8 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string, version?: string, expect?: { type?: unknown }) => marketPluginUpdater.exclusive(async () => {
+  // expect.ack = the scripts / audit warning the user confirmed for a source skill (counted again here from the package).
+  ipcMain.handle('market:install', async (e, id: string, version?: string, expect?: { type?: unknown; ack?: unknown }) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -5055,11 +5083,12 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf, origin, commit } = await downloadMarketPackage(id, report, version)
+    const { info, buf: downloaded, origin, commit, path: packagePath, adaptNote, auditWarn } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
-    const effType = await detectMarketType(buf, info.type)
+    const effType = await detectMarketType(downloaded, info.type)
+    let buf = downloaded
     const dest = join(tanguHomeDir(), MARKET_SUBDIR[effType], info.installSlug)
     // 内置包(播种进 plugins/<id>)不许从市场再装:解压是原地覆盖,所以要在写入**之前**拒 —— 目标目录就是已播种的那份
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
@@ -5068,6 +5097,22 @@ app.whenReady().then(async () => {
     // 来源装的:用户确认时看到的类型 = 目录里的类型 = 包实测的类型,否则拒(目录可以在确认和安装之间改,
     // 把「文字说明」换成会跑代码的插件就绕过了首装确认)。
     if (isSourceCardId(id) && (effType !== info.type || typeof expect?.type !== 'string' || expect.type !== info.type)) throw new Error('resolve: source-item-changed')
+    // 技能(任何来源):SKILL.md 读得出 name + description 才落盘(否则引擎悄悄跳过);包里带的适配说明一律丢掉,
+    // 只写 Forsion 服务器按这个提交核过的那份。来源技能带脚本 / 审计有警告:用户在这一项上确认过(ack 覆盖得到)才装 ——
+    // 脚本数按包实数,不信目录或对话卡片的说法(用户加的来源本来就不给)。
+    let ack: { scripts: number; audit: boolean } | undefined
+    if (effType === 'skill') {
+      const skill = await prepareSkillPackage(downloaded, { note: adaptNote ?? null })
+      buf = skill.buf
+      if (isSourceCardId(id)) {
+        const a = expect?.ack as { scripts?: unknown; audit?: unknown } | undefined
+        ack = a && typeof a === 'object' && typeof a.scripts === 'number' && Number.isInteger(a.scripts) && a.scripts >= 0 ? { scripts: a.scripts, audit: a.audit === true } : undefined
+        // 更新 / 重装:装的时候确认过的照样算(新版多出来的脚本、新出现的审计警告仍要再问)。
+        const before = ack ? undefined : (await storeSources!.installRecord(id).catch(() => null))?.ack
+        if (!ack && before) ack = before
+        if ((skill.scripts > 0 && (!ack || ack.scripts < skill.scripts)) || (auditWarn && !ack?.audit)) throw new Error(`install: confirm-needed scripts=${skill.scripts} audit=${auditWarn ? 1 : 0}`)
+      }
+    }
     // 来源装的插件:包里的 id 和已装的另一个插件撞了就拒(两份同 id 谁先被扫到谁生效),在写盘之前判。
     if (isSourceCardId(id) && (effType === 'plugin' || effType === 'amadeus-plugin')) {
       const incoming = effectivePluginId(info.installSlug, await packageManifestId(buf, effType))
@@ -5076,6 +5121,8 @@ app.whenReady().then(async () => {
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
     const files = await installMarketZip(buf, dest, MARKET_MANIFEST[effType] || [])
+    // 解压是原地覆盖:这一版没有适配说明时,上一版留下的那份要删掉(否则 Tangu 照旧读到旧说明)。
+    if (effType === 'skill' && !adaptNote) await rm(join(dest, ADAPT_FILE), { force: true })
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
     // 绝不删 —— 宁可留一份陈旧也不误删他人插件(install_slug 无全局唯一约束,跨类型可能撞名)。
@@ -5102,7 +5149,9 @@ app.whenReady().then(async () => {
     // 来源装的(所有类型):先记下出处,再交给更新器 —— 没有出处记录的条目不会被自动更新(换出处保护靠它)。
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author })
+      // 技能另记包所在目录(换目录 = 换了东西,自动更新停)、确认过的脚本 / 审计、装好后的目录指纹(用户改过就不自动更新)。
+      const tree = effType === 'skill' ? await skillTreeHash(dest) : null
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author, ...(packagePath !== undefined ? { path: packagePath } : {}), ...(ack ? { ack } : {}), tree })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
@@ -5145,18 +5194,21 @@ app.whenReady().then(async () => {
       : null
     return { ...r, path: dest, ...(pluginId ? { id: pluginId } : {}) }
   }))
-  ipcMain.handle('market:checkUpdates', (e) => {
+  ipcMain.handle('market:checkUpdates', async (e) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
-    return marketPluginUpdater.check()
+    await marketPluginUpdater.check()
+    await checkSourceSkills()
   })
   if (PRODUCT.market) setTimeout(() => {
-    void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
-    setInterval(() => void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)), 6 * 3600_000).unref()
+    void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)).then(checkSourceSkills)
+    setInterval(() => void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)).then(checkSourceSkills), 6 * 3600_000).unref()
   }, 60_000).unref()
 
   ipcMain.handle('market:installed', async () => {
     // 每个已装项带版本号(读其 manifest),供市场「可更新」检查;插件另带装载 id(目录名可 ≠ id),供「打开设置」直达。
     const out: Record<string, Array<{ slug: string; version: string | null; id?: string }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
+    // 来源装的技能:版本以出处记录为准(收录的技能 SKILL.md 里多半没有版本,或写的是上游自己的号),「可更新」才比得对。
+    const sourceSkills = new Map((await storeSources?.installs().catch(() => []) ?? []).filter((r) => r.type === 'skill').map((r) => [r.slug, r.version]))
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
         const base = join(tanguHomeDir(), sub)
@@ -5164,7 +5216,8 @@ app.whenReady().then(async () => {
         out[type] = await Promise.all(
           ents.filter((e) => e.isDirectory()).map(async (e) => {
             const id = await readInstalledPluginId(type, join(base, e.name))
-            return { slug: e.name, version: await readInstalledVersion(type, join(base, e.name)), ...(id ? { id } : {}) }
+            const recorded = type === 'skill' ? sourceSkills.get(e.name) : undefined
+            return { slug: e.name, version: recorded ?? await readInstalledVersion(type, join(base, e.name)), ...(id ? { id } : {}) }
           }),
         )
       } catch {
@@ -5274,6 +5327,8 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('marketSources:catalog', (e, id: string, opts?: { refresh?: boolean; locale?: string }) => { trusted(e); return storeSources!.catalog(id, { refresh: opts?.refresh === true, locale: sourceLocale(opts?.locale) }) })
   ipcMain.handle('marketSources:installs', (e, locale?: string) => { trusted(e); return storeSources!.installs(sourceLocale(locale)) })
+  // 一张来源卡片(读缓存的目录,不问服务器详情):对话卡片据此知道前置、脚本数与审计。
+  ipcMain.handle('marketSources:item', (e, cardId: string, locale?: string) => { trusted(e); if (!isSourceCardId(cardId)) throw new Error('resolve: source-item-removed'); return storeSources!.item(cardId, sourceLocale(locale)) })
 
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。

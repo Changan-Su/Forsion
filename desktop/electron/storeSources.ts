@@ -24,9 +24,10 @@ import { forsionAccountId } from '../shared/forsionAccount'
 import { registryOrder, resolveLatest, timeoutSignal } from '../shared/npmRegistry'
 import { planZipFiles } from '../shared/marketPackage'
 import {
-  canonicalSource, isCommitId, isPublicHttpsUrl, declaredSourcesOf, isSourceId, MAX_INDEX_BYTES, packageOrigin, parseSourceInput, parseStoreIndex, pickText,
+  auditWarns, BUILTIN_SKILLS_SH, canonicalSource, COLLECTED_CATALOG_PATH, collectedItemPath, isCommitId, isPublicHttpsUrl, declaredSourcesOf, isSourceId,
+  MAX_INDEX_BYTES, packageOrigin, parseAdaptView, parseSourceInput, parseStoreIndex, pickText,
   sourceCardId, sourceInstallSlug, splitSourceCardId, STORE_INDEX_FILE, StoreIndexError,
-  type DeclaredStoreSource, type LocalText, type StoreIndex, type StoreIndexItem, type StorePackage, type StoreSourceRef,
+  type AdaptView, type CollectedInfo, type DeclaredStoreSource, type LocalText, type StoreIndex, type StoreIndexItem, type StorePackage, type StorePrereq, type StoreSourceRef,
   type StoreSourceCard, type StoreSourceCatalog, type StoreSourceInfo, type StoreSourceInstall,
 } from '../shared/storeSources'
 export type { StoreSourceCard, StoreSourceCatalog, StoreSourceInfo, StoreSourceInstall }
@@ -35,8 +36,20 @@ type FetchFn = (url: string, init: { signal: AbortSignal; headers?: Record<strin
 
 interface UserSource { id: string; uri: string; title?: LocalText; addedAt: number }
 interface PluginSource { id: string; pluginId: string; declId: string; uri: string; title: LocalText; icon?: string }
-/** `commit` = the commit a GitHub / Forsion Git package was installed from (absent: not known, e.g. installed before it was kept). */
-interface InstallRecord { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string; commit?: string; commits?: Record<string, string> }
+/** skills.sh, collected by Forsion. Not in the state file: it is always there (when the host gives a market base). */
+interface BuiltinSource { id: string; builtin: true }
+type AnySource = UserSource | PluginSource | BuiltinSource
+const isBuiltin = (s: AnySource): s is BuiltinSource => 'builtin' in s
+/**
+ * `commit` = the commit a GitHub / Forsion Git package was installed from (absent: not known, e.g. installed before it was kept).
+ * `path` = the package folder inside its repository ('' = root; absent = not known): an automatic update stops when it moves.
+ * `ack` = scripts / audit warning the user confirmed for this item; an automatic update that brings more stops and waits.
+ * `tree` = hash of the installed skill folder after install: an automatic update leaves a folder the user edited alone.
+ */
+interface InstallRecord {
+  cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; at: number; summary?: string; author?: string
+  commit?: string; commits?: Record<string, string>; path?: string; ack?: { scripts: number; audit: boolean }; tree?: string
+}
 /** How many version → commit pairs an install record keeps (the updater compares the version it is about to fetch). */
 const MAX_KEPT_COMMITS = 8
 const validCommits = (v: unknown): Record<string, string> => {
@@ -62,7 +75,13 @@ export interface SourceDownload {
   origin: string
   /** GitHub / Forsion Git: the commit the archive was made from (null when the archive doesn't say). */
   commit?: string | null
+  /** The package folder inside its repository ('' = root); absent for npm / url packages. */
+  path?: string
+  /** Built-in source: what the collector found (audit, scripts, adaptation flag). */
+  collected?: CollectedInfo
 }
+/** The folder a repository package installs from ('' = repository root). */
+const packagePath = (pkg: StorePackage): string | undefined => pkg.kind === 'github' || pkg.kind === 'forsion-git' ? pkg.path ?? '' : undefined
 
 const FRESH_MS = 10 * 60_000
 const OWN_CDN_REDIRECTS = /^https:\/\/([^/]*\.)?(github\.com|githubusercontent\.com)\//
@@ -226,6 +245,8 @@ export function createStoreSources(o: {
   forsionGit?: () => Promise<ForsionGitAccess | null>
   /** Cheap check for the updater: is anyone signed in? Signed out, items from Forsion Git sources wait quietly. */
   forsionSignedIn?: () => boolean
+  /** The Forsion server the store reads (no trailing slash). Given = the built-in skills.sh source exists; it may throw. */
+  marketBase?: () => Promise<string>
 }) {
   const root = join(o.home, '.store-sources'), stateFile = join(root, 'state.json'), cacheDir = join(root, 'cache')
   const disk = createSerialQueue()
@@ -233,7 +254,8 @@ export function createStoreSources(o: {
   let readable = true
   let loaded: Promise<void> | undefined
   // `who` = the account a Forsion Git catalog was read as (other sources: undefined). A copy read as someone else is never used.
-  const memo = new Map<string, { at: number; index: StoreIndex; who?: string }>()
+  // `uri` = where it was read (the built-in's address follows the market base, which can change).
+  const memo = new Map<string, { at: number; index: StoreIndex; who?: string; uri?: string }>()
   const inflight = new Map<string, Promise<StoreIndex>>()
 
   const load = () => loaded ??= (async () => {
@@ -286,7 +308,16 @@ export function createStoreSources(o: {
 
   const refOf = (s: { uri: string }) => parseSourceInput(s.uri)!
   const all = (): Array<UserSource | PluginSource> => [...state.declared, ...state.user]
-  const find = (id: string) => all().find((s) => s.id === id)
+  const BUILTIN: BuiltinSource | null = o.marketBase ? { id: BUILTIN_SKILLS_SH.id, builtin: true } : null
+  const find = (id: string): AnySource | undefined => (BUILTIN && id === BUILTIN.id ? BUILTIN : all().find((s) => s.id === id))
+  /** The built-in catalog's address on the current market server (throws when no server is set up). */
+  const builtinUrl = async (): Promise<string> => {
+    const base = (await o.marketBase!()).replace(/\/+$/, '')
+    if (!/^https?:\/\//i.test(base)) throw new StoreIndexError('fetch-failed')
+    return `${base}${COLLECTED_CATALOG_PATH}`
+  }
+  /** Last address the built-in was read from (shown as its address; '' until then). */
+  let builtinLast = ''
   const fallbackTitle = (ref: StoreSourceRef): string =>
     ref.kind === 'npm' ? ref.name : ref.kind === 'url' ? hostOf(ref.url) : ref.repo.split('/')[1]
   /** A private (Forsion Git) catalog's own title shows only to the account that read it; otherwise the repository name. */
@@ -295,13 +326,19 @@ export function createStoreSources(o: {
     if (!m || (refOf(s).kind === 'forsion-git' && (!lastWho || m.who !== lastWho))) return ''
     return pickText(m.index.title, locale)
   }
-  const titleOf = (s: UserSource | PluginSource, locale: string): string =>
-    pickText(s.title, locale) || memoTitle(s, locale) || fallbackTitle(refOf(s))
-  const info = (s: UserSource | PluginSource, locale: string): StoreSourceInfo => ({
-    id: s.id, title: titleOf(s, locale), uri: canonicalSource(refOf(s)), kind: refOf(s).kind,
-    trusted: state.trusted.includes(s.id), disabled: state.disabled.includes(s.id),
-    ...('pluginId' in s ? { origin: 'plugin' as const, pluginId: s.pluginId, ...(s.icon ? { icon: s.icon } : {}) } : { origin: 'user' as const }),
-  })
+  const titleOf = (s: AnySource, locale: string): string =>
+    isBuiltin(s) ? BUILTIN_SKILLS_SH.title : pickText(s.title, locale) || memoTitle(s, locale) || fallbackTitle(refOf(s))
+  const info = (s: AnySource, locale: string): StoreSourceInfo => isBuiltin(s)
+    ? { id: s.id, title: BUILTIN_SKILLS_SH.title, origin: 'builtin', uri: builtinLast || 'https://skills.sh', kind: 'url', icon: 'layers', trusted: true, disabled: state.disabled.includes(s.id) }
+    : {
+      id: s.id, title: titleOf(s, locale), uri: canonicalSource(refOf(s)), kind: refOf(s).kind,
+      trusted: state.trusted.includes(s.id), disabled: state.disabled.includes(s.id),
+      ...('pluginId' in s ? { origin: 'plugin' as const, pluginId: s.pluginId, ...(s.icon ? { icon: s.icon } : {}) } : { origin: 'user' as const }),
+    }
+  /** The built-in source only lists skills pinned to one GitHub commit (the server assigns them; anything else is a bad row). */
+  const listed = (s: AnySource, index: StoreIndex): StoreIndexItem[] => isBuiltin(s)
+    ? index.items.filter((it) => it.type === 'skill' && it.package.kind === 'github' && !!it.package.commit)
+    : index.items
 
   // ── Catalog fetching ──
   /** Signed-in access for Forsion Git, or the reason code why not. */
@@ -369,8 +406,9 @@ export function createStoreSources(o: {
     const index = parseStoreIndex(got.json)
     // The source's address changed while this was in flight: don't publish the old address's catalog under it.
     const uri = canonicalSource(ref), cur = find(id)
-    if (cur && canonicalSource(refOf(cur)) !== uri) return index
-    memo.set(id, { at: Date.now(), index, ...(got.who !== undefined ? { who: got.who } : {}) }); bases.set(id, got.base)
+    if (cur && !isBuiltin(cur) && canonicalSource(refOf(cur)) !== uri) return index
+    memo.set(id, { at: Date.now(), index, ...(got.who !== undefined ? { who: got.who } : {}), uri }); bases.set(id, got.base)
+    if (cur && isBuiltin(cur)) builtinLast = uri
     // A private (Forsion Git) catalog stays in memory for the account that read it; it never goes to disk.
     if (got.who !== undefined) return index
     await mkdir(cacheDir, { recursive: true }).catch(() => {})
@@ -379,26 +417,36 @@ export function createStoreSources(o: {
     await writePrivateJson(cacheFile(id), { at: Date.now(), uri, base: got.base ?? null, json: got.json }).catch(() => {})
     return index
   }
-  /** Fresh enough copy, or fetch. `allowStale` falls back to the copy on disk when fetching fails. */
+  /**
+   * Fresh enough copy, or fetch. When fetching fails the last copy (memory, then disk) stands in, marked stale: a failed
+   * or refused read never empties a catalog, so nothing installed from it looks removed because of a network problem.
+   */
   async function indexOf(id: string, opts: { refresh?: boolean; again?: boolean } = {}): Promise<{ index: StoreIndex; at: number; stale: boolean; error?: string }> {
     const s = find(id)
     if (!s) throw new StoreIndexError('not-found')
-    const git = refOf(s).kind === 'forsion-git'
+    const builtin = isBuiltin(s)
+    const git = !builtin && refOf(s).kind === 'forsion-git'
     const who = git ? await currentWho() : undefined
+    // The built-in's address follows the market server; no server set up = only the last copy can be shown.
+    let ref: StoreSourceRef | null = null, refError: unknown
+    if (builtin) { try { ref = { kind: 'url', url: await builtinUrl() } } catch (e) { refError = e instanceof StoreIndexError ? e : new StoreIndexError('fetch-failed') } }
+    else ref = refOf(s)
+    const uri = ref ? canonicalSource(ref) : ''
     const mine = memo.get(id)
-    const hit = mine && mine.who === who ? mine : undefined
+    const hit = mine && mine.who === who && (!builtin || !uri || mine.uri === uri) ? mine : undefined
     if (hit && !opts.refresh && Date.now() - hit.at < FRESH_MS) return { index: hit.index, at: hit.at, stale: false }
-    const uri = canonicalSource(refOf(s)), key = `${id} ${uri} ${who ?? ''}`
-    let job = inflight.get(key)
-    if (!job) { job = fetchIndex(id, refOf(s)).finally(() => inflight.delete(key)); inflight.set(key, job) }
     try {
+      if (!ref) throw refError
+      const key = `${id} ${uri} ${who ?? ''}`
+      let job = inflight.get(key)
+      if (!job) { const r = ref; job = fetchIndex(id, r).finally(() => inflight.delete(key)); inflight.set(key, job) }
       const index = await job
       // Signed in as someone else while this was in flight: that read belongs to the other account. Read again as this one.
       if (git && await currentWho() !== who) {
         if (opts.again) throw new StoreIndexError('fetch-failed')
         return indexOf(id, { ...opts, again: true })
       }
-      return { index, at: memo.get(id)!.at, stale: false }
+      return { index, at: memo.get(id)?.at ?? Date.now(), stale: false }
     } catch (e) {
       const code = e instanceof Error ? e.message : String(e)
       // "Not you" / "not signed in" isn't an outage: no older copy stands in, and the one in memory goes.
@@ -406,10 +454,12 @@ export function createStoreSources(o: {
       if (hit) return { index: hit.index, at: hit.at, stale: true, error: code }
       if (git) throw e
       const cached = await readFile(cacheFile(id), 'utf8').then((t) => JSON.parse(t), () => null)
-      if (cached?.json && cached.uri === uri) {
+      // A copy for another address is never shown (the built-in with no server known: whatever was read last).
+      if (cached?.json && (cached.uri === uri || (builtin && !uri))) {
         try {
           const index = parseStoreIndex(cached.json)
-          memo.set(id, { at: cached.at ?? 0, index }); bases.set(id, cached.base ?? undefined)
+          memo.set(id, { at: cached.at ?? 0, index, uri: cached.uri }); bases.set(id, cached.base ?? undefined)
+          if (builtin && typeof cached.uri === 'string') builtinLast ||= cached.uri
           return { index, at: cached.at ?? 0, stale: true, error: code }
         } catch { /* broken cache */ }
       }
@@ -424,24 +474,36 @@ export function createStoreSources(o: {
       return isPublicHttpsUrl(u) ? u.toString() : null
     } catch { return null }
   }
-  const card = (s: UserSource | PluginSource, index: StoreIndex, it: StoreIndexItem, locale: string): StoreSourceCard => ({
+  /** `collected.requires` against the same catalog (each prerequisite's own scripts / audit, so they can be confirmed). */
+  const prereqsOf = (s: AnySource, index: StoreIndex, it: StoreIndexItem, locale: string): StorePrereq[] => (it.collected?.requires ?? []).filter((x) => x !== it.id).map((itemId) => {
+    const p = listed(s, index).find((x) => x.id === itemId)
+    return {
+      id: sourceCardId(s.id, itemId), itemId, installSlug: sourceInstallSlug(s.id, itemId), name: p ? pickText(p.name, locale) : itemId,
+      scripts: p?.collected?.scripts ?? 0, auditWarn: auditWarns(p?.collected), ...(p ? {} : { missing: true }),
+    }
+  })
+  const card = (s: AnySource, index: StoreIndex, it: StoreIndexItem, locale: string): StoreSourceCard => ({
     id: sourceCardId(s.id, it.id), type: it.type,
     source: it.package.kind === 'github' ? 'github' : it.package.kind === 'npm' ? 'npm' : 'zip',
     name: pickText(it.name, locale), summary: pickText(it.summary, locale), author: it.author ?? index.author ?? '',
-    installSlug: sourceInstallSlug(s.id, it.id), downloads: 0, iconUrl: iconUrl(s.id, it.icon), latestVersion: it.version, tags: it.tags,
+    installSlug: sourceInstallSlug(s.id, it.id), downloads: it.collected?.installs ?? 0, iconUrl: iconUrl(s.id, it.icon), latestVersion: it.version, tags: it.tags,
     ...(it.minAppVersion ? { minAppVersion: it.minAppVersion } : {}), ...(it.maxAppVersion ? { maxAppVersion: it.maxAppVersion } : {}),
     ...(it.platforms ? { platforms: it.platforms } : {}),
     createdAt: null, updatedAt: it.updatedAt ?? null,
     ...(it.package.kind === 'github' ? { githubRepoUrl: `https://github.com/${it.package.repo}` } : {}),
     ...(it.package.kind === 'npm' ? { npmPackage: it.package.name } : {}),
+    ...((it.package.kind === 'github' || it.package.kind === 'forsion-git') && it.package.commit ? { commit: it.package.commit } : {}),
     origin: { sourceId: s.id, sourceTitle: titleOf(s, locale) },
+    // Only the built-in source's collected facts are shown: anyone can write an "audit" into their own catalog.
+    ...(isBuiltin(s) && it.collected ? { collected: it.collected, prereqs: prereqsOf(s, index, it, locale) } : {}),
   })
 
   // ── Public API ──
+  /** The built-in source first, then plugin-declared and user sources. */
   async function list(locale = o.defaultLocale()): Promise<StoreSourceInfo[]> {
     await load()
     if (all().some((s) => refOf(s).kind === 'forsion-git')) await currentWho()
-    return all().map((s) => info(s, locale))
+    return [...(BUILTIN ? [info(BUILTIN, locale)] : []), ...all().map((s) => info(s, locale))]
   }
 
   async function probe(input: unknown, locale = o.defaultLocale()): Promise<{ uri: string; kind: StoreSourceRef['kind']; title: string; count: number; duplicate?: string }> {
@@ -461,7 +523,7 @@ export function createStoreSources(o: {
     const uri = canonicalSource(ref)
     const id = hash8(`uri:${uri}`)
     await load()
-    if (all().some((s) => s.id === id || canonicalSource(refOf(s)) === uri)) throw new StoreIndexError('duplicate')
+    if ((BUILTIN && id === BUILTIN.id) || all().some((s) => s.id === id || canonicalSource(refOf(s)) === uri)) throw new StoreIndexError('duplicate')
     // Only a readable catalog becomes a source.
     const index = await fetchIndex(id, ref)
     // A private catalog's title isn't written to the shared state file (another account on this machine would see it).
@@ -487,7 +549,9 @@ export function createStoreSources(o: {
 
   async function trust(id: string): Promise<void> {
     await load()
-    if (!find(id)) throw new StoreIndexError('not-found')
+    const s = find(id)
+    if (!s) throw new StoreIndexError('not-found')
+    if (isBuiltin(s)) return // always trusted
     if (!state.trusted.includes(id)) await save((s) => { s.trusted = [...s.trusted, id] })
   }
 
@@ -530,7 +594,7 @@ export function createStoreSources(o: {
     try {
       const got = await indexOf(id, opts)
       return {
-        source: info(s, locale), items: got.index.items.map((it) => card(s, got.index, it, locale)), fetchedAt: got.at || null,
+        source: info(s, locale), items: listed(s, got.index).map((it) => card(s, got.index, it, locale)), fetchedAt: got.at || null,
         stale: got.stale, ...(got.error ? { error: got.error } : {}), truncated: got.index.truncated,
         ...(got.index.description ? { description: pickText(got.index.description, locale) } : {}),
       }
@@ -539,20 +603,58 @@ export function createStoreSources(o: {
     }
   }
 
-  async function itemOf(cardId: string, opts: { refresh?: boolean } = {}): Promise<{ s: UserSource | PluginSource; index: StoreIndex; it: StoreIndexItem }> {
+  async function itemOf(cardId: string, opts: { refresh?: boolean } = {}): Promise<{ s: AnySource; index: StoreIndex; it: StoreIndexItem }> {
     await load()
     const parts = splitSourceCardId(cardId)
     const s = parts && find(parts.source)
     if (!parts || !s || state.disabled.includes(s.id)) throw new Error('resolve: source-removed')
     const { index } = await indexOf(s.id, opts)
-    const it = index.items.find((x) => x.id === parts.item)
+    const it = listed(s, index).find((x) => x.id === parts.item)
     if (!it) throw new Error('resolve: source-item-removed')
     return { s, index, it }
   }
 
-  async function detail(cardId: string, locale = o.defaultLocale()): Promise<StoreSourceCard & { readme: string; description?: string }> {
+  /** Item detail from the Forsion server (built-in source): SKILL.md and the adaptation. Throws `resolve: …` codes. */
+  async function collectedDetail(itemId: string): Promise<{ readme: string; adapt: AdaptView | null; adaptRaw: unknown }> {
+    const base = (await o.marketBase!().catch(() => '')).replace(/\/+$/, '')
+    if (!/^https?:\/\//i.test(base)) throw new Error('resolve: collected-detail-unavailable')
+    const url = `${base}${collectedItemPath(itemId)}`
+    const text = await fetchTextFirst([url], () => guardedFetch(!isPublicHttpsUrl(url)), MAX_INDEX_BYTES)
+      .catch((e) => { throw new Error(`resolve: collected-detail-unavailable${(e as { detail?: string })?.detail ? ` (${(e as { detail?: string }).detail})` : ''}`) })
+    let body: Record<string, unknown>
+    try { body = JSON.parse(text) } catch { throw new Error('resolve: collected-detail-unavailable') }
+    if (!body || typeof body !== 'object') throw new Error('resolve: collected-detail-unavailable')
+    return { readme: typeof body.readme === 'string' ? body.readme.slice(0, 64 * 1024) : '', adapt: parseAdaptView(body.adapt), adaptRaw: body.adapt }
+  }
+
+  /** Card for the detail page. Built-in items read SKILL.md and the adaptation from the server; without it the card still shows. */
+  async function detail(cardId: string, locale = o.defaultLocale()): Promise<StoreSourceCard & { readme: string; description?: string; adapt?: AdaptView | null }> {
     const { s, index, it } = await itemOf(cardId)
-    return { ...card(s, index, it, locale), readme: it.readme ?? '' }
+    const c = card(s, index, it, locale)
+    if (!isBuiltin(s)) return { ...c, readme: it.readme ?? '' }
+    const more = await collectedDetail(it.id).catch((e) => { console.warn('[store-sources] collected detail:', errorText(e)); return null })
+    // An adaptation made for another commit than the one this card installs isn't shown as this item's.
+    const adapt = more?.adapt && more.adapt.commit === c.commit ? more.adapt : null
+    return { ...c, readme: more?.readme || it.readme || '', ...(more ? { adapt } : {}), description: c.summary }
+  }
+
+  /** One card from the (cached) catalog, without the server detail: chat cards read prerequisites and confirm facts from it. */
+  async function item(cardId: string, locale = o.defaultLocale()): Promise<StoreSourceCard> {
+    const { s, index, it } = await itemOf(cardId)
+    return card(s, index, it, locale)
+  }
+
+  /**
+   * The note Tangu reads for an adapted built-in item, for exactly `commit`. Install fails (retryable) when it can't be read:
+   * a collected skill written for Claude Code without its adaptation reads wrong in Tangu.
+   */
+  async function adaptNote(cardId: string, commit: string | null | undefined): Promise<string> {
+    const parts = splitSourceCardId(cardId)
+    if (!parts || !BUILTIN || parts.source !== BUILTIN.id) throw new Error('resolve: collected-adapt-unavailable')
+    const got = await collectedDetail(parts.item).catch(() => null)
+    if (!got?.adapt) throw new Error('resolve: collected-adapt-unavailable')
+    if (!commit || got.adapt.commit !== commit) throw new Error('resolve: collected-adapt-mismatch')
+    return got.adapt.note
   }
 
   /** For the plugin updater: the latest version a source lists for an installed item. */
@@ -568,6 +670,7 @@ export function createStoreSources(o: {
     if (!parts) return false
     const s = find(parts.source)
     if (!s || state.disabled.includes(parts.source)) return true
+    if (isBuiltin(s)) return false
     // Signed out: a private source (or a Forsion Git package listed by a public one) can't be read. Wait for the
     // sign-in instead of marking the item as failed.
     const viaGit = refOf(s).kind === 'forsion-git' || !!state.installs.find((x) => x.cardId === cardId)?.origin.startsWith('forsion-git:')
@@ -655,6 +758,8 @@ export function createStoreSources(o: {
     const rec = opts.auto ? state.installs.find((x) => x.cardId === cardId) : undefined
     if (opts.auto) {
       if (!rec || rec.origin !== origin || rec.type !== it.type) throw new Error('resolve: source-package-moved')
+      // Same repository, another folder: also a different package. A record from before folders were kept says nothing.
+      if (rec.path !== undefined && rec.path !== packagePath(it.package)) throw new Error('resolve: source-package-moved')
     }
     // The same version number from a different commit is not an update the user agreed to: stop and let them do it.
     // (The updater only fetches newer versions; this is the backstop. A record without a commit is "not known", not "changed".)
@@ -663,10 +768,12 @@ export function createStoreSources(o: {
     if (it.package.kind === 'github' || it.package.kind === 'forsion-git') {
       if (sameVersionOtherCommit(it.package.commit)) throw new Error('resolve: source-package-moved')
     }
-    const { buf, url, commit } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}), localSource(refOf(s)))
+    const { buf, url, commit } = await downloadPackage(it.package, it.type, opts.onProgress ?? (() => {}), !isBuiltin(s) && localSource(refOf(s)))
     if (sameVersionOtherCommit(commit)) throw new Error('resolve: source-package-moved')
+    const path = packagePath(it.package)
     return {
-      buf, origin, ...(commit !== undefined ? { commit } : {}),
+      buf, origin, ...(commit !== undefined ? { commit } : {}), ...(path !== undefined ? { path } : {}),
+      ...(isBuiltin(s) && it.collected ? { collected: it.collected } : {}),
       info: {
         type: it.type, installSlug: sourceInstallSlug(s.id, it.id), downloadUrl: url, source: it.package.kind === 'npm' ? 'npm' : it.package.kind === 'github' ? 'github' : 'zip',
         version: it.version, ...(it.minAppVersion ? { minAppVersion: it.minAppVersion } : {}), ...(it.maxAppVersion ? { maxAppVersion: it.maxAppVersion } : {}),
@@ -676,15 +783,29 @@ export function createStoreSources(o: {
   }
 
   /** summary / author are copied in so "Installed" can still describe the item after its source is gone. */
-  async function recordInstall(r: { cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string; commit?: string | null }): Promise<void> {
-    const { commit, ...rest } = r
+  async function recordInstall(r: {
+    cardId: string; type: string; slug: string; name: string; version: string | null; origin: string; summary?: string; author?: string; commit?: string | null
+    path?: string; ack?: { scripts: number; audit: boolean }; tree?: string | null
+  }): Promise<void> {
+    const { commit, path, ack, tree, ...rest } = r
     await save((s) => {
       // Commits seen for this item's earlier versions are kept: only for the same item from the same origin (another item
       // reusing the folder, or the package moved to another repository, starts over).
       const was = s.installs.find((x) => x.cardId === r.cardId && x.type === r.type && x.slug === r.slug && x.origin === r.origin)
       const commits = withCommit(validCommits(was?.commits), r.version, commit)
-      s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), { ...rest, ...(isCommitId(commit) ? { commit } : {}), ...(Object.keys(commits).length ? { commits } : {}), at: Date.now() }]
+      // What the user confirmed carries over (an update brings no new consent); a new confirmation replaces it.
+      const kept = ack ?? (was?.ack && typeof was.ack.scripts === 'number' ? was.ack : undefined)
+      s.installs = [...s.installs.filter((x) => !(x.type === r.type && x.slug === r.slug) && x.cardId !== r.cardId), {
+        ...rest, ...(isCommitId(commit) ? { commit } : {}), ...(Object.keys(commits).length ? { commits } : {}),
+        ...(typeof path === 'string' ? { path } : {}), ...(kept ? { ack: { scripts: kept.scripts, audit: kept.audit === true } } : {}), ...(tree ? { tree } : {}), at: Date.now(),
+      }]
     })
+  }
+  /** The install record of one item (the skill updater reads what was confirmed and the folder hash). */
+  async function installRecord(cardId: string): Promise<{ version: string | null; ack?: { scripts: number; audit: boolean }; tree?: string; type: string; slug: string } | null> {
+    await load()
+    const x = state.installs.find((r) => r.cardId === cardId)
+    return x ? { version: x.version, type: x.type, slug: x.slug, ...(x.ack ? { ack: x.ack } : {}), ...(typeof x.tree === 'string' ? { tree: x.tree } : {}) } : null
   }
   /** The updater downloaded `version` from `commit`: remember the pair (the installed version and commit stay as they are). */
   async function noteCommit(cardId: string, version: string, commit: string | null | undefined): Promise<void> {
@@ -704,13 +825,20 @@ export function createStoreSources(o: {
   async function installs(locale = o.defaultLocale()): Promise<StoreSourceInstall[]> {
     await load()
     return state.installs.map((x) => {
-      const sourceId = splitSourceCardId(x.cardId)!.source
+      const { source: sourceId, item } = splitSourceCardId(x.cardId)!
       const s = find(sourceId)
       const text = (v: unknown, max: number) => (typeof v === 'string' && v ? v.slice(0, max) : undefined)
-      return { cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null, removed: !s || state.disabled.includes(sourceId), summary: text(x.summary, 400), author: text(x.author, 80) }
+      // Only a catalog that was actually read says anything about the item; no copy (or a failed read) = nothing known.
+      const m = s && isBuiltin(s) ? memo.get(sourceId) : undefined
+      const it = m ? listed(s!, m.index).find((y) => y.id === item) : undefined
+      return {
+        cardId: x.cardId, type: x.type, slug: x.slug, name: x.name, version: x.version, sourceId, sourceTitle: s ? titleOf(s, locale) : null,
+        removed: !s || state.disabled.includes(sourceId), summary: text(x.summary, 400), author: text(x.author, 80),
+        ...(it?.collected?.upstreamDeleted ? { upstreamDeleted: true } : {}), ...(m && !it ? { delisted: true } : {}),
+      }
     })
   }
 
-  return { load, list, probe, add, remove, setDisabled, trust, setDeclared, catalog, detail, lookup, updatesPaused, download, recordInstall, noteCommit, forget, installs }
+  return { load, list, probe, add, remove, setDisabled, trust, setDeclared, catalog, detail, item, adaptNote, lookup, updatesPaused, download, recordInstall, installRecord, noteCommit, forget, installs }
 }
 export type StoreSources = ReturnType<typeof createStoreSources>
