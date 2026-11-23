@@ -22,7 +22,8 @@ export interface LocalEngineOptions {
 
 export interface LocalEngine {
   readonly configFile: string
-  endpoint(): { url: string | null; token: string; remoteMark?: string }
+  /** multiAccount is true only once the engine itself reported multi-account mode at readiness. */
+  endpoint(): { url: string | null; token: string; remoteMark?: string; multiAccount?: boolean }
   status(): { state: 'stopped' | 'starting' | 'ready' | 'crashed'; pid: number | null; lastError: string | null }
   start(packageRoots: string[]): Promise<void>
   /** Restart discards registered tools/routes from removed packages. Agents already
@@ -121,6 +122,9 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
           if (message.host !== '127.0.0.1' || !Number.isInteger(message.port) || message.port < 1 || message.port > 65535) {
             onError(new Error('Invalid local engine readiness endpoint')); return
           }
+          // Never trust the request alone: an engine that does not confirm multi-account mode would put every
+          // visitor in one database.
+          if (options.multiAccount && message.mode !== 'multi-account') { onError(new Error('Local engine did not start in multi-account mode')); return }
           url = `http://127.0.0.1:${message.port}`
           state = 'ready'
           fingerprint = nextFingerprint
@@ -138,7 +142,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
 
   return {
     configFile,
-    endpoint: () => (url ? (options.multiAccount ? { url, token } : { url, token, remoteMark }) : { url, token }),
+    endpoint: () => (url ? (options.multiAccount ? { url, token, multiAccount: true } : { url, token, remoteMark }) : { url, token }),
     status: () => ({ state, pid: child?.pid ?? null, lastError }),
     start: (roots) => serialize(() => run(roots)),
     setPackages: (roots, force) => serialize(() => run(roots, force)),

@@ -98,10 +98,11 @@ export function createRemoteAccount(options: RemoteAccountOptions): Required<Pic
       const purpose = opts.purpose === 'administration' ? 'administration' : undefined
       const key = createHash('sha256').update(`${purpose || ''}\0${token}`).digest('hex')
       const hit = cache.get(key)
-      if (hit && hit.expires > now()) return structuredClone(hit.identity)
+      if (hit && hit.expires > now() && !opts.fresh) return structuredClone(hit.identity)
       if (hit) cache.delete(key)
       // Concurrent requests with one token share one lookup; the caller's own signal still applies.
-      let job = pending.get(key)
+      // A fresh re-check never joins a lookup that started before it.
+      let job = opts.fresh ? undefined : pending.get(key)
       if (!job) {
         job = ask(token, purpose).then((identity) => {
           if (identity && cacheMs > 0) {
@@ -109,12 +110,21 @@ export function createRemoteAccount(options: RemoteAccountOptions): Required<Pic
             cache.set(key, { identity, expires: now() + cacheMs })
           }
           return identity
-        }).finally(() => pending.delete(key))
+        }).finally(() => { if (pending.get(key) === job) pending.delete(key) })
         pending.set(key, job)
       }
-      const result = await (opts.signal
-        ? Promise.race([job, new Promise<never>((_, reject) => opts.signal!.addEventListener('abort', () => reject(opts.signal!.reason), { once: true }))])
-        : job)
+      let result: BackendIdentity | null
+      if (!opts.signal) result = await job
+      else {
+        const signal = opts.signal
+        let onAbort: (() => void) | undefined
+        try {
+          result = await Promise.race([job, new Promise<never>((_, reject) => {
+            onAbort = () => reject(signal.reason)
+            signal.addEventListener('abort', onAbort, { once: true })
+          })])
+        } finally { if (onAbort) signal.removeEventListener('abort', onAbort) }
+      }
       return result ? structuredClone(result) : null
     },
   }

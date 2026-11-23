@@ -79,7 +79,7 @@ export function createAccountHttp(options: {
       // Revalidate after uploads: revocation while reading a request cannot commit data.
       const guard = async () => {
         controller.signal.throwIfAborted()
-        const current = await provider.account.resolve(bearer!, { signal: controller.signal, purpose: 'administration' })
+        const current = await provider.account.resolve(bearer!, { signal: controller.signal, purpose: 'administration', fresh: true })
         if (!current || digest(current) !== digest(identity) || options.provider()?.account !== provider.account) {
           throw new AccountChanged('Account changed')
         }

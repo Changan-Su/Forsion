@@ -24,7 +24,7 @@ Unit 拿访客的令牌问 `GET <origin>/api/auth/unit-identity`，只有明确�
 验过的身份缓存 30 秒（吊销最多晚 30 秒生效）。浏览器侧的 `/api` 仍是同源路径，要由站点前面的反向代理转给 `origin`。
 `loginVia` 是同一运营方另一个入口上的登录处：没登录的访客去那里登录（已经登录就直接回来），带回一张一次性交接码，本页用它换令牌；
 本页只认自己这一标签页发起的那次登录（一次性 state），别人发来的带码链接一律丢弃。提供登录的入口要在它的 `webEntries` 项里列出
-`"handoffTargets": ["https://ai.example.com"]`（只收确切的 https 源），且只把码交给带着 state 回来要的页面。两边拿到的是同一枚令牌，在任一边退出两边一起退出。
+`"handoffTargets": ["https://ai.example.com/web/"]`（https 源加入口路径，码只送进这个路径下面，不会落到那个源上会跳转的别的路由），且只把码交给带着 state 回来要的页面。两边拿到的是同一枚令牌，在任一边退出两边一起退出。
 
 `"visitorEngine": { "plugin": "tangu" }` 让公开 Unit 用多账号模式拉起这个包的引擎（`TANGU_MULTI_ACCOUNT=1`，没有主人、没有单一数据库路径）。
 访客经 `<base>/engine/*` 访问：Unit 先用访客自己的令牌验身份，再重建请求头，只带引擎口令和 `X-Forsion-User: <server userId>`；
@@ -35,7 +35,7 @@ A public Unit can verify Forsion logins remotely instead of hosting the Server p
 `GET /api/auth/unit-identity` with the visitor's token; only an explicit 401 / 403 means signed out, every other failure is a 503
 that keeps the browser's login. Verified identities are reused for 30 seconds. `/api` stays a same-origin path, so a reverse proxy in
 front of the site forwards it to `origin`. With `loginVia`, visitors sign in on another entry of the same operator and come back with a
-one-time handoff code that only completes a login this tab started; that entry lists the receiving origins in `handoffTargets`.
+one-time handoff code that only completes a login this tab started; that entry lists the receiving entry URLs (origin plus base path) in `handoffTargets`.
 `visitorEngine` starts the named package's engine in multi-account mode; `<base>/engine/*` resolves the visitor's own token and forwards
 with the engine credential and `X-Forsion-User` only. Both options are refused on a local workspace Unit.
 

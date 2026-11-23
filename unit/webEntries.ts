@@ -4,19 +4,22 @@ export interface WebEntry {
   plugins: string[]
   defaultSpace?: string
   inheritWebAccount?: boolean
-  /** Origins of other entries of this operator (another Unit, another domain) that may ask this entry for its
-   *  visitor's login. They get a one-time handoff code, never the token. Exact origins only, no wildcards. */
+  /** Other entries of this operator (another Unit, another domain) that may ask this entry for its visitor's
+   *  login, as entry URLs: origin plus base path, e.g. https://ai.example.com/web/. The code is only ever sent to
+   *  a page under one of them, never to other routes of that origin. They get a one-time code, never the token. */
   handoffTargets?: string[]
 }
 
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
-function validOrigin(value: unknown): value is string {
+function validEntryUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try {
     const url = new URL(value)
     // Plain host names only: URL parsing accepts characters such as '*' that read like a wildcard.
     const host = LOOPBACK.has(url.hostname) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(url.hostname)
-    return host && url.origin === value && (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname)))
+    return host && url.href === value && !url.username && !url.password && !url.search && !url.hash
+      && /^\/(?:[A-Za-z0-9_-]+\/)+$/.test(url.pathname)
+      && (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname)))
   } catch { return false }
 }
 
@@ -37,8 +40,8 @@ export function validateWebEntries(entries: WebEntry[] | undefined, primary: str
       if (pack.requires?.some((dep) => !entry.plugins.includes(dep))) throw new Error(`Web entry omits a dependency of ${id}`)
     }
     if (entry.defaultSpace && !entry.plugins.some((id) => packages.get(id)!.spaces.has(entry.defaultSpace!))) throw new Error('Web entry default Space must be published')
-    if (entry.handoffTargets !== undefined && (!Array.isArray(entry.handoffTargets) || !entry.handoffTargets.every(validOrigin))) {
-      throw new Error('Web entry handoff targets must be exact https origins')
+    if (entry.handoffTargets !== undefined && (!Array.isArray(entry.handoffTargets) || !entry.handoffTargets.every(validEntryUrl))) {
+      throw new Error('Web entry handoff targets must be https entry URLs with a base path, e.g. https://ai.example.com/web/')
     }
   }
   return entries

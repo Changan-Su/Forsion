@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import http from 'node:http'
+import { getEventListeners } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -93,6 +94,17 @@ describe('remote account authority', () => {
     const waiting = createRemoteAccount({ origin: accountOrigin, timeoutMs: 2000 }).resolve('tok-slow', { signal: gone.signal })
     gone.abort(new Error('closed'))
     await expect(waiting).rejects.toThrow('closed')
+    // A re-check before a write asks again instead of trusting the cache.
+    const aliceCalls = () => accountCalls.filter((c) => c.token === 'tok-alice' && !c.purpose).length
+    const asked = aliceCalls()
+    await account.resolve('tok-alice')
+    expect(aliceCalls()).toBe(asked)
+    await account.resolve('tok-alice', { fresh: true })
+    expect(aliceCalls()).toBe(asked + 1)
+    // A long-lived caller signal keeps no listener once a lookup settles.
+    const live = new AbortController()
+    for (const token of ['tok-bob', 'tok-nobody', 'tok-down']) await account.resolve(token, { signal: live.signal, fresh: true }).catch(() => null)
+    expect(getEventListeners(live.signal, 'abort')).toHaveLength(0)
     const copy = (await account.resolve('tok-alice'))!
     copy.userId = 'changed'
     expect((await account.resolve('tok-alice'))!.userId).toBe('a1b2c3d4-0000-4000-8000-000000000001')
@@ -100,7 +112,7 @@ describe('remote account authority', () => {
 })
 
 describe('public Unit with a remote account and a visitor engine', () => {
-  async function fixture(options: { visitorEngine?: boolean } = {}) {
+  async function fixture(options: { visitorEngine?: boolean; legacyRuntime?: boolean } = {}) {
     const root = await mkdtemp(join(tmpdir(), 'unit-visitor-engine-'))
     await mkdir(join(root, 'web'), { recursive: true })
     await writeFile(join(root, 'web/index.html'), '<html><head></head><body></body></html>')
@@ -109,7 +121,7 @@ describe('public Unit with a remote account and a visitor engine', () => {
     await writeFile(join(engine, 'manifest.json'), JSON.stringify({ id: 'visitor-engine', version: '1.0.0', apiVersion: 1, runtime: { apiVersion: 1, main: 'runtime.mjs' } }))
     await writeFile(join(engine, 'runtime.mjs'), `export function createRuntime(context) {
       if (context.multiAccount !== true) throw new Error('expected a multi-account runtime')
-      return { engine: { endpoint: () => ({ url: ${JSON.stringify(engineUrl)}, token: 'engine-secret' }), status: () => ({}) }, close: async () => {} }
+      return { engine: { endpoint: () => ({ url: ${JSON.stringify(engineUrl)}, token: 'engine-secret'${options.legacyRuntime ? '' : ', multiAccount: true'} }), status: () => ({}) }, close: async () => {} }
     }`)
     const handle = await startBasicUnit({ instanceId: 'public-visitors', name: 'Public', version: '3.0.0', dataDir: join(root, 'data'), port: 0,
       basePath: '/web/', plugins: [engine], webDist: join(root, 'web'),
@@ -157,6 +169,18 @@ describe('public Unit with a remote account and a visitor engine', () => {
       expect(JSON.stringify(bobConfig)).not.toContain('dark')
       // The rest of the host surface stays unpublished.
       for (const path of ['/vault/rpc', '/unit/hostfile?path=/etc/passwd', '/unit/pair/poll']) expect((await get(path, { Authorization: 'Bearer tok-alice' })).status).toBe(403)
+      // Removing the visitor engine would leave a unit.json the next start refuses.
+      await expect(handle.uninstall('visitor-engine')).rejects.toThrow('visitor engine')
+    } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
+  })
+
+  it('keeps visitors out of an engine that did not confirm multi-account mode', async () => {
+    const { root, handle, base } = await fixture({ legacyRuntime: true })
+    try {
+      engineCalls.length = 0
+      const r = await fetch(base + '/engine/agent/sessions', { headers: { Authorization: 'Bearer tok-alice' } })
+      expect(r.status).toBe(503)
+      expect(engineCalls).toHaveLength(0)
     } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
   })
 
@@ -192,13 +216,13 @@ describe('public Unit with a remote account and a visitor engine', () => {
       const start = (handoffTargets: unknown) => startBasicUnit({ instanceId: 'entries', name: 'Entries', version: '3.0.0', dataDir: join(root, 'data'), port: 0,
         basePath: '/admin/', plugins: [join(root, 'site'), join(root, 'other')], webDist: join(root, 'web'), remoteAccount: { origin: accountOrigin },
         webEntries: [{ basePath: '/web/', plugins: ['site'], handoffTargets: handoffTargets as string[] }, { basePath: '/other/', plugins: ['other'] }] })
-      for (const bad of [['https://*.example.com'], ['https://www.example.com/web/'], ['http://www.example.com'], 'https://www.example.com']) {
+      for (const bad of [['https://*.example.com/web/'], ['https://www.example.com'], ['https://www.example.com/web'], ['http://www.example.com/web/'], ['https://www.example.com/web/?x=1'], 'https://www.example.com/web/']) {
         await expect(start(bad)).rejects.toThrow('handoff targets')
       }
-      const handle = await start(['https://www.example.com'])
+      const handle = await start(['https://www.example.com/web/'])
       try {
         const base = `http://127.0.0.1:${handle.port}`
-        expect((await fetch(base + '/web/unit/meta').then((r) => r.json())).account).toEqual({ apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://www.example.com'] })
+        expect((await fetch(base + '/web/unit/meta').then((r) => r.json())).account).toEqual({ apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://www.example.com/web/'] })
         expect((await fetch(base + '/other/unit/meta').then((r) => r.json())).account.handoffTargets).toBeUndefined()
       } finally { await handle.close() }
     } finally { await rm(root, { recursive: true, force: true }) }

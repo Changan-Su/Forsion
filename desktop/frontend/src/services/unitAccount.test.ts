@@ -352,7 +352,7 @@ describe('Unit visitor Account adapter', () => {
 describe('Unit login handoff between entries of one operator', () => {
   const pending = async (promise: Promise<unknown>) => Promise.race([promise.then(() => 'settled', () => 'settled'), new Promise((done) => setTimeout(() => done('pending'), 30))])
   const receiver = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth', loginVia: 'https://sign.test/web/' } }
-  const provider = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://forsion.test'] } }
+  const provider = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://forsion.test/admin/'] } }
 
   it('completes only a login this tab started, with a one-time code exchanged for the token', async () => {
     const exchanged: string[] = []
@@ -411,17 +411,20 @@ describe('Unit login handoff between entries of one operator', () => {
     values.set(tokenKey, 'token-b')
     const ask = (to: string) => { browserLocation.href = sign.href + '?unit-handoff=' + encodeURIComponent(to) }
 
-    ask('https://forsion.test/admin/?account_state=s1&handoff=stale')
+    ask('https://forsion.test/admin/?account_state=s1&handoff=stale#notes')
     expect(await pending(installUnitAccount(provider, sign))).toBe('pending')
     expect(minted).toEqual(['Bearer token-b'])
     const sent = new URL((browserLocation as unknown as { replace: ReturnType<typeof vi.fn> }).replace.mock.calls[0][0])
     expect(sent.origin).toBe('https://forsion.test')
     expect(sent.searchParams.get('account_state')).toBe('s1')
     expect(sent.searchParams.getAll('handoff')).toEqual(['code-b'])
+    expect(sent.hash).toBe('#notes')
 
     // Unlisted origin, plain http, no state from the asking page, or no list at all: open normally, mint nothing.
-    for (const [to, meta] of [['https://evil.test/?account_state=s1', provider], ['http://forsion.test/?account_state=s1', provider],
-      ['https://forsion.test/admin/', provider], ['https://forsion.test/?account_state=s1', receiver]] as const) {
+    // Other routes on the listed origin may redirect elsewhere and carry the code on, so only the entry path counts.
+    for (const [to, meta] of [['https://evil.test/admin/?account_state=s1', provider], ['http://forsion.test/admin/?account_state=s1', provider],
+      ['https://forsion.test/auth?account_state=s1', provider], ['https://forsion.test/admin/../auth?account_state=s1', provider],
+      ['https://forsion.test/admin/', provider], ['https://forsion.test/admin/?account_state=s1', receiver]] as const) {
       ask(to)
       const unit = await installUnitAccount(meta, sign)
       expect(unit.account.getIdentity()?.userId).toBe('b')

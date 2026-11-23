@@ -26,7 +26,8 @@ export interface RuntimeVault extends VaultFace {
 export interface LocalRuntime {
   vault?: RuntimeVault
   engine?: {
-    endpoint(): { url: string | null; token: string }
+    /** multiAccount: the engine confirmed multi-account mode (required before a public Unit lets visitors in). */
+    endpoint(): { url: string | null; token: string; multiAccount?: boolean }
     status(): unknown
   }
   /** Reconcile installed/enabled bundles using the same loader as desktop. */

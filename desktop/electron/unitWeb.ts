@@ -574,7 +574,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       upRes.pipe(res)
       res.on('close', () => upRes.destroy())
     })
-    up.on('error', (e) => { if (!res.headersSent) json(res, 502, { detail: `本机引擎不可达: ${e.message}` }) })
+    up.on('error', (e) => { if (!res.headersSent) json(res, 502, { detail: `本机引擎不可达: ${e.message}` }); else res.destroy() })
+    // 调用方在引擎回头之前就断了:上游请求一起收掉,别让慢请求一直占着引擎的连接。
+    res.on('close', () => { if (!res.writableEnded) up.destroy() })
     req.pipe(up)
   }
 

@@ -7,14 +7,18 @@ const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (n
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 const webOrigin = (url: URL) => url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname))
 
-/** Where this entry may hand its visitor's login: an operator-listed origin, back to a page that asked for it.
+/** Where this entry may hand its visitor's login: inside an operator-listed entry (origin plus base path, so a
+ *  redirecting route elsewhere on that origin can never carry the code on), back to a page that asked for it.
  *  The receiving page proves it asked by its own one-time state, so the address must carry one. */
 function handoffTarget(raw: string, allowed: readonly string[] | undefined): URL | null {
   if (!allowed?.length) return null
   let url: URL
   try { url = new URL(raw) } catch { return null }
-  if (!webOrigin(url) || url.username || url.password || url.hash || url.origin === location.origin) return null
-  if (!allowed.includes(url.origin) || !url.searchParams.get('account_state')) return null
+  if (!webOrigin(url) || url.username || url.password || url.origin === location.origin) return null
+  const inside = allowed.some((entry) => {
+    try { const base = new URL(entry); return base.origin === url.origin && url.pathname.startsWith(base.pathname) } catch { return false }
+  })
+  if (!inside || !url.searchParams.get('account_state')) return null
   url.searchParams.delete('handoff')
   return url
 }

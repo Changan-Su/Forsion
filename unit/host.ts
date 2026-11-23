@@ -340,7 +340,13 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       return false
     },
     routeUpgrade: (req, socket, head) => { const backend = select(pathname(req.url)); if (!backend?.upgrade) return false; backend.upgrade(req, socket, head); return true },
-    getEngine: () => runtimeEngine()?.endpoint() || { url: null, token: '' },
+    getEngine: () => {
+      const endpoint = runtimeEngine()?.endpoint()
+      // A visitor engine is reachable only after it confirmed multi-account mode itself. A package whose runtime
+      // predates that mode ignores the request and would serve every visitor from one database.
+      if (!endpoint || (visitorEnginePlugin && endpoint.multiAccount !== true)) return { url: null, token: '' }
+      return endpoint
+    },
     pairedDevices: { list: () => localWorkspace ? [localWorkspace.device] : [], add: async () => { throw new Error('Pairing is disabled') } },
     confirmPair: async () => false,
     readPlugins: async () => published().flatMap((r) => r.package.ui ? [r.package.ui] : []),
@@ -381,6 +387,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         return [candidate, { requires: pack.manifest.requires, spaces: pack.spaceIds }]
       })))
       if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace) && !next.spaceIds.has(config.defaultSpace)) throw new Error('Update removes the Unit default Space')
+      if (id === visitorEnginePlugin && !next.runtimeEntry) throw new Error('Update removes the visitor engine runtime')
       const previous = rec.package, active = activeTree(id)
       for (const candidate of [...active].reverse()) await deactivate(candidate, false, true)
       rec.package = next
@@ -435,6 +442,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       if (dependents.length) throw new OperationError(`Uninstall the plugins that require it first: ${dependents.join(', ')}`)
       if (config.webEntries?.some((entry) => entry.plugins.includes(id))) throw new OperationError('A web entry in unit.json publishes this plugin; remove it there first')
       if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace)) throw new OperationError('This plugin supplies the Unit default Space; change defaultSpace in unit.json first')
+      if (id === visitorEnginePlugin) throw new OperationError('This plugin is the visitor engine; change visitorEngine in unit.json first')
       const before = { records: [...records], order: [...ordered], state: rec.state, enabled: rec.installation.enabled }
       const restore = async () => {
         records.clear()
