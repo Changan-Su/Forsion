@@ -348,3 +348,94 @@ describe('Unit visitor Account adapter', () => {
     expect(browserLocation.reload).toHaveBeenCalledOnce()
   })
 })
+
+describe('Unit login handoff between entries of one operator', () => {
+  const pending = async (promise: Promise<unknown>) => Promise.race([promise.then(() => 'settled', () => 'settled'), new Promise((done) => setTimeout(() => done('pending'), 30))])
+  const receiver = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth', loginVia: 'https://sign.test/web/' } }
+  const provider = { instanceId: 'unit-one', account: { apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://forsion.test'] } }
+
+  it('completes only a login this tab started, with a one-time code exchanged for the token', async () => {
+    const exchanged: string[] = []
+    const authority = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      if (new URL(String(input)).pathname === '/api/auth/handoff/exchange') {
+        const { code } = JSON.parse(String(init?.body))
+        exchanged.push(code)
+        return code === 'code-a' ? json({ token: 'token-a' }) : json({}, 410)
+      }
+      return authority(input, init)
+    })
+    // Unsolicited: no state from this tab, so the code is dropped unused.
+    browserLocation.href = base.href + '?handoff=code-a&account_state=forged#notes'
+    let unit = await installUnitAccount(receiver, base)
+    expect(exchanged).toEqual([])
+    expect(unit.account.getIdentity()).toBeNull()
+    expect(browserLocation.href).toBe(base.href + '#notes')
+
+    // Login goes to the sign-in entry with this tab's state in the return address.
+    await unit.login()
+    const target = new URL(browserLocation.assign.mock.calls[0][0])
+    expect(target.origin + target.pathname).toBe('https://sign.test/web/')
+    const back = new URL(target.searchParams.get('unit-handoff')!)
+    const state = back.searchParams.get('account_state')!
+    expect(state).toBe(values.get(stateKey))
+
+    back.searchParams.set('handoff', 'code-a')
+    browserLocation.href = back.href
+    unit = await installUnitAccount(receiver, base)
+    expect(exchanged).toEqual(['code-a'])
+    expect(unit.account.getIdentity()?.userId).toBe('a')
+    expect(values.has(stateKey)).toBe(false)
+    expect(browserLocation.href).not.toContain('handoff')
+
+    // A code that no longer works stops the page instead of bouncing back to sign in forever.
+    await unit.account.clearSession({ prepare: false })
+    values.set(stateKey, 's2')
+    browserLocation.href = base.href + '?handoff=code-old&account_state=s2'
+    await expect(installUnitAccount(receiver, base)).rejects.toThrow('handoff')
+  })
+
+  it('hands a signed-in visitor to a listed origin that asked, and nowhere else', async () => {
+    Object.assign(browserLocation, { replace: vi.fn() })
+    const minted: Array<string | null> = []
+    const authority = fetcher.getMockImplementation()!
+    fetcher.mockImplementation(async (input, init) => {
+      if (new URL(String(input)).pathname === '/api/auth/handoff') {
+        minted.push(new Headers(init?.headers).get('Authorization'))
+        return json({ code: 'code-b', expires_in: 60 })
+      }
+      return authority(input, init)
+    })
+    const sign = new URL('https://sign.test/admin/')
+    Object.assign(browserLocation, { origin: sign.origin })
+    values.set(tokenKey, 'token-b')
+    const ask = (to: string) => { browserLocation.href = sign.href + '?unit-handoff=' + encodeURIComponent(to) }
+
+    ask('https://forsion.test/admin/?account_state=s1&handoff=stale')
+    expect(await pending(installUnitAccount(provider, sign))).toBe('pending')
+    expect(minted).toEqual(['Bearer token-b'])
+    const sent = new URL((browserLocation as unknown as { replace: ReturnType<typeof vi.fn> }).replace.mock.calls[0][0])
+    expect(sent.origin).toBe('https://forsion.test')
+    expect(sent.searchParams.get('account_state')).toBe('s1')
+    expect(sent.searchParams.getAll('handoff')).toEqual(['code-b'])
+
+    // Unlisted origin, plain http, no state from the asking page, or no list at all: open normally, mint nothing.
+    for (const [to, meta] of [['https://evil.test/?account_state=s1', provider], ['http://forsion.test/?account_state=s1', provider],
+      ['https://forsion.test/admin/', provider], ['https://forsion.test/?account_state=s1', receiver]] as const) {
+      ask(to)
+      const unit = await installUnitAccount(meta, sign)
+      expect(unit.account.getIdentity()?.userId).toBe('b')
+      expect(browserLocation.href).toBe(sign.href)
+    }
+    expect(minted).toHaveLength(1)
+
+    // Not signed in here yet: sign in first, keeping the request in the return address.
+    values.delete(tokenKey)
+    ask('https://forsion.test/admin/?account_state=s3')
+    expect(await pending(installUnitAccount(provider, sign))).toBe('pending')
+    const login = new URL(browserLocation.assign.mock.calls.at(-1)![0])
+    expect(login.pathname).toBe('/auth')
+    expect(new URL(login.searchParams.get('redirect')!).searchParams.get('unit-handoff')).toBe('https://forsion.test/admin/?account_state=s3')
+    expect(minted).toHaveLength(1)
+  })
+})

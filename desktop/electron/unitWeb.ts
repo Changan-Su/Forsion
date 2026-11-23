@@ -213,8 +213,9 @@ function startsWorkspaceSession(path: string): boolean {
 
 export interface UnitWebDeps {
   account?: {
-    /** loginVia:另一个公开入口上的登录处(同一运营方),没登录的访客去那里登、带一次性交接码回来。 */
-    metadata: () => { apiBase: string; loginPath: string; loginVia?: string } | undefined
+    /** loginVia:另一个公开入口上的登录处(同一运营方),没登录的访客去那里登、带一次性交接码回来。
+     *  handoffTargets:反过来,本入口可以把访客的登录(一次性交接码)交给哪些源。 */
+    metadata: () => { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] } | undefined
     handle: (path: string, req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>
   }
   /** Optional generic backend contributions. true means the request was accepted. */

@@ -4,9 +4,26 @@ import type { PluginAccount, PluginAccountStatus } from '../../desktop/frontend/
 import { quotaEntry } from '../../desktop/shared/telemetryKeys'
 
 const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (n) => n.toString(16).padStart(2, '0')).join('')
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
+const webOrigin = (url: URL) => url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK.has(url.hostname))
+
+/** Where this entry may hand its visitor's login: an operator-listed origin, back to a page that asked for it.
+ *  The receiving page proves it asked by its own one-time state, so the address must carry one. */
+function handoffTarget(raw: string, allowed: readonly string[] | undefined): URL | null {
+  if (!allowed?.length) return null
+  let url: URL
+  try { url = new URL(raw) } catch { return null }
+  if (!webOrigin(url) || url.username || url.password || url.hash || url.origin === location.origin) return null
+  if (!allowed.includes(url.origin) || !url.searchParams.get('account_state')) return null
+  url.searchParams.delete('handoff')
+  return url
+}
 
 export async function installUnitAccount(meta: {
-  instanceId: string; account: { apiBase: string; loginPath: string }; inheritWebAccount?: boolean
+  instanceId: string; inheritWebAccount?: boolean
+  /** loginVia: sign in on another entry of the same operator, which sends back a one-time handoff code.
+   *  handoffTargets: origins this entry hands its login to when one of their pages asks. */
+  account: { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] }
 }, base: URL) {
   // The official public entry keeps its login across tabs and browser restarts, as the old Web did;
   // other entries stay tab-scoped. The key is this Unit's own: /auth never reads or forwards it.
@@ -35,6 +52,25 @@ export async function installUnitAccount(meta: {
     identityUrl: new URL('unit/account', base).href, allowedPaths: [new URL('unit', base).pathname] })
   const url = new URL(location.href)
   const stateKey = `unit:${meta.instanceId}:login-state`
+  const handoff = url.searchParams.get('handoff')
+  if (handoff !== null) {
+    // A one-time code from the sign-in entry. Only a login this tab started may be completed with it,
+    // so a link carrying someone else's code cannot sign the visitor in to that account.
+    const state = url.searchParams.get('account_state')
+    url.searchParams.delete('handoff')
+    url.searchParams.delete('account_state')
+    history.replaceState(null, '', url.href)
+    if (state && state === sessionStorage.getItem(stateKey)) {
+      sessionStorage.removeItem(stateKey)
+      const exchange = await fetch(new URL('auth/handoff/exchange', new URL(meta.account.apiBase.replace(/\/?$/, '/'), location.origin)).href, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: handoff }),
+        credentials: 'omit', redirect: 'error', cache: 'no-store' })
+      const token = exchange.ok ? (await exchange.json().catch(() => null))?.token : null
+      // Stop here instead of signing in again: a code that never works would otherwise bounce forever.
+      if (typeof token !== 'string' || !token) throw new AccountHttpError(exchange.status, 'The sign-in handoff did not complete')
+      await account.adoptToken(token)
+    }
+  }
   const callback = url.searchParams.get('token')
   if (callback) {
     const state = url.searchParams.get('account_state')
@@ -103,13 +139,20 @@ export async function installUnitAccount(meta: {
   const login = async () => {
     try {
       for (const listener of prepare) await listener()
-      const target = new URL(meta.account.loginPath, location.origin)
-      target.searchParams.set('app', 'forsion-unit')
-      target.searchParams.set('session', 'tab')
       const callbackUrl = new URL(location.href)
       const state = randomId()
       sessionStorage.setItem(stateKey, state)
       callbackUrl.searchParams.set('account_state', state)
+      if (meta.account.loginVia) {
+        // The sign-in entry already knows the visitor or signs them in there, then returns a handoff code.
+        const target = new URL(meta.account.loginVia)
+        target.searchParams.set('unit-handoff', callbackUrl.href)
+        location.assign(target.href)
+        return { ok: true }
+      }
+      const target = new URL(meta.account.loginPath, location.origin)
+      target.searchParams.set('app', 'forsion-unit')
+      target.searchParams.set('session', 'tab')
       target.searchParams.set('redirect', callbackUrl.href)
       location.assign(target.href)
       return { ok: true }
@@ -182,6 +225,23 @@ export async function installUnitAccount(meta: {
     if (!account.getIdentity()) return { status: 401, json: null }
     const response = await request(path, { ...init, signal: AbortSignal.timeout(15000) })
     return { status: response.status, json: await response.json().catch(() => null) }
+  }
+  // Another entry of this operator asked for the visitor's login: sign in here if needed, then send it a
+  // one-time code (never the token itself) and leave this page without opening it.
+  const handoffRequest = url.searchParams.get('unit-handoff')
+  if (handoffRequest !== null) {
+    const target = handoffTarget(handoffRequest, meta.account.handoffTargets)
+    if (target) {
+      if (!identity) { await login(); return new Promise<never>(() => {}) }
+      const minted = await request('/auth/handoff', { method: 'POST' })
+      const code = minted.ok ? (await minted.json().catch(() => null))?.code : null
+      if (typeof code !== 'string' || !code) throw new AccountHttpError(minted.status, 'Could not hand the sign-in to the other entry')
+      target.searchParams.set('handoff', code)
+      location.replace(target.href)
+      return new Promise<never>(() => {})
+    }
+    url.searchParams.delete('unit-handoff')
+    history.replaceState(null, '', url.href)
   }
   return { account, capability, scope, login, accountPresentation,
     onAuthWillChange(callback: () => Promise<void>) {

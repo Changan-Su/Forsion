@@ -293,7 +293,10 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
           requires: r.package.manifest.requires || [], protected: r.package.manifest.id === authority })) }
     } })
   const mountedEntries = await Promise.all(webEntries.map(async (entry) => ({ entry, web: await startUnitWeb({
-    account: { metadata: accountMetadata, handle: (path, req, res) => {
+    account: { metadata: () => {
+      const metadata = accountMetadata()
+      return metadata && entry.handoffTargets?.length ? { ...metadata, handoffTargets: [...entry.handoffTargets] } : metadata
+    }, handle: (path, req, res) => {
       if (path.startsWith('/unit/plugin-data/') && !entry.plugins.includes(path.slice('/unit/plugin-data/'.length))) {
         res.writeHead(404, { 'Content-Type': 'application/json' }); res.end('{"error":"Plugin is not published"}'); return Promise.resolve(true)
       }

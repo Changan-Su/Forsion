@@ -178,4 +178,29 @@ describe('public Unit with a remote account and a visitor engine', () => {
         plugins: [], webDist: join(local, 'web'), remoteAccount: { origin: accountOrigin }, visitorEngine: { plugin: 'missing' } })).rejects.toThrow('visitorEngine.plugin')
     } finally { await rm(local, { recursive: true, force: true }) }
   })
+
+  it('publishes handoff targets only on the web entry that lists them, and only exact https origins', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'unit-handoff-targets-'))
+    try {
+      await mkdir(join(root, 'web'))
+      await writeFile(join(root, 'web/index.html'), '<html><head></head><body></body></html>')
+      for (const id of ['site', 'other']) {
+        await mkdir(join(root, id))
+        await writeFile(join(root, id, 'manifest.json'), JSON.stringify({ id, version: '1.0.0', apiVersion: 1, main: 'main.js' }))
+        await writeFile(join(root, id, 'main.js'), 'ctx.registerView({id:"v"})')
+      }
+      const start = (handoffTargets: unknown) => startBasicUnit({ instanceId: 'entries', name: 'Entries', version: '3.0.0', dataDir: join(root, 'data'), port: 0,
+        basePath: '/admin/', plugins: [join(root, 'site'), join(root, 'other')], webDist: join(root, 'web'), remoteAccount: { origin: accountOrigin },
+        webEntries: [{ basePath: '/web/', plugins: ['site'], handoffTargets: handoffTargets as string[] }, { basePath: '/other/', plugins: ['other'] }] })
+      for (const bad of [['https://*.example.com'], ['https://www.example.com/web/'], ['http://www.example.com'], 'https://www.example.com']) {
+        await expect(start(bad)).rejects.toThrow('handoff targets')
+      }
+      const handle = await start(['https://www.example.com'])
+      try {
+        const base = `http://127.0.0.1:${handle.port}`
+        expect((await fetch(base + '/web/unit/meta').then((r) => r.json())).account).toEqual({ apiBase: '/api', loginPath: '/auth', handoffTargets: ['https://www.example.com'] })
+        expect((await fetch(base + '/other/unit/meta').then((r) => r.json())).account.handoffTargets).toBeUndefined()
+      } finally { await handle.close() }
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
 })

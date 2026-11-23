@@ -32,6 +32,7 @@ function checkedOrigin(value: unknown, what: string): URL {
   // Plain HTTP only for a server on this machine (development and tests).
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) throw new Error(`${what} must use HTTPS`)
   if (url.username || url.password || url.search || url.hash) throw new Error(`${what} must not carry credentials, a query or a fragment`)
+  if (!LOOPBACK.has(url.hostname) && !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(url.hostname)) throw new Error(`${what} must name a plain host`)
   return url
 }
 
