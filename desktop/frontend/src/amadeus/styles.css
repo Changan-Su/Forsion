@@ -1546,7 +1546,10 @@ body.amx-marquee-active * {
 .am-app .slash-preview .sp-h[data-level='h2'] { font-size: var(--ui-font-title); }
 .am-app .slash-preview .sp-h[data-level='h3'] { font-size: var(--ui-font-heading); }
 .am-app .slash-preview .sp-h[data-level='hn'] { font-size: var(--ui-font-body); }
-.am-app .slash-preview .sp-callout { margin: -2px -4px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, #448aff 10%, var(--surface-menu, var(--surface-2))); }
+/* 标注预览是预览卡里的一块样张,不是浮层:底取实色 --surface-2(= 预览卡在 Genesis 下的回落,颜色与之前逐字一样,
+   也盖住样张框的 --overlay-light 那层淡底)。别拿 --surface-menu 当混色底 —— Glass 下它是「高光渐变, 底色」
+   两层背景列表,color-mix 整条失效、底色丢掉(11-23)。 */
+.am-app .slash-preview .sp-callout { margin: -2px -4px; padding: 8px 10px; border-radius: var(--radius-sm); background: color-mix(in srgb, #448aff 10%, var(--surface-2)); }
 .am-app .slash-preview .sp-callout-title { display: flex; align-items: center; gap: 6px; font-weight: 600; }
 .am-app .slash-preview .sp-callout-icon { display: inline-flex; color: #448aff; }
 .am-app .slash-preview .sp-table { width: 100%; border-collapse: collapse; }
@@ -3376,21 +3379,35 @@ body.amx-marquee-active * {
 .unified-body .ProseMirror:not(:focus-within) .amx-sec-tb-host,
 .unified-body .ProseMirror[contenteditable='false'] .amx-sec-tb-host,
 .unified-body .ProseMirror[data-dragging='true'] .amx-sec-tb-host { display: none; }
+/* 材质(底色 + 磨砂 + 描边)画在无子节点的 ::before 上,条自己透明:展开的 .amx-sec-pop 是条的后代,
+   条自己读 --surface-blur 就成了弹层的 backdrop root,弹层在 Glass 下只能糊到条里那点像素 = 半透又不糊
+   (同 genesis-glass 的输入卡 .t2c-card;isolation 只把负 z-index 留在条内,不截 backdrop)。
+   条上留一圈透明边占住原来 1px 描边的位置,::before 用 inset:-1px 盖住整个边框盒,看上去和画在条上一样。 */
 .unified-body .amx-sec-tb {
   position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 2px;
   height: 32px;
   padding: 0 3px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-md, 12px);
-  background: var(--surface-menu, var(--bg-card));
   box-shadow: var(--card-shadow);
   font-size: var(--ui-font-meta);
   color: var(--text);
   white-space: nowrap;
   user-select: none;
+}
+.unified-body .amx-sec-tb::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border: 1px solid var(--surface-edge, var(--border));
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
 }
 .unified-body .amx-sec-tb-group { display: flex; align-items: center; gap: 1px; }
 .unified-body .amx-sec-tb-group + .amx-sec-tb-group { margin-left: 3px; padding-left: 4px; border-left: 1px solid var(--border); }
@@ -3426,9 +3443,9 @@ body.amx-marquee-active * {
   right: 0;
   min-width: 180px;
   padding: 4px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-edge, var(--border));
   border-radius: var(--radius-md, 12px);
-  background: var(--surface-menu, var(--bg-card));
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--card-shadow);
 }
 .unified-body .amx-sec-pop-row {

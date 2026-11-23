@@ -1655,7 +1655,9 @@ body.hp-lib-dragging,
 body.hp-lib-dragging * { cursor: grabbing !important; }
 body.hp-lib-nodrop,
 body.hp-lib-nodrop * { cursor: not-allowed !important; }
-/* 影子下面的小签:放不下的原因 / 要知道的事(左栏点完成后会收成图标条) */
+/* 影子下面的小签:放不下的原因 / 要知道的事(左栏点完成后会收成图标条)。
+   浮层表面 token 照 DESIGN「浮层表面 token」:回落是实色(Genesis 下不半透)、读 --surface-blur(Glass 下有磨砂);
+   它和影子同为 body 的子元素,不在影子里,影子 .is-no 的 opacity 不会截它的 backdrop。 */
 .hp-lib-note-pill {
   position: fixed;
   left: 0;
@@ -1666,9 +1668,9 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
   align-items: center;
   gap: 6px;
   padding: 5px 11px 5px 9px;
-  border: var(--border-width) solid color-mix(in srgb, var(--border) 80%, transparent);
+  border: var(--border-width) solid var(--surface-edge, color-mix(in srgb, var(--border) 80%, transparent));
   border-radius: var(--radius-pill, 999px);
-  background: var(--surface-float, color-mix(in srgb, var(--bg-card) 94%, transparent));
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--icon-shadow);
   color: var(--text);
   font-size: var(--ui-font-meta, 12px);
