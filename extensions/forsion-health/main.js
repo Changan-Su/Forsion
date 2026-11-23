@@ -1,6 +1,8 @@
 const t = ctx.i18n.define({
   zh: {
     title: '健康',
+    pairDevice: '此设备需要小米授权才能查看或管理这份健康数据。',
+    changed: '绑定已更新，请刷新后重试。',
     source: '小米运动健康',
     unavailable: '此宿主暂未提供 Forsion 账号连接。',
     signIn: '登录 Forsion',
@@ -42,6 +44,8 @@ const t = ctx.i18n.define({
   },
   en: {
     title: 'Health',
+    pairDevice: 'Authorize Mi Fitness on this device to view or manage this connection.',
+    changed: 'This connection has changed. Refresh and try again.',
     source: 'Mi Fitness',
     unavailable: 'Account connections are unavailable on this host.',
     signIn: 'Sign in to Forsion',
@@ -113,6 +117,7 @@ ctx.registerView({
       url = '',
       proof = '',
       status = null,
+      spaceKey = '',
       data = null,
       note = '',
       error = '',
@@ -160,6 +165,8 @@ ctx.registerView({
               link_expired: 'invalid',
               account_already_linked: 'linked',
               reconnect_required: 'reconnect',
+              device_pairing_required: 'pairDevice',
+              access_changed: 'changed',
               no_scopes: 'scope',
               invalid_date: 'noDate',
               not_configured: 'offline',
@@ -182,13 +189,21 @@ ctx.registerView({
       const s = await api('status');
       if (!current()) return;
       status = s;
-      if (s.connected && s.configured) {
-        const result = await api('summary', 'POST', { endDate: date, timezone: zone });
+      const stored = (await ctx.loadData()) || {};
+      if (!current()) return;
+      spaceKey = stored[s.accountId] || '';
+      if (s.connected && s.configured && spaceKey) {
+        const result = await api('summary', 'POST', {
+          endDate: date,
+          timezone: zone,
+          grantId: s.grantId,
+          spaceKey,
+        });
         if (current()) data = result;
       }
     }
     async function start(current) {
-      const r = await api('xiaomi/start', 'POST');
+      const r = await api('xiaomi/start', 'POST', { accountId: status.accountId });
       if (!current()) return;
       const target = new URL(r.url);
       if (target.origin !== 'https://account.xiaomi.com' || target.pathname !== '/oauth2/authorize')
@@ -234,7 +249,11 @@ ctx.registerView({
         input.autocomplete = 'one-time-code';
         input.value = proof;
         const confirm = action(controls, 'confirm', async (current) => {
-          await api('xiaomi/confirm', 'POST', { proof });
+          const confirmed = await api('xiaomi/confirm', 'POST', { proof, grantId: status.grantId, spaceKey });
+          if (!current()) return;
+          const stored = (await ctx.loadData()) || {};
+          if (!current()) return;
+          await ctx.saveData({ ...stored, [confirmed.accountId]: confirmed.spaceKey });
           if (!current()) return;
           url = '';
           proof = '';
@@ -249,6 +268,9 @@ ctx.registerView({
           url = '';
           proof = '';
         });
+      } else if (status?.connected && !spaceKey) {
+        node(group, 'p', t(status.configured ? 'pairDevice' : 'offline'));
+        if (status.configured) action(group, 'relink', start);
       } else if (status?.connected) {
         const controls = node(group, 'div', undefined, 'fh-row'),
           label = node(controls, 'label', t('end') + ' ');
@@ -303,7 +325,7 @@ ctx.registerView({
         toggle.onchange = () => {
           const enabled = toggle.checked;
           run(async (current) => {
-            await api('agent-access', 'POST', { enabled });
+            await api('agent-access', 'POST', { enabled, grantId: status.grantId, spaceKey });
             if (current()) status.agentEnabled = enabled;
           });
         };
@@ -312,7 +334,7 @@ ctx.registerView({
         action(buttons, 'disconnect', async (current) => {
           const yes = await ctx.ui.confirm({ title: t('disconnectQ'), ok: t('disconnect'), danger: true });
           if (!yes || !current()) return;
-          await api('xiaomi', 'DELETE');
+          await api('xiaomi', 'DELETE', { grantId: status.grantId, spaceKey });
           if (!current()) return;
           await load(current);
           if (current()) note = 'disconnected';
@@ -330,6 +352,7 @@ ctx.registerView({
       signed = false;
       status = null;
       data = null;
+      spaceKey = '';
       date = today();
       run(load);
     };

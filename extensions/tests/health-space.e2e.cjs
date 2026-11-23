@@ -70,15 +70,26 @@ const electron = require(join(desktop, 'scripts/lib/launch-electron.cjs'));
         agentEnabled = false;
       ipcMain.handle('cloud:fetch', (_e, req) => {
         const reply = (json) => ({ status: 200, json });
+        if (
+          ['/wellness/xiaomi', '/wellness/summary', '/wellness/agent-access'].includes(req.path) &&
+          (req.body?.spaceKey !== 'device-fixture' || req.body?.grantId !== 'revision')
+        )
+          return { status: 403, json: { code: 'device_pairing_required' } };
         switch (req.path) {
           case '/wellness/status':
-            return reply({ configured: true, connected, agentEnabled });
+            return reply({
+              configured: true,
+              connected,
+              agentEnabled,
+              accountId: 'fixture',
+              grantId: connected ? 'revision' : null,
+            });
           case '/wellness/xiaomi/start':
             return reply({ url: 'https://account.xiaomi.com/oauth2/authorize?state=fixture' });
           case '/wellness/xiaomi/confirm':
             if (req.body.proof !== '1234567890ABCDEF') return { status: 400, json: { code: 'invalid_code' } };
             connected = true;
-            return reply({});
+            return reply({ accountId: 'fixture', spaceKey: 'device-fixture', grantId: 'revision' });
           case '/wellness/agent-access':
             agentEnabled = req.body.enabled;
             return reply({});
@@ -93,8 +104,8 @@ const electron = require(join(desktop, 'scripts/lib/launch-electron.cjs'));
                 date: new Date(last - (6 - i) * 86400000).toISOString().slice(0, 10),
                 steps: [null, 8042, 7161, 6894, 9103, 4310, 7283][i],
                 sleepMinutes: i ? 400 + i * 9 : null,
-                workouts: i % 3 ? 0 : 1,
-                workoutSeconds: i % 3 ? 0 : 1800,
+                workouts: i % 3 ? null : 1,
+                workoutSeconds: i % 3 ? null : 1800,
               })),
             });
           }

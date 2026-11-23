@@ -41,10 +41,12 @@ export default {
           timeoutMs: 40000,
         });
         if (result.status === 200) return JSON.stringify(result.json);
-        return JSON.stringify({
-          error: result.json?.code || result.error || 'health_unavailable',
-          status: result.status,
-        });
+        const code = result.json?.code || result.error;
+        if (code === 'agent_access_off')
+          return 'Error: Agent access is off. The user can enable it in Health.';
+        if (code === 'not_connected' || code === 'reconnect_required')
+          return 'Error: Connect Mi Fitness in Health to read data.';
+        return 'Error: Health data is unavailable (' + result.status + ').';
       },
     };
     ctx.registerPlugin({
