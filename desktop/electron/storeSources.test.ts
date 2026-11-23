@@ -4,14 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createStoreSources, packageManifest, packageManifestId, subtreeZip } from './storeSources'
+import { archiveCommit, createStoreSources, packageManifest, packageManifestId, subtreeZip } from './storeSources'
 
 const json = (v: unknown) => new Response(JSON.stringify(v), { status: 200 })
-async function zipOf(files: Record<string, string>): Promise<Buffer> {
+/** `comment` = what `git archive` writes there: the commit id (GitHub and Gitea archives both carry it). */
+async function zipOf(files: Record<string, string>, comment?: string): Promise<Buffer> {
   const z = new JSZip()
   for (const [k, v] of Object.entries(files)) z.file(k, v)
-  return z.generateAsync({ type: 'nodebuffer' })
+  return z.generateAsync({ type: 'nodebuffer', ...(comment ? { comment } : {}) })
 }
+const C1 = '1'.repeat(40), C2 = '2'.repeat(40)
+const statePath = () => join(home, '.store-sources', 'state.json')
 const skill = (name: string, version: string) => `---\nname: ${name}\nversion: ${version}\n---\nbody`
 
 let home: string
@@ -94,6 +97,110 @@ describe('store sources', () => {
     expect(s.updatesPaused(cardId)).toBe(true)
     expect((await s.installs())[0]).toMatchObject({ removed: true, sourceTitle: null })
     await expect(s.lookup(cardId)).rejects.toThrow('resolve: source-removed')
+  })
+
+  it('installs a pinned commit and refuses an archive made from another one', async () => {
+    const files = { 'image-skills-x/skills/poster/SKILL.md': skill('poster', '1.2.0') }
+    routes[CATALOG] = () => json(index([poster('1.2.0', { github: 'pixel-lab/image-skills', ref: 'v1.2.0', commit: C1, path: 'skills/poster' })]))
+    const PINNED = `https://github.com/pixel-lab/image-skills/archive/${C1}.zip`
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf(files, C1)))
+    const s = make()
+    const src = await s.add('github:pixel-lab/image-skills')
+    const cardId = `src_${src.id}_poster`
+    const got = await s.download(cardId)
+    // Asked for the commit, not the tag the author can move.
+    expect(hits).toContain(PINNED)
+    expect(hits).not.toContain('https://github.com/pixel-lab/image-skills/archive/v1.2.0.zip')
+    expect(got.commit).toBe(C1)
+    expect(Object.keys((await JSZip.loadAsync(got.buf)).files)).toEqual(['SKILL.md'])
+    // A mirror (or anything else) answering with another commit, or an archive that doesn't say: not installed.
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf(files, C2)))
+    await expect(s.download(cardId)).rejects.toThrow('install: package commit mismatch')
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf(files)))
+    await expect(s.download(cardId)).rejects.toThrow('install: package commit mismatch')
+  })
+
+  it('records the commit an unpinned package turned out to be, and stops when the same version changes commit', async () => {
+    const files = { 'image-skills-1.2.0/skills/poster/SKILL.md': skill('poster', '1.2.0') }
+    let at = C1
+    routes[CATALOG] = () => json(index([poster()]))
+    routes['https://github.com/pixel-lab/image-skills/archive/v1.2.0.zip'] = async () => new Response(new Uint8Array(await zipOf(files, at)))
+    const s = make()
+    const src = await s.add('github:pixel-lab/image-skills')
+    const cardId = `src_${src.id}_poster`
+    const got = await s.download(cardId)
+    expect(got.commit).toBe(C1)
+    const rec = { cardId, type: 'skill', slug: `src-${src.id}-poster`, name: 'x', version: '1.2.0', origin: got.origin }
+    await s.recordInstall({ ...rec, commit: got.commit })
+    expect(JSON.parse(await readFile(statePath(), 'utf8')).installs[0]).toMatchObject({ cardId, version: '1.2.0', commit: C1 })
+    // Same commit: fine.
+    await expect(s.download(cardId, { auto: true })).resolves.toMatchObject({ commit: C1 })
+    // The author moved the tag: same version number, other code. Not an update the user agreed to.
+    at = C2
+    await expect(s.download(cardId, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    // By hand it installs (and the new commit is what gets recorded).
+    await expect(s.download(cardId)).resolves.toMatchObject({ commit: C2 })
+    // An install recorded before commits were kept is "not known", not "changed".
+    await s.recordInstall(rec)
+    expect(JSON.parse(await readFile(statePath(), 'utf8')).installs[0].commit).toBeUndefined()
+    await expect(s.download(cardId, { auto: true })).resolves.toMatchObject({ commit: C2 })
+    // A pinned catalog that repins the same version stops before downloading anything.
+    await s.recordInstall({ ...rec, commit: C1 })
+    routes[CATALOG] = () => json(index([poster('1.2.0', { github: 'pixel-lab/image-skills', ref: 'v1.2.0', commit: C2, path: 'skills/poster' })]))
+    await s.catalog(src.id, { refresh: true })
+    const before = hits.length
+    await expect(s.download(cardId, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    expect(hits.slice(before).some((u) => u.includes('/archive/'))).toBe(false)
+    // A new version from a new commit is an ordinary update.
+    routes[CATALOG] = () => json(index([poster('1.3.0', { github: 'pixel-lab/image-skills', ref: 'v1.3.0', commit: C2, path: 'skills/poster' })]))
+    routes[`https://github.com/pixel-lab/image-skills/archive/${C2}.zip`] = async () => new Response(new Uint8Array(await zipOf(files, C2)))
+    await s.catalog(src.id, { refresh: true })
+    await expect(s.download(cardId, { auto: true })).resolves.toMatchObject({ commit: C2 })
+  })
+
+  it('moves on to the next address when a mirror serves another commit of a pinned package', async () => {
+    const files = { 'image-skills-x/skills/poster/SKILL.md': skill('poster', '1.2.0') }
+    routes[CATALOG] = () => json(index([poster('1.2.0', { github: 'pixel-lab/image-skills', ref: 'v1.2.0', commit: C1, path: 'skills/poster' })]))
+    const DIRECT = `https://github.com/pixel-lab/image-skills/archive/${C1}.zip`
+    const PROXY = 'https://proxy.example'
+    routes[`${PROXY}/${DIRECT}`] = async () => new Response(new Uint8Array(await zipOf(files, C2)))
+    routes[DIRECT] = async () => new Response(new Uint8Array(await zipOf(files, C1)))
+    const s = createStoreSources({
+      home, mirror: async () => 'china', githubProxy: () => PROXY, defaultLocale: () => 'zh',
+      fetchFor: () => async (url) => { hits.push(url); const r = routes[url]; return r ? r() : new Response('nope', { status: 404 }) },
+    })
+    const src = await s.add('github:pixel-lab/image-skills')
+    const got = await s.download(`src_${src.id}_poster`)
+    expect(got.commit).toBe(C1)
+    expect(hits.indexOf(`${PROXY}/${DIRECT}`)).toBeGreaterThanOrEqual(0)
+    expect(hits.at(-1)).toBe(DIRECT)
+    // Nobody has the right commit: the mismatch is what gets reported, not the last 404.
+    routes[DIRECT] = () => new Response('nope', { status: 404 })
+    await expect(s.download(`src_${src.id}_poster`)).rejects.toThrow('install: package commit mismatch')
+  })
+
+  it('remembers the commit an automatic update fetched, so that version changing commit later stops', async () => {
+    const files = { 'image-skills-1.3.0/skills/poster/SKILL.md': skill('poster', '1.3.0') }
+    let at = C1
+    routes[CATALOG] = () => json(index([poster('1.3.0')]))
+    routes['https://github.com/pixel-lab/image-skills/archive/v1.3.0.zip'] = async () => new Response(new Uint8Array(await zipOf(files, at)))
+    const s = make()
+    const src = await s.add('github:pixel-lab/image-skills')
+    const cardId = `src_${src.id}_poster`
+    // Installed 1.2.0 by hand (at C2); the updater fetches 1.3.0 at C1 and notes it.
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${src.id}-poster`, name: 'x', version: '1.2.0', origin: 'github:pixel-lab/image-skills', commit: C2 })
+    const got = await s.download(cardId, { auto: true })
+    await s.noteCommit(cardId, '1.3.0', got.commit)
+    const rec = JSON.parse(await readFile(statePath(), 'utf8')).installs[0]
+    expect(rec).toMatchObject({ version: '1.2.0', commit: C2, commits: { '1.2.0': C2, '1.3.0': C1 } })
+    at = C2
+    await expect(s.download(cardId, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    // A broken value in the file is ignored, not trusted and not fatal.
+    await s.noteCommit(cardId, '1.3.0', 'nope')
+    expect(JSON.parse(await readFile(statePath(), 'utf8')).installs[0].commits['1.3.0']).toBe(C1)
+    // Installed by hand from another repository: what the old one served says nothing about the new one.
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${src.id}-poster`, name: 'x', version: '1.2.0', origin: 'github:pixel-lab/other', commit: C1 })
+    expect(JSON.parse(await readFile(statePath(), 'utf8')).installs[0].commits).toEqual({ '1.2.0': C1 })
   })
 
   it('checks the hash of a package given by address', async () => {
@@ -359,6 +466,28 @@ describe('Forsion Git sources', () => {
     await expect(cached.download(`src_${src.id}_brief`, { auto: true })).rejects.toThrow('forsion-git-signin')
   })
 
+  it('asks the server for the pinned commit and refuses an archive made from another one', async () => {
+    routes[INDEX] = () => json(index([kit({ forsionGit: 'acme/team-kit', ref: 'v1.0.0', commit: C1, path: 'skills/brief' })]))
+    const PINNED = `${BASE}/api/git/store/archive?repo=acme%2Fteam-kit&ref=${C1}`
+    const files = { 'team-kit/skills/brief/SKILL.md': skill('brief', '1.0.0') }
+    let comment: string | undefined = C1
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf(files, comment)))
+    const s = makeGit()
+    const src = await s.add('forsion-git:acme/team-kit')
+    const got = await s.download(`src_${src.id}_brief`)
+    expect(got.commit).toBe(C1)
+    expect(got.info.downloadUrl).toBe(`forsion-git:acme/team-kit@${C1}`)
+    expect(hits).not.toContain(ARCHIVE)
+    // Read from our own server by that commit: an archive without the comment is taken; one from another commit is not.
+    comment = undefined
+    await expect(s.download(`src_${src.id}_brief`)).resolves.toMatchObject({ commit: C1 })
+    comment = C2
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('install: package commit mismatch')
+    // Another commit followed by a stray byte is still another commit, not "no comment" (Codex 11-21).
+    routes[PINNED] = async () => new Response(new Uint8Array(Buffer.concat([await zipOf(files, C2), Buffer.from([0])])))
+    await expect(s.download(`src_${src.id}_brief`)).rejects.toThrow('install: package commit mismatch')
+  })
+
   it('never carries the sign-in through a redirect', async () => {
     const ELSEWHERE = 'https://elsewhere.example/grab'
     const away = () => new Response(null, { status: 302, headers: { location: ELSEWHERE } })
@@ -391,5 +520,17 @@ describe('package helpers', () => {
     // 负对照(已实跑红):packageManifest 改回按原样大小写找 → 读不到,internals-raw 审核被绕过
     const m = await packageManifest(await zipOf({ 'Manifest.JSON': JSON.stringify({ id: 'p', version: '1.0.0', capabilities: ['internals', 'internals-raw'] }), 'main.js': 'x' }), 'amadeus-plugin')
     expect(m?.capabilities).toEqual(['internals', 'internals-raw'])
+  })
+})
+
+describe('archiveCommit', () => {
+  it('reads the commit id git archive leaves in the zip comment', async () => {
+    expect(await archiveCommit(await zipOf({ 'a.txt': 'x' }, C1))).toBe(C1)
+    expect(await archiveCommit(await zipOf({ 'a.txt': 'x' }, C1.toUpperCase()))).toBe(C1)
+    expect(await archiveCommit(await zipOf({ 'a.txt': 'x' }))).toBeNull()
+    expect(await archiveCommit(await zipOf({ 'a.txt': 'x' }, 'not a commit'))).toBeNull()
+    // Bytes after the comment: read the way the installer reads the archive (JSZip), not skipped as "no comment".
+    expect(await archiveCommit(Buffer.concat([await zipOf({ 'a.txt': 'x' }, C2), Buffer.from([0])]))).toBe(C2)
+    await expect(archiveCommit(Buffer.from('tiny'))).rejects.toThrow()
   })
 })

@@ -3238,7 +3238,7 @@ async function installedPluginIds(type: 'plugin' | 'amadeus-plugin'): Promise<Ar
   return out
 }
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null }> {
   if (isSourceCardId(id)) return downloadSourcePackage(id, { version, report })
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
@@ -3523,8 +3523,10 @@ app.whenReady().then(async () => {
       return Array.isArray(data.items) ? data.items : []
     },
     download: async (item) => {
-      const { info, buf } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
+      const { info, buf, commit } = isSourceCardId(item.id) ? await downloadSourcePackage(item.id, { auto: true }) : await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
+      // Keep which commit this version came from, so the same version from another commit later stops (storeSources.download).
+      if (isSourceCardId(item.id) && info.version) await sources.noteCommit(item.id, info.version, commit).catch((e) => console.warn('[store-sources] note commit:', e))
       return buf
     },
     broadcast: (status) => {
@@ -5053,7 +5055,7 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf, origin } = await downloadMarketPackage(id, report, version)
+    const { info, buf, origin, commit } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
@@ -5100,7 +5102,7 @@ app.whenReady().then(async () => {
     // 来源装的(所有类型):先记下出处,再交给更新器 —— 没有出处记录的条目不会被自动更新(换出处保护靠它)。
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, summary: named?.summary, author: named?.author })
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
