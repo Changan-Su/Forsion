@@ -24,9 +24,6 @@ import { getPluginSkill, isPluginSkillActive, listPluginSkills, PLUGIN_SKILL_PRE
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
-/** frontmatter `disable-model-invocation: true`:只在用户点名时用(见 toRecord)。 */
-export const userInvokedOnly = (skill: unknown): boolean => (skill as { disableModelInvocation?: unknown } | null)?.disableModelInvocation === true;
-
 // bundle = 共享域 plugins/<id>/skills(市场装的第三方包):装载优先级与 user 同档,但**不是** manage_skill 会写的根,origin 不认它。
 type SkillSource = 'builtin' | 'user' | 'bundle' | 'agent' | 'project';
 
@@ -146,11 +143,13 @@ function toRecord(id: string, fallbackName: string, raw: string, source: SkillSo
     shared: source === 'agent' && /^(true|yes|1)$/i.test(meta.shared || ''),
     // disable-model-invocation(Claude Code 的 frontmatter):只许用户点名用 —— 不进模型看到的技能目录,use_skill 只在用户这一轮点了它时才放行。
     // 技能清单、设置页、/skill 选择器照常列它(用户得找得到它才能点名)。
-    disableModelInvocation: /^(true|yes|1)$/i.test(meta['disable-model-invocation'] || ''),
+    disableModelInvocation: /^(true|yes|1)(\s+#.*)?$/i.test(meta['disable-model-invocation'] || ''), // 允许行尾 YAML 注释
+    // adaptNote: 文件夹里的 .forsion-adapt.md 算不算数(见 skills/invocation.ts acceptsAdaptNote)。只认商店来源装的(src-<来源 id>-…)且在用户 / Agent 目录里的。
+    adaptNote: (source === 'user' || source === 'agent') && /^src-[0-9a-f]{8}-/.test(path.basename(dir)),
     // dir: 这个技能的文件夹(绝对路径)。use_skill 把它告诉模型 —— 正文里写的 scripts/ references/ 这类相对路径才有处可找。
     // 引擎内部用:对外接口(routes/assets.skillSummary、上云)都是逐字段挑,不带它。
     dir,
-  } as SkillRecord & { source: string; origin: 'agent' | null; shared: boolean; disableModelInvocation: boolean; dir: string };
+  } as SkillRecord & { source: string; origin: 'agent' | null; shared: boolean; disableModelInvocation: boolean; adaptNote: boolean; dir: string };
 }
 
 async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]> {

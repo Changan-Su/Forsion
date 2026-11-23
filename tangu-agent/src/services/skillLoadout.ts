@@ -13,7 +13,8 @@
 import { presetOf } from '../core/presetTable.js';
 import { deps } from '../seams/runtime.js';
 import { materializeSkill } from '../tools/fileWorkspace.js';
-import { listSharedAgentSkills, userInvokedOnly } from '../skills/localSkills.js';
+import { listSharedAgentSkills } from '../skills/localSkills.js';
+import { userInvokedOnly } from '../skills/invocation.js';
 import { currentDisplayAgentSlug } from '../seams/runContext.js';
 
 
@@ -121,11 +122,12 @@ export async function loadSkillLoadout(
   // 借用方的 enabledSkillIds 追加这些 id → use_skill 放行。谁都没开共享时这一段不出现,前面各段字节不变。
   // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
   if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
-    const shared = (await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => [])).filter((s) => !userInvokedOnly(s));
+    const allShared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
+    const shared = allShared.filter((s) => !userInvokedOnly(s)); // 只许用户点名的不列;准许清单照旧全给(下面 enabledSkillIds 用 allShared)
     const sharedLine = (s: (typeof shared)[number]): string => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`;
     for (const s of shared) catalog.push({ id: s.id, name: s.name, bytes: Buffer.byteLength(sharedLine(s)) });
     const listed = shelved?.size ? shared.filter((s) => !shelved.has(s.id)) : shared;
-    enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
+    enabledSkillIds = [...enabledSkillIds, ...allShared.map((s) => s.id)];
     if (listed.length) {
       const lines = listed.map(sharedLine).join('\n');
       sections.push(

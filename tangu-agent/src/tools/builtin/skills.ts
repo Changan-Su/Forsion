@@ -3,11 +3,11 @@
  * use_skill 的「无启用技能时不暴露给 LLM」过滤仍在 registry.getToolDefinitions(语义:
  * 不暴露但可执行,返回 session 级提示),不放 isEnabledFor(后者会让 executeTool 也查不到)。
  */
-import { promises as fs } from 'node:fs';
+import { constants as fsc, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
-import { userInvokedOnly } from '../../skills/localSkills.js';
+import { acceptsAdaptNote, userInvokedOnly } from '../../skills/invocation.js';
 
 import { stageSessionSkill } from '../../sandbox/sessionSandbox.js';
 
@@ -17,16 +17,24 @@ const ADAPT_NOTE_FILE = '.forsion-adapt.md';
 const ADAPT_NOTE_MAX_CHARS = 1200;
 
 /** 读 `<技能文件夹>/.forsion-adapt.md`。每次 use_skill 现读:技能扫描的缓存只看 SKILL.md 的修改时间,
- *  而宿主是在解包之后才写这份说明的。只认普通文件(不跟软链,免得把别处的文件带进上下文),读不到 / 空 = 没有。 */
+ *  而宿主是在解包之后才写这份说明的。只认普通文件:不跟软链(O_NOFOLLOW 打开,再对同一个句柄 fstat、从同一个句柄限量读,
+ *  中途被换成软链也读不到别处的文件);读不到 / 空 = 没有。 */
 async function adaptNote(dir: string): Promise<string> {
   const file = path.join(dir, ADAPT_NOTE_FILE);
+  let handle: import('node:fs/promises').FileHandle | undefined;
   try {
-    const st = await fs.lstat(file);
-    if (!st.isFile() || st.size > 64 * 1024) return '';
-    const text = (await fs.readFile(file, 'utf8')).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
+    if (!(await fs.lstat(file)).isFile()) return ''; // 没有 O_NOFOLLOW 的平台(Windows)靠这一道
+    handle = await fs.open(file, fsc.O_RDONLY | (fsc.O_NOFOLLOW ?? 0));
+    if (!(await handle.stat()).isFile()) return '';
+    const buf = Buffer.alloc(8 * 1024); // 1200 字(多字节)以内,读这么多足够
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    const text = buf.subarray(0, bytesRead).toString('utf8').replace(/\uFFFD+$/, '')
+      .replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim();
     return text.slice(0, ADAPT_NOTE_MAX_CHARS).trim();
   } catch {
     return '';
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -171,7 +179,7 @@ export const skillsProvider: ToolProvider = {
         // 只对本机会话里的本地技能给:云端技能没有文件夹,沙箱里也够不着这个路径。
         const dir = ctx.execMode === 'host' ? String((s as { dir?: string }).dir || '') : '';
         // 商店收录的技能多是写给 Claude Code / Codex 的:适配说明放在正文前面(工具结果超长时保头部)。
-        const note = dir ? await adaptNote(dir) : '';
+        const note = dir && acceptsAdaptNote(s) ? await adaptNote(dir) : '';
         const head = `# Skill: ${s.name}\n\n` + (dir ? `Skill folder: ${dir}\nRelative paths in this skill (scripts/, references/, assets/ …) resolve against that folder.\n\n` : '')
           + (note ? `## Forsion adaptation\n${note}\n\n` : '');
         return head + body.slice(0, USE_SKILL_MAX_CHARS) + (body.length > USE_SKILL_MAX_CHARS ? '\n\n…(truncated)' : '');
