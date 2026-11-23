@@ -9080,7 +9080,8 @@ Then reply with only the command output.`,
       const usedSkill = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /# Skill: forsion-extension-development/.test(String(r.full || '')));
       const sbx = ev.clientCmds.filter((c) => c.claimed && ['start', 'reset'].includes(c.op)).length;
       const out = String(ev.content || '');
-      const files_ = /manifest\.json|main\.js|space\.json/.test(out);
+      // 计划点了要动的文件:具体文件名,或目标文件夹路径(11-23 第 3 次:只写了「新建 bookmark-notes/…check.mjs」也是在列文件)
+      const files_ = /manifest\.json|main\.js|space\.json|check\.mjs|tangu-plugin\.json|bookmark-notes\//.test(out);
       const accept = /验收|check\.mjs|check-plugin|沙箱|sandbox|acceptance|verify/i.test(out);
       const asks = /确认|同意|开工|开始写|动手|点头|可以吗|行吗|好吗|要你定|需要你|你来定|你定|confirm|go ahead|approve|ok to proceed/i.test(out);
       const data = /CALENDAR\.db|human\/|mountChat|真(实)?会话|real session|ctx\.calendar/i.test(out);
