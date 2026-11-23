@@ -53,6 +53,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
  *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
+ *                                                           #   11-22 起含传话:要它带话时末尾出 ```relay 稿、不说「不能带回去」,普通提问不出
  *                                                           #   10-24 起含附件:图里的随机数字 / txt 里的口令 / PDF 里的编码要答得出,落库只留记录。--btw-no-attach = 负对照(同样的问题不带附件,必须红)
  *   npm run live:harness -- --only suggest                   # 输入建议(10-10):一轮结束后猜用户下一句。须是一句短话、跟用户的语言、一轮只调一次,且那次调用吃到主循环的前缀缓存;改 services/promptSuggestion.ts 或主循环收尾处的快照后跑
  *   npm run live:harness -- --only realuse --rounds 2 --model xai/grok-4.7   # 真实使用模拟(10-04):消息不点名任何库 / 工具;改 manage_harness / 装备层 / 工作笔记注入 / Muse 巡检后跑。
@@ -152,6 +153,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
  *   npm run live:harness -- --only ruleobserve --muse-mode auto  # 规则观察(10-31):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察(改观察分支 / manage_automation 后跑)
  *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
+ *   npm run live:harness -- --only musetodo [--todo-neg]   # Muse 提待办必带依据(11-20):私聊明说要待办 → 有待办、依据对得上种子;--todo-neg 只有随口抱怨 → 一条都不提。新 home 单独跑
  *   npm run live:harness -- --only muselogdm                # 到期日程撞上 LOG 里的活(10-31):私聊存下的交代,第一个周期就得办。要新 home,和别的 Muse 场景分开跑(改周期提示词 / 日程文案后跑)
  *   npm run live:harness -- --only muserulechat             # 私聊直说规则(10-31):Muse 当场建好,不经过周期(改 museChatSection / manage_automation 后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
@@ -276,7 +278,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('handoff', 'crosstree');
@@ -352,7 +354,9 @@ OPT_IN.add('bgsteer'); KEYS.push('bgsteer');
 OPT_IN.add('signals');
 OPT_IN.add('decisiongate'); // --only decisiongate:Historian 决策闸(beta);要 TANGU_LIVE_CLOUD_URL 带决策模型,--decision-gate off = 负对照
 OPT_IN.add('musechat');
+KEYS.push('musetodo'); OPT_IN.add('musetodo'); // --only musetodo:Muse 提待办必带依据(11-20,scripts/lib/muse-todo-live.mjs);--todo-neg = 只有随口抱怨,不该提;新 home 单独跑
 KEYS.push('musewakenow'); OPT_IN.add('musewakenow'); // --only musewakenow:面板「叫醒」(11-08)—— 时段外、心跳没到点,点一下就起一轮完整的周期
+OPT_IN.add('museautosugg'); // --only museautosugg:一个 Muse 周期之后,自动化首页有没有它放上的任务建议(--autosugg-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('musestarters'); // --only musestarters:一个 Muse 周期之后,新对话页有没有它放上的开场建议(--starters-off = 负对照:开关关掉,工具不给)
 OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
@@ -449,6 +453,7 @@ OPT_IN.add('resume'); KEYS.push('resume'); // --only resume:工具执行到一�
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
+OPT_IN.add('autosolo'); KEYS.push('autosolo'); // User asks an Agent to create a rule, then replies to the delivery in its existing Solo.
 OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
 OPT_IN.add('ruleobserve'); KEYS.push('ruleobserve'); // 一个 Muse 周期(--muse-mode auto):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察并如实告诉用户
 OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); // 一个 Muse 周期(muselogspace 11-08 退场:Space 不再装载 main.js,没有报错回写这条来路):第一个周期必撞每周装备巡检,看 LOG 里的活有没有被挤掉;动周期提示词 / 日程文案时跑
@@ -5252,6 +5257,13 @@ Then reply with only the command output.`,
     const a5 = await aside({ question: 'What 4-digit number is shown in the attached image? Reply with just the number.', ...with_([{ name: 'number.png', mimeType: 'image/png', data: pngB64, thumb: `data:image/png;base64,${thumbB64}` }]) });
     const a6 = await aside({ question: 'What is the passphrase written in the attached notes.txt? Reply with just the passphrase.', ...with_([{ name: 'notes.txt', mimeType: 'text/plain', data: notesB64 }]) });
     const a7 = await aside({ question: 'What code is printed in the attached PDF? Reply with just the code.', ...with_([{ name: 'code.pdf', mimeType: 'application/pdf', data: pdfB64 }]) });
+    // 传话(11-22):用户要它带话 → 末尾写一个 ```relay 块(稿子),不说「不能带回去」;普通提问不出块。
+    // 中文那问照用户 11-22 实报的说法(「你帮我带回去不行吗」),英文那问换个说法。
+    const a8 = await aside({ question: '你帮我带回去跟主对话说一声:以后代号统一写成 AZURE-FALCON-8。' });
+    const a9 = await aside({ question: 'Can you remind the main agent to add a changelog entry for the codename change?' });
+    const RELAY_RE = /```[ \t]*relay[ \t]*\n([\s\S]*?)\n[ \t]*```/i;
+    const CANT_RE = /不能(直接)?(带回|替你发|转达|传)|can(?:'|’)?t (?:pass|send|relay|forward|bring)|cannot (?:pass|send|relay|forward|bring)|unable to (?:pass|send|relay|forward)/i;
+    const relayOf = (a) => (a.content.match(RELAY_RE) || [])[1] || '';
     const saved = asList(await api(`/agent/sessions/${sid}/asides`).catch(() => []), 'asides');
     const savedTurn = saved.flatMap((a) => a.turns || []).find((t) => String(t.question).startsWith('What 4-digit number'));
     const savedJson = JSON.stringify(saved);
@@ -5268,14 +5280,17 @@ Then reply with only the command output.`,
       attachImage: !a5.error && a5.content.replace(/\D/g, '').includes(imgDigits) && a5.attached?.images === 1,
       attachFile: !a6.error && back(a6.content).includes(back(fileWord)) && a6.attached?.files?.includes('notes.txt'),
       attachPdf: !a7.error && back(a7.content).includes(pdfWord) && a7.attached?.files?.includes('code.pdf'),
+      relayZh: !a8.error && /AZURE-FALCON-8/.test(relayOf(a8)) && !CANT_RE.test(a8.content),
+      relayEn: !a9.error && /changelog/i.test(relayOf(a9)) && !CANT_RE.test(a9.content),
+      noStrayRelay: [a1, a2, a3, a4, a5, a6, a7].every((a) => !/```[ \t]*relay/i.test(a.content)),
       savedMeta: savedTurn?.attachments?.[0]?.name === 'number.png' && savedTurn.attachments[0].thumb === `data:image/png;base64,${thumbB64}` && !('data' in savedTurn.attachments[0]) && leaked === 0,
     };
     const ok = Object.values(checks).every(Boolean) && !a1.error && !a2.error && !mainEv.error;
     return {
       ok,
-      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}${noAttach ? '(负对照:不带附件)' : ''};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;图里 ${imgDigits} / 口令 ${fileWord} / PDF ${pdfWord};attached ${JSON.stringify([a5.attached, a6.attached, a7.attached])};落库 ${saved.length} 段,那一轮附件 ${JSON.stringify((savedTurn?.attachments || []).map((a) => ({ name: a.name, thumb: (a.thumb || '').length, data: 'data' in a })))},内容泄进库 ${leaked} 处;传话稿 zh「${relayOf(a8).slice(0, 80)}」en「${relayOf(a9).slice(0, 80)}」;首帧/总 ${[a1, a2, a3, a4, a5, a6, a7, a8, a9].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
       inconclusive: ok && !mainBusy,
-      output: [a1, a2, a3, a4, a5, a6, a7].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
+      output: [a1, a2, a3, a4, a5, a6, a7, a8, a9].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
     };
   });
 
@@ -6123,6 +6138,45 @@ Then reply with only the command output.`,
     return run(session.id, text, 180_000);
   };
   const museRules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
+  await scenario('autosolo', 'autosolo Agent 建规则、主动投递与原私聊回复', async () => {
+    const slug = 'automation-writer';
+    const dir = join(home, 'agents', slug);
+    mkdirSync(join(dir, 'Library'), { recursive: true });
+    writeFileSync(join(dir, 'config.toml'), `name = "Automation Writer"\nmodel = ${JSON.stringify(MODEL)}\n`);
+    const open = () => api(`/agent/solo/agent/${slug}/open`, { method: 'POST', body: '{}' });
+    const { session } = await open();
+    const signalFile = join(dir, 'Library', 'notification-signal.txt');
+    const ruleName = 'Solo delivery fixture';
+    const setup = await run(session.id,
+      `Set up one active automation called "${ruleName}" using manage_automation. The trigger is when ${signalFile} reaches 10 non-whitespace characters (file_chars_gte, n 10). ` +
+      `Add two ordered send_message steps, both from Agent slug "${slug}". First, Solo direct chat, written by the Agent, with the instruction: "Send exactly this question: Should we proceed with GLACIER-42?" ` +
+      'Second, the Forsion Inbox, fixed text "FIXED-PINE-7". Please create the rule now. For this chat also note that my earlier reference is QUARTZ-19.',
+      180_000, { approvalMode: 'auto-edit' });
+    const rule = museRules().find((t) => t.desc === ruleName);
+    const [soloStep, inboxStep] = rule?.actions ?? [];
+    const configured = setup.toolCalls.includes('manage_automation') && rule?.enabled && rule.cond?.type === 'file_chars_gte' &&
+      soloStep?.type === 'send_message' && soloStep.agentSlug === slug && soloStep.delivery === 'solo' && soloStep.source === 'agent' &&
+      inboxStep?.type === 'send_message' && inboxStep.agentSlug === slug && inboxStep.delivery === 'inbox' && inboxStep.source === 'fixed';
+    if (!configured) return { ok: false, detail: `规则配置失败: ${JSON.stringify(rule)}`, output: setup.content + '\n' + JSON.stringify(setup.toolResults) };
+    writeFileSync(signalFile, 'trigger now with a real file change');
+    await api('/agent/special/automation/kick', { method: 'POST', body: '{}' });
+    const execution = await until(async () => (await api(`/agent/special/automation/executions?triggerId=${rule.id}`)).executions?.find((r) => r.origin === 'auto'), 150_000, 1000);
+    const messages = (await api(`/agent/sessions/${session.id}/messages?limit=50`)).messages || [];
+    const delivered = messages.filter((m) => m.origin === 'proactive:automation');
+    const unread = (await api('/agent/sessions/attention')).sessions?.find((s) => s.id === session.id);
+    const inbox = asList(await api('/agent/inbox?filter=all'), 'messages').find((m) => m.sender_id === slug && m.body === 'FIXED-PINE-7');
+    const same = (await open()).session.id === session.id;
+    if (execution?.status !== 'done' || delivered.length !== 1 || delivered[0]?.agent_slug !== slug || !delivered[0]?.content.includes('GLACIER-42') || !unread?.unread || !inbox || !same) {
+      return { ok: false, detail: JSON.stringify({ execution, delivered, unread, inbox: !!inbox, same }), output: setup.content };
+    }
+    const reply = await run(session.id, 'Please name both the earlier reference I gave you in this chat and the reference in your most recent automation message. No tools.', 120_000);
+    return {
+      ok: reply.done && /QUARTZ-19/i.test(reply.content) && /GLACIER-42/i.test(reply.content),
+      detail: `Agent 通过工具建规则;自动触发两个步骤成功;Solo id 复用,主动消息 ${delivered.length} 条,未读 ${unread.count};固定文案已进收件箱`,
+      output: delivered[0].content + '\n\n' + reply.content,
+    };
+  });
+
   // muserule(10-30):ask 档的 Muse 收到「每次打开 X 就提醒」→ 只发规则卡,triggers.json 一条不多;用户点「好」规则才出现。
   // 10-31 递话改走私聊:原来往 /muse/feedback 写「The user asked: …」,产品里没有这样的发送方([feedback] 只有回执和 Space 报错),
   // 这样递第一个周期漏掉 7/20(含 ruleobserve),同一句话走私聊 0/14(汇总 harness-runs/2026-10-31/Muse周期漏请求-live汇总.md)。
@@ -6369,6 +6423,77 @@ Then reply with only the command output.`,
     ].join(';');
     return { ok, detail, output: `${museSays}\n\n=== 开场建议 ===\n${starters.map((x) => `- ${x.text}`).join('\n')}`, status: done };
   });
+  // ── museautosugg(11-22,opt-in,单独跑:`--only museautosugg`):Muse 给自动化首页的任务建议(方案 docs/ToBeImproved/自动化任务建议方案_2026-11-22,用户选 A)。
+  // 种一份「用户每周一上午都手动整理开发日志」的上下文(授权文件夹里的日志笔记 + 过去四个周一 9–10 点编辑它的活动行),起一个周期;
+  // 判据读引擎真状态:set_automation_suggestions 真被调过、GET /agent/special/muse/automation-suggestions 有 ≥1 条、每条带规则(cond)与依据。
+  // 只记不判:有没有一条是「每周 / 周一」的定时、标题用不用中文。--autosugg-off = 负对照(开关关掉:工具不给、接口回空 → 这条必须红)。
+  await scenario('museautosugg', `museautosugg Muse 自动化建议(${MUSE_MODE}${argv.includes('--autosugg-off') ? ',关掉的负对照' : ''})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    if (!(await until(async () => !(await status()).running, 600_000, 5000))) return { ok: false, detail: '前一个场景的 Muse 周期 600s 没收尾' };
+    const log = join(workspace, '开发日志.md');
+    writeFileSync(log, [
+      '# 开发日志',
+      '',
+      '每周一上午我都会把上周的日志翻一遍，手动整理成周报发给团队(挺花时间的)。',
+      '',
+      '## 上周',
+      '- 附件上传进度条合进 main',
+      '- 日历双击新建、默认 30 分钟',
+      '- 白板手写笔修补',
+      '',
+    ].join('\n'));
+    writeFileSync(join(workspace, '周报.md'), '# 周报\n\n(每周一手动从开发日志整理)\n');
+    const now = new Date();
+    for (let w = 1; w <= 4; w++) {
+      const d = new Date(now); d.setDate(d.getDate() - ((d.getDay() + 6) % 7) - 7 * w + 7 * (now.getDay() === 1 ? 1 : 0)); d.setHours(9, 20, 0, 0);
+      if (d.getTime() >= now.getTime()) continue;
+      appendUserActivity(d, `note.edit f="${log}" l=${w}`);
+      appendUserActivity(new Date(d.getTime() + 25 * 60_000), `note.edit f="${join(workspace, '周报.md')}" l=${w}`);
+    }
+    const off = argv.includes('--autosugg-off');
+    const t0 = Date.now();
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3, allowedFolders: [workspace], notify: 'immediate', automationSuggestions: !off } }) });
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) >= t0 - 5000 ? x : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done = await until(async () => { const x = await status(); return !x.running && Number(x.lastCycleAt) > 0 ? x : null; }, 600_000, 5000);
+    if (!done) return { ok: false, detail: '周期 600s 未收尾' };
+    const runFail = (readFileSync(engineLog, 'utf8').match(/run [0-9a-f-]+ failed: [^\n]*/g) || []).slice(-1)[0];
+    if (done.lastError || runFail) return { ok: false, detail: `周期没跑成(模型调用失败):${done.lastError || runFail}` };
+    await sleep(1500);
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let calls = [];
+    let results = [];
+    try {
+      // 只算本场景起的周期(前面场景的 Muse 周期不算):runs 的 created_at 在 t0 之后
+      calls = db.prepare(`SELECT e.payload AS p, r.created_at AS at FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'set_automation_suggestions'`).all()
+        .filter((x) => { const at = Date.parse(String(x.at).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(x.at)) ? '' : 'Z')); return !Number.isFinite(at) || at >= t0 - 5000; }).map((x) => x.p);
+      const ids = new Set(calls.map((p) => { try { return JSON.parse(p).id; } catch { return null; } }).filter(Boolean));
+      results = db.prepare(`SELECT e.payload AS p FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+        WHERE s.kind = 'muse' AND e.type = 'tool_result'`).all().map((x) => { try { const o = JSON.parse(x.p); return ids.has(o.id) ? String(o.result ?? '').slice(0, 200) : null; } catch { return null; } }).filter((x) => x !== null);
+    } finally { db.close(); }
+    let getFailed = false;
+    const list = asList(await api('/agent/special/muse/automation-suggestions').catch(() => { getFailed = true; return []; }), 'suggestions');
+    // 负对照(--autosugg-off):这一轮必须一次没调、接口成功回空。这里照样按「正向」判 → 负对照应当红,红的原因要是「调了 0 次 + 0 条」,不是接口挂了。
+    const shaped = list.every((x) => x.rule && x.rule.cond && x.title && x.why && x.source?.label);
+    const weekly = list.filter((x) => ['every', 'daily_at'].includes(x.rule?.cond?.type) || /周一|每周|weekly|monday/i.test(`${x.title} ${x.why}`)).length;
+    const zh = list.filter((x) => /[一-鿿]/.test(x.title)).length;
+    const ok = calls.length > 0 && list.length >= 1 && shaped;
+    const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
+    const detail = [
+      `set_automation_suggestions 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
+      ...(getFailed ? ['GET 自动化建议失败(不是「没有」)← 红'] : []),
+      `工具回执:${results.join(' / ') || '(无)'}`,
+      `自动化首页 ${list.length} 条${list.length ? '' : ' ← 红'}${shaped ? '' : ';有条目缺规则 / 依据 ← 红'}`,
+      `像「每周整理日志」的 ${weekly}/${list.length}(只记)`,
+      `中文标题 ${zh}/${list.length}(只记)`,
+      list.map((x) => `[${x.rule?.cond?.type}${x.rule?.cond?.interval ? ` ${x.rule.cond.interval}` : x.rule?.cond?.time ? ` ${x.rule.cond.time}` : ''} → ${(x.rule?.actions || []).map((a) => a.type).join('+') || 'wake'}] ${x.title} —— ${x.why}(${x.source?.kind}「${x.source?.label}」)`).join(' | '),
+    ].join(';');
+    return { ok, detail, output: `${museSays}\n\n=== 自动化建议 ===\n${list.map((x) => `- ${x.title}: ${x.why}`).join('\n')}`, status: done };
+  });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
   // 14 天),于是「现在」恒落在作息的深夜段、最近一次活动约 9 小时前 —— 不管台架几点跑,判断题都是同一道。
@@ -6378,12 +6503,21 @@ Then reply with only the command output.`,
     const now = new Date();
     const nowH = now.getHours();
     const active = (h) => { const k = (h - nowH + 24) % 24; return k >= 6 && k < 16; };
+    // 11-21:活动行指向的笔记要真有(绝对路径、建在授权文件夹里)—— 从前写的是不存在的 Notes/day-*.md,set_chat_starters
+    // 引用它们必报错重试,首周期白耗 2–3 轮,顶到轮数上限还没走到 set_next_wake(新旧代码都中招)。
+    const notesDir = join(workspace, 'Notes'); mkdirSync(notesDir, { recursive: true });
     for (let t = now.getTime() - 14 * 86_400_000; t < now.getTime(); t += 3_600_000) {
       const d = new Date(t); d.setMinutes(15, 0, 0);
-      if (d.getTime() < now.getTime() && active(d.getHours())) appendUserActivity(d, `note.edit f="Notes/day-${actDay(d)}.md" l=${d.getHours()}`);
+      if (d.getTime() >= now.getTime() || !active(d.getHours())) continue;
+      const note = join(notesDir, `day-${actDay(d)}.md`);
+      if (!existsSync(note)) writeFileSync(note, `# ${actDay(d)}\n\n- 写了一点日记\n`);
+      appendUserActivity(d, `note.edit f="${note}" l=${d.getHours()}`);
     }
     const usualStart = new Date(now.getTime() + 6 * 3_600_000); usualStart.setMinutes(0, 0, 0);
-    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 5, allowedFolders: [workspace], notify: 'immediate' } }) });
+    // 11-21:轮数上限用产品缺省(specialAgentsConfig 的 maxIterationsPerCycle = 20);从前写死 12,而首周期还要做每周装备巡检、
+    // 开场建议、今日简报,六次里四次顶到 12 轮被截停,判的是「轮数够不够」而不是「它决定睡没睡」。`--musewake-iters N` 可改。
+    const iters = Number(opt('musewake-iters', 20));
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: iters, maxRestartsPerWindow: 5, allowedFolders: [workspace], notify: 'immediate' } }) });
     const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s));
     const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
     if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
@@ -6392,10 +6526,25 @@ Then reply with only the command output.`,
     const cycle1At = Number(done1.lastCycleAt);
     const sid = done1.sessionId;
     const says = async () => (sid ? asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '');
+    // 11-21:只判**第一个周期**。从前读 status 的 sleepUntil:周期 1 没睡、紧接着的周期 2 睡了,台架照样判绿(11-21 旧代码基线就这样绿过一次)。
+    // 改读第一个 Muse run 里有没有 set_next_wake,并记下它用了几轮、有没有顶到上限。
+    const first = await (async () => {
+      const { default: Database } = await import('better-sqlite3');
+      const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+      try {
+        const runs = db.prepare(`SELECT r.id FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all();
+        const id = runs[0]?.id;
+        if (!id) return { runs: 0, rounds: 0, slept: false, calls: [] };
+        const rounds = db.prepare(`SELECT COUNT(*) AS n FROM agent_run_events WHERE run_id = ? AND type = 'usage'`).get(id).n;
+        const calls = db.prepare(`SELECT json_extract(payload, '$.name') AS n FROM agent_run_events WHERE run_id = ? AND type = 'tool_call' ORDER BY rowid`).all(id).map((x) => x.n);
+        return { runs: runs.length, rounds, slept: calls.includes('set_next_wake'), calls };
+      } finally { db.close(); }
+    })().catch((e) => ({ runs: 0, rounds: 0, slept: false, calls: [], error: String(e?.message || e) }));
+    const roundsText = `周期 1 用了 ${first.rounds}/${iters} 轮${first.rounds >= iters ? '(顶到上限)' : ''}、工具 ${first.calls.length} 次(${first.calls.join(',')})${first.runs > 1 ? `;读状态时已起 ${first.runs} 个周期` : ''}`;
     const sleepUntil = Number(done1.sleepUntil) || 0;
-    const slept = sleepUntil - Date.now() >= 60 * 60_000;
+    const slept = first.slept && sleepUntil - Date.now() >= 60 * 60_000;
     const plan = sleepUntil ? `睡到 ${hhmm(sleepUntil)}(作息起点 ${hhmm(usualStart)};理由:${done1.sleepReason || '无'})` : '没睡';
-    if (!slept) return { ok: false, detail: `现在 ${hhmm(now)} 在作息深夜段、上次活动约 9h 前,Muse ${plan}`, output: await says(), status: done1 };
+    if (!slept) return { ok: false, detail: `现在 ${hhmm(now)} 在作息深夜段、上次活动约 9h 前,Muse 周期 1 ${first.slept ? plan : '没调 set_next_wake'};${roundsText}`, output: await says(), status: done1 };
     // ② 心跳 1 分钟 + 巡检 1 分钟:醒着的话 100s 内必起周期 2
     await sleep(100_000);
     const mid = await status();
@@ -6408,7 +6557,7 @@ Then reply with only the command output.`,
     const journalSleep = /sleep → /.test(journal);
     return {
       ok: slept && honored && !!woke && journalSleep,
-      detail: `${plan};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
+      detail: `${plan};${roundsText};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
       output: await says(), journal, status: woke || mid,
     };
   });
@@ -6417,6 +6566,10 @@ Then reply with only the command output.`,
   // 判据:最近几轮的第一行 trigger = manual 且 done、agent_runs.input 里带「用户刚叫醒你」那句(代码拼的简报原文,不看模型)、
   // 周期没报错、请求清掉(wakePending=false)。模型这一轮做了什么 / 有没有又睡下记进 detail 与 output(不计红)。
   // 负对照 = 没有这条路由的旧 dist(POST /wake 404 → 红)。
+  await scenario('musetodo', `musetodo Muse 提待办带依据(${MUSE_MODE}${argv.includes('--todo-neg') ? ',只有随口抱怨的负腿' : ''})`, async () => {
+    const { museTodoLive } = await import('./lib/muse-todo-live.mjs');
+    return museTodoLive({ api, home, workspace, shared, argv, MODEL, MUSE_MODE, until, sleep, asList, museCycleHints, museLogTail, engineLog });
+  });
   await scenario('musewakenow', `musewakenow 面板「叫醒」:时段外点一下就起一轮(${MUSE_MODE})`, async () => {
     const h = new Date().getHours();
     const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));

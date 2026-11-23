@@ -19,6 +19,8 @@ import { homeTarget } from '../../services/engine/targets'
 export const AUTOMATION_WORKSPACE_MODE = 'plugin:automation:rules' as const
 const keyOf = (sel: AutomationSel | null): string | null => sel ? JSON.stringify(sel) : null
 const openDetail = () => useWorkspace.getState().openView('automation-detail', {}, 'main')
+/** 回首页:取消选中、关掉画布(setSel 自带离开闸:有没保存的修改先问,答「否」就留在画布)。 */
+const goHome = (): void => { useAutomation.getState().setSel(null); openDetail() }
 const mutate = async (run: () => Promise<unknown>): Promise<boolean> => {
   try { await run(); useAutomation.getState().bump(); return true }
   catch (error) { useApp.getState().toast(String(error instanceof Error ? error.message : error), true); return false }
@@ -113,8 +115,8 @@ export const automationListSource: HostListSource = {
   })).filter((group) => group.count > 0 || group.key === 'rules'),
   open(item) { useAutomation.getState().setSel(JSON.parse(item.key)); openDetail() },
   actions: [
-    { id: 'new', get label() { return t('automation.new') }, run() { useAutomation.getState().openBuilder(); openDetail() } },
-    { id: 'overview', get label() { return t('automation.ux.overview') }, run() { useAutomation.getState().setSel(null); openDetail() } },
+    // 11-22 方案 A:首页(Muse 建议 + 模板)就是「新建」页,像 ChatGPT 的「+ 新建任务」;从空白开始点页里的「自定义流程」
+    { id: 'new', get label() { return t('automation.new') }, run() { goHome() } },
   ],
   itemMenu(item) {
     const sel = JSON.parse(item.key) as AutomationSel, state = useAutomation.getState(), cfg = useApp.getState().cfg

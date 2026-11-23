@@ -51,7 +51,7 @@ export function ImageStudioChat(props: ViewProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => { void useImageStudio.getState().hydrate() }, [])
-  useEffect(() => { if (board?.sessionId) void useApp.getState().loadSessionHistory(board.sessionId) }, [board?.sessionId])
+  useEffect(() => { if (board?.sessionId) void useApp.getState().ensureHistoryDepth(board.sessionId) }, [board?.sessionId])
   // 对话视图是 Tangu 交出来的(核心插件化 2e-7)
   const Chat = readTanguChatViews()?.Chat
   if (board?.sessionId && Chat) return <div className="ims-chat" data-image-studio-chat={board.id}>

@@ -36,6 +36,7 @@ import { getTriggerSource, listTriggerSources } from '../../services/triggerRegi
 import { listMuseCards, postMuseCard } from '../../services/museCards.js';
 import { readDbOrNull } from '../../services/amadeusDb.js';
 import { dropCursors } from '../../services/dbCursors.js';
+import { automationSenderError } from '../../services/automationMessage.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
@@ -55,6 +56,7 @@ function fmt(t: MuseTrigger): string {
     ? `, actions: ${t.actions.map((a) =>
         a.type === 'tool_call' ? `tool_call(${a.tool})`
         : a.type === 'agent_run' ? `agent_run(${a.agentSlug})`
+        : a.type === 'send_message' ? `send_message(${a.agentSlug} → ${a.delivery}, ${a.source})`
         : a.type === 'db_row_add' || a.type === 'db_row_edit' ? `${a.type}(${a.path})`
         : a.type).join(' → ')}`
     : t.agentSlug ? `, runs agent "${t.agentSlug}"` : '';
@@ -71,8 +73,8 @@ async function proposeRule(userId: string, cwd: string | undefined, args: Record
   if (String(args.id || '').trim()) return 'Error: at your permission level you can only propose new rules, not change existing ones.';
   // 卡上「做」只有一行:只收一步,点「好」建出来的和卡上写的是一回事。
   const steps = v.actions ?? [];
-  if (v.agentSlug || steps.length > 1 || steps.some((a) => a.type !== 'remind' && a.type !== 'notify')) {
-    return 'Error: a proposed rule does one thing: remind the user (one remind or notify action) or wake you (no actions). Ask the user to set up anything else in Automation.';
+  if (v.agentSlug || steps.length > 1 || steps.some((a) => a.type !== 'remind' && a.type !== 'notify' && a.type !== 'send_message')) {
+    return 'Error: a proposed rule does one thing: remind the user (one remind, notify, or send_message action) or wake you (no actions). Ask the user to set up anything else in Automation.';
   }
   const pending = await listMuseCards(userId, 'pending');
   if (pending.filter((c) => c.kind === 'rule').length >= MAX_PENDING_RULE_CARDS) return `Error: ${MAX_PENDING_RULE_CARDS} rule proposals are already waiting for the user. Wait for an answer first.`;
@@ -97,35 +99,30 @@ export const manageAutomationProvider: ToolProvider = {
       // 到期起跑的是对方 agent 的 full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2)。
       isEnabledFor: (profile) => !!profile.capabilities.hostExec,
 
-      deferred: true, // P0-2:3.3KB 大 schema,低频管理面 → 按需装载(Muse/自动化 run 例外全量可见)
+      deferred: true, // P0-2:大 schema(11-21 去重后约 6.6KB),低频管理面 → 按需装载(Muse/自动化 run 例外全量可见)
       deferHint: 'Set up/list/remove automations: reminders ("remind me at 9am"), event watchers, scheduled or recurring agent tasks.',
       definition: {
         type: 'function',
         function: {
           name: 'manage_automation',
           description:
-            'Manage automation rules (trigger + actions). Use when the user asks to be reminded at/every some time, ' +
-            'or to watch for something ("remind me at 9am tomorrow", "every 2h tell me to stretch", "keep an eye on xxx.md"). ' +
-            'Triggers: at (one-time local datetime), every (recurring interval like "30m"/"2h"/"1d"), daily_at (once a day after HH:MM), ' +
-            'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars), ' +
-            'manual (never fires on its own — the user runs it by clicking a button block in a note; use this when asked for "a button that does X"), ' +
-            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires), ' +
-            'computer.app_opened (params.app: app name or bundle id — the user switched to it), computer.app_used (params.app + params.minutes — continuous use), ' +
-            'computer.returned (params.minutes — the user came back after being away at least that long), computer.unlocked (screen unlocked or the computer woke), ' +
-            'calendar.before (params.minutes — before a timed calendar event starts). computer.* rules need Computer History on and are matched on this machine; only the fact that one fired is shared. ' +
-            'Restrict any rule with only {hours:{start,end}, weekdays:[0-6, 0=Sunday]} and max_per_day. ' +
-            'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
-            'remind {title, body?} shows a system notification and writes one line in the Muse chat — no model, nothing leaves this computer, skipped outside Muse active hours; ' +
-            'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
-            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing. ' +
-            'A rule with observe:true only records what it would have done and runs nothing until the user enables it.' +
+            'Manage automation rules: triggers plus ordered actions, checked periodically at zero cost. ' +
+            'Use for timed reminders, recurring tasks or watching for events. ' +
+            'Triggers: at (one time; the rule disables itself after firing), every (recurring), daily_at (once a day after HH:MM), ' +
+            'event_seen (in-app activity contains match), file_chars_gte (file reaches n non-whitespace chars), ' +
+            'manual (fires from a button block in a note), ' +
+            'db_changed (a row added to, or a column changed in, an Amadeus database; needs path + event, and cell_changed also needs column_id or column_ids), ' +
+            'computer.app_opened (params.app: switched to app name or bundle id), computer.app_used (params.app + params.minutes of continuous use), ' +
+            'computer.returned (params.minutes: back after being away at least that long), computer.unlocked (screen unlocked or the computer woke), ' +
+            'calendar.before (params.minutes before a timed event). computer.* rules need Computer History on; only the firing is shared. ' +
+            'Without actions the rule wakes Muse (legacy); `agent` is shorthand for a single agent_run.' +
             pluginTriggersNote(),
           parameters: {
             type: 'object',
             properties: {
-              action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update a rule, list=show rules, remove=delete by id' },
-              id: { type: 'string', description: 'set: update this rule instead of creating; remove: rule id (from list)' },
-              desc: { type: 'string', description: 'set: human-readable description of the rule (shown to the user)' },
+              action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update, list, remove=delete by id' },
+              id: { type: 'string', description: 'Rule id: list details, update or remove' },
+              desc: { type: 'string', description: 'set: human-readable description shown to the user' },
               cond_type: { type: 'string', enum: listTriggerSources().map((s) => s.id), description: 'set: trigger type' },
               params: { type: 'object', description: 'set(computer.*, calendar.before, plugin triggers): trigger parameters, see the trigger list above' },
               only: {
@@ -137,14 +134,14 @@ export const manageAutomationProvider: ToolProvider = {
                 },
               },
               max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
-              observe: { type: 'boolean', description: 'set: true = record each firing without running its actions (not for at or manual rules). Only the user can turn an observing rule on.' },
+              observe: { type: 'boolean', description: 'set: true = record each firing and run nothing, not even a Muse wake or `agent` (not for at or manual rules). Only the user can turn an observing rule on.' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
-              column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
-              column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
-              equals: { type: 'string', description: 'set(db_changed + cell_changed): only fire when the cell becomes exactly this value (omit = any change)' },
+              column_id: { type: 'string', description: 'set(cell_changed): the column ID, NOT its name (names are neither unique nor stable); read the .db JSON to find it' },
+              column_ids: { type: 'array', items: { type: 'string' }, description: 'set(cell_changed): several column IDs, fires when ANY changes (max 10; union with column_id). Prefer this over one rule per column.' },
+              equals: { type: 'string', description: 'set(cell_changed): fire only when the cell becomes exactly this value (omit = any change)' },
               where: {
                 type: 'array',
-                description: 'set(db_changed): extra AND conditions on the matched row, compared as strings after computed columns (lookup/formula) are resolved. Max 10.',
+                description: 'set(db_changed): extra AND conditions on the matched row, compared as strings after computed columns resolve. Max 10.',
                 items: {
                   type: 'object',
                   properties: {
@@ -155,45 +152,51 @@ export const manageAutomationProvider: ToolProvider = {
                   required: ['column', 'op'],
                 },
               },
-              datetime: { type: 'string', description: 'set(at): one-time local datetime "YYYY-MM-DD HH:mm"' },
+              datetime: { type: 'string', description: 'set(at): local "YYYY-MM-DD HH:mm"' },
               interval: { type: 'string', description: 'set(every): interval like "30m"/"2h"/"1d" (min 15m; min 1h when any agent runs)' },
-              time: { type: 'string', description: 'set(daily_at): local time "HH:MM"' },
-              match: { type: 'string', description: 'set(event_seen): substring to look for in new activity lines (e.g. a file name, "note.edit", "run.done agent=historian", or a plugin event like "plugin:activitywatch:focus")' },
-              path: { type: 'string', description: 'set(file_chars_gte): file path (absolute, or relative to the current workspace). set(db_changed): vault-relative .db path, e.g. "Tasks.db"' },
-              n: { type: 'number', description: 'set(file_chars_gte): non-whitespace character threshold' },
+              time: { type: 'string', description: 'set(daily_at): local "HH:MM"' },
+              match: { type: 'string', description: 'set(event_seen): substring, e.g. a file name, "note.edit", "run.done agent=historian", "plugin:activitywatch:focus"' },
+              path: { type: 'string', description: 'set(file_chars_gte): file path, absolute or relative to the current workspace. set(db_changed): vault-relative .db path, e.g. "Tasks.db"' },
+              n: { type: 'number', description: 'set(file_chars_gte): the threshold' },
               actions: {
                 type: 'array',
                 description:
-                  `set: ordered action steps. Max ${MAX_ACTIONS}. Each item is one of: ` +
-                  '{type:"notify", title, body?} — inbox message; ' +
-                  '{type:"remind", title, body?} — system notification plus one line in the Muse chat, no model; ' +
-                  '{type:"agent_run", agentSlug, prompt} — run that agent unattended; ' +
-                  '{type:"db_row_add", path, cells, skipIfEmpty?} — append a row to an Amadeus database (skipIfEmpty = a cells key; the step is skipped when that value expands to empty); ' +
-                  '{type:"db_row_edit", path, cells, rowId? | rowFrom? | match?} — update rows: rowId = one row; rowFrom = a relation column of the trigger row (each linked row is edited, available as {{target.X}}); match = {column, value} edits every row whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
-                  'cells maps a column ID (or name) to a value. Values may use {{row.<column>}} / {{target.<column>}} / {{now}} / {{today}} templates and arithmetic {{= {target.qty} - {row.qty} }} (formula syntax, column refs in single braces); ' +
-                  'templates are ONLY expanded in notify text and db cell values — never in prompts, paths or tool arguments. ' +
-                  'Computed columns (lookup/formula) of the trigger row are resolved before templating.',
+                  `set: ordered steps; stop on failure. Max ${MAX_ACTIONS}. ` +
+                  'notify {title, body?}: inbox message with push, zero cost; the right way to deliver timed reminders. ' +
+                  'remind {title, body?}: system notification plus one line in the Muse chat; no model, nothing leaves this computer, skipped outside Muse active hours. ' +
+                  'agent_run {agentSlug, prompt}: run that agent unattended. ' +
+                  'send_message {agentSlug, delivery, source, body|prompt}: send as that Agent to the user. ' +
+                  'delivery=solo uses their existing direct chat (the user can reply there); inbox uses Forsion Inbox. ' +
+                  'fixed: send body; agent: draft from prompt with read-only tools, then send the final text. ' +
+                  'db_row_add {path, cells, skipIfEmpty?}: append a row (skipIfEmpty = a cells key; skip the step when that value expands to empty). ' +
+                  'db_row_edit {path, cells, rowId? | rowFrom? | match?}: rowId = one row; rowFrom = a relation column (ID or name) of the trigger row, edits each linked row (as {{target.X}}); ' +
+                  'match = {column, value} edits every row of the target table whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
+                  'path is a vault-relative Amadeus .db; cells maps a column ID (or name) to a value. ' +
+                  'Templates {{row.<column>}}, {{target.<column>}}, {{now}}, {{today}} and arithmetic {{= {target.qty} - {row.qty} }} (formula syntax, column refs in single braces) ' +
+                  'expand in notify/remind and send_message fixed text, or db cell values, never in prompts, paths or tool arguments. Computed columns (lookup/formula) of the trigger row are resolved first.',
                 items: {
                   type: 'object',
                   properties: {
-                    type: { type: 'string', enum: ['notify', 'remind', 'agent_run', 'db_row_add', 'db_row_edit'] },
-                    title: { type: 'string', description: 'notify/remind: message title' },
-                    body: { type: 'string', description: 'notify/remind: optional message body' },
-                    agentSlug: { type: 'string', description: 'agent_run: agent to run unattended' },
-                    prompt: { type: 'string', description: 'agent_run: task prompt for the agent' },
-                    path: { type: 'string', description: 'db_row_add/db_row_edit: vault-relative .db path' },
-                    rowId: { type: 'string', description: 'db_row_edit: target row id (omit = the row the trigger matched)' },
-                    rowFrom: { type: 'string', description: 'db_row_edit: relation column (ID or name) of the trigger row; edits the linked row(s) in the target table' },
-                    match: { type: 'object', description: 'db_row_edit: {column, value} — edit every row of the target table whose column equals value (template allowed)', properties: { column: { type: 'string' }, value: { type: 'string' } }, required: ['column', 'value'] },
-                    skipIfEmpty: { type: 'string', description: 'db_row_add: a cells key; skip this step when that value expands to empty' },
-                    cells: { type: 'object', description: 'db_row_add/db_row_edit: column ID (or name) → value' },
+                    type: { type: 'string', enum: ['notify', 'remind', 'agent_run', 'send_message', 'db_row_add', 'db_row_edit'] },
+                    title: { type: 'string' },
+                    body: { type: 'string' },
+                    agentSlug: { type: 'string' },
+                    delivery: { type: 'string', enum: ['inbox', 'solo'] },
+                    source: { type: 'string', enum: ['fixed', 'agent'] },
+                    prompt: { type: 'string' },
+                    path: { type: 'string' },
+                    rowId: { type: 'string' },
+                    rowFrom: { type: 'string' },
+                    match: { type: 'object', properties: { column: { type: 'string' }, value: { type: 'string' } }, required: ['column', 'value'] },
+                    skipIfEmpty: { type: 'string' },
+                    cells: { type: 'object' },
                   },
                   required: ['type'],
                 },
               },
-              prompt: { type: 'string', description: 'set(legacy, no actions): extra instruction for the runner when the rule fires' },
-              cooldown_hours: { type: 'number', description: 'set: hours before the rule may fire again (default 24; min 1 with agent runs, min 0.25 for pure notify chains; db_changed rules with only notify/db actions default to 0 and allow 0 — they fire per row; ignored for timed triggers at/every/daily_at)' },
-              agent: { type: 'string', description: 'set(legacy shorthand, no actions): agent slug to run the prompt unattended when the rule fires (omit = wake Muse)' },
+              prompt: { type: 'string', description: 'set(legacy, no actions): extra instruction for the runner' },
+              cooldown_hours: { type: 'number', description: 'set: hours before the rule may fire again (default 24; min 1 with agent runs, min 0.25 for notify-only chains; db_changed rules with only notify/db actions default to and allow 0, firing per row; ignored for at/every/daily_at)' },
+              agent: { type: 'string', description: 'set(legacy, no actions): agent slug to run the prompt unattended (omit = wake Muse)' },
             },
             required: ['action'],
           },
@@ -206,6 +209,11 @@ export const manageAutomationProvider: ToolProvider = {
         if (remoteDenied) return `Error: ${remoteDenied}`;
         if (action === 'list') {
           const list = await loadTriggers();
+          const id = String(args.id || '').trim();
+          if (id) {
+            const rule = list.find((t) => t.id === id);
+            return rule ? JSON.stringify(rule) : `Error: rule ${id} not found`;
+          }
           return list.length ? `${list.length} automation rule(s):\n${list.map(fmt).join('\n')}` : '(no automation rules)';
         }
         // ask / agent 档的 Muse:只能看、只能提。
@@ -233,27 +241,34 @@ export const manageAutomationProvider: ToolProvider = {
         if (ctx.muse && wakesMuse && !getTriggerSource(v.value.cond.type)?.selfWakeSafe) {
           return 'Error: Muse cannot create automations that wake itself from this kind of trigger (self-trigger loop). For your own timed follow-ups use manage_schedule; rules that wake you must use a computer.* or calendar.before trigger.';
         }
-        if (proposing) return proposeRule(ctx.userId, ctx.cwd, args, v.value);
-
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" not found (use manage_agent action=list to see agents)`;
         }
-        for (const a of v.value.actions || []) {
+        const id = String(args.id || '').trim() || undefined;
+        // 插件种子规则归插件的 ensure 管，聊天 Agent 不能修改或伪造。
+        if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
+        const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+        const senderActions = v.value.actions === undefined ? prev?.actions : v.value.actions;
+        if (v.value.enabled || !prev) {
+          for (const a of senderActions ?? []) {
+            if (a.type !== 'send_message') continue;
+            const error = await automationSenderError(a);
+            if (error) return `Error: ${error}`;
+          }
+        }
+        for (const a of v.value.actions ?? []) {
           if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
             return `Error: agent "${a.agentSlug}" not found (use manage_agent action=list to see agents)`;
           }
         }
-        const id = String(args.id || '').trim() || undefined;
-        // auto 档 Muse 自己新建的、会动东西的规则一律先观察,传 observe:false 也一样:没有用户看过的规则,不放权。
+        if (proposing) return proposeRule(ctx.userId, ctx.cwd, args, v.value);
+        // auto 档 Muse 自建的会执行动作的规则先观察。
         const forcedObserve = !!ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value) && !v.value.observe;
         if (ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value)) v.value.observe = true;
-        // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
-        if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
         // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
         // 桌面构建器早就把它们过滤掉了,引擎侧从前没有对等闸(这条工具能建出这种「永远不响」的规则)。
         // ⚠️ H2 同款闸(与 HTTP 路由对齐):只在新建 / cond 实质变化 / 本次要置为 enabled:true 时体检。
         // set 是**整量** upsert,agent 要「把这条规则关掉」也走这里 —— 关规则永远不许被预检挡住。
-        const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
         // 观察转启用只有用户能做(面板和结果卡):改成一次性条件也等于转成启用。
         if (prev?.observe && (v.value.observe === false || !canObserve(v.value.cond))) {
           return 'Error: only the user can turn an observing rule on. Tell them to enable it in Automation.';

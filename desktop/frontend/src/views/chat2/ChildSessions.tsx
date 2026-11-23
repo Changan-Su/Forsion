@@ -24,6 +24,7 @@ import { displaySessionTitle } from '../../sessionTitle'
 import { StatusMark } from './AttentionDot'
 import { rowStatus, type RowStatus } from './sessionTree'
 import { openBtw, useBtw } from './btwStore'
+import { splitRelay } from './btwRelay'
 
 registerMessages({
   'childs.head': { zh: '子会话', en: 'Child sessions' },
@@ -199,13 +200,16 @@ function AsideRow({ sessionId, aside }: { sessionId: string; aside: SavedAside }
   const last = aside.turns[aside.turns.length - 1]
   const title = useApp((s) => s.sessions.find((x) => x.id === sessionId)?.title)
   const open = (): void => openBtw({ sessionId, title, asideId: aside.id, messageId: aside.message_id || undefined })
+  // 右边面板里正开着的就是这一段:垫一层底色,两边对得上(11-22 方案 A)
+  const panelOpen = useChildChat((s) => Object.values(s.selected).some((x) => x?.aside?.sessionId === sessionId))
+  const current = useBtw((s) => s.anchors[sessionId]?.asideId === aside.id) && panelOpen
   return (
-    <div className="t2-child-row" role="button" tabIndex={0} data-aside={aside.id} data-status="seen" onClick={open} onKeyDown={(e) => { if (e.key === 'Enter') open() }}>
+    <div className="t2-child-row" role="button" tabIndex={0} data-aside={aside.id} data-status="seen" aria-current={current || undefined} onClick={open} onKeyDown={(e) => { if (e.key === 'Enter') open() }}>
       <span className="t2-child-lead"><MessageCircleQuestion size={15} /></span>
       <span className="t2-child-title">{first?.question || t('btw.title')}</span>
       <span className="t2-child-state">{t('fork.aside')}{aside.turns.length > 1 ? ` · ${aside.turns.length}` : ''}</span>
       <span className="t2-child-chev"><ChevronRight size={13} /></span>
-      {last?.answer && <span className="t2-child-sub">{plain(last.answer)}</span>}
+      {last?.answer && <span className="t2-child-sub">{plain(splitRelay(last.answer).body)}</span>}
     </div>
   )
 }

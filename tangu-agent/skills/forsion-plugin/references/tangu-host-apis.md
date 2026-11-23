@@ -227,7 +227,7 @@ const r = await ctx.tangu?.complete?.({
 ```
 
 写进笔记**必须经用户确认**:把「拿结果」包进 `registerSelectionAction`,宿主替你开预览面板(与内置的「润色 / 翻译…」同一块),
-用户点「替换 / 插入下方」才写,Esc / 丢弃 = 一个字不动。入口在选中文字后那一条的「⋯ → 插件」(桌面 2.13.3 及更早在「AI ▾ → 插件」);
+用户点「替换 / 插入下方」才写,Esc / 丢弃 = 一个字不动。入口在选中文字后那一条的「⋯ → 插件」,`placement: 'bar'` 可以要条上的位置(2026-11-21 起;桌面 2.13.3 及更早在「AI ▾ → 插件」);
 想让它在聊天或别的视图里也出现、按视图过滤、带图标,见上「Selection bar」:
 
 ```js
@@ -243,6 +243,25 @@ ctx.registerSelectionAction({
 - `run` 返回 `''` = 什么都不提议;返回值按 slash `run` 同一套校验(必须是字符串、不许控制字符)。
 - 模型缺省 = 主区聊天当前用的那个;额度与用量照主聊天口径扣、记。插件被停用时在飞的 `complete` 会被中止并 reject。
 - 笔记里宿主做不了正文 AI(探针没有 `complete`)时「AI ▾」「翻译」「⋯」都不出现,你的项也不会出现。
+
+### 朗读:ctx.tts(2026-11-21 起)
+
+用用户在「设置 → 模型 → 语音」里选的朗读模型 / 音色 / 语速念一段。和 `ctx.tangu` 同一道门:非 Tangu 宿主、旧宿主整个没有 → `ctx.tts?.`。
+
+```js
+const tts = ctx.tts
+if (tts?.available()) {
+  try { await tts.speak(text, { signal: ac.signal }) }      // 念完 / 被停 / 被别的顶掉时兑现
+  catch (e) { if (e.message !== 'tts_no_model') showError(e) }   // tts_no_model:宿主自己出「去设置」提示
+}
+tts?.stop()                                                  // 只停你自己起的那段
+```
+
+- 全应用**一个**播放器,和聊天朗读、划线条「朗读」共用:新的 `speak` 顶掉正在放的那段(被顶掉的那次兑现,不 reject)。
+- 没配朗读模型 reject `Error('tts_no_model')`,宿主同时弹一条「还没选朗读模型 · 去设置」;这个宿主配不了朗读(网页端)reject `Error('tts_unavailable')`。**不回落系统声音。**
+- markdown 剥成纯文本(代码块跳过),上限 4000 字;合成走宿主的模型和额度,插件拿不到密钥。
+- `stop()` 只停你起的那段,别人(聊天朗读)在放的不碰;插件停用 / 重载时宿主中止你在飞的合成、停掉你在放的那段。停用 / 重载之后旧 `ctx` 上的 `stop()` 什么都不做,停不到新一代起的那段。`signal` 只收真的 `AbortSignal`,别的直接拒。
+- 划线条结果卡里的小喇叭不用自己画:`registerSelectionAction({ card: { speak: true } })`(见 host-ui-mounts「Selection bar」)。
 
 ### 翻译:ctx.tangu.translate(2026-10-13 起)
 
@@ -261,6 +280,9 @@ const tr = ctx.tangu?.translate
 - 引擎每个用户同时最多 3 个一次性请求(`complete` + `translate` 合计),超出回 429。自己排队,并发开 2 就够。
 - 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
+- **划线动作的 `run` 里**(2026-11-22 起):把 `cx.signal` 原样当 `signal` 传(`translate` / `complete` 都行),结果卡头就会像内置翻译
+  那样写明是哪个模型出的(这次 run 里先调用的那个)。自己另建 AbortController 就对不上这次 run。选区周边(笔记前后文、页面说明)
+  只补进宿主核心翻译插件 `translation` 的 `translate` 请求,别的插件不补(模型可能把没选中的原文回给插件)。
 
 ### 行内补全:ctx.tangu.fim(2026-10-26 起)
 

@@ -387,11 +387,10 @@ async function main() {
     for (let i = 0; i < 3; i++) await p.keyboard.press('Shift+ArrowLeft')
     await p.waitForTimeout(300)
     await p.locator('.inline-toolbar .itb-color').dispatchEvent('mousedown') // 开颜色面板
-    await p.waitForTimeout(250)
-    await p.locator('.inline-toolbar .itb-swatch[data-fg="#c62222"]').dispatchEvent('mousedown') // AFFiNE v1 红(2026-08-13 第4振换正典)
+    await p.locator('.amx-color-popover button[data-fg="#c62222"]').click()
     await p.waitForTimeout(400)
     const md = await mdOf(p)
-    check('T16 文字色 → 序列化含 <span style="color', /<span style="color:[^"]+">red<\/span>/.test(md), `md=${JSON.stringify(md)}`)
+    check('T16 文字色 → 保存选中的红色', md.includes('<span style="color:#c62222">red</span>'), `md=${JSON.stringify(md)}`)
     await p.close()
   })
 

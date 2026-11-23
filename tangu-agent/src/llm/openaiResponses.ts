@@ -222,6 +222,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
+  let terminal = false;
   let filtered = false;
   let incomplete = false; // response.incomplete(max_output_tokens 等):输出被截断,工具参数不可信
   // cached_tokens / reasoning_tokens 都不预置 0:上游没报时必须保持 undefined(报 0 = 真没命中/真没思考,
@@ -319,6 +320,7 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         // 记 output_index 供收尾排序:正常 SSE 有序,但代理重排/实现差异下按 index 恢复原始输出序(防御)。
         outputItems.push({ __idx: typeof ev.output_index === 'number' ? ev.output_index : outputItems.length, item: ev.item });
       } else if (type === 'response.completed' || type === 'response.incomplete') {
+        terminal = true;
         // incomplete=响应被截断(常见 max_output_tokens;其他原因的半截参数同样不可信)
         // → 归一化为 finishReason:'length',让 agentLoop 的截断硬化把工具调用全部置错不执行。
         //   content_filter 例外,单独报(见下):它也不执行工具,但不续写。
@@ -364,5 +366,5 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   if (usage.completion_tokens === 0 && content) usage.completion_tokens = Math.ceil(content.length / 4);
 
   const orderedItems = outputItems.sort((a, b) => a.__idx - b.__idx).map((o) => o.item);
-  return { content, reasoning, toolCalls, usage, finishReason, ...(incomplete || !orderedItems.length ? {} : { outputItems: orderedItems }) };
+  return { content, reasoning, toolCalls, usage, finishReason, ...(!terminal ? { streamEndedEarly: true } : {}), ...(incomplete || !orderedItems.length ? {} : { outputItems: orderedItems }) };
 }

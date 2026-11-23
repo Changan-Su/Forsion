@@ -324,7 +324,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const cfg = useApp((s) => s.cfg)
   const execModes = useApp(useShallow((s) => Object.fromEntries(ids.map((id) => [id, s.configBySession[id]?.execMode]))))
   // 分支的历史不在内存里(只看过主线):画布一开就把整棵树拉齐;拉到一支画一支
-  useEffect(() => { for (const id of ids) void useApp.getState().loadSessionHistory(id) }, [ids])
+  useEffect(() => { for (const id of ids) void useApp.getState().ensureHistoryDepth(id) }, [ids])
   // 子会话在后台又跑了一轮(主会话 send_to_session 等):它不是当前会话,没人轮询它的历史(pollSession 只管 activeId)。
   // 会话列表里它的 updated_at / 在跑 / 等你一变就重拉一次,并进 store(同 ChildChatPanel 那份合并);正在跑 / 正看着的由流和轮询管
   const kidSig = kids.map((k) => `${k.id}:${k.updated_at}:${k.busy ? 1 : 0}:${k.awaiting_user ? 1 : 0}`).join(',')
@@ -1019,7 +1019,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
         setPref({ order: { ...order, [d.parent]: sids }, draft: { ...d, sid: id } })
       }
       // 等历史和配置都到了再发:复制段先到、继承来的 Agent / 模型不被空配置冲掉(建分支时 setActiveId 已经开始拉,这里等同一份)
-      await useApp.getState().loadSessionHistory(id)
+      await useApp.getState().ensureHistoryDepth(id)
       // 发成了才清草稿;没发成(断网 / 引擎拒绝)字留着,分支 id 也记着,再按一次就接着发
       if (await useApp.getState().send(text, [], undefined, undefined, undefined, id)) setPref({ draft: null })
     } finally { setSending(false) }

@@ -22,6 +22,7 @@ import { TaskCards, TaskTraces, fetchMuseTodoStatus, useMuseTodoSeen, useMuseTod
 import type { TaskCard } from './suggest'
 
 registerMessages({
+  'museDm.automationFrom': { zh: '自动化「{rule}」 · {time}', en: 'Automation “{rule}” · {time}' },
   'museDm.from': { zh: '主动发来 · {time}', en: 'Reached out · {time}' },
   'museDm.apvPending': { zh: '等你批准 · 在对话最下面', en: 'Waiting for your approval · at the end of the chat' },
   'museDm.apvExecuting': { zh: '已批准，执行中…', en: 'Approved, running…' },
@@ -40,12 +41,12 @@ const dbTime = (v: string): number => Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}
 
 export const isProactive = (m: Pick<UiMessage, 'origin'>): boolean => !!m.origin?.startsWith('proactive')
 
-export function ProactiveMark({ at }: { at: number }) {
+export function ProactiveMark({ at, rule }: { at: number; rule?: string }) {
   const { t, locale } = useI18n()
   return (
     <div className="t2-dm-from" data-proactive="">
       <BellDot size={12} aria-hidden="true" />
-      <span>{t('museDm.from', { time: formatMessageTime(at, { locale }) })}</span>
+      <span>{t(rule ? 'museDm.automationFrom' : 'museDm.from', { ...(rule ? { rule } : {}), time: formatMessageTime(at, { locale }) })}</span>
     </div>
   )
 }

@@ -335,6 +335,7 @@ const PLAN_MODE_TOOLS = new Set([
   'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
 
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
+  'set_automation_suggestions', // 同上:只是放在自动化首页的草稿建议,不建规则(可见性另由 ctx.muse 收口)
   'set_chat_starters', // 同上:只是向用户提议新对话的开场句,不碰用户资产(可见性另由 ctx.muse + muse.chatStarters 收口)
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
   'read_computer_history', // 只读电脑历史;可见性另由 computerHistoryGate 收口(开关 + 本机客户端 + 非通道/团队)
@@ -416,6 +417,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
     // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
     if (isSubAgentDenied(ctx, t.name)) return;
+    if (ctx.coreToolsOnly && (!isBuiltin || fromPlugin)) return;
     if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) return;
     // 远程污点 run 缺省不装 Computer Use(设备能力方案 §4.7 / §6.4-5):驱动它的人不在这台电脑前,而 CU 的观察类动作
     // (看屏幕、读任意窗口的文字)在 auto-edit 上限下不过审批。按 runId 现取 —— 起跑后被远端 steer 染上的 run,

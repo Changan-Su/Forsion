@@ -5,6 +5,8 @@
  * 10-24 方案 A:输入区是共用 Chat Box,「+」在模型胶囊左边;「+」/ 粘贴 / 拖入加图片和文件(磁贴),不支持的类型给提示;
  * 附件随这一问到引擎(图片带缩略图),发出后那一问上显示磁贴,追问不再带内容;拖进面板的文件不进主输入框;
  * 面板头列出挂在这条回答上存下来的几段(第一行「新的一段」),点一段载回接着问,点「新的一段」另起。
+ * 11-22 改版(方案 A + 传话):头一行(标题 + 段落胶囊 + ＋ + ✕),几段收进胶囊的下拉,顶上挂点卡;回答里的 ```relay 块
+ * 画成「转给主对话」卡:放进输入框(接在草稿后)/ 发给主对话(起 run、带「来自顺便问」小标)/ 发给别的会话(下拉)。
  * 落库与「从这里分出」那一行的重开另见 scripts/branch-anchors.e2e.cjs。
  * npm run build && npm run check:btw
  * 全程打隔离 loopback stub(引擎旁聊端点按剧本回 SSE),不碰真账号、不烧模型额度。真模型那半 = tangu-agent `live:harness -- --only btw`。
@@ -43,6 +45,7 @@ const SAVED = [
   { id: 'saved-2', message_id: 'a1', turns: [{ question: '截图里是什么?', answer: '一个红色方块。', attachments: [{ name: 'old.png', mimeType: 'image/png', size: 70, thumb: THUMB }] }, { question: '什么颜色?', answer: '红色。' }], created_at: '', updated_at: '' },
   { id: 'on-a0', message_id: 'a0', turns: [{ question: '别处的一段', answer: '不该出现在 a1 的列表里' }], created_at: '', updated_at: '' },
 ]
+const RELAY = '把词法阶段的运算符表按长度倒序排。'
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 150)) } }
 
 async function main() {
@@ -65,7 +68,7 @@ async function main() {
         asides.push({ sessionId: m[1], ...b })
         if (String(b.question).includes('慢')) await new Promise((r) => setTimeout(r, 2500)) // 让这一问在流里多待一会儿
         const atts = b.attachments || []
-        const answer = atts.length ? `收到 ${atts.length} 个附件:${atts.map((a) => a.name).join('、')}。` : b.thread?.length ? '倒过来是 **NOCLAF-ERUZA**。' : b.quote ? `这段在说代号:\`${b.quote.slice(0, 12)}\`。` : '项目代号是 **AZURE-FALCON**。'
+        const answer = String(b.question).includes('带话') ? '好,我拟了一句:\n\n```relay\n' + RELAY + '\n```' : atts.length ? `收到 ${atts.length} 个附件:${atts.map((a) => a.name).join('、')}。` : b.thread?.length ? '倒过来是 **NOCLAF-ERUZA**。' : b.quote ? `这段在说代号:\`${b.quote.slice(0, 12)}\`。` : '项目代号是 **AZURE-FALCON**。'
         // 同真引擎:没给挂点 → 挂到最近一条回答(a1),done 回记录 id 与挂点;带了附件就报 attached(新引擎才有)
         const attached = atts.length ? { attached: { images: atts.filter((a) => a.mimeType.startsWith('image/')).length, files: atts.filter((a) => !a.mimeType.startsWith('image/')).map((a) => a.name), transcribed: false } } : {}
         return sse([...answer.match(/.{1,6}/g).map((text) => ({ type: 'delta', text })), { type: 'done', content: answer, toolCallText: false, asideId: b.aside_id || `x-${m[1]}`, asideMessageId: b.message_id || 'a1', ...attached }])
@@ -107,7 +110,8 @@ async function main() {
     await btw.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).waitFor({ timeout: 15000 })
     check('回答来自引擎旁聊端点,问的是本会话', asides.length === 1 && asides[0].sessionId === 'sess-main' && asides[0].question === '代号是什么?' && asides[0].thread.length === 0)
     check('主对话里什么都没发(没有起 run,输入框已清空)', stub.seen.runs.length === 0 && (await input.inputValue()) === '')
-    check('面板头写「顺便问」,内容头部显示所属会话', (await win.locator('[data-aside-panel] .agent-desk-title').textContent()) === '顺便问' && (await btw.locator('.btw-context').textContent()).includes('Parser 重构'))
+    check('面板头一行写「顺便问」,没有旧的会话名 / 说明 / 列表三层', (await btw.locator('.btw-head .agent-desk-title').textContent()) === '顺便问' && (await btw.locator('.btw-head').count()) === 1 && (await btw.locator('.btw-bar, .btw-list').count()) === 0 && (await win.locator('[data-aside-panel] .agent-desk-head').count()) === 1)
+    check('顶上挂点卡写的是挂着的那条回答(a1)', (await btw.locator('[data-testid="btw-anchor"]').textContent()).includes('AZURE-FALCON 已记下'))
 
     // ── 输入区是共用 Chat Box:「+」在模型胶囊左边,模型胶囊缺省跟当前会话(m1) ──
     await win.waitForTimeout(800) // 面板还在滑出:两个盒子要在同一帧里量
@@ -304,20 +308,27 @@ async function main() {
     check('追问不再带附件内容:本问没有 attachments,上一轮只剩名字 / 类型 / 大小', !follow?.attachments && prevTurn?.attachments?.length === 4 && prevTurn.attachments.every((a) => !a.data && !a.thumb && a.name), JSON.stringify(prevTurn?.attachments))
     await btw.locator('.btw-turn[data-status="streaming"]').waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
 
-    // ── 面板头的列表:挂在这条回答(a1)上存下来的几段;第一行「新的一段」;别的回答上的不列 ──
+    // ── 头上的段落胶囊:挂在这条回答(a1)上存下来的几段收进它的下拉;别的回答上的不列 ──
+    const pill = btw.locator('[data-testid="btw-seg"]')
+    check('段落胶囊写「第 1 段 · 共 2」', (await pill.textContent()).includes('第 1 段 · 共 2'), await pill.textContent())
+    await pill.click()
     const list = btw.locator('[data-testid="btw-aside-list"]')
     await list.waitFor({ timeout: 10000 })
-    const rows = await list.locator('.btw-list-row').evaluateAll((els) => els.map((el) => ({ aside: el.dataset.aside || (el.hasAttribute('data-new') ? 'new' : '?'), current: el.getAttribute('aria-current') === 'true', text: el.textContent })))
-    check('列表只列 a1 上的两段,第一行是「新的一段」,当前这段标着', JSON.stringify(rows.map((r) => r.aside)) === JSON.stringify(['new', 'x-sess-main', 'saved-2']) && rows[1].current && !rows[0].current && rows[0].text.includes('新的一段') && (await list.locator('.btw-list-head').textContent()).includes('2'), JSON.stringify(rows))
-    await list.locator('.btw-list-row[data-aside="saved-2"]').click()
+    const rows = await list.locator('button[data-aside]').evaluateAll((els) => els.map((el) => ({ aside: el.dataset.aside, current: el.getAttribute('aria-current') === 'true' })))
+    check('下拉只列 a1 上的两段,当前这段标着,底部有「删掉这一段」', JSON.stringify(rows.map((r) => r.aside)) === JSON.stringify(['x-sess-main', 'saved-2']) && rows[0].current && !rows[1].current && (await list.locator('[data-testid="btw-seg-delete"]').count()) === 1, JSON.stringify(rows))
+    await list.locator('button[data-aside="saved-2"]').click()
     await until(async () => (await btw.locator('.btw-turn').count()) === 2, 5000)
-    check('点一段 → 载回那段(两轮,第一轮带着当时附的缩略图)', (await btw.locator('.btw-turn').count()) === 2 && (await btw.locator('.btw-turn').first().locator('.btw-turn-q').textContent()) === '截图里是什么?' && (await btw.locator('.btw-turn').first().locator('.att-tile--img img').count()) === 1)
+    // 下拉收起要放完退场(useExitGhost 留一个淡出的替身,不带 testid 以外的交互):等它摘掉再数
+    await until(async () => (await list.count()) === 0, 3000)
+    const loaded = { turns: await btw.locator('.btw-turn').count(), q: await btw.locator('.btw-turn').first().locator('.btw-turn-q').textContent(), img: await btw.locator('.btw-turn').first().locator('.att-tile--img img').count(), menu: await list.count(), pill: await pill.textContent() }
+    check('点一段 → 载回那段(两轮,第一轮带着当时附的缩略图),下拉收起、胶囊改成第 2 段', loaded.turns === 2 && loaded.q === '截图里是什么?' && loaded.img === 1 && loaded.menu === 0 && loaded.pill.includes('第 2 段'), JSON.stringify(loaded))
+    check('主对话「从这里分出」里正开着的那一行标成当前', await until(async () => (await win.locator('.t2-childs .t2-child-row[data-aside="saved-2"][aria-current="true"]').count()) === 1 && (await win.locator('.t2-childs .t2-child-row[aria-current="true"]').count()) === 1, 5000))
     await box.fill('接着问一句')
     await box.press('Enter')
     await until(async () => asides.length === sentBefore + 3, 10000)
     check('接着问带的是那段的记录 id 和挂点', asides[sentBefore + 2]?.aside_id === 'saved-2' && asides[sentBefore + 2]?.message_id === 'a1', JSON.stringify({ aside: asides[sentBefore + 2]?.aside_id, msg: asides[sentBefore + 2]?.message_id }))
     await btw.locator('.btw-turn[data-status="streaming"]').waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
-    await list.locator('.btw-list-row[data-new]').click()
+    await btw.locator('[data-testid="btw-new"]').click()
     await until(async () => (await btw.locator('.btw-turn').count()) === 0, 5000)
     await box.fill('新开一段')
     await box.press('Enter')
@@ -325,6 +336,34 @@ async function main() {
     check('「新的一段」→ 线程清空,下一问挂在同一条回答上、不带记录 id', (await btw.locator('.btw-turn').count()) === 1 && asides[sentBefore + 3]?.message_id === 'a1' && !asides[sentBefore + 3]?.aside_id && !asides[sentBefore + 3]?.thread?.length, JSON.stringify(asides[sentBefore + 3]))
     await btw.locator('.btw-turn[data-status="streaming"]').waitFor({ state: 'detached', timeout: 15000 }).catch(() => {})
     await win.screenshot({ path: path.join(shots, 'btw-list.png') })
+
+    // ── 传话:回答里的 relay 块画成卡,正文里不留围栏;放进输入框接在草稿后;发给主对话 = 起一个 run + 小标 ──
+    await box.fill('帮我带话给主对话')
+    await box.press('Enter')
+    const relay = btw.locator('[data-testid="btw-relay"]')
+    await relay.waitFor({ timeout: 15000 })
+    const relayTurn = btw.locator('.btw-turn').last()
+    check('relay 块画成「转给主对话」卡,正文里不留 ```relay', (await relay.textContent()).includes(RELAY) && !(await relayTurn.locator('.btw-turn-a').textContent()).includes('relay') && (await relayTurn.locator('.btw-turn-a').textContent()).includes('我拟了一句') && (await relay.textContent()).includes('转给主对话 · Parser 重构'))
+    await input.fill('我自己的半句')
+    await relay.locator('[data-testid="btw-relay-compose"]').click()
+    await until(async () => (await input.inputValue()).includes(RELAY), 5000)
+    check('放进输入框:接在已有草稿后面,不覆盖', (await input.inputValue()).startsWith('我自己的半句') && (await input.inputValue()).includes(RELAY), await input.inputValue())
+    await input.fill('')
+    await relay.locator('[data-testid="btw-relay-other"]').click()
+    const relayMenu = btw.locator('[data-testid="btw-relay-menu"]')
+    await relayMenu.waitFor({ timeout: 5000 })
+    check('发给别的会话:下拉里是别的会话,不含当前这条', (await relayMenu.textContent()).includes('另一条会话') && !(await relayMenu.textContent()).includes('Parser 重构'))
+    await win.keyboard.press('Escape')
+    check('Esc 只收下拉,面板还在', (await until(async () => (await relayMenu.count()) === 0, 3000)) === true && (await btw.count()) === 1)
+    const runsBefore = stub.seen.runs.length
+    await relay.locator('[data-testid="btw-relay-send"]').click()
+    await until(async () => stub.seen.runs.length === runsBefore + 1, 8000)
+    check('发给主对话:起了一个 run,正文就是那句稿,发在本会话', stub.seen.runs[runsBefore]?.message === RELAY && stub.seen.runs[runsBefore]?.sessionId === 'sess-main', JSON.stringify(stub.seen.runs[runsBefore] || null))
+    await until(async () => (await relay.textContent()).includes('已发给主对话'), 5000)
+    check('卡片变成「已发给主对话 · 跳过去看」', (await relay.textContent()).includes('已发给主对话') && (await relay.locator('[data-testid="btw-relay-send"]').count()) === 0)
+    const tag = win.locator('.t2-userwrap', { hasText: RELAY }).locator('[data-testid="btw-relay-tag"]')
+    check('主对话里那条消息带「来自顺便问」小标', (await until(async () => (await tag.count()) === 1, 8000)) === true)
+    await win.screenshot({ path: path.join(shots, 'btw-relay.png') })
 
     // ── 观感自查(DESIGN §8):英文界面 + 深色各截一张,人看 ──
     await win.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
@@ -339,7 +378,8 @@ async function main() {
     await box.fill('What is the codename?')
     await box.press('Enter')
     await btw.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).last().waitFor({ timeout: 15000 })
-    check('英文界面文案到位(不是 key、不是中文)', (await btw.locator('.btw-hint').textContent()).startsWith('Uses this conversation as context') && (await win.locator('[data-aside-panel] .agent-desk-title').textContent()) === 'By the way')
+    check('英文界面文案到位(不是 key、不是中文)', (await box.getAttribute('placeholder')) === 'Ask a side question (not added to the chat)…' && (await btw.locator('.btw-head .agent-desk-title').textContent()) === 'By the way' && (await btw.locator('[data-testid="btw-anchor"]').textContent()).includes('About this reply'))
+    await win.waitForTimeout(900) // 面板还在滑出:等它停稳再拍(这两张是给人看的)
     await win.screenshot({ path: path.join(shots, 'btw-en.png') })
     // 深色走真主题管线:写模式偏好(loader 的 forsion_theme)后重载;只改 <html data-mode> 不会重算 token(实测截出来仍是浅色)
     await win.evaluate(() => localStorage.setItem('forsion_theme', 'dark'))
@@ -353,6 +393,7 @@ async function main() {
     const bg = await win.evaluate(() => getComputedStyle(document.querySelector('[data-aside-panel] .agent-desk-inner') || document.body).backgroundColor)
     const lum = (bg.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3
     check('深色模式下面板底色是暗的(token 生效,不是写死的浅色)', lum < 90, bg)
+    await win.waitForTimeout(900) // 面板还在滑出:等它停稳再拍(这两张是给人看的)
     await win.screenshot({ path: path.join(shots, 'btw-en-dark.png') })
     console.log(`${checks} checks passed. Screenshots: ${shots}`)
   } catch (error) {

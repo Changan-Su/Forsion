@@ -130,6 +130,16 @@ describe('stableSessionUuid(缓存/路由粘性:同会话稳定,不再每请求�
 describe('streamOpenAiResponses SSE parse', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([false, true])('recognizes premature EOF when the terminal event is absent (completed=%s)', async (complete) => {
+    const text = 'data: {"type":"response.output_text.delta","delta":"Your train departs at"}\n\n' +
+      (complete ? 'data: {"type":"response.completed","response":{}}\n\n' : '');
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(text)));
+    const result = await streamOpenAiResponses({
+      apiKey: 'k', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] },
+    });
+    expect(result.streamEndedEarly).toBe(complete ? undefined : true);
+  });
+
   /** 只喂一条 response.completed,取回归一化后的 usage。 */
   const usageOf = async (u: any): Promise<any> => {
     const sse = `data: ${JSON.stringify({ type: 'response.completed', response: { usage: u } })}\n`;

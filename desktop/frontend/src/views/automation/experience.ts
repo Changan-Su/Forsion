@@ -1,8 +1,20 @@
+import { AUTOMATION_MESSAGE_LIMIT } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import type { AutomationActionCatalogItem } from '../../types'
 import { blankStep, type StepDraft } from './lib'
 
 export type Starter = 'reminder' | 'briefing' | 'table' | 'button'
 export const STARTERS: Starter[] = ['reminder', 'briefing', 'table', 'button']
+
+/** 首页一共几格(11-22 方案 A):Muse 建议排前面,不够的用模板补;建议多了收进「还有 N 条」。 */
+export const HOME_SLOTS = 4
+export function homeSlots<S>(suggestions: S[], expanded = false): { shown: S[]; extra: number; starters: Starter[] } {
+  const shown = expanded ? suggestions : suggestions.slice(0, HOME_SLOTS)
+  return {
+    shown,
+    extra: suggestions.length - shown.length,
+    starters: STARTERS.slice(0, Math.max(0, HOME_SLOTS - suggestions.length)),
+  }
+}
 
 /** Templates are editable drafts. Opening one never creates or enables a rule. */
 export function starterSteps(starter: Starter | undefined, t: (key: string) => string): StepDraft[] {
@@ -17,6 +29,12 @@ export function starterSteps(starter: Starter | undefined, t: (key: string) => s
 export function stepIssue(s: StepDraft, kind: string, catalog: AutomationActionCatalogItem[]): string | null {
   if (s.type === 'notify' || s.type === 'remind') return s.title.trim() ? null : 'notify'
   if (s.type === 'agent_run') return !s.agentSlug ? 'agent' : !s.prompt.trim() ? 'prompt' : null
+  if (s.type === 'send_message') {
+    if (!s.agentSlug) return 'sender'
+    if (s.source === 'agent') return s.prompt.trim() ? null : 'prompt'
+    const length = s.body.trim().length
+    return !length ? 'message' : length > AUTOMATION_MESSAGE_LIMIT[s.delivery] ? 'messageLength' : null
+  }
   if (s.type === 'db_row_add' || s.type === 'db_row_edit') {
     if (!/\.db$/i.test(s.dbPath.trim())) return 'table'
     if (!s.cells.some((c) => c.k.trim())) return 'cells'

@@ -6,7 +6,7 @@
  * upsert 缺席 actions 保留旧值(旧客户端整量启停不抹链)。
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -19,6 +19,7 @@ import { query } from '../src/core/db.js';
 import { registerToolProvider } from '../src/tools/toolRegistry.js';
 import { runActions, listExecutions, isAutomationTool, launchAutomationTriggers } from '../src/services/automation.js';
 import { validateTriggerInput, upsertTrigger, loadTriggers, type MuseTrigger } from '../src/services/museTriggers.js';
+import { withAgentSoloSession } from '../src/routes/solo.js';
 import { setCursors, loadCursors } from '../src/services/dbCursors.js';
 
 const { forwardInboxToChannels } = vi.hoisted(() => ({ forwardInboxToChannels: vi.fn() }));
@@ -100,6 +101,43 @@ describe('runActions', () => {
     const dm = await query<any[]>(`SELECT content, origin FROM chat_messages WHERE origin = 'proactive:remind'`);
     expect(dm).toEqual([{ content: '该学习了\n先背 20 个单词', origin: 'proactive:remind' }]);
     expect(forwardInboxToChannels).not.toHaveBeenCalled();
+  });
+
+  it('delivers fixed text into the selected Agent’s existing Solo or Inbox, with its identity', async () => {
+    const slug = 'automation-writer';
+    const dir = join(process.env.TANGU_HOME!, 'agents', slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'config.toml'), 'name = "Writer"\n');
+    const soloId = await withAgentSoloSession(USER, slug, async (s) => s.id);
+    expect(soloId).toBeTruthy();
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('prior', ?, 'user', 'Earlier conversation', ?)`, [soloId, Date.now()]);
+    forwardInboxToChannels.mockClear();
+    const t = trig({ desc: 'First delivery', actions: [
+      { type: 'send_message', agentSlug: slug, delivery: 'solo', source: 'fixed', body: 'Ready to review?' },
+      { type: 'send_message', agentSlug: slug, delivery: 'inbox', source: 'fixed', body: 'Inbox delivery' },
+    ] });
+    const run = await runActions(t, 'auto');
+    expect(run.steps.map((s) => [s.type, s.ok])).toEqual([['send_message', true], ['send_message', true]]);
+    const messages = await query<any[]>(`SELECT id, content, agent_slug, origin, timestamp FROM chat_messages WHERE session_id = ? ORDER BY timestamp`, [soloId]);
+    expect(messages.map((m) => m.content)).toEqual(['Earlier conversation', 'Automation: First delivery\n\nReady to review?']);
+    expect(messages[1]).toMatchObject({ agent_slug: slug, origin: 'proactive:automation' });
+    expect((await query<any[]>(`SELECT proactive_at, awaiting_user FROM chat_sessions WHERE id = ?`, [soloId]))[0])
+      .toMatchObject({ proactive_at: messages[1].timestamp, awaiting_user: 1 });
+    expect(await withAgentSoloSession(USER, slug, async (s) => s.id)).toBe(soloId);
+    expect(await query<any[]>(`SELECT title, body FROM inbox_messages WHERE sender_id = ?`, [slug]))
+      .toEqual([{ title: 'First delivery', body: 'Inbox delivery' }]);
+    expect(forwardInboxToChannels).not.toHaveBeenCalled();
+    expect((await listExecutions(t.id))[0].status).toBe('done');
+  });
+
+  it('rejects a failed send before subsequent steps can run', async () => {
+    const t = trig({ actions: [
+      { type: 'send_message', agentSlug: 'missing-sender', delivery: 'solo', source: 'fixed', body: 'Do not deliver' },
+      { type: 'notify', title: 'Should not be sent' },
+    ] });
+    const result = await runActions(t, 'auto');
+    expect(result.status).toBe('failed');
+    expect(result.steps).toEqual([{ type: 'send_message', ok: false, summary: 'Unknown sending Agent "missing-sender".' }]);
   });
 
   it('remind:Muse 运行时段外跳过,不补发;试跑不受限', async () => {

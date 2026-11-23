@@ -76,3 +76,25 @@ it('`![[裸文件名]]` / 页相对的嵌入(不经 toDisplayMarkdown)照旧带 
   expect(new URL(toAssetUrl('pic.png')).searchParams.get('page')).toBe('notes/note.md')
   expect(await served(toAssetUrl('./pic.png'))).toBe('SAME-FOLDER') // 带路径的页相对嵌入靠 page 才解析得到
 })
+
+it('an older Unit cannot silently downgrade an existing-file batch write', async () => {
+  let supported = false
+  const calls: string[] = []
+  vi.stubGlobal('fetch', async (input: URL | string, init?: RequestInit) => {
+    if (!String(input).includes('vault/rpc')) return Response.json({ token: 'at', ttlSec: 600 })
+    const { ch } = JSON.parse(String(init?.body))
+    calls.push(ch)
+    return Response.json({ ok: true, result: ch === IPC.restoreVault
+      ? { root, pages: [], folders: [], ...(supported ? { strictExistingWrites: true } : {}) } : { ok: true } })
+  })
+  const bridge = await createUnitAmadeusBridge({ base: 'https://unit.test/', getToken: () => 'token', onAuthError() {} })
+  await bridge.restoreVault()
+  const opts = { strictExisting: true, base: 'base', expectedRoot: root }
+  expect(bridge.hostCaps?.batchReplace).toBe(false)
+  await expect(bridge.writeTextFile('note.md', 'change', opts)).rejects.toThrow()
+  expect(calls).not.toContain(IPC.writeTextFile)
+  supported = true
+  await bridge.restoreVault()
+  expect(bridge.hostCaps?.batchReplace).toBe(true)
+  expect(await bridge.writeTextFile('note.md', 'change', opts)).toEqual({ ok: true })
+})

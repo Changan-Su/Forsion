@@ -445,5 +445,5 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
     )
     .filter(Boolean) as any[];
 
-  return { content, reasoning, toolCalls, usage, finishReason, ...(outputItems.length ? { outputItems } : {}) };
+  return { content, reasoning, toolCalls, usage, finishReason, ...(!finishReason ? { streamEndedEarly: true } : {}), ...(outputItems.length ? { outputItems } : {}) };
 }
