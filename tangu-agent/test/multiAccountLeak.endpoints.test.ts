@@ -128,7 +128,9 @@ describe('multi-account: model catalogue', () => {
     const b = await E.client.call('bob', 'GET', '/agent/models');
     expect(a.status).toBe(200);
     expect(a.text).toBe(b.text);
+    expect(a.json?.directProviders?.length).toBeGreaterThan(0);
     for (const p of a.json?.directProviders ?? []) expect(p).not.toHaveProperty('baseUrl');
+    expect(a.text).not.toContain('RELAY-SECRET-IN-URL');
     expect(a.json?.modelOverridesWritable).toBe(false);
     expect((await E.client.call('alice', 'PUT', '/agent/models/overrides', { body: { modelId: 'x', contextWindow: 100000 } })).status).toBe(403);
   });
