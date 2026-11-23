@@ -1,7 +1,8 @@
 /**
  * 「对话开在侧栏」这条链的端到端契约(真 Electron)。2026-08-14 两批用户要求合并钉在这里:
  *
- *  0-2  新对话空状态落在 **view 的竖向中心**(此前只在「输入框以上那段」居中 → 整体偏高)
+ *  0-2  新对话空状态落在 **view 的竖向中心**(此前只在「输入框以上那段」居中 → 整体偏高);10-25 起量的是
+ *       「空状态 + 输入区」整块(freshLayout.ts),不再是品牌块自己
  *  3,11 细长列(宽:高 < 9:16)不画头像,宽列照常 —— 量的是 container-type: size 有没有生效
  *  4-5  Amadeus 右栏默认 = 对话视图(展开右栏,活动 tab 必须是对话,且主区仍是编辑器)
  *  6-7  侧栏对话默认引用**主区当前打开的文件**(开 Alpha 再换 Beta:引用必须跟过去,不许残留)
@@ -99,22 +100,41 @@ async function main() {
 
   // ── 4 空状态居中(默认 Tangu Space,主区就是新对话)────────────────────────────
   const RECTS = `const r = (s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, w: b.width, h: b.height } }`
+  // View 所在的 Dockview 组。11-09 #583(90c9a1c57)起 WorkspaceHost 用 defaultRenderer="always":View 内容画在
+  // .dv-render-overlay(带 data-lcl-loc)里、按组的位置盖上去,不再是 .dv-groupview 的后代 —— 之前写的
+  // closest('.dv-groupview') 从那天起恒为 null,31 / 31b 量不到东西、12 / 13 量到的宽度恒为 0。
+  // 组按几何找:覆盖层中点落在哪个组里。侧栏那一串(react-part / 内容容器 / 覆盖层)全是透明的(11-23 探针),
+  // 看得见的侧栏底就是这个组的底色,所以 31 / 31b 的「侧栏底」照旧读组。
+  const GROUP_OF = `const groupOf = (el) => {
+    const own = el.closest('.dv-groupview')
+    if (own) return own
+    const ov = el.closest('.dv-render-overlay')
+    if (!ov) return null
+    const b = ov.getBoundingClientRect(), x = b.left + b.width / 2, y = b.top + b.height / 2
+    return [...document.querySelectorAll('.dv-groupview')].find((g) => { const q = g.getBoundingClientRect(); return q.width > 0 && x >= q.left && x <= q.right && y >= q.top && y <= q.bottom }) || null
+  }`
   const empty = await win.evaluate(`(() => {
-    ${RECTS}
-    const col = r('.t2-chat-col'), mark = r('.t2-empty-mark'), sub = r('.t2-empty-sub'), stream = r('.t2-stream')
+    const colEl = document.querySelector('.t2-chat-col')
+    const r = (s) => { const e = colEl && colEl.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, h: b.height } }
+    const col = colEl && colEl.getBoundingClientRect(), mark = r('.t2-empty-mark'), sub = r('.t2-empty-sub'), anchor = r(':scope > .composer-anchor')
     const inCol = !!document.querySelector('.t2-chat-col > .t2-empty')
-    if (!col || !mark || !sub || !stream) return { col, mark, sub, stream, inCol }
-    return { inCol, colMid: (col.top + col.bottom) / 2, streamMid: (stream.top + stream.bottom) / 2, contentMid: (mark.top + sub.bottom) / 2 }
+    if (!col || !mark || !sub || !anchor) return { col: !!col, mark, sub, anchor, inCol }
+    return {
+      inCol, colMid: (col.top + col.bottom) / 2, contentMid: (mark.top + sub.bottom) / 2,
+      topGap: Math.round(mark.top - col.top), bottomGap: Math.round(col.bottom - anchor.bottom),
+      lift: (colEl.querySelector(':scope > .composer-anchor').style.translate || ''),
+    }
   })()`)
   check('0 前置:主区是新对话空状态(品牌图+标语都在)', !!empty && typeof empty.contentMid === 'number', JSON.stringify(empty))
   if (typeof empty.contentMid === 'number') {
-    const dCol = Math.abs(empty.contentMid - empty.colMid)
-    const dStream = Math.abs(empty.contentMid - empty.streamMid)
     check('1 空状态是聊天列的直属子元素(不在滚动流里)', empty.inCol)
-    // 8px 容差:品牌图与标题之间的 gap 让内容块不完全对称,不是几何误差。
-    // 08-14 输入卡改成悬浮后,流已经等于整列 → 两个中心恒等,dStream 不再有鉴别力。
-    // 这条现在只剩「内容块确实落在列中心」这一层意思;结构那半由 1 单独钉(空状态不在流里)。
-    check('2 空状态落在 view 的竖向中心', dCol <= 8, `距列中心 ${dCol.toFixed(1)}px(流中心 ${dStream.toFixed(1)}px:悬浮后二者恒等)`)
+    // 10-25 起(64078d643,Muse 开场建议 / freshLayout.ts,用户选的方案)对话列空着时「空状态 + 输入区」整块垂直居中,
+    // 品牌块本身就该落在列中心之上 —— 旧断言「品牌块中点 = 列中心」从那天起不成立(11-23 在 main 上实测偏 85.9px)。
+    // 现在量整块:列顶 → 品牌图上缘 与 输入区下缘(含抬升) → 列底 两段留白相等(同 check:musestarters ②,4px 容差)。
+    // 08-14 那次要防的「只在输入框以上那段居中 → 整体偏高」照样会让两段不等。
+    const dGap = Math.abs(empty.topGap - empty.bottomGap)
+    check('2 空状态 + 输入区整块落在 view 的竖向中心', dGap <= 4,
+      `上留白 ${empty.topGap}px / 下留白 ${empty.bottomGap}px(差 ${dGap}px);输入区抬升 ${empty.lift || '无'};品牌块距列中心 ${Math.abs(empty.contentMid - empty.colMid).toFixed(1)}px(整块居中时本就在上方)`)
   }
 
   /** 往每个 .t2-chat-col 插一颗探针头像,读 computed display + 该列的宽高比。
@@ -427,9 +447,10 @@ async function main() {
     side.chat && side.am ? `chat.left=${Math.round(side.chat.left)} vs am.left=${Math.round(side.am.left)} w=${Math.round(side.am.w)}` : '缺 .am-app 或 .t2-chat-view',
   )
   const sideCardTone = await win.evaluate(`((mainColors) => {
+    ${GROUP_OF}
     const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
     const card = view && view.querySelector('.t2c-card')
-    const group = view && view.closest('.dv-groupview')
+    const group = view && groupOf(view)
     if (!card || !group) return null
     const rgb = (color) => {
       const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
@@ -480,10 +501,11 @@ async function main() {
     await win.evaluate((id) => { document.documentElement.dataset.bg = id }, bg)
     await win.waitForTimeout(300)
     darkSideTones.push(await win.evaluate(`((bg) => {
+      ${GROUP_OF}
       const root = getComputedStyle(document.documentElement)
       const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
       const card = view && view.querySelector('.t2c-card')
-      const group = view && view.closest('.dv-groupview')
+      const group = view && groupOf(view)
       if (!card || !group) return { bg, missing: true }
       const rgb = (color) => {
         const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
@@ -643,12 +665,15 @@ async function main() {
   )
 
   // ── 侧栏宽度:拖过之后折叠再展开必须还是那个宽 ──────────────────────────────────
-  const groupRect = `(() => { const g = document.querySelector('.t2-chat-view'); const grp = g && g.closest('.dv-groupview'); return grp ? Math.round(grp.getBoundingClientRect().width) : 0 })()`
+  // 组按 GROUP_OF 找(11-09 起 View 在覆盖层里,closest 找不到组 → 宽度恒 0,12 红、13 拿 0 比 0 空过)。
+  const SIDE_VIEW = `[...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)`
+  const groupRect = `(() => { ${GROUP_OF}; const g = ${SIDE_VIEW}; const grp = g && groupOf(g); return grp ? Math.round(grp.getBoundingClientRect().width) : 0 })()`
   const before = await win.evaluate(groupRect)
   // 拖右栏与主区之间的 sash 往左 120px = 把右栏拉宽
   const sash = await win.evaluate(`(() => {
-    const g = document.querySelector('.t2-chat-view')
-    const grp = g && g.closest('.dv-groupview')
+    ${GROUP_OF}
+    const g = ${SIDE_VIEW}
+    const grp = g && groupOf(g)
     if (!grp) return null
     const x = grp.getBoundingClientRect().left
     let best = null
@@ -672,7 +697,7 @@ async function main() {
   await win.click('.dv-edge-right'); await win.waitForTimeout(1200) // 折叠
   await win.click('.dv-edge-right'); await win.waitForTimeout(1600) // 再展开
   const restored = await win.evaluate(groupRect)
-  check('13 折叠再展开后宽度仍是拖出来的那个', Math.abs(restored - dragged) <= 6, `拖后 ${dragged}px → 折返 ${restored}px(旧行为会打回黄金分割 ≈${before}px)`)
+  check('13 折叠再展开后宽度仍是拖出来的那个', dragged > 0 && Math.abs(restored - dragged) <= 6, `拖后 ${dragged}px → 折返 ${restored}px(旧行为会打回黄金分割 ≈${before}px)`)
 
   // ── 23-24 卡片不描边 / glass 输入卡真的是磨砂 ─────────────────────────────────
   // 颜色可能被 Chrome 报成 `color(srgb r g b / a)`(color-mix 的结果),不只有 rgba() 那一种写法。
@@ -705,6 +730,17 @@ async function main() {
     }
   }
   for (const sh of document.styleSheets) { try { walk(sh.cssRules) } catch { /* 跨源样式表读不了 */ } }
+  // 材质画在 ::before 上的浮层(上面跳过带伪类的选择器,它们会悄悄掉出探针表),逐个点名:
+  // 版块工具条 11-23 把材质挪到 ::before(它的弹层是后代,条自己读 --surface-blur 会成为弹层的 backdrop root)。
+  // 标注预览 .sp-callout 同一天不再读 token —— 它是预览卡里的一抹色,不是浮层,掉出探针表是对的。
+  for (const [chain, tierName] of [[['unified-body', 'amx-sec-tb'], 'menu']]) {
+    let host = document.body
+    const made = []
+    for (const cls of chain) { const el = document.createElement('div'); el.className = cls; host.appendChild(el); made.push(el); host = el }
+    const cs = getComputedStyle(host, '::before')
+    auto['.' + chain.join(' .') + '::before'] = { b: (cs.backdropFilter || cs.webkitBackdropFilter) !== 'none', a: cs.content === 'none' ? 0 : alphaOf(cs.backgroundColor), tier: tierName }
+    made[0].remove()
+  }
   return auto
 }`
   const ALPHA = `const alphaOf = (c) => { const m = /\\/\\s*([0-9.]+)\\s*\\)/.exec(c) || /rgba\\(\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*[\\d.]+\\s*,\\s*([0-9.]+)\\s*\\)/.exec(c); return m ? parseFloat(m[1]) : 1 }`
