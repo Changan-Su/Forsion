@@ -2,7 +2,7 @@
 .dash-compact-kpi { min-height: 40px; display: flex; align-items: baseline; gap: 6px; flex: 0 0 auto; }
 .dash-compact-kpi strong { font-size: var(--ui-font-display, 20px); line-height: 1; font-weight: 640; font-variant-numeric: tabular-nums; }
 .dash-compact-kpi span { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
-.dash-compact-kpi button { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.dash-compact-kpi button { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .dash-compact-kpi button:hover { background: var(--overlay-light); color: var(--text); }
 .dash-compact-rows { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
 .dash-compact-row { min-height: 30px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 0; border: 0; border-bottom: var(--border-width, 1px) solid color-mix(in srgb, var(--border) 44%, transparent); background: transparent; color: var(--text); font: inherit; text-align: left; }

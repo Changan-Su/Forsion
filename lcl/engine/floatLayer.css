@@ -75,7 +75,7 @@
 .lcl-float-view-btn {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 26px; height: 26px; padding: 0;
-  border: 0; border-radius: var(--radius-sm, 6px);
+  border: 0; border-radius: var(--radius-sm, 8px);
   background: transparent; color: var(--text-muted);
   cursor: pointer;
 }

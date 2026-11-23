@@ -55,11 +55,10 @@
       "--signal-line": "Drop indicator / insertion line"
     },
     "radius": {
-      "--radius-xs": "Chips, small marks",
-      "--radius-sm": "Buttons, inputs, menu items",
+      "--radius-xs": "Small pieces whose short side is 18px or less: badges, counts, kbd, inline code, swatches",
+      "--radius-sm": "Controls: buttons, inputs, selects, menu items, chips",
       "--radius-md": "Cards, menus",
       "--radius-lg": "Panels, dialogs",
-      "--radius-xl": "Large sheets",
       "--radius-pill": "Fully rounded"
     },
     "shadow": {
@@ -131,7 +130,6 @@
     "--sel-fill": "2.7.0",
     "--signal-line": "2.13.5",
     "--radius-xs": "2.0.3",
-    "--radius-xl": "2.0.3",
     "--radius-pill": "2.0.3",
     "--shadow-sm": "2.0.3",
     "--shadow-panel": "2.0.3",
@@ -177,7 +175,8 @@
     "--ease-spring": "--ease-surface",
     "--ease-apple": "--ease-calm",
     "--dur-fast": "--duration-fast",
-    "--dur-normal": "--duration-fast / --duration-slow"
+    "--dur-normal": "--duration-fast / --duration-slow",
+    "--radius-xl": "--radius-lg"
   },
   "privateClassPrefixes": [
     "amx-",

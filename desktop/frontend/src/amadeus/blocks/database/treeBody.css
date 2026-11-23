@@ -20,7 +20,7 @@
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: none;
   /* 比分组头的 caret 重一档:它是**每行**的控件,--text-faint 的小三角在真机截图里读作句点 */
   color: var(--text-muted);

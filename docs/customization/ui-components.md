@@ -575,7 +575,8 @@ list.addEventListener('drop', async (e) => {
 插件可以依赖的宿主类名和 CSS 变量发布在 forsion-plugin 技能的 `tools/plugin-contract.json`（每个带用途，随 `apiVersion` 升级）；清单外的宿主类名和变量随时可能改名或删掉。
 
 - 公开类名：`.btn`（`.primary` / `.ghost` / `.danger` / `.sm`）、`.ctx-menu` 外壳（直接子 `<button>` 是菜单项，另有 `button.danger`、`.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`）、`.empty-state` / `.empty-title`。不要借用 `.amx-*`、`.fc-*`、`.t2-*` 这些宿主私有类名。
-- 公开 token：色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`，以及 `--focus-ring`。只列名字不列值，值跟着设计语言、主题色和背景色变。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
+- 公开 token：色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`，以及 `--focus-ring`。只列名字不列值，值跟着设计语言、主题色和背景色变。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*`、`--radius-xl` 已弃用。
+- 圆角按尺寸选档：短边 ≤ 18px 的小件（徽标、计数、kbd、行内代码、色块）用 `--radius-xs`；按钮、输入框、下拉、菜单项、芯片用 `--radius-sm`；菜单、浮层和普通卡片用 `--radius-md`；面板和对话框用 `--radius-lg`；胶囊用 `--radius-pill`，圆形写 `50%`。和外框成对的内圆角写成 `calc(var(--radius-md) - 4px)` 这样的算式，不另写数字。`--radius-xl` 换成 `--radius-lg`。
 - 不写兜底：写 `var(--radius-md)`，不写 `var(--radius-md, 10px)`。只有 token 比插件的 `minAppVersion` 新（契约里的 `since` 表）时才给老宿主留兜底；`--reading-line-height` / `--reading-paragraph-gap` 本来就带兜底。
 - 不写死颜色、阴影和圆角：浅底用 `color-mix()`。画面本身要固定的颜色（视频黑边、压在画面上的白字）写关键字 `black` / `white`。
 

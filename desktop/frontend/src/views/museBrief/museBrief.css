@@ -63,7 +63,7 @@
 /* 待你看的 */
 .msb-tds { display: flex; flex-direction: column; gap: 7px; }
 .msb-td { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.msb-box { flex: none; display: grid; place-items: center; width: 14px; height: 14px; margin-top: 2px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: transparent; cursor: pointer; }
+.msb-box { flex: none; display: grid; place-items: center; width: 14px; height: 14px; margin-top: 2px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-xs); background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: transparent; cursor: pointer; }
 .msb-box:hover { color: var(--text-muted); }
 .msb-box:disabled { cursor: default; opacity: .5; }
 .msb-tdt { display: flex; flex-direction: column; min-width: 0; flex: 1; }

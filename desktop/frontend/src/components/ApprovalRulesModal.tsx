@@ -100,7 +100,7 @@ export const ApprovalRulesModal: React.FC<{ cfg: TanguDesktopConfig; onClose: ()
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 12px)', padding: 18, width: 'min(620px, 92vw)', maxHeight: '86vh', overflow: 'auto', boxShadow: 'var(--card-shadow)' }}
+        style={{ background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 18, width: 'min(620px, 92vw)', maxHeight: '86vh', overflow: 'auto', boxShadow: 'var(--card-shadow)' }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
           <b>{t('approvalRules.title')}</b>

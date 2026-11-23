@@ -37,7 +37,7 @@
   height: 24px;
   padding: 0;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg-card, var(--bg));
   color: var(--text-muted);
   cursor: pointer;

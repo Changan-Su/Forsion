@@ -12,7 +12,7 @@
   /* 不描边(2026-08-14 用户要求,同 chat2.css 那批卡)。留着 1px transparent 而不是 border:none:
      盒模型不变 → 拖文件进来时 .dragover 换个 border-color 就能亮边,布局不位移。 */
   border: var(--border-width, 1px) solid transparent;
-  border-radius: var(--radius-chat-surface, 20px);
+  border-radius: var(--radius-chat-surface, 16px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
   padding: 12px 14px;
   transition: border-color var(--duration-fast, 0.15s);

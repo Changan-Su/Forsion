@@ -126,7 +126,7 @@
   height: 16px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   background: var(--border-strong, var(--border));
   cursor: pointer;
   transition: background var(--duration-fast, 120ms) var(--ease-surface, ease);

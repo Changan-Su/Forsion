@@ -56,7 +56,7 @@ export interface ShareViewerProps {
 const CSS = `
 .shv { height: calc(100vh / var(--uiz, 1)); display: flex; background: var(--bg); color: var(--text); font: 15px/1.75 -apple-system, "PingFang SC", "Segoe UI", Roboto, sans-serif; }
 .shv-side { width: 240px; flex-shrink: 0; border-right: 1px solid var(--border, rgba(127,127,127,.18)); padding: 20px 10px; overflow-y: auto; height: calc(100vh / var(--uiz, 1)); background: var(--sidebar-bg, transparent); }
-.shv-side button { display: block; width: 100%; text-align: left; padding: 5px 10px; border: 0; background: none; border-radius: 8px; font: 13px/1.5 inherit; color: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shv-side button { display: block; width: 100%; text-align: left; padding: 5px 10px; border: 0; background: none; border-radius: var(--radius-sm); font: 13px/1.5 inherit; color: inherit; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shv-side button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }
 .shv-side button.on { background: var(--accent-soft, rgba(76,110,245,.12)); color: var(--accent, #4c6ef5); }
 .shv-side .cr { display: inline-block; width: 14px; margin-right: 2px; font-size: 9px; opacity: .5; vertical-align: 1px; }
@@ -67,21 +67,21 @@ const CSS = `
 .shv-toolbar { justify-content: flex-start; }
 .shv-crumb { font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .shv-spacer { flex: 1; }
-.shv-ro { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--overlay-light, rgba(127,127,127,.12)); color: var(--text-muted); }
+.shv-ro { font-size: 11.5px; padding: 1px 8px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127,127,127,.12)); color: var(--text-muted); }
 .shv-doc { max-width: 920px; margin: 0 auto; padding: 8px 48px 0; }
-.shv-doc pre { background: rgba(127,127,127,.09); padding: 12px 14px; border-radius: 10px; overflow-x: auto; font-size: 13px; }
+.shv-doc pre { background: rgba(127,127,127,.09); padding: 12px 14px; border-radius: var(--radius-md); overflow-x: auto; font-size: 13px; }
 .shv-doc code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
-.shv-doc img { max-width: 100%; border-radius: 8px; }
+.shv-doc img { max-width: 100%; border-radius: var(--radius-sm); }
 .shv-doc blockquote { margin: 0; padding: 2px 16px; border-left: 3px solid rgba(127,127,127,.35); opacity: .9; }
 .shv-doc table { border-collapse: collapse; display: block; overflow-x: auto; }
 .shv-doc th, .shv-doc td { border: 1px solid rgba(127,127,127,.25); padding: 5px 10px; font-size: 14px; }
-.shv-db { margin: 14px 0; border: 1px solid rgba(127,127,127,.2); border-radius: 10px; overflow: hidden; }
+.shv-db { margin: 14px 0; border: 1px solid rgba(127,127,127,.2); border-radius: var(--radius-md); overflow: hidden; }
 .shv-db-head { padding: 8px 12px; font-size: 13px; font-weight: 600; background: rgba(127,127,127,.06); border-bottom: 1px solid rgba(127,127,127,.15); }
 .shv-db-scroll { overflow-x: auto; }
 .shv-db-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 .shv-db-table th, .shv-db-table td { border: 1px solid rgba(127,127,127,.18); padding: 5px 10px; text-align: left; vertical-align: top; }
 .shv-db-table th { font-weight: 600; background: rgba(127,127,127,.05); white-space: nowrap; }
-.shv-db-chip { display: inline-block; padding: 0 8px; margin: 1px 3px 1px 0; border-radius: 999px; background: rgba(76,110,245,.16); color: #4c6ef5; font-size: 12px; }
+.shv-db-chip { display: inline-block; padding: 0 8px; margin: 1px 3px 1px 0; border-radius: var(--radius-pill, 999px); background: rgba(76,110,245,.16); color: #4c6ef5; font-size: 12px; }
 .shv-db-check { font-size: 14px; }
 .shv-db-foot { padding: 6px 12px; font-size: 12px; opacity: .6; }
 .shv-db-err { padding: 10px 12px; font-size: 12.5px; opacity: .7; }

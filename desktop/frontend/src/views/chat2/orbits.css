@@ -61,7 +61,7 @@
   height: 24px;
   flex-shrink: 0;
   border: none;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -80,7 +80,7 @@
   padding-block: 5px;
   padding-inline: 14px 6px;
   border: none;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
@@ -181,7 +181,7 @@
   width: 24px;
   height: 24px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   color: var(--text-faint, var(--text-muted));
   cursor: pointer;
   opacity: 1;
@@ -236,7 +236,7 @@
 .t2o .t2s-group .t2s-folder-row .t2s-lead {
   width: 30px;
   height: 30px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
 }
 /* Project 导入的图片图标铺满 30px 方块(与私聊头像同档),emoji 照旧 1em 居中。 */
