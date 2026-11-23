@@ -4,7 +4,7 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, Copy, Eraser, ExternalLink, Loader2, Maximize2, Minimize2, NotebookPen, Pin, Puzzle, Rows2, Sparkles, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, Copy, Eraser, Loader2, Maximize2, Minimize2, NotebookPen, Pin, Rows2, Sparkles, X } from 'lucide-react'
 import { getView, subscribeViews, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
@@ -18,7 +18,7 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
-import { iconForFile } from '../../services/fileKinds'
+import { DeskItemIcon, deskDragTip, deskOpenItems, isOwnDeskDrag, startDeskItemDrag, canDragDeskItem, useDeskItemDrop } from './deskOpen'
 import { openDb, openFile, openNote, opensAsTab } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
@@ -43,6 +43,7 @@ registerMessages({
   'desk.moveUp': { zh: '移到上面', en: 'Move up' },
   'desk.moveDown': { zh: '移到下面', en: 'Move down' },
   'desk.remove': { zh: '从 Desk 拿掉', en: 'Remove from Desk' },
+  // 旧叫法:Agent Desk 已换成 deskOpen.tsx 的四项(11-23);Human Desk 分支还在用,它换过去之后删
   'desk.openMain': { zh: '在主区打开', en: 'Open in main area' },
   'desk.pinned': { zh: '钉住', en: 'Pinned' },
   'desk.unpin': { zh: '取消钉住', en: 'Unpin' },
@@ -298,6 +299,7 @@ function useDeskDrop(ref: React.RefObject<HTMLDivElement | null>, sessionId: str
     if (!el || !enabled) return
     const view = el.ownerDocument.defaultView
     const accepts = (e: DragEvent): boolean => {
+      if (isOwnDeskDrag(e, sessionId)) return false // Desk 自己那一样拖过来 = 对调,归 useDeskItemDrop(deskOpen.tsx)
       const ts = Array.from(e.dataTransfer?.types ?? [])
       return ts.includes('Files') || ts.includes(REF_MIME) || ts.includes(PATHS_MIME)
     }
@@ -355,7 +357,7 @@ function useDeskDrop(ref: React.RefObject<HTMLDivElement | null>, sessionId: str
 /** 展开态的一格 = 悬浮胶囊 + 内容(方案 B,两颗胶囊同 Mini 顶栏 lcl/engine/miniCard.css .mini-card-cap)。
  *  左胶囊:条目名 + ▾(每一格都有:换成这条会话最近放过的 8 样)+ 钉住时一枚图钉(点了取消);
  *  右胶囊:视图控件槽 │ ⋯ │ 面板级按钮。下面的格(panel=null)不要右胶囊,槽和 ⋯ 跟在名字后面。伴随面(item 缺省)只有右胶囊。
- *  ⋯ 新加的四项在上(只看这一格 / 恢复两格、移到上面 / 下面、从 Desk 拿掉、在主区打开),原来的几项不动。 */
+ *  ⋯ 新加的几项在上(只看这一格 / 恢复两格、移到上面 / 下面、从 Desk 拿掉),打开的四项居中(deskOpen.tsx),原来的几项在下。 */
 function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
   sessionId: string; item?: DeskItem; slot?: number; panel: React.ReactNode; className?: string; children: React.ReactNode
 }) {
@@ -373,6 +375,7 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
   const two = all.length >= 2
   const solo = two && (desk?.solo === 0 || desk?.solo === 1)
   useDeskDrop(paneRef, sessionId, slot, own, !!item?.live)
+  useDeskItemDrop(paneRef, sessionId, slot, own, !!item?.live) // 名字胶囊拖到另一格 = 对调
   const path = item?.path || ''
   const rel = vaultRelOf(path, vaultRoot)
   // 「在 Amadeus 中打开」只给 Desk 自己会改道原生 view 的库内类型(与 DeskFilePane 同口径)
@@ -393,15 +396,17 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
         ? { label: t('desk.moveDown'), icon: <ArrowDown size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }
         : { label: t('desk.moveUp'), icon: <ArrowUp size={14} />, run: () => actHere((n) => ({ type: 'move', slot: n })) }] : []),
       { label: t('desk.remove'), icon: <X size={14} />, run: () => actHere((n) => ({ type: 'remove', slot: n })) },
-      ...(item.tool ? [] : [{ label: t('desk.openMain'), icon: <ExternalLink size={14} />, run: () => openDeskItemInMain(item, vaultRoot) }]),
     ]
+    // 打开的四项居中(11-23 Desk 标签栏互通 ②):这一格自己的在上,视图自己的在下;原「在主区打开」= 其中的「在新标签页打开」
+    const opens: CtxItem[] = !own || !item ? [] : deskOpenItems({ item, rel, anchor: paneRef.current, openTab: () => openDeskItemInMain(item, vaultRoot), t })
     const orig: CtxItem[] = [
       ...more.current,
       // .db 走 openDb:openNote 会把它塞进笔记编辑器,保存时把 Markdown 写回数据库(Codex P1)
       ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
       ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
     ]
-    return [...mine, ...orig.map((x, i) => (i === 0 && mine.length ? { ...x, separatorBefore: true } : x))]
+    const after = (xs: CtxItem[], sep: boolean): CtxItem[] => xs.map((x, i) => (i === 0 && sep ? { ...x, separatorBefore: true } : x))
+    return [...mine, ...after(opens, mine.length > 0), ...after(orig, mine.length + opens.length > 0)]
   }
   const tools = item && (
     <>
@@ -413,10 +418,14 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
   )
   let name: React.ReactNode = null
   if (item) {
-    const Icon = item.live ? Loader2 : item.tool ? Puzzle : item.view ? Sparkles : iconForFile('', item.name || path)
     const label = item.live ? (path ? t('desk.writing', { name: item.name }) : t('desk.drafting')) : (item.name || path.split(/[/\\]/).pop() || '')
-    const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
-    const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
+    // 悬停:路径 / 说明之后接一句「拖到标签栏…」(拖不起来的说原因)
+    const tip = [path, !item.live && note, own && deskDragTip(item, t)].filter(Boolean).join('\n') || undefined
+    const drag = own && canDragDeskItem(item)
+      ? (e: React.DragEvent<HTMLElement>): void => startDeskItemDrag(e, { sessionId, item, rel, openVault: () => openDeskItemInMain(item, vaultRoot) })
+      : undefined
+    // 图标跟着这样东西的种类走(方案 ③,deskOpen.tsx);原来按视图放上来的一律给星
+    const inner = <><DeskItemIcon item={item} rel={rel} size={13} className="desk-cap-ic" /><span className="desk-cap-label">{label}</span></>
     const menu = own && desk ? deskMenuRows(desk, slot) : null
     const dot = !!desk?.fresh && visibleSlots(desk)[0] === slot // 点只亮在最上面那格的 ▾ 上(方案图 ⑦)
     const pickable = !!menu && (menu.rows.length > 1 || !!menu.fresh || !!note)
@@ -448,10 +457,10 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
     name = (
       <>
         {pickable ? (
-          <DeskPickButton className="desk-cap-pick" title={tip ?? t('desk.switch')} rows={rows} onOpen={() => { if (useApp.getState().deskBySession[sessionId]?.fresh) act({ type: 'seen' }) }}>
+          <DeskPickButton className="desk-cap-pick" title={tip ?? t('desk.switch')} rows={rows} onDragStart={drag} onOpen={() => { if (useApp.getState().deskBySession[sessionId]?.fresh) act({ type: 'seen' }) }}>
             {inner}<ChevronDown size={12} className="desk-cap-caret" />{dot && <span className="desk-cap-dot" aria-hidden="true" />}
           </DeskPickButton>
-        ) : <span className="desk-cap-pick" title={tip}>{inner}</span>}
+        ) : <span className="desk-cap-pick" title={tip} draggable={drag ? true : undefined} onDragStart={drag}>{inner}</span>}
         {own && item.pin && (
           <button type="button" className="icon-btn desk-cap-pin" aria-pressed="true" aria-label={t('desk.pinned')} title={t('desk.unpin')} onClick={() => actHere((n) => ({ type: 'unpin', slot: n }))}>
             <Pin size={13} />
