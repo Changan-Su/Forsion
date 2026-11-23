@@ -23,6 +23,17 @@ const manage = manageSkillProvider.tools()[0];
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
 const CLOUD = { id: 'cloud-1', name: 'Cloud one', description: 'd', content: 'cloud body' };
+// 文档速查表的来源与整名:云端目录里的官方文档技能(owner 为空)才换速查表,其余技能给自己的正文。
+const DOC_LONG = 'Use docx-js to build OOXML …';
+const EXTRA: Record<string, Record<string, unknown>> = Object.fromEntries([
+  { id: 'skill_1717', name: 'docx', content: DOC_LONG, owner_user_id: null }, // 管理员上传的官方技能:id 是自动生成的
+  { id: 'ai-studio:pptx', name: 'Slides', content: DOC_LONG, owner_user_id: null }, // 名字不对,id 去掉应用前缀是 pptx
+  { id: 'skill_2002', name: ' XLSX ', content: DOC_LONG }, // 大小写 / 空白不同的整名
+  { id: 'ai-studio:word', name: 'xlsx', content: DOC_LONG }, // 名字和 id 指向不同的速查表:以名字为准
+  { id: 'cloud-notes', name: 'presentation-notes', content: 'Summarise talks into speaker notes.', owner_user_id: null },
+  { id: 'usr_k3_a1b2c3', name: 'docx', content: 'My own docx house style.', owner_user_id: 'u1' }, // 用户自己上传的同名技能
+  { id: 'local:plugin/demo/word-tools', name: 'word-tools', content: 'Run scripts/wc.py.', source: 'plugin' }, // 插件技能
+].map((s) => [s.id as string, s]));
 
 let home: string;
 const load = (id: string, ctx: Record<string, unknown> = {}) =>
@@ -35,9 +46,11 @@ const visibleSkill = async (id: string, out: string) => {
 beforeAll(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), 'tangu-useskill-'));
   process.env.TANGU_HOME = home;
-  const brain: any = { assets: { getSkill: async (id: string) => (id.startsWith('local:') ? getLocalSkill(id) : id === CLOUD.id ? CLOUD : null) } };
+  const brain: any = { assets: { getSkill: async (id: string) => EXTRA[id] ?? (id.startsWith('local:') ? getLocalSkill(id) : id === CLOUD.id ? CLOUD : null) } };
   configureTangu({ host: stub, brain, billing: stub, profile } as any);
   await manage.execute({ action: 'create', name: 'Ship Web', description: 'how to ship', instructions: 'Run scripts/ship.sh from the skill folder.' }, {} as any);
+  await manage.execute({ action: 'create', name: 'word-count', description: 'count words', instructions: 'Run scripts/count.py on the file.' }, {} as any);
+  await manage.execute({ action: 'create', name: 'docx', description: 'imported docx skill', instructions: 'Run scripts/office/unpack.py first.' }, {} as any);
   await fs.mkdir(path.join(home, 'skills', 'ship-web', 'scripts'), { recursive: true });
   await fs.writeFile(path.join(home, 'skills', 'ship-web', 'scripts', 'ship.sh'), 'echo ship\n');
 });
@@ -108,6 +121,43 @@ describe('use_skill:技能文件夹', () => {
       expect(visible, s).toContain(s);
     }
     expect(visible).toBe(out);
+  });
+});
+
+// 11-23:速查表曾按技能名子串匹配(/docx|word/i、/pptx|…|presentation|ppt/i),名字里带 word / presentation 的
+// 本地技能拿到 docx / pptx 速查表、看不到自己的 SKILL.md,模型照速查表猜错了脚本名。钉住:只有云端目录里的官方文档技能换速查表。
+describe('use_skill:文档速查表只给云端官方文档技能', () => {
+  const CHEAT = /^# Skill: (docx|xlsx|pptx|pdf) \(use python-/;
+
+  it('本地技能名里带 word:给它自己的正文和文件夹,不是 docx 速查表', async () => {
+    const out = await load('local:word-count');
+    expect(out).not.toMatch(CHEAT);
+    expect(out.startsWith('# Skill: word-count\n')).toBe(true);
+    expect(out).toContain('Run scripts/count.py on the file.');
+    expect(out).toContain(`Skill folder: ${path.join(home, 'skills', 'word-count')}\n`);
+  });
+
+  it('本地 / 插件 / 用户上传的技能就算整名叫 docx 也给自己的正文', async () => {
+    expect(await load('local:docx')).toContain('Run scripts/office/unpack.py first.');
+    expect(await load('local:plugin/demo/word-tools')).toContain('Run scripts/wc.py.');
+    const own = await load('usr_k3_a1b2c3');
+    expect(own).toContain('My own docx house style.');
+    for (const out of [await load('local:docx'), await load('local:plugin/demo/word-tools'), own]) expect(out).not.toMatch(CHEAT);
+  });
+
+  it('云端技能名只是含 presentation:给自己的正文', async () => {
+    const out = await load('cloud-notes');
+    expect(out).not.toMatch(CHEAT);
+    expect(out).toContain('Summarise talks into speaker notes.');
+  });
+
+  it('云端目录里的官方文档技能:整名或去掉应用前缀的 id 命中 → 速查表', async () => {
+    const docx = await load('skill_1717');
+    expect(docx).toMatch(/^# Skill: docx \(use python-docx/);
+    expect(docx).not.toContain(DOC_LONG);
+    expect(await load('ai-studio:pptx')).toMatch(/^# Skill: pptx \(use python-pptx/);
+    expect(await load('skill_2002')).toMatch(/^# Skill: xlsx \(use openpyxl/);
+    expect(await load('ai-studio:word')).toMatch(/^# Skill: xlsx \(use openpyxl/);
   });
 });
 
