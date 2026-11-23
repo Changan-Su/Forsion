@@ -102,7 +102,7 @@ const DEFAULT_TOOL_CAPABILITIES: Record<string, ToolCapabilities> = {
   search_marketplace: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   get_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
   recommend_marketplace_plugin: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
-  web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 30_000 },
+  web_search: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 45_000 },
   web_fetch: { sideEffect: 'network', parallel: true, defaultTimeoutMs: 25_000 },
   browser_search: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
   browser_navigate: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },

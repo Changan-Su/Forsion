@@ -284,3 +284,15 @@ describe('httpBrain notice 帧(服务端停用模型改用替代,2026-10-25)', (
     expect(r.content).toBe('hi');
   });
 });
+
+it('passes the selected model with a search request and uses only the authenticated account', async () => {
+  const fetcher = vi.fn(async (_url: RequestInfo | URL, _init: RequestInit) => Response.json({ provider: 'openai-native' }));
+  vi.stubGlobal('fetch', fetcher);
+  const brain = createHttpBrain({ cloudUrl: 'https://search-cloud.test', token: 'search-token' });
+  const ctx = { userId: 'local-user', modelId: 'gpt-config', appId: 'tangu', client: 'web/2.14.2' };
+  expect(await brain.search.runSearch('weather', 5, ctx)).toEqual({ provider: 'openai-native' });
+  const [url, req] = fetcher.mock.calls[0];
+  expect(url).toBe('https://search-cloud.test/api/brain/search');
+  expect(new Headers(req.headers).get('authorization')).toBe('Bearer search-token');
+  expect(JSON.parse(String(req.body))).toEqual({ query: 'weather', maxResults: 5, modelId: 'gpt-config', appId: 'tangu', client: 'web/2.14.2' });
+});

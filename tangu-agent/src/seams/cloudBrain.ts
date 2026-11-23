@@ -172,7 +172,8 @@ export interface MemoryBrain {
 }
 
 export interface AssetsBrain {
-  getSkill(id: string): Promise<SkillRecord | null>;
+  getSkill(id: string, forUser?: string): Promise<SkillRecord | null>;
+  getSkillPackage?(userId: string, id: string): Promise<{ files: { path: string; base64: string }[] } | null>;
   listCustomTools(filter?: ListFilter): Promise<CustomToolRecord[]>;
   listForcedCustomTools(appId?: string): Promise<CustomToolRecord[]>;
   /** 技能目录(桌面/TUI 的技能面板用)。可选:旧版云端未实现时调用方降级空列表。 */
@@ -189,9 +190,17 @@ export interface AssetsBrain {
   deleteUserSkill?(userId: string, id: string): Promise<boolean>;
 }
 
+export interface WebSearchContext {
+  userId: string;
+  modelId?: string;
+  appId: string;
+  client?: string;
+  signal?: AbortSignal;
+}
+
 export interface SearchBrain {
   /** 返回 { provider, text, results } 或字符串(见 ai-studio webSearchService.runSearch)。 */
-  runSearch(query: string, maxResults: number): Promise<any>;
+  runSearch(query: string, maxResults: number, context?: WebSearchContext): Promise<any>;
 }
 
 /** 模型目录(admin 列表用)。 */
