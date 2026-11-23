@@ -370,6 +370,9 @@ export async function runMigration(): Promise<void> {
     ['chat_sessions', 'emoji_manual BOOLEAN NOT NULL DEFAULT FALSE'],
     // todo 工具(builtin:todo)的会话级任务清单。
     ['chat_sessions', 'todos JSONB'],
+    // 任务卡 / 作品卡「处理过了」的记录(services/cardMarks.ts):跟会话走,同一台引擎的各端共用。
+    // 放独立列不放 agent_config:配置写口有整对象替换 / 按顶层键覆盖,会连带冲掉(同 title_manual)。
+    ['chat_sessions', 'card_marks JSONB'],
     // 项目工作区(本地/Cloud Project/无根会话显式分型)。projectless 不能拿 project_path/
     // project_name 双空来推断:历史默认 Cloud 会话也是双空。
     ['chat_sessions', 'project_path TEXT'],

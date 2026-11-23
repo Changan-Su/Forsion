@@ -11,9 +11,10 @@ import { ChevronRight, ChevronDown, XCircle, PauseCircle, CircleHelp, Sparkles, 
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
-import { registerMessages, useI18n } from '../i18n'
+import { registerMessages, translateFor, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { parseComputerUseUnavailable } from '../../../../tangu-agent/src/contracts/agentEngine'
+import { isUserRejectedToolResult } from '../../../../tangu-agent/src/contracts/toolRejection'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
@@ -33,6 +34,12 @@ registerMessages({
   'tool.inflight.unknown': { zh: '结果未知：这一步执行到一半引擎停了，可能已经部分或全部生效。', en: 'Outcome unknown: the engine stopped while this step was running. It may have partly or fully taken effect.' },
   // 折叠头里的那一段:被打断的步不算进「写入 N 文件」这类完成计数,单独说(评审 #9)
   'tool.sum.interrupted': { zh: '{n} 步被打断', en: '{n} interrupted' },
+  // 折叠头里出错的那几步(11-23):后来同一个目标又做成了 = 重试;你自己拒绝的、插话时没来得及跑的各说各的,都不算失败;
+  // 只有最后仍没做成的才写「N 个失败」并挂红叉
+  'tool.sum.retried': { zh: '重试 {n} 次', en: 'Retried {n}×' },
+  'tool.sum.rejected': { zh: '已拒绝 {n}', en: '{n} rejected' },
+  'tool.sum.skipped': { zh: '已跳过 {n}', en: '{n} skipped' },
+  'tool.sum.failed': { zh: '{n} 个失败', en: '{n} failed' },
   // 过程行尾的短状态字(和展开后的整句同一个三分法)
   'tool.inflight.short.notRun': { zh: '没执行', en: 'Not run' },
   'tool.inflight.short.readCut': { zh: '被打断', en: 'Interrupted' },
@@ -52,7 +59,8 @@ registerMessages({
   'tool.thoughtSec': { zh: '思考 {n} 秒', en: 'Thought for {n}s' },
   'tool.thoughtMin': { zh: '思考 {m} 分 {s} 秒', en: 'Thought for {m}m {s}s' },
   'tool.step': { zh: '第 {n} 步', en: 'Step {n}' },
-  'tool.sumN': { zh: '{n} 个工具', en: '{n} tool calls' },
+  // 「N 个工具」读着像「一共只用了 N 个工具」;这里数的是调用次数(和英文 calls 同一口径)
+  'tool.sumN': { zh: '{n} 步', en: '{n} tool calls' },
   'tool.verb.session': { zh: '子会话', en: 'Sub-session' },
   'tool.sum.sessions': { zh: '开了 {n} 个子会话', en: 'Started {n} sub-session(s)' },
   // hand_off_task(11-08「另起话题」):把手头没做完的活挪进一个新会话接着做。摘要就是这一句(一轮里只会挪一次,不报个数)
@@ -165,6 +173,69 @@ export function countFiles(descs: readonly Pick<Desc, 'kind' | 'file' | 'files'>
   for (const f of wrote) edited.delete(f)
   return { write: wrote.size + w, edit: edited.size + e }
 }
+
+/** 折叠头里一步的结局。ok = 做成了或还在路上(在跑 / 挂起等批准照旧进计数);其余都不进「编辑 N 文件」这类计数:
+ *  cut 断在半截 · skipped 插话时没来得及跑 · rejected 你拒绝的 · retried 失败了但后面同一个目标又做成了 · failed 最后仍没做成。 */
+export type StepOutcome = 'ok' | 'cut' | 'skipped' | 'rejected' | 'retried' | 'failed'
+
+/**
+ * 插话打断生成时没来得及跑的调用:桌面在 turn_boundary 收尾时自己补上 appstore.steerDiscardedCall 那句(当时的界面语言),
+ * 只在这次的内存里,不落库。认法:引擎从没开始过它(没有 startedAt)+ 结果正好是那句话的中文或英文原文。
+ * 这是认句子(集中在这一处);结构化的记号要在写那句话的 tanguSlice 里给调用补一个字段,另行跟进。
+ */
+const STEER_DISCARDED_KEY = 'appstore.steerDiscardedCall'
+export function isSteerDiscarded(ev: Pick<ToolEvent, 'isError' | 'startedAt' | 'result'>): boolean {
+  if (!ev.isError || ev.startedAt != null || !ev.result) return false
+  return ev.result === translateFor('zh', STEER_DISCARDED_KEY) || ev.result === translateFor('en', STEER_DISCARDED_KEY)
+}
+
+const SEARCH_TOOLS = new Set(['grep', 'search_files', 'glob_files', 'web_search'])
+/** 判「同一个目标」用的键(导出给单测):宁可认不出重试(照旧挂红叉),也不把另一件事的成功记成这次失败的重试。
+ *  文件类按完整路径(apply_patch 按动到的全部文件,含改名的目标)、命令按整条命令 + 工作目录、搜索按整段参数(词 + 范围);
+ *  认不出目标的按整段参数。不用过程行的 target:那只是文件名 / 命令第一行,不同目录的同名文件会被当成一个。 */
+export function retryTarget(ev: Pick<ToolEvent, 'name' | 'arguments'>): string {
+  const raw = ev.arguments || ''
+  let a: any
+  try { a = raw ? JSON.parse(raw) : {} } catch { return raw }
+  if (!a || typeof a !== 'object' || SEARCH_TOOLS.has(ev.name)) return raw
+  if (ev.name === 'apply_patch') {
+    const patch = String(a.patch ?? a.input ?? a.diff ?? raw)
+    const moved = [...patch.matchAll(/^\*\*\* Move to: (.+)$/gm)].map((m) => `→${m[1].trim()}`)
+    return [...patchPaths(patch), ...moved].sort().join('\n') || raw
+  }
+  if (typeof a.path === 'string' && a.path) return `path:${a.path}`
+  const cmd = [a.command, a.cmd, a.code].find((v) => typeof v === 'string' && v)
+  if (cmd) return `cmd:${typeof a.cwd === 'string' ? a.cwd : ''}\n${cmd}`
+  for (const k of ['url', 'file']) if (typeof a[k] === 'string' && a[k]) return `${k}:${a[k]}`
+  if (typeof a.from === 'string' || typeof a.to === 'string') return `${a.from ?? ''}→${a.to ?? ''}`
+  return raw
+}
+
+/** 一组调用逐个归类(按先后;「重试」只看同一组里后面的调用:同一个工具、同一个目标、真做成了)。导出给单测。 */
+export function stepOutcomes(events: readonly ToolEvent[], running: boolean): StepOutcome[] {
+  // 断在半截的占位只在这条回答已不在跑时算(与 ToolRow 同一口径):接上在跑的 run 时它会被回放的真事件换掉
+  const cut = (e: ToolEvent): boolean => !running && !!inflightOf(e)
+  const madeIt = (e: ToolEvent): boolean => e.done && !e.isError && !e.parked && !cut(e)
+  // 参数只在真有待判的失败时才解析(多数组没有失败)
+  const keys: Array<string | undefined> = []
+  const keyAt = (i: number): string => (keys[i] ??= retryTarget(events[i]))
+  return events.map((e, i) => {
+    if (cut(e)) return 'cut'
+    if (!e.done || !e.isError) return 'ok'
+    if (isSteerDiscarded(e)) return 'skipped'
+    if (isUserRejectedToolResult(e.result)) return 'rejected'
+    for (let j = i + 1; j < events.length; j++) {
+      if (events[j].name === e.name && madeIt(events[j]) && keyAt(j) === keyAt(i)) return 'retried'
+    }
+    return 'failed'
+  })
+}
+
+/** 摘要的一段:note 是灰字附注(重试 / 已拒绝 / 已跳过 / 被打断),不跟主色。 */
+type SumPart = { text: string; note?: boolean }
+const SumParts: React.FC<{ parts: SumPart[] }> = ({ parts }) => (
+  <>{parts.map((p, i) => <React.Fragment key={i}>{i ? ' · ' : ''}{p.note ? <span className="tool-group-note">{p.text}</span> : p.text}</React.Fragment>)}</>
+)
 
 /** 把一次工具调用描述成「动作 + 目标(+增/-删)」,供分组摘要与逐行展示。
  *  pluginName:工具名 → 所属插件的显示名(ToolGroup 从引擎插件名单里取;不给 = 插件工具照原名)。
@@ -450,10 +521,12 @@ export const ToolGroup: React.FC<{
   // 插件句子只给看得见的行求值:展开时每行;折叠时只有头上那条「当前这步」(做完后的折叠头本来就是宿主的汇总)。
   // 句子不影响汇总计数(describeTool 里有没有句子 kind 一样),所以折叠 / 展开算出的摘要一致。
   const descs = groupedEvents.map((ev, i) => describeTool(ev, pluginName, open || i === curIdx ? labelOf : undefined))
-  // 断在半截的占位(这条回答已不在跑;与 ToolRow 同一口径)不算完成的动作、不算文件数,头上单说「N 步被打断」(评审 #9)
-  const cut = groupedEvents.map((e) => !running && !!inflightOf(e))
-  const cutN = cut.filter(Boolean).length
-  const doneDescs = descs.filter((_, i) => !cut[i])
+  // 计数只算做成了(或还在路上)的步:断在半截的头上单说「N 步被打断」(评审 #9);失败 / 你拒绝的 / 插话时跳过的也不算进
+  // 「编辑 N 文件」,各自一段附注;后来同一个目标又做成了的那次失败只记「重试 N 次」,不挂红叉(11-23)
+  const outcomes = stepOutcomes(groupedEvents, !!running)
+  const nOf = (o: StepOutcome): number => outcomes.filter((x) => x === o).length
+  const cutN = nOf('cut'), failedN = nOf('failed')
+  const doneDescs = descs.filter((_, i) => outcomes[i] === 'ok')
   const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, session: 0, handoff: 0, other: 0 } as Record<Kind, number>
   doneDescs.forEach((d) => { counts[d.kind]++ })
   // 写 / 改按文件数(方案 A:同一个文件改了几次只算一个;先写后改的算在「写入」里),拿不到路径的照调用数
@@ -466,18 +539,28 @@ export const ToolGroup: React.FC<{
   }
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'session', 'handoff', 'other']
   const thinkLabel = reasoning ? (thinking ? t('tool.thinkingNow') : thoughtLabel(t, reasoningMs)) : ''
-  const cutLabel = cutN ? t('tool.sum.interrupted', { n: cutN }) : ''
-  const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })), cutLabel].filter(Boolean).join(' · ')
-  // 窄列的短摘要只报个数;整组都是开子会话 / 挪活时照样说那一句(「开了 N 个子会话」「把手头的活挪到了子会话」就是这组在干什么)
-  const doneN = groupedEvents.length - cutN
+  const note = (key: string, n: number): SumPart[] => (n ? [{ text: t(key, { n }), note: true }] : [])
+  // 附注:重试 / 已拒绝 / 已跳过 / 被打断灰字;「N 个失败」放最后、挨着红叉
+  const tail: SumPart[] = [
+    ...note('tool.sum.rejected', nOf('rejected')), ...note('tool.sum.skipped', nOf('skipped')),
+    ...note('tool.sum.interrupted', cutN), ...(failedN ? [{ text: t('tool.sum.failed', { n: failedN }) }] : []),
+  ]
+  const head: SumPart[] = thinking || !thinkLabel ? [] : [{ text: thinkLabel }]
+  const kinds = order.filter((k) => counts[k] > 0)
+  // 只有归不进类的那几步时说「N 步」,不说「另 N 步」(没有「另」的对象)
+  const summaryParts: SumPart[] = [...head, ...kinds.map((k) => ({ text: t(k === 'other' && kinds.length === 1 ? 'tool.sumN' : SUM[k], { n: counts[k] }) })), ...note('tool.sum.retried', nOf('retried')), ...tail]
+  // 窄列的短摘要只报个数;整组都是开子会话 / 挪活时照样说那一句(「开了 N 个子会话」「把手头的活挪到了子会话」就是这组在干什么)。
+  // 「重试」在窄列不单说(那次失败没算进个数,后来做成的那次算了)
+  const doneN = doneDescs.length
   const allSessions = doneN > 0 && counts.session === doneN
   const allHandoff = doneN > 0 && counts.handoff === doneN
-  const shortSummary = [...(thinking ? [] : [thinkLabel]), doneN ? t(allHandoff ? 'tool.sum.handoff' : allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: doneN }) : '', cutLabel].filter(Boolean).join(' · ') || thinkLabel
+  const shortParts: SumPart[] = [...head, ...(doneN ? [{ text: t(allHandoff ? 'tool.sum.handoff' : allSessions ? 'tool.sum.sessions' : 'tool.sumN', { n: doneN }) }] : []), ...tail]
 
   // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
   const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
   const allDone = groupedEvents.every((e) => e.done)
-  const anyErr = groupedEvents.some((e) => e.isError)
+  // 红叉只给最后仍没做成的(重试成功 / 你拒绝的 / 插话跳过的不算)
+  const anyErr = failedN > 0
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
@@ -515,8 +598,8 @@ export const ToolGroup: React.FC<{
             ) : (
               // key:「正在做」和「汇总」不共用节点,换态时旧节点上的流光随节点一起拆掉
               <span key="sum" className={`tool-group-sum${busy ? ' chat-run-shimmer-text' : ''}`}>
-                <span className="tool-group-sum-long">{summary || thinkLabel}</span>
-                <span className="tool-group-sum-short">{shortSummary}</span>
+                <span className="tool-group-sum-long">{summaryParts.length ? <SumParts parts={summaryParts} /> : thinkLabel}</span>
+                <span className="tool-group-sum-short">{shortParts.length ? <SumParts parts={shortParts} /> : thinkLabel}</span>
               </span>
             )}
             </RollLine>
@@ -525,7 +608,7 @@ export const ToolGroup: React.FC<{
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
                 : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
-                : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} />
+                : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} aria-label={t('tool.sum.failed', { n: failedN })} />
                 : anyInflight ? <CircleHelp size={13} style={{ color: 'var(--text-faint)' }} aria-label={t('tool.inflight.label')}><title>{t('tool.inflight.label')}</title></CircleHelp> : null}
             </span>
           </button>

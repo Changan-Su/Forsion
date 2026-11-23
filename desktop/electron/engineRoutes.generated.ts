@@ -240,6 +240,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'DELETE', path: '/agent/sessions/:id/asides/:asideId', access: 'deny-remote', src: 'routes/sessions.ts', why: 'irreversible delete of a saved btw aside; local only like session hard delete' },
   { method: 'GET', path: '/agent/sessions/:id/background', access: 'allow', src: 'routes/sessions.ts', why: 'background child sessions' },
   { method: 'POST', path: '/agent/sessions/:id/branch', access: 'allow', src: 'routes/sessions.ts', why: 'branch a session (remote taint propagates, C5)' },
+  { method: 'GET', path: '/agent/sessions/:id/card-marks', access: 'allow', src: 'routes/sessions.ts', why: 'handled-card records of a session (task / creation cards); the phone hides cards already handled elsewhere' },
+  { method: 'POST', path: '/agent/sessions/:id/card-marks', access: 'allow', src: 'routes/sessions.ts', why: 'record a task / creation card as handled (per-key add-only merge); same scope as answering the card in the chat' },
   { method: 'GET', path: '/agent/sessions/:id/changes', access: 'allow', src: 'routes/sessions.ts', why: 'read this session\'s code changes from checkpoints (per-turn file list + line counts); same reach as workspace/read' },
   { method: 'GET', path: '/agent/sessions/:id/changes/diff', access: 'allow', src: 'routes/sessions.ts', why: 'read this session\'s code changes from checkpoints (line diff); same reach as workspace/read' },
   { method: 'GET', path: '/agent/sessions/:id/changes/git', access: 'allow', src: 'routes/sessions.ts', why: 'read-only uncommitted git changes of the session\'s own project folder; same reach as workspace/read' },

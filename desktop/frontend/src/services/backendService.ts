@@ -20,7 +20,7 @@ import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { noteApprovalCap } from './delegatedAdmin'
 import { saveResponseAs } from './nativeDownload'
-import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { CardMarkRecord, MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { countTelemetry } from '../telemetrySend'
 import { REALTIME_BEARER_PROTOCOL } from '../../../shared/voiceInputStream' // 引擎握手认的子协议名,和听写共用一份
 
@@ -271,6 +271,23 @@ export const listAsides = (t: EngineTarget, sessionId: string) =>
 
 export const deleteAside = (t: EngineTarget, sessionId: string, asideId: string) =>
   request<{ ok: boolean }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides/${encodeURIComponent(asideId)}`, { method: 'DELETE' })
+
+/** 任务卡 / 作品卡「处理过了」的记录(引擎 chat_sessions.card_marks,同一台引擎的各端共用;键 = doneKey 去掉「会话 id:」)。
+ *  老引擎没有这两条路由(404 无 error 码 / unitWeb 403)、会话不在(404 session_not_found)→ 抛,调用方回落本机记录。
+ *  响应形状不对也抛:读不出来 ≠ 没有记录,不能当空表。 */
+const cardMarksOf = (r: { marks?: unknown } | null | undefined): Record<string, CardMarkRecord> => {
+  const m = r?.marks
+  if (!m || typeof m !== 'object' || Array.isArray(m)) throw Object.assign(new Error('bad card-marks response'), { status: 0 })
+  return m as Record<string, CardMarkRecord>
+}
+/** 卡住的请求不能一直占着(客户端按会话去重,一条挂死的读会挡住后面所有的读):两条都带超时。 */
+const CARD_MARKS_TIMEOUT_MS = 15_000
+export const getSessionCardMarks = (t: EngineTarget, sessionId: string) =>
+  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`, undefined, { timeoutMs: CARD_MARKS_TIMEOUT_MS }).then(cardMarksOf)
+
+/** 按键并进(只加不减),回并好的整表。只发这次要记的几条,不发整表。 */
+export const postSessionCardMarks = (t: EngineTarget, sessionId: string, marks: Record<string, CardMarkRecord>) =>
+  request<{ marks: Record<string, CardMarkRecord> }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/card-marks`, { method: 'POST', body: JSON.stringify({ marks }) }, { timeoutMs: CARD_MARKS_TIMEOUT_MS }).then(cardMarksOf)
 
 /** 某会话名下的 Background Session(@讨论 / Historian 辅助讨论等隐藏子会话,含最新 run 供回放)。 */
 export interface BackgroundSessionInfo {

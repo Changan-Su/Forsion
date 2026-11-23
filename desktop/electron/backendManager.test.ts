@@ -405,6 +405,10 @@ describe('shutdown intent written before the engine is signalled', () => {
     ].join('\n'), 'utf8')
     return { entry, seen: () => JSON.parse(readFileSync(out, 'utf8')) }
   }
+  /** Windows 上 SIGTERM 等于强杀、假引擎的 handler 跑不到(契约:下次启动的恢复流程按 pid 认这份意图)。
+   *  所以 Windows 断言「发信号前意图已落盘」:读盘上那份;其余平台照旧断言引擎收信号那一刻读到的。 */
+  const WIN = process.platform === 'win32'
+  const onDisk = () => (existsSync(INTENT) ? JSON.parse(readFileSync(INTENT, 'utf8')) : null)
   const boot = async (tag: string) => {
     rmSync(INTENT, { force: true })
     const eng = intentProbeEngine(tag)
@@ -423,8 +427,9 @@ describe('shutdown intent written before the engine is signalled', () => {
     await m.stop(reason)
     const seen = eng.seen()
     expect(seen.pid).toBe(pid)
-    expect(seen.intent).toMatchObject({ reason, pid })
-    expect(seen.intent!.at).toBeGreaterThanOrEqual(before)
+    const intent = WIN ? onDisk() : seen.intent
+    expect(intent).toMatchObject({ reason, pid })
+    expect(intent!.at).toBeGreaterThanOrEqual(before)
     expect(readdirSync(H.dir).filter((f) => f.startsWith('shutdown-intent.json.'))).toEqual([]) // 临时文件 rename 走了
   }, 30_000)
 
@@ -434,7 +439,7 @@ describe('shutdown intent written before the engine is signalled', () => {
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(next.entry)
     try {
       await m.start({ cloudUrl: '', sandbox: 'none' }, 'engine_restart')
-      expect(eng.seen().intent).toMatchObject({ reason: 'engine_restart', pid })
+      expect(WIN ? onDisk() : eng.seen().intent).toMatchObject({ reason: 'engine_restart', pid })
       expect(m.getStatus().pid).not.toBe(pid)
     } finally { await m.stop() }
   }, 30_000)
@@ -442,7 +447,7 @@ describe('shutdown intent written before the engine is signalled', () => {
   it('no reason (clearing data along with the engine database) writes nothing', async () => {
     const { m, eng } = await boot('none')
     await m.stop()
-    expect(eng.seen().intent).toBeNull()
+    expect(WIN ? onDisk() : eng.seen().intent).toBeNull()
     expect(existsSync(INTENT)).toBe(false)
   }, 30_000)
 

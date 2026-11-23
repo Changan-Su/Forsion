@@ -18,7 +18,7 @@ const { translate } = await import('../../i18n')
 function mount(props: Record<string, unknown>): HTMLDivElement {
   const host = document.createElement('div')
   document.body.appendChild(host)
-  act(() => createRoot(host).render(createElement(TaskCards as any, { tasks: [{ title: 'T', prompt: 'p' }], ownerId: `m${Math.random()}`, ...props })))
+  act(() => createRoot(host).render(createElement(TaskCards as any, { tasks: [{ title: 'T', prompt: 'p' }], ownerId: `m${Math.random()}`, onTask: () => true, ...props })))
   return host
 }
 const labels = (host: HTMLElement): string[] => [...host.querySelectorAll('.t2-taskcard-actions button')].map((b) => b.textContent!.trim())

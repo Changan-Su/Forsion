@@ -1550,6 +1550,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .tool-group-cur .file { color: var(--accent-ink); font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); }
 .tool-group-step { color: var(--text-faint); }
+/* 摘要里的灰字附注:重试 / 已拒绝 / 已跳过 / 被打断(11-23);「N 个失败」不走这里,跟主色、挨着红叉 */
+.tool-group-note { color: var(--text-faint); }
 /* 窄列(侧栏对话、手机)换短摘要「思考 8 秒 · 5 个工具」,不靠省略号截断 */
 .tool-group-sum-short { display: none; }
 @container (max-width: 520px) {

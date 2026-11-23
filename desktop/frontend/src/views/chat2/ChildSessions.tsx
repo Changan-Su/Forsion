@@ -60,8 +60,7 @@ registerMessages({
   'handoff.note': { zh: '做完在这里留一行，不打断这边', en: 'It leaves a line here when done; it won’t interrupt this chat' },
 })
 
-export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
-export const SESSION_MESSAGE_OPEN = '<session_message '
+export { CHILD_UPDATE_OPEN, SESSION_MESSAGE_OPEN } from './machineRows'
 const ID_RE = /\(id ([0-9a-f-]{36})\)/i
 
 /** 这条回答里某个工具成功开出的会话 id(工具结果里的 `(id …)`)。 */
