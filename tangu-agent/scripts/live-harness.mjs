@@ -466,6 +466,7 @@ OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // Explicit recommenda
 // storeupdate(10-27):Tangu 替作者提交商店更新 —— 官方签名 Extend 包里的引擎插件(ctx.cloud / approvalPreview / chat 准入)。
 //   --extend-plugin <npm pack 解出来的、已签名的 Extend 目录> + TANGU_LIVE_CLOUD_URL=<server scripts/marketplace-fixture.ts>
 //   + TANGU_LIVE_CLOUD_TOKEN=<payload {"userId":"owner"} 的假 JWT>。负对照:给一份改过一个字节的包 → 插件拿不到 ctx.cloud、工具不出现 → 红。
+KEYS.push('healthsummary'); OPT_IN.add('healthsummary');
 KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.add('storeupdatechat');
 // agentfeedback(11-15):Agent 碰到 Forsion 自己的问题时起草反馈(Extend 引擎插件 agent-feedback 的 feedback_draft,chat 面要官方签名)。
 //   --extend-plugin <已签名、解包的 Extend 目录>。正例:用户说 Forsion 报错、请它反馈 → 起草一次、不说已发送;
@@ -1099,6 +1100,10 @@ if (BLUEBIRD_SRC) {
   cpSync(BLUEBIRD_SRC, join(shared, 'plugins/bluebird'), { recursive: true, filter: p => !p.split('/').some(x => ['.git','node_modules','outputs','__pycache__'].includes(x)) });
 }
 
+if (ONLY.has('healthsummary')) {
+  if (process.env.TANGU_LIVE_CLOUD_URL) throw new Error('healthsummary requires the local fixture cloud');
+  cpSync(resolve(root, '../extensions/forsion-health'), join(shared, 'plugins/market-8d6fac48-fb63-483a-a8cb-5603a8ca1c8a'), { recursive: true });
+}
 if (ONLY.has('storeupdate') || ONLY.has('storeupdatechat') || ONLY.has('agentfeedback')) {
   const bundle = opt('extend-plugin', '');
   if (ONLY.has('agentfeedback') && (!bundle || !existsSync(join(bundle, 'tangu-plugins/agent-feedback/tangu-plugin.json')))) throw new Error('--only agentfeedback needs --extend-plugin <signed Extend bundle with tangu-plugins/agent-feedback>');
@@ -1494,7 +1499,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = ONLY.has('imagerecovery') ? await startImageRecoveryCloud(TOKEN) : (ONLY.has('healthsummary') || ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 // computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
 // (core/hostChannel.ts);只在跑这个场景时接管 stdin,别的场景的引擎环境不变
@@ -2838,6 +2843,13 @@ try {
       && final.entries.some((e) => e.id === entry.id && e.content.includes('plain language')) && !ev3.statuses.some((s) => s.phase === 'tool_failure_loop');
     return { ok: renamed && recovered && fixedUp, detail: `改名原地保存=${renamed};参数错误=${errors.length};纠正后保存=${recovered};版本号抄错回执=${miscopyErrors.length};抄错后改成=${fixedUp}`,
       output: `【改名】\n${ev.content}\n【参数纠正】\n${ev2.content}\n【版本号抄错】\n${ev3.content}`, ttftMs: ttft(ev), tokens: tokensOf(ev) + tokensOf(ev2) + tokensOf(ev3), toolCalls: [...ev.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls] };
+  });
+
+  await scenario('healthsummary', 'Signed Health bundle reads an authorized summary in chat', async () => {
+    const ev = await run('live-health-' + Date.now(), '从我的健康数据查一下，2025 年 3 月 30 日我实际走了多少步？请用阿拉伯数字回答。', 180000, { preset: 'chat' }, 'desktop/2.14.3');
+    const requested = FAKE_CLOUD.seen.some(r => r.method === 'POST' && r.path === '/api/wellness/agent/summary' && JSON.parse(r.body).endDate === '2025-03-30');
+    const ok = requested && ev.toolCalls.includes('read_health_summary') && ev.content.replace(/[,， ]/g, '').includes('7283') && !ev.error;
+    return { ok, detail: 'Authenticated summary request: ' + requested, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
   // 两个场景各改一个条目(第一个提交后那条就有待审更新,第二个再改会被 market_update_pending 拦)。

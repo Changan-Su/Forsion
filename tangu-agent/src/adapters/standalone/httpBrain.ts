@@ -26,7 +26,8 @@ import { withRetryAfter } from '../../llm/retry.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
 import { friendlyUpstreamError } from './upstreamError.js';
 import { parseAgentConfig } from '../../agents/agentRegistry.js';
-import { currentAgentSlug } from '../../seams/runContext.js';
+import { createHash } from 'node:crypto';
+import { currentAgentSlug, runCloudAccount } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { getDeviceId } from '../../core/deviceId.js';
 import { engineVersion } from '../../core/version.js';
@@ -786,7 +787,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   // 这里要的是「永不抛、状态码原样交回」—— 调用方要分得清没登录、令牌失效、接口没开(404)和网络断。
   const CLOUD_REQUEST_TIMEOUT_MS = 15_000;
   const tokenNow = (): string => String((typeof cfg.token === 'function' ? cfg.token() : cfg.token) || '').trim();
+  const bindingOf = (token: string) => createHash('sha256').update(token).digest('hex');
   brain.cloud = {
+    accountBinding: () => bindingOf(tokenNow()),
     async request(req) {
       if (!base) return { status: 0, error: 'no_cloud_url' };
       const method = req.method ?? 'GET';
@@ -806,18 +809,24 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         || lower === '/api/git/credential' || lower === '/api/github/credential') {
         return { status: 0, error: 'path_not_allowed' };
       }
-      if (!tokenNow()) return { status: 401, json: null, error: 'not_signed_in' };
+      const token = tokenNow();
+      const health = rawPath === '/api/wellness/agent/summary';
+      const binding = health ? runCloudAccount() : undefined;
+      if (health && binding !== bindingOf(token)) return {status:403, error:'account_changed'};
+      if (!token) return { status: 401, json: null, error: 'not_signed_in' };
       const timeout = AbortSignal.timeout(Math.max(1_000, Number(req.timeoutMs) || CLOUD_REQUEST_TIMEOUT_MS));
       try {
         const r = await fetch(url, {
           method,
-          headers: authHeaders(),
+          headers: { ...origin, 'Content-Type':'application/json', Authorization:'Bearer ' + token },
           ...(req.body === undefined || method === 'GET' ? {} : { body: JSON.stringify(req.body) }),
           // 不跟重定向:同源的 3xx 会带着身份落到路径闸没看过的地址(比如 /api/auth/refresh),3xx 原样交回(Codex 10-10 #4)。
           redirect: 'manual',
           signal: req.signal ? AbortSignal.any([req.signal, timeout]) : timeout,
         });
-        return { status: r.status, json: await r.json().catch(() => null) };
+        const json = await r.json().catch(() => null);
+        if (health && binding !== bindingOf(tokenNow())) return {status:403, error:'account_changed'};
+        return { status: r.status, json };
       } catch (e: any) {
         return { status: 0, error: e?.name === 'TimeoutError' ? 'timeout' : e?.name === 'AbortError' ? 'aborted' : String(e?.message || e) };
       }

@@ -53,6 +53,9 @@ export async function startFakeCloud(token, { connect } = {}) {
       if (key === 'GET /__harness/connect-posts') return send(200, { n: seen.filter((r) => r.method === 'POST' && r.path === '/api/connect/apps').length });
       if (key === 'GET /api/market/items') return send(200, { items: MARKET });
       if (req.method === 'GET' && path.startsWith('/api/market/items/')) { const hit = MARKET.find((i) => i.id === decodeURIComponent(path.slice('/api/market/items/'.length))); return hit ? send(200, hit) : send(404, { detail: 'not found' }); }
+      if (key === 'POST /api/wellness/agent/summary') return send(200, {
+        provider: 'xiaomi', days: [{ date: '2025-03-30', steps: 7283, sleepMinutes: null, workouts: 0, workoutSeconds: 0 }],
+      });
       if (key === 'GET /api/token-quota/my') return send(200, QUOTA);
       if (key === 'GET /api/brain/users/me') return send(200, { id: 'u-live', username: 'livetester', nickname: 'Live Tester', membershipTier: 'pro' });
       if (key === 'GET /api/membership/my') return send(200, { membership: { tier: 'pro', status: 'active', expiresAt: '2026-11-03T00:00:00.000Z', autoRenew: true, plan: { name: 'Pro' } } });

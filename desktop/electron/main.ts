@@ -100,7 +100,7 @@ import { createCoreTangu } from './coreTangu'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, storeUpdateTelemetry, telemetryPackaged, updateProps } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
-import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
+import { installMarketZip, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
@@ -5075,7 +5075,7 @@ app.whenReady().then(async () => {
     }
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
-    const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[effType] || [])
+    const files = await installMarketZip(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
     // 绝不删 —— 宁可留一份陈旧也不误删他人插件(install_slug 无全局唯一约束,跨类型可能撞名)。

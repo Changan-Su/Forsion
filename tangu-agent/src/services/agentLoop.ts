@@ -31,7 +31,7 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { bindRunCloudAccount, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
@@ -872,6 +872,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     // Agent 的对话:回答记在它名下(finalizeAssistantMessage 读 displayAgentSlug)、记忆作用域按它折叠;普通引擎对话照旧不带身份。
     if (engineAgent) enterRunContext(userId, runId, resolveMemorySlug(engineAgent.def), engineAgent.slug);
     else enterRunContext(userId, runId);
+    bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
@@ -1647,6 +1648,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 多租户接缝:把本 run 的 {userId, runId} 注入异步子树,供 worker 的 brain/state 适配器取 per-dispatch token。
   // microserver/standalone 的 brain/state 不读此上下文,无副作用。
   enterRunContext(userId, runId);
+  bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段

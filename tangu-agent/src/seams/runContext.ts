@@ -13,6 +13,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 interface RunCtx {
   userId: string;
+  cloudBinding?: string;
   runId?: string;
   /** 发起本 run 的客户端面标识(desktop/web/mobile + 版本),供所有派生 LLM 调用统一记账。 */
   clientTag?: string;
@@ -76,13 +77,20 @@ export function enterRunContext(
     runId,
     agentSlug,
     displayAgentSlug: displayAgentSlug ?? agentSlug,
-    ...(sameRun ? { sessionId: prev?.sessionId, remote: prev?.remote, standIn: prev?.standIn } : {}),
+    ...(sameRun ? { cloudBinding: prev?.cloudBinding, sessionId: prev?.sessionId, remote: prev?.remote, standIn: prev?.standIn } : {}),
     // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
     // 只在同一个 run 内沿用(runId 相同,或不指定 runId 的作用域细化如 Historian):排队接力的下一个 run 是在
     // 上一个 run 的收尾上下文里起的,不能继承它的标签(外部引擎 loop 之后不再设 client,会一直带着)。
     clientTag: clientTag ?? (runId === undefined || runId === prev?.runId ? prev?.clientTag : undefined),
   });
 }
+
+export function bindRunCloudAccount(binding: string | undefined): void {
+  const run = als.getStore();
+  if (run && run.cloudBinding === undefined) run.cloudBinding = binding;
+}
+
+export function runCloudAccount(): string | undefined { return als.getStore()?.cloudBinding; }
 
 /** 当前 run 的 userId(不在 run 上下文内时 undefined)。 */
 export function currentRunUserId(): string | undefined {

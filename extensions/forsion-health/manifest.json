@@ -1,0 +1,12 @@
+{
+  "id": "forsion-health",
+  "name": "健康",
+  "nameEn": "Health",
+  "description": "连接小米运动健康，在健康 Space 查看步数、睡眠和运动，并管理 Agent 的读取权限。",
+  "descriptionEn": "Connect Mi Fitness, view steps, sleep and workouts in Health, and manage agent access.",
+  "version": "0.1.0",
+  "minAppVersion": "2.14.3-beta.1",
+  "apiVersion": 1,
+  "author": "Forsion",
+  "main": "main.js"
+}
