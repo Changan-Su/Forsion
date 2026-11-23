@@ -218,7 +218,7 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
     };
     const ok = Object.values(checks).every(Boolean);
     writeFileSync(join(OUT, 'multiaccount-evidence.json'), JSON.stringify({
-      offScript, health, accounts, secret, planPath, expectDigest, statsHits, bobDisk, checks,
+      offScript, health, accounts, marker: secret, planPath, expectDigest, statsHits, bobDisk, checks,
       turns: turns.map((t) => ({ ...t, results: t.results.map((r) => ({ ...r, result: r.result.slice(0, 2000) })) })),
     }, null, 2));
     const detail = `${offScript ? '负对照(技能不提脚本)' : '正式'}:${turns.map(brief).join(' | ')};`
