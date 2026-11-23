@@ -2233,6 +2233,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let credsRefreshedAt = 0;
     // 额度用完接力(llm/quotaRelay.ts):这一轮实际在用的模型。只换一次,换了之后后备也用完就停下报错。
     let callModelId = modelId;
+    let searchModelId = model?.id || modelId;
     let quotaRelayed = false;
     // 这一轮已经开始回答(吐过字 / 推理 / 工具调用):之后撞上额度用完也不换,免得一段回答拼了两个模型
     let turnStarted = false;
@@ -2244,6 +2245,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl); // 出站包装按每次请求判;这里让界面标注跟上实际发往的模型
       apiKey = r.apiKey;
       callModelId = target;
+      searchModelId = model?.id || target;
       quotaRelayed = true;
       modelSwaps.set(runId, { modelId: target, origin: 'fallback:quota' });
       console.warn(`[agent-core] run=${runId} ${from} 额度用完${until ? `(到 ${new Date(until).toISOString()})` : ''},这一轮改用 ${target}`);
@@ -3542,7 +3544,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // writeProtect:闸门按 known-safe 放行的 git 读命令(没人看过卡)→ 这一次在写拒绝 profile 里跑(G5 方案 B,macOS、宿主沙箱关)。
     const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }): Promise<ExecutedToolCall> => {
       (ptc?.signal ?? ac.signal).throwIfAborted();
-      const executionContext = { ...toolCtx, toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
+      const executionContext = { ...toolCtx, ...(execCall.function.name === 'web_search' ? { modelId: searchModelId } : {}), toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
       // 意图先落盘(E2):执行前把「已开始」写进这一行 —— 崩在执行中,下次回放说「结局不明,先核对」,而不是「没跑过」。
       // 只读程序里嵌套的调用(ptc)不在 allToolCalls 里,不记。
       if (!ptc) {
@@ -4121,6 +4123,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
             // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
             onNotice: (n) => {
+              if (n.kind === 'model_fallback' && n.to) searchModelId = n.to;
               if (n.kind !== 'model_fallback' || modelFallbackNoted) return;
               modelFallbackNoted = true;
               console.warn(`[agent-core] run=${runId} 模型 ${n.from} 已停用,服务端改用 ${n.to}`);
