@@ -10,14 +10,14 @@
    落点(输入框)同时亮起。不描边:包住整块的虚线框 2026-10-12 用户要求去掉(DESIGN §6「拖入提示」,
    check:dropfeedback 守着)。 */
 .t2-chat-view { position: relative; }
-.t2-chat-view.refdrop::after,
-.t2-chat-view[data-filedrop]::after { /* OS 文件也落整片(见 Composer2) */
+.t2-chat-view.refdrop:not([data-deskdrop])::after,
+.t2-chat-view[data-filedrop]:not([data-deskdrop])::after { /* OS 文件也落整片(见 Composer2);拖到 Desk 某一格上时让给那一格(data-deskdrop) */
   content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 20;
   border-radius: var(--radius-lg, 12px);
   background: color-mix(in srgb, var(--signal) 5%, transparent);
 }
 /* 与 lcl/components/chatBox.css 的 .t2c-card.dragover 同一画法(那条是卡片自己当落区时用的) */
-:is(.t2-chat-view.refdrop, .t2-chat-view[data-filedrop]) .t2c-card {
+:is(.t2-chat-view.refdrop, .t2-chat-view[data-filedrop]):not([data-deskdrop]) .t2c-card {
   border-color: var(--signal-line);
   background: var(--accent-wash);
 }
@@ -1137,6 +1137,29 @@ button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { backgro
 .desk-cap-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desk-cap-ic { flex-shrink: 0; color: var(--accent-ink); }
 .desk-cap-caret { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+/* 两格手动控制(11-23 方案 A):▾ 上的小点 = Agent 放了你看不见的东西;图钉 = 这格钉住(默认配色下只靠有没有图钉分辨,不另造颜色) */
+.desk-cap-pick { position: relative; }
+.desk-cap-dot { position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent-ink); pointer-events: none; }
+.desk-cap .icon-btn.desk-cap-pin { width: 24px; height: 24px; margin-left: -4px; color: var(--text-muted); }
+.desk-cap .icon-btn.desk-cap-pin:hover { color: var(--text); }
+/* ▾ = 选择菜单:224px、长名省略(DESIGN §3 菜单几何) */
+.ctx-menu.desk-pick-menu { width: var(--menu-select-width); max-width: min(var(--menu-select-width), calc(100vw - 16px)); }
+.ctx-menu.desk-pick-menu .desk-pick-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-menu.desk-pick-menu .desk-pick-hint { flex: none; }
+.ctx-menu.desk-pick-menu .desk-pick-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
+/* 上下分界:平时不画,悬停 / 拖动时变色、光标上下箭头(画法同左缘拖宽条 .agent-desk-grip) */
+.agent-desk-body { position: relative; }
+.agent-desk-split { position: absolute; left: 0; right: 0; height: 6px; margin-top: -3px; cursor: row-resize; z-index: 5; border-radius: 3px; touch-action: none; }
+.agent-desk-split:hover, .agent-desk-split.active { background: var(--accent-ink); opacity: 0.3; }
+/* 拖文件到某一格:那一格原地淡入一层 5% 主题色(同聊天区拖入的画法),不画框 */
+.agent-desk-pane.has-caps::after {
+  content: ''; position: absolute; inset: 6px; pointer-events: none; z-index: 4;
+  border-radius: var(--radius-lg, 12px);
+  background: color-mix(in srgb, var(--signal) 5%, transparent);
+  opacity: 0; transition: opacity var(--lcl-drop-fade, 130ms ease);
+}
+.agent-desk-pane.has-caps[data-drop]::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .agent-desk-pane.has-caps::after { transition: none; } }
 .desk-cap-slot { display: flex; align-items: center; gap: 1px; min-width: 0; overflow: hidden; }
 .desk-cap-slot .wsfile-seg { margin: 0; }
 .desk-cap-slot .wsfile-seg button { height: 28px; padding: 0 8px; border-radius: var(--radius-pill, 999px); }

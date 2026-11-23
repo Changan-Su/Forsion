@@ -11,7 +11,7 @@ import React, { createContext, useContext, useEffect, useRef, useState } from 'r
 import { MessageSquare, PanelRight, Puzzle } from 'lucide-react'
 import type { ToolEvent } from '../types'
 import { useApp, type DeskItem } from '../stores/appStore'
-import { replaceTop } from '../stores/deskPlan'
+import { deskReduce } from '../stores/deskPlan'
 import { registerMessages, useI18n } from '../i18n'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { pluginDisplayName } from '../amadeus/plugins/display'
@@ -48,13 +48,18 @@ const QUOTE_CAP = 20_000 // 同 quoteInMainChat
 
 export const deskItemsOf = (sessionId: string): DeskItem[] => useApp.getState().deskBySession[sessionId]?.items ?? []
 
-/** 放进 Desk 顶格并展开成半宽侧板(用户拖过宽度就不动宽度);同一次调用已在 Desk 里时只挪到顶格。 */
-export function showToolCardInDesk(sessionId: string, callId: string, name: string): void {
+/** 放进 Desk 并展开成半宽侧板(用户拖过宽度就不动宽度);同一次调用已在 Desk 里时只挪到顶格。
+ *  落位听钉住(deskPlan.deskReduce):byAgent = 结果直播到达时自动进(进没钉的那格,两格都钉 → 只亮点);
+ *  否则是用户点了卡片上的「放到 Desk」,按引用的规则落位。一格都没钉时两者都 = 原来的顶格。 */
+export function showToolCardInDesk(sessionId: string, callId: string, name: string, byAgent = false): void {
   const app = useApp.getState()
   const cur = app.deskBySession[sessionId]
   const item: DeskItem = { key: `tool:${callId}`, path: '', name, at: Date.now(), tool: { callId } }
-  const items = replaceTop(deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId), item)
-  app.patchDesk(sessionId, { items, mode: 'open', ...(cur?.userResized ? {} : { size: 'half' as const }) })
+  const rest = deskItemsOf(sessionId).filter((x) => x.tool?.callId !== callId)
+  const placed = deskReduce({ ...(cur ?? {}), items: rest }, byAgent
+    ? { type: 'land', item }
+    : { type: 'cite', path: '', item, sameView: () => false })
+  app.patchDesk(sessionId, { ...placed, mode: 'open', ...(cur?.userResized ? {} : { size: 'half' as const }) })
 }
 
 /** 从 Desk 拿掉;Desk 空了就收起侧板。 */
@@ -78,7 +83,7 @@ export async function placeLiveToolCard(sessionId: string, callId: string): Prom
   }
   if (!claim || claim.item.surface !== 'desk') return
   autoPlaced.add(callId)
-  showToolCardInDesk(sessionId, callId, toolCardTitle(claim.item))
+  showToolCardInDesk(sessionId, callId, toolCardTitle(claim.item), true)
 }
 
 /** 仅供单测复位。 */

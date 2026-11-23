@@ -29,7 +29,7 @@ import { track } from '../../achievements/store'
 import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
 import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, clearLiveTop, isDuplicateShow, liveDeskPath, liveKeepsDesk, packDeskMap, placeLiveItem, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskIdentity, deskItemFor, deskLivePlace, deskPathId, deskReduce, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
@@ -894,19 +894,86 @@ export interface DeskState {
   fraction?: number
   userResized?: boolean
   note?: string
+  /** 手动控制(11-23 方案 A)的摆法字段,含义见 deskPlan.ts 的 DeskCore;split = 上格占比(缺省各半)。 */
+  noteFor?: string[]
+  recent?: DeskItem[]
+  fresh?: string
+  solo?: number
+  split?: number
 }
 
-/** Desk 会话快照:变更后 500ms 合并落盘(直播格在 pack 时剔除,超容量按最近展示截断)。
- *  localStorage 是会话键共享,多窗口各自启动时水化、写入合并为后写胜——与 desk 本身的
- *  per-session 语义一致;写失败(配额/隐私模式)静默容忍,退化回"刷新散场"。 */
+/** Desk 会话快照:变更后合并落盘(直播格在 pack 时剔除,超容量按最近展示截断)。Agent 的变更等 500ms 合并,
+ *  用户动手立刻落(另一扇窗要马上跟)。写的时候只覆盖**这扇窗动过的会话**,其余照盘上的(原来整张表后写胜,
+ *  两扇窗各摆各的会互相盖掉)。另一扇窗经 storage 事件收到后只认摆法那几项(installDeskSync)。
+ *  写失败(配额/隐私模式)静默容忍,退化回"刷新散场"。 */
 let deskPersistTimer: ReturnType<typeof setTimeout> | null = null
-function persistDeskSoon(): void {
+const deskDirty = new Set<string>()
+function flushDesk(): void {
+  if (deskPersistTimer) { clearTimeout(deskPersistTimer); deskPersistTimer = null }
+  if (!deskDirty.size) return
+  try {
+    const disk = unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY))
+    const mine = store.get().deskBySession
+    for (const sid of deskDirty) {
+      if (mine[sid]) disk[sid] = mine[sid] as DeskSnapshot
+      else delete disk[sid]
+    }
+    deskDirty.clear()
+    localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(disk))
+  } catch { /* ignore */ }
+}
+function persistDeskSoon(sessionId?: string, now = false): void {
   if (typeof localStorage === 'undefined') return
+  if (sessionId) deskDirty.add(sessionId)
+  else for (const sid of Object.keys(store.get().deskBySession)) deskDirty.add(sid)
+  if (now) { flushDesk(); return }
   if (deskPersistTimer) clearTimeout(deskPersistTimer)
-  deskPersistTimer = setTimeout(() => {
-    deskPersistTimer = null
-    try { localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(store.get().deskBySession)) } catch { /* ignore */ }
-  }, 500)
+  deskPersistTimer = setTimeout(flushDesk, 500)
+}
+
+/** 同一条会话开在两扇窗(主窗 + 独立窗):一扇摆了,另一扇跟着变。独立窗收不到主窗那次 run 的事件,
+ *  所以摆法只经 localStorage 走:收到 storage 事件 → 对每条摆法变了的会话,换上对面的摆法(条目、钉住、
+ *  最近放过的、点、说明、分界、只看一格);形态与宽度(mode / fraction / size)是每扇窗自己的,不跟。
+ *  同一样东西(身份相同、钉住相同)留本窗的条目对象,不因两扇窗各自生成的 key 不同而重挂;本窗自己的直播格
+ *  按 Agent 落位规则重新摆回去(直播格不落盘,对面看不见它)。 */
+let deskSyncInstalled = false
+function installDeskSync(): void {
+  if (deskSyncInstalled || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+  deskSyncInstalled = true
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== DESK_PERSIST_KEY || e.newValue === null) return
+    const incoming = unpackDeskMap(e.newValue)
+    const before = unpackDeskMap(e.oldValue)
+    store.set((s) => {
+      let changed = false
+      const next = { ...s.deskBySession }
+      for (const sid of new Set([...Object.keys(incoming), ...Object.keys(before)])) {
+        const theirs = incoming[sid]
+        const cur = next[sid]
+        if (!theirs && !before[sid]) continue
+        const adopted = adoptDeskArrangement(cur, theirs ?? { items: [], size: 'half' })
+        if (adopted !== cur) { next[sid] = adopted; changed = true }
+      }
+      return changed ? { deskBySession: next } : {}
+    })
+  })
+}
+const DESK_SYNC_FIELDS = ['recent', 'fresh', 'solo', 'note', 'noteFor', 'split'] as const
+export function adoptDeskArrangement(cur: DeskState | undefined, theirs: DeskSnapshot): DeskState {
+  const base: DeskState = cur ?? { items: [], size: theirs.size || 'half', ...(theirs.mode ? { mode: theirs.mode } : {}) }
+  const lives = base.items.filter((x) => x.live)
+  // 同一样(身份 + 钉住都相同)沿用本窗的条目对象
+  let items = theirs.items.map((t) => base.items.find((x) => !x.live && deskIdentity(x) === deskIdentity(t) && !!x.pin === !!t.pin) ?? t)
+  for (const lv of lives) items = deskLivePlace(items, { ...lv, live: { ...lv.live!, bumped: undefined } })
+  const sameItems = items.length === base.items.length && items.every((x, i) => x === base.items[i])
+  const sameRest = DESK_SYNC_FIELDS.every((k) => JSON.stringify(base[k] ?? null) === JSON.stringify(theirs[k] ?? null))
+  if (sameItems && sameRest) return base
+  const out: DeskState = { ...base, items: sameItems ? base.items : items }
+  for (const k of DESK_SYNC_FIELDS) {
+    if (theirs[k] === undefined) delete out[k]
+    else (out as unknown as Record<string, unknown>)[k] = theirs[k]
+  }
+  return out
 }
 
 const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>>()
@@ -1255,6 +1322,8 @@ export interface TanguState {
   /** view 省略 = 按文件类型自动路由;给了(如 PDF 引用要跳到第 N 页)就照它挂原生视图。 */
   deskShowFile(sessionId: string, path: string, view?: { type: string; params?: Record<string, unknown> }, name?: string): void
   patchDesk(sessionId: string, patch: Partial<DeskState>): void
+  /** Agent Desk 摆法动作(手动控制 ▾ / ⋯ / 拖放 / 钉住 / 清空;纯决策在 deskPlan.deskReduce)。立刻落盘。 */
+  deskAct(sessionId: string, action: DeskAction): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
@@ -1324,6 +1393,7 @@ export function createTanguSlice(set: StoreApi<AppState>['setState'], get: Store
   host = h
   store = { get, set }
   initFirstRun() // 首次运行(遥测 v3)的首启时刻:建 store = 开窗那一刻,早于首启引导(sinceFirstLaunchS 要把引导算进去)
+  installDeskSync() // 两扇窗同一条会话的 Desk 摆法经 localStorage 同步
   return tanguMembers(set, get)
 }
 
@@ -3066,8 +3136,17 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // size 也是形态指令(用户裁决):card=收回卡片,half/wide=展开侧板;不带 size=保持现状。
     const mode: DeskState['mode'] = spec.size === 'card' ? undefined
       : spec.size === 'half' || spec.size === 'wide' ? 'open' : cur?.mode
-    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, items, size, mode, note: typeof spec.note === 'string' ? spec.note : cur?.note } } }))
-    persistDeskSoon()
+    // 落位听钉住(deskReduce 'present'):钉住的格不动,第一样进没钉的格,第二样进「最近放过的」;一格没钉 = 原样整个换掉
+    const placed = deskReduce(cur ?? { items: [] }, { type: 'present', items, note: typeof spec.note === 'string' ? spec.note : undefined })
+    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, ...placed, size, mode } as DeskState } }))
+    persistDeskSoon(sessionId)
+  },
+  deskAct: (sessionId, action) => {
+    const prev = get().deskBySession[sessionId]
+    const next = deskReduce(prev ?? { items: [] }, action)
+    if (prev && next === (prev as DeskCore)) return
+    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...(s.deskBySession[sessionId] ?? { size: 'half' as const }), ...next } as DeskState } }))
+    persistDeskSoon(sessionId, true) // 用户动手:立刻落,另一扇窗马上跟
   },
   deskAutoShow: (sessionId, toolId) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
@@ -3087,14 +3166,20 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const p = resolveDeskPath(raw, cfg.cwd || session?.project_path || undefined)
     if (!p) return
     const now = Date.now()
-    // 顶格是直播格时必须被磁盘真身替换,节流只防「磁盘格连续重挂」。
-    if (!cur?.items[0]?.live && isDuplicateShow(cur?.items[0], p, now)) return
+    // 直播格必须被磁盘真身替换,节流只防「磁盘格连续重挂」。节流看的是这次会被换掉的那格:
+    // 没钉 = 顶格(#790 原样);有钉 = 正演着这份文件的钉住格,否则 Agent 那格。
+    const items = cur?.items ?? []
+    const hasLive = items.some((x) => x.live?.toolId === toolId)
+    const tgt = !items.some((x) => x.pin)
+      ? items[0]
+      : items.find((x) => x.pin && !x.live && deskPathId(x.path) === deskPathId(p)) ?? items[agentSlot(items)]
+    if (!hasLive && !tgt?.live && isDuplicateShow(tgt, p, now)) return
     const item = deskItemFor(p, now)
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: replaceTop(c.items, item) } } }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...deskReduce(c, { type: 'land', item, toolId }) } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId)
   },
   deskLiveSync: (sessionId, msgId, toolId, tool) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
@@ -3102,9 +3187,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const cfg = get().configBySession[sessionId] || {}
     const session = get().sessions.find((x) => x.id === sessionId)
     if (cfg.execMode ? cfg.execMode !== 'host' : !session?.project_path) return
-    const top = cur?.items[0]
-    const already = top?.live?.toolId === toolId
+    const top = cur?.items.find((x) => x.live?.toolId === toolId) // 直播格不一定在顶格(上格钉住时在下格)
+    const already = !!top
     if (already && top!.path) return // 已上台且路径就位:内容直播由 LivePane 订阅,state 不再动
+    // 两格都钉:不上直播,只亮点 —— 点已经亮着就别每段增量都动 state
+    if (!already && cur && agentSlot(cur.items) < 0 && cur.fresh === `live:${toolId}`) return
     // 从累积参数里试提目标路径(可能还没流到)
     let p: string | null = null
     const msgs = get().messagesBySession[sessionId] || []
@@ -3123,45 +3210,65 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       at: Date.now(),
       live: { msgId, toolId, tool },
     }
+    let changed = false
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: placeLiveItem(c.items, item) } } }
+      const next = deskReduce(c, { type: 'live', item })
+      if (next.items === c.items && next.fresh === c.fresh) return {}
+      changed = true
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next } } }
     })
-    persistDeskSoon() // 直播格本身不落盘,但 replaceTop 可能挤掉了要落盘的磁盘格
+    if (changed) persistDeskSoon(sessionId) // 直播格本身不落盘,但它可能挤掉了要落盘的磁盘格
   },
   deskLiveClear: (sessionId, toolId) => {
+    let changed = false
     set((s) => {
       const c = s.deskBySession[sessionId]
-      const items = clearLiveTop(c?.items, toolId) // 带着 bumped 的直播格 → 回到直播前的摆法
-      if (!c || !items) return {}
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items } } }
+      if (!c) return {}
+      const next = deskReduce(c, { type: 'liveClear', toolId }) // 带着 bumped 的直播格 → 回到直播前的摆法
+      if (next === (c as DeskCore)) return {}
+      changed = true
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next } } }
     })
-    persistDeskSoon()
+    if (changed) persistDeskSoon(sessionId)
   },
   deskShowFile: (sessionId, path, view, name) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
+    // 两格都钉着、Agent 正在写这份(直播没上台)时点「正在编辑」行 → 把直播请进来(落位照引用的规则)
+    const msgs = get().messagesBySession[sessionId] || []
+    const cfg = get().configBySession[sessionId] || {}
+    const cwd = cfg.cwd || get().sessions.find((x) => x.id === sessionId)?.project_path || undefined
+    let liveItem: DeskItem | null = null
+    if (!view && !(get().deskBySession[sessionId]?.items ?? []).some((x) => x.live)) {
+      outer: for (let i = msgs.length - 1; i >= 0; i--) {
+        for (const e of msgs[i].toolEvents || []) {
+          if (e.done || !DESK_EDIT_TOOLS.has(e.name)) continue
+          const p = liveDeskPath(e.arguments || '', cwd)
+          if (p && deskPathId(p) === deskPathId(path)) {
+            liveItem = { key: `live:${e.id}`, path: p, name: p.split(/[\\/]/).pop() || p, at: Date.now(), live: { msgId: msgs[i].id, toolId: e.id, tool: e.name } }
+            break outer
+          }
+        }
+      }
+    }
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      const top = c.items[0]
-      // 顶格已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
+      // 已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
       // (PDF 重下一次、代码重建 CodeMirror)。只换 view.params(新页码/行号),没挂载完的视图
       // 据此以正确位置开场。文件身份键 = pdfPath(PDF 阅读器)/ path(WsFileView)/ filePath(插件文件视图:
       // 接管了 PDF 的插件,同一份的第二条引用也要原地收落点,e2e:pdfcite --plugin 的 P2),
       // **必须非空才算同一份** —— 两个都没带路径参数的视图不能被判成同一个。
       const fileKeyOf = (v?: { type: string; params?: Record<string, unknown> } | null): unknown =>
         v?.params?.pdfPath ?? v?.params?.path ?? v?.params?.filePath
-      const sameFile = !!view && top?.view?.type === view.type
-        && fileKeyOf(view) != null && fileKeyOf(top.view) === fileKeyOf(view)
-      // 顶格是直播格、点的正是它那份或下格那份(已在 Desk 上)→ 别打断直播,条目不动,只展开
-      const items = liveKeepsDesk(c.items, path)
-        ? c.items
-        : replaceTop(c.items, sameFile
-          ? { ...top!, view, at: Date.now() }
-          : { ...deskItemFor(path, Date.now(), name), ...(view ? { view } : {}) })
+      const sameView = (x: DeskItem): boolean => !!view && x.view?.type === view.type
+        && fileKeyOf(view) != null && fileKeyOf(x.view) === fileKeyOf(view)
+      // 直播格写完前不换内容(点的是 Desk 上已有的 → 条目不动,只展开);落位规则见 deskPlan.deskCite
+      const item = liveItem ?? { ...deskItemFor(path, Date.now(), name), ...(view ? { view } : {}) }
+      const next = deskReduce(c, { type: 'cite', path, item, sameView })
       // 用户点了「正在编辑」入口 = 用户动作,直接展开(卡片态 → 侧板)
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, mode: 'open' as const, items } } }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next, mode: 'open' as const } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId, true)
   },
   patchDesk: (sessionId, patch) => {
     set((s) => {
@@ -3169,7 +3276,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...patch } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId)
   },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
