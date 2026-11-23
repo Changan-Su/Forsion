@@ -38,17 +38,18 @@ export function marketplaceOriginOf(value: unknown): MarketplaceOrigin | undefin
   if (typeof o.sourceId !== 'string' || !/^[0-9a-f]{8}$/.test(o.sourceId) || !sourceTitle) return undefined;
   return { kind: o.kind, sourceId: o.sourceId, sourceTitle };
 }
+/** All five fields are required: a partial block must not read as "needs nothing". */
 export function marketplaceNeedsOf(value: unknown): MarketplaceItemNeeds | undefined {
   const r = value as Record<string, unknown> | null;
   if (!r || typeof r !== 'object' || Array.isArray(r)) return undefined;
-  if (['cli', 'desktopOnly', 'auditWarn'].some(k => r[k] !== undefined && typeof r[k] !== 'boolean')) return undefined;
-  if (r.apiKeys !== undefined && !Array.isArray(r.apiKeys)) return undefined;
-  if (r.scripts !== undefined && !(Number.isInteger(r.scripts) && (r.scripts as number) >= 0)) return undefined;
-  const apiKeys = ((r.apiKeys as unknown[]) || []).filter((k): k is string => typeof k === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(k)).slice(0, 8);
-  return { cli: r.cli === true, apiKeys, desktopOnly: r.desktopOnly === true, scripts: Math.min(Number(r.scripts) || 0, 100000), auditWarn: r.auditWarn === true };
+  if (['cli', 'desktopOnly', 'auditWarn'].some(k => typeof r[k] !== 'boolean')) return undefined;
+  if (!Array.isArray(r.apiKeys) || !(Number.isInteger(r.scripts) && (r.scripts as number) >= 0)) return undefined;
+  const apiKeys = (r.apiKeys as unknown[]).filter((k): k is string => typeof k === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(k)).slice(0, 8);
+  return { cli: r.cli as boolean, apiKeys, desktopOnly: r.desktopOnly as boolean, scripts: Math.min(r.scripts as number, 100000), auditWarn: r.auditWarn as boolean };
 }
-/** Older servers send no origin: treat those entries as Forsion's. */
-export const isForsionMarketplaceItem = (item: { origin?: MarketplaceOrigin }): boolean => !item.origin || item.origin.kind === 'forsion';
+/** Older servers send no origin: treat those entries as Forsion's. Source card IDs (`src_…`) never are, even if their origin was malformed. */
+export const isForsionMarketplaceItem = (item: { id?: string; origin?: MarketplaceOrigin }): boolean =>
+  !item.id?.startsWith('src_') && (!item.origin || item.origin.kind === 'forsion');
 const VERSION = /^[vV]?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
 export function compareAppVersions(a: string, b: string): number | null {
   const valid = (value: string) => {
@@ -75,10 +76,10 @@ export function compareAppVersions(a: string, b: string): number | null {
   return 0;
 }
 export type MarketplaceCompatibility = 'compatible' | 'unknown' | 'version' | 'platform';
-export function marketplaceCompatibility(item: MarketplaceRequirements & { tags?: string[] }, version: string, platform: string): MarketplaceCompatibility {
+export function marketplaceCompatibility(item: MarketplaceRequirements & { tags?: string[]; requirements?: { desktopOnly?: boolean } }, version: string, platform: string): MarketplaceCompatibility {
   const platforms = item.platforms || [];
   const desktop = ['desktop', 'macos', 'windows', 'linux'].includes(platform);
-  if (item.tags?.includes('desktop-only') && !desktop) return 'platform';
+  if ((item.tags?.includes('desktop-only') || item.requirements?.desktopOnly === true) && !desktop) return 'platform';
   if (platforms.length && !platforms.includes(platform) && !(desktop && platforms.includes('desktop'))) return 'platform';
   const min = item.minAppVersion ? compareAppVersions(version, item.minAppVersion) : null;
   const max = item.maxAppVersion ? compareAppVersions(version, item.maxAppVersion) : null;

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 const fixture = vi.hoisted(() => ({ list: vi.fn(), detail: vi.fn() }));
 vi.mock('../seams/runtime.js', () => ({ isConfigured: () => true, deps: () => ({ brain: { marketplace: fixture } }) }));
 import { marketplaceProvider } from './builtin/marketplace.js';
-import { hasMarketplaceCards, marketplaceItemsOf } from '../shared/marketplace.js';
+import { hasMarketplaceCards, marketplaceCompatibility, marketplaceItemsOf } from '../shared/marketplace.js';
 describe('Forsion marketplace tools', () => {
   const item = (id: string, name: string, tags = ['notes']) => ({ id, name, tags, installSlug: `market-${id}`, type: 'amadeus-plugin', source: 'zip', author: 'Author', summary: 'PDF notes', minAppVersion: '2.13.0', platforms: ['desktop'] });
   it('searches the entire catalog, preserves duplicate names, applies filters and propagates cancellation', async () => {
@@ -99,6 +99,24 @@ describe('collected skills (skills.sh) in store results', () => {
     expect(official.origin).toEqual({ kind: 'forsion', publisher: 'official' });
     expect(marketplaceItemsOf({ kind: 'marketplace', version: 1, items: [forsion('x', { origin: { kind: 'forsion', publisher: 'king' } })] })[0].origin).toEqual({ kind: 'forsion', publisher: 'developer' });
     expect(marketplaceItemsOf({ kind: 'marketplace', version: 1, items: [forsion('y', { origin: { kind: 'other', sourceId: '25aae625', sourceTitle: 'x' } })] })[0].origin).toBeUndefined();
+    // 缺字段的需要条件不能读成「什么都不需要」
+    for (const partial of [{}, { cli: false, apiKeys: [], desktopOnly: false, scripts: 0 }, { cli: false, apiKeys: 'KEY', desktopOnly: false, scripts: 0, auditWarn: false }, { cli: false, apiKeys: [], desktopOnly: false, scripts: -1, auditWarn: false }])
+      expect(marketplaceItemsOf({ kind: 'marketplace', version: 1, items: [collected('p', { requirements: partial })] })[0].requirements).toBeUndefined();
+  });
+
+  it('a src_ card whose origin was malformed still ranks and reads as an outside entry', async () => {
+    fixture.list.mockResolvedValue([collected('planner-a', { origin: { kind: 'collected', sourceId: 'bad', sourceTitle: 'skills.sh' } }), forsion('mine')]);
+    const search = (await marketplaceProvider.tools({} as any))[0];
+    const result = JSON.parse(String(await search.execute({ query: 'plan projects' }, {} as any)));
+    expect(result.items.map((i: any) => i.id)).toEqual(['mine', 'src_25aae625_planner-a']);
+    expect(result.instruction).toContain('not manually reviewed');
+  });
+
+  it('marketplaceCompatibility itself honours requirements.desktopOnly (clients render cards from the same contract)', () => {
+    const item = { platforms: [], requirements: { desktopOnly: true } };
+    expect(marketplaceCompatibility(item, '2.14.3', 'android')).toBe('platform');
+    expect(marketplaceCompatibility(item, '2.14.3', 'web')).toBe('platform');
+    expect(marketplaceCompatibility(item, '2.14.3', 'macos')).toBe('unknown');
   });
 
   it('ranks Forsion entries first at equal keyword hits; more hits still win', async () => {
