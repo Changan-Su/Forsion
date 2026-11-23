@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, setRunApprovalCap, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { PARKED_USER_REJECT_REASON } from '../contracts/toolRejection.js';
 import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
@@ -3750,7 +3751,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         let done: ExecutedToolCall;
         if (d.action === 'reject') {
           status = 'rejected';
-          done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || '用户拒绝了该操作。');
+          done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || PARKED_USER_REJECT_REASON);
         } else {
           try {
             done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);

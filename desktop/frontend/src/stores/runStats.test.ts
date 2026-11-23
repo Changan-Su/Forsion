@@ -30,6 +30,27 @@ describe('run stats', () => {
     expect(rs.tokens).toBe(5400)
   })
 
+  it('sums per-call output / input / cached from usage, skipping background phases', () => {
+    let rs = stepRunStats(base, { type: 'usage', seq: 3, payload: { prompt: 61200, completion: 380, cached: 58800, total: 61580 } }, 1)
+    rs = stepRunStats(rs, { type: 'usage', seq: 7, payload: { phase: 'compaction', prompt: 9000, completion: 900, cached: 0 } }, 2)
+    rs = stepRunStats(rs, { type: 'usage', seq: 9, payload: { prompt: 63900, completion: 610, cached: 61000, total: 126090 } }, 3)
+    expect(rs).toMatchObject({ output: 990, input: 125100, cached: 119800, tokens: 126090, usageSeq: 9 })
+  })
+
+  it('does not count a usage event twice when a stream replays it (same or older seq)', () => {
+    let rs = stepRunStats(base, { type: 'usage', seq: 4, payload: { prompt: 100, completion: 10, total: 110 } }, 1)
+    rs = stepRunStats(rs, { type: 'usage', seq: 8, payload: { prompt: 200, completion: 20, total: 330 } }, 2)
+    expect(stepRunStats(rs, { type: 'usage', seq: 8, payload: { prompt: 200, completion: 20, total: 330 } }, 3)).toBe(rs)
+    expect(stepRunStats(rs, { type: 'usage', seq: 4, payload: { prompt: 100, completion: 10, total: 110 } }, 3)).toBe(rs)
+    expect(rs).toMatchObject({ output: 30, input: 300 })
+    // 重挂 = 统计从零重建、从 seq 0 回放:一遍下来和在线看到的一样
+    let again = base
+    for (const ev of [{ seq: 4, payload: { prompt: 100, completion: 10, total: 110 } }, { seq: 8, payload: { prompt: 200, completion: 20, total: 330 } }]) {
+      again = stepRunStats(again, { type: 'usage', ...ev }, 9)
+    }
+    expect(again).toMatchObject({ output: 30, input: 300, tokens: 330 })
+  })
+
   it('closes a thinking segment when the model call ends without output', () => {
     let rs = stepRunStats(base, { type: 'reasoning' }, 0)
     rs = stepRunStats(rs, { type: 'status', payload: { phase: 'llm_call' } }, 500)
