@@ -87,20 +87,18 @@ async function newHumanNote(sessionId: string): Promise<void> {
 }
 
 /** ＋ 里的「选一个文件」:系统选择框选一个本机文件放上来。 */
+/** 选一个文件:桌面走系统选择框(pickPaths,同 Chat Box 的「添加文件」);只取第一个文件,文件夹不收。网页 / 手机没有本机路径 → 不给这一项。 */
 async function pickHumanFile(sessionId: string): Promise<void> {
-  const files = await window.tangu?.pickFiles?.()
-  const f = files?.[0]
-  if (!f) return
-  let p = ''
-  try { p = window.tangu?.getPathForFile?.(f) || '' } catch { p = '' }
-  if (p) put(sessionId, deskItemFor(p, Date.now()))
+  const picked = await window.tangu?.pickPaths?.()
+  const f = picked?.find((x) => !x.isDirectory)
+  if (f?.path) put(sessionId, deskItemFor(f.path, Date.now()))
 }
 
 function addItems(sessionId: string, t: (k: string) => string): CtxItem[] {
   return [
     { label: t('humanDesk.newNote'), icon: <FilePlus size={14} />, run: () => void newHumanNote(sessionId) },
     // 「新建白板」这一步不放:Desk 上的白板是只读预览(走查续七 7.7 A),Human Desk 上可画要用户点头
-    ...(window.tangu?.pickFiles ? [{ label: t('humanDesk.pickFile'), icon: <FolderOpen size={14} />, run: () => void pickHumanFile(sessionId) }] : []),
+    ...(window.tangu?.pickPaths ? [{ label: t('humanDesk.pickFile'), icon: <FolderOpen size={14} />, run: () => void pickHumanFile(sessionId) }] : []),
   ]
 }
 
@@ -184,6 +182,8 @@ export function DeskSwitch({ sessionId }: { sessionId: string }): React.ReactEle
 
 // ── 你在第几节(笔记) ──
 
+/** 展开态「滚到哪」那条线:整块顶往下这么多(胶囊带 46 + 一点余量)。滚回上次那一节时标题也停在这条线上方一点。 */
+const SECTION_LINE = 58
 const HEADING_SEL = '.page-view h1, .page-view h2, .page-view h3' // 同 NoteFloatingToc
 const headingsIn = (root: HTMLElement): HTMLElement[] => {
   const own = Array.from(root.querySelectorAll<HTMLElement>(HEADING_SEL))
@@ -192,48 +192,61 @@ const headingsIn = (root: HTMLElement): HTMLElement[] => {
 }
 
 /** 展开态:光标在这篇笔记里就按光标,否则按滚动位置(胶囊带下面那条线以上最后一个标题)算「第几节」,记进 store(内存)。 */
-function useSectionTracker(paneRef: React.RefObject<HTMLDivElement | null>, sessionId: string, on: boolean, itemKey: string | undefined): void {
+function useSectionTracker(paneRef: React.RefObject<HTMLDivElement | null>, sessionId: string, on: boolean, itemKey: string | undefined, keep = false): void {
   useEffect(() => {
     const pane = paneRef.current
     if (!pane || !on) return
     let raf = 0
+    // 光标在这块里 → 按光标;你滚了 → 按滚到哪;光标去了别处(比如去输入框打字)→ 留着上一次,不按滚动位置重算
+    let why: 'scroll' | 'auto' = 'auto'
+    let known = keep // 回到同一样东西(切走又切回 / 收起又展开):先留着上次那一节,等你点进去或滚动再算
+    const caretIn = (): Node | null => {
+      const sel = pane.ownerDocument.getSelection()
+      const node = sel && sel.rangeCount ? sel.anchorNode : null
+      return node && pane.contains(node) ? node : null
+    }
     const compute = (): void => {
       raf = 0
+      const scrolled = why === 'scroll'
+      why = 'auto'
       const hs = headingsIn(pane)
       let at = -1
-      const sel = document.getSelection()
-      const node = sel && sel.rangeCount ? sel.anchorNode : null
-      if (node && pane.contains(node)) {
+      const node = scrolled ? null : caretIn()
+      if (!node && !scrolled && known) return
+      if (hs.length) known = true // 编辑器还没挂好(没有标题)不算数,挂好那一下的变动再按滚动位置算一次
+      if (node) {
         for (let i = 0; i < hs.length; i++) {
           const h = hs[i]
           if (h === node || h.contains(node) || (h.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) at = i
           else break
         }
       } else {
-        const line = pane.getBoundingClientRect().top + 58 // 胶囊带(46)+ 一点余量
+        const line = pane.getBoundingClientRect().top + SECTION_LINE
         for (let i = 0; i < hs.length; i++) { if (hs[i].getBoundingClientRect().top <= line) at = i; else break }
       }
       const sec = deskSection(hs.map((h) => ({ level: Number(h.tagName.slice(1)) || 2, text: h.textContent || '' })), at)
       useApp.getState().humanDeskAct(sessionId, { type: 'section', section: sec ?? undefined })
     }
     const kick = (): void => { if (!raf) raf = requestAnimationFrame(compute) }
+    const onScroll = (): void => { why = 'scroll'; kick() }
     const doc = pane.ownerDocument
     doc.addEventListener('selectionchange', kick)
-    pane.addEventListener('scroll', kick, true)
+    pane.addEventListener('scroll', onScroll, true)
     const mo = new MutationObserver(kick)
     mo.observe(pane, { childList: true, subtree: true, characterData: true })
     kick()
     return () => {
       if (raf) cancelAnimationFrame(raf)
       doc.removeEventListener('selectionchange', kick)
-      pane.removeEventListener('scroll', kick, true)
+      pane.removeEventListener('scroll', onScroll, true)
       mo.disconnect()
     }
-  }, [paneRef, sessionId, on, itemKey])
+  }, [paneRef, sessionId, on, itemKey]) // eslint-disable-line react-hooks/exhaustive-deps -- keep 只在挂上那一下有意义
 }
 
-/** 卡片预览跟到你在的那一节:预览挂上来、小节变了 → 把那个标题滚到预览顶上(只滚预览自己的滚动容器,不带着栈一起滚)。 */
-function useFollowSection(bodyRef: React.RefObject<HTMLDivElement | null>, idx: number | undefined, on: boolean): void {
+/** 卡片预览跟到你在的那一节:预览挂上来、小节变了 → 把那个标题滚到预览顶上(只滚预览自己的滚动容器,不带着栈一起滚)。
+ *  展开态也用它,只在挂上那一下把你上次那一节滚回来(offset 让出浮动胶囊带)。 */
+function useFollowSection(bodyRef: React.RefObject<HTMLDivElement | null>, idx: number | undefined, on: boolean, offset = 6, fromBody = false): void {
   useEffect(() => {
     const body = bodyRef.current
     if (!body || !on || idx === undefined) return
@@ -247,10 +260,12 @@ function useFollowSection(bodyRef: React.RefObject<HTMLDivElement | null>, idx: 
       while (sc && sc !== body && !(sc.scrollHeight > sc.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement
       if (!sc || sc === body) return
       const zoom = (sc as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1 // 卡片预览是 zoom 0.75:矩形是缩放后的,scrollTop 是本地 px
-      sc.scrollTop += (h.getBoundingClientRect().top - sc.getBoundingClientRect().top - 6) / zoom
+      // 卡片预览:标题贴预览顶(滚动容器顶 + offset);展开态:offset 量自整块的顶(胶囊带浮在上面),和 useSectionTracker 的「滚到哪」那条线同一把尺
+      const top = (fromBody ? body.getBoundingClientRect().top : sc.getBoundingClientRect().top) + offset
+      sc.scrollTop += (h.getBoundingClientRect().top - top) / zoom
     }, 80)
     return () => window.clearInterval(id)
-  }, [bodyRef, idx, on])
+  }, [bodyRef, idx, on, offset, fromBody])
 }
 
 // ── 内容(卡片态与展开态共用) ──
@@ -371,7 +386,11 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
   const pickRows = useHumanPickRows(sessionId)
   useEffect(() => { ensureAmadeusReady() }, [])
   useDeskPathDrop(paneRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())))
-  useSectionTracker(paneRef, sessionId, isNote(item), item?.key)
+  // 挂上时记下上次那一节(同一样东西才算):滚回去,并且不让「编辑器挂好那一下」按顶上那一节覆盖掉
+  const back = useRef<{ key?: string; idx?: number }>({ key: item?.key, idx: h?.section?.idx })
+  if (back.current.key !== item?.key) back.current = { key: item?.key, idx: undefined }
+  useFollowSection(paneRef, back.current.idx, isNote(item), SECTION_LINE - 6, true)
+  useSectionTracker(paneRef, sessionId, isNote(item), item?.key, back.current.idx !== undefined)
   const collapse = (): void => { touchDesk(sessionId, 'humandesk'); useApp.getState().setDeskSide(sessionId, null) }
   const path = item?.path || ''
   const rel = vaultRelOf(path, vaultRoot)

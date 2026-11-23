@@ -2081,6 +2081,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 
 /* 卡片态:卡头「你」+ Human Desk + 名字 ▾ + 小眼睛 + 停止 + 展开;正文 = 「你在第几节」一行 + 小预览(同 Agent Desk 卡 0.75 缩镜) */
 .human-desk-card .t2-card-title > .human-desk-card-name { flex-shrink: 0; }
+/* 卡头已有名字 ▾ 时不再挂卡片自己的开合箭头(r3:一个 ▾ 就够,两个箭头把名字挤成「定…」) */
+.human-desk-card:has(.human-desk-card-pick) .t2-tsum-chev { display: none; }
 .human-desk-card-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .human-desk-card-pickwrap { display: inline-flex; min-width: 0; }
 .human-desk-card-pick {
@@ -2130,6 +2132,13 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .desk-caps-left > .desk-cap { pointer-events: auto; }
 .desk-cap.human-desk-name { gap: 0; padding-left: 6px; }
 .desk-cap.human-desk-name > .human-desk-eye { padding: 0 8px 0 2px; }
+/* 拖到最窄(切换件已收成只留图标):名字胶囊里的「你」和切换件那段的头像重复 → 藏掉;名字先裁,⋯ 和收起恒可见 */
+.desk-caps-left:has(.lcl-vmode[data-compact]) { gap: 4px; }
+/* Human Desk 右胶囊没有要裁的视图控件:窄时让左边那组先让(名字先裁),停止 / ⋯ / 收起不被挤出格(Agent Desk 照 #829 不变) */
+.human-desk-pane > .desk-caps > .desk-caps-left { flex-shrink: 20; }
+.desk-caps-left:has(.lcl-vmode[data-compact]) .human-desk-capyou { display: none; }
+.desk-caps-left:has(.lcl-vmode[data-compact]) .desk-cap.human-desk-name { padding-left: 2px; overflow: hidden; }
+.desk-caps-left:has(.lcl-vmode[data-compact]) .desk-cap.human-desk-name > .human-desk-eye { padding: 0 6px 0 0; }
 .human-desk-empty {
   flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   padding: 0 24px; text-align: center; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body, 13px);
