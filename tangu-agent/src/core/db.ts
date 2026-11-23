@@ -8,6 +8,13 @@ import { toSqliteDDL } from './dialectDDL.js';
 export const query = <T = any>(sql: string, params?: any[]): Promise<T> =>
   deps().host.query<T>(sql, params);
 
+/** 宿主的异步事务(HostServices.transaction);没实现回 null,调用方走各自的逐条写退路。 */
+export type TxQuery = <R = any>(sql: string, params?: any[]) => Promise<R>;
+export const hostTransaction = (): (<T>(fn: (q: TxQuery) => Promise<T>) => Promise<T>) | null => {
+  const h = deps().host;
+  return typeof h.transaction === 'function' ? (fn) => h.transaction!(fn) : null;
+};
+
 export const getDbType = (): string => deps().host.getDbType();
 export const getNowSql = (): string => deps().host.getNowSql();
 
