@@ -44,7 +44,7 @@
 .agent-portrait { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 96px; height: 104px; color: var(--accent-ink); border-radius: var(--radius-lg, 16px); background: var(--overlay-light); overflow: hidden; }
 .agent-portrait img { width: 100%; height: 100%; object-fit: cover; }
 .agent-portrait.small { width: 36px; height: 40px; border-radius: var(--radius-sm, 8px); }
-.agent-character-id { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); text-overflow: ellipsis; transition: background 160ms ease, border-color 160ms ease; }
+.agent-character-id { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-xs, 4px); text-overflow: ellipsis; transition: background 160ms ease, border-color 160ms ease; }
 .agent-character-id:not([readonly]):hover { background: var(--overlay-light); }
 .agent-character-id:not([readonly]):focus { color: var(--text); background: var(--bg-card); border-color: var(--accent-ink); }
 .agent-character-id[readonly] { cursor: default; }
@@ -183,7 +183,7 @@ div.agent-equipment-item { display: grid; gap: 1px; padding: 7px 10px; cursor: d
 div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 10px; min-width: 0; cursor: pointer; }
 .equipment-desc { display: block; width: calc(100% - 23px); min-width: 0; margin-left: 23px; padding: 0; text-align: left; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .equipment-desc:hover { color: var(--text); }
-.equipment-desc:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; border-radius: 4px; }
+.equipment-desc:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; border-radius: var(--radius-sm); }
 .equipment-desc[aria-expanded=true] { white-space: normal; overflow-wrap: anywhere; }
 /* 内置技能组:默认合上。标题行 = 组名 + 已启用计数,不描边(内容卡纪律),靠底色与清单区分。 */
 .equipment-group { margin-top: 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }

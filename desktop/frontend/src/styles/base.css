@@ -798,7 +798,7 @@ a:hover { color: var(--accent-ink); }
 .nt-search { display: flex; align-items: center; gap: 10px; width: 100%; height: 40px; padding: 0 12px; background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); color: var(--text-faint); font-size: var(--ui-font-body, 13px); text-align: left; cursor: text; transition: border-color var(--duration-fast, .15s); }
 .nt-search:hover { border-color: var(--accent-ink); }
 .nt-search > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nt-kbd { flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption, 11px); }
+.nt-kbd { flex-shrink: 0; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--overlay-light); color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption, 11px); }
 .nt-search + .newtab-sec { margin-top: 22px; }
 .nt-head { display: flex; align-items: baseline; gap: 8px; }
 .nt-hint { margin-left: auto; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 400; letter-spacing: 0; }
@@ -1276,7 +1276,7 @@ a:hover { color: var(--accent-ink); }
   font-size: 0.88em;
   background: var(--overlay-light);
   padding: 0.15em 0.4em;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
 }
 .msg-content pre {
   background: var(--bg-card);
@@ -3347,7 +3347,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-theme-live-brand { display: flex; align-items: center; gap: 7px; padding: 0 7px 13px; color: var(--text); font-size: var(--ui-font-caption, 11px); }
 .settings-theme-live-brand strong { font-weight: 660; }
 .settings-theme-live-nav { display: flex; flex-direction: column; gap: 3px; }
-.settings-theme-live-nav span { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.settings-theme-live-nav span { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 8px; border-radius: var(--radius-xs); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .settings-theme-live-nav span.active { color: var(--accent-ink); background: var(--accent-light); font-weight: 620; }
 .settings-theme-live-paper { display: flex; flex-direction: column; min-width: 0; padding: 22px 25px 18px; background: var(--bg); }
 .settings-theme-live-kicker { color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
@@ -3408,7 +3408,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-number-input { max-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
 /* 设置 → 浏览器 → Chrome 扩展:连接码(整段可选中)+ 行内按钮 */
 .settings-inline-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
-.settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
+.settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-xs); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
 .settings-path-text { font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); word-break: break-all; user-select: all; }
 /* Forsion Clip 扩展文件夹的拖拽把手(设置 › 浏览器):一张文件卡片,按下去走原生拖出(fs:startDrag) */
 .settings-drag-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border: var(--border-width) solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); cursor: grab; user-select: none; }
@@ -4120,7 +4120,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   font-size: 0.88em;
   background: var(--overlay-light);
   padding: 0.15em 0.4em;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
 }
 .md-body pre {
   margin: 0 0 8px;
@@ -4165,7 +4165,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   font-size: 0.88em;
   background: var(--overlay-light);
   padding: 0.15em 0.4em;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
 }
 .changelog-entry pre {
   background: var(--bg-card);
@@ -4411,7 +4411,7 @@ html.dark .brand-logo--dark { display: inline-block; }
 .shortcut-conflict-chip + span { margin-left: 10px; }
 /* 搜索框里的「按键」开关与按键查询 */
 .settings-filter-input > .shortcut-keymode {
-  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: var(--radius-xs);
   font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap;
 }
 .settings-filter-input > .shortcut-keymode.is-on { color: var(--accent-ink); background: var(--accent-light); }
@@ -4708,7 +4708,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
 .wsfile-ext { font-size: var(--ui-font-caption, 11px); text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-faint); font-family: var(--font-mono); flex-shrink: 0; }
 .wsfile-head .icon-btn { width: 26px; height: 26px; flex-shrink: 0; }
 .wsfile-seg { display: inline-flex; align-items: center; gap: 2px; margin-right: 4px; }
-.wsfile-seg button { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 2px 8px; border-radius: var(--radius-sm); display: inline-flex; align-items: center; gap: 4px; }
+.wsfile-seg button { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); padding: 2px 8px; border-radius: var(--radius-xs); display: inline-flex; align-items: center; gap: 4px; }
 .wsfile-seg button:hover { background: var(--overlay-light); color: var(--text); }
 .wsfile-seg button.active { background: var(--overlay-light); color: var(--accent-ink); }
 .wsfile-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -4754,7 +4754,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-banner-wrap { top: cal
 .csx-newok { font-size: var(--ui-font-meta, 12px); color: var(--on-action); background: var(--action-fill); border-radius: var(--radius-sm); padding: 6px 14px; }
 .csx-newerr { font-size: var(--ui-font-meta, 12px); color: var(--danger); margin-bottom: 10px; }
 .csx-projlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.csx-projcard { display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); color: var(--text); background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius); padding: 12px 14px; text-align: left; overflow: hidden; }
+.csx-projcard { display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); color: var(--text); background: var(--bg-card); border: var(--border-width) solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; text-align: left; overflow: hidden; }
 .csx-projcard span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .csx-projcard:hover { border-color: var(--accent-ink); background: var(--overlay-light); }
 .csx-projcard svg { flex-shrink: 0; color: var(--accent-ink); }

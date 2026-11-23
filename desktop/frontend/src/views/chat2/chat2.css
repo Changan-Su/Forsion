@@ -986,7 +986,7 @@
 .t2-tsum-secact {
   flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; border: none; background: transparent; cursor: pointer;
-  border-radius: var(--radius-sm, 8px); color: var(--text-faint, var(--text-muted));
+  border-radius: var(--radius-xs, 4px); color: var(--text-faint, var(--text-muted));
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2-tsum-secact:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
@@ -1038,7 +1038,7 @@
 .t2-tsum-root .t2-tsum-x {
   flex-shrink: 0; margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; border: none; background: transparent; cursor: pointer;
-  border-radius: var(--radius-sm, 8px); color: var(--text-faint, var(--text-muted));
+  border-radius: var(--radius-xs, 4px); color: var(--text-faint, var(--text-muted));
   opacity: 0; transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
 .t2-tsum-root:hover .t2-tsum-x,
@@ -1227,7 +1227,7 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-bg-stop {
   flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; padding: 0; border: none; background: transparent; cursor: pointer;
-  border-radius: var(--radius-sm, 8px); color: var(--text-faint, var(--text-muted));
+  border-radius: var(--radius-xs, 4px); color: var(--text-faint, var(--text-muted));
   opacity: 0; transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
 .t2-bg-row:hover .t2-bg-stop, .t2-bg-stop:focus-visible { opacity: 1; }
@@ -1712,7 +1712,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-turn:not([data-measured]) { visibility: hidden; }
 .t2cv-card {
   position: relative; box-sizing: border-box; padding: 14px 16px 10px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
 }
 /* 提问卡:对话里用户气泡的配方(强调色混进卡底),扁一些 */
 .t2cv-qcard { padding: 9px 14px 10px; background: color-mix(in srgb, var(--accent-ink) 9%, var(--bg-card, var(--bg))); }
@@ -1823,7 +1823,7 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2cv-read-b .t2-content { max-width: none; }
 .t2cv-empty {
   position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); max-width: 300px; padding: 22px 26px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card, var(--bg)); box-shadow: var(--card-shadow);
   color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; text-align: center; pointer-events: none;
 }
 /* 「接在 · …」:输入框发出去接在哪张卡后面(当前这一支的最后一张)。盒子照抄 .t2c-inner(880 封顶 + 28 内边距),左缘对齐输入卡。 */

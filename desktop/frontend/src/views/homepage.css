@@ -1341,7 +1341,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
   min-width: 16px;
   margin-right: 3px;
   padding: 0 5px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--overlay-light);
   color: var(--text-muted);
   font: inherit;

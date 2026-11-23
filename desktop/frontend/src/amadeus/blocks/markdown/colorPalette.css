@@ -8,7 +8,7 @@
 .amx-palette-close { margin-left: auto; display: flex; }
 .amx-palette-option { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; min-height: 30px; }
 .amx-palette-option > span { flex: 1; }
-.amx-palette-accent { width: 16px; height: 16px; background: var(--signal); border-radius: var(--radius-sm); }
+.amx-palette-accent { width: 16px; height: 16px; background: var(--signal); border-radius: var(--radius-xs); }
 .amx-palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px 0; }
 .amx-palette-grid > button { position: relative; display: flex; align-items: center; justify-content: center; height: 32px; }
 .amx-palette-grid i { width: 22px; height: 22px; border-radius: var(--radius-sm); }

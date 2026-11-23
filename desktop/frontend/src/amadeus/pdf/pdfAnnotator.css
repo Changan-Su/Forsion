@@ -97,7 +97,7 @@
   height: auto;
   background: #fff;
   border: 2px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-sizing: border-box;
 }
 .pdfa-thumb.on canvas { border-color: var(--accent-ink, var(--accent)); }

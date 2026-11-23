@@ -237,7 +237,7 @@
 .unitsw-subrow.is-locked { cursor: default; }
 .unitsw-subrow.is-locked > :not(.unitsw-sublink) { opacity: .48; } /* 深链照常可读可点:设置页里有原因与出路 */
 .unitsw-subrow.is-locked:hover { background: transparent; }
-.unitsw-sublink { flex: none; padding: 2px 5px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); white-space: nowrap; cursor: pointer; }
+.unitsw-sublink { flex: none; padding: 2px 5px; border: none; border-radius: var(--radius-xs); background: transparent; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); white-space: nowrap; cursor: pointer; }
 .unitsw-sublink:hover { background: var(--overlay-medium); color: var(--text-muted); }
 .unitsw-subswitch { flex: none; display: inline-flex; padding: 0; border: none; background: transparent; cursor: pointer; }
 .unitsw-subswitch:disabled { cursor: default; }

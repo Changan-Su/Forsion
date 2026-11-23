@@ -47,7 +47,7 @@ html[data-window='pip'] body { overflow: hidden; }
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-xs, 4px);
   background: transparent;
   color: var(--text-muted, #888);
   cursor: pointer;

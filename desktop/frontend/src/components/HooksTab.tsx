@@ -147,7 +147,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
   const eventDesc = (event: string): string => (EVENT_DESC[event] ? t(EVENT_DESC[event]) : '')
 
   const badge = (text: string, color: string): React.ReactNode => (
-    <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color, border: `var(--border-width) solid ${color}`, borderRadius: 4, padding: '0 4px' }}>{text}</span>
+    <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color, border: `var(--border-width) solid ${color}`, borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>{text}</span>
   )
 
   return (

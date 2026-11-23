@@ -398,7 +398,7 @@ const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
 
 const badge: React.CSSProperties = {
   fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))',
-  borderRadius: 4, padding: '0 4px', whiteSpace: 'nowrap',
+  borderRadius: 'var(--radius-xs)', padding: '0 4px', whiteSpace: 'nowrap',
 }
 
 /** 插件声明的设置项(registerSetting)表单行:值存 localStorage `plugin.<id>.<key>`(全存字符串,
@@ -604,7 +604,7 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
   return (
     <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ width: 8, height: 8, borderRadius: 4, background: dot, flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }} />
         <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{app.name}</b>
         <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{statusText}</span>
       </div>

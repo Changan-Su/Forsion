@@ -731,7 +731,7 @@ html[data-lcl-sash-drag='row'], html[data-lcl-sash-drag='row'] * { cursor: row-r
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; margin-right: -4px;
   border: none; background: transparent; color: inherit;
-  border-radius: var(--radius-sm, 8px); cursor: pointer;
+  border-radius: var(--radius-xs, 4px); cursor: pointer;
   opacity: 0; pointer-events: none;
   transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }

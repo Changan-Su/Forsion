@@ -153,24 +153,24 @@ export const PluginsTab: React.FC<{
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{nm(p)}</b>
-                <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+                <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>
                   {p.source === 'folder' ? t('settings.plugins.folder') : t('settings.plugins.builtin')}
                 </span>
                 {p.needsRestart && (
-                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>
                     {t('settings.plugins.needsRestart')}
                   </span>
                 )}
                 {p.enabled && !running(p) && (p.waitingFor?.length ? (
-                  <span data-plugin-waiting title={p.waitingFor.map((w) => label(w.id)).join(sep)} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                  <span data-plugin-waiting title={p.waitingFor.map((w) => label(w.id)).join(sep)} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>
                     {t('settings.plugins.waitingDeps')}
                   </span>
                 ) : p.lastError ? (
-                  <span data-plugin-failed title={p.lastError} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger, #c0392b)', border: 'var(--border-width) solid var(--danger, #c0392b)', borderRadius: 4, padding: '0 4px' }}>
+                  <span data-plugin-failed title={p.lastError} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger, #c0392b)', border: 'var(--border-width) solid var(--danger, #c0392b)', borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>
                     {t('settings.plugins.loadFailed')}
                   </span>
                 ) : p.settling ? (
-                  <span data-plugin-settling title={t('settings.plugins.settlingHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+                  <span data-plugin-settling title={t('settings.plugins.settlingHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>
                     {t('settings.plugins.settling')}
                   </span>
                 ) : null)}

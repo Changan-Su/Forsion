@@ -482,7 +482,7 @@
 @media (prefers-reduced-motion: reduce) { .t2s-st.run::before { animation: none; } }
 /* 主会话行尾的子会话个数(点一下收起 / 展开,触屏没有 hover 箭头时靠它) */
 .t2s-kids {
-  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; border-radius: var(--radius-sm, 8px);
+  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px; border-radius: var(--radius-xs, 4px);
   font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums;
 }
 .t2s-kids > svg { width: 11px; height: 11px; }
@@ -683,7 +683,7 @@
   margin: 10px 9.5px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted));
   /* 是个 button(点一下开合):归零它自带的边框、底色与字体 */
   width: calc(100% - 19px); padding: 0; border: 0; background: transparent;
-  font-family: var(--font-ui); text-align: left; cursor: pointer; border-radius: var(--radius-sm, 8px);
+  font-family: var(--font-ui); text-align: left; cursor: pointer; border-radius: var(--radius-xs, 4px);
 }
 .t2sw-plug-sec:hover { color: var(--text-muted); }
 .t2sw-plug-sec-name { display: inline-flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }

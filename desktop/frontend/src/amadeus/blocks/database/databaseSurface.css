@@ -40,7 +40,7 @@
 .amx-db .amx-db-cellbtn { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); gap: 5px; line-height: var(--db-line-height); font-size: var(--db-text-size); color: var(--text); }
 .amx-db .amx-db-urlcell { padding: 0; gap: 2px; }
 .amx-db .amx-db-cellbtn:hover { background: var(--overlay-subtle, var(--overlay-light)); }
-:is(.amx-db, .amx-db-pop, .amx-db-peek) .amx-db-chip { display: inline-block; min-width: 0; max-width: 100%; height: var(--db-chip-height); line-height: var(--db-meta-line-height); padding: 0 6px; border-color: transparent; border-radius: 4px; font-size: var(--db-meta-size); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+:is(.amx-db, .amx-db-pop, .amx-db-peek) .amx-db-chip { display: inline-block; min-width: 0; max-width: 100%; height: var(--db-chip-height); line-height: var(--db-meta-line-height); padding: 0 6px; border-color: transparent; border-radius: var(--radius-sm); font-size: var(--db-meta-size); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 :is(.amx-db, .amx-db-pop, .amx-db-peek) .amx-db-chip.amx-chip-c9 { background: var(--overlay-medium); }
 .amx-db .amx-db-addrow { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); border-top-color: color-mix(in srgb, var(--border) 78%, transparent); font-size: var(--db-meta-size); }
 .amx-db .amx-db-row.amx-db-row--selected { background: var(--sel-fill, var(--overlay-light)); }

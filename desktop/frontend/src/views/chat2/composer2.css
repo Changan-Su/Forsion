@@ -84,7 +84,7 @@
 .t2c-input-wrap[data-suggestion] .t2c-ta { position: absolute; inset: 0; height: 100% !important; max-height: none; }
 .t2c-input-wrap[data-suggestion] .t2c-ta::placeholder { color: transparent; }
 .t2c-suggestion { font: var(--t2c-font-body, 13px)/1.6 var(--font-ui); color: var(--text-faint, var(--text-muted)); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
-.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
+.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-xs, 4px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
 
 /* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
    ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */

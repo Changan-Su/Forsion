@@ -29,7 +29,7 @@
   position: relative;
   display: block;
   overflow: hidden;
-  border-radius: var(--radius-sm, 8px);
+  border-radius: var(--radius-xs, 4px);
   background: var(--sk-base);
   height: 12px;
   flex: none;
