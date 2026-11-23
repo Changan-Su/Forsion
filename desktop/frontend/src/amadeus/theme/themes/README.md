@@ -40,13 +40,14 @@ export default manifest
 主色  --primary --primary-2 --on-primary
 派生  --selection --drop --primary-soft   ← 建议用 color-mix 从 --primary 派生一次,自动跟随
 阴影  --shadow-panel
-圆角  --radius-xs --radius-sm --radius-md --radius-lg --radius-xl   (--radius-pill 在 base.css)
+圆角  不在这里声明:Genesis 的 base.css :root 是唯一来源(xs = sm / 2、pill、弃用别名 xl 都在那里),
+      Genesis 主题只覆盖 sm / md / lg;契约见仓根 DESIGN §3,棘轮 npm run check:radius
 字体  --font-ui   (--font-mono 在 base.css)
 ```
 
 `Origin` 是默认主题：它的调色板挂在**裸** `[data-mode]` 上（任何未知/旧的 `data-theme` 都回落到它，
-不闪烁），radii/font 是 `:root` 默认；其它主题在其上覆盖。`base.css` 只放主题无关项（motion、
-`--font-mono`、`--radius-pill`）。
+不闪烁），font 是 `:root` 默认（圆角不在这里，见上）；其它主题在其上覆盖。`base.css` 只放主题无关项（motion、
+`--font-mono`）。
 
 ## custom(seed, dark) — 自定义取色（可选）
 

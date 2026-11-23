@@ -49,6 +49,8 @@
   --radius-xs: calc(var(--radius-sm) / 2);
   --radius-md: 12px;
   --radius-lg: 16px;
+  /* 已弃用的插件契约 token(2.0.3 起公开过):老插件还在读,留成 lg 的别名;宿主自己别用。 */
+  --radius-xl: var(--radius-lg);
   --radius-chat-surface: var(--radius-lg);
   --radius-chat-card: var(--radius-md);
   --font-ui: 'Hanken Grotesk', ui-sans-serif, system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;

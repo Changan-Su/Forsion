@@ -4,7 +4,7 @@
  * 契约:组件只消费五个 token —— xs 小件(短边 ≤ 18px)· sm 控件 · md 浮层与普通卡 · lg 大面板 · pill 胶囊;圆用 50%。
  * 本脚本钉五件事,托管样式(desktop 渲染层、lcl、mobile、web 的 CSS 与 TS / TSX)里:
  *  1. 定义只有一处:--radius-sm / md / lg(及 chat 别名)只许在 base.css 与随包主题 theme/themes/<id>/theme.css 里声明;
- *     --radius-xs、--radius-pill 只许在 base.css(xs 由 sm 派生,主题别另写)。
+ *     --radius-xs、--radius-pill 只许在 base.css(xs 由 sm 派生,主题别另写);--radius-xl 是给老插件留的弃用别名,也只在 base.css。
  *  2. 不写数字:border-radius 不许写 > 3px 的数字(≤ 3px 算笔画几何,如细条、复选框内的勾),999px 一类用 pill。
  *  3. 兜底等于缺省:var(--radius-sm, X) 的 X 必须等于 base.css 的缺省值(xs 的缺省 = sm / 2)。
  *  4. 小件用 xs:同一条规则里声明了 ≤ 18px 的宽或高,却用 sm → 红。
@@ -38,7 +38,7 @@ const BRIDGE_VARS = new Set([
 ])
 const ALLOW_VARS = new Set([...BRIDGE_VARS, '--border-width']) // --border-width:同心内圆角 calc(token - 描边)
 const DEF_SHARED = new Set(['--radius-sm', '--radius-md', '--radius-lg', '--radius-chat-surface', '--radius-chat-card'])
-const DEF_BASE_ONLY = new Set(['--radius-xs', '--radius-pill'])
+const DEF_BASE_ONLY = new Set(['--radius-xs', '--radius-pill', '--radius-xl']) // xl:已弃用的插件契约别名(= lg),宿主不消费
 
 const rel = (f) => path.relative(REPO, f).replace(/\\/g, '/')
 function walk(dir) {
