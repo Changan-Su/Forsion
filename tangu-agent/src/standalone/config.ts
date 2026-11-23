@@ -44,13 +44,15 @@ function parseToolBuiltins(raw: string | undefined): 'all' | string[] | undefine
   return list.length ? list : undefined;
 }
 
-export function parseConfig(argv: string[]): StandaloneConfig {
+export function parseConfig(argv: string[], opts?: { configFile?: boolean }): StandaloneConfig {
   // config.json 作为 env 之下、默认之上的一层(优先级:CLI args > env > config.json > 默认)。
   // 直连 providers 不在此 seed —— 由 loadProviders(assemble.ts)统一读 config.providers 段并合并。
-  const cloud = (getRawSection('cloud') as any) || {};
-  const db = (getRawSection('database') as any) || {};
-  const server = (getRawSection('server') as any) || {};
-  const sandboxCfg = getRawSection('sandbox') as StandaloneConfig['sandbox'] | undefined;
+  // 多账号模式传 configFile:false:config.json 是每个账号一份,引擎配置只来自 env / CLI。
+  const section = (name: string): unknown => (opts?.configFile === false ? undefined : getRawSection(name));
+  const cloud = (section('cloud') as any) || {};
+  const db = (section('database') as any) || {};
+  const server = (section('server') as any) || {};
+  const sandboxCfg = section('sandbox') as StandaloneConfig['sandbox'] | undefined;
   const cfg: StandaloneConfig = {
     cloudUrl: process.env.TANGU_CLOUD_URL ?? cloud.url ?? '',
     token: process.env.TANGU_TOKEN ?? cloud.token ?? '',
@@ -159,5 +161,18 @@ export function validate(cfg: StandaloneConfig): string[] {
   const errs: string[] = [];
   // A local engine, its persisted sessions and direct providers do not require Forsion Server.
   if (!cfg.localToken && !cfg.token) errs.push('Missing --token / TANGU_TOKEN or TANGU_LOCAL_TOKEN');
+  return errs;
+}
+
+/**
+ * 多账号模式的配置错误(启动即退出,非 0)。每个账号一个库文件,不接受单一库路径 / 外部库;宿主口令必须单独给
+ * (不拿云端令牌当本机口令)。`env` 缺省读 process.env(只看真实环境与已加载的引擎级 .env,不看任何账号的 config.json)。
+ */
+export function validateMultiAccount(cfg: StandaloneConfig, env: NodeJS.ProcessEnv = process.env): string[] {
+  const errs: string[] = [];
+  if (cfg.databaseUrl || env.TANGU_DATABASE_URL || env.DATABASE_URL) errs.push('multi-account mode does not accept --db / TANGU_DATABASE_URL / DATABASE_URL (each account has its own database file)');
+  if (env.TANGU_EMBED === 'pglite') errs.push('multi-account mode does not support TANGU_EMBED=pglite');
+  if (cfg.dataDir || env.TANGU_DATA_DIR) errs.push('multi-account mode does not accept --data-dir / TANGU_DATA_DIR (each account has its own database file)');
+  if (!cfg.localToken) errs.push('multi-account mode requires TANGU_LOCAL_TOKEN (the host credential is never the cloud token)');
   return errs;
 }

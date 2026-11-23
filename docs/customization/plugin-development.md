@@ -241,7 +241,7 @@ ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, m
 
 返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(桌面小窗没有 `close`);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`；要笔记那样的 `@` 日期 / 页面面板，传 `mentions` 并用 `onMention` 接手（2026-11-20 起，先看能力表里的 `'mentions'`）；要加粗、列表这些格式，传 `format: 'inline' | 'basic'`，值改为 Markdown，显示用 `ctx.ui.parseInlineMarkdown`（2026-11-21 起，能力表 `'format'`）。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 
@@ -257,7 +257,7 @@ View 内需要一个完整的常驻对话时（例如创作类 Space 的右栏�
 
 要一个「在这里打字、按发送就去 Tangu 开新对话」的输入区时（主页就是这么用的），使用 `ctx.tangu.mountComposer`：宿主把主页那一整块新对话输入区挂进来（附件、模式、项目、运行位置、语音、通话都在），用户按发送后由宿主建会话、切到 Tangu 并发出，插件只能读到草稿（`draft()`），改不了要发的内容。插件可以往空着的输入框里填一句并聚焦（`prefill(text)`，2026-11-09 起），已经写了一半的草稿原样留着，回车仍由用户按。
 
-不需要对话、只要模型回一段文字时用 `ctx.tangu.complete`（一次性调用：没有工具、不进任何会话，用聊天当前的模型）。翻译用 `ctx.tangu.translate({ text, language })`：同一条通道，但模型取用户在「设置 → 模型 → 翻译」里选的那个；没选时账号里有机器翻译模型就用它，都没有才跟聊天模型（2.13.3 及更早的桌面版本：没选就跟聊天模型）。逐句翻译这类量大的活应当走它；它只返回译文。旧版本没有 `translate`，先探测再退回 `complete`。
+不需要对话、只要模型回一段文字时用 `ctx.tangu.complete`（一次性调用：没有工具、不进任何会话，用聊天当前的模型）。翻译用 `ctx.tangu.translate({ text, language })`：同一条通道，但模型取用户在「设置 → 模型 → 翻译」里选的那个；没选时账号里有机器翻译模型就用它，都没有才跟聊天模型（2.13.3 及更早的桌面版本：没选就跟聊天模型）。逐句翻译这类量大的活应当走它；它只返回译文。旧版本没有 `translate`，先探测再退回 `complete`。在划线动作的 `run` 里调用时，把 `cx.signal` 原样当 `signal` 传进去（2026-11-22 起）：结果卡头会像内置翻译那样写明是哪个模型出的（这次 run 里先调用的那个），`complete` 同理。选区周边（笔记前后的文字、页面说明）只补进宿主核心翻译插件的 `translate` 请求，别的插件不补。
 
 边打字边给灰字建议这类按光标补中间的活用 `ctx.tangu.fim({ before, after })`（2026-10-26 起）：光标前后的正文原样交给补全模型（FIM，fill-in-the-middle），没有提示词，返回模型原文（不 trim）和实际用的 `model`。模型取用户在「设置 → 模型 → 补全」选的那个，没选就用账号里第一个补全模型；`maxTokens` 夹到 1..512（缺省 64），`stop` 最多 4 个、每个不超过 32 字符。没有补全模型、模型或引擎做不了 FIM 时 reject `Error('fim_unavailable')`：退回 `complete`，并在本次会话里记住别再试；云端目录这次没拉到时 reject `Error('fim_catalog_unreachable')`，属临时错误，下次照常试 `fim`。与 `complete` / `translate` 合计每个用户同时最多 3 个请求，每次按键先 abort 上一次。旧版本没有 `fim`，先探测。
 
@@ -275,11 +275,12 @@ ctx.ui?.attachTooltip?.(el, content, { side })
 
 拖动排序、拖进去的落点提示也用宿主那一个：`ctx.ui?.dropIndicator?.()` 拿到 `{ line, zone, hide, dispose }`，传视口坐标；换落点原地淡出淡入、颜色跟主题，给 `key` 免得滚动被当成换落点，插件禁用时宿主统一收；旧宿主没有就照旧自己画。见 [可复用界面组件](./ui-components.md)。松手之后 `drop.land?.(行或找它的函数, 松手处)` 让被拖的那一行从松手处滑进新位置（2026-10-25 起，160ms，减少动态效果下直接到位）。
 
-选中文字后浮出的那一条（划线条）对插件开放两半。一是加动作：`ctx.registerSelectionAction` 的动作列在条上的「⋯ → 插件」里，`run(cx)` 返回的 markdown 进宿主的结果卡（笔记里用户点「替换 / 插入下方」才写，别处只读）。不写 `scope` 只在笔记里出现；`scope: 'all'` 出现在所有有这一条的视图（笔记、聊天、接入了的插件视图），`'own'` 只在自己的视图，数组点名视图；`when({ view, editable, length })` 按视图和字数过滤，`output: 'none'` 表示结果由插件自己处理。二是让自己的视图用上这一条：`ctx.ui?.mountSelectionBar`，宿主给「问 Tangu」「翻译」「⋯」，插件声明自己的工具（图标钮或颜色点）；不接就不出。这两半在 2.13.3 之后的桌面版本里才有：更早的版本只在笔记里列动作（「AI ▾ → 插件」），没有 `mountSelectionBar`，先探测、保留自己的菜单。2026-11-08 起条和结果卡随滚动、缩放跟着那段字走,滚出可见区先藏起来;`watch: false` 自己报选区的视图在 `show()` 里再给 `getRect` 也能跟。见 [可复用界面组件](./ui-components.md)。
+选中文字后浮出的那一条（划线条）对插件开放两半。一是加动作：`ctx.registerSelectionAction` 的动作列在条上的「⋯ → 插件」里，`run(cx)` 返回的 markdown 进宿主的结果卡（笔记里用户点「替换 / 插入下方」才写，别处只读）。不写 `scope` 只在笔记里出现；`scope: 'all'` 出现在所有有这一条的视图（笔记、聊天、接入了的插件视图），`'own'` 只在自己的视图，数组点名视图；`when({ view, editable, length })` 按视图和字数过滤，`output: 'none'` 表示结果由插件自己处理。二是让自己的视图用上这一条：`ctx.ui?.mountSelectionBar`，宿主给「问 Tangu」「翻译」「⋯」，插件声明自己的工具（图标钮或颜色点）；不接就不出。这两半在 2.13.3 之后的桌面版本里才有：更早的版本只在笔记里列动作（「AI ▾ → 插件」），没有 `mountSelectionBar`，先探测、保留自己的菜单。2026-11-08 起条和结果卡随滚动、缩放跟着那段字走,滚出可见区先藏起来;`watch: false` 自己报选区的视图在 `show()` 里再给 `getRect` 也能跟。2026-11-21 起动作可以常驻条上(`placement: 'bar'`,条上插件位最多 3 个,用户在 ⋯ 里钉 / 右键收进 ⋯ / 设置里改的永远优先),可以声明支持「划选后自动」(`auto: true`,开关归用户、缺省关,开了以后划选停下就出结果卡,`run` 拿到 `cx.auto`;这个开关是给用户的界面开关、不是安全边界 —— 插件和宿主跑在同一个渲染进程里,别自己去改它;笔记里不自动跑,`scope` 只认笔记的动作声明了也没用),可以让宿主在结果卡上画目标语言(`cx.language`)、原文和小喇叭(`card`);`title` 也收 `{ zh, en }`。条上多了「朗读」,插件自己念用 `ctx.tts?.speak(text)`(用用户选的朗读模型,没配时宿主提示去设置,不回落系统声音)。宿主自己的「翻译」让给 id 为 `translation` 的插件,条件是它是宿主认的核心插件(随包 / 预装,停用也算),或者它启用着并注册了划线动作;接管后沿用用户给宿主翻译设的「放在哪」。见 [可复用界面组件](./ui-components.md)。
 
 ```js
-ctx.registerSelectionAction({ id, title, run })
+ctx.registerSelectionAction({ id, title, run, placement, auto, card })
 ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
+await ctx.tts?.speak(text, { signal })
 ```
 
 「拿着一件工具干活」的视图(PDF 批注一类)换工具用宿主的工具岛:`ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` 顶部居中(窄于 520px 停底部),选中受控(`onPick` 里自己 `setActive`),句柄的 `row` 是岛下那一排、归插件画。旧宿主没有就画自己的那条。详见[可复用界面组件](./ui-components.md)「工具岛」。
@@ -321,6 +322,10 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。这些工具和用户自己接的 MCP 一样缺省按需加载:每次请求只带一行目录(工具名 + 描述第一行),AI 要用时先装上再调,所以描述第一行要能单独说清这个工具做什么;每轮都要用的 server 在声明里写 `"deferLoading": false` 就一直带着。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
 
 插件还能收到笔记库里的文件事件:新建、删除、在 Forsion 里改名或移动、被别的程序或 Tangu 改动,以及换库。反链、自动整理这类插件靠它跟上库里的变化,不用一遍遍重新扫描。接口细节见插件开发技能的「插件自带的 MCP server 与 hooks」和「库级文件事件」两节;插件命令给 Tangu 交回查询结果的写法在「`invoke`:把一条命令开给 agent」一节。
+
+## 多账号模式下的插件（2026-11-21 起）
+
+本机引擎可以开成「多账号模式」：一台机器上多个账号共用一个引擎进程，每个账号的对话、Agent、记忆、技能和文件各在自己的文件夹里。这种模式下引擎只从插件包里取两样东西：`agents/` 里的 Agent 人设和 `skills/` 里的技能，都是只读的。插件包里的 `tangu-plugins/` 引擎代码不加载，插件自带的 MCP server 和 hooks 也不启动。所以插件如果要在这种模式下可用，核心能力要放在人设和技能里，别依赖引擎插件。缺省的单人模式不受影响，照旧全部加载。
 
 ## 库里的文件夹、文件时间、改名与移动（2026-11-16 起）
 

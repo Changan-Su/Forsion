@@ -4,6 +4,7 @@ const os = require('node:os')
 const path = require('node:path')
 const assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
+const { skipDisableReason } = require('./lib/disable-reason.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.resolve(__dirname, '..')
 const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
@@ -326,7 +327,8 @@ async function main() {
     check('cold restart retains the selected plugin choices', await settings.inputValue('#startup-icon') === key)
     await installedPlugins()
     const pluginCard = settings.locator('.plugin-card--link').filter({ hasText: /开屏与图标示例|Startup appearance sample/ })
-    await pluginCard.locator('[role="switch"]').uncheck()
+    await pluginCard.locator('[role="switch"]').click()
+    await skipDisableReason(settings) // 拨下先问停用理由(遥测 v3):直接停用
     await appearance(settings)
     await settings.waitForFunction(() => document.querySelector('#startup-icon').value === '')
     check('disabling the real plugin clears its selected icon and artwork', JSON.parse(fs.readFileSync(diskPath, 'utf8')).splash === null)

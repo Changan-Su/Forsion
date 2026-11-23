@@ -9,6 +9,7 @@
  * 设计见 server/Documents/Tangu/Tangu_Agent_Architecture_v2.0.md(三层 + 两接缝)。
  */
 import { Router } from 'express';
+import { isMultiAccount } from './core/accountScope.js';
 import { configureTangu, deps, type TanguDeps } from './seams/runtime.js';
 import type { AppProfileOverride } from './seams/appProfile.js';
 import runsRouter from './routes/runs.js';
@@ -48,6 +49,7 @@ import linkPreviewRouter from './routes/linkPreview.js';
 import adminRouter from './routes/admin.js';
 import { runMigration } from './db/migrate.js';
 import { recoverQueuedRuns, abortAllRuns } from './services/agentLoop.js';
+import { markRecoveryHost } from './services/runProgress.js';
 import { deliverPendingChildReports } from './services/childSessions.js';
 import { loadSandboxConfig } from './sandbox/sandboxConfig.js';
 import { startCacheJanitor, stopCacheJanitor, reapOrphanRunContainers } from './sandbox/dockerProvider.js';
@@ -62,6 +64,7 @@ import { startChannels, stopChannels } from './channels/hub.js';
 import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './services/browserExtension.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 import { startDeviceRenameWatch } from './services/deviceTagContext.js';
+import { startSleepDetector, stopSleepDetector } from './llm/sleepDetector.js';
 
 export interface TanguModule {
   /** session 亲和路由(runs/SSE/workspace/approvals):fleet 模式按 session 哈希转发到 worker。 */
@@ -132,9 +135,21 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(processesRouter);
 
   const startBackgroundTasks = (opts?: { recoverRuns?: boolean; historian?: boolean; sandbox?: boolean; profilePolling?: boolean; eventRetention?: boolean }): void => {
+    // 多账号模式(core/accountScope.ts):只留进程级、不碰任何账号数据的(睡眠检测)。启动恢复、Muse、收件箱、通道、浏览器桥、
+    // 回收站清理、设备改名监听、遥测快照、app_profile_overrides 轮询、run 事件保留期、沙箱 janitor 一律不起 ——
+    // 它们要么扫「那一个」库 / home,要么用进程那一份云端凭据替人办事。记忆整理跟着对话 run 走(按人)。
+    if (isMultiAccount()) {
+      markRecoveryHost(false);
+      startSleepDetector();
+      return;
+    }
     // 进程重启自愈:陈旧行标 failed → 余下在飞行按持有者处理(别的活进程的不碰、跑到一半的标中断、排队的认领后入队;见 recoverQueuedRuns)。
     // 共享云库的 worker 集群必须关掉(opts.recoverRuns=false),否则跨 worker 互相干扰。
     // 纯调度网关(Forsion server)三个全关:loop 不在该进程跑,沙箱也不在该机。
+    // 会做启动恢复的本机引擎(standalone / 桌面拉起的那个):之后建的 run 盖 hostRecovery 戳、引擎被停时记 interrupted、
+    // 边跑边落库(中断任务续跑方案 B,services/runProgress.ts)。TUI(recoverRuns:false)/ 云端 worker / 网关都不是。
+    // 先于下面一切会建 run 的后台任务(Muse、通道、恢复本身)。
+    markRecoveryHost(opts?.recoverRuns !== false && !!deps().profile.capabilities.hostExec);
     if (opts?.recoverRuns !== false) {
       recoverQueuedRuns()
         .then((m) => { if (m) console.log(`[tangu] re-enqueued ${m} pending run(s)`); })
@@ -142,6 +157,9 @@ export function createTanguModule(d: TanguDeps): TanguModule {
         .then(() => deliverPendingChildReports()) // 上次退出时没送出去的子会话回报(services/childSessions.ts)
         .catch(() => {});
     }
+
+    // 系统睡眠检测(llm/sleepDetector.ts):睡着的时间不算进模型调用的重试预算,睡前发出、醒来才报错的请求按断网处理。
+    startSleepDetector();
 
     // 本机本地的沙箱 janitor(docker 容器 / 会话工作区):每个 worker 各管自己的,安全。
     if (opts?.sandbox !== false) {
@@ -187,6 +205,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   };
 
   const dispose = (): void => {
+    stopSleepDetector();
     stopCacheJanitor();
     stopSessionReaper();
     stopHistorian();

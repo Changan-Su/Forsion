@@ -7,6 +7,7 @@ import { fuzzyRank } from './fuzzy'
 import { label } from './types'
 import { useEngineI18n } from './i18nSeam'
 import { isImeKeyEvent } from './ime'
+import { closePhonePage } from './phoneDock'
 import { usePhoneForm } from './listFirst'
 
 export function CommandPalette() {
@@ -42,7 +43,11 @@ export function CommandPalette() {
     close() // 选取模式:close 会清 pickCb,故用 render 捕获的引用
     if (!c) return
     if (pickCb) pickCb(c.id)
-    else { noteCommandUse(c.id, 'palette'); c.run() }
+    else {
+      // 手机上命令面板从「我」页开(phoneDock.ts):跑命令时先收起那一页,命令作用的那一页(页内查找、开面板…)才露得出来
+      closePhonePage()
+      noteCommandUse(c.id, 'palette'); c.run()
+    }
   }
 
   const onKeyDown = (e: KeyboardEvent): void => {

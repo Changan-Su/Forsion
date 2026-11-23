@@ -637,6 +637,156 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   transform: scaleY(1.08);
 }
 
+/* ── 图片工具条 · 说明 · 两侧把手(2026-11-17 Notion 对齐第 4 条;imageToolbar.ts / mdImage.ts) ──
+   `![](…)` 图片的包裹层带 .amx-img-md。图片在包裹层里的位置由 mdImage.layout 写成 --amx-img-top / -mid / -h:
+   说明行、源码行会把包裹层撑高,把手与工具条要按**图片**定位,不按包裹层。 */
+.am-app .amx-img-resize--left { right: auto; left: -7px; }
+.am-app .amx-img-md > .amx-img-resize {
+  top: var(--amx-img-mid, 50%);
+  max-height: calc(var(--amx-img-h, 100%) * 0.58);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast, 0.14s) ease;
+}
+.am-app .amx-img-md:hover > .amx-img-resize,
+.am-app .amx-img-md[data-selected] > .amx-img-resize,
+.am-app .amx-img-md[data-resizing] > .amx-img-resize { opacity: 1; pointer-events: auto; }
+.am-app .amx-img-md[data-ro] > .amx-img-resize { display: none; }
+/* 说明:图下灰字。width:0 + min-width:100% —— 不把 inline-block 包裹层撑得比图宽(撑宽了右把手就离开图片边缘);
+   左 / 中 / 右跟着这一段的对齐走(text-align 继承)。为空 hidden,不占位。 */
+.am-app .wiki-inline-img-wrap > .amx-img-cap,
+.am-app .wiki-inline-img-wrap > .amx-img-capline {
+  display: block;
+  box-sizing: border-box;
+  width: 0;
+  min-width: 100%;
+  margin: 6px 0 0;
+  padding: 0;
+  font-size: 0.875em;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.am-app .wiki-inline-img-wrap > .amx-img-cap[hidden] { display: none; }
+.am-app .wiki-inline-img-wrap > .amx-img-capline {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  text-align: inherit;
+  caret-color: var(--primary, var(--accent, currentColor));
+}
+.am-app .wiki-inline-img-wrap > .amx-img-capline::placeholder { color: var(--text-faint); }
+/* 悬停工具条:浮在图片右上角(图窄于工具条时 mdImage 打 data-tb-out,挪到图片上方,按段落对齐靠边)。
+   表面读浮层 token(DESIGN §3「浮层表面」);包裹层 line-height:0,这里要回来。 */
+.am-app .wiki-inline-img-wrap > .amx-img-tb {
+  position: absolute;
+  top: calc(var(--amx-img-top, 0px) + 8px);
+  right: 8px;
+  z-index: var(--z-view-float);
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  line-height: var(--ui-line-body, 1.4);
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast, 0.14s) ease;
+  /* --amx-tb-dx:贴着窗口 / 画布卡片边缘时 placeHoverToolbar 算出来往里收的那一段(imageToolbar.ts nudgeIntoView) */
+  translate: var(--amx-tb-dx, 0px) 0;
+}
+.am-app .wiki-inline-img-wrap:hover > .amx-img-tb,
+.am-app .wiki-inline-img-wrap[data-tb-hold] > .amx-img-tb,
+.am-app .wiki-inline-img-wrap[data-tb-menu] > .amx-img-tb,
+.am-app .wiki-inline-img-wrap > .amx-img-tb:focus-within { opacity: 1; pointer-events: auto; }
+.am-app .wiki-inline-img-wrap[data-resizing] > .amx-img-tb { opacity: 0; pointer-events: none; }
+.am-app .wiki-inline-img-wrap[data-src-open] > .amx-img-tb { display: none; }
+/* 块拖拽进行中(blockLayer beginBlockDrag 打的 data-dragging,⠿ 与图片本体两个起拖口都打)收起工具条、不接指针。
+   原生拖拽期间 Chromium 把 :hover 冻在起拖那一刻:从图片本体起拖,工具条整场都亮着,挪到图片上方时(data-tb-out)
+   正好盖住上一段的上沿 —— 落点落在工具条上,编辑器收不到 dragover / drop,图拖不动(check:coldrag R24)。 */
+.am-app .ProseMirror[data-dragging='true'] .wiki-inline-img-wrap > .amx-img-tb { opacity: 0; pointer-events: none; }
+.am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb { top: auto; bottom: calc(100% - var(--amx-img-top, 0px) + 6px); }
+/* 挪到上方时工具条和图片之间有 6px 缝:指针从图片往上挪,经过缝那一下包裹层就不算 :hover 了,工具条当场收起、点击落到底下
+   (画布舞台上实测)。工具条下沿垫一条透明的桥盖住这道缝 —— 桥是工具条的子元素,压在上面时包裹层仍算悬停。 */
+.am-app .wiki-inline-img-wrap[data-tb-out] > .amx-img-tb::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
+.am-app .wiki-inline-img-wrap[data-tb-out='left'] > .amx-img-tb { right: auto; left: 0; }
+.am-app .wiki-inline-img-wrap[data-tb-out='center'] > .amx-img-tb { right: auto; left: 50%; translate: calc(-50% + var(--amx-tb-dx, 0px)) 0; }
+.am-app .wiki-inline-img-wrap[data-tb-out='right'] > .amx-img-tb { right: 0; }
+/* 窄图上方没地方(被画布卡片 / 滚动容器裁掉,placeHoverToolbar 判):叠在图片顶上,同样按对齐靠边 */
+.am-app .wiki-inline-img-wrap[data-tb-over='left'] > .amx-img-tb { right: auto; left: 0; }
+.am-app .wiki-inline-img-wrap[data-tb-over='center'] > .amx-img-tb { right: auto; left: 50%; translate: calc(-50% + var(--amx-tb-dx, 0px)) 0; }
+.am-app .wiki-inline-img-wrap[data-tb-over='right'] > .amx-img-tb { right: 0; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn:hover { background: var(--menu-hover); color: var(--text); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn[aria-pressed='true'] { background: var(--overlay-medium); color: var(--text); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn:focus-visible { outline: calc(2 * var(--focus-ring, 1px)) solid var(--sel-line, var(--primary)); outline-offset: -1px; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-btn[hidden],
+:is(.am-app, .amx-img-sheet) .amx-img-tb-sep[hidden] { display: none; }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-src { width: auto; min-width: 28px; padding: 0 6px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-meta, 12px); }
+:is(.am-app, .amx-img-sheet) .amx-img-tb-sep { flex: none; width: 1px; height: 16px; margin: 0 3px; background: var(--border); }
+/* ⋯ 菜单(.ctx-menu 外壳,fixed + --z-menu):hover 摆法挂在 body 下、followAnchor 贴着 ⋯ 键(imageToolbar.ts);
+   不挂在包裹层里 —— 画布卡片 overflow:auto 会把它裁掉;也不做工具条的后代(工具条读了 --surface-blur,会成为包含块 / backdrop 根)。 */
+/* `![[x.png]]` 图片(.amx-img-wiki,wikiImageToolbar.ts)也走这一排工具条:`</>` 收进工具条,包裹层上那颗单挂的藏起。
+   小图(< 80px,amx-img-tiny)例外 —— 11-07 定只留一颗缩小版 `</>`(整排按钮会压到旁边的字),工具条不出。 */
+.am-app .amx-img-wiki:not(.amx-img-tiny) > .amx-src-btn { display: none; }
+.am-app .amx-img-wiki.amx-img-tiny > .amx-img-tb { display: none; }
+.amx-img-more { font-family: var(--font-ui); line-height: var(--menu-line-height, 1.4); white-space: nowrap; }
+/* 粗指针没有悬停:包裹层里那条不出,改由选中时贴底的 .amx-img-sheet(挂在 body 下,所以选择器不带 .am-app)。 */
+@media (pointer: coarse) {
+  .am-app .wiki-inline-img-wrap > .amx-img-tb { display: none; }
+}
+.amx-img-sheet {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-window-float);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.amx-img-sheet > * { pointer-events: auto; }
+.amx-img-sheet > .amx-img-tb {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  box-sizing: border-box;
+  gap: 1px;
+  padding: 3px;
+  color: var(--text-muted);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: var(--card-shadow);
+}
+.amx-img-sheet .amx-img-tb-btn { width: 40px; min-width: 30px; height: 40px; border-radius: var(--radius-pill, 999px); }
+.amx-img-sheet .amx-img-more--sheet { position: static; }
+.amx-img-sheet .amx-img-more--sheet button { min-height: 44px; }
+
 /* 折叠块 `[!fold]`(`>` 空格触发):Notion 手感 —— 不做成有色标注框,只留 chevron + 标题,
    内容左缩进一个层级。落盘仍是标准的 Obsidian 折叠 callout,Obsidian 里能原生折叠。 */
 .am-app .milkdown .ProseMirror blockquote.callout-fold {
@@ -1571,7 +1721,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   #amx-print-root .lcl-ftoc-frame,
   #amx-print-root .ctx-menu,
   #amx-print-root .block-gutter,
-  #amx-print-root .drag-handle { display: none !important; }
+  #amx-print-root .drag-handle,
+  #amx-print-root .amx-img-tb,
+  #amx-print-root .amx-img-resize { display: none !important; } /* 图片工具条 / 把手(悬停过、选中着时克隆里带着) */
   /* iframe(PDF 预览)打印不出内容、克隆的 video 无帧 → 隐去预览体,只留文件名头(文件卡片语义)。 */
   #amx-print-root .embed-pdf,
   #amx-print-root .embed-video,
@@ -1748,6 +1900,10 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amx-cal-card-title::placeholder { color: var(--text-faint, var(--text-muted)); font-weight: 500; }
 .amx-cal-card-title:focus { background: var(--bg-hover, var(--overlay-light)); }
 textarea.amx-cal-card-title { display: block; resize: none; field-sizing: content; max-height: calc(4lh + 4px); overflow-y: auto; overflow-wrap: anywhere; }
+.amx-cal-card-title-md { cursor: text; overflow-wrap: anywhere; }
+.amx-cal-card-title-md:hover { background: var(--bg-hover, var(--overlay-light)); }
+.amx-cal-card-title-md code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.9em; }
+.amx-db-wikilink.is-inert, .amx-db-url.is-inert { cursor: inherit; }
 
 /* 行基座(时间/属性共用):图标 + 内容 */
 .amx-cal-card-row { display: flex; gap: 8px; padding: 6px; border-radius: var(--radius-sm, 6px); }

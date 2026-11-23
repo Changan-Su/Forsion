@@ -195,7 +195,8 @@ export function controlPlaneCall(
     const writesControl = (agent !== '' && agent !== MUSE_AGENT_SLUG) ||
       (a.actions != null && (!Array.isArray(a.actions) || a.actions.some((s: any) => {
         const t = String(s?.type || '');
-        return t === 'agent_run' || t === 'tool_call';
+        // A limited Muse run can only show a rule card; acceptance is the approval.
+        return t === 'agent_run' || t === 'tool_call' || t === 'send_message' && !opts.museCycle;
       })));
     // 停用(validateTriggerInput:缺席=启用)只在**不写入**控制内容时免批:停用的同时改写 agent_run 链 / 旧式 agent 的 prompt,
     // 用户之后在面板里一键重新启用,跑的就是模型写的那条链(面板不显示改动)。省略 actions 的纯停用照旧免批。
@@ -524,6 +525,10 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
       const t = String(s?.type || '?');
       const text = (key: 'prompt' | 'body'): string => (raw[i] ? savedText(String(s?.[key] ?? ''), raw[i]?.[key]) : body(s?.[key]));
       if (t === 'agent_run') return labeled(`agent_run "${full(s.agentSlug || s.agent_slug)}" unattended`, text('prompt'));
+      if (t === 'send_message') return labeled(
+        `send_message as "${full(s.agentSlug)}" → ${full(s.delivery)} (${full(s.source)})`,
+        text(s.source === 'agent' ? 'prompt' : 'body'),
+      );
       if (t === 'tool_call') return withArgs(`tool_call ${full(s.tool)}`, s.args);
       if (t === 'notify') return s.body ? labeled(`notify "${full(s.title)}"`, text('body')) : `notify "${full(s.title)}"`;
       const { type: _t, path: p, ...rest } = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
@@ -1087,6 +1092,7 @@ export interface GateCtx {
   remote?: RemoteInfo;
   /** 无人值守且无异步审批通道的 run(自动化:强制完全通行、没有订阅者):本该问人的保护路径写入直接拒,不挂死等。 */
   unattended?: boolean;
+  disableHooks?: boolean;
   /** 挂起而不等(托盘客户端的主循环,见 ParkedApproval):要问用户时发出请求就返回凭条。只有自己会在迭代边界
    *  兑现的调用方才能给;子代理 / 引擎中继 / TUI / 通道都是当场要结果的,不给。 */
   park?: boolean;
@@ -1319,7 +1325,7 @@ export async function gateToolCall(
   }, {
     profile: ctx.profile,
     execMode: ctx.execMode === 'host' ? 'host' : 'sandbox',
-    cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal,
+    cwd: ctx.cwd, sessionId: ctx.sessionId, runId, signal, disableHooks: ctx.disableHooks,
   });
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };

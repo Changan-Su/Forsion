@@ -13,10 +13,10 @@
  * 只读 rootfs、CPU/内存/pids 配额、不注入密钥。kernel exec 受同一并发信号量约束。
  *
  * kernel 协议：docker exec -i <c> python3 -u -c <DRIVER>，stdin/stdout 走「10 位十进制长度前缀 + UTF-8」
- * 帧。driver 在持久 globals 里 exec，sys.stdout/stderr 重定向到 StringIO 回传。
- * 局限：绕过 sys.stdout 的裸 fd 写（os.write(1,...) 等）会破坏帧 → 视为 kernel 死亡，杀容器重建并回退
- * ephemeral。文档生成类代码（print / 库写文件）不受影响。
+ * 帧。driver 独立持有协议描述符，用户代码及其子进程的标准输出和错误按次捕获。
  */
+import { pythonKernelDriver } from './pythonKernelDriver.js';
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { ExecutionQueue } from './executionQueue.js';
@@ -30,7 +30,7 @@ import {
   runPython, DEFAULT_TIMEOUT_MS, MAX_CAPTURE, type ExecResult,
 } from './dockerProvider.js';
 import { hydrateWorkspaceToDir, snapshotDirToWorkspace, scopeOf } from '../tools/fileWorkspace.js';
-import { readConfined, unlinkConfined } from './confinedFs.js';
+import { readConfined, unlinkConfined, writeConfined } from './confinedFs.js';
 
 export interface SessionKey {
   userId: string;
@@ -47,46 +47,7 @@ const SESSION_TTL_MS = Number(process.env.AGENT_SANDBOX_SESSION_TTL_MS) || 600_0
 const MAX_SESSIONS = Math.max(1, Number(process.env.AGENT_SANDBOX_MAX_SESSIONS) || 24);
 const KERNEL_START_TIMEOUT_MS = Number(process.env.AGENT_SANDBOX_KERNEL_START_TIMEOUT_MS) || 30_000;
 
-// ── 持久 kernel driver（发给容器内 python3 -c）。帧：b"%010d"(len) + JSON ──────────
-const KERNEL_DRIVER = [
-  'import sys, io, json, traceback, importlib',
-  '_in = sys.stdin.buffer',
-  '_out = sys.stdout.buffer',
-  '_G = {"__name__": "__main__"}',
-  'def _read_exactly(n):',
-  '    b = b""',
-  '    while len(b) < n:',
-  '        c = _in.read(n - len(b))',
-  '        if not c: return None',
-  '        b += c',
-  '    return b',
-  'def _send(o):',
-  '    d = json.dumps(o).encode("utf-8")',
-  '    _out.write(b"%010d" % len(d)); _out.write(d); _out.flush()',
-  '_send({"ready": True})',
-  'while True:',
-  '    h = _read_exactly(10)',
-  '    if h is None: break',
-  '    try: n = int(h)',
-  '    except Exception: break',
-  '    code = _read_exactly(n)',
-  '    if code is None: break',
-  '    code = code.decode("utf-8", "replace")',
-  '    importlib.invalidate_caches()',  // 让 pip_install 刚装的包在持久 kernel 里立即可 import
-  '    so, se = io.StringIO(), io.StringIO()',
-  '    oo, oe = sys.stdout, sys.stderr',
-  '    sys.stdout, sys.stderr = so, se',
-  '    ok = True',
-  '    try:',
-  '        exec(compile(code, "<run_python>", "exec"), _G)',
-  '    except SystemExit:',
-  '        pass',
-  '    except BaseException:',
-  '        ok = False; traceback.print_exc()',
-  '    finally:',
-  '        sys.stdout, sys.stderr = oo, oe',
-  '    _send({"stdout": so.getvalue(), "stderr": se.getvalue(), "ok": ok})',
-].join('\n');
+const KERNEL_DRIVER = pythonKernelDriver(MAX_CAPTURE);
 
 interface KernelResult { stdout: string; stderr: string; ok: boolean; }
 
@@ -109,6 +70,7 @@ class PythonKernel {
       if (signal?.aborted) { onAbort(); return; }
       signal?.addEventListener('abort', onAbort, { once: true });
       try {
+        assertHostSpawnAllowed('sandbox kernel');
         this.child = spawn('docker', ['exec', '-i', this.containerName, 'python3', '-u', '-c', KERNEL_DRIVER],
           { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       } catch { this.dead = true; return done(false); }
@@ -191,6 +153,7 @@ class PythonKernel {
 
 // ── 会话状态 ──────────────────────────────────────────────────────────────
 interface Session {
+  skillFolders?: Map<string, string>;
   ks: string;
   key: SessionKey;
   id: string;            // 容器/目录名用的短 hash
@@ -357,6 +320,29 @@ async function ensureContainerKernel(s: Session, signal?: AbortSignal): Promise<
 export async function getSessionDir(k: SessionKey): Promise<string> {
   const s = await getOrCreateSession(k);
   return s.dir;
+}
+
+/** Stage a user-owned package once in this sandbox. Dot directories are excluded from workspace snapshots. */
+export async function stageSessionSkill(k: SessionKey, id: string, load: () => Promise<{ files: { path: string; base64: string }[] } | null>, signal?: AbortSignal): Promise<string> {
+  const session = await getOrCreateSession(k, signal);
+  return withSessionLock(session, async () => {
+    const folders = session.skillFolders ??= new Map();
+    const cached = folders.get(id);
+    if (cached && (await fsp.lstat(path.join(session.dir, cached)).catch(() => null))?.isDirectory()) return cached;
+    const pkg = await load();
+    if (!pkg?.files.length) throw new Error('Cloud skill package is unavailable');
+    const dir = await fsp.mkdtemp(path.join(session.dir, '.forsion-skill-'));
+    const folder = path.basename(dir);
+    try {
+      for (const file of pkg.files) {
+        signal?.throwIfAborted();
+        if (!file.path.split('/').every(part => part && part !== '.' && part !== '..' && !part.includes('\\'))) throw new Error('Invalid skill file path');
+        await writeConfined(session.dir, folder + '/' + file.path, Buffer.from(file.base64, 'base64'));
+      }
+      folders.set(id, folder);
+      return folder;
+    } catch (e) { await fsp.rm(dir, { recursive: true, force: true }); throw e; }
+  }, signal);
 }
 
 /** 标记会话工作区有未回写改动（write_file 后调用），驱动 run 末 snapshot。 */

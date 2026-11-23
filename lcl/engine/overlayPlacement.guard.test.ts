@@ -22,6 +22,7 @@ const PATTERN = /\binnerHeight\b|\bshowPopover\(/g
 const SKIP = new Set(['lcl/engine/menuAnchor.tsx'])
 
 const ALLOW: Record<string, [number, string]> = {
+  'desktop/frontend/src/amadeus/unified/centerLine.ts': [1, '输入行居中使用可视区高度计算正文卷动距离，缺少 visualViewport 的宿主取窗口高度'],
   'lcl/engine/Ribbon.tsx': [6, 'Ribbon 「+N」液滴浮层的落位(363/599/664)与拖出窗口判定(760/775/869)'],
   'lcl/engine/hoverSurface.ts': [2, '悬停浮层:placeHover 自带夹取;另一处是锚点滚出视口就收起'],
   'lcl/engine/FloatingToc.tsx': [2, '悬浮目录的轨道高度按窗口比例,不是锚定浮层'],
@@ -37,6 +38,7 @@ const ALLOW: Record<string, [number, string]> = {
   'desktop/frontend/src/amadeus/plugins/guideTips.ts': [1, '判断锚点是否在视口里'],
   'desktop/frontend/src/amadeus/blocks/excalidraw/ExcalidrawCanvas.tsx': [1, '全屏提示没有锚点时放窗口底部中间'],
   'desktop/frontend/src/amadeus/blocks/markdown/footnote.ts': [1, '判断脚注是否在视口里再决定滚动'],
+  'desktop/frontend/src/amadeus/blocks/markdown/imageToolbar.ts': [2, '手机贴底的图片工具条坐在移动端编辑胶囊 / 软键盘上沿(visualViewport),不是锚定浮层'],
   'desktop/frontend/src/amadeus/unified/UnifiedPage.tsx': [1, '判断块是否在视口里再决定滚动'],
   'desktop/frontend/src/amadeus/unified/canvasStage.tsx': [1, '画布可见区与视口求交'],
   'desktop/frontend/src/components/ImageViewer.tsx': [1, '判断原图是否在视口里(缩放动画起点)'],

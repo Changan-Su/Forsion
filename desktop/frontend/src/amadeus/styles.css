@@ -1765,6 +1765,10 @@ body.amx-marquee-active * {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
+/* 字色跟正文走:浏览器给 <mark> 的缺省字色是纯黑(MarkText),暗色下无色高亮(强调色兜底底)里的字就成了黑字。
+   只放过「无色」与「色板色」两种 —— 这两种的底色都随明暗切换;手写的色板外背景(盘上 `<mark style>`)不随明暗,
+   保留黑字才读得出。 */
+.am-app .ProseMirror mark:is(:not([style]), [data-hl]) { color: inherit; }
 /* 高亮暗色对齐 AFFiNE **v1** 编辑器真值(--affine-text-highlight-* 的 [data-theme=dark] 段;
    2026-08-13 第4振:此前误取 v2 design token 整片过暗)。落盘是字面亮色 hex(Obsidian 可渲染),
    in-app 暗色下按 data-hl/data-hlc 语义名覆盖(!important 压过内联 style)。
@@ -3222,6 +3226,48 @@ body.amx-marquee-active * {
 }
 .am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) {
   animation: amx-drag-source-fade 85ms cubic-bezier(0.2, 0, 0, 1) both;
+  /* 拖动期间原位只淡到 0.58、不叠选中底色(页面编辑手感方案第 3 条);落下后块照旧选中。 */
+  background: transparent;
+}
+/* 原生文字选区的蓝底同理收掉(灰底撤了以后它就露出来了)。只在整块拖动期间、只在被拖的块里。 */
+.am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected)::selection,
+.am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) *::selection {
+  background: transparent;
+}
+/* 块拖拽的拖影(blockLayer makeDragGhost):块的副本,去选中底色、字 52% 正文色、不加阴影。
+   放在视口外只给 setDragImage 拍一张,下一帧就摘掉;包装的左 / 上补白 = 指针在块外那一截。 */
+.am-app .unified-drag-ghost {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  pointer-events: none;
+  background: transparent;
+}
+.am-app .unified-drag-ghost-page {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  outline: none;
+}
+.am-app .unified-drag-ghost-blk {
+  background: transparent !important;
+  color: color-mix(in srgb, var(--text) 52%, transparent) !important;
+  animation: none !important;
+  opacity: 1 !important;
+}
+.am-app .unified-drag-ghost-blk * {
+  color: inherit !important;
+}
+.am-app .unified-drag-ghost-blk :is(img, svg, .unified-drag-ghost-media),
+.am-app .unified-drag-ghost-blk::before,
+.am-app .unified-drag-ghost-blk ::marker {
+  opacity: 0.52;
+}
+.am-app .unified-drag-ghost-media {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 /* 把手菜单的小节标签/分隔线(菜单壳与按钮吃 .ctx-menu 现成样式)。 */
 .am-app /* 分栏(v4 单实例列节点,columns.ts):行=flex,列宽走 flex-grow(cell attrs.width)。
@@ -3237,6 +3283,187 @@ body.amx-marquee-active * {
   min-width: 0;
   cursor: auto;
 }
+/* ── 版块(方向 B,page/5;columns.ts 在行上写 data-sec-*)────────────────────────────────
+   一整块带底色和留白的区域,里面 1–4 栏。比正文栏左右各宽 44px(全宽页面撑满,手机收到 16px);
+   底色缺省「跟随主题」= 主题色混进纸面 6%(暗色 10%),九色与块颜色同一组色相、比块底色更淡;
+   卡片 = 纸面色 + 圆角 + 卡片阴影,不描边(DESIGN §5)。栏宽不到约 200px 时竖排(顺序左 → 右,
+   见下面的 @container);手机上留白缩一档。导出 PDF(printToPDF printBackground)保留底色与卡片。 */
+.am-app .unified-body .amx-ucolrow.amx-usection {
+  --amx-sec-bg: color-mix(in srgb, var(--signal) 6%, var(--bg-card));
+  --amx-sec-pad: 24px;
+  --amx-sec-gap: 16px;
+  position: relative; /* 工具条 widget 的定位父级 */
+  margin-block: 14px;
+  margin-inline: -44px;
+  padding: var(--amx-sec-pad);
+  gap: var(--amx-sec-gap);
+  flex-wrap: wrap;
+  border-radius: var(--radius-lg, 16px);
+  background: var(--amx-sec-bg);
+  cursor: auto;
+  container: amx-section / inline-size;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection, .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection {
+  --amx-sec-bg: color-mix(in srgb, var(--signal) 10%, var(--bg-card));
+}
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-pad='s'] { --amx-sec-pad: 14px; --amx-sec-gap: 10px; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-pad='l'] { --amx-sec-pad: 40px; --amx-sec-gap: 24px; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='red'] { --amx-sec-bg: color-mix(in srgb, #fed5d5 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='orange'] { --amx-sec-bg: color-mix(in srgb, #fedfbb 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='yellow'] { --amx-sec-bg: color-mix(in srgb, #fef3a1 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='green'] { --amx-sec-bg: color-mix(in srgb, #e1fab1 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='teal'] { --amx-sec-bg: color-mix(in srgb, #adf8e9 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='blue'] { --amx-sec-bg: color-mix(in srgb, #cce2fe 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='purple'] { --amx-sec-bg: color-mix(in srgb, #edddff 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='magenta'] { --amx-sec-bg: color-mix(in srgb, #ffcece 55%, var(--bg-card)); }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='grey'] { --amx-sec-bg: color-mix(in srgb, #eaecef 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='red'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='red'] { --amx-sec-bg: color-mix(in srgb, #6c2727 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='orange'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='orange'] { --amx-sec-bg: color-mix(in srgb, #703a15 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='yellow'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='yellow'] { --amx-sec-bg: color-mix(in srgb, #6a540f 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='green'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='green'] { --amx-sec-bg: color-mix(in srgb, #1a5b32 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='teal'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='teal'] { --amx-sec-bg: color-mix(in srgb, #0e5561 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='blue'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='blue'] { --amx-sec-bg: color-mix(in srgb, #384b7a 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='purple'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='purple'] { --amx-sec-bg: color-mix(in srgb, #502e6f 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='magenta'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='magenta'] { --amx-sec-bg: color-mix(in srgb, #7f5d5d 55%, var(--bg-card)); }
+[data-mode='dark'] .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-bg='grey'], .am-app[data-mode='dark'] .unified-body .amx-ucolrow.amx-usection[data-sec-bg='grey'] { --amx-sec-bg: color-mix(in srgb, #40434a 55%, var(--bg-card)); }
+/* 对齐:有卡片时「顶」= 等高卡片(stretch),中 / 底按内容高度排;没卡片时就是栏的上下对齐。 */
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-valign='t'] { align-items: flex-start; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-valign='t'][data-sec-cards='1'] { align-items: stretch; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-valign='m'] { align-items: center; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-valign='b'] { align-items: flex-end; }
+.am-app .unified-body .amx-ucolrow.amx-usection[data-sec-cards='1'] > .amx-ucolcell {
+  padding: 14px 18px;
+  border-radius: var(--radius-md, 12px);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+}
+/* 栏是一个小版面:首个块不顶着自己的上边距、末块不拖下边距(标题的上边距在卡片里就是顶上空一截)。
+   (0,6,0) 压过 .am-app .milkdown .ProseMirror 的标题 / 段落边距。 */
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :first-child { margin-top: 0; }
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :last-child { margin-bottom: 0; }
+.am-app .amx-pane[data-page-wide] .unified-body .amx-ucolrow.amx-usection { margin-inline: 0; }
+/* 窄屏竖排:按版块自己的内容宽度判(2 栏 < 416 / 3 栏 < 632 / 4 栏 < 848,即每栏不到约 200px)。
+   版块是 container,样式只能落在子元素上 → 行常年 flex-wrap,竖排 = 每栏占满一行。 */
+@container amx-section (max-width: 415px) {
+  .amx-usection[data-sec-stack='1'][data-cols='2'] > .amx-ucolcell { flex: 1 1 100% !important; }
+}
+@container amx-section (max-width: 631px) {
+  .amx-usection[data-sec-stack='1'][data-cols='3'] > .amx-ucolcell { flex: 1 1 100% !important; }
+}
+@container amx-section (max-width: 847px) {
+  .amx-usection[data-sec-stack='1'][data-cols='4'] > .amx-ucolcell { flex: 1 1 100% !important; }
+}
+@media (pointer: coarse) and (max-width: 820px) {
+  .am-app .unified-body .amx-ucolrow.amx-usection { margin-inline: -16px; --amx-sec-pad: 16px; --amx-sec-gap: 12px; }
+  .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-pad='s'] { --amx-sec-pad: 10px; --amx-sec-gap: 8px; }
+  .am-app .unified-body .amx-ucolrow.amx-usection[data-sec-pad='l'] { --amx-sec-pad: 24px; --amx-sec-gap: 16px; }
+}
+@media print {
+  .am-app .unified-body .amx-ucolrow.amx-usection { margin-inline: 0; break-inside: avoid; }
+  .amx-sec-tb-host { display: none !important; }
+}
+
+/* 版块工具条(SectionToolbar.tsx):挂在版块行尾的 widget,浮在版块右上方;只在编辑器有焦点时露。 */
+.unified-body .amx-sec-tb-host {
+  position: absolute;
+  right: 0;
+  bottom: 100%; /* 在 DOM 里排在前文之后,不加 z-index 也画在上面 */
+  padding-bottom: 6px;
+  cursor: auto;
+}
+.unified-body .ProseMirror:not(:focus-within) .amx-sec-tb-host,
+.unified-body .ProseMirror[contenteditable='false'] .amx-sec-tb-host,
+.unified-body .ProseMirror[data-dragging='true'] .amx-sec-tb-host { display: none; }
+.unified-body .amx-sec-tb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface-menu, var(--bg-card));
+  box-shadow: var(--card-shadow);
+  font-size: var(--ui-font-meta);
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+}
+.unified-body .amx-sec-tb-group { display: flex; align-items: center; gap: 1px; }
+.unified-body .amx-sec-tb-group + .amx-sec-tb-group { margin-left: 3px; padding-left: 4px; border-left: 1px solid var(--border); }
+.unified-body .amx-sec-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+.unified-body .amx-sec-tb-btn:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.04)); color: var(--text); }
+.unified-body .amx-sec-tb-btn[aria-pressed='true'] { background: color-mix(in srgb, var(--signal) 14%, transparent); color: var(--text); }
+.unified-body .amx-sec-tb-seg { min-width: 24px; padding: 0 5px; }
+.unified-body .amx-sec-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border); /* shadow-contract: 色块的形状描边,不是高程 */
+}
+.unified-body .amx-sec-swatch[data-sec-bg='theme'] { background: color-mix(in srgb, var(--signal) 35%, var(--bg-card)); }
+.unified-body .amx-sec-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface-menu, var(--bg-card));
+  box-shadow: var(--card-shadow);
+}
+.unified-body .amx-sec-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.unified-body .amx-sec-pop-row > span { flex: 1; }
+.unified-body .amx-sec-pop-row:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.04)); }
+.unified-body .amx-sec-pop-grid { display: grid; grid-template-columns: repeat(5, 28px); gap: 4px; padding: 6px 4px 4px; }
+.unified-body .amx-sec-pop-grid > button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  cursor: pointer;
+}
+.unified-body .amx-sec-pop-grid > button > i { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--border); }
+.unified-body .amx-sec-pop-grid > button > svg { position: absolute; color: var(--text); }
+.unified-body .amx-sec-pop-grid > button:hover { background: var(--overlay-light, rgba(0, 0, 0, 0.04)); }
 /* 块级嵌入(embedLayer.tsx 装饰 widget):widget 顶满段落宽;源码由 wikilink-src-hidden 藏。 */
 .unified-body .unified-embed {
   display: block;
@@ -3284,6 +3511,12 @@ body.amx-marquee-active * {
 
 /* 标题小节折叠(unified,会话内纯装饰,headingFold.ts):隐藏块 + 折叠标题的常驻展开钮。 */
 .unified-body .amx-fold-hidden { display: none; }
+/* 锚标记段(独占一段的 `<!-- a id -->`,anchorMarks.ts):落盘留着给 `![[笔记#id]]` 定位,编辑器里不露原文。 */
+.unified-body .amx-anchor-mark { display: none; }
+/* 版块栏内首尾块去外边距(.amx-usection > .amx-ucolcell 的 :first-child / :last-child,#756)认的是 DOM 第一个孩子;栏里打头 / 收尾的
+   是看不见的锚标记段时,真正的第一 / 最后一块照样去,不然这一栏的标题比隔壁低一截(栏里多锚、减栏后常见)。版块没合之前这两条不生效。 */
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :nth-child(1 of :not(.amx-anchor-mark)) { margin-top: 0; }
+.am-app .unified-body .milkdown .ProseMirror .amx-usection > .amx-ucolcell > :nth-last-child(1 of :not(.amx-anchor-mark)) { margin-bottom: 0; }
 .am-app .amx-fold-caret {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; margin-right: 4px; padding: 0;
@@ -4458,6 +4691,11 @@ body.amx-marquee-active * {
    锚在 UnifiedPage 自己的树里,零尺寸,只用来 closest('.amx-pane') 找本 pane。 */
 .am-app .amx-toolbar .amx-modeseg-slot { display: contents; }
 .am-app .amx-seg-anchor { display: none; }
+/* Editor-only space for the first and last typing lines. Print uses the note's ordinary geometry. */
+@media screen {
+  .am-app .amx-seg-anchor[data-center-line] { display: block; height: var(--amx-writing-lead); }
+  .am-app .unified-body > .page-tail { min-height: var(--amx-writing-tail, 0px); }
+}
 
 /* ── 移动端画布:底部悬浮编辑胶囊压着舞台工具栏(2026-08-20 真机台架截图查出)────────────
    `.amx-mbar` 是 z-index:5 的悬浮药丸(bottom:10px + 约 46px 高),舞台工具栏 z-index:4、

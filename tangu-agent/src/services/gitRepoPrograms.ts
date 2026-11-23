@@ -12,6 +12,7 @@
  * 而那两处远程 shell 写不进(家目录顶层点文件与 ~/.config 在拒写名单里),本机 run 写它们也要审批。
  * 但全局那个 filter 调起的 git-lfs 会从**仓库**配置读它自己的程序键(`lfs.extension.*.clean` 等)—— 那几条照样算(见 classify 的 lfs)。
  */
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { existsSync, lstatSync, readFileSync, statSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -155,6 +156,7 @@ function listConfig(file: string): ConfigEntries | 'unknown' {
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
     for (const k of [...GIT_SCRUBBED_ENV, 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG']) delete env[k];
     // cwd = 文件所在盘的根(POSIX 即 '/',Windows 即 'C:\\'):在仓库里跑,git 的发现阶段会读那个仓库的配置并跟 include(实测 --file 也挡不住)
+    assertHostSpawnAllowed('git config');
     const out = execFileSync(gitExecutable(), ['--no-pager', 'config', '--no-includes', '--file', file, '--list', '--null'], {
       cwd: path.parse(path.resolve(file)).root, env, timeout: 2000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8', windowsHide: true,
     });

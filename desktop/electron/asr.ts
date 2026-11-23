@@ -26,12 +26,21 @@ export interface TranscribeCloudOpts {
   timestamps?: boolean
 }
 
+/** 按路径转写时的扩展名 → mime。以前只认 wav / mp3 / m4a,ogg / opus / flac / webm / aac 落成 application/octet-stream,
+ *  服务端按 WAV 交给上游(dashscopeAsrBody 只认 audio/*),格式对不上。 */
+export const AUDIO_MIME_BY_EXT: Record<string, string> = {
+  wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
+  ogg: 'audio/ogg', opus: 'audio/ogg', flac: 'audio/flac', webm: 'audio/webm',
+}
+
 /** 音频 mime → 上游期望的文件后缀(部分服务按扩展名判编码)。 */
 function extForMime(mime: string): string {
   if (/wav/.test(mime)) return 'wav'
-  if (/mp4|m4a|aac/.test(mime)) return 'm4a'
+  if (/aac/.test(mime) && !/mp4|m4a/.test(mime)) return 'aac' // 裸 ADTS 别标成 m4a 容器(Codex 评审)
+  if (/mp4|m4a/.test(mime)) return 'm4a'
   if (/ogg/.test(mime)) return 'ogg'
   if (/mpeg|mp3/.test(mime)) return 'mp3'
+  if (/flac/.test(mime)) return 'flac'
   return 'webm'
 }
 
@@ -94,7 +103,11 @@ export async function transcribeViaForsion(o: {
     body: JSON.stringify({ modelId: o.modelId || undefined, audioBase64: o.audioB64, mime: o.mime, language: o.language, timestamps: o.timestamps || undefined, projectSource: 'tangu', client: `desktop/${app.getVersion()}` }),
   })
   const data = (await res.json().catch(() => ({}))) as { text?: string; detail?: string }
-  if (!res.ok) throw new Error(data.detail || `Forsion 转写失败 ${res.status}`)
+  if (!res.ok) {
+    // 百炼原生接口把「这段没人声」(静音、纯音乐)当 400 回、服务端转成 502:那是空文本,不是转写失败
+    if (/ASR_RESPONSE_HAVE_NO_WORDS/.test(data.detail || '')) return o.timestamps ? { text: '' } : ''
+    throw new Error(data.detail || `Forsion transcription failed: HTTP ${res.status}${res.status === 504 ? ' (gateway timeout)' : ''}`)
+  }
   const text = (data.text || '').trim()
   // 服务端还没支持 timestamps 时只会回 text —— 照实回 segments:undefined,绝不伪造时间点。
   return o.timestamps ? { text, segments: parseVerboseSegments(data) } : text

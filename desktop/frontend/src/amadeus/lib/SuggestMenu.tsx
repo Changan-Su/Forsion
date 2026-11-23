@@ -1,12 +1,14 @@
 // 光标旁的补全浮层:编辑器 `#` 补全和 ChatBox 的 suggest 共用同一份外观与键盘行为。
 // 查询串驻留在输入区,面板只在捕获阶段拦导航键(↑↓/Enter/Tab/Esc),字母照常落进去。
-import { useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useState, type ReactNode } from 'react'
 import { OverlayAt } from './clampMenu'
 
 export interface SuggestMenuItem {
   key: string
   label: ReactNode
   hint?: ReactNode
+  /** 这一行前面画一个分组标签(同笔记 @ 面板的「日期」「链接到页面」);标签不占键盘位置。 */
+  section?: ReactNode
 }
 
 interface Props {
@@ -59,8 +61,9 @@ export function SuggestMenu({ items, left, top, anchorTop, prefer, className = '
   return (
     <OverlayAt className={`wiki-suggest ${className}`} x={left} y={top} anchorTop={anchorTop} prefer={prefer} role="menu" onMouseDown={(e) => e.preventDefault()}>
       {items.map((item, i) => (
+        <Fragment key={item.key}>
+        {item.section != null && item.section !== '' && <div className="slash-group-label">{item.section}</div>}
         <button
-          key={item.key}
           className="wiki-item"
           data-active={i === active || undefined}
           ref={reveal(i)}
@@ -74,6 +77,7 @@ export function SuggestMenu({ items, left, top, anchorTop, prefer, className = '
           <span className="wiki-item-name">{item.label}</span>
           {item.hint != null && item.hint !== '' && <span className="wiki-item-hint">{item.hint}</span>}
         </button>
+        </Fragment>
       ))}
     </OverlayAt>
   )

@@ -1,15 +1,17 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { useAutomation } from './automationStore'
-import { getMuseTriggers } from '../services/backendService'
-import type { MuseTriggerInfo, TanguDesktopConfig } from '../types'
+import { suggestionDraft, useAutomation } from './automationStore'
+import { getMuseAutomationSuggestions, getMuseTriggers, listMuseCards, patchMuseAutomationSuggestion } from '../services/backendService'
+import type { MuseAutomationSuggestion, MuseTriggerInfo, TanguDesktopConfig } from '../types'
 
 vi.mock('../services/backendService', () => ({
   getSpecialConfig: vi.fn(async () => ({ config: null })), getMuseStatus: vi.fn(async () => null),
   getMuseTriggers: vi.fn(async () => []), getAutomationSessions: vi.fn(async () => []),
   getAgentSchedules: vi.fn(async () => []), getAutomationActions: vi.fn(async () => []),
+  getMuseAutomationSuggestions: vi.fn(async () => []), patchMuseAutomationSuggestion: vi.fn(async () => ({ ok: true })),
+  listMuseCards: vi.fn(async () => []),
 }))
 const trigger = { id: 'new-rule', desc: 'Reminder', enabled: false, cond: { type: 'manual' }, actions: [{ type: 'notify', title: 'Hello' }] } as MuseTriggerInfo
-beforeEach(() => useAutomation.setState({ triggers: [], sel: null, builder: null, refreshNonce: 0 }))
+beforeEach(() => { vi.mocked(patchMuseAutomationSuggestion).mockClear(); useAutomation.setState({ triggers: [], suggestions: [], pendingRules: [], sel: null, builder: null, refreshNonce: 0 }) })
 
 it('saving a new rule closes the builder and selects its actual returned ID', () => {
   useAutomation.getState().openBuilder(undefined, 'reminder')
@@ -33,4 +35,62 @@ it('a response without the list field keeps the previous list instead of storing
   vi.mocked(getMuseTriggers).mockResolvedValueOnce(undefined as unknown as MuseTriggerInfo[])
   await useAutomation.getState().refresh({} as TanguDesktopConfig)
   expect(useAutomation.getState().triggers).toEqual([trigger])
+})
+
+const sugg = (id: string): MuseAutomationSuggestion => ({ id, title: `T ${id}`, why: 'seen', source: { kind: 'muse', label: 'x' },
+  rule: { desc: 'Weekly log', cond: { type: 'daily_at', time: '09:00' }, cooldownHours: 0, actions: [{ type: 'notify', title: 'Hi' }] } })
+
+it('a suggestion opens as an unsaved, paused draft and keeps its snapshot when Muse replaces it', async () => {
+  useAutomation.setState({ suggestions: [sugg('s1')] })
+  useAutomation.getState().openSuggestion('s1')
+  expect(useAutomation.getState().builder?.suggestion?.id).toBe('s1')
+  expect(suggestionDraft(sugg('s1'))).toMatchObject({ id: '', enabled: false, desc: 'Weekly log', cond: { type: 'daily_at' } })
+  await useAutomation.getState().refresh({} as TanguDesktopConfig) // Muse 换掉了这一组
+  expect(useAutomation.getState().suggestions).toEqual([])
+  expect(useAutomation.getState().builder?.suggestion?.id).toBe('s1')
+})
+
+it('saving a suggestion draft marks it used and it does not come back on the next poll', async () => {
+  useAutomation.setState({ suggestions: [sugg('s2'), sugg('s3')] })
+  useAutomation.getState().openSuggestion('s2')
+  useAutomation.getState().openSuggestion('s3') // 慢保存期间换了草稿:记 used 的仍是保存开始时那条
+  useAutomation.getState().acceptSaved(trigger, 's2')
+  expect(vi.mocked(patchMuseAutomationSuggestion)).toHaveBeenCalledWith(expect.anything(), 's2', 'used')
+  vi.mocked(getMuseAutomationSuggestions).mockResolvedValueOnce([sugg('s2'), sugg('s3')]) // 引擎还没收到时的旧快照
+  await useAutomation.getState().refresh({} as TanguDesktopConfig)
+  expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s3'])
+  expect(vi.mocked(patchMuseAutomationSuggestion)).not.toHaveBeenCalledWith(expect.anything(), 's3', 'used')
+})
+
+it('a failed dismiss puts the suggestion back; a 409 (already gone) keeps it hidden', async () => {
+  useAutomation.setState({ suggestions: [sugg('s4'), sugg('s5')] })
+  vi.mocked(patchMuseAutomationSuggestion).mockRejectedValueOnce(Object.assign(new Error('offline'), { status: 500 }))
+  const pending = useAutomation.getState().dismissSuggestion('s4', 'timing')
+  useAutomation.setState({ suggestions: [sugg('s5'), sugg('s9')] }) // 期间轮询换来了新一组
+  await expect(pending).rejects.toThrow('offline')
+  expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4', 's5', 's9'])
+  useAutomation.setState({ suggestions: [sugg('s4'), sugg('s5')] })
+  vi.mocked(patchMuseAutomationSuggestion).mockRejectedValueOnce(Object.assign(new Error('gone'), { status: 409 }))
+  await useAutomation.getState().dismissSuggestion('s5')
+  expect(useAutomation.getState().suggestions.map((s) => s.id)).toEqual(['s4'])
+})
+
+it('pending rule cards from the Muse chat: only rule cards; a failed read keeps the last list; an older reply cannot bring a card back', async () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+  const rule = { id: 'c1', kind: 'rule', status: 'pending', payload: { rule: { desc: 'Open Figma' } } }
+  vi.mocked(listMuseCards).mockResolvedValueOnce([rule, { id: 'c2', kind: 'plugin', status: 'pending', payload: {} }] as any)
+  await useAutomation.getState().refresh({} as TanguDesktopConfig); await flush()
+  expect(useAutomation.getState().pendingRules.map((c) => c.id)).toEqual(['c1'])
+  vi.mocked(listMuseCards).mockRejectedValueOnce(new Error('offline'))
+  await useAutomation.getState().refresh({} as TanguDesktopConfig); await flush()
+  expect(useAutomation.getState().pendingRules.map((c) => c.id)).toEqual(['c1'])
+  // 慢的旧读(还看得到 c1)晚于「答过了」之后的新读回来:不许把 c1 画回来
+  let slow!: (v: any) => void
+  vi.mocked(listMuseCards).mockImplementationOnce(() => new Promise((r) => { slow = r }))
+  void useAutomation.getState().refresh({} as TanguDesktopConfig)
+  vi.mocked(listMuseCards).mockResolvedValueOnce([])
+  useAutomation.getState().bumpCards(); await flush()
+  expect(useAutomation.getState().pendingRules).toEqual([])
+  slow([rule]); await flush()
+  expect(useAutomation.getState().pendingRules).toEqual([])
 })

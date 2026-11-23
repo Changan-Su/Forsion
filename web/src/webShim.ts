@@ -12,6 +12,7 @@
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { createBrowserAccount, WEB_CLIENT_TAG, type BrowserAccount } from './account'
 import { createAccountFetch } from './accountFetch'
+import { quotaEntry } from '../../desktop/shared/telemetryKeys'
 
 const TOKEN_KEY = 'forsion_token'
 
@@ -177,20 +178,24 @@ export async function installWebShim(): Promise<boolean> {
       openPage(`/account/${tokenQuery()}${hash}`)
       return { ok: true }
     },
-    openPayCenter: async () => {
+    // entry(遥测 v3 契约 §17):付款页 pay.js 读 ?from= 透传给下单接口;表外的值不带
+    openPayCenter: async (opts?: { entry?: string }) => {
       const back = encodeURIComponent(location.origin + '/account/')
-      openPage(`/pay/?tab=membership${tokenQuery('&')}&redirect=${back}`)
+      const entry = quotaEntry(opts?.entry)
+      openPage(`/pay/?tab=membership${tokenQuery('&')}${entry ? `&from=${entry}` : ''}&redirect=${back}`)
       return { ok: true }
     },
     // 额度视图与重置卡:同源直连(token 就在本端 localStorage),电文形状对齐 electron 的
     // account:quota / account:useResetCard —— AccountCard 靠 accountQuota 是否存在决定
     // 点头像是弹菜单还是直接跳走,缺席=手机端连额度都看不到。
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
-    accountUseResetCard: (type?: string) => {
+    // entry 追加在末尾(遥测 v3):表外的值当没给,绝不因此拒绝
+    accountUseResetCard: (type?: string, entry?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
       }
-      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both' })
+      const e = quotaEntry(entry)
+      return cloudJson('POST', '/token-quota/reset-card/use', { type: type ?? 'both', ...(e ? { entry: e } : {}) })
     },
     // 协议更新提示(components/TermsUpdateDialog):网页版不给通用 cloudFetch,只开这两条
     termsStatus: () => cloudJson('GET', '/auth/terms'),

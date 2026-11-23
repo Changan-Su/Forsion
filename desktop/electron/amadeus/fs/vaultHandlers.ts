@@ -4,12 +4,12 @@
 import { promises as fs } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
-import { IPC, type DbReadResult, type DrawingReadResult, type PageProps } from '@amadeus-shared/ipc'
+import { IPC, type DbReadResult, type DrawingReadResult, type PageProps, type TextWriteOptions } from '@amadeus-shared/ipc'
 import { dbFileSchema, parseDb, serializeDb } from '@amadeus-shared/db/schema'
 import { rewriteDbRefs } from '@amadeus-shared/db/rewriteDbRefs'
 import { rewriteNoteRefs } from '@amadeus-shared/rewriteNoteRefs'
 import { rebaseFileRefs } from '@amadeus-shared/assets'
-import { movedUnder } from '@amadeus-shared/propagateNoteRenames'
+import { createStructureQueue, movedUnder, STRUCTURE_OPS } from '@amadeus-shared/propagateNoteRenames'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { extractFrontmatterExtra } from '@amadeus-shared/compiler/split'
 import { loadPage, newPage, pageFileName, savePage, type PageManifest } from '@amadeus-shared/compiler'
@@ -18,9 +18,11 @@ import { linkMentionInText } from '@amadeus-shared/linkIndex'
 import type { VaultManager } from './vaultManager'
 import type { VaultIndex } from './vaultIndex'
 import { withDbLock } from './dbLock'
+import { withTextWriteLock } from './textWriteLock'
+export { withTextWriteLock } from './textWriteLock'
 import { writeVaultText } from './pageWrite'
 import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
-import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { checkStrictTextWrite, textFingerprint } from '@amadeus-shared/writeConflict'
 import { vaultRel } from './vaultRel'
 import { migrateWorkFolder } from './workFolderMigration'
 import type { WorkFolderMigration } from '@amadeus-shared/ipc'
@@ -98,25 +100,23 @@ export interface VaultHandlerDependencies {
   pageHistory?: PageHistory
 }
 
-/** 同一路径的文本写串行化(进程内)。CAS 的「读→比对→写」中间有两次 await,两个窗口的 invoke
- *  会交错在它们之间 —— 两边都比对通过、先写的那份被后写的静默盖掉,等于没做 CAS。非 CAS 的写也进同一条
- *  链,免得一发盲写插在别人的比对与落盘之间。引擎是另一个进程,不在这把锁里(它的改动走 watcher → 回灌)。
- *  ⚠️ **同一篇 .md 的每一条读改写 / 写通道都得进这把锁,并且在锁内读**(Codex g3#2):setPageFrontmatter、patchMark、
- *  改名引用重写这些「读全文 → 改一处 → 整篇写回」若在锁外,读到旧全文后编辑器的 CAS 写照样比对通过、回 ok:true,
- *  随后旧正文连同补丁写回 → 编辑器刚落盘的新正文静默丢失。不可重入:只在最底层那段「读→改→写」上锁,
- *  别把一个会再去拿锁的 helper 整个包进来。 */
-const textWriteChains = new Map<string, Promise<unknown>>()
-export function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = textWriteChains.get(key) ?? Promise.resolve()
-  const run = prev.then(fn, fn)
-  const tail = run.catch(() => {})
-  textWriteChains.set(key, tail)
-  void tail.then(() => { if (textWriteChains.get(key) === tail) textWriteChains.delete(key) })
-  return run
-}
-
 export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
-  const { vault, index, handle, rememberPage: persistLastPage, notifyAll } = deps
+  const { vault, index, rememberPage: persistLastPage, notifyAll } = deps
+  const serializeStructure = createStructureQueue()
+  const structureChannels = new Set<string>(STRUCTURE_OPS.map((name) => IPC[name]))
+  const handle: VaultHandlerDependencies['handle'] = (channel, fn) => {
+    deps.handle(channel, (event, ...args) => {
+      const invoke = () => fn(event, ...args)
+      if (structureChannels.has(channel) || (channel === IPC.writeTextFile && args[2]?.strictExisting)) {
+        const root = vault.getRoot()
+        return serializeStructure(async () => {
+          if (vault.getRoot() !== root) throw new Error('Vault changed before queued operation')
+          return invoke()
+        })
+      }
+      return invoke()
+    })
+  }
   // The file operation has already committed when most callers remember its
   // location. A device preference failure must not masquerade as a failed move
   // and make the renderer resume writing the now-missing source path.
@@ -136,8 +136,8 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   /** 同时持几条路径的写锁(Codex 复核返修 P0-3:改名 / 移动 / 删除要与同篇的 CAS 保存互斥)。按键排序后逐层嵌套取锁 ——
    *  所有多锁调用方都按同一顺序取,不会互等成死锁;单锁的保存只拿一把,也成不了环。不可重入:fn 里别再拿这几把。 */
   const withPathLocks = <T>(rels: string[], fn: () => Promise<T>): Promise<T> => {
-    const keys = [...new Set(rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } }))].sort()
-    return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
+    const files = rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } })
+    return withTextWriteLock(files, fn)
   }
   handle(IPC.migrateWorkFolder, async (_e, request: WorkFolderMigration) => {
     const result = await migrateWorkFolder(vault, request, withPathLocks)
@@ -282,7 +282,11 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
   )
 
   handle(IPC.saveVaultBytes, async (_e, filePath: string, bytes: Uint8Array) => {
-    await vault.writeVaultBytes(filePath, bytes)
+    const root = vault.getRoot()
+    await withPathLock(filePath, async () => {
+      if (vault.getRoot() !== root) throw new Error('Vault changed before byte write')
+      await vault.writeVaultBytes(filePath, bytes)
+    })
     logActivity('file.save', { f: filePath })
   })
 
@@ -393,12 +397,13 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       return null
     }
   })
-  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }) => {
+  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: TextWriteOptions) => {
     const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
       const expectedRoot = typeof opts?.expectedRoot === 'string' ? opts.expectedRoot : null
       const checkRoot = (): void => { if (expectedRoot !== null && vault.getRoot() !== expectedRoot) throw new Error('Vault changed before text save') }
       checkRoot()
+      if (opts?.strictExisting) checkStrictTextWrite(opts, vault.getRoot())
       if (opts?.create === true) {
         // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
         // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
@@ -491,7 +496,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   if (deps.pageHistory) registerPageHistoryHandlers({ vault, index, handle, withPathLock, notifyPeers: deps.notifyPeers, history: deps.pageHistory })
 
-  handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string): Promise<string> => {
+  handle(IPC.renamePageFile, async (_e, oldPath: string, newBaseName: string, rememberOpened?: boolean): Promise<string> => {
     const dir = path.dirname(oldPath)
     let base = newBaseName.trim().replace(/[\\/]/g, '')
     if (!base) throw new Error('笔记名不能为空')
@@ -507,6 +512,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       index.remove(oldPath)
       await index.update(newPath)
     })
+    if (rememberOpened) await rememberPage(newPath)
     await propagateRenames({ [oldPath]: newPath }, pagesBefore)
     return newPath
   })
@@ -571,7 +577,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     return { newPath, rewrittenPages }
   })
 
-  handle(IPC.search, (_e, query: string) => index.search(query))
+  handle(IPC.search, (_e, query: string, mode?: string) => mode === 'replace-candidates' ? index.noteReplaceCandidates(query) : index.search(query))
   handle(IPC.backlinks, (_e, pagePath: string) => index.backlinks(pagePath))
   handle(IPC.exclusiveAssets, (_e, pagePath: string) => index.exclusiveAssets(pagePath))
   handle(IPC.reindex, () => index.build())

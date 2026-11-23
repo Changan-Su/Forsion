@@ -16,7 +16,7 @@ import { materializeSkill } from '../tools/fileWorkspace.js';
 import { listSharedAgentSkills } from '../skills/localSkills.js';
 import { currentDisplayAgentSlug } from '../seams/runContext.js';
 
-const getSkill = (id: string) => deps().brain.assets.getSkill(id);
+
 
 export interface SkillLoadout {
   enabledSkillIds: string[];
@@ -46,17 +46,17 @@ export async function loadSkillLoadout(
   // 旧客户端的空数组([])按「未配置」处理;skillsConfigured=true 则允许显式卸下全部技能。避免旧客户端传空
   // 列表时把整段技能从 system prompt 抹掉(表现为「装完技能后本轮 agent 不知道有哪些 skills,刷新才好」)。
   const explicit = Array.isArray(agentConfig.enabledSkillIds) && (agentConfig.enabledSkillIds.length > 0 || agentConfig.skillsConfigured === true);
+  const getSkill = (id: string) => deps().brain.assets.getSkill(id, userId);
   let enabledSkillIds: string[] = explicit ? agentConfig.enabledSkillIds : [];
   let deferredSkills: Array<{ id: string; name: string; description: string }> = [];
-  // 未显式配置 + 非云端沙箱 → 默认列出全部本地技能(按需 use_skill 目录)。
-  // 用 `!== 'sandbox'`(而非 `=== 'host'`):execMode 偶发缺失/未回填时仍兜底列出,
-  // 不让单轮配置不完整就清空技能段;真·云端会话(execMode==='sandbox')仍走云端技能、不在此列本地。
-  if (!explicit && agentConfig.execMode !== 'sandbox') {
+  // Automatic loadout follows the execution environment. Explicit selections, including an empty list, win.
+  if (!explicit) {
     // 本机会话未显式配置技能 → 默认启用「全部本地技能」,但只列进按需 use_skill 目录:
     // 不内联、不逐个拉全文,零 prompt 膨胀;调不调用全看 agent(use_skill 读盘按需加载)。
     try {
-      const all = (await (deps().brain.assets.listSkills?.() ?? Promise.resolve([]))) as any[];
-      const local = all.filter((s) => String(s?.id || '').startsWith('local:'));
+      const all = await (deps().brain.assets.listSkills?.({ forUser: userId, visibleOnly: true }) ?? Promise.resolve([]));
+      const prefix = agentConfig.execMode === 'sandbox' ? 'usr_gh_' : 'local:';
+      const local = all.filter((s) => s.id.startsWith(prefix));
       enabledSkillIds = local.map((s) => s.id);
       deferredSkills = local.map((s) => ({
         id: s.id,

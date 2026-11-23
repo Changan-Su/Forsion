@@ -62,7 +62,7 @@ describe('standalone local Amadeus capability', () => {
     expect(await readFile((await vault.assetAbs('Notes/Offline.md', asset))!)).toEqual(Buffer.from([1, 2, 3]))
     await close(vault)
     vault = await open()
-    expect(await vault.call(IPC.restoreVault, [])).toMatchObject({ pages: ['Notes/Offline.md'], folders: ['Bluebird', 'Notes'], lastPage: 'Notes/Offline.md' })
+    expect(await vault.call(IPC.restoreVault, [])).toMatchObject({ pages: ['Notes/Offline.md'], folders: ['Bluebird', 'Notes'], lastPage: 'Notes/Offline.md', strictExistingWrites: true })
     expect(JSON.stringify(await vault.call(IPC.loadPage, ['Notes/Offline.md']))).toContain('Offline note #local')
     expect(await vault.call(IPC.search, ['Offline note'])).toHaveLength(1)
     expect(await vault.call(IPC.pluginDataRead, ['bluebird'])).toBe('{"collection":"offline"}')

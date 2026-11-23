@@ -64,8 +64,9 @@ export type PointsAutoDeductResult =
 
 const NO_HANDLER = /no handler|not a forsion extend channel/i
 
-/** 写开关。成功时返回合并后的额度视图(回包不含 resetCards / pointsBalance,沿用 prev 的值)。 */
-export async function setPointsAutoDeduct(enabled: boolean, prev: AccountQuotaView | null): Promise<PointsAutoDeductResult> {
+/** 写开关。成功时返回合并后的额度视图(回包不含 resetCards / pointsBalance,沿用 prev 的值)。
+ *  entry = 从哪个入口点的(遥测 v3 契约 §17,服务端随账号记):追加在通道参数末尾,老 Extend 忽略;不给就和原来一样只传 enabled。 */
+export async function setPointsAutoDeduct(enabled: boolean, prev: AccountQuotaView | null, entry?: string): Promise<PointsAutoDeductResult> {
   const invoke = typeof window !== 'undefined' ? window.tangu?.cloudInvoke : undefined
   if (typeof invoke !== 'function' || channelMissing) return { ok: false, reason: 'no-bridge' }
   if (pointsPhaseBusy(phase)) return { ok: false, reason: 'busy' }
@@ -77,7 +78,7 @@ export async function setPointsAutoDeduct(enabled: boolean, prev: AccountQuotaVi
   const rejected = (): void => setPhase(wasUnknown ? 'unknown' : 'idle')
   let response: { status?: number; json?: any } | null
   try {
-    response = await invoke(POINTS_AUTO_DEDUCT_CHANNEL, enabled) as { status?: number; json?: any } | null
+    response = await (entry ? invoke(POINTS_AUTO_DEDUCT_CHANNEL, enabled, entry) : invoke(POINTS_AUTO_DEDUCT_CHANNEL, enabled)) as { status?: number; json?: any } | null
   } catch (error: any) {
     if (epoch !== accountQuotaEpoch()) return { ok: false, reason: 'stale' }
     if (NO_HANDLER.test(String(error?.message || error))) { channelMissing = true; rejected(); return { ok: false, reason: 'no-bridge' } }

@@ -48,6 +48,7 @@ const api: AmadeusApi = {
     }
   },
   search: (query) => ipcRenderer.invoke(IPC.search, query),
+  noteReplaceCandidates: (query) => ipcRenderer.invoke(IPC.search, query, 'replace-candidates'),
   backlinks: (pagePath) => ipcRenderer.invoke(IPC.backlinks, pagePath),
   exclusiveAssets: (pagePath) => ipcRenderer.invoke(IPC.exclusiveAssets, pagePath),
   reindex: () => ipcRenderer.invoke(IPC.reindex),
@@ -128,7 +129,7 @@ const api: AmadeusApi = {
   migrateWorkFolder: (request) => ipcRenderer.invoke(IPC.migrateWorkFolder, request),
   listPageProps: (folder) => ipcRenderer.invoke(IPC.listPageProps, folder),
   setPageFrontmatter: (pagePath, patch) => ipcRenderer.invoke(IPC.setPageFrontmatter, pagePath, patch),
-  renamePageFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renamePageFile, oldPath, newBaseName),
+  renamePageFile: (oldPath, newBaseName, rememberOpened) => ipcRenderer.invoke(IPC.renamePageFile, oldPath, newBaseName, rememberOpened),
   renameDbFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renameDbFile, oldPath, newBaseName),
 }
 

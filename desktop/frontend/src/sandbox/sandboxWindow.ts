@@ -89,8 +89,9 @@ function watchNotices(): void {
 const INTERACTIVE = 'button,a[href],input:not([type=hidden]),textarea,select,summary,[contenteditable=""],[contenteditable=true],'
   + '[role=button],[role=link],[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],[role=tab],[role=checkbox],[role=radio],'
   + '[role=switch],[role=option],[role=combobox],[role=textbox],[role=slider],[tabindex]:not([tabindex="-1"])'
-/** 沙箱条(报告问题 / 安装 / 重置)不给 agent 点:那几颗是给人的。 */
-const CHROME = '.sbx-chrome'
+/** 沙箱条(报告问题 / 安装 / 重置)、报告框、首次说明不给 agent 读和点:那几块是给人的(SandboxChrome.tsx 打 data-sbx-host)。
+ *  11-20 起沙箱条住进引擎的右上角浮钮组,不再有外层 .sbx-chrome;按属性认,别改回按类名。 */
+const CHROME = '[data-sbx-host]'
 /** 宿主右上角的通知栈(插件 ctx.notify 也弹在这里):卡片压在目标上时先关掉再点(底部吐司 .amx-toast 不接指针,不挡)。 */
 const TOASTS = '.ntf-wrap'
 const refs = new Map<string, WeakRef<Element>>()

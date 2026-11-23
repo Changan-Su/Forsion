@@ -10,6 +10,7 @@ import { ProcessLogView } from '../views/chat2/BackgroundProcs'
 import { ChangesView } from '../views/chat2/ChangesView'
 import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
 import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
+import { GithubSkillImport } from '../views/chat2/GithubSkillImport'
 import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
 import { ensureAppRefCommand } from '../views/chat2/appRefCommand'
 import { MemoryPanelView, SubchatsView, SessionFilesView, TocView } from '../views/RightViews'
@@ -117,7 +118,7 @@ export function activateTangu(host: TanguHost): void {
     btwPageVisible: (activeId) => btwWebVisible(useBtw.getState().webOpen, activeId),
     closeBtwPage: () => useBtw.getState().closeWeb(),
     subscribeBtw: (cb) => useBtw.subscribe(cb),
-    FilesPanel, bumpDir, openSpecial,
+    FilesPanel, bumpDir, openSpecial, GithubSkillImport,
   })
   registerTanguViews()
   if (tanguProbeAvailable()) {

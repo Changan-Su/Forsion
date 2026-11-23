@@ -17,6 +17,10 @@ export interface HostServices {
    *  缺省时 core 用 Postgres 形式(microserver/worker/外部 PG 皆为 PG,无需实现);
    *  仅 sqliteHost 覆写为 datetime() 形式。 */
   getOlderThanSql?(column: string, minutes: number): string;
+  /** 可选:同步事务(只有本机 SQLite 实现)。fn 里用 run 同步执行语句(SELECT / RETURNING 回行,其余回空数组),
+   *  整段 BEGIN IMMEDIATE … COMMIT,抛错整段回滚。fn 里不能 await —— 正是同步才保证别的异步任务插不进这段事务。
+   *  没实现 = 调用方按各自的「可重放」退路逐条写(外部 PG / PGlite)。 */
+  transactionSync?<T>(fn: (run: (sql: string, params?: any[]) => any[]) => T): T;
 
   /** 用户鉴权中间件(Bearer token)。 */
   authMiddleware: RequestHandler;

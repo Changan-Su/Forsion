@@ -2,10 +2,11 @@
  *
  *  Why default-on: Historian only ever writes *candidates*; this job is the single path that promotes them into
  *  MEMORY.md. While it was opt-in, a stock install collected candidates forever and never remembered any of them. */
+import { isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { isStandInSlug } from '../agents/standIn.js';
 import { deps } from '../seams/runtime.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
-import { query } from '../core/db.js';
+import { messageTimeOrder, query } from '../core/db.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { resolveBackgroundModelId, loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { redactSecrets } from '../core/redact.js';
@@ -53,6 +54,8 @@ const DEFAULTS: MemoryDreamConfig = { enabled: true, modelId: '', timeoutMs: 60_
  *  10-06 真模型(GPT 6 Luna,20 / 40 条已有记忆 + 8 条候选):整理完成 关 4/30、medium 14/30;提议里的格式硬错 关 5 次、medium 1 次。 */
 const DREAM_THINKING: ThinkingLevel = 'medium';
 const jobs = new Map<string, { controller: AbortController; status: MemoryDreamStatus }>();
+/** jobs 的键:多账号模式前面带账号(core/accountScope.ts),各账号的同名 Agent 互不挡;单人模式就是 slug。 */
+const jobKey = (slug: string): string => (isMultiAccount() ? `${requireAccountId('memory dream')}:${slug}` : slug);
 const FILE = '.memory-dream.json';
 const clamp = (value: unknown, fallback: number, min: number, max: number): number => Number.isFinite(Number(value)) ? Math.max(min, Math.min(max, Math.floor(Number(value)))) : fallback;
 
@@ -73,7 +76,7 @@ export function getMemoryDream(slug: string): DreamFile & { status: MemoryDreamS
   const data = readFile(slug);
   // A process restart never pretends its former request is still running.
   const last = data.last?.running ? { ...data.last, state: 'failed' as const, running: false, detail: 'Maintenance interrupted by engine restart; candidates retained.' } : data.last;
-  return { ...data, status: jobs.get(slug)?.status || last || { state: 'idle', running: false }, candidates: readCandidates(slug).length };
+  return { ...data, status: jobs.get(jobKey(slug))?.status || last || { state: 'idle', running: false }, candidates: readCandidates(slug).length };
 }
 export function configureMemoryDream(slug: string, patch: Partial<MemoryDreamConfig>): MemoryDreamConfig {
   return withPrivateMemoryLock(slug, () => {
@@ -85,7 +88,7 @@ export function configureMemoryDream(slug: string, patch: Partial<MemoryDreamCon
   });
 }
 export function cancelMemoryDream(slug: string): MemoryDreamStatus {
-  const job = jobs.get(slug);
+  const job = jobs.get(jobKey(slug));
   if (job) { job.controller.abort(new Error('Memory maintenance cancelled')); job.status.state = 'cancelling'; job.status.detail = 'Cancellation requested; waiting for the provider to stop.'; }
   return getMemoryDream(slug).status;
 }
@@ -177,7 +180,7 @@ async function candidateEvidence(userId: string, slug: string, candidate: Memory
   }
   // New candidates replay the same bounded conversation window they were collected
   // from. Legacy session-only references retain a conservative latest-window fallback.
-  const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? AND role IN ('user','model','assistant')${anchorTimestamp !== undefined ? ' AND timestamp <= ?' : ''} ORDER BY timestamp DESC LIMIT 30`, anchorTimestamp !== undefined ? [sessions[0].id, anchorTimestamp] : [sessions[0].id]);
+  const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? AND role IN ('user','model','assistant')${anchorTimestamp !== undefined ? ' AND timestamp <= ?' : ''} ORDER BY ${messageTimeOrder('DESC')} LIMIT 30`, anchorTimestamp !== undefined ? [sessions[0].id, anchorTimestamp] : [sessions[0].id]);
   const evidence = rows.reverse().map((r) => `${r.role === 'model' ? 'assistant' : r.role}: ${redactSecrets(String(r.content || '').slice(-8000))}`).join('\n').slice(-8000);
   return evidence || undefined;
 }
@@ -187,14 +190,14 @@ const DREAM_END = { completed: 'dreamCompleted', skipped: 'dreamSkipped', failed
 /** Starts immediately, returns status. At most two provider jobs; no queued/retrying background swarm.
  *  trigger 'archive' = 归档会话时顺手跑的(只给遥测分来源,行为同手动)。 */
 export function startMemoryDream(userId: string, slug: string, opts: { automatic?: boolean; modelId?: string; trigger?: 'archive' } = {}): MemoryDreamStatus {
-  if (jobs.has(slug)) return jobs.get(slug)!.status;
+  if (jobs.has(jobKey(slug))) return jobs.get(jobKey(slug))!.status;
   const data = readFile(slug);
   if (opts.automatic && (!data.config.enabled || (Date.now() - Date.parse(data.last?.startedAt || '') < data.config.intervalHours * 3_600_000))) return getMemoryDream(slug).status;
   if (jobs.size >= 2) return { state: 'skipped', running: false, detail: 'Two maintenance jobs are already active; retry later.' };
   const controller = new AbortController();
   const status: MemoryDreamStatus = { state: 'running', running: true, startedAt: new Date().toISOString(), calls: 0 };
   writePrivateText(slug, FILE, JSON.stringify({ ...data, last: status }, null, 2));
-  jobs.set(slug, { controller, status });
+  jobs.set(jobKey(slug), { controller, status });
   const dim = agentRoleOf(slug);
   ledger.inc('daily_memory', opts.automatic ? 'dreamAuto' : opts.trigger === 'archive' ? 'dreamArchive' : 'dreamManual', { dim });
   const timer = setTimeout(() => { controller.abort(new Error('Memory maintenance deadline exceeded')); status.state = 'cancelling'; status.detail = 'Time budget exhausted; waiting for provider cancellation.'; }, data.config.timeoutMs);
@@ -379,7 +382,7 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       const ms = Date.parse(status.finishedAt) - Date.parse(status.startedAt!);
       if (ms > 0) ledger.inc('daily_memory', 'dreamMs', { dim, n: ms });
       try { withPrivateMemoryLock(slug, () => { const latest = readFile(slug); writePrivateText(slug, FILE, JSON.stringify({ ...latest, last: status }, null, 2)); }); } catch { /* Next read surfaces filesystem errors. */ }
-      jobs.delete(slug);
+      jobs.delete(jobKey(slug));
     }
   });
   return status;

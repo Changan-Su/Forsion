@@ -18,7 +18,11 @@ internal data class ChromeIcons(
  * (running / waiting for the user / unread); JS decides which one applies. `label` (translated by JS) is what a
  * screen reader announces — the dot itself says nothing.
  */
-/** NOTICE = not a Space's own state: something reached through the "all" cell wants a look ([ChromeState.allDot]); drawn danger red, like the dot "More" carries. */
+/**
+ * NOTICE = not a Space's own state: something reached through the "all" cell wants a look ([ChromeState.allDot]), or — a
+ * phone's fixed dock (Home · Chats · Notes · Apps · Me, 2026-11-19) — a launcher on the page behind the Apps / Me cell does
+ * (sent as a cell's badge kind "notice"); drawn danger red, like the dot "More" carries.
+ */
 internal data class ChromeBadge(val kind: Kind, val label: String) { enum class Kind { RUNNING, ATTENTION, UNREAD, NOTICE } }
 
 /**
@@ -175,6 +179,8 @@ internal data class ChromeState(
                 "running" -> ChromeBadge.Kind.RUNNING
                 "attention" -> ChromeBadge.Kind.ATTENTION
                 "unread" -> ChromeBadge.Kind.UNREAD
+                // a phone's fixed dock (2026-11-19): a launcher on the Apps / Me page wants a look — the same red dot as [allDot]
+                "notice" -> ChromeBadge.Kind.NOTICE
                 else -> return null
             }
             return ChromeBadge(kind, NativeJson.optStr(o, "label", 128))

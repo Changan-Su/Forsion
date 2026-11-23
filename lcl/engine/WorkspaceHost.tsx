@@ -26,6 +26,7 @@ import { allViews, getView, subscribeViews } from './viewRegistry'
 import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
 import { IS_VIEW_WINDOW } from './uiMode'
 import { useNav } from './navStore'
+import { useEdgeAccessory } from './edgeAccessory'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
 import { useEngineI18n } from './i18nSeam'
 import { useShortcuts, formatHotkey, isMacPlatform } from './shortcutStore'
@@ -591,6 +592,7 @@ export const WorkspaceHost: React.FC<{
   }, [])
   // 小窗钮跟着宿主的 open-mini 命令走:只有桌面注册它(web 无 openMini)→ 引擎不碰 window.tangu。
   const miniCmd = useCommandStore((s) => s.commands.find((c) => c.id === 'open-mini'))
+  const edgeAccessory = useEdgeAccessory((s) => s.node) // 宿主的窗口级附件(edgeAccessory.ts),排在浮钮组最前
   // 视图注册表 → Dockview components map(注册变化时重建,支持运行期注册)。
   const [version, setVersion] = useState(0)
   useEffect(() => subscribeViews(() => setVersion((v) => v + 1)), [])
@@ -781,6 +783,7 @@ export const WorkspaceHost: React.FC<{
       <SpaceFloatLayer />
       {/* 右上角浮钮组:恢复默认布局 → 小窗(仅桌面)→ 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
       <div className="dv-edge-actions" ref={edgeRef}>
+        {edgeAccessory && <div className="dv-edge-accessory">{edgeAccessory}</div>}
         <button
           className="dv-edge-toggle dv-edge-reset"
           title={t('lcl.edge.reset')}

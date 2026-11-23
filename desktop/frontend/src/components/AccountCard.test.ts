@@ -243,7 +243,7 @@ it('uses a reset card only on the second click and plays the ceremony', async ()
   expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
   await click('再点一次确认使用')
   await tick()
-  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both')
+  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both', 'avatar-menu') // 末位 entry(遥测 v3)
   expect(document.querySelector('.account-pop')).toBeNull() // 用完关菜单
   const dialog = document.querySelector('.reset-ceremony[role="dialog"]')!
   expect(dialog.textContent).toContain('额度已焕新')

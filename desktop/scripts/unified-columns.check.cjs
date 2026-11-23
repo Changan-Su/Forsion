@@ -302,6 +302,7 @@ async function main() {
       const pm = document.querySelector(s)
       const target = [...pm.querySelectorAll(':scope > p')].find((x) => x.textContent === '段甲。')
       const r = target.getBoundingClientRect()
+      // 默认壳是 720px 的盒子、没有可滚 pane:⠿ 左边没地方,拼左栏退回正文左缘 28px 带(宽 pane 的分道见 unified-dragfeel)。
       const at = { clientX: r.left + 8, clientY: r.top + r.height / 2, dataTransfer: dt }
       md('dragover', pm, at)
       md('dragover', pm, at)

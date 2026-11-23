@@ -26,7 +26,8 @@ import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { openWsFile } from '../../views/wsFileNav'
 import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
-import { tanguCount, tanguSetting } from '../telemetry'
+import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
+import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
@@ -35,7 +36,9 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
-import { TURN_RESUME_MARKER, isContinuationRow } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { turnResumeMarker, isContinuationRow, isInterruptReason, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
+import { inflightFromResult, markUnfinishedInflight, type ToolEventWithInflight } from '../inflightTool'
+import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
 import { isEngineModelNoApiKey } from '../../../../../tangu-agent/src/contracts/engineModelError'
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -43,6 +46,7 @@ import type { StoreApi } from 'zustand'
 import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
+import { notifySteerDropped } from './steerDropped'
 import { cancelQuotaReminder } from './quotaReminders'
 import { sourcesFromMetadata } from '../../../../../tangu-agent/src/contracts/citeSources'
 import type { WebSource } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -154,21 +158,26 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     attachments: r.attachments || undefined,
     displayFiles: Array.isArray(r.display_files) && r.display_files.length ? r.display_files : undefined,
     status: 'done', timestamp: Number(r.timestamp) || 0,
+    ...(r.history_order != null ? { historyOrder: r.history_order } : {}),
     agentId, agentName, agentColor,
     ...(teamDone ? { teamDone: true } : {}),
     ...(teamSummary ? { teamSummary: true } : {}),
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
     ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
+    ...(role === 'assistant' && r.origin === 'refused' ? { refused: true } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
     msg.toolEvents = r.tool_calls.map((c: any) => {
       const res = results.get(c.id)
       const rawOffset = c.ui_content_offset
+      // 引擎边跑边落库的占位(断在半截:没开始 / 结果未知,见 inflightTool.ts):不当成功(result 留空)也不当报错,挂 inflight 画成灰色一步
+      const inflight = inflightFromResult(res)
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
-        result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
+        result: res && !inflight ? String(res.content ?? '') : undefined, isError: (!inflight && res?.isError) || false,
+        ...(inflight ? { inflight } : {}),
         ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
         ...(sourcesOfResult(c.function?.name || c.name, res) ?? {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
@@ -199,6 +208,15 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
 }
 
 /**
+ * 接上一条**还在跑**的 run 时,它的回答行若已在历史里(引擎边跑边落库:做到一半的正文 + 占位工具结果,recordToUi 记成 done),
+ * 清成空的在跑气泡再订阅:订阅从 seq 0 回放,正文 / 思考 / 工具调用由回放原样重建 —— 不清就会把落库的那半截再拼一遍,
+ * 占位也会把在跑的那一步画成「被打断」。计划卡、草图卡、审批等不在回放里重建的字段留着(草图按 callId 去重)。
+ */
+export function replayRow(m: UiMessage): UiMessage {
+  return { ...m, content: '', segments: undefined, toolEvents: undefined, reasoning: undefined, status: 'streaming' }
+}
+
+/**
  * 重开对话时补回失败的那几轮(引擎 services/failedRuns.ts 随消息一起带来)。失败而没有正文的一轮不落回答行,
  * 原因只在 run 上:有半截回答落了库的,在那一行上补失败状态与原因;没有的,按在线时那个气泡的 id 补一行(排在用户那一句后面)。
  * 原因是 run 上记的原串,与在线 error 事件同一串,渲染层照旧翻译。已是失败 / 停止状态的不动。
@@ -208,6 +226,8 @@ export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp
   const out = [...ui]
   for (const f of failed) {
     if (!f?.assistant_message_id) continue
+    // 不是用户按停的中断(interrupted:<原因>)不是失败:引擎会在后面补一行说明原因 / 自动接着做,这里不画红色失败行
+    if (isInterruptedRunError(f.error)) continue
     const error = f.error || 'error'
     const i = out.findIndex((m) => m.id === f.assistant_message_id)
     if (i >= 0) {
@@ -219,8 +239,61 @@ export function withFailedRuns(ui: UiMessage[], failed: FailedRunRecord[], stamp
   return out
 }
 
+/**
+ * 历史里紧跟在某条回答行后面的带原因中断说明(引擎在被非用户原因打断、没自动续的那一轮后面补的 `<turn_interrupted>` + reason)
+ * → 原因;中间只跳过系统行,碰到别的行就算没有。用户按停留下的老式说明不带原因,不算。
+ */
+export function interruptedNoticeAfter(rows: ReadonlyArray<{ id?: unknown; role?: unknown; content?: unknown }>, assistantId: string): InterruptReason | undefined {
+  const i = rows.findIndex((r) => r.id === assistantId)
+  if (i < 0) return undefined
+  let j = i + 1
+  while (j < rows.length && rows[j].role === 'system') j++
+  const next = rows[j]
+  if (!next || next.role !== 'user' || typeof next.content !== 'string') return undefined
+  return parseInterruptedNotice(next.content) ?? undefined
+}
+
+/**
+ * 重开对话 / 轮询合并时,把「被打断」挂回那一轮的回答行(评审 #7)。回答行落库时不带状态,recordToUi 一律记成 done ——
+ * 关着自动续跑时冷开对话,右栏 / 摘要就会和正文的 ⏸ 一起说「已完成」。紧挨在带原因中断说明前面的那条回答行
+ * (中间只跳过系统行;碰到用户行就停 —— 那一轮还没有回答)改成和在线时一样的安静停住(stopped + interrupted:<原因>)。
+ * 只改 done 的(在跑 / 失败 / 停止的不动);没改的行原样返回同一个对象 —— pollSession 按对象相等短路,不能每轮都换新。
+ */
+export function withInterruptedTurns(list: UiMessage[]): UiMessage[] {
+  let out: UiMessage[] | null = null
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].role !== 'user') continue
+    const reason = parseInterruptedNotice(list[i].content)
+    if (!reason) continue
+    let j = i - 1
+    while (j >= 0 && list[j].role === 'system') j--
+    const a = j >= 0 ? list[j] : undefined
+    if (!a || a.role !== 'assistant' || a.status !== 'done') continue
+    out ??= [...list]
+    out[j] = { ...a, status: 'stopped', error: interruptedRunError(reason) }
+  }
+  return out ?? list
+}
+
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
 /** 团队成员的工作状态一行(见 teamWorkBySession)。 */
+/**
+ * 对话里那行黄字的状态(引擎 status 事件):
+ *  - phase 'retry':llm_retry,「第 N/M 次重试,Xs 后」;overload = 服务过载,文案换「服务繁忙」
+ *  - phase 'wait_network':llm_wait_network,断网等网中(不倒计时);llm_network_back / 下一次 llm_call 撤掉
+ * 缺 phase 的老数据按 'retry' 画。
+ */
+export interface LlmRetryState {
+  attempt: number
+  max: number
+  waitMs: number
+  error?: string
+  phase?: 'retry' | 'wait_network'
+  overload?: boolean
+  /** 开始等网的时刻(wait_network) */
+  since?: number
+}
+
 export interface TeamWorkMember {
   slug: string
   name: string
@@ -408,6 +481,7 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
       const pointsOn = j.pointsAutoDeduct === true && typeof j.pointsBalance === 'number' && j.pointsBalance > 0
       if (pointsOn) toast(tr('quota.exhausted.pointsOn'))
       else toast(tr(state === 'weekly' ? 'quota.exhausted.weekly' : 'quota.exhausted.daily'), true)
+      tanguQuotaPrompt('run-toast', 'shown') // 匿名遥测 v3:run 收尾那条额度提示露出一次(toast 上没有按钮,只计露出)
     }
     lastQuotaExhaustState = state
   }).catch(() => {}).finally(() => { if (generation === host.authGen()) quotaCheckBusy = false })
@@ -415,6 +489,19 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
 // 卡死兜底:SSE 偶尔丢「终止帧」(后端 run 挂死/被 orphan janitor 标失败但事件没进流)→ 助手消息永远停在
 // streaming。看门狗周期性查:该 run 已不在后端活跃集 → 重载消息收尾(有内容标 done,无则 error),解除卡死。
 const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
+type HistoryReply = Awaited<ReturnType<typeof api.listHistory>>
+export interface TranscriptPage { messages: UiMessage[]; page?: api.ChatPage }
+const tailPages = new Map<string, api.ChatPage>()
+const expandedHistory = new Set<string>()
+const legacyHistory = new Set<string>()
+function forgetHistory(sid: string): void {
+  loadedHistory.delete(sid)
+  expandedHistory.delete(sid)
+  legacyHistory.delete(sid)
+  tailPages.delete(sid)
+  historyInflight.delete(sid)
+}
+const pollingHistory = new Set<string>()
 const loadedHistory = new Set<string>()
 /** 在途的历史加载:重复调用等同一份(建了分支马上发的,要等配置到了再发,不然拿空配置把继承来的 Agent 冲成缺省) */
 const historyInflight = new Map<string, Promise<void>>()
@@ -617,6 +704,17 @@ function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<un
 function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid: string): string {
   return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
     || useChildChat.getState().sessions[sid]?.model_id || ''
+}
+/** 这个会话实际跑的模型:会话自己存的,没有就按发送那条回退链落到全局默认(匿名遥测 v3 model_feedback 用)。 */
+function effectiveModelOf(s: AppState, sid: string): string {
+  return sessionModelOf(s, sid) || defaultModelOf(s, refForSession(sid)) || s.modelsResp?.defaultModelId || ''
+}
+/** run 收尾:首次运行(只算新装,见 tangu/firstRun.ts)。时长取本窗口的 run 统计(重挂的取触发它的用户消息时间起算)。 */
+function noteRunEnd(s: AppState, sessionId: string, runId: string, outcome: 'done' | 'error' | 'aborted', error?: string): void {
+  try {
+    const rs = s.runStatsBySession[sessionId]
+    noteRunEnded({ outcome, ...(error ? { error } : {}), ...(rs?.runId === runId ? { durationMs: Date.now() - rs.startedAt } : {}) })
+  } catch { /* 遥测不影响收尾 */ }
 }
 /** 外部引擎的提示(status/engine_notice):文案 zh/en 由引擎给,按钮只能指插件给这个引擎登记的对话菜单项(见 ApprovalTray)。 */
 export interface EngineNoticeUi { id: string; text: { zh?: string; en?: string }; action?: { id: string; label: { zh?: string; en?: string } } }
@@ -889,9 +987,83 @@ export interface TanguSliceDeps {
 type SessionMode = 'chat' | 'work'
 /** 界面动作 / Agent 命令的结果(与 agentCommands 的 UiActionResult 同形)。 */
 type UiCommandResult = { ok: boolean; error?: string; state?: string; result?: string; pending?: boolean }
+let sessionRefreshSequence = 0
+let appliedSessionRefresh = 0
 let host: TanguSliceDeps
 /** 组装时绑定的 store 句柄:模块级辅助函数(不在 createTanguSlice 闭包里)经它读写,不 import useApp。 */
 let store: { get: StoreApi<AppState>['getState']; set: StoreApi<AppState>['setState'] }
+
+function historyRows(reply: HistoryReply, state: AppState): UiMessage[] {
+  const group = groupSpeakerResolver(state.agentDefs, state.tr('group.host'))
+  const slug = (id: string) => agentName(state.agentDefs.find(a => a.slug === id))
+  return reply.messages.map(r => recordToUi(r, group, slug))
+}
+
+export function compareHistoryRows(a: UiMessage, b: UiMessage): number {
+  if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp
+  if (a.historyOrder === undefined || b.historyOrder === undefined) return 0
+  return a.historyOrder < b.historyOrder ? -1 : a.historyOrder > b.historyOrder ? 1 : 0
+}
+
+function reconcileHistory(rows: UiMessage[], reply: HistoryReply, state: AppState, sid: string): UiMessage[] {
+  const withFailures = withFailedRuns(rows, reply.failedRuns, agentStamp(state, state.configBySession[sid]))
+  return withInterruptedTurns(withFailures.sort(compareHistoryRows))
+}
+
+function mergeHistory(sid: string, reply: HistoryReply, previous?: api.ChatPage): void {
+  store.set(s => {
+    const existing = s.messagesBySession[sid] || []
+    const removed = new Set(reply.page?.removed)
+    const resetPersisted = !!previous?.ids.length && previous.ids.every(id => removed.has(id))
+    if (resetPersisted) expandedHistory.delete(sid)
+    if (!reply.messages.length && !reply.failedRuns.length && !removed.size) return s
+    const byId = new Map(historyRows(reply, s).map(m => [m.id, m]))
+    for (const m of existing) {
+      if ((removed.has(m.id) || (resetPersisted && m.historyOrder !== undefined)) && m.status !== 'streaming') continue
+      const persisted = byId.get(m.id)
+      const oldVersion = previous?.versions[m.id]
+      const changed = oldVersion !== undefined && reply.page?.versions[m.id] !== oldVersion
+      if (changed && persisted && m.status !== 'streaming') {
+        // Live approvals, attachments to the conversation, and other UI-only
+        // state survive a remote edit to the persisted content.
+        byId.set(m.id, { ...m, ...persisted, toolEvents: persisted.toolEvents, segments: persisted.segments,
+          status: m.status === 'done' ? persisted.status : m.status })
+      } else byId.set(m.id, m.historyOrder === undefined && persisted?.historyOrder !== undefined ? { ...m, historyOrder: persisted.historyOrder } : m)
+    }
+    const merged = reconcileHistory([...byId.values()], reply, s, sid)
+    if (merged.length === existing.length && merged.every((m, i) => existing[i] === m)) return s
+    return { messagesBySession: { ...s.messagesBySession, [sid]: merged } }
+  })
+}
+
+function recoverActiveRuns(sid: string, active: Awaited<ReturnType<typeof listActiveRuns>>): void {
+  const state = store.get()
+  const stamp = agentStamp(state, state.configBySession[sid])
+  for (const run of active) {
+    const id = run.assistant_message_id
+    if (!id || subscribedRuns.has(run.id) || (run.status !== 'running' && run.status !== 'queued')) continue
+    store.set(s => {
+      const list = s.messagesBySession[sid] || []
+      const messages: UiMessage[] = list.some(m => m.id === id)
+        ? list.map(m => m.id === id ? replayRow(m) : m)
+        : [...list, { id, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), ...stamp }]
+      return { messagesBySession: { ...s.messagesBySession, [sid]: messages } }
+    })
+    store.get().subscribeRun(sid, run.id, id)
+  }
+}
+
+async function readTail(sid: string, previous?: api.ChatPage): Promise<HistoryReply> {
+  const target = targetForSession(sid)
+  if (legacyHistory.has(sid)) return api.listHistory(target, sid)
+  const generation = host.authGen()
+  const reply = await api.listHistory(target, sid, api.CHAT_PAGE_SIZE, undefined, { known: previous?.versions })
+  if (!reply.page && generation === host.authGen() && sameRef(target.ref, refForSession(sid))) legacyHistory.add(sid)
+  // A deployed older engine ignores the new query parameters. Preserve its
+  // historical 200-row view until the engine is updated.
+  if (!reply.page && reply.messages.length === api.CHAT_PAGE_SIZE) return api.listHistory(target, sid)
+  return reply
+}
 
 export interface TanguState {
   sessions: SessionRecord[]
@@ -924,7 +1096,8 @@ export interface TanguState {
   pendingDraft: string | null
   /** 瞬态:外部入口(手机「分享到 Forsion」)交给主聊天框的一份内容。与 pendingDraft 两处不同:文字是**接在**已有草稿
    *  后面(别的 App 分享进来,不该顶掉用户打了一半的字);取走即清(takePendingShare),只给第一个来取的。不落盘。 */
-  pendingShare: { text: string; files: File[] } | null
+  /** sessionId:只给这个会话的聊天视图接(顺便问「放进输入框」带上,免得被别的钉住的聊天标签先接走);缺省 = 谁先挂谁接。 */
+  pendingShare: { text: string; files: File[]; sessionId?: string } | null
   /** Chat View 划线后的定向引用交接。与 pendingDraft 分开:主区 chat 和侧栏 chat-panel 会同时挂载，
    *  只有 targetType 对应的承载面消费，避免选中文字误落进主输入框。 */
   pendingChatQuote: { targetType: string; text: string; seq: number } | null
@@ -960,8 +1133,8 @@ export interface TanguState {
   loadProjectIcon(path: string, force?: boolean): Promise<void>
   stoppingBySession: Record<string, string | undefined>
   groupVoting: Record<string, boolean>
-  /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
-  llmRetryBySession: Record<string, { attempt: number; max: number; waitMs: number; error?: string } | undefined>
+  /** LLM 瞬时失败重试中 / 断网等网中(引擎 status/llm_retry、llm_wait_network):渲染那行黄字。任何后续非 status 事件即清除。 */
+  llmRetryBySession: Record<string, LlmRetryState | undefined>
   /** 手动 Compact 进度 0-100(undefined = 未在压缩)。ponytail: 客户端估算,compact 接口一次性返回没有进度信号。 */
   compactingBySession: Record<string, number | undefined>
   subChatsBySession: Record<string, SubChat[]>
@@ -998,6 +1171,9 @@ export interface TanguState {
   /** 历史拉取在途(按会话):ChatView 据此显示会话骨架屏而非空状态(module 级 loadedHistory 不响应式)。 */
   historyLoading: Record<string, boolean>
   loadSessionHistory(sessionId: string): Promise<void>
+  historyTail(sessionId: string): api.ChatPage | undefined
+  readTranscriptPage(sessionId: string, cursor: api.ChatPageCursor): Promise<TranscriptPage>
+  ensureHistoryDepth(sessionId: string, messageId?: string, needPrompt?: boolean): Promise<boolean>
   pollSession(sessionId: string): Promise<void>
   /** 实时语音通话代跑 Tangu run 用的模型与 agent_config(与 sendMessage 起 run 同一套取法,只读不固化)。 */
   voiceRunParams(sessionId: string): { modelId: string; agentConfig: AgentConfig }
@@ -1046,9 +1222,10 @@ export interface TanguState {
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
-  /** 「继续生成」:回答因报错 / 额度用完停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写(retry / regenerate 是删掉重来)。
+  /** 「继续生成」:回答因报错 / 额度用完 / 写到输出上限 / 被用户停下而停在半截 → 什么都不删,发一条 <turn_resume> 机器行让模型接着写
+   *  (retry / regenerate 是删掉重来)。reason 决定那一行怎么跟模型说停下的原因,缺省 error。
    *  quotaFallback:额度卡上点了「改用 X」,这一次直接走后备。false = 没发出去(在跑 / 发送失败,已 toast)。 */
-  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean }): Promise<boolean>
+  continueRun(sessionId?: string | null, opts?: { quotaFallback?: boolean; reason?: TurnResumeReason }): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
@@ -1122,9 +1299,9 @@ export interface TanguState {
   setNewChatModel(id: string | null): void
   /** 预填聊天框草稿(外部 via-chat 入口的统一接缝);Composer2 消费后自行清空。 */
   setPendingDraft(text: string | null): void
-  setPendingShare(share: { text: string; files: File[] } | null): void
+  setPendingShare(share: { text: string; files: File[]; sessionId?: string } | null): void
   /** 取走并清空:返回值只给第一个来取的人。 */
-  takePendingShare(): { text: string; files: File[] } | null
+  takePendingShare(): { text: string; files: File[]; sessionId?: string } | null
   /** 把选中文字作为引用交给指定 Chat View；seq 使连续交接同一段文字也会重新触发。 */
   setPendingChatQuote(targetType: string, text: string): void
   /** 只清掉自己消费的那一版，防止较晚的交接被旧 effect 清空。 */
@@ -1146,6 +1323,7 @@ export interface TanguState {
 export function createTanguSlice(set: StoreApi<AppState>['setState'], get: StoreApi<AppState>['getState'], h: TanguSliceDeps): TanguState {
   host = h
   store = { get, set }
+  initFirstRun() // 首次运行(遥测 v3)的首启时刻:建 store = 开窗那一刻,早于首启引导(sinceFirstLaunchS 要把引导算进去)
   return tanguMembers(set, get)
 }
 
@@ -1157,6 +1335,10 @@ export function resetTanguAuthScope(): void {
   quotaCheckBusy = false
   lastQuotaExhaustState = ''
   loadedHistory.clear()
+  tailPages.clear()
+  expandedHistory.clear()
+  legacyHistory.clear()
+  historyInflight.clear()
 }
 /** 换号且不是托管模式:中止全部在途 run 的订阅与看门狗(订阅静默退出、不走 endRun)。 */
 export function abortAllTanguRuns(): void {
@@ -1279,8 +1461,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (!cur?.[slug] || (status === 'working' && cur[slug].status !== 'waiting')) return {}
       return { teamWorkBySession: { ...s.teamWorkBySession, [sid]: { ...cur, [slug]: { ...cur[slug], status } } } }
     })
-    // 重试提示自清:重试后流恢复(token/…)或终结(done/error)的第一个非 status 事件就撤掉横幅。
-    if (ev.type !== 'status' && get().llmRetryBySession[sessionId]) {
+    // 重试 / 等网提示自清:只认「流恢复了」(token / 推理 / 工具调用)和 run 终态(done / error);重发的 llm_call 与
+    // llm_network_back 在 status 分支里撤,run 收尾 endRun 兜底撤。等待期间来的无关事件(如回答了先前挂起的提问 →
+    // inquiry_result)不撤:引擎每段等待只报一次,撤了就不会再出现。
+    if (RETRY_BANNER_CLEARERS.has(ev.type) && get().llmRetryBySession[sessionId]) {
       set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
     }
     const upsertSubChat = (id: string, fn: (s: SubChat) => SubChat, init?: Partial<SubChat>) => {
@@ -1348,7 +1532,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         patchMessage(sessionId, assistantId, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
-          const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup }
+          // inflight: undefined —— 历史里的占位(断在半截)这会儿在线接上了,别再画成「被打断」
+          const item = { id: pl.id, name: pl.name, arguments: pl.arguments, done: false, startedAt: pl.startedAt, parallelGroup: pl.parallelGroup, inflight: undefined }
           if (i >= 0) { evs[i] = { ...evs[i], ...item }; return { ...m, toolEvents: evs, ...endThink(m), ...(m.live ? { live: undefined } : {}) } }
           evs.push(item)
           return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...endThink(m), ...(m.live ? { live: undefined } : {}) }
@@ -1365,13 +1550,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const i = evs.findIndex((tt) => tt.id === pl.id)
           if (i >= 0) {
             evs[i] = {
-              ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true,
+              ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true, inflight: undefined, // 真结果到了:占位作废
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
               masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
               sources: sourcesFromMetadata(evs[i].name || pl.name, pl.metadata),
-            }
+            } as ToolEventWithInflight
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
             if (sk && !(m.sketches || []).some((s) => s.callId === sk.callId)) {
@@ -1778,7 +1963,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
           // 任务清单带进新段:最新那份总在当前段上 —— 跑着转圈、停在这段报「已停止」;旧段留它那份快照(已 done,不带状态词)
           if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(prevSeg?.todos?.length ? { todos: prevSeg.todos } : {}) })
-          return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...next, ...additions] } }
+          // 回放(重开 / pollSession 接上在跑的 run)时新段已经在历史里了:引擎边跑边落库,那一行带着做到一半的正文 / 占位结果,
+          // 接下来回放的 token 会再拼一遍 —— 清成空的在跑气泡,由回放重建。只清从历史来的(不是 streaming):在线时新段 id 不会事先存在,
+          // 团队成员那种事先摆好的在跑占位不动
+          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' && m.status !== 'streaming' ? replayRow(m) : m)) : next
+          return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...replayed, ...additions] } }
         })
         if (users.length) set((s) => touchSessionActivity(s, sessionId))
         if (newId) assistantRef.current = newId
@@ -1796,8 +1985,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           return {
             ...m, content, status: 'done' as const, live: undefined, ...endThink(m),
             ...(settled ? { segments: settleSegments(content, m.segments, m.toolEvents, pl.toolOffsets) ?? m.segments } : {}),
+            // 写到输出上限:引擎自动接过一次 / 接过还停在半句(只在这次 done 上,重载即无,同「已停止」)
+            truncated: pl.truncated === true ? true : undefined,
+            lengthResumed: pl.lengthResumed === true ? true : undefined,
             approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
             inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+            // 安全审核拦下:流出来的那截正文已被上面的终稿换掉,思考一并清掉(引擎也不落库)
+            ...(pl.refused === true ? { refused: true, reasoning: undefined } : {}),
           }
         })
         set((s) => touchSessionActivity(s, sessionId))
@@ -1831,6 +2025,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const autoKick = planAutoStart.delete(runId)
           expireRunPrompts(set, sessionId, runId)
           if (autoKick) queueAfterRun(set, sessionId, { text: t('plan.autoKickoff') })
+          noteRunEnd(get(), sessionId, runId, 'done')
           endRun(set, get, sessionId, runId)
         }
         checkQuotaExhausted(get().toast, get().tr)
@@ -1840,35 +2035,44 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         if (!get().runningBySession[sessionId] && !queueBusy(get(), sessionId)) void requestSuggestion(sessionId, runId)
         else clearSuggestion(sessionId)
         break
-      case 'error':
+      case 'error': {
         clearEngineNotices(set, sessionId)
+        // 不是用户按停的中断(退出 / 更新 / 引擎重启 / 换账号,中断任务续跑方案 B):引擎带 interrupted:<原因>。
+        // 不当用户停下(不画「⏹ 已停止」+「继续生成」)、也不当失败(不画红色失败行):气泡安静收住,
+        // 没等到结果的工具调用记成「结果未知」;引擎重启后会补一行说明原因 / 自动接着做(pollSession 拉回来)。
+        const interrupted = isInterruptReason(pl.interrupted) ? pl.interrupted : pl.error === 'interrupted' ? null : undefined
+        const quiet = interrupted !== undefined
+        const aborted = !!pl.aborted || quiet
         set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || []).map((m) =>
           m.compaction?.runId === runId && m.compaction.status === 'running'
-            ? { ...m, content: get().tr(pl.aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: pl.aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
+            ? { ...m, content: get().tr(aborted ? 'ctx.compaction.aborted' : 'ctx.compaction.failed'), compaction: { ...m.compaction, status: aborted ? 'aborted' as const : 'failed' as const, skippable: false } } : m) } }))
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
-          status: pl.aborted ? ('stopped' as const) : ('error' as const),
-          error: pl.aborted ? undefined : (pl.error || 'error'),
+          status: aborted ? ('stopped' as const) : ('error' as const),
+          error: quiet ? interruptedRunError(interrupted) : aborted ? undefined : (pl.error || 'error'),
+          ...(quiet ? { toolEvents: markUnfinishedInflight(m.toolEvents) } : {}),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
         expireRunPrompts(set, sessionId, runId)
+        noteRunEnd(get(), sessionId, runId, pl.aborted ? 'aborted' : 'error', pl.aborted ? undefined : String(pl.error || ''))
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         clearSuggestion(sessionId)
         // 外部引擎的当前模型缺 API key:提示叫用户去模型菜单里换一个(或先去引擎那边登录)。菜单里那份清单启动后只取一次,
         // 记下它可能过时了:用户登录之后再打开模型菜单,就让引擎重新探测(这时当场取没用:多半还没登录)。
-        if (!pl.aborted && isEngineModelNoApiKey(pl.error)) {
+        if (!aborted && isEngineModelNoApiKey(pl.error)) {
           const cfg = sessionConfigBaseOf(get(), sessionId)
           get().ensureEngineCaps(cfg?.engineId || cfg?.soloEngineId, 'stale') // 私聊会话两样都存着,以防只剩身份键
         }
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
-        if (!pl.aborted && get().authInfo?.loggedIn) {
+        if (!aborted && get().authInfo?.loggedIn) {
           void window.tangu?.authStatus?.()
             .then((a) => { if (a?.loggedIn && a.tokenValid === false) get().handleAuthExpired() })
             .catch(() => {})
         }
         break
+      }
       case 'subchat': {
         const id = String(pl.id || '')
         const kind = pl.kind === 'discussion' ? 'discussion' : 'subagent'
@@ -2019,6 +2223,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // 模型调用等待实况:sending(正在上传上下文)→ accepted(已送达,等首帧)。首帧/工具/结束即清(见 token 等分支)。
         // since 续用上一条(重试后引擎重发 sending 不归零):用户看到的是「这次调用总共等了多久」。
         if (pl.phase === 'llm_call') {
+          // 重发了:「几秒后重试」的倒计时和「网络已断开」都已过时,不能挂到首帧(llm_network_back 漏了也兜住)
+          if (get().llmRetryBySession[sessionId]) {
+            set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
+          }
           patchMessage(sessionId, assistantId, (m) => ({
             ...m,
             live: {
@@ -2038,17 +2246,34 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           } }))
           break
         }
-        // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
+        // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试 / 等网提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
             llmRetryBySession: {
               ...s.llmRetryBySession,
               [sessionId]: {
+                phase: 'retry',
                 attempt: Number(pl.attempt) || 1, max: Number(pl.max) || 0,
                 waitMs: Number(pl.waitMs) || 0, error: pl.error ? String(pl.error) : undefined,
+                ...(pl.overload === true ? { overload: true } : {}),
               },
             },
           }))
+        }
+        // 断网:引擎停下等网(不扣次数、最长 30 分钟),网回来在同一轮接着发
+        if (pl.phase === 'llm_wait_network') {
+          set((s) => ({
+            llmRetryBySession: {
+              ...s.llmRetryBySession,
+              [sessionId]: {
+                phase: 'wait_network', attempt: 0, max: 0, waitMs: 0,
+                since: Number(pl.since) || Date.now(), error: pl.error ? String(pl.error) : undefined,
+              },
+            },
+          }))
+        }
+        if (pl.phase === 'llm_network_back' && get().llmRetryBySession[sessionId]) {
+          set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
         }
         break
       default: break
@@ -2096,17 +2321,36 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       try { active = await listActiveRuns(targetForSession(sessionId), sessionId) } catch { return }
       if (active.some((r) => r.id === runId && (r.status === 'running' || r.status === 'queued' || !r.status))) return
       // 后端已不跑此 run,但 UI 还卡 streaming → 重载消息收尾。
+      // 按 run ID 认引擎记的终态(评审 #7):只有明确 done 才标完成。失败照引擎记的原因画失败行;中断照在线时那样安静收住;
+      // 别处按停的(aborted)= 停止。列表只给最近五条、在跑的排前,这个 run 被挤出去就查不到 —— 查不到时从历史里找线索
+      // (失败记录 / 紧跟的带原因中断说明),都没有就画「事件流中断」,不因为有半截正文就说做完了。
+      const recorded = active.find((r) => r.id === runId)?.status
       let rec: any
-      try { rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current) } catch { return }
+      let failedError: string | undefined
+      let noticeReason: InterruptReason | undefined
+      try {
+        if (recorded === 'done' || recorded === 'aborted') {
+          rec = (await api.listMessages(targetForSession(sessionId), sessionId)).find((r: any) => r.id === assistantRef.current)
+        } else {
+          const h = await api.listHistory(targetForSession(sessionId), sessionId)
+          rec = h.messages.find((r: any) => r.id === assistantRef.current)
+          failedError = h.failedRuns.find((f) => f.assistant_message_id === assistantRef.current)?.error || undefined
+          noticeReason = interruptedNoticeAfter(h.messages, assistantRef.current)
+        }
+      } catch { return }
       if (ac.signal.aborted || stoppedRuns.has(runId) || get().runningBySession[sessionId] !== runId) return
       // Persisted content is authoritative. Flush BEFORE applying it: aborting after the
       // snapshot must not append an already-persisted buffered delta a second time.
       events.flush()
+      const outcome = recorded === 'done' || recorded === 'aborted' || recorded === 'interrupted' || recorded === 'failed' ? recorded
+        : failedError ? 'failed' : noticeReason ? 'interrupted' : 'unknown'
       get().patchMessage(sessionId, assistantRef.current, (m) => {
         const content = rec?.content || m.content
-        return content
-          ? { ...m, content, status: 'done' as const }
-          : { ...m, status: 'error' as const, error: get().tr('app.eventStreamInterrupted') }
+        if (outcome === 'interrupted') return { ...m, content, status: 'stopped' as const, error: interruptedRunError(noticeReason), toolEvents: markUnfinishedInflight(m.toolEvents) }
+        if (outcome === 'failed') return { ...m, content, status: 'error' as const, error: failedError || get().tr('app.eventStreamInterrupted') }
+        if (outcome === 'aborted') return { ...m, content, status: 'stopped' as const }
+        if (outcome === 'done' && content) return { ...m, content, status: 'done' as const }
+        return { ...m, content, status: 'error' as const, error: get().tr('app.eventStreamInterrupted') }
       })
       stoppedRuns.add(runId)
       ac.abort() // 停掉还在空转的 SSE 重连循环
@@ -2129,14 +2373,19 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void c // 请求走 homeTarget()(活目标现读 store.cfg);c 只是历史签名
     if (tanguDelegatedAdmin()) return [] // 委托管理员:会话与消息不归它管,那台设备也不放(删 Agent 后的刷新等调用点一并不发)
     const generation = host.authGen()
+    const sequence = ++sessionRefreshSequence
     // P1-K6 S4(INTEGRATION R-17):列表**只拉本端**,并保留已注入的 unit 记录(在那台电脑上建的 / K7 打开的那一条)。
     // 不把整台电脑的会话列表并进 appStore.sessions —— 22 个读者(workspaces() 等)会把 Mac 的路径当成本机项目;设备分组归 K7。
     const t = homeTarget()
+    initFirstRun() // 兜底:建 store 时存储读不了的话这里再试(已有记录就不动)
     const [act, arch] = await Promise.all([api.listSessions(t, false), api.listSessions(t, true)])
     if (generation !== host.authGen()) return []
+    noteSessionsListed([...act, ...arch]) // 本端列表真读回来了:首启前就有会话 = 升级上来的,首次运行不发(旧一轮的结果也是真列表)
+    if (sequence < appliedSessionRefresh) return get().sessions
+    appliedSessionRefresh = sequence
     // 本端列表 = 本端会话的权威证据:早先被设备自报的同 id 抢绑到那台的(启动时列表还没回来就绑上了),撤回本端;
     // 那条会话此前按那台拉过的历史作废,下次打开从本端重拉。
-    for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) loadedHistory.delete(id)
+    for (const id of yieldToHomeListing([...act, ...arch].map((x) => x.id))) forgetHistory(id)
     let merged: SessionRecord[] = act
     // 引擎报的 busy 从有到无 = 那一轮跑完了;本端没订阅它(子会话 / 自动接着做的一轮)就没人标未读 —— 这里补上(当前会话不标)。
     const wasBusy = new Set(get().sessions.filter((x) => x.busy).map((x) => x.id))
@@ -2251,6 +2500,50 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void api.getAgentsMeta(c).then((m) => { if (generation === host.catalogToken()) { set({ defaultAgentSlug: m.defaultSlug || 'xyra' }); host.rememberCatalog(key, { defaultAgentSlug: m.defaultSlug || 'xyra' }) } }).catch(() => { /* ignore */ })
   },
 
+  historyTail: sid => tailPages.get(sid),
+  readTranscriptPage: async (sid, cursor) => {
+    const generation = host.authGen()
+    const target = targetForSession(sid)
+    const reply = await api.listHistory(target, sid, api.CHAT_PAGE_SIZE, undefined, cursor)
+    if (generation !== host.authGen() || !sameRef(target.ref, refForSession(sid))) throw new Error('Session changed')
+    return { page: reply.page, messages: reconcileHistory(historyRows(reply, get()), reply, get(), sid) }
+  },
+
+  ensureHistoryDepth: async (sid, messageId, needPrompt) => {
+    await get().loadSessionHistory(sid)
+    if (!loadedHistory.has(sid)) return false
+    if (!messageId && !needPrompt && (expandedHistory.has(sid) || legacyHistory.has(sid) || tailPages.get(sid)?.older === false)) return true
+    const generation = host.authGen()
+    const target = targetForSession(sid)
+    try {
+      // Full-history consumers and edits explicitly request the history they use.
+      // Never pass a sparse suffix to truncate/rewind.
+      let reply = await api.listHistory(target, sid, 200, undefined, {})
+      let records = reply.messages
+      const failures = [...reply.failedRuns]
+      // Include a predecessor as well, so edits at a page boundary fork from
+      // the actual preceding message and regenerate can find its question.
+      const needsEarlier = () => {
+        const index = messageId ? records.findIndex(m => m.id === messageId) : records.length
+        return !!messageId && index <= 0 || !!needPrompt && !records.slice(0, index).some(m => m.role === 'user' && !isContinuationRow(m.content || ''))
+      }
+      while (needsEarlier() && reply.page?.older && records.length) {
+        const beforeId = records[0].id
+        reply = await api.listHistory(target, sid, 200, undefined, { beforeId })
+        if (!reply.page || reply.page.missing || !reply.messages.length || reply.messages[0].id === beforeId) return false
+        records = [...reply.messages, ...records]
+        failures.push(...reply.failedRuns)
+      }
+      if (generation !== host.authGen() || !sameRef(target.ref, refForSession(sid)) || (messageId && !records.some(m => m.id === messageId))) return false
+      mergeHistory(sid, { messages: records, failedRuns: failures, page: undefined })
+      expandedHistory.add(sid)
+      return true
+    } catch (e: any) {
+      if (generation === host.authGen()) get().toast(get().tr('app.historyLoadFail', { e: e?.message || e }), true)
+      return false
+    }
+  },
+
   loadSessionHistory: async (sessionId) => {
     const generation = host.authGen()
     const t = get().tr
@@ -2264,63 +2557,56 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (loadedHistory.has(sessionId)) return historyInflight.get(sessionId)
     loadedHistory.add(sessionId)
     let landed!: () => void
-    historyInflight.set(sessionId, new Promise<void>((r) => { landed = r }))
+    const inflight = new Promise<void>((r) => { landed = r })
+    historyInflight.set(sessionId, inflight)
     set((s) => ({ historyLoading: { ...s.historyLoading, [sessionId]: true } }))
     try {
-      const c = get().cfg
-      const [{ messages: records, failedRuns }, config, active] = await Promise.all([
-        api.listHistory(targetForSession(sessionId), sessionId),
-        api.getSessionConfig(targetForSession(sessionId), sessionId).catch(() => ({} as AgentConfig)),
-        listActiveRuns(targetForSession(sessionId), sessionId),
-      ])
-      if (generation !== host.authGen()) return
-      // 配置拉取失败/为空时,别把本机(project_path)会话降级成非 host——否则 execMode 缺失,拖文件走
-      // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
-      // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
-      const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
-      // 会话在别的电脑上:不并这一端的笔记库根(与建会话 / 发消息同一口径;否则它存进会话配置,下一条消息就带着本机路径发给那台)
-      const base: AgentConfig = withAmadeusWorkspace(sess?.project_path
-        ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
-        : {}, refForSession(sessionId).kind === 'unit' ? null : activeAmadeusRoot())
-      // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
-      // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
-      set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
+      const target = targetForSession(sessionId)
+      const configRead = api.getSessionConfig(target, sessionId).catch(() => ({} as AgentConfig))
+      const runsRead = listActiveRuns(target, sessionId).catch(() => [])
+      const reply = await readTail(sessionId)
+      if (generation !== host.authGen() || historyInflight.get(sessionId) !== inflight) return
+      if (reply.page) tailPages.set(sessionId, reply.page)
+      mergeHistory(sessionId, reply)
+      set(s => {
+        const historyLoading = { ...s.historyLoading }
+        delete historyLoading[sessionId]
+        return { historyLoading }
+      })
+      const stillOpen = () => generation === host.authGen() && historyInflight.get(sessionId) === inflight
+      const applyConfig = configRead.then(config => {
+        if (!stillOpen()) return
+        // 配置拉取失败/为空时,别把本机(project_path)会话降级成非 host——否则 execMode 缺失,拖文件走
+        // 「上传工作区(25MB 限制)」而非本机路径插入,且因 loadedHistory 已标记不再重拉 → 刷新前一直卡住。
+        // 从会话记录的 project_path 派生 host 兜底,真实 config 覆盖其上(用户显式设过 sandbox 时仍以 config 为准)。
+        const sess = get().sessions.find((x) => x.id === sessionId) || get().archivedSessions.find((x) => x.id === sessionId)
+        // 会话在别的电脑上:不并这一端的笔记库根(与建会话 / 发消息同一口径;否则它存进会话配置,下一条消息就带着本机路径发给那台)
+        const base: AgentConfig = withAmadeusWorkspace(sess?.project_path
+          ? { execMode: 'host', approvalMode: DEFAULT_APPROVAL, cwd: sess.project_path }
+          : {}, refForSession(sessionId).kind === 'unit' ? null : activeAmadeusRoot())
+        // 本地已有的键优先(local-wins):本地每次改配置都会同步 PUT,永远不旧于服务端;而这里的
+        // fetch 可能与「新会话初始配置 PUT」竞速,整体替换会把刚选好的 agentSlug/thinkingLevel 冲掉。
+        set((s) => ({ configBySession: { ...s.configBySession, [sessionId]: { ...base, ...config, ...(s.configBySession[sessionId] || {}) } } }))
+      })
       // ctx 只有流式 usage 事件会喂,重开会话后本地是空的 → 用服务端回放的「最近一次上下文占用」兜底
       // (本地已有值更新,不覆盖:历史加载可能与正在跑的 run 竞速)。
-      void api.getSessionUsage(targetForSession(sessionId), sessionId)
-        .then(({ base, ctx }) => set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } })))
+      void api.getSessionUsage(target, sessionId)
+        .then(({ base, ctx }) => {
+          if (generation !== host.authGen() || !sameRef(target.ref, refForSession(sessionId))) return
+          set(s => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...s.usageBySession[sessionId], ctx: s.usageBySession[sessionId]?.ctx || ctx, base, live: 0 } } }))
+        })
         .catch(() => {})
-      const stamp = agentStamp(get(), config)
-      set((s) => {
-        const existing = s.messagesBySession[sessionId] || []
-        const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
-        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
-        const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
-        const byId = new Map(ui.map((m) => [m.id, m] as const))
-        for (const m of existing) byId.set(m.id, m)
-        // 失败轮在本地已有那一行之后再补:本地那一行可能被看门狗收成了 done(终态事件丢了),以引擎记的失败为准
-        const merged = withFailedRuns([...byId.values()], failedRuns, stamp)
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged.sort((a, b) => a.timestamp - b.timestamp) } }
-      })
-      for (const run of active) {
-        if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id) {
-          const amid = run.assistant_message_id
-          set((s) => {
-            const list = s.messagesBySession[sessionId] || []
-            if (list.some((m) => m.id === amid)) return s
-            return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: amid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), ...stamp }] } }
-          })
-          get().subscribeRun(sessionId, run.id, amid)
-        }
-      }
+      await Promise.all([applyConfig, runsRead.then(active => {
+        if (stillOpen()) recoverActiveRuns(sessionId, active)
+      })])
     } catch (e: any) {
-      if (generation !== host.authGen()) return
+      if (generation !== host.authGen() || historyInflight.get(sessionId) !== inflight) return
       loadedHistory.delete(sessionId)
       get().toast(t('app.historyLoadFail', { e: e?.message || e }), true)
     } finally {
-      historyInflight.delete(sessionId)
       landed()
-      if (generation !== host.authGen()) return
+      if (generation !== host.authGen() || historyInflight.get(sessionId) !== inflight) return
+      historyInflight.delete(sessionId)
       set((s) => {
         const historyLoading = { ...s.historyLoading }
         delete historyLoading[sessionId]
@@ -2354,38 +2640,38 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (now - (host.unitPollAt.get(key) ?? 0) < UNIT_POLL_MS) return
       host.unitPollAt.set(key, now)
     }
+    const generation = host.authGen()
+    const key = JSON.stringify([generation, sessionId])
+    if (historyInflight.has(sessionId) || pollingHistory.has(key)) return
+    pollingHistory.add(key)
     try {
-      const c = get().cfg
-      const [{ messages: records, failedRuns }, active] = await Promise.all([
-        api.listHistory(targetForSession(sessionId), sessionId),
+      const previous = tailPages.get(sessionId)
+      const [reply, active] = await Promise.all([
+        readTail(sessionId, previous),
         listActiveRuns(targetForSession(sessionId), sessionId).catch(() => []),
       ])
-      if (get().activeId !== sessionId || get().runningBySession[sessionId]) return
-      const failStamp = agentStamp(get(), get().configBySession[sessionId])
-      set((s) => {
-        const existing = s.messagesBySession[sessionId] || []
-        const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
-        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
-        const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
-        const byId = new Map(ui.map((m) => [m.id, m] as const))
-        for (const m of existing) byId.set(m.id, m)
-        const merged = withFailedRuns([...byId.values()], failedRuns, failStamp).sort((a, b) => a.timestamp - b.timestamp) // 同 loadHistory:合并后再补
-        if (merged.length === existing.length && merged.every((m, i) => m === existing[i])) return s
-        return { messagesBySession: { ...s.messagesBySession, [sessionId]: merged } }
-      })
-      const stamp = agentStamp(get(), get().configBySession[sessionId])
-      for (const run of active) {
-        if ((run.status === 'running' || run.status === 'queued') && run.assistant_message_id && !subscribedRuns.has(run.id)) {
-          const amid = run.assistant_message_id
-          set((s) => {
-            const list = s.messagesBySession[sessionId] || []
-            if (list.some((m) => m.id === amid)) return s
-            return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: amid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), ...stamp }] } }
-          })
-          get().subscribeRun(sessionId, run.id, amid)
+      if (generation !== host.authGen() || !sameRef(pollRef, refForSession(sessionId)) || get().activeId !== sessionId || get().runningBySession[sessionId]) return
+      const last = previous?.ids.slice().reverse().find(id => !reply.page?.removed?.includes(id))
+      if (last && reply.page?.older && !reply.page.ids.some(id => previous!.versions[id] !== undefined)) {
+        // More than a page arrived between polls. Catch up chronologically,
+        // committing only after the last page so destructive actions see no gap.
+        let afterId: string | undefined = last
+        const bridge: HistoryReply[] = []
+        while (afterId) {
+          const part = await api.listHistory(targetForSession(sessionId), sessionId, 200, undefined, { afterId })
+          if (!part.page || part.page.missing || !part.page.ids.length) break
+          bridge.push(part)
+          const next = part.page.ids.at(-1)
+          if (!part.page.newer || next === afterId || part.page.ids.includes(reply.page.ids[0])) break
+          afterId = next
         }
+        if (generation !== host.authGen() || !sameRef(pollRef, refForSession(sessionId)) || get().activeId !== sessionId || get().runningBySession[sessionId]) return
+        for (const part of bridge) mergeHistory(sessionId, part)
       }
-    } catch { /* 轮询失败静默 */ }
+      if (reply.page) tailPages.set(sessionId, reply.page)
+      mergeHistory(sessionId, reply, previous)
+      recoverActiveRuns(sessionId, active)
+    } catch { /* retry on the next poll */ } finally { pollingHistory.delete(key) }
   },
 
   setActiveId: (id, opts) => {
@@ -2406,7 +2692,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         if (evict.length) {
           set((s) => {
             const next = { ...s.messagesBySession }
-            for (const sid of evict) { delete next[sid]; loadedHistory.delete(sid) }
+            for (const sid of evict) { delete next[sid]; forgetHistory(sid) }
             return { messagesBySession: next }
           })
         }
@@ -2612,7 +2898,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    const target = targetForSession(id)
+    const generation = host.authGen()
+    const listBeforeWrite = appliedSessionRefresh
+    try {
+      await api.updateSession(target, id, { title, title_source: auto ? 'auto' : 'user' })
+      // A refresh started before the PATCH committed may have read the old title.
+      if (target.ref.kind === 'home' && generation === host.authGen() && listBeforeWrite !== sessionRefreshSequence) {
+        void get().refreshSessions(get().cfg).catch(() => {})
+      }
+    } catch (e: any) {
+      get().toast(get().tr('app.renameFail', { e: e?.message || e }), true)
+    }
   },
 
   setSessionEmoji: async (id, value) => {
@@ -2648,7 +2945,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       await api.deleteSession(targetForSession(id), id)
       forgetSession(id)
       set((s) => ({ sessions: s.sessions.filter((x) => x.id !== id), archivedSessions: s.archivedSessions.filter((x) => x.id !== id) }))
-      loadedHistory.delete(id)
+      forgetHistory(id)
       if (get().activeId === id) get().setActiveId(null)
     } catch (e: any) { get().toast(get().tr('app.deleteFail', { e: e?.message || e }), true) }
   },
@@ -2716,7 +3013,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const ids = new Set(targets.map((s) => s.id))
       ids.forEach(forgetSession)
       set((s) => ({ sessions: s.sessions.filter((x) => !ids.has(x.id)), archivedSessions: s.archivedSessions.filter((x) => !ids.has(x.id)) }))
-      ids.forEach((id) => loadedHistory.delete(id))
+      ids.forEach((id) => forgetHistory(id))
       if (get().activeId && ids.has(get().activeId!)) get().setActiveId(null)
       if (opts?.deleteFiles && ws.path) {
         // 相关文件 = 项目里的 .tangu/(引擎 WORKSPACE_DIR_NAME:指令、技能、计划、图标);会话已删,文件进废纸篓可恢复
@@ -3110,6 +3407,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (!r.ok) return null
     }
     set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== msgId) } }))
+    if (item.kind !== 'compact' && item.kind !== 'retry') notifySteerDropped(sessionId, [{ id: item.id, text: item.text }])
     tanguCount('chatSteerWithdraw')
     return { text: item.text, attachments: item.attachments }
   },
@@ -3137,6 +3435,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const pending = stopRequests.get(runId)
     if (pending) return pending
     tanguCount('chatStop')
+    tanguModelCount('stop', effectiveModelOf(get(), sid))
     stoppedRuns.add(runId)
     planAutoStart.delete(runId)
     set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: runId } }))
@@ -3152,10 +3451,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         } else {
           set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).map((m) =>
             m.status === 'streaming' ? { ...m, live: undefined, ...endThink(m),
-              status: status === 'aborted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
+              // 用户按了停、引擎恰好把它记成 interrupted(停的同时退出 / 重启了引擎):照用户停下画
+              status: status === 'aborted' || status === 'interrupted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
               ...(status === 'failed' ? { error: translate('agentrun.stopUnconfirmed') } : {}),
             } : m) } }))
-          endRun(set, get, sid, runId, status === 'aborted' ? 'aborted' : 'failed')
+          endRun(set, get, sid, runId, status === 'aborted' || status === 'interrupted' ? 'aborted' : 'failed')
         }
         return status !== 'failed'
       } catch (e: unknown) {
@@ -3176,9 +3476,17 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return false
-    const list = get().messagesBySession[sid] || []
-    if (fromIndex < 0 || fromIndex >= list.length) return false
+    let list = get().messagesBySession[sid] || []
+    const cut = list[fromIndex]
+    if (!cut) return false
+    if (tailPages.get(sid)?.older) {
+      if (!await get().ensureHistoryDepth(sid, cut.id) || get().runningBySession[sid]) return false
+      list = get().messagesBySession[sid] || []
+      fromIndex = list.findIndex(m => m.id === cut.id)
+      if (fromIndex < 0) return false
+    }
     const removed = list.slice(fromIndex)
+    const removedIds = new Set(removed.map(m => m.id))
     tanguCount('chatTruncateResend') // 截断重发真正落下的次数(重试 / 改了再发 / 重新生成都走这里;各自的入口另计)
     // 编辑重发 / 重新生成 / retry:删之前把整份对话复制成一支「旧版本」分支(方案 docs/ToBeImproved/编辑重发分支与编辑框方案_2026-10-28 ①),
     // 新的这一版就是主线。复制到最后一条落库的,分叉点在被改那条之前落库的那条(改第一句时就是它自己 —— 旧那支在画布上成并排的第二棵)。
@@ -3188,7 +3496,6 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     try {
       const records = await api.listMessages(targetForSession(sid), sid, PAGE)
       const onServer = new Set(records.map((r) => r.id))
-      const removedIds = new Set(removed.map((m) => m.id))
       const last = records[records.length - 1]
       if (last && records.some((r) => removedIds.has(r.id) && r.role !== 'user' && !!(r.content || '').trim())) {
         const before = list.slice(0, fromIndex).reverse()
@@ -3205,13 +3512,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     } catch (e: any) { get().toast(t('app.keepOldFail', { e: e?.message || e }), true); return false }
     try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
     catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return false }
-    set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))
+    set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).filter(m => !removedIds.has(m.id)) } }))
     // 正在朗读的消息被删(重新生成/编辑重发)→ 停播,否则音频没了停止按钮还在响。
     const speaking = ttsState()
-    if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
+    if (speaking && removed.some((m) => m.id === speaking.key)) stopSpeaking()
     const ok = await get().send(text, attachments, undefined, undefined, undefined, sid, fromQueue)
     if (!ok) {
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: [...(s.messagesBySession[sid] || []).slice(0, fromIndex), ...removed] } }))
+      set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: [...(s.messagesBySession[sid] || []).filter(m => !removedIds.has(m.id)), ...removed].sort((a, b) => a.timestamp - b.timestamp) } }))
       get().toast(t('app.resendFailed'), true)
     }
     return ok
@@ -3227,6 +3534,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       drainQueued(get, set, sid)
       return true
     }
+    if (tailPages.get(sid)?.older && !(get().messagesBySession[sid] || []).some(m => m.role === 'user' && !isContinuationRow(m.content))) {
+      if (!await get().ensureHistoryDepth(sid, undefined, true) || get().runningBySession[sid]) return false
+    }
     const list = get().messagesBySession[sid] || []
     let u = list.length - 1
     // 越过「继续生成」/ 打断标记:它们不是用户的问题,重试要从真正那条用户消息重来(连同续写出来的一起删)
@@ -3241,7 +3551,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!sid || get().runningBySession[sid] || continuing.has(sid)) return false
     continuing.add(sid)
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
-    try { return await get().send(TURN_RESUME_MARKER, [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
+    try { return await get().send(turnResumeMarker(opts?.reason ?? 'error'), [], undefined, undefined, undefined, sid) } finally { continuing.delete(sid) }
   },
 
   editUserMessage: (messageId, newText, targetSessionId) => {
@@ -3251,13 +3561,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0 || list[idx].role !== 'user') return
     tanguCount('chatEditResend')
+    tanguModelCount('editResend', effectiveModelOf(get(), sid))
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
-  regenerate: (messageId, targetSessionId, opts) => {
+  regenerate: async (messageId, targetSessionId, opts) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid || get().runningBySession[sid]) return
+    const current = get().messagesBySession[sid] || []
+    if (tailPages.get(sid)?.older && !current.slice(0, Math.max(0, current.findIndex(m => m.id === messageId))).some(m => m.role === 'user' && !isContinuationRow(m.content))) {
+      if (!await get().ensureHistoryDepth(sid, messageId, true) || get().runningBySession[sid]) return
+    }
     const list = get().messagesBySession[sid] || []
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0) return
@@ -3265,6 +3580,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     while (u >= 0 && (list[u].role !== 'user' || isContinuationRow(list[u].content))) u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
     tanguCount('chatRegenerate')
+    tanguModelCount('regenerate', effectiveModelOf(get(), sid))
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
@@ -3274,6 +3590,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     if (get().runningBySession[sid]) { get().toast(t('rewind.busy'), true); return }
+    if (mode !== 'code' && tailPages.get(sid)?.older &&
+        (!await get().ensureHistoryDepth(sid, messageId) || get().runningBySession[sid])) return
     const list = get().messagesBySession[sid] || []
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0) return
@@ -3299,16 +3617,17 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     if (mode !== 'code') {
       const removed = list.slice(idx)
+      const removedIds = new Set(removed.map(m => m.id))
       try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
       catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return }
       const speaking = ttsState()
-      if (speaking && removed.some((m) => m.id === speaking.msgId)) stopSpeaking()
+      if (speaking && removed.some((m) => m.id === speaking.key)) stopSpeaking()
       set((s) => {
         // 上下文分解是按「回退前那些消息」算的,删完还挂着就是假数据(且刻意不重发 → 没人来刷新它)。
         const ctx = { ...s.ctxInfoBySession }
         delete ctx[sid]
         return {
-          messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, idx) },
+          messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).filter(m => !removedIds.has(m.id)) },
           ctxInfoBySession: ctx,
           // 原 prompt 回填输入框(类 Claude Code:回退不自动重发,改不改由用户定)。
           ...(list[idx].role === 'user' && list[idx].content
@@ -3662,15 +3981,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const session = withLocation(raw) // S4(R-15):插进 appStore.sessions 的记录一律经 withLocation 打标(位置只从绑定表派生)
     if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
     set((st) => {
-      const existing = st.sessions.findIndex((s) => s.id === session.id)
-      // `/open` 返回既有会话时只原位刷新数据。把它 unshift 到首位会让一次纯点击伪装成「最近活动」;
-      // 真正新建/rotate 的会话才在首位出现,后续活动排序只认消息带来的 updated_at。
-      const sessions = existing >= 0
-        ? st.sessions.map((s, i) => (i === existing ? session : s))
-        : [session, ...st.sessions]
+      // `/open` 返回既有会话时只原位刷新数据。快速查找带回的归档会话仍属于归档列表。
+      const upsert = (rows: SessionRecord[]): SessionRecord[] => rows.some((row) => row.id === session.id)
+        ? rows.map((row) => row.id === session.id ? session : row)
+        : [session, ...rows]
       return {
-        sessions,
-        archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
+        sessions: session.archived ? st.sessions.filter((s) => s.id !== session.id) : upsert(st.sessions),
+        archivedSessions: session.archived ? upsert(st.archivedSessions) : st.archivedSessions.filter((s) => s.id !== session.id),
         configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
         messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
       }
@@ -3831,6 +4148,9 @@ function expireRunPrompts(set: (fn: (s: AppState) => Partial<AppState>) => void,
   })
 }
 
+/** 撤重试 / 等网横幅的事件:流恢复了或 run 收尾了(其余非 status 事件不撤,见 reduceEvent)。 */
+const RETRY_BANNER_CLEARERS = new Set(['token', 'reasoning', 'tool_call', 'tool_stream', 'done', 'error'])
+
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */
 function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () => AppState, sessionId: string, runId: string, compactionEnd: 'failed' | 'aborted' = 'failed'): void {
   runAborts.get(runId)?.abort()
@@ -3846,6 +4166,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   let ended = false
+  let dropped: Array<{ id: string; text: string }> = []
   set((s) => {
     // 迟到的旧 run 终结事件不碰任何状态(尤其不许动等待区——新 run 的插话还排着队)。
     if (s.runningBySession[sessionId] !== runId) return {}
@@ -3857,6 +4178,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     const pending = s.steerPendingBySession[sessionId] || []
     const localDrafts = pending.filter((p) => p.localOnly)
     const leftover = pending.filter((p) => !p.localOnly)
+    dropped = leftover.map((p) => ({ id: p.id, text: p.text }))
     const rs = s.runStatsBySession[sessionId]
     return {
       runningBySession: next,
@@ -3871,12 +4193,15 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
       ...(s.sessions.some((x) => x.id === sessionId && x.busy) ? { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, busy: false } : x)) } : {}),
       ...(rs?.runId === runId ? { runStatsBySession: { ...s.runStatsBySession, [sessionId]: finishRunStats(rs, Date.now()) } } : {}),
       stoppingBySession: { ...s.stoppingBySession, [sessionId]: undefined },
+      // 靠轮询确认停止、没收到 SSE 终态时:重试 / 等网横幅也一并撤,别挂到下一轮
+      ...(s.llmRetryBySession[sessionId] ? { llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } } : {}),
       ...(leftover?.length ? {
         steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: localDrafts },
         steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: leftover.map((p) => p.text).join('\n\n') },
       } : {}),
     }
   })
+  notifySteerDropped(sessionId, dropped) // 退回输入框的插话没进对话(顺便问传话卡据此恢复成可发)
   if (get().activeId !== sessionId) {
     const next = new Set(get().unread)
     next.add(sessionId)

@@ -2,6 +2,7 @@
  * unless launched by live-harness --only intelligentcards (then real GPT-6 Luna composer). */
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs'), { enterSpace } = require('./lib/uiux-electron.cjs'), { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipDisableReason } = require('./lib/disable-reason.cjs')
 const ROOT = path.resolve(__dirname, '..'), OUT = process.env.TANGU_IUI_OUT || path.join(ROOT, 'outputs/intelligent-cards')
 const LIVE = !!process.env.TANGU_IUI_TOKEN, MODEL = process.env.TANGU_IUI_MODEL || 'm1'
 const CARD_IDS = ['native:calendar', 'native:todo-list', 'plugin:bluebird:library-list']
@@ -150,7 +151,8 @@ async function main() {
     await panel.getByRole('button', { name: '已安装插件', exact: true }).click()
     const plugin = panel.locator('[data-plugin-id="bluebird"]'); await plugin.waitFor()
     const toggle = plugin.locator('[data-plugin-switch], [data-bundle-switch]')
-    await toggle.uncheck()
+    await toggle.click()
+    await skipDisableReason(panel) // 拨下先问停用理由(遥测 v3):直接停用
     await win.locator('[data-card-unavailable="plugin:bluebird:library-list"]').waitFor()
     check('禁用青鸟即时撤下现有卡片', await bookmarks.count() === 0)
     await toggle.check()

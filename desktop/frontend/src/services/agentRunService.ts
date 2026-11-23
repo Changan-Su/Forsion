@@ -16,6 +16,7 @@ import './engine/messages'
 import { currentPlatform } from './platform'
 import { collectClientCapabilities } from './clientSurfaces'
 import { collectIntelligentCards } from './intelligentCardCatalog'
+import { MARKETPLACE_CARDS_CAPABILITY } from '../../../shared/marketplace'
 
 registerMessages({
   'agentrun.authFailed': { zh: '鉴权失败（401）：令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
@@ -165,7 +166,7 @@ export async function startRun(
       // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
       // 小组件(widget.v1)只在桌面报:网页端的引擎在云端、没有 agents/ 文件夹,手机不画卡片区 / 仪表盘 / 主页里的小组件。
-      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : []), ...(currentPlatform() === 'desktop' ? ['widget.v1'] : [])],
+      client_capabilities: [...collectClientCapabilities(), MARKETPLACE_CARDS_CAPABILITY, ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : []), ...(currentPlatform() === 'desktop' ? ['widget.v1'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
@@ -210,9 +211,10 @@ export async function skipRunCompaction(t: EngineTarget, runId: string, operatio
   } finally { clearTimeout(timer) }
 }
 
-export type TerminalRunStatus = 'done' | 'failed' | 'aborted'
+/** interrupted(中断任务续跑方案 B):不是用户按停的中断,也是终态 —— 不认它,对着它按「停止」会空转 10 秒再报停不下来。 */
+export type TerminalRunStatus = 'done' | 'failed' | 'aborted' | 'interrupted'
 function isTerminalStatus(status: unknown): status is TerminalRunStatus {
-  return status === 'done' || status === 'failed' || status === 'aborted'
+  return status === 'done' || status === 'failed' || status === 'aborted' || status === 'interrupted'
 }
 
 /** 保留 SSE 订阅直到真终态。新引擎等 finally;旧引擎回退到显式的终态记录,空列表不是证明。 */

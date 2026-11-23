@@ -369,7 +369,7 @@ function handleCall(client: WebSocket, caller: RealtimeCaller, host: RealtimeVoi
           let result = run.result;
           if (typeof result === 'string') try { result = JSON.parse(result); } catch { result = null; }
           stop(); resolve(String(result?.content ?? ''));
-        } else if (run.status === 'failed' || run.status === 'aborted') { stop(); rejectRun(new Error(String(run.error || run.status))); }
+        } else if (run.status === 'failed' || run.status === 'aborted' || run.status === 'interrupted') { stop(); rejectRun(new Error(String(run.error || run.status))); }
       };
       const poll = setInterval(() => void look(), 5000);
       unsubs.add(stop);

@@ -42,7 +42,7 @@ jobs:
           node-version: 24.22.1
 
       - name: Independent release policy tests
-        run: node --test scripts/engine-release-gate.test.mjs ../desktop/scripts/release-channel.test.mjs ../desktop/scripts/release-merge-materials.test.mjs ../mobile/scripts/update-fixture.test.mjs
+        run: node --test scripts/engine-release-gate.test.mjs scripts/check-dist-lf.test.mjs ../desktop/scripts/release-channel.test.mjs ../desktop/scripts/release-merge-materials.test.mjs ../mobile/scripts/update-fixture.test.mjs
 
       # Desktop and engine versions are independent; validate the bundled engine in its own release history.
       - name: Desktop and bundled engine release identities
@@ -87,6 +87,13 @@ jobs:
           - os: macos-latest        # Apple Silicon(arm64)。需 Intel 包再加一行:
             ebargs: --mac --arm64    #   { os: macos-13, ebargs: "--mac --x64" }
     steps:
+      # Windows runner 的 git 缺省 core.autocrlf=true,检出成 CRLF;tsc 把模板串 / 注释里的 \r 原样编进产物。引擎热更新逐字节比对
+      # 自带引擎的建表文件,npm 上的包是 LF → 2.14.2 的 Windows 安装包拒收所有引擎热更新(11-20 遥测 + 实包坐实)。
+      # 检出前关掉;下面 Build backend 之后有一道闸兜着(tangu-agent/scripts/check-dist-lf.mjs)。
+      - name: Check out with LF line endings (Windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
@@ -112,6 +119,11 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
+
+      # 引擎产物里一个 \r 都不许有:有 = 检出又被转成了 CRLF,这份安装包会拒收所有引擎热更新(见上面 Windows 检出那一步)
+      - name: Engine build output has LF line endings
+        working-directory: tangu-agent
+        run: node scripts/check-dist-lf.mjs dist
 
       # ② 桌面壳(renderer/main/preload)→ out/;先出 unit-web-dist(设备页静态壳)——
       #    electron-builder 配置**装载即验**该产物(unit 捆包闸),缺了直接 throw。

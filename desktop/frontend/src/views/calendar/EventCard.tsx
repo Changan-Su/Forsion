@@ -11,6 +11,9 @@ import { CalendarOverlay } from './CalendarOverlay'
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
 import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
+import { InlineMarkdownText, todoTitleColumn } from '../../amadeus/blocks/database/todoTitle'
+import { useCalendarConfig } from '../../amadeus/store/calendarConfigStore'
+import { usePageStore } from '../../amadeus/store/pageStore'
 import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
 import { UI_MODE, useClampedMenu, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
@@ -113,7 +116,8 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const frame = window.requestAnimationFrame(() => {
-      const titleInput = dialogRef.current?.querySelector<HTMLInputElement>('.amx-cal-card-title:not(.amx-cal-card-title-ro)')
+      // A formatted to-do title stays formatted on open; only an explicit title request (focusTitle) opens it for editing.
+      const titleInput = dialogRef.current?.querySelector<HTMLElement>(focusTitle ? '.amx-cal-card-title:not(.amx-cal-card-title-ro)' : '.amx-cal-card-title:not(.amx-cal-card-title-ro):not(.amx-cal-card-title-md)')
       if (!calendar || focusTitle) (titleInput ?? closeRef.current)?.focus()
     })
     const keydown = (e: KeyboardEvent): void => {
@@ -220,6 +224,11 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
   const fullyEditable = !lock && !db.readonly
   const nameCol = db.columns[0]
   const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
+  // A to-do list's title is inline Markdown (the to-do box writes it): shown formatted, the source while editing (11-21).
+  const vault = usePageStore((s) => s.vaultRoot) ?? ''
+  const byVault = useCalendarConfig((s) => s.byVault)
+  const mdTitle = !!nameCol && todoTitleColumn(vault, byVault, db.path, db.columns) === nameCol.id
+  const [titleEdit, setTitleEdit] = useState(false)
   const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId && !hide?.includes(c.id))
   const timeRaw = raw ?? (colId && typeof row.cells[colId] === 'string' ? (row.cells[colId] as string) : '')
   const summary = colId ? eventTimeSummary(timeRaw) : null
@@ -238,7 +247,10 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
     <>
       {/* 标题 */}
       <div className="amx-cal-card-head">
-        {titleEditable ? (
+        {titleEditable && mdTitle && !titleEdit && title ? (
+          <div className="amx-cal-card-title amx-cal-card-title-md" role="textbox" tabIndex={0} aria-label={t('evcard.name')}
+            onClick={() => setTitleEdit(true)} onFocus={() => setTitleEdit(true)}><InlineMarkdownText md={title} /></div>
+        ) : titleEditable ? (
           // 走查续七 7.15:长标题折行、自己长高(CSS field-sizing),最多 4 行后内部滚动。标题不该有换行:
           // Enter 不换行(和原来的单行框一样什么也不做),粘贴进来的换行换成空格。
           // ponytail: 只靠 field-sizing(Chromium 123+,Electron 与安卓 WebView 都够),没写 scrollHeight 兜底
@@ -250,9 +262,12 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
             placeholder={t('evcard.untitled')}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) e.preventDefault() }}
             onChange={(e) => setAggName(db, row.rowId, e.target.value.replace(/\r?\n/g, ' '))}
+            autoFocus={titleEdit}
+            onFocus={() => { if (mdTitle) setTitleEdit(true) }} // typing into an empty title must not flip it to the preview mid-word
+            onBlur={() => setTitleEdit(false)}
           />
         ) : (
-          <div className="amx-cal-card-title amx-cal-card-title-ro">{title || t('evcard.untitled')}</div>
+          <div className="amx-cal-card-title amx-cal-card-title-ro">{title ? (mdTitle ? <InlineMarkdownText md={title} /> : title) : t('evcard.untitled')}</div>
         )}
       </div>
 

@@ -246,11 +246,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
     search: {
       // 搜索分发:本地配了 provider(config.json webSearch 段)→ 本地直搜(BYO-key);
       // 否则走云 brain;云不可用(未登录/断网/云侧全败)→ 本地 DuckDuckGo 免费兜底。
-      runSearch: async (query: string, maxResults: number) => {
+      runSearch: async (query, maxResults, context) => {
+        context?.signal?.throwIfAborted();
         if (hasLocalSearchProvider(loadLocalWebSearchConfig())) return runLocalSearch(query, maxResults);
+        // A direct model ID belongs to the local provider registry, not the hosted catalog.
+        const hosted = context?.modelId && registry.has(context.modelId) ? { ...context, modelId: undefined } : context;
         try {
-          return await httpBrain.search.runSearch(query, maxResults);
+          return await httpBrain.search.runSearch(query, maxResults, hosted);
         } catch (e) {
+          context?.signal?.throwIfAborted();
           const out = await runLocalSearch(query, maxResults, { provider: 'duckduckgo' });
           out.text = `[web_search note] cloud search unavailable (${e instanceof Error ? e.message : String(e)}); results served by local ${out.provider}.\n\n${out.text}`;
           return out;
@@ -394,6 +398,8 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           // ponytail: 不记冷却,下一轮仍先试快档(撞 429 只花几百毫秒);频繁撞再加按 retry-after 的冷却。
           const send = async (): Promise<StreamResult> => {
             try { return await sendOnce(); } catch (err) {
+              // 快档 429 的 Retry-After 说的是快档自己的容量;降到标准档是另一份容量,照旧当场重发,不按它等
+              // (按它等 = 白等或整轮失败,评审 #5 这一处不采纳)。标准档再 429 才交给重试链按 Retry-After 处理。
               if (!(err instanceof LlmError && err.status === 429 && !isQuotaExhaustedLlmError(err)) || p[ACCOUNT_MARK] || !downgradeSpeedTier(p)) throw err;
               console.warn(`[multiBrain] ${p.model} 快档被限流(429),降到 ${p.service_tier || p.speed || 'standard'} 重发`);
               return send();

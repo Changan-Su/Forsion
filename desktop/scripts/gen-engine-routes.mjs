@@ -236,6 +236,8 @@ export const CLASSIFICATION = {
   'PATCH /agent/agents/:slug': [D, 'update Agent (design appendix C)'],
   'DELETE /agent/agents/:slug': [D, 'delete Agent'],
   'GET /agent/agents/:slug/uninstall-preview': [D, 'uninstall preview (only feeds a local delete)'],
+  'GET /agent/agents/:slug/builtin-update': [D, 'built-in instructions changed while the user edited them (shows both texts; remote callers get no instructions)'],
+  'POST /agent/agents/:slug/builtin-update': [D, 'keep the edited instructions or switch to the new built-in default (local config page only)'],
   'POST /agent/agents/:slug/rename': [D, 'rename Agent'],
   'POST /agent/agents/:slug/avatar': [D, 'update Agent avatar'],
   'GET /agent/agents/:slug/avatar': [A, 'Agent avatar'],
@@ -393,6 +395,8 @@ export const CLASSIFICATION = {
   'GET /agent/special/muse/library': [A, 'Muse library'],
   'GET /agent/special/muse/starters': [A, 'Muse chat starters shown under the new-chat composer (read-only)'],
   'PATCH /agent/special/muse/starters/:id': [D, 'marks a starter used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)'],
+  'GET /agent/special/muse/automation-suggestions': [D, 'Muse task suggestions on the Automation home page: absolute file paths, activity-derived reasons and full draft prompts stay on this computer'],
+  'PATCH /agent/special/muse/automation-suggestions/:id': [D, 'marks a suggestion used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)'],
   'GET /agent/special/muse/library/file': [A, 'Muse library file (read-only, realpath-bounded to the Library)'],
 
   // ── hooks.ts / wechat.ts / channels.ts —— 整组本机 ──

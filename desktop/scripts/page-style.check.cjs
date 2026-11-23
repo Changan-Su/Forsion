@@ -1,7 +1,7 @@
 // 页面排版选项(评审 C-21,拍板 #14):全宽 / 小字号 / 页面字体(默认 · 衬线 · 等宽),本机 viewMemory 按库 + 路径记。
 // 台架 `?upage&upane`:壳 = 生产 EditorScope 的镜像(data-page-* 挂在 .amx-pane 上),顶栏 ⋯ 开的是生产同一个
 // PageStyleMenuItems(入口集合 pageStyleEntries);`&umbar` 挂生产的移动端底栏胶囊 + ⋯ sheet。
-// 钉:缺省 920 / 15px;菜单三项生效且菜单不关;重载仍在;行内改名跟着走;锁定页照样生效、照样能改;
+// 钉:主题阅读宽度 / 15px;菜单三项生效且菜单不关;重载仍在;行内改名跟着走;锁定页照样生效、照样能改;
 // 画布模式不受影响;分享页形态(`&uro`、非 .amx-pane 壳)恒缺省;PDF 克隆带着字体 / 字号、纸面不溢出;移动 sheet 同一组入口。
 // C24(评审 C-24):⋯「复制为 Markdown」= 落盘正文 —— 防抖窗里刚打的字也在(先冲洗)、不含 frontmatter(结构 JSON 不进剪贴板)。
 // 用法:npm run check:pagestyle(由 e2e-editor 自起 / 复用 Vite);`--shot=<目录>` 留明暗 / 窄屏 / 菜单截图(DESIGN §8)。
@@ -9,6 +9,7 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { chromium } = require('playwright-core')
+const { checkCenterLine } = require('./center-line.check.cjs')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -68,6 +69,7 @@ const measure = (page) => page.evaluate(() => {
   const code = q('.unified-body .ProseMirror p code')
   const pane = q('.amx-pane')
   return {
+    readingWidth: parseFloat(getComputedStyle(pm).getPropertyValue('--amx-page-max')) || 920,
     attrs: pane ? [...pane.attributes].filter((a) => a.name.startsWith('data-page-')).map((a) => `${a.name}=${a.value}`) : [],
     doc: w('.amx-doc.unified-page'),
     body: w('.unified-body'),
@@ -97,10 +99,10 @@ async function main() {
   const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1900, height: 1000 } })
   page.on('pageerror', (e) => console.log('[pageerror]', e.message))
 
-  // ── P0 缺省:920 纸面、15px、默认字体;壳上一个 data-page-* 都没有 ──
+  // ── P0 缺省:主题阅读宽度、15px、默认字体;壳上一个 data-page-* 都没有 ──
   await open(page, '&upane')
   const m0 = await measure(page)
-  check('P0 缺省:阅读宽度 920、正文 15px、壳上无排版属性', m0.doc === 920 && m0.body === 920 && m0.fs === '15px' && m0.attrs.length === 0, JSON.stringify(m0))
+  check('P0 缺省:主题阅读宽度、正文 15px、壳上无排版属性', m0.doc === m0.readingWidth && m0.body === m0.readingWidth && m0.fs === '15px' && m0.attrs.length === 0, JSON.stringify(m0))
 
   // ── P1 ⋯ 菜单:字体三格 + 全宽 + 小字号,中文文案、初始状态 ──
   await openMenu(page)
@@ -116,7 +118,7 @@ async function main() {
     }
   })
   check('P1 菜单:页面字体(默认 / 衬线 / 等宽)+ 全宽 + 小字号', /页面字体/.test(menu.text) && /默认/.test(menu.text) && /衬线/.test(menu.text) && /等宽/.test(menu.text) && /全宽/.test(menu.text) && /小字号/.test(menu.text), menu.text)
-  check('P1 初始状态:默认字体选中、两个开关关', menu.radios.join() === 'default:true,serif:false,mono:false' && menu.toggles.join() === 'wide:false,small:false', JSON.stringify(menu))
+  check('P1 初始状态:默认字体选中、三个开关关闭', menu.radios.join() === 'default:true,serif:false,mono:false' && menu.toggles.join() === 'wide:false,small:false,centerLine:false', JSON.stringify(menu))
   check('P1 菜单几何:操作菜单宽度上限内、字体格不溢出', menu.menuW <= 200 && !menu.overflow, `menuW=${menu.menuW}`)
 
   // ── P2 全宽 ──
@@ -124,7 +126,7 @@ async function main() {
   await page.waitForTimeout(200)
   const m2 = await measure(page)
   const stillOpen = await page.locator('[data-pagestyle-menu]').count()
-  check('P2 全宽:正文与标题区脱出 920,两者同宽', m2.attrs.includes('data-page-wide=') && m2.body > 1500 && m2.doc === m2.body && m2.p > 920, JSON.stringify({ doc: m2.doc, body: m2.body, p: m2.p, attrs: m2.attrs }))
+  check('P2 全宽:正文与标题区脱出阅读列,两者同宽', m2.attrs.includes('data-page-wide=') && m2.body > 1500 && m2.doc === m2.body && m2.p > m0.readingWidth, JSON.stringify({ doc: m2.doc, body: m2.body, p: m2.p, attrs: m2.attrs }))
   check('P2 点选后菜单不关(边点边看)', stillOpen === 1)
 
   // ── P3 小字号:正文 13.5px、标题不变、标题块按 em 跟着缩 ──
@@ -217,7 +219,7 @@ async function main() {
   await page.click('[data-pagestyle="wide"]')
   await page.waitForTimeout(200)
   const m8b = await measure(page)
-  check('P8 锁定页里关掉全宽 → 回到 920、零写盘', m8b.body === 920 && (await page.evaluate(() => window.__upage.writes.length)) === 0, JSON.stringify({ body: m8b.body }))
+  check('P8 锁定页里关掉全宽 → 回到主题阅读宽度、零写盘', m8b.body === m0.readingWidth && (await page.evaluate(() => window.__upage.writes.length)) === 0, JSON.stringify({ body: m8b.body }))
   await page.click('[data-pagestyle="wide"]') // 还原成全宽,供下面几组
   await page.evaluate(() => localStorage.removeItem('amx.noteLocked:' + JSON.stringify(['', 'Unified.md'])))
 
@@ -238,7 +240,7 @@ async function main() {
     const pmEl = document.querySelector('.unified-body .ProseMirror')
     return { fs: getComputedStyle(pmEl).fontSize, ff: getComputedStyle(pmEl).fontFamily, max: getComputedStyle(document.querySelector('.unified-body')).maxWidth, pane: !!document.querySelector('.amx-pane') }
   })
-  check('P10 分享页形态恒按缺省(15px、非衬线、920 上限)', !m10.pane && m10.fs === '15px' && !SERIF.test(m10.ff) && m10.max === '920px', JSON.stringify(m10))
+  check('P10 分享页形态恒按缺省(15px、非衬线、主题阅读宽度上限)', !m10.pane && m10.fs === '15px' && !SERIF.test(m10.ff) && parseFloat(m10.max) === m0.readingWidth, JSON.stringify(m10))
 
   // ── P11 暗色 + 窄屏(390)+ 移动端 ⋯ sheet:同一组入口,开关不关 sheet、打勾 ──
   await open(page, '&upane&udark')
@@ -260,7 +262,7 @@ async function main() {
   }))
   const narrow = await mob.evaluate(() => { const pane = document.querySelector('.amx-pane'); return { sw: pane.scrollWidth, cw: pane.clientWidth } })
   check('P11 窄屏(390)正文不横向溢出', narrow.sw <= narrow.cw && m11.body <= 390, JSON.stringify({ ...narrow, body: m11.body }))
-  check('P11 移动端 sheet:页面字体一行三段 + 全宽 + 小字号(与桌面同一组入口)', sheet.rows.join() === 'page-font,page-wide,page-small' && sheet.seg.length === 3 && !sheet.over, JSON.stringify(sheet))
+  check('P11 移动端 sheet:页面字体一行三段 + 全宽 + 小字号(与桌面同一组入口)', sheet.rows.join() === 'page-font,page-wide,page-small,page-centerLine' && sheet.seg.length === 3 && !sheet.over, JSON.stringify(sheet))
   await mob.click('.mb-sheet [data-action="page-small"]')
   await mob.waitForTimeout(200)
   const afterTap = await mob.evaluate(() => ({
@@ -315,6 +317,8 @@ async function main() {
     }
   }
 
+  await checkCenterLine(browser, false)
+  await checkCenterLine(browser, true)
   await browser.close()
   const failed = results.filter((x) => !x).length
   console.log(`\n${results.length - failed}/${results.length} 通过`)

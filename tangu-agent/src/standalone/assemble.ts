@@ -2,6 +2,7 @@
  * standalone 形态的共享装配:host(嵌入式 PGlite / 外部 PG)、brain(httpBrain / multiBrain)、
  * 沙箱探测。被 standalone/main.ts(server 前端)与 cli/main.ts(终端前端)共用,杜绝漂移。
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { query } from '../core/db.js';
@@ -26,6 +27,7 @@ import { createProviderRegistry, type DirectProvider } from '../llm/providerRegi
 import { STANDALONE_SCHEMA } from '../db/schemaStandalone.js';
 import { getRawSection } from '../core/config.js';
 import type { StandaloneConfig } from './config.js';
+import { setCloudTokenSource } from '../services/cloudAccount.js';
 
 /** 读一个 providers JSON(裸数组或 { providers: [...] } 包装);失败/缺失返回 []。 */
 function readProvidersJson(path: string, label: string, warnMissing: boolean): DirectProvider[] {
@@ -73,6 +75,7 @@ export function loadProviders(cfg: StandaloneConfig): DirectProvider[] {
 
 function dockerAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
+    if (hostSpawnDenied('docker probe')) { resolve(false); return; }
     const p = execFile('docker', ['version', '--format', '{{.Server.Version}}'], { timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, windowsHide: true }, (err) => resolve(!err));
     p.on('error', () => resolve(false));
   });
@@ -125,7 +128,10 @@ export async function setupHost(
  * httpBrain 仍构造(供同步服务调用云端 memory/log 端点),但不再是运行时 memory 来源。
  */
 export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; providers: DirectProvider[] } {
-  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
+  const credential = cloudCredential(cfg);
+  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: credential });
+  // 建 run 时记下当时的云端账号、恢复时核对(换了账号的不续、旧账号排队的不跑):services/cloudAccount.ts
+  setCloudTokenSource(typeof credential === 'function' ? credential : () => credential);
   const providers = loadProviders(cfg);
   const base = withPluginModelProviders(providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain);
   const localMemory = createLocalMemoryBrain();
@@ -140,6 +146,19 @@ export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; 
   // 绑定的 GitHub 账号:远端在 github.com 时用它推拉(同一个接缝上的另一个提供方)。没登录 / 云端没开绑定 → 照现状。
   installGithubGit(httpBrain.github);
   return { brain, providers };
+}
+
+/**
+ * 多账号模式(standalone/multiAccount.ts)的底层 brain:只从 env / CLI 来(不读任何账号的 config.json、不读 auth.json、
+ * 不接 OAuth 订阅),没有副作用(不装同步源、不装 git 凭据、不登记云端账号源)。**不包**脱敏 / 本地记忆 / 本地技能 ——
+ * 那几层在 createMultiAccountApp 里包,测试注入的假 brain 走同一条路。
+ */
+export function buildMultiAccountBaseBrain(cfg: StandaloneConfig): CloudBrainServices {
+  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
+  const seen = new Set<string>();
+  const providers = [...cfg.providers, ...(cfg.providersFile ? readProvidersJson(cfg.providersFile, 'providers-file', true) : [])]
+    .filter((p) => !!p?.providerId && !!p?.baseUrl && !seen.has(p.providerId) && !!seen.add(p.providerId));
+  return providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain;
 }
 
 /**

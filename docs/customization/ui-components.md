@@ -49,6 +49,8 @@ ctx.registerView({
 | `toolbar(el)` | 卡片底排左侧的插槽，排在模型药丸前面。把自己的 DOM 放进 `el`，可返回清理函数；清理函数在 dispose 时调用，update 传入另一个函数时也会先清理再重挂。两处抛错都由宿主记录，不影响输入框。 |
 | `suggest` | `{ trigger, items(query), mention? }`，光标旁的宿主补全浮层，外观和键盘行为与笔记里的 `#` 补全一致。 |
 | `insertText(text)` | handle 方法。在光标处插入，有选区时替换选区，并聚焦输入框。给「#」按钮、语音转写用，不会弹补全；用户接着打字才会弹。 |
+| `mentions`, `onMention` | 2026-11-20 起。打开宿主自带的 `@` 面板（和笔记里的同一个）：`'date'` 日期、`'page'` 当前库的笔记。见下面「@ 面板」。 |
+| `format` | 2026-11-21 起。`'inline'` / `'basic'`：输入框显示加粗、列表这些格式，值是 Markdown。见下面「格式 format」。 |
 
 `toolbar` 的 `el` 在宿主挂载层里，不吃插件视图的基础样式，里面的按钮要写 class，比如 `.btn.sm`。
 
@@ -84,7 +86,56 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
 
-这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上、`@` 面板）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+
+### @ 面板 mentions
+
+`mentions: ['date', 'page']` 打开宿主自带的 `@` 面板，外观、键盘、分组标签都和笔记里的 `@` 一样：日期在上（今天、明天，或者接着打 `@11/28`、`@2200` 这类写法出对应日期），笔记在下。数组决定开哪几种，顺序固定是日期在前。
+
+- 触发规则同笔记：`@` 前是行首、空白或中文时开，紧贴字母数字（邮箱）不开；查询在同一行、不含空白和方括号、最多 30 字；输入法组字时不弹；Esc 之后同一个 `@` 不再弹。和 `suggest` 不同，查询可以带 `/`、`:`、`.`。
+- 选中后默认插入：日期 `@YYYY-MM-DD `（带时刻是 `@YYYY-MM-DDTHH:mm `，同笔记里的日期标记），笔记 `[[名字]] `（重名时插路径）。
+- `onMention(m)` 在插入前调用：`m` 是 `{ kind: 'date', value }` 或 `{ kind: 'page', path, link }`。返回 `true` 表示你自己接手（比如把日期设成截止日），宿主只删掉打的 `@查询`、不插任何字；返回别的或抛错都照默认插入。必须同步返回。
+- 面板里没有「提醒我」和「不设日期」：那是笔记行上的标记，Chat Box 的使用方没地方存。
+- 打开 `mentions` 时，`suggest` 里触发符是 `@` 的那一项不再生效；`#`、`[[` 照旧。
+- 先看 `ctx.ui.chatBoxCapabilities?.includes('mentions')`，旧宿主会忽略这两个选项。
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  mentions: caps.includes('mentions') ? ['date', 'page'] : undefined,
+  onMention(m) {
+    if (m.kind === 'date') { setDue(m.value); return true } // 日期进截止日，不写进标题
+  },
+  onSubmit: ({ text }) => addTask(text),
+})
+```
+
+### 格式 format
+
+`format: 'inline'` 或 `'basic'` 把输入框换成能显示格式的编辑器（和笔记同一套写法和快捷键，删减过），`value`、`onChange`、`onSubmit` 里的文字都是 Markdown。不传就是原来的纯文本框，文字原样。
+
+- `'inline'`：一行内的格式。加粗 `**x**`、斜体 `*x*`、删除线 `~~x~~`、行内代码 `` `x` ``、链接 `[x](url)`；快捷键 ⌘/Ctrl+B、I、E，⌘/Ctrl+Alt+X 删除线。只有一行：`submitOn: 'enter'` 时 Enter 提交，Shift+Enter 什么都不做，粘贴多行合成一行。适合标题、待办这类一行的东西。
+- `'basic'`：`inline` 加上无序 / 有序 / 任务列表、引用、代码块，Shift+Enter 换行；列表和代码块里的 Enter 同笔记（列表续一项，代码块里换行）。
+- 两档都没有标题、表格、标注、嵌入、图片、HTML 和裸网址自动成链接：`# 标题`、`![图](x.png)`、`https://…` 原样是字。
+- 纯文字一字不差：`snake_case`、网址、`5*3`、`1. 买菜`、`# 不是标题` 存下来和打的一样，不会多出反斜杠；只有本来会变成格式的字才留一个 `\`（比如想要字面的 `**`）。所以没用格式的值，老读者（旧版本、Agent、直接读库）看到的和以前一样。值的首尾空白不保留（Markdown 本来不认）：选完补全后屏幕上的那个空格还在，`onChange` 的文字里没有。
+- `#`、`[[`、`@` 补全和 `insertText` 照旧。`insertText` 插的是字面文字，不按 Markdown 解析。
+- 显示存下来的值用 `ctx.ui.parseInlineMarkdown(md)`：和输入框同一套语法，同步、不抛错，返回 `{ text, strong?, em?, strike?, code?, href?, wiki?, from, to }[]`。`[[名字|别名]]` 那段带 `wiki`（原文）、`text` 是显示名；`from` / `to` 是这段字在原文里的位置（不含定界符），自己再解析原文时（比如从标题里认日期）可以绕开带格式的段。读屏标签、悬停、通知、排序用纯文字：把每段的 `text` 连起来。`href` 打开前自己查协议。
+- 先看 `ctx.ui.chatBoxCapabilities?.includes('format')`。旧宿主忽略 `format`，也没有 `parseInlineMarkdown`，输入框是纯文本框、写不出格式，存量的值照旧按纯文字显示就对。手机端暂时也不报 `'format'`、忽略这个选项（编辑器在手机输入法上还没验过），但有 `parseInlineMarkdown`，存下的值照样能按格式显示。
+- 挂载时定好；`update({ format })` 会重建输入框（草稿保留，撤销历史清空）。
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const formatted = caps.includes('format') && typeof ctx.ui?.parseInlineMarkdown === 'function'
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  format: formatted ? 'inline' : undefined,
+  onSubmit: ({ text }) => addTask(text), // text 是 Markdown，如 '**重要** 交周报'
+})
+// 显示：formatted ? ctx.ui.parseInlineMarkdown(title) 逐段画 : title 原样
+```
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 
@@ -232,7 +283,7 @@ await ctx.ui.boardToSvg({ elements }, { theme, padding })
 
 ### 划线条 (2026-10-13)
 
-选中一段文字之后浮出来的那一条,聊天、笔记和接入了的插件视图是同一条:当前视图自己的工具,加上每个视图都有的三样 —— 「问 Tangu」(把这段文字作为引用交给侧栏对话)、「翻译」(结果在选区下面的一张卡里)、「⋯」(插件加的动作)。哪一块排在前面由用户在「设置 → 外观 → 划线菜单」里定,缺省是视图自己的工具在前。条上的按钮由 `@lcl/components` 的 `SelectionBar` / `SelectionBarActions` 维护;聊天和插件视图经应用层的 `components/selectionBar/ViewSelectionBar` 接选区与动作,笔记的格式工具栏把动作区嵌进自己那一行。
+选中一段文字之后浮出来的那一条,聊天、笔记和接入了的插件视图是同一条:当前视图自己的工具,加上每个视图都有的几样 —— 「问 Tangu」(把这段文字作为引用交给侧栏对话)、「翻译」(结果在选区下面的一张卡里)、「朗读」(2026-11-21 起,能配朗读模型的宿主才有),一道竖线后是放在条上的插件动作(最多 3 个),最后是「⋯」(其余的插件动作)。哪一块排在前面由用户在「设置 → 外观 → 划线菜单」里定,缺省是视图自己的工具在前。条上的按钮由 `@lcl/components` 的 `SelectionBar` / `SelectionBarActions` 维护;聊天和插件视图经应用层的 `components/selectionBar/ViewSelectionBar` 接选区与动作,笔记的格式工具栏把动作区嵌进自己那一行。
 
 插件视图用 `ctx.ui?.mountSelectionBar?.(root, opts)` 接入,不接就什么都不出(宿主不做全局的选区监听):
 
@@ -257,6 +308,8 @@ if (!bar) drawOwnMenu(el)                           // 2.13.3 及更早的宿主
 - 条不往 `root` 里加任何东西,也不接管它(条浮在页面上方),和 `mountFloatingToc` 等别的挂载互不影响。句柄有 `show` / `hide` / `update(opts)` / `dispose()`;插件停用或重载时宿主统一收掉。
 
 往条里加动作用 `ctx.registerSelectionAction`(列在「⋯ → 插件」)。不写 `scope` 时只在笔记里出现,和以前一样;`scope: 'all'` 出现在所有接入了的视图,`'own'` 只在这个插件自己的视图,数组点名视图(`'note'`、`'chat'`、`'<插件 id>:<视图 id>'`)。`when({ view, editable, length })` 返回真才列出,它拿不到选中的文字,文字在用户点了动作之后才经 `run(cx)` 交给插件。`run` 返回的 markdown 进宿主的结果卡:可编辑的笔记里是「替换 / 插入下方 / 复制 / 丢弃」,点了才写;别处只读(「复制 / 关闭」)。`output: 'none'` 表示插件自己处理结果,宿主不出卡。`cx.pagePath` 只在笔记里有。2.13.3 及更早的宿主忽略这些新字段:动作只在笔记里、列在「AI ▾ → 插件」。
+
+2026-11-21 起又加了几样(都可选,旧宿主忽略):`placement: 'bar'` 要一个条上的位置(缺省 `'more'` 在 ⋯ 里)。这只是缺省:用户在 ⋯ 里每行右边的钉、条上按钮右键「收进 ⋯ / 管理划线菜单…」、「设置 → 外观 → 划线菜单」下面的管理表(条上 / ⋯ / 不显示、拖排序)里改的永远优先、记住。条上插件位最多 3 个,放不下的按装的先后进 ⋯,⋯ 顶上写「还有 N 个放不下 · 去管理」;核心插件和宿主那几样站在竖线前,不占插件位。`auto: true` 只声明**支持**划选后自动跑:开关在结果卡卡头(「划选后自动」)和管理表里,按动作记、缺省关,插件自己打不开;开了以后,鼠标划选停下 400ms(1–2000 字、输入框里不算)条和结果卡一起出,`run` 拿到 `cx.auto === true`,换一段划选在同一张卡里重跑并中止旧请求,同一段同一种语言这次会话里不重复请求;开了几个只跑排最前那个。手机和笔记里不自动跑。`card: { language, source, speak }` 让宿主在结果卡上画目标语言下拉(值经 `cx.language` 交给 `run`,初值按选区猜、之后记住这个动作上次选的)、原文(收成 3 行,点了展开)、原文 / 结果旁的小喇叭。`title` 收字符串、函数或 `{ zh, en }`,后两种跟着切语言;更早的宿主只收字符串,别的形状整个动作被丢掉,用 `minAppVersion` 挡。
 
 ### 工具岛 (2026-11-04)
 

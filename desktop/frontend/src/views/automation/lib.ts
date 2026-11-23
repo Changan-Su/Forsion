@@ -1,3 +1,4 @@
+import type { AutomationMessageDelivery, AutomationMessageSource } from '../../../../../tangu-agent/src/contracts/automationMessage'
 /** 「自动化」Space 三个 view 共用的小工具(文案拼装;t 由调用方传入)+ 构建器的 draft ↔ spec 纯映射
  *  (2026-09-02 从 AutomationBuilder.tsx 搬来:desktop vitest 只收 *.test.ts,留在 .tsx 里永远测不到,
  *  而「编辑既有规则再保存不丢字段」正是需要仪器的那件事,见 lib.test.ts)。 */
@@ -87,6 +88,7 @@ export function actionsText(t: T, defs: NormalAgentDef[], tr: MuseTriggerInfo): 
         a.type === 'notify' ? t('automation.step.notify')
         : a.type === 'remind' ? t('automation.step.remind')
         : a.type === 'agent_run' ? runnerName(defs, a.agentSlug)
+        : a.type === 'send_message' ? `${runnerName(defs, a.agentSlug)} → ${t(`automation.send.${a.delivery}`)}`
         : a.type === 'db_row_add' ? `＋ ${shortPath(a.path)}${a.skipIfEmpty ? ` (?${a.skipIfEmpty})` : ''}`
         : a.type === 'db_row_edit' ? `✎ ${shortPath(a.path)}${a.rowFrom ? ` →${a.rowFrom}` : a.match ? ` →${a.match.column}` : ''}`
         : (a as any).tool || 'tool')
@@ -185,10 +187,12 @@ export function triggerToUpsert(t: MuseTriggerInfo): MuseTriggerUpsert {
 
 export interface StepDraft {
   key: number
-  type: 'notify' | 'remind' | 'agent_run' | 'tool_call' | 'db_row_add' | 'db_row_edit'
+  type: AutomationActionSpec['type']
   title: string
   body: string
   agentSlug: string
+  delivery: AutomationMessageDelivery
+  source: AutomationMessageSource
   prompt: string
   tool: string
   /** 工具参数原始输入(全字符串;boolean 存 'true'/'false'，缺席保持省略)。 */
@@ -222,7 +226,7 @@ export const MAX_WHERE = 10
 
 /** 本版构建器能编辑的全部步骤类型(2.8 起含 DB 动作)。 */
 export function isEditableStep(a: AutomationActionSpec): boolean {
-  return a.type === 'notify' || a.type === 'remind' || a.type === 'agent_run' || a.type === 'tool_call' || a.type === 'db_row_add' || a.type === 'db_row_edit'
+  return a.type === 'notify' || a.type === 'remind' || a.type === 'agent_run' || a.type === 'send_message' || a.type === 'tool_call' || a.type === 'db_row_add' || a.type === 'db_row_edit'
 }
 
 /** 每种动作/条件本版表单认识的键。不在表里的键 = 表单表达不了 → 打开即只读(见 hasUnsupportedParts)。 */
@@ -230,6 +234,7 @@ const KNOWN_ACTION_KEYS: Record<StepDraft['type'], readonly string[]> = {
   notify: ['type', 'title', 'body'],
   remind: ['type', 'title', 'body'],
   agent_run: ['type', 'agentSlug', 'prompt'],
+  send_message: ['type', 'agentSlug', 'delivery', 'source', 'body', 'prompt'],
   tool_call: ['type', 'tool', 'args'],
   db_row_add: ['type', 'path', 'cells', 'skipIfEmpty'],
   db_row_edit: ['type', 'path', 'rowId', 'rowFrom', 'match', 'cells'],
@@ -263,7 +268,7 @@ export const isParamCond = (cond: { type?: string } | undefined): boolean => /\.
 
 let stepKey = 1
 export const blankStep = (type: StepDraft['type']): StepDraft => ({
-  key: stepKey++, type, title: '', body: '', agentSlug: '', prompt: '', tool: '', argValues: {},
+  key: stepKey++, type, title: '', body: '', agentSlug: '', delivery: 'inbox', source: 'fixed', prompt: '', tool: '', argValues: {},
   dbPath: '', rowId: '', rowFrom: '', matchColumn: '', matchValue: '', skipIfEmpty: '', cells: [{ k: '', v: '' }],
 })
 
@@ -273,9 +278,10 @@ export function stepsFrom(editing?: MuseTriggerInfo): StepDraft[] {
     return editing.actions.filter(isEditableStep).map((a) => ({
       ...blankStep(a.type as StepDraft['type']),
       title: a.type === 'notify' || a.type === 'remind' ? a.title : '',
-      body: a.type === 'notify' || a.type === 'remind' ? a.body || '' : '',
-      agentSlug: a.type === 'agent_run' ? a.agentSlug : '',
-      prompt: a.type === 'agent_run' ? a.prompt : '',
+      body: a.type === 'notify' || a.type === 'remind' || a.type === 'send_message' && a.source === 'fixed' ? a.body || '' : '',
+      agentSlug: a.type === 'agent_run' || a.type === 'send_message' ? a.agentSlug : '',
+      ...(a.type === 'send_message' ? { delivery: a.delivery, source: a.source } : {}),
+      prompt: a.type === 'agent_run' || a.type === 'send_message' && a.source === 'agent' ? a.prompt : '',
       tool: a.type === 'tool_call' ? a.tool : '',
       argValues: a.type === 'tool_call'
         ? Object.fromEntries(Object.entries(a.args || {}).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))
@@ -319,6 +325,10 @@ export function toSpec(steps: StepDraft[], catalog: AutomationActionCatalogItem[
   return steps.map((s): AutomationActionSpec => {
     if (s.type === 'notify' || s.type === 'remind') return { type: s.type, title: s.title.trim(), ...(s.body.trim() ? { body: s.body.trim() } : {}) }
     if (s.type === 'agent_run') return { type: 'agent_run', agentSlug: s.agentSlug, prompt: s.prompt.trim() }
+    if (s.type === 'send_message') return {
+      type: 'send_message', agentSlug: s.agentSlug, delivery: s.delivery,
+      ...(s.source === 'agent' ? { source: 'agent', prompt: s.prompt.trim() } : { source: 'fixed', body: s.body.trim() }),
+    }
     if (s.type === 'db_row_add') {
       return { type: 'db_row_add', path: s.dbPath.trim(), cells: cellsOf(s), ...(s.skipIfEmpty.trim() ? { skipIfEmpty: s.skipIfEmpty.trim() } : {}) }
     }

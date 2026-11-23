@@ -149,6 +149,22 @@ describe('v3 note moved while typing', () => {
     return { ...(await import('./pageStore')), disk, io, savePage, moving: () => !!finishMove, finish: () => finishMove!(), fail: () => failMove!() }
   }
 
+  it('rebases keystrokes made while a cross-note replacement is in flight into the saved revision', async () => {
+    const m = await setupDisk()
+    const store = m.pageStoreFor('editing')
+    await store.getState().loadPage('A.md')
+    const hold = await m.holdLegacyForReplace('A.md')
+    expect(hold.dirty()).toBe(false)
+    store.getState().setBlockContent('1', '正文续写')
+    expect(hold.dirty()).toBe(true)
+    m.disk.set('A.md', V3.replace('p.png','reviewed.png'))
+    await hold.release(true)
+    expect(m.disk.get('A.md')).toContain('正文续写')
+    expect(m.disk.get('A.md')).toContain('reviewed.png')
+    expect(store.getState().blocks['1'].content).toBe('正文续写')
+    expect(store.getState().blocks['2'].content).toBe('![](reviewed.png)')
+  })
+
   it('typing during the move IPC lands in the moved note, not a resurrected old file', async () => {
     const m = await setupDisk()
     const store = m.pageStoreFor('v3-tab')
@@ -214,4 +230,39 @@ describe('v3 note moved while typing', () => {
     expect(m.disk.get('A.md')).toContain('正文续写')
     await expect(m.flushAllScopes(true)).resolves.toBeUndefined()
   })
+})
+
+it('a legacy title rename moves current file bytes after another window replaced its text', async () => {
+  const { mkdtemp, readFile, writeFile, rename, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'forsion-v3-rename-'))
+  const old = ['---','amadeus_page: pg_test','amadeus_schema: amadeus.page/3','---','','<!-- a 1 -->','','old term',''].join('\r\n')
+  const { parsePageSource } = await import('@amadeus-shared/compiler/page')
+  try {
+    vi.doMock('../plugins/pluginStore', () => ({ matchFileType: () => undefined }))
+    const m = await setup()
+    await writeFile(join(dir,'A.md'),old)
+    const store = m.pageStoreFor('title-rename')
+    const peer = m.pageStoreFor('same-note-other-leaf')
+    const api = window.amadeus
+    const current = (p: string) => readFile(join(dir,p), 'utf8')
+    api.readTextFile = current
+    m.loadPage.mockImplementation(async p => parsePageSource(p, await current(p), '2026-11-22T00:00:00Z'))
+    api.renamePageFile = async (path, base) => { await rename(join(dir,path), join(dir,base+'.md')); return base+'.md' }
+    const overwrite = vi.fn()
+    api.writeTextFile = overwrite
+    store.setState({ vaultRoot: dir }); peer.setState({ vaultRoot: dir })
+    await store.getState().loadPage('A.md'); await peer.getState().loadPage('A.md')
+    const fresh = old.replace('old term', 'new term')
+    await writeFile(join(dir,'A.md'), fresh)
+    expect(await store.getState().renamePage('B')).toBe(true)
+    expect(await current('B.md')).toBe(fresh)
+    await expect(current('A.md')).rejects.toMatchObject({ code: 'ENOENT' })
+    for (const instance of [store,peer]) {
+      expect(instance.getState().activePage).toBe('B.md')
+      expect(Object.values(instance.getState().blocks).map(b=>b.content)).toContain('new term')
+    }
+    expect(overwrite).not.toHaveBeenCalled()
+  } finally { vi.doUnmock('../plugins/pluginStore'); await rm(dir,{recursive:true,force:true}) }
 })

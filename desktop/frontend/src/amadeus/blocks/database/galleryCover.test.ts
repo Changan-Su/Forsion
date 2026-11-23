@@ -23,6 +23,7 @@ describe('firstBodyImage', () => {
   it('markdown images: any target counts (CDN URLs often have no extension), angle brackets and titles allowed', () => {
     expect(firstBodyImage('![](https://img.example/abc?w=600)')).toEqual({ kind: 'md', src: 'https://img.example/abc?w=600' })
     expect(firstBodyImage('![a](<assets/one.png> "title")')).toEqual({ kind: 'md', src: 'assets/one.png' })
+    expect(firstBodyImage('![a|300](assets/two.png "say \\"hi\\" (x)")')).toEqual({ kind: 'md', src: 'assets/two.png' })
   })
 
   it('ignores plain links, unsafe schemes and images inside code', () => {

@@ -19,6 +19,8 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 - `suggest: { trigger, items(query), mention? }`：`mention: true` 时只打 `trigger` 就开（`query` 为空串），紧跟中文也开，紧贴拉丁字母或数字不开。宿主补全浮层，外观和键盘与笔记 `#` 补全一致（↑↓ / Enter / Tab / Esc，输入法组字时不弹，Enter 选中不提交）。`items` 回数组或 Promise，每项 `{ label, hint?, value }`，最多显示 8 项；选中把 trigger + 查询换成 `value` 加一个空格。
 - `suggest` 也可以是数组（2026-11-02+）：几种触发各给一份（例如 `#` 标签 + `[[` 关联），离光标最近的那个打开；更早的宿主只认单个对象。传数组前看 `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`（2026-11-04+，没有这个字段 = 不支持）；别拿 `insertText`、`setBody` 这类别的接口当暗号（2.13.8-beta.3 有 `insertText` 却不收数组）。输入卡在窗口下半部分时浮层朝上开（放不下再翻到下面）。
 - `insertText(text)`：在光标处插入（有选区则替换）并聚焦，给「#」按钮、语音转写用。
+- `mentions` / `onMention`（2026-11-20+，能力表 `'mentions'`）：打开宿主自带的 `@` 面板，同笔记：`['date', 'page']` 日期在上（今天、明天、打 `@11/28` / `@2200` 出对应日期）、当前库笔记在下。默认插 `@YYYY-MM-DD `（带时刻 `@YYYY-MM-DDTHH:mm `）或 `[[名字]] `（重名插路径）。`onMention(m)` 同步返回 `true` = 插件自己接手（如设截止日），宿主只删掉 `@查询`；`m` 为 `{ kind: 'date', value }` / `{ kind: 'page', path, link }`。没有「提醒我」「不设日期」行。开着时 `suggest` 里 `@` 那项不生效，`#` / `[[` 照旧。触发同笔记：邮箱里的 `@` 不弹，查询可带 `/ : .`、不含空白、≤30 字。
+- `format: 'inline' | 'basic'`（2026-11-21+，能力表 `'format'`）：输入框换成显示格式的编辑器（笔记那套的删减版），`value` / `onChange` / `onSubmit` 的文字变成 Markdown。`inline` = 一行内的加粗 / 斜体 / 删除线 / 行内代码 / 链接（⌘B / ⌘I / ⌘E，⌘⌥X 删除线；Shift+Enter 不换行，粘贴多行并成一行）；`basic` 再加列表 / 任务列表 / 引用 / 代码块，Shift+Enter 换行。两档都没有标题、表格、标注、嵌入、图片、HTML、裸网址成链接（`# x`、`![a](b)`、`https://…` 原样是字）。纯文字存得一字不差（`snake_case`、网址、`5*3`、`1. x` 不加反斜杠），只有本会变成格式的字留 `\`;值不带首尾空白(选完补全屏幕上有空格、`onChange` 里没有)。`insertText` 插字面文字。显示用 `ctx.ui.parseInlineMarkdown(md)` → `{ text, strong?, em?, strike?, code?, href?, wiki?, from, to }[]`（同步、不抛错；`[[a|b]]` 那段带 `wiki`、`text` 是显示名；`from`/`to` 是字在原文里的位置、不含定界符，自己从原文认日期 / 标签时绕开带格式的段）；读屏 / 悬停 / 排序把 `text` 连起来。旧宿主忽略 `format`、没有 `parseInlineMarkdown`，存量值照纯文字显示;手机端暂不报 `'format'`、忽略该选项,但有读法。挂载时定，`update({ format })` 重建输入框。
 旧宿主忽略这三个选项，也没有 `insertText`，用 `typeof box.insertText === 'function'` 探测，四项同时到位。
 插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
@@ -216,8 +218,9 @@ list.addEventListener('drop', async (e) => {
 Watched ordinary DOM reading surfaces share continuous line selection bands with chat, notes and result previews. Math is measured as a unit, while native Selection, keyboard extension and copying remain intact. Paint is outside the content DOM and is removed on dispose. Touch pointers and custom PDF/code-editor selection layers retain native paint; `watch: false` continues to use the plugin's own paint and manual `show()` / `hide()`.
 
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
-show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
-as a quote), **Translate** (result in a card under the selection) and **⋯** (selection actions from plugins). Which
+show the same one: the view's own tools plus the shared actions — **Ask Tangu** (hands the text to the side chat
+as a quote), **Translate** (result in a card under the selection), **Read aloud** (2026-11-21+, hosts with a
+read-aloud setting), then a divider and up to three plugin actions placed on the bar, then **⋯** (the rest). Which
 block comes first is the user's setting (Settings → Appearance → Selection menu); do not depend on the order.
 
 **Give your own view the bar.** Do not draw your own popup menu on new hosts.
@@ -263,8 +266,9 @@ ctx.registerView({ id: 'reader', title: 'Reader', mount(el) {
   `mountFloatingToc` and other mounts on the same element. The host disposes it on disable / reload.
 - A view that never calls `mountSelectionBar` gets no bar: the host does not sniff selections globally.
 
-**Add an action to the bar.** `ctx.registerSelectionAction` entries are listed behind "⋯" under "Plugins".
-With no `scope` they appear in notes only, exactly as before; opt into more with the new optional fields:
+**Add an action to the bar.** `ctx.registerSelectionAction` entries are listed behind "⋯" under "Plugins" unless
+they ask for a spot on the bar (`placement: 'bar'`, below). With no `scope` they appear in notes only, exactly as
+before; opt into more with the new optional fields:
 
 ```js
 ctx.registerSelectionAction({
@@ -296,6 +300,48 @@ ctx.registerSelectionAction({
   (Copy / Close). You cannot bypass the card to write into a note.
 - `output: 'none'`: you handle the result yourself (open a view, save a clipping) — the host shows no card and
   ignores the return value. Report failures yourself or throw: the host shows a toast with the error message.
+
+**On the bar, running by itself, card controls (2026-11-21+).** All optional; older hosts ignore them.
+
+```js
+ctx.registerSelectionAction({
+  id: 'translate',
+  title: { zh: '翻译', en: 'Translate' },             // string | () => string | { zh, en } — drawn in the current language
+  icon: 'languages',
+  scope: 'all',
+  placement: 'bar',                                  // default spot: on the bar ('more' = behind ⋯, the default)
+  auto: true,                                        // supports "Run on select" — the user turns it on, never you
+  card: { language: true, source: true, speak: true },
+  run: async (cx) => (await ctx.tangu.translate({ text: cx.markdown, language: cx.language ?? 'English', signal: cx.signal, onDelta: cx.onDelta })).text,
+})
+```
+
+- `placement: 'bar'` is a default only. The user pins / unpins in ⋯ (a pin on each row), right-clicks a bar button
+  ("Move to ⋯", "Manage selection menu…") or uses the table under Settings → Appearance → Selection menu
+  (Bar / ⋯ / Hidden, drag to reorder); their choice always wins and is remembered. At most **3** plugin actions sit
+  on the bar; the rest go behind ⋯ in install order and ⋯ says "N more did not fit · Manage". Core plugins sit with
+  the host's actions before the divider and don't use those slots.
+- `auto: true` only declares support (needs output `'preview'`). The switch is per action, off by default, in the
+  card head ("Run on select") and the Settings table. It is a user-facing setting, not a security boundary (plugins run
+  in the host's renderer): never flip it yourself. Your `scope` must reach a non-note view, or there is no switch at
+  all. When on, a mouse selection that
+  rests 400 ms (1–2000 characters, not in inputs) opens the bar and your card together and `run` gets
+  `cx.auto === true`; a new selection retargets the same card and aborts the previous `cx.signal`; the same text in
+  the same language is not requested twice in a session. With several switched on only the first in the user's
+  order runs. Desktop only for now (phones don't run actions automatically). Notes don't run actions automatically
+  either: there the card can write into the note. Disabling or reloading the plugin closes its open card and aborts
+  the in-flight `cx.signal`.
+- The host's own Translate gives way to plugin id `translation` when it is a host-shipped core plugin (even while
+  disabled) or when it is enabled and has registered a selection action; it keeps the placement the user gave the
+  host's Translate.
+- `card.language` draws a target-language picker in the card head; the value reaches `run` as `cx.language` (English
+  language names: `'English'`, `'Chinese (Simplified)'`, `'Japanese'`…). Initial value = the host's guess from the
+  selection, then the user's last pick for this action. `card.source` shows the selection above the result (3 lines,
+  click to expand). `card.speak` adds speaker buttons next to the original and the result (hidden where read-aloud
+  is not available).
+- `title` as a function or `{ zh, en }` needs this host: older hosts drop the whole action (console warning) when
+  `title` is not a string. Set `minAppVersion`, or pass a string on older hosts.
+- Read aloud yourself with `ctx.tts?.speak(text, { signal })` (see the host APIs reference).
 - Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
   has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
 

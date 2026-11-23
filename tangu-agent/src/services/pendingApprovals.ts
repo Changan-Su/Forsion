@@ -15,6 +15,7 @@
  * ⚠️ 对 tools/registry.js 与 muse.js 一律动态 import:approvals.ts → 本模块 → registry → builtin 工具 →
  *    (某些工具)→ approvals.ts,静态引用会成环。
  */
+import { isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import path from 'node:path';
 import { previewText, deferredPreview, deferredSummary } from './approvals.js';
 import { createHash } from 'node:crypto';
@@ -575,7 +576,8 @@ async function resurfaceApprovalLetter(a: { userId: string; agentSlug: string; i
 export async function deferApproval(
   runId: string, call: ToolCall, preview: string, reason: ApprovalReason | undefined, ctx: DeferCtx,
 ): Promise<ApprovalDecision> {
-  const userId = ctx.userId || process.env.TANGU_USER_ID || 'local';
+  // 多账号模式:身份只认当前账号(环境变量是进程级的,不是来的那个人);单人模式照旧。
+  const userId = ctx.userId || (isMultiAccount() ? requireAccountId('deferApproval') : process.env.TANGU_USER_ID || 'local');
   const agentSlug = ctx.agentSlug || DEFAULT_AGENT_SLUG;
   let note: string | undefined;
   if (ctx.approvalDeferral === 'agent') {

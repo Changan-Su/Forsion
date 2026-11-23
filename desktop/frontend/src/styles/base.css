@@ -1600,6 +1600,11 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-row-stat .del { color: var(--danger); }
 .tool-row-status { flex-shrink: 0; display: inline-flex; }
 .tool-row-status:empty { display: none; }
+/* 断在半截的一步(中断任务续跑):整行退成淡色,不像做完的那几步;行尾写明「没执行 / 被打断 / 结果未知」 */
+.tool-row[data-inflight] .tool-row-ic,
+.tool-row[data-inflight] .tool-row-copy-text,
+.tool-row[data-inflight] .tool-row-target { color: var(--text-faint); }
+.tool-row-inflight { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
 /* 展开箭头在行尾,平时不抢眼:悬停 / 键盘焦点 / 已展开才露;触屏常显 */
 .tool-row-chev { flex-shrink: 0; margin-left: auto; color: var(--text-faint); }
 @media (hover: hover) {

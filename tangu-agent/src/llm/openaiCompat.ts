@@ -13,6 +13,7 @@
 import type { BuildPayloadOpts, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { learnFromUpstreamError } from '../services/contextWindowStore.js';
 import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
+import { withRetryAfter } from './retry.js';
 import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, clampThinkingLevel, isClaudeAdaptiveModel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
@@ -349,12 +350,14 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     // 只学不拦:学到与否都照常抛错,失败语义一个字不变。
     learnFromUpstreamError(streamPayload?.model, response.status, detail);
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw Object.assign(new LlmError(status, detail || `Upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
+    // Retry-After(429 / 503 常带):挂在 err.retryAfterMs 上,重试链按它等(llm/retry.ts)
+    throw withRetryAfter(Object.assign(new LlmError(status, detail || `Upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {}), response.headers);
   }
 
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
+  let doneFrame = false;
   // 可选字段必须在字面量里预置类型,否则后面按需赋值会 TS2339。
   const usage: {
     prompt_tokens: number;
@@ -380,7 +383,8 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
       const trimmed = line.trim();
       if (!trimmed.startsWith('data:')) continue;
       const data = trimmed.slice(5).replace(/^ /, '');
-      if (data === '[DONE]' || data === '') continue;
+      if (data === '[DONE]') { doneFrame = true; continue; }
+      if (!data) continue;
       let json: any;
       try {
         json = JSON.parse(data);
@@ -473,5 +477,5 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     }
   }
 
-  return { content: outContent, reasoning, toolCalls, usage, finishReason };
+  return { content: outContent, reasoning, toolCalls, usage, finishReason, ...(!doneFrame && !finishReason ? { streamEndedEarly: true } : {}) };
 }

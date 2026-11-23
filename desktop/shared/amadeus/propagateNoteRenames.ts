@@ -8,7 +8,7 @@
 import { rebaseFileRefs } from './assets'
 import { rewriteNoteRefs, type NoteRenamePlan } from './rewriteNoteRefs'
 import { textFingerprint } from './writeConflict'
-import type { TextWriteResult } from './ipc'
+import type { TextWriteOptions, TextWriteResult } from './ipc'
 
 /** 挪 / 改名文件夹时,库内路径的新旧换算:`[旧文件夹, 新文件夹]` 之下的整棵树跟着走;没给 = 没有文件换位置。
  *  进出都是 `/` 分隔的库内路径(Windows 上宿主给的文件夹路径可能带 `\`,先换掉)。 */
@@ -109,16 +109,27 @@ export const STRUCTURE_OPS = ['renamePage', 'renamePageFile', 'movePage', 'renam
  *  否则 B→C 的重写还在跑,C→D 已按「页表里没有 B」扫完 → 前一次随后写入的 [[C]] 指向已不存在的 C,静默断链。
  *  与各桥按路径的写队列分开(结构操作内部还要占路径写锁,混成一条会自锁);重写本身不经这条队列。
  *  只管本端:别的设备上的连续改名要服务端按路径身份组合,不在这里。 */
-export function queueStructureOps<T extends object>(api: T): T {
-  const rec = api as unknown as Record<string, unknown>
+export function createStructureQueue() {
   let tail: Promise<unknown> = Promise.resolve()
-  for (const k of STRUCTURE_OPS) {
+  return <T>(operation: () => Promise<T>): Promise<T> => {
+    const run = tail.then(operation)
+    tail = run.catch(() => {})
+    return run
+  }
+}
+
+export function queueStructureOps<T extends object>(api: T, localQueue?: ReturnType<typeof createStructureQueue>): T {
+  const rec = api as unknown as Record<string, unknown>
+  const enqueue = localQueue ?? createStructureQueue()
+  const operations = localQueue ? [...STRUCTURE_OPS, 'writeTextFile'] : STRUCTURE_OPS
+  for (const k of operations) {
     const fn = rec[k]
     if (typeof fn !== 'function') continue
     rec[k] = (...args: unknown[]): Promise<unknown> => {
-      const run = tail.then(() => (fn as (...a: unknown[]) => Promise<unknown>)(...args))
-      tail = run.catch(() => {})
-      return run
+      const call = () => (fn as (...a: unknown[]) => Promise<unknown>)(...args)
+      // A reviewed batch must not race a local rename of its parent folder.
+      if (k === 'writeTextFile' && !(args[2] as TextWriteOptions | undefined)?.strictExisting) return call()
+      return enqueue(call)
     }
   }
   return api

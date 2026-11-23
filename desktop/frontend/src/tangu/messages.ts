@@ -203,6 +203,8 @@ registerMessages({
   'chat.action.quote': { zh: '引用', en: 'Quote' },
   'chat.error': { zh: '运行出错', en: 'Run failed' },
   'chat.llmRetrying': { zh: '网络波动，{s} 秒后自动重试（第 {n}/{max} 次）', en: 'Network hiccup — retrying in {s}s (attempt {n}/{max})' },
+  'chat.llmRetryingBusy': { zh: '服务繁忙，{s} 秒后重试（第 {n}/{max} 次）', en: 'Service busy — retrying in {s}s (attempt {n}/{max})' },
+  'chat.llmWaitNetwork': { zh: '网络已断开，恢复后自动接着做', en: 'Offline — will continue when the connection is back' },
   'chat.err.network': { zh: '无法连接模型服务（网络不通或服务未启动）', en: 'Cannot reach the model service (network down or server not running)' },
   'chat.err.dropped': { zh: '连接中途断开（网络波动），回复未完成', en: 'Connection dropped mid-response (network hiccup); reply incomplete' },
   'chat.err.timeout': { zh: '请求超时，网络或模型响应过慢', en: 'Request timed out — slow network or model' },

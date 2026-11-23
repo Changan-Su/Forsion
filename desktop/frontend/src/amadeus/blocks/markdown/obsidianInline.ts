@@ -13,45 +13,15 @@ import { $prose } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type Command, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
-import { buildBlockString, scanMath } from './mathLivePreview'
+import { buildBlockString } from './mathLivePreview'
+import { scanObsidian } from './inlineTextSpans'
+export { scanObsidian, type ObsSpan } from './inlineTextSpans'
 import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
 
 registerMessages({
   'obsinline.comment.title': { zh: '注释（点击编辑）', en: 'Comment (click to edit)' },
 })
-
-export interface ObsSpan { kind: 'hl' | 'cmt'; from: number; to: number }
-
-/** 块串里的 `%%…%%` 与 `==…==` 跨度(偏移 = 块串下标,含定界符)。入参同 buildBlockString:代码已抹成空格、硬换行为 `\n`。 */
-export function scanObsidian(s: string): ObsSpan[] {
-  if (s.indexOf('%%') === -1 && s.indexOf('==') === -1) return []
-  // 公式里的不算:抹成等长空格,偏移不动。
-  let t = s
-  for (const m of scanMath(s)) t = t.slice(0, m.from) + ' '.repeat(m.to - m.from) + t.slice(m.to)
-  const out: ObsSpan[] = []
-  // `%%…%%`:从左往右配对,内容非空;没配上的 `%%` 是字面。
-  for (let i = t.indexOf('%%'); i !== -1;) {
-    const close = t.indexOf('%%', i + 2)
-    if (close === -1) break
-    if (close > i + 2) {
-      out.push({ kind: 'cmt', from: i, to: close + 2 })
-      i = t.indexOf('%%', close + 2)
-    } else {
-      i = t.indexOf('%%', i + 1) // `%%%%`:空注释不算,挪一格再找
-    }
-  }
-  // `==x==`:定界符内侧不贴空白、外侧不贴 `=`(`a === b`、`x == y` 不误伤),不跨行,不落在注释里。
-  const HL = /(?<!=)==(?![\s=])([^\n]*?)(?<![\s=])==(?!=)/g
-  for (let m = HL.exec(t); m; m = HL.exec(t)) {
-    const from = m.index
-    const to = from + m[0].length
-    if (to - from <= 4) continue
-    if (out.some((c) => c.kind === 'cmt' && from < c.to && to > c.from)) continue
-    out.push({ kind: 'hl', from, to })
-  }
-  return out.sort((a, b) => a.from - b.from)
-}
 
 const key = new PluginKey('amadeus-obsidian-inline')
 

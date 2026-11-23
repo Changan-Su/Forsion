@@ -141,6 +141,7 @@ export interface HookVerdict {
 
 /** runHooks 运行上下文（host-only 闸所需 + payload 富集）。 */
 export interface HookRunContext {
+  disableHooks?: boolean;
   hostSandbox?: HostSandboxConfig;
   profile?: AppProfile;
   execMode?: 'sandbox' | 'host';

@@ -6,16 +6,19 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 import { deviceIdFile, tanguHome } from './tanguHome.js';
+import { perAccount } from './accountScope.js';
 
-let cached: string | null = null;
+// 多账号模式每个账号一份(device.json 在账号 home 里);单人模式一个槽,行为不变。
+const slot = perAccount((): { cached: string | null } => ({ cached: null }));
 
 export function getDeviceId(): string {
-  if (cached) return cached;
+  const holder = slot();
+  if (holder.cached) return holder.cached;
   try {
     const raw = JSON.parse(readFileSync(deviceIdFile(), 'utf8'));
     if (raw?.deviceId && typeof raw.deviceId === 'string') {
       const id: string = raw.deviceId;
-      cached = id;
+      holder.cached = id;
       return id;
     }
   } catch {
@@ -29,6 +32,6 @@ export function getDeviceId(): string {
     /* 写不进(只读 home 等)→ 仍返回本次生成的 id,本进程内稳定即可 */
     void tanguHome();
   }
-  cached = id;
+  holder.cached = id;
   return id;
 }

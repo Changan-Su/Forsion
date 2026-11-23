@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Bot, ChevronRight, Loader2, MessageCircleQuestion, X } from 'lucide-react'
+import { Bot, ChevronRight, Loader2, X } from 'lucide-react'
 import type { Leaf } from '@lcl/engine/types'
 import { listActiveRuns } from '../../services/agentRunService'
 import { useApp } from '../../stores/appStore'
@@ -86,7 +86,8 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
   const runId = member?.runId || target?.runId
   const delegateRunning = useApp((s) => (s.subChatsBySession[parentId] || []).some((c) => c.sessionId === sessionId && c.streaming) && !!s.runningBySession[parentId])
   const cfg = useApp((s) => s.cfg)
-  const fraction = useApp((s) => s.deskBySession[parentId]?.fraction ?? 0.52)
+  // 顺便问缺省窄一档(11-22 方案 A:37%,主对话的代码块别被截);拖过的宽度照旧记住、和子会话共用
+  const fraction = useApp((s) => s.deskBySession[parentId]?.fraction ?? (target?.aside ? 0.37 : 0.52))
   const root = useRef<HTMLDivElement>(null)
   const grip = useDeskGrip(parentId, root)
   const { t } = useI18n()
@@ -167,8 +168,8 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
     return <div ref={root} className="agent-desk open child-chat-panel" data-team-desk="panel" data-aside-panel="" style={{ '--desk-w': `${fraction * 100}%` } as React.CSSProperties}>
       <div className="agent-desk-grip" onPointerDown={grip} />
       <div className="agent-desk-inner">
-        <div className="agent-desk-head"><MessageCircleQuestion size={15} /><strong className="agent-desk-title">{t('btw.title')}</strong><button className="icon-btn" aria-label={t('teamdesk.collapse')} onClick={leaf.close}><X size={16} /></button></div>
-        <BtwPanel key={target.aside.nonce} seed={target.aside} onClose={leaf.close} />
+        {/* 头由面板自己画成一行(标题 + 段落胶囊 + ＋ + ✕,11-22 方案 A) */}
+        <BtwPanel key={target.aside.nonce} seed={target.aside} chrome="own" onClose={leaf.close} />
       </div>
     </div>
   }
