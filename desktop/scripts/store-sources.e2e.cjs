@@ -80,9 +80,10 @@ async function main() {
     res.writeHead(404); res.end()
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r)); base = `http://127.0.0.1:${server.address().port}`
-  fs.mkdirSync(`${userData}-dev`); fs.writeFileSync(path.join(`${userData}-dev`, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', cloudUrl: base, unitHostEnabled: false }))
+  fs.mkdirSync(`${userData}-dev`); fs.writeFileSync(path.join(`${userData}-dev`, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed', cloudUrl: base, unitHostEnabled: false, mirror: 'china' }))
   // Signed in (the sign-in belongs to the fixture server): Forsion Git reads carry it.
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: base, token: TOKEN }), { mode: 0o600 })
+  // GitHub downloads go through TANGU_GITHUB_PROXY (the fixture), which is tried first with the China mirror setting on.
   const env = { ...process.env, TANGU_HOME: home, TANGU_CLOUD_URL: base, TANGU_GITHUB_PROXY: `${base}/gh/` }; delete env.TANGU_BACKEND_URL
   let app
   try {
