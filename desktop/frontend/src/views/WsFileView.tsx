@@ -13,11 +13,12 @@ import { useViewModes, ViewModeSwitch } from '@lcl/engine'
 import { Markdown } from '../components/Markdown'
 import {
   ImageView, PdfView, DocxView, DiffView, Spinner, cm, loadOffice, HtmlPreview,
-  TEXT_KINDS, BLOB_KINDS, CSV_ROW_CAP, OfficeFail,
+  TEXT_KINDS, BLOB_KINDS, CSV_ROW_CAP, FILE_DOCUMENT_SCROLL, OfficeFail,
   type PreviewTarget, type PreviewData, type ImgView, type OfficeRender,
 } from '../components/WorkspaceFilePreview'
 import { previewKindFor, iconForFile, extOf, parseDelimited, fmtSize, mimeForExt, splitFrontmatter, type PreviewKind } from '../services/fileKinds'
 import { useI18n } from '../i18n'
+import { useFileShiftWheel } from '../lib/fileWheel'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
@@ -253,6 +254,8 @@ export function WsFileView({ leaf }: ViewProps) {
 
   // 同一个文件刷新(⟳、外部改动后重载):文本类不先清空,留着屏上内容,读完回到原来的滚动位置(D26)
   const hostRef = useRef<HTMLDivElement | null>(null)
+  const preview = useRef<HTMLDivElement>(null)
+  useFileShiftWheel(preview, FILE_DOCUMENT_SCROLL)
   const loadedRef = useRef<typeof target>(null)
   const keptScroll = useRef<KeptScroll | null>(null)
   // 编辑器按「读完了几次」重挂,不按点了几次刷新:刷新读回来之前旧编辑器留着,滚动位置才读得到;mtime 没变也换上新内容
@@ -515,7 +518,7 @@ export function WsFileView({ leaf }: ViewProps) {
   useEffect(() => () => { if (desk) desk.more.current = [] }, [desk])
   if (desk) {
     return (
-      <div className="wsfile-tab in-desk">
+      <div className="wsfile-tab in-desk" ref={preview}>
         {desk.slot && createPortal(controls, desk.slot)}
         <div className="wsfile-body" ref={hostRef}>{body}</div>
       </div>
@@ -523,7 +526,7 @@ export function WsFileView({ leaf }: ViewProps) {
   }
 
   return (
-    <div className="wsfile-tab">
+    <div className="wsfile-tab" ref={preview}>
       <div className="wsfile-head">
         <Icon size={14} className="wsfile-head-icon" />
         <div className="wsfile-title" title={path ?? name}>

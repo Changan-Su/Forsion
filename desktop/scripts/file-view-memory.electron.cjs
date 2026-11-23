@@ -39,11 +39,22 @@ const closeTo = (a,b) => Math.abs(a.x-b.x)<1 && Math.abs(a.y-b.y)<1 && Math.abs(
   const space=async(name)=>{await win.locator(`.rb-space[aria-label="${name}"]`).filter({visible:true}).first().click();await win.waitForTimeout(800)}
   await space('笔记')
   const open=async(name,selector)=>{await win.locator('.t2s-srow').filter({has:win.locator('.t2s-srow-title',{hasText:new RegExp(`^${name}$`)})}).first().click();await win.locator(selector).filter({visible:true}).first().waitFor({timeout:30000});await win.waitForTimeout(1200)}
+  const shiftWheel = async (viewport) => {
+    await viewport.hover()
+    await win.keyboard.down('Shift')
+    try { await win.mouse.wheel(0, 120) } finally { await win.keyboard.up('Shift') }
+    await win.waitForTimeout(200)
+  }
   const board=()=>open('Board.excalidraw','.amx-drawview .excalidraw canvas.interactive')
   const cycle=async()=>{await space('Tangu');await space('笔记')}
   await board()
   check('new board starts at 100%',Math.abs((await engineState(win)).z-1)<.0001,await engineState(win))
   await engineState(win,{x:-2100,y:-1500,z:.75});await win.waitForTimeout(200)
+  const boardBeforeWheel = await engineState(win)
+  await shiftWheel(win.locator('.amx-drawview .excalidraw canvas.interactive:visible'))
+  const boardAfterWheel = await engineState(win)
+  check('drawing already supports Shift+wheel horizontal pan', boardAfterWheel.x < boardBeforeWheel.x - 10
+    && Math.abs(boardAfterWheel.y - boardBeforeWheel.y) < 1 && boardAfterWheel.z === boardBeforeWheel.z, { boardBeforeWheel, boardAfterWheel })
   const before=await engineState(win)
   await cycle()
   const after=await engineState(win)
@@ -66,17 +77,28 @@ const closeTo = (a,b) => Math.abs(a.x-b.x)<1 && Math.abs(a.y-b.y)<1 && Math.abs(
   check('Markdown reading position still survives',noteBefore>300 && Math.abs(noteAfter-noteBefore)<2,{noteBefore,noteAfter})
   await open('Image.svg','.amx-imgview-img')
   await win.locator('.amx-imgview-img').filter({visible:true}).click()
-  await win.locator('.amx-imgview-scroll.actual').evaluate(e=>{e.scrollTop=450;e.scrollLeft=300})
+  const imageScroll = win.locator('.amx-imgview-scroll.actual')
+  await imageScroll.evaluate(e=>{e.scrollTop=450;e.scrollLeft=300})
+  await shiftWheel(imageScroll)
+  const imagePan = await imageScroll.evaluate(e => ({ left: e.scrollLeft, top: e.scrollTop }))
+  check('native image Shift+wheel only scrolls horizontally', imagePan.left > 310 && Math.abs(imagePan.top - 450) < 2, imagePan)
+  await imageScroll.evaluate(e => { e.scrollLeft = 300 })
   await win.waitForTimeout(300);await cycle()
   const image=await win.locator('.amx-imgview-scroll').filter({visible:true}).evaluate(e=>({actual:e.classList.contains('actual'),top:e.scrollTop,left:e.scrollLeft}))
   check('image size and pan survive Space switch',image.actual && Math.abs(image.top-450)<2 && Math.abs(image.left-300)<2,image)
   await open('Paper.pdf','.pdfa-pageinput')
-  await win.locator('.pdfa-zoomsel').filter({visible:true}).selectOption('1.5')
+  await win.locator('.pdfa-zoomsel').filter({visible:true}).selectOption('3')
   await win.locator('.pdfa-pageinput').filter({visible:true}).fill('4');await win.locator('.pdfa-pageinput').filter({visible:true}).press('Enter')
   await win.waitForTimeout(500)
   const pdfState=()=>win.locator('.pdfa-container').filter({visible:true}).evaluate(e=>({top:e.scrollTop,left:e.scrollLeft,scale:e.closest('.pdfa-root').querySelector('.pdfa-zoomsel').value,page:Number(e.closest('.pdfa-root').querySelector('.pdfa-pageinput').value)}))
-  const pdfBefore=await pdfState();await cycle();await win.waitForTimeout(900);const pdfAfter=await pdfState()
-  check('PDF page/zoom/position survive Space switch',pdfBefore.page===4 && pdfAfter.page===4 && pdfAfter.scale===pdfBefore.scale && Math.abs(pdfAfter.top-pdfBefore.top)<2,{pdfBefore,pdfAfter})
+  const pdfBeforeWheel = await pdfState()
+  await shiftWheel(win.locator('.pdfa-container:visible'))
+  const pdfBefore = await pdfState()
+  check('built-in PDF Shift+wheel only scrolls horizontally', pdfBefore.left > pdfBeforeWheel.left + 10
+    && Math.abs(pdfBefore.top - pdfBeforeWheel.top) < 2 && pdfBefore.scale === pdfBeforeWheel.scale, { pdfBeforeWheel, pdfBefore })
+  await cycle();await win.waitForTimeout(900);const pdfAfter=await pdfState()
+  check('PDF page/zoom/position survive Space switch',pdfBefore.page===4 && pdfAfter.page===4 && pdfAfter.scale===pdfBefore.scale
+    && Math.abs(pdfAfter.top-pdfBefore.top)<2 && Math.abs(pdfAfter.left-pdfBefore.left)<2,{pdfBefore,pdfAfter})
   await win.locator('.pdfa-zoomsel').filter({visible:true}).selectOption('page-width');await win.waitForTimeout(600)
   const fitBefore=await pdfState();await space('Tangu')
   await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setContentSize(1150,900));await space('笔记');await win.waitForTimeout(700)
