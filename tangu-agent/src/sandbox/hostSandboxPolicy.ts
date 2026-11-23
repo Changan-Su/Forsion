@@ -1,9 +1,13 @@
 /** Trusted instance policy. Request bodies/tool arguments cannot select or weaken it. */
 import { configExists, loadRawConfig } from '../core/config.js';
+import { isMultiAccount } from '../core/accountScope.js';
 import { normalizeHostSandbox, type HostSandboxConfig } from './hostSandbox.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
 export function resolveHostSandboxPolicy(): HostSandboxConfig {
+  // 多账号模式:不起任何子进程(core/hostSpawn.ts),宿主沙箱的 helper 也起不了 —— 文件工具一律在进程内做,
+  // 隔离靠账号文件夹的读写根(services/accessDomain.ts)。账号自己的 config.json 选不了这一项。
+  if (isMultiAccount()) return normalizeHostSandbox(undefined);
   const config = loadRawConfig();
   if ((config === null && configExists()) || Array.isArray(config)) throw new Error('Invalid config.json: cannot determine local sandbox policy');
   return normalizeHostSandbox(config?.hostSandbox);

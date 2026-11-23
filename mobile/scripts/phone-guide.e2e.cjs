@@ -303,18 +303,19 @@ async function homeGeometry(page, dockTop) {
   const geo = await page.evaluate((dock) => {
     const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return r.height ? { top: r.top, bottom: r.bottom, left: r.left, right: r.right, h: r.height } : null }
     const H = document.querySelector('.mb-view[data-view="homepage"]') || document
-    const cards = [...H.querySelectorAll('.hp-card')].map(box).filter(Boolean)
+    // 主页的「继续」(最近三项;新用户没有,整张卡不画)。只数画出来的行:放不下时产品把第三行 / 后两条建议 / 整块建议用 CSS 收掉,节点还在
+    const rows = [...H.querySelectorAll('.hp-continue-row')].map(box).filter(Boolean)
+    const cont = box(H.querySelector('.hp-continue'))
     const sug = box(H.querySelector('.hp-suggest'))
-    // 只数画出来的:放不下时产品把后两条建议 / 第三行卡片 / 整块用 CSS 收掉,节点还在
     const chips = [...H.querySelectorAll('.hp-suggest-chip')].filter((e) => e.getBoundingClientRect().height > 0)
     return {
       suggest: sug, chips: chips.length,
       chipText: chips.map((e) => e.textContent.trim()),
       fit: (H.querySelector('.hp-root') || document.querySelector('.hp-root'))?.getAttribute('data-suggest-fit') ?? null,
-      cards: cards.length, cardsDom: H.querySelectorAll('.hp-card').length,
-      cardIds: [...H.querySelectorAll('.hp-card')].map((e) => (e.dataset.spaceId ? `space:${e.dataset.spaceId}` : e.dataset.fixedId)),
-      cardsTop: cards.length ? Math.min(...cards.map((c) => c.top)) : null,
-      lastCardBottom: cards.length ? Math.max(...cards.map((c) => c.bottom)) : null,
+      rows: rows.length, rowsDom: H.querySelectorAll('.hp-continue-row').length,
+      continueTop: cont ? cont.top : null,
+      // 输入条要在这之下:画出来的最后一块(「继续」的最后一行,没有「继续」就是建议块)
+      lastBottom: Math.max(-Infinity, ...rows.map((c) => c.bottom), ...(cont ? [cont.bottom] : []), ...(sug ? [sug.bottom] : [])),
       pill: box(H.querySelector('.hp-pill')), dock,
     }
   }, dockTop)
@@ -322,19 +323,48 @@ async function homeGeometry(page, dockTop) {
 }
 
 /**
- * 诊断(不是断言):产品把建议块收掉时,照产品的类名在卡片前面摆一块同样的,量一下放上去之后输入条超出主页底边多少,拍一张,再拿掉。
+ * 主页「继续」要有东西时:照 phone-stage 的 seedNotes,往库里放三篇笔记、记成最近看过(新用户没有,卡不画)。
+ * 主页的「放不下就收」看着整列的子树,「继续」长出来会重判。
+ */
+async function seedContinue(page) {
+  await page.evaluate(async ({ storeUrl, recentUrl, now }) => {
+    const { usePageStore } = await import(/* @vite-ignore */ storeUrl)
+    const { useRecentViews } = await import(/* @vite-ignore */ recentUrl)
+    const pages = ['十月计划.md', '项目/发版清单.md', '读书笔记/第三章摘记.md']
+    usePageStore.setState({ vaultRoot: usePageStore.getState().vaultRoot || '/stage/vault', pages, folders: ['项目', '读书笔记'], files: [] })
+    useRecentViews.setState({ items: pages.map((id, i) => ({ key: `note:${id}`, kind: 'note', id, title: id, ts: now - (i + 1) * 3600_000 })) })
+  }, { storeUrl: lib.moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'), recentUrl: lib.moduleUrl('../desktop/frontend/src/recentViews.ts'), now: Date.now() })
+  await page.waitForTimeout(800)
+}
+
+/** 新用户的样子:「继续」一项都没有(台架自带的会话、最近看过的都清掉),整张卡不画。 */
+async function clearContinue(page) {
+  await page.evaluate(async ({ appUrl, recentUrl, prefsUrl }) => {
+    const { useApp } = await import(/* @vite-ignore */ appUrl)
+    const { useRecentViews } = await import(/* @vite-ignore */ recentUrl)
+    const { useAmadeusPrefs } = await import(/* @vite-ignore */ prefsUrl)
+    useApp.setState({ sessions: [] })
+    useRecentViews.setState({ items: [] })
+    useAmadeusPrefs.setState({ recents: [] })
+  }, { appUrl: lib.moduleUrl('../desktop/frontend/src/stores/appStore.ts'), recentUrl: lib.moduleUrl('../desktop/frontend/src/recentViews.ts'), prefsUrl: lib.moduleUrl('../desktop/frontend/src/amadeusPrefs.ts') })
+  await page.waitForTimeout(800)
+}
+
+/**
+ * 诊断(不是断言):产品把建议块收掉时,照产品的类名在「继续」(没有就是输入条)前面摆一块同样的,量一下放上去之后输入条超出主页底边多少,拍一张,再拿掉。
  * 只用来说明「放不下」差多少,不代表产品画出来的样子。
  */
 async function suggestReplica(page, name) {
   const m = await page.evaluate(() => {
-    const cards = document.querySelector('.mb-view[data-view="homepage"] .hp-cards') || document.querySelector('.hp-cards')
-    if (!cards) return null
+    const H = document.querySelector('.mb-view[data-view="homepage"]') || document
+    const anchor = H.querySelector('.hp-continue') || H.querySelector('.hp-pill')
+    if (!anchor) return null
     const sec = document.createElement('section'); sec.className = 'hp-suggest'; sec.setAttribute('data-e2e-replica', '')
     sec.innerHTML = '<div class="hp-suggest-title">试试这些 · 点了只填进输入框，不会直接发</div><div class="hp-suggest-grid">' +
       ['理一理今天要做的事', '明早 8 点提醒我开会', '总结我粘贴的文章', '你能帮我做什么？'].map((t) => `<button type="button" class="hp-suggest-chip"><span class="hp-suggest-text">${t}</span></button>`).join('') + '</div>'
-    cards.before(sec)
+    anchor.before(sec)
     const r = (q) => document.querySelector(q)?.getBoundingClientRect()
-    return { block: r('[data-e2e-replica]')?.height, blockDisplay: getComputedStyle(sec).display, pillBottom: r('.hp-pill')?.bottom, stackBottom: r('.hp-stack')?.bottom, greetBottom: r('.hp-greet')?.bottom, cardsTop: r('.hp-cards')?.top }
+    return { block: r('[data-e2e-replica]')?.height, blockDisplay: getComputedStyle(sec).display, pillBottom: r('.hp-pill')?.bottom, stackBottom: r('.hp-stack')?.bottom, greetBottom: r('.hp-greet')?.bottom, continueTop: r('.hp-continue')?.top ?? null }
   })
   if (m) {
     await shot(page, name)
@@ -434,8 +464,8 @@ const SCEN = {
       await page.waitForSelector('.hp-suggest', { timeout: 8000 }).catch(() => {})
       const g = await homeGeometry(page, dockTop)
       ok('HOME: 4 suggestions', g.chips === 4, { chips: g.chipText, gate: g.gate })
-      ok('HOME: suggestion block sits above the cards', !!g.suggest && g.cardsTop !== null && g.suggest.bottom <= g.cardsTop + 0.5, { suggest: g.suggest, cardsTop: g.cardsTop })
-      ok('HOME: pill below the last card and above the dock', !!g.pill && g.pill.top >= g.lastCardBottom - 0.5 && g.pill.bottom <= dockTop, { pill: g.pill, lastCardBottom: g.lastCardBottom, dockTop })
+      // 台架自带几条会话,走完引导后「继续」也有行;一行都没有的样子在 s15 的 n = 0 里看
+      ok('HOME: suggestion block above Continue, pill below both and above the dock', (g.continueTop === null || (!!g.suggest && g.suggest.bottom <= g.continueTop + 0.5)) && !!g.suggest && !!g.pill && g.pill.top >= g.lastBottom - 0.5 && g.pill.bottom <= dockTop, { suggest: g.suggest, continueTop: g.continueTop, pill: g.pill, lastBottom: g.lastBottom, dockTop })
       await shot(page, 'HOME-suggest')
       if (!g.chips) console.log('  diag replica:', JSON.stringify(await suggestReplica(page, 'DIAG-replica-after-wizard-411x914')))
       ok('no uncaught page errors', page.__net.errors.length === 0, page.__net.errors.slice(0, 5))
@@ -457,7 +487,7 @@ const SCEN = {
       const g = await homeGeometry(t.page, t.dockTop)
       if (g.chips === 4) {
         o = t; o.vp = vp; ok(`all four suggestions visible at ${vp.width}x${vp.height}`, true, { fit: g.fit })
-        ok(`real block at ${vp.width}x${vp.height}: above the cards, pill below the last card and above the dock`, !!g.suggest && g.suggest.bottom <= g.cardsTop + 0.5 && g.pill.top >= g.lastCardBottom - 0.5 && g.pill.bottom <= t.dockTop, { suggest: g.suggest, cardsTop: g.cardsTop, pill: g.pill, dockTop: t.dockTop })
+        ok(`real block at ${vp.width}x${vp.height}: pill below the block and above the dock`, !!g.suggest && !!g.pill && g.pill.top >= g.lastBottom - 0.5 && g.pill.bottom <= t.dockTop, { suggest: g.suggest, lastBottom: g.lastBottom, pill: g.pill, dockTop: t.dockTop })
         await shot(t.page, `HOME-suggest-real-${vp.width}x${vp.height}`)
         break
       }
@@ -879,44 +909,39 @@ const SCEN = {
     }
   },
 
-  // 15:主页建议在各种屏高上怎么摆 —— 放不下时逐级让(四条 + 全部卡片 → 四条 + 两行卡片 → 两条 + 两行卡片 → 不出),每次从头判。
+  // 15:主页建议在各种屏高上怎么摆 —— 放不下时逐级让(四条 + 「继续」三行 → 四条 + 两行 → 两条 + 两行 → 不出),每次从头判。
+  // 「继续」新用户是空的(整张卡不画):台架自带几条会话,n = 0 的几轮先清空;n = 3 的几轮再往库里放三篇最近看过的笔记,把它撑满。
   async s15() {
-    const home = async (opts) => {
+    const home = async (opts, rows = 0) => {
       const t = await openPage(opts)
       await t.page.waitForSelector('.mb-shell', { timeout: 180_000 }); await t.page.waitForTimeout(1200)
       t.dockTop = await installChrome(t.page)
       await lib.stage.space(t.page, 'home').catch(() => {}); await t.page.waitForTimeout(1200)
+      await (rows ? seedContinue(t.page) : clearContinue(t.page))
       return t
     }
     const MARK = { ...OLD_DONE, [KEYS.suggest]: '1' }
-    // 缺省的卡片是哪几张;再从架子上另找 Space 凑成六张(三整行)
-    let base = [], six = null
     {
       cur = 's15-baseline'
-      const t = await home({ seed: OLD_DONE, viewport: { width: 360, height: 800 } })
+      const t = await home({ seed: OLD_DONE, viewport: { width: 360, height: 800 } }, 3)
       try {
         const g = await homeGeometry(t.page, t.dockTop)
-        base = g.cardIds
-        ok('no marker: no fit attribute, every card drawn (same as before this change)', g.fit === null && g.suggest === null && g.cards === g.cardsDom && g.cards > 0, { fit: g.fit, cards: g.cards, cardsDom: g.cardsDom, ids: g.cardIds })
-        const extra = await t.page.evaluate((have) => (window.__stage?.state?.spaces || []).map((sp) => `space:${sp.id}`).filter((id) => !have.includes(id) && id !== 'space:home'), base)
-        if (base.length && base.length < 6 && base.length + extra.length >= 6) six = [...base, ...extra.slice(0, 6 - base.length)]
+        ok('no marker: no fit attribute, all three Continue rows drawn', g.fit === null && g.suggest === null && g.rows === 3 && g.rowsDom === 3, { fit: g.fit, rows: g.rows, rowsDom: g.rowsDom })
       } finally { await t.ctx.close() }
     }
-    if (!six) notRun('six-card cases', `could not build a six-card set (default cards: ${JSON.stringify(base)})`)
 
-    // 常见手机 + 一台横放的平板:建议块必须出现(至少两条),输入条在最后一张画出来的卡下面、Dock 上面
+    // 常见手机 + 一台横放的平板:建议块必须出现(至少两条),输入条在最后一行「继续」(没有就是建议块)下面、Dock 上面
     const SIZES = [{ width: 360, height: 780 }, { width: 360, height: 800 }, { width: 393, height: 851 }, { width: 412, height: 915 }, { width: 1280, height: 768 }]
-    for (const vp of SIZES) for (const locale of ['zh-CN', 'en-US']) for (const set of six ? [null, six] : [null]) {
-      const n = set ? 6 : base.length
+    for (const vp of SIZES) for (const locale of ['zh-CN', 'en-US']) for (const n of [0, 3]) {
       cur = `s15-${vp.width}x${vp.height}-${locale.slice(0, 2)}-${n}`
-      const t = await home({ seed: { ...MARK, ...(set ? { forsion_home_cards_v1: JSON.stringify(set) } : {}) }, viewport: vp, locale })
+      const t = await home({ seed: MARK, viewport: vp, locale }, n)
       try {
         const g = await homeGeometry(t.page, t.dockTop)
-        ok(`${n} cards in the list`, g.cardsDom === n, { cardsDom: g.cardsDom, ids: g.cardIds })
+        ok(`${n} Continue rows in the list`, g.rowsDom === n, { rowsDom: g.rowsDom })
         ok('suggestion block is shown with at least two suggestions', !!g.suggest && g.chips >= 2 && ['all', 'rows', 'two'].includes(g.fit), { fit: g.fit, chips: g.chips, suggest: g.suggest, gate: g.gate })
-        ok('fit level matches what is drawn', (g.fit === 'all' && g.chips === 4 && g.cards === n) || (g.fit === 'rows' && g.chips === 4 && g.cards === Math.min(n, 4)) || (g.fit === 'two' && g.chips === 2 && g.cards === Math.min(n, 4)), { fit: g.fit, chips: g.chips, cards: g.cards })
-        ok('block above the cards, pill below the last drawn card and above the dock', !!g.suggest && !!g.pill && g.suggest.bottom <= g.cardsTop + 0.5 && g.pill.top >= g.lastCardBottom - 0.5 && g.pill.bottom <= t.dockTop + 0.5, { suggest: g.suggest, cardsTop: g.cardsTop, lastCardBottom: g.lastCardBottom, pill: g.pill, dockTop: t.dockTop })
-        console.log(`  fit ${vp.width}x${vp.height} ${locale} ${n} cards → ${g.fit}, chips ${g.chips}, cards drawn ${g.cards}`)
+        ok('fit level matches what is drawn', (g.fit === 'all' && g.chips === 4 && g.rows === n) || (g.fit === 'rows' && g.chips === 4 && g.rows === Math.min(n, 2)) || (g.fit === 'two' && g.chips === 2 && g.rows === Math.min(n, 2)), { fit: g.fit, chips: g.chips, rows: g.rows })
+        ok('block above Continue, pill below the last drawn row and above the dock', !!g.suggest && !!g.pill && (g.continueTop === null || g.suggest.bottom <= g.continueTop + 0.5) && g.pill.top >= g.lastBottom - 0.5 && g.pill.bottom <= t.dockTop + 0.5, { suggest: g.suggest, continueTop: g.continueTop, lastBottom: g.lastBottom, pill: g.pill, dockTop: t.dockTop })
+        console.log(`  fit ${vp.width}x${vp.height} ${locale} ${n} rows → ${g.fit}, chips ${g.chips}, rows drawn ${g.rows}`)
         await shot(t.page, `HOME-fit-${vp.width}x${vp.height}-${locale.slice(0, 2)}-${n}`)
       } finally { await t.ctx.close() }
     }
@@ -925,7 +950,7 @@ const SCEN = {
     {
       cur = 's15-recover'
       const big = { width: 412, height: 915 }
-      const t = await home({ seed: MARK, viewport: big })
+      const t = await home({ seed: MARK, viewport: big }, 3)
       try {
         const a = await homeGeometry(t.page, t.dockTop)
         await t.page.setViewportSize({ width: 412, height: 700 }); await t.page.waitForTimeout(500)
@@ -934,29 +959,29 @@ const SCEN = {
         const c = await homeGeometry(t.page, t.dockTop)
         const rank = (f) => ['all', 'rows', 'two', 'none'].indexOf(f)
         ok('shorter window steps the fit down', rank(b.fit) > rank(a.fit), { tall: a.fit, short: b.fit })
-        ok('back to the tall window brings the same fit back', c.fit === a.fit && c.chips === a.chips && c.cards === a.cards, { before: { fit: a.fit, chips: a.chips, cards: a.cards }, after: { fit: c.fit, chips: c.chips, cards: c.cards } })
+        ok('back to the tall window brings the same fit back', c.fit === a.fit && c.chips === a.chips && c.rows === a.rows, { before: { fit: a.fit, chips: a.chips, rows: a.rows }, after: { fit: c.fit, chips: c.chips, rows: c.rows } })
       } finally { await t.ctx.close() }
     }
 
-    // 很矮的屏(没有建议时卡片自己就放不下):建议块不出,卡片一张不少,输入条的位置和没有记号时一样 —— 这次改动不添乱
+    // 很矮的屏(「继续」三行自己就快放不下):建议块不出,「继续」一行不少,输入条的位置和没有记号时一样 —— 建议不添乱
     {
-      const vp = { width: 360, height: 640 }
-      cur = 's15-360x640'
-      const base = await home({ seed: OLD_DONE, viewport: vp })
+      const vp = { width: 360, height: 560 }
+      cur = `s15-${vp.width}x${vp.height}`
+      const base = await home({ seed: OLD_DONE, viewport: vp }, 3)
       let basePill = null
       try {
         const g = await homeGeometry(base.page, base.dockTop)
         basePill = g.pill
-        console.log(`  360x640 without the marker: pill bottom ${g.pill?.bottom}, dock top ${base.dockTop} (${g.pill && g.pill.bottom <= base.dockTop ? 'above' : 'BELOW'} the dock; this is the page as it is on main)`)
-        await shot(base.page, 'HOME-360x640-control-nokey')
+        console.log(`  ${vp.width}x${vp.height} without the marker: pill bottom ${g.pill?.bottom}, dock top ${base.dockTop} (${g.pill && g.pill.bottom <= base.dockTop ? 'above' : 'BELOW'} the dock)`)
+        await shot(base.page, `HOME-${vp.width}x${vp.height}-control-nokey`)
       } finally { await base.ctx.close() }
-      const t = await home({ seed: MARK, viewport: vp })
+      const t = await home({ seed: MARK, viewport: vp }, 3)
       try {
         const g = await homeGeometry(t.page, t.dockTop)
         ok('too short for any level: block not drawn, fit none', g.suggest === null && g.fit === 'none', { fit: g.fit, suggest: g.suggest })
-        ok('too short: every card still drawn', g.cards === g.cardsDom, { cards: g.cards, cardsDom: g.cardsDom })
+        ok('too short: every Continue row still drawn', g.rows === g.rowsDom && g.rows === 3, { rows: g.rows, rowsDom: g.rowsDom })
         ok('too short: pill exactly where it is without the marker', !!g.pill && !!basePill && Math.abs(g.pill.bottom - basePill.bottom) <= 0.5 && Math.abs(g.pill.top - basePill.top) <= 0.5, { pill: g.pill, basePill })
-        await shot(t.page, 'HOME-360x640')
+        await shot(t.page, `HOME-${vp.width}x${vp.height}`)
       } finally { await t.ctx.close() }
     }
   },

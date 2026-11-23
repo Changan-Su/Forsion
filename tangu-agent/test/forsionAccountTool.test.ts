@@ -153,7 +153,7 @@ describe('forsion_account_action(代办)', () => {
   it('用重置卡:发的是固定请求,回执带用后的额度与剩余张数;没有卡 → 说明什么都没变', async () => {
     routes['POST /api/token-quota/reset-card/use'] = { status: 200, json: { success: true, resetCards: 1, quota: { ...QUOTA, dailyRemaining: 81_337, weeklyRemaining: 406_685 } } };
     const text = await call('forsion_account_action', { action: 'use_reset_card' });
-    expect(seen).toEqual([expect.objectContaining({ path: '/api/token-quota/reset-card/use', method: 'POST', body: { type: 'both' } })]);
+    expect(seen).toEqual([expect.objectContaining({ path: '/api/token-quota/reset-card/use', method: 'POST', body: { type: 'both', entry: 'agent-tool' } })]);
     expect(text).toMatch(/^Used one quota reset card\.\nAI quota: today 100% left · this week 100% left\./);
     expect(text).toContain('Quota reset cards: 1 ');
     routes['POST /api/token-quota/reset-card/use'] = { status: 400, json: { error: 'no_reset_card' } };
@@ -169,7 +169,7 @@ describe('forsion_account_action(代办)', () => {
     for (const raw of ['8134', '8,134', '101671', '101,671']) expect(moved).not.toContain(raw);
     expect(await call('forsion_account_action', { action: 'send_feedback', message: ' 侧栏拖不动 ' })).toBe('Feedback sent to the Forsion team.');
     expect(seen.map((r) => [r.path, r.body])).toEqual([
-      ['/api/token-quota/background/convert', { percent: 25 }],
+      ['/api/token-quota/background/convert', { percent: 25, entry: 'agent-tool' }],
       ['/api/feedback', { description: '侧栏拖不动' }],
     ]);
     seen = [];

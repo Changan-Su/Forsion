@@ -3,6 +3,7 @@
  * 只记 pid 不够:引擎崩了之后它的 pid 可能被无关进程复用,探活会误判「还活着」,那几行就一直卡在 running。
  * 加上启动时刻,同一个 pid 换了进程就对不上。本机 SQLite 建 run 时写(sqlStateStore.createRun),重启自愈时探(agentLoop.recoverQueuedRuns)。
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'node:child_process';
 
 /** 本进程的身份。自算启动时刻与 ps 读到的实测相差 0–1 秒,比对留 3 秒余量。 */
@@ -16,6 +17,7 @@ export function processStartedAt(pid: number): Promise<number | null> {
       const v = err ? NaN : parse(String(out).trim());
       resolve(Number.isFinite(v) && v > 0 ? Math.round(v) : null);
     };
+    if (hostSpawnDenied('process start time')) { resolve(null); return; }
     if (process.platform === 'win32') {
       execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `([DateTimeOffset](Get-Process -Id ${pid}).StartTime).ToUnixTimeSeconds()`],
         { timeout: 8000, windowsHide: true }, (err, out) => done(err, out, Number));

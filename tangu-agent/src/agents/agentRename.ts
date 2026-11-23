@@ -103,7 +103,7 @@ export async function renameAgent(oldSlug: string, newSlug: string): Promise<{ a
     let touched = false;
     for (const t of triggers) {
       if (t.agentSlug === oldSlug) { t.agentSlug = newSlug; touched = true; }
-      for (const a of t.actions || []) if (a.type === 'agent_run' && a.agentSlug === oldSlug) { a.agentSlug = newSlug; touched = true; }
+      for (const a of t.actions || []) if ((a.type === 'agent_run' || a.type === 'send_message') && a.agentSlug === oldSlug) { a.agentSlug = newSlug; touched = true; }
     }
     if (touched) await saveTriggers(triggers);
   });

@@ -13,6 +13,7 @@
  * microserver/worker 不触本模块。mtime 缓存(config.toml + SOUL.md),改文件即时生效。
  * 旧扁平 <slug>.md 首次访问时惰性迁移成文件夹(原文件留 .bak)。
  */
+import { firstLink, isMultiAccount, perAccount, requireAccountId } from '../core/accountScope.js';
 import { promises as fs } from 'node:fs';
 import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -26,7 +27,8 @@ import { isStandInSlugShape } from '../contracts/agentSyncRules.js';
 import { isLibraryMemoryRel } from '../contracts/memoryLayers.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { agentEngineLabel, isKnownAgentEngine } from '../contracts/agentEngine.js';
-import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
+import { LEGACY_PERSONAS } from './legacyPersonas.js';
+import { acknowledgedBaseline, atomicWriteText, pendingBuiltinUpdate, planBuiltinRefresh, readBuiltinBaseline, readBuiltinCurrent, writeBuiltinBaseline, type BuiltinBaseline, type BuiltinDefaults, type BuiltinUpdate } from './builtinBaseline.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
 import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codingPrompt.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
@@ -351,6 +353,8 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
 
 /** 读 <dir>/config.toml + <dir>/SOUL.md 组装 def。 */
 export async function parseAgentFolder(slug: string, dir: string): Promise<NormalAgentDef> {
+  // 多账号模式:Agent 文件夹或它的 config.toml / SOUL.md 是软链 → 当坏目录(调用方跳过 / 当不存在),不跟链读
+  if (isMultiAccount() && firstLink(dir, path.join(dir, 'config.toml'), path.join(dir, 'SOUL.md'))) throw new Error(`agent folder ${slug} contains a symbolic link`);
   const tomlRaw = await fs.readFile(path.join(dir, 'config.toml'), 'utf-8').catch(() => '');
   const soul = await fs.readFile(path.join(dir, 'SOUL.md'), 'utf-8').catch(() => '');
   return parseAgentConfig(slug, tomlRaw, soul);
@@ -432,16 +436,22 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
 
 // ── mtime 缓存(各 agent 子目录的 config.toml + SOUL.md 指纹)──
 interface CacheEntry { stamp: string; defs: NormalAgentDef[] }
-let cache: CacheEntry | null = null;
+// 多账号模式按账号分(core/accountScope.ts);单人模式一个槽,行为不变。
+const cacheSlot = perAccount((): { v: CacheEntry | null } => ({ v: null }));
+
+/** 测试用:Agent 目录指纹(单人模式的格式不许变)。 */
+export const __agentDirStampForTests = (dir: string): Promise<string> => dirStamp(dir);
 
 async function dirStamp(dir: string): Promise<string> {
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    return 'missing';
+    return isMultiAccount() ? `missing:${dir}` : 'missing';
   }
-  const parts: string[] = [];
+  // 多账号模式下指纹带上目录本身:缓存只比指纹是否相等,换了目录(每个账号一个 agents/)就一定失效,
+  // 哪天缓存槽退化成全进程一格,同名 Agent、同样的修改时间也不会把另一个目录的名册当成命中。单人模式指纹照旧。
+  const parts: string[] = isMultiAccount() ? [`dir:${dir}`] : [];
   for (const e of entries) {
     if (e.isDirectory()) {
       if (!isValidSlug(e.name)) continue;
@@ -515,7 +525,7 @@ export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
     slug: 'coding',
     name: 'Coding',
     nameEn: 'Coding',
-    version: CODING_AGENT_VERSION, // 提示词更新即 bump → refreshBuiltinAgent 覆盖旧版(保留用户 model/thinking)
+    version: CODING_AGENT_VERSION, // 提示词更新即 bump;没改过的换新、改过的保留并在配置页提示(builtinBaseline.ts)
     description: 'Build and refine working web apps with a project brief, live preview, Forsion AI, and verified repairs',
     thinkingLevel: 'medium',
     systemPrompt: CODING_SYSTEM_PROMPT,
@@ -559,10 +569,14 @@ export function builtinAgentDef(slug: string): NormalAgentDef | null {
 }
 
 /** 写一个默认 agent 的骨架(目录 + Library/ + 缺失的 config.toml / SOUL.md);幂等,不覆盖已有文件。
- *  不建 MEMORY.md / LOG/(由记忆层按需建——提前建空 MEMORY.md 会让 migrateGlobalMemoryToXyra 误判已迁移)。 */
-async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<void> {
+ *  不建 MEMORY.md / LOG/(由记忆层按需建——提前建空 MEMORY.md 会让 migrateGlobalMemoryToXyra 误判已迁移)。
+ *  返回这次真写了哪几个文件(内置基线只给真写下出厂文本的那几项记,见 recordScaffoldBaseline)。 */
+async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<{ config: boolean; soul: boolean }> {
+  const wrote = { config: false, soul: false };
   const adir = path.join(agentsDir(), a.slug);
   mkdirSync(path.join(adir, 'Library'), { recursive: true }); // 建 agent 目录 + Library(头像/资料)
+  // 'wx' 排他创建:查在不在和写之间,同步可能刚拉下来一份 —— 已存在就算没写,绝不盖
+  const create = async (file: string, text: string): Promise<boolean> => fs.writeFile(path.join(adir, file), text, { encoding: 'utf-8', flag: 'wx' }).then(() => true, (e: any) => { if (e?.code === 'EEXIST') return false; throw e; });
   if (!existsSync(path.join(adir, 'config.toml'))) {
     const def: NormalAgentDef = {
       slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, version: a.version || '1.0.0', description: a.description || '', model: a.model || '',
@@ -571,69 +585,139 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
       systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: [],
       ...(a.engine ? { engine: a.engine } : {}),
     };
-    await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
+    wrote.config = await create('config.toml', serializeAgentConfig(def));
   }
-  if (!existsSync(path.join(adir, 'SOUL.md'))) {
-    await fs.writeFile(path.join(adir, 'SOUL.md'), a.soul || '', 'utf-8');
-  }
+  if (!existsSync(path.join(adir, 'SOUL.md'))) wrote.soul = await create('SOUL.md', a.soul || '');
+  return wrote;
 }
 
-/** 内置(系统维护)agent 的提示词升级:磁盘版本 ≠ 预设版本时,用预设覆盖 systemPrompt/soul/version/描述,
- *  但**保留全部用户配置**(含名字、工具权限、头像、同步与记忆作用域)。仅对预设声明了 version 的 agent 生效。 */
-async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<void> {
-  if (!a.version) return;
-  const adir = path.join(agentsDir(), a.slug);
-  const cfgPath = path.join(adir, 'config.toml');
-  const txt = await fs.readFile(cfgPath, 'utf-8').catch(() => null);
-  if (txt === null) return;
-  const cur = parseAgentConfig(a.slug, txt, '');
-  if (cur.version === a.version) return; // 已是最新
-  const def: NormalAgentDef = {
-    ...cur, // 白名单覆盖维护字段，避免未来新增用户配置在升级时被静默清空。名字也是用户配置,不在此列。
-    slug: a.slug, version: a.version, description: a.description || '',
-    systemPrompt: a.systemPrompt, soul: a.soul || '',
-  };
-  await fs.writeFile(cfgPath, serializeAgentConfig(def), 'utf-8');
-  await fs.writeFile(path.join(adir, 'SOUL.md'), a.soul || '', 'utf-8');
+/** 走内置基线的 Agent 的现行出厂文本(builtinBaseline.ts)。Arioso / Aria / Recita 的提示词改了从来不推给老用户,这一轮不接。 */
+function builtinDefaultsFor(slug: string): BuiltinDefaults | null {
+  if (slug === MUSE_AGENT_SLUG) return { systemPrompt: MUSE_AGENT_PRESET.systemPrompt, soul: MUSE_AGENT_PRESET.soul || '', description: MUSE_AGENT_PRESET.description || '' };
+  const a = slug === 'coding' ? DEFAULT_AGENTS.find((x) => x.slug === slug) : undefined;
+  return a ? { version: a.version, systemPrompt: a.systemPrompt, soul: a.soul || '', description: a.description || '' } : null;
+}
+
+/** 骨架刚写下出厂文本的那几项记进基线。记的是**真正的**出厂常量:Muse 首次播种时 config.toml 里可能是用户的旧自定义
+ *  (legacyPrompt),它不是出厂文本,绝不能当基线 —— 否则下次升级会被判成「没改过」盖掉。基线读不出来就不写。 */
+async function recordScaffoldBaseline(slug: string, wrote: { config: boolean; soul: boolean }): Promise<void> {
+  const defaults = builtinDefaultsFor(slug);
+  if (!defaults || (!wrote.config && !wrote.soul)) return;
+  const adir = path.join(agentsDir(), slug);
+  const read = await readBuiltinBaseline(adir);
+  if (read.state === 'unknown') return;
+  const next: BuiltinBaseline = { ...(read.state === 'ok' ? read.baseline : {}) };
+  const entry = (field: 'systemPrompt' | 'soul' | 'description') => ({ text: defaults[field], ...(defaults.version ? { version: defaults.version } : {}) });
+  if (wrote.config) { next.systemPrompt = entry('systemPrompt'); next.description = entry('description'); }
+  if (wrote.soul) next.soul = entry('soul');
+  await writeBuiltinBaseline(adir, next);
+}
+
+/**
+ * 内置 Agent(Coding / Muse)升级:没改过的(== 基线或历届出厂文本)换成新默认,改过的一个字节都不写,
+ * 留给配置页提示(判定见 builtinBaseline.planBuiltinRefresh)。名字、工具、头像、同步这些用户配置原样保留。
+ * 先写内容、最后写基线,每个文件原子写:中途断电,下次看到「当前 == 新默认」只补基线;反过来会把旧默认当成用户改过的。
+ * 读-判-写整段在该 slug 的写锁里,和配置页保存、「保留 / 换新」串行(首访播种可能还没跑完,保存就先到了)。
+ * 能进锁:所有拿锁的入口都先在锁外跑完 ensureAgentsReady,播种因此不会发生在别人的锁里(同 slug = 自己等自己)。
+ */
+async function refreshBuiltinTexts(slug: string): Promise<void> {
+  const defaults = builtinDefaultsFor(slug);
+  if (!defaults) return;
+  const adir = path.join(agentsDir(), slug);
+  await withAgentLock(slug, async () => {
+    const cur = await readBuiltinCurrent(adir);
+    if (cur.state !== 'ok') return; // 不在 / 读不出来 = 不知道,不写
+    const base = await readBuiltinBaseline(adir);
+    if (base.state === 'unknown') return;
+    const plan = planBuiltinRefresh(slug, defaults, cur.current, base.state === 'ok' ? base.baseline : null);
+    if (!plan) return;
+    const { replace } = plan;
+    if (replace.systemPrompt !== undefined || replace.description !== undefined) {
+      await atomicWriteText(path.join(adir, 'config.toml'), serializeAgentConfig({
+        ...parseAgentConfig(slug, cur.raw, ''), // 白名单只换维护字段,用户配置(含名字)原样
+        // 没换的指令 / 描述照原文写回(parseAgentConfig 会 trim):只换描述那次不许顺手改了用户的指令
+        systemPrompt: replace.systemPrompt ?? cur.current.systemPrompt,
+        description: replace.description ?? cur.current.description,
+        ...(plan.version ? { version: plan.version } : { version: cur.current.version }),
+      }));
+    }
+    if (replace.soul !== undefined) await atomicWriteText(path.join(adir, 'SOUL.md'), replace.soul);
+    if (plan.baseline) await writeBuiltinBaseline(adir, plan.baseline);
+    if (Object.keys(replace).length || plan.baseline) cacheSlot().v = null;
+  });
+}
+
+/** 配置页的「内置指令改了什么」:没有就是 null(包括读不出来 —— 不知道就不提示)。 */
+export async function getBuiltinUpdate(slug: string): Promise<BuiltinUpdate | null> {
+  const defaults = builtinDefaultsFor(slug);
+  if (!defaults) return null;
+  await ensureAgentsReady();
+  const adir = path.join(agentsDir(), slug);
+  const cur = await readBuiltinCurrent(adir);
+  if (cur.state !== 'ok') return null;
+  const base = await readBuiltinBaseline(adir);
+  if (base.state === 'unknown') return null;
+  return pendingBuiltinUpdate(slug, defaults, cur.current, base.state === 'ok' ? base.baseline : null);
+}
+
+/** 用户看到的那份提示已经过时(另一个窗口刚改过文本、app 又升了版):带上现在的提示,让界面重看。 */
+export class BuiltinUpdateStaleError extends Error {
+  constructor(readonly update: BuiltinUpdate | null) { super('The built-in instructions changed since you looked. Review them again.'); }
+}
+
+/**
+ * 用户在配置页拍板:keep = 保留自己的文本,只把基线记成新默认(提示消失,下次升级再比);
+ * adopt = 提示过的几项换成新默认(工作指令换了才把 config.toml 的版本跟上),基线同上。
+ * 锁内现读、凭 token 核对用户看到的就是现在的样子;对不上 → BuiltinUpdateStaleError。读不出来 → 抛错,什么都不写。
+ */
+export async function resolveBuiltinUpdate(slug: string, action: 'keep' | 'adopt', token: string): Promise<NormalAgentDef | null> {
+  const defaults = builtinDefaultsFor(slug);
+  if (!defaults) throw new AgentNotFoundError(slug);
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
+    const adir = path.join(agentsDir(), slug);
+    const cur = await readBuiltinCurrent(adir);
+    if (cur.state === 'absent') throw new AgentNotFoundError(slug);
+    if (cur.state !== 'ok') throw new Error(`Cannot read ${slug}/config.toml; nothing was changed.`);
+    const base = await readBuiltinBaseline(adir);
+    if (base.state === 'unknown') throw new Error(`Cannot read ${slug}/.builtin-baseline.json; nothing was changed.`);
+    const baseline = base.state === 'ok' ? base.baseline : null;
+    const pending = pendingBuiltinUpdate(slug, defaults, cur.current, baseline);
+    if (!pending || pending.token !== token) throw new BuiltinUpdateStaleError(pending);
+    const fields = pending.fields.map((f) => f.field);
+    if (action === 'adopt') {
+      if (fields.includes('systemPrompt')) {
+        await atomicWriteText(path.join(adir, 'config.toml'), serializeAgentConfig({
+          ...parseAgentConfig(slug, cur.raw, ''),
+          systemPrompt: defaults.systemPrompt, description: cur.current.description, version: defaults.version || cur.current.version,
+        }));
+      }
+      if (fields.includes('soul')) await atomicWriteText(path.join(adir, 'SOUL.md'), defaults.soul);
+    }
+    await writeBuiltinBaseline(adir, acknowledgedBaseline(defaults, baseline, fields));
+    cacheSlot().v = null;
+    return getAgent(slug);
+  });
 }
 
 // ── Muse 系统 agent(Special Agent 的文件夹化身份;由 muse supervisor 按需播种/自愈)──
 
 
 /**
- * 确保 Muse 系统 agent 文件夹存在(幂等,绝不覆盖已有文件——用户对 SOUL/指令的修改被尊重)。
- * legacyPrompt = 旧 specialAgents.muse.prompt 自定义值,仅首次创建时一次性迁移为 developer_instructions。
+ * 确保 Muse 系统 agent 文件夹存在(幂等)。已有文件夹:走内置基线(refreshBuiltinTexts)—— 没改过的换成现行预设,
+ * 用户改过的原样保留、配置页提示;名字、模型、权限等一个字段都不动。
+ * legacyPrompt = 旧 specialAgents.muse.prompt 自定义值,仅首次创建时一次性迁移为 developer_instructions(基线照样记出厂文本)。
  */
 export async function ensureMuseAgent(legacyPrompt?: string): Promise<void> {
   const adir = path.join(agentsDir(), MUSE_AGENT_SLUG);
   if (existsSync(path.join(adir, 'config.toml'))) {
-    // 已有文件夹:只把**原装旧指令**换成现行预设(见 upgradeMusePrompt),其余一个字段都不动。
-    const cur = await parseAgentFolder(MUSE_AGENT_SLUG, adir);
-    const upgraded = upgradeMusePrompt(cur);
-    if (upgraded !== cur) {
-      await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(upgraded), 'utf-8');
-      cache = null;
-    }
+    await refreshBuiltinTexts(MUSE_AGENT_SLUG);
     return;
   }
   const preset = { ...MUSE_AGENT_PRESET };
   if (legacyPrompt && legacyPrompt.trim()) preset.systemPrompt = legacyPrompt.trim();
-  await writeAgentScaffold(preset);
-  cache = null;
-}
-
-/** Muse 逐字段升级:工作指令 / 描述还是**一字未改的历史原装**才换成现行预设;用户写过的原样保留。
- *  没变化时返回同一个对象(调用方按引用判断要不要写盘)。 */
-export function upgradeMusePrompt(cur: NormalAgentDef): NormalAgentDef {
-  if (cur.slug !== MUSE_AGENT_SLUG) return cur;
-  const stalePrompt = LEGACY_MUSE_PROMPTS.includes((cur.systemPrompt || '').trim());
-  const staleDescription = cur.description === LEGACY_MUSE_DESCRIPTION;
-  if (!stalePrompt && !staleDescription) return cur;
-  return {
-    ...cur,
-    systemPrompt: stalePrompt ? MUSE_AGENT_PRESET.systemPrompt : cur.systemPrompt,
-    description: staleDescription ? MUSE_AGENT_PRESET.description : cur.description,
-  };
+  await recordScaffoldBaseline(MUSE_AGENT_SLUG, await writeAgentScaffold(preset));
+  cacheSlot().v = null;
 }
 
 /** 内置头像显式删除后不复活;自定义头像和独立的记忆保持原样。 */
@@ -699,7 +783,7 @@ export async function migrateDefaultEffortOnce(): Promise<void> {
     const cur = await parseAgentFolder(slug, adir);
     if (cur.thinkingLevel === 'low') {
       await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig({ ...cur, thinkingLevel: 'medium' }), 'utf-8');
-      cache = null;
+      cacheSlot().v = null;
     }
   }
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
@@ -722,7 +806,7 @@ export async function migrateAgentNamesOnce(): Promise<void> {
     await fs.writeFile(file, stringifyToml({ ...(nameZh ? { name_zh: nameZh } : {}), ...(nameEn ? { name_en: nameEn } : {}) }) + raw, 'utf-8');
   }
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** Arioso/Coding 保持原来的补齐语义;Aria/Recita/Muse 独立播种标记让已有安装也能获得新名册,
@@ -739,8 +823,8 @@ async function seedDefaultAgentsOnce(): Promise<void> {
     if (upgraded.soul !== cur.soul) await fs.writeFile(path.join(adir, 'SOUL.md'), upgraded.soul || '', 'utf-8');
   }
   const coding = DEFAULT_AGENTS.find((a) => a.slug === 'coding')!;
-  await writeAgentScaffold(coding);
-  await refreshBuiltinAgent(coding);
+  await recordScaffoldBaseline(coding.slug, await writeAgentScaffold(coding));
+  await refreshBuiltinTexts(coding.slug);
   const marker = path.join(agentsDir(), '.seeded-personas-v1');
   if (!existsSync(marker)) {
     for (const a of DEFAULT_AGENTS) {
@@ -749,6 +833,9 @@ async function seedDefaultAgentsOnce(): Promise<void> {
     }
     await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
   }
+  // 后台 Agent 关着时 Muse 的监督器不跑、ensureMuseAgent 也就不来:已有的 Muse 在这里照样升级(没改过的换新),
+  // 否则配置页会把没动过的历届原装当成「你改过」来提示。删掉了的(没有 config.toml)不建回来。
+  if (existsSync(path.join(agentsDir(), MUSE_AGENT_SLUG, 'config.toml'))) await refreshBuiltinTexts(MUSE_AGENT_SLUG);
   await seedDshAgentOnce();
   await migrateDefaultEffortOnce();
   await migrateAgentNamesOnce();
@@ -767,7 +854,7 @@ export async function seedDshAgentOnce(): Promise<void> {
   } catch { return; } // 运行时还没装配:不播种,下次进程再看
   await writeAgentScaffold(DSH_AGENT_PRESET);
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** 旧扁平 <slug>.md → <slug>/(config.toml + 空 SOUL.md);原文件留 .bak。幂等、非破坏。 */
@@ -837,11 +924,11 @@ async function migrateImportedPortraitOnce(): Promise<void> {
   } catch (e) { console.warn('[import] portrait migration failed:', e instanceof Error ? e.message : e); }
 }
 
-let readyChecked = false;
+const readyFlag = perAccount((): { checked: boolean } => ({ checked: false })); // 多账号模式每个账号各跑一次
 /** 首次访问:迁移扁平 agent → 文件夹、播种默认 agent + USER.md、迁移旧全局记忆 → xyra。幂等、绝不抛。 */
 async function ensureAgentsReady(): Promise<void> {
-  if (readyChecked) return;
-  readyChecked = true;
+  if (readyFlag().checked) return;
+  readyFlag().checked = true;
   try { mkdirSync(agentsDir(), { recursive: true }); } catch { /* ignore */ }
   await migrateFlatAgentsOnce().catch(() => { /* ignore */ });
   await seedDefaultAgentsOnce().catch(() => { /* ignore */ });
@@ -851,7 +938,7 @@ async function ensureAgentsReady(): Promise<void> {
   await migrateImportedPortraitOnce();
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
   await purgeExpiredWidgets().catch((e) => { console.warn('[widgets] purge failed:', e instanceof Error ? e.message : e); });
-  cache = null;
+  cacheSlot().v = null;
 }
 
 /** 解析本 run 的 active agent slug:合法 slug 用之,否则回默认 agent(记忆/日志据此选文件夹)。 */
@@ -889,7 +976,7 @@ export async function writeAgentsMeta(patch: Partial<AgentsMeta>): Promise<Agent
   });
   mkdirSync(agentsDir(), { recursive: true });
   await fs.writeFile(agentsMetaFile(), JSON.stringify(next, null, 2), 'utf-8');
-  cache = null; // 顺序变 → 列表缓存失效
+  cacheSlot().v = null; // 顺序变 → 列表缓存失效
   return next;
 }
 
@@ -897,13 +984,15 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   await ensureAgentsReady();
   const dir = agentsDir();
   const stamp = await dirStamp(dir);
-  if (cache && cache.stamp === stamp) return cache.defs.filter((a) => !a.standInOf); // 缓存存全量(listStandIns 也读它),命中时同样不列分身(Codex 评审 #9)
+  const cached = cacheSlot().v;
+  if (cached && cached.stamp === stamp) return cached.defs.filter((a) => !a.standInOf); // 缓存存全量(listStandIns 也读它),命中时同样不列分身(Codex 评审 #9)
   const defs: NormalAgentDef[] = [];
   let entries;
   try {
+    if (isMultiAccount() && firstLink(dir)) throw new Error('linked agents folder'); // 多账号模式:agents/ 本身是软链 → 当空
     entries = await fs.readdir(dir, { withFileTypes: true });
   } catch {
-    cache = { stamp, defs };
+    cacheSlot().v = { stamp, defs };
     return defs;
   }
   for (const e of entries) {
@@ -922,7 +1011,7 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
   // 按 meta.order 排(order 内按序在前,order 外按 name 在后)。
   const meta = readAgentsMeta();
   const visible = sortAgentDefs(defs.filter((a) => !isRetiredBuiltin(a)), meta.order);
-  cache = { stamp, defs: visible };
+  cacheSlot().v = { stamp, defs: visible };
   return visible.filter((a) => !a.standInOf);
 }
 
@@ -944,7 +1033,7 @@ async function standInDirsOf(bodySlug: string): Promise<string[]> {
 
 export async function listStandIns(bodySlug?: string): Promise<NormalAgentDef[]> {
   await listAgents();
-  return (cache?.defs ?? []).filter((a) => !!a.standInOf && (!bodySlug || a.standInOf === bodySlug));
+  return (cacheSlot().v?.defs ?? []).filter((a) => !!a.standInOf && (!bodySlug || a.standInOf === bodySlug));
 }
 
 export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
@@ -1171,17 +1260,23 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
 // 盖掉先写的一方(比如用户刚收紧的审批档)。KEEP_APPROVAL_MODE 的「现读」只有在这把锁里才算数。
 // 删除 / 头像的读-改-写也排进同一条队(Codex 09-25 二轮 #3 #4):删除不入队 = 保存读到 existing 之后删掉、保存再把目录建回来
 // (mustExist 形同虚设);头像在锁外读的旧快照(含审批档)会盖掉排在它前面的用户收紧。
-const saveChains = new Map<string, Promise<unknown>>(); // slug -> 队尾
+const saveChains = new Map<string, Promise<unknown>>(); // 锁键(agentLockKey:slug,多账号模式带账号)-> 队尾
 
 /** 把 fn 排进该 slug 的队。⚠️ fn 里绝不能再调 saveAgent / deleteAgent / saveAgentAvatar / deleteAgentAvatar(同 slug = 自己等自己,
  *  永久挂死)—— 要写就调 writeAgentLocked。入队前先 ensureAgentsReady(见 saveAgent 的注释)。 */
 function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
-  const tail = saveChains.get(slug) || Promise.resolve();
+  const key = agentLockKey(slug);
+  const tail = saveChains.get(key) || Promise.resolve();
   const mine = tail.then(fn);
   const entry = mine.then(() => undefined, () => undefined);
-  saveChains.set(slug, entry);
-  void entry.then(() => { if (saveChains.get(slug) === entry) saveChains.delete(slug); });
+  saveChains.set(key, entry);
+  void entry.then(() => { if (saveChains.get(key) === entry) saveChains.delete(key); });
   return mine;
+}
+
+/** Agent 写锁的键:单人模式 = slug;多账号模式 = 账号 + slug(两个账号的同名 Agent 不互相排队)。 */
+export function agentLockKey(slug: string): string {
+  return isMultiAccount() ? `${requireAccountId('agent lock')}\u0000${slug}` : slug;
 }
 
 /** 锁内落盘(调用方已持有该 slug 的锁、existing 是锁内现读的)。基于已有 agent 的写不建目录:落盘那一刻它的 config.toml
@@ -1193,11 +1288,14 @@ async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, i
   if (!existing && !input.standInOf && isStandInSlugShape(slug)) throw new Error(`"${slug}" is reserved for stand-ins (it contains "-standin-"); pick another id.`);
   const def = buildAgentDef(slug, existing, input);
   const adir = path.join(agentsDir(), slug);
+  // 多账号模式:目标(agents/、Agent 文件夹、config.toml、SOUL.md)已存在且是软链 → 拒,不经它写到别处
+  const linked = isMultiAccount() ? firstLink(agentsDir(), adir, path.join(adir, 'config.toml'), path.join(adir, 'SOUL.md')) : null;
+  if (linked) throw new Error(`Refusing to write agent "${slug}": ${linked} is a symbolic link.`);
   if (!existing) mkdirSync(adir, { recursive: true });
   else if (!existsSync(path.join(adir, 'config.toml'))) throw new AgentNotFoundError(slug);
   await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
   await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
-  cache = null; // 失效缓存
+  cacheSlot().v = null; // 失效缓存
   return def;
 }
 
@@ -1302,7 +1400,7 @@ export async function trashAgent(slug: string, opts: { record?: boolean; alsoTra
       const standIns = own && !own.standInOf && existsSync(path.join(dir, 'config.toml')) ? (await standInDirsOf(slug)).map((p) => ({ path: p, role: 'standin' })) : [];
       if (opts.record !== false && !own?.standInOf) undo = recordAgentRemoval(slug); // 影子跟着目录走,不先记一笔,下次同步会从云端整份拉回来
       const entry = await moveToTrash({ kind: 'agent', ref: slug, name, paths: [{ path: dir, role: 'dir' }, { path: path.join(agentsDir(), `${slug}.md`), role: 'flat' }, ...standIns, ...(opts.alsoTrash ?? [])] });
-      cache = null;
+      cacheSlot().v = null;
       return entry ? { ok: true, entry } : { ok: true };
     } catch {
       // 没挪走(config.toml 还在)就撤掉这次的记录:不然下次同步会删云端、再把本地没动过的文件当成别处删了一起删掉
@@ -1313,7 +1411,7 @@ export async function trashAgent(slug: string, opts: { record?: boolean; alsoTra
 }
 
 /** 恢复之后名册重读(目录是回收站挪回来的,不经 saveAgent)。 */
-export function invalidateAgentCache(): void { cache = null; }
+export function invalidateAgentCache(): void { cacheSlot().v = null; }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
 export const AVATAR_MIME_EXT: Record<string, string> = {

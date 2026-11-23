@@ -39,6 +39,8 @@ import { executeTool } from '../tools/registry.js';
 import { declaredApproval, declaredAutomationSafe } from '../tools/toolRegistry.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
 import { postMuseDm } from './museDm.js';
+import { AUTOMATION_COMPOSE_TIMEOUT_MS } from '../contracts/automationMessage.js';
+import { deliverAutomationMessage } from './automationMessage.js';
 import { backgroundClientTag } from '../core/version.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { ledger } from './telemetryLedger.js';
@@ -66,11 +68,14 @@ export interface AutomationSessionRow {
 }
 
 /** 全部自动化会话(≤MAX_TRIGGERS 条,量小;triggerId 过滤在 JS 里做——见头注释双方言说明)。 */
-export async function listAutomationSessions(triggerId?: string): Promise<AutomationSessionRow[]> {
+export const listAutomationSessions = (triggerId?: string): Promise<AutomationSessionRow[]> =>
+  listSessions('automation', triggerId);
+
+async function listSessions(kind: 'automation' | 'automation_draft', triggerId?: string): Promise<AutomationSessionRow[]> {
   const rows = await query<any[]>(
     `SELECT id, title, agent_config, created_at, updated_at FROM chat_sessions
-     WHERE user_id = ? AND kind = 'automation' ORDER BY updated_at DESC`,
-    [automationUserId()],
+     WHERE user_id = ? AND kind = ? ORDER BY updated_at DESC`,
+    [automationUserId(), kind],
   );
   const out: AutomationSessionRow[] = [];
   for (const r of rows || []) {
@@ -89,15 +94,15 @@ export async function listAutomationSessions(triggerId?: string): Promise<Automa
   return out;
 }
 
-async function ensureAutomationSession(triggerKey: string, agentSlug: string, title: string, modelId: string): Promise<string> {
-  const existing = await listAutomationSessions(triggerKey);
+async function ensureAutomationSession(triggerKey: string, agentSlug: string, title: string, modelId: string, kind: 'automation' | 'automation_draft' = 'automation'): Promise<string> {
+  const existing = await listSessions(kind, triggerKey);
   if (existing.length) return existing[0].id;
   const id = uuidv4();
   const agentConfig = JSON.stringify({ agentSlug, automationTriggerId: triggerKey });
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config)
-     VALUES (?, ?, ?, ?, ?, 'automation', ?)`,
-    [id, automationUserId(), deps().profile.appId, title.slice(0, 80), modelId, agentConfig],
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [id, automationUserId(), deps().profile.appId, title.slice(0, 80), modelId, kind, agentConfig],
   );
   return id;
 }
@@ -271,6 +276,7 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
   const steps: ExecStepRecord[] = [];
   const touched: TouchedDbs = {};
   let error: string | undefined;
+  let composeDeadline: number | undefined;
   for (const a of actions) {
     try {
       if (a.type === 'notify') {
@@ -294,6 +300,15 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
         steps.push({ type: 'remind', ok: r.ok, summary: r.ok ? `reminded: ${title}` : String(r.error || 'failed').slice(0, 300) });
         if (!r.ok) { error = r.error || 'remind failed'; break; }
         if (!dm.ok) log(`规则 ${t.id} 提醒写进私聊失败:${dm.error}`);
+      } else if (a.type === 'send_message') {
+        let draft: { sessionId: string; deadline: number } | undefined;
+        if (a.source === 'agent') {
+          composeDeadline ??= Date.now() + AUTOMATION_COMPOSE_TIMEOUT_MS;
+          const draftSessionId = await ensureAutomationSession(`draft:${t.id}:${a.agentSlug}`, a.agentSlug, t.desc, '', 'automation_draft');
+          draft = { sessionId: draftSessionId, deadline: composeDeadline };
+        }
+        const summary = await deliverAutomationMessage(a, t, userId, draft, tctx);
+        steps.push({ type: a.type, ok: true, summary });
       } else if (a.type === 'agent_run') {
         const ok = await launchUnattendedRun({ agentSlug: a.agentSlug, triggerKey: t.id, title: String(t.desc), message: automationMessage(t, a.prompt) });
         steps.push({ type: 'agent_run', ok, summary: ok ? `run started (${a.agentSlug})` : `agent "${a.agentSlug}" busy/unavailable` });
@@ -483,6 +498,7 @@ export function observedSteps(t: MuseTrigger, ctx?: TriggerContext): ExecStepRec
   }
   return t.actions.map((a) => {
     if (a.type === 'notify' || a.type === 'remind') return step(a.type, [fill(a.title), a.body ? fill(a.body) : ''].filter(Boolean).join(' · '));
+    if (a.type === 'send_message') return step(a.type, a.source === 'fixed' ? fill(a.body) : a.prompt, { target: `${a.agentSlug} → ${a.delivery}` });
     if (a.type === 'agent_run') return step(a.type, a.prompt, { target: a.agentSlug });
     if (a.type === 'tool_call') return step(a.type, JSON.stringify(a.args || {}), { tool: a.tool });
     return step(a.type, Object.entries(a.cells || {}).map(([k, v]) => `${k}: ${fill(String(v))}`).join(' · '), { target: a.path });
@@ -513,7 +529,7 @@ export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo 
   try {
     if (runnable.length && await anyUserRunActive()) {
       // 让位是为了不抢模型账号;直接提醒不叫模型,该响就响。
-      runnable = runnable.filter((h) => h.t.actions?.length && h.t.actions.every((a) => a.type === 'remind'));
+      runnable = runnable.filter((h) => h.t.actions?.length && h.t.actions.every((a) => a.type === 'remind' || a.type === 'send_message' && a.source === 'fixed'));
       if (!runnable.length) log('用户有进行中的 run,本轮让位');
     }
   } catch { runnable = []; }

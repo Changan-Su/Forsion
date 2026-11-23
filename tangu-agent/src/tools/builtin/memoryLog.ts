@@ -3,7 +3,7 @@
  * 经 deps().brain.memory 落云端(或 standalone 的 httpBrain)。
  */
 import { standInOf } from '../../services/accessDomain.js';
-import { deps } from '../../seams/runtime.js';
+import { deps, isConfigured } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { Tool } from '../../core/types.js';
 import type { ToolContext } from '../toolTypes.js';
@@ -15,7 +15,7 @@ import { mutatePortrait, PERSON_IS, portraitEntries, PortraitFullError, PORTRAIT
 import { HumanError, type HumanChangeSource, type HumanDocument } from '../../agents/humanStore.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
-import { APPLIES_TO, labelFor, tagOf, withTag } from '../../contracts/deviceTags.js';
+import { APPLIES_TO, filterTaggedText, labelFor, tagOf, withTag } from '../../contracts/deviceTags.js';
 import { runTagContext } from '../../services/deviceTagContext.js';
 import { countRemember, noteRetell } from '../../services/memoryTelemetry.js';
 import { splitMark, stripMark } from '../../contracts/entryMark.js';
@@ -118,7 +118,20 @@ export function personAllowed(ctx: ToolContext): boolean {
 /** 有没有工作笔记这个工具:本机引擎的 profile、本机直连(host)、不是 chat 面,且 profile 的内置工具名单里有它
  *  (manageHarness.isEnabledFor + preset 的 host 族整族拒 + toolLoadout.builtins)。
  *  ponytail: 照这几条近似,没去问注册表(定义求值期间再解析一遍工具表会绕回来);计划模式 / 子代理里它其实不在,那句多说了也只是多说。 */
+const cloudRemember: Tool = {
+  type: 'function',
+  function: {
+    name: 'remember',
+    description: REMEMBER_BASE.function.description.split('ACTIONS:')[0] +
+      'ACTIONS: add saves a durable fact; list reads the current memory text. This store provides no entry IDs.',
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['add', 'list'] },
+      fact: { type: ['string', 'null'], description: 'The durable fact to save, or null when reading.' },
+    }, required: ['action', 'fact'] },
+  },
+};
 function rememberDefinitionFor(ctx: ToolContext): Tool {
+  if (ctx.execMode === 'sandbox' && isConfigured() && !deps().brain?.memory?.getMemorySnapshot) return cloudRemember;
   const profile = ctx.profile ?? deps().profile;
   const builtins = profile?.toolLoadout?.builtins;
   const notes = ctx.execMode === 'host' && ctx.preset !== 'chat' && !!profile?.capabilities?.hostExec
@@ -312,7 +325,12 @@ export const memoryLogProvider: ToolProvider = {
         // 分身没有项目记忆(项目记忆按项目路径给这个项目里的所有 Agent,分身写进去本体就读得到)
         const projectRef = deps().profile.capabilities.hostExec && !standInOf(ctx) ? await resolveProjectMemory(ctx.userId, ctx.sessionId) : null;
         if (action === 'list') {
-          if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
+          if (!brain.getMemorySnapshot) {
+            if (ctx.execMode !== 'sandbox') return 'Error: this memory store does not support entry management.';
+            const memory = await brain.getMemory(ctx.userId, { signal: ctx.signal });
+            const content = filterTaggedText(memory.content, runTagContext(false)).text;
+            return JSON.stringify({ content, updatedAt: memory.updatedAt, supportedActions: ['list', 'add'] });
+          }
           const snapshot = await brain.getMemorySnapshot(ctx.userId);
           const project = projectRef ? await peekProjectMemory(projectRef) : null;
           // 项目记忆的详情(11-09 分层):每份一行(标题、几条、说明、文件位置),条目本身按这句话召回或整份读;常驻条目去掉行尾记号

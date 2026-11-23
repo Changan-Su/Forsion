@@ -38,6 +38,7 @@
  *    真要救它,得把 tuneOpenAiDirectPayload 在 hydrate 前对着空 payload 探一次,别在这里手抄一份 viaResponses 判据。 */
 import { createHash } from 'node:crypto';
 import type { ChatMessage, ToolCall } from '../core/types.js';
+import { expiredParkedText, inflightResultText, isInflightEntry, isLiveRow } from './runProgress.js';
 import { deps } from '../seams/runtime.js';
 import { capToolResult, capHistoryContent } from './contextBudget.js';
 
@@ -236,6 +237,28 @@ function toolResultText(call: ToolCall, results: Map<string, any>): string {
     ? capToolResult(text)
     : 'Tool outcome unknown: no result was saved. The call may have partially executed. Verify current state before retrying; do not assume success or repeat side effects blindly.';
 }
+/**
+ * 结果表 + 引擎被停时留下的占位(中断任务续跑方案 B · E3)。只对「所属 run 已经不在跑」的行改写;本进程正在边跑边落库的段
+ * (isLiveRow)里的在飞记录当缺结果(走上面那句通用的「结局不明」),挂起占位原样:
+ *  - inflight pending → 没开始:可以再跑;started + 只读(none / read)→ 断在半截、没有副作用:可以再跑;
+ *    started + 其余(含 unknown)→ 结局不明:先核对现场再决定(引擎绝不替模型重跑);
+ *  - 挂起占位(parked:托盘 run 里等批准 / 等回答的那条)→ 那次请求随 run 结束作废了,要做就重新调(会重新弹审批)。
+ * 升级前的行没有这些记录:缺项照旧用通用那句。
+ */
+function settledResults(rowId: string | undefined, entries: any[]): Map<string, any> {
+  const live = isLiveRow(rowId);
+  const out = new Map<string, any>();
+  for (const r of entries) {
+    if (!r || typeof r.tool_call_id !== 'string') continue;
+    if (isInflightEntry(r) && typeof r.content !== 'string') {
+      if (!live) out.set(r.tool_call_id, { ...r, content: inflightResultText(r.inflight) });
+      continue;
+    }
+    if (r.parked === true && !live) { out.set(r.tool_call_id, { ...r, content: expiredParkedText(String(r.name || '')) }); continue; }
+    out.set(r.tool_call_id, r);
+  }
+  return out;
+}
 /** 扁平形态的 tool 消息。键序**保持 B3 之前那样**(role, tool_call_id, content):直连
  *  chat-completions 时 compatWireMessages 可能原样透传本对象,键序会上 wire —— 退回扁平的行
  *  (旧行 / steer 拆段 / 毒化行 / thin worker)本就拿不到交错,别再顺手动它们的字节。
@@ -273,7 +296,7 @@ export function replayAssistantHistory(
   const calls = sanitizeCalls(row.tool_calls);
   const content = capHistoryContent(row.content || '');
   if (!calls.length) return content.trim() ? [{ role: 'assistant', content }] : [];
-  const results = new Map(array(row.tool_results).filter((r) => r && typeof r.tool_call_id === 'string').map((r) => [r.tool_call_id, r]));
+  const results = settledResults(row.id, array(row.tool_results));
   // Array.isArray:调用方可能是 rows.flatMap(replayAssistantHistory),第二个实参会是**下标**
   // (第三个则会是整个数组)—— 故 replayFor 也按 apiModelId 的类型认,不按「有没有传」认。
   const wantModel = typeof (replayFor as any)?.apiModelId === 'string' && (replayFor as any).apiModelId

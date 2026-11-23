@@ -3,14 +3,14 @@
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ArrowLeft, ChevronDown, LayoutGrid, MoreHorizontal, PanelLeft, PanelRight, Search, UserRound, X } from 'lucide-react'
 import {
-  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, nativeRailCells, useSpaceStore, useWideLayout,
+  dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, nativeRailCells, useSpaceStore, useWideLayout, PHONE_GLYPHS, PHONE_ME,
   UI_ZOOM_EVENT, type NativeChromeAction, type NativeChromeSpace, type NativeChromeState,
 } from '@lcl/engine'
 import { accountChip, subscribeAccountChip } from '@/services/accountChip'
 import { useApp } from '@/stores/appStore'
 import { useAttention } from '@/stores/attentionStore'
 import { useInbox } from '@/stores/inboxStore'
-import { spaceBadges } from './nativeChrome'
+import { dockBadges, spaceBadges, type DockBadgeKind } from './nativeChrome'
 import { installBrowserSheet, BrowserSheet } from './browserSheet'
 import './browserChrome.css'
 
@@ -60,11 +60,14 @@ function Action({ action, label, children }: { action: NativeChromeAction; label
   return <button className="bmc-button" data-chrome-action={action} aria-label={label} onClick={() => dispatchNativeChromeAction(action)}>{children}</button>
 }
 
-/** One Space cell of the dock / the rail: icon over name (the same cell Android draws in both). */
-function Destination({ sp, badge }: { sp: NativeChromeSpace; badge?: string }) {
-  const Icon = useSpaceStore((s) => s.spaces.find((x) => x.id === sp.id)?.icon)
+/** One Space cell of the dock / the rail: icon over name (the same cell Android draws in both). A phone's fixed dock (lcl
+ *  phoneDock.ts) names its own glyph for Chats / Apps / Me; `notice` = a launcher on that cell's page wants a look. */
+function Destination({ sp, badge }: { sp: NativeChromeSpace; badge?: { kind: DockBadgeKind; label?: string } }) {
+  const SpaceIcon = useSpaceStore((s) => s.spaces.find((x) => x.id === sp.id)?.icon)
+  const Icon = sp.glyph ? PHONE_GLYPHS[sp.glyph] : SpaceIcon
+  const said = badge ? (badge.kind === 'notice' ? badge.label ?? '' : useApp.getState().tr(`nativebar.badge.${badge.kind}`)) : ''
   return <button className="bmc-destination" data-space={sp.id} aria-current={sp.active ? 'page' : undefined} onClick={() => dispatchNativeChromeSpace(sp.id)}>
-    <span className="bmc-destination-icon">{Icon && <Icon size={22} />}{badge && <i className="bmc-badge" data-kind={badge} aria-label={useApp.getState().tr(`nativebar.badge.${badge}`)} />}</span>
+    <span className="bmc-destination-icon">{Icon && <Icon size={22} />}{badge && <i className="bmc-badge" data-kind={badge.kind} role="img" aria-label={said} />}</span>
     <span>{sp.label}</span>
   </button>
 }
@@ -77,6 +80,7 @@ export function BrowserChrome() {
   const chrome = useSyncExternalStore(subscribe, () => state)
   const account = useSyncExternalStore(subscribeAccountChip, accountChip)
   const badges = JSON.parse(useSyncExternalStore(subscribeBadges, badgeSnapshot)) as ReturnType<typeof spaceBadges>
+  const spaceIds = useSpaceStore((s) => s.spaces).map((x) => x.id)
   const topRef = useRef<HTMLElement>(null)
   const dockRef = useRef<HTMLElement>(null)
   const headingRef = useRef<HTMLDivElement>(null)
@@ -92,6 +96,9 @@ export function BrowserChrome() {
   const showDock = !wide && spaceBar
   const showAll = destinations.some((sp) => !sp.pinned)
   const atDetail = chrome.mode === 'shell' && chrome.leftBack
+  // A phone's fixed dock has a Me cell: the account is that page, so no avatar in the right capsule.
+  const meCell = destinations.some((sp) => sp.id === PHONE_ME)
+  const dots = dockBadges(destinations, badges, spaceIds)
   // As many cells as the rail's height holds (measured), past that the pinned ones first and a last cell for "all".
   const [railFit, setRailFit] = useState(Number.MAX_SAFE_INTEGER)
   const rail = nativeRailCells(destinations, railFit)
@@ -172,14 +179,14 @@ export function BrowserChrome() {
               {chrome.tabCount > 1 && <Action action="tabs" label={chrome.labels.tabs}><span className="mb-tabcount">{chrome.tabCount}</span></Action>}
               {/* On a phone "more" is the page's own menu: a page with nothing of its own sends `more: false`. */}
               {chrome.more !== false && <Action action="more" label={chrome.labels.more}><MoreHorizontal size={20} /></Action>}
-              {!atDetail && !showRail && account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
+              {!atDetail && !showRail && !meCell && account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>
                 {account.avatar ? <img src={account.avatar} alt="" /> : account.loggedIn ? account.initial : <UserRound size={20} />}
               </button>}
             </>}
         </div>
       </header>
       {showDock && chrome.mode === 'shell' && <nav ref={dockRef} className="bmc-dock" aria-label={chrome.allLabel}>
-        {dock.map((sp) => <Destination key={sp.id} sp={sp} badge={badges[sp.id]} />)}
+        {dock.map((sp) => <Destination key={sp.id} sp={sp} badge={dots[sp.id]} />)}
         {/* `allDot`: an entry of the all-Spaces sheet wants a look (something to claim, a reply) — the dot is on this cell. */}
         {showAll && <button className="bmc-destination" data-chrome-action="spacesAll" onClick={() => dispatchNativeChromeAction('spacesAll')}>
           <span className="bmc-destination-icon"><LayoutGrid size={22} />{chrome.allDot && <i className="bmc-badge" data-kind="unread" data-all-dot="" role="img" aria-label={chrome.allDot.label} />}</span>
@@ -188,7 +195,7 @@ export function BrowserChrome() {
       </nav>}
       {showRail && chrome.mode === 'shell' && <nav className="bmc-rail" aria-label={chrome.allLabel}>
         <div className="bmc-rail-cells" ref={railCellsRef}>
-          {rail.cells.map((sp) => <Destination key={sp.id} sp={sp} badge={badges[sp.id]} />)}
+          {rail.cells.map((sp) => <Destination key={sp.id} sp={sp} badge={dots[sp.id]} />)}
           {rail.more.length > 0 && <button className="bmc-destination" data-chrome-action="spacesAll" aria-current={rail.more.some((sp) => sp.active) ? 'page' : undefined} onClick={() => dispatchNativeChromeAction('spacesAll')}><LayoutGrid size={22} /><span>{chrome.allLabel}</span></button>}
         </div>
         {account && <button className="bmc-button bmc-account" aria-label={account.label} data-chrome-action="account" onClick={() => account.activate()}>

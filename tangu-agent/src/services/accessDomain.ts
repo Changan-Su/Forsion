@@ -21,6 +21,7 @@ import { canonicalFuturePath, pathWithin, withinForsionDomains } from '../sandbo
 import { currentStandIn, type StandInDomain } from '../seams/runContext.js';
 import { isLibraryMemoryRel, MEMORY_DETAIL_DIR } from '../contracts/memoryLayers.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
+import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 
 export type { StandInDomain };
 
@@ -144,6 +145,8 @@ function skillRoot(abs: string, dom: StandInDomain): boolean {
 
 /** 分身读这个路径:null = 可以;否则是给模型的拒绝原因(英文)。 */
 export function standInReadDenied(dom: StandInDomain | undefined, abs: string): string | null {
+  const acct = accountReadDenied(abs); // 多账号模式的账号域先于分身域:分身也出不了自己账号的文件夹
+  if (acct) return acct;
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
   if (insidePlain(abs, own)) return null;
@@ -161,6 +164,8 @@ export function standInReadDenied(dom: StandInDomain | undefined, abs: string): 
 
 /** 分身写这个路径:null = 可以(之后照常过 fsPolicy 的其余判定);否则是硬拒原因。只认自己的文件夹和工作目录,勾给它的 Library 文件只读。 */
 export function standInWriteDenied(dom: StandInDomain | undefined, abs: string): string | null {
+  const acct = accountWriteDenied(abs);
+  if (acct) return acct;
   if (!dom) return null;
   const own = path.join(agentsDir(), dom.slug);
   if (insidePlain(abs, own)) return null;
@@ -173,6 +178,8 @@ export function standInWriteDenied(dom: StandInDomain | undefined, abs: string):
 /** 搜索 / 列举的起点:起点本身读不了,或者起点底下包着读不了的那几片(本体与别的 Agent、human/、引擎 home、Forsion 家目录、笔记库),整次拒 ——
  *  搜索结果不逐条过读根,只能在起点上把住。 */
 export function standInSearchDenied(dom: StandInDomain | undefined, baseDir: string): string | null {
+  const acct = accountReadDenied(baseDir); // 搜索 / 列目录的起点也得在账号域里(结果不逐条过读根)
+  if (acct) return acct;
   if (!dom) return null;
   const direct = standInReadDenied(dom, baseDir);
   if (direct) return direct;
@@ -181,4 +188,46 @@ export function standInSearchDenied(dom: StandInDomain | undefined, baseDir: str
   const guarded = [agentsDir(), humanDir(), tanguHome(), vaultRoot()];
   if (guarded.some((g) => within(g, baseDir))) return `Access denied: searching ${baseDir} would reach folders this stand-in cannot read (other agents, the user's own files or notes). Search a narrower folder inside the working directory.`;
   return null;
+}
+
+// ── 多账号模式的账号域(core/accountScope.ts)─────────────────────────────────────────────
+// 每个 run / 请求隐含一个域:读写根 = 这个账号的文件夹(<engineRoot>/accounts/<id>),只读根 = 插件包目录、包内置技能。
+// 判定与分身同一套(真实路径落在不是软链的根里才放行;软链指出去的、根本身是软链的一律拒)。单人模式什么都不做。
+// ⚠️ 残余:判定与打开之间换链的竞态没有关上(与分身域同一条残余)。
+
+let readOnlyRootsOf: () => string[] = () => [];
+/** 只读根的来源(插件包目录;createMultiAccountApp 装配时登记)。 */
+export function setAccountReadOnlyRoots(fn: () => string[]): void { readOnlyRootsOf = fn; }
+
+/** 当前账号的文件夹;不在账号上下文里就抛(缺省拒绝)。 */
+export function currentAccountRoot(): string {
+  return accountHome(requireAccountId('file access'));
+}
+
+const packageAgentSkillsRoot = (): string => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent-skills');
+
+/** 账号读这个路径:null = 可以;否则是给模型的拒绝原因(英文)。 */
+export function accountReadDenied(abs: string): string | null {
+  if (!isMultiAccount()) return null;
+  const root = currentAccountRoot();
+  if (insidePlain(abs, root)) return null;
+  let ro: string[] = [];
+  try { ro = readOnlyRootsOf(); } catch { ro = []; } // 读不到只读根 = 不放行它们
+  if ([packageSkills(), packageAgentSkillsRoot(), ...ro].some((r) => typeof r === 'string' && path.isAbsolute(r) && insidePlain(abs, r))) return null;
+  return `Access denied: ${abs} is outside your account folder (${root}).`;
+}
+
+/** 账号写这个路径:null = 可以(之后照常过 fsPolicy 的其余判定);否则是硬拒原因。只认账号自己的文件夹。 */
+export function accountWriteDenied(abs: string): string | null {
+  if (!isMultiAccount()) return null;
+  const root = currentAccountRoot();
+  if (insidePlain(abs, root)) return null;
+  return `Access denied: you can only write inside your account folder (${root}); ${abs} is outside it.`;
+}
+
+/** 会话 / run 的工作目录(project_path、agent_config.cwd、额外工作文件夹):必须在账号文件夹里。null = 可以。 */
+export function accountCwdDenied(dir: unknown): string | null {
+  if (!isMultiAccount() || dir == null || dir === '') return null;
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return 'Working directories must be absolute paths inside your account folder.';
+  return accountWriteDenied(dir);
 }

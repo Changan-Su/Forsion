@@ -17,6 +17,7 @@
  * 缓存目录；exec 时把该目录只读挂到 /pkgs 并设 PYTHONPATH=/pkgs。共享缓存=每个包全局只装一次，
  * 后续 run 直接挂载零成本。安装容器默认 --only-binary（不跑 setup.py，杜绝装包期任意代码执行）。
  */
+import { hostSpawnDenied } from '../core/hostSpawn.js';
 import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import os from 'node:os';
@@ -180,6 +181,7 @@ async function touchLastUsed(): Promise<void> {
 /** 缓存总体积（字节）。优先用 du（快），失败回落 node 递归。 */
 function getCacheSizeBytes(): Promise<number> {
   return new Promise((resolve) => {
+    if (hostSpawnDenied('docker cache size')) { resolve(0); return; }
     execFile('du', ['-sb', PKG_DIR], { timeout: 8000 }, (err, stdout) => {
       if (!err && stdout) {
         const n = parseInt(String(stdout).split(/\s+/)[0], 10);

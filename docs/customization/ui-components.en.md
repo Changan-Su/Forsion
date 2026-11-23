@@ -49,6 +49,8 @@ Canonical types: `desktop/shared/chatBox.ts`.
 | `toolbar(el)` | A slot at the left of the bottom row, before the model pill. Put your own DOM in `el` and optionally return a cleanup function. The cleanup runs on dispose, and before remounting when update passes a different function. The host logs exceptions from either and the input keeps working. |
 | `suggest` | `{ trigger, items(query), mention? }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
 | `insertText(text)` | Handle method. Inserts at the caret, replaces any selection, and focuses the input. Use it for a "#" button or voice transcription. It doesn't open the menu; the menu opens when the user keeps typing. |
+| `mentions`, `onMention` | 2026-11-20+. Turns on the host's own `@` panel (the same one as in notes): `'date'` dates, `'page'` notes in the current vault. See "The @ panel" below. |
+| `format` | 2026-11-21+. `'inline'` / `'basic'`: the input shows formatting such as bold and lists, and the value is Markdown. See "Formatting: format" below. |
 
 The toolbar's `el` sits inside the host mount layer and doesn't get the plugin view base styles, so give buttons in it a class such as `.btn.sm`.
 
@@ -84,7 +86,56 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
-These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu, the `@` panel) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
+
+### The @ panel: mentions
+
+`mentions: ['date', 'page']` turns on the host's own `@` panel. It looks, behaves and is labelled like `@` in notes: dates on top (Today, Tomorrow, or whatever date the user types after `@`, such as `@11/28` or `@2200`), notes below. The array picks which sources are on; dates always come first.
+
+- Same trigger rule as notes: it opens when `@` follows the line start, whitespace or CJK text, and stays closed right after a letter or digit (e-mail addresses). The query stays on the line, has no whitespace or brackets, and is at most 30 characters. It doesn't open during IME composition, and after Esc the same `@` stays closed. Unlike `suggest`, the query may contain `/`, `:` and `.`.
+- What a pick inserts by default: a date as `@YYYY-MM-DD ` (with a time, `@YYYY-MM-DDTHH:mm `, the same date mark as in notes), a note as `[[Name]] ` (the path when the name isn't unique).
+- `onMention(m)` runs before the insert. `m` is `{ kind: 'date', value }` or `{ kind: 'page', path, link }`. Return `true` to handle it yourself (for example, make the date the due date): the host then only removes the typed `@query` and inserts nothing. Any other return value, or an exception, inserts the default text. It must return synchronously.
+- The panel has no "Remind me" or "No date" rows: those are note-line marks, and a Chat Box consumer has nowhere to keep them.
+- While `mentions` is on, a `suggest` entry whose trigger is `@` no longer applies; `#` and `[[` work as before.
+- Check `ctx.ui.chatBoxCapabilities?.includes('mentions')` first; older hosts ignore both options.
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  mentions: caps.includes('mentions') ? ['date', 'page'] : undefined,
+  onMention(m) {
+    if (m.kind === 'date') { setDue(m.value); return true } // the date becomes the due date, not part of the title
+  },
+  onSubmit: ({ text }) => addTask(text),
+})
+```
+
+### Formatting: format
+
+`format: 'inline'` or `'basic'` swaps the textarea for an editor that shows formatting (a trimmed-down version of the one in notes, with the same syntax and shortcuts). The text in `value`, `onChange` and `onSubmit` is then Markdown. Without it you get the plain textarea and plain text, as before.
+
+- `'inline'`: formatting within one line. Bold `**x**`, italic `*x*`, strikethrough `~~x~~`, inline code `` `x` `` and links `[x](url)`; shortcuts ⌘/Ctrl+B, I and E, and ⌘/Ctrl+Alt+X for strikethrough. It stays one line: with `submitOn: 'enter'`, Enter submits, Shift+Enter does nothing, and pasted lines are joined. Use it for titles, tasks and other one-line values.
+- `'basic'`: `inline` plus bullet, numbered and task lists, quotes and code blocks. Shift+Enter starts a new line; Enter in a list or code block works as in notes (a new item, or a new line inside the code block).
+- Neither has headings, tables, callouts, embeds, images, HTML or bare-URL links: `# Title`, `![img](x.png)` and `https://…` stay literal text.
+- Plain text is stored exactly as typed: `snake_case`, URLs, `5*3`, `1. Buy milk` and `# not a heading` come back without added backslashes. Only text that would otherwise turn into formatting keeps a `\` (a literal `**`, for example). A value without formatting therefore reads the same to older readers (older app versions, the Agent, the raw database). Leading and trailing whitespace isn't kept (Markdown doesn't read it): after a pick the space stays on screen but isn't in the `onChange` text.
+- `#`, `[[` and `@` suggestions and `insertText` work as before. `insertText` inserts literal text; it is not parsed as Markdown.
+- To show a stored value, use `ctx.ui.parseInlineMarkdown(md)`. It uses the same grammar as the input, is synchronous and never throws, and returns `{ text, strong?, em?, strike?, code?, href?, wiki?, from, to }[]`. A `[[Name|Alias]]` run carries `wiki` (as written) and its `text` is the display name. `from` / `to` are the run's own offsets in the source (inside any delimiters), so your own parsing of the source (reading a date out of a title, say) can skip formatted runs. For screen-reader labels, tooltips, notifications and sorting, use the plain reading: join every run's `text`. Check the scheme before opening an `href`.
+- Check `ctx.ui.chatBoxCapabilities?.includes('format')` first. Older hosts ignore `format` and have no `parseInlineMarkdown`; their input is a plain textarea that can't write formatting, so showing existing values as plain text is correct there. The phone doesn't report `'format'` for now either and ignores the option (the editor hasn't been verified with phone keyboards yet), but it has `parseInlineMarkdown`, so stored values still show formatted.
+- Set it at mount. `update({ format })` re-creates the input (the draft is kept, undo history is cleared).
+
+```js
+const caps = ctx.ui?.chatBoxCapabilities ?? []
+const formatted = caps.includes('format') && typeof ctx.ui?.parseInlineMarkdown === 'function'
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  format: formatted ? 'inline' : undefined,
+  onSubmit: ({ text }) => addTask(text), // text is Markdown, e.g. '**Important** send the report'
+})
+// Showing it: formatted ? draw ctx.ui.parseInlineMarkdown(title) run by run : title as is
+```
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
@@ -232,7 +283,7 @@ await ctx.ui.boardToSvg({ elements }, { theme, padding })
 
 ### The selection bar (2026-10-13)
 
-The strip that appears over selected text is the same one in chat, in notes and in every plugin view that opts in: the view's own tools plus three actions every view shares — **Ask Tangu** (hands the text to the side chat as a quote), **Translate** (the result opens in a card under the selection) and **⋯** (actions added by plugins). Which block comes first is the user's choice under Settings → Appearance → Selection menu; the view's own tools lead by default. The buttons are maintained in `@lcl/components` (`SelectionBar`, `SelectionBarActions`); chat and plugin views wire selections and actions through the app-level `components/selectionBar/ViewSelectionBar`, and the note formatting toolbar embeds the action area in its own row.
+The strip that appears over selected text is the same one in chat, in notes and in every plugin view that opts in: the view's own tools plus the actions every view shares — **Ask Tangu** (hands the text to the side chat as a quote), **Translate** (the result opens in a card under the selection) and **Read aloud** (2026-11-21+, on hosts where a read-aloud model can be set) — then a divider and up to three plugin actions placed on the bar, then **⋯** (the other plugin actions). Which block comes first is the user's choice under Settings → Appearance → Selection menu; the view's own tools lead by default. The buttons are maintained in `@lcl/components` (`SelectionBar`, `SelectionBarActions`); chat and plugin views wire selections and actions through the app-level `components/selectionBar/ViewSelectionBar`, and the note formatting toolbar embeds the action area in its own row.
 
 A plugin view opts in with `ctx.ui?.mountSelectionBar?.(root, opts)`. A view that never calls it gets no bar (the host does not listen for selections globally):
 
@@ -257,6 +308,8 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 - The bar adds nothing to `root` and does not take it over (it floats above the page), so it coexists with `mountFloatingToc` and other mounts. The handle has `show`, `hide`, `update(opts)` and `dispose()`; the host disposes it when the plugin is disabled or reloaded.
 
 Add actions with `ctx.registerSelectionAction`; they are listed under "⋯ → Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that has opted in, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user clicks, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only, listed under "AI ▾ → Plugins".
+
+Since 2026-11-21 a few more optional fields (older hosts ignore them). `placement: 'bar'` asks for a spot on the bar (the default `'more'` keeps it behind ⋯). It is only a default: the user's choice always wins and is remembered — the pin on each row in ⋯, right-click on a bar button ("Move to ⋯", "Manage selection menu…"), and the table under Settings → Appearance → Selection menu (Bar / ⋯ / Hidden, drag to reorder). At most three plugin actions sit on the bar; the rest go behind ⋯ in install order, and ⋯ says "N more did not fit · Manage". Core plugins stand with the host's actions before the divider and don't use those slots. `auto: true` only declares that the action **supports** running right after a selection: the switch lives in the result card head ("Run on select") and in the Settings table, per action, off by default, and a plugin cannot turn it on. Once on, a mouse selection that rests for 400 ms (1–2000 characters, not in inputs) opens the bar and the card together, `run` gets `cx.auto === true`, a new selection reruns the same card and aborts the previous request, and the same text in the same language is not requested twice in a session; with several switched on only the first in the user's order runs. Phones and notes don't run actions automatically. `card: { language, source, speak }` makes the host draw a target-language picker in the card head (its value reaches `run` as `cx.language`; it starts from a guess based on the selection, then the action's last pick), the original text (three lines, click to expand) and speaker buttons next to the original and the result. `title` takes a string, a function or `{ zh, en }`; the latter two follow a language switch. Older hosts take a string only and drop the whole action otherwise — gate with `minAppVersion`.
 
 ### The tool island (2026-11-04)
 

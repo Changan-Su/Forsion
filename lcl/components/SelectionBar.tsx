@@ -12,8 +12,17 @@ export interface SelectionBarAction {
   lead?: boolean
   title?: string
   testId?: string
+  /** Pressed state (a toggle that is on, read-aloud while it speaks): `aria-pressed` + the `.on` look. */
+  pressed?: boolean
+  /** Items behind ⋯ only: a pin on the right of the row. `on` = it would sit on the bar if there were room. */
+  pin?: { on: boolean; title: string; onToggle(): void }
+  /** Right-click / context-menu key on a bar button: the host opens its own menu (anchor = the button). */
+  onContextMenu?(anchor: HTMLElement): void
   onRun(): void
 }
+
+/** The line at the top of the ⋯ panel when some actions wanted the bar but had no room. */
+export interface SelectionBarMoreNotice { text: string; action: string; onRun(): void }
 
 /** A view's own tool: an icon button, a colour dot when `color` is set, icon + text when `label` is set. */
 export interface SelectionBarTool {
@@ -47,19 +56,71 @@ const Ellipsis = (): React.ReactElement => (
   </svg>
 )
 
-/** The shared action buttons, for hosts that draw their own toolbar row (the note editor). `more` adds the ⋯
- *  button; the host owns the panel it opens. */
-export function SelectionBarActions({ actions, more }: {
+const Pin = ({ on }: { on: boolean }): React.ReactElement => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill={on ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 17v5" /><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+  </svg>
+)
+
+const actionButton = (a: SelectionBarAction, group?: 'plugin'): React.ReactElement => (
+  <button key={a.id} type="button" className={`selbar-btn selbar-act${a.lead ? ' lead' : ''}${a.pressed ? ' on' : ''}`} data-act={a.id} data-group={group} data-testid={a.testId}
+    title={a.title} aria-pressed={a.pressed == null ? undefined : a.pressed} {...press(a.onRun)}
+    onContextMenu={a.onContextMenu ? (e) => { e.preventDefault(); e.stopPropagation(); a.onContextMenu!(e.currentTarget) } : undefined}>
+    {a.icon}{a.label}
+  </button>
+)
+
+/** The inside of the ⋯ panel: an optional "N more didn't fit · Manage" line, the host's own actions, then the plugin
+ *  actions under `heading`. Every row runs on mousedown like the bar buttons; a row with `pin` gets a pin button on
+ *  the right that toggles without running the action. The host draws the panel around it. */
+export function SelectionBarMoreList({ host, plugins, heading, notice, onPicked, itemClass = 'selbar-menu-item' }: {
+  host?: SelectionBarAction[]
+  plugins: SelectionBarAction[]
+  heading?: string
+  notice?: SelectionBarMoreNotice
+  /** Called before an item runs (close the panel). */
+  onPicked(): void
+  itemClass?: string
+}): React.ReactElement {
+  const row = (item: SelectionBarAction): React.ReactElement => (
+    <div key={item.id} className="selbar-more-row" data-ai-row={item.id}>
+      <button type="button" className={itemClass} role="menuitem" tabIndex={-1} data-ai={item.id} title={item.title} {...press(() => { onPicked(); item.onRun() })}>
+        {item.icon}<span>{item.label}</span>
+      </button>
+      {item.pin && (
+        <button type="button" className={`selbar-pin${item.pin.on ? ' on' : ''}`} tabIndex={-1} data-pin={item.id} title={item.pin.title} aria-label={item.pin.title} aria-pressed={item.pin.on}
+          {...press(() => item.pin!.onToggle())}>
+          <Pin on={item.pin.on} />
+        </button>
+      )}
+    </div>
+  )
+  return (
+    <>
+      {notice && (
+        <div className="selbar-notice" data-testid="selbar-overflow">
+          <span>{notice.text}</span>
+          <button type="button" className="selbar-notice-act" tabIndex={-1} data-act="manage" {...press(() => { onPicked(); notice.onRun() })}>{notice.action}</button>
+        </div>
+      )}
+      {host?.map(row)}
+      {heading && plugins.length > 0 && <div className="selbar-head">{heading}</div>}
+      {plugins.map(row)}
+    </>
+  )
+}
+
+/** The shared action buttons, for hosts that draw their own toolbar row (the note editor). `plugins` sit after a
+ *  divider (plugin actions placed on the bar); `more` adds the ⋯ button; the host owns the panel it opens. */
+export function SelectionBarActions({ actions, plugins, more }: {
   actions: SelectionBarAction[]
+  plugins?: SelectionBarAction[]
   more?: { label: string; open: boolean; onToggle(byKeyboard: boolean): void }
 }): React.ReactElement {
   return (
     <>
-      {actions.map((a) => (
-        <button key={a.id} type="button" className={`selbar-btn selbar-act${a.lead ? ' lead' : ''}`} data-act={a.id} data-testid={a.testId} title={a.title} {...press(a.onRun)}>
-          {a.icon}{a.label}
-        </button>
-      ))}
+      {actions.map((a) => actionButton(a))}
+      {!!plugins?.length && <>{actions.length > 0 && <span className="selbar-sep" data-sep="plugins" />}{plugins.map((a) => actionButton(a, 'plugin'))}</>}
       {more && (
         <button
           type="button"
@@ -86,7 +147,8 @@ function onNav(e: ReactKeyboardEvent<HTMLDivElement>): void {
   const inPanel = box.classList.contains('selbar-panel')
   const keys = inPanel ? ['ArrowDown', 'ArrowUp', 'Home', 'End'] : ['ArrowRight', 'ArrowLeft', 'Home', 'End']
   if (!keys.includes(e.key)) return
-  const btns = [...box.querySelectorAll<HTMLElement>('button')]
+  // ⋯ 面板里:每行的钉不进方向键序(鼠标点;键盘用户在设置的管理表里改)
+  const btns = [...box.querySelectorAll<HTMLElement>(inPanel ? '[role="menuitem"], .selbar-notice-act' : 'button')]
   const i = btns.indexOf(document.activeElement as HTMLElement)
   const fwd = e.key === 'ArrowRight' || e.key === 'ArrowDown'
   const next = e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : i < 0 ? 0 : (i + (fwd ? 1 : -1) + btns.length) % btns.length
@@ -97,11 +159,16 @@ function onNav(e: ReactKeyboardEvent<HTMLDivElement>): void {
 
 /** The inside of a selection bar: one row (tools and actions, a divider between them) and the ⋯ panel under it.
  *  Put it in a positioned element carrying the `selbar` class; that element is the shell. */
-export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, order = 'tools', onClose }: {
+export function SelectionBar({ tools, actions, plugins, more, moreHost, moreNotice, moreHeading, moreLabel, order = 'tools', onClose }: {
   tools?: SelectionBarTool[]
   actions: SelectionBarAction[]
-  /** What ⋯ holds. Empty or absent: no ⋯ button. */
+  /** Plugin actions placed on the bar: after the shared actions, a divider between. */
+  plugins?: SelectionBarAction[]
+  /** Plugin actions behind ⋯ (under `moreHeading`). Empty or absent (and no `moreHost`): no ⋯ button. */
   more?: SelectionBarAction[]
+  /** The host's own actions the user moved into ⋯ (above the plugins, no heading). */
+  moreHost?: SelectionBarAction[]
+  moreNotice?: SelectionBarMoreNotice
   moreHeading?: string
   moreLabel: string
   order?: SelectionBarOrder
@@ -136,10 +203,10 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
   useEffect(() => {
     if (!open || !byKey.current) return
     byKey.current = false
-    panelRef.current?.querySelector<HTMLElement>('button')?.focus()
+    panelRef.current?.querySelector<HTMLElement>('[role="menuitem"], .selbar-notice-act')?.focus()
   }, [open])
 
-  const hasMore = !!more?.length
+  const hasMore = !!more?.length || !!moreHost?.length
   const toolEls = tools?.length ? tools.map((t) => {
     const menuKey = (e: ReactKeyboardEvent<HTMLButtonElement>): void => {
       if (!t.menu || e.key !== 'ArrowRight') return
@@ -164,10 +231,11 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
   const actionEls = (
     <SelectionBarActions
       actions={actions}
+      plugins={plugins}
       more={hasMore ? { label: moreLabel, open, onToggle: (k) => { byKey.current = k && !open; setOpen(!open) } } : undefined}
     />
   )
-  const sep = toolEls && (actions.length > 0 || hasMore) ? <span className="selbar-sep" /> : null
+  const sep = toolEls && (actions.length > 0 || !!plugins?.length || hasMore) ? <span className="selbar-sep" /> : null
 
   return (
     <>
@@ -176,12 +244,7 @@ export function SelectionBar({ tools, actions, more, moreHeading, moreLabel, ord
       </div>
       {open && hasMore && (
         <div className="selbar-panel" role="menu" aria-label={moreLabel} data-testid="selbar-more" ref={panelRef} onKeyDown={onNav} data-motion="enter">
-          {moreHeading && <div className="selbar-head">{moreHeading}</div>}
-          {more!.map((item) => (
-            <button key={item.id} type="button" className="selbar-menu-item" role="menuitem" tabIndex={-1} data-ai={item.id} title={item.title} {...press(() => { setOpen(false); item.onRun() })}>
-              {item.icon}<span>{item.label}</span>
-            </button>
-          ))}
+          <SelectionBarMoreList host={moreHost} plugins={more ?? []} heading={moreHeading} notice={moreNotice} onPicked={() => setOpen(false)} />
         </div>
       )}
     </>

@@ -1,4 +1,5 @@
 /** Local execution policy. The engine stays trusted; model-driven processes enter an OS sandbox. */
+import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { existsSync, realpathSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
@@ -169,6 +170,7 @@ function bubblewrapArgs(roots: string[], scratch: string, cwd: string, network: 
   return args;
 }
 export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: SpawnOptions = {}, extraEnv: Record<string, string> = {}): ChildProcess {
+  assertHostSpawnAllowed('host command'); // 多账号模式一律拒(core/hostSpawn.ts)
   const command = prepareHostCommand(ctx, argv);
   if (Object.keys(extraEnv).length) command.options = { ...command.options, env: { ...(command.options.env || {}), ...extraEnv } };
   try {
@@ -184,6 +186,7 @@ export function spawnHostCommand(ctx: HostExecContext, argv: string[], options: 
  *  Windows 不 detached + windowsHide,两个必须成对:detached 是 DETACHED_PROCESS,cmd.exe 没有控制台,它起的 python.exe
  *  等控制台程序就各自弹一个可见窗口,而单加 windowsHide(CREATE_NO_WINDOW)与它同用时被系统忽略。win32 的终止本来就不靠进程组。 */
 export function spawnHostShell(ctx: HostExecContext, command: string, opts: { runSecrets?: boolean } = {}): ChildProcess {
+  assertHostSpawnAllowed('host shell');
   // 本 run 的秘密变量(runSecretEnv.ts):只给本机 run 的 run_bash(调用方显式要)—— run_background 不给:
   // 后台进程活得比 run 久、输出走 read_process_output 不经打码。远程污点(含 steer 染色)一律不给。
   const secrets = opts.runSecrets && !effectiveRemote(ctx) ? runSecretEnv(ctx) : {};

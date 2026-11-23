@@ -110,6 +110,17 @@ async function gate(c: any, ctx: Record<string, unknown>, answer: ApprovalAction
 }
 
 describe('① controlPlaneCall 分类', () => {
+  it('approves the chosen sender, destination and message text together', () => {
+    const args = {
+      action: 'set', desc: 'Solo delivery', cond_type: 'daily_at', time: '09:00',
+      actions: [{ type: 'send_message', agentSlug: 'writer', delivery: 'solo', source: 'fixed', body: 'Ready to review?' }],
+    };
+    expect(controlPlaneCall('manage_automation', args)).toBe(true);
+    expect(approvalPreview(call('manage_automation', args))).toContain('send_message as "writer" → solo (fixed): Ready to review?');
+    // Muse’s limited cycle only proposes the rule in a confirmation card.
+    expect(controlPlaneCall('manage_automation', args, { museCycle: true })).toBe(false);
+  });
+
   it('manage_automation:含 agent_run / tool_call / 旧式 agent 简写的启用规则是控制面;其余免批', () => {
     const yes: Record<string, unknown>[] = [
       AUTO_AGENT_RUN,

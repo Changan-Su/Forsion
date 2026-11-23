@@ -78,6 +78,9 @@ export interface FinalizeMessageInput {
   agentSlug?: string;
   /** 消息来由(chat_messages.origin,≤24 字符):'fallback:quota' = 这一轮额度用完改用了后备模型(modelId 即实际模型)。 */
   origin?: string;
+  /** 这一行先被进度写(persistAssistantProgress)插过、这是它第一次正式落库:时间戳改成这次的(与没有进度写时逐字相同)。
+   *  只有本机 SQL 存储会收到(云端 worker 不做进度写)。 */
+  restamp?: boolean;
 }
 
 /** 重启自愈看到的在飞 run:owner = 持有它的本机引擎进程 `<pid>:<启动时刻秒>`(NULL = 不知道;见 services/runOwner.ts)。 */
@@ -129,6 +132,9 @@ export interface StateStore {
   drain(runId: string): Promise<void>;
   /** SSE 回放(seq>fromSeq)。仅服务端用;worker 不调。 */
   listEventsFrom(runId: string, fromSeq: number): Promise<AgentEvent[]>;
+  /** 可选:删掉这个 run 已落库的流式正文帧(token / reasoning)。被安全审核拦下的 run 收尾时用,原文不留在续播录像里
+   *  (contracts/safetyStop.ts)。worker(HttpStateStore)不实现:云端靠服务端 7 天的保留期清掉。 */
+  purgeStreamFrames?(runId: string): Promise<void>;
 
   // ── messages（会话历史）──
   countSessionMessages(sessionId: string): Promise<number>;
@@ -147,6 +153,19 @@ export interface StateStore {
    *  返回是否真改了。可选:没实现的存储(云端 http)就不改正,只影响显示。 */
   correctUserMessage?(m: { id: string; sessionId: string; content: string }): Promise<boolean>;
   finalizeAssistantMessage(m: FinalizeMessageInput): Promise<void>;
+  /** 边跑边落库(中断任务续跑方案 B · E2):在工具边界把这一轮当前助手段写进 chat_messages,引擎崩了下次也看得到做到哪了。
+   *  与 finalize 的差别:不动 display_files 里已有的(没给就留着,图片交付回执在里面)、不刷会话 updated_at、插入后不改时间戳;
+   *  顺带刷新 run 行的 updated_at(恢复按它算「多久之前停的」)。可选:只有本机 SQL 存储实现,云端 worker 没有 = 不做进度写。 */
+  persistAssistantProgress?(m: FinalizeMessageInput & { runId: string }): Promise<void>;
+  /** 已落库段的工具结果按调用 id 原地换掉(挂起审批切段后的「开始执行」/ 兑现回填,评审 #13):只动 tool_results 这一列,
+   *  不碰 origin / model_id / 正文 / 时间戳。返回是否写上了(行不在 = false)。可选:只有本机 SQL 存储实现。 */
+  patchToolResults?(messageId: string, entries: any[]): Promise<boolean>;
+  /** 终稿助手行 + run 记 done 同一事务提交(评审 #5):进程死在两次提交之间,完整终稿已在历史里、run 却还是 running,
+   *  下次启动会再续一轮。可选:只有本机 SQL 存储实现;没有事务的库逐条写。 */
+  completeRun?(m: FinalizeMessageInput, done: { runId: string; result: any; tokensTotal?: number }): Promise<void>;
+  /** 执行入口原子认领 queued → running(评审 #1):返回 false = 这一行已经不是 queued(别处在跑 / 已终态),不许再执行。
+   *  可选:云端 worker 没有 = 照旧直接记 running。 */
+  claimRunStart?(runId: string): Promise<boolean>;
   hasImageDelivery?(userId: string, sessionId: string, delivery: { id: string; receipt: string }): Promise<boolean>;
 
   // ── sessions ──

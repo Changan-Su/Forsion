@@ -341,6 +341,15 @@ describe('compatWireMessages(providerItems 无条件剥除)', () => {
 describe('streamOpenAiCompat(usage 解析 / wire 面)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([false, true])('recognizes premature EOF when DONE is absent (DONE=%s)', async (done) => {
+    const text = 'data: {"choices":[{"delta":{"content":"Your train departs at"}}]}\n\n' + (done ? 'data: [DONE]\n\n' : '');
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(text)));
+    const result = await streamOpenAiCompat({
+      apiKey: 'k', baseUrl: 'https://api.openai.com/v1', payload: { model: 'gpt-5.6-luna', messages: [] },
+    });
+    expect(result.streamEndedEarly).toBe(done ? undefined : true);
+  });
+
   const sse = (usage: any): string =>
     `data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' }, finish_reason: 'stop' }] })}\n` +
     `data: ${JSON.stringify({ choices: [], usage })}\n`;

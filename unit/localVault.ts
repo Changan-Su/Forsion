@@ -98,7 +98,7 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
     rememberPage: async (page) => { await writeState('last-page.json', JSON.stringify(page)); lastPage = page },
     notifyAll: emit,
   })
-  handle(IPC.restoreVault, async () => ({ root, pages: await vault.listPages(), folders: await vault.listFolders(), lastPage }))
+  handle(IPC.restoreVault, async () => ({ root, pages: await vault.listPages(), folders: await vault.listFolders(), lastPage, strictExistingWrites: true }))
   // Choosing another directory is an owner configuration operation, never a remote dialog.
   handle(IPC.openVault, async () => null)
   const pluginFile = (id: string): string => {

@@ -629,9 +629,22 @@ const tabCountText = (list) => {
   const nav = "document.querySelector('.mb-shell')?.dataset.nav || ''"
   /** Show the left panel: a two-level Space's list (from its detail page: the back arrow) or a drawer Space's drawer.
    *  A Space without a left panel (Home) has neither: use Tangu's list. */
+  /** The Apps / Me page covers the Space it was opened over (a row there — settings, the Unit switcher — returns to it):
+   *  tap that Space (its dock cell, or its tile on Apps) to be on it again, with nothing on top. */
+  async function leavePhonePage() {
+    if (!(await cdp.eval(anyPhonePage))) return
+    await tapSpace(await cdp.eval("document.querySelector('.mb-shell').dataset.space"))
+    assert.ok(await h.waitPage(cdp, `!(${anyPhonePage})`, 5000), 'the Apps / Me page did not close')
+    await h.pause(500)
+  }
   async function openDrawer() {
+    await leavePhonePage()
     if (await cdp.eval(drawerOpen)) return
-    if (!h.byId(ui(), 'nativeChrome.left')) { await toSpace('tangu'); return }
+    if (!h.byId(ui(), 'nativeChrome.left')) {
+      // toSpace goes through here from a detail page: without the bar's back key there it would call back into this forever
+      assert.notEqual(await cdp.eval(nav), 'detail', 'a detail page without the native back key: cannot get back to the list')
+      await toSpace('tangu'); return
+    }
     await tapId('nativeChrome.left')
     assert.ok(await h.waitPage(cdp, drawerOpen, 5000), 'drawer did not open')
     await h.pause(500)
@@ -639,6 +652,7 @@ const tabCountText = (list) => {
   /** Leave the left panel. On a two-level Space that means entering its main page — through the tabs sheet when there
    *  is one (two or more tabs), which needs no particular list item; on a drawer Space system back closes the drawer. */
   async function closeDrawer() {
+    await leavePhonePage()
     if (!(await cdp.eval(drawerOpen))) return
     if ((await cdp.eval(nav)) === 'list') {
       if (h.byId(ui(), 'nativeChrome.tabs')) {
@@ -657,36 +671,62 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!(${drawerOpen})`, 5000), 'drawer stayed open')
     await h.pause(500)
   }
-  /** No row at the foot of the left panel under the native bottom bar. The account is the avatar at the end of the top
-   *  bar (first-level pages only) and its menu carries settings and the Unit switcher (2026-10-05, like WeChat's
-   *  "Me → Settings"; they led the ⋯ sheet for one day). From a detail page go back to the Space's list first. */
-  async function accountItem(id) {
-    if (!h.byId(ui(), 'nativeChrome.account')) await openDrawer()
-    await tapId('nativeChrome.account')
-    await tapId(`nativeSheet.item.${id}`, await waitSheet(true))
-    await waitSheet(false)
+  /** A phone's dock is five fixed cells since 2026-11-19 (Home · Chats · Notes · Apps · Me, lcl phoneDock.ts): the last two
+   *  open whole pages drawn by the WebView (`.mb-phonepage[data-phone-page]`, mobile/src/phonePages.tsx). What the avatar
+   *  menu held (account, settings, the Unit switcher, theme, command panel) is on Me; the store and the other launchers
+   *  on Apps, achievements / events / feedback on Me. The dock is on first-level pages only: from a detail page go back
+   *  to the Space's list first. */
+  const phonePageOpen = (which) => `!!document.querySelector('.mb-phonepage[data-phone-page="${which}"]')`
+  const anyPhonePage = "!!document.querySelector('.mb-phonepage')"
+  async function openPhonePage(which) {
+    if ((await cdp.eval(nav)) === 'detail') await openDrawer()
+    if (await cdp.eval(phonePageOpen(which))) return
+    const cell = h.byId(await waitDock(), `nativeChrome.space.@${which}`)
+    assert.ok(cell, `the dock has no "${which}" cell (${dockCells(ui()).map(idOfCell)})`)
+    h.tapNode(cell)
+    assert.ok(await h.waitPage(cdp, phonePageOpen(which), 5000), `the ${which} page did not open`)
+    await h.pause(500)
   }
-  /** The shell's own bar is up again (a page's bar is gone): no page back, and the avatar (first level) or the left
+  const pageRowExpr = (id) => `document.querySelector('.mb-phonepage [data-row=${JSON.stringify(id)}]')`
+  const pageRows = () => cdp.eval("JSON.stringify([...document.querySelectorAll('.mb-phonepage [data-row]')].map((r) => r.dataset.row))")
+  /** Tap a row of the Apps / Me page (its account rows arrive a moment after the page: the quota is asked for). */
+  async function pageItem(which, id) {
+    await openPhonePage(which)
+    assert.ok(await h.waitPage(cdp, `!!${pageRowExpr(id)}`, 6000), `no "${id}" row on the ${which} page (${await pageRows()})`)
+    await tapEl(pageRowExpr(id))
+  }
+  /** What the avatar menu held: a row of the Me page. */
+  const accountItem = (id) => pageItem('me', id)
+  /** The shell's own bar is up again (a page's bar is gone): no page back, and the dock (first level) or the left
    *  button (detail). On a phone ⋯ is no anchor any more: it holds only the page's own things and a first-level page
    *  has none (2026-11-18), so it is not drawn there. */
-  const shellBar = (l) => !!h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.back') && !!(h.byId(l, 'nativeChrome.account') || h.byId(l, 'nativeChrome.left'))
+  const shellBar = (l) => !!h.byId(l, 'nativeChrome.bar') && !h.byId(l, 'nativeChrome.back') && !!(h.byId(l, 'nativeChrome.dock') || h.byId(l, 'nativeChrome.account') || h.byId(l, 'nativeChrome.left'))
   const shellBack = async (what = 'shell bar did not return') => assert.ok((await h.waitNodes((l) => (shellBar(l) ? l : null), { timeout: 5000 })).hit, what)
-  /** Avatar → command panel (on a phone it moved there from ⋯ with the theme switch, 2026-11-18). */
+  /** Me → command panel (on a phone it left ⋯ with the theme switch for the avatar menu, 2026-11-18; that menu is the Me page since 11-19). */
   async function openPalette() {
     await accountItem('rb-cmd')
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.cmd-input')", 5000), 'the command panel did not open')
   }
+  /** The command panel's field, ready to type into. Opened from a row of the Me page (a WebView tap) the field takes the
+   *  focus at once and the keyboard comes up straight away, moving the panel while it rises: a tap measured before it
+   *  settles lands on a command row and runs it. So wait for the keyboard; tap only when the field does not have it. */
+  async function focusPaletteInput() {
+    for (let i = 0; i < 15 && !imeShown(); i++) await h.pause(200)
+    await h.pause(500)
+    if (!imeShown() || !(await cdp.eval("document.activeElement === document.querySelector('.cmd-input')"))) await tapEl("document.querySelector('.cmd-input')")
+    await h.pause(500)
+  }
   /** Command panel → the first row whose text includes `match` (typed: `query`, ASCII). */
   async function paletteRun(query, match) {
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', query.replace(/ /g, '%s'))
     const row = `[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes(${JSON.stringify(match)}))`
-    assert.ok(await h.waitPage(cdp, `!!${row}`, 5000), `the command panel does not list "${match}" (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).slice(0, 8))")})`)
+    assert.ok(await h.waitPage(cdp, `!!${row}`, 5000), `the command panel does not list "${match}" (${await cdp.eval("JSON.stringify([...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).slice(0, 8))")}; panel ${await cdp.eval("JSON.stringify({ open: !!document.querySelector('.cmd-input'), value: document.querySelector('.cmd-input')?.value ?? null, focus: document.activeElement?.className || document.activeElement?.tagName, page: document.querySelector('.mb-phonepage')?.dataset.phonePage || null, space: document.querySelector('.mb-shell')?.dataset.space })")})`)
     if (imeShown()) { h.key(4); await h.pause(600) }
     await tapEl(row)
   }
-  /** The dock's Space cells from left to right (its last cell, "all", is `nativeChrome.spacesAll`). */
+  /** The dock's cells from left to right (a phone: home, tangu, amadeus, @apps, @me; a rail / an older build: Spaces + `nativeChrome.spacesAll`). */
   const dockCells = (list) => h.byIdPrefix(list, 'nativeChrome.space.').sort((a, b) => a.rect.left - b.rect.left)
   const idOfCell = (n) => n['resource-id'].slice('nativeChrome.space.'.length)
   /** Marked as the one you are in / the one that is on. A tab reports `selected`; any other role reports the same state as `checked`. */
@@ -706,32 +746,33 @@ const tabCountText = (list) => {
     h.tapNode(all)
     return waitSheet(true)
   }
-  /** The launchers that left ⋯ on a phone (store, achievements, feedback…) are the last group of that sheet, `go:<ribbon id>`. */
+  /** The launchers that left ⋯ on a phone: the store and the rest on the Apps page; achievements, events, feedback on Me. */
   async function allItem(id) {
-    if ((await cdp.eval(nav)) === 'detail') await openDrawer()
-    const list = await openAllSpaces()
-    await tapId(`nativeSheet.item.go:${id}`, list)
-    await waitSheet(false)
+    await openPhonePage('apps')
+    await pageItem((await cdp.eval(`!!${pageRowExpr(id)}`)) ? 'apps' : 'me', id)
   }
-  /** Ids of every Space, the dock's first (list order), then the ones behind "all". Leaves the screen as it was. */
+  /** The Apps page's Spaces in the order drawn: the frequent row, then the rest. */
+  const appsTiles = () => cdp.eval("[...document.querySelectorAll('.mb-phonepage .pp-tile')].map((t) => t.dataset.space)")
+  /** Ids of every Space, the dock's first (list order), then the Apps page's. Ends on Home when it had to open that page. */
   async function allSpaceIds() {
     const list = await waitDock()
-    const inDock = dockCells(list).map(idOfCell)
-    if (!h.byId(list, 'nativeChrome.spacesAll')) return inDock
-    const tiles = h.byIdPrefix(await openAllSpaces(), 'nativeSheet.item.space:').sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left)
-    h.key(4)
-    await waitSheet(false)
-    const ids = tiles.map((n) => n['resource-id'].slice('nativeSheet.item.space:'.length))
+    const inDock = dockCells(list).map(idOfCell).filter((id) => !id.startsWith('@'))
+    if (!h.byId(list, 'nativeChrome.space.@apps')) return inDock
+    await openPhonePage('apps')
+    const ids = await appsTiles()
+    h.key(4) // back on the Apps page = Home
+    assert.ok(await h.waitPage(cdp, `!(${anyPhonePage})`, 5000), 'system back left the Apps page open')
+    await h.pause(400)
     return [...inDock, ...ids.filter((id) => !inDock.includes(id))]
   }
-  /** Tap a Space: its cell in the dock, or — when the dock does not hold it — its tile in the sheet behind "all". */
+  /** Tap a Space: its cell in the dock, or — when the dock does not hold it — its tile on the Apps page. */
   async function tapSpace(id) {
     const cell = h.byId(await waitDock(), `nativeChrome.space.${id}`)
     if (cell) { h.tapNode(cell); return }
-    const tile = h.byId(await openAllSpaces(), `nativeSheet.item.space:${id}`)
-    assert.ok(tile, `Space "${id}" is neither in the native dock nor behind its "all" cell`)
-    h.tapNode(tile)
-    await waitSheet(false)
+    await openPhonePage('apps')
+    const tile = `document.querySelector('.mb-phonepage .pp-tile[data-space=${JSON.stringify(id)}]')`
+    assert.ok(await cdp.eval(`!!${tile}`), `Space "${id}" is neither in the native dock nor on the Apps page`)
+    await tapEl(tile)
   }
   /** Which Spaces stand in the dock is the user's choice, kept on the device: `picks` = ids besides Home, null = as shipped.
    *  The bar is sent again on the next shell change — a Space switch does it. */
@@ -741,7 +782,7 @@ const tabCountText = (list) => {
     // The bottom bar exists on a Space's first level only: from a detail page go back to the list first.
     if ((await cdp.eval(nav)) === 'detail') await openDrawer()
     // The shell mirrors the active Space on `.mb-shell[data-space]`.
-    const active = `document.querySelector('.mb-shell')?.dataset.space === ${JSON.stringify(id)}`
+    const active = `document.querySelector('.mb-shell')?.dataset.space === ${JSON.stringify(id)} && !(${anyPhonePage})`
     if (!(await cdp.eval(active))) {
       await tapSpace(id)
       assert.ok(await h.waitPage(cdp, active, 6000), `Space "${id}" did not become active`)
@@ -779,7 +820,8 @@ const tabCountText = (list) => {
   }
   const sheetItem = (id) => (l) => h.byId(l, `nativeSheet.item.${id}`)
   const dangerKey = "document.querySelector('.model-pill-wrap').classList.contains('is-danger')"
-  const homeShown = "!!document.querySelector('.hp-root .hp-cards')"
+  // Home on a phone: no cards since 2026-11-19 (Continue instead, and nothing at all when there is nothing to continue)
+  const homeShown = "document.querySelector('.mb-shell')?.dataset.space === 'home' && !document.querySelector('.mb-phonepage') && !!document.querySelector('.hp-root .hp-greet')"
   async function goHome() {
     if (await cdp.eval(homeShown)) return
     await toSpace('home')
@@ -830,12 +872,19 @@ const tabCountText = (list) => {
   const sameRect = (a, b, tol = 2) => near(a.left, b.left, tol) && near(a.top, b.top, tol) && near(a.right, b.right, tol) && near(a.bottom, b.bottom, tol)
   const fmt = (r) => `[${r.left},${r.top}][${r.right},${r.bottom}]`
   const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
-  /** Closes every notification card on screen (an error card stays until it is closed). */
-  const closeCards = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+  /** Closes every notification on screen (an error one stays until it is closed): the page's cards, and the phone's native
+   *  banner (2026-11-15), which sits over the capsule row — a tap meant for a capsule lands on it while it is up. */
+  const closeCards = async () => {
+    await cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    for (let i = 0; i < 8; i++) { const x = h.byId(ui(), 'nativeBanner.close'); if (!x) break; h.tapNode(x); await h.pause(600) }
+    return true
+  }
 
   await check('native top bar replaces the web .mb-topbar (zh, light)', async () => {
     const list = ui()
-    for (const id of ['nativeChrome.bar', 'nativeChrome.account', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
+    for (const id of ['nativeChrome.bar', 'nativeChrome.title']) assert.ok(h.byId(list, id), `missing ${id}`)
+    // a phone: Me is the dock's last cell, no avatar at the top (2026-11-19)
+    if (h.byId(list, 'nativeChrome.dock')) assert.ok(h.byId(list, 'nativeChrome.space.@me') && !h.byId(list, 'nativeChrome.account'), `Me is not a dock cell (${dockCells(list).map(idOfCell)}), or an avatar is still at the top`)
     // a first-level page has no ⋯ on a phone (2026-11-18: ⋯ holds only the page's own things)
     if (h.byId(list, 'nativeChrome.dock')) assert.ok(!h.byId(list, 'nativeChrome.more'), 'a ⋯ on a first-level page')
     // the count button is there with two or more tabs only (the tabs check below walks both states)
@@ -1174,38 +1223,45 @@ const tabCountText = (list) => {
     assert.ok(h.byId(at.list, 'nativeChrome.spaces'), 'no bottom bar on the list level')
     assert.ok(!h.byId(at.list, 'nativeChrome.left'), 'the list level shows a left button (nothing to go back to)')
     assert.ok(!h.byId(at.list, 'nativeChrome.right'), 'the list level shows the right-panel button')
-    assert.equal(textOf(at.list, 'nativeChrome.title'), 'Tangu', 'the list level is titled after its Space')
+    assert.equal(textOf(at.list, 'nativeChrome.title'), '对话', 'the list level is titled after its dock cell (Tangu = Chats)')
     const geo = await cdp.eval(`(() => { const d = document.querySelector('.mb-drawer--left').getBoundingClientRect(), b = document.querySelector('.mb-body').getBoundingClientRect()
       return { full: Math.abs(d.width - b.width) < 1 && Math.abs(d.left - b.left) < 1, bar: !!document.querySelector('.mb-drawer--left .mb-drawer-bar'), dim: getComputedStyle(document.querySelector('.mb-push-dim')).opacity,
         foot: !!document.querySelector('.mb-drawer-foot') } })()`)
     assert.deepEqual(geo, { full: true, bar: false, dim: '0', foot: false }, 'list level is not a plain full-screen page (no bar of its own, no row at its foot)')
-    // the account is the avatar at the end of the top bar (first-level pages only): label = the signed-in name
-    // no ⋯ on the list level (2026-11-18: it holds only the page's own things; a list has none)
+    // no ⋯ on the list level (2026-11-18: it holds only the page's own things; a list has none), and no avatar on top:
+    // the account is the Me page, the dock's last cell (2026-11-19)
     assert.ok(!h.byId(at.list, 'nativeChrome.more'), 'a ⋯ on the list level')
-    const avatar = h.byId(at.list, 'nativeChrome.account')
-    assert.ok(avatar, 'no account avatar on the list level')
-    assert.equal(descOf(at.list, 'nativeChrome.account'), 'e2e')
-    const capR = h.byId(at.list, 'nativeChrome.capRight')
-    assert.ok(avatar.rect.right - avatar.rect.left >= 120 && (!capR || avatar.rect.right >= capR.rect.right - Math.round(12 * density)), `avatar is not the trailing 48dp target (${fmt(avatar.rect)} in ${capR && fmt(capR.rect)})`)
-    // … and it is the account's picture (the fixture's is solid magenta), not the initial on a tinted disc
-    let px = pixelAt(avatar.rect.cx, avatar.rect.cy)
-    for (let i = 0; i < 10 && !(px.r > 200 && px.g < 80 && px.b > 200); i++) { await h.pause(300); px = pixelAt(avatar.rect.cx, avatar.rect.cy) }
-    assert.ok(px.r > 200 && px.g < 80 && px.b > 200, `the avatar does not show the account picture (centre pixel ${JSON.stringify(px)})`)
+    assert.ok(!h.byId(at.list, 'nativeChrome.account'), 'an avatar at the top of the list level')
+    const meCell = h.byId(at.list, 'nativeChrome.space.@me')
+    assert.ok(meCell, `no Me cell in the dock (${dockCells(at.list).map(idOfCell)})`)
+    assert.equal(cellName(at.list, meCell), '我')
     shot('03-list-level')
-    h.tapNode(avatar)
-    const accountSheet = await waitSheet(true)
-    assert.ok(h.byId(accountSheet, 'nativeSheet.item.logout'), `the avatar did not open the account sheet (${ids(accountSheet)})`)
-    // settings and the Unit switcher live in this menu (no row at the foot of the left panel to hold them), in that order
-    const rows = ids(accountSheet)
-    assert.ok(rows.includes('rb-settings') && rows.indexOf('rb-units-mobile') === rows.indexOf('rb-settings') + 1, `settings + Unit switcher expected in the account sheet (${rows})`)
-    assert.ok(rows.indexOf('rb-settings') < rows.indexOf('logout'), 'sign out must stay the last row')
-    assert.equal(rowLabel(accountSheet, 'nativeSheet.item.rb-settings'), '设置')
-    // the two global switches that left ⋯ on a phone (2026-11-18): theme and the command panel, after settings, before sign out
-    for (const id of ['rb-mode', 'rb-cmd']) assert.ok(rows.indexOf(id) > rows.indexOf('rb-settings') && rows.indexOf(id) < rows.indexOf('logout'), `"${id}" expected in the account sheet after settings (${rows})`)
-    assert.equal(rowLabel(accountSheet, 'nativeSheet.item.rb-cmd'), '命令面板')
-    shot('03b-account-sheet')
-    h.key(4)
-    await waitSheet(false)
+    h.tapNode(meCell)
+    assert.ok(await h.waitPage(cdp, phonePageOpen('me'), 5000), 'the Me cell did not open the Me page')
+    assert.ok(await h.waitPage(cdp, `!!${pageRowExpr('logout')}`, 6000), `the Me page has no sign-out row (${await pageRows()})`)
+    const mePage = ui()
+    assert.equal(textOf(mePage, 'nativeChrome.title'), '我')
+    assert.ok(isOn(h.byId(mePage, 'nativeChrome.space.@me')), 'the Me cell is not the selected one on the Me page')
+    // the head is the account: its name, and its picture (the fixture's is solid magenta), not the initial on a tinted disc
+    assert.equal(await cdp.eval("document.querySelector('.mb-phonepage .pp-me-name strong')?.textContent"), 'e2e')
+    const pic = await elPoint("document.querySelector('.mb-phonepage .pp-me-avatar img')")
+    let px = pixelAt(Math.round(pic.x), Math.round(pic.y))
+    for (let i = 0; i < 10 && !(px.r > 200 && px.g < 80 && px.b > 200); i++) { await h.pause(300); px = pixelAt(Math.round(pic.x), Math.round(pic.y)) }
+    assert.ok(px.r > 200 && px.g < 80 && px.b > 200, `the Me page does not show the account picture (centre pixel ${JSON.stringify(px)})`)
+    // settings and the Unit switcher are here (no row at the foot of the left panel to hold them), in that order; then the
+    // two global switches that left ⋯ on a phone (theme, command panel); sign out last
+    const rows = JSON.parse(await pageRows())
+    assert.ok(rows.includes('rb-settings') && rows.indexOf('rb-units-mobile') === rows.indexOf('rb-settings') + 1, `settings + Unit switcher expected on the Me page (${rows})`)
+    assert.equal(rows.at(-1), 'logout', `sign out must stay the last row (${rows})`)
+    for (const id of ['rb-mode', 'rb-cmd']) assert.ok(rows.indexOf(id) > rows.indexOf('rb-settings') && rows.indexOf(id) < rows.indexOf('logout'), `"${id}" expected on the Me page after settings (${rows})`)
+    const rowText = (id) => cdp.eval(`${pageRowExpr(id)}?.querySelector('.pp-row-title')?.textContent`)
+    assert.equal(await rowText('rb-settings'), '设置')
+    assert.equal(await rowText('rb-cmd'), '命令面板')
+    shot('03b-me-page')
+    h.key(4) // back on the Me page = Home
+    assert.ok(await h.waitPage(cdp, `!(${anyPhonePage}) && document.querySelector('.mb-shell').dataset.space === 'home'`, 5000), 'system back on the Me page did not go Home')
+    await tanguDrawer()
+    at = await level()
     // a horizontal swipe over the list must not slide it away (only an item enters the main view)
     const wv = webViewNode(at.list).rect
     h.adb('shell', 'input', 'swipe', String(wv.right - 120), String(wv.cy), String(wv.left + 120), String(wv.cy), '200')
@@ -1298,8 +1354,8 @@ const tabCountText = (list) => {
     await tapSpace('home') // re-tap: used to slide an empty drawer over the homepage
     await h.pause(700)
     assert.ok(!(await cdp.eval(drawerOpen)), 're-tapping Home opened a drawer')
-    assert.ok(h.byId(at.list, 'nativeChrome.account'), 'Home is a first-level page: avatar expected')
-    // Home has nothing of its own for ⋯ (settings / the Unit switcher are in the avatar menu, the rest behind "all")
+    assert.ok(h.byId(at.list, 'nativeChrome.space.@me') && !h.byId(at.list, 'nativeChrome.account'), 'Home is a first-level page: the Me cell expected (no avatar on top)')
+    // Home has nothing of its own for ⋯ (settings / the Unit switcher are on the Me page, the rest on Apps)
     assert.ok(!h.byId(ui(), 'nativeChrome.more'), 'a ⋯ on Home')
     // a start-up lands on the list too, not on the main view that was open (start-up Space pinned to Tangu for this:
     // the default start-up Space is Home, which has no list)
@@ -1471,11 +1527,13 @@ const tabCountText = (list) => {
   })
 
   // The Space switcher, native: a Material bar with a label under every icon until 2026-10-09, an icon-only dock for a few
-  // hours, and since that evening (the user: "too small, put the names back under the icons" — variant ③ of the second
-  // mock-up) a dock of five equal cells, icon over name: Home, the Spaces the user keeps there, and "all" for the rest.
-  // Nothing scrolls. (The check keeps its old first words: `ONLY='bottom space bar'` is in people's notes.)
-  await check('bottom space bar: a native dock of named cells, Home first and "all" last; switches Space; the user picks which Spaces it holds; away with the keyboard and in settings', async () => {
+  // hours, then a dock of five equal cells, icon over name: Home, the Spaces the user kept there, and "all" for the rest.
+  // Since 2026-11-19 (direction E) the five cells are fixed on a phone: Home · Chats (Tangu) · Notes (Amadeus) · Apps · Me.
+  // Every other Space is a tile on the Apps page, whose first row ("frequent") the user picks. Nothing scrolls.
+  // (The check keeps its old first words: `ONLY='bottom space bar'` is in people's notes.)
+  await check('bottom space bar: a native dock of five fixed cells (Home, Chats, Notes, Apps, Me); switches Space; other Spaces are on the Apps page, whose first row the user picks; away with the keyboard and in settings', async () => {
     await setDockPicks(null)
+    await cdp.eval("(localStorage.removeItem('lcl_apps_frequent_v1'), true)")
     await goHome()
     let list = ui()
     const [bar, dock] = [h.byId(list, 'nativeChrome.spaces'), h.byId(list, 'nativeChrome.dock')]
@@ -1484,24 +1542,20 @@ const tabCountText = (list) => {
     for (const id of ['home', 'tangu', 'agents']) assert.ok(ids.includes(id), `Space "${id}" missing (${ids.join(', ')})`)
     list = ui()
     const items = dockCells(list)
-    const all = h.byId(list, 'nativeChrome.spacesAll')
     assert.equal(bar.rect.bottom, screen.h, 'the dock\'s strip does not reach the screen edge')
     assert.ok(within(bar, dock) && near(dock.rect.bottom - dock.rect.top, 68 * density, 1), `the dock is not a 68dp capsule inside its strip (${dock.bounds} in ${bar.bounds})`)
-    // more Spaces than cells: Home, three more in list order, and "all" — five equal cells across the dock, each with its name
-    assert.ok(ids.length > 5, `the fixture has ${ids.length} Spaces: the "all" cell cannot be tried`)
-    assert.deepEqual(items.map(idOfCell), ids.slice(0, 4), 'as shipped the dock holds the first four Spaces')
-    assert.ok(all && all.rect.left >= items[3].rect.right - 1, `no "all" cell after the Spaces (${all?.bounds})`)
-    const cells = [...items, all]
+    // five fixed cells, every one a place: no "all" cell (an older native build would draw one only past five)
+    assert.deepEqual(items.map(idOfCell), ['home', 'tangu', 'amadeus', '@apps', '@me'], 'the dock is not Home · Chats · Notes · Apps · Me')
+    assert.ok(!h.byId(list, 'nativeChrome.spacesAll'), 'an "all" cell beside five fixed ones')
     const fifth = (dock.rect.right - dock.rect.left - 12 * density) / 5
-    for (const n of cells) {
+    for (const n of items) {
       assert.ok(near(n.rect.right - n.rect.left, fifth, 3) && near(n.rect.bottom - n.rect.top, 56 * density, 2), `dock cell ${n['resource-id']} is not a fifth of the dock × 56dp (${n.bounds}, a fifth = ${Math.round(fifth)}px)`)
       assert.ok(cellName(list, n) && !n['content-desc'], `dock cell ${n['resource-id']} does not show its name ("${cellName(list, n)}", spoken "${n['content-desc']}")`)
     }
-    assert.equal(cellName(list, items[0]), '主页')
-    assert.equal(cellName(list, all), '全部')
+    assert.deepEqual(items.map((n) => cellName(list, n)), ['主页', '对话', '笔记', '应用', '我'])
     assert.equal(await cdp.eval("document.querySelectorAll('.mb-spacebar, .mb-tab').length"), 0, 'the web Space row is still rendered')
     assert.equal(await cdp.eval("document.querySelector('.mb-shell').dataset.space"), 'home')
-    const chosen = (l) => [...dockCells(l), h.byId(l, 'nativeChrome.spacesAll')].filter(isOn).map((n) => n['resource-id'].replace('nativeChrome.', ''))
+    const chosen = (l) => dockCells(l).filter(isOn).map((n) => n['resource-id'].replace('nativeChrome.', ''))
     assert.deepEqual(chosen(list), ['space.home'], 'the cell of the Space you are in is the selected one')
     shot('03c-dock-home')
     // keyboard (Home's input pill — a first-level page with a text field): the bar leaves, the WebView takes its room; back brings it back
@@ -1512,25 +1566,29 @@ const tabCountText = (list) => {
     assert.ok((await h.waitNodes((l) => !!h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the bar did not come back after the keyboard')
     await cdp.eval('(document.activeElement && document.activeElement.blur(), true)')
     await foldHomeComposer()
-    // "all": a sheet with every Space as a tile, the dock's own first; the one you are in is marked
-    const places = (l) => [...dockCells(l), h.byId(l, 'nativeChrome.spacesAll')].map((n) => n.bounds).join(' ')
+    // Apps: a page with every other Space as a tile; first row "frequent" (as shipped: Calendar, Inbox, then list order)
+    const places = (l) => dockCells(l).map((n) => n.bounds).join(' ')
     const homePlaces = places(ui())
-    let sheet = await openAllSpaces()
-    assert.equal(textOf(sheet, 'nativeSheet.title'), '全部 Space')
-    for (const id of ids) assert.ok(h.byId(sheet, `nativeSheet.item.space:${id}`), `no tile for Space "${id}" in the sheet`)
-    const tile = (l, id) => h.byId(l, `nativeSheet.item.space:${id}`)
-    assert.ok(near(tile(sheet, 'home').rect.top, tile(sheet, ids[3]).rect.top, 2) && tile(sheet, ids[4]).rect.top > tile(sheet, 'home').rect.bottom, 'the tiles are not four to a row, the dock\'s own first')
-    assert.deepEqual(ids.filter((id) => isOn(tile(sheet, id))), ['home'], 'the tile of the Space you are in — and only that one — is marked')
-    assert.ok(h.byId(sheet, 'nativeSheet.item.dock:edit'), 'no way to choose the dock\'s Spaces from the sheet')
-    shot('03c-dock-all-sheet')
-    // a Space that is not in the dock: reached through its tile; lands on its list, the bar stays, and "all" is the selected cell
-    h.tapNode(tile(sheet, 'agents'))
-    await waitSheet(false)
-    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'agents' && (${nav}) === 'list'`, 6000), 'the tile did not switch to the Agents list')
+    const others = ids.filter((id) => !['home', 'tangu', 'amadeus'].includes(id))
+    const sections = () => cdp.eval("JSON.stringify([...document.querySelectorAll('.mb-phonepage .pp-section')].map((s) => ({ title: s.querySelector('.pp-section-title')?.textContent || '', tiles: [...s.querySelectorAll('.pp-tile')].map((t) => t.dataset.space) })).filter((s) => s.tiles.length))").then(JSON.parse)
+    await openPhonePage('apps')
+    list = ui()
+    assert.equal(textOf(list, 'nativeChrome.title'), '应用')
+    assert.deepEqual(chosen(list), ['space.@apps'], 'on the Apps page the Apps cell is the selected one')
+    let secs = await sections()
+    assert.deepEqual(secs.map((x) => x.title), ['常用', '全部'], `the Apps page is not "frequent" then "all" (${JSON.stringify(secs)})`)
+    assert.deepEqual([...secs[0].tiles, ...secs[1].tiles].sort(), [...others].sort(), 'the Apps page does not hold every Space but Home / Chats / Notes')
+    const shipped = (() => { const start = ['calendar', 'inbox'].filter((id) => others.includes(id)); const pick = [...start, ...others.filter((id) => !start.includes(id))].slice(0, 4); return others.filter((id) => pick.includes(id)) })()
+    assert.deepEqual(secs[0].tiles, shipped, 'as shipped "frequent" is Calendar, Inbox, then list order (four, shown in list order)')
+    shot('03c-dock-apps-page')
+    // a Space on the Apps page: reached through its tile; lands on its list, the bar stays, and Apps is the selected cell
+    const target = others.includes('agents') ? 'agents' : others[0]
+    await tapEl(`document.querySelector('.mb-phonepage .pp-tile[data-space="${target}"]')`)
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === ${JSON.stringify(target)} && (${nav}) === 'list' && !(${anyPhonePage})`, 6000), `the tile did not switch to the ${target} list`)
     await h.pause(800)
     list = ui()
-    assert.ok(h.byId(list, 'nativeChrome.spaces'), 'the bar left on the Agents list')
-    assert.deepEqual(chosen(list), ['spacesAll'], 'in a Space behind "all", "all" is the selected cell')
+    assert.ok(h.byId(list, 'nativeChrome.spaces'), `the bar left on the ${target} list`)
+    assert.deepEqual(chosen(list), ['space.@apps'], 'in a Space reached through Apps, Apps is the selected cell')
     assert.equal(places(list), homePlaces, 'the dock\'s cells moved when the Space changed')
     shot('03c-space-bar')
     // an Agents row enters the profile. That main view used to crash on the single-column shell (it read the dockview-only `stash`).
@@ -1555,7 +1613,7 @@ const tabCountText = (list) => {
       // back leads Home (2026-10-13). It left the app before that, and did nothing at all before 2026-10-04 (the
       // handler stopped at the no-op close).
       h.key(4)
-      assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell')?.dataset.space === 'home' && ${homeShown}`, 6000), 'system back on a pinned main view did not lead to Home')
+      assert.ok(await h.waitPage(cdp, homeShown, 6000), 'system back on a pinned main view did not lead to Home')
       assert.ok(resumed(), 'system back on a pinned main view left the app')
     }
     // … and a Space whose left panel became such a list keeps the default: Image Studio's left panel is its project
@@ -1572,7 +1630,7 @@ const tabCountText = (list) => {
     assert.equal(await cdp.eval("document.querySelector('.mb-main .sk-error')?.textContent || ''"), '', 'Image Studio\'s main view failed to render')
     shot('03h-image-studio-detail')
     await openDrawer() // the back arrow: its list again
-    // the dock is away in page mode (settings) and comes back as it was
+    // the dock is away in page mode (settings, from the Me page) and comes back as it was, on the Me page
     await accountItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')
     assert.ok((await h.waitNodes((l) => h.byId(l, 'nativeChrome.back') && !h.byId(l, 'nativeChrome.spaces'), { timeout: 12000 })).hit, 'the dock stayed up in page mode')
@@ -1581,39 +1639,55 @@ const tabCountText = (list) => {
     assert.ok(back.hit, 'the dock did not come back after settings')
     await h.pause(600)
     assert.equal(places(ui()), homePlaces, 'the dock came back from page mode with other cells')
-    // which Spaces the dock holds is the user's to choose: Home stays, three more; a full dock offers nothing until one is taken out
+    assert.ok(await cdp.eval(phonePageOpen('me')), 'closing settings did not return to the Me page')
+    // which Spaces lead the Apps page is the user's to choose (up to four); a full row offers nothing until one is taken out.
+    // A dock choice from before the five fixed cells carries into that row once (nothing is written until the user picks).
     try {
-      await tapId('nativeSheet.item.dock:edit', await openAllSpaces())
-      sheet = await waitSheet(true)
-      assert.equal(textOf(sheet, 'nativeSheet.title'), '固定在 Dock')
+      await openPhonePage('apps')
+      await tapEl(pageRowExpr('choose-frequent'))
+      let sheet = await waitSheet(true)
+      assert.equal(textOf(sheet, 'nativeSheet.title'), '常用')
       await cdp.eval(presentCounter) // the picks sheet is up: from here on every present is one too many
       const pick = (l, id) => h.byId(l, `nativeSheet.item.pick:${id}`)
-      assert.ok(!pick(sheet, 'home'), 'Home is offered as something to take out')
-      assert.deepEqual(ids.slice(1).filter((id) => isOn(pick(sheet, id))), ids.slice(1, 4), 'the picks shown are not the dock\'s Spaces')
-      assert.equal(pick(sheet, 'agents')?.enabled, 'false', 'a full dock still offers a fourth Space')
-      assert.match(sheet.map((n) => n.text).join(' '), /最多固定 3 个/, 'the sheet does not say how many fit')
-      shot('03g-dock-picks')
-      h.tapNode(pick(sheet, ids[3])) // out — the tick goes in place and a cell is free
-      let again = await h.waitNodes((l) => (h.byId(l, 'nativeSheet.item.pick:agents')?.enabled === 'true' && !isOn(h.byId(l, `nativeSheet.item.pick:${ids[3]}`)) ? l : null), { timeout: 12000 })
-      assert.ok(again.hit, `taking "${ids[3]}" out did not free a cell`)
-      h.tapNode(pick(again.hit, 'agents')) // in
-      again = await h.waitNodes((l) => (isOn(h.byId(l, 'nativeSheet.item.pick:agents')) ? l : null), { timeout: 12000 })
-      assert.ok(again.hit, 'Agents was not ticked')
+      for (const id of ['home', 'tangu', 'amadeus']) assert.ok(!pick(sheet, id), `"${id}" is offered (it has a dock cell of its own)`)
+      assert.deepEqual(others.filter((id) => isOn(pick(sheet, id))), shipped, 'the picks shown are not the frequent row')
+      const outside = others.find((id) => !shipped.includes(id))
+      assert.ok(outside, 'every Space is already frequent: taking one out and another in cannot be tried')
+      assert.equal(pick(sheet, outside)?.enabled, 'false', 'a full row still offers a fifth Space')
+      shot('03g-frequent-picks')
+      h.tapNode(pick(sheet, shipped[shipped.length - 1])) // out — the tick goes in place and a place is free
+      let again = await h.waitNodes((l) => (h.byId(l, `nativeSheet.item.pick:${outside}`)?.enabled === 'true' && !isOn(h.byId(l, `nativeSheet.item.pick:${shipped[shipped.length - 1]}`)) ? l : null), { timeout: 12000 })
+      assert.ok(again.hit, `taking "${shipped[shipped.length - 1]}" out did not free a place`)
+      h.tapNode(pick(again.hit, outside)) // in
+      again = await h.waitNodes((l) => (isOn(h.byId(l, `nativeSheet.item.pick:${outside}`)) ? l : null), { timeout: 12000 })
+      assert.ok(again.hit, `${outside} was not ticked`)
       assert.equal(await cdp.eval('window.Capacitor.__presents'), 0, 'the picks sheet was presented again while ticking (it drops and slides back in on every tick)')
       await tapId(h.byId(again.hit, 'nativeSheet.done') ? 'nativeSheet.done' : 'nativeSheet.item.dock:done', again.hit)
       await waitSheet(false)
-      const now = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.space.agents') ? l : null), { timeout: 8000 })
-      assert.ok(now.hit, 'the dock did not take the new Space')
-      // list order, not the order of picking: Agents stands where the Space list has it
-      assert.deepEqual(dockCells(now.hit).map(idOfCell), ids.filter((id) => [ids[0], ids[1], ids[2], 'agents'].includes(id)), 'the dock is not Home + the picks in list order')
-      shot('03g-dock-picked')
+      const want = others.filter((id) => [...shipped.slice(0, -1), outside].includes(id)) // list order, not the order of picking
+      assert.ok(await h.waitPage(cdp, `JSON.stringify([...document.querySelectorAll('.mb-phonepage .pp-section')][0]?.querySelectorAll('.pp-tile').length) === '${want.length}'`, 5000), 'the frequent row did not change')
+      assert.deepEqual((await sections())[0].tiles, want, 'the frequent row is not the picks in list order')
+      assert.deepEqual(dockCells(ui()).map(idOfCell), ['home', 'tangu', 'amadeus', '@apps', '@me'], 'picking frequent Spaces changed the dock')
+      shot('03g-frequent-picked')
       await reload() // the choice is kept on the device
-      assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ids.filter((id) => [ids[0], ids[1], ids[2], 'agents'].includes(id)), 'the picks did not survive a reload')
+      await openPhonePage('apps')
+      assert.deepEqual((await sections())[0].tiles, want, 'the frequent row did not survive a reload')
+      // an older build's dock choice, no frequent choice yet: it leads the Apps page; the dock stays the five fixed cells
+      const carried = others.filter((id) => ['agents', 'image-studio'].includes(id))
+      await cdp.eval("(localStorage.removeItem('lcl_apps_frequent_v1'), true)")
+      await setDockPicks(carried)
+      await reload()
+      assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ['home', 'tangu', 'amadeus', '@apps', '@me'], 'an older dock choice changed the five fixed cells')
+      await openPhonePage('apps')
+      assert.deepEqual((await sections())[0].tiles, carried, 'an older dock choice did not carry into the frequent row')
+      assert.equal(await cdp.eval("localStorage.getItem('lcl_apps_frequent_v1')"), null, 'the carried choice was written down without the user picking')
+      assert.equal(await cdp.eval("localStorage.getItem('lcl_dock_pins_v1')"), JSON.stringify(carried), 'the older dock choice was rewritten')
     } finally {
       await setDockPicks(null)
+      await cdp.eval("(localStorage.removeItem('lcl_apps_frequent_v1'), true)")
       await reload()
     }
-    assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ids.slice(0, 4), 'the dock is not back to what it ships with')
+    assert.deepEqual(dockCells(await waitDock()).map(idOfCell), ['home', 'tangu', 'amadeus', '@apps', '@me'], 'the dock is not back to what it ships with')
   })
 
   // 2026-10-02 real-phone recording: every tap flashed the WebView's blue tap-highlight box. It is off now, and a press
@@ -1622,9 +1696,9 @@ const tabCountText = (list) => {
   // per-account unread set does not survive a reload (cloudAccountCache: a fresh anonymous scope every boot), and a
   // running session needs a live run stream. The other two kinds are covered by the payload unit test (Kotlin).
   await check('bottom bar badge: no dot at rest; a session waiting for the user puts a warning dot on Tangu; answered → the dot leaves', async () => {
-    // the Space cells' dots. The "all" cell can carry the launchers' dot (an achievement earned by the checks above to
-    // claim: 2026-11-18 it moved there from ⋯) — that one is the "more dot" check's.
-    const badges = (l) => { const all = h.byId(l, 'nativeChrome.spacesAll'); return h.byIdPrefix(l, 'nativeChrome.badge').filter((n) => !all || !within(all, n)) }
+    // the Space cells' dots. The Me cell (an older build: the "all" cell) can carry the launchers' dot (an achievement
+    // earned by the checks above to claim; 2026-11-18 it left ⋯, 11-19 it went to the Me page) — that one is the "more dot" check's.
+    const badges = (l) => { const own = ['nativeChrome.spacesAll', 'nativeChrome.space.@me'].map((id) => h.byId(l, id)).filter(Boolean); return h.byIdPrefix(l, 'nativeChrome.badge').filter((n) => !own.some((c) => within(c, n))) }
     const refetch = () => cdp.eval("(document.dispatchEvent(new Event('visibilitychange')), true)") // attentionStore refetches when the page comes to the front
     const polled = () => stubLog.filter((l) => l.includes('/agent/approvals/pending')).slice(-3).join(' | ')
     await goHome()
@@ -1652,44 +1726,41 @@ const tabCountText = (list) => {
   })
 
   // RibbonItem.dot behind ⋯ (2026-10-18): the web capsule's ⋯ had the dot, the native one only the sheet row's subtitle.
-  // On a phone (2026-11-18) achievements left ⋯ for the last group of the dock's "all" sheet: the dot went along, onto
-  // the "all" cell (state `allDot`, Kotlin `allBadge()`: the same badge node as any cell's, drawn as an unread dot).
+  // On a phone achievements left ⋯ for the dock's "all" sheet (2026-11-18), then for the Me page (11-19): the dot goes
+  // along, onto the Me cell (kind "notice", Kotlin NOTICE: a danger-red dot) and onto the row on that page.
   // The achievements store is seeded on disk and the page reloaded (it reads the disk once at boot).
-  await check('more dot: nothing to claim → no dot; an achievement to claim → a red dot on the dock\'s "all" cell and on its tile', async () => {
+  await check('more dot: nothing to claim → no dot; an achievement to claim → a red dot on the dock\'s Me cell and on its row', async () => {
     const KEY = 'forsion_tangu_achievements'
     const kept = await cdp.eval(`localStorage.getItem('${KEY}')`)
     const put = async (data) => { await cdp.eval(`(localStorage.setItem('${KEY}', ${JSON.stringify(JSON.stringify(data))}), true)`); await reload() }
-    const allCell = (l) => h.byId(l, 'nativeChrome.spacesAll')
-    const dotOf = (l) => { const c = allCell(l); return c ? h.byIdPrefix(l, 'nativeChrome.badge').find((n) => within(c, n)) : null }
+    const meCell = (l) => h.byId(l, 'nativeChrome.space.@me')
+    const dotOf = (l) => { const c = meCell(l); return c ? h.byIdPrefix(l, 'nativeChrome.badge').find((n) => within(c, n)) : null }
     try {
       await put({ v: 1, counters: {}, claimed: [] })
       await goHome()
       let list = await waitDock()
-      assert.ok(allCell(list), 'control: the dock has no "all" cell (the launchers would stay in ⋯)')
+      assert.ok(meCell(list), 'control: the dock has no Me cell')
       assert.ok(!dotOf(list) && !h.byId(list, 'nativeChrome.moreDot'), 'a dot with nothing to claim')
       await put({ v: 1, counters: { 'theme.change': 1 }, claimed: [] })
       await goHome()
       const r = await h.waitNodes((l) => (dotOf(l) ? l : null), { timeout: 10000 })
-      assert.ok(r.hit, `no dot on the "all" cell with an achievement to claim (badges: ${h.byIdPrefix(r.nodes, 'nativeChrome.badge').map((n) => n.bounds)})`)
+      assert.ok(r.hit, `no dot on the Me cell with an achievement to claim (badges: ${h.byIdPrefix(r.nodes, 'nativeChrome.badge').map((n) => n.bounds)})`)
       assert.ok(!h.byId(r.hit, 'nativeChrome.more') && !h.byId(r.hit, 'nativeChrome.moreDot'), 'Home shows a ⋯ (or its dot)')
       assert.equal(h.byIdPrefix(r.hit, 'nativeChrome.badge').length, 1, 'more than one dot')
       const dot = dotOf(r.hit)
       const c = pixelAt(dot.rect.cx, dot.rect.cy) // the launchers' dot is a notice (--danger), red in every theme
-      assert.ok(c.r > c.g + 60 && c.r > c.b + 60, `the "all" cell's dot is not the danger colour: ${JSON.stringify(c)}`)
+      assert.ok(c.r > c.g + 60 && c.r > c.b + 60, `the Me cell's dot is not the danger colour: ${JSON.stringify(c)}`)
       shot('03g-more-dot')
-      // the tile behind it: a tile has no second line, so the dot's meaning is a dot on its square
-      // (`nativeSheet.itemDot.<id>`) and the screen reader's state; the other launchers carry none
-      list = await openAllSpaces()
-      const tile = h.byId(list, 'nativeSheet.item.go:rb-achievements')
-      assert.ok(tile, `no achievements tile behind "all" (${ids(list)})`)
-      const tileDot = h.byId(list, 'nativeSheet.itemDot.go:rb-achievements')
-      assert.ok(tileDot && within(tile, tileDot), `the achievements tile carries no dot (${ids(list, 'nativeSheet.itemDot.')})`)
-      assert.deepEqual(ids(list, 'nativeSheet.itemDot.'), ['go:rb-achievements'], 'dots on other tiles')
-      const tc = pixelAt(tileDot.rect.cx, tileDot.rect.cy)
-      assert.ok(tc.r > tc.g + 60 && tc.r > tc.b + 60, `the tile's dot is not red: ${JSON.stringify(tc)}`)
-      shot('03h-all-sheet-dot')
+      // the row on the Me page carries it (and the screen reader's label); the other rows carry none
+      await openPhonePage('me')
+      const dotted = await cdp.eval("JSON.stringify([...document.querySelectorAll('.mb-phonepage .pp-row .pp-dot')].map((d) => d.closest('[data-row]').dataset.row))")
+      assert.deepEqual(JSON.parse(dotted), ['rb-achievements'], 'the achievements row carries no dot, or other rows do')
+      const p = await elPoint(`${pageRowExpr('rb-achievements')}.querySelector('.pp-dot')`)
+      const tc = pixelAt(p.x, p.y)
+      assert.ok(tc.r > tc.g + 60 && tc.r > tc.b + 60, `the row's dot is not red: ${JSON.stringify(tc)}`)
+      shot('03h-me-page-dot')
       h.key(4)
-      await waitSheet(false)
+      assert.ok(await h.waitPage(cdp, `!(${anyPhonePage})`, 5000), 'system back left the Me page open')
     } finally {
       await cdp.eval(`(${JSON.stringify(kept)} === null ? localStorage.removeItem('${KEY}') : localStorage.setItem('${KEY}', ${JSON.stringify(kept)}), true)`)
       await reload()
@@ -2135,19 +2206,23 @@ const tabCountText = (list) => {
   })
 
   // A failed request surfaces as the browser's own words ("TypeError: Failed to fetch"). On the phone the notification
-  // says it plainly; the rest of the message (what failed) is kept.
+  // says it plainly; the rest of the message (what failed) is kept. Since 2026-11-15 a phone's notification is a native
+  // banner (nativeBanner.card, one at a time; the page draws no card): its words are read off that banner, and each one is
+  // closed before the next — a banner left up covers the capsule row and every check after this one taps into it.
   await check('offline wording: "Failed to fetch" in an error notification reads as "network unavailable"', async () => {
-    const texts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent)"
-    const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
-    await closeToasts()
+    const bannerWords = (l) => { const c = h.byId(l, 'nativeBanner.card'); return c ? l.filter((n) => within(c, n)).map((n) => n.text || n['content-desc'] || '').filter(Boolean).join(' | ') : '' }
+    const closeBanners = async () => { for (let i = 0; i < 8; i++) { const x = h.byId(ui(), 'nativeBanner.close'); if (!x) break; h.tapNode(x); await h.pause(600) } }
+    await closeBanners()
     try {
       for (const [raw, want] of [['TypeError: Failed to fetch', '网络不可用，请稍后再试'], ['同步失败：Failed to fetch', '同步失败：网络不可用，请稍后再试'], ['同步失败：磁盘已满', '同步失败：磁盘已满']]) {
         await cdp.eval(`(window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: ${JSON.stringify(raw)}, level: 'error' } })), true)`)
-        assert.ok(await h.waitPage(cdp, `${texts}.includes(${JSON.stringify(want)})`, 4000), `"${raw}" was shown as: ${await cdp.eval(`${texts}.join(' | ')`)}`)
+        const r = await h.waitNodes((l) => (bannerWords(l).includes(want) ? l : null), { timeout: 6000 })
+        assert.ok(r.hit, `"${raw}" was shown as: ${bannerWords(r.nodes) || '(no banner)'}`)
+        assert.ok(!bannerWords(r.hit).includes('Failed to fetch'), "the browser's wording is still on screen")
+        if (raw.startsWith('TypeError')) shot('41-offline-wording')
+        await closeBanners()
       }
-      assert.ok(!(await cdp.eval(`${texts}.join(' | ')`)).includes('Failed to fetch'), "the browser's wording is still on screen")
-      shot('41-offline-wording')
-    } finally { await closeToasts() }
+    } finally { await closeBanners() }
   })
 
   await check('session row menu (long-press): native sheet, rename through the native prompt reaches the server', async () => {
@@ -2308,17 +2383,21 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), 'back did not return to the list')
   })
 
-  await check('phone Home: four cards with what is going on; the input is one pill that opens the composer above the keyboard and folds back', async () => {
+  // Home on a phone since 2026-11-19 (direction E): no Space cards — "Continue", the three most recent things (chats and
+  // notes mixed, newest first; nothing at all when there is nothing); top right a search button only.
+  await check('phone Home: Continue lists the most recent, no cards; top right only search; the input is one pill that opens the composer above the keyboard and folds back', async () => {
     await goHome()
-    const cards = await cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => [c.dataset.spaceId || c.dataset.fixedId, c.querySelector('.hp-card-status').textContent])`)
-    // never chosen = Tangu, notes, calendar, inbox (the store and achievements are in the long-press list, not on Home), and showing them stores nothing
-    assert.equal(String(cards.map((c) => c[0])), 'tangu,amadeus,calendar,inbox', `the default cards are not Tangu, notes, calendar, inbox: ${JSON.stringify(cards)}`)
-    assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), null, 'showing the default cards stored a choice')
-    const tangu = cards.find((c) => c[0] === 'tangu')
-    assert.ok(tangu && /E2E/.test(tangu[1]), `the Tangu card does not say what was last worked on (${JSON.stringify(cards)})`)
+    const rows = JSON.parse(await cdp.eval(`JSON.stringify([...document.querySelectorAll('.hp-root .hp-continue-row')].map((r) => [r.dataset.continue, r.querySelector('.hp-continue-name').textContent]))`))
+    assert.ok(rows.length >= 1 && rows.length <= 3, `Continue does not list one to three things (${JSON.stringify(rows)})`)
+    // newest first, whatever kind (a note an earlier check opened may lead); the conversations last worked on are there
+    assert.ok(rows.some(([k, name]) => k.startsWith('chat:') && /E2E/.test(name)), `Continue lists no conversation last worked on (${JSON.stringify(rows)})`)
+    assert.equal(await cdp.eval("document.querySelectorAll('.hp-root .hp-card').length"), 0, 'Space cards on a phone Home')
+    assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), null, 'Home stored a card choice')
+    const top = ui()
+    assert.ok(h.byId(top, 'nativeChrome.search') && !h.byId(top, 'nativeChrome.more') && !h.byId(top, 'nativeChrome.account'), `Home's top right is not a search button alone (${ids(top, 'nativeChrome.')})`)
     const hidden = homeFolded
     await foldHomeComposer() // whatever ran before may have left it open
-    shot('03d-home-cards')
+    shot('03d-home-continue')
     await tapEl(`document.querySelector('.hp-root [data-act="home-pill"]')`)
     for (let i = 0; i < 20 && !imeShown(); i++) await h.pause(300)
     assert.ok(imeShown(), 'a tap on the pill did not bring the keyboard up')
@@ -2336,57 +2415,47 @@ const tabCountText = (list) => {
     assert.ok(resumed(), 'back left the app')
   })
 
-  // Which cards Home shows is the user's (2026-10-13: "let me edit the Space cards on Home"): a long-press on any card
-  // opens "Home cards" — every Space and the two fixed entries, checked = shown, in the order they were checked; kept
-  // on the device. The sheet stays up while the user ticks (2026-10-14, "选一个闪一下": it used to answer each tick and be
-  // presented again, dropping and sliding back in) and the choice lands when it closes. Ends by clearing the choice and
-  // reloading, so what follows sees the default four again.
-  await check('phone Home: a long-press on a card opens "Home cards"; ticks flip in place with one sheet up throughout; on Done a checked Space joins as the last card, an unchecked entry leaves, the choice is stored', async () => {
+  // A Continue row opens the thing itself (a conversation: Tangu's second level), and back from there — the bar's back
+  // arrow or the system back — is Home again, not that Space's list (lcl listTrips' return trip). A conversation opened
+  // from the list still goes back to the list.
+  await check('phone Home: a Continue row opens the conversation itself; back (arrow or system) returns Home, not to the list', async () => {
+    await closeCards() // a banner left up covers the bar's back arrow
     await goHome()
     await foldHomeComposer()
-    const cardIds = () => cdp.eval(`[...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))`)
-    const item = (l, id) => h.byId(l, `nativeSheet.item.card:${id}`)
-    const before = await cardIds()
-    assert.equal(before.length, 4, `control: Home starts with its four default cards (${before})`)
-    try {
-      await cdp.eval(presentCounter)
-      await holdEl(`document.querySelector('.hp-root .hp-card')`)
-      let sheet = (await h.waitNodes((l) => (h.byId(l, 'nativeSheet.done') || h.byId(l, 'nativeSheet.item.cards:done') ? l : null), { timeout: 8000 })).hit
-      assert.ok(sheet, 'a long-press on a card opened no sheet')
-      shot('03g-home-cards-sheet')
-      const spare = sheet.map((n) => n['resource-id'] || '').filter((id) => id.startsWith('nativeSheet.item.card:space:')).map((id) => id.slice('nativeSheet.item.card:'.length)).find((id) => !before.includes(id))
-      assert.ok(spare, 'control: the sheet lists no Space that is not a card yet')
-      assert.ok(before.every((id) => isOn(item(sheet, id))) && !isOn(item(sheet, spare)), `the check marks do not say what is on Home (${before.map((id) => `${id}=${isOn(item(sheet, id))}`)}, ${spare}=${isOn(item(sheet, spare))})`)
-      h.tapNode(item(sheet, spare))
-      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
-      assert.ok(sheet, 'the tick on the Space did not show')
-      h.tapNode(item(sheet, before[2]))
-      sheet = (await h.waitNodes((l) => (item(l, before[2]) && !isOn(item(l, before[2])) && isOn(item(l, spare)) ? l : null), { timeout: 12000 })).hit
-      assert.ok(sheet, 'the entry did not come unticked')
-      // one sheet the whole time: ticking asked the native side for no second sheet
-      assert.equal(await cdp.eval('window.Capacitor.__presents'), 1, 'the sheet was presented again while ticking (it drops and slides back in on every tick)')
-      shot('03g-home-cards-ticked')
-      const want = [before[0], before[1], before[3], spare]
-      h.tapNode(h.byId(sheet, 'nativeSheet.done') || h.byId(sheet, 'nativeSheet.item.cards:done'))
-      await h.pause(900)
-      shot('03h-home-cards-edited')
-      assert.deepEqual(await cardIds(), want, 'on Done the cards are not the ticked ones in the order they were ticked')
-      assert.equal(await cdp.eval(`localStorage.getItem('forsion_home_cards_v1')`), JSON.stringify(want), 'the choice was not stored')
-      // closing by a swipe / back keeps the ticks too: take the Space out again and leave with back
-      await holdEl(`document.querySelector('.hp-root .hp-card')`)
-      sheet = (await h.waitNodes((l) => (isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit
-      assert.ok(sheet, 'the sheet did not come up again')
-      h.tapNode(item(sheet, spare))
-      assert.ok((await h.waitNodes((l) => (item(l, spare) && !isOn(item(l, spare)) ? l : null), { timeout: 8000 })).hit, 'the second tick did not show')
-      h.key(4)
-      assert.ok(await h.waitPage(cdp, `JSON.stringify([...document.querySelectorAll('.hp-root .hp-card')].map((c) => (c.dataset.spaceId ? 'space:' + c.dataset.spaceId : c.dataset.fixedId))) === ${JSON.stringify(JSON.stringify(want.slice(0, 3)))}`, 5000), `closing with back dropped the tick (${await cardIds()})`)
-      assert.ok(resumed(), 'back left the app instead of closing the sheet')
-    } finally {
-      await cdp.eval(`(localStorage.removeItem('forsion_home_cards_v1'), true)`)
-      await reload()
+    const row = `document.querySelector('.hp-root .hp-continue-row[data-continue^="chat:"]')`
+    assert.ok(await cdp.eval(`!!${row}`), 'control: no conversation in Continue')
+    const title = await cdp.eval(`${row}.querySelector('.hp-continue-name').textContent`)
+    const opened = `document.querySelector('.mb-shell').dataset.space === 'tangu' && (${nav}) === 'detail' && !!document.querySelector('.model-pill-btn')`
+    for (const via of ['arrow', 'system']) {
+      await tapEl(row)
+      assert.ok(await h.waitPage(cdp, opened, 8000), `the Continue row did not open the conversation (${via})`)
+      await h.pause(800)
+      const at = ui()
+      assert.equal(textOf(at, 'nativeChrome.title'), title, 'the conversation\'s page is not titled with it')
+      assert.ok(h.byId(at, 'nativeChrome.left') && !h.byId(at, 'nativeChrome.spaces'), 'not the second level (a back arrow, no dock)')
+      if (via === 'arrow') { shot('03g-continue-chat'); await tapId('nativeChrome.left') } else h.key(4)
+      assert.ok(await h.waitPage(cdp, homeShown, 6000), `back (${via}) from a conversation opened in Continue did not return Home (space ${await cdp.eval("document.querySelector('.mb-shell').dataset.space")}, nav ${await cdp.eval(nav)})`)
+      assert.ok(resumed(), `back (${via}) left the app`)
+      await h.pause(600)
     }
+    // a note row: another way in (the note opens asynchronously, in the Notes Space) — back is Home just the same
+    const noteRow = `document.querySelector('.hp-root .hp-continue-row[data-continue^="note:"]')`
+    if (await cdp.eval(`!!${noteRow}`)) {
+      for (const via of ['arrow', 'system']) {
+        await tapEl(noteRow)
+        assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'amadeus' && (${nav}) === 'detail'`, 8000), `the Continue note row did not open the note (${via})`)
+        await h.pause(900)
+        if (via === 'arrow') { shot('03g-continue-note'); await tapId('nativeChrome.left') } else h.key(4)
+        assert.ok(await h.waitPage(cdp, homeShown, 6000), `back (${via}) from a note opened in Continue did not return Home (space ${await cdp.eval("document.querySelector('.mb-shell').dataset.space")}, nav ${await cdp.eval(nav)})`)
+        assert.ok(resumed(), `back (${via}) left the app`)
+        await h.pause(600)
+      }
+    } else console.log('  (no note in Continue: the note leg is not tried)')
+    // from the list it is the list again
+    await openChat('E2E Session One')
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, `document.querySelector('.mb-shell').dataset.space === 'tangu' && (${nav}) === 'list'`, 6000), 'back from a conversation opened in the list did not return to the list')
     await goHome()
-    assert.deepEqual(await cardIds(), before, 'with the choice cleared Home does not show its default cards')
   })
 
   // Home is Home (2026-10-11, reported on a phone: "I enter Home and it shows another workspace", then decided: Home
@@ -2448,7 +2517,7 @@ const tabCountText = (list) => {
     if ((await st()).view !== 'homepage') { h.key(4); await h.pause(900) } // the build without the fix: get the stray tab out of the way
     // the command panel (avatar menu on a phone); quick find (conversations, notes) is one of its commands
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', 'quick')
     const quick = "[...document.querySelectorAll('.cmd-item')].find((r) => r.textContent.includes('快速查找'))"
     assert.ok(await h.waitPage(cdp, `!!${quick}`, 5000), 'control: the command panel does not list quick find')
@@ -2664,10 +2733,11 @@ const tabCountText = (list) => {
     const quiet = () => h.pause(2400) // past the two seconds in which a second back exits
     const TWO = sessions.find((x) => x.id === 'e2e-s2').title
     const open = async (title) => { await tapEl(rowExpr(title)); await h.waitPage(cdp, `(${nav}) === 'detail'`, 8000) }
-    /** Avatar → command panel → quick find → the conversation titled `title` (typed: `text`): opens it without the list.
-     *  On a phone the command panel is in the avatar menu (2026-11-18), so only a first-level page (Home) can start this. */
+    /** Home's search button (its only one, top right, 2026-11-19) → quick find → the conversation titled `title` (typed:
+     *  `text`): opens it without the list. Elsewhere: Me → command panel → quick find. */
     const find = async (text, title) => {
-      await paletteRun('quick', '快速查找')
+      if (h.byId(ui(), 'nativeChrome.search') && (await cdp.eval("document.querySelector('.mb-shell').dataset.space")) === 'home') await tapId('nativeChrome.search')
+      else await paletteRun('quick', '快速查找')
       assert.ok(await h.waitPage(cdp, "!!document.querySelector('.amx-qf-input')", 5000), 'quick find did not open')
       await tapEl("document.querySelector('.amx-qf-input')"); await h.pause(500); h.adb('shell', 'input', 'text', text)
       const hit = `[...document.querySelectorAll('.amx-qf-row')].find((r) => r.querySelector('.amx-qf-title')?.textContent.trim() === ${JSON.stringify(title)})`
@@ -2693,13 +2763,13 @@ const tabCountText = (list) => {
     }
     // … and a Space entered from Home leads back to it
     await goHome(); await foldHomeComposer()
-    await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await note('A4 Home: tap the Tangu card', LIST)
+    await tapSpace('tangu'); await note('A4 Home: tap the Chats cell (Tangu)', LIST)
     h.key(4); await note('A5 back key', HOME)
     // … the first thing opened after entering a Space goes back to its list, whichever conversation the Space had up
     //    when it was entered (anything recorded while the list was on screen must not come first)
     for (const title of ['E2E Session One', TWO]) {
       await goHome(); await foldHomeComposer()
-      await tapEl(`document.querySelector('.hp-root .hp-card[data-space-id="tangu"]')`); await h.waitPage(cdp, `(${nav}) === 'list'`, 6000); await h.pause(900)
+      await tapSpace('tangu'); await h.waitPage(cdp, `(${nav}) === 'list'`, 6000); await h.pause(900)
       await cdp.eval(`(() => { if (document.querySelector('.mb-drawer--left .t2s-srow')) return true; const g = [...document.querySelectorAll('.mb-drawer--left .t2s-group')].find((e) => e.textContent.includes('无项目') || /project/i.test(e.textContent)); g?.querySelector('button')?.click(); return true })()`)
       await h.waitPage(cdp, `!!${rowExpr(title)}`, 8000)
       await open(title); await note(`A6 Home → Tangu → tap "${title}"`, `tangu/detail "${title}"`)
@@ -2723,8 +2793,9 @@ const tabCountText = (list) => {
     h.key(4); await note('C5 back key', HOME)
     await quiet(); twice(); await note('C6 back key twice', LEFT)
     // (C7–C9 — a page reached from inside a trip: conversation Two → ⋯ → search → conversation One, walked back first —
-    //  are gone: on a phone the command panel left ⋯ for the avatar menu (2026-11-18), which a conversation page does not
-    //  have, so nothing in a conversation opens another one any more. F below still opens one from Home's search.)
+    //  are gone: on a phone the command panel left ⋯ for the avatar menu (2026-11-18; the Me page since 11-19), which a
+    //  conversation page does not reach, so nothing in a conversation opens another one any more. F below still opens one
+    //  from Home's search, and the Home check "a Continue row opens the conversation itself" walks Continue's way back.)
 
     // D. a conversation: the same rightward swipe by where the finger starts. Up to the system's back inset it is the
     //    system's (the page gets a touchcancel and one back); past it the page's own drag. Both end on the list.
@@ -4294,37 +4365,42 @@ const tabCountText = (list) => {
   // 2026-11-18: on a phone ⋯ holds only the page's own things. The two global switches it carried (theme, command panel)
   // went into the avatar menu after settings; the other launchers (store, achievements, feedback…) into the last group of
   // the dock's "all" sheet (`go:<id>`). The check keeps its first words (`ONLY='more sheet runs'`).
-  await check('more sheet runs a command (theme mode) — from the avatar menu now; the "all" sheet ends with the launchers; dark renders', async () => {
+  await check('more sheet runs a command (theme mode) — from the Me page now; the Apps page holds the launchers; dark renders', async () => {
     await goHome()
     const mode = await cdp.eval(dom.mode)
-    // the "all" sheet: Spaces first, then the launchers that left ⋯ ("More"), then the dock editor; titled "全部"
-    const all = await openAllSpaces()
-    const rows = ids(all)
-    const launchers = rows.filter((x) => x.startsWith('go:'))
-    assert.ok(launchers.includes('go:rb-market') && launchers.includes('go:rb-achievements'), `store / achievements not behind "all" (${rows})`)
-    for (const gone of ['rb-mode', 'rb-cmd', 'rb-settings', 'rb-account', 'go:rb-mode', 'go:rb-cmd', 'go:rb-settings']) assert.ok(!rows.includes(gone), `"${gone}" behind "all" (${rows})`)
-    const at = (id) => { const n = h.byId(all, `nativeSheet.item.${id}`); return n ? n.rect.top : -1 }
-    const lastSpace = Math.max(...rows.filter((x) => x.startsWith('space:')).map(at))
-    assert.ok(launchers.every((x) => at(x) > lastSpace), `the launchers are not after the Spaces (${rows})`)
-    assert.ok(!rows.includes('dock:edit') || launchers.every((x) => at(x) < at('dock:edit')), `the dock editor is not after the launchers (${rows})`)
-    assert.equal(textOf(all, 'nativeSheet.title'), '全部')
-    shot('05-all-sheet-light')
+    // the Apps page: the Spaces as tiles, then the launchers that left ⋯ (the store first), then "choose frequent"
+    await openPhonePage('apps')
+    let rows = JSON.parse(await pageRows())
+    assert.equal(rows[0], 'rb-market', `the store does not lead the Apps page's rows (${rows})`)
+    assert.equal(rows.at(-1), 'choose-frequent', `"choose frequent" is not the last row (${rows})`)
+    for (const gone of ['rb-mode', 'rb-cmd', 'rb-settings', 'rb-account', 'rb-achievements', 'rb-feedback']) assert.ok(!rows.includes(gone), `"${gone}" on the Apps page (${rows})`)
+    assert.equal(textOf(ui(), 'nativeChrome.title'), '应用')
+    /** Scrolled to its end, the page's last row ends above the native dock (the page runs under the dock's glass). */
+    const lastRowClear = async (id) => {
+      await cdp.eval("(document.querySelector('.mb-phonepage').scrollTop = 1e6, true)"); await h.pause(400)
+      const r = await elRect(pageRowExpr(id))
+      const dockTop = h.byId(ui(), 'nativeChrome.dock').rect.top
+      await cdp.eval("(document.querySelector('.mb-phonepage').scrollTop = 0, true)")
+      assert.ok(r.bottom <= dockTop, `the ${id} row ends under the dock (${fmt(r)}, dock top ${dockTop})`)
+    }
+    await lastRowClear('choose-frequent')
+    shot('05-apps-page-light')
     h.key(4)
-    await waitSheet(false)
-    // the avatar menu: theme and the command panel after settings (no ⋯ on Home to hold them)
+    assert.ok(await h.waitPage(cdp, homeShown, 5000), 'system back on the Apps page did not go Home')
+    // the Me page: theme and the command panel after settings (no ⋯ on Home to hold them); achievements / feedback after those
     assert.ok(!h.byId(ui(), 'nativeChrome.more'), 'a ⋯ on Home')
-    await tapId('nativeChrome.account')
-    const list = await waitSheet(true)
-    const menu = ids(list)
-    assert.ok(h.byId(list, 'nativeSheet.item.rb-mode'), `theme mode command missing from the avatar menu (${menu})`)
+    await openPhonePage('me')
+    assert.ok(await h.waitPage(cdp, `!!${pageRowExpr('logout')}`, 6000), `the Me page's account rows did not arrive (${await pageRows()})`)
+    rows = JSON.parse(await pageRows())
+    assert.ok(rows.includes('rb-mode'), `theme mode missing from the Me page (${rows})`)
     // same name as on the desktop, minus the keyboard shortcut a phone does not have ("Search" hid it: 2026-10-13)
-    assert.equal(rowLabel(list, 'nativeSheet.item.rb-cmd'), '命令面板')
-    assert.ok(menu.indexOf('rb-mode') > menu.indexOf('rb-settings') && menu.indexOf('rb-cmd') > menu.indexOf('rb-settings'), `theme / command panel not after settings (${menu})`)
-    assert.ok(!menu.includes('tab:new'), `"New tab" in the avatar menu (${menu})`)
-    shot('05-account-menu-light')
-    h.key(4)
-    await waitSheet(false)
-    // avatar → command panel → system Back: the panel closes and the person is still on the page they were on
+    assert.equal(await cdp.eval(`${pageRowExpr('rb-cmd')}?.querySelector('.pp-row-title')?.textContent`), '命令面板')
+    assert.ok(rows.indexOf('rb-mode') > rows.indexOf('rb-settings') && rows.indexOf('rb-cmd') > rows.indexOf('rb-settings'), `theme / command panel not after settings (${rows})`)
+    assert.ok(rows.indexOf('rb-achievements') > rows.indexOf('rb-cmd') && rows.includes('rb-feedback'), `achievements / feedback not after the switches (${rows})`)
+    assert.ok(!rows.includes('tab:new'), `"New tab" on the Me page (${rows})`)
+    await lastRowClear('logout')
+    shot('05-me-page-light')
+    // Me → command panel → system Back: the panel closes and the person is still on the page they were on
     await openPalette()
     await h.pause(400)
     if (imeShown()) { h.key(4); await h.pause(700) } // that Back is the keyboard's
@@ -4333,20 +4409,20 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, "!document.querySelector('.cmd-input')", 4000), 'system Back did not close the command panel')
     await h.pause(500)
     assert.ok(resumed(), 'system Back on the command panel left the app')
-    assert.deepEqual(await cdp.eval(`({ space: document.querySelector('.mb-shell')?.dataset.space, home: ${homeShown} })`), { space: 'home', home: true }, 'system Back on the command panel also left Home')
-    await tapId('nativeChrome.account')
-    const again = await waitSheet(true)
-    await tapId('nativeSheet.item.rb-mode', again)
-    await waitSheet(false)
+    assert.ok(await cdp.eval(phonePageOpen('me')), 'system Back on the command panel also closed the Me page')
+    await pageItem('me', 'rb-mode')
     assert.equal(await h.waitPage(cdp, `(${dom.mode}) !== ${JSON.stringify(mode)} && (${dom.mode})`, 5000), 'dark')
     await h.pause(700) // the bar repaints from the MutationObserver
-    shot('06-shell-dark')
-    await tapId('nativeChrome.account')
-    await waitSheet(true)
-    shot('07-account-menu-dark')
+    shot('07-me-page-dark')
     h.key(4)
-    await waitSheet(false)
-    assert.equal(await cdp.eval(dom.mode), 'dark', 'cancel must not run anything')
+    assert.ok(await h.waitPage(cdp, homeShown, 5000), 'system back on the Me page did not go Home')
+    await h.pause(500)
+    shot('06-shell-dark')
+    await openPhonePage('apps')
+    shot('07-apps-page-dark')
+    h.key(4)
+    assert.ok(await h.waitPage(cdp, homeShown, 5000), 'system back on the Apps page did not go Home')
+    assert.equal(await cdp.eval(dom.mode), 'dark', 'leaving the pages must not run anything')
     const closeTabs = await tabsSheet()
     shot('08-tabs-sheet-dark')
     await closeTabs()
@@ -4432,8 +4508,9 @@ const tabCountText = (list) => {
   })
 
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {
-    if (!h.byId(ui(), 'nativeChrome.account')) await openDrawer()
-    await tapId('nativeChrome.account') // a first-level page has no ⋯ on a phone: the avatar menu is the sheet to leave open
+    // a first-level page has no ⋯ on a phone and the avatar menu became the Me page: the Apps page's "choose frequent" is the sheet to leave open
+    await openPhonePage('apps')
+    await tapEl(pageRowExpr('choose-frequent'))
     await waitSheet(true)
     await reload()
     assert.ok(!sheetOpen(ui()), 'sheet survived the reload')
@@ -4688,32 +4765,32 @@ const tabCountText = (list) => {
 
   // 2026-10-09: the phone host never read the Spaces plugins ship (spaces/<slug>/space.json) — commands and views were
   // there after an install, the Space was not. Most store plugins declare their Space this way.
-  await check('plugins: the Space a plugin ships joins the bottom bar with the plugin\'s own picture and opens on its main view', async () => {
+  await check('plugins: the Space a plugin ships joins the Apps page with the plugin\'s own picture and opens on its main view', async () => {
     assert.match(runAs('ls', `files/plugins/${PLUGIN_ID}/spaces/desk`), /space\.json/, 'the Space recipe was not written with the plugin')
     // the plugin also ships a Space with a 200-character name: the native bars must still be there
     assert.ok((await h.waitNodes((l) => (h.byId(l, 'nativeChrome.bar') && h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 8000 })).hit,
       'the native bars went away after the install (a Space label the native side refuses?)')
-    // A Space that came later is behind "all" until the user puts it in the dock. Put it there (it stands last in the
-    // list): the dock shows a picture, the sheet's tile only the line icon.
-    await setDockPicks(['tangu', PLUGIN_SPACE])
-    await toSpace(PLUGIN_SPACE) // fails with "is neither in the native dock nor behind its all cell" when the Space was not registered
+    // A phone's dock is five fixed cells since 2026-11-19: a Space that came later is a tile on the Apps page, with the
+    // plugin's picture (the native dock's picture path is the tablet rail's now).
+    await openPhonePage('apps')
+    const tile = `document.querySelector('.mb-phonepage .pp-tile[data-space=${JSON.stringify(PLUGIN_SPACE)}]')`
+    assert.ok(await h.waitPage(cdp, `!!${tile}`, 6000), `the plugin's Space is not on the Apps page (${await appsTiles()})`)
+    const pic = await elPoint(`${tile}.querySelector('.pp-tile-icon img, .pp-tile-icon svg')`)
+    let px = pixelAt(pic.x, pic.y)
+    for (let i = 0; i < 10 && !PLUGIN_ICON_RGB.every((v, j) => Math.abs(v - [px.r, px.g, px.b][j]) <= 8); i++) { await h.pause(300); px = pixelAt(pic.x, pic.y) }
+    assert.ok(PLUGIN_ICON_RGB.every((v, i) => Math.abs(v - [px.r, px.g, px.b][i]) <= 8), `the tile's picture is not the plugin icon: ${JSON.stringify(px)}`)
+    shot('p02a-plugin-space-tile')
+    await toSpace(PLUGIN_SPACE) // fails with "is neither in the native dock nor on the Apps page" when the Space was not registered
     assert.ok(await h.waitPage(cdp, "!!document.querySelector('.mb-main [data-e2e-plugin-view]')", 8000), 'the Space did not open the plugin view its recipe names')
     // A recipe Space is main-first on the phone even with a left panel (written for the desktop's three columns, the
     // panel may not lead into the main view at all): no list level, the bar stays, the panel is a drawer.
     assert.equal(await cdp.eval(nav), '', 'a recipe Space must open on its main view, not on its left panel')
-    const cellId = `nativeChrome.space.${PLUGIN_SPACE}`
-    // the picture goes out with a second push (converted off the bar's path): wait for it
-    const r = await h.waitNodes((l) => { const c = h.byId(l, cellId); return c && h.byIdPrefix(l, 'nativeChrome.spacePicture').some((n) => within(c, n)) ? l : null }, { timeout: 10000 })
-    assert.ok(h.byId(r.nodes, 'nativeChrome.spaces') && h.byId(r.nodes, cellId), 'the bottom bar must stay on a main-first Space')
-    assert.ok(h.byId(r.nodes, 'nativeChrome.left'), 'the recipe\'s left panel must be reachable (drawer button)')
-    assert.equal(h.byId(r.nodes, cellId).selected || h.byId(r.nodes, cellId).checked, 'true', 'the plugin Space is not the selected cell')
-    assert.ok(r.hit, 'the cell shows no picture (the plugin\'s icon.png)')
-    const pic = h.byIdPrefix(r.hit, 'nativeChrome.spacePicture').find((n) => within(h.byId(r.hit, cellId), n))
-    const px = pixelAt(pic.rect.cx, pic.rect.cy)
-    assert.ok(PLUGIN_ICON_RGB.every((v, i) => Math.abs(v - [px.r, px.g, px.b][i]) <= 8), `the cell's picture is not the plugin icon: ${JSON.stringify(px)}`)
+    const r = await h.waitNodes((l) => (h.byId(l, 'nativeChrome.spaces') ? l : null), { timeout: 10000 })
+    assert.ok(r.hit, 'the bottom bar must stay on a main-first Space')
+    assert.ok(h.byId(r.hit, 'nativeChrome.left'), 'the recipe\'s left panel must be reachable (drawer button)')
+    assert.ok(isOn(h.byId(r.hit, 'nativeChrome.space.@apps')), 'a Space reached through Apps does not light the Apps cell')
     shot('p02b-plugin-space')
-    await setDockPicks(null)
-    await goHome() // where the install check left the app (the switch also sends the dock as shipped again)
+    await goHome() // where the install check left the app
   })
 
   await check('plugins: oversized downloads (declared > 25 MB, endless stream) are refused by the native capped download; cache and files/plugins stay clean', async () => {
@@ -5242,21 +5319,23 @@ const tabCountText = (list) => {
     shot('15-more-sheet-dark-en')
     h.key(4)
     await waitSheet(false)
-    // the avatar menu carries the command panel; the "all" sheet is titled "All"
+    // the dock's five cells, the Me page (with the command panel) and the Apps page, in English
     await openDrawer()
-    await tapId('nativeChrome.account')
-    list = await waitSheet(true)
-    assert.ok(!hasCjk(list), 'Chinese text in the English avatar menu')
-    assert.equal(rowLabel(list, 'nativeSheet.item.rb-cmd'), 'Command palette')
-    shot('15b-account-menu-dark-en')
+    list = await waitDock()
+    assert.deepEqual(dockCells(list).map((n) => cellName(list, n)), ['Home', 'Chats', 'Notes', 'Apps', 'Me'])
+    const pageCjk = () => cdp.eval("[...document.querySelectorAll('.mb-phonepage .pp-section-title, .mb-phonepage .pp-row-title, .mb-phonepage .pp-row small, .mb-phonepage .pp-tile-name')].map((e) => e.textContent).filter((t) => /[\u4e00-\u9fff]/.test(t)).join(' | ')")
+    await openPhonePage('me')
+    assert.ok(await h.waitPage(cdp, `!!${pageRowExpr('logout')}`, 6000), `the Me page's account rows did not arrive (${await pageRows()})`)
+    assert.equal(textOf(ui(), 'nativeChrome.title'), 'Me')
+    assert.equal(await pageCjk(), '', 'Chinese text on the English Me page')
+    assert.equal(await cdp.eval(`${pageRowExpr('rb-cmd')}?.querySelector('.pp-row-title')?.textContent`), 'Command palette')
+    shot('15b-me-page-dark-en')
+    await openPhonePage('apps')
+    assert.equal(textOf(ui(), 'nativeChrome.title'), 'Apps')
+    assert.equal(await pageCjk(), '', 'Chinese text on the English Apps page')
+    shot('15c-apps-page-dark-en')
     h.key(4)
-    await waitSheet(false)
-    list = await openAllSpaces()
-    assert.equal(textOf(list, 'nativeSheet.title'), 'All')
-    assert.ok(!hasCjk(list.filter((n) => /^nativeSheet\.(title|item\.go:)/.test(n['resource-id'] || ''))), 'Chinese in the English "all" sheet title / launchers')
-    shot('15c-all-sheet-dark-en')
-    h.key(4)
-    await waitSheet(false)
+    assert.ok(await h.waitPage(cdp, `!(${anyPhonePage})`, 5000), 'system back left the Apps page open')
     await cdp.eval("localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light'); true")
     await reload()
     const closeTabs = await tabsSheet()
@@ -5334,7 +5413,7 @@ const tabCountText = (list) => {
     assert.ok(await h.waitPage(cdp, `!(${settingsOpen})`, 6000) || (h.key(4), await h.waitPage(cdp, `!(${settingsOpen})`, 6000)), 'settings stayed open')
     // its page is gone with it, so ⋯ has nowhere to list it: what is left to check is the command panel (avatar menu)
     await openPalette()
-    await tapEl("document.querySelector('.cmd-input')"); await h.pause(500)
+    await focusPaletteInput()
     h.adb('shell', 'input', 'text', 'E2E')
     await h.pause(800)
     const stillListed = await cdp.eval("[...document.querySelectorAll('.cmd-item')].map((r) => r.textContent.trim()).filter((t) => /E2E plugin/.test(t))")

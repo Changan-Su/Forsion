@@ -1,7 +1,7 @@
 /* 沙箱窗口的标识与操作(SandboxChrome.tsx)。只在插件沙箱那份 Forsion 里挂。
  * 一行标识 + 按钮进右上角浮钮组(引擎 .dv-edge-accessory,标签头按整宽让位);宽度压到 ~220px:插件名截断、重置 / 报告只留图标。 */
 .sbx-chrome-row { display: flex; align-items: center; gap: 4px; height: 24px; font-family: var(--font-ui); font-size: var(--ui-font-meta); }
-.sbx-float { position: fixed; top: 4px; right: 12px; z-index: 60; -webkit-app-region: no-drag; } /* 只在手机界面预览里(没有浮钮组) */
+.sbx-float { position: fixed; top: 4px; right: 12px; z-index: var(--z-window-float, 60); -webkit-app-region: no-drag; } /* 只在手机界面预览里(没有浮钮组) */
 .sbx-pill {
   display: inline-flex;
   align-items: center;
@@ -73,7 +73,7 @@
   position: fixed;
   right: 16px;
   bottom: 40px; /* 状态栏之上 */
-  z-index: 60;
+  z-index: var(--z-window-float, 60);
   -webkit-app-region: no-drag;
   display: flex;
   align-items: center;
@@ -81,8 +81,10 @@
   max-width: 460px;
   padding: 8px 8px 8px 12px;
   border-radius: var(--radius-md);
-  background: var(--bg-card);
-  border: var(--border-width, 1px) solid var(--border);
+  /* 压在插件页面上的提示条 = 浮层档(DESIGN §3「浮层表面」):Genesis / Soft 落回原实色,Glass 给磨砂 */
+  background: var(--surface-float, var(--bg-card));
+  backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width, 1px) solid var(--surface-edge, var(--border));
   box-shadow: var(--card-shadow);
   color: var(--text-muted);
   font-size: var(--ui-font-meta);

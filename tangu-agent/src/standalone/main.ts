@@ -12,10 +12,12 @@ import { readFileSync, writeSync } from 'node:fs';
 import { createTanguModule } from '../index.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
-import { parseConfig, validate, HELP, type StandaloneConfig } from './config.js';
+import { parseConfig, validate, validateMultiAccount, HELP, type StandaloneConfig } from './config.js';
 import { loadCreds } from './credStore.js';
 import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
-import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
+import { resolveSandboxMode, setupHost, buildBrain, buildMultiAccountBaseBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
+import { startMultiAccountServer } from './multiAccount.js';
+import { isMultiAccount } from '../core/accountScope.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { createEngineManager } from '../engines/index.js';
@@ -30,6 +32,7 @@ import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
 import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
+import { shutdownReasonForSelf } from '../services/shutdownIntentStore.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
@@ -47,7 +50,27 @@ function engineVersion(): string {
 /** 启动走到哪一步了(见 main 里的 exit 监听);listen 回调里置 'ready'。 */
 let bootPhase = 'config';
 
+/**
+ * 多账号模式(TANGU_MULTI_ACCOUNT=1,真实环境变量):一个进程服务多个账号(standalone/multiAccount.ts)。
+ * 启动时不读 config.json、不读 auth.json、不加载 OAuth provider、不迁移旧配置;引擎配置只来自 env / CLI(含引擎根的 .env)。
+ * 不接桌面私有 stdin 通道、不挂实时语音 ws、不起 MCP / 外部引擎、不加载插件引擎代码。
+ */
+async function mainMultiAccount(): Promise<void> {
+  loadTanguEnv(); // <engineRoot>/.env(引擎级;多账号开关本身不认它)
+  const cfg = parseConfig(process.argv.slice(2), { configFile: false });
+  if (cfg.showHelp) { process.stdout.write(HELP); return; }
+  if (cfg.showVersion) { process.stdout.write(`tangu-server ${engineVersion() || 'unknown'}\n`); return; }
+  const errs = validateMultiAccount(cfg);
+  if (errs.length) {
+    process.stderr.write('配置错误(multi-account):\n  - ' + errs.join('\n  - ') + '\n');
+    process.exit(1);
+  }
+  // 装配、监听、ready 消息、关停都在 standalone/multiAccount.ts(测试走的同一个入口)
+  await startMultiAccountServer({ cfg, brain: buildMultiAccountBaseBrain(cfg), version: engineVersion(), onPhase: (p) => { bootPhase = p; } });
+}
+
 async function main(): Promise<void> {
+  if (isMultiAccount()) return mainMultiAccount();
   startHostChannel(); // 桌面拉起时的私有 stdin 通道(电脑历史钥匙);先于一切,开关读完即从 env 删掉
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
@@ -172,17 +195,23 @@ async function main(): Promise<void> {
 
   attachRealtimeVoice(server); // ws /agent/realtime:实时语音通话中转(brain.realtime 未注入则拒连)
 
-  // 优雅退出(桌面 backendManager 发 SIGTERM,3s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
-  // 等被中止的 run 落完终态(部分回答 + aborted)再退,有界 1.5s,赶在 2s 硬退出之前。
+  // 优雅退出(桌面 backendManager 先写 shutdown-intent.json、再发 SIGTERM,5s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
+  // 等被中止的 run 落完终态(部分回答 + interrupted(<原因>))再退,有界 3s,赶在 4s 硬退出之前。
+  // 原因(中断任务续跑方案 B):意图文件写的是本进程 pid、且是刚写的 → 用它(app_quit / app_update / engine_restart / account_change);
+  // 否则 engine_stop(没打招呼的停,不自动续)。只处理第一次:退出时常常先 SIGTERM、再 disconnect,第二次不改写原因。
+  let stopping = false;
   const shutdown = (): void => {
-    const drained = drainRunsForExit(1500);
+    if (stopping) return;
+    stopping = true;
+    const drained = drainRunsForExit(3000, shutdownReasonForSelf());
     try { mod.dispose(); } catch { /* ignore */ }
     void Promise.all([drained, mcp.dispose()]).finally(() => process.exit(0));
-    setTimeout(() => process.exit(0), 2000).unref?.();
+    setTimeout(() => process.exit(0), 4000).unref?.();
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   // A Unit crash must not leave an orphan engine listening with access to its workspace.
+  // 宿主没写意图就断开(Unit 崩了)= engine_stop;写了(先断 IPC 再发信号的退出顺序)照意图记。
   if (process.send) process.on('disconnect', shutdown);
 }
 

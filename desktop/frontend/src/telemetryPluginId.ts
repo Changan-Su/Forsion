@@ -38,14 +38,22 @@ const LOCAL: TelemetryPluginRef = { pluginId: 'local', pluginOfficial: false }
 
 /** 一个插件 → 遥测里的 { pluginId, pluginOfficial }。type = 它装在哪个插件目录(Forsion 插件 / 引擎插件)。 */
 export function telemetryPluginRef(p: TelemetryPluginLike | undefined, type: 'amadeus-plugin' | 'plugin' = 'amadeus-plugin'): TelemetryPluginRef {
-  if (!p || p.dev) return LOCAL
+  const { pluginId, pluginOfficial } = telemetryPluginEntry(p, type)
+  return { pluginId, pluginOfficial }
+}
+
+/** 同上,另带命中的是哪一类(插件清单 plugin_inventory 的 source):商店条目 = store,内置 / 预装 = builtin,其余 local。 */
+export interface TelemetryPluginEntry extends TelemetryPluginRef { source: 'store' | 'builtin' | 'local' }
+export function telemetryPluginEntry(p: TelemetryPluginLike | undefined, type: 'amadeus-plugin' | 'plugin' = 'amadeus-plugin'): TelemetryPluginEntry {
+  const local: TelemetryPluginEntry = { ...LOCAL, source: 'local' }
+  if (!p || p.dev) return local
   const dir = p.dir || p.bundle?.dir || p.id // 安装目录名(老商店条目按 install_slug 落目录,可以和插件 id 不同)
   const mapped = (telemetryOn() || marketIds ? ensureMarketIds() : null)?.get(`${type}:${dir}`)
-  if (mapped && !isSourceCardId(mapped)) return { pluginId: mapped, pluginOfficial: true } // 商店来源(第三方目录)装的记 local
+  if (mapped && !isSourceCardId(mapped)) return { pluginId: mapped, pluginOfficial: true, source: 'store' } // 商店来源(第三方目录)装的记 local
   const marketDir = [dir, p.id].find((x) => MARKET_ITEM_ID.test(x))
-  if (marketDir) return { pluginId: marketDir.slice('market-'.length), pluginOfficial: true } // market-<UUID> 的 UUID 就是商店条目 id
-  if (p.builtin || p.preinstalled) return { pluginId: p.id, pluginOfficial: true }
-  return LOCAL
+  if (marketDir) return { pluginId: marketDir.slice('market-'.length), pluginOfficial: true, source: 'store' } // market-<UUID> 的 UUID 就是商店条目 id
+  if (p.builtin || p.preinstalled) return { pluginId: p.id, pluginOfficial: true, source: 'builtin' }
+  return local
 }
 
 /** 命令 id 的白名单上限(telemetry-schema.json command_use.id max)。 */

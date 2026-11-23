@@ -38,7 +38,7 @@ const GRANTED = 'a0000000-0000-4000-8000-000000000007';
 const profile = createTanguProfile({ sandboxMode: 'none' });
 let home: string;
 let requests: any[];
-let script: Array<() => any>;
+let script: Array<(o?: any) => any>;
 let model: Record<string, unknown>;
 let events: Array<{ type: string; payload: any }>;
 let unsubscribe: () => void;
@@ -71,7 +71,7 @@ beforeEach(async () => {
       requests.push(o.payload);
       const step = script.shift();
       if (!step) throw new Error(`no scripted reply for call ${requests.length}`);
-      return step();
+      return step(o);
     },
   };
   configureTangu({
@@ -93,6 +93,23 @@ afterEach(() => {
 });
 
 describe('delegate resume', () => {
+  it('子代理被安全审核拦下:父代理拿到固定说明,子会话转写退回并标 refused,续用时上下文里没有原文', async () => {
+    const REFUSED = 'partial text that must not survive';
+    script = [() => callDatetime('tc0'), (o: any) => { o.onToken(REFUSED); o.onReasoning?.('hidden'); return { content: REFUSED, reasoning: 'hidden', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 }, finishReason: 'refusal' }; }];
+    const first = await execute({ task: 'Write it', name: 'Writer' }, ctxOf());
+    expect(first).toContain("This reply was blocked by the model's safety check.");
+    expect(first).not.toContain(REFUSED);
+    const full = (await query<any[]>(`SELECT id FROM chat_sessions WHERE kind = 'delegate'`))[0].id as string;
+    const row = (await query<any[]>(`SELECT content, reasoning, origin FROM chat_messages WHERE session_id = ? AND role = 'model'`, [full]))[0];
+    expect(row.content).toBe("This reply was blocked by the model's safety check.");
+    expect(row.reasoning || '').not.toContain('hidden');
+    expect(row.origin).toBe('refused');
+
+    script = [() => reply('ok')];
+    await execute({ task: 'Try again', resume: idOf(first) }, ctxOf());
+    expect(JSON.stringify(requests.at(-1).messages)).not.toContain(REFUSED);
+  });
+
   it('接着原上下文跑:第二轮带着上一轮的工具结果,不新开子会话,两轮各落各的行', async () => {
     script = [() => callDatetime('tc1'), () => reply('The time is known.')];
     const first = await execute({ task: 'What time is it?', instructions: 'You are the clock keeper.', name: 'Clock' }, ctxOf());

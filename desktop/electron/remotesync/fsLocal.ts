@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { RemoteFs } from './types'
+import { withTextWriteLock } from '../amadeus/fs/textWriteLock'
 import { writeFileDurable } from '../amadeus/fs/renameAtomic'
 
 export interface LocalFile {
@@ -73,13 +74,17 @@ export function createDirRemote(root: string): RemoteFs {
       return fs.readFile(abs(key))
     },
     async writeFile(key, data, mtimeMs) {
-      await atomicWrite(abs(key), data, mtimeMs)
-      const st = await fs.stat(abs(key))
-      const mt = Math.floor(st.mtimeMs)
-      return { key, size: st.size, mtimeMs: mt, id: `${mt}:${st.size}` }
+      const file = abs(key)
+      return withTextWriteLock(file, async () => {
+        await atomicWrite(file, data, mtimeMs)
+        const st = await fs.stat(file)
+        const mt = Math.floor(st.mtimeMs)
+        return { key, size: st.size, mtimeMs: mt, id: `${mt}:${st.size}` }
+      })
     },
     async rm(key) {
-      await fs.rm(abs(key), { force: true })
+      const file = abs(key)
+      await withTextWriteLock(file, () => fs.rm(file, { force: true }))
     },
     async check() {
       try {

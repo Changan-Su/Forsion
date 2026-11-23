@@ -68,15 +68,15 @@ describe('Amadeus note view memory', () => {
   it('keeps page typography per vault, drops the key at defaults, and carries it across rename', () => {
     expect(readNotePageStyle('/a', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
     writeNotePageStyle('/a', 'p.md', { wide: true, font: 'serif' })
-    expect(readNotePageStyle('/a', 'p.md')).toEqual({ wide: true, small: false, font: 'serif' })
+    expect(readNotePageStyle('/a', 'p.md')).toEqual({ wide: true, small: false, centerLine: false, font: 'serif' })
     expect(readNotePageStyle('/b', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
     remapNoteViewMemory('/a', 'p.md', 'q.md')
-    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: false, font: 'serif' })
+    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: false, centerLine: false, font: 'serif' })
     expect(readNotePageStyle('/a', 'p.md')).toEqual(DEFAULT_PAGE_STYLE)
-    writeNotePageStyle('/a', 'q.md', { small: true })
+    writeNotePageStyle('/a', 'q.md', { small: true, centerLine: true })
     remapNoteViewMemory('/a', 'p.md', 'q.md') // 行内改名之后 remapScopePaths 再调一次:不许拿旧的盖掉新的
-    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: true, font: 'serif' })
-    writeNotePageStyle('/a', 'q.md', { wide: false, small: false, font: 'default' })
+    expect(readNotePageStyle('/a', 'q.md')).toEqual({ wide: true, small: true, centerLine: true, font: 'serif' })
+    writeNotePageStyle('/a', 'q.md', { wide: false, small: false, centerLine: false, font: 'default' })
     expect([...data.keys()].filter((k) => k.startsWith('amx.notePage:'))).toEqual([])
   })
 

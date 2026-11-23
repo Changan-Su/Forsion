@@ -16,6 +16,7 @@ import { decide } from './decide'
 import { compileIgnore } from './ignore'
 import { walkLocalFiles, atomicWrite, sha256, type LocalFile } from './fsLocal'
 import { loadPrev, savePrev } from './prevSync'
+import { withTextWriteLock } from '../amadeus/fs/textWriteLock'
 import { withDbLock } from '../amadeus/fs/dbLock'
 import type { PlanItem, PrevState, RemoteEntity, SyncOptions, SyncReport } from './types'
 
@@ -275,7 +276,10 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
     const abs = absOf(key)
     // 数据库文件(日历 Calendar.db 等)落盘「重读 → 比对 → 留副本 → 换文件」整段拿桌面比对交换写 / 引擎 mutateDb / human/ 镜像共用的那把锁:
     // 不然别的写入方在「重读」和「换文件」之间写进来的行会被静默盖掉,镜像还会把它当成「库里删了」传到所有设备(10-20 Codex 复核)
-    const local = <T>(fn: () => Promise<T>): Promise<T> => (key.toLowerCase().endsWith('.db') ? withDbLock(abs, fn) : fn())
+    // Keep local revalidation and replacement/unlink together with editor CAS. For a database,
+    // use the same outer-to-inner lock order as the content sync host.
+    const local = <T>(fn: () => Promise<T>): Promise<T> =>
+      withTextWriteLock(abs, () => key.toLowerCase().endsWith('.db') ? withDbLock(abs, fn) : fn())
     try {
       if (kind === 'push') {
         const before = await fs.stat(abs)
@@ -395,8 +399,9 @@ export async function moveAsideFromSync(opts: { localRoot: string; keys: string[
     for (const key of opts.keys) {
       const to = path.join(opts.backupDir, key)
       await fs.mkdir(path.dirname(to), { recursive: true })
-      await fs.rename(path.join(opts.localRoot, key), to)
-      await removeEmptyDirs(path.join(opts.localRoot, key), opts.localRoot) // 挪空的文件夹不留空壳(只删空的)
+      const from = path.resolve(opts.localRoot, key)
+      await withTextWriteLock(from, () => fs.rename(from, to))
+      await removeEmptyDirs(from, opts.localRoot) // 挪空的文件夹不留空壳(只删空的)
       moved++
     }
   } catch (e) { return { moved, error: String((e as Error)?.message || e) } }

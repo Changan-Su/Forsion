@@ -21,6 +21,6 @@ export function nextOccurrence(entry: Pick<AgentScheduleEntry, 'date' | 'repeat'
 
 /** 规则命中后会不会叫醒这个 Agent:动作链里有它的 agent_run;没有动作链的旧式规则看 agentSlug(缺省 = Muse)。 */
 export function triggerWakes(tr: Pick<MuseTriggerInfo, 'actions' | 'agentSlug'>, slug: string): boolean {
-  if (tr.actions?.length) return tr.actions.some((a) => a.type === 'agent_run' && a.agentSlug === slug)
+  if (tr.actions?.length) return tr.actions.some((a) => (a.type === 'agent_run' || a.type === 'send_message') && a.agentSlug === slug)
   return (tr.agentSlug || 'muse') === slug
 }

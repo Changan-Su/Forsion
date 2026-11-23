@@ -66,11 +66,12 @@ describe('withLlmRetry', () => {
     expect(fn).not.toHaveBeenCalled();
   });
 
-  it('59s 失败加退避将超过累计预算时不再启动下一次请求', async () => {
+  // 11-20 退避改成 1s 起翻倍 ±20%:第一次退避最短 800ms,所以失败点挪到 59.5s(59.5+0.8 ≥ 60)才稳定越线。
+  it('59.5s 失败加退避将超过累计预算时不再启动下一次请求', async () => {
     vi.useFakeTimers();
     try {
       const fn = vi.fn(async () => {
-        vi.advanceTimersByTime(SLOW_FAIL_NO_RETRY_MS - 1000);
+        vi.advanceTimersByTime(SLOW_FAIL_NO_RETRY_MS - 500);
         throw new TypeError('fetch failed');
       });
       await expect(withLlmRetry(fn)).rejects.toThrow('fetch failed');

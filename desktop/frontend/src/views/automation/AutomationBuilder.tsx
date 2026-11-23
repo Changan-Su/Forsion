@@ -4,7 +4,8 @@
  * 旧式 Muse 规则保留无动作链的行为；工具仍走既有白名单与参数契约。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Send, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
+import { AUTOMATION_MESSAGE_LIMIT, AUTOMATION_MESSAGE_PROMPT_LIMIT } from '../../../../../tangu-agent/src/contracts/automationMessage'
 import { useApp } from '../../stores/appStore'
 import { track } from '../../achievements/store'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
@@ -26,7 +27,8 @@ import { ArrowLeft, HelpCircle, Plus } from 'lucide-react'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { SelectField } from '../../components/SelectField'
 import { AutomationExtension } from './AutomationExtension'
-import type { MuseTriggerInfo, MuseTriggerUpsert, TriggerSourceInfo } from '../../types'
+import type { MuseAutomationSuggestion, MuseTriggerInfo, MuseTriggerUpsert, TriggerSourceInfo } from '../../types'
+import { SuggestionNote } from './MuseSuggestions'
 import { starterSteps, stepIssue, type Starter } from './experience'
 import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
 import { TemplateField } from './TemplateField'
@@ -40,6 +42,10 @@ type TimerMode = 'daily_at' | 'at' | 'every'
 /** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
 export interface AutomationBuilderProps {
   editing?: MuseTriggerInfo
+  /** Muse 建议的草稿(11-22 方案 A):只当初值填画布,不带 id —— 保存是新建,和模板同一约定。 */
+  draft?: MuseTriggerInfo
+  /** 草稿来自哪条 Muse 建议:标题下一行写依据与来源。 */
+  suggestion?: MuseAutomationSuggestion
   extendView?: ExtendViewController
   starter?: Starter
   /** true=锁死「手动(按钮)」触发,隐藏触发类型选择器。 */
@@ -61,18 +67,20 @@ function defaultDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
 }
 
-export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel, extendView }) => {
+export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, draft, suggestion, starter, fixedManual, onSaved, onCancel, extendView }) => {
   const { t } = useI18n()
   const agentDefs = useHomeAgentDefs() // 自动化是本端的(P1-K6)
   const st = useAutomation()
   const catalog = st.actionsCatalog
 
-  const [desc, setDesc] = useState(editing?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
+  // 初值的来源:编辑既有规则,或 Muse 建议的草稿。id / rev / 启用态只认 editing(草稿保存是新建、先暂停)。
+  const seed = editing ?? draft
+  const [desc, setDesc] = useState(seed?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
   const [selected, setSelectedId] = useState('trigger')
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const setSelected = (id: string): void => { setSelectedId(id); setInspectorOpen(true) }
   const [enabled, setEnabled] = useState(editing?.enabled ?? !!fixedManual)
-  const initCond = editing?.cond
+  const initCond = seed?.cond
   const [kind, setKind] = useState<TriggerKind>(
     !initCond ? (fixedManual || starter === 'button' ? 'manual' : starter === 'table' ? 'db_changed' : 'timer')
     : initCond.type === 'event_seen' ? 'event_seen'
@@ -97,7 +105,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     if (kind !== 'param' || recentApps.length) return
     void window.tangu?.computerHistory?.recentApps().then(setRecentApps).catch(() => {})
   }, [kind, recentApps.length])
-  const [onlyDraft, setOnlyDraft] = useState<OnlyDraft>(() => onlyDraftFrom(editing))
+  const [onlyDraft, setOnlyDraft] = useState<OnlyDraft>(() => onlyDraftFrom(seed))
   const [timerMode, setTimerMode] = useState<TimerMode>(
     initCond?.type === 'at' ? 'at' : initCond?.type === 'every' ? 'every' : 'daily_at',
   )
@@ -140,16 +148,16 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   const dbColsRaw = useDbStore((s) => (kind === 'db_changed' && dbPath ? s.entries[dbPath]?.data?.columns : undefined))
   // 计算列(公式/引用)不落盘,引擎游标比对永远看不见它变 —— 列出来 = 一条永不触发的规则。
   const dbCols = useMemo(() => dbColsRaw?.filter((c) => c.type !== 'formula' && c.type !== 'lookup'), [dbColsRaw])
-  const [steps, setSteps] = useState<StepDraft[]>(() => editing ? stepsFrom(editing) : starterSteps(starter, t))
-  const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
+  const [steps, setSteps] = useState<StepDraft[]>(() => seed ? stepsFrom(seed) : starterSteps(starter, t))
+  const [musePrompt, setMusePrompt] = useState(seed && !seed.actions?.length && !seed.agentSlug ? seed.prompt || '' : '')
   // 「叫醒 Muse」是没有动作链的规则:和步骤互斥,选了就把步骤清掉。
-  const [wakeMuse, setWakeMuse] = useState(!!editing && !editing.actions?.length && !editing.agentSlug)
-  const [cooldown, setCooldown] = useState(() => initialCooldown(editing, kind))
+  const [wakeMuse, setWakeMuse] = useState(!!seed && !seed.actions?.length && !seed.agentSlug)
+  const [cooldown, setCooldown] = useState(() => initialCooldown(seed, kind))
   // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0,新触发源按注册表);用户已亲手改过的值不动。
   const cooldownTouched = useRef(false)
   useEffect(() => {
-    if (!editing && !cooldownTouched.current) setCooldown(initialCooldown(null, kind, kind === 'param' ? source?.defaultCooldownHours : undefined))
-  }, [kind, editing, source?.defaultCooldownHours])
+    if (!seed && !cooldownTouched.current) setCooldown(initialCooldown(null, kind, kind === 'param' ? source?.defaultCooldownHours : undefined))
+  }, [kind, seed, source?.defaultCooldownHours])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [conflict, setConflict] = useState(false)
@@ -192,7 +200,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     setKind(item.kind)
     if (item.kind === 'param') { setSourceId(item.id); setParamValues({}) }
   }
-  const hasAgentStep = steps.some((s) => s.type === 'agent_run')
+  const hasAgentStep = steps.some((s) => s.type === 'agent_run' || s.type === 'send_message' && s.source === 'agent')
   const patchStep = (key: number, patch: Partial<StepDraft>): void =>
     setSteps((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)))
   const moveStep = (i: number, dir: -1 | 1): void =>
@@ -250,8 +258,13 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   if (!desc.trim()) issues.push({ node: 'trigger', text: t('automation.ux.issue.name') })
   if (!triggerValid) issues.push({ node: 'trigger', text: t('automation.ux.issue.trigger') })
   if (!steps.length && !wakeMuse && (!editing || kind === 'manual')) issues.push({ node: 'review', text: t('automation.ux.issue.steps') })
-  steps.forEach((step, i) => {
+  const stepProblem = (step: StepDraft): string | null => {
     const issue = stepIssue(step, kind, catalog)
+    if (issue || step.type !== 'send_message' || step.source !== 'agent') return issue
+    return agentDefs.find((d) => d.slug === step.agentSlug)?.engine?.trim() ? 'senderEngine' : null
+  }
+  steps.forEach((step, i) => {
+    const issue = stepProblem(step)
     if (issue) issues.push({ node: String(step.key), text: `${i + 1}. ${t(`automation.ux.issue.${issue}`)}` })
   })
   const showCooldown = kind !== 'timer' && kind !== 'manual' && !source?.timed
@@ -308,7 +321,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         // where 对 row_added 也有效;空数组送 undefined(见 whereToUpsert 注释)。
         where: condType === 'db_changed' ? whereToUpsert(dbWhere) : undefined,
         // 编辑既有 db 规则:钉回建规则时的 vault(省略会被引擎重钉到**当前** vault,切库编辑会静默改靶)。
-        vault: condType === 'db_changed' && editing?.cond.type === 'db_changed' ? editing.cond.vault : undefined,
+        vault: condType === 'db_changed' && seed?.cond.type === 'db_changed' ? seed.cond.vault : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
         cooldown_hours: cooldownPayload(showCooldown ? kind : 'timer', cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
@@ -317,7 +330,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
       })
       if (!editing?.id) track('automation.create') // 只计新建,编辑保存不算
       if (onSaved) { st.bump(); onSaved(saved); return }
-      st.acceptSaved(saved)
+      st.acceptSaved(saved, suggestion?.id)
       useApp.getState().toast(t('automation.ux.saved'))
     } catch (e: any) {
       if (e?.status === 409) { setConflict(true); setError(t('automation.builder.conflict')); lastMode.current = mode }
@@ -328,21 +341,27 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   }
 
   const stepIcon = (ty: StepDraft['type']): React.ReactNode =>
-    ty === 'notify' || ty === 'remind' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} />
+    ty === 'notify' || ty === 'remind' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} /> : ty === 'send_message' ? <Send size={14} />
     : ty === 'db_row_add' || ty === 'db_row_edit' ? <Database size={14} /> : <Wrench size={14} />
 
   const sourceName = (s: TriggerSourceInfo): string => s.name[currentLocale() === 'zh' ? 'zh' : 'en']
   const kindLabel = (k: TriggerKind): string => t(`automation.builder.${k === 'timer' ? 'condTimer' : k === 'manual' ? 'condManual' : k === 'db_changed' ? 'condDb' : k === 'event_seen' ? 'condEvent' : 'condFile'}`)
   const flowNodes: FlowNode[] = [
     { id: 'trigger', title: t('automation.builder.trigger'), subtitle: kind === 'param' ? (source ? sourceName(source) : sourceId) : kindLabel(kind), icon: <Zap size={17} />, ready: triggerValid && !!desc.trim() },
-    ...steps.map((step, i) => ({ id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`, subtitle: step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'), icon: stepIcon(step.type), ready: !stepIssue(step, kind, catalog) })),
+    ...steps.map((step, i) => ({
+      id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`,
+      subtitle: step.type === 'send_message' && step.agentSlug
+        ? `${(agentName(agentDefs.find((d) => d.slug === step.agentSlug)) || step.agentSlug)} → ${t(`automation.send.${step.delivery}`)}`
+        : step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'),
+      icon: stepIcon(step.type), ready: !stepProblem(step),
+    })),
     ...(!steps.length && wakeMuse && kind !== 'manual' ? [{ id: 'muse', title: t('automation.step.wake'), subtitle: musePrompt || t('automation.step.wakeHint'), icon: <Sparkles size={17} />, ready: true }] : []),
     { id: 'review', title: t('automation.ux.finish'), subtitle: canSave ? t('automation.ux.allReady') : t('automation.ux.finishHint'), icon: <CheckCircle2 size={17} />, ready: canSave },
   ]
   const additions = <>
     <CapabilityMenu label={t('automation.ux.addStep')} className="btn ghost sm" disabled={busy || steps.length >= 24}
       items={[
-        ...(['remind', 'notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
+        ...(['remind', 'notify', 'send_message', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
           id: type, label: t(`automation.step.${type}`), icon: stepIcon(type), disabled: type === 'tool_call' && !catalog.length,
           onSelect: () => addStep(type),
         })),
@@ -357,6 +376,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
         <button className="btn ghost sm" disabled={busy} onClick={() => leave()}>{t('common.cancel')}</button>
       </div>
+      {suggestion && <SuggestionNote s={suggestion} />}
       <div className="auto-builder-workspace" hidden={!extendView && inspectorOpen}>
         <WorkflowCanvas nodes={flowNodes} selected={inspectorOpen ? selected : ''} onSelect={setSelected}>{additions}</WorkflowCanvas>
       </div>
@@ -593,6 +613,46 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
                 <TemplateField label={t('automation.builder.notifyTitle')} value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(title) => patchStep(s.key, { title })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <TemplateField label={t('automation.builder.notifyBody')} value={s.body} multiline onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <div className="auto-hint">{t('automation.builder.notifyHint')}</div>
+              </>
+            )}
+            {s.type === 'send_message' && (
+              <>
+                <div className="field">
+                  <label>{t('automation.send.sender')}</label>
+                  <SelectField size="sm" field="automation-sender" ariaLabel={t('automation.send.sender')} value={s.agentSlug}
+                    onChange={(agentSlug) => patchStep(s.key, { agentSlug })}
+                    options={[
+                      { value: '', label: t('automation.send.pickSender') },
+                      ...agentDefs.map((d) => ({ value: d.slug, label: agentName(d) })),
+                      ...(s.agentSlug && !agentDefs.some((d) => d.slug === s.agentSlug) ? [{ value: s.agentSlug, label: s.agentSlug }] : []),
+                    ]} />
+                </div>
+                <div className="field">
+                  <label>{t('automation.send.delivery')}</label>
+                  <SelectField size="sm" field="automation-delivery" ariaLabel={t('automation.send.delivery')} value={s.delivery}
+                    onChange={(delivery) => patchStep(s.key, { delivery: delivery === 'solo' ? 'solo' : 'inbox' })}
+                    options={(['inbox', 'solo'] as const).map((value) => ({ value, label: t(`automation.send.${value}`) }))} />
+                </div>
+                <div className="field">
+                  <label>{t('automation.send.source')}</label>
+                  <div className="auto-seg" role="group" aria-label={t('automation.send.source')}>
+                    {(['fixed', 'agent'] as const).map((source) => (
+                      <button key={source} type="button" className={s.source === source ? 'active' : ''} aria-pressed={s.source === source}
+                        onClick={() => patchStep(s.key, { source })}>{t(`automation.send.${source}`)}</button>
+                    ))}
+                  </div>
+                </div>
+                {s.source === 'fixed' ? (
+                  <TemplateField label={t('automation.send.body')} value={s.body} multiline maxLength={AUTOMATION_MESSAGE_LIMIT[s.delivery]}
+                    onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
+                ) : (
+                  <div className="field">
+                    <label htmlFor={`automation-send-prompt-${s.key}`}>{t('automation.send.prompt')}</label>
+                    <textarea id={`automation-send-prompt-${s.key}`} value={s.prompt} rows={3} maxLength={AUTOMATION_MESSAGE_PROMPT_LIMIT}
+                      onChange={(e) => patchStep(s.key, { prompt: e.target.value })} />
+                  </div>
+                )}
+                {s.delivery === 'solo' && <div className="auto-hint">{t('automation.send.soloHint')}</div>}
               </>
             )}
             {s.type === 'agent_run' && (

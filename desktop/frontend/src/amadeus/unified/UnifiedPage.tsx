@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentProps, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection, type Selection, type Transaction } from '@milkdown/kit/prose/state'
@@ -98,14 +98,17 @@ import { beginPending, createPendingInsert, endPending, insertAtPending, insertI
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
-import type { ToolbarAiItem } from '../blocks/markdown/InlineToolbar'
+import type { ToolbarAiItem, ToolbarBarModel } from '../blocks/markdown/InlineToolbar'
 import { agentEditing, claimAgentWrite, subscribeAgentWrites } from '../../stores/agentWriteLedger'
 import { askTanguQuote } from './askTangu'
 import { replyAnchorPos } from './replyInsert'
 import type { ReplyAnchor } from './lifecycle'
 import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
-import { listSelectionActions, runSelectionAction, selectionActionKey } from '../../selectionActions'
+import { listSelectionActions, rememberSelectionLanguage, runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle } from '../../selectionActions'
+import { bindSelectionRun, unbindSelectionRun } from '../plugins/selectionRun'
+import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive } from '../../components/selectionBar/barModel'
+import { TtsSetupCard } from '../../components/selectionBar/TtsSetupCard'
 import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
 import { anchorMarksPlugin } from './anchorMarks'
@@ -123,6 +126,7 @@ import { ReadingSurface, type ReadingModeControl } from './ReadingSurface'
 import { captureReadingPosition, prepareReadingSnapshot, readingCounterpart, readingSnapshot, restoreReadingPosition, type ReadingPosition } from './readingSnapshot'
 import type { NoteReadingSnapshot } from '../plugins/noteRenderers'
 import { registerReadingToggle } from './readingCommands'
+import { createCenterLine } from './centerLine'
 import { fromDisk, toDisk, type Eol } from './eol'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { readDocumentScroll, readNoteSurfaceMode, remapNoteViewMemory, writeDocumentScroll, writeNoteSurfaceMode } from './viewMemory'
@@ -133,6 +137,7 @@ import { pmFindProvider } from './findReplace'
 import { claimMoveHandoff, hasMoveHandoff, registerMoveHandoff, type MoveHandoff, type MoveSnapshot } from './moveHandoff'
 
 registerMessages({
+  'selbar.speakFailedNote': { zh: '朗读没有完成：{e}', en: 'Read aloud did not finish: {e}' },
   'unipage.toast.insertPointLost': { zh: '文件已创建，但原插入位置已失效（笔记已切换）', en: 'The file was created, but the original insertion point is gone (the note was switched).' },
   'unipage.plugin.notString': { zh: 'run() 必须返回字符串，实际是 {type}', en: 'run() must return a string, but returned {type}' },
   'unipage.plugin.tooLong': { zh: 'run() 返回内容过长', en: 'run() returned too much content' },
@@ -449,7 +454,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   /** 选区工具栏「问 Tangu」(G3-04);缺 = 宿主没有侧栏对话,不出按钮。 */
   onAskTangu?: (view: EditorView) => void
   /** 选区工具栏「AI ▾」(G3-07);缺 = 宿主做不了正文 AI。 */
-  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void
+    bar?: (from: number, to: number, close: () => void) => ToolbarBarModel }
   /** `/ai`(G3-07):消费掉 '/ai' 之后在光标处开 AI 面板。 */
   onAiPrompt?: (view: EditorView) => void
 }): ReactElement {
@@ -1379,7 +1385,9 @@ export function UnifiedPage(props: Parameters<typeof UnifiedPageInner>[0]): Reac
   return <UnifiedPageInner {...props} {...prepared} />
 }
 
-function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, initialReading = false, onReadingMode, onReadingChange, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, historyRef, filesRef, mdRef, onUnlock, onExitCenterLine, initialReading = false, onReadingMode, onReadingChange, compact = false, readOnly = false, hardBreaks = false, inheritedMove = false, moveCaret }: {
+  /** Present only while this note has opted into centering the typing line. */
+  onExitCenterLine?: () => void
   initialReading?: boolean
   onReadingMode?: (control: ReadingModeControl | null) => void
   onReadingChange?: (reading: boolean) => void
@@ -1862,8 +1870,14 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   const recoveryOpen = useRef(false) // 「恢复草稿」条还在等用户决定:那份草稿和本实例同一格,连打节拍不许盖掉它
   // 版块工具条(sections.ts):插件 + 小 store,工具条组件只订阅它。每个实例一份,稳定引用。
   const sectionTb = useMemo(() => createSectionToolbar(), [])
+  const exitCenterLine = useRef(onExitCenterLine)
+  exitCenterLine.current = onExitCenterLine
+  const centerLine = useMemo(() => createCenterLine(() => exitCenterLine.current?.(), () => segAnchorRef.current), [])
+  const following = !!onExitCenterLine && !readOnly && !reading && !canvasOn && mode === 'wysiwyg'
+  useLayoutEffect(() => { centerLine.setEnabled(following) }, [centerLine, following])
   const editorPlugins = useMemo(
     () => [
+      centerLine.plugin,
       ...layer.plugins,
       ...columnPlugins,
       sectionTb.plugin,
@@ -2081,7 +2095,41 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     const length = doc ? doc.textBetween(Math.min(from, doc.content.size), Math.min(to, doc.content.size), '\n', '').length : to - from
     return listSelectionActions(pluginSelActions, { view: 'note', editable: true, length }).map((o) => {
       const icon = resolveIcon(o.item.icon)
-      return { id: selectionActionKey(o), label: o.item.title, icon: icon ? <span className="selbar-ico">{icon}</span> : undefined }
+      return { id: selectionActionKey(o), label: selectionActionTitle(o), icon: icon ? <span className="selbar-ico">{icon}</span> : undefined }
+    })
+  }
+  // 格式栏的动作区整份(2026-11-21 划线插件常驻 / 朗读 / 翻译改插件):和聊天那一条同一份排法(barModel)。
+  // 笔记不做划选后自动(这一张卡能写回笔记,回车 = 替换;自动开的卡会让一下误按变成改稿)。
+  const installedPlugins = usePluginStore((s) => s.plugins)
+  useSelectionBarLive() // 结果卡里小喇叭的三态跟着播放器走
+  const [ttsSetup, setTtsSetup] = useState<{ x: number; y: number; top: number } | null>(null)
+  const selectionBarFor = (from: number, to: number, close: () => void): ToolbarBarModel => {
+    const doc = layer.getView()?.state.doc
+    const text = doc ? doc.textBetween(Math.min(from, doc.content.size), Math.min(to, doc.content.size), '\n', '') : ''
+    const tts = readTangu()?.tts
+    const live = tts?.state()
+    const key = speakKeyOf(text)
+    const withView = (fn: (view: EditorView) => void): void => { const v = layer.getView(); if (v) fn(v) }
+    return buildSelectionBarModel({
+      view: 'note', editable: true, length: text.length, registered: pluginSelActions, installed: installedPlugins,
+      host: {
+        ask: canAskTangu ? [{ id: 'ask', label: t('itb.askTangu'), title: t('itb.askTanguTitle'), icon: <MessageCircle size={14} />, lead: true,
+          onRun: () => { close(); withView((v) => askTangu(v, v.state.selection.from, v.state.selection.to)) } }] : [],
+        translate: canAi ? () => { close(); withView((v) => openAi(v, 'translate')) } : undefined,
+        speak: tts ? {
+          phase: live?.key === key ? live.phase : null,
+          onRun: () => {
+            if (live?.key === key) { tts.stop(key); return }
+            tts.speak(key, text).catch((e: unknown) => {
+              const m = String((e as Error)?.message || e)
+              if (m === 'tts_no_model') {
+                withView((v) => { const a = v.coordsAtPos(from); const b = v.coordsAtPos(to); setTtsSetup({ x: a.left, y: b.bottom + 6, top: a.top - 6 }) })
+              } else if (m !== 'EMPTY') window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('selbar.speakFailedNote', { e: m }) } }))
+            })
+          },
+        } : undefined,
+      },
+      onPlugin: (o) => { close(); withView((v) => openAi(v, selectionActionKey(o))) },
     })
   }
   const noteTitle = path.split('/').pop()!.replace(/\.md$/i, '')
@@ -2100,7 +2148,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (owned?.item.output === 'none') {
       const markdown = hostApi.current?.serializeMd(view.state.doc.slice(from, to).content) ?? text
       void runSelectionAction(owned, { text, markdown, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle } })
-        .catch((e: unknown) => window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('selbar.failed', { title: owned.item.title, e: String((e as Error)?.message || e) }) } })))
+        .catch((e: unknown) => window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('selbar.failed', { title: selectionActionTitle(owned), e: String((e as Error)?.message || e) }) } })))
       return
     }
     setAiTarget(view, from, to)
@@ -2108,9 +2156,12 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     const b = view.coordsAtPos(to)
     const action = (plugin || cursor ? (cursor ? 'prompt' : 'custom') : kind) as TanguInlineAction | 'prompt'
     const title = plugin
-      ? (owned?.item.title ?? t('inlineai.label'))
+      ? (owned ? selectionActionTitle(owned) : t('inlineai.label'))
       : cursor ? t('inlineai.label') : t(`inlineai.action.${kind}`)
-    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin, ...(kind === 'translate' ? { language: translateTargetOf(text) } : {}) })
+    // 插件要卡头的目标语言(card.language):初值 = 这个动作上次选的,没选过按选区猜(同宿主翻译)
+    const pluginLang = owned && cardOptionsOf(owned).language ? (selectionActionPrefs().language[selectionActionKey(owned)] ?? translateTargetOf(text)) : undefined
+    setAiPanel({ key: Date.now(), x: a.left, y: b.bottom + 6, top: a.top - 6, title, hasSelection: !cursor, askFirst: cursor || kind === 'custom', action, plugin,
+      ...(kind === 'translate' ? { language: translateTargetOf(text) } : pluginLang ? { language: pluginLang } : {}) })
   }
   aiSpaceRef.current = (view) => openAi(view, 'prompt')
   /** 可写结果卡跟着目标那段字走(划线菜单方案 B,2026-11-08):目标区间随编辑映射(aiTargetOf),每帧按它现量;
@@ -2134,6 +2185,17 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     })
   }, [aiPanelKey, layer])
   useEffect(() => () => aiAnchor?.dispose(), [aiAnchor])
+  // 插件停用 / 重载:卡上那个插件动作没了就收卡 —— 卸下时中止在飞的请求(插件的 cx.signal 跟着 abort),迟到的结果没人收
+  const aiPluginGone = !!aiPanel?.plugin && !pluginSelActions.some((o) => `${o.pluginId}:${o.item.id}` === aiPanel.plugin)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (aiPluginGone) closeAi() }, [aiPluginGone])
+  // 卡收起 / 换一张:它小喇叭念着的那段停掉
+  const aiSpeakPrefix = aiPanel ? `card:${aiPanel.key}:` : null
+  useEffect(() => () => {
+    const probe = readTangu()?.tts
+    const cur = probe?.state()?.key
+    if (aiSpeakPrefix && cur?.startsWith(aiSpeakPrefix)) probe!.stop(cur)
+  }, [aiSpeakPrefix])
   /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
   const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
     const view = layer.getView()
@@ -2146,7 +2208,18 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       const owned = usePluginStore.getState().selectionActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin)
       if (!owned) throw new Error(translate('selbar.err.gone'))
       // 返回值的校验(字符串、无控制字符)在 runSelectionAction 里:聊天、插件视图里跑同一个动作走的也是它。
-      return { text: await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) } }) }
+      // 宿主侧上下文(selectionRun.ts):插件把 cx.signal 交给 ctx.tangu.translate / complete 时,请求照宿主翻译那样带上
+      // 前后文与页面说明(插件看不到),出结果的模型回来给卡头署名 —— 翻译改由核心插件接管后两样都不丢。
+      const ctxAround = aiContextOf(view.state.doc, target.from, target.to)
+      const ran = bindSelectionRun(signal, {
+        pluginId: owned.pluginId, title: noteTitle, pagePath: path, pageInstructions: instructionsOf(view.state.doc),
+        ...(ctxAround.before ? { before: ctxAround.before } : {}), ...(ctxAround.after ? { after: ctxAround.after } : {}),
+      })
+      let text: string
+      try {
+        text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) })
+      } finally { unbindSelectionRun(signal) }
+      return { text, ...(text && ran.model ? { model: { name: ran.model.name, mt: !!ran.model.mt } } : {}) }
     }
     const probe = readTangu()
     if (!probe?.complete) throw new Error(translate('inlineai.unavailable'))
@@ -2163,6 +2236,34 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       pageInstructions: instructionsOf(view.state.doc),
       ...(action === 'translate' ? { language: panel.language ?? translateTargetOf(target.text) } : {}),
     }, { signal, onDelta })
+  }
+  /** 插件结果卡宿主替它画的几样(card.source / card.speak):原文、原文 / 结果旁的小喇叭。笔记不给「划选后自动」。 */
+  const aiPanelPluginCard = (panel: NonNullable<typeof aiPanel>): { icon?: ReactNode; source?: string; speak?: ComponentProps<typeof InlineAiPanel>['speak'] } => {
+    const owned = panel.plugin ? pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin) : undefined
+    if (!owned) return {}
+    const opts = cardOptionsOf(owned)
+    const view = layer.getView()
+    const target = view ? aiTargetOf(view) : null
+    const tts = readTangu()?.tts
+    const icon = resolveIcon(owned.item.icon)
+    return {
+      ...(icon ? { icon: <span className="selbar-ico">{icon}</span> } : {}),
+      ...(opts.source && target ? { source: target.text } : {}),
+      ...(opts.speak && tts ? {
+        speak: {
+          phase: (which, body) => { const st = tts.state(); return st?.key === `card:${panel.key}:${which}:${body}` ? st.phase : null },
+          onToggle: (which, body) => {
+            const k = `card:${panel.key}:${which}:${body}`
+            if (tts.state()?.key === k) { tts.stop(k); return }
+            tts.speak(k, body).catch((e: unknown) => {
+              const m = String((e as Error)?.message || e)
+              if (m === 'tts_no_model') setTtsSetup({ x: panel.x, y: panel.y, top: panel.top })
+              else if (m !== 'EMPTY') window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate('selbar.speakFailedNote', { e: m }) } }))
+            })
+          },
+        },
+      } : {}),
+    }
   }
   const closeAi = (): void => {
     setAiPanel(null)
@@ -3922,7 +4023,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   return (
     <>
       {/* 顶栏胶囊的锚:恒在场(源码模式也在),只用来 `closest('.amx-pane')` 找本 pane 的插槽。
-          零尺寸、不吃指针 —— 它不参与任何布局。 */}
+          日常零尺寸;输入行居中时也借它在标题上方留出首行需要的滚动余量。 */}
       <span ref={segAnchorRef} className="amx-seg-anchor" aria-hidden />
       {mode === 'source' ? null : (
         <CanvasSegPortal anchor={segAnchor} on={canvasOn} toggle={() => toggleCanvasRef.current()} leafId={scope} />
@@ -4116,7 +4217,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
                 onCard={makeCard}
                 readOnly={readOnly}
                 onAskTangu={canAskTangu ? (view) => askTangu(view, view.state.selection.from, view.state.selection.to) : undefined}
-                aiMenu={canAi ? { items: aiMenuItems, translate: true, more: aiMoreItems, onPick: (id, view) => openAi(view, id) } : undefined}
+                aiMenu={canAi ? { items: aiMenuItems, translate: true, more: aiMoreItems, onPick: (id, view) => openAi(view, id), bar: selectionBarFor } : undefined}
                 onAiPrompt={canAi ? (view) => openAi(view, 'prompt') : undefined}
               />
             </MilkdownProvider>
@@ -4159,9 +4260,15 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             onApply={applyAi}
             onClose={closeAi}
             editorEl={bodyRef.current}
-            // 翻译:卡头能临时换目标语言。换 key = 重开这张卡(在飞的请求随卸载中止),目标区间不动。
-            language={aiPanel.language ? { value: aiPanel.language, onChange: (id) => setAiPanel({ ...aiPanel, key: Date.now(), language: id }) } : undefined}
+            // 翻译:卡头能临时换目标语言。换 key = 重开这张卡(在飞的请求随卸载中止),目标区间不动。插件的(card.language)按动作记住。
+            language={aiPanel.language ? { value: aiPanel.language, onChange: (id) => { if (aiPanel.plugin) rememberSelectionLanguage(`plugin:${aiPanel.plugin}`, id); setAiPanel({ ...aiPanel, key: Date.now(), language: id }) } } : undefined}
+            {...aiPanelPluginCard(aiPanel)}
           />
+        </OverlayPortal>
+      )}
+      {ttsSetup && (
+        <OverlayPortal>
+          <TtsSetupCard x={ttsSetup.x} y={ttsSetup.y} anchorTop={ttsSetup.top} onOpenSettings={() => readTangu()?.tts?.openSettings()} onClose={() => setTtsSetup(null)} />
         </OverlayPortal>
       )}
       {movePick && !readOnly && (

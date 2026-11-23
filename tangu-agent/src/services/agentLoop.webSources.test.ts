@@ -1,7 +1,7 @@
 /** 搜索来源编号的引擎整链(真 loop + 内存 SQLite):web_search 的结构化来源随 tool_result 事件发出、落进
  * chat_messages.tool_results,而模型那份 tool 消息(本轮与下一轮回放)逐字是「引用锚点头 + runSearch 的 text」,
  * 来源里独有的标题一个字都进不去。 */
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,10 +21,15 @@ const URL_A = 'https://www.hokkaido-ski.jp/niseko/beginner';
 const TEXT = `Search results (Bocha):\n1. Niseko guide\n  ${URL_A}\n  gentle slope.`;
 const HEAD = 'Cite for the user: [<a short phrase from the snippet>](<the result URL>) — the link text is the exact sentence the reader gets scrolled to.\n\n';
 
+const searches = vi.fn(async () => ({
+  provider: 'bocha', text: TEXT,
+  results: [{ title: SENTINEL, url: URL_A, snippet: 'gentle slope.', date: '2026-10-28' }],
+}));
 let home: string;
 let payloads: any[][];
 let runId = '';
 beforeEach(async () => {
+  searches.mockClear();
   home = mkdtempSync(join(tmpdir(), 'tangu-web-sources-'));
   process.env.TANGU_HOME = home;
   payloads = [];
@@ -45,7 +50,7 @@ beforeEach(async () => {
           return { content: `See [gentle slope](${URL_A}).`, toolCalls: [], usage: { prompt_tokens: 100, completion_tokens: 2 }, finishReason: 'stop' };
         },
       },
-      search: { runSearch: async () => ({ provider: 'bocha', text: TEXT, results: [{ title: SENTINEL, url: URL_A, snippet: 'gentle slope.', date: '2026-10-28' }] }) },
+      search: { runSearch: searches },
       users: { getUserById: async () => ({ id: 'u1', username: 'u' }) }, memory: { getMemory: async () => ({ content: '' }) }, models: { hasDirectModel: () => false },
     } as any,
     billing: { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} } as any,
@@ -74,6 +79,7 @@ async function turn(n: number) {
 
 it('sources ride on the tool_result event and the stored row; the model only ever sees head + text', async () => {
   await turn(1);
+  expect(searches).toHaveBeenCalledWith('hokkaido', 5, expect.objectContaining({ userId: 'u1', appId: 'tangu', modelId: 'm1' }));
   const expected = [{ url: URL_A, site: 'hokkaido-ski.jp', title: SENTINEL, date: '2026-10-28', snippet: 'gentle slope.' }];
 
   const events = await listEventsFrom('web-1', 0);

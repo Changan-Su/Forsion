@@ -277,7 +277,8 @@ const moduleUrl = (rel) => {
 
 /** Installs the stand-in native chrome and returns once the shell has taken it (no web top bar, list-first). */
 async function installChrome(page) {
-  await page.evaluate(async ({ engineUrl, hostUrl, layout }) => {
+  const url = page.url()
+  const attach = () => page.evaluate(async ({ engineUrl, hostUrl, layout }) => {
     const engine = await import(/* @vite-ignore */ engineUrl)
     const host = await import(/* @vite-ignore */ hostUrl)
     const stage = (window.__stage = { engine, state: null, renders: 0 })
@@ -290,6 +291,15 @@ async function installChrome(page) {
     engine.installNativeChromeHost({ spaces: true, render(state) { stage.state = state; stage.renders++; host.applyChromeLayout(state.mode !== 'shell' ? plain : state.leftBack ? detail : layout) } })
     host.applyChromeLayout(layout)
   }, { engineUrl: moduleUrl('../lcl/engine/nativeChrome.ts'), hostUrl: moduleUrl('src/nativeChrome.ts'), layout: LAYOUT })
+  try {
+    await attach()
+  } catch (error) {
+    // A same-URL reload can replace the document between the shell appearing and these dynamic
+    // imports resolving. Mount once on the replacement shell; real module/bridge errors still fail.
+    if (page.isClosed() || page.url() !== url || !/Execution context was destroyed/.test(error.message)) throw error
+    await page.locator('.mb-shell').waitFor({ timeout: 10_000 })
+    await attach()
+  }
   await page.waitForFunction(() => document.querySelector('.mb-shell')?.hasAttribute('data-native-chrome') && !!window.__stage?.state, null, { timeout: 10_000 })
     .catch(() => { throw new Error('the shell did not take the stand-in chrome: the engine module reached from the page is not the app\'s instance') })
   // the capsules are native; here only their plates exist — tint them so a screenshot shows where they are
@@ -436,18 +446,154 @@ async function seedTags(page) {
 const SCENES = {
   home: async (page) => {
     await stage.space(page, 'home')
+    await seedNotes(page)
+    await page.waitForTimeout(400)
     const HOME = '.mb-view[data-view="homepage"]'
     const pill = await rect(page, `${HOME} .hp-pill`)
-    const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => { const r = el.getBoundingClientRect(); return { name: el.querySelector('.hp-card-name').textContent, status: el.querySelector('.hp-card-status').textContent, w: r.width, h: r.height, bottom: r.bottom } }), `${HOME} .hp-card`)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => ({ key: el.getAttribute('data-continue'), name: el.querySelector('.hp-continue-name').textContent, when: el.querySelector('.hp-continue-when')?.textContent ?? '' })), `${HOME} .hp-continue-row`)
+    const card = await rect(page, `${HOME} .hp-continue`)
     const greet = await rect(page, `${HOME} .hp-greet`)
     const composerShown = () => page.evaluate((q) => { const el = document.querySelector(q); return !!el && el.getBoundingClientRect().height > 0 }, `${HOME} .hp-composer`)
     const before = await composerShown()
-    const stored = await page.evaluate(() => localStorage.getItem('forsion_home_cards_v1'))
+    const st = await stage.state(page)
     return [
       ['the greeting leads, below the capsules', !!greet && greet.y >= LAYOUT.top, JSON.stringify(greet && { y: greet.y })],
-      ['never chosen: the four Spaces with something to report, two to a row, the first with what was last worked on; no store, no achievements', cards.map((c) => c.name).join() === 'Tangu,笔记,日历,收件箱' && cards.every((c) => c.h >= 103 && near(c.w, cards[0].w)) && cards[0].status === '继续：发版说明草稿', JSON.stringify(cards.map((c) => [c.name, c.status, Math.round(c.h)]))],
-      ['showing the defaults stores nothing', stored === null, String(stored)],
-      ['the input is one pill above the dock, the full composer hidden', !!pill && near(pill.h, 54) && pill.bottom <= DOCK_TOP - 6 && pill.y > cards[cards.length - 1]?.bottom && !before, JSON.stringify({ pill, before })],
+      // 方向 E:卡片换成「继续」—— 最近三项,对话和笔记混排、新的在前(会话 4 / 38 分钟前,笔记 25 分钟前);没有卡片了
+      ['Continue: the three most recent, chats and notes mixed, newest first; no cards any more', rows.map((r) => r.name).join() === '发版说明草稿,发版清单 2.13,周末去哪儿' && rows.every((r) => r.when) && !(await page.locator(`${HOME} .hp-card`).count()), JSON.stringify(rows)],
+      ['the input is one pill above the dock, below Continue; the full composer hidden', !!pill && near(pill.h, 54) && pill.bottom <= DOCK_TOP - 6 && !!card && pill.y > card.bottom && !before, JSON.stringify({ pill, card: card && card.bottom, before })],
+      ['top right holds only search (chats, notes, files); no "more", no avatar (Me is a dock cell)', st.search === '搜索对话、笔记、文件' && st.more === false && !st.right, JSON.stringify({ search: st.search, more: st.more, right: st.right })],
+    ]
+  },
+  // 手机五格 Dock(方向 E 第 1 步):主页 · 对话 · 笔记 · 应用 · 我,固定;Tangu 的列表层标题叫「对话」;别的 Space 算「应用」那格
+  'dock-five': async (page) => {
+    await stage.space(page, 'home')
+    const cells = (st) => (st.spaces || []).map((c) => `${c.id}:${c.label}${c.active ? '*' : ''}${c.pinned ? '' : '?'}`).join(' ')
+    const atHome = await stage.state(page)
+    await stage.space(page, 'tangu')
+    const atChats = await stage.state(page)
+    await stage.space(page, 'calendar')
+    const atCal = await stage.state(page)
+    const calSpace = await shellSpace(page)
+    await stage.space(page, 'home')
+    return [
+      ['five fixed cells, all pinned (≤ five: an older native build draws every cell and no "all" cell)', cells(atHome) === 'home:主页* tangu:对话 amadeus:笔记 @apps:应用 @me:我', cells(atHome)],
+      ['the Chats cell is Tangu: its list level is called 对话 and the cell is selected there', atChats.title === '对话' && cells(atChats).includes('tangu:对话*'), `${atChats.title} | ${cells(atChats)}`],
+      ['a Space reached through Apps (calendar) lights the Apps cell', calSpace === 'calendar' && cells(atCal).includes('@apps:应用*'), `${calSpace} | ${cells(atCal)}`],
+    ]
+  },
+  'apps-page': async (page) => {
+    await stage.space(page, 'home')
+    await stage.space(page, '@apps')
+    const PAGE = '.mb-phonepage[data-phone-page="apps"]'
+    const shown = await page.locator(PAGE).count()
+    const st = await stage.state(page)
+    const sections = await page.evaluate((q) => [...document.querySelectorAll(`${q} .pp-section`)].map((sec) => ({
+      title: sec.querySelector('.pp-section-title')?.textContent ?? '',
+      tiles: [...sec.querySelectorAll('.pp-tile')].map((t) => t.getAttribute('data-space')),
+      rows: [...sec.querySelectorAll('.pp-row')].map((r) => r.getAttribute('data-row')),
+    })), PAGE)
+    const frequent = sections.find((x) => x.title === '常用')?.tiles ?? []
+    const all = sections.find((x) => x.title === '全部')?.tiles ?? []
+    const rows = sections.flatMap((x) => x.rows)
+    const box = await rect(page, PAGE)
+    const lastApps = await page.evaluate((q) => { const p = document.querySelector(q); p.scrollTop = p.scrollHeight; const rows = p.querySelectorAll('[data-row]'); const r = rows[rows.length - 1]; return r ? { id: r.dataset.row, bottom: r.getBoundingClientRect().bottom } : null }, PAGE)
+    await page.evaluate((q) => { document.querySelector(q).scrollTop = 0 }, PAGE)
+    await page.screenshot({ path: path.join(OUT, `apps-page-open${DARK ? '-dark' : ''}.png`) })
+    // 点「全部」里的一格:收起这一页、进那个 Space,Dock 上亮的仍是「应用」
+    const target = all[0] || frequent[0]
+    await page.locator(`${PAGE} .pp-tile[data-space="${target}"]`).tap()
+    await page.waitForTimeout(700)
+    const after = await stage.state(page)
+    const gone = !(await page.locator('.mb-phonepage').count())
+    const landed = await shellSpace(page)
+    // 再开一次,按系统返回:回主页。按不到返回键的这一趟(backPath = event,只问得到列表层)不判,真返回键在模拟器上验
+    await stage.space(page, '@apps')
+    const via = await systemBack(page)
+    const backTo = await shellSpace(page)
+    const closed = !(await page.locator('.mb-phonepage').count())
+    if (via !== 'key') await stage.space(page, 'home')
+    return [
+      ['the Apps page covers the first level between the capsules and the dock; title 应用, no left button / ⋯ / search', shown === 1 && st.title === '应用' && !st.left && st.more === false && !st.search && (st.spaces || []).find((c) => c.active)?.id === '@apps' && !!box && near(box.h, SCREEN.height), JSON.stringify({ shown, title: st.title, left: st.left, more: st.more })],
+      ['first row 常用 = calendar and inbox, then list order (nothing chosen yet); 全部 = the rest; no Home / Chats / Notes on the page', frequent.slice(0, 2).join() === 'calendar,inbox' && frequent.length <= 4 && ![...frequent, ...all].some((id) => id === 'home' || id === 'tangu' || id === 'amadeus') && !all.some((id) => frequent.includes(id)), JSON.stringify({ frequent, all })],
+      ['the store is the first row under the grids; the last row chooses the frequent ones', rows[0] === 'rb-market' && rows[rows.length - 1] === 'choose-frequent', rows.join()],
+      ['scrolled to its end, the last row ends above the dock', !!lastApps && lastApps.id === 'choose-frequent' && lastApps.bottom <= DOCK_TOP, JSON.stringify({ lastApps, dockTop: DOCK_TOP })],
+      ['a tile closes the page and enters that Space; the dock lights Apps', gone && landed === target && (after.spaces || []).find((c) => c.active)?.id === '@apps', `${target} → ${landed} gone=${gone}`],
+      [`system Back on the Apps page goes Home (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || (closed && backTo === 'home'), `${backTo} closed=${closed}`],
+    ]
+  },
+  'me-page': async (page) => {
+    await stage.space(page, 'home')
+    await stage.space(page, '@me')
+    const PAGE = '.mb-phonepage[data-phone-page="me"]'
+    await page.waitForFunction((q) => !document.querySelector(`${q} [data-row="account-loading"]`), PAGE, { timeout: 8000 }).catch(() => {})
+    const st = await stage.state(page)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(`${q} [data-row]`)].map((r) => r.getAttribute('data-row')), PAGE)
+    const name = await page.evaluate((q) => document.querySelector(`${q} .pp-me-name strong`)?.textContent ?? '', PAGE)
+    // 滚到底:最后一行(退出)整行在 Dock 之上
+    const lastMe = await page.evaluate((q) => { const p = document.querySelector(q); p.scrollTop = p.scrollHeight; const rows = p.querySelectorAll('[data-row]'); const r = rows[rows.length - 1]; return r ? { id: r.dataset.row, bottom: r.getBoundingClientRect().bottom } : null }, PAGE)
+    await page.evaluate((q) => { document.querySelector(q).scrollTop = 0 }, PAGE)
+    await page.screenshot({ path: path.join(OUT, `me-page-open${DARK ? '-dark' : ''}.png`) })
+    // 设置盖上来、关掉之后,「我」还在
+    await page.locator(`${PAGE} [data-row="rb-settings"]`).tap()
+    await page.waitForTimeout(800)
+    const app = (await page.evaluate(async (url) => { const { useApp } = await import(/* @vite-ignore */ url); return { open: useApp.getState().settingsOpen } }, moduleUrl('../desktop/frontend/src/stores/appStore.ts')))
+    const covered = (await stage.state(page)).mode !== 'shell'
+    await page.evaluate(async (url) => { const { useApp } = await import(/* @vite-ignore */ url); useApp.getState().closeSettings() }, moduleUrl('../desktop/frontend/src/stores/appStore.ts'))
+    await page.waitForTimeout(700)
+    const still = await page.locator(PAGE).count()
+    await systemBack(page)
+    return [
+      ['the Me page: title 我, the Me cell lit, no avatar and no ⋯ in the capsules', st.title === '我' && (st.spaces || []).find((c) => c.active)?.id === '@me' && st.more === false, JSON.stringify({ title: st.title, more: st.more })],
+      ['account head, then quota / backpack / invite / upgrade (what the avatar menu had), settings, where it runs, dark mode, command palette, achievements, feedback, sign out', name === 'stage' && ['rb-settings', 'rb-units-mobile', 'rb-mode', 'rb-cmd', 'rb-achievements'].every((id) => rows.includes(id)) && rows.indexOf('rb-settings') < rows.indexOf('rb-achievements'), `${name} | ${rows.join()}`],
+      ['settings covers the page and closing it returns to Me', app.open && covered && still === 1, JSON.stringify({ ...app, covered, still })],
+      ['scrolled to its end, the last row (sign out) ends above the dock', !!lastMe && lastMe.id === 'logout' && lastMe.bottom <= DOCK_TOP, JSON.stringify({ lastMe, dockTop: DOCK_TOP })],
+    ]
+  },
+  // 主页「继续」点一行 → 直接到那条对话;返回(顶栏左钮 / 系统返回)回主页,不经 Tangu 的列表;
+  // 先在列表里看过另一条(甲)再回主页点乙,返回也不翻出甲(listTrips 只在列表层起算的那条坑)
+  'continue-trip': async (page) => {
+    await openChat(page, '周末去哪儿')
+    await stage.action(page, 'left')
+    await stage.space(page, 'home')
+    const row = '.mb-view[data-view="homepage"] .hp-continue-row[data-continue="chat:st-1"]'
+    await page.locator(row).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    const inChat = { space: await shellSpace(page), nav: await stage.nav(page), title: (await stage.state(page)).title }
+    await stage.action(page, 'left')
+    const byButton = await shellSpace(page)
+    await page.locator(row).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(600)
+    const via = await systemBack(page)
+    const bySystem = await shellSpace(page)
+    if (via !== 'key') await stage.action(page, 'left')
+    // 笔记那一行:走的是另一条路(openNote 是异步的、去的是笔记 Space),返回同样回主页
+    await seedNotes(page)
+    const noteRow = '.mb-view[data-view="homepage"] .hp-continue-row[data-continue^="note:"]'
+    const noteTrip = []
+    for (const how of ['capsule', 'system']) {
+      await page.locator(noteRow).first().tap()
+      await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+      await page.waitForTimeout(900)
+      const at = { space: await shellSpace(page), nav: await stage.nav(page) }
+      let via = how
+      if (how === 'capsule') await stage.action(page, 'left')
+      else { via = await systemBack(page); if (via !== 'key') await stage.action(page, 'left') }
+      await page.waitForTimeout(500)
+      noteTrip.push({ how: via, at, back: await shellSpace(page) })
+    }
+    // 从列表点进去的照旧回列表
+    await openChat(page, '周末去哪儿')
+    await stage.action(page, 'left')
+    const fromList = { space: await shellSpace(page), nav: await stage.nav(page) }
+    await stage.space(page, 'home')
+    return [
+      ['a Continue row opens that chat directly (Tangu, second level)', inChat.space === 'tangu' && inChat.nav === 'detail' && inChat.title === '发版说明草稿', JSON.stringify(inChat)],
+      ['back from there (capsule) goes Home, not to the list — and not to the chat seen before', byButton === 'home', byButton],
+      [`system Back goes Home too (${via === 'key' ? 'key' : 'no back key on this load — checked on the emulator'})`, via !== 'key' || bySystem === 'home', bySystem],
+      ['a note row opens the note itself (Notes, second level); back from it is Home too', noteTrip.every((t) => t.at.space === 'amadeus' && t.at.nav === 'detail' && t.back === 'home'), JSON.stringify(noteTrip)],
+      ['a chat opened from the list still goes back to the list', fromList.space === 'tangu' && fromList.nav === 'list', JSON.stringify(fromList)],
     ]
   },
   'home-open': async (page) => {
@@ -456,7 +602,7 @@ const SCENES = {
     await page.waitForTimeout(500)
     const focused = await page.evaluate(() => document.activeElement?.matches('.hp-composer .t2c-ta') ?? false)
     const shown = await page.evaluate((q) => { const el = document.querySelector(q); return !!el && el.getBoundingClientRect().height > 0 }, `${HOME} .hp-composer`)
-    return [['a tap on the pill opens the full composer with the caret in it; the cards make room', shown && focused && !(await rect(page, `${HOME} .hp-card`))?.h, `focused=${focused}`]]
+    return [['a tap on the pill opens the full composer with the caret in it; Continue makes room', shown && focused && !(await rect(page, `${HOME} .hp-continue`))?.h, `focused=${focused}`]]
   },
   'home-closed': async (page) => {
     // something typed, then a touch outside the composer: it folds back into the pill, which now reads what was typed
@@ -869,15 +1015,20 @@ const SCENES = {
     const list = await stage.state(page)
     rows.push(["a Space's list: no \"more\" button", list.more === false, `more=${list.more}`])
 
-    // where the app-wide entries went
-    const all = await ask('spacesAll')
-    const groups = (all?.sections || []).map((x) => ({ title: x.title || '', grid: !!x.grid, ids: x.items.map((i) => i.id) }))
-    const go = groups.findIndex((g) => g.ids.some((id) => id.startsWith('go:')))
-    rows.push(['all Spaces: the launchers are one group of tiles after the Spaces, before the dock row',
-      go > 0 && groups[go].grid && groups[go].ids.every((id) => id.startsWith('go:')) && groups[go].ids.includes('go:rb-achievements') && groups[go + 1]?.ids.join() === 'dock:edit',
-      JSON.stringify(groups.map((g) => [g.title, g.grid, g.ids.filter((id) => !id.startsWith('space:'))]))])
+    // where the app-wide entries went: no sheet any more —「全部」那一格换成了「应用」页,头像菜单换成了「我」页(方向 E,phonePageItems)
+    const before = await page.evaluate(() => window.__stage.menus.length)
+    await stage.action(page, 'spacesAll')
+    await page.waitForTimeout(500)
+    const sheets = await page.evaluate((n) => window.__stage.menus.length - n, before)
+    const appsPage = await page.locator('.mb-phonepage[data-phone-page="apps"]').count()
+    const appsRows = await page.evaluate(() => [...document.querySelectorAll('.mb-phonepage [data-row]')].map((r) => r.getAttribute('data-row')))
+    rows.push(['"all" opens the Apps page, not a sheet: the store and the other launchers are rows there', sheets === 0 && appsPage === 1 && appsRows[0] === 'rb-market', JSON.stringify({ sheets, appsPage, appsRows })])
+    await stage.space(page, '@me')
+    const meRows = await page.evaluate(() => [...document.querySelectorAll('.mb-phonepage [data-row]')].map((r) => r.getAttribute('data-row')))
     const avatar = await page.evaluate(async (url) => (await import(/* @vite-ignore */ url)).accountMenuRows().map((r) => r.id), moduleUrl('../lcl/engine/SingleColumnHost.tsx'))
-    rows.push(['the avatar menu: settings first, then theme mode and the command palette', avatar[0] === 'rb-settings' && avatar.slice(-2).join() === 'rb-mode,rb-cmd', avatar.join()])
+    const at = (id) => meRows.indexOf(id)
+    rows.push(['what the avatar menu had is on the Me page: settings first, then theme mode and the command palette, achievements after; no avatar menu rows left', avatar.length === 0 && at('rb-settings') >= 0 && at('rb-settings') < at('rb-mode') && at('rb-mode') < at('rb-cmd') && at('rb-cmd') < at('rb-achievements'), JSON.stringify({ avatar, meRows })])
+    await stage.space(page, 'tangu')
 
     // a conversation: its own rows only
     await openChat(page, TITLE)
@@ -1645,12 +1796,13 @@ const SCENES = {
       ['native host: the ticks come back in tick order', nativeTeam === '研究员 等 2 位', nativeTeam],
     ]
   },
-  // Home again, with something going on in each of the four: a session, a note opened last, an agent's appointment
-  // tomorrow, unread mail. The stores the cards read are filled directly — the stage answers neither the schedule nor
-  // the unread count — so this looks at the cards' lines, not at how those stores get their data.
+  // Home again, with something going on in each of what the four cards used to show: a session, a note opened last, an
+  // agent's appointment tomorrow, unread mail. The stores are filled directly — the stage answers neither the schedule nor
+  // the unread count — so this looks at where each shows now, not at how those stores get their data.
   'home-status': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'home')
+    await seedNotes(page) // the note opened last (recent views carry its time); on its own this scene has no vault yet
     const day = new Date(T0 + DAY)
     const at = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}T14:00`
     await page.evaluate(async ([prefs, schedule, when]) => {
@@ -1661,14 +1813,31 @@ const SCENES = {
     // count set straight into the store would be overwritten by the next poll, which gets real answers from the stub
     await seedInbox(page)
     await page.waitForTimeout(600)
-    const cards = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => [el.dataset.spaceId || el.dataset.fixedId, el.querySelector('.hp-card-status').textContent]), '.mb-view[data-view="homepage"] .hp-card')
-    const of = (id) => (cards.find((c) => c[0] === id) || [])[1] || ''
-    return [['each default card says what is going on: the last session, the last note, the next appointment, unread mail', cards.map((c) => c[0]).join() === 'tangu,amadeus,calendar,inbox' && /^继续：/.test(of('tangu')) && of('amadeus') === '发版清单 2.13' && /14:00 周会$/.test(of('calendar')) && of('inbox') === '2 条未读', JSON.stringify(cards)]]
+    // Since 2026-11-19 a phone Home has no Space cards: what their status lines said lives elsewhere. The last session and
+    // the last note are Continue rows; unread mail is the unread dot on the Apps cell (the inbox is reached through Apps);
+    // the next appointment is not on Home any more (it is in Calendar).
+    const HOME = '.mb-view[data-view="homepage"]'
+    const cards = await page.evaluate((q) => document.querySelectorAll(q).length, `${HOME} .hp-card`)
+    const rows = await page.evaluate((q) => [...document.querySelectorAll(q)].map((el) => el.getAttribute('data-continue')), `${HOME} .hp-continue-row`)
+    // the dots are added by the host on their way to the native bar (the stage records the engine's state, before that):
+    // ask the host's own rule, with the cells the engine sent
+    const apps = await page.evaluate(async ({ hostUrl, spacesUrl }) => {
+      const host = await import(/* @vite-ignore */ hostUrl)
+      const { useSpaceStore } = await import(/* @vite-ignore */ spacesUrl)
+      const dots = host.dockBadges(window.__stage.state.spaces || [], host.spaceBadges(), useSpaceStore.getState().spaces.map((x) => x.id))
+      return { id: '@apps', badge: dots['@apps'] ?? null }
+    }, { hostUrl: moduleUrl('src/nativeChrome.ts'), spacesUrl: moduleUrl('../lcl/engine/spaceRegistry.ts') })
+    return [
+      ['no Space cards (and no card status lines) on a phone Home', cards === 0, String(cards)],
+      ['the last session and the last note are Continue rows', rows.some((k) => /^chat:/.test(k)) && rows.includes('note:项目/发版清单 2.13.md'), JSON.stringify(rows)],
+      ['unread mail is the unread dot on the Apps cell (the inbox is not in the dock)', apps?.badge?.kind === 'unread', JSON.stringify(apps)],
+    ]
   },
   // A new note named from its title, then system Back (walk 2026-11-19, b): Back goes to the list — never to the note
   // under the name it was born with («当前库里没有这篇笔记「untitled.md」»). The history keeps the note under its new path.
-  // Home's note card names it, and stops naming it once it is deleted (h: the card read the first "recent" path as is —
-  // the dead `untitled.md` that the wrong Back had opened, or a deleted note).
+  // Home names it, and stops naming it once it is deleted (h: the old note card read the first "recent" path as is — the
+  // dead `untitled.md` that the wrong Back had opened, or a deleted note). Since 2026-11-19 a phone Home has no cards: the
+  // note is a Continue row.
   'notes-rename-back': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'amadeus')
@@ -1677,7 +1846,7 @@ const SCENES = {
     const via = await detailBack(page)
     const after = { nav: await stage.nav(page), missing: await page.evaluate(() => /当前库里没有这篇笔记/.test(document.querySelector('.mb-shell')?.innerText || '')), history: await noteHistory(page) }
     await stage.space(page, 'home')
-    const card = () => page.evaluate(() => [...document.querySelectorAll('.mb-view[data-view="homepage"] .hp-card')].find((el) => el.dataset.spaceId === 'amadeus')?.querySelector('.hp-card-status')?.textContent ?? null)
+    const card = () => page.evaluate(() => [...document.querySelectorAll('.mb-view[data-view="homepage"] .hp-continue-row')].map((el) => el.getAttribute('data-continue')))
     const named = await card()
     await page.evaluate(async (u) => { await (await import(/* @vite-ignore */ u)).usePageStore.getState().deletePage('购物清单.md') }, moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts'))
     await page.waitForTimeout(600)
@@ -1687,7 +1856,7 @@ const SCENES = {
       ['the title renames the new note (the file follows it)', notes.includes('购物清单.md') && !notes.some((p) => /^untitled/.test(p)), JSON.stringify(notes)],
       ['the history holds the note once, under its new path — not under the name it was born with', before.includes('amadeus:购物清单.md') && !before.some((k) => k.includes('untitled')), JSON.stringify(before)],
       ['system Back from the renamed note goes to the list, not to a note that is not there', after.nav === 'list' && !after.missing && !after.history.some((k) => k.includes('untitled')), JSON.stringify({ via, ...after })],
-      ['Home\'s note card names the renamed note, and no longer names it once it is deleted', named === '购物清单' && deleted !== '购物清单', JSON.stringify({ named, deleted })],
+      ['Home\'s Continue lists the renamed note (never under the name it was born with), and drops it once it is deleted', named.includes('note:购物清单.md') && !named.some((k) => /untitled/.test(k)) && !deleted.includes('note:购物清单.md'), JSON.stringify({ named, deleted })],
     ]
   },
   // What is written in a note reaches the tag list and the full-text search without reopening the vault (walk
@@ -1722,6 +1891,68 @@ const SCENES = {
       ['the body was saved', /全文探针词/.test(disk || ''), JSON.stringify(disk)],
       ['its tag is in the tag list right away', tags.includes('待买'), tags.join('、')],
       ['the full-text search finds it by a word of its body', found.some((t) => /采购单/.test(t)), JSON.stringify(found)],
+    ]
+  },
+  'notes-batch-replace': async (page) => {
+    await backPath(page) // prime the Capacitor probe before opening the nested preview
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    await chip(page, 'recent')
+    const note = '实验/标定记录.md', reference = '实验/说明书.md'
+    await page.evaluate(async ([note, reference]) => {
+      const a = window.amadeus
+      await a.writeTextFile(note, '## 光谱记录\n\n开机做**零点校准**，保存读数。\n\n再做零点校准。\n')
+      await a.writeTextFile(reference, '> 原话：零点校准。\n')
+      await a.reindex()
+    }, [note, reference])
+    await page.locator(`${LIST} .amx-fulltext-entry`).tap()
+    await page.locator(`${LIST} .amx-search-heading .amx-search-save`).tap()
+    const pane = page.locator(`${LIST} .amx-replace-panel`)
+    await pane.getByRole('textbox', { name: '查找正文' }).fill('零点校准')
+    await pane.getByRole('textbox', { name: '替换为' }).fill('零位校准')
+    await pane.getByRole('button', { name: '替换 2 处', exact: true }).waitFor()
+    const quotes = pane.locator('.amx-replace-row', { hasText: '引用原文' })
+    const quoteKept = !(await quotes.getByRole('checkbox').isChecked())
+    const checks = pane.getByRole('checkbox')
+    const initial = await checks.count()
+    const first = pane.locator('.amx-replace-row', { hasText: '开机' })
+    const last = pane.locator('.amx-replace-row', { hasText: '再做' })
+    await last.getByRole('checkbox').uncheck()
+    const footer = await pane.locator('.amx-replace-actions .btn').boundingBox()
+    await page.screenshot({ path: path.join(OUT, 'batch-replace-list.png') })
+    await first.getByRole('button').tap()
+    await pane.locator('.amx-replace-paper ins').waitFor()
+    const rendered = await pane.locator('.amx-replace-paper').evaluate(el => ({
+      title: el.querySelector('h1')?.textContent,
+      section: el.querySelector('h2')?.textContent,
+      old: el.querySelector('strong del')?.textContent,
+      next: el.querySelector('strong ins')?.textContent,
+      count: el.querySelectorAll('ins').length,
+    }))
+    await page.screenshot({ path: path.join(OUT, 'batch-replace-preview.png') })
+    await systemBack(page)
+    await pane.locator('.amx-replace-actions').waitFor({ timeout: 5000 })
+    const kept = !(await last.getByRole('checkbox').isChecked()) && (await first.getByRole('checkbox').isChecked())
+    await pane.getByRole('button', { name: '替换 1 处', exact: true }).tap()
+    await pane.getByRole('button', { name: '撤销这次替换' }).waitFor()
+    const read = async () => page.evaluate(async ([a,b]) => [await window.amadeus.readTextFile(a), await window.amadeus.readTextFile(b)], [note, reference])
+    const [changed, quoted] = await read()
+    await pane.getByRole('button', { name: '重新预览' }).tap()
+    await pane.getByText('请重新勾选这篇笔记中的匹配。', { exact: true }).waitFor()
+    const reviewed = await checks.count() === 2 && !(await last.getByRole('checkbox').isChecked())
+      && !(await quotes.getByRole('checkbox').isChecked()) && await pane.getByRole('button', { name: '替换 0 处' }).isDisabled()
+    await pane.getByRole('button', { name: '上次替换' }).tap()
+    await pane.getByRole('button', { name: '撤销这次替换' }).tap()
+    await pane.getByText('已撤销 1 处', { exact: true }).waitFor()
+    const [undone] = await read()
+    await pane.getByRole('button', { name: '返回全文搜索' }).tap()
+    await page.locator(`${LIST} .amx-panel-back`).tap()
+    return [
+      ['replacement list opens from real search and leaves quotations unchecked', initial === 3 && quoteKept],
+      ['commit is above the floating native dock', footer && footer.y + footer.height <= LAYOUT.plates.find(p => p.id === 'dock').y, JSON.stringify(footer)],
+      ['tap opens full formatted note with exact inline change; system Back preserves unchecked hit', rendered.title === '标定记录' && rendered.section === '光谱记录' && rendered.old === '零点校准' && rendered.next === '零位校准' && rendered.count === 1 && kept, JSON.stringify(rendered)],
+      ['reviewing again clears matches in a changed note and keeps choices in unchanged notes', reviewed],
+      ['mobile vault writes only selected text and can undo the batch', changed.includes('**零位校准**') && changed.includes('再做零点校准') && quoted.includes('零点校准') && undone.includes('**零点校准**') && !undone.includes('零位校准')],
     ]
   },
 }

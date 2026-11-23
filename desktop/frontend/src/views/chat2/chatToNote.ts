@@ -68,7 +68,7 @@ export async function turnChatIntoNote(sessionId: string): Promise<boolean> {
   const session = [...app.sessions, ...app.archivedSessions].find((s) => s.id === sessionId)
   try {
     // 历史读取也在 try 里:失败要走下面的失败回执(调用方 void 掉了 Promise,漏在外面 = 用户什么也看不到)。
-    if (!app.messagesBySession[sessionId]?.length) await app.loadSessionHistory(sessionId)
+    if (!await app.ensureHistoryDepth(sessionId)) return false
     const msgs = useApp.getState().messagesBySession[sessionId] || []
     const transcript = transcriptOf(msgs)
     if (!transcript) {

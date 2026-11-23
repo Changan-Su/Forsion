@@ -102,7 +102,7 @@ import { blockPickerPlugin, closeBlockPicker } from './blockPicker'
 import { takeMachineSlash } from './machineSlash'
 import { applyTrigger, applyTypedTrigger, canAutoTriggerFromBlock, matchTrigger, posAtTextAnchor, slashRange, splitTail, textBeforeCursor, triggerAtCursor, unwrapAtStart, type Trigger } from './blockTriggers'
 import { fullWidthWikiRule, mentionSuggestPlugin, selectionToolbarPlugin, setSpacedSlashLabels, slashSuggestPlugin, toolbarDismissKey, wikiSuggestPlugin, type SelRect, type WikiQuery } from './wikiAutocomplete'
-import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem } from './InlineToolbar'
+import { InlineToolbar, TURN_LABEL_KEYS, type ToolbarAction, type ToolbarAiItem, type ToolbarBarModel } from './InlineToolbar'
 import { Sparkles, Bot, BookOpen, MessageSquare, ListTodo, CalendarDays } from 'lucide-react'
 import { defaultSlashCategory, moveSlash, moveSlashCategory, slashCategory, SLASH_CATEGORIES, type SlashCategory } from './slashNavigation'
 import './slashCategories.css'
@@ -654,7 +654,9 @@ export function MilkdownInner({
   /** 选区工具栏的正文 AI(评审 G3-07):宿主能做才传;选中一项交回宿主(带当前 view)开预览面板。
    *  items = 「AI ▾」里的改写动作;translate = 动作区的「翻译」(id 'translate');more = ⋯ 里的插件动作,按选区现算
    *  (插件的 when 要看选了多少)。 */
-  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void }
+  aiMenu?: { items: ToolbarAiItem[]; translate?: boolean; more?: (from: number, to: number) => ToolbarAiItem[]; onPick: (id: string, view: EditorView) => void
+    /** 动作区整份(2026-11-21):给了就由它画动作区与 ⋯。close = 收起格式栏(动作带走了选区时调)。 */
+    bar?: (from: number, to: number, close: () => void) => ToolbarBarModel }
 }) {
   const ready = useRef(false)
   const pagePathRef = useRef(attachmentPagePath)
@@ -1618,6 +1620,17 @@ export function MilkdownInner({
     })
     return focused
   }
+  /** A deferred wiki pick belongs to this editor, document and caret even if another trigger has identical text. */
+  const captureCaret = (to: number): (() => boolean) => {
+    let current = () => false
+    getInstance()?.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const { doc, selection } = view.state
+      current = () => !view.isDestroyed && !view.composing && view.hasFocus() && selection.head === to
+        && view.state.doc === doc && view.state.selection.eq(selection)
+    })
+    return current
+  }
   /** 光标后面紧跟着的是不是字(不是空白、`]`、段尾):`[[` 面板据此把 ←/→ 让给移光标(回到查询词中间改错字)。 */
   const caretMidWord = (): boolean => {
     let mid = false
@@ -1895,6 +1908,8 @@ export function MilkdownInner({
       {wiki && !readOnly && (
         <WikiSuggest
           query={wiki.query}
+          triggerFrom={wiki.from}
+          captureCaret={() => captureCaret(wiki.to)}
           left={wiki.left}
           top={wiki.top}
           anchorTop={wiki.anchorTop}
@@ -1914,6 +1929,9 @@ export function MilkdownInner({
       {!wiki && mention && !readOnly && (
         <WikiSuggest
           query={mention.query}
+          triggerFrom={mention.from}
+          captureCaret={() => captureCaret(mention.to)}
+          sourcePath={attachmentPagePath}
           left={mention.left}
           top={mention.top}
           anchorTop={mention.anchorTop}
@@ -2030,6 +2048,7 @@ export function MilkdownInner({
               getInstance()?.action((ctx) => aiMenu.onPick(id, ctx.get(editorViewCtx)))
             },
           } : undefined}
+          bar={aiMenu?.bar ? () => aiMenu.bar!(toolbar.from, toolbar.to, () => setToolbar(null)) : undefined}
         />
       )}
       </OverlayPortal>

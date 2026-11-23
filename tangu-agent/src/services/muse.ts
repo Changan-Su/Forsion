@@ -36,6 +36,7 @@ import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
 import { MAX_STARTERS, starterHint } from './museStarters.js';
+import { suggestionHint } from './museAutomationSuggestions.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
@@ -51,7 +52,7 @@ import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, on
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, readSpaceLayoutToldAt, type MuseSleep } from './museState.js';
-import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
+import { loadTriggers, evaluateTriggers, markTriggersFired, triggerEpoch, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
 import { readDbOrNull } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -778,6 +779,8 @@ export function buildCycleMessages(
     'If that context ends with a computer-history block, it is what the user was actually doing on this computer outside Forsion: treat it as your most direct signal of what they are working on. ' +
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
+    // 11-22 live:每周手动的活被当成待办提了(待办里写着「可设每周一的规则」)。重复的活走自动化建议,不走待办;预算紧,只留一句。
+    (cfg.automationSuggestions ? 'A chore the user repeats by hand goes to set_automation_suggestions, not a todo. ' : '') +
     (cfg.chatStarters ? `Keep ${MAX_STARTERS} new-chat starters shown via set_chat_starters (fill it back up when fewer are shown); change one only when something more timely comes up. ` : '') +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
     'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
@@ -785,6 +788,9 @@ export function buildCycleMessages(
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
     // 10-18 方案 B:要用户回话 / 拍板的进私聊,做好的成品进收件箱;notify 只管日报(每天一封 Journal)发不发。
+    // 11-20(借鉴 dsh-superagent 第 3 条):该不该发看内容,和每小时 3 条的频次上限互补。放在节奏规矩之后、原「Reaching the user」的位置 ——
+    // 10-30 实测节奏规矩之前多一句,它收尾就容易忘了 set_next_wake;MUSE_DELIVERY_GUIDANCE(11-13 治「太沉默」)不动。
+    'Message the user only if they can now review, use, decide or unblock something. Otherwise stay quiet: routine progress belongs in your log. ' +
     'Todos and approval requests already post to your direct chat; do not duplicate them. Saving work in your Library or showing it with display_file does not deliver it' +
     (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
     // 10-30 live:写在节奏规矩前面时,Muse 有一半周期收尾忘了 set_next_wake(同代码去掉这句 4/4 睡,带着 2/4),所以放在「怎么找用户」之后。
@@ -845,6 +851,8 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
     (cfg.chatStarters ? await starterHint(userId) : '') +
+    // 11-22 自动化首页的任务建议:用法只写在本周期简报与工具说明里,不进落库的稳定指令(长度预算 4800 已近满)
+    (cfg.automationSuggestions ? await suggestionHint(userId) : '') +
     (await museDmHint(userId)) +
     (await recommendHint(userId)) +
     (await inboxHint(userId, cfg)) +
@@ -908,6 +916,48 @@ function rollWindow(cfg: MuseConfig): void {
 let ticking = false;
 /** drain 期间到达的 kick 不能丢(桌面写完表踢一下 → 单发闸吃掉 = 退化成等满 5 分钟):记一笔,tick 结束后自唤醒一次。 */
 let pendingKick = false;
+
+// ── 睡醒稳定期(11-20 生产遥测):macOS 合盖时机器每十几分钟 DarkWake 一次、只醒几秒。到期的巡检定时器恰在那一秒触发,
+// 起的周期(连同规则 / 日程 run)发出请求后机器就回睡,到下一次 DarkWake 才报网络错 / 流超时 —— 白发一份上下文、
+// 记一次失败、cycleMs 还把睡眠时间算进去。本机两次失败的 created_at / updated_at 与 pmset 的 DarkWake 逐秒对上。
+// 判「刚睡醒」用墙钟上的存活间隔:本机 Node 22(libuv 1.52)的单调钟含睡眠时间,比不出差;只看定时器晚到又会漏掉
+// 「刚好在醒来前不久到点」的那次。睡醒后整轮巡检推迟到**连续醒着** WAKE_SETTLE_MS:DarkWake 撑不到这么久,真醒了只晚一分钟。
+// 量的是连续醒着多久、不是离第一次醒来多久:DarkWake 常成串来(pmset:17:55:51 / 17:56:18 / 17:56:47 / 17:57:46,
+// 中间各睡 11–16 秒),心跳粗、只认大间隔的话,「第一次醒来 + 60s」的补巡检恰好落进下一个几秒的醒窗、照样起周期。
+// 所以心跳要比最短的那段睡眠细:5 秒一跳,任何一跳隔了 12 秒以上(= 睡过 ≥12s,或事件循环卡了 7 秒以上)就从此刻重新起算。
+/** 两次存活心跳之间隔了这么久 = 机器睡过(或进程被冻住 / 事件循环卡死)。心跳每 ALIVE_BEAT_MS 一次。 */
+export const SLEEP_GAP_MS = 12_000;
+const ALIVE_BEAT_MS = 5_000;
+/** 睡醒后要连续醒着这么久才起后台 run(用户刚点的叫醒除外)。 */
+export const WAKE_SETTLE_MS = 60_000;
+let lastAliveAt = 0;
+let wokeAt = 0;
+let aliveTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 记一次「此刻醒着」;离上一次超过 SLEEP_GAP_MS 就把此刻记为刚睡醒。纯状态更新,心跳定时器与 tick 开头都调。 */
+function aliveBeat(now = Date.now()): void {
+  if (lastAliveAt && now - lastAliveAt > SLEEP_GAP_MS) {
+    wokeAt = now;
+    log(`${Math.round((now - lastAliveAt) / 1000)}s 没有存活心跳(机器睡过 / 进程被冻住):${WAKE_SETTLE_MS / 1000}s 内不起后台 run`);
+  }
+  lastAliveAt = now;
+}
+
+/** 纯函数,单测钉:此刻还在睡醒稳定期里吗。叫醒请求不早于这次睡醒(人就在跟前点的)→ 不算;
+ *  时钟被往回拨到睡醒时刻之前 → 不算(否则要等墙钟追回来才放行)。 */
+export function inWakeSettle(s: { now: number; wokeAt: number; wakeRequestedAt: number }): boolean {
+  const since = s.now - s.wokeAt;
+  return s.wokeAt > 0 && since >= 0 && since < WAKE_SETTLE_MS && !(s.wakeRequestedAt >= s.wokeAt);
+}
+
+/** tick 开头与起周期前各判一次(tick 里 await 多,中途机器也可能睡过去):还在睡醒稳定期 → 排一次补巡检、返回 true。
+ *  调用方直接 return:到期的规则 / 日程不确认,下一轮照样到期。 */
+function deferForWake(): boolean {
+  aliveBeat();
+  if (!inWakeSettle({ now: Date.now(), wokeAt, wakeRequestedAt })) return false;
+  scheduleSettleTick();
+  return true;
+}
 /** 规则 id → **不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);每 tick 整份替换。
  *  面板经 GET /agent/special/muse/triggers 的 `notice` 字段读它 —— 从前这些情况一律静默,
  *  规则显示「已启用」却一次都不评估,用户零信号(H3)。 */
@@ -932,6 +982,7 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
+    if (deferForWake()) return;
     // P1-K2(方案 §6.5):急停锁定了远程访问 → 盯任务规则、Agent 日程、Muse 周期整轮**推迟**(不丢:解锁后下一轮照常评估,
     // 到期条目按 dueEntries 补跑)。急停的语义是「不是我在键盘前发起的一律停」;读不出锁 = 锁定。
     let locked = true;
@@ -1083,6 +1134,7 @@ async function tick(): Promise<void> {
       }
     }
 
+    if (deferForWake()) return; // 上面一串 await 期间机器睡过去又 DarkWake:这时起的周期同样白发
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { dropWake('restartCap'); ledger.inc('daily_muse', 'skipRestartCap'); log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
@@ -1095,7 +1147,10 @@ async function tick(): Promise<void> {
       else { wakeRequestedAt = 0; wakeBlocked = null; }
     }
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
-    if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
+    if (museFired.length) {
+      const epochs = new Map(museFired.map((t) => [t.id, triggerEpoch(t)]));
+      await markTriggersFired([...epochs.keys()], undefined, trigCursors, epochs);
+    }
     await markMuseEntriesFired(cycleRunId, dueMuse);
   } catch (e: any) {
     lastError = e?.message || String(e);
@@ -1104,6 +1159,15 @@ async function tick(): Promise<void> {
     ticking = false;
     if (pendingKick) { pendingKick = false; kickMuse(); }
   }
+}
+
+/** 睡醒稳定期满后补一次巡检(复用 kickTimer:期间来的 kick 会顶掉它,那一轮 tick 仍在稳定期里就再排一次)。
+ *  supervisor 没起(单测直调 tick)→ 不自排。 */
+function scheduleSettleTick(): void {
+  if (!timer) return;
+  if (kickTimer) clearTimeout(kickTimer);
+  kickTimer = setTimeout(() => { void tick(); }, Math.max(1000, wokeAt + WAKE_SETTLE_MS - Date.now() + 1000));
+  (kickTimer as any).unref?.();
 }
 
 /** 启动 Muse supervisor（幂等）。间隔取配置的 supervisorPollMinutes；首次 ~15s 后即跑(不必等满一个周期)。 */
@@ -1127,6 +1191,10 @@ export function startMuseSupervisor(): void {
   };
   log(`supervisor 启动(巡检 ${nextPollMs() / 60_000} 分钟;15s 后首次)`);
   arm();
+  // 存活心跳:墙钟上隔太久没跳 = 机器睡过,tick 据此推迟起跑(见 aliveBeat)
+  lastAliveAt = Date.now();
+  aliveTimer = setInterval(() => aliveBeat(), ALIVE_BEAT_MS);
+  (aliveTimer as any).unref?.();
   // run 终态 → 催一次评估:event_seen 盯 run.done 的规则不用等满一个巡检周期。
   setRunTerminalListener(() => kickMuse());
   // 首次延迟 15s 即跑(开机不抢资源、但开启后很快就能起来,不必等满一个 poll 周期)。
@@ -1145,6 +1213,7 @@ export function kickMuse(): void {
 /** 面板「叫醒」:记一笔、催一次巡检(下一次 tick 当作到点,见 wakeRequestedAt)。supervisor 还没起 → false
  *  (请求照样留着,起来后的第一次巡检照办)。 */
 export function requestMuseWake(): boolean {
+  aliveBeat(); // 刚开盖就点:先把这次睡醒记上,请求才排在它后面(否则被当成睡前挂着的请求,白等一分钟)
   wakeRequestedAt = Date.now();
   wakeBlocked = null;
   if (!timer) return false;
@@ -1154,10 +1223,13 @@ export function requestMuseWake(): boolean {
 
 /** @internal 测试用:跑一轮巡检(P1-K2 锁定测试)。 */
 export const __museTickForTests = (): Promise<void> => tick();
+/** @internal 测试用:在 now 记一次存活心跳(睡醒稳定期测试)。 */
+export const __museAliveBeatForTests = (now: number): void => aliveBeat(now);
 
 export function stopMuseSupervisor(): void {
   if (timer) { clearTimeout(timer); timer = null; }
   if (kickTimer) { clearTimeout(kickTimer); kickTimer = null; }
+  if (aliveTimer) { clearInterval(aliveTimer); aliveTimer = null; }
 }
 
 export interface MuseStatus {

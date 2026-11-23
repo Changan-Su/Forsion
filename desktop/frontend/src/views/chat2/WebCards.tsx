@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { PanelRight } from 'lucide-react'
 import type { ToolEvent } from '../../types'
+import { isInflightTool } from '../../tangu/inflightTool'
 import { WebCard, type WebCardAction, type WebCardMenuEntry, type WebCardProps } from '../../components/WebCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { formatTime } from '../../format/time'
@@ -52,7 +53,7 @@ export type WebCardSpec = { kind: 'local'; path: string } | { kind: 'service'; p
 
 const HTML_RE = /\.html?$/i
 const START_RE = /^started background process (\S+)/
-const succeeded = (ev: ToolEvent): boolean => ev.done && !ev.isError && !ev.parked && !/^Error[:\s]/i.test(ev.result || '')
+const succeeded = (ev: ToolEvent): boolean => ev.done && !ev.isError && !ev.parked && !isInflightTool(ev) && !/^Error[:\s]/i.test(ev.result || '')
 const argsOf = (ev: ToolEvent): Record<string, unknown> => { try { const v = JSON.parse(ev.arguments || '{}'); return v && typeof v === 'object' ? v : {} } catch { return {} } }
 
 /** 一条消息里哪些工具调用后面跟网页卡(调用 id → 卡)。 */

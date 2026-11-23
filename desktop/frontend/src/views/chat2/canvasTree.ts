@@ -15,7 +15,7 @@ import type { SessionRecord, UiMessage } from '../../../../../tangu-agent/src/co
 const unseen = (m: UiMessage): boolean =>
   m.role === 'system' || !!m.teamSummary || (!!m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length)
 /** 引擎落库的机器行(打断 / 审批结局 / 子会话回报 / 会话消息)也是 role=user,但不是用户问的话:跟着上一轮,不另起一张卡。 */
-const MACHINE = /^<(?:(?:turn_interrupted|turn_resume|approval_update|inquiry_update|child_sessions_update)>|session_message )/
+const MACHINE = /^<(?:(?:turn_interrupted|turn_resume|approval_update|inquiry_update|background_update|child_sessions_update)>|session_message )/
 const isQuestion = (m: UiMessage): boolean => m.role === 'user' && !MACHINE.test(m.content)
 /** 对话流里画成一只气泡的行(提问或回答):列表里不画的、系统行、机器行都不算。 */
 export const isBubble = (m: UiMessage): boolean => !unseen(m) && (m.role !== 'user' || !MACHINE.test(m.content))

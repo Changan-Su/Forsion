@@ -41,6 +41,16 @@ export interface SelectedOverlay { version: string; dir: string }
 
 export const engineOverlayRoot = (sharedDir: string): string => path.join(sharedDir, 'engine');
 
+/**
+ * 这次启动为什么不挑引擎新版(null = 照常挑)。multi-account = 多账号模式(真实环境 TANGU_MULTI_ACCOUNT=1)一律跑包内引擎:
+ * 覆盖层可能是不认识这个开关的旧版,会按单人模式跑、用共用库。off = TANGU_ENGINE_OVERLAY=off。
+ */
+export function overlaySkipReason(env: NodeJS.ProcessEnv = process.env): 'multi-account' | 'off' | null {
+  if (env.TANGU_MULTI_ACCOUNT === '1') return 'multi-account';
+  if (env.TANGU_ENGINE_OVERLAY === 'off') return 'off';
+  return null;
+}
+
 /** 只比正式版号(x.y.z);调用方先用 RELEASE 过滤。 */
 export function cmpVersion(a: string, b: string): number {
   const pa = a.split('.').map(Number);

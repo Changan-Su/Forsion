@@ -35,7 +35,8 @@ const stubHost = (list: AppRefList | null): void => {
 const show = async (query: string, extra: Record<string, unknown> = {}): Promise<void> => {
   await act(async () => {
     root.render(React.createElement(WikiSuggest, {
-      query, left: 10, top: 10, getPageNames: () => ['Alpha.md', 'Safari 笔记.md'], onPick, onClose, editorFocused: () => true, ...extra,
+      query, triggerFrom: 1, captureCaret: () => () => true, left: 10, top: 10,
+      getPageNames: () => ['Alpha.md', 'Safari 笔记.md'], onPick, onClose, editorFocused: () => true, ...extra,
     }))
   })
   await act(async () => { await Promise.resolve() }) // 等 list() 回来

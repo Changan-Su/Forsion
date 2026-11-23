@@ -1859,8 +1859,10 @@ export interface PluginAccount {
 /** An action in the selection bar — the strip that appears over selected text (2026-09-28+, review G3-07;
  *  scopes beyond notes 2026-10-13+).
  *
- * Listed behind the bar's "⋯" button under a "Plugins" heading. By default (no `scope`) it only appears in v4 notes,
- * exactly as before; set `scope` to reach other views. `run` receives the selection and returns the markdown to
+ * Where it shows (2026-11-21+): behind the bar's "⋯" button under a "Plugins" heading by default; `placement: 'bar'`
+ * asks for a spot on the bar itself. The user decides in the end (pin in ⋯, right-click "Move to ⋯", Settings →
+ * Appearance → Selection menu) and the host remembers it. Before 2026-11-21 every plugin action sat behind ⋯.
+ * By default (no `scope`) it only appears in v4 notes, exactly as before; set `scope` to reach other views. `run` receives the selection and returns the markdown to
  * show; the host puts it in the **same preview card** as the built-in AI actions. In an editable note the card
  * offers Replace / Insert below / Copy / Discard — nothing is written until the user confirms, so a plugin can never
  * silently rewrite a note. Everywhere else the card is read-only (Copy / Close). Return '' to propose nothing.
@@ -1868,10 +1870,37 @@ export interface PluginAccount {
  * The host validates the return value like slash `run` (string, no control characters). */
 export interface SelectionActionContribution {
   id: string
-  /** Menu label (already in the user's language — pick with `ctx.getLocale?.()` if you ship both). */
-  title: string
+  /** Button / menu label. String, function or `{ zh, en }` (see PluginText, 2026-11-21+ here): the latter two follow a
+   *  language switch. Hosts before 2026-11-21 take a string only and drop the whole action (console warning) when
+   *  `title` is anything else — set `minAppVersion` when you pass a function or `{ zh, en }`. */
+  title: PluginText
   /** A name from the plugin icon vocabulary (same names as commands and panels). Unknown names fall back to none. */
   icon?: string
+  /** Default spot (2026-11-21+). 'bar' = on the bar itself; 'more' (default) = behind ⋯.
+   *  The user's choice (pin in ⋯ / right-click "Move to ⋯" / Settings table) always wins and is remembered.
+   *  At most 3 plugin actions sit on the bar; the rest overflow into ⋯ by install order.
+   *  Core plugins (CORE_BUNDLE_IDS) sit with the host's shared actions and don't use up those 3 slots. */
+  placement?: 'bar' | 'more'
+  /** The action supports running by itself right after the user selects text (2026-11-21+).
+   *  This only declares support. The switch belongs to the user: per action, off by default, flipped in the
+   *  result card head ("Run on select") or the Settings table. Don't flip it yourself: it is a user-facing UI setting,
+   *  not a security boundary (plugins run in the same renderer as the host, and could watch selections on their own
+   *  anyway). Needs output 'preview' and a `scope` that reaches a non-note view: notes never run actions automatically.
+   *  When it runs automatically, `run` gets `auto: true`. Only the first action (in the user's order) with the switch
+   *  on runs; phones don't run actions automatically yet. */
+  auto?: boolean
+  /** Controls the host draws on the result card (2026-11-21+, output 'preview' only). */
+  card?: {
+    /** Target-language picker in the card head. Its value reaches `run` as `cx.language`
+     *  (an English language name such as 'English' / 'Chinese (Simplified)', same list as the built-in translate
+     *  card). Initial value = the host's guess from the selection (into the UI language, or out of it when the
+     *  selection already is in it); the user's last pick for this action is remembered. */
+    language?: boolean
+    /** Show the original selection above the result (collapsed to 3 lines, click to expand). */
+    source?: boolean
+    /** Speaker buttons next to the original and the result. Hidden where read-aloud isn't available (see `ctx.tts`). */
+    speak?: boolean
+  }
   /** Where the action is listed. Default `'note'`.
    *  - `'note'` — v4 notes only.
    *  - `'all'` — every view that shows the selection bar (notes, chat, plugin views that mounted one).
@@ -1900,10 +1929,16 @@ export interface SelectionActionContribution {
     editable?: boolean
     /** Where the text came from, when the view knows (note path, chat session, PDF page…). */
     source?: { title?: string; path?: string; sessionId?: string; page?: number }
-    /** Aborted when the user closes the card or picks another language / retries. */
+    /** Aborted when the user closes the card or picks another language / retries, or (automatic runs) selects
+     *  other text. */
     signal?: AbortSignal
     /** Stream partial text into the card while working (the returned string still wins at the end). */
     onDelta?(chunk: string): void
+    /** Picked target language when `card.language` is set (2026-11-21+). */
+    language?: string
+    /** True when the host ran this action automatically after a selection (the user turned on "Run on select";
+     *  2026-11-21+). */
+    auto?: boolean
   }): string | void | Promise<string | void>
 }
 
@@ -1931,6 +1966,7 @@ export type PluginIconName =
   | 'video' | 'terminal' | 'layout-grid' | 'sparkles' | 'boxes' | 'list-tree' | 'list-todo' | 'server' | 'server-cog'
   | 'pencil' | 'trash-2' | 'download' | 'upload' | 'search' | 'check' | 'x' | 'settings' | 'external-link'
   | 'eraser' | 'hand' | 'highlighter' | 'mouse-pointer-2' | 'pen-line' | 'shapes' | 'sticky-note' | 'type'
+  | 'languages' | 'volume'
 
 /** One row of `ctx.ui.contextMenu`. Before 2026-10-26 the host kept only `label` / `run` / `checked` / `disabled` /
  *  `danger` and silently dropped every other field. */
@@ -2408,7 +2444,8 @@ export interface PluginContext {
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
      *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
      *  `typeof box.insertText === 'function'` on the returned handle. Later additions that a handle can't reveal
-     *  (an array of `suggest` triggers, the menu opening upward) are listed in `chatBoxCapabilities`. */
+     *  (an array of `suggest` triggers, the menu opening upward, the host's `@` panel via `mentions` / `onMention`) are listed in
+     *  `chatBoxCapabilities`. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -2416,6 +2453,10 @@ export interface PluginContext {
     /** What this host's Chat Box does beyond the options it has always taken (2026-11-04+), see `CHAT_BOX_CAPABILITIES`.
      *  Missing field = none of them: e.g. pass `suggest` as an array only when this includes `'suggestMany'`. */
     readonly chatBoxCapabilities?: readonly import('../../../../shared/chatBox').ChatBoxCapability[]
+    /** 2026-11-21+ (with `chatBoxCapabilities` `'format'`): read a `format: 'inline'` value — e.g. a task title written by that
+     *  Chat Box — as runs of text with their marks, in the same grammar the box writes. Synchronous, never throws.
+     *  `[[wiki]]` runs carry `wiki`; join every `text` for the plain reading (labels, tooltips, notifications, sorting). */
+    parseInlineMarkdown?(markdown: string): import('../../../../shared/chatBox').ChatBoxInlineToken[]
     mountFloatingToc(
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,
@@ -2776,7 +2817,11 @@ export interface PluginContext {
      *  `'Simplified Chinese'`);`before` 是原文前面的一段上下文(只供消歧,不翻)。返回 `text` = 译文本身，另可带实际模型回执 `model`。
      *  只做翻译:要模型顺带改错字、按你的格式回话,请用 `complete` 自己写指令。引擎每个用户同时最多 3 个这类请求
      *  (与 `complete` 合计),超出回 429 → 自己排队。停用时在飞的请求被中止并 reject。
-     *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。 */
+     *  旧宿主没有:`ctx.tangu?.translate ?? 退回 complete`。
+     *  In a selection action's `run` (2026-11-22+): pass `cx.signal` through as `signal` and the result card names the model
+     *  that answered (the first call in that run), like the built-in translate; same for `complete`. Only the host's core
+     *  translation plugin also gets the selection's surroundings (note text before / after, page instructions) added to its
+     *  `translate` request; other plugins never do. */
     translate?(req: { text: string; language: string; before?: string; signal?: AbortSignal; modelId?: string; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string; mt?: boolean } }>
     /** 行内补全 / Inline completion (FIM, fill-in-the-middle; 2026-10-26+). 光标前后文原样交给**补全模型**,没有提示词、没有指令:
      *  `before` = 光标前的正文(引擎留最后 16k 字符),`after` = 光标后的正文(留前 8k);两者至少一个非空。返回 `text` = 模型原文
@@ -2788,6 +2833,20 @@ export interface PluginContext {
      *  与 `complete` / `translate` 合计每用户同时最多 3 个请求(超出 429);每次按键前请先 abort 上一次(`signal`)。
      *  插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`。 */
     fim?(req: { before: string; after?: string; maxTokens?: number; stop?: string[]; modelId?: string; signal?: AbortSignal; onDelta?: (delta: string) => void }): Promise<{ text: string; model?: { id: string; name: string } }>
+  }
+  /** Read aloud with the user's read-aloud model (Settings → Models → Voice; 2026-11-21+). Same gate as `ctx.tangu`:
+   *  only on Tangu hosts, absent elsewhere and on older hosts (`ctx.tts?.speak`). Synthesis runs through the host's
+   *  model and quota; the plugin never sees a key. There is one player for the whole app (chat read-aloud included):
+   *  a new `speak` stops whatever was playing. Disabling the plugin stops its playback and aborts its requests. */
+  tts?: {
+    /** Read text aloud with the user's read-aloud model. Resolves when playback ends or is stopped.
+     *  Rejects Error('tts_no_model') when none is set (the host shows the "pick a model" prompt itself),
+     *  Error('tts_unavailable') on hosts without read-aloud. Markdown is stripped; capped at 4000 characters. */
+    speak(text: string, o?: { signal?: AbortSignal }): Promise<void>
+    /** Stop playback this plugin started (someone else's playback is left alone). */
+    stop(): void
+    /** Whether a read-aloud model is set right now. */
+    available(): boolean
   }
   /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
    *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。

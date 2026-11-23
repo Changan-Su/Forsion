@@ -32,6 +32,7 @@ import { startBackgroundProcess, disposeAllProcesses, type BackgroundProcess } f
 import { recordRemoteCreated, listRemoteCreated } from '../src/services/remoteCreated.js';
 import { ensureEntry, validateEntryInput, loadSchedule, entriesOf } from '../src/services/agentSchedule.js';
 import { markMuseEntriesFired } from '../src/services/muse.js';
+import { markRecoveryHost } from '../src/services/runProgress.js';
 
 const USER = 'u1';
 const AUTH = { Authorization: 'Bearer x' };
@@ -291,5 +292,25 @@ describe('急停 + 解锁(S5 / S2)', () => {
     const r = await post('/agent/remote/estop', { source: 'evil' });
     expect(r.body).toEqual({ ok: true, aborted: [], killedProcesses: 0, revertedEntries: 0, locked: true });
     expect((await post('/agent/remote/estop', {})).body.locked).toBe(true);
+  });
+});
+
+describe('退出清单 restart-status(中断任务续跑评审 D5 / D10)', () => {
+  it('只算本进程持有的任务;resumable = 此刻停机会被自动续跑的那几条;TANGU_AUTO_RESUME=0 → 0', async () => {
+    // 共用 state.db 的另一个进程被强杀留下的 running 行:不算
+    await createRun({ id: 'RS-orphan', sessionId: 'SN', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'RS-orphan-a', input: { message: 'x', userMessageId: 'RS-orphan-u', attachments: [] } });
+    await query(`UPDATE agent_runs SET status = 'running', owner = '1:1700000000' WHERE id = 'RS-orphan'`);
+    expect((await get('/agent/remote/restart-status')).body).toEqual({ tasks: 0, processes: 0, resumable: 0 });
+    markRecoveryHost(true);
+    let stamped: { runId: string };
+    try { stamped = await start('SL', {}); } finally { markRecoveryHost(false); }
+    const tui = await start('SC', {}); // 没有 hostRecovery 戳(TUI 起的):桌面引擎停了也不替它续
+    await vi.waitFor(async () => expect((await get('/agent/remote/activity')).body.runs.length).toBe(2), { timeout: 5000 });
+    expect((await get('/agent/remote/restart-status')).body).toEqual({ tasks: 2, processes: 0, resumable: 1 });
+    process.env.TANGU_AUTO_RESUME = '0';
+    try { expect((await get('/agent/remote/restart-status')).body).toEqual({ tasks: 2, processes: 0, resumable: 0 }); } finally { delete process.env.TANGU_AUTO_RESUME; }
+    abortRun(stamped!.runId); abortRun(tui.runId);
+    await settled(stamped!.runId); await settled(tui.runId);
+    expect((await get('/agent/remote/restart-status')).body).toEqual({ tasks: 0, processes: 0, resumable: 0 });
   });
 });

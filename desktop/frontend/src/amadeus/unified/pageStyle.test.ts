@@ -4,10 +4,10 @@ import { pageStyleAttrs, pageStyleEntries } from './pageStyle'
 import { DEFAULT_PAGE_STYLE } from './viewMemory'
 
 describe('page style entries', () => {
-  it('offers font (default / serif / mono), full width and small text with live state', () => {
+  it('offers font, width, size and typing-line centering with live state', () => {
     const set = vi.fn()
-    const entries = pageStyleEntries({ wide: true, small: false, font: 'serif' }, set, (k) => k)
-    expect(entries.map((e) => e.id)).toEqual(['font', 'wide', 'small'])
+    const entries = pageStyleEntries({ wide: true, small: false, centerLine: false, font: 'serif' }, set, (k) => k)
+    expect(entries.map((e) => e.id)).toEqual(['font', 'wide', 'small', 'centerLine'])
     const font = entries[0]
     if (font.kind !== 'choice') throw new Error('font must be a choice')
     expect(font.options.map((o) => [o.id, o.label, o.on])).toEqual([
@@ -17,7 +17,11 @@ describe('page style entries', () => {
     ])
     font.options[2].run()
     expect(set).toHaveBeenLastCalledWith({ font: 'mono' })
-    const [, wide, small] = entries
+    const [, wide, small, centerLine] = entries
+    expect(centerLine).toMatchObject({ kind: 'toggle', on: false })
+    centerLine.kind === 'toggle' && centerLine.run()
+    expect(set).toHaveBeenLastCalledWith({ centerLine: true })
+    expect(pageStyleEntries(DEFAULT_PAGE_STYLE, set, undefined, false).map(e => e.id)).not.toContain('centerLine')
     expect(wide).toMatchObject({ kind: 'toggle', label: 'amxpage.wide', on: true })
     expect(small).toMatchObject({ kind: 'toggle', label: 'amxpage.small', on: false })
     wide.kind === 'toggle' && wide.run()
@@ -28,6 +32,6 @@ describe('page style entries', () => {
 
   it('puts no attribute on the shell at defaults', () => {
     expect(pageStyleAttrs(DEFAULT_PAGE_STYLE)).toEqual({})
-    expect(pageStyleAttrs({ wide: true, small: true, font: 'mono' })).toEqual({ 'data-page-wide': '', 'data-page-small': '', 'data-page-font': 'mono' })
+    expect(pageStyleAttrs({ wide: true, small: true, centerLine: true, font: 'mono' })).toEqual({ 'data-page-wide': '', 'data-page-small': '', 'data-page-font': 'mono' })
   })
 })

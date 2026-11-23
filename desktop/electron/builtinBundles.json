@@ -32,5 +32,16 @@
     ],
     "minVersion": "0.1.0",
     "requiresSpace": "calendar"
+  },
+  {
+    "pkg": "@forsion/translation",
+    "id": "translation",
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "minVersion": "0.1.0",
+    "requires": "agentBackend"
   }
 ]

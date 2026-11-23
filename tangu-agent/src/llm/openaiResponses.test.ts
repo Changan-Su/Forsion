@@ -130,6 +130,16 @@ describe('stableSessionUuid(缓存/路由粘性:同会话稳定,不再每请求�
 describe('streamOpenAiResponses SSE parse', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([false, true])('recognizes premature EOF when the terminal event is absent (completed=%s)', async (complete) => {
+    const text = 'data: {"type":"response.output_text.delta","delta":"Your train departs at"}\n\n' +
+      (complete ? 'data: {"type":"response.completed","response":{}}\n\n' : '');
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(text)));
+    const result = await streamOpenAiResponses({
+      apiKey: 'k', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] },
+    });
+    expect(result.streamEndedEarly).toBe(complete ? undefined : true);
+  });
+
   /** 只喂一条 response.completed,取回归一化后的 usage。 */
   const usageOf = async (u: any): Promise<any> => {
     const sse = `data: ${JSON.stringify({ type: 'response.completed', response: { usage: u } })}\n`;
@@ -338,6 +348,18 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(seen[0]['x-opencode-session']).toBe(openCodeSessionId('sess-1'));
     expect(seen[1]['x-opencode-session']).toBe(openCodeSessionId('run-1'));
     expect(seen[2]['x-opencode-session']).toBeUndefined();
+  });
+
+  it('response.incomplete 的原因是 content_filter:单独报 content_filter(安全审核拦下),不并进 length 去自动续写', async () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"半截"}',
+      'data: {"type":"response.incomplete","response":{"usage":{"input_tokens":5,"output_tokens":3},"incomplete_details":{"reason":"content_filter"}}}',
+      '',
+    ].join('\n');
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+    const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-6-luna', messages: [] } } as any);
+    expect(res.finishReason).toBe('content_filter');
+    expect(res.outputItems).toBeUndefined();
   });
 
   it('response.incomplete(输出截断)归一化为 finishReason=length——半截函数参数不得伪装成 tool_calls 被执行', async () => {

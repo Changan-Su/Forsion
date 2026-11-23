@@ -6,6 +6,7 @@
  * 内置 provider 由 registry.ts(门面)按固定顺序注册;app 自带工具经
  * AppProfile.toolLoadout.providers 注入(resolve 时排在内置之后,不受 builtins 白名单约束)。
  */
+import { multiAccountToolAllowed } from './multiAccountTools.js';
 import { standInOf, standInToolDenied } from '../services/accessDomain.js';
 import type { ToolImpl, ToolContext } from './toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -334,6 +335,7 @@ const PLAN_MODE_TOOLS = new Set([
   'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
 
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
+  'set_automation_suggestions', // 同上:只是放在自动化首页的草稿建议,不建规则(可见性另由 ctx.muse 收口)
   'set_chat_starters', // 同上:只是向用户提议新对话的开场句,不碰用户资产(可见性另由 ctx.muse + muse.chatStarters 收口)
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
   'read_computer_history', // 只读电脑历史;可见性另由 computerHistoryGate 收口(开关 + 本机客户端 + 非通道/团队)
@@ -384,8 +386,12 @@ export function listToolProviders(): ToolProvider[] {
  * 同名后注册者覆盖(host 模式下 hostExec 的 read_file/write_file 覆盖云工作区版本——
  * 后者已被 ① 滤掉,故 host 工具按注册序追加在末尾,对齐原「HOST_TOOLS 末尾叠加」行为)。
  */
-export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Map<string, 'plugin' | 'core'>): Map<string, ToolDef> {
+/** 插件工具的主人(遥测 v3 契约 §19:tool_call / tool_result 带 pluginId + pluginOfficial)。resolveTools 的 owners 参数按名字填。 */
+export interface ToolPluginOwner { ownerPlugin?: string; official: boolean }
+
+export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Map<string, 'plugin' | 'core'>, owners?: Map<string, ToolPluginOwner>): Map<string, ToolDef> {
   origins?.clear();
+  owners?.clear();
   const host = ctx.execMode === 'host';
   const sandboxCtx = { ...ctx, hostSandbox: ctx.hostSandbox ?? (ctx.execMode === 'sandbox' ? undefined : resolveHostSandboxPolicy()) };
   const sandboxRestricted = isHostSandboxRestricted(sandboxCtx);
@@ -404,11 +410,14 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
   const out = new Map<string, ToolDef>();
   const standIn = standInOf(ctx);
   const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false, official = false, ownerPlugin?: string): void => {
+    // 多账号模式(tools/multiAccountTools.ts):工具名白名单,缺省拒绝 —— 放在一切闸之前,defs / 目录 / load_tools / 执行四处同时生效。
+    if (!multiAccountToolAllowed(t.name, t.mode)) return;
     // 分身闸(11-09)和子代理硬闸一样放在**最前**:内置只给白名单,插件只给注册这个通道的那个插件的,一处拒 = 四处都没有。
     if (standIn && standInToolDenied(standIn, t.name, { isBuiltin, fromPlugin, ownerPlugin })) return;
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
     // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
     if (isSubAgentDenied(ctx, t.name)) return;
+    if (ctx.coreToolsOnly && (!isBuiltin || fromPlugin)) return;
     if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) return;
     // 远程污点 run 缺省不装 Computer Use(设备能力方案 §4.7 / §6.4-5):驱动它的人不在这台电脑前,而 CU 的观察类动作
     // (看屏幕、读任意窗口的文字)在 auto-edit 上限下不过审批。按 runId 现取 —— 起跑后被远端 steer 染上的 run,
@@ -452,6 +461,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
     out.set(t.name, t);
     origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
+    if (owners) { if (fromPlugin) owners.set(t.name, { ownerPlugin, official }); else owners.delete(t.name); }
   };
   for (const p of providers) for (const t of providerTools(p)) add(t, true, p.origin === 'plugin', p.origin === 'plugin' && p.official === true, p.ownerPlugin);
   for (const p of profile.toolLoadout.providers ?? []) for (const t of providerTools(p)) add(t, false, p.origin === 'plugin', false, p.ownerPlugin);

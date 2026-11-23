@@ -19,12 +19,15 @@ import type { AmadeusApi, DbReadResult, LinkMeta, PageProps, TextWriteResult, Va
 import { VaultManager } from './vaultManager'
 import { VaultIndex } from './vaultIndex'
 import { installLocalAssetUrls } from './localAssets'
-import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
-import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { createStructureQueue, propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
+import { checkStrictTextWrite, textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
 import { translate } from '@/i18n'
 import '@/amadeus/lib/bridgeMessages' // amxbridge.* 文案与 web 桥共用一份(G2-14)
 
+// Switching from cloud back to local can create a second bridge over the same directory.
+const localStructureQueue = createStructureQueue()
+const pathChains = new Map<string, Promise<unknown>>()
 const ROOT = '/vault' // 虚拟绝对根;实际落 Capacitor Data/vault/
 const LAST_PAGE_KEY = 'amadeus_last_page'
 const nowIso = (): string => new Date().toISOString()
@@ -57,7 +60,6 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
   // writeTextFile 也不认 base。单进程够用:按路径的 promise 链;编辑器保存(writeTextFile / savePage / 外科写 fm)
   // 与链接重写都经过它,锁内 读 → 比对 → 写(契约同桌面 / web:盘上不是基线 → 不写,交回 { ok:false, current })。
   // 不可重入:只包最底层那段读改写,锁里别再调会拿锁的东西。
-  const pathChains = new Map<string, Promise<unknown>>()
   const withPathLock = <T>(p: string, fn: () => Promise<T>): Promise<T> => {
     const key = p.replace(/\\/g, '/')
     const prev = pathChains.get(key) ?? Promise.resolve()
@@ -272,6 +274,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
 
     // 派生索引
     search: async (query) => { await ensureVault(); return index.search(query) },
+    noteReplaceCandidates: async (query) => { await ensureVault(); return index.noteReplaceCandidates(query) },
     backlinks: async (pagePath) => { await ensureVault(); return index.backlinks(pagePath) },
     reindex: async () => { await ensureVault(); await index.build() },
     listTags: async () => { await ensureVault(); return index.listTags() },
@@ -304,7 +307,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
 
     // ---- 字节读写(PDF 阅读器 getDocument({data}) 等) ----
-    saveVaultBytes: async (p, bytes) => { await ensureVault(); await vault.writeVaultBytes(p, bytes) },
+    saveVaultBytes: (p, bytes) => withPathLock(p, async () => { await ensureVault(); await vault.writeVaultBytes(p, bytes) }),
     readVaultBytes: async (p) => { await ensureVault(); return vault.readVaultBytes(p) },
     statPath: async (p) => { await ensureVault(); return vault.statEntry(p) },
 
@@ -335,6 +338,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     // 不更新的话标签、全文检索要等重开智库才看得到刚写的字,全文只剩标题能命中(手机走查 2026-11-19)。
     // 索引在锁外读盘(同 propagateRenames 的写口);读失败不影响这次写的结果,下次 build 会补上。
     writeTextFile: async (p, text, opts) => {
+      if (opts?.strictExisting) checkStrictTextWrite(opts, ROOT)
       const r = await writeText(p, text, { base: opts?.base, create: opts?.create })
       if (r === undefined || (r !== 'gone' && r.ok)) await index.update(p).catch(() => {})
       return r as void | TextWriteResult
@@ -372,7 +376,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     pageIcons: async () => { await ensureVault(); return index.pageIcons() },
 
     // ---- 文件级改名(desktop ipc.ts renamePageFile/renameDbFile 同款) ----
-    renamePageFile: async (oldPath, newBaseName) => {
+    renamePageFile: async (oldPath, newBaseName, rememberOpened) => {
       await ensureVault()
       const dir = path.dirname(oldPath)
       let base = newBaseName.trim().replace(/[\\/]/g, '')
@@ -385,6 +389,7 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
       await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
       index.remove(oldPath)
       await index.update(newPath)
+      if (rememberOpened) rememberPage(newPath)
       await propagateRenames({ [oldPath]: newPath }, pagesBefore)
       return newPath
     },
@@ -468,5 +473,5 @@ export function createMobileAmadeusBridge(cfg?: { apiBase?: () => string; getTok
     },
     onDbExternalChange: () => () => { /* 无 watcher */ },
     onStructureChange: () => () => { /* 无 watcher */ },
-  })
+  }, localStructureQueue)
 }

@@ -7,7 +7,9 @@
 import { deps } from '../seams/runtime.js';
 import { currentRunClientTag } from '../seams/runContext.js';
 import type { AgentEvent } from './eventBus.js';
-import type { ActiveRunRow, PendingRunRow, StepInput, StepRow } from '../seams/stateStore.js';
+import type { ActiveRunRow, FinalizeMessageInput, PendingRunRow, StepInput, StepRow } from '../seams/stateStore.js';
+import { isRecoveryHost } from './runProgress.js';
+import { currentCloudAccount } from './cloudAccount.js';
 
 export interface AgentRun {
   id: string;
@@ -35,10 +37,16 @@ export const createRun = (run: {
   input: any;
 }): Promise<void> => {
   const clientTag = currentRunClientTag();
-  const input = clientTag && run.input && typeof run.input === 'object' && !Array.isArray(run.input)
-    && run.input.client == null
+  const plain = !!run.input && typeof run.input === 'object' && !Array.isArray(run.input);
+  let input = clientTag && plain && run.input.client == null
     ? { ...run.input, client: clientTag }
     : run.input;
+  // 会做启动恢复的本机引擎建的 run 盖戳(中断任务续跑方案 B,门控第 8 条):被停下后只有带戳的才会被自动续。
+  // TUI(与桌面共用 state.db、不做恢复)建的 run 不带。所有引擎内的建 run 都经这里;POST 请求体伸不进 input。
+  if (plain && isRecoveryHost() && input.hostRecovery == null) input = { ...input, hostRecovery: true };
+  // 当时登录的云端账号(评审 #3 / D2):换了账号之后,旧账号被停下的不续、排队中的不跑。认不出是谁(null)就不记;续跑 run 照抄旧 run 的。
+  const account = currentCloudAccount();
+  if (plain && typeof account === 'string' && input.cloudAccount === undefined) input = { ...input, cloudAccount: account };
   return deps().state.createRun(input === run.input ? run : { ...run, input });
 };
 
@@ -51,7 +59,8 @@ export const getRunForUser = (id: string, userId: string): Promise<AgentRun | nu
 // ── run 终态收敛点:全部引擎调用方(agentLoop/groupChat)都经此写终态,单点发 run.done 活动行。
 // 供 event_seen 盯「某 agent 的 run 结束」;automation run 带 o=triggerKey(评估侧防自激)。
 // muse 周期跳过(高频噪音);仅本地形态(活动日志=hostExec 专属)。监听器由 muse.ts 注册(kickMuse,避免 import 环)。
-const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted']);
+// interrupted(中断任务续跑方案 B)= 引擎被停下的那一刻收的尾,也是终态(之后可能另起一个续跑 run)。
+const TERMINAL_STATUSES = new Set(['done', 'failed', 'aborted', 'interrupted']);
 let runTerminalListener: (() => void) | null = null;
 export function setRunTerminalListener(cb: (() => void) | null): void {
   runTerminalListener = cb;
@@ -91,6 +100,18 @@ export const updateRunStatus = async (
   if (TERMINAL_STATUSES.has(status)) {
     emitRunTerminal(id, status).catch(() => {}); // 尽力而为,绝不影响 run 收尾
   }
+};
+
+/** 终稿助手行 + run 记 done 同一事务(评审 #5)。存储没有 completeRun → 逐条写(先行后状态)。 */
+export const completeRunWithMessage = async (m: FinalizeMessageInput, done: { runId: string; result: any; tokensTotal?: number }): Promise<void> => {
+  const st = deps().state;
+  if (typeof st.completeRun === 'function') {
+    await st.completeRun(m, done);
+    emitRunTerminal(done.runId, 'done').catch(() => {});
+    return;
+  }
+  await st.finalizeAssistantMessage(m);
+  await updateRunStatus(done.runId, 'done', { result: done.result, tokensTotal: done.tokensTotal });
 };
 
 export const appendStep = (step: StepInput): Promise<void> => deps().state.appendStep(step);

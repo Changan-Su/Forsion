@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, UI_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, readBad, selectOverlay, verifyEngineSignature, verifySignedBytes } from './overlay.js';
+import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, UI_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, overlaySkipReason, readBad, selectOverlay, verifyEngineSignature, verifySignedBytes } from './overlay.js';
 import { ENGINE_SIGNING_KEY } from './signingKey.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -246,4 +246,14 @@ it('readBad 读到坏文件当作空', () => {
   writeFileSync(path.join(engineRoot, 'bad.json'), '[1]');
   expect(readBad(engineRoot)).toEqual({});
   expect(readFileSync(path.join(engineRoot, 'bad.json'), 'utf8')).toBe('[1]');
+});
+
+describe('overlaySkipReason', () => {
+  it('multi-account mode always runs the bundled engine; off is honoured; otherwise overlays are picked', () => {
+    expect(overlaySkipReason({ TANGU_MULTI_ACCOUNT: '1' })).toBe('multi-account');
+    expect(overlaySkipReason({ TANGU_MULTI_ACCOUNT: '1', TANGU_ENGINE_OVERLAY: 'verbose' })).toBe('multi-account');
+    expect(overlaySkipReason({ TANGU_ENGINE_OVERLAY: 'off' })).toBe('off');
+    expect(overlaySkipReason({ TANGU_MULTI_ACCOUNT: 'true' })).toBeNull();
+    expect(overlaySkipReason({})).toBeNull();
+  });
 });

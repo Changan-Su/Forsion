@@ -6,6 +6,7 @@
  * browser_* 全族改为驱动**用户正在用的那个 Chrome**(看得见已开的标签、带着登录态),
  * 否则仍是 Tangu 自己的后台浏览器。见 userBrowserEndpoint。
  */
+import { assertHostSpawnAllowed, hostSpawnDenied } from '../../core/hostSpawn.js';
 import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants, promises as fs } from 'node:fs';
@@ -360,6 +361,7 @@ let npxBin: Promise<string | null> | null = null;
 function resolveNpxBin(): Promise<string | null> {
   npxBin ??= new Promise((resolve) => {
     if (process.platform === 'win32') { resolve(null); return; }
+    if (hostSpawnDenied('browser tool')) { resolve(null); return; }
     execFile('npx', ['-y', '-p', 'agent-browser', '-c', 'command -v agent-browser'], { timeout: 120_000, env: toolSubprocessEnv() }, (err, stdout) => {
       const link = String(stdout || '').trim().split('\n').pop();
       if (err || !link) { resolve(null); return; }
@@ -390,6 +392,7 @@ async function spawnAgentBrowser(
   return new Promise((resolve) => {
     let child;
     try {
+      assertHostSpawnAllowed('browser tool');
       child = spawn(executable, argv, { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch (e: any) {
       resolve({ success: false, error: e?.code === 'ENOENT' ? installHint() : String(e?.message || e), enoent: e?.code === 'ENOENT' });

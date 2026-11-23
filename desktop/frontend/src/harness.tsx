@@ -516,6 +516,7 @@ function BoardHarness() {
   // 深色档要能切:网格层在深色下换的是 mix-blend-mode(multiply → screen),而混合的结果只有截图看得见。
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   // 真 App 里写设置是异步的(drawingStore 先 flush、预读盘面再写):lag > 0 模拟那段「props 还是旧值」的窗口
+  const viewport = useRef({ x: 0, y: 0, z: 1 })
   const lag = useRef(0)
   const patches = useRef<Partial<BoardSettings>[]>([])
   const cur = useRef(settings)
@@ -528,6 +529,7 @@ function BoardHarness() {
       setLag: (ms: number) => { lag.current = ms },
       patches: patches.current,
       get: () => cur.current,
+      getViewport: () => viewport.current,
     }
   }, [])
   return (
@@ -544,6 +546,7 @@ function BoardHarness() {
             if (lag.current) setTimeout(apply, lag.current)
             else apply()
           }}
+          onViewportChange={(next) => { viewport.current = next }}
           onSceneChange={(json: string) => {
             ;(window as unknown as { __scene: unknown }).__scene = JSON.parse(json)
           }}
@@ -2426,6 +2429,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             key={`${st.path}${locked ? ':locked' : ''}`}
             path={st.path}
             initial={st.initial}
+            onExitCenterLine={pageStyle.centerLine ? () => setNotePageStyle(null, st.path, { centerLine: false }) : undefined}
             diskRaw={st.diskRaw}
             probe={probe}
             filesRef={filesRef}
@@ -2524,9 +2528,11 @@ if (new URLSearchParams(location.search).has('dock')) {
       //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
       const wb = new URLSearchParams(location.search).has('uwb')
       const pane = (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
-          {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
-          <UPageHost onPath={setPath} onReading={setReading} />
+        <>
+          <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
+            {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger={reading} />}
+            <UPageHost onPath={setPath} onReading={setReading} />
+          </div>
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
           {new URLSearchParams(location.search).has('umbar') && (
             <AmxMobileBar
@@ -2540,7 +2546,7 @@ if (new URLSearchParams(location.search).has('dock')) {
               canvas={null}
             />
           )}
-        </div>
+        </>
       )
       return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }
