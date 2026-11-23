@@ -28,6 +28,8 @@ registerMessages({
   'globalSkills.mine': { zh: '我的技能', en: 'My skills' },
   'globalSkills.packaged': { zh: '随包提供', en: 'Included with Forsion' },
   'globalSkills.github': { zh: 'GitHub 技能', en: 'GitHub skills' },
+  'globalSkills.githubRemove': { zh: '从个人技能库删除“{name}”和随包文件？', en: 'Delete “{name}” and its files from your skills?' },
+  'globalSkills.githubRemoved': { zh: '已删除 GitHub 技能及随包文件。', en: 'Deleted the GitHub skill and its files.' },
   'globalSkills.githubReady': { zh: '正文和随包文件在云端技能会话中可用。', en: 'The instructions and package files are available in cloud sessions with skills enabled.' },
   'globalSkills.cloud': { zh: '我的云端正文副本', en: 'My cloud text copies' },
   'globalSkills.fromUser': { zh: '自建或导入', en: 'Created or imported' },
@@ -300,8 +302,8 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       <div className="gsk-search"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('globalSkills.search')} aria-label={t('globalSkills.search')} /></div>
       <CapabilityMenu label={t('globalSkills.source')} selection items={([
         ['all', 'globalSkills.allSources'], ['user', 'globalSkills.mine'], ['builtin', 'globalSkills.fromBuiltin'], ['bundle', 'globalSkills.fromBundle'], ['cloud', 'globalSkills.cloud'],
-      ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || githubEnabled || id !== 'cloud').map(([id, key]) => ({ id, label: t(key), selected: filter === id, onSelect: () => setFilter(id) }))}>
-        <span>{t(({ all: 'globalSkills.allSources', user: 'globalSkills.mine', builtin: 'globalSkills.fromBuiltin', bundle: 'globalSkills.fromBundle', cloud: 'globalSkills.cloud' } as const)[filter])}</span><ChevronDown size={13} />
+      ] as const).filter(([id]) => CLOUD_SKILLS_ENABLED || githubEnabled || id !== 'cloud').map(([id, key]) => ({ id, label: t(id === 'cloud' && githubEnabled ? 'globalSkills.github' : key), selected: filter === id, onSelect: () => setFilter(id) }))}>
+        <span>{t(({ all: 'globalSkills.allSources', user: 'globalSkills.mine', builtin: 'globalSkills.fromBuiltin', bundle: 'globalSkills.fromBundle', cloud: githubEnabled ? 'globalSkills.github' : 'globalSkills.cloud' } as const)[filter])}</span><ChevronDown size={13} />
       </CapabilityMenu>
       {catalog !== null && !delegated && <CapabilityMenu label={t('globalSkills.add')} className="btn primary sm" items={[
         { id: 'create', label: t('globalSkills.create'), icon: <FileText size={14} />, onSelect: () => setEditor({ kind: 'create', name: '', slug: '', slugEdited: false, description: '', content: '' }) },
@@ -357,7 +359,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
         </> : selectedCloud ? <>
           <div className="gsk-detail-head"><div><span>{t(githubEnabled ? 'globalSkills.github' : 'globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
           <p className="gsk-cloud-note">{t(githubEnabled ? 'globalSkills.githubReady' : 'globalSkills.cloudExplanation')}</p>{!githubEnabled && <p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>}
-          <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t('globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(homeTarget(), selectedCloud.id), t('globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
+          <div className="gsk-actions"><button className="btn ghost sm" type="button" disabled={busy} onClick={() => { if (window.confirm(t(selectedCloud.id.startsWith('usr_gh_') ? 'globalSkills.githubRemove' : 'globalSkills.deleteCloudConfirm', { name: selectedCloud.name }))) void run(() => deleteUserCloudSkill(homeTarget(), selectedCloud.id), t(selectedCloud.id.startsWith('usr_gh_') ? 'globalSkills.githubRemoved' : 'globalSkills.cloudDeleted'), null) }}><Trash2 size={13} />{t('globalSkills.delete')}</button></div>
         </> : catalog !== null && !catalog.length && !cloud.length
           ? <EmptyState icon={Sparkles} title={t('globalSkills.emptyTitle')} line={t('globalSkills.emptyLine')} data-gsk-empty=""
               action={{ label: t('globalSkills.add'), icon: Plus, action: 'create', onClick: () => setEditor({ kind: 'create', name: '', slug: '', slugEdited: false, description: '', content: '' }) }}

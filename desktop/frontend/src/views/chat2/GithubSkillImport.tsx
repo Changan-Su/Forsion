@@ -32,7 +32,7 @@ export function GithubSkillImport({ source }: { source?: string }) {
         const result = await request<{ name: string }>(homeTarget(), '/brain/skills/github/install', { method: 'POST', body: JSON.stringify({ pinned: preview.pinned }) }, { timeoutMs: 130000 })
         setMessage(t('githubSkill.done', { name: result.name }))
         setPreview(null)
-        setUrl('')
+        setUrl(source || '')
         setOpen(false)
         window.dispatchEvent(new Event('forsion:skills-changed'))
       } else {
