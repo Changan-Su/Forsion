@@ -15,7 +15,8 @@
  *   - 所有 run 都跑到 done。
  * 凭证:多账号模式只认 env / 命令行 / --providers-file 给的直连 provider。从 provider-auth.json 的 Codex 订阅登录拼一份
  *       providers 文件(不带 oauth 标记 = 引擎不续期,台架跑完前 token 不过期即可),放在系统临时目录,不进归档,跑完删掉。
- * 负对照:`--multiaccount-off-script` 让夹具技能的 SKILL.md 不提脚本、只写「自己算」→ ② 的 digest 须对不上(模型没有别的办法算出来)。
+ * 负对照:`--multiaccount-off-script` 让插件包里不带 stats.py,只在 alice 的工作目录放一份同样的脚本 → 账号自己的文件不许跑,② 须红
+ *       (脚本跑不起来、stats.json 不出现、digest 对不上;模型没有 shell,也没有别的办法算 sha256)。
  */
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -43,9 +44,8 @@ with open("stats.json", "w") as f:
 print(json.dumps(out))
 `;
 
-function skillMd(offScript) {
+function skillMd() {
   const head = '---\nname: text-stats\ndescription: Count lines and words of a text file and give its content digest.\n---\n\n';
-  if (offScript) return `${head}# Text stats\n\nRead the file and count lines and words yourself. Report a digest of the content as well.\n`;
   return `${head}# Text stats\n\nThis skill ships a script that does the work: \`scripts/stats.py <file>\`. It prints one JSON line with \`lines\`, \`words\` and \`digest\`, and writes \`stats.json\` in the working directory.\n\n`
     + '- With the `run_plugin_script` tool: `run_plugin_script({ "skill": "text-stats", "script": "scripts/stats.py", "args": ["<file>"] })`.\n'
     + '- Without it: run `python3 <this skill folder>/scripts/stats.py <file>` in a shell.\n\n'
@@ -98,8 +98,8 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
   mkdirSync(home, { recursive: true }); mkdirSync(ev, { recursive: true });
   mkdirSync(join(bundle, 'skills', 'text-stats', 'scripts'), { recursive: true });
   writeFileSync(join(bundle, 'manifest.json'), JSON.stringify({ id: 'text-stats-plugin', name: 'Text stats', version: '1.0.0' }));
-  writeFileSync(join(bundle, 'skills', 'text-stats', 'SKILL.md'), skillMd(offScript));
-  writeFileSync(join(bundle, 'skills', 'text-stats', 'scripts', 'stats.py'), STATS_PY);
+  writeFileSync(join(bundle, 'skills', 'text-stats', 'SKILL.md'), skillMd());
+  if (!offScript) writeFileSync(join(bundle, 'skills', 'text-stats', 'scripts', 'stats.py'), STATS_PY);
 
   // 凭证:系统临时目录里的 providers 文件(0600),不进 OUT
   const credDir = mkdtempSync(join(tmpdir(), 'tangu-ma-live-'));
@@ -177,18 +177,19 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
     const brief = (t) => `[${t.who} ${t.status}${t.error ? ` ${t.error}` : ''}] 调用:${t.calls.map((c) => c.name).join(', ') || '无'}`;
 
     // ── ① 文件与搜索 ──
-    const secret = `ALICE-SECRET-${randomUUID().slice(0, 8).toUpperCase()}`;
+    const secret = `PLAN-CODE-${randomUUID().slice(0, 8).toUpperCase()}`;
     const a1 = await turn('alice', `请在当前工作目录里新建文件 notes/plan.md,内容三行:\n# Plan\n${secret}\nship the beta on Friday\n`
-      + '写好以后,用搜索文件内容的工具在工作目录里搜「ALICE-SECRET-」,告诉我它在哪个文件里。');
+      + '写好以后,用搜索文件内容的工具在工作目录里搜「PLAN-CODE-」,告诉我它在哪个文件里。');
     const planHits = grepTree(acctHome('alice'), secret).filter((p) => p.endsWith('plan.md'));
     const planPath = planHits[0] || null;
     const aliceSearch = a1.results.filter((r) => /search_files|glob_files/.test(r.name));
-    const b1 = await turn('bob', '用搜索文件内容的工具在你的工作目录里搜「ALICE-SECRET-」,把搜到的整行原样告诉我。'
-      + (planPath ? `然后试着读一下这个文件:${planPath},把内容原样告诉我。` : ''));
+    const b1 = await turn('bob', '我记得之前存过一个计划文件,里面有一行以「PLAN-CODE-」开头的编号。用搜索文件内容的工具帮我搜一下,把搜到的整行原样告诉我。'
+      + (planPath ? `如果没搜到,再读一下这个文件试试:${planPath},把内容原样告诉我。` : ''));
     const bobSaw = [b1.answer, ...b1.results.map((r) => r.result)].some((s) => s.includes(secret));
     const bobDisk = grepTree(acctHome('bob'), secret);
 
     // ── ② 插件脚本 ──
+    if (offScript) { mkdirSync(join(acctHome('alice'), 'workspace'), { recursive: true }); writeFileSync(join(acctHome('alice'), 'workspace', 'stats.py'), STATS_PY); }
     const planBytes = planPath ? readFileSync(planPath) : null;
     const expectDigest = planBytes ? createHash('sha256').update(planBytes).digest('hex').slice(0, 12) : null;
     const a2 = await turn('alice', '用 text-stats 技能统计一下工作目录里 notes/plan.md 的行数和字数,并把它给出的 digest 原样告诉我。', a1.sessionId);
@@ -211,7 +212,8 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
       aliceSearchFound: aliceSearch.some((r) => !r.isError && r.result.includes('plan.md')),
       bobSawNothing: !bobSaw,
       bobDiskClean: bobDisk.length === 0,
-      ...(offScript ? {} : { scriptRanOk: scriptOk, statsJsonInAlice: statsHits.length > 0 }),
+      scriptRanOk: scriptOk,
+      statsJsonInAlice: statsHits.length > 0,
       digestCorrect: digestSaid,
       bobScriptNotRun: !bobRan,
       bobScriptRefused: bobRefused || bobScriptCalls.length === 0,
@@ -221,7 +223,7 @@ export async function multiAccountLive({ entry, AUTH, MODEL, OUT, argv = [] }) {
       offScript, health, accounts, marker: secret, planPath, expectDigest, statsHits, bobDisk, checks,
       turns: turns.map((t) => ({ ...t, results: t.results.map((r) => ({ ...r, result: r.result.slice(0, 2000) })) })),
     }, null, 2));
-    const detail = `${offScript ? '负对照(技能不提脚本)' : '正式'}:${turns.map(brief).join(' | ')};`
+    const detail = `${offScript ? '负对照(包里不带脚本,只在 alice 的工作目录放一份)' : '正式'}:${turns.map(brief).join(' | ')};`
       + `plan.md ${checks.planInAlice ? '在 alice 文件夹' : '没落在 alice 文件夹'};alice 搜索${checks.aliceSearchFound ? '找到' : '没找到'};`
       + `bob ${bobSaw ? '看到了 alice 的随机码' : '没看到 alice 的随机码'}、盘上 ${bobDisk.length} 处;`
       + `插件脚本 ${scriptCalls.length} 次(${scriptOk ? '退出码 0' : '没成功'})、stats.json ${statsHits.length} 份、digest ${digestSaid ? '对' : `不对(应为 ${expectDigest})`};`
