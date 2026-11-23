@@ -61,6 +61,7 @@
       "desktop/frontend/src/components/toolDiff.ts",
       "desktop/frontend/src/features/tangu.tsx",
       "desktop/frontend/src/stores/detailsSubject.ts",
+      "desktop/frontend/src/stores/humanDeskPlan.ts",
       "desktop/frontend/src/stores/newChatWorkspaces.ts",
       "desktop/frontend/src/views/AgentProfileView.tsx",
       "desktop/frontend/src/views/BuiltinUpdateNotice.tsx",

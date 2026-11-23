@@ -1,8 +1,7 @@
 /** Human Desk 纯决策(2026-11-23 用户定第三轮:两张卡各自独立、右边一次只展开一块;方案页仓根
  *  docs/ToBeImproved/HumanTask实时协作方案_2026-11-20/r3.html)。Agent Desk 的摆法在 deskPlan.ts,这里只管 Human Desk:
  *  一样东西 + 在看 / 停止 + 最近放过的几样;右边展开的是哪一块由 deskSideOf 一处判定。appStore 只执行。 */
-import { contentStorageKey } from '@lcl/engine/contentStorageScope'
-import { deskIdentity, rememberRecent, DESK_RECENT_CAP, type DeskItem } from './deskPlan'
+import { deskIdentity, rememberRecent, DESK_RECENT_CAP, HUMAN_DESK_PERSIST_KEY, type DeskItem } from './deskPlan'
 
 /** 跨窗同步、落盘的那部分:放着的那样东西、最近放过的、你点过「停止」。 */
 export interface HumanDeskCore {
@@ -119,7 +118,7 @@ export function deskSection(headings: Array<{ level: number; text: string }>, at
 
 // ── 快照(本机落盘 + 两扇窗同步) ──
 
-export const HUMAN_DESK_PERSIST_KEY = contentStorageKey('forsion.humanDeskBySession')
+export { HUMAN_DESK_PERSIST_KEY }
 export const HUMAN_DESK_PERSIST_CAP = 40
 
 const persistable = (it: DeskItem | undefined): it is DeskItem => !!it && !it.live && !it.tool && !!(it.path || it.view)
