@@ -9072,18 +9072,22 @@ Then reply with only the command output.`,
     const DIR = join(workspace, 'bookmark-notes');
     await scenario('pluginplan', 'pluginplan 写插件的请求 → 先交一页计划(文件 / 依赖的宿主数据 / 验收 / 要我定的事),不写文件、不起沙箱', async () => {
       const msg = '在当前文件夹里新建一个 bookmark-notes 文件夹,给我写一个 Forsion 桌面插件「书签笔记」:带一个 Space,左栏列出我的书签,点开一条在主区看详情,旁边能和 Tangu 聊这条书签;书签的提醒日期要出现在我的日历里。';
+      const files = (d) => (existsSync(d) ? readdirSync(d, { recursive: true }).map(String).filter((f) => !f.split(/[\\/]/).some((x) => x.startsWith('.') && x !== '.git')) : []);
+      const before = new Set(files(workspace));
       const ev = await run(`live-pluginplan-${Date.now()}`, msg, 600_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: { ns: 'plugin', respond: () => ({ ok: true, text: '{"v":1,"state":"running"}' }) } });
-      const written = existsSync(DIR) ? readdirSync(DIR, { recursive: true }).filter((f) => !String(f).startsWith('.git')) : [];
-      const usedSkill = ev.toolCalls.includes('use_skill');
-      const sbx = ev.toolCalls.filter((n) => n.startsWith('plugin_sandbox')).length;
+      // 写盘判据:目标目录建了(哪怕是空的 / 只有 .git)、或工作区里多出任何文件,都算动手了
+      const written = [...(existsSync(DIR) ? ['bookmark-notes/'] : []), ...files(workspace).filter((f) => !before.has(f) && !f.startsWith('bookmark-notes'))];
+      const usedSkill = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /# Skill: forsion-extension-development/.test(String(r.full || '')));
+      const sbx = ev.clientCmds.filter((c) => c.claimed && ['start', 'reset'].includes(c.op)).length;
       const out = String(ev.content || '');
-      const files = /manifest\.json|main\.js|space\.json/.test(out);
-      const asks = /确认|同意|开工|开始写|可以吗|行吗|要你定|需要你|confirm|go ahead|approve/i.test(out);
+      const files_ = /manifest\.json|main\.js|space\.json/.test(out);
+      const accept = /验收|check\.mjs|check-plugin|沙箱|sandbox|acceptance|verify/i.test(out);
+      const asks = /确认|同意|开工|开始写|动手|点头|可以吗|行吗|好吗|要你定|需要你|你来定|你定|confirm|go ahead|approve|ok to proceed/i.test(out);
       const data = /CALENDAR\.db|human\/|mountChat|真(实)?会话|real session|ctx\.calendar/i.test(out);
-      const ok = !ev.error && usedSkill && !written.length && !sbx && files && asks;
+      const ok = !ev.error && usedSkill && !written.length && !sbx && files_ && accept && asks;
       return {
-        ok, detail: ev.error || `${usedSkill ? '读了技能' : '✗ 没读技能'};${written.length ? `✗ 已写 ${written.length} 个文件` : '没写文件'};${sbx ? `✗ 起了沙箱 ${sbx} 次` : '没起沙箱'};`
-          + `${files ? '计划点了文件' : '✗ 没列文件'};${asks ? '等确认' : '✗ 没请确认'};${data ? '点了数据来源(日历 / 会话)' : '没点数据来源'};工具 ${ev.toolCalls.join('→') || '无'}`,
+        ok, detail: ev.error || `${usedSkill ? '读了技能' : '✗ 没读到技能正文'};${written.length ? `✗ 已写 ${written.slice(0, 5).join(', ')}` : '没写文件'};${sbx ? `✗ 起了沙箱 ${sbx} 次` : '没起沙箱'};`
+          + `${files_ ? '计划点了文件' : '✗ 没列文件'};${accept ? '有验收' : '✗ 没写验收'};${asks ? '等确认' : '✗ 没请确认'};${data ? '点了数据来源(日历 / 会话)' : '没点数据来源'};工具 ${ev.toolCalls.join('→') || '无'}`,
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
       };
     });

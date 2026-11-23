@@ -98,37 +98,39 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 ### 只在本机托管引擎下才有的接口
 
-桌面要么自己起 Tangu 引擎（托管，安装版缺省），要么连别处起好的引擎（外部）。下面这些只在托管模式下能用，判断写在 `desktop/frontend/src/tanguProbe.ts:553`：宿主声明了 `executionCapabilities.host` 就按它，没声明就看是不是托管模式。
+桌面要么自己起 Tangu 引擎（托管，安装版缺省），要么连别处起好的引擎（外部）。有两道检查，各管各的：
 
-| 接口 | 外部引擎下（沙箱、舞台里同样如此） |
-|---|---|
-| `ctx.tangu.request(...)` | **抛错** `A local engine is required`（等引擎之前就抛），等完还不行抛 `Local engine is unavailable` |
-| `ctx.tangu.connectChannel(...)` | 回 `{ ok: false, error }`，同样两句，不抛 |
-| `ctx.app.hostPath(rel)` | 静默回 `null`；没开库、云端库、绝对路径或带 `..` 时也是 `null` |
-| `ctx.tangu.startChat({ folder })` | **悄悄丢掉** `folder`，对话照开，只是没有工作目录 |
-| `ctx.tangu.mountChat(el, { folder })` | 挂载处显示 `folder is not available on this host: <folder>`，不建会话 |
-| 捆绑包的引擎路由（`/extensions/<目录>/<引擎插件 id>/…`） | 引擎回 403 `Local plugin routes only` |
-| 个人日历 `human://CALENDAR.db` | 真引擎回 404 `HUMAN_LOCAL_ONLY`，快照里 `myCalendar` 是 `unknown` |
+- **桌面这道门** `hostExecution()`（`desktop/frontend/src/tanguProbe.ts:553`）：宿主声明了 `executionCapabilities.host` 就按它，没声明就看是不是托管模式（桌面只看模式；网页、手机自己声明，手机是 `false`）。下面这些方法在 `ctx` 上一直都在，只是门不开时**调不通**。
+- **引擎自己对部分路由的授权**（它的 `hostExec`、请求是不是远端来的）。和桌面是什么模式无关：引擎不在本机，写对了也会被拒。
 
-**宿主对这些拒绝一条记录都不留**：控制台和网络里都看不到。插件的轮询要是把错误吞了，界面上就只剩一个空状态。所以要接住错误、在自己的视图里显示出来，并在 README 里写明「引擎半身要本机托管引擎」。没有 `workPath` 这个东西；`ctx.app.workFolder()` 永远回字符串（`Plugins/<id>` 或用户改过的值），没开库也照回，不能拿来判断可用。
+| 接口 | 哪道门 | 被拒时 |
+|---|---|---|
+| `ctx.tangu.request(...)` | 先过桌面的门，再过引擎的路由检查 | **抛错** `A local engine is required`（等引擎之前就抛），等完还不行抛 `Local engine is unavailable`；引擎对不在本机或远端来的请求回 403 `Local plugin routes only` |
+| `ctx.tangu.connectChannel(...)` | 桌面的门 | 回 `{ ok: false, error }`，同样两句，不抛 |
+| `ctx.app.hostPath(rel)` | 桌面的门 | 静默回 `null`；没开库、云端库、绝对路径或带 `..` 时也是 `null` |
+| `ctx.tangu.startChat({ folder })` | 经 `hostPath` | **悄悄丢掉** `folder`，对话照开，按平常的规则选工作区（工作模式下仍可能落到缺省项目） |
+| `ctx.tangu.mountChat(el, { folder })` | 经 `hostPath` | 没连上引擎时先报 `engine is not connected`；连上了但拿不到本机路径时 `ready.error` 是 `folder is not available on this host: <folder>`，挂载处显示本地化的提示；都不建会话 |
+| 个人日历 `human://CALENDAR.db` | 引擎（日历读写直接找配置的引擎，不过桌面的门） | 不在本机的真引擎回 404 `HUMAN_LOCAL_ONLY` → `myCalendar` 是 `absent`；引擎连不上 → `unknown`。舞台虽是外部模式，回放引擎照样给日历 |
+
+**桌面这道门本身一条记录都不留**：控制台和网络里都看不到；只有从 `setup` 里抛出去的错会记成 setup 错误。插件的轮询要是把错误吞了，界面上就只剩一个空状态。所以要接住错误、在自己的视图里显示出来，并在 README 里写明「引擎半身要本机托管引擎」。没有 `workPath` 这个东西；`ctx.app.workFolder()` 永远回字符串（用户改过的值、`Plugins/<id>`，或库里已有的旧 `Plugins/<显示名>` 文件夹），没开库也照回，不能拿来判断可用。
 
 ### 各界面与挂载件
 
 | 接口 | 读什么 | 副作用 | 沙箱 / 舞台 | 要托管引擎？ |
 |---|---|---|---|---|
-| `ctx.tangu.mountChat(el, { agent, folder, title })` | **引擎会话**，每个（插件, 工作目录绝对路径）一条；对应关系记在 localStorage `tangu.pluginChats`。挂载时接回那条；被删了（404）或归档了就**新建一条真会话** | 建出来的会话出现在用户的对话列表里。**不能注入消息**：句柄只有 `quote()`（全应用共用的引用位）和 `prefill()`（草稿），发送要用户点。要写历史用 `ctx.tangu.importSessions`（能力 `agentImport`），那是另建的会话 | 沙箱没有引擎，15 秒后报 `engine is not connected`。舞台用 `engine: 'scripted'` 时不带 `folder` 能用（回放引擎会真建会话），带 `folder` 就失败 | 要引擎；带 `folder` 时要托管引擎 |
+| `ctx.tangu.mountChat(el, { agent, folder, title })` | **引擎会话**，每个（插件, 工作目录绝对路径）一条；对应关系记在 localStorage `tangu.pluginChats`。挂载时接回那条；被删了（404）或归档了就**新建一条真会话** | 建出来的会话出现在用户的对话列表里。**不能注入消息**：句柄只有 `quote()`（全应用共用的引用位）和 `prefill()`（草稿），发送要用户点。要写历史用 `ctx.tangu.importSessions`（能力 `agentImport`），那是另建的会话 | 沙箱没有引擎，15 秒后报 `engine is not connected`。舞台用 `engine: 'scripted'` 时不带 `folder` 能用，会话存在回放引擎的内存里，而且演不出「会话被删后新建」那条路（不认识的 id 回 200、没有会话，不是 404）；带 `folder` 就失败 | 要引擎；带 `folder` 时要托管引擎 |
 | `ctx.tangu.mountComposer` | Tangu 新对话输入区；`prefill` 只在新对话草稿为空时填 | 发送归宿主，`draft()` 只读 | 未核实 | 否 |
-| `ctx.tangu.startChat` | 宿主状态，开一个看得见的新对话；`send: true` 只对本插件播种的 Agent 生效，否则只填进输入框 | 改变用户眼前的主区 | `folder` 被丢（见上表） | 只有 `folder` 要 |
+| `ctx.tangu.startChat` | 宿主状态，开一个看得见的新对话；`send: true` 只对本插件播种的 Agent 生效，否则只填进输入框 | 改变用户眼前的主区；允许的 `send: true` 会把话发出去、**开始一轮运行** | `folder` 被丢（见上表） | 只有 `folder` 要 |
 | `ctx.ui.mountChatBox` | 关掉模型选择（`modelPicker: false`）后**照样订阅**宿主的默认模型和 Agent 名册，只是不用：拿到的模型是 `options.modelId ?? ''`。`@` 页面提及读库里的页名 | 无；`onSubmit` 归插件 | 有 DOM 就能用 | 否 |
-| `ctx.ui.mountRecord` | **库里的 `.db` 表**；要声明能力 `databases`，路径必须是**当前打开的库**里的表，否则抛错。`human://CALENDAR.db` 还要 `calendar` | 改的是用户表里那一行 | 沙箱的库是空的，先往里写一张 `.db` 才挂得上；舞台用 fixture 里的表 | 只有个人日历要 |
-| `ctx.ui.mountMarkdown`（只读） | 聊天那套 Markdown。每个 `[[名字]]` 都成链接，并为解析它**订阅库里的页名**；点了打开那篇笔记 | 不改数据，但会链进用户的笔记 | 没有库时链接显示为未解析 | 否 |
+| `ctx.ui.mountRecord` | **库里的 `.db` 表**；要声明能力 `databases`，路径必须是**当前打开的库**里的表，否则抛错。`human://CALENDAR.db` 还要 `calendar` | 改的是用户表里那一行 | 表要先**载入**，光写进去不够：等它出现在 `ctx.databases.subscribe` 里再挂。沙箱的库起初是空的；舞台用 fixture 里的表，等它载入 | 只有个人日历要 |
+| `ctx.ui.mountMarkdown`（只读） | 聊天那套 Markdown。正文里每个 `[[名字]]` 都成链接，并为解析它**订阅库里的页名**，也可能指向对话和文件；点了打开目标。代码段里的不算 | 不改数据，但会链进用户的笔记 | 没有库时链接显示为未解析 | 否 |
 | `ctx.ui.mountMarkdownEditor` | 缺省不碰库（没有 `[[` 补全，链接不可点）；`vault: true` 从当前库补全、打开链接 | 只有 `onChange`，正文归插件存 | 没有库也能用 | 否 |
 | 任何插件视图（`registerView` 挂载） | 挂载时宿主调 `ensureAmadeusReady()`，**重新打开用户上次的库** | 可能打开上次的库；恢复是异步的，刚挂上时 `vaultRoot()` 还可能是 `null` | 沙箱是它自己的空 `vault/`，舞台是拷进来的 fixture 库 | 否 |
-| `ctx.calendar` / 「我的日历」 | 成员和颜色在宿主配置里，按库分（`ensureMember` 会等库开好）；个人日历是**引擎 `human/CALENDAR.db`**，经 `GET/PUT /agent/human/CALENDAR.db` 读写，不是库里的文件 | `ensureMember` 写日历配置；写个人日历要 `calendar` 和 `databases` 都声明 | 沙箱、舞台 `engine: 'none'`：`myCalendar` 是 `unknown`。舞台 `engine: 'scripted'`：读 `<fixture>/human/CALENDAR.db`，没放就是空日历，改动只留在这次舞台里 | 真引擎要；舞台的回放引擎不设门 |
+| `ctx.calendar` / 「我的日历」 | 成员和颜色在宿主配置里，按库分（`ensureMember` 会等库开好）；个人日历是**引擎 `human/CALENDAR.db`**，经 `GET/PUT /agent/human/CALENDAR.db` 读写，不是库里的文件 | `ensureMember` 写日历配置；订阅会开始刷新叠加源，可能存下缺省颜色、迁移成员；经 `ctx.databases` / `mountRecord` 写个人日历要 `calendar` 和 `databases` 都声明，但 `ctx.calendar.events` 只有 `calendar` 也能删、改期个人日历里的行；真引擎写入时还可能更新库里那份旧的日历镜像 | 沙箱、舞台 `engine: 'none'`：`myCalendar` 是 `unknown`。舞台 `engine: 'scripted'`：读 `<fixture>/human/CALENDAR.db`，没放就是空日历，改动只留在这次舞台里 | 真引擎要；舞台的回放引擎不设门 |
 | `ctx.databases` | 全库 `.db` 和文件夹笔记视图；声明了 `calendar` 再加上个人日历。能力 `databases` | 按格按行写，和界面一样 | 沙箱是空的；舞台读 fixture 表 | 只有个人日历要 |
 | `ctx.noteTasks` | 库里笔记正文的 `@` 时间任务。能力 `noteTasks` | `update` 改笔记里那一行 | 看库 | 否 |
 | `ctx.table.mount` | 只读插件传进来的规格（内存里的行） | 无 | 能用 | 否 |
-| `ctx.dashboard` | `mount` 用内存里的页面，不碰库，布局经 `onLayout` 交回；`source` 编译成库里的 `.dashboard.md` | `mount` 无 | `mount` 没有库也能用 | 否 |
+| `ctx.dashboard` | `mount` 用内存里的页面，不碰库，布局经 `onLayout` 交回；`source` 把配方（和你给的 `existingFileText`）编译成 `.dashboard.md` 文本，不读写库，写不写文件归插件 | `mount` 无 | `mount` 没有库也能用 | 否 |
 | `ctx.ui.mountBoard` | 只读你给的 `scene` / `viewport` | 无 | 能用 | 否 |
 | `ctx.loadData` / `saveData` | 插件数据，主进程里的 `<forsion 家目录>/plugins-data/<id>.json`；`syncData: true` 的还经云端同步。读不出来**reject**（`plugin-data-unreadable`），从没存过回 `null` | 写文件，可能同步 | 沙箱有自己的空家目录；舞台**不拷**插件数据 | 否 |
 | `ctx.widgets` | 插件自己给的行，卡片声明在 manifest `widgets`（宿主内存） | 无 | 能用 | 否 |
@@ -143,27 +145,27 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 ### 身份与路由
 
-- 视图类型是 `plugin:<插件 id>:<视图 id>`；商店装的插件 id 是安装目录名（`market-<UUID>`），其余是 manifest 的 `id`。
-- 捆绑包的**引擎路由**挂在**安装目录名的小写**下，不按 manifest 的 id：`ctx.tangu.request` 请求的是 `/extensions/<目录名小写>/<引擎插件 id>/<路径>`。目录名里有 `a-z 0-9 -` 以外的字符时根本拼不出路由（直接抛错）。
+- 视图类型是 `plugin:<插件 id>:<视图 id>`；商店装的插件 id 是安装目录名（`market-<UUID>`），其余是 manifest 的 `id`，manifest 没写或写得不合法时用目录名。
+- 捆绑包的**引擎路由**挂在**安装目录名**下，不按 manifest 的 id：引擎按目录名的原样拼写挂，匹配时不分大小写；`ctx.tangu.request` 请求的是 `/extensions/<目录名小写>/<引擎插件 id>/<路径>`。目录名小写后要匹配 `^[a-z0-9][a-z0-9-]{0,63}$`，否则直接抛错。
 
 ### 渲染出来的正文里的双链
 
-`mountMarkdown`（以及 `vault: true` 的 `mountMarkdownEditor`）把 `[[…]]` 当作链进用户库的链接。宿主对 HTML 字符实体没有专门处理，11-19 的评审里，插件自己过滤 `[[` 的写法被实体编码的方括号绕了过去。不是用户自己笔记的文本（模型输出、导入的数据、演示内容），又不该链进库的，就按纯文本或代码渲染，别靠自己过滤 `[[`。
+`mountMarkdown`（以及 `vault: true` 的 `mountMarkdownEditor`）把 `[[…]]` 当作链进用户库的链接。Markdown 解析会先把字符实体解码再找双链，所以正文里实体编码的方括号（`&#91;&#91;x&#93;&#93;`）**也会变成链接**（11-23 用装着的解析器核过），插件自己过滤字面的 `[[` 挡不住。不是用户自己笔记的文本（模型输出、导入的数据、演示内容），又不该链进库的，就按纯文本或代码渲染，别靠自己过滤 `[[`。
 
 ### 沙箱和舞台里有什么
 
 | | 插件沙箱（`plugin_sandbox`） | 演示舞台（`ctx.stage`） |
 |---|---|---|
-| 引擎 | 没有（指向一个死端口），外部模式 | `engine: 'none'` 没有；`engine: 'scripted'` 是照 `engine.json` 回放的本机引擎，但仍是**外部模式**，上面「只在本机托管引擎下」那张表里的接口一律被拒 |
+| 引擎 | 没有（指向一个死端口），外部模式 | `engine: 'none'` 没有；`engine: 'scripted'` 是照 `engine.json` 回放的本机引擎，但仍是**外部模式**，上面过桌面那道门的接口一律被拒（个人日历例外，回放引擎照样给） |
 | 库 | 自己一个，起初是空的，重启沙箱还在，`reset` 清掉 | 拷一份 `<fixture>/vault/`，每次打开都重拷 |
 | 插件数据 | 自己一份，起初是空的 | 不拷进去 |
 | 账号 | 未登录 | 未登录 |
 | 个人日历 | `myCalendar` 是 `unknown` | `engine: 'scripted'` 时读 `<fixture>/human/CALENDAR.db` |
-| 谁能用 | 你正在写的开发副本 | 只有**已安装**且声明了 `stage` 的插件（开发副本和沙箱里的副本都会被拒） |
+| 谁能用 | 你正在写的开发副本 | 只有**已安装**且声明了 `stage` 的插件（沙箱里的会被拒）。开发副本盖着同 id 的已安装插件时也调得通，但舞台装的是**已安装**的那份和它的 fixture，不是你手上的副本 |
 
 舞台的演示数据这样放：`<fixture>/vault/…` 是舞台的库（笔记、`.db` 表）；`<fixture>/engine.json` 是 `engine: 'scripted'` 必需的（只要日历就写 `{ "runs": [] }`）；`<fixture>/human/CALENDAR.db` 是「我的日历」，一张普通数据库表，≤ 8 MB，格式见下文「演示舞台 `ctx.stage`」一节。然后 `ctx.stage.open({ fixture, engine: 'scripted', clock, plugins, includeSelf })`。
 
-还没核实的：沙箱和舞台里到底有没有 `ctx.tangu`、`ctx.desk`、`ctx.tts`；实体编码的 `[[…]]` 今天在 `mountMarkdown` 里具体怎么显示；沙箱里 `ctx.account` 的实际表现（「未登录」是从它独立的家目录推出来的）。
+还没核实的：沙箱和舞台里到底有没有 `ctx.tangu`、`ctx.desk`、`ctx.tts`；沙箱里 `ctx.account` 的实际表现（「未登录」是从它独立的家目录推出来的）。
 
 ## 工具的校验报错要点出哪一格（2026-11-23 起的写法建议）
 
