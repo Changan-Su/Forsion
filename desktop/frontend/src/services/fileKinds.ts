@@ -5,6 +5,7 @@
  */
 import {
   FileText, FileImage, FileCode, FileSpreadsheet, FileVideo, FileAudio, FileArchive, Presentation,
+  PenTool, LayoutDashboard, Database, BookOpen,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -77,6 +78,19 @@ export function iconForFile(mime: string, path: string): LucideIcon {
   if (['ppt', 'pptx', 'key', 'odp'].includes(ext)) return Presentation
   if (CODE_EXTS.includes(ext) || ['html', 'htm', 'json'].includes(ext)) return FileCode
   return FileText
+}
+
+/** 只有路径时按种类取图标(Desk 名字胶囊、库外文件 / PDF 标签共用,11-23 Desk 标签栏互通方案 ③):
+ *  先认文件树那几种(白板 / 仪表盘 / 数据库),PDF 用书本(同聊天引用),其余按扩展名补上文件类型再交给 iconForFile ——
+ *  直接传空 MIME 的话图片、音视频都落成一张纸(方案实测)。 */
+export function iconForPath(path: string): LucideIcon {
+  const p = path.replace(/\\/g, '/')
+  if (/\.excalidraw(\.md)?$/i.test(p)) return PenTool
+  if (/\.dashboard\.md$/i.test(p)) return LayoutDashboard
+  const ext = extOf(p)
+  if (ext === 'db') return Database
+  if (ext === 'pdf') return BookOpen
+  return iconForFile(mimeForExt(p) ?? '', p)
 }
 
 // ── 预览种类(单一出处) ─────────────────────────────────────────────────────────

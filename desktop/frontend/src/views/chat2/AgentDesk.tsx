@@ -4,7 +4,7 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, ChevronDown, Copy, Eraser, ExternalLink, Loader2, Maximize2, Minimize2, NotebookPen, Pin, Puzzle, Rows2, Sparkles, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronDown, Copy, Eraser, ExternalLink, Loader2, Maximize2, Minimize2, NotebookPen, Pin, Rows2, Sparkles, X } from 'lucide-react'
 import { getView, subscribeViews, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
@@ -18,7 +18,7 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
-import { iconForFile } from '../../services/fileKinds'
+import { DeskItemIcon } from './deskOpen'
 import { openDb, openFile, openNote, opensAsTab } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
@@ -413,10 +413,10 @@ function DeskCaps({ sessionId, item, slot = 0, panel, className, children }: {
   )
   let name: React.ReactNode = null
   if (item) {
-    const Icon = item.live ? Loader2 : item.tool ? Puzzle : item.view ? Sparkles : iconForFile('', item.name || path)
     const label = item.live ? (path ? t('desk.writing', { name: item.name }) : t('desk.drafting')) : (item.name || path.split(/[/\\]/).pop() || '')
     const tip = [path, !item.live && note].filter(Boolean).join('\n') || undefined
-    const inner = <><Icon size={13} className={`desk-cap-ic${item.live ? ' spin' : ''}`} /><span className="desk-cap-label">{label}</span></>
+    // 图标跟着这样东西的种类走(方案 ③,deskOpen.tsx);原来按视图放上来的一律给星
+    const inner = <><DeskItemIcon item={item} rel={rel} size={13} className="desk-cap-ic" /><span className="desk-cap-label">{label}</span></>
     const menu = own && desk ? deskMenuRows(desk, slot) : null
     const dot = !!desk?.fresh && visibleSlots(desk)[0] === slot // 点只亮在最上面那格的 ▾ 上(方案图 ⑦)
     const pickable = !!menu && (menu.rows.length > 1 || !!menu.fresh || !!note)

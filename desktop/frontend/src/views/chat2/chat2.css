@@ -1136,6 +1136,9 @@ button.desk-cap-pick { cursor: pointer; }
 button.desk-cap-pick:hover, button.desk-cap-pick[aria-expanded='true'] { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .desk-cap-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desk-cap-ic { flex-shrink: 0; color: var(--accent-ink); }
+/* 名字胶囊里的页面 emoji / 插件文件类型图标(deskOpen.tsx DeskItemIcon):和 13px 的线条图标同大,插件给的 SVG 1em 见方 */
+.desk-cap-emoji { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; font-size: var(--ui-font-body, 13px); line-height: 1; }
+.desk-cap-emoji > svg { display: block; width: 1em; height: 1em; }
 .desk-cap-caret { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
 /* 两格手动控制(11-23 方案 A):▾ 上的小点 = Agent 放了你看不见的东西;图钉 = 这格钉住(默认配色下只靠有没有图钉分辨,不另造颜色) */
 .desk-cap-pick { position: relative; }
