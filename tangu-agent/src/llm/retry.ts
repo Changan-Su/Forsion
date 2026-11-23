@@ -1,4 +1,5 @@
 import { LlmError } from '../core/types.js';
+import { quotaExhaustedText, RATE_LIMIT_RE, tryAgainMsFromText } from '../contracts/runErrorKind.js';
 import { isOfflineLlmError, isLocalTransportError, probeTargetOf, probeNetwork, waitForNetwork, sleepOrAbort, NETWORK_WAIT_MAX_MS } from './netWait.js';
 import { lastWakeAt, sleepIntervals, sleptMsBetween } from './sleepDetector.js';
 
@@ -36,15 +37,17 @@ const FOREIGN_REASONING = /invalid_encrypted_content|encrypted[ _]content.{0,80}
 export function isQuotaExhaustedLlmError(err: unknown): boolean {
   return err instanceof LlmError && quotaExhaustedErr(err);
 }
-/** 订阅额度 / 账单配额用尽的措辞(不可重试)。「rate limit」是秒级限流,不在此列。 */
-const QUOTA_EXHAUSTED = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i;
-/** 写着一分钟以内的窗口、又没提按天 / 余额的「quota exceeded」是限流(Gemini …PerMinute、Vertex requests_per_minute、
- *  百炼 Allocated quota exceeded 其实是 TPM):照常退避重试,也不触发额度接力(借 magpie d83f887a7)。按天的仍算额度用完。 */
-const SHORT_WINDOW = /per ?minute|perminute|_per_minute|\b[RT]PM\b|per ?second|allocated quota exceeded/i;
-const LONG_WINDOW = /per ?day|perday|_per_day|daily|per ?month|monthly|balance|credit|insufficient_quota|usage_limit_reached|billing_hard_limit/i;
-/** 流里的失败只有 error.code 写着 usage_limit_reached 时，正文可能是一句别的话:code 一起看。 */
-const quotaExhaustedErr = (err: LlmError): boolean => quotaExhaustedText(`${err.message} ${(err as { code?: string }).code || ''}`);
-export const quotaExhaustedText = (msg: string): boolean => QUOTA_EXHAUSTED.test(msg) && !(SHORT_WINDOW.test(msg) && !LONG_WINDOW.test(msg));
+/** 订阅额度 / 账单配额 / 余额用尽:措辞表在 contracts/runErrorKind.ts(桌面文案共用同一份);402 Payment Required 一律算。
+ *  流里的失败只有 error.code 写着 usage_limit_reached 时，正文可能是一句别的话:code 一起看。 */
+const quotaExhaustedErr = (err: LlmError): boolean => err.status === 402 || quotaExhaustedText(`${err.message} ${(err as { code?: string }).code || ''}`);
+export { quotaExhaustedText };
+
+/** 秒级限流(不是额度用完、不是服务过载):HTTP 429,或 Codex 流里那种 LlmError(502) + code rate_limit_exceeded / 正文「Rate limit reached」。
+ *  通道闸(llm/channelGate.ts)据此让整条通道暂停、别的会话排队。 */
+export function isRateLimitedLlmError(err: unknown): boolean {
+  if (!(err instanceof LlmError) || quotaExhaustedErr(err) || isOverloadedLlmError(err)) return false;
+  return err.status === 429 || RATE_LIMIT_RE.test(`${err.message} ${(err as { code?: string }).code || ''}`);
+}
 
 export const MODEL_MAX_RETRIES = 3; // 首次 + 至多 3 次重试 = 4 次尝试
 /** 服务过载(529 / 503 / 「overloaded」「服务繁忙」)多给几次:过载通常几十秒内缓解,3 次指数退避只覆盖 ~7 秒。 */
@@ -111,11 +114,14 @@ export function withRetryAfter<E>(err: E, headers: { get(name: string): string |
   return err;
 }
 
-/** 报错上的 Retry-After:没有 → undefined;不是合法的非负有限数 → Infinity(按超限处理)。 */
+/** 报错上的 Retry-After:没有 → undefined;不是合法的非负有限数 → Infinity(按超限处理)。
+ *  响应头没给时再读正文里的「try again in 3.877s」(Codex 流里的失败没有响应头,11-23 第一轮 dogfood 的 429 全是这种)。 */
 export const retryAfterMsOf = (err: unknown): number | undefined => {
-  if (!err || typeof err !== 'object' || !('retryAfterMs' in err)) return undefined;
+  if (!err || typeof err !== 'object') return undefined;
+  if (!('retryAfterMs' in err) || (err as { retryAfterMs?: unknown }).retryAfterMs === undefined) {
+    return err instanceof LlmError ? tryAgainMsFromText(err.message) : undefined;
+  }
   const v = (err as { retryAfterMs?: unknown }).retryAfterMs;
-  if (v === undefined) return undefined;
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : Infinity;
 };
 
@@ -253,6 +259,11 @@ export class LlmRetryChain {
     if (end > start) this.excluded.push({ start, end });
   }
 
+  /** 在通道闸前排队的那段(别的会话撞了限流 / 通道满了):不是这条链自己的失败,不算预算(llm/channelGate.ts)。 */
+  excludeQueued(start: number, end: number): void {
+    this.excludeSpan(start, end);
+  }
+
   /** 不探网、不等:这次失败值不值得再试、等多久。null = 放弃。决定重试即记一次。 */
   plan(err: unknown): (LlmRetryPlan & { excludedFromBudget: boolean }) | null {
     if (!isRetryableLlmError(err)) return null;
@@ -357,8 +368,11 @@ export async function withLlmRetry<T>(
   /** 流式调用方用:本次尝试已向客户端吐过帧就返回 false,不重发(否则重复流)。 */
   canRetry?: () => boolean,
   network?: LlmNetworkHooks,
+  /** 拿到这条链(通道闸排队的那段要从它的预算里扣掉:chain.excludeQueued)。 */
+  onChain?: (chain: LlmRetryChain) => void,
 ): Promise<T> {
   const chain = new LlmRetryChain();
+  onChain?.(chain);
   for (;;) {
     if (signal?.aborted) throw abortError();
     const attemptStartedAt = Date.now();

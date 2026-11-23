@@ -97,6 +97,8 @@ export interface ToolContext {
   dispatchTargets?: string[];
   /** 计划模式(类 Claude plan mode):只暴露只读工具 + exit_plan_mode;custom/MCP 工具一并隐藏。 */
   planMode?: boolean;
+  /** 这个会话不开子会话(会话设置「不开子会话」,11-23):start_session 和 delegate 不进工具表,模型看不到也就开不了。 */
+  noChildSessions?: boolean;
   /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */
   muse?: boolean;
   /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */

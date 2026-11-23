@@ -8,6 +8,7 @@
  */
 
 import type { SendMessageAction } from './automationMessage.js'
+import type { RunErrorKind } from './runErrorKind.js'
 
 /** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14)。 */
 export type TargetRef = { kind: 'home' } | { kind: 'unit'; unitId: string }
@@ -146,6 +147,10 @@ export interface SessionRecord {
   awaiting_user?: boolean
   /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
   busy?: boolean
+  /** 这个会话的模型请求正在通道闸前排队(同一通道撞了限流 / 到了并发上限;列表接口现算,11-23):子会话那行写「排队中」。 */
+  queued?: boolean
+  /** 子会话最近一轮失败了(没在跑;列表接口现算,只给子会话):kind = 类别(contracts/runErrorKind.ts),error = 原文一行。 */
+  last_failure?: { kind: RunErrorKind; error: string }
   created_at: string
   updated_at: string
   // P1-K6
@@ -459,6 +464,9 @@ export interface AgentConfig {
   verifyCommand?: string
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
+  /** 不开子会话(会话设置,缺省允许;插件开发优化方案 11-23 第四节 A):开着时引擎从这个会话的工具表里拿掉 start_session 和 delegate。
+   *  存在会话配置里:主会话被子会话回报 / 会话消息叫醒、续跑的那几轮读的是存值,同样拿不到这两个工具。 */
+  noChildSessions?: boolean
   /** 工作预设(**会话事实**,与引擎 core/presetTable.ts 同源):'chat'=轻聊天(正向工具面、临时工作区、答完即停、不写笔记)/
    *  'coding'=编码 / 缺省=work。建会话时定,跑过一轮后引擎锁定(run 带别的值只警告不切)—— 换模式 = 新建会话。 */
   preset?: 'coding' | 'chat'

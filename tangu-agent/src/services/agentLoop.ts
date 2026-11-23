@@ -101,6 +101,8 @@ import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplayS
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, sleepOrAbort, LlmRetryChain, llmBackoffMs, isOverloadedLlmError, retryAfterVerdict, probeBeforeResume, awaitNetwork, createRunNetLedger, MIDSTREAM_MAX_FREE_RESUMES, type LlmRetryPlan, type LlmNetworkHooks } from '../llm/retry.js';
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
+import { acquireChannel, channelKeyOf, type ChannelSlot } from '../llm/channelGate.js';
+import { classifyRunError } from '../llm/runErrorKind.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteRunSignals, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
@@ -1021,7 +1023,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       const merged = mergeBridgeCalls([], [], engineAgent ? toolServer : undefined);
       await finalizeAssistantMessage(assistantId, sessionId, modelId, text, '', merged.calls, merged.results, handoffFiles.length ? handoffFiles : undefined).catch(() => {});
     }
-    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+    const errorKind = status === 'failed' ? classifyRunError(err, msg) : undefined;
+    await publish(runId, 'error', { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}), ...(errorKind ? { errorKind } : {}) }).catch(() => {});
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg, ...(sessionGone ? { result: { externalSessionReset: true } } : {}) }).catch(() => {});
   } finally {
@@ -2738,6 +2741,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
+      noChildSessions: agentConfig.noChildSessions === true || undefined, // 会话设置「不开子会话」:start_session / delegate 不进工具表
       remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
@@ -3103,8 +3107,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (mentioned.length) {
         const directive =
           '## Mentioned Agents for This Turn\n' +
-          'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
-          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n' +
+          'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. ' +
+          (agentConfig.noChildSessions === true ? 'Use:\n' : 'Two ways, pick per the task:\n' +
+          // 「不开子会话」开着时 delegate 不在工具表里,这一条不说
+          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n') +
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');
@@ -4118,18 +4124,42 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         let emitted = false;
         partialText = '';
         inflightText = '';
-        const attemptStart = Date.now();
+        let attemptStart = Date.now();
         let acceptedAt = 0;
         let firstFrameAt = 0;
-        const markFrame = (): void => { if (!firstFrameAt) firstFrameAt = Date.now(); };
+        let slot: ChannelSlot | undefined;
+        const markFrame = (): void => { if (!firstFrameAt) firstFrameAt = Date.now(); slot?.opened(); };
         const sampling = new AbortController();
         const stopSampling = (): void => sampling.abort(ac.signal.reason);
         ac.signal.addEventListener('abort', stopSampling, { once: true });
         if (ac.signal.aborted) stopSampling();
         const steerSampling = (): void => sampling.abort(new Error('Sampling interrupted for steering'));
         steerWakeups.set(runId, steerSampling);
-        void publish(runId, 'status', { phase: 'llm_call', stage: 'sending', iteration, bytes: requestBytes });
         try {
+          // 通道闸(llm/channelGate.ts):同一通道(提供方 + 密钥)撞了限流就整体暂停、别的会话排队;同时在飞的请求有上限(缺省 3 路)。
+          // 按每次尝试现算 key:额度接力 / 续期换了模型或 token,通道跟着换。排队的那段不算这条重试链的预算,尝试计时从拿到槽位起。
+          // 槽位只在这次流里持有:失败了先放掉,再去重试链里退避(退避 / 等网期间不占别人的路)。
+          {
+            const chKey = channelKeyOf(model, baseUrl, apiKey, callModelId);
+            const queuedAt = Date.now();
+            let queued = false;
+            slot = await acquireChannel(chKey, {
+              signal: sampling.signal,
+              sessionId,
+              onQueued: (q) => {
+                queued = true;
+                void publish(runId, 'status', { phase: 'llm_queue', reason: q.reason, position: q.position, limit: q.limit, ...(q.waitMs !== undefined ? { waitMs: q.waitMs } : {}), iteration });
+              },
+            });
+            if (queued) {
+              retryChain.excludeQueued(queuedAt, Date.now());
+              console.warn(`[agent-core] run=${runId} 通道排队 ${Date.now() - queuedAt}ms 后发出`);
+              if (runCostClosed()) { slot.release(); slot = undefined; await stopForRunCost(); return; }
+            }
+            attemptStart = Date.now();
+          }
+          void publish(runId, 'status', { phase: 'llm_call', stage: 'sending', iteration, bytes: requestBytes });
+          const heldSlot = slot;
           res = await streamProviderCompletion({
             apiKey,
             baseUrl,
@@ -4139,6 +4169,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             maskScope: sessionId,
             onMasked: (hits, action) => { void publish(runId, 'status', { phase: 'masked', iteration, action, n: hits.length, kinds: [...new Set(hits.map((h) => h.kind))] }); },
             onResponseStart: () => {
+              heldSlot.opened();
               if (sampling.signal.aborted) return;
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
@@ -4169,6 +4200,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               }
             },
           });
+          heldSlot.release();
+          slot = undefined;
           sampling.signal.throwIfAborted();
           llmTiming = {
             llmMs: Date.now() - attemptStart,
@@ -4179,6 +4212,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           inflightText = ''; // 整段收下了:正文随 res.content 走下面的正常落库,别在后续失败时再并一次
           break;
         } catch (err) {
+          // 先放掉槽位:秒级限流 → 整条通道暂停到报错给出的时刻(别的会话排队,不各自去撞);然后才去退避 / 等网 / 续写
+          if (slot) { slot.failed(err); slot.release(); slot = undefined; }
           if (ac.signal.aborted) throw err;
           // 失败尝试已知的用量(流里先报了 usage 再断,如 Anthropic message_start 之后断流):记进本 run 成本,重发前的成本闸据此判
           const failedUsage = (err as LlmError)?.partialUsage;
@@ -4339,6 +4374,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 重发之前(含插话叫醒后的那次)复查 run 成本闸
           if (runCostClosed()) { await stopForRunCost(); return; }
         } finally {
+          slot?.release();
           ac.signal.removeEventListener('abort', stopSampling);
           if (steerWakeups.get(runId) === steerSampling) steerWakeups.delete(runId);
         }
@@ -5004,9 +5040,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // content 带上部分正文 → 在线前端把这条流式消息原地收尾为「已停止」,不丢已输出内容。
     // P1-K2:中止且记过原因(急停)→ 带 reason,手机 / 设备页据此显示「已被那台电脑急停」。
     // interrupted:error 固定 'interrupted'、aborted 仍为 true(老客户端当「已停止」收尾),interrupted 字段带原因(新客户端换成说原因的那条线)。
+    // 失败的类别(限流 / 额度或余额 / 登录失效 / 网络 / 上下文太长 / 其他):只随 error 事件走,桌面按它出文案、原文收进「看原文」。
+    // 不落进 agent_runs.result(那一列是这一轮的交付物,失败的 run 留空;落库行 / 子会话回报按原文现判,contracts/runErrorKind.ts)
+    const errorKind = status === 'failed' ? classifyRunError(err, msg) : undefined;
     await publish(runId, 'error', interruptReason
       ? { error: 'interrupted', aborted: true, interrupted: interruptReason, content: finalContent }
-      : { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+      : { error: msg, aborted, content: finalContent, ...(aborted ? reasonOf(runId) : {}), ...(errorKind ? { errorKind } : {}) }).catch(() => {});
     // —— Stop hook：失败/中止路径也触发（host-only；纯 side-effect 通知，不影响错误处理，无续跑）。——
     void runHooks('Stop', {
       session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug, stop_reason: aborted ? 'aborted' : 'error',
