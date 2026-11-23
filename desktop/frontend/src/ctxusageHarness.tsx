@@ -1,6 +1,6 @@
 /**
  * Dev-only 台架:输入框上下文环的详情弹层(真 ContextUsagePop + 真 composer2.css)。
- * 参数:?lang=en  ?dark  ?theme=genesis-glass  ?noinfo(还没跑过 run)  ?logout(未登录)  ?unlimited(今日不限)  ?capped(1M 被封顶)
+ * 参数:?lang=en  ?dark  ?theme=genesis-glass  ?noinfo(还没跑过 run)  ?logout(未登录)  ?unlimited(今日不限 + 带积分余额)  ?capped(1M 被封顶)
  *      ?over(占用超出窗口);?direct=codex|deepseek|none(当前是直连模型:列该来源的额度 / 余额,none = 来源查不到);window.__ctxu.switchAccount() = 直接换到账号 B(B 的额度 300ms 后才回来)
  * 跑:node scripts/e2e-editor.cjs --check=ctxusage --shot
  */
@@ -23,6 +23,7 @@ applyTheme(q.get('theme') || 'lovable', 'cream', 'cream', q.has('dark') ? 'dark'
 const quota = {
   dailyLimit: q.has('unlimited') ? -1 : 100, dailyRemaining: q.has('unlimited') ? -1 : 88, dailyPercent: 12,
   weeklyLimit: 500, weeklyRemaining: 40, weeklyPercent: 92, weeklyResetAt: '2026-10-02',
+  ...(q.has('unlimited') ? { pointsBalance: 1280 } : {}), // 积分:不限那档隐藏后的那一行(11-20)
 }
 let account = 'A'
 const quotaB = { ...quota, dailyRemaining: 50, dailyPercent: 50, weeklyRemaining: 450, weeklyPercent: 10 }
