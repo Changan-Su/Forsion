@@ -22,6 +22,7 @@ import { useApp } from '../stores/appStore'
 import './imageViewer.css'
 import { motion } from '../theme/motionTokens'
 import { reducedMotion } from '@lcl/engine/spring'
+import { horizontalWheelDelta } from '../lib/fileWheel'
 
 registerMessages({
   'viewer.open': { zh: '查看图片 {name}', en: 'View image {name}' },
@@ -290,13 +291,19 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     if (!st) return
     const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
+      const dx = horizontalWheelDelta(e, st)
+      if (dx) {
+        setView((cur) => cur ? clamp({ ...cur, tx: cur.tx - dx }) : cur)
+        return
+      }
+      if (!e.deltaY) return
       const [px, py] = local(e.clientX, e.clientY)
       const cur = view ?? fit
       zoomTo(cur.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)), px, py) // ctrlKey = 触控板捏合
     }
     st.addEventListener('wheel', onWheel, { passive: false })
     return () => st.removeEventListener('wheel', onWheel)
-  }, [view, fit, zoomTo]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, fit, zoomTo, clamp]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 指针:放大后拖动平移;触屏在适应窗口时左右滑切换、往下拖关闭;双指捏合缩放(跟着当前两指中点走)。
   // 一按下就捕获指针,之后 pointerup 的 target 恒是舞台 —— 点的是什么要在按下时记(hit),别看松手时的 target(Codex P1)

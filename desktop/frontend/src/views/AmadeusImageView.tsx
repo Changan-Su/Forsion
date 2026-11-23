@@ -8,6 +8,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { useVaultRelParam } from './vaultRelParam'
 import { fileViewKey, readFileView, writeFileView } from '@amadeus/lib/fileViewMemory'
+import { useFileShiftWheel } from '../lib/fileWheel'
 
 const imgBase = (p: string): string => p.split(/[\\/]/).pop() || p
 
@@ -26,6 +27,7 @@ function ImageFile({ leaf, imagePath, mode, vaultReady, vaultRoot }: { leaf: Vie
   const [saved] = useState(() => readFileView('image', memoryKey))
   const [actual, setActual] = useState(saved?.actual ?? false)
   const scroll = useRef<HTMLDivElement>(null)
+  useFileShiftWheel(scroll)
   const restoring = useRef(!!saved)
   const restore = (): void => {
     if (!restoring.current || !scroll.current) return

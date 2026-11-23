@@ -147,6 +147,19 @@ async function main() {
     await win.mouse.down(); await win.mouse.move(stage.x + stage.width * 0.3 + 80, stage.y + stage.height * 0.3 + 10, { steps: 5 }); await win.mouse.up()
     const after = await win.evaluate(() => document.querySelector('.iv-img:not(.is-side)').getBoundingClientRect().left)
     check('放大后拖动平移', Math.abs(after - before - 80) <= 2 || after === 0, { before, after })
+    const image = win.locator('.iv-img:not(.is-side)')
+    const beforePan = await image.boundingBox()
+    await win.keyboard.down('Shift')
+    try { await win.mouse.wheel(0, 120) } finally { await win.keyboard.up('Shift') }
+    await win.waitForFunction((x) => document.querySelector('.iv-img:not(.is-side)').getBoundingClientRect().left < x - 10, beforePan.x)
+    const afterPan = await image.boundingBox()
+    check('Shift+滚轮只横移，保持缩放', Math.abs(afterPan.y - beforePan.y) < 1
+      && Math.abs(afterPan.width - beforePan.width) < 1, { beforePan, afterPan })
+    await win.mouse.wheel(-80, 4)
+    await win.waitForFunction((x) => document.querySelector('.iv-img:not(.is-side)').getBoundingClientRect().left > x + 10, afterPan.x)
+    const afterDiagonal = await image.boundingBox()
+    check('横向为主的触控板滚动保持缩放', Math.abs(afterDiagonal.y - afterPan.y) < 1
+      && Math.abs(afterDiagonal.width - afterPan.width) < 1, { afterPan, afterDiagonal })
     if (shots) { await zoom110(true); await win.keyboard.press('0'); await win.keyboard.press('+'); await win.keyboard.press('+'); await win.keyboard.press('+'); await shot('viewer-zoomed'); await zoom110(false) }
     await win.mouse.dblclick(stage.x + stage.width / 2, stage.y + stage.height / 2)
     s = await state()

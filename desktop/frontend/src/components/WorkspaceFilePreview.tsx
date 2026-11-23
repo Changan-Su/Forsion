@@ -22,11 +22,14 @@ import { useI18n } from '../i18n'
 import { loadWorkbook } from '../services/workbookPreview'
 import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
+import { horizontalWheelDelta, useFileShiftWheel } from '../lib/fileWheel'
 // pdf.js worker(?url 走 Vite 资源,单独 asset);PDF 渲染到 canvas,不依赖 Electron PDF 插件。
 // ⚠️legacy 构建:pdf.js 5.7 用了 Map.prototype.getOrInsertComputed,Electron 40 V8 没有(见 PdfAnnotator)。
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 const CodeView = lazyRetry(() => import('./CodeView'))
+
+export const FILE_DOCUMENT_SCROLL = '.wsfile-doc:not(.msg-content)'
 
 export interface PreviewData { mimeType: string; bytes: Uint8Array; size: number; mtimeMs?: number }
 /** name=显示名(文件名/相对路径);load=拉取字节(或超限);download=可选下载;
@@ -117,22 +120,48 @@ export const OfficeFail: React.FC<{ t: (k: string, v?: Record<string, unknown>) 
 // ── 图片缩放/平移(滚轮以光标为中心、拖拽平移、双击复位)──────────────────────────
 export const ImageView: React.FC<{ src: string; alt: string; view: ImgView; setView: React.Dispatch<React.SetStateAction<ImgView>> }> = ({ src, alt, view, setView }) => {
   const drag = useRef<{ x: number; y: number; sx: number; sy: number } | null>(null)
+  const stage = useRef<HTMLDivElement>(null)
+  const image = useRef<HTMLImageElement>(null)
+  useEffect(() => {
+    const el = stage.current
+    if (!el) return
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault()
+      const dx = horizontalWheelDelta(e, el)
+      if (dx) {
+        const width = image.current?.offsetWidth ?? 0
+        const viewportWidth = el.clientWidth
+        setView((p) => {
+          const overflow = (width * p.s - viewportWidth) / 2
+          if (overflow <= 0) return p
+          // Pointer dragging can leave the image beyond a wheel limit. A wheel step may bring
+          // it back, but must never flip direction just to reach the limit.
+          const min = Math.min(-overflow, p.x)
+          const max = Math.max(overflow, p.x)
+          return { ...p, x: Math.max(min, Math.min(max, p.x - dx)) }
+        })
+        return
+      }
+      if (!e.deltaY) return
+      const r = el.getBoundingClientRect()
+      const cx = e.clientX - r.left - r.width / 2
+      const cy = e.clientY - r.top - r.height / 2
+      const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
+      setView((p) => { const s = clampScale(p.s * f); const k = s / p.s; return { s, x: cx - (cx - p.x) * k, y: cy - (cy - p.y) * k } })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [setView])
   return (
     <div
       className="wsfile-imgwrap"
-      onWheel={(e) => {
-        const r = e.currentTarget.getBoundingClientRect()
-        const cx = e.clientX - r.left - r.width / 2
-        const cy = e.clientY - r.top - r.height / 2
-        const f = e.deltaY < 0 ? 1.12 : 1 / 1.12
-        setView((p) => { const s = clampScale(p.s * f); const k = s / p.s; return { s, x: cx - (cx - p.x) * k, y: cy - (cy - p.y) * k } })
-      }}
+      ref={stage}
       onPointerDown={(e) => { drag.current = { x: e.clientX, y: e.clientY, sx: view.x, sy: view.y }; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }}
       onPointerMove={(e) => { const d = drag.current; if (d) setView((p) => ({ ...p, x: d.sx + (e.clientX - d.x), y: d.sy + (e.clientY - d.y) })) }}
       onPointerUp={() => { drag.current = null }}
       onDoubleClick={() => setView({ s: 1, x: 0, y: 0 })}
     >
-      <img src={src} alt={alt} draggable={false} style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }} />
+      <img ref={image} src={src} alt={alt} draggable={false} style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.s})` }} />
     </div>
   )
 }
@@ -229,6 +258,8 @@ export async function loadOffice(bytes: Uint8Array, kind: 'xlsx' | 'pptx', signa
 }
 
 export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: () => void }> = ({ target, onClose }) => {
+  const preview = useRef<HTMLDivElement>(null)
+  useFileShiftWheel(preview, FILE_DOCUMENT_SCROLL)
   const { t } = useI18n()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -430,7 +461,7 @@ export const WorkspaceFilePreview: React.FC<{ target: PreviewTarget; onClose: ()
           </button>
           <button className="icon-btn" title={t('preview.close')} onClick={onClose}><X size={15} /></button>
         </div>
-        <div className="wsfile-body">{body}</div>
+        <div className="wsfile-body" ref={preview}>{body}</div>
       </div>
     </motion.div>
   )
