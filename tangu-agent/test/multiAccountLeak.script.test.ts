@@ -250,15 +250,31 @@ describe('multi-account: plugin scripts — what may run', () => {
   it("the scripts' temporary folder and the account database files cannot be written by the account's own tools", async () => {
     const target = join(accDir('alice'), '.scratch', 'mine.txt');
     const wal = join(accDir('alice'), 'state.db-journal');
+    // the database runs in WAL mode, so there is no journal file: plant a link under that name pointing back into the account
+    // (after the account's database is open, so opening it never sees the planted file)
+    expect((await E.client.call('alice', 'GET', '/agent/sessions')).status).toBe(200);
+    const linkTarget = join(accDir('alice'), 'notes-for-link.txt');
+    writeFileSync(linkTarget, 'kept');
+    rmSync(wal, { force: true });
+    symlinkSync(linkTarget, wal);
+    // other spellings of the same names (on a case-insensitive volume they are the same file)
+    const folded = join(accDir('alice'), '\u017Ftate.DB-journal');
+    const scratchFolded = join(accDir('alice'), '.SCRATCH', 'mine2.txt');
     const s = E.fake.script('alice', 'scratch-write', steps([
       { calls: [{ name: 'write_file', args: { path: target, content: 'x'.repeat(100) } }] },
       { calls: [{ name: 'write_file', args: { path: wal, content: 'x'.repeat(100) } }] },
+      { calls: [{ name: 'write_file', args: { path: folded, content: 'x'.repeat(100) } }] },
+      { calls: [{ name: 'write_file', args: { path: scratchFolded, content: 'x'.repeat(100) } }] },
     ], 'done'));
     const r = await runToEnd(E.client, 'alice', s, { timeoutMs: 30_000 });
     expect(r.follow?.status).toBe('done');
     const outs = s.results.filter((x) => x.name === 'write_file').map((x) => x.output);
     expect(outs[0]).toMatch(/temporary files of plugin scripts/);
     expect(outs[1]).toMatch(/account database/);
+    expect(outs[2]).toMatch(/account database/);
+    expect(outs[3]).toMatch(/temporary files of plugin scripts/);
+    expect(readFileSync(linkTarget, 'utf8')).toBe('kept');
+    rmSync(wal, { force: true });
     expect(existsSync(target)).toBe(false);
     expect(existsSync(wal)).toBe(false);
   }, 60_000);

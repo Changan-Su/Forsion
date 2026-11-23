@@ -218,14 +218,27 @@ export function accountReadDenied(abs: string): string | null {
 }
 
 /** 账号写这个路径:null = 可以(之后照常过 fsPolicy 的其余判定);否则是硬拒原因。只认账号自己的文件夹。 */
-const ACCOUNT_DB_FILES = ['state.db', 'state.db-wal', 'state.db-shm', 'state.db-journal'];
+const ACCOUNT_DB_FILES = new Set(['state.db', 'state.db-wal', 'state.db-shm', 'state.db-journal']);
+/** 名字按 Unicode 兼容形 + 大小写折叠:大小写不敏感的卷上 `ſtate.db-journal`、`STATE.DB` 之类的写法落到同一个文件。 */
+const foldName = (n: string): string => n.normalize('NFKC').toLowerCase().normalize('NFKC');
+/** abs 在账号根下的各段(字面 / 真实路径各算一份,名字已折叠;不在根下的那种形态不算)。拒绝用,宁可多拒:
+ *  叫这个名字的软链(字面命中)和指向它的软链(真实命中)都算。 */
+function segmentsUnder(abs: string, root: string): string[][] {
+  const out: string[][] = [];
+  for (const f of forms(abs)) for (const r of [path.resolve(root), real(root)]) {
+    if (!pathWithin(f, r)) continue;
+    out.push(path.relative(r.toLowerCase(), f.toLowerCase()).split(path.sep).filter(Boolean).map(foldName));
+  }
+  return out;
+}
 export function accountWriteDenied(abs: string): string | null {
   if (!isMultiAccount()) return null;
   const root = currentAccountRoot();
+  const segs = segmentsUnder(abs, root);
   // 插件脚本的临时目录(services/pluginScripts.ts)归引擎管:不算磁盘上限、开户时整个清掉,账号自己不能往里写
-  if (insidePlain(abs, path.join(root, '.scratch'))) return 'Access denied: that folder holds temporary files of plugin scripts and cannot be written.';
+  if (segs.some((s) => s[0] === '.scratch')) return 'Access denied: that folder holds temporary files of plugin scripts and cannot be written.';
   // 账号自己的库文件(services/accountStorage.ts 不把 -wal / -shm / -journal 算进磁盘上限):文件工具不许碰
-  if (ACCOUNT_DB_FILES.some((n) => insidePlain(abs, path.join(root, n)))) return 'Access denied: that is the account database and cannot be written with file tools.';
+  if (segs.some((s) => s.length === 1 && ACCOUNT_DB_FILES.has(s[0]))) return 'Access denied: that is the account database and cannot be written with file tools.';
   if (insidePlain(abs, root)) return null;
   return `Access denied: you can only write inside your account folder (${root}); ${abs} is outside it.`;
 }
