@@ -106,6 +106,36 @@ describe('debounced PlainMarkdownEditor hands held edits over on unmount', () =>
     expect(changed).not.toHaveBeenCalled()
   })
 
+  it('typed and undone, then a change marked addToHistory:false: unmount hands nothing over', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    const end = editor.state.doc.content.size - 1
+    type(editor, 'x')
+    act(() => { editor.dispatch(editor.state.tr.delete(end, end + 1)) })
+    act(() => { editor.dispatch(editor.state.tr.insertText(' quiet', editor.state.doc.content.size - 1).setMeta('addToHistory', false)) })
+    await unmount()
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('typed and undone in a file whose headings get ids after mount: unmount hands nothing over', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed, '###   Title   ###\n\nBody')
+    const end = editor.state.doc.content.size - 1
+    type(editor, 'x')
+    act(() => { editor.dispatch(editor.state.tr.delete(end, end + 1)) })
+    await unmount()
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('hands over the last edit’s document, like the listener: a later addToHistory:false change is not included', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    type(editor, ' tail')
+    act(() => { editor.dispatch(editor.state.tr.insertText(' quiet', editor.state.doc.content.size - 1).setMeta('addToHistory', false)) })
+    await unmount()
+    expect(changed).toHaveBeenCalledExactlyOnceWith('Start tail\n')
+  })
+
   it('read-only editor never hands anything over', async () => {
     const changed = vi.fn()
     const editor = await mount(changed, 'Start', { readOnly: true })
@@ -120,6 +150,8 @@ describe('debounced PlainMarkdownEditor hands held edits over on unmount', () =>
     const editor = await mount(changed, 'Start', { flushRef })
     type(editor, ' tail')
     act(() => { flushRef.current?.() })
+    expect(changed).toHaveBeenCalledExactlyOnceWith('Start tail\n')
+    await listenerWindow() // the listener's still-pending emit of the same text is not delivered again
     expect(changed).toHaveBeenCalledExactlyOnceWith('Start tail\n')
     type(editor, '!')
     await unmount()

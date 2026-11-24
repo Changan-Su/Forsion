@@ -2556,37 +2556,45 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   }))] : undefined, [immediate])
   /** Debounced mode: the listener's emit (`settled`) tells the plugin below that nothing is held any more. */
   const settled = useRef<(() => void) | null>(null)
+  /** Debounced mode: what a flush handed over, until the next edit; the listener's pending emit of the same text is dropped. */
+  const flushed = useRef<string | null>(null)
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
   const debouncedPlugins = useMemo(() => immediate ? undefined : [$prose((ctx) => {
     // Milkdown's listener emits 200ms after the last edit and *cancels* that call when the editor is destroyed, so
-    // closing the host inside the window dropped the last keystrokes (check:wsfileflush). Track what the listener has
-    // not emitted yet, with the listener's own trigger (a doc change not marked addToHistory:false, seen in the same
-    // state.apply hook), and hand it over on unmount instead. Nothing held → nothing handed over: an untouched
-    // document is never re-serialized, so a host that saves on change never rewrites it normalized.
-    let held = false
-    let base: ProseNode | null = null // the document as of the last emit
+    // closing the host inside the window dropped the last keystrokes (check:wsfileflush). Mirror the listener instead —
+    // same trigger (a doc change not marked addToHistory:false, seen in the same state.apply hook), same document
+    // (the last such transaction's, not the live one) — and hand that over on unmount. Nothing held → nothing handed
+    // over: an untouched document is never re-serialized, so a host that saves on change never rewrites it normalized.
+    let held: ProseNode | null = null // doc of the last edit the listener has not emitted yet
+    // The document as of the last emit, plus changes the listener never emits (addToHistory:false while nothing is
+    // held, e.g. ids filled in after mount), so typing and undoing inside the window counts as no edit.
+    let base: ProseNode | null = null
     return new Plugin({
       state: {
         init: (_config, state) => { base ??= state.doc; return null },
         apply: (tr, value) => {
-          if (tr.docChanged && tr.getMeta('addToHistory') !== false) held = true
+          if (!tr.docChanged) return value
+          if (tr.getMeta('addToHistory') !== false) { held = tr.doc; flushed.current = null }
+          else if (!held) base = tr.doc
           return value
         },
       },
       view: (view) => {
-        const settle = (): void => { held = false; base = view.state.doc }
+        const settle = (): void => { if (held) base = held; held = null }
         const flushNow = (): void => {
           if (view.isDestroyed) return
           // Text still in pending DOM mutations reaches the state (and marks itself held) first.
           ;(view as unknown as { domObserver?: { flush?: () => void } }).domObserver?.flush?.()
-          if (!held || readOnlyRef.current) return
-          held = false
-          const doc = view.state.doc
-          if (base && doc.eq(base)) return // typed and undone inside the window: the listener would not emit either
+          const doc = held
+          held = null
+          if (!doc || readOnlyRef.current) return
+          if (base && doc.eq(base)) return // e.g. typed and undone inside the window: the listener would not emit either
           base = doc
           // The listener path's chain (MilkdownInner normalizes, the onChange wrapper below converts tabs): same bytes.
-          onChangeRef.current(entitiesToTabs(normalizeSerializedMd(ctx.get(serializerCtx)(doc))))
+          const stored = entitiesToTabs(normalizeSerializedMd(ctx.get(serializerCtx)(doc)))
+          flushed.current = stored
+          onChangeRef.current(stored)
         }
         settled.current = settle
         flushHeld.current = flushNow
@@ -2621,7 +2629,12 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           initial={tabsToEntities(initial)}
           // Immediate mode has one writer. The listener can retain an older local
           // transaction when an external addToHistory=false update supersedes it.
-          onChange={immediate ? noop : (md) => { settled.current?.(); onChange(entitiesToTabs(md)) }}
+          onChange={immediate ? noop : (md) => {
+            settled.current?.()
+            const stored = entitiesToTabs(md)
+            if (stored === flushed.current) { flushed.current = null; return } // a mid-life flushRef call already handed it over
+            onChange(stored)
+          }}
           extraPlugins={immediatePlugins ?? debouncedPlugins}
           standalone
           keys={keys}
