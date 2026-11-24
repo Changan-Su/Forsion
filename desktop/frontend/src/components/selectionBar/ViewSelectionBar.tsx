@@ -227,8 +227,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const at = e.target as Element | null
       fromBar = !!at?.closest?.('.selbar')
       cancelAuto()
-      // 结果卡 / 朗读提示卡和条是一起的(自动开的卡和条同时在):点在卡里不算点到外面
-      if (at && !el.contains(at) && !fromBar && !at.closest?.('.am-ai-panel')) clear()
+      // 结果卡 / 朗读提示卡和条是一起的(自动开的卡和条同时在):点在卡里不算点到外面;卡头服务菜单挂在 body 下(.plugin-menu),也算卡里
+      if (at && !el.contains(at) && !fromBar && !at.closest?.('.am-ai-panel, .plugin-menu')) clear()
     }
     // 标记只管这一次按下到松手:松手过去就清。留到「下一次按下」的话,之后前面没有按下的松手(脚本派发的那种)会被它吞掉。
     // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
