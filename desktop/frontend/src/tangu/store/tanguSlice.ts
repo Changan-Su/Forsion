@@ -4339,6 +4339,16 @@ const queueDispatching = new Map<string, object>()
 const QUEUE_DISPATCH_VALVE_MS = 30_000
 
 /** 新来的消息 / 命令是否必须排队:队里已有排队项、压缩中、或排队消息正在发出。 */
+/** 这一条 send(…, skillIds) 的技能钉选能不能真的到引擎(任务卡「在这里做」走 /skill 隐藏通道前问一句,taskLanding.ts):
+ *  · 会话在跑 / 在压缩 / 队列在派发 → send 转成插话或排队,那两条只带正文和附件,钉选不随过去;
+ *  · chat 预设(已有会话的配置,或新会话将落成 chat)→ 引擎整个不开技能,requestedSkillIds 被丢掉。
+ *  sessionId 为空 = 新会话。答 false 时调用方应把引导语留在正文里。 */
+export function skillPinReaches(st: AppState, sessionId: string | null): boolean {
+  if (!sessionId) return newSessionPreset(st.sessionMode, resolveNewSessionWorkspace(st, currentPlatform()), currentPlatform()) !== 'chat'
+  if (st.configBySession[sessionId]?.preset === 'chat') return false
+  return !st.runningBySession[sessionId] && !queueBusy(st, sessionId) && !(st.steerPendingBySession[sessionId] || []).length
+}
+
 function queueBusy(st: AppState, sessionId: string): boolean {
   return queueDispatching.has(sessionId) || st.compactingBySession[sessionId] !== undefined
     || (st.steerPendingBySession[sessionId] || []).some((p) => p.localOnly)

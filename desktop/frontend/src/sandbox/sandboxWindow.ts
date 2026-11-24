@@ -307,6 +307,20 @@ async function clearToasts(x: number, y: number): Promise<string[] | 'stuck' | n
   return hit() ? 'stuck' : texts
 }
 
+/** 首次打开时右下角那张「这是一个沙箱」说明条(SandboxChrome.tsx)。它压着被测插件的按钮时,agent 点下去只会得到
+ *  「上面压着别的元素」(11-19 第一轮挡住导入按钮的疑似就是它)。和通知一样:先收起再点。收起 = 当作人点了「知道了」,
+ *  说明的原文一直在右上角「沙箱」胶囊的悬停提示里。 */
+export const SANDBOX_NOTE_COLLAPSE = 'forsion-sandbox-note-collapse'
+const NOTE = '[data-testid="sandbox-note"]'
+async function clearNote(x: number, y: number): Promise<boolean> {
+  const hit = (): boolean => !!document.elementFromPoint(x, y)?.closest(NOTE)
+  if (!hit()) return false
+  window.dispatchEvent(new Event(SANDBOX_NOTE_COLLAPSE))
+  const end = Date.now() + 1000
+  while (hit() && Date.now() < end) await sleep(40)
+  return true
+}
+
 type Located = { x: number; y: number; label: string; covered?: string; dismissed?: string[] }
 async function locate(target: string): Promise<Located | { error: string }> {
   const el = find(target)
@@ -320,6 +334,10 @@ async function locate(target: string): Promise<Located | { error: string }> {
   const label = `${roleOf(el)} "${labelOf(el)}"`
   const over = (top: Element | null): boolean => !!top && top !== el && !el.contains(top) && !top.contains(el)
   let dismissed: string[] | undefined
+  if (!el.closest(NOTE) && over(document.elementFromPoint(x, y)) && await clearNote(x, y)) {
+    if (!el.isConnected) return { error: 'the page changed while the sandbox note was being closed; read again' }
+    ;({ x, y } = point())
+  }
   // 目标本身就在通知卡里(点通知上的按钮)不算被压着
   if (!el.closest(TOASTS) && over(document.elementFromPoint(x, y))) {
     const cleared = await clearToasts(x, y)
@@ -329,6 +347,11 @@ async function locate(target: string): Promise<Located | { error: string }> {
       if (!el.isConnected) return { error: 'the page changed while a notification was being dismissed; read again' }
       dismissed = cleared
       ;({ x, y } = point())
+      // 通知收走以后露出来的可能是说明条(右下角的吐司正好叠在它上面):再看一眼
+      if (over(document.elementFromPoint(x, y)) && await clearNote(x, y)) {
+        if (!el.isConnected) return { error: 'the page changed while the sandbox note was being closed; read again' }
+        ;({ x, y } = point())
+      }
     }
   }
   const top = document.elementFromPoint(x, y)

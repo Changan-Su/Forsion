@@ -10,6 +10,7 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import { pluginWanted, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
+import { hostDenialsOf, type HostDenial } from '@amadeus/plugins/hostDenials'
 import { registerMessages } from './i18n'
 
 registerMessages({
@@ -151,6 +152,13 @@ export function hiddenSpaceForAgent(pluginId: string, h: HiddenSpace): string {
   return `hidden Space ${h.id ?? h.slug}: ${why}`
 }
 
+/** 被拒的一句(短:回执总共 200 字符)。 */
+export function hostDenialForAgent(d: HostDenial): string {
+  const why = d.code === 'external-engine' ? 'external engine mode, needs the managed local engine'
+    : d.code === 'no-local-engine' ? 'no local engine on this host' : 'local engine not ready'
+  return `host refused ${d.api} (${why})`
+}
+
 /** 运行态一句话;problem = 值得在目录的 state 里点名(用户自己关掉的不算问题)。 */
 function runState(p: AmadeusPlugin, hidden: HiddenSpace[]): { text: string; problem: boolean } {
   const s = usePluginStore.getState()
@@ -178,6 +186,7 @@ export function pluginStatusForAgent(query: string): string {
   const views = viewsOf(id)
   return clip([
     `${p.id} ${p.version}: ${runState(p, hidden).text}`,
+    ...hostDenialsOf(id).map(hostDenialForAgent),
     ...hidden.map((h) => hiddenSpaceForAgent(id, h)),
     `views registered: ${views.join(', ') || 'none'}`,
   ].join('; '), 200)
@@ -187,7 +196,10 @@ function problems(): Array<{ id: string; what: string }> {
   return usePluginStore.getState().plugins.flatMap((p) => {
     const mine = hiddenSpacesOf(p.id)
     const state = runState(p, mine)
-    return state.problem ? [{ id: p.id, what: mine.length ? `${mine.length} Space hidden` : state.text.split(/[:(]/)[0].trim() }] : []
+    if (state.problem) return [{ id: p.id, what: mine.length ? `${mine.length} Space hidden` : state.text.split(/[:(]/)[0].trim() }]
+    // 在跑、加载也没报错,但它的请求被宿主拒过(外部引擎模式下的 ctx.tangu.request):插件自己往往把错吞了,这里点名
+    const refused = hostDenialsOf(p.id)
+    return refused.length ? [{ id: p.id, what: `host refused ${refused[0].api}` }] : []
   })
 }
 

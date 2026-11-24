@@ -227,6 +227,10 @@ export interface TanguProbe {
   openSession?(sessionId: string, alive?: () => boolean): Promise<void> | void
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
+  /** hostExecution() 为假时的原因(11-23,插件请求被拒时给开发者留诊断用):
+   *  'external-engine' = 桌面连的是外部引擎;'no-local-engine' = 这个宿主本来就没有本机引擎(网页 / 手机);
+   *  'pending' = 配置还没读到。为真时 null。 */
+  hostExecutionBlock?(): 'external-engine' | 'no-local-engine' | 'pending' | null
   /** 主区聊天此刻**实际会用**的模型;一个都没有 → null。 */
   activeModel(): TanguModelInfo | null
   /** 当前模型目录里的全部对话模型(只含 llm,不混入生图 / 语音模型)。 */

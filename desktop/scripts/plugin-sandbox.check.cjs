@@ -16,7 +16,7 @@
  *  12 (11-03)在沙箱里动手:read 给出带引用的大纲 → type 填输入框 → click 按钮 → 回执里有插件新写的 console、
  *     弹出的提示和一张新截图(和上一张不同 = 不是旧帧);press Enter;files 备好路径后点 <input type=file> 直接拿到文件
  *  14 (11-15)read 报开关的 pressed / 只读框的 read-only;命令等自己弹的框 → 几秒内回 pending,在框里点完它跑完;
- *     目标被通知盖住 → 先关通知再点;settings 打开设置窗口(s 引用、插件自绘面板),window "settings" 在里面动手、截图、关掉
+ *     目标被通知盖住 → 先关通知再点;右下角的按钮被「这是沙箱」说明条盖住 → 先收起说明条再点(11-23);settings 打开设置窗口(s 引用、插件自绘面板),window "settings" 在里面动手、截图、关掉
  *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
  *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
  *
@@ -81,6 +81,13 @@ ctx.registerCommand({ id: 'fixture-toast', title: 'Fixture toast', run() {
   const under = document.createElement('button'); under.textContent = 'Under toast'; under.style.cssText = 'position:fixed;top:50px;right:20px;width:120px;height:30px;z-index:50'
   under.onclick = () => console.log('UNDER_TOAST_CLICKED'); document.body.append(under)
   ctx.notify('Covering toast', { level: 'error', sticky: true })
+} })
+// 一个按钮正好在右下角、压在首次说明条底下(11-23):插件自己报它此刻是不是真被说明条盖着,断言不会空过
+ctx.registerCommand({ id: 'fixture-corner', title: 'Fixture corner', run() {
+  const b = document.createElement('button'); b.textContent = 'Corner action'; b.style.cssText = 'position:fixed;right:24px;bottom:46px;width:110px;height:24px;z-index:50'
+  b.onclick = () => console.log('CORNER_CLICKED'); document.body.append(b)
+  const r = b.getBoundingClientRect(); const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+  console.log('CORNER_COVERED ' + !!(top && top.closest('[data-testid="sandbox-note"]')))
 } })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
@@ -485,6 +492,12 @@ async function main() {
     check('14e 目标被通知盖住 → 先关掉通知再点,点到的是目标,回执说了关过通知',
       underToast.a?.newLogs?.some((l) => l.text === 'UNDER_TOAST_CLICKED') && /notification was covering it/.test(underToast.a?.did || '') && /Covering toast/.test(underToast.a?.target || ''),
       JSON.stringify(underToast.r.error || underToast.a))
+    await exec('command', { command: 'fixture-corner' })
+    const covered = await until(async () => (await status())?.logs?.find((l) => l.text.startsWith('CORNER_COVERED'))?.text, 5000)
+    const cornerClick = await act('click', { target: 'Corner action' })
+    check('14e2 被测插件右下角的按钮压在「这是沙箱」说明条底下 → 说明条先收起,点到的是插件的按钮(11-23)',
+      covered === 'CORNER_COVERED true' && cornerClick.a?.newLogs?.some((l) => l.text === 'CORNER_CLICKED') && !/on top of it/.test(cornerClick.a?.target || ''),
+      JSON.stringify({ covered, click: cornerClick.r.error || cornerClick.a }))
     const noSettings = await act('read', { window: 'settings' })
     const opened = await act('settings', {})
     const settingsText = opened.a?.outline || ''
