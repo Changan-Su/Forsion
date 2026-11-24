@@ -1,0 +1,125 @@
+/* 看图器「标注修改」态(ImageMarkup.tsx,方案 2B)。盖在看图器的底色上,自己不再铺底。
+   标记颜色 = --signal(指示色:米白 / 墨色配色是柔蓝,其余跟主题色);输入条照 Chat Box 卡面(不描边、--card-shadow);
+   发送钮照 .t2c-send(--action-fill)。字号只用界面角色变量(check:uiscale),阴影只走 token(check:shadowcontract)。 */
+.imk { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; --imk-color: var(--signal); }
+.imk, .ivg { outline: none; }
+/* 发送途中整层不收指针(键盘在 ImageMarkup 里一并挡住):失败时标记原样回来,不会被中途的改动覆盖 */
+.imk.is-busy, .ivg.is-busy { pointer-events: none; }
+.imk-bar { justify-content: flex-start; }
+.imk-bar .iv-title { flex: 1 1 0; }
+.imk-bar .iv-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.imk-bar .iv-tools { flex: 1 1 0; justify-content: flex-end; }
+.imk-tools { flex: none; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: var(--radius-pill, 999px); background: var(--bg-card); box-shadow: var(--btn-shadow); }
+.imk-tool { height: 28px; min-width: 28px; padding: 0 10px; border: 0; border-radius: var(--radius-pill, 999px); display: inline-flex; align-items: center; justify-content: center; gap: 5px; background: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.imk-tool:hover:not(:disabled) { background: var(--overlay-light); color: var(--text); }
+.imk-tool[aria-pressed='true'] { background: color-mix(in oklab, var(--accent-ink) 14%, transparent); color: var(--accent-ink); }
+.imk-tool:disabled { opacity: .35; cursor: default; }
+.imk-tool:focus-visible, .imk-ghost:focus-visible, .imk-send:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
+.imk-sep { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
+.imk-ghost { height: 28px; padding: 0 12px; border: 0; border-radius: var(--radius-pill, 999px); background: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.imk-ghost:hover { background: var(--overlay-light); color: var(--text); }
+
+.imk-body { position: relative; flex: 1; overflow: hidden; touch-action: none; cursor: crosshair; user-select: none; }
+.imk-body.is-pan { cursor: grab; }
+.imk-body.is-pan:active { cursor: grabbing; }
+/* 图框 = 适应窗口时图的位置和大小;放大只在框里(is-zoomed 才裁切,不放大时贴边的编号不被切掉) */
+.imk-frame { position: absolute; border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow); }
+.imk-frame.is-zoomed { overflow: hidden; }
+:root.dark .imk-frame { box-shadow: none; }
+.imk-world { position: absolute; left: 0; top: 0; width: 100%; height: 100%; transform-origin: 0 0; }
+.imk-world img { display: block; width: 100%; height: 100%; border-radius: var(--radius-md, 12px); user-select: none; -webkit-user-drag: none; pointer-events: none; }
+.imk-frame.is-zoomed .imk-world img { border-radius: 0; }
+.imk-world svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.imk-stroke { stroke: var(--imk-color); }
+.imk-fill { fill: var(--imk-color); }
+.imk-num { fill: var(--on-accent, #fff); font-family: var(--font-ui, inherit); font-weight: 600; }
+:root.dark .imk-num { fill: var(--bg); }
+
+/* 右侧清单:一处一行,编号 + 那句话 + 种类;悬停和图上的那处互相点亮 */
+.imk-notes { position: absolute; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; cursor: default; }
+.imk-notes-head { padding: 2px 10px 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.imk-note { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 8px 30px 8px 10px; border-radius: var(--radius-sm, 8px); color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.45; cursor: pointer; }
+.imk-note:hover, .imk-note.is-on { background: var(--overlay-light); }
+.imk-note.is-add { padding-right: 10px; align-items: center; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); cursor: default; }
+.imk-note.is-add:hover { background: none; }
+.imk-note-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; word-break: break-word; }
+.imk-note-body small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.imk-faint { color: var(--text-faint, var(--text-muted)); }
+.imk-note-input { width: 100%; padding: 0; border: 0; outline: none; background: none; color: var(--text); font: inherit; }
+.imk-badge { flex: none; width: 20px; height: 20px; margin-top: 0; border-radius: 50%; display: grid; place-items: center; background: var(--imk-color); color: var(--on-accent, #fff); font-size: var(--ui-font-caption, 11px); font-weight: 600; font-variant-numeric: tabular-nums; }
+:root.dark .imk-badge { color: var(--bg); }
+.imk-del { position: absolute; right: 6px; top: 8px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; background: none; color: var(--text-muted); opacity: 0; cursor: pointer; }
+.imk-note:hover .imk-del, .imk-note.is-on .imk-del, .imk-del:focus-visible { opacity: 1; }
+.imk-del:hover { background: var(--overlay-medium, var(--overlay-light)); color: var(--text); }
+
+/* 落下一处当场写一句:浮在那处下方(放不下就上方) */
+.imk-pop { position: absolute; z-index: 4; width: 280px; padding: 8px 10px 6px; border-radius: var(--radius-md, 12px); background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); box-shadow: var(--card-shadow); cursor: default; }
+.imk-pop-in { display: flex; align-items: center; gap: 8px; }
+.imk-pop-in input { min-width: 0; flex: 1; padding: 4px 0; border: 0; outline: none; background: none; color: var(--text); font-family: var(--font-ui, inherit); font-size: var(--ui-font-body, 13px); }
+.imk-pop-in input::placeholder, .imk-overall::placeholder { color: var(--text-faint, var(--text-muted)); }
+.imk-pop-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; padding-left: 28px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
+
+/* 底下一条:整体要求 + 发送 N 处修改(照 Chat Box 卡面) */
+.imk-dock { position: absolute; z-index: 2; height: 50px; display: flex; align-items: center; gap: 8px; padding: 0 7px 0 16px; border-radius: var(--radius-pill, 999px); background: var(--t2c-card-surface, var(--bg-card)); box-shadow: var(--card-shadow); cursor: default; }
+.imk-overall { min-width: 0; flex: 1; height: 100%; border: 0; outline: none; background: none; color: var(--text); font-family: var(--font-ui, inherit); font-size: var(--ui-font-body, 13px); }
+.imk-send { flex: none; height: 36px; padding: 0 16px 0 12px; border: 0; border-radius: var(--radius-pill, 999px); display: inline-flex; align-items: center; gap: 6px; background: var(--action-fill); color: var(--on-action, #fff); font-size: var(--ui-font-body, 13px); font-weight: 500; white-space: nowrap; cursor: pointer; transition: opacity var(--duration-fast, .15s), transform var(--duration-fast, .15s); }
+.imk-send:hover:not(:disabled) { transform: translateY(-1px); }
+.imk-send:active:not(:disabled) { transform: scale(.97); transition-duration: 70ms; }
+.imk-send:disabled { opacity: .35; cursor: default; background: var(--overlay-medium, var(--overlay-light)); color: var(--text-faint, var(--text-muted)); }
+.imk-collect-hint { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.imk-hint { bottom: auto; }
+
+.imk-confirm { position: absolute; left: 50%; top: 40%; z-index: 6; transform: translate(-50%, -50%); min-width: 260px; padding: 16px 16px 12px; border-radius: var(--radius-lg, 16px); background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); box-shadow: var(--card-shadow); cursor: default; animation: iv-fade 160ms ease-out; }
+.imk-confirm p { margin: 0 0 14px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.imk-confirm-btns { display: flex; justify-content: flex-end; gap: 6px; }
+.imk-confirm .imk-send { height: 30px; padding: 0 14px; }
+
+/* 手机 / 窄窗:图在上,清单和输入在底部抽屉 */
+.imk-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; max-height: 46%; display: flex; flex-direction: column; padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px)); border-radius: var(--radius-lg, 16px) var(--radius-lg, 16px) 0 0; background: var(--bg-card); box-shadow: var(--card-shadow); cursor: default; }
+:root.dark .imk-sheet { box-shadow: none; }
+.imk-grab { flex: none; width: 36px; height: 4px; margin: 0 auto 6px; border-radius: 2px; background: var(--overlay-strong, var(--border)); }
+.imk-hint-touch { flex: none; padding: 0 4px 4px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); text-align: center; }
+.imk-sheet-list { min-height: 0; flex: 1; overflow-y: auto; }
+.imk-sheet-list .imk-notes-head { padding-top: 0; }
+.imk-dock.is-sheet { position: static; flex: none; height: 46px; margin-top: 8px; background: var(--bg); box-shadow: none; }
+.imk.is-compact .imk-tools { padding: 2px; }
+.imk.is-compact .imk-tool { padding: 0 8px; }
+.imk.is-compact .imk-del { opacity: 1; }
+.imk.is-compact .imk-bar .iv-title b { display: none; }
+
+/* 「全部图片」(ImageGrid.tsx,方案 1C):网格 + 多选 + 底下一条统一发送 */
+.ivg { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; animation: iv-fade 160ms ease-out; }
+.ivg-bar .iv-title { align-items: center; gap: 8px; }
+.ivg-bar .iv-title .iv-btn { margin-left: -10px; }
+.ivg-body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 32px 104px; }
+.ivg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 12px; max-width: 1240px; margin: 0 auto; }
+.ivg-cell { position: relative; aspect-ratio: 1; border-radius: var(--radius-md, 12px); overflow: hidden; background: var(--overlay-light); }
+.ivg-cell img { display: block; width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
+.ivg-cell img:focus-visible { outline: 2px solid var(--signal-line); outline-offset: -2px; }
+.ivg-cell.is-on { box-shadow: inset 0 0 0 3px var(--signal); }
+.ivg-cell.is-on img { transform: scale(.94); border-radius: var(--radius-sm, 8px); transition: transform var(--duration-fast, .15s); }
+.ivg-check { position: absolute; left: 8px; top: 8px; width: 24px; height: 24px; padding: 0; border: 2px solid #fff; border-radius: 50%; display: grid; place-items: center; background: rgb(0 0 0 / .18); color: var(--on-accent, #fff); cursor: pointer; opacity: 0; transition: opacity var(--duration-fast, .15s); }
+.ivg-check[aria-pressed='true'] { border-color: var(--signal); background: var(--signal); }
+:root.dark .ivg-check[aria-pressed='true'] { color: var(--bg); }
+.ivg-cell:hover .ivg-check, .ivg-check:focus-visible, .ivg.has-picked .ivg-check, .ivg-check[aria-pressed='true'] { opacity: 1; }
+.ivg-mark { position: absolute; left: 8px; bottom: 8px; height: 24px; padding: 0 9px; border: 0; border-radius: var(--radius-pill, 999px); display: inline-flex; align-items: center; gap: 4px; background: var(--bg-card); color: var(--text); font-size: var(--ui-font-caption, 11px); box-shadow: var(--btn-shadow); cursor: pointer; opacity: 0; transition: opacity var(--duration-fast, .15s); }
+.ivg-cell:hover .ivg-mark, .ivg-mark:focus-visible, .ivg-mark.has-marks { opacity: 1; }
+.ivg-mark.has-marks { background: var(--signal); color: var(--on-accent, #fff); }
+:root.dark .ivg-mark.has-marks { color: var(--bg); }
+.ivg-check:focus-visible, .ivg-mark:focus-visible { outline: 2px solid var(--signal-line); outline-offset: 1px; }
+.ivg-dock { left: 50%; bottom: 20px; width: min(720px, calc(100% - 32px)); transform: translateX(-50%); }
+.ivg-picked { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; }
+.ivg-hint { bottom: 20px; }
+.ivg-over { bottom: 80px; color: var(--danger, var(--text)); }
+.ivg.is-compact .ivg-body { padding: 4px 4px 96px; }
+.ivg.is-compact .ivg-grid { grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.ivg.is-compact .ivg-cell { border-radius: var(--radius-sm, 8px); }
+.ivg.is-compact .ivg-check, .ivg.is-compact .ivg-mark { opacity: 1; }
+.ivg.is-compact .ivg-dock { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: calc(100% - 16px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .ivg { animation: none; }
+  .ivg-cell.is-on img { transition: none; }
+  .imk-confirm { animation: none; }
+  .imk-send { transition: none; }
+}

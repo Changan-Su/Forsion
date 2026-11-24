@@ -63,18 +63,34 @@ function decodeImage(url: string) {
   return { mime: match[1], b64: match[2] };
 }
 
+/** 客户端「标注修改」发来的标注副本(桌面 imageMarkupModel.ts 的 markup.copyName:「<原图名>-标注」/「<原图名>-marked」,JPEG)
+ *  只给对话模型看改哪里。工具说明叫模型别传它,模型偶尔仍当「位置参考」一起传(live imagemulti ② 12 次里 1 次),
+ *  标记就会被画进结果 —— 同一批里有它的原图时,来源一律换成原图、去重。没有原图(只发了副本)就照模型选的。 */
+const MARKUP_COPY = /^(.+)-(?:标注|marked)\.(?:jpe?g|png|webp)$/i;
+export function dropMarkupCopies(inputs: ReadonlyArray<{ name?: string }>, chosen: number[]): number[] {
+  const stem = (name?: string) => (name || '').replace(/\.[a-z0-9]+$/i, '');
+  const out: number[] = [];
+  for (const index of chosen) {
+    const copy = MARKUP_COPY.exec(inputs[index - 1]?.name || '');
+    const original = copy ? inputs.findIndex((x, j) => j !== index - 1 && !MARKUP_COPY.test(x.name || '') && stem(x.name) === copy[1]) : -1;
+    const use = original >= 0 ? original + 1 : index;
+    if (!out.includes(use)) out.push(use);
+  }
+  return out;
+}
+
 /** inputs = 看得见的图(按 image_indices 选);outputs = 已按名字查到的本会话产出图。带了 outputs 而没给 image_indices 时不默认带上附件。 */
-export function editInputs(inputs: ReadonlyArray<{ url: string }>, indices?: unknown, outputs: ReadonlyArray<{ url: string }> = []) {
+export function editInputs(inputs: ReadonlyArray<{ url: string; name?: string }>, indices?: unknown, outputs: ReadonlyArray<{ url: string }> = []) {
   // 没图时说清楚原因:旧报错「image_indices must refer to attached images」像是索引写错,模型会原样重试(2026-10-19 连试 5 次)。
   if (!inputs.length && !outputs.length) throw new Error(NO_IMAGES);
   const chosen = indices === undefined ? (outputs.length ? [] : inputs.map((_, i) => i + 1)) : indices;
   if (!Array.isArray(chosen) || (!chosen.length && !outputs.length) || chosen.length + outputs.length > 8 || new Set(chosen).size !== chosen.length)
     throw new Error('Use 1–8 source images in total and select distinct image_indices.');
+  for (const index of chosen) {
+    if (!Number.isInteger(index) || index < 1 || index > inputs.length) throw new Error(`image_indices must refer to the ${inputs.length} visible attached image(s), starting at 1.`);
+  }
   return [
-    ...chosen.map(index => {
-      if (!Number.isInteger(index) || index < 1 || index > inputs.length) throw new Error(`image_indices must refer to the ${inputs.length} visible attached image(s), starting at 1.`);
-      return decodeImage(inputs[index - 1].url);
-    }),
+    ...dropMarkupCopies(inputs, chosen as number[]).map(index => decodeImage(inputs[index - 1].url)),
     ...outputs.map(o => decodeImage(o.url)),
   ];
 }
@@ -113,7 +129,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
     capabilities: { sideEffect: 'network', parallel: false, defaultTimeoutMs: 1_000_000 },
     definition: { type: 'function', function: {
       name: 'edit_image',
-      description: 'Edit images with an image model. Use this instead of generate_image when the user wants to modify an existing image or preserve a reference. Sources: (1) the images attached to the latest user message that carries images and that you can currently see (the current message if it has any), selected by image_indices from 1; (2) images generated earlier in this conversation by generate_image or edit_image, selected by file name in previous_outputs. Write a concrete English prompt describing changes and what to preserve. Transparent source margins can guide expansion. For background removal request transparent_background and preserve the subject. This is generative editing: exact pixel preservation, masks and automatic layer decomposition are not supported. Do not invent indices or file names, and do not pass paths, base64 or URLs. If neither source has the image you need, ask the user to attach it. Results are already displayed; do not call display_file again.',
+      description: 'Edit images with an image model. Use this instead of generate_image when the user wants to modify an existing image or preserve a reference. Sources: (1) the images attached to the latest user message that carries images and that you can currently see (the current message if it has any), selected by image_indices from 1; (2) images generated earlier in this conversation by generate_image or edit_image, selected by file name in previous_outputs. Write a concrete English prompt describing changes and what to preserve. Transparent source margins can guide expansion. For background removal request transparent_background and preserve the subject. This is generative editing: exact pixel preservation, masks and automatic layer decomposition are not supported. Annotated copies: when the user attaches a clean image together with a copy of it carrying numbered marks (circles, pins, painted highlights), the marked copy only shows where to change. Pass only the clean original as a source and describe in words, in the prompt, where each marked spot is and what to change there; never pass the marked copy as a source, not even as a location guide with an instruction to ignore its marks: the image model cannot tell a guide from content and draws the marks into the result. Several images to change separately: call edit_image once per image, each call selecting only that image (a different index or file name every time), because multiple sources in one call are combined into a single picture. Do not invent indices or file names, and do not pass paths, base64 or URLs. If neither source has the image you need, ask the user to attach it. Results are already displayed; do not call display_file again.',
       parameters: { type: 'object', properties: {
         prompt: { type: 'string', description: 'Desired edit and details to preserve.' },
         image_indices: { type: 'array', items: { type: 'integer' }, description: '1-based indices into the visible attached images. Defaults to all of them when previous_outputs is omitted or empty, and to none when it lists files. At most 8 source images in total.' },

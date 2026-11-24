@@ -9,10 +9,12 @@
  * 挂在 body 下自己的 React 根里:桌面 / 网页 / 手机三端同一份,不用进 Root / MobileRoot。
  * body 有 CSS zoom(用户界面缩放):量到的屏幕坐标一律除以 currentCSSZoom 再写进样式。
  * 方案页:docs/ToBeImproved/借鉴Claude设计系统方案_2026-10-17/round2.html §4 / §6
+ * 11-23 生图多张与标注改图(2B):对话里能改的图(meta.edit)顶栏多「标注修改」「用这张继续」;标注态见 ImageMarkup.tsx,
+ *   开着时看图器的键盘、点空白关闭、左右切图都让开。1C:顶栏「全部图片」(G)= 这条对话流的图排成网格,多选、逐张标注、一起发(ImageGrid.tsx)。方案页:docs/ToBeImproved/生图多张与标注改图方案_2026-11-23/
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, MoreHorizontal, Plus, Scan, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Copy, CornerDownRight, Download, ExternalLink, LayoutGrid, Minus, MoreHorizontal, PenLine, Plus, Scan, X } from 'lucide-react'
 import { useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 import { registerMessages, translate as tr } from '../i18n'
 import { saveResponseAs } from '../services/nativeDownload'
@@ -23,6 +25,10 @@ import './imageViewer.css'
 import { motion } from '../theme/motionTokens'
 import { reducedMotion } from '@lcl/engine/spring'
 import { horizontalWheelDelta } from '../lib/fileWheel'
+import { ImageMarkup } from './ImageMarkup'
+import { MAX_ATTACHMENTS, attachmentCount, buildAttachments, buildMarkupMessage, originalAttachment, resolveSignal, type Mark } from './imageMarkupModel'
+import { ImageGrid } from './ImageGrid'
+import { readTanguDrafts } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
   'viewer.open': { zh: '查看图片 {name}', en: 'View image {name}' },
@@ -42,9 +48,14 @@ registerMessages({
   'viewer.hintZoomed': { zh: '拖动查看 · 滚轮缩放（以指针为中心） · 双击回到适应窗口', en: 'Drag to pan · scroll to zoom at the pointer · double-click to fit' },
   'viewer.openTab': { zh: '在标签页打开', en: 'Open in a tab' },
   'viewer.openFile': { zh: '打开文件', en: 'Open file' }, // 嵌入图:开着 Agent Desk 时进 Desk,手机 / 关了 Desk 走别处(openFileCitation 自己判)
+  'viewer.markup': { zh: '标注修改', en: 'Mark up' },
+  'viewer.useThis': { zh: '用这张继续', en: 'Continue with this' },
+  'viewer.useThisFailed': { zh: '没能把这张图放进输入框', en: 'Could not add this image to the message box' },
+  'viewer.allOpen': { zh: '全部图片 (G)', en: 'All images (G)' },
 })
 
-export interface ViewMeta { name: string; alt?: { label: string; run: () => void } }
+/** edit:对话里能接着改的图(生图 / 改图的产出、用户发的图)—— 标注修改发回这个会话,用这张继续放进它的输入框 */
+export interface ViewMeta { name: string; alt?: { label: string; run: () => void }; edit?: { sessionId: string } }
 interface Item extends ViewMeta { el: HTMLImageElement; src: string; w: number; h: number }
 interface View { s: number; tx: number; ty: number }
 
@@ -70,21 +81,39 @@ export function viewableProps(meta: ViewMeta) {
   }
 }
 
+/** 把一张图放进某个会话输入框的附件(「用这张继续」:对话里的缩略条和看图器共用)。成功返回 true。 */
+export async function continueWithImage(src: string, name: string, sessionId: string): Promise<boolean> {
+  try {
+    const attach = readTanguDrafts()?.attach
+    if (!attach) throw new Error('no_drafts')
+    attach(sessionId, await originalAttachment(src, name))
+    return true
+  } catch {
+    useApp.getState().toast(tr('viewer.useThisFailed'), true)
+    return false
+  }
+}
+
 let opened = false
-export function openImageViewer(from: HTMLImageElement): void {
+/** markup:打开就进「标注修改」;flyEl:飞入 / 飞回用的元素(对话里主图 + 缩略条时,列表按缩略图收、动画从主图起) */
+export function openImageViewer(from: HTMLImageElement, opts: { markup?: boolean; flyEl?: HTMLImageElement } = {}): void {
   if (opened || !(from.currentSrc || from.src)) return
   const scope = from.closest('.t2-stream-inner') ?? from.parentElement ?? document.body
   const els = [...scope.querySelectorAll<HTMLImageElement>('img[data-viewable]')].filter((el) => el.currentSrc || el.src)
   if (!els.includes(from)) els.unshift(from)
   const items: Item[] = els.map((el) => {
     const meta = metas.get(el)
-    return { el, src: el.currentSrc || el.src, name: meta?.name || el.alt || '', alt: meta?.alt, w: el.naturalWidth, h: el.naturalHeight }
+    const fly = el === from && opts.flyEl?.isConnected ? opts.flyEl : el
+    return { el: fly, src: el.currentSrc || el.src, name: meta?.name || el.alt || '', alt: meta?.alt, edit: meta?.edit, w: el.naturalWidth, h: el.naturalHeight }
   })
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
   opened = true
+  let finished = false
   const done = (last: Item): void => {
+    if (finished) return // 发送成功和关闭动画可能前后脚都走到这里:只卸一次
+    finished = true
     // 推到下一轮再卸:这里常在看图自己的点击 / 动画回调里被调
     window.setTimeout(() => {
       root.unmount()
@@ -94,7 +123,8 @@ export function openImageViewer(from: HTMLImageElement): void {
       if (back.isConnected) back.focus({ preventScroll: true }) // 焦点回到看的最后一张的缩略图
     })
   }
-  root.render(<Viewer items={items} start={items.findIndex((it) => it.el === from)} onDone={done} />)
+  const start = Math.max(0, els.indexOf(from))
+  root.render(<Viewer items={items} start={start} markupAtStart={!!opts.markup && !!items[start]?.edit} onDone={done} />)
 }
 
 const reduced = (): boolean => reducedMotion()
@@ -120,7 +150,7 @@ async function downloadImage(src: string, name: string): Promise<void> {
 
 const CHROME_HIDDEN: NativeChromeClaim = { mode: 'hidden' }
 
-function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone: (last: Item) => void }) {
+function Viewer({ items, start, markupAtStart, onDone }: { items: Item[]; start: number; markupAtStart?: boolean; onDone: (last: Item) => void }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const flyRef = useRef<HTMLDivElement>(null)
@@ -131,7 +161,19 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
   const [drag, setDrag] = useState({ dx: 0, dy: 0 }) // 手机:滑动切换 / 下拉关闭的跟手偏移
   const [menu, setMenu] = useState(false)
   const [closing, setClosing] = useState(false)
+  const [markup, setMarkup] = useState(!!markupAtStart)
+  // 1C「全部图片」:网格开没开、选了哪几张、各自收的标记、整体要求;markIdx = 网格里点「标注」进的那张(收集模式)
+  const [grid, setGrid] = useState(false)
+  const [picked, setPicked] = useState<number[]>([])
+  const [collected, setCollected] = useState<Record<number, Mark[]>>({})
+  const [markIdx, setMarkIdx] = useState<number | null>(null)
+  const [overall, setOverall] = useState('')
+  const [busy, setBusy] = useState(false)
   const item = items[idx]
+  const canEdit = (it: Item): boolean => !!it.edit && !/\.gif$/i.test(it.name) && !it.src.startsWith('data:image/gif')
+  const editable = canEdit(item) && !!dims[idx].w
+  const entriesOf = (sel: number[], marks = collected) => [...sel].sort((a, b) => a - b).map((i) => ({ name: items[i].name, src: items[i].src, marks: marks[i] ?? [] }))
+  const tooMany = (): void => useApp.getState().toast(tr('viewer.tooMany', { max: MAX_ATTACHMENTS }), true)
   // 安卓原生外壳:胶囊顶栏 / Dock 是原生视图,永远压在页面之上 —— 看图开着时收起来(Codex P1)
   useNativeChromeClaim(useNativeChromeInstalled() ? CHROME_HIDDEN : null)
   const compact = box.W > 0 && (box.W < 600 || window.matchMedia?.('(pointer: coarse)').matches)
@@ -256,13 +298,40 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
   // 手机返回:先关「更多」菜单,再关看图
   const closeRef = useRef(close)
   closeRef.current = close
-  useEffect(() => pushMobileBack(() => closeRef.current()), [])
+  // 返回键按层派发:标注层(它把自己的返回挂在 layerBack 上)→ 网格 → 关看图器。
+  // 不让标注层自己 pushMobileBack:从主图直进标注时子组件的 effect 先跑,这里的「关闭」会压到它上面(Codex 评审)
+  const layerBack = useRef<(() => void) | null>(null)
+  const gridRef = useRef(grid)
+  gridRef.current = grid
+  useEffect(() => pushMobileBack(() => {
+    if (layerBack.current) layerBack.current()
+    else if (gridRef.current) setGrid(false)
+    else closeRef.current()
+  }), [])
   useEffect(() => (menu ? pushMobileBack(() => setMenu(false)) : undefined), [menu])
 
   // 键盘(捕获相位:看图开着时 ← → Esc 不漏给底下的聊天)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      if (markup || markIdx !== null) return // 标注态自己管键盘(ImageMarkup 也挂在捕获相位,后挂)
       const mod = e.metaKey || e.ctrlKey
+      if (grid) {
+        // 网格里:Esc 回单张;这一层输入框里打的字原样给它(不当快捷键),回车 = 发送;Tab 只在这一层转;发送途中什么都不动
+        if (e.isComposing || e.keyCode === 229) return
+        if (busy) { e.preventDefault(); e.stopPropagation(); return }
+        const t = e.target as HTMLElement | null
+        const layer = document.querySelector<HTMLElement>('.ivg')
+        const typing = !!t && !!layer?.contains(t) && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (typing) t?.blur(); else setGrid(false) }
+        else if (e.key === 'Tab') {
+          e.preventDefault(); e.stopPropagation()
+          const els = [...(layer?.querySelectorAll<HTMLElement>('button:not(:disabled), input, img[tabindex]') ?? [])]
+          const i = els.indexOf(document.activeElement as HTMLElement)
+          els[e.shiftKey ? (i <= 0 ? els.length - 1 : i - 1) : (i < 0 || i === els.length - 1 ? 0 : i + 1)]?.focus()
+        }
+        else if (typing) { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); void sendAllRef.current() } }
+        return
+      }
       let hit = true
       if (e.key === 'Escape') { if (menu) setMenu(false); else close() }
       else if (e.key === 'ArrowLeft' && !mod) go(-1)
@@ -270,6 +339,7 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
       else if ((e.key === '+' || e.key === '=') && !mod) zoomTo((view ?? fit).s * STEP)
       else if (e.key === '-' && !mod) zoomTo((view ?? fit).s / STEP)
       else if (e.key === '0' && !mod) setView(null)
+      else if (e.key.toLowerCase() === 'g' && !mod && items.length > 1) { setMenu(false); setGrid(true) }
       else if (e.key.toLowerCase() === 'c' && mod && !window.getSelection()?.toString()) void copyImage(item.src)
       else if (e.key === 'Tab') {
         // aria-modal 不会自己圈住焦点:Tab / ⇧Tab 只在看图层的按钮之间转
@@ -283,7 +353,7 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [menu, close, go, zoomTo, view, fit, item.src])
+  }, [menu, close, go, zoomTo, view, fit, item.src, markup, markIdx, grid, items.length, busy])
 
   // 滚轮缩放:要 preventDefault,React 的 onWheel 是被动监听,只能自己挂
   useEffect(() => {
@@ -401,17 +471,75 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
       <span className="iv-sep" />
     </>
   )
+  const sendMarkup = async (marks: Mark[], overall: string): Promise<boolean> => {
+    const sid = item.edit?.sessionId
+    if (!sid) return false
+    try {
+      const atts = await buildAttachments([{ name: item.name, src: item.src, marks }], resolveSignal(rootRef.current ?? document.body))
+      const ok = await useApp.getState().send(buildMarkupMessage([{ name: item.name, marks }], overall), atts, undefined, undefined, undefined, sid)
+      if (ok) onDone(item) // 发出去才关;没发出去 send 自己会提示,标记留着
+      return ok
+    } catch {
+      useApp.getState().toast(tr('markup.sendFailed'), true)
+      return false
+    }
+  }
+  const togglePick = (i: number): void => {
+    if (picked.includes(i)) { setPicked(picked.filter((x) => x !== i)); return }
+    if (attachmentCount(entriesOf([...picked, i])) > MAX_ATTACHMENTS) { tooMany(); return }
+    setPicked([...picked, i])
+  }
+  const collect = (i: number, marks: Mark[]): void => {
+    const next = { ...collected, [i]: marks }
+    setCollected(next)
+    setMarkIdx(null)
+    // 标了就算选上(放不下就只留标记、不选,底下会提示)
+    if (marks.length && !picked.includes(i)) {
+      if (attachmentCount(entriesOf([...picked, i], next)) > MAX_ATTACHMENTS) tooMany()
+      else setPicked([...picked, i])
+    }
+  }
+  const sendAll = async (): Promise<void> => {
+    const entries = entriesOf(picked)
+    const sid = entries.length ? items[Math.min(...picked)].edit?.sessionId : undefined
+    // 每张都得有改法:要么自己有标记,要么写了整体要求(只标了一张、整体留空时,另一张没有任何要求,Codex 评审)
+    if (!sid || busy || attachmentCount(entries) > MAX_ATTACHMENTS || !(overall.trim() || entries.every((e) => e.marks.length))) return
+    setBusy(true)
+    try {
+      const atts = await buildAttachments(entries, resolveSignal(rootRef.current ?? document.body))
+      const ok = await useApp.getState().send(buildMarkupMessage(entries, overall), atts, undefined, undefined, undefined, sid)
+      if (ok) onDone(item)
+    } catch {
+      useApp.getState().toast(tr('markup.sendFailed'), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const sendAllRef = useRef(sendAll)
+  sendAllRef.current = sendAll
+  const useThis = async (): Promise<void> => {
+    if (item.edit && await continueWithImage(item.src, item.name, item.edit.sessionId)) close()
+  }
+  const gridAct = items.length > 1 && items.some(canEdit)
+    ? [{ key: 'grid', icon: <LayoutGrid size={14} />, label: tr('viewer.allOpen'), run: () => { setMenu(false); setGrid(true) } }] : []
+  const editActs = editable ? [
+    { key: 'markup', icon: <PenLine size={14} />, label: tr('viewer.markup'), run: () => { setMenu(false); setMarkup(true) } },
+    { key: 'use', icon: <CornerDownRight size={14} />, label: tr('viewer.useThis'), run: () => void useThis() },
+  ] : []
   const actions = [
     { key: 'copy', icon: <Copy size={14} />, label: tr('viewer.copy'), run: () => void copyImage(item.src) },
     { key: 'dl', icon: <Download size={14} />, label: tr('viewer.download'), run: () => void downloadImage(item.src, item.name) },
     ...(item.alt ? [{ key: 'alt', icon: <ExternalLink size={14} />, label: item.alt.label, run: () => { const run = item.alt!.run; onDone(item); run() } }] : []),
   ]
   return (
-    <div ref={rootRef} className={`iv${closing ? ' is-closing' : ''}${compact ? ' is-compact' : ''}`} role="dialog" aria-modal="true" aria-label={item.name} tabIndex={-1}>
+    <div ref={rootRef} className={`iv${closing ? ' is-closing' : ''}${compact ? ' is-compact' : ''}${markup || markIdx !== null || grid ? ' is-markup' : ''}`} role="dialog" aria-modal="true" aria-label={item.name} tabIndex={-1}>
       <div className="iv-back" style={pullDown ? { opacity: 1 - pullDown } : undefined} />
       <div className="iv-bar" style={pullDown ? { opacity: 1 - pullDown } : undefined}>
         <div className="iv-title"><b title={item.name}>{item.name}</b>{items.length > 1 && <span>{idx + 1} / {items.length}</span>}</div>
         <div className="iv-tools">
+          {!compact && editActs.map((a) => <button key={a.key} type="button" className="iv-act" onClick={a.run}>{a.icon}<span>{a.label}</span></button>)}
+          {!compact && !!editActs.length && <span className="iv-sep" />}
+          {!compact && gridAct.map((a) => <button key={a.key} type="button" className="iv-btn" title={a.label} aria-label={a.label} onClick={a.run}>{a.icon}</button>)}
           {!compact && tools}
           {!compact && actions.map((a) => <button key={a.key} type="button" className="iv-btn" title={a.label} aria-label={a.label} onClick={a.run}>{a.icon}</button>)}
           {compact && (
@@ -419,7 +547,7 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
               <button type="button" className="iv-btn" title={tr('viewer.more')} aria-label={tr('viewer.more')} aria-expanded={menu} onClick={() => setMenu((m) => !m)}><MoreHorizontal size={16} /></button>
               {menu && (
                 <div className="iv-menu" role="menu">
-                  {actions.map((a) => <button key={a.key} type="button" role="menuitem" onClick={() => { setMenu(false); a.run() }}>{a.icon}<span>{a.label}</span></button>)}
+                  {[...editActs, ...gridAct, ...actions].map((a) => <button key={a.key} type="button" role="menuitem" onClick={() => { setMenu(false); a.run() }}>{a.icon}<span>{a.label}</span></button>)}
                 </div>
               )}
             </span>
@@ -444,6 +572,20 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
         {!compact && idx < items.length - 1 && <button type="button" className="iv-arrow is-next" title={tr('viewer.next')} aria-label={tr('viewer.next')} onClick={() => go(1)}><ChevronRight size={18} /></button>}
         {!compact && <div className="iv-hint">{tr(zoomed ? 'viewer.hintZoomed' : 'viewer.hint')}</div>}
       </div>
+      {markup && (
+        <ImageMarkup src={item.src} name={item.name} w={dims[idx].w} h={dims[idx].h} compact={compact} mode="send"
+          onCancel={() => { setMarkup(false); rootRef.current?.focus({ preventScroll: true }) }} onSubmit={sendMarkup} backRef={layerBack} />
+      )}
+      {grid && markIdx === null && (
+        <ImageGrid items={items.map((it) => ({ src: it.src, name: it.name, editable: canEdit(it) }))} current={idx} picked={picked}
+          marksOf={(i) => collected[i]?.length ?? 0} overall={overall} count={attachmentCount(entriesOf(picked))} busy={busy} compact={compact}
+          onOverall={setOverall} onOpen={(i) => { setIdx(i); setView(null); setGrid(false) }} onToggle={togglePick} onMark={setMarkIdx}
+          onSend={() => void sendAll()} onBack={() => setGrid(false)} onClose={close} />
+      )}
+      {markIdx !== null && (
+        <ImageMarkup key={markIdx} src={items[markIdx].src} name={items[markIdx].name} w={dims[markIdx].w} h={dims[markIdx].h} compact={compact} mode="collect"
+          initial={collected[markIdx]} onCancel={() => setMarkIdx(null)} onCollect={(marks) => collect(markIdx, marks)} backRef={layerBack} />
+      )}
     </div>
   )
 }
