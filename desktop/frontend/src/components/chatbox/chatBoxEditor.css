@@ -19,14 +19,14 @@
 .t2c-ed strong { font-weight: 600; }
 .t2c-ed code {
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em;
-  padding: 0.05em 0.3em; border-radius: var(--radius-sm, 4px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  padding: 0.05em 0.3em; border-radius: var(--radius-sm, 8px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
 }
 .t2c-ed a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
 .t2c-ed del { color: var(--text-muted); }
 .t2c-ed ul, .t2c-ed ol { margin: 0; padding-left: 1.4em; }
 .t2c-ed blockquote { margin: 0; padding-left: 0.8em; border-left: 2px solid var(--border, rgba(127, 127, 127, 0.3)); color: var(--text-muted); }
 .t2c-ed pre {
-  margin: 0; padding: 6px 8px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  margin: 0; padding: 6px 8px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light, rgba(127, 127, 127, 0.12));
   font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; white-space: pre-wrap;
 }
 .t2c-ed li[data-item-type="task"] { list-style: none; }

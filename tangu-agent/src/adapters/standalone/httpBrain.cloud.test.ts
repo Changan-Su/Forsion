@@ -56,6 +56,20 @@ describe('brain.cloud.request', () => {
     expect(JSON.stringify([a, b])).not.toContain('tok-')
   })
 
+  it('健康请求只使用 run 开始时的云账号，切换中丢弃旧响应', async () => {
+    const { enterRunContext, bindRunCloudAccount } = await import('../../seams/runContext.js')
+    let token = 'account-A'
+    const cloud = createHttpBrain({ cloudUrl: await start(), token: () => token }).cloud!
+    enterRunContext('local', 'health-run')
+    bindRunCloudAccount(cloud.accountBinding!())
+    const req = {path:'/api/wellness/agent/summary', method:'POST' as const}
+    expect((await cloud.request(req)).status).toBe(200)
+    respond = (_req,res) => { token = 'account-B'; res.end(JSON.stringify({days:[]})) }
+    expect(await cloud.request(req)).toEqual({status:403,error:'account_changed'})
+    expect(await cloud.request(req)).toEqual({status:403,error:'account_changed'})
+    expect(seen).toHaveLength(2)
+  })
+
   it('查询串保留;响应不是 JSON → json 为 null,不抛', async () => {
     const base = await start()
     respond = (_req, res) => { res.writeHead(502, { 'Content-Type': 'text/html' }); res.end('<html>bad gateway</html>') }

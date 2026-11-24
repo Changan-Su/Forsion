@@ -1,0 +1,12 @@
+{
+  "alg": "ed25519",
+  "files": {
+    "icon.svg": "9ef6b7fbc3442994c27d8f831b9999417af0eb4c4d33b29955a3e04092a2db95",
+    "main.js": "67a3f26bd8fa3f13ff3a768fbfe4fbc0f1c97053f4b670fca9effd3e9a090b15",
+    "manifest.json": "ae93774c14757ee7a5678b06a0d14c90dd579a625624963604cff6fdf0e7c100",
+    "spaces/health/space.json": "04850355cc32c3593be443c785c5c0a46b1b5a596796b98bb7bffc4693ceab86",
+    "tangu-plugins/health-reader/index.mjs": "33a1b8e83199de5c671f8a18ca49aa8b9c1e1b9598768c1b0fd94fcf2f31bc98",
+    "tangu-plugins/health-reader/tangu-plugin.json": "c87d3dbf46a91b08415efa37d87a50421350ad56f48e24e945d8a55e682088af"
+  },
+  "sig": "IYE+mgchpCPx8rmr+XZ0PA7wCOeoXUa6X4JTGFe7oSk63XDW3Er7HSW+l/Lfv8HQmpDgC6lTzO9vkPNTNpD7Dg=="
+}

@@ -1,10 +1,20 @@
 /** 任务卡(```forsion-task)的「处理过了没」+ 会话里还在等你选的那几张(对话末尾的卡片堆收它们,方案「待确认卡片」B)。
  *  处理记录落 localStorage:卡片堆按它判断收不收一张卡,不落盘的话重启后 7 天内的旧卡全部回到卡片堆。
- *  键 = 会话(收件箱是信 id)+ 卡内容哈希,不含消息 id 和卡序:消息 id 在乐观气泡 / 落库之间可能换,卡序在重排后会变。 */
+ *  键 = 会话(收件箱是信 id)+ 卡内容哈希,不含消息 id 和卡序:消息 id 在乐观气泡 / 落库之间可能换,卡序在重排后会变。
+ *
+ *  聊天会话的记录同时记在引擎上(GET / POST /agent/sessions/:id/card-marks,11-23):同一台引擎的另一端(手机 / 网页 /
+ *  连过来的电脑)打开同一会话,处理过的卡不再回到「N 件等你」、也不会被再执行一次。localStorage 退成缓存,看的时候取并集:
+ *   - 只加不减:引擎没有的本机记录照旧算数、永不删;读引擎失败 = 不知道(照本机的看,不往回写空表);
+ *   - 引擎读成功后,本机有、引擎没有的这个会话的记录补传上去(老记录 / 写失败的 / 引擎后来才升级的,一条规则全兜住);
+ *   - 发的只是要记的那几条,引擎按键合并,两端同时记不同的卡互不覆盖;
+ *   - 老引擎(没这条路由 / 远端老宿主 403)→ 只用本机记录,几分钟后再试;收件箱的卡(键是信 id)不发,只记本机。 */
 import { useSyncExternalStore } from 'react'
-import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { CardMarkRecord, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { splitSuggestions, type CreationCard, type TaskCard } from './suggest'
 import { humanAcked, humanChanges, type HumanChange } from '../../services/humanCollaboration'
+import { getSessionCardMarks, postSessionCardMarks } from '../../services/backendService'
+import { targetForSession } from '../../services/engine/targets'
+type EngineTarget = ReturnType<typeof targetForSession>
 
 /** 任务卡落点:开个子会话 / 在这里做 / 新会话执行(收件箱,没有当前会话)/ 交给 Muse / 忽略(spawn_task 的 worktree、云端两档刻意不搬)。 */
 export type TaskLanding = 'child' | 'here' | 'new' | 'muse' | 'ignore'
@@ -13,6 +23,9 @@ export const TASK_CARD_TTL_MS = 7 * 24 * 3600_000
 
 const KEY = 'forsion_task_cards_handled'
 type Rec = { l: TaskLanding; t: number; c?: string }
+/** 任务卡 7 天就过期,记录多留一天够了;作品卡过了 7 天在原处照旧能点(不过期),它的记录一直留着(Codex 10-23)。引擎那边同一条。 */
+const MARK_TTL_MS = TASK_CARD_TTL_MS + 24 * 3600_000
+const LANDINGS: ReadonlySet<string> = new Set<TaskLanding>(['child', 'here', 'new', 'muse', 'ignore'])
 
 function hashStr(s: string): string {
   let h = 5381
@@ -28,6 +41,16 @@ export function taskDoneKey(scope: string, c: TaskCard): string {
   return `${scope}:${c.todo ? `todo:${c.todo}` : c.id ? `id:${c.id}` : hashStr(`${c.title}|${c.prompt}`)}`
 }
 
+/** 同一张卡两条记录取哪条(引擎 services/cardMarks.ts 同一条):「忽略」让位给真做了的;其余留先有的(保住先开出的子会话)。 */
+export function pickMark<T extends { l: string }>(have: T | undefined, other: T | undefined): T | undefined {
+  if (!have) return other
+  if (other && have.l === 'ignore' && other.l !== 'ignore') return other
+  return have
+}
+/** 记录还算不算数(creation = 作品卡记录,一直算)。 */
+const markLive = (creation: boolean, v: Rec, now: number): boolean => creation || v.t > now - MARK_TTL_MS
+const validRec = (v: unknown): v is Rec => !!v && typeof v === 'object' && LANDINGS.has((v as Rec).l) && typeof (v as Rec).t === 'number'
+
 let recs: Record<string, Rec> | null = null
 let version = 0
 const listeners = new Set<() => void>()
@@ -35,10 +58,9 @@ function read(): Record<string, Rec> {
   const out: Record<string, Rec> = {}
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}') as Record<string, Rec>
-    // 任务卡 7 天就过期,记录多留一天够了;作品卡过了 7 天在原处照旧能点(不过期),它的记录一直留着(Codex 10-23)
     // ponytail: 作品卡记录不清,一条回答最多一张、量很小;多了再按会话归档清
-    const keep = Date.now() - TASK_CARD_TTL_MS - 24 * 3600_000
-    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && (v.t > keep || k.includes(':creation:'))) out[k] = v
+    const now = Date.now()
+    for (const [k, v] of Object.entries(raw)) if (v && typeof v.t === 'number' && markLive(k.includes(':creation:'), v, now)) out[k] = v
   } catch { /* 私密窗口 / 坏数据:当作没有记录 */ }
   return out
 }
@@ -49,18 +71,181 @@ const bump = (): void => { version++; for (const f of listeners) f() }
 // 别的窗口(Mini / 分离窗口各是一个渲染进程)记了一笔:作废缓存,跟着重渲
 if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY || e.key === null) { recs = null; bump() } })
 export function taskHandled(key: string): { landing: TaskLanding; childId?: string } | undefined {
-  const r = load()[key]
+  // 长开着的窗口里缓存不会自己过期:查的时候再按 TTL 筛一遍(重新写出的同键卡不能被一条过期记录挡住)
+  const local = load()[key]
+  const r = pickMark(local && markLive(key.includes(':creation:'), local, Date.now()) ? local : undefined, engineRecOf(key))
   return r ? { landing: r.l, childId: r.c } : undefined
 }
-export function markTaskHandled(key: string, landing: TaskLanding, childId?: string): void {
+/** 记一张卡处理过了。sessionId = 卡所在的聊天会话(键以「会话 id:」开头):同时记到那台引擎上;收件箱不传,只记本机。 */
+export function markTaskHandled(key: string, landing: TaskLanding, childId?: string, sessionId?: string): void {
+  const rec: Rec = { l: landing, t: Date.now(), ...(childId ? { c: childId } : {}) }
   // 写之前重读一遍再并上:两个窗口各拿着旧快照整份写回,后写的会抹掉先写的那条(Codex 10-23)
-  recs = { ...load(), ...read(), [key]: { l: landing, t: Date.now(), ...(childId ? { c: childId } : {}) } }
+  recs = { ...load(), ...read(), [key]: rec }
   try { localStorage.setItem(KEY, JSON.stringify(recs)) } catch { /* 存不下就只活到应用关闭 */ }
   bump()
+  if (sessionId && key.startsWith(`${sessionId}:`)) pushMark(sessionId, key.slice(sessionId.length + 1), rec)
 }
 /** 处理记录一变就重渲(卡片堆据此把处理过的卡拿走)。 */
 export function useTaskHandledVersion(): number {
   return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f) } }, () => version)
+}
+
+// ── 引擎那份(按会话)──────────────────────────────────────────────────────────────────────────────
+/** ok = 读到过(marks 是引擎说过的并集,只加不减);error = 这次没读到(网络 / 5xx / 形状不对:过一会儿再试);
+ *  absent = 引擎说没这个会话(删了 / 不是这台的)。读失败不清 marks,也不改本机记录。 */
+type EngineEntry = { state: 'loading' | 'ok' | 'error' | 'absent'; at: number; marks: Record<string, Rec>; loading?: Promise<void> }
+const engine = new Map<string, EngineEntry>()
+/** 没这条路由的目标(老引擎 404 / 远端老宿主 403 / 405):几分钟内不再问 —— 引擎会热更新,不能记一辈子。 */
+const unsupported = new Map<string, number>()
+const REFRESH_MS = 30_000
+const RETRY_MS = 30_000
+const ABSENT_MS = 5 * 60_000
+const UNSUPPORTED_MS = 5 * 60_000
+const ENGINE_KEY_MAX = 200
+const POST_BATCH = 200
+/** 最近一次在看的会话(焦点回来时刷新它)+ 见过卡的会话(没卡的会话不去问引擎)。 */
+let activeSid: string | null = null
+const sessionsWithCards = new Set<string>()
+
+/** 引擎缓存里这一条还算数的记录(过期的当没有)。 */
+function liveEngineRec(entry: EngineEntry | undefined, rest: string, now = Date.now()): Rec | undefined {
+  const r = entry?.marks[rest]
+  return r && markLive(rest.startsWith('creation:'), r, now) ? r : undefined
+}
+function engineRecOf(key: string): Rec | undefined {
+  const i = key.indexOf(':')
+  if (i <= 0) return undefined
+  return liveEngineRec(engine.get(key.slice(0, i)), key.slice(i + 1))
+}
+
+/** 引擎回来的表并进缓存(只加不减;坏条目 / 过期的任务卡记录不收,缓存里过期的那条让位)。有变化返回 true。 */
+function absorb(entry: EngineEntry, got: Record<string, CardMarkRecord>): boolean {
+  const now = Date.now()
+  let changed = false
+  for (const [k, v] of Object.entries(got)) {
+    if (!validRec(v) || !markLive(k.startsWith('creation:'), v, now)) continue
+    const have = liveEngineRec(entry, k, now)
+    const next = pickMark(have, v)!
+    if (next !== entry.marks[k]) { entry.marks[k] = next; changed = true }
+  }
+  return changed
+}
+
+type Failure = 'session' | 'unsupported' | 'transient'
+/** 读失败归类。只有认得出的「没这条路由」才算不支持(老引擎 404 无错误码 / 405 / 501 / 远端宿主 403 LOCAL_ONLY、多账号模式 403 无码);
+ *  别的 403(远端拒了这次请求,REMOTE_*)只是这一次不行。 */
+function failureOf(e: unknown): Failure {
+  const x = e as { status?: unknown; code?: unknown } | null
+  const status = typeof x?.status === 'number' ? x.status : 0
+  const code = typeof x?.code === 'string' ? x.code : ''
+  if (status === 404 && code === 'session_not_found') return 'session'
+  if ((status === 404 && !code) || status === 405 || status === 501) return 'unsupported'
+  if (status === 403 && (code === 'LOCAL_ONLY' || !code)) return 'unsupported'
+  return 'transient'
+}
+
+function targetOf(sid: string): EngineTarget | null {
+  try { return targetForSession(sid) } catch { return null }
+}
+
+/** 按需读一次引擎上这个会话的记录(去重、不抛、不同步 bump)。maxAge = 已有结果多旧才重读(缺省:读到过 30s、失败 30s、会话不在 5min)。 */
+function ensureEngine(sid: string, maxAge?: number): Promise<void> | undefined {
+  const now = Date.now()
+  const had = engine.get(sid)
+  if (had?.loading) return had.loading
+  if (had) {
+    const wait = maxAge ?? (had.state === 'ok' ? REFRESH_MS : had.state === 'absent' ? ABSENT_MS : RETRY_MS)
+    if (now - had.at < wait) return undefined
+  }
+  const t = targetOf(sid)
+  if (!t) return undefined
+  const since = unsupported.get(t.key)
+  if (since != null && now - since < UNSUPPORTED_MS) return undefined
+  const entry: EngineEntry = had ?? { state: 'loading', at: now, marks: {} }
+  engine.set(sid, entry)
+  const run = (async () => {
+    let got: Record<string, CardMarkRecord>
+    try {
+      got = await getSessionCardMarks(t, sid)
+      if (!got || typeof got !== 'object' || Array.isArray(got)) throw Object.assign(new Error('bad card-marks response'), { status: 0 })
+    } catch (e) {
+      const f = failureOf(e)
+      if (f === 'unsupported') unsupported.set(t.key, Date.now())
+      entry.state = f === 'session' ? 'absent' : 'error'
+      entry.at = Date.now()
+      entry.loading = undefined
+      return
+    }
+    unsupported.delete(t.key)
+    absorb(entry, got)
+    // 先置 ok、放开读,再补传:此后新记的直接 POST;此前记的在 reconcile 读本机时一并带上。
+    // 补传另走一条(不挂在 loading 上):POST 卡住 / 被拒不能挡住下一次读,也不把这台当成不支持。
+    entry.state = 'ok'; entry.at = Date.now(); entry.loading = undefined
+    bump()
+    void reconcile(sid, t, entry).catch(() => { /* 下次读成功时再补 */ })
+  })()
+  entry.loading = run
+  return run
+}
+
+/** 本机有、引擎没有(或引擎只记了「忽略」而本机是做了的)的这个会话的记录 → 补传。失败就算了,下次读成功再补。 */
+async function reconcile(sid: string, t: EngineTarget, entry: EngineEntry): Promise<void> {
+  const prefix = `${sid}:`
+  const now = Date.now()
+  const local = { ...read(), ...(recs || {}) }
+  const missing = Object.entries(local).filter(([k, v]) => {
+    if (!k.startsWith(prefix) || !markLive(k.includes(':creation:'), v, now)) return false
+    const rest = k.slice(prefix.length)
+    if (!rest || rest.length > ENGINE_KEY_MAX) return false
+    const have = liveEngineRec(entry, rest, now)
+    return pickMark(have, v) !== have
+  }).map(([k, v]) => [k.slice(prefix.length), v] as const)
+  for (let i = 0; i < missing.length; i += POST_BATCH) {
+    const got = await postSessionCardMarks(t, sid, Object.fromEntries(missing.slice(i, i + POST_BATCH)))
+    if (absorb(entry, got)) bump()
+  }
+}
+
+function pushMark(sid: string, rest: string, rec: Rec): void {
+  if (!rest || rest.length > ENGINE_KEY_MAX) return
+  const entry = engine.get(sid)
+  if (entry?.state !== 'ok') { void ensureEngine(sid, 0); return } // 还没读到:读成功后 reconcile 会把它带上
+  const t = targetOf(sid)
+  if (!t) return
+  postSessionCardMarks(t, sid, { [rest]: rec }).then((got) => { if (absorb(entry, got)) bump() }, () => { /* 下次读成功时 reconcile 补 */ })
+}
+
+/** 卡片堆 / 回答下面那行算卡之前调:这个会话有卡就去引擎读一下(异步,读回来 bump 重渲)。 */
+function watchSession(sid: string, hasCards: boolean): void {
+  activeSid = sid
+  if (!hasCards) return
+  sessionsWithCards.add(sid)
+  void ensureEngine(sid)
+}
+/** 画出一张还能点的卡的地方调(超过 7 天的作品卡不进卡片堆,但原处照旧能点):去引擎读一下这个会话。 */
+export function syncCardMarks(sid: string): void {
+  sessionsWithCards.add(sid)
+  void ensureEngine(sid)
+}
+
+/** 点卡执行前跟引擎再对一下(另一端可能刚处理过):最多等 timeoutMs,等不到照旧往下走(引擎慢 / 不在不能卡住按钮)。 */
+export async function refreshCardMarks(sid: string, maxAgeMs = 5_000, timeoutMs = 1_500): Promise<void> {
+  sessionsWithCards.add(sid)
+  const p = ensureEngine(sid, maxAgeMs)
+  if (!p) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([p, new Promise<void>((r) => { timer = setTimeout(r, timeoutMs) })])
+  if (timer) clearTimeout(timer)
+}
+
+// 切回窗口 / 应用回到前台:在看的那个会话重读一次(别的端这期间可能处理了卡)
+if (typeof window !== 'undefined') {
+  const back = (): void => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    if (activeSid && sessionsWithCards.has(activeSid)) void ensureEngine(activeSid, 5_000)
+  }
+  window.addEventListener('focus', back)
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', back)
 }
 
 /** 卡片堆里的一张任务卡。id 带消息 id 和卡序,只在这一屏里用来区分;判断处理过没用 doneKey。 */
@@ -81,6 +266,7 @@ export function pendingTaskCardsOf(list: UiMessage[] | undefined, sessionId: str
   const withdrawn = new Set<string>()
   for (const m of list || []) if (done(m)) for (const c of tasksOf(m)) if (c.withdraw) withdrawn.add(c.withdraw)
   const out: PendingTask[] = []
+  watchSession(sessionId, (list || []).some((m) => done(m) && !(m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) && tasksOf(m).some((c) => !c.withdraw)))
   for (const m of list || []) {
     if (!done(m)) continue
     if (m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) continue
@@ -106,9 +292,10 @@ function creationsOf(m: UiMessage): CreationCard[] {
 /** 会话里还在等你点的作品卡,按出现顺序;过 7 天的不收(原处照旧摆整张)。会话工作目录本来就是造物(卡已完成)由调用方判。 */
 export function pendingCreationCardsOf(list: UiMessage[] | undefined, sessionId: string, now = Date.now()): PendingCreation[] {
   const out: PendingCreation[] = []
+  const live = (m: UiMessage): boolean => m.role === 'assistant' && m.status === 'done' && !(m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS)
+  if ((list || []).some((m) => live(m) && creationsOf(m).length > 0)) watchSession(sessionId, true)
   for (const m of list || []) {
-    if (m.role !== 'assistant' || m.status !== 'done') continue
-    if (m.timestamp && now - m.timestamp > TASK_CARD_TTL_MS) continue
+    if (!live(m)) continue
     creationsOf(m).forEach((card, i) => {
       const doneKey = creationDoneKey(sessionId, card)
       if (!taskHandled(doneKey)) out.push({ kind: 'creation', id: `creation:${m.id}:${i}`, messageId: m.id, card, createdAt: m.timestamp || undefined, doneKey })

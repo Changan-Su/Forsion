@@ -1,4 +1,4 @@
-import { FileText, Database, PenTool, LayoutDashboard, FileImage, FileVideo, Link2, Replace, Search, Hash, Waypoints } from 'lucide-react'
+import { FileText, BookOpen, Database, PenTool, LayoutDashboard, FileImage, FileVideo, Link2, Replace, Search, Hash, Waypoints } from 'lucide-react'
 import { registerView } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { translate } from '../i18n'
@@ -62,7 +62,7 @@ export function registerAmadeusViews(): void {
     // 独立 PDF 视图(多实例,params.pdfPath 认领文件;树上点 .pdf / 笔记里点 [[x.pdf#page=N]] 打开,见 amadeusNav.openPdf;「由谁打开」在 openFile 里判,插件接管了 PDF 就不进这个视图)。
     registerView({
       type: 'amadeus-pdf', kind: 'entity', rightCompanions: FILE_RIGHT, embeddable: true, idParam: 'pdfPath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'],
-      displayName: () => 'PDF', icon: FileText, factory: (props) => <AmadeusPdfView {...props} />,
+      displayName: () => 'PDF', icon: BookOpen, factory: (props) => <AmadeusPdfView {...props} />, // 书本 = 聊天里 PDF 引用、Desk 胶囊同一枚
       dashboard: { sizes: ['lg', 'full', 'workspace'], defaultSize: 'workspace', surface: 'workspace' },
     })
     // 独立图片视图(多实例,params.imagePath 认领文件;树上点 .png/.jpg 等打开,见 amadeusNav.openImage)。

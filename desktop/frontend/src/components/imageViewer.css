@@ -38,13 +38,13 @@
 .iv-arrow.is-prev { left: 20px; }
 .iv-arrow.is-next { right: 20px; }
 :root.dark .iv-arrow { box-shadow: none; }
-.iv-hint { position: absolute; left: 50%; bottom: 12px; z-index: 2; transform: translateX(-50%); padding: 3px 10px; border-radius: 999px; background: var(--bg-card); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; pointer-events: none; }
+.iv-hint { position: absolute; left: 50%; bottom: 12px; z-index: 2; transform: translateX(-50%); padding: 3px 10px; border-radius: var(--radius-pill); background: var(--bg-card); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; pointer-events: none; }
 
 /* 手机 / 窄窗:顶栏只留名字、计数、「更多」和关闭 */
 .iv.is-compact .iv-bar { padding: 0 6px 0 14px; }
 .iv-more { position: relative; }
 .iv-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 3; min-width: 176px; padding: 4px; border-radius: var(--radius-md, 12px); background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none); box-shadow: var(--card-shadow, 0 6px 22px rgb(0 0 0 / .08)); display: flex; flex-direction: column; }
-.iv-menu button { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; border-radius: var(--radius-sm, 6px); background: none; color: var(--text); font-size: var(--ui-font-body, 13px); text-align: left; cursor: pointer; }
+.iv-menu button { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 0; border-radius: var(--radius-sm, 8px); background: none; color: var(--text); font-size: var(--ui-font-body, 13px); text-align: left; cursor: pointer; }
 .iv-menu button:hover { background: var(--overlay-light); }
 
 @media (prefers-reduced-motion: reduce) {

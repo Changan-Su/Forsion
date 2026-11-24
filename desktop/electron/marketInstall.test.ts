@@ -2,12 +2,12 @@
  * Market 安装解压单测:重点是**安全边界**(路径穿越拒绝)+ GitHub source zip 的剥顶层。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, statSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { planZipFiles, planZipEntries, ZipPlanError } from '../shared/marketPackage'
-import { skillVersion, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
+import { HEALTH_STORE_SLUG, installMarketZip, skillVersion, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
   const z = new JSZip()
@@ -395,4 +395,25 @@ describe('skillVersion(SKILL.md frontmatter)', () => {
     expect(skillVersion('---\nname: a\nmetadata:\n  author: x\nother:\n  version: 9.9.9\n---\n')).toBeNull()
     expect(skillVersion('# no frontmatter')).toBeNull()
   })
+})
+
+it('only replaces the Health store installation with a fully verified archive', async () => {
+  const source = join(__dirname, '../../extensions/forsion-health')
+  const signature = JSON.parse(readFileSync(join(source, 'SIGNATURE'), 'utf8'))
+  const archive = new JSZip()
+  for (const name of ['SIGNATURE', ...Object.keys(signature.files)]) archive.file(name, readFileSync(join(source, name)))
+  const root = mkdtempSync(join(tmpdir(), 'health-store-'))
+  const dest = join(root, HEALTH_STORE_SLUG)
+  const install = async () => installMarketZip(await archive.generateAsync({ type: 'nodebuffer' }), dest, ['manifest.json'])
+  try {
+    await install()
+    const original = readFileSync(join(dest, 'main.js'))
+    archive.file('unsigned.js', 'extra')
+    await expect(install()).rejects.toThrow('unsigned')
+    archive.remove('unsigned.js')
+    archive.file('main.js', 'changed')
+    await expect(install()).rejects.toThrow('signature')
+    expect(readFileSync(join(dest, 'main.js'))).toEqual(original)
+    expect(existsSync(join(dest, 'unsigned.js'))).toBe(false)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

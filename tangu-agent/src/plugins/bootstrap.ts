@@ -54,7 +54,7 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
-import { createOfficialCloud, isOfficialEnginePlugin } from './official.js';
+import { createOfficialCloud, inspectOfficialEnginePlugin, officialBundleId } from './official.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
 import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
@@ -243,7 +243,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
-    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
+    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed, officialBundleId(path.basename(path.dirname(path.dirname(d.dir))))) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {
@@ -455,7 +455,10 @@ async function startEntry(e: Entry): Promise<boolean> {
     // import 与 activate 一起限时:吊死的连接 / 顶层 await 不许堵住整条生命周期链(重扫、开关、卸载全排在它后面)
     await withDeadline(e, 'activate', lifecycleTimeouts.activateMs, async () => {
       // 官方判定每次激活现做,且在首次 import 之前(升级 / 重扫换了代码就重新核;核不过照常加载,只是不当官方)。
-      const verified = await isOfficialEnginePlugin(e.d);
+      const admission = await inspectOfficialEnginePlugin(e.d);
+      const verified = !!admission;
+      const health = e.d.bundled && officialBundleId(path.basename(path.dirname(path.dirname(e.d.dir)))) === 'forsion-health';
+      if (health && !admission) throw new Error('Health bundle signature verification failed');
       if (e.plugin) {
         assertNativePluginsAllowed(); // 复用已 import 的模块对象也要过沙箱闸
         official = verified && e.pluginOfficial === true;
@@ -463,7 +466,7 @@ async function startEntry(e: Entry): Promise<boolean> {
         official = verified;
         if (!e.gen && importedUrls.has(e.d.entryUrl)) e.gen = ++genSeq; // 卸载后同路径重装:破入口缓存
         importedUrls.add(e.d.entryUrl);
-        e.plugin = await loadPlugin(e.d, e.gen);
+        e.plugin = await loadPlugin(e.d, e.gen, admission ? admission.entry : undefined);
         e.pluginOfficial = verified;
       }
       inst.plugin = e.plugin;

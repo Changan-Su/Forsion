@@ -267,6 +267,8 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
     const css = [
       '.x { --x-wash: color-mix(in srgb, var(--green) 14%, transparent); }',
       '.x .ok { background: var(--x-wash); color: var(--green); border-radius: var(--radius-md); box-shadow: 0 0 0 1px var(--border); }',
+      // 手册里的例子:和外框成对的内圆角写成 token 加减偏移,不算写死
+      '.x .ok-inner { border-radius: calc(var(--radius-md) - 4px); }',
       '.x .t { font-size: var(--ui-font-title, 16px); line-height: var(--reading-line-height, 1.6); }',
       '.fc-btn { border-radius: 2px; background: black; }',
     ].join('\n');

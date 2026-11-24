@@ -97,7 +97,7 @@
   width: 21px;
   height: 21px;
   border: 1.8px solid currentColor;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   font-size: var(--ui-font-caption, 11px);
   font-weight: 600;
   line-height: 1;
@@ -260,8 +260,8 @@
 .mb-sheet {
   background: var(--bg-card, var(--bg, #fff));
   color: var(--text, #111);
-  border-top-left-radius: 16px;
-  border-top-right-radius: 16px;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
   padding: 6px 10px 10px;
   max-height: 72%;
   overflow-y: auto;
@@ -297,7 +297,7 @@
 /* ── 标签页切换 sheet 的行(骑 .mb-sheet-row 壳) ── */
 .mb-tabrow.on { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }
 .mb-tabrow-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: var(--radius-sm, 6px); opacity: 0.5; }
+.mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: var(--radius-sm, 8px); opacity: 0.5; }
 .mb-tabrow-x:active { opacity: 1; background: var(--bg-active, rgba(0, 0, 0, 0.12)); }
 .mb-tabrow-new { color: var(--accent-ink, var(--accent, #4d8794)); font-weight: 600; }
 
@@ -339,7 +339,7 @@
   margin: 2px;
   padding: 7px 3px 6px;
   border: none;
-  border-radius: var(--radius-md, 11px);
+  border-radius: var(--radius-md, 12px);
   background: transparent;
   color: var(--text-muted, rgba(0, 0, 0, 0.5));
   cursor: pointer;

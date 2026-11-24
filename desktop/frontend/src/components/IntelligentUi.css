@@ -185,7 +185,7 @@
 /* While the answer is arriving: a placeholder for what is still to come, and arriving blocks fade in. */
 .iui-skeleton { display: grid; gap: 10px; margin-top: 26px; }
 .iui-skeleton:first-child { margin-top: 0; }
-.iui-skeleton > i { display: block; height: 12px; border-radius: var(--radius-sm); background: linear-gradient(90deg, var(--overlay-light) 25%, var(--overlay-medium) 37%, var(--overlay-light) 63%) 0 0 / 400% 100%; animation: iui-shimmer 1.6s ease infinite; }
+.iui-skeleton > i { display: block; height: 12px; border-radius: var(--radius-xs); background: linear-gradient(90deg, var(--overlay-light) 25%, var(--overlay-medium) 37%, var(--overlay-light) 63%) 0 0 / 400% 100%; animation: iui-shimmer 1.6s ease infinite; }
 .iui-skeleton > i:nth-child(1) { width: 96px; height: 14px; margin-bottom: 4px; }
 .iui-skeleton > i:nth-child(3) { width: 72%; }
 .intelligent-ui[data-streamed] .iui-block { animation: iui-in var(--view-enter-duration, .22s) ease both; }

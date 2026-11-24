@@ -26,11 +26,12 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, setApprovalTray, setRunApprovalCap, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { PARKED_USER_REJECT_REASON } from '../contracts/toolRejection.js';
 import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { bindRunCloudAccount, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
 import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
@@ -871,6 +872,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     // Agent 的对话:回答记在它名下(finalizeAssistantMessage 读 displayAgentSlug)、记忆作用域按它折叠;普通引擎对话照旧不带身份。
     if (engineAgent) enterRunContext(userId, runId, resolveMemorySlug(engineAgent.def), engineAgent.slug);
     else enterRunContext(userId, runId);
+    bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
@@ -1646,6 +1648,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 多租户接缝:把本 run 的 {userId, runId} 注入异步子树,供 worker 的 brain/state 适配器取 per-dispatch token。
   // microserver/standalone 的 brain/state 不读此上下文,无副作用。
   enterRunContext(userId, runId);
+  bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
@@ -3750,7 +3753,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         let done: ExecutedToolCall;
         if (d.action === 'reject') {
           status = 'rejected';
-          done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || '用户拒绝了该操作。');
+          done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || PARKED_USER_REJECT_REASON);
         } else {
           try {
             done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);

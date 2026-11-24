@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   emoji_manual BOOLEAN NOT NULL DEFAULT FALSE,
   agent_config JSONB,
   todos JSONB,
+  card_marks JSONB,
   project_path TEXT,
   project_name VARCHAR(255),
   projectless BOOLEAN NOT NULL DEFAULT FALSE,

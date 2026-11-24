@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.137.0
+  version: 1.138.0
   author: Forsion
   category: Forsion
 ---
@@ -120,7 +120,10 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
   `.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`)、`.empty-state` / `.empty-title`。私有前缀 `.amx-*`(编辑器、数据库浮层、⌘P)、
   `.fc-*`(内置日历)、`.t2-*` 别借;自己的类名用自己的前缀。
 - **公开 token**:色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`,
-  外加 `--focus-ring`。契约只列名字不列值:值跟着设计语言 / 主题色 / 背景色走。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
+  外加 `--focus-ring`。契约只列名字不列值:值跟着设计语言 / 主题色 / 背景色走。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*`、`--radius-xl` 已弃用。
+- **圆角按尺寸选档**:短边 ≤ 18px 的小件(徽标、计数、kbd、行内代码、色块)`--radius-xs`;按钮、输入、下拉、菜单项、芯片 `--radius-sm`;
+  菜单、浮层、普通卡 `--radius-md`;面板、对话框 `--radius-lg`;胶囊 `--radius-pill`,圆写 `50%`。和外框成对的内圆角写 `calc(var(--radius-md) - 4px)`,
+  不另写数字。`--radius-xl` 换 `--radius-lg`(宿主留着别名,只为老插件不掉角)。
 - **不写兜底**:`var(--radius-md)`,不是 `var(--radius-md, 10px)`。宿主定义着的变量兜底永远不生效,抄来的值迟早和宿主对不上。例外:token
   比你的 `minAppVersion` 新(契约的 `since` 表),兜底留给老宿主;`--reading-*` 两个本来就带兜底。
 - **不写死颜色、阴影、圆角**:浅底用 `color-mix(in srgb, var(--green) 14%, transparent)`,别抄 Tailwind 色板。画面本身要固定的色(视频黑边、

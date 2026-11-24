@@ -7,7 +7,7 @@
   align-items: center;
   gap: 4px;
   background: var(--surface-float, var(--bg-card, var(--bg))); backdrop-filter: var(--surface-blur, none);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   outline: 0.5px solid var(--border);
   outline-offset: -0.5px;
   box-shadow: var(--card-shadow);
@@ -37,7 +37,7 @@
   font-size: var(--ui-font-body, 13px);
   width: 20px;
   height: 20px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   cursor: pointer;
   display: inline-flex;
   align-items: center;

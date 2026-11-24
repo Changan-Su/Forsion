@@ -369,13 +369,14 @@ export function assertNativePluginsAllowed(): void {
  * `gen > 0` 时给入口 URL 带 `?tangu-gen=<n>` 破 ESM 缓存(原地升级用),同包 ESM 文件经 resolve 钩子带上同一代号(见 cannotHotSwap)。
  * 普通停用→启用**不**重 import(ESM 模块永不卸载,每拨一次 import 一份会泄漏),复用同一模块对象再 activate。
  */
-export async function loadPlugin(d: DiscoveredPlugin, gen = 0): Promise<TanguPlugin> {
+export async function loadPlugin(d: DiscoveredPlugin, gen = 0, signedEntry?: Buffer): Promise<TanguPlugin> {
   assertNativePluginsAllowed();
   if (gen > 0) {
     try { genRoots.set(String(gen), realpathSync(d.dir)); } catch { /* 目录没了:下面的 import 自己报错 */ }
     ensureGraphHooks();
   }
-  const mod = await import(gen > 0 ? `${d.entryUrl}?tangu-gen=${gen}` : d.entryUrl);
+  // The signed Health reader ships as a standalone ESM entry. Import the exact verified bytes.
+  const mod = signedEntry ? await import(`data:text/javascript;base64,${signedEntry.toString('base64')}#${gen}`) : await import(gen > 0 ? `${d.entryUrl}?tangu-gen=${gen}` : d.entryUrl);
   const plugin: TanguPlugin = mod.default ?? mod.plugin;
   if (!plugin || typeof plugin.activate !== 'function') {
     throw new Error(`插件 ${d.manifest.id} 入口未 default-export 合法 TanguPlugin`);

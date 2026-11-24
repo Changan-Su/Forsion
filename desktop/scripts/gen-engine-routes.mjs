@@ -153,6 +153,8 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/config': [A, 'read session config'],
   'PATCH /agent/sessions/:id/config': [A, 'session config patch (field subset + approval ceiling enforced engine-side, P0 ④ / C3)'],
   'PUT /agent/sessions/:id/config': [D, 'whole-config replace; remote uses PATCH'],
+  'GET /agent/sessions/:id/card-marks': [A, 'handled-card records of a session (task / creation cards); the phone hides cards already handled elsewhere'],
+  'POST /agent/sessions/:id/card-marks': [A, 'record a task / creation card as handled (per-key add-only merge); same scope as answering the card in the chat'],
   'GET /agent/sessions/:id/usage': [A, 'session usage'],
   'GET /agent/sessions/:id/status': [A, 'live run status (context / tokens / steps)'],
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],

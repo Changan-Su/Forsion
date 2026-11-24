@@ -64,14 +64,14 @@
   font: inherit; font-size: var(--ui-font-meta, 12px);
   padding: 4px 6px;
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--bg);
   color: var(--text);
 }
 .dash-filter-editor select:focus-visible,
 .dash-filter-editor input:focus-visible { outline: var(--focus-ring) solid var(--primary); outline-offset: 1px; }
 .dash-filter-commit {
-  border: none; border-radius: var(--radius-sm, 6px); cursor: pointer;
+  border: none; border-radius: var(--radius-sm, 8px); cursor: pointer;
   padding: 5px 8px; font-size: var(--ui-font-meta, 12px); font-weight: 550;
   background: var(--primary); color: var(--bg);
 }

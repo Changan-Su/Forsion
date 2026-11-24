@@ -8,7 +8,7 @@
  */
 import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
-import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, TodoItem, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
 import { tanguDelegatedAdmin } from '../delegatedRole'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -124,6 +124,20 @@ const sourcesOfResult = (name: string | undefined, res: any): { sources: WebSour
   return sources ? { sources } : undefined
 }
 
+/** todo_write 的参数 → 清单,和引擎 todo.ts 同一套归一(状态不认识当 pending、空内容丢掉、截断),
+ *  这样重开看到的和在线时 todo 事件推的是同一份。参数解析不了 / todos 不是数组 → undefined(当没写过,不当清空)。 */
+export function todosFromArgs(raw: string): TodoItem[] | undefined {
+  try {
+    const list = JSON.parse(raw)?.todos
+    if (!Array.isArray(list)) return undefined
+    const STATUS = ['pending', 'in_progress', 'completed']
+    return list.slice(0, 50).map((t: any) => ({
+      content: String(t?.content ?? '').slice(0, 500),
+      status: (STATUS.includes(t?.status) ? t.status : 'pending') as TodoItem['status'],
+    })).filter((t: TodoItem) => t.content)
+  } catch { return undefined }
+}
+
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
 export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
@@ -196,6 +210,12 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     for (const ev of msg.toolEvents) {
       const sk = sketchFromToolEvent(ev)
       if (sk) { (msg.sketches ||= []).push(sk); continue }
+      // 任务清单同理:todo 事件不落库,整单原样在 todo_write 的参数里 —— 取这条回答里最后一次成功的写入(空清单也算,= 清空)
+      if (ev.name === 'todo_write' && ev.arguments && !ev.isError && ev.result !== undefined) { // 断在半截的占位 result 为空:不算写成
+        const todos = todosFromArgs(ev.arguments)
+        if (todos) msg.todos = todos
+        continue
+      }
       if (ev.name !== 'exit_plan_mode' || !ev.arguments) continue
       try {
         const p = String(JSON.parse(ev.arguments).plan ?? '').trim()
@@ -2004,7 +2024,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : grp ? '' : assistantRef.current
           const prevSeg = list.find((m) => m.id === finalizedId)
           const keep = (m: UiMessage): boolean => !!m.work || (m.approvals || []).some((a) => a.status === 'pending') || (m.inquiries || []).some((q) => q.status === 'pending')
+          // 任务清单挪进新段(不抄):旧段原来各留一份快照,一轮插两次话就多出两行像卡住的「2/4 …」
+          const carryTodos = !!(newId && newId !== finalizedId && prevSeg?.todos?.length)
           const next = list
+            .map((m) => (carryTodos && m.id === finalizedId ? { ...m, todos: undefined } : m))
             .map((m) => (finalizedId && m.id === finalizedId && !m.work ? {
               ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const, ...endThink(m),
               toolEvents: m.toolEvents?.map((tool) => !tool.done && tool.startedAt == null
@@ -2013,12 +2036,15 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             .filter((m) => !(finalizedId && m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length) && !keep(m)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
-          // 任务清单带进新段:最新那份总在当前段上 —— 跑着转圈、停在这段报「已停止」;旧段留它那份快照(已 done,不带状态词)
-          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(prevSeg?.todos?.length ? { todos: prevSeg.todos } : {}) })
+          // 任务清单跟着当前段走:跑着转圈、停在这段报「已停止」;旧段不留快照(上面已拿走)
+          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(carryTodos ? { todos: prevSeg!.todos } : {}) })
           // 回放(重开 / pollSession 接上在跑的 run)时新段已经在历史里了:引擎边跑边落库,那一行带着做到一半的正文 / 占位结果,
           // 接下来回放的 token 会再拼一遍 —— 清成空的在跑气泡,由回放重建。只清从历史来的(不是 streaming):在线时新段 id 不会事先存在,
           // 团队成员那种事先摆好的在跑占位不动
-          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' && m.status !== 'streaming' ? replayRow(m) : m)) : next
+          // 新段已在历史里(重连回放):清单同样挪过去;它自己落库时写过清单(历史重建出来的)就用它自己的
+          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' ? {
+            ...(m.status !== 'streaming' ? replayRow(m) : m), ...(carryTodos && m.todos === undefined ? { todos: prevSeg!.todos } : {}),
+          } : m)) : next
           return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...replayed, ...additions] } }
         })
         if (users.length) set((s) => touchSessionActivity(s, sessionId))

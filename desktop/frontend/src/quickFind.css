@@ -6,7 +6,7 @@
 .amx-qf-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font-size: var(--ui-font-heading, 14px); outline: none; }
 .amx-qf-list { flex: 1; overflow-y: auto; padding: 6px; }
 .amx-qf-sec { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 6px 10px 4px; letter-spacing: 0.04em; }
-.amx-qf-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; background: transparent; color: var(--text); border-radius: var(--radius-sm, 6px); cursor: pointer; text-align: left; }
+.amx-qf-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; background: transparent; color: var(--text); border-radius: var(--radius-sm, 8px); cursor: pointer; text-align: left; }
 .amx-qf-row.sel { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); }
 .amx-qf-icon { flex: none; color: var(--text-muted); display: inline-flex; }
 .amx-qf-emoji { font-size: 15px; line-height: 1; }
@@ -14,7 +14,7 @@
 .amx-qf-sub { flex: 1; min-width: 0; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
 .amx-qf-empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
 .amx-qf-foot { padding: 8px 14px; border-top: 1px solid var(--border); color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
-.amx-qf-foot kbd { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); border-radius: 4px; padding: 1px 5px; font-family: inherit; }
+.amx-qf-foot kbd { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); border-radius: var(--radius-xs); padding: 1px 5px; font-family: inherit; }
 /* 原生外壳(Android):面板开着时胶囊和 Dock 已收起(quickFind.tsx 的 claim),WebView 从状态栏下沿起 —— 贴顶、通栏,
    高度让给结果(键盘弹起后视口只剩一半,12vh 的顶距和 66vh 的限高都按桌面的整屏算的)。 */
 .amx-qf-phone { padding: 8px 10px 10px; }
@@ -55,7 +55,7 @@
 .amx-qf-pv-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
 .amx-qf-pv-empty { align-items: center; justify-content: center; text-align: center; color: var(--text-faint, var(--text-muted)); }
 .amx-qf-pv-user, .amx-qf-pv-reply { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; flex: none; }
-.amx-qf-pv-user { align-self: flex-end; max-width: 85%; padding: 6px 10px; border-radius: var(--radius-md, 10px); background: var(--overlay-light, rgba(127, 127, 127, 0.14)); -webkit-line-clamp: 3; }
+.amx-qf-pv-user { align-self: flex-end; max-width: 85%; padding: 6px 10px; border-radius: var(--radius-md, 12px); background: var(--overlay-light, rgba(127, 127, 127, 0.14)); -webkit-line-clamp: 3; }
 .amx-qf-pv-reply { color: var(--text); }
 .amx-qf-pv-hint { flex: none; color: var(--text-faint, var(--text-muted)); }
 @media (max-width: 759px) {

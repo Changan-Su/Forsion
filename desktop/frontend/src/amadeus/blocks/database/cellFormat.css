@@ -35,7 +35,7 @@
   justify-content: center;
   width: 18px;
   height: 18px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
   color: var(--text-faint, var(--text-muted));
   font-size: var(--ui-font-meta, 12px);

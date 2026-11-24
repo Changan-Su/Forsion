@@ -19,6 +19,6 @@
 .amx-keys-caps { display: inline-flex; flex-shrink: 0; gap: 4px; }
 .amx-keys-caps kbd {
   min-width: 20px; padding: 1px 6px; box-sizing: border-box; text-align: center;
-  border-radius: 5px; background: var(--overlay-light); color: var(--text-muted);
+  border-radius: var(--radius-xs); background: var(--overlay-light); color: var(--text-muted);
   font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); line-height: 18px;
 }

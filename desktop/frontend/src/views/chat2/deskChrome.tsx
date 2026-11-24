@@ -50,8 +50,11 @@ export type DeskPickRow =
 
 /** 名字胶囊上的 ▾:这是**选择菜单**不是操作菜单(DESIGN §3「菜单几何」)—— 224px(--menu-select-width)、
  *  长名省略、分组小标题走 .ctx-head。外壳沿用 .ctx-menu(材质表已登记)。onOpen:打开那一刻(清 ▾ 上的点)。 */
-export function DeskPickButton({ rows, title, className, onOpen, children }: {
-  rows: () => DeskPickRow[]; title: string; className?: string; onOpen?: () => void; children: React.ReactNode
+export function DeskPickButton({ rows, title, className, onOpen, onDragStart, children }: {
+  rows: () => DeskPickRow[]; title: string; className?: string; onOpen?: () => void
+  /** 给了就能拖(名字胶囊拖到标签栏 / 输入框 / 另一格,deskOpen.tsx):点一下照旧是 ▾,按住挪动才算拖(浏览器原生拖拽的门槛)。 */
+  onDragStart?: (e: React.DragEvent<HTMLElement>) => void
+  children: React.ReactNode
 }): React.ReactElement {
   const [menu, setMenu] = useState<{ x: number; y: number; top: number; rows: DeskPickRow[] } | null>(null)
   const btn = useRef<HTMLButtonElement>(null)
@@ -75,6 +78,8 @@ export function DeskPickButton({ rows, title, className, onOpen, children }: {
         title={title}
         aria-haspopup="menu"
         aria-expanded={!!menu}
+        draggable={onDragStart ? true : undefined}
+        onDragStart={onDragStart}
         onClick={(e) => {
           const list = rows()
           if (!list.length) return

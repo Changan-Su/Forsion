@@ -71,7 +71,7 @@
   transform: translate(-50%, -50%);
   padding: 7px 14px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background-color: var(--color-surface-low);
   outline: 1px solid var(--color-surface-lowest);
   box-shadow: var(--card-shadow);

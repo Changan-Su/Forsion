@@ -36,6 +36,7 @@ import { deps } from '../seams/runtime.js';
 import { enterRunContext, setRunCwd } from '../seams/runContext.js';
 import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.js';
 import { computerUseUnavailableText } from '../contracts/agentEngine.js';
+import { BRIDGE_USER_REJECT_REASON } from '../contracts/toolRejection.js';
 import { fitImageForModel } from '../services/imageShrink.js';
 
 /** 取结果的那个工具(只在带 budgetMs 的桥上有)。 */
@@ -269,7 +270,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
           // 交接的桥照 Tangu 循环:只有输入框发的轮才按会话现档读(approvalModeSessionId);插件任务那条路照旧跟会话
           modeSessionId: opts.cards ? ctx.approvalModeSessionId : ctx.sessionId, profile: ctx.profile, agentSlug: opts.agentSlug, projectPath: ctx.projectPath,
         }, life.signal);
-        if (decision.action === 'reject') return finish(decision.rejectReason || 'The user denied this tool call.', true);
+        if (decision.action === 'reject') return finish(decision.rejectReason || BRIDGE_USER_REJECT_REASON, true);
         life.signal.throwIfAborted();
         if (!allowed().has(name)) return finish('Tool is no longer available.', true);
         onPhase('running');
