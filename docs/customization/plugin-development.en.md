@@ -413,6 +413,55 @@ if (res.status === 200) render(res.json())
 
 The web and mobile versions have different CSPs; test there separately.
 
+## Secrets and translation services: `ctx.secrets`, `ctx.registerTranslationEngine` (2026-11-24+)
+
+### Storing API keys: `ctx.secrets`
+
+Desktop only (check `if (ctx.secrets)` first). Values are encrypted with the system keychain and stored on this computer, separately per plugin; they are not synced, not part of plugin data and not in diagnostic snapshots. Uninstalling the plugin without "Keep settings" deletes them.
+
+```js
+await ctx.secrets.set('svc.deepl', JSON.stringify({ key }))
+const saved = JSON.parse(await ctx.secrets.get('svc.deepl') || 'null')
+```
+
+- Methods: `get(key)` (`null` if never set), `set(key, value)`, `delete(key)`, `has(key)`, `keys()`. `has` and `keys` do not decrypt.
+- Keys match `^[a-z0-9][a-z0-9._-]{0,63}$`, values are at most 8192 characters, at most 64 keys per plugin.
+- Failures carry `err.code`: `secrets_bad_key`, `secrets_too_large`, `secrets_too_many`, `secrets_unavailable` (no system encryption on this computer; nothing was stored, never plaintext), `secrets_locked` (stored but cannot be decrypted right now, e.g. a locked keychain; **not** "never set": don't treat it as empty or overwrite it), `secrets_failed`.
+- Never put a saved key back into an input; show "Saved, leave empty to keep it".
+- Plugins share the renderer process with the host: per-plugin separation keeps things tidy, it is not a security boundary.
+
+### Offering a translation service to the whole app: `ctx.registerTranslationEngine`
+
+Same gate as `ctx.tangu.translate`. Once registered, users can pick it in the result card's service menu and in Settings → Models → Default models → Translate; when it is chosen, editor Translate, selection-bar translation and other plugins' `ctx.tangu.translate` calls without a `modelId` all go through it.
+
+```js
+const off = ctx.registerTranslationEngine({
+  id: 'deepl',                       // ^[a-z0-9][a-z0-9-]{0,31}$; registering the same id again replaces it
+  name: 'DeepL',                     // a string or { zh, en }
+  ready: () => hasKey,               // cheap and synchronous; false hides it from the choices
+  translate: async ({ text, to, before, signal }) => callDeepL(text, to, before, signal),
+})
+```
+
+- `to` is an English language name (`'Chinese (Simplified)'`, `'English'`, `'Japanese'`, `'Korean'`, `'French'`, `'German'`, `'Spanish'`, `'Russian'`; more may be added); map it to the vendor's codes yourself.
+- Formulas, code and link targets in `text` have been replaced with markers like `ZXQ1a2b3c4d_0QXZ`; keep them unchanged in the translation. The host restores and checks them; if markers are lost it retries once with the same engine, then fails with `translation_format_lost`.
+- `before` is the passage before the selection, for disambiguation only (e.g. DeepL's `context`); don't translate it into the result.
+- On failure reject with a human-readable message ("DeepL didn't translate: the key was rejected (HTTP 403)"); that is what the user sees on the card, with the code `translation_engine_failed`. If the chosen service's `ready()` is false the call fails with `translation_engine_unavailable`; the host **never switches services silently**, and the card offers "Retry with Forsion models".
+- Disabling or reloading the plugin unregisters it. A choice whose engine is not registered (plugin disabled, web and mobile) counts as no choice and uses Forsion models.
+- The choice is stored on this computer and not synced (the keys stay on this computer too).
+
+### The current choice: `ctx.translation`
+
+- `current()` returns `{ engine: { pluginId, id, name } | null, model: { id?, name } }`; `engine: null` means Forsion models (the Translate slot).
+- `use(id | null)`: switch to one of **your own** engines, or back to Forsion models; other plugins' engines are refused.
+- `subscribe(cb)`: called when the choice or the set of registered engines changes (in any window); returns an unsubscribe function.
+
+### Service menu on the result card: `card.service`
+
+Add `service: true` to `card` in `registerSelectionAction` (only for `output: 'preview'`): the card head's "Machine translation · …" line becomes a small dropdown with the current service, listing every available engine, "Forsion models · <model>" and, when the plugin registered a settings page, "Translation settings…". Picking one changes this computer's choice and reruns immediately. When the action fails the card adds "Retry with Forsion models" (this time only: `ctx.tangu.translate` calls in that run skip the engine) and "Open settings". This only matters when `run` translates through `ctx.tangu.translate`.
+
+Write each vendor adapter from the vendor's official API docs, list the API hosts in the manifest's `network`, and call them with `ctx.net.request`.
+
 ## Internal APIs: `ctx.internals` (2026-11-16+)
 
 When the public APIs are missing something and you don't want to wait for a Forsion release, internal APIs let you read Forsion's own state or take its internal modules directly. **They are not stable**: everything in them follows Forsion's internals and can be renamed, reshaped or removed in any version, without notice and without counting as a breaking change. Desktop only: on web, mobile and older hosts `ctx.internals` is `undefined`, so always check before use.

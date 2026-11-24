@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.138.0
+  version: 1.139.0
   author: Forsion
   category: Forsion
 ---
@@ -50,6 +50,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/vault-files-and-templates.md](references/vault-files-and-templates.md): `ctx.app.createFolder` / `stat` / `renamePath` / `movePath` (who gets asked, rejections); extending the host's templates with `ctx.registerTemplateProcessor` and `ctx.registerNoteBirth`; older-host fallback
 - [references/plugin-sandbox.md](references/plugin-sandbox.md): `plugin_sandbox_inspect` in detail: element states, notifications in the way, commands that wait, the plugin's settings window
 - [references/network.md](references/network.md): `ctx.net` (`PluginNetApi`) and manifest `network`: host-side requests for APIs without CORS headers, rules and error codes
+- [references/translation-and-secrets.md](references/translation-and-secrets.md): `ctx.secrets` (keychain-stored API keys, desktop only), `ctx.registerTranslationEngine` (offer a translation service to the whole app), `ctx.translation` (device choice) and `card.service` (2026-11-24+)
 - [references/internals.md](references/internals.md): `ctx.internals` (2026-11-16+, unstable, desktop only): manifest `internals` (read-only copies, subscribe) / `internals-raw` (real host modules), `internalsVerified`, failure cut-off, store review per version.
 - [references/stage.md](references/stage.md): `ctx.stage` demo stage (2026-11-20+, experimental, desktop only): manifest `stage`, isolated Forsion with fixture vault + named plugins, window size / density / theme / clock, full-resolution capture, window recording with pointer, scripted chat replay (`engine.json`) and personal calendar (`human/CALENDAR.db`), permission prompt, error codes, store review.
 
