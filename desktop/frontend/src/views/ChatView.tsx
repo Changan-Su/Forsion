@@ -267,6 +267,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setModelContextWindow: state.setModelContextWindow,
     setSessionMaxIterations: state.setSessionMaxIterations,
     setSessionPlanMode: state.setSessionPlanMode,
+    setSessionNoChildSessions: state.setSessionNoChildSessions,
     voiceOnByAgent: state.voiceOnByAgent,
     setVoiceMode: state.setVoiceMode,
     setSessionGroup: state.setSessionGroup,
@@ -399,7 +400,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         // settleModes:与建会话同一口径结算 Ultra(草稿换了云端 / 引擎 / 团队,或 Agent 自带非 max 档,药丸就不显示 Ultra)与「团队模式下没有计划模式」
         return settleModes(applyPreset({
           execMode: cloud ? 'sandbox' : 'host',
-          ...stickyDefaults(s.desktopConfig, !cloud, preset),
+          ...stickyDefaults(s.desktopConfig, !cloud, preset, s.newChatCfg.agentSlug || s.defaultAgentSlug),
           ...s.newChatCfg,
           // 排在草稿之后:改审批档会把当时显示的 cwd 抄进草稿,之后换了项目 / 换了库它就是旧的;send() 建会话时同样以落点为准。
           cwd: cloud ? undefined : (s.newChatWs?.path || landingRoot || undefined),
@@ -1149,6 +1150,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           planMode={mvCfg.planMode}
           // 成员会话不给计划模式:团队模式下没有它(成员的配置每次激活按团队重写,这里开了也不作数)。
           onPlanModeChange={teamCfg ? undefined : activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
+          noChildSessions={mvCfg.noChildSessions}
+          // 会话进行中也能改:存进会话配置(引擎起的那几轮 —— 子会话回报叫醒、会话消息、续跑 —— 读的是存值)
+          onNoChildSessionsChange={teamCfg ? undefined : activeId ? (v) => s.setSessionNoChildSessions(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, noChildSessions: v || undefined }))}
           preset={mvCfg.preset}
           onPresetChange={activeId ? undefined : (p) => s.setSessionMode(p)}
           voiceMode={voiceOn}

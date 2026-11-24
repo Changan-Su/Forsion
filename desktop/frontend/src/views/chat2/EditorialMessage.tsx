@@ -111,6 +111,7 @@ import { AUTOMATION_DM_ORIGIN, readAutomationDm } from '../../../../../tangu-age
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
+import { classifyRunErrorText, type RunErrorKind } from '../../../../../tangu-agent/src/contracts/runErrorKind'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, HandoffBlock, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf, handoffIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, BACKGROUND_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseBackgroundUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome, type BackgroundOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -255,37 +256,63 @@ const ERR_RULES: Array<[RegExp, string]> = [
  *  enable =「开关没开,开了就能用积分接着用」;topup =「开着,积分也用完了」 */
 const QUOTA_POINTS_ENABLE_RE = /Turn on "Continue with points"/i
 const QUOTA_POINTS_OUT_RE = /points have run out/i
-export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = ''): string {
+/** 引擎给的类别(或按原文认出的)→ 文案键。只在 ERR_RULES 命中的是「通用」那几条(或没命中)时用:引擎自家的错误码说得更具体。 */
+const GENERIC_ERR_KEYS = new Set(['chat.err.quotaUsed', 'chat.err.network', 'chat.err.dropped', 'chat.err.timeout', 'chat.err.auth', 'chat.err.rate', 'chat.err.server'])
+const CREDITS_RE = /credit|balance|余额|欠费|payment required|(^|\D)402(\D|$)/i
+function kindKey(kind: RunErrorKind, raw: string, hit: string | undefined): string | undefined {
+  switch (kind) {
+    case 'rate_limit': return 'chat.err.rate'
+    case 'quota': return CREDITS_RE.test(raw) ? 'chat.err.credits' : 'chat.err.quotaUsed'
+    case 'auth': return SUB_EXPIRED_RE.test(raw) ? 'chat.err.subExpired' : 'chat.err.auth'
+    case 'network': return hit === 'chat.err.dropped' || hit === 'chat.err.timeout' ? hit : 'chat.err.network'
+    case 'context': return 'chat.err.context'
+    default: return hit
+  }
+}
+
+/**
+ * 失败那一行的说法(插件开发优化方案 11-23「报错先归类再出文案」):text = 人话(中英),raw = 原文,收进「看原文」(不再拼在括号里)。
+ * kind = 引擎在 error 事件上给的类别;没有(旧引擎 / 重载回来的行)按原文认(contracts/runErrorKind.ts,与引擎同一份)。
+ * 引擎自家的错误码(token_quota_exceeded、tierLocked、run_cost_exceeded…)仍按 ERR_RULES 走,它们说得比类别具体。
+ */
+export function describeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = '', kind?: RunErrorKind): { text: string; raw?: string } {
   const engineAgent = agentEngineErrorText(raw, t) // 跑在 DSH 上的 Agent 没跑起来(引擎发的 agent_engine_* 码,带引擎名)
-  if (engineAgent) return `${engineAgent}(${raw})`
-  if (!raw) return t('chat.error')
+  if (engineAgent) return { text: engineAgent, raw }
+  if (!raw) return { text: t('chat.error') }
   raw = stripQuotaAsk(raw)
   if (isEngineModelNoApiKey(raw)) return engineModelNoApiKeyText(raw, t)
-  const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
-  // 这一句自己就说清了,不再把机器码 / JSON 回包挂在括号里(「复制错误」照样拿得到原文)
-  if (hit?.[1] === 'chat.err.tierLocked') return tierLockedText(raw, t, modelName, trialEndedDate)
+  const hit = ERR_RULES.find(([re, key]) => re.test(raw!) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw!)))?.[1]
+  // 这一句自己就说清了,不再把机器码 / JSON 回包挂出来(「复制错误」「看原文」照样拿得到原文)
+  if (hit === 'chat.err.tierLocked') return { text: tierLockedText(raw, t, modelName, trialEndedDate) }
   // Forsion 额度用完:服务端在机器码后面补了一句积分提示(给不认识积分的旧客户端看,见 server quotaExceededMessage),
-  // 只在积分帮得上时才补。这里按它选自己的说法,括号里只留机器码;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
+  // 只在积分帮得上时才补。这里按它选自己的说法;裸码 = 积分帮不上(后台任务、组织账号、已到预支硬顶)
   // 或老服务端,就不提积分(Codex 11-15)
-  if (hit?.[1] === 'chat.err.quota') {
+  if (hit === 'chat.err.quota') {
     const key = QUOTA_POINTS_OUT_RE.test(raw) ? 'chat.err.quotaPointsOut' : QUOTA_POINTS_ENABLE_RE.test(raw) ? 'chat.err.quotaPoints' : 'chat.err.quota'
-    return `${t(key)}(token_quota_exceeded)`
+    return { text: t(key), raw: 'token_quota_exceeded' }
   }
-  if (hit?.[1] === 'chat.err.quotaUsed') {
+  const k = !hit || GENERIC_ERR_KEYS.has(hit) ? kindKey(kind || classifyRunErrorText(raw), raw, hit) : hit
+  if (k === 'chat.err.quotaUsed') {
     const time = quotaResetFromError(raw)
-    return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
+    return { text: t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time }), raw }
   }
-  return hit ? `${t(hit[1])}(${raw})` : raw
+  return k ? { text: t(k), raw } : { text: raw }
+}
+
+/** 一行字的旧口径(人话 + 括号里的原文):给只能放一行字的地方和旧测试。 */
+export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string, modelName = '', trialEndedDate = '', kind?: RunErrorKind): string {
+  const d = describeRunError(raw, t, modelName, trialEndedDate, kind)
+  return d.raw && d.raw !== d.text ? `${d.text}(${d.raw})` : d.text
 }
 
 /** 外部引擎的当前模型要 API key 而没有配(引擎拼的那一句见 tangu-agent/src/contracts/engineModelError.ts;实测来源:
  *  DSH 只用账号登录时,新会话的缺省模型走的是要 key 的那条线,不选模型每一句都失败)。点名当前模型和能换成哪些;
  *  引擎的原话留在括号里。句式拆不开(被截断 / 改写过)就给不点名的说法,整句留在括号里。 */
-function engineModelNoApiKeyText(raw: string, t: (k: string, v?: Record<string, unknown>) => string): string {
+function engineModelNoApiKeyText(raw: string, t: (k: string, v?: Record<string, unknown>) => string): { text: string; raw: string } {
   const info = parseEngineModelNoApiKey(raw)
-  if (!info?.model) return `${t('chat.err.engineModelNoKey')}(${raw})`
+  if (!info?.model) return { text: t('chat.err.engineModelNoKey'), raw }
   const vars = { engine: info.engine, model: info.model, others: info.others.join(t('chat.err.listSep')) }
-  return `${t(info.others.length ? 'chat.err.engineModelNoKeyPick' : 'chat.err.engineModelNoKeyOnly', vars)}(${info.raw})`
+  return { text: t(info.others.length ? 'chat.err.engineModelNoKeyPick' : 'chat.err.engineModelNoKeyOnly', vars), raw: info.raw }
 }
 
 registerMessages({
@@ -526,16 +553,22 @@ function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; se
   // 服务端回包里的结束时刻优先(后台提前结束时,本机记着的到期还在以后);没有再看本机见过的
   const trialEnded = stillLocked ? (trialEndedAtOf(msg.error) ?? recentlyEndedTrial(sessionModel!.id)) : null
   const trialEndedDate = trialEnded != null ? formatDate(trialEnded, { locale }) : ''
+  // 人话一行 + 原文收进「看原文」(11-23):引擎带了类别按类别说,没带按原文认
+  const described = describeRunError(msg.error, t, modelName, trialEndedDate, msg.errorKind)
+  const hasRaw = !!described.raw && described.raw !== described.text
+  const [rawOpen, setRawOpen] = useState(false)
   return (
     <>
       <div className="t2-tool err">
-        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t, modelName, trialEndedDate)}</span>
+        <span className="t2-status-err">✕ {described.text}</span>
+        {hasRaw && <button type="button" className="t2-err-raw-toggle" data-testid="msg-error-raw" aria-expanded={rawOpen} onClick={() => setRawOpen((v) => !v)}>{t(rawOpen ? 'chat.err.rawHide' : 'chat.err.rawShow')}</button>}
         <ReloginChip error={msg.error} modelId={modelId} />
         <QuotaPageChip error={msg.error} msgId={msg.id} />
         <UpgradeChip error={msg.error} msgId={msg.id} />
         <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
         <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
       </div>
+      {hasRaw && rawOpen && <pre className="t2-err-raw" data-testid="msg-error-raw-text">{described.raw}</pre>}
       {(canRetry || (handlers?.onCopy && msg.error)) && (
         <div className="t2-retry-row">
           {canContinue && <button type="button" className="t2-retry-btn lead" data-testid="msg-continue" title={t('chat.continueTip')} onClick={() => handlers!.onContinue!()}><StepForward size={13} />{t('chat.continue')}</button>}
@@ -805,7 +838,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
     // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
-    if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
+    if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} parentId={runSid} /></div>
     // 别的会话发来的消息(<session_message>:子会话发给主会话 / 兄弟之间):同理不是用户说的话
     if (msg.content.startsWith(SESSION_MESSAGE_OPEN)) return <div ref={rootRef}><SessionMessageLine content={msg.content} /></div>
     // 挂起提问的答案回灌(<inquiry_update>,10-23):agent 没停下来等,答案到了这一行标出「它从这里接着用上了」

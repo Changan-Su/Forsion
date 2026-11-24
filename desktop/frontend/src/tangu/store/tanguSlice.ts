@@ -36,6 +36,7 @@ import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
+import { isRunErrorKind } from '../../../../../tangu-agent/src/contracts/runErrorKind'
 import { turnResumeMarker, isContinuationRow, isInterruptReason, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { inflightFromResult, markUnfinishedInflight, type ToolEventWithInflight } from '../inflightTool'
 import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
@@ -308,10 +309,14 @@ export interface LlmRetryState {
   max: number
   waitMs: number
   error?: string
-  phase?: 'retry' | 'wait_network'
+  phase?: 'retry' | 'wait_network' | 'queue'
   overload?: boolean
   /** 开始等网的时刻(wait_network) */
   since?: number
+  /** queue:rate_limit = 同一通道撞了限流、整体暂停;busy = 同一通道同时在飞的请求到了上限(引擎 llm/channelGate.ts) */
+  reason?: 'rate_limit' | 'busy'
+  /** queue:同时在飞的上限 */
+  limit?: number
 }
 
 export interface TeamWorkMember {
@@ -1338,6 +1343,8 @@ export interface TanguState {
   setModelContextWindow(modelId: string, tokens: number | null): Promise<void>
   setSessionMaxIterations(n: number | null, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
+  /** 不开子会话(会话设置,缺省允许):开着时引擎从这个会话的工具表里拿掉 start_session / delegate。 */
+  setSessionNoChildSessions(on: boolean, sessionId?: string | null): void
   /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
   refreshVoiceMode(slug?: string | null): Promise<void>
   setVoiceMode(slug: string, on: boolean): Promise<void>
@@ -2128,6 +2135,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
           status: aborted ? ('stopped' as const) : ('error' as const),
           error: quiet ? interruptedRunError(interrupted) : aborted ? undefined : (pl.error || 'error'),
+          // 引擎给失败归的类(限流 / 额度 / 登录 / 网络 / 上下文 / 其他):按它出文案,原文收进「看原文」。旧引擎不带 → 按原文认
+          ...(!quiet && !aborted && isRunErrorKind(pl.errorKind) ? { errorKind: pl.errorKind } : {}),
           ...(quiet ? { toolEvents: markUnfinishedInflight(m.toolEvents) } : {}),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
@@ -2346,6 +2355,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               [sessionId]: {
                 phase: 'wait_network', attempt: 0, max: 0, waitMs: 0,
                 since: Number(pl.since) || Date.now(), error: pl.error ? String(pl.error) : undefined,
+              },
+            },
+          }))
+        }
+        // 通道闸排队(引擎 llm/channelGate.ts):同一通道撞了限流整体暂停 / 同时在飞的请求到了上限。发出时 llm_call 撤掉。
+        if (pl.phase === 'llm_queue') {
+          set((s) => ({
+            llmRetryBySession: {
+              ...s.llmRetryBySession,
+              [sessionId]: {
+                phase: 'queue', attempt: 0, max: 0, waitMs: Number(pl.waitMs) || 0, since: Date.now(),
+                reason: pl.reason === 'rate_limit' ? 'rate_limit' : 'busy', ...(Number(pl.limit) > 0 ? { limit: Number(pl.limit) } : {}),
               },
             },
           }))
@@ -2883,7 +2904,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // 新会话延续「上次用的」档位(审批 + 思考;模型走 cfg.modelId 的老路)。初始配置随建会话请求**原子**落库
       // (引擎 ≥ 本版 POST 接 agent_config;老引擎忽略该字段 → 回来的 agent_config 为空,再补一次 PUT):
       // 补 PUT 失败会留下没有 preset/execMode 的 chat 会话,重载后被当 work 初始化(creview 09-07 F2)。
-      const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
+      const sticky = stickyDefaults(get().desktopConfig, !!path, preset, get().defaultAgentSlug)
       // 模型当场固化,与 send() 同一条回退链(项目默认 → 记忆 → 目录缺省):不传的话引擎按**启动时**读到的缺省模型落库
       // (profile.defaultModelId 不跟着 config.json 变),之后在会话里换过的模型要到重启才对这里建出来的会话生效。
       // 空白新对话草稿里的 newChatModel 不算 —— 那是给下一条空态消息的,这里也不吃草稿的 Agent / 档位。
@@ -3335,7 +3356,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
-      const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
+      const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset, get().newChatCfg.agentSlug || projectDefaults.config.agentSlug || get().defaultAgentSlug), projectDefaults.config, get().newChatCfg)
       const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
         // 草稿里的额外文件夹(ExtraFolders)只给本机会话:云端 / 无项目 / Chat 会话不带(那里看不到那几枚胶囊,带进去就是没人看见的授权)
@@ -3926,7 +3947,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const nextUltra = level === 'max' ? ultra : false
     // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。chat 槽没有 Ultra。
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
-    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
+    // work 槽再按 Agent 分(11-23):这一轮的 Agent 记一份,全局那份照写(没记过的 Agent 回落它)
+    // 草稿的 Agent 与建会话同序:显式选择 > 项目默认(同步缓存,setNewChatWs 已预取)> 全局默认
+    const draftProject = sid ? null : newChatProjectPath(get(), currentPlatform())
+    const draftProjectAgent = draftProject ? projectDefaultsForNewSession(get().projectSettingsByPath[draftProject], get().teams).config.agentSlug : undefined
+    const agent = preset === 'chat' ? undefined : sid ? (get().configBySession[sid]?.agentSlug || get().defaultAgentSlug) : (get().newChatCfg.agentSlug || draftProjectAgent || get().defaultAgentSlug)
+    const byAgent = agent ? { lastThinkingByAgent: { ...(get().desktopConfig?.lastThinkingByAgent || {}), [agent]: level } } : {}
+    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...byAgent, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
     // 草稿里显式记 false(而不是删键):建会话时 sticky 只补缺席的键,删掉的话上次的 Ultra 会被补回来。
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra } : {}) } })); return }
     // 已有会话:关 = 删键(PATCH 里 undefined 上线为 null)。
@@ -3965,6 +3992,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     get().patchSessionConfig({ planMode: on }, sid)
+  },
+
+  setSessionNoChildSessions: (on, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid) return
+    // 关 = 删键(PATCH 里 undefined 上线为 null):缺省就是允许
+    get().patchSessionConfig({ noChildSessions: on || undefined }, sid)
   },
 
   refreshVoiceMode: async (slug) => {

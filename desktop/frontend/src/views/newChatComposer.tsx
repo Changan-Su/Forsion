@@ -97,10 +97,10 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
   // settleModes:与建会话同一口径结算 Ultra 与「团队模式下没有计划模式」,药丸显示什么首条消息就按什么跑
   const config = useMemo(() => settleModes(withAmadeusWorkspace(applyPreset({
     execMode: cloud ? 'sandbox' : 'host',
-    ...stickyDefaults(s.desktopConfig, !cloud, preset),
+    ...stickyDefaults(s.desktopConfig, !cloud, preset, s.newChatCfg.agentSlug || s.defaultAgentSlug), // 思考档按这次的 Agent 记
     cwd: cloud ? undefined : (targetWorkspace.path || undefined),
     ...s.newChatCfg,
-  }, preset), vaultRoot)), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
+  }, preset), vaultRoot)), [cloud, preset, s.desktopConfig, s.newChatCfg, s.defaultAgentSlug, targetWorkspace.path, vaultRoot])
   const modelId = newChatModelId(s) || ''
   const visibleModels = !s.modelsResp?.models
     ? null
@@ -183,6 +183,8 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         onVerifyCommandChange={(cmd) => s.setNewChatCfg((c) => ({ ...c, verifyCommand: cmd || undefined }))}
         planMode={config.planMode}
         onPlanModeChange={(on) => s.setNewChatCfg((c) => ({ ...c, planMode: on }))}
+        noChildSessions={config.noChildSessions}
+        onNoChildSessionsChange={(on) => s.setNewChatCfg((c) => ({ ...c, noChildSessions: on || undefined }))}
         preset={config.preset}
         onPresetChange={(p) => s.setSessionMode(p)}
         voiceMode={voiceOn}

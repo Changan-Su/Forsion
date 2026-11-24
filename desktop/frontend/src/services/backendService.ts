@@ -315,6 +315,10 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
 export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string; model?: string }) =>
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
+/** 子会话失败后父会话里那一行的「重试」:引擎以主会话的名义给它再发一轮(走 fromParent,做完照常回报)。11-23 起;旧引擎 404。 */
+export const retryChildSession = (t: EngineTarget, parentId: string, childId: string) =>
+  request<{ runId: string; queued: boolean }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children/${encodeURIComponent(childId)}/retry`, { method: 'POST', body: '{}' })
+
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
   listHistory(t, sessionId, limit, before).then((r) => r.messages)
 

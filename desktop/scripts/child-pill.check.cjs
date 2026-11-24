@@ -18,6 +18,7 @@ const Q = '0b6f8c2e-2a20-4c4e-9b11-0000000000b1'
 const QK = '0b6f8c2e-2a20-4c4e-9b11-0000000000d1'
 const LONE = '0b6f8c2e-2a20-4c4e-9b11-0000000000f1'
 const T = Date.now() - 30 * 60_000
+const RATE = 'Rate limit reached for gpt-6.2-sol on tokens per min (TPM): Limit 1000000, Used 955313, Requested 109292. Please try again in 3.877s'
 
 function sessions(dir) {
   const base = { summary: '', archived: false, model_id: 'm1', agent_config: null, project_path: dir, project_name: 'Forsion', projectless: false }
@@ -25,11 +26,11 @@ function sessions(dir) {
   const row = (id, title, mins, extra = {}) => ({ ...base, id, title, created_at: at(mins + 60), updated_at: at(mins), ...extra })
   return [
     row(P, '三家笔记软件的离线同步怎么做', 1),
-    row(K[0], '查 Obsidian Sync 的冲突处理', 2, { parent_session_id: P, busy: true }),
+    row(K[0], '查 Obsidian Sync 的冲突处理', 2, { parent_session_id: P, busy: true, queued: true }),
     row(K[1], '查 Notion 离线模式', 3, { parent_session_id: P, awaiting_user: true }),
     row(K[2], '查 Logseq 的同步', 4, { parent_session_id: P }),
     row(Q, '日历显示优化', 8),
-    row(QK, '日历标签切走再切回来跳到 8 月', 9, { parent_session_id: Q }),
+    row(QK, '日历标签切走再切回来跳到 8 月', 9, { parent_session_id: Q, last_failure: { kind: 'rate_limit', error: RATE } }),
     row(LONE, '桌面端冷启动慢了 0.8 秒', 6, { awaiting_user: true }),
   ]
 }
@@ -56,6 +57,8 @@ const qMsgs = [
     tool_calls: [call('q0', 'start_session', { title: 'q', message: 'brief' })],
     tool_results: [res('q0', 'start_session', `Started child session "q" (id ${QK}). It is working on its own.`)],
     content: '开了一个子会话去查。' },
+  // 11-23:子会话被限流打掉 → 回报行写明原因、带「重试」(引擎 <child> 元素第一行 `Failed (<类别>): <原文>`)
+  { id: 'qupd', role: 'user', timestamp: T + 90_000, content: `<child_sessions_update>\nChild sessions you started have reported back.\n<child id="${QK}" title="日历标签切走再切回来跳到 8 月" status="failed">\nFailed (rate_limit): ${RATE}\n(no reply)\n</child>\nNext: …\n</child_sessions_update>` },
   ...filler('qf', 8),
 ]
 
@@ -209,6 +212,41 @@ async function main() {
     })
     await sleep(700)
     r.check('P5 子会话都做完的会话:滚到底也不露药丸', await pill.count() === 0, String(await pill.count()))
+    // ── F 子会话失败 / 排队(11-23 报错归类):失败那行写原因带「重试」,回报行同样;P 里在跑的那个排队中 ──
+    const fail = await win.evaluate(({ qk }) => {
+      const rowEl = document.querySelector(`#tocmsg-qa1 .t2-child-row[data-child-session="${qk}"]`)
+      const upd = document.querySelector('.t2-child-update-item[data-status="failed"]')
+      return {
+        status: rowEl?.getAttribute('data-status'), text: (rowEl?.textContent || '').replace(/\s+/g, ' ').trim(),
+        retry: !!rowEl?.querySelector('[data-testid="child-retry"]'),
+        upd: (upd?.textContent || '').replace(/\s+/g, ' ').trim(), updRetry: !!upd?.querySelector('[data-testid="child-update-retry"]'),
+      }
+    }, { qk: QK })
+    const wantWhy = process.env.LANG_EN ? 'rate limited' : '被限流'
+    r.check('F1 失败的子会话行:状态「失败」、写原因、带「重试」', fail.status === 'failed' && fail.text.includes(wantWhy) && fail.retry, JSON.stringify(fail))
+    r.check('F2 回报行里失败那条写明原因、带「重试」', fail.upd.includes(wantWhy) && fail.updRetry, fail.upd)
+    // innerText 对屏幕外(content-visibility)的行取不到字,上面用 textContent;截图前把那一行本身滚进视野
+    // 屏幕外的消息是按需渲染的:先把整条消息滚进来,等它画出来,再把那一行滚到中间
+    for (let i = 0; i < 2; i++) { // 两遍:第一遍滚过去时上方的消息才画出来、高度会变
+      await win.evaluate(() => {
+        const block = document.querySelector('#tocmsg-qa1 .t2-childs')
+        let el = block
+        while (el && !(el.scrollHeight > el.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(el).overflowY))) el = el.parentElement
+        if (el && block) el.scrollTop += block.getBoundingClientRect().top - el.getBoundingClientRect().top - 120
+      })
+      await sleep(600)
+    }
+    await win.screenshot({ path: path.join(dir, 'child-failed.png') }) // 整窗:应用有整页缩放,元素截图 / clip 的坐标会偏
+    await win.locator('.t2-child-update-item[data-status="failed"]').first().screenshot({ path: path.join(dir, 'child-update-failed.png') }).catch(() => {})
+    await row(P).click()
+    await win.locator('#tocmsg-a1 .t2-childs').waitFor({ timeout: 15_000 })
+    await win.evaluate(() => document.querySelector('#tocmsg-a1 .t2-childs')?.scrollIntoView({ block: 'center' }))
+    await sleep(500)
+    const q = await win.evaluate(({ k }) => { const el = document.querySelector(`#tocmsg-a1 .t2-child-row[data-child-session="${k}"]`); return { status: el?.getAttribute('data-status'), text: (el?.textContent || '').replace(/\s+/g, ' ').trim() } }, { k: K[0] })
+    r.check('F3 在跑但在通道闸前排队的子会话:写「排队中」', q.status === 'queued' && q.text.includes(process.env.LANG_EN ? 'Queued' : '排队中'), JSON.stringify(q))
+    await win.evaluate(({ k }) => document.querySelector(`#tocmsg-a1 .t2-child-row[data-child-session="${k}"]`)?.scrollIntoView({ block: 'center' }), { k: K[0] })
+    await sleep(500)
+    await win.screenshot({ path: path.join(dir, 'child-queued.png') })
     r.check('P5b 那一排空着时不占位(:empty 收掉)', await win.evaluate(() => [...document.querySelectorAll('.t2-deckpill-row')].every((e) => e.children.length > 0 || getComputedStyle(e).display === 'none')), '')
     console.log(`截图:${dir}`)
   } finally {

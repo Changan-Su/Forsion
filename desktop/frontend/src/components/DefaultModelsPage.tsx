@@ -26,6 +26,8 @@ registerMessages({
   'dm.chat': { zh: '聊天与任务', en: 'Chats and tasks' },
   'dm.chatHint': { zh: '新会话和内置 Agent 默认用它。', en: 'New chats and built-in agents use it by default.' },
   'dm.background': { zh: '后台任务', en: 'Background tasks' },
+  'dm.channelConcurrency': { zh: '同一通道同时请求', en: 'Requests per channel at once' },
+  'dm.channelConcurrencyHint': { zh: '同一个服务商和密钥上，主会话和子会话同时发出的请求最多几路；多出来的排队。撞上限流时整条通道会先暂停再排队', en: 'How many requests the main chat and its child sessions can send at once on the same provider and key. Extra ones wait in line, and a rate limit pauses the whole channel first' },
   'dm.quotaFallback': { zh: '额度用完时', en: 'When quota runs out' },
   'dm.quotaFallbackHint': { zh: '订阅额度或账单配额用完、这一轮还没开始回答时，换成这个模型重发。只换一次，它也用完就停下。', en: 'If a subscription or billing quota runs out before the reply starts, resend the turn with this model. Switches once; stops if this one is out too.' },
   'dm.quotaFallbackNone': { zh: '不换，停下报错', en: 'Don\'t switch, stop' },
@@ -198,6 +200,13 @@ export function DefaultModelsPage(p: {
       })} />}
       {stored && <SettingsRow label={t('dm.quotaAsk')} description={t('dm.quotaAskHint')} control={
         <SettingsSwitch label={t('dm.quotaAsk')} checked={!!stored.quotaFallbackAsk} disabled={!stored.quotaFallbackModelId} onChange={(v) => void save({ quotaFallbackAsk: v })} />} />}
+      {stored && <SettingsRow label={t('dm.channelConcurrency')} description={t('dm.channelConcurrencyHint')} control={
+        <div className="seg seg-sm" role="group" aria-label={t('dm.channelConcurrency')}>
+          {[1, 2, 3, 4, 6].map((n) => {
+            const cur = stored.channelConcurrency || 3
+            return <button key={n} aria-pressed={cur === n} className={cur === n ? 'active' : ''} onClick={() => void save({ channelConcurrency: n })}>{n}</button>
+          })}
+        </div>} />}
     </SettingsPanel>
 
     <SettingsPanel className="model-defaults-panel" icon={<ImageIcon size={14} />} title={t('dm.panel.image')}>
