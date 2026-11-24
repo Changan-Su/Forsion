@@ -200,7 +200,7 @@ export function DefaultModelsPage(p: {
       })} />}
       {stored && <SettingsRow label={t('dm.quotaAsk')} description={t('dm.quotaAskHint')} control={
         <SettingsSwitch label={t('dm.quotaAsk')} checked={!!stored.quotaFallbackAsk} disabled={!stored.quotaFallbackModelId} onChange={(v) => void save({ quotaFallbackAsk: v })} />} />}
-      {stored && <SettingsRow label={t('dm.channelConcurrency')} description={t('dm.channelConcurrencyHint')} control={
+      {stored && <SettingsRow anchor="channel-concurrency" label={t('dm.channelConcurrency')} description={t('dm.channelConcurrencyHint')} control={
         <div className="seg seg-sm" role="group" aria-label={t('dm.channelConcurrency')}>
           {[1, 2, 3, 4, 6].map((n) => {
             const cur = stored.channelConcurrency || 3
