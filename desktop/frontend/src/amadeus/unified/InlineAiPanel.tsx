@@ -276,6 +276,8 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
     const onDown = (e: MouseEvent): void => {
       const at = e.target as Node
       if (panelRef.current?.contains(at) || keepRef.current?.(at)) return
+      // 卡头的服务菜单挂在卡外面(openPluginContextMenu):按在菜单里不算点到卡外,否则 mousedown 先把卡和菜单一起收了、click 落空(Codex 评审 #3)
+      if (at instanceof Element && at.closest('.plugin-menu')) return
       onClose()
     }
     document.addEventListener('mousedown', onDown, true)
@@ -388,7 +390,10 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
                 {service.openSettings && <button type="button" className="btn sm" data-act="service-settings" onClick={() => service.openSettings!()}>{t('inlineai.svc.goSettings')}</button>}
               </>
             ) : (phase === 'done' || phase === 'error') && (
-              <button type="button" className="btn sm" data-act="retry" onClick={() => start(lastInstruction.current)}>{t('inlineai.retry')}</button>
+              <>
+                <button type="button" className="btn sm" data-act="retry" onClick={() => start(lastInstruction.current)}>{t('inlineai.retry')}</button>
+                {phase === 'error' && service?.openSettings && <button type="button" className="btn sm" data-act="service-settings" onClick={() => service.openSettings!()}>{t('inlineai.svc.goSettings')}</button>}
+              </>
             )}
             <button type="button" className="btn sm" data-act="discard" onClick={onClose}>{t(onApply ? 'inlineai.discard' : 'inlineai.close')}</button>
           </div>

@@ -34,8 +34,13 @@ export async function engineTranslate(engine: RegisteredTranslationEngine, req: 
       throw Object.assign(new Error(msg), { code: 'translation_engine_failed', engine: name })
     }
     signal.throwIfAborted()
-    if (typeof out !== 'string' || !out.trim()) throw Object.assign(new Error(translate('translate.engine.empty', { name })), { code: 'translation_engine_failed', engine: name })
+    if (typeof out !== 'string') throw Object.assign(new Error(translate('translate.engine.empty', { name })), { code: 'translation_engine_failed', engine: name })
     const text = content.restore(out)
+    // 空译文:原文里有标记时它就是「标记全丢了」,走格式重试那条路(Codex 评审 #7);没标记才是引擎没回东西
+    if (!out.trim()) {
+      if (text == null) continue
+      throw Object.assign(new Error(translate('translate.engine.empty', { name })), { code: 'translation_engine_failed', engine: name })
+    }
     if (text != null) {
       opts.onDelta?.(text)
       return { text, toolCallText: false, model: { id: `engine:${engine.key}`, name, mt: true, engine: true } }

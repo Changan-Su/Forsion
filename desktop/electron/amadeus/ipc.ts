@@ -1095,8 +1095,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
     // 密钥(ctx.secrets)跟着「设置」走:没勾「保留设置」就删掉;不进回收站(恢复插件后要重新填 —— 密钥不该多躺一处)。
-    if (!opts?.keepSettings) await pluginSecrets().removePlugin(id).catch(() => false)
-    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}) }
+    // 连带卸掉的旧普通副本(superseded)也各有一份;删不掉就回 secretsLeft,渲染层告诉用户(Codex 评审 #5)。
+    let secretsLeft = false
+    if (!opts?.keepSettings) {
+      for (const pid of new Set([id, ...superseded.map((x) => x.id)])) {
+        if (!(await pluginSecrets().removePlugin(pid).catch(() => false))) secretsLeft = true
+      }
+    }
+    return { ...(entry ? { trashId: entry.id } : {}), ...(secretsLeft ? { secretsLeft: true } : {}), dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}) }
   })
 
   // 恢复主进程写的回收站条目(Forsion 插件):文件放回原处,重算扩展名保护;偏好交回渲染层写 localStorage、重载插件。
@@ -1169,7 +1175,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 同 ctx.net:直接挂 ipcMain(与库无关、也不给 Unit 设备页远端),只认我们自己窗口的顶层页面。
   ipcMain.handle(IPC.pluginSecrets, (e, op: unknown, pluginId: unknown, key: unknown, value: unknown) => {
     const wc = e.sender
-    if (!wc || wc.isDestroyed() || wc.getType() === 'webview' || !BrowserWindow.fromWebContents(wc) || (e.senderFrame && e.senderFrame !== wc.mainFrame)) {
+    // 比 ctx.net 严:发送帧已经没了(senderFrame 为 null,排队中的调用在导航后才到)也拒,不放行没核过的写(Codex 评审 #2)。
+    // 顶层页面能是什么由 hardenNav 管(SPA 不整页导航到别的源)。
+    if (!wc || wc.isDestroyed() || wc.getType() === 'webview' || !BrowserWindow.fromWebContents(wc) || !e.senderFrame || e.senderFrame !== wc.mainFrame) {
       return { ok: false, code: 'secrets_failed', message: 'untrusted sender' }
     }
     const s = pluginSecrets()

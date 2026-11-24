@@ -417,7 +417,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
         ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
       })
       } finally { unbindSelectionRun(signal) }
-      if (card.auto && text && !signal.aborted) {
+      // 「用 Forsion 模型重试」那一次的结果不进缓存:键是本机选的服务,拿它顶下一次会绕过那个服务(Codex 评审 #4)
+      if (card.auto && text && !signal.aborted && !runOpts?.noEngine) {
         cache.delete(ck)
         cache.set(ck, { text, ...(ran.model ? { model: ran.model } : {}) })
         if (cache.size > AUTO_CACHE_MAX) cache.delete(cache.keys().next().value!)

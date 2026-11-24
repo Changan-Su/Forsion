@@ -2058,7 +2058,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     })() : undefined
     // 翻译引擎与本机翻译选择(2026-11-24+,translationEngines.ts):和 ctx.tangu.translate 同一道门。停用 / 重载 → 撤销登记、退订。
     const translationHost = !!readTangu()?.complete
-    const ownEngines = new Set<string>()
+    // id → 这次登记的令牌:同 id 重登记后,旧的撤销函数不许把新登记的归属也抹掉(Codex 评审 #6)
+    const ownEngines = new Map<string, object>()
     const translationApi: PluginTranslationApi | undefined = translationHost ? {
       current: async () => {
         const key = chosenEngineKey()
@@ -2084,7 +2085,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return () => {}
       }
       const id = def.id
-      ownEngines.add(id)
+      const token = {}
+      ownEngines.set(id, token)
       const off = hostRegisterEngine(pluginId, {
         id, name: def.name,
         ready: def.ready ? () => !!ctxAlive() && def.ready!() !== false : () => !!ctxAlive(),
@@ -2093,7 +2095,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           return Promise.resolve(def.translate({ text: req.text, to: req.to, ...(req.before ? { before: req.before } : {}), signal: req.signal }))
         },
       })
-      const release = scope.own('subscription', () => { ownEngines.delete(id); off() }, 'translationEngine')
+      const release = scope.own('subscription', () => { if (ownEngines.get(id) === token) ownEngines.delete(id); off() }, 'translationEngine')
       return release
     } : undefined
     const ctx: PluginContext = {

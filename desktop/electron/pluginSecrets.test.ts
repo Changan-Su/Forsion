@@ -59,7 +59,8 @@ describe('pluginSecrets', () => {
   })
 
   it('an unreadable file refuses reads and writes instead of overwriting', async () => {
-    for (const e of [env({ initial: '{not json' }), env({ initial: '{"v":2,"plugins":{}}' }), env({ readThrows: true })]) {
+    for (const e of [env({ initial: '{not json' }), env({ initial: '{"v":2,"plugins":{}}' }), env({ readThrows: true }),
+      env({ initial: '{"v":1,"plugins":{"translation":{"k":null}}}' }), env({ initial: '{"v":1,"plugins":{"translation":[]}}' }), env({ initial: '{"v":1,"plugins":{"x":{"k":{"data":7}}}}' })]) {
       expect(await e.s.get('translation', 'k')).toMatchObject({ ok: false, code: 'secrets_failed' })
       expect(await e.s.set('translation', 'k', 'v')).toMatchObject({ ok: false, code: 'secrets_failed' })
       expect(await e.s.delete('translation', 'k')).toMatchObject({ ok: false, code: 'secrets_failed' })

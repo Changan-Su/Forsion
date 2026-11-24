@@ -49,6 +49,8 @@ export interface PluginSecrets {
 
 const fail = (code: PluginSecretsErrorCode, message: string = code): { ok: false; code: PluginSecretsErrorCode; message: string } => ({ ok: false, code, message })
 
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
 export function createPluginSecrets(d: PluginSecretsDeps): PluginSecrets {
   const now = d.now ?? Date.now
   // 串行:读到一半的写不许被看见,两次写不互相覆盖。
@@ -66,7 +68,12 @@ export function createPluginSecrets(d: PluginSecretsDeps): PluginSecrets {
     if (raw == null) return {}
     try {
       const j = JSON.parse(raw) as { v?: unknown; plugins?: unknown }
-      if (!j || typeof j !== 'object' || j.v !== 1 || !j.plugins || typeof j.plugins !== 'object') return null
+      if (!j || typeof j !== 'object' || j.v !== 1 || !isObj(j.plugins)) return null
+      // 逐条核形状:任何一条认不出就当整份不知道(读写都拒),不把它当「没存过」再写回覆盖(Codex 评审 #1)。
+      for (const entries of Object.values(j.plugins)) {
+        if (!isObj(entries)) return null
+        for (const e of Object.values(entries)) if (!isObj(e) || typeof e.data !== 'string') return null
+      }
       return j.plugins as Store
     } catch { return null }
   }

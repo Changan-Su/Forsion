@@ -43,7 +43,7 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
   const withOld = !!p.supersedes && !opts.keepOld
   const prefs = opts.keepSettings ? {} : { ...pluginPrefs(p.id), ...(withOld && p.supersedes ? pluginPrefs(p.supersedes.id) : {}) }
   const vaultFolder = opts.moveVault ? pluginVaultFolder(p.id, p.name) : null
-  let r: { trashId?: string; dirName?: string } | void
+  let r: { trashId?: string; dirName?: string; secretsLeft?: boolean } | void
   try {
     r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}), ...(withOld ? { withSuperseded: true } : {}) })
   } catch (e: any) {
@@ -55,6 +55,7 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
     return false
   }
   reportUninstall(tele, opts.reason)
+  if (r?.secretsLeft) panelToast(translate('settings.amadeusPlugins.secretsLeft', { name }), true)
   if (!opts.keepSettings && pluginDataSyncOn(p)) void dropPluginCloudData(p.id) // 先于 dropPluginPrefs
   dropPluginPrefs(prefs)
   if (r?.dirName) void window.tangu?.marketForget?.('amadeus-plugin', r.dirName).catch(() => {}) // 商店装的:撤掉安装记录
@@ -95,7 +96,7 @@ export async function cleanupSupersededCopy(store: AmadeusPlugin, name: string, 
   const keepSettings = opts.keepSettings || !hasTrash
   const prefs = keepSettings ? {} : pluginPrefs(old.id)
   const vaultFolder = hasTrash && opts.moveVault ? supersededVaultFolder(store) : null
-  let r: { trashId?: string } | void
+  let r: { trashId?: string; secretsLeft?: boolean } | void
   try {
     r = await amadeus.uninstallPlugin?.(old.id, { keepSettings, dir: old.dir, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}) })
   } catch (e: any) {
@@ -104,6 +105,7 @@ export async function cleanupSupersededCopy(store: AmadeusPlugin, name: string, 
     return false
   }
   dropPluginPrefs(prefs)
+  if (r?.secretsLeft) panelToast(translate('settings.amadeusPlugins.secretsLeft', { name }), true)
   await reloadPluginsAndAnnounce() // 只刷元数据(supersedes 没了):商店那份照跑,不拆不装
   const label = { name, version: old.version }
   if (hasTrash) notifyUninstalled(translate('settings.amadeusPlugins.superseded.done', label), name, r?.trashId ? { id: r.trashId, kind: 'plugin', restorer: 'desktop' } : null)

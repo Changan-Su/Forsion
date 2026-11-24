@@ -77,6 +77,13 @@ describe('engineTranslate', () => {
     expect(calls).toHaveLength(2)
   })
 
+  it('an empty answer for text with formulas takes the format-retry path', async () => {
+    const { calls } = reg(() => '')
+    await expect(engineTranslate(listTranslationEngines()[0], { action: 'translate', selection: 'a $b$ c', language: 'English' }, {}))
+      .rejects.toMatchObject({ code: 'translation_format_lost' })
+    expect(calls).toHaveLength(2)
+  })
+
   it('passes the engine message through with a code', async () => {
     reg(() => { throw new Error('DeepL 没有翻：密钥无效（HTTP 403）') })
     await expect(engineTranslate(listTranslationEngines()[0], { action: 'translate', selection: 'hello', language: 'English' }, {}))

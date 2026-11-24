@@ -95,6 +95,15 @@ describe('translation engines', () => {
     expect(engines.listTranslationEngines()).toHaveLength(0)
   })
 
+  it('disposing a replaced registration keeps the live one selectable', async () => {
+    const ctx = await load()
+    const first = ctx.registerTranslationEngine!({ id: 'deepl', name: 'DeepL', translate: async () => 'a' })
+    ctx.registerTranslationEngine!({ id: 'deepl', name: 'DeepL', translate: async () => 'b' })
+    first()
+    expect(engines.listTranslationEngines()).toHaveLength(1)
+    await expect(ctx.translation!.use('deepl')).resolves.toBeUndefined()
+  })
+
   it('rejects malformed definitions without registering', async () => {
     const ctx = await load()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

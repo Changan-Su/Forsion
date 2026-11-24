@@ -1029,7 +1029,7 @@ export interface AmadeusApi {
    *  withSuperseded:目标是商店安装时,被它取代的旧普通目录(主进程自己判定,渲染层不递目录名)一起进同一条回收站条目,
    *  否则卸掉商店版后旧副本立刻重新运行。旧副本的设置跟着 keepSettings 走。
    *  dir:同一个 id 有多份目录时指名卸哪一份(清理旧副本按界面显示的那份);生效 id 对不上就是没找到。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[] } | void>
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[]; secretsLeft?: boolean } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

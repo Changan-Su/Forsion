@@ -95,7 +95,7 @@ export function OriginTag({ origin, mt }: { origin: ModelOrigin | null; mt?: boo
 /** 候选项喂给 ModelSelect 要长成 ModelInfo;朗读 / 通话 / 翻译 / 本地识别这些候选没有 ModelInfo,就地补一个。 */
 const asInfo = (c: CatalogItem): ModelInfo => c.model || { id: c.id, name: c.name, provider: c.provider, source: c.source }
 
-type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; fim: string; asrBackend: 'local' | 'cloud'; asrModelId: string }
+type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; fim: string; asrBackend: 'local' | 'cloud'; asrModelId: string; engine?: string | null }
 
 export function DefaultModelsPage(p: {
   models: ModelsResponse | null
@@ -151,15 +151,18 @@ export function DefaultModelsPage(p: {
     chat: p.chatModelId, image: p.imageModelId,
     background: stored?.backgroundModelId || '', vision: stored?.visionModelId || '', translate: stored?.translateModelId || '', fim: stored?.fimModelId || '',
     asrBackend: stored?.asrBackend === 'local' ? 'local' : 'cloud', asrModelId: stored?.asrModelId || '',
+    engine: chosenEngineKey(),
   }
   const asrValue = snap.asrBackend === 'local' && localReady ? LOCAL_ASR : snap.asrModelId
-  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, snap.fim, asrValue] : [])].filter(Boolean).length
+  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, snap.fim, asrValue] : [])].filter(Boolean).length + (snap.engine ? 1 : 0)
   const restore = (s: Snapshot) => {
     p.onChat(s.chat); p.onImage(s.image)
+    // 本机选的翻译服务也算一项自选:「全部恢复默认」把它清掉,撤销时放回(Codex 评审 #9)
+    try { if ((s.engine ?? null) !== chosenEngineKey()) setChosenEngine(s.engine ?? null) } catch { /* 写不进 localStorage:选择没变 */ }
     if (stored) void save({ backgroundModelId: s.background, visionModelId: s.vision, translateModelId: s.translate, fimModelId: s.fim, asrBackend: s.asrBackend, asrModelId: s.asrModelId })
   }
   const resetAll = () => {
-    restore({ chat: '', image: '', background: '', vision: '', translate: '', fim: '', asrBackend: 'cloud', asrModelId: '' })
+    restore({ chat: '', image: '', background: '', vision: '', translate: '', fim: '', asrBackend: 'cloud', asrModelId: '', engine: null })
     setUndo({ snap, count: custom })
     if (undoTimer.current) clearTimeout(undoTimer.current)
     undoTimer.current = setTimeout(() => setUndo(null), 8000)
