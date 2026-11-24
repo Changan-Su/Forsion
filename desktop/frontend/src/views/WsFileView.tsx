@@ -2,7 +2,7 @@
  *  params: {path,name}(本机,随布局持久化,重启恢复)或 {tkey,name}(瞬态:云沙箱/对话内联)。
  *  渲染复用 WorkspaceFilePreview 的导出渲染器;markdown(本机)默认 Amadeus Milkdown 编辑、
  *  debounce 原子写回 + mtime 冲突保护;不支持的类型询问是否用系统默认应用打开。 */
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Download, FileWarning, RefreshCw, WrapText, Code2, Eye, Columns2, AlignJustify,
@@ -129,11 +129,17 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
   const saveRef = useRef(save)
   saveRef.current = save
 
+  const viewRef = useRef(view)
+  viewRef.current = view
+  const [, showLatest] = useReducer((n: number) => n + 1, 0)
   const onChange = (md: string): void => {
     bodyRef.current = md
     dirtyRef.current = true
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => { void saveRef.current() }, 800)
+    // Edit → source unmounts the editor, which hands over its last keystrokes only after the source pane rendered
+    // bodyRef: render once more so the pane shows them.
+    if (viewRef.current === 'source') showLatest()
   }
   // 卸载(关 tab/重挂)冲刷:CAS 保存;冲突或失败 → 另存旁路文件 + toast(组件已卸载,横幅没了,但绝不静默丢)。
   useEffect(() => () => {
