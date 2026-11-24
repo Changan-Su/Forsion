@@ -13,7 +13,7 @@ vi.mock('../services/backendService', async (original) => ({
 import { useApp } from './appStore'
 import { abortAllTanguRuns } from '../tangu/store/tanguSlice'
 import { deskItemFor } from './deskPlan'
-import { HUMAN_DESK_PAUSE_MS, deskSideOf, humanWatching } from './humanDeskPlan'
+import { HUMAN_DESK_PAUSE_MS, HUMAN_DESK_PERSIST_KEY, deskSideOf, humanWatching } from './humanDeskPlan'
 import '../tangu/store/standalone'
 
 const SID = 'hd-session'
@@ -183,6 +183,31 @@ describe('Human Desk × 真 store', () => {
     expect(human().out).toBeUndefined()
     expect(human().tabHere).toBeUndefined()
     expect(side()).toBe('human')
+  })
+
+  it('在主区时展开 Human Desk 只是占位:不算回来看,那个标签看不见满时长照样暂停(Codex 评审)', async () => {
+    useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
+    useApp.getState().humanDeskAct(SID, { type: 'takeOut' })
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: false })
+    useApp.getState().setDeskSide(SID, 'human') // 切「你」:展开的是占位
+    expect(side()).toBe('human')
+    await vi.advanceTimersByTimeAsync(HUMAN_DESK_PAUSE_MS + 10)
+    expect(human().paused).toBe(true)
+    expect(human().out).toBe(true)
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: true })
+    expect(humanWatching(human())).toBe(true)
+  })
+
+  it('拿到主区落盘:写进 localStorage 的那份带着 out(重启 / 另一扇窗才跟得上)', () => {
+    const mem = new Map<string, string>() // 单测跑在 node 环境,没有 localStorage:换一份内存的
+    vi.stubGlobal('localStorage', { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v) }, removeItem: (k: string) => { mem.delete(k) } })
+    try {
+      useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
+      useApp.getState().humanDeskAct(SID, { type: 'takeOut' })
+      const raw = mem.get(HUMAN_DESK_PERSIST_KEY)
+      expect(raw).toBeTruthy()
+      expect(JSON.parse(raw!)[SID]?.out).toBe(true)
+    } finally { vi.unstubAllGlobals() }
   })
 
   it('Human Desk 的状态不进 deskBySession', () => {

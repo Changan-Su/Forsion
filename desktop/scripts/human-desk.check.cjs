@@ -20,7 +20,8 @@
  *   n  名字胶囊拖到标签栏 = 拿走;标签看不见满时长 → 暂停;卡上「转到标签页」回去 → 接着看
  *   o  主区标签右键第一项「放到 Human Desk」:放回来、标签关掉;对话标签没有这一项
  *   p  把标签拖到 Human Desk 卡 / 展开的那块上:拆分提示让位(对照:拖到正文照常有)、现成淡染;换上它、旧的进最近、标签关掉;Agent Desk 不接
- *   r  向右拆分(对话窄过 760、摘要栏藏起):卡挪到主区对话顶上;标签右键放回
+ *   r  向右拆分(对话窄过 760、摘要栏藏起):卡挪到主区对话顶上;把标签拖回这张卡 = 放回来
+ *   w  拿到主区落盘:重载后照旧「在主区」;把那个标签移到新窗口不算关
  *   q  Amadeus(对话在右栏、这扇窗里没有它的 Desk):标签右键 = 就地认领(标签留着、卡在右栏对话顶上);切 Space 不算关;关掉标签 = 拿掉
  *   m / o / p 各带一个「数据不丢」探针:打完字紧接着拿走 / 放回 / 换掉,读盘
  *   tabshots 亮 / 暗:在主区的卡、占位、标签右键、标签拖上来、窄对话顶上的卡、Amadeus 右栏的卡
@@ -803,12 +804,32 @@ async function main() {
       check('r 摘要栏藏起时卡挪到对话顶上:「你 定价调研.md · 在主区」,名字看得见', !!s1.hside && /定价调研/.test(s1.hside.text) && /在主区/.test(s1.hside.text) && s1.hside.titleW > 24, s1.hside)
       check('r 引用照旧挂着', s1.live.length === 1, s1.live)
       await shot('r-narrow-side')
-      await tabMenu('定价调研')
-      out.notes.rActs = await tabMenuActs()
-      await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1500)
-      await shot('r-after-put')
+      // 把那个标签拖回对话顶上这张卡 = 放回来(同摘要栏那张卡)
+      const over = await dragStart({ tab: '定价调研' }, '.human-desk-side')
+      check('r 标签拖到对话顶上那张卡:卡染色、拆分提示让位', over.tint && !over.zone && !over.line, over)
+      await dragEnd(true); await sleep(1500)
       const s2 = await st()
-      check('r 标签右键放回:标签关掉、对话顶上那张卡没了、右边展开', (await fileTabs('定价调研')) === 0 && !s2.hside && s2.side === 'human', { side: s2.side, hside: s2.hside, tabs: await groups() })
+      check('r 松手 = 放回来:标签关掉、对话顶上那张卡没了、右边展开', (await fileTabs('定价调研')) === 0 && !s2.hside && s2.side === 'human', { side: s2.side, hside: s2.hside, tabs: await groups() })
+    })
+
+    // ══ w:拿到主区落了盘(重载后卡照旧「在主区」、标签还原);把那个标签移到新窗口不算关(不拿掉) ══
+    await step('w', async () => {
+      await ensureOn(F.N); await humanMore('向下拆分'); await sleep(1500)
+      check('w 前置:在主区', (await st()).hcard?.out, (await st()).hcard)
+      await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
+      await openSession(win)
+      const s1 = await st()
+      check('w 重载后卡照旧写「在主区」、那个标签也还原了', s1.hcard?.out && (await fileTabs('定价调研')) >= 1, { card: s1.hcard, tabs: await groups() })
+      await tabMenu('定价调研')
+      const [w2] = await Promise.all([app.waitForEvent('window', { timeout: 20_000 }), win.locator('.ctx-menu button[data-act="move-window"]').last().click()])
+      await w2.waitForSelector('#root', { timeout: 30_000 }); await sleep(3000)
+      const s2 = await st()
+      check('w 把那个标签移到新窗口:不算关,Human Desk 上还是它、照旧「在主区」', /定价调研/.test(s2.hcard?.title || '') && s2.hcard?.out && (await fileTabs('定价调研')) === 0, { card: s2.hcard, tabs: await groups() })
+      await w2.close().catch(() => {}); await sleep(800)
+      await win.locator('.human-desk-card button[title="转到标签页"]').first().click(); await sleep(1500)
+      check('w 这扇窗里没有那个标签了:点卡在这里重新打开', (await fileTabs('定价调研')) === 1, await groups())
+      await tabMenu('定价调研'); await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1300)
+      check('w 收尾:放回 Human Desk', !(await st()).hcard?.out && (await fileTabs('定价调研')) === 0, await groups())
     })
 
     // ══ q:Amadeus(对话在右栏,这扇窗里没有它的 Desk):标签右键「放到 Human Desk」= 就地认领 —— 标签留着、记成在主区,

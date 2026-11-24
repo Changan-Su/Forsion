@@ -23,7 +23,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly, withoutLeafClose } from './dockviewStore'
 import { IS_VIEW_WINDOW } from './uiMode'
 import { useNav } from './navStore'
 import { useEdgeAccessory } from './edgeAccessory'
@@ -111,8 +111,9 @@ const tabTypeOf = (p: { params?: unknown; api: unknown }): string =>
  *  补一个新的同类 View 回原处(pinnedViews.ts 的不变量照旧成立)—— 2026-11-07 用户报「每个 Space 的第一个 View 拖不出去」。 */
 function releaseLeaf(id: string): void {
   const ws = useWorkspace.getState()
-  if (!ws.isPinnedLeaf(id)) { ws.closeLeaf(id); return }
-  ws.closeLeaf(id, true)
+  // 搬去别的窗不是「关掉」:不发 onLeafClose(Human Desk 据它判「你关掉了 = 做完了」)
+  if (!ws.isPinnedLeaf(id)) { withoutLeafClose(() => ws.closeLeaf(id)); return }
+  withoutLeafClose(() => ws.closeLeaf(id, true))
   ws.ensurePinned()
 }
 
@@ -445,6 +446,10 @@ function setHoverZone(z: TabDropZone | null): void {
   hoverZone = z
   z?.hover?.(true)
 }
+/** 这一次确实是拖标签(带着标签的载荷、源面板还在):源被关掉、dragend 没到留下的 draggingId 残留,不能让下一次无关拖拽落进落区(Codex 评审)。 */
+function isTabDrag(e: DragEvent): boolean {
+  return !!draggingId && !!e.dataTransfer?.types?.includes('application/x-tangu-view') && !!useWorkspace.getState().api?.getPanel(draggingId)
+}
 /** 指针下接这个视图的落区(里层的优先:落区可以嵌套,取离指针最近的那个)。 */
 function tabZoneAt(e: DragEvent, view: ViewRef | null): TabDropZone | null {
   if (!view || !tabDropZones.size) return null
@@ -726,7 +731,7 @@ export const WorkspaceHost: React.FC<{
       if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
       if (draggingOpen && 'open' in draggingOpen) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:冒泡阶段再看(见 onListDragOver)
       // 标签拖到登记过的落区上(Human Desk):拆分那套提示让位,落点归它
-      const zone = draggingId ? tabZoneAt(e, draggingView) : null
+      const zone = draggingId && isTabDrag(e) ? tabZoneAt(e, draggingView) : null
       setHoverZone(zone)
       if (zone) { e.preventDefault(); hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; return }
       const t = dropTargetAt(e)
@@ -740,7 +745,7 @@ export const WorkspaceHost: React.FC<{
       if (!id && !open) return
       if (open && 'open' in open) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:见 onListDrop
       e.preventDefault()
-      const zone = id ? tabZoneAt(e, draggingView) : null
+      const zone = id && isTabDrag(e) ? tabZoneAt(e, draggingView) : null
       if (zone && id && draggingView) {
         const view = draggingView
         clearDragState()

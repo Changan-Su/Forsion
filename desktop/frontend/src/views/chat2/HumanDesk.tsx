@@ -18,7 +18,8 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
 import { DeskFilePane, DeskViewPane, openDeskItemInMain, useDeskPathDrop, vaultRelOf } from './AgentDesk'
-import { DeskItemIcon, canDragDeskItem, deskDragTip, deskOpenItems, startDeskItemDrag } from './deskOpen'
+import { DeskItemIcon, canDragDeskItem, deskDragTip, deskOpenItems, deskViewRef, startDeskItemDrag } from './deskOpen'
+import { fileViewRef } from '../../amadeusNav'
 import { CardAction, DeskSqueezeContext, SummaryCard } from './TaskSummary'
 import { bumpOpen, openOf, setUserOpen, touchDesk, useSummaryOpen } from './summaryOpen'
 import { fileChip, refChipOf, viewChip, type RefChip } from './Composer2'
@@ -151,7 +152,8 @@ installHumanDeskPathFollow()
 /** 东西已经在主区开出来了 → 记成「在主区」;这扇窗的展开收回。 */
 export const takeHumanOut = (sessionId: string): void => useApp.getState().humanDeskAct(sessionId, { type: 'takeOut' })
 
-const normAbs = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+// Windows 盘符路径大小写不敏感(C:\Vault\A.md 与 c:\vault\a.md 是同一份):比对前整串转小写(Codex 评审)
+const normAbs = (p: string): string => { const s = p.replace(/\\/g, '/').replace(/\/+$/, ''); return /^[a-zA-Z]:\//.test(s) ? s.toLowerCase() : s }
 const isAbs = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p)
 /** 主区标签装着的那份文件的绝对路径:笔记是库相对路径(接上库根),工作区文件 / PDF 是绝对路径。 */
 function tabAbs(filePath: string | undefined, root: string | null): string | null {
@@ -185,6 +187,13 @@ function putBackHere(sessionId: string): void {
   const tabs = humanTabsOf(it)
   put(sessionId, it)
   for (const tab of tabs) useWorkspace.getState().closeLeaf(tab.id)
+  stillOpen(sessionId, tabs.map((x) => x.id))
+}
+
+/** 关不掉的(固定 View 的最后一个,closeLeaf 拒关)→ 东西仍记成在主区,别让它两处都开着(Codex 评审)。 */
+function stillOpen(sessionId: string, leafIds: string[]): void {
+  const api = useWorkspace.getState().api
+  if (leafIds.some((id) => api?.getPanel(id))) takeHumanOut(sessionId)
 }
 
 /** 标签 → Human Desk 上的一样东西:只收有文件的标签(笔记、工作区文件、PDF、图片……);对话、启动器、网页这些不是「你在做的那一样」。 */
@@ -212,6 +221,7 @@ function putTargetSession(): string | null {
 function putFromTab(sessionId: string, item: DeskItem, leafId: string): void {
   put(sessionId, item)
   useWorkspace.getState().closeLeaf(leafId)
+  stillOpen(sessionId, [leafId])
 }
 
 /** 这扇窗当前 Space 的主区里有没有这条会话的对话(Human Desk 长在主区对话上;别的 Space 的右栏对话没有 Desk)。 */
@@ -237,16 +247,16 @@ registerTabMenuItems((tab) => {
 })
 
 /** 卡 / 展开的那块接标签:把主区标签拖上来 = 放到 Human Desk(落点提示用 Desk 现成的淡染 data-drop,同拖文件进来)。 */
-function useHumanTabDrop(ref: React.RefObject<HTMLElement | null>, sessionId: string): void {
+function useHumanTabDrop(ref: React.RefObject<HTMLElement | null>, sessionId: string, mounted = true): void {
   useEffect(() => {
     const el = ref.current
-    if (!el) return
+    if (!el || !mounted) return
     return registerTabDropZone(el, {
       accepts: (view) => !!tabItem(view),
       hover: (on) => el.toggleAttribute('data-drop', on),
       drop: (view, leafId) => { const it = tabItem(view); if (it) putFromTab(sessionId, it, leafId) },
     })
-  }, [ref, sessionId])
+  }, [ref, sessionId, mounted])
 }
 
 // 拿到主区之后:那个标签看不看得见、你在第几节、你关没关掉它。每扇窗一份,模块级(卡、右栏都可能不在屏上)。只认这扇窗当前 Space 的主区:
@@ -560,12 +570,15 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
 export function HumanDeskSideCard({ sessionId }: { sessionId: string }): React.ReactElement | null {
   const { t } = useI18n()
   const h = useApp((s) => s.humanDeskBySession[sessionId])
-  if (!h?.out || !h.item) return null
+  const ref = useRef<HTMLDivElement>(null)
+  const shown = !!h?.out && !!h.item
+  useHumanTabDrop(ref, sessionId, shown) // 主区那个标签拖回这张卡 = 放回来(同摘要栏那张卡)
+  if (!shown || !h?.item) return null
   const watching = humanWatching(h)
   const note = isNote(h.item) ? h.section : undefined
   const go = (): void => goToHumanTab(sessionId)
   return (
-    <div className="human-desk-side" data-human-desk-session={sessionId} title={t('humanDesk.goTab')} onClick={go}>
+    <div ref={ref} className="human-desk-side" data-human-desk-session={sessionId} title={t('humanDesk.goTab')} onClick={go}>
       <div className="human-desk-side-head">
         <YouMark />
         <span className="t2-card-hint human-desk-card-title" title={`${t('humanDesk.title')} · ${h.item.path || h.item.name}`}>{h.item.name}</span>
@@ -611,7 +624,11 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
   const collapse = (): void => { touchDesk(sessionId, 'humandesk'); useApp.getState().setDeskSide(sessionId, null) }
   const path = item?.path || ''
   const rel = vaultRelOf(path, vaultRoot)
-  const take = (): void => takeHumanOut(sessionId)
+  // 拿走只认开出去的那一样:拖出窗外要等对面回话(异步),这期间你换了东西,别把新换上的记成在主区(Codex 评审)
+  const takeKey = item?.key
+  const take = (): void => { if (takeKey && useApp.getState().humanDeskBySession[sessionId]?.item?.key === takeKey) takeHumanOut(sessionId) }
+  // 开得成主区标签才算拿走;库里没人认领的类型交给系统默认程序打开 —— 那不是拿到了主区,东西留在 Human Desk(Codex 评审)
+  const canTake = !!item && (rel && !item.view ? !!fileViewRef(rel) : !!deskViewRef(item, rel))
   const moreItems = (): CtxItem[] => {
     if (!item) return []
     const mine: CtxItem[] = [
@@ -622,7 +639,7 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
     // 打开的四项同 Agent Desk(#842 deskOpen.tsx 的共用函数),但 Human Desk 是拿走:开出去之后从这边拿掉、卡留着指向它(第 1 步后半)。
     // 「在 Amadeus 中打开」不再给:那是再开一份,和「一件事只有一张卡」打架;四项里的「在新标签页打开」就是它
     const opens = deskOpenItems({ item, rel, anchor: paneRef.current, openTab: () => openDeskItemInMain(item, vaultRoot), t })
-      .map((x) => ({ ...x, run: () => { x.run(); take() } }))
+      .map((x) => ({ ...x, run: () => { x.run(); if (canTake) take() } }))
     const orig: CtxItem[] = [
       ...more.current,
       ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
@@ -633,7 +650,7 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
   const pickable = (h?.recent?.length ?? 0) > 1
   // 名字胶囊拖得起来(同 Agent Desk,#842):拖进标签栏 / 主区 = 拿到主区(落下成功才拿掉);拖进输入框 = 一枚引用(不拿走)
   const drag = onDesk && canDragDeskItem(item!)
-    ? (e: React.DragEvent<HTMLElement>): void => startDeskItemDrag(e, { sessionId, item: item!, rel, openVault: () => openDeskItemInMain(item!, vaultRoot), taken: take })
+    ? (e: React.DragEvent<HTMLElement>): void => startDeskItemDrag(e, { sessionId, item: item!, rel, openVault: () => openDeskItemInMain(item!, vaultRoot), ...(canTake ? { taken: take } : {}) })
     : undefined
   const tip = item ? [path || item.name, onDesk && deskDragTip(item, t)].filter(Boolean).join('\n') : undefined
   // 图标跟着种类走,同 Agent Desk 的名字胶囊(#842 DeskItemIcon)

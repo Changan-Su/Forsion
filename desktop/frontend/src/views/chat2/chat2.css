@@ -2179,6 +2179,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .human-desk-card.out .human-desk-card-frame.out .human-desk-where { padding-bottom: 10px; }
 .human-desk-outacts { display: inline-flex; gap: 8px; }
 .human-desk-side {
+  /* 画布模式下舞台(z 2)铺满整列:卡浮在它上面才点得到(Codex 评审) */
+  position: relative; z-index: 3;
   flex: none; margin: 8px 12px 0; padding: 9px 12px 8px; cursor: pointer;
   border-radius: var(--radius-md, 12px); background: var(--bg-card, var(--bg));
   border: var(--border-width, 1px) solid var(--border); box-shadow: var(--card-shadow-low, none);
@@ -2197,3 +2199,12 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 @container (min-width: 760px) {
   .t2-chat-col:has(.t2-rail:not([data-off])) .human-desk-side { display: none; }
 }
+/* 主区那个标签拖到对话顶上这张卡上(放回来):同摘要栏那张卡的落点画法 —— 描边换主题色 + 原地淡入一层 5%,不画虚线框 */
+.human-desk-side::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: color-mix(in srgb, var(--signal) 5%, transparent);
+  opacity: 0; transition: opacity var(--lcl-drop-fade, 130ms ease);
+}
+.human-desk-side[data-drop] { border-color: var(--accent-ink); }
+.human-desk-side[data-drop]::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .human-desk-side::after { transition: none; } }

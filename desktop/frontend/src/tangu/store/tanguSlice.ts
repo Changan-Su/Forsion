@@ -999,7 +999,8 @@ function persistHumanDesk(sessionId: string): void {
   try {
     const disk = unpackHumanDeskMap(localStorage.getItem(HUMAN_DESK_PERSIST_KEY))
     const mine = store.get().humanDeskBySession[sessionId]
-    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped } as HumanDeskCore
+    // out(拿到了主区)也落盘:重启后卡照旧指向那个标签,另一扇窗靠这次写盘跟上(Codex 评审:漏了它 = 拿走只在本窗有效)
+    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped, out: mine.out } as HumanDeskCore
     else delete disk[sessionId]
     localStorage.setItem(HUMAN_DESK_PERSIST_KEY, packHumanDeskMap(disk))
   } catch { /* ignore */ }
@@ -1038,7 +1039,8 @@ function armHumanPause(sessionId: string): void {
     humanPauseTimers.delete(sessionId)
     store.set((s) => {
       const h = s.humanDeskBySession[sessionId]
-      if (!h?.item || h.paused || (h.out && h.tabHere) || deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human') return {}
+      // 在主区时「在场」只认那个标签看不看得见:展开的 Human Desk 那时只是占位,不算在看(Codex 评审)
+      if (!h?.item || h.paused || (h.out ? h.tabHere : deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human')) return {}
       return { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...h, paused: true } } }
     })
   }, humanDeskPauseMs()))
@@ -3439,6 +3441,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const cur = get().deskBySession[sessionId]
     if (side === 'agent') { get().patchDesk(sessionId, { mode: 'open' }); return }
     if (cur?.mode === 'open') get().patchDesk(sessionId, { mode: undefined })
+    if (side === 'human' && get().humanDeskBySession[sessionId]?.out) {
+      // 东西在主区:展开的这块只是占位(转到标签页 / 放回来),不算回来看 —— 暂停照旧跟着那个标签走
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], open: true } } }))
+      if (!get().humanDeskBySession[sessionId]?.tabHere) armHumanPause(sessionId)
+      return
+    }
     if (side === 'human') {
       disarmHumanPause(sessionId)
       set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), open: true, paused: undefined } } }))

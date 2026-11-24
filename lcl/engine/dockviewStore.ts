@@ -514,7 +514,14 @@ export function onLeafClose(fn: LeafCloseListener): () => void {
   leafCloseListeners.add(fn)
   return () => { leafCloseListeners.delete(fn) }
 }
+let leafCloseMuted = 0
+/** 搬走(移到新窗口 / 拖出窗外)也是经 closeLeaf 把源关掉的,但东西没关、只是换了窗:包在这里面关,不发 onLeafClose(Codex 评审)。 */
+export function withoutLeafClose<T>(fn: () => T): T {
+  leafCloseMuted++
+  try { return fn() } finally { leafCloseMuted-- }
+}
 function emitLeafClose(leaf: { id: string; type: string; params: Record<string, unknown> }): void {
+  if (leafCloseMuted) return
   for (const fn of leafCloseListeners) { try { fn(leaf) } catch { /* 宿主的回调出错不挡关闭 */ } }
 }
 
