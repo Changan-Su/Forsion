@@ -21,6 +21,11 @@ export interface HostServices {
    *  整段 BEGIN IMMEDIATE … COMMIT,抛错整段回滚。fn 里不能 await —— 正是同步才保证别的异步任务插不进这段事务。
    *  没实现 = 调用方按各自的「可重放」退路逐条写(外部 PG / PGlite)。 */
   transactionSync?<T>(fn: (run: (sql: string, params?: any[]) => any[]) => T): T;
+  /** 可选:异步事务(server 网关的 PostgreSQL 用一条独占连接实现)。fn 里只能用传进来的 q 执行语句(与 query 同口径:
+   *  ? 占位符、回行数组),别再调全局 query —— 那会走别的连接、不在这段事务里。fn resolve = COMMIT,reject = ROLLBACK 并原样抛出。
+   *  用处:外键要求「先建父行」、又不能让别人看见写了一半的父行(会话导入,services/sessionImport.ts)。
+   *  没实现 = 调用方按各自的退路逐条写(本机 SQLite 没有外键约束,原路不变)。 */
+  transaction?<T>(fn: (q: <R = any>(sql: string, params?: any[]) => Promise<R>) => Promise<T>): Promise<T>;
 
   /** 用户鉴权中间件(Bearer token)。 */
   authMiddleware: RequestHandler;

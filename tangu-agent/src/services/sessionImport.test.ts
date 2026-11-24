@@ -8,6 +8,7 @@ vi.mock('../core/db.js', async () => {
   h.db.exec(STANDALONE_SCHEMA);
   return {
     getDbType: () => 'sqlite',
+    hostTransaction: () => null, // 本机 SQLite 宿主不给异步事务:走逐条写的老路(PG 事务路径见 sessionImport.pg.test.ts)
     // 同宿主的 sqlite 适配:布尔按 0/1 绑定
     query: async (sql: string, params: any[] = []) => {
       if (/INSERT INTO chat_messages/.test(sql) && h.failAfterChunks >= 0 && h.chunks++ >= h.failAfterChunks) throw new Error('disk full');
