@@ -2189,3 +2189,11 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .human-desk-side-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .human-desk-side-acts > .human-desk-eye { padding: 0 4px; }
 .human-desk-side > .human-desk-where { padding: 4px 0 0; }
+/* 在主区时卡头放不下「Human Desk」+ 名字 +「在主区」三样(摘要栏 296 / 右栏 280,再加眼睛、停止、转到三颗钮):
+ * 省掉「Human Desk」字样、留「你」头像,读作「你 定价调研.md · 在主区」(r3 ⑦ 的写法);名字至少留几个字,不被挤成 0 宽。 */
+.human-desk-card.out .t2-card-title > .human-desk-card-name { display: none; }
+.human-desk-card.out .human-desk-card-title, .human-desk-card.out .human-desk-card-pickwrap, .human-desk-side-head > .human-desk-card-title { flex: 0 1 auto; min-width: 3em; }
+/* 摘要栏(卡片栈)在场时卡已经在栏里,对话顶上这张让掉;栏不在场(右栏、主区里窄过 760、画布)才露出来 */
+@container (min-width: 760px) {
+  .t2-chat-col:has(.t2-rail:not([data-off])) .human-desk-side { display: none; }
+}

@@ -898,8 +898,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
       <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
-      {/* 右栏里的这条对话(别的 Space 开着右栏):Human Desk 的东西拿到了主区时,卡在对话顶上(那里没有摘要栏卡片栈) */}
-      {deskEnabled && activeId && leaf.loc !== 'main' && <HumanDeskSideCard sessionId={activeId} />}
+      {/* Human Desk 的东西拿到了主区时,摘要栏卡片栈不在场(右栏、窄过 760、画布)→ 卡在对话顶上;栏在场时 CSS 让掉它 */}
+      {deskEnabled && activeId && !params.childSurface && <HumanDeskSideCard sessionId={activeId} />}
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}

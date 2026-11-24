@@ -214,12 +214,26 @@ function putFromTab(sessionId: string, item: DeskItem, leafId: string): void {
   useWorkspace.getState().closeLeaf(leafId)
 }
 
-// 标签右键第一项「放到 Human Desk」(方案 r2-out-put:主区标签右键第一项;放回去以后主区那个标签关掉)
+/** 这扇窗当前 Space 的主区里有没有这条会话的对话(Human Desk 长在主区对话上;别的 Space 的右栏对话没有 Desk)。 */
+function deskReachable(sessionId: string): boolean {
+  const api = useWorkspace.getState().api
+  if (!api) return false
+  const active = useApp.getState().activeId
+  return api.panels.some((p) => {
+    const q = (p.params ?? {}) as Record<string, unknown>
+    return q.__type === 'chat' && q.__loc === 'main' && (q.followActive !== false ? active === sessionId : q.sessionId === sessionId)
+  })
+}
+
+// 标签右键第一项「放到 Human Desk」(方案 r2-out-put:主区标签右键第一项;放回去以后主区那个标签关掉)。
+// 这扇窗里没有这条会话的 Desk(Amadeus 等别的 Space,对话在右栏)时,关掉标签东西就没处看了:改成就地认领 ——
+// 放上 Human Desk、记成「在主区」、标签留着(r3 ⑦:右栏对话顶上一张「你 定价调研.md · 在主区」)。
 registerTabMenuItems((tab) => {
   const sid = putTargetSession()
   const item = sid ? tabItem({ type: tab.type, params: tab.params }) : null
   if (!sid || !item) return []
-  return [{ id: 'human-desk-put', label: translate('humanDesk.add'), icon: <Eye size={13} />, run: () => putFromTab(sid, item, tab.id) }]
+  return [{ id: 'human-desk-put', label: translate('humanDesk.add'), icon: <Eye size={13} />,
+    run: () => { if (deskReachable(sid)) putFromTab(sid, item, tab.id); else { put(sid, item); takeHumanOut(sid) } } }]
 })
 
 /** 卡 / 展开的那块接标签:把主区标签拖上来 = 放到 Human Desk(落点提示用 Desk 现成的淡染 data-drop,同拖文件进来)。 */
@@ -539,8 +553,9 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
   )
 }
 
-/** 右栏对话顶上的那张卡(r2-details §4:在 Amadeus 等别的 Space 里、右栏开着这条会话时 —— 那里摘要栏卡片栈整栈不显示)。
- *  只在东西拿到了主区时出现,同摘要栏那张卡的「在主区」态:「名字 · 在主区」+ 小眼睛 + 停止 / 继续看,下面一行你在第几节;
+/** 对话顶上的那张卡(r2-details §4):摘要栏卡片栈不在场时 —— 别的 Space 的右栏里、主区对话窄过 760(如向右拆分之后)、画布 ——
+ *  卡挪到对话顶上(栏在场时 CSS 把它让掉,见 chat2.css .human-desk-side)。
+ *  只在东西拿到了主区时出现,同摘要栏那张卡的「在主区」态:「你 名字 · 在主区」+ 小眼睛 + 停止 / 继续看,下面一行你在第几节;
  *  点卡 = 转到装着它的标签(这个 Space 里没有就在这里打开)。 */
 export function HumanDeskSideCard({ sessionId }: { sessionId: string }): React.ReactElement | null {
   const { t } = useI18n()
@@ -553,8 +568,7 @@ export function HumanDeskSideCard({ sessionId }: { sessionId: string }): React.R
     <div className="human-desk-side" data-human-desk-session={sessionId} title={t('humanDesk.goTab')} onClick={go}>
       <div className="human-desk-side-head">
         <YouMark />
-        <span className="human-desk-card-name">{t('humanDesk.title')}</span>
-        <span className="t2-card-hint human-desk-card-title">{h.item.name}</span>
+        <span className="t2-card-hint human-desk-card-title" title={`${t('humanDesk.title')} · ${h.item.path || h.item.name}`}>{h.item.name}</span>
         <span className="t2-card-hint human-desk-inmain">· {t('humanDesk.inMain')}</span>
         <span className="human-desk-side-acts" onClick={(e) => e.stopPropagation()}>
           {watching && <span className="human-desk-eye" title={t('humanDesk.watching')} aria-label={t('humanDesk.watching')}><Eye size={13} /></span>}
