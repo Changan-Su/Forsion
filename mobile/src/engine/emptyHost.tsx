@@ -20,3 +20,7 @@ export const openViewSplit = (_view: { type: string; params?: Record<string, unk
 export const copyOfView = (view: { type: string; params?: Record<string, unknown> }): { type: string; params?: Record<string, unknown> } | null => view
 export const endOpenDrag = (): void => {}
 export const hideDropCue = (): void => {}
+
+/** 主区标签右键项 / 标签落区(11-24 Human Desk 放回来)。移动端没有标签栏、不挂 Desk:登记即忽略,返回的撤销函数什么都不做。 */
+export const registerTabMenuItems = (_p: unknown): (() => void) => () => {}
+export const registerTabDropZone = (_el: HTMLElement, _z: unknown): (() => void) => () => {}
