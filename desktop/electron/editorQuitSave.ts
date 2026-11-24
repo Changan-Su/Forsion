@@ -34,28 +34,31 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
   let seq = 0
   const newId = deps.newId ?? (() => `quit-save-${Date.now()}-${++seq}`)
   const open = new Map<number, QuitSaveRenderer>()
-  /** Windows that let an ask run into the cap: not asked again (restart asks, then its own before-quit asks once more)
-   *  until they report again, which shows they are alive. */
-  const unresponsive = new Set<number>()
+  let quitDone = false
+  let inflight: Promise<void> | null = null
   return {
     /** A renderer reported its open editor count. */
     report(renderer: QuitSaveRenderer, count: unknown): void {
-      unresponsive.delete(renderer.id)
       if (typeof count === 'number' && count > 0) open.set(renderer.id, renderer)
       else open.delete(renderer.id)
     },
     /** The renderer navigated (reload) or went away: its editors went with it. */
     forget(id: number): void {
       open.delete(id)
-      unresponsive.delete(id)
     },
-    /** Before quitting: null = no window has a workspace editor open (nothing to wait for). Otherwise resolves once
-     *  every such window answered, went away, or the cap passed; never rejects (quitting must not get stuck). */
+    /** Before quitting: null = nothing to wait for. Otherwise resolves once every window with a workspace editor open
+     *  answered, went away, or the cap passed; never rejects (quitting must not get stuck).
+     *  Once per quit, like contentFlush.quit(): the restart / install path asks before stopping the engine, and the
+     *  before-quit that follows gets null — it must not turn that quit into app.exit (relaunch / quitAndInstall).
+     *  Typing during the engine stop is then saved by the windows' pagehide as they close. Asked again while the
+     *  answer is pending → the same promise. reset() after a restart that did not happen. */
     quit(): Promise<void> | null {
-      const targets = [...open.values()].filter((r) => !r.isDestroyed() && !unresponsive.has(r.id))
+      if (quitDone) return inflight
+      quitDone = true
+      const targets = [...open.values()].filter((r) => !r.isDestroyed())
       if (!targets.length) return null
       const requestId = newId()
-      return new Promise<void>((resolve) => {
+      const p = new Promise<void>((resolve) => {
         const pending = new Set(targets.map((r) => r.id))
         const gone = new Map<QuitSaveRenderer, () => void>()
         const finish = (): void => {
@@ -71,7 +74,6 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
         const onDone: AckListener = (event, received) => { if (received === requestId) settle(event.sender.id) }
         const timer = setTimeout(() => {
           deps.log?.(`[quit-save] ${pending.size} window(s) did not answer within ${timeoutMs}ms; quitting anyway`)
-          for (const id of pending) unresponsive.add(id)
           finish()
         }, timeoutMs)
         deps.events.on(QUIT_SAVE_DONE, onDone)
@@ -84,7 +86,11 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
           try { r.send(QUIT_SAVE_ASK, { requestId }) } catch { settle(r.id) }
         }
       })
+      const done: Promise<void> = p.finally(() => { if (inflight === done) inflight = null })
+      inflight = done
+      return done
     },
+    reset(): void { quitDone = false; inflight = null },
   }
 }
 

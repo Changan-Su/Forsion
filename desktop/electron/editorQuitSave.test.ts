@@ -26,7 +26,6 @@ afterEach(() => { vi.useRealTimers() })
 describe('createEditorQuitSave', () => {
   it('does not wait when no window has a workspace editor open', () => {
     const { events, saver } = setup()
-    expect(saver.quit()).toBeNull()
     const r = new FakeRenderer(1, events)
     saver.report(r, 2)
     saver.report(r, 0)
@@ -97,19 +96,26 @@ describe('createEditorQuitSave', () => {
     expect(reloaded.sent).toEqual([])
   })
 
-  it('a window that ran into the cap is not asked again (restart, then its before-quit) until it reports again', async () => {
-    vi.useFakeTimers()
-    const events = new EventEmitter()
-    const saver = createEditorQuitSave({ events, timeoutMs: 5000 })
-    const hung = new FakeRenderer(1, events, 'no')
-    saver.report(hung, 1)
+  it('once per quit: the before-quit after a restart that already asked gets null, a second ask while pending the same promise', async () => {
+    const { events, saver } = setup()
+    const r = new FakeRenderer(1, events, 'no')
+    saver.report(r, 1)
     const first = saver.quit()!
-    await vi.advanceTimersByTimeAsync(5000)
+    expect(saver.quit()).toBe(first)
+    events.emit(QUIT_SAVE_DONE, { sender: { id: 1 } }, 'req-1')
     await first
-    expect(saver.quit()).toBeNull()
-    saver.report(hung, 1)
-    expect(saver.quit()).not.toBeNull()
-    expect(hung.sent).toHaveLength(2)
+    expect(saver.quit()).toBeNull() // must not make that quit take the app.exit route
+    expect(r.sent).toHaveLength(1)
+  })
+
+  it('reset() after a restart that did not happen: the next quit asks again', async () => {
+    const { events, saver } = setup()
+    const r = new FakeRenderer(1, events)
+    saver.report(r, 1)
+    await saver.quit()
+    saver.reset()
+    await saver.quit()
+    expect(r.sent).toHaveLength(2)
   })
 })
 

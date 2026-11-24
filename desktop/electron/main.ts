@@ -3749,8 +3749,8 @@ app.whenReady().then(async () => {
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
-        // 还在静默期里的改动先推上去(最多等 5 秒;冲过了,紧跟着的 before-quit 不再冲);工作区 .md 标签里还没存的字先存
-        // (装更新那条路先关窗再退出,只剩 pagehide 那一道)
+        // 还在静默期里的改动先推上去(最多等 5 秒);工作区 .md 标签里还没存的字先存。两样都是一次退出只做一次:
+        // 紧跟着的 before-quit 拿到 null,不会把这次退出改走 app.exit;停引擎期间再打的字由关窗时的 pagehide 存
         await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
@@ -3761,6 +3761,7 @@ app.whenReady().then(async () => {
         isQuitting = false
         quitGuards.reset()
         contentFlush.reset()
+        editorQuitSave.reset()
         throw error
       }
     },
