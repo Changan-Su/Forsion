@@ -53,6 +53,29 @@
   color: var(--danger);
 }
 .am-ai-panel .am-ai-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+/* 卡头的翻译服务(card.service,2026-11-24):和目标语言同款的小下拉,站到原来「谁译的」那句的位置。 */
+.am-ai-panel .am-ai-svc {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 6px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-sec, var(--text));
+  font: inherit;
+  font-size: var(--ui-font-meta, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.am-ai-panel .am-ai-svc > span { overflow: hidden; text-overflow: ellipsis; }
+.am-ai-panel .am-ai-svc > svg { flex: 0 0 auto; color: var(--text-muted); }
+.am-ai-panel .am-ai-svc[aria-expanded="true"], .am-ai-panel .am-ai-svc:hover { background: var(--overlay-light); }
+.am-ai-panel .am-ai-error .am-ai-error-note { display: block; color: var(--text-muted); }
 /* 卡头上的目标语言:一枚小下拉。 */
 .am-ai-panel .am-ai-lang {
   flex: 0 0 auto;

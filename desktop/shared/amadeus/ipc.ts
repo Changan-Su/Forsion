@@ -75,6 +75,8 @@ export const IPC = {
   bundleAgentOwned: 'plugins:bundle-agent-owned',
   /** ctx.net.request 的主进程代请求(2026-11-16+;electron/pluginNet.ts)。白名单由主进程按插件 id 读磁盘上的 manifest。 */
   pluginNetRequest: 'plugins:net-request',
+  /** ctx.secrets 的主进程半边(2026-11-24+;electron/pluginSecrets.ts)。一条通道,第一个参数是操作名。 */
+  pluginSecrets: 'plugins:secrets',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -487,6 +489,8 @@ export interface PluginNetRequestInit { method?: string; headers?: Record<string
 export type PluginNetIpcResult =
   | { ok: true; status: number; headers: Record<string, string>; bytes: Uint8Array; url: string }
   | { ok: false; code: string; message: string }
+/** ctx.secrets 的 IPC 回包(electron/pluginSecrets.ts 的 PluginSecretsResult 同形)。 */
+export type PluginSecretsIpcResult = { ok: true; value: string | null | boolean | string[] } | { ok: false; code: string; message: string }
 
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
@@ -1034,6 +1038,9 @@ export interface AmadeusApi {
   /** ctx.net 的底座(2026-11-16+):主进程按 pluginId 读**磁盘上**那份 manifest 的 `network` 白名单,只代请求声明过的 https 域名。
    *  失败不抛,回 `{ ok:false, code }`(invoke 抛出的错误会被包一层,码就丢了)。可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.net。 */
   pluginNetRequest?(pluginId: string, url: string, init?: PluginNetRequestInit): Promise<PluginNetIpcResult>
+  /** ctx.secrets 的底座(2026-11-24+):系统钥匙串加密存小段机密,按插件 id 分开、不同步。失败不抛,回 `{ ok:false, code }`。
+   *  可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.secrets。 */
+  pluginSecrets?(op: 'get' | 'set' | 'delete' | 'has' | 'keys', pluginId: string, key?: string, value?: string): Promise<PluginSecretsIpcResult>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 宿主做不了的 OS 动作(评审 G2-13):对应键**不渲染**(留一个点了没反应的按钮比没有更糟,见 platform-parity)。

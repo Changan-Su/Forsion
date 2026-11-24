@@ -107,7 +107,7 @@ import { readTangu } from '../plugins/tanguSeam'
 import { usePluginStore } from '../plugins/pluginStore'
 import { listSelectionActions, rememberSelectionLanguage, runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle } from '../../selectionActions'
 import { bindSelectionRun, unbindSelectionRun } from '../plugins/selectionRun'
-import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive } from '../../components/selectionBar/barModel'
+import { buildSelectionBarModel, cardOptionsOf, cardServiceOf, speakKeyOf, useSelectionBarLive } from '../../components/selectionBar/barModel'
 import { TtsSetupCard } from '../../components/selectionBar/TtsSetupCard'
 import { resolveIcon } from '../components/icons'
 import { headingFoldPlugins } from './headingFold'
@@ -2197,7 +2197,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     if (aiSpeakPrefix && cur?.startsWith(aiSpeakPrefix)) probe!.stop(cur)
   }, [aiSpeakPrefix])
   /** 面板的请求:内置动作走引擎 /agent/inline;插件项走它自己的 run(结果同样只进预览)。目标区间现读(随编辑映射)。 */
-  const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal) => {
+  const runAi = (panel: NonNullable<typeof aiPanel>): InlineAiRun => async (instruction, onDelta, signal, runOpts) => {
     const view = layer.getView()
     const target = view ? aiTargetOf(view) : null
     if (!view || !target) throw new Error(translate('unipage.toast.insertPointLost'))
@@ -2212,7 +2212,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       // 前后文与页面说明(插件看不到),出结果的模型回来给卡头署名 —— 翻译改由核心插件接管后两样都不丢。
       const ctxAround = aiContextOf(view.state.doc, target.from, target.to)
       const ran = bindSelectionRun(signal, {
-        pluginId: owned.pluginId, title: noteTitle, pagePath: path, pageInstructions: instructionsOf(view.state.doc),
+        pluginId: owned.pluginId, title: noteTitle, pagePath: path, pageInstructions: instructionsOf(view.state.doc), ...(runOpts?.noEngine ? { noEngine: true } : {}),
         ...(ctxAround.before ? { before: ctxAround.before } : {}), ...(ctxAround.after ? { after: ctxAround.after } : {}),
       })
       let text: string
@@ -2235,10 +2235,11 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       pagePath: path,
       pageInstructions: instructionsOf(view.state.doc),
       ...(action === 'translate' ? { language: panel.language ?? translateTargetOf(target.text) } : {}),
+      ...(runOpts?.noEngine ? { noEngine: true } : {}),
     }, { signal, onDelta })
   }
   /** 插件结果卡宿主替它画的几样(card.source / card.speak):原文、原文 / 结果旁的小喇叭。笔记不给「划选后自动」。 */
-  const aiPanelPluginCard = (panel: NonNullable<typeof aiPanel>): { icon?: ReactNode; source?: string; speak?: ComponentProps<typeof InlineAiPanel>['speak'] } => {
+  const aiPanelPluginCard = (panel: NonNullable<typeof aiPanel>): { icon?: ReactNode; source?: string; speak?: ComponentProps<typeof InlineAiPanel>['speak']; service?: ComponentProps<typeof InlineAiPanel>['service'] } => {
     const owned = panel.plugin ? pluginSelActions.find((o) => `${o.pluginId}:${o.item.id}` === panel.plugin) : undefined
     if (!owned) return {}
     const opts = cardOptionsOf(owned)
@@ -2246,8 +2247,10 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
     const target = view ? aiTargetOf(view) : null
     const tts = readTangu()?.tts
     const icon = resolveIcon(owned.item.icon)
+    const service = cardServiceOf(owned, new Set(usePluginStore.getState().settingsPages.map((o) => o.pluginId)))
     return {
       ...(icon ? { icon: <span className="selbar-ico">{icon}</span> } : {}),
+      ...(service ? { service } : {}),
       ...(opts.source && target ? { source: target.text } : {}),
       ...(opts.speak && tts ? {
         speak: {

@@ -4,7 +4,7 @@
  *  纯展示 + 请求生命周期:请求怎么发(内置动作走 readTangu().complete,插件项走它自己的 run)由宿主给的 run 决定。
  *  样式在同目录 inlineAiPanel.css(聊天不加载 Amadeus 那份大样式表,所以单拎出来由本文件自己带)。 */
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
-import { Languages, Loader2, Sparkles, Square, Volume2 } from 'lucide-react'
+import { ChevronDown, Languages, Loader2, Sparkles, Square, Volume2 } from 'lucide-react'
 import { OverlayAt } from '../lib/clampMenu'
 import type { TextAnchor } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
@@ -13,6 +13,9 @@ import type { AiApply } from './inlineAi'
 import { Markdown } from '../../components/Markdown'
 import { mountLineSelection } from '@lcl/engine/lineSelection'
 import './inlineAiPanel.css'
+import { activeTranslationEngine, chosenEngineKey, findTranslationEngine, listTranslationEngines, setChosenEngine, subscribeTranslationChoice } from '../plugins/translationEngines'
+import { readTangu } from '../plugins/tanguSeam'
+import type { PluginMenuEntry } from '../plugins/contextMenuSurface'
 
 registerMessages({
   'inlineai.action.improve': { zh: '润色', en: 'Improve writing' },
@@ -43,6 +46,14 @@ registerMessages({
   'inlineai.copied': { zh: '已复制', en: 'Copied' },
   'inlineai.close': { zh: '关闭', en: 'Close' },
   'inlineai.targetLang': { zh: '目标语言', en: 'Target language' },
+  'inlineai.svc.label': { zh: '翻译服务', en: 'Translation service' },
+  'inlineai.svc.head': { zh: '翻译用', en: 'Translate with' },
+  'inlineai.svc.forsion': { zh: 'Forsion 模型', en: 'Forsion models' },
+  'inlineai.svc.forsionWith': { zh: 'Forsion 模型 · {name}', en: 'Forsion models · {name}' },
+  'inlineai.svc.settings': { zh: '翻译设置…', en: 'Translation settings…' },
+  'inlineai.svc.retryForsion': { zh: '用 Forsion 模型重试', en: 'Retry with Forsion models' },
+  'inlineai.svc.goSettings': { zh: '去设置', en: 'Open settings' },
+  'inlineai.svc.failNote': { zh: '没有自动换别的服务。', en: 'No other service was tried automatically.' },
   'inlineai.byMt': { zh: '机器翻译 · {name}', en: 'Machine translation · {name}' },
   'inlineai.source': { zh: '原文', en: 'Original' },
   'inlineai.translation': { zh: '译文', en: 'Translation' },
@@ -58,9 +69,10 @@ registerMessages({
 export type CardSpeakPhase = 'loading' | 'playing' | null
 
 /** model = 这次实际是谁出的结果(翻译才给;readTangu().complete 的返回值可以原样交回来)。 */
-export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
+/** opts.noEngine:这一次跳过本机选的翻译引擎(结果卡「用 Forsion 模型重试」;宿主把它挂到这次 run 的 signal 上)。 */
+export type InlineAiRun = (instruction: string | undefined, onDelta: (d: string) => void, signal: AbortSignal, opts?: { noEngine?: boolean }) => Promise<{ text: string; toolCallText?: boolean; model?: { name: string; mt: boolean } }>
 
-export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelection, askFirst, run, onApply, onClose, editorEl, language, source, speak, auto, runKey, cancelKey, keepOnDown }: {
+export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelection, askFirst, run, onApply, onClose, editorEl, language, source, speak, auto, runKey, cancelKey, keepOnDown, service }: {
   /** 视口坐标:目标末尾下方(y)/ 目标起点上方(anchorTop);下方放不下时翻上去(同工具栏)。 */
   x: number
   y: number
@@ -96,6 +108,9 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
   cancelKey?: unknown
   /** 点到卡外面那一下(只读卡):回 true = 这一下先别收(宿主随后自己决定,比如自动卡上换一段划选)。 */
   keepOnDown?(target: Node): boolean
+  /** 卡头的翻译服务按钮(插件 card.service,2026-11-24+):显示本机翻译走哪(插件引擎 / Forsion 模型),点开换,换了立刻重跑;
+   *  失败时多「用 Forsion 模型重试」「去设置」。openSettings 不给 = 那个插件没有设置页,不出「翻译设置…」。 */
+  service?: { openSettings?: () => void }
 }): ReactElement {
   const { t } = useI18n()
   const [phase, setPhase] = useState<'ask' | 'running' | 'done' | 'error'>(askFirst ? 'ask' : 'running')
@@ -120,7 +135,47 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
     return mountLineSelection(previewRef.current, { zIndex: zIndex + 1 }).dispose
   }, [asking])
 
-  const start = (instr: string | undefined): void => {
+  // 翻译服务(card.service):本机选择变了(这张卡、设置页、别的窗)就重画按钮字
+  const [svcTick, setSvcTick] = useState(0)
+  const [modelName, setModelName] = useState('')
+  useEffect(() => {
+    if (!service) return
+    let live = true
+    const refresh = (): void => {
+      setSvcTick((n) => n + 1)
+      void readTangu()?.translateModelInfo?.().then((m) => { if (live) setModelName(m.name) }).catch(() => {})
+    }
+    refresh()
+    const off = subscribeTranslationChoice(refresh)
+    return () => { live = false; off() }
+  }, [!!service]) // eslint-disable-line react-hooks/exhaustive-deps
+  void svcTick
+  const svcEngine = service ? findTranslationEngine(chosenEngineKey()) : undefined
+  const svcRef = useRef<HTMLButtonElement | null>(null)
+  const svcMenu = useRef<(() => void) | null>(null)
+  useEffect(() => () => svcMenu.current?.(), [])
+  const pickService = (key: string | null): void => {
+    try { setChosenEngine(key) } catch (e) { setError(String((e as Error)?.message || e)); setPhase('error'); return }
+    start(lastInstruction.current)
+  }
+  const openServiceMenu = (): void => {
+    const anchorEl = svcRef.current
+    if (!anchorEl || !service) return
+    const cur = chosenEngineKey()
+    const curEngine = activeTranslationEngine().engine
+    const entries: PluginMenuEntry[] = [
+      { kind: 'head', label: t('inlineai.svc.head') },
+      ...listTranslationEngines({ readyOnly: true }).map((e): PluginMenuEntry => ({ kind: 'item', label: e.name(), checked: e.key === cur, run: () => pickService(e.key) })),
+      { kind: 'item', label: modelName ? t('inlineai.svc.forsionWith', { name: modelName }) : t('inlineai.svc.forsion'), checked: !curEngine && !findTranslationEngine(cur), run: () => pickService(null) },
+      ...(service.openSettings ? [{ kind: 'sep' } as PluginMenuEntry, { kind: 'item', label: t('inlineai.svc.settings'), icon: 'settings', run: () => service.openSettings!() } as PluginMenuEntry] : []),
+    ]
+    void import('../plugins/contextMenuSurface').then((m) => {
+      svcMenu.current?.()
+      svcMenu.current = m.openPluginContextMenu({ anchor: anchorEl, align: 'end' }, entries, (r) => { try { r() } catch (e) { console.error(e) } }, () => { svcMenu.current = null })
+    })
+  }
+
+  const start = (instr: string | undefined, runOpts?: { noEngine?: boolean }): void => {
     ac.current?.abort()
     const ctl = new AbortController()
     ac.current = ctl
@@ -135,7 +190,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
       if (ctl.signal.aborted) return
       acc.current += d
       setText(acc.current)
-    }, ctl.signal).then((r) => {
+    }, ctl.signal, runOpts).then((r) => {
       if (ctl.signal.aborted) return
       const out = String(r.text ?? '')
       setText(out)
@@ -261,7 +316,13 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
           </select>
         )}
         {/* 右侧:生成中 → 进度;翻译完 → 这次是谁译的;别的可写结果 → 「确认后才写入」。 */}
-        {phase !== 'ask' && <span className="am-ai-hint" data-testid="inline-ai-hint">{phase === 'running' ? t('inlineai.generating') : (phase === 'done' && by) || (onApply ? t('inlineai.hint') : '')}</span>}
+        {service && (
+          <button ref={svcRef} type="button" className="am-ai-svc" data-testid="inline-ai-service" data-engine={svcEngine?.key ?? ''}
+            aria-label={t('inlineai.svc.label')} title={t('inlineai.svc.label')} aria-haspopup="menu" onClick={openServiceMenu}>
+            <span>{svcEngine ? svcEngine.name() : t('inlineai.svc.forsion')}</span><ChevronDown size={12} aria-hidden />
+          </button>
+        )}
+        {phase !== 'ask' && !service && <span className="am-ai-hint" data-testid="inline-ai-hint">{phase === 'running' ? t('inlineai.generating') : (phase === 'done' && by) || (onApply ? t('inlineai.hint') : '')}</span>}
         {auto && (
           <label className="am-ai-auto" data-testid="inline-ai-auto">
             <span>{t('inlineai.auto')}</span>
@@ -307,7 +368,7 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
           )}
           {(source != null || speak) && <div className="am-ai-label">{t(language ? 'inlineai.translation' : 'inlineai.result')}{phase === 'done' && speaker('result', text)}</div>}
           <div ref={previewRef} className="am-ai-preview md-body" data-testid="inline-ai-preview"><Markdown content={text || (phase === 'running' ? '…' : '')} allowRun={false} /></div>
-          {phase === 'error' && <div className="am-ai-error" role="alert">{error}</div>}
+          {phase === 'error' && <div className="am-ai-error" role="alert">{error}{service && svcEngine ? <span className="am-ai-error-note">{t('inlineai.svc.failNote')}</span> : null}</div>}
           {toolText && phase === 'done' && <div className="am-ai-error">{t('inlineai.toolText')}</div>}
           <div className="am-ai-actions">
             {phase === 'running' && <button type="button" className="btn sm" data-act="stop" onClick={stop}>{t('inlineai.stop')}</button>}
@@ -321,7 +382,12 @@ export function InlineAiPanel({ x, y, anchorTop, anchor, title, icon, hasSelecti
               <button type="button" className="btn sm primary" data-act="insert" onClick={() => onApply('insert', text)}>{t('inlineai.insert')}</button>
             )}
             {phase === 'done' && copyBtn(!onApply)}
-            {(phase === 'done' || phase === 'error') && (
+            {phase === 'error' && service && svcEngine ? (
+              <>
+                <button type="button" className="btn sm primary" data-act="retry-forsion" onClick={() => start(lastInstruction.current, { noEngine: true })}>{t('inlineai.svc.retryForsion')}</button>
+                {service.openSettings && <button type="button" className="btn sm" data-act="service-settings" onClick={() => service.openSettings!()}>{t('inlineai.svc.goSettings')}</button>}
+              </>
+            ) : (phase === 'done' || phase === 'error') && (
               <button type="button" className="btn sm" data-act="retry" onClick={() => start(lastInstruction.current)}>{t('inlineai.retry')}</button>
             )}
             <button type="button" className="btn sm" data-act="discard" onClick={onClose}>{t(onApply ? 'inlineai.discard' : 'inlineai.close')}</button>

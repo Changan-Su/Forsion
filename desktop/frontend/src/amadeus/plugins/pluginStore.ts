@@ -123,6 +123,8 @@ import type {
   PlatformAccountStatus,
   PluginContext,
   PluginNetApi,
+  PluginSecretsApi,
+  PluginTranslationApi,
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
@@ -169,6 +171,7 @@ import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
 import { unitAuthHeader } from '../../services/unitToken'
 import { selectionRunOf } from './selectionRun'
+import { chosenEngineKey, ENGINE_ID_RE, engineKey, findTranslationEngine, registerTranslationEngine as hostRegisterEngine, setChosenEngine, subscribeTranslationChoice } from './translationEngines'
 import { TRANSLATION_PLUGIN_ID } from '../../selectionActions'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
@@ -2034,10 +2037,72 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return { status: r.status, headers: { ...r.headers }, bytes, url: r.url, text: readText, json: <T,>() => JSON.parse(readText()) as T }
       },
     } : undefined
+    // ctx.secrets(2026-11-24+,electron/pluginSecrets.ts):只有本机桌面(主进程有 safeStorage)。码原样还原(读失败 ≠ 空)。
+    const secretsBridge = amadeus?.pluginSecrets
+    const secrets: PluginSecretsApi | undefined = secretsBridge ? (() => {
+      const call = async <T,>(op: 'get' | 'set' | 'delete' | 'has' | 'keys', key?: unknown, value?: unknown): Promise<T> => {
+        const dead = (): Error => Object.assign(new Error('plugin disabled'), { code: 'secrets_failed' as const })
+        if (!ctxAlive()) throw dead()
+        const r = await secretsBridge(op, pluginId, key as string | undefined, value as string | undefined)
+        if (!ctxAlive()) throw dead()
+        if (!r.ok) throw Object.assign(new Error(r.message || r.code), { name: 'PluginSecretsError', code: r.code })
+        return r.value as T
+      }
+      return {
+        get: (key) => call<string | null>('get', key),
+        set: (key, value) => call<null>('set', key, value).then(() => undefined),
+        delete: (key) => call<null>('delete', key).then(() => undefined),
+        has: (key) => call<boolean>('has', key),
+        keys: () => call<string[]>('keys'),
+      }
+    })() : undefined
+    // 翻译引擎与本机翻译选择(2026-11-24+,translationEngines.ts):和 ctx.tangu.translate 同一道门。停用 / 重载 → 撤销登记、退订。
+    const translationHost = !!readTangu()?.complete
+    const ownEngines = new Set<string>()
+    const translationApi: PluginTranslationApi | undefined = translationHost ? {
+      current: async () => {
+        const key = chosenEngineKey()
+        const e = findTranslationEngine(key)
+        const model = (await readTangu()?.translateModelInfo?.().catch(() => null)) ?? { name: '' }
+        return { engine: e ? { pluginId: e.pluginId, id: e.id, name: e.name() } : null, model }
+      },
+      use: async (id) => {
+        if (!ctxAlive()) throw new Error('plugin disabled')
+        if (id == null) { setChosenEngine(null); return }
+        if (typeof id !== 'string' || !ownEngines.has(id) || !findTranslationEngine(engineKey(pluginId, id))) throw new Error(`ctx.translation.use: "${String(id)}" is not an engine this plugin registered`)
+        setChosenEngine(engineKey(pluginId, id))
+      },
+      subscribe: (cb) => {
+        if (!ctxAlive() || typeof cb !== 'function') return () => {}
+        return scope.own('subscription', subscribeTranslationChoice(() => { if (ctxAlive()) { try { cb() } catch { /* 插件回调抛错不打断别人 */ } } }), 'translation')
+      },
+    } : undefined
+    const registerEngine: PluginContext['registerTranslationEngine'] = translationHost ? (def) => {
+      if (!ctxAlive()) return () => {}
+      if (!def || typeof def !== 'object' || typeof def.id !== 'string' || !ENGINE_ID_RE.test(def.id) || !isPluginText(def.name) || typeof def.translate !== 'function' || (def.ready != null && typeof def.ready !== 'function')) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerTranslationEngine 缺 id(小写字母数字和 -,≤32)/ name / translate,已忽略`)
+        return () => {}
+      }
+      const id = def.id
+      ownEngines.add(id)
+      const off = hostRegisterEngine(pluginId, {
+        id, name: def.name,
+        ready: def.ready ? () => !!ctxAlive() && def.ready!() !== false : () => !!ctxAlive(),
+        translate: (req) => {
+          if (!ctxAlive()) return Promise.reject(new Error('plugin disabled'))
+          return Promise.resolve(def.translate({ text: req.text, to: req.to, ...(req.before ? { before: req.before } : {}), signal: req.signal }))
+        },
+      })
+      const release = scope.own('subscription', () => { ownEngines.delete(id); off() }, 'translationEngine')
+      return release
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
     account: scopedAccount,
     ...(net ? { net } : {}),
+    ...(secrets ? { secrets } : {}),
+    ...(translationApi ? { translation: translationApi } : {}),
+    ...(registerEngine ? { registerTranslationEngine: registerEngine } : {}),
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
@@ -3239,7 +3304,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
                           ...(run.pageInstructions ? { pageInstructions: run.pageInstructions } : {}),
                         }
                       : body
-                    const r = await scoped(what, req, (o) => probe.complete!(full, o))
+                    const routed: TanguCompleteRequest = run?.noEngine && what === 'translate' ? { ...full, noEngine: true } : full
+                    const r = await scoped(what, req, (o) => probe.complete!(routed, o))
                     const model = r.model ?? (body.modelId ? { id: body.modelId, name: body.modelId } : undefined)
                     if (run && model && !run.model) run.model = model // 一次 run 里先出的那个算(插件再调别的模型做校对不改署名)
                     return { text: r.text, ...(model ? { model } : {}) }

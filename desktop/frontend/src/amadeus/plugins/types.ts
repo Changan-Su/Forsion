@@ -1842,6 +1842,83 @@ export interface PluginNetApi {
   }): Promise<PluginNetResponse>
 }
 
+/** Error codes `ctx.secrets` rejects with (on `err.code`). */
+export type PluginSecretsErrorCode =
+  /** Key isn't `^[a-z0-9][a-z0-9._-]{0,63}$`, or the value isn't a string. */
+  | 'secrets_bad_key'
+  /** Value longer than 8192 characters. */
+  | 'secrets_too_large'
+  /** More than 64 keys for this plugin. */
+  | 'secrets_too_many'
+  /** This device has no system encryption for secrets right now (no keychain, Linux basic_text). Nothing was stored —
+   *  the host never writes a secret in plain text. */
+  | 'secrets_unavailable'
+  /** The key exists but can't be decrypted right now (keychain locked, different OS account). It is NOT the same as
+   *  "never set": don't treat it as empty and don't overwrite it. */
+  | 'secrets_locked'
+  /** Anything else (the store file is unreadable, a write failed). */
+  | 'secrets_failed'
+
+/**
+ * Secrets kept per plugin in this computer's system keychain (2026-11-24+, desktop only; `if (ctx.secrets)`).
+ * For third-party API keys and the like — not synced, not in plugin data, not in diagnostics. Removed when the plugin is
+ * uninstalled without "keep settings". Plugins share the app's renderer, so "per plugin" keeps them tidy, it is not a
+ * security boundary between plugins. Rejections carry a {@link PluginSecretsErrorCode} on `err.code`.
+ */
+export interface PluginSecretsApi {
+  /** `null` = never set. A stored key that can't be decrypted rejects with `secrets_locked` (never `null`). */
+  get(key: string): Promise<string | null>
+  set(key: string, value: string): Promise<void>
+  delete(key: string): Promise<void>
+  /** Doesn't decrypt. */
+  has(key: string): Promise<boolean>
+  /** Doesn't decrypt. Sorted. */
+  keys(): Promise<string[]>
+}
+
+/**
+ * A translation service your plugin offers to the whole app (2026-11-24+). Once registered and `ready()`, users can pick it
+ * on the result card (`card.service`), in Settings → Models → Default models → Translate, or from your own settings page
+ * through `ctx.translation.use(id)`. Then the editor's Translate, the selection bar and every plugin's
+ * `ctx.tangu.translate` (without `modelId`) go through it.
+ *
+ * The host wraps every call: formulas, code and link targets are swapped for opaque markers before `translate` sees the
+ * text, and checked and restored afterwards (one retry with your engine if markers go missing, then
+ * `translation_format_lost`). If your `translate` rejects, the user sees your `message` — write it for people
+ * ("DeepL didn't translate: the key was rejected (HTTP 403)"). The host never quietly switches to another service.
+ */
+export interface TranslationEngineContribution {
+  /** Unique within your plugin: `^[a-z0-9][a-z0-9-]{0,31}$`. Registering the same id again replaces it. */
+  id: string
+  /** Shown in menus and settings. */
+  name: PluginText
+  /** `false` = can't translate right now (no key yet, failed check): left out of the lists. If the user had picked it,
+   *  translation reports `translation_engine_unavailable` instead of switching. Called often — keep it cheap and
+   *  synchronous. Default: always ready. */
+  ready?(): boolean
+  /** Translate `text` into `to` and resolve with the translation only. */
+  translate(req: {
+    /** Contains opaque markers like `ZXQ1a2b3c4d_0QXZ` where formulas, code and links were. Leave them exactly as they are. */
+    text: string
+    /** Target language as an English name: 'Chinese (Simplified)', 'English', 'Japanese', 'Korean', 'French', 'German',
+     *  'Spanish', 'Russian' (more may come). */
+    to: string
+    /** The passage just before the selection, for disambiguation only (e.g. DeepL's `context`). Don't translate it. */
+    before?: string
+    signal: AbortSignal
+  }): Promise<string>
+}
+
+/** What translation uses on this device (2026-11-24+). The choice is per device (keys are too) and not synced. */
+export interface PluginTranslationApi {
+  /** `engine: null` = Forsion models (Settings → Models → Default models → Translate); `model` is what that slot resolves to now. */
+  current(): Promise<{ engine: { pluginId: string; id: string; name: string } | null; model: { id?: string; name: string } }>
+  /** Switch to one of **your own** registered engines by id, or `null` for Forsion models. Rejects for anything else. */
+  use(id: string | null): Promise<void>
+  /** Called when the choice or the set of engines changes (any window, the settings page, the card head). */
+  subscribe(cb: () => void): () => void
+}
+
 /** Host-owned account; credentials never form part of this plugin API. */
 export interface PluginAccount {
   status(): Promise<PluginAccountStatus>
@@ -1900,6 +1977,13 @@ export interface SelectionActionContribution {
     source?: boolean
     /** Speaker buttons next to the original and the result. Hidden where read-aloud isn't available (see `ctx.tts`). */
     speak?: boolean
+    /** (2026-11-24+) A translation-service button in the card head, showing what translation uses on this device
+     *  (an engine from `ctx.registerTranslationEngine`, or "Forsion models"). Its menu lists every ready engine,
+     *  "Forsion models" and — when your plugin has a settings page — "Translation settings…". Picking one switches the
+     *  device's choice and runs the action again. When `run` fails, the card also offers "Retry with Forsion models"
+     *  (just this once: `ctx.tangu.translate` calls carrying this run's `cx.signal` skip the engine) and the settings link.
+     *  Only useful when `run` translates through `ctx.tangu.translate`. */
+    service?: boolean
   }
   /** Where the action is listed. Default `'note'`.
    *  - `'note'` — v4 notes only.
@@ -2199,6 +2283,15 @@ export interface PluginContext {
   /** Host-made HTTPS requests to the domains in manifest `network` (2026-11-16+, desktop only; see {@link PluginNetApi}).
    *  Absent on web, mobile and older hosts. */
   net?: PluginNetApi
+  /** Small secrets (third-party API keys) kept in this computer's system keychain (2026-11-24+, desktop only;
+   *  see {@link PluginSecretsApi}). Absent on web, mobile and older hosts. */
+  secrets?: PluginSecretsApi
+  /** Offer a translation service (DeepL, your own API…) to the whole app (2026-11-24+; same gate as
+   *  `ctx.tangu.translate`). See {@link TranslationEngineContribution}. Returns an unregister function; disabling or
+   *  reloading the plugin unregisters too. */
+  registerTranslationEngine?(def: TranslationEngineContribution): () => void
+  /** What translation uses on this device, and switching it to one of your engines (2026-11-24+; same gate). */
+  translation?: PluginTranslationApi
   app: PluginAppApi
   registerSlashItem(item: SlashContribution): void
   /** Add an action to the selection bar's "⋯" menu (see SelectionActionContribution). The result goes

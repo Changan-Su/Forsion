@@ -24,9 +24,10 @@ import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, rememberSelectionLanguage, setSelectionAuto, type OwnedSelectionAction } from '../../selectionActions'
 import { bindSelectionRun, unbindSelectionRun, type SelectionRunModel } from '../../amadeus/plugins/selectionRun'
+import { chosenEngineKey } from '../../amadeus/plugins/translationEngines'
 import { translateTargetOf } from '../../translateTarget'
 import { selectionMarkdown } from './selectionMarkdown'
-import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
+import { buildSelectionBarModel, cardOptionsOf, cardServiceOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
 import { TtsSetupCard } from './TtsSetupCard'
 
 registerMessages({
@@ -394,19 +395,20 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   const armedFor = card?.auto ? `${card.key}:${card.runKey}` : null
   const lastArmed = useRef<string | null>(null)
   if (armedFor !== lastArmed.current) { lastArmed.current = armedFor; cacheArmed.current = armedFor ? card!.runKey : null }
-  const runCard: InlineAiRun = async (_instruction, onDelta, signal) => {
+  const runCard: InlineAiRun = async (_instruction, onDelta, signal, runOpts) => {
     if (!card) return { text: '' }
     if (card.action) {
       const o = usePluginStore.getState().selectionActions.find((x) => selectionActionKey(x) === card.action)
       if (!o) throw new Error(translate('selbar.err.gone'))
       const cache = autoCacheOf(o.item)
-      const ck = autoCacheKey(p.view, card.source, card.language, card.markdown)
+      // 换了翻译服务,同一段的缓存不能拿来顶(键里带上本机选择)
+      const ck = autoCacheKey(p.view, card.source, `${card.language ?? ''}|${chosenEngineKey() ?? ''}`, card.markdown)
       const useCache = card.auto && cacheArmed.current === card.runKey
       cacheArmed.current = null
       const hit = useCache ? cache.get(ck) : undefined
       if (hit != null) return { text: hit.text, ...(hit.model ? { model: { name: hit.model.name, mt: !!hit.model.mt } } : {}) }
       // 插件在 run 里把 cx.signal 交给 ctx.tangu.translate / complete 时,出结果的模型记在这里,卡头照宿主翻译那样署名
-      const ran = bindSelectionRun(signal, { pluginId: o.pluginId })
+      const ran = bindSelectionRun(signal, { pluginId: o.pluginId, ...(runOpts?.noEngine ? { noEngine: true } : {}) })
       let text: string
       try {
         text = await runSelectionAction(o, {
@@ -424,7 +426,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     }
     const complete = readTangu()?.complete
     if (!complete) throw new Error(translate('inlineai.unavailable'))
-    return complete({ action: 'translate', selection: card.markdown, language: card.language }, { signal, onDelta })
+    return complete({ action: 'translate', selection: card.markdown, language: card.language, ...(runOpts?.noEngine ? { noEngine: true } : {}) }, { signal, onDelta })
   }
 
   const cardOwned = card?.action ? plugins.find((x) => selectionActionKey(x) === card.action) : undefined
@@ -439,6 +441,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     if (speakPrefix && cur?.startsWith(speakPrefix)) probe!.stop(cur)
   }, [speakPrefix])
   const opts = cardOptionsOf(cardOwned)
+  const settingsPluginIds = new Set(usePluginStore.getState().settingsPages.map((o) => o.pluginId))
   const cardSpeak = card && cardOwned && opts.speak && tts
     ? {
         phase: (which: 'source' | 'result', text: string): SpeakPhase => (speaking?.key === `${cardSpeakPrefix(card)}${which}:${text}` ? speaking.phase : null),
@@ -473,6 +476,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           source={cardOwned && opts.source ? card.text : undefined}
           speak={cardSpeak}
           auto={cardOwned && opts.auto ? { on: selectionActionPrefs().auto[card.action!] === true, onChange: (on) => setSelectionAuto(card.action!, on) } : undefined}
+          service={cardServiceOf(cardOwned, settingsPluginIds)}
         />
       )}
       {ttsCard && (
