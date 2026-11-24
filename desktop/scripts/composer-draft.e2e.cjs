@@ -7,6 +7,7 @@
  *  ③ 在草稿中间插字,光标不跳到末尾(草稿住在 store 里,输入框是受控的);
  *  ④ ↑ 召回历史消息到一半切走,进入召回前的那份草稿不丢;
  *  ⑤ 新对话的第一句没发出去(起 run 被拒):那份输入留在刚建的会话里可以重发,不留在新对话里。
+ *  ⑥ ↑ / ↓ 在显式换行和自动折行之间移动光标,仅在输入框首 / 末行切换历史。
  *
  * 需先 npm run build。用法:npm run e2e:composerdraft
  * 负对照:FORSION_E2E_ROOT=<没有这次改动的检出>/desktop node scripts/composer-draft.e2e.cjs —— ① ② 必须转红。
@@ -32,6 +33,8 @@ const session = (id, title) => ({
   created_at: '2026-10-09 09:00:00', updated_at: '2026-10-09 09:00:00',
 })
 
+const wrappedText = 'This draft wraps without an explicit newline. '.repeat(24).trim()
+const historyText = '以前发过的一句\n' + wrappedText
 const T_MSG = Date.parse('2026-10-09T09:00:00Z')
 const msg = (id, role, content, dt) => ({
   id, role, content, reasoning: null, tool_calls: null, tool_results: null, attachments: null, display_files: null,
@@ -45,7 +48,7 @@ async function main() {
   }
   const stub = await startStubEngine({
     sessions: [session('draft-a', '草稿甲'), session('draft-b', '草稿乙')],
-    messages: [msg('u1', 'user', '以前发过的一句', 0), msg('a1', 'model', '收到', 1000)], // 桩对每个会话都回这两条:↑ 有东西可召回
+    messages: [msg('u1', 'user', historyText, 0), msg('a1', 'model', '收到', 1000)], // 桩对每个会话都回这两条:↑ 有东西可召回
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-composer-draft-'))
@@ -97,9 +100,50 @@ async function main() {
     check('在草稿中间插字:落在光标处', (await value()) === '写给XY甲的半句', JSON.stringify(await value()))
     await win.screenshot({ path: SHOT })
 
+    // ── ⑥ 首 / 末行按实际折行算,有相邻行时让 textarea 处理方向键 ──
+    const caret = () => ta.evaluate(el => el.selectionStart)
+    const setCaret = (at) => ta.evaluate((el, offset) => el.setSelectionRange(offset, offset), at)
+    const hardLines = 'first line\nsecond line\nthird line'
+    const secondLineOffset = hardLines.indexOf('second') + 3
+    await type(hardLines)
+    await setCaret(secondLineOffset)
+    await win.keyboard.press('ArrowUp')
+    check('↑ 在显式换行间移动光标', (await value()) === hardLines && (await caret()) < hardLines.indexOf('\n'))
+    await win.keyboard.press('ArrowDown')
+    check('↓ 在显式换行间移动光标', (await value()) === hardLines && (await caret()) >= hardLines.indexOf('second'))
+
+    await type(wrappedText)
+    await setCaret(wrappedText.length)
+    await win.keyboard.press('ArrowUp')
+    check('↑ 在自动折行间移动光标', (await value()) === wrappedText && (await caret()) < wrappedText.length)
+    await setCaret(3)
+    await win.keyboard.press('Shift+ArrowUp')
+    const selection = await ta.evaluate(el => ({ start: el.selectionStart, end: el.selectionEnd }))
+    check('Shift+↑ 保留原生选择行为', (await value()) === wrappedText && selection.start === 0 && selection.end === 3, JSON.stringify(selection))
+    await setCaret(3)
+    await win.keyboard.press('ArrowUp')
+    check('↑ 在自动折行草稿的首行召回历史', (await value()) === historyText)
+    if ((await value()) === historyText) {
+      await win.waitForFunction(() => {
+        const el = document.activeElement
+        return el instanceof HTMLTextAreaElement && el.selectionStart === el.value.length
+      })
+      await setCaret(3)
+      await win.keyboard.press('ArrowUp')
+      check('↑ 到最早一条后保留原生光标操作', (await value()) === historyText && (await caret()) === 0)
+      const wrappedHistoryStart = historyText.indexOf('\n') + 2
+      await setCaret(wrappedHistoryStart)
+      await win.keyboard.press('ArrowDown')
+      check('↓ 在历史消息的自动折行间移动光标', (await value()) === historyText && (await caret()) > wrappedHistoryStart)
+      await setCaret(historyText.length)
+      await win.keyboard.press('ArrowDown')
+      check('↓ 在历史消息的末行恢复草稿', (await value()) === wrappedText)
+    }
+
+    await type('写给XY甲的半句')
     // ── ④ 召回到一半切走:进入召回前的草稿只存在组件里,得放回原会话 ──
     await win.keyboard.press('ArrowUp')
-    check('↑ 召回了历史消息', (await value()) === '以前发过的一句', JSON.stringify(await value()))
+    check('↑ 召回了历史消息', (await value()) === historyText, JSON.stringify(await value()))
     await open('草稿乙')
     await open('草稿甲')
     check('召回到一半切走再回来:原先的草稿还在', (await value()) === '写给XY甲的半句', JSON.stringify(await value()))
