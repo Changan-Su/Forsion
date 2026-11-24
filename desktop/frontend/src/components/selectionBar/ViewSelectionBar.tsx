@@ -24,9 +24,10 @@ import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { runSelectionAction, selectionActionKey, selectionActionPrefs, selectionActionTitle, selectionBarOrder, rememberSelectionLanguage, setSelectionAuto, type OwnedSelectionAction } from '../../selectionActions'
 import { bindSelectionRun, unbindSelectionRun, type SelectionRunModel } from '../../amadeus/plugins/selectionRun'
+import { chosenEngineKey } from '../../amadeus/plugins/translationEngines'
 import { translateTargetOf } from '../../translateTarget'
 import { selectionMarkdown } from './selectionMarkdown'
-import { buildSelectionBarModel, cardOptionsOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
+import { buildSelectionBarModel, cardOptionsOf, cardServiceOf, speakKeyOf, useSelectionBarLive, type SpeakPhase } from './barModel'
 import { TtsSetupCard } from './TtsSetupCard'
 
 registerMessages({
@@ -226,8 +227,8 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
       const at = e.target as Element | null
       fromBar = !!at?.closest?.('.selbar')
       cancelAuto()
-      // 结果卡 / 朗读提示卡和条是一起的(自动开的卡和条同时在):点在卡里不算点到外面
-      if (at && !el.contains(at) && !fromBar && !at.closest?.('.am-ai-panel')) clear()
+      // 结果卡 / 朗读提示卡和条是一起的(自动开的卡和条同时在):点在卡里不算点到外面;卡头服务菜单挂在 body 下(.plugin-menu),也算卡里
+      if (at && !el.contains(at) && !fromBar && !at.closest?.('.am-ai-panel, .plugin-menu')) clear()
     }
     // 标记只管这一次按下到松手:松手过去就清。留到「下一次按下」的话,之后前面没有按下的松手(脚本派发的那种)会被它吞掉。
     // 冒泡阶段挂在 document 上,排在 el 自己的 read 后面。
@@ -394,28 +395,30 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   const armedFor = card?.auto ? `${card.key}:${card.runKey}` : null
   const lastArmed = useRef<string | null>(null)
   if (armedFor !== lastArmed.current) { lastArmed.current = armedFor; cacheArmed.current = armedFor ? card!.runKey : null }
-  const runCard: InlineAiRun = async (_instruction, onDelta, signal) => {
+  const runCard: InlineAiRun = async (_instruction, onDelta, signal, runOpts) => {
     if (!card) return { text: '' }
     if (card.action) {
       const o = usePluginStore.getState().selectionActions.find((x) => selectionActionKey(x) === card.action)
       if (!o) throw new Error(translate('selbar.err.gone'))
       const cache = autoCacheOf(o.item)
-      const ck = autoCacheKey(p.view, card.source, card.language, card.markdown)
+      // 换了翻译服务,同一段的缓存不能拿来顶(键里带上本机选择)
+      const ck = autoCacheKey(p.view, card.source, `${card.language ?? ''}|${chosenEngineKey() ?? ''}`, card.markdown)
       const useCache = card.auto && cacheArmed.current === card.runKey
       cacheArmed.current = null
       const hit = useCache ? cache.get(ck) : undefined
       if (hit != null) return { text: hit.text, ...(hit.model ? { model: { name: hit.model.name, mt: !!hit.model.mt } } : {}) }
       // 插件在 run 里把 cx.signal 交给 ctx.tangu.translate / complete 时,出结果的模型记在这里,卡头照宿主翻译那样署名
-      const ran = bindSelectionRun(signal, { pluginId: o.pluginId })
+      const ran = bindSelectionRun(signal, { pluginId: o.pluginId, ...(runOpts?.noEngine ? { noEngine: true } : {}) })
       let text: string
       try {
         text = await runSelectionAction(o, {
         text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
         onDelta: (d) => { if (typeof d === 'string') onDelta(d) },
-        ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
+        ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}), ...(runOpts?.noEngine ? { noEngine: true } : {}),
       })
       } finally { unbindSelectionRun(signal) }
-      if (card.auto && text && !signal.aborted) {
+      // 「用 Forsion 模型重试」那一次的结果不进缓存:键是本机选的服务,拿它顶下一次会绕过那个服务(Codex 评审 #4)
+      if (card.auto && text && !signal.aborted && !runOpts?.noEngine) {
         cache.delete(ck)
         cache.set(ck, { text, ...(ran.model ? { model: ran.model } : {}) })
         if (cache.size > AUTO_CACHE_MAX) cache.delete(cache.keys().next().value!)
@@ -424,7 +427,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     }
     const complete = readTangu()?.complete
     if (!complete) throw new Error(translate('inlineai.unavailable'))
-    return complete({ action: 'translate', selection: card.markdown, language: card.language }, { signal, onDelta })
+    return complete({ action: 'translate', selection: card.markdown, language: card.language, ...(runOpts?.noEngine ? { noEngine: true } : {}) }, { signal, onDelta })
   }
 
   const cardOwned = card?.action ? plugins.find((x) => selectionActionKey(x) === card.action) : undefined
@@ -439,6 +442,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     if (speakPrefix && cur?.startsWith(speakPrefix)) probe!.stop(cur)
   }, [speakPrefix])
   const opts = cardOptionsOf(cardOwned)
+  const settingsPluginIds = new Set(usePluginStore.getState().settingsPages.map((o) => o.pluginId))
   const cardSpeak = card && cardOwned && opts.speak && tts
     ? {
         phase: (which: 'source' | 'result', text: string): SpeakPhase => (speaking?.key === `${cardSpeakPrefix(card)}${which}:${text}` ? speaking.phase : null),
@@ -473,6 +477,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           source={cardOwned && opts.source ? card.text : undefined}
           speak={cardSpeak}
           auto={cardOwned && opts.auto ? { on: selectionActionPrefs().auto[card.action!] === true, onChange: (on) => setSelectionAuto(card.action!, on) } : undefined}
+          service={cardServiceOf(cardOwned, settingsPluginIds)}
         />
       )}
       {ttsCard && (

@@ -1,13 +1,13 @@
 /**
  * 沙箱窗口的标识与操作(只在沙箱那份 Forsion 的主窗里挂):右上角浮钮组最前面一格(引擎的 setEdgeAccessory)——
  * 「沙箱 · 插件名」胶囊 + 重置 / 报告问题(只留图标)+ 安装。放进浮钮组的流内,标签头按整宽让位,不再浮在标签上叠字(11-20)。
- * 首次打开时右下角垂一张说明卡,不压插件自己的工具栏。按钮只把意图转给父进程(window.tangu.sandbox.action),决定与确认框都在父进程那边。
+ * 首次打开时右下角垂一张说明卡;agent 点的目标被它压着时自动收起(sandboxWindow 的 clearNote,同通知),人点「知道了」也收。按钮只把意图转给父进程(window.tangu.sandbox.action),决定与确认框都在父进程那边。
  */
 import { useEffect, useState } from 'react'
 import { Download, Flag, FlaskConical, RotateCcw, X } from 'lucide-react'
 import { OverlayAt, UI_MODE, setEdgeAccessory } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
-import { sandboxSelf } from './sandboxWindow'
+import { SANDBOX_NOTE_COLLAPSE, sandboxSelf } from './sandboxWindow'
 import './sandbox.css'
 
 registerMessages({
@@ -52,8 +52,14 @@ export function SandboxChrome() {
   )
   useEffect(() => { if (docked) setEdgeAccessory(row) }, [self, t, reporting]) // eslint-disable-line react-hooks/exhaustive-deps -- row 由这三样决定
   useEffect(() => () => setEdgeAccessory(null), [])
-  if (!self) return null
   const closeNote = () => { setNote(false); try { localStorage.setItem(NOTE_KEY, '1') } catch { /* 下次再提示 */ } }
+  // agent 在沙箱里点的东西正好压在说明条底下 → sandboxWindow 先让它收起再点(同通知;11-23)
+  useEffect(() => {
+    if (!note) return
+    window.addEventListener(SANDBOX_NOTE_COLLAPSE, closeNote)
+    return () => window.removeEventListener(SANDBOX_NOTE_COLLAPSE, closeNote)
+  }, [note])
+  if (!self) return null
   const send = () => { act('report', text.trim()); setText(''); setReporting(false) }
   return (
     <>

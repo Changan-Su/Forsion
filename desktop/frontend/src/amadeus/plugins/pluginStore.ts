@@ -123,6 +123,8 @@ import type {
   PlatformAccountStatus,
   PluginContext,
   PluginNetApi,
+  PluginSecretsApi,
+  PluginTranslationApi,
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
@@ -144,6 +146,7 @@ import type {
 } from './types'
 import { validateTableSpec } from './tableSpec'
 import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
+import { clearHostDenials, noteHostDenial, resetHostDenials, type HostDenialApi, type HostDenialCode } from './hostDenials'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { createEffectScope, type EffectHandle, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
@@ -169,6 +172,7 @@ import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef } from '../../telemetryPluginId'
 import { unitAuthHeader } from '../../services/unitToken'
 import { selectionRunOf } from './selectionRun'
+import { chosenEngineKey, ENGINE_ID_RE, engineKey, findTranslationEngine, registerTranslationEngine as hostRegisterEngine, setChosenEngine, subscribeTranslationChoice } from './translationEngines'
 import { TRANSLATION_PLUGIN_ID } from '../../selectionActions'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
@@ -1593,6 +1597,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // registerCompanion 不再挂新伴随面、旧 handle 变哑。语言 / 模型 / 账号订阅、仪表盘 / 原生表 / 宿主 UI 挂载、
     // 字体、伴随面……插件自己能撤,但**最终责任人是宿主**:全记在 scope 上,关账统一撤(codex 评审 2026-08-14 起的纪律)。
     const ctxAlive = (): boolean => scope.alive()
+    resetHostDenials(pluginId) // 这一次激活重新开始记「被宿主拒掉」(hostDenials.ts)
+    /** 只有本机托管引擎才放行的接口被拒:报错原样抛给插件(插件可能按这串字判断),宿主另外留一条开发者看得到的记录
+     *  (控制台 + 插件诊断,同一原因只记一次,见 hostDenials.ts)。原因按 tanguProbe 的同一套判定说;等引擎超时另算。 */
+    const hostRefusal = (api: HostDenialApi, message: string, timedOut = false): Error => {
+      const block = readTangu()?.hostExecutionBlock?.()
+      // 'pending' = 启动早期配置还没读到就被拒:一会儿就有答案,不记(记成「引擎没及时就绪」会在托管模式就绪后还挂着,Codex 11-23)
+      const code: HostDenialCode | null = timedOut || !block ? 'engine-unavailable' : block === 'pending' ? null : block
+      if (code && ctxAlive()) noteHostDenial(pluginId, api, code)
+      return new Error(message)
+    }
     /** 模板钩子提示里点名用的插件显示名(当前语言)。 */
     const hookPluginName = (): string => { const p = get().plugins.find((x) => x.id === pluginId); return p ? pluginDisplayName(p, currentLocale()) : pluginId }
     // workspace.open 的插件这一半(第三期):只开自己的视图(类型名宿主拼命名空间)、层级白名单在 pluginLayer。
@@ -2034,10 +2048,74 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return { status: r.status, headers: { ...r.headers }, bytes, url: r.url, text: readText, json: <T,>() => JSON.parse(readText()) as T }
       },
     } : undefined
+    // ctx.secrets(2026-11-24+,electron/pluginSecrets.ts):只有本机桌面(主进程有 safeStorage)。码原样还原(读失败 ≠ 空)。
+    const secretsBridge = amadeus?.pluginSecrets
+    const secrets: PluginSecretsApi | undefined = secretsBridge ? (() => {
+      const call = async <T,>(op: 'get' | 'set' | 'delete' | 'has' | 'keys', key?: unknown, value?: unknown): Promise<T> => {
+        const dead = (): Error => Object.assign(new Error('plugin disabled'), { code: 'secrets_failed' as const })
+        if (!ctxAlive()) throw dead()
+        const r = await secretsBridge(op, pluginId, key as string | undefined, value as string | undefined)
+        if (!ctxAlive()) throw dead()
+        if (!r.ok) throw Object.assign(new Error(r.message || r.code), { name: 'PluginSecretsError', code: r.code })
+        return r.value as T
+      }
+      return {
+        get: (key) => call<string | null>('get', key),
+        set: (key, value) => call<null>('set', key, value).then(() => undefined),
+        delete: (key) => call<null>('delete', key).then(() => undefined),
+        has: (key) => call<boolean>('has', key),
+        keys: () => call<string[]>('keys'),
+      }
+    })() : undefined
+    // 翻译引擎与本机翻译选择(2026-11-24+,translationEngines.ts):和 ctx.tangu.translate 同一道门。停用 / 重载 → 撤销登记、退订。
+    const translationHost = !!readTangu()?.complete
+    // id → 这次登记的令牌:同 id 重登记后,旧的撤销函数不许把新登记的归属也抹掉(Codex 评审 #6)
+    const ownEngines = new Map<string, object>()
+    const translationApi: PluginTranslationApi | undefined = translationHost ? {
+      current: async () => {
+        const key = chosenEngineKey()
+        const e = findTranslationEngine(key)
+        const model = (await readTangu()?.translateModelInfo?.().catch(() => null)) ?? { name: '' }
+        return { engine: e ? { pluginId: e.pluginId, id: e.id, name: e.name() } : null, model }
+      },
+      use: async (id) => {
+        if (!ctxAlive()) throw new Error('plugin disabled')
+        if (id == null) { setChosenEngine(null); return }
+        if (typeof id !== 'string' || !ownEngines.has(id) || !findTranslationEngine(engineKey(pluginId, id))) throw new Error(`ctx.translation.use: "${String(id)}" is not an engine this plugin registered`)
+        setChosenEngine(engineKey(pluginId, id))
+      },
+      subscribe: (cb) => {
+        if (!ctxAlive() || typeof cb !== 'function') return () => {}
+        return scope.own('subscription', subscribeTranslationChoice(() => { if (ctxAlive()) { try { cb() } catch { /* 插件回调抛错不打断别人 */ } } }), 'translation')
+      },
+    } : undefined
+    const registerEngine: PluginContext['registerTranslationEngine'] = translationHost ? (def) => {
+      if (!ctxAlive()) return () => {}
+      if (!def || typeof def !== 'object' || typeof def.id !== 'string' || !ENGINE_ID_RE.test(def.id) || !isPluginText(def.name) || typeof def.translate !== 'function' || (def.ready != null && typeof def.ready !== 'function')) {
+        console.warn(`[amadeus] 插件 ${pluginId} 的 registerTranslationEngine 缺 id(小写字母数字和 -,≤32)/ name / translate,已忽略`)
+        return () => {}
+      }
+      const id = def.id
+      const token = {}
+      ownEngines.set(id, token)
+      const off = hostRegisterEngine(pluginId, {
+        id, name: def.name,
+        ready: def.ready ? () => !!ctxAlive() && def.ready!() !== false : () => !!ctxAlive(),
+        translate: (req) => {
+          if (!ctxAlive()) return Promise.reject(new Error('plugin disabled'))
+          return Promise.resolve(def.translate({ text: req.text, to: req.to, ...(req.before ? { before: req.before } : {}), signal: req.signal }))
+        },
+      })
+      const release = scope.own('subscription', () => { if (ownEngines.get(id) === token) ownEngines.delete(id); off() }, 'translationEngine')
+      return release
+    } : undefined
     const ctx: PluginContext = {
     app: appApi,
     account: scopedAccount,
     ...(net ? { net } : {}),
+    ...(secrets ? { secrets } : {}),
+    ...(translationApi ? { translation: translationApi } : {}),
+    ...(registerEngine ? { registerTranslationEngine: registerEngine } : {}),
     registerSlashItem: (item) => set((s) => ({ slashItems: [...s.slashItems, { pluginId, item }] })),
     registerSelectionAction: (action) => {
       if (!ctxAlive()) return
@@ -3000,7 +3078,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 const route = pluginRequestPath(bundle?.dir ?? pluginId, engineId, path, bundle?.enginePlugins ?? [])
                 const method = opts.method ?? 'GET'
                 if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error('Invalid request method')
-                if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                if (!readTangu()?.hostExecution?.()) throw hostRefusal('ctx.tangu.request', 'A local engine is required')
                 const ac = new AbortController()
                 const stop = scope.own('request', () => ac.abort(), 'plugin route')
                 const onAbort = (): void => ac.abort()
@@ -3009,12 +3087,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 try {
                   const cfg = await readTangu()?.waitBackend?.(15_000)
                   if (!ctxAlive() || ac.signal.aborted) throw new Error('plugin disabled or request cancelled')
-                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw hostRefusal('ctx.tangu.request', 'Local engine is unavailable', !cfg)
                   const result = await engineJsonRequest(connectionTarget(cfg), route, {
                     method, signal: ac.signal,
                     ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
                   })
                   if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (ctxAlive()) clearHostDenials(pluginId, 'ctx.tangu.request') // 旧一次激活在途的请求成功了,别撤新一次激活的记录
                   return result
                 } finally { opts.signal?.removeEventListener('abort', onAbort); stop.forget() }
               },
@@ -3024,10 +3103,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
                 try {
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   if (typeof kind !== 'string' || !/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error('Invalid channel kind')
-                  if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                  if (!readTangu()?.hostExecution?.()) throw hostRefusal('ctx.tangu.connectChannel', 'A local engine is required')
                   const cfg = await readTangu()?.waitBackend?.(15_000)
                   if (!ctxAlive()) throw new Error('plugin disabled')
-                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw hostRefusal('ctx.tangu.connectChannel', 'Local engine is unavailable', !cfg)
                   const target = connectionTarget(cfg)
                   const { channels } = await engineJsonRequest<{ channels: ChannelOwnership[] }>(target, '/agent/channels')
                   const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
@@ -3039,6 +3118,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(modelId ? { ...patch, modelId } : patch) })
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   const r = await engineJsonRequest<{ accountId: string; label: string; sessionId: string }>(target, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
+                  if (ctxAlive()) clearHostDenials(pluginId, 'ctx.tangu.connectChannel') // 旧一次激活在途的请求成功了,别撤新一次激活的记录
                   return { ok: true as const, accountId: r.accountId, label: r.label, sessionId: r.sessionId }
                 } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
@@ -3239,7 +3319,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
                           ...(run.pageInstructions ? { pageInstructions: run.pageInstructions } : {}),
                         }
                       : body
-                    const r = await scoped(what, req, (o) => probe.complete!(full, o))
+                    const routed: TanguCompleteRequest = run?.noEngine && what === 'translate' ? { ...full, noEngine: true } : full
+                    const r = await scoped(what, req, (o) => probe.complete!(routed, o))
                     const model = r.model ?? (body.modelId ? { id: body.modelId, name: body.modelId } : undefined)
                     if (run && model && !run.model) run.model = model // 一次 run 里先出的那个算(插件再调别的模型做校对不改署名)
                     return { text: r.text, ...(model ? { model } : {}) }

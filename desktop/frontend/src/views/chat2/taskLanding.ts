@@ -12,9 +12,10 @@
 import { openNewChat } from '../../sessionNav'
 import { approveMuseTodo, patchMuseTodo, postMuseFeedback, saveAgentScheduleEntry, startChildSession } from '../../services/backendService'
 import { useApp } from '../../stores/appStore'
+import { skillPinReaches } from '../../tangu/store/tanguSlice'
 import type { TaskCard } from './suggest'
 import type { TaskLanding } from './TaskCards'
-import { homeTarget, targetForSession } from '../../services/engine/targets'
+import { focusTarget, homeTarget, targetForSession } from '../../services/engine/targets'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 function localStamp(d: Date): string {
@@ -47,6 +48,27 @@ async function revertTodo(id: string): Promise<void> {
   })
 }
 
+/** 「在这里做 / 新会话」发出去的那条用户消息。卡头点了技能(`skill:`)时,引导语不进用户气泡:
+ *  技能走引擎的 /skill 通道(requestedSkillIds → 引擎在尾部 user 消息后拼「本轮指定技能」指令,不落库),气泡里只有任务书正文。
+ *  技能目录里认不出这个名字(目录还没拉到、技能没装、引擎不同)→ 退回旧做法,把那句英文留在正文里:
+ *  走隐藏通道而引擎又认不出 id 时,指令会被静默丢掉,模型就不加载技能了(比多露一句话更糟)。
+ *  子会话与交给 Muse 两条仍用带引导语的全文(那里没有隐藏通道)。 */
+export function taskCardMessage(card: Pick<TaskCard, 'prompt' | 'skill' | 'brief'>, skills: ReadonlyArray<{ id: string; name?: string }> | null | undefined): { text: string; skillIds?: string[] } {
+  if (!card.skill || !card.brief) return { text: card.prompt }
+  const want = card.skill
+  const hit = skills?.find((s) => s.id === `local:${want}` || s.id === want) ?? skills?.find((s) => s.name === want && s.id.startsWith('local:'))
+  return hit ? { text: card.brief, skillIds: [hit.id] } : { text: card.prompt }
+}
+
+/** 这条发送能不能走 /skill 隐藏通道:
+ *  · 钉选到不了引擎(会话在跑 / 排队 / chat 预设,见 tanguSlice 的 skillPinReaches);
+ *  · 会话不在焦点那台引擎上 → skillsList 是焦点那台的目录,认出来的 id 在那边未必有。
+ *  两种都退回带引导语的全文(仍然交给模型,只是露在气泡里)。新会话(sessionId 为空)落在焦点引擎上,能走。 */
+function hiddenSkillChannel(sessionId: string | null): boolean {
+  if (!skillPinReaches(useApp.getState(), sessionId)) return false
+  return !sessionId || targetForSession(sessionId).key === focusTarget().key
+}
+
 /** 返回 true = 做成(卡片定格);false = 没做成(卡片保留按钮,toast 说明);{ childId } = 开出了子会话(卡原地变成子会话行)。
  *  反馈行只在做成后发,免得 LOG 里记着没发生的事。 */
 export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionId: string | null): Promise<boolean | { childId: string }> {
@@ -71,7 +93,8 @@ export async function runTaskCard(card: TaskCard, landing: TaskLanding, sessionI
     let ok = false
     try {
       if (landing === 'new') openNewChat()
-      ok = !!(await useApp.getState().send(card.prompt, [], undefined, undefined, undefined, landing === 'here' ? sessionId : null))
+      const { text, skillIds } = taskCardMessage(card, hiddenSkillChannel(landing === 'here' ? sessionId : null) ? useApp.getState().skillsList : null)
+      ok = !!(await useApp.getState().send(text, [], undefined, skillIds, undefined, landing === 'here' ? sessionId : null))
     } finally {
       if (!ok && card.todo) await revertTodo(card.todo)
     }

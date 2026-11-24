@@ -512,6 +512,8 @@ interface TanguStoredConfig {
   quotaFallbackModelId: string
   /** 换之前先问我(models.quotaFallbackAsk):开着时停在失败卡上让人选。 */
   quotaFallbackAsk: boolean
+  /** 同一通道同时在飞的模型请求上限(models.channelConcurrency;0 = 没设,引擎按 3)。 */
+  channelConcurrency: number
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -519,6 +521,8 @@ interface TanguStoredConfig {
   /** 上次用的审批档 / 思考档:渲染层新建会话时据此起步(纯 UI 记忆,不进 config.json 段)。 */
   lastApprovalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
+  /** 按 Agent 记的思考档(work;slug → 档位,纯渲染层 UI 记忆)。 */
+  lastThinkingByAgent: Record<string, string>
   /** chat 模式的思考档记忆(按 preset 分槽,与 lastThinkingLevel 互不污染)。 */
   lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
@@ -627,10 +631,12 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   fimModelId: '',
   quotaFallbackModelId: '',
   quotaFallbackAsk: false,
+  channelConcurrency: 0,
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
   lastThinkingLevel: '',
+  lastThinkingByAgent: {},
   lastChatThinkingLevel: '',
   lastUltra: false,
   lastFast: false,
@@ -714,7 +720,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'disabledBundles', // 桌面专属(内置包主进程半身由 main 开机装载)
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', 'lastFast', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
+  'lastApprovalMode', 'lastThinkingLevel', 'lastThinkingByAgent', 'lastChatThinkingLevel', 'lastUltra', 'lastFast', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 // 文件名是与引擎的契约(电脑历史第二道闸经 FORSION_DESKTOP_CONFIG 读它,见 shared/computerHistory.ts),改名三处同步
 const configPath = (): string => join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)
@@ -886,6 +892,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       fimModelId: auxModels.fim || '',
       quotaFallbackModelId: typeof auxModels.quotaFallback === 'string' ? auxModels.quotaFallback : '',
       quotaFallbackAsk: auxModels.quotaFallbackAsk === true,
+      channelConcurrency: Number.isInteger(auxModels.channelConcurrency) && auxModels.channelConcurrency > 0 ? auxModels.channelConcurrency : 0,
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -961,6 +968,11 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
   if ('quotaFallbackModelId' in patch) { auxModels.quotaFallback = patch.quotaFallbackModelId; mT = true }
   if ('quotaFallbackAsk' in patch) { auxModels.quotaFallbackAsk = patch.quotaFallbackAsk === true; mT = true }
+  if ('channelConcurrency' in patch) {
+    const n = Number(patch.channelConcurrency)
+    if (Number.isInteger(n) && n >= 1 && n <= 16) auxModels.channelConcurrency = n; else delete auxModels.channelConcurrency
+    mT = true
+  }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }

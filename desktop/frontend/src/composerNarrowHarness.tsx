@@ -20,6 +20,8 @@ const models = [
   { id: 'gpt-6-luna', name: 'gpt-6-luna', provider: 'codex', source: 'direct', contextWindow: 272000, fastTier: '1.5x speed', thinkingLevels: ['low', 'medium', 'high', 'max'] },
   { id: 'long', name: 'Research / Very long model deployment with spaces and 0123456789', provider: 'codex', source: 'direct', contextWindow: 272000 },
   ...Array.from({ length: 12 }, (_, i) => ({ id: `model-${i}`, name: `Model ${i}`, provider: 'codex', source: 'direct', contextWindow: 272000 })),
+  // ?dupe:另一个通道下也有同名的 gpt-6-luna → 按钮应带通道名(11-23)
+  ...(q.has('dupe') ? [{ id: 'openai-2/gpt-6-luna', name: 'gpt-6-luna', provider: 'openai-2', source: 'direct', contextWindow: 272000 }] : []),
 ] as ModelInfo[]
 const catalog = { models, backgroundModelId: '', imageModelId: '', visionModelId: '' } as ModelsResponse
 const agents = [{ slug: 'arioso', name: 'Arioso' }, { slug: 'research', name: 'Research assistant with a long display name' }] as NormalAgentDef[]

@@ -314,10 +314,13 @@ function providerTools(p: ToolProvider): ToolDef[] {
   });
 }
 
+/** 「不开子会话」拿掉的工具(ctx.noChildSessions)。 */
+export const CHILD_SESSION_TOOLS = new Set(['start_session', 'delegate']);
+
 /**
  * 计划模式白名单:只读探查 + 规划辅助。写文件/跑命令/沙箱执行/记忆写入一律不可见;
  * custom/MCP 工具(外部副作用不可知)由 agentLoop 在 planMode 下整体跳过。
- * delegate 可用:子代理继承 planMode(subAgent 透传 ctx),同样只读。
+ * delegate 11-23 起不在名单里(插件开发优化方案第四节:计划阶段自己开子代理并行查,是撞限流的起头);Muse 例外见 resolveTools。
  */
 const PLAN_MODE_TOOLS = new Set([
   'get_datetime', 'calculator', 'web_search', 'web_fetch',
@@ -330,7 +333,7 @@ const PLAN_MODE_TOOLS = new Set([
   'forsion_guide', // 只读:Forsion 自家产品速查(固定文字)
 
   'list_processes', 'read_process_output',
-  'delegate', 'ask_user', 'exit_plan_mode',
+  'ask_user', 'exit_plan_mode',
   'self_brainstorm', // 纯推理无副作用(分身无工具),计划阶段的方案压力测试正是其主场
   'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
 
@@ -432,7 +435,10 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
     if (!host && m === 'host') return;
     // 计划模式:只读集中过滤。Muse 例外:remember 只写它自己记忆域(agents/muse/MEMORY.md)的自我校准
     // 洞察,不触达用户资产——「对用户的唯一写」仍是 add_muse_todo;普通 plan mode 行为零变化。
-    if (ctx.planMode && !PLAN_MODE_TOOLS.has(t.name) && !((ctx as any).muse && t.name === 'remember')) return;
+    // Muse 另外留着 delegate:它的周期跑在计划模式里,系统提示让它把要更强模型的活 delegate 给 escalateTo(services/muse.ts)。
+    if (ctx.planMode && !PLAN_MODE_TOOLS.has(t.name) && !((ctx as any).muse && (t.name === 'remember' || t.name === 'delegate'))) return;
+    // 会话设置「不开子会话」(11-23):开子会话的两条路都拿掉 —— 只写在提示词里模型守不住(第二轮 dogfood 明令禁止仍开了一个)。
+    if (ctx.noChildSessions && CHILD_SESSION_TOOLS.has(t.name)) return;
     // preset 硬闸(PRESET_TABLE.toolFace;chat 用):planMode 之后、isEnabledFor 之前——工具根本不进 out map,
     // defs / 目录 / load_tools 三处同时看不见。work/coding 的集合为空 → 零行为变化(旧快照逐字节不动)。
     // ① host 族按 t.mode 整族拒,不靠名单:host 侧同名的 read_file/write_file 打的是用户真实磁盘(D45);

@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, safeStorage, shell } from 'electron'
 import { declaredSourcesOf } from '../../shared/storeSources'
 import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, sanitizeInternalsVerified, PLUGIN_CAPABILITIES,type ExternalPluginSource, type PluginBundleInfo, type SupersededInstall } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
@@ -38,6 +38,8 @@ import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
 import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
 import { createManifestPatternLookup, pluginNetRequest } from '../pluginNet'
+import { createPluginSecrets, type PluginSecrets } from '../pluginSecrets'
+import { writePrivateJson } from '../configWrite'
 import { networkOf } from '@amadeus-shared/pluginSource'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
@@ -1092,7 +1094,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
     const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
-    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}) }
+    // 密钥(ctx.secrets)跟着「设置」走:没勾「保留设置」就删掉;不进回收站(恢复插件后要重新填 —— 密钥不该多躺一处)。
+    // 连带卸掉的旧普通副本(superseded)也各有一份;删不掉就回 secretsLeft,渲染层告诉用户(Codex 评审 #5)。
+    let secretsLeft = false
+    if (!opts?.keepSettings) {
+      for (const pid of new Set([id, ...superseded.map((x) => x.id)])) {
+        if (!(await pluginSecrets().removePlugin(pid).catch(() => false))) secretsLeft = true
+      }
+    }
+    return { ...(entry ? { trashId: entry.id } : {}), ...(secretsLeft ? { secretsLeft: true } : {}), dirName: path.basename(target), ...(superseded.length ? { superseded: superseded.map((x) => x.dir) } : {}) }
   })
 
   // 恢复主进程写的回收站条目(Forsion 插件):文件放回原处,重算扩展名保护;偏好交回渲染层写 localStorage、重载插件。
@@ -1159,6 +1169,26 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       return { ok: false, code: 'net_failed', message: 'untrusted sender' }
     }
     return pluginNetRequest(pluginId, url, init, { patternsFor: pluginNetworkPatterns, userAgent: `Forsion/${app.getVersion()}` })
+  })
+
+  // ctx.secrets(2026-11-24+,electron/pluginSecrets.ts):插件的第三方 API 密钥进 safeStorage,按插件 id 分开、不同步。
+  // 同 ctx.net:直接挂 ipcMain(与库无关、也不给 Unit 设备页远端),只认我们自己窗口的顶层页面。
+  ipcMain.handle(IPC.pluginSecrets, (e, op: unknown, pluginId: unknown, key: unknown, value: unknown) => {
+    const wc = e.sender
+    // 比 ctx.net 严:发送帧已经没了(senderFrame 为 null,排队中的调用在导航后才到)也拒,不放行没核过的写(Codex 评审 #2)。
+    // 顶层页面能是什么由 hardenNav 管(SPA 不整页导航到别的源)。
+    if (!wc || wc.isDestroyed() || wc.getType() === 'webview' || !BrowserWindow.fromWebContents(wc) || !e.senderFrame || e.senderFrame !== wc.mainFrame) {
+      return { ok: false, code: 'secrets_failed', message: 'untrusted sender' }
+    }
+    const s = pluginSecrets()
+    switch (op) {
+      case 'get': return s.get(pluginId, key)
+      case 'set': return s.set(pluginId, key, value)
+      case 'delete': return s.delete(pluginId, key)
+      case 'has': return s.has(pluginId, key)
+      case 'keys': return s.keys(pluginId)
+      default: return { ok: false, code: 'secrets_failed', message: 'unknown operation' }
+    }
   })
 
   // 启动即同步预扫插件扩展名 → 早于渲染端 restoreVault→listPages,关掉「.mindmap.md 被当页面加载」的启动竞态(Codex #2)。
@@ -1228,4 +1258,26 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       root: () => vault.getRoot(),
     },
   }
+}
+
+/** ctx.secrets 的存储单例(第一次用到才建;所有插件都没存过时不碰加密后端)。 */
+let pluginSecretsStore: PluginSecrets | null = null
+function pluginSecrets(): PluginSecrets {
+  return (pluginSecretsStore ??= createPluginSecrets({
+    file: path.join(app.getPath('userData'), 'plugin-secrets.json'),
+    crypto: {
+      available: () => safeStorage.isEncryptionAvailable(),
+      backend: () => (process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : process.platform === 'darwin' ? 'keychain' : process.platform === 'win32' ? 'dpapi' : 'none'),
+      encrypt: (v) => safeStorage.encryptString(v),
+      decrypt: (b) => safeStorage.decryptString(b),
+    },
+    platform: process.platform,
+    read: async (f) => {
+      try { return await fs.readFile(f, 'utf8') } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw e
+      }
+    },
+    write: writePrivateJson,
+  }))
 }

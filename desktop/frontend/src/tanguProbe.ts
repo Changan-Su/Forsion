@@ -41,6 +41,10 @@ import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
 import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
+import { translate } from './i18n'
+import { activeTranslationEngine } from './amadeus/plugins/translationEngines'
+import { engineTranslate } from './services/engineTranslate'
+
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { createAgentForPlugin, importSessionsForPlugin, type AgentImportDeps } from './services/pluginAgentImport'
@@ -68,6 +72,14 @@ export async function translateModelChoice(): Promise<{ id?: string; auto?: bool
  *  结果带上实际是谁译的。自动选上的机器翻译模型**一个字没出**就失败(那一行没密钥 / 不支持这对语言)→ 落回聊天模型
  *  再来一次;用户自己选的不落回 —— 那是他要的,错了该看见。 */
 async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOptions = {}): Promise<TanguCompleteResult> {
+  // 本机选了插件登记的翻译引擎(DeepL 等;amadeus/plugins/translationEngines.ts):先走它。选了却用不了 → 报错,不悄悄换。
+  if (!req.noEngine) {
+    const { engine, unavailable } = activeTranslationEngine()
+    if (unavailable) throw Object.assign(new Error(translate('translate.engine.unavailable', { name: unavailable.name() })), { code: 'translation_engine_unavailable', engine: unavailable.name() })
+    if (engine) return engineTranslate(engine, req, opts)
+  }
+  const { noEngine: _skip, ...rest } = req
+  req = rest
   const chat = readActiveModel()?.id ?? null
   const pick = await translateModelChoice()
   const by = (r: TanguCompleteResult, id: string | null | undefined): TanguCompleteResult => {
@@ -551,6 +563,14 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
   const pip = pipAgentClient()
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
+    // 和上面同一套判定,只是说出为什么不行(插件请求被拒时的诊断、设置卡上的注明;pluginStore / AmadeusPluginsTab)
+    hostExecutionBlock: () => {
+      const declared = window.tangu?.executionCapabilities?.host
+      if (declared === true) return null
+      if (declared === false) return 'no-local-engine'
+      const mode = useApp.getState().desktopConfig?.mode
+      return mode === 'managed' ? null : mode === 'external' ? 'external-engine' : 'pending'
+    },
     activeModel: readActiveModel,
     models: readModels,
     modelCatalog,
@@ -606,6 +626,13 @@ export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {})
     // 正文生成式 AI(G3-07):引擎 /agent/inline;模型缺省 = 主区聊天此刻用的那个(与 activeModel 同口径)。
     // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
+    ...(hasNativeFeature('tangu') ? { translateModelInfo: async () => {
+      const pick = await translateModelChoice()
+      const id = pick.id ?? readActiveModel()?.id ?? undefined
+      const cat = catalogFor('home')?.models
+      const name = (id && (cat?.translateModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name)) || id || ''
+      return { ...(id ? { id } : {}), name }
+    } } : {}),
     ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => (req.action === 'translate' && !req.modelId ? translateInline(req, opts) : completeInline(req, readActiveModel()?.id ?? null, opts)) } : {}),
     // 行内补全(FIM,2026-10-26+):同一门控、同一条 /agent/inline;模型取 fimModelChoice(),做不了一律 fim_unavailable。
     ...(hasNativeFeature('tangu') ? { fim: fimViaProbe } : {}),

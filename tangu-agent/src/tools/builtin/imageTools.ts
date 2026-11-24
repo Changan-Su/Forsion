@@ -64,7 +64,7 @@ export const imageGenProvider: ToolProvider = {
             properties: {
               prompt: { type: 'string', description: 'Vivid, concrete description of the image to generate.' },
               size: { type: 'string', description: 'Aspect/size: "1:1" | "2:3" | "3:2" | "16:9" | "9:16". Omit for square still images or automatic GIF sizing.' },
-              n: { type: 'integer', description: 'How many images (1-4). Default 1.' },
+              n: { type: 'integer', description: 'How many images (1-4). When the user asks for several images, deliver exactly that many separate images: set n when one prompt fits them all; when each image needs its own content (different lighting, style or subject), call once per image with its own prompt. Never pack the requested images as panels into one picture. Default 1.' },
               transparent_background: { type: 'boolean', description: 'Transparent background (PNG). Default false.' },
               ...imageOutputSchema,
               quality: {

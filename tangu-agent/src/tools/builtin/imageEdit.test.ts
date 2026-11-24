@@ -27,6 +27,15 @@ describe('edit_image attachment boundary', () => {
     const webp = { url: `data:image/webp;base64,${Buffer.from('RIFF0000WEBP').toString('base64')}` };
     expect(editInputs([input, webp], [2, 1]).map(i => i.mime)).toEqual(['image/webp', 'image/png']);
   });
+  it('swaps a markup copy for its clean original when both are attached', () => {
+    const jpg = { url: `data:image/jpeg;base64,${Buffer.from([255, 216, 255, 0]).toString('base64')}` };
+    const visible = [{ ...input, name: 'gen-7a03.png' }, { ...jpg, name: 'gen-7a03-标注.jpg' }, { ...input, name: 'cat.png' }, { ...jpg, name: 'cat-marked.jpg' }];
+    expect(editInputs(visible, [1, 2]).map(i => i.mime)).toEqual(['image/png']);
+    expect(editInputs(visible, [2]).map(i => i.mime)).toEqual(['image/png']);
+    expect(editInputs(visible, [4, 3]).map(i => i.mime)).toEqual(['image/png']);
+    expect(editInputs([{ ...jpg, name: 'gen-7a03-标注.jpg' }], [1]).map(i => i.mime)).toEqual(['image/jpeg']);
+    expect(editInputs(visible).length).toBe(2);
+  });
   it('uploads current attachments and emits the actual output through the native display seam', async () => {
     const result = await tool.execute({ prompt: 'Change the background to blue', transparent_background: true, n: 2 }, ctx());
     expect(edit).toHaveBeenCalledWith(expect.objectContaining({ images: [{ mime: 'image/png', b64: png }], model: 'default-image', n: 2, transparentBackground: true }));

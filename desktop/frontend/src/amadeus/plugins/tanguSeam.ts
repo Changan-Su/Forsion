@@ -227,6 +227,10 @@ export interface TanguProbe {
   openSession?(sessionId: string, alive?: () => boolean): Promise<void> | void
   /** True only when the active engine executes against this host filesystem. */
   hostExecution?(): boolean
+  /** hostExecution() 为假时的原因(11-23,插件请求被拒时给开发者留诊断用):
+   *  'external-engine' = 桌面连的是外部引擎;'no-local-engine' = 这个宿主本来就没有本机引擎(网页 / 手机);
+   *  'pending' = 配置还没读到。为真时 null。 */
+  hostExecutionBlock?(): 'external-engine' | 'no-local-engine' | 'pending' | null
   /** 主区聊天此刻**实际会用**的模型;一个都没有 → null。 */
   activeModel(): TanguModelInfo | null
   /** 当前模型目录里的全部对话模型(只含 llm,不混入生图 / 语音模型)。 */
@@ -294,6 +298,9 @@ export interface TanguProbe {
    *  `action: 'translate'` 没点名模型时先取「翻译」模型槽(设置 → 模型 → 翻译)。
    *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
   complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
+  /** 「设置 → 模型 → 默认模型 → 翻译」这一格现在解析到的模型(没设就是自动选的机翻模型或聊天模型)。给 ctx.translation.current()
+   *  和结果卡的服务菜单写「Forsion 模型 · <名字>」。和 complete 同时给。 */
+  translateModelInfo?(): Promise<{ id?: string; name: string }>
   /** 行内补全(FIM,2026-10-26+):引擎 `/agent/inline` 的 `fim` 动作,光标前后文原样交给补全模型,无提示词。
    *  模型:`req.modelId` → 「补全」模型槽(还在目录里)→ 目录 fimModels 第一个 → 都没有 reject `Error('fim_unavailable')`;
    *  引擎 / 云端回 fim_unsupported 也 reject 成 `fim_unavailable`(插件据此落回 `complete`)。只在给得出 `complete` 的宿主上有。 */
@@ -353,6 +360,8 @@ export interface TanguCompleteRequest {
   language?: string
   /** 不给 = 主区聊天当前模型(translate:先取「翻译」模型槽)。 */
   modelId?: string
+  /** 宿主内部(不给插件):translate 这一次跳过本机选的翻译引擎、直接用 Forsion 模型(结果卡「用 Forsion 模型重试」)。 */
+  noEngine?: boolean
 }
 export interface TanguCompleteOptions {
   signal?: AbortSignal
@@ -365,7 +374,7 @@ export interface TanguCompleteResult {
   /** 模型把工具调用写成了文本(它没有工具,什么都没执行)。 */
   toolCallText: boolean
   /** translate:这次实际是谁译的(结果卡上写出来;mt = 机器翻译模型)。别的动作不给;不随 ctx.tangu 交给插件。 */
-  model?: { id: string; name: string; mt: boolean }
+  model?: { id: string; name: string; mt: boolean; engine?: boolean }
 }
 
 /** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */
@@ -455,7 +464,7 @@ export function readTanguPrefs(): TanguPrefs | null {
 }
 
 /** 输入框里没发出去的纯文本(手机系统还原用,mobile/src/restoreSnapshot.ts):Tangu 在激活时交出来。**宿主内部接缝**。
- *  只有文字和长粘贴 —— 附件是 base64,不出这道缝。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
+ *  只有文字和长粘贴 —— 附件是 base64,读不出这道缝(attach 只往里放)。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
 export interface TanguDraftText { text: string; pastes: string[] }
 export interface TanguDrafts {
   read(): Record<string, TanguDraftText>
@@ -463,6 +472,8 @@ export interface TanguDrafts {
   fill(key: string, d: TanguDraftText): void
   /** 整份换掉文字和长粘贴(附件、引用芯片不动)。只给调用方自己先问过用户、或确认里面是它自己填的那句时用;fill 照旧不覆盖。 */
   replace(key: string, d: TanguDraftText): void
+  /** 往那份草稿的附件末尾加一件(看图器 / 对话缩略条的「用这张继续」,11-23)。只进不出:读还是只给文字。 */
+  attach?(key: string, att: Attachment): void
   subscribe(fn: () => void): () => void
 }
 

@@ -183,6 +183,7 @@ export function registerTanguViews(): void {
       setDraftField(key, 'text', d.text)
       setDraftField(key, 'pastes', d.pastes)
     },
+    attach: (key, att) => setDraftField(key, 'attachments', (list) => [...list, att]),
     subscribe: (fn) => useComposerDrafts.subscribe(fn),
   })
   // 主页「卜算子·建议」卡(11-07):宿主画行,数据与填进草稿(含引用芯片、发出去才算采纳)留在这边

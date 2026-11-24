@@ -331,6 +331,30 @@ describe('任务卡 skill 头', () => {
   it('不合法的值只丢这个键', () => {
     expect(card('skill: a b\n').prompt).toBe('做一个转写插件')
     expect(card('').prompt).toBe('做一个转写插件')
+    expect(card('').skill).toBeUndefined()
+  })
+  it('技能名与去掉引导语的正文另外带上(「在这里做」走隐藏附注用)', () => {
+    const c = card('skill: forsion-plugin\n')
+    expect(c.skill).toBe('forsion-plugin')
+    expect(c.brief).toBe('做一个转写插件')
+  })
+})
+
+describe('任务卡「在这里做」的那条消息(11-23)', async () => {
+  const { taskCardMessage } = await import('./taskLanding')
+  const c = { prompt: 'Load the forsion-plugin skill first.\n\n做一个转写插件', skill: 'forsion-plugin', brief: '做一个转写插件' }
+  it('技能认得出:气泡只有正文,技能走 /skill 通道', () => {
+    expect(taskCardMessage(c, [{ id: 'local:forsion-plugin', name: 'forsion-plugin' }])).toEqual({ text: '做一个转写插件', skillIds: ['local:forsion-plugin'] })
+  })
+  it('按名字也认(本地技能)', () => {
+    expect(taskCardMessage(c, [{ id: 'local:fp', name: 'forsion-plugin' }])).toEqual({ text: '做一个转写插件', skillIds: ['local:fp'] })
+  })
+  it('目录没拉到 / 没这个技能:退回带引导语的全文,别让指令静默丢掉', () => {
+    expect(taskCardMessage(c, null)).toEqual({ text: c.prompt })
+    expect(taskCardMessage(c, [{ id: 'local:other', name: 'other' }])).toEqual({ text: c.prompt })
+  })
+  it('没点技能的卡原样发', () => {
+    expect(taskCardMessage({ prompt: 'p' }, [{ id: 'local:forsion-plugin' }])).toEqual({ text: 'p' })
   })
 })
 

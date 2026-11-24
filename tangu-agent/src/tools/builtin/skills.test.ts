@@ -111,6 +111,17 @@ describe('use_skill:技能文件夹', () => {
     expect(await visibleSkill('local:forsion-plugin', await load('local:forsion-plugin'))).toContain('## 发布到商店');
   });
 
+  // 11-23 棘轮:forsion-plugin 正文曾涨到 11.3 万字,离 use_skill 的 12 万字读入上限(skills.ts USE_SKILL_MAX_CHARS,超出只截头部)
+  // 只剩 7 千字;读进来后每一步都跟着重发。正文只留流程、纪律和索引,细节进 references/。超了别抬上限,把新内容挪进 references/。
+  it('forsion-plugin:正文不超过 6 万字(读入上限的一半),新增细节进 references/', async () => {
+    const body = await fs.readFile(path.join(builtinSkillsDir(), 'forsion-plugin', 'SKILL.md'), 'utf8');
+    expect(body.length, 'forsion-plugin SKILL.md is over 60,000 characters: move details into references/').toBeLessThanOrEqual(60_000);
+    const visible = await visibleSkill('local:forsion-plugin', await load('local:forsion-plugin'));
+    for (const s of ['## Default workflow: hand in a one-page plan first', 'references/host-data-sources.md', 'Build in serial blocks, not in parallel sub-sessions']) {
+      expect(visible, s).toContain(s);
+    }
+  });
+
   // 10-29 插件开发体验 1B:agent 写的插件自己画下拉 / 菜单 / 对话框,因为「用宿主零件」的规矩和样式契约都在被省掉的中段。
   // 钉住:界面纪律、零件速查表、样式契约、商店一节到 Agent 自建 Space 的指针都到达模型。
   it('forsion-plugin:界面纪律与样式契约在模型看得到的部分', async () => {

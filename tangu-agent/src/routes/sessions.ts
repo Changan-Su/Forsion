@@ -29,7 +29,10 @@ import { estimateTokensRough } from '../services/contextBudget.js';
 import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import { activeSessionIds, sessionHasActiveRun } from '../services/agentLoop.js';
-import { resolveChildModel, startChildSession } from '../services/childSessions.js';
+import { queuedSessionIds } from '../llm/channelGate.js';
+import { CHILD_RETRY_MESSAGE, resolveChildModel, sendToChildSession, startChildSession } from '../services/childSessions.js';
+import { errorKindOfRun } from '../llm/runErrorKind.js';
+import type { RunErrorKind } from '../contracts/runErrorKind.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
@@ -122,6 +125,29 @@ async function getOwnSession(sessionId: string, userId: string): Promise<any | n
   return s;
 }
 
+/** 这些子会话里最近一轮是失败的那些:{ kind, error }(error 截一行)。读不到当没有,不挡列表。 */
+async function childFailures(ids: string[]): Promise<Map<string, { kind: RunErrorKind; error: string }>> {
+  const out = new Map<string, { kind: RunErrorKind; error: string }>();
+  if (!ids.length) return out;
+  try {
+    const rows = await query<any[]>(
+      `SELECT session_id, status, error, result FROM agent_runs WHERE session_id IN (${ids.map(() => '?').join(', ')})
+       ORDER BY created_at DESC${getDbType() === 'sqlite' ? ', rowid DESC' : ', updated_at DESC'}`,
+      ids,
+    );
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const id = String(r.session_id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (r.status === 'failed') out.set(id, { kind: errorKindOfRun(r), error: String(r.error || '').replace(/\s+/g, ' ').trim().slice(0, 300) });
+    }
+  } catch (e: any) {
+    console.warn('[sessions] child failure lookup failed:', e?.message || e);
+  }
+  return out;
+}
+
 router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -139,7 +165,15 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
     );
     // busy = 本进程有在飞 / 排队 run:会话列表行尾的「在跑」要覆盖客户端没订阅的会话(主会话开出的子会话、自动接着做的那一轮)。
     const busy = activeSessionIds();
-    res.json({ sessions: rows.map((r) => ({ ...rowToSession(r), busy: busy.has(r.id) })) });
+    // queued = 这个会话的模型请求正在通道闸前排队(llm/channelGate.ts:同一通道撞了限流 / 到了并发上限),子会话那行写「排队中」。
+    const queued = queuedSessionIds();
+    // last_failure = 子会话最近一轮失败了(没在跑):父会话里那一行画「失败」、写原因、给「重试」。只查子会话,一条 SQL。
+    const failures = await childFailures(rows.filter((r) => r.parent_session_id && !r.fork_message_id && !busy.has(r.id)).map((r) => String(r.id)));
+    res.json({ sessions: rows.map((r) => ({
+      ...rowToSession(r), busy: busy.has(r.id),
+      ...(queued.has(r.id) ? { queued: true } : {}),
+      ...(failures.has(r.id) ? { last_failure: failures.get(r.id) } : {}),
+    })) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list sessions failed' });
   }
@@ -368,6 +402,26 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
+  }
+});
+
+// 子会话失败后,父会话里那一行的「重试」:以主会话的名义给子会话再发一轮(走 fromParent,做完照常回报给主会话)。
+router.post('/agent/sessions/:id/children/:childId/retry', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'not available in this deployment' });
+    const userId = req.user!.userId;
+    const s = await getOwnSession(req.params.id, userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    // 只重试「最近一轮失败、眼下没在跑」的子会话:失败行是列表快照,重试成功后再点(或两台设备各点一次)不能再开一轮重复副作用。
+    // 读不到最近一轮(查询失败)按不知道处理,同样拒绝。
+    if (activeSessionIds().has(req.params.childId) || !(await childFailures([req.params.childId])).has(req.params.childId)) {
+      return res.status(409).json({ detail: 'child session is not in a failed state' });
+    }
+    const remote = parseRemoteOrigin(req.headers);
+    const r = await sendToChildSession({ parentId: s.id, userId, childId: req.params.childId, message: CHILD_RETRY_MESSAGE, ...(remote ? { remote } : {}) });
+    res.json({ runId: r.runId, queued: r.queued });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'retry child session failed' });
   }
 });
 

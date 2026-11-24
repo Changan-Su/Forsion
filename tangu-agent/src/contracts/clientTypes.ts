@@ -8,6 +8,7 @@
  */
 
 import type { SendMessageAction } from './automationMessage.js'
+import type { RunErrorKind } from './runErrorKind.js'
 
 /** 运行位置(可持久化、可比较的纯数据)。K7 的 RunLocation ≡ 它(INTEGRATION R-14)。 */
 export type TargetRef = { kind: 'home' } | { kind: 'unit'; unitId: string }
@@ -146,6 +147,10 @@ export interface SessionRecord {
   awaiting_user?: boolean
   /** 引擎这会儿有在飞 / 排队的 run(列表接口现算):客户端没订阅的会话(子会话、自动接着做的一轮)也画「在跑」。 */
   busy?: boolean
+  /** 这个会话的模型请求正在通道闸前排队(同一通道撞了限流 / 到了并发上限;列表接口现算,11-23):子会话那行写「排队中」。 */
+  queued?: boolean
+  /** 子会话最近一轮失败了(没在跑;列表接口现算,只给子会话):kind = 类别(contracts/runErrorKind.ts),error = 原文一行。 */
+  last_failure?: { kind: RunErrorKind; error: string }
   created_at: string
   updated_at: string
   // P1-K6
@@ -459,6 +464,9 @@ export interface AgentConfig {
   verifyCommand?: string
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */
   planMode?: boolean
+  /** 不开子会话(会话设置,缺省允许;插件开发优化方案 11-23 第四节 A):开着时引擎从这个会话的工具表里拿掉 start_session 和 delegate。
+   *  存在会话配置里:主会话被子会话回报 / 会话消息叫醒、续跑的那几轮读的是存值,同样拿不到这两个工具。 */
+  noChildSessions?: boolean
   /** 工作预设(**会话事实**,与引擎 core/presetTable.ts 同源):'chat'=轻聊天(正向工具面、临时工作区、答完即停、不写笔记)/
    *  'coding'=编码 / 缺省=work。建会话时定,跑过一轮后引擎锁定(run 带别的值只警告不切)—— 换模式 = 新建会话。 */
   preset?: 'coding' | 'chat'
@@ -948,6 +956,8 @@ export interface DisplayFile {
   path?: string
   /** 内联数据 URL(data:<mime>;base64,...);无工作区路径的小文件用(表情包 / 沙箱生图)。 */
   dataUrl?: string
+  /** 生图工具自己产出的图才有(同引擎 DisplayFileItem.source);对话里多张成组(主图 + 缩略条)只认它。 */
+  source?: 'generate_image' | 'edit_image'
 }
 
 // ── 聊天流 UI 模型(由历史 + SSE 事件归约) ─────────────────────────────────────
@@ -1183,6 +1193,8 @@ export interface UiMessage {
   work?: TeamWork
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
+  /** 失败的类别(引擎 error 事件带,contracts/runErrorKind.ts):按它出文案,原文收进「看原文」。旧引擎 / 回放的行没有 → 按原文认。 */
+  errorKind?: RunErrorKind
   /** 收尾那一发写到了输出上限、停在半句(done 的 truncated):画「停在了半句」+「继续生成」。只在本次运行里有,重载即无。 */
   truncated?: boolean
   /** 这一轮引擎自动接着写过一次(done 的 lengthResumed):回答下面一行灰字说明。只在本次运行里有。 */
@@ -1308,10 +1320,14 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   quotaFallbackModelId?: string
   /** 换之前先问我(models.quotaFallbackAsk)。 */
   quotaFallbackAsk?: boolean
+  /** 同一通道(提供方 + 密钥)同时在飞的模型请求上限(config.json models.channelConcurrency,1–16;缺省 3)。引擎 llm/channelGate.ts 读。 */
+  channelConcurrency?: number
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel?: ThinkingLevel
+  /** 按 Agent 记的上次思考档(work 会话;插件开发优化方案 11-23 第五节):新对话按这次的 Agent 起步,没记过的 Agent 回落 lastThinkingLevel。 */
+  lastThinkingByAgent?: Record<string, ThinkingLevel>
   /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省「中」(09-19 前是 off);在 chat 里改档不污染下一个 work 会话。 */
   lastChatThinkingLevel?: ThinkingLevel
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */

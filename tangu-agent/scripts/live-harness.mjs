@@ -35,11 +35,15 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
  *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only imagemulti                # 生图多张 + 标注改(11-23,生图多张与标注改图方案 1B/1C/2B):①「画 3 张…」= generate_image 合计正好 3 张(一次 n=3 或逐张各调一次都行,拼成一张不算);② 原图 + 带编号标注副本 + 编号清单 → edit_image 只拿原图(标注副本不进改图来源);
+ *                                                           #   ③ 两张图「分别改」→ 两次 edit_image、每次一张;④ 一张带标注 + 一张不带的多张消息(1C)→ 两次、来源 [1] / [3]。假生图后端同 imageedit。改 imageTools / imageEdit 的工具说明、客户端标注发送的正文后跑
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params、
  *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
+ *   npm run live:harness -- --only taskskill                 # 改任务卡「在这里做」交技能的方式(desktop views/chat2/taskLanding.ts)或引擎 requestedSkillIds 的尾部指令后跑:
+ *                                                           #   只带任务书 + requestedSkillIds,模型须先 use_skill 取回 forsion-plugin,落库的用户消息就是原文。--taskskill-neg = 不带 id 的对照
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugininternals           # 改 skills/forsion-plugin 的 references/internals.md(ctx.internals)或正文指向它那行后跑:须读到那份参考并答出声明 / read·subscribe / 手机端没有
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
@@ -278,7 +282,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'musestarters', 'museautosugg', 'pluginui', 'pluginplan'];
 KEYS.push('bluebird');
 KEYS.push('nestedmsg');
 KEYS.push('handoff', 'crosstree');
@@ -317,6 +321,7 @@ KEYS.push('projcompact');
 KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
+KEYS.push('imagemulti');
 KEYS.push('titlelang');
 KEYS.push('titlemanual');
 KEYS.push('windowscmd');
@@ -336,7 +341,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+const OPT_IN = new Set(['pluginplan', 'pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'multirepo', 'gitpublish', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('imagerecovery'); OPT_IN.add('imagerecovery');
 KEYS.push('heic'); OPT_IN.add('heic'); // --only heic: real HEIC photo through attachment hydration and the live vision model
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
@@ -362,6 +367,7 @@ OPT_IN.add('cmdreads');
 OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
+OPT_IN.add('imagemulti'); // --only imagemulti:张数照话填 n、标注副本不进改图来源、两张分别改(三个会话;假生图后端)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
 OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
@@ -409,6 +415,7 @@ OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferr
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
 OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
+KEYS.push('taskskill'); OPT_IN.add('taskskill'); // 一个 run;只在动任务卡「在这里做」怎么把 skill: 交给模型(desktop taskLanding / 引擎的 requestedSkillIds 尾部指令)时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 KEYS.push('plugininternals'); OPT_IN.add('plugininternals'); // 一个 run;只在动 forsion-plugin 的 references/internals.md 或正文里指向它那行时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
@@ -441,6 +448,8 @@ OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在
 OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('continuegen'); KEYS.push('continuegen'); // 注入:真 Codex 回答写到一半在流里报额度用完(lib/llm-fault-preload.mjs cut_after),再发 <turn_resume> 接着写;动失败落库 / 「继续生成」时跑。自带负对照腿
 OPT_IN.add('lengthcut'); KEYS.push('lengthcut'); // 注入:真 Codex 回答写到一半补一条 response.incomplete(max_output_tokens),看引擎自动接写一次 / 接了还撞上限给 truncated,以及用户按停后「继续生成」;改截断续写(agentLoop 那段 / turnResume 的 length·stopped 两句)后跑。自带负对照腿
+OPT_IN.add('channelgate'); KEYS.push('channelgate'); // 注入(11-23 通道闸):四个会话同时跑,上游按时间窗限流(lib/llm-fault-preload.mjs rate_window,正文带 try again in、不带响应头);动 llm/channelGate.ts / retry.ts 的限流认法时跑。负对照 = 旧引擎(--kind base)
+OPT_IN.add('nochild'); KEYS.push('nochild'); // 「不开子会话」开关(11-23):开着时请求体里没有 start_session / delegate、模型开不了子会话;对照腿和计划模式腿只看工具表。动 toolRegistry 的子会话门控时跑
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -1035,7 +1044,7 @@ if (argv.includes('--selftest')) {
 
 const OUT = resolve(opt('out', process.env.TANGU_LIVE_OUT || join(tmpdir(), `tangu-live-${stamp}-${randomUUID().slice(0, 6)}`)));
 // streamoverflow / foreignreasoning:引擎以 --import 载入 lib/llm-fault-preload.mjs,场景往规则文件里写一条,真 Codex 路径上命中的请求换成厂商原文报错
-const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') ? join(OUT, 'llm-fault.json') : null;
+const FAULT_FILE = ONLY.has('streamoverflow') || ONLY.has('foreignreasoning') || ONLY.has('continuegen') || ONLY.has('lengthcut') || ONLY.has('channelgate') || ONLY.has('nochild') ? join(OUT, 'llm-fault.json') : null;
 // 每次布置规则先清掉上一次的记录:同一次台架里 streamoverflow 与 foreignreasoning 共用这份 .log,不清的话后跑的那个会把前一个的「被拒 / 放行」也算进来
 const armFault = (rule) => { rmSync(`${FAULT_FILE}.log`, { force: true }); writeFileSync(FAULT_FILE, JSON.stringify(rule)); };
 const disarmFault = () => rmSync(FAULT_FILE, { force: true });
@@ -1239,6 +1248,8 @@ const MCP_CFG = ONLY.has('mcp') || ONLY.has('imgwindow') || ONLY.has('novision')
 // imageedit(10-19,改图跨轮取图方案 B1 + B2):假的直连生图 provider。收 multipart,按到达顺序记下每次收到的图(sha256),
 // 每次回一张不同数字的 PNG 并记下它的 sha256 —— 场景据此判「上传的就是那两张附件」「改的就是上一张产出」。
 const IMGEDIT_PNGS = ONLY.has('imageedit') ? [randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
+// imagemulti:原图 / 带编号标注的副本 / 另一张图(三张数字各不相同,按 sha256 认)
+const IMGMULTI_PNGS = ONLY.has('imagemulti') ? [randDigits(), randDigits(), randDigits()].map((d) => digitsPng(d, 6)) : [];
 const sha = (buf) => createHash('sha256').update(buf).digest('hex');
 // relay:「下一次模型调用回额度用完」的注入 —— 一个本地提供方,每个请求都回 Codex 订阅额度用完的报文(429 + usage_limit_reached + resets_at)。
 const RELAY_MODE = (() => { const i = argv.indexOf('--relay-mode'); return i >= 0 ? argv[i + 1] : 'auto'; })();
@@ -1260,10 +1271,17 @@ const FAKEQ = ONLY.has('relay') ? await new Promise((resolve) => {
   });
   srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
 }) : null;
-const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
-  const state = { calls: [], outputs: [] };
+const IMGEDIT = ONLY.has('imageedit') || ONLY.has('imagemulti') ? await new Promise((resolve) => {
+  const state = { calls: [], outputs: [], gens: [] };
   const srv = createHttpServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
+    if (req.url.endsWith('/images/generations')) { // imagemulti ①:记下 n,回 n 张
+      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      const n = Math.max(1, Number(body.n) || 1);
+      state.gens.push({ n, prompt: String(body.prompt || '') });
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: Array.from({ length: n }, () => ({ b64_json: digitsPng(randDigits(), 6).toString('base64') })) }));
+      return;
+    }
     if (!req.url.endsWith('/images/edits')) { res.writeHead(404).end(); return; }
     const form = await new Response(Buffer.concat(chunks), { headers: { 'content-type': req.headers['content-type'] || '' } }).formData();
     const parts = [...form.getAll('image[]'), ...form.getAll('image')];
@@ -1272,7 +1290,7 @@ const IMGEDIT = ONLY.has('imageedit') ? await new Promise((resolve) => {
     state.outputs.push(sha(out));
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ b64_json: out.toString('base64') }] }));
   });
-  srv.listen(0, '127.0.0.1', () => resolve({ ...state, port: srv.address().port, server: srv }));
+  srv.listen(0, '127.0.0.1', () => resolve(Object.assign(state, { port: srv.address().port, server: srv })));
 }) : null;
 { // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
   const gitCfg = ONLY.has('git') && GIT_PREFS ? { branchPrefix: GIT_PREFIX, commitInstructions: `Start every commit subject with the tag ${GIT_TAG} followed by a space.` } : null;
@@ -1810,7 +1828,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
-          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'llm_wait_network', 'llm_network_back', 'reasoning_dropped', 'length_resume'].includes(p.phase)) ev.statuses.push(p);
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped', 'tool_failure_loop', 'action_delivery_nudge', 'sketch_delivery_nudge', 'ui_document_recovery', 'describing_images', 'masked', 'model_fallback', 'llm_retry', 'llm_wait_network', 'llm_network_back', 'llm_queue', 'reasoning_dropped', 'length_resume'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; ev.truncated = p.truncated === true; ev.lengthResumed = p.lengthResumed === true; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); ev.errorReason = p.reason ?? null; break outer; } // P1-K2:急停 / 锁定的终态原因
         }
@@ -3638,6 +3656,64 @@ try {
     return { ok, detail, output: b.content, tokens: tokensOf(a) + tokensOf(b), toolCalls: b.toolCalls };
   });
 
+  // channelgate(11-23,插件开发优化方案第三节 A + 四节 B):四个会话同时各读一个文件再作答(每个会话两次模型调用),
+  //   上游像真实的 TPM 窗口:10 秒内只放行 2 个主对话请求,多的回厂商原文限流(正文「Please try again in X.XXXs」、不带 Retry-After 头,
+  //   HTTP 429 和流里 rate_limit_exceeded 轮流)。修好 = 认出正文里的等待、整条通道暂停、别的会话排队(status llm_queue)、四个全答对。
+  //   负对照(--kind base,旧引擎):正文里的等待没人读,各自 1/2/4 秒退避一起撞回去,7 秒 < 10 秒窗口 → 至少一个会话失败。
+  await scenario('channelgate', 'channelgate 同一通道四路并发撞限流:排队而不连锁失败', async () => {
+    const tag = `GATE-${randomUUID().slice(0, 6)}`;
+    const dir = join(workspace, 'gate');
+    mkdirSync(dir, { recursive: true });
+    const codes = [0, 1, 2, 3].map((i) => `${tag}-${i}-${randomUUID().slice(0, 4)}`);
+    codes.forEach((c, i) => writeFileSync(join(dir, `note-${i}.txt`), `${c}\n`));
+    armFault({ mode: 'rate_window', match: tag, max: 2, windowMs: 10_000, variant: 'mixed' });
+    const t0 = Date.now();
+    const evs = await Promise.all(codes.map((c, i) => run(`live-gate-${i}-${Date.now()}`, `[${tag}] Read the file gate/note-${i}.txt with read_file and reply with exactly the code written in it, nothing else.`, 420_000)))
+      .finally(disarmFault);
+    const wall = Date.now() - t0;
+    const log = faultLog().filter((l) => l.match && l.tools);
+    const fired = log.filter((l) => l.fired);
+    const queued = evs.map((e) => e.statuses.filter((x) => x.phase === 'llm_queue'));
+    const retries = evs.map((e) => e.statuses.filter((x) => x.phase === 'llm_retry'));
+    const right = evs.map((e, i) => !e.error && e.content.includes(codes[i]));
+    writeFileSync(join(OUT, 'channelgate-evidence.json'), JSON.stringify({ codes, wall, log, runs: evs.map((e, i) => ({ error: e.error, content: e.content, toolCalls: e.toolCalls, queue: queued[i], retry: retries[i] })) }, null, 2));
+    const ok = right.every(Boolean) && fired.length >= 1 && queued.some((q) => q.length > 0);
+    const detail = `四个会话 ${right.filter(Boolean).length}/4 答对${evs.some((e) => e.error) ? `(失败:${evs.filter((e) => e.error).map((e) => e.error.slice(0, 90)).join(' | ')})` : ''};`
+      + `上游放行 ${log.length - fired.length} 次、限流 ${fired.length} 次(HTTP ${fired.filter((l) => l.fired === 'rate_http').length} / 流里 ${fired.filter((l) => l.fired === 'rate_stream').length});`
+      + `排队行 ${queued.map((q) => q.length).join('/')}(${[...new Set(queued.flat().map((x) => x.reason))].join(',') || '无'});重试行 ${retries.map((r) => r.length).join('/')};墙钟 ${sec(wall)}`;
+    return { ok, detail, output: evs.map((e, i) => `【会话 ${i}】${e.error ? `报错:${e.error}` : e.content}`).join('\n'), toolCalls: evs.flatMap((e) => e.toolCalls), tokens: evs.reduce((a, e) => a + (tokensOf(e) || 0), 0) || null };
+  });
+
+  // nochild(11-23,方案第四节 A):会话设置「不开子会话」开着时,引擎从工具表拿掉 start_session 和 delegate。
+  //   ① 开着,明令要它开两个子会话并行查 → 发给模型的每个请求里都没有这两个工具、它也没开出子会话(请求体由 preload 记下);
+  //   ② 对照腿:同一个会话设置不开,只让它回一句 → 请求里有 start_session(证明 ① 的「没有」不是台架看错);
+  //   ③ 计划模式(不开开关)→ 请求里也没有 delegate、start_session(计划模式顺手拿掉 delegate)。
+  //   负对照(--kind base,旧引擎):① 的请求里两个工具都在(旧引擎不认这个开关),③ 里 delegate 还在。
+  await scenario('nochild', 'nochild 不开子会话:工具表里拿掉 start_session / delegate', async () => {
+    const leg = async (name, cfg, prompt) => {
+      const tag = `NOCHILD-${name}-${randomUUID().slice(0, 6)}`;
+      armFault({ mode: 'observe', match: tag });
+      const sid = `live-nochild-${name}-${Date.now()}`;
+      const ev = await run(sid, `[${tag}] ${prompt}`, 300_000, cfg).finally(disarmFault);
+      const reqs = faultLog().filter((l) => l.match && l.tools);
+      const kids = (await api('/agent/sessions?limit=500')).sessions.filter((x) => x.parent_session_id === sid);
+      return { ev, reqs, kids, sid };
+    };
+    const FAN = 'Open two child sessions with start_session and run them in parallel: one lists the files in the current folder, the other tells me today\'s date. Then summarize both. If you cannot start child sessions or delegate, do the work yourself here instead and say so.';
+    const a = await leg('on', { noChildSessions: true }, FAN);
+    const b = await leg('off', {}, 'Reply with exactly "OK". Do not call any tools.');
+    const c = await leg('plan', { planMode: true }, 'Reply with exactly "OK". Do not call any tools.');
+    const offered = (r, k) => r.reqs.some((l) => l[k]);
+    const aClean = a.reqs.length > 0 && !offered(a, 'startSession') && !offered(a, 'delegate') && !a.ev.toolCalls.some((n) => n === 'start_session' || n === 'delegate') && a.kids.length === 0;
+    const bHas = b.reqs.length > 0 && offered(b, 'startSession');
+    const cClean = c.reqs.length > 0 && !offered(c, 'delegate') && !offered(c, 'startSession');
+    writeFileSync(join(OUT, 'nochild-evidence.json'), JSON.stringify({ on: { reqs: a.reqs, toolCalls: a.ev.toolCalls, kids: a.kids.map((k) => k.id), content: a.ev.content, error: a.ev.error }, off: { reqs: b.reqs, content: b.ev.content }, plan: { reqs: c.reqs, content: c.ev.content } }, null, 2));
+    const fmt = (r) => `${r.reqs.length} 个请求,start_session ${offered(r, 'startSession') ? '在' : '无'}、delegate ${offered(r, 'delegate') ? '在' : '无'}`;
+    const detail = `【开着】${fmt(a)};工具序列 ${a.ev.toolCalls.join(' → ') || '无'};子会话 ${a.kids.length} 个${a.ev.error ? `;报错:${a.ev.error.slice(0, 100)}` : ''}`
+      + ` 【对照(没开)】${fmt(b)} 【计划模式】${fmt(c)}`;
+    return { ok: aClean && bHas && cClean && !a.ev.error, detail, output: `【开着】${a.ev.content}\n\n【对照】${b.ev.content}\n\n【计划模式】${c.ev.content}`, toolCalls: [...a.ev.toolCalls, ...b.ev.toolCalls, ...c.ev.toolCalls], tokens: (tokensOf(a.ev) || 0) + (tokensOf(b.ev) || 0) + (tokensOf(c.ev) || 0) || null };
+  });
+
   // resume(11-20,中断任务续跑方案 B):工具执行到一半强杀引擎 → 同一 home 重启 → 自动续一轮跑完,不重跑已经开始的那条命令。
   //   自带独立隔离 home 和两台引擎(主台架那台不参与);判据只看磁盘和库,见 lib/resume-live.mjs。改 runResume / runProgress / 启动恢复后跑。
   await scenario('resume', 'resume 工具中途崩溃后重启自动续跑', async () => {
@@ -4164,6 +4240,51 @@ try {
         `第三轮 previous_outputs ${args3.some((a) => /previous_outputs/.test(a)) ? '有' : '没有'}、后端收到上一张产出 ${usedOutput ? '✓' : '✗'}${extra ? '(还多带了别的图)' : ''}`,
       output: `第二轮回复:${ev2.content}\n第二轮 edit_image:${shortRes(ev2)}\n\n第三轮参数:${args3.join(' | ')}\n第三轮回复:${ev3.content}\n第三轮 edit_image:${shortRes(ev3)}`,
       ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0), toolCalls: [...ev2.toolCalls, ...ev3.toolCalls] };
+  });
+
+  // ── imagemulti(11-23,opt-in,生图多张与标注改图方案 1B/1C/2B):三个会话。
+  // ① 「画 3 张…」:generate_image 合计正好 3 张。一次 n=3 或每张各调一次都算(话里「每张光线不一样」时分开调、各写提示词反而更对);
+  //    拼成一张三联图(合计 1 张)不算。对话里按整条消息归组,分开调的图照样进同一条缩略条。
+  // ② 客户端「标注修改」发出的那条:原图 + 带编号标注副本 + 编号清单 → edit_image 收到的只有原图(标注副本只给对话模型看,进了改图来源圈和编号会被画进结果)。
+  //    11-23 起引擎 imageEdit.dropMarkupCopies 兜底(同批有原图就把副本换成原图),这条红了先看是不是兜底坏了;模型自己传了哪几张看「参数」。
+  // ③ 两张图「分别改」:两次 edit_image、每次恰好一张,两张都改到(多来源 = 合成,不是逐张改)。
+  // ④ 看图器「全部图片」多选一起改的那条(1C):一张带标注、一张不带 → 附件 [A 原图, A 标注副本, B 原图];两次 edit_image,来源 A / B,标注副本永不出现。
+  // 正文照搬客户端 imageMarkupModel.ts 的 buildMarkupMessage(zh)。真生图模型会不会把标记画进结果,假后端验证不了。
+  await scenario('imagemulti', 'imagemulti 话里几张就填 n;标注副本不进改图来源;两张分别改是逐张改;多张混排逐张改', async () => {
+    const cfg = { imageModelId: 'fakeimg/fake-edit' };
+    const [orig, marked, other] = IMGMULTI_PNGS;
+    const g0 = IMGEDIT.gens.length;
+    const ev1 = await run(`live-imagemulti-n-${Date.now()}`, '画 3 张窗边打盹的橘猫，每张光线不一样。', 240_000, cfg);
+    const gens = IMGEDIT.gens.slice(g0);
+    const ok1 = !ev1.error && gens.length >= 1 && gens.reduce((sum, g) => sum + g.n, 0) === 3;
+    const e0 = IMGEDIT.calls.length;
+    const text2 = '按标注改附图 1（附图 2 是标注示意，只用来看改哪里）：\n1 上方居中圈出的地方：换成红色的贝雷帽\n2 右下点的位置：换成透明玻璃杯，装冰美式\n其余保持不变。';
+    const ev2 = await run(`live-imagemulti-mark-${Date.now()}`, text2, 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a03-标注.png', mimeType: 'image/png', data: marked.toString('base64') }] });
+    const calls2 = IMGEDIT.calls.slice(e0); const e1 = IMGEDIT.calls.length;
+    const ok2 = !ev2.error && calls2.length >= 1 && calls2.every((c) => c.length === 1 && c[0] === sha(orig));
+    const ev3 = await run(`live-imagemulti-two-${Date.now()}`, '这两张图分别改：都把背景换成浅黄色，别的不动。', 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a04.png', mimeType: 'image/png', data: other.toString('base64') }] });
+    const calls3 = IMGEDIT.calls.slice(e1);
+    const got3 = calls3.map((c) => c.join('+')).sort().join(',');
+    const ok3 = !ev3.error && calls3.length === 2 && calls3.every((c) => c.length === 1) && got3 === [sha(orig), sha(other)].sort().join(',');
+    const e2 = IMGEDIT.calls.length;
+    const text4 = '分别改下面 2 张图，每张单独改一次、只拿它自己的原图（标注示意只用来看改哪里）：\n图 1（gen-7a03.png，附图 1；附图 2 是它的标注示意）：\n1 上方居中圈出的地方：把这里的数字改成红色\n另外：背景换成浅黄色\n图 2（gen-7a04.png，附图 3）：\n背景换成浅黄色\n其余保持不变。';
+    const ev4 = await run(`live-imagemulti-mixed-${Date.now()}`, text4, 240_000, cfg, undefined, undefined, undefined, undefined,
+      { attachments: [{ name: 'gen-7a03.png', mimeType: 'image/png', data: orig.toString('base64') }, { name: 'gen-7a03-标注.png', mimeType: 'image/png', data: marked.toString('base64') }, { name: 'gen-7a04.png', mimeType: 'image/png', data: other.toString('base64') }] });
+    const calls4 = IMGEDIT.calls.slice(e2);
+    const got4 = calls4.map((c) => c.join('+')).sort().join(',');
+    const ok4 = !ev4.error && calls4.length === 2 && calls4.every((c) => c.length === 1) && got4 === [sha(orig), sha(other)].sort().join(',');
+    const name = (h) => (h === sha(orig) ? '原图' : h === sha(marked) ? '标注副本' : h === sha(other) ? '第二张' : '别的');
+    const args = (ev, n) => ev.toolArgs.filter((a) => a.name === n).map((a) => a.arguments).join(' | ') || `(没调 ${n})`;
+    return { ok: ok1 && ok2 && ok3 && ok4,
+      detail: ev1.error || ev2.error || ev3.error || ev4.error ||
+        `① generate_image ${gens.length} 次、n=${gens.map((g) => g.n).join('/') || '-'} ${ok1 ? '✓' : '✗'};` +
+        `② edit_image ${calls2.length} 次,来源 ${calls2.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok2 ? '✓' : '✗'};` +
+        `③ edit_image ${calls3.length} 次,来源 ${calls3.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok3 ? '✓' : '✗'};` +
+        `④ edit_image ${calls4.length} 次,来源 ${calls4.map((c) => c.map(name).join('+')).join(' / ') || '无'} ${ok4 ? '✓' : '✗'}`,
+      output: `① 参数:${args(ev1, 'generate_image')}\n① 回复:${ev1.content}\n\n② 参数:${args(ev2, 'edit_image')}\n② 回复:${ev2.content}\n\n③ 参数:${args(ev3, 'edit_image')}\n③ 回复:${ev3.content}\n\n④ 参数:${args(ev4, 'edit_image')}\n④ 回复:${ev4.content}`,
+      ttftMs: ttft(ev2), tokens: (tokensOf(ev1) || 0) + (tokensOf(ev2) || 0) + (tokensOf(ev3) || 0) + (tokensOf(ev4) || 0), toolCalls: [...ev1.toolCalls, ...ev2.toolCalls, ...ev3.toolCalls, ...ev4.toolCalls] };
   });
 
   // novision(10-07,反馈 dbb04870:deepseek × Computer Use 操作微信):主模型没有图像输入 × 一个要按坐标点的任务。
@@ -5089,6 +5210,25 @@ Then reply with only the command output.`,
   // ⚠️ 这一节必须留在技能正文的前 34k 字符里:工具结果入列有 48k 硬帽(contextBudget.capToolResult,只留头 34k + 尾 12k),
   //    forsion-plugin 已 73k 字符,中段模型默认看不到。10-05 实测:这一节在中段时本场景 1 红(模型只读了头部就答)、
   //    1 绿(模型自己又去读了落盘的全文,26s);挪进头部后 3/3 绿、8s。本场景变红先查这一节的位置,别先改措辞。
+  // 任务卡「在这里做」(11-23,插件开发优化方案第十节 1):卡头 skill: forsion-plugin 不再拼成用户气泡里的 `Load the … skill first.`,
+  // 改走 /skill 那条隐藏通道(agentConfig.requestedSkillIds → 引擎在尾部 user 消息后拼「本轮指定技能」指令,不落库)。
+  // 判据:模型第一件事就 use_skill 取回 forsion-plugin;落库的用户消息就是任务书原文(没有引导语、没有指令段)。
+  // 负对照 `--taskskill-neg`:同一份任务书不带 requestedSkillIds —— 看模型自己会不会去加载(结果如实记,不一定红)。
+  const TASKSKILL_NEG = argv.includes('--taskskill-neg');
+  await scenario('taskskill', `taskskill 任务卡技能走隐藏附注:use_skill 先行、气泡只有任务书${TASKSKILL_NEG ? '(负对照:不带 requestedSkillIds)' : ''}`, async () => {
+    const sid = `live-taskskill-${Date.now()}`;
+    const brief = 'Add a small status-bar counter to my notes app that shows how many notes I edited today. Reply with a three-bullet plan only; do not create or edit any files yet.';
+    const ev = await run(sid, brief, 240_000, TASKSKILL_NEG ? {} : { requestedSkillIds: ['local:forsion-plugin'] });
+    const firstTool = ev.toolCalls[0] || '';
+    const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const userTexts = msgs.filter((m) => m.role === 'user').map((m) => String(m.content || ''));
+    const clean = userTexts.length === 1 && userTexts[0].trim() === brief && !/Load the|Designated Skills/.test(userTexts[0]);
+    return { ok: !ev.error && ev.done && firstTool === 'use_skill' && loaded && clean,
+      detail: ev.error || `第一个工具 ${firstTool || '无'};use_skill ${loaded ? '取回正文' : '未取回'};落库用户消息${clean ? '就是任务书原文' : `不对:${JSON.stringify(userTexts).slice(0, 200)}`};工具 ${ev.toolCalls.join(',') || '无'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
   await scenario('pluginlook', 'pluginlook 插件技能:外观开关一节经 use_skill 到达模型', async () => {
     const ev = await run(`live-pluginlook-${Date.now()}`, "I'm writing a Forsion desktop plugin with a left-sidebar list view and a long-form article view. Load your Forsion extension development skill first, then tell me in three short bullets what my CSS and markup must do so the plugin follows the user's appearance switches (dim surroundings, relaxed text, gentle transitions). Name the exact CSS variables and attributes.", 240_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true });
     const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && r.fullLength > 1000);
@@ -9039,7 +9179,7 @@ Then reply with only the command output.`,
       views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
     const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
     await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
-      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
+      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。不用先给我计划,直接做。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
       const ev = await run(`live-pluginui-${Date.now()}`, msg, 900_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: desktop });
       const tool = join(root, 'skills', 'forsion-plugin', 'tools', 'ui-reinvent.mjs');
       // 负对照里技能目录没有这份文件(那时还没有):判据照样要用它扫产物,从这份脚本旁边的检出拿一份
@@ -9062,6 +9202,33 @@ Then reply with only the command output.`,
       return {
         ok, detail: ev.error || `${main ? `main.js ${main.split('\n').length} 行` : '✗ 没写出 main.js'};零件 ${Object.entries(used).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}(${nUsed}/4);`
           + `自画 ${notes.map((g) => `${g.kind}×${g.count}`).join(' ') || '0 条'}${bad.length ? ' ←' : ''};沙箱 ${sbx} 次${sawCheck ? ',看到过 UI check' : ''};工具 ${ev.toolCalls.length} 次`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+      };
+    });
+  }
+  // pluginplan(11-23):forsion-plugin 技能的缺省流程 = 写插件先交一页计划(文件 / 宿主接口与数据来源 / 宿主缺口 / 验收 / 要用户定的事),
+  // 用户确认前不写文件、不起沙箱。负对照 = 同一台架换回 11-23 之前的 SKILL.md(没有这一节)。
+  if (ONLY.has('pluginplan')) {
+    const DIR = join(workspace, 'bookmark-notes');
+    await scenario('pluginplan', 'pluginplan 写插件的请求 → 先交一页计划(文件 / 依赖的宿主数据 / 验收 / 要我定的事),不写文件、不起沙箱', async () => {
+      const msg = '在当前文件夹里新建一个 bookmark-notes 文件夹,给我写一个 Forsion 桌面插件「书签笔记」:带一个 Space,左栏列出我的书签,点开一条在主区看详情,旁边能和 Tangu 聊这条书签;书签的提醒日期要出现在我的日历里。';
+      const files = (d) => (existsSync(d) ? readdirSync(d, { recursive: true }).map(String).filter((f) => !f.split(/[\\/]/).some((x) => x.startsWith('.') && x !== '.git')) : []);
+      const before = new Set(files(workspace));
+      const ev = await run(`live-pluginplan-${Date.now()}`, msg, 600_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: { ns: 'plugin', respond: () => ({ ok: true, text: '{"v":1,"state":"running"}' }) } });
+      // 写盘判据:目标目录建了(哪怕是空的 / 只有 .git)、或工作区里多出任何文件,都算动手了
+      const written = [...(existsSync(DIR) ? ['bookmark-notes/'] : []), ...files(workspace).filter((f) => !before.has(f) && !f.startsWith('bookmark-notes'))];
+      const usedSkill = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /# Skill: forsion-extension-development/.test(String(r.full || '')));
+      const sbx = ev.clientCmds.filter((c) => c.claimed && ['start', 'reset'].includes(c.op)).length;
+      const out = String(ev.content || '');
+      // 计划点了要动的文件:具体文件名,或目标文件夹路径(11-23 第 3 次:只写了「新建 bookmark-notes/…check.mjs」也是在列文件)
+      const files_ = /manifest\.json|main\.js|space\.json|check\.mjs|tangu-plugin\.json|bookmark-notes\//.test(out);
+      const accept = /验收|check\.mjs|check-plugin|沙箱|sandbox|acceptance|verify/i.test(out);
+      const asks = /确认|同意|开工|开始写|动手|点头|可以吗|行吗|好吗|要你定|需要你|你来定|你定|confirm|go ahead|approve|ok to proceed/i.test(out);
+      const data = /CALENDAR\.db|human\/|mountChat|真(实)?会话|real session|ctx\.calendar/i.test(out);
+      const ok = !ev.error && usedSkill && !written.length && !sbx && files_ && accept && asks;
+      return {
+        ok, detail: ev.error || `${usedSkill ? '读了技能' : '✗ 没读到技能正文'};${written.length ? `✗ 已写 ${written.slice(0, 5).join(', ')}` : '没写文件'};${sbx ? `✗ 起了沙箱 ${sbx} 次` : '没起沙箱'};`
+          + `${files_ ? '计划点了文件' : '✗ 没列文件'};${accept ? '有验收' : '✗ 没写验收'};${asks ? '等确认' : '✗ 没请确认'};${data ? '点了数据来源(日历 / 会话)' : '没点数据来源'};工具 ${ev.toolCalls.join('→') || '无'}`,
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
       };
     });

@@ -21,6 +21,7 @@ const ROOTS = [join(REPO, 'desktop/frontend/src'), join(REPO, 'lcl')]
 const SOLID_BY_DESIGN: Record<string, { file: string; why: string }> = {
   // 画布 / 内容本身:它们是正文的一部分,不是压在正文上的面
   '.iv-img': { file: 'desktop/frontend/src/components/imageViewer.css', why: '看图器里的图片本身' },
+  '.imk-frame': { file: 'desktop/frontend/src/components/imageMarkup.css', why: '标注层里的图框,就是那张图本身' },
   '.img-stack-card': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '对话里的图片叠卡' },
   '.img-stack-nav': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '图片叠卡的翻页钮,压在图上' },
   '.t2cv-read': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '画布视图的阅读卡(正文)' },

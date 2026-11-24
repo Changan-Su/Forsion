@@ -95,6 +95,19 @@ type Pane = 'model' | 'context' | DefaultModelSlot
 /** 一级行悬停多久才开 / 切二级面板(手感旋钮:调大更不易误切,但悬停开面板更迟钝)。 */
 const PANE_HOVER_MS = 150
 
+/** 当前模型的名字在可选列表里重名时,返回它所在通道的名字(模型的 provider,查不到退回分组标题);不重名返回空串。 */
+export function duplicateNameChannel(id: string, name: string, groups: readonly ModelPillGroup[], catalog?: ReadonlyArray<Pick<ModelInfo, 'id' | 'name' | 'provider'>> | null): string {
+  const listed = groups.flatMap((g) => g.options)
+  // 通道名以模型自己的 provider 为准:分组标题可以是用户自建的组名(「常用」之类),只在目录里查不到时兜底
+  const channelOf = (mid: string): string => (catalog?.find((m) => m.id === mid)?.provider
+    || (listed.find((m) => m.id === mid) as { provider?: string } | undefined)?.provider
+    || groups.find((g) => g.options.some((o) => o.id === mid))?.label || '').trim()
+  const pool: ReadonlyArray<{ id: string; name: string }> = listed.length ? listed : catalog ?? []
+  const own = channelOf(id)
+  // 只算挂在**别的通道**下的同名模型:同一通道里两条同名(不同 id)带上通道名也分不出来,反而添噪音
+  return own && pool.some((m) => m.name === name && m.id !== id && channelOf(m.id) !== own) ? own : ''
+}
+
 const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
 // 档位显示名走 thinkingLabel 单源(U-28a);原先这里 'max' 写死英文 'Max',中文界面也露英文。
 const effortDisplay = (lv: Thinking, t: (key: string) => string): string => thinkingLabel(lv, t)
@@ -461,7 +474,11 @@ export const ModelPill: React.FC<{
     const tier = minTier(m), datetime = formatDateTime(at, { locale })
     return tier ? t('pill.trialTip', { datetime, tier }) : t('pill.trialTipBare', { datetime })
   }
-  const label = current?.name || emptyLabel || t('input.selectModel')
+  // 同一个模型名挂在多个通道下(codex 和 openai-2 都有 gpt-6.2-sol)→ 按钮带上通道名,不然只能展开菜单 / 查库才知道在哪个通道上。
+  // 没重名就不变(同子会话「不同才显示芯片」一个思路)。compactName 仍按裸名缩写:窄排只放得下名字,通道名在 title / aria-label 里。
+  const baseName = current?.name || ''
+  const channel = baseName ? duplicateNameChannel(current!.id, baseName, groups, modelsResponse?.models) : ''
+  const label = (channel ? `${baseName} · ${channel}` : baseName) || emptyLabel || t('input.selectModel')
   const [lockTip, setLockTip] = useState<string | null>(null)
   useEffect(() => { if (!open || !pane) setLockTip(null) }, [open, pane])
   const isUltra = allowUltra && !!ultra
@@ -476,7 +493,7 @@ export const ModelPill: React.FC<{
   const ultrafastPrice = ultrafastTier ? /(\d+(?:\.\d+)?)x price/i.exec(ultrafastTier)?.[1] : undefined
   const ultrafastText = ultrafastPrice ? t('pill.ultrafastDesc', { price: ultrafastPrice }) : ultrafastTier || ''
   const speedTag = ultrafastOn ? t('pill.ultrafastTag') : t('pill.fastTag')
-  const compactName = label.replace(/^gpt-[0-9.]+-(luna|sol|astra|terra)$/i, (_, name: string) => name[0].toUpperCase() + name.slice(1))
+  const compactName = (baseName || label).replace(/^gpt-[0-9.]+-(luna|sol|astra|terra)$/i, (_, name: string) => name[0].toUpperCase() + name.slice(1))
   const compactEffort = isUltra ? 'Ultra' : ({ off: '', minimal: 'Min', low: 'L', medium: 'M', high: 'H', xhigh: 'XH', max: 'Max' } as const)[effLevel]
   const effort = `${effLevel !== 'off' ? ` · ${effortText}` : ''}${fastOn ? ` · ${speedTag}` : ''}`
   const lastStop = THINKING_LEVELS.length - (allowUltra ? 0 : 1)
