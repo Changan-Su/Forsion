@@ -19,7 +19,7 @@ import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
 import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
 import { DeskItemIcon, deskDragTip, deskOpenItems, isOwnDeskDrag, startDeskItemDrag, canDragDeskItem, useDeskItemDrop } from './deskOpen'
-import { openDb, openFile, openNote, opensAsTab } from '../../amadeusNav'
+import { fileViewRef, openDb, openFile, openNote, opensAsTab } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
 import { DeskToolCardPane } from './DeskToolCardPane'
@@ -188,6 +188,57 @@ function DeskFilePane({ item, allowNative }: { item: DeskItem; allowNative: bool
   if (findFileType(fileTypes, rel)) return <DeskShimView type="amadeus-plugin-file" params={{ filePath: rel }} k={`desk-ft:${rel}`} />
   if (/\.db$/i.test(rel)) return <DeskShimView type="amadeus-db" params={{ dbPath: rel }} k={`desk-db:${rel}`} />
   return <DeskPane item={item} />
+}
+
+const isAbsPath = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p)
+/** 库内相对路径的分隔符,同编辑器自己的读法(useVaultRelParam → amadeus/lib/vaultFiles.slashRel):只有 Windows 库才把 `\\` 当分隔符,
+ *  别的平台它是合法的文件名字符。照抄不 import:Tangu 模块的宿主依赖表只许缩(check:tanguboundary)。 */
+const slashRel = (p: string, root: string | null): string => (root && /^[a-zA-Z]:[\\/]|^[\\/]{2}/.test(root) ? p.replace(/\\/g, '/') : p)
+
+/** Agent 直接给出的笔记编辑器(desk_present {type:'view', view:'amadeus-editor', params:{notePath}})在格子里要不要改道。
+ *  null = 原样挂(不是笔记编辑器 / 没给路径 / 指着的确实是笔记);否则 = 按那份文件挂,path 是它的绝对路径
+ *  (相对路径而库还没就绪、拼不出来 → path: null,调用方挂占位,绝不先挂编辑器)。
+ *  判定同拆分 / 新窗口那条(deskOpen.deskViewRef → amadeusNav.fileViewRef,「打开」的分派次序):.db、插件文件类型、
+ *  白板、认不出的都不是笔记 —— 开进笔记编辑器,它一存就把 Markdown 写回那份文件 = 毁档(openNote / openDb 注释里的同类事故)。
+ *  库内绝对路径按库内相对路径判(插件文件类型按库内路径认领)。仪器:agentDesk.viewReroute.test.ts、check:deskmanual 的 l 段。 */
+export function deskEditorReroute(view: DeskItem['view'], vaultRoot: string | null): { path: string | null } | null {
+  if (view?.type !== 'amadeus-editor') return null
+  const note = (view.params ?? {}).notePath
+  if (typeof note !== 'string' || !note) return null
+  if (isAbsPath(note)) {
+    const kind = fileViewRef(vaultRelOf(note, vaultRoot) ?? note)?.type
+    return kind === 'amadeus-editor' || kind === 'dashboard' ? null : { path: note }
+  }
+  const rel = slashRel(note, vaultRoot)
+  const kind = fileViewRef(rel)?.type
+  // 仪表盘也原样挂:它本是一份合法笔记(布局在外来 frontmatter 键里,见 features/amadeus.tsx),格子的文件口径同样把 .dashboard.md
+  // 交给笔记编辑器;改道去通用预览反倒落进 WsFileView 的 Markdown 编辑器(Codex 评审)
+  if (kind === 'amadeus-editor' || kind === 'dashboard') return null
+  // 爬出库外的相对路径(`../x.db`)不拼:库内的数据库 / 插件视图不替库外的文件读写 → 占位
+  if (!vaultRoot || rel.split(/[\\/]/).includes('..')) return { path: null }
+  return { path: `${vaultRoot.replace(/[\\/]+$/, '')}/${rel}` }
+}
+
+/** 格子里 Agent 给出的视图(item.view)。笔记编辑器先按文件重新分派一次(deskEditorReroute):不是笔记的照 DeskFilePane 的口径挂
+ *  (白板只读预览、插件文件视图、数据库、其余通用预览),不认领全局当前页;其余视图原样按注册表挂。
+ *  卡片态与展开态共用;Human Desk 挂视图条目也该走这里(Agent Desk ⋯「我来改」会把 Agent 给的视图原样挪过去)。 */
+export function DeskViewPane({ item }: { item: DeskItem }) {
+  // fileViewRef 读的是 store 快照:插件文件类型晚到、库晚就绪都要重判,订阅着就行
+  usePluginStore((s) => s.fileTypes)
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const view = item.view!
+  const to = deskEditorReroute(view, vaultRoot)
+  if (!to) return <DeskShimView type={view.type} params={view.params ?? {}} k={`desk-view:${item.key}`} />
+  const name = String((view.params ?? {}).notePath).split(/[\\/]/).pop() || item.name
+  if (!to.path) {
+    return (
+      <div className="agent-desk-card-empty">
+        <Sparkles size={18} />
+        <span>{name}</span>
+      </div>
+    )
+  }
+  return <DeskFilePane item={{ key: item.key, path: to.path, name, at: item.at }} allowNative={false} />
 }
 
 /** 双格里第一个认领类(vault 笔记)非直播格(用户裁决:卡片态也上原生,认领语义与展开态一致)。
@@ -577,7 +628,7 @@ export function AgentDesk({ sessionId, onQuote }: { sessionId: string; onQuote?:
                 <DeskCaps key={it.key} sessionId={sessionId} item={it} slot={slot} panel={i === 0 ? panelBtns : null}>
                   {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                     : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} onQuote={onQuote} />
-                    : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
+                    : it.view ? <DeskViewPane item={it} />
                       : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
                 </DeskCaps>
               ))}
@@ -702,7 +753,7 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
               <div className="agent-desk-pane" key={it.key} style={items.length === 2 && i === 0 ? splitStyle(desk?.split) : undefined}>
                 {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                   : it.tool ? <DeskToolCardPane sessionId={sessionId} callId={it.tool.callId} />
-                  : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
+                  : it.view ? <DeskViewPane item={it} />
                     : <DeskFilePane item={it} allowNative={it.key === claimKey} />}
               </div>
             ))
