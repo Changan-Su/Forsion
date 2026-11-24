@@ -166,15 +166,23 @@ export function buildSelectionBarModel(o: {
 }
 
 /** 插件动作在结果卡上要宿主画的那几样(card 字段只认对象里 === true 的几项)。 */
-export function cardOptionsOf(a: OwnedSelectionAction | undefined): { language: boolean; source: boolean; speak: boolean; auto: boolean } {
+export function cardOptionsOf(a: OwnedSelectionAction | undefined): { language: boolean; source: boolean; speak: boolean; service: boolean; auto: boolean } {
   const c = a?.item.card
   const ok = !!c && typeof c === 'object' && !Array.isArray(c)
   return {
     language: ok && c!.language === true,
     source: ok && c!.source === true,
     speak: ok && c!.speak === true,
+    service: ok && (c as { service?: unknown }).service === true && a?.item.output !== 'none',
     auto: a?.item.auto === true && a.item.output !== 'none',
   }
 }
 
 export { selectionActionKey }
+
+/** 结果卡的翻译服务按钮(card.service):「翻译设置…」只在那个插件登记了设置页时给,打开它的那一页。 */
+export function cardServiceOf(a: OwnedSelectionAction | undefined, settingsPluginIds: ReadonlySet<string>): { openSettings?: () => void } | undefined {
+  if (!a || !cardOptionsOf(a).service) return undefined
+  const id = a.pluginId
+  return settingsPluginIds.has(id) ? { openSettings: () => window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: `fplugin:${id}` })) } : {}
+}

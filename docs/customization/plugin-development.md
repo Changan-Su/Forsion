@@ -498,6 +498,55 @@ if (res.status === 200) render(res.json())
 
 网页版和手机版的 CSP 不一样，要在那两端单独试。
 
+## 密钥与翻译服务：`ctx.secrets`、`ctx.registerTranslationEngine`（2026-11-24 起）
+
+### 存 API 密钥：`ctx.secrets`
+
+只在桌面版有（先判断 `if (ctx.secrets)`）。值用系统钥匙串加密后存在本机，按插件分开；不同步、不进插件数据、不进诊断快照。卸载插件时没勾「保留设置」就一起删掉。
+
+```js
+await ctx.secrets.set('svc.deepl', JSON.stringify({ key }))
+const saved = JSON.parse(await ctx.secrets.get('svc.deepl') || 'null')
+```
+
+- 方法：`get(key)`（没存过回 `null`）、`set(key, value)`、`delete(key)`、`has(key)`、`keys()`。`has` 和 `keys` 不解密。
+- 键名 `^[a-z0-9][a-z0-9._-]{0,63}$`，值不超过 8192 个字符，每个插件最多 64 条。
+- 失败时错误的 `code`：`secrets_bad_key`、`secrets_too_large`、`secrets_too_many`、`secrets_unavailable`（这台电脑没有可用的系统加密，什么也没存，绝不明文落盘）、`secrets_locked`（存过但现在解不开，比如钥匙串锁着；**不是没存过**，别当空的处理、别覆盖）、`secrets_failed`。
+- 已存的密钥别再填回输入框，写「已保存，留空表示不改」。
+- 插件和宿主在同一个渲染进程里，「按插件分开」是为了整洁，不是安全边界。
+
+### 把一家翻译服务接给整个应用：`ctx.registerTranslationEngine`
+
+和 `ctx.tangu.translate` 同一道门。登记后用户就能在结果卡的服务菜单、「设置 → 模型 → 默认模型 → 翻译」里选它；选中后，编辑器的翻译、划线翻译以及其他插件不点名模型的 `ctx.tangu.translate` 都走它。
+
+```js
+const off = ctx.registerTranslationEngine({
+  id: 'deepl',                       // ^[a-z0-9][a-z0-9-]{0,31}$，同 id 重登记 = 替换
+  name: 'DeepL',                     // 字符串或 { zh, en }
+  ready: () => hasKey,               // 便宜、同步；false 时不出现在可选列表里
+  translate: async ({ text, to, before, signal }) => callDeepL(text, to, before, signal),
+})
+```
+
+- `to` 是英文语言名（`'Chinese (Simplified)'`、`'English'`、`'Japanese'`、`'Korean'`、`'French'`、`'German'`、`'Spanish'`、`'Russian'`，以后可能加），自己映射成厂商的代码。
+- `text` 里的公式、代码、链接地址已经换成了 `ZXQ1a2b3c4d_0QXZ` 这样的标记，原样留在译文里。宿主负责还原和校验；标记丢了用同一引擎重试一次，再不行报 `translation_format_lost`。
+- `before` 是选区前面一段原文，只用来消歧（比如 DeepL 的 `context`），别翻进结果。
+- 出错就 reject 一条人话（「DeepL 没有翻：密钥无效（HTTP 403）」），用户在卡上看到的就是它，错误码是 `translation_engine_failed`。用户选的服务 `ready()` 为 false 时报 `translation_engine_unavailable`；宿主**不悄悄换**到别的服务，卡上会给「用 Forsion 模型重试」。
+- 插件停用、重载时自动撤销登记。用户选了、但引擎没登记（插件停用、网页和手机版）时当作没选，走 Forsion 模型。
+- 选择存在本机，不同步（密钥也只在这台电脑上）。
+
+### 当前选择：`ctx.translation`
+
+- `current()` 回 `{ engine: { pluginId, id, name } | null, model: { id?, name } }`；`engine` 为 `null` 表示走 Forsion 模型（「翻译」那一格）。
+- `use(id | null)`：切到**自己登记的**某个引擎，或回 Forsion 模型；别的插件的引擎会被拒。
+- `subscribe(cb)`：选择或已登记的引擎变了（任何窗口）就回调，返回取消订阅。
+
+### 结果卡上的服务菜单：`card.service`
+
+`registerSelectionAction` 的 `card` 里加 `service: true`（只对 `output: 'preview'` 有效）：卡头那句「机器翻译 · …」换成当前服务的小下拉，列出所有可用的引擎、「Forsion 模型 · 模型名」，插件登记了设置页时还有「翻译设置…」。选一项会改本机选择并立刻重跑。动作失败时卡上多两个按钮：「用 Forsion 模型重试」（只这一次：这次 run 收到 `cx.noEngine === true`，run 里调的 `ctx.tangu.translate` 跳过引擎；自己有缓存的，这次别读按引擎存的缓存，结果也别记到引擎名下）和「去设置」。只在 `run` 通过 `ctx.tangu.translate` 翻译时有意义。
+
+各家接口照厂商官方文档自己写，接口主机写进 manifest 的 `network`、用 `ctx.net.request` 调。
+
 ## 内部接口 `ctx.internals`（2026-11-16 起）
 
 正式接口缺东西、又不想等 Forsion 发版时，可以用内部接口直接读 Forsion 自己的状态，或者拿到它的内部模块。**它不稳定**：里面的东西跟着 Forsion 内部走，任何一版都可能改名、改形状或消失，不算破坏性变更，也不会提前通知。只在桌面版有；网页版、手机版和旧宿主上 `ctx.internals` 是 `undefined`，一定先判断再用。

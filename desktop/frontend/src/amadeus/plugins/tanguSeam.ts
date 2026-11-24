@@ -298,6 +298,9 @@ export interface TanguProbe {
    *  `action: 'translate'` 没点名模型时先取「翻译」模型槽(设置 → 模型 → 翻译)。
    *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
   complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
+  /** 「设置 → 模型 → 默认模型 → 翻译」这一格现在解析到的模型(没设就是自动选的机翻模型或聊天模型)。给 ctx.translation.current()
+   *  和结果卡的服务菜单写「Forsion 模型 · <名字>」。和 complete 同时给。 */
+  translateModelInfo?(): Promise<{ id?: string; name: string }>
   /** 行内补全(FIM,2026-10-26+):引擎 `/agent/inline` 的 `fim` 动作,光标前后文原样交给补全模型,无提示词。
    *  模型:`req.modelId` → 「补全」模型槽(还在目录里)→ 目录 fimModels 第一个 → 都没有 reject `Error('fim_unavailable')`;
    *  引擎 / 云端回 fim_unsupported 也 reject 成 `fim_unavailable`(插件据此落回 `complete`)。只在给得出 `complete` 的宿主上有。 */
@@ -357,6 +360,8 @@ export interface TanguCompleteRequest {
   language?: string
   /** 不给 = 主区聊天当前模型(translate:先取「翻译」模型槽)。 */
   modelId?: string
+  /** 宿主内部(不给插件):translate 这一次跳过本机选的翻译引擎、直接用 Forsion 模型(结果卡「用 Forsion 模型重试」)。 */
+  noEngine?: boolean
 }
 export interface TanguCompleteOptions {
   signal?: AbortSignal
@@ -369,7 +374,7 @@ export interface TanguCompleteResult {
   /** 模型把工具调用写成了文本(它没有工具,什么都没执行)。 */
   toolCallText: boolean
   /** translate:这次实际是谁译的(结果卡上写出来;mt = 机器翻译模型)。别的动作不给;不随 ctx.tangu 交给插件。 */
-  model?: { id: string; name: string; mt: boolean }
+  model?: { id: string; name: string; mt: boolean; engine?: boolean }
 }
 
 /** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */

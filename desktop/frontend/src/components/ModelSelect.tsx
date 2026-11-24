@@ -26,7 +26,7 @@ registerMessages({
 const SEARCH_THRESHOLD = 12
 const MENU_MIN = 320 // 菜单最窄(px);比控件窄时按这个,名字和「后台额度」这类标签放得下
 
-export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer, tagFor }: {
+export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel, chip, footer, tagFor, extra }: {
   models: ModelInfo[]
   /** 空串 = 未选择(跟随云端默认槽)。 */
   value: string
@@ -44,6 +44,8 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   /** 菜单里某一项名字后面的小标签(如后台额度计入的那个模型);id '' = 最上面「跟随 / 不选」那一项,由调用方判它实际落到哪个模型。
    *  只进菜单,不进按钮(按钮里会把模型名挤成省略号)。 */
   tagFor?: (id: string) => React.ReactNode
+  /** 模型之外的一节(如插件登记的翻译服务,2026-11-24):排在模型后面、footer 前面;选它照样走 onChange(id)。 */
+  extra?: { title: string; items: Array<{ id: string; name: string }> }
 }) {
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
@@ -76,7 +78,7 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
   }, [open])
 
-  const nameOf = (id: string): string => models.find((m) => m.id === id)?.name || id
+  const nameOf = (id: string): string => models.find((m) => m.id === id)?.name || extra?.items.find((x) => x.id === id)?.name || id
   const followLabel = cloudDefaultId ? `${defaultLabel || t('msel.follow')} · ${nameOf(cloudDefaultId)}` : defaultLabel || t('msel.none')
   // 按钮里的跟随态:灰字前缀 + 实际调到的模型名(菜单里那一项仍写全「跟随云端默认 · X」)
   const label = value ? nameOf(value) : cloudDefaultId
@@ -127,6 +129,17 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
             </div>
           ))}
           {!groups.length && <div className="menu-section">{t('model.empty')}</div>}
+          {extra && extra.items.length > 0 && (
+            <div>
+              <div className="menu-source">{extra.title}</div>
+              {extra.items.filter((x) => !q || x.name.toLowerCase().includes(q)).map((x) => (
+                <button key={`extra-${x.id}`} className={`menu-item${x.id === value ? ' active' : ''}`} aria-current={x.id === value ? 'true' : undefined} onClick={() => pick(x.id)}>
+                  <span className="grow">{x.name}</span>
+                  <span className="mi-check">{x.id === value ? <Check size={12} /> : ''}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {footer && <div className="model-select-footer">
             <button className="menu-item" onClick={() => { setOpen(false); footer.onClick() }}><span className="grow">{footer.label}</span><ChevronRight size={12} /></button>
           </div>}

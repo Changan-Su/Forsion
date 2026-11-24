@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowRightLeft, AudioLines, ChevronRight, Eye, Image as ImageIcon, Info, Languages, MessageCircle, Mic, Phone, RefreshCw, RotateCcw, Sparkles, TextCursorInput, Volume2 } from 'lucide-react'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { ModelSelect } from './ModelSelect'
+import { chosenEngineKey, findTranslationEngine, listTranslationEngines, notifyTranslationChoice, setChosenEngine, subscribeTranslationChoice } from '../amadeus/plugins/translationEngines'
 import { catalogByKind, originOf, type CatalogItem, type ModelKind, type ModelOrigin } from './modelKinds'
 import { realtimeCandidates, saveRealtimeModel } from './RealtimeVoiceSettings'
 import { effectiveRealtimeModel } from '../services/realtimeModel'
@@ -61,6 +62,7 @@ registerMessages({
   'dm.translate': { zh: '翻译', en: 'Translation' },
   'dm.translateHint': { zh: '划线菜单、笔记和插件里的翻译。', en: 'Translation in the selection menu, notes and plugins.' },
   'dm.translateChat': { zh: '跟随聊天模型', en: 'Same as chat' },
+  'dm.translateEngines': { zh: '翻译服务', en: 'Translation services' },
   'dm.panel.fim': { zh: '补全', en: 'Completion' },
   'dm.fim': { zh: '补全', en: 'Completion' },
   'dm.fimHint': { zh: '插件的行内补全用它，只列出支持补全（FIM）的模型。', en: 'Used by plugins for inline completion. Only models that support fill-in-the-middle (FIM) are listed.' },
@@ -95,7 +97,7 @@ export function OriginTag({ origin, mt }: { origin: ModelOrigin | null; mt?: boo
 /** 候选项喂给 ModelSelect 要长成 ModelInfo;朗读 / 通话 / 翻译 / 本地识别这些候选没有 ModelInfo,就地补一个。 */
 const asInfo = (c: CatalogItem): ModelInfo => c.model || { id: c.id, name: c.name, provider: c.provider, source: c.source }
 
-type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; fim: string; asrBackend: 'local' | 'cloud'; asrModelId: string }
+type Snapshot = { chat: string; image: string; background: string; vision: string; translate: string; fim: string; asrBackend: 'local' | 'cloud'; asrModelId: string; engine?: string | null }
 
 export function DefaultModelsPage(p: {
   models: ModelsResponse | null
@@ -118,6 +120,9 @@ export function DefaultModelsPage(p: {
   const { t } = useI18n()
   const { models, stored } = p
   const [localReady, setLocalReady] = useState(false)
+  // 插件登记 / 撤销翻译服务、本机选择变了(卡头、插件设置页、别的窗)→ 重画「翻译」那一格
+  const [, setEngineTick] = useState(0)
+  useEffect(() => subscribeTranslationChoice(() => setEngineTick((n) => n + 1)), [])
   const [undo, setUndo] = useState<{ snap: Snapshot; count: number } | null>(null)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => { void window.tangu?.asrLocalStatus?.().then((s) => setLocalReady(s.ready)) }, [])
@@ -135,10 +140,10 @@ export function DefaultModelsPage(p: {
   const manage = (kind: ModelKind) => ({ label: t('dm.manage'), onClick: () => p.onOpen('m-display', kind) })
 
   // 一行 = 选择器 + 自选时的「恢复跟随」
-  const slot = (o: { value: string; onChange: (id: string) => void; models: ModelInfo[]; icon: ReactNode; label: string; cloudDefaultId?: string | null; defaultLabel?: string; chip?: ReactNode; disabled?: boolean; kind: ModelKind; resettable?: boolean; tagFor?: (id: string) => ReactNode }) => (
+  const slot = (o: { value: string; onChange: (id: string) => void; models: ModelInfo[]; icon: ReactNode; label: string; cloudDefaultId?: string | null; defaultLabel?: string; chip?: ReactNode; disabled?: boolean; kind: ModelKind; resettable?: boolean; tagFor?: (id: string) => ReactNode; extra?: { title: string; items: Array<{ id: string; name: string }> } }) => (
     <div className="model-slot">
       <ModelSelect models={o.models} value={o.value} onChange={o.onChange} icon={o.icon} ariaLabel={o.label} cloudDefaultId={o.cloudDefaultId}
-        defaultLabel={o.defaultLabel} chip={o.chip} disabled={o.disabled || p.loading} footer={manage(o.kind)} tagFor={o.tagFor} />
+        defaultLabel={o.defaultLabel} chip={o.chip} disabled={o.disabled || p.loading} footer={manage(o.kind)} tagFor={o.tagFor} extra={o.extra} />
       {o.resettable !== false && o.value && <button className="btn ghost sm model-slot-reset" title={t('dm.reset')} aria-label={`${t('dm.reset')} · ${o.label}`} onClick={() => o.onChange('')}><RotateCcw size={13} /></button>}
     </div>
   )
@@ -148,15 +153,18 @@ export function DefaultModelsPage(p: {
     chat: p.chatModelId, image: p.imageModelId,
     background: stored?.backgroundModelId || '', vision: stored?.visionModelId || '', translate: stored?.translateModelId || '', fim: stored?.fimModelId || '',
     asrBackend: stored?.asrBackend === 'local' ? 'local' : 'cloud', asrModelId: stored?.asrModelId || '',
+    engine: chosenEngineKey(),
   }
   const asrValue = snap.asrBackend === 'local' && localReady ? LOCAL_ASR : snap.asrModelId
-  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, snap.fim, asrValue] : [])].filter(Boolean).length
+  const custom = [snap.chat, snap.image, ...(stored ? [snap.background, snap.vision, snap.translate, snap.fim, asrValue] : [])].filter(Boolean).length + (snap.engine ? 1 : 0)
   const restore = (s: Snapshot) => {
     p.onChat(s.chat); p.onImage(s.image)
+    // 本机选的翻译服务也算一项自选:「全部恢复默认」把它清掉,撤销时放回(Codex 评审 #9)
+    try { if ((s.engine ?? null) !== chosenEngineKey()) setChosenEngine(s.engine ?? null) } catch { /* 写不进 localStorage:选择没变 */ }
     if (stored) void save({ backgroundModelId: s.background, visionModelId: s.vision, translateModelId: s.translate, fimModelId: s.fim, asrBackend: s.asrBackend, asrModelId: s.asrModelId })
   }
   const resetAll = () => {
-    restore({ chat: '', image: '', background: '', vision: '', translate: '', fim: '', asrBackend: 'cloud', asrModelId: '' })
+    restore({ chat: '', image: '', background: '', vision: '', translate: '', fim: '', asrBackend: 'cloud', asrModelId: '', engine: null })
     setUndo({ snap, count: custom })
     if (undoTimer.current) clearTimeout(undoTimer.current)
     undoTimer.current = setTimeout(() => setUndo(null), 8000)
@@ -169,6 +177,15 @@ export function DefaultModelsPage(p: {
   const callValue = stored ? effectiveRealtimeModel(stored, { model: models?.realtimeModel, signedIn: p.realtimeSignedIn, providers: p.providers }) : ''
   const callList = stored ? realtimeCandidates(stored, p.providers, models?.realtimeModel, p.realtimeSignedIn) : []
   const autoMt = cat.mt[0]?.id
+  // 插件登记的翻译服务(DeepL 等;本机选择,不进 config):选它 = 写 forsion_translate_engine;选回任一模型 = 清掉它再写模型槽
+  const engineChosen = findTranslationEngine(chosenEngineKey())
+  const engineItems = listTranslationEngines({ readyOnly: true }).map((e) => ({ id: `engine:${e.key}`, name: e.name() }))
+  if (engineChosen && !engineItems.some((x) => x.id === `engine:${engineChosen.key}`)) engineItems.push({ id: `engine:${engineChosen.key}`, name: engineChosen.name() })
+  const pickTranslate = (id: string): void => {
+    if (id.startsWith('engine:')) { try { setChosenEngine(id.slice(7)) } catch { /* 写不进 localStorage:选择没变,按钮照旧 */ } return }
+    try { if (chosenEngineKey()) setChosenEngine(null) } catch { /* 同上 */ }
+    void save({ translateModelId: id }).then(() => notifyTranslationChoice())
+  }
   const translators = [...llms, ...cat.mt.map(asInfo)]
   // 补全槽只列能做 FIM 的(目录 fimModels);不选 = 第一个(tanguProbe.fimModelChoice 同一条规则)。选过的下架了,行里照样显示它,探针会自动跳过。
   const autoFim = cat.fim[0]?.id
@@ -251,9 +268,10 @@ export function DefaultModelsPage(p: {
     {stored && <SettingsPanel className="model-defaults-panel" icon={<Languages size={14} />} title={t('dm.panel.translate')}>
       {/* 没有 app 级的槽可跟:不选 = 目录里第一个机器翻译模型,没有就跟聊天当前模型(tanguProbe.translateModelChoice 同一条规则) */}
       <SettingsRow label={t('dm.translate')} description={t('dm.translateHint')} control={slot({
-        value: snap.translate, onChange: (id) => void save({ translateModelId: id }), models: translators, icon: <Languages size={13} />, label: t('dm.translate'), kind: 'mt',
+        value: engineChosen ? `engine:${engineChosen.key}` : snap.translate, onChange: pickTranslate, models: translators, icon: <Languages size={13} />, label: t('dm.translate'), kind: 'mt',
         cloudDefaultId: autoMt, defaultLabel: t(autoMt ? 'dm.auto' : 'dm.translateChat'),
-        chip: find(cat.mt, followOrValue(snap.translate, autoMt)) ? tag(cat.mt, followOrValue(snap.translate, autoMt)) : tag(cat.llm, snap.translate),
+        chip: engineChosen ? undefined : find(cat.mt, followOrValue(snap.translate, autoMt)) ? tag(cat.mt, followOrValue(snap.translate, autoMt)) : tag(cat.llm, snap.translate),
+        ...(engineItems.length ? { extra: { title: t('dm.translateEngines'), items: engineItems } } : {}),
       })} />
     </SettingsPanel>}
 
