@@ -39,6 +39,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
+import { createEditorQuitSave, OPEN_EDITORS } from './editorQuitSave'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
@@ -1023,6 +1024,8 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 // 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
 const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
+// Workspace .md tabs still holding typed text (electron/editorQuitSave.ts): before quitting, the windows that have one save it
+const editorQuitSave = createEditorQuitSave({ events: ipcMain, log: (m) => console.warn(m) })
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -3746,7 +3749,9 @@ app.whenReady().then(async () => {
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
-        await contentFlush.quit() // 还在静默期里的改动先推上去(最多等 5 秒);冲过了,紧跟着的 before-quit 不再冲
+        // 还在静默期里的改动先推上去(最多等 5 秒;冲过了,紧跟着的 before-quit 不再冲);工作区 .md 标签里还没存的字先存
+        // (装更新那条路先关窗再退出,只剩 pagehide 那一道)
+        await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
         await backend.stop(install ? 'app_update' : 'app_quit')
@@ -4288,6 +4293,28 @@ app.whenReady().then(async () => {
   // 按路径串行,精确 mtime CAS 在 tmp fsync 后、rename 前再检查;新建仍走 wx。
   ipcMain.handle('fs:writeFile', (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) =>
     writeHostTextFile(filePath, content, expectedMtimeMs, createNew))
+  // Same write for a page that is going away (pagehide on a window reload / close): the renderer blocks until it is on
+  // disk, refused (conflict) or failed, so it can still put the text in a sidecar, and a reloaded page never reads the
+  // file before the write landed. returnValue is always set: an unanswered sendSync hangs the renderer.
+  ipcMain.on('fs:writeFileSync', (e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
+    if (!isTrustedSender(e)) { e.returnValue = { error: 'forbidden' }; return }
+    writeHostTextFile(filePath, content, expectedMtimeMs, createNew).then(
+      (r) => { e.returnValue = r },
+      (err) => { e.returnValue = { error: String((err as Error)?.message || err) } },
+    )
+  })
+  // How many workspace .md tabs a window has open: quit only waits for windows that have one (editorQuitSave).
+  // A reload or a closed window takes its editors with it.
+  const editorWindows = new WeakSet<Electron.WebContents>()
+  ipcMain.on(OPEN_EDITORS, (e, count: unknown) => {
+    if (!isTrustedSender(e)) return
+    const wc = e.sender
+    editorQuitSave.report(wc, count)
+    if (editorWindows.has(wc)) return
+    editorWindows.add(wc)
+    wc.on('did-start-navigation', (_ev, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) editorQuitSave.forget(wc.id) })
+    wc.once('destroyed', () => editorQuitSave.forget(wc.id))
+  })
 
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   // 安全:重命名/新建只接受**单段名字**(无路径分隔符、非 . / ..),结果始终落在原目录内,杜绝越权写。
@@ -6092,12 +6119,15 @@ app.on('before-quit', (e) => {
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 新同步还在静默期里的改动先推上去(最多等 5 秒;没有要推的 = null,不等)。要在停后端之前:合并、通知引擎都要它在
   const flushing = contentFlush.quit()
+  // Workspace .md tabs save what is still typed (null = none open). The exit below is app.exit, which destroys the windows
+  // without unload events, and a plain quit never runs React cleanup either: without this the last ~1s of typing is lost.
+  const saving = editorQuitSave.quit()
   deferredEngineRestart.cancel() // 等着空闲再重启的那次作废:引擎这就停了
   // 优雅停后端(SIGTERM→5s→SIGKILL);停完再真正退出。发信号前写下 app_quit:在途任务记成 interrupted,下次打开接着做。
   const st = backend.getStatus().state
-  if (flushing || st === 'ready' || st === 'starting') {
+  if (flushing || saving || st === 'ready' || st === 'starting') {
     e.preventDefault()
-    exitChain = (flushing ?? Promise.resolve())
+    exitChain = Promise.all([flushing, saving])
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain
