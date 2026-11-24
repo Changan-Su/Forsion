@@ -43,7 +43,12 @@ async function main() {
     args: [`--user-data-dir=${ud}`, '--lang=zh-CN', DESK], cwd: DESK,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
   })
-  const out = { home, checks: [], trials: [], errors: [] }
+  const out = { home, checks: [], trials: [], errors: [], rendererEvents: [] }
+  // The main process reloads the renderer when it goes unresponsive (a loaded machine) or an engine/UI hot update
+  // rolls back; record why, a trial caught in one is re-run (see `trial`).
+  for (const st of [app.process().stdout, app.process().stderr]) st?.on('data', (b) => {
+    for (const line of String(b).split('\n')) if (/renderer recover|render-process-gone|rolled-back/.test(line)) out.rendererEvents.push(line.slice(0, 200))
+  })
   const save = () => fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(out, null, 2))
   const check = (name, ok, got) => { out.checks.push({ name, ok: !!ok, got }); console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify(got ?? null).slice(0, 300)) }
   let win
@@ -53,8 +58,9 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000, state: 'attached' })
     check('onboarding skipped', await skipOnboarding(win))
     await sleep(1500)
-    // Last keystroke time, read in the page so the measured gap has no CDP round trip in it.
-    await win.evaluate(() => {
+    // Last keystroke time, read in the page so the measured gap has no CDP round trip in it. Re-installed per trial:
+    // a renderer reload drops it.
+    const hook = () => win.evaluate(() => {
       const w = window
       if (w.__wsflushKeyHook) return
       w.__wsflushKeyHook = true
@@ -96,6 +102,7 @@ async function main() {
 
     /** Opens `file`, puts the caret at the end of the last paragraph; returns the editor locator. */
     const openAndFocus = async (file, kind) => {
+      await hook()
       await openFile(file)
       const ed = win.locator(`${kind === 'ws' ? '.wsmd-scope' : '.unified-body'} .ProseMirror`).filter({ visible: true }).first() // one file open at a time
       await ed.waitFor({ timeout: 20_000 })
@@ -105,7 +112,8 @@ async function main() {
       return ed
     }
     /** open → type A → A saved → type B → (`between`) → `act` `delay` ms after the last key → read the disk. */
-    const trial = async ({ kind, name, delay, act, between }) => {
+    const trial = async (opts, retried = false) => {
+      const { kind, name, delay, act, between } = opts
       const file = path.join(kind === 'ws' ? proj : vault, `${name}.md`)
       fs.writeFileSync(file, INITIAL)
       const rec = { name, kind, act, delay, file }
@@ -134,8 +142,18 @@ async function main() {
         rec.sidecars = sidecars(file).map((f) => ({ f, b: fs.readFileSync(path.join(path.dirname(file), f), 'utf8').includes(B.trim()) }))
       } catch (e) {
         rec.error = String(e && e.message || e).slice(0, 400)
-        out.errors.push({ trial: name, err: rec.error })
         await win.screenshot({ path: path.join(OUT, `${name}-error.png`) }).catch(() => {})
+        if (!retried && /Execution context was destroyed|navigation/.test(rec.error)) {
+          // The renderer reloaded under the trial (not something the trial did): record it, let the page come back, re-run once.
+          rec.disk = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null
+          out.trials.push({ ...rec, reloaded: true })
+          console.log('RELOAD during', name, '- re-running once; renderer events:', JSON.stringify(out.rendererEvents.slice(-3)))
+          await win.waitForSelector('.dv-groupview', { timeout: 40_000, state: 'attached' }).catch(() => {})
+          await sleep(2500)
+          if (await tabOpen(name).catch(() => false)) { await closeQuietly(name); await sleep(1500) }
+          return trial({ ...opts, name: `${name}-retry` }, true)
+        }
+        out.errors.push({ trial: name, err: rec.error })
       }
       if (await tabOpen(name).catch(() => false)) { await closeQuietly(name); await sleep(1500) }
       out.trials.push(rec)
@@ -199,7 +217,7 @@ async function main() {
     if (LIB) {
       for (const d of DELAYS) {
         const r = await trial({ kind: 'lib', name: `lib-x-${d}`, delay: d, act: 'x' })
-        console.log(`INFO lib × close at ${d}ms: B ${r.b ? 'on disk' : 'LOST'}`)
+        console.log(`INFO lib × close at ${d}ms: B ${r.error ? `not measured (${r.error.slice(0, 80)})` : r.b ? 'on disk' : 'LOST'}`)
         out.checks.push({ name: `INFO lib × close at ${d}ms`, ok: true, got: { gap: r.gap, a: r.a, b: r.b, error: r.error } })
       }
     }
