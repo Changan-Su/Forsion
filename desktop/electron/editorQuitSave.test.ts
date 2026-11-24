@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createEditorQuitSave, QUIT_SAVE_ASK, QUIT_SAVE_DONE } from './editorQuitSave'
+import { createEditorQuitSave, QUIT_SAVE_ASK, QUIT_SAVE_DONE, unloadWrite } from './editorQuitSave'
 
 class FakeRenderer extends EventEmitter {
   sent: Array<{ channel: string; payload: any }> = []
@@ -95,5 +95,45 @@ describe('createEditorQuitSave', () => {
     dead.destroyed = true
     expect(saver.quit()).toBeNull()
     expect(reloaded.sent).toEqual([])
+  })
+
+  it('a window that ran into the cap is not asked again (restart, then its before-quit) until it reports again', async () => {
+    vi.useFakeTimers()
+    const events = new EventEmitter()
+    const saver = createEditorQuitSave({ events, timeoutMs: 5000 })
+    const hung = new FakeRenderer(1, events, 'no')
+    saver.report(hung, 1)
+    const first = saver.quit()!
+    await vi.advanceTimersByTimeAsync(5000)
+    await first
+    expect(saver.quit()).toBeNull()
+    saver.report(hung, 1)
+    expect(saver.quit()).not.toBeNull()
+    expect(hung.sent).toHaveLength(2)
+  })
+})
+
+describe('unloadWrite', () => {
+  const ok = (mtimeMs = 2) => Promise.resolve({ ok: true, mtimeMs })
+  it('passes a plain write through', async () => {
+    await expect(unloadWrite({ write: () => ok(7), read: async () => null }, '/a.md', 'x', 1)).resolves.toEqual({ ok: true, mtimeMs: 7 })
+  })
+  it('a refused CAS over a file that already holds exactly these bytes is a save, not a conflict', async () => {
+    const write = () => Promise.resolve({ conflict: true, mtimeMs: 9 })
+    await expect(unloadWrite({ write, read: async () => 'same' }, '/a.md', 'same', 1)).resolves.toEqual({ ok: true, mtimeMs: 9 })
+    await expect(unloadWrite({ write, read: async () => 'theirs' }, '/a.md', 'mine', 1)).resolves.toEqual({ conflict: true, mtimeMs: 9 })
+    await expect(unloadWrite({ write, read: async () => { throw new Error('gone') } }, '/a.md', 'mine', 1)).resolves.toEqual({ conflict: true, mtimeMs: 9 })
+  })
+  it('a failed write answers with the error instead of throwing', async () => {
+    await expect(unloadWrite({ write: () => Promise.reject(new Error('EACCES')), read: async () => null }, '/a.md', 'x')).resolves.toEqual({ error: 'EACCES' })
+  })
+  it('always answers: a write stuck on a stalled mount resolves at the cap', async () => {
+    vi.useFakeTimers()
+    let answer: unknown = null
+    void unloadWrite({ write: () => new Promise(() => {}), read: async () => null, capMs: 3000 }, '/a.md', 'x', 1).then((r) => { answer = r })
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(answer).toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(answer).toEqual({ error: 'timeout' })
   })
 })

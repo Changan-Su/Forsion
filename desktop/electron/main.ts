@@ -39,7 +39,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
-import { createEditorQuitSave, OPEN_EDITORS } from './editorQuitSave'
+import { createEditorQuitSave, OPEN_EDITORS, unloadWrite } from './editorQuitSave'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
@@ -4295,13 +4295,11 @@ app.whenReady().then(async () => {
     writeHostTextFile(filePath, content, expectedMtimeMs, createNew))
   // Same write for a page that is going away (pagehide on a window reload / close): the renderer blocks until it is on
   // disk, refused (conflict) or failed, so it can still put the text in a sidecar, and a reloaded page never reads the
-  // file before the write landed. returnValue is always set: an unanswered sendSync hangs the renderer.
+  // file before the write landed. unloadWrite always answers, capped: an unanswered sendSync hangs the renderer.
   ipcMain.on('fs:writeFileSync', (e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
     if (!isTrustedSender(e)) { e.returnValue = { error: 'forbidden' }; return }
-    writeHostTextFile(filePath, content, expectedMtimeMs, createNew).then(
-      (r) => { e.returnValue = r },
-      (err) => { e.returnValue = { error: String((err as Error)?.message || err) } },
-    )
+    void unloadWrite({ write: writeHostTextFile, read: (p) => readFile(p, 'utf8') }, filePath, content, expectedMtimeMs, createNew)
+      .then((r) => { e.returnValue = r })
   })
   // How many workspace .md tabs a window has open: quit only waits for windows that have one (editorQuitSave).
   // A reload or a closed window takes its editors with it.
@@ -4312,7 +4310,9 @@ app.whenReady().then(async () => {
     editorQuitSave.report(wc, count)
     if (editorWindows.has(wc)) return
     editorWindows.add(wc)
-    wc.on('did-start-navigation', (_ev, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) editorQuitSave.forget(wc.id) })
+    // Committed, not started: a navigation that hardenNav cancels leaves the page (and its editors) in place.
+    wc.on('did-navigate', () => editorQuitSave.forget(wc.id))
+    wc.on('render-process-gone', () => editorQuitSave.forget(wc.id))
     wc.once('destroyed', () => editorQuitSave.forget(wc.id))
   })
 

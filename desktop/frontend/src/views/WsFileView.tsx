@@ -21,8 +21,8 @@ import { useI18n } from '../i18n'
 import { useFileShiftWheel } from '../lib/fileWheel'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
-import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
-import { registerOpenMdEditor } from './openMdEditors'
+import { getTransientTarget, hostTargetFor } from './wsFileNav'
+import { registerOpenMdEditor, trackWrite } from './openMdEditors'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -34,16 +34,19 @@ import { DeskChromeContext, readTanguShell } from '../amadeus/plugins/tanguSeam'
 /** 旁路文件:未保存内容写不进原文件(冲突 / 写失败)时另存到它旁边,绝不覆盖原文件。 */
 const salvagePathFor = (path: string): string => path.replace(/(\.[^./\\]+)?$/, `.本地未保存-${Date.now()}$1`)
 
-/** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
-async function salvageDraft(path: string, content: string): Promise<void> {
+/** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。返回是否真写下了。 */
+async function salvageDraft(path: string, content: string): Promise<boolean> {
   const toast = useApp.getState().toast
   const salvagePath = salvagePathFor(path)
   try {
-    await window.tangu?.writeHostFile?.(salvagePath, content, undefined, true)
+    if (!window.tangu?.writeHostFile) throw new Error('no host')
+    await window.tangu.writeHostFile(salvagePath, content, undefined, true)
     readTanguShell()?.bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
     toast(useApp.getState().tr('preview.mdSalvaged', { file: salvagePath.split(/[/\\]/).pop() || salvagePath }), true)
+    return true
   } catch {
     toast(useApp.getState().tr('preview.mdSaveFail', { err: path }), true)
+    return false
   }
 }
 
@@ -114,10 +117,10 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
   const [saveErr, setSaveErr] = useState<string | null>(null)
   /** PlainMarkdownEditor hands over what its listener still holds (its 200ms window) when this is called. */
   const flushRef = useRef<(() => void) | null>(null)
-  /** The write in flight, and the body it carries (null until its IPC went out). */
+  /** The write in flight (a new save chains behind it). */
   const writingRef = useRef<Promise<SaveResult> | null>(null)
-  const inflightBody = useRef<string | null>(null)
-  /** Text already put in a sidecar: the unmount after a Reload / quit does not write a second one. */
+  /** Text put in (or being put in) a sidecar: the unmount after a Reload / quit does not write a second one. Cleared if
+   *  that write failed, so a later attempt tries again. */
   const salvagedRef = useRef<string | null>(null)
 
   /** One write at a time: each one CASes against the mtime the previous returned (two overlapping writes from this editor
@@ -129,7 +132,6 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
       if (prev) await prev
       if (!dirtyRef.current || !window.tangu?.writeHostFile) return {}
       const snapshot = bodyRef.current // 写盘期间的新键入不能被 dirty=false 吞掉
-      inflightBody.current = snapshot
       try {
         const r = await window.tangu.writeHostFile(path, fm + snapshot, force ? undefined : mtimeRef.current)
         if (r.conflict) { setConflict(true); return { conflict: true } }
@@ -140,18 +142,12 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
       } catch (e: any) {
         setSaveErr(e?.message || String(e))
         return { failed: true }
-      } finally {
-        inflightBody.current = null
       }
     }
     const p = run()
-    const tracked = p.then(() => {}, () => {})
     writingRef.current = p
-    pendingWrites.set(path, tracked)
-    void tracked.then(() => {
-      if (writingRef.current === p) writingRef.current = null
-      if (pendingWrites.get(path) === tracked) pendingWrites.delete(path)
-    })
+    trackWrite(path, p)
+    void p.finally(() => { if (writingRef.current === p) writingRef.current = null })
     return p
   }
   const saveRef = useRef(save)
@@ -172,17 +168,19 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
     const r = await saveRef.current()
     if (!wasDirty || !(r.conflict || r.failed) || salvagedRef.current === content) return
     salvagedRef.current = content
-    await salvageDraft(path, content)
+    if (!(await salvageDraft(path, content)) && salvagedRef.current === content) salvagedRef.current = null
   }
   /** The page is going away (pagehide / beforeunload on a window reload or close): the same, blocking until the host
    *  wrote it, so a reloaded page reads it. No toast (the page is gone); the sidecar sits next to the file. */
   const saveBeforeUnload = (): void => {
     takeHeld()
     if (!dirtyRef.current) return
-    if (inflightBody.current === bodyRef.current) return // that write is already out; the host finishes it
     const writeSync = window.tangu?.writeHostFileSync
     if (!writeSync) { void saveBeforeLeaving(); return }
     const content = fm + bodyRef.current
+    // Also while an autosave is in flight: the host serializes writes per path, so that one lands first; if it carried
+    // the same text the host answers ok (the file already holds these bytes), and if it was refused this one is too
+    // and the text goes to the sidecar below instead of only into a banner on a page that is gone.
     const r = writeSync(path, content, mtimeRef.current)
     if (r && !r.conflict && !r.error && typeof r.mtimeMs === 'number') {
       mtimeRef.current = r.mtimeMs
@@ -190,8 +188,8 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
       return
     }
     if (salvagedRef.current === content) return
-    salvagedRef.current = content
-    writeSync(salvagePathFor(path), content, undefined, true)
+    const s2 = writeSync(salvagePathFor(path), content, undefined, true)
+    if (s2 && !s2.conflict && !s2.error) salvagedRef.current = content // only once it is really there: pagehide retries
   }
   const leaving = useRef(saveBeforeLeaving)
   leaving.current = saveBeforeLeaving
@@ -210,11 +208,14 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
     // bodyRef: render once more so the pane shows them.
     if (viewRef.current === 'source') showLatest()
   }
-  // 卸载(关 tab/重挂)冲刷:CAS 保存;冲突或失败 → 另存旁路文件 + toast(组件已卸载,横幅没了,但绝不静默丢)。
-  // 编辑器自己的卸载已先把手里那段交出来(PlainMarkdownEditor 的 layout 清理)。
-  useEffect(() => () => { void leaving.current() }, [])
   // 整页离开(退出 / 整窗重载)React 清理不跑:登记给 openMdEditors,由它在退出握手 / pagehide 时叫这里存。
-  useEffect(() => registerOpenMdEditor({ save: () => leaving.current(), saveSync: () => unloading.current() }), [])
+  // 卸载(关 tab/重挂)冲刷:CAS 保存;冲突或失败 → 另存旁路文件 + toast(组件已卸载,横幅没了,但绝不静默丢)。
+  // 编辑器自己的卸载已先把手里那段交出来(PlainMarkdownEditor 的 layout 清理)。登记留到这次保存落定才撤:
+  // 它可能排在一笔在途的写后面,这期间退出 / 重载照样要等它、照样走 pagehide。
+  useEffect(() => {
+    const off = registerOpenMdEditor({ save: () => leaving.current(), saveSync: () => unloading.current() })
+    return () => { void leaving.current().finally(off) }
+  }, [])
   // 宿主的 ⟳:先存后读(见 WsFileView 的 reload)
   useEffect(() => {
     if (!leaveRef) return

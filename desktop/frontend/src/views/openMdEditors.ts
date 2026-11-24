@@ -14,6 +14,16 @@
  *  so a remount / reload never reads the file before the outgoing editor's save is on disk. */
 export const pendingWrites = new Map<string, Promise<unknown>>()
 
+/** Registers a write on `path`. Readers wait for every write still outstanding on the path (two tabs of the same file
+ *  each have their own), not only the latest one; the entry goes once all of them settled. */
+export function trackWrite(path: string, write: Promise<unknown>): void {
+  const settled = write.then(() => {}, () => {})
+  const prev = pendingWrites.get(path)
+  const all = prev ? Promise.all([prev, settled]).then(() => {}) : settled
+  pendingWrites.set(path, all)
+  void all.then(() => { if (pendingWrites.get(path) === all) pendingWrites.delete(path) })
+}
+
 export interface OpenMdEditor {
   /** Hand over what the editor holds and save it (CAS; conflict / failure → sidecar). The write starts synchronously. */
   save(): Promise<void>

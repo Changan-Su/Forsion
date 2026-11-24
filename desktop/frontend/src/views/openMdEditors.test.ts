@@ -91,4 +91,21 @@ describe('open workspace .md editors', () => {
     release()
     await vi.waitFor(() => expect(order).toEqual(['a.save', 'reload']))
   })
+
+  it('readers wait for every write outstanding on a path, not only the latest one', async () => {
+    const m = await load()
+    let a!: () => void; let b!: () => void
+    m.trackWrite('/p/x.md', new Promise<void>((r) => { a = r }))
+    m.trackWrite('/p/x.md', new Promise<void>((_r, rej) => { b = () => rej(new Error('conflict')) }))
+    let done = false
+    void m.pendingWrites.get('/p/x.md')!.then(() => { done = true })
+    b()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(done).toBe(false)
+    expect(m.pendingWrites.has('/p/x.md')).toBe(true)
+    a()
+    await vi.waitFor(() => expect(done).toBe(true))
+    await vi.waitFor(() => expect(m.pendingWrites.has('/p/x.md')).toBe(false))
+  })
 })
+

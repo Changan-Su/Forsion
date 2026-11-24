@@ -34,20 +34,25 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
   let seq = 0
   const newId = deps.newId ?? (() => `quit-save-${Date.now()}-${++seq}`)
   const open = new Map<number, QuitSaveRenderer>()
+  /** Windows that let an ask run into the cap: not asked again (restart asks, then its own before-quit asks once more)
+   *  until they report again, which shows they are alive. */
+  const unresponsive = new Set<number>()
   return {
     /** A renderer reported its open editor count. */
     report(renderer: QuitSaveRenderer, count: unknown): void {
+      unresponsive.delete(renderer.id)
       if (typeof count === 'number' && count > 0) open.set(renderer.id, renderer)
       else open.delete(renderer.id)
     },
     /** The renderer navigated (reload) or went away: its editors went with it. */
     forget(id: number): void {
       open.delete(id)
+      unresponsive.delete(id)
     },
     /** Before quitting: null = no window has a workspace editor open (nothing to wait for). Otherwise resolves once
      *  every such window answered, went away, or the cap passed; never rejects (quitting must not get stuck). */
     quit(): Promise<void> | null {
-      const targets = [...open.values()].filter((r) => !r.isDestroyed())
+      const targets = [...open.values()].filter((r) => !r.isDestroyed() && !unresponsive.has(r.id))
       if (!targets.length) return null
       const requestId = newId()
       return new Promise<void>((resolve) => {
@@ -66,6 +71,7 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
         const onDone: AckListener = (event, received) => { if (received === requestId) settle(event.sender.id) }
         const timer = setTimeout(() => {
           deps.log?.(`[quit-save] ${pending.size} window(s) did not answer within ${timeoutMs}ms; quitting anyway`)
+          for (const id of pending) unresponsive.add(id)
           finish()
         }, timeoutMs)
         deps.events.on(QUIT_SAVE_DONE, onDone)
@@ -80,4 +86,30 @@ export function createEditorQuitSave(deps: { events: QuitSaveEvents; timeoutMs?:
       })
     },
   }
+}
+
+export interface UnloadWriteResult { ok?: boolean; conflict?: boolean; mtimeMs?: number; error?: string }
+
+/** The save a page makes while it goes away (pagehide → `fs:writeFileSync`): the renderer is blocked until this resolves.
+ *  - Always resolves, capped: a write stuck on a stalled mount must not freeze the window's reload / close for good
+ *    (the write itself goes on; the renderer then tries its sidecar).
+ *  - The CAS refused but the file already holds exactly these bytes (the editor's own autosave of the same text was in
+ *    flight and landed first): that is a save, not a conflict — nothing to put in a sidecar. */
+export function unloadWrite(
+  deps: {
+    write(path: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
+    read(path: string): Promise<string | null>
+    capMs?: number
+  },
+  path: string, content: string, expectedMtimeMs?: number, createNew?: boolean,
+): Promise<UnloadWriteResult> {
+  const capMs = deps.capMs ?? 3000
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ error: 'timeout' }), capMs)
+    const done = (r: UnloadWriteResult): void => { clearTimeout(timer); resolve(r) }
+    deps.write(path, content, expectedMtimeMs, createNew).then(async (r) => {
+      if (r.conflict && !createNew && (await deps.read(path).catch(() => null)) === content) return done({ ok: true, mtimeMs: r.mtimeMs })
+      done(r)
+    }, (err) => done({ error: String((err as Error)?.message || err) }))
+  })
 }
