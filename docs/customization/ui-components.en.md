@@ -584,7 +584,7 @@ The host class names and CSS custom properties a plugin can rely on are publishe
 color-mix(in srgb, var(--green) 14%, transparent)
 ```
 
-- Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not listed or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
+- Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not listed or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line. It lists the first 300 notes; to work a count down to zero, add `--all` (`node check-plugin.mjs <plugin folder> --style --all`) to list every one. Piped output (`| grep -c border-radius`) is complete too, and its last line starts with `RESULT:`.
 
 DOM popovers opened with `ctx.ui.popover` use the same `ui-menu-exit` animation and tokens as `OverlayAt`. Cleanup runs immediately; only an inert visual copy remains until exit completes. Reduced motion follows host policy.
 

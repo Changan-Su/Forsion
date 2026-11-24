@@ -314,6 +314,41 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
     expect(r.code).toBe(0);
   });
 
+  // 11-23 插件圆角那轮:报告接管道(`| grep -c`)只剩前 64KB —— 写没刷完就 process.exit(macOS 上管道是异步写);
+  // --style 又只列前 300 条,作者没法确认清零。spawnSync 的 stdout 本身就是管道,报告要远超 64KB 才压得出来。
+  it('--style --all:几千条提示全数列出、UI 位置不截,接管道也不截断、末行是 RESULT;不带 --all 照旧只列 300 条并提示 --all', () => {
+    const N = 3000;
+    const dir = plugin(["ctx.registerView({ id: 'desk', title: 'Desk', mount(el) {", ...Array(25).fill("document.createElement('select')"), '} })'].join('\n'));
+    writeFileSync(join(dir, 'big.css'), Array.from({ length: N }, (_, i) => `.x .c${i} { border-radius: 10px; }`).join('\n'));
+    const radius = (out: string) => out.split('\n').filter((l) => l.includes('border-radius written by hand')).length;
+    const last = (out: string) => out.trimEnd().split('\n').pop();
+
+    const r = check(dir, '--style', '--all');
+    expect(r.out.length).toBeGreaterThan(200_000);
+    expect(radius(r.out)).toBe(N);
+    expect(r.out).toContain(`${N} style note(s)`);
+    expect(r.out).toContain('hand-made dropdown ×25 (main.js:2,');
+    expect(r.out).toContain('main.js:26) → ');
+    expect(last(r.out)).toMatch(/^RESULT: /);
+    expect(r.code).toBe(0);
+
+    const capped = check(dir, '--style');
+    expect(radius(capped.out)).toBe(300);
+    expect(capped.out).toContain(`… +${N - 300} more (add --all to list every one)`);
+    expect(capped.out).toContain('hand-made dropdown ×25 (main.js:2, main.js:3, main.js:4, …) → ');
+    expect(last(capped.out)).toMatch(/^RESULT: /);
+    // 有问题照旧非零:同样的大报告 + 加载抛错;早退分支(入口文件不存在)同理
+    writeFileSync(join(dir, 'main.js'), "throw new Error('boom')");
+    const bad = check(dir, '--style', '--all');
+    expect(radius(bad.out)).toBe(N);
+    expect(last(bad.out)).toMatch(/^RESULT: \d+ problem\(s\) found\.$/);
+    expect(bad.code).toBe(1);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'gone.js' }));
+    const gone = check(dir, '--style', '--all');
+    expect(last(gone.out)).toBe('RESULT: 1 problem(s) found.');
+    expect(gone.code).toBe(1);
+  });
+
   it('--style UI parts:用了零件和公开 .btn、压缩过的库代码、宿主菜单外壳 → 无可报;官方样例全部 0 条(防模板退回手搓)', () => {
     const lib = `var x=1;${'a.createElement("select");'.repeat(100)}`;
     const dir = plugin([
