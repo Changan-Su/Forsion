@@ -17,7 +17,7 @@ import { ensureAmadeusReady } from '../../amadeusPlugins'
 import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
-import { DeskFilePane, DeskShimView, openDeskItemInMain, useDeskPathDrop, vaultRelOf } from './AgentDesk'
+import { DeskFilePane, DeskViewPane, openDeskItemInMain, useDeskPathDrop, vaultRelOf } from './AgentDesk'
 import { DeskItemIcon, deskOpenItems } from './deskOpen'
 import { CardAction, DeskSqueezeContext, SummaryCard } from './TaskSummary'
 import { bumpOpen, openOf, setUserOpen, touchDesk, useSummaryOpen } from './summaryOpen'
@@ -282,9 +282,10 @@ function useFollowSection(bodyRef: React.RefObject<HTMLDivElement | null>, idx: 
 
 // ── 内容(卡片态与展开态共用) ──
 
+// 视图条目走 DeskViewPane(#848):Agent 给成笔记编辑器的 .db / 插件文件 / 白板经「我来改」挪过来,照样按文件重新分派,不进笔记编辑器
 function HumanContent({ item, allowNative }: { item: DeskItem; allowNative: boolean }): React.ReactElement {
   return item.view
-    ? <DeskShimView key={item.key} type={item.view.type} params={item.view.params ?? {}} k={`human-view:${item.key}`} />
+    ? <DeskViewPane key={item.key} item={item} k={`human-view:${item.key}`} />
     : <DeskFilePane key={item.key} item={item} allowNative={allowNative} />
 }
 

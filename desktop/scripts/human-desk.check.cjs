@@ -16,6 +16,7 @@
  *   j  窄:切换件收成只留图标,两块的 ⋯ 和收起都在格内(紧凑阈值上下各量一档)
  *   k  两扇窗:换东西对面跟着;对面展开 Agent Desk,这扇的 Human Desk 不被换掉;对面没守着 → 不挂引用
  *   s  desk_screenshot 调查:Human Desk 展开时截到的是哪块(宽 / 窄窗各一次),只记事实不判
+ *   v  Agent 给成笔记编辑器的 .db / 白板(#848 同口径):「我来改」挪到 Human Desk、Human Desk ⋯「在新标签页打开」都不进笔记编辑器,字节不变
  *   shots 亮 / 暗各一张展开态 + 卡片态,与 r3 对照
  *
  * 跑(必须经 devlock):node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="Human Desk" --eta=8 -- npm run check:humandesk
@@ -42,6 +43,12 @@ async function main() {
   for (const d of [userData, `${userData}-dev`, vault, proj]) fs.mkdirSync(d, { recursive: true })
   const F = { N: path.join(vault, '定价调研.md'), R: path.join(proj, 'pricing-report.md'), T: path.join(proj, 'notes.txt'), C: path.join(proj, 'prices.csv'), D: path.join(proj, 'draft.md') }
   fs.writeFileSync(F.N, NOTE); fs.writeFileSync(F.R, REPORT); fs.writeFileSync(F.T, 'line 1\nline 2\n'); fs.writeFileSync(F.C, 'product,personal,team\nAlpha,12,30\n')
+  // v 段:库里「不是笔记」的两份(Agent 会把它们给成笔记编辑器),同 check:deskmanual l 段的夹具
+  const V = { db: path.join(vault, '数据', '任务.db'), board: path.join(vault, 'boards', '草图.excalidraw.md') }
+  for (const p of Object.values(V)) fs.mkdirSync(path.dirname(p), { recursive: true })
+  fs.writeFileSync(V.db, JSON.stringify({ version: 1, name: '任务', columns: [{ id: 'title', name: '标题', type: 'text' }], rows: [{ id: 'r1', cells: { title: '补 Gamma 阶梯价' } }], views: [] }))
+  fs.writeFileSync(V.board, ['---', 'excalidraw-plugin: parsed', '---', '', '## Drawing', '```json',
+    JSON.stringify({ type: 'excalidraw', version: 2, elements: [], appState: { viewBackgroundColor: '#ffffff' }, files: {} }), '```', '%%'].join('\n'))
   const S = { id: 'hd-s1', title: '竞品定价调研', summary: '', archived: false, model_id: 'm1', project_path: proj, project_name: 'pricing', projectless: false,
     agent_config: { execMode: 'host', cwd: proj }, created_at: '2026-11-23 10:00:00', updated_at: '2026-11-23 10:00:00' }
   const HISTORY = [
@@ -561,6 +568,61 @@ async function main() {
       console.log('NOTE desk_screenshot with Human Desk expanded:', JSON.stringify(out.notes.screenshot))
       check('s 截图请求都有回执(不让引擎干等)', !!wide.capture && !!cardVisible.capture && !!narrow.capture, out.notes.screenshot)
       check('s Human Desk 展开时右边那块从不被截(截的只可能是 Agent Desk 卡)', [wide, cardVisible, narrow].every((x) => !x.capture || x.capture.mode !== 'open'), out.notes.screenshot)
+    })
+
+    // ══ v:Agent 给成笔记编辑器的 .db / 白板 → Human Desk 也按文件重新分派(#848 同口径),不进笔记编辑器 ══
+    await step('v', async () => {
+      const bytes = () => Object.fromEntries(Object.entries(V).map(([k, p]) => [k, fs.readFileSync(p).toString('base64')]))
+      const before = bytes()
+      const errs = []
+      win.on('pageerror', (e) => errs.push(String(e && e.stack || e).slice(0, 400)))
+      const crashed = () => win.evaluate(() => [...document.querySelectorAll('[data-view-error]')].map((e) => (e.querySelector('pre')?.textContent || '').slice(0, 300)))
+      const chatTab = win.locator('.wb-tab[data-view-type="chat"]').first()
+      if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
+      const ed = (notePath, name) => ({ type: 'view', view: 'amadeus-editor', params: { notePath }, name })
+      stub.script([
+        { type: 'status', payload: { phase: 'llm_call', stage: 'sending', iteration: 0 }, delay: 150 },
+        { type: 'desk_present', payload: { views: [ed('数据/任务.db', '任务.db'), ed('boards/草图.excalidraw.md', '草图')], size: 'half' }, delay: 200 },
+        { type: 'done', payload: { content: '' }, delay: 200 },
+      ])
+      await send('把任务库和草图摆上来'); await sleep(3500)
+      out.notes.vPresent = { boom: await crashed(), errs: errs.slice(0, 4) }; await shot('v-after-present')
+      const takeOver = async (re) => {
+        if ((await st()).side !== 'agent') await seg('Agent')
+        const labels = (await st()).alabels
+        const i = labels.findIndex((x) => re.test(x || ''))
+        if (i < 0) return { missing: labels }
+        await win.locator('.agent-desk.open .agent-desk-body > .agent-desk-pane').nth(i).locator('button[title="更多"]').first().click(); await sleep(400)
+        await menuClick('我来改'); await sleep(2500)
+        return { labels }
+      }
+      const humanBody = () => win.evaluate(() => {
+        const b = document.querySelector('.agent-desk.open .human-desk-body')
+        return b ? { editor: !!b.querySelector('.amx-editor'), db: !!b.querySelector('.amx-dbview'), draw: !!b.querySelector('.amx-drawview'),
+          preview: !!b.querySelector('.amx-drawpreview-open'), name: (b.querySelector('.human-desk-name')?.textContent || '').trim() } : null
+      })
+      const t1 = await takeOver(/草图/)
+      const h1 = await humanBody()
+      check('v 白板给成笔记编辑器 →「我来改」挪到 Human Desk:白板只读预览,没有笔记编辑器', !!h1 && h1.draw && h1.preview && !h1.editor && /草图/.test(h1.name), { t1, h1 })
+      const t2 = await takeOver(/任务\.db/)
+      const h2 = await humanBody()
+      check('v .db 给成笔记编辑器 →「我来改」挪到 Human Desk:数据库视图,没有笔记编辑器', !!h2 && h2.db && !h2.editor && /任务/.test(h2.name), { t2, h2 })
+      await shot('v-human-db')
+      const tabs = () => win.evaluate(() => [...document.querySelectorAll('.wb-tab[data-view-type]')].map((t) => t.getAttribute('data-view-type')))
+      const n = (xs, type) => xs.filter((x) => x === type).length
+      const tb = await tabs()
+      await win.locator('.agent-desk.open .human-desk-body button[title="更多"]').first().click(); await sleep(400)
+      await menuClick('在新标签页打开'); await sleep(2500)
+      const ta = await tabs()
+      check('v Human Desk ⋯「在新标签页打开」(.db):主区多一个数据库标签,没开笔记编辑器', n(ta, 'amadeus-db') === n(tb, 'amadeus-db') + 1 && n(ta, 'amadeus-editor') === n(tb, 'amadeus-editor'), { tb, ta })
+      await shot('v-main-db')
+      if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
+      await sleep(3000) // 过了编辑器的存盘防抖再比字节
+      const after = bytes()
+      const changed = Object.keys(V).filter((k) => before[k] !== after[k])
+      check('v .db / 白板的字节都没变', changed.length === 0, { changed })
+      const boom = await crashed()
+      check('v 没有塌成错误页、没有页面异常', boom.length === 0 && errs.length === 0, { boom, errs: errs.slice(0, 4) })
     })
   } finally {
     save()

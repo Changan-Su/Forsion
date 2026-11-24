@@ -224,14 +224,14 @@ export function deskEditorReroute(view: DeskItem['view'], vaultRoot: string | nu
 
 /** 格子里 Agent 给出的视图(item.view)。笔记编辑器先按文件重新分派一次(deskEditorReroute):不是笔记的照 DeskFilePane 的口径挂
  *  (白板只读预览、插件文件视图、数据库、其余通用预览),不认领全局当前页;其余视图原样按注册表挂。
- *  卡片态与展开态共用;Human Desk 挂视图条目也该走这里(Agent Desk ⋯「我来改」会把 Agent 给的视图原样挪过去)。 */
-export function DeskViewPane({ item }: { item: DeskItem }) {
+ *  卡片态与展开态共用;Human Desk 挂视图条目也走这里(Agent Desk ⋯「我来改」会把 Agent 给的视图原样挪过去),k = shim leaf 的 id 前缀不同。 */
+export function DeskViewPane({ item, k }: { item: DeskItem; k?: string }) {
   // fileViewRef 读的是 store 快照:插件文件类型晚到、库晚就绪都要重判,订阅着就行
   usePluginStore((s) => s.fileTypes)
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const view = item.view!
   const to = deskEditorReroute(view, vaultRoot)
-  if (!to) return <DeskShimView type={view.type} params={view.params ?? {}} k={`desk-view:${item.key}`} />
+  if (!to) return <DeskShimView type={view.type} params={view.params ?? {}} k={k ?? `desk-view:${item.key}`} />
   const name = String((view.params ?? {}).notePath).split(/[\\/]/).pop() || item.name
   if (!to.path) {
     return (
@@ -331,6 +331,12 @@ export function useDeskGrip(sessionId: string, rootRef: React.RefObject<HTMLDivE
 /** 「在主区打开」(方案 C 那一项):库内文件走 Amadeus 的打开方式(同「在 Amadeus 中打开」),库外文件开 wsfile 标签,
  *  注册视图按类型开一个主区标签。插件工具卡没有主区对应物,不给这一项。 */
 export function openDeskItemInMain(it: DeskItem, vaultRoot: string | null): void {
+  // Agent 直接给出的笔记编辑器先按文件重新分派(同格子 DeskViewPane):.db / 插件文件 / 白板按那份文件开,拼不出路径的不开 ——
+  // 原样 openView('amadeus-editor') = 笔记编辑器存回那份文件 = 毁档。仪器:openDeskItemInMain.test.ts、check:humandesk v 段。
+  if (it.view) {
+    const to = deskEditorReroute(it.view, vaultRoot)
+    if (to) { if (to.path) openDeskItemInMain({ key: it.key, path: to.path, name: it.name, at: it.at }, vaultRoot); return }
+  }
   const rel = vaultRelOf(it.path, vaultRoot)
   if (rel) {
     if (opensAsTab(rel)) openFile(rel)
