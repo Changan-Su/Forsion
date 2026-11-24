@@ -167,7 +167,7 @@ async function main() {
     // 4. untouched: open → click into the text → arrows → close; normalization-prone source must stay byte-identical
     {
       const file = path.join(proj, 'ws-untouched.md')
-      const raw = `${FM}* star bullet\n*   spaced\n\nPara  with  two  spaces\n`
+      const raw = `${FM}###   Title   ###\n\n* star bullet\n*   spaced\n\nPara  with  two  spaces\n`
       fs.writeFileSync(file, raw)
       try {
         await openFile(file)
@@ -192,7 +192,7 @@ async function main() {
     // 6. edit → source right after typing (the editor unmounts, MdFileEditor stays)
     {
       const r = await trial({ kind: 'ws', name: 'ws-source-0', delay: 0, act: 'source' })
-      check('ws edit → source at ~0ms → back to edit: B on disk and in the editor', !r.error && r.a && r.b && (r.editorShows || '').includes(B.trim()),
+      check('ws edit → source at ~0ms → back to edit: B on disk, in the source pane and in the editor', !r.error && r.a && r.b && (r.sourceShows || '').includes(B.trim()) && (r.editorShows || '').includes(B.trim()),
         { gap: r.gap, a: r.a, b: r.b, editor: (r.editorShows || '').includes(B.trim()), sourcePane: (r.sourceShows || '').includes(B.trim()), error: r.error })
     }
     // 7. vault notes (v4 unified editor), same × gesture — reported only
