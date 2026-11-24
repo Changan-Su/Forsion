@@ -458,7 +458,7 @@ const off = ctx.registerTranslationEngine({
 
 ### Service menu on the result card: `card.service`
 
-Add `service: true` to `card` in `registerSelectionAction` (only for `output: 'preview'`): the card head's "Machine translation · …" line becomes a small dropdown with the current service, listing every available engine, "Forsion models · <model>" and, when the plugin registered a settings page, "Translation settings…". Picking one changes this computer's choice and reruns immediately. When the action fails the card adds "Retry with Forsion models" (this time only: `ctx.tangu.translate` calls in that run skip the engine) and "Open settings". This only matters when `run` translates through `ctx.tangu.translate`.
+Add `service: true` to `card` in `registerSelectionAction` (only for `output: 'preview'`): the card head's "Machine translation · …" line becomes a small dropdown with the current service, listing every available engine, "Forsion models · <model>" and, when the plugin registered a settings page, "Translation settings…". Picking one changes this computer's choice and reruns immediately. When the action fails the card adds "Retry with Forsion models" (this time only: that run gets `cx.noEngine === true` and its `ctx.tangu.translate` calls skip the engine; if you keep a cache, don't serve this run from the engine's entries or store its result under the engine) and "Open settings". This only matters when `run` translates through `ctx.tangu.translate`.
 
 Write each vendor adapter from the vendor's official API docs, list the API hosts in the manifest's `network`, and call them with `ctx.net.request`.
 

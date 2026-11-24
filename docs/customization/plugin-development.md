@@ -458,7 +458,7 @@ const off = ctx.registerTranslationEngine({
 
 ### 结果卡上的服务菜单：`card.service`
 
-`registerSelectionAction` 的 `card` 里加 `service: true`（只对 `output: 'preview'` 有效）：卡头那句「机器翻译 · …」换成当前服务的小下拉，列出所有可用的引擎、「Forsion 模型 · 模型名」，插件登记了设置页时还有「翻译设置…」。选一项会改本机选择并立刻重跑。动作失败时卡上多两个按钮：「用 Forsion 模型重试」（只这一次，这次 run 里调的 `ctx.tangu.translate` 跳过引擎）和「去设置」。只在 `run` 通过 `ctx.tangu.translate` 翻译时有意义。
+`registerSelectionAction` 的 `card` 里加 `service: true`（只对 `output: 'preview'` 有效）：卡头那句「机器翻译 · …」换成当前服务的小下拉，列出所有可用的引擎、「Forsion 模型 · 模型名」，插件登记了设置页时还有「翻译设置…」。选一项会改本机选择并立刻重跑。动作失败时卡上多两个按钮：「用 Forsion 模型重试」（只这一次：这次 run 收到 `cx.noEngine === true`，run 里调的 `ctx.tangu.translate` 跳过引擎；自己有缓存的，这次别读按引擎存的缓存，结果也别记到引擎名下）和「去设置」。只在 `run` 通过 `ctx.tangu.translate` 翻译时有意义。
 
 各家接口照厂商官方文档自己写，接口主机写进 manifest 的 `network`、用 `ctx.net.request` 调。
 

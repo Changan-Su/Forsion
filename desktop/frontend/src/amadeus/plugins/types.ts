@@ -2023,6 +2023,10 @@ export interface SelectionActionContribution {
     /** True when the host ran this action automatically after a selection (the user turned on "Run on select";
      *  2026-11-21+). */
     auto?: boolean
+    /** True when the user pressed "Retry with Forsion models" on a failed `card.service` card (2026-11-24+): this run's
+     *  `ctx.tangu.translate` calls skip the chosen translation engine. Don't serve this run from a cache keyed by the
+     *  chosen engine, and don't cache its result under that engine. */
+    noEngine?: boolean
   }): string | void | Promise<string | void>
 }
 

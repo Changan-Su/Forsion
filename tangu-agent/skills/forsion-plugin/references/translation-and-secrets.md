@@ -33,7 +33,7 @@ Once registered and ready, the engine shows up in the result card's service menu
 
 ## Result card: `card.service`
 
-`registerSelectionAction({ …, card: { language: true, source: true, speak: true, service: true } })` (output 'preview'): the card head shows the current service as a small dropdown (every ready engine, "Forsion models · <model>", and "Translation settings…" when your plugin registered a settings page). Picking one switches the device choice and reruns. On failure the card offers "Retry with Forsion models" (that run's `ctx.tangu.translate` calls skip the engine) and "Open settings". Only meaningful when `run` translates through `ctx.tangu.translate`.
+`registerSelectionAction({ …, card: { language: true, source: true, speak: true, service: true } })` (output 'preview'): the card head shows the current service as a small dropdown (every ready engine, "Forsion models · <model>", and "Translation settings…" when your plugin registered a settings page). Picking one switches the device choice and reruns. On failure the card offers "Retry with Forsion models" (that run gets `cx.noEngine === true` and its `ctx.tangu.translate` calls skip the engine; don't serve it from, or store it under, an engine-keyed cache) and "Open settings". Only meaningful when `run` translates through `ctx.tangu.translate`.
 
 ## Pattern
 

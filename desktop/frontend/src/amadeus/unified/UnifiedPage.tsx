@@ -2217,7 +2217,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       })
       let text: string
       try {
-        text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}) })
+        text = await runSelectionAction(owned, { text: target.text, markdown: selMd, pagePath: path, view: 'note', editable: true, source: { path, title: noteTitle }, signal, onDelta: (d) => { if (typeof d === 'string') onDelta(d) }, ...(panel.language ? { language: panel.language } : {}), ...(runOpts?.noEngine ? { noEngine: true } : {}) })
       } finally { unbindSelectionRun(signal) }
       return { text, ...(text && ran.model ? { model: { name: ran.model.name, mt: !!ran.model.mt } } : {}) }
     }

@@ -414,7 +414,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
         text = await runSelectionAction(o, {
         text: card.text, markdown: card.markdown, view: p.view, editable: false, source: card.source, signal,
         onDelta: (d) => { if (typeof d === 'string') onDelta(d) },
-        ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}),
+        ...(card.language ? { language: card.language } : {}), ...(card.auto ? { auto: true } : {}), ...(runOpts?.noEngine ? { noEngine: true } : {}),
       })
       } finally { unbindSelectionRun(signal) }
       // 「用 Forsion 模型重试」那一次的结果不进缓存:键是本机选的服务,拿它顶下一次会绕过那个服务(Codex 评审 #4)
