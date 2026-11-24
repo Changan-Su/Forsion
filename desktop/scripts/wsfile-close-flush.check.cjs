@@ -13,7 +13,10 @@
  *   × close at each DELAY · tab menu → Close · flushed bytes == debounced bytes · untouched open/click/close stays
  *   byte-identical · file changed on disk meanwhile → external bytes kept, B goes to the sidecar (CAS, not around it) ·
  *   edit → source right after typing keeps B.
- * Every other close gesture (drag elsewhere, closing a group/window) ends in the same closeLeaf → unmount.
+ * Measured: tab × and tab menu → Close (both closeLeaf → unmount) and edit → source (unmounts the editor only).
+ * Not covered: a renderer that goes away without React cleanup (app quit, renderer reload). WsFileView has no
+ * beforeunload / pagehide / quit-handshake flush, so ~1s of typing (200ms listener + 800ms save debounce) can still
+ * be lost there (pre-existing). Closing the main window only hides it to the tray.
  * Vault notes (Amadeus v4 unified editor) are measured with the same × gesture and reported (LIB=0 skips them).
  *
  *   node <repo root>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="wsfile close flush" --eta=5 -- npm run check:wsfileflush
