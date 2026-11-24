@@ -458,15 +458,6 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
         {geo && !compact && (
           <div className="imk-notes" style={{ left: geo.x + geo.iw + GAP, top: geo.y, width: PW, maxHeight: geo.ih }}>{notes}</div>
         )}
-        {popPos && pop && (
-          <div className="imk-pop" style={popPos} onPointerDown={(e) => e.stopPropagation()}>
-            <div className="imk-pop-in">
-              <span className="imk-badge">{pop.id}</span>
-              <input ref={popInput} value={pop.text} placeholder={tr('markup.notePh')} onChange={(e) => setPop({ ...pop, text: e.target.value })} />
-            </div>
-            <div className="imk-pop-foot"><span>{tr(pop.fresh ? 'markup.noteFoot' : 'markup.noteFootEdit')}</span><span>{popMark && kindLabel(popMark.kind)}</span></div>
-          </div>
-        )}
         {geo && !compact && (
           <div className="imk-dock" style={{ left: geo.x, top: geo.y + geo.ih + 14, width: geo.iw + GAP + PW }}>{dock}</div>
         )}
@@ -477,6 +468,16 @@ export function ImageMarkup({ src, name, w, h, compact, initial, mode, onCancel,
             <div className="imk-hint-touch">{tr('markup.hintTouch')}</div>
             <div className="imk-sheet-list">{notes}</div>
             <div className="imk-dock is-sheet">{dock}</div>
+          </div>
+        )}
+        {/* 备注浮层排在抽屉后面:同为局部 z-index 3,靠文档顺序压在抽屉上;确认框最后、最上 */}
+        {popPos && pop && (
+          <div className="imk-pop" style={popPos} onPointerDown={(e) => e.stopPropagation()}>
+            <div className="imk-pop-in">
+              <span className="imk-badge">{pop.id}</span>
+              <input ref={popInput} value={pop.text} placeholder={tr('markup.notePh')} onChange={(e) => setPop({ ...pop, text: e.target.value })} />
+            </div>
+            <div className="imk-pop-foot"><span>{tr(pop.fresh ? 'markup.noteFoot' : 'markup.noteFootEdit')}</span><span>{popMark && kindLabel(popMark.kind)}</span></div>
           </div>
         )}
         {confirm && (
