@@ -26,7 +26,8 @@
  *   m / o / p 各带一个「数据不丢」探针:打完字紧接着拿走 / 放回 / 换掉,读盘
  *   tabshots 亮 / 暗:在主区的卡、占位、标签右键、标签拖上来、窄对话顶上的卡、Amadeus 右栏的卡
  *   s  desk_screenshot 调查:Human Desk 展开时截到的是哪块(宽 / 窄窗各一次),只记事实不判
- *   v  Agent 给成笔记编辑器的 .db / 白板(#848 同口径):「我来改」挪到 Human Desk、Human Desk ⋯「在新标签页打开」都不进笔记编辑器,字节不变
+ *   v  Agent 给成笔记编辑器的 .db / 白板(#848 同口径):「我来改」挪到 Human Desk、Human Desk ⋯「在新标签页打开」、
+ *      标签移走后点卡「在这里打开」都不进笔记编辑器,字节不变
  *   shots 亮 / 暗各一张展开态 + 卡片态,与 r3 对照
  *
  * 跑(必须经 devlock):node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="Human Desk" --eta=8 -- npm run check:humandesk
@@ -968,6 +969,20 @@ async function main() {
       const ta = await tabs()
       check('v Human Desk ⋯「在新标签页打开」(.db):主区多一个数据库标签,没开笔记编辑器', n(ta, 'amadeus-db') === n(tb, 'amadeus-db') + 1 && n(ta, 'amadeus-editor') === n(tb, 'amadeus-editor'), { tb, ta })
       await shot('v-main-db')
+      if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
+      // 拿到主区之后:那个标签移到新窗口(不算关),这扇窗里找不到它 → 点卡「转到标签页」= 在这里打开(goToHumanTab → openDeskItemInMain),同样按文件开
+      const s1 = await st()
+      check('v 前置:「在新标签页打开」= 拿走,卡写「在主区」', !!s1.hcard?.out, s1.hcard)
+      await tabMenu('任务')
+      const [w2] = await Promise.all([app.waitForEvent('window', { timeout: 20_000 }), win.locator('.ctx-menu button[data-act="move-window"]').last().click()])
+      await w2.waitForSelector('#root', { timeout: 30_000 }); await sleep(3000)
+      await w2.close().catch(() => {}); await sleep(800)
+      const tg = await tabs()
+      await win.locator('.human-desk-card button[title="转到标签页"]').first().click(); await sleep(2000)
+      const th = await tabs()
+      check('v 这扇窗里没有那个标签了,点卡在这里打开:开的是数据库,不是笔记编辑器', n(th, 'amadeus-db') === n(tg, 'amadeus-db') + 1 && n(th, 'amadeus-editor') === n(tg, 'amadeus-editor'), { tg, th })
+      await shot('v-reopen-here')
+      await tabMenu('任务'); await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1300)
       if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
       await sleep(3000) // 过了编辑器的存盘防抖再比字节
       const after = bytes()
