@@ -55,6 +55,55 @@ describe('Basic Unit public projection', () => {
     } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
   })
 
+  it('serves different browser branding for Web and Admin and publishes each Space icon with its owner', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'unit-web-branding-'))
+    const admin = join(root, 'server-admin')
+    const web = join(root, 'web')
+    const publicPlugin = join(root, 'public')
+    await mkdir(join(admin, 'spaces/server-admin'), { recursive: true })
+    await mkdir(web)
+    await mkdir(publicPlugin)
+    const defaultIcon = '<link rel="icon" type="image/svg+xml" href="/shared/Forsion-LOGO3.svg" />'
+    await writeFile(join(web, 'index.html'), `<html><head><title>Forsion</title>${defaultIcon}</head><body></body></html>`)
+    for (const [dir, id] of [[admin, 'server-admin'], [publicPlugin, 'public']]) {
+      await writeFile(join(dir, 'manifest.json'), JSON.stringify({ id, version: '1.0.0', apiVersion: 1, main: 'main.js' }))
+      await writeFile(join(dir, 'main.js'), '')
+    }
+    await writeFile(join(admin, 'spaces/server-admin/space.json'), JSON.stringify({ id: 'server-admin', icon: 'server-cog', iconFile: 'icon.svg' }))
+    const localIcon = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'
+    const packageIcon = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>'
+    await writeFile(join(admin, 'spaces/server-admin/icon.svg'), localIcon)
+    await writeFile(join(admin, 'icon.svg'), packageIcon)
+    const packageIconUrl = 'data:image/svg+xml;base64,' + Buffer.from(packageIcon).toString('base64')
+    const localIconUrl = 'data:image/svg+xml;base64,' + Buffer.from(localIcon).toString('base64')
+    const config = { instanceId: 'branding-fixture', name: 'Forsion Server', version: '3.0.0', port: 0,
+      dataDir: join(root, 'data'), basePath: '/admin/', defaultSpace: 'server-admin', plugins: [admin, publicPlugin], webDist: web,
+      webEntries: [{ basePath: '/web/', plugins: ['public'], inheritWebAccount: true }, { basePath: '/example/', plugins: ['public'] }] }
+    try {
+      const handle = await startBasicUnit(config)
+      const base = `http://127.0.0.1:${handle.port}`
+      try {
+        const adminHtml = await fetch(base + '/admin/usage/today').then((r) => r.text())
+        expect(adminHtml).toContain('<title>Forsion Admin Panel</title>')
+        expect(adminHtml).toContain('href="/shared/ForsionLOFO3-Inverse.svg"')
+        expect(adminHtml).not.toContain(defaultIcon)
+        const webHtml = await fetch(base + '/web/').then((r) => r.text())
+        expect(webHtml).toContain('<title>Forsion</title>')
+        expect(webHtml).toContain(defaultIcon)
+        expect(await fetch(base + '/example/').then((r) => r.text())).toContain('<title>Forsion Server · Forsion</title>')
+        expect((await fetch(base + '/web/unit/meta').then((r) => r.json())).name).toBe('Forsion Server')
+        expect((await fetch(base + '/admin/unit/spaces').then((r) => r.json())).spaces[0].iconUrl).toBe(localIconUrl)
+        expect((await fetch(base + '/web/unit/spaces').then((r) => r.json())).spaces).toEqual([])
+      } finally { await handle.close() }
+      await rm(join(admin, 'spaces/server-admin/icon.svg'))
+      expect((await loadPackages([admin])).spaces[0].iconUrl).toBe(packageIconUrl)
+      await rm(join(admin, 'icon.svg'))
+      await writeFile(join(root, 'outside.svg'), packageIcon)
+      await symlink(join(root, 'outside.svg'), join(admin, 'icon.svg'))
+      expect((await loadPackages([admin])).spaces[0].iconUrl).toBeUndefined()
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('installs and uninstalls plugins live without leaving a configuration the next start would reject', async () => {
     const root = await mkdtemp(join(tmpdir(), 'basic-unit-install-'))
     await mkdir(join(root, 'web'))

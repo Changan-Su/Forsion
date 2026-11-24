@@ -7,6 +7,9 @@ import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '
 import { CORE_BUNDLE_IDS } from '../desktop/shared/corePlugins'
 import bundles from '../desktop/electron/builtinBundles.json'
 import { verifyBundleSignature } from '../desktop/electron/bundleSignature'
+import { readSmallFile } from '../desktop/electron/pluginIcon'
+import { spaceIconDataUrl, spaceIconFileOf } from '../desktop/electron/spaceIcon'
+import { spaceIconMaxBytes } from '../desktop/shared/spaceIcon'
 import { createHash } from 'node:crypto'
 import { cmpVersion } from '../tangu-agent/src/contracts/lenientVersion'
 
@@ -42,7 +45,7 @@ export interface InstalledPackage {
   backendEntry?: string
   runtimeEntry?: string
   ui?: Record<string, unknown>
-  spaces: Array<{ slug: string; json: string; plugin: string }>
+  spaces: Array<{ slug: string; json: string; plugin: string; iconUrl?: string }>
   spaceIds: Set<string>
 }
 export const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-z][a-z0-9-]*$/.test(id)
@@ -59,6 +62,20 @@ export async function packagePath(root: string, relative: string): Promise<strin
   if (!file.startsWith(root + sep)) throw new Error('Plugin file escapes its package')
   if (!(await stat(file)).isFile()) throw new Error('Plugin entry must be a regular file')
   return file
+}
+
+async function packageSpaceIcon(root: string, slug: string, json: string, signed?: Record<string, string>): Promise<string | undefined> {
+  const name = spaceIconFileOf(json)
+  if (!name) return undefined
+  for (const relative of [`spaces/${slug}/${name}`, name]) {
+    if (signed && !(relative in signed)) continue
+    try {
+      const bytes = await readSmallFile(await packagePath(root, relative), spaceIconMaxBytes(name))
+      if (!bytes || (signed && createHash('sha256').update(bytes).digest('hex') !== signed[relative])) continue
+      const url = spaceIconDataUrl(name, bytes)
+      if (url) return url
+    } catch { /* Missing or unreadable icon: try the package root, then fall back to the built-in glyph. */ }
+  }
 }
 export async function readPackage(dir: string, appVersion?: string): Promise<InstalledPackage> {
   const root = await realpath(dir)
@@ -140,7 +157,8 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
     const spec = JSON.parse(json)
     if (!validId(spec.id) || result.spaceIds.has(spec.id)) throw new Error('Invalid or duplicate Space id')
     result.spaceIds.add(spec.id)
-    result.spaces.push({ slug: entry.name, json, plugin: manifest.id })
+    const iconUrl = await packageSpaceIcon(root, entry.name, json, signed)
+    result.spaces.push({ slug: entry.name, json, plugin: manifest.id, ...(iconUrl ? { iconUrl } : {}) })
   }
   return result
 }
