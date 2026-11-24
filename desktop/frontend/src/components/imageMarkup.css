@@ -38,7 +38,7 @@
 /* 右侧清单:一处一行,编号 + 那句话 + 种类;悬停和图上的那处互相点亮 */
 .imk-notes { position: absolute; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; cursor: default; }
 .imk-notes-head { padding: 2px 10px 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-.imk-note { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 8px 30px 8px 10px; border-radius: var(--radius-sm, 6px); color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.45; cursor: pointer; }
+.imk-note { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 8px 30px 8px 10px; border-radius: var(--radius-sm, 8px); color: var(--text); font-size: var(--ui-font-body, 13px); line-height: 1.45; cursor: pointer; }
 .imk-note:hover, .imk-note.is-on { background: var(--overlay-light); }
 .imk-note.is-add { padding-right: 10px; align-items: center; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); cursor: default; }
 .imk-note.is-add:hover { background: none; }
@@ -97,7 +97,7 @@
 .ivg-cell img { display: block; width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; user-select: none; -webkit-user-drag: none; }
 .ivg-cell img:focus-visible { outline: 2px solid var(--signal-line); outline-offset: -2px; }
 .ivg-cell.is-on { box-shadow: inset 0 0 0 3px var(--signal); }
-.ivg-cell.is-on img { transform: scale(.94); border-radius: var(--radius-sm, 6px); transition: transform var(--duration-fast, .15s); }
+.ivg-cell.is-on img { transform: scale(.94); border-radius: var(--radius-sm, 8px); transition: transform var(--duration-fast, .15s); }
 .ivg-check { position: absolute; left: 8px; top: 8px; width: 24px; height: 24px; padding: 0; border: 2px solid #fff; border-radius: 50%; display: grid; place-items: center; background: rgb(0 0 0 / .18); color: var(--on-accent, #fff); cursor: pointer; opacity: 0; transition: opacity var(--duration-fast, .15s); }
 .ivg-check[aria-pressed='true'] { border-color: var(--signal); background: var(--signal); }
 :root.dark .ivg-check[aria-pressed='true'] { color: var(--bg); }
@@ -113,7 +113,7 @@
 .ivg-over { bottom: 80px; color: var(--danger, var(--text)); }
 .ivg.is-compact .ivg-body { padding: 4px 4px 96px; }
 .ivg.is-compact .ivg-grid { grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.ivg.is-compact .ivg-cell { border-radius: var(--radius-sm, 6px); }
+.ivg.is-compact .ivg-cell { border-radius: var(--radius-sm, 8px); }
 .ivg.is-compact .ivg-check, .ivg.is-compact .ivg-mark { opacity: 1; }
 .ivg.is-compact .ivg-dock { bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: calc(100% - 16px); }
 
