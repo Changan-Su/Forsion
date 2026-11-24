@@ -2,23 +2,23 @@
  *  和 Agent Desk 各自独立:摘要栏卡片栈里一张卡(排在 Agent Desk 卡上面),右边那块一次只展开一块,展开的那块最左上是
  *  「你 / Agent」切换件。Human Desk 只放一样东西;放上来就「在看」:这条会话的输入框自动挂一枚引用芯片(走今天的引用,
  *  发出去的 token 和 [[ 选择器同一份)。状态在 appStore.humanDeskBySession(纯决策 stores/humanDeskPlan.ts)。
- *  这一步不做:拿到主区 / 放到 Human Desk / 在外面的那张卡、引擎里的现场(<human_activity>)、停笔说一句、白板可画。 */
+ *  第 1 步后半(11-24,叠在 #852 上):拿到主区(⋯ 四项 / 名字胶囊拖出去 = 拿走)、在外面时那张卡(摘要栏 / 右栏对话顶上)、
+ *  放回来(标签右键「放到 Human Desk」/ 把标签拖到 Human Desk 上)。这一步仍不做:引擎里的现场(<human_activity>)、
+ *  停笔说一句、白板可画。 */
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Copy, Eye, FilePlus, FolderOpen, MapPin, Maximize2, Minimize2, NotebookPen, Pause, Play, Plus, Sparkles, X } from 'lucide-react'
+import { ChevronDown, Copy, Eye, FilePlus, FolderOpen, MapPin, Maximize2, Minimize2, Pause, Play, Plus, Sparkles, SquareArrowOutUpRight, X } from 'lucide-react'
 import { ViewModeSwitch } from '@lcl/components'
+import { onLeafClose, registerTabDropZone, registerTabMenuItems, useWorkspace, type ViewRef } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
 import { deskItemFor } from '../../stores/deskPlan'
 import { deskSection, deskSideOf, humanMenuRows, humanWatching, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { usePageStore, birthNoteFile, onNotePathGone } from '@amadeus/store/pageStore'
-import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
-import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
-import { openDb, openNote } from '../../amadeusNav'
 import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, DeskPickButton, type DeskChrome, type DeskPickRow } from './deskChrome'
 import { DeskFilePane, DeskViewPane, openDeskItemInMain, useDeskPathDrop, vaultRelOf } from './AgentDesk'
-import { DeskItemIcon, deskOpenItems } from './deskOpen'
+import { DeskItemIcon, canDragDeskItem, deskDragTip, deskOpenItems, startDeskItemDrag } from './deskOpen'
 import { CardAction, DeskSqueezeContext, SummaryCard } from './TaskSummary'
 import { bumpOpen, openOf, setUserOpen, touchDesk, useSummaryOpen } from './summaryOpen'
 import { fileChip, refChipOf, viewChip, type RefChip } from './Composer2'
@@ -42,6 +42,10 @@ registerMessages({
   'humanDesk.where': { zh: '你在第 {n} 节 · {title}', en: 'You’re in section {n} · {title}' },
   'humanDesk.live': { zh: '{name} · 第 {n} 节', en: '{name} · Section {n}' },
   'humanDesk.noVault': { zh: '先在 Amadeus 里打开一个智库，才能新建笔记', en: 'Open a vault in Amadeus first to create a note' },
+  // 拿到主区之后(r3 ⑦ / r2-details §4):卡头「名字 · 在主区」,点卡 = 转到那个标签
+  'humanDesk.inMain': { zh: '在主区', en: 'In a tab' },
+  'humanDesk.goTab': { zh: '转到标签页', en: 'Go to tab' },
+  'humanDesk.outHere': { zh: '{name} 在主区的标签页里', en: '{name} is open in a tab' },
 })
 
 /** 「你」= 对话里用户头像缩到 16px(有头像用头像,没有就是名字的第一个字,同 EditorialMessage)。 */
@@ -140,6 +144,144 @@ function installHumanDeskPathFollow(): void {
 }
 installHumanDeskPathFollow()
 
+// ── 拿到主区 / 放回来(第 1 步后半,11-24) ──
+// Human Desk 是「你正在做的那一样」,只能在一处:⋯ 里的四项、名字胶囊拖出去都是拿走 —— 东西变成主区的标签页,卡留着、指向它。
+// 共用件 deskOpen.tsx 只管「开出去」(Agent Desk 那格留着),拿走由这边在开出来之后做(takeHumanOut)。
+
+/** 东西已经在主区开出来了 → 记成「在主区」;这扇窗的展开收回。 */
+export const takeHumanOut = (sessionId: string): void => useApp.getState().humanDeskAct(sessionId, { type: 'takeOut' })
+
+const normAbs = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+const isAbs = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|[\\/])/.test(p)
+/** 主区标签装着的那份文件的绝对路径:笔记是库相对路径(接上库根),工作区文件 / PDF 是绝对路径。 */
+function tabAbs(filePath: string | undefined, root: string | null): string | null {
+  if (!filePath || /^[a-z][a-z0-9+.-]+:\/\//i.test(filePath)) return null
+  if (isAbs(filePath)) return normAbs(filePath)
+  return root ? normAbs(`${root.replace(/[\\/]+$/, '')}/${filePath}`) : null
+}
+const itemAbs = (it: DeskItem): string | null => (it.path && isAbs(it.path) ? normAbs(it.path) : null)
+
+/** 这扇窗当前 Space 的主区里装着这样东西的标签(按文件认)。 */
+function humanTabsOf(it: DeskItem): Array<{ id: string; front: boolean }> {
+  const want = itemAbs(it)
+  if (!want) return []
+  const root = usePageStore.getState().vaultRoot
+  return useWorkspace.getState().mainTabs.filter((t) => tabAbs(t.filePath, root) === want)
+}
+
+/** 点「在主区」的卡:转到装着它的那个标签;这扇窗里没有(关了、在另一扇窗、在别的 Space)→ 在这里打开。 */
+export function goToHumanTab(sessionId: string): void {
+  const it = useApp.getState().humanDeskBySession[sessionId]?.item
+  if (!it) return
+  const tab = humanTabsOf(it)[0]
+  if (tab) useWorkspace.getState().activateLeaf(tab.id)
+  else openDeskItemInMain(it, usePageStore.getState().vaultRoot)
+}
+
+/** 展开的那块上点「放到 Human Desk」(东西在主区时):放回来,这扇窗里装着它的标签关掉(先放后关,理由同 putFromTab)。 */
+function putBackHere(sessionId: string): void {
+  const it = useApp.getState().humanDeskBySession[sessionId]?.item
+  if (!it) return
+  const tabs = humanTabsOf(it)
+  put(sessionId, it)
+  for (const tab of tabs) useWorkspace.getState().closeLeaf(tab.id)
+}
+
+/** 标签 → Human Desk 上的一样东西:只收有文件的标签(笔记、工作区文件、PDF、图片……);对话、启动器、网页这些不是「你在做的那一样」。 */
+function tabItem(view: ViewRef): DeskItem | null {
+  const params = (view.params ?? {}) as Record<string, unknown>
+  for (const k of ['notePath', 'drawingPath', 'dbPath', 'pdfPath', 'imagePath', 'dashPath', 'filePath', 'path'] as const) {
+    const v = params[k]
+    if (typeof v !== 'string' || !v) continue
+    const abs = tabAbs(v, usePageStore.getState().vaultRoot)
+    return abs ? deskItemFor(abs, Date.now()) : null
+  }
+  return null
+}
+
+/** 能往哪条会话的 Human Desk 上放(标签右键用):当前那条会话,且 Human Desk 对它开着(同 Agent Desk 的门:开关开着、有过消息)。 */
+function putTargetSession(): string | null {
+  const app = useApp.getState()
+  const sid = app.activeId
+  if (!sid || !app.desktopConfig?.agentDeskEnabled || !(app.messagesBySession[sid]?.length)) return null
+  return sid
+}
+
+/** 放回来 / 放上来(标签右键、把标签拖到 Human Desk 上):先放(在主区的那样 = 放回来,清掉「在主区」),再关掉那个标签 —— 顺序别反:
+ *  先关的话标签监视会把它当成「你关掉了」、从 Human Desk 拿掉。 */
+function putFromTab(sessionId: string, item: DeskItem, leafId: string): void {
+  put(sessionId, item)
+  useWorkspace.getState().closeLeaf(leafId)
+}
+
+// 标签右键第一项「放到 Human Desk」(方案 r2-out-put:主区标签右键第一项;放回去以后主区那个标签关掉)
+registerTabMenuItems((tab) => {
+  const sid = putTargetSession()
+  const item = sid ? tabItem({ type: tab.type, params: tab.params }) : null
+  if (!sid || !item) return []
+  return [{ id: 'human-desk-put', label: translate('humanDesk.add'), icon: <Eye size={13} />, run: () => putFromTab(sid, item, tab.id) }]
+})
+
+/** 卡 / 展开的那块接标签:把主区标签拖上来 = 放到 Human Desk(落点提示用 Desk 现成的淡染 data-drop,同拖文件进来)。 */
+function useHumanTabDrop(ref: React.RefObject<HTMLElement | null>, sessionId: string): void {
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    return registerTabDropZone(el, {
+      accepts: (view) => !!tabItem(view),
+      hover: (on) => el.toggleAttribute('data-drop', on),
+      drop: (view, leafId) => { const it = tabItem(view); if (it) putFromTab(sessionId, it, leafId) },
+    })
+  }, [ref, sessionId])
+}
+
+// 拿到主区之后:那个标签看不看得见、你在第几节、你关没关掉它。每扇窗一份,模块级(卡、右栏都可能不在屏上)。只认这扇窗当前 Space 的主区:
+//  · 看得见(是所在组的前台标签)= 在场 → tabHere;看不见满时长 → 暂停(计时在 tanguSlice,同离开 Human Desk);
+//  · 你关掉了它(LCL onLeafClose:只有真的关才发,切 Space、移到新窗口、标签里换了文件都不发),也没有别的标签装着它 = 做完了
+//    → 从 Human Desk 拿掉(进「最近放过的」,▾ 还能拿回来);
+//  · 笔记:在那个标签的内容(LCL .wb-view[data-leaf-id])里算第几节,同展开态。
+const OUT_SECTION_LINE = 24
+let outWatchInstalled = false
+function installHumanOutWatch(): void {
+  if (outWatchInstalled) return
+  outWatchInstalled = true
+  onLeafClose((leaf) => {
+    const closed = tabItem({ type: leaf.type, params: leaf.params })
+    if (!closed) return
+    const app = useApp.getState()
+    for (const [sid, h] of Object.entries(app.humanDeskBySession)) {
+      if (!h?.out || !h.item || itemAbs(h.item) !== itemAbs(closed)) continue
+      if (humanTabsOf(h.item).some((t) => t.id !== leaf.id)) continue // 还有别的标签装着它
+      app.humanDeskAct(sid, { type: 'remove' })
+    }
+  })
+  let tracking: { sid: string; leaf: string; key: string; el: Element; stop: () => void } | null = null
+  let retry = 0
+  const run = (): void => {
+    const app = useApp.getState()
+    let want: { sid: string; leaf: string; key: string; keep: boolean } | null = null
+    for (const [sid, h] of Object.entries(app.humanDeskBySession)) {
+      if (!h?.out || !h.item) continue
+      const front = humanTabsOf(h.item).find((t) => t.front)
+      if (!!h.tabHere !== !!front) app.humanDeskAct(sid, { type: 'tabHere', here: !!front })
+      if (front && isNote(h.item) && !want) want = { sid, leaf: front.id, key: h.item.key, keep: !!h.section }
+    }
+    const el = want ? document.querySelector(`.wb-view[data-leaf-id="${CSS.escape(want.leaf)}"]`) : null
+    if (tracking && (!want || tracking.sid !== want.sid || tracking.leaf !== want.leaf || tracking.key !== want.key || tracking.el !== el || !el?.isConnected)) {
+      tracking.stop(); tracking = null
+    }
+    if (want && el && !tracking) tracking = { ...want, el, stop: trackSections(el as HTMLElement, want.sid, OUT_SECTION_LINE, want.keep) }
+    // 标签刚开出来、内容还没挂上:过一会儿再找一次(有上限)
+    if (want && !el && retry < 20) { retry++; setTimeout(schedule, 150) } else if (!want || el) retry = 0
+  }
+  let pending = false
+  const schedule = (): void => { if (!pending) { pending = true; queueMicrotask(() => { pending = false; run() }) } }
+  useWorkspace.subscribe(schedule)
+  useApp.subscribe((s, prev) => { if (s.humanDeskBySession !== prev.humanDeskBySession) schedule() })
+  usePageStore.subscribe((s, prev) => { if (s.vaultRoot !== prev.vaultRoot) schedule() })
+}
+installHumanOutWatch()
+
 // ── 切换件「你 / Agent」(两块展开态最左上;LCL 看法胶囊装在 Desk 的浮动胶囊皮里) ──
 
 const SegState = createContext<{ eye: boolean; dot: boolean; dotTitle: string }>({ eye: false, dot: false, dotTitle: '' })
@@ -208,6 +350,14 @@ function useSectionTracker(paneRef: React.RefObject<HTMLDivElement | null>, sess
   useEffect(() => {
     const pane = paneRef.current
     if (!pane || !on) return
+    return trackSections(pane, sessionId, SECTION_LINE, keep)
+  }, [paneRef, sessionId, on, itemKey]) // eslint-disable-line react-hooks/exhaustive-deps -- keep 只在挂上那一下有意义
+}
+
+/** 在一块内容里算「第几节」(展开态的 Human Desk、拿到主区后那个标签的内容共用)。line = 「滚到哪」那条线离这块顶的距离。
+ *  返回撤销。 */
+function trackSections(pane: HTMLElement, sessionId: string, line: number, keep: boolean): () => void {
+  {
     let raf = 0
     // 光标在这块里 → 按光标;你滚了 → 按滚到哪;光标去了别处(比如去输入框打字)→ 留着上一次,不按滚动位置重算
     let why: 'scroll' | 'auto' = 'auto'
@@ -233,8 +383,8 @@ function useSectionTracker(paneRef: React.RefObject<HTMLDivElement | null>, sess
           else break
         }
       } else {
-        const line = pane.getBoundingClientRect().top + SECTION_LINE
-        for (let i = 0; i < hs.length; i++) { if (hs[i].getBoundingClientRect().top <= line) at = i; else break }
+        const y = pane.getBoundingClientRect().top + line
+        for (let i = 0; i < hs.length; i++) { if (hs[i].getBoundingClientRect().top <= y) at = i; else break }
       }
       const sec = deskSection(hs.map((h) => ({ level: Number(h.tagName.slice(1)) || 2, text: h.textContent || '' })), at)
       useApp.getState().humanDeskAct(sessionId, { type: 'section', section: sec ?? undefined })
@@ -253,7 +403,7 @@ function useSectionTracker(paneRef: React.RefObject<HTMLDivElement | null>, sess
       pane.removeEventListener('scroll', onScroll, true)
       mo.disconnect()
     }
-  }, [paneRef, sessionId, on, itemKey]) // eslint-disable-line react-hooks/exhaustive-deps -- keep 只在挂上那一下有意义
+  }
 }
 
 /** 卡片预览跟到你在的那一节:预览挂上来、小节变了 → 把那个标题滚到预览顶上(只滚预览自己的滚动容器,不带着栈一起滚)。
@@ -329,8 +479,11 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
   const bodyRef = useRef<HTMLDivElement>(null)
   useEffect(() => { ensureAmadeusReady() }, [])
   useDeskPathDrop(cardRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())), sessionId)
+  useHumanTabDrop(cardRef, sessionId)
+  // 拿到主区了:卡留着、指向它 ——「名字 · 在主区」,点卡 = 转到那个标签;不再有小预览(原生编辑器归主区那个标签)
+  const out = !!h?.out && !!item
   const note = isNote(item) ? h?.section : undefined
-  useFollowSection(bodyRef, note?.idx, open && !gone && hasContent)
+  useFollowSection(bodyRef, note?.idx, open && !gone && hasContent && !out)
   const pickRows = useHumanPickRows(sessionId)
   const expand = (): void => { touchDesk(sessionId, 'humandesk'); useApp.getState().setDeskSide(sessionId, 'human') }
   // 右边是 Agent Desk 在演时卡片预览让出原生编辑器(同一时间只有一处能开,见 AgentDesk.useClaimKey)
@@ -339,7 +492,7 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
   return (
     <SummaryCard
       id="humandesk"
-      className={`human-desk-card${gone ? ' gone' : ''}${hasContent ? '' : ' empty'}`}
+      className={`human-desk-card${gone ? ' gone' : ''}${hasContent ? '' : ' empty'}${out ? ' out' : ''}`}
       rootProps={{ ref: (el: HTMLElement | null) => { cardRef.current = el }, 'data-human-desk-session': sessionId, 'data-want': want ? '1' : '0', 'data-watching': watching || undefined }}
       open={open}
       onToggle={(o) => { touchDesk(sessionId, 'humandesk'); if (hasContent) setUserOpen(sessionId, 'humandesk', o); else setPeek(o) }}
@@ -353,18 +506,23 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
             </DeskPickButton>
           </span>
         ) : <span className="t2-card-hint human-desk-card-title" title={item.path || item.name}>{item.name}</span>)}
+        {out && <span className="t2-card-hint human-desk-inmain">· {t('humanDesk.inMain')}</span>}
       </>}
       actions={item ? <>
         {watching && <span className="human-desk-eye" title={t('humanDesk.watching')} aria-label={t('humanDesk.watching')}><Eye size={13} /></span>}
         {watching
           ? <CardAction className="icon-btn" icon={<Pause size={13} />} label={t('humanDesk.stop')} run={() => useApp.getState().humanDeskAct(sessionId, { type: 'stop' })} />
           : <CardAction className="icon-btn" icon={<Play size={13} />} label={t('humanDesk.resume')} run={() => useApp.getState().humanDeskAct(sessionId, { type: 'resume' })} />}
-        <CardAction className="icon-btn" icon={<Maximize2 size={13} />} label={t('desk.expand')} run={expand} />
+        {out
+          ? <CardAction className="icon-btn" icon={<SquareArrowOutUpRight size={13} />} label={t('humanDesk.goTab')} run={() => goToHumanTab(sessionId)} />
+          : <CardAction className="icon-btn" icon={<Maximize2 size={13} />} label={t('desk.expand')} run={expand} />}
       </> : <HumanAddButton sessionId={sessionId} />}
-      bodyClassName={`human-desk-card-frame${item ? ' act' : ''}`}
-      bodyProps={{ onClick: item ? expand : undefined, title: item ? t('desk.expand') : undefined }}
+      bodyClassName={`human-desk-card-frame${item ? ' act' : ''}${out ? ' out' : ''}`}
+      bodyProps={{ onClick: item ? (out ? () => goToHumanTab(sessionId) : expand) : undefined, title: item ? t(out ? 'humanDesk.goTab' : 'desk.expand') : undefined }}
     >
-      {open && !gone && (item ? (
+      {open && !gone && (out ? (
+        note ? <div className="human-desk-where"><MapPin size={12} /><span>{t('humanDesk.where', { n: String(note.n), title: note.title })}</span></div> : null
+      ) : item ? (
         <>
           {note && <div className="human-desk-where"><MapPin size={12} /><span>{t('humanDesk.where', { n: String(note.n), title: note.title })}</span></div>}
           <div ref={bodyRef} className="human-desk-card-body">
@@ -378,6 +536,36 @@ export function HumanDeskCard({ sessionId }: { sessionId: string }): React.React
         </div>
       ))}
     </SummaryCard>
+  )
+}
+
+/** 右栏对话顶上的那张卡(r2-details §4:在 Amadeus 等别的 Space 里、右栏开着这条会话时 —— 那里摘要栏卡片栈整栈不显示)。
+ *  只在东西拿到了主区时出现,同摘要栏那张卡的「在主区」态:「名字 · 在主区」+ 小眼睛 + 停止 / 继续看,下面一行你在第几节;
+ *  点卡 = 转到装着它的标签(这个 Space 里没有就在这里打开)。 */
+export function HumanDeskSideCard({ sessionId }: { sessionId: string }): React.ReactElement | null {
+  const { t } = useI18n()
+  const h = useApp((s) => s.humanDeskBySession[sessionId])
+  if (!h?.out || !h.item) return null
+  const watching = humanWatching(h)
+  const note = isNote(h.item) ? h.section : undefined
+  const go = (): void => goToHumanTab(sessionId)
+  return (
+    <div className="human-desk-side" data-human-desk-session={sessionId} title={t('humanDesk.goTab')} onClick={go}>
+      <div className="human-desk-side-head">
+        <YouMark />
+        <span className="human-desk-card-name">{t('humanDesk.title')}</span>
+        <span className="t2-card-hint human-desk-card-title">{h.item.name}</span>
+        <span className="t2-card-hint human-desk-inmain">· {t('humanDesk.inMain')}</span>
+        <span className="human-desk-side-acts" onClick={(e) => e.stopPropagation()}>
+          {watching && <span className="human-desk-eye" title={t('humanDesk.watching')} aria-label={t('humanDesk.watching')}><Eye size={13} /></span>}
+          {watching
+            ? <button type="button" className="icon-btn human-desk-stop" title={t('humanDesk.stop')} aria-label={t('humanDesk.stop')} onClick={() => useApp.getState().humanDeskAct(sessionId, { type: 'stop' })}><Pause size={13} /></button>
+            : <button type="button" className="icon-btn human-desk-stop" title={t('humanDesk.resume')} aria-label={t('humanDesk.resume')} onClick={() => useApp.getState().humanDeskAct(sessionId, { type: 'resume' })}><Play size={13} /></button>}
+          <button type="button" className="icon-btn" title={t('humanDesk.goTab')} aria-label={t('humanDesk.goTab')} onClick={go}><SquareArrowOutUpRight size={13} /></button>
+        </span>
+      </div>
+      {note && <div className="human-desk-where"><MapPin size={12} /><span>{t('humanDesk.where', { n: String(note.n), title: note.title })}</span></div>}
+    </div>
   )
 }
 
@@ -395,36 +583,45 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
   const more = useRef<CtxItem[]>([])
   const chrome = useMemo<DeskChrome>(() => ({ slot: slotEl, more }), [slotEl])
   const vaultRoot = usePageStore((s) => s.vaultRoot)
-  const fileTypes = usePluginStore((s) => s.fileTypes)
   const pickRows = useHumanPickRows(sessionId)
   useEffect(() => { ensureAmadeusReady() }, [])
   useDeskPathDrop(paneRef, true, false, (p) => put(sessionId, deskItemFor(p, Date.now())), sessionId)
+  useHumanTabDrop(paneRef, sessionId)
+  const out = !!h?.out
+  const onDesk = !!item && !out // 东西在 Human Desk 上(拿到主区了 = 这块只剩一句「在主区」)
   // 挂上时记下上次那一节(同一样东西才算):滚回去,并且不让「编辑器挂好那一下」按顶上那一节覆盖掉
   const back = useRef<{ key?: string; idx?: number }>({ key: item?.key, idx: h?.section?.idx })
   if (back.current.key !== item?.key) back.current = { key: item?.key, idx: undefined }
-  useFollowSection(paneRef, back.current.idx, isNote(item), SECTION_LINE - 6, true)
-  useSectionTracker(paneRef, sessionId, isNote(item), item?.key, back.current.idx !== undefined)
+  useFollowSection(paneRef, back.current.idx, onDesk && isNote(item), SECTION_LINE - 6, true)
+  useSectionTracker(paneRef, sessionId, onDesk && isNote(item), item?.key, back.current.idx !== undefined)
   const collapse = (): void => { touchDesk(sessionId, 'humandesk'); useApp.getState().setDeskSide(sessionId, null) }
   const path = item?.path || ''
   const rel = vaultRelOf(path, vaultRoot)
-  const amadeus = rel && (/\.(md|db)$/i.test(rel) || isDrawingPath(rel) || !!findFileType(fileTypes, rel)) ? rel : null
+  const take = (): void => takeHumanOut(sessionId)
   const moreItems = (): CtxItem[] => {
     if (!item) return []
     const mine: CtxItem[] = [
       ...addItems(sessionId, t),
       { label: t('humanDesk.remove'), icon: <X size={14} />, separatorBefore: true, run: () => useApp.getState().humanDeskAct(sessionId, { type: 'remove' }) },
     ]
-    // 打开的几项同 Agent Desk(#842 deskOpen.tsx):新标签页 / 拆分 / 新窗口,都是再开一份,Human Desk 上的留着
+    if (out) return [{ label: t('humanDesk.goTab'), icon: <SquareArrowOutUpRight size={14} />, run: () => goToHumanTab(sessionId) }, ...mine]
+    // 打开的四项同 Agent Desk(#842 deskOpen.tsx 的共用函数),但 Human Desk 是拿走:开出去之后从这边拿掉、卡留着指向它(第 1 步后半)。
+    // 「在 Amadeus 中打开」不再给:那是再开一份,和「一件事只有一张卡」打架;四项里的「在新标签页打开」就是它
     const opens = deskOpenItems({ item, rel, anchor: paneRef.current, openTab: () => openDeskItemInMain(item, vaultRoot), t })
+      .map((x) => ({ ...x, run: () => { x.run(); take() } }))
     const orig: CtxItem[] = [
       ...more.current,
-      ...(amadeus ? [{ label: t('preview.openInAmadeus'), icon: <NotebookPen size={14} />, run: () => { if (/\.db$/i.test(amadeus)) openDb(amadeus); else void openNote(amadeus) } }] : []),
       ...(path ? [{ label: t('panel.action.copyPath'), icon: <Copy size={14} />, run: () => void navigator.clipboard?.writeText(path) }] : []),
     ]
     const after = (xs: CtxItem[]): CtxItem[] => xs.map((x, i) => (i === 0 ? { ...x, separatorBefore: true } : x))
     return [...mine, ...after(opens), ...after(orig)]
   }
   const pickable = (h?.recent?.length ?? 0) > 1
+  // 名字胶囊拖得起来(同 Agent Desk,#842):拖进标签栏 / 主区 = 拿到主区(落下成功才拿掉);拖进输入框 = 一枚引用(不拿走)
+  const drag = onDesk && canDragDeskItem(item!)
+    ? (e: React.DragEvent<HTMLElement>): void => startDeskItemDrag(e, { sessionId, item: item!, rel, openVault: () => openDeskItemInMain(item!, vaultRoot), taken: take })
+    : undefined
+  const tip = item ? [path || item.name, onDesk && deskDragTip(item, t)].filter(Boolean).join('\n') : undefined
   // 图标跟着种类走,同 Agent Desk 的名字胶囊(#842 DeskItemIcon)
   const inner = item ? <><DeskItemIcon item={item} rel={rel} size={13} className="desk-cap-ic" /><span className="desk-cap-label">{item.name || path.split(/[/\\]/).pop()}</span></> : null
   return (
@@ -437,8 +634,9 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
               <div className="desk-cap desk-cap-name human-desk-name">
                 <YouMark className="human-desk-capyou" />
                 {pickable
-                  ? <DeskPickButton className="desk-cap-pick" title={path || item.name} rows={pickRows}>{inner}<ChevronDown size={12} className="desk-cap-caret" /></DeskPickButton>
-                  : <span className="desk-cap-pick" title={path || item.name}>{inner}</span>}
+                  ? <DeskPickButton className="desk-cap-pick" title={tip ?? ""} rows={pickRows} onDragStart={drag}>{inner}<ChevronDown size={12} className="desk-cap-caret" /></DeskPickButton>
+                  : <span className="desk-cap-pick" title={tip} draggable={drag ? true : undefined} onDragStart={drag}>{inner}</span>}
+                {out && <span className="human-desk-inmain">{t('humanDesk.inMain')}</span>}
                 {watching && <span className="human-desk-eye" title={t('humanDesk.watching')} aria-label={t('humanDesk.watching')}><Eye size={12} /></span>}
               </div>
             )}
@@ -456,7 +654,17 @@ export function HumanDeskPanel({ sessionId, switcher }: { sessionId: string; swi
           </div>
         </div>
         <DeskChromeContext.Provider value={chrome}>
-          {item ? <HumanContent item={item} allowNative /> : (
+          {out && item ? (
+            // 拿到主区了:这块不再演它(一件事只有一张卡,原生编辑器归主区那个标签);转到它 / 放回来
+            <div className="human-desk-empty human-desk-outpane">
+              <SquareArrowOutUpRight size={24} />
+              <span className="human-desk-empty-tx">{t('humanDesk.outHere', { name: item.name })}</span>
+              <span className="human-desk-outacts">
+                <button type="button" className="t2-btn ghost" onClick={() => goToHumanTab(sessionId)}>{t('humanDesk.goTab')}</button>
+                <button type="button" className="t2-btn ghost" onClick={() => putBackHere(sessionId)}>{t('humanDesk.add')}</button>
+              </span>
+            </div>
+          ) : item ? <HumanContent item={item} allowNative /> : (
             <div className="human-desk-empty">
               <Eye size={28} />
               <span className="human-desk-empty-tx">{t('humanDesk.empty')}</span>

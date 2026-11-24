@@ -10,6 +10,9 @@ export interface HumanDeskCore {
   recent?: DeskItem[]
   /** 你点了停止:不再自动挂「现场」引用,直到点「继续看」或放上新东西。 */
   stopped?: true
+  /** 拿到主区了(⋯ 里的四项 / 名字胶囊拖出去,第 1 步后半):东西变成主区的标签页,卡留着、指向它(「一件事只有一张卡」)。
+   *  在看照算,只是来源换成那个标签。放回来(标签右键 / 把标签拖到 Human Desk 上)或换一样东西就清掉。 */
+  out?: true
 }
 
 /** 每扇窗自己的那部分(内存,不落盘、不同步)。 */
@@ -22,6 +25,8 @@ export interface HumanDeskRuntime {
   agentDot?: true
   /** 笔记:你在哪一节(展开态从编辑器的光标 / 滚动位置算出来)。idx = 第几个标题,卡片预览据此滚过去。 */
   section?: { n: number; title: string; idx: number }
+  /** 拿到主区时:这扇窗里装着它的那个标签正看得见(是所在组的前台标签)。看得见 = 在场(不起暂停表);看不见满时长 → 暂停。 */
+  tabHere?: true
 }
 
 export type HumanDeskState = HumanDeskCore & HumanDeskRuntime
@@ -36,6 +41,8 @@ export type HumanDeskAction =
   /** 库里的文件被改名 / 挪走(to = 新路径)或删掉(to = null):放着的那样和「最近放过的」跟过去 / 拿掉。
    *  prefix = 整个文件夹(子树里的都算)。不跟的话编辑器攥着已退休的旧路径,之后打的字不落盘。 */
   | { type: 'retarget'; from: string; to: string | null; prefix?: boolean }
+  /** 拿到主区(东西已经在主区开出来之后):卡留着、指向它。 */
+  | { type: 'takeOut' }
 
 /** 东西在 Human Desk 上才算在看:没停、也没因为离开太久自动暂停。 */
 export const humanWatching = (s: HumanDeskState | undefined): boolean => !!s?.item && !s.stopped && !s.paused
@@ -52,12 +59,14 @@ export function humanDeskReduce(core: HumanDeskCore, a: HumanDeskAction): HumanD
     case 'put': {
       const item = unpinned(a.item)
       const same = !!core.item && deskIdentity(core.item) === deskIdentity(item)
-      // 同一样东西再放一次:条目不换(不重挂编辑器),只是重新开始看
-      if (same) return core.stopped ? { ...core, stopped: undefined } : core
-      return { ...core, item, recent: rememberRecent(core.recent, [item, ...(core.item ? [core.item] : [])]), stopped: undefined }
+      // 同一样东西再放一次:条目不换(不重挂编辑器),只是重新开始看;它在主区的话 = 放回来
+      if (same) return core.stopped || core.out ? { ...core, stopped: undefined, out: undefined } : core
+      return { ...core, item, recent: rememberRecent(core.recent, [item, ...(core.item ? [core.item] : [])]), stopped: undefined, out: undefined }
     }
     case 'remove':
-      return core.item ? { ...core, item: undefined, stopped: undefined } : core
+      return core.item ? { ...core, item: undefined, stopped: undefined, out: undefined } : core
+    case 'takeOut':
+      return core.item && !core.out ? { ...core, out: true } : core
     case 'stop':
       return core.item && !core.stopped ? { ...core, stopped: true } : core
     case 'resume':
@@ -76,7 +85,7 @@ export function humanDeskReduce(core: HumanDeskCore, a: HumanDeskAction): HumanD
       const recent = core.recent?.map(move).filter((x): x is DeskItem => !!x)
       const same = item === core.item && (recent?.length ?? 0) === (core.recent?.length ?? 0) && (recent ?? []).every((x, i) => x === core.recent![i])
       if (same) return core
-      return { ...core, item: item ?? undefined, recent, ...(item ? {} : { stopped: undefined }) }
+      return { ...core, item: item ?? undefined, recent, ...(item ? {} : { stopped: undefined, out: undefined }) }
     }
   }
 }
@@ -152,6 +161,7 @@ export function packHumanDeskMap(map: Record<string, HumanDeskCore>, cap = HUMAN
       const recent = (s.recent || []).filter(persistable).map(unpinned)
       if (recent.length) out.recent = recent
       if (s.stopped && out.item) out.stopped = true
+      if (s.out && out.item) out.out = true // 重启后卡照旧指向主区(布局会把那个标签还原回来;没还原的,点卡重新打开)
       return [sid, out]
     })
     .filter(([, s]) => s.item || s.recent?.length)
@@ -187,7 +197,12 @@ export function unpackHumanDeskMap(raw: string | null | undefined): Record<strin
     const item = unpackItem(v.item)
     const recent = (Array.isArray(v.recent) ? v.recent : []).map(unpackItem).filter((x: DeskItem | null): x is DeskItem => !!x).slice(0, DESK_RECENT_CAP)
     if (!item && !recent.length) continue
-    out[sid] = { ...(item ? { item } : {}), ...(recent.length ? { recent } : {}), ...(item && v.stopped === true ? { stopped: true as const } : {}) }
+    out[sid] = {
+      ...(item ? { item } : {}),
+      ...(recent.length ? { recent } : {}),
+      ...(item && v.stopped === true ? { stopped: true as const } : {}),
+      ...(item && v.out === true ? { out: true as const } : {}),
+    }
   }
   return out
 }
@@ -203,7 +218,7 @@ export function humanDeskSessionsChanged(before: Record<string, HumanDeskCore>, 
 export function adoptHumanDesk(cur: HumanDeskState | undefined, theirs: HumanDeskCore): HumanDeskState {
   const base: HumanDeskState = cur ?? {}
   const sameItem = (!base.item && !theirs.item) || (!!base.item && !!theirs.item && JSON.stringify(base.item) === JSON.stringify(theirs.item))
-  const sameRest = JSON.stringify(base.recent ?? null) === JSON.stringify(theirs.recent ?? null) && !!base.stopped === !!theirs.stopped
+  const sameRest = JSON.stringify(base.recent ?? null) === JSON.stringify(theirs.recent ?? null) && !!base.stopped === !!theirs.stopped && !!base.out === !!theirs.out
   if (sameItem && sameRest) return base
   const changedThing = !sameItem && !(base.item && theirs.item && deskIdentity(base.item) === deskIdentity(theirs.item))
   // 对面点了「继续看」而本窗没展开 Human Desk:本窗同样不算在场(否则本窗的引用一直挂着,也没有计时来暂停它)
@@ -213,6 +228,10 @@ export function adoptHumanDesk(cur: HumanDeskState | undefined, theirs: HumanDes
     item: sameItem ? base.item : theirs.item,
     recent: theirs.recent,
     stopped: theirs.stopped,
+    out: theirs.out,
+    // 对面拿到了主区:本窗的展开收回(东西不在 Human Desk 上了);对面放回来了:本窗那个标签不算数了
+    ...(theirs.out && !base.out ? { open: undefined } : {}),
+    ...(!theirs.out ? { tabHere: undefined } : {}),
     ...(changedThing ? { section: undefined } : {}),
     ...((changedThing || resumedThere) && !base.open ? { paused: true as const } : {}),
   }

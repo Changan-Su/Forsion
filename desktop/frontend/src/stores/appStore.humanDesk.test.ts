@@ -152,6 +152,39 @@ describe('Human Desk × 真 store', () => {
     expect(human().agentDot).toBeUndefined()
   })
 
+  it('拿到主区(第 1 步后半):卡留着指向它、展开收回、照旧在看;标签看得见 = 在场不计时,看不见满时长才暂停', async () => {
+    useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
+    expect(side()).toBe('human')
+    useApp.getState().humanDeskAct(SID, { type: 'takeOut' })
+    expect(human().out).toBe(true)
+    expect(human().item).toEqual(note) // 一件事只有一张卡:东西还记在 Human Desk 上
+    expect(side()).toBeNull() // 东西不在 Human Desk 上了,右边空出来
+    expect(humanWatching(human())).toBe(true) // 在看照算,只是来源换成主区那个标签
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: true })
+    await vi.advanceTimersByTimeAsync(HUMAN_DESK_PAUSE_MS * 2)
+    expect(human().paused).toBeUndefined()
+    useApp.getState().setDeskSide(SID, null) // 别处的收起照常 arm,但标签看得见 = 在场,不起表
+    await vi.advanceTimersByTimeAsync(HUMAN_DESK_PAUSE_MS * 2)
+    expect(human().paused).toBeUndefined()
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: false })
+    await vi.advanceTimersByTimeAsync(HUMAN_DESK_PAUSE_MS + 10)
+    expect(human().paused).toBe(true)
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: true }) // 回到那个标签 = 接着看
+    expect(humanWatching(human())).toBe(true)
+  })
+
+  it('放回来(同一样东西再放一次)= 清掉「在主区」、切到 Human Desk;东西不在主区时 tabHere 不认', () => {
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: true })
+    expect(human()).toBeUndefined()
+    useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
+    useApp.getState().humanDeskAct(SID, { type: 'takeOut' })
+    useApp.getState().humanDeskAct(SID, { type: 'tabHere', here: true })
+    useApp.getState().humanDeskAct(SID, { type: 'put', item: { ...note, at: 9 } })
+    expect(human().out).toBeUndefined()
+    expect(human().tabHere).toBeUndefined()
+    expect(side()).toBe('human')
+  })
+
   it('Human Desk 的状态不进 deskBySession', () => {
     useApp.getState().humanDeskAct(SID, { type: 'put', item: note })
     expect(JSON.stringify(agentDesk())).not.toContain('定价调研')
