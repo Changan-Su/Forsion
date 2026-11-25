@@ -149,8 +149,7 @@ function accountBound<T extends object>(obj: T, names: ReadonlyArray<string>): T
 
 /**
  * 注入的 brain 只取 llm(包出站脱敏)和 models(模型目录)。main.ts 注入的那份发往 server 的请求一律带当前账号的模型票
- * (standalone/modelTickets.ts 的 createModelTicketHttpBrain);以后透传的语音识别(asr)走同一个 httpBrain、同一份凭据,
- * 在下面照 llm / models 加一行,并放进 accountBound。云端 per-user 的其它能力(云存储、云记忆、Agent 云文件、收件箱、
+ * (standalone/modelTickets.ts 的 createModelTicketHttpBrain);语音识别(asr)走同一个 httpBrain、同一份凭据,也在 accountBound 里。云端 per-user 的其它能力(云存储、云记忆、Agent 云文件、收件箱、
  * 云笔记、账号面、git 凭据、生图 / 实时、决策模型、商店)一律不给。
  * 用户资料不出网:getUserById 只回账号 id。记忆 / 技能换成本地实现(按路径,天然按人)。
  */
@@ -158,6 +157,7 @@ function multiAccountBrain(b: CloudBrainServices): CloudBrainServices {
   return {
     llm: accountBound(withOutboundMasking(b.llm), ['resolveModelAndKey', 'buildProviderPayload', 'streamProviderCompletion', 'refreshModelKey', 'fimCompletion']),
     models: accountBound(b.models, ['listGlobalModels', 'listModelsForProject', 'providerQuota']),
+    ...(b.asr ? { asr: accountBound(b.asr, ['transcribe']) } : {}), // 云端转写:凭据同 llm(当前账号的票);transcribe_audio 读之前按账号读闸核路径
     users: { getUserById: async (id: string) => ({ id, username: id }) },
     memory: createLocalMemoryBrain(),
     assets: createLocalAssets(NO_CLOUD_ASSETS, false),

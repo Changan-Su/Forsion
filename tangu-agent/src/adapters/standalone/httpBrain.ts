@@ -519,6 +519,35 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         return (await r.json()) as DecisionResult;
       },
     },
+    // 云端语音识别(POST /api/brain/transcribe):一次一段;服务端按音频时长扣这枚令牌的额度。网关读超时约 60 秒,单段给 2 分钟。
+    // 上游把「这段没人声」当 400 回、服务端转成 502:那是空文本,不是失败。client 不填:服务端那一列只收端标签,引擎不冒充桌面。
+    asr: {
+      transcribe: async (req) => {
+        const r = await fetch(`${base}/api/brain/transcribe`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: JSON.stringify({
+            audioBase64: Buffer.from(req.audio).toString('base64'), mime: req.mime,
+            ...(req.language ? { language: req.language } : {}), ...(req.modelId ? { modelId: req.modelId } : {}), projectSource: 'tangu',
+          }),
+          signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
+        });
+        if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
+          const detail = String(j?.detail || '');
+          if (/ASR_RESPONSE_HAVE_NO_WORDS/.test(detail)) return { text: '' };
+          throw new LlmError(r.status, `cloud transcription ${r.status}${r.status === 402 ? ' (quota exceeded)' : r.status === 504 ? ' (gateway timeout)' : ''}: ${detail.slice(0, 200)}`);
+        }
+        // 200 之后读体断流 / 被取消 / 不是 JSON:如实报错(取消原样抛出),不能当成「没人声」的空文本
+        let j: any;
+        try { j = await r.json(); } catch (e) {
+          if ((e as Error)?.name === 'AbortError' || req.signal?.aborted) throw e;
+          throw new LlmError(502, 'cloud transcription returned an unreadable response');
+        }
+        if (typeof j?.text !== 'string') throw new LlmError(502, 'cloud transcription returned no text field');
+        return { text: j.text.trim() };
+      },
+    },
     // 云端音色(GET|POST|DELETE /api/brain/voices):复刻要传样本,境外到百炼的上行很慢,给足 5 分钟。
     voices: {
       list: async () => voicesCall('GET', '', undefined, 20_000),

@@ -22,6 +22,7 @@ export const MULTI_ACCOUNT_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
   'search_files', 'glob_files', 'search_sessions', 'read_session',
   // 插件包里自带的脚本(唯一会起子进程的:只跑插件包目录里的、不经 shell、一次一个,services/pluginScripts.ts)
   'run_plugin_script',
+  'transcribe_audio', // 只走云端(brain.asr),路径过账号读闸,不碰桌面桥(tools/builtin/transcribeAudio.ts)
 ]);
 
 /** 会往账号文件夹 / 账号库里写东西的工具:执行前先看这个账号的磁盘上限(tools/registry.ts 的 executeTool)。 */

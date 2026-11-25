@@ -71,6 +71,7 @@ function startServer(): Promise<void> {
       let claims: any = {};
       try { claims = JSON.parse(Buffer.from(String(req.headers.authorization || '').split('.')[1] || '', 'base64url').toString('utf8')); } catch { /* not a ticket */ }
       if (String(claims.jti || '').startsWith('revoked')) return json(401, { detail: 'Model ticket is no longer valid' });
+      if (url.pathname === '/api/brain/transcribe') return json(200, { text: 'ASR-OK' });
       if (url.pathname === '/api/brain/models') {
         return json(200, { models: [{ id: MODEL, name: 'Cloud model', provider: 'forsion', modelType: 'llm' }], defaultModelId: MODEL, backgroundModelId: MODEL });
       }
@@ -282,6 +283,30 @@ describe('multi-account: model tickets', () => {
     // the raw ticket credential itself, outside the account guard
     expect(() => tickets.currentModelTicket()).toThrow(tickets.NO_ACCOUNT_FOR_MODEL_CALL);
     expect(seen.slice(from)).toEqual([]);
+  });
+
+  it('speech recognition goes with the account\'s own ticket: none → nothing sent; refused → forgotten, "sign in again"', async () => {
+    const brain = deps().brain;
+    const req = { audio: Buffer.from('RIFF-AUDIO'), mime: 'audio/wav' };
+    const from = seen.length;
+    await expect(brain.asr.transcribe(req)).rejects.toMatchObject({ status: 401, message: tickets.NO_ACCOUNT_FOR_MODEL_CALL });
+    await expect(scope.runWithAccount('henry', () => brain.asr.transcribe(req))).rejects.toMatchObject({ status: 401, message: tickets.NO_MODEL_TICKET });
+    expect(seen.slice(from)).toEqual([]);
+    const mine = ticket('henry', 3600);
+    expect(tickets.acceptModelTicket('henry', mine)).toBe('stored');
+    expect(await scope.runWithAccount('henry', () => brain.asr.transcribe(req))).toEqual({ text: 'ASR-OK' });
+    expect(seen.at(-1)).toMatchObject({ path: '/api/brain/transcribe', auth: `Bearer ${mine}` });
+    // another account never rides on henry's ticket
+    const n0 = seen.length;
+    await expect(scope.runWithAccount('ivan', () => brain.asr.transcribe(req))).rejects.toMatchObject({ status: 401, message: tickets.NO_MODEL_TICKET });
+    expect(seen.length).toBe(n0);
+    const refused = ticket('henry', 7200, { jti: 'revoked-asr' });
+    expect(tickets.acceptModelTicket('henry', refused)).toBe('stored');
+    await expect(scope.runWithAccount('henry', () => brain.asr.transcribe(req))).rejects.toMatchObject({ status: 401, message: tickets.NO_MODEL_TICKET });
+    expect(seen.at(-1)!.auth).toBe(`Bearer ${refused}`);
+    const n = seen.length; // forgotten: the next call has no ticket and sends nothing
+    await expect(scope.runWithAccount('henry', () => brain.asr.transcribe(req))).rejects.toMatchObject({ status: 401, message: tickets.NO_MODEL_TICKET });
+    expect(seen.length).toBe(n);
   });
 
   it('the ticket is taken off the request and appears in no event, message, log line, file or script environment', async () => {

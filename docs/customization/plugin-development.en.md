@@ -439,6 +439,10 @@ Multi-account mode has no `run_bash`, so the agent cannot start arbitrary comman
 
 Single-user mode does not have this tool; the agent runs the same script with `run_bash` there. Write both ways into the skill: use `run_plugin_script` when it is available, otherwise `run_bash`.
 
+**Transcribing audio a script hands back** (2026-11-25+): have the agent call `transcribe_audio` with the script's audio path in the same turn. The temporary folder is deleted when the turn ends, so a later turn cannot find the file, and the plugin's UI cannot reach files on that machine either. In multi-account mode the tool only uses Forsion cloud transcription, billed by audio length, and only reads files in the current account folder, including this turn's temporary folder. Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes and the engine splits it itself; other formats are refused, so convert to that WAV in the script. Single-user mode is unchanged: with the desktop app running, the desktop's speech recognition does it.
+
+**How the UI half knows to use this path:** when the host declares `window.tangu.executionCapabilities.pluginScripts === true` (with `host` false), the engine has no shell and only runs scripts that ship inside the plugin. Switch the task text to `run_plugin_script` and do not save media into the vault (a script can only write the account folder). With `host` true, keep using `run_bash`. With neither, only do work that needs no script. On device pages the token in the config can be an empty string or the placeholder `tunnel`; then send engine requests without `Authorization` and let the page carry the identity.
+
 ## Folders, file times, renaming and moving in the vault (2026-11-16+)
 
 Plugins can create folders, read a file's size and times, and rename or move files in the vault, the same way you do it in the file tree: renaming or moving a note rewrites the `[[links]]` to it across the vault, editors that have it open follow, and its subnotes move with it. All of these need an open vault; older hosts don't have them, so check with optional chaining.

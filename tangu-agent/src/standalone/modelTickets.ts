@@ -124,6 +124,7 @@ export function createModelTicketHttpBrain(cloudUrl: string): CloudBrainServices
     }
   };
   const fim = http.llm.fimCompletion;
+  const asr = http.asr;
   return {
     ...http,
     llm: {
@@ -132,6 +133,7 @@ export function createModelTicketHttpBrain(cloudUrl: string): CloudBrainServices
       streamProviderCompletion: forgetOnRefusal(http.llm.streamProviderCompletion),
       ...(fim ? { fimCompletion: forgetOnRefusal(fim) } : {}),
     },
+    ...(asr ? { asr: { transcribe: forgetOnRefusal(asr.transcribe) } } : {}),
     models: {
       ...http.models,
       listGlobalModels: async (...args: any[]) => { credential(); return http.models.listGlobalModels(...args); },

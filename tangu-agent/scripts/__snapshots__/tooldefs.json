@@ -5048,7 +5048,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6393,7 +6393,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9368,7 +9368,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10713,7 +10713,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12062,7 +12062,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -14807,7 +14807,7 @@
       "type": "function",
       "function": {
         "name": "transcribe_audio",
-        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "description": "Transcribe a local audio file with Forsion speech recognition: the Forsion Desktop pipeline when the desktop app is running (local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
         "parameters": {
           "type": "object",
           "properties": {
