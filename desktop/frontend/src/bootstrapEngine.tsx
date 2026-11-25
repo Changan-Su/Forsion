@@ -298,7 +298,10 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
       const api = ws().api
       const main = api ? activeMainPanel(api) : null
       const owner = api ? main ? ws().leafById(main.id) : null : ws().getActiveLeaf()
-      const leafId = owner?.loc === 'main' && owner.type === 'chat' ? owner.id : null
+      // Pinned Mini chats record the visible session through mainTabs below.
+      // The global active ID can change during boot while that session stays pinned.
+      const pinnedMini = windowKind() === 'mini' && owner?.params.followActive === false
+      const leafId = owner?.loc === 'main' && owner.type === 'chat' && !pinnedMini ? owner.id : null
       recordNav(leafId, `chat:${id}`, (context) => {
         if (context && !context.isCurrent()) return
         // 状态在**复原当时**现读:主聊天可能已被冻成钉住档(见 sessionNav.freezeMainPrimary)。
