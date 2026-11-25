@@ -375,6 +375,48 @@ describe('hosted public Unit: backup schedule and archiving', () => {
     } finally { await o.b.close() }
   })
 
+  it('a restored account stays on the backup schedule: what the returning request writes is backed up', async () => {
+    svc.restorePoints.set(ALICE, { backupId: 'bk-before', body: Buffer.from('alice archived') })
+    eng.accounts.set(ALICE, 'cold'); eng.coldBackup.set(ALICE, 'bk-before')
+    const o = await orchestrator()
+    try {
+      expect(await o.b.prepare(ALICE, 'tok-alice')).toBeNull()
+      expect(eng.restored.get(ALICE)?.toString()).toBe('alice archived')
+      // the request that brought it back goes on to write
+      eng.data.set(ALICE, Buffer.from('alice after coming back')); eng.fingerprint.delete(ALICE)
+      o.advance(3 * 60_000)
+      await o.b.tick()
+      expect(svc.restorePoints.get(ALICE)?.body.toString()).toBe('alice after coming back')
+    } finally { await o.b.close() }
+  })
+
+  it('after a restart, an account the file calls archived but the engine has is backed up again', async () => {
+    const t0 = Date.parse('2026-11-25T00:00:00Z')
+    const archived = { lastSeen: t0 - 100 * 24 * 3600_000, lastBackup: { backupId: 'bk-old', fingerprint: null, sha256: '0'.repeat(64), at: t0 - 95 * 24 * 3600_000 }, cold: { backupId: 'bk-old', at: t0 - 5 * 24 * 3600_000, serverMarked: true } }
+    // ① the visitor comes back first
+    eng.accounts.set(ALICE, 'active'); eng.data.set(ALICE, Buffer.from('alice restored before the stop'))
+    let o = await orchestrator({ state: JSON.stringify({ version: 1, accounts: { [ALICE]: archived } }) })
+    try {
+      expect(await o.b.prepare(ALICE, 'tok-alice')).toBeNull()
+      expect(svc.calls).not.toContain('POST /api/units/backups/restore') // the engine has it: nothing to bring back
+    } finally { await o.b.close() }
+    // the visit itself put it back on the schedule (before any pass ran)
+    const saved = (await o.state()).accounts[ALICE]
+    expect(saved.cold).toBeUndefined()
+    expect(saved.dirty).toBe(true)
+    // ② nobody comes: the hourly look at the engine's list does it
+    svc.restorePoints.clear(); svc.calls.length = 0
+    eng.accounts.set(BOB, 'active'); eng.data.set(BOB, Buffer.from('bob restored before the stop'))
+    o = await orchestrator({ state: JSON.stringify({ version: 1, accounts: { [BOB]: archived } }) })
+    try {
+      o.advance(61 * 60_000)
+      await o.b.tick()
+      o.advance(3 * 60_000)
+      await o.b.tick()
+      expect(svc.restorePoints.get(BOB)?.body.toString()).toBe('bob restored before the stop')
+    } finally { await o.b.close() }
+  })
+
   it('archives nobody while the state file cannot be read, and does not overwrite it', async () => {
     eng.accounts.set(ALICE, 'active')
     const o = await orchestrator({ state: '{"version": 1, "accounts": ' })

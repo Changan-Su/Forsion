@@ -19,11 +19,12 @@ const env = vi.hoisted(() => {
 });
 
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, linkSync, lstatSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import Database from 'better-sqlite3';
 import { createMultiAccountApp } from './multiAccount.js';
+import { accountFingerprint } from './accountBackup.js';
 import { tarEnd, tarEntryHeader, tarPadding } from '../core/tarArchive.js';
 import { reloadMultiAccountLimits } from '../core/multiAccountLimits.js';
 import { __resetAccountStorageForTests } from '../services/accountStorage.js';
@@ -175,6 +176,30 @@ describe('account backups (host control)', () => {
     expect(again.json).toEqual({ unchanged: true, fingerprint: snap.fingerprint });
   });
 
+  it('a same-size edit that puts the old modification time back still counts as a change', async () => {
+    const f = join(accountDir('alice'), 'same-size.txt');
+    writeFileSync(f, 'aaaa');
+    utimesSync(f, 1_700_000_000, 1_700_000_000); // a whole second, so it can be put back exactly
+    const s1 = (await host('POST', '/accounts/alice/snapshot', { body: {} })).json;
+    await host('DELETE', `/snapshots/${s1.snapshotId}`);
+    const st = statSync(f, { bigint: true });
+    writeFileSync(f, 'bbbb');
+    utimesSync(f, 1_700_000_000, 1_700_000_000);
+    expect(statSync(f, { bigint: true }).mtimeNs).toBe(st.mtimeNs);
+    const s2 = (await host('POST', '/accounts/alice/snapshot', { body: { since: s1.fingerprint } })).json;
+    expect(s2.unchanged, JSON.stringify(s2)).toBe(false);
+    expect(s2.snapshotId).toBeTruthy();
+    await host('DELETE', `/snapshots/${s2.snapshotId}`);
+    unlinkSync(f);
+  });
+
+  it('one host operation per account at a time: two snapshots at once, one is busy', async () => {
+    const [a, b] = await Promise.all([host('POST', '/accounts/alice/snapshot', { body: {} }), host('POST', '/accounts/alice/snapshot', { body: {} })]);
+    const codes = [a, b].map((r) => (r.status === 200 ? 'ok' : r.json.code)).sort();
+    expect(codes).toEqual(['ACCOUNT_BUSY', 'ok']);
+    for (const r of [a, b]) if (r.json?.snapshotId) await host('DELETE', `/snapshots/${r.json.snapshotId}`);
+  });
+
   it('refuses a snapshot while a run is going', async () => {
     let release!: () => void;
     holdRun = new Promise<void>((r) => { release = r; });
@@ -184,6 +209,11 @@ describe('account backups (host control)', () => {
       const busy = await host('POST', '/accounts/alice/snapshot', { body: {} });
       expect(busy.status).toBe(409);
       expect(busy.json.code).toBe('ACCOUNT_BUSY');
+      // nor "unchanged" (which would let the host mark the account as saved while the run still has output to write)
+      const now = await accountFingerprint('alice');
+      const same = await host('POST', '/accounts/alice/snapshot', { body: { since: now } });
+      expect(same.status, JSON.stringify(same.json)).toBe(409);
+      expect(same.json.code).toBe('ACCOUNT_BUSY');
     } finally {
       release();
       holdRun = null;
@@ -198,9 +228,19 @@ describe('account backups (host control)', () => {
     expect(stale.json.code).toBe('ACCOUNT_CHANGED');
     expect(existsSync(accountDir('alice'))).toBe(true);
     // a fresh backup of the current state, then purge with its fingerprint
+    writeFileSync(join(accountDir('alice'), 'back\\slash.txt'), 'a name an archive cannot carry');
     snap = (await host('POST', '/accounts/alice/snapshot', { body: {} })).json;
     snap.body = (await host('GET', `/snapshots/${snap.snapshotId}`)).buf;
     before = { files: files('alice'), db: dbView('alice') };
+    // the backup leaves out a file with another hard link and a name with a backslash: purging would lose their bytes
+    const kept = await host('POST', '/accounts/alice/purge', { body: { fingerprint: snap.fingerprint, backupId: 'b-2', sha256: snap.sha256 } });
+    expect(kept.status, JSON.stringify(kept.json)).toBe(409);
+    expect(kept.json.code).toBe('ACCOUNT_NOT_ARCHIVABLE');
+    unlinkSync(join(accountDir('alice'), 'hard-in'));
+    expect((await host('POST', '/accounts/alice/purge', { body: { fingerprint: snap.fingerprint, backupId: 'b-2', sha256: snap.sha256 } })).json.code).toBe('ACCOUNT_NOT_ARCHIVABLE');
+    unlinkSync(join(accountDir('alice'), 'back\\slash.txt'));
+    expect(existsSync(accountDir('alice'))).toBe(true);
+    delete before.files['back\\slash.txt'];
     const ok = await host('POST', '/accounts/alice/purge', { body: { fingerprint: snap.fingerprint, backupId: 'b-2', sha256: snap.sha256 } });
     expect(ok.json, JSON.stringify(ok.json)).toEqual({ state: 'cold' });
     expect(existsSync(accountDir('alice'))).toBe(false);
@@ -241,7 +281,11 @@ describe('account backups (host control)', () => {
   });
 
   it('restores the account exactly, and the visitor carries on writing', async () => {
-    const r = await host('POST', `/accounts/alice/restore?backupId=b-2&size=${snap.body.length}&sha256=${snap.sha256}`, { raw: snap.body });
+    // two restores at once: exactly one installs the folder, the other is turned away (never one over the other)
+    const both = await Promise.all([0, 1].map(() => host('POST', `/accounts/alice/restore?backupId=b-2&size=${snap.body.length}&sha256=${snap.sha256}`, { raw: snap.body })));
+    const r = both.find((x) => x.status === 200)!;
+    expect(both.filter((x) => x.status === 200).length, JSON.stringify(both.map((x) => x.json))).toBe(1);
+    expect(['ACCOUNT_BUSY', 'ACCOUNT_EXISTS']).toContain(both.find((x) => x.status !== 200)!.json.code);
     expect(r.json, JSON.stringify(r.json)).toMatchObject({ state: 'active', sessions: 1 });
     expect(r.json.fingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect((await host('GET', '/accounts/alice')).json.state).toBe('active');

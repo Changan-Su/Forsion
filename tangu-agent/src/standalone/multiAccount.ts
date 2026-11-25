@@ -389,6 +389,8 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   // ②c 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库;做副本等写请求走完、清本机等全部走完
   app.use((req, res, next) => {
     const id = (req as any).accountId as string;
+    // the visitor already left (while an earlier step awaited): its 'close' has fired, a count taken now would never drop
+    if (req.socket?.destroyed || res.destroyed) return;
     const write = String(req.method || '').toUpperCase() !== 'GET';
     inflight.set(id, (inflight.get(id) ?? 0) + 1);
     if (write) inflightWrites.set(id, (inflightWrites.get(id) ?? 0) + 1);

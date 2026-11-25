@@ -196,7 +196,13 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
   async function bringBack(id: string, bearer: string): Promise<void> {
     const info = await engine('GET', `/accounts/${id}`)
     if (info.status !== 200) throw new Refused(503, 'ENGINE_UNAVAILABLE', `engine answered ${info.status}`)
-    if (info.json?.state === 'active') return
+    if (info.json?.state === 'active') {
+      // the engine has it (e.g. a restore finished just before this process stopped, before the state file said so):
+      // the file must not keep calling it archived, or no backup would ever run for it again
+      const a = acct(id)
+      if (a.cold) { a.cold = undefined; a.dirty = true; a.dirtySince ??= now(); void save() }
+      return
+    }
     const engineState: 'cold' | 'absent' = info.json?.state === 'cold' ? 'cold' : 'absent'
     const expected: string | null = info.json?.cold?.backupId ?? null
     const r = await server('POST', '/api/units/backups/restore', { bearer, body: expected ? { backupId: expected } : {} })
@@ -238,7 +244,8 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
     const a = acct(id)
     a.cold = undefined
     a.lastBackup = { backupId, fingerprint: typeof out?.fingerprint === 'string' ? out.fingerprint : null, sha256, at: now() }
-    a.dirty = false
+    // dirty stays as the request that brought it back set it: that request (and what it starts) writes after this point,
+    // and the next pass checks it against the restored fingerprint ("unchanged" costs no upload)
     void save()
     log(`[unit] Hosted unit account backups: ${id} restored`)
   }
@@ -323,6 +330,7 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
     }
   }
 
+  const notArchivable = new Set<string>()
   /** Removes the local copy of an account nobody used for coldAfterDays, once its latest restore point is confirmed. */
   async function archive(id: string): Promise<void> {
     const a = acct(id)
@@ -342,7 +350,11 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
     }
     const purged = await engine('POST', `/accounts/${id}/purge`, { fingerprint: snap.json.fingerprint, backupId: a.lastBackup.backupId, sha256: a.lastBackup.sha256 })
     if (purged.status !== 200) {
-      if (purged.json?.code !== 'ACCOUNT_BUSY') log(`[unit] Hosted unit account backups: archiving ${id} refused (${purged.status} ${purged.json?.code || ''})`)
+      const code = purged.json?.code
+      if (code === 'ACCOUNT_CHANGED') { a.dirty = true; a.dirtySince ??= now() } // back it up again first
+      // keeps something a backup cannot carry (e.g. a hard-linked file): stays here; said once per process, not every hour
+      if (code !== 'ACCOUNT_BUSY' && !(code === 'ACCOUNT_NOT_ARCHIVABLE' && notArchivable.has(id))) log(`[unit] Hosted unit account backups: archiving ${id} refused (${purged.status} ${code || ''})`)
+      if (code === 'ACCOUNT_NOT_ARCHIVABLE') notArchivable.add(id)
       return
     }
     known.delete(id)
@@ -366,7 +378,13 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
     if (!Object.keys(state.accounts).length || t - lastArchivePass >= 60 * MINUTE) {
       const list = await engine('GET', '/accounts').catch(() => null)
       if (list?.status === 200 && Array.isArray(list.json?.accounts)) {
-        for (const e of list.json.accounts) if (ACCOUNT_ID.test(e?.id) && !state.accounts[e.id]) state.accounts[e.id] = { lastSeen: t, ...(e.state === 'cold' ? { cold: { backupId: '', at: t, serverMarked: true } } : {}) }
+        for (const e of list.json.accounts) {
+          if (!ACCOUNT_ID.test(e?.id)) continue
+          const had = state.accounts[e.id]
+          if (!had) state.accounts[e.id] = { lastSeen: t, ...(e.state === 'cold' ? { cold: { backupId: '', at: t, serverMarked: true } } : {}) }
+          // archived in the file but here on the engine (restored before the file was saved): back on the schedule
+          else if (had.cold && e.state === 'active') { had.cold = undefined; had.dirty = true; had.dirtySince ??= t }
+        }
       }
     }
     for (const [id, a] of Object.entries(state.accounts)) {

@@ -94,29 +94,50 @@ async function syncDir(dir: string): Promise<void> {
 
 /**
  * The account folder's fingerprint: every regular file that a backup contains (and state.db plus a non-empty WAL),
- * by relative path, size and modification time in nanoseconds. Any write changes it; opening the database read-only does not.
+ * by relative path, size, inode, modification and change time in nanoseconds. Any write changes it — the change time
+ * moves even when a writer puts the old modification time back; opening the database read-only does not.
  */
 export async function accountFingerprint(id: string): Promise<string> {
+  return (await scanAccount(id)).fingerprint;
+}
+
+/**
+ * The fingerprint, plus what the folder holds that a backup would leave out and that carries data of its own: regular
+ * files with other hard links, names an archive cannot carry (see safeRelative), entries that cannot be read. Symbolic
+ * links and special files are left out of backups by design (no data of their own) and are not counted.
+ */
+async function scanAccount(id: string): Promise<{ fingerprint: string; unarchivable: number }> {
   const home = accountHome(id);
   const lines: string[] = [];
   let seen = 0;
+  let unarchivable = 0;
   const walk = async (dir: string, rel: string): Promise<void> => {
     for (const name of (await readdir(dir)).sort()) {
       if (++seen > MAX_ENTRIES) throw new Error('too many entries');
       const relName = rel ? `${rel}/${name}` : name;
       const p = join(dir, name);
       let st;
-      try { st = await lstat(p, { bigint: true }); } catch { continue; }
+      try { st = await lstat(p, { bigint: true }); } catch { unarchivable++; continue; }
       if (!rel && (name === SCRATCH_DIR || name === 'state.db-shm' || name === 'state.db-journal')) continue;
       if (!rel && name === 'state.db-wal' && st.size === 0n) continue;
-      if (st.isDirectory()) { lines.push(`d\0${relName}`); await walk(p, relName); continue; }
-      if (!st.isFile() || st.nlink > 1n) continue;
-      lines.push(`f\0${relName}\0${st.size}\0${st.mtimeNs}`);
+      const carried = (!rel && name === 'state.db') || archivableName(relName);
+      if (st.isDirectory()) {
+        if (!carried) { unarchivable++; continue; }
+        lines.push(`d\0${relName}`);
+        await walk(p, relName);
+        continue;
+      }
+      if (!st.isFile()) continue;
+      if (st.nlink > 1n || !carried) { unarchivable++; continue; }
+      lines.push(`f\0${relName}\0${st.size}\0${st.ino}\0${st.mtimeNs}\0${st.ctimeNs}`);
     }
   };
   await walk(home, '');
-  return createHash('sha256').update(lines.join('\n')).digest('hex');
+  return { fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex'), unarchivable };
 }
+
+/** A name under the account folder that the archive can carry and a restore will take back (the same check as restore). */
+const archivableName = (rel: string): boolean => safeRelative(`home/${rel}`) !== null;
 
 /** Archive paths of account files: home/<relative path>. Every segment plain, nothing that climbs out. */
 function safeRelative(name: string): string | null {
@@ -133,6 +154,14 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
   if (deps.controlToken === deps.localToken) throw new Error(`${HOST_CONTROL_ENV} must differ from TANGU_LOCAL_TOKEN`);
   const { mh } = deps;
   const gates = new Map<string, Gate>();
+  /** One host operation per account at a time, taken before the first await (the visitor gate above is separate). */
+  const ops = new Set<string>();
+  const claim = (id: string): (() => void) => {
+    if (ops.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
+    ops.add(id);
+    let done = false;
+    return () => { if (!done) { done = true; ops.delete(id); } };
+  };
   const cold = new Map<string, ColdMarker>();
   const snapshots = new Map<string, Snapshot>();
 
@@ -181,6 +210,8 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
   /** Runs before a visitor request is counted and before the account is opened. */
   const visitorGate: RequestHandler = (req, res, next) => {
     const id = (req as any).accountId as string;
+    let left = false;
+    res.once('close', () => { left = true; });
     void (async () => {
       const started = Date.now();
       for (;;) {
@@ -196,6 +227,8 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
       }
       if (cold.has(id)) return void res.status(409).json({ code: 'ACCOUNT_COLD', detail: 'This account must be restored first.' });
       if (!mh.provisionedAccounts().includes(id) && !exists(id)) return void res.status(409).json({ code: 'ACCOUNT_NOT_ADMITTED', detail: 'This account is not open on this engine yet.' });
+      // gone while queued behind a snapshot: nothing to serve (and its in-flight count would never be released)
+      if (left || req.socket?.destroyed) return;
       next();
     })().catch(() => { if (!res.headersSent) res.status(500).json({ detail: 'Request failed' }); });
   };
@@ -245,6 +278,8 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
           if (++entries > MAX_ENTRIES) throw new HostError(413, 'BACKUP_TOO_LARGE', 'too many files');
           if (!rel && SKIP_TOP.has(name)) continue;
           const relName = rel ? `${rel}/${name}` : name;
+          // a name the restore would refuse stays out (and keeps the account from being purged, see scanAccount)
+          if (!archivableName(relName)) continue;
           const p = join(dir, name);
           const st = await lstat(p);
           if (st.isDirectory()) { await write(tarEntryHeader(`home/${relName}`, 'dir', 0, 0o700)); await walk(p, relName); continue; }
@@ -264,15 +299,24 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
   }
 
   async function snapshot(id: string, since: string | undefined) {
+    const release = claim(id);
+    try { return await snapshotClaimed(id, since); } finally { release(); }
+  }
+  async function snapshotClaimed(id: string, since: string | undefined) {
     if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
     if (cold.has(id)) throw new HostError(409, 'ACCOUNT_COLD', 'the account is not on this engine');
     if (!exists(id)) throw new HostError(404, 'ACCOUNT_ABSENT', 'no such account');
     const before = await accountFingerprint(id);
-    if (since && before === since) return { unchanged: true as const, fingerprint: before };
+    // "unchanged" lets the host mark the account as backed up: not while a run, a write or memory organising is still going
+    // (its output would land after the answer and stay out of every backup until the next visit)
+    if (since && before === since) {
+      if (accountHasActiveRuns(id) || deps.inflight(id).writes > 0 || organizePendingFor(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'the account is in use');
+      return { unchanged: true as const, fingerprint: before };
+    }
     // a run that is going is not waited for behind the gate (it can take minutes): only one that is just finishing
     if (!(await waitUntil(() => !accountHasActiveRuns(id), 2_000))) throw new HostError(409, 'ACCOUNT_BUSY', 'a run of this account is going');
-    let release!: () => void;
-    gates.set(id, { kind: 'snapshot', done: new Promise<void>((r) => { release = r; }) });
+    let open!: () => void;
+    gates.set(id, { kind: 'snapshot', done: new Promise<void>((r) => { open = r; }) });
     const out = join(backupRoot(), 'out', `${randomUUID()}.tgz`);
     try {
       const quiet = () => deps.inflight(id).writes === 0 && !organizePendingFor(id) && !accountHasActiveRuns(id);
@@ -292,7 +336,7 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
       throw e;
     } finally {
       gates.delete(id);
-      release();
+      open();
     }
   }
 
@@ -302,14 +346,18 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
     if (typeof body.fingerprint !== 'string' || !HEX64.test(body.fingerprint)) throw new HostError(400, 'BAD_REQUEST', 'fingerprint is required');
     const backupId = typeof body.backupId === 'string' && body.backupId.length <= 128 ? body.backupId : null;
     const sha256 = typeof body.sha256 === 'string' && HEX64.test(body.sha256) ? body.sha256 : null;
-    if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
-    if (cold.has(id)) return { state: 'cold' as const };
-    if (!exists(id)) throw new HostError(404, 'ACCOUNT_ABSENT', 'no such account');
+    const release = claim(id);
+    if (gates.has(id)) { release(); throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account'); }
+    if (cold.has(id)) { release(); return { state: 'cold' as const }; }
+    if (!exists(id)) { release(); throw new HostError(404, 'ACCOUNT_ABSENT', 'no such account'); }
     gates.set(id, { kind: 'purge' });
     try {
       const idle = await waitUntil(() => deps.inflight(id).all === 0, 5_000);
       if (!idle || accountHasActiveRuns(id) || organizePendingFor(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'the account is in use');
-      if ((await accountFingerprint(id)) !== body.fingerprint) throw new HostError(409, 'ACCOUNT_CHANGED', 'the account changed since that backup');
+      const scan = await scanAccount(id);
+      if (scan.fingerprint !== body.fingerprint) throw new HostError(409, 'ACCOUNT_CHANGED', 'the account changed since that backup');
+      // anything with data of its own that the backup left out would be lost with the folder: keep the account here
+      if (scan.unarchivable > 0) throw new HostError(409, 'ACCOUNT_NOT_ARCHIVABLE', `${scan.unarchivable} item(s) in this account cannot be carried by a backup`);
       const marker: ColdMarker = { backupId, sha256, fingerprint: body.fingerprint, at: new Date().toISOString() };
       // the marker first: from here on a missing folder means "restore it", never "new account"
       await writeDurable(markerPath(id), JSON.stringify(marker));
@@ -323,6 +371,7 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
       return { state: 'cold' as const };
     } finally {
       gates.delete(id);
+      release();
     }
   }
 
@@ -335,6 +384,10 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
     const maxArchive = Math.max(mbBytes(multiAccountLimits().accountStorageMB) * 2, 64 * 1024 * 1024);
     if (!HEX64.test(sha256) || !Number.isSafeInteger(size) || size <= 0) throw new HostError(400, 'BAD_REQUEST', 'sha256 and size are required');
     if (size > maxArchive) throw new HostError(413, 'BACKUP_TOO_LARGE', 'the archive is larger than an account may be');
+    const release = claim(id);
+    try { return await restoreClaimed(id, req, sha256, size, backupId, maxArchive); } finally { release(); }
+  }
+  async function restoreClaimed(id: string, req: Request, sha256: string, size: number, backupId: string | null, maxArchive: number) {
     if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
     const marker = cold.get(id);
     if (marker) {
@@ -462,13 +515,16 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
     return state === 'cold' ? { state, cold: cold.get(id) } : { state };
   }));
   router.post('/accounts/:id/admit', handle(async (_req, _res, id) => {
-    if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
-    const state = stateOf(id);
-    if (state === 'cold') throw new HostError(409, 'ACCOUNT_COLD', 'the account must be restored, not admitted');
-    if (state === 'active') return { state, created: false };
-    if (!(await newAccountsAllowed())) throw new HostError(503, 'NEW_ACCOUNTS_CLOSED', 'This engine is not accepting new accounts right now.');
-    await mh.ensureAccount(id);
-    return { state: 'active', created: true };
+    const release = claim(id);
+    try {
+      if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
+      const state = stateOf(id);
+      if (state === 'cold') throw new HostError(409, 'ACCOUNT_COLD', 'the account must be restored, not admitted');
+      if (state === 'active') return { state, created: false };
+      if (!(await newAccountsAllowed())) throw new HostError(503, 'NEW_ACCOUNTS_CLOSED', 'This engine is not accepting new accounts right now.');
+      await mh.ensureAccount(id);
+      return { state: 'active', created: true };
+    } finally { release(); }
   }));
   router.post('/accounts/:id/snapshot', json, handle(async (req, _res, id) => {
     const since = typeof req.body?.since === 'string' && HEX64.test(req.body.since) ? req.body.since : undefined;
@@ -491,13 +547,16 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
   // The backup service removed this account's backups after its retention period: drop the cold marker so it can start over.
   // Only for a cold account (there is no folder to lose); the host calls it only on that answer from the service.
   router.post('/accounts/:id/forget', handle(async (_req, _res, id) => {
-    if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
-    if (!cold.has(id)) throw new HostError(409, 'ACCOUNT_NOT_COLD', 'only an archived account can be forgotten');
-    if (exists(id)) throw new HostError(409, 'ACCOUNT_EXISTS', 'the account folder is here');
-    await unlink(markerPath(id)).catch((e) => { if (e?.code !== 'ENOENT') throw e; });
-    await syncDir(stateDir());
-    cold.delete(id);
-    return { state: 'absent' };
+    const release = claim(id);
+    try {
+      if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
+      if (!cold.has(id)) throw new HostError(409, 'ACCOUNT_NOT_COLD', 'only an archived account can be forgotten');
+      if (exists(id)) throw new HostError(409, 'ACCOUNT_EXISTS', 'the account folder is here');
+      await unlink(markerPath(id)).catch((e) => { if (e?.code !== 'ENOENT') throw e; });
+      await syncDir(stateDir());
+      cold.delete(id);
+      return { state: 'absent' };
+    } finally { release(); }
   }));
   router.use((_req, res) => { res.status(404).json({ detail: 'Not found' }); });
 
