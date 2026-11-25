@@ -28,20 +28,18 @@ export async function dropStaleCurrentBlockmap(cacheDir: string, oldFileName: st
   }
 }
 
-/** electron-builder blockmap(gzip 的 `{version, files: [{offset, sizes}]}`)描述的文件有多大;读不懂返回 null。 */
+/** electron-builder blockmap(gzip 的 `{version, files: [{offset, sizes}]}`)从 0 起首尾相接描述的文件有多大;读不懂返回 null。 */
 export function blockmapCoveredSize(content: Buffer): number | null {
   try {
     const map = JSON.parse(gunzipSync(content).toString('utf8'))
     if (!Array.isArray(map?.files) || !map.files.length) return null
     let end = 0
     for (const file of map.files) {
-      if (!Array.isArray(file?.sizes)) return null
-      let size = Number(file.offset) || 0
+      if (!Array.isArray(file?.sizes) || Number(file.offset) !== end) return null
       for (const n of file.sizes) {
-        if (!Number.isSafeInteger(n) || n < 0) return null
-        size += n
+        if (!Number.isSafeInteger(n) || n <= 0) return null
+        end += n
       }
-      end = Math.max(end, size)
     }
     return end
   } catch {

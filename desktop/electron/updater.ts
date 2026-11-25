@@ -41,6 +41,11 @@ const GH_REPO = 'Forsion' // 2026-07-05 GitHub 仓已改名(旧名 Tangu 经重�
 const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`
 /** 这么久没有新的下载进度就算「下不动」,换另一边。 */
 const STALL_MS = 30_000
+/**
+ * 差量下载开头要先取新旧两份 blockmap(各约 0.5 MB),这段 electron-updater 不报进度:第一条进度之前多给些时间,
+ * 不然慢网上会在取 blockmap 时被当成下不动取消掉 —— 取消令牌一并带走了它自己的整包回落(Codex 评审)。
+ */
+const FIRST_PROGRESS_DIFF_MS = 90_000
 
 export type UpdaterPhase =
   | 'idle' | 'checking' | 'available' | 'not-available'
@@ -84,7 +89,7 @@ let feedSource: UpdateSource | null = null
 /** 我们自己 await 的 checkForUpdates 进行中:它的事件(checking / error)由调用处处理,别广播 */
 let busy = false
 /** 下载进行中:取消令牌、最后一次有进度的时刻、手动要换去的那边 */
-type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean }
+type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean; progressed?: boolean }
 let dl: Download | null = null
 /** mac:当前运行的包能不能自装(探一次记住);自装失败过一次,本次运行不再试;Squirrel 已经取好包 */
 let macSelf: Promise<boolean> | null = null
@@ -304,7 +309,7 @@ function ensureWired(): void {
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
   autoUpdater.on('download-progress', (p) => {
     if (dl?.dropped) return // 关了测试版、作废中的那份:迟到的进度别把状态翻回 downloading
-    if (dl) dl.lastAt = Date.now()
+    if (dl) { dl.lastAt = Date.now(); dl.progressed = true }
     broadcast({ ...lastStatus, phase: 'downloading', percent: Math.round(p.percent), transferred: p.transferred, total: p.total })
   })
   autoUpdater.on('update-downloaded', (info) => {
@@ -421,7 +426,10 @@ export async function downloadUpdate(): Promise<void> {
   for (;;) {
     const cur: Download = { token: new CancellationToken(), lastAt: Date.now(), manual: null }
     dl = cur
-    const watchdog = setInterval(() => { if (Date.now() - cur.lastAt > STALL_MS) cur.token.cancel() }, 5000)
+    const watchdog = setInterval(() => {
+      const limit = cur.progressed || autoUpdater.disableDifferentialDownload ? STALL_MS : FIRST_PROGRESS_DIFF_MS
+      if (Date.now() - cur.lastAt > limit) cur.token.cancel()
+    }, 5000)
     try {
       await autoUpdater.downloadUpdate(cur.token)
       return // update-downloaded 事件负责广播

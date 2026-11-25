@@ -16,6 +16,7 @@ it('reads the size an electron-builder blockmap covers', () => {
   expect(blockmapCoveredSize(Buffer.from('nope'))).toBeNull()
   expect(blockmapCoveredSize(gzipSync('{"files":[]}'))).toBeNull()
   expect(blockmapCoveredSize(gzipSync('{"files":[{"sizes":[1,-2]}]}'))).toBeNull()
+  expect(blockmapCoveredSize(gzipSync('{"files":[{"offset":50,"sizes":[50]}]}'))).toBeNull() // 只描述了后半截
 })
 
 it('keeps a cached blockmap that matches the old file, drops one left over from an earlier version', async () => {
