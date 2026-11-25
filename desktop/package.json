@@ -563,7 +563,7 @@
     "@forsion/calendar": "0.1.13",
     "@forsion/extend": "0.10.11",
     "@forsion/tangu-computer-use": "0.7.4",
-    "@forsion/translation": "0.1.0",
+    "@forsion/translation": "0.2.0",
     "@milkdown/kit": "^7.21.2",
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/react": "^7.21.2",
