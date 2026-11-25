@@ -309,11 +309,14 @@ export function createPluginFileOps(deps: PluginFileOpsDeps): {
                 await amadeus.createFolder(parent, seg)
                 made.push(here)
               } catch (err) {
-                // 「已存在」:别人刚建好(不是我们建的,不记账)还是有个文件挡着?按刷新后的清单分
+                // 同名目录可能是另一窗口建的,也可能是大小写不敏感卷上的路径别名。只有本次真正创建的目录记账。
                 await st().refreshStructure()
                 const now = lookup(here)
-                if (now && !now.folder) throw new Error(`A file is in the way: ${here}`)
-                if (!now) throw err
+                const kind = now
+                  ? (now.folder ? 'folder' : 'file')
+                  : (await amadeus.statPath?.(here).catch(() => null))?.kind
+                if (kind === 'file') throw new Error(`A file is in the way: ${here}`)
+                if (kind !== 'folder') throw err
               }
               if (st().vaultRoot !== root) throw new Error('The active vault changed')
             }

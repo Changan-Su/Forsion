@@ -91,6 +91,53 @@ it('self-write ledger stores no source text and retires directory descendants an
   expect(ledger.size).toBe(0)
 })
 
+it('moves a note to its new casing and restores its old casing when move registration fails', async () => {
+  const { root, vault } = await setup()
+  await vault.writeTextFile('note.md', 'keep')
+  await vault.moveEntry('note.md', 'Note.md', 'collision')
+  expect(await fs.readdir(root)).toEqual(['Note.md'])
+  expect(await fs.readFile(path.join(root, 'Note.md'), 'utf8')).toBe('keep')
+  vault.setMutationHooks(() => {}, () => { throw new Error('registration failed') })
+  await expect(vault.moveEntry('Note.md', 'NOTE.md', 'collision')).rejects.toThrow('registration failed')
+  expect(await fs.readdir(root)).toEqual(['Note.md'])
+  expect(await fs.readFile(path.join(root, 'Note.md'), 'utf8')).toBe('keep')
+})
+
+it('rejects two renames to the same target without overwriting the winner', async () => {
+  const { root, vault } = await setup()
+  await vault.writeTextFile('first.md', 'first')
+  await vault.writeTextFile('second.md', 'second')
+  const moves = await Promise.allSettled([
+    vault.moveEntry('first.md', 'target.md', 'collision'),
+    vault.moveEntry('second.md', 'target.md', 'collision'),
+  ])
+  expect(moves).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'rejected', reason: new Error('collision') }])
+  expect(await fs.readFile(path.join(root, 'target.md'), 'utf8')).toBe('first')
+  expect(await fs.readFile(path.join(root, 'second.md'), 'utf8')).toBe('second')
+})
+
+it('keeps both names of a hard link when directory entries collide', async ({ skip }) => {
+  const { root, vault } = await setup()
+  await vault.writeTextFile('note.md', 'keep')
+  const source = path.join(root, 'note.md')
+  const target = path.join(root, 'Note.md')
+  try { await fs.link(source, target) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    skip('Case-insensitive volume. Covered separately by the distinct NTFS hard-link names test.')
+  }
+  await expect(vault.moveEntry('note.md', 'Note.md', 'collision')).rejects.toThrow('collision')
+  expect((await fs.readdir(root)).sort()).toEqual(['Note.md', 'note.md'])
+})
+
+it('rejects a separately listed hard link on every volume', async () => {
+  const { root, vault } = await setup()
+  await vault.writeTextFile('note.md', 'keep')
+  await fs.link(path.join(root, 'note.md'), path.join(root, 'other.md'))
+  await expect(vault.moveEntry('note.md', 'other.md', 'collision')).rejects.toThrow('collision')
+  expect((await fs.readdir(root)).sort()).toEqual(['note.md', 'other.md'])
+})
+
 it('1000 file lifecycles retain only live ledger entries, and the cache has a fixed capacity', async () => {
   const { vault } = await setup()
   await vault.writeTextFile('live.md', 'keep')
