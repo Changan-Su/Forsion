@@ -9,6 +9,7 @@ import { createUnitAmadeusBridge } from '../../../web/src/amadeus/unitBridge'
 import { createUnitAuthErrorHandler, UNIT_AUTH_RELOAD_WINDOW_MS } from '../../../web/src/unitAuthReload'
 import { isRealUnitToken, UNIT_TOKEN_PLACEHOLDER, unitAuthHeader } from './services/unitToken'
 import { connectionTarget } from './services/engine/targets'
+import { resolveExternalSources } from './amadeus/plugins/pluginStore'
 
 vi.mock('./amadeus/api', () => ({ amadeus: { listPlugins: async () => [], listPages: async () => [], listFiles: async () => [] } }))
 
@@ -72,7 +73,6 @@ describe('pluginStore device-page source', () => {
     const w = window as unknown as { __FORSION_UNIT_PAGE__?: unknown; __FORSION_UNIT_TOKEN__?: string }
     w.__FORSION_UNIT_PAGE__ = { instanceId: 'u1', name: 'U', version: '9.9.9' }
     w.__FORSION_UNIT_TOKEN__ = token
-    const { resolveExternalSources } = await import('./amadeus/plugins/pluginStore')
     await resolveExternalSources()
     return seen.filter((s) => s.path.endsWith('/unit/plugins'))
   }
