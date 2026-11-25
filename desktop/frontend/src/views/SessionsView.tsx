@@ -55,7 +55,9 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   // 智库是 workspaces() 里的常驻文件夹,但库是懒加载的:冷启动直接进 Tangu、没碰过笔记 / 日历时 vaultRoot 为空,
   // 列表里就没有这一项(库里有会话时只剩靠会话撑出来的旧名组)。左栏一挂上就唤起(幂等,同 WorkspaceView / AgentDesk)。
-  useEffect(() => { if (amadeusAvailable()) ensureAmadeusReady() }, [])
+  // 只在桌面:手机本来 1.2 秒后就恢复;网页冷启动常直接落在 Tangu,提前整库恢复会打开上次那篇,
+  // 那篇若已在别处删掉、树快照还是旧的,在线桥会把 404 当新建写回空页(Codex 评审 P2)。
+  useEffect(() => { if (currentPlatform() === 'desktop' && amadeusAvailable()) ensureAmadeusReady() }, [])
   // Chat/Work 模式(新对话行右侧胶囊)。桌面左栏是 WorkspaceView 挂的 sessions 面,另带一层本地/云端侧过滤(sideFilter):
   // Chat 模式不分侧(chat 会话没有侧,全列);Work 模式沿用侧过滤,但无根组/无根会话恒在(用户拍板)。
   const mode = effectiveSessionMode(s.sessionMode, currentPlatform())

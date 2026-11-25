@@ -43,6 +43,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { amadeusAvailable, runLocationsAvailable } from '../features/runtime'
 import { ensureAmadeusReady } from '../amadeusPlugins'
+import { currentPlatform } from '../services/platform'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { announceOrbitPins, isOrbitPinned, onOrbitPinsChanged, readOrbitPins, sameOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import { onProjectRelinked } from './chat2/ProjectRelink'
@@ -175,7 +176,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   // 智库是 workspaces() 里的常驻文件夹,但库是懒加载的:冷启动直接进 Tangu、没碰过笔记 / 日历时 vaultRoot 为空,
   // 列表里就没有这一项(库里有会话时只剩靠会话撑出来的旧名组)。左栏一挂上就唤起(幂等,同 WorkspaceView / AgentDesk)。
-  useEffect(() => { if (amadeusAvailable()) ensureAmadeusReady() }, [])
+  // 只在桌面:手机本来 1.2 秒后就恢复;网页冷启动常直接落在 Tangu,提前整库恢复会打开上次那篇,
+  // 那篇若已在别处删掉、树快照还是旧的,在线桥会把 404 当新建写回空页(Codex 评审 P2)。
+  useEffect(() => { if (currentPlatform() === 'desktop' && amadeusAvailable()) ensureAmadeusReady() }, [])
   const [plusMenu, setPlusMenu] = useState<MenuAt | null>(null)
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null)
   const [pinnedEntries, setPinnedEntries] = useState<OrbitPinTimes>(readOrbitPins)
