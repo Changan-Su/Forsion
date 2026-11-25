@@ -3,14 +3,14 @@
  *
  * 变化广播 `localUnits:changed`(任一实例改的都要传到别的实例):
  *   · fs.watch 名册所在目录(看目录不看文件:原子 rename 会换掉文件的 inode)、每个登记的文件夹(标记文件)和它的 app-data/(运行记录);
- *     名册一变就按新名册重挂;
+ *     Windows 改用 watchFile 观察两个文件,让已停止的 Unit 目录可移动。名册一变就按新名册重挂;
  *   · 任一窗口拿到焦点时再核一次(崩掉的 Unit 不会删运行记录、也不会有文件事件,回到这扇窗时以 pid 判活补上);
  *   · 本进程自己的写操作做完立刻核一次。
  * 每次都算一遍快照、和上一次比,真变了才广播(一次广播 = 渲染层重新 list 一次)。
  */
 import { BrowserWindow, app, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
-import { existsSync, watch, type FSWatcher } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, unwatchFile, watch, watchFile } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { LocalUnitChannel, LocalUnitsResult, LocalUnitsSnapshot } from '../shared/localUnits'
 import { LOCAL_UNIT_MARKER, LOCAL_UNIT_REGISTRY } from '../shared/localUnits'
 import { defineMainMessages, mt } from './mainI18n'
@@ -92,13 +92,23 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
   }
   let timer: ReturnType<typeof setTimeout> | null = null
   const soon = (): void => { if (timer) clearTimeout(timer); timer = setTimeout(() => { timer = null; recheck(); rewatch() }, 150) }
-  const watchers = new Map<string, FSWatcher>()
+  const watchers = new Map<string, () => void>()
   const watchDir = (dir: string, names: readonly string[]): void => {
     if (watchers.has(dir) || !existsSync(dir)) return
     try {
       const w = watch(dir, { persistent: false }, (_ev, f) => { if (!f || names.some((n) => String(f).startsWith(n))) soon() })
-      w.on('error', () => { w.close(); watchers.delete(dir) })
-      watchers.set(dir, w)
+      const close = () => w.close()
+      w.on('error', () => { close(); if (watchers.get(dir) === close) watchers.delete(dir) })
+      watchers.set(dir, close)
+    } catch { /* 监视不了就靠焦点时的核对 */ }
+  }
+  const watchUnitFile = (file: string): void => {
+    if (watchers.has(file)) return
+    // Windows directory watchers hold open handles and block renaming the Unit folder.
+    // Stat the marker and run record instead, including while the run record is absent.
+    try {
+      watchFile(file, { persistent: false, interval: 750 }, soon)
+      watchers.set(file, () => unwatchFile(file, soon))
     } catch { /* 监视不了就靠焦点时的核对 */ }
   }
   const rewatch = (): void => {
@@ -108,12 +118,19 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     if (read.state === 'ok') {
       for (const u of read.registry.units) {
         const p = localUnitPaths(u.path)
-        want.add(p.dir); want.add(p.appData)
-        watchDir(p.dir, [LOCAL_UNIT_MARKER])
-        watchDir(p.appData, [LOCAL_UNIT_RUN_FILE])
+        if (process.platform === 'win32') {
+          for (const file of [join(p.dir, LOCAL_UNIT_MARKER), join(p.appData, LOCAL_UNIT_RUN_FILE)]) {
+            want.add(file)
+            watchUnitFile(file)
+          }
+        } else {
+          want.add(p.dir); want.add(p.appData)
+          watchDir(p.dir, [LOCAL_UNIT_MARKER])
+          watchDir(p.appData, [LOCAL_UNIT_RUN_FILE])
+        }
       }
     }
-    for (const [dir, w] of watchers) if (!want.has(dir)) { w.close(); watchers.delete(dir) }
+    for (const [target, close] of watchers) if (!want.has(target)) { close(); watchers.delete(target) }
   }
   rewatch()
   const onFocus = (): void => soon()
@@ -207,7 +224,7 @@ export function createLocalUnitsHost(d: LocalUnitsHostDeps): LocalUnitsHost {
     dispose() {
       app.off('browser-window-focus', onFocus)
       if (timer) clearTimeout(timer)
-      for (const w of watchers.values()) w.close()
+      for (const close of watchers.values()) close()
       watchers.clear()
     },
   }
