@@ -15,6 +15,7 @@
  * 摘要文本一旦写定不再变,summaryMessage 的字节 run 内与 hydrate 时逐字相同 → 压缩后的前缀可跨 run 命中缓存。
  * 所有读 fail-safe → 退回未压缩行为;用户取消会抛出,调用方须终结 run 而非继续机械折叠。
  */
+import { isImageGeometryPart } from './imageAttachments.js';
 import { v4 as uuidv4 } from 'uuid';
 import { messageTimeOrder, query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
@@ -389,6 +390,7 @@ function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
+    .filter((part, index, parts) => !isImageGeometryPart(part, index, parts))
     .map((p: any) => (p?.type === 'text' || p?.type === 'input_text') ? String(p.text ?? '') : `[${p?.type || 'attachment'} omitted; inspect the original artifact if needed]`)
     .join('\n');
 }

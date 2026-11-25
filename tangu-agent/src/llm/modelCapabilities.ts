@@ -1072,7 +1072,7 @@ const NO_VISION_PATTERNS: readonly RegExp[] = [
   // 而后台的 supportsVision=true 不算标注(见 visionOverrideOf),判错 = 图被转给辅助模型、主模型
   // 看不到原图(2026-10-19 用户报)。`deepseek-v4-pro` 仍纯文本。网关上纯文本的开放权重 V4-Flash
   // 判错是「图发过去报错」那个看得见的方向,由 admin 标 false / noVisionModelIds 兜。
-  /^deepseek-(?!vl|.*vision|(v4-)?flash)/i,
+  /^deepseek-(?!vl|.*vision|(?:v4(?:\.1)?-)?flash)/i,
   // GLM-5.3 官方文档明写「目前仅支持处理文本模态信息」。**但 5.3-Flash 是原生多模态**
   // (GLM-5 系首个原生多模态模型,收图片/视频)—— 同族里一支纯文本一支能看图,必须反查排除,
   // 否则把 Flash 判成无视觉 = 白跑辅助模型 + 丢原图(静默劣化,本表最不愿意的方向)。

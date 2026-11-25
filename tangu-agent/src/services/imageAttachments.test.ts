@@ -57,7 +57,8 @@ describe('phone photo model input', () => {
 
   it('bounds converted photos to the viewing budget and refuses unsafe dimensions', () => {
     const photo = encodePhotoForModel(Buffer.alloc(2000 * 1000 * 4, 255), 2000, 1000);
-    const decoded = jpeg.decode(photo);
+    const decoded = jpeg.decode(photo.buf);
+    expect([photo.fromWidth, photo.fromHeight, photo.width, photo.height]).toEqual([2000, 1000, decoded.width, decoded.height]);
     expect(Math.max(decoded.width, decoded.height)).toBeLessThanOrEqual(MAX_EDGE);
     expect(decoded.width * decoded.height).toBeLessThanOrEqual(MAX_PIXELS);
     expect(() => encodePhotoForModel(new Uint8Array(), 100000, 100000)).toThrow('dimensions');

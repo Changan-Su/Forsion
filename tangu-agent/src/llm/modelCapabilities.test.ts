@@ -626,7 +626,7 @@ describe('modelSupportsVision — 黑名单制', () => {
   // 2026-10-19 用户报:Forsion 云端 DeepSeek 那行 id 是 `deepseek-v4-flash`(官方别名,由 V4.1 Flash
   // 回答、能看图),后台标 supportsVision=true 不算 override → 整族规则判纯文本 → 图被转给辅助模型。
   it('⚠️DeepSeek V4.1 Flash 线能看图(新 id 与退役别名都算)', () => {
-    for (const id of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']) {
+    for (const id of ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'deepseek-v4.1-flash', 'deepseek-v4.1-flash-1017']) {
       expect(modelSupportsVision(id)).toBe(true);
     }
     expect(modelSupportsVision('deepseek-v4-flash', false)).toBe(false); // admin 标 false 仍压得住

@@ -3,6 +3,7 @@ import {
   extractFileOps, formatFileOps, parseFileOps, compactionRange, buildTranscript, rowCoverage,
   summaryMessage, isSummaryMessage, compactSystemPrompt, idleCompactionDue, tagMessageSource, type FileOps,
 } from './compaction.js';
+import { toImageParts } from './imageAttachments.js';
 import { estimateMessageTokens } from './contextBudget.js';
 import type { ChatMessage } from '../core/types.js';
 
@@ -265,4 +266,13 @@ describe('idleCompactionDue — 隔久了先压(提示缓存已凉)', () => {
     expect(idleCompactionDue(msgs(now - 61 * 60_000), { ...cfg, idleMinutes: 0 }, 50_000, now, 'cur')).toBe(false);
     expect(idleCompactionDue(msgs(now - 61 * 60_000), { ...cfg, enabled: false }, 50_000, now, 'cur')).toBe(false);
   });
+});
+
+it('omits resized-image geometry when the transcript omits the corresponding pixels', () => {
+  const parts = toImageParts('Choose a target', [{ url: 'data:image/jpeg;base64,AA==',
+    resize: { fromWidth: 1600, fromHeight: 1000, width: 1356, height: 847 } }]);
+  const { text } = buildTranscript([{ role: 'user', content: structuredClone(parts) }], { read: new Set(), modified: new Set() }, 100_000);
+  expect(text).toContain('Choose a target');
+  expect(text).toContain('image_url omitted');
+  expect(text).not.toContain('1356');
 });

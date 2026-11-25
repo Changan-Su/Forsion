@@ -45,13 +45,14 @@ export interface FittedImage {
 interface Header { kind: 'png' | 'jpeg'; width: number; height: number; orientation: number }
 
 /** Encode decoded phone photos with the same viewing budget as other user images. */
-export function encodePhotoForModel(data: Uint8Array, width: number, height: number): Buffer {
+export function encodePhotoForModel(data: Uint8Array, width: number, height: number): FittedImage {
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0
     || width * height > MAX_DECODE_PIXELS || data.length !== width * height * 4) throw new Error('Invalid image dimensions');
   const scale = Math.min(1, MAX_EDGE / Math.max(width, height), Math.sqrt(MAX_PIXELS / (width * height)));
   const w = Math.max(1, Math.floor(width * scale)), h = Math.max(1, Math.floor(height * scale));
   flattenOnWhite(data);
-  return jpeg.encode({ data: scale < 1 ? shrinkArea(data, width, height, w, h) : data, width: w, height: h }, JPEG_QUALITY).data;
+  const buf = jpeg.encode({ data: scale < 1 ? shrinkArea(data, width, height, w, h) : data, width: w, height: h }, JPEG_QUALITY).data;
+  return { buf, mime: 'image/jpeg', width: w, height: h, fromWidth: width, fromHeight: height };
 }
 
 /** 只读文件头:格式按字节认,不信扩展名 / 声明的 MIME。 */
@@ -202,10 +203,26 @@ export function fitImageForModel(buf: Buffer, opts: { keepSize?: boolean } = {})
   }
 }
 
-/** data: URL 进、data: URL 出;没缩(或根本不是 base64 的 data: URL)就把同一个字符串还回去。 */
-export function fitImageUrlForModel(url: string): string {
+export type ImageResize = Pick<FittedImage, 'fromWidth' | 'fromHeight' | 'width' | 'height'>;
+
+export interface ModelImage { url: string; resize?: ImageResize }
+
+export function fittedImageUrl(fit: FittedImage): ModelImage {
+  const { fromWidth, fromHeight, width, height } = fit;
+  const url = 'data:' + fit.mime + ';base64,' + fit.buf.toString('base64');
+  return width === fromWidth && height === fromHeight
+    ? { url }
+    : { url, resize: { fromWidth, fromHeight, width, height } };
+}
+
+/** Retain the transform only when model pixels and original display pixels differ. */
+export function fitImageUrlWithGeometry(url: string): ModelImage {
   const m = /^data:[^,]*;base64,/i.exec(url);
-  if (!m) return url;
+  if (!m) return { url };
   const fit = fitImageForModel(Buffer.from(url.slice(m[0].length), 'base64'));
-  return fit ? `data:${fit.mime};base64,${fit.buf.toString('base64')}` : url;
+  return fit ? fittedImageUrl(fit) : { url };
+}
+
+export function fitImageUrlForModel(url: string): string {
+  return fitImageUrlWithGeometry(url).url;
 }
