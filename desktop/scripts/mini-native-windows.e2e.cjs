@@ -140,11 +140,13 @@ async function main() {
         const first=stable.find(frame=>frame.phase==='before'),last=stable.findLast(frame=>frame.phase==='released')
         const held=frames.filter(frame=>frame.phase==='clamped')
         const moving=stable.filter(frame=>frame.phase==='drag')
-        const gap=Math.max(...frames.slice(1).map((frame,i)=>frame.timeMs-frames[i].timeMs))
+        const active=frames.filter(frame=>frame.phase==='drag'||frame.phase==='clamped')
+        // GDI may spend longer on its first capture before any mouse movement.
+        const gap=Math.max(...active.slice(1).map((frame,i)=>frame.timeMs-active[i].timeMs))
         const physicalWidth=Math.round((inward?260:640)*receipt.displayScale)
         const physicalHeight=Math.round((inward?160:Math.min(900,receipt.area.y+receipt.area.height-before.y))*receipt.displayScale)
         const visuallyWhole=frame=>frame.clearBackdrop&&frame.roundedCorners===4&&frame.filledSides===4&&frame.lightInterior>=23
-        check(direction+' compositor has a bright rounded Mini surrounded by a dark fixture before resizing',first&&visuallyWhole(first),first)
+        check(direction+' compositor has a bright rounded Mini surrounded by a dark fixture before resizing',first&&visuallyWhole(first),first,true)
         check(direction+' reaches the expected resize limit',
           inward ? after.width===260&&after.height===160 : after.width===640&&closeEnough(after.y+after.height,receipt.area.y+receipt.area.height),after)
         check(direction+' stays at its final size and position while the pointer moves beyond both axes',
@@ -154,7 +156,7 @@ async function main() {
               (inward ? frame.cursorX<frame.x+frame.width-8&&frame.cursorY<frame.y+frame.height-8 :
                 frame.cursorX>frame.x+frame.width+8&&frame.cursorY>frame.y+frame.height+8)),held)
         check(direction+' timestamped independent compositor samples observe the moving native card',
-          frames.length>=40&&moving.length>=12&&new Set(moving.map(frame=>frame.width)).size>=5&&gap<=65,{samples:frames.length,moving:moving.length,gap})
+          frames.length>=40&&moving.length>=12&&new Set(moving.map(frame=>frame.width)).size>=5&&gap<=65,{samples:frames.length,moving:moving.length,gap},true)
         check(direction+' stable-geometry compositor samples show filled sides and rounded corner contours',
           last&&stable.length>=frames.length*.75&&stable.every(visuallyWhole),stable.filter(frame=>!visuallyWhole(frame)),true)
       }
