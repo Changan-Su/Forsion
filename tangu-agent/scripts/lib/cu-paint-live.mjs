@@ -234,7 +234,7 @@ export async function cuPaintLive({ api, run, OUT, checkout, outline, tokensOf, 
     const ev = await run(sessionId, prompt, 180_000, {
       toolsMode: 'allow',
       toolsList: ['launch_browser', 'observe_ui', 'act_ui', 'use_skill', 'load_tools'],
-    });
+    }, undefined, () => 'reject');
     const image = readFileSync(join(OUT, id + '-delivered.png'));
     const receipt = JSON.parse(readFileSync(join(OUT, id + '-receipt.json'), 'utf8'));
     writeFileSync(join(OUT, id + '-result.png'), image);

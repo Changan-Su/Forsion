@@ -1,5 +1,5 @@
 // A fresh instance of the real macOS Preview opens only the run's generated image.
-// The grader measures the red figure in the screenshots actually sent to the model.
+// The grader measures the colored figures in the screenshots actually sent to the model.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
@@ -52,9 +52,22 @@ function randomPicture() {
 async function pictureMetrics(jpeg, png) {
   await exec('/usr/bin/sips', ['-s', 'format', 'png', jpeg, '--out', png]);
   const shot = PNG.sync.read(readFileSync(png));
-  let n = 0;
-  for (let i = 0; i < shot.data.length; i += 4)
-    if (shot.data[i] > 165 && shot.data[i + 1] < 85 && shot.data[i + 2] < 95) n++;
+  const marks = Array.from({ length: 3 }, () => ({ x: 0, y: 0, count: 0 }));
+  for (let i = 0; i < shot.data.length; i += 4) {
+    const r = shot.data[i],
+      g = shot.data[i + 1],
+      b = shot.data[i + 2];
+    let mark;
+    if (r > 165 && g < 85 && b < 95) mark = marks[0];
+    else if (r < 80 && g < 130 && b > 160) mark = marks[1];
+    else if (r < 95 && g > 125 && b < 110) mark = marks[2];
+    if (mark) {
+      mark.count++;
+      mark.x += (i / 4) % shot.width;
+      mark.y += Math.floor(i / 4 / shot.width);
+    }
+  }
+  const centers = marks.map(({ x, y, count }) => ({ x: x / count, y: y / count, count }));
   let documentTop;
   for (let y = 0; y < shot.height; y++) {
     let whites = 0,
@@ -69,18 +82,36 @@ async function pictureMetrics(jpeg, png) {
       break;
     }
   }
-  return { red: n, documentTop };
+  return { red: marks[0].count, documentTop, centers };
 }
 
-export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = false }) {
+const gestures = {
+  cupreview: '用鼠标点一次工具栏的放大按钮。',
+  cupreviewmarkup: '根据当前截图把标记工具栏切换一次（用鼠标点击，在显示和隐藏间切换）。',
+  cupreviewrotate: '记下目前图形从左到右的顺序，再用鼠标点击工具栏，把这张图片向左旋转九十度。',
+};
+
+function turnedLeft(before, after) {
+  if ([...before, ...after].some((p) => p.count < 300)) return false;
+  const [red, blue, green] = after;
+  const spread = Math.max(...after.map((p) => p.x)) - Math.min(...after.map((p) => p.x));
+  return (
+    before[0].x + 30 < before[1].x &&
+    before[1].x + 30 < before[2].x &&
+    green.y + 30 < blue.y &&
+    blue.y + 30 < red.y &&
+    spread < (red.y - green.y) * 0.3
+  );
+}
+
+export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
   if (process.platform !== 'darwin') throw Error('This scenario needs macOS Preview');
   const plugin = (await api('/agent/plugins')).plugins.find((p) => /computer-use/.test(p.id));
   await api('/agent/plugins/' + plugin.id + '/enabled', {
     method: 'PUT',
     body: JSON.stringify({ enabled: true }),
   });
-  const key = markup ? 'cupreviewmarkup' : 'cupreview',
-    sessionId = 'live-cupreview-' + Date.now();
+  const sessionId = 'live-cupreview-' + Date.now();
   const pic = randomPicture(),
     path = join(OUT, 'Vision-' + Date.now() + '.png');
   writeFileSync(path, pic.bytes);
@@ -107,14 +138,12 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = fa
     if (!Number.isSafeInteger(pid) || pid < 2) throw Error('No fresh Preview process');
     await delay(1100);
     writeFileSync(join(OUT, 'pixel-target.json'), JSON.stringify({ key, sessionId, pid }));
-    const gesture = markup
-      ? '根据当前截图把标记工具栏切换一次（用鼠标点击，在显示和隐藏间切换）。'
-      : '用鼠标点一次工具栏的放大按钮。';
     const ev = await run(
       sessionId,
-      `只看截图操作 macOS 预览 PID ${pid} 的 Vision 图片窗口。${gesture}保持后台。请用 find_roots 按 PID 找窗口，用 observe_ui 的 pixels 模式看图。点击后再用一次同样的 observe_ui 核对最终画面，按从左往右的顺序告诉我三种形状。如果没能验证就直说，不重复点击。`,
+      `只看截图操作 macOS 预览 PID ${pid} 的 Vision 图片窗口。${gestures[key]}保持后台。请用 find_roots 按 PID 找窗口，用 observe_ui 的 pixels 模式看图。点击后再用一次同样的 observe_ui 核对最终画面，告诉我操作前三种图形从左到右的顺序。如果没能验证就直说，不重复点击。`,
       160_000,
       { toolsMode: 'allow', toolsList: ['find_roots', 'observe_ui', 'act_ui', 'use_skill', 'load_tools'] },
+      undefined, () => 'reject',
     );
     const before = await pictureMetrics(join(OUT, key + '-first.jpg'), join(OUT, key + '-before.png'));
     const after = await pictureMetrics(join(OUT, key + '-delivered.jpg'), join(OUT, key + '-result.png'));
@@ -131,6 +160,12 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = fa
     const toolbarShift = Math.abs(after.documentTop - before.documentTop);
     const zoom = after.red / before.red,
       front = samples.filter((n) => n === pid).length;
+    const rotated = turnedLeft(before.centers, after.centers);
+    const actionVerified = {
+      cupreview: zoom > 1.18,
+      cupreviewmarkup: toolbarShift >= 25 && toolbarShift <= 120 && Math.abs(zoom - 1) < 0.15,
+      cupreviewrotate: rotated,
+    }[key];
     const ok = Boolean(
       ev.done &&
         !ev.error &&
@@ -138,7 +173,7 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = fa
         before.red > 300 &&
         receipt.count >= 2 &&
         receipt.actions === 1 &&
-        (markup ? toolbarShift >= 25 && toolbarShift <= 120 && Math.abs(zoom - 1) < 0.15 : zoom > 1.18) &&
+        actionVerified &&
         actions.length === 1 &&
         samples.length > 10 &&
         front === 0,
@@ -152,6 +187,8 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = fa
           before,
           after,
           zoom,
+          actionVerified,
+          rotated,
           calls,
           receipt,
           outputs: ev.toolResults.map((t) => ({
@@ -169,7 +206,7 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, markup = fa
     );
     return {
       ok,
-      detail: `图形顺序 ${readOrder}，红色面积比 ${zoom.toFixed(2)}，画稿顶边 ${before.documentTop}→${after.documentTop}，点击 ${actions.length} 次，前台 ${front}/${samples.length}`,
+      detail: `动作核验 ${actionVerified}，图形顺序 ${readOrder}，红色面积比 ${zoom.toFixed(2)}，画稿顶边 ${before.documentTop}→${after.documentTop}，点击 ${actions.length} 次，前台 ${front}/${samples.length}`,
       output: ev.content,
       ttftMs: ttft(ev),
       tokens: tokensOf(ev),

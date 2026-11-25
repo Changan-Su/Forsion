@@ -53,7 +53,7 @@ export default {
                     ...tcx,
                     collectImage(item) {
                       tcx.collectImage(item);
-                      image = item.url;
+                      if (item.name !== 'detail-2x.png') image = item.url;
                     },
                   });
                   if (t.name === 'act_ui' && image) state.actions = (state.actions || 0) + 1;

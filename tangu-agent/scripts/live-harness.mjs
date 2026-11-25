@@ -203,7 +203,7 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
  *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
  *   npm run live:harness -- --only cupaintfill,cupaintoutline --cu-plugin <built bundle> --cu-paint <clean checkout of github.com/1j01/jspaint>
- *   npm run live:harness -- --only cupreview --cu-plugin <package with the matching signed macOS helper>
+ *   npm run live:harness -- --only cupreview,cupreviewmarkup,cupreviewrotate --cu-plugin <package with the matching signed macOS helper>
  *   npm run live:harness -- --only cumanaged --cu-plugin <built bundle>  # Real form in an isolated background Chrome, no desktop helper
  *   npm run live:harness -- --only cuweb,cuwebdead,cuwebcovered --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
  *   npm run live:harness -- --only cuweb --cu-plugin <新协议的捆绑包> --cu-replace-installed-helper   # 验已装 helper 的真实升级(11-14):不设 PI_* 变量,
@@ -298,7 +298,7 @@ KEYS.push('musechat');
 KEYS.push('cmdreads'); // Windows read-only shell shortcut, including the Muse approval screenshot.
 KEYS.push('novision');
 KEYS.push('cuoff');
-KEYS.push('cuvision', 'cumanaged', 'cupaintfill', 'cupaintoutline', 'cupreview', 'cupreviewmarkup');
+KEYS.push('cuvision', 'cumanaged', 'cupaintfill', 'cupaintoutline', 'cupreview', 'cupreviewmarkup', 'cupreviewrotate');
 KEYS.push(...CU_JEV_KEYS);
 KEYS.push(...CU_WEB_KEYS);
 KEYS.push('dreamseed');
@@ -389,6 +389,7 @@ OPT_IN.add('cupaintfill');
 OPT_IN.add('cupaintoutline');
 OPT_IN.add('cupreview');
 OPT_IN.add('cupreviewmarkup');
+OPT_IN.add('cupreviewrotate');
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
@@ -1143,7 +1144,7 @@ if (ONLY.has('dispatch')) {
   cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').some(x=>['.git','node_modules','artifacts'].includes(x))});
 }
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
-const previewScenario = ONLY.has('cupreview') || ONLY.has('cupreviewmarkup');
+const previewScenario = ONLY.has('cupreview') || ONLY.has('cupreviewmarkup') || ONLY.has('cupreviewrotate');
 const paintScenario = ONLY.has('cupaintfill') || ONLY.has('cupaintoutline');
 const paintTmp = join(OUT, 'paint-browser-tmp');
 if (paintScenario) mkdirSync(paintTmp, {recursive:true});
@@ -4414,8 +4415,9 @@ try {
   }
 
   // cuweb / cuwebdead(10-31):网页按钮的后台 AXPress。说明和判据在 lib/cu-web-live.mjs。
-  await scenario('cupreviewmarkup','实际 macOS 预览：纯截图切换标记工具栏并读图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,markup:true}));
-  await scenario('cupreview','实际 macOS 预览：看图、点放大、核对图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf}));
+  await scenario('cupreviewmarkup','实际 macOS 预览：纯截图切换标记工具栏并读图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreviewmarkup'}));
+  await scenario('cupreview','实际 macOS 预览：看图、点放大、核对图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreview'}));
+  await scenario('cupreviewrotate','实际 macOS 预览：纯截图将临时图片向左转九十度', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreviewrotate'}));
   for (const key of ['cupaintfill','cupaintoutline']) {
     await scenario(key, key==='cupaintfill'?'真实 JS Paint 纯视觉填色':'真实 JS Paint 纯视觉画框', () => cuPaintLive({
       api, run, OUT, checkout:opt('cu-paint',''), outline:key==='cupaintoutline', tokensOf, ttft }));
