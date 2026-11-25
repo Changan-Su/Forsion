@@ -17,7 +17,7 @@
  *  1. 结束脚本用户名下所有残留进程(脚本用户是专用的:上一次脚本脱离进程组的子孙进程不许活到下一个账号打开时)。
  *  2. 本进程第一次跑:把 accounts/ 下每个账号文件夹顶层收成 0700(上次引擎跑到一半退出、没收回的)。
  *  3. 临时目录(刚建的那次)交给脚本用户,0700;`.scratch` 本身 0711(只能穿过、看不到别的运行)。
- *  4. 开账号文件夹:账号库 `state.db*` 收成 0600;其余条目组改成脚本组、目录 g+rwx、文件 g+rw(去掉 setuid / setgid),
+ *  4. 开账号文件夹:删掉脚本上次占进来的 `state.db*` 名字,账号库 `state.db*` 收成 0600;其余条目组改成脚本组、目录 g+rwx、文件 g+rw(去掉 setuid / setgid),
  *     顶层的 `state.db*` 和 `.scratch` 不碰;最后才把顶层改成「组 = 脚本组、01770」(组可进可写,粘滞位让脚本删不了、改不了名
  *     不是它自己的条目,比如账号库)。
  *     遍历一律 lstat、不跟随软链,改属主 / 权限用 O_NOFOLLOW 打开后的 fd(打开的必须还是 lstat 看到的那个);链接数 >1 的文件不碰
@@ -214,7 +214,7 @@ function setDir(p: string, gid: number, mode: number): boolean {
  * 顶层 state.db* 里脚本放进来的东西:删掉。运行期间顶层组可写,粘滞位只护得住已有的名字 —— 脚本可以抢先占一个还没有的库旁文件名
  * (比如放个 state.db-journal 软链 / 目录),等 SQLite 以 root 去开。删的只有:不是普通文件的(软链只删链接本身;state.db 本身除外,
  * 那种账号本来就打不开),以及属主是脚本用户的普通文件。别的属主的普通文件不删(可能是换过运行身份的旧数据),由调用方改回引擎的。
- * 只在脚本用户的进程已清光、顶层已关上时调(跑完、开账号文件夹之前、账号打开时)。
+ * 只在脚本队列里、脚本用户的进程已清光、顶层已关上时调(开账号文件夹之前、跑完);账号打开时不调(那时没清过进程,开关关着也不该删东西)。
  */
 export function dropForeignDbEntries(home: string, scriptUid?: number): void {
   let names: string[];
@@ -231,15 +231,8 @@ export function dropForeignDbEntries(home: string, scriptUid?: number): void {
   }
 }
 
-/** 脚本用户的 uid(开关开着且配置有效时),否则 undefined。 */
-function configuredScriptUid(): number | undefined {
-  if (scriptIsolationMode() !== 'required') return undefined;
-  try { return parseId(SCRIPT_UID_ENV); } catch { return undefined; }
-}
-
-/** 账号库文件(顶层 state.db*)收成 0600、属主是引擎;脚本放进来的先删掉。有别的硬链接 → 抛。 */
+/** 账号库文件(顶层 state.db* 里的普通文件)收成 0600、属主是引擎。有别的硬链接 → 抛。 */
 function secureDbFiles(home: string): void {
-  dropForeignDbEntries(home, configuredScriptUid());
   const me = engineIds();
   for (const name of readdirSync(home)) {
     if (!isDbFile(name)) continue;
@@ -319,6 +312,7 @@ function grantEntry(p: string, seen: Stats, gid: number, bits: number): void {
  */
 export function openAccountToScripts(home: string, user: ScriptUser, scratchName: string): void {
   setDir(home, engineIds().gid, TOP_CLOSED);
+  dropForeignDbEntries(home, user.uid);
   secureDbFiles(home);
   let count = 0;
   const stack: Array<{ dir: string; top: boolean }> = [{ dir: home, top: true }];

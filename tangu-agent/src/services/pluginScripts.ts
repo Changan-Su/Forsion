@@ -385,7 +385,7 @@ export interface PluginScriptResult {
 // ── 换用户(core/scriptIsolation.ts)───────────────────────────────────────────────────────────
 let allHomesLocked = false; // 本进程第一次换用户跑脚本前,收一遍所有账号文件夹(上次引擎跑到一半退出、没收回的)
 const stuckOpen = new Set<string>(); // 跑完没收回的账号文件夹:下次跑脚本前先收,收不回就不跑
-const sweepPending = new Set<string>(); // 跑完没清光脚本进程、所以没扫链接的账号:下次清光之后再扫
+const sweepPending = new Map<string, FileIds>(); // 跑完没清光脚本进程、所以没扫链接的账号(→ 那次跑之前的快照):下次清光之后再扫
 
 const isolationErr = (e: unknown): PluginScriptError =>
   new PluginScriptError(e instanceof ScriptIsolationError ? e.message : `Plugin scripts are disabled right now: ${(e as Error)?.message || e}`);
@@ -396,9 +396,9 @@ function prepareScriptUser(user: ScriptUser): void {
     reapScriptUser(user);
     if (!allHomesLocked) { lockAllAccountHomes(); allHomesLocked = true; }
     for (const home of [...stuckOpen]) { closeAccountToScripts(home); stuckOpen.delete(home); }
-    for (const account of [...sweepPending]) {
+    for (const [account, before] of [...sweepPending]) {
       dropForeignDbEntries(accountHome(account), user.uid);
-      sweepAccountLinks(account);
+      sweepAccountLinks(account, before);
       sweepPending.delete(account);
     }
   } catch (e) {
@@ -411,13 +411,12 @@ function prepareScriptUser(user: ScriptUser): void {
  * 跑完(含没起来):收回顶层、再清一遍脚本用户的进程、删掉脚本占的库旁文件名。不抛:收不回的记进 stuckOpen;
  * 清不完进程 → 返回 false(这时 root 不在账号文件夹里按路径动东西,扫链接留到下次清光之后)。
  */
-function finishScriptUser(account: string, home: string, user: ScriptUser): boolean {
+function finishScriptUser(home: string, user: ScriptUser): boolean {
   try { closeAccountToScripts(home); } catch (e) {
     stuckOpen.add(home);
     console.error(`[tangu] multi-account: could not close ${home} to plugin scripts:`, (e as Error)?.message || e);
   }
   try { reapScriptUser(user); } catch (e) {
-    sweepPending.add(account);
     console.error('[tangu] multi-account: could not end leftover plugin script processes:', (e as Error)?.message || e);
     return false;
   }
@@ -485,12 +484,13 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
       }
       res = await spawnScript(target, args, { cwd, signal: o.signal }, env, scratch, limits, user, queuedAt, startedAt);
     } finally {
-      if (user && opened) canSweep = finishScriptUser(account, home, user);
+      if (user && opened) canSweep = finishScriptUser(home, user);
     }
     // 换用户起不来(缺能力、解释器脚本用户执行不了…):当拒绝,不退回以引擎自己的身份跑
     if (user && res.startError) throw new PluginScriptError(`The script could not start as the script user (uid ${user.uid}): ${res.startError}`);
     delete res.startError;
     // 进程组已结束(close 之后又补了一次 SIGKILL):扫链接,标脏磁盘用量(脚本用户的进程没清光时不扫,留到下次)
+    if (!canSweep) sweepPending.set(account, before);
     res.removedLinks = canSweep ? sweepAccountLinks(account, before) : [];
     if (res.removedLinks.length) console.warn(`[tangu] multi-account: removed ${res.removedLinks.length} link(s) left in ${account}'s folder by ${target.file}`);
     markAccountUsageDirty(account);
