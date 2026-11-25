@@ -138,7 +138,7 @@
  * 右端让出 --windows-caption-width(视口 px,除 --uiz 折回局部 px);Linux 也画,在系统标题栏下面。 */
 .unitrs.unitrs--whole,
 :not(.shell-work) > .unitrs.unitrs--whole { position: fixed; inset: 0; left: 0; flex-direction: column; --unitfr-bar-h: var(--rb-mac-top, 30px); }
-[data-platform='win'] .unitrs--whole { --unitfr-bar-h: 32px; }
+[data-platform='win'] .unitrs.unitrs--whole { --unitfr-bar-h: 32px; }
 .unitfr-bar {
   flex: none;
   height: var(--unitfr-bar-h);
