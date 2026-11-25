@@ -17,6 +17,7 @@ import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/ho
 import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
 import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
+import { createMiniResizeBacking, miniFrameCoversEdges } from './miniResizeBacking'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
@@ -34,7 +35,7 @@ import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCAL
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
+import { app, BaseWindow, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
@@ -2524,6 +2525,7 @@ interface MiniEntry {
   resizeDock: MiniDockState | null
   resizeMaskActive: boolean
   resizeUpdates: ReturnType<typeof createMiniResizeQueue>
+  resizeBacking: ReturnType<typeof createMiniResizeBacking> | null
   stopPassThrough: (() => void) | null
 }
 const minis = new Map<string, MiniEntry>()
@@ -2635,6 +2637,7 @@ function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
 }
 function clearIdleMiniResizeMask(m: MiniEntry): void {
   if (!m.resizeMaskActive || m.resizeFrom || m.dock || m.win.isDestroyed()) return
+  m.resizeBacking?.clear()
   m.resizeMaskActive = false
   m.win.setShape([])
 }
@@ -2756,10 +2759,30 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
     show: !QUIET_WINDOWS && restored?.visible !== false,
     webPreferences: satelliteWebPreferences(),
   })
+  const contents = win.webContents
+  const resizeBacking = process.platform === 'win32' ? createMiniResizeBacking({
+    // BrowserWindow.setBackgroundColor also changes Chromium's page background.
+    // Set only the native backing so the transparent renderer can still dock.
+    setNativeBackground: (color) => {
+      if (!win.isDestroyed()) BaseWindow.prototype.setBackgroundColor.call(win, color)
+    },
+    watchPresentedFrames: (callback, radius) => {
+      if (contents.isDestroyed()) return () => {}
+      contents.beginFrameSubscription(false, (image) => {
+        const scaleFactor = image.getScaleFactors()[0] ?? 1
+        const size = image.getSize()
+        const pixels = { width: Math.round(size.width * scaleFactor), height: Math.round(size.height * scaleFactor) }
+        if (miniFrameCoversEdges(image.toBitmap({ scaleFactor }), pixels, radius)) setImmediate(() => callback(pixels))
+      })
+      contents.invalidate()
+      return () => { if (!contents.isDestroyed()) contents.endFrameSubscription() }
+    },
+    canClearWithoutFrame: () => win.isDestroyed() || !win.isVisible() || win.isMinimized(),
+  }) : null
   const m: MiniEntry = {
     id, win, key, target: opts, gen: 0, dock: null, pinned, dockMotion: null, suppressMoved: false, dragging: false,
     settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
-    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
+    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), resizeBacking, stopPassThrough: null,
   }
   minis.set(id, m)
   touchMini(m)
@@ -2773,6 +2796,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   hardenNav(win.webContents)
   win.webContents.on('did-finish-load', () => {
     m.resizeUpdates.cancel()
+    m.resizeBacking?.clear()
     m.resizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     m.resizeDock = null
     if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', { ...m.target, gen: m.gen })
@@ -2784,6 +2808,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   if (process.platform === 'win32') m.dockMotion = createMiniDockMotion(win)
   win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
+    m.resizeBacking?.clear()
     m.resizeUpdates.cancel(); m.resizeFrom = null; m.resizeDock = null
     if (m.dock && !m.dockMotion) setMiniBounds(m, expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea), false)
     m.dockMotion?.reset(false); m.dock = null; stopMiniPoll(m)
@@ -2791,14 +2816,24 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   win.on('move', () => onMiniMoved(m))
   // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
   // native dragging can cross to a monitor with another scale.
-  win.on('will-move', () => clearIdleMiniResizeMask(m))
-  win.on('resize', () => clearIdleMiniResizeMask(m))
+  win.on('will-move', () => {
+    if (!m.resizeFrom) m.resizeBacking?.clear()
+    clearIdleMiniResizeMask(m)
+  })
+  win.on('resize', () => { if (!m.suppressMoved) clearIdleMiniResizeMask(m) })
+  win.on('hide', () => {
+    m.resizeUpdates.cancel()
+    m.resizeFrom = null
+    m.resizeDock = null
+    m.resizeBacking?.clear()
+  })
   win.on('focus', () => touchMini(m))
   // 托盘「全部 Mini」按窗口标题列出(渲染层把胶囊上的名字写进 document.title)
   win.on('page-title-updated', () => refreshTrayMenu())
   win.on('close', () => rememberMiniLayout(m))
   win.on('closed', () => {
     m.resizeUpdates.cancel()
+    m.resizeBacking?.clear()
     m.resizeMaskActive = false
     console.log('[win] mini closed', id, key); m.stopPassThrough?.(); m.stopPassThrough = null
     m.dockMotion?.stop(); m.dockMotion = null
@@ -2993,7 +3028,10 @@ function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
     // Keep BOTH the old and new HWND extents rounded between the native calls.
     // Growing a rounded region before its HWND would clip halfway down the old
     // height and briefly expose square corners, just like shrinking stale paint.
-    if (m.resizeFrom) win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+    if (m.resizeFrom) {
+      win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+      if (win.isVisible()) m.resizeBacking?.begin()
+    }
     win.setContentBounds(r)
     if (m.resizeFrom) {
       win.setShape(miniResizeShape(r.width, r.height, m.resizeFrom.radius))
@@ -3009,6 +3047,7 @@ function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(m: MiniEntry): void {
   if (m.win.isDestroyed() || m.suppressMoved || m.resizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  m.resizeBacking?.clear()
   clearIdleMiniResizeMask(m)
   if (m.dock) { m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m) }
   m.dragging = true
@@ -3072,6 +3111,7 @@ function pollMiniCursor(m: MiniEntry): void {
     // 展开:光标离开窗口 + 迟滞边距 → 折叠(小幅移动不触发,修「一动就弹回」)
     if (!pointInRect(pt.x, pt.y, growRect(b, MINI_HYSTERESIS))) {
       dock.expanded = false
+      m.resizeBacking?.clear()
       if (m.dockMotion) m.dockMotion.set(dock.edge, true, MINI_PEEK)
       else setMiniBounds(m, collapsedBounds(b, dock.edge, wa, MINI_PEEK))
     }
@@ -4580,6 +4620,11 @@ app.whenReady().then(async () => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }
     const win = BrowserWindow.fromWebContents(e.sender)
+    const backing = miniBySender(e.sender)?.resizeBacking
+    if (backing) {
+      backing.setColor(request.backgroundColor ?? (request.mode === 'dark' ? '#252327' : '#fbf8f5'))
+      return { ok: true }
+    }
     applyWindowMaterial(win, request, process.platform, !!win && (isMiniWindow(win) || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
   })
@@ -5518,6 +5563,7 @@ app.whenReady().then(async () => {
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
       m.resizeUpdates.flush()
       const dock = m.resizeDock
+      const radius = m.resizeFrom?.radius ?? 16
       m.resizeFrom = null
       m.resizeDock = null
       if (dock) {
@@ -5531,6 +5577,11 @@ app.whenReady().then(async () => {
         }
       }
       rememberMiniLayout(m, true)
+      if (m.resizeBacking) {
+        const bounds = miniBounds(m)
+        const scale = screen.getDisplayMatching(bounds).scaleFactor
+        m.resizeBacking.settle(screen.dipToScreenRect(m.win, bounds), radius * scale)
+      }
       if (process.platform === 'darwin') m.win.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
