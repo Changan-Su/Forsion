@@ -532,13 +532,20 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
           }),
           signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
         });
-        const j: any = await r.json().catch(() => ({}));
         if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
           const detail = String(j?.detail || '');
           if (/ASR_RESPONSE_HAVE_NO_WORDS/.test(detail)) return { text: '' };
           throw new LlmError(r.status, `cloud transcription ${r.status}${r.status === 402 ? ' (quota exceeded)' : r.status === 504 ? ' (gateway timeout)' : ''}: ${detail.slice(0, 200)}`);
         }
-        return { text: String(j?.text || '').trim() };
+        // 200 之后读体断流 / 被取消 / 不是 JSON:如实报错(取消原样抛出),不能当成「没人声」的空文本
+        let j: any;
+        try { j = await r.json(); } catch (e) {
+          if ((e as Error)?.name === 'AbortError' || req.signal?.aborted) throw e;
+          throw new LlmError(502, 'cloud transcription returned an unreadable response');
+        }
+        if (typeof j?.text !== 'string') throw new LlmError(502, 'cloud transcription returned no text field');
+        return { text: j.text.trim() };
       },
     },
     // 云端音色(GET|POST|DELETE /api/brain/voices):复刻要传样本,境外到百炼的上行很慢,给足 5 分钟。

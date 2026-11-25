@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, truncateSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { transcribeFileViaCloud, wavHeader, CLOUD_WHOLE_MAX_BYTES } from './cloudTranscribe.js';
+import { transcribeFileViaCloud, wavHeader } from './cloudTranscribe.js';
 
 const SR = 16000;
 let dir: string;
@@ -84,21 +84,38 @@ describe('transcribeFileViaCloud', () => {
     expect(r.sent.length).toBe(2); // 失败后不再发后面的段
   });
 
-  it('stereo or other formats go whole when small, and are refused when too large to send whole', async () => {
+  it('anything but 16-bit PCM mono WAV is refused before anything is sent (its length and price cannot be told)', async () => {
     const stereo = Buffer.concat([speechWav(1)]);
-    stereo.writeUInt16LE(2, 22); // 声道数改成 2:不能原样切
-    const r = recorder(() => 'whole');
-    expect(await transcribeFileViaCloud(file('stereo.wav', stereo), { timestamps: true }, r.send)).toEqual({ text: 'whole' });
-    const m4a = file('clip.m4a', Buffer.from('not really m4a'));
-    const r2 = recorder(() => 'm4a');
-    expect(await transcribeFileViaCloud(m4a, {}, r2.send)).toEqual({ text: 'm4a' });
-    expect(r2.sent[0].mime).toBe('audio/mp4');
-    const big = path.join(dir, 'big.mp3');
-    writeFileSync(big, '');
-    truncateSync(big, CLOUD_WHOLE_MAX_BYTES + 1);
-    const r3 = recorder();
-    await expect(transcribeFileViaCloud(big, {}, r3.send)).rejects.toThrow(/16 kHz mono WAV/);
-    expect(r3.sent).toHaveLength(0);
+    stereo.writeUInt16LE(2, 22); // 声道数改成 2
+    const shortFmt = Buffer.concat([speechWav(1)]);
+    shortFmt.writeUInt32LE(14, 16); // fmt 块自称只有 14 字节:不读到下一块里去
+    for (const [name, data] of [['stereo.wav', stereo], ['short-fmt.wav', shortFmt], ['clip.m4a', Buffer.from('not really m4a')]] as const) {
+      const r = recorder();
+      await expect(transcribeFileViaCloud(file(name, data), {}, r.send)).rejects.toThrow(/16-bit PCM mono WAV only/);
+      expect(r.sent, name).toHaveLength(0);
+    }
+  });
+
+  it('a data chunk after a large metadata chunk is still found', async () => {
+    const w = speechWav(5);
+    const list = Buffer.alloc(8 + 100_000); list.write('LIST', 0, 'ascii'); list.writeUInt32LE(100_000, 4);
+    const withList = Buffer.concat([w.subarray(0, 36), list, w.subarray(36)]);
+    const r = recorder(() => 'ok');
+    expect(await transcribeFileViaCloud(file('list.wav', withList), { timestamps: true }, r.send)).toEqual({ text: 'ok', segments: [{ start: 0, end: 5, text: 'ok' }] });
+    expect(r.sent).toHaveLength(1);
+  });
+
+  it('the first failure stops handing out pieces and cancels the ones in flight', async () => {
+    let started = 0;
+    const cancelled: number[] = [];
+    const send = (_audio: Buffer, _mime: string, signal?: AbortSignal) => {
+      const i = started++;
+      if (i === 0) return new Promise<string>((_, no) => setTimeout(() => no(new Error('cloud transcription 402 (quota exceeded)')), 20));
+      return new Promise<string>((_, no) => signal?.addEventListener('abort', () => { cancelled.push(i); const e = new Error('aborted'); e.name = 'AbortError'; no(e); }));
+    };
+    await expect(transcribeFileViaCloud(file('stop.wav', speechWav(150)), { concurrency: 3 }, send)).rejects.toThrow(/chunk 1\/\d+ .*402/);
+    expect(started).toBe(3); // 后两段没发
+    expect(cancelled.sort()).toEqual([1, 2]);
   });
 
   it('audio longer than the cap is refused before anything is sent', async () => {

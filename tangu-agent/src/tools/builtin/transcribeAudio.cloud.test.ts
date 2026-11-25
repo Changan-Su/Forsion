@@ -66,6 +66,17 @@ describe('transcribe_audio 云端直连', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('没登录 Forsion(令牌是空的):工具不出现,也不发', async () => {
+    const { setCloudTokenSource } = await import('../../services/cloudAccount.js');
+    setCloudTokenSource(() => '');
+    try {
+      expect(await names()).not.toContain('transcribe_audio');
+      const out = await (await tool()).execute({ path: wav }, { userId: 'u' } as any);
+      expect(String(out)).toMatch(/^Error: /);
+      expect(calls).toHaveLength(0);
+    } finally { setCloudTokenSource(null); }
+  });
+
   it('有桌面桥就只走桥:桥连不上也不悄悄改走计费的云端', async () => {
     writeFileSync(path.join(home, 'desktop-bridge.json'), JSON.stringify({ url: 'http://127.0.0.1:9/mcp', token: 't' }));
     const out = await (await tool()).execute({ path: wav }, { userId: 'u' } as any);

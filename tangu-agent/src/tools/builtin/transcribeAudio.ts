@@ -14,12 +14,13 @@
  * 变化,冻结集会时有时无。桌面不在 → 发现文件缺失(工具直接不可见)或连接失败(诚实报错,
  * 调用方按 skill 约定回退「交回宿主/告知用户」)。
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isMultiAccount } from '../../core/accountScope.js';
 import { deps } from '../../seams/runtime.js';
 import type { AsrBrain } from '../../seams/cloudBrain.js';
-import { accountReadDenied } from '../../services/accessDomain.js';
+import { accountReadDenied, currentAccountRoot } from '../../services/accessDomain.js';
 import { transcribeFileViaCloud } from '../../services/cloudTranscribe.js';
+import { currentCloudAccount } from '../../services/cloudAccount.js';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -37,7 +38,9 @@ const bridgeFile = (): string => path.join(forsionSharedDir(), 'desktop-bridge.j
  *     issue #9920 的血:`10:44` 会被读成 10 小时 44 分),让模型写冒号必然踩空。秒数本来就是
  *     segments[].start 的原值,零换算。可读时间放别名位(`|01:35`),那里怎么写都不影响跳转。
  *  ⚠️ 转写对象常常是从视频里抽出来的**临时音轨**,引它等于给用户一条点不开的路 —— 明说要引原件。 */
-function withCiteHint(out: string, audioPath: string): string {
+function withCiteHint(out: string, audioPath: string, realPath = audioPath): string {
+  // 多账号模式下插件脚本的音频在这一轮的临时目录里,这一轮结束就删:引它是一条点不开的路,也会把机器上的路径带给用户
+  if (isMultiAccount() && realPath.startsWith(path.join(realpathOr(currentAccountRoot()), '.scratch') + path.sep)) return out;
   let ref = audioPath;
   // 多账号模式不拿进程那份笔记库路径来算相对引用(那是机器主人的库,不是这个账号的)
   if (!isMultiAccount()) try {
@@ -68,12 +71,17 @@ function readBridge(): { url: string; token: string } | null {
   return null;
 }
 
+const realpathOr = (p: string): string => { try { return realpathSync.native(p); } catch { return path.resolve(p); } };
+
 /** 桌面桥在不在(多账号模式一律当不在)。 */
 const bridgePresent = (): boolean => !isMultiAccount() && existsSync(bridgeFile());
 /** 云端转写口子(brain.asr);没装配 / 没注入 → null。桌面托管的引擎(宿主注入 TANGU_HOST_CLIENT=desktop/…)不给:
  *  那里转写一律交桌面,用户选的本地模型 / 自带 key 不能因为桥文件一时不在就被计费的云端顶掉。多账号模式恒给。 */
 function cloudAsr(): AsrBrain | null {
   if (!isMultiAccount() && /^desktop\//.test(process.env.TANGU_HOST_CLIENT || '')) return null;
+  // 没登录 Forsion(登记了令牌来源但令牌是空的):云端转写必然 401,不把一个注定失败的工具摆给模型。认不出 / 没登记 = 不拦。
+  // 多账号模式不看进程凭据:那里每个账号用自己的凭据(由 brain 按当前账号取,取不到就报错),进程级令牌本来就是空的。
+  if (!isMultiAccount() && currentCloudAccount() === '') return null;
   try { return deps().brain.asr ?? null; } catch { return null; }
 }
 
@@ -109,7 +117,7 @@ export const transcribeAudioProvider: ToolProvider = {
             '(local offline model or the ASR provider configured in desktop settings), otherwise Forsion cloud transcription, billed by audio length. ' +
             'Returns JSON {text, segments?}. ' +
             'Use this when a transcription script reports the media has no subtitle track and hands back an audio_path ' +
-            '(e.g. source:"needs_asr"). Cloud transcription takes 16 kHz mono WAV of any length up to an hour; other formats only as small files. ' +
+            '(e.g. source:"needs_asr"). Cloud transcription takes 16-bit PCM mono WAV (16 kHz) up to 20 minutes; convert other formats first. ' +
             'With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.',
           parameters: {
             type: 'object',
@@ -125,14 +133,22 @@ export const transcribeAudioProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const p = String(args.path ?? '').trim();
         if (!p || !path.isAbsolute(p)) return 'Error: path must be an absolute path to a local audio file';
-        // 多账号模式:只许读这个账号自己的文件夹(含插件脚本这一轮的临时目录),和文件工具同一道读闸
-        const denied = accountReadDenied(path.resolve(p));
-        if (denied) return `Error: ${denied}`;
         if (!bridgePresent()) {
           const asr = cloudAsr();
           if (!asr) return 'Error: Forsion Desktop bridge not found — is the desktop app installed and running?';
-          const out = await viaCloud(asr, p, args, ctx.signal);
-          return args.timestamps === true && !out.startsWith('Error:') ? withCiteHint(out, p) : out;
+          // 判和读用同一个真实路径:原样打开 `<账号>/软链/../x` 时内核先走软链再上一级,和字面归一化后判过的不是同一个文件。
+          // 多账号模式只许读这个账号自己的文件夹(含插件脚本这一轮的临时目录),和文件工具同一道读闸。
+          let real: string;
+          try { real = realpathSync.native(p); } catch (e: any) {
+            // 先过闸再说「不存在」:否则别的账号能拿它试探另一个账号的文件夹里有没有某个文件
+            const refused = accountReadDenied(path.resolve(p));
+            if (refused) return `Error: ${refused}`;
+            return e?.code === 'ENOENT' ? `Error: ${p} does not exist` : `Error: cannot read ${p}: ${e?.code || e?.message || e}`;
+          }
+          const denied = accountReadDenied(real);
+          if (denied) return `Error: ${denied}`;
+          const out = await viaCloud(asr, real, args, ctx.signal);
+          return args.timestamps === true && !out.startsWith('Error:') ? withCiteHint(out, p, real) : out;
         }
         const bridge = readBridge();
         if (!bridge) return 'Error: Forsion Desktop bridge not found — is the desktop app installed and running?';

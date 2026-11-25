@@ -316,7 +316,7 @@ A Space that should also open as a small floating window gets a `mini` block in 
 - 环境只传 `PATH` 与语言 / 时区;`HOME` / `TMPDIR` / `XDG_CACHE_HOME` 指这次运行的临时目录(`FORSION_SCRIPT_SCRATCH`),跑完删。**拿不到登录信息和 API key**;Python 不写 `.pyc`、不读用户 site-packages,依赖要么机器上装好、要么随包带。
 - 整个引擎同时只跑一个,其余排队;缺省每个最多 5 分钟、临时目录 2 GB、stdout 1 MB,超了连子进程一起结束。写进账号文件夹的算账号磁盘上限;跑完删掉它在账号文件夹留下的软链,和账号文件夹外共用的硬链接断开。退出码非 0 = 失败。
 - 只认技能目录里的文件:包里别处(如 `tangu-plugins/`)的代码不跑,软链指过去也不行。Windows 主机上没有这个工具。
-- 脚本交回的音频要转文字(2026-11-25 起):**同一轮**里调 `transcribe_audio(path=<脚本给的音频>)`。临时目录这一轮结束就删;多账号模式下它只走 Forsion 云端转写(按音频时长计费),只读当前账号文件夹(含这一轮的临时目录);16 kHz 单声道 WAV 最长一小时、引擎自己切段,别的格式只收小文件,脚本里先转成这种 WAV。
+- 脚本交回的音频要转文字(2026-11-25 起):**同一轮**里调 `transcribe_audio(path=<脚本给的音频>)`。临时目录这一轮结束就删;多账号模式下它只走 Forsion 云端转写(按音频时长计费),只读当前账号文件夹(含这一轮的临时目录);云端只收 16-bit PCM 单声道 WAV(16 kHz),最长 20 分钟,引擎自己切段;别的格式会被拒,脚本里先转成这种 WAV。
 - 界面那半:宿主声明 `window.tangu.executionCapabilities.pluginScripts === true`(`host` 为 false)= 引擎没 shell、只跑包里自带的脚本,任务说明改用 `run_plugin_script`,素材别往库里存;`host` 为 true 照旧 `run_bash`。设备页上配置里的令牌可能是空串或占位值 `tunnel`,发引擎请求时别带 `Authorization`。
 
 **三种生命周期,发包前必须分清**:

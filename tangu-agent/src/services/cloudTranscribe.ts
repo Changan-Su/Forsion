@@ -9,31 +9,26 @@
  * 这里按文件句柄一窗一窗地读:切点在每窗后三分之一里找最安静的 20 ms 帧;只记切点,发送时再按偏移读那一段。
  * 内存 ≈ 并发数 × 一段(30 秒 ≈ 1 MB)。
  *
- * 别的格式 / 位深 / 声道数没法原样切,整段送,有大小上限;更大的要先转成 16 kHz 单声道 WAV。
- * 每段「没人声」= 空文本(上游把它当错误回);别的错误整次失败并带上第几段,不拿半截冒充全文。
+ * 只收 16-bit PCM 单声道 WAV:别的格式没法原样切,服务端按 WAV 头算时长计费,压缩音频整段送时长和费用都会算错,
+ * 低码率的长音频还会撞网关读超时。所以一律报错,让调用方先转(视频转写交回的本来就是这种 WAV)。
+ * 每段「没人声」= 空文本(上游把它当错误回);别的错误整次失败并带上第几段,不拿半截冒充全文;
+ * 一段失败就不再派发、在途的段一起取消,少花冤枉钱。
  * 时间戳:服务端只回文字,所以每段一条(段的真实起止),不编句子级时间。
  */
 import { open, stat, type FileHandle } from 'node:fs/promises';
-import path from 'node:path';
 
 /** 一段最多多长(秒)。15 秒一段实测 13 秒回来,30 秒离 60 秒网关读超时留了一倍余量。 */
 export const CLOUD_CHUNK_SEC = 30;
 /** 同时在路上的段数。 */
 export const CLOUD_CHUNK_CONCURRENCY = 3;
-/** 一次最多转多长的音频:按段计费,也受工具的时长上限管(60 分钟 ≈ 120 段,并发 3 约 9 分钟)。 */
-export const CLOUD_MAX_AUDIO_SEC = 60 * 60;
-/** 没法切的格式整段送的上限(base64 之后约 20 MB,远低于服务端 50 MB)。 */
-export const CLOUD_WHOLE_MAX_BYTES = 15 * 1024 * 1024;
+/** 一次最多转多长的音频。按段计费,而工具一次最多 9 分钟:一段 30 秒实测要 25 秒上下才回来,
+ *  20 分钟 = 40 段、并发 3 约 14 轮 ≈ 6 分钟,留了余量;再长就可能付完钱在时限里拿不到结果。 */
+export const CLOUD_MAX_AUDIO_SEC = 20 * 60;
 
 export interface TranscriptSegment { start: number; end: number; text: string }
 export interface CloudTranscript { text: string; segments?: TranscriptSegment[] }
 /** 发一段音频,回这段的文字。 */
 export type SendAudio = (audio: Buffer, mime: string, signal?: AbortSignal) => Promise<string>;
-
-const MIME_BY_EXT: Record<string, string> = {
-  '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg',
-  '.opus': 'audio/ogg', '.flac': 'audio/flac', '.webm': 'audio/webm',
-};
 
 /** 上游把「这段没人声」当错误回(百炼原生接口 400 `ASR_RESPONSE_HAVE_NO_WORDS`):静音、纯音乐的一段是空文本,不是失败。 */
 export function isNoSpeechError(message: string): boolean {
@@ -42,20 +37,22 @@ export function isNoSpeechError(message: string): boolean {
 
 interface WavLayout { sampleRate: number; dataOffset: number; samples: number }
 
-/** 读 WAV 头:16-bit PCM 单声道才回布局,别的(包括不是 WAV)回 null。data 长度按文件实际大小截。 */
+/** 读 WAV 头:16-bit PCM 单声道才回布局,别的(包括不是 WAV)回 null。按偏移逐块读块头(大的 LIST 块之后的 data 也找得到);
+ *  data 长度按文件实际大小截(流式写的 WAV 头里的长度不可信)。 */
 async function monoPcm16Layout(fh: FileHandle, fileSize: number): Promise<WavLayout | null> {
-  const head = Buffer.alloc(Math.min(fileSize, 64 * 1024));
-  const { bytesRead } = await fh.read(head, 0, head.length, 0);
-  const b = head.subarray(0, bytesRead);
-  if (b.length < 44 || b.toString('ascii', 0, 4) !== 'RIFF' || b.toString('ascii', 8, 12) !== 'WAVE') return null;
+  if (fileSize < 44) return null;
+  const b = Buffer.alloc(16);
+  const readAt = async (len: number, at: number): Promise<boolean> => (await fh.read(b, 0, len, at)).bytesRead === len;
+  if (!(await readAt(12, 0)) || b.toString('ascii', 0, 4) !== 'RIFF' || b.toString('ascii', 8, 12) !== 'WAVE') return null;
   let off = 12;
   let fmt: { format: number; channels: number; sampleRate: number; bits: number } | null = null;
-  while (off + 8 <= b.length) {
-    const id = b.toString('ascii', off, off + 4);
-    const size = b.readUInt32LE(off + 4);
+  for (let n = 0; n < 64 && off + 8 <= fileSize; n++) {
+    if (!(await readAt(8, off))) return null;
+    const id = b.toString('ascii', 0, 4);
+    const size = b.readUInt32LE(4);
     if (id === 'fmt ') {
-      if (off + 24 > b.length) return null;
-      fmt = { format: b.readUInt16LE(off + 8), channels: b.readUInt16LE(off + 10), sampleRate: b.readUInt32LE(off + 12), bits: b.readUInt16LE(off + 22) };
+      if (size < 16 || !(await readAt(16, off + 8))) return null;
+      fmt = { format: b.readUInt16LE(0), channels: b.readUInt16LE(2), sampleRate: b.readUInt32LE(4), bits: b.readUInt16LE(14) };
     } else if (id === 'data') {
       if (!fmt || fmt.format !== 1 || fmt.channels !== 1 || fmt.bits !== 16 || fmt.sampleRate < 8000 || fmt.sampleRate > 96000) return null;
       const dataOffset = off + 8;
@@ -124,8 +121,8 @@ function abortError(): Error {
 }
 
 /**
- * 转写一个本机音频文件。16-bit PCM 单声道 WAV 按段送(短于一段的整段送);别的格式整段送,超过 CLOUD_WHOLE_MAX_BYTES 就报错。
- * timestamps:每段一条 {start,end,text}(段的真实起止);整段送的非 WAV 没有时间,不给 segments。
+ * 转写一个本机 16-bit PCM 单声道 WAV:按段送(短于一段的整段送),别的格式报错。
+ * timestamps:每段一条 {start,end,text}(段的真实起止)。
  */
 export async function transcribeFileViaCloud(
   file: string,
@@ -139,19 +136,17 @@ export async function transcribeFileViaCloud(
   try {
     const layout = await monoPcm16Layout(fh, info.size);
     if (!layout) {
-      if (info.size > CLOUD_WHOLE_MAX_BYTES) {
-        throw new Error(`The file is ${(info.size / 1048576).toFixed(1)} MB and is not 16-bit mono WAV, so it cannot be split for cloud transcription. Convert it to 16 kHz mono WAV first.`);
-      }
-      const whole = Buffer.alloc(info.size);
-      await fh.read(whole, 0, info.size, 0);
-      const text = await sendOne(send, whole, MIME_BY_EXT[path.extname(file).toLowerCase()] || 'application/octet-stream', opts.signal);
-      return { text };
+      throw new Error('Cloud transcription takes 16-bit PCM mono WAV only. Convert the file first, e.g. ffmpeg -i <input> -ac 1 -ar 16000 -c:a pcm_s16le <output>.wav');
     }
     const seconds = layout.samples / layout.sampleRate;
     const cap = opts.maxAudioSec ?? CLOUD_MAX_AUDIO_SEC;
     if (seconds > cap) throw new Error(`The audio is ${Math.round(seconds / 60)} minutes long; cloud transcription takes at most ${Math.round(cap / 60)} minutes per call.`);
+    if (!layout.samples) throw new Error('The audio file has no samples');
     const chunks = await planChunks(fh, layout, opts.maxSec ?? CLOUD_CHUNK_SEC);
     const results: string[] = new Array(chunks.length);
+    // 一段失败就叫停:不再派发,在途的段一起取消(它们的结果反正用不上)
+    const stop = new AbortController();
+    const signal = opts.signal ? AbortSignal.any([opts.signal, stop.signal]) : stop.signal;
     let next = 0;
     let failed = null as Error | null;
     const worker = async (): Promise<void> => {
@@ -160,21 +155,26 @@ export async function transcribeFileViaCloud(
         const i = next++;
         const c = chunks[i];
         const pcm = await readSamples(fh, layout, c.from, c.to);
+        if (failed) return; // 读的时候别的段失败了
         try {
-          results[i] = (await sendOne(send, Buffer.concat([wavHeader(pcm.length, layout.sampleRate), pcm]), 'audio/wav', opts.signal)).trim();
+          results[i] = (await sendOne(send, Buffer.concat([wavHeader(pcm.length, layout.sampleRate), pcm]), 'audio/wav', signal)).trim();
         } catch (e) {
-          if ((e as Error)?.name === 'AbortError') throw e;
+          if (opts.signal?.aborted) throw abortError();
+          if (failed) return; // 是被别的段的失败叫停的
           failed = new Error(chunks.length > 1
             ? `chunk ${i + 1}/${chunks.length} (${(c.from / layout.sampleRate).toFixed(0)}s–${(c.to / layout.sampleRate).toFixed(0)}s) failed: ${(e as Error)?.message || e}`
             : String((e as Error)?.message || e));
+          stop.abort();
           throw failed;
         }
       }
     };
     const workers = Array.from({ length: Math.min(opts.concurrency ?? CLOUD_CHUNK_CONCURRENCY, chunks.length) }, worker);
     const settled = await Promise.allSettled(workers);
+    if (opts.signal?.aborted) throw abortError();
+    if (failed) throw failed;
     const rejected = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
-    if (rejected) throw failed ?? rejected.reason;
+    if (rejected) throw rejected.reason;
     const text = results.filter(Boolean).join('\n');
     if (!opts.timestamps) return { text };
     const segments = chunks

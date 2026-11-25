@@ -333,6 +333,7 @@ describe('multi-account: a script\'s audio is transcribed in the same turn', () 
       const out = s.results.find((x) => x.name === 'transcribe_audio')!.output;
       expect(out).toContain(words);
       expect(JSON.parse(out).text).toContain(words); // same JSON contract as the bridge
+      expect(JSON.parse(out).cite, 'no cite hint to a scratch file that is deleted at the end of the turn').toBeUndefined();
       expect(E.fake.asrCalls.slice(before).map((c) => c.account)).toEqual(['alice']);
 
       // bob aims at alice's audio: refused before anything is read or sent
@@ -340,16 +341,23 @@ describe('multi-account: a script\'s audio is transcribed in the same turn', () 
       const secret = `ALICE_ONLY_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
       const aliceAudio = join(accDir('alice'), 'workspace', 'alice-audio.mp3');
       writeFileSync(aliceAudio, secret.repeat(10));
+      // a link in bob's own folder plus `..`: written out it stays in bob's folder, the kernel walks the link first and lands in alice's
+      mkdirSync(join(accDir('alice'), 'workspace', 'deep'), { recursive: true });
+      mkdirSync(accDir('bob'), { recursive: true });
+      symlinkSync(join(accDir('alice'), 'workspace', 'deep'), join(accDir('bob'), 'hop'));
       const mark = E.fake.asrCalls.length;
       const b = E.fake.script('bob', 'asr-steal', steps([{ calls: [
         { name: 'transcribe_audio', args: { path: aliceAudio } },
         { name: 'transcribe_audio', args: { path: audioPath } },
         { name: 'transcribe_audio', args: { path: join(accDir('bob'), '..', 'alice', 'workspace', 'alice-audio.mp3') } },
+        { name: 'transcribe_audio', args: { path: `${join(accDir('bob'), 'hop')}/../alice-audio.mp3` } },
+        // a file that is not there in alice's folder: refused the same way, so bob cannot probe what alice has
+        { name: 'transcribe_audio', args: { path: join(accDir('alice'), 'workspace', 'no-such.wav') } },
       ] }], 'done'));
       const rb = await runToEnd(E.client, 'bob', b, { timeoutMs: 60_000 });
       expect(rb.follow?.status).toBe('done');
       const outs = b.results.filter((x) => x.name === 'transcribe_audio').map((x) => x.output);
-      expect(outs).toHaveLength(3);
+      expect(outs).toHaveLength(5);
       for (const o of outs) { expect(o).toMatch(/^Error: Access denied/); expect(o).not.toContain(secret); }
       expect(E.fake.asrCalls.slice(mark)).toEqual([]);
     } finally {
