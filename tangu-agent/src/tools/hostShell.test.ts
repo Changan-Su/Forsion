@@ -26,6 +26,14 @@ describe('resolveWindowsShell', () => {
     expect(resolveWindowsShell({ ProgramFiles: 'C:\\Program Files' }, only()).kind).toBe('cmd');
   });
 
+  it('resolves the configured Git forwarding launcher and preserves a direct custom Bash path', () => {
+    const launcher = 'D:\\Portable Git\\bin\\bash.exe';
+    const real = 'D:\\Portable Git\\usr\\bin\\bash.exe';
+    const custom = 'D:\\Custom Tools\\bash.exe';
+    expect(resolveWindowsShell({ TANGU_BASH_BIN: launcher }, only(launcher, real)).bin).toBe(real);
+    expect(resolveWindowsShell({ TANGU_BASH_BIN: custom }, only(custom)).bin).toBe(custom);
+  });
+
   it('never picks WSL bash, relative paths, or anything when forced to cmd', () => {
     const wsl = 'C:\\Windows\\System32\\bash.exe';
     expect(resolveWindowsShell({ TANGU_BASH_BIN: wsl }, () => true).kind).toBe('cmd');

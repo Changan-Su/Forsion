@@ -139,8 +139,8 @@ const BASH_TOOLS = ['du', 'df', 'stat', 'tee', 'which', 'sleep', 'seq', 'chmod',
 const BASH_EXTRA = ['usr/bin/msys-bz2-1.dll', 'usr/bin/gunzip', 'usr/bin/zcat', 'usr/bin/egrep', 'usr/bin/fgrep', 'usr/share/licenses/unzip/LICENSE'];
 const bashMembers = () => [...BASH_TOOLS.map((t) => `usr/bin/${t}.exe`), ...BASH_EXTRA];
 
-/** 引擎 hostShell.ts 的 BASH_EVAL_ARGS 原样(命令走环境变量,argv 是固定字面量):冒烟用同一种调用方式,
- *  Windows 命令行转义 / MSYS 自己的通配展开在这里就能现形。改一边必须改另一边。 */
+/** 与引擎 hostShell.ts 一样通过环境变量传命令、使用固定 argv，验证 Windows 转义和 MSYS 通配展开。
+ *  引擎会在实际执行命令前另行设置 Windows Job Object。 */
 const BASH_EVAL = ['-c', '__tangu_cmd=$TANGU_RUN_BASH_COMMAND; unset TANGU_RUN_BASH_COMMAND; eval "$__tangu_cmd"'];
 
 /** 构建机上 Git for Windows 的 usr/bin(GNU tar + bzip2 在这里)。FORSION_GIT_USR_BIN 可指定;否则看标准安装位置,

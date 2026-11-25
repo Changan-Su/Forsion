@@ -142,7 +142,7 @@ let exitHookInstalled = false;
 
 /**
  * 杀「整个进程组」:detached 子进程自成进程组(pgid=child.pid),负 pid 杀组连带它 fork 的孙进程
- * (dev server / watch 等)。Windows 通过 taskkill /T /F 杀整棵树,否则孙进程残留占着端口/管道。
+ * (dev server / watch 等)。Windows Bash 用 Job Object，cmd 用 taskkill /T /F，保证释放端口和管道。
  */
 function killTree(child: ChildProcess, sig: NodeJS.Signals = 'SIGKILL'): void {
   void killProcessTree(child, 5000, sig);

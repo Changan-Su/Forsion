@@ -2,6 +2,7 @@ import { assertHostSpawnAllowed } from '../core/hostSpawn.js';
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { terminateWindowsJob } from './windowsProcessJob.js';
 
 export interface BoundedProcessResult {
   code: number;
@@ -36,8 +37,10 @@ export async function killProcessTree(child: ChildProcess, timeoutMs = 5_000, si
       return false;
     }
   }
-  // A later escalation must not target a recycled Windows PID. Windows has no
-  // POSIX signals: taskkill /T /F stops the shell and its descendants together.
+  const jobStopped = terminateWindowsJob(child);
+  if (jobStopped !== undefined) return jobStopped;
+  // A later escalation must not target a recycled Windows PID. Use taskkill /T /F for
+  // Windows children that were not launched in an owned job.
   if (child.exitCode != null || child.signalCode != null) return true;
   return new Promise((resolve) => {
     const root = process.env.SystemRoot || process.env.WINDIR;

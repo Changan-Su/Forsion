@@ -242,7 +242,7 @@ function runBash(
       signal?.removeEventListener('abort', onAbort);
       resolve({ stdout, stderr, code: -1, timedOut: false, aborted: false, handedOff: child });
     };
-    // POSIX 杀进程组;Windows 用 taskkill /T /F 连同孙进程一起停止。
+    // POSIX 杀进程组。Windows Bash 由 Job Object 包住整棵树，cmd 保留 taskkill /T /F。
     // Windows 的 taskkill 在负载下启动/枚举可超过 1s,给它 5s,避免先杀 shell 后丢掉整棵树。
     // 仍不来(残留 fd 撑着管道)就强制 resolve —— 绝不无限等 'close'。
     const killGroup = (): void => {
