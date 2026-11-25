@@ -19,6 +19,7 @@ import { validateWebEntries, type WebEntry } from './webEntries'
 import { cloudBundle, createCloudRuntime, DELEGATED_ADMIN_FEATURE } from './cloudHost'
 import { createRemoteAccount, validateRemoteAccount, type RemoteAccountConfig } from './remoteAccount'
 import { createModelTickets, deviceCredentialPath, readDeviceCredential, type ModelTickets } from './modelTickets'
+import { backupSettings, createVisitorBackups, type VisitorBackups } from './visitorBackups'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -40,8 +41,10 @@ export interface UnitConfig {
    *  <base>/engine as their own account (the account id is their server user id); nobody is its owner.
    *  deviceCredential: path, relative to the data directory, of the hosted unit device credential the host writes there
    *  (`{ unitId, unitSecret, gen }`). Set, the Unit gets each visitor a model ticket from the remoteAccount server and the
-   *  engine runs plugin scripts isolated from it (see modelTickets.ts). Requires remoteAccount. */
-  visitorEngine?: { plugin: string; deviceCredential?: string }
+   *  engine runs plugin scripts isolated from it (see modelTickets.ts). Requires remoteAccount.
+   *  backup: back each visitor's account up through the account server's backup service and bring it back when they return
+   *  (visitorBackups.ts: { intervalMinutes?: 15, idleMinutes?: 2, coldAfterDays?: 90 }). Requires deviceCredential. */
+  visitorEngine?: { plugin: string; deviceCredential?: string; backup?: Record<string, unknown> }
 }
 
 /** Same rule as the engine's multi-account mode. No case folding: ids that differ only in case are refused, not merged. */
@@ -80,6 +83,11 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     else console.log('[unit] Hosted unit device credential is not there yet; visitors get model tickets once it is')
     return createModelTickets({ origin: remoteAccountConfig.origin, credentialFile: deviceCredentialFile, initial })
   })() : undefined
+  // Per-account backups: the Unit signs and moves the bytes (it holds the credential), the engine snapshots and restores
+  // behind its own host-only credential. Declared = the engine no longer creates accounts by itself.
+  const backup = config.visitorEngine?.backup === undefined ? undefined : backupSettings(config.visitorEngine.backup)
+  if (backup && !deviceCredentialFile) throw new Error('visitorEngine.backup requires visitorEngine.deviceCredential')
+  let visitorBackups: VisitorBackups | undefined
   const workspaceDir = resolve(config.workspace?.path || resolve(dataDir, 'workspace'))
   const records = new Map<string, RecordState>()
   const runtimeVault = () => [...records.values()].find((r) => usable(r) && r.runtime?.vault)?.runtime?.vault || null
@@ -218,10 +226,12 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         if (typeof factory !== 'function') throw new Error('Local runtime has no factory')
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {},
-          ...(visitorEngineHost ? { multiAccount: true, ...(remoteAccountConfig ? { cloudUrl: remoteAccountConfig.origin } : {}), ...(scriptIsolation ? { scriptIsolation: 'required' as const } : {}) } : {}),
+          ...(visitorEngineHost ? { multiAccount: true, ...(remoteAccountConfig ? { cloudUrl: remoteAccountConfig.origin } : {}), ...(scriptIsolation ? { scriptIsolation: 'required' as const } : {}), ...(backup ? { hostControl: true } : {}) } : {}),
           log: (m) => console.log(`[plugin:${id}] ${m}`) })
         if (!runtime || typeof runtime.close !== 'function') throw new Error('Invalid local runtime')
         if (visitorEngineHost && (!runtime.engine || runtime.vault || runtime.account)) throw new Error('A visitor engine runtime must provide an engine and nothing else')
+        // An engine that ignored hostControl would create every returning visitor an empty account: refuse it.
+        if (visitorEngineHost && backup && typeof runtime.engine?.control !== 'function') throw new Error('The visitor engine runtime does not support account backups')
         if ((runtime.vault && runtimeVault()) || (runtime.engine && runtimeEngine())) throw new Error('Local capability already has a provider')
       }
       if (local && cloudBundle(id)) {
@@ -352,7 +362,12 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     },
     // Only for logins the remote authority verified: that server issues the tickets.
     ...(modelTickets ? { modelTicket: async (bearer: string, account: string, signal: AbortSignal) =>
-      accountProvider()?.account === remoteAccount ? modelTickets.ticketFor(account, bearer, signal) : null } : {}) } : undefined,
+      accountProvider()?.account === remoteAccount ? modelTickets.ticketFor(account, bearer, signal) : null } : {}),
+    // Before the request reaches the engine: an account that is not there is restored (or admitted when it never had a backup).
+    ...(backup ? { prepare: async (bearer: string, account: string, signal: AbortSignal) => {
+      if (accountProvider()?.account !== remoteAccount) return { status: 503, code: 'ACCOUNT_UNAVAILABLE', detail: 'Account service unavailable' }
+      return visitorBackups ? visitorBackups.prepare(account, bearer, signal) : { status: 503, code: 'ENGINE_STARTING', detail: 'Starting; try again in a moment' }
+    } } : {}) } : undefined,
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product,
       ...(adminPanel ? { browserTitle: 'Forsion Admin Panel', faviconPath: '/shared/ForsionLOFO3-Inverse.svg' } : {}),
@@ -390,6 +405,13 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     try { await activate(id) } catch { console.error(`[unit] Plugin ${id} failed to activate; Unit remains available`) }
   }
   started = true
+  if (backup && deviceCredentialFile && remoteAccountConfig) {
+    const engineRec = () => (visitorEnginePlugin ? records.get(visitorEnginePlugin) : undefined)
+    visitorBackups = await createVisitorBackups({
+      origin: remoteAccountConfig.origin, credentialFile: deviceCredentialFile, stateFile: resolve(dataDir, 'visitor-backups.json'), settings: backup,
+      engine: () => { const r = engineRec(); return r && usable(r) ? r.runtime?.engine?.control?.() ?? null : null },
+    })
+  }
   try { await syncRuntimes() } catch (error) {
     await web.close()
     await Promise.allSettled([...records.values()].map(async (rec) => { try { await rec.runtime?.close() } finally { await rec.backend?.stop() } }))
@@ -504,6 +526,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       if (closing) return
       closing = true
       await web.close()
+      await visitorBackups?.close().catch(() => {})
       await Promise.all(mountedEntries.map(({ web }) => web.close()))
       const errors: unknown[] = []
       for (const id of [...ordered].reverse()) { try { await deactivate(id, true) } catch (error) { errors.push(error) } }

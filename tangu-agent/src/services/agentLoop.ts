@@ -341,6 +341,13 @@ export function accountHasRuns(accountId: string): boolean {
   return false;
 }
 
+/** Multi-account mode: this account has a run queued or running right now (not counting the 30-second retention after one ends).
+ *  An account snapshot waits for this; the database eviction above keeps using accountHasRuns. */
+export function accountHasActiveRuns(accountId: string): boolean {
+  for (const [runId, owner] of runAccount) if (owner === accountId && runSession.has(runId)) return true;
+  return false;
+}
+
 function inRunAccount<T>(runId: string, fn: () => T): T {
   if (!isMultiAccount() || currentAccountId()) return fn();
   const owner = runAccount.get(runId);

@@ -61,6 +61,12 @@ export interface MultiAccountHost {
    * 只关句柄、从缓存里拿掉 —— 开户状态留着,下次碰到时 dbFor 原地重开(不重跑开户 / 恢复)。返回关掉的账号。
    */
   evictIdle(opts: { idleMs: number; maxOpen: number; isBusy: (accountId: string) => boolean; now?: number }): string[];
+  /** SQLite online backup of this account's database into dest (opens the database if needed, never provisions). */
+  backupDatabase(id: string, dest: string): Promise<void>;
+  /** Session ids in this account's database. */
+  sessionIdsOf(id: string): string[];
+  /** Closes the account's database and forgets that it was provisioned (its folder is about to go away). */
+  closeAccount(id: string): void;
   close(): void;
 }
 
@@ -272,6 +278,21 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
         }
       }
       return closed;
+    },
+    backupDatabase: async (id, dest) => {
+      if (!isValidAccountId(id)) throw new Error('multi-account: invalid account id');
+      await dbFor(id).backup(dest);
+    },
+    sessionIdsOf: (id) => {
+      if (!isValidAccountId(id)) throw new Error('multi-account: invalid account id');
+      return (dbFor(id).prepare('SELECT id FROM chat_sessions').pluck().all() as unknown[]).filter((x): x is string => typeof x === 'string' && !!x);
+    },
+    closeAccount: (id) => {
+      const db = dbs.get(id);
+      dbs.delete(id);
+      ready.delete(id);
+      lastUsed.delete(id);
+      if (db) { try { db.close(); } catch (e) { console.warn(`[tangu] multi-account: closing the database of ${id} failed:`, (e as Error)?.message || e); } }
     },
     close: () => {
       for (const db of dbs.values()) { try { db.close(); } catch { /* ignore */ } }

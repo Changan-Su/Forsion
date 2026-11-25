@@ -256,4 +256,11 @@ export function scheduleOrganize(target: OrganizeTarget, userId?: string): void 
 }
 export const lastOrganize = (target: OrganizeTarget): { at: number; outcome: OrganizeOutcome } | null => lastRun.get(keyOf(target)) ?? null;
 export const organizeRunning = (target: OrganizeTarget): boolean => jobs.has(keyOf(target));
+/** Multi-account mode: an organize pass of this account is scheduled or running (an account snapshot waits for it). */
+export const organizePendingFor = (accountId: string): boolean => {
+  const prefix = `${accountId}:`;
+  for (const k of timers.keys()) if (k.startsWith(prefix)) return true;
+  for (const k of jobs.keys()) if (k.startsWith(prefix)) return true;
+  return false;
+};
 export function resetMemoryOrganizeForTests(): void { jobs.clear(); retryAt.clear(); lastRun.clear(); for (const t of timers.values()) clearTimeout(t); timers.clear(); lastUserId = undefined; }

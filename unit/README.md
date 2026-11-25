@@ -36,6 +36,13 @@ Unit 拿访客的令牌问 `GET <origin>/api/auth/unit-identity`，只有明确�
 以 `X-Forsion-Model-Ticket` 随请求转给引擎；引擎拿它当这个账号调模型的凭据，没票 / 过期就报错让人重新登录，不回落到任何进程凭据。票不回给浏览器、不进日志；浏览器自己带的同名头不转发。
 设备凭据只有 Unit 主进程读（每次换票前按路径重读，托管方轮换时整份替换文件），不进引擎环境；引擎另收 `TANGU_CLOUD_URL` 和 `TANGU_SCRIPT_ISOLATION=required`（插件脚本换非特权用户跑，读不到这份凭据）。不配就不换票、不开脚本隔离。
 
+配了设备凭据的还可以再加 `"backup": {}`（可调 `intervalMinutes` 缺省 15、`idleMinutes` 缺省 2、`coldAfterDays` 缺省 90），按账号备份到账号服务的备份接口：
+Unit 签地址、搬字节（凭据只在它手里），引擎只做要用到账号库的那几步（一致副本、回灌、清本机），走另一枚只给宿主的口令 `TANGU_HOST_CONTROL_TOKEN`，访客的口令打不开，`<base>/engine/_host*` 一律 404。
+访客用过之后闲 `idleMinutes`、或一直在用每 `intervalMinutes`，Unit 让引擎做一份副本（没变就不传），向 `POST /api/units/backups` 要一次性上传地址、原样流过去、再登记；失败保住上一个恢复点。
+`coldAfterDays` 没来、本机副本自上次备份没变、账号服务核实了最新恢复点，才清掉本机副本。开了备份后引擎不再自己给没见过的账号开户：
+访客的第一次请求前 Unit 先问账号服务（用访客自己的令牌）——有恢复点就先恢复（全 Unit 同一时间一个），确认从没备份过才当新人开户；答不上来回 503，绝不用空账号顶上。
+最近一次使用时间记在数据目录的 `visitor-backups.json`（原子写），读不出来就谁都不清。
+
 A public Unit can verify Forsion logins remotely instead of hosting the Server plugin: `remoteAccount.origin` is asked
 `GET /api/auth/unit-identity` with the visitor's token; only an explicit 401 / 403 means signed out, every other failure is a 503
 that keeps the browser's login. Verified identities are reused for 30 seconds. `/api` stays a same-origin path, so a reverse proxy in
@@ -49,6 +56,15 @@ ticket (`POST <remoteAccount.origin>/api/units/model-ticket`, cached per sign-in
 `X-Forsion-Model-Ticket`; the engine uses it as that account's model credential and fails closed without one. Tickets never go back to the
 browser or into logs, and a browser-sent header of that name is not forwarded. Only the Unit process reads the credential (again before each
 exchange, so rotation needs no restart); the engine gets `TANGU_CLOUD_URL` and `TANGU_SCRIPT_ISOLATION=required` instead.
+With the device credential, `visitorEngine.backup` (`{}` or `{ intervalMinutes: 15, idleMinutes: 2, coldAfterDays: 90 }`) backs every visitor's
+account up through the account server's backup service. The Unit signs and moves the bytes; the engine only snapshots, restores and removes local
+copies, behind a second, host-only credential (`TANGU_HOST_CONTROL_TOKEN`) that visitors' requests never carry (`<base>/engine/_host*` is 404).
+Quiet or long-used accounts are snapshotted (unchanged ones are skipped), uploaded to a one-time address from `POST /api/units/backups` and
+registered; a failure keeps the previous restore point. Accounts unused for `coldAfterDays` lose their local copy only when it is unchanged since
+the last backup and the service confirms that restore point. With backups on, the engine no longer creates accounts by itself: before a visitor's
+first request the Unit asks the service (with the visitor's token) and restores, or admits a new account only when there never was a backup; when
+the service cannot answer, the visitor gets a 503, never an empty account. Last-use times live in `visitor-backups.json`; if it cannot be read,
+nothing is archived.
 
 Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 
