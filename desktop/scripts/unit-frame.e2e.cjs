@@ -151,7 +151,19 @@ async function main() {
     if (G.h.platform === 'mac') {
       const barBottom = G.h.bar ? G.h.bar.y + G.h.bar.h : 0
       R.check('3 mac:远端 Ribbon 顶上的按钮在标题条(红绿灯那一条)下面', !!G.remoteTopBtnWin && G.remoteTopBtnWin.y >= barBottom - 0.5 && (!G.lights || G.remoteTopBtnWin.y > G.lights.y + 12), fmt({ topBtn: G.remoteTopBtnWin, barBottom, lights: G.lights }))
-    } else R.note('3 非 mac,红绿灯那条跳过', G.h.platform)
+    } else if (process.platform === 'win32') {
+      // Electron reports the new native overlay geometry asynchronously after setTabTitleBar.
+      await win.waitForFunction(() => navigator.windowControlsOverlay?.getTitlebarAreaRect().height === 32, undefined, { timeout: 5000 }).catch(() => {})
+      const caption = await win.evaluate(() => {
+        const overlay = navigator.windowControlsOverlay
+        const area = overlay?.getTitlebarAreaRect()
+        const pill = document.querySelector('.unitfr-pill')?.getBoundingClientRect()
+        return { visible: overlay?.visible, height: area?.height, right: area?.right, pillRight: pill?.right }
+      })
+      R.check('3 Windows:标题条与原生按钮区均为 32px,按钮不覆盖胶囊',
+        G.h.bar?.h === 32 && caption.visible && caption.height === 32 && caption.pillRight <= caption.right,
+        fmt({ bar: G.h.bar, caption }))
+    }
     const pillText = await win.evaluate(() => document.querySelector('.unitfr-pill')?.textContent ?? '')
     R.check('胶囊 = 主机地址 + 回到这台电脑,不带 #unit-owner 主人密钥', pillText === `127.0.0.1:${unit.port}/web回到这台电脑`, pillText)
     await sleep(2500) // 给本机上手提示一个出来的机会(它每秒判一次)
