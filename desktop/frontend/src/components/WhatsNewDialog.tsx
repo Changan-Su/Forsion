@@ -39,6 +39,8 @@ registerMessages({
 
 const SKIP_KEY = 'forsion_update_skipped_version'
 const shownThisRun = new Set<string>()
+/** 本次运行里交给后台自动下载过的版本:下好(downloaded)那一下必弹一次 */
+const autoStarted = new Set<string>()
 
 // status:bootstrap 收到的每一次更新状态都记在这里,弹窗直接读(触发弹出的那次广播在弹窗挂载之前就到了)
 const useWhatsNew = create<{ open: boolean; status: UpdaterStatusInfo }>(() => ({ open: false, status: { phase: 'idle' } }))
@@ -52,12 +54,27 @@ export function openWhatsNew(): void {
 /**
  * 检测到新版本时要不要自动弹:只在主窗;点过「跳过这个版本」的不弹;同一次运行里每个版本只弹一次
  * (6 小时定时检查 / 唤醒检查不重复打扰)。「稍后」= 下次启动再提醒。
+ *
+ * 主进程标了 autoDownload(GitHub 源、能应用内装)的新版:先不弹,在后台下载,下好(downloaded)再弹,
+ * 左下角「重启更新」同时亮起;自动下载没成,主进程会把 autoDownload 清掉再发一次 available,那时照常弹、等用户点。
+ * 跳过的版本也不自动下。
  */
 export function maybeAutoOpenWhatsNew(st: UpdaterStatusInfo): void {
   useWhatsNew.setState({ status: st })
   if ((st.phase !== 'available' && st.phase !== 'downloaded') || !st.version || windowKind() !== 'main') return
-  if (shownThisRun.has(st.version)) return
   try { if (localStorage.getItem(SKIP_KEY) === st.version) return } catch { /* 读不到就照常弹 */ }
+  if (st.phase === 'available' && st.autoDownload && st.manualInstall === false) {
+    autoStarted.add(st.version)
+    void window.tangu?.downloadUpdate?.({ auto: true, version: st.version })?.catch(() => { /* 没下成主进程会再发一次 available */ })
+    return
+  }
+  // 后台下好的:就算这次运行里为它弹过一次「没下成、请手动」,下好时也再弹一次(Codex 评审)
+  if (st.phase === 'downloaded' && autoStarted.delete(st.version)) {
+    shownThisRun.add(st.version)
+    useWhatsNew.setState({ open: true })
+    return
+  }
+  if (shownThisRun.has(st.version)) return
   shownThisRun.add(st.version)
   useWhatsNew.setState({ open: true })
 }
