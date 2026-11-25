@@ -118,7 +118,8 @@ export function createModelTicketHttpBrain(cloudUrl: string): CloudBrainServices
     let used: string | undefined;
     try { used = currentModelTicket(); } catch { /* the call itself reports it */ }
     try { return await fn(...args); } catch (e) {
-      if (id && used && e instanceof LlmError && e.status === 401) forgetModelTicket(id, used);
+      // The server's own wording ("Invalid or expired token") means nothing to the visitor: say what to do, as the next call would.
+      if (id && used && e instanceof LlmError && e.status === 401) { forgetModelTicket(id, used); throw new LlmError(401, NO_MODEL_TICKET); }
       throw e;
     }
   };

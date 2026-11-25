@@ -262,6 +262,8 @@ describe('multi-account: model tickets', () => {
     const r1 = await run('grace', 'Hi.');
     expect(r1.follow.status).toBe('error');
     expect(seen.at(-1)!.auth).toBe(`Bearer ${refused}`);
+    // the visitor is told to sign in again, not shown the server's own wording
+    expect(JSON.stringify(r1.follow.events.filter((e) => e.type === 'error'))).toContain('sign in again');
     await quiet();
     const from = seen.length;
     const r2 = await run('grace', 'Hi again.', withTicket(valid));
