@@ -57,7 +57,14 @@ export function resolveWindowsShell(env: NodeJS.ProcessEnv, exists: (p: string) 
   for (const bin of windowsBashCandidates(env)) {
     if (!path.win32.isAbsolute(bin) || /^[\\/]{2}/.test(bin) || !/(^|[\\/])bash\.exe$/i.test(bin) || /[\\/]system32[\\/]/i.test(bin)) continue;
     if (!exists(bin)) continue;
-    return { kind: 'bash', bin, pathDirs: bashPathDirs(bin, exists) };
+    // Git for Windows bin/bash.exe forwards to usr/bin/bash.exe. Start the real Bash
+    // directly so the process placed in the Windows job is the one evaluating commands.
+    const dir = path.win32.dirname(bin);
+    const parent = path.win32.dirname(dir);
+    const actualBash = path.win32.join(parent, 'usr', 'bin', 'bash.exe');
+    const resolved = /^bin$/i.test(path.win32.basename(dir)) && !/^usr$/i.test(path.win32.basename(parent)) && exists(actualBash)
+      ? actualBash : bin;
+    return { kind: 'bash', bin: resolved, pathDirs: bashPathDirs(resolved, exists) };
   }
   return { kind: 'cmd' };
 }
@@ -96,7 +103,18 @@ export function windowsBashEnv(base: NodeJS.ProcessEnv, shell: HostShell, comman
  *  That sidesteps Windows command-line quoting, the MSYS runtime's own wildcard expansion of unquoted arguments,
  *  and the 32 KiB command-line limit. The variable is unset before the command runs, so children never see it. */
 export const RUN_VAR = 'TANGU_RUN_BASH_COMMAND';
-export const BASH_EVAL_ARGS = ['-c', `__tangu_cmd=$${RUN_VAR}; unset ${RUN_VAR}; eval "$__tangu_cmd"`];
+export const JOB_READY_VAR = 'TANGU_RUN_BASH_JOB_READY';
+export const BASH_EVAL_ARGS = ['-c', [
+  `if [[ -n \${${JOB_READY_VAR}:-} ]]; then`,
+  `until [[ -f $${JOB_READY_VAR} ]]; do`,
+  'if (( SECONDS >= 5 )); then echo "Windows process job did not become ready" >&2; exit 125; fi;',
+  'done;',
+  `if ! IFS= read -r __tangu_job_pid < "$${JOB_READY_VAR}" ||`,
+  '! IFS= read -r __tangu_win_pid < "/proc/$$/winpid" || [[ "$__tangu_win_pid" != "$__tangu_job_pid" ]]; then',
+  'echo "Cannot verify the Windows Git Bash process. Set TANGU_BASH_BIN to Git for Windows usr/bin/bash.exe." >&2; exit 125;',
+  `fi; unset ${JOB_READY_VAR} __tangu_job_pid __tangu_win_pid; fi;`,
+  `__tangu_cmd=$${RUN_VAR}; unset ${RUN_VAR}; eval "$__tangu_cmd"`,
+].join(' ')];
 
 /** What run_bash's description names as its shell. */
 export function hostShellName(platform: NodeJS.Platform = process.platform, shell: HostShell = hostShell(platform)): string {
