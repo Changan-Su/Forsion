@@ -1948,6 +1948,26 @@ app.on('web-contents-created', (_e, contents) => {
   })
 })
 
+const MAIN_WINDOW_MIN_WIDTH = 880
+const WHOLE_UNIT_MIN_WIDTH = 480
+
+function fitMainWindowToMinimumWidth(win: BrowserWindow): void {
+  if (win.isMinimized() || win.isMaximized() || win.isFullScreen()) return
+  const [width] = win.getMinimumSize()
+  const bounds = win.getBounds()
+  if (bounds.width >= width) return
+  const work = screen.getDisplayMatching(bounds).workArea
+  const x = Math.max(work.x, Math.min(bounds.x, work.x + work.width - width))
+  win.setBounds({ ...bounds, x, width })
+}
+
+function setWholeUnitMinimumWidth(win: BrowserWindow, wholeUnit: boolean): void {
+  const width = wholeUnit ? WHOLE_UNIT_MIN_WIDTH : MAIN_WINDOW_MIN_WIDTH
+  const [previousWidth, minHeight] = win.getMinimumSize()
+  if (width !== previousWidth) win.setMinimumSize(width, minHeight)
+  if (!wholeUnit) fitMainWindowToMinimumWidth(win)
+}
+
 function createWindow(): void {
   // Windows/Linux 默认会渲染 File/Edit/View/Window 菜单条;macOS 菜单在系统栏(不在窗口内)。
   // 置空菜单让 Windows/Linux 与 macOS 观感一致(无窗口内菜单条);文本框的复制/粘贴等由 Chromium 原生处理,不依赖菜单。
@@ -1959,7 +1979,7 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: stage ? stage.window.width : 1200,
     height: stage ? stage.window.height : 820,
-    minWidth: stage ? 640 : 880,
+    minWidth: stage ? 640 : MAIN_WINDOW_MIN_WIDTH,
     minHeight: stage ? 480 : 600,
     // 尺寸定死:用户拖了 / 最大化了,截出来的就不是参数给的尺寸(Codex 11-20)
     ...(stage ? { useContentSize: true, enableLargerThanScreen: true, resizable: false, maximizable: false, fullScreenable: false } : {}),
@@ -1999,6 +2019,14 @@ function createWindow(): void {
     deepLinkReady = false; mainPanelReady = false
     miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
   })
+  if (process.platform === 'win32' && !stage) {
+    const win = mainWindow
+    // Reset the local constraint if the renderer is replaced before it can report that it left Unit view.
+    win.webContents.on('did-start-navigation', (event) => {
+      if (event.isMainFrame && !event.isSameDocument) setWholeUnitMinimumWidth(win, false)
+    })
+    win.on('leave-full-screen', () => fitMainWindowToMinimumWidth(win))
+  }
   // 主进程文案(托盘 / 对话框 / 通知,mainI18n)跟随界面语言:由渲染层挂载时与每次切换经 ui:locale 报上来的**生效**语言喂入
   // (P1-KF,见 uiLocaleSync.ts)。这里刻意不再读 localStorage `tangu_locale`:那是「手选」键,② 系统 / ③ IP 判出的语言不写它,
   // 读到 null 还会把渲染层已报上来的语言重置回系统。
@@ -4589,7 +4617,9 @@ app.whenReady().then(async () => {
     if (process.platform !== 'win32' || !request || !win || win.isDestroyed()
       || e.senderFrame !== e.sender.mainFrame
       || (win !== mainWindow && ![...detachedWindows.values()].includes(win))) return { ok: false }
-    win.setTitleBarOverlay(request)
+    const { wholeUnit, ...overlay } = request
+    win.setTitleBarOverlay(overlay)
+    if (win === mainWindow && !SANDBOX?.stage && wholeUnit !== undefined) setWholeUnitMinimumWidth(win, wholeUnit)
     return { ok: true, fullscreen: win.isFullScreen() }
   })
 

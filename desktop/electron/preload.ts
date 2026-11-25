@@ -477,7 +477,7 @@ const api = {
   /** 当前主题请求窗口级系统材质，并同步经白名单校验的实色降级底。 */
   setWindowMaterial: (input: { material: 'opaque' | 'system-glass'; mode: 'light' | 'dark'; backgroundColor?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:setMaterial', input),
-  setTabTitleBar: (input: { height: number; symbolColor: string }): Promise<{ ok: boolean; fullscreen?: boolean }> =>
+  setTabTitleBar: (input: { height: number; symbolColor: string; wholeUnit?: boolean }): Promise<{ ok: boolean; fullscreen?: boolean }> =>
     ipcRenderer.invoke('window:setTabTitleBar', input),
   onTabTitleBarFullscreen: (cb: (fullscreen: boolean) => void): (() => void) => {
     const listener = (_e: unknown, fullscreen: boolean): void => cb(fullscreen)

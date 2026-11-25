@@ -22,13 +22,14 @@ export function installTabTitleBar(): void {
     const tabs = [...document.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container')]
       .find((el) => { const r = el.getBoundingClientRect(); return !el.classList.contains('dv-edge-stacked') && r.width > 0 && r.top < 2 && r.height > 0 })
     // 设备页整窗形态(UnitSwitcher UNIT_SURFACE_WHOLE):标签栏被盖住,原生按钮区对齐宿主画的那条标题条
-    const frameBar = root.dataset.unitFrame ? document.querySelector<HTMLElement>('.unitrs--whole .unitfr-bar') : null
+    const wholeUnit = root.dataset.unitFrame === '1'
+    const frameBar = wholeUnit ? document.querySelector<HTMLElement>('.unitrs--whole .unitfr-bar') : null
     const height = Math.max(16, Math.min(128, Math.round((frameBar ?? tabs)?.getBoundingClientRect().bottom ?? 32)))
     const symbolColor = root.dataset.mode === 'dark' ? '#ecebea' : '#383837'
-    const key = `${height}:${symbolColor}`
+    const key = `${height}:${symbolColor}:${wholeUnit}`
     if (key !== last) {
       last = key
-      void bridge.setTabTitleBar!({ height, symbolColor }).then((result) => {
+      void bridge.setTabTitleBar!({ height, symbolColor, wholeUnit }).then((result) => {
         if (fullscreen === undefined && result.ok) { fullscreen = result.fullscreen; schedule() }
       }).catch(() => { last = '' })
     }
