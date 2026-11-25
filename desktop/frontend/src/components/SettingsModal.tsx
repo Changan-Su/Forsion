@@ -397,13 +397,13 @@ function HeldSyncAll({ mirror }: { mirror: AmadeusSyncStatus }) {
   useEffect(() => { ensureEntrySyncSubscribed() }, [])
   const entry = useEntrySync((s) => s.status)
   const groups = [
-    ...(!mirror.binding && mirror.held?.length ? [{ binding: null as string | null, held: mirror.held }] : []),
-    ...Object.entries(entry).filter(([, st]) => st.enabled && st.held?.length).map(([binding, st]) => ({ binding: binding as string | null, held: st.held! })),
+    ...(!mirror.binding && mirror.held?.length ? [{ binding: null as string | null, shareKey: mirror.shareKey ?? null, held: mirror.held }] : []),
+    ...Object.entries(entry).filter(([, st]) => st.enabled && st.held?.length).map(([binding, st]) => ({ binding: binding as string | null, shareKey: null, held: st.held! })),
   ]
   if (!groups.length) return null
   return (
     <div className="settings-row-notes">
-      {groups.map((g) => <HeldSyncNotice key={g.binding ?? ''} binding={g.binding} held={g.held} />)}
+      {groups.map((g) => <HeldSyncNotice key={g.binding ?? g.shareKey ?? ''} binding={g.binding} shareKey={g.shareKey} held={g.held} />)}
     </div>
   )
 }

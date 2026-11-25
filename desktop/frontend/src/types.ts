@@ -1154,7 +1154,7 @@ declare global {
       confirmDeletions?(): Promise<AmadeusSyncStatus>
       /** 处理先放着的文件(Forsion Extend 0.10.13+;旧的缺位)。binding = 按条目同步的库根(状态里的 binding),不带 = 云端镜像。
        *  paths = 服务端路径(held[].path)。newer 只在用户点了之后按修改时间替他逐篇选。 */
-      resolveHeld?(payload: { binding?: string | null; paths: string[]; choice: AmadeusHeldChoice }): Promise<AmadeusSyncStatus | { error: string }>
+      resolveHeld?(payload: { binding?: string | null; shareKey?: string | null; paths: string[]; choice: AmadeusHeldChoice }): Promise<AmadeusSyncStatus | { error: string }>
       /** 胶囊滑块:Local↔Cloud 全局切活动 vault;返回与 restoreVault 同形载荷。 */
       switchSide(side: 'local' | 'cloud'): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string; side: 'local' | 'cloud' } | null>
       onStatus(cb: (s: AmadeusSyncStatus) => void): () => void
@@ -1355,6 +1355,8 @@ export interface AmadeusSyncStatus {
   /** 两边都有、内容不同、又没有同步记录 → 先放着等用户选的文件(Forsion Extend 0.10.13+;旧的没有 = 当空)。
    *  这些文件同时以 reason 'HELD' 列在 skipped 里(给不认 held 的旧界面看),新界面显示时要把它们滤掉。 */
   held?: AmadeusHeldFile[]
+  /** 与我共享的库的引擎发的状态带这个(不带 binding,和镜像一起画);处理它的待定文件时原样带回 resolveHeld。 */
+  shareKey?: string
   /** 服务端下发的二进制单文件上限(字节,随会员档位);null / 缺 = 还没拉到(或旧引擎)。 */
   maxFileBytes?: number | null
   /** 仅 get() 响应携带:当前活动 vault 在哪一侧。 */

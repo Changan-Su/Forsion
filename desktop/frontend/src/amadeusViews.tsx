@@ -854,7 +854,7 @@ function CloudSkipWarn() {
   if (!skipped.length && !held.length) return null
   return (
     <>
-      {held.length > 0 && <HeldSyncNotice binding={null} held={held} compact />}
+      {held.length > 0 && <HeldSyncNotice binding={null} shareKey={st.shareKey ?? null} held={held} compact />}
       {skipped.length > 0 && skipWarnRow(skipped)}
     </>
   )

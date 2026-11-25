@@ -69,9 +69,11 @@ const newerSide = (h: AmadeusHeldFile): 'local' | 'cloud' | null => {
 }
 
 /** 「N 篇和云端不一样,等你定」:侧栏云同步分区、开启同步弹窗、设置页同步那段共用。
- *  binding = 按条目同步的库根(null = 云端镜像);held 来自该引擎的状态。勾选决定作用于哪几篇,缺省全选。 */
-export function HeldSyncNotice({ binding, held, open: openInit = false, compact = false }: {
+ *  binding = 按条目同步的库根(null = 云端镜像);shareKey = 与我共享的库(状态里带来的,原样带回);held 来自该引擎的状态。
+ *  勾选决定作用于哪几篇,缺省全选。 */
+export function HeldSyncNotice({ binding, shareKey = null, held, open: openInit = false, compact = false }: {
   binding: string | null
+  shareKey?: string | null
   held: AmadeusHeldFile[]
   open?: boolean
   compact?: boolean
@@ -87,7 +89,7 @@ export function HeldSyncNotice({ binding, held, open: openInit = false, compact 
     if (!resolve || !chosen.length || busy) return
     setBusy(true)
     try {
-      const r = await resolve({ binding, paths: chosen, choice })
+      const r = await resolve({ binding, ...(shareKey ? { shareKey } : {}), paths: chosen, choice })
       if (r && 'error' in r) useApp.getState().toast(t('csd.held.failed'), true)
     } catch {
       useApp.getState().toast(t('csd.held.failed'), true)
