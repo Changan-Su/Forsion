@@ -1146,8 +1146,6 @@ if (ONLY.has('dispatch')) {
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
 const previewScenario = ONLY.has('cupreview') || ONLY.has('cupreviewmarkup') || ONLY.has('cupreviewrotate');
 const paintScenario = ONLY.has('cupaintfill') || ONLY.has('cupaintoutline');
-const paintTmp = join(OUT, 'paint-browser-tmp');
-if (paintScenario) mkdirSync(paintTmp, {recursive:true});
 if (ONLY.has('cumanaged') || paintScenario) installManagedFixture(opt('cu-plugin', ''), shared);
 
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
@@ -1569,9 +1567,8 @@ const child = spawn(process.execPath, [
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
-  ...(ONLY.has('cumanaged') || paintScenario ? { TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : {}),
-  ...(previewScenario ? { TANGU_PIXEL_HARNESS_DIR:OUT, PI_COMPUTER_USE_CDP_PORT:'' } : {}),
-  ...(paintScenario ? { TMPDIR:paintTmp, TMP:paintTmp, TEMP:paintTmp, PI_COMPUTER_USE_CDP_PORT:'', TANGU_PIXEL_HARNESS_DIR:OUT } : {}),
+  ...(ONLY.has('cumanaged') ? { TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : {}),
+  ...(paintScenario || previewScenario ? { TANGU_PIXEL_HARNESS_DIR: OUT } : {}),
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
   ...(ONLY.has('notebook') && !NOTEBOOK_NEG ? { TANGU_PYTHON_BIN: NOTEBOOK_PY } : {}),

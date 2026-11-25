@@ -2,7 +2,7 @@
 // The grader measures the colored figures in the screenshots actually sent to the model.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -82,7 +82,18 @@ async function pictureMetrics(jpeg, png) {
       break;
     }
   }
-  return { red: marks[0].count, documentTop, centers };
+  // The second toolbar sits below the title bar. Its many small icons make
+  // horizontal edges across the middle; an empty strip or white document does not.
+  let markupRows = 0;
+  for (let y = Math.round(shot.width * 0.075); y < Math.min(shot.height, shot.width * 0.125); y += 4) {
+    let edges = 0;
+    for (let x = Math.round(shot.width * 0.2); x < shot.width * 0.8; x += 2) {
+      const i = 4 * (shot.width * y + x);
+      if ([0, 1, 2].some((k) => Math.abs(shot.data[i + k] - shot.data[i - 8 + k]) > 24)) edges++;
+    }
+    if (edges > 30) markupRows++;
+  }
+  return { red: marks[0].count, documentTop, centers, markupRows };
 }
 
 const gestures = {
@@ -137,23 +148,29 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
     pid = Number((await exec('/usr/bin/swift', [script, path], { timeout: 40000 })).stdout.trim());
     if (!Number.isSafeInteger(pid) || pid < 2) throw Error('No fresh Preview process');
     await delay(1100);
-    writeFileSync(join(OUT, 'pixel-target.json'), JSON.stringify({ key, sessionId, pid }));
+    writeFileSync(join(OUT, 'pixel-target.json'), JSON.stringify({ key, sessionId, pid, title: basename(path) }));
     const ev = await run(
       sessionId,
-      `只看截图操作 macOS 预览 PID ${pid} 的 Vision 图片窗口。${gestures[key]}保持后台。请用 find_roots 按 PID 找窗口，用 observe_ui 的 pixels 模式看图。点击后再用一次同样的 observe_ui 核对最终画面，告诉我操作前三种图形从左到右的顺序。如果没能验证就直说，不重复点击。`,
+      `只看截图操作 macOS 预览 PID ${pid} 的 Vision 图片窗口。${gestures[key]}保持后台。请用 find_roots 按 PID 找窗口，用 observe_ui 的 pixels 模式看图。点击后再用一次同样的 observe_ui 核对最终画面，最后独占一行给出操作前的图形顺序，格式为「顺序=形状、形状、形状」，每个形状请用圆形、三角形或正方形命名。如果没能验证就直说，不重复点击。`,
       160_000,
       { toolsMode: 'allow', toolsList: ['find_roots', 'observe_ui', 'act_ui', 'use_skill', 'load_tools'] },
-      undefined, () => 'reject',
+      undefined,
+      () => 'reject',
     );
     const before = await pictureMetrics(join(OUT, key + '-first.jpg'), join(OUT, key + '-before.png'));
     const after = await pictureMetrics(join(OUT, key + '-delivered.jpg'), join(OUT, key + '-result.png'));
-    const shapeWords = {
-      圆形: /圆形|圆|circle/i,
-      三角形: /三角形|三角|triangle/i,
-      正方形: /正方形|方形|方块|square/i,
-    };
-    const positions = pic.shapes.map((s) => ev.content.search(shapeWords[s]));
-    const readOrder = positions[0] >= 0 && positions[0] < positions[1] && positions[1] < positions[2];
+    const line = ev.content
+      .split('\n')
+      .map((s) => s.trim().replaceAll('**', ''))
+      .filter((s) => s.startsWith('顺序='));
+    const readOrder =
+      line.length === 1 &&
+      line[0]
+        .slice(3)
+        .replace(/[。.]$/, '')
+        .split(/[、，,]/)
+        .map((s) => s.trim())
+        .join('|') === pic.shapes.join('|');
     const calls = ev.toolArgs.map((t) => ({ name: t.name, args: JSON.parse(t.arguments || '{}') }));
     const actions = calls.filter((c) => c.name === 'act_ui').flatMap((c) => c.args.actions);
     const receipt = JSON.parse(readFileSync(join(OUT, key + '-receipt.json'), 'utf8'));
@@ -161,9 +178,23 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
     const zoom = after.red / before.red,
       front = samples.filter((n) => n === pid).length;
     const rotated = turnedLeft(before.centers, after.centers);
+    // Preview may resize its document to the window. Measure both independent
+    // inter-shape distances on the displayed image, alongside the red area.
+    const intervals = [0, 1].map((i) => {
+      const initial = before.centers[i + 1].x - before.centers[i].x;
+      const final = after.centers[i + 1].x - after.centers[i].x;
+      return { ratio: final / initial, gain: final - initial };
+    });
     const actionVerified = {
-      cupreview: zoom > 1.18,
-      cupreviewmarkup: toolbarShift >= 25 && toolbarShift <= 120 && Math.abs(zoom - 1) < 0.15,
+      cupreview:
+        zoom > 1.04 &&
+        intervals.every((v) => v.gain > 10 && v.ratio > 1.025) &&
+        Math.abs(intervals[0].ratio - intervals[1].ratio) < 0.05,
+      cupreviewmarkup:
+        before.markupRows >= 3 !== after.markupRows >= 3 &&
+        toolbarShift >= 25 &&
+        toolbarShift <= 120 &&
+        Math.abs(zoom - 1) < 0.15,
       cupreviewrotate: rotated,
     }[key];
     const ok = Boolean(
@@ -173,6 +204,7 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
         before.red > 300 &&
         receipt.count >= 2 &&
         receipt.actions === 1 &&
+        receipt.checked &&
         actionVerified &&
         actions.length === 1 &&
         samples.length > 10 &&
@@ -189,6 +221,8 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
           zoom,
           actionVerified,
           rotated,
+          intervals,
+          previousZoomAreaGate: zoom > 1.18,
           calls,
           receipt,
           outputs: ev.toolResults.map((t) => ({
