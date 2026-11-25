@@ -385,7 +385,7 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
 describe('shutdown intent written before the engine is signalled', () => {
   const INTENT = join(H.dir, 'shutdown-intent.json')
   /** 假引擎:收到关停请求时把那一刻盘上的意图(没有 = null)、自己的 pid 与 TANGU_AUTO_RESUME 落盘,再退出。 */
-  function intentProbeEngine(tag: string, hostShutdown = true): { entry: string; seen: () => { pid: number; autoResume: string | null; intent: { reason: string; pid: number; at: number } | null } } {
+  function intentProbeEngine(tag: string, opts: { hostShutdown?: boolean; holdHealth?: boolean; ignoreShutdown?: boolean } = {}): { entry: string; seen: () => { pid: number; autoResume: string | null; intent: { reason: string; pid: number; at: number } | null } } {
     const entry = join(H.dir, `intent-probe-${tag}.cjs`)
     const out = join(H.dir, `intent-probe-${tag}.json`)
     rmSync(out, { force: true })
@@ -401,15 +401,17 @@ describe('shutdown intent written before the engine is signalled', () => {
       "  write(intent); process.exit(0)",
       "}",
       "process.on('SIGTERM', shutdown)",
-      "require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => { if (JSON.parse(line).shutdown === true) shutdown() })",
+      ...(opts.ignoreShutdown ? [] : ["require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => { if (JSON.parse(line).shutdown === true) shutdown() })"]),
       "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
-      `require('node:http').createServer((_q, s) => s.end(${JSON.stringify(hostShutdown ? '{"hostShutdown":true}' : '{}')})).listen(port, '127.0.0.1')`,
+      opts.holdHealth
+        ? "require('node:http').createServer(() => {}).listen(port, '127.0.0.1')"
+        : `require('node:http').createServer((_q, s) => s.end(${JSON.stringify(opts.hostShutdown === false ? '{}' : '{"hostShutdown":true}')})).listen(port, '127.0.0.1')`,
     ].join('\n'), 'utf8')
     return { entry, seen: () => JSON.parse(readFileSync(out, 'utf8')) }
   }
-  const boot = async (tag: string, hostShutdown = true) => {
+  const boot = async (tag: string, opts?: Parameters<typeof intentProbeEngine>[1]) => {
     rmSync(INTENT, { force: true })
-    const eng = intentProbeEngine(tag, hostShutdown)
+    const eng = intentProbeEngine(tag, opts)
     vi.restoreAllMocks() // 前面热更新那组把 resolveLaunch 换成了它们的启动器
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
     process.env.TANGU_NODE_BIN = process.execPath
@@ -450,11 +452,34 @@ describe('shutdown intent written before the engine is signalled', () => {
   }, 30_000)
 
   it.runIf(process.platform === 'win32')('a Windows engine without the capability still exits and leaves its shutdown intent for startup recovery', async () => {
-    const { m, eng, pid } = await boot('legacy', false)
+    const { m, eng, pid } = await boot('legacy', { hostShutdown: false })
     await m.stop('app_quit')
     expect(eng.seen().intent).toBeUndefined()
     expect(JSON.parse(readFileSync(INTENT, 'utf8'))).toMatchObject({ reason: 'app_quit', pid })
     expect(m.getStatus().state).toBe('stopped')
+  }, 30_000)
+
+  it.runIf(process.platform === 'win32')('stopping while a replacement is starting does not use the previous engine capability', async () => {
+    const { m, pid: firstPid } = await boot('first')
+    const next = intentProbeEngine('without-health', { holdHealth: true })
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(next.entry)
+    const starting = m.start({ cloudUrl: '', sandbox: 'none' }, 'engine_restart')
+    try {
+      await vi.waitFor(() => expect(next.seen().pid).not.toBe(firstPid), { timeout: 5_000 })
+      const pid = next.seen().pid
+      await m.stop('app_quit')
+      expect(next.seen().intent).toBeUndefined()
+      expect(JSON.parse(readFileSync(INTENT, 'utf8'))).toMatchObject({ reason: 'app_quit', pid })
+      expect((await starting).state).toBe('stopped')
+    } finally { await m.stop() }
+  }, 30_000)
+
+  it.runIf(process.platform === 'win32')('hard-kills an unresponsive Windows engine that advertised host shutdown', async () => {
+    const { m, eng, pid } = await boot('no-response', { ignoreShutdown: true })
+    await m.stop('app_quit')
+    expect(eng.seen().intent).toBeUndefined()
+    expect(JSON.parse(readFileSync(INTENT, 'utf8'))).toMatchObject({ reason: 'app_quit', pid })
+    expect(() => process.kill(pid, 0)).toThrow()
   }, 30_000)
 
   it('TANGU_AUTO_RESUME follows the in-memory setting at every spawn', async () => {
