@@ -288,6 +288,9 @@ export interface UnitWebDeps {
    *  抛错 = 账号服务答不上来(503,渲染层不会因此清掉登录)。 */
   visitorEngine?: {
     identify: (bearer: string, signal: AbortSignal) => Promise<{ account: string } | { forbidden: true } | null>
+    /** 托管 Unit 的模型票(可缺省):身份验过之后取这个访客的票,随请求以 X-Forsion-Model-Ticket 转给引擎(引擎拿它当这个账号调模型的凭据)。
+     *  null = 没有(请求照转,引擎那边的模型调用会报「重新登录」);不抛。票只进转给引擎的头,不回给浏览器、不进日志。 */
+    modelTicket?: (bearer: string, account: string, signal: AbortSignal) => Promise<string | null>
   }
   /** 委托管理员档的本机开关(独立 Unit 的 unit.json cloud.delegatedAdmin;每请求现读)。缺省 / false = 关:
    *  隧道断言里的操作者声明一律无视,按今天的隧道档。桌面不传。 */
@@ -530,7 +533,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
    *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote* / x-unit-caller
    *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。
    *  caller = resolveCaller 验过的调用方:只在隧道来路盖 x-forsion-remote-caller(引擎在 marked && tunnel 时才读)。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null, delegated = false, visitor?: string): void => {
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null, caller: ProxyCaller | null, delegated = false, visitor?: string, modelTicket?: string): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -549,6 +552,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     // 访客引擎:账号只来自 identify 验过的身份;入站同名头在上面的白名单拷贝里根本带不过来。
     if (visitor !== undefined) headers['x-forsion-user'] = visitor
+    // 模型票同理:只有 visitorEngine.modelTicket 给的那一张;浏览器带来的同名头不在白名单里,带不过去。
+    if (visitor !== undefined && modelTicket) headers['x-forsion-model-ticket'] = modelTicket
     const route = path.split('?', 1)[0]
     const changesSessions = via && !delegated && deps.onSessionsChanged && (
       (req.method === 'POST' && startsWorkspaceSession(route)) ||
@@ -599,7 +604,14 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (controller.signal.aborted || res.destroyed) return
     if (!who) { json(res, 401, { detail: 'Authentication required', code: 'AUTH_REQUIRED' }); return }
     if ('forbidden' in who) { json(res, 403, { detail: 'This account cannot use the engine here', code: 'ACCOUNT_NOT_ALLOWED' }); return }
-    proxyEngine(req, res, target.path + target.query, null, null, false, who.account)
+    // 身份验过才取票;取不到照转(身份的行为不变,只是模型调用会失败)。
+    let ticket: string | null = null
+    if (deps.visitorEngine!.modelTicket) {
+      res.once('close', onClose)
+      try { ticket = await deps.visitorEngine!.modelTicket(bearer, who.account, controller.signal) } catch { ticket = null } finally { res.off('close', onClose) }
+      if (controller.signal.aborted || res.destroyed) return
+    }
+    proxyEngine(req, res, target.path + target.query, null, null, false, who.account, ticket ?? undefined)
   }
 
   /** baseHref:index.html 的 <base>;缺省 = 投影的绝对基址(本机 / 局域网来路,与改版前逐字节一致),隧道来路传相对基址。 */

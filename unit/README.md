@@ -31,6 +31,11 @@ Unit 拿访客的令牌问 `GET <origin>/api/auth/unit-identity`，只有明确�
 入站的同名头、访客令牌都不转发。userId 不合 `^[a-z0-9][a-z0-9_-]{0,63}$`（不做大小写归一）或是受限的管理员令牌 → 403。
 公开 Unit 上只有这一个运行时会启动，智库、主人账号等单主人运行时一律不起。两个开关都只给公开 Unit，本机工作区（`workspace: local`）配了直接拒绝启动。
 
+托管的公开 Unit 可以在 `visitorEngine` 里加 `"deviceCredential": "<相对 dataDir 的路径>"`，指向托管方写进数据目录的设备凭据（`{ "unitId", "unitSecret", "gen" }`，要同时配 `remoteAccount`）。
+配了它，Unit 在验过访客身份之后拿设备凭据 + 访客自己的令牌向 `POST <remoteAccount.origin>/api/units/model-ticket` 换一张短期模型票（按访客、按登录缓存，剩不到 30 分钟就换新的），
+以 `X-Forsion-Model-Ticket` 随请求转给引擎；引擎拿它当这个账号调模型的凭据，没票 / 过期就报错让人重新登录，不回落到任何进程凭据。票不回给浏览器、不进日志；浏览器自己带的同名头不转发。
+设备凭据只有 Unit 主进程读（每次换票前按路径重读，托管方轮换时整份替换文件），不进引擎环境；引擎另收 `TANGU_CLOUD_URL` 和 `TANGU_SCRIPT_ISOLATION=required`（插件脚本换非特权用户跑，读不到这份凭据）。不配就不换票、不开脚本隔离。
+
 A public Unit can verify Forsion logins remotely instead of hosting the Server plugin: `remoteAccount.origin` is asked
 `GET /api/auth/unit-identity` with the visitor's token; only an explicit 401 / 403 means signed out, every other failure is a 503
 that keeps the browser's login. Verified identities are reused for 30 seconds. `/api` stays a same-origin path, so a reverse proxy in
@@ -38,6 +43,12 @@ front of the site forwards it to `origin`. With `loginVia`, visitors sign in on 
 one-time handoff code that only completes a login this tab started; that entry lists the receiving entry URLs (origin plus base path) in `handoffTargets`.
 `visitorEngine` starts the named package's engine in multi-account mode; `<base>/engine/*` resolves the visitor's own token and forwards
 with the engine credential and `X-Forsion-User` only. Both options are refused on a local workspace Unit.
+A hosted public Unit may add `visitorEngine.deviceCredential` (a path relative to the data directory, requires `remoteAccount`) naming the
+device credential its host writes there. After verifying a visitor, the Unit exchanges it plus the visitor's own token for a short-lived model
+ticket (`POST <remoteAccount.origin>/api/units/model-ticket`, cached per sign-in, renewed under 30 minutes left) and forwards it as
+`X-Forsion-Model-Ticket`; the engine uses it as that account's model credential and fails closed without one. Tickets never go back to the
+browser or into logs, and a browser-sent header of that name is not forwarded. Only the Unit process reads the credential (again before each
+exchange, so rotation needs no restart); the engine gets `TANGU_CLOUD_URL` and `TANGU_SCRIPT_ISOLATION=required` instead.
 
 Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 

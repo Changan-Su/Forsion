@@ -14,6 +14,7 @@ import { createLocalHost } from '../adapters/standalone/localHost.js';
 import { createSqliteHost } from '../adapters/standalone/sqliteHost.js';
 import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
+import { createModelTicketHttpBrain } from './modelTickets.js';
 import { cloudCredential } from './tokenFile.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
 import { withOutboundMasking } from '../llm/outboundMask.js';
@@ -152,9 +153,11 @@ export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; 
  * 多账号模式(standalone/multiAccount.ts)的底层 brain:只从 env / CLI 来(不读任何账号的 config.json、不读 auth.json、
  * 不接 OAuth 订阅),没有副作用(不装同步源、不装 git 凭据、不登记云端账号源)。**不包**脱敏 / 本地记忆 / 本地技能 ——
  * 那几层在 createMultiAccountApp 里包,测试注入的假 brain 走同一条路。
+ * 发往 server 的请求不用进程凭据(TANGU_TOKEN / --token / 引擎 .env 一概不认),每次现取当前账号的模型票(standalone/modelTickets.ts)。
  */
 export function buildMultiAccountBaseBrain(cfg: StandaloneConfig): CloudBrainServices {
-  const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cloudCredential(cfg) });
+  if (cfg.token || cfg.tokenFile) console.warn('[tangu] multi-account: the process cloud token is ignored; server model calls use each account\'s model ticket');
+  const httpBrain = createModelTicketHttpBrain(cfg.cloudUrl);
   const seen = new Set<string>();
   const providers = [...cfg.providers, ...(cfg.providersFile ? readProvidersJson(cfg.providersFile, 'providers-file', true) : [])]
     .filter((p) => !!p?.providerId && !!p?.baseUrl && !seen.has(p.providerId) && !!seen.add(p.providerId));
