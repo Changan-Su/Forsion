@@ -14,6 +14,7 @@ import Database from 'better-sqlite3';
 import type { HostServices } from '../../seams/hostServices.js';
 import { accountHome, currentAccountId, engineRoot, isValidAccountId, runWithAccount } from '../../core/accountScope.js';
 import { toSqliteDDL } from '../../core/dialectDDL.js';
+import { lockAccountHome } from '../../core/scriptIsolation.js';
 import { STANDALONE_SCHEMA } from '../../db/schemaStandalone.js';
 import { applyWalWithFallback, sanitize } from './sqliteHost.js';
 
@@ -163,6 +164,8 @@ export function createMultiAccountSqliteHost(cfg: MultiAccountHostConfig): Multi
     let db = dbs.get(id);
     if (db) return db;
     assertAccountPaths(id); // 账号 home / 库文件不许是软链、不许落到 accounts/<id> 之外
+    // 开户和淘汰后重开都走这里:root 跑时把账号文件夹顶层收成 0700(插件脚本换用户跑时只在运行期间对它开着,core/scriptIsolation.ts)
+    lockAccountHome(id);
     db = new Database(join(accountHome(id), 'state.db'));
     applyWalWithFallback(db);
     db.pragma('foreign_keys = ON');

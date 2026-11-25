@@ -13,6 +13,11 @@
  *   - package code outside skill folders (engine plugins) never runs; an agent's seeded copy maps to that agent's original
  *   - a detached grandchild holding the output pipe does not hold the engine-wide queue
  *   - every process started is a package script (spawn spy)
+ *   - run as a separate user (TANGU_SCRIPT_ISOLATION=required): the process carries the script uid / gid; an engine that cannot
+ *     switch users refuses and never runs the script as itself; the account folder is opened to the script group only while the
+ *     script runs (not state.db*, not .scratch, not through links, not hard-linked files, setuid bits dropped) and is back to 0700
+ *     afterwards and whenever the account is opened; on a real root Linux engine (container) the script user cannot read a 0600
+ *     root file, another account's folder or the account database
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 
@@ -39,12 +44,13 @@ const env = await vi.hoisted(async () => {
 vi.mock('node:child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { bootMultiAccount, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
 import { LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
-import { pluginScriptQueue } from '../src/services/pluginScripts.js';
+import { pluginScriptQueue, snapshotAccountFiles, sweepAccountLinks } from '../src/services/pluginScripts.js';
+import { closeAccountToScripts, lockAllAccountHomes, openAccountToScripts, setScriptIsolationHostForTest } from '../src/core/scriptIsolation.js';
 
 const accDir = (id: string) => join(env.home, 'accounts', id);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -126,6 +132,47 @@ function writeBundle(): void {
   writeFileSync(join(env.bundle, 'tangu-plugins', 'probe', 'index.mjs'), 'console.log("ENGINE PLUGIN RAN")');
   symlinkSync(join(env.bundle, 'tangu-plugins', 'probe', 'index.mjs'), join(sdir, 'plug.mjs'));
   writeFileSync(join(sdir, 'notes.txt'), 'not a script');
+  // reports which user it runs as and what the account folder looks like while it runs
+  writeFileSync(join(sdir, 'whoami.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    const home = path.dirname(path.dirname(process.env.FORSION_SCRIPT_SCRATCH));
+    const st = (p) => { try { const s = fs.lstatSync(p); return { mode: s.mode & 0o7777, uid: s.uid, gid: s.gid }; } catch (e) { return { err: e.code }; } };
+    console.log(JSON.stringify({ uid: process.getuid(), gid: process.getgid(), top: st(home), db: st(path.join(home, 'state.db')),
+      scratchParent: st(path.join(home, '.scratch')), scratch: st(process.env.FORSION_SCRIPT_SCRATCH), home: st(process.env.HOME), tmp: st(process.env.TMPDIR) }));
+  `);
+  // leaves a marker file in its working directory (to prove it never ran)
+  writeFileSync(join(sdir, 'marker.mjs'), `
+    import fs from 'node:fs';
+    fs.writeFileSync('marker-' + process.argv[2] + '.txt', 'ran');
+    console.log('MARKER RAN');
+  `);
+  // what the script user can reach (root-only test): another account, the account database, a 0600 root file
+  writeFileSync(join(sdir, 'isolate.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    import { spawn } from 'node:child_process';
+    const home = path.dirname(path.dirname(process.env.FORSION_SCRIPT_SCRATCH));
+    const t = (f) => { try { const v = f(); return { ok: true, v }; } catch (e) { return { ok: false, code: e.code }; } };
+    const kid = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+    kid.unref();
+    const walExists = fs.existsSync(path.join(home, 'state.db-wal'));
+    console.log(JSON.stringify({
+      uid: process.getuid(), gid: process.getgid(), groups: process.getgroups(),
+      capEff: /CapEff:\\s*(\\w+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))?.[1],
+      cred: t(() => fs.readFileSync(${JSON.stringify(join(env.root, 'cloud', 'device.json'))}, 'utf8')),
+      bobFile: t(() => fs.readFileSync(${JSON.stringify(join(env.home, 'accounts', 'bob', 'workspace', 'bob-secret.txt'))}, 'utf8')),
+      bobDir: t(() => fs.readdirSync(${JSON.stringify(join(env.home, 'accounts', 'bob'))})),
+      db: t(() => fs.readFileSync(path.join(home, 'state.db')).length),
+      dbRename: t(() => fs.renameSync(path.join(home, 'state.db'), path.join(home, 'moved.db'))),
+      walUnlink: walExists ? t(() => fs.unlinkSync(path.join(home, 'state.db-wal'))) : { ok: false, code: 'NO_WAL' },
+      scratchRename: t(() => fs.renameSync(path.join(home, '.scratch'), path.join(home, '.scratch-moved'))),
+      input: t(() => fs.readFileSync('input-0600.txt', 'utf8')),
+      write: t(() => { fs.mkdirSync('made-by-script', { recursive: true }); fs.writeFileSync('made-by-script/out.txt', 'from the script'); return 'ok'; }),
+      homeWrite: t(() => { fs.writeFileSync(path.join(process.env.HOME, 'h.txt'), 'h'); return 'ok'; }),
+      kid: kid.pid,
+    }));
+  `);
   // a link inside the package pointing out of it
   writeFileSync(join(env.root, 'outside-script.mjs'), 'console.log("OUTSIDE SCRIPT RAN")');
   symlinkSync(join(env.root, 'outside-script.mjs'), join(sdir, 'outlink.mjs'));
@@ -146,7 +193,10 @@ function writeBundle(): void {
 }
 
 let E: MaEngine;
+const REAL_ROOT = process.getuid?.() === 0;
 beforeAll(async () => {
+  // as root (the Linux container run) the script user must be able to reach the package and the engine folder: mkdtemp made it 0700
+  if (REAL_ROOT) chmodSync(env.root, 0o755);
   writeFileSync(OUTSIDE, 'outside content');
   writeBundle();
   E = await bootMultiAccount({ bundleDirs: [env.bundle] });
@@ -382,4 +432,284 @@ describe('multi-account: plugin scripts — one at a time, bounded', () => {
     const pkgScript = new RegExp(`${env.bundle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(agents/[^/ ]+/)?skills/[^/ ]+/scripts/[^/ ]+\\.(mjs|js|cjs|py|sh)(\\s|$)`);
     for (const rec of log) expect(rec.command, `${rec.fn} ${rec.command}\n${rec.stack}`).toMatch(pkgScript);
   });
+});
+
+// ── run as a separate user ───────────────────────────────────────────────────────────────────────
+const ISO_ENV = ['TANGU_SCRIPT_ISOLATION', 'TANGU_SCRIPT_UID', 'TANGU_SCRIPT_GID'];
+const ENGINE = { uid: process.getuid!(), gid: process.getgid!() };
+/** the user scripts switch to in the tests that fake a root engine: ourselves (a real switch needs root), 65534 when really root */
+const TEST_USER = REAL_ROOT ? { uid: 65534, gid: 65534 } : ENGINE;
+const modeOf = (p: string) => lstatSync(p).mode & 0o7777;
+const reaped: number[] = [];
+function fakeRootEngine(o: { cannot?: string } = {}): void {
+  setScriptIsolationHostForTest({ root: () => true, cannotSwitch: () => o.cannot ?? null, reap: (uid) => { reaped.push(uid); } });
+}
+function requireScriptUser(user = TEST_USER): void {
+  process.env.TANGU_SCRIPT_ISOLATION = 'required';
+  process.env.TANGU_SCRIPT_UID = String(user.uid);
+  process.env.TANGU_SCRIPT_GID = String(user.gid);
+}
+const scriptSpawns = (name: string) => spawnLog().filter((r) => r.command.includes(`/scripts/${name}`));
+/** a group we may hand files to that differs from the group new files get here (null = none on this machine) */
+function otherGroup(fileGid: number): number | null {
+  if (REAL_ROOT) return 65534;
+  return process.getgroups?.().find((g) => g !== fileGid) ?? null;
+}
+
+describe('multi-account: plugin scripts — run as a separate user', () => {
+  afterEach(() => {
+    for (const k of ISO_ENV) delete process.env[k];
+    setScriptIsolationHostForTest(null);
+    reaped.length = 0;
+  });
+
+  it('without the switch nothing changes: no uid / gid on the process, the account folder is not opened to a group', async () => {
+    const n = scriptSpawns('whoami.mjs').length;
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/whoami.mjs' }]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    const rec = scriptSpawns('whoami.mjs').slice(n);
+    expect(rec).toHaveLength(1);
+    expect(rec[0].uid).toBeUndefined();
+    expect(rec[0].gid).toBeUndefined();
+    const seen = JSON.parse(stdoutOf(outputs[0]));
+    expect(seen.top.mode & 0o1000, 'no sticky / group opening without the switch').toBe(0);
+  }, 60_000);
+
+  it('required, but the engine cannot switch users (or the setting is wrong): refused, the script never starts', async () => {
+    fakeRootEngine({ cannot: 'the engine is not running as root' });
+    requireScriptUser();
+    const n = scriptSpawns('marker.mjs').length;
+    const r1 = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/marker.mjs', args: ['cannot'] }]);
+    expect(r1.outputs[0]).toMatch(/^Error: Plugin scripts are disabled on this engine: they must run as a separate system user, but the engine is not running as root\./);
+    // a wrong switch value or a root / non-numeric id is refused too (never read as "off")
+    setScriptIsolationHostForTest(null);
+    fakeRootEngine();
+    const bad: Array<[string, string, RegExp]> = [
+      ['TANGU_SCRIPT_ISOLATION', 'yes', /TANGU_SCRIPT_ISOLATION must be "required" or unset/],
+      ['TANGU_SCRIPT_UID', '0', /TANGU_SCRIPT_UID must be a whole number from 1/],
+      ['TANGU_SCRIPT_GID', 'nobody', /TANGU_SCRIPT_GID must be a whole number from 1/],
+    ];
+    for (const [k, v, re] of bad) {
+      requireScriptUser();
+      process.env[k] = v;
+      const r = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/marker.mjs', args: ['bad'] }]);
+      expect(r.outputs[0]).toMatch(re);
+    }
+    expect(scriptSpawns('marker.mjs').length, 'no script process was started').toBe(n);
+    for (const m of ['cannot', 'bad']) expect(existsSync(join(accDir('alice'), 'workspace', `marker-${m}.txt`))).toBe(false);
+    expect(pluginScriptQueue()).toEqual({ running: 0, waiting: 0 });
+  }, 60_000);
+
+  it.skipIf(REAL_ROOT)('required on a root engine: the process carries the script uid / gid, the scratch is the script user\'s, the folder is open to the script group only while it runs', async () => {
+    fakeRootEngine();
+    requireScriptUser();
+    const n = scriptSpawns('whoami.mjs').length;
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/whoami.mjs' }, { skill: SKILL, script: 'scripts/whoami.mjs' }]);
+    for (const o of outputs) expect(o).toMatch(/exit code: 0/);
+    const rec = scriptSpawns('whoami.mjs').slice(n);
+    expect(rec).toHaveLength(2);
+    for (const r of rec) expect([r.uid, r.gid]).toEqual([TEST_USER.uid, TEST_USER.gid]);
+    for (const o of outputs) {
+      const seen = JSON.parse(stdoutOf(o));
+      expect(seen.top, 'account folder while the script runs').toEqual({ mode: 0o1770, uid: ENGINE.uid, gid: TEST_USER.gid });
+      expect(seen.db.mode & 0o077, 'state.db is not readable by group / others').toBe(0);
+      expect(seen.scratchParent.mode).toBe(0o711);
+      for (const d of [seen.scratch, seen.home, seen.tmp]) expect(d).toEqual({ mode: 0o700, uid: TEST_USER.uid, gid: TEST_USER.gid });
+    }
+    // back to 0700, owned by the engine, once it is over
+    expect(modeOf(accDir('alice'))).toBe(0o700);
+    expect([lstatSync(accDir('alice')).uid, lstatSync(accDir('alice')).gid]).toEqual([ENGINE.uid, ENGINE.gid]);
+    // leftover processes of the script user are ended before the folder opens and after it closes
+    expect(reaped.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(reaped)).toEqual(new Set([TEST_USER.uid]));
+  }, 60_000);
+
+  it('opening a folder changes groups / modes of account files only: not state.db*, not .scratch, not through links, not hard-linked files; setuid bits go', (ctx) => {
+    const base = join(env.root, 'grant-fixture');
+    rmSync(base, { recursive: true, force: true });
+    const home = join(base, 'acct');
+    const outside = join(base, 'outside.txt');
+    const outsideHard = join(base, 'outside-hard.txt');
+    mkdirSync(join(home, 'work', 'sub'), { recursive: true });
+    mkdirSync(join(home, '.scratch', 'run'), { recursive: true });
+    const files: Record<string, number> = {
+      'state.db': 0o644, 'state.db-wal': 0o644, '.scratch/run/x.txt': 0o644, 'work/a.txt': 0o640, 'work/sub/b.txt': 0o600, 'work/su.bin': 0o4755,
+    };
+    for (const [rel, mode] of Object.entries(files)) { writeFileSync(join(home, rel), rel); chmodSync(join(home, rel), mode); }
+    writeFileSync(outside, 'outside'); chmodSync(outside, 0o640);
+    writeFileSync(outsideHard, 'outside hard'); chmodSync(outsideHard, 0o640);
+    symlinkSync(outside, join(home, 'work', 'link'));
+    linkSync(outsideHard, join(home, 'work', 'hard'));
+    chmodSync(join(home, 'work', 'sub'), 0o750);
+    chmodSync(home, 0o700);
+    const fileGid = lstatSync(join(home, 'work', 'a.txt')).gid;
+    const G = otherGroup(fileGid);
+    if (G === null) return ctx.skip(); // no second group on this machine to hand files to
+    const before = (rel: string) => ({ mode: modeOf(join(home, rel)), gid: lstatSync(join(home, rel)).gid });
+    const keep = { db: before('state.db'), scratch: before('.scratch'), scratchFile: before('.scratch/run/x.txt') };
+    const keepOut = { outside: { mode: modeOf(outside), gid: lstatSync(outside).gid }, hard: { mode: modeOf(outsideHard), gid: lstatSync(outsideHard).gid } };
+
+    openAccountToScripts(home, { uid: 65534, gid: G }, '.scratch');
+    const now = (p: string) => ({ mode: modeOf(p), gid: lstatSync(p).gid });
+    expect(now(join(home, 'work', 'a.txt'))).toEqual({ mode: 0o660, gid: G });
+    expect(now(join(home, 'work', 'sub', 'b.txt'))).toEqual({ mode: 0o660, gid: G });
+    expect(now(join(home, 'work', 'sub'))).toEqual({ mode: 0o770, gid: G });
+    expect(now(join(home, 'work'))).toEqual({ mode: (0o755 | 0o070), gid: G });
+    expect(now(join(home, 'work', 'su.bin')), 'setuid bit dropped').toEqual({ mode: 0o775, gid: G });
+    for (const db of ['state.db', 'state.db-wal']) expect(now(join(home, db))).toEqual({ mode: 0o600, gid: keep.db.gid });
+    expect(now(join(home, '.scratch'))).toEqual(keep.scratch);
+    expect(now(join(home, '.scratch', 'run', 'x.txt'))).toEqual(keep.scratchFile);
+    expect(now(outside), 'the target of a link is untouched').toEqual(keepOut.outside);
+    expect(now(outsideHard), 'a hard-linked file is untouched').toEqual(keepOut.hard);
+    expect(now(join(home, 'work', 'hard'))).toEqual(keepOut.hard);
+    expect(now(home)).toEqual({ mode: 0o1770, gid: G });
+
+    closeAccountToScripts(home);
+    expect(now(home)).toEqual({ mode: 0o700, gid: ENGINE.gid });
+    expect(lstatSync(home).uid).toBe(ENGINE.uid);
+
+    // a setuid file with another hard link cannot be made safe: the folder is not opened
+    const su = join(base, 'outside-su.bin');
+    writeFileSync(su, 'su'); chmodSync(su, 0o4755);
+    linkSync(su, join(home, 'work', 'su-hard.bin'));
+    expect(() => openAccountToScripts(home, { uid: 65534, gid: G }, '.scratch')).toThrow(/setuid/);
+    expect(modeOf(home), 'still closed').toBe(0o700);
+    expect(modeOf(su)).toBe(0o4755);
+  });
+
+  it('opening an account closes its folder (0700): on first open and on reopen after idle eviction; not when the engine is not root', async () => {
+    fakeRootEngine();
+    expect((await E.client.call('erin', 'GET', '/agent/sessions')).status).toBe(200);
+    expect(modeOf(accDir('erin'))).toBe(0o700);
+    chmodSync(accDir('erin'), 0o755);
+    expect(E.accounts.evictIdleNow(0)).toContain('erin');
+    expect((await E.client.call('erin', 'GET', '/agent/sessions')).status).toBe(200);
+    expect(modeOf(accDir('erin')), 'reopen after eviction').toBe(0o700);
+    if (REAL_ROOT) return; // the real engine is root here: the negative control below does not apply
+    setScriptIsolationHostForTest(null);
+    chmodSync(accDir('erin'), 0o755);
+    expect(E.accounts.evictIdleNow(0)).toContain('erin');
+    expect((await E.client.call('erin', 'GET', '/agent/sessions')).status).toBe(200);
+    expect(modeOf(accDir('erin')), 'not root: left alone').toBe(0o755);
+  }, 60_000);
+
+  it('folders left open by an earlier engine are closed before the first script', async () => {
+    for (const id of ['frank', 'gina']) expect((await E.client.call(id, 'GET', '/agent/sessions')).status).toBe(200);
+    for (const id of ['frank', 'gina']) chmodSync(accDir(id), 0o1770);
+    lockAllAccountHomes();
+    for (const id of ['frank', 'gina']) expect(modeOf(accDir(id))).toBe(0o700);
+  }, 60_000);
+
+  it('the copy that unshares a hard link leaving the account drops setuid / setgid bits', () => {
+    const f = join(accDir('alice'), 'workspace', 'su-shared.bin');
+    writeFileSync(f, 'binary'); chmodSync(f, 0o6755);
+    const before = snapshotAccountFiles('alice');
+    const out = join(env.root, 'su-shared-outside.bin');
+    rmSync(out, { force: true });
+    linkSync(f, out);
+    expect(sweepAccountLinks('alice', before)).toContain(join('workspace', 'su-shared.bin'));
+    expect(lstatSync(f).nlink).toBe(1);
+    expect(modeOf(f)).toBe(0o755);
+    expect(readFileSync(f, 'utf8')).toBe('binary');
+  });
+});
+
+// ── the real thing: root on Linux (run inside a container) ────────────────────────────────────────
+const capEff = (): bigint => {
+  try { return BigInt(`0x${/^CapEff:\s*([0-9a-f]+)/im.exec(readFileSync('/proc/self/status', 'utf8'))?.[1] ?? '0'}`); } catch { return 0n; }
+};
+const NEEDED_CAPS = [0, 1, 5, 6, 7]; // CHOWN, DAC_OVERRIDE, KILL, SETGID, SETUID
+const LINUX_ROOT = REAL_ROOT && process.platform === 'linux';
+const CAN_SWITCH = LINUX_ROOT && NEEDED_CAPS.every((b) => (capEff() & (1n << BigInt(b))) !== 0n);
+const procState = (pid: number): string | undefined => {
+  try { return /^State:\s*(\S)/m.exec(readFileSync(`/proc/${pid}/status`, 'utf8'))?.[1]; } catch { return undefined; }
+};
+
+describe.runIf(LINUX_ROOT)('multi-account: plugin scripts — separate user on a real root Linux engine', () => {
+  const cred = join(env.root, 'cloud', 'device.json');
+  beforeAll(async () => {
+    mkdirSync(dirname(cred), { recursive: true });
+    writeFileSync(cred, 'DEVICE-CREDENTIAL-CANARY', { mode: 0o600 });
+    chmodSync(cred, 0o600);
+    // another account with a file that is even world-readable: its folder is what keeps it private
+    expect((await E.client.call('bob', 'GET', '/agent/sessions')).status).toBe(200);
+    mkdirSync(join(accDir('bob'), 'workspace'), { recursive: true });
+    writeFileSync(join(accDir('bob'), 'workspace', 'bob-secret.txt'), 'BOB-CANARY', { mode: 0o644 });
+    expect((await E.client.call('alice', 'GET', '/agent/sessions')).status).toBe(200);
+    mkdirSync(join(accDir('alice'), 'workspace'), { recursive: true });
+  });
+  afterEach(() => { for (const k of ISO_ENV) delete process.env[k]; });
+
+  it.runIf(CAN_SWITCH)('the script user reaches its own account folder only: not a 0600 root file, not another account, not state.db', async () => {
+    writeFileSync(join(accDir('alice'), 'workspace', 'input-0600.txt'), 'ALICE-INPUT', { mode: 0o600 });
+    process.env.TANGU_SCRIPT_ISOLATION = 'required';
+    const n = scriptSpawns('isolate.mjs').length;
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/isolate.mjs' }, { skill: SKILL, script: 'scripts/whoami.mjs' }]);
+    expect(outputs[0]).toMatch(/exit code: 0/);
+    const seen = JSON.parse(stdoutOf(outputs[0]));
+    expect(scriptSpawns('isolate.mjs').slice(n).map((r) => [r.uid, r.gid])).toEqual([[65534, 65534]]);
+    expect([seen.uid, seen.gid, seen.groups]).toEqual([65534, 65534, [65534]]);
+    expect(BigInt(`0x${seen.capEff}`), 'no capabilities left in the script').toBe(0n);
+    expect(seen.cred).toEqual({ ok: false, code: 'EACCES' });
+    expect(seen.bobFile).toEqual({ ok: false, code: 'EACCES' });
+    expect(seen.bobDir).toEqual({ ok: false, code: 'EACCES' });
+    expect(seen.db).toEqual({ ok: false, code: 'EACCES' });
+    expect(seen.dbRename.ok, 'cannot move the account database').toBe(false);
+    expect(seen.scratchRename.ok, 'cannot move the scratch folder').toBe(false);
+    if (seen.walUnlink.code !== 'NO_WAL') expect(seen.walUnlink.ok, 'cannot delete the database log').toBe(false);
+    expect(seen.input).toEqual({ ok: true, v: 'ALICE-INPUT' });
+    expect(seen.write).toEqual({ ok: true, v: 'ok' });
+    expect(seen.homeWrite).toEqual({ ok: true, v: 'ok' });
+    // a second script in the same turn still works
+    expect(outputs[1]).toMatch(/exit code: 0/);
+    expect(JSON.parse(stdoutOf(outputs[1])).uid).toBe(65534);
+    // afterwards: closed again, the database where it was, the escaped grandchild ended, the output usable by the engine
+    expect(modeOf(accDir('alice'))).toBe(0o700);
+    expect([lstatSync(accDir('alice')).uid, lstatSync(accDir('alice')).gid]).toEqual([0, 0]);
+    expect(existsSync(join(accDir('alice'), 'state.db'))).toBe(true);
+    expect(modeOf(join(accDir('alice'), 'state.db')) & 0o077).toBe(0);
+    expect(['Z', undefined]).toContain(procState(seen.kid));
+    expect(readFileSync(join(accDir('alice'), 'workspace', 'made-by-script', 'out.txt'), 'utf8')).toBe('from the script');
+    writeFileSync(join(accDir('alice'), 'workspace', 'made-by-script', 'engine.txt'), 'the engine can write here');
+  }, 60_000);
+
+  it.runIf(CAN_SWITCH)('limits still hold for the script user: past its time it is ended with its children, over its scratch size it is stopped, its scratch is removed', async () => {
+    process.env.TANGU_SCRIPT_ISOLATION = 'required';
+    writeFileSync(join(env.home, LIMITS_FILE_NAME), JSON.stringify({ scriptMinutes: 0.02 }));
+    reloadMultiAccountLimits();
+    const a = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/forever.mjs' }]);
+    expect(a.outputs[0]).toMatch(/stopped: the script ran longer/);
+    const pids = JSON.parse(readFileSync(join(accDir('alice'), 'workspace', 'pids.json'), 'utf8')) as number[];
+    for (const pid of pids) expect(['Z', undefined]).toContain(procState(pid));
+    // the temporary folder belongs to the script user (0700): the engine still measures it
+    writeFileSync(join(env.home, LIMITS_FILE_NAME), JSON.stringify({ scriptScratchMB: 1 }));
+    reloadMultiAccountLimits();
+    const { outputs, runId } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/bigtmp.mjs' }]);
+    expect(outputs[0]).toMatch(/stopped: the script wrote more temporary data/);
+    await sleep(200);
+    expect(readdirSync(join(accDir('alice'), '.scratch')).filter((n) => n.includes(runId))).toEqual([]);
+    expect(pluginScriptQueue()).toEqual({ running: 0, waiting: 0 });
+  }, 60_000);
+
+  it.runIf(CAN_SWITCH)('negative control: without the switch the same probe does read them (as root)', async () => {
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/isolate.mjs' }]);
+    const seen = JSON.parse(stdoutOf(outputs[0]));
+    expect(seen.uid).toBe(0);
+    expect(seen.cred).toEqual({ ok: true, v: 'DEVICE-CREDENTIAL-CANARY' });
+    expect(seen.bobFile).toEqual({ ok: true, v: 'BOB-CANARY' });
+    try { process.kill(seen.kid, 'SIGKILL'); } catch { /* gone */ }
+    // the probe moved the database aside as root: put it back for the tests after this one
+    if (existsSync(join(accDir('alice'), 'moved.db'))) rmSync(join(accDir('alice'), 'moved.db'));
+  }, 60_000);
+
+  it.runIf(!CAN_SWITCH)('without the capabilities to switch users the engine refuses and never runs the script as root', async () => {
+    process.env.TANGU_SCRIPT_ISOLATION = 'required';
+    const n = scriptSpawns('marker.mjs').length;
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/marker.mjs', args: ['nocaps'] }]);
+    const missing = ([['CAP_CHOWN', 0], ['CAP_DAC_OVERRIDE', 1], ['CAP_KILL', 5], ['CAP_SETGID', 6], ['CAP_SETUID', 7]] as const)
+      .filter(([, b]) => (capEff() & (1n << BigInt(b))) === 0n).map(([n]) => n);
+    expect(outputs[0]).toContain(`Error: Plugin scripts are disabled on this engine: they must run as a separate system user, but the engine lacks ${missing.join(', ')}.`);
+    expect(scriptSpawns('marker.mjs').length).toBe(n);
+    expect(existsSync(join(accDir('alice'), 'workspace', 'marker-nocaps.txt'))).toBe(false);
+  }, 60_000);
 });

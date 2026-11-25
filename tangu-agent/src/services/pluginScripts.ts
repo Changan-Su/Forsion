@@ -17,15 +17,21 @@
  *   脚本退出后它起的、脱离了进程组的子孙进程还拿着输出管道时,最多再等 2 秒就收尾放下一个(那个子孙进程本身管不到,见下面的残余)。
  * - 临时目录在这一轮结束时删(agentLoop 收尾调 disposeRunScratch),开户时把上次进程留下的整个 .scratch 清掉;不算进账号的磁盘上限,另有单次上限;
  *   账号自己的文件工具不能往 .scratch 里写(services/accessDomain.ts)。
- * ⚠️ 残余:脚本以引擎自己的系统身份运行(没有按账号的系统用户),账号隔离靠「只跑审过的代码 + 参数里的路径钳在账号文件夹 + 跑完扫链接」;
- *   脱离进程组的子孙进程不归这里管。放开自由命令行之前,要先换成按账号的系统用户,并把文件访问改成按目录句柄打开。
+ * - 换用户(core/scriptIsolation.ts):宿主设了 TANGU_SCRIPT_ISOLATION=required 时,脚本以单独的系统用户跑(缺省 uid / gid 65534),
+ *   跑的期间只对这个账号的文件夹开组权限(账号库 state.db* 与 .scratch 除外),跑完收回;引擎换不了用户就不跑。没设这个开关时以引擎自己的身份跑。
+ * ⚠️ 残余:没开换用户时,账号隔离靠「只跑审过的代码 + 参数里的路径钳在账号文件夹 + 跑完扫链接」,脱离进程组的子孙进程不归这里管;
+ *   开了换用户,所有账号共用一个脚本用户(见 core/scriptIsolation.ts 的残余)。放开自由命令行之前,要先换成按账号的系统用户,并把文件访问改成按目录句柄打开。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { constants, copyFileSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { mbBytes, minutesMs, multiAccountLimits, SCRIPT_CONCURRENCY } from '../core/multiAccountLimits.js';
+import {
+  closeAccountToScripts, handScratchToScriptUser, lockAllAccountHomes, openAccountToScripts, reapScriptUser, resolveScriptUser,
+  ScriptIsolationError, type ScriptUser,
+} from '../core/scriptIsolation.js';
 import { bundleDirs } from '../plugins/bundles.js';
 import { accountWriteDenied } from './accessDomain.js';
 import { markAccountUsageDirty, SCRATCH_DIR } from './accountStorage.js';
@@ -233,17 +239,21 @@ export function pluginScriptQueue(): { running: number; waiting: number } {
 
 // ── 这一轮的临时目录 ─────────────────────────────────────────────────────────────────────────
 const scratchOf = new Map<string, string>(); // runId → 目录
+/** 临时目录已经交给脚本用户的运行(交过之后脚本拥有这棵树,可能把里面的目录换成软链:不再以 root 去改它)。 */
+const handedScratch = new Set<string>();
+const SCRATCH_SUBDIRS = ['home', 'tmp', 'cache'];
 function runScratch(account: string, runId: string): string {
   const safe = runId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'run';
   const parent = path.join(accountHome(account), SCRATCH_DIR);
   try { if (!lstatSync(parent).isDirectory()) rmSync(parent, { force: true }); } catch { /* 还没有 */ }
   const dir = path.join(parent, safe);
-  for (const sub of ['home', 'tmp', 'cache']) mkdirSync(path.join(dir, sub), { recursive: true });
+  for (const sub of SCRATCH_SUBDIRS) mkdirSync(path.join(dir, sub), { recursive: true });
   scratchOf.set(runId, dir);
   return dir;
 }
 /** 这一轮结束:删掉它的临时目录(没有 = no-op)。 */
 export function disposeRunScratch(runId: string): void {
+  handedScratch.delete(runId);
   const dir = scratchOf.get(runId);
   if (!dir) return;
   scratchOf.delete(runId);
@@ -325,6 +335,8 @@ export function sweepAccountLinks(account: string, before?: FileIds): string[] {
         if (before?.get(p) === id) {
           const tmp = `${p}.unlink-${process.pid}-${Date.now()}`;
           copyFileSync(p, tmp, constants.COPYFILE_EXCL);
+          // 拷贝带着原件的权限位:不去掉 setuid / setgid,引擎(root)拷出来的就是一个 root 的 setuid 程序
+          chmodSync(tmp, lstatSync(tmp).mode & 0o777);
           renameSync(tmp, p);
         } else unlinkSync(p);
         touched.push(path.relative(home, p));
@@ -347,9 +359,39 @@ export interface PluginScriptResult {
   ranMs: number;
 }
 
+// ── 换用户(core/scriptIsolation.ts)───────────────────────────────────────────────────────────
+let allHomesLocked = false; // 本进程第一次换用户跑脚本前,收一遍所有账号文件夹(上次引擎跑到一半退出、没收回的)
+const stuckOpen = new Set<string>(); // 跑完没收回的账号文件夹:下次跑脚本前先收,收不回就不跑
+
+const isolationErr = (e: unknown): PluginScriptError =>
+  new PluginScriptError(e instanceof ScriptIsolationError ? e.message : `Plugin scripts are disabled right now: ${(e as Error)?.message || e}`);
+
+/** 拿到脚本队列之后、开账号文件夹之前:清残留进程,收没收回的文件夹。任何一步不成 → PluginScriptError(这次不跑)。 */
+function prepareScriptUser(user: ScriptUser): void {
+  try {
+    reapScriptUser(user);
+    if (!allHomesLocked) { lockAllAccountHomes(); allHomesLocked = true; }
+    for (const home of [...stuckOpen]) { closeAccountToScripts(home); stuckOpen.delete(home); }
+  } catch (e) {
+    console.error('[tangu] multi-account: cannot prepare the plugin script user:', (e as Error)?.message || e);
+    throw isolationErr(e);
+  }
+}
+
+/** 跑完(含没起来):收回顶层、再清一遍脚本用户的进程。不抛:收不回的记进 stuckOpen,清不完的下次跑之前再清(清不完就不跑)。 */
+function finishScriptUser(home: string, user: ScriptUser): void {
+  try { closeAccountToScripts(home); } catch (e) {
+    stuckOpen.add(home);
+    console.error(`[tangu] multi-account: could not close ${home} to plugin scripts:`, (e as Error)?.message || e);
+  }
+  try { reapScriptUser(user); } catch (e) {
+    console.error('[tangu] multi-account: could not end leftover plugin script processes:', (e as Error)?.message || e);
+  }
+}
+
 /**
- * 跑一个插件脚本(多账号模式;调用方已在账号上下文里、run 里)。排队等前一个跑完 → 起进程 → 等它退出 → 扫链接。
- * 中止 / 超时 / 临时目录超限 / 输出太多 → 整组进程结束,照样返回已有的输出与原因。
+ * 跑一个插件脚本(多账号模式;调用方已在账号上下文里、run 里)。排队等前一个跑完 → (换用户时:开账号文件夹)起进程 → 等它退出 →
+ * (收回)→ 扫链接。中止 / 超时 / 临时目录超限 / 输出太多 → 整组进程结束,照样返回已有的输出与原因。
  */
 export async function runPluginScript(o: { skill?: unknown; script: unknown; args?: unknown; cwd: string; runId: string; signal?: AbortSignal }): Promise<PluginScriptResult & { script: string }> {
   if (!isMultiAccount()) throw new PluginScriptError('plugin scripts run only in multi-account mode');
@@ -359,10 +401,14 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
   const cwdDenied = accountWriteDenied(o.cwd);
   if (cwdDenied) throw new PluginScriptError(cwdDenied);
   const args = checkScriptArgs(o.args, o.cwd);
+  let user: ScriptUser | null;
+  try { user = resolveScriptUser(); } catch (e) { throw isolationErr(e); } // 要换用户却换不了:不跑,也不以引擎自己的身份跑
   const queuedAt = Date.now();
   const release = await acquire(o.signal);
   const startedAt = Date.now();
   try {
+    if (user) prepareScriptUser(user);
+    const home = accountHome(account);
     const before = snapshotAccountFiles(account);
     const scratch = scratchOf.get(o.runId) ?? runScratch(account, o.runId);
     const env: Record<string, string> = {};
@@ -375,71 +421,29 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
       FORSION_SCRIPT_SCRATCH: scratch,
     });
     const limits = multiAccountLimits();
-    const res = await new Promise<PluginScriptResult>((resolve) => {
-      let child: ChildProcess;
-      let stdout = '';
-      let stderr = '';
-      let stopped: PluginScriptResult['stopped'];
-      let killTimer: ReturnType<typeof setTimeout> | null = null;
-      let settled = false;
-      const timers: Array<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>> = [];
-      const killGroup = (sig: NodeJS.Signals): void => {
-        if (!child?.pid) return;
-        try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, sig); } catch { try { child.kill(sig); } catch { /* gone */ } }
-      };
-      const stop = (why: NonNullable<PluginScriptResult['stopped']>): void => {
-        if (stopped || settled) return;
-        stopped = why;
-        killGroup('SIGTERM');
-        killTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
-      };
-      const finish = (code: number | null, sig: NodeJS.Signals | null): void => {
-        if (settled) return;
-        settled = true;
-        if (killTimer) clearTimeout(killTimer);
-        if (exitGrace) clearTimeout(exitGrace);
-        for (const t of timers) clearTimeout(t as ReturnType<typeof setTimeout>);
-        killGroup('SIGKILL'); // 主进程退了,组里留下的子进程一并结束
-        o.signal?.removeEventListener('abort', onAbort);
-        resolve({ exitCode: code, signal: sig, stdout, stderr, ...(stopped ? { stopped } : {}), removedLinks: [], waitedMs: startedAt - queuedAt, ranMs: Date.now() - startedAt });
-      };
-      const onAbort = (): void => stop('aborted');
-      let exitGrace: ReturnType<typeof setTimeout> | null = null;
-      try {
-        // 多账号模式唯一放行的子进程:插件包里的脚本,不经 shell、参数原样、环境只给上面那几样(见文件头)
-        child = spawn(target.command[0], [...target.command.slice(1), target.file, ...args], {
-          cwd: o.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: process.platform !== 'win32', windowsHide: true,
-        });
-      } catch (e) {
-        resolve({ exitCode: null, signal: null, stdout: '', stderr: `could not start: ${(e as Error)?.message || e}`, removedLinks: [], waitedMs: startedAt - queuedAt, ranMs: 0 });
-        return;
+    let opened = false;
+    let res: PluginScriptResult & { startError?: string };
+    try {
+      if (user) {
+        try {
+          if (!handedScratch.has(o.runId)) {
+            handScratchToScriptUser(path.dirname(scratch), [scratch, ...SCRATCH_SUBDIRS.map((d) => path.join(scratch, d))], user);
+            handedScratch.add(o.runId);
+          }
+          opened = true; // 开到一半失败也要收
+          openAccountToScripts(home, user, SCRATCH_DIR);
+        } catch (e) {
+          console.error(`[tangu] multi-account: cannot open ${account}'s folder to plugin scripts:`, (e as Error)?.message || e);
+          throw isolationErr(e);
+        }
       }
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-      child.stdout?.on('data', (d: string) => {
-        if (stdout.length + d.length > STDOUT_MAX) { stdout += d.slice(0, Math.max(0, STDOUT_MAX - stdout.length)); stop('output'); return; }
-        stdout += d;
-      });
-      child.stderr?.on('data', (d: string) => { stderr = (stderr + d).slice(-STDERR_KEEP); });
-      child.on('error', (e) => { stderr += `\n${e.message}`; finish(null, null); });
-      child.on('close', (code, sig) => finish(code, sig));
-      // 脚本自己退了,但它起的子孙进程(脱离了进程组)还拿着输出管道 → close 永远不来、整个引擎的脚本队列卡死:退出后最多再等 2 秒收尾
-      child.on('exit', (code, sig) => {
-        if (settled || exitGrace) return;
-        exitGrace = setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); finish(code, sig); }, EXIT_GRACE_MS);
-        exitGrace.unref?.();
-      });
-      if (o.signal?.aborted) stop('aborted');
-      else o.signal?.addEventListener('abort', onAbort, { once: true });
-      const t = setTimeout(() => stop('timeout'), minutesMs(limits.scriptMinutes));
-      timers.push(t);
-      const cap = mbBytes(limits.scriptScratchMB);
-      const poll = setInterval(() => {
-        void dirBytes(scratch).then((n) => { if (n > cap) stop('scratch'); }, () => {});
-      }, SCRATCH_POLL_MS);
-      timers.push(poll);
-      for (const x of timers) (x as any).unref?.();
-    });
+      res = await spawnScript(target, args, o, env, scratch, limits, user, queuedAt, startedAt);
+    } finally {
+      if (user && opened) finishScriptUser(home, user);
+    }
+    // 换用户起不来(缺能力、解释器脚本用户执行不了…):当拒绝,不退回以引擎自己的身份跑
+    if (user && res.startError) throw new PluginScriptError(`The script could not start as the script user (uid ${user.uid}): ${res.startError}`);
+    delete res.startError;
     // 进程组已结束(close 之后又补了一次 SIGKILL):扫链接,标脏磁盘用量
     res.removedLinks = sweepAccountLinks(account, before);
     if (res.removedLinks.length) console.warn(`[tangu] multi-account: removed ${res.removedLinks.length} link(s) left in ${account}'s folder by ${target.file}`);
@@ -448,4 +452,81 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
   } finally {
     release();
   }
+}
+
+/** 起进程、等它(和它的进程组)结束。user 给了就以那个系统用户跑;起不来时 startError 带原因(调用方据此拒绝)。 */
+function spawnScript(
+  target: { file: string; command: string[] }, args: string[], o: { cwd: string; signal?: AbortSignal }, env: Record<string, string>,
+  scratch: string, limits: ReturnType<typeof multiAccountLimits>, user: ScriptUser | null, queuedAt: number, startedAt: number,
+): Promise<PluginScriptResult & { startError?: string }> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    let stdout = '';
+    let stderr = '';
+    let stopped: PluginScriptResult['stopped'];
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    let spawned = false;
+    let startError: string | undefined;
+    const timers: Array<ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>> = [];
+    const killGroup = (sig: NodeJS.Signals): void => {
+      if (!child?.pid) return;
+      try { process.kill(process.platform === 'win32' ? child.pid : -child.pid, sig); } catch { try { child.kill(sig); } catch { /* gone */ } }
+    };
+    const stop = (why: NonNullable<PluginScriptResult['stopped']>): void => {
+      if (stopped || settled) return;
+      stopped = why;
+      killGroup('SIGTERM');
+      killTimer = setTimeout(() => killGroup('SIGKILL'), KILL_GRACE_MS);
+    };
+    const finish = (code: number | null, sig: NodeJS.Signals | null): void => {
+      if (settled) return;
+      settled = true;
+      if (killTimer) clearTimeout(killTimer);
+      if (exitGrace) clearTimeout(exitGrace);
+      for (const t of timers) clearTimeout(t as ReturnType<typeof setTimeout>);
+      killGroup('SIGKILL'); // 主进程退了,组里留下的子进程一并结束
+      o.signal?.removeEventListener('abort', onAbort);
+      resolve({ exitCode: code, signal: sig, stdout, stderr, ...(stopped ? { stopped } : {}), ...(startError ? { startError } : {}), removedLinks: [], waitedMs: startedAt - queuedAt, ranMs: Date.now() - startedAt });
+    };
+    const onAbort = (): void => stop('aborted');
+    let exitGrace: ReturnType<typeof setTimeout> | null = null;
+    try {
+      // 多账号模式唯一放行的子进程:插件包里的脚本,不经 shell、参数原样、环境只给上面那几样(见文件头);换用户时带 uid / gid
+      child = spawn(target.command[0], [...target.command.slice(1), target.file, ...args], {
+        cwd: o.cwd, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: process.platform !== 'win32', windowsHide: true,
+        ...(user ? { uid: user.uid, gid: user.gid } : {}),
+      });
+    } catch (e) {
+      const msg = (e as Error)?.message || String(e);
+      resolve({ exitCode: null, signal: null, stdout: '', stderr: `could not start: ${msg}`, startError: msg, removedLinks: [], waitedMs: startedAt - queuedAt, ranMs: 0 });
+      return;
+    }
+    child.on('spawn', () => { spawned = true; });
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
+      if (stdout.length + d.length > STDOUT_MAX) { stdout += d.slice(0, Math.max(0, STDOUT_MAX - stdout.length)); stop('output'); return; }
+      stdout += d;
+    });
+    child.stderr?.on('data', (d: string) => { stderr = (stderr + d).slice(-STDERR_KEEP); });
+    child.on('error', (e) => { if (!spawned) startError = e.message; stderr += `\n${e.message}`; finish(null, null); });
+    child.on('close', (code, sig) => finish(code, sig));
+    // 脚本自己退了,但它起的子孙进程(脱离了进程组)还拿着输出管道 → close 永远不来、整个引擎的脚本队列卡死:退出后最多再等 2 秒收尾
+    child.on('exit', (code, sig) => {
+      if (settled || exitGrace) return;
+      exitGrace = setTimeout(() => { child.stdout?.destroy(); child.stderr?.destroy(); finish(code, sig); }, EXIT_GRACE_MS);
+      exitGrace.unref?.();
+    });
+    if (o.signal?.aborted) stop('aborted');
+    else o.signal?.addEventListener('abort', onAbort, { once: true });
+    const t = setTimeout(() => stop('timeout'), minutesMs(limits.scriptMinutes));
+    timers.push(t);
+    const cap = mbBytes(limits.scriptScratchMB);
+    const poll = setInterval(() => {
+      void dirBytes(scratch).then((n) => { if (n > cap) stop('scratch'); }, () => {});
+    }, SCRATCH_POLL_MS);
+    timers.push(poll);
+    for (const x of timers) (x as any).unref?.();
+  });
 }
