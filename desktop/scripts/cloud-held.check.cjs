@@ -115,32 +115,43 @@ async function run({ old }) {
       await win.screenshot({ path: path.join(SHOTS, 'held-window.png') })
     }
     // 失败提示是全局通知(右上角 .ntf-wrap 堆叠,error 级常驻手动关)。同屏超过 4 条会排进队列、不在 DOM 里,
-    // 所以每次点之前先把已有的通知关掉,两条断言用同一个定位器(失败那条证明这个定位器看得见提示)。
+    // 所以每次点之前把已有的通知(连同排队的)关光,两条断言用同一个定位器(失败那条证明这个定位器看得见提示)。
     const failToast = win.locator('.ntf-wrap .ntf.ntf-error', { hasText: '没处理成' })
     const clearToasts = async () => {
-      await win.locator('.ntf-wrap .ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
-      await win.waitForTimeout(400)
+      for (let i = 0; i < 12; i++) {
+        const left = await win.evaluate(() => document.querySelectorAll('.ntf-wrap .ntf').length + document.querySelectorAll('.ntf-wrap .ntf-more').length)
+        if (!left) return true
+        await win.evaluate(() => document.querySelectorAll('.ntf-wrap .ntf-close').forEach((b) => b.click()))
+        await win.waitForTimeout(400)
+      }
+      return false
     }
-    // 点完等到 resolveHeld 被调用、按钮恢复可点(toast 在 finally 放开按钮之前发),再留一拍给通知入场
+    // 点完等到 resolveHeld 被调到第 n 次、四个按钮恢复可点(toast 在 finally 放开按钮之前发),再留一拍给通知入场。
+    // 等不到就返回 false,断言跟着红,不在没等到的情况下判「没弹」。
     const settle = async (n) => {
-      await win.waitForFunction((k) => window.__resolveCalls.length >= k, n, { timeout: 5000 }).catch(() => {})
-      await win.waitForFunction(() => [...document.querySelectorAll('.amx-tree .amx-held .amx-held-actions button')].every((b) => !b.disabled), null, { timeout: 5000 }).catch(() => {})
+      const called = await win.waitForFunction((k) => window.__resolveCalls.length === k, n, { timeout: 5000 }).then(() => true, () => false)
+      const idle = await win.waitForFunction(() => {
+        const bs = [...document.querySelectorAll('.amx-tree .amx-held .amx-held-actions button')]
+        return bs.length === 4 && bs.every((b) => !b.disabled)
+      }, null, { timeout: 5000 }).then(() => true, () => false)
       await win.waitForTimeout(500)
+      return called && idle
     }
     await notice.locator('.amx-csd-item input').nth(2).click()
-    await clearToasts()
+    const clear1 = await clearToasts()
     await notice.locator('.amx-held-actions button', { hasText: '用这台的' }).click()
-    await settle(1)
+    const settled1 = await settle(1)
     const calls = await win.evaluate(() => window.__resolveCalls)
     check('② 勾掉一篇后点「用这台的」:只处理勾着的两篇,带上库根', JSON.stringify(calls) === JSON.stringify([{ binding: vault, paths: [`Notes/${DIR}/Lecture 1.md`, `Notes/${DIR}/Lecture 2.md`], choice: 'local' }]), JSON.stringify(calls))
     const okToasts = await failToast.count()
-    check('⑤ 处理成功(回同步状态,带 error: null):不弹「没处理成」', okToasts === 0, `失败提示 ${okToasts} 条`)
-    await clearToasts()
+    check('⑤ 处理成功(回同步状态,带 error: null):不弹「没处理成」', clear1 && settled1 && okToasts === 0, `清空通知 ${clear1} / 处理完 ${settled1} / 失败提示 ${okToasts} 条`)
+    const clear2 = await clearToasts()
     await win.evaluate(() => { window.__resolveFail = true })
     await notice.locator('.amx-held-actions button', { hasText: '用这台的' }).click()
-    await settle(2)
+    const settled2 = await settle(2)
     const shown = await failToast.first().waitFor({ timeout: 3000 }).then(() => true, () => false)
-    check('⑤ 回 { error: \'binding-not-found\' }:弹「没处理成」', shown && await failToast.count() === 1, `失败提示 ${await failToast.count()} 条`)
+    const failCount = await failToast.count()
+    check('⑤ 回 { error: \'binding-not-found\' }:弹「没处理成」', clear2 && settled2 && shown && failCount === 1, `清空通知 ${clear2} / 处理完 ${settled2} / 失败提示 ${failCount} 条`)
   } finally {
     await app.close()
   }
