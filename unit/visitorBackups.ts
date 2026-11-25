@@ -193,14 +193,22 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
   const restoring = new Map<string, Promise<void>>()
   let restoreQueue: Promise<unknown> = Promise.resolve()
 
+  /** The account is on the engine now (new, restored or started over): not archived, and due for a look by the next pass. */
+  function onSchedule(id: string): void {
+    const a = acct(id)
+    a.cold = undefined
+    a.dirty = true
+    a.dirtySince ??= now()
+    void save()
+  }
+
   async function bringBack(id: string, bearer: string): Promise<void> {
     const info = await engine('GET', `/accounts/${id}`)
     if (info.status !== 200) throw new Refused(503, 'ENGINE_UNAVAILABLE', `engine answered ${info.status}`)
     if (info.json?.state === 'active') {
       // the engine has it (e.g. a restore finished just before this process stopped, before the state file said so):
       // the file must not keep calling it archived, or no backup would ever run for it again
-      const a = acct(id)
-      if (a.cold) { a.cold = undefined; a.dirty = true; a.dirtySince ??= now(); void save() }
+      if (acct(id).cold) onSchedule(id)
       return
     }
     const engineState: 'cold' | 'absent' = info.json?.state === 'cold' ? 'cold' : 'absent'
@@ -210,6 +218,7 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
     if (r.status === 404 && r.json?.code === 'BACKUP_NONE' && engineState === 'absent') {
       const admit = await engine('POST', `/accounts/${id}/admit`)
       if (admit.status !== 200) throw new Refused(admit.status === 503 ? 503 : 502, admit.json?.code || 'ACCOUNT_UNAVAILABLE', admit.json?.detail || 'the account could not be opened')
+      onSchedule(id)
       log(`[unit] Hosted unit account backups: ${id} is new here`)
       return
     }
@@ -218,6 +227,9 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
       if (engineState === 'cold') await engine('POST', `/accounts/${id}/forget`)
       const admit = await engine('POST', `/accounts/${id}/admit`)
       if (admit.status !== 200) throw new Refused(503, admit.json?.code || 'ACCOUNT_UNAVAILABLE', 'the account could not be opened')
+      const a = acct(id)
+      a.lastBackup = undefined
+      onSchedule(id)
       log(`[unit] Hosted unit account backups: ${id} came back after the retention period; starting a new account`)
       return
     }
@@ -242,11 +254,10 @@ export async function createVisitorBackups(options: VisitorBackupsOptions): Prom
       throw new Refused(503, 'ACCOUNT_RESTORE_UNAVAILABLE', 'Your data could not be brought back right now; try again in a minute.')
     }
     const a = acct(id)
-    a.cold = undefined
     a.lastBackup = { backupId, fingerprint: typeof out?.fingerprint === 'string' ? out.fingerprint : null, sha256, at: now() }
-    // dirty stays as the request that brought it back set it: that request (and what it starts) writes after this point,
-    // and the next pass checks it against the restored fingerprint ("unchanged" costs no upload)
-    void save()
+    // the request that brought it back (and what it starts) writes after this point; the next pass checks it against the
+    // restored fingerprint ("unchanged" costs no upload)
+    onSchedule(id)
     log(`[unit] Hosted unit account backups: ${id} restored`)
   }
 

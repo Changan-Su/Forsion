@@ -112,8 +112,10 @@ async function scanAccount(id: string): Promise<{ fingerprint: string; unarchiva
   let seen = 0;
   let unarchivable = 0;
   const walk = async (dir: string, rel: string): Promise<void> => {
-    for (const name of (await readdir(dir)).sort()) {
+    for (const { name, exact } of await namesIn(dir)) {
       if (++seen > MAX_ENTRIES) throw new Error('too many entries');
+      // a name that is not valid UTF-8 cannot be told apart from a real one with U+FFFD in it: not carried, never purged over
+      if (!exact) { unarchivable++; continue; }
       const relName = rel ? `${rel}/${name}` : name;
       const p = join(dir, name);
       let st;
@@ -134,6 +136,13 @@ async function scanAccount(id: string): Promise<{ fingerprint: string; unarchiva
   };
   await walk(home, '');
   return { fingerprint: createHash('sha256').update(lines.join('\n')).digest('hex'), unarchivable };
+}
+
+/** A folder's entries in name order; `exact` = the name on disk is valid UTF-8 (the string really names that entry). */
+async function namesIn(dir: string): Promise<Array<{ name: string; exact: boolean }>> {
+  return (await readdir(dir, { encoding: 'buffer' }))
+    .map((raw) => { const name = raw.toString('utf8'); return { name, exact: Buffer.from(name, 'utf8').equals(raw) }; })
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 /** A name under the account folder that the archive can carry and a restore will take back (the same check as restore). */
@@ -274,9 +283,9 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
       await write(tarEntryHeader('home', 'dir', 0, 0o700));
       await addFile('home/state.db', dbCopy);
       const walk = async (dir: string, rel: string): Promise<void> => {
-        for (const name of (await readdir(dir)).sort()) {
+        for (const { name, exact } of await namesIn(dir)) {
           if (++entries > MAX_ENTRIES) throw new HostError(413, 'BACKUP_TOO_LARGE', 'too many files');
-          if (!rel && SKIP_TOP.has(name)) continue;
+          if (!exact || (!rel && SKIP_TOP.has(name))) continue;
           const relName = rel ? `${rel}/${name}` : name;
           // a name the restore would refuse stays out (and keeps the account from being purged, see scanAccount)
           if (!archivableName(relName)) continue;
@@ -306,11 +315,13 @@ export function createAccountBackup(deps: AccountBackupDeps & { controlToken: st
     if (gates.has(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'another operation is running on this account');
     if (cold.has(id)) throw new HostError(409, 'ACCOUNT_COLD', 'the account is not on this engine');
     if (!exists(id)) throw new HostError(404, 'ACCOUNT_ABSENT', 'no such account');
+    // "unchanged" lets the host mark the account as backed up: not while a run, a write or memory organising is going, before
+    // or after the walk (a write that ran during the walk either shows in the fingerprint or is still counted at the second look)
+    const busy = (): boolean => accountHasActiveRuns(id) || deps.inflight(id).writes > 0 || !!organizePendingFor(id);
+    const wasBusy = busy();
     const before = await accountFingerprint(id);
-    // "unchanged" lets the host mark the account as backed up: not while a run, a write or memory organising is still going
-    // (its output would land after the answer and stay out of every backup until the next visit)
     if (since && before === since) {
-      if (accountHasActiveRuns(id) || deps.inflight(id).writes > 0 || organizePendingFor(id)) throw new HostError(409, 'ACCOUNT_BUSY', 'the account is in use');
+      if (wasBusy || busy()) throw new HostError(409, 'ACCOUNT_BUSY', 'the account is in use');
       return { unchanged: true as const, fingerprint: before };
     }
     // a run that is going is not waited for behind the gate (it can take minutes): only one that is just finishing

@@ -42,6 +42,7 @@ const svc = {
   putFails: false,
   cold: [] as Array<{ user: string; backupId: string }>,
   latestOverride: null as null | string,
+  expired: new Set<string>(), // users whose backups the service removed after the retention period
 }
 let accountServer: http.Server, origin = ''
 // ── fake engine (visitor side + host control) ───────────────────────────────────────
@@ -100,6 +101,7 @@ beforeAll(async () => {
     if (url.pathname === '/api/units/backups/restore') {
       const who = identities[token]
       if (!who) return send(401, { code: 'VISITOR_AUTH_INVALID' })
+      if (svc.expired.has(who)) return send(410, { code: 'BACKUP_EXPIRED' })
       const rp = svc.restorePoints.get(who)
       if (!rp) return send(404, { code: 'BACKUP_NONE' })
       const key = `${UNIT_ID}/${who}/${rp.backupId}.tgz`
@@ -131,6 +133,10 @@ beforeAll(async () => {
     if ((m = /^\/accounts\/([^/]+)$/.exec(p))) {
       const st = eng.accounts.get(m[1])
       return send(200, st === 'cold' ? { state: 'cold', cold: { backupId: eng.coldBackup.get(m[1]) ?? null } } : { state: st ?? 'absent' })
+    }
+    if ((m = /^\/accounts\/([^/]+)\/forget$/.exec(p))) {
+      if (eng.accounts.get(m[1]) !== 'cold') return send(409, { code: 'ACCOUNT_NOT_COLD' })
+      eng.accounts.delete(m[1]); eng.coldBackup.delete(m[1]); return send(200, { state: 'absent' })
     }
     if ((m = /^\/accounts\/([^/]+)\/admit$/.exec(p))) {
       if (eng.accounts.get(m[1]) === 'cold') return send(409, { code: 'ACCOUNT_COLD' })
@@ -174,7 +180,7 @@ afterAll(async () => {
   await new Promise((done) => engineServer.close(done))
 })
 beforeEach(() => {
-  svc.down = false; svc.restorePoints.clear(); svc.pending.clear(); svc.objects.clear(); svc.calls.length = 0; svc.putFails = false; svc.cold.length = 0; svc.latestOverride = null
+  svc.down = false; svc.restorePoints.clear(); svc.pending.clear(); svc.objects.clear(); svc.calls.length = 0; svc.putFails = false; svc.cold.length = 0; svc.latestOverride = null; svc.expired.clear()
   eng.accounts.clear(); eng.coldBackup.clear(); eng.data.clear(); eng.fingerprint.clear(); eng.snapshots.clear(); eng.calls.length = 0; eng.visitorCalls.length = 0; eng.restored.clear(); eng.restoreDelayMs = 0
 })
 
@@ -415,6 +421,23 @@ describe('hosted public Unit: backup schedule and archiving', () => {
       await o.b.tick()
       expect(svc.restorePoints.get(BOB)?.body.toString()).toBe('bob restored before the stop')
     } finally { await o.b.close() }
+  })
+
+  it('a visitor back after the retention period starts over, and the new account is backed up without waiting for the hourly look', async () => {
+    const t0 = Date.parse('2026-11-25T00:00:00Z')
+    const archived = { lastSeen: t0 - 500 * 24 * 3600_000, lastBackup: { backupId: 'bk-gone', fingerprint: null, sha256: '0'.repeat(64), at: t0 - 495 * 24 * 3600_000 }, cold: { backupId: 'bk-gone', at: t0 - 400 * 24 * 3600_000, serverMarked: true } }
+    eng.accounts.set(ALICE, 'cold'); eng.coldBackup.set(ALICE, 'bk-gone')
+    svc.expired.add(ALICE)
+    const o = await orchestrator({ state: JSON.stringify({ version: 1, accounts: { [ALICE]: archived } }) })
+    try {
+      expect(await o.b.prepare(ALICE, 'tok-alice')).toBeNull()
+      expect(eng.accounts.get(ALICE)).toBe('active')
+      expect(o.logs.join('\n')).toMatch(/after the retention period/)
+    } finally { await o.b.close() }
+    const saved = (await o.state()).accounts[ALICE]
+    expect(saved.cold).toBeUndefined()
+    expect(saved.dirty).toBe(true)
+    expect(saved.lastBackup).toBeUndefined()
   })
 
   it('archives nobody while the state file cannot be read, and does not overwrite it', async () => {

@@ -200,6 +200,20 @@ describe('account backups (host control)', () => {
     for (const r of [a, b]) if (r.json?.snapshotId) await host('DELETE', `/snapshots/${r.json.snapshotId}`);
   });
 
+  it('a file name that is not valid UTF-8 is not carried, and keeps the account from being purged (Linux; APFS refuses such names)', async () => {
+    const bad = Buffer.concat([Buffer.from(join(accountDir('alice'), 'raw-')), Buffer.from([0xff, 0xfe]), Buffer.from('.txt')]);
+    try { writeFileSync(bad, 'bytes under a name that is not UTF-8'); } catch (e: any) { if (['EILSEQ', 'EINVAL'].includes(e?.code)) return; throw e; }
+    try {
+      const s = (await host('POST', '/accounts/alice/snapshot', { body: {} })).json;
+      const tar = (await host('GET', `/snapshots/${s.snapshotId}`)).buf;
+      expect(tar.length).toBe(s.size);
+      await host('DELETE', `/snapshots/${s.snapshotId}`);
+      const kept = await host('POST', '/accounts/alice/purge', { body: { fingerprint: s.fingerprint, backupId: 'b-raw', sha256: s.sha256 } });
+      expect(kept.json.code).toBe('ACCOUNT_NOT_ARCHIVABLE');
+      expect(existsSync(accountDir('alice'))).toBe(true);
+    } finally { unlinkSync(bad); }
+  });
+
   it('refuses a snapshot while a run is going', async () => {
     let release!: () => void;
     holdRun = new Promise<void>((r) => { release = r; });
