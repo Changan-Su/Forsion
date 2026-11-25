@@ -41,7 +41,7 @@ vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSp
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { bootMultiAccount, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
+import { bootMultiAccount, outboundAccount, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
 import { LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
 import { pluginScriptQueue } from '../src/services/pluginScripts.js';
@@ -65,6 +65,20 @@ function writeBundle(): void {
     const o = process.argv.find((a) => a.startsWith('--out='));
     if (o) fs.writeFileSync(o.slice(6), 'written by script');
     console.log(JSON.stringify(out));
+  `);
+  // writes a 16 kHz mono WAV whose samples spell its first argument into the turn's TMPDIR, prints the path (a fetch script's audio)
+  writeFileSync(join(sdir, 'wav.mjs'), `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    let pcm = Buffer.from(String(process.argv[2] || 'AUDIO').repeat(50));
+    if (pcm.length % 2) pcm = Buffer.concat([pcm, Buffer.from(' ')]);
+    const h = Buffer.alloc(44);
+    h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16);
+    h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(16000, 24); h.writeUInt32LE(32000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34);
+    h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+    const out = path.join(process.env.TMPDIR, 'audio.wav');
+    fs.writeFileSync(out, Buffer.concat([h, pcm]));
+    console.log(out);
   `);
   // records when it ran (to prove scripts never overlap)
   writeFileSync(join(sdir, 'slow.mjs'), `
@@ -293,6 +307,54 @@ describe('multi-account: plugin scripts — what may run', () => {
     expect(outputs[5]).toMatch(/exit code: 0/);
     expect(existsSync(join(accDir('bob'), 'from-alice.txt'))).toBe(false);
     expect(existsSync(join(accDir('alice'), 'workspace', 'ok.txt'))).toBe(true);
+  }, 60_000);
+});
+
+describe('multi-account: a script\'s audio is transcribed in the same turn', () => {
+  it('transcribe_audio reads the audio in this turn\'s scratch and sends it to the cloud, never to a desktop bridge; another account cannot send it', async () => {
+    // a desktop bridge on this machine belongs to whoever runs the engine: accounts never reach it
+    const bridge = join(env.home, 'desktop-bridge.json');
+    writeFileSync(bridge, JSON.stringify({ url: 'http://127.0.0.1:9/mcp', token: 'decoy-bridge-token' }));
+    try {
+      const words = `ALICE_SPOKEN_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const before = E.fake.asrCalls.length;
+      let audioPath = '';
+      const s = E.fake.script('alice', 'asr', steps([
+        { calls: [{ name: 'run_plugin_script', args: { skill: SKILL, script: 'scripts/wav.mjs', args: [words] } }] },
+        (ctx) => {
+          audioPath = stdoutOf(ctx.results.filter((x) => x.name === 'run_plugin_script').pop()!.output).trim();
+          return { calls: [{ name: 'transcribe_audio', args: { path: audioPath, timestamps: true } }] };
+        },
+      ], 'done'));
+      const r = await runToEnd(E.client, 'alice', s, { timeoutMs: 60_000 });
+      expect(r.follow?.status, JSON.stringify(r.follow?.events.filter((e) => e.type === 'error'))).toBe('done');
+      expect(E.fake.outbound.some((o) => outboundAccount(o) === 'alice' && o.tools.includes('transcribe_audio')), 'offered to the account').toBe(true);
+      expect(audioPath.startsWith(join(accDir('alice'), '.scratch'))).toBe(true);
+      const out = s.results.find((x) => x.name === 'transcribe_audio')!.output;
+      expect(out).toContain(words);
+      expect(JSON.parse(out).text).toContain(words); // same JSON contract as the bridge
+      expect(E.fake.asrCalls.slice(before).map((c) => c.account)).toEqual(['alice']);
+
+      // bob aims at alice's audio: refused before anything is read or sent
+      mkdirSync(join(accDir('alice'), 'workspace'), { recursive: true });
+      const secret = `ALICE_ONLY_${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const aliceAudio = join(accDir('alice'), 'workspace', 'alice-audio.mp3');
+      writeFileSync(aliceAudio, secret.repeat(10));
+      const mark = E.fake.asrCalls.length;
+      const b = E.fake.script('bob', 'asr-steal', steps([{ calls: [
+        { name: 'transcribe_audio', args: { path: aliceAudio } },
+        { name: 'transcribe_audio', args: { path: audioPath } },
+        { name: 'transcribe_audio', args: { path: join(accDir('bob'), '..', 'alice', 'workspace', 'alice-audio.mp3') } },
+      ] }], 'done'));
+      const rb = await runToEnd(E.client, 'bob', b, { timeoutMs: 60_000 });
+      expect(rb.follow?.status).toBe('done');
+      const outs = b.results.filter((x) => x.name === 'transcribe_audio').map((x) => x.output);
+      expect(outs).toHaveLength(3);
+      for (const o of outs) { expect(o).toMatch(/^Error: Access denied/); expect(o).not.toContain(secret); }
+      expect(E.fake.asrCalls.slice(mark)).toEqual([]);
+    } finally {
+      rmSync(bridge, { force: true });
+    }
   }, 60_000);
 });
 

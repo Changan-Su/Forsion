@@ -11,7 +11,7 @@ import { setContentStorageScope } from '@lcl/engine/contentStorageScope'
 import { installScopedStorage } from './scopedStorage'
 import { parseRelayUrl } from '../../mobile/src/relayPaths'
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] }; capabilities?: UnitCloudCapabilities }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; visitorEngine?: boolean; browserStorage?: boolean; account?: { apiBase: string; loginPath: string; loginVia?: string; handoffTargets?: string[] }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 
@@ -226,6 +226,9 @@ export async function installUnitShim(): Promise<boolean> {
   // cloudApiBase 显式置空(P1-K6 S1):局域网直连的设备页没有云端 API;连接键压在对方偏好之后,对方也写不进来。
   const cfg = cloud?.config ?? { mode: 'external' as const, backendUrl: engineBase, token: published ? '' : token, cloudUrl: '', cloudApiBase: '', sandbox: 'none' as const }
   const authHeaders = (): Record<string, string> | undefined => unitAuthHeader(fixedToken)
+  /** 公开入口带访客引擎(多账号模式):引擎没有 shell,只跑插件包里自带的脚本(run_plugin_script),插件据 executionCapabilities.pluginScripts
+   *  换做法。只在连接配置真的指着本页的 /engine、并且带着访客自己的令牌时才声明 —— 访客引擎只认 Bearer 令牌,没令牌的请求一律 401。 */
+  const visitorEngineReady = published && meta.visitorEngine === true && !delegated && cfg.backendUrl === engineBase && !!cfg.token
   /** 对方设备的 UI 偏好(unit/config 白名单子集):Agent Desk/朗读/笔记偏好等按 desktopConfig
    *  门控的功能靠它长出来 —— 体验跟随对方设置(2026-08-24 拍板);写回走同一张白名单。 */
   let remotePrefs: Record<string, unknown> = {}
@@ -258,7 +261,7 @@ export async function installUnitShim(): Promise<boolean> {
      *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
     remoteCaller: !local || !!delegated,
     hostFiles: !published && !delegated,
-    executionCapabilities: { host: delegated ? false : local ? !!meta.localCapabilities?.host : !published },
+    executionCapabilities: { host: delegated ? false : local ? !!meta.localCapabilities?.host : !published, ...(visitorEngineReady ? { pluginScripts: true } : {}) },
     ...(delegated ? { delegatedAdmin: delegated } : {}),
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),

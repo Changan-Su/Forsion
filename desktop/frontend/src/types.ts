@@ -585,8 +585,10 @@ declare global {
       /** 委托管理员角色(unitShim 按 unit/whoami 的 role 注入,只在 Unit 网页的这一种来路出现):壳只做 Agent 管理,
        *  白名单外的请求不发、入口收起。判断一律走 services/delegatedAdmin.ts 的 isDelegatedAdmin()。 */
       delegatedAdmin?: { name: string }
-      /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
-      executionCapabilities?: { host: boolean }
+      /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify.
+       *  pluginScripts: the engine has no shell (host is false) but runs the scripts that ship inside an installed plugin's skill
+       *  folder through run_plugin_script (a multi-account engine). Plugins that fetch with a bundled script switch to that path. */
+      executionCapabilities?: { host: boolean; pluginScripts?: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */
       hostFiles?: boolean
       /** Verified account config installed synchronously before stores initialize. */

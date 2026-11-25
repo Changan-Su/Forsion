@@ -106,6 +106,8 @@ export const outboundAccount = (r: OutboundRecord): string | undefined => r.runA
 export interface FakeBrain {
   brain: any;
   outbound: OutboundRecord[];
+  /** every cloud transcription request: whose context it ran in and how many bytes it carried */
+  asrCalls: Array<{ account: string | null; bytes: number; mime: string }>;
   scripts: Map<string, Script>;
   script(account: string, label: string, next: Script['next']): Script;
   /** Holds the main-loop call of the given script at `step` until released. */
@@ -121,6 +123,7 @@ function msgText(m: any): string {
 
 export function createFakeBrain(opts: { currentAccount?: () => string | null | undefined; defaultText?: string } = {}): FakeBrain {
   const outbound: OutboundRecord[] = [];
+  const asrCalls: FakeBrain['asrCalls'] = [];
   const scripts = new Map<string, Script>();
   const runScripts = new Map<string, Script>();
   const gates = new Map<string, { promise: Promise<void>; release: () => void; reached: Promise<void>; hit: () => void; signal?: AbortSignal }>();
@@ -241,6 +244,14 @@ export function createFakeBrain(opts: { currentAccount?: () => string | null | u
     memory: { getMemory: async () => ({ content: '', updatedAt: null }), appendMemoryEntry: async () => ({ appended: false }), appendLogEntry: async () => ({ date: '', time: '' }), getLog: async () => ({ date: '', content: '', updatedAt: null }) },
     assets: { getSkill: async () => null, listCustomTools: async () => [], listForcedCustomTools: async () => [], listSkills: async () => [] },
     search: { runSearch: async () => ({ provider: 'fake', text: 'no results', results: [] }) },
+    // cloud transcription that echoes the printable bytes it was sent: someone else's file sent here shows up in the tool
+    // output, where the leak checks already look
+    asr: {
+      transcribe: async (req: { audio: Uint8Array; mime: string }) => {
+        asrCalls.push({ account: opts.currentAccount?.() ?? null, bytes: req.audio.length, mime: req.mime });
+        return { text: `ASR(${Buffer.from(req.audio).toString('latin1').replace(/[^\x20-\x7e]/g, '').slice(0, 4000)})` };
+      },
+    },
     models: {
       listGlobalModels: async () => fakeModels,
       listModelsForProject: async () => ({ models: fakeModels, defaultModelId: MODEL_ID, backgroundModelId: MODEL_ID, reachable: true }),
@@ -261,6 +272,7 @@ export function createFakeBrain(opts: { currentAccount?: () => string | null | u
   return {
     brain,
     outbound,
+    asrCalls,
     scripts,
     script(account, label, next) {
       const token = randUpper(10);

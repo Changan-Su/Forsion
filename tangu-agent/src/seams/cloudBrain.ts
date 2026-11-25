@@ -415,6 +415,12 @@ export interface DecisionBrain {
   decide(req: DecisionRequest): Promise<DecisionResult>;
 }
 
+/** 云端语音识别(POST /api/brain/transcribe):Key 住云端,按音频时长扣调用者的额度;只回整段文字。
+ *  一次一段:生产网关读超时约 60 秒,长音频由调用方切段(services/cloudTranscribe.ts)。 */
+export interface AsrBrain {
+  transcribe(req: { audio: Uint8Array; mime: string; language?: string; modelId?: string; signal?: AbortSignal }): Promise<{ text: string }>;
+}
+
 /** Forsion 账号代管的通话音色(云端复刻):key 住云端,按用户隔离;只有云端实现。 */
 export interface CloudVoice { id: string; voice: string; name: string; modelId: string; hasSample: boolean }
 export interface VoicesBrain {
@@ -567,6 +573,8 @@ export interface CloudBrainServices {
   /** 决策模型(System One:选择 / 是非 / 打分的概率,不生成文字);可选:仅 httpBrain 实现(Forsion 云端中转 /api/brain/decision,Key 住云端)。
    *  未注入 / 没登录 → 调用方退回自己的启发式(services/judgeSignals.ts 的纠正判定)。 */
   decision?: DecisionBrain;
+  /** 云端语音识别;可选:仅 httpBrain 实现(Forsion 云端,Key 住云端)。transcribe_audio 没有桌面桥时走它;未注入 → 那条路不出现。 */
+  asr?: AsrBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
   agentFiles?: AgentFilesBrain;
   /** 每-agent 人格(Phase 2 云端运行水合);可选:未注入 → agentLoop 回落本地 getAgent。 */
