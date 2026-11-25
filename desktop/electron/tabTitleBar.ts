@@ -16,10 +16,11 @@ export function watchTabTitleBar(win: BrowserWindow): void {
   win.on('leave-full-screen', () => report(false))
 }
 
-export function parseTabTitleBar(input: unknown): { height: number; symbolColor: string } | null {
+export function parseTabTitleBar(input: unknown): { height: number; symbolColor: string; wholeUnit?: boolean } | null {
   if (!input || typeof input !== 'object') return null
-  const { height, symbolColor } = input as Record<string, unknown>
+  const { height, symbolColor, wholeUnit } = input as Record<string, unknown>
   if (typeof height !== 'number' || !Number.isInteger(height) || height < 16 || height > 128) return null
   if (typeof symbolColor !== 'string' || !/^#[0-9a-f]{6}$/i.test(symbolColor)) return null
-  return { height, symbolColor }
+  if (wholeUnit !== undefined && typeof wholeUnit !== 'boolean') return null
+  return { height, symbolColor, ...(typeof wholeUnit === 'boolean' ? { wholeUnit } : {}) }
 }

@@ -13,5 +13,7 @@ describe('tab title bar', () => {
       expect(parseTabTitleBar(input)).toBeNull()
     }
     expect(parseTabTitleBar({ height: 35, symbolColor: '#eeeeee' })).toEqual({ height: 35, symbolColor: '#eeeeee' })
+    expect(parseTabTitleBar({ height: 32, symbolColor: '#eeeeee', wholeUnit: 'true' })).toBeNull()
+    expect(parseTabTitleBar({ height: 32, symbolColor: '#eeeeee', wholeUnit: true })).toEqual({ height: 32, symbolColor: '#eeeeee', wholeUnit: true })
   })
 })

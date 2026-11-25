@@ -163,6 +163,38 @@ async function main() {
       R.check('3 Windows:标题条与原生按钮区均为 32px,按钮不覆盖胶囊',
         G.h.bar?.h === 32 && caption.visible && caption.height === 32 && caption.pillRight <= caption.right,
         fmt({ bar: G.h.bar, caption }))
+      const narrowed = await app.evaluate(async ({ BrowserWindow }) => {
+        const w = BrowserWindow.getAllWindows().find(x => !/[?&]window=/.test(x.webContents.getURL()))
+        for (let i = 0; i < 20 && w.getMinimumSize()[0] !== 480; i++) await new Promise(r => setTimeout(r, 50))
+        const original = w.getBounds()
+        w.setSize(532, original.height)
+        return { original, narrow: w.getBounds(), minimum: w.getMinimumSize() }
+      })
+      await win.waitForFunction(() => innerWidth < 560, undefined, { timeout: 5000 }).catch(() => {})
+      const narrowFrame = await win.evaluate(() => ({
+        width: innerWidth,
+        hideText: getComputedStyle(document.querySelector('.unitfr-pill-text')).display === 'none',
+        back: document.querySelector('.unitfr-back')?.getBoundingClientRect().right,
+        caption: navigator.windowControlsOverlay?.getTitlebarAreaRect().right,
+      }))
+      R.check('Windows 主窗整窗设备页可窄于 560px，保留图标及可点的返回按钮',
+        narrowed.minimum[0] === 480 && narrowFrame.width < 560 && narrowFrame.hideText && narrowFrame.back <= narrowFrame.caption,
+        fmt({ narrowed, narrowFrame }))
+      await shot('win-narrow')
+      await win.locator('.unitfr-back').click()
+      await win.waitForFunction(() => !document.documentElement.dataset.unitFrame && innerWidth >= 880, undefined, { timeout: 5000 }).catch(() => {})
+      const normal = await app.evaluate(({ BrowserWindow }, original) => {
+        const w = BrowserWindow.getAllWindows().find(x => !/[?&]window=/.test(x.webContents.getURL()))
+        const result = { bounds: w.getBounds(), minimum: w.getMinimumSize(), visible: w.isVisible() }
+        w.setBounds(original)
+        return result
+      }, narrowed.original)
+      R.check('Windows 返回本机恢复原最小宽度，保留窄窗的位置及高度',
+        normal.visible && normal.minimum[0] === 880 && normal.minimum[1] === 600 && normal.bounds.width >= 880 &&
+        normal.bounds.x === narrowed.narrow.x && normal.bounds.y === narrowed.narrow.y && Math.abs(normal.bounds.height - narrowed.narrow.height) <= 1,
+        fmt(normal))
+      if (!(await connect())) throw new Error('返回后无法重新连接设备页')
+      G = await geo()
     }
     const pillText = await win.evaluate(() => document.querySelector('.unitfr-pill')?.textContent ?? '')
     R.check('胶囊 = 主机地址 + 回到这台电脑,不带 #unit-owner 主人密钥', pillText === `127.0.0.1:${unit.port}/web回到这台电脑`, pillText)
