@@ -6,12 +6,12 @@
  *   2 打开:默认那台拉起的子进程 pid 不同、命令行只带 id;它的 userData / home 落在文件夹里(MCP 发现文件写进 <文件夹>/home)
  *   3 整机资源:**按子进程 pid(含它的整棵子进程树,引擎是孙进程)查它在听的端口**,不去探端口 ——
  *     不含 Clip / 门铃 8791–8794、MCP 固定段 3591–3611、浏览器扩展桥 47654 / 47655 以及本台架钉的扩展口;
- *     先正面确认 lsof 看得到它的 MCP 随机口、引擎确实起来了,免得「什么都没听」也算过
+ *     先正面确认端口表看得到它的 MCP 随机口、引擎确实起来了,免得「什么都没听」也算过
  *   4 再开一次:没有新 pid(新进程把参数交给在跑的那份就退出)
  *   5 默认那台的面板收到 localUnits:changed(另一个进程起来 / 退出时)
  *   6 --forsion-unit-quit 让它正常退出,运行记录随之删掉
  *   7 伪造的 id / 文件夹不在了 / 标记 id 对不上:退出码 3(台架模式下不弹框)、不建任何目录、名册一字不改
- *   8 拷贝出来的文件夹加入 → duplicate_id;搬了家的加入 → 改名册路径
+ *   8 拷贝出来的文件夹加入 → duplicate_id;默认实例一直开着也能移动停止的 Unit 文件夹,加入后改名册路径
  *
  * 隔离:一切都在一个临时目录里 —— HOME 改指临时目录、默认那台用 --user-data-dir(子进程原样转交)、
  *   默认那台走外部模式连死端口(不起引擎);文件夹 Unit 的引擎照常起(要量它的端口)。窗口一律 TANGU_HARNESS_QUIET=1。
@@ -52,16 +52,36 @@ async function until(fn, ms = 20000, step = 250) {
 const freePort = () => new Promise((resolve) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)) }) })
 
 // 台架自己的环境:去掉这一份的身份与重定向,HOME 指临时目录,窗口静默
-const STRIP = /^(TANGU_HOME|FORSION_WORKSPACE_DIR|FORSION_SANDBOX.*|PI_CU_SOCKET_PATH|TANGU_BACKEND_URL|TANGU_BROWSER_EXTENSION.*|FORSION_UNIT.*|FORSION_CLIP_ENTRANCE|ELECTRON_RUN_AS_NODE|ELECTRON_RENDERER_URL)$/
+const STRIP = /^(?:TANGU_|FORSION_|PI_CU_|ELECTRON_)/
 const BASE = {}
 for (const [k, v] of Object.entries(process.env)) if (!STRIP.test(k)) BASE[k] = v
 // 云端地址指死端口:新 Unit 没登录,引擎与 Extend 都不该去连真服务器
 Object.assign(BASE, { HOME: FAKE_HOME, TANGU_HARNESS_QUIET: '1', TANGU_CLOUD_URL: 'http://127.0.0.1:1' })
+if (process.platform === 'win32') {
+  BASE.USERPROFILE = FAKE_HOME
+  if (process.env.FORSION_TEST_DESKTOP) BASE.FORSION_TEST_DESKTOP = process.env.FORSION_TEST_DESKTOP
+}
 
-// ── 进程与端口(只读:ps / lsof)──
+// ── 进程与端口(只读)──
 function processTable() {
+  if (process.platform === 'win32') {
+    const query = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -Filter \"Name='electron.exe' OR Name='node.exe'\" | Select-Object ProcessId,ParentProcessId,CommandLine)"
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', query], {
+      encoding: 'utf8', maxBuffer: 16 << 20, windowsHide: true,
+    })
+    return JSON.parse(out).map(({ ProcessId: pid, ParentProcessId: ppid, CommandLine: cmd }) => ({ pid, ppid, cmd: cmd || '' }))
+  }
   const out = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 16 << 20 })
   return out.split('\n').map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean).map((m) => ({ pid: +m[1], ppid: +m[2], cmd: m[3] }))
+}
+async function renameFixture(from, to) {
+  for (let attempt = 0; ; attempt++) {
+    try { await fs.promises.rename(from, to); return }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code) || attempt === 8) throw error
+      await sleep(300)
+    }
+  }
 }
 function tree(root) {
   const rows = processTable()
@@ -76,6 +96,12 @@ function tree(root) {
 }
 function listening(pids) {
   if (!pids.length) return []
+  if (process.platform === 'win32') {
+    const owned = new Set(pids)
+    return execFileSync('netstat.exe', ['-ano'], { encoding: 'utf8', windowsHide: true })
+      .split(/\r?\n/).map((line) => /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/.exec(line))
+      .filter((m) => m && owned.has(Number(m[2]))).map((m) => ({ pid: Number(m[2]), port: Number(m[1]) }))
+  }
   let out = ''
   try { out = execFileSync('lsof', ['-nP', '-a', '-p', pids.join(','), '-iTCP', '-sTCP:LISTEN'], { encoding: 'utf8' }) } catch (e) { out = String(e.stdout || '') } // 没有 = 退出码 1
   return out.split('\n').slice(1).map((l) => { const c = l.trim().split(/\s+/); const m = l.match(/:(\d+) \(LISTEN\)/); return m ? { pid: +c[1], port: +m[1] } : null }).filter(Boolean)
@@ -93,7 +119,9 @@ for (let p = 3591; p <= 3611; p++) FORBIDDEN.add(p)
 
 /** 台架直接起一份(= 双击桌面快捷方式那条路),env 自定;回 { child, done } 。 */
 function launchDirect(args, env) {
-  const child = spawn(ELECTRON, [ROOT, `--user-data-dir=${UD}`, '--lang=zh-CN', ...args, ...electron.MAC_FLAGS], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'] })
+  const quiet = env.FORSION_TEST_DESKTOP === 'left' && process.platform === 'win32'
+    ? [`--require=${path.join(ROOT, 'scripts/lib/background-desktop.cjs')}`] : []
+  const child = spawn(ELECTRON, [...quiet, ROOT, `--user-data-dir=${UD}`, '--lang=zh-CN', ...args, ...electron.MAC_FLAGS], { cwd: ROOT, env, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
   let stderr = ''
   child.stderr.on('data', (b) => { stderr += b })
   const done = new Promise((resolve) => child.on('exit', (code) => resolve({ code, stderr })))
@@ -111,7 +139,8 @@ async function main() {
   fs.writeFileSync(path.join(UD_DEV, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: 'http://127.0.0.1:1', token: 'bench' }))
   const dEnv = { ...BASE, TANGU_HOME: path.join(T, 'default-home'), FORSION_WORKSPACE_DIR: path.join(T, 'default-ws'), FORSION_CLIP_ENTRANCE: '0' }
   const app = await electron.launch({ args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: dEnv })
-  const dPid = app.process().pid
+  const dPid = await app.evaluate(() => process.pid)
+  ours.add(app.process().pid)
   ours.add(dPid)
   try {
     const page = await until(async () => {
@@ -155,7 +184,7 @@ async function main() {
     check('A 的 home / userData 落在文件夹里(MCP 发现文件写进 A/home;app-data 有 Electron 自己的文件)', !!bridge && fs.readdirSync(path.join(A, 'app-data')).length > 1, { bridge: bridge?.url, appData: fs.readdirSync(path.join(A, 'app-data')).slice(0, 8) })
     const t1 = p1 ? tree(p1) : []
     const l1 = listening(t1.map((r) => r.pid))
-    check('正面:lsof 按 pid 看得到 A 在听它的 MCP 随机口', bridgePort > 0 && l1.some((x) => x.port === bridgePort), { bridgePort, l1 })
+    check('正面:按 pid 在端口表里看得到 A 的 MCP 随机口', bridgePort > 0 && l1.some((x) => x.port === bridgePort), { bridgePort, l1 })
     const bad1 = l1.filter((x) => FORBIDDEN.has(x.port))
     check('A(默认那台拉起的)整棵进程树不听整机固定口(Clip / 门铃 / MCP 3591–3611 / 扩展桥)', bad1.length === 0, { bad: bad1, all: l1 })
     check('默认那台面板收到 localUnits:changed(A 起来了)', await until(async () => (await page.evaluate(() => window.__luChanged)) > changedBefore, 10000), await page.evaluate(() => window.__luChanged))
@@ -212,7 +241,8 @@ async function main() {
       pg.on('console', (m) => { if (m.type() === 'error' && /No handler registered/.test(m.text())) noHandler.push(m.text().slice(0, 200)) })
     }
     const appA = await electron.launch({ args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT, `--forsion-unit=${idA}`], cwd: ROOT, env: BASE })
-    const pidA = appA.process().pid
+    const pidA = await appA.evaluate(() => process.pid)
+    ours.add(appA.process().pid)
     ours.add(pidA)
     appA.on('window', watchPage)
     for (const w of appA.windows()) watchPage(w)
@@ -256,7 +286,7 @@ async function main() {
     ours.add(forged.child.pid)
     const fr = await within(forged.done, 20000)
     check('伪造的 id:退出码 3、说明 not_found', fr.code === 3 && /refused \(not_found\)/.test(fr.stderr), fr)
-    fs.renameSync(path.join(PARENT, 'Bench B'), path.join(T, 'moved-B'))
+    await renameFixture(path.join(PARENT, 'Bench B'), path.join(T, 'moved-B'))
     const missing = launchDirect([`--forsion-unit=${idB}`], BASE)
     ours.add(missing.child.pid)
     const mr = await within(missing.done, 20000)
@@ -311,6 +341,12 @@ main()
   .finally(() => {
     const failed = results.filter((r) => !r.ok)
     console.log(`\n${results.length - failed.length}/${results.length} passed`)
-    if (!process.env.KEEP_TMP) fs.rmSync(T, { recursive: true, force: true }); else console.log(`临时目录留着:${T}`)
+    if (!process.env.KEEP_TMP) {
+      try { fs.rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }) }
+      catch (error) {
+        if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes(error.code)) throw error
+        console.log(`fixture cleanup: ${error.code}; temp directory retained`)
+      }
+    } else console.log(`临时目录留着:${T}`)
     process.exit(failed.length ? 1 : 0)
   })
