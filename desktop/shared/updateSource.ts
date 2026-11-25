@@ -42,6 +42,8 @@ export interface WebsiteInstaller {
   size?: number
   /** base64 的 SHA-512(electron-updater 校验用);老记录没有。 */
   sha512?: string
+  /** 官网存了这一版的 blockmap(GitHub 导入的 exe / zip;老 server、手动上传的没有):能走差量下载。 */
+  blockmap?: boolean
 }
 export type WebsiteInstallers = Partial<Record<WebsitePlatform, WebsiteInstaller>>
 
@@ -59,6 +61,7 @@ export function parseWebsiteInstallers(body: unknown): WebsiteInstallers | null 
       filename: String(p.filename || ''),
       ...(Number.isFinite(p.size) && p.size > 0 ? { size: p.size } : {}),
       ...(typeof p.sha512 === 'string' && p.sha512 ? { sha512: p.sha512 } : {}),
+      ...(p.blockmap === true ? { blockmap: true } : {}),
     }
   }
   return out
@@ -90,6 +93,20 @@ export function websitePlatformFor(os: string): WebsitePlatform {
 /** 官网能不能直接给这个包:只放标准包(捆 Extend)的 Windows / mac,Linux 与 NoExtend 只能从 GitHub 下。 */
 export function websiteCarries(os: string, bundleExtend: boolean): boolean {
   return bundleExtend && (os === 'win32' || os === 'darwin')
+}
+
+/**
+ * 应用内更新从官网下这一份时用哪个地址、开不开差量。
+ * 有 blockmap 的走带版本号的地址 `<api>/website/download/<平台>/<版本>/<文件名>`:electron-updater 取新版 blockmap
+ * = 这个地址 + `.blockmap`,取当前版本的 = 把地址里的新版本号换成当前版本号 + `.blockmap`(Provider.getBlockMapFiles),
+ * 所以版本号要原样出现在路径里(semver 的字符在路径里都合法,不转义,转义了就换不上)。
+ * 没有 blockmap(老 server、手动上传的记录)照旧走 `<api>/website/download/<平台>`、整包下载。
+ */
+export function websiteDownload(api: string, platform: WebsitePlatform, installer: WebsiteInstaller): { url: string; differential: boolean } {
+  if (installer.blockmap && installer.filename && /^[0-9A-Za-z.+-]+$/.test(installer.version)) {
+    return { url: `${api}/website/download/${platform}/${installer.version}/${encodeURIComponent(installer.filename)}`, differential: true }
+  }
+  return { url: `${api}/website/download/${platform}`, differential: false }
 }
 
 /** 官网那份安装包正好是这个版本、而且不是 NoExtend 包(发包脚本按扩展名挑,挑错时宁可走 GitHub)。 */

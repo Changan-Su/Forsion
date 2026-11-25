@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { parseMainland, parseSourcePref, parseWebsiteInstallers, selectGitHubRelease, sourceOrder, websiteCarries, websiteHas, websitePlatformFor } from './updateSource'
+import { parseMainland, parseSourcePref, parseWebsiteInstallers, selectGitHubRelease, sourceOrder, websiteCarries, websiteDownload, websiteHas, websitePlatformFor } from './updateSource'
 
 it('selects revisions numerically and keeps stable users away from prereleases, even with wrong GitHub flags', () => {
   const releases = [
@@ -53,6 +53,9 @@ it('parses website installers and drops malformed entries', () => {
     windows: { version: '2.13.4', filename: 'Forsion-2.13.4-x64.exe', size: 447947415, sha512: 'abc==' },
     macos: { version: '2.13.4', filename: 'Forsion-2.13.4-arm64.dmg', size: 509163663 },
   })
+  expect(parseWebsiteInstallers({ platforms: { 'macos-update': { filename: 'Forsion-2.13.4-arm64.zip', version: '2.13.4', blockmap: true } } }))
+    .toEqual({ 'macos-update': { version: '2.13.4', filename: 'Forsion-2.13.4-arm64.zip', blockmap: true } })
+  expect(parseWebsiteInstallers({ platforms: { windows: { filename: 'a.exe', version: '2.13.4', blockmap: 'yes' } } })).toEqual({ windows: { version: '2.13.4', filename: 'a.exe' } })
   expect(parseWebsiteInstallers({ platforms: { windows: { version: 'latest' } } })).toEqual({})
   expect(parseWebsiteInstallers({ detail: 'oops' })).toBeNull()
 })
@@ -67,4 +70,19 @@ it('maps packages to the website platform and only offers the website for standa
   expect(websiteHas(win, '2.13.4')).toBe(true)
   expect(websiteHas(win, '2.13.5')).toBe(false)
   expect(websiteHas({ ...win, filename: 'Forsion-NoExtend-2.13.4-x64.exe' }, '2.13.4')).toBe(false)
+})
+
+it('downloads a website record with a blockmap from the versioned address, everything else from the platform address', () => {
+  const api = 'https://forsion.net/api'
+  const win = { version: '2.14.4', filename: 'Forsion-2.14.4-x64.exe', sha512: 'abc==' }
+  expect(websiteDownload(api, 'windows', win)).toEqual({ url: 'https://forsion.net/api/website/download/windows', differential: false })
+  expect(websiteDownload(api, 'windows', { ...win, blockmap: true }))
+    .toEqual({ url: 'https://forsion.net/api/website/download/windows/2.14.4/Forsion-2.14.4-x64.exe', differential: true })
+  expect(websiteDownload(api, 'macos-update', { version: '2.14.4', filename: 'Forsion 2.14.4 arm64.zip', blockmap: true }).url)
+    .toBe('https://forsion.net/api/website/download/macos-update/2.14.4/Forsion%202.14.4%20arm64.zip')
+  // 版本号原样进路径(electron-updater 按原样替换成当前版本号),构建号的 + 也一样(server 存的文件名里 + 已换成 _)
+  expect(websiteDownload(api, 'windows', { version: '2.13.7+build.10', filename: 'Forsion-2.13.7_build.10-x64.exe', blockmap: true }).url)
+    .toBe('https://forsion.net/api/website/download/windows/2.13.7+build.10/Forsion-2.13.7_build.10-x64.exe')
+  expect(websiteDownload(api, 'windows', { version: '2.14.4/../x', filename: 'a.exe', blockmap: true }).differential).toBe(false)
+  expect(websiteDownload(api, 'windows', { version: '2.14.4', filename: '', blockmap: true }).differential).toBe(false)
 })

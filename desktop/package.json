@@ -274,6 +274,7 @@
     "check:textfrag": "electron scripts/text-fragment.check.cjs",
     "check:sourceopen": "electron scripts/source-open.check.cjs -ApplePersistenceIgnoreState YES",
     "check:assetfetch": "electron scripts/asset-fetch.check.cjs",
+    "check:websitedelta": "electron scripts/check-website-delta.cjs",
     "check:rtc": "electron scripts/rtc-capability.check.cjs",
     "check:rtcsdk": "electron scripts/rtc-sdk.check.cjs",
     "probe:rtc": "electron scripts/rtc-live.probe.cjs",
