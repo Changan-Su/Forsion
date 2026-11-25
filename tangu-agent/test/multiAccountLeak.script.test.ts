@@ -50,7 +50,7 @@ import { bootMultiAccount, runToEnd, startRun, steps, type MaEngine } from './he
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
 import { LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
 import { pluginScriptQueue, snapshotAccountFiles, sweepAccountLinks } from '../src/services/pluginScripts.js';
-import { closeAccountToScripts, lockAllAccountHomes, openAccountToScripts, setScriptIsolationHostForTest } from '../src/core/scriptIsolation.js';
+import { closeAccountToScripts, lockAllAccountHomes, openAccountToScripts, parseProcStatus, setScriptIsolationHostForTest } from '../src/core/scriptIsolation.js';
 
 const accDir = (id: string) => join(env.home, 'accounts', id);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -157,6 +157,8 @@ function writeBundle(): void {
     const kid = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
     kid.unref();
     const walExists = fs.existsSync(path.join(home, 'state.db-wal'));
+    const ro = process.argv[2] === 'read-only'; // the negative control runs as root: no moving / deleting there
+    const skip = { ok: false, code: 'SKIPPED' };
     console.log(JSON.stringify({
       uid: process.getuid(), gid: process.getgid(), groups: process.getgroups(),
       capEff: /CapEff:\\s*(\\w+)/.exec(fs.readFileSync('/proc/self/status', 'utf8'))?.[1],
@@ -164,12 +166,13 @@ function writeBundle(): void {
       bobFile: t(() => fs.readFileSync(${JSON.stringify(join(env.home, 'accounts', 'bob', 'workspace', 'bob-secret.txt'))}, 'utf8')),
       bobDir: t(() => fs.readdirSync(${JSON.stringify(join(env.home, 'accounts', 'bob'))})),
       db: t(() => fs.readFileSync(path.join(home, 'state.db')).length),
-      dbRename: t(() => fs.renameSync(path.join(home, 'state.db'), path.join(home, 'moved.db'))),
-      walUnlink: walExists ? t(() => fs.unlinkSync(path.join(home, 'state.db-wal'))) : { ok: false, code: 'NO_WAL' },
-      scratchRename: t(() => fs.renameSync(path.join(home, '.scratch'), path.join(home, '.scratch-moved'))),
+      dbRename: ro ? skip : t(() => fs.renameSync(path.join(home, 'state.db'), path.join(home, 'moved.db'))),
+      walUnlink: ro ? skip : walExists ? t(() => fs.unlinkSync(path.join(home, 'state.db-wal'))) : { ok: false, code: 'NO_WAL' },
+      scratchRename: ro ? skip : t(() => fs.renameSync(path.join(home, '.scratch'), path.join(home, '.scratch-moved'))),
       input: t(() => fs.readFileSync('input-0600.txt', 'utf8')),
       write: t(() => { fs.mkdirSync('made-by-script', { recursive: true }); fs.writeFileSync('made-by-script/out.txt', 'from the script'); return 'ok'; }),
       homeWrite: t(() => { fs.writeFileSync(path.join(process.env.HOME, 'h.txt'), 'h'); return 'ok'; }),
+      plantJournal: ro ? skip : t(() => { fs.writeFileSync(path.join(home, 'state.db-journal'), 'planted'); return 'ok'; }),
       kid: kid.pid,
     }));
   `);
@@ -436,7 +439,7 @@ describe('multi-account: plugin scripts — one at a time, bounded', () => {
 
 // ── run as a separate user ───────────────────────────────────────────────────────────────────────
 const ISO_ENV = ['TANGU_SCRIPT_ISOLATION', 'TANGU_SCRIPT_UID', 'TANGU_SCRIPT_GID'];
-const ENGINE = { uid: process.getuid!(), gid: process.getgid!() };
+const ENGINE = { uid: process.getuid?.() ?? -1, gid: process.getgid?.() ?? -1 }; // -1 on Windows (these tests do not run there)
 /** the user scripts switch to in the tests that fake a root engine: ourselves (a real switch needs root), 65534 when really root */
 const TEST_USER = REAL_ROOT ? { uid: 65534, gid: 65534 } : ENGINE;
 const modeOf = (p: string) => lstatSync(p).mode & 0o7777;
@@ -540,6 +543,9 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     writeFileSync(outsideHard, 'outside hard'); chmodSync(outsideHard, 0o640);
     symlinkSync(outside, join(home, 'work', 'link'));
     linkSync(outsideHard, join(home, 'work', 'hard'));
+    // names next to the database a script could claim while the top folder is group-writable: removed, the database stays
+    mkdirSync(join(home, 'state.db-journal'));
+    symlinkSync(outside, join(home, 'state.db-x'));
     chmodSync(join(home, 'work', 'sub'), 0o750);
     chmodSync(home, 0o700);
     const fileGid = lstatSync(join(home, 'work', 'a.txt')).gid;
@@ -557,6 +563,7 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     expect(now(join(home, 'work'))).toEqual({ mode: (0o755 | 0o070), gid: G });
     expect(now(join(home, 'work', 'su.bin')), 'setuid bit dropped').toEqual({ mode: 0o775, gid: G });
     for (const db of ['state.db', 'state.db-wal']) expect(now(join(home, db))).toEqual({ mode: 0o600, gid: keep.db.gid });
+    for (const planted of ['state.db-journal', 'state.db-x']) expect(existsSync(join(home, planted)) || !!lstatSync(join(home, planted), { throwIfNoEntry: false }), planted).toBe(false);
     expect(now(join(home, '.scratch'))).toEqual(keep.scratch);
     expect(now(join(home, '.scratch', 'run', 'x.txt'))).toEqual(keep.scratchFile);
     expect(now(outside), 'the target of a link is untouched').toEqual(keepOut.outside);
@@ -611,6 +618,13 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     expect(lstatSync(f).nlink).toBe(1);
     expect(modeOf(f)).toBe(0o755);
     expect(readFileSync(f, 'utf8')).toBe('binary');
+  });
+
+  it('a process status without an owner is "unknown", never "not the script user"', () => {
+    expect(parseProcStatus('Name:\tnode\nState:\tS (sleeping)\nUid:\t65534\t65534\t65534\t65534\n')).toEqual({ state: 'S', uids: [65534, 65534, 65534] });
+    expect(parseProcStatus('Name:\tnode\nState:\tZ (zombie)\nUid:\t0\t65534\t0\t0\n')).toEqual({ state: 'Z', uids: [0, 65534, 0] });
+    expect(parseProcStatus('Name:\tnode\nState:\tS (sleeping)\n')).toBeNull();
+    expect(parseProcStatus('')).toBeNull();
   });
 });
 
@@ -667,6 +681,8 @@ describe.runIf(LINUX_ROOT)('multi-account: plugin scripts — separate user on a
     expect(modeOf(accDir('alice'))).toBe(0o700);
     expect([lstatSync(accDir('alice')).uid, lstatSync(accDir('alice')).gid]).toEqual([0, 0]);
     expect(existsSync(join(accDir('alice'), 'state.db'))).toBe(true);
+    expect(seen.plantJournal.ok, 'a new name next to the database can be created while open…').toBe(true);
+    expect(existsSync(join(accDir('alice'), 'state.db-journal')), '…and is gone once the folder is closed').toBe(false);
     expect(modeOf(join(accDir('alice'), 'state.db')) & 0o077).toBe(0);
     expect(['Z', undefined]).toContain(procState(seen.kid));
     expect(readFileSync(join(accDir('alice'), 'workspace', 'made-by-script', 'out.txt'), 'utf8')).toBe('from the script');
@@ -692,14 +708,12 @@ describe.runIf(LINUX_ROOT)('multi-account: plugin scripts — separate user on a
   }, 60_000);
 
   it.runIf(CAN_SWITCH)('negative control: without the switch the same probe does read them (as root)', async () => {
-    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/isolate.mjs' }]);
+    const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/isolate.mjs', args: ['read-only'] }]);
     const seen = JSON.parse(stdoutOf(outputs[0]));
     expect(seen.uid).toBe(0);
     expect(seen.cred).toEqual({ ok: true, v: 'DEVICE-CREDENTIAL-CANARY' });
     expect(seen.bobFile).toEqual({ ok: true, v: 'BOB-CANARY' });
     try { process.kill(seen.kid, 'SIGKILL'); } catch { /* gone */ }
-    // the probe moved the database aside as root: put it back for the tests after this one
-    if (existsSync(join(accDir('alice'), 'moved.db'))) rmSync(join(accDir('alice'), 'moved.db'));
   }, 60_000);
 
   it.runIf(!CAN_SWITCH)('without the capabilities to switch users the engine refuses and never runs the script as root', async () => {

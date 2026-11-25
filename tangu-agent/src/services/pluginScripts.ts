@@ -23,14 +23,14 @@
  *   开了换用户,所有账号共用一个脚本用户(见 core/scriptIsolation.ts 的残余)。放开自由命令行之前,要先换成按账号的系统用户,并把文件访问改成按目录句柄打开。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, constants, copyFileSync, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { mbBytes, minutesMs, multiAccountLimits, SCRIPT_CONCURRENCY } from '../core/multiAccountLimits.js';
 import {
-  closeAccountToScripts, handScratchToScriptUser, lockAllAccountHomes, openAccountToScripts, reapScriptUser, resolveScriptUser,
-  ScriptIsolationError, type ScriptUser,
+  closeAccountToScripts, dropForeignDbEntries, handScratchToScriptUser, lockAllAccountHomes, openAccountToScripts, reapScriptUser,
+  resolveScriptUser, ScriptIsolationError, type ScriptUser,
 } from '../core/scriptIsolation.js';
 import { bundleDirs } from '../plugins/bundles.js';
 import { accountWriteDenied } from './accessDomain.js';
@@ -239,8 +239,8 @@ export function pluginScriptQueue(): { running: number; waiting: number } {
 
 // ── 这一轮的临时目录 ─────────────────────────────────────────────────────────────────────────
 const scratchOf = new Map<string, string>(); // runId → 目录
-/** 临时目录已经交给脚本用户的运行(交过之后脚本拥有这棵树,可能把里面的目录换成软链:不再以 root 去改它)。 */
-const handedScratch = new Set<string>();
+/** 临时目录已经交给脚本用户的运行 → 交给了谁(交过之后脚本拥有这棵树,可能把里面的目录换成软链:不再以 root 去改它)。 */
+const handedScratch = new Map<string, ScriptUser>();
 const SCRATCH_SUBDIRS = ['home', 'tmp', 'cache'];
 function runScratch(account: string, runId: string): string {
   const safe = runId.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'run';
@@ -253,15 +253,37 @@ function runScratch(account: string, runId: string): string {
 }
 /** 这一轮结束:删掉它的临时目录(没有 = no-op)。 */
 export function disposeRunScratch(runId: string): void {
+  const user = handedScratch.get(runId);
   handedScratch.delete(runId);
   const dir = scratchOf.get(runId);
   if (!dir) return;
   scratchOf.delete(runId);
+  if (user) return removeScriptOwnedTree(dir, user);
   try { rmSync(dir, { recursive: true, force: true }); } catch (e) { console.warn(`[tangu] multi-account: removing script scratch ${dir} failed:`, (e as Error)?.message || e); }
 }
 /** 开户时:清掉上次进程留下的整个临时目录。 */
 export function clearAccountScratch(account: string): void {
-  try { rmSync(path.join(accountHome(account), SCRATCH_DIR), { recursive: true, force: true }); } catch { /* best-effort */ }
+  const dir = path.join(accountHome(account), SCRATCH_DIR);
+  let user: ScriptUser | null = null;
+  try { user = resolveScriptUser(); } catch { user = null; }
+  if (user) return removeScriptOwnedTree(dir, user);
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+/**
+ * 换用户时临时目录归脚本用户:root 的递归删除要在脚本队列里做(那时没有脚本在跑),并先结束脚本用户名下的进程 ——
+ * 否则还活着的脚本进程能在删到一半时把里面的目录换成软链,让 root 删到账号文件夹外面去。删不掉的下次开户再删。
+ */
+function removeScriptOwnedTree(dir: string, user: ScriptUser): void {
+  void acquire().then((release) => {
+    try {
+      reapScriptUser(user);
+      rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn(`[tangu] multi-account: removing script scratch ${dir} failed:`, (e as Error)?.message || e);
+    } finally {
+      release();
+    }
+  });
 }
 
 async function dirBytes(root: string): Promise<number> {
@@ -335,8 +357,9 @@ export function sweepAccountLinks(account: string, before?: FileIds): string[] {
         if (before?.get(p) === id) {
           const tmp = `${p}.unlink-${process.pid}-${Date.now()}`;
           copyFileSync(p, tmp, constants.COPYFILE_EXCL);
-          // 拷贝带着原件的权限位:不去掉 setuid / setgid,引擎(root)拷出来的就是一个 root 的 setuid 程序
-          chmodSync(tmp, lstatSync(tmp).mode & 0o777);
+          // 拷贝带着原件的权限位:不去掉 setuid / setgid,引擎(root)拷出来的就是一个 root 的 setuid 程序(经不跟链的 fd 改)
+          const fd = openSync(tmp, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+          try { fchmodSync(fd, fstatSync(fd).mode & 0o777); } finally { closeSync(fd); }
           renameSync(tmp, p);
         } else unlinkSync(p);
         touched.push(path.relative(home, p));
@@ -362,31 +385,46 @@ export interface PluginScriptResult {
 // ── 换用户(core/scriptIsolation.ts)───────────────────────────────────────────────────────────
 let allHomesLocked = false; // 本进程第一次换用户跑脚本前,收一遍所有账号文件夹(上次引擎跑到一半退出、没收回的)
 const stuckOpen = new Set<string>(); // 跑完没收回的账号文件夹:下次跑脚本前先收,收不回就不跑
+const sweepPending = new Set<string>(); // 跑完没清光脚本进程、所以没扫链接的账号:下次清光之后再扫
 
 const isolationErr = (e: unknown): PluginScriptError =>
   new PluginScriptError(e instanceof ScriptIsolationError ? e.message : `Plugin scripts are disabled right now: ${(e as Error)?.message || e}`);
 
-/** 拿到脚本队列之后、开账号文件夹之前:清残留进程,收没收回的文件夹。任何一步不成 → PluginScriptError(这次不跑)。 */
+/** 拿到脚本队列之后、开账号文件夹之前:清残留进程,收没收回的文件夹,补扫上次没扫的。任何一步不成 → PluginScriptError(这次不跑)。 */
 function prepareScriptUser(user: ScriptUser): void {
   try {
     reapScriptUser(user);
     if (!allHomesLocked) { lockAllAccountHomes(); allHomesLocked = true; }
     for (const home of [...stuckOpen]) { closeAccountToScripts(home); stuckOpen.delete(home); }
+    for (const account of [...sweepPending]) {
+      dropForeignDbEntries(accountHome(account), user.uid);
+      sweepAccountLinks(account);
+      sweepPending.delete(account);
+    }
   } catch (e) {
     console.error('[tangu] multi-account: cannot prepare the plugin script user:', (e as Error)?.message || e);
     throw isolationErr(e);
   }
 }
 
-/** 跑完(含没起来):收回顶层、再清一遍脚本用户的进程。不抛:收不回的记进 stuckOpen,清不完的下次跑之前再清(清不完就不跑)。 */
-function finishScriptUser(home: string, user: ScriptUser): void {
+/**
+ * 跑完(含没起来):收回顶层、再清一遍脚本用户的进程、删掉脚本占的库旁文件名。不抛:收不回的记进 stuckOpen;
+ * 清不完进程 → 返回 false(这时 root 不在账号文件夹里按路径动东西,扫链接留到下次清光之后)。
+ */
+function finishScriptUser(account: string, home: string, user: ScriptUser): boolean {
   try { closeAccountToScripts(home); } catch (e) {
     stuckOpen.add(home);
     console.error(`[tangu] multi-account: could not close ${home} to plugin scripts:`, (e as Error)?.message || e);
   }
   try { reapScriptUser(user); } catch (e) {
+    sweepPending.add(account);
     console.error('[tangu] multi-account: could not end leftover plugin script processes:', (e as Error)?.message || e);
+    return false;
   }
+  try { dropForeignDbEntries(home, user.uid); } catch (e) {
+    console.error(`[tangu] multi-account: could not clean ${home} after a plugin script:`, (e as Error)?.message || e);
+  }
+  return true;
 }
 
 /**
@@ -407,6 +445,7 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
   const release = await acquire(o.signal);
   const startedAt = Date.now();
   try {
+    try { user = resolveScriptUser(); } catch (e) { throw isolationErr(e); } // 排队期间开关变了:以拿到队列时的为准
     if (user) prepareScriptUser(user);
     const home = accountHome(account);
     const before = snapshotAccountFiles(account);
@@ -422,13 +461,15 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
     });
     const limits = multiAccountLimits();
     let opened = false;
+    let canSweep = true;
+    let cwd = o.cwd;
     let res: PluginScriptResult & { startError?: string };
     try {
       if (user) {
         try {
           if (!handedScratch.has(o.runId)) {
             handScratchToScriptUser(path.dirname(scratch), [scratch, ...SCRATCH_SUBDIRS.map((d) => path.join(scratch, d))], user);
-            handedScratch.add(o.runId);
+            handedScratch.set(o.runId, user);
           }
           opened = true; // 开到一半失败也要收
           openAccountToScripts(home, user, SCRATCH_DIR);
@@ -436,16 +477,21 @@ export async function runPluginScript(o: { skill?: unknown; script: unknown; arg
           console.error(`[tangu] multi-account: cannot open ${account}'s folder to plugin scripts:`, (e as Error)?.message || e);
           throw isolationErr(e);
         }
+        // 起进程时先以 root 进工作目录再换用户:工作目录按真实路径给,而且必须还在这个账号的文件夹里(路径上有链接被换过就不跑)
+        const realCwd = real(o.cwd);
+        const realHome = real(home);
+        if (!realCwd || !realHome || !inside(realCwd, realHome)) throw new PluginScriptError('The working directory is not inside your account folder.');
+        cwd = realCwd;
       }
-      res = await spawnScript(target, args, o, env, scratch, limits, user, queuedAt, startedAt);
+      res = await spawnScript(target, args, { cwd, signal: o.signal }, env, scratch, limits, user, queuedAt, startedAt);
     } finally {
-      if (user && opened) finishScriptUser(home, user);
+      if (user && opened) canSweep = finishScriptUser(account, home, user);
     }
     // 换用户起不来(缺能力、解释器脚本用户执行不了…):当拒绝,不退回以引擎自己的身份跑
     if (user && res.startError) throw new PluginScriptError(`The script could not start as the script user (uid ${user.uid}): ${res.startError}`);
     delete res.startError;
-    // 进程组已结束(close 之后又补了一次 SIGKILL):扫链接,标脏磁盘用量
-    res.removedLinks = sweepAccountLinks(account, before);
+    // 进程组已结束(close 之后又补了一次 SIGKILL):扫链接,标脏磁盘用量(脚本用户的进程没清光时不扫,留到下次)
+    res.removedLinks = canSweep ? sweepAccountLinks(account, before) : [];
     if (res.removedLinks.length) console.warn(`[tangu] multi-account: removed ${res.removedLinks.length} link(s) left in ${account}'s folder by ${target.file}`);
     markAccountUsageDirty(account);
     return { ...res, script: target.file };

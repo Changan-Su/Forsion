@@ -29,7 +29,7 @@
  * (每次跑脚本前后都会结束它名下的所有进程)。
  * ⚠️ 残余:所有账号共用一个脚本用户,/tmp 这类谁都能写的地方仍是两次运行之间的通道(脚本在一个账号里读到的东西可以留到下一个账号的运行里)。
  */
-import { closeSync, constants, fchmodSync, fchownSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, type Stats } from 'node:fs';
+import { closeSync, constants, fchmodSync, fchownSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, rmSync, type Stats } from 'node:fs';
 import { join } from 'node:path';
 import { accountHome, engineRoot, isValidAccountId } from './accountScope.js';
 
@@ -78,19 +78,46 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-/** 扫 /proc,真实 / 有效 / 保存的 uid 有一个是它就 SIGKILL,扫到一个都没有为止(进程刚 fork 出来的下一轮再杀)。僵尸不算。 */
+/** /proc/<pid>/status 里的状态和真实 / 有效 / 保存的 uid;认不出来 → null(调用方当「不知道」,不当「不是它」)。 */
+export function parseProcStatus(text: string): { state: string; uids: number[] } | null {
+  const state = /^State:\s*(\S)/m.exec(text)?.[1];
+  const ids = /^Uid:\s*(\d+)\s+(\d+)\s+(\d+)/m.exec(text);
+  if (!state || !ids) return null;
+  return { state, uids: [Number(ids[1]), Number(ids[2]), Number(ids[3])] };
+}
+
+const gone = (e: unknown): boolean => ['ENOENT', 'ESRCH'].includes(String((e as NodeJS.ErrnoException)?.code));
+
+/** 这个进程(线程组)还有没有活着的线程:组长是僵尸、别的线程还在跑也算活着。 */
+function groupAlive(pid: string, leaderState: string): boolean {
+  if (leaderState !== 'Z' && leaderState !== 'X') return true;
+  let tids: string[];
+  try { tids = readdirSync(`/proc/${pid}/task`); } catch (e) { if (gone(e)) return false; throw e; }
+  for (const tid of tids) {
+    let text: string;
+    try { text = readFileSync(`/proc/${pid}/task/${tid}/status`, 'utf8'); } catch (e) { if (gone(e)) continue; throw e; }
+    const st = parseProcStatus(text);
+    if (!st) throw new ScriptIsolationError(`cannot read the state of process ${pid}`);
+    if (st.state !== 'Z' && st.state !== 'X') return true;
+  }
+  return false;
+}
+
+/**
+ * 扫 /proc,真实 / 有效 / 保存的 uid 有一个是它就 SIGKILL,扫到一个都没有为止(进程刚 fork 出来的下一轮再杀)。只剩僵尸的不算。
+ * 读不出 / 认不出某个进程的状态 → 抛(不当成「没有」:root 这一侧的遍历靠这一步保证没人能在账号文件夹里调包)。
+ */
 function reapUid(uid: number): void {
   if (uid === 0 || uid === process.getuid?.()) throw new ScriptIsolationError('refusing to end processes of the engine\'s own user');
   for (let round = 0; round < 50; round++) {
     let alive = 0;
     for (const name of readdirSync('/proc')) {
       if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-      let status: string;
-      try { status = readFileSync(`/proc/${name}/status`, 'utf8'); } catch { continue; }
-      const state = /^State:\s*(\S)/m.exec(status)?.[1];
-      if (state === 'Z' || state === 'X') continue;
-      const ids = /^Uid:\s*(\d+)\s+(\d+)\s+(\d+)/m.exec(status);
-      if (!ids || ![ids[1], ids[2], ids[3]].some((v) => Number(v) === uid)) continue;
+      let text: string;
+      try { text = readFileSync(`/proc/${name}/status`, 'utf8'); } catch (e) { if (gone(e)) continue; throw e; }
+      const st = parseProcStatus(text);
+      if (!st) throw new ScriptIsolationError(`cannot read the owner of process ${name}`);
+      if (!st.uids.includes(uid) || !groupAlive(name, st.state)) continue;
       alive++;
       try { process.kill(Number(name), 'SIGKILL'); } catch { /* 已经没了 */ }
     }
@@ -183,8 +210,36 @@ function setDir(p: string, gid: number, mode: number): boolean {
   return true;
 }
 
-/** 账号库文件(顶层 state.db*)收成 0600、属主是引擎。有别的硬链接 → 抛;不是普通文件的不碰(跑完扫链接会删软链)。 */
+/**
+ * 顶层 state.db* 里脚本放进来的东西:删掉。运行期间顶层组可写,粘滞位只护得住已有的名字 —— 脚本可以抢先占一个还没有的库旁文件名
+ * (比如放个 state.db-journal 软链 / 目录),等 SQLite 以 root 去开。删的只有:不是普通文件的(软链只删链接本身;state.db 本身除外,
+ * 那种账号本来就打不开),以及属主是脚本用户的普通文件。别的属主的普通文件不删(可能是换过运行身份的旧数据),由调用方改回引擎的。
+ * 只在脚本用户的进程已清光、顶层已关上时调(跑完、开账号文件夹之前、账号打开时)。
+ */
+export function dropForeignDbEntries(home: string, scriptUid?: number): void {
+  let names: string[];
+  try { names = readdirSync(home); } catch (e) { if (codeOf(e) === 'ENOENT') return; throw e; }
+  for (const name of names) {
+    if (!isDbFile(name)) continue;
+    const p = join(home, name);
+    let seen: Stats;
+    try { seen = lstatSync(p); } catch (e) { if (codeOf(e) === 'ENOENT') continue; throw e; }
+    const planted = seen.isFile() ? scriptUid !== undefined && seen.uid === scriptUid : name !== 'state.db';
+    if (!planted) continue;
+    rmSync(p, { recursive: true, force: true });
+    console.warn(`[tangu] multi-account: removed ${p}, which the engine did not create`);
+  }
+}
+
+/** 脚本用户的 uid(开关开着且配置有效时),否则 undefined。 */
+function configuredScriptUid(): number | undefined {
+  if (scriptIsolationMode() !== 'required') return undefined;
+  try { return parseId(SCRIPT_UID_ENV); } catch { return undefined; }
+}
+
+/** 账号库文件(顶层 state.db*)收成 0600、属主是引擎;脚本放进来的先删掉。有别的硬链接 → 抛。 */
 function secureDbFiles(home: string): void {
+  dropForeignDbEntries(home, configuredScriptUid());
   const me = engineIds();
   for (const name of readdirSync(home)) {
     if (!isDbFile(name)) continue;
@@ -222,7 +277,7 @@ export function lockAllAccountHomes(): void {
   for (const id of names) {
     if (!isValidAccountId(id)) continue;
     const home = accountHome(id);
-    try { if (!lstatSync(home).isDirectory()) continue; } catch { continue; }
+    try { if (!lstatSync(home).isDirectory()) continue; } catch (e) { if (codeOf(e) === 'ENOENT') continue; throw e; }
     setDir(home, gid, TOP_CLOSED);
   }
 }
@@ -240,6 +295,7 @@ export function handScratchToScriptUser(scratchParent: string, dirs: string[], u
 /** 一个条目给脚本组开权限:组 = 脚本组,加 bits;文件去掉 setuid / setgid。打开后发现有了别的硬链接 → 不碰。 */
 function grantEntry(p: string, seen: Stats, gid: number, bits: number): void {
   const special = seen.isFile() && (seen.mode & SPECIAL_BITS) !== 0;
+  if (!special && seen.gid === gid && (seen.mode & bits) === bits) return; // 上次已经开过
   try {
     withEntry(p, seen, (fd, st) => {
       if (st.isFile() && st.nlink > 1) {
