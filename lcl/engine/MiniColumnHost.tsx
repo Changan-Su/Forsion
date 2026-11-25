@@ -61,7 +61,7 @@ export const MiniColumnHost: React.FC<{
   const spaces = registered.filter(supportsMiniPanel)
   const space = spaces.find((s) => s.id === activeId)
   const active = useWorkspace((s) => s.mainLeaves.find((r) => r.id === s.activeMainId))
-  const hasChatHistory = useNav((s) => (active?.type === 'chat' || active?.type === 'mini-tangu') && (s.stacks[active.id]?.entries.length ?? 0) > 1)
+  const hasChatHistory = useNav((s) => active?.type === 'chat' && (s.stacks[active.id]?.entries.length ?? 0) > 1)
   const [menu, setMenu] = useState<'space' | 'picker' | null>(null)
   const picker = useMiniChromeSlot()
   // 换了视图(外部 openMini、切 Space)就收起菜单;picker 被撤掉时不留一层没有菜单的遮罩(Codex 评审 P2)

@@ -30,12 +30,7 @@ async function main() {
   fs.writeFileSync(path.join(probe, 'spaces', 'mini-probe', 'space.json'), JSON.stringify({ id: 'mini-probe', name: { zh: 'Mini 探针', en: 'Mini probe' }, layout: { main: [{ type: 'plugin:mini-probe:full' }] },
     mini: { view: { type: 'plugin:mini-probe:mini', params: { itemId: '7' } }, mainView: { type: 'plugin:mini-probe:full' } } }))
   const session = (id) => ({ id, title: id, created_at: '2026-09-07T00:00:00Z', updated_at: '2026-09-07T00:00:00Z', agent_config: { execMode: 'host' } })
-  const stub = await startStubEngine({
-    sessions: ['mini-first', 'mini-latest', 'mini-nav-a', 'mini-nav-b'].map(session),
-    override: ({ path: requestPath }) => requestPath === '/agent/sessions/mini-nav-a/messages' ? { messages: [{
-      id: 'mini-nav-link', role: 'model', content: '[[session:mini-nav-b|Next Mini session]]', timestamp: Date.now(),
-    }] } : undefined,
-  })
+  const stub = await startStubEngine({ sessions: ['mini-first', 'mini-latest', 'mini-nav-a', 'mini-nav-b'].map(session) })
   fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mini-test-token' }))
   let app, mini
   try {
@@ -314,6 +309,9 @@ async function main() {
     await win.evaluate((view) => window.tangu.openMini({ view, mainView: { type: 'chat' } }), directChat)
     mini = await miniWith('[data-chat-surface="chat"][data-session-id="mini-nav-a"]')
     mini.on('pageerror', (e) => errors.push(`mini navigation: ${e.message}`))
+    stub.script([{ type: 'token', payload: { delta: 'Continue in [[session:mini-nav-b|Next Mini session]].' } }])
+    await mini.locator('.t2c-ta').fill('Which session is next?')
+    await mini.locator('.t2c-ta').press('Enter')
     await mini.locator('.wikilink', { hasText: 'Next Mini session' }).click()
     await mini.locator('[data-chat-surface="chat"][data-session-id="mini-nav-b"]').waitFor()
     await mini.locator('.mini-card-chat-navigation [data-press="back"]').click()
