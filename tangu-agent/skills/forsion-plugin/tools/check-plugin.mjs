@@ -6,6 +6,8 @@
 //   node check-plugin.mjs <plugin folder> [--app-version 2.13.1] [--locale en]
 //   node check-plugin.mjs <plugin folder> --style   also check its CSS against tools/plugin-contract.json, and list UI it
 //                                                   draws itself where the host has a part (tools/ui-reinvent.mjs; report only)
+//   node check-plugin.mjs <plugin folder> --style --all   the same, without the cap: every style note (not the first 300)
+//                                                   and every location of each UI note (not the first 3)
 //   node check-plugin.mjs                      every plugin installed in ~/.forsion/plugins (or pass any folder of plugins)
 //
 // No `node` on PATH? The Forsion app binary runs it too:
@@ -13,6 +15,7 @@
 //   Windows  set ELECTRON_RUN_AS_NODE=1 && "%LOCALAPPDATA%\Programs\Forsion\Forsion.exe" check-plugin.mjs <plugin folder>
 //
 // Exit code: 0 = nothing wrong found, 1 = at least one problem, 2 = could not run, 3 = undecided (see the "?" lines).
+// The report ends with a line starting "RESULT:", also through a pipe (`… --style --all | grep -c border-radius`).
 //
 // What "loads" means here: main.js IS EXECUTED — in a separate process that is killed if it hangs, inside a bare vm
 // context whose every object is created inside that context (no `process`, no `require`, no real DOM, timers never
@@ -32,6 +35,14 @@ const FILE = 'forsion-plugin-main.js';
 // How long a plugin may take to load before the probe is killed (ms). The env knob is for slow machines and for tests.
 const HARD_MS = Number(process.env.FORSION_PLUGIN_CHECK_TIMEOUT_MS) || 20_000;
 const PREFIX = '__probeRun(function(ctx){\n';
+/** Write `text`, then exit with `code` once it is flushed; never resolves, so `await` stops the script here. On a pipe
+ *  (macOS) a large write goes out in pieces, and process.exit() before the last piece cuts the report short: piped into
+ *  `grep -c` it used to count half the notes. A reader that stops early (`| head`) is not an error. */
+const printAndExit = (stream, text, code) => new Promise(() => {
+  process.exitCode = code;
+  stream.on('error', () => process.exit(code));
+  stream.write(text, () => process.exit(code));
+});
 
 // ── the load probe (child process): run main.js, print one JSON line ───────────────────────────────────────────────
 // Everything the plugin can reach is built by this bootstrap INSIDE the vm context. Handing it any object from this
@@ -181,8 +192,7 @@ if (argv[0] === '--probe') {
 const opt = (name) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : undefined; };
 const dir = argv.find((a, i) => !a.startsWith('--') && !(argv[i - 1] || '').startsWith('--')) || join(homedir(), '.forsion', 'plugins');
 if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-  console.error(`not a folder: ${dir}\nusage: node check-plugin.mjs [<plugin folder>] [--app-version x.y.z] [--locale zh|en]`);
-  process.exit(2);
+  await printAndExit(process.stderr, `not a folder: ${dir}\nusage: node check-plugin.mjs [<plugin folder>] [--app-version x.y.z] [--locale zh|en] [--style [--all]]\n`, 2);
 }
 const root = resolve(dir);
 const SELF = fileURLToPath(import.meta.url);
@@ -195,7 +205,7 @@ if (!existsSync(join(root, 'manifest.json'))) {
     const bad = [], unsure = [], styled = [];
     console.log(`Forsion plugin check: ${kids.length} plugin(s) in ${root}\n`);
     for (const kid of kids) {
-      const r = spawnSync(process.execPath, [SELF, join(root, kid), ...rest], { encoding: 'utf8', timeout: 90_000 });
+      const r = spawnSync(process.execPath, [SELF, join(root, kid), ...rest], { encoding: 'utf8', timeout: 90_000, maxBuffer: 64 * 1024 * 1024 });
       if (r.status === 0) { console.log(`  ✓ ${kid}`); if (/ (?:style|UI) note\(s\)/.test(r.stdout)) styled.push({ kid, text: r.stdout.trim() }); continue; }
       const text = (r.stdout || r.stderr || String(r.error || 'no output')).trim();
       if (r.status === 3) { console.log(`  ? ${kid}: undecided from the files alone, details below`); unsure.push({ kid, text }); }
@@ -203,8 +213,7 @@ if (!existsSync(join(root, 'manifest.json'))) {
     }
     for (const b of [...bad, ...unsure, ...styled]) console.log(`\n──────── ${b.kid} ────────\n${b.text}`);
     const tail = unsure.length ? ` Undecided (ask the running app): ${unsure.map((b) => b.kid).join(', ')}.` : '';
-    console.log(`\nRESULT: ${bad.length ? `${bad.length} of ${kids.length} plugin(s) have problems: ${bad.map((b) => b.kid).join(', ')}.` : `nothing wrong found in ${kids.length - unsure.length} of ${kids.length} plugin(s).`}${tail}`);
-    process.exit(bad.length ? 1 : 0);
+    await printAndExit(process.stdout, `\nRESULT: ${bad.length ? `${bad.length} of ${kids.length} plugin(s) have problems: ${bad.map((b) => b.kid).join(', ')}.` : `nothing wrong found in ${kids.length - unsure.length} of ${kids.length} plugin(s).`}${tail}\n`, bad.length ? 1 : 0);
   }
 }
 const SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -216,13 +225,13 @@ const say = (line = '') => out.push(line);
 const problem = (line) => { problems.push(line); say(`  ✗ ${line}`); };
 const undecided = (line) => { unsure.push(line); say(`  ? ${line}`); };
 const ok = (line) => say(`  ✓ ${line}`);
+/** Print the report and exit. Callers `await finish()`: the script stops there. */
 const finish = () => {
   say();
   if (problems.length) say(`RESULT: ${problems.length} problem(s) found.`);
   else if (unsure.length) say(`RESULT: undecided. Nothing is provably wrong in the files, but ${unsure.length} thing(s) depend on what only the running app knows. ${ASK_APP}`);
   else say('RESULT: nothing wrong found in what this checker covers: how main.js loads, what it registers, and the views each bundled Space needs. Whether the plugin is switched on, blocked or failing inside the app is the app\'s to say.');
-  console.log(out.join('\n'));
-  process.exit(problems.length ? 1 : unsure.length ? 3 : 0);
+  return printAndExit(process.stdout, `${out.join('\n')}\n`, problems.length ? 1 : unsure.length ? 3 : 0);
 };
 
 // ── 1. manifest ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -231,14 +240,14 @@ say();
 say('manifest.json');
 let manifest;
 try { manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8')); }
-catch (e) { problem(`cannot read manifest.json (${e.message}). Without it the host does not treat this folder as a plugin.`); finish(); }
+catch (e) { problem(`cannot read manifest.json (${e.message}). Without it the host does not treat this folder as a plugin.`); await finish(); }
 if (typeof manifest.id !== 'string' || !SLUG.test(manifest.id)) problem(`"id" must be kebab-case (a-z, 0-9, -): got ${JSON.stringify(manifest.id)}`);
 else ok(`id ${manifest.id}, version ${manifest.version ?? '(none)'}${basename(root) !== manifest.id ? ` (folder is "${basename(root)}"; views and Spaces go by the id, not the folder name)` : ''}`);
 const mainName = typeof manifest.main === 'string' && manifest.main ? manifest.main : 'main.js';
 const mainFile = join(root, mainName);
 // The host lets a bundle (engine plugins / agents / skills / Spaces only) omit main.js, but only when "main" is not declared.
 const bundleOnly = !existsSync(mainFile) && !manifest.main && ['tangu-plugins', 'agents', 'skills', 'spaces'].some((d) => existsSync(join(root, d)));
-if (!existsSync(mainFile) && !bundleOnly) { problem(`"main" points at ${mainName}, which does not exist`); finish(); }
+if (!existsSync(mainFile) && !bundleOnly) { problem(`"main" points at ${mainName}, which does not exist`); await finish(); }
 const src = bundleOnly ? '' : readFileSync(mainFile, 'utf8');
 const lineOf = (offset) => src.slice(0, Math.max(0, offset)).split('\n').length;
 
@@ -333,7 +342,7 @@ else {
     problem(hung
       ? `${mainName} did not finish loading within ${HARD_MS / 1000} s and was stopped: it blocks the thread while loading (an endless loop or a busy wait, possibly in a promise callback). In the app that freezes the window.`
       : `the load probe gave no result (exit ${r.status ?? r.signal ?? '?'}): ${String(r.stderr || r.error || '').trim().split('\n').pop().slice(0, 200) || 'no output'}`);
-    finish();
+    await finish();
   }
 }
 const { loadError } = run;
@@ -520,7 +529,9 @@ if (hidden && !loadError && explain.length) {
 
 // ── 6. style (only with --style): host classes and tokens against the published contract ──────────────────────────
 // Report only: it never changes the exit code. Scans main.js and every .css file in the plugin folder.
+// Capped at 300 notes and 3 locations per UI note unless --all: an author confirming a count is down to zero needs them all.
 if (argv.includes('--style')) {
+  const listAll = argv.includes('--all');
   // The restricted load probe needs no style scanner (and cannot read this sibling module).
   const { scanUi, formatUiNotes } = await import('./ui-reinvent.mjs');
   const contract = JSON.parse(readFileSync(new URL('./plugin-contract.json', import.meta.url), 'utf8'));
@@ -587,14 +598,15 @@ if (argv.includes('--style')) {
   say();
   say(`Style: host classes and tokens checked against plugin-contract.json (apiVersion ${contract.apiVersion}) in ${files.map(([f]) => f).join(', ') || 'no files'}. Report only: does not change the result.`);
   if (!notes.length) ok('nothing to report');
-  for (const n of notes.slice(0, 300)) say(`  · ${n}`);
-  if (notes.length > 300) say(`  … +${notes.length - 300} more`);
+  const shown = listAll ? notes : notes.slice(0, 300);
+  for (const n of shown) say(`  · ${n}`);
+  if (notes.length > shown.length) say(`  … +${notes.length - shown.length} more (add --all to list every one)`);
   if (notes.length) say(`  ${notes.length} style note(s). Public classes and tokens: tools/plugin-contract.json in the forsion-plugin skill.`);
-  const parts = scanUi(files);
+  const parts = scanUi(files, listAll ? Infinity : 20);
   say();
   say('UI parts: what this plugin draws itself although the host has a part for it. Report only: does not change the result.');
   if (!parts.length) ok('nothing to report');
-  for (const n of formatUiNotes(parts, parts.length)) say(`  ${n}`);
+  for (const n of formatUiNotes(parts, parts.length, listAll ? Infinity : 3)) say(`  ${n}`);
   if (parts.length) say(`  ${parts.length} UI note(s). How to use the parts: references/host-ui-mounts.md, section "Host parts", in the forsion-plugin skill.`);
 }
-finish();
+await finish();

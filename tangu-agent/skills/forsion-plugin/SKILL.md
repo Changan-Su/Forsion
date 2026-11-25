@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.139.0
+  version: 1.140.0
   author: Forsion
   category: Forsion
 ---
@@ -82,6 +82,7 @@ When a user says a plugin's Space / view / command is gone, or that a plugin bro
 node "<Skill folder>/tools/check-plugin.mjs"                      # every plugin installed in ~/.forsion/plugins
 node "<Skill folder>/tools/check-plugin.mjs" <plugin folder>      # one plugin, e.g. the project you are developing
 node "<Skill folder>/tools/check-plugin.mjs" <plugin folder> --style   # also: its CSS against the host style contract (report only)
+node "<Skill folder>/tools/check-plugin.mjs" <plugin folder> --style --all   # every note, not the first 300 (counting toward zero)
 ```
 
 Then read [references/troubleshooting.md](references/troubleshooting.md): what each mark means, how the host hides a Space, the `plugin-status` UI command, and running without `node` on PATH. Do not send the user to the developer console or ask for logs before the checker and `plugin-status` have both come back without an answer. Plugin authors: run the same checker before every release.
@@ -151,7 +152,7 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
   压在画面上的白字)写关键字 `black` / `white`,一看就知道是故意的;检查只认 `#hex` / `rgb()` / `hsl()`。
 - **体检**:`check-plugin.mjs <插件目录> --style` 扫 main.js 和目录里的 `.css`,报私有类名、清单外 / 已弃用的 token、多余兜底、写死的色、
   ≥4px 的圆角、带色阴影。**只报不拦**,不改退出码。给另一份文档用的 CSS(iframe 里的页面、导出文件,那里没有宿主变量)在同一行写
-  `/* forsion-style: off */` 跳过;打包把一个模块压成一行时,一个标记管整行。
+  `/* forsion-style: off */` 跳过;打包把一个模块压成一行时,一个标记管整行。缺省只列前 300 条,数到清零要加 `--all`。
 
 ## 引擎插件(samples/forsion-sample-plugin)
 

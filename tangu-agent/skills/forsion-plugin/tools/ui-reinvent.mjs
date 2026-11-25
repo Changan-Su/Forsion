@@ -46,8 +46,9 @@ const RULES = [
 ];
 function count(line, re) { re.lastIndex = 0; let n = 0; while (re.exec(line)) n++; return n; }
 
-/** files: [[relativePath, text], …] → [{ kind, what, use, count, at: ['main.js:12', …] }], most frequent first. */
-export function scanUi(files) {
+/** files: [[relativePath, text], …] → [{ kind, what, use, count, at: ['main.js:12', …] }], most frequent first.
+ *  `at` keeps the first `maxAt` lines per kind (check-plugin --style --all passes Infinity); `count` is always the total. */
+export function scanUi(files, maxAt = 20) {
   const all = files.map(([, t]) => t).join('\n');
   const ctx = {
     hostButtons: /(?:^|[\s'"`.])btn(?=$|[\s'"`.:{,])/m.test(all),
@@ -64,7 +65,7 @@ export function scanUi(files) {
       if (!n) continue;
       const g = groups.get(r.kind) || { kind: r.kind, what: r.what, use: r.use, count: 0, at: [] };
       g.count += n;
-      if (g.at.length < 20) g.at.push(`${file}:${i + 1}`);
+      if (g.at.length < maxAt) g.at.push(`${file}:${i + 1}`);
       groups.set(r.kind, g);
     }
   });
@@ -105,7 +106,8 @@ export function pluginUiFiles(dir) {
   return out;
 }
 
-/** One line per kind: "- hand-made menu ×5 (main.js:40, main.js:88, main.js:97, …) → ctx.ui.contextMenu(…)". */
-export function formatUiNotes(groups, max = 8) {
-  return groups.slice(0, max).map((g) => `- ${g.what} ×${g.count} (${g.at.slice(0, 3).join(', ')}${g.at.length > 3 ? ', …' : ''}) → ${g.use}`);
+/** One line per kind: "- hand-made menu ×5 (main.js:40, main.js:88, main.js:97, …) → ctx.ui.contextMenu(…)".
+ *  `at` = how many locations to list per kind (check-plugin --style --all passes Infinity). */
+export function formatUiNotes(groups, max = 8, at = 3) {
+  return groups.slice(0, max).map((g) => `- ${g.what} ×${g.count} (${g.at.slice(0, at).join(', ')}${g.at.length > at ? ', …' : ''}) → ${g.use}`);
 }
