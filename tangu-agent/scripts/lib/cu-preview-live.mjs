@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
+import { pixelApproval } from './cu-paint-live.mjs';
 import { PNG } from 'pngjs';
 const exec = promisify(execFile);
 const swift = `import AppKit
@@ -155,7 +156,7 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
       160_000,
       { toolsMode: 'allow', toolsList: ['find_roots', 'observe_ui', 'act_ui', 'use_skill', 'load_tools'] },
       undefined,
-      () => 'reject',
+      pixelApproval(OUT,key),
     );
     const before = await pictureMetrics(join(OUT, key + '-first.jpg'), join(OUT, key + '-before.png'));
     const after = await pictureMetrics(join(OUT, key + '-delivered.jpg'), join(OUT, key + '-result.png'));

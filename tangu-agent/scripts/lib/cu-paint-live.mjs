@@ -156,6 +156,18 @@ export function paintGradeSelftest() {
   ];
 }
 
+// Only approve the test URL or an action on the last screenshot delivered in this run.
+export function pixelApproval(out, key, url) {
+  return request => {
+    const args = JSON.parse(request.arguments || '{}');
+    if (request.name === 'launch_browser' && url && args.url === url && args.mode === 'pixels' && !args.visible) return 'approve';
+    const receipt = join(out,key+'-receipt.json');
+    if (request.name === 'act_ui' && existsSync(receipt) &&
+        args.stateId === JSON.parse(readFileSync(receipt,'utf8')).state) return 'approve';
+    return 'reject';
+  };
+}
+
 export function instrumentPixelFixture(shared) {
   const dist = join(shared, 'plugins/tangu-computer-use/tangu-plugins/computer-use/dist');
   renameSync(join(dist, 'index.js'), join(dist, 'provider.mjs'));
@@ -240,8 +252,9 @@ export async function cuPaintLive({ api, run, OUT, checkout, outline, tokensOf, 
         toolsList: ['launch_browser', 'observe_ui', 'act_ui', 'use_skill', 'load_tools'],
       },
       undefined,
-      () => 'reject',
+      pixelApproval(OUT,id,origin + '/#load:' + origin + '/sample.png'),
     );
+    if (!existsSync(join(OUT,id+'-delivered.png'))) throw Error('No screenshot was delivered. '+ev.toolResults.map(t=>String(t.result||t.full||'').slice(0,140)).join(' '));
     const image = readFileSync(join(OUT, id + '-delivered.png'));
     const receipt = JSON.parse(readFileSync(join(OUT, id + '-receipt.json'), 'utf8'));
     writeFileSync(join(OUT, id + '-result.png'), image);
