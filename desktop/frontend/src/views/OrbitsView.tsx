@@ -41,7 +41,8 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
 import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { runLocationsAvailable } from '../features/runtime'
+import { amadeusAvailable, runLocationsAvailable } from '../features/runtime'
+import { ensureAmadeusReady } from '../amadeusPlugins'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { announceOrbitPins, isOrbitPinned, onOrbitPinsChanged, readOrbitPins, sameOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import { onProjectRelinked } from './chat2/ProjectRelink'
@@ -172,6 +173,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const attentionIds = useSessionAttention() // P1-K3「等你处理」点
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
+  // 智库是 workspaces() 里的常驻文件夹,但库是懒加载的:冷启动直接进 Tangu、没碰过笔记 / 日历时 vaultRoot 为空,
+  // 列表里就没有这一项(库里有会话时只剩靠会话撑出来的旧名组)。左栏一挂上就唤起(幂等,同 WorkspaceView / AgentDesk)。
+  useEffect(() => { if (amadeusAvailable()) ensureAmadeusReady() }, [])
   const [plusMenu, setPlusMenu] = useState<MenuAt | null>(null)
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null)
   const [pinnedEntries, setPinnedEntries] = useState<OrbitPinTimes>(readOrbitPins)
