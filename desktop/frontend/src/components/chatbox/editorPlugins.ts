@@ -8,7 +8,8 @@
  *  a url-text link is written `<url>`), the notes' paragraph / list extensions (indent, block colour, verbatim). */
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { $node, $prose, $remark } from '@milkdown/kit/utils'
-import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
+import { Plugin, PluginKey, Selection, type Transaction } from '@milkdown/kit/prose/state'
+import type { EditorView } from '@milkdown/kit/prose/view'
 import {
   blockquoteAttr, blockquoteKeymap, blockquoteSchema, bulletListAttr, bulletListKeymap, bulletListSchema, codeBlockAttr,
   codeBlockKeymap, codeBlockSchema, createCodeBlockCommand, createCodeBlockInputRule, docSchema, emphasisAttr,
@@ -76,16 +77,42 @@ const safeLinkSchema = linkSchema.extendSchema((prev) => (ctx) => {
  *  `start = from - (match[0].length - text.length)`), so a chunk that itself closes `**…**` / `*…*` / `~~…~~` / `` `…` ``
  *  was dropped whole (or threw a RangeError) instead of being formatted. Only chunks carrying a mark delimiter are taken;
  *  everything else goes the default way. A `$prose` plugin sits before the input rules plugin, so it is asked first.
- *  The notes editor uses the same rules and runner (amadeus/blocks/markdown/anchoredMarkRules) and is not covered here. */
+ *  ⚠️ One dispatch: the rules run against the inserted state through a view that captures their transaction, and both
+ *  go out as one (two dispatches let an onChange write-back see the half-done draft and reset history, review 11-25).
+ *  The replay runs only when the caret sits right after the inserted text (a range replaced elsewhere must not format
+ *  text at the caret) and inside the runner's 500-character window (one character later than key-by-key typing would
+ *  read a different window). The notes editor uses the same rules and runner (amadeus/blocks/markdown/anchoredMarkRules)
+ *  and is not covered here. */
 const MARK_DELIMITER = /[*_~`]/
+const RULE_WINDOW = 500
+function withRulesReplayed(view: EditorView, tr: Transaction): Transaction {
+  const after = view.state.apply(tr)
+  const { empty, $head } = after.selection
+  if (!empty || $head.parentOffset > RULE_WINDOW) return tr
+  let ruled: Transaction | null = null
+  const probe = Object.create(view, {
+    state: { value: after },
+    dispatch: { value: (t: Transaction) => { ruled = t } },
+  }) as EditorView
+  probe.someProp('handleTextInput', (f) => f(probe, $head.pos, $head.pos, '', () => after.tr))
+  const r = ruled as Transaction | null
+  if (!r || !r.docChanged) return tr
+  for (const step of r.steps) tr.step(step)
+  if (r.selectionSet) tr.setSelection(Selection.fromJSON(tr.doc, r.selection.toJSON()))
+  if (r.storedMarksSet) tr.setStoredMarks(r.storedMarks)
+  // the input rules plugin's undo record (Backspace right after gives back the literal text) rides on meta
+  const meta = (r as unknown as { meta: Record<string, unknown> }).meta
+  for (const k of Object.keys(meta)) tr.setMeta(k, meta[k])
+  return tr
+}
 const multiCharInput = $prose(() => new Plugin({
   key: new PluginKey('chatBoxMultiCharInput'),
   props: {
     handleTextInput(view, from, to, text, deflt) {
       if (view.composing || text.length < 2 || !MARK_DELIMITER.test(text)) return false
-      view.dispatch((deflt ? deflt() : view.state.tr.insertText(text, from, to)).scrollIntoView())
-      const { empty, head } = view.state.selection
-      if (empty) view.someProp('handleTextInput', (f) => f(view, head, head, '', () => view.state.tr))
+      const tr = deflt ? deflt() : view.state.tr.insertText(text, from, to)
+      const end = tr.mapping.map(to)
+      view.dispatch((tr.selection.empty && tr.selection.head === end ? withRulesReplayed(view, tr) : tr).scrollIntoView())
       return true
     },
   },

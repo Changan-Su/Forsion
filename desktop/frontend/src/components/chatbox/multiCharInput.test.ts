@@ -10,6 +10,7 @@ import type { Ctx } from '@milkdown/kit/ctx'
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { undoInputRule } from '@milkdown/kit/prose/inputrules'
+import { undo } from '@milkdown/kit/prose/history'
 import { chatBoxEditorPlugins } from './editorPlugins'
 import { storeMarkdown } from './ChatBoxEditor'
 import type { ChatBoxFormat } from './chatBoxMarkdown'
@@ -39,8 +40,8 @@ async function boot(format: ChatBoxFormat): Promise<Booted> {
 }
 
 /** One input event carrying `text` over the selection: input rules first, default insertion if nobody took it. */
-function input(view: EditorView, text: string): void {
-  const { from, to } = view.state.selection
+function input(view: EditorView, text: string, range?: { from: number; to: number }): void {
+  const { from, to } = range ?? view.state.selection
   const deflt = () => view.state.tr.insertText(text, from, to)
   if (!view.someProp('handleTextInput', (f) => f(view, from, to, text, deflt))) view.dispatch(deflt())
 }
@@ -123,5 +124,35 @@ describe('basic: block rules from a chunk', () => {
     input(b.view, chunk)
     expect(b.view.state.doc.firstChild!.type.name).toBe('bullet_list')
     expect(para(b.view).text).toBe('')
+  })
+})
+
+describe('review 11-25: one transaction, only at the caret, inside the rule window', () => {
+  it('the insertion and the formatting are one dispatch and one undo step', async () => {
+    const b = await boot('basic')
+    const real = b.view.dispatch.bind(b.view)
+    let n = 0
+    b.view.dispatch = (tr) => { n++; real(tr) }
+    input(b.view, '看下 **重点**')
+    expect(n).toBe(1)
+    expect(undo(b.view.state, b.view.dispatch)).toBe(true)
+    expect(para(b.view)).toEqual({ text: '', marked: [] })
+  })
+
+  it('a range replaced away from the caret does not format text at the caret', async () => {
+    const b = await boot('inline')
+    // literal `aaa *b*`, caret at the end; a text replacement swaps `aaa` for `_x`
+    b.view.dispatch(b.view.state.tr.insertText('aaa *b*', 1, b.view.state.doc.firstChild!.nodeSize - 1))
+    b.view.dispatch(b.view.state.tr.setSelection(TextSelection.atEnd(b.view.state.doc)))
+    input(b.view, '_x', { from: 1, to: 4 })
+    expect(para(b.view)).toEqual({ text: '_x *b*', marked: [] })
+  })
+
+  it('past the input rules\' 500-character window the chunk stays plain', async () => {
+    const b = await boot('basic')
+    const chunk = 'x' + ' '.repeat(498) + '* '
+    input(b.view, chunk)
+    expect(b.view.state.doc.firstChild!.type.name).toBe('paragraph')
+    expect(para(b.view).text).toBe(chunk)
   })
 })
