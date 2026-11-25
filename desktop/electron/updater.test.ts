@@ -409,11 +409,12 @@ it('Developer ID mac in mainland: downloads the website zip in-app, and can stil
 })
 
 it.each([
-  ['a differential website download (blockmaps first, no progress yet) gets 90 seconds', true, 60_000, 100_000],
-  ['a full website download is still called stalled after 30 seconds without progress', false, 25_000, 40_000],
-])('stall watchdog: %s', async (_name, blockmap, alive, dead) => {
+  ['a differential website download (blockmaps first, no progress yet) gets 90 seconds', true, 'CN', 60_000, 100_000, 'generic'],
+  ['a full website download is still called stalled after 30 seconds without progress', false, 'CN', 25_000, 40_000, 'generic'],
+  ['a GitHub download (differential too) keeps the 30-second watchdog', true, 'GB', 25_000, 40_000, 'custom'],
+])('stall watchdog: %s', async (_name, blockmap, country, alive, dead, switchedTo) => {
   answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==', ...(blockmap ? { blockmap: true } : {}) }))
-  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  answers.set('/auth/region', { country, mainland_china: country === 'CN' })
   const { checkForUpdates, downloadUpdate } = await import('./updater')
   await checkForUpdates()
   vi.useFakeTimers()
@@ -427,7 +428,7 @@ it.each([
     expect(token.cancelled).toBe(true)
     await vi.advanceTimersByTimeAsync(1)
     await pending
-    expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' }) // 下不动就换 GitHub,和原来一样
+    expect(updater.feeds.at(-1)).toMatchObject({ provider: switchedTo }) // 下不动就换另一边,和原来一样
   } finally { vi.useRealTimers() }
 })
 

@@ -26,7 +26,7 @@ import { BUNDLE_EXTEND } from './distribution'
 import { WebsiteUpdateProvider } from './websiteUpdateProvider'
 import { probeMacSelfInstall } from './macSelfUpdate'
 import { checkRevisionUpdate } from './revisionUpdateCheck'
-import { differentialOldFile, dropStaleCurrentBlockmap } from './differentialCache'
+import { dropStaleBlockmapFor } from './differentialCache'
 import {
   WEBSITE_API, parseMainland, parseSourcePref, parseWebsiteInstallers, sourceOrder,
   websiteCarries, websiteDownload, websiteHas, websitePlatformFor, selectGitHubRelease,
@@ -42,7 +42,7 @@ const GH_API = `https://api.github.com/repos/${GH_OWNER}/${GH_REPO}`
 /** 这么久没有新的下载进度就算「下不动」,换另一边。 */
 const STALL_MS = 30_000
 /**
- * 差量下载开头要先取新旧两份 blockmap(各约 0.5 MB),这段 electron-updater 不报进度:第一条进度之前多给些时间,
+ * 官网源的差量下载开头要先取新旧两份 blockmap(各约 0.5 MB),这段 electron-updater 不报进度:第一条进度之前多给些时间,
  * 不然慢网上会在取 blockmap 时被当成下不动取消掉 —— 取消令牌一并带走了它自己的整包回落(Codex 评审)。
  */
 const FIRST_PROGRESS_DIFF_MS = 90_000
@@ -272,7 +272,8 @@ async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'>
   autoUpdater.channel = BUNDLE_EXTEND ? 'latest' : 'latest-no-extend'
   // 官网只有带 blockmap 的记录能差量(feedFor 标好了);差量失败 electron-updater 自己回落整包
   autoUpdater.disableDifferentialDownload = src === 'website' && !(feed as { differential?: boolean }).differential
-  if (!autoUpdater.disableDifferentialDownload) await dropStaleBlockmap()
+  // 官网源开差量前,缓存里和旧文件对不上的 current.blockmap 删掉(原因见 differentialCache.ts)
+  if (src === 'website' && !autoUpdater.disableDifferentialDownload) await dropStaleBlockmapFor(autoUpdater, process.platform)
   autoUpdater.setFeedURL(feed)
   feedSource = src
   busy = true
@@ -281,17 +282,6 @@ async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'>
     if (r?.updateInfo?.version !== target.version) return 'fail'
     return r.isUpdateAvailable === false ? 'rejected' : 'ok'
   } catch { return 'fail' } finally { busy = false }
-}
-
-/** 更新缓存里那份「当前版本 blockmap」和差量要对照的旧文件对不上就删掉(原因见 differentialCache.ts)。出任何错都不影响下载。 */
-async function dropStaleBlockmap(): Promise<void> {
-  const oldFile = differentialOldFile(process.platform)
-  if (!oldFile) return
-  try {
-    // electron-updater 的私有方法:按 app-update.yml 的 updaterCacheDirName 拼出缓存目录(下载时用的也是它)
-    const helper = await (autoUpdater as unknown as { getOrCreateDownloadHelper?: () => Promise<{ cacheDir: string }> }).getOrCreateDownloadHelper?.()
-    if (helper?.cacheDir) await dropStaleCurrentBlockmap(helper.cacheDir, oldFile)
-  } catch { /* 查不到缓存目录就算了 */ }
 }
 
 function ensureWired(): void {
@@ -427,7 +417,8 @@ export async function downloadUpdate(): Promise<void> {
     const cur: Download = { token: new CancellationToken(), lastAt: Date.now(), manual: null }
     dl = cur
     const watchdog = setInterval(() => {
-      const limit = cur.progressed || autoUpdater.disableDifferentialDownload ? STALL_MS : FIRST_PROGRESS_DIFF_MS
+      // 只给官网源的差量放宽:GitHub 源的看门狗保持原样
+      const limit = !cur.progressed && feedSource === 'website' && !autoUpdater.disableDifferentialDownload ? FIRST_PROGRESS_DIFF_MS : STALL_MS
       if (Date.now() - cur.lastAt > limit) cur.token.cancel()
     }, 5000)
     try {

@@ -2,7 +2,8 @@
  * 官网下载源的差量更新,真跑一遍 electron-updater:证明带 blockmap 的官网记录走的是差量、量出实际下了多少字节。
  *
  * 被测的是真东西:装着的 electron-updater(NsisUpdater / MacUpdater,ElectronHttpExecutor 走 Electron net)
- * × 真的 WebsiteUpdateProvider × shared/updateSource.ts 的 websiteDownload × differentialCache.ts 的旧 blockmap 核对。
+ * × 真的 WebsiteUpdateProvider × shared/updateSource.ts 的 websiteDownload × differentialCache.ts 的旧 blockmap 核对
+ * (和 updater.ts 一样经 dropStaleBlockmapFor(updater) 走 electron-updater 的 getOrCreateDownloadHelper 找缓存目录)。
  * 假的只有两台本机服务器,形状照生产:
  *   - 「官网」口:`/api/website/download/<平台>/<版本>/<文件名>(.blockmap)` 和老的 `/api/website/download/<平台>`,一律 302 到「OSS」口;
  *   - 「OSS」口:带签名查询串才给;单 Range 回 206;多 Range 只回第一段、也不是 multipart —— dl.forsion.net 实测就是这样
@@ -15,7 +16,7 @@
  *   W2 Windows,记录没有 blockmap(老 server)→ 老地址整包
  *   W3 Windows,带 blockmap 但官网没有当前版本的 blockmap(404)→ 回落整包,sha512 照样过
  *   W4 Windows,缓存里留着更早一版的 current.blockmap(整包更新 / 手动装过之后)、不做核对 → 白下一遍差量再整包(负对照)
- *   W5 同 W4,先跑 dropStaleCurrentBlockmap(updater.ts 开差量前做的)→ 差量
+ *   W5 同 W4,先跑 dropStaleBlockmapFor(updater)(updater.ts 开差量前做的)→ 差量
  *   W6 同 W1,但 provider 用 electron-updater 给 custom 源的缺省多 Range(负对照)→ 假 OSS 只回第一段 → 差量失败、回落整包
  *   M1 mac,带 blockmap,缓存里有上次应用内更新留下的 update.zip → 差量
  *   M2 mac,带 blockmap,没有 update.zip(手动装 dmg 之后第一次更新)→ 整包
@@ -45,7 +46,7 @@ function loadSources() {
     stdin: {
       contents: `export { WebsiteUpdateProvider } from './electron/websiteUpdateProvider'
 export { websiteDownload } from './shared/updateSource'
-export { dropStaleCurrentBlockmap } from './electron/differentialCache'`,
+export { dropStaleBlockmapFor } from './electron/differentialCache'`,
       resolveDir: ROOT, loader: 'ts', sourcefile: 'website-delta-entry.ts',
     },
     bundle: true, platform: 'node', format: 'cjs', write: false,
@@ -200,7 +201,11 @@ async function runScenario(src, data, s) {
   const installer = { version: '1.0.1', filename: name('1.0.1'), size: data.v2.length, sha512: sha512(data.v2), ...(s.blockmap ? { blockmap: true } : {}) }
   const { url, differential } = src.websiteDownload(srv.api, platform, installer)
   updater.disableDifferentialDownload = !differential
-  if (s.guard) s.dropped = await src.dropStaleCurrentBlockmap(cacheDir, mac ? 'update.zip' : 'installer.exe')
+  if (s.guard) {
+    // 和 updater.ts 同一条路:经 electron-updater 的私有方法找缓存目录。先确认它找到的就是预置的那个
+    s.helperCacheDir = (await updater.getOrCreateDownloadHelper()).cacheDir
+    s.dropped = await src.dropStaleBlockmapFor(updater, mac ? 'darwin' : 'win32')
+  }
   // W6:撤掉 WebsiteUpdateProvider 的单 Range,回到 electron-updater 对 custom 源的缺省(多 Range)
   const Provider = s.multiRange ? class extends src.WebsiteUpdateProvider { get isUseMultipleRangeRequest() { return true } } : src.WebsiteUpdateProvider
   updater.setFeedURL({ provider: 'custom', updateProvider: Provider, installer, downloadUrl: url, differential })
@@ -221,7 +226,7 @@ async function runScenario(src, data, s) {
     installerBytes: srv.stats.installerBytes, blockmapBytes: srv.stats.blockmapBytes, full: data.v2.length,
     rangeRequests: srv.stats.rangeRequests, multiRange: srv.stats.multiRange, fullGets: srv.stats.fullGets,
     apiInstallerHits: srv.stats.apiInstallerHits, blockmapUrls: srv.stats.blockmapUrls, notFound: srv.stats.notFound,
-    droppedStaleBlockmap: s.dropped ?? null, ms: Date.now() - started,
+    droppedStaleBlockmap: s.dropped ?? null, helperCacheDirOk: s.guard ? s.helperCacheDir === cacheDir : null, ms: Date.now() - started,
     log: logs.filter((l) => /block map|Download block maps|differential|Differential|To download|fallback|Cannot/i.test(l)).map((l) => l.slice(0, 220)),
   }
   fs.rmSync(tmp, { recursive: true, force: true })
@@ -267,7 +272,7 @@ app.whenReady().then(async () => {
     check('W2 没有 blockmap:老地址整包,不碰 blockmap', by.W2.downloadedOk && by.W2.installerBytes === full && by.W2.blockmapBytes === 0 && /\/windows$/.test(by.W2.url))
     check('W3 当前版本 blockmap 404:回落整包,sha512 照样过', by.W3.downloadedOk && by.W3.fullGets === 1 && by.W3.notFound.some((u) => u.endsWith('.blockmap')), `${pct(by.W3.installerBytes, full)}`)
     check('W4 负对照:过期的 blockmap 不核对 → 白下一遍差量再整包(下得比整包还多)', by.W4.downloadedOk && by.W4.installerBytes > full && by.W4.fullGets === 1, `${pct(by.W4.installerBytes, full)}`)
-    check('W5 先核对:删掉过期的 blockmap,按地址取当前版本的 → 差量', by.W5.droppedStaleBlockmap === true && deltaOk(by.W5), `${pct(by.W5.installerBytes, full)}`)
+    check('W5 先核对:经 updater 找到的缓存目录就是预置的那个,删掉过期的 blockmap,按地址取当前版本的 → 差量', by.W5.helperCacheDirOk === true && by.W5.droppedStaleBlockmap === true && deltaOk(by.W5), `${pct(by.W5.installerBytes, full)}`)
     check('W6 负对照:多 Range 撞上只回第一段的 OSS → 差量失败、回落整包(单 Range 是必须的)', by.W6.downloadedOk && by.W6.multiRange >= 1 && by.W6.fullGets === 1 && by.W6.log.some((l) => /multipart\/byteranges/.test(l)), `多 Range ${by.W6.multiRange} 次,${pct(by.W6.installerBytes, full)}`)
     if (by.M1) {
       check('M1 mac 差量:sha512 对,只下了一小部分', deltaOk(by.M1), `${pct(by.M1.installerBytes, full)}`)

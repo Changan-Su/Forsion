@@ -47,6 +47,21 @@ export function blockmapCoveredSize(content: Buffer): number | null {
   }
 }
 
+/**
+ * 对一个 electron-updater 实例做上面的核对:缓存目录用它自己的私有方法 `getOrCreateDownloadHelper()` 取
+ * (按 app-update.yml 的 updaterCacheDirName 拼,下载时用的也是它)。取不到、出任何错都当没做(返回 false)。
+ */
+export async function dropStaleBlockmapFor(updater: unknown, platform: string): Promise<boolean> {
+  const oldFile = differentialOldFile(platform)
+  if (!oldFile) return false
+  try {
+    const helper = await (updater as { getOrCreateDownloadHelper?: () => Promise<{ cacheDir?: string }> }).getOrCreateDownloadHelper?.()
+    return helper?.cacheDir ? await dropStaleCurrentBlockmap(helper.cacheDir, oldFile) : false
+  } catch {
+    return false
+  }
+}
+
 /** 差量拿来对照的旧文件名(electron-updater 的约定):NSIS `installer.exe`、mac `update.zip`;别的平台不管。 */
 export function differentialOldFile(platform: string): string | null {
   return platform === 'win32' ? 'installer.exe' : platform === 'darwin' ? 'update.zip' : null

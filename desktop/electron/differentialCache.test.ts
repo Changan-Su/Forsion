@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { blockmapCoveredSize, differentialOldFile, dropStaleCurrentBlockmap } from './differentialCache'
+import { blockmapCoveredSize, differentialOldFile, dropStaleBlockmapFor, dropStaleCurrentBlockmap } from './differentialCache'
 
 const blockmap = (...sizes: number[]) => gzipSync(JSON.stringify({ version: '2', files: [{ name: 'file', offset: 0, checksums: sizes.map(String), sizes }] }))
 const exists = (p: string) => stat(p).then(() => true, () => false)
@@ -43,4 +43,15 @@ it('knows which old file each platform diffs against', () => {
   expect(differentialOldFile('win32')).toBe('installer.exe')
   expect(differentialOldFile('darwin')).toBe('update.zip')
   expect(differentialOldFile('linux')).toBeNull()
+})
+
+it('finds the cache directory through the updater, and does nothing when it cannot', async () => {
+  await writeFile(join(dir, 'installer.exe'), Buffer.alloc(40))
+  await writeFile(join(dir, 'current.blockmap'), blockmap(10, 20, 5))
+  expect(await dropStaleBlockmapFor({}, 'win32')).toBe(false)
+  expect(await dropStaleBlockmapFor({ getOrCreateDownloadHelper: async () => { throw new Error('no app-update.yml') } }, 'win32')).toBe(false)
+  expect(await dropStaleBlockmapFor({ getOrCreateDownloadHelper: async () => ({ cacheDir: dir }) }, 'linux')).toBe(false)
+  expect(await exists(join(dir, 'current.blockmap'))).toBe(true)
+  expect(await dropStaleBlockmapFor({ getOrCreateDownloadHelper: async () => ({ cacheDir: dir }) }, 'win32')).toBe(true)
+  expect(await exists(join(dir, 'current.blockmap'))).toBe(false)
 })
