@@ -18,6 +18,8 @@ const updater = vi.hoisted(() => ({
   checkFails: false,
   relaunched: 0,
   sourcePref: 'auto',
+  /** 每次钉源时 disableDifferentialDownload 设成了什么 */
+  noDiff: [] as boolean[],
 }))
 const emitNative = (name: string, ...args: any[]) => { for (const cb of [...(updater.native.get(name) ?? [])]) cb(...args) }
 vi.mock('electron', () => ({
@@ -33,6 +35,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./macSelfUpdate', () => ({ probeMacSelfInstall: async () => updater.macSelf }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: {
+  set disableDifferentialDownload(v: boolean) { updater.noDiff.push(v) },
+  get disableDifferentialDownload() { return updater.noDiff.at(-1) ?? false },
   isUpdateAvailable: async () => true,
   isUpdateSupported: async () => !updater.reject,
   isUserWithinRollout: async () => true,
@@ -68,6 +72,7 @@ beforeEach(() => {
   updater.beta = false; updater.current = '2.13.3'
   updater.macSelf = { ok: false, reason: 'not-developer-id' }; updater.quitAndInstall.mockClear(); updater.native.clear()
   updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0; updater.sourcePref = 'auto'
+  updater.noDiff.length = 0
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -109,12 +114,28 @@ it('in mainland downloads from the website first and switches to GitHub once whe
   answers.set('/auth/region', { country: 'CN', mainland_china: true })
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website' })
-  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows' })
+  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows', differential: false })
+  expect(updater.noDiff).toEqual([true]) // 这条官网记录没有 blockmap(老 server):整包
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   await downloadUpdate()
   expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' })
+  expect(updater.noDiff.at(-1)).toBe(false) // GitHub 照旧差量
   expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloading', source: 'github', fallbackFrom: 'website' }))
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
+})
+
+it('in mainland a website record with a blockmap downloads from the versioned address with differential download on', async () => {
+  answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==', blockmap: true }))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website' })
+  expect(updater.feeds[0]).toMatchObject({
+    provider: 'custom', differential: true,
+    downloadUrl: 'https://forsion.net/api/website/download/windows/2.13.4/Forsion-2.13.4-x64.exe',
+  })
+  expect(updater.noDiff).toEqual([false])
+  await downloadUpdate()
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'website' })
 })
 
 it('does not use the website for Windows when its record has no sha512', async () => {
@@ -379,11 +400,23 @@ it('Developer ID mac in mainland: downloads the website zip in-app, and can stil
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: false })
   expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/macos-update', installer: { filename: 'Forsion-2.13.4-arm64.zip', sha512: 'zip==' } })
+  expect(updater.noDiff).toEqual([true])
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   await downloadUpdate()
   expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' })
   expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloading', source: 'github', fallbackFrom: 'website' }))
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
+})
+
+it('Developer ID mac in mainland: a website zip with a blockmap is fetched from the versioned address with differential download on', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', macWithZip({ blockmap: true }))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: false })
+  expect(updater.feeds[0]).toMatchObject({ downloadUrl: 'https://forsion.net/api/website/download/macos-update/2.13.4/Forsion-2.13.4-arm64.zip', differential: true })
+  expect(updater.noDiff).toEqual([false])
 })
 
 it.each([

@@ -26,9 +26,10 @@ import { BUNDLE_EXTEND } from './distribution'
 import { WebsiteUpdateProvider } from './websiteUpdateProvider'
 import { probeMacSelfInstall } from './macSelfUpdate'
 import { checkRevisionUpdate } from './revisionUpdateCheck'
+import { differentialOldFile, dropStaleCurrentBlockmap } from './differentialCache'
 import {
   WEBSITE_API, parseMainland, parseSourcePref, parseWebsiteInstallers, sourceOrder,
-  websiteCarries, websiteHas, websitePlatformFor, selectGitHubRelease,
+  websiteCarries, websiteDownload, websiteHas, websitePlatformFor, selectGitHubRelease,
   type UpdateSource, type UpdateSourcePref, type WebsiteInstallers,
 } from '../shared/updateSource'
 
@@ -244,7 +245,9 @@ function feedFor(src: UpdateSource): Parameters<typeof autoUpdater.setFeedURL>[0
   const it = target.site?.[key]
   if (!websiteCarries(process.platform, BUNDLE_EXTEND) || !websiteHas(it, target.version) || !it.sha512) return null
   if (mac && !/\.zip$/i.test(it.filename)) return null
-  return { provider: 'custom', updateProvider: WebsiteUpdateProvider, installer: it, downloadUrl: `${WEBSITE_API}/website/download/${key}` }
+  // 记录带 blockmap(新 server 从 GitHub 导入的)走带版本号的地址、开差量;否则照旧整包(见 websiteDownload)
+  const { url, differential } = websiteDownload(WEBSITE_API, key, it)
+  return { provider: 'custom', updateProvider: WebsiteUpdateProvider, installer: it, downloadUrl: url, differential }
 }
 
 /** 下载顺序里、除当前这边以外第一个能用的。 */
@@ -262,7 +265,9 @@ async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'>
   // generic 按 channel 拼 yml 名(Linux 自动加 -linux):标准包 latest*.yml,NoExtend latest-no-extend*.yml;
   // 测试版 tag 上也是 latest*.yml(见 electron-builder.config.cjs 的说明)。
   autoUpdater.channel = BUNDLE_EXTEND ? 'latest' : 'latest-no-extend'
-  autoUpdater.disableDifferentialDownload = src === 'website' // 官网没有 blockmap
+  // 官网只有带 blockmap 的记录能差量(feedFor 标好了);差量失败 electron-updater 自己回落整包
+  autoUpdater.disableDifferentialDownload = src === 'website' && !(feed as { differential?: boolean }).differential
+  if (!autoUpdater.disableDifferentialDownload) await dropStaleBlockmap()
   autoUpdater.setFeedURL(feed)
   feedSource = src
   busy = true
@@ -271,6 +276,17 @@ async function useSource(src: UpdateSource): Promise<'ok' | 'rejected' | 'fail'>
     if (r?.updateInfo?.version !== target.version) return 'fail'
     return r.isUpdateAvailable === false ? 'rejected' : 'ok'
   } catch { return 'fail' } finally { busy = false }
+}
+
+/** 更新缓存里那份「当前版本 blockmap」和差量要对照的旧文件对不上就删掉(原因见 differentialCache.ts)。出任何错都不影响下载。 */
+async function dropStaleBlockmap(): Promise<void> {
+  const oldFile = differentialOldFile(process.platform)
+  if (!oldFile) return
+  try {
+    // electron-updater 的私有方法:按 app-update.yml 的 updaterCacheDirName 拼出缓存目录(下载时用的也是它)
+    const helper = await (autoUpdater as unknown as { getOrCreateDownloadHelper?: () => Promise<{ cacheDir: string }> }).getOrCreateDownloadHelper?.()
+    if (helper?.cacheDir) await dropStaleCurrentBlockmap(helper.cacheDir, oldFile)
+  } catch { /* 查不到缓存目录就算了 */ }
 }
 
 function ensureWired(): void {
