@@ -4972,7 +4972,8 @@ app.whenReady().then(async () => {
     showMainWindow()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('whatsNew:open')
   })
-  ipcMain.handle('updater:download', (_e, opts?: { auto?: boolean }) => downloadUpdate({ auto: opts?.auto === true }))
+  ipcMain.handle('updater:download', (_e, opts?: { auto?: boolean; version?: string }) =>
+    downloadUpdate({ auto: opts?.auto === true, version: typeof opts?.version === 'string' ? opts.version : undefined }))
   ipcMain.handle('updater:install', async (e) => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
     if (!canInstallUpdate() || getUpdaterStatus().phase !== 'downloaded') return { ok: false }

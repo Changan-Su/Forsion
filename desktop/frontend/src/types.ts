@@ -716,8 +716,8 @@ declare global {
       checkForUpdates?(): Promise<UpdaterStatusInfo>
       getUpdaterStatus?(): Promise<UpdaterStatusInfo>
       restartForUpdate?(): Promise<{ ok: boolean }>
-      /** auto = 主窗收到 autoDownload 的「有新版」后自动发起:只认 GitHub 源,失败不换到官网、退回等用户点 */
-      downloadUpdate?(opts?: { auto?: boolean }): Promise<void>
+      /** auto = 主窗收到 autoDownload 的「有新版」后自动发起(version = 主窗查过跳过的那一版):只认 GitHub 源,失败不换到官网、退回等用户点 */
+      downloadUpdate?(opts?: { auto?: boolean; version?: string }): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
       /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */

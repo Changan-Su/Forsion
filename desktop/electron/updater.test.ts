@@ -415,7 +415,7 @@ it('GitHub source is marked for background download, and the auto download finis
   answers.set('/auth/region', { country: 'GB', mainland_china: false })
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', autoDownload: true })
-  await downloadUpdate({ auto: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.13.4', source: 'github' })
 })
 
@@ -426,7 +426,7 @@ it('website source is never downloaded automatically', async () => {
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', autoDownload: false })
   let started = 0
   updater.download.push(async () => { started++ })
-  await downloadUpdate({ auto: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
   expect(started).toBe(0)
   expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'website' })
 })
@@ -437,11 +437,11 @@ it('a failed background download never falls back to the website: it quietly wai
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ source: 'github', autoDownload: true })
   updater.download.push(async () => { throw new Error('ECONNRESET') })
-  await downloadUpdate({ auto: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
   expect(updater.feeds).toHaveLength(1) // 没钉去官网
   expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'github', autoDownload: false })
   expect(updater.sent.some((s) => s.phase === 'error')).toBe(false)
-  await downloadUpdate({ auto: true }) // 清掉 autoDownload 之后不再自己重试
+  await downloadUpdate({ auto: true, version: '2.13.4' }) // 清掉 autoDownload 之后不再自己重试
   expect(getUpdaterStatus()).toMatchObject({ phase: 'available' })
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   await downloadUpdate() // 用户点的:照旧换官网
@@ -459,9 +459,51 @@ it('Developer ID mac abroad: a failed background download does not give up on in
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ source: 'github', manualInstall: false, autoDownload: true })
-  await downloadUpdate({ auto: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
   expect(getUpdaterStatus()).toMatchObject({ phase: 'available', manualInstall: false, autoDownload: false })
   expect(getUpdaterStatus().selfInstallFailed).toBeUndefined()
   await downloadUpdate() // 用户点的:默认那份下载成功
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded' })
+})
+
+it('the background download only takes the version the main window checked, and never a prerelease once beta is off', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  let started = 0
+  updater.download.push(async () => { started++ })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate({ auto: true, version: '2.13.5' }) // 主窗查跳过时看的是另一版
+  await downloadUpdate({ auto: true })
+  expect(started).toBe(0)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', version: '2.13.4' })
+})
+
+it('a beta announced by a check that raced "beta off" is not downloaded in the background', async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.13.4-beta.1' }])
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.4-beta.1', autoDownload: true })
+  updater.beta = false // 在设置里关了测试版,channelChanged 没赶上
+  let started = 0
+  updater.download.push(async () => { started++ })
+  await downloadUpdate({ auto: true, version: '2.13.4-beta.1' })
+  expect(started).toBe(0)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available' })
+})
+
+it('Developer ID mac in mainland on beta: the website has no such version, so the GitHub zip downloads in the background', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.beta = true
+  answers.set('/website/config', macWithZip())
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.13.5-beta.1' }])
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.5-beta.1', source: 'github', manualInstall: false, autoDownload: true })
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.13.5-beta.1' }))
+  await downloadUpdate({ auto: true, version: '2.13.5-beta.1' })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
 })

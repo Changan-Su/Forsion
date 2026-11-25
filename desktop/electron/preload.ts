@@ -259,7 +259,7 @@ const api = {
   checkForUpdates: (): Promise<any> => ipcRenderer.invoke('updater:check'),
   getUpdaterStatus: (): Promise<any> => ipcRenderer.invoke('updater:status'),
   restartForUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:restart'),
-  downloadUpdate: (opts?: { auto?: boolean }): Promise<void> => ipcRenderer.invoke('updater:download', opts),
+  downloadUpdate: (opts?: { auto?: boolean; version?: string }): Promise<void> => ipcRenderer.invoke('updater:download', opts),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
   getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),

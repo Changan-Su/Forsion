@@ -25,7 +25,7 @@ const available = { phase: 'available', version: '2.14.4', source: 'github', man
 
 it('a GitHub update downloads in the background and only pops once it is downloaded', async () => {
   await emit({ ...available, autoDownload: true })
-  expect(download).toHaveBeenCalledWith({ auto: true })
+  expect(download).toHaveBeenCalledWith({ auto: true, version: '2.14.4' })
   expect(dialog()).toBeNull()
   await emit({ ...available, autoDownload: true, phase: 'downloading', percent: 40 })
   expect(dialog()).toBeNull()
@@ -52,4 +52,16 @@ it('website-source updates, manual-install macs and skipped versions are never d
   localStorage.setItem('forsion_update_skipped_version', '2.14.6')
   await emit({ ...available, version: '2.14.6', autoDownload: true })
   expect(download).not.toHaveBeenCalled()
+})
+
+it('after a failed background download was shown, a later successful retry still pops when it is ready', async () => {
+  await emit({ ...available, autoDownload: true })
+  await emit({ ...available, autoDownload: false }) // 没下成:照常弹,用户点了「稍后」
+  expect(dialog()).not.toBeNull()
+  const later = [...host.querySelectorAll<HTMLButtonElement>('.wn-modal button')].find((b) => /稍后|Later/.test(b.textContent || ''))
+  await act(async () => later!.click())
+  expect(dialog()).toBeNull()
+  await emit({ ...available, autoDownload: true }) // 6 小时后重试
+  await emit({ ...available, autoDownload: true, phase: 'downloaded' })
+  expect(dialog()).not.toBeNull()
 })
