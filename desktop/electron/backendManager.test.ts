@@ -384,8 +384,8 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
 // 引擎收到信号那一刻同步读它,据此把在途任务记成 interrupted(<原因>)。意外退出 / 不带原因的停不写。
 describe('shutdown intent written before the engine is signalled', () => {
   const INTENT = join(H.dir, 'shutdown-intent.json')
-  /** 假引擎:收到 SIGTERM 时把那一刻盘上的意图文件(没有 = null)、自己的 pid 与 TANGU_AUTO_RESUME 落盘,再退出。 */
-  function intentProbeEngine(tag: string): { entry: string; seen: () => { pid: number; autoResume: string | null; intent: { reason: string; pid: number; at: number } | null } } {
+  /** 假引擎:收到关停请求时把那一刻盘上的意图(没有 = null)、自己的 pid 与 TANGU_AUTO_RESUME 落盘,再退出。 */
+  function intentProbeEngine(tag: string, hostShutdown = true): { entry: string; seen: () => { pid: number; autoResume: string | null; intent: { reason: string; pid: number; at: number } | null } } {
     const entry = join(H.dir, `intent-probe-${tag}.cjs`)
     const out = join(H.dir, `intent-probe-${tag}.json`)
     rmSync(out, { force: true })
@@ -395,23 +395,21 @@ describe('shutdown intent written before the engine is signalled', () => {
       `const out = ${JSON.stringify(out)}`,
       "const write = (intent) => fs.writeFileSync(out, JSON.stringify({ pid: process.pid, autoResume: process.env.TANGU_AUTO_RESUME ?? null, intent }))",
       "write(undefined)",
-      "process.on('SIGTERM', () => {",
+      "const shutdown = () => {",
       "  let intent = null",
       "  try { intent = JSON.parse(fs.readFileSync(path.join(process.env.TANGU_HOME, 'shutdown-intent.json'), 'utf8')) } catch {}",
       "  write(intent); process.exit(0)",
-      "})",
+      "}",
+      "process.on('SIGTERM', shutdown)",
+      "require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => { if (JSON.parse(line).shutdown === true) shutdown() })",
       "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
-      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+      `require('node:http').createServer((_q, s) => s.end(${JSON.stringify(hostShutdown ? '{"hostShutdown":true}' : '{}')})).listen(port, '127.0.0.1')`,
     ].join('\n'), 'utf8')
     return { entry, seen: () => JSON.parse(readFileSync(out, 'utf8')) }
   }
-  /** Windows 上 SIGTERM 等于强杀、假引擎的 handler 跑不到(契约:下次启动的恢复流程按 pid 认这份意图)。
-   *  所以 Windows 断言「发信号前意图已落盘」:读盘上那份;其余平台照旧断言引擎收信号那一刻读到的。 */
-  const WIN = process.platform === 'win32'
-  const onDisk = () => (existsSync(INTENT) ? JSON.parse(readFileSync(INTENT, 'utf8')) : null)
-  const boot = async (tag: string) => {
+  const boot = async (tag: string, hostShutdown = true) => {
     rmSync(INTENT, { force: true })
-    const eng = intentProbeEngine(tag)
+    const eng = intentProbeEngine(tag, hostShutdown)
     vi.restoreAllMocks() // 前面热更新那组把 resolveLaunch 换成了它们的启动器
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
     process.env.TANGU_NODE_BIN = process.execPath
@@ -421,13 +419,13 @@ describe('shutdown intent written before the engine is signalled', () => {
     return { m, eng, pid: m.getStatus().pid! }
   }
 
-  it.each(['app_quit', 'app_update', 'engine_restart', 'account_change', 'engine_stop'] as const)('stop(%s): the engine reads the reason and its own pid when SIGTERM arrives', async (reason) => {
+  it.each(['app_quit', 'app_update', 'engine_restart', 'account_change', 'engine_stop'] as const)('stop(%s): the engine reads the reason and its own pid before it exits', async (reason) => {
     const { m, eng, pid } = await boot(reason)
     const before = Date.now()
     await m.stop(reason)
     const seen = eng.seen()
     expect(seen.pid).toBe(pid)
-    const intent = WIN ? onDisk() : seen.intent
+    const intent = seen.intent
     expect(intent).toMatchObject({ reason, pid })
     expect(intent!.at).toBeGreaterThanOrEqual(before)
     expect(readdirSync(H.dir).filter((f) => f.startsWith('shutdown-intent.json.'))).toEqual([]) // 临时文件 rename 走了
@@ -439,7 +437,7 @@ describe('shutdown intent written before the engine is signalled', () => {
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(next.entry)
     try {
       await m.start({ cloudUrl: '', sandbox: 'none' }, 'engine_restart')
-      expect(WIN ? onDisk() : eng.seen().intent).toMatchObject({ reason: 'engine_restart', pid })
+      expect(eng.seen().intent).toMatchObject({ reason: 'engine_restart', pid })
       expect(m.getStatus().pid).not.toBe(pid)
     } finally { await m.stop() }
   }, 30_000)
@@ -447,8 +445,16 @@ describe('shutdown intent written before the engine is signalled', () => {
   it('no reason (clearing data along with the engine database) writes nothing', async () => {
     const { m, eng } = await boot('none')
     await m.stop()
-    expect(WIN ? onDisk() : eng.seen().intent).toBeNull()
+    expect(eng.seen().intent).toBeNull()
     expect(existsSync(INTENT)).toBe(false)
+  }, 30_000)
+
+  it.runIf(process.platform === 'win32')('a Windows engine without the capability still exits and leaves its shutdown intent for startup recovery', async () => {
+    const { m, eng, pid } = await boot('legacy', false)
+    await m.stop('app_quit')
+    expect(eng.seen().intent).toBeUndefined()
+    expect(JSON.parse(readFileSync(INTENT, 'utf8'))).toMatchObject({ reason: 'app_quit', pid })
+    expect(m.getStatus().state).toBe('stopped')
   }, 30_000)
 
   it('TANGU_AUTO_RESUME follows the in-memory setting at every spawn', async () => {
@@ -475,7 +481,7 @@ describe('shutdown intent written before the engine is signalled', () => {
     expect(readdirSync(dir).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
-  it('gives the engine 5s after SIGTERM (its own drain is 3s, hard exit 4s)', () => {
+  it('gives the engine 5s to shut down (its own drain is 3s, hard exit 4s)', () => {
     expect(TERMINATE_GRACE_MS).toBe(5000)
   })
 })
