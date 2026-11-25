@@ -4,6 +4,7 @@ export const SYNC_IPC = {
   setEnabled: 'amadeus:sync:set-enabled',
   syncNow: 'amadeus:sync:now',
   confirmDeletions: 'amadeus:sync:confirm-deletions', // 放行被删除保护拦下的批量删除
+  resolveHeld: 'amadeus:sync:resolve-held', // 处理先放着的文件(Forsion Extend 0.10.13+ 才有)
 
   status: 'amadeus:sync:status', // main → renderer 推送
   switchSide: 'amadeus:sync:switch-side', // 胶囊滑块 Local↔Cloud 全局切活动 vault

@@ -99,7 +99,8 @@ function useSyncSources() {
 function useSyncAlert(): boolean {
   const { mirror, entry, remote } = useSyncSources()
   const all = [...(mirror?.enabled ? [mirror] : []), ...Object.values(entry).filter((s) => s.enabled)]
-  return all.some((s) => s.state === 'error') || !!remote?.bad
+  // 先放着、等用户定的文件也露出来:不处理就一直不同步,而它们不算出错、不会自己好
+  return all.some((s) => s.state === 'error' || !!s.held?.length) || !!remote?.bad
 }
 
 function SyncItem() {
@@ -113,8 +114,11 @@ function SyncItem() {
   const syncing = !!remote?.running || all.some((s) => s.state === 'syncing' || s.state === 'starting')
   const offline = all.some((s) => s.state === 'offline')
   const pending = all.reduce((a, s) => a + (s.pending || 0), 0)
+  // 两边不一样、又没有同步记录、先放着等用户定的文件(侧栏「云同步」分区和设置页里处理)
+  const held = all.reduce((a, s) => a + (s.held?.length ?? 0), 0)
   const icon = err ? <AlertCircle size={11} style={{ color: 'var(--danger)' }} />
     : syncing ? <RefreshCw size={11} className="spin" />
+    : held > 0 ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
     : offline ? <CloudOff size={11} />
     : <Check size={11} />
   // remotesync 执行阶段有 x/y 进度(remotely-save 式),优先展示
@@ -122,9 +126,10 @@ function SyncItem() {
   const text = err ? t('sb.syncError')
     : rp?.total ? t('sb.syncProgress', { done: rp.done, total: rp.total })
     : syncing ? (pending > 0 ? t('sb.syncing', { n: pending }) : t('sb.syncingPlain'))
+    : held > 0 ? t('sb.syncHeld', { n: held })
     : offline ? t('sb.syncOffline')
     : t('sb.synced')
-  const status = (err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : text)
+  const status = (err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : held > 0 && !syncing ? `${text} · ${t('sb.syncHeldTip')}` : text)
   // 点了真会触发一轮同步时才说「点击立即同步」:只开了按条目同步、未登录(auth-required)、远程正在跑时点它什么也不做,
   // 这时再许诺「立即同步」就是误导。条件与下面 onClick 的两条分支同源。
   const canSync = (mirrorOn && mirror?.state !== 'auth-required') || (!!remote?.configured && !remote.running)
@@ -171,6 +176,11 @@ function BacklinksItem() {
 }
 
 registerMessages({
+  'sb.syncHeld': { zh: '{n} 篇等你定', en: '{n} to review' },
+  'sb.syncHeldTip': {
+    zh: '这几篇和云端不一样、又没有同步记录，先放着没动；在侧栏「云同步」或设置里选用哪一份',
+    en: 'These files differ from the cloud and have no sync record, so both copies were left alone. Choose which to keep in the sidebar’s Cloud sync section or in Settings',
+  },
   'sb.count': { zh: '{words} 词 · {chars} 字', en: '{words} words · {chars} chars' },
   'sb.countSel': { zh: '已选 {words} 词 · {chars} 字', en: 'Selected {words} words · {chars} chars' },
 })

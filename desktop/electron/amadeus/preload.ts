@@ -146,6 +146,10 @@ if (syncPresent) contextBridge.exposeInMainWorld('amadeusSync', {
   setEnabled: (on: boolean) => ipcRenderer.invoke(SYNC_IPC.setEnabled, on),
   syncNow: () => ipcRenderer.invoke(SYNC_IPC.syncNow),
   confirmDeletions: () => ipcRenderer.invoke(SYNC_IPC.confirmDeletions),
+  // 两边不一样、又没有同步记录的文件先放着,等用户选。旧 Extend 不接这个通道 → 不暴露,界面按缺位隐藏按钮
+  ...(cloudPresent().has(SYNC_IPC.resolveHeld)
+    ? { resolveHeld: (payload: unknown) => ipcRenderer.invoke(SYNC_IPC.resolveHeld, payload) }
+    : {}),
   switchSide: (side: 'local' | 'cloud') => ipcRenderer.invoke(SYNC_IPC.switchSide, side),
   onStatus: (cb: (s: unknown) => void) => {
     const listener = (_e: IpcRendererEvent, s: unknown): void => cb(s)

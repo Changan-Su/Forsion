@@ -38,6 +38,8 @@ import type {
   NormalAgentDef, SessionRecord, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
+import { HeldSyncNotice } from './CloudSyncDialog'
+import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from '../visualsPref'
 import { registerMessages, useI18n } from '../i18n'
@@ -386,6 +388,25 @@ const BACKEND_STATE_LABEL: Record<string, string> = {
   crashed: 'settings.backend.state.crashed',
 }
 
+
+/** 先放着的文件引擎也以 reason 'HELD' 列进 skipped(给旧界面看);这里另画 HeldSyncNotice,跳过那行滤掉。 */
+const noteSkipped = (st: AmadeusSyncStatus): AmadeusSyncStatus['skipped'] => st.skipped.filter((x) => x.reason !== 'HELD')
+
+/** 设置页同步那段:云端镜像 + 每个开了条目同步的库,有先放着的文件就各挂一块「N 篇和云端不一样,等你定」。 */
+function HeldSyncAll({ mirror }: { mirror: AmadeusSyncStatus }) {
+  useEffect(() => { ensureEntrySyncSubscribed() }, [])
+  const entry = useEntrySync((s) => s.status)
+  const groups = [
+    ...(!mirror.binding && mirror.held?.length ? [{ binding: null as string | null, held: mirror.held }] : []),
+    ...Object.entries(entry).filter(([, st]) => st.enabled && st.held?.length).map(([binding, st]) => ({ binding: binding as string | null, held: st.held! })),
+  ]
+  if (!groups.length) return null
+  return (
+    <div className="settings-row-notes">
+      {groups.map((g) => <HeldSyncNotice key={g.binding ?? ''} binding={g.binding} held={g.held} />)}
+    </div>
+  )
+}
 
 export const SettingsModal: React.FC<{
   open: boolean
@@ -2251,7 +2272,7 @@ export const SettingsModal: React.FC<{
                             />
                           )}
                           {/* 行是不换行的 flex:错误 / 待确认删除 / 跳过的文件另起一块放在行下面,别挤到按钮右边 */}
-                          {noteSync.enabled && ((noteSync.error && noteSync.state !== 'auth-required') || (noteSync.pendingDeletions ?? 0) > 0 || noteSync.skipped.length > 0) && (
+                          {noteSync.enabled && ((noteSync.error && noteSync.state !== 'auth-required') || (noteSync.pendingDeletions ?? 0) > 0 || noteSkipped(noteSync).length > 0) && (
                             <div className="settings-row-notes">
                               {noteSync.error && noteSync.state !== 'auth-required' && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
                               {(noteSync.pendingDeletions ?? 0) > 0 && (
@@ -2271,15 +2292,16 @@ export const SettingsModal: React.FC<{
                                   </button>
                                 </div>
                               )}
-                              {noteSync.skipped.length > 0 && (
+                              {noteSkipped(noteSync).length > 0 && (
                                 <div className="hint">
-                                  {t('settings.notes.cloudSyncSkipped', { n: String(noteSync.skipped.length) })}:{' '}
-                                  {noteSync.skipped.slice(0, 3).map((s) => s.path).join(', ')}
-                                  {noteSync.skipped.length > 3 ? '…' : ''}
+                                  {t('settings.notes.cloudSyncSkipped', { n: String(noteSkipped(noteSync).length) })}:{' '}
+                                  {noteSkipped(noteSync).slice(0, 3).map((s) => s.path).join(', ')}
+                                  {noteSkipped(noteSync).length > 3 ? '…' : ''}
                                 </div>
                               )}
                             </div>
                           )}
+                          {noteSync.enabled && <HeldSyncAll mirror={noteSync} />}
                         </div>
                       </SettingsPanel>
                     )}

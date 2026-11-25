@@ -91,7 +91,7 @@ import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor, l
 import { foreignVaultOwner, refreshAfterLeave, useSharedVault } from './stores/sharedVaultStore'
 import { byExpiry, daysUntil } from './amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusSharedItem } from './types'
-import { openCloudSyncDialog } from './components/CloudSyncDialog'
+import { openCloudSyncDialog, HeldSyncNotice } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import '@amadeus/blocks' // 注册内置块类型(markdown→Milkdown);缺此 side-effect 导入则块显示「未知块类型」
@@ -169,6 +169,7 @@ registerMessages({
   'amxv.skip.tooLargeNote': { zh: '（有文件超过云端单文件上限：笔记 5MB，附件随会员档位）', en: ' (some files are over the per-file cloud limit: 5 MB for notes, plan-based for attachments)' },
   'amxv.cloud.dotTitle': { zh: '云端「{name}」', en: 'Cloud “{name}”' },
   'amxv.cloud.skippedCount': { zh: '{n} 项跳过', en: '{n} skipped' },
+  'amxv.cloud.heldCount': { zh: '{n} 篇等你定', en: '{n} to review' },
   'amxv.cloud.notEnabled': { zh: '尚未开启云同步', en: 'Cloud sync is not on yet' },
   'amxv.cloud.missing': { zh: '{path}（已不存在）', en: '{path} (no longer exists)' },
   'amxv.cloud.disableTip': { zh: '关闭云同步（云端副本保留）', en: 'Turn off cloud sync (the cloud copy is kept)' },
@@ -817,6 +818,9 @@ function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dr
   )
 }
 
+/** 先放着的文件引擎也以 reason 'HELD' 列进 skipped(给不认 held 的旧界面看);新界面单独画 HeldSyncNotice,跳过行里滤掉。 */
+const notHeld = (skipped: Array<{ path: string; reason: string }>): Array<{ path: string; reason: string }> => skipped.filter((s) => s.reason !== 'HELD')
+
 /** 引擎跳过原因 → 人话(engine.ts 的 skipped reason;文本上限 5MB,二进制上限随会员档位由服务端下发)。 */
 const skipLabel = (r: string): string => (r === 'TOO_LARGE' ? translate('amxv.skip.tooLarge') : r === 'ASSET_404' ? translate('amxv.skip.assetMissing') : r)
 
@@ -844,8 +848,16 @@ function CloudSkipWarn() {
     // status 通道两家共用:带 binding 的是按条目绑定引擎(CloudSyncSection 的地盘),这里只收镜像引擎。
     return sync.onStatus((s) => { if (!s.binding) setSt(s) })
   }, [])
-  if (!st?.enabled || !st.skipped.length) return null
-  return skipWarnRow(st.skipped)
+  if (!st?.enabled) return null
+  const skipped = notHeld(st.skipped)
+  const held = st.held ?? []
+  if (!skipped.length && !held.length) return null
+  return (
+    <>
+      {held.length > 0 && <HeldSyncNotice binding={null} held={held} compact />}
+      {skipped.length > 0 && skipWarnRow(skipped)}
+    </>
+  )
 }
 
 /** 「云同步」分区(仅本地侧):当前 vault 已开启同步的条目汇总(原树位置不动),
@@ -863,8 +875,10 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
   const rec = vaults.find((v) => v.vaultRoot === vaultRoot)
   if (!window.amadeusSync?.entrySyncEnable || !vaultRoot) return null
   const entries = rec?.entries ?? []
-  // 同「置顶」:没有条目、也没有跳过警示时不占地方(10-02 用户拍板 v7)。
-  if (!entries.length && !status?.skipped.length) return null
+  const skipped = notHeld(status?.skipped ?? [])
+  const held = status?.held ?? []
+  // 同「置顶」:没有条目、也没有跳过警示 / 待定文件时不占地方(10-02 用户拍板 v7)。
+  if (!entries.length && !skipped.length && !held.length) return null
   const norm = (p: string): string => p.replace(/\\/g, '/').normalize('NFC')
   const pageSet = new Set(pages.map(norm))
   const fileSet = new Set(files.map(norm))
@@ -872,7 +886,7 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
   const exists = (e: { path: string; kind: string }): boolean =>
     e.kind === 'folder' ? folderSet.has(e.path) : e.kind === 'page' ? pageSet.has(e.path) : fileSet.has(e.path)
   const dot = status?.state === 'error' || status?.state === 'auth-required' ? 'err' : status?.state === 'offline' ? 'off' : 'ok'
-  const dotTitle = rec ? `${t('amxv.cloud.dotTitle', { name: rec.cloudName })}${status ? ` · ${status.state}${status.skipped.length ? ` · ${t('amxv.cloud.skippedCount', { n: status.skipped.length })}` : ''}` : ''}` : t('amxv.cloud.notEnabled')
+  const dotTitle = rec ? `${t('amxv.cloud.dotTitle', { name: rec.cloudName })}${status ? ` · ${status.state}${skipped.length ? ` · ${t('amxv.cloud.skippedCount', { n: skipped.length })}` : ''}${held.length ? ` · ${t('amxv.cloud.heldCount', { n: held.length })}` : ''}` : ''}` : t('amxv.cloud.notEnabled')
   const accepts = !!dragPath && !isSyncedEntry(vaultRoot, dragPath)
   return (
     <SideSection
@@ -900,7 +914,8 @@ function CloudSyncSection({ dragPath }: { dragPath: string | null }) {
       }}
     >
       {!entries.length && <div className="t2s-hint amx-sec-hint">{t('amxv.cloudsync.hint')}</div>}
-      {!!status?.skipped.length && skipWarnRow(status.skipped)}
+      {held.length > 0 && <HeldSyncNotice binding={vaultRoot} held={held} compact />}
+      {skipped.length > 0 && skipWarnRow(skipped)}
       {entries.map((e) => {
         const ok = exists(e)
         return (

@@ -8,6 +8,7 @@ import { useApp } from '../stores/appStore'
 import { isExcludedPath, useEntrySync } from '../stores/entrySyncStore'
 import { registerMessages, useI18n } from '../i18n'
 import { DialogOverlay } from '../amadeus/components/DialogOverlay'
+import type { AmadeusHeldChoice, AmadeusHeldFile } from '../types'
 
 registerMessages({
   'csd.title': { zh: '开启云同步', en: 'Turn on cloud sync' },
@@ -34,7 +35,108 @@ registerMessages({
   'csd.nothingElse': { zh: '没有子页面与库内关联，仅同步此条目。', en: 'No subpages or in-vault links — only this item will sync.' },
   'csd.enabling': { zh: '开启中…', en: 'Turning on…' },
   'csd.enable': { zh: '开启同步', en: 'Turn on sync' },
+  'csd.checking': { zh: '正在和云端对一遍…', en: 'Comparing with the cloud…' },
+  'csd.done': { zh: '完成', en: 'Done' },
+  // 两边不一样、又没有同步记录的文件:先放着,等用户选(引擎不按时间替用户决定)
+  'csd.held.title': { zh: '{n} 篇和云端不一样，等你定', en: '{n} files differ from the cloud — your call' },
+  'csd.held.hint': {
+    zh: '这几篇没有同步记录，判断不了哪边是旧的，所以两边都没动，其余文件照常同步。被换掉的那份会先存到库外，30 天内能找回。',
+    en: 'There is no sync record for these files, so Forsion can’t tell which copy is older. Both copies are left as they are and everything else keeps syncing. Whichever copy you replace is saved outside the vault for 30 days.',
+  },
+  'csd.held.review': { zh: '逐篇看', en: 'Review' },
+  'csd.held.hide': { zh: '收起', en: 'Hide' },
+  'csd.held.useLocal': { zh: '用这台的', en: 'Keep this device’s' },
+  'csd.held.useCloud': { zh: '用云端的', en: 'Keep the cloud’s' },
+  'csd.held.keepBoth': { zh: '两份都留', en: 'Keep both' },
+  'csd.held.keepNewer': { zh: '都留较新的', en: 'Keep the newer one' },
+  'csd.held.keepNewerTip': {
+    zh: '按这台电脑上的修改时间和云端的更新时间逐篇选。时间不一定准，被换掉的那份照样能找回。',
+    en: 'Picks each file by this computer’s modified time versus the cloud’s update time. Clocks can be off; the replaced copy can still be recovered.',
+  },
+  'csd.held.keepBothTip': { zh: '这台的那份改名成冲突副本，原名放云端的那份', en: 'Renames this device’s copy as a conflict copy and puts the cloud’s copy under the original name' },
+  'csd.held.newerHere': { zh: '这台更新', en: 'Newer here' },
+  'csd.held.newerCloud': { zh: '云端更新', en: 'Newer in the cloud' },
+  'csd.held.newerUnknown': { zh: '时间不明', en: 'Time unknown' },
+  'csd.held.selected': { zh: '已选 {n} 篇', en: '{n} selected' },
+  'csd.held.failed': { zh: '没处理成，请稍后再试', en: 'Could not apply this. Try again in a moment.' },
 })
+
+/** 引擎按本机修改时间对云端 updatedAt 给的「哪边更新」只作参考,真正替用户选只在点了「都留较新的」之后。 */
+const newerSide = (h: AmadeusHeldFile): 'local' | 'cloud' | null => {
+  const at = h.remoteUpdatedAt ? Date.parse(h.remoteUpdatedAt) : NaN
+  if (!Number.isFinite(at) || h.localMtimeMs < 0) return null
+  return h.localMtimeMs > at ? 'local' : 'cloud'
+}
+
+/** 「N 篇和云端不一样,等你定」:侧栏云同步分区、开启同步弹窗、设置页同步那段共用。
+ *  binding = 按条目同步的库根(null = 云端镜像);held 来自该引擎的状态。勾选决定作用于哪几篇,缺省全选。 */
+export function HeldSyncNotice({ binding, held, open: openInit = false, compact = false }: {
+  binding: string | null
+  held: AmadeusHeldFile[]
+  open?: boolean
+  compact?: boolean
+}) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(openInit)
+  const [off, setOff] = useState<Set<string>>(new Set())
+  const [busy, setBusy] = useState(false)
+  const resolve = window.amadeusSync?.resolveHeld
+  if (!held.length) return null
+  const chosen = held.filter((h) => !off.has(h.path)).map((h) => h.path)
+  const act = async (choice: AmadeusHeldChoice): Promise<void> => {
+    if (!resolve || !chosen.length || busy) return
+    setBusy(true)
+    try {
+      const r = await resolve({ binding, paths: chosen, choice })
+      if (r && 'error' in r) useApp.getState().toast(t('csd.held.failed'), true)
+    } catch {
+      useApp.getState().toast(t('csd.held.failed'), true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const name = (h: AmadeusHeldFile): string => (h.local.split('/').pop() ?? h.local).replace(/\.md$/i, '')
+  return (
+    <div className={`amx-held${compact ? ' is-compact' : ''}`} data-binding={binding ?? ''}>
+      <div className="amx-held-head">
+        <span className="amx-held-title">{t('csd.held.title', { n: held.length })}</span>
+        <button type="button" className="amx-held-link" onClick={() => setOpen((v) => !v)}>
+          {open ? t('csd.held.hide') : t('csd.held.review')}
+        </button>
+      </div>
+      {open && (
+        <>
+          <div className="amx-held-hint">{t('csd.held.hint')}</div>
+          <div className="amx-held-list">
+            {held.map((h) => {
+              const side = newerSide(h)
+              return (
+                <label key={h.path} className="amx-csd-item" title={h.local}>
+                  <input type="checkbox" checked={!off.has(h.path)} onChange={() => setOff((s) => {
+                    const n = new Set(s)
+                    n.has(h.path) ? n.delete(h.path) : n.add(h.path)
+                    return n
+                  })} />
+                  <span>{name(h)}</span>
+                  <span className="amx-csd-path">
+                    {side === 'local' ? t('csd.held.newerHere') : side === 'cloud' ? t('csd.held.newerCloud') : t('csd.held.newerUnknown')}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          <div className="amx-held-actions">
+            {held.length > 1 && <span className="amx-held-count">{t('csd.held.selected', { n: chosen.length })}</span>}
+            <button type="button" className="amx-held-btn" disabled={busy || !resolve || !chosen.length} onClick={() => void act('local')}>{t('csd.held.useLocal')}</button>
+            <button type="button" className="amx-held-btn" disabled={busy || !resolve || !chosen.length} onClick={() => void act('cloud')}>{t('csd.held.useCloud')}</button>
+            <button type="button" className="amx-held-btn" disabled={busy || !resolve || !chosen.length} title={t('csd.held.keepBothTip')} onClick={() => void act('both')}>{t('csd.held.keepBoth')}</button>
+            <button type="button" className="amx-held-btn" disabled={busy || !resolve || !chosen.length} title={t('csd.held.keepNewerTip')} onClick={() => void act('newer')}>{t('csd.held.keepNewer')}</button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 interface Req {
   path: string
@@ -72,6 +174,21 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
   const [busy, setBusy] = useState(false)
   const [conflict, setConflict] = useState<string | null>(null)
   const [nameDraft, setNameDraft] = useState('')
+  /** 开启成功后等这个库第一轮对账:有先放着的文件就留在弹窗里让用户当场定,没有就关。 */
+  const [watching, setWatching] = useState<{ root: string; since: number } | null>(null)
+  const watched = useEntrySync((s) => (watching ? s.status[watching.root] : undefined))
+  const watchedHeld = watched?.held ?? []
+  const settled = !!watching && !!watched && watched.state !== 'syncing' && watched.state !== 'starting' && (watched.lastSyncAt ?? 0) >= watching.since
+  useEffect(() => {
+    if (!watching) return
+    if (settled && !watchedHeld.length) onClose()
+  }, [watching, settled, watchedHeld.length, onClose])
+  useEffect(() => {
+    if (!watching) return
+    // 对账久不落定(大库、网慢):不拦着用户,先关;先放着的文件侧栏和状态栏照样会挂出来
+    const timer = setTimeout(() => { if (!useEntrySync.getState().status[watching.root]?.held?.length) onClose() }, 20_000)
+    return () => clearTimeout(timer)
+  }, [watching, onClose])
 
   useEffect(() => {
     let alive = true
@@ -123,7 +240,10 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
     }
     useApp.getState().toast(t('csd.enabled', { name: r.cloudName ?? '' }))
     void useEntrySync.getState().refresh()
-    onClose()
+    const root = useEntrySync.getState().activeRoot
+    // 旧 Extend 不报 held:照旧直接关
+    if (root && window.amadeusSync?.resolveHeld) setWatching({ root, since: Date.now() })
+    else onClose()
   }
 
   /** `A.fd/B.fd/C.md` 的上级子页面链(近→远:A.fd/B.md、A.md);种子页不在 subPages 里,自然被滤掉。 */
@@ -197,7 +317,18 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
           <Cloud size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
           {t('csd.title')}
         </div>
-        {conflict ? (
+        {watching ? (
+          <>
+            {watchedHeld.length ? (
+              <HeldSyncNotice binding={watching.root} held={watchedHeld} open />
+            ) : (
+              <div className="dialog-msg">{t('csd.checking')}</div>
+            )}
+            <div className="dialog-actions">
+              <button className="dialog-btn" data-primary onClick={onClose}>{t('csd.done')}</button>
+            </div>
+          </>
+        ) : conflict ? (
           <>
             <div className="dialog-msg">{t('csd.conflictMsg', { name: conflict })}</div>
             <input

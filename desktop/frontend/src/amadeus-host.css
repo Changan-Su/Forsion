@@ -2301,6 +2301,23 @@ textarea.amx-cal-card-title { display: block; resize: none; field-sizing: conten
 .amx-cs-ghost .t2s-srow-title { text-decoration: line-through; }
 /* 同步跳过警示(如 >5MB 未上传):压过 t2s-hint 的 muted 色,悬停出明细 tooltip。 */
 .amx-sec-hint.amx-cs-warn { color: var(--danger, #e5484d); cursor: help; }
+/* 两边不一样、没有同步记录、先放着等用户定的文件(侧栏云同步分区、开启弹窗、设置页共用 HeldSyncNotice)。
+   不是出错:用提醒色,不用 danger;列表复用开启弹窗的 amx-csd-item 行。 */
+.amx-held { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; margin: 2px 0 4px; border-radius: var(--radius-sm, 8px); background: var(--warning-light); color: var(--text); }
+.amx-held-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.amx-held-title { color: var(--warning); font-weight: 600; font-size: var(--ui-font-meta, 12px); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.amx-held-link { margin-left: auto; flex: none; border: none; background: none; padding: 0 2px; color: var(--accent-ink, var(--accent)); font-size: var(--ui-font-caption, 11px); cursor: pointer; }
+.amx-held-hint { font-size: var(--ui-font-caption, 11px); line-height: 1.5; opacity: .8; }
+.amx-held-list { max-height: 168px; overflow: auto; }
+.amx-held-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.amx-held-count { font-size: var(--ui-font-caption, 11px); opacity: .7; margin-right: auto; }
+.amx-held.is-compact { margin: 2px 4px 4px; }
+.amx-held-btn { border: var(--border-width, 1px) solid var(--border); background: var(--bg-card, var(--bg)); color: var(--text); font: inherit; font-size: var(--ui-font-caption, 11px); line-height: 1.4; padding: 3px 9px; border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; transition: background var(--duration-fast, 0.15s), border-color var(--duration-fast, 0.15s); }
+.amx-held-btn:hover:not(:disabled) { background: var(--bg-hover, var(--overlay-light)); border-color: var(--text-faint); }
+.amx-held-btn:disabled { opacity: .5; cursor: default; }
+.amx-held.is-compact .amx-held-actions { display: grid; grid-template-columns: 1fr 1fr; }
+.amx-held.is-compact .amx-held-count { grid-column: 1 / -1; }
+.amx-held.is-compact .amx-held-btn { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* 开启云同步弹窗:关联勾选组 */
 /* 三组勾选(子页面/关联笔记/附件)叠起来能顶穿视口,而弹窗居中且外层不滚 → 按钮会够不着。 */
