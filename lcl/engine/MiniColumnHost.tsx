@@ -13,6 +13,8 @@ import { currentMiniChrome, useMiniChromeSlot } from './miniChrome'
 import { type Droplet } from './droplet'
 import { openPanel } from './panelMotion'
 import { reducedMotion } from './spring'
+import { useNav } from './navStore'
+import { ViewNavigation } from './viewNavigation'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -59,6 +61,7 @@ export const MiniColumnHost: React.FC<{
   const spaces = registered.filter(supportsMiniPanel)
   const space = spaces.find((s) => s.id === activeId)
   const active = useWorkspace((s) => s.mainLeaves.find((r) => r.id === s.activeMainId))
+  const hasChatHistory = useNav((s) => (active?.type === 'chat' || active?.type === 'mini-tangu') && (s.stacks[active.id]?.entries.length ?? 0) > 1)
   const [menu, setMenu] = useState<'space' | 'picker' | null>(null)
   const picker = useMiniChromeSlot()
   // 换了视图(外部 openMini、切 Space)就收起菜单;picker 被撤掉时不留一层没有菜单的遮罩(Codex 评审 P2)
@@ -137,6 +140,7 @@ export const MiniColumnHost: React.FC<{
 
   const leaf = active && (direct ? active.type === direct.view.type : space && active.type === space.mini!.view.type) ? useWorkspace.getState().getActiveLeaf() : null
   const view = leaf ? getView(leaf.type) : null
+  const chatNavigationId = hasChatHistory ? leaf?.id : undefined
   const showMain = (): void => {
     if (direct) {
       showInMainPanel({ type: direct.mainView.type, params: { ...direct.mainView.params, ...useWorkspace.getState().getActiveLeaf()?.params } })
@@ -148,9 +152,10 @@ export const MiniColumnHost: React.FC<{
       params: { ...current.mini.mainView.params, ...useWorkspace.getState().getActiveLeaf()?.params } })
   }
   return (
-    <div ref={shellRef} className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
+    <div ref={shellRef} className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined} data-chat-navigation={chatNavigationId ? '' : undefined}>
       {/* 顶栏浮在内容之上、收成两颗胶囊(手机 .mb-cap 同款,10-17 方案 A);胶囊之外的透明条是拖拽区。 */}
       <header className="mini-card-chrome">
+        {chatNavigationId && !openMenu && <div className="mini-card-cap mini-card-chat-navigation"><ViewNavigation leafId={chatNavigationId} /></div>}
         <div className="mini-card-cap" ref={capRef}>
           <button className="mini-card-space" aria-label={t('lcl.mini.switchSpace')} aria-expanded={openMenu === 'space'}
             disabled={!hasMenu} onClick={() => toggleMenu('space')}>

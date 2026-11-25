@@ -115,7 +115,10 @@ function check(name, ok, detail) {
       const description = await pop.locator('.chat-pick-desc').textContent()
       check(`${label} open picker updates names and description after locale change`, changed === (lang === 'zh' ? 'Logos' : '逻各斯') && description.includes(lang === 'zh' ? 'Build and refine' : '从需求到可运行'), { changed, description })
       await page.keyboard.press('Escape')
-      check(`${label} Escape closes and returns focus`, await chip.getAttribute('aria-expanded') === 'false' && await chip.evaluate(el => document.activeElement === el))
+      // Escape starts the reverse animation; the popover unmounts when it finishes.
+      const detached = await page.locator('.chat-pick-pop').waitFor({ state: 'detached', timeout: 2000 }).then(() => true, () => false)
+      const closed = await chip.evaluate(el => ({ expanded: el.getAttribute('aria-expanded'), focused: document.activeElement === el }))
+      check(`${label} Escape closes and returns focus`, detached && closed.expanded === 'false' && closed.focused, { ...closed, detached })
     }
     check('no runtime errors', errors.length === 0, errors)
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify({ results, errors }, null, 2))

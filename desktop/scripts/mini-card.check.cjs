@@ -30,7 +30,12 @@ async function main() {
   fs.writeFileSync(path.join(probe, 'spaces', 'mini-probe', 'space.json'), JSON.stringify({ id: 'mini-probe', name: { zh: 'Mini 探针', en: 'Mini probe' }, layout: { main: [{ type: 'plugin:mini-probe:full' }] },
     mini: { view: { type: 'plugin:mini-probe:mini', params: { itemId: '7' } }, mainView: { type: 'plugin:mini-probe:full' } } }))
   const session = (id) => ({ id, title: id, created_at: '2026-09-07T00:00:00Z', updated_at: '2026-09-07T00:00:00Z', agent_config: { execMode: 'host' } })
-  const stub = await startStubEngine({ sessions: [session('mini-first'), session('mini-latest')] })
+  const stub = await startStubEngine({
+    sessions: ['mini-first', 'mini-latest', 'mini-nav-a', 'mini-nav-b'].map(session),
+    override: ({ path: requestPath }) => requestPath === '/agent/sessions/mini-nav-a/messages' ? { messages: [{
+      id: 'mini-nav-link', role: 'model', content: '[[session:mini-nav-b|Next Mini session]]', timestamp: Date.now(),
+    }] } : undefined,
+  })
   fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mini-test-token' }))
   let app, mini
   try {
@@ -66,13 +71,14 @@ async function main() {
       const root = document.querySelector('.mini-card-shell'), bar = document.querySelector('.mini-card-chrome')
       return { overflow: root.scrollWidth - root.clientWidth, height: bar.getBoundingClientRect().height,
         caps: bar.querySelectorAll('.mini-card-cap').length, ownBar: document.querySelectorAll('.mini-tangu .mini-native-bar').length,
-        streamTop: document.querySelector('.t2-stream')?.getBoundingClientRect().top, picker: bar.querySelector('.mini-card-picker')?.textContent,
+        streamTop: root.querySelector('.t2-stream')?.getBoundingClientRect().top - root.getBoundingClientRect().top,
+        chatHeadRows: root.querySelectorAll('.t2-chat-col > .lcl-viewhead').length, picker: bar.querySelector('.mini-card-picker')?.textContent,
         old: document.querySelectorAll('.mb-drawer,.mb-topbar,.mb-sheet,.mini-card-tab-count').length, actions: bar.querySelectorAll('.mini-card-action').length,
         emptyBottom: document.querySelector('.t2-empty')?.getBoundingClientRect().bottom, composerTop: document.querySelector('.composer-anchor')?.getBoundingClientRect().top }
     })
     // 10-17 方案 A:顶栏浮成两颗胶囊(左 Space ▾ │ 会话 ▾,右 新会话 · 主面板 · 关闭),视图不再自带一条栏,对话从胶囊底下滚过
     check('floating capsule header: two caps, search/new/main/close, session picker inside', geo.caps === 2 && geo.actions === 4 && geo.ownBar === 0 && geo.picker === 'mini-latest' && geo.old === 0, JSON.stringify(geo))
-    check('chat scrolls under the capsules (stream starts at the card top)', geo.streamTop === 0 && geo.height < 50)
+    check('chat scrolls under the capsules (stream starts at the card top without a second heading)', geo.streamTop === 0 && geo.chatHeadRows === 0 && geo.height < 50, JSON.stringify(geo))
     check('no overflow or composer overlap', geo.overflow === 0 && geo.emptyBottom <= geo.composerTop)
     await mini.screenshot({ path: path.join(shots, 'tangu-light.png') })
     stub.script([{ type: 'token', payload: { delta: 'Mini message received.' } }])
@@ -302,6 +308,23 @@ async function main() {
     }
     check('five close/open cycles never accumulate fractional-DPI size drift', reopenCycles.every(b => b.width === kept.width && b.height === kept.height), JSON.stringify({ kept, reopenCycles }))
     await mini.screenshot({ path: path.join(shots, 'todo-reopened.png') })
+    await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+
+    const directChat = { type: 'chat', params: { sessionId: 'mini-nav-a', followActive: false, miniSurface: true } }
+    await win.evaluate((view) => window.tangu.openMini({ view, mainView: { type: 'chat' } }), directChat)
+    mini = await miniWith('[data-chat-surface="chat"][data-session-id="mini-nav-a"]')
+    mini.on('pageerror', (e) => errors.push(`mini navigation: ${e.message}`))
+    await mini.locator('.wikilink', { hasText: 'Next Mini session' }).click()
+    await mini.locator('[data-chat-surface="chat"][data-session-id="mini-nav-b"]').waitFor()
+    await mini.locator('.mini-card-chat-navigation [data-press="back"]').click()
+    await mini.locator('[data-chat-surface="chat"][data-session-id="mini-nav-a"]').waitFor()
+    await mini.locator('.mini-card-chat-navigation [data-press="forward"]').click()
+    await mini.locator('[data-chat-surface="chat"][data-session-id="mini-nav-b"]').waitFor()
+    check('direct Mini chat retains Back and Forward without pushing the stream below the chrome', await mini.evaluate(() => {
+      const shell = document.querySelector('.mini-card-shell')
+      return shell.querySelector('.t2-stream').getBoundingClientRect().top === shell.getBoundingClientRect().top
+    }))
+    await mini.screenshot({ path: path.join(shots, 'tangu-navigation.png') })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${shots}`)
