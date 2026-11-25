@@ -1,12 +1,14 @@
 /**
  * 在线库冷启动「读到 404 ≠ 新建」仪器(2026-11-25)。
- * 事故形态:网页 / 手机 / 进岛的桌面窗口(都挂 web/src/amadeus/cloudBridge)冷启动走树快照,快照还列着上次看的那篇,
+ * 事故形态:网页 / 手机,以及对方 Unit 声明了云端笔记时的桌面 Unit 窗 webview(都挂 web/src/amadeus/cloudBridge)
+ * 冷启动走树快照,快照还列着上次看的那篇,
  * 它却已在别的设备上删掉了 —— restoreVault → loadPage(lastPage) → 在线桥把 GET 404 当「打开即创建」,
  * 按 baseSeq 0 在被删的路径上写回一篇空笔记(本会话从没见过这条路径,everKnown 守卫拦不住)。
  * 契约(与桌面主进程 loadPage 的 createIfMissing:false 对齐):读只读,404 = 这篇不存在,不写盘;新建只走显式入口
  * (birthNoteFile → writeTextFile create:true、bridge.newPage)。restoreVault 读不到上次那篇 → 刷新树(顺带重写快照)、
- * 回落到第一篇还在的笔记,没有就空态,不挂「加载失败」。
- * 负对照(实跑过):main 上(loadOrCreate 404 → createViaCompiler)第 1 条红在 PUT gone.md、第 2 条红在 loadPage 照建。
+ * 回落到第一篇还在的笔记,没有就空态,不挂「加载失败」;读失败(500 / 树也拉不到)不算不存在,保留错误不回落。
+ * 负对照(实跑过):桥回到 main(loadOrCreate 404 → createViaCompiler)→ 两条冷启动用例红在 PUT gone.md、
+ * 「没见过的 404 只读」那条红在 loadPage 照建;pageStore 回到 main → 两条冷启动用例红在没有回落。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
