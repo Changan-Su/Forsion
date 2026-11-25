@@ -52,12 +52,20 @@ export function openWhatsNew(): void {
 /**
  * 检测到新版本时要不要自动弹:只在主窗;点过「跳过这个版本」的不弹;同一次运行里每个版本只弹一次
  * (6 小时定时检查 / 唤醒检查不重复打扰)。「稍后」= 下次启动再提醒。
+ *
+ * 主进程标了 autoDownload(GitHub 源、能应用内装)的新版:先不弹,在后台下载,下好(downloaded)再弹,
+ * 左下角「重启更新」同时亮起;自动下载没成,主进程会把 autoDownload 清掉再发一次 available,那时照常弹、等用户点。
+ * 跳过的版本也不自动下。
  */
 export function maybeAutoOpenWhatsNew(st: UpdaterStatusInfo): void {
   useWhatsNew.setState({ status: st })
   if ((st.phase !== 'available' && st.phase !== 'downloaded') || !st.version || windowKind() !== 'main') return
-  if (shownThisRun.has(st.version)) return
   try { if (localStorage.getItem(SKIP_KEY) === st.version) return } catch { /* 读不到就照常弹 */ }
+  if (st.phase === 'available' && st.autoDownload && st.manualInstall === false) {
+    void window.tangu?.downloadUpdate?.({ auto: true })?.catch(() => { /* 没下成主进程会再发一次 available */ })
+    return
+  }
+  if (shownThisRun.has(st.version)) return
   shownThisRun.add(st.version)
   useWhatsNew.setState({ open: true })
 }

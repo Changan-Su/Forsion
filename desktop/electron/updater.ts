@@ -72,6 +72,11 @@ export interface UpdaterStatus {
   selfInstallFailed?: boolean
   /** mac:点了「重启并安装」,Squirrel.Mac 正在取包验签 */
   preparing?: boolean
+  /**
+   * 这一版钉在 GitHub、能应用内装:主窗收到后在后台自动开始下载(downloadUpdate({ auto: true })),下好再弹提示。
+   * 只给 GitHub 源(海外 / 测试版):流量算 GitHub 的;官网源走 OSS 按量计费,照旧等用户点。自动下载失败后置 false。
+   */
+  autoDownload?: boolean
 }
 
 let wired = false
@@ -282,7 +287,7 @@ function ensureWired(): void {
   autoUpdater.on('update-available', (info) => {
     if (dl || !target || info.version !== target.version) return // 下载中换源时的回声
     announceAvailable(info.version, notesToString(info.releaseNotes),
-      { source: feedSource ?? undefined, size: info.files?.[0]?.size, manualInstall: false })
+      { source: feedSource ?? undefined, size: info.files?.[0]?.size, manualInstall: false, autoDownload: feedSource === 'github' })
   })
   // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
@@ -394,9 +399,15 @@ async function runCheck(): Promise<UpdaterStatus> {
 /**
  * 下载:当前这边出错或 30 秒没进度 → 自动换另一边从头下一次(两边是同一个文件,electron-updater 不跨源续传);
  * 换过去还不行就报错,不来回切。手动换源(switchUpdateSource)随时可以,不占这一次。
+ *
+ * auto = 主窗收到 autoDownload 的「有新版」后自动发起的(用户没点):只在钉的是 GitHub 时才下;出错 / 下不动**不换到官网**
+ * (官网那边的流量走 OSS 计费,得用户自己点),也不报错、mac 也不退回 .dmg —— 安静地退回「有新版」并清掉 autoDownload,
+ * 由主窗照常弹提示、等用户点(用户点的那次照旧能换源)。下载中用户手动换了源,之后就按手动下载处理。
  */
-export async function downloadUpdate(): Promise<void> {
+export async function downloadUpdate(opts: { auto?: boolean } = {}): Promise<void> {
   if (unsupported() || lastStatus.manualInstall || !target || dl || lastStatus.phase !== 'available') return
+  let auto = opts.auto === true
+  if (auto && (!lastStatus.autoDownload || feedSource !== 'github')) return
   ensureWired()
   // 先把阶段钉成 downloading:第一条进度事件要等一会儿,这段空档里定时 / 唤醒检查会当成「还没下载」
   // 照常去查,查回来晚于下载完成就把 downloaded 盖回 available(Codex 评审 P2)。
@@ -413,6 +424,12 @@ export async function downloadUpdate(): Promise<void> {
       if (cur.dropped) return // 关了测试版,这份测试包不要了(channelChanged 已重置状态)
       const from = feedSource
       const manual = cur.manual
+      if (manual) auto = false // 用户手动换了源:之后按手动下载处理
+      if (auto) {
+        console.warn('[updater] background download did not finish, waiting for the user instead:', downloadErrorCode(err))
+        broadcast({ ...lastStatus, phase: 'available', autoDownload: false, percent: undefined, transferred: undefined, total: undefined, canSwitch: undefined })
+        return
+      }
       const next = manual ?? (autoSwitched ? null : otherSource())
       const switched = !!next && (await useSource(next)) === 'ok'
       if (cur.dropped) return // 换源那一下 await 期间关了测试版

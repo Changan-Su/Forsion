@@ -463,6 +463,8 @@ export interface UpdaterStatusInfo {
   selfInstallFailed?: boolean
   /** mac:点了重启并安装,正在准备 */
   preparing?: boolean
+  /** 这一版从 GitHub 下、能应用内装:主窗在后台自动开始下载,下好再提示;官网源仍等用户点 */
+  autoDownload?: boolean
 }
 
 /** 已配对的来访设备(本机 unitWeb 的 T1 局域网配对;令牌只存 hash)。 */
@@ -714,7 +716,8 @@ declare global {
       checkForUpdates?(): Promise<UpdaterStatusInfo>
       getUpdaterStatus?(): Promise<UpdaterStatusInfo>
       restartForUpdate?(): Promise<{ ok: boolean }>
-      downloadUpdate?(): Promise<void>
+      /** auto = 主窗收到 autoDownload 的「有新版」后自动发起:只认 GitHub 源,失败不换到官网、退回等用户点 */
+      downloadUpdate?(opts?: { auto?: boolean }): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
       /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
