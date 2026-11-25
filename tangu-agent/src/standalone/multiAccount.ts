@@ -133,17 +133,15 @@ const NO_CLOUD_ASSETS: AssetsBrain = {
 };
 
 /**
- * 注入的 brain 只取 llm(包出站脱敏)、models(进程那一份模型目录)和 asr(云端语音转写:和 llm 一样按次计量、不落任何账号的云端数据,
- * 计费跟 llm 同一份进程凭据,换成每人模型票时一起换)。云端 per-user 的能力(云存储、云记忆、Agent 云文件、收件箱、
- * 云笔记、账号面、git 凭据、生图 / 朗读 / 实时、决策模型、商店)一律不给:它们用的是进程那一份云端凭据,会把所有账号算成一个人。
+ * 注入的 brain 只取 llm(包出站脱敏)和 models(进程那一份模型目录)。云端 per-user 的能力(云存储、云记忆、Agent 云文件、收件箱、
+ * 云笔记、账号面、git 凭据、生图 / 语音 / 实时、决策模型、商店)一律不给:它们用的是进程那一份云端凭据,会把所有账号算成一个人。
  * 用户资料不出网:getUserById 只回账号 id。记忆 / 技能换成本地实现(按路径,天然按人)。
  */
 function multiAccountBrain(b: CloudBrainServices): CloudBrainServices {
   return {
     llm: withOutboundMasking(b.llm),
     models: b.models,
-    // 云端转写:和 llm 同一份凭据(这一段不做每人计费);transcribe_audio 读之前按账号读闸核路径
-    ...(b.asr ? { asr: b.asr } : {}),
+    ...(b.asr ? { asr: b.asr } : {}), // 云端转写:transcribe_audio 读之前按账号读闸核路径;凭据随 llm 走
     users: { getUserById: async (id: string) => ({ id, username: id }) },
     memory: createLocalMemoryBrain(),
     assets: createLocalAssets(NO_CLOUD_ASSETS, false),
