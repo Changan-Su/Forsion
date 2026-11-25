@@ -153,6 +153,7 @@ async function main(): Promise<void> {
   await fixLegacyAppIds(); // 修正 runs.ts 硬编码时期误标 'ai-studio' 的本地会话(仅 standalone 本地库)
   mod.startBackgroundTasks();
 
+  let stopping = false;
   const app = express();
   app.use(express.json({ limit: '25mb' }));
   // CORS:桌面 renderer(dev http://localhost:5173 / 打包 file://)跨源直连本服务。
@@ -162,6 +163,10 @@ async function main(): Promise<void> {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+  app.use((_req, res, next) => {
+    if (stopping) { res.status(503).json({ detail: 'The engine is shutting down' }); return; }
     next();
   });
   // P1-K2:远程锁定的纵深防御 —— 锁定时远程来源的非只读请求(中止除外)一律 423,与 unitWeb 顶层闸同口径。
@@ -201,10 +206,11 @@ async function main(): Promise<void> {
   // 等被中止的 run 落完终态(部分回答 + interrupted(<原因>))再退,有界 3s,赶在 4s 硬退出之前。
   // 原因(中断任务续跑方案 B):意图文件写的是本进程 pid、且是刚写的 → 用它(app_quit / app_update / engine_restart / account_change);
   // 否则 engine_stop(没打招呼的停,不自动续)。只处理第一次:退出时常常先 SIGTERM、再 disconnect,第二次不改写原因。
-  let stopping = false;
   const shutdown = (): void => {
     if (stopping) return;
     stopping = true;
+    // Stop accepting new work without closing the active event streams that report the interruption.
+    server.close();
     const drained = drainRunsForExit(3000, shutdownReasonForSelf());
     try { mod.dispose(); } catch { /* ignore */ }
     void Promise.all([drained, mcp.dispose()]).finally(() => process.exit(0));
