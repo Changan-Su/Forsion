@@ -8,6 +8,7 @@ vi.mock('../tools/toolRegistry.js', async (importOriginal) => ({
 }));
 import { gateToolCall, resolveApproval } from './approvals.js';
 import type { ToolCall } from '../core/types.js';
+import { hostShell, resetHostShellCache } from '../tools/hostShell.js';
 
 beforeEach(() => {
   state.publish.mockClear();
@@ -15,9 +16,14 @@ beforeEach(() => {
   if (process.platform === 'win32') {
     vi.stubEnv('TANGU_WINDOWS_SHELL', 'cmd');
     vi.stubEnv('comspec', 'cmd.exe');
+    resetHostShellCache();
+    expect(hostShell().kind).toBe('cmd');
   }
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetHostShellCache();
+});
 const call = (command: string): ToolCall => ({ id: 'safe-regression', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command }) } });
 
 describe('shell approval gate regression (no command execution)', () => {
