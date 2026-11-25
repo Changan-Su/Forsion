@@ -15,8 +15,19 @@
  *   i  两张卡都想开但放不下:最近碰过的那张开,另一张收成卡头;点卡头互换
  *   j  窄:切换件收成只留图标,两块的 ⋯ 和收起都在格内(紧凑阈值上下各量一档)
  *   k  两扇窗:换东西对面跟着;对面展开 Agent Desk,这扇的 Human Desk 不被换掉;对面没守着 → 不挂引用
+ *   —— 第 1 步后半(11-24,标签栏互通:Human Desk 是拿走,卡留着指向主区那个标签)——
+ *   m  ⋯ 四项(同 Agent Desk)= 拿到主区:卡写「在主区」、引用照旧、主区标签里算第几节;展开 = 占位,「放到 Human Desk」放回来、标签关掉
+ *   n  名字胶囊拖到标签栏 = 拿走;标签看不见满时长 → 暂停;卡上「转到标签页」回去 → 接着看
+ *   o  主区标签右键第一项「放到 Human Desk」:放回来、标签关掉;对话标签没有这一项
+ *   p  把标签拖到 Human Desk 卡 / 展开的那块上:拆分提示让位(对照:拖到正文照常有)、现成淡染;换上它、旧的进最近、标签关掉;Agent Desk 不接
+ *   r  向右拆分(对话窄过 760、摘要栏藏起):卡挪到主区对话顶上;把标签拖回这张卡 = 放回来
+ *   w  拿到主区落盘:重载后照旧「在主区」;把那个标签移到新窗口不算关
+ *   q  Amadeus(对话在右栏、这扇窗里没有它的 Desk):标签右键 = 就地认领(标签留着、卡在右栏对话顶上);切 Space 不算关;关掉标签 = 拿掉
+ *   m / o / p 各带一个「数据不丢」探针:打完字紧接着拿走 / 放回 / 换掉,读盘
+ *   tabshots 亮 / 暗:在主区的卡、占位、标签右键、标签拖上来、窄对话顶上的卡、Amadeus 右栏的卡
  *   s  desk_screenshot 调查:Human Desk 展开时截到的是哪块(宽 / 窄窗各一次),只记事实不判
- *   v  Agent 给成笔记编辑器的 .db / 白板(#848 同口径):「我来改」挪到 Human Desk、Human Desk ⋯「在新标签页打开」都不进笔记编辑器,字节不变
+ *   v  Agent 给成笔记编辑器的 .db / 白板(#848 同口径):「我来改」挪到 Human Desk、Human Desk ⋯「在新标签页打开」、
+ *      标签移走后点卡「在这里打开」都不进笔记编辑器,字节不变
  *   shots 亮 / 暗各一张展开态 + 卡片态,与 r3 对照
  *
  * 跑(必须经 devlock):node <仓根>/.claude/hooks/devlock.cjs run --vehicle=e2e --what="Human Desk" --eta=8 -- npm run check:humandesk
@@ -26,6 +37,7 @@ const fs = require('fs'); const os = require('os'); const path = require('path')
 const DESK = path.join(__dirname, '..')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { enterSpace } = require('./lib/uiux-electron.cjs')
 const OUT = process.env.OUT || path.join(os.tmpdir(), 'human-desk-check'); fs.mkdirSync(OUT, { recursive: true })
 const ONLY = (process.env.ONLY || '').split(',').map((x) => x.trim()).filter(Boolean)
 const W = 1512, H = 950
@@ -82,6 +94,9 @@ async function main() {
   const check = (name, ok, got) => { out.checks.push({ name, ok: !!ok, got }); console.log(ok ? 'PASS' : 'FAIL', name, JSON.stringify(got ?? null).slice(0, 300)) }
   try {
     const win = await app.firstWindow()
+    out.notes.pageErrors = []
+    win.on('pageerror', (e) => out.notes.pageErrors.push(String(e && e.stack || e).slice(0, 600)))
+    win.on('console', (m) => { if (m.type() === 'error') out.notes.pageErrors.push(`console: ${m.text().slice(0, 400)}`) })
     const size = async (w, h, page = null) => {
       await app.evaluate(({ BrowserWindow }, s) => {
         const ws = BrowserWindow.getAllWindows()
@@ -133,7 +148,12 @@ async function main() {
         bothBodies: !!q('.human-desk-body') && !!q('.agent-desk-body'),
         hcard: hc ? { gone: hc.classList.contains('gone'), empty: hc.classList.contains('empty'), open: hc.open, rect: R(hc), title: q('.human-desk-card-title', hc)?.textContent || null,
           eye: !!q('.human-desk-eye', hc), where: q('.human-desk-where', hc)?.textContent || null, emptyText: q('.human-desk-card-empty', hc)?.textContent || null,
-          plus: !!q('button[title="放到 Human Desk"]', hc), resume: !!q('button[title="继续看"]', hc), editors: ce(hc), drop: hc.hasAttribute('data-drop') } : null,
+          plus: !!q('button[title="放到 Human Desk"]', hc), resume: !!q('button[title="继续看"]', hc), editors: ce(hc), drop: hc.hasAttribute('data-drop'),
+          out: hc.classList.contains('out'), inmain: q('.human-desk-inmain', hc)?.textContent || null, goTab: !!q('button[title="转到标签页"]', hc),
+          titleW: Math.round(q('.human-desk-card-title', hc)?.getBoundingClientRect().width || 0), nameShown: !!q('.t2-card-title > .human-desk-card-name', hc)?.getClientRects().length } : null,
+        hinmain: hb ? (q('.human-desk-name .human-desk-inmain', hb)?.textContent || null) : null,
+        houtpane: hb ? (q('.human-desk-outpane', hb)?.textContent || null) : null,
+        hside: (() => { const e = [...document.querySelectorAll('.human-desk-side')].find((x) => x.getClientRects().length); return e ? { text: (e.textContent || '').trim(), rect: R(e), titleW: Math.round(q('.human-desk-card-title', e)?.getBoundingClientRect().width || 0) } : null })(),
         acard: ac ? { gone: ac.classList.contains('gone'), open: ac.open, rect: R(ac), editors: ce(ac) } : null,
         hname: hb ? (q('.human-desk-name', hb)?.textContent || '').trim() : null,
         heye: hb ? !!q('.human-desk-name .human-desk-eye', hb) : null,
@@ -198,6 +218,97 @@ async function main() {
       return { drop: p.hasAttribute('data-drop') }
     }, { sel, file, phase })
     const inside = (a, b, pad = 0) => !!a && !!b && a.x >= b.x - pad && a.y >= b.y - pad && a.r <= b.r + pad && a.b <= b.b + pad && a.w > 0 && a.h > 0
+    // ── 第 1 步后半(拿到主区 / 放回来)用的 ──
+    // 主区各组:前台标签(类型 + 名字)、组里所有标签;对话标签名是会话标题「竞品定价调研」,按名字找笔记标签时要排掉 chat
+    const groups = (page = win) => page.evaluate(() => [...document.querySelectorAll('.dv-groupview')].map((g) => {
+      const r = g.getBoundingClientRect(); const a = g.querySelector('.dv-tab.dv-active-tab .wb-tab')
+      return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height), frontType: a?.getAttribute('data-view-type') || null,
+        frontName: (a?.querySelector('.wb-tab-name')?.textContent || '').trim(), tabs: [...g.querySelectorAll('.wb-tab')].map((t) => `${t.getAttribute('data-view-type')}:${(t.querySelector('.wb-tab-name')?.textContent || '').trim()}`) }
+    }).filter((g) => g.w > 0))
+    const fileTabs = (name, page = win) => page.evaluate((name) => [...document.querySelectorAll('.wb-tab')].filter((t) => t.getAttribute('data-view-type') !== 'chat' && (t.querySelector('.wb-tab-name')?.textContent || '').includes(name)).length, name)
+    const tabByName = (name, page = win) => page.locator('.wb-tab:not([data-view-type="chat"])').filter({ has: page.locator('.wb-tab-name', { hasText: name }) }).first()
+    const humanMore = async (name) => { await win.locator('.agent-desk.open .human-desk-body button[title="更多"]').first().click(); await sleep(400); if (name) await menuClick(name) }
+    const menuItems = () => win.evaluate(() => [...document.querySelectorAll('.ctx-menu .ctx-item')].map((b) => (b.textContent || '').trim()))
+    // 标签右键菜单只认 window 的 click 收起(Escape 不收、右键另一个标签也不收 —— LCL 原有行为):先点一下 body 收掉旧的,只读最后一个菜单
+    const closeTabMenus = async () => { await win.evaluate(() => document.body.click()); await sleep(250) }
+    const tabMenuActs = () => win.evaluate(() => { const ms = document.querySelectorAll('.ctx-menu'); const m = ms[ms.length - 1]; return m ? [...m.querySelectorAll('button[data-act]')].map((b) => ({ act: b.dataset.act, text: (b.textContent || '').trim() })) : [] })
+    // 按坐标点标签(Playwright 的稳定性等待在标签上偶尔等不到:标签栏里有补间)
+    const tabAt = (name) => win.evaluate((name) => {
+      const t = [...document.querySelectorAll('.wb-tab')].find((x) => x.getAttribute('data-view-type') !== 'chat' && (x.querySelector('.wb-tab-name')?.textContent || '').includes(name) && x.getClientRects().length)
+      if (!t) return null
+      const b = t.getBoundingClientRect(); return { x: b.x + Math.min(b.width / 2, 40), y: b.y + b.height / 2 }
+    }, name)
+    const clickTab = async (name, button = 'left') => { await closeTabMenus(); const p = await tabAt(name); if (!p) throw new Error(`tab ${name} not found`); await win.mouse.click(p.x, p.y, { button }); await sleep(button === 'left' ? 600 : 400) }
+    const tabMenu = async (loc) => { await closeTabMenus(); if (typeof loc === 'string') await clickTab(loc, 'right'); else { await loc.click({ button: 'right' }); await sleep(400) } }
+    // 数据不丢的探针:在某个编辑器末尾打一串记号,紧接着做动作(不等存盘),之后读盘 / 读界面
+    // dockview 的 always 渲染把面板内容放在组外的浮层里:按 .wb-view[data-leaf-id] 找,不能挂在 .dv-groupview 下
+    const tabEditor = () => win.locator('.wb-view[data-leaf-id]:not(:has(.t2-chat-view)) [contenteditable="true"]:visible').last()
+    const typeProbe = async (loc, mark) => { await loc.click(); await win.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'); await win.keyboard.press('End'); await win.keyboard.type(` ${mark}`); await sleep(150) }
+    const onDisk = (file, mark) => fs.readFileSync(file, 'utf8').includes(mark)
+    const shownIn = (sel, mark) => win.evaluate(({ sel, mark }) => [...document.querySelectorAll(sel)].some((e) => (e.textContent || '').includes(mark)), { sel, mark })
+    // Amadeus 右栏那份对话(窗右半里看得见的 .t2-chat-view):顶上的卡、正文、输入框里的「现场」引用
+    const rightChat = () => win.evaluate(() => {
+      const cv = [...document.querySelectorAll('.t2-chat-view')].find((x) => x.getClientRects().length && x.getBoundingClientRect().x > innerWidth / 2)
+      if (!cv) return null
+      const r = (e) => { if (!e) return null; const b = e.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) } }
+      const side = cv.querySelector('.human-desk-side')
+      return { chat: r(cv), stream: r(cv.querySelector('.t2-stream')),
+        side: side && side.getClientRects().length ? { ...r(side), text: (side.textContent || '').trim(), titleW: Math.round(side.querySelector('.human-desk-card-title')?.getBoundingClientRect().width || 0), eye: !!side.querySelector('.human-desk-eye') } : null,
+        live: [...cv.querySelectorAll('.composer-anchor .attach-chip[data-live]')].map((c) => (c.textContent || '').trim()) }
+    })
+    // 进 Amadeus、右栏对话开着,在右栏发一句(空白新对话 → 建一条会话;Human Desk 的门:有过消息)
+    const intoAmadeus = async () => {
+      await enterSpace(win, 'amadeus'); await sleep(2500)
+      if (!(await rightChat())) { await win.click('.dv-edge-right', { timeout: 10_000 }).catch(() => {}); await sleep(1500) }
+      stub.script([{ type: 'done', payload: { content: '好的。' }, delay: 100 }])
+      const ta = win.locator('.t2-chat-view:visible .t2c-ta').last()
+      await ta.click(); await ta.fill('在笔记旁边聊两句'); await ta.press('Enter'); await sleep(2500)
+    }
+    // 左栏树里点一篇笔记(Amadeus):按叶子文字找、只认窗左三分之一里看得见的
+    const openFromTree = async (name) => {
+      const p = await win.evaluate((name) => {
+        const own = (e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join('').trim()
+        const el = [...document.querySelectorAll('body *')].find((e) => (own(e) === name || own(e) === `${name}.md`) && e.getClientRects().length && e.getBoundingClientRect().x < innerWidth / 3 && !e.closest('.wb-tab'))
+        if (!el) return { miss: [...document.querySelectorAll('body *')].filter((e) => e.getClientRects().length && e.getBoundingClientRect().x < innerWidth / 3 && own(e)).map(own).slice(0, 40) }
+        const b = el.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+      }, name)
+      if (!p || p.miss) throw new Error(`tree row ${name} not found: ${JSON.stringify(p?.miss)}`)
+      await win.mouse.click(p.x, p.y); await sleep(1800)
+    }
+    const setPause = (ms) => win.evaluate((ms) => localStorage.setItem('forsion.dev.humanDeskPauseMs', String(ms)), ms)
+    // Human Desk 放上一样东西、展开(收起 → 拖文件到卡上;在主区的那样也一起换掉)
+    const ensureOn = async (file) => { if ((await st()).side !== null) await collapseHere(); await dragOn('.human-desk-card', file, 'drop'); await sleep(1500) }
+    // 合成拖拽(全程同一个 DataTransfer,挂在 window.__hd):起拖 → 经过 → 读落点提示;再一次调用松手或取消。
+    // from = 'cap'(展开的 Human Desk 名字胶囊)或 { tab: 名字 }(主区标签);to = 'chatTab'(对话标签右缘 = 标签栏)/ 'body'(对话正文)/ CSS 选择器
+    const dragStart = (from, to, page = win) => page.evaluate(async ({ from, to }) => {
+      const src = from === 'cap' ? document.querySelector('.agent-desk.open .human-desk-name .desk-cap-pick')
+        : [...document.querySelectorAll('.wb-tab')].find((t) => t.getAttribute('data-view-type') !== 'chat' && (t.querySelector('.wb-tab-name')?.textContent || '').includes(from.tab))
+      if (!src) return { err: 'no source' }
+      const dt = new DataTransfer()
+      src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }))
+      let x = 0, y = 0
+      if (to === 'chatTab') { const r = document.querySelector('.wb-tab[data-view-type="chat"]').getBoundingClientRect(); x = r.right - 4; y = r.top + r.height / 2 }
+      else if (to === 'body') { const r = document.querySelector('.t2-stream').getBoundingClientRect(); x = r.left + r.width / 2; y = r.top + r.height * 0.35 }
+      else { const e = document.querySelector(to); if (!e) return { err: 'no target' }; e.scrollIntoView({ block: 'nearest' }); const r = e.getBoundingClientRect(); x = r.left + r.width / 2; y = r.top + Math.min(r.height / 2, 60) }
+      const t = document.elementFromPoint(x, y)
+      if (!t) { src.dispatchEvent(new DragEvent('dragend', { bubbles: true, cancelable: true, composed: true, dataTransfer: dt })); return { err: 'nothing at point', x, y, vp: [innerWidth, innerHeight] } }
+      const fire = (type, el) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt, clientX: x, clientY: y }))
+      fire('dragenter', t); fire('dragover', t)
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      window.__hd = { dt, src, t, x, y }
+      const vis = (sel) => { const e = document.querySelector(sel); return !!e && getComputedStyle(e).display !== 'none' }
+      const tgt = typeof to === 'string' && !['chatTab', 'body'].includes(to) ? document.querySelector(to) : null
+      return { line: vis('.wb-drop-line'), zone: vis('.wb-drop-zone'), effect: dt.dropEffect, tint: !!tgt?.hasAttribute('data-drop'), anyTint: !!document.querySelector('[data-drop]') }
+    }, { from, to })
+    const dragEnd = (drop, page = win) => page.evaluate((drop) => {
+      const h = window.__hd; if (!h) return false
+      const fire = (type, el) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: h.dt, clientX: h.x, clientY: h.y }))
+      if (drop) fire('drop', h.t)
+      // 源被关掉(标签放回 Human Desk)时 dragend 到不了 window:改在 document 上补一发,同真拖拽
+      fire('dragend', h.src.isConnected ? h.src : document)
+      window.__hd = null
+      return { tint: !!document.querySelector('[data-drop]'), zone: getComputedStyle(document.querySelector('.wb-drop-zone') || document.body).display !== 'none' && !!document.querySelector('.wb-drop-zone') }
+    }, drop)
 
     // ══ a:两张卡 ══
     await step('a', async () => {
@@ -533,6 +644,248 @@ async function main() {
       await w2.close().catch(() => {}); await sleep(800)
     })
 
+    // ══ m:⋯ 四项 = 拿到主区(拿走,卡留着指向它);主区那个标签里算第几节;展开 = 占位,放回来 ══
+    await step('m', async () => {
+      await ensureOn(F.N)
+      const s0 = await st()
+      check('m 前置:Human Desk = 定价调研.md,展开、在看', s0.side === 'human' && /定价调研/.test(s0.hname || '') && s0.live.length === 1, { side: s0.side, name: s0.hname, live: s0.live })
+      await humanMore()
+      const items = await menuItems()
+      const want = ['在新标签页打开', '向右拆分', '向下拆分', '在新窗口中打开']
+      const at = want.map((w) => items.indexOf(w))
+      check('m ⋯ 四项打开按序都在(同 Agent Desk)', at.every((i, k) => i >= 0 && (k === 0 || i === at[k - 1] + 1)), items)
+      check('m 没有「拿到主区」「在主区打开」「在 Amadeus 中打开」', !items.some((x) => /拿到主区|在主区打开|在 Amadeus 中打开/.test(x)), items)
+      await shot('m-menu')
+      await closeMenu()
+      // 数据不丢 ①:在 Human Desk 上打字,紧接着拿到主区(原生编辑器从 Desk 卸下、换到标签里)
+      await typeProbe(win.locator('.human-desk-body [contenteditable="true"]').last(), 'TAKEOUTPROBE1')
+      // 向下拆分:对话栏不窄过 760,摘要栏(两张卡)还在;窄的那种(向右拆分)见 r
+      await humanMore('向下拆分'); await sleep(1500)
+      const s1 = await st(); const g1 = await groups()
+      const noteG = g1.find((g) => g.frontType !== 'chat' && /定价调研/.test(g.frontName))
+      const chatG = g1.find((g) => g.tabs.some((x) => x.startsWith('chat:')))
+      check('m 向下拆分 = 拿走:Human Desk 收回,卡留着、卡头写「在主区」', s1.side === null && s1.hcard?.out && /在主区/.test(s1.hcard?.inmain || '') && !s1.hcard?.gone, { side: s1.side, card: s1.hcard })
+      check('m 主区多一组、前台是定价调研;对话那组前台仍是对话', !!noteG && chatG?.frontType === 'chat', g1)
+      check('m 卡头读作「你 定价调研.md · 在主区」:名字没被挤没(省掉 Human Desk 字样)', s1.hcard?.titleW > 24 && !s1.hcard?.nameShown, { w: s1.hcard?.titleW, nameShown: s1.hcard?.nameShown })
+      check('m 摘要栏在场时对话顶上不再出那张卡', !s1.hside, s1.hside)
+      check('m 卡头「展开」换成「转到标签页」', s1.hcard?.goTab && !(await win.locator('.human-desk-card button[title="展开"]').count()), s1.hcard)
+      check('m 标签在前台 = 还在看:引用照旧挂着、卡上眼睛亮', s1.live.length === 1 && /定价调研/.test(s1.live[0]) && s1.hcard?.eye, { live: s1.live, eye: s1.hcard?.eye })
+      check('m 一件事一张卡:Human Desk 卡里不再演它(没有编辑器)', !s1.hcard?.editors && s1.editorsInDesk === 0, { card: s1.hcard?.editors, desk: s1.editorsInDesk })
+      // 在主区那个标签里光标进「3. 明细」→ 引用、卡片都跟着
+      const h = win.locator('.wb-view[data-leaf-id] .page-view h2', { hasText: '明细' }).first()
+      await h.scrollIntoViewIfNeeded().catch(() => {}); await h.click(); await win.keyboard.press('End'); await sleep(1200)
+      const s2 = await st()
+      check('m 主区标签里光标进第 3 节 → 引用写「第 3 节」', s2.live.length === 1 && /第 3 节/.test(s2.live[0]), s2.live)
+      check('m 卡片写「你在第 3 节 · 明细」', /你在第 3 节 · 明细/.test(s2.hcard?.where || ''), s2.hcard?.where)
+      await sleep(1200)
+      check('m 数据不丢 ①:在 Desk 上刚打的字落了盘、主区标签里也有', onDisk(F.N, 'TAKEOUTPROBE1') && await shownIn('.wb-view[data-leaf-id] .page-view', 'TAKEOUTPROBE1'), { disk: onDisk(F.N, 'TAKEOUTPROBE1') })
+      await shot('m-out-split')
+      // 展开 Agent Desk 再切「你」:Human Desk 这块是占位(转到标签页 / 放到 Human Desk),不再挂原生编辑器
+      await win.locator('.agent-desk-card button[title="展开"]').first().click(); await sleep(1200)
+      await seg('你')
+      const s3 = await st()
+      check('m 东西在主区时展开 Human Desk = 占位那句,胶囊带「在主区」', s3.side === 'human' && /定价调研.*在主区的标签页里/.test(s3.houtpane || '') && /在主区/.test(s3.hinmain || ''), { side: s3.side, pane: s3.houtpane, inmain: s3.hinmain })
+      check('m 占位上不挂编辑器(原生编辑器归主区那个标签)', s3.heditors === 0 && s3.hnative === 0, { ed: s3.heditors, native: s3.hnative })
+      await humanMore()
+      const items2 = await menuItems()
+      check('m 在主区时 ⋯ = 转到标签页 + 放 / 拿掉,不再给四项', items2[0] === '转到标签页' && !items2.includes('向右拆分') && items2.includes('从 Human Desk 拿掉'), items2)
+      await closeMenu()
+      await shot('m-out-placeholder')
+      await win.locator('.human-desk-outpane button', { hasText: '放到 Human Desk' }).first().click(); await sleep(1500)
+      const s4 = await st()
+      check('m 占位上「放到 Human Desk」→ 放回来:主区那个标签关掉、Human Desk 演回真编辑器', s4.side === 'human' && !s4.hinmain && !s4.houtpane && s4.heditors >= 1 && (await fileTabs('定价调研')) === 0, { side: s4.side, inmain: s4.hinmain, ed: s4.heditors, tabs: await groups() })
+      check('m 放回来后笔记没丢', fs.readFileSync(F.N, 'utf8').includes('## 3. 明细'), null)
+    })
+
+    // ══ n:名字胶囊拖到标签栏 = 拿走;标签看不见满时长 → 暂停;卡上「转到标签页」回去 → 接着看 ══
+    await step('n', async () => {
+      const s0 = await st()
+      if (s0.side !== 'human' || !/定价调研/.test(s0.hname || '') || s0.hinmain) await ensureOn(F.N)
+      await setPause(PAUSE_MS)
+      const t0 = await fileTabs('定价调研')
+      const over = await dragStart('cap', 'chatTab')
+      check('n 名字胶囊拖到标签栏:落点线出现、没有半屏高亮', over.line && !over.zone, over)
+      await dragEnd(true); await sleep(1600)
+      const s1 = await st(); const g1 = await groups()
+      const chatG = g1.find((g) => g.tabs.some((x) => x.startsWith('chat:')))
+      check('n 松手 = 拿走:对话那组多一个定价调研标签、在前台', (await fileTabs('定价调研')) === t0 + 1 && chatG?.frontType !== 'chat' && /定价调研/.test(chatG?.frontName || ''), { t0, g1 })
+      check('n Human Desk 收回、卡写「在主区」', s1.side === null && s1.hcard?.out, { side: s1.side, card: s1.hcard })
+      check('n 标签在前台 = 在看(引用还挂着)', s1.live.length === 1, s1.live)
+      await shot('n-out-tab')
+      await win.locator('.wb-tab[data-view-type="chat"]').first().click(); await sleep(800)
+      check('n 切回对话(标签不在前台)、没到时长:还在看', (await st()).live.length === 1, (await st()).live)
+      await sleep(PAUSE_MS + 900)
+      const s2 = await st()
+      check('n 标签看不见满时长 → 自动暂停:引用撤、卡上眼睛灭、给「继续看」', s2.live.length === 0 && !s2.hcard?.eye && s2.hcard?.resume, { live: s2.live, card: s2.hcard })
+      const msg = await sendQuiet('先这样')
+      check('n 暂停时发出去的消息不带它', !/定价调研/.test(msg), msg.slice(0, 200))
+      await shot('n-out-paused')
+      await win.locator('.human-desk-card button[title="转到标签页"]').first().click(); await sleep(1000)
+      const g2 = await groups(); const chatG2 = g2.find((g) => g.tabs.some((x) => x.startsWith('chat:')))
+      check('n 卡上「转到标签页」→ 定价调研标签回到前台', /定价调研/.test(chatG2?.frontName || '') && chatG2?.frontType !== 'chat', g2)
+      check('n 回到标签 → 接着看(暂停解除)', (await st()).live.length === 1, (await st()).live)
+      await win.locator('.wb-tab[data-view-type="chat"]').first().click(); await sleep(800)
+      check('n 再切回对话:引用照旧(刚看过)', (await st()).live.length === 1, (await st()).live)
+      await setPause(600_000)
+    })
+
+    // ══ o:主区标签右键第一项「放到 Human Desk」:放回来、那个标签关掉;对话标签没有这一项 ══
+    await step('o', async () => {
+      if (!(await fileTabs('定价调研'))) { await ensureOn(F.N); await humanMore('在新标签页打开'); await sleep(1200); await win.locator('.wb-tab[data-view-type="chat"]').first().click(); await sleep(600) }
+      check('o 前置:定价调研在主区标签里、卡写「在主区」', (await fileTabs('定价调研')) >= 1 && (await st()).hcard?.out, await groups())
+      await tabMenu(win.locator('.wb-tab[data-view-type="chat"]').first())
+      const chatActs = (await tabMenuActs()).map((x) => x.act)
+      check('o 对话标签右键:没有「放到 Human Desk」(没有文件的不收)', chatActs.length > 0 && !chatActs.includes('host-human-desk-put'), chatActs)
+      // 数据不丢 ②:在主区标签里打字,紧接着放回 Human Desk(标签马上关掉)
+      await clickTab('定价调研')
+      await typeProbe(tabEditor(), 'PUTBACKPROBE2')
+      await tabMenu('定价调研')
+      const acts = await tabMenuActs()
+      check('o 笔记标签右键:第一项 =「放到 Human Desk」', acts[0]?.act === 'host-human-desk-put' && acts[0]?.text === '放到 Human Desk', acts)
+      await shot('o-tab-menu')
+      await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1500)
+      const s = await st()
+      check('o 点了 → 主区那个标签关掉', (await fileTabs('定价调研')) === 0, await groups())
+      await sleep(1500)
+      check('o 数据不丢 ②:标签里刚打的字落了盘、Human Desk 上也有', onDisk(F.N, 'PUTBACKPROBE2') && await shownIn('.human-desk-body', 'PUTBACKPROBE2'), { disk: onDisk(F.N, 'PUTBACKPROBE2') })
+      check('o 东西回到 Human Desk(不在主区了)、右边展开、真编辑器、在看', s.side === 'human' && /定价调研/.test(s.hname || '') && !s.hinmain && s.heditors >= 1 && s.live.length === 1, { side: s.side, name: s.hname, inmain: s.hinmain, ed: s.heditors, live: s.live })
+    })
+
+    // ══ p:把主区标签拖到 Human Desk 上(展开的那块 / 卡):拆分提示让位、用现成的淡染;换上它、旧的进「最近放过的」、标签关掉;Agent Desk 不接 ══
+    await step('p', async () => {
+      const s0 = await st()
+      if (!/定价调研/.test(s0.hname || '') || s0.hinmain || s0.side !== 'human') await ensureOn(F.N)
+      await collapseHere()
+      // notes.txt 开在主区下面一组(经 Agent Desk ⋯「向下拆分」,Agent Desk 那格留着)
+      await present([F.T], 'card', '把 notes 摆上来')
+      await win.locator('.agent-desk-card button[title="展开"]').first().click(); await sleep(1200)
+      const ni = (await st()).alabels.findIndex((x) => /notes\.txt/.test(x || ''))
+      await win.locator('.agent-desk.open .agent-desk-body > .agent-desk-pane').nth(Math.max(0, ni)).locator('button[title="更多"]').first().click(); await sleep(400)
+      await menuClick('向下拆分'); await sleep(1500)
+      await collapseHere()
+      check('p 前置:notes.txt 在主区标签里;两张卡都收着', (await fileTabs('notes.txt')) >= 1 && (await st()).side === null, { tabs: await groups(), side: (await st()).side })
+      // 对照:同一个标签拖到对话正文 → 照常画「拆开」半屏高亮(说明下面「不画」是让位,不是根本没提示)
+      const ctl = await dragStart({ tab: 'notes.txt' }, 'body'); await dragEnd(false)
+      check('p 对照:标签拖到对话正文 → 有半屏高亮', ctl.zone, ctl)
+      const ag = await dragStart({ tab: 'notes.txt' }, '.agent-desk-card'); await dragEnd(false)
+      check('p Agent Desk 不接标签:拖到 Agent Desk 卡上不染色', !ag.err && !ag.tint, ag)
+      // 展开 Human Desk(定价调研),打一串字,紧接着把 notes.txt 标签拖上来换掉它
+      await expandHuman()
+      await typeProbe(win.locator('.human-desk-body [contenteditable="true"]').last(), 'SWAPPROBE3')
+      const over = await dragStart({ tab: 'notes.txt' }, '.agent-desk.open .human-desk-pane')
+      check('p 标签拖到展开的 Human Desk 上:那块染色(现成的 data-drop),拆分提示让位(无半屏高亮 / 落点线)', over.tint && !over.zone && !over.line, over)
+      await shot('p-tab-drag-pane')
+      const end = await dragEnd(true); await sleep(1500)
+      const s1 = await st()
+      check('p 松手:Human Desk 换成 notes.txt;那个标签关掉;染色收了', s1.side === 'human' && /notes\.txt/.test(s1.hname || '') && (await fileTabs('notes.txt')) === 0 && !end.tint, { side: s1.side, name: s1.hname, tabs: await groups(), end })
+      await sleep(1000)
+      check('p 数据不丢 ③:被换下去的那篇刚打的字落了盘', onDisk(F.N, 'SWAPPROBE3'), null)
+      await win.locator('.agent-desk.open .human-desk-name button.desk-cap-pick').first().click(); await sleep(450)
+      const rows = await menuItems(); await closeMenu()
+      check('p 原来那样(定价调研)进「最近放过的」', rows.some((x) => /定价调研/.test(x)), rows)
+      // 在主区的那样(notes.txt)的标签拖回收着的卡上 = 放回来
+      await humanMore('向下拆分'); await sleep(1500)
+      check('p 前置:notes.txt 在主区、卡写「在主区」', (await fileTabs('notes.txt')) === 1 && (await st()).hcard?.out, { tabs: await groups() })
+      const over2 = await dragStart({ tab: 'notes.txt' }, '.human-desk-card')
+      check('p 标签拖到 Human Desk 卡上:卡染色、无拆分提示', over2.tint && !over2.zone && !over2.line, over2)
+      await shot('p-tab-drag-card')
+      await dragEnd(true); await sleep(1500)
+      const s2 = await st()
+      check('p 松手 = 放回来:标签关掉、不再「在主区」、右边展开 notes.txt', s2.side === 'human' && !s2.hinmain && /notes\.txt/.test(s2.hname || '') && (await fileTabs('notes.txt')) === 0, { side: s2.side, inmain: s2.hinmain, name: s2.hname })
+    })
+
+    // ══ r:向右拆分(对话窄过 760,摘要栏整列藏起):卡挪到主区对话顶上;标签右键放回 ══
+    await step('r', async () => {
+      const s0 = await st()
+      if (!/定价调研/.test(s0.hname || '') || s0.hinmain || s0.side !== 'human') await ensureOn(F.N)
+      await humanMore('向右拆分'); await sleep(1600)
+      const s1 = await st(); const g1 = await groups()
+      const chatG = g1.find((g) => g.tabs.some((x) => x.startsWith('chat:')))
+      check('r 向右拆分 = 拿走;对话那组窄过 760', s1.hcard?.out && !!chatG && chatG.w < 760, { out: s1.hcard?.out, chatW: chatG?.w })
+      check('r 摘要栏藏起时卡挪到对话顶上:「你 定价调研.md · 在主区」,名字看得见', !!s1.hside && /定价调研/.test(s1.hside.text) && /在主区/.test(s1.hside.text) && s1.hside.titleW > 24, s1.hside)
+      check('r 引用照旧挂着', s1.live.length === 1, s1.live)
+      await shot('r-narrow-side')
+      // 把那个标签拖回对话顶上这张卡 = 放回来(同摘要栏那张卡)
+      const over = await dragStart({ tab: '定价调研' }, '.human-desk-side')
+      check('r 标签拖到对话顶上那张卡:卡染色、拆分提示让位', over.tint && !over.zone && !over.line, over)
+      await dragEnd(true); await sleep(1500)
+      const s2 = await st()
+      check('r 松手 = 放回来:标签关掉、对话顶上那张卡没了、右边展开', (await fileTabs('定价调研')) === 0 && !s2.hside && s2.side === 'human', { side: s2.side, hside: s2.hside, tabs: await groups() })
+    })
+
+    // ══ w:拿到主区落了盘(重载后卡照旧「在主区」、标签还原);把那个标签移到新窗口不算关(不拿掉) ══
+    await step('w', async () => {
+      await ensureOn(F.N); await humanMore('向下拆分'); await sleep(1500)
+      check('w 前置:在主区', (await st()).hcard?.out, (await st()).hcard)
+      await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
+      await openSession(win)
+      const s1 = await st()
+      check('w 重载后卡照旧写「在主区」、那个标签也还原了', s1.hcard?.out && (await fileTabs('定价调研')) >= 1, { card: s1.hcard, tabs: await groups() })
+      await tabMenu('定价调研')
+      const [w2] = await Promise.all([app.waitForEvent('window', { timeout: 20_000 }), win.locator('.ctx-menu button[data-act="move-window"]').last().click()])
+      await w2.waitForSelector('#root', { timeout: 30_000 }); await sleep(3000)
+      const s2 = await st()
+      check('w 把那个标签移到新窗口:不算关,Human Desk 上还是它、照旧「在主区」', /定价调研/.test(s2.hcard?.title || '') && s2.hcard?.out && (await fileTabs('定价调研')) === 0, { card: s2.hcard, tabs: await groups() })
+      await w2.close().catch(() => {}); await sleep(800)
+      await win.locator('.human-desk-card button[title="转到标签页"]').first().click(); await sleep(1500)
+      check('w 这扇窗里没有那个标签了:点卡在这里重新打开', (await fileTabs('定价调研')) === 1, await groups())
+      await tabMenu('定价调研'); await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1300)
+      check('w 收尾:放回 Human Desk', !(await st()).hcard?.out && (await fileTabs('定价调研')) === 0, await groups())
+    })
+
+    // ══ q:Amadeus(对话在右栏,这扇窗里没有它的 Desk):标签右键「放到 Human Desk」= 就地认领 —— 标签留着、记成在主区,
+    //     卡在右栏对话顶上(r3 ⑦);切 Space 不算关;真的关掉标签 = 做完了 ══
+    await step('q', async () => {
+      await intoAmadeus()
+      await openFromTree('定价调研')
+      const a0 = await rightChat()
+      check('q 前置:Amadeus 主区开着定价调研,右栏是对话', (await fileTabs('定价调研')) >= 1 && !!a0, { tabs: await groups(), chat: a0?.chat })
+      await tabMenu('定价调研')
+      const acts = await tabMenuActs()
+      check('q 右栏对话有过消息 → 标签右键第一项也是「放到 Human Desk」', acts[0]?.act === 'host-human-desk-put', acts)
+      await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1500)
+      const a = await rightChat()
+      check('q 这扇窗里没有它的 Desk → 就地认领:标签留着', (await fileTabs('定价调研')) >= 1, await groups())
+      check('q 右栏对话顶上一张「你 定价调研.md · 在主区」,名字看得见', !!a?.side && /定价调研/.test(a.side.text) && /在主区/.test(a.side.text) && a.side.titleW > 24, a)
+      check('q 卡在对话正文上面', !!a?.side && a.side.y <= a.stream.y + 4, a)
+      // 右栏 280 宽时输入框把引用收成一颗钮,「现场」那枚不在 DOM 里;在看以卡上的眼睛为准
+      check('q 标签在前台 = 在看:右栏那张卡带眼睛', !!a?.side?.eye, a?.side)
+      await shot('q-amadeus-side')
+      await enterSpace(win, 'tangu'); await sleep(2000); await enterSpace(win, 'amadeus'); await sleep(2500)
+      const b = await rightChat()
+      check('q 切到 Tangu 再回来:标签还在、卡还在(切 Space 不算关)', (await fileTabs('定价调研')) >= 1 && !!b?.side, { tabs: await groups(), side: b?.side })
+      await tabMenu('定价调研')
+      await win.locator('.ctx-menu button[data-act="close"]').last().click(); await sleep(1200)
+      const c = await rightChat()
+      check('q 关掉那个标签 = 做完了:右栏那张卡没了', !c?.side, c)
+      await enterSpace(win, 'tangu'); await sleep(2000)
+    })
+
+    // ══ tabshots:亮 / 暗 —— 在主区的卡、占位、标签右键、标签拖上来、窄对话顶上的卡、Amadeus 右栏的卡 ══
+    await step('tabshots', async () => {
+      const putBack = async () => { await tabMenu('定价调研'); await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1300) }
+      const pass = async (theme) => {
+        await ensureOn(F.N); await humanMore('向下拆分'); await sleep(1500); await shot(`${theme}-out-card`)
+        await win.locator('.agent-desk-card button[title="展开"]').first().click(); await sleep(1200); await seg('你'); await sleep(300); await shot(`${theme}-out-placeholder`); await collapseHere()
+        await tabMenu('定价调研'); await shot(`${theme}-tab-menu`); await closeTabMenus()
+        await dragStart({ tab: '定价调研' }, '.human-desk-card'); await shot(`${theme}-tab-drag-hover`); await dragEnd(false)
+        await putBack()
+        await humanMore('向右拆分'); await sleep(1500); await shot(`${theme}-out-narrow`); await putBack()
+        await intoAmadeus(); await openFromTree('定价调研'); await putBack(); await shot(`${theme}-amadeus-side`)
+        await tabMenu('定价调研'); await win.locator('.ctx-menu button[data-act="close"]').last().click(); await sleep(1000)
+        await enterSpace(win, 'tangu'); await sleep(2000)
+      }
+      await pass('light')
+      await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'dark') })
+      await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
+      await openSession(win)
+      await pass('dark')
+      check('tabshots 暗色这轮走完:Human Desk 上是定价调研、没有它的标签', /定价调研/.test((await st()).hname || '') && (await fileTabs('定价调研')) === 0, await groups())
+      await win.evaluate(() => { localStorage.setItem('forsion_theme_pref', 'light') })
+      await win.reload({ waitUntil: 'domcontentloaded' }); await win.waitForSelector('.dv-groupview', { timeout: 40_000 }); await sleep(2500)
+      await openSession(win)
+    })
+
     // ══ s:desk_screenshot 调查(只记事实) ══
     await step('s', async () => {
       if ((await st()).side !== 'human') await expandHuman()
@@ -616,6 +969,20 @@ async function main() {
       const ta = await tabs()
       check('v Human Desk ⋯「在新标签页打开」(.db):主区多一个数据库标签,没开笔记编辑器', n(ta, 'amadeus-db') === n(tb, 'amadeus-db') + 1 && n(ta, 'amadeus-editor') === n(tb, 'amadeus-editor'), { tb, ta })
       await shot('v-main-db')
+      if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
+      // 拿到主区之后:那个标签移到新窗口(不算关),这扇窗里找不到它 → 点卡「转到标签页」= 在这里打开(goToHumanTab → openDeskItemInMain),同样按文件开
+      const s1 = await st()
+      check('v 前置:「在新标签页打开」= 拿走,卡写「在主区」', !!s1.hcard?.out, s1.hcard)
+      await tabMenu('任务')
+      const [w2] = await Promise.all([app.waitForEvent('window', { timeout: 20_000 }), win.locator('.ctx-menu button[data-act="move-window"]').last().click()])
+      await w2.waitForSelector('#root', { timeout: 30_000 }); await sleep(3000)
+      await w2.close().catch(() => {}); await sleep(800)
+      const tg = await tabs()
+      await win.locator('.human-desk-card button[title="转到标签页"]').first().click(); await sleep(2000)
+      const th = await tabs()
+      check('v 这扇窗里没有那个标签了,点卡在这里打开:开的是数据库,不是笔记编辑器', n(th, 'amadeus-db') === n(tg, 'amadeus-db') + 1 && n(th, 'amadeus-editor') === n(tg, 'amadeus-editor'), { tg, th })
+      await shot('v-reopen-here')
+      await tabMenu('任务'); await win.locator('.ctx-menu button[data-act="host-human-desk-put"]').last().click(); await sleep(1300)
       if (await chatTab.count()) { await chatTab.click(); await sleep(900) }
       await sleep(3000) // 过了编辑器的存盘防抖再比字节
       const after = bytes()

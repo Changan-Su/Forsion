@@ -190,3 +190,41 @@ describe('两扇窗同步', () => {
     expect(out.open).toBe(true)
   })
 })
+
+describe('拿到主区 / 放回来(第 1 步后半)', () => {
+  it('takeOut 只在有东西时生效;再拿一次 = 原对象', () => {
+    expect(humanDeskReduce({}, { type: 'takeOut' })).toEqual({})
+    const out = humanDeskReduce({ item: A }, { type: 'takeOut' })
+    expect(out.out).toBe(true)
+    expect(out.item).toBe(A) // 东西还记着:卡留着、指向它
+    expect(humanDeskReduce(out, { type: 'takeOut' })).toBe(out)
+  })
+  it('同一样东西再放一次 = 放回来(清掉在主区与停止);换一样东西也清掉;拿掉也清掉', () => {
+    const out: HumanDeskCore = { item: A, recent: [A], out: true, stopped: true }
+    const back = humanDeskReduce(out, { type: 'put', item: { ...A, at: 9 } })
+    expect(back.out).toBeUndefined()
+    expect(back.stopped).toBeUndefined()
+    expect(back.item).toBe(A)
+    expect(humanDeskReduce(out, { type: 'put', item: B }).out).toBeUndefined()
+    expect(humanDeskReduce(out, { type: 'remove' }).out).toBeUndefined()
+  })
+  it('改名跟过去时「在主区」留着;删掉了就一起清掉', () => {
+    const out: HumanDeskCore = { item: A, recent: [A], out: true }
+    expect(humanDeskReduce(out, { type: 'retarget', from: '/v/定价调研.md', to: '/v/定价.md' }).out).toBe(true)
+    expect(humanDeskReduce(out, { type: 'retarget', from: '/v/定价调研.md', to: null }).out).toBeUndefined()
+  })
+  it('在主区要落盘(重启后卡照旧指向它);tabHere 是每扇窗自己的,不落', () => {
+    const map = unpackHumanDeskMap(packHumanDeskMap({ s: { item: A, out: true, tabHere: true } as HumanDeskCore }))
+    expect(map.s.out).toBe(true)
+    expect((map.s as Record<string, unknown>).tabHere).toBeUndefined()
+    expect(unpackHumanDeskMap(JSON.stringify({ s: { recent: [A], out: true } })).s.out).toBeUndefined() // 没东西不认
+  })
+  it('两扇窗:对面拿到了主区 → 本窗的展开收回;对面放回来 → 本窗的 tabHere 作废', () => {
+    const took = adoptHumanDesk({ item: A, recent: [A], open: true }, { item: A, recent: [A], out: true })
+    expect(took.out).toBe(true)
+    expect(took.open).toBeUndefined()
+    const back = adoptHumanDesk({ item: A, recent: [A], out: true, tabHere: true }, { item: A, recent: [A] })
+    expect(back.out).toBeUndefined()
+    expect(back.tabHere).toBeUndefined()
+  })
+})

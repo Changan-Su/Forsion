@@ -1004,7 +1004,8 @@ function persistHumanDesk(sessionId: string): void {
   try {
     const disk = unpackHumanDeskMap(localStorage.getItem(HUMAN_DESK_PERSIST_KEY))
     const mine = store.get().humanDeskBySession[sessionId]
-    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped } as HumanDeskCore
+    // out(拿到了主区)也落盘:重启后卡照旧指向那个标签,另一扇窗靠这次写盘跟上(Codex 评审:漏了它 = 拿走只在本窗有效)
+    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped, out: mine.out } as HumanDeskCore
     else delete disk[sessionId]
     localStorage.setItem(HUMAN_DESK_PERSIST_KEY, packHumanDeskMap(disk))
   } catch { /* ignore */ }
@@ -1037,12 +1038,14 @@ function installHumanDeskSync(): void {
 const humanPauseTimers = new Map<string, ReturnType<typeof setTimeout>>()
 function armHumanPause(sessionId: string): void {
   if (humanPauseTimers.has(sessionId)) return // 「离开」从第一次切走算起,来回切 Agent / 收起不重新计时
-  if (!humanWatching(store.get().humanDeskBySession[sessionId])) return
+  const cur = store.get().humanDeskBySession[sessionId]
+  if (!humanWatching(cur) || (cur?.out && cur.tabHere)) return // 拿到了主区、那个标签正看得见 = 在场
   humanPauseTimers.set(sessionId, setTimeout(() => {
     humanPauseTimers.delete(sessionId)
     store.set((s) => {
       const h = s.humanDeskBySession[sessionId]
-      if (!h?.item || h.paused || deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human') return {}
+      // 在主区时「在场」只认那个标签看不看得见:展开的 Human Desk 那时只是占位,不算在看(Codex 评审)
+      if (!h?.item || h.paused || (h.out ? h.tabHere : deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human')) return {}
       return { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...h, paused: true } } }
     })
   }, humanDeskPauseMs()))
@@ -1425,7 +1428,7 @@ export interface TanguState {
   deskAct(sessionId: string, action: DeskAction): void
   /** Human Desk 动作:放上来(顺带把右边切到 Human Desk)/ 拿掉 / 停止 / 继续看(纯决策在 humanDeskPlan.humanDeskReduce,立刻落盘);
    *  section = 展开态算出的「你在第几节」(内存)。 */
-  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] } | { type: 'agentNews' }): void
+  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] } | { type: 'agentNews' } | { type: 'tabHere'; here: boolean }): void
   /** 右边展开哪一块(两块共用、一次一块):'agent' / 'human' / null = 都收起。切走 Human Desk 满一分钟自动暂停在看。 */
   setDeskSide(sessionId: string, side: DeskSide): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
@@ -3419,6 +3422,16 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   },
   humanDeskAct: (sessionId, action) => {
     if (action.type === 'agentNews') { humanSeesAgentNews(sessionId); return } // 插件结果卡片那条落点(PluginToolCard)
+    if (action.type === 'tabHere') {
+      // 拿到主区的那个标签在这扇窗里看得见 / 看不见了(HumanDesk.tsx 的标签监视):看得见 = 在场,撤表、接着看;看不见 = 起表
+      const h = get().humanDeskBySession[sessionId]
+      if (!h?.out) return
+      if (!!h.tabHere !== action.here || (action.here && h.paused)) {
+        set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], tabHere: action.here ? true : undefined, ...(action.here ? { paused: undefined } : {}) } } }))
+      }
+      if (action.here) disarmHumanPause(sessionId); else armHumanPause(sessionId)
+      return
+    }
     if (action.type === 'section') {
       const h = get().humanDeskBySession[sessionId]
       if (!h || JSON.stringify(h.section ?? null) === JSON.stringify(action.section ?? null)) return
@@ -3429,7 +3442,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const next = humanDeskReduce(prev, action)
     // 「继续看」也撤掉自动暂停(你明说要接着看);放上来 / 拿掉换了东西,小节作废
     const runtime = action.type === 'resume' && prev.paused ? { paused: undefined }
-      : action.type === 'put' || action.type === 'remove' ? { section: undefined } : null
+      : action.type === 'put' || action.type === 'remove' ? { section: undefined, tabHere: undefined }
+      // 拿到主区:东西不在 Human Desk 上了 → 这扇窗的展开收回(右边空出来);小节留着,主区那个标签接着算
+      : action.type === 'takeOut' ? { open: undefined, agentDot: undefined } : null
     if (next !== prev || runtime) {
       set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), ...next, ...runtime } } }))
       if (next !== prev) persistHumanDesk(sessionId)
@@ -3438,6 +3453,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (action.type === 'put') { get().setDeskSide(sessionId, 'human'); return }
     if (action.type === 'retarget') return // 改名跟路径:在不在场、离开的表都不动
     disarmHumanPause(sessionId)
+    // 拿到主区:在不在场改看那个标签(监视一会儿报 tabHere);先起表,标签一露面就撤
+    if (action.type === 'takeOut') { armHumanPause(sessionId); return }
     // 不在 Human Desk 上点的「继续看」(卡片上):接着看,离开的表重新起
     if (action.type === 'resume' && deskSideOf(get().deskBySession[sessionId]?.mode, get().humanDeskBySession[sessionId]?.open) !== 'human') armHumanPause(sessionId)
   },
@@ -3445,6 +3462,12 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const cur = get().deskBySession[sessionId]
     if (side === 'agent') { get().patchDesk(sessionId, { mode: 'open' }); return }
     if (cur?.mode === 'open') get().patchDesk(sessionId, { mode: undefined })
+    if (side === 'human' && get().humanDeskBySession[sessionId]?.out) {
+      // 东西在主区:展开的这块只是占位(转到标签页 / 放回来),不算回来看 —— 暂停照旧跟着那个标签走
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], open: true } } }))
+      if (!get().humanDeskBySession[sessionId]?.tabHere) armHumanPause(sessionId)
+      return
+    }
     if (side === 'human') {
       disarmHumanPause(sessionId)
       set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), open: true, paused: undefined } } }))

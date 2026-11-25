@@ -2186,3 +2186,42 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
   position: absolute; top: 2px; right: 4px; width: 6px; height: 6px; border-radius: 50%;
   background: var(--accent-ink); box-shadow: 0 0 0 1.5px var(--bg-card, var(--bg)); pointer-events: auto;
 }
+
+/* ── Human Desk 第 1 步后半:拿到主区之后(r3 ⑦ / r2-details §4)──
+ * 卡头「名字 · 在主区」;卡不再有小预览,只留「你在第几节」一行,点卡 = 转到那个标签。
+ * 右栏对话顶上同一张卡的简版(.human-desk-side,别的 Space 的右栏里没有摘要栏卡片栈)。展开那块只剩一句「在主区」+ 两个按钮。 */
+.human-desk-inmain { flex: none; white-space: nowrap; }
+.desk-cap.human-desk-name > .human-desk-inmain { padding: 0 4px 0 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.human-desk-card-frame.out { height: auto; cursor: pointer; padding-top: 2px; }
+.human-desk-card.out .human-desk-card-frame.out .human-desk-where { padding-bottom: 10px; }
+.human-desk-outacts { display: inline-flex; gap: 8px; }
+.human-desk-side {
+  /* 画布模式下舞台(z 2)铺满整列:卡浮在它上面才点得到(Codex 评审) */
+  position: relative; z-index: 3;
+  flex: none; margin: 8px 12px 0; padding: 9px 12px 8px; cursor: pointer;
+  border-radius: var(--radius-md, 12px); background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border); box-shadow: var(--card-shadow-low, none);
+}
+.human-desk-side:hover { border-color: color-mix(in srgb, var(--accent-ink) 45%, var(--border)); }
+.human-desk-side-head { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-font-body, 13px); }
+.human-desk-side-head > .human-desk-card-name { flex: none; font-weight: 600; }
+.human-desk-side-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.human-desk-side-acts > .human-desk-eye { padding: 0 4px; }
+.human-desk-side > .human-desk-where { padding: 4px 0 0; }
+/* 在主区时卡头放不下「Human Desk」+ 名字 +「在主区」三样(摘要栏 296 / 右栏 280,再加眼睛、停止、转到三颗钮):
+ * 省掉「Human Desk」字样、留「你」头像,读作「你 定价调研.md · 在主区」(r3 ⑦ 的写法);名字至少留几个字,不被挤成 0 宽。 */
+.human-desk-card.out .t2-card-title > .human-desk-card-name { display: none; }
+.human-desk-card.out .human-desk-card-title, .human-desk-card.out .human-desk-card-pickwrap, .human-desk-side-head > .human-desk-card-title { flex: 0 1 auto; min-width: 3em; }
+/* 摘要栏(卡片栈)在场时卡已经在栏里,对话顶上这张让掉;栏不在场(右栏、主区里窄过 760、画布)才露出来 */
+@container (min-width: 760px) {
+  .t2-chat-col:has(.t2-rail:not([data-off])) .human-desk-side { display: none; }
+}
+/* 主区那个标签拖到对话顶上这张卡上(放回来):同摘要栏那张卡的落点画法 —— 描边换主题色 + 原地淡入一层 5%,不画虚线框 */
+.human-desk-side::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: color-mix(in srgb, var(--signal) 5%, transparent);
+  opacity: 0; transition: opacity var(--lcl-drop-fade, 130ms ease);
+}
+.human-desk-side[data-drop] { border-color: var(--accent-ink); }
+.human-desk-side[data-drop]::after { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .human-desk-side::after { transition: none; } }
