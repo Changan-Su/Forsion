@@ -784,7 +784,7 @@ function main(argv) {
   const next = renderTs(rows)
   let current = ''
   try { current = readFileSync(OUT, 'utf8') } catch { /* 首次生成 */ }
-  const stale = current !== next
+  const stale = current.replace(/\r\n/g, '\n') !== next
   if (check) {
     const report = { ok: !stale && !orphans.length && !unclassified.length, stale, unclassified, orphans, routes: rows.length }
     if (asJson) console.log(JSON.stringify(report))

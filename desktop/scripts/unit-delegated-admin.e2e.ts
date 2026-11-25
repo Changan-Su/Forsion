@@ -14,9 +14,12 @@
  *   SHOT_DIR=<dir>  write screenshots (JPEG ≤1200px wide) there
  *   E2E_PORT=<port> fixed vite port (default: a free one; never 5173)
  *   KEEP_GOING=1    don't stop at the first failed step (report everything)
+ *   MOBILE=1        run the phone shell boot and storage checks
+ *   CHROMIUM_EXE=<path> use an installed Chromium, e.g. chrome.exe on Windows
  */
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,16 +54,20 @@ const freePort = (): Promise<number> => new Promise((res, rej) => {
 async function startVite(): Promise<{ url: string; stop: () => void }> {
   const port = Number(process.env.E2E_PORT) || await freePort()
   if (port === 5173) throw new Error('5173 is reserved for the user dev server')
-  const child: ChildProcess = spawn('npx', ['vite', '--strictPort', '--host', '127.0.0.1'], {
-    cwd: WEB, env: { ...process.env, PORT: String(port), TANGU_DEV_PROXY: 'http://127.0.0.1:9' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+  const vite = createRequire(import.meta.url).resolve('vite/package.json', { paths: [WEB] })
+  const child = spawn(process.execPath, [path.join(path.dirname(vite), 'bin/vite.js'), '--strictPort', '--host', '127.0.0.1'], {
+    cwd: WEB, env: { ...process.env, PORT: String(port), TANGU_DEV_PROXY: 'http://127.0.0.1:9' }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
   })
   let out = ''
+  let startError: Error | undefined
+  child.once('error', (error) => { startError = error })
   child.stdout?.on('data', (d) => { out += String(d) })
   child.stderr?.on('data', (d) => { out += String(d) })
-  const stop = (): void => { try { if (child.pid) process.kill(-child.pid, 'SIGTERM') } catch { /* gone */ } }
+  const stop = (): void => { child.kill() }
   const url = `http://127.0.0.1:${port}/`
   for (let i = 0; i < 300; i++) {
-    if (child.exitCode !== null) throw new Error(`vite exited: ${out}`)
+    if (startError) throw startError
+    if (child.exitCode !== null || child.signalCode !== null) throw new Error(`vite exited: ${out}`)
     if (out.replace(/\x1b\[[0-9;]*m/g, '').includes(`:${port}/`)) return { url, stop }
     await new Promise((r) => setTimeout(r, 200))
   }
@@ -215,8 +222,12 @@ async function shot(page: Page, name: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (SHOT_DIR) fs.mkdirSync(SHOT_DIR, { recursive: true })
   const vite = await startVite()
-  const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
+  const browser = await chromium.launch({ executablePath: findChromium(), headless: true }).catch((error) => {
+    vite.stop()
+    throw error
+  })
   const errors: string[] = []
   let navigations = 0
   try {
@@ -455,11 +466,12 @@ async function main(): Promise<void> {
     await page.keyboard.press('Escape')
     await page.waitForTimeout(500)
     // Keyboard entries that survive the ribbon trim (command palette, quick find): opening them must not send anything outside.
-    await page.keyboard.press('Meta+k'); await page.waitForTimeout(800)
+    const primaryKey = process.platform === 'darwin' ? 'Meta' : 'Control'
+    await page.keyboard.press(`${primaryKey}+k`); await page.waitForTimeout(800)
     const palette = await page.locator('body').innerText()
     check('command palette offers no chat / notes / quick find', !/新对话|新建笔记|打开笔记|快速查找|成就/.test(palette.split('设置').slice(-1)[0] ?? palette))
     await page.keyboard.press('Escape'); await page.waitForTimeout(300)
-    await page.keyboard.press('Meta+p'); await page.waitForTimeout(800); await page.keyboard.press('Escape'); await page.waitForTimeout(300)
+    await page.keyboard.press(`${primaryKey}+p`); await page.waitForTimeout(800); await page.keyboard.press('Escape'); await page.waitForTimeout(300)
 
     // Dark first screen
     await page.emulateMedia({ colorScheme: 'dark' })
@@ -479,13 +491,15 @@ async function main(): Promise<void> {
     check('no reload loop (2 navigations: boot + the dark reload)', navigations <= 2, `navigations=${navigations}`)
     check('no page errors', errors.length === 0, errors.slice(0, 3).join(' || '))
   } finally {
-    fs.writeFileSync(path.join(SHOT_DIR || os.tmpdir(), 'delegated-admin-report.json'), JSON.stringify({ results, outside, allowed: allowedHits, writes }, null, 2))
-    await browser.close()
-    vite.stop()
+    try {
+      fs.writeFileSync(path.join(SHOT_DIR || os.tmpdir(), 'delegated-admin-report.json'), JSON.stringify({ results, outside, allowed: allowedHits, writes }, null, 2))
+      const failed = results.filter((r) => !r.ok)
+      console.log(`\n${results.length - failed.length}/${results.length} passed; outside hits ${outside.length}; allowed hits ${allowedHits.length}; writes ${writes.map((w) => `${w.method} ${w.path}`).join(', ')}`)
+      if (failed.length) process.exitCode = 1
+    } finally {
+      await browser.close().finally(vite.stop)
+    }
   }
-  const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} passed; outside hits ${outside.length}; allowed hits ${allowedHits.length}; writes ${writes.map((w) => `${w.method} ${w.path}`).join(', ')}`)
-  if (failed.length) process.exitCode = 1
 }
 
 main().catch((e) => { console.error(e); console.log(`outside hits so far (${outside.length}):\n` + [...new Set(outside.map((h) => `${h.method} ${h.path}`))].join('\n')); process.exitCode = 1 })
