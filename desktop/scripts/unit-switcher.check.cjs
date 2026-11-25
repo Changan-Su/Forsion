@@ -27,26 +27,11 @@ const path = require('path')
 const http = require('http')
 const { spawn } = require('child_process')
 const { chromium } = require('playwright-core')
+const { findChromium } = require('./lib/find-chromium.cjs')
 
-function findChromium() {
-  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
-  try {
-    const p = chromium.executablePath()
-    if (p && fs.existsSync(p)) return p
-  } catch { /* fallthrough */ }
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
-  for (const d of fs.readdirSync(root).filter((x) => x.startsWith('chromium-')).sort().reverse()) {
-    for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
-      const p = path.join(root, d, 'chrome-mac-arm64', app)
-      if (fs.existsSync(p)) return p
-    }
-  }
-  throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
-}
-
-const BASE = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
+const BASE = process.env.HARNESS_URL || 'http://127.0.0.1:5173/harness.html'
 const URL = `${BASE}?ribbon&unit&surface=part`
-const SHOT_DIR = process.env.UNITSW_SHOT_DIR || '/tmp'
+const SHOT_DIR = process.env.UNITSW_SHOT_DIR || os.tmpdir()
 
 function ping() {
   return new Promise((res) => {
@@ -65,7 +50,8 @@ function check(name, ok, detail) {
 async function main() {
   let vite = null
   if (!(await ping())) {
-    vite = spawn('npx', ['vite', 'frontend'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore' })
+    const viteEntry = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js')
+    vite = spawn(process.execPath, [viteEntry, 'frontend', '--host', '127.0.0.1', '--strictPort'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore', windowsHide: true })
     let up = false
     for (let i = 0; i < 60 && !up; i++) {
       await new Promise((r) => setTimeout(r, 500))
@@ -73,9 +59,11 @@ async function main() {
     }
     if (!up) throw new Error('vite 起不来')
   }
+  fs.mkdirSync(SHOT_DIR, { recursive: true })
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   try {
     const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 720 } })
+    page.setDefaultNavigationTimeout(60000)
     page.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await page.addInitScript(() => localStorage.clear())
     await page.goto(URL, { waitUntil: 'domcontentloaded' })
