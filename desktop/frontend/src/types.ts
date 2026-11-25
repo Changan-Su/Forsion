@@ -1152,6 +1152,9 @@ declare global {
       syncNow(): Promise<AmadeusSyncStatus>
       /** 放行被删除保护拦下的批量删除(可选:旧 preload 构建下缺位)。 */
       confirmDeletions?(): Promise<AmadeusSyncStatus>
+      /** 处理先放着的文件(Forsion Extend 0.10.13+;旧的缺位)。binding = 按条目同步的库根(状态里的 binding),不带 = 云端镜像。
+       *  paths = 服务端路径(held[].path)。newer 只在用户点了之后按修改时间替他逐篇选。 */
+      resolveHeld?(payload: { binding?: string | null; shareKey?: string | null; paths: string[]; choice: AmadeusHeldChoice }): Promise<AmadeusSyncStatus | { error: string }>
       /** 胶囊滑块:Local↔Cloud 全局切活动 vault;返回与 restoreVault 同形载荷。 */
       switchSide(side: 'local' | 'cloud'): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string; side: 'local' | 'cloud' } | null>
       onStatus(cb: (s: AmadeusSyncStatus) => void): () => void
@@ -1322,6 +1325,23 @@ export interface AmadeusCollabQuota {
 }
 
 /** 云同步状态(镜像 electron/amadeus/sync/engine.ts 的 SyncStatus;side 由 IPC get 附带)。 */
+/** 先放着的一个文件。path = 服务端路径(处理时用);local = 本机库内相对路径(显示用)。
+ *  两边的 seq / hash / 时间是发现时的样子,只给人看、给「都留较新的」参考,处理时会重新读两边。 */
+export interface AmadeusHeldFile {
+  path: string
+  local: string
+  localHash: string
+  localSize: number
+  /** 本机文件修改时间(epoch ms;-1 = 不知道)。 */
+  localMtimeMs: number
+  remoteSeq: number
+  remoteHash: string | null
+  /** 云端更新时间(ISO;null = 不知道)。 */
+  remoteUpdatedAt: string | null
+  since: number
+}
+export type AmadeusHeldChoice = 'local' | 'cloud' | 'both' | 'newer'
+
 export interface AmadeusSyncStatus {
   enabled: boolean
   state: 'disabled' | 'starting' | 'idle' | 'syncing' | 'offline' | 'auth-required' | 'error'
@@ -1332,6 +1352,11 @@ export interface AmadeusSyncStatus {
   error: string | null
   /** 被删除保护拦下、等确认的删除条数(旧 preload 无此字段 → undefined 按 0 处理)。 */
   pendingDeletions?: number
+  /** 两边都有、内容不同、又没有同步记录 → 先放着等用户选的文件(Forsion Extend 0.10.13+;旧的没有 = 当空)。
+   *  这些文件同时以 reason 'HELD' 列在 skipped 里(给不认 held 的旧界面看),新界面显示时要把它们滤掉。 */
+  held?: AmadeusHeldFile[]
+  /** 与我共享的库的引擎发的状态带这个(不带 binding,和镜像一起画);处理它的待定文件时原样带回 resolveHeld。 */
+  shareKey?: string
   /** 服务端下发的二进制单文件上限(字节,随会员档位);null / 缺 = 还没拉到(或旧引擎)。 */
   maxFileBytes?: number | null
   /** 仅 get() 响应携带:当前活动 vault 在哪一侧。 */
