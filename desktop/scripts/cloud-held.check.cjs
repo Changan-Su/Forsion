@@ -7,7 +7,10 @@
  *  ① 本地侧左栏「云同步」分区挂出「3 篇和云端不一样，等你定」,跳过行不重复数它们(HELD 被滤掉);
  *  ② 「逐篇看」展开每篇和「哪边更新」;勾掉一篇后点「用这台的」→ resolveHeld({ binding: 库根, paths: 其余两篇, choice: 'local' });
  *  ③ 状态栏同步项显示「3 篇等你定」;
- *  ④ 旧 Extend(没有 resolveHeld)时按钮不可点。
+ *  ④ 旧 Extend(没有 resolveHeld)时按钮不可点;
+ *  ⑤ 处理成功(resolveHeld 回同步状态)后不弹「没处理成」;回 { error: 'binding-not-found' } 时弹。
+ *     真 Extend 的同步状态恒带 error 字段(引擎级错误,平时 null),#877 拿 'error' in r 判失败,每次成功都弹失败提示;
+ *     桩回的状态必须和真 Extend 同形(带 error: null),这条才抓得到。
  *
  * 需先 npm run build(读 out/)。用法:node scripts/cloud-held.check.cjs [--shots=<目录>](亮 / 暗各一张)
  */
@@ -32,6 +35,7 @@ function stub(cfg) {
     localHash: `l${i}`.padEnd(64, '0'), localSize: 1200 + i, localMtimeMs: i === 3 ? day(1) : day(24),
     remoteSeq: 1, remoteHash: `r${i}`.padEnd(64, '0'), remoteUpdatedAt: '2026-11-13T05:37:00.000Z', since: day(24),
   }))
+  // 和真 Extend 的 SyncStatus 同形:error 字段恒在(成功时 null),resolveHeld 对按条目同步的库再补上 binding
   const entry = {
     enabled: true, state: 'idle', lastSyncAt: Date.now(), pending: 0, conflicts: 0, error: null, pendingDeletions: 0, maxFileBytes: null,
     skipped: [{ path: `${cfg.cloudName}/${cfg.dir}/Big.pdf`, reason: 'TOO_LARGE' }, ...held.map((h) => ({ path: h.path, reason: 'HELD' }))],
@@ -48,7 +52,8 @@ function stub(cfg) {
     entrySyncDisable: async () => ({ ok: true }),
     entrySyncClosure: async () => ({ pages: [], files: [], subPages: [] }),
     entrySyncMark: async () => ({ ok: true }),
-    ...(cfg.old ? {} : { resolveHeld: async (payload) => { window.__resolveCalls.push(payload); return entry } }),
+    // __resolveFail = true 时回真 Extend 找不到引擎时的那种错误回复(不是同步状态)
+    ...(cfg.old ? {} : { resolveHeld: async (payload) => { window.__resolveCalls.push(payload); return window.__resolveFail ? { error: 'binding-not-found' } : entry } }),
   }
 }
 
@@ -109,11 +114,33 @@ async function run({ old }) {
       await win.evaluate(() => { document.documentElement.dataset.mode = 'light'; document.documentElement.classList.remove('dark') })
       await win.screenshot({ path: path.join(SHOTS, 'held-window.png') })
     }
+    // 失败提示是全局通知(右上角 .ntf-wrap 堆叠,error 级常驻手动关)。同屏超过 4 条会排进队列、不在 DOM 里,
+    // 所以每次点之前先把已有的通知关掉,两条断言用同一个定位器(失败那条证明这个定位器看得见提示)。
+    const failToast = win.locator('.ntf-wrap .ntf.ntf-error', { hasText: '没处理成' })
+    const clearToasts = async () => {
+      await win.locator('.ntf-wrap .ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
+      await win.waitForTimeout(400)
+    }
+    // 点完等到 resolveHeld 被调用、按钮恢复可点(toast 在 finally 放开按钮之前发),再留一拍给通知入场
+    const settle = async (n) => {
+      await win.waitForFunction((k) => window.__resolveCalls.length >= k, n, { timeout: 5000 }).catch(() => {})
+      await win.waitForFunction(() => [...document.querySelectorAll('.amx-tree .amx-held .amx-held-actions button')].every((b) => !b.disabled), null, { timeout: 5000 }).catch(() => {})
+      await win.waitForTimeout(500)
+    }
     await notice.locator('.amx-csd-item input').nth(2).click()
+    await clearToasts()
     await notice.locator('.amx-held-actions button', { hasText: '用这台的' }).click()
-    await win.waitForTimeout(200)
+    await settle(1)
     const calls = await win.evaluate(() => window.__resolveCalls)
     check('② 勾掉一篇后点「用这台的」:只处理勾着的两篇,带上库根', JSON.stringify(calls) === JSON.stringify([{ binding: vault, paths: [`Notes/${DIR}/Lecture 1.md`, `Notes/${DIR}/Lecture 2.md`], choice: 'local' }]), JSON.stringify(calls))
+    const okToasts = await failToast.count()
+    check('⑤ 处理成功(回同步状态,带 error: null):不弹「没处理成」', okToasts === 0, `失败提示 ${okToasts} 条`)
+    await clearToasts()
+    await win.evaluate(() => { window.__resolveFail = true })
+    await notice.locator('.amx-held-actions button', { hasText: '用这台的' }).click()
+    await settle(2)
+    const shown = await failToast.first().waitFor({ timeout: 3000 }).then(() => true, () => false)
+    check('⑤ 回 { error: \'binding-not-found\' }:弹「没处理成」', shown && await failToast.count() === 1, `失败提示 ${await failToast.count()} 条`)
   } finally {
     await app.close()
   }
