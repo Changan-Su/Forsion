@@ -767,7 +767,26 @@ function makePageStore(opts: PageStoreOptions = {}) {
         if (opts?.keepOpenNote && anyScopeHasNote()) return
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
-        if (target) await get().loadPage(target)
+        if (!target) return
+        await get().loadPage(target)
+        // 启动页没装上:是「这篇已经不在了」(在线库冷启动先上屏的树快照比服务端旧,别处刚删掉它)还是读失败?
+        // 按新树判,不解析错误文案(桌面 IPC 过来的错误没有类型)。只读不建:不存在就回落到新树里第一篇,没有就空态。
+        // 新树也拉不到 = 不知道(读失败 ≠ 空):原样留着错误,归编辑器的「加载失败 + 重试」。
+        // 这期间用户自己点开了别的(loadSeq 变了)→ 不顶掉他。库已装上,stale() 比的是开库前的根,这里改按装上的根判。
+        const moved = (): boolean => gen !== restoreGen || get().vaultRoot !== info.root || get().vaultSide !== sideAtStart
+        if (moved() || get().activePage === target || !get().error) return
+        const navSeq = loadSeq
+        try {
+          await get().refreshStructure()
+        } catch {
+          return
+        }
+        if (moved() || loadSeq !== navSeq || get().pendingPage) return
+        const live = get().pages
+        if (live.includes(target)) return // 还在:是读失败,不是不存在
+        const next = live[0]
+        set({ error: null })
+        if (next) await get().loadPage(next)
       } catch (e) {
         if (stale()) return
         // 库没装上才记失败;装上之后 loadPage 出错归编辑器自己的「加载失败 + 重试」。
@@ -849,9 +868,10 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     async openOrCreate(path) {
-      // 一律走 loadPage:主进程 loadPage 本就是「存在则解析、不存在才 newPage」,绝不覆盖已有文件
-      // (缓存 pages[] 可能落后于磁盘,直接 newPage 会把已有笔记清空)。
+      // loadPage 两端都只读(桌面主进程 createIfMissing:false、在线桥 404 = 不存在,都不建),「没有就建」得先显式出生:
+      // birthNoteFile 只新建不覆盖(已存在回 'exists'),pages[] 落后于盘 / 云端也清不掉已有笔记。
       const known = get().pages.includes(path)
+      if (!known && (await birthNoteFile(path)) === 'failed') return
       await get().loadPage(path)
       if (!known) await get().refreshPages()
     },
