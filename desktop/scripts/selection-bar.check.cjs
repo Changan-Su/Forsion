@@ -248,6 +248,8 @@ const card = (win) => win.evaluate(() => {
     preview: el.querySelector('[data-testid="inline-ai-preview"]')?.textContent ?? null,
     acts: [...el.querySelectorAll('button[data-act]')].map((x) => x.getAttribute('data-act')),
     lang: el.querySelector('[data-testid="inline-ai-lang"]')?.value ?? null,
+    service: el.querySelector('[data-testid="inline-ai-service"]')?.textContent ?? null,
+    serviceEngine: el.querySelector('[data-testid="inline-ai-service"]')?.getAttribute('data-engine') ?? null,
     hint: el.querySelector('[data-testid="inline-ai-hint"]')?.textContent ?? null,
     title: el.querySelector('.am-ai-title')?.textContent ?? null,
     hidden: el.hasAttribute('data-anchor-hidden'), opacity: getComputedStyle(el).opacity,
@@ -909,7 +911,8 @@ async function main() {
       const req = inline.at(-1)
       check('聊天:请求照旧走宿主翻译管线(action=translate、选中的字、中文译成英文、目录里的机器翻译模型)', inline.length === before + 1 && req?.action === 'translate'
         && req.selection === '重构解析器的词法阶段' && req.language === 'English' && req.model_id === 'qwen-mt', JSON.stringify(req))
-      check('聊天:卡头照宿主翻译那样写明是机器翻译、哪个模型', /机器翻译.*Qwen MT Flash/.test(c?.hint || ''), JSON.stringify(c))
+      // 插件 0.2.0(2026-11-24)起登记 card.service:卡头那句「机器翻译 · 模型」换成服务按钮,没选翻译服务时写「Forsion 模型」
+      check('聊天:卡头的服务按钮写明这次走 Forsion 模型(没选翻译服务)', c?.service === 'Forsion 模型' && c?.serviceEngine === '', JSON.stringify(c))
       await shot(win, path.join(shots, 'bundled-chat.png'))
       await win.keyboard.press('Escape')
 
@@ -929,7 +932,7 @@ async function main() {
       check('笔记:插件接管后请求仍带前后文与页面说明(术语表)、标题与路径', inline.length === n0 + 1 && nreq?.action === 'translate' && nreq.selection === '解析器再把记号拼成语法树'
         && /词法阶段先切分记号/.test(nreq.before || '') && /最后检查边界用例/.test(nreq.after || '') && /Translate 记号 as token/.test(nreq.page_instructions || nreq.pageInstructions || '')
         && /Glossary\.md$/.test(nreq.page_path || nreq.pagePath || ''), JSON.stringify(nreq))
-      check('笔记:卡头写明谁译的;只是预览,没写盘', /机器翻译.*Qwen MT Flash/.test(nc?.hint || '') && fs.readFileSync(path.join(fourth.home, 'vault', 'Glossary.md'), 'utf8') === NOTE, JSON.stringify(nc))
+      check('笔记:卡头的服务按钮写明走 Forsion 模型;只是预览,没写盘', nc?.service === 'Forsion 模型' && fs.readFileSync(path.join(fourth.home, 'vault', 'Glossary.md'), 'utf8') === NOTE, JSON.stringify(nc))
       await shot(win, path.join(shots, 'bundled-note.png'))
     })
 
