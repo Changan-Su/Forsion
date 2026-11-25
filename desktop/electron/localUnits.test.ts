@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { tmpdir, userInfo } from 'node:os'
+import { join, sep } from 'node:path'
 import { LOCAL_UNIT_MARKER } from '../shared/localUnits'
 import {
   addExistingLocalUnit, clearLocalUnitRunRecord, createLocalUnit, dropStaleLocalUnitRunRecord, defaultUserDataDir, listLocalUnits, localUnitDisplayPath,
@@ -34,6 +35,17 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }) })
 const create = (name = 'Bench A', extra: Record<string, unknown> = {}) => createLocalUnit({ ...ctx, name, icon: '🧪', parentDir: parent, newId, now: 1000, ...extra })
 const registryIds = () => { const r = readLocalUnitRegistry(registryFile); return r.state === 'ok' ? r.registry.units.map((u) => u.id) : null }
 
+function denyMarkerRead(marker: string): () => void {
+  if (process.platform !== 'win32') {
+    chmodSync(marker, 0o000)
+    return () => chmodSync(marker, 0o644)
+  }
+  const account = [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\')
+  const setAcl = (args: string[]): void => { execFileSync('icacls.exe', [marker, ...args, '/Q'], { windowsHide: true }) }
+  setAcl(['/deny', `${account}:(R)`])
+  return () => setAcl(['/remove:d', account])
+}
+
 describe('启动参数', () => {
   it('只认 --forsion-unit=<id>;写法不对 / 两个不同 id = 出现了但 id 为空(拒绝,不回落成默认那台)', () => {
     expect(parseLocalUnitArgs(['/app', `--forsion-unit=${ID(1)}`])).toEqual({ present: true, id: ID(1), quit: false })
@@ -49,10 +61,12 @@ describe('启动参数', () => {
   it('默认 userData / 缺省父目录 / 给人看的路径', () => {
     expect(defaultUserDataDir('/a/forsion-desktop', false)).toBe('/a/forsion-desktop-dev')
     expect(defaultUserDataDir('/a/Forsion', true)).toBe('/a/Forsion')
-    expect(localUnitsDefaultParent(true, '/Users/x')).toBe('/Users/x/Forsion Units')
-    expect(localUnitsDefaultParent(false, '/Users/x')).toBe('/Users/x/.forsion-dev-units') // 不在开发版 home(~/.forsion-dev)里面
-    expect(localUnitDisplayPath('/Users/x/Forsion Units/A', '/Users/x')).toBe('~/Forsion Units/A')
-    expect(localUnitDisplayPath('/Users/xy/A', '/Users/x')).toBe('/Users/xy/A')
+    const home = join(root, 'Users', 'x')
+    const outside = join(root, 'Users', 'xy', 'A')
+    expect(localUnitsDefaultParent(true, home)).toBe(join(home, 'Forsion Units'))
+    expect(localUnitsDefaultParent(false, home)).toBe(join(home, '.forsion-dev-units')) // 不在开发版 home(~/.forsion-dev)里面
+    expect(localUnitDisplayPath(join(home, 'Forsion Units', 'A'), home)).toBe(join('~', 'Forsion Units', 'A'))
+    expect(localUnitDisplayPath(outside, home)).toBe(outside)
   })
 })
 
@@ -216,13 +230,13 @@ describe('加入已有的文件夹:四种情形', () => {
     expect(await addExistingLocalUnit({ ...ctx, dir: copy, text: (k) => `t:${k}` })).toEqual({ ok: false, code: 'io', message: 't:originalMarkerUnreadable' })
     expect(readLocalUnitRegistry(registryFile)).toMatchObject({ registry: { units: [{ id: ID(1), path: dir }] } })
     cpSync(join(copy, LOCAL_UNIT_MARKER), join(dir, LOCAL_UNIT_MARKER))
-    chmodSync(join(dir, LOCAL_UNIT_MARKER), 0o000) // 没权限
+    const restoreRead = denyMarkerRead(join(dir, LOCAL_UNIT_MARKER))
     try {
       expect(await addExistingLocalUnit({ ...ctx, dir: copy })).toMatchObject({ ok: false, code: 'io' })
       expect(readLocalUnitRegistry(registryFile)).toMatchObject({ registry: { units: [{ id: ID(1), path: dir }] } })
       expect(await addExistingLocalUnit({ ...ctx, dir })).toMatchObject({ ok: false, code: 'not_a_unit' })
       expect(resolveLocalUnitLaunch({ id: ID(1), registryFile, channel: 'dev' })).toEqual({ ok: false, reason: 'mismatch' })
-    } finally { chmodSync(join(dir, LOCAL_UNIT_MARKER), 0o644) }
+    } finally { restoreRead() }
   })
 
   it('文件夹和默认那台的数据沾边:加入 / 新建 / 打开 / 启动都拒;旧的开发版位置 ~/.forsion-dev/units 里的老 Unit 照样能开', async () => {
@@ -321,7 +335,7 @@ describe('改名 / 移除 / 列表', () => {
     expect(snap.registry).toBe('ok')
     expect(snap.self).toMatchObject({ kind: 'folder', id: ID(2), name: 'S' })
     expect(snap.units.map((u) => [u.name, u.state, u.current])).toEqual([['R', 'running', false], ['S', 'running', true], ['M', 'missing', false], ['X', 'mismatch', false]])
-    expect(snap.defaultParentDisplay).toBe('~/default-parent')
+    expect(snap.defaultParentDisplay).toBe(`~${sep}default-parent`)
     expect(lookupLocalUnit(ctx, ID(3))).toMatchObject({ ok: false, code: 'not_a_unit' })
     expect(lookupLocalUnit(ctx, ID(4))).toMatchObject({ ok: false, code: 'channel_mismatch' })
     expect(lookupLocalUnit(ctx, 'nope')).toMatchObject({ ok: false, code: 'not_found' })
@@ -515,7 +529,8 @@ describe('添加到桌面:本机 Unit 这一种', () => {
     expect(await createWindowShortcut(LOCAL_UNIT_SHORTCUT, { id: ID(1), name: 'Work' }, deps)).toEqual({ ok: true, path: join(desktop, 'Work.app') })
     expect(readFileSync(join(desktop, 'Work.app', 'Contents', 'Info.plist'), 'utf8')).toContain(`<key>ForsionLocalUnitId</key>\t<string>${ID(1)}</string>`)
     expect(await createWindowShortcut(LOCAL_UNIT_SHORTCUT, { id: ID(1), name: 'Work' }, { ...deps, isPackaged: false })).toEqual({ ok: false, code: 'unpackaged' })
-    expect(macAppBundleOf('/Applications/Forsion.app/Contents/MacOS/Forsion')).toBe('/Applications/Forsion.app')
+    const appBundle = join(root, 'Applications', 'Forsion.app')
+    expect(macAppBundleOf(join(appBundle, 'Contents', 'MacOS', 'Forsion'))).toBe(appBundle)
     expect(macAppBundleOf('/opt/forsion/forsion')).toBeUndefined()
   })
 })
