@@ -7,7 +7,8 @@
  *  Not here, on purpose: autolinkSerializer (bare URLs are text in this grammar, so a bare spelling would not round-trip;
  *  a url-text link is written `<url>`), the notes' paragraph / list extensions (indent, block colour, verbatim). */
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
-import { $node, $remark } from '@milkdown/kit/utils'
+import { $node, $prose, $remark } from '@milkdown/kit/utils'
+import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import {
   blockquoteAttr, blockquoteKeymap, blockquoteSchema, bulletListAttr, bulletListKeymap, bulletListSchema, codeBlockAttr,
   codeBlockKeymap, codeBlockSchema, createCodeBlockCommand, createCodeBlockInputRule, docSchema, emphasisAttr,
@@ -69,6 +70,27 @@ const safeLinkSchema = linkSchema.extendSchema((prev) => (ctx) => {
   return { ...base, toDOM: (mark) => ['a', { ...ctx.get(linkAttr.key)(mark), ...mark.attrs, href: SAFE_HREF.test(String(mark.attrs.href ?? '').trim()) ? mark.attrs.href : null }] }
 })
 
+/** One input event that inserts several characters (an IME committing a phrase, macOS text replacement, dictation, a tool's
+ *  insertText) is put in the doc first, then the input rules run over it with an empty string, the way they already do
+ *  after compositionend. The mark rules assume only the last typed character is missing from the doc (the runner passes
+ *  `start = from - (match[0].length - text.length)`), so a chunk that itself closes `**…**` / `*…*` / `~~…~~` / `` `…` ``
+ *  was dropped whole (or threw a RangeError) instead of being formatted. Only chunks carrying a mark delimiter are taken;
+ *  everything else goes the default way. A `$prose` plugin sits before the input rules plugin, so it is asked first.
+ *  The notes editor uses the same rules and runner (amadeus/blocks/markdown/anchoredMarkRules) and is not covered here. */
+const MARK_DELIMITER = /[*_~`]/
+const multiCharInput = $prose(() => new Plugin({
+  key: new PluginKey('chatBoxMultiCharInput'),
+  props: {
+    handleTextInput(view, from, to, text, deflt) {
+      if (view.composing || text.length < 2 || !MARK_DELIMITER.test(text)) return false
+      view.dispatch((deflt ? deflt() : view.state.tr.insertText(text, from, to)).scrollIntoView())
+      const { empty, head } = view.state.selection
+      if (empty) view.someProp('handleTextInput', (f) => f(view, head, head, '', () => view.state.tr))
+      return true
+    },
+  },
+}))
+
 function inlineParts(format: ChatBoxFormat): MilkdownPlugin[] {
   return [
     // Schema. ⚠️ paragraph before any other block: the first block type is the default one (a trimmed preset that
@@ -85,7 +107,7 @@ function inlineParts(format: ChatBoxFormat): MilkdownPlugin[] {
     remarkMarker,
     attentionSerializer,
     // Typing: `**x**` / `*x*` / `_x_` / `` `x` `` / `~~x~~` turn into marks, ⌘B ⌘I ⌘E and the strikethrough key.
-    r.emphasisStar, r.emphasisUnderscore, r.inlineCode, r.strong, r.strikethrough,
+    r.emphasisStar, r.emphasisUnderscore, r.inlineCode, r.strong, r.strikethrough, multiCharInput,
     toggleStrongCommand, toggleEmphasisCommand, toggleInlineCodeCommand, toggleStrikethroughCommand,
     strongKeymap, emphasisKeymap, inlineCodeKeymap, strikethroughKeymap,
   ].flat()
