@@ -138,6 +138,22 @@ it('rejects a separately listed hard link on every volume', async () => {
   expect((await fs.readdir(root)).sort()).toEqual(['note.md', 'other.md'])
 })
 
+it('does not mistake different parent directory spellings for the same rename directory', async () => {
+  const { root, vault } = await setup()
+  await vault.writeTextFile('Notes/note.md', 'source')
+  const target = path.join(root, 'notes', 'Note.md')
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  // On a case-sensitive volume both parents can exist. On an insensitive
+  // volume this spelling is still outside the same-directory rename contract.
+  await fs.writeFile(target, 'target', { flag: 'wx' }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EEXIST') throw error
+  })
+  const expectedTarget = await fs.readFile(target, 'utf8')
+  await expect(vault.moveEntry('Notes/note.md', 'notes/Note.md', 'collision')).rejects.toThrow('collision')
+  expect(await fs.readFile(path.join(root, 'Notes', 'note.md'), 'utf8')).toBe('source')
+  expect(await fs.readFile(target, 'utf8')).toBe(expectedTarget)
+})
+
 it('1000 file lifecycles retain only live ledger entries, and the cache has a fixed capacity', async () => {
   const { vault } = await setup()
   await vault.writeTextFile('live.md', 'keep')

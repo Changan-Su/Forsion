@@ -494,11 +494,15 @@ export class VaultManager {
     const dstAbs = this.resolveInVault(dstRel)
     let caseAlias = false
     if (collisionMessage && await this.pathExists(dstRel)) {
-      // On a case-insensitive volume both paths resolve, but only the source name is listed.
+      const sourceParent = path.dirname(srcAbs)
+      const sourceName = path.basename(srcAbs)
+      const targetName = path.basename(dstAbs)
+      // Restrict aliases to a rename within the same directory spelling. On a
+      // case-insensitive volume both paths resolve, but only the source name is listed.
       // Distinct directory entries still collide, even if they are hard links to the same file.
-      if (srcAbs !== dstAbs && srcAbs.toLowerCase() === dstAbs.toLowerCase()) {
-        const names = await fs.readdir(path.dirname(srcAbs))
-        caseAlias = names.includes(path.basename(srcAbs)) && !names.includes(path.basename(dstAbs))
+      if (sourceParent === path.dirname(dstAbs) && sourceName !== targetName && sourceName.toLowerCase() === targetName.toLowerCase()) {
+        const names = await fs.readdir(sourceParent)
+        caseAlias = names.includes(sourceName) && !names.includes(targetName)
       }
       if (!caseAlias) throw new Error(collisionMessage)
     }
