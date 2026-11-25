@@ -157,13 +157,24 @@ async function main() {
         await pause(150)
         const resized = await app.evaluate(() => globalThis.__miniProbe.w.getContentBounds())
         check('resizing an expanded docked card changes its width', resized.width === before.width + 40 && resized.x === before.x, { before, resized })
-        await app.evaluate(() => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea; p.cursor = { x: a.x + a.width / 2, y: a.y + a.height / 2 } })
-        await pause(500)
+        // At 150% DPI the monitor center can lie inside the enlarged card.
+        // Choose the farther edge of the work area, beyond the hover margin.
+        const left = a.x
+        const right = a.x + a.width - 1
+        const leftGap = resized.x - left
+        const rightGap = right - (resized.x + resized.width)
+        const gap = Math.max(leftGap, rightGap)
+        const cursor = { x: rightGap >= leftGap ? right : left, y: resized.y + Math.floor(resized.height / 2) }
+        if (gap < 32) throw new Error(`Mini docking probe needs room to leave the enlarged card: ${JSON.stringify({ resized, cursor, gap })}`)
+        await app.evaluate((_, cursor) => { globalThis.__miniProbe.cursor = cursor }, cursor)
+        const folded = await mini.waitForFunction(() => Math.abs(document.querySelector('.mini-card-shell').getBoundingClientRect().right - 14) <= 1,
+          null, { timeout: 3000 }).then(() => true, () => false)
         const peek = await mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return r.right })
-        check('resized docked card folds back to a 14 DIP handle', Math.abs(peek - 14) <= 1, peek)
+        check('resized docked card folds back to a 14 DIP handle', folded, { peek, resized, cursor, gap })
         await app.evaluate(() => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea, b = p.w.getContentBounds(); p.cursor = { x: a.x + 7, y: b.y + b.height / 2 } })
-        await pause(500)
-        check('resized docked handle can expand again', await mini.evaluate(() => Math.abs(document.querySelector('.mini-card-shell').getBoundingClientRect().x) < 1))
+        const reopened = await mini.waitForFunction(() => Math.abs(document.querySelector('.mini-card-shell').getBoundingClientRect().x) < 1,
+          null, { timeout: 3000 }).then(() => true, () => false)
+        check('resized docked handle can expand again', folded && reopened)
       }
       // A deliberate drag away must cancel docking and release the native input mask.
       await app.evaluate((_, size) => { const p = globalThis.__miniProbe, a = globalThis.__miniProbeArea; p.w.setContentBounds({ ...p.w.getContentBounds(), x: a.x + 50, y: a.y + 50, ...size }) }, meta.cardSize)
