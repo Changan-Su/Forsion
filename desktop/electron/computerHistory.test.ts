@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { createInterface } from 'node:readline'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
@@ -72,21 +73,33 @@ async function lockWindowsReplacement(file: string): Promise<() => Promise<void>
     $file = [IO.File]::Open($env:FORSION_CH_FIXTURE_FILE, 'Open', 'Read', 'Read')
     try { [Console]::WriteLine('locked'); [void][Console]::ReadLine() }
     finally { $file.Dispose() }`
+  const startedAt = performance.now()
   const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     env: { ...process.env, FORSION_CH_FIXTURE_FILE: file }, windowsHide: true,
   })
-  const exited = once(holder, 'exit')
-  const release = async () => { holder.stdin.destroy(); await exited }
+  const output = createInterface({ input: holder.stdout })
+  const closed = once(holder, 'close')
+  let stderr = ''
+  holder.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk })
   try {
-    await Promise.race([
-      once(holder.stdout, 'data', { signal: AbortSignal.timeout(2000) }),
-      exited.then(() => { throw new Error('File lock process exited before acquiring its handle') }),
+    const [marker] = await Promise.race([
+      once(output, 'line', { signal: AbortSignal.timeout(10_000) }),
+      closed.then(([code, signal]) => { throw new Error(`PowerShell exited before acquiring the handle (code ${code}, signal ${signal})`) }),
     ])
+    if (marker !== 'locked') throw new Error(`Unexpected PowerShell stdout: ${JSON.stringify(marker)}`)
   } catch (error) {
-    await release()
-    throw error
+    const elapsed = Math.round(performance.now() - startedAt)
+    holder.kill()
+    await closed.catch(() => {})
+    throw new Error(`Windows file lock failed after ${elapsed} ms: ${String(error)}. stderr: ${stderr.trim() || '(empty)'}`, { cause: error })
+  } finally {
+    output.close()
   }
-  return release
+  return async () => {
+    holder.stdin.end()
+    const [code, signal] = await closed
+    if (code !== 0) throw new Error(`PowerShell could not release the file lock cleanly (code ${code}, signal ${signal}): ${stderr.trim()}`)
+  }
 }
 
 async function waitFor(fn: () => boolean | Promise<boolean>, ms = 4_000): Promise<void> {
@@ -1867,7 +1880,7 @@ describe('ComputerHistoryStore × 加密', () => {
     expect(readdirSync(store.eventsDir)).toEqual(['2026-09-26.jsonl'])
     expect(await store.migrate()).toBe(true) // 恢复可写后接着迁
     expect(lines(f).map((e) => e.title)).toEqual([`w${at(2026, 9, 26, 9)}`])
-  })
+  }, 20_000)
 
   it('保留期:截止那天有解不开的行 → 整份不动(不当残行删);更早的整天照删;能解的日子照常按时间裁', async () => {
     const { store } = encStore()

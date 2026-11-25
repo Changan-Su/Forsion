@@ -138,6 +138,12 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   box-shadow: var(--card-shadow);
 }
 .mini-card-cap:last-child { flex-shrink: 0; }
+.mini-card-floating[data-chat-navigation] { --mini-chat-navigation-space: 34px; }
+.mini-card-chat-navigation {
+  position: absolute;
+  top: var(--mini-top);
+  left: 7px;
+}
 .mini-card-floating .mini-card-space,
 .mini-card-floating .mini-card-action,
 .mini-card-picker { border-radius: var(--radius-pill, 999px); }
@@ -254,11 +260,11 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
 /* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
 .mini-card-shell .t2-toolbar { display: none; }
 .mini-card-shell .t2-stream-inner {
-  padding: calc(var(--mini-top, 0px) + 6px) 12px calc(var(--t2-composer-h, 88px) + 6px);
+  padding: calc(var(--mini-top, 0px) + var(--mini-chat-navigation-space, 0px) + 6px) 12px calc(var(--t2-composer-h, 88px) + 6px);
   gap: 18px;
 }
 .mini-card-shell .t2-chat-col > .t2-empty {
-  inset: var(--mini-top, 0px) 0 var(--t2-composer-h, 88px);
+  inset: calc(var(--mini-top, 0px) + var(--mini-chat-navigation-space, 0px)) 0 var(--t2-composer-h, 88px);
   gap: 8px;
   padding: 14px 18px;
 }

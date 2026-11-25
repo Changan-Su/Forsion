@@ -10,6 +10,7 @@ import { useApp } from './stores/appStore'
 import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace, isPinned, mainOpensBeside } from '@lcl/engine'
 import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
 import { registerMessages, translate } from './i18n'
+import { windowKind } from './windowKind'
 
 registerMessages({
   'orbits.rotate.queued': { zh: '已开新会话，正在后台总结上一段的记忆', en: 'New session started; summarizing the previous one in the background' },
@@ -55,6 +56,13 @@ function pinnedChatTarget(): { id: string; follows: boolean } | undefined {
 
 export function openSession(id: string, opts?: { newTab?: boolean }): void {
   const ws = useWorkspace.getState()
+  const miniChat = windowKind() === 'mini' ? ws.getActiveLeaf() : undefined
+  if (miniChat?.type === 'chat') {
+    // Mini has one content surface. Keep it pinned so history can restore each
+    // session and the compact chat retains its window-specific parameters.
+    ws.navigateLeaf(miniChat.id, 'chat', { ...miniChat.params, sessionId: id, followActive: false, miniSurface: true })
+    return
+  }
   // 悬停预览里点了 Tangu 的会话(人在别的 Space):开在当前标签旁边(已经开着就切过去,见引擎 openBeside.ts),
   // 不动本 Space 的跟随聊天,也不改活动会话 —— 那是 Tangu 自己的状态,真切过去才算数。
   if (mainOpensBeside()) { ws.openView('chat', { sessionId: id, followActive: false }, 'main', { newTab: true }); return }
