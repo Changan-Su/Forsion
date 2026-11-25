@@ -109,6 +109,9 @@ export default {
                       state.actions = (state.actions || 0) + 1;
                     }
                     if (t.name === 'observe_ui' && state.actions) state.checked = true;
+                    for (const item of images) {
+                      if (tcx.collectImage(item) === false) throw Error('The model image queue did not accept the test screenshot.');
+                    }
                     state.id = id;
                     const ext = image.startsWith('data:image/png;') ? 'png' : 'jpg';
                     writeFileSync(
@@ -133,7 +136,6 @@ export default {
                       }),
                     );
                   }
-                  for (const item of images) tcx.collectImage(item);
                   allowed.set(tcx.sessionId, state);
                   return text;
                 },

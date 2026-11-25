@@ -242,7 +242,9 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
       ? (img: { url: string; name?: string; untrusted?: string }) => {
           if (img && typeof img.url === 'string' && img.url && images.length < MAX_BRIDGE_IMAGES_PER_CALL) {
             images.push({ url: img.url, ...(typeof img.untrusted === 'string' && img.untrusted ? { untrusted: img.untrusted } : {}) });
+            return true;
           }
+          return false;
         }
       : undefined;
     const finish = (text: string, isError: boolean, extra: { metadata?: any; artifactPath?: string } = {}): Outcome => {
