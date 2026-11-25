@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fitCards, MIN_BODY, openOf, stepOpen, type CardSig, type FitCard } from './summaryOpen'
+import { deskPairTight, fitCards, MIN_BODY, openOf, REOPEN_SLACK, squeezedDeskCard, stepOpen, type CardSig, type FitCard } from './summaryOpen'
 
 const sig = (id: string, count: number, dflt = false, live?: boolean): CardSig => ({ id, count, dflt, live })
 
@@ -121,5 +121,20 @@ describe('fitCards', () => {
     // 全开 = 47×3 + 200 + 100 + 100 + 20 = 561
     expect(fitCards(cards, 570, 10, ['outputs']).squeezed).toEqual(['outputs'])
     expect(fitCards(cards, 590, 10, ['outputs']).squeezed).toEqual([])
+  })
+})
+
+describe('two Desk cards (Human Desk + Agent Desk) both want to be open', () => {
+  it('tight only when both bodies do not fit; reopening needs REOPEN_SLACK extra room', () => {
+    expect(deskPairTight(100, 800, 1000, false)).toBe(false)
+    expect(deskPairTight(100, 920, 1000, false)).toBe(true)
+    expect(deskPairTight(100, 890, 1000, true)).toBe(true) // fits by 10 < REOPEN_SLACK: stay folded, no flip-flop
+    expect(deskPairTight(100, 900 - REOPEN_SLACK - 1, 1000, true)).toBe(false)
+  })
+  it('the card you touched last stays open; untouched → Human Desk stays open', () => {
+    expect(squeezedDeskCard(false, 'desk')).toBeNull()
+    expect(squeezedDeskCard(true, undefined)).toBe('desk')
+    expect(squeezedDeskCard(true, 'humandesk')).toBe('desk')
+    expect(squeezedDeskCard(true, 'desk')).toBe('humandesk')
   })
 })

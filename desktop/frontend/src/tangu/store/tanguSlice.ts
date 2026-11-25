@@ -29,8 +29,9 @@ import { track } from '../../achievements/store'
 import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
 import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskIdentity, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
+import { HUMAN_DESK_PERSIST_KEY, adoptHumanDesk, deskSideOf, humanDeskPauseMs, humanDeskReduce, humanDeskSessionsChanged, humanWatching, packHumanDeskMap, unpackHumanDeskMap, type DeskSide, type HumanDeskAction, type HumanDeskCore, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
@@ -970,17 +971,105 @@ function installDeskSync(): void {
     const incoming = unpackDeskMap(e.newValue)
     const touched = deskSessionsChanged(unpackDeskMap(e.oldValue), incoming)
     if (!touched.length) return
+    const news: string[] = []
     store.set((s) => {
       let changed = false
       const next = { ...s.deskBySession }
       for (const sid of touched) {
         const cur = next[sid]
-        const adopted = adoptDeskArrangement(cur, incoming[sid])
+        let adopted = adoptDeskArrangement(cur, incoming[sid])
+        // 本窗 Human Desk 展开着:对面的「展开」不带过来(本窗还没有这条摆法时 adopt 会借对面的 mode;右边一次只展开一块)
+        if (adopted.mode === 'open' && cur?.mode !== 'open' && s.humanDeskBySession[sid]?.open) adopted = { ...adopted, mode: undefined }
         if (adopted !== cur) { next[sid] = adopted; changed = true }
+        const had = new Set((cur?.items || []).map(deskIdentity))
+        if (adopted.items.some((x) => !had.has(deskIdentity(x))) || (adopted.fresh && adopted.fresh !== cur?.fresh)) news.push(sid)
       }
       return changed ? { deskBySession: next } : {}
     })
+    for (const sid of news) humanSeesAgentNews(sid)
   })
+}
+
+// ── Human Desk(11-23 第三轮):快照、两扇窗同步、自动暂停 ──
+
+function restoredHumanDesks(raw: string | null): Record<string, HumanDeskState> {
+  const out: Record<string, HumanDeskState> = {}
+  for (const [sid, core] of Object.entries(unpackHumanDeskMap(raw))) out[sid] = core.item ? { ...core, paused: true } : core
+  return out
+}
+
+/** 只覆盖这次动过的会话(同 flushDesk):Human Desk 的动作全是你的手,立刻落,另一扇窗马上跟。写失败静默。 */
+function persistHumanDesk(sessionId: string): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const disk = unpackHumanDeskMap(localStorage.getItem(HUMAN_DESK_PERSIST_KEY))
+    const mine = store.get().humanDeskBySession[sessionId]
+    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped } as HumanDeskCore
+    else delete disk[sessionId]
+    localStorage.setItem(HUMAN_DESK_PERSIST_KEY, packHumanDeskMap(disk))
+  } catch { /* ignore */ }
+}
+
+let humanDeskSyncInstalled = false
+function installHumanDeskSync(): void {
+  if (humanDeskSyncInstalled || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+  humanDeskSyncInstalled = true
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== HUMAN_DESK_PERSIST_KEY || e.newValue === null) return
+    const incoming = unpackHumanDeskMap(e.newValue)
+    const touched = humanDeskSessionsChanged(unpackHumanDeskMap(e.oldValue), incoming)
+    if (!touched.length) return
+    store.set((s) => {
+      let changed = false
+      const next = { ...s.humanDeskBySession }
+      for (const sid of touched) {
+        const cur = next[sid]
+        const adopted = adoptHumanDesk(cur, incoming[sid])
+        if (adopted !== cur) { next[sid] = adopted; changed = true }
+      }
+      return changed ? { humanDeskBySession: next } : {}
+    })
+  })
+}
+
+/** 切走 Human Desk(切到 Agent Desk / 收起)时起表,满时长还没回来 → 这扇窗暂停在看(引用芯片随之摘掉);回来(展开它)就撤表、接着看。
+ *  表是每扇窗自己的:另一扇窗闲在 Agent Desk 上不会把你正在写的这扇暂停。 */
+const humanPauseTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function armHumanPause(sessionId: string): void {
+  if (humanPauseTimers.has(sessionId)) return // 「离开」从第一次切走算起,来回切 Agent / 收起不重新计时
+  if (!humanWatching(store.get().humanDeskBySession[sessionId])) return
+  humanPauseTimers.set(sessionId, setTimeout(() => {
+    humanPauseTimers.delete(sessionId)
+    store.set((s) => {
+      const h = s.humanDeskBySession[sessionId]
+      if (!h?.item || h.paused || deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human') return {}
+      return { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...h, paused: true } } }
+    })
+  }, humanDeskPauseMs()))
+}
+function disarmHumanPause(sessionId: string): void {
+  const t = humanPauseTimers.get(sessionId)
+  if (t) { clearTimeout(t); humanPauseTimers.delete(sessionId) }
+}
+
+/** Agent Desk 被展开了(你点了它的卡 / 切换件 / 引用,或 Agent 在两块都收着时撑开):Human Desk 收回,切换件上的点算看过了,起暂停表。 */
+function humanYieldsToAgent(sessionId: string): void {
+  const h = store.get().humanDeskBySession[sessionId]
+  if (h && (h.open || h.agentDot)) {
+    store.set((s) => {
+      const c = s.humanDeskBySession[sessionId]
+      return c ? { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...c, open: undefined, agentDot: undefined } } } : {}
+    })
+  }
+  armHumanPause(sessionId)
+}
+
+/** Human Desk 展开着时 Agent 往 Agent Desk 放了东西:不切换右边(r3 §5「Agent 不抢」),只在切换件「Agent」那段亮点。 */
+function humanSeesAgentNews(sessionId: string): boolean {
+  const h = store.get().humanDeskBySession[sessionId]
+  if (!h?.open || deskSideOf(store.get().deskBySession[sessionId]?.mode, h.open) !== 'human') return false
+  if (!h.agentDot) store.set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], agentDot: true } } }))
+  return true
 }
 
 const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>>()
@@ -1225,6 +1314,9 @@ export interface TanguState {
   engineNoticesBySession: Record<string, EngineNoticeUi[]>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
   deskBySession: Record<string, DeskState>
+  /** Human Desk(你动手、Agent 跟着看,11-23 第三轮):每条会话一样东西 + 在看 / 停止 + 最近放过的。core 落盘、两扇窗同步;
+   *  展开 / 自动暂停 / 切换件上的点 / 你在第几节是每扇窗自己的(见 stores/humanDeskPlan.ts)。 */
+  humanDeskBySession: Record<string, HumanDeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
   voiceOnByAgent: Record<string, boolean>
   unread: Set<string>
@@ -1331,6 +1423,11 @@ export interface TanguState {
   patchDesk(sessionId: string, patch: Partial<DeskState>): void
   /** Agent Desk 摆法动作(手动控制 ▾ / ⋯ / 拖放 / 钉住 / 清空;纯决策在 deskPlan.deskReduce)。立刻落盘。 */
   deskAct(sessionId: string, action: DeskAction): void
+  /** Human Desk 动作:放上来(顺带把右边切到 Human Desk)/ 拿掉 / 停止 / 继续看(纯决策在 humanDeskPlan.humanDeskReduce,立刻落盘);
+   *  section = 展开态算出的「你在第几节」(内存)。 */
+  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] } | { type: 'agentNews' }): void
+  /** 右边展开哪一块(两块共用、一次一块):'agent' / 'human' / null = 都收起。切走 Human Desk 满一分钟自动暂停在看。 */
+  setDeskSide(sessionId: string, side: DeskSide): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
@@ -1403,6 +1500,7 @@ export function createTanguSlice(set: StoreApi<AppState>['setState'], get: Store
   store = { get, set }
   initFirstRun() // 首次运行(遥测 v3)的首启时刻:建 store = 开窗那一刻,早于首启引导(sinceFirstLaunchS 要把引导算进去)
   installDeskSync() // 两扇窗同一条会话的 Desk 摆法经 localStorage 同步
+  installHumanDeskSync() // Human Desk 同理(只同步放着的东西、最近放过的、停止)
   return tanguMembers(set, get)
 }
 
@@ -1473,6 +1571,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   configBySession: {},
   // 上次各会话展示的内容随快照复活("上次展示的东西还展示着");直播格是瞬态,不在快照里
   deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
+  // 重启后 Human Desk 收着(展开是每扇窗自己的、不落盘)→ 算你不在场:暂停,展开它才接着看
+  humanDeskBySession: typeof localStorage !== 'undefined' ? restoredHumanDesks(localStorage.getItem(HUMAN_DESK_PERSIST_KEY)) : {},
   voiceOnByAgent: {},
   runningBySession: {},
   projectSettingsByPath: {},
@@ -3163,12 +3263,16 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       ? cur.size
       : (spec.size === 'wide' ? 'wide' : spec.size === 'half' ? 'half' : cur?.size || 'half')
     // size 也是形态指令(用户裁决):card=收回卡片,half/wide=展开侧板;不带 size=保持现状。
+    // Human Desk 展开着:Agent 不抢右边(r3 §5),half / wide 也不撑开,只在切换件「Agent」那段亮点(humanSeesAgentNews)
+    const humanHere = deskSideOf(cur?.mode, get().humanDeskBySession[sessionId]?.open) === 'human'
     const mode: DeskState['mode'] = spec.size === 'card' ? undefined
-      : spec.size === 'half' || spec.size === 'wide' ? 'open' : cur?.mode
+      : (spec.size === 'half' || spec.size === 'wide') && !humanHere ? 'open' : cur?.mode
     // 落位听钉住(deskReduce 'present'):钉住的格不动,第一样进没钉的格,第二样进「最近放过的」;一格没钉 = 原样整个换掉
     const placed = deskReduce(cur ?? { items: [] }, { type: 'present', items, note: typeof spec.note === 'string' ? spec.note : undefined })
     set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, ...placed, size, mode } as DeskState } }))
     persistDeskSoon(sessionId)
+    if (humanHere) humanSeesAgentNews(sessionId)
+    else if (mode === 'open' && cur?.mode !== 'open') humanYieldsToAgent(sessionId)
   },
   deskAct: (sessionId, action) => {
     const prev = get().deskBySession[sessionId]
@@ -3209,6 +3313,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...deskReduce(c, { type: 'land', item, toolId }) } } }
     })
     persistDeskSoon(sessionId)
+    humanSeesAgentNews(sessionId)
   },
   deskLiveSync: (sessionId, msgId, toolId, tool) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
@@ -3248,6 +3353,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next } } }
     })
     if (changed) persistDeskSoon(sessionId) // 直播格本身不落盘,但它可能挤掉了要落盘的磁盘格
+    if (changed) humanSeesAgentNews(sessionId)
   },
   deskLiveClear: (sessionId, toolId) => {
     let changed = false
@@ -3298,6 +3404,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next, mode: 'open' as const } } }
     })
     persistDeskSoon(sessionId, true)
+    humanYieldsToAgent(sessionId) // 你点的引用 / 「正在编辑」:右边换成 Agent Desk
   },
   patchDesk: (sessionId, patch) => {
     set((s) => {
@@ -3306,6 +3413,46 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...patch } } }
     })
     persistDeskSoon(sessionId)
+    // 一次只展开一块:Agent Desk 展开了,Human Desk 就收回(Agent 自己撑开的那几处在调用前已判过 Human Desk 在不在)
+    if (patch.mode === 'open') humanYieldsToAgent(sessionId)
+    else if ('mode' in patch) armHumanPause(sessionId)
+  },
+  humanDeskAct: (sessionId, action) => {
+    if (action.type === 'agentNews') { humanSeesAgentNews(sessionId); return } // 插件结果卡片那条落点(PluginToolCard)
+    if (action.type === 'section') {
+      const h = get().humanDeskBySession[sessionId]
+      if (!h || JSON.stringify(h.section ?? null) === JSON.stringify(action.section ?? null)) return
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], section: action.section } } }))
+      return
+    }
+    const prev = get().humanDeskBySession[sessionId] ?? {}
+    const next = humanDeskReduce(prev, action)
+    // 「继续看」也撤掉自动暂停(你明说要接着看);放上来 / 拿掉换了东西,小节作废
+    const runtime = action.type === 'resume' && prev.paused ? { paused: undefined }
+      : action.type === 'put' || action.type === 'remove' ? { section: undefined } : null
+    if (next !== prev || runtime) {
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), ...next, ...runtime } } }))
+      if (next !== prev) persistHumanDesk(sessionId)
+    }
+    // 你往 Human Desk 放东西 = 你的动作:右边切到 Human Desk(r3 §5)
+    if (action.type === 'put') { get().setDeskSide(sessionId, 'human'); return }
+    if (action.type === 'retarget') return // 改名跟路径:在不在场、离开的表都不动
+    disarmHumanPause(sessionId)
+    // 不在 Human Desk 上点的「继续看」(卡片上):接着看,离开的表重新起
+    if (action.type === 'resume' && deskSideOf(get().deskBySession[sessionId]?.mode, get().humanDeskBySession[sessionId]?.open) !== 'human') armHumanPause(sessionId)
+  },
+  setDeskSide: (sessionId, side) => {
+    const cur = get().deskBySession[sessionId]
+    if (side === 'agent') { get().patchDesk(sessionId, { mode: 'open' }); return }
+    if (cur?.mode === 'open') get().patchDesk(sessionId, { mode: undefined })
+    if (side === 'human') {
+      disarmHumanPause(sessionId)
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), open: true, paused: undefined } } }))
+      return
+    }
+    const h = get().humanDeskBySession[sessionId]
+    if (h?.open) set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], open: undefined } } }))
+    armHumanPause(sessionId)
   },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
