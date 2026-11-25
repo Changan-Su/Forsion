@@ -1,3 +1,4 @@
+import { validateBrowserUrl } from '../core/browserUrl.js';
 import { createHash } from 'node:crypto';
 import { deps } from '../seams/runtime.js';
 import { tanguHome } from '../core/tanguHome.js';
@@ -71,6 +72,7 @@ import type { BillingServices } from '../seams/billing.js';
 
 /** 按引用的运行时构建块——核心同一模块图（见文件头 P0）。 */
 const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
+  validateBrowserUrl,
   createTanguModule,
   createHttpBrain,
   createNoopBilling,

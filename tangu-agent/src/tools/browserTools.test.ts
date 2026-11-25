@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -159,8 +159,17 @@ describe('user browser attach (Chrome remote debugging)', () => {
     process.env.TANGU_BROWSER_CDP = 'off';
     const out = JSON.parse(String(await browserTabsProvider.tools()[0].execute({}, ctxOf())));
     expect(out).toMatchObject({ success: false, connected: false });
-    expect(out.error).toMatch(/Tangu for Chrome" extension/); // 09-24 起首选扩展(不弹授权框、有标签组、后台操作)
+    expect(out.error).toContain('Forsion Clip');
+    expect(out.error).toContain('launch_browser');
+    expect(out.error).not.toContain('chrome://inspect');
     expect(out.error).toMatch(/Settings → Browser/);
+  });
+
+  it('explains the optional approval-based Chrome connection in automatic discovery mode', () => {
+    vi.stubEnv('TANGU_BROWSER_CDP', 'auto');
+    try {
+      expect(__browserToolInternals.notConnectedHint()).toContain('chrome://inspect/#remote-debugging');
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('gates clicks/typing/back only while driving the user\'s browser, and never in full-auto', () => {
