@@ -16,6 +16,7 @@
  *   W3 Windows,带 blockmap 但官网没有当前版本的 blockmap(404)→ 回落整包,sha512 照样过
  *   W4 Windows,缓存里留着更早一版的 current.blockmap(整包更新 / 手动装过之后)、不做核对 → 白下一遍差量再整包(负对照)
  *   W5 同 W4,先跑 dropStaleCurrentBlockmap(updater.ts 开差量前做的)→ 差量
+ *   W6 同 W1,但 provider 用 electron-updater 给 custom 源的缺省多 Range(负对照)→ 假 OSS 只回第一段 → 差量失败、回落整包
  *   M1 mac,带 blockmap,缓存里有上次应用内更新留下的 update.zip → 差量
  *   M2 mac,带 blockmap,没有 update.zip(手动装 dmg 之后第一次更新)→ 整包
  *
@@ -200,7 +201,9 @@ async function runScenario(src, data, s) {
   const { url, differential } = src.websiteDownload(srv.api, platform, installer)
   updater.disableDifferentialDownload = !differential
   if (s.guard) s.dropped = await src.dropStaleCurrentBlockmap(cacheDir, mac ? 'update.zip' : 'installer.exe')
-  updater.setFeedURL({ provider: 'custom', updateProvider: src.WebsiteUpdateProvider, installer, downloadUrl: url, differential })
+  // W6:撤掉 WebsiteUpdateProvider 的单 Range,回到 electron-updater 对 custom 源的缺省(多 Range)
+  const Provider = s.multiRange ? class extends src.WebsiteUpdateProvider { get isUseMultipleRangeRequest() { return true } } : src.WebsiteUpdateProvider
+  updater.setFeedURL({ provider: 'custom', updateProvider: Provider, installer, downloadUrl: url, differential })
 
   const started = Date.now()
   let error = null
@@ -241,6 +244,7 @@ app.whenReady().then(async () => {
       { id: 'W3', platform: 'win', blockmap: true, oldFile: true, noOldBlockmap: true, what: 'Windows 带 blockmap、官网没有当前版本的 blockmap' },
       { id: 'W4', platform: 'win', blockmap: true, oldFile: true, staleBlockmap: true, what: 'Windows 缓存里是过期 blockmap、不核对(负对照)' },
       { id: 'W5', platform: 'win', blockmap: true, oldFile: true, staleBlockmap: true, guard: true, what: 'Windows 缓存里是过期 blockmap、先核对' },
+      { id: 'W6', platform: 'win', blockmap: true, oldFile: true, multiRange: true, what: 'Windows 带 blockmap、provider 用缺省的多 Range(负对照)' },
       ...(process.platform === 'darwin' ? [
         { id: 'M1', platform: 'mac', blockmap: true, oldFile: true, what: 'mac 带 blockmap、有上次留下的 update.zip' },
         { id: 'M2', platform: 'mac', blockmap: true, oldFile: false, what: 'mac 带 blockmap、没有 update.zip(手动装之后)' },
@@ -264,6 +268,7 @@ app.whenReady().then(async () => {
     check('W3 当前版本 blockmap 404:回落整包,sha512 照样过', by.W3.downloadedOk && by.W3.fullGets === 1 && by.W3.notFound.some((u) => u.endsWith('.blockmap')), `${pct(by.W3.installerBytes, full)}`)
     check('W4 负对照:过期的 blockmap 不核对 → 白下一遍差量再整包(下得比整包还多)', by.W4.downloadedOk && by.W4.installerBytes > full && by.W4.fullGets === 1, `${pct(by.W4.installerBytes, full)}`)
     check('W5 先核对:删掉过期的 blockmap,按地址取当前版本的 → 差量', by.W5.droppedStaleBlockmap === true && deltaOk(by.W5), `${pct(by.W5.installerBytes, full)}`)
+    check('W6 负对照:多 Range 撞上只回第一段的 OSS → 差量失败、回落整包(单 Range 是必须的)', by.W6.downloadedOk && by.W6.multiRange >= 1 && by.W6.fullGets === 1 && by.W6.log.some((l) => /multipart\/byteranges/.test(l)), `多 Range ${by.W6.multiRange} 次,${pct(by.W6.installerBytes, full)}`)
     if (by.M1) {
       check('M1 mac 差量:sha512 对,只下了一小部分', deltaOk(by.M1), `${pct(by.M1.installerBytes, full)}`)
       check('M2 mac 没有 update.zip:整包,也不去取 blockmap', by.M2.downloadedOk && by.M2.installerBytes === full && by.M2.blockmapBytes === 0)
