@@ -55,7 +55,7 @@ export default {
                       args.stateId === state.id &&
                       !args.expect &&
                       Array.isArray(args.actions) &&
-                      args.actions.length === 1 &&
+                      (rules.url || args.actions.length === 1) &&
                       args.actions.every(
                         (a) =>
                           !a.ref &&
