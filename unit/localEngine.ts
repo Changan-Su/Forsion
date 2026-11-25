@@ -18,6 +18,11 @@ export interface LocalEngineOptions {
    *  every account keeps its own folder and database under the engine home. There is no owner, so no
    *  single database path, user id, owner config or remote mark. */
   multiAccount?: boolean
+  /** Multi-account only: the account server the engine sends model calls to (TANGU_CLOUD_URL). Model calls carry each
+   *  account's model ticket from the host; no token is ever passed in the environment. */
+  cloudUrl?: string
+  /** Multi-account only: TANGU_SCRIPT_ISOLATION=required (the host holds a device credential plugin scripts must not read). */
+  scriptIsolation?: 'required'
 }
 
 export interface LocalEngine {
@@ -88,6 +93,8 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     Object.assign(env, options.multiAccount ? {
       TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_MULTI_ACCOUNT: '1',
       TANGU_HOST: '127.0.0.1', TANGU_PORT: '0', TANGU_BUNDLE_DIRS: JSON.stringify(roots),
+      ...(options.cloudUrl ? { TANGU_CLOUD_URL: options.cloudUrl } : {}),
+      ...(options.scriptIsolation === 'required' ? { TANGU_SCRIPT_ISOLATION: 'required' } : {}),
     } : {
       TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_REMOTE_MARK_SECRET: remoteMark,
       TANGU_DATABASE_URL: '', TANGU_DATA_DIR: join(dataDir, 'tangu/state.db'),
