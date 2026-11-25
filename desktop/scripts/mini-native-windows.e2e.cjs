@@ -54,8 +54,12 @@ async function main() {
         window.__nativeEdges.push({type,trusted:e.isTrusted,edge:e.target.closest('.mini-card-edge')?.dataset.edge,x:e.screenX,y:e.screenY,buttons:e.buttons})
       },true)
     })
-    const drag=async(edge,dx,dy,name)=>{
-      await native('activate',['-Window',fixture.hwnd])
+    const drag=async(edge,dx,dy,name,visualFixture)=>{
+      if(visualFixture) {
+        await app.evaluate(({BrowserWindow},id)=>BrowserWindow.fromId(id).focus(),visualFixture.id)
+        check(name+' owns the foreground before mouse down',
+          (await native('foreground',['-Window',visualFixture.hwnd])).stdout.trim()==='True')
+      } else await native('activate',['-Window',fixture.hwnd])
       const before=await geometry()
       check(name+' starts with Mini inactive',!before.focused,before)
       const target=mini.locator('.mini-card-edge[data-edge="'+edge+'"]'), box=await target.boundingBox()
@@ -63,13 +67,15 @@ async function main() {
         {x:edge.includes('w')?box.x+box.width-2:box.x+2,y:edge.includes('n')?box.y+box.height-2:box.y+2}
       check(name+' shows the correct resize cursor',await target.evaluate(el=>getComputedStyle(el).cursor)===(edge.length===1?(edge==='s'||edge==='n'?'ns-resize':'ew-resize'):(edge==='ne'||edge==='sw'?'nesw-resize':'nwse-resize')))
       const start=await mini.evaluate(()=>window.__nativeEdges.length)
-      await native('drag',['-Window',before.hwnd,'-X',String(Math.round(point.x*before.zoom)),'-Y',String(Math.round(point.y*before.zoom)),'-Dx',String(dx),'-Dy',String(dy)])
+      const trace=await native('drag',['-Window',before.hwnd,'-X',String(Math.round(point.x*before.zoom)),'-Y',String(Math.round(point.y*before.zoom)),
+        '-Dx',String(dx),'-Dy',String(dy),...(visualFixture?['-FrameDir',path.join(output,name)]:[])])
+      const frames=visualFixture?JSON.parse(trace.stdout.trim()):undefined
       await pause(250)
       const after=await geometry(), events=await mini.evaluate(start=>window.__nativeEdges.slice(start),start)
       check(name+' receives trusted down, held moves and up on the first gesture',
         events.some(e=>e.type==='pointerdown'&&e.trusted&&e.edge===edge)&&events.filter(e=>e.type==='pointermove'&&e.trusted&&e.buttons===1).length>=2&&events.some(e=>e.type==='pointerup'&&e.trusted),events)
-      fs.writeFileSync(path.join(output,name+'.json'),JSON.stringify({before,after,events},null,2))
-      return {before:before.bounds,after:after.bounds}
+      fs.writeFileSync(path.join(output,name+'.json'),JSON.stringify({before,after,events,frames},null,2))
+      return {before:before.bounds,after:after.bounds,frames}
     }
     const closeEnough=(a,b)=>Math.abs(a-b)<=2
     for(const edge of ['s','n','e','w','se','sw','ne','nw']) {
@@ -87,6 +93,36 @@ async function main() {
     await place()
     const large=await drag('se',450,500,'maximum')
     check('actual outward gesture reaches maximum width and work area bottom',large.after.width===640&&closeEnough(large.after.y+large.after.height,receipt.area.y+receipt.area.height)&&large.after.x===large.before.x&&large.after.y===large.before.y,large)
+    // One dark, owned native window covers the capture area behind the Mini on
+    // the exclusive runner. Screenshot each sample from the Windows desktop,
+    // because the renderer cannot see stale or clipped compositor frames.
+    await mini.evaluate(() => window.tangu.setWindowMaterial({ material: 'opaque', mode: 'light', backgroundColor: '#f8f7f6' }))
+    const visualFixture=await app.evaluate(async ({BrowserWindow},area)=>{
+      const w=new BrowserWindow({...area,frame:false,show:false,backgroundColor:'#161820'})
+      await w.loadURL('data:text/html,<body style="margin:0;background:%23161820">')
+      w.show()
+      return { id:w.id,hwnd:w.getNativeWindowHandle().readBigUInt64LE().toString() }
+    },receipt.area)
+    try {
+      for(const direction of ['minimum','maximum']) {
+        await place()
+        const inward=direction==='minimum'
+        const {after,frames}=await drag('se',inward?-220:439,inward?-224:500,direction+'-compositor',visualFixture)
+        const first=frames.at(0), last=frames.at(-1)
+        const held=frames.filter(frame=>frame.phase==='clamped')
+        check(direction+' compositor has a bright Mini surrounded by a dark fixture before resizing',first.lightInterior>=23&&first.darkCorners===4,first)
+        check(direction+' reaches the expected resize limit',
+          inward ? after.width===260&&after.height===160 : after.width===640&&closeEnough(after.y+after.height,receipt.area.y+receipt.area.height),after)
+        check(direction+' stays at its final size and position while the pointer moves beyond it',
+          held.length>=12&&new Set(held.map(frame=>frame.cursorX)).size>1&&held.every(frame=>
+            frame.width===last.width&&frame.height===last.height&&frame.x===last.x&&frame.y===last.y&&
+              (inward ? frame.cursorX<frame.x+frame.width-16 : frame.cursorX>frame.x+frame.width+16)),held)
+        check(direction+' sampled native frames keep the Mini filled and its corners rounded during and after resize',
+          last.phase==='released'&&frames.length>=38&&frames.every(frame=>frame.darkCorners===4&&frame.lightInterior>=first.lightInterior-2),frames)
+      }
+    } finally {
+      await app.evaluate(({BrowserWindow},id)=>BrowserWindow.fromId(id)?.destroy(),visualFixture.id)
+    }
     await place()
     const inward=await drag('s',0,-80,'bottom-inward')
     check('actual upward bottom-edge drag shortens only the height',inward.after.x===inward.before.x&&inward.after.y===inward.before.y&&inward.after.width===inward.before.width&&closeEnough(inward.after.height,inward.before.height-80),inward)
