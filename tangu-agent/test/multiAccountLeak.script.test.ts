@@ -44,13 +44,15 @@ const env = await vi.hoisted(async () => {
 vi.mock('node:child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 vi.mock('child_process', async (orig) => (await import('./helpers/multiAccountSpawnSpy.js')).wrapChildProcess(await orig()));
 
-import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lchownSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { bootMultiAccount, runToEnd, startRun, steps, type MaEngine } from './helpers/multiAccountHarness.js';
 import { spawnLog } from './helpers/multiAccountSpawnSpy.js';
 import { LIMITS_FILE_NAME, reloadMultiAccountLimits } from '../src/core/multiAccountLimits.js';
 import { pluginScriptQueue, snapshotAccountFiles, sweepAccountLinks } from '../src/services/pluginScripts.js';
-import { closeAccountToScripts, lockAllAccountHomes, openAccountToScripts, parseProcStatus, setScriptIsolationHostForTest } from '../src/core/scriptIsolation.js';
+import {
+  closeAccountToScripts, dropForeignDbEntries, lockAllAccountHomes, openAccountToScripts, parseProcStatus, processVisibilityProblem, setScriptIsolationHostForTest,
+} from '../src/core/scriptIsolation.js';
 
 const accDir = (id: string) => join(env.home, 'accounts', id);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -543,8 +545,9 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     writeFileSync(outsideHard, 'outside hard'); chmodSync(outsideHard, 0o640);
     symlinkSync(outside, join(home, 'work', 'link'));
     linkSync(outsideHard, join(home, 'work', 'hard'));
-    // names next to the database a script could claim while the top folder is group-writable: removed, the database stays
-    mkdirSync(join(home, 'state.db-journal'));
+    // other state.db* names the engine (not the script user) owns: never removed, not even a directory
+    mkdirSync(join(home, 'state.db-backup'));
+    writeFileSync(join(home, 'state.db-backup', 'copy.db'), 'engine backup');
     symlinkSync(outside, join(home, 'state.db-x'));
     chmodSync(join(home, 'work', 'sub'), 0o750);
     chmodSync(home, 0o700);
@@ -563,7 +566,8 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     expect(now(join(home, 'work'))).toEqual({ mode: (0o755 | 0o070), gid: G });
     expect(now(join(home, 'work', 'su.bin')), 'setuid bit dropped').toEqual({ mode: 0o775, gid: G });
     for (const db of ['state.db', 'state.db-wal']) expect(now(join(home, db))).toEqual({ mode: 0o600, gid: keep.db.gid });
-    for (const planted of ['state.db-journal', 'state.db-x']) expect(existsSync(join(home, planted)) || !!lstatSync(join(home, planted), { throwIfNoEntry: false }), planted).toBe(false);
+    expect(readFileSync(join(home, 'state.db-backup', 'copy.db'), 'utf8'), 'an engine-owned directory next to the database is kept').toBe('engine backup');
+    expect(lstatSync(join(home, 'state.db-x')).isSymbolicLink(), 'an engine-owned link next to the database is kept').toBe(true);
     expect(now(join(home, '.scratch'))).toEqual(keep.scratch);
     expect(now(join(home, '.scratch', 'run', 'x.txt'))).toEqual(keep.scratchFile);
     expect(now(outside), 'the target of a link is untouched').toEqual(keepOut.outside);
@@ -620,6 +624,37 @@ describe('multi-account: plugin scripts — run as a separate user', () => {
     expect(readFileSync(f, 'utf8')).toBe('binary');
   });
 
+  it('names next to the database that the script user created are removed; the database and anything else are not', () => {
+    // the "script user" here is this test process (a real one needs root): everything it owns counts as planted
+    const home = join(env.root, 'drop-fixture');
+    rmSync(home, { recursive: true, force: true });
+    mkdirSync(join(home, 'state.db-journal', 'deep'), { recursive: true });
+    writeFileSync(join(home, 'state.db-journal', 'deep', 'x'), 'x');
+    writeFileSync(join(home, 'state.db'), 'the database');
+    writeFileSync(join(home, 'state.db-z'), 'planted file');
+    writeFileSync(join(home, 'notes.txt'), 'not a database name');
+    symlinkSync(join(home, 'notes.txt'), join(home, 'state.db-y'));
+    dropForeignDbEntries(home, ENGINE.uid);
+    expect(readdirSync(home).sort()).toEqual(['notes.txt', 'state.db']);
+    expect(readFileSync(join(home, 'notes.txt'), 'utf8'), 'a link is removed, not its target').toBe('not a database name');
+    // owned by someone else (65534 is not this process): nothing goes
+    mkdirSync(join(home, 'state.db-journal'));
+    dropForeignDbEntries(home, REAL_ROOT ? 12345 : 65534);
+    expect(existsSync(join(home, 'state.db-journal'))).toBe(true);
+  });
+
+  it('a /proc that hides other users\' processes (hidepid) without CAP_SYS_PTRACE stops plugin scripts', () => {
+    const proc = (opts: string) => `22 1 0:5 / /dev rw - devtmpfs udev rw\n23 1 0:21 / /proc rw,nosuid,nodev,noexec,relatime shared:12 - proc proc ${opts}\n`;
+    const ptrace = 1n << 19n;
+    expect(processVisibilityProblem(proc('rw'), 0n)).toBeNull();
+    expect(processVisibilityProblem(proc('rw,hidepid=0'), 0n)).toBeNull();
+    for (const o of ['rw,hidepid=2', 'rw,hidepid=invisible', 'rw,hidepid=ptraceable,gid=0']) {
+      expect(processVisibilityProblem(proc(o), 0n), o).toMatch(/hidepid and the engine lacks CAP_SYS_PTRACE/);
+      expect(processVisibilityProblem(proc(o), ptrace), `${o} with CAP_SYS_PTRACE`).toBeNull();
+    }
+    expect(processVisibilityProblem('22 1 0:5 / /dev rw - devtmpfs udev rw\n', ptrace)).toMatch(/cannot find the \/proc mount/);
+  });
+
   it('a process status without an owner is "unknown", never "not the script user"', () => {
     expect(parseProcStatus('Name:\tnode\nState:\tS (sleeping)\nUid:\t65534\t65534\t65534\t65534\n')).toEqual({ state: 'S', uids: [65534, 65534, 65534] });
     expect(parseProcStatus('Name:\tnode\nState:\tZ (zombie)\nUid:\t0\t65534\t0\t0\n')).toEqual({ state: 'Z', uids: [0, 65534, 0] });
@@ -656,6 +691,14 @@ describe.runIf(LINUX_ROOT)('multi-account: plugin scripts — separate user on a
 
   it.runIf(CAN_SWITCH)('the script user reaches its own account folder only: not a 0600 root file, not another account, not state.db', async () => {
     writeFileSync(join(accDir('alice'), 'workspace', 'input-0600.txt'), 'ALICE-INPUT', { mode: 0o600 });
+    // next to the database: an engine-owned directory (kept), and a script-owned one holding an engine file (only the script's part goes)
+    mkdirSync(join(accDir('alice'), 'state.db-backup'), { recursive: true });
+    writeFileSync(join(accDir('alice'), 'state.db-backup', 'copy.db'), 'ENGINE-BACKUP');
+    mkdirSync(join(accDir('alice'), 'state.db-mixed'), { recursive: true });
+    writeFileSync(join(accDir('alice'), 'state.db-mixed', 'engine.txt'), 'ENGINE-FILE');
+    writeFileSync(join(accDir('alice'), 'state.db-mixed', 'script.txt'), 'SCRIPT-FILE');
+    lchownSync(join(accDir('alice'), 'state.db-mixed'), 65534, 65534);
+    lchownSync(join(accDir('alice'), 'state.db-mixed', 'script.txt'), 65534, 65534);
     process.env.TANGU_SCRIPT_ISOLATION = 'required';
     const n = scriptSpawns('isolate.mjs').length;
     const { outputs } = await scriptRun('alice', [{ skill: SKILL, script: 'scripts/isolate.mjs' }, { skill: SKILL, script: 'scripts/whoami.mjs' }]);
@@ -683,6 +726,9 @@ describe.runIf(LINUX_ROOT)('multi-account: plugin scripts — separate user on a
     expect(existsSync(join(accDir('alice'), 'state.db'))).toBe(true);
     expect(seen.plantJournal.ok, 'a new name next to the database can be created while open…').toBe(true);
     expect(existsSync(join(accDir('alice'), 'state.db-journal')), '…and is gone once the folder is closed').toBe(false);
+    expect(readFileSync(join(accDir('alice'), 'state.db-backup', 'copy.db'), 'utf8')).toBe('ENGINE-BACKUP');
+    expect(readFileSync(join(accDir('alice'), 'state.db-mixed', 'engine.txt'), 'utf8')).toBe('ENGINE-FILE');
+    expect(existsSync(join(accDir('alice'), 'state.db-mixed', 'script.txt'))).toBe(false);
     expect(modeOf(join(accDir('alice'), 'state.db')) & 0o077).toBe(0);
     expect(['Z', undefined]).toContain(procState(seen.kid));
     expect(readFileSync(join(accDir('alice'), 'workspace', 'made-by-script', 'out.txt'), 'utf8')).toBe('from the script');

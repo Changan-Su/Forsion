@@ -29,7 +29,7 @@
  * (每次跑脚本前后都会结束它名下的所有进程)。
  * ⚠️ 残余:所有账号共用一个脚本用户,/tmp 这类谁都能写的地方仍是两次运行之间的通道(脚本在一个账号里读到的东西可以留到下一个账号的运行里)。
  */
-import { closeSync, constants, fchmodSync, fchownSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, rmSync, type Stats } from 'node:fs';
+import { closeSync, constants, fchmodSync, fchownSync, fstatSync, lstatSync, openSync, readdirSync, readFileSync, rmdirSync, type Stats, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { accountHome, engineRoot, isValidAccountId } from './accountScope.js';
 
@@ -86,6 +86,51 @@ export function parseProcStatus(text: string): { state: string; uids: number[] }
   return { state, uids: [Number(ids[1]), Number(ids[2]), Number(ids[3])] };
 }
 
+const CAP_SYS_PTRACE = 19;
+
+/**
+ * /proc 能不能看到所有进程:/proc 挂了 hidepid(别的用户的进程看不见),引擎又没有 CAP_SYS_PTRACE,扫 /proc 就可能漏掉
+ * 还活着的脚本进程 → 返回原因(调用方拒跑);看得见 → null。mountinfo 里找不到 /proc 的 proc 挂载也当看不见。
+ * mountinfo 一行:`<id> <parent> <maj:min> <root> <挂载点> <挂载选项> [可选字段…] - <类型> <来源> <超级块选项>`。
+ */
+export function processVisibilityProblem(mountinfo: string, capEff: bigint): string | null {
+  let found = false;
+  let hidden = false;
+  for (const line of mountinfo.split('\n')) {
+    const [left, right] = line.split(' - ');
+    if (!left || right === undefined) continue;
+    const l = left.split(' ');
+    const r = right.split(' ');
+    if (l[4] !== '/proc' || r[0] !== 'proc') continue;
+    found = true;
+    for (const opt of `${l[5] ?? ''},${r[2] ?? ''}`.split(',')) {
+      const m = /^hidepid=(.+)$/.exec(opt.trim());
+      if (m && m[1] !== '0' && m[1] !== 'off') hidden = true;
+    }
+  }
+  if (!found) return 'the engine cannot find the /proc mount to check for leftover script processes';
+  if (hidden && !(capEff & (1n << BigInt(CAP_SYS_PTRACE)))) {
+    return '/proc is mounted with hidepid and the engine lacks CAP_SYS_PTRACE, so it cannot see every leftover script process';
+  }
+  return null;
+}
+
+function readCapEff(): bigint | null {
+  try {
+    const m = /^CapEff:\s*([0-9a-f]+)/im.exec(readFileSync('/proc/self/status', 'utf8'));
+    return m ? BigInt(`0x${m[1]}`) : null;
+  } catch { return null; }
+}
+
+/** 引擎在这台机器上看不看得到所有进程(见 processVisibilityProblem);读不出 mountinfo / 能力 → 当看不到。 */
+function procVisibilityProblem(): string | null {
+  const eff = readCapEff();
+  if (eff === null) return 'the engine cannot read its own capabilities';
+  let mountinfo: string;
+  try { mountinfo = readFileSync('/proc/self/mountinfo', 'utf8'); } catch { return 'the engine cannot read /proc/self/mountinfo'; }
+  return processVisibilityProblem(mountinfo, eff);
+}
+
 const gone = (e: unknown): boolean => ['ENOENT', 'ESRCH'].includes(String((e as NodeJS.ErrnoException)?.code));
 
 /** 这个进程(线程组)还有没有活着的线程:组长是僵尸、别的线程还在跑也算活着。 */
@@ -109,6 +154,8 @@ function groupAlive(pid: string, leaderState: string): boolean {
  */
 function reapUid(uid: number): void {
   if (uid === 0 || uid === process.getuid?.()) throw new ScriptIsolationError('refusing to end processes of the engine\'s own user');
+  const hidden = procVisibilityProblem();
+  if (hidden) throw new ScriptIsolationError(hidden);
   for (let round = 0; round < 50; round++) {
     let alive = 0;
     for (const name of readdirSync('/proc')) {
@@ -132,14 +179,11 @@ const realHost: ScriptIsolationHost = {
   cannotSwitch: () => {
     if (process.platform !== 'linux') return 'running scripts as a separate user is supported only on Linux hosts';
     if (!realHost.root()) return 'the engine is not running as root';
-    let eff: bigint;
-    try {
-      const m = /^CapEff:\s*([0-9a-f]+)/im.exec(readFileSync('/proc/self/status', 'utf8'));
-      if (!m) return 'the engine cannot read its own capabilities';
-      eff = BigInt(`0x${m[1]}`);
-    } catch { return 'the engine cannot read its own capabilities'; }
+    const eff = readCapEff();
+    if (eff === null) return 'the engine cannot read its own capabilities';
     const missing = CAPS.filter(([, bit]) => !(eff & (1n << BigInt(bit)))).map(([n]) => n);
-    return missing.length ? `the engine lacks ${missing.join(', ')}` : null;
+    if (missing.length) return `the engine lacks ${missing.join(', ')}`;
+    return procVisibilityProblem();
   },
   reap: reapUid,
 };
@@ -212,23 +256,34 @@ function setDir(p: string, gid: number, mode: number): boolean {
 
 /**
  * 顶层 state.db* 里脚本放进来的东西:删掉。运行期间顶层组可写,粘滞位只护得住已有的名字 —— 脚本可以抢先占一个还没有的库旁文件名
- * (比如放个 state.db-journal 软链 / 目录),等 SQLite 以 root 去开。删的只有:不是普通文件的(软链只删链接本身;state.db 本身除外,
- * 那种账号本来就打不开),以及属主是脚本用户的普通文件。别的属主的普通文件不删(可能是换过运行身份的旧数据),由调用方改回引擎的。
- * 只在脚本队列里、脚本用户的进程已清光、顶层已关上时调(开账号文件夹之前、跑完);账号打开时不调(那时没清过进程,开关关着也不该删东西)。
+ * (比如放个 state.db-journal 软链 / 目录),等 SQLite 以 root 去开。只删属主是脚本用户的条目(lstat 看,软链只删链接本身);
+ * 属主是引擎或别人的一律不碰(哪怕是目录、名字不是 -wal / -shm / -journal),state.db 本身也不碰。脚本用户的目录往里删时同样只删它的东西,
+ * 里面有别人的条目就把那一支留着。只在脚本队列里、脚本用户的进程已清光、顶层已关上时调(开账号文件夹之前、跑完)。
  */
-export function dropForeignDbEntries(home: string, scriptUid?: number): void {
+export function dropForeignDbEntries(home: string, scriptUid: number): void {
   let names: string[];
   try { names = readdirSync(home); } catch (e) { if (codeOf(e) === 'ENOENT') return; throw e; }
   for (const name of names) {
-    if (!isDbFile(name)) continue;
+    if (!isDbFile(name) || name === 'state.db') continue;
     const p = join(home, name);
-    let seen: Stats;
-    try { seen = lstatSync(p); } catch (e) { if (codeOf(e) === 'ENOENT') continue; throw e; }
-    const planted = seen.isFile() ? scriptUid !== undefined && seen.uid === scriptUid : name !== 'state.db';
-    if (!planted) continue;
-    rmSync(p, { recursive: true, force: true });
-    console.warn(`[tangu] multi-account: removed ${p}, which the engine did not create`);
+    if (removeOwnedBy(p, scriptUid)) console.warn(`[tangu] multi-account: removed ${p}, which a plugin script created`);
   }
+}
+
+/** 删掉 p(不跟链):只删属主是 uid 的;目录先删里面属于它的,删空了才删目录。全删掉 → true。 */
+function removeOwnedBy(p: string, uid: number): boolean {
+  let seen: Stats;
+  try { seen = lstatSync(p); } catch (e) { if (codeOf(e) === 'ENOENT') return true; throw e; }
+  if (seen.uid !== uid) return false;
+  if (seen.isDirectory()) {
+    let all = true;
+    for (const n of readdirSync(p)) if (!removeOwnedBy(join(p, n), uid)) all = false;
+    if (!all) return false;
+    rmdirSync(p);
+    return true;
+  }
+  unlinkSync(p);
+  return true;
 }
 
 /** 账号库文件(顶层 state.db* 里的普通文件)收成 0600、属主是引擎。有别的硬链接 → 抛。 */
