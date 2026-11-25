@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { specialAgentsConfigFile } from '../core/tanguHome.js';
 import { getRawSection, updateConfigFile, updateSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
+import { currentAccountId, isMultiAccount } from '../core/accountScope.js';
 
 export interface HistorianConfig {
   enabled: boolean;
@@ -351,22 +352,27 @@ export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
  * 拉不到目录(断网 / 未登录)时一律放行,宁可沿用旧选择也不误判。
  * 60s 缓存(Historian 每轮触发,避免连环拉模型列表)。
  */
-let bgSlotCache: { at: number; bg: string; def: string; enabled: Set<string> | null } | null = null;
+type BgSlots = { at: number; bg: string; def: string; enabled: Set<string> | null };
+// 多账号模式按账号分桶(各账号用自己的模型票拉,一个账号拉失败不能让别人跟着读空),且只缓存拉成功的;单人模式一个桶,照旧
+const bgSlotCache = new Map<string, BgSlots>();
 const staleWarned = new Set<string>();
-async function backgroundCatalog(): Promise<NonNullable<typeof bgSlotCache>> {
+async function backgroundCatalog(): Promise<BgSlots> {
   const now = Date.now();
-  if (bgSlotCache && now - bgSlotCache.at <= 60_000) return bgSlotCache;
+  const key = isMultiAccount() ? currentAccountId() : '';
+  const hit = key === undefined ? undefined : bgSlotCache.get(key);
+  if (hit && now - hit.at <= 60_000) return hit;
   const m = deps().brain.models;
   let bg = '';
   let def = '';
   let enabled: Set<string> | null = null;
+  let failed = false;
   await Promise.all([
     (async () => {
       try {
         const r = await m?.listModelsForProject?.(deps().profile.appId);
         bg = String(r?.backgroundModelId || '');
         def = String(r?.defaultModelId || '');
-      } catch { /* 云端不可达 → 落 profile 静态默认 */ }
+      } catch { failed = true; /* 云端不可达 → 落 profile 静态默认 */ }
     })(),
     (async () => {
       // 停用判定按全局 enabled 列表,不按 profile.appId 的应用目录:云端 worker 的 appId 是基线应用,按它筛会误伤
@@ -374,10 +380,15 @@ async function backgroundCatalog(): Promise<NonNullable<typeof bgSlotCache>> {
       try {
         const all = await m?.listGlobalModels?.();
         if (all?.length) enabled = new Set(all.flatMap((x: any) => [x?.id, x?.apiModelId]).filter(Boolean).map(String));
-      } catch { /* 同上:拉不到 → 不判 */ }
+      } catch { failed = true; /* 同上:拉不到 → 不判 */ }
     })(),
   ]);
-  return (bgSlotCache = { at: now, bg, def, enabled });
+  const fresh: BgSlots = { at: now, bg, def, enabled };
+  if (key !== undefined && !(failed && isMultiAccount())) {
+    if (bgSlotCache.size >= 500) for (const [k, v] of bgSlotCache) if (now - v.at > 60_000) bgSlotCache.delete(k);
+    bgSlotCache.set(key, fresh);
+  }
+  return fresh;
 }
 
 export async function resolveBackgroundModelId(explicit: string): Promise<string> {
@@ -398,7 +409,7 @@ export async function resolveBackgroundModelId(explicit: string): Promise<string
 }
 
 export function __resetBackgroundSlotCacheForTests(): void {
-  bgSlotCache = null;
+  bgSlotCache.clear();
   staleWarned.clear();
 }
 

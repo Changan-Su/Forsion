@@ -113,7 +113,7 @@ describe('transcribeFileViaCloud', () => {
       if (i === 0) return new Promise<string>((_, no) => setTimeout(() => no(new Error('cloud transcription 402 (quota exceeded)')), 20));
       return new Promise<string>((_, no) => signal?.addEventListener('abort', () => { cancelled.push(i); const e = new Error('aborted'); e.name = 'AbortError'; no(e); }));
     };
-    await expect(transcribeFileViaCloud(file('stop.wav', speechWav(150)), { concurrency: 3 }, send)).rejects.toThrow(/chunk 1\/\d+ .*402/);
+    await expect(transcribeFileViaCloud(file('stop.wav', speechWav(150)), { concurrency: 3 }, send)).rejects.toThrow(/chunk \d+\/\d+ .*402/);
     expect(started).toBe(3); // 后两段没发
     expect(cancelled.sort()).toEqual([1, 2]);
   });

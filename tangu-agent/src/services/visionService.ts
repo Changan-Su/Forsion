@@ -11,6 +11,7 @@
  * 自行降级(agentLoop 会退回原来的「直接塞图」行为,不因为没配槽就丢内容)。
  */
 import { deps } from '../seams/runtime.js';
+import { currentAccountId, isMultiAccount } from '../core/accountScope.js';
 import { getRawSection } from '../core/config.js';
 import { modelSupportsVision } from '../llm/modelCapabilities.js';
 import { toImageParts } from './imageAttachments.js';
@@ -37,24 +38,31 @@ const MAX_IMAGES_PER_CALL = 8;
 type Slots = { at: number; visionId: string; noVision: Set<string> };
 const slotCache = new Map<string, Slots>();
 async function loadSlots(appId?: string): Promise<Slots> {
-  const key = (appId || deps().profile.appId || '').trim();
+  const app = (appId || deps().profile.appId || '').trim();
+  // 多账号模式另按账号分桶(各账号用自己的模型票拉),且只缓存拉成功的;没有账号上下文就不缓存
+  const account = isMultiAccount() ? currentAccountId() : undefined;
+  const key = !isMultiAccount() ? app : account ? `${account}\u0000${app}` : undefined;
   const now = Date.now();
-  const hit = slotCache.get(key);
+  const hit = key === undefined ? undefined : slotCache.get(key);
   if (hit && now - hit.at <= 60_000) return hit;
   let visionId = '';
   const noVision = new Set<string>();
+  let failed = false;
   try {
     const list = deps().brain.models.listModelsForProject;
     if (list) {
-      const r = await list(key);
+      const r = await list(app);
       visionId = String(r?.visionModelId || '');
       for (const m of r?.models || []) {
         if (m?.id && m.supportsVision === false) noVision.add(String(m.id));
       }
     }
-  } catch { /* 云端不可达 → 视作未标注(全默认有视觉),不因此拦下图片 */ }
+  } catch { failed = true; /* 云端不可达 → 视作未标注(全默认有视觉),不因此拦下图片 */ }
   const fresh: Slots = { at: now, visionId, noVision };
-  slotCache.set(key, fresh);
+  if (key !== undefined && !(failed && isMultiAccount())) {
+    if (slotCache.size >= 500) for (const [k, v] of slotCache) if (now - v.at > 60_000) slotCache.delete(k);
+    slotCache.set(key, fresh);
+  }
   return fresh;
 }
 

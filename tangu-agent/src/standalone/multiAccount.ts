@@ -15,7 +15,8 @@
  * - 库与路径:每个账号一个 home(<engineRoot>/accounts/<id>)、一个 state.db(adapters/standalone/multiAccountSqliteHost.ts)。
  * - 关掉的功能:Muse、定时 / 自动化、收件箱、通道、MCP、外部引擎、浏览器工具、钩子、云同步、账号工具、发布、商店、git、遥测、
  *   回收站清理、profile 轮询、run 事件保留期、启动恢复、实时语音、宿主命令(core/hostSpawn.ts)。
- * - 模型调用仍用进程那一份凭据(本段不做每人计费);出站脱敏层包在这里面(注入的 brain 也包)。
+ * - 模型调用:没有进程凭据。宿主随访客的请求带来这个账号的模型票(X-Forsion-Model-Ticket),每个账号存最新一张,发往 server 的模型请求
+ *   一律用当前账号的票(standalone/modelTickets.ts);没有账号上下文 / 没票 / 票过期 → 401 报错,不回落。出站脱敏层包在这里面(注入的 brain 也包)。
  */
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response, type Router } from 'express';
 import { existsSync, mkdirSync } from 'node:fs';
@@ -24,7 +25,7 @@ import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { AssetsBrain, CloudBrainServices, StorageBrain } from '../seams/cloudBrain.js';
-import { accountHome, accountWorkspaceDir, isMultiAccount, runWithAccount, setSessionClaimer } from '../core/accountScope.js';
+import { accountHome, accountWorkspaceDir, currentAccountId, isMultiAccount, runWithAccount, setSessionClaimer } from '../core/accountScope.js';
 import { assertAccountStorage, lastTotalUsage, markAccountUsageDirty, newAccountsAllowed, StorageLimitError } from '../services/accountStorage.js';
 import { checkAccountIdentity, createMultiAccountSqliteHost, type MultiAccountHost } from '../adapters/standalone/multiAccountSqliteHost.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
@@ -44,6 +45,8 @@ import { accountHasRuns, drainRunsForExit, recoverAccountRuns } from '../service
 import { clearAccountScratch } from '../services/pluginScripts.js';
 import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import type { StandaloneConfig } from './config.js';
+import { LlmError } from '../core/types.js';
+import { NO_ACCOUNT_FOR_MODEL_CALL, takeModelTicket } from './modelTickets.js';
 
 export interface MultiAccountAppOptions {
   localToken: string;            // 宿主口令
@@ -132,16 +135,29 @@ const NO_CLOUD_ASSETS: AssetsBrain = {
   listForcedCustomTools: async () => [],
 };
 
+/** 模型调用只在账号上下文里发(不管注入的是哪种 brain):没有账号 → 401,不发。main.ts 那份 brain 的凭据本身就是当前账号的票,
+ *  这一层再兜住直连 provider 与测试注入的 brain,也让「账号上下文之外的模型调用」在多账号测试里当场红。 */
+function accountBound<T extends object>(obj: T, names: ReadonlyArray<string>): T {
+  const out: any = { ...obj };
+  for (const name of names) {
+    const fn = out[name];
+    if (typeof fn !== 'function') continue;
+    out[name] = (...args: unknown[]) => (currentAccountId() ? fn.apply(obj, args) : Promise.reject(new LlmError(401, NO_ACCOUNT_FOR_MODEL_CALL)));
+  }
+  return out;
+}
+
 /**
- * 注入的 brain 只取 llm(包出站脱敏)和 models(进程那一份模型目录)。云端 per-user 的能力(云存储、云记忆、Agent 云文件、收件箱、
- * 云笔记、账号面、git 凭据、生图 / 语音 / 实时、决策模型、商店)一律不给:它们用的是进程那一份云端凭据,会把所有账号算成一个人。
+ * 注入的 brain 只取 llm(包出站脱敏)和 models(模型目录)。main.ts 注入的那份发往 server 的请求一律带当前账号的模型票
+ * (standalone/modelTickets.ts 的 createModelTicketHttpBrain);语音识别(asr)走同一个 httpBrain、同一份凭据,也在 accountBound 里。云端 per-user 的其它能力(云存储、云记忆、Agent 云文件、收件箱、
+ * 云笔记、账号面、git 凭据、生图 / 实时、决策模型、商店)一律不给。
  * 用户资料不出网:getUserById 只回账号 id。记忆 / 技能换成本地实现(按路径,天然按人)。
  */
 function multiAccountBrain(b: CloudBrainServices): CloudBrainServices {
   return {
-    llm: withOutboundMasking(b.llm),
-    models: b.models,
-    ...(b.asr ? { asr: b.asr } : {}), // 云端转写:transcribe_audio 读之前按账号读闸核路径;凭据随 llm 走
+    llm: accountBound(withOutboundMasking(b.llm), ['resolveModelAndKey', 'buildProviderPayload', 'streamProviderCompletion', 'refreshModelKey', 'fimCompletion']),
+    models: accountBound(b.models, ['listGlobalModels', 'listModelsForProject', 'providerQuota']),
+    ...(b.asr ? { asr: accountBound(b.asr, ['transcribe']) } : {}), // 云端转写:凭据同 llm(当前账号的票);transcribe_audio 读之前按账号读闸核路径
     users: { getUserById: async (id: string) => ({ id, username: id }) },
     memory: createLocalMemoryBrain(),
     assets: createLocalAssets(NO_CLOUD_ASSETS, false),
@@ -337,6 +353,8 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     if (!who.ok) return void res.status(who.status).json({ detail: who.detail });
     (req as any).accountId = who.accountId;
     (req as any).user = { userId: who.accountId, username: who.accountId, role: 'USER' };
+    // 宿主带来的模型票:从请求上摘掉(后面谁都看不到),是这个账号的就存下(standalone/modelTickets.ts)
+    takeModelTicket(req as any, who.accountId);
     // 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库
     inflight.set(who.accountId, (inflight.get(who.accountId) ?? 0) + 1);
     let counted = true;

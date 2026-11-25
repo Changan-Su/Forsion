@@ -18,6 +18,7 @@ import { OperationError, RollbackIncomplete } from './errors'
 import { validateWebEntries, type WebEntry } from './webEntries'
 import { cloudBundle, createCloudRuntime, DELEGATED_ADMIN_FEATURE } from './cloudHost'
 import { createRemoteAccount, validateRemoteAccount, type RemoteAccountConfig } from './remoteAccount'
+import { createModelTickets, deviceCredentialPath, readDeviceCredential, type ModelTickets } from './modelTickets'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -36,8 +37,11 @@ export interface UnitConfig {
   /** Public Units only: verify Forsion logins with a Forsion server over HTTPS instead of a backend plugin authority. */
   remoteAccount?: RemoteAccountConfig
   /** Public Units only: run this package's engine runtime in multi-account mode. Signed-in visitors reach it at
-   *  <base>/engine as their own account (the account id is their server user id); nobody is its owner. */
-  visitorEngine?: { plugin: string }
+   *  <base>/engine as their own account (the account id is their server user id); nobody is its owner.
+   *  deviceCredential: path, relative to the data directory, of the hosted unit device credential the host writes there
+   *  (`{ unitId, unitSecret, gen }`). Set, the Unit gets each visitor a model ticket from the remoteAccount server and the
+   *  engine runs plugin scripts isolated from it (see modelTickets.ts). Requires remoteAccount. */
+  visitorEngine?: { plugin: string; deviceCredential?: string }
 }
 
 /** Same rule as the engine's multi-account mode. No case folding: ids that differ only in case are refused, not merged. */
@@ -57,9 +61,25 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   if (config.workspace && config.workspace.mode !== 'local') throw new Error('Invalid workspace mode')
   const local = config.workspace?.mode === 'local'
   if (local && (config.remoteAccount || config.visitorEngine)) throw new Error('remoteAccount and visitorEngine require a public Unit')
-  const remoteAccount = config.remoteAccount ? createRemoteAccount(validateRemoteAccount(config.remoteAccount)) : undefined
+  const remoteAccountConfig = config.remoteAccount ? validateRemoteAccount(config.remoteAccount) : undefined
+  const remoteAccount = remoteAccountConfig ? createRemoteAccount(remoteAccountConfig) : undefined
   const visitorEnginePlugin = config.visitorEngine?.plugin
   if (config.visitorEngine && (typeof visitorEnginePlugin !== 'string' || !visitorEnginePlugin)) throw new Error('visitorEngine.plugin must name an installed plugin')
+  // A hosted public Unit names the device credential its host writes into the data directory (modelTickets.ts). Only the Unit
+  // process reads it, again before every ticket request (the host replaces it on rotation, and it may be missing for a while
+  // after a restore). Declaring it turns plugin script isolation on for the engine whether or not the file is there yet; the
+  // engine gets the server origin and that switch, never the credential.
+  const deviceCredentialFile = config.visitorEngine?.deviceCredential === undefined ? undefined
+    : deviceCredentialPath(dataDir, config.visitorEngine.deviceCredential)
+  if (deviceCredentialFile && !remoteAccountConfig) throw new Error('visitorEngine.deviceCredential requires remoteAccount (the server that issues model tickets)')
+  const scriptIsolation = !!deviceCredentialFile
+  const modelTickets: ModelTickets | undefined = deviceCredentialFile && remoteAccountConfig ? await (async () => {
+    const initial = await readDeviceCredential(deviceCredentialFile)
+    if (initial.state === 'ok') console.log('[unit] Hosted unit device credential loaded')
+    else if (initial.state === 'unreadable') console.error(`[unit] Hosted unit device credential is unreadable (${initial.reason}); visitors get no model tickets until it is repaired`)
+    else console.log('[unit] Hosted unit device credential is not there yet; visitors get model tickets once it is')
+    return createModelTickets({ origin: remoteAccountConfig.origin, credentialFile: deviceCredentialFile, initial })
+  })() : undefined
   const workspaceDir = resolve(config.workspace?.path || resolve(dataDir, 'workspace'))
   const records = new Map<string, RecordState>()
   const runtimeVault = () => [...records.values()].find((r) => usable(r) && r.runtime?.vault)?.runtime?.vault || null
@@ -198,7 +218,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         if (typeof factory !== 'function') throw new Error('Local runtime has no factory')
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
         runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {},
-          ...(visitorEngineHost ? { multiAccount: true } : {}), log: (m) => console.log(`[plugin:${id}] ${m}`) })
+          ...(visitorEngineHost ? { multiAccount: true, ...(remoteAccountConfig ? { cloudUrl: remoteAccountConfig.origin } : {}), ...(scriptIsolation ? { scriptIsolation: 'required' as const } : {}) } : {}),
+          log: (m) => console.log(`[plugin:${id}] ${m}`) })
         if (!runtime || typeof runtime.close !== 'function') throw new Error('Invalid local runtime')
         if (visitorEngineHost && (!runtime.engine || runtime.vault || runtime.account)) throw new Error('A visitor engine runtime must provide an engine and nothing else')
         if ((runtime.vault && runtimeVault()) || (runtime.engine && runtimeEngine())) throw new Error('Local capability already has a provider')
@@ -328,7 +349,10 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       // MCP-style scoped administrator tokens and ids the engine would refuse never reach it.
       if (identity.role === 'ADMIN_SCOPED' || !VISITOR_ACCOUNT_ID.test(identity.userId)) return { forbidden: true as const }
       return { account: identity.userId }
-    } } : undefined,
+    },
+    // Only for logins the remote authority verified: that server issues the tickets.
+    ...(modelTickets ? { modelTicket: async (bearer: string, account: string, signal: AbortSignal) =>
+      accountProvider()?.account === remoteAccount ? modelTickets.ticketFor(account, bearer, signal) : null } : {}) } : undefined,
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
     projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product,
       ...(adminPanel ? { browserTitle: 'Forsion Admin Panel', faviconPath: '/shared/ForsionLOFO3-Inverse.svg' } : {}),

@@ -1017,7 +1017,13 @@ async function run(app, win, stub, seen, home, ctx) {
   const enHead = await profile.evaluate((el) => ({ kind: (el.querySelector('.team-profile-identity h3') || {}).textContent, tabs: Array.from(el.querySelectorAll('.agent-section-nav [role=tab]')).map((b) => b.textContent) }))
   check('9 英文界面:标题 Project、标签 Agents / Collaboration / Settings / Git', enHead.kind === 'Project' && enHead.tabs.join(',') === 'Agents,Collaboration,Settings,Git', JSON.stringify(enHead))
   // 英文「Current conversation」标签很长:名字曾被压成 0 宽,行里只剩标签和星标。名字必须完整可见(没被截断),标签放不下就换行
-  const names = await profile.locator('[data-project-executor] .team-member-open > strong > span:first-child').evaluateAll((els) => els.map((el) => ({ text: el.textContent, w: Math.round(el.getBoundingClientRect().width), need: el.scrollWidth })))
+  // 重载后执行者行先按 slug 画出来,显示名和「Project default」星标随后才到(Windows CI 11-25 量到 xyra、只有一个标签);
+  // 等 xyra 那行的无障碍名称带上第二段状态再量,别量到半成品
+  await win.waitForFunction(() => {
+    const b = document.querySelector('[data-project-executor="agent:xyra"] .team-member-open')
+    return !!b && /Xyra · .+ · /.test(b.getAttribute('aria-label') || '')
+  }, null, { timeout: 15_000 }).catch(() => {})
+  const names =await profile.locator('[data-project-executor] .team-member-open > strong > span:first-child').evaluateAll((els) => els.map((el) => ({ text: el.textContent, w: Math.round(el.getBoundingClientRect().width), need: el.scrollWidth })))
   // 标签成组换行:当前会话标签与星标在同一行(星标单独掉到第三行 = 没成组)
   const tagRows = await profile.locator('[data-project-executor="agent:xyra"] .project-executor-tag').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))
   // 文字标签极窄时会省略号:完整状态要在悬停提示与按钮的无障碍名称里(Codex 评审)

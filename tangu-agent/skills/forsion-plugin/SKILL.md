@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.142.0
+  version: 1.143.0
   author: Forsion
   category: Forsion
 ---
@@ -316,6 +316,7 @@ A Space that should also open as a small floating window gets a `mini` block in 
 - 环境只传 `PATH` 与语言 / 时区;`HOME` / `TMPDIR` / `XDG_CACHE_HOME` 指这次运行的临时目录(`FORSION_SCRIPT_SCRATCH`),跑完删。**拿不到登录信息和 API key**;Python 不写 `.pyc`、不读用户 site-packages,依赖要么机器上装好、要么随包带。
 - 整个引擎同时只跑一个,其余排队;缺省每个最多 5 分钟、临时目录 2 GB、stdout 1 MB,超了连子进程一起结束。写进账号文件夹的算账号磁盘上限;跑完删掉它在账号文件夹留下的软链,和账号文件夹外共用的硬链接断开。退出码非 0 = 失败。
 - 只认技能目录里的文件:包里别处(如 `tangu-plugins/`)的代码不跑,软链指过去也不行。Windows 主机上没有这个工具。
+- **可能换成单独的系统用户跑**(2026-11-25 起,部署设了 `TANGU_SCRIPT_ISOLATION=required`):脚本只读写得到本账号文件夹(`state.db*` 除外)、本次临时目录和谁都能读的系统文件;别的账号、引擎自己的文件碰不到;脚本结束时它起的进程(含脱离进程组的)一并结束。别假设是 root、别往账号文件夹 / 临时目录以外写,随包依赖要谁都能读;引擎换不了用户就不跑,工具报错。
 - 脚本交回的音频要转文字(2026-11-25 起):**同一轮**里调 `transcribe_audio(path=<脚本给的音频>)`。临时目录这一轮结束就删;多账号模式下它只走 Forsion 云端转写(按音频时长计费),只读当前账号文件夹(含这一轮的临时目录);云端只收 16-bit PCM 单声道 WAV(16 kHz),最长 20 分钟,引擎自己切段;别的格式会被拒,脚本里先转成这种 WAV。
 - 界面那半:宿主声明 `window.tangu.executionCapabilities.pluginScripts === true`(`host` 为 false)= 引擎没 shell、只跑包里自带的脚本,任务说明改用 `run_plugin_script`,素材别往库里存;`host` 为 true 照旧 `run_bash`。设备页上配置里的令牌可能是空串或占位值 `tunnel`,发引擎请求时别带 `Authorization`。
 

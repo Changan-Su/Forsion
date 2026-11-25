@@ -17,6 +17,9 @@ export interface SpawnRecord {
   account?: string;
   /** set while the test itself deliberately calls child_process to prove the spy is live */
   tag?: string;
+  /** uid / gid from the options object, when the call asked to run as another user */
+  uid?: number;
+  gid?: number;
   stack: string;
 }
 
@@ -42,7 +45,12 @@ function record(fn: string, args: unknown[]): void {
   const st = spawnSpyState();
   let account: string | undefined;
   try { account = st.currentAccount?.(); } catch { account = undefined; }
-  st.log.push({ fn, command: describeCall(args), at: Date.now(), account, tag: st.tag, stack: String(new Error().stack || '').split('\n').slice(2, 12).join('\n') });
+  const opts = args.find((a, i) => i > 0 && !!a && typeof a === 'object' && !Array.isArray(a)) as { uid?: unknown; gid?: unknown } | undefined;
+  const ids = {
+    ...(typeof opts?.uid === 'number' ? { uid: opts.uid } : {}),
+    ...(typeof opts?.gid === 'number' ? { gid: opts.gid } : {}),
+  };
+  st.log.push({ fn, command: describeCall(args), at: Date.now(), account, tag: st.tag, ...ids, stack: String(new Error().stack || '').split('\n').slice(2, 12).join('\n') });
 }
 
 function wrap(name: string, fn: any): any {

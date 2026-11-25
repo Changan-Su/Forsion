@@ -10,6 +10,12 @@ export interface RuntimeContext {
   /** Set on a public Unit's visitor engine: one engine serves every signed-in visitor as their own account.
    *  The runtime must then provide an engine only, never a vault or an owner account. */
   multiAccount?: boolean
+  /** Visitor engine only: the account server's origin (the remote account authority). The engine sends model calls there with
+   *  each visitor's model ticket. Never a credential. */
+  cloudUrl?: string
+  /** Visitor engine only: 'required' when this Unit holds a hosted unit device credential. Plugin scripts must then run as an
+   *  unprivileged user so they cannot read it; an engine that cannot switch users refuses to run them. */
+  scriptIsolation?: 'required'
   log(message: string): void
 }
 /** The vault as the cloud host sees it. The lock must come from here: it is module state of the runtime bundle that owns the vault. */
