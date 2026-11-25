@@ -32,6 +32,9 @@ import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces, pluginOfSpace } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
+import { liveHostDenials, useHostDenials } from '../amadeus/plugins/hostDenials'
+import { readTangu } from '../amadeus/plugins/tanguSeam'
+import { formatTime } from '../format/time'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
@@ -52,6 +55,15 @@ import { internalsAvailable } from '../amadeus/plugins/pluginInternals'
 import { capabilityLabels, internalsUnverified } from './pluginCapabilityLabels'
 
 registerMessages({
+  // 插件请求被宿主拒掉(11-23,hostDenials.ts):设置卡上的注明与记录
+  'settings.amadeusPlugins.engineNeedsManaged': {
+    zh: '这个插件的引擎半身要本机托管引擎。现在连的是外部引擎，插件里靠引擎的部分用不了。',
+    en: 'This plugin’s engine half needs the local engine that Forsion manages. Forsion is connected to an external engine, so the parts that rely on it won’t work.',
+  },
+  'settings.amadeusPlugins.hostRefusedTitle': { zh: '被拒绝的请求', en: 'Refused requests' },
+  'settings.amadeusPlugins.hostRefused.external-engine': { zh: '{api} 被拒绝：现在连的是外部引擎，这个接口只在本机托管引擎下可用。（{time}）', en: '{api} was refused: Forsion is connected to an external engine, and this call only works with the local managed engine. ({time})' },
+  'settings.amadeusPlugins.hostRefused.no-local-engine': { zh: '{api} 被拒绝：这台设备上没有本机引擎。（{time}）', en: '{api} was refused: there is no local engine on this device. ({time})' },
+  'settings.amadeusPlugins.hostRefused.engine-unavailable': { zh: '{api} 被拒绝：本机引擎没有及时就绪。（{time}）', en: '{api} was refused: the local engine was not ready in time. ({time})' },
   // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
   'settings.amadeusPlugins.lockedHint': {
     zh: '关闭后，从下次启动起不再加载 Forsion 云端功能（账号、云同步、Connect 等），本机数据不受影响。',
@@ -268,6 +280,34 @@ const RunBadge: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   return null
 }
 
+/** 只有本机托管引擎才放行的接口:外部引擎模式下给带引擎半身的插件注明一句,另列这个插件被宿主拒掉的请求(hostDenials.ts)。
+ *  拒绝的记录各窗口共用(设置是独立浮窗,插件多半跑在主窗)。请求后来成功了记录自己会撤掉。 */
+const HostAccess: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { t } = useI18n()
+  useApp((s) => s.desktopConfig?.mode) // 切引擎模式时重算下面的判定
+  const refused = liveHostDenials(useHostDenials((s) => s.byPlugin[p.id]))
+  const external = !!p.bundle?.enginePlugins?.length && readTangu()?.hostExecutionBlock?.() === 'external-engine'
+  if (!external && !refused.length) return null
+  const card = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' } as const
+  return (
+    <div data-plugin-host-access style={{ display: 'contents' }}>
+      {external && <div className="plugin-card" data-plugin-engine-needs-managed style={{ ...card, color: 'var(--warn, #b8860b)' }}>{t('settings.amadeusPlugins.engineNeedsManaged')}</div>}
+      {refused.length > 0 && (
+        <>
+          <div className="hint">{t('settings.amadeusPlugins.hostRefusedTitle')}</div>
+          <div className="plugin-card" style={card}>
+            {refused.map((d) => (
+              <div key={`${d.api}:${d.code}`} data-plugin-host-refused>
+                {t(`settings.amadeusPlugins.hostRefused.${d.code}`, { api: d.api, time: formatTime(d.at) })}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** 开着、却没出现在功能条上的随包 Space:逐个说清原因。配方的原始校验信息是开发日志串,只放悬停。 */
 const HiddenSpaces: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   const { t, locale } = useI18n()
@@ -398,7 +438,7 @@ const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
 
 const badge: React.CSSProperties = {
   fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))',
-  borderRadius: 4, padding: '0 4px', whiteSpace: 'nowrap',
+  borderRadius: 'var(--radius-xs)', padding: '0 4px', whiteSpace: 'nowrap',
 }
 
 /** 插件声明的设置项(registerSetting)表单行:值存 localStorage `plugin.<id>.<key>`(全存字符串,
@@ -604,7 +644,7 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
   return (
     <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ width: 8, height: 8, borderRadius: 4, background: dot, flexShrink: 0 }} />
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }} />
         <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{app.name}</b>
         <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{statusText}</span>
       </div>
@@ -938,6 +978,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <HostAccess p={p} />
       <HiddenSpaces p={p} />
       <RequiredPlugins p={p} />
       {dep && (

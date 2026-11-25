@@ -481,17 +481,31 @@ export class VaultManager {
   }
 
   /** Move/rename a file or folder within the vault (both ends clamped). */
-  moveEntry(srcRel: string, dstRel: string): Promise<void> {
+  moveEntry(srcRel: string, dstRel: string, collisionMessage?: string): Promise<void> {
     return this.structural(() => {
-      const work = this.moveQueue.then(() => this.performMove(srcRel, dstRel))
+      const work = this.moveQueue.then(() => this.performMove(srcRel, dstRel, collisionMessage))
       this.moveQueue = work.catch(() => {})
       return work
     })
   }
 
-  private async performMove(srcRel: string, dstRel: string): Promise<void> {
+  private async performMove(srcRel: string, dstRel: string, collisionMessage?: string): Promise<void> {
     const srcAbs = this.resolveInVault(srcRel)
     const dstAbs = this.resolveInVault(dstRel)
+    let caseAlias = false
+    if (collisionMessage && await this.pathExists(dstRel)) {
+      const sourceParent = path.dirname(srcAbs)
+      const sourceName = path.basename(srcAbs)
+      const targetName = path.basename(dstAbs)
+      // Restrict aliases to a rename within the same directory spelling. On a
+      // case-insensitive volume both paths resolve, but only the source name is listed.
+      // Distinct directory entries still collide, even if they are hard links to the same file.
+      if (sourceParent === path.dirname(dstAbs) && sourceName !== targetName && sourceName.toLowerCase() === targetName.toLowerCase()) {
+        const names = await fs.readdir(sourceParent)
+        caseAlias = names.includes(sourceName) && !names.includes(targetName)
+      }
+      if (!caseAlias) throw new Error(collisionMessage)
+    }
     await fs.mkdir(path.dirname(dstAbs), { recursive: true })
     const movedKind = (await fs.stat(srcAbs)).isDirectory() ? 'folder' : 'file'
     const finishMove = this.onBeforeMove?.(srcRel, dstRel)
@@ -506,7 +520,7 @@ export class VaultManager {
         catch (error) {
           // The local registration failed before cloud mutation was queued.
           // Restore the source so the renderer can safely keep its old path.
-          if (!(await this.pathExists(srcRel))) await fs.rename(dstAbs, srcAbs)
+          if (caseAlias || !(await this.pathExists(srcRel))) await fs.rename(dstAbs, srcAbs)
           throw error
         }
       }

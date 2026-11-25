@@ -6,7 +6,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 /** 一个 IPC 处理器的函数体(到下一个 ipcMain.handle 为止)。 */
 const handler = (channel: string): string => {
   const at = main.indexOf(`ipcMain.handle('${channel}'`)

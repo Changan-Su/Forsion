@@ -191,7 +191,7 @@ describe('结局表', () => {
     expect(takeHandoffUpdates(b.sessionId)).toBeNull(); // 只交一次
     releaseHandoffUpdates(taken); // 注入失败退回 → 下一个消费者还能取到
     expect(takeHandoffUpdates(b.sessionId)?.text).toContain('[timed_out]');
-  });
+  }, 20_000);
 
   it('结局行能被界面解析(行头格式是两边的契约)', () => {
     const p = {

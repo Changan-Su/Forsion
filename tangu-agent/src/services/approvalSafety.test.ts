@@ -1,14 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ publish: vi.fn(async () => 1) }));
 vi.mock('./eventBus.js', () => ({ publish: state.publish }));
 vi.mock('../hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
-// canonicalToolName:gateToolCall 入口拿它归一工具名(旧别名不得绕过用户规则),mock 必须给,
-// 但本块不测归一(那在 approvalAlias.test.ts),原样返回即可。
-vi.mock('../tools/toolRegistry.js', () => ({ declaredApproval: vi.fn(), canonicalToolName: (n: string) => n }));
+vi.mock('../tools/toolRegistry.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../tools/toolRegistry.js')>(),
+  declaredApproval: vi.fn(),
+}));
 import { gateToolCall, resolveApproval } from './approvals.js';
 import type { ToolCall } from '../core/types.js';
+import { hostShell, resetHostShellCache } from '../tools/hostShell.js';
 
-beforeEach(() => state.publish.mockClear());
+beforeEach(() => {
+  state.publish.mockClear();
+  // This matrix exercises the Windows cmd fallback even when Git Bash is installed on the runner.
+  if (process.platform === 'win32') {
+    vi.stubEnv('TANGU_WINDOWS_SHELL', 'cmd');
+    vi.stubEnv('comspec', 'cmd.exe');
+    resetHostShellCache();
+    expect(hostShell().kind).toBe('cmd');
+  }
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  resetHostShellCache();
+});
 const call = (command: string): ToolCall => ({ id: 'safe-regression', type: 'function', function: { name: 'run_bash', arguments: JSON.stringify({ command }) } });
 
 describe('shell approval gate regression (no command execution)', () => {

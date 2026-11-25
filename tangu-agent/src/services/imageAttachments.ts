@@ -15,6 +15,8 @@ import { prepareInlineImage } from './heicImages.js';
 
 export interface NormalizedImage {
   url: string; // data: URL 或 http(s) URL
+  /** 附件文件名(桌面端带);edit_image 用它认出客户端「标注修改」的标注副本(见 imageEdit.ts dropMarkupCopies)。 */
+  name?: string;
 }
 
 const MAX_IMAGES = 8;
@@ -49,7 +51,7 @@ export function normalizeImageAttachments(raw: any): NormalizedImage[] {
     } else if (typeof a.mimeType === 'string' && a.mimeType.startsWith('image/') && typeof a.data === 'string' && a.data) {
       url = `data:${a.mimeType};base64,${a.data}`;
     }
-    if (url && url.length <= MAX_URL_CHARS) out.push({ url });
+    if (url && url.length <= MAX_URL_CHARS) out.push(typeof a.name === 'string' && a.name ? { url, name: a.name } : { url });
   }
   return out;
 }

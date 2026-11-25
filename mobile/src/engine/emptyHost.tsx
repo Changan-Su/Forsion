@@ -11,4 +11,16 @@ export const Shell = (): null => null
 export const WorkspaceHost = (): null => null
 
 /** 落点即开的拖拽发起(桌面 Dockview 专属)。移动端没有可停靠的落区,空实现即可。 */
-export const startOpenDrag = (_dt: DataTransfer | null, _spec: { type: string; params?: Record<string, unknown> }): void => {}
+export const startOpenDrag = (_dt: DataTransfer | null, _spec: { type: string; params?: Record<string, unknown> } | { open(): void; view?: { type: string; params?: Record<string, unknown> } }): void => {}
+
+/** Desk 拿出去(11-23 Desk 标签栏互通)用的几件,都是 Dockview 专属。移动端不挂 Desk、没有拆分 / 新窗口 / 落点:
+ *  一律「做不到」(拆分、新窗口都 false;副本照原样;收尾 / 撤提示什么都不做)。 */
+export const viewCopyable = (_type: string): { split: boolean; window: boolean } => ({ split: false, window: false })
+export const openViewSplit = (_view: { type: string; params?: Record<string, unknown> }, _besideLeafId: string, _dir: 'right' | 'down'): boolean => false
+export const copyOfView = (view: { type: string; params?: Record<string, unknown> }): { type: string; params?: Record<string, unknown> } | null => view
+export const endOpenDrag = (): void => {}
+export const hideDropCue = (): void => {}
+
+/** 主区标签右键项 / 标签落区(11-24 Human Desk 放回来)。移动端没有标签栏、不挂 Desk:登记即忽略,返回的撤销函数什么都不做。 */
+export const registerTabMenuItems = (_p: unknown): (() => void) => () => {}
+export const registerTabDropZone = (_el: HTMLElement, _z: unknown): (() => void) => () => {}

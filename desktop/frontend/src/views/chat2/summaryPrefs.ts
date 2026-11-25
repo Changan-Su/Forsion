@@ -45,6 +45,15 @@ export function fullOrder(defaults: string[], saved: string[] = []): string[] {
   return seq
 }
 
+/** 本机存过顺序、那时还没有 Human Desk 卡(11-23 新增):它排在 Agent Desk 卡正上方,而不是按缺省序找前一张
+ *  (你把 Agent Desk 卡拖到别处过时,缺省序的前一张已经不挨着它了)。 */
+export function withHumanDeskSlot(saved?: string[]): string[] | undefined {
+  if (!saved || saved.includes('humandesk') || !saved.includes('desk')) return saved
+  const out = [...saved]
+  out.splice(out.indexOf('desk'), 0, 'humandesk')
+  return out
+}
+
 /** 在场的卡片按序排好。defaults 要包含全部在场的 id(插件卡由调用方按注册顺序拼进去)。 */
 export const orderCards = (present: string[], defaults: string[], saved?: string[]): string[] =>
   fullOrder(defaults, saved).filter((k) => present.includes(k))

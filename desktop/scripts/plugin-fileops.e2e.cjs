@@ -135,6 +135,10 @@ async function main() {
     check('T1b 已有的文件夹直接 resolve', r && r.ok === null, JSON.stringify(r))
     r = await call('app.createFolder("Notes/linker.md/x")')
     check('T1c 有文件挡着 → reject', r && /file is in the way/.test(r.err || ''), JSON.stringify(r))
+    if (fs.existsSync(at('projects'))) {
+      r = await call(`app.createFolder(${JSON.stringify('projects\\2026\\q4')})`)
+      check('T1d 大小写不敏感卷:已有目录的大小写别名直接成功', r?.ok === null && fs.readdirSync(at('Projects', '2026')).join() === 'Q4', JSON.stringify(r))
+    }
 
     // ── T2 stat ──
     r = await call('app.stat("Notes/linker.md")')
@@ -165,6 +169,14 @@ async function main() {
     check('T4b 盘上挪过去了', fs.existsSync(at('Archive', 'Renamed.md')) && !fs.existsSync(at('Drafts', 'Renamed.md')))
     const follows2 = await waitFor(() => win.evaluate(() => window.__foprobe.app.getActivePage() === 'Archive/Renamed.md'), 8000)
     check('T4c 编辑器跟到挪过去的路径', follows2, String(await win.evaluate(() => window.__foprobe.app.getActivePage())))
+
+    const before = read('Archive', 'Renamed.md')
+    d = await direct('app.renamePath("Archive/Renamed.md", "RENAMED")')
+    check('T4d 只改笔记名大小写:磁盘拼写变了、文件内容保留', !d.shown && d.r?.ok === 'Archive/RENAMED.md'
+      && fs.readdirSync(at('Archive')).includes('RENAMED.md') && read('Archive', 'RENAMED.md') === before, JSON.stringify(d))
+    const caseFollowed = await waitFor(() => win.evaluate(() => window.__foprobe.app.getActivePage() === 'Archive/RENAMED.md'))
+    check('T4e 仅改大小写后,打开的编辑器跟到新拼写', caseFollowed)
+    if (caseFollowed) await win.screenshot({ path: SHOT('plugin-fileops-case-rename') }).catch(() => {})
 
     // ── T5 工作文件夹里的(不是插件写的)与 createFolder 建的文件夹:不问 ──
     d = await direct('app.renamePath("Plugins/foprobe/seeded.md", "seeded2")')

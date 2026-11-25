@@ -19,6 +19,8 @@ export interface SelectionRunContext {
   readonly title?: string
   readonly pagePath?: string
   readonly pageInstructions?: string
+  /** 结果卡「用 Forsion 模型重试」:这次 run 里插件调的 ctx.tangu.translate 跳过本机选的翻译引擎(2026-11-24)。 */
+  readonly noEngine?: boolean
   /** 宿主在请求返回后写回:这次真正出结果的模型(给卡头署名)。 */
   model?: SelectionRunModel
 }

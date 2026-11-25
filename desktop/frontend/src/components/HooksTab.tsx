@@ -147,7 +147,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
   const eventDesc = (event: string): string => (EVENT_DESC[event] ? t(EVENT_DESC[event]) : '')
 
   const badge = (text: string, color: string): React.ReactNode => (
-    <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color, border: `var(--border-width) solid ${color}`, borderRadius: 4, padding: '0 4px' }}>{text}</span>
+    <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color, border: `var(--border-width) solid ${color}`, borderRadius: 'var(--radius-xs)', padding: '0 4px' }}>{text}</span>
   )
 
   return (
@@ -164,7 +164,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
       </SettingsPanel>
 
       {draft && (
-        <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <label style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
             {t('hookstab.event')}
             <select value={draft.event} onChange={(e) => setDraft({ ...draft, event: e.target.value })} style={{ marginLeft: 8 }}>
@@ -207,7 +207,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.map((h) => (
-                <div key={h.key} title={h.plugin ? t('hookstab.pluginHint') : undefined} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 10, display: 'flex', alignItems: 'center', gap: 10, opacity: h.active ? 1 : 0.6 }}>
+                <div key={h.key} title={h.plugin ? t('hookstab.pluginHint') : undefined} style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 16px)', padding: 10, display: 'flex', alignItems: 'center', gap: 10, opacity: h.active ? 1 : 0.6 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       {h.matcher && badge(h.matcher, 'var(--text-faint)')}

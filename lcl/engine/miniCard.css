@@ -16,7 +16,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   display: grid;
   grid-template-rows: 44px minmax(0, 1fr);
   overflow: hidden;
-  border-radius: var(--radius-lg, 14px);
+  border-radius: var(--radius-lg, 16px);
   background: var(--bg, #fff);
   color: var(--text, #111);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.08)) 74%, transparent);
@@ -69,7 +69,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   min-width: 0;
   max-width: 112px;
   padding: 0 8px;
-  border-radius: var(--radius-sm, 9px);
+  border-radius: var(--radius-sm, 8px);
   font: 600 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
 }
 .mini-card-space:disabled { cursor: default; color: var(--text-muted, rgba(0, 0, 0, 0.58)); }
@@ -92,7 +92,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   position: relative;
   width: 30px;
   padding: 0;
-  border-radius: var(--radius-sm, 9px);
+  border-radius: var(--radius-sm, 8px);
 }
 .mini-card-close:hover { background: color-mix(in srgb, var(--danger, #e0564b) 12%, transparent); color: var(--danger, #e0564b); }
 
@@ -138,6 +138,12 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   box-shadow: var(--card-shadow);
 }
 .mini-card-cap:last-child { flex-shrink: 0; }
+.mini-card-floating[data-chat-navigation] { --mini-chat-navigation-space: 34px; }
+.mini-card-chat-navigation {
+  position: absolute;
+  top: var(--mini-top);
+  left: 7px;
+}
 .mini-card-floating .mini-card-space,
 .mini-card-floating .mini-card-action,
 .mini-card-picker { border-radius: var(--radius-pill, 999px); }
@@ -215,7 +221,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   max-height: calc(100% - 58px);
   overflow: hidden;
   border: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
-  border-radius: var(--radius-lg, 14px);
+  border-radius: var(--radius-lg, 16px);
   /* 不透明卡面(2026-11-05):开合走液滴(MiniColumnHost.tsx 调 emergeDroplet),液滴要求真面板接手时同色,
      半透明毛玻璃过融球阈值会变成实色、接手那一下变一次底;也合「悬浮在正文之上的块底色一律不透明」(DESIGN §3)。 */
   background: var(--bg-card, var(--bg, #fff));
@@ -237,7 +243,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   min-height: 34px;
   padding: 5px 7px;
   border: none;
-  border-radius: var(--radius-sm, 9px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-muted, rgba(0, 0, 0, 0.62));
   font: 500 var(--ui-font-caption, 11px)/1.25 var(--font-ui, sans-serif);
@@ -254,11 +260,11 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
 /* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
 .mini-card-shell .t2-toolbar { display: none; }
 .mini-card-shell .t2-stream-inner {
-  padding: calc(var(--mini-top, 0px) + 6px) 12px calc(var(--t2-composer-h, 88px) + 6px);
+  padding: calc(var(--mini-top, 0px) + var(--mini-chat-navigation-space, 0px) + 6px) 12px calc(var(--t2-composer-h, 88px) + 6px);
   gap: 18px;
 }
 .mini-card-shell .t2-chat-col > .t2-empty {
-  inset: var(--mini-top, 0px) 0 var(--t2-composer-h, 88px);
+  inset: calc(var(--mini-top, 0px) + var(--mini-chat-navigation-space, 0px)) 0 var(--t2-composer-h, 88px);
   gap: 8px;
   padding: 14px 18px;
 }
@@ -334,7 +340,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   margin-inline: auto;
   padding: 6px 11px;
   border: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
-  border-radius: var(--radius-md, 10px);
+  border-radius: var(--radius-md, 12px);
   background: var(--bg-card, var(--bg, #fff));
   color: var(--text, #111);
   box-shadow: var(--card-shadow, 0 8px 24px rgba(0, 0, 0, 0.16));

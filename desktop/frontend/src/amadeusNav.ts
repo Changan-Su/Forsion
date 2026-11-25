@@ -426,6 +426,26 @@ export function opensAsTab(path: string): boolean {
   return isMediaPath(path) || (!/\.html?$/i.test(path) && !!matchFileType(path))
 }
 
+/** 这份库内文件「打开」会开成哪个主区视图({type, params}),只算不开 —— Desk ⋯ 的「向右 / 向下拆分」「在新窗口中打开」
+ *  要先知道开成什么,才能拆到指定的组、交给新窗口重建(11-23 Desk 标签栏互通方案)。
+ *  ⚠️ 次序 = openNote 与 openFile 的分派次序(白板、仪表盘、未被插件接管的内置类型、音视频、插件文件类型、笔记)。
+ *  改那两处时这里同改:插件文件类型或 .db 开进笔记编辑器 = 毁档。仪器 amadeusNav.fileViewRef.test.ts。
+ *  开不成主区标签的(本地 .html 交内置浏览器、没人认领的交系统默认程序)回 null。 */
+export function fileViewRef(path: string): { type: string; params: Record<string, unknown> } | null {
+  if (isDrawingPath(path)) return { type: 'amadeus-drawing', params: { drawingPath: path } }
+  if (isDashboardPath(path)) return { type: 'dashboard', params: { dashPath: path } }
+  if (!(isOverridableBuiltinType(path) && matchFileType(path))) {
+    if (extHit(path, 'amadeus-db')) return { type: 'amadeus-db', params: { dbPath: path } }
+    if (extHit(path, 'amadeus-pdf')) return { type: 'amadeus-pdf', params: { pdfPath: path } }
+    if (extHit(path, 'amadeus-image')) return { type: 'amadeus-image', params: { imagePath: path } }
+  }
+  if (isMediaPath(path)) return { type: 'amadeus-media', params: { path } }
+  if (/\.html?$/i.test(path)) return null
+  if (matchFileType(path)) return { type: 'amadeus-plugin-file', params: { filePath: path } }
+  if (/\.md$/i.test(path)) return { type: 'amadeus-editor', params: { notePath: path } }
+  return null
+}
+
 /** 打开一个「插件文件类型」文件到通用 amadeus-plugin-file 视图:已有认领该文件的 tab
  *  → 激活;否则主区打开。新建后打开时该文件可能还没进结构 → 先刷新树再开。非插件文件类型回落系统默认程序。
  *  page / quote = 带落点的打开(笔记里的 `[[x.pdf#page=3]]`、聊天引用;目前只有 PDF 有落点):跟着「默认打开方式」

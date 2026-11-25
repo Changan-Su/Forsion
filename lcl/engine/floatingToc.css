@@ -42,7 +42,7 @@
   top: 8px;
   width: 20px;
   height: var(--th, 2px);
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill, 999px);
   background: var(--text-muted);
   transform-origin: left;
   transform: translateY(var(--y)) translateY(-50%) scaleX(var(--l));
@@ -68,7 +68,7 @@
   top: -1px;
   width: 20px;
   height: 2px;
-  border-radius: var(--radius-pill, 9999px);
+  border-radius: var(--radius-pill, 999px);
   background: var(--accent-ink);
   transform-origin: left;
   transform: scaleX(var(--ml));
@@ -83,7 +83,7 @@
   border-radius: 50%;
   background: var(--accent-ink);
 }
-.lcl-ftoc-source { position: absolute; left: -5px; top: -9px; width: 34px; height: 18px; border-radius: 9px; }
+.lcl-ftoc-source { position: absolute; left: -5px; top: -9px; width: 34px; height: 18px; border-radius: var(--radius-pill); }
 .lcl-ftoc-frame[data-side='right'] :is(.lcl-ftoc-tick, .lcl-ftoc-mark) { left: auto; right: 6px; }
 .lcl-ftoc-frame[data-side='right'] :is(.lcl-ftoc-tick, .lcl-ftoc-pin) { transform-origin: right; }
 .lcl-ftoc-frame[data-side='right'] .lcl-ftoc-pin { left: auto; right: 0; }

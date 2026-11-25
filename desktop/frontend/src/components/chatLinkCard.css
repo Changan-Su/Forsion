@@ -94,7 +94,7 @@
   place-items: center;
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--overlay-light);
   color: var(--text-muted);
   font-size: var(--ui-font-caption);

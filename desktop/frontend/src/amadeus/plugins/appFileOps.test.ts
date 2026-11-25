@@ -81,6 +81,19 @@ describe('ctx.app.stat', () => {
 })
 
 describe('ctx.app.createFolder', () => {
+  it('reuses a case alias verified by the host without treating it as a created folder', async () => {
+    const createFolder = vi.fn(async () => { throw new Error('already exists') })
+    const statPath = vi.fn(async (rel: string) => ({ kind: rel === 'notes' ? 'folder' : 'file' }))
+    bridge.current = { createFolder, statPath }
+    const ctx = ctxOf('cf-case')
+    vault({ folders: ['Notes'], files: ['File.md'] })
+    await expect(ctx.app.createFolder!('notes')).resolves.toBeUndefined()
+    expect(statPath).toHaveBeenCalledWith('notes')
+    expect(isPluginCreated('cf-case', 'notes')).toBe(false)
+    expect(isPluginCreated('cf-case', 'Notes')).toBe(false)
+    await expect(ctx.app.createFolder!('file.md')).rejects.toThrow('A file is in the way: file.md')
+  })
+
   it('只建缺的那几层;已有的文件夹直接 resolve;只把真建的记进账本', async () => {
     const createFolder = vi.fn(async (parent: string, name: string) => {
       const p = parent ? `${parent}/${name}` : name

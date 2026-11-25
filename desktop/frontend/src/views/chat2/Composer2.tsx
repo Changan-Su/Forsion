@@ -52,6 +52,7 @@ import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
 import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
+import { isCaretOnEdgeLine } from './textareaLayout'
 import { findTokens, tokenTouching } from './composerTokens'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
@@ -110,6 +111,9 @@ registerMessages({
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
   // 团队模式下没有计划模式(成员不吃它,10-05 用户定):那一项置灰,原因直接写在项上 —— 触屏没有悬停说明。
   'input.planModeTeamOff': { zh: '团队模式下不可用', en: 'Not available in team mode' },
+  'input.childSection': { zh: '子会话', en: 'Child sessions' },
+  'input.noChildSessions': { zh: '不开子会话', en: 'No child sessions' },
+  'input.noChildSessionsHint': { zh: '开着时这个对话里的 Agent 不能开子会话或派子代理，只在这里串行做', en: 'When on, the Agent in this chat can’t start child sessions or sub-agents; it works here, one step at a time' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -399,6 +403,9 @@ export const Composer2: React.FC<{
   onVerifyCommandChange?: (cmd: string) => void
   planMode?: boolean
   onPlanModeChange?: (on: boolean) => void
+  /** 不开子会话(会话设置,缺省允许):开着时引擎从工具表里拿掉 start_session 和 delegate。会话进行中也能改。 */
+  noChildSessions?: boolean
+  onNoChildSessionsChange?: (on: boolean) => void
   /** 工作预设(会话事实):'chat' 轻聊天 / 缺省 work。onPresetChange 仅供空态 /chat、/work 命令;可见切换在侧栏胶囊。 */
   preset?: AgentConfig['preset']
   onPresetChange?: (p: 'chat' | 'work') => void
@@ -466,6 +473,10 @@ export const Composer2: React.FC<{
   /** 聊天开在侧栏(left/right)时为 true:自动把**主区当前打开的那篇笔记**作为默认引用挂上
    *  「已选择」条(用户可 ×,换一篇即复活)。聊天自己就是主区时无「另一个主区文件」可言,恒 false。 */
   autoRefFromMain?: boolean
+  /** Human Desk 在看的那样东西(11-23 第三轮):挂成「已选择」里的第一枚引用,× 它 = onLiveRefRemove(停止在看)。
+   *  与 autoRefFromMain 同一套芯片和 token,只是来源换成右边那块 Human Desk。 */
+  liveRef?: RefChip | null
+  onLiveRefRemove?: () => void
   /** 侧边拼接面板里:贴着的那扇 App 窗口。挂成默认引用(用户可 ×),优先于主区笔记。 */
   appRef?: { app: string; bundleId?: string; pid: number; windowId: number; title: string } | null
   /** 本会话已发送的用户消息(旧→新);输入框空/首行按 ↑↓ 召回,类 shell / codex / claude code。 */
@@ -492,13 +503,13 @@ export const Composer2: React.FC<{
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
-  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
+  preset, onPresetChange, planMode, onPlanModeChange, noChildSessions, onNoChildSessionsChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, recipientChip, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
-  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
+  seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, liveRef, onLiveRefRemove, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow, steerInline = false, withdrawSteerRequest, onWithdrawSteerRequestDone,
 }) => {
   const { t, locale } = useI18n()
@@ -1381,7 +1392,13 @@ export const Composer2: React.FC<{
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
     return chip
   }, [appRef, localFs, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
-  const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
+  // Human Desk 的那枚排最前;与主区自动那枚 / 显式加的是同一个(token 相同)就只留一枚
+  // 同主区自动那枚:只在本机 host 会话挂(别的电脑 / 云端的会话读不到本机路径)
+  const liveChip = useMemo<RefChip | null>(() => (liveRef && localFs ? liveRef : null), [liveRef, localFs])
+  const rawRefChips = useMemo(() => {
+    const auto = autoChip && autoChip.token !== liveChip?.token ? autoChip : null
+    return [...(liveChip ? [liveChip] : []), ...(auto ? [auto] : []), ...refChips]
+  }, [autoChip, liveChip, refChips])
   const runChips = useMemo(() => runChipOwners(refChips), [refChips])
   const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
   // 认得出的斜杠命令 / 选过的 @ 提及:输入框里画成一枚(InlineRefMirror),退格整枚删(见 ./composerTokens)
@@ -1394,8 +1411,10 @@ export const Composer2: React.FC<{
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
     const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
-    return rawRefChips.filter((c) => !c.inline || inText.has(c.token))
-  }, [rawRefChips, inlineRuns, runChips])
+    const eff = rawRefChips.filter((c) => !c.inline || inText.has(c.token))
+    // 你自己也引了同一篇(且还算数)→ 只留你那枚;句子里那段删掉了就不算,Human Desk 那枚照旧挂
+    return liveChip && eff.some((c) => c !== liveChip && c.token === liveChip.token) ? eff.filter((c) => c !== liveChip) : eff
+  }, [rawRefChips, inlineRuns, runChips, liveChip])
   /** 把草稿的 [start, end) 换成 piece,光标落在它后面。直接改文本框再把值交给 React(值相同它就不再动 DOM),
    *  光标当场就位;等下一帧再摆光标的话,这一帧里敲的字会落到错的位置(台架连打时把 `[[` 拆散过)。 */
   const spliceDraft = (start: number, end: number, piece: string): void => {
@@ -1872,6 +1891,18 @@ export const Composer2: React.FC<{
       run: () => { onPlanModeChange(!planMode); closeModeMenu() },
     }],
   } : null
+  // 「不开子会话」和计划模式放在一起(插件开发优化方案 11-23 第四节 A):开着时引擎从工具表拿掉 start_session / delegate。
+  // 团队模式下成员本来就开不了子会话,这一项置灰。Web 菜单与原生半屏同一份。
+  const childSection: SheetMenuSection | null = onNoChildSessionsChange && !isChat && !isEngine ? {
+    title: t('input.childSection'),
+    items: [{
+      id: 'no-child-sessions', icon: <Split size={14} />,
+      label: groupChat ? `${t('input.noChildSessions')} · ${t('input.planModeTeamOff')}` : t('input.noChildSessions'),
+      detail: t('input.noChildSessionsHint'),
+      checked: !!noChildSessions && !groupChat, disabled: !!groupChat,
+      run: () => { onNoChildSessionsChange(!noChildSessions); closeModeMenu() },
+    }],
+  } : null
   const groupSection: SheetMenuSection | null = onGroupChange && !isEngine && !isChat ? {
     title: t('group.menu.section'),
     items: [{ id: 'group-chat', label: groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable'), icon: <Users size={14} />, checked: groupActive, run: () => { setGroupSetupOpen(true); closeModeMenu() } }],
@@ -1893,6 +1924,7 @@ export const Composer2: React.FC<{
       sections: [
         { items: normal ? [normal.normal, ...(normal.agentSwitch ? [normal.agentSwitch] : [])] : [] },
         ...(planSection ? [planSection] : []),
+        ...(childSection ? [childSection] : []),
         ...(groupSection ? [groupSection] : []),
         ...(isHost ? [{ title: t(teamApproval ? 'input.approvalSection.team' : 'input.approvalSection'), items: [...approvalItems, ...(editRulesItem ? [editRulesItem] : [])] }] : []),
       ],
@@ -1990,14 +2022,17 @@ export const Composer2: React.FC<{
                 <RefChipView
                   key={c.token}
                   chip={c}
+                  live={c === liveChip}
                   removeTitle={t('input.remove')}
                   inlineTitle={t('input.ref.shiftInline')}
                   onInline={canInline(c) ? () => { const ta = taRef.current; insertInline(c, ta?.selectionStart ?? draft.length, ta?.selectionEnd ?? draft.length, true) } : undefined}
                   onRemove={() => {
                     // 句子里那几段还原成普通文字:话还在,只是不再是引用
                     if (c.run) { const run = c.run; setDraft((d) => plainRuns(d, run)) }
+                    // Human Desk 那枚:× = 停止在看(小眼睛跟着灭,不另记「这一篇先别挂」)
+                    if (c === liveChip) onLiveRefRemove?.()
                     // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
-                    if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
+                    else if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
                     else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
                   }}
                 />
@@ -2162,23 +2197,24 @@ export const Composer2: React.FC<{
                 })
                 return
               }
-              // steer 撤回优先于历史召回:等待区有货且未进召回态,空/首行 ↑ 先取回最新一条插话
-              // (prepend 进草稿,类 pi 的 Alt+Up;再按 ↑ 继续取更早的,取完自然落回历史召回)。
-              if (e.key === 'ArrowUp' && pendingSteer?.length && onWithdrawSteer && histPos === 0
-                && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1) {
-                e.preventDefault()
-                withdrawIntoDraft(pendingSteer[pendingSteer.length - 1].id)
-                return
-              }
-              // 历史召回:走到这里说明无浮层消费方向键(菜单激活时已 return)。空/首行 ↑ 取更旧、末行 ↓ 取更新。
-              if (e.key === 'ArrowUp' && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1 && sentHistory?.length) {
-                e.preventDefault(); recallHistory(true); return
-              }
-              if (e.key === 'ArrowDown' && histPos > 0 && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
-                && draft.slice(e.currentTarget.selectionStart).indexOf('\n') === -1) {
-                e.preventDefault(); recallHistory(false); return
+              // 补全菜单已先处理方向键。光标到视觉首 / 末行才允许撤回插话或切换历史。
+              if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                if (e.key === 'ArrowUp') {
+                  // 等待中的插话优先取回，再往前才是已发送消息。
+                  const queued = histPos === 0 && onWithdrawSteer ? pendingSteer?.at(-1) : undefined
+                  const hasOlder = histPos < (sentHistory?.length ?? 0)
+                  if ((queued || hasOlder) && isCaretOnEdgeLine(e.currentTarget, 'first')) {
+                    e.preventDefault()
+                    if (queued) void withdrawIntoDraft(queued.id)
+                    else recallHistory(true)
+                    return
+                  }
+                }
+                if (e.key === 'ArrowDown' && histPos > 0 && isCaretOnEdgeLine(e.currentTarget, 'last')) {
+                  e.preventDefault()
+                  recallHistory(false)
+                  return
+                }
               }
               // 运行中 ⌘/Ctrl+Enter = 另起话题(11-08);没在跑时 ⌘Enter 照旧就是发送
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); if (running && (isMacPlatform() ? e.metaKey : e.ctrlKey)) sendNewTopic(); else send() }
@@ -2308,11 +2344,11 @@ export const Composer2: React.FC<{
                   <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode t2c-pour" style={modeFix.style}>
                     {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { capsule.dismiss(); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
                     {onNormalWork && !isChat && <NormalModeItem {...normalProps} inline={layout.compact} />}
-                    {[planSection, groupSection].map((sec) => sec && (
+                    {[planSection, childSection, groupSection].map((sec) => sec && (
                       <React.Fragment key={sec.items[0].id}>
                         <div className="menu-section">{sec.title}</div>
                         {sec.items.map((it) => (
-                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} disabled={it.disabled} onClick={it.run}>
+                          <button key={it.id} className={`menu-item${it.checked ? ' active' : ''}`} disabled={it.disabled} onClick={it.run} title={it.detail} data-menu-item={it.id}>
                             {it.icon}
                             <span className="grow">{it.label}</span>
                             {it.checked && <Check size={13} />}

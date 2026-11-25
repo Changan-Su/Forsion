@@ -11,7 +11,7 @@ import { homeTarget } from '../../services/engine/targets'
 import type { MuseTodoEvidence, MuseTodoEvidenceKind, UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { splitSuggestions, type TaskCard } from './suggest'
 import { ChildSessionsBlock, ModelChip } from './ChildSessions'
-import { markTaskHandled, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
+import { markTaskHandled, refreshCardMarks, taskDoneKey, taskHandled, useTaskHandledVersion, TASK_CARD_TTL_MS, type TaskLanding } from './pendingTasks'
 import './chat2.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
@@ -249,16 +249,22 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
           if (createdAt && Date.now() - createdAt > TASK_CARD_TTL_MS) { rerender((n) => n + 1); return } // 挂着跨过 7 天:点的这一下定格成已过期
           inFlightTaskCards.add(doneKey)
           setTaskBusy(key)
+          // 另一端(手机 / 网页 / 连过来的电脑)可能刚处理过这张:执行前跟引擎再对一下(最多等 1.5s,等不到照旧执行)
+          if (sessionId) {
+            await refreshCardMarks(sessionId)
+            if (taskHandled(doneKey)) { inFlightTaskCards.delete(doneKey); setTaskBusy((b) => (b === key ? null : b)); return }
+          }
           let ok = false
           let child: string | undefined
           try {
-            const r = await onTask?.(c, landing)
+            // 没有执行入口(如画布视图)= 什么也没做:不能记成「已处理」(现在这条记录会同步到别的端,卡在那边也会消失)
+            const r = onTask ? await onTask(c, landing) : false
             ok = r !== false
             if (r && typeof r === 'object') child = r.childId
           } catch { ok = false }
           inFlightTaskCards.delete(doneKey)
           setTaskBusy((b) => (b === key ? null : b))
-          if (ok) { markTaskHandled(doneKey, landing, child); setTaskDone((p) => ({ ...p, [key]: landing })) }
+          if (ok) { markTaskHandled(doneKey, landing, child, sessionId); setTaskDone((p) => ({ ...p, [key]: landing })) }
         }
         const btn = (landing: TaskLanding, icon: React.ReactNode, label: string, primary = false): React.ReactNode => (
           <button key={landing} className={primary ? 'primary' : ''} disabled={busy} onClick={() => void pick(landing)}>{icon} {label}</button>
@@ -294,7 +300,7 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
             <button className="t2-taskcard-toggle" onClick={() => setTaskOpen((p) => ({ ...p, [key]: !open }))} aria-expanded={open}>
               {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {t(open ? 'chat.task.hidePrompt' : 'chat.task.showPrompt')}
             </button>
-            {open && <pre className="t2-taskcard-prompt" data-motion="enter">{c.prompt}</pre>}
+            {open && <pre className="t2-taskcard-prompt" data-motion="enter">{c.brief ?? c.prompt}</pre>}
             {gone
               ? <div className="t2-taskcard-done">{gone === 'expired' ? t('chat.task.expired') : `${t('chat.task.withdrawn')}${withdrawn.get(c.id!) ? ` · ${withdrawn.get(c.id!)}` : ''}`}</div>
               : done
@@ -306,7 +312,8 @@ export function TaskCards({ tasks, ownerId, onTask, noHere = false, todoStatus, 
                     {todoState === 'error' && onTodoRetry && <> <button className="t2-taskcard-toggle" onClick={onTodoRetry}>{t('inbox.approval.retry')}</button></>}
                   </div>
                 )
-                : (
+                // 没有执行入口(画布视图)就不摆按钮:摆了点下去什么也不做(只读的卡,要处理回对话里)
+                : !onTask ? null : (
                 <>
                 <div className="t2-taskcard-actions">
                   {c.ask ? [child ?? fresh, here] : musePrimary ? [muse, child, here, fresh] : [child, here, fresh, muse]}

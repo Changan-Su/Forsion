@@ -104,7 +104,8 @@ exports.checkWindowsCaption = async ({ app, win, check, closed, shots }) => {
     if (c.compact) {
       await win.locator('.iv-more .iv-btn').click()
       await win.locator('.iv-menu').waitFor()
-      check(`${c.name}: More menu opens`, await win.locator('.iv-menu button').count() === 2)
+      // 对话里有 ≥2 张图:窄窗「更多」= 全部图片、复制、下载(#843)
+      check(`${c.name}: More menu opens`, await win.locator('.iv-menu button').count() === 3)
       await win.keyboard.press('Escape')
     }
     await win.locator('.iv-tools > button:last-child').click()

@@ -4,10 +4,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { createHash, generateKeyPairSync, sign } from 'node:crypto';
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canonicalFiles, cloudPathAllowed, createOfficialCloud, isOfficialEnginePlugin, verifyBundleSignature } from './official.js';
+import { HEALTH_MARKET_DIR, canonicalFiles, cloudPathAllowed, createOfficialCloud, isOfficialEnginePlugin, verifyBundleSignature } from './official.js';
 import type { DiscoveredPlugin } from './loader.js';
 
 const pem = (k: import('node:crypto').KeyObject): string => k.export({ type: 'spki', format: 'pem' }).toString();
@@ -161,6 +161,12 @@ describe('官方判定(签名)', () => {
 });
 
 describe('ctx.cloud 路径白名单', () => {
+  it('健康包只可读取经用户授权的摘要', () => {
+    expect(cloudPathAllowed('/api/wellness/agent/summary', 'POST', 'forsion-health')).toBe(true);
+    expect(cloudPathAllowed('/api/wellness/agent-access', 'POST', 'forsion-health')).toBe(false);
+    expect(cloudPathAllowed('/api/market/mine', 'GET', 'forsion-health')).toBe(false);
+    expect(cloudPathAllowed('/api/wellness/agent/summary', 'POST', 'forsion-extend')).toBe(false);
+  });
   it('只放两条:GET 我的条目、POST 提交更新(可带 ?dryRun=1)', () => {
     expect(cloudPathAllowed('/api/market/mine', 'GET')).toBe(true);
     expect(cloudPathAllowed('/api/market/mine/abc_DEF-123/update', 'POST')).toBe(true);
@@ -214,7 +220,7 @@ describe('接进宿主(bootstrap)', () => {
     process.env.TANGU_PLUGINS_DIR = path.join(tmp, 'no-user-plugins'); // 先占住:下面按用例改成捆绑包形态
     (globalThis as any).__official = {};
     vi.resetModules();
-    vi.doMock('./officialKeys.js', () => ({ OFFICIAL_BUNDLE_KEYS: { 'test-official': GOOD_PEM } }));
+    vi.doMock('./officialKeys.js', () => ({ OFFICIAL_BUNDLE_KEYS: { 'forsion-extend': GOOD_PEM } }));
   });
   afterEach(() => {
     vi.doUnmock('./officialKeys.js');
@@ -241,7 +247,7 @@ describe('接进宿主(bootstrap)', () => {
   }
 
   it('官方插件拿得到 ctx.cloud、工具进 chat 面、卡面文案生效;第三方插件同样写法三样都没有', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools',
       pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
     signBundle(official);
     const third = writeBundle(path.join(tmp, 'b'), 'third-party', 'third-tools',
@@ -270,7 +276,7 @@ describe('接进宿主(bootstrap)', () => {
   });
 
   it('第三方插件注册同名 store_submit_update:chat 面里留下的是官方那份;卡面文案退回整份参数', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools',
       pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
     signBundle(official);
     const third = writeBundle(path.join(tmp, 'b'), 'third-party', 'zz-third',
@@ -283,7 +289,7 @@ describe('接进宿主(bootstrap)', () => {
   });
 
   it('官方插件的卡面文案抛错 / 不是字符串 → 退回整份参数;文案照样过 previewText 转义', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools', pluginSource('store-tools', [
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools', pluginSource('store-tools', [
       { name: 'store_submit_update', tag: 'a', preview: `() => { throw new Error('x'); }` },
       { name: 'store_check_update', tag: 'b', preview: `() => 'ok\\u202Espoof'` },
     ]));
@@ -296,7 +302,7 @@ describe('接进宿主(bootstrap)', () => {
 
   it('被篡改时 import 的模块:文件恢复成签名那份后停用再启用(不重扫、复用缓存模块)也不升成官方', async () => {
     const signed = pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]);
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools', signed);
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools', signed);
     signBundle(official);
     const entry = path.join(official, 'tangu-plugins/store-tools/dist/index.js');
     writeFileSync(entry, pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'tampered', preview: PREVIEW }]));
@@ -310,7 +316,7 @@ describe('接进宿主(bootstrap)', () => {
   });
 
   it('对照:签名完好的官方插件停用再启用仍是官方', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools',
       pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
     signBundle(official);
     const h = await boot([official]);
@@ -321,7 +327,7 @@ describe('接进宿主(bootstrap)', () => {
   });
 
   it('本次 run 的 profile 里有同名 app 工具 → 卡面文案退回整份参数(执行侧按 ctx.profile 解析)', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools',
       pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
     signBundle(official);
     const h = await boot([official]);
@@ -343,7 +349,7 @@ describe('接进宿主(bootstrap)', () => {
   });
 
   it('签名之后改了入口:照常加载,但不当官方', async () => {
-    const official = writeBundle(path.join(tmp, 'b'), 'test-official', 'store-tools',
+    const official = writeBundle(path.join(tmp, 'b'), 'forsion-extend', 'store-tools',
       pluginSource('store-tools', [{ name: 'store_submit_update', tag: 'official', preview: PREVIEW }]));
     signBundle(official);
     writeFileSync(path.join(official, 'tangu-plugins/store-tools/dist/index.js'),
@@ -361,7 +367,21 @@ describe('钉的公钥与桌面同一把', () => {
   it.skipIf(!existsSync(json))('officialKeys.ts 与 desktop/electron/builtinBundles.json 的 signingKey 逐字一致', async () => {
     const { OFFICIAL_BUNDLE_KEYS } = await vi.importActual<typeof import('./officialKeys.js')>('./officialKeys.js');
     const bundles = JSON.parse(readFileSync(json, 'utf8')) as Array<{ id: string; desktop?: { signingKey?: string } }>;
-    for (const [id, key] of Object.entries(OFFICIAL_BUNDLE_KEYS)) {
+    const health = path.resolve(__dirname, '../../../extensions/forsion-health');
+    expect(OFFICIAL_BUNDLE_KEYS['forsion-health']).toBe(readFileSync(path.join(health, '../health-public.pem'), 'utf8'));
+    const reader = discovered(health, 'health-reader');
+    reader.manifest.entry = 'index.mjs';
+    expect(await isOfficialEnginePlugin(reader, OFFICIAL_BUNDLE_KEYS)).toBe(true);
+    for (const [folder, trusted] of [[HEALTH_MARKET_DIR, true], ['market-11111111-1111-4111-8111-111111111111', false]] as const) {
+      const installed = path.join(tmp, folder);
+      cpSync(health, installed, { recursive: true });
+      const entry = discovered(installed, 'health-reader');
+      entry.manifest.entry = 'index.mjs';
+      expect(await isOfficialEnginePlugin(entry, OFFICIAL_BUNDLE_KEYS)).toBe(trusted);
+      writeFileSync(path.join(entry.dir, 'index.mjs'), 'export default {};');
+      expect(await isOfficialEnginePlugin(entry, OFFICIAL_BUNDLE_KEYS)).toBe(false);
+    }
+    for (const [id, key] of Object.entries(OFFICIAL_BUNDLE_KEYS).filter(([id]) => id !== 'forsion-health')) {
       expect(bundles.find((b) => b.id === id)?.desktop?.signingKey, id).toBe(key);
     }
   });

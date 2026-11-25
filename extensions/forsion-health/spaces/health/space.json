@@ -1,0 +1,9 @@
+{
+  "id": "forsion-health",
+  "name": { "zh": "健康", "en": "Health" },
+  "version": "1.0.0",
+  "icon": "activity",
+  "iconFile": "icon.svg",
+  "layout": { "main": [{ "type": "plugin:forsion-health:overview" }], "left": [], "right": [] },
+  "requires": { "views": ["plugin:forsion-health:overview"] }
+}

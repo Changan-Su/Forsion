@@ -21,6 +21,7 @@ const ROOTS = [join(REPO, 'desktop/frontend/src'), join(REPO, 'lcl')]
 const SOLID_BY_DESIGN: Record<string, { file: string; why: string }> = {
   // 画布 / 内容本身:它们是正文的一部分,不是压在正文上的面
   '.iv-img': { file: 'desktop/frontend/src/components/imageViewer.css', why: '看图器里的图片本身' },
+  '.imk-frame': { file: 'desktop/frontend/src/components/imageMarkup.css', why: '标注层里的图框,就是那张图本身' },
   '.img-stack-card': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '对话里的图片叠卡' },
   '.img-stack-nav': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '图片叠卡的翻页钮,压在图上' },
   '.t2cv-read': { file: 'desktop/frontend/src/views/chat2/chat2.css', why: '画布视图的阅读卡(正文)' },
@@ -81,7 +82,15 @@ function cssFiles(dir: string, out: string[] = []): string[] {
 
 /** 一条规则 × 它选择器列表里的一项。逐条判,不按末级类名合并:否则 `.ctx-menu` 读了 token,
  *  更具体的 `.am-app .ctx-menu` 写回实色也会被前者「代为通过」(Codex 评审 11-08)。 */
-interface Rule { selector: string; cls: string; file: string; floating: boolean; painted: boolean; tokens: boolean; glassy: boolean }
+interface Rule {
+  selector: string; cls: string; file: string; floating: boolean; painted: boolean; tokens: boolean; glassy: boolean
+  /** backdrop-filter 读 --surface-blur */
+  blurred: boolean
+  /** 底色 token 的回落是半透色(color-mix / rgba / hsla / transparent) */
+  softFallback: boolean
+  /** 把 --surface-menu / --surface-float 当 color-mix 的一端 */
+  mixed: boolean
+}
 
 function rules(): Rule[] {
   const out: Rule[] = []
@@ -95,10 +104,14 @@ function rules(): Rule[] {
         || /box-shadow:\s*var\(--card-shadow/.test(body) // shadow-contract: effect (test regex, not a style)
       const tokens = /background(-color)?:\s*var\(--surface-(menu|float)\b/.test(body)
       const glassy = /var\(--(bg-glass|panel-blur)\b/.test(body)
+      const blurred = /backdrop-filter:\s*var\(--surface-blur\b/.test(body)
+      const softFallback = /background(-color)?:\s*var\(--surface-(menu|float),\s*(color-mix|rgba|hsla|transparent|(rgb|hsl)\([^)]*\/)/.test(body)
+      // 只认 color-mix 自己括号里(允许一层嵌套)的 token:「渐变, var(--surface-menu)」这种多层背景是合法的
+      const mixed = /color-mix\((?:[^()]|\([^()]*\))*?var\(--surface-(menu|float)\b/.test(body)
       for (const part of m[1].split(',')) {
         const selector = part.trim().replace(/\s+/g, ' ')
         const cls = (selector.match(/\.[a-zA-Z][\w-]*/g) || []).pop()
-        if (cls) out.push({ selector, cls, file: relative(REPO, file), floating, painted, tokens, glassy })
+        if (cls) out.push({ selector, cls, file: relative(REPO, file), floating, painted, tokens, glassy, blurred, softFallback, mixed })
       }
     }
   }
@@ -134,5 +147,23 @@ describe('浮层表面 token', () => {
     const offenders = all.filter((r) => r.glassy && (r.tokens || MUST_READ_TOKENS.includes(r.selector) || (r.floating && r.painted)))
       .map((r) => `${r.selector}  ${r.file}`)
     expect(offenders).toEqual([])
+  })
+
+  // 契约的另一半(11-23 补):读了 token 还得读 --surface-blur、回落得是实色、token 不能拿去混色。
+  // check:chatside 25b / 25d 只量得到常驻样式表里、选择器不带伪类的规则 —— 懒加载的样式表(Muse 简报 .msb-pop)
+  // 和画在 ::before 上的材质都在它视野外;.hp-lib-note-pill(回落 94% 半透、没磨砂)和版块工具条(没磨砂)也是这么漏到 main 的。
+  it('读 --surface-menu / --surface-float 当底色的规则,同一条里也读 --surface-blur(否则 Glass 下半透又不糊)', () => {
+    const bad = all.filter((r) => r.tokens && !r.blurred).map((r) => `${r.selector}  ${r.file}`)
+    expect(bad, '补上 backdrop-filter: var(--surface-blur, none);有浮层后代的,材质挪到无子节点的 ::before(DESIGN「浮层表面 token」)').toEqual([])
+  })
+
+  it('表面 token 的回落是原来的实色(Genesis 下不半透)', () => {
+    const bad = all.filter((r) => r.softFallback).map((r) => `${r.selector}  ${r.file}`)
+    expect(bad, '回落写实色,如 var(--surface-float, var(--bg-card))').toEqual([])
+  })
+
+  it('表面 token 不拿去 color-mix(Glass 下它是「高光渐变, 底色」两层背景列表,整条声明失效)', () => {
+    const bad = all.filter((r) => r.mixed).map((r) => `${r.selector}  ${r.file}`)
+    expect(bad, '要在浮层上叠一抹色,往 transparent 里混,叠在浮层自己的卡面上').toEqual([])
   })
 })

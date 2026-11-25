@@ -384,6 +384,12 @@ describe('multi-account limits: storage', () => {
     expect(blocked.json?.code).toBe('STORAGE_LIMIT');
     expect((await c.call('dave', 'POST', '/agent/memory', { body: { content: canary('dave', 'mem') } })).status).toBe(507);
     expect((await c.call('dave', 'PATCH', `/agent/sessions/${r.sessionId}/config`, { body: { note: 'x'.repeat(4096) } })).status).toBe(507);
+    // card marks: a write into this account's database (507 over the limit, reads still work); another account's session is unknown (404)
+    const marks = { marks: { 'id:a': { l: 'child', t: Date.now(), c: 'c1' } } };
+    expect((await c.call('dave', 'POST', `/agent/sessions/${r.sessionId}/card-marks`, { body: marks })).status).toBe(507);
+    expect((await c.call('dave', 'GET', `/agent/sessions/${r.sessionId}/card-marks`)).status).toBe(200);
+    expect((await c.call('bob', 'GET', `/agent/sessions/${r.sessionId}/card-marks`)).status).toBe(404);
+    expect((await c.call('bob', 'POST', `/agent/sessions/${r.sessionId}/card-marks`, { body: marks })).status).toBe(404);
     expect((await c.call('dave', 'GET', '/agent/sessions')).status).toBe(200);
     expect((await c.call('dave', 'DELETE', `/agent/sessions/${r.sessionId}`)).status).toBe(200);
     // bob is under his own limit and keeps working

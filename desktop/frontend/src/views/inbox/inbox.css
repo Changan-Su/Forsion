@@ -16,7 +16,7 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   cursor: pointer;
 }
 .ibx-iconbtn:hover { background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); }
@@ -105,7 +105,7 @@
 .t2-taskcard-tag.ibx-approval-wait { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); }
 .ibx-approval-preview {
   padding: 8px 10px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
   font-family: var(--font-mono, monospace);
   font-size: var(--ui-font-meta, 12px);
@@ -163,7 +163,7 @@
 .ibx-fb-text { font-size: var(--ui-font-body, 13px); line-height: 1.6; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ibx-fb-msg.me .ibx-fb-text { padding: 6px 12px; border-radius: var(--radius-md, 12px); background: var(--overlay-medium, rgba(127, 127, 127, 0.14)); }
 .ibx-fb-atts { margin-top: 3px; }
-.ibx-fb-img { max-height: 160px; max-width: 100%; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm, 6px); cursor: zoom-in; }
+.ibx-fb-img { max-height: 160px; max-width: 100%; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); cursor: zoom-in; }
 .ibx-fb-img.big { max-height: none; cursor: zoom-out; }
 /* 回复框:卡里凹下去的一格,不描边(与聊天输入卡同一口径),聚焦时亮一圈;附件钮在左、发送在右。 */
 .ibx-fb-composer {
@@ -201,7 +201,7 @@
   gap: 5px;
   padding: 4px 8px;
   border: 0;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: transparent;
   color: var(--text-muted, var(--text));
   font: inherit;

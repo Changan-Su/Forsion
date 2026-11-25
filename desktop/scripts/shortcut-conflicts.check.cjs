@@ -7,10 +7,16 @@ const DESK = path.resolve(__dirname, '..')
 const OUT = path.join(os.tmpdir(), 'forsion-shortcut-conflicts'); fs.mkdirSync(OUT, { recursive: true })
 let failed = 0
 const check = (name, ok, info) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok ? '' : ' ' + JSON.stringify(info)}`); if (!ok) failed++ }
+const mac = process.platform === 'darwin'
+const primary = mac ? 'Meta' : 'Control'
+const appKey = (key) => mac ? `⌘${key}` : `Ctrl+${key}`
+const pluginKey = mac ? '⇧⌘Y' : 'Ctrl+Shift+Y'
+const replacementKey = mac ? '⌥⇧⌘J' : 'Ctrl+Shift+Alt+J'
+const systemKey = mac ? 'Q' : 'C'
 
 // 插件默认键(2026-11-16):一个空着的默认键生效并能触发,一个撞上「新会话」⌘N 的不生效、行下说明撞上了谁。
 const PROBE_MAIN = `
-ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Alt+J', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
+ctx.registerCommand({ id: 'free', title: 'Probe free', hotkey: 'Mod+Shift+Y', run: () => { window.__probeFree = (window.__probeFree || 0) + 1 } })
 ctx.registerCommand({ id: 'clash', title: 'Probe clash', hotkey: 'Mod+N', run: () => { window.__probeClash = true } })
 window.__probeCtx = ctx
 `
@@ -59,25 +65,25 @@ async function main() {
 
     // ⑧ 插件默认键:空着的生效、撞上的不生效(行上「未设置」+ 行下说明),主窗里真按得出来
     await row('Probe free').waitFor({ timeout: 15_000 })
-    check('⑧ 空着的默认键生效 ⌥⇧⌘J', (await keyText('Probe free')).includes('⌥⇧⌘J'), await keyText('Probe free'))
-    check('⑧ 撞上 ⌘N 的默认键显示未设置', (await keyText('Probe clash')).includes('未设置'), await keyText('Probe clash'))
+    check(`⑧ 空着的默认键生效 ${pluginKey}`, (await keyText('Probe free')).includes(pluginKey), await keyText('Probe free'))
+    check(`⑧ 撞上 ${appKey('N')} 的默认键显示未设置`, (await keyText('Probe clash')).includes('未设置'), await keyText('Probe clash'))
     const note = page.locator('[data-plugin-hotkey-inactive="amadeus:shortcut-probe:clash"]')
     const noteText = await note.innerText().catch(() => '')
     // ⌘N 内置有两条(新会话 / 新建笔记),说明里点名的是先注册的那条
-    check('⑧ 行下说明撞上了内置的 ⌘N', noteText.includes('插件默认键') && noteText.includes('⌘N') && /新会话|新建笔记/.test(noteText) && noteText.includes('未生效'), noteText)
+    check(`⑧ 行下说明撞上了内置的 ${appKey('N')}`, noteText.includes('插件默认键') && noteText.includes(appKey('N')) && /新会话|新建笔记/.test(noteText) && noteText.includes('未生效'), noteText)
     await note.scrollIntoViewIfNeeded().catch(() => {})
     await shot('8-plugin-default-light')
     await win.bringToFront().catch(() => {})
     await win.locator('body').click({ position: { x: 5, y: 5 } }).catch(() => {})
-    await win.keyboard.press('Meta+Shift+Alt+J'); await win.waitForTimeout(300)
-    check('⑧ 主窗里按 ⌥⇧⌘J 触发插件命令', (await win.evaluate(() => window.__probeFree || 0)) >= 1, null)
-    await win.keyboard.press('Meta+N'); await win.waitForTimeout(300)
-    check('⑧ ⌘N 仍归「新会话」,插件那条没被触发', (await win.evaluate(() => !!window.__probeClash)) === false, null)
+    await win.keyboard.press(`${primary}+Shift+Y`); await win.waitForTimeout(300)
+    check(`⑧ 主窗里按 ${pluginKey} 触发插件命令`, (await win.evaluate(() => window.__probeFree || 0)) >= 1, null)
+    await win.keyboard.press(`${primary}+N`); await win.waitForTimeout(300)
+    check(`⑧ ${appKey('N')} 仍归「新会话」,插件那条没被触发`, (await win.evaluate(() => !!window.__probeClash)) === false, null)
     await page.bringToFront().catch(() => {})
 
     // ① 录制撞上已有命令:不存,行下出提示;点「改绑到这里」才解绑对方
     await row('打开浏览器').locator('.shortcut-key').click()
-    await page.keyboard.press('Meta+N')
+    await page.keyboard.press(`${primary}+N`)
     await page.locator('.shortcut-pending--conflict').waitFor({ timeout: 5000 })
     check('① 撞上「新会话」时出现冲突提示行', await page.locator('.shortcut-pending--conflict').innerText().then((s) => s.includes('新会话')), null)
     check('① 确认前没有改动任何覆盖', Object.keys(await overrides()).length === 0, await overrides())
@@ -86,7 +92,7 @@ async function main() {
     await shot('1-conflict-dark')
     await page.evaluate(() => { document.documentElement.dataset.mode = 'light'; document.documentElement.classList.remove('dark') })
     await page.getByRole('button', { name: '改绑到这里' }).click()
-    check('① 改绑后「打开浏览器」= ⌘N', (await keyText('打开浏览器')).includes('⌘N'), await keyText('打开浏览器'))
+    check(`① 改绑后「打开浏览器」= ${appKey('N')}`, (await keyText('打开浏览器')).includes(appKey('N')), await keyText('打开浏览器'))
     check('① 改绑后「新会话」= 未设置', (await keyText('新会话')).includes('未设置'), await keyText('新会话'))
     // ⑧b 用户的键压过插件默认键:⌘N 现在归「打开浏览器」,说明跟着改口
     await page.waitForTimeout(200)
@@ -95,21 +101,21 @@ async function main() {
 
     // ② 「换一个」/ Esc:不存
     await row('打开终端').locator('.shortcut-key').click()
-    await page.keyboard.press('Meta+K')
+    await page.keyboard.press(`${primary}+K`)
     await page.locator('.shortcut-pending--conflict').waitFor({ timeout: 5000 })
     await page.keyboard.press('Escape')
     check('② Esc 收起提示行且不存', (await page.locator('.shortcut-pending').count()) === 0 && (await keyText('打开终端')).includes('未设置'), await keyText('打开终端'))
 
     // ③ 系统保留:拦下,只有「换一个」
     await row('打开终端').locator('.shortcut-key').click()
-    await page.keyboard.press('Meta+Q')
+    await page.keyboard.press(`${primary}+${systemKey}`)
     await page.locator('.shortcut-pending--system').waitFor({ timeout: 5000 })
-    check('③ ⌘Q 被拦下且没有「改绑到这里」', (await page.getByRole('button', { name: '改绑到这里' }).count()) === 0, null)
+    check(`③ ${appKey(systemKey)} 被拦下且没有「改绑到这里」`, (await page.getByRole('button', { name: '改绑到这里' }).count()) === 0, null)
     await shot('3-system-light')
     await page.getByRole('button', { name: '换一个' }).click()
     check('③ 「换一个」回到录制', (await page.locator('input.shortcut-capture').count()) === 1, null)
-    await page.keyboard.press('Meta+Shift+Y')
-    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes('⇧⌘Y'), await keyText('打开终端')) // mac 按系统菜单顺序排修饰键(formatHotkey 的 MAC_ORDER)
+    await page.keyboard.press(`${primary}+Shift+Alt+J`)
+    check('③ 换成不冲突的键直接存', (await keyText('打开终端')).includes(replacementKey), await keyText('打开终端'))
 
     // ④ ⌫ 解绑
     await row('打开终端').locator('.shortcut-key').click()
@@ -118,21 +124,21 @@ async function main() {
 
     // ⑤ 编辑器层:能存,存完提示一句
     await row('打开终端').locator('.shortcut-key').click()
-    await page.keyboard.press('Meta+B')
-    check('⑤ ⌘B 直接存', (await keyText('打开终端')).includes('⌘B'), await keyText('打开终端'))
+    await page.keyboard.press(`${primary}+B`)
+    check(`⑤ ${appKey('B')} 直接存`, (await keyText('打开终端')).includes(appKey('B')), await keyText('打开终端'))
     check('⑤ 存完提示「加粗」', (await page.locator('.settings-inline-notice').innerText().catch(() => '')).includes('加粗'), null)
 
     // ⑥ 按键查找:⌘B → 命令里是「打开终端」,其他地方有编辑器的加粗;⌘C → 系统保留
     await page.locator('.shortcut-keymode').click()
-    await page.keyboard.press('Meta+B')
+    await page.keyboard.press(`${primary}+B`)
     await page.waitForTimeout(200)
     const list = await page.locator('.shortcut-list').innerText()
-    check('⑥ 按键查找 ⌘B 列出「打开终端」与编辑器的「加粗」', list.includes('打开终端') && list.includes('加粗') && list.includes('笔记编辑器'), list)
+    check(`⑥ 按键查找 ${appKey('B')} 列出「打开终端」与编辑器的「加粗」`, list.includes('打开终端') && list.includes('加粗') && list.includes('笔记编辑器'), list)
     await shot('6-keymode-light')
-    await page.keyboard.press('Meta+C')
+    await page.keyboard.press(`${primary}+C`)
     await page.waitForTimeout(200)
     const list2 = await page.locator('.shortcut-list').innerText()
-    check('⑥ 按键查找 ⌘C 显示系统保留的「复制」', list2.includes('复制') && list2.includes('系统保留') && list2.includes('没有命令使用'), list2)
+    check(`⑥ 按键查找 ${appKey('C')} 显示系统保留的「复制」`, list2.includes('复制') && list2.includes('系统保留') && list2.includes('没有命令使用'), list2)
     await page.keyboard.press('Escape')
     check('⑥ Esc 退出按键查找,回到搜索框', (await page.locator('.settings-filter-input input').count()) === 1, null)
 

@@ -506,6 +506,25 @@ let lastMainGroupId: string | null = null
 /** 主区「当前显示」的 panel:全局 activePanel 若在主区用它;否则(焦点在侧栏,如点了侧栏自己的标签头)
  *  取主区组内的 activePanel,优先**最后聚焦的那一组** —— 分屏时不认它就回落成 panels 里第一组(左组),
  *  树行高亮 / 箭头落到另一半屏(09-16 Codex 评审)。就地导航/前进后退都以它为作用对象。 */
+/** 有标签被**真的关掉**了(closeLeaf:× / 右键关闭 / 关闭其他 / 插件关自己的视图 / 文件删了关标签)。切 Space 换布局、移到新窗口、
+ *  标签里就地换文件都不算 —— 宿主据此认「你关掉了它」(Human Desk:拿到主区的那样东西关掉 = 做完了)。回调时面板还在。 */
+type LeafCloseListener = (leaf: { id: string; type: string; params: Record<string, unknown> }) => void
+const leafCloseListeners = new Set<LeafCloseListener>()
+export function onLeafClose(fn: LeafCloseListener): () => void {
+  leafCloseListeners.add(fn)
+  return () => { leafCloseListeners.delete(fn) }
+}
+let leafCloseMuted = 0
+/** 搬走(移到新窗口 / 拖出窗外)也是经 closeLeaf 把源关掉的,但东西没关、只是换了窗:包在这里面关,不发 onLeafClose(Codex 评审)。 */
+export function withoutLeafClose<T>(fn: () => T): T {
+  leafCloseMuted++
+  try { return fn() } finally { leafCloseMuted-- }
+}
+function emitLeafClose(leaf: { id: string; type: string; params: Record<string, unknown> }): void {
+  if (leafCloseMuted) return
+  for (const fn of leafCloseListeners) { try { fn(leaf) } catch { /* 宿主的回调出错不挡关闭 */ } }
+}
+
 export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
   const mains = panelsAt(api, 'main')
   const global = api.activePanel
@@ -1131,6 +1150,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
     if (panelType(panel) === 'home') return // home 是主区空态占位,不可关(无 close 入口,防御性)
     if (!force && guarded(api, panel)) return // 固定 View:区内最后一个关不掉
+    emitLeafClose({ id, type: panelType(panel), params: makeLeaf(panel).params }) // 真关(这时面板还在):切 Space / 移到新窗口 / 就地换文件都不走这里
     const loc = ((panel.params ?? {}) as PanelMeta).__loc ?? 'main'
     if (!force && loc !== 'main' && layoutCoordinator(api) && !layoutCoordinator(api)!.visible(loc)) {
       const remaining = get().stash[loc].filter(v => v.type !== panelType(panel) || identitySig(v.params) !== identitySig(makeLeaf(panel).params))

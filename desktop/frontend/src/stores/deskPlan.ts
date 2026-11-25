@@ -15,6 +15,9 @@ export interface DeskItem {
   view?: { type: string; params?: Record<string, unknown> }
   /** 插件工具结果卡片(落点 desk):按调用 id 回到这条会话的消息里找那次调用(components/PluginToolCard.tsx)。 */
   tool?: { callId: string }
+  /** 这一格被用户钉住(11-23 方案 A):用户动过手的格子,Agent 的新东西不再进它。只写 true、不写 false;
+   *  字段跟着条目走(换位时随条目一起挪)。以后格子有了归属(你的 / Agent 的)就从这里长出来,别改成全局开关。 */
+  pin?: true
 }
 
 /** 编辑类工具:自动上台(tool_result)与流式直播(tool_stream)共用一份名单。 */
@@ -214,6 +217,8 @@ export function extractLiveBody(args: string, tool: string): string {
 /** Desk 会话快照持久化(localStorage,单键存全 map)。直播格是流式瞬态,落盘时剔除;
  *  空且无任何用户痕迹(fraction/mode/note)的条目不落;超容量按「最近展示时间」截断。 */
 export const DESK_PERSIST_KEY = contentStorageKey('forsion.deskBySession')
+/** Human Desk 的快照(humanDeskPlan.ts 用;放这里是为了 Tangu 那侧不再多一条对 LCL 存储作用域的依赖,check:tanguboundary)。 */
+export const HUMAN_DESK_PERSIST_KEY = contentStorageKey('forsion.humanDeskBySession')
 export const DESK_PERSIST_CAP = 40
 
 /** 旧版新会话草稿 Desk 的保留键;ChatView 现在只在会话开始后挂载 Desk。
@@ -227,18 +232,52 @@ export interface DeskSnapshot {
   fraction?: number
   userResized?: boolean
   note?: string
+  /** 下面这几项见 DeskCore(手动控制,11-23 方案 A)。split = 上格占的比例(缺省各半)。 */
+  noteFor?: string[]
+  recent?: DeskItem[]
+  fresh?: string
+  solo?: number
+  split?: number
 }
 
 /** 条目新旧的代理:最近一次展示项的时间戳(无项=0,最先被截断)。 */
 const snapAt = (s: DeskSnapshot): number => Math.max(0, ...s.items.map((it) => it.at || 0))
 
+const persistable = (it: DeskItem): boolean => !it.live && !!(it.path || it.view || it.tool)
+
 export function packDeskMap(map: Record<string, DeskSnapshot>, cap = DESK_PERSIST_CAP): string {
   const entries = Object.entries(map)
-    .map(([sid, s]) => [sid, { ...s, items: (s.items || []).filter((it) => !it.live && (it.path || it.view || it.tool)) }] as const)
-    .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note))
+    .map(([sid, s]) => {
+      const recent = (s.recent || []).filter(persistable)
+      // 钉住格里的直播(两格都钉时点「正在编辑」请进来的):落盘它顶掉的那样(带钉住),别把钉住的格从快照里丢了
+      const items = (s.items || []).map((it) => (it.live && it.pin && it.live.bumped ? { ...unpinned(it.live.bumped), pin: true as const } : it))
+      const out: DeskSnapshot = { ...s, items: items.filter(persistable) }
+      if (recent.length) out.recent = recent; else delete out.recent
+      if (out.fresh?.startsWith('live:')) delete out.fresh // 直播的那颗点是瞬态,同直播格一样不落盘
+      return [sid, out] as const
+    })
+    .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note || s.recent?.length || s.split !== undefined))
     .sort((a, b) => snapAt(b[1]) - snapAt(a[1]))
     .slice(0, cap)
   return JSON.stringify(Object.fromEntries(entries))
+}
+
+/** 快照里的一个条目 → DeskItem(畸形 / 直播 → null)。 */
+function unpackItem(it: any): DeskItem | null {
+  if (!it || it.live) return null
+  const view = it.view && typeof it.view.type === 'string' && it.view.type ? it.view : null
+  const callId = it.tool && typeof it.tool.callId === 'string' && it.tool.callId ? it.tool.callId : null
+  if (!((typeof it.path === 'string' && it.path) || view || callId)) return null
+  const id = it.path || view?.type || callId
+  return {
+    key: typeof it.key === 'string' ? it.key : `${id}@0`,
+    path: typeof it.path === 'string' ? it.path : '',
+    name: typeof it.name === 'string' && it.name ? it.name : String(id).split(/[\\/]/).pop() || id,
+    at: typeof it.at === 'number' ? it.at : 0,
+    ...(callId ? { tool: { callId } } : {}),
+    ...(view ? { view: { type: view.type, ...(view.params && typeof view.params === 'object' && !Array.isArray(view.params) ? { params: view.params } : {}) } } : {}),
+    ...(it.pin === true ? { pin: true as const } : {}),
+  }
 }
 
 export function unpackDeskMap(raw: string | null | undefined): Record<string, DeskSnapshot> {
@@ -249,21 +288,11 @@ export function unpackDeskMap(raw: string | null | undefined): Record<string, De
   const out: Record<string, DeskSnapshot> = {}
   for (const [sid, v] of Object.entries(parsed as Record<string, any>)) {
     if (!v || typeof v !== 'object') continue
-    const items: DeskItem[] = (Array.isArray(v.items) ? v.items : [])
-      .filter((it: any) => it && !it.live
-        && ((typeof it.path === 'string' && it.path) || (it.view && typeof it.view.type === 'string' && it.view.type)
-          || (it.tool && typeof it.tool.callId === 'string' && it.tool.callId)))
-      .slice(0, 2)
-      .map((it: any) => ({
-        key: typeof it.key === 'string' ? it.key : `${it.path || it.view?.type || it.tool.callId}@0`,
-        path: typeof it.path === 'string' ? it.path : '',
-        name: typeof it.name === 'string' && it.name ? it.name : (it.path || it.view?.type || it.tool.callId).split(/[\\/]/).pop() || it.path || it.view?.type || it.tool.callId,
-        at: typeof it.at === 'number' ? it.at : 0,
-        ...(it.tool && typeof it.tool.callId === 'string' && it.tool.callId ? { tool: { callId: it.tool.callId } } : {}),
-        ...(it.view && typeof it.view.type === 'string' && it.view.type
-          ? { view: { type: it.view.type, ...(it.view.params && typeof it.view.params === 'object' && !Array.isArray(it.view.params) ? { params: it.view.params } : {}) } }
-          : {}),
-      }))
+    const parse = (xs: unknown, cap: number): DeskItem[] =>
+      (Array.isArray(xs) ? xs : []).map(unpackItem).filter((x): x is DeskItem => !!x).slice(0, cap)
+    const items = parse(v.items, 2)
+    const recent = parse(v.recent, DESK_RECENT_CAP).map(unpinned)
+    const noteFor = Array.isArray(v.noteFor) ? v.noteFor.filter((x: unknown): x is string => typeof x === 'string') : null
     out[sid] = {
       items,
       size: v.size === 'wide' ? 'wide' : 'half',
@@ -271,6 +300,11 @@ export function unpackDeskMap(raw: string | null | undefined): Record<string, De
       ...(typeof v.fraction === 'number' && v.fraction > 0 && v.fraction < 1 ? { fraction: v.fraction } : {}),
       ...(v.userResized ? { userResized: true } : {}),
       ...(typeof v.note === 'string' && v.note ? { note: v.note } : {}),
+      ...(noteFor ? { noteFor } : {}),
+      ...(recent.length ? { recent } : {}),
+      ...(typeof v.fresh === 'string' && v.fresh && !v.fresh.startsWith('live:') ? { fresh: v.fresh } : {}),
+      ...(v.solo === 0 || v.solo === 1 ? { solo: v.solo } : {}),
+      ...(typeof v.split === 'number' && Number.isFinite(v.split) ? { split: clampSplit(v.split) } : {}),
     }
   }
   return out
@@ -292,4 +326,335 @@ export function findLiveEdit(
     }
   }
   return null
+}
+
+// ── 手动控制(2026-11-23 用户选方案 A,方案页 docs/ToBeImproved/AgentDesk手动控制方案_2026-11-20/) ──
+// 每格可钉住(DeskItem.pin):用户动过手的格子(换内容、对调、拖进东西)自动钉住,Agent 的新东西(编辑自动上台、
+// 流式直播、desk_present)只进没钉的那格;两格都钉了就不顶替,只在 ▾ 上亮点(fresh)。一格都没钉时
+// 一律走上面 #790 的那几个函数(replaceTop / placeLiveItem / clearLiveTop / liveKeepsDesk),行为与之前逐字一致。
+// 所有往 Desk 上放东西的入口都经 deskReduce,不然钉住的格会被绕过去改掉、「最近放过的」也记不全。
+
+export const DESK_RECENT_CAP = 8
+export const DESK_SPLIT_MIN = 0.2
+export const DESK_SPLIT_MAX = 0.8
+/** 上下分界的比例(上格占比),夹在 20%–80%。按比例存,跟界面缩放无关。 */
+export const clampSplit = (f: number): number => Math.min(DESK_SPLIT_MAX, Math.max(DESK_SPLIT_MIN, f))
+
+/** 条目的身份:文件按归一后的路径(同一份文件 = 同一样);插件工具卡按调用 id;注册视图按 key。 */
+export function deskIdentity(it: DeskItem): string {
+  return it.path ? `f:${deskPathId(it.path)}` : it.tool ? `t:${it.tool.callId}` : `k:${it.key}`
+}
+const sameThing = (a: DeskItem | undefined, b: DeskItem | undefined): boolean => !!a && !!b && deskIdentity(a) === deskIdentity(b)
+function unpinned(it: DeskItem): DeskItem {
+  if (!it.pin) return it
+  const { pin: _pin, ...rest } = it
+  return rest
+}
+const pinnedAs = (it: DeskItem, pin: boolean | undefined): DeskItem => (pin ? { ...it, pin: true } : unpinned(it))
+const hasPins = (items: DeskItem[]): boolean => items.some((x) => x.pin)
+const setAt = (items: DeskItem[], i: number, it: DeskItem): DeskItem[] => (i < items.length ? items.map((x, j) => (j === i ? it : x)) : [...items, it])
+const dropAt = (items: DeskItem[], i: number): DeskItem[] => items.filter((_, j) => j !== i)
+
+/** Desk 上与「摆法」有关的那部分状态(两窗口同步、快照、卡片都看它)。 */
+export interface DeskCore {
+  items: DeskItem[]
+  /** 这条会话在 Desk 上最近放过的(最新在前,≤8,不含直播格,不带 pin)。 */
+  recent?: DeskItem[]
+  /** Agent 放了但你看不见的那一样(两格都钉了 / 进了收起的那格):▾ 上亮点、列表顶上「Agent 刚放的」。
+   *  值是 deskIdentity;`live:<toolId>` = 两格都钉着时 Agent 正在写(直播没上台),不落盘。打开 ▾ 即清。 */
+  fresh?: string
+  /** 只看这一格:看哪一格(下标)。只有两格时才有意义。 */
+  solo?: number
+  note?: string
+  /** desk_present 那句说明对应的条目身份:这些都不在 Desk 上了,说明跟着撤掉。旧快照没有这一项就不动说明。 */
+  noteFor?: string[]
+}
+
+/** Agent 的下一样进哪一格:第一个没钉的格;只有一格且钉着 → 新开第二格;两格都钉 → -1。 */
+export function agentSlot(items: DeskItem[]): number {
+  const [a, b] = items
+  if (!a || !a.pin) return 0
+  if (!b || !b.pin) return 1
+  return -1
+}
+
+/** 正在显示的格子下标(只看一格时只有那一格)。 */
+export function visibleSlots(core: Pick<DeskCore, 'items' | 'solo'>): number[] {
+  const n = Math.min(2, core.items.length)
+  if (n === 2 && (core.solo === 0 || core.solo === 1)) return [core.solo]
+  return Array.from({ length: n }, (_, i) => i)
+}
+
+/** 把条目记进「最近放过的」:按身份去重(新的那份顶替旧的),最新在前,≤8。 */
+export function rememberRecent(recent: DeskItem[] | undefined, add: DeskItem[]): DeskItem[] {
+  const out: DeskItem[] = []
+  for (const it of [...add, ...(recent || [])]) {
+    if (it.live || out.some((x) => sameThing(x, it))) continue
+    out.push(unpinned(it))
+    if (out.length >= DESK_RECENT_CAP) break
+  }
+  return out
+}
+
+const liveIndex = (items: DeskItem[], toolId: string): number => items.findIndex((x) => x.live?.toolId === toolId)
+
+/** 直播格落成 / 清场时,它占的那格还原成什么:带着 bumped 且它没和别的格重复 → bumped(继承这格的钉住),否则拿掉这格。 */
+function giveBack(items: DeskItem[], at: number, exclude?: DeskItem): DeskItem[] {
+  const cell = items[at]
+  const back = cell?.live?.bumped
+  const dup = !back || (exclude && sameThing(back, exclude)) || items.some((x, j) => j !== at && (sameThing(x, back) || x.key === back.key))
+  return dup ? dropAt(items, at) : setAt(items, at, pinnedAs(back, cell.pin))
+}
+
+/** Agent 编辑落盘(deskAutoShow)与插件工具卡自动进 Desk。没钉的时候 = replaceTop。 */
+export function deskLand(items: DeskItem[], item: DeskItem, toolId?: string): DeskItem[] {
+  const at = toolId ? liveIndex(items, toolId) : -1
+  if (!hasPins(items) && at <= 0) return replaceTop(items, item)
+  // 钉住的格正演着这份文件 → 原地刷新(钉住照旧);直播格把位置还回去
+  const p = items.findIndex((x, j) => j !== at && x.pin && !x.live && sameThing(x, item))
+  if (p >= 0) {
+    // 只换 key / at(重挂读新内容),视图、引用参数、名字照留
+    const out = setAt(items, p, { ...items[p], key: item.key, at: item.at })
+    return at >= 0 ? giveBack(out, at, item) : out
+  }
+  if (at >= 0) {
+    // 直播格接棒成磁盘真身(继承这格的钉住);另一格没钉且正是这份文件的旧版 → 换成 bumped 或拿掉
+    const cell = items[at]
+    let out = setAt(items, at, pinnedAs(item, cell.pin))
+    const other = 1 - at
+    const o = out[other]
+    if (o && !o.pin && sameThing(o, item)) {
+      const back = cell.live?.bumped
+      out = back && !sameThing(back, item) && !sameThing(back, out[at]) ? setAt(out, other, back) : dropAt(out, other)
+    }
+    return out
+  }
+  const s = agentSlot(items)
+  return s < 0 ? items : setAt(items, s, item)
+}
+
+/** 直播格上台 / 更新(deskLiveSync)。没钉、直播在顶格(或还没上台)时 = placeLiveItem;
+ *  同一次调用已在某格 → 原地更新(bumped 带下去);否则进 Agent 那格,记下它顶掉的条目。两格都钉 → 不上台。 */
+export function deskLivePlace(items: DeskItem[], item: DeskItem): DeskItem[] {
+  if (!item.live) return deskLand(items, item)
+  const at = liveIndex(items, item.live.toolId)
+  if (!hasPins(items) && at <= 0) return placeLiveItem(items, item)
+  if (at >= 0) {
+    const cell = items[at]
+    return setAt(items, at, pinnedAs(withBumped(item, cell.live?.bumped), cell.pin))
+  }
+  const s = agentSlot(items)
+  if (s < 0) return items
+  const cell = items[s]
+  const bumped = cell ? (cell.live ? cell.live.bumped : cell) : undefined
+  return setAt(items, s, withBumped(item, bumped && !bumped.live ? unpinned(bumped) : undefined))
+}
+
+/** 直播格清场(失败 / 没落成)。没钉、直播在顶格 = clearLiveTop;否则还原它那格(去重)。找不到 → null。 */
+export function deskLiveClearAt(items: DeskItem[] | undefined, toolId: string): DeskItem[] | null {
+  if (!items) return null
+  const at = liveIndex(items, toolId)
+  if (at < 0) return null
+  if (at === 0 && !hasPins(items)) return clearLiveTop(items, toolId)
+  return giveBack(items, at)
+}
+
+/** 点了引用 / 「正在编辑」行(deskShowFile)。没钉、也没有直播时 = 原来的顶格逻辑;
+ *  否则:已经在某一格 → 原地(同一种视图只换参数,key 不变不重挂);直播格写完前不换内容 → 进另一格;
+ *  再否则进 Agent 那格(两格都钉 → 上格)。引用不改变格子的钉住状态。 */
+export function deskCite(items: DeskItem[], path: string, item: DeskItem, sameView: (x: DeskItem) => boolean): DeskItem[] {
+  const liveAt = items.findIndex((x) => x.live)
+  if (!hasPins(items) && liveAt < 0) {
+    const top = items[0]
+    return replaceTop(items, top && sameView(top) ? { ...top, view: item.view, at: item.at } : item)
+  }
+  if (liveAt >= 0 && liveKeepsDesk([items[liveAt], ...dropAt(items, liveAt)], path)) return items
+  // 请进来的是直播格(两格都钉时点「正在编辑」行):记下它顶掉的那格,写失败了还回去
+  const put = (x: DeskItem | undefined): DeskItem => pinnedAs(item.live && x && !x.live ? withBumped(item, unpinned(x)) : item, x?.pin)
+  const h = items.findIndex((x) => !x.live && (sameView(x) || sameThing(x, item) || samePath(x.path, path)))
+  if (h >= 0) {
+    const x = items[h]
+    return setAt(items, h, sameView(x) ? { ...x, view: item.view, at: item.at } : put(x))
+  }
+  const t = liveAt >= 0 ? 1 - liveAt : Math.max(0, agentSlot(items))
+  return setAt(items, t, put(items[t]))
+}
+
+export type DeskAction =
+  | { type: 'land'; item: DeskItem; toolId?: string }
+  | { type: 'live'; item: DeskItem }
+  | { type: 'liveClear'; toolId: string }
+  | { type: 'present'; items: DeskItem[]; note?: string }
+  | { type: 'cite'; path: string; item: DeskItem; sameView: (x: DeskItem) => boolean }
+  /** 用户经 ▾ 换内容 / 把文件拖进这一格:这一格钉住;选的正在另一格 → 对调。 */
+  | { type: 'pick'; slot: number; item: DeskItem }
+  /** ⋯「移到上面 / 下面」:两格对调,挪动的那样钉住。 */
+  | { type: 'move'; slot: number }
+  | { type: 'remove'; slot: number }
+  | { type: 'unpin'; slot: number }
+  | { type: 'solo'; slot?: number }
+  /** 打开了 ▾:那颗点算看过了。 */
+  | { type: 'seen' }
+  | { type: 'clear' }
+
+// 清掉的字段写成 undefined 而不是 delete:调用方把结果铺在旧状态上({ ...cur, ...next }),删掉的键会让旧值留下来
+function settle(prev: DeskCore, next: DeskCore): DeskCore {
+  const out: DeskCore = { ...next }
+  const items = out.items
+  if (items.length < 2 || (out.solo !== 0 && out.solo !== 1) || out.solo >= items.length) out.solo = undefined
+  const shown = visibleSlots(out).map((i) => items[i])
+  if (out.fresh && !out.fresh.startsWith('live:') && shown.some((x) => deskIdentity(x) === out.fresh)) out.fresh = undefined
+  if (out.note && out.noteFor) {
+    const onDesk = items.flatMap((x) => (x.live?.bumped ? [x, x.live.bumped] : [x])).map(deskIdentity)
+    if (!out.noteFor.some((id) => onDesk.includes(id) || id === out.fresh)) { out.note = undefined; out.noteFor = undefined }
+  }
+  if (items !== prev.items) {
+    const rec = rememberRecent(out.recent, items)
+    if (rec.length) out.recent = rec
+  }
+  return out
+}
+
+/** 被 Agent 放进了你看不见的地方(两格都钉 / 收起的那格)→ 记成 fresh;看得见就不记。 */
+function noteFresh(core: DeskCore, id: string, items: DeskItem[]): string | undefined {
+  const shown = visibleSlots({ items, solo: core.solo }).map((i) => items[i])
+  return shown.some((x) => deskIdentity(x) === id || (id.startsWith('live:') && x.live && `live:${x.live.toolId}` === id)) ? core.fresh : id
+}
+
+/** Desk 摆法的唯一入口(纯函数)。条目没变时 items 保持同一个数组引用。 */
+export function deskReduce(core: DeskCore, a: DeskAction): DeskCore {
+  const items = core.items || []
+  switch (a.type) {
+    case 'land': {
+      const next = deskLand(items, a.item, a.toolId)
+      const id = deskIdentity(a.item)
+      const liveFresh = a.toolId && core.fresh === `live:${a.toolId}`
+      const placed = next.some((x) => sameThing(x, a.item))
+      const recent = placed ? core.recent : rememberRecent(core.recent, [a.item])
+      const fresh = placed ? noteFresh({ ...core, fresh: liveFresh ? undefined : core.fresh }, id, next) : id
+      return settle(core, { ...core, items: next, recent, fresh })
+    }
+    case 'live': {
+      const next = deskLivePlace(items, a.item)
+      const id = `live:${a.item.live?.toolId}`
+      const onDesk = next.some((x) => x.live?.toolId === a.item.live?.toolId)
+      return settle(core, { ...core, items: next, fresh: onDesk ? noteFresh(core, id, next) : id })
+    }
+    case 'liveClear': {
+      const next = deskLiveClearAt(items, a.toolId)
+      const fresh = core.fresh === `live:${a.toolId}` ? undefined : core.fresh
+      if (!next && fresh === core.fresh) return core
+      return settle(core, { ...core, items: next ?? items, fresh })
+    }
+    case 'present': {
+      const noteFor = a.note !== undefined ? a.items.map(deskIdentity) : core.noteFor
+      const note = a.note !== undefined ? a.note : core.note
+      if (!hasPins(items)) return settle(core, { ...core, items: a.items.slice(0, 2), solo: undefined, note, noteFor })
+      let next = items
+      let slot = agentSlot(items)
+      const rest: DeskItem[] = []
+      let placed: DeskItem | undefined
+      let shownAlready = false
+      for (const it of a.items.slice(0, 2)) {
+        if (next.some((x) => x.pin && sameThing(x, it))) { shownAlready = true; continue } // 钉住的格已经在演它了
+        if (slot >= 0) { next = setAt(next, slot, it); slot = -1; placed = it; continue }
+        rest.push(it)
+      }
+      // 一样都没上格 → 第一样亮点;上了格但那格被「只看一格」收着 → 也亮点
+      const fresh = placed ? noteFresh(core, deskIdentity(placed), next) : !shownAlready && rest[0] ? deskIdentity(rest[0]) : core.fresh
+      return settle(core, { ...core, items: next, recent: rest.length ? rememberRecent(core.recent, rest) : core.recent, fresh, note, noteFor })
+    }
+    case 'cite': {
+      const next = deskCite(items, a.path, a.item, a.sameView)
+      // 点了引用,落到的那格被「只看一格」收着 → 恢复两格,别让你点了看不见
+      const at = next.findIndex((x) => a.sameView(x) || sameThing(x, a.item) || samePath(x.path, a.path))
+      const solo = (core.solo === 0 || core.solo === 1) && at >= 0 && at !== core.solo ? undefined : core.solo
+      return settle(core, { ...core, items: next, solo })
+    }
+    case 'pick': {
+      const cur = items[a.slot]
+      if (cur?.live) return core // 直播那格写完前不换内容
+      const o = items[1 - a.slot]
+      if (cur && sameThing(cur, a.item)) return cur.pin ? core : settle(core, { ...core, items: setAt(items, a.slot, { ...cur, pin: true }) })
+      if (cur && o && !o.live && (o.key === a.item.key || sameThing(o, a.item))) {
+        // 选的正在另一格 → 对调:这一格钉住,换下去的那样带着它自己的钉住状态
+        const next = [...items]
+        next[a.slot] = { ...o, pin: true }
+        next[1 - a.slot] = cur
+        return settle(core, { ...core, items: next })
+      }
+      return settle(core, { ...core, items: setAt(items, Math.min(a.slot, items.length), { ...unpinned(a.item), pin: true }) })
+    }
+    case 'move': {
+      const cur = items[a.slot]
+      const o = items[1 - a.slot]
+      if (!cur || !o) return core
+      const next = [...items]
+      next[1 - a.slot] = cur.live ? cur : { ...cur, pin: true }
+      next[a.slot] = o
+      const solo = core.solo === a.slot ? 1 - a.slot : core.solo === 1 - a.slot ? a.slot : core.solo
+      return settle(core, { ...core, items: next, solo })
+    }
+    case 'remove': {
+      if (!items[a.slot] || items[a.slot].live) return core
+      return settle(core, { ...core, items: dropAt(items, a.slot), solo: undefined })
+    }
+    case 'unpin': {
+      const cur = items[a.slot]
+      if (!cur?.pin) return core
+      return settle(core, { ...core, items: setAt(items, a.slot, unpinned(cur)) })
+    }
+    case 'solo':
+      return settle(core, { ...core, solo: a.slot })
+    case 'seen':
+      return core.fresh ? { ...core, fresh: undefined } : core
+    case 'clear':
+      return { ...core, items: [], note: undefined, noteFor: undefined, solo: undefined, fresh: undefined }
+  }
+}
+
+/** ▾ 菜单的内容:顶上「Agent 刚放的」(若有),下面「最近放过的」:这一格(灰)、另一格(标「在另一格」),再往下按最近。 */
+export function deskMenuRows(core: DeskCore, slot: number): {
+  fresh: DeskItem | { liveToolId: string } | null
+  rows: Array<{ item: DeskItem; where: 'this' | 'other' | null }>
+} {
+  const items = core.items || []
+  const cur = items[slot]
+  const other = items[1 - slot]
+  let fresh: DeskItem | { liveToolId: string } | null = null
+  if (core.fresh?.startsWith('live:')) fresh = { liveToolId: core.fresh.slice(5) }
+  else if (core.fresh) fresh = [other, ...(core.recent || [])].find((x) => x && !x.live && deskIdentity(x) === core.fresh) ?? null
+  const rows: Array<{ item: DeskItem; where: 'this' | 'other' | null }> = []
+  const push = (it: DeskItem | undefined, where: 'this' | 'other' | null): void => {
+    if (!it || it.live || rows.length >= DESK_RECENT_CAP || rows.some((r) => sameThing(r.item, it))) return
+    if (fresh && 'key' in fresh && sameThing(fresh, it) && where !== 'this') return
+    rows.push({ item: it, where })
+  }
+  push(cur, 'this')
+  push(other, 'other')
+  for (const it of core.recent || []) push(it, null)
+  return { fresh, rows }
+}
+
+/** 另一扇窗写了快照(storage 事件):只认**这次写入真改了**的会话(旧值与新值不同)——别的会话照旧是对面盘上的旧样子,
+ *  收下会把本窗还没落盘的改动退回去。会话从快照里消失(超容量被挤出)不当删除。 */
+export function deskSessionsChanged(before: Record<string, DeskSnapshot>, incoming: Record<string, DeskSnapshot>): string[] {
+  return Object.keys(incoming).filter((sid) => JSON.stringify(before[sid] ?? null) !== JSON.stringify(incoming[sid]))
+}
+
+const DESK_SYNC_FIELDS = ['recent', 'fresh', 'solo', 'note', 'noteFor', 'split'] as const
+/** 收下对面这条会话的摆法(条目、钉住、最近放过的、点、说明、分界、只看一格);形态与宽度(mode / fraction / size)
+ *  是每扇窗自己的,不跟。条目完全相同(key、视图参数、钉住都一样)才沿用本窗的对象,否则用对面的(重挂读新内容 / 新落点)。
+ *  本窗自己的直播格按 Agent 落位规则重新摆回去(直播格不落盘,对面看不见它)。没变 → 原对象。 */
+export function adoptDeskArrangement<T extends DeskSnapshot>(cur: T | undefined, theirs: DeskSnapshot): T {
+  const base = (cur ?? { items: [], size: theirs.size || 'half', ...(theirs.mode ? { mode: theirs.mode } : {}) }) as T
+  const lives = base.items.filter((x) => x.live)
+  let items = theirs.items.map((t) => base.items.find((x) => !x.live && JSON.stringify(x) === JSON.stringify(t)) ?? t)
+  for (const lv of lives) items = deskLivePlace(items, { ...lv, live: { ...lv.live!, bumped: undefined } })
+  const sameItems = items.length === base.items.length && items.every((x, i) => x === base.items[i])
+  const sameRest = DESK_SYNC_FIELDS.every((k) => JSON.stringify(base[k] ?? null) === JSON.stringify(theirs[k] ?? null))
+  if (sameItems && sameRest) return base
+  const out = { ...base, items: sameItems ? base.items : items } as T
+  for (const k of DESK_SYNC_FIELDS) (out as unknown as Record<string, unknown>)[k] = theirs[k]
+  return out
 }

@@ -8,7 +8,7 @@
  */
 import { useChildChat } from '../../stores/childChatStore'
 import { createRunEventBatch } from './runEventBatch'
-import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { ProjectSettings, AgentConfig, AgentRunEvent, Attachment, CtxInfo, FailedRunRecord, ModelsResponse, NormalAgentDef, MsgSeg, SessionRecord, SketchItem, SubChat, TanguDesktopConfig, TodoItem, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig, TeamDef, ThinkingLevel } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { clearDeviceSticky, noteDeviceRefusal } from '../../services/deviceMarks' // P1-K7a
 import { tanguDelegatedAdmin } from '../delegatedRole'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -29,13 +29,15 @@ import { track } from '../../achievements/store'
 import { tanguCount, tanguModelCount, tanguQuotaPrompt, tanguSetting } from '../telemetry'
 import { initFirstRun, noteRunEnded, noteSessionsListed } from '../firstRun'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
-import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, clearLiveTop, isDuplicateShow, liveDeskPath, liveKeepsDesk, packDeskMap, placeLiveItem, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
+import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentSlot, agentWriteChecks, deskIdentity, deskItemFor, deskPathId, deskReduce, deskSessionsChanged, adoptDeskArrangement, extractStreamingString, isDuplicateShow, liveDeskPath, packDeskMap, resolveDeskPath, unpackDeskMap, type DeskAction, type DeskCore, type DeskItem, type DeskSnapshot } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
+import { HUMAN_DESK_PERSIST_KEY, adoptHumanDesk, deskSideOf, humanDeskPauseMs, humanDeskReduce, humanDeskSessionsChanged, humanWatching, packHumanDeskMap, unpackHumanDeskMap, type DeskSide, type HumanDeskAction, type HumanDeskCore, type HumanDeskState } from '../../stores/humanDeskPlan'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../../i18n'
 import { pointsReadToken, publishAccountQuota, reconcilePointsRead } from '../../services/accountQuota'
 import { sanitizeAnswerBy, sanitizeApprovalPreviewI18n, sanitizeApprovalReason, sanitizeApprovalRemote } from '../../approvalReason'
 import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/sessionEmoji'
+import { isRunErrorKind } from '../../../../../tangu-agent/src/contracts/runErrorKind'
 import { turnResumeMarker, isContinuationRow, isInterruptReason, parseInterruptedNotice, type InterruptReason, type TurnResumeReason } from '../../../../../tangu-agent/src/contracts/turnResume'
 import { inflightFromResult, markUnfinishedInflight, type ToolEventWithInflight } from '../inflightTool'
 import { interruptedRunError, isInterruptedRunError } from '../../views/chat2/continueTurn'
@@ -124,6 +126,20 @@ const sourcesOfResult = (name: string | undefined, res: any): { sources: WebSour
   return sources ? { sources } : undefined
 }
 
+/** todo_write 的参数 → 清单,和引擎 todo.ts 同一套归一(状态不认识当 pending、空内容丢掉、截断),
+ *  这样重开看到的和在线时 todo 事件推的是同一份。参数解析不了 / todos 不是数组 → undefined(当没写过,不当清空)。 */
+export function todosFromArgs(raw: string): TodoItem[] | undefined {
+  try {
+    const list = JSON.parse(raw)?.todos
+    if (!Array.isArray(list)) return undefined
+    const STATUS = ['pending', 'in_progress', 'completed']
+    return list.slice(0, 50).map((t: any) => ({
+      content: String(t?.content ?? '').slice(0, 500),
+      status: (STATUS.includes(t?.status) ? t.status : 'pending') as TodoItem['status'],
+    })).filter((t: TodoItem) => t.content)
+  } catch { return undefined }
+}
+
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
 export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
@@ -196,6 +212,12 @@ export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) 
     for (const ev of msg.toolEvents) {
       const sk = sketchFromToolEvent(ev)
       if (sk) { (msg.sketches ||= []).push(sk); continue }
+      // 任务清单同理:todo 事件不落库,整单原样在 todo_write 的参数里 —— 取这条回答里最后一次成功的写入(空清单也算,= 清空)
+      if (ev.name === 'todo_write' && ev.arguments && !ev.isError && ev.result !== undefined) { // 断在半截的占位 result 为空:不算写成
+        const todos = todosFromArgs(ev.arguments)
+        if (todos) msg.todos = todos
+        continue
+      }
       if (ev.name !== 'exit_plan_mode' || !ev.arguments) continue
       try {
         const p = String(JSON.parse(ev.arguments).plan ?? '').trim()
@@ -288,10 +310,14 @@ export interface LlmRetryState {
   max: number
   waitMs: number
   error?: string
-  phase?: 'retry' | 'wait_network'
+  phase?: 'retry' | 'wait_network' | 'queue'
   overload?: boolean
   /** 开始等网的时刻(wait_network) */
   since?: number
+  /** queue:rate_limit = 同一通道撞了限流、整体暂停;busy = 同一通道同时在飞的请求到了上限(引擎 llm/channelGate.ts) */
+  reason?: 'rate_limit' | 'busy'
+  /** queue:同时在飞的上限 */
+  limit?: number
 }
 
 export interface TeamWorkMember {
@@ -894,19 +920,159 @@ export interface DeskState {
   fraction?: number
   userResized?: boolean
   note?: string
+  /** 手动控制(11-23 方案 A)的摆法字段,含义见 deskPlan.ts 的 DeskCore;split = 上格占比(缺省各半)。 */
+  noteFor?: string[]
+  recent?: DeskItem[]
+  fresh?: string
+  solo?: number
+  split?: number
 }
 
-/** Desk 会话快照:变更后 500ms 合并落盘(直播格在 pack 时剔除,超容量按最近展示截断)。
- *  localStorage 是会话键共享,多窗口各自启动时水化、写入合并为后写胜——与 desk 本身的
- *  per-session 语义一致;写失败(配额/隐私模式)静默容忍,退化回"刷新散场"。 */
+/** Desk 会话快照:变更后合并落盘(直播格在 pack 时剔除,超容量按最近展示截断)。Agent 的变更等 500ms 合并,
+ *  用户动手立刻落(另一扇窗要马上跟)。写的时候只覆盖**这扇窗动过的会话**,其余照盘上的(原来整张表后写胜,
+ *  两扇窗各摆各的会互相盖掉)。另一扇窗经 storage 事件收到后只认摆法那几项(installDeskSync)。
+ *  写失败(配额/隐私模式)静默容忍,退化回"刷新散场"。 */
 let deskPersistTimer: ReturnType<typeof setTimeout> | null = null
-function persistDeskSoon(): void {
+const deskDirty = new Set<string>()
+function flushDesk(): void {
+  if (deskPersistTimer) { clearTimeout(deskPersistTimer); deskPersistTimer = null }
+  if (!deskDirty.size) return
+  try {
+    const disk = unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY))
+    const mine = store.get().deskBySession
+    for (const sid of deskDirty) {
+      if (mine[sid]) disk[sid] = mine[sid] as DeskSnapshot
+      else delete disk[sid]
+    }
+    deskDirty.clear()
+    localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(disk))
+  } catch { /* ignore */ }
+}
+function persistDeskSoon(sessionId?: string, now = false): void {
   if (typeof localStorage === 'undefined') return
+  if (sessionId) deskDirty.add(sessionId)
+  else for (const sid of Object.keys(store.get().deskBySession)) deskDirty.add(sid)
+  if (now) { flushDesk(); return }
   if (deskPersistTimer) clearTimeout(deskPersistTimer)
-  deskPersistTimer = setTimeout(() => {
-    deskPersistTimer = null
-    try { localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(store.get().deskBySession)) } catch { /* ignore */ }
-  }, 500)
+  deskPersistTimer = setTimeout(flushDesk, 500)
+}
+
+/** 同一条会话开在两扇窗(主窗 + 独立窗):一扇摆了,另一扇跟着变。独立窗收不到主窗那次 run 的事件,
+ *  所以摆法只经 localStorage 走:收到 storage 事件 → 对每条摆法变了的会话,换上对面的摆法(条目、钉住、
+ *  最近放过的、点、说明、分界、只看一格);形态与宽度(mode / fraction / size)是每扇窗自己的,不跟。
+ *  同一样东西(身份相同、钉住相同)留本窗的条目对象,不因两扇窗各自生成的 key 不同而重挂;本窗自己的直播格
+ *  按 Agent 落位规则重新摆回去(直播格不落盘,对面看不见它)。 */
+let deskSyncInstalled = false
+function installDeskSync(): void {
+  if (deskSyncInstalled || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+  deskSyncInstalled = true
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== DESK_PERSIST_KEY || e.newValue === null) return
+    const incoming = unpackDeskMap(e.newValue)
+    const touched = deskSessionsChanged(unpackDeskMap(e.oldValue), incoming)
+    if (!touched.length) return
+    const news: string[] = []
+    store.set((s) => {
+      let changed = false
+      const next = { ...s.deskBySession }
+      for (const sid of touched) {
+        const cur = next[sid]
+        let adopted = adoptDeskArrangement(cur, incoming[sid])
+        // 本窗 Human Desk 展开着:对面的「展开」不带过来(本窗还没有这条摆法时 adopt 会借对面的 mode;右边一次只展开一块)
+        if (adopted.mode === 'open' && cur?.mode !== 'open' && s.humanDeskBySession[sid]?.open) adopted = { ...adopted, mode: undefined }
+        if (adopted !== cur) { next[sid] = adopted; changed = true }
+        const had = new Set((cur?.items || []).map(deskIdentity))
+        if (adopted.items.some((x) => !had.has(deskIdentity(x))) || (adopted.fresh && adopted.fresh !== cur?.fresh)) news.push(sid)
+      }
+      return changed ? { deskBySession: next } : {}
+    })
+    for (const sid of news) humanSeesAgentNews(sid)
+  })
+}
+
+// ── Human Desk(11-23 第三轮):快照、两扇窗同步、自动暂停 ──
+
+function restoredHumanDesks(raw: string | null): Record<string, HumanDeskState> {
+  const out: Record<string, HumanDeskState> = {}
+  for (const [sid, core] of Object.entries(unpackHumanDeskMap(raw))) out[sid] = core.item ? { ...core, paused: true } : core
+  return out
+}
+
+/** 只覆盖这次动过的会话(同 flushDesk):Human Desk 的动作全是你的手,立刻落,另一扇窗马上跟。写失败静默。 */
+function persistHumanDesk(sessionId: string): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    const disk = unpackHumanDeskMap(localStorage.getItem(HUMAN_DESK_PERSIST_KEY))
+    const mine = store.get().humanDeskBySession[sessionId]
+    // out(拿到了主区)也落盘:重启后卡照旧指向那个标签,另一扇窗靠这次写盘跟上(Codex 评审:漏了它 = 拿走只在本窗有效)
+    if (mine) disk[sessionId] = { item: mine.item, recent: mine.recent, stopped: mine.stopped, out: mine.out } as HumanDeskCore
+    else delete disk[sessionId]
+    localStorage.setItem(HUMAN_DESK_PERSIST_KEY, packHumanDeskMap(disk))
+  } catch { /* ignore */ }
+}
+
+let humanDeskSyncInstalled = false
+function installHumanDeskSync(): void {
+  if (humanDeskSyncInstalled || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+  humanDeskSyncInstalled = true
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== HUMAN_DESK_PERSIST_KEY || e.newValue === null) return
+    const incoming = unpackHumanDeskMap(e.newValue)
+    const touched = humanDeskSessionsChanged(unpackHumanDeskMap(e.oldValue), incoming)
+    if (!touched.length) return
+    store.set((s) => {
+      let changed = false
+      const next = { ...s.humanDeskBySession }
+      for (const sid of touched) {
+        const cur = next[sid]
+        const adopted = adoptHumanDesk(cur, incoming[sid])
+        if (adopted !== cur) { next[sid] = adopted; changed = true }
+      }
+      return changed ? { humanDeskBySession: next } : {}
+    })
+  })
+}
+
+/** 切走 Human Desk(切到 Agent Desk / 收起)时起表,满时长还没回来 → 这扇窗暂停在看(引用芯片随之摘掉);回来(展开它)就撤表、接着看。
+ *  表是每扇窗自己的:另一扇窗闲在 Agent Desk 上不会把你正在写的这扇暂停。 */
+const humanPauseTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function armHumanPause(sessionId: string): void {
+  if (humanPauseTimers.has(sessionId)) return // 「离开」从第一次切走算起,来回切 Agent / 收起不重新计时
+  const cur = store.get().humanDeskBySession[sessionId]
+  if (!humanWatching(cur) || (cur?.out && cur.tabHere)) return // 拿到了主区、那个标签正看得见 = 在场
+  humanPauseTimers.set(sessionId, setTimeout(() => {
+    humanPauseTimers.delete(sessionId)
+    store.set((s) => {
+      const h = s.humanDeskBySession[sessionId]
+      // 在主区时「在场」只认那个标签看不看得见:展开的 Human Desk 那时只是占位,不算在看(Codex 评审)
+      if (!h?.item || h.paused || (h.out ? h.tabHere : deskSideOf(s.deskBySession[sessionId]?.mode, h.open) === 'human')) return {}
+      return { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...h, paused: true } } }
+    })
+  }, humanDeskPauseMs()))
+}
+function disarmHumanPause(sessionId: string): void {
+  const t = humanPauseTimers.get(sessionId)
+  if (t) { clearTimeout(t); humanPauseTimers.delete(sessionId) }
+}
+
+/** Agent Desk 被展开了(你点了它的卡 / 切换件 / 引用,或 Agent 在两块都收着时撑开):Human Desk 收回,切换件上的点算看过了,起暂停表。 */
+function humanYieldsToAgent(sessionId: string): void {
+  const h = store.get().humanDeskBySession[sessionId]
+  if (h && (h.open || h.agentDot)) {
+    store.set((s) => {
+      const c = s.humanDeskBySession[sessionId]
+      return c ? { humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...c, open: undefined, agentDot: undefined } } } : {}
+    })
+  }
+  armHumanPause(sessionId)
+}
+
+/** Human Desk 展开着时 Agent 往 Agent Desk 放了东西:不切换右边(r3 §5「Agent 不抢」),只在切换件「Agent」那段亮点。 */
+function humanSeesAgentNews(sessionId: string): boolean {
+  const h = store.get().humanDeskBySession[sessionId]
+  if (!h?.open || deskSideOf(store.get().deskBySession[sessionId]?.mode, h.open) !== 'human') return false
+  if (!h.agentDot) store.set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], agentDot: true } } }))
+  return true
 }
 
 const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>>()
@@ -1151,6 +1317,9 @@ export interface TanguState {
   engineNoticesBySession: Record<string, EngineNoticeUi[]>
   /** Agent Desk:聊天右侧演出面板的 per-session 状态。 */
   deskBySession: Record<string, DeskState>
+  /** Human Desk(你动手、Agent 跟着看,11-23 第三轮):每条会话一样东西 + 在看 / 停止 + 最近放过的。core 落盘、两扇窗同步;
+   *  展开 / 自动暂停 / 切换件上的点 / 你在第几节是每扇窗自己的(见 stores/humanDeskPlan.ts)。 */
+  humanDeskBySession: Record<string, HumanDeskState>
   /** 语音消息:按 agent 的生效开关(voice-message 插件启用 + 该 agent apply)。缓存,首次进会话惰性拉取。 */
   voiceOnByAgent: Record<string, boolean>
   unread: Set<string>
@@ -1255,6 +1424,13 @@ export interface TanguState {
   /** view 省略 = 按文件类型自动路由;给了(如 PDF 引用要跳到第 N 页)就照它挂原生视图。 */
   deskShowFile(sessionId: string, path: string, view?: { type: string; params?: Record<string, unknown> }, name?: string): void
   patchDesk(sessionId: string, patch: Partial<DeskState>): void
+  /** Agent Desk 摆法动作(手动控制 ▾ / ⋯ / 拖放 / 钉住 / 清空;纯决策在 deskPlan.deskReduce)。立刻落盘。 */
+  deskAct(sessionId: string, action: DeskAction): void
+  /** Human Desk 动作:放上来(顺带把右边切到 Human Desk)/ 拿掉 / 停止 / 继续看(纯决策在 humanDeskPlan.humanDeskReduce,立刻落盘);
+   *  section = 展开态算出的「你在第几节」(内存)。 */
+  humanDeskAct(sessionId: string, action: HumanDeskAction | { type: 'section'; section?: HumanDeskState['section'] } | { type: 'agentNews' } | { type: 'tabHere'; here: boolean }): void
+  /** 右边展开哪一块(两块共用、一次一块):'agent' / 'human' / null = 都收起。切走 Human Desk 满一分钟自动暂停在看。 */
+  setDeskSide(sessionId: string, side: DeskSide): void
   setExecConfig(patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd' | 'extraRoots' | 'verifyCommand'>, sessionId?: string | null): void
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
@@ -1267,6 +1443,8 @@ export interface TanguState {
   setModelContextWindow(modelId: string, tokens: number | null): Promise<void>
   setSessionMaxIterations(n: number | null, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
+  /** 不开子会话(会话设置,缺省允许):开着时引擎从这个会话的工具表里拿掉 start_session / delegate。 */
+  setSessionNoChildSessions(on: boolean, sessionId?: string | null): void
   /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
   refreshVoiceMode(slug?: string | null): Promise<void>
   setVoiceMode(slug: string, on: boolean): Promise<void>
@@ -1324,6 +1502,8 @@ export function createTanguSlice(set: StoreApi<AppState>['setState'], get: Store
   host = h
   store = { get, set }
   initFirstRun() // 首次运行(遥测 v3)的首启时刻:建 store = 开窗那一刻,早于首启引导(sinceFirstLaunchS 要把引导算进去)
+  installDeskSync() // 两扇窗同一条会话的 Desk 摆法经 localStorage 同步
+  installHumanDeskSync() // Human Desk 同理(只同步放着的东西、最近放过的、停止)
   return tanguMembers(set, get)
 }
 
@@ -1394,6 +1574,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   configBySession: {},
   // 上次各会话展示的内容随快照复活("上次展示的东西还展示着");直播格是瞬态,不在快照里
   deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
+  // 重启后 Human Desk 收着(展开是每扇窗自己的、不落盘)→ 算你不在场:暂停,展开它才接着看
+  humanDeskBySession: typeof localStorage !== 'undefined' ? restoredHumanDesks(localStorage.getItem(HUMAN_DESK_PERSIST_KEY)) : {},
   voiceOnByAgent: {},
   runningBySession: {},
   projectSettingsByPath: {},
@@ -1577,7 +1759,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       }
       case 'display_file':
         patchMessage(sessionId, assistantId, (m) => ({
-          ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl }],
+          ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl, ...(pl.source ? { source: pl.source } : {}) }],
         }))
         break
       case 'desk_present':
@@ -1952,7 +2134,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : grp ? '' : assistantRef.current
           const prevSeg = list.find((m) => m.id === finalizedId)
           const keep = (m: UiMessage): boolean => !!m.work || (m.approvals || []).some((a) => a.status === 'pending') || (m.inquiries || []).some((q) => q.status === 'pending')
+          // 任务清单挪进新段(不抄):旧段原来各留一份快照,一轮插两次话就多出两行像卡住的「2/4 …」
+          const carryTodos = !!(newId && newId !== finalizedId && prevSeg?.todos?.length)
           const next = list
+            .map((m) => (carryTodos && m.id === finalizedId ? { ...m, todos: undefined } : m))
             .map((m) => (finalizedId && m.id === finalizedId && !m.work ? {
               ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const, ...endThink(m),
               toolEvents: m.toolEvents?.map((tool) => !tool.done && tool.startedAt == null
@@ -1961,12 +2146,15 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             .filter((m) => !(finalizedId && m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length) && !keep(m)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
-          // 任务清单带进新段:最新那份总在当前段上 —— 跑着转圈、停在这段报「已停止」;旧段留它那份快照(已 done,不带状态词)
-          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(prevSeg?.todos?.length ? { todos: prevSeg.todos } : {}) })
+          // 任务清单跟着当前段走:跑着转圈、停在这段报「已停止」;旧段不留快照(上面已拿走)
+          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(carryTodos ? { todos: prevSeg!.todos } : {}) })
           // 回放(重开 / pollSession 接上在跑的 run)时新段已经在历史里了:引擎边跑边落库,那一行带着做到一半的正文 / 占位结果,
           // 接下来回放的 token 会再拼一遍 —— 清成空的在跑气泡,由回放重建。只清从历史来的(不是 streaming):在线时新段 id 不会事先存在,
           // 团队成员那种事先摆好的在跑占位不动
-          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' && m.status !== 'streaming' ? replayRow(m) : m)) : next
+          // 新段已在历史里(重连回放):清单同样挪过去;它自己落库时写过清单(历史重建出来的)就用它自己的
+          const replayed = newId && have.has(newId) ? next.map((m) => (m.id === newId && m.role === 'assistant' ? {
+            ...(m.status !== 'streaming' ? replayRow(m) : m), ...(carryTodos && m.todos === undefined ? { todos: prevSeg!.todos } : {}),
+          } : m)) : next
           return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...replayed, ...additions] } }
         })
         if (users.length) set((s) => touchSessionActivity(s, sessionId))
@@ -2050,6 +2238,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           ...m, content: pl.content || m.content, live: undefined, ...endThink(m),
           status: aborted ? ('stopped' as const) : ('error' as const),
           error: quiet ? interruptedRunError(interrupted) : aborted ? undefined : (pl.error || 'error'),
+          // 引擎给失败归的类(限流 / 额度 / 登录 / 网络 / 上下文 / 其他):按它出文案,原文收进「看原文」。旧引擎不带 → 按原文认
+          ...(!quiet && !aborted && isRunErrorKind(pl.errorKind) ? { errorKind: pl.errorKind } : {}),
           ...(quiet ? { toolEvents: markUnfinishedInflight(m.toolEvents) } : {}),
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
@@ -2268,6 +2458,18 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               [sessionId]: {
                 phase: 'wait_network', attempt: 0, max: 0, waitMs: 0,
                 since: Number(pl.since) || Date.now(), error: pl.error ? String(pl.error) : undefined,
+              },
+            },
+          }))
+        }
+        // 通道闸排队(引擎 llm/channelGate.ts):同一通道撞了限流整体暂停 / 同时在飞的请求到了上限。发出时 llm_call 撤掉。
+        if (pl.phase === 'llm_queue') {
+          set((s) => ({
+            llmRetryBySession: {
+              ...s.llmRetryBySession,
+              [sessionId]: {
+                phase: 'queue', attempt: 0, max: 0, waitMs: Number(pl.waitMs) || 0, since: Date.now(),
+                reason: pl.reason === 'rate_limit' ? 'rate_limit' : 'busy', ...(Number(pl.limit) > 0 ? { limit: Number(pl.limit) } : {}),
               },
             },
           }))
@@ -2805,7 +3007,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // 新会话延续「上次用的」档位(审批 + 思考;模型走 cfg.modelId 的老路)。初始配置随建会话请求**原子**落库
       // (引擎 ≥ 本版 POST 接 agent_config;老引擎忽略该字段 → 回来的 agent_config 为空,再补一次 PUT):
       // 补 PUT 失败会留下没有 preset/execMode 的 chat 会话,重载后被当 work 初始化(creview 09-07 F2)。
-      const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
+      const sticky = stickyDefaults(get().desktopConfig, !!path, preset, get().defaultAgentSlug)
       // 模型当场固化,与 send() 同一条回退链(项目默认 → 记忆 → 目录缺省):不传的话引擎按**启动时**读到的缺省模型落库
       // (profile.defaultModelId 不跟着 config.json 变),之后在会话里换过的模型要到重启才对这里建出来的会话生效。
       // 空白新对话草稿里的 newChatModel 不算 —— 那是给下一条空态消息的,这里也不吃草稿的 Agent / 档位。
@@ -3064,10 +3266,23 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       ? cur.size
       : (spec.size === 'wide' ? 'wide' : spec.size === 'half' ? 'half' : cur?.size || 'half')
     // size 也是形态指令(用户裁决):card=收回卡片,half/wide=展开侧板;不带 size=保持现状。
+    // Human Desk 展开着:Agent 不抢右边(r3 §5),half / wide 也不撑开,只在切换件「Agent」那段亮点(humanSeesAgentNews)
+    const humanHere = deskSideOf(cur?.mode, get().humanDeskBySession[sessionId]?.open) === 'human'
     const mode: DeskState['mode'] = spec.size === 'card' ? undefined
-      : spec.size === 'half' || spec.size === 'wide' ? 'open' : cur?.mode
-    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, items, size, mode, note: typeof spec.note === 'string' ? spec.note : cur?.note } } }))
-    persistDeskSoon()
+      : (spec.size === 'half' || spec.size === 'wide') && !humanHere ? 'open' : cur?.mode
+    // 落位听钉住(deskReduce 'present'):钉住的格不动,第一样进没钉的格,第二样进「最近放过的」;一格没钉 = 原样整个换掉
+    const placed = deskReduce(cur ?? { items: [] }, { type: 'present', items, note: typeof spec.note === 'string' ? spec.note : undefined })
+    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...cur, ...placed, size, mode } as DeskState } }))
+    persistDeskSoon(sessionId)
+    if (humanHere) humanSeesAgentNews(sessionId)
+    else if (mode === 'open' && cur?.mode !== 'open') humanYieldsToAgent(sessionId)
+  },
+  deskAct: (sessionId, action) => {
+    const prev = get().deskBySession[sessionId]
+    const next = deskReduce(prev ?? { items: [] }, action)
+    if (prev && next === (prev as DeskCore)) return
+    set((s) => ({ deskBySession: { ...s.deskBySession, [sessionId]: { ...(s.deskBySession[sessionId] ?? { size: 'half' as const }), ...next } as DeskState } }))
+    persistDeskSoon(sessionId, true) // 用户动手:立刻落,另一扇窗马上跟
   },
   deskAutoShow: (sessionId, toolId) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
@@ -3087,14 +3302,21 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const p = resolveDeskPath(raw, cfg.cwd || session?.project_path || undefined)
     if (!p) return
     const now = Date.now()
-    // 顶格是直播格时必须被磁盘真身替换,节流只防「磁盘格连续重挂」。
-    if (!cur?.items[0]?.live && isDuplicateShow(cur?.items[0], p, now)) return
+    // 直播格必须被磁盘真身替换,节流只防「磁盘格连续重挂」。节流看的是这次会被换掉的那格:
+    // 没钉 = 顶格(#790 原样);有钉 = 正演着这份文件的钉住格,否则 Agent 那格。
+    const items = cur?.items ?? []
+    const hasLive = items.some((x) => x.live?.toolId === toolId)
+    const tgt = !items.some((x) => x.pin)
+      ? items[0]
+      : items.find((x) => x.pin && !x.live && deskPathId(x.path) === deskPathId(p)) ?? items[agentSlot(items)]
+    if (!hasLive && !tgt?.live && isDuplicateShow(tgt, p, now)) return
     const item = deskItemFor(p, now)
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: replaceTop(c.items, item) } } }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...deskReduce(c, { type: 'land', item, toolId }) } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId)
+    humanSeesAgentNews(sessionId)
   },
   deskLiveSync: (sessionId, msgId, toolId, tool) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
@@ -3102,9 +3324,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const cfg = get().configBySession[sessionId] || {}
     const session = get().sessions.find((x) => x.id === sessionId)
     if (cfg.execMode ? cfg.execMode !== 'host' : !session?.project_path) return
-    const top = cur?.items[0]
-    const already = top?.live?.toolId === toolId
+    const top = cur?.items.find((x) => x.live?.toolId === toolId) // 直播格不一定在顶格(上格钉住时在下格)
+    const already = !!top
     if (already && top!.path) return // 已上台且路径就位:内容直播由 LivePane 订阅,state 不再动
+    // 两格都钉:不上直播,只亮点 —— 点已经亮着就别每段增量都动 state
+    if (!already && cur && agentSlot(cur.items) < 0 && cur.fresh === `live:${toolId}`) return
     // 从累积参数里试提目标路径(可能还没流到)
     let p: string | null = null
     const msgs = get().messagesBySession[sessionId] || []
@@ -3123,45 +3347,67 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       at: Date.now(),
       live: { msgId, toolId, tool },
     }
+    let changed = false
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items: placeLiveItem(c.items, item) } } }
+      const next = deskReduce(c, { type: 'live', item })
+      if (next.items === c.items && next.fresh === c.fresh) return {}
+      changed = true
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next } } }
     })
-    persistDeskSoon() // 直播格本身不落盘,但 replaceTop 可能挤掉了要落盘的磁盘格
+    if (changed) persistDeskSoon(sessionId) // 直播格本身不落盘,但它可能挤掉了要落盘的磁盘格
+    if (changed) humanSeesAgentNews(sessionId)
   },
   deskLiveClear: (sessionId, toolId) => {
+    let changed = false
     set((s) => {
       const c = s.deskBySession[sessionId]
-      const items = clearLiveTop(c?.items, toolId) // 带着 bumped 的直播格 → 回到直播前的摆法
-      if (!c || !items) return {}
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, items } } }
+      if (!c) return {}
+      const next = deskReduce(c, { type: 'liveClear', toolId }) // 带着 bumped 的直播格 → 回到直播前的摆法
+      if (next === (c as DeskCore)) return {}
+      changed = true
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next } } }
     })
-    persistDeskSoon()
+    if (changed) persistDeskSoon(sessionId)
   },
   deskShowFile: (sessionId, path, view, name) => {
     if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
+    // 两格都钉着、Agent 正在写这份(直播没上台)时点「正在编辑」行 → 把直播请进来(落位照引用的规则)
+    const msgs = get().messagesBySession[sessionId] || []
+    const cfg = get().configBySession[sessionId] || {}
+    const cwd = cfg.cwd || get().sessions.find((x) => x.id === sessionId)?.project_path || undefined
+    let liveItem: DeskItem | null = null
+    if (!view && !(get().deskBySession[sessionId]?.items ?? []).some((x) => x.live)) {
+      outer: for (let i = msgs.length - 1; i >= 0; i--) {
+        for (const e of msgs[i].toolEvents || []) {
+          if (e.done || !DESK_EDIT_TOOLS.has(e.name)) continue
+          const p = liveDeskPath(e.arguments || '', cwd)
+          if (p && deskPathId(p) === deskPathId(path)) {
+            liveItem = { key: `live:${e.id}`, path: p, name: p.split(/[\\/]/).pop() || p, at: Date.now(), live: { msgId: msgs[i].id, toolId: e.id, tool: e.name } }
+            break outer
+          }
+        }
+      }
+    }
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
-      const top = c.items[0]
-      // 顶格已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
+      // 已经是同一份文件的同类视图(点第二条引用)→ 复用原 key:key 一变整个视图重挂
       // (PDF 重下一次、代码重建 CodeMirror)。只换 view.params(新页码/行号),没挂载完的视图
       // 据此以正确位置开场。文件身份键 = pdfPath(PDF 阅读器)/ path(WsFileView)/ filePath(插件文件视图:
       // 接管了 PDF 的插件,同一份的第二条引用也要原地收落点,e2e:pdfcite --plugin 的 P2),
       // **必须非空才算同一份** —— 两个都没带路径参数的视图不能被判成同一个。
       const fileKeyOf = (v?: { type: string; params?: Record<string, unknown> } | null): unknown =>
         v?.params?.pdfPath ?? v?.params?.path ?? v?.params?.filePath
-      const sameFile = !!view && top?.view?.type === view.type
-        && fileKeyOf(view) != null && fileKeyOf(top.view) === fileKeyOf(view)
-      // 顶格是直播格、点的正是它那份或下格那份(已在 Desk 上)→ 别打断直播,条目不动,只展开
-      const items = liveKeepsDesk(c.items, path)
-        ? c.items
-        : replaceTop(c.items, sameFile
-          ? { ...top!, view, at: Date.now() }
-          : { ...deskItemFor(path, Date.now(), name), ...(view ? { view } : {}) })
+      const sameView = (x: DeskItem): boolean => !!view && x.view?.type === view.type
+        && fileKeyOf(view) != null && fileKeyOf(x.view) === fileKeyOf(view)
+      // 直播格写完前不换内容(点的是 Desk 上已有的 → 条目不动,只展开);落位规则见 deskPlan.deskCite
+      const item = liveItem ?? { ...deskItemFor(path, Date.now(), name), ...(view ? { view } : {}) }
+      const next = deskReduce(c, { type: 'cite', path, item, sameView })
       // 用户点了「正在编辑」入口 = 用户动作,直接展开(卡片态 → 侧板)
-      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, mode: 'open' as const, items } } }
+      return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...next, mode: 'open' as const } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId, true)
+    humanYieldsToAgent(sessionId) // 你点的引用 / 「正在编辑」:右边换成 Agent Desk
   },
   patchDesk: (sessionId, patch) => {
     set((s) => {
@@ -3169,7 +3415,67 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
       return { deskBySession: { ...s.deskBySession, [sessionId]: { ...c, ...patch } } }
     })
-    persistDeskSoon()
+    persistDeskSoon(sessionId)
+    // 一次只展开一块:Agent Desk 展开了,Human Desk 就收回(Agent 自己撑开的那几处在调用前已判过 Human Desk 在不在)
+    if (patch.mode === 'open') humanYieldsToAgent(sessionId)
+    else if ('mode' in patch) armHumanPause(sessionId)
+  },
+  humanDeskAct: (sessionId, action) => {
+    if (action.type === 'agentNews') { humanSeesAgentNews(sessionId); return } // 插件结果卡片那条落点(PluginToolCard)
+    if (action.type === 'tabHere') {
+      // 拿到主区的那个标签在这扇窗里看得见 / 看不见了(HumanDesk.tsx 的标签监视):看得见 = 在场,撤表、接着看;看不见 = 起表
+      const h = get().humanDeskBySession[sessionId]
+      if (!h?.out) return
+      if (!!h.tabHere !== action.here || (action.here && h.paused)) {
+        set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], tabHere: action.here ? true : undefined, ...(action.here ? { paused: undefined } : {}) } } }))
+      }
+      if (action.here) disarmHumanPause(sessionId); else armHumanPause(sessionId)
+      return
+    }
+    if (action.type === 'section') {
+      const h = get().humanDeskBySession[sessionId]
+      if (!h || JSON.stringify(h.section ?? null) === JSON.stringify(action.section ?? null)) return
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], section: action.section } } }))
+      return
+    }
+    const prev = get().humanDeskBySession[sessionId] ?? {}
+    const next = humanDeskReduce(prev, action)
+    // 「继续看」也撤掉自动暂停(你明说要接着看);放上来 / 拿掉换了东西,小节作废
+    const runtime = action.type === 'resume' && prev.paused ? { paused: undefined }
+      : action.type === 'put' || action.type === 'remove' ? { section: undefined, tabHere: undefined }
+      // 拿到主区:东西不在 Human Desk 上了 → 这扇窗的展开收回(右边空出来);小节留着,主区那个标签接着算
+      : action.type === 'takeOut' ? { open: undefined, agentDot: undefined } : null
+    if (next !== prev || runtime) {
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), ...next, ...runtime } } }))
+      if (next !== prev) persistHumanDesk(sessionId)
+    }
+    // 你往 Human Desk 放东西 = 你的动作:右边切到 Human Desk(r3 §5)
+    if (action.type === 'put') { get().setDeskSide(sessionId, 'human'); return }
+    if (action.type === 'retarget') return // 改名跟路径:在不在场、离开的表都不动
+    disarmHumanPause(sessionId)
+    // 拿到主区:在不在场改看那个标签(监视一会儿报 tabHere);先起表,标签一露面就撤
+    if (action.type === 'takeOut') { armHumanPause(sessionId); return }
+    // 不在 Human Desk 上点的「继续看」(卡片上):接着看,离开的表重新起
+    if (action.type === 'resume' && deskSideOf(get().deskBySession[sessionId]?.mode, get().humanDeskBySession[sessionId]?.open) !== 'human') armHumanPause(sessionId)
+  },
+  setDeskSide: (sessionId, side) => {
+    const cur = get().deskBySession[sessionId]
+    if (side === 'agent') { get().patchDesk(sessionId, { mode: 'open' }); return }
+    if (cur?.mode === 'open') get().patchDesk(sessionId, { mode: undefined })
+    if (side === 'human' && get().humanDeskBySession[sessionId]?.out) {
+      // 东西在主区:展开的这块只是占位(转到标签页 / 放回来),不算回来看 —— 暂停照旧跟着那个标签走
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], open: true } } }))
+      if (!get().humanDeskBySession[sessionId]?.tabHere) armHumanPause(sessionId)
+      return
+    }
+    if (side === 'human') {
+      disarmHumanPause(sessionId)
+      set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...(s.humanDeskBySession[sessionId] ?? {}), open: true, paused: undefined } } }))
+      return
+    }
+    const h = get().humanDeskBySession[sessionId]
+    if (h?.open) set((s) => ({ humanDeskBySession: { ...s.humanDeskBySession, [sessionId]: { ...s.humanDeskBySession[sessionId], open: undefined } } }))
+    armHumanPause(sessionId)
   },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId, fromQueue, holdFailed, opts) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
@@ -3220,7 +3526,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
-      const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
+      const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset, get().newChatCfg.agentSlug || projectDefaults.config.agentSlug || get().defaultAgentSlug), projectDefaults.config, get().newChatCfg)
       const base = applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
         // 草稿里的额外文件夹(ExtraFolders)只给本机会话:云端 / 无项目 / Chat 会话不带(那里看不到那几枚胶囊,带进去就是没人看见的授权)
@@ -3811,7 +4117,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const nextUltra = level === 'max' ? ultra : false
     // 记忆按 preset 分槽(D36):chat 会话里调的档位只写 chat 槽,不污染下一个 work 会话的起步档;反之亦然。chat 槽没有 Ultra。
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
-    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
+    // work 槽再按 Agent 分(11-23):这一轮的 Agent 记一份,全局那份照写(没记过的 Agent 回落它)
+    // 草稿的 Agent 与建会话同序:显式选择 > 项目默认(同步缓存,setNewChatWs 已预取)> 全局默认
+    const draftProject = sid ? null : newChatProjectPath(get(), currentPlatform())
+    const draftProjectAgent = draftProject ? projectDefaultsForNewSession(get().projectSettingsByPath[draftProject], get().teams).config.agentSlug : undefined
+    const agent = preset === 'chat' ? undefined : sid ? (get().configBySession[sid]?.agentSlug || get().defaultAgentSlug) : (get().newChatCfg.agentSlug || draftProjectAgent || get().defaultAgentSlug)
+    const byAgent = agent ? { lastThinkingByAgent: { ...(get().desktopConfig?.lastThinkingByAgent || {}), [agent]: level } } : {}
+    if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level, ...byAgent, ...(nextUltra !== undefined ? { lastUltra: nextUltra } : {}) })
     // 草稿里显式记 false(而不是删键):建会话时 sticky 只补缺席的键,删掉的话上次的 Ultra 会被补回来。
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level, ...(nextUltra !== undefined ? { ultra: nextUltra } : {}) } })); return }
     // 已有会话:关 = 删键(PATCH 里 undefined 上线为 null)。
@@ -3850,6 +4162,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     get().patchSessionConfig({ planMode: on }, sid)
+  },
+
+  setSessionNoChildSessions: (on, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid) return
+    // 关 = 删键(PATCH 里 undefined 上线为 null):缺省就是允许
+    get().patchSessionConfig({ noChildSessions: on || undefined }, sid)
   },
 
   refreshVoiceMode: async (slug) => {
@@ -4224,6 +4543,16 @@ const queueDispatching = new Map<string, object>()
 const QUEUE_DISPATCH_VALVE_MS = 30_000
 
 /** 新来的消息 / 命令是否必须排队:队里已有排队项、压缩中、或排队消息正在发出。 */
+/** 这一条 send(…, skillIds) 的技能钉选能不能真的到引擎(任务卡「在这里做」走 /skill 隐藏通道前问一句,taskLanding.ts):
+ *  · 会话在跑 / 在压缩 / 队列在派发 → send 转成插话或排队,那两条只带正文和附件,钉选不随过去;
+ *  · chat 预设(已有会话的配置,或新会话将落成 chat)→ 引擎整个不开技能,requestedSkillIds 被丢掉。
+ *  sessionId 为空 = 新会话。答 false 时调用方应把引导语留在正文里。 */
+export function skillPinReaches(st: AppState, sessionId: string | null): boolean {
+  if (!sessionId) return newSessionPreset(st.sessionMode, resolveNewSessionWorkspace(st, currentPlatform()), currentPlatform()) !== 'chat'
+  if (st.configBySession[sessionId]?.preset === 'chat') return false
+  return !st.runningBySession[sessionId] && !queueBusy(st, sessionId) && !(st.steerPendingBySession[sessionId] || []).length
+}
+
 function queueBusy(st: AppState, sessionId: string): boolean {
   return queueDispatching.has(sessionId) || st.compactingBySession[sessionId] !== undefined
     || (st.steerPendingBySession[sessionId] || []).some((p) => p.localOnly)

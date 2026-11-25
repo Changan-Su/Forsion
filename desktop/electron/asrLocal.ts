@@ -181,8 +181,10 @@ async function decodeSlice(rec: OfflineRecognizer, samples: Float32Array, sample
  *  几路听写同时开(聊天框 + 全局听写胶囊)时排成一队,不让同一个 recognizer 并发解。轮到时 `wanted()` 已是 false
  *  (那路关了 / 未定稿过时了)就跳过,别让关掉的会话拖住另一路的定稿。 */
 let streamQueue: Promise<unknown> = Promise.resolve()
+const MODEL_MISSING = '本地语音模型未下载'
+
 export async function localStreamDecoder(language?: string): Promise<(samples: Float32Array, wanted: () => boolean) => Promise<string>> {
-  if (!localModelReady()) throw new Error('本地语音模型未下载')
+  if (!localModelReady()) throw new Error(MODEL_MISSING)
   const rec = await getRecognizer(language)
   return (samples, wanted) => {
     const next = streamQueue.then(() => (wanted() ? decodeSlice(rec, samples, 16000) : ''))
@@ -202,7 +204,7 @@ export { wavToSamples, splitOnSilence } // 纯函数真身在 asrAudio.ts(那边
  * 要时间戳、或音频长 → 按静音切段逐段解码(长音频不切等于结果不可用)。
  */
 export async function transcribeLocal(wav: Buffer, opts?: { timestamps?: boolean; language?: string }): Promise<string | { text: string; segments?: LocalSegment[] }> {
-  if (!localModelReady()) throw new Error('本地语音模型未下载')
+  if (!localModelReady()) throw new Error(MODEL_MISSING)
   const rec = await getRecognizer(opts?.language)
   const { samples, sampleRate } = wavToSamples(wav)
   const short = samples.length <= sampleRate * 30

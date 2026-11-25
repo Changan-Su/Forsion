@@ -59,7 +59,7 @@
 
 /* ── 手机:贴底抽屉(几何照 compactChatPicker 的 C 抽屉) ── */
 .ct-sheet-scrim { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; justify-content: flex-end; background: rgba(0, 0, 0, .4); -webkit-app-region: no-drag; animation: ct-fade var(--duration-fast) var(--ease-calm); }
-.ct-sheet { position: relative; display: flex; flex-direction: column; max-height: 85%; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); box-sizing: border-box; border-radius: 16px 16px 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow); animation: ct-up var(--duration-slow) var(--ease-drawer); font-family: var(--font-ui); }
+.ct-sheet { position: relative; display: flex; flex-direction: column; max-height: 85%; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); box-sizing: border-box; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow); animation: ct-up var(--duration-slow) var(--ease-drawer); font-family: var(--font-ui); }
 .ct-sheet-grip { flex: none; width: 40px; height: 4px; margin: 6px auto 8px; border-radius: 2px; background: var(--border); }
 .ct-sheet-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 2px 0 8px; font-size: var(--ui-font-body); font-weight: 600; }
 .ct-sheet-head .sp { flex: 1; }

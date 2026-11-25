@@ -507,8 +507,7 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     // 物理改名持旧 / 新两条路径的写锁(Codex 复核返修 P0-3):与同篇的 CAS 保存互斥 —— 否则保存「读到基线 → 写」之间文件被挪走,
     // 原子写照样落到旧路径 = 旧名复活成一篇幽灵笔记。引用重写在锁外(它按页自己拿锁,新路径也在其中,锁不可重入)。
     await withPathLocks([oldPath, newPath], async () => {
-      if (await vault.pathExists(newPath)) throw new Error('目标笔记已存在')
-      await vault.moveEntry(oldPath, newPath) // 纯移动:不落 v3,外来 .md 不被收编
+      await vault.moveEntry(oldPath, newPath, '目标笔记已存在') // 纯移动:不落 v3,外来 .md 不被收编
       index.remove(oldPath)
       await index.update(newPath)
     })

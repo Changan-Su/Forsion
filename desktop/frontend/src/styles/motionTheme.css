@@ -17,7 +17,7 @@
 .motion-preview .mp-panel {
   position: absolute; left: 12px; top: 23px; width: 46%; height: 36px;
   display: flex; flex-direction: column; gap: 4px; padding: 7px 6px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm, 8px);
   background: var(--theme-preview-surface);
   box-shadow: var(--card-shadow, 0 1px 3px rgba(0, 0, 0, 0.08));
   transform-origin: 6px 0;

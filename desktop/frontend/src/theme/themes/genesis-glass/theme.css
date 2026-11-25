@@ -31,7 +31,7 @@
 /* ═══ 结构层:Genesis 的纸感骨架,半径放大到贴近 macOS 面板,字体走系统(mac 即 SF Pro) ═══ */
 [data-theme='genesis-glass'] {
   --border-width: 1px;
-  --radius-sm: 6px;
+  --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-chat-surface: var(--radius-lg);

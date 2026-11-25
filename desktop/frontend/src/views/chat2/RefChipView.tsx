@@ -44,8 +44,10 @@ function AppRefStripChip({ chip, appRef }: { chip: RefChip; appRef: AppRef }) {
   )
 }
 
-export function RefChipView({ chip, onRemove, onInline, removeTitle, inlineTitle, children }: {
+export function RefChipView({ chip, onRemove, onInline, removeTitle, inlineTitle, live, children }: {
   chip: RefChip
+  /** Human Desk「在看」自动挂的那枚(输入框):data-live,样式与别的引用芯片相同,台架 / 读屏据此认。 */
+  live?: boolean
   /** 给了才出 × 按钮(输入框);气泡里只读。 */
   onRemove?: () => void
   /** 给了 = 按住 Shift 点这枚芯片,把它插到输入框光标处(输入框)。 */
@@ -58,7 +60,7 @@ export function RefChipView({ chip, onRemove, onInline, removeTitle, inlineTitle
   if (chip.appRef && !onRemove) return <AppRefStripChip chip={chip} appRef={chip.appRef} />
   return (
     <span
-      className="attach-chip" title={onInline && inlineTitle ? `${chip.token}\n${inlineTitle}` : chip.token} data-ref-kind={chip.kind}
+      className="attach-chip" title={onInline && inlineTitle ? `${chip.token}\n${inlineTitle}` : chip.token} data-ref-kind={chip.kind} data-live={live || undefined}
       // 按下那一刻就拦:不拦的话 Shift+按下会把文本框里的选区从光标一路扩到开头(点的地方在文本框上方),
       // 接着插入就把那一大段替换掉了(实测丢过整段草稿)。拦了之后焦点和光标都留在文本框里。
       onMouseDown={onInline ? (e) => { if (e.shiftKey) e.preventDefault() } : undefined}

@@ -63,6 +63,7 @@ import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { presentResetCardCeremony } from './components/ResetCardCeremony'
 import type { AccountQuotaView } from './services/accountQuota'
 import { isDelegatedAdmin } from './services/delegatedAdmin'
+import { iconForPath } from './services/fileKinds'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
@@ -83,6 +84,12 @@ const app = () => useApp.getState()
 /** 空占位内容(订阅 i18n,语言切换即时生效)。同一个视图服务左右侧栏与**底部面板**,
  *  故文案按所在区取:底部说「面板」不说「侧栏」。tab 标题在 displayName 里拿不到 leaf,
  *  只能在这儿按区改写(WbTab 订阅了 onDidTitleChange,改完即刷)。 */
+/** 库外文件标签按种类给图标(同 Desk 名字胶囊,fileKinds.iconForPath;11-23 Desk 标签栏互通方案 ③),不再一律一张纸。 */
+function WsFileTabIcon({ params, size }: { params: Record<string, unknown>; size: number }) {
+  const Icon = iconForPath(String(params.path || params.name || ''))
+  return <Icon size={size} className="wb-tab-ic" />
+}
+
 function SidebarEmptyView({ leaf }: ViewProps) {
   const { t } = useI18n()
   const bottom = leaf.loc === 'bottom'
@@ -134,7 +141,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 工作区文件预览标签页(多实例,params.path 随布局持久化;打开一律走 views/wsFileNav.openWsFile,
   // 替代原 chatbox 上方的浮层预览 —— 浮层暂时停用,见 appStore.setFilePreview)。无条件注册:
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
-  registerView({ type: 'wsfile', kind: 'entity', rightCompanions: [{ type: 'chat-panel', params: { followActive: true } }], idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
+  registerView({ type: 'wsfile', kind: 'entity', rightCompanions: [{ type: 'chat-panel', params: { followActive: true } }], idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, TabIcon: WsFileTabIcon, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
   if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) {
     registerView({ type: 'code-studio', kind: 'page', rightCompanions: [{ type: 'workspace', params: { mode: 'files' } }], displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
@@ -291,7 +298,10 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
       const api = ws().api
       const main = api ? activeMainPanel(api) : null
       const owner = api ? main ? ws().leafById(main.id) : null : ws().getActiveLeaf()
-      const leafId = owner?.loc === 'main' && owner.type === 'chat' ? owner.id : null
+      // Pinned Mini chats record the visible session through mainTabs below.
+      // The global active ID can change during boot while that session stays pinned.
+      const pinnedMini = windowKind() === 'mini' && owner?.params.followActive === false
+      const leafId = owner?.loc === 'main' && owner.type === 'chat' && !pinnedMini ? owner.id : null
       recordNav(leafId, `chat:${id}`, (context) => {
         if (context && !context.isCurrent()) return
         // 状态在**复原当时**现读:主聊天可能已被冻成钉住档(见 sessionNav.freezeMainPrimary)。

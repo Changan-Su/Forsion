@@ -73,6 +73,11 @@ export interface TaskCard {
   /** 撤回标记(只有 `withdraw: <id>` + 可选 `reason:` 的围栏):不画卡,让同会话里那张 id 的卡变成「已撤回」。 */
   withdraw?: string
   reason?: string
+  /** 卡头 `skill:` 点名的技能(原样,如 `forsion-plugin`)。「在这里做 / 新会话」走引擎的 /skill 通道交给模型(隐藏附注,不进用户气泡)。 */
+  skill?: string
+  /** 去掉技能引导语的任务书正文:隐藏附注那条路发它。没有 `skill:` 时不带(= prompt)。 */
+  brief?: string
+  /** 任务书全文(带 `skill:` 时以 `Load the … skill first.` 开头)。卡的身份键按它算,改它会让旧卡的处理状态对不上,别动它的形状。 */
   prompt: string
 }
 
@@ -165,12 +170,13 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   }
   // `skill:` 头:任务书开头固定一句。模型抄头部很稳,让它在正文里写这句它会改写或省掉(10-30 live:3 次里 2 次)
   const brief = body.join('\n').trim()
-  const prompt = (brief && APPROVAL_ID_RE.test(skill) ? `Load the ${skill} skill first.\n\n${brief}` : brief).slice(0, PROMPT_MAX)
+  const skilled = !!brief && APPROVAL_ID_RE.test(skill)
+  const prompt = (skilled ? `Load the ${skill} skill first.\n\n${brief}` : brief).slice(0, PROMPT_MAX)
   if (!title) title = (body.find((l) => l.trim()) || '').trim()
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
   // todo id 与审批 id 同一形态约束;不合法只丢这个键(卡照出,只是不回写 TODO)。
-  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(agent) ? { agent } : {}), ...(MODEL_RE.test(model) ? { model } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
+  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(agent) ? { agent } : {}), ...(MODEL_RE.test(model) ? { model } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), ...(skilled ? { skill, brief: brief.slice(0, PROMPT_MAX) } : {}), prompt }
 }
 
 /** 围栏正文 → 作品卡:只认 `key: value` 行(name 必填,path 可选,未知键忽略);写坏的 → null(整块还回正文)。 */

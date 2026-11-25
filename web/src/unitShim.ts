@@ -37,14 +37,14 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
           body: JSON.stringify({ name: '来访设备' }),
         })
         if (r.status === 429) {
-          render(`<h3 style="margin:0 0 8px">稍等一下</h3><p style="color:#777;font-size:13px">对方还有一个待确认的配对请求,请稍后重试。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
+          render(`<h3 style="margin:0 0 8px">稍等一下</h3><p style="color:#777;font-size:13px">对方还有一个待确认的配对请求,请稍后重试。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:var(--radius-pill, 999px);border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
           await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
           continue
         }
         req = await r.json()
       } catch { /* 网络失败落到下面统一重试 */ }
       if (!req?.requestId || !req.code) {
-        render(`<h3 style="margin:0 0 8px">连接失败</h3><p style="color:#777;font-size:13px">联系不上对方设备,确认它开着 Forsion 并启用了互联。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
+        render(`<h3 style="margin:0 0 8px">连接失败</h3><p style="color:#777;font-size:13px">联系不上对方设备,确认它开着 Forsion 并启用了互联。</p><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:var(--radius-pill, 999px);border:1px solid #ddd;background:#fff;cursor:pointer">重试</button>`)
         await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
         continue
       }
@@ -58,7 +58,7 @@ async function pairFlow(meta: UnitMeta): Promise<string | null> {
         try { st = await (await fetch(new URL(`unit/pair/poll?id=${req.requestId}`, base()))).json() } catch { /* 掉线继续轮询 */ }
         if (st.status === 'approved' && st.token) return st.token
         if (st.status === 'denied' || st.status === 'expired') {
-          render(`<h3 style="margin:0 0 8px">${st.status === 'denied' ? '对方拒绝了连接' : '配对超时'}</h3><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:999px;border:1px solid #ddd;background:#fff;cursor:pointer">重新配对</button>`)
+          render(`<h3 style="margin:0 0 8px">${st.status === 'denied' ? '对方拒绝了连接' : '配对超时'}</h3><button id="up-retry" style="margin-top:12px;padding:8px 20px;border-radius:var(--radius-pill, 999px);border:1px solid #ddd;background:#fff;cursor:pointer">重新配对</button>`)
           await new Promise<void>((res) => { card.querySelector('#up-retry')?.addEventListener('click', () => res()) })
           break
         }
@@ -363,6 +363,7 @@ export async function installUnitShim(): Promise<boolean> {
       return ((await r.json()) as { spaces?: unknown[] }).spaces || []
     } }),
   }
-  document.title = `${meta.name} · Forsion`
+  // Public entries get their browser title in the HTML, before login or renderer startup.
+  if (!published) document.title = `${meta.name} · Forsion`
   return true
 }

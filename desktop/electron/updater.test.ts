@@ -4,7 +4,7 @@ const updater = vi.hoisted(() => ({
   events: new Map<string, (...args: any[]) => void>(),
   feeds: [] as any[],
   sent: [] as any[],
-  download: [] as Array<() => Promise<void>>,
+  download: [] as Array<(token?: any) => Promise<void>>,
   reject: false,
   beta: false,
   current: '2.13.3',
@@ -18,6 +18,8 @@ const updater = vi.hoisted(() => ({
   checkFails: false,
   relaunched: 0,
   sourcePref: 'auto',
+  /** 每次钉源时 disableDifferentialDownload 设成了什么 */
+  noDiff: [] as boolean[],
 }))
 const emitNative = (name: string, ...args: any[]) => { for (const cb of [...(updater.native.get(name) ?? [])]) cb(...args) }
 vi.mock('electron', () => ({
@@ -33,6 +35,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./macSelfUpdate', () => ({ probeMacSelfInstall: async () => updater.macSelf }))
 vi.mock('electron-updater', () => ({ default: { autoUpdater: {
+  set disableDifferentialDownload(v: boolean) { updater.noDiff.push(v) },
+  get disableDifferentialDownload() { return updater.noDiff.at(-1) ?? false },
   isUpdateAvailable: async () => true,
   isUpdateSupported: async () => !updater.reject,
   isUserWithinRollout: async () => true,
@@ -48,7 +52,7 @@ vi.mock('electron-updater', () => ({ default: { autoUpdater: {
     return { isUpdateAvailable: true, updateInfo: { version } }
   },
   quitAndInstall: updater.quitAndInstall,
-  downloadUpdate: () => (updater.download.shift() ?? (async () => updater.events.get('update-downloaded')!({ version: '2.13.4' })))(),
+  downloadUpdate: (token: any) => (updater.download.shift() ?? (async () => updater.events.get('update-downloaded')!({ version: '2.13.4' })))(token),
 } } }))
 vi.mock('./distribution', () => ({ BUNDLE_EXTEND: true }))
 vi.mock('./websiteUpdateProvider', () => ({ WebsiteUpdateProvider: class {} }))
@@ -68,6 +72,7 @@ beforeEach(() => {
   updater.beta = false; updater.current = '2.13.3'
   updater.macSelf = { ok: false, reason: 'not-developer-id' }; updater.quitAndInstall.mockClear(); updater.native.clear()
   updater.squirrel = 'update-downloaded'; updater.opened.length = 0; updater.checkFails = false; updater.relaunched = 0; updater.sourcePref = 'auto'
+  updater.noDiff.length = 0
   Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     for (const [k, v] of answers) if (url.includes(k)) return json(v)
@@ -109,12 +114,28 @@ it('in mainland downloads from the website first and switches to GitHub once whe
   answers.set('/auth/region', { country: 'CN', mainland_china: true })
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website' })
-  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows' })
+  expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows', differential: false })
+  expect(updater.noDiff).toEqual([true]) // 这条官网记录没有 blockmap(老 server):整包
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   await downloadUpdate()
   expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' })
+  expect(updater.noDiff.at(-1)).toBe(false) // GitHub 照旧差量
   expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloading', source: 'github', fallbackFrom: 'website' }))
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
+})
+
+it('in mainland a website record with a blockmap downloads from the versioned address with differential download on', async () => {
+  answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==', blockmap: true }))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website' })
+  expect(updater.feeds[0]).toMatchObject({
+    provider: 'custom', differential: true,
+    downloadUrl: 'https://forsion.net/api/website/download/windows/2.13.4/Forsion-2.13.4-x64.exe',
+  })
+  expect(updater.noDiff).toEqual([false])
+  await downloadUpdate()
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'website' })
 })
 
 it('does not use the website for Windows when its record has no sha512', async () => {
@@ -379,11 +400,47 @@ it('Developer ID mac in mainland: downloads the website zip in-app, and can stil
   const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: false })
   expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/macos-update', installer: { filename: 'Forsion-2.13.4-arm64.zip', sha512: 'zip==' } })
+  expect(updater.noDiff).toEqual([true])
   updater.download.push(async () => { throw new Error('ECONNRESET') })
   await downloadUpdate()
   expect(updater.feeds.at(-1)).toMatchObject({ provider: 'generic' })
   expect(updater.sent).toContainEqual(expect.objectContaining({ phase: 'downloading', source: 'github', fallbackFrom: 'website' }))
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
+})
+
+it.each([
+  ['a differential website download (blockmaps first, no progress yet) gets 90 seconds', true, 'CN', 60_000, 100_000, 'generic'],
+  ['a full website download is still called stalled after 30 seconds without progress', false, 'CN', 25_000, 40_000, 'generic'],
+  ['a GitHub download (differential too) keeps the 30-second watchdog', true, 'GB', 25_000, 40_000, 'custom'],
+])('stall watchdog: %s', async (_name, blockmap, country, alive, dead, switchedTo) => {
+  answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==', ...(blockmap ? { blockmap: true } : {}) }))
+  answers.set('/auth/region', { country, mainland_china: country === 'CN' })
+  const { checkForUpdates, downloadUpdate } = await import('./updater')
+  await checkForUpdates()
+  vi.useFakeTimers()
+  try {
+    let token: any
+    updater.download.push((t) => new Promise((_ok, fail) => { token = t; t.onCancel(() => fail(new Error('cancelled'))) }))
+    const pending = downloadUpdate()
+    await vi.advanceTimersByTimeAsync(alive)
+    expect(token.cancelled).toBe(false)
+    await vi.advanceTimersByTimeAsync(dead - alive)
+    expect(token.cancelled).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    await pending
+    expect(updater.feeds.at(-1)).toMatchObject({ provider: switchedTo }) // 下不动就换另一边,和原来一样
+  } finally { vi.useRealTimers() }
+})
+
+it('Developer ID mac in mainland: a website zip with a blockmap is fetched from the versioned address with differential download on', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', macWithZip({ blockmap: true }))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', manualInstall: false })
+  expect(updater.feeds[0]).toMatchObject({ downloadUrl: 'https://forsion.net/api/website/download/macos-update/2.13.4/Forsion-2.13.4-arm64.zip', differential: true })
+  expect(updater.noDiff).toEqual([false])
 })
 
 it.each([
@@ -407,4 +464,103 @@ it('Windows never picks the mac update record', async () => {
   const { checkForUpdates } = await import('./updater')
   await checkForUpdates()
   expect(updater.feeds[0]).toMatchObject({ provider: 'custom', downloadUrl: 'https://forsion.net/api/website/download/windows', installer: { sha512: 'exe==' } })
+})
+
+// ── 后台自动下载:只给 GitHub 源(海外 / 测试版);官网源走 OSS 计费,照旧等用户点 ──────────────────────────
+it('GitHub source is marked for background download, and the auto download finishes like a manual one', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'github', autoDownload: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.13.4', source: 'github' })
+})
+
+it('website source is never downloaded automatically', async () => {
+  answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==' }))
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', source: 'website', autoDownload: false })
+  let started = 0
+  updater.download.push(async () => { started++ })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
+  expect(started).toBe(0)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'website' })
+})
+
+it('a failed background download never falls back to the website: it quietly waits for the user, whose click still can', async () => {
+  answers.set('/website/config', site({ version: '2.13.4', sha512: 'abc==' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ source: 'github', autoDownload: true })
+  updater.download.push(async () => { throw new Error('ECONNRESET') })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
+  expect(updater.feeds).toHaveLength(1) // 没钉去官网
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', source: 'github', autoDownload: false })
+  expect(updater.sent.some((s) => s.phase === 'error')).toBe(false)
+  await downloadUpdate({ auto: true, version: '2.13.4' }) // 清掉 autoDownload 之后不再自己重试
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available' })
+  updater.download.push(async () => { throw new Error('ECONNRESET') })
+  await downloadUpdate() // 用户点的:照旧换官网
+  expect(updater.feeds.at(-1)).toMatchObject({ provider: 'custom' })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'website' })
+  // 下一轮定时检查见到 downloaded 原样返回,不会再标自动下载
+  expect(await checkForUpdates()).toMatchObject({ phase: 'downloaded' })
+})
+
+it('Developer ID mac abroad: a failed background download does not give up on in-app install', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  answers.set('/website/config', mac())
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  updater.download.push(async () => { throw new Error('ECONNRESET') })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ source: 'github', manualInstall: false, autoDownload: true })
+  await downloadUpdate({ auto: true, version: '2.13.4' })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', manualInstall: false, autoDownload: false })
+  expect(getUpdaterStatus().selfInstallFailed).toBeUndefined()
+  await downloadUpdate() // 用户点的:默认那份下载成功
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded' })
+})
+
+it('the background download only takes the version the main window checked, and never a prerelease once beta is off', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  let started = 0
+  updater.download.push(async () => { started++ })
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate({ auto: true, version: '2.13.5' }) // 主窗查跳过时看的是另一版
+  await downloadUpdate({ auto: true })
+  expect(started).toBe(0)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available', version: '2.13.4' })
+})
+
+it('a beta announced by a check that raced "beta off" is not downloaded in the background', async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.13.4-beta.1' }])
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.4-beta.1', autoDownload: true })
+  updater.beta = false // 在设置里关了测试版,channelChanged 没赶上
+  let started = 0
+  updater.download.push(async () => { started++ })
+  await downloadUpdate({ auto: true, version: '2.13.4-beta.1' })
+  expect(started).toBe(0)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'available' })
+})
+
+it('Developer ID mac in mainland on beta: the website has no such version, so the GitHub zip downloads in the background', async () => {
+  onMac()
+  updater.macSelf = { ok: true, reason: 'developer-id' }
+  updater.beta = true
+  answers.set('/website/config', macWithZip())
+  answers.set('/auth/region', { country: 'CN', mainland_china: true })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.13.5-beta.1' }])
+  const { checkForUpdates, downloadUpdate, getUpdaterStatus } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.5-beta.1', source: 'github', manualInstall: false, autoDownload: true })
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.13.5-beta.1' }))
+  await downloadUpdate({ auto: true, version: '2.13.5-beta.1' })
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
 })

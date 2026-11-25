@@ -107,3 +107,34 @@ describe('fastTierText', () => {
     expect(fastTierText('Priority processing', t)).toBe('Priority processing')
   })
 })
+
+describe('同名模型按钮带通道名(11-23)', async () => {
+  const { duplicateNameChannel } = await import('./ModelPill')
+  const groups = [
+    { label: 'codex', options: [{ id: 'codex/gpt-6.2-sol', name: 'gpt-6.2-sol' }, { id: 'codex/gpt-6-luna', name: 'gpt-6-luna' }] },
+    { label: 'openai-2', options: [{ id: 'openai-2/gpt-6.2-sol', name: 'gpt-6.2-sol' }] },
+  ]
+  it('重名时给所在通道', () => {
+    expect(duplicateNameChannel('codex/gpt-6.2-sol', 'gpt-6.2-sol', groups)).toBe('codex')
+    expect(duplicateNameChannel('openai-2/gpt-6.2-sol', 'gpt-6.2-sol', groups)).toBe('openai-2')
+  })
+  it('不重名不变', () => {
+    expect(duplicateNameChannel('codex/gpt-6-luna', 'gpt-6-luna', groups)).toBe('')
+  })
+  it('通道名取模型自己的 provider,不取用户自建的分组名', () => {
+    const custom = [{ label: '常用', options: [{ id: 'codex/gpt-6.2-sol', name: 'gpt-6.2-sol', provider: 'codex' }] }, { label: 'openai-2', options: [{ id: 'openai-2/gpt-6.2-sol', name: 'gpt-6.2-sol' }] }]
+    expect(duplicateNameChannel('codex/gpt-6.2-sol', 'gpt-6.2-sol', custom as never)).toBe('codex')
+  })
+  it('分组为空时按目录里的 provider 判', () => {
+    const catalog = [{ id: 'a/x', name: 'x', provider: 'a' }, { id: 'b/x', name: 'x', provider: 'b' }]
+    expect(duplicateNameChannel('b/x', 'x', [], catalog)).toBe('b')
+  })
+})
+
+describe('同一通道里两条同名不带通道名(Codex 11-23)', async () => {
+  const { duplicateNameChannel } = await import('./ModelPill')
+  it('同名但同一通道 → 不变', () => {
+    const groups = [{ label: 'codex', options: [{ id: 'a', name: 'x', provider: 'codex' }, { id: 'b', name: 'x', provider: 'codex' }] }]
+    expect(duplicateNameChannel('a', 'x', groups as never)).toBe('')
+  })
+})

@@ -47,6 +47,8 @@ async function main() {
     })
     check('the real main window exits onboarding', await skipOnboarding(win))
     await win.waitForFunction(async () => (await window.tangu.getConfig()).backendState?.state === 'ready', null, {timeout:60000})
+    const mainWindowId = await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find(w => w.webContents.getURL() === url)?.id, win.url())
+    assert.ok(mainWindowId, 'Find the harness main window before opening Settings')
     const opened = app.waitForEvent('window')
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'browser', nonce: Date.now() } }))
     settings = await opened
@@ -126,11 +128,13 @@ async function main() {
     // The runner has a 1024px desktop. Keep the real settings layout readable,
     // overlap Chrome behind it, and drop into Chrome's exposed right edge.
     const leftWidth = Math.min(820, work.width-160), chromeWidth=Math.min(600,work.width-200)
-    await app.evaluate(({ BrowserWindow }, { id, work, leftWidth }) => {
-      const window=BrowserWindow.fromId(id), parent=window.getParentWindow()
-      if(parent) parent.hide()
+    await app.evaluate(({ BrowserWindow }, { id, mainWindowId, work, leftWidth }) => {
+      // Settings is a top-level window. Leaving the maximized main window visible
+      // lets it cover Chrome as soon as Settings comes to the foreground.
+      BrowserWindow.fromId(mainWindowId).hide()
+      const window=BrowserWindow.fromId(id)
       window.setMinimumSize(500,400); window.setBounds({x:work.x,y:work.y,width:leftWidth,height:work.height}); window.show(); window.focus()
-    }, {id,work,leftWidth})
+    }, {id,mainWindowId,work,leftWidth})
     stage('launch Chrome')
     const launchChrome = profile => chromium.launchPersistentContext(path.join(home, profile), { headless: false, viewport: null, locale: 'en-US', ignoreDefaultArgs: ['--disable-extensions'],
       args: ['--lang=en-US', '--no-first-run', '--no-default-browser-check', '--proxy-server=http://127.0.0.1:9', '--proxy-bypass-list=<-loopback>', `--window-position=${work.x+work.width-chromeWidth},${work.y}`, `--window-size=${chromeWidth},${work.height}`] })
@@ -176,6 +180,9 @@ async function main() {
       const to={x:Math.round((geo.outer.x+geo.outer.width+work.x+work.width)/2),y:Math.round(work.y+work.height*0.65)}
       assert.ok(from.x>=0&&from.y>=0&&from.x<geo.bounds.width&&from.y<geo.bounds.height&&to.x>geo.outer.x+geo.outer.width&&to.x<work.x+work.width,'Native drag endpoints must be visible on their real windows')
       fs.writeFileSync(path.join(output,'drag-points.json'),JSON.stringify({from,to,work,box,geo},null,2))
+      const receiver = JSON.parse(await desktop('hit', ['-ToX', String(to.x), '-ToY', String(to.y)]))
+      fs.writeFileSync(path.join(output, 'drag-receiver.json'), JSON.stringify(receiver, null, 2))
+      check(`native drop point belongs to ${browserName}`, receiver.process === (browserName === 'Chrome' ? 'chrome' : 'msedge'), receiver)
       await desktop('drag',['-FromWindow',geo.hwnd,'-FromX',String(from.x),'-FromY',String(from.y),'-ToX',String(to.x),'-ToY',String(to.y)])
       await sleep(1800)
       const requests=await app.evaluate(()=>globalThis.__clipNativeDragRequests)

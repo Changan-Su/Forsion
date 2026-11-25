@@ -5,8 +5,12 @@
  * 手机把整端切到我的电脑 = 经 hub 的 /unit/hostfile)、沙箱走 /agent/workspace/read(P1-K6 S2)。
  * 下载(P1-DL):host 文件一律交给同一个 hostFs 的 downloadHostFile —— 本机 = 在文件管理器显示;手机 / 设备页 / 看别的电脑 =
  * /unit/hostfile/download 流式下载原文件(预览 4MB 上限管不到它)。老消息不用改形状,同样有下载位。
+ * 11-23(生图多张与标注改图 1B):一条消息里生图 / 改图产出的图(source 标记)≥2 张 = 主图 + 缩略条(选中描 --signal),
+ *   下面「n / N · 用这张继续 · 再来 N 张」;主图悬停出「标注修改」。1 张、截图、表情包照旧;读失败的那张退回文件卡。
+ *   看图器的列表按缩略图收(主图不标 data-viewable,免得同一张收两次)。
  */
 import React, { useEffect, useRef, useState } from 'react'
+import { CornerDownRight, PenLine, RefreshCw } from 'lucide-react'
 import type { DisplayFile, TanguDesktopConfig } from '../types'
 import type { PreviewTarget, PreviewData } from './WorkspaceFilePreview'
 import { b64ToBytes, iconForFile, mimeForExt, previewKindFor } from '../services/fileKinds'
@@ -14,11 +18,20 @@ import * as api from '../services/backendService'
 import { hostFsForSession } from '../services/engine/hostFs'
 import { notifyApp } from '../stores/notificationStore'
 import { targetForSession } from '../services/engine/targets'
-import { translate } from '../i18n'
-import { viewableProps } from './ImageViewer'
+import { registerMessages, translate } from '../i18n'
+import { continueWithImage, openImageViewer, viewableProps } from './ImageViewer'
+import { useApp } from '../stores/appStore'
 import { saveResponseAs } from '../services/nativeDownload'
 
 type ExecMode = 'host' | 'sandbox' | undefined
+
+registerMessages({
+  'inlineSet.markup': { zh: '标注修改', en: 'Mark up' },
+  'inlineSet.useThis': { zh: '用这张继续', en: 'Continue with this' },
+  'inlineSet.more': { zh: '再来 {count} 张', en: '{count} more' },
+  'inlineSet.moreMsg': { zh: '照 {name} 这组再来 {count} 张。', en: 'Make {count} more like the set with {name}.' },
+  'inlineSet.pick': { zh: '看第 {n} 张', en: 'Show image {n}' },
+})
 
 function decodeDataUrl(u: string): PreviewData {
   const m = u.match(/^data:([^;]+);base64,(.*)$/)
@@ -80,12 +93,6 @@ const InlineMedia: React.FC<{
   f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode
   kind: 'image' | 'video' | 'audio'; onClick: () => void
 }> = ({ f, cfg, sessionId, execMode, kind, onClick }) => {
-  const sourceId = f.sourceSessionId || sessionId
-  const direct = kind === 'image'
-    ? f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sourceId), sourceId, f.path) : null)
-    : null
-  const [src, setSrc] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
   const [visible, setVisible] = useState(false)
   const mediaRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -97,6 +104,30 @@ const InlineMedia: React.FC<{
     observer.observe(mediaRef.current)
     return () => observer.disconnect()
   }, [kind])
+  const { src: imageSrc, failed, setFailed } = useMediaSrc(f, cfg, sessionId, execMode, kind, kind === 'image' || visible)
+  if (failed) return <FileCard f={f} onClick={onClick} />
+  if (kind !== 'image') return (
+    <div className="inline-file-media" ref={mediaRef}>
+      {imageSrc && (kind === 'video'
+        ? <video className="inline-file-video" src={imageSrc} controls playsInline preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />
+        : <audio className="inline-file-audio" src={imageSrc} controls preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />)}
+      <FileCard f={f} onClick={onClick} />
+    </div>
+  )
+  if (!imageSrc) return null
+  // 点开 = 就地看图(A2);原来的去处(主区文件标签页)挪到看图顶栏的「在标签页打开」
+  return <img className="inline-file-img" src={imageSrc} alt={f.name} title={f.name} draggable={false} onError={() => setFailed(true)} {...viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onClick }, edit: { sessionId } })} />
+}
+
+/** 媒体字节 → 可用的 src:dataUrl / 沙箱下载地址直接用,host 文件读出来转 blob URL(卸载时回收)。want = 现在就要(音视频进视口才取)。 */
+function useMediaSrc(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: string, execMode: ExecMode, kind: 'image' | 'video' | 'audio', want: boolean) {
+  const sourceId = f.sourceSessionId || sessionId
+  const direct = kind === 'image'
+    ? f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sourceId), sourceId, f.path) : null)
+    : null
+  const [src, setSrc] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const visible = want
   useEffect(() => {
     setSrc(null)
     setFailed(false)
@@ -115,19 +146,85 @@ const InlineMedia: React.FC<{
     })()
     return () => { cancelled = true; if (url) URL.revokeObjectURL(url) }
   }, [direct, f.path, f.dataUrl, f.name, f.mime, sourceId, execMode, kind, visible]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (failed) return <FileCard f={f} onClick={onClick} />
-  if (kind !== 'image') return (
-    <div className="inline-file-media" ref={mediaRef}>
-      {src && (kind === 'video'
-        ? <video className="inline-file-video" src={src} controls playsInline preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />
-        : <audio className="inline-file-audio" src={src} controls preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />)}
-      <FileCard f={f} onClick={onClick} />
+  return { src: direct || src, failed, setFailed }
+}
+
+/** 缩略条里的一格:真正标 data-viewable 的是它(看图器按它收列表);字节读到后报给上面,主图用同一个 src。 */
+const SetThumb: React.FC<{
+  f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; on: boolean; n: number
+  onSrc: (src: string | null, failed: boolean) => void; onPick: () => void; onOpenTab: () => void; imgRef: (el: HTMLImageElement | null) => void
+}> = ({ f, cfg, sessionId, execMode, on, n, onSrc, onPick, onOpenTab, imgRef }) => {
+  const { src, failed, setFailed } = useMediaSrc(f, cfg, sessionId, execMode, 'image', true)
+  useEffect(() => { onSrc(failed ? null : src, failed) }, [src, failed]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (failed) return null // 上面那层改画成文件卡
+  const view = viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onOpenTab }, edit: { sessionId } })
+  return (
+    <button type="button" className={`inline-set-thumb${on ? ' is-on' : ''}`} aria-pressed={on} aria-label={translate('inlineSet.pick', { n })} title={f.name} onClick={onPick}>
+      {src && !failed
+        // 缩略图本身不响应点 / 键(交给外面的按钮切主图);data-viewable + meta 留给看图器收列表
+        ? <img src={src} alt="" draggable={false} onError={() => setFailed(true)} data-viewable="" ref={(el) => { view.ref(el); imgRef(el) }} />
+        : <span className="inline-set-thumb-empty" />}
+    </button>
+  )
+}
+
+const fileKey = (f: DisplayFile): string => `${f.path || ''}|${f.name}`
+
+/** 1B:主图 + 缩略条。窄了缩略条换到下面横排(容器查询,见 base.css)。 */
+const ImageSet: React.FC<{ files: DisplayFile[]; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; open: (f: DisplayFile) => void }> = ({ files, cfg, sessionId, execMode, open }) => {
+  // 选中项 / 字节 / 读失败都按文件认(不按序号):流式里第 3 张晚到,选中的第 2 张不跳、已读出的 blob 不重读
+  const [selKey, setSelKey] = useState<string | null>(null)
+  const [srcs, setSrcs] = useState<Record<string, string | null>>({})
+  const [bad, setBad] = useState<Record<string, boolean>>({})
+  const thumbs = useRef(new Map<string, HTMLImageElement | null>())
+  const mainRef = useRef<HTMLImageElement>(null)
+  const good = files.filter((x) => !bad[fileKey(x)])
+  const f = (selKey ? good.find((x) => fileKey(x) === selKey) : undefined) ?? good[0] ?? files[0]
+  const curKey = fileKey(f)
+  const mainSrc = srcs[curKey] ?? null
+  const view = (markup = false): void => {
+    const el = thumbs.current.get(curKey)
+    if (el) openImageViewer(el, { markup, flyEl: mainRef.current ?? undefined })
+  }
+  // 带上这组第一张的名字:同一会话里几组张数一样时,模型分得清是哪一组
+  const more = (): void => { void useApp.getState().send(translate('inlineSet.moreMsg', { count: files.length, name: files[0].name }), [], undefined, undefined, undefined, sessionId) }
+  return (
+    <div className="inline-set">
+      <div className="inline-set-row">
+        <div className="inline-set-main">
+          {mainSrc
+            ? <img ref={mainRef} src={mainSrc} alt={f.name} title={f.name} draggable={false} role="button" tabIndex={0}
+                onClick={() => view()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); view() } }} />
+            : <span className="inline-set-main-empty" />}
+          {mainSrc && !/\.gif$/i.test(f.name) && (
+            <button type="button" className="inline-set-act" onClick={() => view(true)}><PenLine size={13} /><span>{translate('inlineSet.markup')}</span></button>
+          )}
+        </div>
+        <div className="inline-set-strip" role="group">
+          {files.map((x, i) => {
+            const k = fileKey(x)
+            return (
+              <SetThumb key={k} f={x} cfg={cfg} sessionId={sessionId} execMode={execMode} on={k === curKey} n={i + 1}
+                onSrc={(u, failed) => {
+                  setSrcs((all) => (all[k] === u ? all : { ...all, [k]: u }))
+                  setBad((all) => (!!all[k] === failed ? all : { ...all, [k]: failed }))
+                }}
+                onPick={() => setSelKey(k)} onOpenTab={() => open(x)} imgRef={(el) => { thumbs.current.set(k, el) }} />
+            )
+          })}
+        </div>
+      </div>
+      <div className="inline-set-meta">
+        <span className="inline-set-count">{good.indexOf(f) + 1} / {good.length}</span>
+        <span className="inline-set-name" title={f.name}>{f.name}</span>
+        {mainSrc && !/\.gif$/i.test(f.name) && (
+          <button type="button" className="inline-set-link" onClick={() => void continueWithImage(mainSrc, f.name, sessionId)}><CornerDownRight size={12} />{translate('inlineSet.useThis')}</button>
+        )}
+        <button type="button" className="inline-set-link" onClick={more}><RefreshCw size={12} />{translate('inlineSet.more', { count: files.length })}</button>
+      </div>
+      {files.map((x) => (bad[fileKey(x)] ? <FileCard key={fileKey(x)} f={x} onClick={() => open(x)} /> : null))}
     </div>
   )
-  const imageSrc = direct || src
-  if (!imageSrc) return null
-  // 点开 = 就地看图(A2);原来的去处(主区文件标签页)挪到看图顶栏的「在标签页打开」
-  return <img className="inline-file-img" src={imageSrc} alt={f.name} title={f.name} draggable={false} onError={() => setFailed(true)} {...viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onClick } })} />
 }
 
 export const InlineFiles: React.FC<{
@@ -139,9 +236,13 @@ export const InlineFiles: React.FC<{
 }> = ({ files, cfg, sessionId, execMode, onOpenPreview }) => {
   if (!files.length) return null
   const open = (f: DisplayFile) => onOpenPreview?.(targetFor(f, cfg, sessionId, execMode))
+  // 只给生图工具的产出成组:display_file 展示的截图、表情包照旧逐张排(它们没有「再来 N 张」可言)
+  const images = files.filter((f) => (f.source === 'generate_image' || f.source === 'edit_image') && previewKindFor(f.mime || '', f.name) === 'image')
+  const rest = images.length >= 2 ? files.filter((f) => !images.includes(f)) : files
   return (
     <div className="inline-file-grid">
-      {files.map((f, i) => {
+      {images.length >= 2 && <ImageSet files={images} cfg={cfg} sessionId={sessionId} execMode={execMode} open={open} />}
+      {rest.map((f, i) => {
         const kind = previewKindFor(f.mime || '', f.name)
         if (kind === 'image' || kind === 'video' || kind === 'audio') {
           return <InlineMedia key={i} f={f} cfg={cfg} sessionId={sessionId} execMode={execMode} kind={kind} onClick={() => open(f)} />

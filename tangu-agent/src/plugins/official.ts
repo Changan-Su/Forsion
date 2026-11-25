@@ -9,7 +9,7 @@
  * 判定在每次激活时现做(bootstrap.startEntry,首次 import 之前):升级 / 重扫换了代码就重新核。
  * 只信磁盘与签名,不信 manifest 里的 id 或目录名本身:manifest.json 必须在签名里(它的 id 才可信),
  * 目录名必须等于这个 id(桌面播种内置包就落在 plugins/<id>,见 desktop/electron/builtinPlugins.ts),
- * 商店装的(market-* 目录、带 packageId 的改名身份)一律不是官方。
+ * 健康插件另支持其登记的商店安装目录。两种目录都必须验证对应签名。
  *
  * ⚠️ 威胁模型:引擎插件是同进程的原生代码,这道判定挡的是「第三方插件拿到账号出口 / 冒充审批文案 / 混进聊天」这条契约面,
  * 不是沙箱 —— 能写用户插件目录、或已经在进程里跑的代码本来就什么都做得了。
@@ -33,12 +33,12 @@ const MAX_FILES = 5000;
 export const canonicalFiles = (files: Record<string, string>): string =>
   JSON.stringify(Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
 
-export type SignatureVerdict = { ok: true; files: string[] } | { ok: false; reason: string };
+export type SignatureVerdict = { ok: true; files: string[]; entry?: Buffer } | { ok: false; reason: string };
 
 const SAFE_REL = /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0\\]+$/;
 
 /** 核对 dir 下的 SIGNATURE(桌面 bundleSignature.verifyBundleSignature 的引擎侧移植)。require = 必须被签到的文件(posix 相对路径)。 */
-export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = []): Promise<SignatureVerdict> {
+export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = [], capture?: string): Promise<SignatureVerdict> {
   let parsed: { alg?: unknown; files?: unknown; sig?: unknown };
   try {
     parsed = JSON.parse(await fs.readFile(path.join(dir, SIGNATURE_FILE), 'utf8'));
@@ -65,6 +65,7 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
   for (const rel of require) {
     if (!Object.prototype.hasOwnProperty.call(digests, rel)) return { ok: false, reason: `${rel} is not covered by ${SIGNATURE_FILE}` };
   }
+  let entry: Buffer | undefined;
   for (const [rel, digest] of entries) {
     const file = path.join(dir, ...rel.split('/'));
     let stat: import('node:fs').Stats;
@@ -74,19 +75,27 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
       return { ok: false, reason: `${rel} is missing` };
     }
     if (!stat.isFile()) return { ok: false, reason: `${rel} is not a regular file` };
-    const actual = createHash('sha256').update(await fs.readFile(file)).digest('hex');
+    const bytes = await fs.readFile(file);
+    const actual = createHash('sha256').update(bytes).digest('hex');
+    if (rel === capture) entry = bytes;
     if (actual !== digest) return { ok: false, reason: `${rel} does not match its signed hash` };
   }
-  return { ok: true, files: entries.map(([rel]) => rel) };
+  return { ok: true, files: entries.map(([rel]) => rel), ...(entry ? { entry } : {}) };
+}
+
+// Store assigns a stable directory to each listing. A name only selects the expected key.
+export const HEALTH_MARKET_DIR = 'market-8d6fac48-fb63-483a-a8cb-5603a8ca1c8a';
+export function officialBundleId(directory: string): string {
+  return directory === HEALTH_MARKET_DIR ? 'forsion-health' : directory;
 }
 
 /** 官方判定。keys 可注入只为单测(生产恒用引擎钉的那张表);任何一步不满足都是 false,永不抛。 */
-export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<boolean> {
+export async function inspectOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<false | { entry?: Buffer }> {
   try {
     if (!d.bundled || d.packageId !== undefined) return false;
     const root = path.dirname(path.dirname(d.dir)); // <shared>/plugins/<bundle>(d.dir = <bundle>/tangu-plugins/<pid>)
     const name = path.basename(root);
-    if (path.basename(path.dirname(d.dir)) !== 'tangu-plugins' || name.startsWith('market-')) return false;
+    if (path.basename(path.dirname(d.dir)) !== 'tangu-plugins' || (name.startsWith('market-') && name !== HEALTH_MARKET_DIR)) return false;
     let bundleId: unknown;
     try {
       bundleId = JSON.parse(await fs.readFile(path.join(root, 'manifest.json'), 'utf8'))?.id;
@@ -98,7 +107,7 @@ export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly
       console.warn(`[tangu] 捆绑包 ${name} 的引擎插件 ${d.manifest.id} 不按官方插件对待:${reason}`);
       return false;
     };
-    if (name !== bundleId) return fail(`folder name "${name}" is not the bundle id "${bundleId}"`);
+    if (officialBundleId(name) !== bundleId) return fail(`folder name "${name}" is not the bundle id "${bundleId}"`);
     // 所有要核的文件都必须真的落在捆绑包目录里:中间任何一层是符号链接(含 tangu-plugins/<pid> 本身)realpath 就对不上。
     const realRoot = await fs.realpath(root);
     const pluginRel = path.relative(root, d.dir).split(path.sep).join('/');
@@ -110,21 +119,28 @@ export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly
       try { real = await fs.realpath(path.join(root, ...rel.split('/'))); } catch { return fail(`${rel} is missing`); }
       if (real !== path.join(realRoot, ...rel.split('/'))) return fail(`${rel} goes through a symbolic link`);
     }
-    const verdict = await verifyBundleSignature(root, keys[bundleId], required);
-    return verdict.ok ? true : fail(verdict.reason);
+    const health = bundleId === 'forsion-health';
+    if (health && (required[2] !== 'tangu-plugins/health-reader/index.mjs' || d.manifest.id !== 'health-reader')) return fail('unexpected health entry');
+    const verdict = await verifyBundleSignature(root, keys[bundleId], required, health ? required[2] : undefined);
+    return verdict.ok ? { entry: verdict.entry } : fail(verdict.reason);
   } catch (e) {
     console.warn(`[tangu] 官方插件判定出错(按非官方处理):${(e as Error)?.message || e}`);
     return false;
   }
 }
 
-// ponytail: 白名单 = 商店「我的条目」与提交更新两条。要开新的账号接口,在这里加一条精确匹配(别改成前缀 / 正则放宽),
-// 并在 server 侧确认那条路由只做插件该做的事;再往上走是按捆绑包分档的能力表(Forsion-Extend 之外的官方包出现时再做)。
+export async function isOfficialEnginePlugin(d: DiscoveredPlugin, keys: Readonly<Record<string, string>> = OFFICIAL_BUNDLE_KEYS): Promise<boolean> {
+  return !!(await inspectOfficialEnginePlugin(d, keys));
+}
+
+// 按签名捆绑包分配账号接口。新增路由须核对服务端权限,并在此精确匹配。
 const MINE_PATH = '/api/market/mine';
 const UPDATE_PATH = /^\/api\/market\/mine\/[A-Za-z0-9_-]{1,128}\/update$/;
 
 /** ctx.cloud 的路径闸:按原串精确匹配(不解码、不规整),通过的就是原样发出去的那串。 */
-export function cloudPathAllowed(rawPath: unknown, method: unknown): boolean {
+export function cloudPathAllowed(rawPath: unknown, method: unknown, bundleId = 'forsion-extend'): boolean {
+  if (bundleId === 'forsion-health') return method === 'POST' && rawPath === '/api/wellness/agent/summary';
+  if (bundleId !== 'forsion-extend') return false;
   if (typeof rawPath !== 'string') return false;
   const q = rawPath.indexOf('?');
   const pathname = q < 0 ? rawPath : rawPath.slice(0, q);
@@ -137,12 +153,12 @@ export function cloudPathAllowed(rawPath: unknown, method: unknown): boolean {
 const MAX_TIMEOUT_MS = 120_000;
 
 /** 给一个官方插件实例造 ctx.cloud。live() = 这次激活还没停用(停用后的迟到调用一律拒,不发)。 */
-export function createOfficialCloud(live: () => boolean): { request(req: PluginCloudRequest): Promise<CloudResponse> } {
+export function createOfficialCloud(live: () => boolean, bundleId = 'forsion-extend'): { request(req: PluginCloudRequest): Promise<CloudResponse> } {
   return {
     async request(req) {
       const method = req?.method ?? 'GET';
       const p = req?.path;
-      if (!cloudPathAllowed(p, method)) return { status: 403, error: 'path_not_allowed' };
+      if (!cloudPathAllowed(p, method, bundleId)) return { status: 403, error: 'path_not_allowed' };
       if (!live()) return { status: 0, error: 'plugin_disabled' };
       let cloud: CloudAccountBrain | undefined;
       try { cloud = deps().brain?.cloud; } catch { cloud = undefined; }

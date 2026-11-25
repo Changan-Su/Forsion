@@ -4,7 +4,7 @@
  *
  *   O1 冷启动 argv 里的库外 .md(win/linux 首启那条)→ wsfile 标签页;argv 里的 app 根目录与开关不被当文件
  *   O2 库外 .md 就地编辑 → 写回原文件(「临时编辑」不导入笔记库:库目录里不多出文件)
- *   O3 mac 的 open-file 事件(Finder 双击 / 拖到 Dock)→ 库外 .pdf 进 wsfile,PDF 渲染出来
+ *   O3 mac 的 open-file 事件(Finder 双击 / 拖到 Dock)→ 库外 .pdf 进内置阅读器并渲染
  *   O4 已开着时二次启动带文件(win/linux 双击)→ 二号进程退出,文件落在一号实例里
  *   O5 本地库内的 .md → Amadeus 笔记视图,不进 wsfile(与已开着的库外文件同名,不许认成那一个)
  *   O6 同一路径再开一次 → 聚焦已有标签页,不重复开
@@ -87,6 +87,13 @@ async function main() {
   fs.writeFileSync(secondMd, '# 二次启动\n')
   const afterReload = path.join(outside, '重载后.md')
   fs.writeFileSync(afterReload, '# 重载后\n')
+  const wideImage = path.join(outside, '宽图.svg')
+  fs.writeFileSync(wideImage, '<svg xmlns="http://www.w3.org/2000/svg" width="2400" height="640"><rect width="2400" height="640" fill="gray"/></svg>')
+  const wideTable = path.join(outside, '宽表.csv')
+  const cells = Array.from({ length: 40 }, (_, i) => `Column_${i}_keep_reading`).join(',')
+  fs.writeFileSync(wideTable, Array(80).fill(cells).join('\n'))
+  const wideDiff = path.join(outside, '宽文本.diff')
+  fs.writeFileSync(wideDiff, `diff --git a/example.txt b/example.txt\n--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-${'old '.repeat(400)}\n+${'new '.repeat(400)}\n`)
   /** 库里有没有出现外部文件的副本(应用自己会在库里建 Sessions/ 之类,不能比整份目录)。 */
   const copiedIntoVault = (dir = vaultDir) => fs.readdirSync(dir, { withFileTypes: true }).some((d) =>
     d.isDirectory() ? copiedIntoVault(path.join(dir, d.name)) : d.name.includes('外部'))
@@ -135,13 +142,10 @@ async function main() {
     if (!o2) await shot('o2')
 
     // O3:mac 的 open-file(Finder 双击 / 打开方式 / 拖到 Dock)
+    const outsidePdfShown = () => win.locator('.pdfa-container .textLayer:visible').filter({ hasText: 'Outside PDF' }).first().isVisible()
     await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, extPdf)
-    const o3 = await waitFor(async () => (await activeWsfile(win)) === extPdf, 15_000)
-    const pdfOk = o3 && await waitFor(() => win.evaluate(() => {
-      const tab = [...document.querySelectorAll('.wsfile-tab')].find((t) => t.offsetParent !== null)
-      return !!tab && !tab.querySelector('.wsfile-fallback') && !!tab.querySelector('canvas, .page, .pdfViewer')
-    }).catch(() => false), 15_000)
-    check('O3 open-file 事件把库外 .pdf 开成 wsfile 并渲染出页面', !!pdfOk, `active=${await activeWsfile(win)}`)
+    const pdfOk = await waitFor(outsidePdfShown, 15_000)
+    check('O3 open-file 事件把库外 .pdf 交给内置阅读器并渲染出页面', !!pdfOk)
     if (!pdfOk) await shot('o3')
 
     // O4:二次启动带文件 —— 二号进程拿不到单实例锁直接退出,文件经 second-instance 落到这里
@@ -170,7 +174,7 @@ async function main() {
 
     // O6:同一路径再开 → 聚焦已有的,不重复开(先切走,确认是「聚焦回来」)
     await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, extPdf)
-    const o6 = await waitFor(async () => (await activeWsfile(win)) === extPdf, 10_000)
+    const o6 = await waitFor(outsidePdfShown, 10_000)
     const pdfTabs = (await tabTitles(win)).filter((t) => t.includes('外部文档')).length
     await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, vaultNote)
     await win.waitForTimeout(1500)
@@ -197,14 +201,57 @@ async function main() {
       const first = await deliver(mixed)
       const firstShown = await waitFor(async () => (await tabTitles(win)).includes('MixedCase') && await activeWsfile(win) !== mixed, 15000)
       const away = await deliver(extPdf)
-      const left = await waitFor(async () => await activeWsfile(win) === extPdf, 15000)
+      const left = await waitFor(outsidePdfShown, 15000)
       const second = await deliver(mixed.toLowerCase())
-      const returned = await waitFor(async () => await activeWsfile(win) !== extPdf, 15000)
+      const returned = await waitFor(async () => !await outsidePdfShown(), 15000)
       const content = await win.locator('.ProseMirror:visible').filter({ hasText: 'Windows path identity fixture.' }).count()
       const count = (await tabTitles(win)).filter(title => title.toLowerCase() === 'mixedcase').length
       check('O8 Windows case-only second-instance path focuses the original native note without a duplicate', first === 0 && firstShown && away === 0 && left && second === 0 && returned && count === 1 && content === 1, `nativeTabs=${count} tabs=${(await tabTitles(win)).join('|')}`)
       if (count !== 1 || !returned) await shot('o8')
     }
+    const openPreview = async (file, selector) => {
+      await app.evaluate(({ app: a }, p) => { a.emit('open-file', { preventDefault() {} }, p) }, file)
+      const viewport = win.locator(`${selector}:visible`).first()
+      await viewport.hover({ timeout: 15000 })
+      return viewport
+    }
+    const shiftWheel = async () => {
+      await win.keyboard.down('Shift')
+      try { await win.mouse.wheel(0, 120) } finally { await win.keyboard.up('Shift') }
+    }
+    const image = await openPreview(wideImage, '.wsfile-imgwrap img')
+    await image.evaluate(el => el.decode())
+    for (let i = 0; i < 6; i++) await win.mouse.wheel(0, -120)
+    const imageBefore = await image.boundingBox()
+    await shiftWheel()
+    const imageAfter = await image.boundingBox()
+    check('文件图片预览 Shift+滚轮只横移，保持缩放', imageAfter.x < imageBefore.x - 10
+      && Math.abs(imageAfter.y - imageBefore.y) < 1 && Math.abs(imageAfter.width - imageBefore.width) < 1,
+    JSON.stringify({ imageBefore, imageAfter }))
+    const stage = await win.locator('.wsfile-imgwrap:visible').boundingBox()
+    const midY = stage.y + stage.height / 2
+    await win.mouse.move(stage.x + stage.width * 0.9, midY)
+    await win.mouse.down()
+    await win.mouse.move(stage.x + stage.width * 0.1, midY, { steps: 8 })
+    await win.mouse.up()
+    const dragged = await image.boundingBox()
+    await shiftWheel()
+    const beyondEdge = await image.boundingBox()
+    check('图片拖过边缘后继续横滚，图片保持当前位置',
+      dragged.x < imageAfter.x - stage.width / 2 && Math.abs(beyondEdge.x - dragged.x) < 1,
+      JSON.stringify({ dragged, beyondEdge }))
+    const table = await openPreview(wideTable, '.wsfile-tab .wsfile-doc:has(.wsfile-table)')
+    await table.evaluate(el => { el.scrollTop = 200 })
+    const position = () => table.evaluate(el => ({ left: el.scrollLeft, top: el.scrollTop }))
+    const tableBefore = await position()
+    await shiftWheel()
+    const tableAfter = await position()
+    check('文件表格预览 Shift+滚轮只横移', tableAfter.left > tableBefore.left + 10 && tableAfter.top === tableBefore.top,
+      JSON.stringify({ tableBefore, tableAfter }))
+    const diff = await openPreview(wideDiff, '.wsfile-diff .d2h-file-side-diff')
+    await shiftWheel()
+    const diffLeft = await diff.evaluate(el => el.scrollLeft)
+    check('并排差异预览 Shift+滚轮横移指针下的列', diffLeft > 10, `left=${diffLeft}`)
   } finally {
     await app.close().catch(() => {})
     try { await stub.close() } catch { /* ignore */ }

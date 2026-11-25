@@ -11,13 +11,15 @@
  *   - 原时间照留:会话 created_at / updated_at、每条消息的 timestamp 都用原记录的,列表里按原时间排,不冒到最上面。
  *   - 不触发后台:导入不建 run,Historian 起标题 / 记忆候选 / Dream 都只认跑过的轮次,所以一条也不会被它们扫到;
  *     proactive_at 留空 → 没有未读点;标题记为手动(title_manual),之后接着聊也不会被 Historian 改名。
- *   - **先写消息、最后才建会话行**:会话行出现之前,列表里看不到、也没人能往里续聊。消息 id 由 (会话 id, 序号) 定死、
+ *   - **先写消息、最后才建会话行**(宿主没有异步事务时;有的话见下一条):会话行出现之前,列表里看不到、也没人能往里续聊。消息 id 由 (会话 id, 序号) 定死、
  *     `ON CONFLICT (id) DO NOTHING` —— 写到一半断了(失败 / 进程退出)留下的只是没有会话行的消息,谁也看不见;
  *     再导一次会补齐剩下的、再建会话行。**不做补偿删除**:按 session_id 删会连别人此刻写进去的消息一起删(Codex 11-16)。
+ *   - 宿主给了异步事务(HostServices.transaction,server 网关的 PG —— chat_messages.session_id 有外键,先写消息会被拒):
+ *     每条对话一个事务,先建会话行、再写消息,提交前谁也看不见,失败整段回滚。一条失败不连累同一批的其他对话。
  *   - 消息 origin = 'import',来源记在会话 agent_config.imported = { source, id }(界面和以后的撤销靠它认)。
  */
 import { createHash } from 'node:crypto';
-import { query, getDbType } from '../core/db.js';
+import { query, getDbType, hostTransaction, type TxQuery } from '../core/db.js';
 
 export const IMPORT_MAX_CONVERSATIONS = 50;
 export const IMPORT_MAX_MESSAGES = 20000;
@@ -168,23 +170,48 @@ export async function importConversations(req: ImportRequest): Promise<ImportRes
       // 会话行还没建 = 只有之前断掉的导入留下的残留(谁也看不见、没人能往里写):换了内容的那批先清掉,别混进这一份。
       // 同一份内容的残留 id 一样,不删,下面 DO NOTHING 直接复用。会话行一旦存在就绝不删(上面已按 exists 返回)。
       // 残留按块从第 0 条写起:第 0 条的 id 对得上 = 同一份内容的残留(DO NOTHING 复用);对不上 = 换过内容,整批清掉。
-      const leftovers = await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? LIMIT 1`, [sessionId]);
-      if (leftovers[0]) {
-        const same = await query<any[]>(`SELECT 1 FROM chat_messages WHERE id = ? LIMIT 1`, [importedMessageId(sessionId, 0, fp)]);
-        if (!same[0]) {
-          await query(
-            `DELETE FROM chat_messages WHERE session_id = ? AND origin = 'import' AND NOT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)`,
-            [sessionId, sessionId],
-          );
+      // (有宿主事务时放进事务里做:清掉了、后面又失败,回滚把残留一并还原,不会因一次失败的重试丢掉上回写进去的那批。)
+      const clearStaleLeftovers = async (run: TxQuery) => {
+        const leftovers = await run<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? LIMIT 1`, [sessionId]);
+        if (!leftovers[0]) return;
+        const same = await run<any[]>(`SELECT 1 FROM chat_messages WHERE id = ? LIMIT 1`, [importedMessageId(sessionId, 0, fp)]);
+        if (same[0]) return;
+        await run(
+          `DELETE FROM chat_messages WHERE session_id = ? AND origin = 'import' AND NOT EXISTS (SELECT 1 FROM chat_sessions WHERE id = ?)`,
+          [sessionId, sessionId],
+        );
+      };
+      const sessionSql = `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?) ON CONFLICT (id) DO NOTHING`;
+      const sessionParams = [sessionId, req.userId, req.appId, title, true, req.modelId, JSON.stringify(cfg), req.projectless,
+        updatedAt, sqlTime(createdAt), sqlTime(updatedAt)];
+      const tx = hostTransaction();
+      if (tx) {
+        // 宿主给了异步事务(server 网关的 PG:chat_messages.session_id 有外键指向 chat_sessions,不能先写消息)。
+        // 同一个事务里先建会话行、再写消息:提交之前别人看不见这条会话,失败整段回滚 —— 与下面逐条写的「写一半谁也看不见」同一个不变量。
+        // 会话行没插进去 = 这期间别人(同一次导入的并发请求)建了它:不往里写消息,按 exists / 撞号回报。
+        const created = await tx(async (q) => {
+          await clearStaleLeftovers(q); // 先于建会话行:它的 NOT EXISTS 闸认的就是「会话行还没建」
+          const inserted = await q<any[]>(`${sessionSql} RETURNING id`, sessionParams);
+          if (!inserted?.[0]) return false;
+          await insertMessages(q, sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
+          return true;
+        });
+        if (!created) {
+          const owner = await query<any[]>(`SELECT user_id FROM chat_sessions WHERE id = ? LIMIT 1`, [sessionId]);
+          // 回查时已经没了 = 并发建它的那一份刚被删掉:既不是 exists 也不是撞号,让调用方重试。
+          results.push(!owner[0]
+            ? { external_id: c.external_id, status: 'error', error: 'session changed during import, retry' }
+            : owner[0].user_id === req.userId
+              ? { external_id: c.external_id, status: 'exists', session_id: sessionId }
+              : { external_id: c.external_id, status: 'error', error: 'id collision' });
+          continue;
         }
+      } else {
+        await clearStaleLeftovers(query);
+        await insertMessages(query, sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
+        await query(sessionSql, sessionParams);
       }
-      await insertMessages(sessionId, c.messages, stamps, agentSlugOf(req.agentConfig), fp);
-      await query(
-        `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, agent_config, projectless, kind, last_read_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
-        [sessionId, req.userId, req.appId, title, true, req.modelId, JSON.stringify(cfg), req.projectless,
-         updatedAt, sqlTime(createdAt), sqlTime(updatedAt)],
-      );
       results.push({ external_id: c.external_id, status: 'created', session_id: sessionId, messages: c.messages.length });
     } catch (e: any) {
       results.push({ external_id: c.external_id, status: 'error', error: String(e?.message || e).slice(0, 300) });
@@ -199,7 +226,7 @@ function agentSlugOf(cfg: Record<string, unknown> | null): string | null {
   return typeof v === 'string' && v && v.length <= 64 ? v : null;
 }
 
-async function insertMessages(sessionId: string, messages: ImportMessageInput[], stamps: number[], agentSlug: string | null, fingerprint: string): Promise<void> {
+async function insertMessages(run: TxQuery, sessionId: string, messages: ImportMessageInput[], stamps: number[], agentSlug: string | null, fingerprint: string): Promise<void> {
   const pg = getDbType() !== 'sqlite';
   for (let i = 0; i < messages.length; i += INSERT_CHUNK) {
     const slice = messages.slice(i, i + INSERT_CHUNK);
@@ -209,7 +236,7 @@ async function insertMessages(sessionId: string, messages: ImportMessageInput[],
         m.model_id || null, m.reasoning ? stripNul(m.reasoning, pg) : null, m.role === 'assistant' ? agentSlug : null, 'import');
       return '(?, ?, ?, ?, ?, ?, ?, ?, ?)';
     });
-    await query(
+    await run(
       `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, reasoning, agent_slug, origin) VALUES ${rows.join(', ')} ON CONFLICT (id) DO NOTHING`,
       params,
     );

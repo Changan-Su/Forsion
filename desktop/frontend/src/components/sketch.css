@@ -48,8 +48,8 @@ input, select, textarea { accent-color: var(--fs-accent); }
 .fs-value { font-size: 26px; font-weight: 500; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .fs-panel { padding: 12px 14px; border-radius: var(--fs-radius); background: var(--fs-surface); }
 .fs-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
-.fs-chip { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; background: var(--fs-surface); font-size: 12px; color: var(--fs-muted); }
-.fs-bar-track { height: 9px; overflow: hidden; border-radius: 999px; background: var(--fs-surface); }
+.fs-chip { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: var(--radius-pill); background: var(--fs-surface); font-size: 12px; color: var(--fs-muted); }
+.fs-bar-track { height: 9px; overflow: hidden; border-radius: var(--radius-pill); background: var(--fs-surface); }
 .fs-bar-fill { height: 100%; border-radius: inherit; background: var(--fs-accent); transform-origin: left center; }
 .fs-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 12px 16px; margin-bottom: 16px; }
 .fs-field { display: grid; gap: 6px; flex: 1 1 200px; min-width: 0; }

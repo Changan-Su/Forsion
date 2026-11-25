@@ -112,7 +112,7 @@ function cursorEl(): HTMLElement {
   el.id = CURSOR_ID
   el.setAttribute('aria-hidden', 'true')
   // 只是画给录像看的:不接点击、不进读屏、压在最上面
-  el.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;z-index:2147483647;pointer-events:none;transform:translate(-40px,-40px);transition:transform 320ms cubic-bezier(.3,.7,.2,1);will-change:transform'
+  el.style.cssText = 'position:fixed;left:0;top:0;width:22px;height:22px;z-index:calc(var(--z-stage-overlay, 2147483646) + 1);pointer-events:none;transform:translate(-40px,-40px);transition:transform 320ms cubic-bezier(.3,.7,.2,1);will-change:transform'
   el.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.4 12.6 L16.6 12.6 Z" fill="#111" stroke="#fff" stroke-width="1.4" stroke-linejoin="round"/></svg>'
   document.body.appendChild(el)
   return el
@@ -127,7 +127,7 @@ async function cursorTo(x: number, y: number): Promise<void> {
   if (far) await new Promise((r) => setTimeout(r, 360))
   const ring = document.createElement('div')
   ring.setAttribute('aria-hidden', 'true')
-  ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(17,17,17,.55);z-index:2147483646;pointer-events:none;transition:transform 420ms ease-out,opacity 420ms ease-out`
+  ring.style.cssText = `position:fixed;left:${x - 14}px;top:${y - 14}px;width:28px;height:28px;border-radius:50%;border:2px solid rgba(17,17,17,.55);z-index:var(--z-stage-overlay, 2147483646);pointer-events:none;transition:transform 420ms ease-out,opacity 420ms ease-out`
   document.body.appendChild(ring)
   requestAnimationFrame(() => { ring.style.transform = 'scale(1.6)'; ring.style.opacity = '0' })
   setTimeout(() => ring.remove(), 500)
@@ -140,7 +140,7 @@ let recording: { rec: MediaRecorder; chunks: Blob[]; started: number; ext: 'mp4'
 function startFrameTicker(): () => void {
   const el = document.createElement('div')
   el.setAttribute('aria-hidden', 'true')
-  el.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:2147483646;pointer-events:none'
+  el.style.cssText = 'position:fixed;right:0;bottom:0;width:2px;height:2px;z-index:var(--z-stage-overlay, 2147483646);pointer-events:none'
   document.body.appendChild(el)
   let on = true
   let raf = 0
@@ -307,6 +307,20 @@ async function clearToasts(x: number, y: number): Promise<string[] | 'stuck' | n
   return hit() ? 'stuck' : texts
 }
 
+/** 首次打开时右下角那张「这是一个沙箱」说明条(SandboxChrome.tsx)。它压着被测插件的按钮时,agent 点下去只会得到
+ *  「上面压着别的元素」(11-19 第一轮挡住导入按钮的疑似就是它)。和通知一样:先收起再点。收起 = 当作人点了「知道了」,
+ *  说明的原文一直在右上角「沙箱」胶囊的悬停提示里。 */
+export const SANDBOX_NOTE_COLLAPSE = 'forsion-sandbox-note-collapse'
+const NOTE = '[data-testid="sandbox-note"]'
+async function clearNote(x: number, y: number): Promise<boolean> {
+  const hit = (): boolean => !!document.elementFromPoint(x, y)?.closest(NOTE)
+  if (!hit()) return false
+  window.dispatchEvent(new Event(SANDBOX_NOTE_COLLAPSE))
+  const end = Date.now() + 1000
+  while (hit() && Date.now() < end) await sleep(40)
+  return true
+}
+
 type Located = { x: number; y: number; label: string; covered?: string; dismissed?: string[] }
 async function locate(target: string): Promise<Located | { error: string }> {
   const el = find(target)
@@ -320,6 +334,10 @@ async function locate(target: string): Promise<Located | { error: string }> {
   const label = `${roleOf(el)} "${labelOf(el)}"`
   const over = (top: Element | null): boolean => !!top && top !== el && !el.contains(top) && !top.contains(el)
   let dismissed: string[] | undefined
+  if (!el.closest(NOTE) && over(document.elementFromPoint(x, y)) && await clearNote(x, y)) {
+    if (!el.isConnected) return { error: 'the page changed while the sandbox note was being closed; read again' }
+    ;({ x, y } = point())
+  }
   // 目标本身就在通知卡里(点通知上的按钮)不算被压着
   if (!el.closest(TOASTS) && over(document.elementFromPoint(x, y))) {
     const cleared = await clearToasts(x, y)
@@ -329,6 +347,11 @@ async function locate(target: string): Promise<Located | { error: string }> {
       if (!el.isConnected) return { error: 'the page changed while a notification was being dismissed; read again' }
       dismissed = cleared
       ;({ x, y } = point())
+      // 通知收走以后露出来的可能是说明条(右下角的吐司正好叠在它上面):再看一眼
+      if (over(document.elementFromPoint(x, y)) && await clearNote(x, y)) {
+        if (!el.isConnected) return { error: 'the page changed while the sandbox note was being closed; read again' }
+        ;({ x, y } = point())
+      }
     }
   }
   const top = document.elementFromPoint(x, y)

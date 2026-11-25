@@ -145,6 +145,7 @@ export const CLASSIFICATION = {
   'POST /agent/sessions/:id/processes/:pid/kill': [A, 'user stops a background process (only stops; base tier like runs/:id/abort)'],
   'POST /agent/sessions/:id/team-members/:slug': [A, 'open a team member child session (taint propagates, C5)'],
   'POST /agent/sessions/:id/children': [A, 'task card starts a visible child session; remote taint is copied onto its first run and stored marker (C5)'],
+  'POST /agent/sessions/:id/children/:childId/retry': [A, 'retry a failed child session from the parent row; the remote origin is passed through like a parent message (C5)'],
   'GET /agent/sessions/:id/detail': [A, 'session detail'],
   'PATCH /agent/sessions/:id': [A, 'rename / archive / model / project of a session (a remote project_path never widens /unit/host* reads: only locally confirmed project roots count)'],
   'DELETE /agent/sessions/:id': [D, 'irreversible hard delete of a local session (runs, messages, code checkpoints); remote uses archive (PATCH archived)'],
@@ -153,6 +154,8 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/config': [A, 'read session config'],
   'PATCH /agent/sessions/:id/config': [A, 'session config patch (field subset + approval ceiling enforced engine-side, P0 ④ / C3)'],
   'PUT /agent/sessions/:id/config': [D, 'whole-config replace; remote uses PATCH'],
+  'GET /agent/sessions/:id/card-marks': [A, 'handled-card records of a session (task / creation cards); the phone hides cards already handled elsewhere'],
+  'POST /agent/sessions/:id/card-marks': [A, 'record a task / creation card as handled (per-key add-only merge); same scope as answering the card in the chat'],
   'GET /agent/sessions/:id/usage': [A, 'session usage'],
   'GET /agent/sessions/:id/status': [A, 'live run status (context / tokens / steps)'],
   'GET /agent/sessions/:id/timeline': [A, 'session timeline'],
@@ -781,7 +784,7 @@ function main(argv) {
   const next = renderTs(rows)
   let current = ''
   try { current = readFileSync(OUT, 'utf8') } catch { /* 首次生成 */ }
-  const stale = current !== next
+  const stale = current.replace(/\r\n/g, '\n') !== next
   if (check) {
     const report = { ok: !stale && !orphans.length && !unclassified.length, stale, unclassified, orphans, routes: rows.length }
     if (asJson) console.log(JSON.stringify(report))

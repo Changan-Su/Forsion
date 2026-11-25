@@ -75,6 +75,8 @@ export const IPC = {
   bundleAgentOwned: 'plugins:bundle-agent-owned',
   /** ctx.net.request 的主进程代请求(2026-11-16+;electron/pluginNet.ts)。白名单由主进程按插件 id 读磁盘上的 manifest。 */
   pluginNetRequest: 'plugins:net-request',
+  /** ctx.secrets 的主进程半边(2026-11-24+;electron/pluginSecrets.ts)。一条通道,第一个参数是操作名。 */
+  pluginSecrets: 'plugins:secrets',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -487,6 +489,8 @@ export interface PluginNetRequestInit { method?: string; headers?: Record<string
 export type PluginNetIpcResult =
   | { ok: true; status: number; headers: Record<string, string>; bytes: Uint8Array; url: string }
   | { ok: false; code: string; message: string }
+/** ctx.secrets 的 IPC 回包(electron/pluginSecrets.ts 的 PluginSecretsResult 同形)。 */
+export type PluginSecretsIpcResult = { ok: true; value: string | null | boolean | string[] } | { ok: false; code: string; message: string }
 
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
@@ -1025,7 +1029,7 @@ export interface AmadeusApi {
    *  withSuperseded:目标是商店安装时,被它取代的旧普通目录(主进程自己判定,渲染层不递目录名)一起进同一条回收站条目,
    *  否则卸掉商店版后旧副本立刻重新运行。旧副本的设置跟着 keepSettings 走。
    *  dir:同一个 id 有多份目录时指名卸哪一份(清理旧副本按界面显示的那份);生效 id 对不上就是没找到。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[] } | void>
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[]; withSuperseded?: boolean; dir?: string }): Promise<{ trashId?: string; dirName?: string; superseded?: string[]; secretsLeft?: boolean } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。
@@ -1034,6 +1038,9 @@ export interface AmadeusApi {
   /** ctx.net 的底座(2026-11-16+):主进程按 pluginId 读**磁盘上**那份 manifest 的 `network` 白名单,只代请求声明过的 https 域名。
    *  失败不抛,回 `{ ok:false, code }`(invoke 抛出的错误会被包一层,码就丢了)。可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.net。 */
   pluginNetRequest?(pluginId: string, url: string, init?: PluginNetRequestInit): Promise<PluginNetIpcResult>
+  /** ctx.secrets 的底座(2026-11-24+):系统钥匙串加密存小段机密,按插件 id 分开、不同步。失败不抛,回 `{ ok:false, code }`。
+   *  可选:只有本机桌面实现,缺席 = 插件拿不到 ctx.secrets。 */
+  pluginSecrets?(op: 'get' | 'set' | 'delete' | 'has' | 'keys', pluginId: string, key?: string, value?: string): Promise<PluginSecretsIpcResult>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 宿主做不了的 OS 动作(评审 G2-13):对应键**不渲染**(留一个点了没反应的按钮比没有更糟,见 platform-parity)。

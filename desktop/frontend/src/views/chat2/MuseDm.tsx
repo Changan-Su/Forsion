@@ -61,11 +61,12 @@ export function MuseTodoCards({ tasks, ownerId, sessionId, createdAt, onTask }: 
     <TaskCards
       tasks={tasks} ownerId={ownerId} sessionId={sessionId} createdAt={createdAt}
       todoStatus={todo.status} onTodoRetry={todo.retry}
-      onTask={async (card, landing) => {
-        const r = await onTask?.(card, landing)
+      // 没有执行入口(画布视图)就不往下传:卡片只读、不摆按钮,也就不会被记成已处理
+      onTask={onTask ? async (card, landing) => {
+        const r = await onTask(card, landing)
         if (card.todo) todo.retry() // 以引擎真状态为准
         return r
-      }}
+      } : undefined}
     />
   )
 }

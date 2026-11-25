@@ -303,7 +303,9 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       return accountHttp(path, req, res)
     } },
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
-    projection: { mode: 'public', basePath: entry.basePath, product: entryProducts.get(entry)!, inheritWebAccount: entry.inheritWebAccount, capabilities: () => capabilities(entryRecords(entry)) },
+    projection: { mode: 'public', basePath: entry.basePath, product: entryProducts.get(entry)!,
+      browserTitle: entry.basePath === '/web/' && entry.inheritWebAccount ? 'Forsion' : undefined,
+      inheritWebAccount: entry.inheritWebAccount, capabilities: () => capabilities(entryRecords(entry)) },
     getEngine: () => ({ url: null, token: '' }), confirmPair: async () => false,
     pairedDevices: { list: () => [], add: async () => { throw new Error('Pairing is disabled') } },
     readPlugins: async () => entryRecords(entry).flatMap((r) => r.package.ui ? [r.package.ui] : []),
@@ -312,6 +314,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
     webDistDir: () => config.webDist, vault: () => null, log: (message) => console.log(message),
   }, { port: 0, mountOnly: true }) })))
+  // The Server Admin package owns this workspace. Its browser branding is independent of the Unit's device name.
+  const adminPanel = config.defaultSpace === 'server-admin' && records.get('server-admin')?.package.spaceIds.has('server-admin')
   const web = await startUnitWeb({
     delegatedAdmin,
     account: local ? undefined : { metadata: accountMetadata, handle: accountHttp },
@@ -326,7 +330,9 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
       return { account: identity.userId }
     } } : undefined,
     meta: { instanceId: config.instanceId, name: config.name, version: config.version },
-    projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product, capabilities: () => capabilities(), localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
+    projection: { mode: local ? 'local' : 'public', basePath: config.basePath, product,
+      ...(adminPanel ? { browserTitle: 'Forsion Admin Panel', faviconPath: '/shared/ForsionLOFO3-Inverse.svg' } : {}),
+      capabilities: () => capabilities(), localCapabilities: () => ({ vault: !!runtimeVault(), engine: !!runtimeEngine()?.endpoint().url, host: !!runtimeEngine()?.endpoint().url }) },
     routeRequest: (req, res) => {
       if (management.route(req, res)) return true
       const entry = mountedEntries.find(({ entry }) => matches(pathname(req.url), entry.basePath.slice(0, -1)))

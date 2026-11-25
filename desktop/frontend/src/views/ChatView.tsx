@@ -50,6 +50,7 @@ import { ExtraFolders } from '../components/ExtraFolders'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { MuseStarters } from './chat2/MuseStarters'
+import { freshCenterOn, startersPlace } from './chat2/freshLayout'
 import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
@@ -66,6 +67,7 @@ import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancel
 import { useTranscriptWindow } from './chat2/useTranscriptWindow'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
+import { DeskSwitch, HumanDeskCard, HumanDeskPanel, HumanDeskSideCard, useHumanLiveChip } from './chat2/HumanDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
@@ -73,6 +75,7 @@ import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { ChatCanvas, armCanvasEnter, chatAnchor, useCanvasKids, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
+import { finishedReplyCount, tailTodoOf } from './chat2/tailTodo'
 import { useI18n } from '../i18n'
 import { effectiveTtsConfig, speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import { homeTarget, useComposerRef } from '../services/engine/targets'
@@ -265,6 +268,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setModelContextWindow: state.setModelContextWindow,
     setSessionMaxIterations: state.setSessionMaxIterations,
     setSessionPlanMode: state.setSessionPlanMode,
+    setSessionNoChildSessions: state.setSessionNoChildSessions,
     voiceOnByAgent: state.voiceOnByAgent,
     setVoiceMode: state.setVoiceMode,
     setSessionGroup: state.setSessionGroup,
@@ -297,7 +301,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
-  const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
+  // 「↓ N 条新消息」:只数画出来、已经说完的回答(在跑的空气泡、成员占位、团队总结、系统行都不算)
+  const replyCount = useMemo(() => finishedReplyCount(activeMessages, isHiddenInList), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断仍看活跃尾部。搜索和阅读位置按消息 id 加载附近的一页。
   const readingKey = activeId ? chatReadingKey(ownerSpace, leaf.id, activeId, s.execConfig.engineId) : ''
@@ -357,17 +362,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(cardRows) : []), [cardRows, activeId, humanAckV])
   const sessionInCreation = useSessionCreation(activeId ?? undefined).inCreation
   const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(cardRows, activeId) : []), [cardRows, activeId, taskHandledV, sessionInCreation])
-  // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
-  const tailTodo = useMemo(() => {
-    let last = true
-    for (let i = activeMessages.length - 1; i >= 0; i--) {
-      const m = activeMessages[i]
-      if (m.role !== 'assistant') continue
-      if (m.todos?.length) return running || (last && m.todos.some((x) => x.status !== 'completed')) ? m : null
-      last = false
-    }
-    return null
-  }, [activeMessages, running])
+  // 对话末尾那一行任务清单:只放这一轮的(在跑那条回答自己的;没在跑时最后一条回答还没做完的),其余几份在各自回答里收成一行。见 tailTodo.ts
+  const tailTodo = useMemo(() => tailTodoOf(activeMessages, running, isHiddenInList), [activeMessages, running])
+  // 团队总结只画最新那份,画在它在对话里的位置(原来钉在末尾:新一轮在出的回答上面压着上一轮的总结,翻到旧页也挂在页底)
+  const latestSummaryId = useMemo(() => { for (let i = shownMessages.length - 1; i >= 0; i--) if (shownMessages[i].teamSummary) return shownMessages[i].id; return null }, [shownMessages])
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
@@ -403,7 +401,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         // settleModes:与建会话同一口径结算 Ultra(草稿换了云端 / 引擎 / 团队,或 Agent 自带非 max 档,药丸就不显示 Ultra)与「团队模式下没有计划模式」
         return settleModes(applyPreset({
           execMode: cloud ? 'sandbox' : 'host',
-          ...stickyDefaults(s.desktopConfig, !cloud, preset),
+          ...stickyDefaults(s.desktopConfig, !cloud, preset, s.newChatCfg.agentSlug || s.defaultAgentSlug),
           ...s.newChatCfg,
           // 排在草稿之后:改审批档会把当时显示的 cwd 抄进草稿,之后换了项目 / 换了库它就是旧的;send() 建会话时同样以落点为准。
           cwd: cloud ? undefined : (s.newChatWs?.path || landingRoot || undefined),
@@ -734,8 +732,10 @@ export function ChatView({ leaf, params }: ViewProps) {
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   // 空对话居中 → 首发落底(freshLayout.ts):小窗 / 子会话面板 / 手机不居中 —— 手机一点输入框键盘就把它顶到键盘上沿,先居中再被顶走等于跳两次。
+  // 不画 Muse 建议的地方(右栏对话)也不居中,贴底:与下面画不画建议读同一个 startersPlace。
   // 原生手机包里 UI_MODE 恒为 desktop,判手机还要看 window.tangu?.mobile。
-  const freshCenter = !params.miniSurface && !params.childSurface && UI_MODE !== 'mobile' && !window.tangu?.mobile
+  const startersHere = startersPlace(leaf)
+  const freshCenter = freshCenterOn({ loc: leaf.loc, type: leaf.type, mini: !!params.miniSurface, child: !!params.childSurface, mobile: UI_MODE === 'mobile' || !!window.tangu?.mobile })
   // 从有消息的会话点「新对话」进来:输入区从底部升回中间(只认挂载那一刻,EmptyState2 自己记)
   const hadMessagesRef = useRef(false)
   const freshRise = hadMessagesRef.current && !hasMessages && !activeId
@@ -750,6 +750,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
+  // Human Desk 在看时,这条会话的输入框自动挂一枚引用(走今天的引用芯片;× 它 = 停止在看)
+  const humanChip = useHumanLiveChip(deskEnabled ? activeId : null)
   // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
   const readReceiptCleanup = useRef<(() => void) | null>(null)
@@ -896,7 +898,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           Markers only; nothing reads them elsewhere. */}
       <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
-      <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
+      {!params.miniSurface && <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />}
+      {/* Human Desk 的东西拿到了主区时,摘要栏卡片栈不在场(右栏、窄过 760、画布)→ 卡在对话顶上;栏在场时 CSS 让掉它 */}
+      {deskEnabled && activeId && !params.childSurface && <HumanDeskSideCard sessionId={activeId} />}
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
@@ -914,12 +918,12 @@ export function ChatView({ leaf, params }: ViewProps) {
             ) : (
               // 待读插话和正文放进同一个数组:读到后同 id 的真消息接替它时 React 认成同一个节点
               // 已经进了正文的(turn_boundary 抢在 POST 应答前到)不再画一份,免得同 key 两个节点
-              (pendingSend.msgs.length && !canvasOn ? [...shownMessages, ...pendingSend.msgs.filter((p) => !activeMessages.some((x) => x.id === p.id))] : shownMessages).map((m) => {
+              (pendingSend.msgs.length && !canvasOn && !transcript.hasNewer ? [...shownMessages, ...pendingSend.msgs.filter((p) => !activeMessages.some((x) => x.id === p.id))] : shownMessages).map((m) => {
                 const pend = pendingSend.props.get(m.id)
                 if (pend && !activeMessages.some((x) => x.id === m.id)) {
                   return <EditorialMessage key={m.id} msg={m} pending={pend} userName={userName} userAvatar={userAvatar} fileCtx={fileCtx} handlers={pendingHandlers} />
                 }
-                if (isHiddenInList(m)) return null
+                if (isHiddenInList(m)) return m.id === latestSummaryId ? <TeamSummary key={m.id} message={m} /> : null
                 if (m.role === 'user' && m.id === editingId) {
                   return <EditBubble key={m.id} original={m.content} value={editText} onChange={setEditText} userName={userName} userAvatar={userAvatar}
                     onSend={saveEdit} onCancel={() => setEditingId(null)} />
@@ -975,7 +979,6 @@ export function ChatView({ leaf, params }: ViewProps) {
               />
             ))}
             {running && runStats && !runStatsMsgId && runStats.finishedAt == null && <div className="t2-runstats-solo"><RunStatsLine stats={runStats} /></div>}
-            {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
@@ -993,9 +996,10 @@ export function ChatView({ leaf, params }: ViewProps) {
               </div>
             )}
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
-            {!canvasOn && (tailTodo || deck) && (
+            {/* 翻到较早的一页时清单那行不画在页底(它说的是最新这一轮);卡片堆和失败气泡照画:里面有没发出去的草稿和要你点的重试 */}
+            {!canvasOn && ((tailTodo && !transcript.hasNewer) || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
+                {tailTodo && !transcript.hasNewer && <TodoList key={tailTodo.id} todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}
@@ -1095,7 +1099,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 「N 件等你」与子会话药丸(借鉴 Comma 2.2)同一排;两颗都不露时这一排是空的(CSS :empty 收掉)
           approvalTray={canvasOn ? (deck ?? undefined) : (
             <div className="t2-deckpill-row">
-              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => { transcript.reset(); scrollToBottom(true) }} />}
               <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} onJump={jumpToChildBlock} />
             </div>
           )}
@@ -1151,6 +1155,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           planMode={mvCfg.planMode}
           // 成员会话不给计划模式:团队模式下没有它(成员的配置每次激活按团队重写,这里开了也不作数)。
           onPlanModeChange={teamCfg ? undefined : activeId ? (v) => s.setSessionPlanMode(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, planMode: v }))}
+          noChildSessions={mvCfg.noChildSessions}
+          // 会话进行中也能改:存进会话配置(引擎起的那几轮 —— 子会话回报叫醒、会话消息、续跑 —— 读的是存值)
+          onNoChildSessionsChange={teamCfg ? undefined : activeId ? (v) => s.setSessionNoChildSessions(v, activeId) : (v) => s.setNewChatCfg((c) => ({ ...c, noChildSessions: v || undefined }))}
           preset={mvCfg.preset}
           onPresetChange={activeId ? undefined : (p) => s.setSessionMode(p)}
           voiceMode={voiceOn}
@@ -1227,6 +1234,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 侧栏聊天默认引用主区当前笔记；Space 的主区分栏可显式 opt-in，
           // 让同屏 ChatView 也跟随旁边的 Amadeus 文档。
           autoRefFromMain={!params.childSurface && (leaf.loc !== 'main' || params.autoRefFromMain === true)}
+          liveRef={params.childSurface ? null : humanChip}
+          onLiveRefRemove={activeId ? () => useApp.getState().humanDeskAct(activeId, { type: 'stop' }) : undefined}
           appRef={!params.childSurface ? appRefOf(params.appRef) : null}
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
@@ -1239,7 +1248,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
         {/* Muse 的开场建议(新对话、没消息时;开场那一行出现的同一组条件):Chat Box 正下方最多三行 */}
-        {openingOn && !studioChat && leaf.loc === 'main' && leaf.type !== 'chat-panel' && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
+        {openingOn && !studioChat && startersHere && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
       </div>
       {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
         * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。
@@ -1251,6 +1260,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onRetry={params.readOnly ? undefined : () => retryOnce(activeId)}
           onContinue={params.readOnly || !turnHasOutput(activeMessages) ? undefined : () => retryOnce(activeId, 'continue')}
           desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
+          humanDesk={deskEnabled && activeId ? <HumanDeskCard key="humandesk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
             <SubChatStatus sessionId={activeId} />
@@ -1293,7 +1303,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         />
       </div>}
       </div>
-      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? (
+        <AgentDesk sessionId={activeId} onQuote={deskQuote} switcher={<DeskSwitch sessionId={activeId} />}
+          humanPanel={<HumanDeskPanel sessionId={activeId} switcher={<DeskSwitch sessionId={activeId} />} />} />
+      ) : null}
       {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
     </ToolCardDeskContext.Provider>

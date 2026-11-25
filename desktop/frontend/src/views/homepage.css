@@ -1254,13 +1254,13 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-phone .hp-continue-row {
   display: flex; align-items: center; gap: calc(10 * var(--hp-dp)); min-width: 0;
   min-height: calc(52 * var(--hp-dp)); padding: calc(8 * var(--hp-dp)) calc(6 * var(--hp-dp));
-  border: 0; border-radius: var(--radius-md, 10px); background: transparent;
+  border: 0; border-radius: var(--radius-md, 12px); background: transparent;
   color: var(--text); font: inherit; text-align: left;
 }
 .hp-phone .hp-continue-row:active { background: var(--bg-hover); }
 .hp-phone .hp-continue-lead {
   flex: none; display: grid; place-items: center; width: calc(32 * var(--hp-dp)); height: calc(32 * var(--hp-dp));
-  border-radius: var(--radius-md, 10px); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-muted);
+  border-radius: var(--radius-md, 12px); background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text-muted);
 }
 .hp-phone .hp-continue-lead > svg { width: calc(18 * var(--hp-dp)); height: calc(18 * var(--hp-dp)); }
 .hp-phone .hp-continue-emoji { font-size: var(--ui-font-heading, 14px); line-height: 1; }
@@ -1341,7 +1341,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
   min-width: 16px;
   margin-right: 3px;
   padding: 0 5px;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   background: var(--overlay-light);
   color: var(--text-muted);
   font: inherit;
@@ -1573,14 +1573,14 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
 /* 列表:一行 = 左标(点 / 勾选框 / 小图标)· 时间 · 标题 · 右边小字;分组名变了画小标题 */
 .hp-wl { display: flex; flex-direction: column; gap: 1px; margin: 0 -6px; }
 .hp-wl-group { margin: 4px 6px 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
-.hp-wl-row { display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%; padding: 3px 6px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.hp-wl-row { display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%; padding: 3px 6px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .hp-wl-row:hover:not(:disabled) { background: var(--bg-hover); }
 .hp-wl-row:disabled { cursor: default; }
 .hp-wl-lead { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 14px; color: var(--text-muted); }
 .hp-wl-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--overlay-medium); }
 .hp-wl-dot.on { background: var(--accent-ink); }
 .hp-wl-row.now .hp-wl-title { font-weight: 600; }
-.hp-wl-box { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: var(--bg-card, #fff); }
+.hp-wl-box { display: grid; place-items: center; width: 14px; height: 14px; border-radius: var(--radius-xs); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: var(--bg-card, #fff); }
 .hp-wl-box.on { background: var(--accent-ink); box-shadow: none; }
 .hp-wl-row.done .hp-wl-title { color: var(--text-muted); text-decoration: line-through; }
 .hp-wl-time { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -1591,7 +1591,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
 .hp-wl-ini { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--overlay-medium); color: var(--text); font-size: var(--ui-font-caption, 11px); font-weight: 600; }
 .hp-wl-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 0 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .hp-wl-empty { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-.hp-wl-loading { min-height: 54px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); }
+.hp-wl-loading { min-height: 54px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
 /* 小按钮 */
 .hp-wbtn { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); font-weight: 500; white-space: nowrap; cursor: pointer; }
 .hp-wbtn:hover { background: var(--bg-hover); }
@@ -1655,7 +1655,9 @@ body.hp-lib-dragging,
 body.hp-lib-dragging * { cursor: grabbing !important; }
 body.hp-lib-nodrop,
 body.hp-lib-nodrop * { cursor: not-allowed !important; }
-/* 影子下面的小签:放不下的原因 / 要知道的事(左栏点完成后会收成图标条) */
+/* 影子下面的小签:放不下的原因 / 要知道的事(左栏点完成后会收成图标条)。
+   浮层表面 token 照 DESIGN「浮层表面 token」:回落是实色(Genesis 下不半透)、读 --surface-blur(Glass 下有磨砂);
+   它和影子同为 body 的子元素,不在影子里,影子 .is-no 的 opacity 不会截它的 backdrop。 */
 .hp-lib-note-pill {
   position: fixed;
   left: 0;
@@ -1666,9 +1668,9 @@ body.hp-lib-nodrop * { cursor: not-allowed !important; }
   align-items: center;
   gap: 6px;
   padding: 5px 11px 5px 9px;
-  border: var(--border-width) solid color-mix(in srgb, var(--border) 80%, transparent);
+  border: var(--border-width) solid var(--surface-edge, color-mix(in srgb, var(--border) 80%, transparent));
   border-radius: var(--radius-pill, 999px);
-  background: var(--surface-float, color-mix(in srgb, var(--bg-card) 94%, transparent));
+  background: var(--surface-float, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
   box-shadow: var(--icon-shadow);
   color: var(--text);
   font-size: var(--ui-font-meta, 12px);

@@ -90,6 +90,102 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 None of these exist on older hosts, so check with optional chaining.
 
+## Where host UI data comes from (2026-11-23)
+
+Before a plugin mounts a host surface or calls a host API, know four things about it. When Tangu writes a plugin it hands in a one-page plan first, and this table is the source for the plan's "host data it depends on" part (the skill carries the same table as `references/host-data-sources.md`). For every host surface or mount your plugin uses, it answers four questions: what it reads, what it does to the user's data or sessions, whether it exists in the plugin sandbox and the demo stage (and how to seed demo data there), and whether it needs the **local managed engine**. Checked against desktop source on 2026-11-23; paths are in the Genesis repo, `FE` = `desktop/frontend/src`, `PS` = `FE/amadeus/plugins/pluginStore.ts`.
+
+Source categories: **vault** (the user's open note library), **engine `human/`** (files in the Tangu engine's home, served by `/agent/human/*`), **plugin data** (`ctx.loadData` / `saveData`), **host memory** (state inside the running app, gone on restart), **cloud** (the user's Forsion account).
+
+### The local managed engine gate
+
+The desktop runs the Tangu engine either itself ("managed", the default install) or connects to one started elsewhere ("external"). Some plugin APIs only work with the managed engine on this computer. There are two separate checks:
+
+- **The desktop's gate** `hostExecution()` (`FE/tanguProbe.ts:553`): `window.tangu.executionCapabilities.host ?? (desktopConfig.mode === 'managed')`. On the desktop only the mode decides; web and mobile hosts set `host` themselves (mobile: `false`). The methods below stay present on `ctx`; they are only **callable** when the gate passes.
+- **The engine's own authorization** of some routes (its `hostExec` and whether the request is remote). It applies whatever the desktop's mode, so an engine that is not local refuses even a correct call.
+
+| API | Gate | When refused |
+|---|---|---|
+| `ctx.tangu.request(...)` | desktop gate, then the engine's route check | **throws** `A local engine is required` (before waiting for the engine) or `Local engine is unavailable` after the wait (PS:3003, :3011); the engine itself answers 403 `Local plugin routes only` for a non-local or remote request (`tangu-agent/src/plugins/bootstrap.ts:217-229`) |
+| `ctx.tangu.connectChannel(...)` | desktop gate | returns `{ ok: false, error }` with the same two messages, never throws (PS:3023-3044) |
+| `ctx.app.hostPath(rel)` | desktop gate | returns `null` silently; also `null` with no open vault, a cloud vault, or an absolute / `..` path (`FE/amadeus/plugins/hostPaths.ts:2-9`) |
+| `ctx.tangu.startChat({ folder })` | via `hostPath` | the folder is **dropped silently** and the chat gets the normal workspace selection (work mode may still pick a default project) (PS:3131-3132) |
+| `ctx.tangu.mountChat(el, { folder })` | via `hostPath` | with no engine connected: `engine is not connected` first; with an engine but no host path: `folder is not available on this host: <folder>` in `ready.error`, and the mount shows a localized message; no session is made (`FE/views/pluginChat.tsx:48-53`) |
+| personal calendar `human://CALENDAR.db` | the engine (calendar I/O goes straight to the configured engine, not through the desktop gate) | a non-local real engine answers 404 `HUMAN_LOCAL_ONLY` → `myCalendar: 'absent'`; no engine reachable → `'unknown'` (`FE/amadeus/store/humanCalendarIo.ts:44-60`, `tangu-agent/src/routes/human.ts:80-93`). The stage's scripted engine serves it although the stage is in external mode |
+
+**The gate itself logs nothing** (no console line, no diagnostics entry); only an error that escapes your `setup` is recorded, as a setup error. A polling loop that swallows the error leaves only an empty view. So: catch the error, show its message in your view, and say in your plan and README that the engine half needs the local managed engine. `workPath` does not exist; `ctx.app.workFolder()` always returns a string (the user's choice, `Plugins/<id>`, or an existing legacy `Plugins/<display name>` folder), even with no vault, so it is not an availability probe.
+
+### Surfaces and mounts
+
+| API | Reads | Side effects | Sandbox / stage | Managed engine? |
+|---|---|---|---|---|
+| `ctx.tangu.mountChat(el, { agent, folder, title })` | an **engine session**, one per (plugin, absolute working folder). The slot → session id map is in localStorage `tangu.pluginChats`. On mount it resumes that session; if it was deleted (404) or archived it **creates a new real session** (`FE/views/pluginChat.tsx:35-103`) | creates sessions that appear in the user's chat list; writes localStorage. **You cannot inject messages**: the handle only has `quote()` (the app-wide quote slot) and `prefill()` (the draft); the user sends. To write history use `ctx.tangu.importSessions` (capability `agentImport`), which makes separate sessions | sandbox: no engine → after 15 s `engine is not connected`. Stage with `engine: 'scripted'`: works without `folder`; sessions live in the replay engine's memory, and it does not reproduce the deleted-session recovery (an unknown id gets a 200 without a session, not a 404). With `folder` it fails (no host path) | engine: yes; managed engine: only with `folder` |
+| `ctx.tangu.mountComposer` | Tangu's new-chat composer; `prefill` fills the new-chat draft only if empty (`FE/tanguProbe.ts:467-492`) | the host sends, your `draft()` is read-only | unverified | no |
+| `ctx.tangu.startChat` | host app state; opens a visible new chat; `send: true` only for an Agent your plugin seeded, otherwise it prefills (PS:3114-3143) | changes what the user sees in the main area; an allowed `send: true` sends the prompt and **starts a run** (`FE/tanguProbe.ts:405`) | `folder` dropped (see the gate) | only for `folder` |
+| `ctx.ui.mountChatBox` | with `modelPicker: false` it **still subscribes** to the host's default model and the Agent list, then ignores them: the model you get is `options.modelId ?? ''` (`FE/amadeus/plugins/chatBoxSurface.tsx:235-260`). `@page` mentions read the vault's page list | none; `onSubmit` is yours | works wherever there is a DOM | no |
+| `ctx.ui.mountRecord` | a **vault `.db` table**; needs capability `databases` and throws unless the path is a table in the **open vault** (PS:2453-2492). `human://CALENDAR.db` also needs `calendar` | edits the row in the user's table | the table must already be **loaded**, not just written: wait until it shows up in `ctx.databases.subscribe` before mounting. Sandbox: the vault starts empty. Stage: fixture tables, after they load | only for the personal calendar |
+| `ctx.ui.mountMarkdown` (read-only) | the chat Markdown renderer. Every `[[name]]` in prose becomes a link that **subscribes to the vault's page list** to resolve it, and may also point at chat sessions and files (`FE/components/ChatWikiLink.tsx:40-53`); clicking opens the target. Code spans stay inert | none on data; links into the user's notes | links show unresolved with no vault | no |
+| `ctx.ui.mountMarkdownEditor` | default: no vault (no `[[` completion, links inert). `vault: true`: completes and opens links from the current vault (PS:2493-2532) | only `onChange`; you store the text | fine without a vault | no |
+| any plugin view (`registerView` mount) | on mount the host calls `ensureAmadeusReady()`, which **reopens the user's last vault** (`FE/pluginViews.tsx:74-78`, `FE/amadeusPlugins.ts:160-171`) | may open the last vault; it restores asynchronously, so `vaultRoot()` can still be `null` right after mount | sandbox: its own empty `vault/`; stage: the copied fixture vault | no |
+| `ctx.calendar` / "My calendar" | members and colours: host config keyed by vault (`ensureMember` waits for a vault); the personal calendar is **engine `human/CALENDAR.db`** via `GET/PUT /agent/human/CALENDAR.db`, never a vault file (`FE/amadeus/store/humanCalendarIo.ts:15-60`) | `ensureMember` writes calendar config; subscribing starts overlay refreshes and may save default colours and migrate members; `ctx.databases` / `mountRecord` writes to the personal calendar need both `calendar` and `databases`, but `ctx.calendar.events` can remove or reschedule its rows with `calendar` alone (`FE/amadeus/plugins/pluginCalendarEvents.ts:43`); a real engine write may also update the old vault mirror of the calendar | sandbox and stage with `engine: 'none'`: `myCalendar: 'unknown'`. Stage with `engine: 'scripted'`: serves `<fixture>/human/CALENDAR.db` (see "Demo stage: `ctx.stage`" below); absent = empty calendar; edits stay in that stage | the real engine: yes; the stage's replay engine: no gate |
+| `ctx.databases` | every vault `.db` and folder note view; plus the personal calendar when `calendar` is declared. Capability `databases` | writes cells / rows like the UI does | sandbox: empty; stage: fixture tables | only for the personal calendar |
+| `ctx.noteTasks` | `@` task marks in vault Markdown. Capability `noteTasks` | `update` rewrites that line of the note | vault-dependent | no |
+| `ctx.table.mount` | only the spec you pass (read-only rows in memory) | none | works | no |
+| `ctx.dashboard` | `mount`: an in-memory page store, never the vault; layout comes back through `onLayout`. `source`: compiles the recipe (and optional `existingFileText` you pass) into `.dashboard.md` text, no vault I/O; writing that file is up to you | `mount`: none | `mount` works with no vault | no |
+| `ctx.ui.mountBoard` | only your `scene` / `viewport` | none | works | no |
+| `ctx.loadData` / `saveData` | plugin data: `<forsion home>/plugins-data/<id>.json` in the main process; `syncData: true` plugins also sync through the cloud. Unreadable data **rejects** (`plugin-data-unreadable`), never-saved gives `null` (PS:2390-2429) | writes the file; may sync | sandbox: its own empty home; stage: plugin data is **not** copied in | no |
+| `ctx.widgets` | rows your plugin provides; cards declared in manifest `widgets` (host memory) | none | works | no |
+| `ctx.home` | only for the plugin that owns the home page; layout in localStorage, widget list from the engine (`GET /agent/widgets`) | writes the home layout | not for normal plugins | engine for the widget list |
+| `ctx.spaces` | host Space and Ribbon state. Capability `spaces` | changes the user's Ribbon | works | no |
+| `ctx.desk` / `ctx.summary` | host memory (registered companions / cards); desktop with Tangu only | adds UI | unverified | no |
+| `ctx.tts` | the voice model the user picked; errors `tts_unavailable` / `tts_no_model` | plays audio | unverified | no |
+| `ctx.account` | **cloud**: the user's Forsion account | sign in / out | signed out in the sandbox and the stage | no |
+| `ctx.agent` | engine Muse endpoints; only for an Agent's own Space plugin (today only Muse) | patches its to-dos | unverified | engine yes |
+| `ctx.internals` | frozen copies of host state; `internals-raw` = live host modules; Electron desktop only | raw: anything | the sandbox counts as desktop | no |
+| `ctx.net` | requests made by the main process, allowed by manifest `network` | network requests | the sandbox reads `network` from your dev manifest | no |
+
+### Identity and routes
+
+- A view's type is `plugin:<plugin id>:<view id>`, where the plugin id is the install folder name for store installs (`market-<UUID>`), otherwise the manifest `id`, and the folder name when the manifest id is missing or invalid (`desktop/shared/products.ts:19-28`).
+- Your bundle's **engine routes** hang off the **install folder name**, not the manifest id. The engine mounts them under the folder's actual spelling and matches case-insensitively; `ctx.tangu.request` calls `/extensions/<folder lowercased>/<engine plugin id>/<path>` (`FE/amadeus/plugins/engineRequest.ts:32-43`). The lowercased folder name must match `^[a-z0-9][a-z0-9-]{0,63}$`, or the call throws.
+
+### Wiki links in rendered text
+
+`mountMarkdown` (and `mountMarkdownEditor` with `vault: true`) treat `[[…]]` as links into the user's vault. The Markdown parser decodes character entities before wiki links are found, so entity-encoded brackets (`&#91;&#91;x&#93;&#93;`) in prose **also become links** (checked 2026-11-23 against the installed parser); a plugin filter that strips literal `[[` does not stop them. If the text is not the user's own note (model output, imported data, demo content) and must not link into the vault, render it as plain text or code rather than filtering `[[` yourself.
+
+### The sandbox and the demo stage
+
+| | Plugin sandbox (`plugin_sandbox`) | Demo stage (`ctx.stage`) |
+|---|---|---|
+| Engine | none (points at a dead port); external mode | `engine: 'none'`: none. `engine: 'scripted'`: a local replay engine from `engine.json`; still **external mode**, so the desktop-gated APIs above are refused (the personal calendar is the exception: the replay engine serves it) |
+| Vault | its own, starts empty, kept between starts, wiped by `reset` | a copy of `<fixture>/vault/`, wiped on every open |
+| Plugin data | its own, starts empty | not copied in |
+| Account | signed out | signed out |
+| Personal calendar | `myCalendar: 'unknown'` | from `<fixture>/human/CALENDAR.db` with `engine: 'scripted'` |
+| Who can use it | the dev copy you are writing | only an **installed** plugin that declares `stage` (the sandbox is refused). A dev copy that shadows an installed plugin with the same id can call it, but the stage loads the **installed** package and its fixtures, not your working copy |
+
+Demo data for the stage:
+
+```
+<plugin>/<fixture>/vault/…              → the stage's vault (notes, .db tables)
+<plugin>/<fixture>/engine.json          → required for engine: 'scripted' ({ "runs": [] } if you only need the calendar)
+<plugin>/<fixture>/human/CALENDAR.db    → "My calendar": a regular database table, ≤ 8 MB
+```
+
+Then `ctx.stage.open({ fixture, engine: 'scripted', clock, plugins, includeSelf })`.
+
+Not verified yet:
+
+- Whether `ctx.tangu`, `ctx.desk` and `ctx.tts` are present at all in the sandbox and the stage.
+- `ctx.account` at runtime in the sandbox (signed out is derived from its isolated home).
+
+## Tool validation errors should name the field (writing advice, from 2026-11-23)
+
+When an engine plugin tool's arguments, or a document your code is about to save, fail validation, put **the field path and what is wrong** into the tool result, for example `data.example: missing "zh"`, instead of one generic line such as "does not match the format". The model can only fix what the error shows it: Showcase's `showcase_save_deck` once answered only "The deck does not match the Showcase v1 schema." The validator knew the problem was `data.example` missing `zh`, yet the agent editing the deck kept getting it wrong.
+
+Keep one negative case in `check.mjs`: break one field on purpose and assert that the error names that field. If someone later turns the error back into a generic line, the check fails.
+
+The host does not need to change for this; it is how the plugin itself is written.
+
 ## Store identity and install folders
 
 The Store gives every listing an ID that never changes. New listings install into `plugins/market-<ID>/`, unrelated to the display name, so display names may repeat. A plugin in such a folder runs under the folder name: engine plugins inside a bundle still mount their routes under it, a standalone engine plugin's id becomes `market-<ID>` with its data under `plugin-data/market-<ID>/`, and the host rewrites its tool names to unique hashed names (two plugins sharing an id never replace each other). A bundled Space recipe keeps naming its own views by your manifest `id` (`plugin:<id>:<view>`); under `market-<ID>` the host maps them to the runtime id (from 2.13.8; on earlier versions such a Space does not appear). Other plugins can still list your manifest `id` in `requiresPlugins` as long as only one copy is installed; for a one-click install from the Store they also need `market: "market-<ID>"`, because the Store matches the exact slug and never guesses from the display name. These listings need a desktop version after 2.13.4; older versions ask the person to update Forsion first. Older listings keep the folder name derived from their display name; for those, a bundle with an engine plugin whose folder name differs from its manifest `id` cannot reach that engine plugin from its pages on desktop 2.13.3 and earlier (every call returns 404, with no error shown).
@@ -426,6 +522,55 @@ if (res.status === 200) render(res.json())
 - https APIs that send cross-origin headers can still be called with plain `fetch`.
 
 The web and mobile versions have different CSPs; test there separately.
+
+## Secrets and translation services: `ctx.secrets`, `ctx.registerTranslationEngine` (2026-11-24+)
+
+### Storing API keys: `ctx.secrets`
+
+Desktop only (check `if (ctx.secrets)` first). Values are encrypted with the system keychain and stored on this computer, separately per plugin; they are not synced, not part of plugin data and not in diagnostic snapshots. Uninstalling the plugin without "Keep settings" deletes them.
+
+```js
+await ctx.secrets.set('svc.deepl', JSON.stringify({ key }))
+const saved = JSON.parse(await ctx.secrets.get('svc.deepl') || 'null')
+```
+
+- Methods: `get(key)` (`null` if never set), `set(key, value)`, `delete(key)`, `has(key)`, `keys()`. `has` and `keys` do not decrypt.
+- Keys match `^[a-z0-9][a-z0-9._-]{0,63}$`, values are at most 8192 characters, at most 64 keys per plugin.
+- Failures carry `err.code`: `secrets_bad_key`, `secrets_too_large`, `secrets_too_many`, `secrets_unavailable` (no system encryption on this computer; nothing was stored, never plaintext), `secrets_locked` (stored but cannot be decrypted right now, e.g. a locked keychain; **not** "never set": don't treat it as empty or overwrite it), `secrets_failed`.
+- Never put a saved key back into an input; show "Saved, leave empty to keep it".
+- Plugins share the renderer process with the host: per-plugin separation keeps things tidy, it is not a security boundary.
+
+### Offering a translation service to the whole app: `ctx.registerTranslationEngine`
+
+Same gate as `ctx.tangu.translate`. Once registered, users can pick it in the result card's service menu and in Settings → Models → Default models → Translate; when it is chosen, editor Translate, selection-bar translation and other plugins' `ctx.tangu.translate` calls without a `modelId` all go through it.
+
+```js
+const off = ctx.registerTranslationEngine({
+  id: 'deepl',                       // ^[a-z0-9][a-z0-9-]{0,31}$; registering the same id again replaces it
+  name: 'DeepL',                     // a string or { zh, en }
+  ready: () => hasKey,               // cheap and synchronous; false hides it from the choices
+  translate: async ({ text, to, before, signal }) => callDeepL(text, to, before, signal),
+})
+```
+
+- `to` is an English language name (`'Chinese (Simplified)'`, `'English'`, `'Japanese'`, `'Korean'`, `'French'`, `'German'`, `'Spanish'`, `'Russian'`; more may be added); map it to the vendor's codes yourself.
+- Formulas, code and link targets in `text` have been replaced with markers like `ZXQ1a2b3c4d_0QXZ`; keep them unchanged in the translation. The host restores and checks them; if markers are lost it retries once with the same engine, then fails with `translation_format_lost`.
+- `before` is the passage before the selection, for disambiguation only (e.g. DeepL's `context`); don't translate it into the result.
+- On failure reject with a human-readable message ("DeepL didn't translate: the key was rejected (HTTP 403)"); that is what the user sees on the card, with the code `translation_engine_failed`. If the chosen service's `ready()` is false the call fails with `translation_engine_unavailable`; the host **never switches services silently**, and the card offers "Retry with Forsion models".
+- Disabling or reloading the plugin unregisters it. A choice whose engine is not registered (plugin disabled, web and mobile) counts as no choice and uses Forsion models.
+- The choice is stored on this computer and not synced (the keys stay on this computer too).
+
+### The current choice: `ctx.translation`
+
+- `current()` returns `{ engine: { pluginId, id, name } | null, model: { id?, name } }`; `engine: null` means Forsion models (the Translate slot).
+- `use(id | null)`: switch to one of **your own** engines, or back to Forsion models; other plugins' engines are refused.
+- `subscribe(cb)`: called when the choice or the set of registered engines changes (in any window); returns an unsubscribe function.
+
+### Service menu on the result card: `card.service`
+
+Add `service: true` to `card` in `registerSelectionAction` (only for `output: 'preview'`): the card head's "Machine translation · …" line becomes a small dropdown with the current service, listing every available engine, "Forsion models · <model>" and, when the plugin registered a settings page, "Translation settings…". Picking one changes this computer's choice and reruns immediately. When the action fails the card adds "Retry with Forsion models" (this time only: that run gets `cx.noEngine === true` and its `ctx.tangu.translate` calls skip the engine; if you keep a cache, don't serve this run from the engine's entries or store its result under the engine) and "Open settings". This only matters when `run` translates through `ctx.tangu.translate`.
+
+Write each vendor adapter from the vendor's official API docs, list the API hosts in the manifest's `network`, and call them with `ctx.net.request`.
 
 ## Internal APIs: `ctx.internals` (2026-11-16+)
 

@@ -43,11 +43,13 @@ import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import type { CapMode } from './remoteOrigin.js';
 import { chatModels, listModelCatalog, resolveModelQuery } from './modelCatalog.js';
 import { THINKING_LEVELS, normalizeThinkingLevel } from '../llm/modelCapabilities.js';
+import { errorKindOfRun } from '../llm/runErrorKind.js';
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>';
 export const CHILD_UPDATE_CLOSE = '</child_sessions_update>';
 const AUTO_CONTINUE_MAX = 3;
-const MAX_RUNNING_CHILDREN = 4;
+/** 同时在跑 / 排队的子会话上限:防失控用,不是并发上限(并发由通道闸管,缺省 3 路)。 */
+const MAX_RUNNING_CHILDREN = 12;
 const EXCERPT_CHARS = 1500;
 /** 挪出去的回报行 id 的命名空间(uuid v5,随手生成的固定值)。 */
 const HANDOFF_REPORT_NS = '6f1d3c9a-4b7e-4d2a-9c61-2f8e5a7b0d14';
@@ -55,6 +57,11 @@ const HANDOFF_REPORT_NS = '6f1d3c9a-4b7e-4d2a-9c61-2f8e5a7b0d14';
  *  ponytail: 子会话事后换成窗口 < ~4× 种子的模型仍可能撑窗;要彻底得让压缩能重压种子。 */
 const FORK_MAX_TOKENS = 24_000;
 export const SESSION_MESSAGE_OPEN = '<session_message ';
+/** 子会话失败时 <child> 元素里第一行的开头:`Failed (rate_limit): <原文一行>`。界面认它(ChildSessions.tsx)。 */
+export const CHILD_FAILURE_PREFIX = 'Failed (';
+const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 300);
+/** 父会话那一行的「重试」发给子会话的话(落成子会话的一条主会话消息,照常回报):模型读,英文。 */
+export const CHILD_RETRY_MESSAGE = 'Your previous turn stopped with an error before it finished. Pick up the task where you left off: check what is already done, then continue. Do not redo finished work.';
 /** 子会话从主会话的存值里继承的配置键(工作目录、人格、档位);团队 / 私聊引擎 / 计划模式这类会话事实不抄。 */
 const INHERIT_KEYS = ['preset', 'execMode', 'cwd', 'extraRoots', 'workspaceProject', 'agentSlug', 'approvalMode', 'thinkingLevel'];
 
@@ -99,11 +106,13 @@ export async function startChildSession(p: {
   );
   if (!parent || parent.user_id !== p.userId || parent.kind !== 'user') throw new Error('This conversation cannot start child sessions.');
   if (parent.parent_session_id && !parent.fork_message_id) throw new Error('This is already a child session, and child sessions cannot start their own. Do the work here, or finish and let the main session decide.');
+  // 11-23 起不再「第 5 个直接报错」:子会话照开,模型请求在通道闸前排队(llm/channelGate.ts,同一通道缺省 3 路),界面显示「排队中」。
+  // 只留一道防失控的上限(一次开出一长串多半是模型在循环)。
   const { activeSessionIds } = await loop();
   const busy = activeSessionIds();
   const kids = await query<any[]>(`SELECT id FROM chat_sessions WHERE parent_session_id = ? AND kind = 'user' AND fork_message_id IS NULL`, [p.parentId]);
   if (kids.filter((k) => busy.has(String(k.id))).length >= MAX_RUNNING_CHILDREN) {
-    throw new Error(`${MAX_RUNNING_CHILDREN} child sessions are already running. Wait for them to report back before starting more.`);
+    throw new Error(`${MAX_RUNNING_CHILDREN} child sessions are already running or queued. Wait for them to report back before starting more.`);
   }
   const cfg = { ...decode(parent.agent_config), ...Object.fromEntries(Object.entries(p.inherit || {}).filter(([, v]) => v !== undefined)) };
   const runConfig: Record<string, unknown> = {};
@@ -519,10 +528,13 @@ async function deliverNow(parentId: string, opts: { rowOnly?: boolean }): Promis
     // 只取挂起那一轮自己的回答:之后用户在子会话里(可能从手机)接着聊的不算(Codex 10-17 #1)。
     // ponytail: 那一轮被 steer 拆成几条时只取第一条;要全量得按时间窗取。
     const [msg] = run?.assistant_message_id ? await query<any[]>(`SELECT content FROM chat_messages WHERE id = ? LIMIT 1`, [run.assistant_message_id]) : [];
-    const text = String(msg?.content || run?.error || '').trim();
+    const text = String(msg?.content || (status === 'failed' ? '' : run?.error) || '').trim();
     const excerpt = text.length > EXCERPT_CHARS ? `${text.slice(0, EXCERPT_CHARS)}… [truncated; read_session for the rest]` : text || '(no reply)';
     const askedBlock = asked.length ? `\nIt asked (ask_user, not answered yet):\n${asked.map((q) => `- ${q}`).join('\n')}` : '';
-    parts.push(`<child id="${attr(String(k.id))}" title="${attr(String(k.title || ''))}" status="${status}">\n${excerpt}${askedBlock}\n</child>`);
+    // 失败的写明原因(类别 + 原文一行),放在元素里第一行:不给 <child> 加属性 —— 旧桌面的解析要求 status 后紧跟 `">`,加了属性整行认不出(界面引擎分开热更新)。
+    // 界面据此在主会话那一行写原因、给「重试」(ChildSessions.tsx parseChildUpdate)。
+    const failure = status === 'failed' ? `${CHILD_FAILURE_PREFIX}${errorKindOfRun(run)}): ${oneLine(String(run?.error || 'unknown error'))}\n` : '';
+    parts.push(`<child id="${attr(String(k.id))}" title="${attr(String(k.title || ''))}" status="${status}">\n${failure}${excerpt}${askedBlock}\n</child>`);
   }
   if (!delivered.length) return;
   // 送达先落库(行 / run),再按 (id, run) 比对清挂起,最后才入队:清早了一失败就永久漏送;按 id 清会吞掉链外新记下的回报(Codex 10-17 #3/#4)。

@@ -500,6 +500,8 @@ export interface CloudResponse { status: number; json?: any; error?: string }
  * 调用方拿不到令牌,只拿结果;**永不抛**。
  */
 export interface CloudAccountBrain {
+  /** Opaque identity of the credential currently used by this adapter. */
+  accountBinding?(): string;
   request(req: CloudRequest): Promise<CloudResponse>;
 }
 

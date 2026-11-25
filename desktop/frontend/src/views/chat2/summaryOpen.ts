@@ -110,3 +110,24 @@ export const setUserOpen = (sessionId: string, id: string, open: boolean): void 
 /** 计数之外的「来了新东西」(Agent Desk 换了顶格条目):自动展开并记成最新。 */
 export const bumpOpen = (sessionId: string, id: string): void =>
   patch(sessionId, (s) => ({ ...s, auto: { ...s.auto, [id]: true }, last: { ...s.last, [id]: s.tick + 1 }, tick: s.tick + 1 }))
+
+// ── 两张 Desk 卡(Human Desk 在上、Agent Desk 在下,11-23 第三轮)──
+// 两张都想开着、栈放不下:最近碰过的那张开着,另一张收成卡头,点卡头两张互换(r3 §5)。「碰过」只算你的手(点卡头 / 展开 / 收起 / 往 Human Desk 放东西),
+// Agent 往它那块放了新东西不算 —— 卡片栈里也不抢。没碰过时 Human Desk 那张优先。按会话存在内存。
+
+export type DeskCardId = 'desk' | 'humandesk'
+export const useDeskTouch = create<{ by: Record<string, DeskCardId> }>(() => ({ by: {} }))
+export const touchDesk = (sessionId: string, id: DeskCardId): void => {
+  if (useDeskTouch.getState().by[sessionId] !== id) useDeskTouch.setState((st) => ({ by: { ...st.by, [sessionId]: id } }))
+}
+
+/** 两张 Desk 卡一起开着放不下吗。rest = 其余卡(已按 fitCards 收好)+ 两张卡头 + 卡间距占的高度;bodies = 两张卡开着时多出来的正文高度
+ *  (按它们开着时量到的固定高度算,收着的卡量不到正文)。刚才放不下的,要多出 REOPEN_SLACK 才算放得下,免得量得不准时来回翻。 */
+export function deskPairTight(rest: number, bodies: number, avail: number, wasTight: boolean): boolean {
+  const need = rest + bodies
+  return wasTight ? need > avail - REOPEN_SLACK : need > avail
+}
+
+/** 被收成卡头的那张(放得下 / 只有一张想开 → null)。 */
+export const squeezedDeskCard = (tight: boolean, touched: DeskCardId | undefined): DeskCardId | null =>
+  !tight ? null : (touched ?? 'humandesk') === 'desk' ? 'humandesk' : 'desk'

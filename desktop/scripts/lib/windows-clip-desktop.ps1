@@ -1,4 +1,4 @@
-param([ValidateSet('activate','click','drag','picker','explorer','capture')] [string]$Action,
+param([ValidateSet('activate','click','drag','hit','picker','explorer','capture')] [string]$Action,
   [string]$Path, [int]$FromX, [int]$FromY, [int]$ToX, [int]$ToY, [string]$FromWindow, [switch]$Close)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Native Clip probe requires a dedicated GitHub Actions desktop' }
@@ -20,6 +20,8 @@ public static class ClipDesktopInput {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(Point point);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
   [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd,ref Point point);
   [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -40,6 +42,10 @@ public static class ClipDesktopInput {
     var point=new Point{x=(int)Math.Round(x*scale),y=(int)Math.Round(y*scale)};
     if(!ClientToScreen(hwnd,ref point)) throw new Exception("Cannot resolve owned window client origin");
     return point;
+  }
+  public static IntPtr TopLevelWindowAt(int x, int y) {
+    SetThreadDpiAwarenessContext(new IntPtr(-4));
+    return GetAncestor(WindowFromPoint(new Point { x=x, y=y }), 2);
   }
   static void Send(uint flags, int x=0, int y=0) {
     var input = new Input { value = new Union { mouse = new Mouse { x=x,y=y,flags=flags } } };
@@ -78,6 +84,14 @@ public static class ClipDesktopInput {
 }
 '@
 if ($Action -eq 'activate') { [ClipDesktopInput]::ActivateCaption([long]::Parse($FromWindow)); exit }
+if ($Action -eq 'hit') {
+  $window = [ClipDesktopInput]::TopLevelWindowAt($ToX, $ToY)
+  [uint32]$ownerId = 0
+  [void][ClipDesktopInput]::GetWindowThreadProcessId($window, [ref]$ownerId)
+  $owner = if ($ownerId) { Get-Process -Id $ownerId -ErrorAction SilentlyContinue }
+  @{ hwnd = $window.ToInt64(); pid = $ownerId; process = $owner.ProcessName; session = $owner.SessionId } | ConvertTo-Json -Compress
+  exit
+}
 if ($FromWindow) {
   $point=[ClipDesktopInput]::ClientPoint([long]::Parse($FromWindow),$FromX,$FromY)
   $FromX=$point.x; $FromY=$point.y

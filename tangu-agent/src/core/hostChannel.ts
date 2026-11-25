@@ -9,7 +9,7 @@
  *    不出现在 ps / 工具子进程环境里。
  * 引擎自己起的子进程默认各有各的 stdin 管道(没有 stdio:'inherit' 的服务端路径),拿不到这条。
  *
- * 消息:{"computerHistoryKey":"<64 位 hex>"}(主进程每次拉起引擎、以及钥匙第一次就绪时各发一次)。认不出的行忽略。
+ * 消息:{"computerHistoryKey":"<64 位 hex>"} 下发钥匙;{"shutdown":true} 请求关停。认不出的行忽略。
  */
 import { setComputerHistoryKey } from '../services/computerHistoryCrypto.js';
 
@@ -19,7 +19,7 @@ const MAX_LINE = 16 * 1024;
 
 type Input = NodeJS.ReadableStream & { unref?: () => void; setEncoding?: (e: BufferEncoding) => unknown };
 
-export function handleHostMessage(line: string): void {
+export function handleHostMessage(line: string, onShutdown?: () => void): void {
   let msg: unknown;
   try { msg = JSON.parse(line); } catch { return; }
   if (!msg || typeof msg !== 'object') return;
@@ -27,10 +27,11 @@ export function handleHostMessage(line: string): void {
   if ('computerHistoryKey' in m && !setComputerHistoryKey(m.computerHistoryKey)) {
     console.warn('[tangu] host channel: ignored a malformed computer history key');
   }
+  if (m.shutdown === true) onShutdown?.();
 }
 
 /** 启用了就开始读并返回 true。env 里的开关读完即删:引擎再起的子进程(外部 ACP 引擎、另一个 tangu)不该去读它们自己的 stdin。 */
-export function startHostChannel(input: Input = process.stdin as Input, env: NodeJS.ProcessEnv = process.env): boolean {
+export function startHostChannel(input: Input = process.stdin as Input, env: NodeJS.ProcessEnv = process.env, onShutdown?: () => void): boolean {
   if (env[HOST_STDIN_ENV] !== '1') return false;
   delete env[HOST_STDIN_ENV];
   let buf = '';
@@ -40,7 +41,7 @@ export function startHostChannel(input: Input = process.stdin as Input, env: Nod
     const lines = buf.split('\n');
     buf = lines.pop() ?? '';
     if (buf.length > MAX_LINE) buf = '';
-    for (const line of lines) if (line.trim()) handleHostMessage(line);
+    for (const line of lines) if (line.trim()) handleHostMessage(line, onShutdown);
   });
   input.on('error', () => { /* 主进程那头关了:钥匙已在内存里,不影响 */ });
   input.unref?.(); // 不靠 stdin 撑住事件循环(启动诊断看 beforeExit;主进程退出时管道 EOF 也不该拖住关停)

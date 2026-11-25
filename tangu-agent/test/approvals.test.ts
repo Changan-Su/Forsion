@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isKnownSafeBash, writeEscalationNeeded } from '../src/services/approvals.js';
 import { credentialPaths } from '../src/sandbox/hostSandboxProtection.js';
@@ -7,7 +10,18 @@ const call = (name: string, args: any) =>
   ({ id: 'c1', type: 'function', function: { name, arguments: JSON.stringify(args) } } as any);
 
 describe('isKnownSafeBash · POSIX', () => {
-  const posix = (command: string) => isKnownSafeBash(command, process.cwd(), 'linux');
+  let repo: string;
+  beforeAll(() => {
+    // Linked worktrees and developer Git settings can change git's approval decision.
+    vi.stubEnv('GIT_CONFIG_COUNT', undefined);
+    repo = mkdtempSync(path.join(os.tmpdir(), 'forsion-approval-git-'));
+    execFileSync('git', ['init', '--quiet', '--template='], { cwd: repo, windowsHide: true });
+  });
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    if (repo) rmSync(repo, { recursive: true, force: true });
+  });
+  const posix = (command: string) => isKnownSafeBash(command, repo, 'linux');
   it('does not treat mutating arguments, wrappers or executable search helpers as read-only', () => {
     for (const c of [
       'env touch /tmp/not-executed', 'find /tmp -delete', 'git branch -D unused',
@@ -43,7 +57,7 @@ describe('isKnownSafeBash · POSIX', () => {
 
 // 10-19:Windows 上 run_bash 走 cmd.exe。Muse 用 `dir /b "C:\…"` 读自己的目录,每条都排成一张审批卡。
 describe('isKnownSafeBash · Windows cmd 的 dir / type', () => {
-  const win = (c: string, cwd = process.cwd()) => isKnownSafeBash(c, cwd, 'win32');
+  const win = (c: string, cwd = process.cwd()) => isKnownSafeBash(c, cwd, 'win32', 'cmd');
 
   it('只读写法免审批(双引号路径、/x 开关、中文路径、dir 的通配)', () => {
     for (const c of ['dir', 'dir /b', 'DIR /b /s "Library"', 'dir /a:-d /o:-d /-c "Journal\\笔记 1"', 'dir *.md', 'dir C:\\Users\\x', 'type "Journal\\2026-10-19.md"', 'type README.md']) {
@@ -78,7 +92,7 @@ describe('isKnownSafeBash · Windows cmd 的 dir / type', () => {
 describe('isKnownSafeBash · Windows 上别的命令一律要批', () => {
   it('不落回 POSIX 名单:cmd 先在当前目录 / PATH 找外部程序、先展开 %变量% 再切命令(Codex 10-19)', () => {
     for (const c of ['ls -la', 'git status', 'pwd', 'cat README.md', 'cat %USERPROFILE%/.forsion/auth.json', 'cat //server/share/x', 'echo %CD%', 'date -u']) {
-      expect(isKnownSafeBash(c, process.cwd(), 'win32'), c).toBe(false);
+      expect(isKnownSafeBash(c, process.cwd(), 'win32', 'cmd'), c).toBe(false);
     }
     expect(isKnownSafeBash('ls -la', process.cwd(), 'darwin')).toBe(true); // 别的平台照旧
   });
@@ -87,9 +101,9 @@ describe('isKnownSafeBash · Windows 上别的命令一律要批', () => {
     const prev = process.env.comspec;
     try {
       process.env.comspec = 'C:\\Program Files\\Git\\bin\\bash.exe';
-      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32')).toBe(false);
+      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32', 'cmd')).toBe(false);
       process.env.comspec = 'C:\\Windows\\System32\\CMD.EXE';
-      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32')).toBe(true);
+      expect(isKnownSafeBash('dir /b', process.cwd(), 'win32', 'cmd')).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.comspec; else process.env.comspec = prev;
     }

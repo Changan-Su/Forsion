@@ -23,6 +23,7 @@ import { Minus, PanelLeft, Plus } from 'lucide-react'
 import { isHostPath, buildPdfLink } from '@amadeus-shared/pdfLink'
 import { amadeus } from '../api'
 import { registerMessages, useI18n } from '../../i18n'
+import { scrollFileOnShiftWheel } from '../../lib/fileWheel'
 import { paintHlBands } from './hlBand'
 /** 引语落地提醒动画的时长,必须与 pdfAnnotator.css 里 .pdfa-citehl-band.is-pulse 的一致。 */
 const PULSE_MS = 1000
@@ -409,7 +410,11 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed, memory
     // ⌘/Ctrl+滚轮 与 触控板捏合(macOS 捏合 = ctrlKey 的 wheel 事件)缩放:
     // pdf.js **组件包不含**滚轮缩放(那是 Firefox 完整 viewer 的 webViewerWheel)→ 必须自己接。
     const onWheel = (ev: WheelEvent): void => {
-      if (!ev.ctrlKey && !ev.metaKey) return
+      if (!ev.ctrlKey && !ev.metaKey) {
+        // Embedded PDFs share the note's wheel gestures (including canvas panning).
+        if (!embed) scrollFileOnShiftWheel(ev, container)
+        return
+      }
       ev.preventDefault() // 否则整个界面被浏览器缩放
       if (!state.doc) return
       const delta = -ev.deltaY

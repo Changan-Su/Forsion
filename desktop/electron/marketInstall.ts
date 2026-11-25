@@ -3,9 +3,10 @@
  * 只依赖 jszip + fs/path(不 import electron),便于单测路径穿越 / 剥顶层;不碰 I/O 的校验规则在 shared/marketPackage.ts。
  */
 import JSZip from 'jszip'
-import { mkdir, writeFile, readFile, readdir, chmod } from 'fs/promises'
+import { mkdir, writeFile, readFile, readdir, chmod, mkdtemp, rename, rm } from 'fs/promises'
 import { join, dirname, basename } from 'path'
 import { effectivePluginId } from '../shared/products'
+import { verifyBundleSignature } from './bundleSignature'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import {
   MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, planZipFiles,
@@ -159,6 +160,60 @@ export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manif
     if (typeof mode === 'number' && Number.isFinite(mode)) await chmod(out, mode & 0o777)
   }
   return plan.length
+}
+
+// A Store installation has its own stable folder. The optional Health bundle is signed with the
+// same pinned key as its standalone Tangu reader (extensions/health-public.pem).
+export const HEALTH_STORE_SLUG = 'market-8d6fac48-fb63-483a-a8cb-5603a8ca1c8a'
+const healthSigningKey = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAD/PpmoFRiTaTNHAVZMoAUzzMNHu35Ei5WryLcREq0Yc=\n-----END PUBLIC KEY-----\n'
+const isHealthSlug = (slug: string) => slug === HEALTH_STORE_SLUG || slug === 'forsion-health'
+
+export async function checkHealthStoreDirectory(slug: string, dir: string): Promise<void> {
+  if (!isHealthSlug(slug)) return
+  const required = ['manifest.json', 'main.js', 'spaces/health/space.json', 'tangu-plugins/health-reader/tangu-plugin.json', 'tangu-plugins/health-reader/index.mjs']
+  const verdict = await verifyBundleSignature(dir, healthSigningKey, required)
+  if (!verdict.ok) throw new Error(`install: health signature: ${verdict.reason}`)
+  const signed = new Set([...verdict.files, 'SIGNATURE'])
+  async function checkFiles(rel: string): Promise<void> {
+    for (const entry of await readdir(join(dir, rel), { withFileTypes: true })) {
+      const name = rel ? rel + '/' + entry.name : entry.name
+      if (entry.isDirectory()) await checkFiles(name)
+      else if (!entry.isFile() || !signed.has(name)) throw new Error('install: unsigned Health file')
+    }
+  }
+  await checkFiles('')
+}
+
+export async function installMarketZip(bytes: Buffer, dest: string, manifests: string[]): Promise<number> {
+  const slug = basename(dest)
+  if (!isHealthSlug(slug)) return extractZipToDir(bytes, dest, manifests)
+  const parent = dirname(dest)
+  await mkdir(parent, { recursive: true })
+  const staging = await mkdtemp(join(parent, '.health-install-'))
+  const backup = join(parent, '.' + slug + '.previous')
+  try {
+    const files = await extractZipToDir(bytes, staging, manifests)
+    await checkHealthStoreDirectory(slug, staging)
+    // Restore an interrupted swap before retrying. Both names are on the same filesystem.
+    const exists = async (dir: string) => readdir(dir).then(() => true, (err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') throw err
+      return false
+    })
+    if (await exists(backup)) {
+      if (await exists(dest)) await rm(backup, { recursive: true })
+      else await rename(backup, dest)
+    }
+    const had = await exists(dest)
+    if (had) await rename(dest, backup)
+    try { await rename(staging, dest) } catch (err) {
+      if (had) await rename(backup, dest)
+      throw err
+    }
+    if (had) await rm(backup, { recursive: true })
+    return files
+  } finally {
+    await rm(staging, { recursive: true, force: true })
+  }
 }
 
 // ── 下载:候选地址 + 每个候选的连接/断流超时 + 字节进度 ──

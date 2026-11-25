@@ -2,8 +2,9 @@
  * Chat View 等待期信息 —— 真 Electron × 真组件/store × 可编剧假引擎。
  *
  * 钉住两处产品契约:
- *  ① 最后一条助手气泡末尾一行 run 统计「耗时 · N tokens · 思考 Xs」:运行中逐秒走、思考中显示「思考中」,
- *     done / 用户停止后冻结(不再走),tokens 取 usage.total。
+ *  ① 最后一条助手气泡末尾一行 run 统计「耗时 · 输出 N tokens · 思考 Xs」:运行中逐秒走、思考中显示「思考中」,
+ *     done / 用户停止后冻结(不再走)。tokens 是逐次 usage.completion 之和(11-23 起不再写 usage.total:那是每次调用整段上下文的累加),
+ *     悬停给「输入(其中缓存)· 输出」拆分。
  *  ② 运行中输入框占位换成「小贴士:…」并定时轮换;run 结束回到默认占位。
  *
  * 需先 npm run build。用法:npm run e2e:runstats
@@ -79,6 +80,7 @@ const probe = (win) => win.evaluate(() => {
     visible: !!line[0] && line[0].getBoundingClientRect().height > 0,
     state: line[0]?.getAttribute('data-run-stats') ?? null,
     text: line[0]?.textContent ?? '',
+    title: line[0]?.getAttribute('title') ?? '',
     inLastAssistant: !!line[0] && line[0].closest('.t2-asst') === [...document.querySelectorAll('.t2-asst')].pop(),
     placeholder: ta?.getAttribute('placeholder') ?? '',
     // 空输入框里占位折行被一行高裁掉:scrollHeight 会算上占位(Chromium 实测)
@@ -129,7 +131,8 @@ async function main() {
       { type: 'reasoning', delay: 200, payload: { delta: '先看看' } },
       ...Array.from({ length: 8 }, () => ({ type: 'reasoning', delay: 400, payload: { delta: '…' } })),
       { type: 'token', delay: 0, payload: { delta: '好的,' } },
-      { type: 'usage', delay: 100, payload: { prompt: 12000, completion: 345, total: 12345 } },
+      { type: 'usage', delay: 100, payload: { prompt: 12000, completion: 345, cached: 11000, total: 12345 } },
+      { type: 'usage', delay: 50, payload: { prompt: 12500, completion: 1200, cached: 12000, total: 26045 } },
       { type: 'token', delay: 12000, payload: { delta: '做完了。' } },
       { type: 'done', delay: 200, payload: {} },
     ])
@@ -149,7 +152,8 @@ async function main() {
     const sec = (s) => { const m = /^(?:(\d+)m )?(\d+)s/.exec(s); return m ? Number(m[1] || 0) * 60 + Number(m[2]) : -1 }
     check('运行中耗时逐秒走', t2.visible && sec(t1.text) >= 0 && sec(t2.text) - sec(t1.text) >= 2, `${t1.text} → ${t2.text}`)
     check('流式输出末尾没有闪烁光标', t1.lines === 1 && t1.state === 'live' && !t1.caret, JSON.stringify({ state: t1.state, caret: t1.caret }))
-    check('出正文后思考结算、tokens 取 usage.total', /12\.3k tokens/.test(t2.text) && /思考 [34]s/.test(t2.text) && !/思考中/.test(t2.text), t2.text)
+    check('出正文后思考结算、tokens 写逐次输出之和(不是 usage.total)', /输出 1\.5k tokens/.test(t2.text) && !/26\.0k|26k/.test(t2.text) && /思考 [34]s/.test(t2.text) && !/思考中/.test(t2.text), t2.text)
+    check('悬停给输入 / 其中缓存 / 输出拆分', /输入 24\.5k（其中缓存 23k）· 输出 1\.5k/.test(t2.title), t2.title)
     check('小贴士不随渲染乱换(8s 内保持同一条)', Date.now() - sentAt < 7800 && t1.placeholder === tipA && t2.placeholder === tipA, `${tipA} / ${t1.placeholder} / ${t2.placeholder} @${Date.now() - sentAt}ms`)
 
     if (!NEGATIVE_CONTROL) await win.locator('.t2-chat-col').first().screenshot({ path: SHOTS.liveLight }).catch(() => win.screenshot({ path: SHOTS.liveLight }))
@@ -165,7 +169,7 @@ async function main() {
     const done1 = await probe(win)
     await win.waitForTimeout(2100)
     const done2 = await probe(win)
-    check('done 后统计冻结', done2.visible && done1.state === 'done' && done1.text === done2.text && /12\.3k tokens · 思考 [34]s/.test(done2.text), `${done1.text} | ${done2.text}`)
+    check('done 后统计冻结', done2.visible && done1.state === 'done' && done1.text === done2.text && /输出 1\.5k tokens · 思考 [34]s/.test(done2.text), `${done1.text} | ${done2.text}`)
     check('done 后占位回到默认', done2.placeholder === idlePlaceholder, done2.placeholder)
     if (!NEGATIVE_CONTROL) await win.locator('.t2-asst').last().screenshot({ path: SHOTS.done })
 

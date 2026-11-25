@@ -14,6 +14,7 @@ import { targetForSession } from '../../services/engine/targets'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
 import { reminderResetAt, useQuotaReminders } from '../../tangu/store/quotaReminders'
 import { turnHasOutput } from './continueTurn'
+import { QUOTA_EXHAUSTED_RE, quotaExhaustedText } from '../../../../../tangu-agent/src/contracts/runErrorKind'
 
 registerMessages({
   'relay.line.quota': { zh: '{from} 的额度用完了（{time} 重置），这一轮改用 {to}', en: '{from} is out of quota (resets {time}), so this turn used {to}' },
@@ -34,11 +35,10 @@ registerMessages({
   'quotaRemind.continue': { zh: '继续', en: 'Continue' },
 })
 
-/** 和引擎 llm/retry.ts 的 quotaExhaustedText 同一条规则:订阅额度 / 账单配额用完(几小时才重置);写着一分钟窗口的是限流。 */
-export const QUOTA_RE = /usage limit|usage_limit_reached|usage_not_included|insufficient_quota|quota exceeded|exceeded your current quota|out of budget|billing_hard_limit/i
-const SHORT_WINDOW = /per ?minute|perminute|_per_minute|\b[RT]PM\b|per ?second|allocated quota exceeded/i
-const LONG_WINDOW = /per ?day|perday|_per_day|daily|per ?month|monthly|balance|credit|insufficient_quota|usage_limit_reached|billing_hard_limit/i
-export const isQuotaText = (raw: string): boolean => QUOTA_RE.test(raw) && !(SHORT_WINDOW.test(raw) && !LONG_WINDOW.test(raw))
+/** 和引擎同一条规则(contracts/runErrorKind.ts,引擎 llm/retry.ts 也从那里取):订阅额度 / 账单配额 / 余额用完(几小时才重置或要充值);
+ *  写着一分钟窗口的是限流。11-23 起含「You have no credits remaining」一族,别在这里另抄一份。 */
+export const QUOTA_RE = QUOTA_EXHAUSTED_RE
+export const isQuotaText = (raw: string): boolean => quotaExhaustedText(raw)
 const ASK_RE = /\s*\[quota_fallback_ask:([^\]\s]+)\]/
 export const stripQuotaAsk = (raw: string): string => raw.replace(ASK_RE, '')
 

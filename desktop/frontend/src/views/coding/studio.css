@@ -166,7 +166,7 @@
 .csu-git-install { display: flex; flex-direction: column; gap: 10px; }
 .csu-git-cmd { align-self: flex-start; max-width: 100%; padding: 7px 10px; border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); line-height: 1.5; overflow-wrap: anywhere; }
 .csu-git-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.csu-version-auto { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); letter-spacing: 0.04em; }
+.csu-version-auto { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-xs); background: var(--bg-input); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); letter-spacing: 0.04em; }
 .csu-legacy > summary { cursor: pointer; padding: 6px 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .csu-history-foot { font-size: var(--ui-font-caption, 11px); opacity: 0.85; }
 

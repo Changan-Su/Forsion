@@ -312,7 +312,7 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
           placeholder={t('browser.placeholder')}
           spellCheck={false}
           style={{
-            flex: 1, minWidth: 0, fontSize: 'var(--ui-font-meta, 12px)', padding: '4px 8px', borderRadius: 'var(--radius-sm, 6px)',
+            flex: 1, minWidth: 0, fontSize: 'var(--ui-font-meta, 12px)', padding: '4px 8px', borderRadius: 'var(--radius-sm, 8px)',
             border: 'var(--border-width, 1px) solid var(--border)', background: 'var(--bg)', color: 'inherit',
           }}
         />

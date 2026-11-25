@@ -12,9 +12,7 @@ import { AppRefIcon } from '../../components/appRefs'
 import type { RefChip } from './Composer2'
 import { RUN_LEAD, RUN_TAIL, type InlineRun } from './inlineRefs'
 import type { TokenMark } from './composerTokens'
-
-const COPY = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textAlign', 'tabSize',
-  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'direction', 'fontFeatureSettings', 'fontVariantNumeric', 'wordBreak'] as const
+import { copyTextareaTextStyles } from './textareaLayout'
 
 export function InlineRefMirror({ text, runs, marks = [], pending = '', chipOf }: {
   text: string
@@ -33,8 +31,7 @@ export function InlineRefMirror({ text, runs, marks = [], pending = '', chipOf }
     const ta = box?.previousElementSibling
     if (!on || !box || !inner || !(ta instanceof HTMLTextAreaElement)) return
     const sync = (): void => {
-      const cs = getComputedStyle(ta)
-      for (const p of COPY) box.style[p] = cs[p]
+      copyTextareaTextStyles(getComputedStyle(ta), box)
       let x = ta.clientLeft
       let y = ta.clientTop
       for (let n: HTMLElement | null = ta; n && n !== box.offsetParent; n = n.offsetParent as HTMLElement | null) { x += n.offsetLeft; y += n.offsetTop }
