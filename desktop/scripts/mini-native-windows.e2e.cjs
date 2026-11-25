@@ -30,8 +30,16 @@ async function main() {
       env:{...process.env,TANGU_HOME:home,TANGU_BACKEND_URL:stub.url,FORSION_TEST_DESKTOP:'',TANGU_HARNESS_QUIET:'0'}})
     const win=await app.firstWindow()
     check('real application exits onboarding',await skipOnboarding(win))
-    await win.evaluate(()=>window.tangu.openMini({spaceId:'calendar'}))
-    for(let i=0;i<200;i++){mini=app.windows().find(w=>w.url().includes('window=mini'));if(mini)break;await pause(50)}
+    const openCalendar=()=>win.evaluate(()=>window.tangu.openMini({spaceId:'calendar'}))
+    const waitForMini=async()=>{
+      for(let i=0;i<200;i++){
+        const opened=app.windows().find(w=>!w.isClosed()&&w.url().includes('window=mini'))
+        if(opened) return opened
+        await pause(50)
+      }
+    }
+    await openCalendar()
+    mini=await waitForMini()
     assert.ok(mini,'Real Mini window exists')
     await mini.locator('.mini-todo .amx-todo').waitFor({timeout:30000})
     await mini.evaluate(()=>localStorage.setItem('forsion_theme_pref','light'))
@@ -191,22 +199,33 @@ async function main() {
     const mainForeground=(await native('foreground',['-Window',receipt.main])).stdout.trim()==='True'
     check('native main-panel button focuses the visible exact ToDo surface',mainForeground&&await win.locator('.amx-todo').first().isVisible())
     const kept=(await geometry()).bounds
-    await nativeClick(mini.locator('.mini-card-close'))
-    for(let i=0;i<60&&!mini.isClosed();i++)await pause(50)
-    check('native close button closes Mini without resize interception',mini.isClosed())
-    // The hotkey is a separate other-app scenario. Minimize the main surface
-    // whose activation was just verified so it cannot cover Notepad's caption.
+    const closeMini=async()=>{
+      await nativeClick(mini.locator('.mini-card-close'))
+      for(let i=0;i<60&&!mini.isClosed();i++) await pause(50)
+      return mini.isClosed()
+    }
+    check('native close button closes Mini without resize interception',await closeMini())
+    await openCalendar()
+    mini=await waitForMini()
+    assert.ok(mini,'Opening the same calendar should recreate Mini')
+    await mini.locator('.mini-todo .amx-todo').waitFor()
+    const reopened=(await geometry()).bounds
+    check('native close and reopening the same calendar retain the exact resized dimensions',
+      kept.width===reopened.width&&kept.height===reopened.height,{kept,reopened},true)
+    fs.writeFileSync(path.join(output,'native-reopen.json'),JSON.stringify({target:{spaceId:'calendar'},kept,reopened},null,2))
+    await mini.screenshot({path:path.join(output,'native-reopened.png')})
+    assert.ok(await closeMini(),'No targeted Mini should be open before testing the global shortcut')
+    // The global shortcut can create the default entity. Minimize the main
+    // surface whose activation was verified so it cannot cover Notepad.
     await app.evaluate(({BrowserWindow},handle)=>BrowserWindow.getAllWindows().find(w=>w.getNativeWindowHandle().readBigUInt64LE().toString()===handle).minimize(),receipt.main)
     await pause(300)
     await native('hotkey',['-Window',fixture.hwnd])
-    for(let i=0;i<200;i++){mini=app.windows().find(w=>w.url().includes('window=mini'));if(mini)break;await pause(50)}
+    mini=await waitForMini()
     assert.ok(mini,'Native global shortcut reopens Mini')
     await mini.locator('.mini-todo .amx-todo').waitFor()
-    const reopenedGeometry=await geometry(),reopened=reopenedGeometry.bounds
-    check('native Ctrl Shift M visibly reopens the real Mini from another app',!!mini&&!mini.isClosed()&&reopenedGeometry.visible,reopenedGeometry)
-    check('native close and shortcut reopen retain the exact resized dimensions',kept.width===reopened.width&&kept.height===reopened.height,{kept,reopened})
-    fs.writeFileSync(path.join(output,'native-reopen.json'),JSON.stringify({kept,reopened},null,2))
-    await mini.screenshot({path:path.join(output,'native-reopened.png')})
+    const shortcut=await geometry()
+    check('native Ctrl Shift M visibly reopens the real Mini from another app',!mini.isClosed()&&shortcut.visible,shortcut)
+    await mini.screenshot({path:path.join(output,'native-shortcut.png')})
     await native('capture',['-Path',path.join(output,'desktop-final.png')])
     console.log(checks.filter(result=>result.ok).length+'/'+checks.length+' checks passed')
     if(checks.some(result=>!result.ok)) process.exitCode=1
