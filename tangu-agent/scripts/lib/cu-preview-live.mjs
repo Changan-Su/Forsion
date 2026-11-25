@@ -23,8 +23,10 @@ NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath:"/System/A
   exit(0)
 }
 RunLoop.main.run()`;
-function randomPicture() {
-  const png = new PNG({ width: 480, height: 240 });
+function randomPicture(forRotation) {
+  // In Preview a landscape window can clip the two outer figures after a
+  // quarter turn. A square sheet keeps both axes visible for this verdict.
+  const png = new PNG(forRotation ? {width:320,height:320} : {width:480,height:240});
   png.data.fill(255);
   const shapes = ['圆形', '三角形', '正方形'];
   for (let i = 2; i > 0; i--) {
@@ -37,7 +39,8 @@ function randomPicture() {
     [35, 165, 60],
   ];
   for (let i = 0; i < 3; i++) {
-    const cy = 100 + randomInt(35);
+    const cx = forRotation ? 74+86*i : 80+160*i;
+    const cy = (forRotation ? 145 : 100) + randomInt(35);
     for (let y = -32; y <= 32; y++)
       for (let x = -32; x <= 32; x++) {
         if (
@@ -45,7 +48,7 @@ function randomPicture() {
           (shapes[i] === '三角形' && Math.abs(x) > (y + 32) / 2)
         )
           continue;
-        png.data.set(colors[i], 4 * ((cy + y) * png.width + 80 + 160 * i + x));
+        png.data.set(colors[i], 4 * ((cy + y) * png.width + cx + x));
       }
   }
   return { shapes, bytes: PNG.sync.write(png) };
@@ -124,7 +127,7 @@ export async function cuPreviewLive({ api, run, OUT, ttft, tokensOf, key }) {
     body: JSON.stringify({ enabled: true }),
   });
   const sessionId = 'live-cupreview-' + Date.now();
-  const pic = randomPicture(),
+  const pic = randomPicture(key === 'cupreviewrotate'),
     path = join(OUT, 'Vision-' + Date.now() + '.png');
   writeFileSync(path, pic.bytes);
   const script = join(OUT, 'launch-preview.swift');
