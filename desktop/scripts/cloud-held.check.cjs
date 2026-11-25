@@ -21,7 +21,7 @@ const SHOTS = (process.argv.find((a) => a.startsWith('--shots=')) || '').slice(8
 const results = []
 const check = (name, ok, detail) => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`) }
 
-const DIR = 'Foundations of Physics 3B'
+const DIR = 'Course Notes'
 
 function stub(cfg) {
   window.__resolveCalls = []
