@@ -23,7 +23,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, attachLayoutCoordinator, markSelfTitled, dropAllowed, keepMainOnly, withoutLeafClose } from './dockviewStore'
 import { IS_VIEW_WINDOW } from './uiMode'
 import { useNav } from './navStore'
 import { useEdgeAccessory } from './edgeAccessory'
@@ -111,8 +111,9 @@ const tabTypeOf = (p: { params?: unknown; api: unknown }): string =>
  *  补一个新的同类 View 回原处(pinnedViews.ts 的不变量照旧成立)—— 2026-11-07 用户报「每个 Space 的第一个 View 拖不出去」。 */
 function releaseLeaf(id: string): void {
   const ws = useWorkspace.getState()
-  if (!ws.isPinnedLeaf(id)) { ws.closeLeaf(id); return }
-  ws.closeLeaf(id, true)
+  // 搬去别的窗不是「关掉」:不发 onLeafClose(Human Desk 据它判「你关掉了 = 做完了」)
+  if (!ws.isPinnedLeaf(id)) { withoutLeafClose(() => ws.closeLeaf(id)); return }
+  withoutLeafClose(() => ws.closeLeaf(id, true))
   ws.ensurePinned()
 }
 
@@ -169,6 +170,7 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       <div
         ref={viewRef}
         className={`wb-view wb-view--${loc}`}
+        data-leaf-id={leaf.id} // 宿主按标签找到它的内容(Human Desk 拿到主区的笔记在这里算「第几节」)
       >
         <ViewErrorBoundary type={def.type}>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
@@ -228,7 +230,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const closable = useWorkspace((s) => !s.isPinnedLeaf(api.id)) && def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
-  const [menu, setMenu] = useState<{ x: number; y: number; closeAll: string[]; others: string[]; right: string[]; copy: Record<string, unknown> | null } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; closeAll: string[]; others: string[]; right: string[]; copy: Record<string, unknown> | null; extra: TabMenuItem[] } | null>(null)
   const { t } = useEngineI18n()
   // 右键菜单(2026-11-07 用户:「右键标签栏的 view 应该有一堆菜单选项」)。固定 View 也有菜单,只是没有「关闭」。
   const menuable = !PLACEHOLDER_TABS.has(type) && type !== '__extend'
@@ -238,7 +240,9 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
     const { __loc, __type, ...user } = (params ?? {}) as Record<string, unknown>
     void __loc; void __type
     // 副本参数在右键这一刻算:跟随型视图(主对话)钉的是此刻的会话;算不出(新对话还没会话)就不给拆分 / 在新窗口打开。
-    setMenu({ x: e.clientX, y: e.clientY, closeAll: c.all, others: c.others, right: c.right, copy: copiedParams(type, user) })
+    // 宿主的项(放到 Human Desk 等)只给主区标签:侧栏标签是工具位,不是「你在做的那一样」
+    const extra = loc === 'left' || loc === 'right' ? [] : extraTabItems({ id: api.id, type, params: user })
+    setMenu({ x: e.clientX, y: e.clientY, closeAll: c.all, others: c.others, right: c.right, copy: copiedParams(type, user), extra })
   }
   const run = (fn: () => void) => (): void => { setMenu(null); fn() }
   const closeMany = (ids: string[]): void => { const ws = useWorkspace.getState(); for (const id of ids) ws.closeLeaf(id) }
@@ -305,6 +309,9 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       )}
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+          {/* 宿主的项在最前(方案图:「放到 Human Desk」是标签右键第一项),和后面隔一条线 */}
+          {menu.extra.map((x) => <button key={x.id} data-act={`host-${x.id}`} onClick={run(x.run)}>{x.icon} {x.label}</button>)}
+          {menu.extra.length > 0 && (closable || menu.others.length > 0 || menu.right.length > 0 || menu.closeAll.length > 1 || (copy && canSplit) || canWindow) && <div className="ctx-separator" />}
           {/* 关闭一组 → 拆分一组 → 窗口一组;按当下能不能做逐项出现,一组都没有就不画那条分隔线。 */}
           {closable && <button data-act="close" onClick={run(() => useWorkspace.getState().closeLeaf(api.id))}><X size={13} /> {t('lcl.tab.close')}</button>}
           {menu.others.length > 0 && <button data-act="close-others" onClick={run(() => closeMany(menu.others))}><ListX size={13} /> {t('lcl.tab.closeOthers')}</button>}
@@ -400,6 +407,60 @@ function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
   }
 }
 
+// ── 宿主往标签右键菜单里加的项(最前面一组,如 Human Desk 的「放到 Human Desk」)──
+// 引擎不认识这些项:宿主按标签(类型 + 参数)决定给不给,文案也由宿主翻好。按当下能不能做逐项给,做不到的不给(同其余各项)。
+export interface TabMenuItem { id: string; label: string; icon?: React.ReactNode; run(): void }
+export type TabMenuProvider = (tab: { id: string; type: string; params: Record<string, unknown> }) => TabMenuItem[]
+const tabMenuProviders = new Set<TabMenuProvider>()
+/** 登记一组标签右键项;返回撤销。 */
+export function registerTabMenuItems(p: TabMenuProvider): () => void {
+  tabMenuProviders.add(p)
+  return () => { tabMenuProviders.delete(p) }
+}
+function extraTabItems(tab: { id: string; type: string; params: Record<string, unknown> }): TabMenuItem[] {
+  const out: TabMenuItem[] = []
+  for (const p of tabMenuProviders) { try { out.push(...p(tab)) } catch { /* 宿主的项出错不拖垮整份菜单 */ } }
+  return out
+}
+
+// ── 视图里「接标签」的落区(Human Desk:把标签拖到它上面 = 放到 Human Desk)──
+// 标签拖拽是引擎自管的(捕获阶段算落点、画竖线 / 半屏高亮),里层元素自己挂 dragover 抢不到。登记过的落区:指针在它上面、
+// 它也接这个视图时,引擎的那套提示让位(不画「把这一组拆开」),松手交给它;它自己画落点(用现成的淡染,不新造)。
+export interface TabDropZone {
+  accepts(view: ViewRef): boolean
+  /** 标签拖到它上面 / 离开(画 / 撤落点提示)。 */
+  hover?(on: boolean): void
+  /** 松手:view = 被拖的标签的视图,leafId = 那个标签(要不要关掉它由落区定)。 */
+  drop(view: ViewRef, leafId: string): void
+}
+const tabDropZones = new Map<HTMLElement, TabDropZone>()
+/** 登记一个接标签的落区;返回撤销。 */
+export function registerTabDropZone(el: HTMLElement, z: TabDropZone): () => void {
+  tabDropZones.set(el, z)
+  return () => { if (tabDropZones.get(el) === z) { if (hoverZone === z) setHoverZone(null); tabDropZones.delete(el) } }
+}
+let hoverZone: TabDropZone | null = null
+function setHoverZone(z: TabDropZone | null): void {
+  if (hoverZone === z) return
+  hoverZone?.hover?.(false)
+  hoverZone = z
+  z?.hover?.(true)
+}
+/** 这一次确实是拖标签(带着标签的载荷、源面板还在):源被关掉、dragend 没到留下的 draggingId 残留,不能让下一次无关拖拽落进落区(Codex 评审)。 */
+function isTabDrag(e: DragEvent): boolean {
+  return !!draggingId && !!e.dataTransfer?.types?.includes('application/x-tangu-view') && !!useWorkspace.getState().api?.getPanel(draggingId)
+}
+/** 指针下接这个视图的落区(里层的优先:落区可以嵌套,取离指针最近的那个)。 */
+function tabZoneAt(e: DragEvent, view: ViewRef | null): TabDropZone | null {
+  if (!view || !tabDropZones.size) return null
+  let el: Element | null = e.target instanceof Element ? e.target : null
+  for (; el; el = el.parentElement) {
+    const z = tabDropZones.get(el as HTMLElement)
+    if (z && el.isConnected && z.accepts(view)) return z
+  }
+  return null
+}
+
 // ── 受控自定义拖放层(Dockview disableDnd,自管发起/提示/提交)──
 // 唯一真源 computeDropTarget(dropModel.ts)同时驱动「提示」(竖线/半屏高亮)与「提交」(dropView 程序化 moveTo):
 // 提示显示在哪就落在哪(根治提示≠落点)。固定 3 面板:tab 栏=并标签页;正文半边=面板内分屏(侧栏仅上下,主区四向);违规=null 弹回。
@@ -413,7 +474,8 @@ let draggingView: ViewRef | null = null // 跨窗撕拽:源视图的可重建描
 // 与 draggingId(搬面板)互斥;同一套 dragover 提示 + computeDropTarget 落点。
 //  · 列表条目可以再带一份可重建的视图(view,目前只有 Desk 的名字胶囊):拖出窗外 = 在新窗口打开(或落进光标下的另一扇窗),同拖标签;
 //    源不动(Desk 那格留着,11-23 用户定)。不带 view 的(文件面板、会话行)拖出窗外照旧什么都不发生。
-type OpenDrag = { type: string; params?: Record<string, unknown> } | { open(): void; view?: ViewRef }
+//  · detached:带 view 的条目拖出窗外、对面真开出来之后回一声(Human Desk 拖出去是「拿走」,要等这一下才从它那边拿掉)。
+type OpenDrag = { type: string; params?: Record<string, unknown> } | { open(): void; view?: ViewRef; detached?(): void }
 let draggingOpen: OpenDrag | null = null
 // 拖拽载荷里带上这个类型才认 draggingOpen:源元素拖到一半被卸掉(dragend 到不了 window)时,残留的 draggingOpen
 // 不能被下一次无关的拖入(系统文件、别的 app 的文字)借走。
@@ -486,6 +548,7 @@ function clearDragState(): void {
   draggingOpen = null
   if (document.documentElement.dataset.dvDragging) delete document.documentElement.dataset.dvDragging
   document.querySelector('.dv-tab.wb-tab-dragging')?.classList.remove('wb-tab-dragging')
+  setHoverZone(null)
   hideIndicator()
 }
 
@@ -667,6 +730,10 @@ export const WorkspaceHost: React.FC<{
     const onDragOver = (e: DragEvent): void => {
       if (!draggingId && !draggingOpen) return // 搬面板 或 落点即开,两者共用提示
       if (draggingOpen && 'open' in draggingOpen) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:冒泡阶段再看(见 onListDragOver)
+      // 标签拖到登记过的落区上(Human Desk):拆分那套提示让位,落点归它
+      const zone = draggingId && isTabDrag(e) ? tabZoneAt(e, draggingView) : null
+      setHoverZone(zone)
+      if (zone) { e.preventDefault(); hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; return }
       const t = dropTargetAt(e)
       if (!t) { hideIndicator(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'none'; return }
       e.preventDefault() // 有效落点才放行 drop
@@ -678,6 +745,13 @@ export const WorkspaceHost: React.FC<{
       if (!id && !open) return
       if (open && 'open' in open) { if (isListDrag(e)) watchClaims(e); return } // 列表条目:见 onListDrop
       e.preventDefault()
+      const zone = id && isTabDrag(e) ? tabZoneAt(e, draggingView) : null
+      if (zone && id && draggingView) {
+        const view = draggingView
+        clearDragState()
+        zone.drop(view, id)
+        return
+      }
       const t = dropTargetAt(e)
       if (t) {
         if (open) openViewAtTarget(t, open)       // 落点即开(新视图,不搬面板)
@@ -725,7 +799,8 @@ export const WorkspaceHost: React.FC<{
       // 被别的程序接走了(它带着引用载荷,拖进 Finder、编辑器能被接住),那就不再开窗。窗里松手的早在 onListDrop 收尾、view 已清。
       // isListDrag:只认带着落点即开载荷的这一次 —— 源卸掉、dragend 没到留下的残留,不能被下一次无关拖拽带出窗外(Codex 评审)
       else if (!id && view && isListDrag(e) && d?.drop && outside && (e.dataTransfer?.dropEffect ?? 'none') === 'none' && getView(view.type)) {
-        void d.drop(view).catch(() => {})
+        const spec = draggingOpen // clearDragState 马上清掉它:回调先拿在手里
+        void d.drop(view).then((ok) => { if (ok && spec && 'open' in spec) spec.detached?.() }).catch(() => {})
       }
       clearDragState()
     }

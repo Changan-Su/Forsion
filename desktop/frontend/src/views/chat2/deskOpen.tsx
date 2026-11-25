@@ -156,7 +156,9 @@ function dropOpen(it: DeskItem, rel: string | null, openVault: () => void): void
  *  标签栏 / 主区正文 = 在落点打开(LCL 落点即开,落点线 / 半屏高亮都是现成的);输入框 = 一枚引用(带文件的才有);
  *  另一格 = 两格对调(useDeskItemDrop);拖出窗外 = 新窗口(LCL)。Desk 这一格一律留着(11-23 用户定 A)。
  *  没有文件的(网页、插件视图)不带引用:拖到对话正文上什么都不做 —— 对话区先认领下来,不让 LCL 画出「把对话那组拆开」。 */
-export function startDeskItemDrag(e: React.DragEvent<HTMLElement>, o: { sessionId: string; item: DeskItem; rel: string | null; openVault: () => void }): void {
+/**  taken:拖出去真开出来了(落进标签栏 / 主区正文,或拖出窗外对面开成了)之后回一声 —— Human Desk 拖出去是「拿走」,
+ *  在这里从它那边拿掉;拖进输入框(一枚引用)、落空、被别处接走都不算。Agent Desk 不传(那格留着)。 */
+export function startDeskItemDrag(e: React.DragEvent<HTMLElement>, o: { sessionId: string; item: DeskItem; rel: string | null; openVault: () => void; taken?: () => void }): void {
   const dt = e.dataTransfer
   if (!dt || !canDragDeskItem(o.item)) { e.preventDefault(); return }
   e.stopPropagation() // 胶囊在聊天视图里:别让外层的拖源(若有)再起一次
@@ -167,7 +169,11 @@ export function startDeskItemDrag(e: React.DragEvent<HTMLElement>, o: { sessionI
   const rel = o.rel ?? (o.item.view && file && !isAbsPath(file) ? file : null)
   if (file) setChatRefDrag(dt, [rel ? { kind: 'note', path: rel } : { kind: 'file', path: file }])
   const ref = deskViewRef(o.item, o.rel)
-  startOpenDrag(dt, { open: () => dropOpen(o.item, o.rel, o.openVault), view: ref ?? undefined })
+  startOpenDrag(dt, {
+    open: () => { dropOpen(o.item, o.rel, o.openVault); o.taken?.() },
+    view: ref ?? undefined,
+    ...(o.taken ? { detached: o.taken } : {}),
+  })
   const cap = e.currentTarget.closest('.desk-cap-name')
   cap?.classList.add('desk-cap-dragging')
   // 没有文件的:窗里每一块对话区都先认领(不止源那一块 —— 并排的另一个对话同样不该被画成「拆开那组」,Codex 评审)

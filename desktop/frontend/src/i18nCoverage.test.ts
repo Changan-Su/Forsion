@@ -378,6 +378,7 @@ describe('i18n 覆盖', () => {
       'settings.ribbon.title': 'Space 页「Ribbon」块的标题(设置页规范 v1,2026-11-17):Ribbon 是界面区域专名,中文界面一直写 Ribbon(「Ribbon 滚动后自动归位」),不译',
       'agentEngine.harness':'Agent 配置页的卡片名:DSH 融合方案 C2-1 定的「Harness」(由谁来跑这个 Agent,Tangu / DSH 并列),专名不译',
       'onboarding.guide.moreAgentsPath': '指向 Space 名「Agents」',
+      'humanDesk.title': 'Human Desk 是功能专名(Human Task 方案第三轮 2026-11-23 定,与 Agent Desk 对称),中文界面不译',
       'approvalRules.allowPh': '工具名示例(代码),不可译',
       'approvalRules.askPh': '工具名示例(代码),不可译',
       'approvalRules.denyPh': '工具名示例(代码),不可译',

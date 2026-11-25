@@ -67,6 +67,7 @@ import { useWorkspace, useSpaceStore, UI_MODE, Skeleton, scrollToElement, cancel
 import { useTranscriptWindow } from './chat2/useTranscriptWindow'
 import { useTailFirst } from './chat2/useTailFirst'
 import { AgentDesk, DeskCard, useDeskHome } from './chat2/AgentDesk'
+import { DeskSwitch, HumanDeskCard, HumanDeskPanel, HumanDeskSideCard, useHumanLiveChip } from './chat2/HumanDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
@@ -749,6 +750,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
   const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
+  // Human Desk 在看时,这条会话的输入框自动挂一枚引用(走今天的引用芯片;× 它 = 停止在看)
+  const humanChip = useHumanLiveChip(deskEnabled ? activeId : null)
   // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
   const readReceiptCleanup = useRef<(() => void) | null>(null)
@@ -896,6 +899,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
       <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
+      {/* Human Desk 的东西拿到了主区时,摘要栏卡片栈不在场(右栏、窄过 760、画布)→ 卡在对话顶上;栏在场时 CSS 让掉它 */}
+      {deskEnabled && activeId && !params.childSurface && <HumanDeskSideCard sessionId={activeId} />}
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body">
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={shownMessages.length} />}
@@ -1229,6 +1234,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 侧栏聊天默认引用主区当前笔记；Space 的主区分栏可显式 opt-in，
           // 让同屏 ChatView 也跟随旁边的 Amadeus 文档。
           autoRefFromMain={!params.childSurface && (leaf.loc !== 'main' || params.autoRefFromMain === true)}
+          liveRef={params.childSurface ? null : humanChip}
+          onLiveRefRemove={activeId ? () => useApp.getState().humanDeskAct(activeId, { type: 'stop' }) : undefined}
           appRef={!params.childSurface ? appRefOf(params.appRef) : null}
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
@@ -1253,6 +1260,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onRetry={params.readOnly ? undefined : () => retryOnce(activeId)}
           onContinue={params.readOnly || !turnHasOutput(activeMessages) ? undefined : () => retryOnce(activeId, 'continue')}
           desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
+          humanDesk={deskEnabled && activeId ? <HumanDeskCard key="humandesk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
             <SubChatStatus sessionId={activeId} />
@@ -1295,7 +1303,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         />
       </div>}
       </div>
-      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? (
+        <AgentDesk sessionId={activeId} onQuote={deskQuote} switcher={<DeskSwitch sessionId={activeId} />}
+          humanPanel={<HumanDeskPanel sessionId={activeId} switcher={<DeskSwitch sessionId={activeId} />} />} />
+      ) : null}
       {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
     </ToolCardDeskContext.Provider>

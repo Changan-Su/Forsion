@@ -78,6 +78,11 @@ export interface UpdaterStatus {
   selfInstallFailed?: boolean
   /** mac:点了「重启并安装」,Squirrel.Mac 正在取包验签 */
   preparing?: boolean
+  /**
+   * 这一版钉在 GitHub、能应用内装:主窗收到后在后台自动开始下载(downloadUpdate({ auto: true })),下好再弹提示。
+   * 只给 GitHub 源(海外 / 测试版):流量算 GitHub 的;官网源走 OSS 按量计费,照旧等用户点。自动下载失败后置 false。
+   */
+  autoDownload?: boolean
 }
 
 let wired = false
@@ -293,7 +298,7 @@ function ensureWired(): void {
   autoUpdater.on('update-available', (info) => {
     if (dl || !target || info.version !== target.version) return // 下载中换源时的回声
     announceAvailable(info.version, notesToString(info.releaseNotes),
-      { source: feedSource ?? undefined, size: info.files?.[0]?.size, manualInstall: false })
+      { source: feedSource ?? undefined, size: info.files?.[0]?.size, manualInstall: false, autoDownload: feedSource === 'github' })
   })
   // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
@@ -378,7 +383,10 @@ async function runCheck(): Promise<UpdaterStatus> {
     target = { version: latest.version, site: latest.site, order: sourceOrder(source, source === 'auto' ? await detectMainland() : null) }
     // mac 只能手动装(ad-hoc 旧包等);或者这次该先走官网(大陆 / 选了官网 / 地区没探出来)而官网给不了 zip ——
     // 官网只收 .dmg,那就照旧从官网开 .dmg,不为了自装绕去 GitHub(下载源按地区是 10-19 定的口径)。
-    if (!(await selfInstallable()) || (process.platform === 'darwin' && target.order[0] === 'website' && !feedFor('website'))) {
+    // 官网压根没有这一版(测试版 / NoExtend)时没有官网那条路,.dmg 本来也得去 GitHub 下 → 照常往下试 GitHub 的 zip。
+    const macWebsiteDmgOnly = process.platform === 'darwin' && target.order[0] === 'website' && !feedFor('website')
+      && websiteCarries('darwin', BUNDLE_EXTEND) && websiteHas(target.site?.macos, latest.version)
+    if (!(await selfInstallable()) || macWebsiteDmgOnly) {
       announceAvailable(latest.version, latest.notes, { ...manualMacSource(latest.version), manualInstall: true })
       return lastStatus
     }
@@ -405,9 +413,23 @@ async function runCheck(): Promise<UpdaterStatus> {
 /**
  * 下载:当前这边出错或 30 秒没进度 → 自动换另一边从头下一次(两边是同一个文件,electron-updater 不跨源续传);
  * 换过去还不行就报错,不来回切。手动换源(switchUpdateSource)随时可以,不占这一次。
+ *
+ * auto = 主窗收到 autoDownload 的「有新版」后自动发起的(用户没点):只在钉的是 GitHub 时才下;出错 / 下不动**不换到官网**
+ * (官网那边的流量走 OSS 计费,得用户自己点),也不报错、mac 也不退回 .dmg —— 安静地退回「有新版」并清掉 autoDownload,
+ * 由主窗照常弹提示、等用户点(用户点的那次照旧能换源)。下载中用户手动换了源,之后就按手动下载处理。
  */
-export async function downloadUpdate(): Promise<void> {
+export async function downloadUpdate(opts: { auto?: boolean; version?: string } = {}): Promise<void> {
   if (unsupported() || lastStatus.manualInstall || !target || dl || lastStatus.phase !== 'available') return
+  let auto = opts.auto === true
+  if (auto) {
+    // 主窗是按它看到的那一版查的「跳过这个版本」:期间换了版本(比如关测试版后切回正式版)就不下(Codex 评审)
+    const autoOk = (): boolean => !dl && !!target && lastStatus.phase === 'available' && !!lastStatus.autoDownload
+      && feedSource === 'github' && opts.version === target.version
+    if (!autoOk()) return
+    // 关测试版可能发生在定下 target 之前(channelChanged 那时不作数),这里按现在的偏好再核一次测试包(Codex 评审)
+    if (isPrerelease(target.version) && !(await readUpdaterConfig()).beta) return
+    if (!autoOk()) return
+  }
   ensureWired()
   // 先把阶段钉成 downloading:第一条进度事件要等一会儿,这段空档里定时 / 唤醒检查会当成「还没下载」
   // 照常去查,查回来晚于下载完成就把 downloaded 盖回 available(Codex 评审 P2)。
@@ -428,6 +450,12 @@ export async function downloadUpdate(): Promise<void> {
       if (cur.dropped) return // 关了测试版,这份测试包不要了(channelChanged 已重置状态)
       const from = feedSource
       const manual = cur.manual
+      if (manual) auto = false // 用户手动换了源:之后按手动下载处理
+      if (auto) {
+        console.warn('[updater] background download did not finish, waiting for the user instead:', downloadErrorCode(err))
+        broadcast({ ...lastStatus, phase: 'available', autoDownload: false, percent: undefined, transferred: undefined, total: undefined, canSwitch: undefined })
+        return
+      }
       const next = manual ?? (autoSwitched ? null : otherSource())
       const switched = !!next && (await useSource(next)) === 'ok'
       if (cur.dropped) return // 换源那一下 await 期间关了测试版

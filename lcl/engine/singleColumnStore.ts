@@ -312,6 +312,8 @@ export function activeMainPanel(): null { return null }
  *  ponytail: 剔掉了一部分(插件视图比还原晚注册)的那份照用、照存,目标 Space 的插件标签这一程就没了;要保住得把
  *  「剔过」也报成落空,让补定位从归档还原。 */
 export function bootLayoutFellThrough(): boolean { return false }
+/** 同 dockviewStore.onLeafClose 的契约;单列宿主(手机)不挂 Desk,没有消费者 → 只登记、不发。 */
+export function onLeafClose(_fn: (leaf: { id: string; type: string; params: Record<string, unknown> }) => void): () => void { return () => {} }
 /** 命名槽此刻还原得了吗:存在、成形,引用的视图都已注册(口径同桌面版)。 */
 export function namedLayoutRestorable(name: string): boolean {
   const b = (readJSON<Record<string, unknown>>(SC_NAMED_KEY) ?? {})[name]

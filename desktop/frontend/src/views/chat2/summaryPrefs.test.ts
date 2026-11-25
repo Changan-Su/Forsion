@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { moveCard, orderCards } from './summaryPrefs'
+import { moveCard, orderCards, withHumanDeskSlot } from './summaryPrefs'
 
 const D = ['progress', 'bg', 'outputs', 'sources', 'scope', 'desk']
 
@@ -25,5 +25,19 @@ describe('moveCard', () => {
   it('moves before a target, or to the end', () => {
     expect(moveCard(D, 'outputs', 'bg')).toEqual(['progress', 'outputs', 'bg', 'sources', 'scope', 'desk'])
     expect(moveCard(D, 'progress', null)).toEqual(['bg', 'outputs', 'sources', 'scope', 'desk', 'progress'])
+  })
+})
+
+describe('withHumanDeskSlot (order saved before the Human Desk card existed)', () => {
+  it('puts Human Desk right above Agent Desk, even when Agent Desk was dragged elsewhere', () => {
+    expect(withHumanDeskSlot(['desk', 'progress', 'outputs'])).toEqual(['humandesk', 'desk', 'progress', 'outputs'])
+    expect(orderCards(['progress', 'outputs', 'humandesk', 'desk'], ['progress', 'outputs', 'humandesk', 'desk'], withHumanDeskSlot(['desk', 'progress', 'outputs'])))
+      .toEqual(['humandesk', 'desk', 'progress', 'outputs'])
+  })
+  it('leaves orders that already place it (or have no Agent Desk) alone', () => {
+    const saved = ['desk', 'humandesk', 'progress']
+    expect(withHumanDeskSlot(saved)).toBe(saved)
+    expect(withHumanDeskSlot(['progress'])).toEqual(['progress'])
+    expect(withHumanDeskSlot(undefined)).toBeUndefined()
   })
 })

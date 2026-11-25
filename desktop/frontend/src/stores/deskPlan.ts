@@ -217,6 +217,8 @@ export function extractLiveBody(args: string, tool: string): string {
 /** Desk 会话快照持久化(localStorage,单键存全 map)。直播格是流式瞬态,落盘时剔除;
  *  空且无任何用户痕迹(fraction/mode/note)的条目不落;超容量按「最近展示时间」截断。 */
 export const DESK_PERSIST_KEY = contentStorageKey('forsion.deskBySession')
+/** Human Desk 的快照(humanDeskPlan.ts 用;放这里是为了 Tangu 那侧不再多一条对 LCL 存储作用域的依赖,check:tanguboundary)。 */
+export const HUMAN_DESK_PERSIST_KEY = contentStorageKey('forsion.humanDeskBySession')
 export const DESK_PERSIST_CAP = 40
 
 /** 旧版新会话草稿 Desk 的保留键;ChatView 现在只在会话开始后挂载 Desk。

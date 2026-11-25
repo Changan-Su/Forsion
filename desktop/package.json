@@ -393,6 +393,7 @@
     "check:hooks": "eslint --config build/eslint.hooks.mjs \"frontend/src/**/*.{ts,tsx}\"",
     "check:deskshot": "node scripts/desk-shot.check.cjs",
     "check:deskmanual": "node scripts/desk-manual.check.cjs",
+    "check:humandesk": "node scripts/human-desk.check.cjs",
     "check:splash": "node scripts/splash-loop.check.cjs",
     "probe:startup-windows": "node scripts/startup-windows.probe.cjs",
     "probe:startup-trace": "node scripts/startup-trace.probe.cjs",

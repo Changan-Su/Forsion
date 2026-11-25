@@ -12,6 +12,7 @@ import { MessageSquare, PanelRight, Puzzle } from 'lucide-react'
 import type { ToolEvent } from '../types'
 import { useApp, type DeskItem } from '../stores/appStore'
 import { deskReduce } from '../stores/deskPlan'
+import { deskSideOf } from '../stores/humanDeskPlan'
 import { registerMessages, useI18n } from '../i18n'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import { pluginDisplayName } from '../amadeus/plugins/display'
@@ -61,7 +62,10 @@ export function showToolCardInDesk(sessionId: string, callId: string, name: stri
     : { type: 'cite', path: '', item, sameView: () => false })
   // Agent 自动放的卡片没上格(两格都钉着,只进了最近放过的、亮点)→ 别替你把侧板展开
   const landed = !byAgent || placed.items.some((x) => x.tool?.callId === callId)
-  app.patchDesk(sessionId, { ...placed, ...(landed ? { mode: 'open' as const, ...(cur?.userResized ? {} : { size: 'half' as const }) } : {}) })
+  // Human Desk 展开着:Agent 自动放的不抢右边,只在切换件「Agent」那段亮点(r3 §5;你点「放到 Desk」照样切过去)
+  const humanHere = byAgent && deskSideOf(cur?.mode, app.humanDeskBySession[sessionId]?.open) === 'human'
+  app.patchDesk(sessionId, { ...placed, ...(landed && !humanHere ? { mode: 'open' as const, ...(cur?.userResized ? {} : { size: 'half' as const }) } : {}) })
+  if (humanHere) app.humanDeskAct(sessionId, { type: 'agentNews' })
 }
 
 /** 从 Desk 拿掉;Desk 空了就收起侧板。 */
