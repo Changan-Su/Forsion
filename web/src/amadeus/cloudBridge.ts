@@ -597,8 +597,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     try {
       return await fetchAndParse(pagePath)
     } catch (e) {
+      // 读失败(404 或别的)都作废树缓存:调用方(restoreVault 的回落)接着问列表时拿新树下判断,不用失败之前缓存的那份。
+      invalidateTree()
       if (is404(e)) {
-        invalidateTree()
         if (everKnown.has(pagePath)) throw new VanishedError(pagePath)
         throw new Error(`Note not found: ${pagePath}`)
       }

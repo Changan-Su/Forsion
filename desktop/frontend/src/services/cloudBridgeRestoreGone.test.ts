@@ -113,6 +113,10 @@ describe('cloud vault cold start: a 404 read never creates', () => {
     expect(s.activePage).toBe('keep.md') // 回落到还在的那篇
     expect(s.error).toBeNull()
     expect(s.pages).not.toContain('gone.md') // 树刷新过,幽灵条目从侧栏消失
+    // 快照本身也重写了(不只是 lastPage 换了):存着的树里不再有 gone.md
+    const snaps = [...storage.values()].filter((v) => v.includes('"tree"'))
+    expect(snaps.length).toBeGreaterThan(0)
+    for (const v of snaps) expect(JSON.parse(v).tree.pages).not.toContain('gone.md')
     // 快照也重写过:再冷启动一次,lastPage 已不在快照里,直接开 keep.md,仍零写
     const again = await coldStart()
     await again.usePageStore.getState().restoreVault()
