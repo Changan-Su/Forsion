@@ -100,7 +100,7 @@ describe('createMultiAccountApp', () => {
   });
 
   it('closes everything outside the route allowlist with 403', async () => {
-    for (const [m, p] of [['GET', '/agent/tools'], ['GET', '/agent/models'], ['GET', '/agent/workspace/list?sessionId=x'], ['GET', '/agent/approvals/pending'], ['PUT', '/agent/compaction'], ['GET', '/agent/human/CALENDAR.db'], ['GET', '/agent/plugins'], ['GET', '/agent/nope']]) {
+    for (const [m, p] of [['GET', '/agent/tools'], ['GET', '/agent/models/quota?model=x'], ['PUT', '/agent/models/overrides'], ['GET', '/agent/projects'], ['GET', '/agent/approvals/stream'], ['GET', '/agent/approval-rules'], ['PUT', '/agent/compaction'], ['GET', '/agent/human/CALENDAR.db'], ['GET', '/agent/plugins'], ['GET', '/agent/nope']]) {
       expect((await call(m, p)).status, `${m} ${p}`).toBe(403);
     }
   });
@@ -206,7 +206,7 @@ describe('createMultiAccountApp', () => {
     expect((await call('POST', '/agent/runs', { as: 'dave', body: { session_id: taken, model_id: 'test-model', message: 'x' } })).status).toBe(404);
   });
 
-  it('marks runs left queued or running by the previous engine as failed when the account is opened, without re-running them', async () => {
+  it('settles runs left queued or running by the previous engine as interrupted when the account is opened, without re-running them', async () => {
     const dir = join(env.home, 'accounts', 'erin');
     mkdirSync(dir, { recursive: true });
     const db = new Database(join(dir, 'state.db'));
@@ -225,7 +225,7 @@ describe('createMultiAccountApp', () => {
     const after = new Database(join(dir, 'state.db'), { readonly: true });
     const rows = Object.fromEntries((after.prepare('SELECT id, status, error FROM agent_runs').all() as any[]).map((r) => [r.id, [r.status, r.error]]));
     after.close();
-    expect(rows).toEqual({ 'run-q': ['failed', 'engine restarted'], 'run-r': ['failed', 'engine restarted'], 'run-d': ['completed', null] });
+    expect(rows).toEqual({ 'run-q': ['interrupted', 'interrupted:engine_restart'], 'run-r': ['interrupted', 'interrupted:crash'], 'run-d': ['completed', null] });
     const listed = (await call('GET', `/agent/runs?session_id=${sid}`, { as: 'erin' })).json.runs as Array<{ status: string }>;
     expect(listed.filter((r) => r.status === 'queued' || r.status === 'running')).toEqual([]);
     expect(seenAccounts.length).toBe(before); // 没有重新入队去调模型

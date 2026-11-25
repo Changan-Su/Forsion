@@ -245,6 +245,8 @@ export function createFakeBrain(opts: { currentAccount?: () => string | null | u
       listGlobalModels: async () => fakeModels,
       listModelsForProject: async () => ({ models: fakeModels, defaultModelId: MODEL_ID, backgroundModelId: MODEL_ID, reachable: true }),
       hasDirectModel: () => false,
+      // one direct provider whose base URL carries a credential, as some relays do: it must never reach an account
+      listDirectProviders: () => [{ providerId: 'fake-relay', baseUrl: 'https://fake-relay.invalid/v1?key=RELAY-SECRET-IN-URL', modelIds: ['relay-model'] }],
     },
     storage: {
       listDirectory: async () => { throw new Error('cloud storage is not available in this test'); },
@@ -737,6 +739,8 @@ export interface MaEngine {
   toolAllowlist: ReadonlyArray<string>;
   routes: RouteEntry[];
   scope: any;
+  /** open / provisioned account databases; evict idle ones now */
+  accounts: { open(): string[]; provisioned(): string[]; evictIdleNow(idleMs?: number, maxOpen?: number): string[] };
   dispose: () => Promise<void>;
 }
 
@@ -773,6 +777,7 @@ export async function bootMultiAccount(o: { bundleDirs?: string[] } = {}): Promi
     toolAllowlist: created.toolAllowlist,
     routes,
     scope,
+    accounts: created.accounts,
     dispose: async () => {
       try { (server as any).closeAllConnections?.(); } catch { /* ignore */ }
       await new Promise<void>((r) => server.close(() => r()));

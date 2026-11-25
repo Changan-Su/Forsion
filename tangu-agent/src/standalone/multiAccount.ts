@@ -18,13 +18,14 @@
  * - 模型调用仍用进程那一份凭据(本段不做每人计费);出站脱敏层包在这里面(注入的 brain 也包)。
  */
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response, type Router } from 'express';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { createTanguModule } from '../index.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { AssetsBrain, CloudBrainServices, StorageBrain } from '../seams/cloudBrain.js';
-import { accountWorkspaceDir, isMultiAccount, runWithAccount, setSessionClaimer } from '../core/accountScope.js';
+import { accountHome, accountWorkspaceDir, isMultiAccount, runWithAccount, setSessionClaimer } from '../core/accountScope.js';
+import { assertAccountStorage, lastTotalUsage, markAccountUsageDirty, newAccountsAllowed, StorageLimitError } from '../services/accountStorage.js';
 import { checkAccountIdentity, createMultiAccountSqliteHost, type MultiAccountHost } from '../adapters/standalone/multiAccountSqliteHost.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
@@ -37,8 +38,11 @@ import { accountCwdDenied, setAccountReadOnlyRoots } from '../services/accessDom
 import { getRunForUser } from '../services/runStore.js';
 import { deps } from '../seams/runtime.js';
 import { MULTI_ACCOUNT_TOOL_ALLOWLIST } from '../tools/multiAccountTools.js';
+import { createProfileStore } from '../profiles/profileStore.js';
 import { remoteLockGuard } from './remoteLockGuard.js';
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { accountHasRuns, drainRunsForExit, recoverAccountRuns } from '../services/agentLoop.js';
+import { clearAccountScratch } from '../services/pluginScripts.js';
+import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import type { StandaloneConfig } from './config.js';
 
 export interface MultiAccountAppOptions {
@@ -52,13 +56,17 @@ type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 /** 碰 id 之前的核对。run / session = 这个账号的库里查得到这条 run / 会话(查不到 404,别人的和不存在的一样;先于工作目录钳制,
  *  与 handler 自己「先查会话、再看请求体」的次序一致)。
  *  newSession = 会新建会话的接口里客户端给的会话 id:必须是 UUID(400);当场替当前账号认领,已被别的账号认领过 → 404(认领表见 multiAccountSqliteHost)。 */
-type Own = { kind: 'run'; param: string } | { kind: 'session'; param: string } | { kind: 'newSession'; body: string };
+type Own = { kind: 'run'; param: string } | { kind: 'session'; param: string } | { kind: 'newSession'; body: string }
+  /** sessionRef = 只读 / 删除接口里客户端给的会话 id(查询串或请求体):必须是 UUID(400);不认领。属于别的账号 → 标 req.foreignSession,
+   *  handler 按「空的、没人用过的会话」回(与不存在的 id 一模一样)。 */
+  | { kind: 'sessionRef'; query?: string; body?: string };
 /** 客户端给的新会话 id 的格式:UUID(8-4-4-4-12 十六进制,大小写不限)。引擎内部建的会话一律 randomUUID,不受影响。 */
 const SESSION_ID_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** 客户端给的工作目录:必须在账号文件夹里。where = 'body'(建会话 / 改会话:project_path + agent_config.cwd / extraRoots)、
  *  'config'(会话配置:体本身就是 agent_config)、'run'(起 run:agent_config.cwd / extraRoots)。 */
 type Clamp = 'session' | 'config' | 'run';
-interface RouteRule { method: Method; path: string; own?: Own[]; clamp?: Clamp; why: string }
+/** quota = 这条会往账号文件夹里写东西:账号磁盘已满(services/accountStorage.ts)时回 507,读和删不受影响。 */
+interface RouteRule { method: Method; path: string; own?: Own[]; clamp?: Clamp; quota?: true; why: string }
 
 /**
  * 接口白名单(第一段):对话(runs / SSE / 会话 / 审批)、Agent、记忆、技能。每条都读过 handler:
@@ -67,7 +75,7 @@ interface RouteRule { method: Method; path: string; own?: Own[]; clamp?: Clamp; 
  */
 const ROUTE_ALLOWLIST: ReadonlyArray<RouteRule> = [
   // ── 对话:run ──
-  { method: 'POST', path: '/agent/runs', own: [{ kind: 'newSession', body: 'session_id' }], clamp: 'run', why: 'client session id must be a UUID; an id claimed by another account is 404 (session claim registry); the session is looked up / auto-created in this account DB; run row in this account DB; cwd clamped here and in runLoop' },
+  { quota: true, method: 'POST', path: '/agent/runs', own: [{ kind: 'newSession', body: 'session_id' }], clamp: 'run', why: 'client session id must be a UUID; an id claimed by another account is 404 (session claim registry); the session is looked up / auto-created in this account DB; run row in this account DB; cwd clamped here and in runLoop' },
   { method: 'GET', path: '/agent/runs', why: 'lists runs from this account DB only (another account session id = no runs, same as an unknown id)' },
   { method: 'GET', path: '/agent/runs/:id/events', own: [{ kind: 'run', param: 'id' }], why: 'run looked up in this account DB first; replay from this account DB; live bus keyed by a run id that only exists here' },
   { method: 'POST', path: '/agent/runs/:id/abort', own: [{ kind: 'run', param: 'id' }], why: 'run looked up in this account DB first; abortRun also refuses another account run' },
@@ -79,29 +87,39 @@ const ROUTE_ALLOWLIST: ReadonlyArray<RouteRule> = [
   { method: 'POST', path: '/agent/runs/:runId/inquiries/:inquiryId', own: [{ kind: 'run', param: 'runId' }], why: 'run looked up in this account DB first; inquiry / ui / client-action registries check the id belongs to that run' },
   // ── 对话:会话 ──
   { method: 'GET', path: '/agent/sessions', why: 'SELECT from this account DB; busy flag from activeSessionIds() filtered by account' },
-  { method: 'POST', path: '/agent/sessions', clamp: 'session', why: 'server-generated UUID claimed for this account; row in this account DB; project_path / agent_config.cwd clamped' },
+  { quota: true, method: 'POST', path: '/agent/sessions', clamp: 'session', why: 'server-generated UUID claimed for this account; row in this account DB; project_path / agent_config.cwd clamped' },
   { method: 'GET', path: '/agent/sessions/:id/detail', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404)' },
   { method: 'PATCH', path: '/agent/sessions/:id', own: [{ kind: 'session', param: 'id' }], clamp: 'session', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); project_path clamped' },
   { method: 'DELETE', path: '/agent/sessions/:id', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cascade delete in this account DB + checkpoints under this account home' },
   { method: 'GET', path: '/agent/sessions/:id/messages', own: [{ kind: 'session', param: 'id' }], why: 'session looked up in this account DB first (another account id = unknown id = 404); messages from this account DB' },
   { method: 'GET', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404)' },
-  { method: 'PUT', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
-  { method: 'PATCH', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
+  { quota: true, method: 'PUT', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
+  { quota: true, method: 'PATCH', path: '/agent/sessions/:id/config', own: [{ kind: 'session', param: 'id' }], clamp: 'config', why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); cwd / extraRoots clamped' },
   { method: 'GET', path: '/agent/sessions/:id/card-marks', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); card_marks column of that row' },
-  { method: 'POST', path: '/agent/sessions/:id/card-marks', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); per-key add-only merge into card_marks of that row' },
+  { quota: true, method: 'POST', path: '/agent/sessions/:id/card-marks', own: [{ kind: 'session', param: 'id' }], why: 'getOwnSession on this account DB (session looked up in this account DB before anything else: another account id = unknown id = 404); per-key add-only merge into card_marks of that row' },
   // ── Agent ──
   { method: 'GET', path: '/agent/agents', why: 'listAgents() over this account agents/ (roster cache per account); cloud sync scope absent (no agentFiles brain)' },
-  { method: 'POST', path: '/agent/agents', why: 'saveAgent under this account agents/; cloud sync refused without an agentFiles brain' },
-  { method: 'PATCH', path: '/agent/agents/:slug', why: 'patchAgent under this account agents/' },
+  { quota: true, method: 'POST', path: '/agent/agents', why: 'saveAgent under this account agents/; cloud sync refused without an agentFiles brain' },
+  { quota: true, method: 'PATCH', path: '/agent/agents/:slug', why: 'patchAgent under this account agents/' },
   { method: 'GET', path: '/agent/agents/:slug/memory', why: 'memory repository under this account agents/<slug>; cloud sync is a no-op without an agentFiles brain' },
-  { method: 'PUT', path: '/agent/agents/:slug/memory', why: 'memory repository under this account agents/<slug>' },
+  { quota: true, method: 'PUT', path: '/agent/agents/:slug/memory', why: 'memory repository under this account agents/<slug>' },
   // ── 记忆 / 日志(当前 Agent 的,本地记忆 brain 按路径走)──
   { method: 'GET', path: '/agent/memory', why: 'local memory brain under this account agents/<slug>' },
-  { method: 'POST', path: '/agent/memory', why: 'local memory brain under this account agents/<slug>' },
+  { quota: true, method: 'POST', path: '/agent/memory', why: 'local memory brain under this account agents/<slug>' },
   { method: 'GET', path: '/agent/log', why: 'local memory brain under this account agents/<slug>/LOG' },
-  { method: 'POST', path: '/agent/log', why: 'local memory brain under this account agents/<slug>/LOG' },
+  { quota: true, method: 'POST', path: '/agent/log', why: 'local memory brain under this account agents/<slug>/LOG' },
   // ── 技能 ──
   { method: 'GET', path: '/agent/skills', why: 'local skills from this account skills/ + packaged / bundle skills (read-only); cloud skills off' },
+  // ── 会话的工作区文件 / 上传(routes/workspace.ts 的多账号分支:<accountHome>/uploads/<sessionId>/,不碰进程级会话沙箱与云端存储)──
+  { method: 'GET', path: '/agent/workspace/list', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'lists <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (empty)' },
+  { method: 'GET', path: '/agent/workspace/read', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'reads inside <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (404)' },
+  { method: 'GET', path: '/agent/workspace/download', own: [{ kind: 'sessionRef', query: 'sessionId' }], why: 'same as read, as a download' },
+  { method: 'POST', path: '/agent/workspace/delete', own: [{ kind: 'sessionRef', body: 'sessionId' }], why: 'unlinks inside <accountHome>/uploads/<sessionId> via confinedFs; another account session id answers like an unused id (ok:false)' },
+  { quota: true, method: 'POST', path: '/agent/workspace/upload', own: [{ kind: 'newSession', body: 'sessionId' }], why: 'client session id must be a UUID and is claimed for this account (taken by another account = 404); writes inside <accountHome>/uploads/<sessionId> via confinedFs; storage limit per file' },
+  // ── 模型目录:进程那一份(同一份目录给所有人看);多账号模式去掉直连 provider 的 baseUrl,不报覆盖可写 ──
+  { method: 'GET', path: '/agent/models', why: 'process model catalogue (the same for every account); direct provider baseUrl stripped in multi-account mode; per-model overrides read from this account config only' },
+  // ── 待处理的审批 / 询问计数(services/pendingPromptIndex.ts 按账号分:条目记属主、只列当前账号的、清理只看当前账号的、版本号按账号数)──
+  { method: 'GET', path: '/agent/approvals/pending', why: 'per-account view of the pending prompt index (entries tagged with their account; sweep and rev per account)' },
 ];
 
 // ── brain:只留按人无关或按人本地的能力 ─────────────────────────────────────────────────────────────
@@ -133,7 +151,8 @@ function multiAccountBrain(b: CloudBrainServices): CloudBrainServices {
 
 function multiAccountProfile(defaultModelId?: string): AppProfile {
   const base = createTanguProfile({ sandboxMode: 'none', defaultModelId, toolBuiltins: [...MULTI_ACCOUNT_TOOL_ALLOWLIST] });
-  return { ...base, features: { ...base.features, sandbox: false, webSearch: false, historian: false, customTools: false } };
+  // 群聊不开:协调 run 拿着这个账号的名额等成员 run,成员 run 又排在同一个账号的名额后面(services/runAdmission.ts)→ 等到超时
+  return { ...base, capabilities: { ...base.capabilities, groupChat: false }, features: { ...base.features, sandbox: false, webSearch: false, historian: false, customTools: false } };
 }
 
 // ── 白名单路由器:按注册的路由模式从各路由器栈里摘 ──────────────────────────────────────────────────
@@ -183,6 +202,12 @@ function ownershipGuard(host: MultiAccountHost, own: Own[] | undefined): Request
         } else if (o.kind === 'session') {
           const id = req.params[o.param];
           if (typeof id !== 'string' || (await deps().state.getSessionOwner(id)) !== me) return void res.status(404).json({ detail: 'Session not found' });
+        } else if (o.kind === 'sessionRef') {
+          const raw = o.query ? req.query[o.query] : (req.body || {})[o.body!];
+          if (raw === undefined || raw === null || raw === '') continue; // 缺 id:交给 handler 照常 400
+          if (typeof raw !== 'string' || !SESSION_ID_UUID_RE.test(raw)) return void res.status(400).json({ detail: 'sessionId must be a UUID' });
+          const owner = host.sessionOwner(raw);
+          if (owner !== undefined && owner !== me) (req as any).foreignSession = true;
         } else {
           const raw = (req.body || {})[o.body];
           if (raw === undefined || raw === null || raw === '') continue; // 缺 id:交给 handler 照常 400
@@ -218,12 +243,29 @@ function cwdClamp(clamp: Clamp | undefined): RequestHandler {
 
 const NOT_AVAILABLE = { detail: 'Not available in multi-account mode' } as const;
 
+/** 写进账号文件夹的接口先看磁盘上限(读 / 删不看):已用 + 这次请求体大小超了 → 507。 */
+function storageGuard(quota: true | undefined): RequestHandler {
+  return (req, res, next) => {
+    if (!quota) return next();
+    const incoming = Number(req.headers['content-length']) || 0;
+    assertAccountStorage((req as any).accountId as string, incoming).then(
+      () => { markAccountUsageDirty((req as any).accountId as string); next(); },
+      (e) => {
+        if (e instanceof StorageLimitError) return void res.status(507).json({ code: e.code, detail: e.message });
+        res.status(500).json({ detail: 'Storage check failed' });
+      },
+    );
+  };
+}
+
 /** 测试与 main.ts 共用的入口。整个进程只装配一次(configureTangu 是进程级的)。 */
 export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promise<{
   app: Express;
   dispose: () => Promise<void>;
   routeAllowlist: ReadonlyArray<{ method: string; path: string }>;
   toolAllowlist: ReadonlyArray<string>;
+  /** 账号库的打开 / 开户情况与立即淘汰一次(测试 / 诊断)。 */
+  accounts: { open(): string[]; provisioned(): string[]; evictIdleNow(idleMs?: number, maxOpen?: number): string[] };
 }> {
   if (!isMultiAccount()) throw new Error('createMultiAccountApp requires TANGU_MULTI_ACCOUNT=1 in the real environment');
   if (!opts.localToken) throw new Error('multi-account mode requires a host credential (TANGU_LOCAL_TOKEN)');
@@ -237,13 +279,12 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     // 开户:建目录、迁移、播种内置技能 / 示例命令 / 插件包带的人设。在该账号的上下文里跑,同账号并发首请求共用一次。
     provision: async (id) => {
       mkdirSync(accountWorkspaceDir(id), { recursive: true });
+      clearAccountScratch(id); // 上次进程留下的插件脚本临时目录(这一轮结束时本该删掉的)
       await runMigration();
-      // 收敛上次进程留下的 run:开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。标成失败
-      //(与启动时清陈旧行同一种写法),不重新入队、不自动续跑 —— 多账号模式没有启动恢复。
-      const stale = await mh.host.query<any[]>(
-        `UPDATE agent_runs SET status = 'failed', error = 'engine restarted', updated_at = CURRENT_TIMESTAMP WHERE status IN ('queued', 'running') RETURNING id`,
-      );
-      if (stale.length) console.log(`[tangu] multi-account: marked ${stale.length} run(s) of ${id} left by the previous engine as failed`);
+      // 上次进程留下的 run(崩溃 / 被强杀 / 退出时还在排队):开户发生在本进程第一次服务这个账号之前,还是 queued / running 的行都是上次的。
+      // 标成中断、补回这一轮用户说的话和一条说明行,不重放、不续跑(services/agentLoop.ts 的 recoverAccountRuns)。
+      const recovered = await recoverAccountRuns();
+      if (recovered) console.log(`[tangu] multi-account: settled ${recovered} run(s) of ${id} left by the previous engine as interrupted`);
       await seedBuiltinSkills().catch((e) => console.warn(`[tangu] multi-account: seeding built-in skills for ${id} failed:`, e?.message || e));
       try { seedExampleCommand(); } catch { /* best-effort */ }
       await seedBundleAgents().catch(() => []);
@@ -252,11 +293,14 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
 
   setSessionClaimer((sessionId) => mh.claimSession(sessionId)); // enqueueRun 入队前核会话归属(core/accountScope.ts)
 
+  const maProfile = multiAccountProfile(opts.defaultModelId);
   const mod = createTanguModule({
     host: mh.host,
     brain: multiAccountBrain(opts.brain),
     billing: createNoopBilling(),
-    profile: multiAccountProfile(opts.defaultModelId),
+    profile: maProfile,
+    // 这个模式的 profile 就是上面这份:不叠仓里给 tangu 的文件覆盖(那份会把群聊、联网搜索重新打开),也不读覆盖表
+    profileStore: createProfileStore({ baseline: maProfile, fileOverrides: {}, fetchOverrideRows: async () => [] }),
     // 不给 MCP 管理器、外部引擎管理器:这两样在多账号模式下不存在
   });
   mod.startBackgroundTasks(); // 多账号分支只起睡眠检测(index.ts)
@@ -264,18 +308,43 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   const allowed = collectAllowedRoutes([mod.userRouter, mod.dataRouter], ROUTE_ALLOWLIST);
   const allowRouter = express.Router();
   for (const { rule, handlers } of allowed) {
-    (allowRouter as any)[rule.method.toLowerCase()](rule.path, ownershipGuard(mh, rule.own), cwdClamp(rule.clamp), ...handlers);
+    (allowRouter as any)[rule.method.toLowerCase()](rule.path, ownershipGuard(mh, rule.own), cwdClamp(rule.clamp), storageGuard(rule.quota), ...handlers);
   }
+
+  // 账号库淘汰:手上没事(没有在途请求 / SSE、没有 run)且闲了一阵的账号关掉库句柄,下次用时原地重开(开户与恢复不重跑)。
+  const inflight = new Map<string, number>();
+  const busy = (id: string): boolean => (inflight.get(id) ?? 0) > 0 || accountHasRuns(id);
+  const evictTimer = setInterval(() => {
+    const l = multiAccountLimits();
+    const closed = mh.evictIdle({ idleMs: minutesMs(l.idleCloseMinutes), maxOpen: l.maxOpenAccounts, isBusy: busy });
+    if (closed.length) console.log(`[tangu] multi-account: closed ${closed.length} idle account database(s)`);
+  }, 60_000);
+  evictTimer.unref?.();
 
   const app = express();
   app.disable('x-powered-by');
-  app.get('/health', (_req, res) => res.json({ ok: true, mode: 'multi-account' }));
+  // 宿主据 newAccounts 知道还接不接新账号(只读上次量到的合计,不在这里走盘;没量过 = unknown,顺手起一次量)
+  app.get('/health', (_req, res) => {
+    const t = lastTotalUsage();
+    if (!t) void newAccountsAllowed().catch(() => {});
+    const limit = multiAccountLimits().totalStorageGB * 1024 ** 3;
+    res.json({ ok: true, mode: 'multi-account', newAccounts: t ? (t.bytes < limit ? 'open' : 'closed') : 'unknown' });
+  });
   // ① 来的是谁(先于读请求体:没过口令的请求连 25MB 的 JSON 都不解析)
   app.use((req, res, next) => {
     const who = checkAccountIdentity(req.headers, opts.localToken);
     if (!who.ok) return void res.status(who.status).json({ detail: who.detail });
     (req as any).accountId = who.accountId;
     (req as any).user = { userId: who.accountId, username: who.accountId, role: 'USER' };
+    // 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库
+    inflight.set(who.accountId, (inflight.get(who.accountId) ?? 0) + 1);
+    let counted = true;
+    res.once('close', () => {
+      if (!counted) return;
+      counted = false;
+      const left = (inflight.get(who.accountId) ?? 1) - 1;
+      if (left > 0) inflight.set(who.accountId, left); else inflight.delete(who.accountId);
+    });
     next();
   });
   // ② 白名单先判(先于读请求体、先于开户):按原始 method + 注册的路由模式。HEAD 不当 GET、OPTIONS 不自动应答 ——
@@ -290,7 +359,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   // ③ 开户 + 整个请求(含它起的 run 的异步子树)绑进这个账号
   app.use((req, res, next) => {
     const id = (req as any).accountId as string;
-    mh.ensureAccount(id).then(
+    const openAccount = (): void => void mh.ensureAccount(id).then(
       () => runWithAccount(id, () => next()),
       (e) => {
         // 细节(本机路径)只进日志,不回给请求方
@@ -298,6 +367,12 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
         res.status(500).json({ detail: 'Account could not be opened' });
       },
     );
+    // 新账号(本进程没开过户、磁盘上也没有它的文件夹):全部账号合计到了总量上限就不接(已有账号照常用),回 503 带固定的 code。
+    if (mh.provisionedAccounts().includes(id) || existsSync(accountHome(id))) return openAccount();
+    newAccountsAllowed().then((ok) => {
+      if (!ok) return void res.status(503).json({ code: 'NEW_ACCOUNTS_CLOSED', detail: 'This engine is not accepting new accounts right now.' });
+      openAccount();
+    }, () => res.status(500).json({ detail: 'Account could not be opened' }));
   });
   // ④ 远程锁定(与单人 standalone 同一道):锁定时带远程来源头的非只读请求一律 423(中止 run 除外)。
   // 锁是整台电脑的(桌面主进程的锁文件 + 进程内闩),对所有账号都收紧;读它不碰账号路径、不抛(读不出 = 锁定)。
@@ -312,6 +387,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
   return {
     app,
     dispose: async () => {
+      clearInterval(evictTimer);
       try { mod.dispose(); } catch { /* ignore */ }
       mh.close();
       setMultiAccountBundleDirs(null);
@@ -319,6 +395,14 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     },
     routeAllowlist: ROUTE_ALLOWLIST.map(({ method, path }) => ({ method, path })),
     toolAllowlist: [...MULTI_ACCOUNT_TOOL_ALLOWLIST],
+    accounts: {
+      open: () => mh.openAccounts(),
+      provisioned: () => mh.provisionedAccounts(),
+      evictIdleNow: (idleMs, maxOpen) => {
+        const l = multiAccountLimits();
+        return mh.evictIdle({ idleMs: idleMs ?? minutesMs(l.idleCloseMinutes), maxOpen: maxOpen ?? l.maxOpenAccounts, isBusy: busy });
+      },
+    },
   };
 }
 

@@ -6,6 +6,7 @@
  * 输出统一截断,跳过 .git/node_modules 等重目录与二进制文件。
  */
 import { standInOf, standInSearchDenied } from '../../services/accessDomain.js';
+import { isMultiAccount, withinAccountRoot } from '../../core/accountScope.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { getSessionDir } from '../../sandbox/sessionSandbox.js';
@@ -185,9 +186,15 @@ async function cloudSearch(ctx: ToolContext, worker: FileSearchWorker): Promise<
   return formatHits(hits, false) + (capped ? `\n${capped}` : '');
 }
 
-/** 解析本次调用的搜索根:host → cwd;sandbox → 本地 hydrate 目录(无则 null=纯云)。 */
+/** 解析本次调用的搜索根:host → cwd;sandbox → 本地 hydrate 目录(无则 null=纯云)。
+ *  多账号模式:只有 host 这一种,搜索根必须在当前账号的文件夹里(cwd 进 run 时已钳过,这里再核一次;不在 → 抛,整次拒)。 */
 async function resolveBaseDir(ctx: ToolContext): Promise<string | null> {
   checkSearchAbort(ctx.signal);
+  if (isMultiAccount()) {
+    const base = ctx.execMode === 'host' ? ctx.cwd : undefined;
+    if (!base || !withinAccountRoot(base)) throw new Error('the search folder is outside this account');
+    return base;
+  }
   if (ctx.execMode === 'host') return ctx.cwd || process.cwd();
   const dir = await getSessionDir(ctx).catch(error => {
     checkSearchAbort(ctx.signal);
@@ -239,7 +246,8 @@ export const fileSearchProvider: ToolProvider = {
         if (standInDenied) return `Error: ${standInDenied}`;
         const exclude = baseDir ? credentialExclusions(baseDir) : [];
         if (exclude === null) return CREDENTIAL_SEARCH_DENIED;
-        if (ctx.execMode === 'host') {
+        // 多账号模式不起 ripgrep(引擎不替账号起子进程,core/hostSpawn.ts):直接走下面的 Node 扫描(不跟软链)。
+        if (ctx.execMode === 'host' && !isMultiAccount()) {
           const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive, exclude);
           if (viaRg !== null) return viaRg;
         }

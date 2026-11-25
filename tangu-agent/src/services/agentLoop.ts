@@ -1,4 +1,7 @@
-import { accountWorkspaceDir, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
+import { accountWorkspaceDir, bindAccount, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
+import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
+import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, startRunClock, waitingOnUser, type WaitingFor } from './runAdmission.js';
+import { disposeRunScratch } from './pluginScripts.js';
 import { formatToolOutput, toolOutputWorkspaceKey } from '../tools/outputPersist.js';
 import { READ_ONLY_PROGRAM_TOOLS } from '../tools/readOnlyProgram.js';
 import { retryImageDeliveries } from '../tools/builtin/imageDelivery.js';
@@ -332,6 +335,12 @@ function scheduleRunCleanup(runId: string, unref = false): void {
 /** 测试用:run 的属主登记(多账号模式)。 */
 export function __runOwnerForTests(runId: string): string | undefined { return runAccount.get(runId); }
 
+/** 多账号模式:这个账号在本进程里还有没有 run(在跑 / 排队 / 收尾后 30 秒保留期内)。账号库淘汰据此跳过手上有事的账号。 */
+export function accountHasRuns(accountId: string): boolean {
+  for (const owner of runAccount.values()) if (owner === accountId) return true;
+  return false;
+}
+
 function inRunAccount<T>(runId: string, fn: () => T): T {
   if (!isMultiAccount() || currentAccountId()) return fn();
   const owner = runAccount.get(runId);
@@ -446,16 +455,28 @@ function startRunInAccount(runId: string): void {
   const mcpReady = deps().mcp?.reloadConfig?.() ?? Promise.resolve();
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  const task = withTaskProjectQueue(runId, ac.signal, async () => {
+  // 多账号模式:先拿准入名额(每账号 / 整个引擎同时几个任务,services/runAdmission.ts),拿到才开跑,并从这一刻起计这一轮的时长上限。
+  // 名额在下面的 finally 里还 —— 那是这个任务唯一一定会跑到的出口。
+  const admitted = isMultiAccount()
+    ? admitRun(runId, requireAccountId('admitRun'), ac.signal, bindAccount((why: WaitingFor) => {
+        void publish(runId, 'status', { state: 'queued', waitingFor: why }).catch(() => {});
+      })).then(() => {
+        // 这一轮的时长从拿到名额起算,停下来等人回答的那几段不算(services/runAdmission.ts 的 waitingOnUser)
+        startRunClock(runId, minutesMs(multiAccountLimits().runMinutes), () => abortRun(runId, { reason: 'time_limit' }));
+      })
+    : Promise.resolve();
+  const task = admitted.then(() => withTaskProjectQueue(runId, ac.signal, async () => {
     await waitMcpAdmission(mcpReady, ac.signal);
     return dispatchRun(runId, ac);
-  }).catch(async (err) => {
+  })).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
-    const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
+    const aborted = !(err instanceof DockerCleanupError) && !(err instanceof RunAdmissionError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
     // 退出时(drainRunsForExit 记了原因)还在准备阶段 = 主循环还没开跑、什么都没做(连用户这句都还没落库):
     // 退回 queued,下次启动按「持有者已死的排队行」认领后照原输入起跑 —— 从没开跑的 run 重跑不会重复任何副作用。
-    if (aborted && interruptReasons.has(runId) && isRecoveryHost() && !userStopped.has(ac) && !abortReasons.has(runId)) {
+    // 多账号模式:退出时还在排准入的(没拿到名额 = 从没开跑)同样留在 queued,下次开户时收成中断并补回用户这句(recoverAccountRuns)。
+    const leftQueued = (interruptReasons.has(runId) && isRecoveryHost()) || (isMultiAccount() && exiting && !holdsAdmission(runId));
+    if (aborted && leftQueued && !userStopped.has(ac) && !abortReasons.has(runId)) {
       console.warn(`[agent-core] run preparation interrupted run=${runId} (${interruptReasons.get(runId)}): left queued for the next start`);
       try {
         await updateRunStatus(runId, 'queued').catch(() => {});
@@ -473,7 +494,13 @@ function startRunInAccount(runId: string): void {
     const message = aborted ? 'aborted' : err?.message || String(err);
     console.error(`[agent-core] run preparation ${status} run=${runId}:`, message);
     try {
-      await publish(runId, 'error', { error: message, aborted, content: '', ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
+      const code = err instanceof RunAdmissionError ? { code: err.code } : {};
+      // 没拿到名额就失败的(回忙 / 排满):这一轮还没开跑、用户这句还没落库 —— 补回来,历史里才看得到这句和它为什么没跑(幂等)
+      if (err instanceof RunAdmissionError) {
+        const row = await query<any[]>(`SELECT session_id, model_id, input FROM agent_runs WHERE id = ?`, [runId]).then((r) => r?.[0]).catch(() => null);
+        if (row) await ensureUserRow(row, runInput(row)).catch(() => {});
+      }
+      await publish(runId, 'error', { error: message, aborted, content: '', ...code, ...(aborted ? reasonOf(runId) : {}) }).catch(() => {});
       await drain(runId).catch(() => {});
       await updateRunStatus(runId, status, { error: message }).catch(() => {});
     } finally {
@@ -488,6 +515,8 @@ function startRunInAccount(runId: string): void {
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
+    releaseRun(runId); // 多账号模式的准入名额与时长计时(没拿过 = no-op)
+    disposeRunScratch(runId); // 多账号模式:这一轮插件脚本的临时目录(没有 = no-op)
     runTasks.delete(runId);
     releaseRunCompaction(runId);
     if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
@@ -1338,6 +1367,50 @@ export async function recoverQueuedRuns(): Promise<number> {
   } finally {
     // 意图只在写它的进程已经没了、它名下的行都处理完时才删:那个引擎还活着(别的桌面实例正停它)就留给它
     if (intent && !intentRowsLeft && !pidAlive(intent.pid)) clearShutdownIntent();
+  }
+  return n;
+}
+
+/**
+ * 多账号模式的启动恢复,按账号做:本进程第一次打开这个账号的库时(开户)调,在该账号的上下文里跑。那一刻本进程还没替这个账号
+ * 起过任何 run,库里还是 queued / running / 没处理过的 interrupted 的行都是上一个进程留下的。一律**不重放、不续跑**:
+ *  - running(跑到一半,进程没了)→ interrupted:crash;queued(从没开跑)→ interrupted:engine_restart;
+ *  - 两种都把这一轮用户的那句补回库里(它在 run 真正开跑时才落库),再补一条说明原因的中断行(认领 resumed_by = '-',只处理一次);
+ *  - 有取消请求的(用户按停 / 级联)按 aborted 收尾;上次就停下、还没处理过的 interrupted 只补说明行。
+ * 返回处理的行数。多账号模式没有 recoverQueuedRuns(它扫的是「那一个」库、会自动续跑)。
+ */
+export async function recoverAccountRuns(): Promise<number> {
+  requireAccountId('recoverAccountRuns');
+  let n = 0;
+  const rows = await query<any[]>(
+    `SELECT * FROM agent_runs WHERE status IN ('queued', 'running') OR (status = 'interrupted' AND resumed_by IS NULL) ORDER BY created_at ASC`,
+  );
+  for (const run of rows) {
+    try {
+      if (run.cancel_requested && run.status !== 'interrupted') { if (await settleCancelled(run, run.status)) n++; continue; }
+      let reason: InterruptReason;
+      if (run.status === 'running') {
+        if ((await markOrphanInterrupted(run.id, 'crash')) !== 'marked') continue;
+        reason = 'crash';
+      } else if (run.status === 'queued') {
+        const marked = await query<any[]>(
+          `UPDATE agent_runs SET status = 'interrupted', error = 'interrupted:engine_restart', interrupted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status = 'queued' RETURNING id`,
+          [run.id],
+        );
+        if (!marked.length) continue;
+        await publish(run.id, 'error', { error: 'interrupted', aborted: true, interrupted: 'engine_restart' }).catch(() => {});
+        await drain(run.id).catch(() => {});
+        scheduleRunCleanup(run.id);
+        reason = 'engine_restart';
+      } else {
+        reason = reasonFromError(run.error) ?? 'engine_stop';
+      }
+      await ensureUserRow(run, runInput(run));
+      if (await commitNotice({ ...run, status: 'interrupted' }, reason)) n++;
+    } catch (e: any) {
+      console.warn(`[agent-core] multi-account: recovering run ${run?.id} failed:`, e?.message || e);
+    }
   }
   return n;
 }
@@ -3513,7 +3586,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
         parked.set(call.id, entry);
-        void requestInquiry(runId, ask, parkAc.signal).then((raw) => {
+        void requestInquiry(runId, ask, parkAc.signal, { parked: true }).then((raw) => {
           const answer = normalizeInquiryAnswer(raw, parkAc.signal); // run 停了没答 → 英文系统说明,不冒充用户
           // 落库那半当场改:答了之后、兑现之前被停,答案也得留在历史里;停了没答的写成「没等到回答」,不留「还在等」的占位(Codex 10-23 P1)。
           // 模型上下文那半仍在迭代边界换(settleParkedCalls),不在模型调用途中动它。
@@ -3795,7 +3868,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 被移交的命令收尾了也算有东西可交(否则要等用户拍板才交得出去,Codex 11-21 P1-5);末轮不取(见 takeBgRows)
       const bgReady = (): boolean => !finalIter && handoffAllowed() && hasHandoffUpdates(sessionId);
       while (![...parked.values()].some(parkedReady) && !steerQueue.get(runId)?.length && !bgReady()) {
-        await new Promise<void>((resolve, reject) => {
+        // 多账号模式:这里才是托盘 run 真正停下来等人的地方 —— 名额先还、时长暂停,有东西可交了再拿回名额(services/runAdmission.ts)
+        await waitingOnUser(runId, new Promise<void>((resolve, reject) => {
           const offBg = onHandoffClosed((p) => { if (p.sessionId === sessionId) parkedWake?.(); });
           const settle = (): void => { parkedWake = null; offBg(); ac.signal.removeEventListener('abort', onAbort); };
           const onAbort = (): void => { settle(); reject(new AbortLikeError()); };
@@ -3803,7 +3877,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (ac.signal.aborted) return onAbort();
           ac.signal.addEventListener('abort', onAbort, { once: true });
           void waitSteer(runId).then(() => parkedWake?.());
-        });
+        }), ac.signal);
       }
     };
 

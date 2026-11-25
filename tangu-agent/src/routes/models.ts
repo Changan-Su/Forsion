@@ -22,6 +22,7 @@ import { CONTEXT_WINDOW_TOKENS } from '../services/contextBudget.js';
 import { MIN_OVERRIDE_TOKENS, setModelContextWindow } from '../services/modelOverrides.js';
 import { listModelCatalog } from '../services/modelCatalog.js';
 import { remoteRole } from '../services/remoteOrigin.js';
+import { isMultiAccount } from '../core/accountScope.js';
 
 const router = Router();
 
@@ -71,7 +72,8 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     res.json({
       models: cat.models,
       // 委托管理员(remoteRole)只给它选模型要的字段:直连 provider 的 baseUrl 是原样串(中转站偶尔把凭据写进 URL),去掉;别的来路原样。
-      directProviders: remoteRole(req.headers) === 'delegated-admin' ? withoutBaseUrl(cat.directProviders) : cat.directProviders,
+      // 多账号模式:直连 provider 是进程那一份(引擎的运营者配的),账号只拿选模型要的字段,baseUrl 一样去掉。
+      directProviders: isMultiAccount() || remoteRole(req.headers) === 'delegated-admin' ? withoutBaseUrl(cat.directProviders) : cat.directProviders,
       defaultModelId: cat.defaultModelId,
       backgroundModelId: cat.backgroundModelId,
       imageModelId: cat.imageModelId,
@@ -88,7 +90,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       ultraUncapped: true,
       // PUT /agent/models/overrides 在本进程能不能写(与它同一道 hostExec 门):桌面连外部 / 云端 worker 时为 false,
       // 模型菜单据此不露「上下文上限」—— 靠前端猜宿主(backendStatus)会在 external 模式下露出一个必然 404 的开关。
-      modelOverridesWritable: deps().profile.capabilities.hostExec,
+      modelOverridesWritable: deps().profile.capabilities.hostExec && !isMultiAccount(), // 多账号模式这个写接口不开
       forsion,
     });
   } catch (e: any) {

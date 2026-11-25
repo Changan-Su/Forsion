@@ -424,6 +424,20 @@ Plugins can also receive file events in your vault: files created, deleted, rena
 
 The local engine can run in "multi-account mode": several accounts on one machine share one engine process, and each account's chats, agents, memory, skills and files live in that account's own folder. In this mode the engine takes only two things from a plugin bundle, both read-only: the agent personas in `agents/` and the skills in `skills/`. It does not load the engine code in `tangu-plugins/`, and it does not start the plugin's own MCP servers or hooks. If a plugin should work in this mode, put its core abilities in personas and skills rather than in an engine plugin. The default single-user mode is unchanged and still loads everything.
 
+### Scripts in skills (2026-11-23+)
+
+Multi-account mode has no `run_bash`, so the agent cannot start arbitrary commands. When a skill needs to run code, such as transcribing audio, put the script in the skill folder, for example `skills/<skill>/scripts/transcribe.py`. The agent runs it with the `run_plugin_script` tool and passes three things: the skill name, the script's path inside the skill folder, and a list of arguments. Say in the skill's `SKILL.md` how to fill in all three. The rules:
+
+- **Only the original in the plugin bundle runs.** Copies of the skill in the account folder do not run, and neither do scripts the agent wrote. A file in the bundle that links outside the bundle does not run either. If the agent passes the absolute path of the account copy, the engine runs the bundle original instead.
+- **Supported types:** `.py` (python3), `.js` / `.mjs` / `.cjs` (the engine's own Node), and `.sh` (sh). There is no shell: arguments are passed as a list, exactly as given, with no quoting, globbing or variable expansion.
+- **Where files go:** the script starts in the turn's working directory, which is inside the account folder. Any argument that looks like a path (absolute, or containing `..`) must point inside the account folder. Values that start with `~` are refused; URLs are not checked. Keep input and output files in the account folder.
+- **Environment:** only `PATH` and the language and time zone variables are passed through. `HOME`, `TMPDIR` and `XDG_CACHE_HOME` point to a temporary folder for this run, whose path is also in `FORSION_SCRIPT_SCRATCH`, and that folder is deleted afterwards. Scripts get no sign-in details and no API keys, so do not rely on either. Python does not write `.pyc` files or read the user's site-packages: dependencies must be installed on the machine or shipped in the bundle.
+- **Limits:** only one script runs at a time on the whole engine, and the rest wait in a queue. By default a script may run for 5 minutes, use 2 GB of temporary space and print 1 MB to stdout. A script that goes over is stopped together with any processes it started. What the script writes into the account folder counts toward that account's disk limit.
+- **Afterwards:** symlinks the script left in the account folder are removed. Hard links shared with a file outside the account folder are broken: a name the script created is removed, and an existing file keeps a copy of its own. The model gets back the exit code, stdout and stderr. Any exit code other than 0 counts as a failure.
+- **Only the skill folder counts:** code elsewhere in the bundle, such as `tangu-plugins/`, never runs as a script, not even through a symlink. The tool is not available on Windows hosts.
+
+Single-user mode does not have this tool; the agent runs the same script with `run_bash` there. Write both ways into the skill: use `run_plugin_script` when it is available, otherwise `run_bash`.
+
 ## Folders, file times, renaming and moving in the vault (2026-11-16+)
 
 Plugins can create folders, read a file's size and times, and rename or move files in the vault, the same way you do it in the file tree: renaming or moving a note rewrites the `[[links]]` to it across the vault, editors that have it open follow, and its subnotes move with it. All of these need an open vault; older hosts don't have them, so check with optional chaining.
