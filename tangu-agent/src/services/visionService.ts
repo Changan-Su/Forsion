@@ -59,7 +59,10 @@ async function loadSlots(appId?: string): Promise<Slots> {
     }
   } catch { failed = true; /* 云端不可达 → 视作未标注(全默认有视觉),不因此拦下图片 */ }
   const fresh: Slots = { at: now, visionId, noVision };
-  if (key !== undefined && !(failed && isMultiAccount())) slotCache.set(key, fresh);
+  if (key !== undefined && !(failed && isMultiAccount())) {
+    if (slotCache.size >= 500) for (const [k, v] of slotCache) if (now - v.at > 60_000) slotCache.delete(k);
+    slotCache.set(key, fresh);
+  }
   return fresh;
 }
 

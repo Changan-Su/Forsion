@@ -67,6 +67,10 @@ function startServer(): Promise<void> {
       const url = new URL(req.url || '/', 'http://x');
       seen.push({ at: Date.now(), method: req.method || '', path: url.pathname, auth: String(req.headers.authorization || ''), body });
       const json = (status: number, v: unknown) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };
+      // a ticket the server no longer honours (revoked / rotated)
+      let claims: any = {};
+      try { claims = JSON.parse(Buffer.from(String(req.headers.authorization || '').split('.')[1] || '', 'base64url').toString('utf8')); } catch { /* not a ticket */ }
+      if (String(claims.jti || '').startsWith('revoked')) return json(401, { detail: 'Model ticket is no longer valid' });
       if (url.pathname === '/api/brain/models') {
         return json(200, { models: [{ id: MODEL, name: 'Cloud model', provider: 'forsion', modelType: 'llm' }], defaultModelId: MODEL, backgroundModelId: MODEL });
       }
@@ -249,6 +253,22 @@ describe('multi-account: model tickets', () => {
     await quiet();
     expect(seen.slice(from2)).toEqual([]);
   }, 90_000);
+
+  it('a ticket the server refuses is forgotten, so the next one the host sends is taken even if it expires sooner', async () => {
+    const valid = ticket('grace', 3600);
+    const refused = ticket('grace', 7200, { jti: 'revoked-1' });
+    await c.call('grace', 'GET', '/agent/sessions', { headers: withTicket(valid) });
+    await c.call('grace', 'GET', '/agent/sessions', { headers: withTicket(refused) }); // later exp: replaces the valid one
+    const r1 = await run('grace', 'Hi.');
+    expect(r1.follow.status).toBe('error');
+    expect(seen.at(-1)!.auth).toBe(`Bearer ${refused}`);
+    await quiet();
+    const from = seen.length;
+    const r2 = await run('grace', 'Hi again.', withTicket(valid));
+    expect(r2.follow.status, JSON.stringify(r2.follow.events.filter((e) => e.type === 'error'))).toBe('done');
+    await quiet();
+    expect(seen.slice(from).every((s) => s.auth === `Bearer ${valid}`)).toBe(true);
+  }, 60_000);
 
   it('a model call outside any account context, or in an account without a ticket, fails before anything is sent', async () => {
     const from = seen.length;

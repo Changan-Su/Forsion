@@ -8,6 +8,9 @@
  * recognition goes through the same credential). The engine does not verify the ticket — the server does — but it drops one
  * whose userId is not the account the host named.
  *
+ * The newest ticket (latest exp) wins; one the server refuses (401) is forgotten, so the next one the host sends is taken
+ * even if it expires sooner (another sign-in of the same person, or a re-issued ticket after a rotation).
+ *
  * Fails closed: no account in context, no ticket, or an expired ticket → LlmError 401 with a plain English message, and
  * nothing is sent. Never another account's ticket, never the process token (TANGU_TOKEN / --token / the engine .env).
  * Tickets live only in the map below: not in plugin script environments, not in log lines, not in run events.
@@ -53,8 +56,16 @@ export function acceptModelTicket(accountId: string, raw: unknown, now = Date.no
   if (claims.expMs <= now) return 'expired';
   const kept = tickets.get(accountId);
   if (kept && kept.expMs >= claims.expMs) return 'older';
+  if (!kept && tickets.size >= 1000) for (const [id, t] of tickets) if (t.expMs <= now) tickets.delete(id);
   tickets.set(accountId, { raw: raw as string, expMs: claims.expMs });
   return 'stored';
+}
+
+/** The server refused `raw`: forget it (only if it is still the one kept for the account). */
+export function forgetModelTicket(accountId: string, raw: string): boolean {
+  if (tickets.get(accountId)?.raw !== raw) return false;
+  tickets.delete(accountId);
+  return true;
 }
 
 /**
@@ -100,8 +111,26 @@ export function createModelTicketHttpBrain(cloudUrl: string): CloudBrainServices
   };
   const http = createHttpBrain({ cloudUrl, token: credential });
   const listForProject = http.models.listModelsForProject;
+  // A 401 from the server for the ticket this call used: forget it (see the header). Our own "no ticket" errors never get here
+  // with a ticket in hand.
+  const forgetOnRefusal = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+    const id = currentAccountId();
+    let used: string | undefined;
+    try { used = currentModelTicket(); } catch { /* the call itself reports it */ }
+    try { return await fn(...args); } catch (e) {
+      if (id && used && e instanceof LlmError && e.status === 401) forgetModelTicket(id, used);
+      throw e;
+    }
+  };
+  const fim = http.llm.fimCompletion;
   return {
     ...http,
+    llm: {
+      ...http.llm,
+      resolveModelAndKey: forgetOnRefusal(http.llm.resolveModelAndKey),
+      streamProviderCompletion: forgetOnRefusal(http.llm.streamProviderCompletion),
+      ...(fim ? { fimCompletion: forgetOnRefusal(fim) } : {}),
+    },
     models: {
       ...http.models,
       listGlobalModels: async (...args: any[]) => { credential(); return http.models.listGlobalModels(...args); },

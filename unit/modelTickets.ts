@@ -95,6 +95,10 @@ const RENEW_BEFORE_MS = 30 * 60_000
 const EXPIRY_MARGIN_MS = 60_000
 const RETRY_AFTER_MS = 30_000
 const LOG_EVERY_MS = 60_000
+/** How often a cached ticket is checked against the file: a rotation voids every ticket of the previous credential. */
+const RECHECK_MS = 30_000
+
+const credentialKey = (c: DeviceCredential): string => createHash('sha256').update(`${c.unitId}\0${c.unitSecret}\0${c.gen ?? 0}`).digest('hex')
 
 export function createModelTickets(options: ModelTicketsOptions): ModelTickets {
   const doFetch = options.fetch ?? fetch
@@ -104,18 +108,25 @@ export function createModelTickets(options: ModelTicketsOptions): ModelTickets {
   const log = options.log ?? ((message: string) => console.log(message))
   const url = new URL(MODEL_TICKET_PATH, options.origin)
   let credential: DeviceCredential | null = options.initial?.state === 'ok' ? options.initial.credential : null
+  // The last good credential's key. Changes only when a different valid credential is read (not when the file is missing):
+  // tickets minted with another key are never sent again.
+  let activeKey: string | null = credential ? credentialKey(credential) : null
   let unreadableReported = options.initial?.state === 'unreadable'
   let lastFailureLog = { reason: '', at: -Infinity }
   let failing = false
+  let checkedAt = now()
+  let checking: Promise<unknown> | null = null
 
-  type Entry = { ticket?: string; expMs: number; retryAt: number; job?: Promise<void> }
+  type Entry = { ticket?: string; credKey?: string; expMs: number; retryAt: number; job?: Promise<void> }
   const entries = new Map<string, Entry>()
 
   async function loadCredential(): Promise<DeviceCredential | null> {
+    checkedAt = now()
     const read = await readDeviceCredential(options.credentialFile)
     if (read.state === 'ok') {
       if (!credential || unreadableReported) log('[unit] Hosted unit device credential loaded')
       credential = read.credential
+      activeKey = credentialKey(read.credential)
       unreadableReported = false
     } else if (read.state === 'absent') {
       if (credential) log('[unit] Hosted unit device credential is missing; visitors get no new model tickets until it is back')
@@ -152,7 +163,7 @@ export function createModelTickets(options: ModelTicketsOptions): ModelTickets {
         if (response.status === 401) {
           // Rotated between our read and the server's check: the host has replaced the file by now. Once, and only with a changed one.
           const again = await loadCredential()
-          if (again && (again.unitId !== current.unitId || again.unitSecret !== current.unitSecret)) {
+          if (again && credentialKey(again) !== credentialKey(current)) {
             await response.body?.cancel().catch(() => {})
             current = again
             response = await ask(current, bearer)
@@ -164,6 +175,7 @@ export function createModelTickets(options: ModelTicketsOptions): ModelTickets {
       const expMs = ticketExpiry(body?.ticket, account, body?.expiresAt)
       if (expMs === null || expMs - now() <= EXPIRY_MARGIN_MS) { failed(entry, 'unusable ticket in reply'); return }
       entry.ticket = body.ticket
+      entry.credKey = credentialKey(current)
       entry.expMs = expMs
       entry.retryAt = 0
       if (failing) { failing = false; log('[unit] Model ticket requests succeed again') }
@@ -185,9 +197,14 @@ export function createModelTickets(options: ModelTicketsOptions): ModelTickets {
   return {
     async ticketFor(account, bearer, signal) {
       try {
+        if (now() - checkedAt >= RECHECK_MS) {
+          checking ??= loadCredential().finally(() => { checking = null })
+          await checking
+        }
         const key = createHash('sha256').update(`${account}\0${bearer}`).digest('hex')
         let entry = entries.get(key)
-        const usable = (): string | null => (entry?.ticket && entry.expMs - now() > EXPIRY_MARGIN_MS ? entry.ticket : null)
+        // Minted with the current credential and not about to expire. A ticket of a rotated credential is dead on the server.
+        const usable = (): string | null => (entry?.ticket && entry.credKey === activeKey && entry.expMs - now() > EXPIRY_MARGIN_MS ? entry.ticket : null)
         const current = usable()
         if (current && entry!.expMs - now() > RENEW_BEFORE_MS) return current
         if (!entry) {

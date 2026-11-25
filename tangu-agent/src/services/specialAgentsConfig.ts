@@ -384,7 +384,10 @@ async function backgroundCatalog(): Promise<BgSlots> {
     })(),
   ]);
   const fresh: BgSlots = { at: now, bg, def, enabled };
-  if (key !== undefined && !(failed && isMultiAccount())) bgSlotCache.set(key, fresh);
+  if (key !== undefined && !(failed && isMultiAccount())) {
+    if (bgSlotCache.size >= 500) for (const [k, v] of bgSlotCache) if (now - v.at > 60_000) bgSlotCache.delete(k);
+    bgSlotCache.set(key, fresh);
+  }
   return fresh;
 }
 

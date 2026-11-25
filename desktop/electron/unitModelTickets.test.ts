@@ -267,6 +267,35 @@ describe('model ticket client', () => {
     } finally { await rm(root, { recursive: true, force: true }) }
   })
 
+  it('a rotation voids cached tickets of the old credential within the recheck interval', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'unit-model-tickets-voids-'))
+    try {
+      const file = join(root, 'device.json')
+      const seen: string[] = []
+      let clock = Date.now()
+      const fake: typeof fetch = async (_url, init) => {
+        seen.push(String((init?.headers as Record<string, string>)['X-Unit-Secret']))
+        return new Response(JSON.stringify({ ticket: jwt({ scope: 'model-ticket', userId: ALICE, exp: Math.floor(clock / 1000) + 3600, n: seen.length }) }), { status: 200 })
+      }
+      await writeFile(file, JSON.stringify({ unitId: UNIT_ID, unitSecret: 'secret-gen-1', gen: 1 }))
+      const tickets = createModelTickets({ origin: accountOrigin, credentialFile: file, fetch: fake, now: () => clock, log: () => {},
+        initial: { state: 'ok', credential: { unitId: UNIT_ID, unitSecret: 'secret-gen-1', gen: 1 } } })
+      const first = await tickets.ticketFor(ALICE, 'tok-a')
+      expect(await tickets.ticketFor(ALICE, 'tok-a')).toBe(first)
+      await writeFile(file, JSON.stringify({ unitId: UNIT_ID, unitSecret: 'secret-gen-2', gen: 2 }))
+      clock += 31_000
+      const second = await tickets.ticketFor(ALICE, 'tok-a')
+      expect(second).toBeTruthy()
+      expect(second).not.toBe(first)
+      expect(seen).toEqual(['secret-gen-1', 'secret-gen-2'])
+      // the file missing for a while is not a rotation: the valid ticket keeps going
+      await rm(file)
+      clock += 31_000
+      expect(await tickets.ticketFor(ALICE, 'tok-a')).toBe(second)
+      expect(seen).toHaveLength(2)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+
   it('a 401 right after a rotation re-reads the file and tries once more; an unchanged file does not retry', async () => {
     const root = await mkdtemp(join(tmpdir(), 'unit-model-tickets-rotate-'))
     try {
