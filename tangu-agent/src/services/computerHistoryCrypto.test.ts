@@ -2,7 +2,7 @@
  * 电脑历史逐行加密的引擎侧:黄金向量(与 desktop/electron/computerHistoryCrypto.test.ts 钉同一个字面量)、
  * 桌面经 stdin 交钥匙的私有通道、读端「解不开 ≠ 没有」。
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
@@ -45,6 +45,20 @@ describe('格式镜像', () => {
 
 describe('stdin 私有通道(core/hostChannel)', () => {
   afterEach(() => resetComputerHistoryKeyForTests());
+
+  it('only delivers a shutdown request on the enabled host pipe', () => {
+    const input = new EventEmitter();
+    const stream = input as unknown as NodeJS.ReadableStream;
+    const shutdown = vi.fn();
+    expect(startHostChannel(stream, {}, shutdown)).toBe(false);
+    input.emit('data', '{"shutdown":true}\n');
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(startHostChannel(stream, { [HOST_STDIN_ENV]: '1' }, shutdown)).toBe(true);
+    input.emit('data', '{"shutdown":"true"}\n{"shutdown":true');
+    expect(shutdown).not.toHaveBeenCalled();
+    input.emit('data', '}\n');
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
 
   it('只在桌面拉起时启用;开关读完即从 env 删掉(子进程不继承);逐行收钥匙,形状不对的不顶掉原来那把', () => {
     const input = Object.assign(new EventEmitter(), { setEncoding: () => {}, unref: () => {} }) as unknown as NodeJS.ReadableStream;

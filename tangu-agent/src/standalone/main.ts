@@ -71,7 +71,9 @@ async function mainMultiAccount(): Promise<void> {
 
 async function main(): Promise<void> {
   if (isMultiAccount()) return mainMultiAccount();
-  startHostChannel(); // 桌面拉起时的私有 stdin 通道(电脑历史钥匙);先于一切,开关读完即从 env 删掉
+  let shutdownFromHost: (() => void) | undefined;
+  // 桌面私有 stdin 通道:先消费 env 开关,再加载配置和插件。
+  const hostShutdown = startHostChannel(undefined, undefined, () => shutdownFromHost?.());
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
   const cfg = parseConfig(process.argv.slice(2));
@@ -151,6 +153,7 @@ async function main(): Promise<void> {
   await fixLegacyAppIds(); // 修正 runs.ts 硬编码时期误标 'ai-studio' 的本地会话(仅 standalone 本地库)
   mod.startBackgroundTasks();
 
+  let stopping = false;
   const app = express();
   app.use(express.json({ limit: '25mb' }));
   // CORS:桌面 renderer(dev http://localhost:5173 / 打包 file://)跨源直连本服务。
@@ -162,12 +165,16 @@ async function main(): Promise<void> {
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
   });
+  app.use((_req, res, next) => {
+    if (stopping) { res.status(503).json({ detail: 'The engine is shutting down' }); return; }
+    next();
+  });
   // P1-K2:远程锁定的纵深防御 —— 锁定时远程来源的非只读请求(中止除外)一律 423,与 unitWeb 顶层闸同口径。
   app.use((req, res, next) => remoteLockGuard(req, res, next));
   const version = engineVersion();
   const startedAt = new Date().toISOString();
   app.get('/health', (_req, res) =>
-    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt }));
+    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt, hostShutdown }));
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // /agent/sessions、/agent/models、/agent/memory、/agent/skills、/agent/tools
 
@@ -195,19 +202,21 @@ async function main(): Promise<void> {
 
   attachRealtimeVoice(server); // ws /agent/realtime:实时语音通话中转(brain.realtime 未注入则拒连)
 
-  // 优雅退出(桌面 backendManager 先写 shutdown-intent.json、再发 SIGTERM,5s 后 SIGKILL):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
+  // 优雅退出(桌面先写 shutdown-intent.json,再请求关停):停起新 run 并中止在飞 run、停定时器、杀 MCP stdio 子进程;
   // 等被中止的 run 落完终态(部分回答 + interrupted(<原因>))再退,有界 3s,赶在 4s 硬退出之前。
   // 原因(中断任务续跑方案 B):意图文件写的是本进程 pid、且是刚写的 → 用它(app_quit / app_update / engine_restart / account_change);
   // 否则 engine_stop(没打招呼的停,不自动续)。只处理第一次:退出时常常先 SIGTERM、再 disconnect,第二次不改写原因。
-  let stopping = false;
   const shutdown = (): void => {
     if (stopping) return;
     stopping = true;
+    // Stop accepting new work without closing the active event streams that report the interruption.
+    server.close();
     const drained = drainRunsForExit(3000, shutdownReasonForSelf());
     try { mod.dispose(); } catch { /* ignore */ }
     void Promise.all([drained, mcp.dispose()]).finally(() => process.exit(0));
     setTimeout(() => process.exit(0), 4000).unref?.();
   };
+  shutdownFromHost = shutdown;
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   // A Unit crash must not leave an orphan engine listening with access to its workspace.

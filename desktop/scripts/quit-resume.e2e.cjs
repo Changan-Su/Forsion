@@ -42,10 +42,12 @@ const { enterSpace } = require('./lib/uiux-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const OFF = process.argv.includes('--auto-resume-off')
+const WINDOWS = process.platform === 'win32'
 const MODE = OFF ? 'off' : 'on'
 const SHOT_DIR = process.env.SHOT_DIR || path.join(os.tmpdir(), 'forsion-quit-resume')
 const SHOT = path.join(SHOT_DIR, OFF ? 'quit-resume-off-zh.png' : 'quit-resume-zh.png')
 const OUT = path.join(os.tmpdir(), `forsion-quit-resume-${MODE}-${new Date().toISOString().replace(/[:.]/g, '-')}`)
+const ENGINE_OBSERVER = path.join(__dirname, 'lib', 'quit-resume-windows.cjs')
 const PROVIDER = 'stubresume'
 const MODEL = 'resume-model'
 const PROBE = 'QUIT-RESUME-PROBE'
@@ -138,7 +140,9 @@ function launch() {
   }
   delete env.TANGU_BACKEND_URL
   delete env.TANGU_AUTO_RESUME // 只由桌面按设置注入
-  return electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env, timeout: 60_000 })
+  const observerArgs = WINDOWS ? ['-r', ENGINE_OBSERVER] : []
+  if (WINDOWS) env.FORSION_QUIT_RESUME_OBSERVATIONS = OUT
+  return electron.launch({ args: [...observerArgs, `--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env, timeout: 60_000 })
 }
 async function boot(app, firstTime) {
   const pid = app.process()?.pid
@@ -162,6 +166,10 @@ async function engineInfo(win) {
   const st = await win.evaluate(() => window.tangu.backendStatus())
   const pid = st.pid
   if (pid) ownPids.add(pid)
+  if (WINDOWS) {
+    const observation = JSON.parse(fs.readFileSync(path.join(OUT, `engine-${pid}.json`), 'utf8'))
+    return { pid, url: st.url, ...observation }
+  }
   const cmd = execFileSync('ps', ['-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
   const withEnv = execFileSync('ps', ['-E', '-ww', '-o', 'command=', '-p', String(pid)], { encoding: 'utf8' })
   const dataDir = (cmd.match(/--data-dir\s+(\S+)/) || [])[1] || ''
@@ -299,6 +307,10 @@ async function main() {
   const expectIntent = path.join(obs.engine1.envHome || path.dirname(obs.engine1.dataDir), 'shutdown-intent.json')
   obs.intentPath = expectIntent
   obs.intent = fs.existsSync(expectIntent) ? parse(fs.readFileSync(expectIntent, 'utf8')) : null
+  if (WINDOWS) {
+    const beforeShutdown = path.join(OUT, `before-shutdown-${enginePid1}.json`)
+    obs.beforeShutdown = fs.existsSync(beforeShutdown) ? parse(fs.readFileSync(beforeShutdown, 'utf8')) : null
+  }
   const intentFiles = []
   for (const d of [home, path.join(home, 'tangu')]) {
     try { for (const f of fs.readdirSync(d)) if (f.startsWith('shutdown-intent')) intentFiles.push(path.join(d, f)) } catch { /* 无 */ }
@@ -387,6 +399,10 @@ function evaluate(obs) {
   check('run 的 error=interrupted:app_quit(不是 crash / engine_stop / aborted)', obs.run1?.error === 'interrupted:app_quit', obs.run1?.error)
   check('回答行里存着退出前流出的半截正文', /PARTIAL-ALPHA/.test(obs.answer1?.content || ''), (obs.answer1?.content || '').slice(0, 80))
   check('意图文件在退出后还在、reason=app_quit、pid=那个引擎', obs.intent?.reason === 'app_quit' && obs.intent?.pid === obs.engine1?.pid, `${JSON.stringify(obs.intent)} vs pid ${obs.engine1?.pid}`)
+  if (WINDOWS) {
+    const request = obs.beforeShutdown
+    check('Windows:经私有 stdin 请求关停前已写好意图', request?.method === 'stdin' && request.intent?.reason === 'app_quit' && request.intent?.pid === obs.engine1?.pid, JSON.stringify(request))
+  }
   const dDir = obs.engine1?.dataDir ? real(path.dirname(obs.engine1.dataDir)) : ''
   const dHome = obs.engine1?.envHome ? real(obs.engine1.envHome) : ''
   const dIntent = obs.intentFiles?.length === 1 ? real(path.dirname(obs.intentFiles[0])) : `(${obs.intentFiles?.length || 0} 个意图文件)`
@@ -444,9 +460,11 @@ function evaluate(obs) {
   // 只收自己拉起的进程
   await sleep(1500)
   for (const pid of ownPids) if (alive(pid)) { console.log(`  · 收尾:进程 ${pid} 还在,SIGKILL`); try { process.kill(pid, 'SIGKILL') } catch { /* */ } }
-  let left = ''
-  try { left = execFileSync('pgrep', ['-fl', home], { encoding: 'utf8' }).trim() } catch { left = '' }
-  check('没有留下带隔离 home 的进程', !left, left, 'info')
+  if (!WINDOWS) {
+    let left = ''
+    try { left = execFileSync('pgrep', ['-fl', home], { encoding: 'utf8' }).trim() } catch { left = '' }
+    check('没有留下带隔离 home 的进程', !left, left, 'info')
+  }
   fs.rmSync(home, { recursive: true, force: true })
   fs.rmSync(`${home}-workspace`, { recursive: true, force: true })
   const bad = results.filter((r) => !r.pass && r.level !== 'info')

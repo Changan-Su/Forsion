@@ -8,9 +8,9 @@
  *     三者都走 env,不上进程列表。
  *   - /health 轮询就绪(300ms × 20s 超时)
  *   - stdout/stderr 环形缓冲 200 行(设置页可查看)
- *   - 意外退出指数退避自动重启(≤3 次),before-quit SIGTERM→5s→SIGKILL
+ *   - 意外退出指数退避自动重启(≤3 次),计划内关闭先给引擎 5s 落盘再强杀
  *   - 停引擎前先把「为什么停」原子写进 <TANGU_HOME>/shutdown-intent.json(中断任务续跑方案 B,contracts/shutdownIntent.ts):
- *     引擎收到 SIGTERM 时读它,把在途任务记成 interrupted(<原因>);意外退出不写(引擎下次启动推定 crash)。
+ *     引擎收到关停请求时读它,把在途任务记成 interrupted(<原因>);意外退出不写(引擎下次启动推定 crash)。
  * dev:包根 dist/ 缺失 → 报错引导先 `npm run build`(回落 external 模式)。
  * 打包:extraResources 的 resources/tangu-server/(dist + node_modules 同级,Node 解析自然命中)。
  *   打包版不直接跑 standalone 入口,而是经引擎自己的启动器 dist/boot/launch.js:它决定跑安装包自带的 dist,
@@ -40,8 +40,8 @@ export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 export type EngineStopReason = ShutdownIntentReason | 'engine_stop'
 
 /**
- * 把「为什么停」原子写进 `<dir>/shutdown-intent.json`(先写临时文件再 rename):引擎收到 SIGTERM 时同步读一次,
- * Windows 上信号等于强杀、引擎来不及读时,下次启动按 pid 对上它。必须在发信号**之前**同步落盘。
+ * 把「为什么停」原子写进 `<dir>/shutdown-intent.json`(先写临时文件再 rename):引擎收到关停请求时同步读一次,
+ * 来不及关停时下次启动按 pid 对上它。必须在请求关停**之前**同步落盘。
  * 写不进(磁盘满 / 只读)只记日志:没有意图 = 引擎按 engine_stop / crash 算,不当成计划内,不影响停引擎本身。
  */
 export function writeShutdownIntent(dir: string, reason: EngineStopReason, pid: number, now = Date.now()): boolean {
@@ -208,6 +208,7 @@ export class BackendManager {
   private overlayExits = 0
   /** 最近一次就绪时引擎在 /health 里报的版本号;没报 = null。 */
   private healthVersion: string | null = null
+  private healthHostShutdown = false
   /** 本机引擎令牌(TANGU_LOCAL_TOKEN):每个 App 进程(= 每次启动)一枚,引擎重启沿用 —— 渲染层缓存的
    *  cfg.token 跨 ensureBackend 重启照样有效。与 forsion_token 无关,auth.json 续期 / 换号都不动它。 */
   private readonly localEngineToken = randomBytes(32).toString('hex')
@@ -233,10 +234,13 @@ export class BackendManager {
 
   /** 主进程 → 引擎的私有通道(引擎侧 tangu-agent/src/core/hostChannel.ts):一行一条 JSON。写不进(引擎刚退)就算了,
    *  下次拉起会重发。 */
-  private sendHostMessage(child: ChildProcess, msg: Record<string, unknown>): void {
+  private sendHostMessage(child: ChildProcess, msg: Record<string, unknown>): boolean {
     const stdin = child.stdin
-    if (!stdin || stdin.destroyed || !stdin.writable) return
-    try { stdin.write(`${JSON.stringify(msg)}\n`) } catch { /* EPIPE:引擎已退 */ }
+    if (!stdin || stdin.destroyed || !stdin.writable) return false
+    try {
+      stdin.write(`${JSON.stringify(msg)}\n`)
+      return true
+    } catch { return false }
   }
 
   onStatus(cb: (st: BackendStatus) => void): () => void {
@@ -533,6 +537,7 @@ export class BackendManager {
       if (this.computerHistoryKeyHex) this.sendHostMessage(child, { computerHistoryKey: this.computerHistoryKeyHex })
       this.spawnedEntry = entry
       this.spawnedAt = Date.now()
+      this.healthHostShutdown = false
       this.child = child
       child.stdout?.on('data', (d) => this.pushLog(String(d)))
       child.stderr?.on('data', (d) => this.pushLog(String(d)))
@@ -571,8 +576,11 @@ export class BackendManager {
       try {
         const r = await fetch(`http://127.0.0.1:${this.port}/health`, { signal: AbortSignal.timeout(1000) })
         if (r.ok) {
-          const version = await r.json().then((b: { version?: unknown }) => b?.version, () => undefined)
+          const health = await r.json().then((b: { version?: unknown; hostShutdown?: unknown }) => b, () => undefined)
+          if (this.child !== child || gen !== this.gen) return false
+          const version = health?.version
           this.healthVersion = typeof version === 'string' && version ? version : null
+          this.healthHostShutdown = health?.hostShutdown === true
           return true
         }
       } catch { /* not yet */ }
@@ -618,7 +626,7 @@ export class BackendManager {
     }, wait)
   }
 
-  /** reason = 为什么停(退出 / 更新 / 引擎重启 / 换账号):手里有引擎进程时,发信号**之前**同步写好 shutdown-intent.json。
+  /** reason = 为什么停(退出 / 更新 / 引擎重启 / 换账号):手里有引擎进程时,关停**之前**同步写好 shutdown-intent.json。
    *  不带 = 不写(引擎按 engine_stop 记;清空数据这类之后不会再有续跑的场合)。 */
   async stop(reason?: EngineStopReason): Promise<void> {
     const gen = ++this.gen // 先作废在途的拉起链(可能正卡在 freePort / waitHealthy,手里还没有 child)
@@ -631,7 +639,11 @@ export class BackendManager {
       if (reason && child.pid && child.exitCode === null && child.signalCode === null) writeShutdownIntent(tanguDataDir(), reason, child.pid)
       this.stopping = true
       this.child = null
-      this.retiring = Promise.all([this.retiring, terminate(child)])
+      const useHostShutdown = process.platform === 'win32' && this.healthHostShutdown
+      this.retiring = Promise.all([this.retiring, terminate(child, () => {
+        // Windows maps SIGTERM to TerminateProcess. Ask a compatible engine to drain over its private stdin pipe.
+        if (!useHostShutdown || !this.sendHostMessage(child, { shutdown: true })) child.kill('SIGTERM')
+      })])
     }
     // 屏障:哪怕这次手里没有 child,前一个 stop() 摘下的那个也要等它退干净 —— 装更新 / 删库 / 退出 App
     // 都在 stop() 之后动手,提前放行 = 对着还活着的引擎做这些事。
@@ -656,10 +668,11 @@ export class BackendManager {
   }
 }
 
-/** SIGTERM → 5s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行,别让屏障卡住之后所有 stop/start。
- *  5s:引擎收到 SIGTERM 后有 3s 让在途任务停在安全处并记成 interrupted、4s 硬退出(中断任务续跑方案 B 6.6),这里要比它长。 */
+/** 计划内关停 → 5s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行。
+ *  5s:引擎收到关停请求后有 3s 让在途任务停在安全处并记成 interrupted、4s 硬退出(中断任务续跑方案 B 6.6)。 */
 export const TERMINATE_GRACE_MS = 5000
-function terminate(child: ChildProcess): Promise<void> {
+function terminate(child: ChildProcess, requestShutdown: () => void): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
   return new Promise<void>((resolve) => {
     const killTimer = setTimeout(() => {
       try { child.kill('SIGKILL') } catch { /* ignore */ }
@@ -669,10 +682,7 @@ function terminate(child: ChildProcess): Promise<void> {
       clearTimeout(killTimer)
       resolve()
     })
-    try { child.kill('SIGTERM') } catch {
-      clearTimeout(killTimer)
-      resolve()
-    }
+    try { requestShutdown() } catch { /* Still use the bounded hard-kill fallback. */ }
   })
 }
 
