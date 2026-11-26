@@ -22,6 +22,8 @@ export interface ToolContext {
   appId: string;
   /** Host-issued scope for this user turn. An incoming steer invalidates the previous scope. */
   userTurnId?: string;
+  /** Revoked immediately on incoming user input, including during a running tool call. */
+  userTurnSignal?: AbortSignal;
   /** Set on this call only after its mandatory interactive approval in the same turn. */
   userConfirmedCall?: boolean;
   runId?: string;

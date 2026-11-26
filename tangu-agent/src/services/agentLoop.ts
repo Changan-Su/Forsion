@@ -175,7 +175,16 @@ const VERIFY_MAX_ROUNDS = 2;
 interface SteerMsg { receivedTurn?: string; id: string; content: string; attachments?: any[]; newTopic?: boolean; viaRemote?: boolean; machine?: boolean }
 const steerQueue = new Map<string, SteerMsg[]>();
 // Remains current while a drained batch waits for pending approvals to settle.
-const receivedUserTurn = new WeakMap<AbortController, string>();
+interface UserTurnScope { id: string; lifetime: AbortController; pending: Set<string> }
+const userTurnScopes = new WeakMap<AbortController, UserTurnScope>();
+function userTurnScope(ac: AbortController): UserTurnScope {
+  let scope = userTurnScopes.get(ac);
+  if (!scope) {
+    scope = { id: uuidv4(), lifetime: new AbortController(), pending: new Set() };
+    userTurnScopes.set(ac, scope);
+  }
+  return scope;
+}
 // Only the read-only model request is interruptible for steering. Tool execution and
 // the parent run keep their lifetime; completed work remains in workingMessages.
 const immediateSteers = new Set<string>();
@@ -235,9 +244,12 @@ export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
   const ac = abortControllers.get(runId);
   if (!ac || ac.signal.aborted || steerClosed.has(runId)) return false;
   if (!msg.machine) {
-    const turn = uuidv4();
-    receivedUserTurn.set(ac, turn);
-    msg = { ...msg, receivedTurn: turn };
+    const scope = userTurnScope(ac);
+    scope.lifetime.abort();
+    scope.lifetime = new AbortController();
+    scope.id = uuidv4();
+    scope.pending.add(scope.id);
+    msg = { ...msg, receivedTurn: scope.id };
   }
   const q = steerQueue.get(runId);
   if (q) q.push(msg);
@@ -264,7 +276,9 @@ export function cancelSteer(runId: string, msgId: string): boolean {
   if (!q) return false;
   const i = q.findIndex((m) => m.id === msgId);
   if (i < 0) return false;
-  q.splice(i, 1);
+  const [removed] = q.splice(i, 1);
+  const ac = abortControllers.get(runId);
+  if (ac && removed.receivedTurn) userTurnScope(ac).pending.delete(removed.receivedTurn);
   if (!q.length) steerQueue.delete(runId);
   return true;
 }
@@ -3274,12 +3288,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 运行时转向的「回合切分」:把当前累积的助手段 A 落库 → 持久化注入的用户消息 U(们) → 清空累加器、
     // 铸新 assistantId(段 B)→ 发 turn_boundary 让前端关闭 A、插入 U 气泡、开 B 流。在迭代边界调用,
     // 即「一个 loop 结束即注入」。A 无正文且无工具调用(刚开跑就转向)则不落库,空段交前端丢弃。
-    const initialUserTurn = uuidv4();
-    let userTurnId = initialUserTurn;
-    const activeUserTurn = () => (receivedUserTurn.get(ac) ?? initialUserTurn) === userTurnId ? userTurnId : undefined;
+    const scope = userTurnScope(ac);
+    const activeUserTurn = () => scope.pending.size ? undefined : scope.id;
     const applySteering = async (msgs: SteerMsg[]): Promise<void> => {
       const firstUser = msgs.findIndex(m => !m.machine);
-      for (const message of msgs) if (message.receivedTurn) userTurnId = message.receivedTurn;
+      for (const message of msgs) if (message.receivedTurn) scope.pending.delete(message.receivedTurn);
       actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
       if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled, computedUiEnabled)?.kind === 'explicit'); }
       toolFailureGuard.reset(); repeatedToolFailure = false;
@@ -3668,8 +3681,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // writeProtect:闸门按 known-safe 放行的 git 读命令(没人看过卡)→ 这一次在写拒绝 profile 里跑(G5 方案 B,macOS、宿主沙箱关)。
     const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }, approvedTurn?: string): Promise<ExecutedToolCall> => {
       (ptc?.signal ?? ac.signal).throwIfAborted();
-      const turn = activeUserTurn();
-      const executionContext = { ...toolCtx, userTurnId: turn, userConfirmedCall: !!turn && turn === approvedTurn, ...(execCall.function.name === 'web_search' ? { modelId: searchModelId } : {}), toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
       // 意图先落盘(E2):执行前把「已开始」写进这一行 —— 崩在执行中,下次回放说「结局不明,先核对」,而不是「没跑过」。
       // 只读程序里嵌套的调用(ptc)不在 allToolCalls 里,不记。
       if (!ptc) {
@@ -3678,6 +3689,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 「已开始」没落上库(评审 #4):有副作用的不执行,如实告诉模型没跑 —— 崩了也不会被说成「没开始」而其实已经生效
         if (!started) return mkRejected(call, startedAt, parallelGroup, CALL_NOT_STARTED_RESULT);
       }
+      const turn = activeUserTurn();
+      const executionContext = { ...toolCtx, userTurnId: turn, userTurnSignal: turn ? scope.lifetime.signal : undefined, userConfirmedCall: !!turn && turn === approvedTurn, ...(execCall.function.name === 'web_search' ? { modelId: searchModelId } : {}), toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
       const result = await executeTool(execCall, executionContext);
       // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
       // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。

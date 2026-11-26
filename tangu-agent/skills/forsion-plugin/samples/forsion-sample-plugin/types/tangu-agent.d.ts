@@ -48,6 +48,8 @@ export interface ToolContext {
   /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
   /** Host-issued scope for this user turn. An incoming steer invalidates the previous scope. */
   userTurnId?: string;
+  /** Revoked immediately on incoming user input, including during a running tool call. */
+  userTurnSignal?: AbortSignal;
   /** Set on this call only after its mandatory interactive approval in the same turn. */
   userConfirmedCall?: boolean;
   runId?: string;

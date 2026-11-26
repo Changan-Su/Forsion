@@ -24,7 +24,7 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval, type ApprovalDecision } from '../src/services/approvals.js';
-import { enqueueRun, abortRun, enqueueSteer, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, cancelSteer, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
 import { markRecoveryHost, CALL_NOT_STARTED_RESULT } from '../src/services/runProgress.js';
 
 // ⑧⑨ 用:路径带 prectx → PreToolUse 注入上下文;参数带 boom → 执行抛错。其余一律透传原实现(①–⑦ 不受影响)。
@@ -169,6 +169,35 @@ const until = async (cond: () => boolean, what: string): Promise<void> => {
 };
 
 describe('挂起审批(托盘 run)', () => {
+  it('withdrawn steering revokes an in-flight grant and permits a fresh approval', async () => {
+    const receipts: { id?: string; confirmed?: boolean; signal?: AbortSignal }[] = [];
+    const name = 'test_withdrawn_turn';
+    registerToolProvider({ id: name, tools: () => [{
+      name, mode: 'host', capabilities: { approval: 'always' },
+      definition: { type: 'function', function: { name, description: 'Check revocation', parameters: { type: 'object', properties: {} } } },
+      execute: async (_args, ctx) => {
+        receipts.push({id: ctx.userTurnId, confirmed: ctx.userConfirmedCall, signal: ctx.userTurnSignal});
+        if (receipts.length === 1) {
+          enqueueSteer(ctx.runId!, { id: 'withdraw', content: 'another task' });
+          cancelSteer(ctx.runId!, 'withdraw');
+        }
+        return 'checked';
+      },
+    }] });
+    try {
+      const call = (id: string) => () => ({ content: '', reasoning: '', finishReason: 'stop', usage,
+        toolCalls: [{ id, type: 'function', function: { name, arguments: '{}' } }] });
+      script = [call('first'), call('second'), finalStep('done')];
+      const r = await start(false);
+      for (let i = 0; i < 2; i++) expect(decide(await r.nextApproval(), {action:'approve'})).toBe(true);
+      expect((await r.settled()).status).toBe('done');
+      expect(receipts.map(r => r.confirmed)).toEqual([true, true]);
+      expect(receipts[0].signal?.aborted).toBe(true);
+      expect(receipts[1].id).toBeTruthy();
+      expect(receipts[1].id).not.toBe(receipts[0].id);
+    } finally { unregisterToolProvider(name); }
+  }, 20_000);
+
   it.each([false, true])('binds a confirmed call to its original user turn (incoming steer: %s)', async (steer) => {
     const seen: Array<{ turn?: string; confirmed?: boolean }> = [];
     const name = 'test_confirm_turn';
