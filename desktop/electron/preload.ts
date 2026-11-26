@@ -269,6 +269,14 @@ const api = {
   restartForUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:restart'),
   downloadUpdate: (opts?: { auto?: boolean; version?: string }): Promise<void> => ipcRenderer.invoke('updater:download', opts),
   installUpdate: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:install'),
+  /**
+   * Unattended, version-bound install (feature-detect: `typeof window.tangu.installUpdateIfIdle === 'function'`). Installs the
+   * downloaded package only if it is exactly `version`, the OS has been idle for `requireOsIdleSeconds`, and nothing is busy
+   * (engine tasks / processes, quit guards, voice call). Never shows the restart dialog. On success the app quits to install
+   * (the promise may never settle); otherwise `{ ok: false, reason }`, see restartGuard.IdleInstallReason.
+   */
+  installUpdateIfIdle: (args: { version: string; requireOsIdleSeconds: number }): Promise<{ ok: true } | { ok: false; reason: string }> =>
+    ipcRenderer.invoke('updater:installIfIdle', args),
   /** 测试版通道:开了才会收到 x.y.z-beta.N;关着连看都看不到(feed/端点两层都隔离)。 */
   getUpdateBeta: (): Promise<boolean> => ipcRenderer.invoke('updater:getBeta'),
   setUpdateBeta: (on: boolean): Promise<{ ok: boolean }> => ipcRenderer.invoke('updater:setBeta', on),

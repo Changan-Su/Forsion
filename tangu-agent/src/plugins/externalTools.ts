@@ -19,11 +19,16 @@ export async function callPluginExternalTool(userId:string,name:string,args:Reco
   const tool=pluginExternalTools(userId).find(t=>t.name===name);if(!tool)throw new Error('Plugin has not exposed this tool');
   const call={id:randomUUID(),type:'function' as const,function:{name,arguments:JSON.stringify(args)}};
   if(tool.capabilities?.sideEffect==='none')return executeTool(call,context(userId));
+  // An unattended update is stopping this engine: refuse before a run row exists (a refused row would be replayed as an agent run).
+  const { restartHoldActive } = await import('../services/agentLoop.js');
+  if(restartHoldActive())throw new Error('The engine is restarting; try again shortly');
   const sessionId=randomUUID(),runId=randomUUID(),assistantMessageId=randomUUID();
   await query(`INSERT INTO chat_sessions (id,user_id,app_id,title,kind,agent_config) VALUES (?,?,?,?,?,?)`,[sessionId,userId,deps().profile.appId,`Desktop MCP · ${name}`,'task',JSON.stringify({approvalMode:'ask'})]);
   await createRun({id:runId,sessionId,userId,appId:deps().profile.appId,modelId:'',assistantMessageId,input:{origin:'client',approvalTray:true,message:`Desktop MCP: ${name}`,agentConfig:{approvalMode:'ask'}}});
   const { runControlledOperation } = await import('../services/agentLoop.js');
-  return runControlledOperation(runId,sessionId,signal,async runSignal=>{
+  let entered=false;
+  try { return await runControlledOperation(runId,sessionId,signal,async runSignal=>{
+    entered=true;
     enterRunContext(userId,runId);setApprovalTray(runId,true);
     try {
       runSignal.throwIfAborted();await updateRunStatus(runId,'running');
@@ -44,5 +49,9 @@ export async function callPluginExternalTool(userId:string,name:string,args:Reco
       await updateRunStatus(runId,result.isError?'failed':'done',{result:{content:String(result.result)}});return result;
     }catch(e:any){await updateRunStatus(runId,runSignal.aborted?'aborted':'failed',{error:e.message});throw e;}
     finally{setApprovalTray(runId,false);}
-  });
+  }); } catch(e) {
+    // Refused before the operation ran (engine exiting / restart hold): close the row so no later start replays it as an agent run.
+    if(!entered){try{await updateRunStatus(runId,'failed',{error:'Engine is restarting'});}catch{/* the row stays; next start marks it */}}
+    throw e;
+  }
 }

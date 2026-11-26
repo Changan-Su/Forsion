@@ -41,6 +41,10 @@ it('quit waits for pending pushes up to the cap, only once per quit, and never b
   void stuck.then(() => { released = true })
   await vi.advanceTimersByTimeAsync(4999); expect(released).toBe(false)
   await vi.advanceTimersByTimeAsync(1); expect(released).toBe(true) // 推不完也到点放行
+  expect(await stuck).toBe('timeout') // the unattended install refuses on this
+  f.reset()
+  const ok = f.quit(5000)!
+  finish(); expect(await ok).toBe('done')
 })
 
 it('nothing held means the hook returns nothing and quit does not wait', () => {

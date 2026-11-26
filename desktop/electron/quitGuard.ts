@@ -63,6 +63,19 @@ export function createQuitGuards(deps: { locale(): MainLocale; ask(b: QuitBlock)
       quitAfter = false
       return ask(b)
     },
+    /**
+     * Non-interactive: is anything unfinished? Never opens a dialog. Unknown counts as busy (the opposite of the quit path,
+     * where a broken plugin must not block quitting): a guard that throws, a non-null answer of any shape, a dialog still open.
+     */
+    peek(): boolean {
+      if (asking) return true
+      for (const g of guards) {
+        try { if (g(deps.locale()) !== null) return true } catch { return true } // undefined = not a clear "nothing" → busy
+      }
+      return false
+    },
+    /** The unattended install checked peek() at its point of no return: the before-quit that follows must not ask again. */
+    pass(): void { confirmed = true },
     /** 重启失败、退出没成:下次退出照常再问。 */
     reset(): void { confirmed = false },
   }

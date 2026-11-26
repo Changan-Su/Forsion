@@ -2,6 +2,9 @@
  * 远程活动 + 急停 + 解锁(设备能力 MCP 方案 P1 · K2 §3.5,方案 §6.5)。**本机专用**:桌面主进程带本机引擎令牌调。
  *   GET  /agent/remote/activity           ActivitySnapshot(在飞 run 分类 + 待批计数 + 非本机后台进程 + 锁状态)
  *   GET  /agent/remote/restart-status     本机退出清单(本进程的运行/排队任务 + 子任务 + 后台进程 + 其中会自动续跑的数)
+ *   POST /agent/remote/restart-hold {ttlMs, holdId?}  idle check + hold in one step: no own task / delegate / process → hold (no run
+ *                                                      starts until released or ttl lapses) → {ok:true, holdId}; busy → 409
+ *   POST /agent/remote/restart-hold/release {holdId}   release that hold (held runs start); unknown id → {ok:false}
  *   GET  /agent/remote/activity/events    SSE:连上立即一帧全量 snapshot,之后每次变更(去抖 200ms)再发全量;15s 一次 `: hb`
  *   POST /agent/remote/estop {source}     急停:上闩 → 中止全部非本机 run(reason:'remote_estop')→ 杀其后台进程 → 撤回远端批准的 Muse 条目
  *   POST /agent/remote/unlock             清闩:只在主进程已写好解锁(锁文件可读且 lock===null)时成立,否则 409
@@ -13,7 +16,7 @@ import { Router } from 'express';
 import { authMiddleware } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { abortRun, abortUnregisteredNonLocalRuns, ownRunIds, waitForRunSettlement, wouldAutoResume } from '../services/agentLoop.js';
+import { abortRun, abortUnregisteredNonLocalRuns, acquireRestartHold, ownRunIds, releaseRestartHold, RESTART_HOLD_MAX_MS, waitForRunSettlement, wouldAutoResume } from '../services/agentLoop.js';
 import { activitySnapshot, notifyActivity, onActivityChange, type RunCategory } from '../services/remoteActivity.js';
 import { clearRemoteLatch, latchRemoteLock, remoteLatchId, remoteLocked, remoteLockState } from '../services/remoteLock.js';
 import { killProcessesWhere, runningProcessCount } from '../tools/processRegistry.js';
@@ -66,6 +69,26 @@ router.get('/agent/remote/restart-status', authMiddleware, async (req, res) => {
   } catch {
     res.status(503).json({ detail: 'Task status unavailable' });
   }
+});
+
+// Unattended update (desktop installIfIdle): the host's last engine check before it stops this engine. The count and the hold
+// happen in one synchronous step (no await in between), so no run can start between "idle" and "held".
+router.post('/agent/remote/restart-hold', authMiddleware, (req, res) => {
+  if (!localOnly(req, res)) return;
+  const raw = Number(req.body?.ttlMs);
+  const ttlMs = Number.isFinite(raw) && raw > 0 ? Math.min(raw, RESTART_HOLD_MAX_MS) : 15_000;
+  const tasks = ownRunIds().length + activeDelegateCount();
+  const processes = runningProcessCount();
+  if (tasks || processes) { res.status(409).json({ ok: false, reason: 'busy', tasks, processes }); return; }
+  const holdId = acquireRestartHold(ttlMs, typeof req.body?.holdId === 'string' ? req.body.holdId : undefined);
+  if (!holdId) { res.status(409).json({ ok: false, reason: 'held' }); return; }
+  res.json({ ok: true, holdId, ttlMs });
+});
+
+router.post('/agent/remote/restart-hold/release', authMiddleware, (req, res) => {
+  if (!localOnly(req, res)) return;
+  const holdId = typeof req.body?.holdId === 'string' ? req.body.holdId : '';
+  res.json({ ok: !!holdId && releaseRestartHold(holdId) });
 });
 
 router.get('/agent/remote/activity/events', authMiddleware, (req, res) => {
