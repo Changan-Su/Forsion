@@ -20,7 +20,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, re
 import net from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig', 'cuscroll', 'cusearch'];
 /** 引擎起来时 TANGU_JEV_EVIDENCE_DIR 指 <OUT>/这里;每个场景跑完把自己那段时间的请求挪进自己的 evidence 目录。 */
@@ -84,12 +84,20 @@ export function cuJevSetup({ bundle, shared, replaceInstalledHelper = false }) {
  * 只写进隔离 home(归档工具不收它)。必须在台架整份写 config.json 之后调用 —— 这里是合并写。
  * threshold 不给 = 用插件缺省(这次要量的就是缺省值)。
  */
-export function cuJevConfig({ shared, mode = 'auto', threshold = '' }) {
+export async function cuJevConfig({ shared, mode = 'auto', threshold = '' }) {
   const src = process.env.JEV_SETTINGS_FILE || join(homedir(), '.forsion-dev', 'config.json');
   const mine = JSON.parse(readFileSync(src, 'utf8')).plugins?.global?.['computer-use'] || {};
   if (!mine.jev_api_key) throw new Error(`${src} 的 Computer Use 设置里没有 Jev 密钥(设置 → 电脑操作 → Jev API 密钥)`);
   const file = join(shared, 'config.json');
   const cfg = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  if (process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only') {
+    // This case explicitly invites foreground input. Only allow calls grounded in the isolated player's root.
+    const { syncUserTrust, normalizeHooksConfig } = await import('../../dist/hooks/config.js');
+    const guard = new URL('./cu-melody-scope.mjs', import.meta.url);
+    const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+    const command = [process.execPath, fileURLToPath(guard)].map(quote).join(' ');
+    cfg.hooks = syncUserTrust(normalizeHooksConfig({events: {PreToolUse: [{hooks: [{type: 'command', command}]}]}}));
+  }
   cfg.plugins ??= {}; cfg.plugins.global ??= {};
   cfg.plugins.global['computer-use'] = {
     __enabled: true, ...(process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only' ? {headless: false} : {}), jev_enabled: true, jev_api_url: mine.jev_api_url || 'https://api.typesafe.ai/v1/systemone', jev_api_key: mine.jev_api_key, jev_mode: mode,
