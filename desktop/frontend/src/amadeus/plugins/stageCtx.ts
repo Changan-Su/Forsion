@@ -68,7 +68,10 @@ export function createStageApi(o: { pluginId: string; alive(): boolean; own(off:
         record: async (opts) => {
           await run('recordStart', { ...(opts ?? {}) })
           let stopped: Promise<PluginStageVideo> | null = null
+          const gone = (): Promise<void> => Promise.reject(stageError('closed', 'this recording has already stopped'))
           return {
+            pause: () => (stopped ? gone() : run('recordPause').then(() => undefined)),
+            resume: () => (stopped ? gone() : run('recordResume').then(() => undefined)),
             stop: () => (stopped ??= run('recordStop').then((x) => ({
               bytes: asBytes(x.bytes), mime: typeof x.mime === 'string' ? x.mime : 'video/mp4',
               width: Number(x.width) || 0, height: Number(x.height) || 0, durationMs: Number(x.durationMs) || 0,

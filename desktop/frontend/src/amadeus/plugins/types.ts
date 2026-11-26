@@ -3257,8 +3257,10 @@ export interface PluginStageHandle {
   /** 全分辨率 PNG(像素 = CSS 尺寸 × 密度)。rect 是 CSS 像素;selector 截那个元素所在的矩形。 */
   capture(opts?: { rect?: { x: number; y: number; width: number; height: number }; selector?: string }): Promise<PluginStageImage>
   /** 录本窗口(不录屏幕、不要系统录屏权限)。cursor 缺省开:点击前画一个指针挪过去;maxMs 缺省 / 上限 120 秒,到点自己停。
-   *  宽度上限 3840 像素。format 缺省 mp4(H.264),可选 webm。 */
-  record(opts?: { fps?: number; cursor?: boolean; maxMs?: number; format?: 'mp4' | 'webm' }): Promise<{ stop(): Promise<PluginStageVideo> }>
+   *  宽度上限 3840 像素。format 缺省 mp4(H.264),可选 webm。
+   *  pause / resume(2026-11-26+,旧宿主没有,先判断再用):把等待、准备动作剪出成片;暂停的时间不算进 durationMs,也不算进 maxMs。
+   *  已经暂停再 pause、没暂停就 resume、stop 之后再调,都 reject(stop 之后是 `closed`)。 */
+  record(opts?: { fps?: number; cursor?: boolean; maxMs?: number; format?: 'mp4' | 'webm' }): Promise<{ stop(): Promise<PluginStageVideo>; pause?(): Promise<void>; resume?(): Promise<void> }>
   close(): Promise<void>
 }
 

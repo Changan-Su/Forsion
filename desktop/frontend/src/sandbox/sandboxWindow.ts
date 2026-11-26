@@ -133,7 +133,8 @@ async function cursorTo(x: number, y: number): Promise<void> {
   setTimeout(() => ring.remove(), 500)
 }
 
-let recording: { rec: MediaRecorder; chunks: Blob[]; started: number; ext: 'mp4' | 'webm'; mime: string; width: number; height: number; stopped: Promise<void>; timer: ReturnType<typeof setTimeout>; tick: () => void } | null = null
+/** pausedMs / pausedAt:暂停的时长不算进 durationMs,也不算进 maxMs(到点自停只数录下来的时间)。 */
+let recording: { rec: MediaRecorder; chunks: Blob[]; started: number; ext: 'mp4' | 'webm'; mime: string; width: number; height: number; stopped: Promise<void>; timer: ReturnType<typeof setTimeout>; tick: () => void; maxMs: number; pausedMs: number; pausedAt: number | null } | null = null
 
 /** 页签录制只在画面有变化时出帧:窗口静着的那几秒没有帧,录出来的视频比实际短、结尾停住的画面被截掉(11-20 台架实测 2.6 秒录成 1.8 秒)。
  *  录着的时候在右下角放一块 2px、透明度只有 1/255 上下的小块,每帧换一下,让窗口一直出帧(肉眼看不见,截图里也看不出)。 */
@@ -175,19 +176,43 @@ async function recordStart(o: { fps: number; maxMs: number; cursor: boolean; for
     width: Number(st.width) || W, height: Number(st.height) || H, stopped,
     // 到点自己停:recordStop 照样拿得到这一段
     timer: setTimeout(() => { if (rec.state !== 'inactive') rec.stop() }, o.maxMs),
-    tick,
+    tick, maxMs: o.maxMs, pausedMs: 0, pausedAt: null,
   }
   return { mime: recording.mime }
+}
+/** 暂停 / 继续(11-26):插件把等待、准备动作剪出成片。暂停期间 MediaRecorder 不收帧,补帧小块照跑也不进视频。 */
+function recordPause(): { ok: true } | { error: string } {
+  const r = recording
+  if (!r || r.rec.state === 'inactive') return { error: 'not recording' }
+  if (r.rec.state === 'paused') return { error: 'the recording is already paused' }
+  r.rec.pause()
+  r.pausedAt = performance.now()
+  clearTimeout(r.timer)
+  return { ok: true }
+}
+function recordResume(): { ok: true } | { error: string } {
+  const r = recording
+  if (!r || r.rec.state === 'inactive') return { error: 'not recording' }
+  if (r.rec.state !== 'paused' || r.pausedAt === null) return { error: 'the recording is not paused' }
+  const now = performance.now()
+  r.pausedMs += now - r.pausedAt
+  r.pausedAt = null
+  r.rec.resume()
+  const left = Math.max(0, r.maxMs - (now - r.started - r.pausedMs))
+  r.timer = setTimeout(() => { if (r.rec.state !== 'inactive') r.rec.stop() }, left)
+  return { ok: true }
 }
 async function recordStop(): Promise<Record<string, unknown>> {
   const r = recording
   if (!r) return { error: 'not recording' }
   recording = null
   clearTimeout(r.timer)
+  const end = performance.now()
+  if (r.pausedAt !== null) r.pausedMs += end - r.pausedAt
   if (r.rec.state !== 'inactive') r.rec.stop()
   await r.stopped
   r.tick()
-  const durationMs = Math.round(performance.now() - r.started)
+  const durationMs = Math.round(end - r.started - r.pausedMs)
   document.getElementById(CURSOR_ID)?.remove()
   cursorAt = null
   const bytes = await new Blob(r.chunks, { type: r.mime }).arrayBuffer()
@@ -595,6 +620,8 @@ export function installSandboxHook(): void {
     cursorTo,
     recordStart,
     recordStop,
+    recordPause,
+    recordResume,
     reload: async () => {
       if (self.stage) return // 舞台没有开发副本可重载
       const before = usePluginStore.getState().views.some((v) => v.pluginId === pid)

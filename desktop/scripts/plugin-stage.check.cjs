@@ -11,6 +11,8 @@
  *     被拍插件在用户那份的插件数据(plugins-data/<id>.json 里的标记)没进舞台;没有沙箱条
  *   4 selector 截一块:尺寸 = 那个元素的矩形 × 密度
  *   5 录像:录本窗口 2 秒(中间点一下,带假指针)→ mp4 / webm 字节,宽 = 窗口像素;有 ffprobe 时数帧数
+ *   5c 暂停 / 继续:录 1 秒 → 暂停 2 秒 → 录 1 秒,durationMs 与成片时长都只算录下的 ~2 秒;重复暂停、没暂停就继续、
+ *      停了再调都 reject
  *   6 脚本回放引擎:engine 'scripted' → 舞台里发一句话 → 页面上出现 engine.json 里写的回复
  *   7 互斥:舞台开着时别的插件 open → busy
  *   8 负对照:fixture 带 `..` → invalid;点名没装的插件 → plugin-missing
@@ -222,6 +224,36 @@ async function main() {
       vid.ok ? `${vid.mime} ${vid.w}×${vid.h} ${vid.len}B ${vid.ms}ms frames=${frames} video=${videoSec}s` : JSON.stringify(vid))
     const after = await win.evaluate(async () => (await window.__stage.read()).outline)
     check('5b 录像中的点击真点到了', /Extra action done/.test(after))
+
+    // ── 5c 暂停 / 继续(插件把等待、准备动作剪出成片) ──
+    const cut = await win.evaluate(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+      const code = (p) => p.then(() => 'resolved', (e) => e.code || e.message)
+      try {
+        const rec = await window.__stage.record({ fps: 30, cursor: false })
+        if (typeof rec.pause !== 'function' || typeof rec.resume !== 'function') return { ok: false, error: 'no pause / resume on the recording' }
+        const early = await code(rec.resume())
+        await wait(1000)
+        await rec.pause()
+        const twice = await code(rec.pause())
+        await wait(2000)
+        await rec.resume()
+        await wait(1000)
+        const v = await rec.stop()
+        const after = await code(rec.pause())
+        return { ok: true, early, twice, after, len: v.bytes.length, mime: v.mime, ms: v.durationMs, all: Array.from(v.bytes) }
+      } catch (e) { return { ok: false, code: e.code, error: e.message } }
+    })
+    let cutSec = null
+    if (cut.ok) {
+      const f = path.join(SHOT_DIR || home, `stage-rec-cut.${/mp4/.test(cut.mime) ? 'mp4' : 'webm'}`)
+      fs.writeFileSync(f, Buffer.from(cut.all))
+      try { cutSec = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], { encoding: 'utf8' }).trim()) } catch { cutSec = null }
+    }
+    check('5c 暂停 2 秒不进成片:durationMs 与视频时长 ≈ 录下的 2 秒', cut.ok && cut.len > 10_000 && cut.ms >= 1700 && cut.ms <= 2700 && (cutSec === null || (cutSec >= 1.5 && cutSec <= 3.2)),
+      cut.ok ? `${cut.mime} ${cut.len}B ${cut.ms}ms video=${cutSec}s` : JSON.stringify(cut))
+    check('5d 没暂停就继续、重复暂停、停了再暂停都 reject(最后一个是 closed)', cut.ok && cut.early !== 'resolved' && cut.twice !== 'resolved' && cut.after === 'closed',
+      cut.ok ? JSON.stringify({ early: cut.early, twice: cut.twice, after: cut.after }) : JSON.stringify(cut))
 
     // ── 6 脚本回放引擎 ──
     const chat = await win.evaluate(async (reply) => {

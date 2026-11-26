@@ -638,6 +638,7 @@ const { outline } = await stage.read()
 const shot = await stage.capture({ selector: 'main' })   // { bytes, width, height, mime: 'image/png' }
 const rec = await stage.record({ fps: 30 })               // 录这个窗口；点击前会画一个指针挪过去
 await stage.click('新建事件')
+await rec.pause?.(); await stage.press('Mod+P'); await rec.resume?.()   // 暂停的这段不进成片
 const video = await rec.stop()                             // { bytes, mime, width, height, durationMs }
 await stage.close()
 ```
@@ -647,6 +648,7 @@ await stage.close()
 - 每次 `open` 都从演示内容重新开始，上一次留下的标签页和设置不带过来。
 - `fixture` 只收插件包里的相对路径；里面的软链接不拷。只有已安装的插件能开舞台（开发沙箱里的副本不行）。
 - 截图的像素 = 窗口尺寸 × 密度；`rect` 用 CSS 像素。录像宽度最多 3840 像素，最长 120 秒（到点自动停，`stop()` 照样拿得到），缺省 mp4，可选 `format: 'webm'`。
+- 录像可以暂停（2026-11-26 起）：`rec.pause()` 到 `rec.resume()` 之间的画面不进成片，用来剪掉准备动作和等待；暂停的时间不算进 `durationMs`，也不算进 120 秒上限。已经暂停再暂停、没暂停就继续会 reject，`stop()` 之后再调报 `closed`。旧版本没有这两个方法，写成 `rec.pause?.()`，或者先判断再用。
 - `engine.json` 的写法：`{ "models": [...], "runs": [{ "match": "用户那句话里的字（可省）", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`。舞台里每发一句话，取第一段对得上的 `runs` 回放。
 - 个人日历「我的日历」不在智库里，日历是向引擎要 `human/CALENDAR.db` 的。要拍带日程的日历，在 fixture 里放 `human/CALENDAR.db`，并且用 `engine: 'scripted'`（只拍日历时 `engine.json` 写 `{ "runs": [] }` 就够）：回放引擎拿这份代替真引擎家目录里的那份。格式和真的一样，是一张普通数据库表，最大 8 MB，每列要有 `id` / `name` / `type`，每行要有 `id` / `cells`；表里有勾选列时，每一行都画成带勾的待办：`{ "version": 2, "name": "我的日历", "columns": [{ "id": "name", "name": "名称", "type": "text" }, { "id": "date", "name": "日期", "type": "calendarDate" }, { "id": "done", "name": "完成", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "发布评审", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`。舞台里对日历的改动只留在这一次舞台里。不放这个文件，舞台里是一本空的个人日历；`engine: 'none'` 没有引擎，个人日历读不到。是软链、不是文件或格式不对时，`open` 报 `fixture-invalid`。
 - 失败都是 reject 带 `code` 的错误：`unsupported`、`invalid`、`denied`、`busy`、`fixture-invalid`、`plugin-missing`、`timeout`、`closed`、`error`。

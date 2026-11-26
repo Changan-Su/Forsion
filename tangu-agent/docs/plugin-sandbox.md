@@ -162,6 +162,8 @@ console 与最后的挂载报错 —— client_cmd 结果 text 与工具结果�
 - 装进去的是用户已安装插件的**包**(按 id 在 `plugins/` 里找、按真实目录拷,不带 `plugins-data/`);内置插件也要点名。演示库只拷 fixture/vault 里的普通文件。
 - 截图 `capture`:`capturePage` 原生密度 PNG 写进 `out/`,父进程核过路径读出来交给插件;录像:渲染层 `getDisplayMedia` 录本页签
   (子进程的 `setDisplayMediaRequestHandler` 只给武装过的那一次、只给主窗顶层 frame),录完经 `pluginSandbox:saveRecording` 落盘。
+  暂停 / 继续(11-26):`recordPause` / `recordResume` 两个操作直通渲染层 `MediaRecorder.pause()` / `resume()`;暂停的时长从
+  `durationMs` 里扣掉,到点自停的计时也只数录下的时间(继续时按剩余时长重新定时)。收尾中或没在录 → error。
 - `engine: 'scripted'`:父进程起 `stageEngine.ts` 的本机回放服务,舞台的引擎地址指向它(`tangu-desktop-config.json` 与 `TANGU_BACKEND_URL`)。
   第 6 节的「沙箱里不起引擎」对舞台的这一档不成立:起的是回放,不是真引擎。
 - 互斥:同一时间一个舞台;别的插件 open → `busy`;闲置 5 分钟自停;插件停用 / 重载时宿主替它关。
