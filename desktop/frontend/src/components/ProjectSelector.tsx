@@ -166,7 +166,7 @@ export const ProjectSelector: React.FC<{
           onKeyDown={moveMenuFocus}
         >
           {showSearch && (
-            <label className="project-menu-search">
+            <label className="project-menu-search" data-edge-pin>
               <Search size={13} />
               {/* 触屏不自动聚焦：软键盘会让向上弹的菜单移位，导致首次点击落空。 */}
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('input.project.search')} />

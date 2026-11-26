@@ -6009,6 +6009,22 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 .model-pill-compact > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .model-pill-compact > span:not(:first-child) { flex: none; }
 .model-pill-wrap[data-compact] .model-pill-btn > svg:last-of-type { flex: none; }
+/* 第三档(11-17 方案 3A):缩写也放不下 → 只剩打头那颗图标,和左边 + / 权限同尺寸的圆钮;全名与档位在 title / aria-label。
+   Ultra 的底色与流光照留;用不了的档位在右上角挂一把小锁(缩写档的锁随缩写一起藏了)。 */
+.model-pill-corner-lock { display: none; }
+.model-pill-wrap[data-tier='icon'], .model-pill-wrap[data-tier='icon'].is-open { flex: none; max-width: none; }
+.model-pill-wrap[data-tier='icon'] .composer-chip.model-pill-btn {
+  position: relative; width: 28px; height: 28px; padding: 0; gap: 0; justify-content: center;
+}
+.model-pill-wrap[data-tier='icon'] .model-pill-btn > svg:first-of-type { display: inline-block; flex: none; }
+.model-pill-wrap[data-tier='icon'] .model-pill-btn > .model-pill-compact,
+.model-pill-wrap[data-tier='icon'] .model-pill-btn > svg:last-of-type { display: none; }
+.model-pill-wrap[data-tier='icon'] .model-pill-corner-lock {
+  position: absolute; top: -2px; right: -2px; display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; border-radius: 50%; background: var(--bg-card); color: var(--text-muted);
+}
+/* Ultra 钮自带 overflow:hidden(流光),挂在外缘的锁会被削掉一角:收进钮内 */
+.model-pill-wrap[data-tier='icon'] .model-pill-btn.is-ultra .model-pill-corner-lock { top: 0; right: 0; }
 .cm-main { display: contents; }
 .cm-main[hidden] { display: none; }
 .composer-menu.composer-menu--compact, .t2c-ctxring-pop.composer-menu--compact {

@@ -862,7 +862,7 @@ export const Composer2: React.FC<{
   }
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
-  const modeFix = useEdgeNudge(openMenu === 'mode' && !layout.compact, { boundary: '.t2-chat-view' })
+  const modeFix = useEdgeNudge(openMenu === 'mode' && !layout.compact, { boundary: '.t2-chat-view', subPanels: true })
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
   const ctxPopFix = useEdgeNudge(openMenu === 'ctx' && !layout.compact, { boundary: '.t2c-card', margin: 0 })
