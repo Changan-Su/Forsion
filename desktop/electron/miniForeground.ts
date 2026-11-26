@@ -14,14 +14,15 @@ export function foregroundSignalActive(raw: unknown, now: number): boolean {
 }
 
 /** Reads only the helper's short-lived input signal; never launches it or requests a screenshot. */
-export async function readComputerUseForeground(): Promise<boolean> {
-  if (process.platform !== 'darwin') return false
+export interface ForegroundLease { runId: string | null; targetPid: number | null; id?: string }
+export async function readComputerUseForeground(): Promise<ForegroundLease | null> {
+  if (process.platform !== 'darwin') return null
   try {
     const raw = JSON.parse(await readFile(path.join(path.dirname(helperSocketPath()), 'foreground.json'), 'utf8'))
-    if (!foregroundSignalActive(raw, Date.now())) return false
-    try { process.kill(raw.helperPid, 0) } catch { return false }
-    return true
-  } catch { return false }
+    if (!foregroundSignalActive(raw, Date.now())) return null
+    try { process.kill(raw.helperPid, 0) } catch { return null }
+    return { id: `${raw.helperPid}/${Number.isSafeInteger(raw.takeId) ? raw.takeId : raw.updatedAt}`, runId: typeof raw.runId === 'string' ? raw.runId : null, targetPid: Number.isSafeInteger(raw.targetPid) && raw.targetPid > 0 ? raw.targetPid : null }
+  } catch { return null }
 }
 
 /** Where Mini sits until the user drags it: the work area's top-right corner. */

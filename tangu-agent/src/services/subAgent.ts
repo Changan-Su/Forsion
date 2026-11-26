@@ -407,6 +407,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     clientCapabilities: undefined,
     // 长命令不挡插话只给主循环:子代理的 run_bash 结局交不回父 run 的上下文
     steerHandoff: undefined,
+    userTurnId: undefined,
+    userTurnSignal: undefined,
+    userConfirmedCall: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
     // 收起的装备是父代理写在自己工作笔记里的选择,子代理的提示里没有那段笔记,也不该替它少带工具(Codex 10-04)

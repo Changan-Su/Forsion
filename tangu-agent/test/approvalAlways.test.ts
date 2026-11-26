@@ -93,11 +93,13 @@ describe("capabilities.approval: 'always'", () => {
     const first = await gate(call('spend_asset'), { approvalMode: 'auto-edit', sessionId: 'S-always' }, 'approve_always');
     expect(first.asked).toBe(true);
     expect(first.decision.action).toBe('approve');
+    expect(first.decision.userConfirmed).toBe(true);
     expect(isAlwaysAllowed('S-always', 'spend_asset')).toBe(false);
     expect((await gate(call('spend_asset'), { approvalMode: 'auto-edit', sessionId: 'S-always' })).asked).toBe(true);
     // 对照:command 档的「总允许」照旧记下、下一次不问
     const cmd = await gate(call('plain_command'), { approvalMode: 'auto-edit', sessionId: 'S-cmd' }, 'approve_always');
     expect(cmd.asked).toBe(true);
+    expect(cmd.decision.userConfirmed).toBeUndefined();
     expect(isAlwaysAllowed('S-cmd', 'plain_command')).toBe(true);
     expect((await gate(call('plain_command'), { approvalMode: 'auto-edit', sessionId: 'S-cmd' })).asked).toBe(false);
   });

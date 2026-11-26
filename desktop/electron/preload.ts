@@ -721,6 +721,12 @@ const api = {
     return () => ipcRenderer.removeListener('window:miniDockMotion', listener)
   },
   miniDockMotionDone: (id: number): void => ipcRenderer.send('window:miniDockMotionDone', id),
+  onComputerUseReturn: (cb: (sessionId: string) => void): (() => void) => {
+    const listener = (_event: unknown, id: string) => cb(id)
+    ipcRenderer.on('window:computerUseReturn', listener)
+    return () => ipcRenderer.removeListener('window:computerUseReturn', listener)
+  },
+  reportComputerUseChat: (phase: 'start' | 'end', sessionId: string, runId: string): void => ipcRenderer.send('window:computerUseChat', phase, { sessionId, runId }),
   reportMiniSession: (context: import('../shared/miniPanel').MiniSessionContext): void => ipcRenderer.send('window:miniSession', context),
   miniSessionReady: (sessionId: string): void => ipcRenderer.send('window:miniSessionReady', sessionId),
   showMainPanel: (target: import('../shared/miniPanel').MainPanelTarget): void => ipcRenderer.send('window:showMainPanel', target),

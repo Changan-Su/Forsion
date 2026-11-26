@@ -6,12 +6,12 @@ afterEach(() => vi.useRealTimers())
 function fixture() {
   vi.useFakeTimers()
   const state = { foreground: false, focused: true, manual: false, context: { sessionId: 's1', runId: 'r1' } as MiniSessionContext }
-  const open = vi.fn(), close = vi.fn()
-  const panel = startMiniAutoPanel({ readForeground: async () => state.foreground,
+  const open = vi.fn(), close = vi.fn(), restore = vi.fn(async () => {})
+  const panel = startMiniAutoPanel({ readForeground: async () => state.foreground ? { targetPid: 55, runId: state.context.runId } : null,
     hasForsionFocus: () => state.focused, manualMiniVisible: () => state.manual,
-    session: () => state.context, open, close })
+    session: () => state.context, open, close, restore })
   const tick = () => vi.advanceTimersByTimeAsync(100)
-  return { state, panel, open, close, tick }
+  return { state, panel, open, close, restore, tick }
 }
 
 describe('automatic Computer Use conversation panel', () => {
@@ -72,32 +72,54 @@ describe('automatic Computer Use conversation panel', () => {
     state.context.runId = null; panel.refresh(); expect(panel.following()).toBe(false)
     panel.stop()
   })
-  it('asks to restore Forsion only when the owning run ends while the user is away', async () => {
-    const { state, panel, close, tick } = fixture()
-    state.focused = false; state.foreground = true; await tick()
+  it('returns to the owning conversation even when a manual Mini suppressed the automatic one', async () => {
+    const { state, panel, restore, open, tick } = fixture()
+    state.focused = false; state.manual = true; state.foreground = true; await tick()
     state.foreground = false; state.context.runId = null; panel.refresh()
-    expect(close).toHaveBeenLastCalledWith(true)
-    state.context.runId = 'r2'; state.foreground = true; await tick()
-    state.context.runId = 'r3'; state.foreground = false; panel.refresh() // the next run replaces this one
-    expect(close).toHaveBeenLastCalledWith(true)
+    expect(open).not.toHaveBeenCalled(); expect(restore).toHaveBeenCalledExactlyOnceWith('s1', 55)
     panel.stop()
   })
-  it('never restores when the user came back, took the panel over, or the monitor stops', async () => {
-    const { state, panel, close, tick } = fixture()
+  it('does not reclaim focus after a user switches conversations, dismisses Mini or replaces the run', async () => {
+    const { state, panel, restore, tick } = fixture()
     state.focused = false; state.foreground = true; await tick()
-    state.focused = true; panel.refresh(); expect(close).toHaveBeenLastCalledWith(false)
-    state.focused = false; await tick(); panel.dismiss(); expect(close).toHaveBeenLastCalledWith()
-    state.context.runId = 'r2'; await tick(); panel.stop(); expect(close).toHaveBeenLastCalledWith()
-    expect(close.mock.calls.some((c) => c[0] === true)).toBe(false)
+    state.context = { sessionId: 's2', runId: 'r2' }; panel.refresh(); await tick()
+    state.context.runId = 'r3'; panel.refresh(); await tick()
+    panel.dismiss(); state.context.runId = null; panel.refresh()
+    await tick(); expect(restore).not.toHaveBeenCalled()
+    panel.stop()
+  })
+  it('does not reuse a consumed lease after the user returned and left again', async () => {
+    vi.useFakeTimers()
+    const context: MiniSessionContext = { sessionId: 's', runId: 'r' }
+    let focused = false
+    const restore = vi.fn(), open = vi.fn()
+    const panel = startMiniAutoPanel({ session: () => context, hasForsionFocus: () => focused, manualMiniVisible: () => false,
+      readForeground: async () => ({runId: 'r', targetPid: 55, id: '2/19'}), open, close: vi.fn(), restore })
+    await vi.advanceTimersByTimeAsync(80)
+    focused = true; panel.refresh(); focused = false
+    await vi.advanceTimersByTimeAsync(80); context.runId = null; panel.refresh()
+    await vi.advanceTimersByTimeAsync(80)
+    expect(open).toHaveBeenCalledTimes(1); expect(restore).not.toHaveBeenCalled(); panel.stop()
+  })
+  it('recovers a completed run between polls only with its own stored lease', async () => {
+    const context: MiniSessionContext = {sessionId: 'fast', runId: 'brief'}
+    const restore = vi.fn(async () => {}); let leaseRun = 'brief'
+    const panel = startMiniAutoPanel({session: () => context, manualMiniVisible: () => true, hasForsionFocus: () => false,
+      readForeground: async () => ({runId: leaseRun, targetPid: 42}), open: vi.fn(), close: vi.fn(), restore})
+    context.runId = null; panel.refresh(); await Promise.resolve(); await Promise.resolve()
+    expect(restore).toHaveBeenCalledExactlyOnceWith('fast', 42)
+    context.runId = 'next'; panel.refresh(); leaseRun = 'old'; context.runId = null; panel.refresh()
+    await Promise.resolve(); await Promise.resolve(); expect(restore).toHaveBeenCalledTimes(1)
+    panel.stop()
   })
   it('does not resurrect a stopped controller after an in-flight read', async () => {
     vi.useFakeTimers()
-    let resolve!: (active: boolean) => void
+    let resolve!: (active: {runId: string; targetPid: number}) => void
     const open = vi.fn()
     const panel = startMiniAutoPanel({ readForeground: () => new Promise((r) => { resolve = r }),
       hasForsionFocus: () => false, manualMiniVisible: () => false,
-      session: () => ({ sessionId: 's', runId: 'r' }), open, close: vi.fn() })
-    panel.stop(); resolve(true); await vi.advanceTimersByTimeAsync(200)
+      session: () => ({ sessionId: 's', runId: 'r' }), open, close: vi.fn(), restore: vi.fn() })
+    panel.stop(); resolve({runId: 'r', targetPid: 11}); await vi.advanceTimersByTimeAsync(200)
     expect(open).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0)
   })
   it('accepts only bounded session/run identifiers from the renderer', () => {

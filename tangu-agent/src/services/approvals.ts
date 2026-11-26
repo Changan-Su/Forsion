@@ -74,6 +74,8 @@ function warnUnknownMode(raw: unknown, source: string): void {
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
 export interface ApprovalDecision {
   action: ApprovalAction;
+  /** Minted only by the mandatory interactive approval path. */
+  userConfirmed?: true;
   /** 用户在审批时修改了参数（如改 bash 命令）：用这份覆盖原 call 的 arguments 执行。 */
   argsOverride?: Record<string, any>;
   /** 拒绝原因（仅规则自动拒绝时有）：让模型与用户都看得见是**哪条规则**挡的，否则无从调起。 */
@@ -1395,6 +1397,7 @@ export async function gateToolCall(
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     // 远程污点 run 的「总允许」按单次批准算:记下来就等于远端改了本机会话的审批面(本机 run 随后也吃它)。
     if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk) allowAlways(ctx.sessionId, name);
+    if (alwaysAsk) out.userConfirmed = true;
     return out;
   });
   if (ctx.park) return { action: 'park', decided, preview };

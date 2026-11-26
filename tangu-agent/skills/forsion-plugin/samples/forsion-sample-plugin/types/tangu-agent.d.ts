@@ -46,6 +46,12 @@ export interface ToolContext {
   collectImage?: (img: { url: string; name?: string }) => void;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
   /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
+  /** Host-issued scope for this user turn. An incoming steer invalidates the previous scope. */
+  userTurnId?: string;
+  /** Revoked immediately on incoming user input, including during a running tool call. */
+  userTurnSignal?: AbortSignal;
+  /** Set on this call only after its mandatory interactive approval in the same turn. */
+  userConfirmedCall?: boolean;
   runId?: string;
   /** Agent Desk 演出闸(同 desk_present 工具):把文件或已注册的视图(插件视图写 `plugin:<插件 id>:<视图 id>`)
    *  摆到聊天右侧的 Agent Desk。不落库、不回灌上下文;每个 run 有次数上限;用户关掉 Desk 后到下一条用户消息前不再弹。
