@@ -50,8 +50,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'memory-sync', tab: 'forsion', sub: 'f-sync', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },
   { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 后台任务 图像识别 图像生成 翻译 跟随 default model background vision image translate 额度用完 后备 换模型 quota fallback 通道 并发 同时请求 限流 排队 channel concurrency rate limit' },
-  { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },
-  { id: 'masking', tab: 'model', sub: 'm-providers', anchor: 'masking', labelKey: 'maskset.title', keywords: '脱敏 遮住 密钥 令牌 隐私 占位符 mask redact secret privacy placeholder' },
+  // 提供方、联网搜索 11-26 并进「模型与服务」(m-display);id 不变 —— 引擎的提示词与 Agent 的 open-settings 清单按 id 找
+  { id: 'model-providers', tab: 'model', sub: 'm-display', anchor: 'model-sources', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 连接 apikey provider connection 添加模型 add model' },
+  { id: 'masking', tab: 'model', sub: 'm-display', anchor: 'masking', labelKey: 'maskset.title', keywords: '脱敏 遮住 密钥 令牌 隐私 占位符 mask redact secret privacy placeholder' },
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
   { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
   { id: 'theme-language', tab: 'theme', anchor: 'theme-language', labelKey: 'settings.theme.langLabel', keywords: '设计语言 主题 theme language' },

@@ -26,7 +26,7 @@ registerMessages({
   'settings.tts.unknownBinding': { zh: '绑定模型未知', en: 'Unknown model' },
   'settings.tts.unknownBindingHint': { zh: '不知道这个音色绑在哪个模型上，没法用于朗读。可以删掉重新复刻。', en: "We can't tell which model this voice is tied to, so it can't be used for read-aloud. You can delete it and clone again." },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
-  'settings.voice.addProvider': { zh: '添加提供方', en: 'Add provider' },
+  'settings.voice.addProvider': { zh: '添加连接', en: 'Add connection' },
   'settings.voice.chooseModel': { zh: '去选模型', en: 'Choose model' },
   'settings.voice.readDesc': { zh: '点消息下方的朗读键，或让新回复读出来。', en: 'Tap the read-aloud button under a message, or have new replies read out.' },
   'settings.voice.readNoModel': { zh: '还没选朗读模型。下面几项可以先设，选好模型以后生效。', en: 'No read-aloud model yet. You can set the options below now; they take effect once you pick one.' },

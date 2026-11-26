@@ -23,10 +23,14 @@ export function catalogByKind(models: ModelsResponse | null, directRealtime: Arr
   const list = models?.models || []
   const of = (m: ModelInfo): CatalogItem => ({ id: m.id, name: m.name, source: m.source, provider: m.source === 'forsion' ? m.groupName || m.provider : m.provider, model: m })
   const directTts = (models?.directProviders || []).flatMap((p) => (p.ttsModelIds || []).map((id) => ({ id: `${p.providerId}/${id}`, name: id, source: 'direct' as const, provider: p.providerId })))
+  // 直连的识别模型引擎不放进 models(只有对话 / 生图):从 directProviders 补出来,否则加进识别名单的模型在库里没有行、改不了也移除不了
+  const asrRows = list.filter((m) => m.modelType === 'asr').map(of)
+  const asrSeen = new Set(asrRows.map((m) => m.id))
+  const directAsr = (models?.directProviders || []).flatMap((p) => (p.asrModelIds || []).map((id) => ({ id: `${p.providerId}/${id}`, name: id, source: 'direct' as const, provider: p.providerId }))).filter((m) => !asrSeen.has(m.id))
   return {
     llm: list.filter((m) => (m.modelType || 'llm') === 'llm').map(of),
     image_gen: list.filter((m) => m.modelType === 'image_gen').map(of),
-    asr: list.filter((m) => m.modelType === 'asr').map(of),
+    asr: [...asrRows, ...directAsr],
     tts: [...(models?.ttsModels || []).map((m) => ({ id: m.id, name: m.name, source: 'forsion' as const, provider: 'forsion' })), ...directTts],
     realtime: [...(models?.realtimeModel ? [{ id: models.realtimeModel.id, name: models.realtimeModel.name, source: 'forsion' as const, provider: 'forsion' }] : []), ...directRealtime.map((m) => ({ ...m, source: 'direct' as const }))],
     mt: (models?.translateModels || []).map((m) => ({ id: m.id, name: m.name, source: 'forsion' as const, provider: m.provider || 'forsion' })),

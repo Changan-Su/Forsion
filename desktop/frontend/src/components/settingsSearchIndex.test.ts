@@ -1,6 +1,7 @@
 import './McpImportDialog'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { modelSubAlias } from './settingsTarget'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import '../i18n.generated'
@@ -15,7 +16,7 @@ import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery } from './settingsSearchInd
 // U-15 静态半边:索引项的锚点在源码里真有、子页 key 真存在、标签双语都有。
 // 真落点(本端门控下点结果 → 锚点可见)由 check:settingsmode 在真 Electron 里逐项点。
 // 锚点可以落在 SettingsModal 直接渲染的独立页组件里(P1-K4 远程会话页的三块面板)。
-const SRC = ['SettingsModal.tsx', 'AppearanceSettings.tsx', 'RibbonSettings.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx', 'MaskingSettingsSection.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
+const SRC = ['SettingsModal.tsx', 'AppearanceSettings.tsx', 'RibbonSettings.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx', 'MaskingSettingsSection.tsx', 'ModelSources.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
 
 describe('settings search index', () => {
   it('id 唯一,每项都有检索别名', () => {
@@ -37,7 +38,9 @@ describe('settings search index', () => {
     for (const e of SETTINGS_SEARCH_INDEX.filter((x) => x.sub)) {
       // fx:<pluginId>:<viewId> = 首方内置包运行期注册的自绘子页(「Forsion 云端」),源码里没有字面量,只核格式
       if (e.sub!.startsWith('fx:')) { expect(e.sub, e.id).toMatch(/^fx:[a-z0-9-]+:[a-z0-9-]+$/); continue }
-      expect(SRC.includes(`['${e.sub}',`), `${e.id} → ${e.sub}`).toBe(true)
+      // 模型页的旧子页 id(提供方 / 联网搜索,11-26 并进「模型与服务」)照别名落地,别名后的 key 要真实存在
+      const key = e.tab === 'model' ? modelSubAlias(e.sub!) : e.sub
+      expect(SRC.includes(`['${key}',`), `${e.id} → ${e.sub}`).toBe(true)
     }
   })
 

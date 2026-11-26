@@ -1,7 +1,8 @@
 import { publicMcpUrl } from '../../../shared/mcpConfig'
 import { McpImportDialog, type McpImportDraft } from './McpImportDialog'
 import { PRODUCT } from '../product'
-import { ModelPickerSettings } from './ModelPickerSettings'
+import { ModelPickerSettings, type LibKind } from './ModelPickerSettings'
+import type { CapabilityMenuItem } from './CapabilityMenu'
 import { WebSearchSettings } from './WebSearchSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { GitSettingsSection } from './GitSettingsSection'
@@ -24,9 +25,8 @@ import { listClientSurfaces } from '../services/clientSurfaces'
 import { ConnectorSettingsPage } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
 import {
-  fetchProviderModels,
   listModels, listTools, mcpLogin, mcpLogout, setModelContextWindow,
-  testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
+  syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
   getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
@@ -54,8 +54,9 @@ import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
 import { DefaultModelsPage } from './DefaultModelsPage'
 import { VoiceSettingsPage } from './VoiceSettingsPage'
-import { PROVIDER_PRESETS, presetProviderId } from './providerPresets'
-import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
+import { catalogByKind, type CatalogItem, type ModelKind } from './modelKinds'
+import { AddConnectionDialog, AddModelsDialog, SourceChips, type ConnectionDraft } from './ModelSources'
+import { bareModelId, canDropLlm, changeModelKind, LIST_KINDS, listKindOf, modelsIn, mutateProvider, removeModel, setTextOnly } from './providerModels'
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
@@ -114,7 +115,7 @@ import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { ipcErrorText } from '../ipcError'
 import { newReservedMcpNames } from '../../../shared/mcpNames'
-import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
+import { modelSubAlias, resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
@@ -205,7 +206,15 @@ registerMessages({
   'settingsmodal.closeAction.quit': { zh: '退出 Forsion', en: 'Quit Forsion' },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
-  'modelsettings.display': { zh: '模型库', en: 'Model library' },
+  'modelsettings.display': { zh: '模型与服务', en: 'Models & services' },
+  'modelsettings.servicesHint': { zh: '你能用的全部模型、自带 Key 的连接和联网搜索都在这一页。', en: 'All your models, your own API connections and web search, on one page.' },
+  'modelsettings.copyId': { zh: '复制模型名', en: 'Copy model name' },
+  'modelsettings.setDefault': { zh: '设为默认对话模型', en: 'Set as default chat model' },
+  'modelsettings.vision': { zh: '能看图', en: 'Can see images' },
+  'modelsettings.kindAs': { zh: '类型：{kind}', en: 'Type: {kind}' },
+  'modelsettings.removeFrom': { zh: '从 {name} 移除', en: 'Remove from {name}' },
+  'modelsettings.keepOne': { zh: '至少留一个，或删除这条连接', en: 'Keep at least one, or delete the connection' },
+  'modelsettings.saveFailed': { zh: '没保存上：{msg}', en: 'Couldn’t save: {msg}' },
   'modelsettings.providers': { zh: '提供方', en: 'Providers' },
   'modelsettings.defaultsHint': { zh: '每个用途调用哪个模型。不选就跟随 Forsion 云端默认；自选的随时可以恢复跟随。', en: 'Which model each purpose uses. Unset ones follow the Forsion Cloud defaults, and any custom choice can go back to the default.' },
   'modelsettings.displayHint': { zh: '你能用的全部模型，分类和后台一致。关掉的不出现在选择菜单里。', en: 'Every model you can use, sorted the same way as the admin console. Models you turn off stay out of the pickers.' },
@@ -457,8 +466,8 @@ export const SettingsModal: React.FC<{
   // 商店「已连接 · 管理」深链到 connectors/conn:<server 名>:只在首次挂载时用一次,之后在导航里点「连接器」落列表
   const [initialConnector, setInitialConnector] = useState(() => (initialTarget.tab === 'connectors' && initialTarget.sub?.startsWith('conn:') ? initialTarget.sub.slice(5) : undefined))
   useEffect(() => { if (rawTab !== 'connectors') setInitialConnector(undefined) }, [rawTab])
-  /** 模型库当前的类型标签(默认模型页的「在模型库里管理」带着类型跳过来)。 */
-  const [libKind, setLibKind] = useState<ModelKind>('llm')
+  /** 模型库当前的类型标签(默认模型页的「在模型库里管理」带着类型跳过来)。旧深链 model/m-websearch 落到「联网搜索」标签。 */
+  const [libKind, setLibKind] = useState<LibKind>(() => (initialTarget.tab === 'model' && initialTarget.sub === 'm-websearch' ? 'websearch' : 'llm'))
   // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
   const [subDir, setSubDir] = useState(0)
   const [cloudAdvancedOpen, setCloudAdvancedOpen] = useState(false)
@@ -750,25 +759,16 @@ export const SettingsModal: React.FC<{
   const [customProviders, setCustomProviders] = useState<DirectProviderConfig[]>([])
   /** 装了 Extend 且登录有效:语音通话的云端模型此时才可选(默认模型页、模型库、语音页三处同一口径)。 */
   const realtimeSignedIn = cloudAccount && !!authSt?.loggedIn && authSt.tokenValid !== false
-  /** 正在编辑的直连连接:rows = 每个模型一行(类型 + 纯文本),保存时再拆回 modelIds / imageModelIds / ttsModelIds / asrModelIds / noVisionModelIds。
-   *  isNew = 「添加连接」(编辑区画在列表下面);否则画在被编辑的那一行下面。base = 打开时的原配置(保存时留住行表示不了的旧归属);
-   *  editId 区分每次打开:拉取回包时编辑区已经换了一条连接,就不往里并。 */
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number; preset?: string; autoId?: string }) | null>(null)
-  const [manualModel, setManualModel] = useState('')
-  // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
-  const [providerTestMsg, setProviderTestMsg] = useState('')
-  const [providerTesting, setProviderTesting] = useState(false)
-  const providerTestAbort = useRef<AbortController | null>(null) // 供「测试连接」取消用
-  const [providerSaveMsg, setProviderSaveMsg] = useState('')
+  /** 模型与服务(11-26 C2):添加连接 / 添加模型两个弹窗,和模型清单「只看某条连接」。 */
+  const [addConnOpen, setAddConnOpen] = useState(false)
+  const [addModels, setAddModels] = useState<{ draft?: ConnectionDraft; providerId?: string } | null>(null)
+  const [libProvider, setLibProvider] = useState<string | null>(null)
+  const [libMsg, setLibMsg] = useState('')
   // 本地联网搜索(BYO-key;engine /agent/websearch)。wsRed=null 表示端点不可用(云端/旧后端)→ 整段隐藏。
   const [wsRed, setWsRed] = useState<LocalWebSearchRedacted | null>(null)
   // 镜像连通性测试(设置页管理后端)
   const [mirrorTesting, setMirrorTesting] = useState(false)
   const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
-  // 「拉取模型」:后端代拉 baseUrl/models → 并进 editProvider.rows(按模型名猜类型)。
-  const [modelSearch, setModelSearch] = useState('')
-  const [fetchingModels, setFetchingModels] = useState(false)
-  const [fetchModelsMsg, setFetchModelsMsg] = useState('')
   // 高级→导出日志:把当前会话的全部对话 + 后端运行日志打包成一个 JSON,便于开发者排障。
   const [exporting, setExporting] = useState(false)
   const [exportMsg, setExportMsg] = useState('')
@@ -1192,6 +1192,18 @@ export const SettingsModal: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.open, tab])
 
+  // 存连接后托管引擎是延后重启的(有任务在跑时等它跑完):重启好了再拉一次目录,否则新加的模型要手动刷新才出来(评审 P2)
+  // 只认「见过非 ready → 又 ready」(真的重启了);打开设置时第一条状态(null → ready)不算,不然一开页就白拉一遍
+  const backendWasDown = useRef(false)
+  useEffect(() => {
+    const state = backendSt?.state
+    if (!state) return
+    if (state !== 'ready') { backendWasDown.current = true; return }
+    if (backendWasDown.current && p.open && tab === 'model' && models) void loadModels()
+    backendWasDown.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [backendSt?.state])
+
   // 订阅更新状态(主进程经 App 启动检查或本页「检查更新」触发,事件流回这里驱动按钮态)。
   useEffect(() => {
     const off = window.tangu?.onUpdaterStatus?.((st) => setUpd(st))
@@ -1300,8 +1312,6 @@ export const SettingsModal: React.FC<{
     model: [
       ['m-models', t('modelsettings.defaults')],
       ['m-display', t('modelsettings.display')],
-      ...(isDesktop ? [['m-providers', t('modelsettings.providers')] as [string, string]] : []),
-      ...(isDesktop && wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
       ...((isDesktop || window.tangu?.mobile) && stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
     ],
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
@@ -1343,7 +1353,8 @@ export const SettingsModal: React.FC<{
   } as Record<string, Array<[string, string]>>)
   const subItemsForTab = (id: Tab): Array<[string, string]> => subItemsByTab[id] ?? []
   const subItems = subItemsForTab(tab)
-  const resolvedSub = tab === 'forsion' ? resolveCloudSettingsKey(cloudViews, sub) : sub
+  // 提供方、联网搜索 11-26 并进「模型与服务」(m-display):旧的子页 id(深链、插件、设置搜索、Agent 的 open-settings)照样认
+  const resolvedSub = tab === 'forsion' ? resolveCloudSettingsKey(cloudViews, sub) : tab === 'model' ? modelSubAlias(sub) : sub
   const activeSub = subItems.some(([k]) => k === resolvedSub) ? resolvedSub : (subItems[0]?.[0] ?? '')
   const cloudParentKey = cloudSettingsParent(cloudViews, activeSub)
   const cloudNavKey = groupedCloud && activeSub === 'f-conn' ? 'f-sync' : cloudParentKey
@@ -1356,7 +1367,7 @@ export const SettingsModal: React.FC<{
       : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription'
         : cloudNavKey === 'fx:forsion-extend:privacy' ? 'settingsmodal.cloudPrivacyDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
-  const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
+  const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': isDesktop ? 'modelsettings.servicesHint' : 'modelsettings.displayHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
   // .settings-body,内层 `key` 重挂不会重置父容器的
   // scrollTop:在技能库往下滚过再切到另一个长分类,会直接落在新页中段(短分类则落到底)。
@@ -1374,6 +1385,7 @@ export const SettingsModal: React.FC<{
   }
   const openSubPage = (id: Tab, key: string): void => {
     if (id === 'forsion' && key === 'f-sync') setCloudAdvancedOpen(false)
+    if (id === 'model' && key === 'm-websearch') setLibKind('websearch')
     if (id === tab) pickSub(key)
     else {
       goTab(id)
@@ -1458,7 +1470,8 @@ export const SettingsModal: React.FC<{
   const searchEntryVisible = (e: SettingsSearchEntry): boolean => {
     // 与导航同一套门控:一级页在本端存在、子页在 subItemsByTab 里,再加面板自身的显示条件。
     if (!tabItems.some(([id]) => id === e.tab)) return false
-    if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
+    const subKey = e.tab === 'model' && e.sub ? modelSubAlias(e.sub) : e.sub // 11-26:提供方 / 联网搜索并进「模型与服务」,旧子页 id 照旧可搜
+    if (subKey && !subItemsForTab(e.tab as Tab).some(([k]) => k === subKey)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
       : need === 'host' ? isDesktop && !unitPage
@@ -1494,7 +1507,8 @@ export const SettingsModal: React.FC<{
   }).filter((sec) => sec.groups.length > 0)
   const searchPathLabel = (e: SettingsSearchEntry): string => {
     const tabLabel = tabItems.find(([id]) => id === e.tab)?.[1] ?? ''
-    const subLabel = e.sub ? subItemsForTab(e.tab as Tab).find(([k]) => k === e.sub)?.[1] : ''
+    const subKey = e.tab === 'model' && e.sub ? modelSubAlias(e.sub) : e.sub
+    const subLabel = subKey ? subItemsForTab(e.tab as Tab).find(([k]) => k === subKey)?.[1] : ''
     const parent = e.tab === 'forsion' && e.sub ? cloudSettingsParent(cloudViews, e.sub) : ''
     const parentLabel = parent !== e.sub ? subItemsForTab('forsion').find(([key]) => key === parent)?.[1] : ''
     return subLabel ? `${tabLabel} › ${parentLabel ? `${parentLabel} › ` : ''}${subLabel}` : tabLabel
@@ -1510,16 +1524,31 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!flashAnchor) return
     let raf = 0, timer = 0, tries = 0
+    const place = (body: HTMLElement, el: HTMLElement): number => {
+      const offset = el.getBoundingClientRect().top - body.getBoundingClientRect().top
+      body.scrollTop += offset - Math.max(12, (body.clientHeight - el.offsetHeight) / 3)
+      return body.scrollTop
+    }
+    // 找到后再跟 ~1s:上面的内容晚到(模型与服务页的模型清单异步加载)会把锚点推下去,用户没动过滚动就再对一次
+    const follow = (body: HTMLElement, el: HTMLElement, set: number, top: number, left: number): void => {
+      if (left <= 0 || !el.isConnected) return
+      raf = requestAnimationFrame(() => {
+        if (body.scrollTop !== set) return // 用户自己滚了:不抢
+        const now = el.getBoundingClientRect().top
+        if (Math.abs(now - top) > 4) { const s2 = place(body, el); follow(body, el, s2, el.getBoundingClientRect().top, left - 1) }
+        else follow(body, el, set, top, left - 1)
+      })
+    }
     const seek = (): void => {
       const body = document.querySelector<HTMLElement>('.settings-body')
       const el = body?.querySelector<HTMLElement>(`[data-setting-anchor="${flashAnchor.id}"]`)
       if (body && el && el.getBoundingClientRect().height > 0) {
-        const offset = el.getBoundingClientRect().top - body.getBoundingClientRect().top
-        body.scrollTop += offset - Math.max(12, (body.clientHeight - el.offsetHeight) / 3)
+        const set = place(body, el)
         el.classList.remove('is-anchor-flash')
         void el.offsetWidth
         el.classList.add('is-anchor-flash')
         timer = window.setTimeout(() => el.classList.remove('is-anchor-flash'), 1600)
+        follow(body, el, set, el.getBoundingClientRect().top, 60)
         return
       }
       if (++tries < 60) raf = requestAnimationFrame(seek)
@@ -2410,213 +2439,79 @@ export const SettingsModal: React.FC<{
                   </DefaultModelsPage>
                 )}
 
-                {/* 模型库:六类与后台同名同序。自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智),写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
-                {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings
-                  catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [])}
-                  kind={libKind} onKind={setLibKind} subscriptionIds={(providers || []).map((pr) => pr.id)}
-                  onRefresh={() => void loadModels()} loading={modelsLoading}
-                  autoCompact={isDesktop ? <AutoCompactSetting cfg={p.cfg} /> : undefined}
-                  onContextWindow={isDesktop ? async (modelId, tokens) => {
-                  // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
-                  await setModelContextWindow(homeTarget(), modelId, tokens)
-                  const next = await listModels(homeTarget())
-                  setModels(next)
-                  // 进度环读的是 store 里启动时装的 modelsResp,且优先上一轮 run 的 context_info(只在切模型时清):
-                  // 两处都刷,否则改完窗口它还显示旧数直到下一条消息。
-                  useApp.setState((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([, v]) => v.modelId !== modelId)) }))
-                } : undefined} />}
-
-                {tab === 'model' && activeSub === 'm-providers' && isDesktop && (() => {
-                  const hostOf = (url: string) => { try { return new URL(url).host } catch { return url } }
-                  const KINDS: ProviderModelKind[] = ['llm', 'image', 'tts', 'asr', 'off']
-                  const startEdit = (cp: DirectProviderConfig | null) => {
-                    setEditProvider(cp ? { ...cp, rows: rowsFromProvider(cp), original: cp.providerId, base: cp, editId: Date.now() } : { providerId: '', baseUrl: '', apiKey: '', rows: [], isNew: true, base: {}, editId: Date.now() })
-                    setProviderTestMsg(''); setProviderSaveMsg(''); setModelSearch(''); setFetchModelsMsg(''); setManualModel('')
-                  }
-                  const closeEdit = () => { setEditProvider(null); setModelSearch(''); setFetchModelsMsg('') }
-                  const editor = editProvider && (() => {
-                    const ep = editProvider
-                    const mq = modelSearch.trim().toLowerCase()
-                    const rows = mq ? ep.rows.filter((r) => r.id.toLowerCase().includes(mq)) : ep.rows
-                    const setRow = (id: string, patch: Partial<ProviderModelRow>) => setEditProvider({ ...ep, rows: ep.rows.map((r) => (r.id === id ? { ...r, ...patch } : r)) })
-                    // 手填模型名(端点没有 /models、或拉取结果里没有):并成一行,类型照样按名字猜
-                    const addManual = () => {
-                      const id = manualModel.trim()
-                      if (id) setEditProvider({ ...ep, rows: mergeFetched(ep.rows, [id], ep.base.noVisionModelIds) })
-                      setManualModel('')
-                    }
-                    // 选预设:填地址与协议;名称只在空着或还是上一个预设填的时才换(用户自己起的名不动)
-                    const pickPreset = (id: string) => {
-                      const pr = PROVIDER_PRESETS.find((x) => x.id === id)
-                      const autoName = !ep.providerId || ep.providerId === ep.autoId
-                      const nextId = pr ? presetProviderId(pr.id, customProviders) : ''
-                      setEditProvider({ ...ep, preset: id, baseUrl: pr?.baseUrl || '', protocol: pr?.protocol, providerId: autoName ? nextId : ep.providerId, autoId: nextId })
-                    }
-                    // 导入的 openai-responses 等订阅连接不画协议选择,保存时原样留住
-                    const protocolEditable = !ep.protocol || ep.protocol === 'openai' || ep.protocol === 'anthropic-messages'
-                    return (
-                      <div className="provider-editor">
-                        {ep.isNew && <SettingsRow label={t('prov.preset')} description={t('prov.presetHint')} control={
-                          <select aria-label={t('prov.preset')} value={ep.preset || ''} onChange={(e) => pickPreset(e.target.value)}>
-                            <option value="">{t('prov.preset.custom')}</option>
-                            {PROVIDER_PRESETS.map((pr) => <option key={pr.id} value={pr.id}>{pr.name || t(`prov.preset.${pr.id}`)}</option>)}
-                          </select>
-                        } />}
-                        <SettingsRow label={t('prov.name')} description={t('prov.nameHint')} control={
-                          <input type="text" value={ep.providerId} placeholder={t('settings.customProvider.idPlaceholder')} onChange={(e) => setEditProvider({ ...ep, providerId: e.target.value.trim() })} />
-                        } />
-                        <SettingsRow label="Base URL" description={t(ep.protocol === 'anthropic-messages' ? 'prov.baseUrlHintAnthropic' : 'prov.baseUrlHint')} control={
-                          <input type="text" value={ep.baseUrl} placeholder={t('settings.customProvider.baseUrlPlaceholder')} onChange={(e) => setEditProvider({ ...ep, baseUrl: e.target.value.trim() })} />
-                        } />
-                        <SettingsRow label="API Key" description={t('prov.keyHint')} control={
-                          <input type="password" value={ep.apiKey || ''} placeholder="sk-…" onChange={(e) => setEditProvider({ ...ep, apiKey: e.target.value })} />
-                        } />
-                        {protocolEditable && <SettingsRow label={t('prov.protocol')} description={t('prov.protocolHint')} control={
-                          <select aria-label={t('prov.protocol')} value={ep.protocol || 'openai'} onChange={(e) => setEditProvider({ ...ep, protocol: e.target.value as 'openai' | 'anthropic-messages' })}>
-                            <option value="openai">{t('prov.protocol.openai')}</option>
-                            <option value="anthropic-messages">{t('prov.protocol.anthropic-messages')}</option>
-                          </select>
-                        } />}
-                        <div className="provider-editor-models-head">
-                          <strong>{ep.rows.length ? t('prov.fetched', { count: ep.rows.length }) : t('prov.models')}</strong>
-                          <span className="grow" />
-                          <button className="btn ghost sm" disabled={fetchingModels || !ep.baseUrl} onClick={() => {
-                            setFetchingModels(true); setFetchModelsMsg('')
-                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol })
-                              .then((ms) => {
-                                setEditProvider((cur) => (cur?.editId === ep.editId ? { ...cur, rows: mergeFetched(cur.rows, ms.map((m) => m.id), cur.base.noVisionModelIds) } : cur))
-                                setModelSearch('')
-                                setFetchModelsMsg(!ms.length ? t('settings.customProvider.fetchEmpty') : ms.length > FETCH_ENABLE_LIMIT ? t('prov.many') : '')
-                              })
-                              .catch((e) => setFetchModelsMsg(`✗ ${e?.message || e}`))
-                              .finally(() => setFetchingModels(false))
-                          }}>
-                            {fetchingModels ? <Loader2 size={12} className="spin" /> : <Download size={12} />} {t('settings.customProvider.fetchModels')}
-                          </button>
-                        </div>
-                        <div className="hint provider-editor-hint">{fetchModelsMsg || (ep.rows.length ? t('prov.modelsHint') : t('prov.noRows'))}</div>
-                        <form className="provider-editor-add" onSubmit={(e) => { e.preventDefault(); addManual() }}>
-                          <input value={manualModel} placeholder={t('prov.addModelPlaceholder')} aria-label={t('prov.addModel')} onChange={(e) => setManualModel(e.target.value)} />
-                          <button className="btn ghost sm" disabled={!manualModel.trim()}><Plus size={12} /> {t('prov.addModel')}</button>
-                        </form>
-                        {ep.rows.length > 8 && <span className="model-search provider-editor-search"><Search size={12} /><input value={modelSearch} placeholder={t('model.searchPlaceholder')} onChange={(e) => setModelSearch(e.target.value)} /></span>}
-                        <div className="provider-editor-rows">
-                          {rows.map((r) => (
-                            <SettingsRow key={r.id} className={r.kind === 'off' ? 'model-lib-row is-hidden' : 'model-lib-row'} label={<span title={r.id}>{r.id}</span>}
-                              description={r.kind !== 'off' && r.kind !== guessProviderModelKind(r.id) ? t('prov.changed') : undefined}
-                              control={<div className="model-lib-controls">
-                                {r.kind === 'llm' && <label className="provider-editor-textonly" title={t('prov.textOnlyHint')}>{t('prov.textOnly')}<SettingsSwitch checked={r.textOnly} label={`${t('prov.textOnly')} · ${r.id}`} onChange={(on) => setRow(r.id, { textOnly: on })} /></label>}
-                                <select aria-label={t('prov.kindFor', { id: r.id })} value={r.kind} onChange={(e) => setRow(r.id, { kind: e.target.value as ProviderModelKind })}>
-                                  {KINDS.map((k) => <option key={k} value={k}>{t(`prov.kind.${k}`)}</option>)}
-                                </select>
-                              </div>} />
-                          ))}
-                        </div>
-                        <div className="provider-editor-actions">
-                          <button className="btn primary sm" disabled={!ep.providerId || !ep.baseUrl} onClick={() => {
-                            void window.tangu!.saveProvider!({
-                              providerId: ep.providerId,
-                              baseUrl: ep.baseUrl.replace(/\/+$/, ''),
-                              apiKey: ep.apiKey || undefined,
-                              ...providerFieldsFromRows(ep.rows, ep.base),
-                              ...(ep.protocol ? { protocol: ep.protocol } : {}), // 预设 / 协议选择写进来;导入的 Responses 连接不画选择,原样留住
-                            }).then((list) => {
-                              // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
-                              setCustomProviders(list)
-                              closeEdit()
-                              void loadModels() // Provider 保存/后端重启完成后立即刷新显示筛选目录
-                              setProviderSaveMsg(t('settings.customProvider.savedReloading'))
-                            }).catch((e) => setProviderTestMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
-                          }}>{t('settings.btn.save')}</button>
-                          <button className="btn ghost sm" disabled={!ep.baseUrl} onClick={() => {
-                            // 已在测试中 → 这个按钮变成「取消」:abort 掉挂起的请求(错误 URL/密钥时不再无限转圈)。
-                            if (providerTesting) { providerTestAbort.current?.abort(); return }
-                            const ac = new AbortController()
-                            providerTestAbort.current = ac
-                            setProviderTesting(true); setProviderTestMsg('')
-                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
-                              .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
-                              .catch((e) => setProviderTestMsg(
-                                e?.name === 'AbortError' ? t('settings.test.canceled')
-                                  : e?.name === 'TimeoutError' ? t('settings.test.timeout')
-                                  : `✗ ${e?.message || e}`))
-                              .finally(() => { setProviderTesting(false); providerTestAbort.current = null })
-                          }}>
-                            {providerTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {providerTesting ? t('settings.btn.cancel') : t('settings.btn.testConnection')}
-                          </button>
-                          <button className="btn ghost sm" onClick={closeEdit}>{t('settings.btn.cancel')}</button>
-                          <span className="provider-editor-msg">{providerTestMsg}</span>
-                        </div>
-                      </div>
-                    )
-                  })()
+                {/* 模型与服务(11-26 方案 C2,docs/ToBeImproved/自定义模型添加与管理方案_2026-11-26/r2.html):原「模型库」+「提供方」+「联网搜索」三页并成一页。
+                    类型标签与后台同名同序(10-17),桌面末尾多一个「联网搜索」;页顶来源胶囊管连接,⋯ 管单个模型,「添加模型」弹窗挑模型。
+                    自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智),写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
+                {tab === 'model' && activeSub === 'm-display' && (() => {
                   const cloudCount = (models?.models || []).filter((m) => m.source === 'forsion').length
-                  return (
-                    <>
-                      {cloudAccount && (
-                        <SettingsPanel icon={<Cloud size={14} />} title={t('prov.cloud')}>
-                          <SettingsRow label={authSt?.loggedIn ? (authSt.nickname || authSt.username || t('prov.cloud')) : t('prov.cloudOut')}
-                            description={authSt?.loggedIn ? t('prov.cloudIn', { count: cloudCount }) : t('prov.cloudOutHint')}
-                            control={<button className="btn ghost sm" onClick={() => goTab('forsion')}>{t('prov.manageAccount')}</button>} />
-                        </SettingsPanel>
-                      )}
-                      {providers && providers.length > 0 && (
-                        <SettingsPanel icon={<KeyRound size={14} />} title={t('prov.subs')} description={t('modelsettings.loginHint')}>
-                          {providers.map((pr) => (
-                            <SettingsRow key={pr.id} label={pr.id} description={pr.loggedIn ? t('prov.subIn') : t('prov.cloudOut')} control={
-                              <button className="btn ghost sm" disabled={providerBusy === pr.id} onClick={() => void doProviderLogin(pr.id)}>
-                                {providerBusy === pr.id ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />}{t(pr.loggedIn ? 'prov.signInAgain' : 'prov.signIn')}
-                              </button>
-                            } />
-                          ))}
-                          {providerBusy && <div className="hint provider-editor-hint">{t('settings.provider.loginBusy')}</div>}
-                        </SettingsPanel>
-                      )}
-                      <SettingsPanel icon={<Plug size={14} />} title={t('modelsettings.apiProviders')} description={t('modelsettings.providerHint')}>
-                        {customProviders.map((cp) => {
-                          const editing = editProvider && !editProvider.isNew && editProvider.original === cp.providerId
-                          const n = (cp.modelIds?.length || 0) + (cp.imageModelIds?.length || 0) + (cp.ttsModelIds?.length || 0) + (cp.asrModelIds?.length || 0)
-                          return <React.Fragment key={cp.providerId}>
-                            <SettingsRow label={cp.providerId}
-                              description={editing ? t('prov.editing', { host: hostOf(cp.baseUrl) }) : `${hostOf(cp.baseUrl)} · ${n ? t('settings.customProvider.modelCount', { count: n }) : t('settings.customProvider.anyModel')}`}
-                              control={<div className="model-lib-controls">
-                                <button className="btn ghost sm" onClick={() => (editing ? closeEdit() : startEdit(cp))}>{t(editing ? 'prov.collapse' : 'settings.btn.edit')}</button>
-                                <button className="icon-btn" title={t('settings.btn.delete')} aria-label={`${t('settings.btn.delete')} · ${cp.providerId}`} onClick={() => {
-                                  if (!window.confirm(t('settings.customProvider.deleteConfirm', { id: cp.providerId }))) return
-                                  void window.tangu!.deleteProvider!(cp.providerId).then((list) => {
-                                    setCustomProviders(list)
-                                    if (editing) closeEdit()
-                                    void loadModels()
-                                    setProviderSaveMsg(t('settings.customProvider.deletedReloading'))
-                                  })
-                                }}><Trash2 size={13} /></button>
-                              </div>} />
-                            {editing && editor}
-                          </React.Fragment>
-                        })}
-                        {editProvider?.isNew && editor}
-                        {!editProvider?.isNew && <LocalProviderImport providers={customProviders} onManual={() => startEdit(null)} onImported={(list) => {
-                          setCustomProviders(list)
-                          void loadModels()
-                          setProviderSaveMsg(t('settings.customProvider.savedReloading'))
-                        }} />}
-                        {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
-                      </SettingsPanel>
-                      <MaskingSettingsSection />
-                    {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
-                      <div className="hint" style={{ marginTop: 10 }}>
-                        {t('settings.customProvider.externalWarning')}
-                      </div>
-                    )}
-
-                    </>
-                  )
+                  const subscriptionIds = (providers || []).map((pr) => pr.id)
+                  const providersChanged = (list: DirectProviderConfig[]) => { setCustomProviders(list); void loadModels() }
+                  // 改的是盘上最新那份、排队写(mutateProvider):连点两下不会互相盖掉
+                  const saveCp = (id: string, fn: (cur: DirectProviderConfig) => DirectProviderConfig) => {
+                    setLibMsg('')
+                    void mutateProvider(id, fn).then(providersChanged).catch((e) => setLibMsg(e?.message === 'last-llm' ? t('modelsettings.keepOne') : t('modelsettings.saveFailed', { msg: e?.message || String(e) })))
+                  }
+                  // 每行 ⋯:云端模型只有设默认 / 复制;自带 Key 的(桌面)还能改类型、看图、从连接里移除
+                  const rowActions = (c: CatalogItem, kind: ModelKind): CapabilityMenuItem[] => {
+                    const items: CapabilityMenuItem[] = []
+                    if (kind === 'llm' && c.model) items.push({ id: 'default', label: t('modelsettings.setDefault'), selected: draft.modelId === c.id, onSelect: () => { setDraft((d) => ({ ...d, modelId: c.id })); p.onConfigChange({ modelId: c.id }) } })
+                    items.push({ id: 'copy', label: t('modelsettings.copyId'), onSelect: () => { void navigator.clipboard?.writeText(c.id) } })
+                    const cp = isDesktop && c.source === 'direct' ? customProviders.find((x) => x.providerId === c.provider) : undefined
+                    const lk = listKindOf(kind)
+                    if (!cp || !lk) return items
+                    const bare = bareModelId(cp.providerId, c.id)
+                    if (!modelsIn(cp, lk).includes(bare)) return items
+                    const locked = lk === 'llm' && !canDropLlm(cp, bare)
+                    const pid = cp.providerId
+                    if (lk === 'llm') {
+                      const textOnly = (cp.noVisionModelIds || []).includes(bare)
+                      items.push({ id: 'vision', label: t('modelsettings.vision'), selected: !textOnly, onSelect: () => saveCp(pid, (cur) => setTextOnly(cur, bare, !textOnly)) })
+                    }
+                    for (const k of LIST_KINDS) items.push({ id: `kind:${k}`, label: t('modelsettings.kindAs', { kind: t(`msvc.kind.${k}`) }), selected: k === lk,
+                      onSelect: () => { if (k !== lk) saveCp(pid, (cur) => changeModelKind(cur, bare, lk, k)) } })
+                    items.push({ id: 'remove', danger: true, label: t('modelsettings.removeFrom', { name: pid }), hint: locked ? t('modelsettings.keepOne') : undefined, disabled: locked, onSelect: () => saveCp(pid, (cur) => removeModel(cur, lk, bare)) })
+                    return items
+                  }
+                  return <>
+                    <ModelPickerSettings
+                      catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [])}
+                      kind={libKind} onKind={setLibKind} subscriptionIds={subscriptionIds}
+                      onRefresh={() => void loadModels()} loading={modelsLoading}
+                      autoCompact={isDesktop ? <AutoCompactSetting cfg={p.cfg} /> : undefined}
+                      defaultChatId={draft.modelId || models?.defaultModelId || undefined}
+                      rowActions={rowActions}
+                      providerFilter={libProvider} onProviderFilter={setLibProvider}
+                      onAddModels={isDesktop ? () => setAddModels({}) : undefined}
+                      sources={isDesktop ? <SourceChips target={homeTarget()} providers={customProviders} onProviders={providersChanged}
+                        cloud={cloudAccount ? { signedIn: !!authSt?.loggedIn, count: cloudCount } : null} onManageCloud={() => goTab('forsion')}
+                        subs={providers || []} subBusy={providerBusy} onSubLogin={(id) => void doProviderLogin(id)} subscriptionIds={subscriptionIds}
+                        onAddConnection={() => setAddConnOpen(true)}
+                        onShowModels={(id) => { setLibKind('llm'); setLibProvider(id) }} /> : undefined}
+                      webSearch={isDesktop && wsRed ? <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} /> : undefined}
+                      footer={isDesktop ? <>
+                        {libMsg && <div className="hint model-catalog-error" role="alert">{libMsg}</div>}
+                        <LocalProviderImport foundOnly providers={customProviders} onImported={providersChanged} />
+                        <MaskingSettingsSection />
+                        {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
+                          <div className="hint" style={{ marginTop: 10 }}>{t('settings.customProvider.externalWarning')}</div>
+                        )}
+                      </> : undefined}
+                      onContextWindow={isDesktop ? async (modelId, tokens) => {
+                        // 只在本机引擎下露出:写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
+                        await setModelContextWindow(homeTarget(), modelId, tokens)
+                        const next = await listModels(homeTarget())
+                        setModels(next)
+                        // 进度环读的是 store 里启动时装的 modelsResp,且优先上一轮 run 的 context_info(只在切模型时清):
+                        // 两处都刷,否则改完窗口它还显示旧数直到下一条消息。
+                        useApp.setState((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([, v]) => v.modelId !== modelId)) }))
+                      } : undefined} />
+                    {addConnOpen && <AddConnectionDialog target={homeTarget()} providers={customProviders} onClose={() => setAddConnOpen(false)}
+                      onNext={(d) => { setAddConnOpen(false); setAddModels({ draft: d }) }} />}
+                    {addModels && <AddModelsDialog target={homeTarget()} providers={customProviders} draft={addModels.draft} initialProviderId={addModels.providerId ?? libProvider}
+                      onClose={() => setAddModels(null)} onSaved={providersChanged}
+                      onAddConnection={() => { setAddModels(null); setAddConnOpen(true) }} />}
+                  </>
                 })()}
-
-                {/* 本地联网搜索(BYO-key):engine /agent/websearch,写 config.json webSearch 段,搜索时即时生效。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-websearch' && wsRed && (
-                  <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} />
-                )}
 
                 {/* 语音页三张卡(10-25 走查续 4.5),各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
                     语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
@@ -2626,7 +2521,7 @@ export const SettingsModal: React.FC<{
                     cloudModel={models?.realtimeModel} ttsDefault={models} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
                     edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
                     onOpen={(target) => {
-                      if (target === 'providers') { openSubPage('model', 'm-providers'); return }
+                      if (target === 'providers') { openSubPage('model', 'm-display'); setAddConnOpen(true); return }
                       openSubPage('model', 'm-models')
                       setFlashAnchor({ id: target === 'tts-model' ? 'default-tts' : 'default-call', seq: Date.now() })
                     }} />

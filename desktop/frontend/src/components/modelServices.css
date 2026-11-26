@@ -1,0 +1,74 @@
+/* 设置 → 模型 → 模型与服务(ModelSources.tsx / ModelPickerSettings.tsx)。只读 token;胶囊样子同首启引导的服务商胶囊。 */
+
+/* 来源胶囊(和添加 / 分组 / 刷新同一行,按钮靠右) */
+.model-lib-top { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 12px; }
+.model-lib-actions { display: flex; align-items: center; gap: 6px; flex: none; margin-left: auto; }
+.msvc-sources { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: var(--control-height, 30px); }
+.msvc-sources-label { color: var(--text-muted); font-size: var(--ui-font-meta); margin-right: 2px; }
+.msvc-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border: 0; border-radius: var(--radius-pill);
+  background: var(--overlay-light); color: var(--text); font: inherit; font-size: var(--ui-font-meta); white-space: nowrap; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm);
+}
+.msvc-chip:hover, .msvc-chip[aria-expanded='true'] { background: var(--overlay-medium); }
+.msvc-chip[aria-pressed='true'] { background: var(--action-fill); color: var(--on-action); }
+.msvc-chip svg { color: var(--text-muted); }
+.msvc-chip-add { color: var(--text-muted); }
+.msvc-dot { width: 7px; height: 7px; flex: none; border-radius: var(--radius-pill); background: var(--text-faint); }
+.msvc-dot.is-ok { background: var(--green); }
+.msvc-dot.is-bad { background: var(--warning); }
+
+/* 浮层 */
+.ui-popover.msvc-pop { width: min(340px, calc(100vw - 20px)); padding: 0; }
+.msvc-pop-body { display: grid; gap: 6px; padding: 12px; font-size: var(--ui-font-body); }
+.msvc-pop-head { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+.msvc-pop-status { min-height: 18px; }
+.msvc-pop-row { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; }
+.msvc-pop-row > span:first-child { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msvc-pop-row input { width: 100%; min-width: 0; }
+.msvc-pop-v { color: var(--text-muted); font-size: var(--ui-font-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msvc-pop-note { margin: 0; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 1.5; }
+.msvc-pop-note.is-bad, .msvc-stat.is-bad { color: var(--warning); }
+.msvc-pop-foot { display: flex; align-items: center; gap: 6px; padding-top: 4px; }
+.msvc-pop-foot .grow { flex: 1; }
+.btn.msvc-danger { color: var(--danger); }
+.msvc-stat { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta); min-width: 0; }
+.msvc-stat.is-ok { color: var(--green); }
+
+.msvc-adv { justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; font: inherit; font-size: var(--ui-font-meta); color: var(--text-muted); cursor: pointer; }
+.msvc-adv svg { color: var(--text-faint); }
+.msvc-adv-fields { display: grid; gap: 8px; }
+.msvc-adv-fields label, .msvc-field { display: grid; gap: 4px; }
+.msvc-adv-fields label > span, .msvc-field > span, .msvc-label { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msvc-field input, .msvc-field select, .msvc-adv-fields input, .msvc-adv-fields select { width: 100%; min-width: 0; }
+.msvc-link { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; font: inherit; font-size: var(--ui-font-meta); color: var(--text-muted); cursor: pointer; }
+.msvc-link:hover { color: var(--text); }
+
+/* 弹窗 */
+.modal.msvc-dialog { height: auto; max-height: 88vh; }
+.msvc-dialog-body { display: grid; gap: 10px; padding: 2px 18px 6px; overflow: auto; min-height: 0; }
+.msvc-dialog-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; }
+.msvc-dialog-foot .grow, .msvc-inline .grow, .msvc-toolbar .grow { flex: 1; }
+.msvc-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.msvc-inline { display: flex; align-items: center; gap: 10px; min-height: 18px; }
+.msvc-sub { color: var(--text-muted); font-size: var(--ui-font-meta); }
+.msvc-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.msvc-search { flex: 1; min-width: 160px; display: flex; align-items: center; gap: 6px; padding: 0 10px; height: var(--control-height, 30px); border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); }
+.msvc-search input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 0; height: 100%; outline: none; box-shadow: none; color: var(--text); font: inherit; font-size: var(--ui-font-body); }
+.msvc-models { display: grid; max-height: min(46vh, 380px); overflow-y: auto; }
+.msvc-models-note { display: flex; align-items: center; gap: 6px; margin: 8px 2px; }
+.msvc-model { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: var(--border-width) solid var(--border); cursor: pointer; font-size: var(--ui-font-body); }
+.msvc-model:last-child { border-bottom: 0; }
+.msvc-model.is-disabled { cursor: default; }
+.msvc-model.is-disabled .msvc-model-name { color: var(--text-muted); }
+.msvc-dialog .model-lib-count { margin-left: 5px; color: var(--text-faint); }
+.msvc-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msvc-more { justify-self: start; }
+
+/* 模型库里的新东西 */
+.model-lib-filter { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 9px; border-radius: var(--radius-pill); background: var(--overlay-light); font-size: var(--ui-font-meta); color: var(--text); }
+.model-lib-default { margin-left: 6px; color: var(--accent-ink, var(--text)); font-size: var(--ui-font-caption); font-weight: 500; }
+.model-lib-more { width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
+.model-lib-more:hover, .model-lib-more[aria-expanded='true'] { background: var(--overlay-light); color: var(--text); }
+.model-lib-bar .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap; }
+.model-lib-websearch { display: grid; gap: 12px; }
