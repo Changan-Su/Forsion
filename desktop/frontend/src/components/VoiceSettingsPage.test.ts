@@ -72,7 +72,7 @@ afterEach(async () => {
 })
 
 describe('语音页(设置卡片)', () => {
-  it('三张卡,每行都声明窄屏排法;没选朗读模型时音色照样能看,「去选模型」/「添加提供方」交给 onOpen', async () => {
+  it('三张卡,每行都声明窄屏排法;没选朗读模型时音色照样能看,「去选模型」/「添加连接」交给 onOpen', async () => {
     installTangu()
     const p = await render({ mode: 'external', backendUrl: 'http://127.0.0.1:1' })
     await flush()
@@ -84,7 +84,7 @@ describe('语音页(设置卡片)', () => {
     expect(read.querySelector('.voice-gallery')).not.toBeNull()
     await click(btn(read, '去选模型'))
     expect(p.onOpen).toHaveBeenLastCalledWith('tts-model')
-    await click(btn(panel('settings-voice-call'), '添加提供方'))
+    await click(btn(panel('settings-voice-call'), '添加连接'))
     expect(p.onOpen).toHaveBeenLastCalledWith('providers')
     expect(read.querySelector('.voice-tile-new')).toBeNull() // 没有百炼提供方:不给新建
   })

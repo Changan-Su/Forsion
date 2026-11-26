@@ -977,7 +977,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     <article key={c.id} className={`mk-card ${compact ? 'compact' : ''}`} onClick={() => openDetail(c)}>
       <div className="mk-card-visual" aria-hidden="true"><ItemIcon url={c.iconUrl} type={c.type} size={compact ? 20 : 24} /></div>
       <div className="mk-card-content">
-        <div className="mk-card-eyeline">
+        <div className="mk-card-eyeline" data-has-tier={requirementText(c.collected, t) ? '' : undefined}>
           <span>{kindLabel[c.type]}</span>
           {!!requirementText(c.collected, t) && <span className="mk-tier" data-market-tier={c.id} title={requirementText(c.collected, t)}>{requirementText(c.collected, t)}</span>}
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
