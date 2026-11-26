@@ -20,6 +20,10 @@ export interface ToolContext {
   userId: string;
   sessionId: string;
   appId: string;
+  /** Host-issued scope for this user turn. An incoming steer invalidates the previous scope. */
+  userTurnId?: string;
+  /** Set on this call only after its mandatory interactive approval in the same turn. */
+  userConfirmedCall?: boolean;
   runId?: string;
   /** 客户端面标识(input.client,经 routes/runs 白名单:desktop|web|mobile|cli|tui/版本)。
    *  GUI 门禁工具(sketch)据此判定;TUI/通道/自动化/子代理 run 无 tag → 缺省即不可见(default-deny)。 */

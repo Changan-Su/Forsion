@@ -24,7 +24,7 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval, type ApprovalDecision } from '../src/services/approvals.js';
-import { enqueueRun, abortRun, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
 import { markRecoveryHost, CALL_NOT_STARTED_RESULT } from '../src/services/runProgress.js';
 
 // ⑧⑨ 用:路径带 prectx → PreToolUse 注入上下文;参数带 boom → 执行抛错。其余一律透传原实现(①–⑦ 不受影响)。
@@ -46,6 +46,8 @@ vi.mock('../src/tools/registry.js', async (importOriginal) => {
       : orig.executeTool(call, ctx)),
   };
 });
+
+import { registerToolProvider, unregisterToolProvider } from '../src/tools/toolRegistry.js';
 
 const USER = 'u1';
 let home: string;
@@ -167,6 +169,29 @@ const until = async (cond: () => boolean, what: string): Promise<void> => {
 };
 
 describe('挂起审批(托盘 run)', () => {
+  it.each([false, true])('binds a confirmed call to its original user turn (incoming steer: %s)', async (steer) => {
+    const seen: Array<{ turn?: string; confirmed?: boolean }> = [];
+    const name = 'test_confirm_turn';
+    registerToolProvider({ id: name, tools: () => [{
+      name, mode: 'host', capabilities: { approval: 'always' },
+      definition: { type: 'function', function: { name, description: 'Exercise turn-bound approval', parameters: { type: 'object', properties: {} } } },
+      execute: async (_args, ctx) => { seen.push({ turn: ctx.userTurnId, confirmed: ctx.userConfirmedCall }); return 'checked'; },
+    }] });
+    try {
+      script = [() => ({ content: '', reasoning: '', finishReason: 'stop', usage,
+        toolCalls: [{ id: 'receipt-call', type: 'function', function: { name, arguments: '{}' } }] }),
+        ...Array.from({ length: 6 }, () => finalStep('done'))];
+      const r = await start(true);
+      const req = await r.nextApproval();
+      if (steer) expect(enqueueSteer(r.runId, { id: 'new-user-message', content: '<approval_update>new user request' })).toBe(true);
+      expect(decide(req, { action: 'approve' })).toBe(true);
+      expect((await r.settled()).status).toBe('done');
+      expect(seen).toHaveLength(1);
+      expect(seen[0].confirmed).toBe(!steer);
+      if (!steer) expect(seen[0].turn).toBeTruthy();
+    } finally { unregisterToolProvider(name); }
+  }, 20_000);
+
   it('① 挂起后先干别的、收尾时等拍板;批准 → 按原参数执行、结局回灌、续跑收尾', async () => {
     script = [
       outsideWrite('c-park', 'parked.txt'),
