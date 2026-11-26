@@ -161,20 +161,49 @@ export function positionMotionLayer(layer: HTMLElement, x: number, y: number, wi
   return z
 }
 
-/** Fade out alongside the retreating surface, including when interrupted during entry. */
-export function fadePanelContentOut(children: HTMLElement[], opacity: number[], time: number, duration: number): Animation[] {
+/** 面板里真正画出来的那一层子节点:穿过 display: contents 的包装层(模型菜单的 .cm-main)—— 它没有自己的盒子,
+ *  opacity / translate 动在它身上不会传给里面的行(Codex 评审 P2,2026-11-26)。 */
+export function paintedChildren(panel: Element): HTMLElement[] {
+  const out: HTMLElement[] = []
+  for (const c of Array.from(panel.children) as HTMLElement[]) {
+    if (typeof getComputedStyle === 'function' && getComputedStyle(c).display === 'contents') out.push(...paintedChildren(c))
+    else out.push(c)
+  }
+  return out
+}
+
+/** 内容收起时朝源挪的方向(4px):源在面板下方就往下、上方往上、左右同理;重叠或量不到就原地淡。 */
+export function driftToward(source: Element, panel: Element): { x: number; y: number } {
+  const s = source.getBoundingClientRect(), p = panel.getBoundingClientRect()
+  const y = s.top >= p.bottom - 1 ? 4 : s.bottom <= p.top + 1 ? -4 : 0
+  const x = y ? 0 : s.left >= p.right - 1 ? 4 : s.right <= p.left + 1 ? -4 : 0
+  return { x, y }
+}
+
+/** Fade out alongside the retreating surface, including when interrupted during entry.
+ *  `ratio`:内容在倒放进行到几成时淡完(缺省 0.65);`drift`:同时朝源挪多少(缺省不挪)。
+ *  液滴主题传 0.3 + 朝源 4px(2026-11-26 用户选「菜单字先收」,方案页 docs/ToBeImproved/胶囊收起与Ribbon过渡方案_2026-11-26/):
+ *  液滴的内容不受液体形状裁切,液体 ~100ms 已缩离文字区、字还要 ~190ms 才淡完,一排字浮在液体外面。
+ *  拉伸主题照旧 0.65、不挪:那边内容被同一个 clip-path 裁着,不会浮在外面;早淡完反而是「卡先空了再缩」
+ *  (droplet-reuse.e2e「卡片开始明显收拢前,内容仍在淡出」钉着)。 */
+export function fadePanelContentOut(children: HTMLElement[], opacity: number[], time: number, duration: number, drift: { x: number; y: number } = { x: 0, y: 0 }, ratio = 0.65): Animation[] {
   // 关键帧的 offset 只收 [0,1]:刚开就收(动画还在 delay 里 currentTime 为负)或时长读成 0 时会算出负数 / NaN,
   // animate() 直接抛错(11-09 2.14.0-beta.1 tag 构建的打包验收报过)。夹住之后最坏是「立刻淡到 0」。
-  const k = 0.65 * time / duration
+  const k = ratio * time / duration
   const offset = Number.isFinite(k) ? Math.min(1, Math.max(0, k)) : 0
+  const moves = drift.x !== 0 || drift.y !== 0
+  const away = moves ? { translate: `${drift.x}px ${drift.y}px`, scale: '0.98' } : {}
+  const home = moves ? { translate: '0 0', scale: '1' } : {}
+  // 无 DOM(单测)读不到 :root 的 token,用同值兜底
+  const ease = typeof getComputedStyle === 'function' ? curve('--ease-exit', 'cubic-bezier(0.4, 0, 1, 1)') : 'cubic-bezier(0.4, 0, 1, 1)'
   return children.map((child, i) => child.animate(
-    [{ opacity: opacity[i] }, { opacity: 0, offset }, { opacity: 0 }],
+    [{ opacity: opacity[i], ...home, ...(moves ? { easing: ease } : {}) }, { opacity: 0, offset, ...away }, { opacity: 0, ...away }],
     { duration: duration * 0.7 },
   ))
 }
 
 export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
-  const kids = (): HTMLElement[] => Array.from(panel.children) as HTMLElement[]
+  const kids = (): HTMLElement[] => paintedChildren(panel)
   if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) {
     // 减少动态效果:留反馈、去点缀(DESIGN §3 规矩 8)—— 只淡入 / 淡出,不形变
     const fade = (from: number, to: number, duration: number): Animation =>
@@ -395,7 +424,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       setEase(back, rate)
       // 别用 fill: forwards:面板不卸载时,取消填充动画和隐藏面板撞在同一帧,Chromium 会把内容的透明度留在 0,
       // 元素上已没有动画,再展开就是空屏(10-30 用户报,连开 33 次空 16 次)。所以写成保持到结束,收完由下面藏起面板
-      outs = fadePanelContentOut(kids(), from, t, D)
+      outs = fadePanelContentOut(kids(), from, t, D, driftToward(source, panel), 0.3)
       // 直接赋 playbackRate(同步生效):updatePlaybackRate 要等下一帧才换向,掉头 / 中途收那一帧会先朝原方向多走一步,
       // 曲线陡的地方就是肉眼可见的一跳(droplet-retract.probe.cjs 量到 5–8%)
       for (const a of [grow, clip]) { a.playbackRate = rate; a.play() }
@@ -425,10 +454,11 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       // 曲线换回展开那条,播放头按形状换算(不跳帧)
       const t = setEase(surface, 1)
       // 内容从此刻的透明度回到 1,不早于 0.22D 露出(同流出)
-      const from = kids().map((k) => +getComputedStyle(k).opacity)
+      // 透明度、朝源挪的位移与缩放都从这一帧接着回(只接透明度的话,还看得见的字会一帧弹回原位;Codex 评审 P2)
+      const from = kids().map((k) => { const cs = getComputedStyle(k); return { opacity: +cs.opacity, translate: cs.translate === 'none' ? '0px 0px' : cs.translate, scale: cs.scale === 'none' ? '1' : cs.scale } })
       outs.forEach((a) => a.cancel())
       outs = []
-      shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
+      shows = kids().map((k, i) => k.animate([from[i] ?? { opacity: 0 }, { opacity: 1, translate: '0px 0px', scale: '1' }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
       // 只改速率、不 play():刚调完 retract() 的同一帧里它们还停在终点,play() 遇到「正向 + 在终点」会倒回 0 重放(Codex 评审 P3)
       for (const a of [grow, clip]) { a.playbackRate = 1; if (a.playState === 'paused') a.play() }
       if (swell.playState === 'paused') swell.play() // 速率 setEase 已按剩下的路配好

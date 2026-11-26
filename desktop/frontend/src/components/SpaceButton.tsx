@@ -46,7 +46,7 @@ export function SpaceButton({ space, expanded }: { space: SpaceDefinition; expan
       }}
     >
       {Icon && <Icon size={18} />}
-      {expanded && <span className="rb-label">{name}</span>}
+      <span className="rb-label">{name}</span>
       {unread > 0 && <span className={`rb-badge${solo.wait ? ' dm-wait' : ''}`} aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
       {unread === 0 && dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
       {unread === 0 && !dot && pct != null && <span className="rb-badge rb-ring" style={{ '--p': pct } as CSSProperties} aria-hidden="true" />}

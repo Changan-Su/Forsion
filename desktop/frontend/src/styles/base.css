@@ -2112,6 +2112,10 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它 fit-content → 224px 不可插值,过渡不跑。
    ⚠️ 别改成 min-width 0 → 224px:可见区间只有 [自然宽, 224],收的时候几乎瞬变。scripts/model-menu.check.cjs 的 B 钉着。
    ponytail: Safari 尚不支持 interpolate-size,那边降级为直接到位。 */
+/* 带图标的模型胶囊收起态也是三列 grid(同 composer2.css .mode-pill-btn 的注释,2026-11-26):开合只动宽度,字不跳。
+   不带图标的(笔记插件里的模型选择,icon={null})照旧 inline-flex;窄 Chat View(data-compact)那条更具体,仍是 flex。 */
+/* 两侧列至少 13px:图标 13 / 箭头 10 也等宽,撑开后字精确居中(model-menu.check 钉 0.6px);字的 max-width 开合不变 */
+.composer-chip.model-pill-btn.has-icon { display: grid; grid-template-columns: minmax(13px, auto) minmax(0, 1fr) minmax(13px, auto); }
 .composer-chip.model-pill-btn {
   min-width: 0;
   interpolate-size: allow-keywords;
@@ -2119,9 +2123,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
   transition: background var(--duration-fast), width var(--pill-size-motion);
 }
+/* 不带图标的那种照旧只在撑开时换三列(带图标的在基础规则里就是 grid,列宽不随开合变,收起时字不跳) */
+.composer-chip.model-pill-btn.is-open:not(.has-icon) { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; }
 .composer-chip.model-pill-btn.is-open {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
   --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
@@ -2133,8 +2137,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   background: color-mix(in srgb, #8b5cf6 12%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
 }
 .model-pill-wrap.is-open { flex-shrink: 0; }
-.model-pill-btn.is-open > svg { justify-self: center; }
-.model-pill-btn.is-open .pill-marquee { width: 100%; max-width: none; text-align: center; }
+.model-pill-btn.is-open:not(.has-icon) > svg { justify-self: center; }
+.model-pill-btn.has-icon > :is(svg, .pill-marquee, .pill-ultra-label) { justify-self: center; }
+.model-pill-btn.is-open:not(.has-icon) .pill-marquee { width: 100%; max-width: none; text-align: center; }
 /* ⚠️ 子面板绝对定位到菜单**外面**,故此变体必须 overflow:visible —— 通用 .composer-menu 的
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
@@ -2375,7 +2380,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .pill-ultra-streaks i:nth-child(4) { --pill-streak: rgba(255, 122, 69, 0.75); top: 75%; animation-duration: 1.7s; animation-delay: -1.25s; }
 :root[data-mode='dark'] .pill-ultra-streaks i { --pill-streak: rgba(255, 255, 255, 0.85); }
 .pill-ultra-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.model-pill-btn.is-open .pill-ultra-label { justify-content: center; width: 100%; }
+.model-pill-btn.is-open:not(.has-icon) .pill-ultra-label { justify-content: center; width: 100%; }
 /* 展开态通用规则会把 .pill-marquee 撑满整行(居中单行文案用);Ultra 这里名字 + 标签要作为一组居中,名字不许撑开 */
 .model-pill-btn.is-open .pill-ultra-label .pill-marquee { width: auto; min-width: 0; }
 /* 柔光上叠渐变字会糊:「Ultra」用加粗的紫色实色;暗色换浅紫(深紫压在深灰上对比度不够) */

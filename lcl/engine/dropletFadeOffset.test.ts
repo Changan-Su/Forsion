@@ -7,14 +7,15 @@ const fakeChild = () => {
   const el = { animate: (k: Keyframe[]) => { calls.push(k); return {} as Animation } } as unknown as HTMLElement
   return { el, calls }
 }
-const mid = (time: number, duration: number): unknown => {
+const mid = (time: number, duration: number, ratio?: number): unknown => {
   const c = fakeChild()
-  fadePanelContentOut([c.el], [1], time, duration)
+  fadePanelContentOut([c.el], [1], time, duration, undefined, ratio)
   return c.calls[0][1].offset
 }
 
 describe('fadePanelContentOut 的关键帧 offset', () => {
-  it('正常进度按 0.65 比例', () => expect(mid(200, 400)).toBeCloseTo(0.325))
+  it('正常进度按 0.65 比例(拉伸主题)', () => expect(mid(200, 400)).toBeCloseTo(0.325))
+  it('液滴传 0.3:倒放头 30% 淡完', () => expect(mid(200, 400, 0.3)).toBeCloseTo(0.15))
   it('刚开就收,进度为负 → 0', () => expect(mid(-16, 420)).toBe(0))
   it('时长为 0 / 进度非数 → 0,不出 NaN', () => {
     expect(mid(0, 0)).toBe(0)
