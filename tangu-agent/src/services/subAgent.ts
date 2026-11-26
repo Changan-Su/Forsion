@@ -22,7 +22,7 @@ import { isSafetyStop, safetyStopNotice, SAFETY_STOP_NOTICE, SAFETY_STOP_ORIGIN 
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
-import { getToolDefinitions, listDeferredTools, deferredCatalogSection, executeTool, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, listDeferredTools, deferredCatalogSection, executeTool, macAppShellRoute, type ToolContext } from '../tools/registry.js';
 import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
 import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
 import { withLlmRetry, type LlmRetryChain } from '../llm/retry.js';
@@ -622,7 +622,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         ? { ...call, function: { ...call.function, arguments: JSON.stringify(preV.updatedInput) } }
         : call;
       // 审批闸门照走(host 模式破坏性操作仍需用户批准;审批请求发到父 run 的事件流)
-      const decision = denied || preV?.block ? null : await gateToolCall(
+      const redirected = !denied && !preV?.block && macAppShellRoute(hookCall, subCtx);
+      const decision = denied || preV?.block || redirected ? null : await gateToolCall(
         runId,
         hookCall,
         {
@@ -653,6 +654,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       } else if (preV?.block) {
         // 与主循环(agentLoop)逐字同一句:模型面英文,写明是 hook 挡的、没执行(旧文案是中文「⛔ Hook 拦截：…」)。
         content = `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`;
+        isError = true;
+      } else if (redirected) {
+        content = redirected;
         isError = true;
       } else if (decision && decision.action === 'reject') {
         // 决定体没带 rejectReason = 用户在审批卡 / 通道点了拒绝 → 与主循环同一回落文案(规则 / 中止各自带原因)。

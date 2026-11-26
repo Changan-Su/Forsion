@@ -43,3 +43,36 @@ describe('tool arguments are never silently replaced (R4)', () => {
     expect(closeToolNames('totally_unrelated', ['run_bash', 'read_file'])).toEqual([]);
   });
 });
+
+describe.runIf(process.platform === 'darwin')('direct application activation in host shell tools', () => {
+  it.each(['run_bash', 'run_background'])('routes %s only when Computer Use is available', async (name) => {
+    const execute = vi.fn(() => 'shell ran');
+    const ctx = context(execute);
+    ctx.profile!.toolLoadout.providers = [{ id: 'route-test', tools: () => [name, 'act_ui'].map(tool => ({
+      name: tool, mode: 'host' as const,
+      capabilities: { sideEffect: 'read' as const, concurrencyKey: tool === 'act_ui' ? 'computer-use' : undefined },
+      definition: { type: 'function' as const, function: { name: tool, description: '', parameters: {} } }, execute,
+    })) }];
+    const activate = call(JSON.stringify({ command: 'if true; then open /Applications/Music.app; fi' }), name);
+    expect((await executeTool(activate, ctx)).result).toContain('Use ensure_app');
+    expect(execute).not.toHaveBeenCalled();
+    const inspect = call(JSON.stringify({ command: 'echo "open -a Music"' }), name);
+    expect((await executeTool(inspect, ctx)).result).toBe('shell ran');
+    ctx.computerUseUnavailable = 'no-image-input';
+    expect((await executeTool(activate, ctx)).result).toBe('shell ran');
+  });
+});
+
+describe('Computer Use window recovery', () => {
+  it('only trusts a refused Computer Use action for the final-response signal', async () => {
+    const failure = Object.assign(new Error('No input sent'), { code: 'computer_use_recovery_exhausted' });
+    const execute = vi.fn(() => { throw failure; });
+    const ctx = context(execute);
+    ctx.profile!.toolLoadout.providers = [{ id: 'recovery-test', tools: () => ['act_ui', 'read_file'].map(name => ({
+      name, mode: 'host' as const, capabilities: { sideEffect: 'read' as const, concurrencyKey: name === 'act_ui' ? 'computer-use' : undefined },
+      definition: { type: 'function' as const, function: {name, description: '', parameters: {}} }, execute,
+    })) }];
+    expect(await executeTool(call('{}', 'act_ui'), ctx)).toMatchObject({ isError: true, metadata: { computerUseRecoveryExhausted: true } });
+    expect((await executeTool(call('{}', 'read_file'), ctx)).metadata).toBeUndefined();
+  });
+});

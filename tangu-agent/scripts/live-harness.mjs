@@ -1330,7 +1330,10 @@ const IMGEDIT = ONLY.has('imageedit') || ONLY.has('imagemulti') ? await new Prom
   if (COMPACTION_CFG || MCP_CFG || gitCfg || providers.length) writeFileSync(join(shared, 'config.json'), JSON.stringify({ ...(COMPACTION_CFG ? { compaction: COMPACTION_CFG } : {}), ...(MCP_CFG ? { mcp: MCP_CFG } : {}), ...(gitCfg ? { git: gitCfg } : {}), ...(providers.length ? { providers } : {}), ...relayModels }, null, 2));
 }
 // cumusic / cusend:隔离 config 里打开 Jev(合并写,所以在上面那次整份写之后)
-if (CU_JEV) cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
+if (CU_JEV && process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only' && (ONLY.size !== 1 || !ONLY.has('cumusic'))) {
+  throw new Error('The foreground recovery test controls only Melody. Run it with --only cumusic.');
+}
+if (CU_JEV) await cuJevConfig({ shared, mode: opt('cu-jev-mode', 'auto'), threshold: opt('cu-jev-threshold', '') });
 // C3:必须在上面那次整份 writeFileSync(config.json) 之后、引擎起来之前 —— 走 K4 的 IPC 处理器与 main.ts 同一套写法,不自己写 JSON
 let remoteCapWrite = null;
 if (REMOTE_CAP) {

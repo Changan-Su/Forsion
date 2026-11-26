@@ -20,7 +20,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, re
 import net from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const CU_JEV_KEYS = ['cumusic', 'cusend', 'cuambig', 'cuscroll', 'cusearch'];
 /** 引擎起来时 TANGU_JEV_EVIDENCE_DIR 指 <OUT>/这里;每个场景跑完把自己那段时间的请求挪进自己的 evidence 目录。 */
@@ -84,15 +84,23 @@ export function cuJevSetup({ bundle, shared, replaceInstalledHelper = false }) {
  * 只写进隔离 home(归档工具不收它)。必须在台架整份写 config.json 之后调用 —— 这里是合并写。
  * threshold 不给 = 用插件缺省(这次要量的就是缺省值)。
  */
-export function cuJevConfig({ shared, mode = 'auto', threshold = '' }) {
+export async function cuJevConfig({ shared, mode = 'auto', threshold = '' }) {
   const src = process.env.JEV_SETTINGS_FILE || join(homedir(), '.forsion-dev', 'config.json');
   const mine = JSON.parse(readFileSync(src, 'utf8')).plugins?.global?.['computer-use'] || {};
   if (!mine.jev_api_key) throw new Error(`${src} 的 Computer Use 设置里没有 Jev 密钥(设置 → 电脑操作 → Jev API 密钥)`);
   const file = join(shared, 'config.json');
   const cfg = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+  if (process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only') {
+    // This case explicitly invites foreground input. Only allow calls grounded in the isolated player's root.
+    const { syncUserTrust, normalizeHooksConfig } = await import('../../dist/hooks/config.js');
+    const guard = new URL('./cu-melody-scope.mjs', import.meta.url);
+    const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
+    const command = [process.execPath, fileURLToPath(guard)].map(quote).join(' ');
+    cfg.hooks = syncUserTrust(normalizeHooksConfig({events: {PreToolUse: [{hooks: [{type: 'command', command}]}]}}));
+  }
   cfg.plugins ??= {}; cfg.plugins.global ??= {};
   cfg.plugins.global['computer-use'] = {
-    __enabled: true, jev_enabled: true, jev_api_url: mine.jev_api_url || 'https://api.typesafe.ai/v1/systemone', jev_api_key: mine.jev_api_key, jev_mode: mode,
+    __enabled: true, ...(process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only' ? {headless: false} : {}), jev_enabled: true, jev_api_url: mine.jev_api_url || 'https://api.typesafe.ai/v1/systemone', jev_api_key: mine.jev_api_key, jev_mode: mode,
     ...(threshold ? { jev_threshold: Number(threshold) } : {}),
   };
   if (existsSync(file)) chmodSync(file, 0o600); // 台架先写过这个文件时 mode 不生效:密钥写进去之前先收紧
@@ -327,7 +335,10 @@ export async function cuJevLive({ key, api, run, OUT, bundle, timeoutMs, tokensO
     // 发送前问「要不要发」是插件的确认规则(对外发送先确认):用户原话已经让发,台架照用户的意思答「可以」,问了几次记进指标
     const sends = key === 'cusend' || key === 'cusearch';
     const session = `live-${key}-${t0}`, opts = sends ? { inquiryAnswer: OK_SEND } : {};
-    ev = await run(session, PROMPTS[key], timeoutMs, {}, undefined, undefined, undefined, undefined, opts);
+    const prompt = key === 'cumusic' && process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only'
+      ? PROMPTS[key] + '\n播放器在另一个桌面，应用标识是 com.forsion.cu-fixture.melody。尽可能在后台完成点击，确实需要时可以使用前台 Mini，结束后回原对话。'
+      : PROMPTS[key];
+    ev = await run(session, prompt, timeoutMs, {}, undefined, undefined, undefined, undefined, opts);
     // 10-16 前三轮都是用一句普通回复问「要现在发吗?」就收尾:照真用户在同一会话里回一句再接着跑,判据看最终状态
     // 最多回两次(纠正收件人之后它可能再问一次「发给 Sakura 吗?」);每次只答它问的,照用户的真实意思
     for (let last = ev.content; sends && followUps.length < 2 && !(read('chatter')?.sent || []).length && asksToSend(last);) {
