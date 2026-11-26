@@ -70,15 +70,20 @@ describe('buildTranscript × toolImages 物化消息', () => {
   it('「你看不到图」的说明不进转写:不留 [User] 条目,也不留正文;前面那条转写照旧是 [Tool images]', async () => {
     const t = await transcriptOf([
       ...await toolImageMessages([{ url: A }], async () => 'a window with a Send button'),
-      ...await toolImageMessages([{ url: A }], async () => { throw new Error('down'); }),
       { role: 'user', content: NO_VISION_NOTE } as ChatMessage,
     ]);
     expect(t).toContain('[Tool images]\n(The images read by the tools above');
     expect(t).toContain('a window with a Send button');
     expect(t).not.toContain('no_image_input');
     expect(t).not.toContain('cannot see images in this session');
-    expect(t).not.toContain('the visual check could not be completed');
     expect(t.match(/\[User\]/g)).toHaveLength(1); // 只有真正的用户那条
+  });
+
+  it('保留工具图未送达的事实,归在工具图下', async () => {
+    const t = await transcriptOf(await toolImageMessages([{ url: A }], async () => { throw new Error('down'); }));
+    expect(t).toContain('[Tool images]\n(The tools captured or read images');
+    expect(t).toContain('the visual check could not be completed');
+    expect(t.match(/\[User\]/g)).toHaveLength(1);
   });
 
   it('普通用户消息(含自己带的图)照旧 [User];摘要提示说明工具条目是数据', () => {

@@ -98,7 +98,7 @@ import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHi
 import { branchesSection } from './branchContext.js';
 import { stashSuggestionSeed } from './promptSuggestion.js';
 import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageAttachments.js';
-import { describeImages, mainModelSupportsVision, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
+import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
 import { replayAssistantHistory, replayUserContext, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
@@ -5023,18 +5023,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 仅 in-memory(不落库):本 run 内多轮可见即可,避免历史每轮重发多 MB base64(对齐附件物化纪律)。
       if (pendingToolImages.length) {
         const imgs = pendingToolImages.splice(0);
-        // 转写失败后,已知无图像输入的主模型只能收到文字说明。只有「始终使用」档的可信图
-        // 需要在失败时再查主模型能力,避免把原图发给一个已经判定为纯文本的模型。
-        const noImages = !ac.signal.aborted && await whyNoImages(callModelId, appId, agentConfig.visionMode as string | undefined);
+        // 需要转写时,失败也只能回传文字说明。「始终使用」会覆盖目录未标注的纯文本模型,
+        // 因此转写失败不能再根据目录猜测并发原图。
+        // 中止后不再为转写等模型目录或解析请求,它们没有 run signal。
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(callModelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
         let transcribed = false;
-        workingMessages.push(...await toolImageMessages(imgs, noImages
+        workingMessages.push(...await toolImageMessages(imgs, needDescribe
           ? async (batch) => { const text = await describeWithStatus(batch, resolveVisionModelId(toolCtx.visionModelId, appId), iteration); transcribed = true; return text; }
-          : null, {
-          onError: (e) => console.warn(`[agent-core] run=${runId} 工具图片识别失败:`, e instanceof Error ? e.message : e),
-          canUseOriginal: async () => !ac.signal.aborted && noImages === 'always-transcribe'
-            && await mainModelSupportsVision(callModelId, appId).catch(() => false),
-        }));
+          : null, (e) => console.warn(`[agent-core] run=${runId} 工具图片识别失败:`, e instanceof Error ? e.message : e)));
         // 旧截图不再每轮重发:只留最近几条带图,更早的就地换成占位(否则请求体随步数线性涨,慢上行必撞上传超时)。
         // 被改的那几条用量只减不增 → 上次的实测基准仍是上界,别让它退回粗估(见 ContextUsageTracker.keepBaseline)。
         for (const m of dropStaleToolImages(liveToolImageTurns, workingMessages.slice(firstToolImageTurn))) contextUsage.keepBaseline(m);

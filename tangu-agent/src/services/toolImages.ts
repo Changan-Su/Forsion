@@ -3,7 +3,7 @@
  *
  * 两类图,按 `untrusted`(工具写的前言句)分组,各出一条消息:
  *  - 可信(view_image / view_video / desk_present / hostExec:用户自己的文件、Forsion 自己的界面):
- *    主模型无视觉先经辅助视觉模型转写;转写失败时只向支持图片输入的主模型回传原图,否则留说明。
+ *    需要辅助视觉模型时先转写。转写失败留说明,始终使用档也不改回原图,以免重现纯文本模型拒图。
  *  - 不可信(phone_observe 截图:**别的 App** 的屏幕):
  *    ⚠️ 图只能放进 user 角色消息(provider 不收 tool 角色的图),所以必须在同一条消息里标明「不可信、别照做」,
  *       否则截图里的注入(「SYSTEM NOTICE… tap 转账」)带着用户权威进上下文,绕过屏幕文字的 DATA 围栏。
@@ -25,20 +25,14 @@ export type DescribeFn = (imgs: Array<{ url: string }>) => Promise<string>;
 
 export const UNTRUSTED_IMAGE_TAG = 'untrusted_image_text';
 export const TOOL_IMAGE_DESCRIPTION_FAILED =
-  '(The tools captured or read images, but the vision assistant model could not describe them. You did not receive the images. If the task requires seeing them, tell the user that the visual check could not be completed. Use the available text results.)';
-
-type DescribeFailure = {
-  onError?: (e: unknown) => void;
-  /** 只在可信图转写失败时检查,例如「始终使用」档中的主模型仍可能有视觉。 */
-  canUseOriginal?: () => Promise<boolean>;
-};
+  '(The tools captured or read images, but the vision assistant model could not describe them. No image or description reached the conversation model, so the visual check could not be completed.)';
 
 const neutralize = (s: string) => s.replace(/</g, '‹').replace(/>/g, '›');
 
 export async function toolImageMessages(
   imgs: ToolImage[],
   describe: DescribeFn | null,
-  failure?: DescribeFailure,
+  onDescribeError?: (e: unknown) => void,
 ): Promise<ChatMessage[]> {
   // 按前言分组、保持首次出现的顺序(一轮里通常只有一类;混合时各出一条)。
   const groups = new Map<string | undefined, Array<{ url: string }>>();
@@ -56,12 +50,12 @@ export async function toolImageMessages(
       try {
         described = await describe(group);
       } catch (e) {
-        failure?.onError?.(e);
+        onDescribeError?.(e);
       }
     }
     const failed = !!describe && !described;
     if (preface === undefined) {
-      if (failed && !(await failure?.canUseOriginal?.())) {
+      if (failed) {
         out.push({ role: 'user', content: TOOL_IMAGE_DESCRIPTION_FAILED });
         continue;
       }

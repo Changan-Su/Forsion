@@ -24,7 +24,7 @@ let runId: string;
 let closeDb: () => void;
 let visionRequests: Array<{ messages: ChatMessage[]; maxTokens: number }>;
 let mainInputs: ChatMessage[][];
-let mainSupportsVision: boolean;
+let mainSupportsVision: boolean | undefined;
 let visionFails: boolean;
 
 beforeEach(async () => {
@@ -58,7 +58,7 @@ beforeEach(async () => {
               { id: 'shot', type: 'function', function: { name: 'desk_screenshot', arguments: '{}' } },
             ], usage: USAGE, finishReason: 'tool_calls' };
           }
-          if (!mainSupportsVision && JSON.stringify(opts.payload.messages).includes(SHOT)) {
+          if (mainSupportsVision !== true && JSON.stringify(opts.payload.messages).includes(SHOT)) {
             throw new LlmError(400, 'The selected model cannot process all input types in this request.');
           }
           opts.onToken?.('The turn continued.');
@@ -118,10 +118,19 @@ it.each(['auto', 'always'] as const)('Agent Desk (%s) continues when auxiliary v
   expect(result.nextInput).toContain('the vision assistant model could not describe them');
 }, 15_000);
 
-it('Agent Desk can still send the original to an image-capable model when forced transcription fails', async () => {
-  mainSupportsVision = true;
+it('Agent Desk does not send an image on failed forced transcription when main model vision is unknown', async () => {
+  mainSupportsVision = undefined;
   const result = await screenshotRun('always');
   expect(visionRequests).toHaveLength(1);
+  expect(result.status).toBe('done');
+  expect(result.nextInput).toContain('the vision assistant model could not describe them');
+  expect(result.nextInput).not.toContain(SHOT);
+}, 15_000);
+
+it('Agent Desk sends the original to an image-capable model in automatic mode', async () => {
+  mainSupportsVision = true;
+  const result = await screenshotRun('auto');
+  expect(visionRequests).toHaveLength(0);
   expect(result.status).toBe('done');
   expect(result.nextInput).toContain(SHOT);
 }, 15_000);
