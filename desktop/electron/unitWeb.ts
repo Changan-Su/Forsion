@@ -291,6 +291,9 @@ export interface UnitWebDeps {
     /** 托管 Unit 的模型票(可缺省):身份验过之后取这个访客的票,随请求以 X-Forsion-Model-Ticket 转给引擎(引擎拿它当这个账号调模型的凭据)。
      *  null = 没有(请求照转,引擎那边的模型调用会报「重新登录」);不抛。票只进转给引擎的头,不回给浏览器、不进日志。 */
     modelTicket?: (bearer: string, account: string, signal: AbortSignal) => Promise<string | null>
+    /** Hosted Unit with per-account backups (optional): runs after the identity check, before anything reaches the engine.
+     *  null = go on; otherwise that reply is sent (an account that must be restored first and could not be, …). Never throws. */
+    prepare?: (bearer: string, account: string, signal: AbortSignal) => Promise<{ status: number; code: string; detail: string } | null>
   }
   /** 委托管理员档的本机开关(独立 Unit 的 unit.json cloud.delegatedAdmin;每请求现读)。缺省 / false = 关:
    *  隧道断言里的操作者声明一律无视,按今天的隧道档。桌面不传。 */
@@ -590,6 +593,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const proxyVisitorEngine = async (req: http.IncomingMessage, res: http.ServerResponse, afterEngine: string): Promise<void> => {
     const target = engineTarget(afterEngine || '/')
     if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+    // The engine's host-only routes are never reached through the visitors' door (they need another credential anyway).
+    const lowered = target.path.toLowerCase()
+    if (lowered === '/_host' || lowered.startsWith('/_host/')) { json(res, 404, { detail: 'Not found' }); return }
     const bearer = /^Bearer (\S+)$/i.exec(String(req.headers.authorization || ''))?.[1]
     if (!bearer) { json(res, 401, { detail: 'Authentication required', code: 'AUTH_REQUIRED' }); return }
     const controller = new AbortController()
@@ -604,6 +610,14 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     if (controller.signal.aborted || res.destroyed) return
     if (!who) { json(res, 401, { detail: 'Authentication required', code: 'AUTH_REQUIRED' }); return }
     if ('forbidden' in who) { json(res, 403, { detail: 'This account cannot use the engine here', code: 'ACCOUNT_NOT_ALLOWED' }); return }
+    // Per-account backups: bring the account back before its first request (restore, or admit a visitor who never had one).
+    if (deps.visitorEngine!.prepare) {
+      res.once('close', onClose)
+      let refused: Awaited<ReturnType<NonNullable<NonNullable<UnitWebDeps['visitorEngine']>['prepare']>>>
+      try { refused = await deps.visitorEngine!.prepare(bearer, who.account, controller.signal) } catch { refused = { status: 503, code: 'ACCOUNT_UNAVAILABLE', detail: 'Try again in a moment' } } finally { res.off('close', onClose) }
+      if (controller.signal.aborted || res.destroyed) return
+      if (refused) { json(res, refused.status, { detail: refused.detail, code: refused.code }); return }
+    }
     // 身份验过才取票;取不到照转(身份的行为不变,只是模型调用会失败)。
     let ticket: string | null = null
     if (deps.visitorEngine!.modelTicket) {

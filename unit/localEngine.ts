@@ -23,12 +23,17 @@ export interface LocalEngineOptions {
   cloudUrl?: string
   /** Multi-account only: TANGU_SCRIPT_ISOLATION=required (the host holds a device credential plugin scripts must not read). */
   scriptIsolation?: 'required'
+  /** Multi-account only: a second, host-only credential (TANGU_HOST_CONTROL_TOKEN) for per-account backup operations.
+   *  It is never the credential visitors' requests carry. */
+  hostControl?: boolean
 }
 
 export interface LocalEngine {
   readonly configFile: string
   /** multiAccount is true only once the engine itself reported multi-account mode at readiness. */
   endpoint(): { url: string | null; token: string; remoteMark?: string; multiAccount?: boolean }
+  /** hostControl engines only: the host-only credential, while the engine runs. */
+  control(): { url: string | null; token: string } | null
   status(): { state: 'stopped' | 'starting' | 'ready' | 'crashed'; pid: number | null; lastError: string | null }
   start(packageRoots: string[]): Promise<void>
   /** Restart discards registered tools/routes from removed packages. Agents already
@@ -44,6 +49,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
   let child: ChildProcess | null = null
   let url: string | null = null
   let token = ''
+  let controlToken = ''
   // Lets the engine tell relayed requests from the owner's own; the owner's page never carries it.
   const remoteMark = randomBytes(32).toString('base64url')
   let state: ReturnType<LocalEngine['status']>['state'] = 'stopped'
@@ -61,6 +67,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     child = null
     url = null
     token = ''
+    controlToken = ''
     state = 'stopped'
     if (!current?.pid || current.exitCode !== null || current.signalCode !== null) return
     await new Promise<void>((done) => {
@@ -90,11 +97,13 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     // plugin overrides. Explicit configuration inside this instance remains native.
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('TANGU_') && key !== 'DATABASE_URL'))
     token = randomBytes(32).toString('base64url')
+    controlToken = options.multiAccount && options.hostControl ? randomBytes(32).toString('base64url') : ''
     Object.assign(env, options.multiAccount ? {
       TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_MULTI_ACCOUNT: '1',
       TANGU_HOST: '127.0.0.1', TANGU_PORT: '0', TANGU_BUNDLE_DIRS: JSON.stringify(roots),
       ...(options.cloudUrl ? { TANGU_CLOUD_URL: options.cloudUrl } : {}),
       ...(options.scriptIsolation === 'required' ? { TANGU_SCRIPT_ISOLATION: 'required' } : {}),
+      ...(controlToken ? { TANGU_HOST_CONTROL_TOKEN: controlToken } : {}),
     } : {
       TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_REMOTE_MARK_SECRET: remoteMark,
       TANGU_DATABASE_URL: '', TANGU_DATA_DIR: join(dataDir, 'tangu/state.db'),
@@ -115,7 +124,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     })
     current.once('exit', (code, signal) => {
       if (child !== current) return
-      child = null; url = null; token = ''; state = 'crashed'
+      child = null; url = null; token = ''; controlToken = ''; state = 'crashed'
       lastError = `Local Tangu engine exited (${signal || code})`
       options.log?.(lastError)
     })
@@ -150,6 +159,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
   return {
     configFile,
     endpoint: () => (url ? (options.multiAccount ? { url, token, multiAccount: true } : { url, token, remoteMark }) : { url, token }),
+    control: () => (controlToken ? { url, token: controlToken } : null),
     status: () => ({ state, pid: child?.pid ?? null, lastError }),
     start: (roots) => serialize(() => run(roots)),
     setPackages: (roots, force) => serialize(() => run(roots, force)),

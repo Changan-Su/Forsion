@@ -16,6 +16,9 @@ export interface RuntimeContext {
   /** Visitor engine only: 'required' when this Unit holds a hosted unit device credential. Plugin scripts must then run as an
    *  unprivileged user so they cannot read it; an engine that cannot switch users refuses to run them. */
   scriptIsolation?: 'required'
+  /** Visitor engine only: give the engine a second, host-only credential for per-account backup operations (snapshot,
+   *  restore, archive). With it the engine also stops creating accounts on its own: the host admits or restores them. */
+  hostControl?: boolean
   log(message: string): void
 }
 /** The vault as the cloud host sees it. The lock must come from here: it is module state of the runtime bundle that owns the vault. */
@@ -34,6 +37,8 @@ export interface LocalRuntime {
   engine?: {
     /** multiAccount: the engine confirmed multi-account mode (required before a public Unit lets visitors in). */
     endpoint(): { url: string | null; token: string; multiAccount?: boolean }
+    /** The host-only side of a visitor engine started with hostControl (never handed to visitors' requests). */
+    control?(): { url: string | null; token: string } | null
     status(): unknown
   }
   /** Reconcile installed/enabled bundles using the same loader as desktop. */

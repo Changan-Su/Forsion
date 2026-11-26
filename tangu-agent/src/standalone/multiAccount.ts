@@ -47,12 +47,16 @@ import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import type { StandaloneConfig } from './config.js';
 import { LlmError } from '../core/types.js';
 import { NO_ACCOUNT_FOR_MODEL_CALL, takeModelTicket } from './modelTickets.js';
+import { createAccountBackup, HOST_CONTROL_ENV, type AccountBackup } from './accountBackup.js';
 
 export interface MultiAccountAppOptions {
   localToken: string;            // 宿主口令
   brain: CloudBrainServices;     // 测试注入假模型;main.ts 传 buildMultiAccountBaseBrain 出来的那份(脱敏层在这里包)
   defaultModelId?: string;
   bundleDirs?: string[];         // 只读插件包目录;缺省读 TANGU_BUNDLE_DIRS
+  /** 宿主专用的第二枚口令(TANGU_HOST_CONTROL_TOKEN):开了就有 /_host/*(按账号备份 / 恢复 / 清本机,standalone/accountBackup.ts),
+   *  并且引擎不再自己给没见过的账号开户 —— 由宿主先 admit 或恢复。缺省没有,行为照旧。 */
+  hostControlToken?: string;
 }
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -260,14 +264,21 @@ function cwdClamp(clamp: Clamp | undefined): RequestHandler {
 
 const NOT_AVAILABLE = { detail: 'Not available in multi-account mode' } as const;
 
-/** 写进账号文件夹的接口先看磁盘上限(读 / 删不看):已用 + 这次请求体大小超了 → 507。 */
+/** 写进账号文件夹的接口先看磁盘上限(读 / 删不看):已用 + 这次请求体大小超了 → 507。全部账号合计到了总量上限时,
+ *  已有账号的写也一样挡(507 ENGINE_STORAGE_FULL),不只挡新账号:不然已有的人照样能把盘写满。量不出按满处理。 */
 function storageGuard(quota: true | undefined): RequestHandler {
   return (req, res, next) => {
     if (!quota) return next();
     const incoming = Number(req.headers['content-length']) || 0;
-    assertAccountStorage((req as any).accountId as string, incoming).then(
-      () => { markAccountUsageDirty((req as any).accountId as string); next(); },
+    assertAccountStorage((req as any).accountId as string, incoming).then(async () => {
+      if (!(await newAccountsAllowed())) {
+        return void res.status(507).json({ code: 'ENGINE_STORAGE_FULL', detail: 'This engine is out of space. Delete files or conversations to continue.' });
+      }
+      markAccountUsageDirty((req as any).accountId as string);
+      next();
+    }).then(undefined,
       (e) => {
+        if (res.headersSent) return;
         if (e instanceof StorageLimitError) return void res.status(507).json({ code: e.code, detail: e.message });
         res.status(500).json({ detail: 'Storage check failed' });
       },
@@ -330,7 +341,13 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
 
   // 账号库淘汰:手上没事(没有在途请求 / SSE、没有 run)且闲了一阵的账号关掉库句柄,下次用时原地重开(开户与恢复不重跑)。
   const inflight = new Map<string, number>();
+  const inflightWrites = new Map<string, number>(); // 其中不是 GET 的(做副本前要等它们走完)
   const busy = (id: string): boolean => (inflight.get(id) ?? 0) > 0 || accountHasRuns(id);
+  // 宿主口令开着:按账号备份 / 恢复 / 清本机(standalone/accountBackup.ts)
+  const hostBackup: AccountBackup | null = opts.hostControlToken ? createAccountBackup({
+    mh, controlToken: opts.hostControlToken, localToken: opts.localToken,
+    inflight: (id) => ({ all: inflight.get(id) ?? 0, writes: inflightWrites.get(id) ?? 0 }),
+  }) : null;
   const evictTimer = setInterval(() => {
     const l = multiAccountLimits();
     const closed = mh.evictIdle({ idleMs: minutesMs(l.idleCloseMinutes), maxOpen: l.maxOpenAccounts, isBusy: busy });
@@ -347,6 +364,8 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     const limit = multiAccountLimits().totalStorageGB * 1024 ** 3;
     res.json({ ok: true, mode: 'multi-account', newAccounts: t ? (t.bytes < limit ? 'open' : 'closed') : 'unknown' });
   });
+  // ⓪ 宿主专用接口(另一枚口令,在访客身份闸之前分流;访客那枚口令打不开)。没开宿主口令时 /_host 落到下面的闸:401 / 403
+  if (hostBackup) app.use('/_host', hostBackup.router);
   // ① 来的是谁(先于读请求体:没过口令的请求连 25MB 的 JSON 都不解析)
   app.use((req, res, next) => {
     const who = checkAccountIdentity(req.headers, opts.localToken);
@@ -355,15 +374,6 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     (req as any).user = { userId: who.accountId, username: who.accountId, role: 'USER' };
     // 宿主带来的模型票:从请求上摘掉(后面谁都看不到),是这个账号的就存下(standalone/modelTickets.ts)
     takeModelTicket(req as any, who.accountId);
-    // 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库
-    inflight.set(who.accountId, (inflight.get(who.accountId) ?? 0) + 1);
-    let counted = true;
-    res.once('close', () => {
-      if (!counted) return;
-      counted = false;
-      const left = (inflight.get(who.accountId) ?? 1) - 1;
-      if (left > 0) inflight.set(who.accountId, left); else inflight.delete(who.accountId);
-    });
     next();
   });
   // ② 白名单先判(先于读请求体、先于开户):按原始 method + 注册的路由模式。HEAD 不当 GET、OPTIONS 不自动应答 ——
@@ -374,6 +384,29 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     return allowedLayers.some((l) => l.route?.methods?.[method] === true && l.match(req.path));
   };
   app.use((req, res, next) => { if (listed(req)) return next(); res.status(403).json(NOT_AVAILABLE); });
+  // ②b 宿主口令开着时:做副本那几秒排队;冷账号 / 没 admit 的账号 409、恢复 / 清本机进行中 503(都在计数和开户之前)
+  if (hostBackup) app.use(hostBackup.visitorGate);
+  // ②c 在途请求(含 SSE 长连接)计数:淘汰不关正被用着的账号库;做副本等写请求走完、清本机等全部走完
+  app.use((req, res, next) => {
+    const id = (req as any).accountId as string;
+    // the visitor already left (while an earlier step awaited): its 'close' has fired, a count taken now would never drop
+    if (req.socket?.destroyed || res.destroyed) return;
+    const write = String(req.method || '').toUpperCase() !== 'GET';
+    inflight.set(id, (inflight.get(id) ?? 0) + 1);
+    if (write) inflightWrites.set(id, (inflightWrites.get(id) ?? 0) + 1);
+    let counted = true;
+    res.once('close', () => {
+      if (!counted) return;
+      counted = false;
+      const left = (inflight.get(id) ?? 1) - 1;
+      if (left > 0) inflight.set(id, left); else inflight.delete(id);
+      if (write) {
+        const w = (inflightWrites.get(id) ?? 1) - 1;
+        if (w > 0) inflightWrites.set(id, w); else inflightWrites.delete(id);
+      }
+    });
+    next();
+  });
   app.use(express.json({ limit: '25mb' }));
   // ③ 开户 + 整个请求(含它起的 run 的异步子树)绑进这个账号
   app.use((req, res, next) => {
@@ -407,6 +440,7 @@ export async function createMultiAccountApp(opts: MultiAccountAppOptions): Promi
     app,
     dispose: async () => {
       clearInterval(evictTimer);
+      hostBackup?.dispose();
       try { mod.dispose(); } catch { /* ignore */ }
       mh.close();
       setMultiAccountBundleDirs(null);
@@ -441,6 +475,7 @@ export async function startMultiAccountServer(opts: {
     localToken: cfg.localToken!,
     brain: opts.brain,
     defaultModelId: cfg.defaultModelId || undefined,
+    hostControlToken: process.env[HOST_CONTROL_ENV] || undefined,
   });
   opts.onPhase?.('listen');
   const server = app.listen(cfg.port, cfg.host, () => {
