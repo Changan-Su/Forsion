@@ -99,9 +99,20 @@ describe("capabilities.approval: 'always'", () => {
     // 对照:command 档的「总允许」照旧记下、下一次不问
     const cmd = await gate(call('plain_command'), { approvalMode: 'auto-edit', sessionId: 'S-cmd' }, 'approve_always');
     expect(cmd.asked).toBe(true);
-    expect(cmd.decision.userConfirmed).toBeUndefined();
+    expect(cmd.decision.userConfirmed).toBe(true);
     expect(isAlwaysAllowed('S-cmd', 'plain_command')).toBe(true);
-    expect((await gate(call('plain_command'), { approvalMode: 'auto-edit', sessionId: 'S-cmd' })).asked).toBe(false);
+    const automatic = await gate(call('plain_command'), { approvalMode: 'auto-edit', sessionId: 'S-cmd' });
+    expect(automatic.asked).toBe(false);
+    expect(automatic.decision.userConfirmed).toBeUndefined();
+  });
+
+  it('does not remember Always Allow from a superseded turn', async () => {
+    const stale = await gate(call('plain_command'), {
+      approvalMode: 'auto-edit', sessionId: 'S-stale', approvalTurnIsCurrent: () => false,
+    }, 'approve_always');
+    expect(stale.asked).toBe(true);
+    expect(stale.decision.userConfirmed).toBe(true);
+    expect(isAlwaysAllowed('S-stale', 'plain_command')).toBe(false);
   });
 
   it('用户写的 allow 规则与 hook 的 allow 都不放行;deny 规则与 hook 的 block 照样拒', async () => {

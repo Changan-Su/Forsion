@@ -198,25 +198,26 @@ describe('挂起审批(托盘 run)', () => {
     } finally { unregisterToolProvider(name); }
   }, 20_000);
 
-  it.each([false, true])('binds a confirmed call to its original user turn (incoming steer: %s)', async (steer) => {
-    const seen: Array<{ turn?: string; confirmed?: boolean }> = [];
+  it.each([[true, false], [true, true], [false, false], [false, true]])('binds a confirmed call to its original user turn (parked: %s, incoming steer: %s)', async (park, steer) => {
+    const seen: Array<{ turn?: string; confirmed?: boolean; signal?: AbortSignal }> = [];
     const name = 'test_confirm_turn';
     registerToolProvider({ id: name, tools: () => [{
-      name, mode: 'host', capabilities: { approval: 'always' },
+      name, mode: 'host', capabilities: { approval: 'command' },
       definition: { type: 'function', function: { name, description: 'Exercise turn-bound approval', parameters: { type: 'object', properties: {} } } },
-      execute: async (_args, ctx) => { seen.push({ turn: ctx.userTurnId, confirmed: ctx.userConfirmedCall }); return 'checked'; },
+      execute: async (_args, ctx) => { seen.push({ turn: ctx.userTurnId, confirmed: ctx.userConfirmedCall, signal: ctx.userTurnSignal }); return 'checked'; },
     }] });
     try {
       script = [() => ({ content: '', reasoning: '', finishReason: 'stop', usage,
         toolCalls: [{ id: 'receipt-call', type: 'function', function: { name, arguments: '{}' } }] }),
         ...Array.from({ length: 6 }, () => finalStep('done'))];
-      const r = await start(true);
+      const r = await start(park);
       const req = await r.nextApproval();
       if (steer) expect(enqueueSteer(r.runId, { id: 'new-user-message', content: '<approval_update>new user request' })).toBe(true);
       expect(decide(req, { action: 'approve' })).toBe(true);
       expect((await r.settled()).status).toBe('done');
       expect(seen).toHaveLength(1);
       expect(seen[0].confirmed).toBe(!steer);
+      expect(seen[0].signal?.aborted).toBe(steer);
       if (!steer) expect(seen[0].turn).toBeTruthy();
     } finally { unregisterToolProvider(name); }
   }, 20_000);

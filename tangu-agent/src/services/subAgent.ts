@@ -407,8 +407,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     clientCapabilities: undefined,
     // 长命令不挡插话只给主循环:子代理的 run_bash 结局交不回父 run 的上下文
     steerHandoff: undefined,
-    userTurnId: undefined,
-    userTurnSignal: undefined,
+    // A delegated action belongs to the original user turn and needs its own card.
     userConfirmedCall: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
@@ -634,6 +633,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           // 否则同一笔会写到父代理头上 —— 判定在 pendingApprovals,这里只把真实身份如实报上去。
           ...(skillSlug ? { execAgentSlug: skillSlug } : {}),
           sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode, modeSessionId: parentCtx.approvalModeSessionId,
+          approvalTurnIsCurrent: () => !parentCtx.userTurnSignal?.aborted,
           // 远程污点随父 run(C5):子代理的调用同样钳到远程上限;父 run 中途被远端 steer 染上的也算(runId 即父 run)。
           remote: effectiveRemote(parentCtx), unattended: !!parentCtx.automationOrigin || !!parentCtx.muse,
           // 越界写升级按真实工作区判定、PermissionRequest hook 需要 profile(Codex 评审 #3)
@@ -669,7 +669,11 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         // 具名子代理:在它自己的记忆作用域内执行(remember/log_event 落它的文件夹),用完即恢复父作用域。
         // 展示/技能身份单独给实际 slug:use_skill 等在执行期按 displayAgentSlug 解析 agents/<slug>/skills。
         // known-safe git 读命令(闸门 writeProtect)在写拒绝 profile 里跑,与主循环同口径(G5 方案 B)
-        const execCtx = decision?.writeProtect ? { ...subCtx, writeProtectShell: true } : subCtx;
+        const execCtx = {
+          ...subCtx,
+          userConfirmedCall: decision?.userConfirmed && !subCtx.userTurnSignal?.aborted,
+          ...(decision?.writeProtect ? { writeProtectShell: true } : {}),
+        };
         const r = def
           ? await runWithAgentSlug(memSlug, () => executeTool(execCall, execCtx), skillSlug || undefined)
           : await executeTool(execCall, execCtx);
