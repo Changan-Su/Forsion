@@ -173,11 +173,12 @@ export function sanitizeStageRect(v: unknown): { x: number; y: number; width: nu
 }
 
 /** 录像参数。 */
-export function sanitizeStageRecord(v: unknown): { fps: number; cursor: boolean; maxMs: number } {
+export function sanitizeStageRecord(v: unknown): { fps: number; cursor: boolean; maxMs: number; format: 'mp4' | 'webm' } {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   const fps = typeof o.fps === 'number' && Number.isFinite(o.fps) ? Math.min(STAGE_LIMITS.maxFps, Math.max(STAGE_LIMITS.minFps, Math.round(o.fps))) : 30
   const maxMs = typeof o.maxMs === 'number' && Number.isFinite(o.maxMs) ? Math.min(STAGE_LIMITS.maxRecordMs, Math.max(1000, Math.round(o.maxMs))) : STAGE_LIMITS.maxRecordMs
-  return { fps, cursor: o.cursor !== false, maxMs }
+  // format 原先在这里被丢掉,要 webm 也录成 mp4(11-26 评审抓到)
+  return { fps, cursor: o.cursor !== false, maxMs, format: o.format === 'webm' ? 'webm' : 'mp4' }
 }
 
 /** FORSION_SANDBOX_INFO.stage → 舞台参数;形状不对就当不是舞台(父进程那边已清洗过,这里只防坏数据)。 */

@@ -11,8 +11,8 @@
  *     被拍插件在用户那份的插件数据(plugins-data/<id>.json 里的标记)没进舞台;没有沙箱条
  *   4 selector 截一块:尺寸 = 那个元素的矩形 × 密度
  *   5 录像:录本窗口 2 秒(中间点一下,带假指针)→ mp4 / webm 字节,宽 = 窗口像素;有 ffprobe 时数帧数
- *   5c 暂停 / 继续:录 1 秒 → 暂停 2 秒 → 录 1 秒,durationMs 与成片时长都只算录下的 ~2 秒;重复暂停、没暂停就继续、
- *      停了再调都 reject
+ *   5c–5f 暂停 / 继续:录 1 秒 → 暂停 2 秒 → 录 1 秒,成片(ffprobe 量)只有 ~2 秒;重复暂停、没暂停就继续各报各的错,
+ *      停了再调 → closed;暂停着 stop 只留暂停前那段;webm 真是 webm,到点自停只数录下的时间、取片晚了时长不涨(要 ffprobe)
  *   6 脚本回放引擎:engine 'scripted' → 舞台里发一句话 → 页面上出现 engine.json 里写的回复
  *   7 互斥:舞台开着时别的插件 open → busy
  *   8 负对照:fixture 带 `..` → invalid;点名没装的插件 → plugin-missing
@@ -225,35 +225,47 @@ async function main() {
     const after = await win.evaluate(async () => (await window.__stage.read()).outline)
     check('5b 录像中的点击真点到了', /Extra action done/.test(after))
 
-    // ── 5c 暂停 / 继续(插件把等待、准备动作剪出成片) ──
-    const cut = await win.evaluate(async () => {
+    // ── 5c–5f 暂停 / 继续(插件把等待、准备动作剪出成片):成片的证据只认 ffprobe 量出来的帧数 / 时长,durationMs 是宿主自己算的 ──
+    const recCase = (opts, plan) => win.evaluate(async ([opts, plan]) => {
       const wait = (ms) => new Promise((r) => setTimeout(r, ms))
-      const code = (p) => p.then(() => 'resolved', (e) => e.code || e.message)
+      const msg = (p) => p.then(() => 'resolved', (e) => (e.code === 'closed' ? 'closed' : e.message || String(e)))
+      const notes = {}
       try {
-        const rec = await window.__stage.record({ fps: 30, cursor: false })
+        const rec = await window.__stage.record(opts)
         if (typeof rec.pause !== 'function' || typeof rec.resume !== 'function') return { ok: false, error: 'no pause / resume on the recording' }
-        const early = await code(rec.resume())
-        await wait(1000)
-        await rec.pause()
-        const twice = await code(rec.pause())
-        await wait(2000)
-        await rec.resume()
-        await wait(1000)
+        for (const [op, arg] of plan) {
+          if (op === 'wait') await wait(arg)
+          else if (op === 'try') notes[arg[0]] = await msg(rec[arg[1]]())
+          else await rec[op]()
+        }
         const v = await rec.stop()
-        const after = await code(rec.pause())
-        return { ok: true, early, twice, after, len: v.bytes.length, mime: v.mime, ms: v.durationMs, all: Array.from(v.bytes) }
+        notes.after = await msg(rec.pause())
+        return { ok: true, notes, len: v.bytes.length, mime: v.mime, ms: v.durationMs, all: Array.from(v.bytes) }
       } catch (e) { return { ok: false, code: e.code, error: e.message } }
-    })
-    let cutSec = null
-    if (cut.ok) {
-      const f = path.join(SHOT_DIR || home, `stage-rec-cut.${/mp4/.test(cut.mime) ? 'mp4' : 'webm'}`)
-      fs.writeFileSync(f, Buffer.from(cut.all))
-      try { cutSec = Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], { encoding: 'utf8' }).trim()) } catch { cutSec = null }
+    }, [opts, plan])
+    const probe = (v, name) => {
+      if (!v.ok) return { frames: null, sec: null }
+      const f = path.join(SHOT_DIR || home, `${name}.${/mp4/.test(v.mime) ? 'mp4' : 'webm'}`)
+      fs.writeFileSync(f, Buffer.from(v.all))
+      const run = (args) => { try { const n = Number(execFileSync('ffprobe', ['-v', 'error', ...args, f], { encoding: 'utf8' }).trim()); return Number.isFinite(n) ? n : null } catch { return null } }
+      return { frames: run(['-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0']), sec: run(['-show_entries', 'format=duration', '-of', 'csv=p=0']) }
     }
-    check('5c 暂停 2 秒不进成片:durationMs 与视频时长 ≈ 录下的 2 秒', cut.ok && cut.len > 10_000 && cut.ms >= 1700 && cut.ms <= 2700 && (cutSec === null || (cutSec >= 1.5 && cutSec <= 3.2)),
-      cut.ok ? `${cut.mime} ${cut.len}B ${cut.ms}ms video=${cutSec}s` : JSON.stringify(cut))
-    check('5d 没暂停就继续、重复暂停、停了再暂停都 reject(最后一个是 closed)', cut.ok && cut.early !== 'resolved' && cut.twice !== 'resolved' && cut.after === 'closed',
-      cut.ok ? JSON.stringify({ early: cut.early, twice: cut.twice, after: cut.after }) : JSON.stringify(cut))
+    const show = (v, p) => (v.ok ? `${v.mime} ${v.len}B ${v.ms}ms frames=${p.frames} video=${p.sec}s ${JSON.stringify(v.notes)}` : JSON.stringify(v))
+    // 5c 录 1 秒 → 暂停 2 秒 → 录 1 秒(30 fps):没剪掉的话约 4 秒 / 120 帧
+    const cut = await recCase({ fps: 30, cursor: false }, [['try', ['early', 'resume']], ['wait', 1000], ['pause'], ['try', ['twice', 'pause']], ['wait', 2000], ['resume'], ['wait', 1000]])
+    const cutP = probe(cut, 'stage-rec-cut')
+    check('5c 暂停 2 秒不进成片(ffprobe:mp4 时长 1.5–3.0 秒、帧数 40–90;没 ffprobe 算不过)', cut.ok && /mp4/.test(cut.mime) && cut.ms >= 1700 && cut.ms <= 2700
+      && cutP.sec !== null && cutP.sec >= 1.5 && cutP.sec <= 3.0 && cutP.frames !== null && cutP.frames >= 40 && cutP.frames <= 90, show(cut, cutP))
+    check('5d 没暂停就继续、重复暂停各报各的错,停了再暂停 → closed', cut.ok && /not paused/.test(cut.notes.early) && /already paused/.test(cut.notes.twice) && cut.notes.after === 'closed', show(cut, cutP))
+    // 5e 暂停着直接 stop:成片只有暂停前那 0.7 秒
+    const held = await recCase({ fps: 30, cursor: false }, [['wait', 700], ['pause'], ['wait', 1500]])
+    const heldP = probe(held, 'stage-rec-held')
+    check('5e 暂停着 stop:durationMs ≈ 0.7 秒,成片 ≤ 1.3 秒', held.ok && held.ms >= 500 && held.ms <= 1100 && heldP.sec !== null && heldP.sec <= 1.3, show(held, heldP))
+    // 5f webm + 到点自停跨过暂停:maxMs 1.5 秒,录 0.5 → 停 1.5 → 继续后 1 秒自停,再等 2.5 秒才取片
+    const lim = await recCase({ fps: 30, cursor: false, format: 'webm', maxMs: 1500 }, [['wait', 500], ['pause'], ['wait', 1500], ['resume'], ['wait', 2500]])
+    const limP = probe(lim, 'stage-rec-limit')
+    check('5f format webm 真是 webm;到点自停只数录下的时间,取片晚了 durationMs 不涨(≈1.5 秒,帧数 ≤ 60)', lim.ok && /webm/.test(lim.mime) && lim.ms >= 1300 && lim.ms <= 1900
+      && limP.frames !== null && limP.frames <= 60, show(lim, limP))
 
     // ── 6 脚本回放引擎 ──
     const chat = await win.evaluate(async (reply) => {
