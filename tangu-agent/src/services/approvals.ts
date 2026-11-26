@@ -74,7 +74,7 @@ function warnUnknownMode(raw: unknown, source: string): void {
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
 export interface ApprovalDecision {
   action: ApprovalAction;
-  /** Minted only by the mandatory interactive approval path. */
+  /** Set only when the user approves an interactive card. */
   userConfirmed?: true;
   /** 用户在审批时修改了参数（如改 bash 命令）：用这份覆盖原 call 的 arguments 执行。 */
   argsOverride?: Record<string, any>;
@@ -1091,6 +1091,8 @@ export interface GateCtx {
   /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
    *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
   modeSessionId?: string;
+  /** A card from a superseded user turn cannot grant future automatic approvals. */
+  approvalTurnIsCurrent?: () => boolean;
   /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
   approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
   /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -1396,8 +1398,9 @@ export async function gateToolCall(
     // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     // 远程污点 run 的「总允许」按单次批准算:记下来就等于远端改了本机会话的审批面(本机 run 随后也吃它)。
-    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk) allowAlways(ctx.sessionId, name);
-    if (alwaysAsk) out.userConfirmed = true;
+    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk
+      && ctx.approvalTurnIsCurrent?.() !== false) allowAlways(ctx.sessionId, name);
+    out.userConfirmed = true;
     return out;
   });
   if (ctx.park) return { action: 'park', decided, preview };
