@@ -99,13 +99,15 @@ async function main() {
       if (el) { el.scrollIntoView({ block: 'center' }); el.click() }
       return !!el
     })
-    const sub = sw.locator('.settings-nav-subitem', { hasText: '联网搜索' }).first()
+    // 11-26 起联网搜索是「模型与服务」页里的一个标签(左栏不再单列)
+    const sub = sw.locator('.settings-nav-subitem', { hasText: '模型与服务' }).first()
     if (!(await sub.waitFor({ timeout: 15_000 }).then(() => true, () => false))) {
       await sw.screenshot({ path: SHOT('nav-miss') })
       const subs = await sw.evaluate(() => [...document.querySelectorAll('.settings-nav-subitem')].map((b) => b.textContent.trim()))
-      throw new Error(`没出现「联网搜索」小节:clicked模型=${clicked} subs=${JSON.stringify(subs)} 截图 ${SHOT('nav-miss')}`)
+      throw new Error(`没出现「模型与服务」小节:clicked模型=${clicked} subs=${JSON.stringify(subs)} 截图 ${SHOT('nav-miss')}`)
     }
     await sub.click()
+    await sw.locator('.model-lib-bar [data-kind="websearch"]').click()
     await sw.waitForSelector('.wsc [data-ws-item]', { timeout: 10_000 })
     const list = () => sw.evaluate(() => ({
       use: [...document.querySelectorAll('.wsc [data-ws-item]')].map((x) => x.getAttribute('data-ws-item')).join(),

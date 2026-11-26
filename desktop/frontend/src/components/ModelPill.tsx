@@ -10,7 +10,8 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search, Settings2 } from 'lucide-react'
+import { useApp } from '../stores/appStore'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu, useSubPanelFlow } from '@lcl/engine'
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
@@ -67,6 +68,7 @@ registerMessages({
   'pill.locked': { zh: '升级后可用', en: 'Upgrade to use' },
   'pill.lockTip': { zh: '当前会员档位不能使用 {name}。升级会员或换一个模型。', en: "Your current plan can't use {name}. Upgrade your membership or pick another model." },
   'pill.lockUpgrade': { zh: '升级会员', en: 'Upgrade membership' },
+  'pill.manageModels': { zh: '管理模型…', en: 'Manage models…' },
   // 算得出最低够用的档位时(services/upgradeTier,按服务端公开方案的倍率上限算)代替上面两条;算不出回落上面两条
   'pill.lockedTier': { zh: '{tier} 起可用', en: 'Available from {tier}' },
   'pill.lockTipTier': { zh: '当前会员档位不能使用 {name}。升级到 {tier} 或以上即可，也可以换一个模型。', en: "Your current plan can't use {name}. Upgrade to {tier} or higher, or pick another model." },
@@ -993,6 +995,10 @@ export const ModelPill: React.FC<{
                     </React.Fragment>
                   ))}
                   {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}
+                  {/* 模型与服务(11-26):从模型菜单直达设置里加 / 管模型 */}
+                  {pane === 'model' && <button type="button" className="menu-item cm-manage-models" onClick={() => { setPillOpen(false); useApp.getState().openSettings('model/m-display') }}>
+                    <Settings2 size={13} aria-hidden="true" /><span className="grow">{t('pill.manageModels')}</span>
+                  </button>}
                 </>
               )}
             </div>

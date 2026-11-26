@@ -74,7 +74,7 @@ async function main() {
     if (!(await parent.count())) throw new Error('nav has no 模型 parent; nav text=\n' + navText)
     await parent.click()
     await win.waitForTimeout(500)
-    await win.locator('.settings-nav-subitem', { hasText: '模型库' }).first().click()
+    await win.locator('.settings-nav-subitem', { hasText: '模型与服务' }).first().click()
     await win.waitForTimeout(900)
     const rows = win.locator('.model-catalog-model')
     check('T1 云端 + 本地模型行都渲染了窗口输入框', (await win.locator('.model-catalog-ctx input').count()) === 5, 'count=' + (await win.locator('.model-catalog-ctx input').count()))

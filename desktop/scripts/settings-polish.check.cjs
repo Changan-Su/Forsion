@@ -143,7 +143,7 @@ async function main() {
     check('H1 常规 › 基本:卡内补充说明 == 卡头说明的字号与颜色', hb.ref && hb.hints.length > 0 && hb.hints.every(([f, c]) => f === hb.ref[0] && c === hb.ref[1]), hb)
     await shot(fl, 'basic-light')
     const sweep = []
-    for (const tab of ['general/g-conn', 'general/g-runtime', 'general/g-inbox', 'model/m-providers', 'browser', 'notes', 'advanced/a-data']) {
+    for (const tab of ['general/g-conn', 'general/g-runtime', 'general/g-inbox', 'model/m-display', 'browser', 'notes', 'advanced/a-data']) {
       try {
         const f = await openSettings(tab)
         const r = await hintTier(f)
@@ -181,11 +181,11 @@ async function main() {
     check('V3 每一行都声明了窄屏排法 data-fit', v && v.noFit === 0, v && v.noFit)
     check('V4 说明不在占位符里(占位符 ≤ 12 字),行里有小字说明', v && v.longPlaceholder.length === 0 && v.smallHelp >= 4, v && { long: v.longPlaceholder, small: v.smallHelp })
     check('V5 朗读卡四行:音色 / 语速 / 自动朗读 / 复刻·设计音色;没选模型也不置灰、照样能填', v && v.readRows.length === 4 && v.readDisabled === 0 && v.readEnabled.every(Boolean), v && { rows: v.readRows, enabled: v.readEnabled })
-    check('V6 卡头动作:通话「添加提供方」、识别「下载」、朗读「去选模型」', v && v.callAction.includes('添加提供方') && v.asrAction.includes('下载') && v.chooseModel.includes('去选模型'), v && { call: v.callAction, asr: v.asrAction, read: v.chooseModel })
+    check('V6 卡头动作:通话「添加连接」、识别「下载」、朗读「去选模型」', v && v.callAction.includes('添加连接') && v.asrAction.includes('下载') && v.chooseModel.includes('去选模型'), v && { call: v.callAction, asr: v.asrAction, read: v.chooseModel })
     await fl.locator('.settings-body').evaluate((el) => { el.scrollTop = 0 })
     await shot(fl, 'voice-light')
 
-    // 深链:去选模型 → 默认模型 › 朗读那一行在可视区;添加提供方 → 提供方
+    // 深链:去选模型 → 默认模型 › 朗读那一行在可视区;添加连接 → 模型与服务 + 添加连接弹窗
     await fl.locator('.settings-voice-read .settings-panel-head button', { hasText: '去选模型' }).click()
     await waitFor(async () => (await activeSubLabel(fl)) === '默认模型')
     const anchorSeen = await waitFor(() => fl.evaluate(() => {
@@ -196,9 +196,10 @@ async function main() {
     }), 4000)
     check('V7 「去选模型」→ 默认模型,朗读那一行在可视区', (await activeSubLabel(fl)) === '默认模型' && anchorSeen, await activeSubLabel(fl))
     fl = await openSettings('model/m-voice')
-    await fl.locator('.settings-voice-call .settings-panel-head button', { hasText: '添加提供方' }).click()
-    await waitFor(async () => (await activeSubLabel(fl)) === '提供方')
-    check('V8 「添加提供方」→ 模型 › 提供方', (await activeSubLabel(fl)) === '提供方', await activeSubLabel(fl))
+    await fl.locator('.settings-voice-call .settings-panel-head button', { hasText: '添加连接' }).click()
+    await waitFor(async () => (await activeSubLabel(fl)) === '模型与服务' && (await fl.locator('.msvc-dialog').count()) === 1)
+    check('V8 「添加连接」→ 模型 › 模型与服务,并弹出添加连接', (await activeSubLabel(fl)) === '模型与服务' && (await fl.locator('.msvc-dialog').count()) === 1, await activeSubLabel(fl))
+    await fl.keyboard.press('Escape')
 
     // 选了朗读模型 → 「去选模型」消失,卡头说明写出模型
     await main.evaluate(() => window.tangu.setConfig({ ttsModelId: 'openai/tts-1' }))
