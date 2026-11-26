@@ -237,6 +237,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec, { engine: id, bundle: d.bundled ? path.basename(path.dirname(path.dirname(d.dir))) : null }));
     },
     channelCapabilities: { multiPeer: true, agentPin: true, sendApproval: true },
+    toolCapabilities: { approvalEdit: true },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
       automation: {
         ...automation,

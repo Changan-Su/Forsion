@@ -2,7 +2,8 @@
  * capabilities.approval:'edit' —— 插件写工具并入写文件档(与 write_file 同档)。
  * 钉的是它与 'command' 档的差别:「替我批准」(auto-edit)直接做、只有「询问我批准」(readonly)问;
  * custom 的 base 照样作数;云端 / sandbox 会话不问;「总允许」照旧记下。
- * 负对照(实跑):去掉 toolNeedsApproval 里 writesFiles 的 `declared === 'edit'` → 前四条红(只有云端 / sandbox 那条照旧绿)。
+ * 负对照(实跑):去掉 toolNeedsApproval 里 writesFiles 的 `declared === 'edit'` → 前四条红(只有云端 / sandbox 那条照旧绿);
+ * 闸门不把 ctx.profile 传进 toolNeedsApproval → profile 那条红。
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -99,6 +100,17 @@ describe("capabilities.approval: 'edit'", () => {
     expect(first.decision.action).toBe('approve');
     expect(isAlwaysAllowed('S-edit', 'plugin_save')).toBe(true);
     expect((await gate(call('plugin_save'), { approvalMode: 'readonly', sessionId: 'S-edit' })).asked).toBe(false);
+  });
+
+  it('应用 profile 自带的工具(toolLoadout.providers)声明的档也认', async () => {
+    const appProfile = createTanguProfile({ sandboxMode: 'none' }) as any;
+    appProfile.toolLoadout = { ...(appProfile.toolLoadout ?? {}), providers: [{ id: 'test:profile-edit', tools: () => [tool('profile_save', 'edit'), tool('profile_command', 'command')] }] };
+    expect(toolNeedsApproval('profile_save', 'readonly')).toBe(false); // 不带 profile 看不见(修之前闸门就是这么判的)
+    expect(toolNeedsApproval('profile_save', 'readonly', { profile: appProfile })).toBe(true);
+    expect(toolNeedsApproval('profile_save', 'auto-edit', { profile: appProfile })).toBe(false);
+    expect((await gate(call('profile_save'), { approvalMode: 'readonly', profile: appProfile })).asked).toBe(true);
+    expect((await gate(call('profile_save'), { approvalMode: 'auto-edit', profile: appProfile })).asked).toBe(false);
+    expect((await gate(call('profile_command'), { approvalMode: 'auto-edit', profile: appProfile })).asked).toBe(true);
   });
 
   it('云端 / sandbox 会话不问', async () => {

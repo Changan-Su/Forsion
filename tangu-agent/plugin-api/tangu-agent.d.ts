@@ -103,7 +103,8 @@ export interface ToolCapabilities {
   concurrencyKey?: string;
   defaultTimeoutMs?: number;
   /** 声明本工具的审批档:'edit' = 与 write_file 同档(只在「询问我批准」下需用户批准,
-   *  「替我批准」与完全通行直接做)。给只改插件自己那份数据、参数里不带路径的写工具用;旧引擎不认得,当缺省处理。
+   *  「替我批准」与完全通行直接做)。给只改插件自己那份数据、参数里不带路径的写工具用;旧引擎不认得,当缺省(不问)处理,
+   *  先判 ctx.toolCapabilities?.approvalEdit,不认就声明 'command'。
    *  'command' = 与 run_bash 同档(readonly/auto-edit 下需用户批准)。
    *  缺省=只读语义,不触发审批。核心据此把插件工具并入审批,无需硬编码工具名。
    *  'always' = 每次都问用户本人:任何档位(含完全通行)、任何执行形态都弹审批,不进「总允许」,
@@ -508,6 +509,9 @@ export interface TanguPluginContext {
   registerChannel?(spec: PluginChannelSpec): void;
   /** 本引擎的通道管线认哪些字段;老引擎没有这个键。 */
   channelCapabilities?: { multiPeer: true; agentPin: true; sendApproval: true };
+  /** 本引擎的工具声明认哪些档;老引擎没有这个键。approvalEdit = 认 capabilities.approval:'edit',
+   *  老引擎把 'edit' 当缺省(从不问),要守住「询问我批准」就 `ctx.toolCapabilities?.approvalEdit ? 'edit' : 'command'`。 */
+  toolCapabilities?: { approvalEdit: true };
   sdk: TanguSdk;
   log(msg: string): void;
   paths: { pluginDir: string; dataDir: string };

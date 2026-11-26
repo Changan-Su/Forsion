@@ -173,6 +173,9 @@ export interface TanguPluginContext {
   registerChannel(spec: PluginChannelSpec): void;
   /** 本引擎的通道管线认哪些字段。老引擎没有这个键,且会静默忽略 multiPeer —— 依赖它的插件要先判,不然 peer 全被拒。 */
   channelCapabilities: { multiPeer: true; agentPin: true; sendApproval: true };
+  /** 本引擎的工具声明认哪些档。approvalEdit = 认 capabilities.approval:'edit'(2026-11-26 起);老引擎没有这个键,
+   *  会把 'edit' 当缺省(从不问)—— 想在老引擎上也守住「询问我批准」的插件先判它,不认就声明 'command'。 */
+  toolCapabilities: { approvalEdit: true };
   /** 运行时构建块（按引用，见 `TanguSdk`）。 */
   sdk: TanguSdk;
   /** 带插件 id 前缀的日志。 */

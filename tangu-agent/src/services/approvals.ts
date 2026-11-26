@@ -133,8 +133,9 @@ export function widgetWrite(call: ToolCall): boolean {
   return args?.widget != null || args?.edits != null;
 }
 
-export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; widgetWrite?: boolean }): boolean {
-  const declared = declaredApproval(name);
+export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; widgetWrite?: boolean; profile?: Pick<AppProfile, 'toolLoadout'> }): boolean {
+  // 带上会话的 profile:应用 profile 自带的工具(toolLoadout.providers)声明的档也要认,不只全局注册的(Codex 11-26)。
+  const declared = declaredApproval(name, opts?.profile);
   if (declared === 'always') return true; // 每次都问那一档:不看档位(空档 / 完全通行也问)
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
@@ -1322,7 +1323,7 @@ export async function gateToolCall(
     // 无人值守 run 本就不接管,也就不因此排队审批
     // 扩展那一路:动的是 Tangu 标签组里它自己开的页 → 不批;动用户自己的标签 → 批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId);
-    if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call) })) return { action: 'approve' };
+    if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call), profile: ctx.profile })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。
     // 会话互发起的那一轮带了上限档(runApprovalCaps):上限档要问的,本会话以前点过的「总允许」也不代答(Codex 11-08)。
@@ -1422,7 +1423,7 @@ async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppP
 async function capWouldAsk(
   call: ToolCall,
   cap: CapMode,
-  ctx: { sessionId?: string; execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent' },
+  ctx: { sessionId?: string; execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent'; profile?: AppProfile },
   remote: RemoteInfo | undefined, // 没有 = 会话消息上限(跨树互发):同样不让 custom allow 越过上限,额外可写根也不认
 ): Promise<boolean> {
   if (cap === 'full-auto') return false;
@@ -1430,5 +1431,5 @@ async function capWouldAsk(
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
   if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd, remote })) return true; // 远程不认额外可写根,也不认 C8 禁用的 cwd
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId || '');
-  return toolNeedsApproval(name, cap, { userBrowser, widgetWrite: widgetWrite(call) });
+  return toolNeedsApproval(name, cap, { userBrowser, widgetWrite: widgetWrite(call), profile: ctx.profile });
 }
