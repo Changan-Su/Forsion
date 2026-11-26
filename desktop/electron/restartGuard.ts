@@ -103,7 +103,8 @@ export type ShutdownLock = ReturnType<typeof createShutdownLock>
 export function createRestartGuard(deps: {
   inspect(): Promise<RestartActivity>
   confirm(options: RestartDialog): Promise<boolean>
-  restart(install: boolean): Promise<void>
+  /** 回 { ok: false } = 自己挡下了(比如装更新前还有文件夹 Unit 没关掉),这一次不算重启。 */
+  restart(install: boolean): Promise<void | { ok: false }>
   /** 设置「重启后自动接着做未完成的任务」开着没有;不给 / 读不到 = 按关(原来的弹窗)。 */
   autoResume?(): Promise<boolean>
   /** Shared with the unattended install: while it is shutting down, a restart request is refused. */
@@ -119,8 +120,8 @@ export function createRestartGuard(deps: {
         const autoResume = await (deps.autoResume?.() ?? Promise.resolve(false)).catch(() => false)
         if (!await deps.confirm(restartDialog(activity, { install, autoResume }))) return { ok: false }
       }
-      await deps.restart(install)
-      return { ok: true }
+      const r = await deps.restart(install)
+      return r && r.ok === false ? { ok: false } : { ok: true }
     })().finally(() => { pending = undefined; deps.lock?.release('restart') })
     return pending
   }

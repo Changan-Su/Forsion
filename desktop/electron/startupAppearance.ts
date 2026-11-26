@@ -6,6 +6,8 @@ import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppear
 import { roundIconBitmap } from '../shared/iconShape'
 import { keepMacIcon, keepWindowsIcon, windowsProgramsFolders } from './systemIcon'
 import { PRODUCT } from './product'
+import { keepMacIcon, keepWindowsIcon } from './systemIcon'
+import { isMachineOwner } from './hostRole'
 
 // Until the GPU process has reported, Chromium answers "disabled" for every feature, so asking early made
 // hardware-accelerated machines look like software rendering. Registered at import: the report can beat `ready`.
@@ -47,8 +49,8 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   let keeping: Promise<void> = Promise.resolve()
   let programs: Promise<string[]> | undefined
   const keep = (): void => {
-    // 插件沙箱是同一个安装包另起的一份:它的设置页改图标不能写到整机那份 .app / 快捷方式上
-    if (!app.isPackaged || process.env.FORSION_SANDBOX === '1') return
+    // 插件沙箱 / 文件夹 Unit 是同一个安装包另起的一份:它们的设置页改图标不能写到整机那份 .app / 快捷方式上
+    if (!app.isPackaged || !isMachineOwner()) return
     const icon = state.icon && state.nativeIcon ? activeIcon : null
     const key = icon ? state.icon!.image : null
     const dir = app.getPath('userData')

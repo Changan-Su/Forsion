@@ -601,6 +601,7 @@ describe('IPC / 文案 / 名册 / 落点', () => {
     const main = readFileSync(join(__dirname, 'main.ts'), 'utf8')
     expect(main).toContain("join(app.getPath('userData'), REMOTE_SESSIONS_FILE)")
     // 清空数据(desktop)一并删掉 → 重置信任(G11:急停的 remote-lock.json 不在此列,那是 K2 的)
-    expect(main).toMatch(/for \(const f of \[[^\]]*REMOTE_SESSIONS_FILE[^\]]*\]\)/)
+    // 要删的路径由 clearDataPaths 按身份算(本机多 Unit 起),壳层文件清单作为 desktopFiles 交给它
+    expect(main).toMatch(/desktopFiles: \[[^\]]*REMOTE_SESSIONS_FILE[^\]]*\]/)
   })
 })

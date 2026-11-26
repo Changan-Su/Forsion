@@ -163,7 +163,9 @@ async function listenFrom(server: Server, first: number, tries: number): Promise
         const onListening = () => { server.off('error', onError); resolve() }
         server.once('error', onError).once('listening', onListening).listen(port, HOST)
       })
-      return port
+      // 实际绑上的口:first = 0(系统随机分,文件夹 Unit 用)时 port 还是 0,要从 address() 取
+      const bound = server.address()
+      return bound && typeof bound === 'object' ? bound.port : port
     } catch (e) {
       if (port >= first + tries - 1) throw e
     }
