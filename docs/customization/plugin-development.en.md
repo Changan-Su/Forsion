@@ -108,6 +108,7 @@ The desktop runs the Tangu engine either itself ("managed", the default install)
 | `ctx.tangu.request(...)` | desktop gate, then the engine's route check | **throws** `A local engine is required` (before waiting for the engine) or `Local engine is unavailable` after the wait (PS:3003, :3011); the engine itself answers 403 `Local plugin routes only` for a non-local or remote request (`tangu-agent/src/plugins/bootstrap.ts:217-229`) |
 | `ctx.tangu.connectChannel(...)` | desktop gate | returns `{ ok: false, error }` with the same two messages, never throws (PS:3023-3044) |
 | `ctx.app.hostPath(rel)` | desktop gate | returns `null` silently; also `null` with no open vault, a cloud vault, or an absolute / `..` path (`FE/amadeus/plugins/hostPaths.ts:2-9`) |
+| `ctx.storage.hostPath(path)` (2026-11-26+) | desktop gate | resolves `null` (also on mobile and after the plugin is turned off); an invalid path still rejects |
 | `ctx.tangu.startChat({ folder })` | via `hostPath` | the folder is **dropped silently** and the chat gets the normal workspace selection (work mode may still pick a default project) (PS:3131-3132) |
 | `ctx.tangu.mountChat(el, { folder })` | via `hostPath` | with no engine connected: `engine is not connected` first; with an engine but no host path: `folder is not available on this host: <folder>` in `ready.error`, and the mount shows a localized message; no session is made (`FE/views/pluginChat.tsx:48-53`) |
 | personal calendar `human://CALENDAR.db` | the engine (calendar I/O goes straight to the configured engine, not through the desktop gate) | a non-local real engine answers 404 `HUMAN_LOCAL_ONLY` → `myCalendar: 'absent'`; no engine reachable → `'unknown'` (`FE/amadeus/store/humanCalendarIo.ts:44-60`, `tangu-agent/src/routes/human.ts:80-93`). The stage's scripted engine serves it although the stage is in external mode |
@@ -766,6 +767,7 @@ if (store) {
 - `list(folder?)`, `stat(path)`: `[]` / `null` when missing. `remove(path)` deletes permanently (this is the plugin's own data: no trash). `move(from, to)` moves within the same layer and rejects when the target exists.
 - `usage()`: bytes of the whole folder (both layers) and of its `cache/` folders.
 - `url(path)`: a synchronous address for `<img>` / `<video>` / `fetch`, read in byte ranges (videos can seek). `null` where the host cannot give one: then read the bytes and make a Blob URL.
+- `hostPath(path?)`: the absolute path of a file or folder in this layer on the computer (omitted = the layer root), for handing to the Agent or a script (a `cwd`, a script path). Async; it has a value only when the engine runs on this computer (the same gate as `ctx.app.hostPath`), and is `null` on mobile and after the plugin is turned off. It only computes the path: it does not create the folder or check that it exists, so write into it first. Older hosts lack it: `await ctx.storage?.hostPath?.('tools')`.
 
 ### Two layers
 

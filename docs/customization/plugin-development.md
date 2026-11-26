@@ -108,6 +108,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 | `ctx.tangu.request(...)` | 先过桌面的门，再过引擎的路由检查 | **抛错** `A local engine is required`（等引擎之前就抛），等完还不行抛 `Local engine is unavailable`；引擎对不在本机或远端来的请求回 403 `Local plugin routes only` |
 | `ctx.tangu.connectChannel(...)` | 桌面的门 | 回 `{ ok: false, error }`，同样两句，不抛 |
 | `ctx.app.hostPath(rel)` | 桌面的门 | 静默回 `null`；没开库、云端库、绝对路径或带 `..` 时也是 `null` |
+| `ctx.storage.hostPath(path)`（2026-11-26 起） | 桌面的门 | 回 `null`（手机、插件停用后也是 `null`）；路径不合法照样 reject |
 | `ctx.tangu.startChat({ folder })` | 经 `hostPath` | **悄悄丢掉** `folder`，对话照开，按平常的规则选工作区（工作模式下仍可能落到缺省项目） |
 | `ctx.tangu.mountChat(el, { folder })` | 经 `hostPath` | 没连上引擎时先报 `engine is not connected`；连上了但拿不到本机路径时 `ready.error` 是 `folder is not available on this host: <folder>`，挂载处显示本地化的提示；都不建会话 |
 | 个人日历 `human://CALENDAR.db` | 引擎（日历读写直接找配置的引擎，不过桌面的门） | 不在本机的真引擎回 404 `HUMAN_LOCAL_ONLY` → `myCalendar` 是 `absent`；引擎连不上 → `unknown`。舞台虽是外部模式，回放引擎照样给日历 |
@@ -755,6 +756,7 @@ if (store) {
 - `list(folder?)`、`stat(path)`：不存在回 `[]` / `null`。`remove(path)` 永久删除（这是插件自己的数据，不进回收站）。`move(from, to)` 只在同一层里挪，目标已存在就 reject。
 - `usage()`：整个文件夹（两层都算）和其中 `cache/` 的字节数。
 - `url(path)`：同步给一个地址，`<img>` / `<video>` / `fetch` 都能用，按字节范围读（视频能拖进度条）。宿主给不出时回 `null`，这时读字节、转成 Blob URL。
+- `hostPath(path?)`：这一层里某个文件或文件夹在本机上的绝对路径（省略 = 这一层的根），给 Agent 或脚本用（比如工作目录 `cwd`、脚本路径）。异步；只在引擎跑在这台电脑上时才有值（和 `ctx.app.hostPath` 同一道门），手机上和插件停用后回 `null`。它只算路径，不建文件夹、不查存在，先写进去再交出路径。旧宿主没有这个方法：`await ctx.storage?.hostPath?.('tools')`。
 
 ### 两层
 

@@ -184,6 +184,31 @@ describe('review fixes (2026-11-26 Codex)', () => {
   })
 })
 
+describe('hostPath (absolute path for the Agent)', () => {
+  it('returns the absolute path in either layer without creating anything; escapes and symlinks still reject', async () => {
+    const h = host()
+    expect(await h.handle({ id: 'demo', op: 'hostPath' })).toBe(path.join(base, 'demo'))
+    expect(await h.handle({ id: 'demo', op: 'hostPath', path: 'tools/run.sh' })).toBe(path.join(base, 'demo', 'tools', 'run.sh'))
+    expect(await h.handle({ id: 'demo', vault, op: 'hostPath', path: 'jobs' })).toBe(path.join(base, 'demo', 'vaults', storageVaultKey(vault), 'jobs'))
+    await expect(fs.access(path.join(base, 'demo'))).rejects.toThrow() // 只算路径,不建文件夹
+    await expect(h.handle({ id: 'demo', op: 'hostPath', path: '../x' })).rejects.toThrow(TypeError)
+    await expect(h.handle({ id: 'demo', op: 'hostPath', path: 'Vaults/x' })).rejects.toThrow(TypeError)
+    const outside = path.join(tmp, 'outside')
+    await fs.mkdir(outside)
+    await fs.mkdir(path.join(base, 'demo'), { recursive: true })
+    await fs.symlink(outside, path.join(base, 'demo', 'link'))
+    await expect(h.handle({ id: 'demo', op: 'hostPath', path: 'link/x' })).rejects.toThrow('leaves its folder')
+  })
+
+  it('answers an absolute path even when the data home is given as a relative path', async () => {
+    const rel = path.relative(process.cwd(), base)
+    expect(path.isAbsolute(rel)).toBe(false)
+    const h = createPluginStorageHost({ base: () => rel, vaultRoot: () => current, openFolder: () => {} })
+    expect(await h.handle({ id: 'demo', op: 'hostPath', path: 'tools' })).toBe(path.join(base, 'demo', 'tools'))
+    await expect(h.handle({ id: 'demo', op: 'hostPath', path: null as unknown as string })).rejects.toThrow(TypeError) // null 不当根
+  })
+})
+
 describe('vault layer', () => {
   it('lives under vaults/<key>/, is invisible from the app layer, and refuses once the vault changed', async () => {
     const h = host()

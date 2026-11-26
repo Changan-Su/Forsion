@@ -99,6 +99,8 @@ export type PluginStorageRequest = { id: string; vault?: string } & (
   | { op: 'move'; path: string; to: string }
   | { op: 'usage' }
   | { op: 'import'; vault: string; from: string; to: string; migration: string; allowed: string[]; into: 'app' | 'vault' }
+  // 本机绝对路径(交给本机托管引擎上的 Agent / 脚本用);渲染层先过「本机执行」那道门,宿主只算路径、不建文件夹
+  | { op: 'hostPath'; path?: string }
   // 宿主界面自己用的(插件详情页),不挂到 ctx 上
   | { op: 'clearCache' }
   | { op: 'reveal' }

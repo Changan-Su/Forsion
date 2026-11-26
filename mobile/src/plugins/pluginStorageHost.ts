@@ -370,6 +370,10 @@ export function createMobilePluginStorage(deps: MobilePluginStorageDeps): Mobile
       case 'reveal':
         pluginRoot(id)
         return false // 手机上没有可打开的文件管理器
+      case 'hostPath':
+        pluginRoot(id)
+        normalizeStoragePath(req.path === undefined ? '' : req.path, { allowRoot: true, appLayer: vault === undefined }) // 不合法照样拒,和桌面一致
+        return null // 手机上没有本机托管引擎,给 Agent 的绝对路径没意义
       case 'import': {
         const args: ImportArgs = {
           id,

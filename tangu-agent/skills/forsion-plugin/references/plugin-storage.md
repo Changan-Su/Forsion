@@ -40,6 +40,7 @@ All paths are relative to the layer and `/`-separated. `..`, absolute paths (a l
 | `move(from, to)` | inside the same layer; rejects when the target exists |
 | `usage()` | `{ bytes, cacheBytes }` for the whole data folder (both layers) and its `cache/` folders |
 | `url(path)` | synchronous address for `<img src>` / `<video src>` / `fetch`, streamed with byte ranges (videos can seek). `null` where the host cannot serve files: read the bytes and use a Blob URL. Throws on an invalid path; does not check that the file exists |
+| `hostPath(path?)` | async absolute path of a file/folder in this layer (omitted = the layer root), for the Agent or a script (`cwd`, script path). `null` unless the engine runs on this computer (same gate as `ctx.app.hostPath`), on mobile, and after the plugin is turned off; rejects on an invalid path. Computes only: no folder created, no existence check. Older hosts lack it: `await ctx.storage?.hostPath?.('tools')` |
 | `vault()` | the layer for the open library, or `null` with none open |
 | `importFromVault(opts)` | copy old data from the vault, once per library (below) |
 

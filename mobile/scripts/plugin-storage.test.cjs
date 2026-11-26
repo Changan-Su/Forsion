@@ -384,6 +384,9 @@ const test = async (name, fn) => {
     assert.equal(await call({ vault: '/vault', op: 'readText', path: 'v.txt' }), 'vv')
     assert.equal(fs.files.has(`${ROOT}/cache/a.bin`), false)
     assert.equal(await call({ op: 'reveal' }), false) // 手机上没有文件管理器
+    assert.equal(await call({ op: 'hostPath', path: 'tools' }), null) // 手机上没有本机托管引擎
+    await assert.rejects(call({ op: 'hostPath', path: '../x' }), TypeError) // 不合法照样拒,和桌面一致
+    await assert.rejects(call({ op: 'hostPath', path: 'vaults/x' }), TypeError)
     await assert.rejects(call({ op: 'bogus' }), /Unknown plugin storage op/)
   })
 

@@ -2529,6 +2529,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       call: (req) => amadeus.pluginStorage!(req),
       url: amadeus.pluginStorageUrl ? (id, rel) => amadeus.pluginStorageUrl!(id, rel) : undefined,
       vaultRoot: () => usePageStore.getState().vaultRoot,
+      hostExec: () => readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false, // 同 ctx.app.hostPath
       importRoots: () => {
         const name = get().plugins.find((o) => o.id === pluginId)?.name || pluginId
         return [...new Set([configuredWorkFolder(pluginId), defaultWorkFolder(pluginId), `${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`].filter((f): f is string => !!f))]
