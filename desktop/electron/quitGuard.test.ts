@@ -96,6 +96,9 @@ describe('quitGuard', () => {
     expect(g.peek()).toBe(true)
     mode = 'throw'; expect(g.peek()).toBe(true)
     mode = 'odd'; expect(g.peek()).toBe(true)
+    const off = g.add(() => undefined as unknown as null) // a guard that forgot to return null
+    mode = 'idle'; expect(g.peek()).toBe(true)
+    off()
     mode = 'idle'; expect(g.peek()).toBe(false)
     expect(asked).toEqual([])
     mode = 'busy'

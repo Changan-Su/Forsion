@@ -2099,6 +2099,24 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
 // 用户这时多半会再点一次图标 → second-instance)。主窗由启动流程自己建,唤起请求那时自然满足。
 let startupWindowGate = true
 /** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
+/** before-quit fired since the unattended install's commit point (beginQuit resets it): its hand-off watchdog reads it.
+ *  A flag, not a listener added afterwards: quitAndInstall may call app.quit() synchronously, before anyone could subscribe. */
+let appQuitStarted = false
+app.on('before-quit', () => { appQuitStarted = true })
+
+/**
+ * Windows: can this user write into the install folder? An all-users install (Program Files) cannot, and its installer would stop
+ * at a UAC prompt; the unattended install refuses then. Probed by creating and removing a file; any error = not writable.
+ */
+function installDirWritable(): boolean {
+  const probe = join(dirname(app.getPath('exe')), `.forsion-update-probe-${process.pid}-${Date.now()}`)
+  try {
+    writeFileSync(probe, '', { flag: 'wx' })
+    rmSync(probe, { force: true })
+    return true
+  } catch { return false }
+}
+
 /**
  * Voice-call presence for the unattended install. Genesis services/realtimeCall.ts keeps the call's session id in localStorage
  * (`forsion_voice_call_active`, shared by every same-origin app window) while a call is up; read it through the main window.
@@ -5073,14 +5091,24 @@ app.whenReady().then(async () => {
     },
     holdEngine: async (ttlMs) => {
       const eng = managedEngine()
-      return eng ? requestEngineHold(eng.url, eng.token, ttlMs) : { ok: false, reason: 'engine_not_ready' }
+      if (!eng) return { ok: false, reason: 'engine_not_ready' }
+      const hold = await requestEngineHold(eng.url, eng.token, ttlMs)
+      // Bound to the engine that granted it: an engine restarted meanwhile (account switch, settings) holds nothing
+      return hold.ok ? { ...hold, valid: () => (hold.valid?.() ?? false) && managedEngine()?.url === eng.url } : hold
     },
+    needsElevation: () => process.platform === 'win32' && !installDirWritable(),
     prepare: () => prepareInstall(),
-    flush: async () => { await contentFlush.quit() },
+    flush: async () => (await contentFlush.quit()) !== 'timeout',
     resetFlush: () => contentFlush.reset(),
-    beginQuit: () => { isQuitting = true; quitGuards.pass(); deferredEngineRestart.cancel() },
+    beginQuit: () => { appQuitStarted = false; isQuitting = true; quitGuards.pass(); deferredEngineRestart.cancel() },
     stopEngine: () => backend.stop('app_update'),
     install: (v) => installPinned(v),
+    quitStarted: (ms) => new Promise<boolean>((resolve) => {
+      if (appQuitStarted) { resolve(true); return }
+      const t = setTimeout(() => { app.removeListener('before-quit', on); resolve(false) }, ms)
+      const on = (): void => { clearTimeout(t); resolve(true) }
+      app.once('before-quit', on)
+    }),
     abortQuit: () => {
       isQuitting = false
       quitGuards.reset()

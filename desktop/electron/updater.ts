@@ -110,6 +110,8 @@ let downloadedVersion: string | null = null
  * the package (a channel switch, a re-check, a new download, a source switch), so what quitAndInstall installs is what was checked.
  */
 let pinned: string | null = null
+/** A channel switch that came while pinned: applied when the pin is released without installing. */
+let deferredBeta: boolean | null = null
 
 /** 阶段变了才回调(匿名遥测的 update 事件:见 telemetryHost.appUpdateProps);下载进度那种同阶段的刷新不回调。返回退订。 */
 const phaseListeners = new Set<(status: UpdaterStatus) => void>()
@@ -495,7 +497,8 @@ export async function downloadUpdate(opts: { auto?: boolean; version?: string } 
  */
 export function channelChanged(beta: boolean): void {
   // mac 已经点了安装、Squirrel 在取 / 已取好:它一取好就会在退出时装上,这时作废只会让界面和实际装的对不上(Codex 评审)
-  if (pinned || beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
+  if (pinned) { deferredBeta = beta; return }
+  if (beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
   if (dl) { dl.dropped = true; dl.token.cancel() }
   target = null
   downloadedVersion = null
@@ -622,7 +625,10 @@ export function pinDownloaded(version: string): PinRefusal | null {
 }
 
 export function unpinDownloaded(version: string): void {
-  if (pinned === version) pinned = null
+  if (pinned !== version) return
+  pinned = null
+  // The attempt did not install: a channel switch made meanwhile now takes effect (beta off drops the prerelease)
+  if (deferredBeta !== null) { const beta = deferredBeta; deferredBeta = null; channelChanged(beta) }
 }
 
 /** The pin still holds and the package still matches (re-checked synchronously right before the point of no return). */

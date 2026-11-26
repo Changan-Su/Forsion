@@ -1501,10 +1501,11 @@ export async function drainRunsForExit(timeoutMs: number, reason?: InterruptReas
 let restartHold: { id: string; held: Map<string, string>; timer: ReturnType<typeof setTimeout> } | null = null;
 export const RESTART_HOLD_MAX_MS = 60_000;
 
-export function acquireRestartHold(ttlMs: number): string | null {
+/** `requestedId` = the caller's own lease id (so it can release a hold whose reply it never got); otherwise a random one. */
+export function acquireRestartHold(ttlMs: number, requestedId?: string): string | null {
   if (restartHold || exiting) return null;
   const ms = Math.min(Math.max(Number.isFinite(ttlMs) ? Math.floor(ttlMs) : 0, 1000), RESTART_HOLD_MAX_MS);
-  const id = randomUUID();
+  const id = requestedId && /^[A-Za-z0-9-]{8,64}$/.test(requestedId) ? requestedId : randomUUID();
   const timer = setTimeout(() => { releaseRestartHold(id); }, ms);
   if (typeof timer.unref === 'function') timer.unref();
   restartHold = { id, held: new Map(), timer };

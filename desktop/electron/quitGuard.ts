@@ -70,7 +70,7 @@ export function createQuitGuards(deps: { locale(): MainLocale; ask(b: QuitBlock)
     peek(): boolean {
       if (asking) return true
       for (const g of guards) {
-        try { if (g(deps.locale()) != null) return true } catch { return true }
+        try { if (g(deps.locale()) !== null) return true } catch { return true } // undefined = not a clear "nothing" → busy
       }
       return false
     },

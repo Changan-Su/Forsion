@@ -368,3 +368,16 @@ describe('restart hold (desktop installIfIdle: no run may start between the last
     abortRun(next.runId); await settled(next.runId);
   });
 });
+
+describe('restart hold lease id (the host can release a hold whose reply it never got)', () => {
+  it('uses the caller-supplied id, and releasing by it frees the engine', async () => {
+    const id = 'host-lease-0123456789'
+    const h = await post('/agent/remote/restart-hold', { ttlMs: 20_000, holdId: id })
+    expect(h.body).toMatchObject({ ok: true, holdId: id })
+    expect((await post('/agent/remote/restart-hold/release', { holdId: id })).body).toEqual({ ok: true })
+    const again = await post('/agent/remote/restart-hold', { ttlMs: 20_000, holdId: 'bad id!' })
+    expect(again.body.ok).toBe(true)
+    expect(again.body.holdId).not.toBe('bad id!') // malformed → a random id
+    await post('/agent/remote/restart-hold/release', { holdId: again.body.holdId })
+  })
+})

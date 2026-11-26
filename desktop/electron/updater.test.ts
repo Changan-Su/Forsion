@@ -608,6 +608,17 @@ it('pin: a channel switch while pinned cannot drop the package, and a re-check c
   expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
 })
 
+it('pin: a channel switch made while pinned takes effect when the attempt is released without installing', async () => {
+  const { pinDownloaded, unpinDownloaded, channelChanged, getUpdaterStatus, installPinned } = await downloadedBeta()
+  expect(pinDownloaded('2.14.0-beta.1')).toBeNull()
+  updater.beta = false
+  channelChanged(false)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded' })
+  unpinDownloaded('2.14.0-beta.1') // e.g. someone came back: refused
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+  expect(installPinned('2.14.0-beta.1')).toBe(false)
+})
+
 it('pin: once unpinned a channel switch drops the package again and the old version can no longer be installed', async () => {
   const { pinDownloaded, unpinDownloaded, channelChanged, getUpdaterStatus, installPinned } = await downloadedBeta()
   expect(pinDownloaded('2.14.0-beta.1')).toBeNull()

@@ -32,11 +32,12 @@ function setup(over: Partial<Parameters<typeof createIdleInstall>[0]> = {}) {
       return { ok: true, release: async () => { calls.push('release'); state.held = false } }
     },
     prepare: async () => { calls.push('prepare'); return true },
-    flush: async () => { calls.push('flush'); state.flushed = true },
+    flush: async () => { calls.push('flush'); state.flushed = true; return true },
     resetFlush: () => { calls.push('resetFlush'); state.flushed = false },
     beginQuit: () => { calls.push('beginQuit'); state.quitting = true },
     stopEngine: async () => { calls.push('stopEngine') },
     install: (v) => { calls.push(`install:${v}`); return state.pinned === v },
+    quitStarted: async () => { calls.push('quitStarted'); return true },
     abortQuit: () => { calls.push('abortQuit'); state.quitting = false },
     ...over,
   }
@@ -47,7 +48,7 @@ describe('installIfIdle', () => {
   it('success: pin → checks → prepare → flush → hold → stop engine → install the pinned version, in that order', async () => {
     const { run, calls, state } = setup()
     expect(await run(ARGS)).toEqual({ ok: true })
-    expect(calls).toEqual(['pin', 'prepare', 'flush', `hold:${IDLE_INSTALL_HOLD_MS}`, 'beginQuit', 'stopEngine', `install:${V}`])
+    expect(calls).toEqual(['pin', 'prepare', 'flush', `hold:${IDLE_INSTALL_HOLD_MS}`, 'beginQuit', 'stopEngine', `install:${V}`, 'quitStarted'])
     expect(state.pinned).toBe(V) // the pin stays through the shutdown
   })
 
@@ -189,7 +190,7 @@ describe('installIfIdle', () => {
     expect(await pending).toEqual({ ok: false })
     // and while an unattended install runs, a restart request is refused without asking anything
     let releaseFlush!: () => void
-    const running = setup({ lock, flush: () => new Promise<void>((r) => { releaseFlush = r }) } as any)
+    const running = setup({ lock, flush: () => new Promise<boolean>((r) => { releaseFlush = () => r(true) }) } as any)
     const p = running.run(ARGS)
     await new Promise((r) => setTimeout(r, 0))
     expect(await guarded(true)).toEqual({ ok: false })
@@ -200,12 +201,51 @@ describe('installIfIdle', () => {
 
   it('two overlapping calls: the second refuses (in_progress)', async () => {
     let releaseFlush!: () => void
-    const { run } = setup({ flush: () => new Promise<void>((r) => { releaseFlush = r }) })
+    const { run, lock } = setup({ flush: () => new Promise<boolean>((r) => { releaseFlush = () => r(true) }) })
     const a = run(ARGS)
     await new Promise((r) => setTimeout(r, 0))
     expect(await run(ARGS)).toEqual({ ok: false, reason: 'in_progress' })
     releaseFlush()
     expect(await a).toEqual({ ok: true })
+    expect(lock.owner).toBe('idle-install') // kept through the shutdown: nothing else may start one
+  })
+
+  it('a content flush that timed out (a push may still be running) refuses', async () => {
+    const { run, calls } = setup({ flush: async () => false })
+    expect(await run(ARGS)).toEqual({ ok: false, reason: 'extend_busy' })
+    expect(calls).not.toContain('beginQuit')
+    expect(calls.slice(-2)).toEqual(['unpin', 'resetFlush'])
+  })
+
+  it('Windows all-users install (elevation needed) refuses before anything; unknown counts as needed', async () => {
+    expect(await setup({ needsElevation: () => true }).run(ARGS)).toEqual({ ok: false, reason: 'needs_elevation' })
+    const t = setup({ needsElevation: () => { throw new Error('x') } })
+    expect(await t.run(ARGS)).toEqual({ ok: false, reason: 'needs_elevation' })
+    expect(t.calls).toEqual([])
+  })
+
+  it('a hold that is no longer valid (lapsed / another engine) refuses and is released', async () => {
+    const { run, calls } = setup({ holdEngine: async () => ({ ok: true, valid: () => false, release: async () => { calls.push('release') } }) })
+    expect(await run(ARGS)).toEqual({ ok: false, reason: 'engine_unknown' })
+    expect(calls).toContain('release')
+    expect(calls).not.toContain('stopEngine')
+  })
+
+  it('the app did not start quitting after the hand-off → the quit is undone, the engine restarted, the lock freed', async () => {
+    const { run, calls, state, lock } = setup({ quitStarted: async () => false })
+    expect(await run(ARGS)).toEqual({ ok: false, reason: 'install_failed' })
+    expect(calls.slice(-3)).toEqual([`install:${V}`, 'abortQuit', 'unpin'])
+    expect(state.quitting).toBe(false)
+    expect(lock.owner).toBeNull()
+  })
+
+  it('engine stop throws → the hold is released too', async () => {
+    const { run, calls } = setup({
+      holdEngine: async () => ({ ok: true, release: async () => { calls.push('release') } }),
+      stopEngine: async () => { throw new Error('boom') },
+    })
+    expect(await run(ARGS)).toEqual({ ok: false, reason: 'install_failed' })
+    expect(calls).toContain('release')
   })
 })
 
@@ -220,12 +260,28 @@ describe('requestEngineHold', () => {
     expect(await requestEngineHold('http://e', 't', 15000, f(res(200, { ok: true })))).toEqual({ ok: false, reason: 'engine_unknown' })
     expect(await requestEngineHold('http://e', 't', 15000, f(new Error('ECONNREFUSED')))).toEqual({ ok: false, reason: 'engine_unknown' })
   })
-  it('a granted hold releases with its id', async () => {
-    const seen: Array<[string, any]> = []
-    const f = vi.fn(async (url: string, init: any) => { seen.push([url, JSON.parse(init.body)]); return res(200, { ok: true, holdId: 'h1', ttlMs: 15000 }) }) as unknown as typeof fetch
-    const h = await requestEngineHold('http://e/', 'tok', 15000, f)
-    expect(h.ok).toBe(true)
-    if (h.ok) await h.release()
-    expect(seen).toEqual([['http://e/agent/remote/restart-hold', { ttlMs: 15000 }], ['http://e/agent/remote/restart-hold/release', { holdId: 'h1' }]])
+  it('a granted hold releases with our lease id, and is valid only well inside its ttl', async () => {
+    vi.useFakeTimers()
+    try {
+      const seen: Array<[string, any]> = []
+      const f = vi.fn(async (url: string, init: any) => { seen.push([url, JSON.parse(init.body)]); return res(200, { ok: true, holdId: 'lease-1', ttlMs: 15000 }) }) as unknown as typeof fetch
+      const h = await requestEngineHold('http://e/', 'tok', 15000, f, 'lease-1')
+      expect(h.ok).toBe(true)
+      if (!h.ok) return
+      expect(h.valid!()).toBe(true)
+      vi.advanceTimersByTime(7600)
+      expect(h.valid!()).toBe(false)
+      await h.release()
+      expect(seen).toEqual([['http://e/agent/remote/restart-hold', { ttlMs: 15000, holdId: 'lease-1' }], ['http://e/agent/remote/restart-hold/release', { holdId: 'lease-1' }]])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('a reply that never arrives (or is unreadable) still releases the lease the engine may have granted', async () => {
+    const seen: string[] = []
+    let n = 0
+    const f = vi.fn(async (url: string) => { seen.push(url); if (n++ === 0) throw new Error('timeout'); return res(200, {}) }) as unknown as typeof fetch
+    expect(await requestEngineHold('http://e', 't', 15000, f, 'lease-2')).toEqual({ ok: false, reason: 'engine_unknown' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(seen).toEqual(['http://e/agent/remote/restart-hold', 'http://e/agent/remote/restart-hold/release'])
   })
 })
