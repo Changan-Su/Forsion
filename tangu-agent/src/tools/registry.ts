@@ -482,7 +482,7 @@ export function macAppShellRoute(call: ToolCall, ctx: ToolContext, resolved?: Ma
   if (typeof command !== 'string' || !shellActivatesMacApp(command)) return;
   const tools = resolved ?? resolveTools(currentProfile(ctx), ctx);
   const act = tools.get('act_ui');
-  if (tools.has(name) && act && isComputerUseTool(act)) return 'The shell command was not run. Use ensure_app, then act_ui or jev_ui on the named window. Only for an explicit user request to raise a window, pass its returned foregroundRoot to ensure_app. Tangu coordinates foreground input with Mini and can return to the originating chat if the user stays in the target app. Run any unrelated CLI work separately.';
+  if (tools.has(name) && act && isComputerUseTool(act)) return 'The shell command was not run. Use ensure_app, then act_ui or jev_ui on the named window. After an unconfirmed background click, inspect its screenshot and follow its recoveryHint once if the requested effect is missing. An explicit request to raise a window can also use foregroundRoot. Tangu coordinates foreground input with Mini and can return to the originating chat if the user stays in the target app. Run any unrelated CLI work separately.';
 }
 
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
@@ -595,6 +595,9 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       if (undoSnapshot) await (undoSnapshot as () => Promise<void>)();
       if (scopedCtx.signal?.aborted && !ctx.signal?.aborted) {
         return { toolCallId: call.id, name, result: `Error: tool timed out after ${caps.defaultTimeoutMs}ms. If you retry, narrow the operation (smaller file / shorter command) or split it into steps.`, isError: true };
+      }
+      if (isComputerUseTool(impl) && e?.code === 'computer_use_recovery_exhausted') {
+        return { toolCallId: call.id, name, result: `Error: ${e.message}`, isError: true, metadata: { computerUseRecoveryExhausted: true } };
       }
       return { toolCallId: call.id, name, result: `Error: ${e?.message || e}`, isError: true };
     } finally {

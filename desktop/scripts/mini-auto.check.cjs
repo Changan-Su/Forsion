@@ -15,6 +15,9 @@ const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const nativeArg = process.argv.indexOf('--native-helper')
 const nativePath = nativeArg < 0 ? null : process.argv[nativeArg + 1]
 const nativeExecutable = nativeArg < 0 ? null : (nativePath && !nativePath.startsWith('--') ? nativePath : '/Applications/tangu-computer-use.app/Contents/MacOS/bridge')
+// --other-space <CU plugin checkout> adds the actual background click, desktop transition and chat handback.
+const crossArg = process.argv.indexOf('--other-space')
+const crossPlugin = crossArg >= 0 ? path.resolve(process.argv[crossArg + 1]) : null
 const raiseOnly = process.argv.includes('--raise-only')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-auto-'))
 const pause = (ms) => new Promise((r) => setTimeout(r, ms)), results = []
@@ -74,6 +77,7 @@ async function main() {
     const w = new BrowserWindow({ width: 540, height: 240, title: 'Mini automatic test — foreground fixture' });
     w.loadURL('data:text/html,<h2>Computer Use foreground fixture</h2><p>Isolated test window for Mini Panel.</p>');
   });`)
+  let cleanupSpaceFixture
   let app, external, independent, mockSocket, externalPid, heartbeat, nativeHelper, nativeAsk, nativeStarted = false
   const signal = () => { const now = Date.now(); fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ v: 1, active: true, updatedAt: now, expiresAt: now + 2500, helperPid: process.pid, targetPid: externalPid })) }
   const startInput = () => { signal(); heartbeat = setInterval(signal, 500) }
@@ -153,10 +157,27 @@ async function main() {
         // the screen like a click does, so the conversation must appear and Forsion must come back when the run ends.
         await focusMain()
         check('Mini is absent before the raise', (await autoWindows()).length === 0)
-        const raised = await nativeAsk({ cmd: 'restoreUserFocus', pid, windowId: target.windowId, runId: run.id })
-        check('helper brings the fixture app forward with no physical input', raised.appRestored === true && await until(async () => (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid))
+        let recoveryPid = pid, recoveryWindow = target.windowId, readPlacement
+        if (crossPlugin) {
+          const fx = await import(require('node:url').pathToFileURL(path.join(crossPlugin, 'scripts/vision-fixtures.mjs')).href)
+          const stateFile = path.join(temp, 'other-space.json')
+          const boot = await fx.launchFixture(await fx.buildFixture('melody'), stateFile, { behind: true, args: ['--inactive-space'] })
+          cleanupSpaceFixture = () => fx.quitFixture(boot.pid)
+          recoveryPid = boot.pid
+          recoveryWindow = boot.windowNumber
+          readPlacement = () => fx.readState(stateFile)
+          const placement = boot.spaceTest
+          check('fixture starts on another desktop', placement.membership.includes(placement.target) && placement.current !== placement.target)
+          const root = (await nativeAsk({cmd: 'listRoots', pid: recoveryPid})).roots.find(w => w.windowId === recoveryWindow)
+          const look = await nativeAsk({cmd: 'look', pid: recoveryPid, windowId: recoveryWindow, windowRef: root.windowRef, includeImage: true, readText: 'never'})
+          await nativeAsk({cmd: 'act', pid: recoveryPid, lookId: look.lookId, runId: run.id, action: 'click', policy: 'ax_only',
+            target: {x: Math.round(look.image.width * 0.96), y: Math.round(look.image.height * 0.12)}, params: {button: 'left', delivery: 'pid'}})
+          check('background attempt leaves the original desktop active', readPlacement().activeTestSpace === placement.current && !await autoVisible())
+        }
+        const raised = await nativeAsk({cmd: 'restoreUserFocus', pid: recoveryPid, windowId: recoveryWindow, runId: run.id, recoverBackgroundClick: !!crossPlugin})
+        check('helper brings the fixture app forward with no physical input', raised.appRestored === true && await until(async () => (await nativeAsk({ cmd: 'getFrontmost' })).pid === recoveryPid))
         check('a raise without input opens the current conversation', !!await until(autoVisible, 5000).catch(() => null))
-        check('the raised app keeps the focus', (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
+        check('the raised app keeps the focus', (await nativeAsk({ cmd: 'getFrontmost' })).pid === recoveryPid)
         await pause(1300)
         check('the one-second lease has run out and the conversation stays', JSON.parse(fs.readFileSync(path.join(temp, 'foreground.json'), 'utf8')).expiresAt < Date.now() && !!await autoVisible())
         backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
@@ -164,6 +185,12 @@ async function main() {
         check('run completion after a raise returns focus to the Forsion main window', await until(mainFocused))
         const chat = win.locator(`[data-chat-surface="chat"][data-session-id="${run.sessionId}"]`).first()
         check('the originating conversation is visible in the returned window', await chat.isVisible())
+        if (readPlacement) {
+          check('handback returns to the desktop that contains the originating chat', await until(() => readPlacement().activeTestSpace === readPlacement().spaceTest.current))
+          check('Mini handback included an actual Space transition', readPlacement().events.filter(e => e.kind === 'spaceChanged').length >= 2)
+          console.log('Cross-Space Mini handback verified')
+          return
+        }
         run = await send()
         await nativeAsk({ cmd: 'restoreUserFocus', pid, windowId: target.windowId, runId: run.id })
         await until(autoVisible)
@@ -281,6 +308,7 @@ async function main() {
     if (app) for (const [i, page] of app.windows().entries()) { await page.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {}); console.log((await page.locator('body').innerText().catch(() => '')).slice(0, 2200)) }
     console.error(`FAILURE_SCREENSHOTS ${shots}`); throw e
   } finally {
+    if (cleanupSpaceFixture) await cleanupSpaceFixture()
     if (nativeHelper || nativeStarted) {
       await nativeAsk({ cmd: 'shutdown' }).catch(() => {}); await pause(300)
       if (nativeHelper && nativeHelper.exitCode === null) nativeHelper.kill('SIGTERM')

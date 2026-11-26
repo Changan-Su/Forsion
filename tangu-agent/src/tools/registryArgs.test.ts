@@ -62,3 +62,17 @@ describe.runIf(process.platform === 'darwin')('direct application activation in 
     expect((await executeTool(activate, ctx)).result).toBe('shell ran');
   });
 });
+
+describe('Computer Use window recovery', () => {
+  it('only trusts a refused Computer Use action for the final-response signal', async () => {
+    const failure = Object.assign(new Error('No input sent'), { code: 'computer_use_recovery_exhausted' });
+    const execute = vi.fn(() => { throw failure; });
+    const ctx = context(execute);
+    ctx.profile!.toolLoadout.providers = [{ id: 'recovery-test', tools: () => ['act_ui', 'read_file'].map(name => ({
+      name, mode: 'host' as const, capabilities: { sideEffect: 'read' as const, concurrencyKey: name === 'act_ui' ? 'computer-use' : undefined },
+      definition: { type: 'function' as const, function: {name, description: '', parameters: {}} }, execute,
+    })) }];
+    expect(await executeTool(call('{}', 'act_ui'), ctx)).toMatchObject({ isError: true, metadata: { computerUseRecoveryExhausted: true } });
+    expect((await executeTool(call('{}', 'read_file'), ctx)).metadata).toBeUndefined();
+  });
+});

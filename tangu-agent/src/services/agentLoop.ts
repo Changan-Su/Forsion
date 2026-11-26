@@ -2006,6 +2006,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const finalTurnNoteFor = (iteration: number): ChatMessage => (iteration > 0 ? FINAL_TURN_NOTE : FINAL_TURN_NOTE_SINGLE);
   const toolFailureGuard = new RepeatedToolFailureGuard();
   let repeatedToolFailure = false;
+  let windowRecoveryExhausted = false;
+  const WINDOW_RECOVERY_FINAL_NOTE: ChatMessage = {
+    role: 'user',
+    content: '[System] Computer Use refused further input after the window could not be recovered. Summarize what was completed and where the task stopped in the user’s language. Do not claim that an unverified action succeeded.',
+  };
   const TOOL_FAILURE_FINAL_NOTE: ChatMessage = {
     role: 'user',
     content: '[System] Tool calls have failed three consecutive times with unchanged arguments and the same error. Tools are unavailable for this final response. Explain the failure and what remains incomplete in the user\'s language. Do not claim the failed operation succeeded, call tools, or write tool calls as text.',
@@ -3295,7 +3300,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       for (const message of msgs) if (message.receivedTurn) scope.pending.delete(message.receivedTurn);
       actionAskText += msgs.map((m) => `\n${String(m.content || '')}`).join('');
       if (msgs.length) { marketplaceCardsShown = false; visualAsked = msgs.some((m) => sketchTurnSignalFor(String(m.content || ''), visualsPref, nativeUiEnabled, computedUiEnabled)?.kind === 'explicit'); }
-      toolFailureGuard.reset(); repeatedToolFailure = false;
+      toolFailureGuard.reset(); repeatedToolFailure = false; windowRecoveryExhausted = false;
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
@@ -4114,7 +4119,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
-      const lastIter = iteration === maxIterations - 1 || repeatedToolFailure;
+      const lastIter = iteration === maxIterations - 1 || repeatedToolFailure || windowRecoveryExhausted;
       // 本轮**真实上 wire** 的工具头文本:末轮不发 tools;空集也不发(openaiCompat 的 `tools && tools.length` 闸,
       // 记 `[]` 的 2 字节等于谎报)。toolsBytes 与探针的 tools 段都以它为准。
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
@@ -4173,7 +4178,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         model,
         apiModelId,
         // 末轮追加「本轮无工具」说明(副本,不落 workingMessages);首轮即末轮用短版。
-        messages: withHtmlCardName(lastIter ? [...workingMessages, repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages),
+        messages: withHtmlCardName(lastIter ? [...workingMessages, windowRecoveryExhausted ? WINDOW_RECOVERY_FINAL_NOTE : repeatedToolFailure ? TOOL_FAILURE_FINAL_NOTE : finalTurnNoteFor(iteration)] : workingMessages),
         projectSource: appId,
         client: clientTag,
         temperature: 0.7,
@@ -4864,7 +4869,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         finalTurnText = leakedText ? '' : String(res.content || '');
         finalTurnNoTools = lastIter;
         finalTruncated = (res.finishReason === 'length' && !res.toolCalls?.length && !leakedText && !!String(res.content || '').trim()) || resumeLeftCut;
-        if (automationDraft && !finalTruncated && !droppedCalls && !repeatedToolFailure && consumed?.ok !== false) {
+        if (automationDraft && !finalTruncated && !droppedCalls && !repeatedToolFailure && !windowRecoveryExhausted && consumed?.ok !== false) {
           composedMessage = finalTurnText.trim();
         }
         if (leakedText || droppedCalls) {
@@ -4879,7 +4884,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ? `⚠️ 工具调用以相同参数连续失败 ${MAX_REPEATED_TOOL_FAILURES} 次，已停止重复执行；相关操作尚未完成。`
             : `⚠️ Tool calls failed ${MAX_REPEATED_TOOL_FAILURES} times with unchanged arguments. Repeated execution has stopped; the affected operation remains incomplete.`;
           finalContent = finalContent.trim() ? `${finalContent.trimEnd()}\n\n> ${notice}` : notice;
-        } else if (lastIter && (usedTools || leakedText || droppedCalls)) {
+        } else if (lastIter && !windowRecoveryExhausted && (usedTools || leakedText || droppedCalls)) {
           // 点名上限来源:此前一律写「本会话」,Agent 定义里的 3 轮让用户以为是会话设置、又在 /status 里看到 90。
           const origin = maxIterationsSource === 'session' ? '本会话 /loop 设置'
             : maxIterationsSource === 'agent' ? `Agent「${activeAgentSlug}」定义的 max_iterations`
@@ -5005,6 +5010,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolCalls: res.toolCalls,
         toolResults,
       });
+      // A fresh model turn follows the first refusal. If it tries the exhausted window again, finish in text.
+      // A mixed batch can still have unrelated work. Only executor metadata can trigger this boundary.
+      windowRecoveryExhausted = toolResults.length > 0 && toolResults.every(r => r.isError && r.metadata?.computerUseRecoveryExhausted === true);
       repeatedToolFailure = toolFailureGuard.record(res.toolCalls, toolResults);
       if (repeatedToolFailure) {
         judgeSignals.push(toolLoopSignal(res.toolCalls.map((c) => c.function.name)));
