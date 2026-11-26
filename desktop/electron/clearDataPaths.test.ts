@@ -155,7 +155,8 @@ describe('app:clearData 要删的路径', () => {
     const input: ClearDataInput = { home: H, desktopFiles: files, tangu: true, role: 'owner', forsionHome: join(H, '.forsion'), workspace: join(H, 'Forsion'), userData: '/ud', unitDirs: [] }
     const t = clearDataPaths(input).targets[0] as ClearTarget
     expect(verifyClearTarget(t, { ...input, unitDirs: null })).toBe('changed')
-    rmSync(join(H, '.forsion'), { recursive: true })
+    // 换成另一个目录:先挪走原目录再在原地新建,两者同时存在,inode 必然不同(Linux 上删完立刻新建常复用同一个 inode 号)
+    renameSync(join(H, '.forsion'), join(H, '.forsion-old'))
     mkdirSync(join(H, '.forsion'))
     expect(verifyClearTarget(t, input)).toBe('changed')
     rmSync(join(H, '.forsion'), { recursive: true })
