@@ -27,12 +27,12 @@ The host does not block vault writes. A **dev copy** gets one console warning (o
 
 ## API
 
-All paths are relative to the layer and `/`-separated. `..`, absolute paths and drive letters reject with a `TypeError`. Every method rejects with `Error('plugin-disposed')` after the plugin is turned off.
+All paths are relative to the layer and `/`-separated. `..`, absolute paths (a leading `/`) and drive letters reject with a `TypeError`. After the plugin is turned off, the read and write methods reject with `Error('plugin-disposed')` and `url()` / `vault()` return `null`.
 
 | Method | Behaviour |
 |---|---|
 | `readText(path)` / `readBytes(path)` | UTF-8 text / `Uint8Array`; `null` when the file does not exist |
-| `write(path, data)` | atomic (temp file + rename), creates parent folders, replaces an existing file; strings stored as UTF-8; writes to one file are queued |
+| `write(path, data)` | atomic (temp file + rename), creates parent folders, replaces an existing file; strings stored as UTF-8. All of a plugin's write-type calls (`write` / `append` / `remove` / `move` / `importFromVault`) share one queue in call order, so a long import holds back later writes |
 | `append(path, data)` | creates the file when missing; for streaming large output (recordings) in chunks. Not atomic: a crash can leave a partial tail |
 | `list(folder?)` | direct children (`''` or omitted = layer root), sorted by name, `{ name, path, kind, size, mtime }`; folders report size 0; missing folder → `[]` |
 | `stat(path)` | `{ kind, size, mtime }` or `null` |
@@ -58,11 +58,11 @@ if (store) {
 ## Two layers
 
 - `ctx.storage` follows the app: it survives switching vaults and needs no vault at all.
-- `ctx.storage.vault()` is a separate folder per library (`vaults/<library key>/` inside the same data folder), for indexes and caches derived from one vault's notes. `null` with no library open. Same methods; on a vault layer `vault()` returns itself.
+- `ctx.storage.vault()` is a separate folder per library (`vaults/<library key>/` inside the same data folder), for indexes and caches derived from one vault's notes. `null` with no library open, and also while the library is still being restored at startup: call `vault()` when you need it, don't keep the startup one. Same methods; on a vault layer `vault()` returns itself.
 - The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer; the old one stays and still counts in `usage()`.
 - Operations on a vault layer reject once the user switches libraries: call `ctx.storage.vault()` again instead of caching the layer across a switch.
 - `cache/` in either layer is yours to regenerate: the desktop plugin page's **Clear cache** button empties it. Keep nothing there you cannot rebuild.
-- The top-level name `vaults/` is reserved: the app layer refuses paths starting with it.
+- Reserved names, matched in any letter case: the top-level `vaults/` on the app layer, the top-level `.forsion-imports/` (import records) on a vault layer.
 
 ## Where it lives
 
@@ -97,7 +97,7 @@ if (v) {
 ```
 
 - `from` is vault-relative and must be inside your working folder, `Plugins/<plugin ID>` or `Plugins/<display name>` (the pre-2026-10-21 default); anything else rejects.
-- Copy, never move: each file is verified against its source. A second call with the same `id` returns `already-done`. A completion record that cannot be read rejects: do not treat that as "not imported yet".
+- Copy, never move: each file is verified against its source. A second call with the same `id` returns `already-done`. A completion record that cannot be read or recognised rejects: do not treat that as "not imported yet".
 - Call it on the app layer (`ctx.storage.importFromVault`) for data that should follow the app, on `vault()` for per-library data. Both need an open library.
 - Do not delete the vault originals yourself after copying; tell the user they can.
 - This is separate from `ctx.app.migrateWorkFolder` ([references/work-folder-migration.md](references/work-folder-migration.md)), which moves **notes** from an old vault folder into the new ID work folder.

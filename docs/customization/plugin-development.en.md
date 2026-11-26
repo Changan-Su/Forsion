@@ -749,7 +749,7 @@ The host does not block vault writes. A dev copy that writes a dot-file, or a si
 
 ### API
 
-Paths are relative to the layer and `/`-separated; `..`, absolute paths and drive letters throw a `TypeError`. Every method rejects after the plugin is turned off (`plugin-disposed`).
+Paths are relative to the layer and `/`-separated; `..`, absolute paths (a leading `/`) and drive letters throw a `TypeError`. After the plugin is turned off, the read and write methods reject (`plugin-disposed`) and `url()` / `vault()` return `null`.
 
 ```js
 const store = ctx.storage
@@ -762,7 +762,7 @@ if (store) {
 ```
 
 - `readText(path)` / `readBytes(path)`: `null` when the file does not exist; **any other read failure rejects**. Never treat it as empty and write defaults over it.
-- `write(path, data)`: temp file + rename, replaces an existing file; writes to one file are queued. `append(path, data)` appends (creating the file when missing), for writing large output such as recordings in chunks; it is not atomic.
+- `write(path, data)`: temp file + rename, replaces an existing file. A plugin's write-type calls (`write` / `append` / `remove` / `move` / `importFromVault`) share one queue and run in call order, so while a long `importFromVault` runs, that plugin's later writes wait for it. `append(path, data)` appends (creating the file when missing), for writing large output such as recordings in chunks; it is not atomic.
 - `list(folder?)`, `stat(path)`: `[]` / `null` when missing. `remove(path)` deletes permanently (this is the plugin's own data: no trash). `move(from, to)` moves within the same layer and rejects when the target exists.
 - `usage()`: bytes of the whole folder (both layers) and of its `cache/` folders.
 - `url(path)`: a synchronous address for `<img>` / `<video>` / `fetch`, read in byte ranges (videos can seek). `null` where the host cannot give one: then read the bytes and make a Blob URL.
@@ -770,9 +770,9 @@ if (store) {
 ### Two layers
 
 - `ctx.storage` follows the app: it survives switching vaults and works with no vault open.
-- `ctx.storage.vault()` is a layer per library (`vaults/<library key>/` in the same folder), for indexes and caches derived from one vault's notes. `null` with no library open; the methods are the same. The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer, and the old one stays and still counts in `usage()`. After the user switches libraries, operations on the old library's layer reject: call `vault()` again.
+- `ctx.storage.vault()` is a layer per library (`vaults/<library key>/` in the same folder), for indexes and caches derived from one vault's notes. `null` with no library open; the methods are the same. It is also `null` while the library is still being restored at startup: call `vault()` when you need it rather than keeping the one you got at startup. The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer, and the old one stays and still counts in `usage()`. After the user switches libraries, operations on the old library's layer reject: call `vault()` again.
 - `cache/` in either layer is the plugin's to rebuild at any time: "Clear cache" in the Data section of the desktop plugin page empties only that.
-- The top-level name `vaults/` is reserved; the app layer refuses it.
+- Reserved names (any letter case): the top-level `vaults/` on the app layer and the top-level `.forsion-imports/` (import records) on a vault layer; writes there are refused.
 
 ### Where it lives, where it exists
 
@@ -807,7 +807,7 @@ if (v) {
 ```
 
 - `from` must be inside your work folder, `Plugins/<plugin ID>` or `Plugins/<display name>` (the default before 2026-10-21); anything else rejects.
-- Copy, never move: every file is checked against its original. A second call with the same `id` returns `already-done`; a completion record that cannot be read rejects, so don't treat that as "not copied yet".
+- Copy, never move: every file is checked against its original. A second call with the same `id` returns `already-done`; a completion record that cannot be read or recognised rejects, so don't treat that as "not copied yet".
 - Call `ctx.storage.importFromVault` for data that follows the app and the `vault()` layer's for per-library data; both need an open library.
 - Don't delete the vault originals yourself after copying; tell the user they can.
 - This is not `ctx.app.migrateWorkFolder`: that one moves **notes** from an old folder into the new English-ID work folder.

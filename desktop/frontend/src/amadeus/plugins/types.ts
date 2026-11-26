@@ -2294,8 +2294,9 @@ export interface PluginStorageImportOptions {
 }
 
 /** Plugin data folder (`ctx.storage`, 2026-11-26+). Paths are relative to the layer and `/`-separated; `..`,
- *  absolute paths and drive letters reject with a TypeError. Every method rejects after your plugin is turned off
- *  (`Error('plugin-disposed')`). Missing file → `null` / `[]`; any other read failure **rejects** — never treat it
+ *  absolute paths (a leading `/`) and drive letters reject with a TypeError. Reserved names (any letter case): the
+ *  top-level `vaults/` on the app layer, the top-level `.forsion-imports/` on a vault layer. After your plugin is turned
+ *  off the read / write methods reject (`Error('plugin-disposed')`) and `url()` / `vault()` return null. Missing file → `null` / `[]`; any other read failure **rejects** — never treat it
  *  as "empty" and overwrite (a failed read is not missing data). */
 export interface PluginStorage {
   /** UTF-8 text, or null when the file does not exist. */
@@ -2303,7 +2304,8 @@ export interface PluginStorage {
   /** Raw bytes, or null when the file does not exist. */
   readBytes(path: string): Promise<Uint8Array | null>
   /** Atomic write (temp file + rename), creating parent folders; replaces an existing file. Strings are stored as UTF-8.
-   *  Writes to the same file are queued. */
+   *  All of a plugin's write-type calls (write / append / remove / move / importFromVault) share one queue in call
+   *  order, so a long import holds back later writes. */
   write(path: string, data: string | Uint8Array | ArrayBuffer): Promise<void>
   /** Append to a file (created when missing). Use it to stream large output (recordings) in chunks instead of
    *  holding the whole thing in memory. Not atomic: a crash can leave a partial tail. */
@@ -2322,7 +2324,8 @@ export interface PluginStorage {
    *  same way vault images are served. null where the host cannot serve files (then read bytes and use a Blob URL).
    *  Throws on an invalid path. Does not check that the file exists. */
   url(path: string): string | null
-  /** The layer for the library open right now (`vaults/<library key>/` in the same folder), or null with none open.
+  /** The layer for the library open right now (`vaults/<library key>/` in the same folder), or null with none open —
+   *  including while the library is still being restored at startup, so call it when you need it.
    *  The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer; the
    *  old one stays and still counts in usage(). On a vault layer, returns itself. Operations on a vault layer reject
    *  once the user switches libraries — call `vault()` again. */
@@ -2330,7 +2333,7 @@ export interface PluginStorage {
   /** Copy (never move) old data you wrote into the vault into this layer, once per library. Each file is verified
    *  against its source; the originals stay in the vault for the user to delete. An existing target file with
    *  different content is left alone and listed in `skipped`. `missing` = the source is not there (nothing recorded,
-   *  so a later call can still copy it, e.g. after sync delivers it). A completion record that cannot be read rejects.
+   *  so a later call can still copy it, e.g. after sync delivers it). A completion record that cannot be read or recognised rejects.
    *  Needs an open library. */
   importFromVault(opts: PluginStorageImportOptions): Promise<{ status: 'complete' | 'already-done' | 'missing'; copied: number; skipped: string[] }>
 }
@@ -2554,7 +2557,7 @@ export interface PluginContext {
    *
    *  Two layers: `ctx.storage` follows the app (survives switching vaults); `ctx.storage.vault()` is a separate folder
    *  per library (indexes / caches derived from one vault's notes), `null` with no library open. `cache/` in either
-   *  layer is yours to regenerate: the plugin page's "Clear cache" empties it. The top-level name `vaults/` is reserved.
+   *  layer is yours to regenerate: the plugin page's "Clear cache" empties it. Reserved: top-level `vaults/` (app layer), `.forsion-imports/` (vault layer).
    *  See `PluginStorage` for every method. */
   storage?: PluginStorage
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives

@@ -738,7 +738,7 @@ off?.()
 
 ### 接口
 
-路径都相对这一层、用 `/` 分隔；带 `..`、绝对路径、盘符的一律抛 `TypeError`。插件停用后每个方法都 reject（`plugin-disposed`）。
+路径都相对这一层、用 `/` 分隔；带 `..`、绝对路径（`/` 开头）、盘符的一律抛 `TypeError`。插件停用后读写类方法都 reject（`plugin-disposed`），`url()`、`vault()` 回 `null`。
 
 ```js
 const store = ctx.storage
@@ -751,7 +751,7 @@ if (store) {
 ```
 
 - `readText(path)` / `readBytes(path)`：文件不存在回 `null`；**别的读错误一律 reject**，别当成空的再写默认值盖上去。
-- `write(path, data)`：临时文件 + 换名，已有的文件直接替换；同一个文件的写入排队。`append(path, data)` 追加写（不存在就建），适合分块写录像这类大文件，不是原子的。
+- `write(path, data)`：临时文件 + 换名，已有的文件直接替换。一个插件的写类调用（`write` / `append` / `remove` / `move` / `importFromVault`）排同一条队，按调用先后执行；所以一次长的 `importFromVault` 进行中，这个插件后面的写会等它做完。`append(path, data)` 追加写（不存在就建），适合分块写录像这类大文件，不是原子的。
 - `list(folder?)`、`stat(path)`：不存在回 `[]` / `null`。`remove(path)` 永久删除（这是插件自己的数据，不进回收站）。`move(from, to)` 只在同一层里挪，目标已存在就 reject。
 - `usage()`：整个文件夹（两层都算）和其中 `cache/` 的字节数。
 - `url(path)`：同步给一个地址，`<img>` / `<video>` / `fetch` 都能用，按字节范围读（视频能拖进度条）。宿主给不出时回 `null`，这时读字节、转成 Blob URL。
@@ -759,9 +759,9 @@ if (store) {
 ### 两层
 
 - `ctx.storage` 跟着应用走：换库不丢，没打开库也能用。
-- `ctx.storage.vault()` 是按库分开的一层（同一个文件夹里的 `vaults/<库标识>/`），放从某个库的笔记算出来的索引、缓存。没打开库时回 `null`；方法完全一样。库标识按库文件夹的路径算：在 Forsion 外面挪了库，会拿到一份新的空层，旧的那份留着、照样算进 `usage()`。用户切换库后，旧库那一层的操作会 reject，重新调一次 `vault()`。
+- `ctx.storage.vault()` 是按库分开的一层（同一个文件夹里的 `vaults/<库标识>/`），放从某个库的笔记算出来的索引、缓存。没打开库时回 `null`；方法完全一样。插件启动时库可能还没恢复，这时也是 `null`：用到时再调 `vault()`，别在启动时取一次存着。库标识按库文件夹的路径算：在 Forsion 外面挪了库，会拿到一份新的空层，旧的那份留着、照样算进 `usage()`。用户切换库后，旧库那一层的操作会 reject，重新调一次 `vault()`。
 - 两层里的 `cache/` 都归插件随时重建：桌面插件详情页「数据」一节的「清空缓存」只清它。
-- 顶层的 `vaults/` 是保留名，跟应用走的那一层写不进去。
+- 保留名（不分大小写）：跟应用走的那一层顶层的 `vaults/`，库那一层顶层的 `.forsion-imports/`（复制进来的完成记录），都写不进去。
 
 ### 放在哪、哪里有
 
@@ -796,7 +796,7 @@ if (v) {
 ```
 
 - `from` 必须在你的工作文件夹、`Plugins/<插件 ID>` 或 `Plugins/<显示名>`（2026-10-21 以前的缺省目录）里面，别处一律 reject。
-- 只复制、不挪：每个文件都和原件核对过。同一个 `id` 第二次调回 `already-done`；完成记录读不出来会 reject，别当成「还没复制过」。
+- 只复制、不挪：每个文件都和原件核对过。同一个 `id` 第二次调回 `already-done`；完成记录读不出来、或内容认不得，会 reject，别当成「还没复制过」。
 - 跟应用走的数据调 `ctx.storage.importFromVault`，跟库走的调 `vault()` 那一层的；两者都要有打开的库。
 - 复制完别自己删库里的原件，告诉用户可以删。
 - 这和 `ctx.app.migrateWorkFolder` 是两件事：那个是把**笔记**从旧文件夹搬进新的英文 ID 工作文件夹。

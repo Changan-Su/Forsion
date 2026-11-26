@@ -419,3 +419,40 @@ it('⚠️同一个 id 有两份普通目录:卸商店版不留设置时设置�
   expect(await fs.readdir(pluginsRoot())).toEqual([])
   expect(await exists(dataFile('demo-suite'))).toBe(false)
 })
+
+// ── 插件数据文件夹(ctx.storage,2026-11-26):跟着「设置」走 —— 不留设置就整夹进回收站、撤销整夹回来;勾了保留就原地留着。
+const storageDir = (id: string): string => path.join(env.root, 'app-data', 'tangu', 'plugin-data', id)
+async function seedStorage(id: string): Promise<void> {
+  await fs.mkdir(path.join(storageDir(id), 'cache'), { recursive: true })
+  await fs.mkdir(path.join(storageDir(id), 'vaults', 'k'), { recursive: true })
+  await fs.writeFile(path.join(storageDir(id), 'drafts.json'), '{"d":1}')
+  await fs.writeFile(path.join(storageDir(id), 'cache', 'shot.png'), 'PNG')
+  await fs.writeFile(path.join(storageDir(id), 'vaults', 'k', 'state.json'), '{"v":1}')
+}
+
+it('卸载不留设置:插件数据文件夹整夹进回收站,撤销后原样回来', async () => {
+  await installed('demo', { id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await seedStorage('demo')
+  await boot()
+  const r = await invoke('plugins:uninstall-forsion', 'demo') as { trashId: string }
+  expect(await exists(storageDir('demo'))).toBe(false)
+  await invoke('trash:restore-desktop', r.trashId)
+  expect(await fs.readFile(path.join(storageDir('demo'), 'drafts.json'), 'utf8')).toBe('{"d":1}')
+  expect(await fs.readFile(path.join(storageDir('demo'), 'cache', 'shot.png'), 'utf8')).toBe('PNG')
+  expect(await fs.readFile(path.join(storageDir('demo'), 'vaults', 'k', 'state.json'), 'utf8')).toBe('{"v":1}')
+})
+
+it('卸载勾了保留设置:插件数据文件夹原地不动', async () => {
+  await installed('demo', { id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await seedStorage('demo')
+  await boot()
+  await invoke('plugins:uninstall-forsion', 'demo', { keepSettings: true })
+  expect(await fs.readFile(path.join(storageDir('demo'), 'drafts.json'), 'utf8')).toBe('{"d":1}')
+})
+
+it('没有插件数据文件夹(或引擎卸载已先挪走)时卸载照常,不因为少一件而回滚', async () => {
+  const pdir = await installed('demo', { id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  await boot()
+  await expect(invoke('plugins:uninstall-forsion', 'demo')).resolves.toMatchObject({ dirName: 'demo' })
+  await expect(fs.access(pdir)).rejects.toThrow()
+})
