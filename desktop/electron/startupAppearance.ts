@@ -6,7 +6,6 @@ import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppear
 import { roundIconBitmap } from '../shared/iconShape'
 import { keepMacIcon, keepWindowsIcon, windowsProgramsFolders } from './systemIcon'
 import { PRODUCT } from './product'
-import { keepMacIcon, keepWindowsIcon } from './systemIcon'
 import { isMachineOwner } from './hostRole'
 
 // Until the GPU process has reported, Chromium answers "disabled" for every feature, so asking early made
