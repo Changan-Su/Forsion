@@ -531,8 +531,8 @@ describe('按这一份的身份补的引擎环境', () => {
     const { defaultCalendarFor } = await import('./backendManager')
     const id = (p: string) => p
     const m = { machineHome: '/u/.forsion', machineWorkspace: '/u/Forsion', real: id }
-    expect(defaultCalendarFor({ ...m, home: '/u/.forsion', workspace: '/u/Forsion' })).toBe('/u/Forsion/Amadeus/Calendar.db')
-    expect(defaultCalendarFor({ ...m, home: '/U/A/home', workspace: '/U/A/Forsion' })).toBe('/U/A/Forsion/Amadeus/Calendar.db')
+    expect(defaultCalendarFor({ ...m, home: '/u/.forsion', workspace: '/u/Forsion' })).toBe(join('/u/Forsion', 'Amadeus', 'Calendar.db'))
+    expect(defaultCalendarFor({ ...m, home: '/U/A/home', workspace: '/U/A/Forsion' })).toBe(join('/U/A/Forsion', 'Amadeus', 'Calendar.db'))
     expect(defaultCalendarFor({ ...m, home: '/tmp/h', workspace: '/u/Forsion' })).toBeNull()
     expect(defaultCalendarFor({ ...m, home: '/u/.forsion', workspace: '/tmp/w' })).toBeNull()
   })
