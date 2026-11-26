@@ -231,6 +231,25 @@ describe('sketch proactive turn signal', () => {
     expect(section).toContain('Never invent controls');
   });
 
+  it('makes mechanism guidance available even without native UI or a turn hint, subject to the requested format', () => {
+    expect(sketchTurnSignalFor('It tips sideways. Why?', 'auto', false)).toBeUndefined();
+    expect(SKETCH_SECTION).toContain('When visuals are on auto and the user leaves the form open');
+    expect(SKETCH_SECTION).toContain('static diagram or another format take precedence');
+    expect(SKETCH_SECTION).toContain('the host handles switching');
+  });
+
+  it('recognizes a changing condition and an outcome question independently of the subject', () => {
+    for (const message of ['逐渐调节两个齿轮的轴间距，会怎样？', 'What happens as I rotate a polarized filter?']) {
+      expect(sketchTurnSignalFor(message)?.section).toContain('Changing conditions');
+      expect(sketchTurnSignalFor(message, 'less')).toBeUndefined();
+    }
+    expect(sketchTurnSignalFor('把以下描述改写成英文：逐渐移动，两点会怎样？')?.section || '').not.toContain('Changing conditions');
+    for (const message of ['What happens as I rotate it? Return a JSON object only.', '逐渐调节间距，会怎样？用表格回答。']) {
+      expect(sketchTurnSignalFor(message, 'auto', true)?.section || '').not.toContain('Changing conditions');
+    }
+    expect(sketchTurnSignalFor('How does the tax work?')?.section || '').not.toContain('Changing conditions');
+  });
+
   it('names the native tool only when the client can render it', () => {
     const q = '下周要搬家，我需要提前准备些什么？';
     expect(sketchTurnSignalFor(q, 'auto', true)?.section).toContain('`intelligent_ui`');

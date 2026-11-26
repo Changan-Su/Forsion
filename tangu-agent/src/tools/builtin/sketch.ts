@@ -94,12 +94,17 @@ export function sketchEnabledFor(ctx: Pick<ToolContext, 'client' | 'subAgentDept
  * 同门禁,CLI run 不注入。视觉语法是从 lieflat-charts 里抽出的「数据诚实 + 编辑部密度」,
  * 但不把整份 skill 塞进每轮上下文;沙箱也无法用 gallery 的外链图库,故在此给出可执行的内联 SVG 配方。
  */
+const MECHANISM_CHOICE = 'When visuals are on auto and the user leaves the form open, use this test: would the reader have to mentally move parts or trace changing paths or directions to understand the answer? If so, call `intelligent_ui_html` before finishing and show the mechanism in action. Explicit requests for prose, a table, a static diagram or another format take precedence.';
+
 export const SKETCH_SECTION = `## Visual cards
 
 Use \`intelligent_ui_html\` when seeing or manipulating a relationship materially helps the answer: compare
 options, explore a trend, explain a process, inspect a proposed interface, or try a small simulator.
-Do not wait for the user to say "draw" when interaction would help. Use prose for explanations, study notes, derivations and reading guidance,
-Markdown for a requested table, and normal project/file tools when the deliverable is an app or file.
+Do not wait for the user to say "draw". ${MECHANISM_CHOICE}
+For a few qualitatively different states, use labelled \`.fs-tabs\` with a directly drawn diagram per state on common axes; the host handles switching.
+Use a continuous control when intermediate values matter. Derive fixed landmarks and moving marks
+from one coordinate system, including the orientation of the screen axes. Keep the takeaway in chat.
+Use Markdown for reading and normal project/file tools when the deliverable is an app or file.
 Never add a visualization just because an answer contains three values or steps.
 
 ### Composition contract
@@ -124,8 +129,8 @@ Compose from the built-in parts so every card looks like one family: \`fs-chart\
 message) and \`fs-checklist\` (tickable list, ticks persist on this device). Each takes one JSON
 script; load the bundled \`visualize\` skill for the schemas. Prefer them over hand-built markup,
 and never add inline \`style\` attributes, custom colors or your own button/checkbox styling: the host
-owns typography, spacing, theme and responsive layout. Use custom SVG only for multi-series plots or
-arbitrary graphs. When the content is a short list or one sentence, answer in prose instead.
+owns typography, spacing, theme and responsive layout. Use inline SVG for geometry, paths or vectors that change with an input,
+and for plots or graphs the built-in parts cannot express. Derive the drawing and readout from the same model. Make each transition reachable; at a limit, show the limiting behavior instead of a fabricated finite value. When the content is a short list or one sentence, answer in prose instead.
 
 Use the supplied \`.fs-*\` styles and \`--fs-*\` variables. Shared controls: \`fs-controls\`,
 \`fs-field\` (wrapping label), \`fs-input\`, \`fs-select\`, \`fs-range\`, \`fs-check\` (wrapping label)
@@ -170,6 +175,11 @@ export type SketchTurnSignal = {
 
 const SKETCH_OPTOUT_RE = /(?:不要|不用|无需|别)(?:画|绘制|图表|可视化|\s*sketch)|(?:只要?|仅)(?:用)?(?:文字|纯文字|代码)|\b(?:text[ -]?only|no (?:chart|diagram|visuals?|sketch))\b/i;
 const SKETCH_EXPLICIT_RE = /(?:画|绘制|生成|做|给我|用)[^。！？\n]{0,48}(?:图|图表|示意图|架构图|流程图|时序图|关系图|时间线|看板|可视化|sketch)|(?:请|帮我)?可视化|\b(?:draw|visuali[sz]e|make|create|render|show)\b.{0,32}\b(?:chart|diagram|flowchart|timeline|wireframe|mockup|visual|sketch)\b|\b(?:diagram|flowchart|wireframe)\s+(?:this|it|the)\b/i;
+// A changing condition plus an outcome question is a presentation cue. Neither a subject
+// name nor a change verb alone decides whether there is anything spatial to display.
+const VARY_CONDITION_RE = /(?:逐渐|渐渐|慢慢|逐步|移动|转动|旋转|改变|调节|穿过|越过|经过|从.{1,16}(?:移到|移向|转到|到达|到))|\b(?:gradually|vary|varying|rotate|rotating|move|moving|cross|crosses|crossing|increase|decrease|from.{1,40}to)\b/i;
+const SPECIFIC_FORMAT_RE = /(?:只用|仅用|仅输出|只输出|只要|只给|仅给|用一?句(?:话)?|以.{0,12}格式)|(?:用|以|输出为|给我一张?)[^。！？\n]{0,12}(?:表格|纯文本|静态图|JSON|CSV)|\b(?:as (?:a |an )?(?:table|list|json|csv)|(?:json(?: object)?|csv|markdown(?: table)?|prose|table|text)[- ]only|only.{0,14}(?:json|csv|prose|text|table)|static diagram|no controls|one sentence)\b/i;
+const ASK_EFFECT_RE = /(?:会.{0,14}(?:怎样|怎么样|如何|什么变化)|怎么变|有何变化|如何变化)|\b(?:what (?:happens|changes)|how (?:does|do|will|would))\b/i;
 const SKETCH_RELATION_RE = /(?:比较|对比|排名|趋势|变化|演变|分布|构成|前后|步骤|流程|架构|结构|层级|关系|状态机|生命周期|用户旅程|路线图|时间线|决策矩阵|布局|版式|配色)|\b(?:compare|comparison|versus|vs\.?|rank|ranking|trend|distribution|composition|before and after|steps?|flow|process|architecture|hierarchy|relationship|state machine|lifecycle|journey|roadmap|timeline|decision matrix|layout|palette)\b/i;
 const SKETCH_INTERACTIVE_RE = /(?:计算器|滑块|筛选|过滤器|切换器|交互式)|\b(?:calculator|slider|filter|toggle|interactive)\b/i;
 const SKETCH_ANALYZE_RE = /(?:分析|对比|比较|趋势|增长|下降|变化|数据|指标)|\b(?:analy[sz]e|compare|trend|growth|decline|change|data|metric)\b/i;
@@ -205,6 +215,14 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
   // less:只认明确要求;隐式信号(比较 / 流程 / 数据形状)不再提醒,收尾补催也随之缺席(它只看这个信号)。
   if (visuals === 'less') return undefined;
 
+  if (VARY_CONDITION_RE.test(text) && ASK_EFFECT_RE.test(text) && !SPECIFIC_FORMAT_RE.test(text) && !SKETCH_ACTIONABLE_SKIP_RE.test(text) && !SKETCH_CODE_FOCUS_RE.test(text)) {
+    return {
+      kind: 'implicit',
+      section: '## Changing conditions in this question\n' +
+        'Identify the variable being changed and the observable outcome. Only when the user leaves the format open and the outcome involves position, alignment, direction, shape or paths, deliver its diagram now: call `intelligent_ui_html` before your final prose. Show the mechanism and its contrasting states on a common frame. For a qualitative question, draw the distinct states directly in labelled host tab panels on the same reference frame. Use a numeric control when the user wants to explore intermediate values. For a purely scalar result or a requested text, table or other specific format, give that answer directly.',
+    };
+  }
+
   const relation = SKETCH_RELATION_RE.test(text);
   const interactive = SKETCH_INTERACTIVE_RE.test(text);
   const numbers = text.match(/(?:^|[^\p{L}\p{N}])[-+]?(?:\d{1,3}(?:[,_ ]\d{3})+|\d+)(?:\.\d+)?%?/gu)?.length ?? 0;
@@ -234,7 +252,10 @@ export function sketchTurnSignalFor(message: string, visuals: VisualsPref = 'aut
 }
 
 // Advisory only: the model sees the task and history; keywords never require a card.
-export const PRESENTATION_CHOICE = 'Use normal chat Markdown for reading: explanations, study notes, derivations, summaries, textbook locations and static comparisons. A heading structure, formula, list or table does not require a view. Add a diagram only when seeing a relationship materially helps, and an interaction only when operating it helps the user understand or complete the task. If removing the controls would lose nothing useful, use prose or a Markdown table. Never invent controls, quizzes, choices or disclosures to justify a card. Choose the form afresh on every turn; previous cards do not make later answers cards. Keep continuous explanations, formulas and citations in chat; a useful local interaction can accompany just the relevant part without enclosing the whole answer. Honor the requested format. Do not repeat content across chat and the view.';
+export const PRESENTATION_CHOICE = `Choose the form afresh for the question the user is trying to answer. Honor their format and visual preference. Use a view when seeing or operating it materially helps.
+${MECHANISM_CHOICE}
+For a one-off quantitative decision with fixed inputs, compute the result before composing the first sentence. For a discrete threshold, check the candidate and its adjacent attainable value against the condition. For continuous inputs, state the inequality and whether its boundary is included. Then lead with that verified action and value; a tie counts only if the question allows equality. A short calculation or Markdown table can justify it; add a calculator only if exploring other inputs is part of the task.
+Use normal chat Markdown for reading, definitions, notes, derivations and static comparisons. Never invent controls to justify a card or repeat the full explanation in it.`;
 const SHAPE_NOTE = `## Presentation choice for this turn
 ${PRESENTATION_CHOICE}
 Use intelligent_ui for useful native interactions; intelligent_ui_html for charts, diagrams or simulations. Otherwise answer with no view.`;
