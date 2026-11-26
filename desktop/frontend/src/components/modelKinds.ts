@@ -19,14 +19,15 @@ export interface CatalogItem {
 }
 
 /** 直连的通话候选由调用方给(百炼的实时模型是写死的一张表,见 RealtimeVoiceSettings)。 */
-export function catalogByKind(models: ModelsResponse | null, directRealtime: Array<{ id: string; name: string; provider: string }> = []): Record<ModelKind, CatalogItem[]> {
+export function catalogByKind(models: ModelsResponse | null, directRealtime: Array<{ id: string; name: string; provider: string }> = [], savedProviders: Array<Pick<DirectProviderConfig, 'providerId' | 'asrModelIds'>> = []): Record<ModelKind, CatalogItem[]> {
   const list = models?.models || []
   const of = (m: ModelInfo): CatalogItem => ({ id: m.id, name: m.name, source: m.source, provider: m.source === 'forsion' ? m.groupName || m.provider : m.provider, model: m })
   const directTts = (models?.directProviders || []).flatMap((p) => (p.ttsModelIds || []).map((id) => ({ id: `${p.providerId}/${id}`, name: id, source: 'direct' as const, provider: p.providerId })))
-  // 直连的识别模型引擎不放进 models(只有对话 / 生图):从 directProviders 补出来,否则加进识别名单的模型在库里没有行、改不了也移除不了
+  // 直连的识别模型引擎不登记(识别在桌面侧跑,引擎目录里没有):由调用方给盘上的连接补出来,
+  // 否则加进识别名单的模型在库里没有行、改不了也移除不了(评审两轮 P2)
   const asrRows = list.filter((m) => m.modelType === 'asr').map(of)
   const asrSeen = new Set(asrRows.map((m) => m.id))
-  const directAsr = (models?.directProviders || []).flatMap((p) => (p.asrModelIds || []).map((id) => ({ id: `${p.providerId}/${id}`, name: id, source: 'direct' as const, provider: p.providerId }))).filter((m) => !asrSeen.has(m.id))
+  const directAsr = savedProviders.flatMap((p) => (p.asrModelIds || []).map((id) => ({ id: `${p.providerId}/${id}`, name: id, source: 'direct' as const, provider: p.providerId }))).filter((m) => !asrSeen.has(m.id))
   return {
     llm: list.filter((m) => (m.modelType || 'llm') === 'llm').map(of),
     image_gen: list.filter((m) => m.modelType === 'image_gen').map(of),

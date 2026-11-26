@@ -9,6 +9,7 @@
  *  S5 下一步进「添加模型」:模型多时缺省「常用」;勾两个、点添加 → 连接和两个模型一起写进 config.json。
  *  S6 每行 ⋯:自带 Key 的对话模型有设默认 / 能看图 / 类型 / 移除;移除写盘;对话名单只剩一个时「移除」不可点。
  *  S7 英文界面:胶囊、弹窗没有中文残留。
+ *  S8 设置搜索「脱敏」落到本页页底的脱敏卡(原在提供方页)。
  *
  * 跑:npx electron-vite build 之后 `npm run check:modelservices`。截图落 MSVC_SHOTS(缺省临时目录),交付前看一眼。
  * 隔离 userData / TANGU_HOME / HOME(导入本机配置会扫 ~/.claude、~/.codex、~/.cc-switch)+ 假引擎,不碰真实配置。
@@ -63,6 +64,8 @@ async function main() {
     handle: async ({ path: p, body }) => {
       if (p === '/agent/providers/fetch-models') { seen.fetches.push(await body()); return { models: UPSTREAM.map((id) => ({ id })) } }
       if (p === '/agent/providers/test') { seen.tests.push(await body()); return { success: true, message: 'ok' } }
+      // 脱敏卡挪到了本页页底:引擎报可写它才画,S8 核设置搜索能落到它
+      if (p === '/agent/masking') return { writable: true, settings: { secrets: true, personal: false, action: 'mask' }, allow: [], recent: { values: 0, sessions: 0 } }
       return undefined
     },
   })
@@ -176,6 +179,7 @@ async function main() {
     let items = await rowMenu('gpt-6.1-mini')
     const labels = items.map((i) => i.label)
     check('S6a 自带 Key 的对话模型:设默认 / 能看图 / 四种类型 / 移除', ['设为默认对话模型', '能看图', '类型：对话', '类型：朗读', '从 openai 移除'].every((l) => labels.includes(l)), labels)
+    await pause(400) // 菜单淡入走完再拍
     await fl.screenshot({ path: path.join(shots, 'row-menu-light-zh.png') })
     await fl.locator('.capability-menu-items > button[aria-label="从 openai 移除"]').click()
     const removed = await waitFor(() => JSON.stringify(savedProviders().find((p) => p.providerId === 'openai')?.modelIds) === '["gpt-6.1"]', 8000)
@@ -197,6 +201,21 @@ async function main() {
       const llmActive = await fl.locator('.model-lib-bar .seg button.active').innerText()
       check('S2 引擎不报联网搜索时:深链落在模型与服务、不出空白标签', llmActive.includes('对话'), llmActive)
     }
+
+    // S8 设置搜索「脱敏」→ 落到本页页底的脱敏卡(原在提供方页)
+    fl = await open('model/m-display')
+    await fl.locator('.settings-body').evaluate((el) => { el.scrollTop = 0 })
+    await fl.locator('.settings-nav-search input').fill('脱敏')
+    await fl.locator('[data-setting-result="masking"]').click()
+    const maskSeen = await waitFor(() => fl.evaluate(() => {
+      const el = document.querySelector('[data-setting-anchor="masking"]'), body = document.querySelector('.settings-body')
+      if (!el || !body) return false
+      const r = el.getBoundingClientRect(), b = body.getBoundingClientRect()
+      return r.height > 0 && r.top < b.bottom && r.bottom > b.top
+    }), 4000)
+    const maskWhere = await fl.evaluate(() => ({ sub: document.querySelector('.settings-sub')?.getAttribute('data-settings-sub'), tall: document.querySelector('.settings-body').scrollHeight > document.querySelector('.settings-body').clientHeight + 40, top: document.querySelector('.settings-body').scrollTop }))
+    check('S8 搜「脱敏」落到模型与服务页底的脱敏卡,卡在可视区', maskSeen && maskWhere.sub === 'm-display', maskWhere)
+    await fl.locator('.settings-nav-search input').fill('')
 
     await look('dark', 'en')
     fl = await open('model/m-display')

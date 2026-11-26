@@ -15,7 +15,7 @@ import type { DirectProviderConfig } from '../types'
 import type { EngineTarget } from '../services/engine/target'
 import { fetchProviderModels, testProviderConnection } from '../services/backendService'
 import { PROVIDER_PRESETS, presetProviderId } from './providerPresets'
-import { addModels, isCommonModel, LIST_KINDS, modelsIn, mutateProvider, pickKindOf, providerModelCount, readProviderStatus, STATUS_EVENT, writeProviderStatus, type ListKind, type ProviderStatus } from './providerModels'
+import { addModels, isCommonModel, LIST_KINDS, modelsIn, mutateProvider, scrubKey, pickKindOf, providerModelCount, readProviderStatus, STATUS_EVENT, writeProviderStatus, type ListKind, type ProviderStatus } from './providerModels'
 import { FETCH_ENABLE_LIMIT } from './modelKinds'
 import './modelServices.css'
 
@@ -105,11 +105,11 @@ export function statusAge(at: number, t: (k: string, v?: Record<string, unknown>
 async function testConnection(target: EngineTarget, cp: Pick<DirectProviderConfig, 'providerId' | 'baseUrl' | 'apiKey' | 'protocol' | 'modelIds'>, modelId?: string): Promise<ProviderStatus> {
   try {
     const r = await testProviderConnection(target, { baseUrl: cp.baseUrl, apiKey: cp.apiKey || undefined, protocol: cp.protocol, modelId: modelId || cp.modelIds?.[0] })
-    const st = { ok: r.success, at: Date.now(), ...(r.success ? {} : { message: r.message }) }
+    const st = { ok: r.success, at: Date.now(), ...(r.success ? {} : { message: scrubKey(r.message, cp.apiKey) }) }
     if (cp.providerId) writeProviderStatus(cp.providerId, st)
     return st
   } catch (e) {
-    const st = { ok: false, at: Date.now(), message: errText(e) }
+    const st = { ok: false, at: Date.now(), message: scrubKey(errText(e), cp.apiKey) }
     if (cp.providerId) writeProviderStatus(cp.providerId, st)
     return st
   }
@@ -156,7 +156,6 @@ export interface SourceChipsProps {
   onAddConnection: () => void
   /** 浮层里点「N 个模型」:模型清单只看这条连接。 */
   onShowModels: (providerId: string) => void
-  subscriptionIds: string[]
 }
 
 type ChipKey = 'cloud' | `sub:${string}` | `conn:${string}`
@@ -174,10 +173,9 @@ export function SourceChips(p: SourceChipsProps) {
     const el = e.currentTarget
     setOpen((cur) => (cur?.key === key ? null : { key, el }))
   }
-  // 订阅账号(OAuth 登录的提供方)也会以直连连接的形式出现在 providers 里:胶囊只画一份 —— 登录着画成订阅;
-  // 没登录而同名的是一条 API Key 连接(如 xAI 预设缺省叫 xai)时画成连接,否则它的 Key / 地址 / 删除就没处管了(评审 P2)
-  const subIn = new Set(p.subs.filter((s) => s.loggedIn).map((s) => s.id))
-  const conns = p.providers.filter((cp) => subIn.has(cp.providerId) ? false : !p.subscriptionIds.includes(cp.providerId) || !!cp.apiKey)
+  // 写盘的每条连接都画成连接胶囊(同旧提供方页);订阅账号与某条连接同名(如 xAI 预设缺省叫 xai)时只画连接 ——
+  // 引擎让显式连接优先,真正在用的是它,它的 Key / 地址 / 删除也得有处管(评审两轮 P2)
+  const conns = p.providers
   const connIds = new Set(conns.map((cp) => cp.providerId))
   const subs = p.subs.filter((s) => !connIds.has(s.id))
   const dot = (st: ProviderStatus | undefined) => <span className={`msvc-dot${st ? (st.ok ? ' is-ok' : ' is-bad') : ''}`} aria-hidden="true" />
@@ -239,7 +237,9 @@ function ConnectionPanel({ cp, target, status, onStatus, onSaved, onDeleted, onS
     try {
       let next = cp
       if (save && dirty) {
-        const patch = { baseUrl: url.trim().replace(/\/+$/, ''), ...(key.trim() ? { apiKey: key.trim() } : {}), ...(protocolEditable ? { protocol: protocol as 'openai' | 'anthropic-messages' } : {}) }
+        // 只带用户在浮层里改过的字段:别处改过地址时只换 Key 不会把地址改回去(评审二轮 P1)
+        const newUrl = url.trim().replace(/\/+$/, '')
+        const patch: Partial<DirectProviderConfig> = { ...(newUrl !== cp.baseUrl ? { baseUrl: newUrl } : {}), ...(key.trim() ? { apiKey: key.trim() } : {}), ...(protocolEditable && protocol !== (cp.protocol || 'openai') ? { protocol: protocol as 'openai' | 'anthropic-messages' } : {}) }
         const list = await mutateProvider(cp.providerId, (cur) => ({ ...cur, ...patch }))
         next = list.find((x) => x.providerId === cp.providerId) ?? { ...cp, ...patch }
         setKey('')
@@ -331,7 +331,7 @@ export function AddConnectionDialog({ target, providers, onClose, onNext }: {
     const my = ++seq.current
     setProbe({ sig, state: 'busy', fetched: null })
     let fetched: string[] | null = null, fetchError = ''
-    try { fetched = (await fetchProviderModels(target, { baseUrl: url, apiKey: key || undefined, protocol })).map((m) => m.id) } catch (e) { fetchError = errText(e) }
+    try { fetched = (await fetchProviderModels(target, { baseUrl: url, apiKey: key || undefined, protocol })).map((m) => m.id) } catch (e) { fetchError = scrubKey(errText(e), key) || '' }
     if (my !== seq.current) return
     const tryModel = fetched?.find(isCommonModel) || fetched?.find((id) => pickKindOf(id) === 'llm')
     const st = await testConnection(target, { providerId: '', baseUrl: url, apiKey: key || undefined, protocol }, tryModel)
@@ -342,10 +342,11 @@ export function AddConnectionDialog({ target, providers, onClose, onNext }: {
   useEffect(() => {
     if (!key.trim() || !url) return
     const timer = window.setTimeout(() => void check(), 700)
-    // 输入变了 / 弹窗关了:在途的那次作废,不再接着发试调(评审 P3)
-    return () => { window.clearTimeout(timer); seq.current++ }
+    return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig])
+  // 输入变了 / 弹窗关了:在途的那次(含没 Key 时手点的检测)作废,不再接着发试调(评审 P3)
+  useEffect(() => () => { seq.current++ }, [sig])
   const current = probe?.sig === sig ? probe : null
   const openKey = (href: string) => { if (window.tangu?.openExternal) void window.tangu.openExternal(href); else window.open(href, '_blank', 'noopener') }
   const next = () => {
@@ -375,8 +376,8 @@ export function AddConnectionDialog({ target, providers, onClose, onNext }: {
     <span className="msvc-label">{t('msvc.pickService')}</span>
     <div className="msvc-pick" role="group" aria-label={t('msvc.pickService')}>
       {PROVIDER_PRESETS.map((x) => <button key={x.id} type="button" className="msvc-chip" aria-pressed={preset === x.id}
-        onClick={() => { if (x.id !== preset) setKey(''); setPreset(x.id); setPidInput(null); setUrlInput(null); setProtoInput(null) }}>{x.name || t(`prov.preset.${x.id}`)}</button>)}
-      <button type="button" className="msvc-chip" aria-pressed={custom} onClick={() => { if (preset) setKey(''); setPreset(''); setPidInput(null); setUrlInput(null); setProtoInput(null); setAdv(true) }}>{t('msvc.custom')}</button>
+        onClick={() => { if (x.id === preset) return; setKey(''); setPreset(x.id); setPidInput(null); setUrlInput(null); setProtoInput(null) }}>{x.name || t(`prov.preset.${x.id}`)}</button>)}
+      <button type="button" className="msvc-chip" aria-pressed={custom} onClick={() => { if (!preset) return; setKey(''); setPreset(''); setPidInput(null); setUrlInput(null); setProtoInput(null); setAdv(true) }}>{t('msvc.custom')}</button>
     </div>
     {field(custom ? t('msvc.key') : t('msvc.keyFor', { name }), <input type="password" autoComplete="off" value={key} placeholder={custom ? '' : 'sk-…'} onChange={(e) => setKey(e.target.value)} autoFocus />)}
     <div className="msvc-inline">{statusLine}<span className="grow" />
@@ -454,7 +455,7 @@ export function AddModelsDialog({ target, providers, draft, initialProviderId, o
       }
       if (latest) onSaved(latest)
       onClose()
-    } catch (e) { setError(t('msvc.saveFailed', { msg: errText(e) })); setBusy(false) }
+    } catch (e) { setError(errText(e) === 'provider-exists' ? t('msvc.nameTaken') : t('msvc.saveFailed', { msg: errText(e) })); setBusy(false) }
   }
   const kindLabel = (id: string) => { const k = pickKindOf(id); return t(`msvc.kind.${k}`) }
   const draftOnly = !!draft && total === 0

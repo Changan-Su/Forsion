@@ -4,8 +4,8 @@
  *
  * 口径:
  *  - 只动被点的那一类的名单,模型在别的类下的归属不碰(同一个 omni 可以既是对话又是识别)。
- *  - modelIds 为空 = 这条连接任意模型名都放行(引擎口径)。所以对话类的最后一个不让移除、不让改走,
- *    否则一次「移除」会把白名单变成全放行(canDropLlm)。
+ *  - modelIds 为空 = 这条连接任意模型名都放行(引擎口径)。所以对话类的最后一个不让「移除」,
+ *    否则一次移除会把白名单变成全放行(canDropLlm);改类型放行(只有朗读 / 识别的连接是正当配置)。
  *  - 读不到状态记录 = 不知道(灰点),不当成「通过」也不当成「失败」。
  */
 import type { DirectProviderConfig } from '../types'
@@ -64,6 +64,8 @@ export function removeModel(cp: DirectProviderConfig, kind: ListKind, bare: stri
  */
 export function changeModelKind(cp: DirectProviderConfig, bare: string, from: ListKind, to: ListKind): DirectProviderConfig {
   if (from === to) return cp
+  // 盘上它已经不在 from 下了(连点两次改类型,第一次已写完):不再往 to 里加,免得一个模型挂进两类(评审二轮 P2)
+  if (!modelsIn(cp, from).includes(bare)) throw new Error('stale')
   let next = put(cp, from, modelsIn(cp, from).filter((id) => id !== bare))
   next = put(next, to, [...modelsIn(next, to), bare])
   if (from === 'llm') next = setTextOnly(next, bare, false)
@@ -124,12 +126,21 @@ export function mutateProvider(providerId: string, fn: (cur: DirectProviderConfi
     const api = window.tangu
     if (!api?.listProviders || !api.saveProvider) throw new Error('providers api unavailable')
     const list = await api.listProviders()
-    const cur = list.find((x) => x.providerId === providerId) ?? fallback
+    const found = list.find((x) => x.providerId === providerId)
+    // 带 fallback = 新建:同名的已经有了(别处刚建的)就停,不把这份草稿的模型并进别人的连接、也不丢草稿的地址和 Key(评审二轮 P2)
+    if (fallback && found) throw new Error('provider-exists')
+    const cur = found ?? fallback
     if (!cur) throw new Error('provider-gone')
     return api.saveProvider(fn(cur))
   })
   writeChain = run.catch(() => undefined)
   return run
+}
+
+/** 检测失败的原文可能被网关回显出 Key:存进状态缓存 / 显示前把它遮掉。 */
+export function scrubKey(message: string | undefined, key: string | undefined): string | undefined {
+  if (!message || !key || key.length < 6) return message
+  return message.split(key).join(`…${key.slice(-4)}`)
 }
 
 // ── 连接检测状态(本机记一份,只为了状态点;打开页面不自动检测) ──

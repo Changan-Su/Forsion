@@ -1192,18 +1192,6 @@ export const SettingsModal: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.open, tab])
 
-  // 存连接后托管引擎是延后重启的(有任务在跑时等它跑完):重启好了再拉一次目录,否则新加的模型要手动刷新才出来(评审 P2)
-  // 只认「见过非 ready → 又 ready」(真的重启了);打开设置时第一条状态(null → ready)不算,不然一开页就白拉一遍
-  const backendWasDown = useRef(false)
-  useEffect(() => {
-    const state = backendSt?.state
-    if (!state) return
-    if (state !== 'ready') { backendWasDown.current = true; return }
-    if (backendWasDown.current && p.open && tab === 'model' && models) void loadModels()
-    backendWasDown.current = false
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backendSt?.state])
-
   // 订阅更新状态(主进程经 App 启动检查或本页「检查更新」触发,事件流回这里驱动按钮态)。
   useEffect(() => {
     const off = window.tangu?.onUpdaterStatus?.((st) => setUpd(st))
@@ -1471,6 +1459,9 @@ export const SettingsModal: React.FC<{
     // 与导航同一套门控:一级页在本端存在、子页在 subItemsByTab 里,再加面板自身的显示条件。
     if (!tabItems.some(([id]) => id === e.tab)) return false
     const subKey = e.tab === 'model' && e.sub ? modelSubAlias(e.sub) : e.sub // 11-26:提供方 / 联网搜索并进「模型与服务」,旧子页 id 照旧可搜
+    // 并页后这几块只在桌面画(联网搜索还要引擎报了端点),和旧子页的门控一致
+    if (e.id === 'web-search' && !(isDesktop && wsRed)) return false
+    if ((e.id === 'model-providers' || e.id === 'masking') && !isDesktop) return false
     if (subKey && !subItemsForTab(e.tab as Tab).some(([k]) => k === subKey)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
       : need === 'desktop' ? isDesktop
@@ -1524,31 +1515,16 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (!flashAnchor) return
     let raf = 0, timer = 0, tries = 0
-    const place = (body: HTMLElement, el: HTMLElement): number => {
-      const offset = el.getBoundingClientRect().top - body.getBoundingClientRect().top
-      body.scrollTop += offset - Math.max(12, (body.clientHeight - el.offsetHeight) / 3)
-      return body.scrollTop
-    }
-    // 找到后再跟 ~1s:上面的内容晚到(模型与服务页的模型清单异步加载)会把锚点推下去,用户没动过滚动就再对一次
-    const follow = (body: HTMLElement, el: HTMLElement, set: number, top: number, left: number): void => {
-      if (left <= 0 || !el.isConnected) return
-      raf = requestAnimationFrame(() => {
-        if (body.scrollTop !== set) return // 用户自己滚了:不抢
-        const now = el.getBoundingClientRect().top
-        if (Math.abs(now - top) > 4) { const s2 = place(body, el); follow(body, el, s2, el.getBoundingClientRect().top, left - 1) }
-        else follow(body, el, set, top, left - 1)
-      })
-    }
     const seek = (): void => {
       const body = document.querySelector<HTMLElement>('.settings-body')
       const el = body?.querySelector<HTMLElement>(`[data-setting-anchor="${flashAnchor.id}"]`)
       if (body && el && el.getBoundingClientRect().height > 0) {
-        const set = place(body, el)
+        const offset = el.getBoundingClientRect().top - body.getBoundingClientRect().top
+        body.scrollTop += offset - Math.max(12, (body.clientHeight - el.offsetHeight) / 3)
         el.classList.remove('is-anchor-flash')
         void el.offsetWidth
         el.classList.add('is-anchor-flash')
         timer = window.setTimeout(() => el.classList.remove('is-anchor-flash'), 1600)
-        follow(body, el, set, el.getBoundingClientRect().top, 60)
         return
       }
       if (++tries < 60) raf = requestAnimationFrame(seek)
@@ -2449,7 +2425,10 @@ export const SettingsModal: React.FC<{
                   // 改的是盘上最新那份、排队写(mutateProvider):连点两下不会互相盖掉
                   const saveCp = (id: string, fn: (cur: DirectProviderConfig) => DirectProviderConfig) => {
                     setLibMsg('')
-                    void mutateProvider(id, fn).then(providersChanged).catch((e) => setLibMsg(e?.message === 'last-llm' ? t('modelsettings.keepOne') : t('modelsettings.saveFailed', { msg: e?.message || String(e) })))
+                    void mutateProvider(id, fn).then(providersChanged).catch((e) => {
+                      if (e?.message === 'stale') { refreshCustomProviders(); void loadModels(); return } // 盘上已经变了(连点两次):照盘上重画,不报错
+                      setLibMsg(e?.message === 'last-llm' ? t('modelsettings.keepOne') : t('modelsettings.saveFailed', { msg: e?.message || String(e) }))
+                    })
                   }
                   // 每行 ⋯:云端模型只有设默认 / 复制;自带 Key 的(桌面)还能改类型、看图、从连接里移除
                   const rowActions = (c: CatalogItem, kind: ModelKind): CapabilityMenuItem[] => {
@@ -2474,7 +2453,7 @@ export const SettingsModal: React.FC<{
                   }
                   return <>
                     <ModelPickerSettings
-                      catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [])}
+                      catalog={catalogByKind(models, isDesktop && stored ? realtimeCandidates(stored, customProviders, models?.realtimeModel, realtimeSignedIn).filter((c) => c.source === 'direct') : [], isDesktop ? customProviders : [])}
                       kind={libKind} onKind={setLibKind} subscriptionIds={subscriptionIds}
                       onRefresh={() => void loadModels()} loading={modelsLoading}
                       autoCompact={isDesktop ? <AutoCompactSetting cfg={p.cfg} /> : undefined}
@@ -2484,7 +2463,7 @@ export const SettingsModal: React.FC<{
                       onAddModels={isDesktop ? () => setAddModels({}) : undefined}
                       sources={isDesktop ? <SourceChips target={homeTarget()} providers={customProviders} onProviders={providersChanged}
                         cloud={cloudAccount ? { signedIn: !!authSt?.loggedIn, count: cloudCount } : null} onManageCloud={() => goTab('forsion')}
-                        subs={providers || []} subBusy={providerBusy} onSubLogin={(id) => void doProviderLogin(id)} subscriptionIds={subscriptionIds}
+                        subs={providers || []} subBusy={providerBusy} onSubLogin={(id) => void doProviderLogin(id)}
                         onAddConnection={() => setAddConnOpen(true)}
                         onShowModels={(id) => { setLibKind('llm'); setLibProvider(id) }} /> : undefined}
                       webSearch={isDesktop && wsRed ? <WebSearchSettings target={homeTarget()} cfg={wsRed} setCfg={setWsRed} /> : undefined}
