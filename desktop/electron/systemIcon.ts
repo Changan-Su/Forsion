@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { writePrivateJson } from './configWrite'
 
@@ -83,22 +83,37 @@ export async function keepMacIcon(target: MacIconTarget, key: string | null, png
 
 export interface WindowsIconTarget {
   shell: {
-    readShortcutLink(path: string): { target: string; icon?: string }
-    writeShortcutLink(path: string, operation: 'update', options: { target: string; icon: string; iconIndex: number }): boolean
+    readShortcutLink(path: string): Electron.ShortcutDetails
+    writeShortcutLink(path: string, operation: 'update', options: Electron.ShortcutDetails): boolean
   }
   /** Folders that may hold a shortcut to this install. */
   folders: string[]
   exe: string
+  appId?: string
   /** Where the .ico is written (userData). */
   dir: string
 }
+
+/** Windows can redirect Programs independently of Roaming AppData. */
+export async function windowsProgramsFolders(roaming: string): Promise<string[]> {
+  const relative = 'Microsoft/Windows/Start Menu/Programs'
+  const fallback = [join(roaming, relative), ...(process.env.ProgramData ? [join(process.env.ProgramData, relative)] : [])]
+  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+  const command = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Environment]::GetFolderPath('Programs'); [Environment]::GetFolderPath('CommonPrograms')"
+  const paths = await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
+    windowsHide: true, timeout: 2000,
+  }).then(({ stdout }) => stdout.split(/\r?\n/).filter(isAbsolute), () => [])
+  return paths.length ? paths : fallback
+}
+
 const ICO = /^app-icon-[0-9a-f]+\.ico$/
+const LEGACY_APP_ID = 'com.forsion.tangu'
 /** Older pictures kept on disk: a shortcut this app cannot see or rewrite (moved elsewhere, all-users) may still use one. */
 const KEPT_ICONS = 8
 const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
 
 export async function keepWindowsIcon(target: WindowsIconTarget, key: string | null, png: () => Buffer, size: number): Promise<void> {
-  const { shell, folders, exe, dir } = target
+  const { shell, folders, exe, dir, appId } = target
   // Explorer caches icons by path: every picture gets its own file name.
   const file = key ? join(dir, `app-icon-${digest(key)}.ico`) : null
   if (file && !existsSync(file)) {
@@ -115,8 +130,16 @@ export async function keepWindowsIcon(target: WindowsIconTarget, key: string | n
       if (!same(now.target, exe)) continue
       const ours = !!now.icon && same(dirname(now.icon), dir) && ICO.test(basename(now.icon).toLowerCase())
       // Without a picture only our own icon is taken back: one the user set on a shortcut stays.
-      if (file ? same(now.icon ?? '', file) : !ours) continue
-      shell.writeShortcutLink(link, 'update', { target: now.target, icon: file ?? exe, iconIndex: 0 })
+      const changeIcon = file ? !same(now.icon ?? '', file) : ours
+      // NSIS can keep existing links on upgrade. Reconcile the former shared runtime ID,
+      // including on taskbar links, while preserving per-window IDs and custom icons.
+      const changeAppId = appId && now.appUserModelId === LEGACY_APP_ID && now.appUserModelId !== appId
+      if (!changeIcon && !changeAppId) continue
+      shell.writeShortcutLink(link, 'update', {
+        target: now.target,
+        ...(changeIcon ? { icon: file ?? exe, iconIndex: 0 } : {}),
+        ...(changeAppId ? { appUserModelId: appId } : {}),
+      })
     } catch { /* unreadable, or an all-users shortcut this account cannot write: left as it is */ }
   }
   const old: { path: string; at: number }[] = []

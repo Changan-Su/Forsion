@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path'
 import { createSerialQueue, writePrivateJson } from './configWrite'
 import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppearance } from '../shared/startupAppearance'
 import { roundIconBitmap } from '../shared/iconShape'
-import { keepMacIcon, keepWindowsIcon } from './systemIcon'
+import { keepMacIcon, keepWindowsIcon, windowsProgramsFolders } from './systemIcon'
+import { PRODUCT } from './product'
 
 // Until the GPU process has reported, Chromium answers "disabled" for every feature, so asking early made
 // hardware-accelerated machines look like software rendering. Registered at import: the report can beat `ready`.
@@ -44,6 +45,7 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   // The icon set above dies with the process: the same picture also goes to the system (see systemIcon.ts), again on
   // every launch because an update undoes it. Packaged builds only — in development the bundle is Electron's own.
   let keeping: Promise<void> = Promise.resolve()
+  let programs: Promise<string[]> | undefined
   const keep = (): void => {
     // 插件沙箱是同一个安装包另起的一份:它的设置页改图标不能写到整机那份 .app / 快捷方式上
     if (!app.isPackaged || process.env.FORSION_SANDBOX === '1') return
@@ -55,14 +57,14 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
         const bundle = resolve(process.execPath, '../../..')
         if (bundle.endsWith('.app')) await keepMacIcon({ bundle, dir }, key, () => icon!.toPNG())
       } else if (process.platform === 'win32') {
-        const roaming = app.getPath('appData'), programs = 'Microsoft/Windows/Start Menu/Programs'
+        const roaming = app.getPath('appData')
+        programs ??= windowsProgramsFolders(roaming)
         const size = Math.min(256, icon?.getSize().width ?? 256)
         await keepWindowsIcon({
-          shell, exe: process.execPath, dir,
+          shell, exe: process.execPath, dir, appId: PRODUCT.appId,
           folders: [
-            app.getPath('desktop'), join(roaming, programs), join(roaming, 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'),
+            app.getPath('desktop'), ...await programs, join(roaming, 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'),
             // Installed for all users: usually not writable from here, and then left as they are.
-            ...(process.env.ProgramData ? [join(process.env.ProgramData, programs)] : []),
             ...(process.env.PUBLIC ? [join(process.env.PUBLIC, 'Desktop')] : []),
           ],
         }, key, () => (icon!.getSize().width > size ? icon!.resize({ width: size, height: size }) : icon!).toPNG(), size)
@@ -71,6 +73,8 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   }
   apply(activeIcon)
   keep()
+  // Electron may recreate a legacy Start menu link when initializing notifications.
+  if (process.platform === 'win32') await keeping
   app.on('browser-window-created', (_event, win) => {
     if (process.platform !== 'darwin' && !activeIcon.isEmpty()) win.setIcon(activeIcon)
   })

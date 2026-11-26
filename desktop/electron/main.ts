@@ -194,6 +194,8 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
+// Windows uses this to match the running process and notifications to the installer shortcuts.
+if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? PRODUCT.appId : `${PRODUCT.appId}.dev`)
 app.on('second-instance', (_e, argv, cwd) => {
   // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
   if (!argv.some((a) => spaceWindowIdFromUrl(a) || unitWindowIdFromUrl(a))) showMainWindow()
@@ -3479,8 +3481,6 @@ app.whenReady().then(async () => {
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender, (on) => telemetry.setting('computerHistory.enabled', on))
   }
-  // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
-  app.setAppUserModelId('com.forsion.tangu')
   // 媒体权限(麦克风,语音输入):Electron 层放行——部分平台/版本默认拒 getUserMedia。callback(true) 沿用
   // 「未设 handler=全放行」的既有默认,不回归其他权限(通知等)。macOS 仍受系统隐私设置门控(拒了要去设置改)。
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true))

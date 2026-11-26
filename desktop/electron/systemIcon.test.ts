@@ -101,7 +101,7 @@ describe('keepWindowsIcon', () => {
     const name = (path: string) => path.slice(folder.length + 1)
     const shell = {
       readShortcutLink: (path: string) => { if (!links[name(path)]) throw new Error('not a shortcut'); return links[name(path)] },
-      writeShortcutLink: vi.fn((path: string, _op: 'update', options: { target: string; icon: string; iconIndex: number }) => {
+      writeShortcutLink: vi.fn((path: string, _op: 'update', options: Electron.ShortcutDetails) => {
         expect(options.target).toBe(links[name(path)].target) // only the icon changes
         if (name(path) === 'Locked.lnk') throw new Error('Access is denied')
         links[name(path)].icon = options.icon
