@@ -6,6 +6,7 @@ import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, Produc
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
+import type { LocalUnitsApi } from '../../shared/localUnits'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 import type { MuseTodoEvidence } from '../../../tangu-agent/src/contracts/clientTypes'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
@@ -624,6 +625,8 @@ declare global {
       /** 这扇窗口重新拿到焦点(主进程 browser-window-focus;webview 占着焦点时渲染层自己的 focus 事件不可靠)。 */
       onWindowFocused?(cb: () => void): () => void
       unitsShowMain?(): void
+      /** 本机多 Unit(这台电脑上的文件夹 Unit):只在主窗、有本机引擎、不是插件沙箱时存在。不依赖登录或云端扩展。 */
+      localUnits?: LocalUnitsApi
       unitsAddToDesktop?(input: { id: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       /** 本机已配对的来访设备(T1)与回收。 */
       unitsPairedList?(): Promise<UnitPairedDevice[]>
@@ -721,6 +724,8 @@ declare global {
       /** auto = 主窗收到 autoDownload 的「有新版」后自动发起(version = 主窗查过跳过的那一版):只认 GitHub 源,失败不换到官网、退回等用户点 */
       downloadUpdate?(opts?: { auto?: boolean; version?: string }): Promise<void>
       installUpdate?(): Promise<{ ok: boolean }>
+      /** Unattended, version-bound install (main.ts updater:installIfIdle); absent on older hosts. */
+      installUpdateIfIdle?(args: { version: string; requireOsIdleSeconds: number }): Promise<{ ok: true } | { ok: false; reason: string }>
       /** 测试版通道开关(缺省关)。开了才收 x.y.z-beta.N;关着两层都隔离:
        *  Win/Linux 读的是 latest.yml 而非 beta.yml,mac 打的是 /releases/latest(按定义排除 prerelease)。 */
       getUpdateBeta?(): Promise<boolean>

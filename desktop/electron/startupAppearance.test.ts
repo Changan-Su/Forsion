@@ -20,24 +20,49 @@ vi.mock('electron', () => ({
     createFromBitmap: (bitmap: Buffer & { tag: string }) => ({ isEmpty: () => false, getSize: () => ({ width: 1, height: 1 }), toPNG: () => Buffer.from(bitmap.tag), tag: bitmap.tag }),
   },
 }))
-vi.mock('./systemIcon', () => ({ keepMacIcon: mock.keepMac, keepWindowsIcon: mock.keepWindows }))
+vi.mock('./systemIcon', () => ({
+  keepMacIcon: mock.keepMac,
+  keepWindowsIcon: mock.keepWindows,
+  windowsProgramsFolders: async () => ['redirected-programs'],
+}))
 import { registerStartupAppearance } from './startupAppearance'
+import { setHostRole } from './hostRole'
 // Registered when the module loads, before beforeEach clears the map.
 const gpuReports = mock.listeners.get('gpu-info-update')!
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII='
 const asset = { id: 'plugin:probe:one', label: 'Probe', pluginId: 'probe', image: png }
 const platform = process.platform, execPath = process.execPath
+const resourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
 beforeEach(async () => {
   mock.dir = await mkdtemp(join(tmpdir(), 'appearance-test-'))
   mock.handlers.clear(); mock.listeners.clear(); vi.clearAllMocks(); mock.packaged = false
 })
 afterEach(async () => {
   Object.defineProperty(process, 'platform', { value: platform }); Object.defineProperty(process, 'execPath', { value: execPath })
+  if (resourcesPath) Object.defineProperty(process, 'resourcesPath', resourcesPath)
+  else Reflect.deleteProperty(process, 'resourcesPath')
   await rm(mock.dir, { recursive: true, force: true })
 })
 const update = (patch: unknown, owner?: string) => mock.handlers.get('appearance:update')!({ trusted: true }, patch, owner)
 const initial = () => { const event = { returnValue: undefined }; mock.listeners.get('appearance:initial')!(event); return event.returnValue as any }
 describe('desktop appearance persistence and OS icon', () => {
+  it('reconciles packaged Windows shortcuts before startup continues', async () => {
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    mock.packaged = true
+    ;(process as any).resourcesPath = mock.dir
+    let finish: () => void = () => {}
+    mock.keepWindows.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+    let ready = false
+    const initializing = registerStartupAppearance(() => true).then(() => { ready = true })
+    await vi.waitFor(() => expect(mock.keepWindows).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'com.forsion.tangu-desktop2',
+      folders: expect.arrayContaining(['redirected-programs']),
+    }), null, expect.any(Function), 256))
+    expect(ready).toBe(false)
+    finish()
+    await initializing
+    expect(ready).toBe(true)
+  })
   it('trusts the GPU compositing status only after the GPU process has reported', async () => {
     Object.defineProperty(process, 'platform', { value: 'win32' })
     await registerStartupAppearance(() => true)
@@ -121,6 +146,22 @@ describe('desktop appearance persistence and OS icon', () => {
     expect(target.folders.length).toBeGreaterThanOrEqual(3)
     expect(key).toBe(png)
     expect(mock.keepMac).not.toHaveBeenCalled()
+  })
+  it('a folder Unit or plugin sandbox (not the machine owner) never writes the shared app icon', async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    Object.defineProperty(process, 'execPath', { value: '/Applications/Forsion.app/Contents/MacOS/Forsion' })
+    mock.packaged = true
+    ;(process as any).resourcesPath = mock.dir
+    for (const role of [{ pluginSandbox: false, folderUnitId: '00000000-0000-4000-8000-000000000001' }, { pluginSandbox: true, folderUnitId: null }]) {
+      setHostRole(role)
+      try {
+        await registerStartupAppearance(() => true)
+        await update({ icon: asset })
+        await new Promise((r) => setTimeout(r, 20))
+        expect(mock.keepMac).not.toHaveBeenCalled()
+        expect(mock.dock).toHaveBeenCalled() // 这一份自己的 Dock 图标照换
+      } finally { setHostRole({ pluginSandbox: false, folderUnitId: null }) }
+    }
   })
   it('recovers a damaged startup file without blocking application startup', async () => {
     await writeFile(join(mock.dir, 'startup-appearance.json'), '{bad')

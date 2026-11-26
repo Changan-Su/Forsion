@@ -137,7 +137,7 @@ const KNOWN_GATES = {
   'window.tangu?.unitPublicEntry': '服务器 Unit 的公共网页入口以访客账号接入 Extend 云端收件箱;配对设备投影继续只用该设备引擎,手机浏览器装共享 mobile 壳也沿用此边界',
   'window.tangu?.restartForUpdate': '桌面宿主的待重启更新入口与本机任务退出保护；web / mobile 不替换 Electron 或本机核心插件，不提供该 IPC。',
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品由 window.tangu?.authStatus 显示相同组件。',
-  'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡)。web / mobile 的 shim 都自带 authStatus,三端照常显示。',
+  'window.tangu?.authStatus': '账号卡 rb-account 随 Forsion Extend 出现(auth:* 五通道住在 Extend,authStatus 是桥键;缺包 / 验签失败就没有账号卡;桌面主窗有本机多 Unit 时没 Extend 也挂,见 AccountCard 的 accountCardWanted)。2026-11-14 判别式搬进 features/runtime.ts 的 accountBridgeAvailable。web / mobile 的 shim 都自带 authStatus,三端照常显示。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
   'window.tangu?.backendStatus': '桌面壳语义(含 external 模式);2026-09-15 起 Inbox/Muse 的判定单源在 features/runtime.ts(inboxAvailable/museAvailable),bootstrapEngine 不再直接写它',
   'window.tangu?.mobile': '移动端标志',
@@ -150,7 +150,8 @@ const KNOWN_GATES = {
   // P1-K8
   'window.tangu?.unitsList': 'Unit 切换器(Ribbon 命令区 rb-unit;移动端注册在 head)— 桌面 = Electron IPC 名册;mobile 也有 unitsList(mobileShim cloudJson,是移动端 UnitsSheet「在哪运行 / 打开设备界面」的数据面,入口 rb-units-mobile 由 mobileEntry 的 installUnitsEntry 装),rb-unit 在移动端注册为 side=head,而 SingleColumnHost 只渲染 side=bottom 的项 → 不可见,无害(桌面 10-02 起改 side=bottom;移动端刻意留 head,免得它冒进 MoreSheet);webShim / unitShim 无此方法 → 两端都不注册。vault 切换仍走 VaultSideSwitch mobile 分支。P1-K7a:features/runtime.ts 的 rosterAvailable() 也读它 —— 手机的跨设备会话分组 / 「在哪运行」选择器的名册(Electron IPC + mobileShim cloudJson;webShim / unitShim 无 → 网页版与设备页不显示,K7 U2 与 §4.7 b6)',
   'window.tangu?.unitHostStatus': 'Unit 切换器(rb-unit)的第二个上架条件,与 unitsList 取或:名册(unitsList)自 Forsion Extend 0.6 起随包出现,unitHostStatus 留在宿主 → 没有 Extend 的桌面切换器照样上架,只是不列账号名下的设备(本地 / 按地址直连 / 允许其他设备连接本机 / 已配对设备都不经云端)。两者同在产品档案的 AGENT_KEYS 里,amadeus / basic 单品照旧都没有;mobileShim / webShim / unitShim 都没有 unitHostStatus → 三端行为不变(mobile 仍凭 unitsList 注册、不可见)。',
-  'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变。P1-K7a:它还**无条件**关掉「在哪运行」选择器、设备会话分组与逐台拉会话(features/runtime.ts rosterAvailable,不得经 A 的隧道再驱动 B;设备页在手机视口加载 @mobile/mobileEntry 也同样关)',
+  'window.tangu?.localUnits': '本机多 Unit(features/runtime.ts 的 localUnitsAvailable:头像面板「这台电脑」组里的文件夹 Unit 行、「添加 Unit…」、文件夹 Unit 里头像的角标)— 只在桌面 Electron 主窗由 preload 给;手机上没有本机多 Unit(mobileShim / webShim / unitShim 都没有这个键),网页与设备页同理',
+  'window.tangu?.unitPage':'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变。P1-K7a:它还**无条件**关掉「在哪运行」选择器、设备会话分组与逐台拉会话(features/runtime.ts rosterAvailable,不得经 A 的隧道再驱动 B;设备页在手机视口加载 @mobile/mobileEntry 也同样关)',
   'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
   'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
   'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',

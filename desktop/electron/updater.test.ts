@@ -564,3 +564,78 @@ it('Developer ID mac in mainland on beta: the website has no such version, so th
   await downloadUpdate({ auto: true, version: '2.13.5-beta.1' })
   expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', source: 'github' })
 })
+
+// ── Unattended install (installIfIdle): pin the downloaded package so nothing swaps it before quitAndInstall ──
+const downloadedBeta = async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }))
+  const mod = await import('./updater')
+  await mod.checkForUpdates()
+  await mod.downloadUpdate()
+  expect(mod.getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.14.0-beta.1' })
+  return mod
+}
+
+it('pin: refuses before anything is downloaded, and refuses a version other than the downloaded one', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, pinDownloaded, installPinned } = await import('./updater')
+  await checkForUpdates()
+  expect(pinDownloaded('2.13.4')).toBe('not_downloaded')
+  await downloadUpdate()
+  expect(pinDownloaded('2.13.5')).toBe('version_mismatch')
+  expect(installPinned('2.13.5')).toBe(false)
+  expect(updater.quitAndInstall).not.toHaveBeenCalled()
+  expect(pinDownloaded('2.13.4')).toBeNull()
+  expect(pinDownloaded('2.13.5')).toBe('version_mismatch') // one pin at a time
+  expect(installPinned('2.13.4')).toBe(true)
+  expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+})
+
+it('pin: a channel switch while pinned cannot drop the package, and a re-check cannot replace it', async () => {
+  const { pinDownloaded, channelChanged, checkForUpdates, getUpdaterStatus, pinStillValid, installPinned } = await downloadedBeta()
+  expect(pinDownloaded('2.14.0-beta.1')).toBeNull()
+  updater.beta = false
+  channelChanged(false) // would drop the prerelease (see "turning beta off drops a downloaded prerelease")
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded', version: '2.14.0-beta.1' })
+  answers.set('/website/config', site({ version: '2.13.9' }))
+  expect(await checkForUpdates()).toMatchObject({ phase: 'downloaded', version: '2.14.0-beta.1' })
+  expect(pinStillValid('2.14.0-beta.1')).toBe(true)
+  expect(installPinned('2.14.0-beta.1')).toBe(true)
+  expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+})
+
+it('pin: a channel switch made while pinned takes effect when the attempt is released without installing', async () => {
+  const { pinDownloaded, unpinDownloaded, channelChanged, getUpdaterStatus, installPinned } = await downloadedBeta()
+  expect(pinDownloaded('2.14.0-beta.1')).toBeNull()
+  updater.beta = false
+  channelChanged(false)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'downloaded' })
+  unpinDownloaded('2.14.0-beta.1') // e.g. someone came back: refused
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+  expect(installPinned('2.14.0-beta.1')).toBe(false)
+})
+
+it('pin: once unpinned a channel switch drops the package again and the old version can no longer be installed', async () => {
+  const { pinDownloaded, unpinDownloaded, channelChanged, getUpdaterStatus, installPinned } = await downloadedBeta()
+  expect(pinDownloaded('2.14.0-beta.1')).toBeNull()
+  unpinDownloaded('2.14.0-beta.1')
+  updater.beta = false
+  channelChanged(false)
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+  expect(installPinned('2.14.0-beta.1')).toBe(false)
+  expect(pinDownloaded('2.14.0-beta.1')).toBe('not_downloaded')
+  expect(updater.quitAndInstall).not.toHaveBeenCalled()
+})
+
+it('pin: an ad-hoc mac (manual .dmg only) cannot be pinned', async () => {
+  Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, pinDownloaded } = await import('./updater')
+  await checkForUpdates()
+  expect(pinDownloaded('2.13.4')).toBe('unsupported')
+})

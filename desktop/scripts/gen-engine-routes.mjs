@@ -71,6 +71,8 @@ export const CLASSIFICATION = {
   'GET /agent/remote/activity': [D, 'in-flight run registry for the host main process (tray / keep-awake)'],
   'GET /agent/remote/activity/events': [D, 'in-flight run registry feed for the host main process'],
   'GET /agent/remote/restart-status': [D, 'host-only exit checklist (running tasks / background processes) before restarting to update'],
+  'POST /agent/remote/restart-hold': [D, 'host-only: idle check + hold of new runs right before an unattended update stops the engine'],
+  'POST /agent/remote/restart-hold/release': [D, 'host-only: release the restart hold when the unattended update did not go ahead'],
   'POST /agent/remote/estop': [D, 'emergency stop is a host-only action (design §6.5)'],
   'POST /agent/remote/unlock': [D, 'unlocking remote access needs local system auth on the host (design §6.1, D13)'],
 

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { defineMainMessages, mt } from './mainI18n'
 
 defineMainMessages({
@@ -84,26 +85,257 @@ export async function readRestartActivity(url: string, token: string, fetchFn: t
   return { tasks: data.tasks, processes: data.processes, ...(resumable !== undefined ? { resumable } : {}) }
 }
 
+/**
+ * One shutdown at a time across the interactive restart guard and the unattended install: whichever starts first owns it
+ * until it settles (a restart dialog that is still open counts), and the other one refuses.
+ */
+export function createShutdownLock() {
+  let owner: 'restart' | 'idle-install' | null = null
+  return {
+    tryAcquire(who: 'restart' | 'idle-install'): boolean { if (owner) return false; owner = who; return true },
+    release(who: 'restart' | 'idle-install'): void { if (owner === who) owner = null },
+    get owner() { return owner },
+  }
+}
+export type ShutdownLock = ReturnType<typeof createShutdownLock>
+
 /** All restart entry points share one inspection / confirmation / shutdown operation. */
 export function createRestartGuard(deps: {
   inspect(): Promise<RestartActivity>
   confirm(options: RestartDialog): Promise<boolean>
-  restart(install: boolean): Promise<void>
+  /** 回 { ok: false } = 自己挡下了(比如装更新前还有文件夹 Unit 没关掉),这一次不算重启。 */
+  restart(install: boolean): Promise<void | { ok: false }>
   /** 设置「重启后自动接着做未完成的任务」开着没有;不给 / 读不到 = 按关(原来的弹窗)。 */
   autoResume?(): Promise<boolean>
+  /** Shared with the unattended install: while it is shutting down, a restart request is refused. */
+  lock?: ShutdownLock
 }) {
   let pending: Promise<{ ok: boolean }> | undefined
   return (install = false): Promise<{ ok: boolean }> => {
     if (pending) return pending
+    if (deps.lock && !deps.lock.tryAcquire('restart')) return Promise.resolve({ ok: false })
     pending = (async () => {
       const activity = await deps.inspect().catch(() => ({ tasks: 0, processes: 0, unknown: true }))
       if (activity.unknown || activity.tasks || activity.processes) {
         const autoResume = await (deps.autoResume?.() ?? Promise.resolve(false)).catch(() => false)
         if (!await deps.confirm(restartDialog(activity, { install, autoResume }))) return { ok: false }
       }
-      await deps.restart(install)
-      return { ok: true }
-    })().finally(() => { pending = undefined })
+      const r = await deps.restart(install)
+      return r && r.ok === false ? { ok: false } : { ok: true }
+    })().finally(() => { pending = undefined; deps.lock?.release('restart') })
     return pending
   }
+}
+
+// ── Unattended, version-bound install (installIfIdle) ────────────────────────────────────────────────────────────────
+/**
+ * Why the unattended install did nothing. Every uncertainty is a refusal: the caller (Extend forced update) tries again later.
+ *  · invalid_args       version / requireOsIdleSeconds malformed
+ *  · unsupported        dev / sandbox / a build that cannot install in-app (ad-hoc mac, manual .dmg)
+ *  · needs_elevation    Windows: the install folder is not writable by this user (an all-users install), so the installer
+ *                       would stop at a UAC prompt with nobody there
+ *  · in_progress        a restart, a restart dialog, a quit or another unattended install is already under way
+ *  · not_downloaded     no verified package is waiting (or a download is running)
+ *  · version_mismatch   the waiting package is not `version`
+ *  · os_active          OS input more recent than requireOsIdleSeconds
+ *  · os_idle_unknown    the OS idle time cannot be read
+ *  · voice_call         a voice call is up
+ *  · voice_unknown      the voice-call state cannot be read
+ *  · extend_busy        a quit guard (Extend content sync, Penzor Cloud transfers, ...) reports unfinished work, a quit dialog is
+ *                       open, or the content flush did not finish in time (a push may still be running)
+ *  · engine_busy        the managed engine has running / queued tasks, delegates or background processes; or another local
+ *                       Forsion instance on this machine (a folder Unit, localUnits.ts) is running or its state cannot be read
+ *                       (it shares the installation; the unattended path never asks it to quit)
+ *  · engine_unknown     the engine did not answer (or answered something unreadable)
+ *  · engine_not_ready   no managed engine in the `ready` state (stopped, crashed, starting, external / cloud mode)
+ *  · engine_no_hold     the engine cannot hold new runs (an engine older than this host)
+ *  · prepare_failed     mac: Squirrel.Mac could not stage the package (the host fell back to the manual .dmg)
+ *  · install_failed     the engine stopped but the app did not start quitting within QUIT_WATCH_MS (the installer hand-off
+ *                       failed), or the stop itself failed: the quit is undone and the engine started again
+ *  · error              anything unexpected
+ */
+export type IdleInstallReason =
+  | 'invalid_args' | 'unsupported' | 'needs_elevation' | 'in_progress' | 'not_downloaded' | 'version_mismatch'
+  | 'os_active' | 'os_idle_unknown' | 'voice_call' | 'voice_unknown' | 'extend_busy'
+  | 'engine_busy' | 'engine_unknown' | 'engine_not_ready' | 'engine_no_hold'
+  | 'prepare_failed' | 'install_failed' | 'error'
+export type IdleInstallResult = { ok: true } | { ok: false; reason: IdleInstallReason }
+export type EngineCheck = { state: 'ready'; activity: RestartActivity } | { state: 'not_ready' }
+/** valid(): still the engine that granted it, and well inside its ttl (checked synchronously right before the stop). */
+export type EngineHold = { ok: true; release(): Promise<void>; valid?(): boolean } | { ok: false; reason: 'engine_busy' | 'engine_unknown' | 'engine_not_ready' | 'engine_no_hold' }
+
+/** How long the engine holds new runs: the host stops it a few milliseconds later; the ttl only covers a host that died. */
+export const IDLE_INSTALL_HOLD_MS = 15_000
+/** After the installer hand-off, this long without the app starting to quit = the hand-off failed. */
+export const QUIT_WATCH_MS = 30_000
+const VERSION_RE = /^[0-9A-Za-z.+-]{1,40}$/
+const MAX_IDLE_SECONDS = 30 * 24 * 3600
+
+export function createIdleInstall(deps: {
+  lock: ShutdownLock
+  /** dev / sandbox / not installable in-app → false */
+  supported(): boolean
+  /** Windows all-users install (the installer would ask for elevation) → true. Unknown → true. */
+  needsElevation?(): boolean
+  /** A quit is already under way (isQuitting). */
+  quitting(): boolean
+  /** updater.pinDownloaded / unpinDownloaded / pinStillValid / installPinned */
+  pin(version: string): 'unsupported' | 'not_downloaded' | 'version_mismatch' | null
+  unpin(version: string): void
+  pinValid(version: string): boolean
+  /** OS idle seconds; null = cannot be read. Synchronous (powerMonitor). */
+  osIdleSeconds(): number | null
+  /** true = a call is up; null = cannot be read. */
+  voiceCall(): Promise<boolean | null>
+  /** quitGuards.peek(): true = unfinished work or unknown. */
+  extendBusy(): boolean
+  /** Folder Units (local multi-Unit) on this machine: true = one is running, or the registry / a run state cannot be read.
+   *  Synchronous; re-checked right before the point of no return. Absent = none can exist (not the machine owner). */
+  otherInstancesRunning?(): boolean
+  /** Engine restart status; throws = unknown. */
+  engine(): Promise<EngineCheck>
+  /** Atomic engine idle check + hold of new runs (POST /agent/remote/restart-hold). */
+  holdEngine(ttlMs: number): Promise<EngineHold>
+  /** mac Squirrel staging (updater.prepareInstall); true elsewhere. */
+  prepare(): Promise<boolean>
+  /** contentFlush.quit() / contentFlush.reset(). true = every flush hook finished; false = gave up waiting. */
+  flush(): Promise<boolean>
+  resetFlush(): void
+  /** Point of no return, synchronous: isQuitting = true, quitGuards.pass(), cancel the deferred engine restart. */
+  beginQuit(): void
+  /** backend.stop('app_update'): writes the shutdown intent and signals the engine before its first await. */
+  stopEngine(): Promise<void>
+  /** updater.installPinned(version) */
+  install(version: string): boolean
+  /** Resolves true once the app starts quitting (before-quit), false after ms without it. */
+  quitStarted(ms: number): Promise<boolean>
+  /** The stop went through but the install did not: undo beginQuit and start the engine again. */
+  abortQuit(): void
+  log?(m: string): void
+}) {
+  /** Synchronous checks that are repeated right before the point of no return. */
+  const presence = (needIdle: number): IdleInstallReason | null => {
+    let idle: number | null
+    try { idle = deps.osIdleSeconds() } catch { idle = null }
+    if (idle === null || !Number.isFinite(idle) || idle < 0) return 'os_idle_unknown'
+    if (idle < needIdle) return 'os_active'
+    let busy = true
+    try { busy = deps.extendBusy() } catch { busy = true }
+    if (busy) return 'extend_busy'
+    let others = true
+    try { others = deps.otherInstancesRunning?.() ?? false } catch { others = true }
+    return others ? 'engine_busy' : null
+  }
+  const voice = async (): Promise<IdleInstallReason | null> => {
+    const v = await deps.voiceCall().catch(() => null)
+    return v === null ? 'voice_unknown' : v ? 'voice_call' : null
+  }
+  const engine = async (): Promise<IdleInstallReason | null> => {
+    let st: EngineCheck
+    try { st = await deps.engine() } catch { return 'engine_unknown' }
+    if (st.state !== 'ready') return 'engine_not_ready'
+    const a = st.activity
+    if (a.unknown) return 'engine_unknown'
+    return a.tasks || a.processes ? 'engine_busy' : null
+  }
+
+  return async (args: unknown): Promise<IdleInstallResult> => {
+    const a = (args && typeof args === 'object' ? args : {}) as { version?: unknown; requireOsIdleSeconds?: unknown }
+    const version = typeof a.version === 'string' && VERSION_RE.test(a.version) ? a.version : null
+    const needIdle = typeof a.requireOsIdleSeconds === 'number' && Number.isFinite(a.requireOsIdleSeconds)
+      && a.requireOsIdleSeconds >= 0 && a.requireOsIdleSeconds <= MAX_IDLE_SECONDS ? a.requireOsIdleSeconds : null
+    if (!version || needIdle === null) return { ok: false, reason: 'invalid_args' }
+    try { if (!deps.supported()) return { ok: false, reason: 'unsupported' } } catch { return { ok: false, reason: 'unsupported' } }
+    try { if (deps.needsElevation?.()) return { ok: false, reason: 'needs_elevation' } } catch { return { ok: false, reason: 'needs_elevation' } }
+    if (deps.quitting() || !deps.lock.tryAcquire('idle-install')) return { ok: false, reason: 'in_progress' }
+    let pinned = false
+    let flushed = false
+    let committed = false
+    let keepLock = false
+    const refuse = (reason: IdleInstallReason): IdleInstallResult => {
+      deps.log?.(`[idle-install] ${version}: ${reason}`)
+      return { ok: false, reason }
+    }
+    try {
+      const why = deps.pin(version)
+      if (why) return refuse(why)
+      pinned = true
+      // Everything that can refuse runs before Squirrel staging: a busy machine never gets a staged package.
+      const first = presence(needIdle) ?? await voice() ?? await engine()
+      if (first) return refuse(first)
+      if (!(await deps.prepare())) return refuse('prepare_failed')
+      // prepare() is unbounded on mac: everything checked before it is stale now, so the rest re-checks.
+      flushed = true
+      // A flush that timed out may still be pushing, and Extend's sync guard stays quiet while it does: refuse
+      if (!(await deps.flush())) return refuse('extend_busy')
+      const second = await voice()
+      if (second) return refuse(second)
+      const hold = await deps.holdEngine(IDLE_INSTALL_HOLD_MS).catch((): EngineHold => ({ ok: false, reason: 'engine_unknown' }))
+      if (!hold.ok) return refuse(hold.reason)
+      // From here to stopEngine() there is no await: nothing can start or change in between.
+      let holdOk = false
+      try { holdOk = hold.valid ? hold.valid() : true } catch { holdOk = false }
+      const last = presence(needIdle) ?? (deps.pinValid(version) ? null : 'version_mismatch' as const)
+        ?? (deps.quitting() ? 'in_progress' as const : null) ?? (holdOk ? null : 'engine_unknown' as const)
+      if (last) { void hold.release().catch(() => {}); return refuse(last) }
+      committed = true
+      deps.beginQuit()
+      try {
+        await deps.stopEngine()
+      } catch (e) {
+        deps.log?.(`[idle-install] engine stop failed: ${String((e as Error)?.message || e)}`)
+        void hold.release().catch(() => {})
+        deps.abortQuit()
+        return { ok: false, reason: 'install_failed' }
+      }
+      if (!deps.install(version)) { deps.abortQuit(); return refuse('install_failed') }
+      // quitAndInstall may fail without quitting (e.g. the installer cannot be launched): nobody is there to notice a stopped
+      // engine, so undo the quit if the app has not started quitting in time. The lock stays held until then.
+      if (!(await deps.quitStarted(QUIT_WATCH_MS))) { deps.abortQuit(); return refuse('install_failed') }
+      keepLock = true
+      return { ok: true }
+    } catch (e) {
+      deps.log?.(`[idle-install] unexpected: ${String((e as Error)?.message || e)}`)
+      if (committed) deps.abortQuit()
+      return { ok: false, reason: 'error' }
+    } finally {
+      if (!committed) {
+        if (pinned) deps.unpin(version)
+        if (flushed) deps.resetFlush()
+      } else if (!deps.quitting()) {
+        // abortQuit ran: the package stays downloaded; let the next attempt pin it again
+        deps.unpin(version)
+      }
+      if (!keepLock) deps.lock.release('idle-install')
+    }
+  }
+}
+
+/**
+ * POST <engine>/agent/remote/restart-hold: the engine's own idle check and a hold on new runs in one step. 404 (an engine
+ * older than this host) = engine_no_hold. Never throws.
+ */
+export async function requestEngineHold(url: string, token: string, ttlMs: number, fetchFn: typeof fetch = fetch, leaseId: string = randomUUID()): Promise<EngineHold> {
+  const base = url.replace(/\/$/, '')
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const startedAt = Date.now()
+  // The lease id is ours: if the engine granted the hold but its reply is lost, we can still release it.
+  const release = async (): Promise<void> => {
+    try {
+      await fetchFn(`${base}/agent/remote/restart-hold/release`, { method: 'POST', headers, body: JSON.stringify({ holdId: leaseId }), signal: AbortSignal.timeout(5000) })
+    } catch { /* the hold lapses on its own */ }
+  }
+  const unknown = (): EngineHold => { void release(); return { ok: false, reason: 'engine_unknown' } }
+  let res: Response
+  try {
+    res = await fetchFn(`${base}/agent/remote/restart-hold`, { method: 'POST', headers, body: JSON.stringify({ ttlMs, holdId: leaseId }), signal: AbortSignal.timeout(5000) })
+  } catch { return unknown() }
+  if (res.status === 404) return { ok: false, reason: 'engine_no_hold' }
+  let data: any
+  try { data = await res.json() } catch { return unknown() }
+  if (res.status === 409) return { ok: false, reason: data?.reason === 'busy' || data?.reason === 'held' ? 'engine_busy' : 'engine_unknown' }
+  if (!res.ok || data?.ok !== true || data.holdId !== leaseId) return unknown()
+  const granted = typeof data.ttlMs === 'number' && Number.isFinite(data.ttlMs) && data.ttlMs > 0 ? Math.min(data.ttlMs, ttlMs) : ttlMs
+  // Only use it well inside its ttl: a main process that stalled past half of it must not stop an engine whose hold lapsed
+  return { ok: true, release, valid: () => Date.now() - startedAt < granted / 2 }
 }

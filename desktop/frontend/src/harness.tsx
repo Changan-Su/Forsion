@@ -1079,6 +1079,87 @@ if (new URLSearchParams(location.search).has('dock')) {
         delete w.tangu!.unitHostStatus
         w.tangu!.unitPublicEntry = true
       }
+      // &local[=self|unreadable|failed]:本机多 Unit 的桥桩(window.tangu.localUnits;主进程那半由 e2e:localunits 真跑)。
+      // 名册四行:跑着的、没跑的(路径很长,考省略)、找不到的、对不上的。self = 当前进程就是第一行那台文件夹 Unit;
+      // unreadable = 名册读不出;failed = list() 抛错。调用记在 window.__localCalls;window.__localExisting 控制「打开已有的」回什么码
+      // (缺省 duplicate_id;'ok' = 加进来);window.__localOpenFail = open 回的错误码。
+      // &noext:没有 Extend(名册 / 账号 / 额度的键都删掉,设备桥也没有)→ 只剩 localUnits,面板照样出来、头像点了开面板。
+      const localQ = panelQ.get('local')
+      if (localQ !== null) {
+        const en = panelQ.get('lang') === 'en'
+        const self = localQ === 'self'
+        const rows = [
+          { id: 'lu-lab', name: en ? 'Experiments' : '实验用', icon: '', path: `/Users/lin/Forsion Units/${en ? 'Experiments' : '实验用'}`, displayPath: `~/Forsion Units/${en ? 'Experiments' : '实验用'}`, state: 'running', current: self },
+          { id: 'lu-demo', name: en ? 'Client demo' : '客户演示', icon: '🎬', path: '/Users/lin/Documents/Clients/2026 Spring Showcase/Forsion Units/demo', displayPath: '~/Documents/Clients/2026 Spring Showcase/Forsion Units/demo', state: 'stopped', current: false },
+          { id: 'lu-old', name: en ? 'Old backup' : '旧备份', icon: '', path: '/Volumes/Backup/Forsion Units/old', displayPath: '/Volumes/Backup/Forsion Units/old', state: 'missing', current: false },
+          { id: 'lu-copy', name: en ? 'Copied over' : '拷来的', icon: '', path: '/Users/lin/Desktop/copied', displayPath: '~/Desktop/copied', state: 'mismatch', current: false },
+        ]
+        const calls: unknown[][] = []
+        const listeners = new Set<() => void>()
+        const emit = (): void => { for (const cb of listeners) cb() }
+        let n = 0
+        const lw = window as unknown as { __localCalls: unknown[][]; __localExisting?: string; __localOpenFail?: string; __localEmit: () => void }
+        lw.__localCalls = calls
+        lw.__localEmit = emit
+        w.tangu!.platform = 'darwin'
+        w.tangu!.localUnits = {
+          list: async () => {
+            calls.push(['list'])
+            if (localQ === 'failed') throw new Error("No handler registered for 'localUnits:list'")
+            return {
+              self: self ? { kind: 'folder', id: rows[0].id, name: rows[0].name, icon: rows[0].icon, path: rows[0].path, displayPath: rows[0].displayPath } : { kind: 'default' },
+              units: localQ === 'unreadable' ? [] : rows.map((r) => ({ ...r })),
+              registry: localQ === 'unreadable' ? 'unreadable' : 'ok',
+              defaultParent: '/Users/lin/Forsion Units', defaultParentDisplay: '~/Forsion Units',
+            }
+          },
+          create: async (input: { name: string; icon: string; parentDir?: string }) => {
+            calls.push(['create', input])
+            if (localQ === 'unreadable') return { ok: false, code: 'registry_unreadable' }
+            if (rows.some((r) => r.name === input.name.trim())) return { ok: false, code: 'path_exists' }
+            const parent = input.parentDir ? input.parentDir.replace('/Users/lin', '~') : '~/Forsion Units'
+            const row = { id: `lu-new-${++n}`, name: input.name.trim(), icon: input.icon, path: `${input.parentDir ?? '/Users/lin/Forsion Units'}/${input.name.trim()}`, displayPath: `${parent}/${input.name.trim()}`, state: 'stopped', current: false }
+            rows.push(row)
+            emit()
+            return { ok: true, unit: { ...row } }
+          },
+          chooseParent: async () => { calls.push(['chooseParent']); return { path: '/Users/lin/Desktop', display: '~/Desktop' } },
+          addExisting: async () => {
+            calls.push(['addExisting'])
+            const code = lw.__localExisting ?? 'duplicate_id'
+            if (code !== 'ok') return { ok: false, code }
+            const row = { id: `lu-found-${++n}`, name: en ? 'Moved in' : '搬来的', icon: '', path: '/Users/lin/Moved', displayPath: '~/Moved', state: 'stopped', current: false }
+            rows.push(row)
+            emit()
+            return { ok: true, unit: { ...row } }
+          },
+          open: async (id: string) => { calls.push(['open', id]); return lw.__localOpenFail ? { ok: false, code: lw.__localOpenFail } : { ok: true } },
+          rename: async (id: string, patch: { name?: string; icon?: string }) => {
+            calls.push(['rename', id, patch])
+            const r = rows.find((x) => x.id === id)
+            if (!r) return { ok: false, code: 'not_found' }
+            Object.assign(r, patch)
+            emit()
+            return { ok: true, unit: { ...r } }
+          },
+          reveal: async (id: string) => { calls.push(['reveal', id]); return { ok: true } },
+          remove: async (id: string) => {
+            calls.push(['remove', id])
+            const i = rows.findIndex((x) => x.id === id)
+            if (i < 0) return { ok: false, code: 'not_found' }
+            if (rows[i].current) return { ok: false, code: 'is_self' }
+            rows.splice(i, 1)
+            emit()
+            return { ok: true }
+          },
+          // 图标在渲染层画好(1024px PNG data URL)跟着 id 一起交;只记有没有、是不是 PNG
+          addToDesktop: async (id: string, opts?: { iconPng?: string; fallbackName?: string }) => { calls.push(['addToDesktop', id, typeof opts?.iconPng === 'string' && opts.iconPng.startsWith('data:image/png') ? 'png' : 'no-icon', opts?.fallbackName ?? null]); return { ok: true } },
+          onChanged: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb) } },
+        }
+      }
+      if (panelQ.has('noext')) {
+        for (const k of ['unitsList', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'authStatus', 'authAccounts', 'forsionLogin', 'forsionLogout', 'accountQuota', 'unitsOpenWindow', 'unitsAddToDesktop', 'unitsP2pOpen', 'unitsProbeLan']) delete w.tangu![k]
+      }
       applyRealTheme(resolveInitialLang(), panelQ.get('skin') || resolveInitialSkin(), panelQ.get('skin') || resolveInitialBg(), panelQ.has('dark') ? 'dark' : 'light')
       if (panelQ.get('lang') === 'en') setLocaleGlobal('en')
     }
@@ -1100,14 +1181,15 @@ if (new URLSearchParams(location.search).has('dock')) {
         return { ok: true }
       }) as never
     }
-    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard }, { useUnitRoster }, { usePopupQueue }]) => {
+    void Promise.all([import('./components/UnitSwitcher'), import('./stores/appStore'), import('./components/AccountCard'), import('./components/unitRoster'), import('./stores/popupQueue')]).then(([{ UnitSwitcher, UnitRemoteSurface, UnitSettings, useUnitRemote, runUnitRoute }, { useApp }, { AccountCard, accountCardWanted }, { useUnitRoster }, { usePopupQueue }]) => {
       useApp.setState({ desktopConfig: { ...cfg } as never })
       if (panelQ.has('unitbind')) Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote })
       addRibbonIcon({ id: 'rb-unit', side: 'bottom', component: UnitSwitcher })
       if (unitPanel) {
         const toasts: string[] = []
         Object.assign(window as unknown as Record<string, unknown>, { __unitRemote: useUnitRemote, __runUnitRoute: runUnitRoute, __roster: useUnitRoster, __units: units, __toasts: toasts, __popupQueue: usePopupQueue })
-        addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
+        // 挂不挂账号卡跟产品同一个判别式(bootstrapEngine 用的 accountCardWanted):&noext 没 Extend 时只靠本机多 Unit 挂上
+        if (accountCardWanted(false)) addRibbonIcon({ id: 'rb-account', side: 'bottom', pinned: true, component: ({ expanded }: { expanded: boolean }) => <AccountCard compact={!expanded} onToast={(text) => { toasts.push(text) }} /> })
       }
       // 远程面(设备行「整个主区切过去」)也挂上:裸 harness 无 .shell-work → 组件原地渲染,CSS 退化 fixed 覆盖
       const rsHost = document.createElement('div')

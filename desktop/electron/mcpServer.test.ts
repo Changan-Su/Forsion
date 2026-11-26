@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, afterAll } from 'vitest'
 import { createServer, Server } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -254,6 +254,18 @@ describe('启动竞态(端口被抢 / 并发启动 / 开关顺序)', () => {
     Server.prototype.listen = realListen
     expect(() => server!.emit('error', Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' }))).not.toThrow()
     expect(logs.some((m) => m.includes('accept EMFILE'))).toBe(true)
+  })
+
+  it('port: 0(文件夹 Unit 不占固定口):回的是系统实际分的口,发现文件里的地址连得上', async () => {
+    const home = tempHome()
+    const mcp = await startForsionMcp(deps({ homeDir: home }), { port: 0, tries: 1 })
+    cleanup.push(() => mcp.close())
+    expect(mcp.port).toBeGreaterThan(0)
+    expect(mcp.url).toBe(`http://127.0.0.1:${mcp.port}/mcp`)
+    expect(JSON.parse(readFileSync(join(home, 'desktop-bridge.json'), 'utf8')).url).toBe(mcp.url)
+    const c = await connectAs(mcp.url, 'bridge')
+    expect((await c.listTools()).tools.map((t) => t.name)).toContain('inbox_send')
+    await c.close()
   })
 
   it('可试的口全被占 → reject EADDRINUSE,不留未处理的 error、不挂住', async () => {

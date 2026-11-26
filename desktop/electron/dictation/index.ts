@@ -28,8 +28,8 @@ import { createWinDriver } from './winDriver'
 export interface DictationHostDeps {
   isTrustedSender(e: IpcMainEvent | IpcMainInvokeEvent): boolean
   globalHotkeyPause: GlobalHotkeyPause
-  /** 插件沙箱实例:不注册任何全局键。 */
-  sandbox: boolean
+  /** 这台电脑的主人(hostRole.isMachineOwner;插件沙箱与文件夹 Unit 都不是):只有它注册听写的全局键。 */
+  machineOwner: boolean
   /** main 的 __dirname(找 preload / renderer 产物)。 */
   dirname: string
   /** dev:electron-vite 的渲染服务地址。 */
@@ -170,7 +170,7 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
   }, { hotkey: DICTATION_DEFAULT_HOTKEY })
 
   void readHotkey(file).then((hk) => { if (hk !== DICTATION_DEFAULT_HOTKEY) controller.setHotkey(hk) })
-  if (!h.sandbox) h.globalHotkeyPause.add({ pause: () => controller.pause(), resume: () => controller.resume() })
+  if (h.machineOwner) h.globalHotkeyPause.add({ pause: () => controller.pause(), resume: () => controller.resume() })
 
   const release = (id: number): void => {
     const off = owners.get(id)
@@ -182,7 +182,7 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
   }
   ipcMain.handle(DICTATION_CHANNELS.state, (e) => (h.isTrustedSender(e) ? controller.state() : null))
   ipcMain.handle(DICTATION_CHANNELS.attach, (e, on: unknown) => {
-    if (!h.isTrustedSender(e) || h.sandbox) return null
+    if (!h.isTrustedSender(e) || !h.machineOwner) return null
     const wc = e.sender
     if (on !== true) { release(wc.id); return controller.state() }
     if (!owners.has(wc.id)) {
