@@ -2,7 +2,7 @@
  *  params: {path,name}(本机,随布局持久化,重启恢复)或 {tkey,name}(瞬态:云沙箱/对话内联)。
  *  渲染复用 WorkspaceFilePreview 的导出渲染器;markdown(本机)默认 Amadeus Milkdown 编辑、
  *  debounce 原子写回 + mtime 冲突保护;不支持的类型询问是否用系统默认应用打开。 */
-import React, { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Download, FileWarning, RefreshCw, WrapText, Code2, Eye, Columns2, AlignJustify,
@@ -21,7 +21,8 @@ import { useI18n } from '../i18n'
 import { useFileShiftWheel } from '../lib/fileWheel'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
-import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
+import { getTransientTarget, hostTargetFor } from './wsFileNav'
+import { registerOpenMdEditor, trackWrite } from './openMdEditors'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -30,16 +31,22 @@ import { newTabOf } from './itemSelect'
 import type { CtxItem } from '../components/RightPanel'
 import { DeskChromeContext, readTanguShell } from '../amadeus/plugins/tanguSeam'
 
-/** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
-async function salvageDraft(path: string, content: string): Promise<void> {
+/** 旁路文件:未保存内容写不进原文件(冲突 / 写失败)时另存到它旁边,绝不覆盖原文件。 */
+const salvagePathFor = (path: string): string => path.replace(/(\.[^./\\]+)?$/, `.本地未保存-${Date.now()}$1`)
+
+/** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。返回是否真写下了。 */
+async function salvageDraft(path: string, content: string): Promise<boolean> {
   const toast = useApp.getState().toast
-  const salvagePath = path.replace(/(\.[^./\\]+)?$/, `.本地未保存-${Date.now()}$1`)
+  const salvagePath = salvagePathFor(path)
   try {
-    await window.tangu?.writeHostFile?.(salvagePath, content, undefined, true)
+    if (!window.tangu?.writeHostFile) throw new Error('no host')
+    await window.tangu.writeHostFile(salvagePath, content, undefined, true)
     readTanguShell()?.bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
     toast(useApp.getState().tr('preview.mdSalvaged', { file: salvagePath.split(/[/\\]/).pop() || salvagePath }), true)
+    return true
   } catch {
     toast(useApp.getState().tr('preview.mdSaveFail', { err: path }), true)
+    return false
   }
 }
 
@@ -96,7 +103,9 @@ function writeScroll(root: HTMLElement | null, kept: KeptScroll): boolean {
  *  mtime 冲突(外部修改)→ 横幅问「重新加载 / 覆盖写入」,绝不静默覆盖;
  *  卸载冲刷失败/冲突 → 另存旁路文件 + toast(绝不静默丢弃)。
  *  「源码」模式在本组件内渲染(读活草稿),编辑↔源码切换不卸载、内容永远最新。 */
-const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; view: 'edit' | 'source'; onReload: () => void; focusLine?: { line: number; end?: number; nonce: number } | null }> = ({ path, text, mtimeMs, view, onReload, focusLine }) => {
+type SaveResult = { conflict?: boolean; failed?: boolean }
+
+const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; view: 'edit' | 'source'; onReload: () => void; focusLine?: { line: number; end?: number; nonce: number } | null; leaveRef?: React.MutableRefObject<(() => Promise<void>) | null> }> = ({ path, text, mtimeMs, view, onReload, focusLine, leaveRef }) => {
   const { t } = useI18n()
   const mode = useTheme((s) => s.mode)
   const fm = useMemo(() => splitFrontmatter(text).fm, [text])
@@ -106,44 +115,114 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [conflict, setConflict] = useState(false)
   const [saveErr, setSaveErr] = useState<string | null>(null)
+  /** PlainMarkdownEditor hands over what its listener still holds (its 200ms window) when this is called. */
+  const flushRef = useRef<(() => void) | null>(null)
+  /** The write in flight (a new save chains behind it). */
+  const writingRef = useRef<Promise<SaveResult> | null>(null)
+  /** Text put in (or being put in) a sidecar: the unmount after a Reload / quit does not write a second one. Cleared if
+   *  that write failed, so a later attempt tries again. */
+  const salvagedRef = useRef<string | null>(null)
 
-  const save = async (force?: boolean): Promise<{ conflict?: boolean; failed?: boolean }> => {
-    if (!dirtyRef.current || !window.tangu?.writeHostFile) return {}
-    const snapshot = bodyRef.current // 写盘期间的新键入不能被 dirty=false 吞掉
-    const p = window.tangu.writeHostFile(path, fm + snapshot, force ? undefined : mtimeRef.current)
-    pendingWrites.set(path, p.catch(() => {}))
-    try {
-      const r = await p
-      if (r.conflict) { setConflict(true); return { conflict: true } }
-      mtimeRef.current = r.mtimeMs
-      dirtyRef.current = bodyRef.current !== snapshot
-      setConflict(false); setSaveErr(null)
-      return {}
-    } catch (e: any) {
-      setSaveErr(e?.message || String(e))
-      return { failed: true }
-    } finally {
-      pendingWrites.delete(path)
+  /** One write at a time: each one CASes against the mtime the previous returned (two overlapping writes from this editor
+   *  conflict with each other). Registered in pendingWrites synchronously, so a read that starts now waits for it. */
+  const save = (force?: boolean): Promise<SaveResult> => {
+    const prev = writingRef.current
+    if (!prev && (!dirtyRef.current || !window.tangu?.writeHostFile)) return Promise.resolve({})
+    const run = async (): Promise<SaveResult> => {
+      if (prev) await prev
+      if (!dirtyRef.current || !window.tangu?.writeHostFile) return {}
+      const snapshot = bodyRef.current // 写盘期间的新键入不能被 dirty=false 吞掉
+      try {
+        const r = await window.tangu.writeHostFile(path, fm + snapshot, force ? undefined : mtimeRef.current)
+        if (r.conflict) { setConflict(true); return { conflict: true } }
+        mtimeRef.current = r.mtimeMs
+        dirtyRef.current = bodyRef.current !== snapshot
+        setConflict(false); setSaveErr(null)
+        return {}
+      } catch (e: any) {
+        setSaveErr(e?.message || String(e))
+        return { failed: true }
+      }
     }
+    const p = run()
+    writingRef.current = p
+    trackWrite(path, p)
+    void p.finally(() => { if (writingRef.current === p) writingRef.current = null })
+    return p
   }
   const saveRef = useRef(save)
   saveRef.current = save
 
+  /** Synchronous: what the editor still holds becomes bodyRef (and dirty); the debounce timer is dropped. */
+  const takeHeld = (): void => {
+    flushRef.current?.()
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+  }
+  /** The editor is going away (unmount, Reload, quit): everything typed goes to the file now — CAS with the last known
+   *  mtime, never forced; conflict / failure → sidecar + toast. Untouched → nothing is written. Runs up to the IPC send
+   *  synchronously, so pendingWrites has the write by the time this returns. */
+  const saveBeforeLeaving = async (): Promise<void> => {
+    takeHeld()
+    const content = fm + bodyRef.current
+    const wasDirty = dirtyRef.current
+    const r = await saveRef.current()
+    if (!wasDirty || !(r.conflict || r.failed) || salvagedRef.current === content) return
+    salvagedRef.current = content
+    if (!(await salvageDraft(path, content)) && salvagedRef.current === content) salvagedRef.current = null
+  }
+  /** The page is going away (pagehide / beforeunload on a window reload or close): the same, blocking until the host
+   *  wrote it, so a reloaded page reads it. No toast (the page is gone); the sidecar sits next to the file. */
+  const saveBeforeUnload = (): void => {
+    takeHeld()
+    if (!dirtyRef.current) return
+    const writeSync = window.tangu?.writeHostFileSync
+    if (!writeSync) { void saveBeforeLeaving(); return }
+    const content = fm + bodyRef.current
+    // Also while an autosave is in flight: the host serializes writes per path, so that one lands first; if it carried
+    // the same text the host answers ok (the file already holds these bytes), and if it was refused this one is too
+    // and the text goes to the sidecar below instead of only into a banner on a page that is gone.
+    const r = writeSync(path, content, mtimeRef.current)
+    if (r && !r.conflict && !r.error && typeof r.mtimeMs === 'number') {
+      mtimeRef.current = r.mtimeMs
+      dirtyRef.current = false
+      return
+    }
+    if (salvagedRef.current === content) return
+    const s2 = writeSync(salvagePathFor(path), content, undefined, true)
+    if (s2 && !s2.conflict && !s2.error) salvagedRef.current = content // only once it is really there: pagehide retries
+  }
+  const leaving = useRef(saveBeforeLeaving)
+  leaving.current = saveBeforeLeaving
+  const unloading = useRef(saveBeforeUnload)
+  unloading.current = saveBeforeUnload
+
+  const viewRef = useRef(view)
+  viewRef.current = view
+  const [, showLatest] = useReducer((n: number) => n + 1, 0)
   const onChange = (md: string): void => {
     bodyRef.current = md
     dirtyRef.current = true
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => { void saveRef.current() }, 800)
+    // Edit → source unmounts the editor, which hands over its last keystrokes only after the source pane rendered
+    // bodyRef: render once more so the pane shows them.
+    if (viewRef.current === 'source') showLatest()
   }
+  // 整页离开(退出 / 整窗重载)React 清理不跑:登记给 openMdEditors,由它在退出握手 / pagehide 时叫这里存。
   // 卸载(关 tab/重挂)冲刷:CAS 保存;冲突或失败 → 另存旁路文件 + toast(组件已卸载,横幅没了,但绝不静默丢)。
-  useEffect(() => () => {
-    if (timerRef.current) clearTimeout(timerRef.current)
-    const content = fm + bodyRef.current
-    const wasDirty = dirtyRef.current
-    void saveRef.current().then((r) => {
-      if (wasDirty && (r.conflict || r.failed)) void salvageDraft(path, content)
-    })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // 编辑器自己的卸载已先把手里那段交出来(PlainMarkdownEditor 的 layout 清理)。登记留到这次保存落定才撤:
+  // 它可能排在一笔在途的写后面,这期间退出 / 重载照样要等它、照样走 pagehide。
+  useEffect(() => {
+    const off = registerOpenMdEditor({ save: () => leaving.current(), saveSync: () => unloading.current() })
+    return () => { void leaving.current().finally(off) }
+  }, [])
+  // 宿主的 ⟳:先存后读(见 WsFileView 的 reload)
+  useEffect(() => {
+    if (!leaveRef) return
+    const f = (): Promise<void> => leaving.current()
+    leaveRef.current = f
+    return () => { if (leaveRef.current === f) leaveRef.current = null }
+  }, [leaveRef])
 
   return (
     <div className="wsmd-edit">
@@ -162,7 +241,7 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
       ) : (
         /* Amadeus 契约 token 域(bridge 取色)+ 整篇 Milkdown 宿主 */
         <div className="am-app tangu-lovable wsmd-scope" data-mode={mode}>
-          <PlainMarkdownEditor initial={bodyRef.current} onChange={onChange} />
+          <PlainMarkdownEditor initial={bodyRef.current} onChange={onChange} flushRef={flushRef} />
         </div>
       )}
     </div>
@@ -244,6 +323,13 @@ export function WsFileView({ leaf }: ViewProps) {
     return () => window.removeEventListener('amadeus:wsfile-goto', onGoto)
   }, [path])
   const [reloadNonce, setReloadNonce] = useState(0)
+  // ⟳ / 冲突横幅的「重新加载」:编辑器先把手里的字存下(CAS;冲突 → 旁路文件),下面的读等这笔写落盘(pendingWrites)
+  // 再读 —— 不然读到的是存盘前的旧文和旧 mtime,新编辑器下一次存盘就报假冲突,「覆盖写入」还会盖掉刚存的字。
+  const mdLeave = useRef<(() => Promise<void>) | null>(null)
+  const reload = (): void => {
+    void mdLeave.current?.()
+    setReloadNonce((n) => n + 1)
+  }
   const [wrap, setWrap] = useState(false)
   const [diffSide, setDiffSide] = useState(true)
   const [imgView, setImgView] = useState<ImgView>({ s: 1, x: 0, y: 0 })
@@ -394,8 +480,9 @@ export function WsFileView({ leaf }: ViewProps) {
         text={text}
         mtimeMs={data.mtimeMs}
         view={mdMode}
-        onReload={() => setReloadNonce((n) => n + 1)}
+        onReload={reload}
         focusLine={focus}
+        leaveRef={mdLeave}
       />
     )
     else if (specialMd || docView === 'source') body = cm({ value: text, fileName: name, wrap, focusLine: focus })
@@ -484,7 +571,7 @@ export function WsFileView({ leaf }: ViewProps) {
         <ViewModeSwitch leafId={leaf.id} compact={!!desk?.slot} />
         {ready && !mdEditable && !specialMd && kind === 'html' && docView === 'preview' && (
           <div className="wsfile-seg">
-            <button title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={12} /></button>
+            <button title={t('preview.reload')} onClick={reload}><RefreshCw size={12} /></button>
             {/* 在系统浏览器里调试:令牌根按目录 memo,重复 servePath 返回同一 URL,无需从 HtmlPreview 里把它抬出来 */}
             {!!(path ?? target?.path) && !!window.tangu?.codePreviewServePath && !!window.tangu?.openExternal && (
               <button title={t('preview.openInBrowser')} onClick={() => void window.tangu!.codePreviewServePath!((path ?? target!.path)!).then((r) => window.tangu!.openExternal!(r.url)).catch(() => {})}><ExternalLink size={12} /></button>
@@ -513,7 +600,7 @@ export function WsFileView({ leaf }: ViewProps) {
   const deskMore: CtxItem[] = []
   if (path && window.tangu?.openHostPath) deskMore.push({ label: t('preview.openWithDefault'), icon: <ExternalLink size={14} />, run: openWithDefault })
   if (target?.download) deskMore.push({ label: path ? t('panel.action.revealInFileManager') : t('preview.download'), icon: <Download size={14} />, run: target.download })
-  deskMore.push({ label: t('preview.reload'), icon: <RefreshCw size={14} />, run: () => setReloadNonce((n) => n + 1) })
+  deskMore.push({ label: t('preview.reload'), icon: <RefreshCw size={14} />, run: reload })
   useEffect(() => { if (desk) desk.more.current = deskMore })
   useEffect(() => () => { if (desk) desk.more.current = [] }, [desk])
   if (desk) {
@@ -538,7 +625,7 @@ export function WsFileView({ leaf }: ViewProps) {
         {amadeusOpen && <button className="icon-btn" title={t('preview.openInAmadeus')} onClick={amadeusOpen}><NotebookPen size={14} /></button>}
         {path && <button className="icon-btn" title={t('preview.openWithDefault')} onClick={openWithDefault}><ExternalLink size={14} /></button>}
         {target?.download && <button className="icon-btn" title={path ? t('panel.action.revealInFileManager') : t('preview.download')} onClick={target.download}><Download size={14} /></button>}
-        <button className="icon-btn" title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={14} /></button>
+        <button className="icon-btn" title={t('preview.reload')} onClick={reload}><RefreshCw size={14} /></button>
       </div>
       <div className="wsfile-body" ref={hostRef}>{body}</div>
     </div>

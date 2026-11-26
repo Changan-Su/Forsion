@@ -62,6 +62,14 @@ const openVoiceInput: OpenVoiceInput = (modelId, listener) => {
   }
 }
 
+// Before quitting, the host asks windows with open workspace .md tabs to save them (electron/editorQuitSave.ts). Always
+// answered, also when nothing registered here (a page that just reloaded): an unanswered ask holds the quit until the cap.
+const quitSaves = new Set<() => Promise<void>>()
+ipcRenderer.on('wsfile:quit-save', (_e, info: { requestId?: string } | undefined) => {
+  void Promise.all([...quitSaves].map((cb) => Promise.resolve().then(cb).catch(() => {})))
+    .finally(() => ipcRenderer.send('wsfile:quit-saved', info?.requestId))
+})
+
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
@@ -403,6 +411,17 @@ const api = {
   /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
   writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),
+  /** writeHostFile for a page that is going away (pagehide): blocks until the host wrote it, refused it (conflict) or failed
+   *  ({ error }). Only there: it stalls the whole renderer for the write. */
+  writeHostFileSync: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): { ok?: boolean; conflict?: boolean; mtimeMs?: number; error?: string } =>
+    ipcRenderer.sendSync('fs:writeFileSync', filePath, content, expectedMtimeMs, createNew),
+  /** How many workspace .md tabs this window has open (quit only waits for windows that have one). */
+  reportOpenEditors: (count: number): void => ipcRenderer.send('wsfile:open-editors', count),
+  /** Runs when the host is about to quit; the quit waits (capped) until it resolves. */
+  onQuitSave: (cb: () => Promise<void>): (() => void) => {
+    quitSaves.add(cb)
+    return () => { quitSaves.delete(cb) }
+  },
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   renameHostPath: (oldPath: string, newName: string): Promise<{ path: string }> =>
     ipcRenderer.invoke('fs:rename', oldPath, newName),

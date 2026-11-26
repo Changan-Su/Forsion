@@ -874,6 +874,12 @@ declare global {
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
+      /** writeHostFile for a page that is going away (pagehide): blocks until written, refused (conflict) or failed ({ error }). */
+      writeHostFileSync?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): { ok?: boolean; conflict?: boolean; mtimeMs?: number; error?: string }
+      /** How many workspace .md tabs this window has open (quit only waits for windows that have one). */
+      reportOpenEditors?(count: number): void
+      /** Runs when the host is about to quit; the quit waits (capped) until it resolves. */
+      onQuitSave?(cb: () => Promise<void>): () => void
       /** 本机工作区文件操作(host 模式)。 */
       renameHostPath?(oldPath: string, newName: string): Promise<{ path: string }>
       mkdirHost?(parentDir: string, name: string): Promise<{ path: string }>
