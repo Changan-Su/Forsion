@@ -3,6 +3,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
+import { ASSET_SCHEME } from '@amadeus-shared/assets'
 import { SYNC_IPC } from './sync/ipcKeys'
 import { cloudPresent } from '../cloudPresent'
 
@@ -109,6 +110,9 @@ const api: AmadeusApi = {
     }
   },
   readPluginData: (pluginId) => ipcRenderer.invoke(IPC.pluginDataRead, pluginId),
+  pluginStorage: (req) => ipcRenderer.invoke(IPC.pluginStorage, req),
+  // 地址同步拼(img / video 直接用),主进程资源协议按同一格式解:amadeus-asset://plugin-data/<id>/<逐段编码的路径>
+  pluginStorageUrl: (pluginId, rootRel) => `${ASSET_SCHEME}://plugin-data/${encodeURIComponent(pluginId)}/${String(rootRel).split('/').map(encodeURIComponent).join('/')}`,
   writePluginData: (pluginId, text, opts) => ipcRenderer.invoke(IPC.pluginDataWrite, pluginId, text, opts?.backup === true ? { backup: true } : undefined),
   listPlugins: () => ipcRenderer.invoke(IPC.listPlugins),
   openPluginsFolder: (dir) => ipcRenderer.invoke(IPC.openPluginsFolder, dir),

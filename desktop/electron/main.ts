@@ -5950,7 +5950,7 @@ app.whenReady().then(async () => {
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
   stopAmadeusSync = stopSync
-  registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset)
+  registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset, () => join(tanguDataDir(), 'plugin-data'))
   registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建

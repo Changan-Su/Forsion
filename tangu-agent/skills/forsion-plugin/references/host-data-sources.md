@@ -2,7 +2,7 @@
 
 Read this while writing the plan (SKILL.md, "Default workflow"). For every host surface or mount your plugin uses, it answers four questions: what it reads, what it does to the user's data or sessions, whether it exists in the plugin sandbox and the demo stage (and how to seed demo data there), and whether it needs the **local managed engine**. Checked against desktop source on 2026-11-23; paths are in the Genesis repo, `FE` = `desktop/frontend/src`, `PS` = `FE/amadeus/plugins/pluginStore.ts`.
 
-Source categories: **vault** (the user's open note library), **engine `human/`** (files in the Tangu engine's home, served by `/agent/human/*`), **plugin data** (`ctx.loadData` / `saveData`), **host memory** (state inside the running app, gone on restart), **cloud** (the user's Forsion account).
+Source categories: **vault** (the user's open note library), **engine `human/`** (files in the Tangu engine's home, served by `/agent/human/*`), **plugin data** (`ctx.loadData` / `saveData`, and the plugin data folder `ctx.storage`), **host memory** (state inside the running app, gone on restart), **cloud** (the user's Forsion account).
 
 ## The local managed engine gate
 
@@ -41,6 +41,7 @@ The desktop runs the Tangu engine either itself ("managed", the default install)
 | `ctx.dashboard` | `mount`: an in-memory page store, never the vault; layout comes back through `onLayout`. `source`: compiles the recipe (and optional `existingFileText` you pass) into `.dashboard.md` text, no vault I/O; writing that file is up to you | `mount`: none | `mount` works with no vault | no |
 | `ctx.ui.mountBoard` | only your `scene` / `viewport` | none | works | no |
 | `ctx.loadData` / `saveData` | plugin data: `<forsion home>/plugins-data/<id>.json` in the main process; `syncData: true` plugins also sync through the cloud. Unreadable data **rejects** (`plugin-data-unreadable`), never-saved gives `null` (PS:2390-2429) | writes the file; may sync | sandbox: its own empty home; stage: plugin data is **not** copied in | no |
+| `ctx.storage` (2026-11-26+) | the plugin data folder, outside the vault: desktop `~/.forsion/tangu/plugin-data/<plugin ID>/` (the same folder as a same-ID engine plugin's `paths.dataDir`); `vault()` is a per-library subfolder `vaults/<key>/`. Not synced. Missing file → `null` / `[]`, any other read failure **rejects** | writes files there; nothing in the vault | sandbox and stage run with their own home, so the folder starts empty; the user's plugin data is not copied in | no |
 | `ctx.widgets` | rows your plugin provides; cards declared in manifest `widgets` (host memory) | none | works | no |
 | `ctx.home` | only for the plugin that owns the home page; layout in localStorage, widget list from the engine (`GET /agent/widgets`) | writes the home layout | not for normal plugins | engine for the widget list |
 | `ctx.spaces` | host Space and Ribbon state. Capability `spaces` | changes the user's Ribbon | works | no |

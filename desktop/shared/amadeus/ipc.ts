@@ -1,4 +1,5 @@
 // The IPC contract shared by main (handlers), preload (bridge), and renderer (consumer).
+import type { PluginStorageRequest } from './pluginStorage'
 import { cmpVersion } from '../../../tangu-agent/src/contracts/lenientVersion'
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
@@ -93,6 +94,8 @@ export const IPC = {
   /** 每插件一份 JSON blob(~/.forsion/plugins-data/<id>.json);ctx.loadData/saveData 的落点。 */
   pluginDataRead: 'plugins:data-read',
   pluginDataWrite: 'plugins:data-write',
+  /** 插件数据文件夹(ctx.storage,2026-11-26):<tanguDataDir>/plugin-data/<id>/ 的读写、列目录、占用、复制进来。一条通道按 op 分。 */
+  pluginStorage: 'plugins:storage',
   setPageFrontmatter: 'page:set-frontmatter',
   listPageProps: 'vault:page-props',
   renamePageFile: 'page:rename-file',
@@ -1016,6 +1019,11 @@ export interface AmadeusApi {
    *  opts.backup:写之前先把现有那份另存成 <id>.json.replaced-<时间>(拷不出来就不写、抛出去);
    *  同步拉云端那份盖「读失败后按默认值存下的」本机数据时用。 */
   writePluginData?(pluginId: string, text: string, opts?: { backup?: boolean }): Promise<void>
+  /** 插件数据文件夹(ctx.storage,2026-11-26)。可选:桌面主进程 / 手机宿主实现,网页 / 分享页缺位 → ctx.storage 不挂。
+   *  请求与返回形状见 pluginStorage.ts 的 PluginStorageRequest。 */
+  pluginStorage?(req: PluginStorageRequest): Promise<unknown>
+  /** ctx.storage.url 的地址(同步);相对插件数据根的路径(库那一层已带 vaults/<key>/ 前缀)。缺位 → url() 回 null。 */
+  pluginStorageUrl?(pluginId: string, rootRel: string): string | null
   /** Discover user plugins under the vault's .amadeus/plugins/ folder. */
   listPlugins(): Promise<ExternalPluginSource[]>
   /** Open the plugins folder in the OS file manager (creating it if needed). dir = one plugin's directory name:

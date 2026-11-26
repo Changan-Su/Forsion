@@ -94,7 +94,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件挂宿主的界面、调宿主的接口之前，先弄清四件事：它读什么、会动用户的什么、在沙箱和舞台里有没有、要不要本机托管引擎。下面按 2026-11-23 的桌面源码核过。让 Tangu 写插件时，它会先交一页计划，这张表就是计划里「依赖哪些宿主数据」那一栏的出处（技能里同一份在 `references/host-data-sources.md`）。
 
-数据来源分五类：**库**（用户打开着的笔记库）、**引擎 `human/`**（Tangu 引擎家目录里的文件，经 `/agent/human/*` 读写）、**插件数据**（`ctx.loadData` / `saveData`）、**宿主内存**（应用运行时的状态，重启就没了）、**云端**（用户的 Forsion 账号）。
+数据来源分五类：**库**（用户打开着的笔记库）、**引擎 `human/`**（Tangu 引擎家目录里的文件，经 `/agent/human/*` 读写）、**插件数据**（`ctx.loadData` / `saveData`，以及插件数据文件夹 `ctx.storage`）、**宿主内存**（应用运行时的状态，重启就没了）、**云端**（用户的 Forsion 账号）。
 
 ### 只在本机托管引擎下才有的接口
 
@@ -133,6 +133,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 | `ctx.dashboard` | `mount` 用内存里的页面，不碰库，布局经 `onLayout` 交回；`source` 把配方（和你给的 `existingFileText`）编译成 `.dashboard.md` 文本，不读写库，写不写文件归插件 | `mount` 无 | `mount` 没有库也能用 | 否 |
 | `ctx.ui.mountBoard` | 只读你给的 `scene` / `viewport` | 无 | 能用 | 否 |
 | `ctx.loadData` / `saveData` | 插件数据，主进程里的 `<forsion 家目录>/plugins-data/<id>.json`；`syncData: true` 的还经云端同步。读不出来**reject**（`plugin-data-unreadable`），从没存过回 `null` | 写文件，可能同步 | 沙箱有自己的空家目录；舞台**不拷**插件数据 | 否 |
+| `ctx.storage`（2026-11-26 起） | 插件数据文件夹，在库外：桌面是 `~/.forsion/tangu/plugin-data/<插件 ID>/`（和同 ID 引擎插件的 `paths.dataDir` 是同一个）；`vault()` 是按库分的子文件夹 `vaults/<库标识>/`。不随账号同步。文件不存在回 `null` / `[]`，别的读错误一律 **reject** | 往那个文件夹写文件；不碰库 | 沙箱和舞台各用自己的家目录，这个文件夹起初是空的；用户的插件数据不拷进去 | 否 |
 | `ctx.widgets` | 插件自己给的行，卡片声明在 manifest `widgets`（宿主内存） | 无 | 能用 | 否 |
 | `ctx.home` | 只给接管主页的插件；布局在 localStorage，组件清单从引擎 `GET /agent/widgets` 拿 | 写主页布局 | 普通插件没有 | 组件清单要引擎 |
 | `ctx.spaces` | 宿主的 Space 与 Ribbon 状态。能力 `spaces` | 改用户的 Ribbon | 能用 | 否 |
@@ -712,6 +713,98 @@ off?.()
 
 插件在 manifest 里写 `"syncData": true`，它用 `ctx.saveData` 存的数据就会随 Forsion 账号同步到你的其他电脑和手机。没登录或断网时照旧只存在这台设备上，联网后再补传。两台设备都改过时，保留较晚的那次。插件详情页里有「跨设备同步插件数据」开关，可以在某台设备上单独关掉。用户卸载时没勾「保留设置」，云端那份会一起清掉；从回收站恢复后本机这份会重新传上去，别的设备还装着时也会把它的那份传回来。网页版暂不同步。接口细节见插件开发技能「编辑器」一节里 `loadData/saveData` 那几条。
 
+## 插件数据文件夹 `ctx.storage`（2026-11-26 起）
+
+以前插件只有 `ctx.loadData` / `saveData` 那一份 JSON，要存图片、草稿、缓存、索引的插件只能写进用户智库的 `Plugins/<插件 ID>/`：库越来越臃肿，这些东西还跟着笔记一起同步。现在每个插件有一个**库外的插件数据文件夹** `ctx.storage`，文本、二进制都能存，多大都行。技能里同一份说明在 `references/plugin-storage.md`。
+
+### 什么进智库，什么进插件数据
+
+- **进智库**（经 `ctx.app.workFolder()`）：替用户存的笔记（用户会在文件树里打开的东西）、这些笔记里嵌着的文件，以及用户要求存进智库的导出成品。
+- **进 `ctx.storage`**：属于插件自己的东西，包括那份 JSON 之外的设置与状态、索引、缓存、草稿、试探稿、中间产物、日志、任务记录、撤销副本、版本快照、窗口截图、渲染图、插件带的脚本和工具。
+- **一句话自测**：卸载这个插件以后，用户还想在库里看到它吗？想 → 智库；不想 → `ctx.storage`。
+- **唯一的例外**：只有几 KB、离开笔记就没意义的小索引（比如「哪篇笔记是从哪个网址剪的」），可以照旧以点开头的文件留在工作文件夹里。大的、会越积越多的（快照、撤销副本、每张图一份的旁注文件、渲染图、窗口截图、工具脚本）一律放 `ctx.storage`。
+
+| 例子 | 放哪 |
+|---|---|
+| 剪藏的文章、会议纪要、转写、闪念、文献笔记、周报、卡片组、白板、思维导图、视频工程文件 | 智库 |
+| 这些笔记里嵌着的图片、音频、视频；用户选择导出的 PDF、mp4 | 智库（跟着笔记，或放在用户选的位置） |
+| 试探稿、每次渲染出的图、窗口截图 | `ctx.storage`；用户想留的那张，给一个「存到智库」的按钮 |
+| 索引、缓存、任务记录、撤销副本、版本快照、模型失败时的原始输出 | `ctx.storage`（跟某个库有关的放 `vault()` 那一层） |
+| 插件自己用的脚本、工具、音乐素材、说明 | `ctx.storage`，或者直接放进插件包 |
+| 录音、导入的 3D 模型、拖进来的参考文献原件 | 两种都行：笔记引用它就进智库，只有插件自己用就进 `ctx.storage` |
+| 把笔记和出处对上的几 KB 小索引 | 可以以点开头的文件留在工作文件夹 |
+
+宿主不拦往库里写。开发副本往库里写点开头的文件，或者单个超过 5 MB、又不是笔记（`.md` / `.db`）的文件时，控制台会提示一次；正式安装的插件不提示。工作文件夹的缺省值不变（`Plugins/<插件 ID>`，用户手动设过的照旧优先），含义收窄成「插件替用户存笔记的地方」；不存笔记的插件，库里不会出现它的文件夹。
+
+### 接口
+
+路径都相对这一层、用 `/` 分隔；带 `..`、绝对路径（`/` 开头）、盘符的一律抛 `TypeError`。插件停用后读写类方法都 reject（`plugin-disposed`），`url()`、`vault()` 回 `null`。
+
+```js
+const store = ctx.storage
+if (store) {
+  await store.write('exports/c1.png', pngBytes)          // 原子写，父文件夹自动建
+  img.src = store.url('exports/c1.png')                   // 给 <img> / <video> 的地址
+    ?? URL.createObjectURL(new Blob([await store.readBytes('exports/c1.png')], { type: 'image/png' }))
+  const files = await store.list('exports')               // [{ name, path, kind, size, mtime }]
+}
+```
+
+- `readText(path)` / `readBytes(path)`：文件不存在回 `null`；**别的读错误一律 reject**，别当成空的再写默认值盖上去。
+- `write(path, data)`：临时文件 + 换名，已有的文件直接替换。一个插件的写类调用（`write` / `append` / `remove` / `move` / `importFromVault`）排同一条队，按调用先后执行；所以一次长的 `importFromVault` 进行中，这个插件后面的写会等它做完。`append(path, data)` 追加写（不存在就建），适合分块写录像这类大文件，不是原子的。
+- `list(folder?)`、`stat(path)`：不存在回 `[]` / `null`。`remove(path)` 永久删除（这是插件自己的数据，不进回收站）。`move(from, to)` 只在同一层里挪，目标已存在就 reject。
+- `usage()`：整个文件夹（两层都算）和其中 `cache/` 的字节数。
+- `url(path)`：同步给一个地址，`<img>` / `<video>` / `fetch` 都能用，按字节范围读（视频能拖进度条）。宿主给不出时回 `null`，这时读字节、转成 Blob URL。
+
+### 两层
+
+- `ctx.storage` 跟着应用走：换库不丢，没打开库也能用。
+- `ctx.storage.vault()` 是按库分开的一层（同一个文件夹里的 `vaults/<库标识>/`），放从某个库的笔记算出来的索引、缓存。没打开库时回 `null`；方法完全一样。插件启动时库可能还没恢复，这时也是 `null`：用到时再调 `vault()`，别在启动时取一次存着。库标识按库文件夹的路径算：在 Forsion 外面挪了库，会拿到一份新的空层，旧的那份留着、照样算进 `usage()`。用户切换库后，旧库那一层的操作会 reject，重新调一次 `vault()`。
+- 两层里的 `cache/` 都归插件随时重建：桌面插件详情页「数据」一节的「清空缓存」只清它。
+- 保留名（不分大小写）：跟应用走的那一层顶层的 `vaults/`，库那一层顶层的 `.forsion-imports/`（复制进来的完成记录），都写不进去。
+
+### 放在哪、哪里有
+
+| 在哪用 | `ctx.storage` |
+|---|---|
+| 桌面 | `~/.forsion/tangu/plugin-data/<插件 ID>/`（开发版在 `~/.forsion-dev/…`；商店安装的插件 ID 是 `market-<uuid>`），和同 ID 引擎插件的 `paths.dataDir` 是同一个文件夹 |
+| 手机 App | App 私有数据目录（`Data/plugin-data/<插件 ID>/`）。`url()` 在 App 起来、拿到地址之前回 `null`。云端库上 `importFromVault` 不可用（reject，什么都不写），本地库可以；卸载插件时这个文件夹留着（和那份 JSON 一样） |
+| 网页、分享页、旧宿主 | 没有：写 `ctx.storage?.…` |
+
+⚠️ 别和 `~/.forsion/plugins-data/<id>.json`（多一个 s）弄混：那是 `ctx.loadData` / `saveData` 那一份 JSON。两个路径都别写死在代码里。
+
+不随账号同步（`syncData` 只管那一份 JSON），不在库里，不需要打开的库。在桌面上卸载插件时，数据文件夹和设置一起进 Forsion 的回收站；用户勾了「保留设置和数据，重装后接着用」就留着。
+
+宿主没有 `ctx.storage` 时（网页、旧版本），照以前的办法来（小状态存那份 JSON、文件写工作文件夹），或者关掉这个功能并说明原因；别把大块数据塞进 `localStorage`。
+
+### 库里已经有的旧数据
+
+宿主不搬、不删库里的旧文件。插件认得的旧东西，用 `importFromVault` 复制一份进来，库里的原件留着，由用户自己决定删不删（插件详情页「数据」一节会写工作文件夹里还有几个文件）。
+
+```js
+const v = ctx.storage?.vault()                      // 要有打开的库
+if (v) {
+  const r = await v.importFromVault({
+    id: 'index-v1',                                   // [a-z0-9][a-z0-9._-]{0,63}，每个库只做一次
+    from: `${ctx.app.workFolder()}/.my-index.json`,   // 库相对路径
+    to: 'index.json',                                 // 可省；省了放这一层的根
+  })
+  // r.status：'complete' / 'already-done' → 以后读 v 里那份
+  //           'missing' → 库里没有，什么都没记，之后还可以再调（同步可能晚到）
+  // r.skipped：目标已经有、内容又不一样而没覆盖的
+}
+```
+
+- `from` 必须在你的工作文件夹、`Plugins/<插件 ID>` 或 `Plugins/<显示名>`（2026-10-21 以前的缺省目录）里面，别处一律 reject。
+- 只复制、不挪：每个文件都和原件核对过。同一个 `id` 第二次调回 `already-done`；完成记录读不出来、或内容认不得，会 reject，别当成「还没复制过」。
+- 跟应用走的数据调 `ctx.storage.importFromVault`，跟库走的调 `vault()` 那一层的；两者都要有打开的库。
+- 复制完别自己删库里的原件，告诉用户可以删。
+- 这和 `ctx.app.migrateWorkFolder` 是两件事：那个是把**笔记**从旧文件夹搬进新的英文 ID 工作文件夹。
+
+### 引擎那半
+
+`ctx.paths.dataDir` 照旧是 `<TANGU_HOME>/plugin-data/<引擎插件 ID>/`。装在 Forsion 插件包里的引擎插件另有 `ctx.paths.bundleDataDir`（2026-11-26 起）：包的插件数据文件夹 `<TANGU_HOME>/plugin-data/<包的插件 ID>/`，也就是桌面那半看到的 `ctx.storage`（商店安装是 `market-<uuid>` 目录名，其余是包 manifest 的 `id`）；两个 ID 相同时它等于 `dataDir`。旧引擎没有它：`ctx.paths.bundleDataDir ?? ctx.paths.dataDir`。只有引擎跑在这台电脑上（本机托管引擎）时两半才是同一个文件夹，引擎在别的电脑上时各是各的。引擎那半同样别动顶层的 `vaults/`，`cache/` 也可能被清空。
+
 ## 开屏与图标
 
 设置 → 外观 →「开屏与图标」支持上传品牌图标、动态开屏素材、选择默认／呼吸／旋转／静止，以及预览和恢复默认。品牌图标在应用内立即更新；桌面端还会写进系统，退出后仍保留（macOS 的访达／Dock／启动台图标，Windows 的开始菜单、桌面和任务栏快捷方式，Linux 仅运行时）。开屏下次启动生效，安装包图标不变。默认开屏是内置的「树影」（墙上的窗光与枝影，附一句古诗）；它不跟随应用图标，只在用户选了开屏素材时让位。原来的树标动画在「开屏素材 → 内置 → 经典图标」里，经典图标仍跟随应用图标。Web 与 Mobile 共用应用内设置；Android 的桌面图标只跟随内置图标（系统只允许在安装包自带的图标之间切换，且在离开应用后才切换），上传的图片与插件图标只在应用内显示，手机系统启动屏不在此入口内。
@@ -956,6 +1049,8 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 `ctx.app.migrateWorkFolder?` 是本机一次升级迁移口，迁进插件的默认 `Plugins/<插件 ID>` 目录。插件负责 schema 和路径改写，宿主负责校验、独占复制、索引比对后提交及中断恢复；原目录保留作备份。请求里给升级 `id`、事先取得的 `expectedRoot`、作为 `source` 的旧库根目录或 `Plugins/<旧名称>`、默认的 `target`，可选的 `plan`：索引改写前后的确切文本（`before`/`after`）、源文件的文本改写（`path`、`before`、`after`）和引用到的非空 `requiredFiles`。不带 plan 时只查询 / 对账每个库的迁移日志。插件校验自己的 schema，两份都有数据时拒绝；宿主校验快照、拒绝符号链接和路径穿越、不覆盖地复制、核对哈希，再在共享文本锁下发布索引。已完成的日志不会把删掉的条目再导回来。手动设置目录时拒绝自动迁移；不支持的宿主（网页、手机、云端）缺席此方法，插件须保留明确的恢复入口。
 
 默认目录使用稳定的英文插件 ID，不随显示名称或语言变化。外部 manifest 的 ID 必须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`，新 ID 用英文词，已发布 ID 保持稳定。商店安装以不变的 `market-<UUID>` 为生效 ID，可能不同于 manifest ID 或历史安装目录别名；请调用 `workFolder()`，不要自行拼身份目录。未接入迁移的插件继续读取已有的显示名目录；接入者先检测两项 API，再通过 `workFolder({ preferId: true })` 取得新默认目录，校验自身数据后等待迁移完成。用户手动指定的目录优先。
+
+2026-11-26 起工作文件夹只放插件替用户存的笔记（以及这些笔记嵌着的文件、用户要求存进智库的导出）；插件自己的索引、缓存、快照、草稿放 `ctx.storage`，库里已有的旧数据用 `ctx.storage.importFromVault` 复制出去，见上文「插件数据文件夹 `ctx.storage`」。`migrateWorkFolder` 只管把笔记搬进新的工作文件夹。
 
 无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝，手动偏好和智库 / 撤销检查照样生效。迁移前按原智库实际解析裸媒体链接，保留用户放在笔记旁边的附件的位置，而不是假定都在 `assets/` 下。
 

@@ -92,6 +92,7 @@ import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
 import { loadSyncedPluginData, notePluginDataEdit, notePluginDataUnverifiedWrite, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
 import { isJsonText, isPluginDataUnreadable, PluginDataUnreadableError, readLocalPluginData } from './pluginLocalData'
+import { createPluginStorage } from './pluginStorageCtx'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -182,8 +183,8 @@ registerMessages({
   'pluginhost.ttsNoModel': { zh: '还没选朗读模型：在「设置 → 模型 → 语音」里选一个', en: 'No read-aloud model yet: pick one in Settings → Models → Voice' },
   'pluginhost.ttsNoModel.action': { zh: '去设置', en: 'Open settings' },
   'pluginhost.workFolder.desc': {
-    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认 = Plugins/<英文插件 ID>）',
-    en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>)',
+    zh: '本插件替你存笔记的文件夹（相对库根；留空恢复默认 = Plugins/<英文插件 ID>）。插件自己的缓存和草稿不放这里',
+    en: 'Folder in your vault where this plugin saves notes for you (relative to the vault root; leave empty to fall back to Plugins/<plugin ID>). The plugin’s own caches and drafts don’t go here',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },
   'pluginhost.internalsFaulted.title': { zh: '已停用插件「{name}」', en: 'Turned off "{name}"' },
@@ -536,6 +537,19 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   const noteCreated = async (p: string, fresh: Promise<boolean>, root: string | null): Promise<void> => {
     if ((await fresh) && root && usePageStore.getState().vaultRoot === root) markPluginCreated(pluginId, p, root)
   }
+  // 开发副本往库里写「像插件数据」的东西时提示一次(2026-11-26 插件数据目录方案):点开头的路径(索引 / 缓存的老藏法),
+  // 或单个超过 5 MB、又不是笔记的文件。只在开发副本、只打控制台,不拦;正式安装的插件不提示。
+  let warnedVaultData = false
+  const devVaultDataHint = (p: string, size: number): void => {
+    if (warnedVaultData || !usePluginStore.getState().plugins.find((x) => x.id === pluginId)?.dev) return
+    const path = String(p ?? '').replace(/\\/g, '/')
+    const dotted = path.split('/').some((seg) => seg.startsWith('.') && seg !== '.' && seg !== '..')
+    const bigNonNote = size > 5 * 1024 * 1024 && !/\.(md|db)$/i.test(path)
+    if (!dotted && !bigNonNote) return
+    warnedVaultData = true
+    console.warn(`[amadeus] 插件 ${pluginId} 往智库里写了 ${path}:这像插件自己的数据(${dotted ? '点开头的隐藏文件' : '超过 5 MB 的非笔记文件'})。`
+      + 'Plugin data (caches, drafts, indexes, renders) belongs in ctx.storage, outside the vault; keep only notes for the user in ctx.app.workFolder().')
+  }
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -569,6 +583,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
     writeFile: (p, text) => {
       if (!ok()) return Promise.resolve()
+      devVaultDataHint(p, String(text ?? '').length)
       const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
       return amadeus.writeTextFile(p, text).then(() => noteCreated(p, fresh, root)).finally(dropListCache)
     },
@@ -603,6 +618,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
             const view = ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
               : b instanceof ArrayBuffer ? new Uint8Array(b) : null
             if (!view) return Promise.reject(new TypeError('writeBytes expects a Uint8Array or ArrayBuffer'))
+            devVaultDataHint(p, view.byteLength)
             // 子视图(subarray)过 IPC 会把**整块**底层 buffer 结构化克隆过去 → 只拷自己那一段。
             const fresh = probeAbsent(p), root = usePageStore.getState().vaultRoot
             return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice())
@@ -2505,6 +2521,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       if (localData && pluginDataSyncOn(p)) void pushPluginData(pluginId, localData) // 本机还没和云端对过时推送自己不推
     },
+    // 插件数据文件夹(2026-11-26):<tanguDataDir>/plugin-data/<id>/,库外、不同步;桥缺位(网页 / 分享页 / 旧壳)→ 不挂。
+    // 「复制进来」的来源只认本插件在库里的文件夹:手设的工作文件夹、Plugins/<id>、Plugins/<旧显示名>。
+    ...(amadeus?.pluginStorage ? { storage: createPluginStorage({
+      pluginId,
+      alive: ctxAlive,
+      call: (req) => amadeus.pluginStorage!(req),
+      url: amadeus.pluginStorageUrl ? (id, rel) => amadeus.pluginStorageUrl!(id, rel) : undefined,
+      vaultRoot: () => usePageStore.getState().vaultRoot,
+      importRoots: () => {
+        const name = get().plugins.find((o) => o.id === pluginId)?.name || pluginId
+        return [...new Set([configuredWorkFolder(pluginId), defaultWorkFolder(pluginId), `${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`].filter((f): f is string => !!f))]
+      },
+    }) } : {}),
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {

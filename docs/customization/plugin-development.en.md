@@ -94,7 +94,7 @@ None of these exist on older hosts, so check with optional chaining.
 
 Before a plugin mounts a host surface or calls a host API, know four things about it. When Tangu writes a plugin it hands in a one-page plan first, and this table is the source for the plan's "host data it depends on" part (the skill carries the same table as `references/host-data-sources.md`). For every host surface or mount your plugin uses, it answers four questions: what it reads, what it does to the user's data or sessions, whether it exists in the plugin sandbox and the demo stage (and how to seed demo data there), and whether it needs the **local managed engine**. Checked against desktop source on 2026-11-23; paths are in the Genesis repo, `FE` = `desktop/frontend/src`, `PS` = `FE/amadeus/plugins/pluginStore.ts`.
 
-Source categories: **vault** (the user's open note library), **engine `human/`** (files in the Tangu engine's home, served by `/agent/human/*`), **plugin data** (`ctx.loadData` / `saveData`), **host memory** (state inside the running app, gone on restart), **cloud** (the user's Forsion account).
+Source categories: **vault** (the user's open note library), **engine `human/`** (files in the Tangu engine's home, served by `/agent/human/*`), **plugin data** (`ctx.loadData` / `saveData`, and the plugin data folder `ctx.storage`), **host memory** (state inside the running app, gone on restart), **cloud** (the user's Forsion account).
 
 ### The local managed engine gate
 
@@ -133,6 +133,7 @@ The desktop runs the Tangu engine either itself ("managed", the default install)
 | `ctx.dashboard` | `mount`: an in-memory page store, never the vault; layout comes back through `onLayout`. `source`: compiles the recipe (and optional `existingFileText` you pass) into `.dashboard.md` text, no vault I/O; writing that file is up to you | `mount`: none | `mount` works with no vault | no |
 | `ctx.ui.mountBoard` | only your `scene` / `viewport` | none | works | no |
 | `ctx.loadData` / `saveData` | plugin data: `<forsion home>/plugins-data/<id>.json` in the main process; `syncData: true` plugins also sync through the cloud. Unreadable data **rejects** (`plugin-data-unreadable`), never-saved gives `null` (PS:2390-2429) | writes the file; may sync | sandbox: its own empty home; stage: plugin data is **not** copied in | no |
+| `ctx.storage` (2026-11-26+) | the plugin data folder, outside the vault: desktop `~/.forsion/tangu/plugin-data/<plugin ID>/` (the same folder as a same-ID engine plugin's `paths.dataDir`); `vault()` is a per-library subfolder `vaults/<key>/`. Not synced. Missing file → `null` / `[]`, any other read failure **rejects** | writes files there; nothing in the vault | sandbox and stage run with their own home, so the folder starts empty; the user's plugin data is not copied in | no |
 | `ctx.widgets` | rows your plugin provides; cards declared in manifest `widgets` (host memory) | none | works | no |
 | `ctx.home` | only for the plugin that owns the home page; layout in localStorage, widget list from the engine (`GET /agent/widgets`) | writes the home layout | not for normal plugins | engine for the widget list |
 | `ctx.spaces` | host Space and Ribbon state. Capability `spaces` | changes the user's Ribbon | works | no |
@@ -723,6 +724,98 @@ Since 2026-11-18, `ctx.saveData()` rejects a value that turns into nothing as JS
 
 A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. If someone uninstalls the plugin without ticking "Keep settings", the copy in the cloud is cleared too; restoring from the Trash uploads this device's copy again, and any other device that still has the plugin uploads its copy as well. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.
 
+## Plugin data folder: `ctx.storage` (2026-11-26+)
+
+Plugins used to have only the one JSON blob of `ctx.loadData` / `saveData`, so a plugin that stored images, drafts, caches or indexes had to write them into the user's vault under `Plugins/<plugin ID>/`: the vault kept growing, and all of it synced along with the notes. Now every plugin has a **plugin data folder outside the vault**, `ctx.storage`, for text or binary files of any size. The skill carries the same description in `references/plugin-storage.md`.
+
+### What goes in the vault, what goes in plugin data
+
+- **In the vault** (through `ctx.app.workFolder()`): notes the plugin saves for the user (things they open from the file tree), the files those notes embed, and finished exports the user asked to save there.
+- **In `ctx.storage`**: everything that belongs to the plugin itself: settings and state beyond the JSON blob, indexes, caches, drafts, trial versions, intermediate output, logs, job records, undo copies, version snapshots, window captures, renders, bundled scripts and tools.
+- **Self-check**: after uninstalling this plugin, would the user still want this in their vault? Yes → vault. No → `ctx.storage`.
+- **The one exception**: a small index (a few KB) that only makes sense next to the notes, such as "which note was clipped from which URL", may stay a dot-file in the work folder. Anything large or ever-growing (snapshots, undo copies, one sidecar per image, renders, window captures, tool scripts) goes into `ctx.storage`.
+
+| Example | Where |
+|---|---|
+| Clipped articles, meeting minutes, transcripts, quick notes, literature notes, weekly reports, card decks, whiteboards, mind maps, video project files | vault |
+| Images, audio and video embedded in those notes; a PDF or mp4 the user chose to export | vault (beside the note, or where the user chose) |
+| Trial drafts, the image of every render, window captures | `ctx.storage`; give the user a "Save to vault" button for the one they want to keep |
+| Indexes, caches, job records, undo copies, version snapshots, raw output of a failed model call | `ctx.storage` (per-library ones in the `vault()` layer) |
+| Scripts, tools, music and notes the plugin keeps for itself | `ctx.storage`, or ship them in the plugin package |
+| Recordings, imported 3D models, dropped-in reference originals | either: the vault when a note links or embeds it, `ctx.storage` when only the plugin uses it |
+| A few-KB index that matches notes to their sources | may stay a dot-file in the work folder |
+
+The host does not block vault writes. A dev copy that writes a dot-file, or a single non-note file (not `.md` / `.db`) over 5 MB, into the vault gets one console hint; installed plugins get none. The work folder's default is unchanged (`Plugins/<plugin ID>`, and a folder the user set still wins); its meaning narrows to "where the plugin saves notes for the user". A plugin that saves no notes never creates its folder in the vault.
+
+### API
+
+Paths are relative to the layer and `/`-separated; `..`, absolute paths (a leading `/`) and drive letters throw a `TypeError`. After the plugin is turned off, the read and write methods reject (`plugin-disposed`) and `url()` / `vault()` return `null`.
+
+```js
+const store = ctx.storage
+if (store) {
+  await store.write('exports/c1.png', pngBytes)          // atomic, creates parent folders
+  img.src = store.url('exports/c1.png')                   // an address for <img> / <video>
+    ?? URL.createObjectURL(new Blob([await store.readBytes('exports/c1.png')], { type: 'image/png' }))
+  const files = await store.list('exports')               // [{ name, path, kind, size, mtime }]
+}
+```
+
+- `readText(path)` / `readBytes(path)`: `null` when the file does not exist; **any other read failure rejects**. Never treat it as empty and write defaults over it.
+- `write(path, data)`: temp file + rename, replaces an existing file. A plugin's write-type calls (`write` / `append` / `remove` / `move` / `importFromVault`) share one queue and run in call order, so while a long `importFromVault` runs, that plugin's later writes wait for it. `append(path, data)` appends (creating the file when missing), for writing large output such as recordings in chunks; it is not atomic.
+- `list(folder?)`, `stat(path)`: `[]` / `null` when missing. `remove(path)` deletes permanently (this is the plugin's own data: no trash). `move(from, to)` moves within the same layer and rejects when the target exists.
+- `usage()`: bytes of the whole folder (both layers) and of its `cache/` folders.
+- `url(path)`: a synchronous address for `<img>` / `<video>` / `fetch`, read in byte ranges (videos can seek). `null` where the host cannot give one: then read the bytes and make a Blob URL.
+
+### Two layers
+
+- `ctx.storage` follows the app: it survives switching vaults and works with no vault open.
+- `ctx.storage.vault()` is a layer per library (`vaults/<library key>/` in the same folder), for indexes and caches derived from one vault's notes. `null` with no library open; the methods are the same. It is also `null` while the library is still being restored at startup: call `vault()` when you need it rather than keeping the one you got at startup. The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer, and the old one stays and still counts in `usage()`. After the user switches libraries, operations on the old library's layer reject: call `vault()` again.
+- `cache/` in either layer is the plugin's to rebuild at any time: "Clear cache" in the Data section of the desktop plugin page empties only that.
+- Reserved names (any letter case): the top-level `vaults/` on the app layer and the top-level `.forsion-imports/` (import records) on a vault layer; writes there are refused.
+
+### Where it lives, where it exists
+
+| Host | `ctx.storage` |
+|---|---|
+| Desktop | `~/.forsion/tangu/plugin-data/<plugin ID>/` (dev: `~/.forsion-dev/…`; Store installs use `market-<uuid>` as the plugin ID), the same folder as a same-ID engine plugin's `paths.dataDir` |
+| Mobile app | the app's private data folder (`Data/plugin-data/<plugin ID>/`). `url()` returns `null` until the app has resolved its file address at startup. `importFromVault` rejects on a cloud vault (nothing is written) and works on a local vault; uninstalling keeps this folder (like the JSON blob) |
+| Web, shared pages, older hosts | absent: write `ctx.storage?.…` |
+
+⚠️ Don't confuse it with `~/.forsion/plugins-data/<id>.json` (with an s): that is the `ctx.loadData` / `saveData` blob. Hard-code neither path.
+
+Not synced with the account (`syncData` covers only the JSON blob), not in the vault, no library needed. When the plugin is uninstalled on desktop, its data folder goes to Forsion's trash together with its settings; ticking "Keep settings and data for a reinstall" keeps it.
+
+When the host has no `ctx.storage` (web, older versions), keep doing what you did before (small state in the JSON blob, files in the work folder), or turn the feature off and say why; don't push large data into `localStorage`.
+
+### Old data already in the vault
+
+The host never moves or deletes old files in the vault. For old data the plugin recognises, copy it in with `importFromVault`; the originals stay in the vault for the user to delete or keep (the Data section of the plugin page says how many files the work folder still holds).
+
+```js
+const v = ctx.storage?.vault()                      // needs an open library
+if (v) {
+  const r = await v.importFromVault({
+    id: 'index-v1',                                   // [a-z0-9][a-z0-9._-]{0,63}; once per library
+    from: `${ctx.app.workFolder()}/.my-index.json`,   // vault-relative
+    to: 'index.json',                                 // optional; default: the layer root
+  })
+  // r.status: 'complete' / 'already-done' → read the copy in v from now on
+  //           'missing' → nothing there, nothing recorded; call again later (sync may deliver it)
+  // r.skipped: targets that already existed with different content, left alone
+}
+```
+
+- `from` must be inside your work folder, `Plugins/<plugin ID>` or `Plugins/<display name>` (the default before 2026-10-21); anything else rejects.
+- Copy, never move: every file is checked against its original. A second call with the same `id` returns `already-done`; a completion record that cannot be read or recognised rejects, so don't treat that as "not copied yet".
+- Call `ctx.storage.importFromVault` for data that follows the app and the `vault()` layer's for per-library data; both need an open library.
+- Don't delete the vault originals yourself after copying; tell the user they can.
+- This is not `ctx.app.migrateWorkFolder`: that one moves **notes** from an old folder into the new English-ID work folder.
+
+### The engine half
+
+`ctx.paths.dataDir` is still `<TANGU_HOME>/plugin-data/<engine plugin ID>/`. An engine plugin inside a Forsion plugin bundle also gets `ctx.paths.bundleDataDir` (2026-11-26+): the bundle's plugin data folder `<TANGU_HOME>/plugin-data/<bundle plugin ID>/`, which is what the desktop half sees as `ctx.storage` (the `market-<uuid>` folder name for Store installs, the bundle manifest `id` otherwise); it equals `dataDir` when the two IDs match. Older engines lack it: `ctx.paths.bundleDataDir ?? ctx.paths.dataDir`. The two halves share one folder only when the engine runs on this computer (the local managed engine); with an engine on another computer they are separate. The engine half also leaves the top-level `vaults/` alone and expects `cache/` to be emptied.
+
 ## Startup and icons
 
 Settings → Appearance → Startup and icons lets you upload a brand icon and animated startup artwork, choose Default / Breathing / Spinning / Still, and preview or restore the defaults. The brand icon updates in the app at once; desktop also writes it to the system so it stays after quitting (the Finder / Dock / Launchpad icon on macOS, the Start menu, desktop and taskbar shortcuts on Windows; on Linux only while running). The startup screen takes effect at the next launch, and the installer icon doesn't change. The default startup screen is the built-in Tree shadow (window light and branch shadows on a wall, with one classical verse); it does not follow the app icon and yields only when the user picks startup artwork. The original animated tree logo is under Startup artwork → Built-in → Classic logo, which still follows the app icon. Web and Mobile share the in-app settings; on Android the home screen icon follows built-in icons only (the system only allows switching between icons shipped in the app, and the switch happens after the app is left), uploaded images and plugin icons show only inside the app, and the phone's system launch screen is not part of this entry.
@@ -967,6 +1060,8 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 `ctx.app.migrateWorkFolder?` is a one-time local upgrade migration into the plugin's default `Plugins/<plugin ID>` folder. The plugin owns the schema and path rewrites; the host owns validation, exclusive copying, committing after comparing the index, and recovery from interruptions; the original folder stays as a backup. A request supplies an upgrade `id`, the captured `expectedRoot`, the legacy vault-root or `Plugins/<previous name>` `source`, the default `target`, and an optional `plan`: the exact index text `before`/`after`, source text edits (`path`, `before`, `after`) and the referenced nonempty `requiredFiles`. Without a plan it only queries / reconciles the per-vault journal. The plugin validates its own schema and refuses when both sides hold data; the host validates snapshots, rejects symlinks and path traversal, copies without overwriting, verifies hashes, then publishes the index under the shared text lock. A completed journal never re-imports deleted entries. A manually set work folder rejects automatic migration; unsupported hosts (web, mobile, cloud) omit this method, so the plugin must keep an explicit recovery entry.
 
 Default folders use the stable English plugin ID and don't change with the display name or language. External manifest IDs must match `^[a-z0-9][a-z0-9-]{0,63}$`; use English words for new IDs and keep published IDs stable. Store installs use the immutable `market-<UUID>` as the effective ID, which may differ from the manifest ID or a historical install-folder alias; call `workFolder()` rather than building the identity folder yourself. Plugins without migration support keep reading their existing display-name folders. To migrate, first feature-detect both APIs, get the new default folder with `workFolder({ preferId: true })`, validate your own data, then wait for the migration to finish. A folder the user set manually always takes precedence.
+
+Since 2026-11-26 the work folder holds only the notes the plugin saves for the user (plus the files those notes embed and exports the user asked to save there). The plugin's own indexes, caches, snapshots and drafts go in `ctx.storage`, and old data already in the vault is copied out with `ctx.storage.importFromVault`; see "Plugin data folder: `ctx.storage`" above. `migrateWorkFolder` only moves notes into the new work folder.
 
 A status query without a plan can reconcile the migration journal of the previous display-name folder; write plans for an old target are still rejected, and manual preferences and vault / revocation checks still apply. Before migrating, bare media links are resolved against the original vault as they actually resolve there, keeping user-added attachments where they are (beside notes) instead of assuming an `assets/` location.
 

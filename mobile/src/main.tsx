@@ -17,6 +17,8 @@ import { createCloudAmadeusBridge, setCloudNotify } from '@webamadeus/cloudBridg
 import { installCloudCollab } from '@webamadeus/cloudCollab'
 import { cloudApiBaseOf } from '@/services/engine/cloudBase'
 import { installMobilePlugins } from './plugins/installMobilePlugins'
+import { capacitorPluginStorageFs, pluginStorageBaseUrl } from './plugins/capacitorPluginFs'
+import { createMobilePluginStorage } from './plugins/pluginStorageHost'
 import { isSafePluginExt } from '../../desktop/shared/amadeus/pluginFiles'
 
 const VAULT_MODE_KEY = 'amadeus_vault_mode' // 'cloud'(缺省,移动端主打云客户端) | 'local'(显式选过才本地)
@@ -89,6 +91,19 @@ void installMobileShim().then(async (ok) => {
       : // 本地 Capacitor vault;cfg 供 fetchLinkMeta(书签卡 server 代理)/searchImages。
         (createMobileAmadeusBridge({ apiBase: () => cloudApi, getToken, pluginExts: () => pluginExts }) as unknown as Bridge)
 
+  // 插件数据文件夹(ctx.storage,2026-11-26):Data/plugin-data/<id>/,不属于任何库 —— 同插件宿主一样叠在转发壳上,两种库模式共用。
+  // 库那一层核对的「当前库」= 渲染层发请求时用的同一个 pageStore.vaultRoot(本地 `/vault`,云端 `cloud://<v>`)。
+  // 复制进来只认本地库:虚拟根 `/vault` 落在 Data/vault(同 fsAdapter 的去前导斜杠);云端库 → 宿主明确拒绝。
+  // url() 要同步:`plugin-data/` 的可加载地址启动时取一次,取到之前 / 浏览器台架里 url() 回 null。
+  let storageBase: string | null = null
+  void pluginStorageBaseUrl().then((b) => { storageBase = b }).catch(() => {})
+  const storage = createMobilePluginStorage({
+    fs: capacitorPluginStorageFs(),
+    vaultRoot: async () => (await import('@/amadeus/store/pageStore')).usePageStore.getState().vaultRoot,
+    vaultDir: (root) => (/^\/[^/]/.test(root) ? root.replace(/^\/+/, '') : null),
+    baseUrl: () => storageBase,
+  })
+
   const pluginHost: Record<string, unknown> = {
     // 渲染层装 / 卸 / 更新插件之后都会重新 listPlugins(pluginStore.reloadExternal)—— 借这一趟把后缀名单对齐。
     listPlugins: async () => {
@@ -98,6 +113,8 @@ void installMobileShim().then(async (ok) => {
     uninstallPlugin: plugins.host.uninstallPlugin,
     readPluginData: plugins.host.readPluginData,
     writePluginData: plugins.host.writePluginData,
+    pluginStorage: storage.handle,
+    pluginStorageUrl: storage.url,
   }
 
   let side = vaultMode()
@@ -115,7 +132,7 @@ void installMobileShim().then(async (ok) => {
     })
   })
   // 恒定壳:`in` 也要转发 —— 渲染层多处用 `'x' in window.amadeus` 探能力(云/本地两桥方法集不同)。
-  // 插件宿主四件(pluginHost)压在库桥之上;hostCaps 是**合并**不是替换:库桥自己的 revealInFileManager:false 等
+  // 插件宿主那几件(pluginHost:清点 / 卸载 / saveData / ctx.storage)压在库桥之上;hostCaps 是**合并**不是替换:库桥自己的 revealInFileManager:false 等
   // 必须保留,只叠一条 pluginsFolder:false(插件页不渲染「打开插件文件夹 / 创建示例插件」)。
   // 自有键判断(别用 `in`:pluginHost 是普通对象,'toString' / 'constructor' 也会命中原型链)
   const hostKey = (k: string | symbol): boolean => typeof k === 'string' && Object.prototype.hasOwnProperty.call(pluginHost, k)

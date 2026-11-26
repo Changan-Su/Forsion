@@ -54,7 +54,7 @@ import {
   type DiscoveredPlugin, type PluginRequirement,
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
-import { seedBundleAgents } from './bundles.js';
+import { bundleEffectiveId, seedBundleAgents } from './bundles.js';
 import { createOfficialCloud, inspectOfficialEnginePlugin, officialBundleId } from './official.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
 import { attachPluginHooks } from '../hooks/pluginHooks.js';
@@ -247,7 +247,11 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
     ...(official ? { cloud: createOfficialCloud(() => !inst.disposed, officialBundleId(path.basename(path.dirname(path.dirname(d.dir))))) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
-    paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
+    paths: {
+      pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id),
+      // 包里的引擎那半:界面那半的插件数据文件夹(桌面 ctx.storage 同一个目录),见 types.ts
+      ...(() => { const b = d.bundled ? bundleEffectiveId(path.dirname(path.dirname(d.dir))) : null; return b ? { bundleDataDir: path.join(tanguHome(), 'plugin-data', b) } : {}; })(),
+    },
     activity: {
       append: (event, detail) => {
         // 强制插件命名空间前缀(与桌面 ctx.activity.log 同纪律);appendActivityLine 自身吞错,事件流是尽力而为的旁路。

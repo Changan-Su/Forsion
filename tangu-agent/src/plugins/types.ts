@@ -178,7 +178,13 @@ export interface TanguPluginContext {
   /** 带插件 id 前缀的日志。 */
   log(msg: string): void;
   /** 路径信息。 */
-  paths: { pluginDir: string; dataDir: string };
+  /**
+   * dataDir = `<TANGU_HOME>/plugin-data/<本引擎插件 id>`。bundleDataDir(2026-11-26+,只有装在 Forsion 插件包里的引擎插件有)=
+   * 这个包的界面那半的插件数据文件夹 `<TANGU_HOME>/plugin-data/<包的生效插件 id>` —— 和桌面 `ctx.storage` 是同一个目录
+   * (生效 id:商店安装 = `market-<uuid>` 目录名,其余 = 包 manifest id)。包里引擎那半要和界面那半共用文件就用它;
+   * 引擎插件 id 与包 id 相同时两者相等。
+   */
+  paths: { pluginDir: string; dataDir: string; bundleDataDir?: string };
   /**
    * 以用户的 Forsion 账号请求云端。**只有官方插件有**(捆绑包 SIGNATURE 用引擎钉的公钥验过,见 ./official.ts),
    * 其余插件恒为 undefined。健康插件只放行 `POST /api/wellness/agent/summary`。Extend 白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`),

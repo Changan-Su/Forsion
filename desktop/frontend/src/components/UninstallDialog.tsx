@@ -12,6 +12,7 @@ import { registerMessages, translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { panelToast } from './PanelNotice'
 import { ipcErrorText } from '../ipcError'
+import { fmtBytes } from './SyncSetupCard'
 import { homeTarget } from '../services/engine/targets'
 import { isDelegatedAdmin } from '../services/delegatedAdmin'
 import { UninstallReasonChips, type LifecycleReason } from './PluginReasons'
@@ -82,7 +83,11 @@ registerMessages({
   'uninstall.plugin.keepSettings': { zh: '保留设置，重装后接着用', en: 'Keep settings for a reinstall' },
   'uninstall.plugin.settingsCloud': { zh: '含同步到账号的那份', en: 'Including the copy synced to your account' },
   'uninstall.plugin.vault': { zh: '智库里的 {folder}/', en: '{folder}/ in your vault' },
-  'uninstall.plugin.vaultSub': { zh: '你的数据', en: 'Your data' },
+  'uninstall.plugin.vaultSub': { zh: '插件替你存的笔记', en: 'Notes this plugin saved for you' },
+  'uninstall.plugin.settingsData': { zh: '插件的设置、偏好与数据（{size}）', en: 'Plugin settings, preferences and data ({size})' },
+  'uninstall.plugin.dataSub': { zh: '数据是插件自己的草稿和缓存，不在智库里', en: 'The data is the plugin’s own drafts and caches, not in your vault' },
+  'uninstall.plugin.settingsDataNoSize': { zh: '插件的设置、偏好与数据', en: 'Plugin settings, preferences and data' },
+  'uninstall.plugin.keepSettingsData': { zh: '保留设置和数据，重装后接着用', en: 'Keep settings and data for a reinstall' },
   'uninstall.plugin.moveVault': { zh: '一并移到回收站', en: 'Move to Trash too' },
   'uninstall.plugin.skills': { zh: '它带的技能 · {n} 个', en: 'Skills it ships · {n}' },
   'uninstall.plugin.skillsGo': { zh: '随插件进回收站', en: 'Go with the plugin' },
@@ -322,13 +327,16 @@ export function SkillUninstallDialog({ skillKey, agentSlug, name: fallbackName, 
 
 /** 卸载插件(Forsion 插件与引擎插件;设置页与商店共用)。框只收集选择,真正的卸载(停内嵌引擎插件、重载、重扫)由调用方做。
  *  vaultFolder:库里的工作文件夹(pluginStore.pluginVaultFolder 算出,库里没有就不传);skills / agents:捆绑包里带的。 */
-export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, skills = 0, agents = [], superseded, onConfirm, onClose }: {
+export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, dataBytes, skills = 0, agents = [], superseded, onConfirm, onClose }: {
   name: string
   /** 还有别的插件依赖它时的提醒,排在正文前面。 */
   warning?: string
   vaultFolder?: string | null
   /** 这个插件的数据正随账号同步(pluginDataSyncOn):不留设置时云端那份也清。 */
   cloudData?: boolean
+  /** 插件数据文件夹(ctx.storage)的字节数:>0 时设置那一行连数据一起说(带大小),保留 / 进回收站跟设置同一个勾。
+   *  null = 这次卸载会连数据一起挪、但大小还没量出来(照样说「与数据」,不带大小);undefined / 0 = 不提数据。 */
+  dataBytes?: number | null
   skills?: number
   agents?: string[]
   /** 这份商店安装取代的旧普通目录(AmadeusPlugin.supersedes):缺省一起进回收站,勾「保留旧副本」才留下(留下就是重新运行它)。 */
@@ -337,11 +345,14 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, s
   onConfirm: (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean; reason?: LifecycleReason }) => void
   onClose: () => void
 }) {
+  const hasData = dataBytes === null || (typeof dataBytes === 'number' && dataBytes > 0)
   const { t } = useI18n()
   const ic = { size: 15, strokeWidth: 1.8 }
   const rows: UninstallRow[] = [
     { icon: <Box {...ic} />, title: t('uninstall.plugin.files'), dest: t('uninstall.trash30') },
-    { icon: <SlidersHorizontal {...ic} />, title: t('uninstall.plugin.settings'), ...(cloudData ? { sub: t('uninstall.plugin.settingsCloud') } : {}), dest: t('uninstall.trash30'), check: { key: 'keepSettings', label: t('uninstall.plugin.keepSettings'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' } },
+    { icon: <SlidersHorizontal {...ic} />, title: hasData ? (dataBytes ? t('uninstall.plugin.settingsData', { size: fmtBytes(dataBytes) }) : t('uninstall.plugin.settingsDataNoSize')) : t('uninstall.plugin.settings'),
+      ...(cloudData ? { sub: t('uninstall.plugin.settingsCloud') } : hasData ? { sub: t('uninstall.plugin.dataSub') } : {}),
+      dest: t('uninstall.trash30'), check: { key: 'keepSettings', label: t(hasData ? 'uninstall.plugin.keepSettingsData' : 'uninstall.plugin.keepSettings'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' } },
     ...(vaultFolder ? [{ icon: <FolderClosed {...ic} />, title: t('uninstall.plugin.vault', { folder: vaultFolder }), sub: t('uninstall.plugin.vaultSub'), dest: t('uninstall.keep'), tone: 'keep' as const, check: { key: 'moveVault', label: t('uninstall.plugin.moveVault'), checkedDest: t('uninstall.trash30') } }] : []),
     ...(skills ? [{ icon: <Sparkles {...ic} />, title: t('uninstall.plugin.skills', { n: skills }), dest: t('uninstall.plugin.skillsGo') }] : []),
     ...agents.map((a) => ({ icon: <Bot {...ic} />, title: t('uninstall.plugin.agent', { name: a }), sub: t('uninstall.plugin.agentSub'), dest: t('uninstall.keep'), tone: 'keep' as const })),

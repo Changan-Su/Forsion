@@ -2,6 +2,8 @@
 
 Use this reference with the skill's “Vault files and the working folder” section. The local desktop host owns filesystem safety; the plugin owns the business schema. Feature-detect these APIs instead of guessing support from an app version.
 
+This contract moves **notes** (and the files they embed) from an old vault folder into the new ID work folder, vault to vault. Plugin-owned data (indexes, caches, snapshots, drafts, renders) no longer belongs in the vault at all (2026-11-26+): copy it out into `ctx.storage` with `importFromVault` instead, see [references/plugin-storage.md](references/plugin-storage.md).
+
 ## Identity and destination
 
 - New external manifest IDs match `^[a-z0-9][a-z0-9-]{0,63}$`. Choose English words for new IDs and preserve published identities such as `bluebird` and `diting`.

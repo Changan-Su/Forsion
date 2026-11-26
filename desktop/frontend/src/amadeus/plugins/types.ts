@@ -148,7 +148,8 @@ export interface ThemeContribution {
  * 而且库是**惰性恢复**的:用户这一程没进过 Amadeus 之前 `vaultRoot()` 就是 null,哪怕他有库。插件视图挂载时宿主会
  * 唤醒它(2026-10-02 起),但恢复是异步的:视图刚挂上那一下仍可能是 null,读库前先等 `vaultRoot()` 有值。
  * 结论:与笔记无关的插件功能(仪表盘/远程系统面板/工具面)**不得**建立在这些方法上 ——
- * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / 自己的视图 DOM)。
+ * 用不依赖库的面(`ctx.dashboard.mount` / `ctx.loadData` / `ctx.saveData` / `ctx.storage` / 自己的视图 DOM)。
+ * 插件自己的文件(草稿、缓存、索引、渲染图、快照)一律进 `ctx.storage`(库外),库里只放替用户存的笔记(2026-11-26)。
  * 新增方法时把「需库 / 无需库」写进它的注释,别让下一个人再踩。
  */
 /** showResetCardCeremony 的额度快照(服务端 /token-quota/my 字段;-1 = 不限)。 */
@@ -278,7 +279,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  Paths are vault-relative with `/`, the same strings `readFile` takes. With no library open nothing arrives.
    *  Older hosts lack it: `ctx.app.onVaultEvent?.(cb)`, and fall back to `listFiles` polling. */
   onVaultEvent?(cb: (events: PluginVaultEvent[]) => void): () => void
-  /** The plugin's work folder for file output, vault-relative without leading/trailing slash.
+  /** The plugin's work folder in the vault, vault-relative without leading/trailing slash: where the plugin saves
+   *  **notes for the user** (things opened from the file tree, and files those notes embed). The plugin's own drafts,
+   *  caches, indexes, snapshots and renders belong in `ctx.storage` (outside the vault), not here (2026-11-26).
    *  Every plugin automatically gets a "工作文件夹" setting (key `workFolder`) on its detail page;
    *  this returns that value, defaulting to `Plugins/<plugin ID>` (stable ASCII, independent of display name or locale).
    *  Existing `Plugins/<display name>` folders remain in use for compatibility. A plugin implementing
@@ -2276,6 +2279,65 @@ export interface PluginUiPartHandle<P> { update(patch: Partial<P>): void; dispos
 
 
 
+/** One entry of `ctx.storage.list()`. `path` is relative to the layer, `/`-separated. Folders report size 0. */
+export interface PluginStorageEntry { name: string; path: string; kind: 'file' | 'folder'; size: number; mtime: number }
+
+/** `ctx.storage.importFromVault` options. */
+export interface PluginStorageImportOptions {
+  /** Migration ID, `[a-z0-9][a-z0-9._-]{0,63}`. Done once per library: a second call returns `already-done`. */
+  id: string
+  /** Vault-relative file or folder to copy. Must be inside your working folder, `Plugins/<plugin ID>` or the
+   *  folder named after your display name (`Plugins/<name>`, pre-2026-10-21 default); anything else rejects. */
+  from: string
+  /** Target inside this layer (file path when `from` is a file; folder otherwise). Default: the layer root. */
+  to?: string
+}
+
+/** Plugin data folder (`ctx.storage`, 2026-11-26+). Paths are relative to the layer and `/`-separated; `..`,
+ *  absolute paths (a leading `/`) and drive letters reject with a TypeError. Reserved names (any letter case): the
+ *  top-level `vaults/` on the app layer, the top-level `.forsion-imports/` on a vault layer. After your plugin is turned
+ *  off the read / write methods reject (`Error('plugin-disposed')`) and `url()` / `vault()` return null. Missing file → `null` / `[]`; any other read failure **rejects** — never treat it
+ *  as "empty" and overwrite (a failed read is not missing data). */
+export interface PluginStorage {
+  /** UTF-8 text, or null when the file does not exist. */
+  readText(path: string): Promise<string | null>
+  /** Raw bytes, or null when the file does not exist. */
+  readBytes(path: string): Promise<Uint8Array | null>
+  /** Atomic write (temp file + rename), creating parent folders; replaces an existing file. Strings are stored as UTF-8.
+   *  All of a plugin's write-type calls (write / append / remove / move / importFromVault) share one queue in call
+   *  order, so a long import holds back later writes. */
+  write(path: string, data: string | Uint8Array | ArrayBuffer): Promise<void>
+  /** Append to a file (created when missing). Use it to stream large output (recordings) in chunks instead of
+   *  holding the whole thing in memory. Not atomic: a crash can leave a partial tail. */
+  append(path: string, data: string | Uint8Array | ArrayBuffer): Promise<void>
+  /** Direct children of a folder ('' or omitted = the layer root), sorted by name. Missing folder → []. */
+  list(folder?: string): Promise<PluginStorageEntry[]>
+  /** Kind, size and modification time, or null when missing. */
+  stat(path: string): Promise<{ kind: 'file' | 'folder'; size: number; mtime: number } | null>
+  /** Delete a file or a whole folder, permanently (it is your own data: no trash). Missing → resolves. */
+  remove(path: string): Promise<void>
+  /** Rename / move inside the same layer. Rejects when the target exists. */
+  move(from: string, to: string): Promise<void>
+  /** Size of your whole data folder (both layers) and of its `cache/` folders, in bytes. */
+  usage(): Promise<{ bytes: number; cacheBytes: number }>
+  /** Synchronous address for `<img src>` / `<video src>` / `fetch`, streamed with byte ranges (videos can seek), the
+   *  same way vault images are served. null where the host cannot serve files (then read bytes and use a Blob URL).
+   *  Throws on an invalid path. Does not check that the file exists. */
+  url(path: string): string | null
+  /** The layer for the library open right now (`vaults/<library key>/` in the same folder), or null with none open —
+   *  including while the library is still being restored at startup, so call it when you need it.
+   *  The key comes from the library folder's path: a library moved outside Forsion gets a fresh, empty layer; the
+   *  old one stays and still counts in usage(). On a vault layer, returns itself. Operations on a vault layer reject
+   *  once the user switches libraries — call `vault()` again. */
+  vault(): PluginStorage | null
+  /** Copy (never move) old data you wrote into the vault into this layer, once per library. Each file is verified
+   *  against its source; the originals stay in the vault for the user to delete. An existing target file with
+   *  different content is left alone and listed in `skipped`. `missing` = the source is not there (nothing recorded,
+   *  so a later call can still copy it, e.g. after sync delivers it). A completion record that cannot be read or recognised rejects.
+   *  Needs an open library. */
+  importFromVault(opts: PluginStorageImportOptions): Promise<{ status: 'complete' | 'already-done' | 'missing'; copied: number; skipped: string[] }>
+}
+
 export interface PluginContext {
   /** Explicit read-only Agent fields; never export a raw settings blob. Revoked on disable/reload. */
   registerAgentSettings?(def: import('../../../../../tangu-agent/src/contracts/agentSettings').AgentSettingsContribution): void
@@ -2483,6 +2545,21 @@ export interface PluginContext {
    *  undefined)→ reject,什么都不写(2026-11-18 起;之前会写进空内容,下次读就成了读不出来)。BigInt、循环引用本来就会 reject。
    *  manifest 写 `"syncData": true` → 登录后这份随账号跨设备同步(本地优先,整份取较新的;单份 ≤512KB)。 */
   saveData?(value: unknown): Promise<void>
+  /** Plugin data folder (2026-11-26+): files that belong to the plugin itself — drafts, renders, caches, indexes,
+   *  snapshots, logs, bundled tools — kept **outside the user's vault**, binary or text, any size. Use it for
+   *  everything the user would not open from the file tree; keep only notes (and files notes embed) in the vault via
+   *  `ctx.app.workFolder()`. Self-check: "after uninstalling this plugin, would the user still want this in the vault?"
+   *
+   *  Location: desktop `~/.forsion/tangu/plugin-data/<plugin ID>/` (dev: `~/.forsion-dev/…`) — the same folder as an
+   *  engine plugin with the same ID (`paths.dataDir`); an engine plugin shipped inside your bundle reaches it through
+   *  `paths.bundleDataDir`. Mobile: the app's private data folder. Not synced with the account, not in the vault, no
+   *  library needed. Web and shared pages: absent (`ctx.storage?.…`), as are older hosts — fall back to your old way.
+   *
+   *  Two layers: `ctx.storage` follows the app (survives switching vaults); `ctx.storage.vault()` is a separate folder
+   *  per library (indexes / caches derived from one vault's notes), `null` with no library open. `cache/` in either
+   *  layer is yours to regenerate: the plugin page's "Clear cache" empties it. Reserved: top-level `vaults/` (app layer), `.forsion-imports/` (vault layer).
+   *  See `PluginStorage` for every method. */
+  storage?: PluginStorage
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member.
    *  Every mount here renders inside a host-owned layer added to the element you pass (`display:contents`, so

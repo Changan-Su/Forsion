@@ -29,7 +29,7 @@ The only difference between built-in and external plugins is that built-in ones 
 - **Automation events** — let [automation](../spaces/automation.md) rules be triggered by the plugin's events;
 - **Bundled Spaces** — package a whole working setup.
 
-Every plugin automatically gets a "Working folder" setting that decides where its output goes. By default it is `Plugins/<English plugin ID>` in your vault: all plugin output sits under the one `Plugins` folder, and the vault root stays free for your own notes. Plugins with settings offer a form on their **detail page**; changes apply immediately, with no config file to edit.
+Every plugin automatically gets a "Working folder" setting that decides where the notes it saves for you go. By default it is `Plugins/<English plugin ID>` in your vault: all notes plugins save for you sit under the one `Plugins` folder, and the vault root stays free for your own notes. A plugin's own drafts and caches stay out of your vault, in its plugin data folder (on this device only, not synced); the "Data" section on the detail page shows how much space it takes and lets you open its folder or clear the cache. Plugins with settings offer a form on their **detail page**; changes apply immediately, with no config file to edit.
 
 ## Where to install from
 

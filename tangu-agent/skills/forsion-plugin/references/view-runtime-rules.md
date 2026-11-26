@@ -22,6 +22,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash / createFolder
 | `stat(p)`(2026-11-16+) | **静默返回 `null`**(与「不存在」同形,同 `readFile`)。网页宿主没有这个方法 |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
 | `workFolder()` | **照常返值**(它只是一条设置项的值)—— ⚠️**不是可用性探针**,拿到字符串不代表写得进去 |
+| `ctx.storage`(2026-11-26+) | **不需要库**,照常读写(库外的插件数据文件夹);只有 `ctx.storage.vault()` 给 `null`、`importFromVault` reject。网页和旧宿主整个成员缺席 → `ctx.storage?.` |
 
 - ⚠️**库是惰性恢复的**:`vaultRoot()` 为 null 只说明「当前没有**打开着的**库」,不代表用户没有库 ——
   用户这一程还没进过 Amadeus 之前它就是 null。插件在宿主**启动期**装载,setup 里那一发读写多半正撞在这上面。
@@ -29,7 +30,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash / createFolder
   一进视图就要读库(列工程、恢复上次打开的文件)的,先等 `vaultRoot()` 有值再读,别把那一刻的空当成「用户没有内容」。
 - **结论(2026-09-02 起规,起因:服务器总览面板误依赖笔记库,用户实报「太奇怪了」)**:
   **与笔记无关的功能(仪表盘 / 远程系统面板 / 工具面)不得建立在这些方法上** ——
-  用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、以及自己视图里的 DOM。
+  用 `ctx.dashboard.mount`(见下节)、`ctx.loadData` / `ctx.saveData`、`ctx.storage`(插件自己的文件,见 [references/plugin-storage.md](references/plugin-storage.md))、以及自己视图里的 DOM。
 - **启动期的写一律 try/catch**;要按「库在不在」分支就读 `vaultRoot()`,别去试探 `readFile` 的 null。
 - 与列表源那条纪律是同一个病根:`registerListSource` 的 `subscribe()` 必须顺手重读一次(见下)。
 

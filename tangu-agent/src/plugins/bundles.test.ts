@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { BUNDLE_ORIGIN_FILE, bundleDirs, bundleEnginePluginRoots, bundleSkillRoots, seedBundleAgents } from './bundles.js';
+import { BUNDLE_ORIGIN_FILE, bundleDirs, bundleEffectiveId, bundleEnginePluginRoots, bundleSkillRoots, seedBundleAgents } from './bundles.js';
 import { parseAgentFolder } from '../agents/agentRegistry.js';
 import { validSyncPath } from '../services/agentSyncPaths.js';
 import { discoverPlugins, resolvePluginsDirs } from './loader.js';
@@ -143,6 +143,44 @@ describe('内嵌引擎插件', () => {
     expect(bundleDirs()).toEqual([market]);
     expect(bundleSkillRoots()).toEqual([path.join(market, 'skills')]);
     expect(discoverPlugins().filter((d) => d.manifest.id === 'demo-channel').map((d) => d.dir)).toEqual([path.join(market, 'tangu-plugins', 'demo-channel')]);
+  });
+
+  it('包里的引擎那半拿到 paths.bundleDataDir = 界面那半的插件数据文件夹(ctx.storage 同一处);用户目录插件没有这个键', async () => {
+    // 2026-11-26 插件数据目录:引擎那半 id(xx-engine)≠ 界面那半 id(xx),dataDir 各是各的;bundleDataDir 让两半落到同一个文件夹
+    const write = (dir: string, id: string): void => {
+      writeJson(path.join(dir, 'tangu-plugin.json'), { ...engineManifest(id), entry: 'index.mjs', commands: [id] });
+      writeFileSync(path.join(dir, 'index.mjs'), `import { writeFileSync } from 'node:fs';
+export default { activate(ctx) {
+  ctx.registerCommand({ name: '${id}', summary: 'x', run: () => { writeFileSync(${JSON.stringify(path.join(tmp, `${id}.paths.json`))}, JSON.stringify(ctx.paths)); return 0; } });
+} };\n`);
+    };
+    write(path.join(makeBundle('demo'), 'tangu-plugins', 'demo-engine'), 'demo-engine');
+    write(path.join(pluginsDir(), 'loose-engine'), 'loose-engine');
+    expect(await dispatchPluginCommand('demo-engine', [])).toBe(0);
+    expect(await dispatchPluginCommand('loose-engine', [])).toBe(0);
+    const home = process.env.TANGU_HOME!;
+    const bundled = JSON.parse(readFileSync(path.join(tmp, 'demo-engine.paths.json'), 'utf8'));
+    expect(bundled.dataDir).toBe(path.join(home, 'plugin-data', 'demo-engine'));
+    expect(bundled.bundleDataDir).toBe(path.join(home, 'plugin-data', 'demo'));
+    const loose = JSON.parse(readFileSync(path.join(tmp, 'loose-engine.paths.json'), 'utf8'));
+    expect(loose.bundleDataDir).toBeUndefined();
+  });
+
+  it('bundleEffectiveId:商店目录用目录名(market-<uuid>),否则用合法的 manifest id,再退回目录名', () => {
+    const market = path.join(shared, 'plugins', 'market-12345678-1234-1234-1234-123456789abc');
+    writeJson(path.join(market, 'manifest.json'), { id: 'same-name' });
+    expect(bundleEffectiveId(market)).toBe('market-12345678-1234-1234-1234-123456789abc');
+    const renamed = path.join(shared, 'plugins', 'folder-name');
+    writeJson(path.join(renamed, 'manifest.json'), { id: 'real-id' });
+    expect(bundleEffectiveId(renamed)).toBe('real-id');
+    const badId = path.join(shared, 'plugins', 'fallback');
+    writeJson(path.join(badId, 'manifest.json'), { id: 'Bad Id' });
+    expect(bundleEffectiveId(badId)).toBe('fallback');
+    expect(bundleEffectiveId(path.join(shared, 'plugins', 'No Manifest'))).toBeNull();
+    const broken = path.join(shared, 'plugins', 'broken-manifest');
+    mkdirSync(broken, { recursive: true });
+    writeFileSync(path.join(broken, 'manifest.json'), '{ not json');
+    expect(bundleEffectiveId(broken)).toBeNull(); // 读不出来不退回目录名
   });
 
   it('顶不掉用户目录里同 id 的插件(先扫者胜)', () => {

@@ -1,6 +1,6 @@
 # Vault queries, file events, binary assets, the working folder and templates
 
-Moved out of SKILL.md (2026-11-23) verbatim. Deeper contracts: references/vault-files-and-templates.md, references/work-folder-migration.md.
+Moved out of SKILL.md (2026-11-23) verbatim. Deeper contracts: references/vault-files-and-templates.md, references/work-folder-migration.md, references/plugin-storage.md (the plugin's own files, outside the vault, 2026-11-26+).
 
 **Where "见下 / 见上 / below" pointers in this file land** (the sections moved apart on 2026-11-23): Selection bar, View modes, Tooltips, Drop indicators, Host parts, Settings parts, dashboard, `ctx.table.mount` → `host-ui-mounts.md`; 没有活动库, 外观开关, dispose 契约, 自绘浮层, pointer math → `view-runtime-rules.md`; 只读全库查询, onVaultEvent, 二进制资源, working folder, Templates and new notes → `vault-and-assets.md`; 前置条件 / onboarding.requires, requiresPlugins, 双语与图标, 上手提示 / guide, 主页小组件 / widgets → `manifest-declarations.md`; 统一左栏列表源, Floating Panel, Startup appearance, 共享账号, Whiteboard, Chat Box, LCL layout → `more-host-apis.md`; 当前模型, Agent 状态 / 名册, 开新对话, Agent Desk, 摘要栏, 自动化 → `tangu-host-apis.md`; 日历叠加源 → `calendar-overlays.md`; 日历 / 待办其余入口 → `calendar-todo-entries.md`; Space 与 Ribbon, 主页宿主件 → `spaces-and-home.md`; 全库多维表与笔记任务 → `databases-note-tasks.md`; 编辑器 / loadData / 块表面 → `note-editor-surfaces.md`; Tool result cards, Process-row sentences → `tool-cards.md`; where a surface's data comes from → `host-data-sources.md`. All in `references/`.
 
@@ -14,7 +14,7 @@ Moved out of SKILL.md (2026-11-23) verbatim. Deeper contracts: references/vault-
 | `listFiles()` | 文件树可见的非笔记文件。⚠️遍历**跳过一切点目录/点文件** → 经 `saveAsset()` 落进 `.amadeus/` 的页面附件枚举不到,**别声称「库里所有图片」** |
 | `searchVault(q)` | 全库笔记全文检索。⚠️**最多 50 条且可能截断**,要穷举别靠它;`line` 是剥掉 frontmatter 后的行号**不是磁盘坐标**;`score` 不透明,跨版本不保证稳定 |
 | `vaultRoot()` | 库的绝对路径(把路径喂给 Agent 的 host 工具时才需要)。⚠️含用户名/组织目录等**敏感信息,不得默认持久化或上报**;切库瞬间与主进程短暂不同源,**别缓存过夜** |
-| `reveal(path)` | 在系统文件管理器里打开该路径所在目录并高亮它(2026-08-29 起)。⚠️对**不存在**的路径是静默 no-op,而工作文件夹是首写才诞生 → **先 `writeFile` 一份 README 再 reveal 它**;桥缺席时整条方法不存在,`if (ctx.app.reveal)` 才画按钮 |
+| `reveal(path)` | 在系统文件管理器里打开该路径所在目录并高亮它(2026-08-29 起)。⚠️对**不存在**的路径是静默 no-op,而工作文件夹是首写才诞生 → **先 `writeFile` 一份 README 再 reveal 它**(只给「用户要往里放素材」的插件,见下「工作文件夹」);桥缺席时整条方法不存在,`if (ctx.app.reveal)` 才画按钮 |
 | `platformAccounts` | 平台登录(2.13.8 起,只有桌面端;其它端 / 旧宿主整个 `undefined` → 不画账号入口)。`status(p)` / `connect(p)`(只在用户点击时调,弹平台自己的登录页) / `pasteCookie(p, text)` / `disconnect(p)` / `cookie(p)`(没授权过的插件宿主先弹框问;没登录 / 拒绝 → null)。目前只有 `'bilibili'`。⚠️登录信息**别**写进库、日志、插件数据、提示词:交给 Agent 脚本用 `POST /agent/runs` 的 `secret_env: { NAME: cookie }`(只在内存、只给这次 run 的 run_bash,输出里出现会被打码,远程 run 丢弃;名字全大写,不能用 PATH / TANGU_* / FORSION_*);提示词只说「变量已设好、别打印」。详见插件手册「平台账号与登录信息」 |
 | `trash(path)` | 把库内的一个文件或文件夹移进回收站(2026-10-05 起),等同用户在文件树里删它:宿主收掉开着它的编辑器与标签、提示「已移入回收站」,之后可在回收站恢复。返回 Promise,路径不存在 / 没有活动库 / 调用途中换了库 / 移动失败 → **reject**(路径按清单逐字匹配,只归一分隔符与首尾斜杠)。⚠️**文件夹连同里面的一切一起走,宿主不确认、也不看里面是不是别人的文件** —— 只在确认那个文件夹里全是你自己的东西时才传文件夹,否则传文件;⚠️**先让自己的编辑器停笔**(你的视图若还握着待存内容,下一次自动保存会把文件写回来);只有带回收站的宿主(本机桌面)才有这个方法,web / 移动端 / 2.12.2 及更早**整个不存在** → `ctx.app.trash` 没有就别画删除按钮 |
 
@@ -39,7 +39,7 @@ Moved out of SKILL.md (2026-11-23) verbatim. Deeper contracts: references/vault-
 const buf = await fetch(`amadeus-asset://v/${encodeURIComponent(vaultRel)}`).then((r) => r.arrayBuffer())
 ```
 
-按 vault 夹紧(越界 403)、支持 Range、`<img>`/`<video>` 也能当 `src`。⚠️**需要 Forsion ≥ 2.9.0**(CSP 的 connect-src 放行它是 2.9.0 才进的,2.8.1 及更早没有)—— 更早版本 CSP 的 `connect-src` 没放行它,症状是「`<img>` 能显示、fetch 一律 `Failed to fetch`」。文件让用户放进 `ctx.app.workFolder()`,`ctx.app.listFiles?.()` 列出来;**别随包分发大资产或有版权的第三方资产**。仪器:desktop 的 `npm run check:assetfetch`。
+按 vault 夹紧(越界 403)、支持 Range、`<img>`/`<video>` 也能当 `src`。⚠️**需要 Forsion ≥ 2.9.0**(CSP 的 connect-src 放行它是 2.9.0 才进的,2.8.1 及更早没有)—— 更早版本 CSP 的 `connect-src` 没放行它,症状是「`<img>` 能显示、fetch 一律 `Failed to fetch`」。用户自己放、自己管的素材让用户放进 `ctx.app.workFolder()`,`ctx.app.listFiles?.()` 列出来;插件自己生成、下载、缓存的文件放 `ctx.storage`,显示用 `ctx.storage.url(path)`(给 `null` 时读字节转 Blob URL),见 [references/plugin-storage.md](references/plugin-storage.md)。**别随包分发大资产或有版权的第三方资产**。仪器:desktop 的 `npm run check:assetfetch`。
 
 **写/读字节(2026-09-19 起)**:`ctx.app.writeBytes?.(path, bytes)` / `ctx.app.readBytes?.(path)`。导入用户选的文件
 不需要宿主的文件对话框 —— 在自己的 DOM 里放 `<input type="file" accept=".vrm,.glb" multiple>`(或拖放区),
@@ -51,6 +51,7 @@ await ctx.app.writeBytes?.(`${ctx.app.workFolder()}/models/${file.name}`, bytes)
 const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.name}`)  // Uint8Array | null
 ```
 
+- 只在笔记要引用它、或卸载后用户还想在库里看到它时写进库;只有插件自己用的导入件(比如只给自家视图用的模型)用 `ctx.storage.write(path, bytes)`,同样收任意字节。
 - 路径口径同 `writeFile`(库相对、越界由宿主钳死);收 `Uint8Array` / `ArrayBuffer` / 任意 TypedArray 视图(按字节原样)。
   没有活动库 → `writeBytes` reject `'No vault is open'`,`readBytes` 给 `null`(见上「没有活动库」表)。
 - ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把你自己这次写当成外部改动回调一次 —— watch 着自己写的文件时,回调里先比一下内容。(`watchFile` 只盯文本配置类文件和 PDF,别的二进制不报。)
@@ -82,7 +83,7 @@ globalName: 'myPlugin', footer: { js: 'return myPlugin.dispose;' }
 
 `ctx.app.readFile/writeFile` use vault-relative paths, can access the whole active vault, reject traversal, and create parent folders on write. Every plugin gets the built-in `workFolder` setting. **New default: `Plugins/<effective-plugin-id>`**, for example `Plugins/bluebird` or `Plugins/diting`; Store IDs remain `market-<UUID>`. Display names and interface language never determine a new storage path. Always use `ctx.app.workFolder()` rather than constructing a path from the manifest, install-folder alias or translated label. A valid manual preference wins, including a Chinese or custom path outside `Plugins/`.
 
-Use Markdown for user-facing notes and hidden sidecars for machine data. Keep default output under `Plugins/`; do not invent other top-level folders or write into the vault root. Re-register the built-in setting key to customize its label/description rather than creating a second storage setting. Changing the user's preference does not move existing data.
+**The work folder is for notes (2026-11-26+)**: put notes the user opens from the file tree there as Markdown, plus the files those notes embed and exports the user asked to save. Machine data does not go into the vault, not even as hidden dot-files: indexes, caches, drafts, snapshots, undo copies, renders, window captures and bundled tools go into `ctx.storage` ([references/plugin-storage.md](references/plugin-storage.md)). The one exception is a small index (a few KB) that only makes sense next to the notes, such as "which note was clipped from which URL": it may stay a dot-file in the work folder. Keep default output under `Plugins/`; do not invent other top-level folders or write into the vault root. Re-register the built-in setting key to customize its label/description rather than creating a second storage setting. Changing the user's preference does not move existing data.
 
 Local hosts may expose `ctx.app.writeFileScoped?(path, text, expectedRoot, { create: true })`. Capture `expectedRoot = ctx.app.vaultRoot()` before starting an asynchronous task. The host validates it under the filesystem lock and rejects a stale-vault write; create-only writes return `false` when the destination exists, successful writes return `true`. Feature-detect: an older host's renderer-side scope checks across awaits do not provide the same main-process guarantee. Keep that weaker fallback explicit and never silently overwrite an export/log name after a create-only conflict.
 
