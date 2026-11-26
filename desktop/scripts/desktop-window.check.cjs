@@ -8,8 +8,12 @@
  *  ⑥ 没声明 desktopWindow / 用户拒过 → 回落成窗口里的 bare 浮层(没有标题行);
  *  ⑦ 主窗藏起来:小窗还在、小窗的帧回调照跑;
  *  ⑧ 插件停用:它的小窗全关、清理跑了;再启用再开回到上次的位置;
- *  ⑨ 主窗重载:小窗全关;⑩ ctx.ui.float('desktop') 照旧报错;⑪ 没有渲染层报错。
- *  授权预置在 userData(探针 = 允许、denied 探针 = 不允许),不弹框;mac 点击交还前台要真鼠标,不在这里量(见方案页第六节)。
+ *  ⑨ 主窗重载:小窗全关;⑩ ctx.ui.float('desktop') 照旧报错;没有渲染层报错。
+ *  另有:子窗页面自己的 moveTo / resizeTo 不认;⑥b 不预置授权的插件第一次开问一次、记住、撤回后关窗并再问(对话框在主进程替用户点);
+ *  ⑪ 开着一扇挪过位置的小窗退出:20 s 内退干净、主进程没有未捕获异常、位置落盘。
+ *  负对照(11-26 实跑红):去掉子窗的 content-bounds-updated 拦截 → resizeTo 把小窗撑到 1512×949,「moveTo / resizeTo 不认」红;
+ *  听写 broadcast 不查 webContents 是否已销毁 → 退出时未捕获异常、错误框卡住退出(修之前的那几轮)。
+ *  授权预置在 userData(探针 = 允许、denied 探针 = 不允许),dw-ask 不预置;mac 点击交还前台要真鼠标,不在这里量(见方案页第六节)。
  *  npx electron-vite build && node ../../.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run check:desktopwindow
  *  隔离的假引擎 / 笔记库 / 插件;不往别的应用发任何输入(鼠标事件是页面里合成的)。 */
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -46,7 +50,7 @@ async function main() {
   fs.writeFileSync(path.join(userData + '-dev', 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault }))
   fs.writeFileSync(path.join(userData + '-dev', 'plugin-desktop-grants.json'), JSON.stringify({ version: 1, grants: { 'dw-probe': 'allow', 'dw-denied': 'deny' } }))
   fs.writeFileSync(path.join(vault, 'Note.md'), '# Note\n')
-  for (const [id, caps] of [['dw-probe', ['desktopWindow']], ['dw-nocap', []], ['dw-denied', ['desktopWindow']]]) {
+  for (const [id, caps] of [['dw-probe', ['desktopWindow']], ['dw-nocap', []], ['dw-denied', ['desktopWindow']], ['dw-ask', ['desktopWindow']]]) {
     const dir = path.join(temp, 'plugins', id)
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ id, name: id, version: '1.0.0', minAppVersion: '0.0.1', capabilities: caps }))
@@ -55,6 +59,7 @@ async function main() {
   const stub = await startStubEngine({ sessions: [] })
   fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'dw-token' }))
   const errors = []
+  let quitMoved = null
   const app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
     env: { ...process.env, TANGU_HOME: temp, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
   try {
@@ -64,14 +69,17 @@ async function main() {
     win.on('pageerror', (e) => errors.push(`main: ${e.message}`))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
     check('main window left onboarding', await skipOnboarding(win))
-    await win.waitForFunction(() => !!window.__dw?.['dw-probe']?.ctx?.workspace?.open && !!window.__dw?.['dw-nocap'] && !!window.__dw?.['dw-denied'], null, { timeout: 30000 })
+    await win.waitForFunction(() => !!window.__dw?.['dw-probe']?.ctx?.workspace?.open && !!window.__dw?.['dw-nocap'] && !!window.__dw?.['dw-denied'] && !!window.__dw?.['dw-ask'], null, { timeout: 30000 })
     // 主进程弹的每个对话框和未捕获异常都记一笔(文字 + 调用栈):退不掉时看是谁弹的,异常在收尾算失败
     await app.evaluate(({ dialog }, file) => {
       const fs = process.getBuiltinModule('fs')
       process.on('uncaughtException', (e) => fs.appendFileSync(file, `uncaughtException: ${e?.stack ?? e}\n\n`))
       for (const k of ['showMessageBox', 'showMessageBoxSync', 'showErrorBox']) {
         const orig = dialog[k].bind(dialog)
-        dialog[k] = (...args) => { const o = args.find((x) => x && typeof x === 'object' && ('message' in x || 'buttons' in x)); fs.appendFileSync(file, `${k}: ${o?.message ?? args[0]}\n${new Error().stack}\n\n`); return orig(...args) }
+        dialog[k] = (...args) => { const o = args.find((x) => x && typeof x === 'object' && ('message' in x || 'buttons' in x)); fs.appendFileSync(file, `${k}: ${o?.message ?? args[0]}\n${new Error().stack}\n\n`)
+          // dw-ask 的第一次询问:替用户点「允许」并计数(没有预置授权的那条真路径)
+          if (k === 'showMessageBox' && String(o?.message ?? '').includes('dw-ask')) { globalThis.__dwAsked = (globalThis.__dwAsked || 0) + 1; return Promise.resolve({ response: 0, checkboxChecked: false }) }
+          return orig(...args) }
       }
     }, path.join(temp, 'dialogs.log'))
     // 记下主进程对每扇窗的 setIgnoreMouseEvents(Electron 没有读回的接口)
@@ -122,6 +130,12 @@ async function main() {
     const resized = await win.evaluate(() => { const d = window.__dw['dw-probe'].views[0].view.desktop; d.resize(99999, 120); return d.bounds() })
     check('resize is clamped to half the work area', resized.width === Math.floor(moved.wa.width / 2), JSON.stringify({ resized, wa: moved.wa }))
     await win.evaluate(() => { const d = window.__dw['dw-probe'].views[0].view.desktop; d.resize(120, 120); d.moveTo(d.workArea().x + 200, d.workArea().y + 200) })
+    await pause(300)
+    const beforeDom = (await desktopWins()).find((w) => w.id === w1.id)?.bounds
+    await win.evaluate(() => { const w = window.__dw['dw-probe'].views[0].pet.ownerDocument.defaultView; w.resizeTo(4000, 4000); w.moveTo(0, 0) })
+    await pause(500)
+    const afterDom = (await desktopWins()).find((w) => w.id === w1.id)?.bounds
+    check("the child page's own moveTo / resizeTo are ignored (only the controller moves it)", JSON.stringify(beforeDom) === JSON.stringify(afterDom), JSON.stringify({ beforeDom, afterDom }))
 
     // ④ 点穿
     mark('④ 点穿')
@@ -173,6 +187,27 @@ async function main() {
         && inWindow.surfaces.every((s) => s === 'floating') && (await desktopWins()).length === 3, JSON.stringify({ rn, rdn, inWindow }))
     await win.screenshot({ path: path.join(shots, 'main-with-fallback.png') })
 
+    // ⑥b 第一次询问(不预置授权)与撤回
+    mark('⑥b 第一次询问与撤回')
+    const grantsFile = path.join(userData + '-dev', 'plugin-desktop-grants.json')
+    const grantOnDisk = () => { try { return JSON.parse(fs.readFileSync(grantsFile, 'utf8')).grants['dw-ask'] ?? null } catch { return 'unreadable' } }
+    const asked = () => app.evaluate(() => globalThis.__dwAsked || 0)
+    const rx = await wopen('dw-ask', { layer: { float: 'desktop' }, form: 'bare', key: 'x' })
+    const ry = await wopen('dw-ask', { layer: { float: 'desktop' }, form: 'bare', key: 'y' })
+    await pause(800)
+    check('first use asks once, remembers allow, a second window does not ask again',
+      rx.ok && rx.layer.float === 'desktop' && ry.ok && ry.layer.float === 'desktop' && (await asked()) === 1 && grantOnDisk() === 'allow' && (await desktopWins()).length === 5,
+      JSON.stringify({ rx, ry, asked: await asked(), grant: grantOnDisk(), n: (await desktopWins()).length }))
+    const revoked = await win.evaluate(() => window.tangu.desktopWindow.revoke('dw-ask'))
+    await pause(800)
+    check('revoke closes its windows and forgets the answer', revoked === true && (await desktopWins()).length === 3 && grantOnDisk() === null,
+      JSON.stringify({ revoked, n: (await desktopWins()).length, grant: grantOnDisk() }))
+    const rx2 = await wopen('dw-ask', { layer: { float: 'desktop' }, form: 'bare', key: 'x' })
+    await pause(600)
+    check('after revoke the next open asks again', rx2.ok && (await asked()) === 2, JSON.stringify({ rx2, asked: await asked() }))
+    await win.evaluate(() => window.tangu.desktopWindow.revoke('dw-ask'))
+    await pause(600)
+
     // ⑦ 主窗藏起来
     mark('⑦ 主窗藏起来')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !/about:blank/.test(w.webContents.getURL()) && !/window=/.test(w.webContents.getURL()))?.hide())
@@ -218,6 +253,15 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
     await pause(1000)
     check('reloading the main window closes the desktop windows', (await desktopWins()).length === 0)
+
+    // ⑪ 带着一只开着的宠物退出:先开一扇、挪个位置,收尾时退出要干净、位置要落盘
+    mark('⑪ 开着小窗退出')
+    await win.waitForFunction(() => !!window.__dw?.['dw-probe']?.ctx?.workspace?.open, null, { timeout: 30000 })
+    const rq = await wopen('dw-probe', { layer: { float: 'desktop' }, form: 'bare', key: 'q', size: { width: 120, height: 120 } })
+    await pause(800)
+    quitMoved = await win.evaluate(() => { const d = window.__dw['dw-probe'].views.at(-1).view.desktop; d.moveTo(d.workArea().x + 300, d.workArea().y + 250); return d.bounds() })
+    await pause(300)
+    check('a desktop window is open going into quit', rq.ok && (await desktopWins()).length === 1, JSON.stringify(rq))
   } finally {
     check('no renderer errors', errors.length === 0, errors.join(' | '))
     mark('closing')
@@ -231,6 +275,11 @@ async function main() {
       try { process.kill(pid, 'SIGKILL') } catch {}
     }
     check('the app quits within 20 s', closed)
+    if (quitMoved) {
+      let saved = null
+      try { saved = JSON.parse(fs.readFileSync(path.join(temp, 'userdata-dev', 'plugin-desktop-windows.json'), 'utf8')).bounds['dw-probe#q'] } catch { /* 没写 */ }
+      check('quitting with a window open saves where it was moved', !!saved && saved.x === quitMoved.x && saved.y === quitMoved.y, JSON.stringify({ saved, quitMoved }))
+    }
     // 主进程的未捕获异常:台架接住了(否则 Electron 弹错误框、退出卡死),这里照样算失败(11-26 抓到听写 broadcast 往已销毁的 webContents send)
     let uncaught = ''
     try { uncaught = fs.readFileSync(path.join(temp, 'dialogs.log'), 'utf8').split('\n\n').filter((b) => b.startsWith('uncaughtException')).join('\n\n') } catch { /* 没有记录 = 没有 */ }

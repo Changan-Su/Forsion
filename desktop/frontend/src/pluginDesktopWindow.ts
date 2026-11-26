@@ -49,10 +49,10 @@ function wire(a: Api): void {
   if (wired) return
   wired = true
   a.onClosed((id) => byId.get(id)?.close())
-  a.onScreensChanged((screens) => { latestScreens = screens; for (const fn of screenListeners) fn() })
+  a.onScreensChanged((screens, placed) => { latestScreens = screens; for (const fn of screenListeners) fn(placed ?? {}) })
 }
 let latestScreens: DesktopScreen[] = []
-const screenListeners = new Set<() => void>()
+const screenListeners = new Set<(placed: Record<string, DesktopRect>) => void>()
 
 /** 样式与 <html> 属性跟主窗走:克隆 head 里全部 style / link,主窗 head 一变(换主题、插件 addStyle)就重来一遍。 */
 function mirrorTheme(child: Window): () => void {
@@ -169,16 +169,17 @@ function mount(
   const check = (): void => { if (!alive) throw new Error('Desktop window has been closed') }
   const layout = (): PluginViewLayout => ({ width: bounds.width, height: bounds.height, visible: true, compact: false, phase: 'settled' })
   const screens = (): DesktopScreen[] => latestScreens
-  const apply = (next: DesktopRect, notify = true): void => {
+  /** push = false:主进程已经摆好了(换屏),只照收、不回送 —— 回送会走「用户 / 插件摆的」那条路,把临时位置记下来。 */
+  const apply = (next: DesktopRect, notify = true, push = true): void => {
     const resized = next.width !== bounds.width || next.height !== bounds.height
     const moved = next.x !== bounds.x || next.y !== bounds.y
     if (!resized && !moved) return
     bounds = next
-    a.setBounds(id, next)
+    if (push) a.setBounds(id, next)
     if (notify) for (const fn of boundsListeners) fn({ ...bounds })
     if (resized) for (const fn of layoutListeners) fn(layout())
   }
-  const reclamp = (): void => { if (alive) apply(clampDesktopBounds(bounds, screens())) }
+  const reclamp = (placed: Record<string, DesktopRect>): void => { const p = placed[id]; if (alive && p) apply({ ...p }, true, false) }
   screenListeners.add(reclamp)
 
   // ── 点穿:'shape' = 鼠标在视图里的元素上才接住,空白处落到下面的应用;'none' = 整扇接住;'all' = 整扇点穿 ──

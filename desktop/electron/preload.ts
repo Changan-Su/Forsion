@@ -717,8 +717,8 @@ const api = {
       ipcRenderer.on('desktopWindow:closed', listener)
       return () => ipcRenderer.removeListener('desktopWindow:closed', listener)
     },
-    onScreensChanged: (cb: (screens: import('../shared/desktopWindow').DesktopScreen[]) => void): (() => void) => {
-      const listener = (_e: unknown, screens: import('../shared/desktopWindow').DesktopScreen[]): void => cb(screens)
+    onScreensChanged: (cb: (screens: import('../shared/desktopWindow').DesktopScreen[], placed: Record<string, import('../shared/desktopWindow').DesktopRect>) => void): (() => void) => {
+      const listener = (_e: unknown, screens: import('../shared/desktopWindow').DesktopScreen[], placed?: Record<string, import('../shared/desktopWindow').DesktopRect>): void => cb(screens, placed ?? {})
       ipcRenderer.on('desktopWindow:screensChanged', listener)
       return () => ipcRenderer.removeListener('desktopWindow:screensChanged', listener)
     },

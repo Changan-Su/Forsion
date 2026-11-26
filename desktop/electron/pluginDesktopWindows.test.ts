@@ -285,6 +285,9 @@ describe('11-26 评审补的几条', () => {
     screens = [screen]
     m.screensChanged()
     expect((win!.bounds as { x: number }).x).toBeLessThanOrEqual(1440 - 32)
+    // 夹过的位置推给渲染层照收(渲染层不回送 setBounds,见 pluginDesktopWindow.test「换屏」)
+    const pushed = mainWc.sent.find((s) => s[0] === 'desktopWindow:screensChanged') as [string, unknown, Record<string, unknown>]
+    expect(pushed[2][r.ok ? r.id : '']).toEqual(win!.bounds)
     win!.close()
     expect(JSON.parse(fs.readFileSync(path.join(dir, POSITIONS_FILE), 'utf8')).bounds['pet#']).toMatchObject({ x: 2000, y: 300 })
     screens = [screen, side]

@@ -1770,7 +1770,7 @@ const deferredEngineRestart = createDeferredRestart({
   restart: () => (isQuitting ? Promise.resolve() : ensureBackend('engine_restart')),
   onDeferred: () => {
     console.log('[tangu-desktop] engine restart deferred until running tasks finish')
-    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('backend:restartDeferred')
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('backend:restartDeferred')
   },
 })
 
@@ -3597,7 +3597,7 @@ app.whenReady().then(async () => {
     },
     broadcast: (status) => {
       storeUpdateTele(status)
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
   // The updater asks the source table whether an item's source is gone before swapping in a staged update.
@@ -3651,7 +3651,7 @@ app.whenReady().then(async () => {
     ],
     enabled: app.isPackaged,
     broadcast: (status) => {
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('updater:core-status', status)
     },
     run: async (report) => {
       // 匿名遥测 update:引擎 npm 热更新 / 内置插件 npm 更新查完的结论(current / staged / incompatible / error;报错原文只拿来归类)

@@ -1086,7 +1086,7 @@ declare global {
         grant(pluginId: string): Promise<import('../../shared/desktopWindow').DesktopWindowGrant>
         revoke(pluginId: string): Promise<boolean>
         onClosed(cb: (id: string) => void): () => void
-        onScreensChanged(cb: (screens: import('../../shared/desktopWindow').DesktopScreen[]) => void): () => void
+        onScreensChanged(cb: (screens: import('../../shared/desktopWindow').DesktopScreen[], placed: Record<string, import('../../shared/desktopWindow').DesktopRect>) => void): () => void
       }
       openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
       floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>

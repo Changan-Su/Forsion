@@ -350,8 +350,11 @@ export function createPluginDesktopWindows(d: PluginDesktopDeps) {
         e.win!.setBounds(next)
       }
     }
+    // 夹过的位置一并推给渲染层,由它照收(不回送 setBounds:那条路是「用户 / 插件摆的」,会把临时位置记成用户位置)
+    const placed: Record<string, DesktopRect> = {}
+    for (const e of entries.values()) if (live(e)) placed[e.id] = { ...e.bounds }
     const m = d.mainContents()
-    if (m && !m.isDestroyed()) m.send('desktopWindow:screensChanged', screens)
+    if (m && !m.isDestroyed()) m.send('desktopWindow:screensChanged', screens, placed)
   }
 
   function setHidden(hidden: boolean): void {

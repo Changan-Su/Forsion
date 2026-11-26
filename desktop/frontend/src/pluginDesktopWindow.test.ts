@@ -156,6 +156,19 @@ describe('挂进子窗', () => {
     await openPluginDesktopWindow(req())
     expect(late).toHaveBeenCalledTimes(1)
   })
+  it('换屏:照收主进程夹好的位置、通知插件,不回送 setBounds(回送会把临时位置记成用户摆的)', async () => {
+    setup()
+    await openPluginDesktopWindow(req())
+    const d = mounted!.view.desktop!
+    const moves: unknown[] = []
+    d.onBounds((b) => moves.push(b))
+    api.setBounds.mockClear()
+    const cb = api.onScreensChanged.mock.calls[0][0] as (s: DesktopScreen[], placed: Record<string, unknown>) => void
+    cb([screen], { dw1: { x: 1200, y: 600, width: 160, height: 160 } })
+    expect(d.bounds()).toEqual({ x: 1200, y: 600, width: 160, height: 160 })
+    expect(moves).toHaveLength(1)
+    expect(api.setBounds).not.toHaveBeenCalled()
+  })
   it('鼠标停着不动、宠物自己走到底下:定时再判一次,接住', async () => {
     setup()
     await openPluginDesktopWindow(req())
