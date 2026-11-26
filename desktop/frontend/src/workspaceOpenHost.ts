@@ -10,6 +10,7 @@
 import { getView, setDesktopOpener, useWorkspace, workspaceOpen, type OpenOptions, type OpenResult, type OpenTarget, type ViewLocation } from '@lcl/engine'
 import { openMiniWindow } from './mini/openMiniWindow'
 import { openWebFloatingPanel } from './pluginPanelSeam'
+import { desktopBareOpener } from './pluginDesktopWindow'
 import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
 
 let installed = false
@@ -19,7 +20,10 @@ export function installWorkspaceOpenHost(): void {
   installed = true
   const t = window.tangu
   const mobile = !!(t as { mobile?: boolean } | undefined)?.mobile
+  // 插件桌面小窗(form 'bare',2026-11-26):桌面端才有;主窗真开,别的卫星窗只回报(pluginDesktopWindow.ts)
+  const bare = mobile ? null : desktopBareOpener()
   setDesktopOpener({
+    ...(bare ? { bare } : {}),
     ...(t?.openMini ? {
       mini: async (req) => {
         const r = await openMiniWindow({

@@ -118,3 +118,50 @@ it.each([
     expect(stored.find((r: any) => r.tool_call_id === id).content).toBe(result.content);
   }
 }, 15_000);
+
+// 11-23:frontmatter disable-model-invocation: true —— 用户经 /skill(requestedSkillIds)点名的那一轮,真循环里 use_skill 放行;
+// 没点名时模型自己装载被拒。钉的是 agentLoop 把这一轮的点名交给工具上下文(漏了就是「点了也装不上」)。
+it.each([{ requested: true }, { requested: false }])('user-invoked-only skills load only when the user named them this turn: %j', async ({ requested }) => {
+  const gated = { id: 'local:setup-kit', name: 'setup-kit', description: 'one-time setup', content: 'SETUP_BODY', disableModelInvocation: true };
+  const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
+  db.exec(toSqliteDDL(STANDALONE_SCHEMA));
+  configureTangu({ host, profile: createTanguProfile({ sandboxMode: 'none', toolBuiltins: ['use_skill'] }),
+    brain: {
+      assets: { getSkill: async (id: string) => (id === gated.id ? gated : null), listSkills: async () => [gated] },
+      llm: {
+        resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', contextWindow: 200_000 }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+        buildProviderPayload: async (o: any) => ({ messages: structuredClone(o.messages), tools: o.tools }),
+        streamProviderCompletion: async (o: any) => {
+          if (o.onToken) {
+            payloads.push(o.payload.messages);
+            if (payloads.length === 1) return { content: '', toolCalls: [{ id: 'gated-call', type: 'function', function: { name: 'use_skill', arguments: JSON.stringify({ skill_id: gated.id }) } }], usage: { prompt_tokens: 100, completion_tokens: 10 }, finishReason: 'tool_calls' };
+            o.onToken('Done.');
+          }
+          return { content: 'Done.', toolCalls: [], usage: { prompt_tokens: 100, completion_tokens: 2 }, finishReason: 'stop' };
+        },
+      },
+      users: { getUserById: async () => ({ id: 'u1', username: 'u' }) }, memory: { getMemory: async () => ({ content: '' }) }, models: { hasDirectModel: () => false },
+    } as any,
+    billing: { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} } as any,
+  });
+  await runMigration();
+  await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('S', 'u1', 'tangu', 't', 'm1', 'user')`);
+  runId = `gated-${requested}`;
+  await createRun({ id: runId, sessionId: 'S', userId: 'u1', appId: 'tangu', modelId: 'm1', assistantMessageId: 'A1',
+    input: { message: 'Set things up.', userMessageId: 'U1', attachments: [], agentConfig: {
+      execMode: 'host', cwd: home, approvalMode: 'readonly', compaction: { enabled: false }, ...(requested ? { requestedSkillIds: [gated.id] } : {}),
+    } } });
+  const done = new Promise<void>((resolve, reject) => {
+    const off = subscribe(runId, event => {
+      if (event.type === 'error') { off(); reject(new Error(JSON.stringify(event.payload))); }
+      if (event.type === 'done') { off(); resolve(); }
+    });
+  });
+  enqueueRun('S', runId);
+  await done; await waitForRunSettlement(runId, 2000);
+  const system = String(payloads[0].find((m: any) => m.role === 'system')?.content || '');
+  expect(system).not.toContain('local:setup-kit'); // 不进 Available Skills 目录
+  const result = String(payloads[1].find((m: any) => m.role === 'tool' && m.tool_call_id === 'gated-call')?.content || '');
+  if (requested) expect(result).toContain('SETUP_BODY');
+  else { expect(result).toContain('runs only when the user invokes it'); expect(result).not.toContain('SETUP_BODY'); }
+}, 15_000);

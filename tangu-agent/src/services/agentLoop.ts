@@ -2848,6 +2848,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
       noChildSessions: agentConfig.noChildSessions === true || undefined, // 会话设置「不开子会话」:start_session / delegate 不进工具表
+      userInvokedSkillIds: skillLoadout.requested.map((s) => s.id),
       remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
@@ -3656,6 +3657,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const approvalTurn = activeUserTurn();
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
+        approvalTurnIsCurrent: () => approvalTurn !== undefined && approvalTurn === activeUserTurn(),
         approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray && !ptc, remote, disableHooks: automationDraft,
         // 无人值守(自动化 / Muse):没人能答审批卡 —— 保护路径写入直接拒(Muse ask/agent 档另有 approvalDeferral 排队通道)。
         unattended: (typeof agentConfig.automationOrigin === 'string' && !!agentConfig.automationOrigin) || input.background === 'muse',
@@ -3679,7 +3681,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 没带 = 用户在审批卡或通道里点了拒绝(中止在上一行已抛 AbortLikeError,不会走到这里)。
         return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON, ptc?.parentCallId);
       }
-      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect, ptc, decision.userConfirmed ? approvalTurn : undefined);
+      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText, decision.writeProtect, ptc, decision.userConfirmed ? approvalTurn ?? null : undefined);
     };
     // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
     const withArgsOverride = (effCall: ToolCall, d: ApprovalDecision): ToolCall => (d.argsOverride
@@ -3687,7 +3689,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : effCall);
     // 放行之后的执行段:执行 → 封顶 → tool_result → PostToolUse。常规调用与「挂起后被批准」的调用共用这一条路。
     // writeProtect:闸门按 known-safe 放行的 git 读命令(没人看过卡)→ 这一次在写拒绝 profile 里跑(G5 方案 B,macOS、宿主沙箱关)。
-    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }, approvedTurn?: string): Promise<ExecutedToolCall> => {
+    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string, writeProtect?: boolean, ptc?: { parentCallId: string; signal: AbortSignal }, approvedTurn?: string | null): Promise<ExecutedToolCall> => {
       (ptc?.signal ?? ac.signal).throwIfAborted();
       // 意图先落盘(E2):执行前把「已开始」写进这一行 —— 崩在执行中,下次回放说「结局不明,先核对」,而不是「没跑过」。
       // 只读程序里嵌套的调用(ptc)不在 allToolCalls 里,不记。
@@ -3698,7 +3700,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (!started) return mkRejected(call, startedAt, parallelGroup, CALL_NOT_STARTED_RESULT);
       }
       const turn = activeUserTurn();
-      const executionContext = { ...toolCtx, userTurnId: turn, userTurnSignal: turn ? scope.lifetime.signal : undefined, userConfirmedCall: !!turn && turn === approvedTurn, ...(execCall.function.name === 'web_search' ? { modelId: searchModelId } : {}), toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
+      // No approval is needed in an unrestricted session. An interactive approval,
+      // however, cannot inherit the next turn's live signal when a parked call resumes.
+      const currentApproval = approvedTurn === undefined || approvedTurn === turn;
+      const userTurnSignal = currentApproval ? (turn ? scope.lifetime.signal : undefined) : AbortSignal.abort();
+      const executionContext = { ...toolCtx, userTurnId: currentApproval ? turn : undefined, userTurnSignal, userConfirmedCall: !!turn && turn === approvedTurn, ...(execCall.function.name === 'web_search' ? { modelId: searchModelId } : {}), toolCallId: call.id, ...(writeProtect ? { writeProtectShell: true } : {}), ...(ptc ? { ptcRead: true, signal: ptc.signal } : handoffAllowed() ? { steerHandoff } : {}) };
       const result = await executeTool(execCall, executionContext);
       // 入列时定型(append-only):普通数据缩为可回读预览;按需加载的技能指令保留源工具限额内全文。
       // 类别来自引擎工具声明,不是调用参数/返回正文;隐私占位和 PTC 仍先走各自边界。
@@ -3878,7 +3884,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || PARKED_USER_REJECT_REASON);
         } else {
           try {
-            done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText, undefined, undefined, d.userConfirmed ? e.approvalTurn : undefined);
+            done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText, undefined, undefined, d.userConfirmed ? e.approvalTurn ?? null : undefined);
             status = done.toolResult.isError ? 'failed' : 'approved';
             // 「已开始」没落上库 → 没执行(评审 #4):别说成「跑了、失败了」
             notStarted = done.toolResult.content === CALL_NOT_STARTED_RESULT;

@@ -34,6 +34,13 @@ export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?, 
   // 引擎插件页并进统一插件页。此前靠 SettingsModal 里一个 effect 重定向,但 'plugins' 不在 tabItems 里、
   // 先被兜底成第一页,effect 永远等不到它 —— `/plugins` 一直落在「常规」。
   plugins: ['amadeus-plugins'],
+  // 提供方并进「模型与服务」(11-26);联网搜索的旧落点 model/m-websearch 由搜索索引认、SettingsModal 切到它的标签
+  'model/m-providers': ['model', 'm-display'],
+}
+
+/** 提供方、联网搜索 11-26 并进「模型与服务」(m-display):旧子页 id 一律落到它(联网搜索另切到它的标签,见 SettingsModal 的 openSubPage / libKind 初值)。 */
+export function modelSubAlias(sub: string): string {
+  return sub === 'm-providers' || sub === 'm-websearch' ? 'm-display' : sub
 }
 
 export interface ResolvedSettingsTarget {

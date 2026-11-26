@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 // LCL 表面规范第四期:桌面作用域(浮在别的应用上)与跨应用写字只给首方。钉两件事:
 //  ① 插件的 ctx.ui.float 没有桌面档 —— 传 'desktop' 同步抛错,不悄悄退成窗口作用域;ctx 上也没有任何听写 / 写字的口子。
+//     2026-11-26 改了一半(插件桌面小窗方案,用户按建议定):插件能开桌面小窗了,但只有一条路 —— manifest 声明 desktopWindow、
+//     ctx.workspace.open(view, { layer: { float: 'desktop' }, form: 'bare' }),第一次用时问用户(规则在 pluginDesktopWindow.test /
+//     electron/pluginDesktopWindows.test)。ctx.ui.float('desktop') 照旧抛错,ctx 上不另开别的桌面窗口子;听写仍只给首方。
 //  ② 代码内注册的内置插件标了 defaultOff(全局语音输入):这台设备第一次见到时记成关,之后用户怎么拨算怎么,
 //     「见过」清单读不出来时这次按关算、但不写回。
 // 负对照(已实跑红):seedDefaultOff 不记「见过」→ ②「用户打开后不会被关回去」红;读失败分支改成 return disabled → ②「读不出来」红。
@@ -30,6 +33,10 @@ describe('desktop scope stays first-party', () => {
     expect(ctx.dictation).toBeUndefined()
     expect((ctx.app as Record<string, unknown>).dictation).toBeUndefined()
     expect((ctx.ui as Record<string, unknown>).desktopFloat).toBeUndefined()
+    // 桌面小窗只走 workspace.open(bare),ctx 上不另给开窗口子
+    expect(ctx.desktopWindow).toBeUndefined()
+    expect(ctx.desktop).toBeUndefined()
+    expect((ctx.ui as Record<string, unknown>).desktopWindow).toBeUndefined()
   })
 })
 

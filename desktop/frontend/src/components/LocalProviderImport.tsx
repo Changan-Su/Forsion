@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom'
 import { Download, Plus, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { CapabilityMenu } from './CapabilityMenu'
-import { SettingsRow } from './SettingsPrimitives'
+import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 import type { DirectProviderConfig, LocalProviderCandidate } from '../types'
 
 registerMessages({
@@ -36,7 +36,8 @@ const IGNORED_KEY = 'forsion.providerImport.ignored'
 const readIgnored = (): string[] => { try { const v = JSON.parse(localStorage.getItem(IGNORED_KEY) || '[]'); return Array.isArray(v) ? v : [] } catch { return [] } }
 const writeIgnored = (ids: string[]) => { try { localStorage.setItem(IGNORED_KEY, JSON.stringify(ids.slice(-200))) } catch { /* 存不了:下次还提示 */ } }
 
-export function LocalProviderImport({ providers, onManual, onImported }: { providers: DirectProviderConfig[]; onManual: () => void; onImported: (list: DirectProviderConfig[]) => void }) {
+/** foundOnly(模型与服务页,11-26):只在真找到可导入的配置时出一张卡,不再画「添加连接」菜单(添加连接在页顶的来源胶囊里)。 */
+export function LocalProviderImport({ providers, onManual, onImported, foundOnly }: { providers: DirectProviderConfig[]; onManual?: () => void; onImported: (list: DirectProviderConfig[]) => void; foundOnly?: boolean }) {
   const { t } = useI18n()
   const scan = window.tangu?.scanLocalProviders
   const [found, setFound] = useState<LocalProviderCandidate[]>([])
@@ -52,24 +53,27 @@ export function LocalProviderImport({ providers, onManual, onImported }: { provi
   const imported = (list: DirectProviderConfig[]) => { setDialog(null); onImported(list) }
   const rescan = () => void scan?.(true).then(setFound).catch(() => {})
 
-  return <>
-    {fresh.length > 0 && <SettingsRow label={t('provimp.found', { n: fresh.length })}
+  const foundRow = fresh.length > 0 && <SettingsRow label={t('provimp.found', { n: fresh.length })}
       description={t('provimp.foundHint', { list: countOf(fresh).map(([source, n]) => t('provimp.count', { source, n })).join(' · ') })}
       control={<div className="provider-import-actions">
         <button type="button" className="btn ghost sm" onClick={ignore}>{t('provimp.ignore')}</button>
         <button type="button" className="btn ghost sm" onClick={() => setDialog('all')}><Download size={13} /> {t('provimp.open')}</button>
-      </div>} />}
+      </div>} />
+  const dialogEl = dialog && <ImportDialog list={dialog === 'all' ? fresh : found.filter((c) => c.source === dialog)} onClose={() => setDialog(null)} onImported={imported} onStale={rescan} />
+  if (foundOnly) return <>{foundRow && <SettingsPanel icon={<Download size={14} />} title={t('provimp.title')}>{foundRow}</SettingsPanel>}{dialogEl}</>
+  return <>
+    {foundRow}
     <div className="provider-add">
       {scan ? <CapabilityMenu label={t('prov.add')} className="btn ghost sm" items={[
-        { id: 'manual', label: t('provimp.manual'), icon: <Plus size={14} />, onSelect: onManual },
+        ...(onManual ? [{ id: 'manual', label: t('provimp.manual'), icon: <Plus size={14} />, onSelect: onManual }] : []),
         ...SOURCES.map(([k, name]) => {
           const n = found.filter((c) => c.source === k).length
           return { id: k, label: name, icon: <Download size={14} />, hint: n ? t('provimp.n', { n }) : t('provimp.none'), disabled: !n, onSelect: () => setDialog(k) }
         }),
       ]}><Plus size={13} /> {t('prov.add')}</CapabilityMenu>
-        : <button className="btn ghost sm" onClick={onManual}><Plus size={13} /> {t('prov.add')}</button>}
+        : onManual && <button className="btn ghost sm" onClick={onManual}><Plus size={13} /> {t('prov.add')}</button>}
     </div>
-    {dialog && <ImportDialog list={dialog === 'all' ? fresh : found.filter((c) => c.source === dialog)} onClose={() => setDialog(null)} onImported={imported} onStale={rescan} />}
+    {dialogEl}
   </>
 }
 

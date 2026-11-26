@@ -10,7 +10,8 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ChevronRight, Bot, Lock, Search, Settings2 } from 'lucide-react'
+import { useApp } from '../stores/appStore'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu, useSubPanelFlow } from '@lcl/engine'
 import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
@@ -67,6 +68,7 @@ registerMessages({
   'pill.locked': { zh: '升级后可用', en: 'Upgrade to use' },
   'pill.lockTip': { zh: '当前会员档位不能使用 {name}。升级会员或换一个模型。', en: "Your current plan can't use {name}. Upgrade your membership or pick another model." },
   'pill.lockUpgrade': { zh: '升级会员', en: 'Upgrade membership' },
+  'pill.manageModels': { zh: '管理模型…', en: 'Manage models…' },
   // 算得出最低够用的档位时(services/upgradeTier,按服务端公开方案的倍率上限算)代替上面两条;算不出回落上面两条
   'pill.lockedTier': { zh: '{tier} 起可用', en: 'Available from {tier}' },
   'pill.lockTipTier': { zh: '当前会员档位不能使用 {name}。升级到 {tier} 或以上即可，也可以换一个模型。', en: "Your current plan can't use {name}. Upgrade to {tier} or higher, or pick another model." },
@@ -272,6 +274,53 @@ const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
+/**
+ * 模型胶囊第三档(用户 11-17 定 3A):缩写档(卡宽 ≤480,useComposerLayout)还放不下 —— 缩写被截断或底行溢出 —— 就只剩图标。
+ * 回到缩写要看底行的 .t2c-grow 空出来的宽度够不够换回去(多留 12px 回滞,防在临界宽度来回跳)。
+ * 判据是「这一行放不放得下」而不是固定宽度:左边多一个芯片(Agent、权限)也会触发。
+ */
+function usePillIconTier(wrapRef: React.RefObject<HTMLSpanElement | null>, compact: boolean, labelKey: string): boolean {
+  const [icon, setIcon] = useState(false)
+  const need = useRef(0)
+  useLayoutEffect(() => {
+    if (!compact) { setIcon(false); return }
+    const wrap = wrapRef.current
+    const row = wrap?.closest<HTMLElement>('.t2c-row')
+    if (!wrap || !row) return
+    // 名字 / 档位变了:上一次记的「缩写要多宽」作废,先回缩写档按新内容重判
+    need.current = 0
+    const check = (): void => {
+      const btn = wrap.querySelector<HTMLElement>('.model-pill-btn')
+      if (!btn) return
+      const spare = row.querySelector<HTMLElement>(':scope > .t2c-grow')?.offsetWidth ?? 0
+      if (wrap.dataset.tier !== 'icon') {
+        const label = wrap.querySelector<HTMLElement>('.model-pill-compact')
+        // 截断发生在里面那段带省略号的名字上(外层 inline-flex 自己不溢出),逐段量。
+        // 长名字在缩写档本来就被 180px 上限截短 —— 那不算放不下:只有这一行已经没空余(spare≈0)时的截断才降档。
+        const cut = label ? Math.max(label.scrollWidth - label.clientWidth, ...[...label.children].map((c) => c.scrollWidth - c.clientWidth)) : 0
+        const spill = row.scrollWidth - row.clientWidth
+        if ((cut > 1 && spare < 1) || spill > 1) {
+          // 要换回缩写得空出多宽:截掉的那截加回来,但不超过缩写档自己的上限(max-width 180,再长本来就省略)
+          const cap = parseFloat(getComputedStyle(wrap).maxWidth) || Infinity
+          need.current = Math.min(btn.offsetWidth + Math.max(cut, spill, 0), cap)
+          setIcon(true)
+        }
+        return
+      }
+      if (spare >= need.current - btn.offsetWidth + 12) setIcon(false)
+    }
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(row)
+    ro.observe(wrap)
+    // 图标档下 wrap 定宽、row 随卡片:停止钮 / 芯片消失只让空位变宽,不观察它就回不到缩写档(评审 11-17)
+    const grow = row.querySelector<HTMLElement>(':scope > .t2c-grow')
+    if (grow) ro.observe(grow)
+    return () => ro.disconnect()
+  }, [wrapRef, compact, labelKey])
+  return compact && icon
+}
+
 /** Prompt hosts can sit anywhere in a scrolling View; their menus escape its clipping context. */
 export const ModelPill: React.FC<{
   className?: string
@@ -372,7 +421,7 @@ export const ModelPill: React.FC<{
   const subRef = useRef<HTMLDivElement>(null)
   const hoverTimer = useRef(0)
   const cancelHover = (): void => window.clearTimeout(hoverTimer.current)
-  const menuFix = useEdgeNudge(open && !menuPortal && !compact, { boundary: '.t2-chat-view' })
+  const menuFix = useEdgeNudge(open && !menuPortal && !compact, { boundary: '.t2-chat-view', subPanels: true })
   const subFix = useEdgeNudge(pane && !compact ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
@@ -496,6 +545,7 @@ export const ModelPill: React.FC<{
   const compactName = (baseName || label).replace(/^gpt-[0-9.]+-(luna|sol|astra|terra)$/i, (_, name: string) => name[0].toUpperCase() + name.slice(1))
   const compactEffort = isUltra ? 'Ultra' : ({ off: '', minimal: 'Min', low: 'L', medium: 'M', high: 'H', xhigh: 'XH', max: 'Max' } as const)[effLevel]
   const effort = `${effLevel !== 'off' ? ` · ${effortText}` : ''}${fastOn ? ` · ${speedTag}` : ''}`
+  const iconOnly = usePillIconTier(wrapRef, compact, `${compactName}|${compactEffort}|${fastOn}|${currentLocked}`)
   const lastStop = THINKING_LEVELS.length - (allowUltra ? 0 : 1)
   const effortIndex = isUltra ? lastStop : Math.max(0, THINKING_LEVELS.indexOf(effLevel))
   const effortPct = `${(effortIndex / lastStop) * 100}%`
@@ -713,7 +763,7 @@ export const ModelPill: React.FC<{
   }
 
   return (
-    <span ref={wrapRef} className={`model-pill-wrap${expanded ? ' is-open' : ''}${open && !nativeOpen && capsule ? ' t2c-capsule-held' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-cmenu>
+    <span ref={wrapRef} className={`model-pill-wrap${expanded ? ' is-open' : ''}${open && !nativeOpen && capsule ? ' t2c-capsule-held' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-tier={iconOnly ? 'icon' : compact ? 'short' : undefined} data-cmenu>
       <button type="button"
         className={`composer-chip model-pill-btn${expanded ? ' is-open' : ''}${capsule?.retracting ? ' is-retracting' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
         title={`${title || t('input.modelChipTitle')}: ${label}${effort}${currentLocked ? ` · ${lockedNote(current)}` : ''}`}
@@ -733,6 +783,7 @@ export const ModelPill: React.FC<{
             ? <span className="pill-ultra-label"><MarqueeLabel text={label + effort} /><Lock size={11} className="pill-lock" aria-hidden="true" /></span>
             : <MarqueeLabel text={label + effort} />}
         <span className="model-pill-compact" aria-hidden="true"><span>{compactName}</span>{compactEffort && <span className="model-pill-compact-effort"> · {compactEffort}</span>}{fastOn && <span> · {speedTag}</span>}{currentLocked && <Lock size={10} className="pill-lock" />}</span>
+        {currentLocked && <span className="model-pill-corner-lock" aria-hidden="true"><Lock size={9} /></span>}
         <ChevronDown size={10} />
       </button>
       {open && !nativeOpen && (
@@ -936,7 +987,7 @@ export const ModelPill: React.FC<{
                 </>
               ) : (
                 <>
-                  {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
+                  {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search" data-edge-pin><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
                   {slot && (
                     <button type="button"
                       className={`menu-item${paneValue ? '' : ' active'}`}
@@ -993,6 +1044,10 @@ export const ModelPill: React.FC<{
                     </React.Fragment>
                   ))}
                   {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}
+                  {/* 模型与服务(11-26):从模型菜单直达设置里加 / 管模型 */}
+                  {pane === 'model' && <button type="button" className="menu-item cm-manage-models" onClick={() => { setPillOpen(false); useApp.getState().openSettings('model/m-display') }}>
+                    <Settings2 size={13} aria-hidden="true" /><span className="grow">{t('pill.manageModels')}</span>
+                  </button>}
                 </>
               )}
             </div>

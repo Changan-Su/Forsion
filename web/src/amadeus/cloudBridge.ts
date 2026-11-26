@@ -346,7 +346,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
   // ---- 树的 localStorage 快照(冷启动 SWR:先渲染上次的树,真启动后台跑) ----------
   // 单 blob 含 vault id;每次 fetchTree 成功即覆盖。陈旧窗口=到 revalidate 完成的几秒;
-  // 期间点开远端已删的笔记会 create-on-open 复活它(与 wikilink 点击建页同语义,接受的天花板)。
+  // 期间点开远端已删的笔记只会读到「不存在」(loadExisting 不写盘),不再 create-on-open 把它复活。
   const saveTreeSnap = (v: string, tree: TreeDto): void => {
     try { localStorage.setItem(TREE_SNAP_KEY, JSON.stringify({ v, tree })) } catch { /* 配额/私有模式 */ }
   }
@@ -543,7 +543,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     }
   }
 
-  // ---- 页面装载(GET + parsePageSource;404 → 编译器 newPage 语义) --------------
+  // ---- 页面装载(GET + parsePageSource;404 = 不存在,只读不建;新建只在 newPage) ----------
   const fetchAndParse = async (pagePath: string): Promise<LoadedPage> => {
     const f = await getFile(pagePath)
     const page = parsePageSource(pagePath, f.content, nowIso())
@@ -562,7 +562,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     } catch { /* 校验失败不打扰;下次真加载自会暴露 */ }
   }
 
-  /** 404 时的新建:编译器 newPage + 一次性 IO(writeFile → PUT baseSeq=0)。
+  /** 显式新建(newPage):编译器 newPage + 一次性 IO(writeFile → PUT baseSeq=0)。
    *  并发撞车(409 EXISTS)→ 改为装载既有文件,绝不覆盖。 */
   const createViaCompiler = async (pagePath: string): Promise<LoadedPage> => {
     const writes: Array<{ name: string; data: string }> = []
@@ -588,15 +588,20 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return page
   }
 
-  /** 「打开即创建」只对本会话从未见过的路径成立:见过(everKnown)、现 404 = 别处删掉/挪走了,抛 VanishedError。
-   *  否则陈旧标签页/后退/reconcilePage 都会把刚删的页原样造回云端;显式新建走 newPage,不受此限。 */
-  const loadOrCreate = async (pagePath: string): Promise<LoadedPage> => {
+  /** 读就是读:404 = 这篇不存在,**绝不写盘**(与桌面主进程 loadPage 的 createIfMissing:false 同契约)。
+   *  见过(everKnown)的路径抛 VanishedError(别处删掉/挪走了),没见过的抛 `Note not found`(措辞同编译器)。
+   *  此前没见过的 404 会「打开即创建」:冷启动时 everKnown 是空的,树快照还列着别处刚删的那篇,restoreVault 读上次那篇
+   *  → 按 baseSeq 0 在被删的路径上写回一篇空笔记(2026-11-25)。新建只走显式入口:birthNoteFile(writeTextFile create)、newPage。
+   *  树缓存顺手作废:下一次 listPages 拉新树(fetchTree 成功即重写快照),幽灵条目从侧栏和下次冷启动里消失。 */
+  const loadExisting = async (pagePath: string): Promise<LoadedPage> => {
     try {
       return await fetchAndParse(pagePath)
     } catch (e) {
+      // 读失败(404 或别的)都作废树缓存:调用方(restoreVault 的回落)接着问列表时拿新树下判断,不用失败之前缓存的那份。
+      invalidateTree()
       if (is404(e)) {
         if (everKnown.has(pagePath)) throw new VanishedError(pagePath)
-        return createViaCompiler(pagePath)
+        throw new Error(`Note not found: ${pagePath}`)
       }
       throw e
     }
@@ -999,7 +1004,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         void revalidatePage(pagePath) // SWR:先渲染缓存,后台比对;高 RTT 下切回 = 零等待
         return cached
       }
-      const page = await loadOrCreate(pagePath)
+      const page = await loadExisting(pagePath)
       rememberPage(pagePath)
       return page
     },
@@ -1105,10 +1110,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       })
     },
 
-    // 外部改动 reconcile:v3 单文件,重载即是全部(服务端即真源)。
+    // 外部改动 reconcile:v3 单文件,重载即是全部(服务端即真源)。不在了照样不重建(桌面同款 createIfMissing:false)。
     reconcilePage: async (pagePath) => {
       await ensureVault()
-      return loadOrCreate(pagePath)
+      return loadExisting(pagePath)
     },
 
     // 粘贴/拖入的图片落页面 .amadeus/ 文件夹(镜像 vaultManager.writeAsset 的命名)。

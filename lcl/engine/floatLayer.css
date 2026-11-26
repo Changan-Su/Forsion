@@ -63,6 +63,9 @@
   height: 420px;
 }
 .lcl-float[data-view-float='main'] { width: 640px; height: 480px; }
+/* 无卡片(bare,插件桌面小窗回落到窗口里):大小由打开时给的 size 写在行内,这里只去掉卡面的裁切 */
+.lcl-float[data-view-float='bare'] { overflow: visible; }
+.lcl-float-view[data-form='bare'] > .lcl-float-view-body { overflow: visible; }
 .lcl-float[data-view-float]:not([data-bare]) { overflow: hidden; }
 .lcl-float-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .lcl-float-view-head {

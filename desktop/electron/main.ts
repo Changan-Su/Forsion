@@ -17,9 +17,14 @@ import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/ho
 import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
 import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
+import { createMiniResizeBacking, miniFrameCoversEdges } from './miniResizeBacking'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
+import { createPluginDesktopWindows, type PluginDesktopWindows } from './pluginDesktopWindows'
+import { confirmDesktopWindow } from './pluginDesktopDialog'
+import { createMacDriver } from './dictation/macDriver'
+import { DESKTOP_WINDOW_CHANNELS } from '../shared/desktopWindow'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
@@ -34,11 +39,12 @@ import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCAL
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
+import { app, BaseWindow, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
+import { createEditorQuitSave, OPEN_EDITORS, unloadWrite } from './editorQuitSave'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
@@ -90,7 +96,9 @@ import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { createStoreSources, packageManifest, packageManifestId, type StoreSources } from './storeSources'
-import { isSourceCardId } from '../shared/storeSources'
+import { ADAPT_FILE, auditWarns, BUILTIN_SKILLS_SH, isSourceCardId } from '../shared/storeSources'
+import { prepareSkillPackage, skillTreeHash } from './skillPackage'
+import { createSourceSkillUpdater, isSkillStageOf } from './sourceSkillUpdates'
 import { assertInternalsRawApproved } from './marketInternals'
 import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
@@ -1031,10 +1039,27 @@ async function migrateCloudTokenToAuthJson(): Promise<void> {
 
 const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
+// 插件桌面小窗(2026-11-26,electron/pluginDesktopWindows.ts):第一次用时才建(userData 路径要等启动时改完)
+let pluginDesktop: PluginDesktopWindows | null = null
+function desktopWindows(): PluginDesktopWindows {
+  return pluginDesktop ??= createPluginDesktopWindows({
+    userDataDir: app.getPath('userData'),
+    platform: process.platform,
+    mainContents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+    screens: () => screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, workArea: d.workArea, scaleFactor: d.scaleFactor })),
+    cursorWorkArea: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
+    confirm: (plugin) => confirmDesktopWindow(mainWindow, plugin),
+    onChanged: () => refreshTrayMenu(),
+    mac: process.platform === 'darwin' ? createMacDriver() : null,
+    log: (m) => console.log(m),
+  })
+}
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
 // 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
 const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
+// Workspace .md tabs still holding typed text (electron/editorQuitSave.ts): before quitting, the windows that have one save it
+const editorQuitSave = createEditorQuitSave({ events: ipcMain, log: (m) => console.warn(m) })
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -1402,7 +1427,7 @@ async function askPair(info: { name: string; code: string; ip: string }, doorbel
 async function enableUnitHostFromDoorbell(expires: number, port: number): Promise<boolean> {
   if (Date.now() > expires - 10_000) return false
   await saveConfig({ unitHostEnabled: true })
-  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
   if (backend.getStatus().state !== 'ready') await ensureBackend('engine_restart') // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
   await refreshUnitHost()
   // Clip 在门铃那个固定口上等:互联口就落在它上面,或固定口上已换成转发入口,都算接上了
@@ -1708,6 +1733,8 @@ function ensureBackend(reason: EngineStopReason, opts?: { defer?: boolean }): Pr
     deferredEngineRestart.markCovered() // 到这一刻登记过的改动,都由下面这次读配置 / 拉起带上
     const stored = await loadConfig()
     backend.setAutoResume(stored.autoResumeInterrupted !== false)
+    // 商店里内置的 skills.sh 来源开着,Tangu 才搜得到收录技能;读不到来源状态按关算
+    backend.setMarketCollected(storeSources ? await storeSources.collectedOn().catch(() => false) : false)
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
@@ -1751,7 +1778,7 @@ const deferredEngineRestart = createDeferredRestart({
   restart: () => (isQuitting ? Promise.resolve() : ensureBackend('engine_restart')),
   onDeferred: () => {
     console.log('[tangu-desktop] engine restart deferred until running tasks finish')
-    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('backend:restartDeferred')
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('backend:restartDeferred')
   },
 })
 
@@ -1923,6 +1950,10 @@ app.on('web-contents-created', (_e, contents) => {
     ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
     webPreferences.partition = surface ?? BROWSER_PARTITION
     params.partition = surface ?? BROWSER_PARTITION
+    // 内置浏览器与本地 HTML 预览要像浏览器标签一样自己画画布底色。guest 缺省 transparent: true:
+    // 页面根元素声明 color-scheme: dark 时文字随之变白,画布却保持透明,露出宿主写死的白底 → 白字压白底
+    // (11-26 白屏,台架 check:previewscheme)。插件网页表面不动:它们可能有意透出宿主的主题底色。
+    if (!surface) webPreferences.transparent = false
     delete params.nodeintegration
     delete params.nodeintegrationinsubframes
     delete params.disablewebsecurity
@@ -2002,7 +2033,14 @@ function createWindow(): void {
     if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow)
   })
 
-  mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
+  {
+    // 插件桌面小窗:只放行 pluginDesktopWindows 刚发出去的一次性窗口名,其余照旧(http 回投渲染层、别的一律拒)
+    const wc = mainWindow.webContents
+    const openUrl = openUrlHandler(wc)
+    wc.setWindowOpenHandler((d) => desktopWindows().handleWindowOpen(d) ?? openUrl(d))
+    wc.on('did-create-window', (child, details) => desktopWindows().onDidCreateWindow(child, details))
+    desktopWindows().attachMain(wc)
+  }
   hardenNav(mainWindow.webContents)
   // The audio graph runs in this renderer. Protecting only the browser process
   // leaves the renderer's Windows timer policy at its system-managed default.
@@ -2562,6 +2600,7 @@ interface MiniEntry {
   resizeDock: MiniDockState | null
   resizeMaskActive: boolean
   resizeUpdates: ReturnType<typeof createMiniResizeQueue>
+  resizeBacking: ReturnType<typeof createMiniResizeBacking> | null
   stopPassThrough: (() => void) | null
 }
 const minis = new Map<string, MiniEntry>()
@@ -2673,6 +2712,7 @@ function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
 }
 function clearIdleMiniResizeMask(m: MiniEntry): void {
   if (!m.resizeMaskActive || m.resizeFrom || m.dock || m.win.isDestroyed()) return
+  m.resizeBacking?.clear()
   m.resizeMaskActive = false
   m.win.setShape([])
 }
@@ -2801,10 +2841,30 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
     show: !QUIET_WINDOWS && restored?.visible !== false,
     webPreferences: satelliteWebPreferences(),
   })
+  const contents = win.webContents
+  const resizeBacking = process.platform === 'win32' ? createMiniResizeBacking({
+    // BrowserWindow.setBackgroundColor also changes Chromium's page background.
+    // Set only the native backing so the transparent renderer can still dock.
+    setNativeBackground: (color) => {
+      if (!win.isDestroyed()) BaseWindow.prototype.setBackgroundColor.call(win, color)
+    },
+    watchPresentedFrames: (callback, radius) => {
+      if (contents.isDestroyed()) return () => {}
+      contents.beginFrameSubscription(false, (image) => {
+        const scaleFactor = image.getScaleFactors()[0] ?? 1
+        const size = image.getSize()
+        const pixels = { width: Math.round(size.width * scaleFactor), height: Math.round(size.height * scaleFactor) }
+        if (miniFrameCoversEdges(image.toBitmap({ scaleFactor }), pixels, radius)) setImmediate(() => callback(pixels))
+      })
+      contents.invalidate()
+      return () => { if (!contents.isDestroyed()) contents.endFrameSubscription() }
+    },
+    canClearWithoutFrame: () => win.isDestroyed() || !win.isVisible() || win.isMinimized(),
+  }) : null
   const m: MiniEntry = {
     id, win, key, target: opts, gen: 0, dock: null, pinned, dockMotion: null, suppressMoved: false, dragging: false,
     settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
-    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
+    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), resizeBacking, stopPassThrough: null,
   }
   minis.set(id, m)
   touchMini(m)
@@ -2818,6 +2878,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   hardenNav(win.webContents)
   win.webContents.on('did-finish-load', () => {
     m.resizeUpdates.cancel()
+    m.resizeBacking?.clear()
     m.resizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     m.resizeDock = null
     if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', { ...m.target, gen: m.gen })
@@ -2829,6 +2890,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   if (process.platform === 'win32') m.dockMotion = createMiniDockMotion(win)
   win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
+    m.resizeBacking?.clear()
     m.resizeUpdates.cancel(); m.resizeFrom = null; m.resizeDock = null
     if (m.dock && !m.dockMotion) setMiniBounds(m, expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea), false)
     m.dockMotion?.reset(false); m.dock = null; stopMiniPoll(m)
@@ -2836,14 +2898,24 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string, restor
   win.on('move', () => onMiniMoved(m))
   // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
   // native dragging can cross to a monitor with another scale.
-  win.on('will-move', () => clearIdleMiniResizeMask(m))
-  win.on('resize', () => clearIdleMiniResizeMask(m))
+  win.on('will-move', () => {
+    if (!m.resizeFrom) m.resizeBacking?.clear()
+    clearIdleMiniResizeMask(m)
+  })
+  win.on('resize', () => { if (!m.suppressMoved) clearIdleMiniResizeMask(m) })
+  win.on('hide', () => {
+    m.resizeUpdates.cancel()
+    m.resizeFrom = null
+    m.resizeDock = null
+    m.resizeBacking?.clear()
+  })
   win.on('focus', () => touchMini(m))
   // 托盘「全部 Mini」按窗口标题列出(渲染层把胶囊上的名字写进 document.title)
   win.on('page-title-updated', () => refreshTrayMenu())
   win.on('close', () => rememberMiniLayout(m))
   win.on('closed', () => {
     m.resizeUpdates.cancel()
+    m.resizeBacking?.clear()
     m.resizeMaskActive = false
     console.log('[win] mini closed', id, key); m.stopPassThrough?.(); m.stopPassThrough = null
     m.dockMotion?.stop(); m.dockMotion = null
@@ -3038,7 +3110,10 @@ function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
     // Keep BOTH the old and new HWND extents rounded between the native calls.
     // Growing a rounded region before its HWND would clip halfway down the old
     // height and briefly expose square corners, just like shrinking stale paint.
-    if (m.resizeFrom) win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+    if (m.resizeFrom) {
+      win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+      if (win.isVisible()) m.resizeBacking?.begin()
+    }
     win.setContentBounds(r)
     if (m.resizeFrom) {
       win.setShape(miniResizeShape(r.width, r.height, m.resizeFrom.radius))
@@ -3054,6 +3129,7 @@ function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(m: MiniEntry): void {
   if (m.win.isDestroyed() || m.suppressMoved || m.resizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  m.resizeBacking?.clear()
   clearIdleMiniResizeMask(m)
   if (m.dock) { m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m) }
   m.dragging = true
@@ -3117,6 +3193,7 @@ function pollMiniCursor(m: MiniEntry): void {
     // 展开:光标离开窗口 + 迟滞边距 → 折叠(小幅移动不触发,修「一动就弹回」)
     if (!pointInRect(pt.x, pt.y, growRect(b, MINI_HYSTERESIS))) {
       dock.expanded = false
+      m.resizeBacking?.clear()
       if (m.dockMotion) m.dockMotion.set(dock.edge, true, MINI_PEEK)
       else setMiniBounds(m, collapsedBounds(b, dock.edge, wa, MINI_PEEK))
     }
@@ -3272,14 +3349,19 @@ const marketPlatform = () => process.platform === 'darwin' ? 'macos' : process.p
 
 /** Store sources (third-party catalogs in the store's left column): created at startup, before the plugin updater. */
 let storeSources: StoreSources | undefined
-/** Download an item from a store source and run the same package checks as a Forsion store item. */
+/**
+ * Download an item from a store source and run the same package checks as a Forsion store item. A collected skill that
+ * Forsion adapted also gets its adaptation note, read from the Forsion server for exactly this commit: if that read
+ * fails the install fails (try again later) rather than installing a Claude Code skill that reads wrong in Tangu.
+ */
 async function downloadSourcePackage(id: string, opts: { version?: string; auto?: boolean; report?: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void } = {}) {
   if (!storeSources) throw new Error('resolve: source-removed')
   const report = opts.report ?? (() => {})
   const r = await storeSources.download(id, { version: opts.version, auto: opts.auto, onProgress: (p) => report('download', p) })
   assertMarketplaceRequirements(r.info, app.getVersion(), marketPlatform())
   await checkMarketPackage(r.buf, await detectMarketType(r.buf, r.info.type), app.getVersion(), marketPlatform(), builtinPluginIds())
-  return r
+  const adaptNote = r.collected?.adapted && r.info.type === 'skill' ? await storeSources.adaptNote(id, r.commit) : null
+  return { ...r, adaptNote, auditWarn: auditWarns(r.collected) }
 }
 
 /** Loader ids of the plugins installed in one plugin root (folder names can differ from ids). */
@@ -3295,7 +3377,7 @@ async function installedPluginIds(type: 'plugin' | 'amadeus-plugin'): Promise<Ar
   return out
 }
 
-async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null }> {
+async function downloadMarketPackage(id: string, report: (phase: 'resolve' | 'download' | 'install', progress?: DownloadProgress) => void = () => {}, version?: string): Promise<{ info: { type: string; installSlug: string; downloadUrl: string; source: string; version?: string; minAppVersion?: string; maxAppVersion?: string; platforms?: string[]; tags?: string[] } & Partial<NpmInstallSnapshot>; buf: Buffer; origin?: string; commit?: string | null; path?: string; adaptNote?: string | null; auditWarn?: boolean }> {
   if (isSourceCardId(id)) return downloadSourcePackage(id, { version, report })
   const base = await marketBase()
   // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
@@ -3557,6 +3639,8 @@ app.whenReady().then(async () => {
       return base ? { base, token: creds.token } : null
     },
     forsionSignedIn: () => !!loadTanguCreds().token,
+    // The built-in skills.sh source: its catalog lives on the same Forsion server as the store (a dev server works too).
+    marketBase: () => marketBase(),
   })
   const sources = storeSources
   const marketPluginUpdater = createMarketPluginUpdater({
@@ -3588,9 +3672,27 @@ app.whenReady().then(async () => {
     },
     broadcast: (status) => {
       storeUpdateTele(status)
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
+  // 来源装的技能也自动更新(插件更新器只认 JSON manifest):按出处下载、同一套技能检查、整目录替换;
+  // 用户改过的、换了仓库 / 目录的、多出脚本或审计警告的不动,留在「可更新」里手动更新。跟着商店的「自动更新」总开关。
+  const sourceSkillUpdater = createSourceSkillUpdater({
+    sources,
+    download: (cardId) => downloadSourcePackage(cardId, { auto: true }),
+    skillDir: (slug) => marketItemDir(tanguHomeDir(), 'skill', slug),
+    enabled: () => marketPluginUpdater.snapshot().autoUpdateAll,
+    exclusive: (fn) => marketPluginUpdater.exclusive(fn),
+    changed: () => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) {
+        w.webContents.send('window:mainAction', 'skills-changed', undefined)
+        w.webContents.send('market:updateStatus', marketPluginUpdater.snapshot()) // 商店据此重读已装版本
+      }
+    },
+  })
+  const checkSourceSkills = (): Promise<void> => sourceSkillUpdater.check()
+    .then((r) => { for (const x of r) if (x.outcome === 'error') console.warn('[store-sources] skill update:', x.cardId, x.error) })
+    .catch((e) => console.warn('[store-sources] skill updates:', e))
   // The updater asks the source table whether an item's source is gone before swapping in a staged update.
   if (PRODUCT.market) await sources.load()
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
@@ -3628,7 +3730,7 @@ app.whenReady().then(async () => {
       .map((w) => w.webContents)
       .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame()),
     events: ipcMain,
-    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
     stopSync: () => stopAmadeusSync?.(),
     restartSync: () => restartAmadeusSync?.(),
     onWillChange: () => { unitFrames.clear(); unitOpenGrants.clear() }, // 换号 / 登出的握手一开始:设备页的绑定与开窗许可全清(之后要看得重新绑)
@@ -3642,7 +3744,7 @@ app.whenReady().then(async () => {
     ],
     enabled: app.isPackaged,
     broadcast: (status) => {
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('updater:core-status', status)
     },
     run: async (report) => {
       // 匿名遥测 update:引擎 npm 热更新 / 内置插件 npm 更新查完的结论(current / staged / incompatible / error;报错原文只拿来归类)
@@ -3714,7 +3816,7 @@ app.whenReady().then(async () => {
       // ── 0.3 起:账号核心(auth:* 通道住在 Extend,编排在 accountCore)──
       homeDir: forsionHomeDir,
       appVersion: () => app.getVersion(),
-      broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+      broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
       // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
       // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
       accountBackendState: async () => (PRODUCT.agentBackend && (await loadConfig()).mode === 'managed' ? backend.getStatus().state : null),
@@ -3803,7 +3905,9 @@ app.whenReady().then(async () => {
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
-        await contentFlush.quit() // 还在静默期里的改动先推上去(最多等 5 秒);冲过了,紧跟着的 before-quit 不再冲
+        // 还在静默期里的改动先推上去(最多等 5 秒);工作区 .md 标签里还没存的字先存。两样都是一次退出只做一次:
+        // 紧跟着的 before-quit 拿到 null,不会把这次退出改走 app.exit;停引擎期间再打的字由关窗时的 pagehide 存
+        await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
         await backend.stop(install ? 'app_update' : 'app_quit')
@@ -3813,6 +3917,7 @@ app.whenReady().then(async () => {
         isQuitting = false
         quitGuards.reset()
         contentFlush.reset()
+        editorQuitSave.reset()
         throw error
       }
     },
@@ -4345,6 +4450,28 @@ app.whenReady().then(async () => {
   // 按路径串行,精确 mtime CAS 在 tmp fsync 后、rename 前再检查;新建仍走 wx。
   ipcMain.handle('fs:writeFile', (_e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) =>
     writeHostTextFile(filePath, content, expectedMtimeMs, createNew))
+  // Same write for a page that is going away (pagehide on a window reload / close): the renderer blocks until it is on
+  // disk, refused (conflict) or failed, so it can still put the text in a sidecar, and a reloaded page never reads the
+  // file before the write landed. unloadWrite always answers, capped: an unanswered sendSync hangs the renderer.
+  ipcMain.on('fs:writeFileSync', (e, filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean) => {
+    if (!isTrustedSender(e)) { e.returnValue = { error: 'forbidden' }; return }
+    void unloadWrite({ write: writeHostTextFile, read: (p) => readFile(p, 'utf8') }, filePath, content, expectedMtimeMs, createNew)
+      .then((r) => { e.returnValue = r })
+  })
+  // How many workspace .md tabs a window has open: quit only waits for windows that have one (editorQuitSave).
+  // A reload or a closed window takes its editors with it.
+  const editorWindows = new WeakSet<Electron.WebContents>()
+  ipcMain.on(OPEN_EDITORS, (e, count: unknown) => {
+    if (!isTrustedSender(e)) return
+    const wc = e.sender
+    editorQuitSave.report(wc, count)
+    if (editorWindows.has(wc)) return
+    editorWindows.add(wc)
+    // Committed, not started: a navigation that hardenNav cancels leaves the page (and its editors) in place.
+    wc.on('did-navigate', () => editorQuitSave.forget(wc.id))
+    wc.on('render-process-gone', () => editorQuitSave.forget(wc.id))
+    wc.once('destroyed', () => editorQuitSave.forget(wc.id))
+  })
 
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   // 安全:重命名/新建只接受**单段名字**(无路径分隔符、非 . / ..),结果始终落在原目录内,杜绝越权写。
@@ -4625,6 +4752,11 @@ app.whenReady().then(async () => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }
     const win = BrowserWindow.fromWebContents(e.sender)
+    const backing = miniBySender(e.sender)?.resizeBacking
+    if (backing) {
+      backing.setColor(request.backgroundColor ?? (request.mode === 'dark' ? '#252327' : '#fbf8f5'))
+      return { ok: true }
+    }
     applyWindowMaterial(win, request, process.platform, !!win && (isMiniWindow(win) || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
   })
@@ -5105,7 +5237,8 @@ app.whenReady().then(async () => {
 
   // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
   // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
-  ipcMain.handle('market:install', async (e, id: string, version?: string, expect?: { type?: unknown }) => marketPluginUpdater.exclusive(async () => {
+  // expect.ack = the scripts / audit warning the user confirmed for a source skill (counted again here from the package).
+  ipcMain.handle('market:install', async (e, id: string, version?: string, expect?: { type?: unknown; ack?: unknown }) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     let lastSent = 0
     const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
@@ -5115,11 +5248,12 @@ app.whenReady().then(async () => {
       if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
     report('resolve')
-    const { info, buf, origin, commit } = await downloadMarketPackage(id, report, version)
+    const { info, buf: downloaded, origin, commit, path: packagePath, adaptNote, auditWarn } = await downloadMarketPackage(id, report, version)
     report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
-    const effType = await detectMarketType(buf, info.type)
+    const effType = await detectMarketType(downloaded, info.type)
+    let buf = downloaded
     const dest = join(tanguHomeDir(), MARKET_SUBDIR[effType], info.installSlug)
     // 内置包(播种进 plugins/<id>)不许从市场再装:解压是原地覆盖,所以要在写入**之前**拒 —— 目标目录就是已播种的那份
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
@@ -5128,6 +5262,26 @@ app.whenReady().then(async () => {
     // 来源装的:用户确认时看到的类型 = 目录里的类型 = 包实测的类型,否则拒(目录可以在确认和安装之间改,
     // 把「文字说明」换成会跑代码的插件就绕过了首装确认)。
     if (isSourceCardId(id) && (effType !== info.type || typeof expect?.type !== 'string' || expect.type !== info.type)) throw new Error('resolve: source-item-changed')
+    // 技能(任何来源):SKILL.md 读得出 name + description 才落盘(否则引擎悄悄跳过);包里带的适配说明一律丢掉,
+    // 只写 Forsion 服务器按这个提交核过的那份。来源技能带脚本 / 审计有警告:用户在这一项上确认过(ack 覆盖得到)才装 ——
+    // 脚本数按包实数,不信目录或对话卡片的说法(用户加的来源本来就不给)。
+    let ack: { scripts: number; audit: boolean } | undefined
+    let packageTree: string | null = null
+    if (effType === 'skill') {
+      const skill = await prepareSkillPackage(downloaded, { note: adaptNote ?? null })
+      buf = skill.buf
+      packageTree = skill.tree
+      if (isSourceCardId(id)) {
+        const a = expect?.ack as { scripts?: unknown; audit?: unknown } | undefined
+        ack = a && typeof a === 'object' && typeof a.scripts === 'number' && Number.isInteger(a.scripts) && a.scripts >= 0 ? { scripts: a.scripts, audit: a.audit === true } : undefined
+        // 更新 / 重装:装的时候确认过的照样算(新版多出来的脚本、新出现的审计警告仍要再问)。
+        // 只认同一个包(同一仓库 + 同一文件夹)上的确认:来源把这个编号改指到别的包,旧确认不算数。
+        const rec = ack ? null : await storeSources!.installRecord(id).catch(() => null)
+        const before = rec && rec.origin === (origin ?? '') && (rec.path ?? '') === (packagePath ?? '') ? rec.ack : undefined
+        if (!ack && before) ack = before
+        if ((skill.scripts > 0 && (!ack || ack.scripts < skill.scripts)) || (auditWarn && !ack?.audit)) throw new Error(`install: confirm-needed scripts=${skill.scripts} audit=${auditWarn ? 1 : 0}`)
+      }
+    }
     // 来源装的插件:包里的 id 和已装的另一个插件撞了就拒(两份同 id 谁先被扫到谁生效),在写盘之前判。
     if (isSourceCardId(id) && (effType === 'plugin' || effType === 'amadeus-plugin')) {
       const incoming = effectivePluginId(info.installSlug, await packageManifestId(buf, effType))
@@ -5135,6 +5289,12 @@ app.whenReady().then(async () => {
     }
     // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
     if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
+    // 解压是原地覆盖:先删掉上一版留下的适配说明(这一版没有就不该再被读到;是符号链接也只删链接,不写穿到别处)。
+    if (effType === 'skill') {
+      // 技能文件夹本身是链接 / 联接点:删说明、解包都会落到别处,先拒(用户自己的文件夹不该被商店安装改写)
+      if ((await lstat(dest).catch(() => null))?.isSymbolicLink()) throw new Error('install: destination is a link')
+      await rm(join(dest, ADAPT_FILE), { force: true })
+    }
     const files = await installMarketZip(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
@@ -5162,7 +5322,10 @@ app.whenReady().then(async () => {
     // 来源装的(所有类型):先记下出处,再交给更新器 —— 没有出处记录的条目不会被自动更新(换出处保护靠它)。
     if (isSourceCardId(id) && origin) {
       const named = await storeSources!.lookup(id).catch(() => null)
-      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author })
+      // 技能另记包所在目录(换目录 = 换了东西,自动更新停)、确认过的脚本 / 审计、装好后的目录指纹(用户改过就不自动更新)。
+      // 指纹只在目录恰好等于这个包时记(原地覆盖会留下用户自己加的文件:那就不记,自动更新整目录替换时不会把它们删掉)。
+      const tree = effType === 'skill' && packageTree && await skillTreeHash(dest) === packageTree ? packageTree : null
+      await storeSources!.recordInstall({ cardId: id, type: effType, slug: info.installSlug, name: named?.name || info.installSlug, version: info.version ?? null, origin, commit, summary: named?.summary, author: named?.author, ...(packagePath !== undefined ? { path: packagePath } : {}), ...(ack ? { ack } : {}), tree })
         .catch((err) => console.warn('[store-sources] record install:', err))
     }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
@@ -5205,18 +5368,21 @@ app.whenReady().then(async () => {
       : null
     return { ...r, path: dest, ...(pluginId ? { id: pluginId } : {}) }
   }))
-  ipcMain.handle('market:checkUpdates', (e) => {
+  ipcMain.handle('market:checkUpdates', async (e) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
-    return marketPluginUpdater.check()
+    await marketPluginUpdater.check()
+    await checkSourceSkills()
   })
   if (PRODUCT.market) setTimeout(() => {
-    void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e))
-    setInterval(() => void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)), 6 * 3600_000).unref()
+    void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)).then(checkSourceSkills)
+    setInterval(() => void marketPluginUpdater.check().catch((e) => console.warn('[market-updates]', e)).then(checkSourceSkills), 6 * 3600_000).unref()
   }, 60_000).unref()
 
   ipcMain.handle('market:installed', async () => {
     // 每个已装项带版本号(读其 manifest),供市场「可更新」检查;插件另带装载 id(目录名可 ≠ id),供「打开设置」直达。
     const out: Record<string, Array<{ slug: string; version: string | null; id?: string }>> = { skill: [], agent: [], plugin: [], space: [], theme: [], 'amadeus-plugin': [] }
+    // 来源装的技能:版本以出处记录为准(收录的技能 SKILL.md 里多半没有版本,或写的是上游自己的号),「可更新」才比得对。
+    const sourceSkills = new Map((await storeSources?.installs().catch(() => []) ?? []).filter((r) => r.type === 'skill').map((r) => [r.slug, r.version]))
     for (const [type, sub] of Object.entries(MARKET_SUBDIR)) {
       try {
         const base = join(tanguHomeDir(), sub)
@@ -5224,7 +5390,8 @@ app.whenReady().then(async () => {
         out[type] = await Promise.all(
           ents.filter((e) => e.isDirectory()).map(async (e) => {
             const id = await readInstalledPluginId(type, join(base, e.name))
-            return { slug: e.name, version: await readInstalledVersion(type, join(base, e.name)), ...(id ? { id } : {}) }
+            const recorded = type === 'skill' ? sourceSkills.get(e.name) : undefined
+            return { slug: e.name, version: recorded ?? await readInstalledVersion(type, join(base, e.name)), ...(id ? { id } : {}) }
           }),
         )
       } catch {
@@ -5246,6 +5413,8 @@ app.whenReady().then(async () => {
     // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
     const spaceId = type === 'space' && /^market-[0-9a-f-]{36}$/.test(slug) ? slug : type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
+    // 来源技能自动更新留在旁边的上一版 / 中断残留(.skill-stage-<slug>.*)一起删
+    if (type === 'skill') for (const n of await readdir(dirname(dir)).catch(() => [] as string[])) if (isSkillStageOf(n, slug)) await rm(join(dirname(dir), n), { recursive: true, force: true }).catch(() => {})
     await marketPluginUpdater.forget(type, slug)
     await storeSources?.forget(type, slug).catch(() => {})
     return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
@@ -5324,7 +5493,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('marketSources:probe', (e, input: string, locale?: string) => { trusted(e); return storeSources!.probe(input, sourceLocale(locale)) })
   ipcMain.handle('marketSources:add', async (e, input: string, locale?: string) => { trusted(e); return sourcesChanged(await storeSources!.add(input, sourceLocale(locale))) })
   ipcMain.handle('marketSources:remove', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.remove(id)) })
-  ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => { trusted(e); return sourcesChanged(await storeSources!.setDisabled(id, on === true)) })
+  ipcMain.handle('marketSources:setDisabled', async (e, id: string, on: boolean) => {
+    trusted(e)
+    const r = sourcesChanged(await storeSources!.setDisabled(id, on === true))
+    // 内置来源开关决定 Tangu 搜不搜得到收录技能(引擎启动时读):空闲时重启引擎生效,有任务在跑就等它跑完
+    if (id === BUILTIN_SKILLS_SH.id) {
+      const cfg = await loadConfig()
+      if (cfg.mode === 'managed' || cfg.unitHostEnabled) void ensureBackend('engine_restart', { defer: true }) // 「允许其他设备连接」开着时本机引擎也常驻
+    }
+    return r
+  })
   ipcMain.handle('marketSources:trust', async (e, id: string) => { trusted(e); return sourcesChanged(await storeSources!.trust(id)) })
   // Only the main window has the full plugin inventory; any other window would report a partial (or empty) list.
   ipcMain.handle('marketSources:setDeclared', async (e, list: unknown) => {
@@ -5334,6 +5512,8 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('marketSources:catalog', (e, id: string, opts?: { refresh?: boolean; locale?: string }) => { trusted(e); return storeSources!.catalog(id, { refresh: opts?.refresh === true, locale: sourceLocale(opts?.locale) }) })
   ipcMain.handle('marketSources:installs', (e, locale?: string) => { trusted(e); return storeSources!.installs(sourceLocale(locale)) })
+  // 一张来源卡片(读缓存的目录,不问服务器详情):对话卡片据此知道前置、脚本数与审计。
+  ipcMain.handle('marketSources:item', (e, cardId: string, locale?: string) => { trusted(e); if (!isSourceCardId(cardId)) throw new Error('resolve: source-item-removed'); return storeSources!.item(cardId, sourceLocale(locale)) })
 
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。
@@ -5539,6 +5719,25 @@ app.whenReady().then(async () => {
     m.key = key
     m.target = entity // 页面重载(崩溃自愈)回到现在显示的,而不是最初打开的那个
   })
+  // 插件桌面小窗(只认主窗那份插件实例;pluginDesktopWindows 里逐条核 sender 是主窗)
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.prepare, (e, raw: unknown) => (isTrustedSender(e) ? desktopWindows().prepare(e.sender, raw) : { ok: false, reason: 'unavailable' }))
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.setBounds, (e, id: unknown, rect: unknown) => { if (isTrustedSender(e)) desktopWindows().setBounds(e.sender, id, rect) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.passThrough, (e, id: unknown, ignore: unknown) => { if (isTrustedSender(e)) desktopWindows().passThrough(e.sender, id, ignore) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.released, (e, id: unknown) => { if (isTrustedSender(e)) desktopWindows().released(e.sender, id) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.close, (e, id: unknown) => {
+    if (isTrustedSender(e) && e.sender === mainWindow?.webContents && typeof id === 'string') desktopWindows().close(id)
+  })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.closePlugin, (e, pluginId: unknown) => {
+    if (isTrustedSender(e) && e.sender === mainWindow?.webContents && typeof pluginId === 'string') desktopWindows().closePlugin(pluginId)
+  })
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.screens, (e) => (isTrustedSender(e) ? screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, workArea: d.workArea, scaleFactor: d.scaleFactor })) : []))
+  // 设置 → 插件详情:读 / 收回授权(哪扇窗口都能读;收回 = 关掉它所有的小窗、下次再问)
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.grant, (e, pluginId: unknown) => (isTrustedSender(e) && typeof pluginId === 'string' ? desktopWindows().grantOf(pluginId) : null))
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.revoke, (e, pluginId: unknown) => {
+    if (!isTrustedSender(e) || typeof pluginId !== 'string') return false
+    return desktopWindows().revoke(pluginId) // 没写成 = 盘上还是原样:设置页照旧显示
+  })
+  for (const ev of ['display-added', 'display-removed', 'display-metrics-changed'] as const) screen.on(ev as 'display-added', () => pluginDesktop?.screensChanged())
   ipcMain.handle('window:openFloating', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return undefined
     return openFloatingPanel(raw)
@@ -5565,6 +5764,7 @@ app.whenReady().then(async () => {
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
       m.resizeUpdates.flush()
       const dock = m.resizeDock
+      const radius = m.resizeFrom?.radius ?? 16
       m.resizeFrom = null
       m.resizeDock = null
       if (dock) {
@@ -5578,6 +5778,11 @@ app.whenReady().then(async () => {
         }
       }
       rememberMiniLayout(m, true)
+      if (m.resizeBacking) {
+        const bounds = miniBounds(m)
+        const scale = screen.getDisplayMatching(bounds).scaleFactor
+        m.resizeBacking.settle(screen.dipToScreenRect(m.win, bounds), radius * scale)
+      }
       if (process.platform === 'darwin') m.win.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
@@ -5941,6 +6146,13 @@ app.whenReady().then(async () => {
       list: () => liveMinis().map((m) => ({ id: m.id, title: m.win.getTitle(), visible: m.win.isVisible() })),
       open: (id) => { const m = minis.get(id); if (m && !m.win.isDestroyed()) presentMini(m) },
     },
+    // 「桌面小窗」:插件开的桌面小窗,点一行关掉那扇;末尾暂时全部藏起来 / 全部显示
+    desktopWindows: {
+      list: () => pluginDesktop?.list() ?? [],
+      close: (id) => pluginDesktop?.close(id),
+      hidden: () => pluginDesktop?.hidden() ?? false,
+      setHidden: (hidden) => pluginDesktop?.setHidden(hidden),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
@@ -6158,6 +6370,7 @@ app.on('before-quit', (e) => {
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
+  pluginDesktop?.persistNow() // 插件桌面小窗的位置(去抖里还没写的)
   for (const state of persistedDetached) {
     const win = detachedWindows.get(state.id)
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
@@ -6183,12 +6396,15 @@ app.on('before-quit', (e) => {
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 新同步还在静默期里的改动先推上去(最多等 5 秒;没有要推的 = null,不等)。要在停后端之前:合并、通知引擎都要它在
   const flushing = contentFlush.quit()
+  // Workspace .md tabs save what is still typed (null = none open). The exit below is app.exit, which destroys the windows
+  // without unload events, and a plain quit never runs React cleanup either: without this the last ~1s of typing is lost.
+  const saving = editorQuitSave.quit()
   deferredEngineRestart.cancel() // 等着空闲再重启的那次作废:引擎这就停了
   // 优雅停后端(SIGTERM→5s→SIGKILL);停完再真正退出。发信号前写下 app_quit:在途任务记成 interrupted,下次打开接着做。
   const st = backend.getStatus().state
-  if (flushing || st === 'ready' || st === 'starting') {
+  if (flushing || saving || st === 'ready' || st === 'starting') {
     e.preventDefault()
-    exitChain = (flushing ?? Promise.resolve())
+    exitChain = Promise.all([flushing, saving])
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain

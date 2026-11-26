@@ -74,7 +74,7 @@ function warnUnknownMode(raw: unknown, source: string): void {
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
 export interface ApprovalDecision {
   action: ApprovalAction;
-  /** Minted only by the mandatory interactive approval path. */
+  /** Set only when the user approves an interactive card. */
   userConfirmed?: true;
   /** 用户在审批时修改了参数（如改 bash 命令）：用这份覆盖原 call 的 arguments 执行。 */
   argsOverride?: Record<string, any>;
@@ -133,15 +133,18 @@ export function widgetWrite(call: ToolCall): boolean {
   return args?.widget != null || args?.edits != null;
 }
 
-export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; widgetWrite?: boolean }): boolean {
-  const declared = declaredApproval(name);
+export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; widgetWrite?: boolean; profile?: Pick<AppProfile, 'toolLoadout'> }): boolean {
+  // 带上会话的 profile:应用 profile 自带的工具(toolLoadout.providers)声明的档也要认,不只全局注册的(Codex 11-26)。
+  const declared = declaredApproval(name, opts?.profile);
   if (declared === 'always') return true; // 每次都问那一档:不看档位(空档 / 完全通行也问)
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit' ||
-    name === 'move_path' || name === 'copy_path' || name === 'delete_path' || opts?.widgetWrite === true;
+    name === 'move_path' || name === 'copy_path' || name === 'delete_path' || opts?.widgetWrite === true ||
+    // 插件工具经 capabilities.approval:'edit' 自声明并入写文件档(只改插件自己那份数据、不带路径的写;如 Showcase 存稿)。
+    declared === 'edit';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
@@ -1091,6 +1094,8 @@ export interface GateCtx {
   /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
    *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
   modeSessionId?: string;
+  /** A card from a superseded user turn cannot grant future automatic approvals. */
+  approvalTurnIsCurrent?: () => boolean;
   /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
   approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
   /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -1320,7 +1325,7 @@ export async function gateToolCall(
     // 无人值守 run 本就不接管,也就不因此排队审批
     // 扩展那一路:动的是 Tangu 标签组里它自己开的页 → 不批;动用户自己的标签 → 批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId);
-    if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call) })) return { action: 'approve' };
+    if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call), profile: ctx.profile })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。
     // 会话互发起的那一轮带了上限档(runApprovalCaps):上限档要问的,本会话以前点过的「总允许」也不代答(Codex 11-08)。
@@ -1396,8 +1401,9 @@ export async function gateToolCall(
     // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
     // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
     // 远程污点 run 的「总允许」按单次批准算:记下来就等于远端改了本机会话的审批面(本机 run 随后也吃它)。
-    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk) allowAlways(ctx.sessionId, name);
-    if (alwaysAsk) out.userConfirmed = true;
+    if (d.action === 'approve_always' && !escalate && !forceAsk && !protectedAsk && !control && !remote && !alwaysAsk
+      && ctx.approvalTurnIsCurrent?.() !== false) allowAlways(ctx.sessionId, name);
+    out.userConfirmed = true;
     return out;
   });
   if (ctx.park) return { action: 'park', decided, preview };
@@ -1420,7 +1426,7 @@ async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppP
 async function capWouldAsk(
   call: ToolCall,
   cap: CapMode,
-  ctx: { sessionId?: string; execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent' },
+  ctx: { sessionId?: string; execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent'; profile?: AppProfile },
   remote: RemoteInfo | undefined, // 没有 = 会话消息上限(跨树互发):同样不让 custom allow 越过上限,额外可写根也不认
 ): Promise<boolean> {
   if (cap === 'full-auto') return false;
@@ -1428,5 +1434,5 @@ async function capWouldAsk(
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
   if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd, remote })) return true; // 远程不认额外可写根,也不认 C8 禁用的 cwd
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId || '');
-  return toolNeedsApproval(name, cap, { userBrowser, widgetWrite: widgetWrite(call) });
+  return toolNeedsApproval(name, cap, { userBrowser, widgetWrite: widgetWrite(call), profile: ctx.profile });
 }

@@ -47,6 +47,9 @@ export interface ToolContext {
   mcpTools?: Map<string, LoadedMcpTool>;
   /** 本次 run 启用的技能 id（use_skill 的 allowlist）。 */
   enabledSkillIds?: string[];
+  /** 用户这一轮亲手点名的技能 id(桌面 /skill 选择器 → agentConfig.requestedSkillIds)。
+   *  frontmatter `disable-model-invocation: true` 的技能只有在这里才放行 use_skill;子代理不继承。 */
+  userInvokedSkillIds?: string[];
   /** 执行形态：'host'=本地直连真实 FS/shell（TUI），缺省/'sandbox'=云沙箱 + 云工作区。 */
   execMode?: 'sandbox' | 'host';
   /** OS restrictions for local model-driven execution; independent from tool approval. */
@@ -307,12 +310,14 @@ export interface ToolCapabilities {
   concurrencyKey?: string;
   /** 默认超时；executeTool 会把它并入 ctx.signal。 */
   defaultTimeoutMs?: number;
-  /** 审批档：'command' = 与 run_bash 同档(readonly/auto-edit 下需批准）。缺省=只读语义、不触发审批。
+  /** 审批档：'edit' = 与 write_file 同档(只有 readonly 下需批准;auto-edit「替我批准」与完全通行直接做)。
+   *  给只改插件自己那份数据、参数里不带路径的写工具用(如 Showcase 存稿 / 出图);不认得它的旧引擎当缺省(不问)处理。
+   *  'command' = 与 run_bash 同档(readonly/auto-edit 下需批准）。缺省=只读语义、不触发审批。
    *  approvals.toolNeedsApproval 经 declaredApproval(name) 读此，插件工具无需核心硬编码工具名。
    *  'always' = 每次都问用户本人:任何档位(含完全通行与云端的空档)、任何执行形态(host / sandbox / 云端)都弹审批,
    *  不进「总允许」,custom 的 allow 规则与 PermissionRequest hook 的 allow 也不放行;没人能当场答的 run
    *  (自动化 / Muse / 远程污点)直接拒。给「花掉用户账号里的东西」这类动作用(approvals.gateToolCall)。 */
-  approval?: 'command' | 'always';
+  approval?: 'edit' | 'command' | 'always';
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;

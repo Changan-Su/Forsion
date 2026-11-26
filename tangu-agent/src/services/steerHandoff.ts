@@ -139,6 +139,8 @@ async function wakeNow(sessionId: string): Promise<void> {
     }
     const cfg = { ...decode(input.agentConfig) };
     delete cfg.remoteOrigin;
+    // /skill 点名只算用户发的那一轮:交回这一轮不是用户点的,不再带「这一轮指定技能」,也不放行只许用户点名的技能
+    delete cfg.requestedSkillIds;
     // Agent 跟会话此刻选着的那个(用户可能在那一轮之后换了 Agent;抄那一轮的会在起跑时被写穿回会话,Codex 11-21 P1-10)
     const stored = decode(await deps().state.getAgentConfig(sessionId).catch(() => null));
     if (typeof stored.agentSlug === 'string' && stored.agentSlug) cfg.agentSlug = stored.agentSlug;

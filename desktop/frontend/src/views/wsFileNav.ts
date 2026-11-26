@@ -6,12 +6,12 @@ import { useWorkspace } from '@lcl/engine'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { b64ToBytes } from '../services/fileKinds'
 import { openLocalHtml } from '../builtins'
+import { pendingWrites } from './openMdEditors'
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
-/** 在途写盘登记:MdFileEditor 的(冲刷)保存挂在这里,读端先等同路径的写完成再读,
- *  防「关标签/收侧栏重挂 → 冲刷未落盘就重读 → 编辑器拿到陈旧内容」的写读竞态。 */
-export const pendingWrites = new Map<string, Promise<unknown>>()
+// 在途写盘登记(MdFileEditor 的保存挂在这里,读端先等同路径的写完成再读)住在 openMdEditors.ts:reloadWindow 也要等它。
+export { pendingWrites }
 
 /** 本机路径 → PreviewTarget(主进程 readHostFile;download=在文件管理器显示)。 */
 export function hostTargetFor(path: string, name: string): PreviewTarget {

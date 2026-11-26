@@ -874,6 +874,12 @@ declare global {
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; publicUrl?: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
+      /** writeHostFile for a page that is going away (pagehide): blocks until written, refused (conflict) or failed ({ error }). */
+      writeHostFileSync?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): { ok?: boolean; conflict?: boolean; mtimeMs?: number; error?: string }
+      /** How many workspace .md tabs this window has open (quit only waits for windows that have one). */
+      reportOpenEditors?(count: number): void
+      /** Runs when the host is about to quit; the quit waits (capped) until it resolves. */
+      onQuitSave?(cb: () => Promise<void>): () => void
       /** 本机工作区文件操作(host 模式)。 */
       renameHostPath?(oldPath: string, newName: string): Promise<{ path: string }>
       mkdirHost?(parentDir: string, name: string): Promise<{ path: string }>
@@ -1018,7 +1024,7 @@ declare global {
       marketSetAutoUpdateAll?(on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketRollback?(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
-      marketInstall?(id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
+      marketInstall?(id: string, version?: string, expect?: { type: string; ack?: { scripts: number; audit: boolean } }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
@@ -1034,6 +1040,7 @@ declare global {
       marketSourcesCatalog?(id: string, opts?: { refresh?: boolean; locale?: string }): Promise<import('../../shared/storeSources').StoreSourceCatalog>
       onMarketSourcesChanged?(cb: () => void): () => void
       marketSourcesInstalls?(locale?: string): Promise<import('../../shared/storeSources').StoreSourceInstall[]>
+      marketSourcesItem?(cardId: string, locale?: string): Promise<import('../../shared/storeSources').StoreSourceCard>
       /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
       marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
@@ -1074,6 +1081,20 @@ declare global {
       miniEntity?(target: import('../../shared/miniPanel').MiniOpenOptions): void
       onMiniNudge?(cb: () => void): () => void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */
+      /** 插件桌面小窗(2026-11-26,shared/desktopWindow.ts;只有主窗用得上)。 */
+      desktopWindow?: {
+        prepare(req: import('../../shared/desktopWindow').DesktopWindowPrepareRequest): Promise<import('../../shared/desktopWindow').DesktopWindowPrepareReply>
+        setBounds(id: string, rect: Partial<import('../../shared/desktopWindow').DesktopRect>): void
+        passThrough(id: string, ignore: boolean): void
+        released(id: string): void
+        close(id: string): void
+        closePlugin(pluginId: string): void
+        screens(): Promise<import('../../shared/desktopWindow').DesktopScreen[]>
+        grant(pluginId: string): Promise<import('../../shared/desktopWindow').DesktopWindowGrant>
+        revoke(pluginId: string): Promise<boolean>
+        onClosed(cb: (id: string) => void): () => void
+        onScreensChanged(cb: (screens: import('../../shared/desktopWindow').DesktopScreen[], placed: Record<string, import('../../shared/desktopWindow').DesktopRect>) => void): () => void
+      }
       openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
       floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>
       onFloatingTarget?(cb: (opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions) => void): () => void
@@ -1394,8 +1415,17 @@ export interface MarketCard {
   /** 用于商店「最近上架」和详情元信息；兼容旧服务端，均可缺省。 */
   createdAt?: string | null
   updatedAt?: string | null
-  /** 来自商店来源(第三方目录)的条目:哪个来源。Forsion 商店的条目没有这一项。 */
+  /** 来自商店来源(第三方目录 / 内置的 skills.sh)的条目:哪个来源。Forsion 商店的条目没有这一项。
+   *  ⚠️ 判「是不是来源条目」用 isSourceCardId(id),别看 origin 真不真:对话卡片里 Forsion 条目也可能带 origin(kind: 'forsion')。 */
   origin?: { sourceId: string; sourceTitle: string }
+  /** Forsion 商店条目的发布方(服务端后台标的;没有 = 开发者)。 */
+  publisher?: 'official' | 'developer' | null
+  /** 内置来源 skills.sh 的收录信息(审计、许可、需要什么、前置…),只有它有。 */
+  collected?: import('../../shared/storeSources').CollectedInfo
+  /** 来源包锁定的提交(GitHub / Forsion Git)。 */
+  commit?: string
+  /** 收录技能要一起装的前置(同一来源里的条目)。 */
+  prereqs?: import('../../shared/storeSources').StorePrereq[]
   /** 包的 manifest `network`(ctx.net 能访问的域名,2026-11-16+)—— 目录给了才有;装好之后以本机 manifest 为准。 */
   network?: string[] | null
   /** 包的 manifest `capabilities`(服务端审核时从包里读的,2026-11-16+);客户端只认白名单里的。 */
@@ -1419,6 +1449,8 @@ export interface MarketInstallProgress {
 /** 市场详情(含 README 正文)。 */
 export interface MarketDetail extends MarketCard {
   readme: string
+  /** 收录技能的适配说明(只为 Claude Code / Codex 写的那些);null = 没有或读不到。 */
+  adapt?: import('../../shared/storeSources').AdaptView | null
   githubRepoUrl?: string | null
   npmPackage?: string | null
 }

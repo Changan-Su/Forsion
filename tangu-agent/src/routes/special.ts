@@ -688,7 +688,8 @@ router.get('/agent/special/automation/actions', authMiddleware, async (_req: Aut
         name,
         description: String(t.definition?.function?.description || '').split('\n')[0].slice(0, 200),
         parameters: t.definition?.function?.parameters || { type: 'object', properties: {} },
-        dangerous: name === 'run_bash' || declaredApproval(name) !== undefined,
+        // 'edit'(写文件档)和 write_file 一样不标危险;跑命令档与每次都问的才标
+        dangerous: name === 'run_bash' || ['command', 'always'].includes(declaredApproval(name) ?? ''),
       });
     }
     res.json({ tools });

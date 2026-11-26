@@ -824,8 +824,13 @@ export interface PluginViewContext {
    *  'pip' (2026-11-13+): the host's small always-on-top picture-in-picture window (desktop only). Only the host opens
    *  it, only on an explicit user action, and only for views it knows (today: the Computer Use live view); draw a
    *  compact card there (no workspace chrome, no extendView, no showInMainPanel; `close?.()` closes the window).
-   *  Older hosts never report it, and a plugin must not assume the value set is closed: treat unknown values like 'floating'. */
-  surface?: 'main' | 'mini' | 'floating' | 'pip'
+   *  Older hosts never report it, and a plugin must not assume the value set is closed: treat unknown values like 'floating'.
+   *  'desktop' (2026-11-26+): a desktop window opened with `ctx.workspace.open(view, { layer: { float: 'desktop' }, form: 'bare' })` —
+   *  transparent, no host chrome, above other apps; `desktop` below is its controller. */
+  surface?: 'main' | 'mini' | 'floating' | 'pip' | 'desktop'
+  /** Only in a desktop window (`surface === 'desktop'`, 2026-11-26+): move it, let clicks pass through its empty parts, drag it,
+   *  draw frames. Absent everywhere else, including the in-window fallback. See PluginDesktopWindowController. */
+  desktop?: PluginDesktopWindowController
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
@@ -884,8 +889,46 @@ export interface ViewContribution {
   forms?: PluginViewForms
 }
 
-/** The look a view takes (2.13.8+). Left / right are places, not looks: docked in either side panel is 'side'. */
-export type PluginViewForm = 'main' | 'side' | 'bottom' | 'mini'
+/** The look a view takes (2.13.8+). Left / right are places, not looks: docked in either side panel is 'side'.
+ *  'bare' (2026-11-26+): no card, no title row — the view draws everything. With `{ float: 'desktop' }` it is a desktop window
+ *  (manifest capability `desktopWindow`); otherwise, or when the host cannot, a bare card floating in the window. Check
+ *  `ctx.workspace.forms?.includes('bare')` before using it: older hosts do not know it. */
+export type PluginViewForm = 'main' | 'side' | 'bottom' | 'mini' | 'bare'
+
+/** A screen rectangle in logical pixels (the same units as CSS px at zoom 1). */
+export interface PluginDesktopRect { x: number; y: number; width: number; height: number }
+/** One display: `bounds` is the whole screen, `workArea` leaves out the Dock / taskbar / menu bar. */
+export interface PluginDesktopScreen { id: number; bounds: PluginDesktopRect; workArea: PluginDesktopRect; scaleFactor: number }
+
+/** The controller a view gets in a desktop window (`view.desktop`, 2026-11-26+). Every call after the window closed throws.
+ *  The host keeps the window at least 32 px on a screen and no larger than half the screen's work area; moves and resizes
+ *  outside that are clamped (read the result back with `bounds()`). */
+export interface PluginDesktopWindowController {
+  /** Where the window is now, in screen coordinates. */
+  bounds(): PluginDesktopRect
+  /** The work area of the screen the window is on (where a pet "stands": `workArea().y + workArea().height`). */
+  workArea(): PluginDesktopRect
+  screens(): PluginDesktopScreen[]
+  moveTo(x: number, y: number): void
+  moveBy(dx: number, dy: number): void
+  resize(width: number, height: number): void
+  /** Call from a `pointerdown` handler: the window follows the pointer until it is released. */
+  drag(event: PointerEvent | MouseEvent): void
+  /** 'shape' (default): clicks on the empty parts of the window fall through to the app underneath; the pointer over any
+   *  element you drew is caught. 'none': the whole window catches clicks. 'all': nothing is caught (look, don't touch).
+   *  `clickThrough` is false where the host cannot do this (Linux): the window then always catches clicks — keep it tight. */
+  setClickThrough(mode: 'shape' | 'none' | 'all'): void
+  readonly clickThrough: boolean
+  /** For views drawn on a canvas: decide yourself whether the point (window CSS pixels) is on your drawing. null = by elements. */
+  setHitTest(fn: ((x: number, y: number) => boolean) | null): void
+  /** Animation frames of the desktop window itself. Use this, not the global requestAnimationFrame: the global one belongs to the
+   *  main window and slows down when it is hidden. */
+  requestFrame(cb: (time: number) => void): number
+  cancelFrame(handle: number): void
+  /** The window moved or resized (your calls, dragging, a screen change). Returns unsubscribe. */
+  onBounds(fn: (bounds: Readonly<PluginDesktopRect>) => void): () => void
+  close(): void
+}
 
 /** See ViewContribution.forms. */
 export interface PluginViewForms {
@@ -893,6 +936,8 @@ export interface PluginViewForms {
   side?: boolean
   bottom?: boolean
   mini?: boolean | { view: string; params?: Record<string, unknown> }
+  /** 'bare' (2026-11-26+): desktop window / bare floating card. */
+  bare?: boolean
 }
 
 /** Where `ctx.workspace.open` puts a view (2.13.8+).
@@ -927,6 +972,9 @@ export interface PluginOpenOptions {
   key?: string
   /** Title of the Mini / Floating Panel / floating card; defaults to the view's title. */
   title?: string
+  /** 'bare' only (2026-11-26+): the window / card size in logical pixels; default 160 × 160. A desktop window is clamped to half
+   *  the screen's work area. */
+  size?: { width?: number; height?: number }
 }
 
 /** What `ctx.workspace.open` resolves to. `layer` / `form` say where it actually went after the fallback rules.
@@ -934,6 +982,11 @@ export interface PluginOpenOptions {
 export type PluginOpenResult =
   | { ok: true; layer: { dock: PluginViewLocation } | { float: 'desktop' | 'view' | 'space' | 'window' }; form: PluginViewForm; close?(): void }
   | { ok: false; reason: 'unknown-view' | 'unsupported' | 'unavailable' | 'limit' | 'disabled'; limit?: number }
+/* Desktop windows ('bare' + { float: 'desktop' }, 2026-11-26+): `{ ok: true, layer: { float: 'desktop' }, form: 'bare', close }`.
+ * Falls back to `{ float: 'window' }` (a bare card in the window) on Web / phones, without the `desktopWindow` capability, or when
+ * the person said no. 'limit' = this plugin already has 3 desktop windows. The same key already open = nothing happens (no focus,
+ * no flicker; new params are handed to the view). Only the main window opens them: called from a Mini or a detached window it
+ * resolves ok if the window is open, 'unavailable' if not. */
 
 export interface PluginFloatingPanelOptions {
   title?: string
@@ -2462,6 +2515,8 @@ export interface PluginContext {
    *  Floating cards close with your plugin (disable / reload), and when you call `close()` or the person closes them. */
   workspace?: {
     open(target: string | { view: string; params?: Record<string, unknown> }, opts?: PluginOpenOptions): Promise<PluginOpenResult>
+    /** The looks this host knows (2026-11-26+; older hosts lack it). Check `forms?.includes('bare')` before opening a desktop window. */
+    readonly forms?: readonly PluginViewForm[]
   }
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
@@ -3340,8 +3395,10 @@ export interface PluginStageHandle {
   /** 全分辨率 PNG(像素 = CSS 尺寸 × 密度)。rect 是 CSS 像素;selector 截那个元素所在的矩形。 */
   capture(opts?: { rect?: { x: number; y: number; width: number; height: number }; selector?: string }): Promise<PluginStageImage>
   /** 录本窗口(不录屏幕、不要系统录屏权限)。cursor 缺省开:点击前画一个指针挪过去;maxMs 缺省 / 上限 120 秒,到点自己停。
-   *  宽度上限 3840 像素。format 缺省 mp4(H.264),可选 webm。 */
-  record(opts?: { fps?: number; cursor?: boolean; maxMs?: number; format?: 'mp4' | 'webm' }): Promise<{ stop(): Promise<PluginStageVideo> }>
+   *  宽度上限 3840 像素。format 缺省 mp4(H.264),可选 webm。
+   *  pause / resume(2026-11-26+,旧宿主没有,先判断再用):把等待、准备动作剪出成片;暂停的时间不算进 durationMs,也不算进 maxMs。
+   *  已经暂停再 pause、没暂停就 resume、stop 之后再调,都 reject(stop 之后是 `closed`)。 */
+  record(opts?: { fps?: number; cursor?: boolean; maxMs?: number; format?: 'mp4' | 'webm' }): Promise<{ stop(): Promise<PluginStageVideo>; pause?(): Promise<void>; resume?(): Promise<void> }>
   close(): Promise<void>
 }
 

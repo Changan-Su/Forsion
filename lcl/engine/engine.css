@@ -1115,3 +1115,21 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
  * no stacking context is needed: in-View z-indexes compete globally again, as they did inside
  * .dv-content-container. Floating groups keep dockview's own stacking (inline z-index per level). */
 .dv-render-overlay[data-lcl-group]:not(.dv-render-overlay-float) { z-index: auto; isolation: auto; }
+
+/* useEdgeNudge 封顶(menuAnchor.tsx:两侧都放不下 → 放在空间大的一侧并限高):标了 data-edge-pin 的头部(搜索框)钉在顶上,只滚其余部分。
+   搜索框自带半透明底,钉住后要在下面垫一层菜单底色,否则滚过去的行会透出来;上面那圈外壳内边距用同色投影补上。 */
+[data-edge-capped] { overscroll-behavior: contain; }
+[data-edge-capped] [data-edge-pin] {
+  position: sticky; top: 0; z-index: 1;
+  background-color: var(--surface-menu, var(--bg-card, var(--bg)));
+  background-image: linear-gradient(var(--overlay-light), var(--overlay-light));
+  /* 第一层盖住上方那圈外壳内边距 + 搜索框自己的外边距;第二层(外扩 3px)补圆角四周露出来的缝 */
+  box-shadow: 0 calc(-2px - var(--menu-shell-padding, 4px)) 0 var(--surface-menu, var(--bg-card, var(--bg))),
+    0 -2px 0 3px var(--surface-menu, var(--bg-card, var(--bg)));
+}
+/* 上面那条会盖掉搜索框自己的聚焦环(.project-menu-search:focus-within 等):把环叠回最上层 */
+[data-edge-capped] [data-edge-pin]:focus-within {
+  box-shadow: 0 0 0 var(--focus-ring, 2px) var(--sel-line, currentColor),
+    0 calc(-2px - var(--menu-shell-padding, 4px)) 0 var(--surface-menu, var(--bg-card, var(--bg))),
+    0 -2px 0 3px var(--surface-menu, var(--bg-card, var(--bg)));
+}

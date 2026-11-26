@@ -157,6 +157,23 @@ describe('子代理的拒绝 / 拦截文案 = 主循环同一句(英文)', () =>
   }, 20_000);
 });
 
+it('keeps a delegated interactive approval bound to the originating turn', async () => {
+  const turn = new AbortController();
+  spies.gate.mockImplementationOnce(async (_runId, _call, gateCtx) => {
+    expect(gateCtx.approvalTurnIsCurrent()).toBe(true);
+    turn.abort();
+    expect(gateCtx.approvalTurnIsCurrent()).toBe(false);
+    return { action: 'approve', userConfirmed: true };
+  });
+  await runSubAgent({
+    task: 't', parentCtx: { ...parentCtx(), userTurnId: 'origin', userTurnSignal: turn.signal }, modelId: 'm1',
+  });
+  const [, ctx] = spies.exec.mock.calls[0];
+  expect(ctx.userTurnId).toBe('origin');
+  expect(ctx.userTurnSignal?.aborted).toBe(true);
+  expect(ctx.userConfirmedCall).toBe(false);
+}, 20_000);
+
 // PI-DSH 评审 R3:主循环的截断闸与有界重试铺到子代理循环。
 describe('子代理循环硬化 = 主循环同款', () => {
   it('④ finish_reason=length 的工具调用一个不执行,回喂同一句截断说明', async () => {

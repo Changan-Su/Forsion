@@ -43,17 +43,34 @@
 .mk-src-more:hover { color: var(--text); background: var(--overlay-medium); }
 .mk-src-note { margin: 0 0 12px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
 
-/* 卡片角标:混排列表(已安装)里说清是哪个来源 */
-.mk-card-eyeline .mk-src-badge { display: inline-flex; align-items: center; height: 18px; max-width: 160px; padding: 0 6px; border-radius: var(--radius-xs, 4px); background: var(--overlay-light); color: var(--text-muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mk-card-eyeline .mk-src-badge.is-gone { color: var(--text-faint); }
+/* 技能分类「全部」按来源分区(方案 B):Forsion 在前,再内置 skills.sh,再用户来源;顶上一排来源筛选 */
+.mk-upgrade-filters.has-src-chips { flex-wrap: wrap; }
+.mk-src-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.mk-src-chips .mk-filter-chip small { color: var(--text-faint); font-size: var(--ui-font-caption); }
+.mk-src-chips .mk-filter-chip[aria-pressed="true"] small { color: var(--text-muted); }
+.mk-src-divider { width: 1px; height: 16px; margin: 0 6px; background: var(--border); }
+.mk-src-section + .mk-src-section { margin-top: 28px; }
+.mk-src-section-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; }
+.mk-src-section-head b { flex: none; color: var(--text); font-size: var(--ui-font-title); font-weight: 600; }
+.mk-src-section-head span { min-width: 0; color: var(--text-faint); font-size: var(--ui-font-meta); }
+.mk-src-section-more { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta); white-space: nowrap; cursor: pointer; }
+.mk-src-section-more:hover { color: var(--text); }
+.mk-src-unavailable { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-card); color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mk-src-unavailable .btn { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; }
+.settings-nav-list button .mk-src-tail { margin-left: auto; color: var(--text-faint); font-size: var(--ui-font-caption); font-weight: 400; }
+[data-mobile-market] .mk-src-chips { width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+[data-mobile-market] .mk-src-chips .mk-filter-chip { flex: none; }
+[data-mobile-market] .mk-upgrade-filters .mk-src-divider { display: none; }
+[data-mobile-market] .mk-src-section-head { flex-wrap: wrap; row-gap: 2px; }
+
+/* 卡片上是哪个来源:作者旁的标签(.mk-pub,MarketLabels.css),不再在顶行另画角标 */
 
 /* 详情页:信任栏换成「未经审核」的中性色;首装确认原地占住安装按钮的位置 */
 .mk-trust-row.mk-src-trust { color: var(--text-muted); }
 /* 说明比「已审核」长:图标别被正文挤扁;「来源地址」这类标签不折行,让长地址那侧去折 */
 .mk-trust-row.mk-src-trust > svg { flex: none; }
 .mk-detail-sidebar .mk-facts dt { flex: none; }
-.mk-src-confirm { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); }
-.mk-src-confirm .mk-src-acts .btn { flex: 1; justify-content: center; }
+/* 首装确认块(.mk-src-confirm)跟 SourceConfirm 搬去了 MarketLabels.css:对话里的商店卡片也用 */
 
 /* Forsion Git 没登录:添加浮层的报错行里带一个「登录 Forsion」按钮(放末尾:要压过上面同特异性的 .mk-src-probe.is-error) */
 .mk-src-probe.is-error { flex-wrap: wrap; }

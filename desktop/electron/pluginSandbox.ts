@@ -543,6 +543,16 @@ export function createPluginSandbox(deps: SandboxDeps) {
     })
   }
 
+  /** 不排队的 raw:只给舞台录像的暂停 / 继续。动作(点击、按键)在子进程里要等 1.5 秒左右画面稳住才回,排在它后面的暂停
+   *  只能等动作整个做完才生效,插件就剪不掉这段收尾(11-26 台架:每步至少录进 1.6 秒)。子进程按消息并发处理、
+   *  回包按 id 对,暂停 / 继续只动渲染层的 MediaRecorder,不改舞台结构,所以可以插队。 */
+  function rawNow(op: string, args: Record<string, unknown>, timeoutMs: number): Promise<Record<string, unknown>> {
+    const c = child && !child.exited ? child : null
+    if (!c || !c.sock) return Promise.reject(new SandboxError('no_sandbox', 'no sandbox is running'))
+    c.lastUsed = Date.now()
+    return request(c, op, args, timeoutMs)
+  }
+
   /** 把沙箱窗口叫到前面(卡片 / Coding Studio 的「打开沙箱窗口」)。 */
   /** 新起的沙箱窗口压在所有窗口之下(子进程是静默模式):用户自己点出来的起 / 重置,成功了就叫到前面。 */
   async function revealed(p: Promise<SandboxResult>, reveal?: boolean): Promise<SandboxResult> {
@@ -618,7 +628,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     void serial(async () => {
       if (child !== c || Date.now() - c.lastUsed < idleMs) return
       const st = await readStatus(c).catch(() => null)
-      if (st?.windowVisible || child !== c) return
+      // 等状态的工夫有人用过(录像的暂停 / 继续走 rawNow 不排队,会插在这中间):不算闲置
+      if (st?.windowVisible || child !== c || Date.now() - c.lastUsed < idleMs) return
       deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`)
       await stop('idle')
     })
@@ -635,6 +646,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     state: publicState,
     openStage,
     raw,
+    rawNow,
     /** 最近一张截图(右栏卡的缩略图):只给发起这个沙箱的对话。 */
     lastShot: (sessionId?: string): { image: string; at: number } | null => {
       const c = child && !child.exited ? child : null

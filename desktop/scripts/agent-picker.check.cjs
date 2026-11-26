@@ -54,16 +54,16 @@ function check(name, ok, detail) {
       check(`${label} user-authored description stays verbatim`, (await pop.locator('.chat-pick-desc').textContent()).includes('用户编写的说明 / User-authored description'))
       await row('long').hover()
       await settle()
+      // 1C(11-17):说明区恒为一行,长简介省略、全文在 title;不加宽浮层,也不再留三行空白。
       const long = await pop.locator('.chat-pick-desc').evaluate(el => {
-        const before = el.scrollTop
-        el.scrollTop = el.scrollHeight
-        return { height: el.clientHeight, scroll: el.scrollHeight, width: el.clientWidth, scrollWidth: el.scrollWidth, moved: el.scrollTop > before }
+        const cs = getComputedStyle(el)
+        return { height: el.clientHeight, line: parseFloat(cs.lineHeight), overflow: el.scrollWidth > el.clientWidth, ellipsis: cs.textOverflow, title: el.title, width: el.getBoundingClientRect().width, menu: el.closest('.chat-pick-pop').getBoundingClientRect().width }
       })
-      check(`${label} full long description is scrollable without widening menu`, long.scroll > long.height && long.moved && long.scrollWidth <= long.width + 1, long)
-      await row('long-two').hover()
+      check(`${label} long description is one ellipsized line with full text in title`, long.height <= long.line + 10 && long.overflow && long.ellipsis === 'ellipsis' && long.title.length > 40 && long.width <= long.menu, long)
+      await page.mouse.move(2, 2)
       await settle()
-      const reset = await pop.locator('.chat-pick-desc').evaluate(el => ({ top: el.scrollTop, overflowing: el.scrollHeight > el.clientHeight }))
-      check(`${label} another long description starts at the top`, reset.overflowing && reset.top === 0, reset)
+      const idle = await pop.locator('.chat-pick-desc').evaluate(el => ({ height: el.clientHeight, line: parseFloat(getComputedStyle(el).lineHeight), text: el.textContent }))
+      check(`${label} idle footer is the one-line status with no blank space`, idle.height <= idle.line + 10 && idle.text.length > 0, idle)
       await pop.locator('input').fill('extra-11')
       check(`${label} search still filters aliases`, await pop.locator('.chat-pick-row').count() === 1)
       await pop.locator('input').fill('')

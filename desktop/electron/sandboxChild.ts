@@ -474,6 +474,16 @@ export function startSandboxChild(self: SandboxSelf, opts: {
     return { mime: v.mime }
   }
 
+  async function recordToggle(op: 'recordPause' | 'recordResume'): Promise<Record<string, unknown>> {
+    const w = win()
+    if (!w) return { error: 'the stage window is not open' }
+    if (!rec || rec.finalizing) return { error: 'the stage is not recording' }
+    const r = await call(`${op}()`, 10_000, w)
+    if (!r.ok) return { error: hookMissText(r) }
+    const v = (r.value ?? {}) as Record<string, unknown>
+    return typeof v.error === 'string' ? { error: v.error } : {}
+  }
+
   async function recordStop(): Promise<Record<string, unknown>> {
     const w = win()
     if (!rec) return { error: 'the stage is not recording' }
@@ -537,6 +547,7 @@ export function startSandboxChild(self: SandboxSelf, opts: {
       case 'capture': return stage ? capture(args) : { error: 'unknown op' }
       case 'recordStart': return stage ? recordStart(args) : { error: 'unknown op' }
       case 'recordStop': return stage ? recordStop() : { error: 'unknown op' }
+      case 'recordPause': case 'recordResume': return stage ? recordToggle(msg.op) : { error: 'unknown op' }
       case 'reload': await reloadAll(); return {}
       case 'show': {
         unsink()

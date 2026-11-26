@@ -71,6 +71,8 @@ const EFFECT_EXCEPTIONS = new Map([
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-range|box-shadow', 'Ultra 档位轨道辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-thumb|box-shadow', 'Ultra 档位滑块辉光'],
   ['../lcl/engine/engine.css|.lcl-droplet|filter', '液滴融合滤镜:形状由 SVG 滤镜合成,高程 token 的 box-shadow 进不了这一层,只能写 drop-shadow'],
+  ['../lcl/engine/engine.css|[data-edge-capped] [data-edge-pin]|box-shadow', '菜单封顶时钉住的搜索框:零模糊、菜单底色的实心遮挡,盖住从它上方那圈内边距滚过去的行(useEdgeNudge,11-17),不是高程'],
+  ['../lcl/engine/engine.css|[data-edge-capped] [data-edge-pin]:focus-within|box-shadow', '同上一条,另把搜索框自己的聚焦环叠回最上层'],
   ['../lcl/engine/engine.css|.lcl-stretch|filter', '拉伸展开的底层(panelMotion.ts stretchOpen):面板自己的投影被 clip-path 裁掉,影子由这层按子节点拼出的轮廓投,box-shadow 只认盒子不跟形状;与 .lcl-droplet 同用 --droplet-shadow'],
 ])
 

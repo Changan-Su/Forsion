@@ -75,7 +75,7 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, keptPlacement, fitAnchored, followAnchor, useEdgeNudge, edgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, keptPlacement, fitAnchored, followAnchor, useEdgeNudge, edgeNudge, edgeVertical, verticalClip, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts, FitAnchoredOpts, FollowOpts } from './menuAnchor'
 // 液滴展开(DESIGN §3):小按钮长出贴着的面板。宿主组件(账号卡)用;插件暂不开放。
@@ -84,8 +84,8 @@ export { openFloat, nearestAnchor, savedAnchor, registerSpaceFloatLayer, FLOAT_A
 export type { FloatScope, FloatAnchor, FloatRole, FloatOptions, FloatHandle } from './floatLayer'
 export { SpaceFloatLayer } from './SpaceFloatLayer'
 /** 统一打开入口(第三期):位置(layer)和样子(form)分开写;回落规则在 workspaceOpen.ts 头注。 */
-export { workspace, workspaceOpen, planOpen, dockFallback, setDesktopOpener } from './workspaceOpen'
-export type { OpenTarget, OpenOptions, OpenLayer, OpenResult, OpenPlan, OpenEnv, OpenFailure, ResolvedLayer, FloatOpenScope, DesktopOpener } from './workspaceOpen'
+export { workspace, workspaceOpen, planOpen, dockFallback, setDesktopOpener, WORKSPACE_FORMS } from './workspaceOpen'
+export type { OpenTarget, OpenOptions, OpenLayer, OpenResult, OpenPlan, OpenEnv, OpenFailure, ResolvedLayer, FloatOpenScope, DesktopOpener, BareDesktopResult } from './workspaceOpen'
 export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
 export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'

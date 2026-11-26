@@ -18,7 +18,13 @@ Do not send a conversational visualization to Agent Desk in place of the inline 
   legend only if needed. No decorative cards, summary dashboards or fake data. Explicitly label
   illustrative values. Bars start at zero; line domains include all data and uncertainty.
 - Simulations: compact controls followed by one dominant visual. Display changed values near their
-  control or mark. Do not fill space with equations or prose that belongs in the answer.
+  control or mark. Before writing the markup, trace the model at the initial value, the transition
+  itself and a representative value on either side. Give the control a reachable setting for each
+  state (a labelled preset is useful for an exact noninteger boundary). Draw the mechanism that
+  produces the result. Use the same signed model for labels, directions and geometry. Choose a
+  viewport that shows the important marks in each state; when a mark goes out of range, indicate
+  its direction at the edge. At an undefined or unbounded value draw the limiting behavior.
+  Keep derivations in chat.
 - Diagrams: one reading direction, aligned nodes and quiet connectors. Do not turn each sentence
   into a rounded box. A plain Markdown table stays a Markdown table when the user asks for one.
 - Interface previews: reflect Forsion's native density and real content. Make the few useful

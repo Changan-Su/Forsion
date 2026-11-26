@@ -2445,8 +2445,9 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
   vault?: boolean
   /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
   immediate?: boolean
-  /** Immediate mode: set to a function that synchronously hands any held edit (IME composition) to onChange.
-   *  Hosts call it before reading their cached value or disposing. */
+  /** Set to a function that synchronously hands any held edit to onChange (immediate mode: an IME composition;
+   *  debounced mode: whatever the listener's 200ms window still holds). Hosts call it before reading their cached
+   *  value or disposing. Unmount already does it. */
   flushRef?: { current: (() => void) | null }
 }) {
   const onChangeRef = useRef(onChange)
@@ -2553,9 +2554,63 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
       }
     },
   }))] : undefined, [immediate])
+  /** Debounced mode: the listener's emit (`settled`) tells the plugin below that nothing is held any more. */
+  const settled = useRef<(() => void) | null>(null)
+  /** Debounced mode: what a flush handed over, until the next edit; the listener's pending emit of the same text is dropped. */
+  const flushed = useRef<string | null>(null)
+  const readOnlyRef = useRef(readOnly)
+  readOnlyRef.current = readOnly
+  const debouncedPlugins = useMemo(() => immediate ? undefined : [$prose((ctx) => {
+    // Milkdown's listener emits 200ms after the last edit and *cancels* that call when the editor is destroyed, so
+    // closing the host inside the window dropped the last keystrokes (check:wsfileflush). Mirror the listener instead —
+    // same trigger (a doc change not marked addToHistory:false, seen in the same state.apply hook), same document
+    // (the last such transaction's, not the live one) — and hand that over on unmount. Nothing held → nothing handed
+    // over: an untouched document is never re-serialized, so a host that saves on change never rewrites it normalized.
+    let held: ProseNode | null = null // doc of the last edit the listener has not emitted yet
+    // The document as of the last emit, plus changes the listener never emits (addToHistory:false while nothing is
+    // held, e.g. ids filled in after mount), so typing and undoing inside the window counts as no edit.
+    let base: ProseNode | null = null
+    return new Plugin({
+      state: {
+        init: (_config, state) => { base ??= state.doc; return null },
+        apply: (tr, value) => {
+          if (!tr.docChanged) return value
+          if (tr.getMeta('addToHistory') !== false) { held = tr.doc; flushed.current = null }
+          else if (!held) base = tr.doc
+          return value
+        },
+      },
+      view: (view) => {
+        const settle = (): void => { if (held) base = held; held = null }
+        const flushNow = (): void => {
+          if (view.isDestroyed) return
+          // Text still in pending DOM mutations reaches the state (and marks itself held) first.
+          ;(view as unknown as { domObserver?: { flush?: () => void } }).domObserver?.flush?.()
+          const doc = held
+          held = null
+          if (!doc || readOnlyRef.current) return
+          if (base && doc.eq(base)) return // e.g. typed and undone inside the window: the listener would not emit either
+          base = doc
+          // The listener path's chain (MilkdownInner normalizes, the onChange wrapper below converts tabs): same bytes.
+          const stored = entitiesToTabs(normalizeSerializedMd(ctx.get(serializerCtx)(doc)))
+          flushed.current = stored
+          onChangeRef.current(stored)
+        }
+        settled.current = settle
+        flushHeld.current = flushNow
+        return {
+          destroy: () => {
+            if (settled.current === settle) settled.current = null
+            if (flushHeld.current === flushNow) flushHeld.current = null
+          },
+        }
+      },
+    })
+  })], [immediate])
   useLayoutEffect(() => { if (immediate) applyIncoming.current?.() }, [initial, immediate])
-  // Closing mid-composition keeps what is on screen rather than dropping it. Runs before Milkdown's
-  // asynchronous destroy, while the view and serializer are still intact.
+  // Unmount hands over what is held (immediate: a composition; debounced: the listener's window) rather than
+  // dropping it. Layout cleanup: runs before Milkdown's asynchronous destroy, while the view and serializer are
+  // intact, and before any host's passive unmount cleanup reads the value it saves.
   useLayoutEffect(() => () => flushHeld.current?.(), [])
   useLayoutEffect(() => {
     if (!flushRef) return
@@ -2574,8 +2629,13 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           initial={tabsToEntities(initial)}
           // Immediate mode has one writer. The listener can retain an older local
           // transaction when an external addToHistory=false update supersedes it.
-          onChange={immediate ? noop : (md) => onChange(entitiesToTabs(md))}
-          extraPlugins={immediatePlugins}
+          onChange={immediate ? noop : (md) => {
+            settled.current?.()
+            const stored = entitiesToTabs(md)
+            if (stored === flushed.current) { flushed.current = null; return } // a mid-life flushRef call already handed it over
+            onChange(stored)
+          }}
+          extraPlugins={immediatePlugins ?? debouncedPlugins}
           standalone
           keys={keys}
           saveImage={async () => null}

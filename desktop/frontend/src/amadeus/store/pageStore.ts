@@ -767,7 +767,31 @@ function makePageStore(opts: PageStoreOptions = {}) {
         if (opts?.keepOpenNote && anyScopeHasNote()) return
         const target =
           info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
-        if (target) await get().loadPage(target)
+        if (!target) return
+        // 启动页没装上:是「这篇已经不在了」(在线库冷启动先上屏的树快照比服务端旧,别处刚删掉它)还是读失败?
+        // 按新树判,不解析错误文案(桌面 IPC 过来的错误没有类型)。只读不建:不存在就回落到新树里第一篇,没有就空态。
+        // 新树也拉不到 = 不知道(读失败 ≠ 空):原样留着错误,归编辑器的「加载失败 + 重试」。
+        // 用户在这期间自己点开了别的就不顶掉他:v3 导航会推进 loadSeq(loadPage 一进门就 ++,这次启动读该拿到的号是
+        // mySeq;等完不是它 = 错误是用户那次的),v4 打开笔记只改 activeNotePath(noteOf 前后比)。
+        // 库已装上,stale() 比的是开库前的根,这里改按装上的根判。
+        const moved = (): boolean => gen !== restoreGen || get().vaultRoot !== info.root || get().vaultSide !== sideAtStart
+        const noteAt = noteOf(get())
+        const mySeq = loadSeq + 1
+        await get().loadPage(target)
+        const untouched = (): boolean => !moved() && loadSeq === mySeq && !get().pendingPage && noteOf(get()) === noteAt
+        if (!untouched() || !get().error) return
+        let live: string[]
+        try {
+          live = await amadeus.listPages()
+        } catch {
+          return
+        }
+        if (!untouched()) return // 先判再落:换库 / 用户导航之后迟到的列表不进店(refreshStructure 是先提交再给人判)
+        set({ pages: live })
+        if (live.includes(target)) return // 还在:是读失败,不是不存在
+        set({ error: null })
+        const next = live[0]
+        if (next) await get().loadPage(next)
       } catch (e) {
         if (stale()) return
         // 库没装上才记失败;装上之后 loadPage 出错归编辑器自己的「加载失败 + 重试」。
@@ -849,9 +873,11 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     async openOrCreate(path) {
-      // 一律走 loadPage:主进程 loadPage 本就是「存在则解析、不存在才 newPage」,绝不覆盖已有文件
-      // (缓存 pages[] 可能落后于磁盘,直接 newPage 会把已有笔记清空)。
+      // loadPage 两端都只读(桌面主进程 createIfMissing:false、在线桥 404 = 不存在,都不建),「没有就建」得先显式出生:
+      // birthNoteFile 只新建不覆盖(已存在回 'exists'),pages[] 落后于盘 / 云端也清不掉已有笔记。
+      // 不按 pages[] 跳过出生:列表可能还列着别处刚删的那篇,跳过就只剩一个读失败。
       const known = get().pages.includes(path)
+      if ((await birthNoteFile(path)) === 'failed') return
       await get().loadPage(path)
       if (!known) await get().refreshPages()
     },

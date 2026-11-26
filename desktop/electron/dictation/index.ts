@@ -102,7 +102,8 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
   const broadcast = (s: DictationState): void => {
     const capsuleId = capsule.contentsId()
     for (const w of BrowserWindow.getAllWindows()) {
-      if (w.isDestroyed() || w.webContents.id === capsuleId) continue
+      // 退出时主窗的 webContents 先没了、窗口对象还在:往它 send 会抛,Electron 弹「主进程 JavaScript 错误」框把退出卡住
+      if (w.isDestroyed() || w.webContents.isDestroyed() || w.webContents.id === capsuleId) continue
       w.webContents.send(DICTATION_CHANNELS.changed, s)
     }
   }

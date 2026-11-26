@@ -601,7 +601,7 @@ describe('捆绑包里的引擎插件:通道归属按发现目录记', () => {
     writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify({ id: 'lc-chan', name: 'lc-chan', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
     writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
     writeFileSync(path.join(dir, 'dist', 'index.js'), `export default { activate(ctx) {
-  ctx.registerPlugin({ id: 'lc-chan', name: 'lc-chan', description: JSON.stringify(ctx.channelCapabilities) });
+  ctx.registerPlugin({ id: 'lc-chan', name: 'lc-chan', description: JSON.stringify({ ...ctx.channelCapabilities, ...ctx.toolCapabilities }) });
   ctx.registerChannel({
     multiPeer: true, owner: { engine: 'forged', bundle: 'forged' },
     driver: { kind: 'lcchan', start: async () => {}, stop() {}, status: () => [], send: async () => ({ ok: true }), verify: async () => ({ accountId: 'a', label: 'a' }) },
@@ -621,7 +621,7 @@ describe('捆绑包里的引擎插件:通道归属按发现目录记', () => {
     expect(st.plugin.owner).toEqual({ engine: 'lc-chan', bundle: 'acme-chat' });
     expect(st.plugin.multiPeer).toBe(true);
     const { getPluginMeta } = await import('./registry.js');
-    expect(JSON.parse(String(getPluginMeta('lc-chan')?.description))).toEqual({ multiPeer: true, agentPin: true, sendApproval: true });
+    expect(JSON.parse(String(getPluginMeta('lc-chan')?.description))).toEqual({ multiPeer: true, agentPin: true, sendApproval: true, approvalEdit: true });
   });
 });
 

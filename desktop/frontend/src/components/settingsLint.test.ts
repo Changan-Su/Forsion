@@ -90,7 +90,7 @@ const DEBT: Record<string, [number, number, number]> = {
   'components/RealtimeVoiceSettings.tsx': [0, 2, 0],
   'components/RemoteSafetyPanel.tsx': [0, 3, 0],
   'components/RemoteSessionsSettings.tsx': [0, 4, 0],
-  'components/SettingsModal.tsx': [8, 40, 0],
+  'components/SettingsModal.tsx': [8, 31, 0],
   'components/SpaceAppearancePanel.tsx': [0, 5, 0],
   'components/SpacesTab.tsx': [0, 2, 0],
   'components/StartupAppearanceSettings.tsx': [0, 5, 0],

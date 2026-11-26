@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.146.0
+  version: 1.148.0
   author: Forsion
   category: Forsion
 ---
@@ -48,6 +48,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
+- [references/desktop-window.md](references/desktop-window.md): desktop pets / widgets: `ctx.workspace.open(view, { layer: { float: 'desktop' }, form: 'bare' })` with manifest `desktopWindow` (2026-11-26+): transparent chrome-less window above other apps, `view.desktop` controller, click-through, guardrails, fallback to an in-window bare card
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-reading-renderers.md](references/note-reading-renderers.md): `ctx.registerNoteRenderer`; staged read-only rendering, immutable snapshots, hot update rollback and host-owned persistence.
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown / insertMarkdownAt (insert at the caret, cursor marker, refusal reasons); ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile
@@ -162,7 +163,7 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 - **绝不运行时 import 核心包**。对 `@forsion/tangu-agent` 只允许 `import type`(模板 tsconfig 开了 `verbatimModuleSyntax`,值导入直接编译错误)。运行时能力全走 `activate(ctx)` 的 **`ctx.sdk`** —— 否则核心的模块级单例被复制成第二份,行为诡异。
 - **`dist/` 必须提交**。商店安装 = 解压源码到 `~/.forsion/plugins/<id>/`,全程不构建;改 `src/` 后必须 `npm run build`(tsc→dist/)再提交。
 - **工具门禁**:`isEnabledFor` 返回 `store.isPluginEnabledSync(id)`,插件启用才对模型可见。
-- **动手前问不问用户**:工具的 `capabilities.approval`。不写 = 只读,不问。`'command'` = 与 `run_bash` 同档(「询问我批准」时每次问;用户点了「总允许」或开了完全通行就不问;聊天 / 云端会话不问)。`'always'` = **每次调用都由用户本人在卡上确认**:完全通行、「总允许」、用户的 allow 规则、hook 的 allow 都跳不过,聊天 / 云端会话照样弹卡;自动化、Muse 后台、远程会话里直接被拒(工具收不到调用)。花掉用户的东西、替用户对外发内容的动作用 `'always'`。读和写拆成两个工具名,只给写的那个声明;卡上显示的是这次调用的参数原文,所以一次调用只做一件事,参数写成人看得懂的字段。
+- **动手前问不问用户**:工具的 `capabilities.approval`。不写 = 只读,不问。`'edit'`(2026-11-26 起)= 与 `write_file` 同档:只在「询问我批准」时问,「替我批准」和完全放行直接做;给只改插件自己那份数据、参数里不带路径的写工具用(存稿、出图这类),旧引擎不认得,当不写处理(不问),所以先判:`approval: ctx.toolCapabilities?.approvalEdit ? 'edit' : 'command'`,免得旧引擎的「询问我批准」下不问就写。`'command'` = 与 `run_bash` 同档(「询问我批准」和「替我批准」时每次问;用户点了「总允许」或开了完全放行就不问;聊天 / 云端会话不问)。`'always'` = **每次调用都由用户本人在卡上确认**:完全通行、「总允许」、用户的 allow 规则、hook 的 allow 都跳不过,聊天 / 云端会话照样弹卡;自动化、Muse 后台、远程会话里直接被拒(工具收不到调用)。花掉用户的东西、替用户对外发内容的动作用 `'always'`。读和写拆成两个工具名,只给写的那个声明;卡上显示的是这次调用的参数原文,所以一次调用只做一件事,参数写成人看得懂的字段。
 - **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
 - **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
 - **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。
@@ -368,6 +369,8 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 - 不写版本范围 = 「未知」,商店照常展示但不算确认适配;靠新宿主接缝的插件写 `minAppVersion`,已知在某个版本坏掉的写 `maxAppVersion`。
 - 每个条目有公开评论区(登录可评、可回复、本人可改可删)。新评论发到投稿账号的收件箱,回复通知被回复者;作者可以在评论区关掉全部或单个插件的评论消息。
 - Tangu 用 `search_marketplace` 查候选，确认适合后用 `recommend_marketplace_plugin` 展示卡片。用户可在卡片上选择安装，所以标签和描述应写清实际能力。
+- 结果和卡片里每条带 `origin`(出处:`{ kind: 'forsion', publisher: 'official' | 'developer' }`,或 `{ kind: 'collected' | 'source', sourceId, sourceTitle }`;老服务端不带 = Forsion 开发者)和可选的 `requirements`(`{ cli, apiKeys, desktopOnly, scripts, auditWarn }`)。同样命中的 Forsion 条目排在前面;`collected` 是 Forsion 从 skills.sh 收录的技能,没经人工审核(2026-11-23 起)。
+- 技能 frontmatter 写 `disable-model-invocation: true` = 只在用户点名(`/skill`)时用:不进模型看到的技能目录,`use_skill` 只在用户这一轮点了它时才放行。技能文件夹里的 `.forsion-adapt.md` 是保留名:收录技能的适配说明,由安装流程写入、`use_skill` 放在正文前面,只对商店来源装的技能(文件夹 `src-<来源 id>-…`)算数;包里自带的同名文件安装时会被删掉,别用这个名字(2026-11-23 起)。
 
 ### Android App 与 `isDesktopOnly`(2026-10-02 起)
 

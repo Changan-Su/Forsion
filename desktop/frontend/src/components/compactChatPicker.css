@@ -59,8 +59,13 @@
 .chat-pick-direct:hover { background: var(--bg-card); color: var(--text); }
 .chat-pick-desc { min-height: 36px; padding: 4px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; color: var(--text-muted); }
 .chat-pick-desc b { display: block; font-weight: 500; color: var(--text-light); }
-/* Name + three copy lines, including status/empty states. Long copy scrolls here rather than resizing the anchored list. */
-.chat-pick-pop .chat-pick-desc { height: calc(6em + 8px); box-sizing: border-box; overflow-y: auto; overflow-wrap: anywhere; }
+/* 固定一行(用户 11-17 定 1C):平时是状态句,悬停换成「名字 + 简介」,超长省略、全文看行上的悬停提示。
+   高度恒定是为了上方锚定的浮层不跳行;原来按「名字 + 三行」留位,没简介时空出一大块。 */
+.chat-pick-pop .chat-pick-desc {
+  height: calc(1.5em + 8px); min-height: 0; box-sizing: border-box;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.chat-pick-pop .chat-pick-desc b { display: inline; margin-right: 6px; }
 
 /* ─── C 抽屉(触屏):照手机端 .mb-sheet 的几何,不依赖它的样式表 ─── */
 .chat-pick-scrim {

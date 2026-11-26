@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { ArrowDown, ArrowUp, Layers, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Layers, MoreHorizontal, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { saveModelPickerPreferences, useModelPickerPreferences, type ModelPickerPreferences } from '../modelPickerPreferences'
 import type { ModelInfo } from '../types'
@@ -7,6 +7,8 @@ import { ModelMetadata } from './ModelMetadata'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { MODEL_KINDS, originOf, type CatalogItem, type ModelKind } from './modelKinds'
 import { OriginTag } from './DefaultModelsPage'
+import { CapabilityMenu, type CapabilityMenuItem } from './CapabilityMenu'
+import './modelServices.css'
 
 registerMessages({
   'picker.hint': { zh: '修改自动保存在当前设备。隐藏模型不会删除连接或改变已有会话。', en: 'Changes save automatically on this device. Hiding a model keeps its connection and existing conversations.' },
@@ -20,7 +22,13 @@ registerMessages({
   'lib.kinds': { zh: '模型类型', en: 'Model types' },
   'lib.hint.llm': { zh: '数字是计费倍率；自带 key 的模型可以改上下文窗口。', en: 'Numbers are billing multipliers. Models on your own key can have their context window changed.' },
   'lib.hint.slotOnly': { zh: '这一类只在「默认模型」里可选，不出现在聊天的模型菜单。', en: 'These are only offered under Default models, not in the chat model menu.' },
-  'lib.empty': { zh: '这一类还没有模型。可以在「提供方」里添加自己的连接。', en: 'No models of this kind yet. You can add your own connection under Providers.' },
+  'lib.empty': { zh: '这一类还没有模型。可以点「添加模型」接上自己的服务。', en: 'No models of this kind yet. Use Add models to connect your own service.' },
+  'lib.kind.websearch': { zh: '联网搜索', en: 'Web search' },
+  'lib.addModels': { zh: '添加模型', en: 'Add models' },
+  'lib.default': { zh: '默认', en: 'Default' },
+  'lib.rowActions': { zh: '{name} 的更多操作', en: 'More actions for {name}' },
+  'lib.onlyProvider': { zh: '只看 {name}', en: 'Only {name}' },
+  'lib.clearFilter': { zh: '看全部来源', en: 'Show all sources' },
   'lib.all': { zh: '全部', en: 'All' },
   'lib.vision': { zh: '看图', en: 'Vision' },
   'lib.noVision': { zh: '不看图', en: 'Text only' },
@@ -72,17 +80,34 @@ function CtxWindowInput({ model, onSave }: { model: ModelInfo; onSave: (modelId:
  * 对话 / 生图 / 识别的模型来自 models,能在选择菜单里隐藏(本机偏好;云端模型也能藏,只是不能改分组 —— 分组归管理员);
  * 朗读 / 通话 / 翻译只在「默认模型」的对应槽里出现,这里只读列出。自带 key 的对话模型可改上下文窗口(本机覆盖)。
  */
-export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, onContextWindow, onRefresh, loading, autoCompact }: {
+export type LibKind = ModelKind | 'websearch'
+
+export function ModelPickerSettings({ catalog, kind: rawKind, onKind, subscriptionIds, onContextWindow, onRefresh, loading, autoCompact, sources, webSearch, footer, onAddModels, rowActions, defaultChatId, providerFilter, onProviderFilter }: {
   catalog: Record<ModelKind, CatalogItem[]>
-  kind: ModelKind
-  onKind: (k: ModelKind) => void
+  kind: LibKind
+  onKind: (k: LibKind) => void
   subscriptionIds: string[]
   onContextWindow?: (modelId: string, tokens: number | null) => Promise<void>
   onRefresh?: () => void
   loading?: boolean
   /** 自动压缩阈值:跟上下文窗口同一套心智,放在对话那一类的最上面。 */
   autoCompact?: ReactNode
+  /** 模型与服务(11-26 C2):页顶一排来源胶囊(桌面才有)。 */
+  sources?: ReactNode
+  /** 给了 = 类型标签最后多一个「联网搜索」,内容整块是它。 */
+  webSearch?: ReactNode
+  /** 页底(脱敏设置、导入本机配置之类)。 */
+  footer?: ReactNode
+  onAddModels?: () => void
+  /** 每行的 ⋯ 菜单;返回空 = 这行没有 ⋯。 */
+  rowActions?: (c: CatalogItem, kind: ModelKind) => CapabilityMenuItem[]
+  defaultChatId?: string
+  /** 只看某一条直连连接(来源浮层里点「N 个模型」)。 */
+  providerFilter?: string | null
+  onProviderFilter?: (id: string | null) => void
 }) {
+  const kind: ModelKind = rawKind === 'websearch' ? 'llm' : rawKind
+  const showWebSearch = rawKind === 'websearch' && !!webSearch
   const { t } = useI18n()
   const prefs = useModelPickerPreferences()
   const [name, setName] = useState('')
@@ -95,7 +120,7 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
   }
   const items = catalog[kind]
   const q = query.trim().toLowerCase()
-  const shown = items.filter((c) => (source === 'all' || c.source === source) && `${c.name} ${c.id} ${c.provider}`.toLowerCase().includes(q))
+  const shown = items.filter((c) => (providerFilter ? c.source === 'direct' && c.provider === providerFilter : source === 'all' || c.source === source) && `${c.name} ${c.id} ${c.provider}`.toLowerCase().includes(q))
   const hideable = shown.filter((c) => c.model)
   const slotOnly = kind === 'tts' || kind === 'realtime' || kind === 'mt' || kind === 'fim'
   const changeGroup = (id: string, group: string) => {
@@ -126,7 +151,9 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
   const row = (c: CatalogItem) => {
     const m = c.model
     const visible = !prefs.hidden.includes(c.id)
-    return <SettingsRow key={`${c.source}:${c.id}`} className={`model-lib-row${m && !visible ? ' is-hidden' : ''}`} label={<span title={c.id}>{c.name}</span>}
+    const actions = rowActions?.(c, kind) || []
+    return <SettingsRow key={`${c.source}:${c.id}`} className={`model-lib-row${m && !visible ? ' is-hidden' : ''}`}
+      label={<span title={c.id}>{c.name}{kind === 'llm' && defaultChatId === c.id && <span className="model-lib-default">{t('lib.default')}</span>}</span>}
       description={c.source === 'forsion' ? m?.groupName || undefined : c.id !== c.name ? c.id : undefined}
       control={<div className="model-lib-controls">
         {kind === 'llm' && m && caps(m)}
@@ -138,20 +165,28 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
           {prefs.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
         </select>}
         {m && <SettingsSwitch checked={visible} label={t('picker.visibleModel', { name: c.name })} onChange={(on) => save({ ...prefs, hidden: on ? prefs.hidden.filter((id) => id !== c.id) : [...prefs.hidden, c.id] })} />}
+        {actions.length > 0 && <CapabilityMenu label={t('lib.rowActions', { name: c.name })} className="model-lib-more" items={actions}><MoreHorizontal size={15} /></CapabilityMenu>}
       </div>} />
   }
 
+  // 有来源胶囊(桌面的模型与服务页)时,添加 / 分组 / 刷新挪到胶囊那一行的右端:类型标签多了「联网搜索」,一行放不下
+  const actions = <>
+    {!showWebSearch && onAddModels && <button className="btn primary sm" onClick={onAddModels}><Plus size={12} />{t('lib.addModels')}</button>}
+    {!showWebSearch && kind === 'llm' && <button className="btn ghost sm" aria-expanded={groupsOpen} onClick={() => setGroupsOpen((o) => !o)}><Layers size={12} />{t('picker.groups')}</button>}
+    {!showWebSearch && onRefresh && <button className="btn ghost sm" disabled={loading} onClick={onRefresh}><RefreshCw size={12} className={loading ? 'spin' : ''} />{t('lib.refresh')}</button>}
+  </>
   return <div className="model-lib">
+    {sources && <div className="model-lib-top">{sources}<div className="model-lib-actions">{actions}</div></div>}
     <div className="model-lib-bar">
       <div className="seg" role="group" aria-label={t('lib.kinds')}>
-        {MODEL_KINDS.map((k) => <button key={k} aria-pressed={k === kind} className={k === kind ? 'active' : ''} onClick={() => { onKind(k); setQuery('') }}>
+        {MODEL_KINDS.map((k) => <button key={k} aria-pressed={!showWebSearch && k === kind} className={!showWebSearch && k === kind ? 'active' : ''} onClick={() => { onKind(k); setQuery('') }}>
           {t(`lib.kind.${k}`)} <span className="model-lib-count">{catalog[k].length}</span>
         </button>)}
+        {webSearch && <button aria-pressed={showWebSearch} className={showWebSearch ? 'active' : ''} data-kind="websearch" onClick={() => { onKind('websearch'); setQuery('') }}>{t('lib.kind.websearch')}</button>}
       </div>
-      <span className="grow" />
-      {kind === 'llm' && <button className="btn ghost sm" aria-expanded={groupsOpen} onClick={() => setGroupsOpen((o) => !o)}><Layers size={12} />{t('picker.groups')}</button>}
-      {onRefresh && <button className="btn ghost sm" disabled={loading} onClick={onRefresh}><RefreshCw size={12} className={loading ? 'spin' : ''} />{t('lib.refresh')}</button>}
+      {!sources && <><span className="grow" />{actions}</>}
     </div>
+    {showWebSearch ? <div className="model-lib-websearch" data-lib-kind="websearch">{webSearch}</div> : <>
     {kind === 'llm' && groupsOpen && <SettingsPanel icon={<Layers size={14} />} title={t('picker.groups')}>
       <div className="model-lib-groups">
         {prefs.groups.map((g, index) => <div key={g.id} className="model-catalog-group-editor">
@@ -174,7 +209,9 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
     <SettingsPanel title={t(`lib.kind.${kind}`)} description={kind === 'llm' ? t('lib.hint.llm') : slotOnly ? t('lib.hint.slotOnly') : t('picker.hint')}>
       {items.length > 0 && <div className="model-lib-toolbar">
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('model.searchPlaceholder')} aria-label={t('model.searchPlaceholder')} />
-        <div className="seg seg-sm">{(['all', 'forsion', 'direct'] as const).map((s) => <button key={s} aria-pressed={source === s} className={source === s ? 'active' : ''} onClick={() => setSource(s)}>{t(s === 'all' ? 'lib.all' : s === 'forsion' ? 'origin.cloud' : 'origin.key')}</button>)}</div>
+        {providerFilter
+          ? <span className="model-lib-filter">{t('lib.onlyProvider', { name: providerFilter })}<button type="button" className="icon-btn" aria-label={t('lib.clearFilter')} title={t('lib.clearFilter')} onClick={() => onProviderFilter?.(null)}><X size={12} /></button></span>
+          : <div className="seg seg-sm">{(['all', 'forsion', 'direct'] as const).map((s) => <button key={s} aria-pressed={source === s} className={source === s ? 'active' : ''} onClick={() => setSource(s)}>{t(s === 'all' ? 'lib.all' : s === 'forsion' ? 'origin.cloud' : 'origin.key')}</button>)}</div>}
         {hideable.length > 0 && <>
           <button className="btn ghost sm" onClick={() => save({ ...prefs, hidden: prefs.hidden.filter((id) => !hideable.some((c) => c.id === id)) })}>{t('picker.showAll')}</button>
           <button className="btn ghost sm" onClick={() => save({ ...prefs, hidden: [...new Set([...prefs.hidden, ...hideable.map((c) => c.id)])] })}>{t('picker.hideAll')}</button>
@@ -187,5 +224,7 @@ export function ModelPickerSettings({ catalog, kind, onKind, subscriptionIds, on
       {!items.length && <div className="hint model-lib-empty">{t('lib.empty')}</div>}
       {error && <div className="hint model-catalog-error" role="alert">{error}</div>}
     </SettingsPanel>
+    </>}
+    {footer}
   </div>
 }

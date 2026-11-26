@@ -52,7 +52,7 @@ export interface ViewProps {
 }
 
 /** 样子(LCL 表面规范方案 B「形态」):同一个 View 以多大、什么样子出现。左右是位置不是样子:停靠在左 / 右栏都是 side。 */
-export type ViewForm = 'main' | 'side' | 'bottom' | 'mini'
+export type ViewForm = 'main' | 'side' | 'bottom' | 'mini' | 'bare'
 
 /** View 声明自己能用哪几种样子(第三期,workspaceOpen.ts 按它回落)。**不写 = 全都行**(今天的行为,一个不收紧)。
  *  写了:没列出的就是不支持。mini: true = Mini 里显示 View 本身;`{ view }` = 另配一个紧凑视图
@@ -62,6 +62,9 @@ export interface ViewForms {
   side?: boolean
   bottom?: boolean
   mini?: boolean | { view: { type: string; params?: Record<string, unknown> } }
+  /** 无卡片的样子(2026-11-26,插件桌面小窗):浮起来时没有卡面、标题行,View 自己画全部。桌面上是一扇透明、没有外壳的
+   *  系统小窗(壳层接 DesktopOpener.bare);窗口里是 bare 浮层。停靠时不看样子。 */
+  bare?: boolean
 }
 
 /** 视图分类(View 基座统一化,正典 docs/ToBeImproved/View基座统一化方案_2026-08-25.md):

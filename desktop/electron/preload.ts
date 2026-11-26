@@ -62,6 +62,14 @@ const openVoiceInput: OpenVoiceInput = (modelId, listener) => {
   }
 }
 
+// Before quitting, the host asks windows with open workspace .md tabs to save them (electron/editorQuitSave.ts). Always
+// answered, also when nothing registered here (a page that just reloaded): an unanswered ask holds the quit until the cap.
+const quitSaves = new Set<() => Promise<void>>()
+ipcRenderer.on('wsfile:quit-save', (_e, info: { requestId?: string } | undefined) => {
+  void Promise.all([...quitSaves].map((cb) => Promise.resolve().then(cb).catch(() => {})))
+    .finally(() => ipcRenderer.send('wsfile:quit-saved', info?.requestId))
+})
+
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
@@ -403,6 +411,17 @@ const api = {
   /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict 不覆盖。 */
   writeHostFile: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }> =>
     ipcRenderer.invoke('fs:writeFile', filePath, content, expectedMtimeMs, createNew),
+  /** writeHostFile for a page that is going away (pagehide): blocks until the host wrote it, refused it (conflict) or failed
+   *  ({ error }). Only there: it stalls the whole renderer for the write. */
+  writeHostFileSync: (filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): { ok?: boolean; conflict?: boolean; mtimeMs?: number; error?: string } =>
+    ipcRenderer.sendSync('fs:writeFileSync', filePath, content, expectedMtimeMs, createNew),
+  /** How many workspace .md tabs this window has open (quit only waits for windows that have one). */
+  reportOpenEditors: (count: number): void => ipcRenderer.send('wsfile:open-editors', count),
+  /** Runs when the host is about to quit; the quit waits (capped) until it resolves. */
+  onQuitSave: (cb: () => Promise<void>): (() => void) => {
+    quitSaves.add(cb)
+    return () => { quitSaves.delete(cb) }
+  },
   // ── 本机工作区文件操作:重命名 / 新建文件夹 / 删除到回收站 / 在文件管理器显示 / 原生拖出 ──
   renameHostPath: (oldPath: string, newName: string): Promise<{ path: string }> =>
     ipcRenderer.invoke('fs:rename', oldPath, newName),
@@ -505,8 +524,9 @@ const api = {
     void ipcRenderer.invoke('market:updateStatus').then((state) => { if (!off && !received) cb(state) }).catch(() => {})
     return () => { off = true; ipcRenderer.removeListener('market:updateStatus', listener) }
   },
-  /** `expect.type`: for store-source items, the type the user confirmed; main refuses the install if it changed. */
-  marketInstall: (id: string, version?: string, expect?: { type: string }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
+  /** `expect.type`: for store-source items, the type the user confirmed; main refuses the install if it changed.
+   *  `expect.ack`: the scripts / audit warning the user confirmed for a source skill (main counts again and refuses more). */
+  marketInstall: (id: string, version?: string, expect?: { type: string; ack?: { scripts: number; audit: boolean } }): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id, version, expect),
   // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
   onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
@@ -536,6 +556,7 @@ const api = {
     return () => ipcRenderer.removeListener('marketSources:changed', listener)
   },
   marketSourcesInstalls: (locale?: string): Promise<import('../shared/storeSources').StoreSourceInstall[]> => ipcRenderer.invoke('marketSources:installs', locale),
+  marketSourcesItem: (cardId: string, locale?: string): Promise<import('../shared/storeSources').StoreSourceCard> => ipcRenderer.invoke('marketSources:item', cardId, locale),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (disabledPluginIds?: string[]): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list', disabledPluginIds),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -699,6 +720,29 @@ const api = {
     const listener = (): void => cb()
     ipcRenderer.on('window:miniNudge', listener)
     return () => ipcRenderer.removeListener('window:miniNudge', listener)
+  },
+  /** 插件桌面小窗(2026-11-26,shared/desktopWindow.ts):只有主窗用得上,主进程逐条核 sender。 */
+  desktopWindow: {
+    prepare: (req: import('../shared/desktopWindow').DesktopWindowPrepareRequest): Promise<import('../shared/desktopWindow').DesktopWindowPrepareReply> =>
+      ipcRenderer.invoke('desktopWindow:prepare', req),
+    setBounds: (id: string, rect: Partial<import('../shared/desktopWindow').DesktopRect>): void => ipcRenderer.send('desktopWindow:setBounds', id, rect),
+    passThrough: (id: string, ignore: boolean): void => ipcRenderer.send('desktopWindow:passThrough', id, ignore),
+    released: (id: string): void => ipcRenderer.send('desktopWindow:released', id),
+    close: (id: string): void => ipcRenderer.send('desktopWindow:close', id),
+    closePlugin: (pluginId: string): void => ipcRenderer.send('desktopWindow:closePlugin', pluginId),
+    screens: (): Promise<import('../shared/desktopWindow').DesktopScreen[]> => ipcRenderer.invoke('desktopWindow:screens'),
+    grant: (pluginId: string): Promise<import('../shared/desktopWindow').DesktopWindowGrant> => ipcRenderer.invoke('desktopWindow:grant', pluginId),
+    revoke: (pluginId: string): Promise<boolean> => ipcRenderer.invoke('desktopWindow:revoke', pluginId),
+    onClosed: (cb: (id: string) => void): (() => void) => {
+      const listener = (_e: unknown, id: string): void => cb(id)
+      ipcRenderer.on('desktopWindow:closed', listener)
+      return () => ipcRenderer.removeListener('desktopWindow:closed', listener)
+    },
+    onScreensChanged: (cb: (screens: import('../shared/desktopWindow').DesktopScreen[], placed: Record<string, import('../shared/desktopWindow').DesktopRect>) => void): (() => void) => {
+      const listener = (_e: unknown, screens: import('../shared/desktopWindow').DesktopScreen[], placed?: Record<string, import('../shared/desktopWindow').DesktopRect>): void => cb(screens, placed ?? {})
+      ipcRenderer.on('desktopWindow:screensChanged', listener)
+      return () => ipcRenderer.removeListener('desktopWindow:screensChanged', listener)
+    },
   },
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
@@ -890,7 +934,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus', 'marketSourcesList', 'marketSourcesProbe', 'marketSourcesAdd', 'marketSourcesRemove', 'marketSourcesSetDisabled', 'marketSourcesTrust', 'marketSourcesSetDeclared', 'marketSourcesCatalog', 'marketSourcesInstalls', 'onMarketSourcesChanged'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus', 'marketSourcesList', 'marketSourcesProbe', 'marketSourcesAdd', 'marketSourcesRemove', 'marketSourcesSetDisabled', 'marketSourcesTrust', 'marketSourcesSetDeclared', 'marketSourcesCatalog', 'marketSourcesInstalls', 'marketSourcesItem', 'onMarketSourcesChanged'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),

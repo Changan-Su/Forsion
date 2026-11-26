@@ -1,10 +1,10 @@
 /**
  * 云桥(web/mobile 共用)「别处删了/挪了的页不许复活」仪器(2026-09-07 云同步事故,跨端幽灵文件那半 + Codex 终审)。
  *  - SSE delete/move/文件夹事件只走明细回调,**不**走 onPageChange 回灌(回灌 = loadOrCreate 404→重建 = 复活)
- *  - 本会话见过、现 404 的路径:loadPage / reconcilePage 抛 VanishedError,零 PUT;从未见过的 404 照常创建
+ *  - 本会话见过、现 404 的路径:loadPage / reconcilePage 抛 VanishedError,零 PUT;从未见过的 404 抛 not found(11-25 起不再打开即创建)
  *  - 别处删了、本端还有正文 → 另存 recovered 副本并让后续保存落到那份;空白草稿放弃;新建意图(create)不受禁令
  *  - 别处改名 A→B / 文件夹改名:写旧路径落到新路径(别名),旧路径不重建
- * 负对照(实跑过):去掉 cloudEvents 各分支的 return → 第 1 条红;去掉 loadOrCreate 的 everKnown 守卫 → 第 2 条红。
+ * 负对照(实跑过):去掉 cloudEvents 各分支的 return → 第 1 条红;去掉 loadExisting 的 everKnown 守卫 → 第 2 条红(报 not found 而不是 vanished)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
@@ -90,7 +90,7 @@ describe('cloud events: delete/move/folder dispatch', () => {
 })
 
 describe('cloud bridge: vanished pages are not recreated', () => {
-  it('seen page deleted elsewhere: loadPage/reconcilePage reject with zero PUT; unseen 404 still creates', async () => {
+  it('seen page deleted elsewhere: loadPage/reconcilePage reject with zero PUT; unseen 404 rejects too, newPage creates', async () => {
     const { bridge, es } = await boot()
     await bridge.loadPage('seen.md') // 学到 seq → everKnown
     gone.add('seen.md')
@@ -99,7 +99,11 @@ describe('cloud bridge: vanished pages are not recreated', () => {
     await expect(bridge.reconcilePage('seen.md', { title: 'x', blocks: [] } as never, {})).rejects.toThrow(/vanished/)
     expect(puts).toEqual([])
     gone.add('fresh.md')
-    await bridge.loadPage('fresh.md') // 从未见过 → 「打开即创建」照旧
+    // 2026-11-25 起读只读:从未见过的 404 也不再「打开即创建」(冷启动 everKnown 为空,这条曾把别处删掉的上次那篇写回成空笔记,
+    // 见 cloudBridgeRestoreGone.test.ts)。新建只走显式入口。
+    await expect(bridge.loadPage('fresh.md')).rejects.toThrow(/not found/i)
+    expect(puts).toEqual([])
+    await bridge.newPage('fresh.md')
     expect(puts.map((p) => p.path)).toEqual(['fresh.md'])
   })
 

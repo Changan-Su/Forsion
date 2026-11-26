@@ -50,7 +50,10 @@ import { ConnectorStore } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
 import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 import { CODE_TYPES, needsSignIn, SourceConfirm, SourceInfoRow, SourceNavGroup, SourceState, SourceTrustRow, sourceErrorText, useStoreSources } from './MarketSources'
-import type { StoreSourceCatalog } from '../../../shared/storeSources'
+import { isSourceCardId, type StoreSourceCatalog } from '../../../shared/storeSources'
+import { ackOf, compactCount, confirmNeededOf, confirmOf, installPlan, isBuiltinCard, publisherOf, upstreamGone, type InstallStep } from '../services/marketCollected'
+import { splitFrontmatter } from '../services/fileKinds' // 收录技能的正文就是 SKILL.md:frontmatter 不当正文画
+import { AdaptationTab, CollectedFacts, CollectedNeeds, CollectedTrustRow, CountChip, PublisherChip, requirementText, ScriptsConfirmText, SkillsShLink } from './MarketLabels'
 import { sanitizeNetworkPatterns } from '../../../shared/pluginNetwork'
 
 registerMessages({
@@ -60,11 +63,6 @@ registerMessages({
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
   'market.group.more': { zh: '更多', en: 'More' },
   // 卡片与详情页上的类型字样:一张卡是一个东西，英文用单数(左栏分类仍是复数的 market.tab.*)
-  'market.kind.skill': { zh: '技能', en: 'Skill' },
-  'market.kind.agent': { zh: 'Agent', en: 'Agent' },
-  'market.kind.plugin': { zh: '插件', en: 'Plugin' },
-  'market.kind.space': { zh: 'Space', en: 'Space' },
-  'market.kind.theme': { zh: '主题', en: 'Theme' },
   'market.tagLabel': { zh: '标签', en: 'Tags' },
   'market.tagAllShort': { zh: '全部', en: 'All' },
   // 一键补前置:装好的插件在等前置时,提示条与详情页右栏给的那一步
@@ -85,6 +83,14 @@ registerMessages({
   'market.deps.incompatible': { zh: '商店里的版本不能装在这里', en: 'The store version can\'t be installed here' },
   'market.deps.mismatch': { zh: '商店里的条目不是它要的插件', en: 'The store listing isn\'t the plugin it needs' },
   'market.deps.queued': { zh: '等待安装', en: 'Waiting to install' },
+  // 技能分类「全部」按来源分区(2026-11-23 方案 B):Forsion 在前,内置的 skills.sh,再是用户加的来源
+  'market.section.forsionDesc': { zh: '官方与开发者投稿 · 经上架审核 · {n} 项', en: 'Official and developer submissions · Reviewed for listing · {n} items' },
+  'market.section.builtinDesc': { zh: 'Forsion 从 skills.sh 收录 · 已核对能装 · {n} 项', en: 'Collected by Forsion from skills.sh · Checked to install · {n} items' },
+  'market.section.sourceDesc': { zh: '第三方来源 · 未经审核 · {n} 项', en: 'Third-party source · Unreviewed · {n} items' },
+  'market.section.more': { zh: '查看全部 {n} 项', en: 'View all {n}' },
+  'market.section.builtinDescPlain': { zh: 'Forsion 从 skills.sh 收录', en: 'Collected by Forsion from skills.sh' },
+  'market.section.builtinUnavailable': { zh: 'skills.sh 的收录暂时读不到，稍后再试。', en: 'Couldn\'t load the skills.sh collection. Try again later.' },
+  'market.section.filterLabel': { zh: '按来源', en: 'By source' },
 })
 
 type MarketType = MarketCard['type']
@@ -269,6 +275,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const [sourceLoading, setSourceLoading] = useState(false)
   const [confirming, setConfirming] = useState<string | null>(null)
   const [trusting, setTrusting] = useState(false)
+  // 主进程按包实数出来、目录没说的脚本 / 审计警告:按「要装的那一项 → 其中哪一步」记,确认块据此再问一次
+  const [confirmFound, setConfirmFound] = useState<Record<string, Record<string, { scripts: number; audit: boolean }>>>({})
+  // 收录技能连同前置一起装:正在装哪一个前置
+  const [prereqRun, setPrereqRun] = useState<{ parent: string; name: string; n: number; total: number } | null>(null)
+  // 所有开着的来源的目录(技能分类的分区、搜索、可更新、已安装的标签都读它);来源页自己那份仍是 sourceCat
+  const [srcCats, setSrcCats] = useState<Record<string, StoreSourceCatalog>>({})
+  const [srcCatsLoading, setSrcCatsLoading] = useState(false)
+  // 技能分类顶上的来源筛选:all = 分区;forsion / 来源 id = 只看那一个
+  const [skillFilter, setSkillFilter] = useState<string>('all')
   const activeSource = sourceKey ? sources.sources.find((s) => s.id === sourceKey) ?? null : null
   const sourceOf = (c: MarketCard) => (c.origin ? sources.sources.find((s) => s.id === c.origin!.sourceId) : undefined)
   const removedSourceCards = useMemo(() => new Set(sources.installs.filter((r) => r.removed).map((r) => r.cardId)), [sources.installs])
@@ -277,7 +292,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const loadSource = useCallback(async (id: string, refresh = false) => {
     const gen = authGen.current
     setSourceLoading(true)
-    try { const cat = await window.tangu!.marketSourcesCatalog!(id, { refresh, locale }); if (gen === authGen.current) setSourceCat(cat) }
+    try {
+      const cat = await window.tangu!.marketSourcesCatalog!(id, { refresh, locale })
+      if (gen !== authGen.current) return
+      setSourceCat(cat)
+      // 技能分类的混排也用这份(例如登录后才读得出的 Forsion Git 来源)
+      if (cat.items.length) setSrcCats((m) => ({ ...m, [id]: cat }))
+    }
     catch (e) { if (gen === authGen.current) { setSourceCat(null); toast(sourceErrorText(e, t) ?? String((e as Error)?.message || e), true) } }
     finally { if (gen === authGen.current) setSourceLoading(false) }
   }, [locale, t, toast])
@@ -291,6 +312,29 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }), [activeSource, sourceList, loadSource])
   // 选中的来源不见了(插件停用 / 被移除):退回原来那页
   useEffect(() => { if (sourceKey && sources.loaded && !activeSource) setSourceKey(null) }, [sourceKey, sources.loaded, activeSource])
+  // 开着的来源各读一份目录(主进程有 10 分钟缓存与磁盘副本;读失败的来源保留上一份,不当成空)
+  const openSourceIds = sourceList.filter((s) => !s.disabled).map((s) => s.id).join(',')
+  const loadSourceCats = useCallback(async (refresh = false) => {
+    const tg = window.tangu
+    if (!tg?.marketSourcesCatalog || !openSourceIds) { setSrcCats({}); return }
+    const gen = authGen.current
+    setSrcCatsLoading(true)
+    const ids = openSourceIds.split(',')
+    const got = await Promise.all(ids.map((id) => tg.marketSourcesCatalog!(id, { refresh, locale }).catch(() => null)))
+    if (gen !== authGen.current) return
+    setSrcCats((was) => {
+      const next: Record<string, StoreSourceCatalog> = {}
+      ids.forEach((id, i) => { const cat = got[i]; if (cat && (cat.items.length || !was[id]?.items.length)) next[id] = cat; else if (was[id]) next[id] = { ...was[id], stale: true, error: cat?.error ?? was[id].error } })
+      return next
+    })
+    setSrcCatsLoading(false)
+  }, [openSourceIds, locale])
+  // 换了账号:混排里 Forsion Git 来源的条目属于上一个账号,先收掉再按现在的账号重读
+  useEffect(() => window.tangu?.onAuthChanged?.(() => {
+    setSrcCats((m) => Object.fromEntries(Object.entries(m).filter(([id]) => sourceList.find((s) => s.id === id)?.kind !== 'forsion-git')))
+    void loadSourceCats()
+  }), [sourceList, loadSourceCats])
+  useEffect(() => { if (sources.loaded) void loadSourceCats() }, [sources.loaded, loadSourceCats])
   // Automatic checks run in main even while this window is closed. Refresh the local installed snapshot after activation/mutations.
   useEffect(() => { void listInstalled().then(setInstalled).catch(() => {}) }, [pluginUpdates])
 
@@ -369,6 +413,17 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }
   const isInstalled = (c: MarketCard): boolean => !!installedEntry(c)
   const hasUpdate = (c: MarketCard): boolean => isNewer(c.latestVersion, installedEntry(c)?.version ?? null)
+  /** A card of a source, from the catalogs in hand (the open source page first). */
+  const sourceCard = (id: string): MarketCard | null => {
+    const sid = id.slice(4, 12)
+    return ((sourceCat?.source.id === sid ? sourceCat.items : srcCats[sid]?.items ?? []).find((x) => x.id === id) as MarketCard | undefined) ?? null
+  }
+  const skillInstalled = (slug: string): boolean => (installed.skill || []).some((x) => x.slug === slug)
+  /** Installs for one item: prerequisites not installed yet, then the item. */
+  const planOf = (c: MarketCard) => installPlan(c, { installed: skillInstalled, lookup: sourceCard })
+  /** What installing `c` asks the user to confirm (scripts / audit of it and its prerequisites, and what main counted). */
+  const scriptsConfirm = (c: MarketCard) => isSourceCardId(c.id) && c.type === 'skill' ? confirmOf(planOf(c).steps, confirmFound[c.id]) : null
+  const publisher = (c: MarketCard) => publisherOf(c, sources.supported ? sources.sources : undefined, removedSourceCards.has(c.id))
   const updateItem = (c: MarketCard) => pluginUpdates.items.find((x) => x.id === c.id)
   /** 本机版本库里这一项留着的旧版本(按真实装在哪个插件目录找)。 */
   const keptOf = (c: MarketCard) => {
@@ -411,8 +466,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   // 技能「装给哪些 Agent」:按条目记,缺省 null = 所有 Agent;只在首次安装时生效
   const [skillChoice, setSkillChoice] = useState<Record<string, SkillAgentChoice>>({})
   const skillAgents = useSkillAgents(true)
-  /** quiet = 一键补前置的一步:结果由那条链统一说,这里不报成功。 */
-  const onInstall = async (c: MarketCard, version?: string, quiet = false): Promise<{ ok: boolean; restart: boolean }> => {
+  /** quiet = 一键补前置 / 收录技能前置的一步:结果由那条链统一说,这里不报成功。
+   *  ack = 用户对这一项确认过的脚本 / 审计;parent = 连同前置一起装时,用户点的那一项(主进程要确认时回到它的详情页问)。 */
+  const onInstall = async (c: MarketCard, version?: string, quiet = false, opts: { ack?: { scripts: number; audit: boolean }; parent?: MarketCard } = {}): Promise<{ ok: boolean; restart: boolean }> => {
     setInstalling((m) => ({ ...m, [c.id]: true }))
     setProgress((m) => omit(m, c.id))
     setFailed((m) => omit(m, c.id))
@@ -420,7 +476,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const wasInstalled = isInstalled(c)
     const tele = trackMarketInstall(quiet ? 'deps' : 'store', c) // 匿名遥测:商店条目 id + 阶段 / 结果的枚举,报错原文不发
     try {
-      const res = await installMarket(c.id, version, c.origin ? { type: c.type } : undefined)
+      const res = await installMarket(c.id, version, isSourceCardId(c.id) ? { type: c.type, ...(opts.ack ? { ack: opts.ack } : {}) } : undefined)
       const effectiveType = ((res?.type as MarketType) || c.type)
       if (effectiveType === 'skill' && !wasInstalled && skillAgentsSupported()) {
         await applySkillAgentChoice(res?.slug || c.installSlug, skillChoice[c.id] ?? null)
@@ -452,6 +508,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       return { ok: true, restart }
     } catch (e: any) {
       tele.fail(e)
+      // 包里有脚本 / 审计有警告,用户还没在这一项上确认过(目录没说,或说少了):回到详情页按主进程数出来的问一次
+      const need = confirmNeededOf(e)
+      if (need) {
+        const p = opts.parent ?? c
+        setConfirmFound((m) => ({ ...m, [p.id]: { ...m[p.id], [c.id]: need } }))
+        setConfirming(p.id)
+        if (detail?.id !== p.id) openDetail(p, true)
+        return { ok: false, restart: false }
+      }
       setFailed((m) => ({ ...m, [c.id]: true }))
       toast(t('market.installFailNamed', { name: c.name, e: sourceErrorText(e, t) ?? (e?.message || String(e)) }), true, c.source === 'github' && e?.stage !== 'resolve' ? t('market.installHintGithub') : undefined)
       return { ok: false, restart: false }
@@ -459,6 +524,31 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       setInstalling((m) => omit(m, c.id))
       setProgress((m) => omit(m, c.id))
     }
+  }
+
+  /**
+   * Install one item: a collected skill brings its prerequisites (same source) first, each through the same pipeline;
+   * `acks` = what the user confirmed per step. A step that fails stops the chain (what was installed stays).
+   */
+  const startInstall = async (c: MarketCard, version?: string, acks: Record<string, { scripts: number; audit: boolean }> = {}): Promise<void> => {
+    const { steps, missing } = isSourceCardId(c.id) && !version ? planOf(c) : { steps: [] as InstallStep[], missing: [] as string[] }
+    const pre = steps.slice(0, -1)
+    if (!pre.length) {
+      const r = await onInstall(c, version, false, { ack: acks[c.id] })
+      if (r.ok && missing.length) toast(t('market.prereqMissing', { list: missing.join(t('common.listSep')) }))
+      return
+    }
+    setInstalling((m) => ({ ...m, [c.id]: true }))
+    try {
+      for (const [i, step] of pre.entries()) {
+        setPrereqRun({ parent: c.id, name: step.name, n: i + 1, total: pre.length })
+        const card = sourceCard(step.id) ?? { id: step.id, type: 'skill' as const, source: 'github' as const, name: step.name, summary: '', author: c.author, installSlug: step.installSlug, downloads: 0, latestVersion: null, origin: c.origin }
+        const r = await onInstall(card, undefined, true, { ack: acks[step.id], parent: c })
+        if (!r.ok) return
+      }
+    } finally { setPrereqRun(null); setInstalling((m) => omit(m, c.id)) }
+    const r = await onInstall(c, version, false, { ack: acks[c.id] })
+    if (r.ok && missing.length) toast(t('market.prereqMissing', { list: missing.join(t('common.listSep')) }))
   }
 
   /** 把 p 缺的前置一个个装上。每步重算:装完 B 才知道 B 还缺 C。依赖方恢复不在这里 —— 装完的重载走到 pluginStore 的 reconcile。 */
@@ -612,8 +702,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     return () => window.removeEventListener('forsion:mobile-back', onBack)
   }, [detail])
 
-  const openDetail = (c: MarketCard): void => {
+  const openDetail = (c: MarketCard, keepConfirm = false): void => {
     if (removedSourceCards.has(c.id)) return // 来源已移除:没有地方读详情
+    if (!keepConfirm && confirming !== c.id) setConfirming(null)
     setDetailTab('overview')
     setDetailLoading(true)
     setDetail(null)
@@ -625,6 +716,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
 
   const switchTab = (next: Tab): void => {
     setTab(next)
+    setSkillFilter('all')
     setStoreViewKey(null)
     setSourceKey(null)
     setDetail(null)
@@ -659,19 +751,24 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   /** 给人看的标签:保留标签已经画成标记了,不再当普通标签重复一遍。 */
   const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => !isReservedMarketTag(tag))
 
-  /** 来源条目要先确认:这个来源第一次装东西,或会运行代码的条目第一次装。 */
-  const needsConfirm = (c: MarketCard): boolean => !!c.origin && !isInstalled(c) && (!sourceOf(c)?.trusted || CODE_TYPES.has(c.type))
+  /** 来源条目要先确认:这个来源第一次装东西,会运行代码的条目第一次装,或技能(连同前置)带脚本 / 审计有警告(内置来源也问,逐个问)。 */
+  const needsConfirm = (c: MarketCard): boolean => isSourceCardId(c.id) && ((!isInstalled(c) && (!sourceOf(c)?.trusted || CODE_TYPES.has(c.type))) || (!isInstalled(c) && !!scriptsConfirm(c)))
   const onConfirmSourceInstall = async (c: MarketCard): Promise<void> => {
     const s = sourceOf(c)
     setTrusting(true)
     try {
       if (s && !s.trusted) { await window.tangu?.marketSourcesTrust?.(s.id); await sources.reload() }
+      // 确认的是确认块上写的那些:每一步按目录 + 主进程数出来的取大
+      const found = confirmFound[c.id] ?? {}
+      const acks = Object.fromEntries(planOf(c).steps.map((st) => [st.id, ackOf(st, found[st.id])]))
       setConfirming(null)
-      void onInstall(c)
+      void startInstall(c, undefined, acks)
     } catch (e) { toast(sourceErrorText(e, t) ?? String((e as Error)?.message || e), true) } finally { setTrusting(false) }
   }
   const installBtn = (c: MarketCard, extraClass = '') => {
-    if (c.origin && removedSourceCards.has(c.id)) return null // 来源已移除:不再更新,卡片角标说明
+    if (isSourceCardId(c.id) && removedSourceCards.has(c.id)) return null // 来源已移除:不再更新,卡片角标说明
+    // 上游仓库已删:没装的不给装(下不到了),装着的照常用
+    if (isBuiltinCard(c) && !isInstalled(c) && upstreamGone(c, sources.installs)) return <button className={`btn sm ${extraClass}`.trim()} disabled data-market-install={c.id} title={t('market.upstreamDeletedHint')}>{t('market.upstreamDeleted')}</button>
     // 「仅桌面」先判:通用兼容性也把这枚保留标签算作 platform,排在前面的话手机上只剩一句「当前端不可用」,
     // 说不出装不了的原因(手机 e2e:plugins 4b 钉着这枚按钮)。
     if (desktopOnlyHere(c)) {
@@ -687,6 +784,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const inst = installedEntry(c)
     const retry = !busy && !!failed[c.id]
     const p = busy ? progress[c.id] : undefined
+    const run = prereqRun?.parent === c.id ? prereqRun : null
+    // 详情页的宽按钮写明连同几个前置(卡片上放不下,只写「安装」)
+    const withPre = !done && !busy && extraClass.includes('mk-wide-btn') && isSourceCardId(c.id) ? planOf(c).steps.length - 1 : 0
     return (
       <button
         className={`btn sm ${update || !done ? 'primary' : ''} ${extraClass}`.trim()}
@@ -697,12 +797,12 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         onClick={(e) => {
           e.stopPropagation()
           if (pending) void window.tangu?.restartForUpdate?.().catch((error) => toast(String(error?.message || error), true))
-          else if (needsConfirm(c)) { setConfirming(c.id); if (detail?.id !== c.id) openDetail(c) }
-          else void onInstall(c)
+          else if (needsConfirm(c)) { setConfirming(c.id); if (detail?.id !== c.id) openDetail(c, true) }
+          else void startInstall(c)
         }}
       >
         {busy ? <Loader2 size={13} className="mk-spin" /> : retry || update ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
-        {pending ? t('restartUpdate.button') : busy ? state?.phase === 'downloading' ? t('market.autoUpdateDownloading') : busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
+        {pending ? t('restartUpdate.button') : run ? t('market.prereqInstalling', { name: run.name, n: run.n, total: run.total }) : busy ? state?.phase === 'downloading' ? t('market.autoUpdateDownloading') : busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : withPre === 1 ? t('market.installWithPrereq') : withPre > 1 ? t('market.installWithPrereqs', { n: withPre }) : t('market.install')}
       </button>
     )
   }
@@ -809,15 +909,26 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }, [sort])
 
   /** 从来源装的东西(出处记录):「已安装」页里和商店条目排在一起,带来源角标。 */
-  const sourceInstalledCards = useMemo(() => sources.installs.map((r): MarketCard => (sourceCat?.items.find((c) => c.id === r.cardId) as MarketCard | undefined)
-    ?? { id: r.cardId, type: r.type as MarketType, source: 'zip', name: r.name, summary: r.summary || '', author: r.author || '', installSlug: r.slug, downloads: 0, latestVersion: r.version, tags: [], origin: { sourceId: r.sourceId, sourceTitle: r.sourceTitle ?? '' } }), [sources.installs, sourceCat])
+  const sourceInstalledCards = useMemo(() => sources.installs.map((r): MarketCard => ((sourceCat?.source.id === r.sourceId ? sourceCat.items : srcCats[r.sourceId]?.items ?? []).find((c) => c.id === r.cardId) as MarketCard | undefined)
+    ?? { id: r.cardId, type: r.type as MarketType, source: 'zip', name: r.name, summary: r.summary || '', author: r.author || '', installSlug: r.slug, downloads: 0, latestVersion: r.version, tags: [], origin: { sourceId: r.sourceId, sourceTitle: r.sourceTitle ?? '' } }), [sources.installs, sourceCat, srcCats])
+  /** 来源装的东西里有新版本的(按出处记录的版本比;来源停用 / 已不收录的不算) —— 「可更新」与它的计数。 */
+  const sourceUpdatable = useMemo(() => sources.installs.flatMap((r) => {
+    if (r.removed || r.delisted) return []
+    const c = (srcCats[r.sourceId]?.items ?? []).find((x) => x.id === r.cardId) as MarketCard | undefined
+    return c && installedInfo(c) && isNewer(c.latestVersion, installedInfo(c)!.entry.version) ? [c] : []
+  }), [sources.installs, srcCats, installedInfo])
+  const allUpdatable = useMemo(() => [...updatable, ...sourceUpdatable.filter((c) => !updatable.some((u) => u.id === c.id))], [updatable, sourceUpdatable])
+  /** 开着的来源里的技能,按来源分组(内置的 skills.sh 在前,其余按左栏顺序)。这一期只有技能进分类。 */
+  const sourceSkillGroups = useMemo(() => sources.sources.filter((src) => !src.disabled).map((src) => ({
+    source: src, cat: srcCats[src.id] as StoreSourceCatalog | undefined, items: ((srcCats[src.id]?.items ?? []) as MarketCard[]).filter((c) => c.type === 'skill'),
+  })), [sources.sources, srcCats])
   const sourceCards = useMemo(() => (activeSource && sourceCat?.source.id === activeSource.id ? sourceCat.items as MarketCard[] : []), [activeSource, sourceCat])
   const visibleSource = useMemo(() => sourceCards.filter(matchesQuery), [sourceCards, matchesQuery])
   const visibleCatalog = useMemo(() => {
     let cards = tab === 'installed'
       ? [...catalog.filter((c) => !!installedInfo(c)), ...sourceInstalledCards.filter((c) => !!installedInfo(c))]
       : tab === 'updates'
-        ? updatable
+        ? allUpdatable
         : CONTENT_TABS.includes(tab as MarketType)
           ? catalog.filter((c) => tab === 'plugin'
             ? PLUGIN_TAB_TYPES.includes(c.type)
@@ -825,7 +936,22 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           : catalog
     cards = cards.filter(matchesQuery)
     return sortCards(cards)
-  }, [catalog, installedInfo, matchesQuery, sortCards, tab, updatable, sourceInstalledCards])
+  }, [catalog, installedInfo, matchesQuery, sortCards, tab, allUpdatable, sourceInstalledCards])
+  /** Forsion 的排在前面:官方再开发者,各按当前排序。 */
+  const forsionFirst = useCallback((cards: MarketCard[]): MarketCard[] => [...sortCards(cards.filter((c) => c.publisher === 'official')), ...sortCards(cards.filter((c) => c.publisher !== 'official'))], [sortCards])
+  /** 技能分类:Forsion 的技能 + 各来源一组,都已按筛选 / 搜索过滤、组内排好序。 */
+  const skillGroups = useMemo(() => {
+    const forsion = forsionFirst(catalog.filter((c) => c.type === 'skill' && matchesQuery(c)))
+    return { forsion, sources: sourceSkillGroups.map((g) => ({ ...g, visible: sortCards(g.items.filter(matchesQuery)) })) }
+  }, [catalog, sourceSkillGroups, matchesQuery, sortCards, forsionFirst])
+  /** 混排(搜索时 / 选了一个来源):Forsion 在前,再按来源顺序;各来源内按各自的数排,不跨来源比数。 */
+  const skillMixed = useMemo(() => {
+    if (skillFilter === 'forsion') return skillGroups.forsion
+    if (skillFilter !== 'all') return skillGroups.sources.find((g) => g.source.id === skillFilter)?.visible ?? []
+    return [...skillGroups.forsion, ...skillGroups.sources.flatMap((g) => g.visible)]
+  }, [skillGroups, skillFilter])
+  /** 商店首页的搜索:Forsion 的结果后面接上各来源里匹配的技能。 */
+  const sourceSearchHits = useMemo(() => (query.trim() ? skillGroups.sources.flatMap((g) => g.visible) : []), [query, skillGroups])
 
   const featured = useMemo(() => sortCards(catalog.filter(matchesQuery), 'popular')[0], [catalog, matchesQuery, sortCards])
   const recent = useMemo(() => sortCards(catalog.filter(matchesQuery), 'latest').slice(0, 4), [catalog, matchesQuery, sortCards])
@@ -841,26 +967,36 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     close()
   }
 
+  /** 来源条目在它自己的来源页上不再标来源(整页都是它)。 */
+  const showPublisher = (c: MarketCard): boolean => !isSourceCardId(c.id) || c.origin?.sourceId !== sourceKey
+  /** 卡片右上角的数:Forsion 的下载数、skills.sh 的安装数;用户加的来源没有数。 */
+  const showCount = (c: MarketCard): boolean => (!isSourceCardId(c.id) || (isBuiltinCard(c) && !!c.collected)) && !removedSourceCards.has(c.id)
+  const gone = (c: MarketCard): boolean => isBuiltinCard(c) && upstreamGone(c, sources.installs)
+  const delisted = (c: MarketCard): boolean => sources.installs.some((r) => r.cardId === c.id && r.delisted)
   const card = (c: MarketCard, compact = false) => (
     <article key={c.id} className={`mk-card ${compact ? 'compact' : ''}`} onClick={() => openDetail(c)}>
       <div className="mk-card-visual" aria-hidden="true"><ItemIcon url={c.iconUrl} type={c.type} size={compact ? 20 : 24} /></div>
       <div className="mk-card-content">
-        <div className="mk-card-eyeline">
+        <div className="mk-card-eyeline" data-has-tier={requirementText(c.collected, t) ? '' : undefined}>
           <span>{kindLabel[c.type]}</span>
-          {c.origin && c.origin.sourceId !== sourceKey && <span className={`mk-src-badge${removedSourceCards.has(c.id) ? ' is-gone' : ''}`} data-market-source-badge={c.id} title={removedSourceCards.has(c.id) ? t('market.sources.removedHint') : undefined}>{removedSourceCards.has(c.id) ? t('market.sources.removedBadge') : c.origin.sourceTitle}</span>}
+          {!!requirementText(c.collected, t) && <span className="mk-tier" data-market-tier={c.id} title={requirementText(c.collected, t)}>{requirementText(c.collected, t)}</span>}
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
+          {gone(c) && <span className="mk-waiting-badge" data-market-upstream-deleted={c.id} title={t('market.upstreamDeletedHint')}>{t('market.upstreamDeleted')}</span>}
+          {!gone(c) && delisted(c) && isInstalled(c) && <span className="mk-waiting-badge" data-market-delisted={c.id} title={t('market.delistedHint')}>{t('market.delisted')}</span>}
           {isInstalled(c) && <PinnedChip item={updateItem(c)} />}
           {waitingDeps(c) && <span className="mk-waiting-badge" data-market-waiting={c.id}>{t('settings.amadeusPlugins.waitingDeps')}</span>}
           {desktopBadge(c)}
           {entitlementBadge(c)}
           {/* 「未声明」对挑插件没帮助，只在详情页的「Forsion 版本要求」里写(DESIGN §6 插件商店) */}
           {marketplaceCompatibility(c, appVersion, marketPlatform()) !== 'unknown' && <MarketRequirements item={c} version={appVersion} />}
+          {showCount(c) && <CountChip c={c} collected={isBuiltinCard(c)} />}
         </div>
         <button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openDetail(c) }}>{c.name}</button>
         <div className="mk-card-summary">{c.summary || t('market.summaryFallback')}</div>
         {!!shownTags(c).length && <div className="mk-tags">{shownTags(c).slice(0, compact ? 2 : 3).map((tag) => <span key={tag}>{tag}</span>)}</div>}
         <div className="mk-card-foot">
-          <span className="mk-card-meta">{c.author}{!!c.author && <span aria-hidden="true"> · </span>}{c.origin ? (c.latestVersion ? `v${c.latestVersion}` : '') : t('market.downloadsShort', { n: c.downloads })}</span>
+          {/* 作者名先截,来源标签不截 */}
+          <span className="mk-card-meta mk-card-by">{!!c.author && <span className="mk-card-author">{c.author}</span>}{showPublisher(c) && <PublisherChip label={publisher(c)} id={c.id} />}{isSourceCardId(c.id) && !isBuiltinCard(c) && !showPublisher(c) && !!c.latestVersion && <span className="mk-card-author">v{c.latestVersion}</span>}</span>
           {installBtn(c)}
           {uninstallBtn(c)}
         </div>
@@ -882,6 +1018,48 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       </div>
     )
     return <div className="mk-grid">{cards.map((item) => card(item))}</div>
+  }
+
+  /** 技能分类有没有来源可分(没有来源的宿主 / 都停用了:还是原来那一张网格)。 */
+  const skillSectioned = tab === 'skill' && !activeSource && sources.supported && sourceSkillGroups.some((g) => g.items.length || g.source.origin === 'builtin')
+  const skillCount = skillGroups.forsion.length + skillGroups.sources.reduce((n, g) => n + g.visible.length, 0)
+  const SECTION_CARDS = window.tangu?.mobile ? 3 : 6
+  /** 顶上那排来源筛选:全部 / Forsion / 各来源(带数目)。 */
+  const skillChips = () => (
+    <div className="mk-src-chips" role="group" aria-label={t('market.section.filterLabel')} data-market-source-chips>
+      {[{ id: 'all', label: t('market.tagAllShort'), n: skillCount }, { id: 'forsion', label: 'Forsion', n: skillGroups.forsion.length },
+        ...skillGroups.sources.filter((g) => g.items.length || g.source.origin === 'builtin').map((g) => ({ id: g.source.id, label: g.source.title, n: g.visible.length }))]
+        .map((x) => <button key={x.id} type="button" className="mk-filter-chip" aria-pressed={skillFilter === x.id} data-market-source-chip={x.id} onClick={() => setSkillFilter(x.id)}>{x.label}<small>{x.n}</small></button>)}
+    </div>
+  )
+  /** 一个分区:标题 + 说明 + 前几张卡 +「查看全部」(切到只看这一个来源)。 */
+  const skillSection = (key: string, title: string, desc: string, cards: MarketCard[], extra?: ReactNode) => (
+    <div key={key} className="mk-src-section" data-market-section={key}>
+      <div className="mk-src-section-head"><b>{title}</b><span>{desc}</span>
+        {cards.length > SECTION_CARDS && <button type="button" className="mk-src-section-more" data-market-section-more={key} onClick={() => setSkillFilter(key)}>{t('market.section.more', { n: cards.length })}<ArrowRight size={13} /></button>}
+      </div>
+      {extra}
+      {cards.length > 0 && <div className="mk-grid">{cards.slice(0, SECTION_CARDS).map((item) => card(item))}</div>}
+    </div>
+  )
+  const skillBody = () => {
+    if (scanning && !catalog.length) return <Skeleton variant="list" />
+    // 搜索 / 只看一个来源:一张网格,Forsion 在前
+    if (query.trim() || skillFilter !== 'all') return skillMixed.length ? <div className="mk-grid">{skillMixed.map((item) => card(item))}</div> : catalogState([])
+    const parts: ReactNode[] = []
+    if (skillGroups.forsion.length || !skillGroups.sources.length) parts.push(skillSection('forsion', 'Forsion', t('market.section.forsionDesc', { n: skillGroups.forsion.length }), skillGroups.forsion))
+    for (const g of skillGroups.sources) {
+      const builtin = g.source.origin === 'builtin'
+      const desc = t(builtin ? 'market.section.builtinDesc' : 'market.section.sourceDesc', { n: g.visible.length })
+      const stale = g.cat?.stale && g.cat.fetchedAt ? <p className="mk-src-note">{t('market.sources.stale', { time: formatDate(new Date(g.cat.fetchedAt).toISOString()) })}</p> : null
+      if (g.visible.length) parts.push(skillSection(g.source.id, g.source.title, desc, g.visible, stale))
+      // 读不到(新客户端 × 老服务器 404、断网)且没有副本:写明稍后再试,不当成空,也不动装着的
+      // 读不到时不写「0 项」
+      else if (builtin && !g.items.length) parts.push(skillSection(g.source.id, g.source.title, t('market.section.builtinDescPlain'), [], g.cat?.error || (!g.cat && !srcCatsLoading)
+        ? <div className="mk-src-unavailable" data-market-builtin-unavailable><span>{t('market.section.builtinUnavailable')}</span><button className="btn sm" onClick={() => void loadSourceCats(true)}><RefreshCw size={13} />{t('market.retry')}</button></div>
+        : <Skeleton variant="list" />))
+    }
+    return parts.length ? parts : catalogState([])
   }
 
   const showSearch = !storeOnly && !detail && !storeView && tab !== 'submit'
@@ -940,7 +1118,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
             {!storeOnly && <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>}
-            {!storeOnly && <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>}
+            {!storeOnly && <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{allUpdatable.length > 0 && <span className="mk-nav-count">{allUpdatable.length}</span>}</button>}
             {/* Extend 的投稿页同时挂在市场与云端设置中;旧包仍可打开网页个人中心。 */}
             {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={navTab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
@@ -949,7 +1127,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
 
       <section className="settings-main">
         <div className="settings-main-head mk-main-head">
-          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : activeSource ? activeSource.title : storeView ? resolveText(storeView.item.title) : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : activeSource ? [t('market.sources.subtitle', { n: visibleSource.length }), sourcePlugin ? t('market.sources.byPlugin', { name: pluginDisplayName(sourcePlugin, locale) }) : ''].filter(Boolean).join(' · ') : storeView ? resolveText(storeView.item.description) : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : `${tab === 'plugin' ? t('market.pluginsSubtitle') : tab === 'connector' ? t('connectors.subtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}${tab === 'webapp' ? '' : ` · ${t('market.resultCount', { n: visibleCatalog.length })}`}`}</div></div>
+          <div className="mk-title-block"><div className="settings-main-title">{detail ? detail.name : activeSource ? activeSource.title : storeView ? resolveText(storeView.item.title) : navLabel[tab]}</div><div className="mk-title-subtitle">{detail ? t('market.detailSubtitle') : activeSource ? [t(activeSource.origin === 'builtin' ? 'market.sources.builtinSubtitle' : 'market.sources.subtitle', { n: visibleSource.length }), sourcePlugin ? t('market.sources.byPlugin', { name: pluginDisplayName(sourcePlugin, locale) }) : ''].filter(Boolean).join(' · ') : storeView ? resolveText(storeView.item.description) : tab === 'discover' ? t('market.subtitle') : tab === 'submit' ? t('market.submissionsDescription') : `${tab === 'plugin' ? t('market.pluginsSubtitle') : tab === 'connector' ? t('connectors.subtitle') : t('market.sectionSubtitle', { section: navLabel[tab] })}${tab === 'webapp' ? '' : ` · ${t('market.resultCount', { n: skillSectioned ? skillCount : visibleCatalog.length })}`}`}</div></div>
           {showSearch && <label className="mk-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('market.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('market.clearSearch')}>×</button>}</label>}
           {showSort && <label className="mk-sort"><span>{t('market.sort.label')}</span><select value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="popular">{t('market.sort.popular')}</option><option value="latest">{t('market.sort.latest')}</option><option value="name">{t('market.sort.name')}</option></select></label>}
         </div>
@@ -973,8 +1151,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} superseded={asking.plugin.supersedes} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true, storeItemId: a.c.id }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
-        {!storeOnly && !detail && !detailLoading && !storeView && (!!activeSource || tab !== 'connector') && <div className="mk-upgrade-filters">
-          {(!activeSource || (sourceCards.length > 0 && !activeSource.disabled)) && <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set((activeSource ? sourceCards : catalog).flatMap(c => shownTags(c)))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>}
+        {!storeOnly && !detail && !detailLoading && !storeView && (!!activeSource || tab !== 'connector') && <div className={`mk-upgrade-filters${skillSectioned ? ' has-src-chips' : ''}`}>
+          {skillSectioned && <>{skillChips()}<span className="mk-src-divider" aria-hidden="true" /></>}
+          {(!activeSource || (sourceCards.length > 0 && !activeSource.disabled)) && <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set((activeSource ? sourceCards : skillSectioned ? [...catalog, ...sourceSkillGroups.flatMap((g) => g.items)] : catalog).flatMap(c => shownTags(c)))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>}
           {activeSource ? <SourceInfoRow source={activeSource} catalog={sourceCat} pluginName={sourcePlugin ? pluginDisplayName(sourcePlugin, locale) : undefined} onRefresh={() => void loadSource(activeSource.id, true)} onToggle={onToggleSource} onRemove={onRemoveSource} /> : <>
           <button type="button" className="mk-filter-chip" aria-pressed={compatibleOnly} data-market-compat-filter onClick={() => setCompatibleOnly(!compatibleOnly)}><Check size={13} aria-hidden="true" />{t('market.compatibleOnly')}</button>
           <span className="mk-filter-version">Forsion {appVersion}</span>
@@ -984,21 +1163,24 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           {detail ? (
             <div className="mk-detail">
               <button className="settings-back mk-detail-back" onClick={() => setDetail(null)}><ArrowLeft size={14} />{t('market.detailBack')}</button>
-              <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{kindLabel[detail.type]}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{!!detail.author && <>{t('market.author')} {detail.author}<span aria-hidden="true"> · </span></>}{detail.origin ? detail.origin.sourceTitle : t('market.downloads', { n: detail.downloads })}</div></div></div>
+              <div className="mk-detail-hero"><div className="mk-detail-icon"><ItemIcon url={detail.iconUrl} type={detail.type} size={36} /></div><div className="mk-detail-intro"><span className="mk-detail-kind">{kindLabel[detail.type]}{!!requirementText(detail.collected, t) && <span className="mk-tier"> · {requirementText(detail.collected, t)}</span>}</span><h2>{detail.name}</h2><p>{detail.summary || t('market.summaryFallback')}</p><div className="mk-detail-byline">{!!detail.author && <>{t('market.author')} {detail.author} </>}<PublisherChip label={publisher(detail)} id={detail.id} />{!isSourceCardId(detail.id) ? <><span aria-hidden="true"> · </span>{t('market.downloads', { n: detail.downloads })}</> : isBuiltinCard(detail) && detail.collected ? <><span aria-hidden="true"> · </span>{t('market.count.installsLong', { n: compactCount(detail.downloads, locale) })}</> : null}</div></div></div>
               <div className="mk-detail-layout">
-                <main className="mk-detail-main"><nav className="mk-detail-tabs" aria-label={t('market.viewDetails')}>{(detail.origin ? ['overview', 'versions'] : ['overview', 'comments', 'versions']).map(tab => <button key={tab} className={`btn sm ghost ${detailTab === tab ? 'active' : ''}`} aria-pressed={detailTab === tab} onClick={() => setDetailTab(tab)}>{t(`market.${tab}`)}</button>)}</nav>
-                  {detailTab === 'comments' ? <MarketDiscussion key={detail.id} item={detail} /> : detailTab === 'versions' ? <MarketVersions key={detail.id} item={detail} appVersion={appVersion} installing={!!installing[detail.id]} onInstall={version => void onInstall(detail, version)} installedVersion={installedEntry(detail)?.version} pinnedVersion={updateItem(detail)?.pinnedVersion} kept={keptOf(detail)} onRollback={version => void onRollback(detail, version)} /> : <><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map(tag => <span key={tag}>{tag}</span>)}</div>}{detail.description && <p className="mk-description">{detail.description}</p>}<div className="mk-readme md-body">{detail.readme ? <Markdown content={detail.readme} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></>}
+                <main className="mk-detail-main"><nav className="mk-detail-tabs" aria-label={t('market.viewDetails')}>{(isSourceCardId(detail.id) ? ['overview', ...(detail.collected?.adapted || detail.adapt ? ['adapt'] : []), 'versions'] : ['overview', 'comments', 'versions']).map(tab => <button key={tab} className={`btn sm ghost ${detailTab === tab ? 'active' : ''}`} aria-pressed={detailTab === tab} data-market-detail-tab={tab} onClick={() => setDetailTab(tab)}>{tab === 'adapt' ? t('market.adapt.tab') : t(`market.${tab}`)}</button>)}</nav>
+                  {detailTab === 'adapt' && detail.collected ? <AdaptationTab c={detail.collected} adapt={detail.adapt} prereqNames={Object.fromEntries((detail.prereqs ?? []).map((p) => [p.itemId, p.name]))} /> : detailTab === 'comments' ? <MarketDiscussion key={detail.id} item={detail} /> : detailTab === 'versions' ? <MarketVersions key={detail.id} item={detail} appVersion={appVersion} installing={!!installing[detail.id]} onInstall={version => void onInstall(detail, version)} installedVersion={installedEntry(detail)?.version} pinnedVersion={updateItem(detail)?.pinnedVersion} kept={keptOf(detail)} onRollback={version => void onRollback(detail, version)} /> : <><div className="mk-detail-section-title">{t('market.overview')}</div>{!!shownTags(detail).length && <div className="mk-tags">{shownTags(detail).map(tag => <span key={tag}>{tag}</span>)}</div>}{detail.description && <p className="mk-description">{detail.description}</p>}<div className="mk-readme md-body">{detail.readme ? <Markdown content={splitFrontmatter(detail.readme).body} /> : <span className="mk-muted">{t('market.readmeEmpty')}</span>}</div></>}
                 </main>
                 <aside className="mk-detail-sidebar">
-                  <div className="mk-detail-actions">{confirming === detail.id && detail.origin && !isInstalled(detail)
-                    ? <SourceConfirm sourceTitle={detail.origin.sourceTitle} kindLabel={kindLabel[detail.type]} code={CODE_TYPES.has(detail.type)} first={!detailSource?.trusted} busy={trusting || !!installing[detail.id]} onCancel={() => setConfirming(null)} onConfirm={() => void onConfirmSourceInstall(detail)} />
+                  <div className="mk-detail-actions">{confirming === detail.id && isSourceCardId(detail.id) && (!isInstalled(detail) || !!scriptsConfirm(detail))
+                    ? <SourceConfirm sourceTitle={detail.origin?.sourceTitle ?? ''} kindLabel={kindLabel[detail.type]} code={CODE_TYPES.has(detail.type)} first={!isInstalled(detail) && !detailSource?.trusted} busy={trusting || !!installing[detail.id]} onCancel={() => setConfirming(null)} onConfirm={() => void onConfirmSourceInstall(detail)}
+                      scripts={scriptsConfirm(detail) ? <ScriptsConfirmText steps={scriptsConfirm(detail)!.items} collected={detail.collected} sourceTitle={isBuiltinCard(detail) ? undefined : detail.origin?.sourceTitle} /> : undefined} />
                     : installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail, true)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{versionBlock(detail)}</div>
                   {detailPlugin && <RequiredPlugins p={detailPlugin} store={depsStore(detailPlugin)} />}
                   {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
-                  {detail.origin ? <SourceTrustRow sourceTitle={detail.origin.sourceTitle} /> : <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>}
-                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}{networkOf(detail).length > 0 && <div data-market-network={detail.id}><dt>{t('market.network')}</dt><dd className="mk-id-value">{networkOf(detail).join(t('common.listSep'))}</dd></div>}{capsOf(detail).length > 0 && <div data-market-capabilities={detail.id}><dt>{t('market.capabilities')}</dt><dd>{capsOf(detail).join(t('common.listSep'))}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.origin ? t('market.sources.factSource', { name: detail.origin.sourceTitle, kind: detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sources.kind.url') }) : detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{detailSource && <div data-store-source-address><dt>{t('market.sources.factAddress')}</dt><dd className="mk-id-value">{detailSource.uri.replace(/^https?:\/\//, '')}</dd></div>}{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  {isBuiltinCard(detail) && detail.collected && <CollectedNeeds c={detail.collected} />}
+                  {isBuiltinCard(detail) ? <CollectedTrustRow /> : isSourceCardId(detail.id) ? <SourceTrustRow sourceTitle={detail.origin?.sourceTitle ?? ''} /> : <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>}
+                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div>{!isBuiltinCard(detail) && <div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>}{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div>{!isBuiltinCard(detail) && <div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>}{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}{networkOf(detail).length > 0 && <div data-market-network={detail.id}><dt>{t('market.network')}</dt><dd className="mk-id-value">{networkOf(detail).join(t('common.listSep'))}</dd></div>}{capsOf(detail).length > 0 && <div data-market-capabilities={detail.id}><dt>{t('market.capabilities')}</dt><dd>{capsOf(detail).join(t('common.listSep'))}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{isSourceCardId(detail.id) && detail.origin ? t('market.sources.factSource', { name: detail.origin.sourceTitle, kind: detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sources.kind.url') }) : detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{detailSource && detailSource.origin !== 'builtin' && <div data-store-source-address><dt>{t('market.sources.factAddress')}</dt><dd className="mk-id-value">{detailSource.uri.replace(/^https?:\/\//, '')}</dd></div>}{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}{isBuiltinCard(detail) && detail.collected && <CollectedFacts c={detail.collected} commit={detail.commit} updatedAt={detail.updatedAt} />}{gone(detail) && <div data-market-upstream-deleted-fact><dt>{t('market.upstreamDeleted')}</dt><dd>{t('market.upstreamDeletedHint')}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
+                  {isBuiltinCard(detail) && detail.collected?.pageUrl && <SkillsShLink url={detail.collected.pageUrl} />}
                 </aside>
               </div>
             </div>
@@ -1008,7 +1190,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                 {activeSource.disabled ? <SourceState kind="disabled" onEnable={() => onToggleSource(true)} />
                   : sourceLoading && !sourceCards.length ? <Skeleton variant="list" />
                   : sourceCat?.error && !sourceCards.length && needsSignIn(sourceCat.error) ? <SourceState kind="signin" onRetry={() => void loadSource(activeSource.id, true)} />
-                  : sourceCat?.error && !sourceCards.length ? <SourceState kind="error" error={sourceCat.error} onRetry={() => void loadSource(activeSource.id, true)} />
+                  : sourceCat?.error && !sourceCards.length ? <SourceState kind="error" error={sourceCat.error} builtin={activeSource.origin === 'builtin'} onRetry={() => void loadSource(activeSource.id, true)} />
                   : !sourceCards.length ? <SourceState kind="empty" />
                   : <>
                     {sourceCat?.truncated && <p className="mk-src-note">{t('market.sources.truncated')}</p>}
@@ -1020,7 +1202,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
             : storeView ? <PluginSettingsView key={storeViewKeyOf(storeView)} pluginId={storeView.pluginId} def={storeView.item} bare />
             : tab === 'discover' ? (
               scanning ? <Skeleton variant="document" /> : catalogError && catalog.length === 0 ? catalogState([]) : query ? (
-                <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.searchResults')}</h2><p>{t('market.resultCount', { n: visibleCatalog.length })}</p></div></div>{catalogState(visibleCatalog)}</section>
+                <section className="mk-section"><div className="mk-section-head"><div><h2>{t('market.searchResults')}</h2><p>{t('market.resultCount', { n: visibleCatalog.length + sourceSearchHits.length })}</p></div></div>{catalogState([...forsionFirst(visibleCatalog), ...sourceSearchHits])}</section>
               ) : catalog.length === 0 ? catalogState([]) : (
                 <div className="mk-discover">
                   {scopeLimited && <p className="mk-web-hint" data-market-scope-hint>{t('market.scopeHint')}</p>}
@@ -1039,7 +1221,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
               ? <PluginSettingsView pluginId={submissionView.pluginId} def={submissionView.item} bare />
               : <section className="mk-submit"><div className="mk-submit-copy"><span>{t('market.submitKicker')}</span><h2>{t('market.submitTitle')}</h2><p>{t('market.submitHint')}</p><button className="btn primary" onClick={() => void window.tangu?.openAccountCenter?.('submission')}><ExternalLink size={15} />{t('market.submitOpen')}</button></div><div className="mk-submit-art"><PackageOpen size={44} /><strong>{t('market.submitArtTitle')}</strong><span>{t('market.submitArtHint')}</span></div></section>
             ) : (
-              <section className="mk-section">{/* 只有一个分区:页标题已说了是哪一类、计数在副标题里，不再画分区标题;「可更新」只留检查按钮 */}{tab === 'updates' && window.tangu?.marketCheckUpdates && <div className="mk-section-head mk-section-tools"><AutoUpdateAllRow state={pluginUpdates} onError={(text) => toast(text, true)}><button className="btn sm" disabled={pluginUpdates.checking} onClick={() => void window.tangu!.marketCheckUpdates!().then(scanCatalog).catch((error) => toast(String(error?.message || error), true))}><RefreshCw size={14} />{t('market.autoUpdateCheck')}</button></AutoUpdateAllRow></div>}{tab === 'updates' && !scanning && updatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : catalogState(visibleCatalog)}</section>
+              <section className="mk-section">{/* 只有一个分区:页标题已说了是哪一类、计数在副标题里，不再画分区标题;「可更新」只留检查按钮 */}{tab === 'updates' && window.tangu?.marketCheckUpdates && <div className="mk-section-head mk-section-tools"><AutoUpdateAllRow state={pluginUpdates} onError={(text) => toast(text, true)}><button className="btn sm" disabled={pluginUpdates.checking} onClick={() => void window.tangu!.marketCheckUpdates!().then(() => Promise.all([scanCatalog(), loadSourceCats(true)])).catch((error) => toast(String(error?.message || error), true))}><RefreshCw size={14} />{t('market.autoUpdateCheck')}</button></AutoUpdateAllRow></div>}{tab === 'updates' && !scanning && allUpdatable.length === 0 && !query ? <div className="mk-state-card"><Check size={28} /><strong>{t('market.allUpToDate')}</strong><span>{t('market.allUpToDateHint')}</span></div> : skillSectioned ? skillBody() : catalogState(visibleCatalog)}</section>
             )}
         </div>
       </section>

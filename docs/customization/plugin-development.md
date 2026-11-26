@@ -46,7 +46,7 @@ ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 
 沙箱的新变化(2026-11-15 起,需要同期的新版桌面):Agent 读界面时能看到开关是不是按下、输入框和笔记是不是只读(比如笔记处在阅读模式),点开关之前会先看清状态;通知卡挡住要点的地方时,先把通知关掉再点;插件命令弹出自己的对话框、一时没跑完时,Agent 不会重跑,而是读窗口、接着在对话框里操作;Agent 还能打开这个插件在设置里的那一页(沙箱里另开的一扇设置窗口;有设置的插件是「设置 → 插件设置」里它的设置页,没有设置的是「设置 → 插件」里的详情页),在那里填设置、点保存。
 
-引擎插件的工具用 `capabilities.approval` 声明动手前要不要问用户。不写 = 只读,不问;`'command'` = 与跑命令同一档,「询问我批准」时每次问,用户点过「总允许」或开了完全通行就不再问;`'always'` = 每次调用都由用户本人在卡上确认 —— 完全通行、「总允许」、用户写的放行规则都跳不过,聊天会话与云端会话照样弹卡,自动化、Muse 后台和远程会话里直接被拒。花掉用户的东西、替用户对外发出内容这类动作用 `'always'`;读和写拆成两个工具名,只给写的那个声明。卡上显示的是这次调用的参数,所以一次调用只做一件事。
+引擎插件的工具用 `capabilities.approval` 声明动手前要不要问用户。不写 = 只读,不问;`'edit'`(2026-11-26 起)= 与改文件同一档,只在「询问我批准」时问,「替我批准」和完全放行直接做,给只改插件自己那份数据、参数里不带路径的写工具用(存稿、出图这类),旧引擎不认得,当不写处理(不问),所以先判 `ctx.toolCapabilities?.approvalEdit`,没有就声明 `'command'`,免得在旧引擎的「询问我批准」下不问就写;`'command'` = 与跑命令同一档,「询问我批准」和「替我批准」时每次问,用户点过「总允许」或开了完全放行就不再问;`'always'` = 每次调用都由用户本人在卡上确认 —— 完全通行、「总允许」、用户写的放行规则都跳不过,聊天会话与云端会话照样弹卡,自动化、Muse 后台和远程会话里直接被拒。花掉用户的东西、替用户对外发出内容这类动作用 `'always'`;读和写拆成两个工具名,只给写的那个声明。卡上显示的是这次调用的参数,所以一次调用只做一件事。
 
 只给官方插件的三样(2026-10-27 起):`ctx.cloud`(以用户的 Forsion 账号请求云端,只放商店「我的条目」与提交更新两个接口)、工具的 `capabilities.approvalPreview`(插件自己写审批卡上的文案)、以及进聊天(Chat)会话的工具面。官方 = 插件在 Forsion 签名的捆绑包里(包根 `SIGNATURE` 用引擎内置的公钥验过,插件的清单和入口都签在里面)。第三方插件拿到的 `ctx.cloud` 是 `undefined`,写了 `approvalPreview` 也被忽略(卡上照旧是这次调用的参数),工具也不进聊天会话。
 
@@ -233,6 +233,23 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 - 更新：改目录里的 `version` 和 `package`。商店按用户的自动更新设置照常更新；**包的出处变了（换了仓库、npm 包名或下载域名）自动更新会停下**，等用户自己点。
 - 装进本机的身份是 `src-<来源哈希>-<条目 id>`，`requiresPlugins` 的 `market` 字段认不到来源里的条目。用户第一次从某个来源安装、以及每装一个会运行代码的条目（插件、Agent、Space）前，商店会在详情页侧栏让用户确认一次；来源里的东西标着「未经 Forsion 审核」。
 
+### 收录的技能（skills.sh）与 Tangu 的商店结果（2026-11-23 起）
+
+商店内置一个来源 `skills.sh`（来源 id `25aae625`）：Forsion 服务端从 skills.sh 的排行榜收录热门技能，锁定提交、读安全审计，标着「Forsion 收录 · 未经人工审核」。卡片 id 是 `src_25aae625_<条目 id>`，装进本机的文件夹是 `src-25aae625-<条目 id>`。
+
+Tangu 的 `search_marketplace` / `get_marketplace_plugin` / `recommend_marketplace_plugin` 结果（也就是对话里那张商店卡片的数据）每条在原有字段之外多两项，老服务端不发、读的一方要按可选处理：
+
+| 字段 | 形状 | 含义 |
+|---|---|---|
+| `origin` | `{ kind: 'forsion', publisher: 'official' \| 'developer' }` 或 `{ kind: 'collected' \| 'source', sourceId, sourceTitle }` | 出处。没有 = Forsion 开发者投稿。`collected` = Forsion 收录（skills.sh），没经人工审核 |
+| `requirements` | `{ cli, apiKeys, desktopOnly, scripts, auditWarn }` | 要装命令行工具、要哪些 API Key（变量名）、只能在桌面用、带几个脚本、外部安全审计给了中风险 |
+
+坏掉的 `origin` / `requirements` 只丢这一项，条目照常。搜索时同样命中的 Forsion 条目排在前面。装不装仍然由用户在卡片上点。
+
+写技能时两条相关约定：
+- SKILL.md frontmatter 写 `disable-model-invocation: true`（和 Claude Code 同义）= 只在用户点名时用：它不进 Agent 看到的技能目录，Agent 自己 `use_skill` 会被拒；用户在对话里用 `/skill` 点了它的那一轮才放行。设置和技能选择器里照常列出。
+- 技能文件夹里的 `.forsion-adapt.md` 是保留文件名：收录技能的「适配说明」（原文写给 Claude Code / Codex 的地方在 Tangu 里怎么对应），由安装流程写入，`use_skill` 在本机会话里把它放在正文前面（最多 1200 字）。只对从商店来源装进来的技能（文件夹名 `src-<来源 id>-…`）算数；包里自带的同名文件安装时会被删掉，项目目录或插件包里的技能放这个文件不起作用。
+
 ## 平台账号与登录信息（桌面 2.13.8 起）
 
 有些平台的内容要登录才取得到（B 站会员、高清、被风控的视频）。`ctx.app.platformAccounts` 让插件用**用户在内置浏览器里登录的那个账号**去取，插件自己不存登录信息：
@@ -300,6 +317,7 @@ if (open) {
 |---|---|
 | `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | 停靠在工作台里,同 `openView` 的 `location`;样子由位置定(左右栏都是 `side`) |
 | `{ float: 'desktop', pin? }` | 系统小窗:`form: 'mini'`(缺省)是 Mini Panel(缺省置顶,`pin: false` 不置顶、拖到屏幕边也不折起来;可多开、按 `key` 复用,位置和大小按实体记、重启后还在),`'main'` 是 Floating Panel(缺省不置顶,`pin: true` 才盖在别的应用上) |
+| `{ float: 'desktop', pin? }` + `form: 'bare'`(2026-11-26 起) | 桌面小窗:透明、没有边框和卡头,浮在其他应用上面,全由视图来画(桌宠这一类)。要在 manifest 声明 `desktopWindow`,第一次用时宿主问用户一次;开不了时回落成窗口里一张同样没有卡头的卡。见[桌面小窗开发](./desktop-window-development.md) |
 | `{ float: 'space', anchor? }` | 一张卡浮在当前 Space 的三栏之上;切到别的 Space 时藏起来,回来原样 |
 | `{ float: 'window', anchor? }` | 一张卡浮在整个窗口之上,切 Space 也留着 |
 | `{ float: 'view', host, anchor? }` | 一张卡浮在你视图里的某个元素(`host`)里 |
@@ -317,7 +335,7 @@ if (open) {
 ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, mini: { view: 'board-mini' } } })
 ```
 
-不写 `forms` = 什么样子都行(和以前一样)。写了,没列出的就是不支持。`mini: { view }` 指一个本插件的紧凑视图(相对 id):以后凡是用 Mini 样子打开 `board`(桌面 Mini、浮层卡),里面显示的都是 `board-mini`,「在主面板显示」回到 `board`。它取代了 Space 配方 `mini` 里「哪个紧凑视图配哪个主视图」那一半;配方的 `mini` 照旧可用。
+不写 `forms` = 什么样子都行(和以前一样)。写了,没列出的就是不支持。`mini: { view }` 指一个本插件的紧凑视图(相对 id):以后凡是用 Mini 样子打开 `board`(桌面 Mini、浮层卡),里面显示的都是 `board-mini`,「在主面板显示」回到 `board`。它取代了 Space 配方 `mini` 里「哪个紧凑视图配哪个主视图」那一半;配方的 `mini` 照旧可用。`bare: true`(2026-11-26 起)说明视图能不带卡头、自己画全部,先看 `ctx.workspace.forms?.includes('bare')`,旧宿主不认。
 
 **回落规则**(要的样子不支持时):
 
@@ -326,8 +344,9 @@ ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, m
 3. Mini 样子里显示 `forms.mini.view`(没注册就用视图本身);没写就是视图本身。紧凑视图只认本插件的。没写 `forms` 的视图用 `openMiniPanel` 打开时和 2.13.7 一样,Mini 里就是它自己。
 4. 网页没有 Mini 窗口:`{ float: 'desktop' }` 的 Mini 样子降成浮在窗口里的卡;手机上是贴底的半屏抽屉,`main` 样子停靠主区(手机上占满一屏的面板就是主区)。Space 作用域的卡在手机上贴在底栏上方。
 5. Mini 窗、Floating Panel 窗这类没有工作台的窗口里,`space` / `window` / `view` 三档打不开。
+6. `bare`(2026-11-26 起):视图没声明 `bare` 就当 `mini`;桌面层开不了桌面小窗(没声明 `desktopWindow`、用户拒过、网页、手机)时回落成 `window` 层的 `bare` 卡,浮在窗口里的三档直接开成那一档的 `bare` 卡(都没有卡头,`view.surface` 是 `'floating'`)。
 
-返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(桌面小窗没有 `close`);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
+返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(Mini / Floating Panel 那种系统小窗没有 `close`,`bare` 的桌面小窗有);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),或者这个插件的桌面小窗已开满 3 扇(宿主不提示),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。除了 `form: 'bare'`,`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
 
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`；要笔记那样的 `@` 日期 / 页面面板，传 `mentions` 并用 `onMention` 接手（2026-11-20 起，先看能力表里的 `'mentions'`）；要加粗、列表这些格式，传 `format: 'inline' | 'basic'`，值改为 Markdown，显示用 `ctx.ui.parseInlineMarkdown`（2026-11-21 起，能力表 `'format'`）。见 [可复用 UI 组件](./ui-components.md)。
 
@@ -640,6 +659,7 @@ const { outline } = await stage.read()
 const shot = await stage.capture({ selector: 'main' })   // { bytes, width, height, mime: 'image/png' }
 const rec = await stage.record({ fps: 30 })               // 录这个窗口；点击前会画一个指针挪过去
 await stage.click('新建事件')
+await rec.pause?.(); await stage.press('Mod+P'); await rec.resume?.()   // 暂停的这段不进成片
 const video = await rec.stop()                             // { bytes, mime, width, height, durationMs }
 await stage.close()
 ```
@@ -649,6 +669,7 @@ await stage.close()
 - 每次 `open` 都从演示内容重新开始，上一次留下的标签页和设置不带过来。
 - `fixture` 只收插件包里的相对路径；里面的软链接不拷。只有已安装的插件能开舞台（开发沙箱里的副本不行）。
 - 截图的像素 = 窗口尺寸 × 密度；`rect` 用 CSS 像素。录像宽度最多 3840 像素，最长 120 秒（到点自动停，`stop()` 照样拿得到），缺省 mp4，可选 `format: 'webm'`。
+- 录像可以暂停（2026-11-26 起）：`rec.pause()` 到 `rec.resume()` 之间的画面不进成片，用来剪掉准备动作和等待；暂停的时间不算进 `durationMs`，也不算进 120 秒上限。已经暂停再暂停、没暂停就继续会 reject，`stop()` 之后再调报 `closed`。`pause()` / `resume()` 不排队：动作（点击、按键）要等画面稳住才回来，大约 1.5 秒，这时也能暂停。要让每一步只留开头一段，可以发出动作后先不等它，过几百毫秒暂停，等动作回来再继续。旧版本没有这两个方法，写成 `rec.pause?.()`，或者先判断再用。
 - `engine.json` 的写法：`{ "models": [...], "runs": [{ "match": "用户那句话里的字（可省）", "events": [{ "type": "token", "payload": { "delta": "…" }, "delay": 40 }] }] }`。舞台里每发一句话，取第一段对得上的 `runs` 回放。
 - 个人日历「我的日历」不在智库里，日历是向引擎要 `human/CALENDAR.db` 的。要拍带日程的日历，在 fixture 里放 `human/CALENDAR.db`，并且用 `engine: 'scripted'`（只拍日历时 `engine.json` 写 `{ "runs": [] }` 就够）：回放引擎拿这份代替真引擎家目录里的那份。格式和真的一样，是一张普通数据库表，最大 8 MB，每列要有 `id` / `name` / `type`，每行要有 `id` / `cells`；表里有勾选列时，每一行都画成带勾的待办：`{ "version": 2, "name": "我的日历", "columns": [{ "id": "name", "name": "名称", "type": "text" }, { "id": "date", "name": "日期", "type": "calendarDate" }, { "id": "done", "name": "完成", "type": "checkbox" }], "rows": [{ "id": "ev1", "cells": { "name": "发布评审", "date": "2026-11-20T14:00/2026-11-20T15:00" } }] }`。舞台里对日历的改动只留在这一次舞台里。不放这个文件，舞台里是一本空的个人日历；`engine: 'none'` 没有引擎，个人日历读不到。是软链、不是文件或格式不对时，`open` 报 `fixture-invalid`。
 - 失败都是 reject 带 `code` 的错误：`unsupported`、`invalid`、`denied`、`busy`、`fixture-invalid`、`plugin-missing`、`timeout`、`closed`、`error`。

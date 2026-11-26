@@ -7,7 +7,7 @@
  *  B 草稿不被即时开关冲掉:「浏览器控制」里改超时(草稿)→ 切到「基本」拨「阻止休眠」(即时写盘,回来的
  *    effectiveConfig 以前会整体覆盖共享 stored)→ 回到「浏览器控制」,超时仍是草稿值,磁盘未变,吸底栏仍在。
  *    工作目录改成失焦提交:输入 → Tab → 磁盘值更新。
- *  C 深链落点:tab='forsion' → Forsion 云端/账号(登录所在;Extend 自绘的第一个子页);'model/m-providers' → 模型/提供方;
+ *  C 深链落点:tab='forsion' → Forsion 云端/账号(登录所在;Extend 自绘的第一个子页);'model/m-providers' → 模型/模型与服务(11-26 提供方并进来);
  *    'connection' → 常规/连接;
  *    缺省 → 常规/基本(第一屏不再是后端技术项)。
  *  D 设置搜索:搜不到有空态;索引里每一项在本端可见时,点结果 → 落到对应子页,且锚点(有的话)在正文可视区内。
@@ -84,7 +84,7 @@ async function main() {
     await waitFor(async () => (await activeSubLabel(fl)) === '基本')
     check('C0 缺省落点 = 常规/基本(工作目录在第一屏)', (await activeSubLabel(fl)) === '基本' && await fl.locator('[data-setting-anchor="workspace-dir"]').isVisible(), await activeSubLabel(fl))
     await fl.screenshot({ path: path.join(shots, 'settings-default.png') })
-    for (const [target, expected] of [['forsion', '账号'], ['model/m-providers', '提供方'], ['connection', '连接']]) {
+    for (const [target, expected] of [['forsion', '账号'], ['model/m-providers', '模型与服务'], ['connection', '连接']]) {
       fl = await openSettings({ tab: target })
       await waitFor(async () => (await activeSubLabel(fl)) === expected)
       check(`C 深链 ${target} → ${expected}`, (await activeSubLabel(fl)) === expected, await activeSubLabel(fl))
@@ -248,9 +248,15 @@ async function main() {
           const r = el.getBoundingClientRect(), b = body.getBoundingClientRect()
           return r.height > 0 && r.top < b.bottom && r.bottom > b.top
         }, entry.anchor), 4000)
-        check(`D 结果 ${entry.id} → 锚点 ${entry.anchor} 在可视区`, ok)
+        // 没落到时把现场带出来:锚点在不在、各自的矩形、正文滚到哪、当前子页
+        const why = ok ? undefined : await fl.evaluate((a) => {
+          const el = document.querySelector(`[data-setting-anchor="${a}"]`), body = document.querySelector('.settings-body')
+          const r = (x) => x && (({ top, bottom, height }) => ({ top: Math.round(top), bottom: Math.round(bottom), height: Math.round(height) }))(x.getBoundingClientRect())
+          return { el: r(el), body: r(body), scrollTop: body?.scrollTop, scrollHeight: body?.scrollHeight, sub: document.querySelector('.settings-sub')?.getAttribute('data-settings-sub'), text: (document.querySelector('.settings-sub')?.innerText || '').replace(/\s+/g, ' ').slice(0, 400) }
+        }, entry.anchor)
+        check(`D 结果 ${entry.id} → 锚点 ${entry.anchor} 在可视区`, ok, why)
       } else {
-        check(`D 结果 ${entry.id} → 子页 ${entry.sub}`, await waitFor(async () => fl.evaluate((s) => document.querySelector(`.settings-sub[data-settings-sub="${s}"]`) !== null, entry.sub), 4000))
+        check(`D 结果 ${entry.id} → 子页 ${entry.sub}`, await waitFor(async () => fl.evaluate((s) => document.querySelector(`.settings-sub[data-settings-sub="${s}"]`) !== null, entry.sub === 'm-websearch' || entry.sub === 'm-providers' ? 'm-display' : entry.sub), 4000))
       }
       reached++
     }

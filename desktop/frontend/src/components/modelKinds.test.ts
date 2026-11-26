@@ -67,3 +67,10 @@ describe('originOf', () => {
     expect(originOf({ source: 'direct', provider: 'codex' }, ['codex'])).toBe('sub')
   })
 })
+
+describe('catalogByKind direct ASR', () => {
+  it('builds rows for saved speech-recognition models the engine does not list', () => {
+    const asr = catalogByKind(null, [], [{ providerId: 'or', asrModelIds: ['whisper-1'] }]).asr
+    expect(asr).toEqual([{ id: 'or/whisper-1', name: 'whisper-1', source: 'direct', provider: 'or' }])
+  })
+})

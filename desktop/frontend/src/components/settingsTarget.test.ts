@@ -23,7 +23,7 @@ describe('resolveSettingsTarget', () => {
     ['agents/ag-special/muse', { tab: 'agents', sub: 'ag-special', pane: 'muse' }], // 文案说「后台 Agent」的两处链接,落到 Muse 页签
     ['wechat', { tab: 'channels' }],
     ['plugins', { tab: 'amadeus-plugins' }], // `/plugins`:旧引擎插件页并进统一插件页(此前落在「常规」)
-    ['model/m-providers', { tab: 'model', sub: 'm-providers' }], // ReloginChip(订阅登录按钮在提供方)
+    ['model/m-providers', { tab: 'model', sub: 'm-display' }], // ReloginChip(订阅登录按钮在提供方)
     ['general/g-basic', { tab: 'general', sub: 'g-basic' }],
     ['skills', { tab: 'skills' }],
     ['remote-sessions', { tab: 'remote-sessions' }], // P1-K4:设备切换器的「设置 ›」深链
