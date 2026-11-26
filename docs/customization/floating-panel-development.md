@@ -50,6 +50,8 @@ ctx.registerCommand({
 
 2.13.8 起也可以写成 `ctx.workspace.open(viewId, { layer: { float: 'desktop' }, form: 'main' })`,开的是同一扇(窗口 id 同为视图类型,带 `key` 时再加上 key)。Floating Panel 缺省**不置顶**:要盖在别的应用的窗口上,写 `layer: { float: 'desktop', pin: true }`;之后不带 `pin` 再开这一扇会撤掉置顶。视图声明了 `forms` 且不支持 `main` 时,这一句按回落规则开成 Mini。规则见[插件开发](./plugin-development.md)「统一打开入口」。
 
+要一扇透明、没有卡头、浮在其他应用上面的小窗(桌宠、悬浮挂件),用 `form: 'bare'`,见[桌面小窗开发](./desktop-window-development.md)。
+
 插件应 feature-detect `ctx.openFloatingPanel?.(...)` 以兼容旧宿主。当前桌面和 Web 都支持 Floating；移动端没有桌面悬浮语义，插件应继续提供正常主视图作为回退。
 
 ## 验证

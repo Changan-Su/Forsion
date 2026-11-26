@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.143.0
+  version: 1.144.0
   author: Forsion
   category: Forsion
 ---
@@ -48,6 +48,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
+- [references/desktop-window.md](references/desktop-window.md): desktop pets / widgets: `ctx.workspace.open(view, { layer: { float: 'desktop' }, form: 'bare' })` with manifest `desktopWindow` (2026-11-26+): transparent chrome-less window above other apps, `view.desktop` controller, click-through, guardrails, fallback to an in-window bare card
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/note-reading-renderers.md](references/note-reading-renderers.md): `ctx.registerNoteRenderer`; staged read-only rendering, immutable snapshots, hot update rollback and host-owned persistence.
 - [references/note-editor-surfaces.md](references/note-editor-surfaces.md): 块表面 ctx.app.getPage / mountBlocks / insertMarkdown / insertMarkdownAt (insert at the caret, cursor marker, refusal reasons); ctx.registerEditorExtension / registerSettingsView / loadData / saveData / watchFile

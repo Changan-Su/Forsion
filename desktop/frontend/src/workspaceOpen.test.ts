@@ -119,6 +119,28 @@ describe('planOpen · float desktop', () => {
   })
 })
 
+describe('planOpen · bare(插件桌面小窗,2026-11-26)', () => {
+  it('桌面:接缝在 = 系统小窗(pin 缺省 true);接缝不在(网页 / 手机)= 窗口作用域的 bare 浮层', () => {
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop' }, form: 'bare' }, env({ v: undefined }, { desktopBare: true }))).toEqual({ kind: 'bare', pin: true })
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop', pin: false }, form: 'bare' }, env({ v: { bare: true } }, { desktopBare: true }))).toEqual({ kind: 'bare', pin: false })
+    expect(planOpen({ type: 'v', params: { a: 1 } }, { layer: { float: 'desktop' }, form: 'bare' }, env({ v: undefined }))).toEqual(
+      { kind: 'float', scope: 'window', form: 'bare', view: { type: 'v', params: { a: 1 } }, mainView: { type: 'v', params: { a: 1 } }, sheet: false })
+  })
+  it('窗口里的三档:bare 浮层,手机上也不变成抽屉;没有浮层宿主 = unavailable', () => {
+    expect(planOpen({ type: 'v' }, { layer: { float: 'space' }, form: 'bare' }, env({ v: undefined }, { mobile: true }))).toMatchObject({ kind: 'float', scope: 'space', form: 'bare', sheet: false })
+    expect(planOpen({ type: 'v' }, { layer: { float: 'window' }, form: 'bare' }, env({ v: undefined }, { floats: false }))).toEqual({ kind: 'none', reason: 'unavailable' })
+  })
+  it('声明了 forms 却没列 bare:当没说样子(按规则 3 走 Mini)', () => {
+    expect(planOpen({ type: 'v' }, { layer: { float: 'desktop' }, form: 'bare' }, env({ v: { mini: true } }, { desktopBare: true }))).toMatchObject({ kind: 'mini' })
+  })
+  it('停靠时不看 bare', () => {
+    expect(planOpen({ type: 'v' }, { layer: { dock: 'right' }, form: 'bare' }, env({ v: undefined }))).toEqual({ kind: 'dock', loc: 'right', form: 'side' })
+  })
+  it('checkOpenOptions 认 bare', () => {
+    expect(() => checkOpenOptions({ form: 'bare' })).not.toThrow()
+  })
+})
+
 describe('planOpen · float view / space / window', () => {
   it('缺省 mini;side / bottom 当 main(浮着的面板没有边)', () => {
     const e = env({ v: undefined })
@@ -176,6 +198,30 @@ describe('workspaceOpen', () => {
     expect(leaf.close).toHaveBeenCalled()
     await workspaceOpen({ type: 'v' }, { dock: { newTab: true } })
     expect(openView).toHaveBeenLastCalledWith('v', {}, 'main', { newTab: true })
+  })
+
+  it('bare 桌面小窗:接缝开成 = ok + close;接缝说回落 = 窗口里的 bare 浮层(没有标题行、按 size 定大小);limit 原样回', async () => {
+    const close = vi.fn()
+    const bare = vi.fn(async () => ({ ok: true as const, close }))
+    setDesktopOpener({ bare })
+    const r = await workspaceOpen({ type: 'v', params: { a: 1 } }, { layer: { float: 'desktop' }, form: 'bare', key: 'k', size: { width: 120, height: 90 } })
+    expect(bare).toHaveBeenCalledWith({ view: { type: 'v', params: { a: 1 } }, key: 'k', title: undefined, size: { width: 120, height: 90 }, pin: true })
+    expect(r).toMatchObject({ ok: true, layer: { float: 'desktop' }, form: 'bare' })
+    bare.mockResolvedValueOnce({ ok: false, reason: 'limit', limit: 3 } as never)
+    expect(await workspaceOpen({ type: 'v' }, { layer: { float: 'desktop' }, form: 'bare' })).toEqual({ ok: false, reason: 'limit', limit: 3 })
+    bare.mockResolvedValueOnce({ ok: false, reason: 'fallback' } as never)
+    ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+    ;(globalThis as { React?: unknown }).React = React
+    const root = createRoot(document.body.appendChild(document.createElement('div')))
+    act(() => root.render(h(FloatViews)))
+    let fb: Awaited<ReturnType<typeof workspaceOpen>> | undefined
+    await act(async () => { fb = await workspaceOpen({ type: 'v' }, { layer: { float: 'desktop' }, form: 'bare', size: { width: 120, height: 90 } }) })
+    expect(fb).toMatchObject({ ok: true, layer: { float: 'window' }, form: 'bare' })
+    const [rec] = floatViewsSnapshot()
+    expect(rec.handle.el.hasAttribute('data-bare')).toBe(true)
+    expect(rec.handle.el.style.width).toBe('120px')
+    expect(rec.handle.el.querySelector('.lcl-float-view-head')).toBeNull()
+    act(() => root.unmount())
   })
 
   it('桌面:Mini 满了回 limit;Floating Panel 带上标题、置顶、key', async () => {

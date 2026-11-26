@@ -1074,6 +1074,20 @@ declare global {
       miniEntity?(target: import('../../shared/miniPanel').MiniOpenOptions): void
       onMiniNudge?(cb: () => void): () => void
       /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */
+      /** 插件桌面小窗(2026-11-26,shared/desktopWindow.ts;只有主窗用得上)。 */
+      desktopWindow?: {
+        prepare(req: import('../../shared/desktopWindow').DesktopWindowPrepareRequest): Promise<import('../../shared/desktopWindow').DesktopWindowPrepareReply>
+        setBounds(id: string, rect: Partial<import('../../shared/desktopWindow').DesktopRect>): void
+        passThrough(id: string, ignore: boolean): void
+        released(id: string): void
+        close(id: string): void
+        closePlugin(pluginId: string): void
+        screens(): Promise<import('../../shared/desktopWindow').DesktopScreen[]>
+        grant(pluginId: string): Promise<import('../../shared/desktopWindow').DesktopWindowGrant>
+        revoke(pluginId: string): Promise<boolean>
+        onClosed(cb: (id: string) => void): () => void
+        onScreensChanged(cb: (screens: import('../../shared/desktopWindow').DesktopScreen[]) => void): () => void
+      }
       openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
       floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>
       onFloatingTarget?(cb: (opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions) => void): () => void

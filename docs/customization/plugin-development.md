@@ -298,6 +298,7 @@ if (open) {
 |---|---|
 | `{ dock: 'main' \| 'left' \| 'right' \| 'bottom' }` | 停靠在工作台里,同 `openView` 的 `location`;样子由位置定(左右栏都是 `side`) |
 | `{ float: 'desktop', pin? }` | 系统小窗:`form: 'mini'`(缺省)是 Mini Panel(缺省置顶,`pin: false` 不置顶、拖到屏幕边也不折起来;可多开、按 `key` 复用,位置和大小按实体记、重启后还在),`'main'` 是 Floating Panel(缺省不置顶,`pin: true` 才盖在别的应用上) |
+| `{ float: 'desktop', pin? }` + `form: 'bare'`(2026-11-26 起) | 桌面小窗:透明、没有边框和卡头,浮在其他应用上面,全由视图来画(桌宠这一类)。要在 manifest 声明 `desktopWindow`,第一次用时宿主问用户一次;开不了时回落成窗口里一张同样没有卡头的卡。见[桌面小窗开发](./desktop-window-development.md) |
 | `{ float: 'space', anchor? }` | 一张卡浮在当前 Space 的三栏之上;切到别的 Space 时藏起来,回来原样 |
 | `{ float: 'window', anchor? }` | 一张卡浮在整个窗口之上,切 Space 也留着 |
 | `{ float: 'view', host, anchor? }` | 一张卡浮在你视图里的某个元素(`host`)里 |
@@ -315,7 +316,7 @@ if (open) {
 ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, mini: { view: 'board-mini' } } })
 ```
 
-不写 `forms` = 什么样子都行(和以前一样)。写了,没列出的就是不支持。`mini: { view }` 指一个本插件的紧凑视图(相对 id):以后凡是用 Mini 样子打开 `board`(桌面 Mini、浮层卡),里面显示的都是 `board-mini`,「在主面板显示」回到 `board`。它取代了 Space 配方 `mini` 里「哪个紧凑视图配哪个主视图」那一半;配方的 `mini` 照旧可用。
+不写 `forms` = 什么样子都行(和以前一样)。写了,没列出的就是不支持。`mini: { view }` 指一个本插件的紧凑视图(相对 id):以后凡是用 Mini 样子打开 `board`(桌面 Mini、浮层卡),里面显示的都是 `board-mini`,「在主面板显示」回到 `board`。它取代了 Space 配方 `mini` 里「哪个紧凑视图配哪个主视图」那一半;配方的 `mini` 照旧可用。`bare: true`(2026-11-26 起)说明视图能不带卡头、自己画全部,先看 `ctx.workspace.forms?.includes('bare')`,旧宿主不认。
 
 **回落规则**(要的样子不支持时):
 
@@ -324,8 +325,9 @@ ctx.registerView({ id: 'board', title, mount, forms: { main: true, side: true, m
 3. Mini 样子里显示 `forms.mini.view`(没注册就用视图本身);没写就是视图本身。紧凑视图只认本插件的。没写 `forms` 的视图用 `openMiniPanel` 打开时和 2.13.7 一样,Mini 里就是它自己。
 4. 网页没有 Mini 窗口:`{ float: 'desktop' }` 的 Mini 样子降成浮在窗口里的卡;手机上是贴底的半屏抽屉,`main` 样子停靠主区(手机上占满一屏的面板就是主区)。Space 作用域的卡在手机上贴在底栏上方。
 5. Mini 窗、Floating Panel 窗这类没有工作台的窗口里,`space` / `window` / `view` 三档打不开。
+6. `bare`(2026-11-26 起):视图没声明 `bare` 就当 `mini`;桌面层开不了桌面小窗(没声明 `desktopWindow`、用户拒过、网页、手机)时回落成 `window` 层的 `bare` 卡,浮在窗口里的三档直接开成那一档的 `bare` 卡(都没有卡头,`view.surface` 是 `'floating'`)。
 
-返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(桌面小窗没有 `close`);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
+返回值 `{ ok: true, layer, form, close? }` 说明回落之后实际落到哪(Mini / Floating Panel 那种系统小窗没有 `close`,`bare` 的桌面小窗有);打不开是 `{ ok: false, reason }`:`'unknown-view'` 不是你注册的视图,`'unsupported'` 声明的样子一个都用不上,`'unavailable'` 这扇窗开不了,`'limit'` Mini 开满了(宿主已经告诉用户,`limit` 是上限),或者这个插件的桌面小窗已开满 3 扇(宿主不提示),`'disabled'` 插件已停用。参数形状不对同步抛 `TypeError`。插件只能开自己的视图。除了 `form: 'bare'`,`{ float: 'desktop' }` 只是 Mini / Floating Panel 换个写法;组件浮层 `ctx.ui.float` 仍然没有桌面档。
 
 View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`；要笔记那样的 `@` 日期 / 页面面板，传 `mentions` 并用 `onMention` 接手（2026-11-20 起，先看能力表里的 `'mentions'`）；要加粗、列表这些格式，传 `format: 'inline' | 'basic'`，值改为 Markdown，显示用 `ctx.ui.parseInlineMarkdown`（2026-11-21 起，能力表 `'format'`）。见 [可复用 UI 组件](./ui-components.md)。
 

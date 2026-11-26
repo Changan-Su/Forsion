@@ -242,7 +242,7 @@ export function pluginForms(pid: string, raw: unknown): ViewForms | undefined {
     : m && typeof m === 'object' && typeof (m as { view?: unknown }).view === 'string' && (m as { view: string }).view.trim()
       ? { view: { type: `plugin:${pid}:${(m as { view: string }).view.trim()}`, params: plainParams((m as { params?: unknown }).params) } }
       : undefined
-  return { main: f.main === true, side: f.side === true, bottom: f.bottom === true, ...(mini ? { mini } : {}) }
+  return { main: f.main === true, side: f.side === true, bottom: f.bottom === true, ...(mini ? { mini } : {}), ...(f.bare === true ? { bare: true } : {}) }
 }
 const plainParams = (p: unknown): Record<string, unknown> | undefined => (p && typeof p === 'object' && !Array.isArray(p) ? p as Record<string, unknown> : undefined)
 

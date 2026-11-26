@@ -4,7 +4,7 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { hostWorkspaceOpen } from '../../workspaceOpenHost'
-import type { OpenLayer, OpenOptions, OpenResult } from '@lcl/engine/workspaceOpen'
+import { WORKSPACE_FORMS, type OpenLayer, type OpenOptions, type OpenResult } from '@lcl/engine/workspaceOpen'
 import { leaseAccountResponse } from './accountResponse'
 import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
@@ -2369,14 +2369,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (!ctxAlive()) return Promise.resolve({ ok: false as const, reason: 'disabled' as const })
         if (!get().viewOpener) return Promise.resolve({ ok: false as const, reason: 'unavailable' as const })
         const params = t.params && typeof t.params === 'object' && !Array.isArray(t.params) ? t.params : undefined
+        // size 只给 bare(无卡片 / 桌面小窗);只收有限数,别的丢
+        const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+        const rawSize = opts?.size && typeof opts.size === 'object' ? opts.size as { width?: unknown; height?: unknown } : undefined
+        const size = rawSize ? { width: num(rawSize.width), height: num(rawSize.height) } : undefined
         return openOwn(t.view.trim(), params, { layer, form: opts?.form, key: cleanKey(opts?.key),
-          title: typeof opts?.title === 'string' ? opts.title.trim().slice(0, 128) || undefined : undefined }).then((r) => {
+          title: typeof opts?.title === 'string' ? opts.title.trim().slice(0, 128) || undefined : undefined, ...(size ? { size } : {}) }).then((r) => {
           if (!r.ok) return { ok: false as const, reason: r.reason, ...(r.limit != null ? { limit: r.limit } : {}) }
-          // 浮在窗口里的卡归插件管:停用 / 重载一并收掉(视图类型反注册时引擎也会收,这里是两道保险)
-          const close = r.close && 'float' in r.layer && r.layer.float !== 'desktop' ? ownFloat(r.close, r.closed) : r.close
+          // 浮在窗口里的卡、桌面小窗(bare)归插件管:停用 / 重载一并收掉(视图类型反注册时引擎 / 小窗自己也会收,这里是两道保险)
+          const owned = !!r.close && 'float' in r.layer && (r.layer.float !== 'desktop' || r.form === 'bare')
+          const close = owned ? ownFloat(r.close!, r.closed) : r.close
           return { ok: true as const, layer: r.layer, form: r.form, ...(close ? { close: () => { if (ctxAlive()) close() } } : {}) }
         })
       },
+      // 这个宿主认识的样子(2026-11-26+):插件据此判断能不能用 bare(旧宿主没有这一项)
+      forms: WORKSPACE_FORMS,
     },
     // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
     getLocale: () => currentLocale(),

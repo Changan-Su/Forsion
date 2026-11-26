@@ -105,6 +105,12 @@ registerMessages({
     en: 'This plugin works directly on Forsion internals. It may break after an update and can affect your data if it fails. Reload the window after turning it off.',
   },
   'settings.amadeusPlugins.internalsDesktopOnly': { zh: '内部接口只在桌面端提供，这里不会给它。', en: 'Internal APIs are only provided on desktop, so it does not get them here.' },
+  // 插件桌面小窗(2026-11-26):第一次开时问过的答案,在这里看 / 收回
+  'settings.amadeusPlugins.desktopWindow.allowed': { zh: '你已允许它在桌面上显示小窗。', en: 'You allowed it to show windows on your desktop.' },
+  'settings.amadeusPlugins.desktopWindow.denied': { zh: '你没有允许它在桌面上显示小窗，它的小窗会留在 Forsion 窗口里。', en: 'You did not allow it to show windows on your desktop; they stay inside the Forsion window.' },
+  'settings.amadeusPlugins.desktopWindow.unasked': { zh: '它第一次要在桌面上显示小窗时会先问你。', en: 'It will ask you the first time it wants to show a window on your desktop.' },
+  'settings.amadeusPlugins.desktopWindow.revoke': { zh: '收回', en: 'Take back' },
+  'settings.amadeusPlugins.desktopWindow.reset': { zh: '下次再问', en: 'Ask again next time' },
   'settings.amadeusPlugins.internalsUnverified': {
     zh: '作者没有在 Forsion {version} 上验过它用到的内部接口。',
     en: 'The author has not checked its use of internal APIs on Forsion {version}.',
@@ -759,6 +765,25 @@ const InternalsDetail: React.FC<{ t: (k: string, vars?: Record<string, string | 
   )
 }
 
+/** 桌面小窗的授权(2026-11-26):问过的答案 + 收回 / 下次再问。只在有主进程那座桥的桌面端出;收回 = 关掉它所有的小窗、下次再问。 */
+const DesktopWindowGrant: React.FC<{ t: (k: string) => string; p: AmadeusPlugin }> = ({ t, p }) => {
+  const bridge = window.tangu?.desktopWindow
+  const [grant, setGrant] = useState<'allow' | 'deny' | null | undefined>(undefined)
+  useEffect(() => {
+    let live = true
+    void bridge?.grant(p.id).then((g) => { if (live) setGrant(g) }).catch(() => { if (live) setGrant(undefined) })
+    return () => { live = false }
+  }, [bridge, p.id])
+  if (!bridge || grant === undefined) return null
+  const reset = async (): Promise<void> => { if (await bridge.revoke(p.id).catch(() => false)) setGrant(null) }
+  return (
+    <div data-plugin-desktop-window={grant ?? 'unasked'} style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <span>{t(grant === 'allow' ? 'settings.amadeusPlugins.desktopWindow.allowed' : grant === 'deny' ? 'settings.amadeusPlugins.desktopWindow.denied' : 'settings.amadeusPlugins.desktopWindow.unasked')}</span>
+      {grant && <button className="btn ghost sm" onClick={() => void reset()}>{t(grant === 'allow' ? 'settings.amadeusPlugins.desktopWindow.revoke' : 'settings.amadeusPlugins.desktopWindow.reset')}</button>}
+    </div>
+  )
+}
+
 /** 列表卡上那行注记:这份商店安装取代了同一个包的旧普通目录(已停用)。灰字 + 信息图标,不是警告 —— 旧副本已经不跑了。 */
 const SupersededNote: React.FC<{ p: AmadeusPlugin; t: T }> = ({ p, t }) => {
   if (!p.supersedes) return null
@@ -952,6 +977,7 @@ const PluginDetail: React.FC<{
         </div>
       )}
       {p.capabilities?.includes('internals') && <InternalsDetail t={t} p={p} />}
+      {p.capabilities?.includes('desktopWindow') && <DesktopWindowGrant t={t} p={p} />}
       {!!p.network?.length && (
         <div data-plugin-network style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-light)', overflowWrap: 'anywhere' }}>
           {t('settings.amadeusPlugins.network', { domains: p.network.join(t('common.listSep')) })}

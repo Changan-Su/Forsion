@@ -50,6 +50,8 @@ On this surface `mount(el, view)` receives `view.surface === 'floating'`. `getPa
 
 Since 2.13.8 the same window can be opened with `ctx.workspace.open(viewId, { layer: { float: 'desktop' }, form: 'main' })` (the window id is the view type, plus the `key` when given). A Floating Panel is **not** kept on top by default: write `layer: { float: 'desktop', pin: true }` to keep it above other apps' windows; opening it again without `pin` takes that away. If the view declares `forms` without `main`, this call falls back to the Mini look. Rules: "One way to open views" in [Plugin development](./plugin-development.md).
 
+For a transparent window without a card head that floats above other apps (desktop pets, floating widgets), use `form: 'bare'`; see [Desktop window development](./desktop-window-development.en.md).
+
 Feature-detect `ctx.openFloatingPanel?.(...)` for compatibility with older hosts. Desktop and Web both support Floating today; mobile has no desktop floating semantics, so keep providing a normal main view as a fallback.
 
 ## Verification

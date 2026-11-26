@@ -464,8 +464,8 @@ export interface PluginBundleInfo {
  *  `stage`(2026-11-20+,实验):`ctx.stage` 演示舞台 —— 起一份装着演示库的隔离 Forsion 来截图、录像;只在桌面版注入,第一次用时问用户,
  *  官方商店里要过审核才装(electron/marketInternals.ts)。
  */
-export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw' | 'stage'
-export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw', 'stage']
+export type PluginCapability = 'activeWindow' | 'databases' | 'noteTasks' | 'calendar' | 'spaces' | 'agentImport' | 'internals' | 'internals-raw' | 'stage' | 'desktopWindow'
+export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow', 'databases', 'noteTasks', 'calendar', 'spaces', 'agentImport', 'internals', 'internals-raw', 'stage', 'desktopWindow']
 
 /** manifest `internalsVerified`(2026-11-16+):作者在哪几版 Forsion 上验过内部接口,只用于插件页标注,不拦。
  *  收字符串或字符串数组,每项是 `主.次` 或 `主.次.补丁`(只比到次版本),最多 8 项;不认识的静默丢。 */

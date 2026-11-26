@@ -20,6 +20,10 @@ import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createDesktopFloat } from './desktopFloat'
+import { createPluginDesktopWindows, type PluginDesktopWindows } from './pluginDesktopWindows'
+import { confirmDesktopWindow } from './pluginDesktopDialog'
+import { createMacDriver } from './dictation/macDriver'
+import { DESKTOP_WINDOW_CHANNELS } from '../shared/desktopWindow'
 import { createComputerUsePip, createPipAgentRelay, PIP_AGENT_CHANNELS, PIP_MARGIN, PIP_WIDTH, type PipAgentHost } from './computerUsePip'
 import { createPluginSandbox, readSandboxManifest, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { createPluginStage, StageError, STAGE_MESSAGES } from './pluginStage'
@@ -1031,6 +1035,21 @@ async function migrateCloudTokenToAuthJson(): Promise<void> {
 
 const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
+// 插件桌面小窗(2026-11-26,electron/pluginDesktopWindows.ts):第一次用时才建(userData 路径要等启动时改完)
+let pluginDesktop: PluginDesktopWindows | null = null
+function desktopWindows(): PluginDesktopWindows {
+  return pluginDesktop ??= createPluginDesktopWindows({
+    userDataDir: app.getPath('userData'),
+    platform: process.platform,
+    mainContents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+    screens: () => screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, workArea: d.workArea, scaleFactor: d.scaleFactor })),
+    cursorWorkArea: () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea,
+    confirm: (plugin) => confirmDesktopWindow(mainWindow, plugin),
+    onChanged: () => refreshTrayMenu(),
+    mac: process.platform === 'darwin' ? createMacDriver() : null,
+    log: (m) => console.log(m),
+  })
+}
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
 // 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
@@ -1402,7 +1421,7 @@ async function askPair(info: { name: string; code: string; ip: string }, doorbel
 async function enableUnitHostFromDoorbell(expires: number, port: number): Promise<boolean> {
   if (Date.now() > expires - 10_000) return false
   await saveConfig({ unitHostEnabled: true })
-  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
+  for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
   if (backend.getStatus().state !== 'ready') await ensureBackend('engine_restart') // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
   await refreshUnitHost()
   // Clip 在门铃那个固定口上等:互联口就落在它上面,或固定口上已换成转发入口,都算接上了
@@ -2002,7 +2021,14 @@ function createWindow(): void {
     if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow)
   })
 
-  mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
+  {
+    // 插件桌面小窗:只放行 pluginDesktopWindows 刚发出去的一次性窗口名,其余照旧(http 回投渲染层、别的一律拒)
+    const wc = mainWindow.webContents
+    const openUrl = openUrlHandler(wc)
+    wc.setWindowOpenHandler((d) => desktopWindows().handleWindowOpen(d) ?? openUrl(d))
+    wc.on('did-create-window', (child, details) => desktopWindows().onDidCreateWindow(child, details))
+    desktopWindows().attachMain(wc)
+  }
   hardenNav(mainWindow.webContents)
   // The audio graph runs in this renderer. Protecting only the browser process
   // leaves the renderer's Windows timer policy at its system-managed default.
@@ -3611,7 +3637,7 @@ app.whenReady().then(async () => {
       .map((w) => w.webContents)
       .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame()),
     events: ipcMain,
-    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
     stopSync: () => stopAmadeusSync?.(),
     restartSync: () => restartAmadeusSync?.(),
     onWillChange: () => { unitFrames.clear(); unitOpenGrants.clear() }, // 换号 / 登出的握手一开始:设备页的绑定与开窗许可全清(之后要看得重新绑)
@@ -3697,7 +3723,7 @@ app.whenReady().then(async () => {
       // ── 0.3 起:账号核心(auth:* 通道住在 Extend,编排在 accountCore)──
       homeDir: forsionHomeDir,
       appVersion: () => app.getVersion(),
-      broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload) },
+      broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
       // managed 变体的「引擎在不在」轴:引擎没 ready 时账号卡必须显示引擎态,绝不能只看 token 文件亮绿灯
       // (「显示已登录但后端根本没启动」的根)。external/无 agent 后端形态 = null,前端不渲染引擎态。
       accountBackendState: async () => (PRODUCT.agentBackend && (await loadConfig()).mode === 'managed' ? backend.getStatus().state : null),
@@ -5522,6 +5548,25 @@ app.whenReady().then(async () => {
     m.key = key
     m.target = entity // 页面重载(崩溃自愈)回到现在显示的,而不是最初打开的那个
   })
+  // 插件桌面小窗(只认主窗那份插件实例;pluginDesktopWindows 里逐条核 sender 是主窗)
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.prepare, (e, raw: unknown) => (isTrustedSender(e) ? desktopWindows().prepare(e.sender, raw) : { ok: false, reason: 'unavailable' }))
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.setBounds, (e, id: unknown, rect: unknown) => { if (isTrustedSender(e)) desktopWindows().setBounds(e.sender, id, rect) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.passThrough, (e, id: unknown, ignore: unknown) => { if (isTrustedSender(e)) desktopWindows().passThrough(e.sender, id, ignore) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.released, (e, id: unknown) => { if (isTrustedSender(e)) desktopWindows().released(e.sender, id) })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.close, (e, id: unknown) => {
+    if (isTrustedSender(e) && e.sender === mainWindow?.webContents && typeof id === 'string') desktopWindows().close(id)
+  })
+  ipcMain.on(DESKTOP_WINDOW_CHANNELS.closePlugin, (e, pluginId: unknown) => {
+    if (isTrustedSender(e) && e.sender === mainWindow?.webContents && typeof pluginId === 'string') desktopWindows().closePlugin(pluginId)
+  })
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.screens, (e) => (isTrustedSender(e) ? screen.getAllDisplays().map((d) => ({ id: d.id, bounds: d.bounds, workArea: d.workArea, scaleFactor: d.scaleFactor })) : []))
+  // 设置 → 插件详情:读 / 收回授权(哪扇窗口都能读;收回 = 关掉它所有的小窗、下次再问)
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.grant, (e, pluginId: unknown) => (isTrustedSender(e) && typeof pluginId === 'string' ? desktopWindows().grantOf(pluginId) : null))
+  ipcMain.handle(DESKTOP_WINDOW_CHANNELS.revoke, (e, pluginId: unknown) => {
+    if (!isTrustedSender(e) || typeof pluginId !== 'string') return false
+    return desktopWindows().revoke(pluginId) // 没写成 = 盘上还是原样:设置页照旧显示
+  })
+  for (const ev of ['display-added', 'display-removed', 'display-metrics-changed'] as const) screen.on(ev as 'display-added', () => pluginDesktop?.screensChanged())
   ipcMain.handle('window:openFloating', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return undefined
     return openFloatingPanel(raw)
@@ -5893,6 +5938,13 @@ app.whenReady().then(async () => {
       list: () => liveMinis().map((m) => ({ id: m.id, title: m.win.getTitle(), visible: m.win.isVisible() })),
       open: (id) => { const m = minis.get(id); if (m && !m.win.isDestroyed()) presentMini(m) },
     },
+    // 「桌面小窗」:插件开的桌面小窗,点一行关掉那扇;末尾暂时全部藏起来 / 全部显示
+    desktopWindows: {
+      list: () => pluginDesktop?.list() ?? [],
+      close: (id) => pluginDesktop?.close(id),
+      hidden: () => pluginDesktop?.hidden() ?? false,
+      setHidden: (hidden) => pluginDesktop?.setHidden(hidden),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
@@ -6110,6 +6162,7 @@ app.on('before-quit', (e) => {
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
   isQuitting = true // 放行 window close 拦截(否则 hide 会吞掉退出)
+  pluginDesktop?.persistNow() // 插件桌面小窗的位置(去抖里还没写的)
   for (const state of persistedDetached) {
     const win = detachedWindows.get(state.id)
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()

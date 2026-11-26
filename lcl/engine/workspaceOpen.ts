@@ -7,6 +7,10 @@
  *   - `{ float: 'desktop', pin? }`                      系统小窗:form 'mini' = 今天的 Mini(按实体复用、可多开),
  *                                                        'main' = 今天的 Floating Panel。壳层经 setDesktopOpener 接上;
  *                                                        没接(网页 / 手机)= 降成窗口作用域(§7)。
+ *   - form 'bare'(2026-11-26,插件桌面小窗):无卡片。桌面 = 壳层的 bare 接缝开一扇透明、没有外壳的系统小窗
+ *     (桌面端只给声明了 desktopWindow 能力的插件视图,见 desktop/frontend/src/pluginDesktopWindow.ts);接缝不在
+ *     (网页 / 手机)、或接缝说要回落(没声明能力、用户拒了)= 窗口作用域的 bare 浮层。View 声明了 forms 却没列 bare
+ *     = 当没说样子(按规则 3 走 Mini)。bare 浮层不跟 Space 布局存。
  *   - `{ float: 'view' | 'space' | 'window', anchor? }` 窗口里的浮层(floatLayer.openFloat),里面挂这个 View
  *                                                        (缺省它的 Mini 样子)。View 作用域要给 host(浮在哪个元素里)。
  *
@@ -84,7 +88,15 @@ export interface DesktopOpener {
   mini?(req: { view: OpenTarget; mainView: OpenTarget; spaceId?: string; params?: Record<string, unknown>; key?: string; title?: string; pin?: false }):
     Promise<{ ok: true } | { ok: false; reason: 'limit'; limit: number } | undefined>
   panel?(req: { view: OpenTarget; title: string; pin: boolean; key?: string; size?: OpenOptions['size'] }): void
+  /** form 'bare' 的系统小窗。fallback = 这扇窗 / 这个视图不给开(没声明能力、用户拒了),由引擎改开窗口作用域的 bare 浮层;
+   *  elsewhere = 已经在别的窗口开着(主窗那份),这里什么都不做。 */
+  bare?(req: { view: OpenTarget; key?: string; title?: string; size?: OpenOptions['size']; pin: boolean }): Promise<BareDesktopResult>
 }
+export type BareDesktopResult =
+  | { ok: true; close?(): void; closed?: Promise<void> }
+  | { ok: false; reason: 'limit'; limit: number }
+  | { ok: false; reason: 'unavailable' | 'unknown-view' }
+  | { ok: false; reason: 'fallback' }
 let desktop: DesktopOpener | null = null
 export function setDesktopOpener(opener: DesktopOpener | null): void { desktop = opener }
 
@@ -95,6 +107,8 @@ export interface OpenEnv {
   spaceMiniOf(type: string): { spaceId: string; view: OpenTarget } | null
   desktopMini: boolean
   desktopPanel: boolean
+  /** 壳层接了 bare 系统小窗(桌面主窗)。 */
+  desktopBare?: boolean
   bottom: boolean
   floats: boolean
   mobile: boolean
@@ -104,7 +118,8 @@ export type OpenPlan =
   | { kind: 'dock'; loc: ViewLocation; form: ViewForm }
   | { kind: 'mini'; view: OpenTarget; mainView: OpenTarget; spaceId?: string; pin: boolean }
   | { kind: 'panel'; pin: boolean }
-  | { kind: 'float'; scope: FloatOpenScope; form: 'mini' | 'main'; view: OpenTarget; mainView: OpenTarget; sheet: boolean }
+  | { kind: 'bare'; pin: boolean }
+  | { kind: 'float'; scope: FloatOpenScope; form: 'mini' | 'main' | 'bare'; view: OpenTarget; mainView: OpenTarget; sheet: boolean }
   | { kind: 'none'; reason: Exclude<OpenFailure, 'limit'> }
 
 /** 视图类型归谁:插件视图 = 插件 id,宿主视图 = ''。紧凑视图只认同一个主人的(插件 P 打开自己的视图,不该落到插件 Q 的紧凑视图上)。 */
@@ -152,13 +167,20 @@ export function planOpen(target: OpenTarget, opts: OpenOptions, env: OpenEnv): O
     const view = form === 'mini' ? c.view : { type: target.type, params: target.params }
     return { kind: 'float', scope, form, view, mainView: form === 'mini' ? c.mainView : view, sheet: env.mobile && form === 'mini' && scope !== 'view' }
   }
+  const self = { type: target.type, params: target.params }
+  const bareIn = (scope: FloatOpenScope): OpenPlan => (env.floats ? { kind: 'float', scope, form: 'bare', view: self, mainView: self, sheet: false } : { kind: 'none', reason: 'unavailable' })
   if ('dock' in layer) {
     const loc = dockFallback(forms, layer.dock, env.bottom)
     if (loc) return { kind: 'dock', loc, form: dockForm(loc) }
     return supports(forms, 'mini') ? floatIn('space', 'mini') : { kind: 'none', reason: 'unsupported' }
   }
+  // 无卡片(bare):桌面接缝在 = 系统小窗,不在 = 窗口作用域的 bare 浮层;View 不支持 bare = 当没说样子
+  if (opts.form === 'bare' && supports(forms, 'bare')) {
+    if (layer.float === 'desktop') return env.desktopBare ? { kind: 'bare', pin: layer.pin !== false } : bareIn('window')
+    return bareIn(layer.float)
+  }
   // 浮起来(规则 3):缺省 mini;side / bottom 当 main。opts.mainView 在 = 调用方点名了紧凑视图,不再按 forms 换样子
-  let form: 'mini' | 'main' = opts.form == null || opts.form === 'mini' ? 'mini' : 'main'
+  let form: 'mini' | 'main' = opts.form == null || opts.form === 'mini' || opts.form === 'bare' ? 'mini' : 'main'
   if (!opts.mainView) {
     if (form === 'mini' && !supports(forms, 'mini')) form = 'main'
     if (form === 'main' && !supportsSelf(forms)) {
@@ -190,7 +212,7 @@ export interface FloatViewRec {
   readonly key: string
   /** 调用方给的标题(没给 = 视图名,还原时按当时语言重取,不记)。 */
   readonly customTitle?: string
-  readonly form: 'mini' | 'main'
+  readonly form: 'mini' | 'main' | 'bare'
   readonly handle: FloatHandle
   readonly sheet: boolean
   view: OpenTarget
@@ -264,7 +286,7 @@ function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'floa
     return prev
   }
   const handle = openFloat({
-    scope: plan.scope, host, space: space || undefined, label: title,
+    scope: plan.scope, host, space: space || undefined, label: title, bare: plan.form === 'bare',
     anchor: plan.sheet ? 'bottom-center' : restoreAnchor ?? fl?.anchor ?? 'bottom-end',
     // 抽屉不记锚点(恒在底边);别的记用户拖到哪:Space 作用域按 Space + View + key(每个 Space 各记各的),别的按作用域 + View + key
     id: plan.sheet ? undefined : persisted ? `open:space:${space}:${targetType}${key ? `#${key}` : ''}` : `open:${plan.scope}:${targetType}${key ? `#${key}` : ''}`,
@@ -274,6 +296,12 @@ function openViewFloat(targetType: string, plan: Extract<OpenPlan, { kind: 'floa
   if (restoreAnchor && !plan.sheet && handle.anchor !== restoreAnchor) handle.move(restoreAnchor)
   handle.el.dataset.viewFloat = plan.form
   if (plan.sheet) handle.el.dataset.sheet = ''
+  // bare 没有卡面:大小由调用方给(缺省 160 见方,同桌面小窗)
+  if (plan.form === 'bare') {
+    const px = (n: unknown): string => `${Math.max(16, Math.round(typeof n === 'number' && Number.isFinite(n) ? n : 160))}px`
+    handle.el.style.width = px(opts.size?.width)
+    handle.el.style.height = px(opts.size?.height)
+  }
   let settle!: () => void
   const closed = new Promise<void>((r) => { settle = r })
   const rec: FloatViewRec = {
@@ -335,6 +363,7 @@ const spaceIdent = (space: string, type: string, key: string): string => `space|
 function serializable(v: unknown): boolean { try { JSON.stringify(v); return true } catch { return false } }
 
 function toPersisted(r: FloatViewRec): PersistedFloat | null {
+  if (r.form === 'bare') return null // 无卡片浮层不跟布局存(大小、皮都由插件当场给)
   const f: PersistedFloat = {
     type: r.targetType, form: r.form, anchor: r.handle.anchor,
     view: { type: r.view.type, params: { ...(r.view.params ?? {}) } },
@@ -394,7 +423,9 @@ setFloatPersistence({
 })
 
 const DOCKS: readonly ViewLocation[] = ['main', 'left', 'right', 'bottom']
-const FORMS: readonly ViewForm[] = ['main', 'side', 'bottom', 'mini']
+const FORMS: readonly ViewForm[] = ['main', 'side', 'bottom', 'mini', 'bare']
+/** 这个宿主认识的样子(插件 ctx.workspace.forms 照抄;旧宿主没有这一项)。 */
+export const WORKSPACE_FORMS: readonly ViewForm[] = FORMS
 const FLOATS = ['desktop', 'view', 'space', 'window'] as const
 
 /** 参数不对同步抛 TypeError(调用方的 bug,别静默);和 openFloat 同一口径。 */
@@ -426,6 +457,7 @@ function liveEnv(): OpenEnv {
     },
     desktopMini: !!desktop?.mini,
     desktopPanel: !!desktop?.panel,
+    desktopBare: !!desktop?.bare,
     // 单列 store 没有 bottomVisible 这一位(同 pluginViews.hasBottomPanel);Mini / 卫星窗的单列也一样
     bottom: 'bottomVisible' in useWorkspace.getState(),
     floats: renderers > 0,
@@ -460,6 +492,18 @@ async function run(target: OpenTarget, opts: OpenOptions): Promise<OpenResult> {
       const r = await desktop!.mini!({ view: plan.view, mainView: plan.mainView, spaceId: plan.spaceId, params: target.params, key: opts.key, title, ...(plan.pin ? {} : { pin: false as const }) })
       if (r && !r.ok) return { ok: false, reason: 'limit', limit: r.limit }
       return { ok: true, layer: { float: 'desktop' }, form: 'mini' }
+    }
+    case 'bare': {
+      const r = await desktop!.bare!({ view: { type: target.type, params: target.params }, key: opts.key, title: opts.title, size: opts.size, pin: plan.pin })
+      if (r.ok) return { ok: true, layer: { float: 'desktop' }, form: 'bare', ...(r.close ? { close: r.close } : {}), ...(r.closed ? { closed: r.closed } : {}) }
+      if (r.reason === 'limit') return { ok: false, reason: 'limit', limit: r.limit }
+      if (r.reason !== 'fallback') return { ok: false, reason: r.reason }
+      const env = liveEnv()
+      if (!env.floats) return { ok: false, reason: 'unavailable' }
+      const self = { type: target.type, params: target.params }
+      const fb = { kind: 'float' as const, scope: 'window' as const, form: 'bare' as const, view: self, mainView: self, sheet: false }
+      const rec = openViewFloat(target.type, fb, opts, { float: 'window' })
+      return { ok: true, layer: { float: 'window' }, form: 'bare', close: rec.close, closed: rec.closed }
     }
     case 'panel':
       desktop!.panel!({ view: { type: target.type, params: target.params }, title: opts.title || displayTitle(target.type), pin: plan.pin, key: opts.key, size: opts.size })

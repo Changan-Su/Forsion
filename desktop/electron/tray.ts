@@ -45,6 +45,14 @@ export interface TrayHandlers {
     list: () => readonly TrayMiniRow[]
     open: (id: string) => void
   }
+  /** 「桌面小窗」(插件桌面小窗,2026-11-26):开着的每一扇按插件名列出,点一行 = 关掉那扇;末尾「暂时全部藏起来 / 全部显示」。
+   *  没有开着的就不出这一项。 */
+  desktopWindows?: {
+    list: () => readonly TrayDesktopWindowRow[]
+    close: (id: string) => void
+    hidden: () => boolean
+    setHidden: (hidden: boolean) => void
+  }
   /** P1-K2 远程活动 / 急停(可选:无 agent 后端的产品形态不传)。文案走 main.remoteSafety.tray.*,不进 COPY 表(R-23)。 */
   remote?: {
     view: () => RemoteTrayView
@@ -57,6 +65,8 @@ void REMOTE_SAFETY_MESSAGES // 片段随 import 登记(mtFor 取得到)
 
 /** 一扇开着的 Mini:title = 窗口标题(渲染层写的胶囊名字),空 = 「Mini」。 */
 export interface TrayMiniRow { id: string; title: string; visible: boolean }
+/** 一扇开着的插件桌面小窗:插件名 + 这扇的名字(可空)。 */
+export interface TrayDesktopWindowRow { id: string; pluginName: string; title: string }
 /** 渲染层报上来的一条会话(标题已按界面语言显示好)。 */
 export interface TraySessionRow { id: string; title: string; state: 'run' | 'wait' }
 /** 菜单顶上最多列几条(等你的排前)。 */
@@ -88,6 +98,7 @@ let handlers: TrayHandlers | null = null
 const COPY = {
   zh: {
     show: '显示 Forsion', checkUpdates: '检查更新', quit: '退出 Forsion', newMini: '新建 Mini 对话', allMinis: '全部 Mini',
+    desktopWindows: '桌面小窗', dwClose: '关闭「{name}」', dwHideAll: '暂时全部藏起来', dwShowAll: '全部显示',
     sessWait: '等你 · {n}', sessRun: '在跑 · {n}', sessMore: '还有 {n} 个…', sessUntitled: '未命名会话',
     chPause: '暂停电脑历史 1 小时', chResume: '恢复电脑历史',
     chRecording: '电脑历史：记录中', chPausedUntil: '电脑历史：已暂停至 {time}',
@@ -96,6 +107,7 @@ const COPY = {
   },
   en: {
     show: 'Show Forsion', checkUpdates: 'Check for updates', quit: 'Quit Forsion', newMini: 'New Mini chat', allMinis: 'All Mini windows',
+    desktopWindows: 'Desktop windows', dwClose: 'Close "{name}"', dwHideAll: 'Hide all for now', dwShowAll: 'Show all',
     sessWait: 'Needs you · {n}', sessRun: 'Running · {n}', sessMore: '{n} more…', sessUntitled: 'Untitled session',
     chPause: 'Pause computer history for 1 hour', chResume: 'Resume computer history',
     chRecording: 'Computer history: recording', chPausedUntil: 'Computer history: paused until {time}',
@@ -206,6 +218,27 @@ export function trayMiniItems(m: NonNullable<TrayHandlers['minis']>, lang: TrayL
   return [{ label: COPY[lang].allMinis, submenu: rows.map((r) => ({ label: title(r), click: () => m.open(r.id) })) }]
 }
 
+/** 「桌面小窗」子菜单:每扇一行「关闭「插件名 · 名字」」,末尾藏起 / 显示全部。没有开着的 = 不出。 */
+export function trayDesktopWindowItems(m: NonNullable<TrayHandlers['desktopWindows']>, lang: TrayLang, platform: NodeJS.Platform = process.platform): Electron.MenuItemConstructorOptions[] {
+  let rows: readonly TrayDesktopWindowRow[]
+  let hidden = false
+  try { rows = m.list(); hidden = m.hidden() } catch { return [] }
+  if (!rows.length) return []
+  const t = COPY[lang]
+  const name = (r: TrayDesktopWindowRow): string => {
+    const one = [r.pluginName, r.title].map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ') || 'Plugin'
+    return menuText(one.length > 48 ? `${one.slice(0, 47)}…` : one, platform)
+  }
+  return [{
+    label: t.desktopWindows,
+    submenu: [
+      ...rows.map((r) => ({ label: t.dwClose.replace('{name}', name(r)), click: () => m.close(r.id) })),
+      { type: 'separator' as const },
+      { label: hidden ? t.dwShowAll : t.dwHideAll, click: () => m.setHidden(!hidden) },
+    ],
+  }]
+}
+
 function newMiniItem(m: NonNullable<TrayHandlers['newMini']>, label: string): Electron.MenuItemConstructorOptions {
   let acc: string | null = null
   try { acc = m.accelerator() } catch { /* 当没注册 */ }
@@ -226,6 +259,7 @@ export function trayMenuTemplate(h: TrayHandlers, lang: TrayLang, now = Date.now
     { label: t.show, click: () => h.show() },
     ...(h.newMini ? [newMiniItem(h.newMini, t.newMini)] : []),
     ...(h.minis ? trayMiniItems(h.minis, lang, platform) : []),
+    ...(h.desktopWindows ? trayDesktopWindowItems(h.desktopWindows, lang, platform) : []),
     { label: t.checkUpdates, click: () => h.checkUpdates() },
   ]
   const ch = h.computerHistory

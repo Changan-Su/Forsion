@@ -214,6 +214,24 @@ describe('tray 在跑 / 等你段(借鉴 Comma 2.6)', () => {
     expect(open).toHaveBeenCalledWith('m2')
   })
 
+  it('桌面小窗(插件):开着才出;每扇一行「关闭「插件名 · 名字」」,点了关那扇;末尾藏起 / 显示全部', () => {
+    const close = vi.fn(), setHidden = vi.fn()
+    let hidden = false
+    const dw = { list: () => [{ id: 'd1', pluginName: '桌宠', title: '小猫' }, { id: 'd2', pluginName: 'Clock', title: '' }], close, hidden: () => hidden, setHidden }
+    expect(labels(trayMenuTemplate({ ...base, desktopWindows: { ...dw, list: () => [] } }, 'zh'))).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+    const items = trayMenuTemplate({ ...base, desktopWindows: dw }, 'zh', 0, 'darwin')
+    expect(labels(items)).toEqual(['显示 Forsion', '桌面小窗', '检查更新', '退出 Forsion'])
+    const sub = items[1].submenu as Electron.MenuItemConstructorOptions[]
+    expect(sub.map((i) => i.label ?? i.type)).toEqual(['关闭「桌宠 · 小猫」', '关闭「Clock」', 'separator', '暂时全部藏起来'])
+    ;(sub[1].click as () => void)()
+    expect(close).toHaveBeenCalledWith('d2')
+    ;(sub[3].click as () => void)()
+    expect(setHidden).toHaveBeenCalledWith(true)
+    hidden = true
+    const en = trayMenuTemplate({ ...base, desktopWindows: dw }, 'en', 0, 'darwin')[1].submenu as Electron.MenuItemConstructorOptions[]
+    expect(en.map((i) => i.label ?? i.type)).toEqual(['Close "桌宠 · 小猫"', 'Close "Clock"', 'separator', 'Show all'])
+  })
+
   it('清洗:形状不对的行丢掉、重复 id 只留一条、标题压成一行并截短', () => {
     const long = 'x'.repeat(80)
     expect(sanitizeTraySessions([
