@@ -5,6 +5,7 @@ import { createSerialQueue, writePrivateJson } from './configWrite'
 import { DEFAULT_APPEARANCE, patchAppearance, readAppearance, type StartupAppearance } from '../shared/startupAppearance'
 import { roundIconBitmap } from '../shared/iconShape'
 import { keepMacIcon, keepWindowsIcon } from './systemIcon'
+import { PRODUCT } from './product'
 
 // Until the GPU process has reported, Chromium answers "disabled" for every feature, so asking early made
 // hardware-accelerated machines look like software rendering. Registered at import: the report can beat `ready`.
@@ -58,7 +59,7 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
         const roaming = app.getPath('appData'), programs = 'Microsoft/Windows/Start Menu/Programs'
         const size = Math.min(256, icon?.getSize().width ?? 256)
         await keepWindowsIcon({
-          shell, exe: process.execPath, dir,
+          shell, exe: process.execPath, dir, appId: PRODUCT.appId,
           folders: [
             app.getPath('desktop'), join(roaming, programs), join(roaming, 'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar'),
             // Installed for all users: usually not writable from here, and then left as they are.

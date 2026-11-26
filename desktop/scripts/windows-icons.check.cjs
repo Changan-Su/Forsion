@@ -29,12 +29,23 @@ async function main() {
       const dir = path.join(root, 'user data')
       const png = Buffer.from(input.png, 'base64')
       const links = folders.map(p => path.join(p, 'Forsion.lnk'))
+      const legacyId = 'com.forsion.tangu'
+      const appId = input.appId
       const check = (condition, name) => { if (!condition) throw new Error(name); return name }
       const checks = []
-      for (const link of links) check(shell.writeShortcutLink(link, 'create', { target: exe, icon: exe, iconIndex: 0, args: '--probe-argument', description: 'Keep description' }), 'create real .lnk')
+      for (const link of links) check(shell.writeShortcutLink(link, 'create', { target: exe, icon: exe, iconIndex: 0, args: '--probe-argument', description: 'Keep description', appUserModelId: legacyId }), 'create real .lnk')
       const other = path.join(folders[0], 'Other.lnk')
-      check(shell.writeShortcutLink(other, 'create', { target: process.env.ComSpec, icon: process.env.ComSpec, iconIndex: 0 }), 'create unrelated shortcut')
-      const target = { shell, folders, exe, dir }
+      check(shell.writeShortcutLink(other, 'create', { target: process.env.ComSpec, icon: process.env.ComSpec, iconIndex: 0, appUserModelId: legacyId }), 'create unrelated shortcut')
+      const space = path.join(folders[0], 'Space.lnk')
+      const spaceId = 'Forsion.Space.probe'
+      check(shell.writeShortcutLink(space, 'create', { target: exe, appUserModelId: spaceId }), 'create Space shortcut')
+      const target = { shell, folders, exe, dir, appId }
+      await keepWindowsIcon(target, null, () => { throw new Error('No icon change') }, 256)
+      checks.push(check(links.every(p => {
+        const s = shell.readShortcutLink(p)
+        return s.appUserModelId === appId && s.icon === exe && s.description === 'Keep description' && s.args === '--probe-argument'
+      }), 'legacy taskbar identity migrates on real shortcuts without changing launch details or icon'))
+      checks.push(check(shell.readShortcutLink(other).appUserModelId === legacyId && shell.readShortcutLink(space).appUserModelId === spaceId, 'other app and standalone window identities preserved'))
       await keepWindowsIcon(target, 'arioso', () => png, 256)
       const icon = shell.readShortcutLink(links[0]).icon
       checks.push(check(links.every(p => shell.readShortcutLink(p).icon === icon) && icon.startsWith(dir), 'real Desktop / Start Menu / TaskBar shortcuts point to hashed ICO'))
@@ -53,7 +64,7 @@ async function main() {
       checks.push(check(shell.readShortcutLink(links[0]).iconIndex === 1 && links.slice(1).every(p => shell.readShortcutLink(p).icon === exe), 'reset preserves user icon and restores app-owned shortcuts'))
       await keepWindowsIcon(target, 'persisted', () => png, 256)
       return { checks, links, icon: shell.readShortcutLink(links[0]).icon }
-    }, { home, module: moduleFile, png: fs.readFileSync(path.join(ROOT, 'build/icon.png')).toString('base64') })
+    }, { home, module: moduleFile, appId: require('../products/forsion.json').appId, png: fs.readFileSync(path.join(ROOT, 'build/icon.png')).toString('base64') })
     for (const name of result.checks) console.log(`PASS ${name}`)
     await app.close(); app = null
     assert.ok(fs.existsSync(result.icon))
