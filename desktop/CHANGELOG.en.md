@@ -2,6 +2,22 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.14.3-beta.3 (2026-11-26)
+
+Preview build, available only to users on the preview channel.
+
+- **Human Desk and Agent Desk**: Tangu Space adds a Human Desk, a card for what you are working on that you can expand, and the agent never takes your place. Desk items open in a tab, a split, or a new window, the name capsule can be dragged out, and the icon follows the item. Dark web pages no longer show a white screen in Desk and built-in browser previews.
+- **Chat**: Several images sent together form one set, and you can mark them up for the model to edit, one at a time or together. The to-do list at the end shows only this turn's progress and moves with your interjections. When a provider is rate limited, requests wait their turn instead of failing the run, and session settings can turn off child sessions. Arrow keys move line by line through wrapped text in Chat Box, and typing several characters at once no longer drops them.
+- **Models and services**: Providers, the model library, and web search are now one Models and services page in Settings, showing each connection's status, address, and model count at a glance.
+- **Notes and files**: Workspace .md files keep the last keystrokes when you close the tab, quit the app, or reload the window right after typing. Online vaults no longer recreate notes that were deleted on another device. Folder sync lists files held for review and lets you choose which side to keep. The Tangu sidebar always lists the current vault.
+- **Store**: Skills gain a built-in skills.sh source, grouped by source with Forsion first, and collected skills install and update directly.
+- **Computer Use**: Approvals are bound to the chat turn that asked for them, so an outdated Always allow no longer applies. Foreground tasks return to the chat they came from, and browser tasks share Computer Use's website rules.
+- **Updates**: Full updates on the overseas and preview channels download in the background and prompt when ready. The website download source supports differential updates.
+- **Plugin development**: `ctx.storage` keeps plugin data in a plugin data folder outside the vault, and `hostPath` gives the local agent an absolute path. `ctx.secrets` stores keys. Plugins can declare a desktop window, demo stage recordings can pause and resume, and plugin tools gain an Edit approval level. The host explains why it refused to load a plugin. The Translation plugin 0.2.0 adds six machine translation services.
+- **Interface**: Controls are back to an 8px corner radius. Menus that open from a button flip or cap their height at the window edge instead of being cut off, and the agent picker's description area stays one line tall. Adds an official Health Space. In automatic visuals mode, asking what happens when a condition changes gets an interactive diagram or a direct decision threshold, depending on the question.
+- **Windows**: Resizing the Mini no longer shows gaps, and its chat layout is fixed. In-progress replies are saved before the engine shuts down. Processes started from Git Bash end with the engine. Fixed the title bar height of remote Units.
+- Bundles Tangu engine 2.14.10, Calendar 0.1.13, and Translation 0.2.0. The default desktop edition includes Forsion Extend 0.10.13, with the folder sync review list, delete confirmation, and rate-limit waiting fixes.
+
 ## 2.14.3-beta.2 (2026-11-23)
 
 Preview build, available only to users on the preview channel.
