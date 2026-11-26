@@ -143,7 +143,9 @@ export function createRestartGuard(deps: {
  *  · voice_unknown      the voice-call state cannot be read
  *  · extend_busy        a quit guard (Extend content sync, Penzor Cloud transfers, ...) reports unfinished work, a quit dialog is
  *                       open, or the content flush did not finish in time (a push may still be running)
- *  · engine_busy        the managed engine has running / queued tasks, delegates or background processes
+ *  · engine_busy        the managed engine has running / queued tasks, delegates or background processes; or another local
+ *                       Forsion instance on this machine (a folder Unit, localUnits.ts) is running or its state cannot be read
+ *                       (it shares the installation; the unattended path never asks it to quit)
  *  · engine_unknown     the engine did not answer (or answered something unreadable)
  *  · engine_not_ready   no managed engine in the `ready` state (stopped, crashed, starting, external / cloud mode)
  *  · engine_no_hold     the engine cannot hold new runs (an engine older than this host)
@@ -187,6 +189,9 @@ export function createIdleInstall(deps: {
   voiceCall(): Promise<boolean | null>
   /** quitGuards.peek(): true = unfinished work or unknown. */
   extendBusy(): boolean
+  /** Folder Units (local multi-Unit) on this machine: true = one is running, or the registry / a run state cannot be read.
+   *  Synchronous; re-checked right before the point of no return. Absent = none can exist (not the machine owner). */
+  otherInstancesRunning?(): boolean
   /** Engine restart status; throws = unknown. */
   engine(): Promise<EngineCheck>
   /** Atomic engine idle check + hold of new runs (POST /agent/remote/restart-hold). */
@@ -216,7 +221,10 @@ export function createIdleInstall(deps: {
     if (idle < needIdle) return 'os_active'
     let busy = true
     try { busy = deps.extendBusy() } catch { busy = true }
-    return busy ? 'extend_busy' : null
+    if (busy) return 'extend_busy'
+    let others = true
+    try { others = deps.otherInstancesRunning?.() ?? false } catch { others = true }
+    return others ? 'engine_busy' : null
   }
   const voice = async (): Promise<IdleInstallReason | null> => {
     const v = await deps.voiceCall().catch(() => null)

@@ -87,6 +87,9 @@ describe('installIfIdle', () => {
     ['os_idle_unknown', { osIdleSeconds: () => { throw new Error('linux session') } }],
     ['extend_busy', { extendBusy: () => true }],
     ['extend_busy', { extendBusy: () => { throw new Error('x') } }],
+    // A folder Unit (local multi-Unit) shares the installation: running or unknown → refuse, never ask it to quit
+    ['engine_busy', { otherInstancesRunning: () => true }],
+    ['engine_busy', { otherInstancesRunning: () => { throw new Error('registry unreadable') } }],
     ['voice_call', { voiceCall: async () => true }],
     ['voice_unknown', { voiceCall: async () => null }],
     ['voice_unknown', { voiceCall: async () => { throw new Error('renderer gone') } }],
@@ -145,6 +148,17 @@ describe('installIfIdle', () => {
       holdEngine: async () => { busy = true; return { ok: true, release: async () => { calls.push('release') } } },
     })
     expect(await run(ARGS)).toEqual({ ok: false, reason: 'extend_busy' })
+    expect(calls).toContain('release')
+    expect(calls).not.toContain('beginQuit')
+  })
+
+  it('a folder Unit started after the first check is caught at the last moment, hold released', async () => {
+    let running = false
+    const { run, calls } = setup({
+      otherInstancesRunning: () => running,
+      holdEngine: async () => { running = true; return { ok: true, release: async () => { calls.push('release') } } },
+    })
+    expect(await run(ARGS)).toEqual({ ok: false, reason: 'engine_busy' })
     expect(calls).toContain('release')
     expect(calls).not.toContain('beginQuit')
   })

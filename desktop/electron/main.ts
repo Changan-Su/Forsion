@@ -174,7 +174,7 @@ import { SPACE_SHORTCUT, createSpaceShortcut, createWindowShortcut, iconPngFromD
 import { UNIT_SHORTCUT, handleUnitAddToDesktop, isUnitId, parseRosterResponse, parseUnitWindowState, unitWindowIdFromUrl, type RosterRead, type UnitShortcutResult, type UnitWindowEntry } from './unitShortcut'
 import { isMachineOwner, setHostRole } from './hostRole'
 import { LOCAL_UNIT_QUIT_ARG } from '../shared/localUnits'
-import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitEnvOutside, localUnitGuard, localUnitRegistryFile, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, readLocalUnitRegistry, resolveLocalUnitLaunch, writeLocalUnitRunRecord, type LocalUnitLaunchRefusal } from './localUnits'
+import { LOCAL_UNIT_SHORTCUT, clearLocalUnitRunRecord, defaultUserDataDir, dropStaleLocalUnitRunRecord, localUnitAppUserModelId, localUnitChannel, localUnitEnvOutside, localUnitGuard, localUnitPaths, localUnitRegistryFile, localUnitRunState, localUnitSpawnArgs, localUnitSpawnEnv, localUnitsDefaultParent, macAppBundleOf, parseLocalUnitArgs, readLocalUnitRegistry, resolveLocalUnitLaunch, writeLocalUnitRunRecord, type LocalUnitLaunchRefusal } from './localUnits'
 import { createLocalUnitsHost, showInstallBlocked, type LocalUnitsHost } from './localUnitsHost'
 import { clearDataPaths, verifyClearTarget, type ClearDataInput } from './clearDataPaths'
 import { dirIdentity } from './dirIdentity'
@@ -5345,7 +5345,8 @@ app.whenReady().then(async () => {
   }
   const idleInstall = createIdleInstall({
     lock: shutdownLock,
-    supported: () => app.isPackaged && !SANDBOX && canInstallUpdate(),
+    // Folder Units and plugin sandboxes never update (hostRole): only the machine owner installs
+    supported: () => app.isPackaged && MACHINE_OWNER && canInstallUpdate(),
     quitting: () => isQuitting,
     pin: (v) => pinDownloaded(v),
     unpin: (v) => unpinDownloaded(v),
@@ -5353,6 +5354,13 @@ app.whenReady().then(async () => {
     osIdleSeconds: () => { try { return powerMonitor.getSystemIdleTime() } catch { return null } },
     voiceCall: () => readVoiceCallActive(),
     extendBusy: () => quitGuards.peek(),
+    // A running folder Unit shares this installation. The interactive install asks it to quit (with its own quit dialog);
+    // unattended, nobody is there to answer that, so refuse instead. Unreadable registry / run state = running.
+    otherInstancesRunning: () => {
+      const read = readLocalUnitRegistry(LOCAL_UNIT_REGISTRY_FILE)
+      if (read.state !== 'ok') return true
+      return read.registry.units.some((u) => u.id !== LOCAL_UNIT?.id && localUnitRunState(localUnitPaths(u.path).appData).state !== 'stopped')
+    },
     engine: async () => {
       const eng = managedEngine()
       return eng ? { state: 'ready', activity: await readRestartActivity(eng.url, eng.token) } : { state: 'not_ready' }
