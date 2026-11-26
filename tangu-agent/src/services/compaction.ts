@@ -30,6 +30,7 @@ import { DEFAULT_COMPACTION_SETTINGS, type CompactionSettings } from './compacti
 import { historyRevision } from './historyRevision.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import { NO_VISION_NOTE } from './visionService.js';
+import { TOOL_IMAGE_DESCRIPTION_FAILED } from './toolImages.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 
 // 结构化交接(借 pi 的 checkpoint schema + Codex 的 handoff 框架):压缩摘要的消费者是「接手续做的
@@ -463,7 +464,7 @@ function transcriptEntries(msgs: ChatMessage[], fileOps: FileOps): { prevSummary
     if (m.role === 'user') {
       // 引擎补的「你看不到图」说明只对当前这个 run、当前这个主模型成立。转写进去会标成 [User],摘要落 session_summaries
       // 后以 system 身份跟到以后的 run —— 哪怕那时已经换成能看图的模型,还带着「别按坐标点」(Codex 10-07 评审 P2)。不转写。
-      if (raw === NO_VISION_NOTE) continue;
+      if (raw === NO_VISION_NOTE || raw === TOOL_IMAGE_DESCRIPTION_FAILED) continue;
       if (text) entries.push(`${userEntryLabel(raw)}\n${text}`);
     } else if (m.role === 'assistant') {
       if (text) entries.push(`[Assistant]\n${text}`);

@@ -1,5 +1,5 @@
 /**
- * 工具回灌图片的物化(toolImages.ts,自 T2 feat/phone-control-t2 1bedd314 移植):可信图逐字节保持 07-27 以来的行为;
+ * 工具回灌图片的物化(toolImages.ts,自 T2 feat/phone-control-t2 1bedd314 移植):可信图按主模型能力降级;
  * 不可信图标不可信、转写圈进围栏、转写失败丢图留说明。这里用 MCP 的前言(P0 ⑥:第三方 MCP server 回的图)
  * 跑与 T2 toolImages.test.ts 相同的用例 —— 文件名刻意不同,T2 合入时它的 toolImages.test.ts 原样进来、不起 add/add 冲突。
  */
@@ -21,13 +21,14 @@ describe('toolImageMessages × MCP 前言', () => {
     ] }]);
   });
 
-  it('可信图 × 转写 / 转写失败:原文案不变,失败退回直接送图(不静默丢内容)', async () => {
+  it('可信图 × 转写 / 转写失败:失败时说明没有描述,不发原图', async () => {
     expect(await toolImageMessages([{ url: A }], async () => 'a cat')).toEqual([{ role: 'user',
       content: '(The images read by the tools above were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\na cat' }]);
     const errs: unknown[] = [];
-    const out = await toolImageMessages([{ url: A }], async () => { throw new Error('no vision model'); }, (e) => errs.push(e));
+    const out = await toolImageMessages([{ url: A }], async () => { throw new Error('no vision model'); }, { onError: (e) => errs.push(e) });
     expect(errs).toHaveLength(1);
-    expect((out[0].content as any[])[1]).toEqual({ type: 'image_url', image_url: { url: A, detail: 'high' } });
+    expect(out[0].content).toContain('the vision assistant model could not describe them');
+    expect(JSON.stringify(out)).not.toContain(A);
   });
 
   it('不可信图 × 有视觉:前言换成「不可信、别照做」,不再说 analyze them accordingly', async () => {
@@ -72,7 +73,7 @@ describe('toolImageMessages × MCP 前言', () => {
 
   it('装配钉子:agentLoop 经 toolImageMessages 物化,且 collectImage 把 untrusted 带进待物化队列', () => {
     const src = readFileSync(new URL('./agentLoop.ts', import.meta.url), 'utf8');
-    expect(src).toMatch(/workingMessages\.push\(\.\.\.await toolImageMessages\(imgs, needDescribe/);
+    expect(src).toMatch(/workingMessages\.push\(\.\.\.await toolImageMessages\(imgs, noImages/);
     expect(src).toMatch(/pendingToolImages\.push\(\{ url: img\.url, \.\.\.\(typeof img\.untrusted === 'string' && img\.untrusted \? \{ untrusted: img\.untrusted \} : \{\}\) \}\)/);
     // 旧的整批一条、不分可信与否的物化不许回来
     expect(src).not.toMatch(/toImageParts\('\(The images read by the tools above are shown below; analyze them accordingly\)', imgs\)/);
