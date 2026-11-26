@@ -49,6 +49,8 @@ import type { PluginDependency } from '@amadeus-shared/ipc'
 import type { UnmetDependency } from '../amadeus/plugins/pluginDeps'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder, canRevealInFileManager } from '../amadeus/lib/hostCaps'
+import { fmtBytes } from './SyncSetupCard'
+import type { PluginStorageUsage } from '@amadeus-shared/pluginStorage'
 import { FileOpenersPanel } from './FileOpenersPanel'
 import { homeTarget } from '../services/engine/targets'
 import { internalsAvailable } from '../amadeus/plugins/pluginInternals'
@@ -194,6 +196,23 @@ registerMessages({
     en: "It's the same plugin as the store install, and only the store install runs now. Its settings were not carried over. They're still on this phone.",
   },
   'settings.amadeusPlugins.superseded.reveal': { zh: '在访达中显示', en: 'Show in Finder' },
+  'settings.amadeusPlugins.data.head': { zh: '数据', en: 'Data' },
+  'settings.amadeusPlugins.data.title': { zh: '插件自己的数据 · {size}', en: 'Plugin data · {size}' },
+  'settings.amadeusPlugins.data.sub': {
+    zh: '草稿、缓存、导出时的中间文件。只在这台电脑上，不在智库里，也不同步。',
+    en: 'Drafts, caches and intermediate files. Only on this computer, not in your vault, not synced.',
+  },
+  'settings.amadeusPlugins.data.subMobile': {
+    zh: '草稿、缓存、导出时的中间文件。只在这台手机上，不在智库里，也不同步。',
+    en: 'Drafts, caches and intermediate files. Only on this phone, not in your vault, not synced.',
+  },
+  'settings.amadeusPlugins.data.clearCache': { zh: '清空缓存（{size}）', en: 'Clear cache ({size})' },
+  'settings.amadeusPlugins.data.cleared': { zh: '已清空「{name}」的缓存', en: 'Cleared the cache of "{name}"' },
+  'settings.amadeusPlugins.data.vaultTitle': { zh: '智库里的 {folder}/ · {n} 个文件', en: '{folder}/ in your vault · Files: {n}' },
+  'settings.amadeusPlugins.data.vaultSub': {
+    zh: '插件替你存成笔记、要在文件树里打开的东西。跟着笔记同步。',
+    en: 'Notes this plugin saved for you, opened from the file tree. They sync with your notes.',
+  },
   'settings.amadeusPlugins.superseded.revealWin': { zh: '在文件资源管理器中显示', en: 'Show in File Explorer' },
   'settings.amadeusPlugins.superseded.trash': { zh: '移到回收站', en: 'Move to Trash' },
   'settings.amadeusPlugins.superseded.delete': { zh: '删除旧副本', en: 'Delete old copy' },
@@ -827,6 +846,83 @@ const SupersededSection: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   )
 }
 
+/** 插件数据文件夹的占用(ctx.storage,2026-11-26)。桥缺位(网页 / 分享页 / 旧壳)→ null;读不出来也当 null(只是展示)。 */
+function useStorageUsage(pluginId: string): [PluginStorageUsage | null, (u: PluginStorageUsage | null) => void] {
+  const [usage, setUsage] = useState<PluginStorageUsage | null>(null)
+  useEffect(() => {
+    let live = true
+    if (!amadeus?.pluginStorage || window.tangu?.unitPage) return
+    void amadeus.pluginStorage({ id: pluginId, op: 'usage' })
+      .then((u) => { if (live) setUsage(u as PluginStorageUsage) })
+      .catch(() => { if (live) setUsage(null) })
+    return () => { live = false }
+  }, [pluginId])
+  return [usage, setUsage]
+}
+
+/** 详情页「数据」一节(插件数据目录方案 A):插件自己的数据(占用、在访达中显示、清空缓存)+ 智库里的工作文件夹(文件数、
+ *  在访达中显示)。两行都只看和打开,不删用户东西;清空缓存只清各层 cache/。手机只显示占用;网页 / 设备页不显示。 */
+const PluginDataSection: React.FC<{ p: AmadeusPlugin; usage: PluginStorageUsage | null; setUsage: (u: PluginStorageUsage | null) => void }> = ({ p, usage, setUsage }) => {
+  const { t, locale } = useI18n()
+  const [files, setFiles] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const mobile = !!window.tangu?.mobile
+  const remote = !!window.tangu?.unitPage
+  const folder = remote ? null : pluginVaultFolder(p.id, p.name)
+  useEffect(() => {
+    let live = true
+    if (!folder) { setFiles(null); return }
+    const inFolder = (x: string): boolean => x.replace(/\\/g, '/').startsWith(`${folder}/`)
+    void Promise.all([amadeus.listPages().catch(() => [] as string[]), amadeus.listFiles().catch(() => [] as string[])])
+      .then(([pages, other]) => { if (live) setFiles(pages.filter(inFolder).length + other.filter(inFolder).length) })
+    return () => { live = false }
+  }, [folder])
+  if (remote || !amadeus?.pluginStorage) return null
+  const hasData = !!usage && usage.bytes > 0
+  if (!hasData && !folder) return null
+  const canReveal = !mobile && canRevealInFileManager()
+  const revealLabel = t(IS_MAC ? 'settings.amadeusPlugins.superseded.reveal' : 'settings.amadeusPlugins.superseded.revealWin')
+  const clearCache = (): void => {
+    setBusy(true)
+    void amadeus.pluginStorage!({ id: p.id, op: 'clearCache' })
+      .then((u) => { setUsage(u as PluginStorageUsage); panelToast(t('settings.amadeusPlugins.data.cleared', { name: pluginDisplayName(p, locale) })) })
+      .catch((e) => panelToast(ipcErrorText(e), true))
+      .finally(() => setBusy(false))
+  }
+  const row = (title: string, sub: string, buttons: React.ReactNode, attr: Record<string, string>) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }} {...attr}>
+      <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{title}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.5 }}>{sub}</div>
+      </div>
+      {buttons}
+    </div>
+  )
+  return (
+    <>
+      <div className="hint">{t('settings.amadeusPlugins.data.head')}</div>
+      <div className="plugin-card" data-plugin-data={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {hasData && row(
+          t('settings.amadeusPlugins.data.title', { size: fmtBytes(usage!.bytes) }),
+          t(mobile ? 'settings.amadeusPlugins.data.subMobile' : 'settings.amadeusPlugins.data.sub'),
+          <>
+            {canReveal && <button className="btn ghost sm" data-plugin-data-reveal onClick={() => void amadeus.pluginStorage!({ id: p.id, op: 'reveal' }).catch(() => {})}>{revealLabel}</button>}
+            {!mobile && usage!.cacheBytes > 0 && <button className="btn ghost sm" data-plugin-data-clear disabled={busy} onClick={clearCache}>{t('settings.amadeusPlugins.data.clearCache', { size: fmtBytes(usage!.cacheBytes) })}</button>}
+          </>,
+          { 'data-plugin-data-row': 'storage' },
+        )}
+        {hasData && folder && <div style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))' }} />}
+        {folder && row(
+          t('settings.amadeusPlugins.data.vaultTitle', { folder, n: files === null ? '…' : String(files) }),
+          t('settings.amadeusPlugins.data.vaultSub'),
+          canReveal ? <button className="btn ghost sm" data-plugin-data-vault-reveal onClick={() => void amadeus.revealInFileManager(folder).catch(() => {})}>{revealLabel}</button> : null,
+          { 'data-plugin-data-row': 'vault' },
+        )}
+      </div>
+    </>
+  )
+}
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -853,6 +949,7 @@ const PluginDetail: React.FC<{
   // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
   // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
   const [askUninstall, setAskUninstall] = useState(false)
+  const [storageUsage, setStorageUsage] = useStorageUsage(p.id)
   const uninstall = (opts: { keepSettings: boolean; moveVault: boolean; keepOld: boolean; reason?: string }): Promise<boolean> =>
     uninstallForsionPlugin(p, pluginDisplayName(p, locale), opts, { engine: !!cfg, onGone: onBack, onEngineReload })
 
@@ -926,6 +1023,8 @@ const PluginDetail: React.FC<{
           warning={runningDependents(p.id).length ? t('settings.amadeusPlugins.uninstallDependents', { name: pluginDisplayName(p, locale), list: runningDependents(p.id).map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined}
           vaultFolder={pluginVaultFolder(p.id, p.name)}
           cloudData={pluginDataSyncOn(p)}
+          // 手机卸载不动插件数据文件夹,别说它进回收站;桌面在量出大小之前(或量失败)也照样说「与数据」
+          dataBytes={window.tangu?.mobile || !amadeus?.pluginStorage || window.tangu?.unitPage ? undefined : storageUsage ? storageUsage.bytes : null}
           skills={p.bundle?.skills.length ?? 0}
           agents={p.bundle?.agents ?? []}
           superseded={p.supersedes}
@@ -1001,6 +1100,7 @@ const PluginDetail: React.FC<{
           </div>
         </>
       )}
+      <PluginDataSection p={p} usage={storageUsage} setUsage={setStorageUsage} />
       <PluginSyncRow p={p} />
       <PluginGuide plugin={p} />
       {on && <PluginFootprint p={p} />}

@@ -130,6 +130,28 @@ export function bundleDirs(opts?: { keepOverlapping?: boolean }): string[] {
 
 const warnedSuperseded = new Set<string>();
 
+const SAFE_BUNDLE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const MARKET_BUNDLE_DIR = /^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * 插件包在桌面上的生效插件 id(= 桌面 shared/products.ts effectivePluginId 同一条规则):商店安装按 `market-<uuid>` 目录名,
+ * 其余按包 manifest id,manifest id 不合法再退回目录名。给引擎那半的 paths.bundleDataDir 用 —— 必须和桌面 ctx.storage
+ * 的落点逐字一致,否则两半看到的是两个文件夹。算不出 → null。
+ */
+export function bundleEffectiveId(bundleDir: string): string | null {
+  const dir = path.basename(bundleDir);
+  if (MARKET_BUNDLE_DIR.test(dir)) return dir;
+  const m = readManifestId(bundleDir);
+  if (!m.ok) return null; // manifest 读不出来:不猜(猜成目录名会和界面那半认的 id 分家,两半写进两个文件夹)
+  if (typeof m.id === 'string' && SAFE_BUNDLE_ID.test(m.id)) return m.id;
+  return SAFE_BUNDLE_ID.test(dir) ? dir : null;
+}
+
+/** 同 manifestIdOf,但分得清「读不出来」和「读出来了、没有 id」。 */
+function readManifestId(dir: string): { ok: true; id: unknown } | { ok: false } {
+  try { return { ok: true, id: (JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { id?: unknown } | null)?.id }; } catch { return { ok: false }; }
+}
+
 function manifestIdOf(dir: string): unknown {
   try { return (JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { id?: unknown })?.id; } catch { return undefined; }
 }

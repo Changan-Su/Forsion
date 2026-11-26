@@ -7,6 +7,10 @@ import { Readable } from 'node:stream'
 import path from 'node:path'
 import { protocol } from 'electron'
 import { ASSET_SCHEME } from '@amadeus-shared/assets'
+import { insidePluginData, resolvePluginDataAsset } from './pluginStorage'
+
+/** 插件数据文件夹的地址前缀:amadeus-asset://plugin-data/<id>/<路径>(渲染层 ctx.storage.url 拼同一个)。 */
+export const PLUGIN_DATA_HOST = 'plugin-data'
 
 const MIME: Record<string, string> = {
   png: 'image/png',
@@ -78,14 +82,39 @@ async function findByBasename(root: string, basename: string): Promise<string | 
 }
 
 /** Must run AFTER app 'ready'. */
-export function registerAssetProtocol(getVaultRoot: () => string | null, resolveShared?: (vaultRel: string) => string | null): void {
+export function registerAssetProtocol(getVaultRoot: () => string | null, resolveShared?: (vaultRel: string) => string | null, pluginDataBase?: () => string): void {
   protocol.handle(ASSET_SCHEME, async (request) => {
+    let url: URL
+    try {
+      url = new URL(request.url)
+    } catch {
+      return new Response('bad url', { status: 400 })
+    }
+    // 插件数据文件夹(ctx.storage.url,2026-11-26):amadeus-asset://plugin-data/<id>/<路径>。不需要打开的库;
+    // 钳在 <plugin-data>/<id>/ 里,再按真实路径核一遍(插件引擎半身可能在里面放软链)。
+    if (url.host === PLUGIN_DATA_HOST) {
+      if (!pluginDataBase) return new Response('not found', { status: 404 })
+      let pathname: string
+      try { pathname = decodeURIComponent(url.pathname) } catch { return new Response('bad url', { status: 400 }) }
+      const hit = resolvePluginDataAsset(pluginDataBase(), pathname)
+      if (!hit) return new Response('forbidden', { status: 403 })
+      try {
+        const [real, realRoot] = await Promise.all([fs.realpath(hit), fs.realpath(path.join(pluginDataBase(), pathname.replace(/^\/+/, '').split('/')[0]))])
+        if (!insidePluginData(real, realRoot)) return new Response('forbidden', { status: 403 })
+        const st = await fs.stat(real)
+        if (!st.isFile()) return new Response('not found', { status: 404 })
+        return serveFile(request, real, st.size)
+      } catch {
+        return new Response('not found', { status: 404 })
+      }
+    }
+
     const root = getVaultRoot()
     if (!root) return new Response('no vault', { status: 404 })
 
     let vaultRel: string
     try {
-      vaultRel = decodeURIComponent(new URL(request.url).pathname.replace(/^\/+/, ''))
+      vaultRel = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
     } catch {
       return new Response('bad url', { status: 400 })
     }
@@ -118,38 +147,42 @@ export function registerAssetProtocol(getVaultRoot: () => string | null, resolve
         return new Response('not found', { status: 404 })
       }
     }
-    const size = st.size
-    const ext = path.extname(abs).slice(1).toLowerCase()
-    const mime = MIME[ext] ?? 'application/octet-stream'
-    // 截帧要把 <video> 画进 canvas —— 自定义 scheme 与渲染器不同源,没有这个头 canvas 会被污染,
-    // toBlob 直接抛 SecurityError。协议本身已 vault 夹紧(上面的 `..` 闸),放开读取无新增暴露面。
-    const cors = { 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes' }
-    const body = (from: number, to: number): ReadableStream =>
-      Readable.toWeb(createReadStream(abs, { start: from, end: to })) as ReadableStream
+    return serveFile(request, abs, st.size)
+  })
+}
 
-    // 音视频拖进度条 / PDF 阅读器分页都靠 Range;Chromium 只发单区间,支持 bytes=a-b / a- / -n 三形。
-    const range = request.headers.get('range')
-    const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
-    if (m && (m[1] !== '' || m[2] !== '')) {
-      let start = m[1] === '' ? size - Number(m[2]) : Number(m[1])
-      const end = Math.min(m[1] !== '' && m[2] !== '' ? Number(m[2]) : size - 1, size - 1)
-      start = Math.max(0, start)
-      if (start > end || start >= size) {
-        return new Response(null, { status: 416, headers: { ...cors, 'Content-Range': `bytes */${size}` } })
-      }
-      return new Response(body(start, end), {
-        status: 206,
-        headers: {
-          ...cors,
-          'Content-Type': mime,
-          'Content-Range': `bytes ${start}-${end}/${size}`,
-          'Content-Length': String(end - start + 1),
-        },
-      })
+/** 已核过身份的文件按 Range 流式回给渲染层(库资源与插件数据共用)。 */
+function serveFile(request: Request, abs: string, size: number): Response {
+  const ext = path.extname(abs).slice(1).toLowerCase()
+  const mime = MIME[ext] ?? 'application/octet-stream'
+  // 截帧要把 <video> 画进 canvas —— 自定义 scheme 与渲染器不同源,没有这个头 canvas 会被污染,
+  // toBlob 直接抛 SecurityError。协议本身已 vault 夹紧(上面的 `..` 闸),放开读取无新增暴露面。
+  const cors = { 'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes' }
+  const body = (from: number, to: number): ReadableStream =>
+    Readable.toWeb(createReadStream(abs, { start: from, end: to })) as ReadableStream
+
+  // 音视频拖进度条 / PDF 阅读器分页都靠 Range;Chromium 只发单区间,支持 bytes=a-b / a- / -n 三形。
+  const range = request.headers.get('range')
+  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
+  if (m && (m[1] !== '' || m[2] !== '')) {
+    let start = m[1] === '' ? size - Number(m[2]) : Number(m[1])
+    const end = Math.min(m[1] !== '' && m[2] !== '' ? Number(m[2]) : size - 1, size - 1)
+    start = Math.max(0, start)
+    if (start > end || start >= size) {
+      return new Response(null, { status: 416, headers: { ...cors, 'Content-Range': `bytes */${size}` } })
     }
-    if (size === 0) return new Response(new Uint8Array(0), { headers: { ...cors, 'Content-Type': mime } })
-    return new Response(body(0, size - 1), {
-      headers: { ...cors, 'Content-Type': mime, 'Content-Length': String(size) },
+    return new Response(body(start, end), {
+      status: 206,
+      headers: {
+        ...cors,
+        'Content-Type': mime,
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Content-Length': String(end - start + 1),
+      },
     })
+  }
+  if (size === 0) return new Response(new Uint8Array(0), { headers: { ...cors, 'Content-Type': mime } })
+  return new Response(body(0, size - 1), {
+    headers: { ...cors, 'Content-Type': mime, 'Content-Length': String(size) },
   })
 }

@@ -121,3 +121,46 @@ describe('asset protocol: which file a note image resolves to', () => {
     })
   })
 })
+
+describe('asset protocol: plugin data folder (ctx.storage.url, 2026-11-26)', () => {
+  const get = async (url: string, init?: RequestInit) => {
+    const res = await env.handler!(new Request(url, init))
+    return { status: res.status, body: res.ok ? await res.text() : '' }
+  }
+  let base = ''
+  beforeEach(async () => {
+    base = path.join(root, '..', `${path.basename(root)}-plugin-data`)
+    await fs.mkdir(path.join(base, 'demo', 'cache'), { recursive: true })
+    await fs.writeFile(path.join(base, 'demo', 'cache', 'shot 1.png'), 'SHOT')
+    await fs.mkdir(path.join(base, 'other'), { recursive: true })
+    await fs.writeFile(path.join(base, 'other', 'x.png'), 'OTHER')
+    registerAssetProtocol(() => root, undefined, () => base)
+  })
+  afterEach(async () => { await fs.rm(base, { recursive: true, force: true }) })
+
+  it('serves a file inside the plugin folder, with Range', async () => {
+    expect(await get('amadeus-asset://plugin-data/demo/cache/shot%201.png')).toEqual({ status: 200, body: 'SHOT' })
+    const res = await env.handler!(new Request('amadeus-asset://plugin-data/demo/cache/shot%201.png', { headers: { Range: 'bytes=1-2' } }))
+    expect(res.status).toBe(206)
+    expect(await res.text()).toBe('HO')
+  })
+
+  it('stays inside that plugin\'s folder: encoded ../, bad ids, folders and missing files', async () => {
+    expect((await get('amadeus-asset://plugin-data/demo/%2E%2E%2Fother%2Fx.png')).status).toBe(403)
+    expect((await get('amadeus-asset://plugin-data/demo/..%2F..%2Fsecret')).status).toBe(403)
+    expect((await get('amadeus-asset://plugin-data/Demo/cache/shot%201.png')).status).toBe(403)
+    expect((await get('amadeus-asset://plugin-data/demo/cache')).status).toBe(404)
+    expect((await get('amadeus-asset://plugin-data/demo/nope.png')).status).toBe(404)
+  })
+
+  it('a symlink planted in the folder pointing outside is refused', async () => {
+    await fs.writeFile(path.join(root, 'secret.txt'), 'SECRET')
+    await fs.symlink(path.join(root, 'secret.txt'), path.join(base, 'demo', 'leak.txt'))
+    expect((await get('amadeus-asset://plugin-data/demo/leak.txt')).status).toBe(403)
+  })
+
+  it('without a plugin data base (older wiring) the host is 404', async () => {
+    registerAssetProtocol(() => root)
+    expect((await get('amadeus-asset://plugin-data/demo/cache/shot%201.png')).status).toBe(404)
+  })
+})

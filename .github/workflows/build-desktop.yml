@@ -456,6 +456,7 @@ jobs:
           npm run test:unitbridge
           npm run test:unitssheet
           npm run test:plugins
+          npm run test:pluginstorage
           npm run test:kbrise
           npm run test:account
           npm run test:extendbundle

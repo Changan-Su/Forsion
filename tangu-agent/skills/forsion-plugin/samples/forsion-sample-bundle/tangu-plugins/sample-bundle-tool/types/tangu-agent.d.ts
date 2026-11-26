@@ -502,7 +502,14 @@ export interface TanguPluginContext {
   channelCapabilities?: { multiPeer: true; agentPin: true; sendApproval: true };
   sdk: TanguSdk;
   log(msg: string): void;
-  paths: { pluginDir: string; dataDir: string };
+  /**
+   * `dataDir`: `<TANGU_HOME>/plugin-data/<this engine plugin's id>/`, host-owned, never inside the vault.
+   * `bundleDataDir` (2026-11-26+, only for an engine plugin shipped inside a Forsion plugin bundle): the bundle's
+   * plugin data folder `<TANGU_HOME>/plugin-data/<bundle plugin id>/` — the same folder the desktop half sees as
+   * `ctx.storage` (bundle plugin id = the `market-<uuid>` folder for store installs, the bundle manifest id otherwise).
+   * Use it to share files between the two halves. Equal to `dataDir` when the ids match.
+   */
+  paths: { pluginDir: string; dataDir: string; bundleDataDir?: string };
   /**
    * 以用户的 Forsion 账号请求云端。**只有官方签名捆绑包里的插件有**,第三方插件恒为 undefined。
    * 路径白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`);其余 → `{ status: 403, error: 'path_not_allowed' }`。

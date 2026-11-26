@@ -39,6 +39,8 @@ import { mt } from '../mainI18n'
 import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
 import { createManifestPatternLookup, pluginNetRequest } from '../pluginNet'
 import { createPluginSecrets, type PluginSecrets } from '../pluginSecrets'
+import { createPluginStorageHost } from './pluginStorage'
+import type { PluginStorageRequest } from '@amadeus-shared/pluginStorage'
 import { writePrivateJson } from '../configWrite'
 import { networkOf } from '@amadeus-shared/pluginSource'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
@@ -998,6 +1000,15 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     try { await next } finally { if (pluginDataWrites.get(f) === next) pluginDataWrites.delete(f) }
   })
 
+  // ── 插件数据文件夹(ctx.storage,2026-11-26):<tanguDataDir>/plugin-data/<id>/,与同 ID 引擎插件的 paths.dataDir 同一个。
+  // 智库外,不需要打开的库;库那一层(vaults/<库标识>/)按当前库核。实现与纪律见 ./pluginStorage.ts。
+  const pluginStorage = createPluginStorageHost({
+    base: () => path.join(tanguDataDir(), 'plugin-data'),
+    vaultRoot: () => vault.getRoot(),
+    openFolder: (abs) => shell.openPath(abs),
+  })
+  handle(IPC.pluginStorage, (_e, req: PluginStorageRequest) => pluginStorage.handle(req))
+
   handle(IPC.revealInFileManager, async (_e, targetPath: string) => {
     // Clamp to the vault, then select the item in the OS file manager. showItemInFolder
     // opens the parent and highlights the entry — works for both files and folders.
@@ -1070,12 +1081,24 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     // 一条恢复。工作文件夹由渲染层按 ctx.app.workFolder() 同口径算出(相对库根),这里只认库里、不是库根的真目录。
     const paths: Array<{ path: string; role: string }> = [{ path: target, role: 'files' }]
     if (!opts?.keepSettings) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${id}.json`), role: 'settings' })
+    // 插件数据文件夹跟着「设置」走(勾了保留就都留着)。带引擎那半、引擎插件同 ID 的,前面引擎自己的卸载已经挪过它
+    // (renderer 先调引擎 takePluginData)—— 这里只挪还在的,别同一路径挪两遍(第二遍 ENOENT 会让整次卸载回滚)。
+    const storageDir = (pid: string): string => path.join(tanguDataDir(), 'plugin-data', pid)
+    const pushStorage = async (pid: string): Promise<void> => {
+      const dir = storageDir(pid)
+      if (paths.some((p) => p.path === dir)) return
+      // 只有「确实没有」才跳过;读不出来(EACCES 等)照抛,别悄悄把数据留下又告诉用户删了
+      const st = await fs.lstat(dir).catch((e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return null; throw e })
+      if (st?.isDirectory()) paths.push({ path: dir, role: 'settings' })
+    }
+    if (!opts?.keepSettings) await pushStorage(id)
     // 旧副本:文件(role superseded,恢复时同 files 一样查「原处是否又装了」)+ 它自己的设置(跟着 keepSettings)
     for (const x of superseded) {
       paths.push({ path: path.join(root, x.dir), role: 'superseded' })
       // 两份普通目录可能同一个 id:设置文件只记一次(同一路径挪两遍,第二遍 ENOENT 会让整次卸载回滚)
       const settings = path.join(forsionHomeDir(), 'plugins-data', `${x.id}.json`)
       if (!opts?.keepSettings && x.id !== id && !paths.some((p) => p.path === settings)) paths.push({ path: settings, role: 'settings' })
+      if (!opts?.keepSettings && x.id !== id) await pushStorage(x.id)
     }
     const vaultRoot = vault.getRoot()
     const rel = typeof opts?.vaultFolder === 'string' ? opts.vaultFolder.replace(/^\/+|\/+$/g, '') : ''
