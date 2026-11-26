@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
-import { encodePhotoForModel } from './imageShrink.js';
+import { encodePhotoForModel, fittedImageUrl, fitImageUrlWithGeometry, type ModelImage } from './imageShrink.js';
 
 const require = createRequire(import.meta.url);
 const ERROR = 'image_attachment_conversion_failed';
 const MAX_PIXELS = 24_000_000;
 const CACHE_BYTES = 16 * 1024 * 1024;
-const cache = new Map<string, string>();
+const cache = new Map<string, ModelImage>();
 let cacheBytes = 0;
 // Phone decoders can use hundreds of MB: only one is alive in this engine at a time.
 let pending: Promise<unknown> = Promise.resolve();
@@ -86,14 +86,14 @@ export function inlineImageMime(bytes: Buffer): string | undefined {
 }
 
 /** Convert only the model's copy; stored attachments retain the original bytes. */
-export async function prepareInlineImage(url: string, signal?: AbortSignal): Promise<string> {
+export async function prepareInlineImage(url: string, signal?: AbortSignal): Promise<ModelImage> {
   signal?.throwIfAborted();
   const match = /^data:([^;,]+);base64,/i.exec(url);
-  if (!match) return url;
+  if (!match) return fitImageUrlWithGeometry(url);
   const bytes = Buffer.from(url.slice(match[0].length), 'base64');
   const mime = inlineImageMime(bytes);
   const heic = mime === 'image/heic' || (!mime && /^image\/hei[cf](?:-sequence)?$/i.test(match[1]));
-  if (!heic) return mime ? `data:${mime};base64,${url.slice(match[0].length)}` : url;
+  if (!heic) return fitImageUrlWithGeometry(mime ? `data:${mime};base64,${url.slice(match[0].length)}` : url);
   if (bytes.length > 6_000_000) throw new Error(ERROR);
   const key = createHash('sha256').update(bytes).digest('hex');
   const convert = async () => {
@@ -103,12 +103,12 @@ export async function prepareInlineImage(url: string, signal?: AbortSignal): Pro
     try {
       const decoded = await decode(bytes, signal);
       signal?.throwIfAborted();
-      const result = `data:image/jpeg;base64,${encodePhotoForModel(decoded.data, decoded.width, decoded.height).toString('base64')}`;
-      while (cache.size && cacheBytes + result.length > CACHE_BYTES) {
+      const result = fittedImageUrl(encodePhotoForModel(decoded.data, decoded.width, decoded.height));
+      while (cache.size && cacheBytes + result.url.length > CACHE_BYTES) {
         const [oldKey, old] = cache.entries().next().value!;
-        cache.delete(oldKey); cacheBytes -= old.length;
+        cache.delete(oldKey); cacheBytes -= old.url.length;
       }
-      if (result.length <= CACHE_BYTES) { cache.set(key, result); cacheBytes += result.length; }
+      if (result.url.length <= CACHE_BYTES) { cache.set(key, result); cacheBytes += result.url.length; }
       return result;
     } catch { signal?.throwIfAborted(); throw new Error(ERROR); }
   };

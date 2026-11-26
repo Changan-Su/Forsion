@@ -83,6 +83,8 @@ export interface PluginCommand {
  * 插件用 `ctx.sdk.*` 调到的全是核心**同一份**模块实例（同一 `als`/`_deps`/registry）。
  */
 export interface TanguSdk {
+  /** Apply the engine browser navigation policy to an explicit HTTP(S) destination. */
+  validateBrowserUrl?(raw: string): Promise<string>;
   automation: ReturnType<typeof import('./automation.js').createPluginAutomation>;
   workspaces: ReturnType<typeof import('./workspaces.js').createPluginWorkspaces>;
   runs: ReturnType<typeof import('./runs.js').createPluginRuns>;

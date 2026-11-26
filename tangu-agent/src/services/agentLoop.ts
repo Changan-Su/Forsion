@@ -3408,7 +3408,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       collectImage: (img) => {
         if (img && typeof img.url === 'string' && img.url && pendingToolImages.length < MAX_TOOL_IMAGES_PER_ROUND) {
           pendingToolImages.push({ url: img.url, ...(typeof img.untrusted === 'string' && img.untrusted ? { untrusted: img.untrusted } : {}) });
+          return true;
         }
+        return false;
       },
       displayFile: (item) => {
         if (item && typeof item.name === 'string' && (item.path || item.dataUrl) && pendingDisplayFiles.length < MAX_DISPLAY_FILES_PER_RUN) {

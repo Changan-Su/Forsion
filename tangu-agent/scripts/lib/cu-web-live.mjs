@@ -107,6 +107,8 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   const plugin = (await api('/agent/plugins')).plugins?.find((p) => /computer-use/.test(p.id));
   if (!plugin) return { ok: false, detail: 'Computer Use 插件没装进隔离 home,场景无效' };
   await api(`/agent/plugins/${plugin.id}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled: true }) });
+  // The retry fixture specifically exercises user-enabled foreground fallback.
+  await api(`/agent/plugins/${plugin.id}/settings`, { method: 'PUT', body: JSON.stringify({ patch: { headless: key !== 'cuwebdead' } }) });
   const dir = join(OUT, `${key}-evidence`); mkdirSync(dir, { recursive: true });
 
   const events = [];
@@ -163,7 +165,14 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
   const calls = ev.toolArgs.map((c) => c.name);
   const bypass = ev.toolArgs.filter((c) => /run_command|bash|shell|exec|applescript/i.test(c.name) || /osascript|AppleScript/.test(c.arguments || ''));
   const results = ev.toolResults.map((r) => String(r.full || r.result));
-  const pressNote = results.some((r) => /went through accessibility/.test(r));
+  const accessibilityPress = r => {
+    if (/went through accessibility/.test(r)) return true;
+    const trace = r.match(/^\[execution\] (.+)$/m);
+    if (!trace) return false;
+    try { const e = JSON.parse(trace[1]); return e.strictBackground && e.steps?.some(s => s.delivery === 'ax'); }
+    catch { return false; }
+  };
+  const pressNote = results.some(accessibilityPress);
   const viaAct = calls.includes('act_ui'); // jev_ui 的结果不转述这些提示,这条路上只看页面收到了什么
   const checks = {};
   if (key === 'cuweb') {
@@ -171,7 +180,7 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
     checks['全程没抢前台(替身一次都没到前台)'] = samples >= 8 && tookFront === 0;
     checks['模型照实说了 saved'] = /saved/i.test(ev.content);
   } else if (key === 'cuwebcovered') {
-    const pressResult = results.find((r) => /went through accessibility/.test(r));
+    const pressResult = results.find(accessibilityPress);
     checks['按下时页面是 hidden'] = clicks('save')[0]?.vis === 'hidden';
     checks['按钮只按了一次,页面收到一次点击'] = clicks('save').length === 1;
     checks['没提窗口(替身一次都没到前台,页面最后还是 hidden)'] = samples >= 8 && tookFront === 0 && events.filter((e) => e.type === 'vis').at(-1)?.vis === 'hidden';
@@ -185,7 +194,7 @@ export async function cuWebLive({ key, api, run, OUT, electron, timeoutMs, token
     checks['采样看得到前台变化(真实点击把替身拿到了前台)'] = tookFront > 0;
     checks['模型照实说了 reviewed'] = /reviewed/i.test(ev.content);
   }
-  if (key !== 'cuwebcovered' || viaAct) checks['结果里给了 AXPress 那句提示'] = pressNote;
+  if (key !== 'cuwebcovered' || viaAct) checks['结果记录了后台无障碍按压'] = pressNote;
   checks['没绕去 shell / AppleScript'] = bypass.length === 0;
   checks['模型正常收尾'] = ev.done === true && !ev.error;
 

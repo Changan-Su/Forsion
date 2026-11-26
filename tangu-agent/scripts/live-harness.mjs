@@ -202,6 +202,9 @@ import { startImageRecoveryCloud, imageRecoveryLive } from './lib/image-recovery
  *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
  *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
+ *   npm run live:harness -- --only cupaintfill,cupaintoutline --cu-plugin <built bundle> --cu-paint <clean checkout of github.com/1j01/jspaint>
+ *   npm run live:harness -- --only cupreview,cupreviewmarkup,cupreviewrotate --cu-plugin <package with the matching signed macOS helper>
+ *   npm run live:harness -- --only cumanaged --cu-plugin <built bundle>  # Real form in an isolated background Chrome, no desktop helper
  *   npm run live:harness -- --only cuweb,cuwebdead,cuwebcovered --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
  *   npm run live:harness -- --only cuweb --cu-plugin <新协议的捆绑包> --cu-replace-installed-helper   # 验已装 helper 的真实升级(11-14):不设 PI_* 变量,
  *                                                           #   插件第一次调用时自己判过期、换掉 /Applications 里的 helper、重启真实 socket 上的守护进程。
@@ -268,6 +271,9 @@ import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './l
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
+import { cuPreviewLive } from './lib/cu-preview-live.mjs';
+import { cuPaintLive, instrumentPixelFixture, paintGradeSelftest } from './lib/cu-paint-live.mjs';
+import { cuManagedLive, installManagedFixture } from './lib/cu-managed-live.mjs';
 import { CU_WEB_KEYS, cuWebLive } from './lib/cu-web-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 import { taskOutcomesLive } from './lib/task-outcomes-live.mjs';
@@ -292,7 +298,7 @@ KEYS.push('musechat');
 KEYS.push('cmdreads'); // Windows read-only shell shortcut, including the Muse approval screenshot.
 KEYS.push('novision');
 KEYS.push('cuoff');
-KEYS.push('cuvision');
+KEYS.push('cuvision', 'cumanaged', 'cupaintfill', 'cupaintoutline', 'cupreview', 'cupreviewmarkup', 'cupreviewrotate');
 KEYS.push(...CU_JEV_KEYS);
 KEYS.push(...CU_WEB_KEYS);
 KEYS.push('dreamseed');
@@ -378,6 +384,12 @@ OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转�
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
+OPT_IN.add('cumanaged');
+OPT_IN.add('cupaintfill');
+OPT_IN.add('cupaintoutline');
+OPT_IN.add('cupreview');
+OPT_IN.add('cupreviewmarkup');
+OPT_IN.add('cupreviewrotate');
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
@@ -1036,6 +1048,7 @@ if (argv.includes('--selftest')) {
     rmSync(d, { recursive: true, force: true });
   }
   for (const [name, got, want] of notebookSelftest()) check(name, got, want); // notebook 的文件判据 / 绕开工具的识别 / 审批守门
+  for (const [name, got, want] of paintGradeSelftest()) check(name, got, want);
   for (const [name, got, want] of appRefSelftest()) check(name, got, want); // appref 的引用判据(原样 / 不进代码 / 不当笔记)
   await import('./lib/windows-cmd-live.check.mjs');
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
@@ -1132,9 +1145,15 @@ if (ONLY.has('dispatch')) {
   cpSync(bundle, join(shared, 'plugins/forsion-plugin-dispatch'), {recursive:true, filter: p => !p.split('/').some(x=>['.git','node_modules','artifacts'].includes(x))});
 }
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
+const previewScenario = ONLY.has('cupreview') || ONLY.has('cupreviewmarkup') || ONLY.has('cupreviewrotate');
+const paintScenario = ONLY.has('cupaintfill') || ONLY.has('cupaintoutline');
+if (ONLY.has('cumanaged') || paintScenario) installManagedFixture(opt('cu-plugin', ''), shared);
+
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
 const CU_JEV = CU_JEV_KEYS.some((k) => ONLY.has(k));
-if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared, replaceInstalledHelper: argv.includes('--cu-replace-installed-helper') });
+if (previewScenario || CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared, replaceInstalledHelper: argv.includes('--cu-replace-installed-helper') });
+
+if (paintScenario || previewScenario) instrumentPixelFixture(shared);
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -1549,6 +1568,8 @@ const child = spawn(process.execPath, [
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   ...(FAULT_FILE ? { TANGU_LIVE_FAULT_FILE: FAULT_FILE } : {}),
   TANGU_BROWSER_CDP: userChromeWs || 'off',
+  ...(ONLY.has('cumanaged') ? { TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : {}),
+  ...(paintScenario || previewScenario ? { TANGU_PIXEL_HARNESS_DIR: OUT } : {}),
   FORSION_DESKTOP_CONFIG: desktopCfg,
   ...(PLUGINDIAG_DIR ? { HOME: FAKE_HOME, ...(process.platform === 'win32' ? { USERPROFILE: FAKE_HOME } : {}) } : {}),
   ...(ONLY.has('notebook') && !NOTEBOOK_NEG ? { TANGU_PYTHON_BIN: NOTEBOOK_PY } : {}),
@@ -4399,6 +4420,14 @@ try {
   }
 
   // cuweb / cuwebdead(10-31):网页按钮的后台 AXPress。说明和判据在 lib/cu-web-live.mjs。
+  await scenario('cupreviewmarkup','实际 macOS 预览：纯截图切换标记工具栏并读图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreviewmarkup'}));
+  await scenario('cupreview','实际 macOS 预览：看图、点放大、核对图形', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreview'}));
+  await scenario('cupreviewrotate','实际 macOS 预览：纯截图将临时图片向左转九十度', () => cuPreviewLive({api,run,OUT,ttft,tokensOf,key:'cupreviewrotate'}));
+  for (const key of ['cupaintfill','cupaintoutline']) {
+    await scenario(key, key==='cupaintfill'?'真实 JS Paint 纯视觉填色':'真实 JS Paint 纯视觉画框', () => cuPaintLive({
+      api, run, OUT, checkout:opt('cu-paint',''), outline:key==='cupaintoutline', tokensOf, ttft }));
+  }
+  await scenario('cumanaged', '后台浏览器填写本地表单', () => cuManagedLive({ api, run, OUT, tokensOf, ttft }));
   for (const key of CU_WEB_KEYS) {
     await scenario(key, { cuweb: 'cuweb 网页按钮后台按下,不抢前台', cuwebdead: 'cuwebdead AXPress 没反应时再按一次走真实点击', cuwebcovered: 'cuwebcovered 窗口被盖住时按一次就够,不提窗口就读到新状态' }[key], () =>
       cuWebLive({ key, api, run, OUT, electron: process.env.CU_ELECTRON || join(root, '..', 'desktop', 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'), timeoutMs: Number(opt('cu-timeout', '420')) * 1000, tokensOf, ttft }));

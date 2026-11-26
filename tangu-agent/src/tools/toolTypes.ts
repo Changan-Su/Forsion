@@ -169,7 +169,9 @@ export interface ToolContext {
    * loop 会把这类图单独成条、用这句前言标成不可信,视觉转写也圈进围栏(services/toolImages.ts)。
    * ⚠️ 这类图只能进 user 角色消息,不标就等于把屏幕上的注入以用户权威送进上下文。
    */
-  collectImage?: (img: { url: string; name?: string; untrusted?: string }) => void;
+  // The built-in collectors return false when the round's image limit has been reached.
+  // Existing hosts can still use a callback that returns nothing.
+  collectImage?: (img: { url: string; name?: string; untrusted?: string }) => void | boolean;
   /**
    * 「在对话区展示文件」闸(display_file / generate_image / 表情包用):工具把要展示给**用户**的
    * 文件交给 loop,loop 即时 publish 'display_file' 事件(桌面端内联渲染、图片可点击放大),并在

@@ -10,13 +10,14 @@
  *  缓存稳定且模型全程可见图片。
  */
 
-import { fitImageUrlForModel } from './imageShrink.js';
+import type { ImageResize } from './imageShrink.js';
 import { prepareInlineImage } from './heicImages.js';
 
 export interface NormalizedImage {
   url: string; // data: URL 或 http(s) URL
   /** 附件文件名(桌面端带);edit_image 用它认出客户端「标注修改」的标注副本(见 imageEdit.ts dropMarkupCopies)。 */
   name?: string;
+  resize?: ImageResize;
 }
 
 const MAX_IMAGES = 8;
@@ -60,17 +61,33 @@ export function normalizeImageAttachments(raw: any): NormalizedImage[] {
 export async function fitUserImages(images: NormalizedImage[], signal?: AbortSignal): Promise<NormalizedImage[]> {
   const out: NormalizedImage[] = [];
   for (const image of images) {
-    const url = await prepareInlineImage(image.url, signal);
+    const fitted = await prepareInlineImage(image.url, signal);
     signal?.throwIfAborted();
-    out.push({ url: fitImageUrlForModel(url) });
+    out.push(fitted);
   }
   return out;
+}
+
+// Text-only transcripts may clone image parts. Recognize the generated hint only in its
+// reserved position between user text and an attachment, including after JSON replay.
+const GEOMETRY_PREFIX = 'This attachment is displayed at ';
+export function isImageGeometryPart(part: unknown, index: number, parts: unknown[]): boolean {
+  const block = part as { type?: string; text?: unknown } | null;
+  return index > 0 && block?.type === 'text' && typeof block.text === 'string'
+    && block.text.startsWith(GEOMETRY_PREFIX) && (parts[index + 1] as { type?: string } | undefined)?.type === 'image_url';
 }
 
 /** 把纯文本 user content 转成 OpenAI 形态的 parts 数组(text + image_url...)。 */
 export function toImageParts(text: string, images: NormalizedImage[]): any[] {
   return [
     { type: 'text', text: text || '' },
-    ...images.map((i) => ({ type: 'image_url', image_url: { url: i.url, detail: 'high' } })),
+    ...images.flatMap((image) => {
+      const part = { type: 'image_url', image_url: { url: image.url, detail: 'high' } };
+      if (!image.resize) return [part];
+      const { width, height, fromWidth, fromHeight } = image.resize;
+      const geometry = `${GEOMETRY_PREFIX}${width} × ${height} pixels. Its original is ${fromWidth} × ${fromHeight}. For a click in original pixels, convert the displayed point (u,v) to (floor((u + 0.5) × ${fromWidth} / ${width}), floor((v + 0.5) × ${fromHeight} / ${height})).`;
+      const hint = { type: 'text', text: geometry };
+      return [hint, part];
+    }),
   ];
 }

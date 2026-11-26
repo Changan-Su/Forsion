@@ -13,7 +13,7 @@ import { constants as fsConstants, promises as fs } from 'node:fs';
 import net from 'node:net';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { assertPublicHttpUrl } from '../../core/util/urlSafety.js';
+import { validateBrowserUrl as validateUrl } from '../../core/browserUrl.js';
 import { tanguHome } from '../../core/tanguHome.js';
 import { getRawSection } from '../../core/config.js';
 import { formatToolOutput } from '../outputPersist.js';
@@ -32,11 +32,15 @@ const TAB_TEXT_MAX_CHARS = 15_000;
 const TAB_REFS_MAX_CHARS = 6_000;
 
 // 模型面文案一律英文(项目约定)
-const NOT_CONNECTED_HINT =
-  "Not connected to the user's own browser, so their open tabs cannot be seen. "
-  + 'Tell the user the one-time setup: install the "Tangu for Chrome" extension (Tangu → Settings → Browser → Chrome extension has the steps) '
-  + 'and paste the connect code shown there into the extension. Safari and Firefox are not supported. '
-  + "Until then, the other browser_* tools use Tangu's separate background browser, which has none of the user's tabs or logins.";
+function notConnectedHint(): string {
+  const setting = String(process.env.TANGU_BROWSER_CDP ?? browserCfg().cdp ?? 'auto').trim().toLowerCase();
+  const direct = setting === 'auto' || setting === ''
+    ? 'For existing tabs without an extension, Chrome 144+ supports chrome://inspect/#remote-debugging. The user can enable remote debugging there and approve the connection in Chrome. '
+    : '';
+  return "Tangu is not connected to the user's open tabs. "
+    + direct + 'Forsion Clip can also connect via Settings → Browser. '
+    + 'For an isolated page, use Computer Use launch_browser when available. browser_navigate can also open a page and follows the current browser connection.';
+}
 const OWN_BROWSER_EMPTY_NOTE =
   "This is Tangu's own background browser, not the user's, and it shows nothing (no page loaded, or no interactive elements). "
   + 'To see what the user has open in their browser, use browser_tabs.';
@@ -59,12 +63,6 @@ function browserCfg(): any { return getRawSection('browser') || {}; }
 function browserEnabled(): boolean {
   if (process.env.TANGU_BROWSER_ENABLED !== undefined) return process.env.TANGU_BROWSER_ENABLED !== '0';
   return browserCfg().enabled !== false; // 默认开
-}
-
-function allowPrivateUrls(): boolean {
-  if (process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS !== undefined)
-    return ['1', 'true', 'yes', 'on'].includes(String(process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS).toLowerCase());
-  return browserCfg().allowPrivateUrls === true; // 默认禁私网
 }
 
 function browserEngine(): BrowserEngine {
@@ -307,17 +305,9 @@ function screenshotDir(): string {
   return path.join(tanguHome(), 'browser', 'screenshots');
 }
 
-async function validateUrl(raw: string): Promise<string> {
-  if (allowPrivateUrls()) {
-    const u = new URL(raw);
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Only http and https URLs are allowed');
-    return u.href;
-  }
-  return (await assertPublicHttpUrl(raw)).href;
-}
-
 export const __browserToolInternals = {
   validateUrl,
+  notConnectedHint,
   navigate,
   findUserBrowser,
   pickTabs: (tabs: TabInfo[], select: string) => pickTabs(tabs, select),
@@ -841,7 +831,7 @@ export const browserTabsProvider: ToolProvider = {
       execute: async (args, ctx) => {
         if (useExtension(ctx)) return extensionTabs(ctx, String(args.select ?? '').trim());
         const cdp = await userBrowserEndpoint(ctx);
-        if (!cdp) return toJson({ success: false, connected: false, error: NOT_CONNECTED_HINT });
+        if (!cdp) return toJson({ success: false, connected: false, error: notConnectedHint() });
         return withAttachLock(() => readUserTabs(ctx, cdp, String(args.select ?? '').trim()));
       },
     },
@@ -909,7 +899,7 @@ const errText = (e: any): string => String(e?.message || e);
 async function extensionTabs(ctx: ToolContext, select: string): Promise<string> {
   try {
     const clientId = currentExtensionClient();
-    if (clientId == null) return toJson({ success: false, connected: false, error: NOT_CONNECTED_HINT });
+    if (clientId == null) return toJson({ success: false, connected: false, error: notConnectedHint() });
     const { tabs } = await extensionCall<{ tabs: any[] }>('tabs.list', {}, undefined, clientId);
     const list: TabInfo[] = tabs.map((t) => ({
       tab: tabRef(t.id), title: String(t.title || ''), url: String(t.url || ''),

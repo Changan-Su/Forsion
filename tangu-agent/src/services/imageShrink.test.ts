@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import jpeg from 'jpeg-js';
 import { PNG } from 'pngjs';
+import { fitUserImages, isImageGeometryPart, toImageParts } from './imageAttachments.js';
 import { KEEP_BYTES, MAX_EDGE, MAX_PIXELS, fitImageForModel, fitImageUrlForModel } from './imageShrink.js';
 
 // 夹具:四个象限各一色(左上红 / 右上绿 / 左下蓝 / 右下灰),右下象限可铺噪点把体积撑过 KEEP_BYTES(纯色块压完只有几 KB)。
@@ -205,4 +206,18 @@ describe('fitImageUrlForModel', () => {
     expect(out.startsWith('data:image/jpeg;base64,')).toBe(true);
     expect(out.length).toBeLessThan(src.length); // base64 后仍比原图的二进制小
   });
+});
+
+it('puts each resized attachment’s pixel transform next to its image on replay', async () => {
+  const small = 'https://example.com/small.png';
+  const url = 'data:image/png;base64,' + png(1600, 1000, quadrants(1600, 1000)).toString('base64');
+  const inputs = [{ url: small }, { url }];
+  const parts = toImageParts('click', await fitUserImages(inputs));
+  expect(parts.map(p => p.type)).toEqual(['text', 'image_url', 'text', 'image_url']);
+  const fitted = jpeg.decode(Buffer.from(parts[3].image_url.url.split(',')[1], 'base64'));
+  expect(parts[2].text).toContain(fitted.width + ' × ' + fitted.height);
+  expect(parts[2].text).toContain('1600 × 1000');
+  expect(parts[1].image_url.url).toBe(small);
+  expect(parts.map(isImageGeometryPart)).toEqual([false, false, true, false]);
+  expect(toImageParts('click', await fitUserImages(inputs))).toEqual(parts);
 });
