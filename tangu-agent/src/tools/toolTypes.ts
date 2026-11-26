@@ -47,6 +47,9 @@ export interface ToolContext {
   mcpTools?: Map<string, LoadedMcpTool>;
   /** 本次 run 启用的技能 id（use_skill 的 allowlist）。 */
   enabledSkillIds?: string[];
+  /** 用户这一轮亲手点名的技能 id(桌面 /skill 选择器 → agentConfig.requestedSkillIds)。
+   *  frontmatter `disable-model-invocation: true` 的技能只有在这里才放行 use_skill;子代理不继承。 */
+  userInvokedSkillIds?: string[];
   /** 执行形态：'host'=本地直连真实 FS/shell（TUI），缺省/'sandbox'=云沙箱 + 云工作区。 */
   execMode?: 'sandbox' | 'host';
   /** OS restrictions for local model-driven execution; independent from tool approval. */

@@ -244,6 +244,23 @@ Declare it in the manifest (up to 4 per plugin):
 - Updates: change the item's `version` and `package` in the catalog. The store updates it according to the user's auto-update settings. **If the package's origin changes (another repository, npm package name or download host), the automatic update stops** and waits for the user to click.
 - The local identity is `src-<source hash>-<item id>`, so the `market` field in `requiresPlugins` can't point at source items. The store asks once in the detail sidebar before the first install from a source, and before each item that runs code (plugins, Agents, Spaces). Source items are marked "Not reviewed by Forsion".
 
+### Collected skills (skills.sh) and Tangu's store results (2026-11-23+)
+
+The store has one built-in source, `skills.sh` (source id `25aae625`): the Forsion server collects popular skills from the skills.sh leaderboard, pins a commit, reads the security audits, and labels them "Collected by Forsion · Not manually reviewed". Card ids are `src_25aae625_<item id>`; the local install folder is `src-25aae625-<item id>`.
+
+Results of Tangu's `search_marketplace` / `get_marketplace_plugin` / `recommend_marketplace_plugin` (the data behind the store card in chat) carry two more fields per entry. Older servers don't send them, so treat both as optional:
+
+| Field | Shape | Meaning |
+|---|---|---|
+| `origin` | `{ kind: 'forsion', publisher: 'official' \| 'developer' }` or `{ kind: 'collected' \| 'source', sourceId, sourceTitle }` | Where the entry comes from. Absent = a Forsion developer submission. `collected` = collected by Forsion (skills.sh), not manually reviewed |
+| `requirements` | `{ cli, apiKeys, desktopOnly, scripts, auditWarn }` | Needs a command-line tool, which API keys (variable names), desktop only, how many scripts, an outside security audit rated it medium |
+
+A malformed `origin` or `requirements` drops just that field, never the entry. At equal search hits, Forsion entries come first. The user still decides on the card whether to install.
+
+Two related conventions for skill authors:
+- `disable-model-invocation: true` in SKILL.md frontmatter (same meaning as in Claude Code) = use only when the user names it: the skill stays out of the skills list Agents see, an Agent's own `use_skill` call is refused, and it loads only in a turn where the user picked it with `/skill`. Settings and the skill picker still list it.
+- `.forsion-adapt.md` in a skill folder is a reserved file name: the "adaptation note" of a collected skill (how the parts written for Claude Code / Codex map to Tangu). The installer writes it and `use_skill` puts it before the instructions in local sessions (up to 1200 characters). It only counts for skills installed from a store source (folder `src-<source id>-…`); a file of that name shipped inside a package is deleted on install, and one in a project or plugin-package skill is ignored.
+
 ## Platform accounts and sign-ins (desktop 2.13.8+)
 
 Some content only loads for signed-in users (members-only, HD or rate-limited Bilibili videos). `ctx.app.platformAccounts` lets a plugin use **the account the user signed in to in the built-in browser**. Your plugin never stores the sign-in itself:

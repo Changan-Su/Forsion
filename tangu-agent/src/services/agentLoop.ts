@@ -2848,6 +2848,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
       noChildSessions: agentConfig.noChildSessions === true || undefined, // 会话设置「不开子会话」:start_session / delegate 不进工具表
+      userInvokedSkillIds: skillLoadout.requested.map((s) => s.id),
       remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,

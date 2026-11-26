@@ -118,3 +118,28 @@ describe('httpBrain 上报宿主客户端与系统', () => {
     expect(hostOriginHeaders({}, 'linux')).toEqual({})
   })
 })
+
+// 11-23:商店列表带 include=collected(老服务端忽略这个参数);收录条目的详情仍是同一路径 /api/market/items/src_25aae625_<itemId>。
+// 只在宿主注入 TANGU_MARKET_COLLECTED=1 时带:引擎能脱离桌面外壳热更新,老外壳的卡片安装认不了 src_ 编号。
+describe('marketplace 请求', () => {
+  afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
+  it('宿主没开收录(老外壳 / 命令行 / 云端节点):列表不带 include=collected', async () => {
+    const urls: string[] = []
+    vi.stubEnv('TANGU_MARKET_COLLECTED', '')
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(String(url)); return new Response(JSON.stringify({ items: [] }), { status: 200 }) }))
+    const brain = createHttpBrain({ cloudUrl: 'http://127.0.0.1:1', token: 't' })
+    await brain.marketplace!.list()
+    vi.stubEnv('TANGU_MARKET_COLLECTED', '0')
+    await brain.marketplace!.list()
+    expect(urls).toEqual(['http://127.0.0.1:1/api/market/items', 'http://127.0.0.1:1/api/market/items'])
+  })
+  it('列表要上收录条目,详情按卡片 ID 原样取', async () => {
+    vi.stubEnv('TANGU_MARKET_COLLECTED', '1')
+    const urls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => { urls.push(String(url)); return new Response(JSON.stringify({ items: [] }), { status: 200 }) }))
+    const brain = createHttpBrain({ cloudUrl: 'http://127.0.0.1:1', token: 't' })
+    await brain.marketplace!.list()
+    await brain.marketplace!.detail('src_25aae625_trailmap')
+    expect(urls).toEqual(['http://127.0.0.1:1/api/market/items?include=collected', 'http://127.0.0.1:1/api/market/items/src_25aae625_trailmap'])
+  })
+})

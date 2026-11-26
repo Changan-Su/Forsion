@@ -35,6 +35,15 @@ describe('skillLoadout 共享技能段', () => {
     expect(stripped.sections).toEqual([]);
     expect(stripped.enabledSkillIds).toEqual([]);
   });
+  it('只许用户点名的共享技能(disable-model-invocation):不列进共享段,但仍在准许清单里(use_skill 自己按点名拒)', async () => {
+    h.hostExec = true; h.shared = [CODING, { ...CODING, id: 'local:@coding/setup', name: 'Setup', disableModelInvocation: true }];
+    const r = await loadSkillLoadout('u', 'tangu', { execMode: 'host' });
+    expect(r.sections[0]).toContain('local:@coding/forsion-webapp');
+    expect(r.sections[0]).not.toContain('local:@coding/setup');
+    expect(r.catalog.map((c) => c.id)).not.toContain('local:@coding/setup');
+    expect(r.enabledSkillIds).toEqual(expect.arrayContaining(['local:@coding/forsion-webapp', 'local:@coding/setup']));
+    h.shared = [];
+  });
   it('显式选中的共享技能只列按需目录，不把短正文内联进每轮 system', async () => {
     h.hostExec = true; h.shared = [];
     h.selected = { ...CODING, content: '# Forsion webapp\nBorrowed instructions' };

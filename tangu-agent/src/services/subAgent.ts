@@ -421,6 +421,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     ...(def?.enabledMcpServers ? { mcpTools: new Map([...(parentCtx.mcpTools || [])].filter(([, tool]) => def.enabledMcpServers!.includes(tool.serverName))) } : {}),
     // 具名 agent 的可用技能集(use_skill 按 ctx.enabledSkillIds 鉴权);未装载则继承父。
     ...(skills ? { enabledSkillIds: skills.enabledSkillIds } : {}),
+    // 用户点名的是父 run;子代理的任务正文是模型写的,「只许用户点名」的技能不随委派放行。
+    userInvokedSkillIds: undefined,
     unlockedTools: subUnlocked,
     // 返回**实际解锁的**名字:被 deny 的那些由 load_tools 如实报成「本会话不可用」,
     // 不能让模型拿着一句「已装载」去调一个永远不会出现在 defs 里的工具。

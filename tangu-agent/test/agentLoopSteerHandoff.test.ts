@@ -46,6 +46,7 @@ beforeEach(async () => {
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   const fakeBrain: any = {
+    assets: { getSkill: async () => null }, // ⑨c 带 /skill 点名起跑:取不到技能就当没点
     llm: {
       resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
       buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })) }),
@@ -309,6 +310,15 @@ describe('长命令不挡插话', () => {
     expect(input.approvalCap).toBe('full-auto');
     expect(input.agentConfig.approvalMode).toBe('full-auto'); // 快照档照抄
     expect(input.agentConfig.agentSlug).toBe('agent-b');
+  }, 30_000);
+
+  it('⑨c 那一轮用户 /skill 点了技能 → 交回那一轮不再带着点名(不是用户点的;只许用户点名的技能不能借此放行)', async () => {
+    script = [bash('c-long', 'sleep 2.5; echo K-DONE'), finalStep('Port 22.'), finalStep('Done.')];
+    const r = await start({ steerOn: 'c-long', input: { agentConfig: { execMode: 'host', cwd: ws, approvalMode: 'full-auto', requestedSkillIds: ['local:setup-kit'] } } });
+    expect((await r.settled()).status).toBe('done');
+    const wake = await wakeRun();
+    expect(inputOf(wake).agentConfig.requestedSkillIds).toBeUndefined();
+    expect(inputOf(wake).agentConfig.approvalMode).toBe('full-auto');
   }, 30_000);
 
   it('⑨b 桌面输入区起的那一轮(跟会话现档)→ 交回那一轮也跟', async () => {

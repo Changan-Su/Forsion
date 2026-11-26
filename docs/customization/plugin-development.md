@@ -233,6 +233,23 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 - 更新：改目录里的 `version` 和 `package`。商店按用户的自动更新设置照常更新；**包的出处变了（换了仓库、npm 包名或下载域名）自动更新会停下**，等用户自己点。
 - 装进本机的身份是 `src-<来源哈希>-<条目 id>`，`requiresPlugins` 的 `market` 字段认不到来源里的条目。用户第一次从某个来源安装、以及每装一个会运行代码的条目（插件、Agent、Space）前，商店会在详情页侧栏让用户确认一次；来源里的东西标着「未经 Forsion 审核」。
 
+### 收录的技能（skills.sh）与 Tangu 的商店结果（2026-11-23 起）
+
+商店内置一个来源 `skills.sh`（来源 id `25aae625`）：Forsion 服务端从 skills.sh 的排行榜收录热门技能，锁定提交、读安全审计，标着「Forsion 收录 · 未经人工审核」。卡片 id 是 `src_25aae625_<条目 id>`，装进本机的文件夹是 `src-25aae625-<条目 id>`。
+
+Tangu 的 `search_marketplace` / `get_marketplace_plugin` / `recommend_marketplace_plugin` 结果（也就是对话里那张商店卡片的数据）每条在原有字段之外多两项，老服务端不发、读的一方要按可选处理：
+
+| 字段 | 形状 | 含义 |
+|---|---|---|
+| `origin` | `{ kind: 'forsion', publisher: 'official' \| 'developer' }` 或 `{ kind: 'collected' \| 'source', sourceId, sourceTitle }` | 出处。没有 = Forsion 开发者投稿。`collected` = Forsion 收录（skills.sh），没经人工审核 |
+| `requirements` | `{ cli, apiKeys, desktopOnly, scripts, auditWarn }` | 要装命令行工具、要哪些 API Key（变量名）、只能在桌面用、带几个脚本、外部安全审计给了中风险 |
+
+坏掉的 `origin` / `requirements` 只丢这一项，条目照常。搜索时同样命中的 Forsion 条目排在前面。装不装仍然由用户在卡片上点。
+
+写技能时两条相关约定：
+- SKILL.md frontmatter 写 `disable-model-invocation: true`（和 Claude Code 同义）= 只在用户点名时用：它不进 Agent 看到的技能目录，Agent 自己 `use_skill` 会被拒；用户在对话里用 `/skill` 点了它的那一轮才放行。设置和技能选择器里照常列出。
+- 技能文件夹里的 `.forsion-adapt.md` 是保留文件名：收录技能的「适配说明」（原文写给 Claude Code / Codex 的地方在 Tangu 里怎么对应），由安装流程写入，`use_skill` 在本机会话里把它放在正文前面（最多 1200 字）。只对从商店来源装进来的技能（文件夹名 `src-<来源 id>-…`）算数；包里自带的同名文件安装时会被删掉，项目目录或插件包里的技能放这个文件不起作用。
+
 ## 平台账号与登录信息（桌面 2.13.8 起）
 
 有些平台的内容要登录才取得到（B 站会员、高清、被风控的视频）。`ctx.app.platformAccounts` 让插件用**用户在内置浏览器里登录的那个账号**去取，插件自己不存登录信息：
