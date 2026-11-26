@@ -9,6 +9,7 @@ import { isExcludedPath, useEntrySync } from '../stores/entrySyncStore'
 import { registerMessages, useI18n } from '../i18n'
 import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 import type { AmadeusHeldChoice, AmadeusHeldFile } from '../types'
+import { isResolveHeldFailure } from './heldResolveResult'
 
 registerMessages({
   'csd.title': { zh: '开启云同步', en: 'Turn on cloud sync' },
@@ -90,7 +91,8 @@ export function HeldSyncNotice({ binding, shareKey = null, held, open: openInit 
     setBusy(true)
     try {
       const r = await resolve({ binding, ...(shareKey ? { shareKey } : {}), paths: chosen, choice })
-      if (r && 'error' in r) useApp.getState().toast(t('csd.held.failed'), true)
+      // 成功回的同步状态恒带 error 字段(平时 null),只有不是同步状态的错误回复才算失败
+      if (isResolveHeldFailure(r)) useApp.getState().toast(t('csd.held.failed'), true)
     } catch {
       useApp.getState().toast(t('csd.held.failed'), true)
     } finally {
