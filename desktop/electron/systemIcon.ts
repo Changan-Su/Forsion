@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { writePrivateJson } from './configWrite'
 
@@ -93,6 +93,19 @@ export interface WindowsIconTarget {
   /** Where the .ico is written (userData). */
   dir: string
 }
+
+/** Windows can redirect Programs independently of Roaming AppData. */
+export async function windowsProgramsFolders(roaming: string): Promise<string[]> {
+  const relative = 'Microsoft/Windows/Start Menu/Programs'
+  const fallback = [join(roaming, relative), ...(process.env.ProgramData ? [join(process.env.ProgramData, relative)] : [])]
+  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+  const command = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Environment]::GetFolderPath('Programs'); [Environment]::GetFolderPath('CommonPrograms')"
+  const paths = await promisify(execFile)(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
+    windowsHide: true, timeout: 2000,
+  }).then(({ stdout }) => stdout.split(/\r?\n/).filter(isAbsolute), () => [])
+  return paths.length ? paths : fallback
+}
+
 const ICO = /^app-icon-[0-9a-f]+\.ico$/
 const LEGACY_APP_ID = 'com.forsion.tangu'
 /** Older pictures kept on disk: a shortcut this app cannot see or rewrite (moved elsewhere, all-users) may still use one. */
