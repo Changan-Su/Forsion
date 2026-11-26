@@ -637,7 +637,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
       onClick={() => useApp.getState().openSettings('units')}
     >
       <span className="unitsw-ic">{current.icon}</span>
-      {expanded && <span className="rb-label unitsw-name">{current.name}</span>}
+      <span className="rb-label unitsw-name">{current.name}</span>
     </button>
   )
 }

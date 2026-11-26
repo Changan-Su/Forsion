@@ -442,7 +442,7 @@ export const AccountCard: React.FC<{
     else dismissMenu()
   }
   const activate = (e: React.MouseEvent | React.KeyboardEvent): void => toggleFrom(e.currentTarget as HTMLElement)
-  const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
+  const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : engineStarting ? ' engine-starting' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
     : expired ? t('sidebar.account.expired')

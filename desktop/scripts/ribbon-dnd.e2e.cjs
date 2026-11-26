@@ -245,7 +245,8 @@ async function main() {
     await page.evaluate(() => window.__rb.getState().toggleExpanded())
     await page.waitForTimeout(150)
     check('M2 展开态按顺序标 ⌘1..4', (await keysOf(page)).join() === '⌘1,⌘2,⌘3,⌘4', (await keysOf(page)).join())
-    check('M3 提示不撑高槽位(撑高就会让位预览歪掉)', (await slotHeights(page)).join() === hCollapsed.map(() => 34).join(), `${(await slotHeights(page)).join()} ｜ 折叠 ${hCollapsed.join()}`)
+    // 2026-11-26 起展开、收起同一槽高(Ribbon.tsx slotH = 32 + GAP 常量;原来展开 34,开合时整列图标上下挪)
+    check('M3 提示不撑高槽位(撑高就会让位预览歪掉)', (await slotHeights(page)).join() === hCollapsed.join(), `${(await slotHeights(page)).join()} ｜ 折叠 ${hCollapsed.join()}`)
     await page.evaluate(() => window.__rb.getState().setZoneOrder('top', ['tD', 'tA', 'tB', 'tC']))
     await page.waitForTimeout(120)
     const firstId = await page.$eval('.rb-top .rb-slot', (e) => e.dataset.id)
@@ -300,9 +301,10 @@ async function main() {
     const end = await stripNow()
     const offGrid = (y) => Math.abs(y / pitch - Math.round(y / pitch)) > 0.05
     check('W1c 丝滑:手势中列停在两格之间、窗外格子画出图标;停手吸附到整格(第 3 格起)、占位清空', offGrid(ty(mid.tr)) && mid.filled > 0 && Math.abs(ty(end.tr) + 2 * pitch) < 0.5 && end.filled === 0, JSON.stringify({ pitch, mid: ty(mid.tr), filledMid: mid.filled, end: ty(end.tr), filledEnd: end.filled }))
-    // 触控板式连续小 delta(6 × 15px ≈ 2.4 格,16ms 一发 = 同一手势):累加跟手,停手四舍五入吸附 → 再挪 2 格。
+    // 触控板式连续小 delta(6 下合计 ≈ 2.4 格,16ms 一发 = 同一手势):累加跟手,停手四舍五入吸附 → 再挪 2 格。
+    // 每下多少 px 按实测槽距算(原来写死 15px = 按 38 的槽距;槽距 36 时 90px 正好 2.5 格,四舍五入成 3)
     const before8 = await idsIn('top')
-    await wheelAt('top', 15, 6, 16)
+    await wheelAt('top', Math.round(pitch * 2.4 / 6), 6, 16)
     const after8 = await idsIn('top')
     check('W8 连续小 delta 累加、停手按最近整格吸附(≈2.4 格 → 2 格)', after8[0] === top0[4] && before8[0] === top0[2], `${before8.join()} → ${after8.join()}`)
     await wheelAt('top', -10, 2)
@@ -357,7 +359,7 @@ async function main() {
     await page.click('.rb-top .rb-more')
     await page.waitForTimeout(OPEN)
     const xFly = await flyIds('top')
-    const xMore = await page.$eval('.rb-top .rb-more', (b) => ({ exp: b.getAttribute('aria-expanded'), label: b.getAttribute('aria-label'), n: b.textContent }))
+    const xMore = await page.$eval('.rb-top .rb-more', (b) => ({ exp: b.getAttribute('aria-expanded'), label: b.getAttribute('aria-label'), n: b.querySelector('.rb-more-n')?.textContent })) // 名字常驻后按钮的 textContent 还含「更多 Space」
     check('X1 点上区「+4」:浮层列藏着的 4 个,条上仍 5 个、命令区还在,钮标「更多 Space · 4」', xFly.join() === 'tF,tG,tH,tI' && (await idsIn('top')).length === 5 && !!(await page.$('.rb-bottom')) && xMore.exp === 'true' && xMore.label === '更多 Space · 4' && xMore.n === '+4', `${xFly.join()} ｜ ${JSON.stringify(xMore)}`)
     check('X2 浮层开着时账号卡仍贴底', (await pinBottom()) === pin0, `${pin0} → ${await pinBottom()}`)
     await page.evaluate(() => { window.__rbHits.length = 0 })

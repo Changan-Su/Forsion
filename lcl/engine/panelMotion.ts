@@ -7,7 +7,7 @@
  *  面板前面插一层兄弟节点画同形状的「底」,影子(--droplet-shadow)由这层带着形状走 —— clip-path 会裁掉面板自己的投影。
  *  平移:淡入 + 0.985→1 微缩(菜单那一对,--menu-enter-*),收起淡出 + 0.99(--menu-exit-duration、--ease-exit)。
  *  减少动态效果 / 「只淡入淡出」(reducedMotion())三种都只淡入 / 淡出。 */
-import { emergeDroplet, ms, curve, splitAlpha, fadePanelContentOut, motionRectChanged, observePanelGeometry, positionMotionLayer, type Droplet, type DropletOptions } from './droplet'
+import { emergeDroplet, ms, curve, splitAlpha, fadePanelContentOut, paintedChildren, motionRectChanged, observePanelGeometry, positionMotionLayer, type Droplet, type DropletOptions } from './droplet'
 import { zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
 
@@ -202,7 +202,7 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
   const grow = body.animate(frames(placeSurface()), kf)
   panel.classList.add(POURING)
   let clip: Animation | null = panel.animate(frames(pz), kf)
-  const kids = (): HTMLElement[] => Array.from(panel.children) as HTMLElement[]
+  const kids = (): HTMLElement[] => paintedChildren(panel)
   const surface = curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)')
   let shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.3, duration: D * 0.3, easing: surface, fill: 'backwards' }))
   let outs: Animation[] = [] // 倒放时内容的淡出(掉头时只撤它们)

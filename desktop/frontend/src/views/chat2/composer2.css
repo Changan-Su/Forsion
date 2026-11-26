@@ -117,7 +117,13 @@
    展开 = --cap-open(跟菜单的展开方式走:液滴 420ms,见 base.css),倒放收起 = --cap-close(.is-retracting),
    点了一行 / 换胶囊 = 菜单退场那一对(写在基础规则)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
+/* 收起态也是三列 grid(2026-11-26,方案页 docs/ToBeImproved/胶囊收起与Ribbon过渡方案_2026-11-26/ 用户选 A):开合之间只有宽度在变,
+   字始终在中列里居中 —— 原来 .is-open 才换 grid,倒放一开始就摘,字一帧从正中跳回左边、⌄ 跳回字旁。
+   两侧列至少 13px(图标 13、箭头 10 → 两侧等宽,撑开后字精确居中;收起只比原来的 inline-flex 宽 3px);＋ 胶囊本来就是这么写的。
+   字的 max-width 开合不变(原来撑开时放成 none,收起第一帧长名字的盒子缩回 160,字起点一跳)。 */
 .t2c-pill.mode-pill-btn {
+  display: grid;
+  grid-template-columns: minmax(13px, auto) minmax(0, 1fr) minmax(13px, auto);
   min-width: 0;
   interpolate-size: allow-keywords;
   width: fit-content;
@@ -125,19 +131,18 @@
   transition: background var(--duration-fast, 0.15s), width var(--pill-size-motion);
 }
 .t2c-pill.mode-pill-btn.is-open {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: 224px;
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
   --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
 .t2c-pill.mode-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
-.mode-pill-btn.is-open > svg { justify-self: center; }
-.mode-pill-btn.is-open .t2c-pill-label { width: 100%; max-width: none; text-align: center; }
+.mode-pill-btn > svg, .mode-pill-btn .t2c-pill-label { justify-self: center; }
 
 /* 「＋」升级为第三颗同语系胶囊：闭合 28px，展开 224px；菜单左缘固定，所以只向右长。 */
-.add-pill-wrap { position: relative; display: inline-flex; }
+/* 不参与底排收缩:底排挤满时被挤窄的「＋」在胶囊撑开、别的钮让位后弹回 28px,把正在撑开的胶囊左缘推走一两像素;
+   挤不下时由带省略号的胶囊去让(手机端原来就这么写) */
+.add-pill-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 .t2c-pill.add-pill-btn {
   box-sizing: border-box;
   display: grid;
