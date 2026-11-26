@@ -341,6 +341,11 @@ export function createPluginStage(deps: StageDeps) {
           const r = await deps.sandbox.raw('recordStart', sanitizeStageRecord(args), 20_000)
           return typeof r.error === 'string' ? fail('error', r.error) : { ok: true, mime: r.mime }
         }
+        case 'recordPause': case 'recordResume': {
+          // 插队(rawNow):要在上一个动作的收尾期间生效,插件才剪得掉那段等待
+          const r = await (deps.sandbox.rawNow ?? deps.sandbox.raw)(op, {}, 15_000)
+          return typeof r.error === 'string' ? fail('error', r.error) : { ok: true }
+        }
         case 'recordStop': {
           const r = await deps.sandbox.raw('recordStop', {}, 90_000)
           if (typeof r.error === 'string') return fail('error', r.error)

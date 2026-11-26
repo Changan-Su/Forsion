@@ -58,8 +58,10 @@ describe('主题 / 截图区域 / 录像参数', () => {
     expect(sanitizeStageRect({ x: 0, y: 0, width: 0, height: 10 })).toBeNull()
   })
   it('sanitizeStageRecord:夹到上下限,cursor 缺省开', () => {
-    expect(sanitizeStageRecord({})).toEqual({ fps: 30, cursor: true, maxMs: 120_000 })
-    expect(sanitizeStageRecord({ fps: 500, maxMs: 10, cursor: false })).toEqual({ fps: 60, cursor: false, maxMs: 1000 })
+    expect(sanitizeStageRecord({})).toEqual({ fps: 30, cursor: true, maxMs: 120_000, format: 'mp4' })
+    expect(sanitizeStageRecord({ fps: 500, maxMs: 10, cursor: false })).toEqual({ fps: 60, cursor: false, maxMs: 1000, format: 'mp4' })
+    expect(sanitizeStageRecord({ format: 'webm' }).format).toBe('webm')
+    expect(sanitizeStageRecord({ format: 'gif' }).format).toBe('mp4')
   })
 })
 
