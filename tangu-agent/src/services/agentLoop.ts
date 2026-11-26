@@ -49,7 +49,7 @@ import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, createRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns, completeRunWithMessage } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolOriginOf, type ToolContext, type ToolOrigin } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, macAppShellRoute, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolOriginOf, type ToolContext, type ToolOrigin } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import { multiAccountToolAllowed } from '../tools/multiAccountTools.js';
@@ -3611,6 +3611,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         ? { ...call, function: { ...call.function, arguments: JSON.stringify(preV.updatedInput) } }
         : call;
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
+
+      const redirected = macAppShellRoute(effCall, toolCtx);
+      if (redirected) return mkRejected(effCall, startedAt, parallelGroup, redirected, ptc?.parentCallId);
 
       // 托盘 run 的 ask_user 也挂起(10-23 方案「待确认卡片」B):问题照发进对话末尾的卡片堆、不等,先给模型占位结果;
       // 用户答了,在迭代边界把答案放回原工具消息 + 一行 <inquiry_update>。子会话 / 无人值守照旧走工具里的当场代答;计划审阅不挂(只读模式下没别的可做)。

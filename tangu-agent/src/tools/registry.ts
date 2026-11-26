@@ -1,3 +1,4 @@
+import { shellActivatesMacApp } from './macAppActivation.js';
 import { readToolOutputProvider } from './builtin/readToolOutput.js';
 import { isMultiAccount, requireAccountId } from '../core/accountScope.js';
 import { assertAccountStorage, markAccountUsageDirty, StorageLimitError } from '../services/accountStorage.js';
@@ -14,7 +15,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef, type ToolPluginOwner } from './toolRegistry.js';
+import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, isComputerUseTool, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef, type ToolPluginOwner } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -472,6 +473,18 @@ function incomingBytes(args: Record<string, any>): number {
   return n;
 }
 
+/** Shared by interactive approval and dispatch (including arguments edited during approval). */
+export function macAppShellRoute(call: ToolCall, ctx: ToolContext, resolved?: Map<string, ToolDef>): string | undefined {
+  const name = canonicalToolName(call.function.name);
+  if (process.platform !== 'darwin' || ctx.execMode !== 'host' || (name !== 'run_bash' && name !== 'run_background')) return;
+  let command: unknown;
+  try { command = JSON.parse(call.function.arguments).command; } catch { return; }
+  if (typeof command !== 'string' || !shellActivatesMacApp(command)) return;
+  const tools = resolved ?? resolveTools(currentProfile(ctx), ctx);
+  const act = tools.get('act_ui');
+  if (tools.has(name) && act && isComputerUseTool(act)) return 'The shell command was not run. Use ensure_app, then act_ui or jev_ui on the named window. Only for an explicit user request to raise a window, pass its returned foregroundRoot to ensure_app. Tangu coordinates foreground input with Mini and can return to the originating chat if the user stays in the target app. Run any unrelated CLI work separately.';
+}
+
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
   ctx.signal?.throwIfAborted();
@@ -526,7 +539,10 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     markAccountUsageDirty(id);
   }
 
-  const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);
+  const available = resolveTools(currentProfile(ctx), ctx);
+  const impl: ToolDef | undefined = available.get(name);
+  const redirect = macAppShellRoute(call, ctx, available);
+  if (redirect) return { toolCallId: call.id, name, isError: true, result: redirect };
   if (impl) {
     const caps = mergeCapabilities(name, impl);
     const timed = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
