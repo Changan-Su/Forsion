@@ -628,7 +628,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     void serial(async () => {
       if (child !== c || Date.now() - c.lastUsed < idleMs) return
       const st = await readStatus(c).catch(() => null)
-      if (st?.windowVisible || child !== c) return
+      // 等状态的工夫有人用过(录像的暂停 / 继续走 rawNow 不排队,会插在这中间):不算闲置
+      if (st?.windowVisible || child !== c || Date.now() - c.lastUsed < idleMs) return
       deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`)
       await stop('idle')
     })

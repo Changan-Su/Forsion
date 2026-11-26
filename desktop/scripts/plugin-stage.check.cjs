@@ -273,19 +273,19 @@ async function main() {
       try {
         const rec = await window.__stage.record({ fps: 30, cursor: false })
         const t0 = performance.now()
-        const acting = window.__stage.press('Escape')
+        const acting = window.__stage.press('Escape').then(() => performance.now() - t0) // 动作真回来的时刻
         await wait(300)
         await rec.pause()
         const pausedAt = performance.now() - t0
-        await acting
-        const actMs = performance.now() - t0
+        const actMs = await acting
         await rec.resume()
         await wait(300)
         const v = await rec.stop()
         return { ok: true, actMs: Math.round(actMs), pausedAt: Math.round(pausedAt), ms: v.durationMs }
       } catch (e) { return { ok: false, code: e.code, error: e.message } }
     })
-    check('5g 动作收尾期间暂停当场生效:暂停在动作回来之前就回了,录下的时长 < 动作耗时', mid.ok && mid.pausedAt < mid.actMs - 300 && mid.ms < mid.actMs - 300 && mid.ms <= 1300, JSON.stringify(mid))
+    // 证的是「不排队」:暂停在动作回来之前就生效了(排在后面的话,暂停要等动作做完)。暂停落在动作的哪一刻(按键发出前后)不在这里证
+    check('5g 暂停不排在动作后面:动作还没回来暂停已生效,录下的时长 < 动作耗时', mid.ok && mid.pausedAt < mid.actMs - 300 && mid.ms < mid.actMs - 300 && mid.ms <= 1300, JSON.stringify(mid))
 
     // ── 6 脚本回放引擎 ──
     const chat = await win.evaluate(async (reply) => {
