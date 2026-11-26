@@ -12,7 +12,8 @@
  *   4 selector 截一块:尺寸 = 那个元素的矩形 × 密度
  *   5 录像:录本窗口 2 秒(中间点一下,带假指针)→ mp4 / webm 字节,宽 = 窗口像素;有 ffprobe 时数帧数
  *   5c–5f 暂停 / 继续:录 1 秒 → 暂停 2 秒 → 录 1 秒,成片(ffprobe 量)只有 ~2 秒;重复暂停、没暂停就继续各报各的错,
- *      停了再调 → closed;暂停着 stop 只留暂停前那段;webm 真是 webm,到点自停只数录下的时间、取片晚了时长不涨(要 ffprobe)
+ *      停了再调 → closed;暂停着 stop 只留暂停前那段;webm 真是 webm,到点自停只数录下的时间、取片晚了时长不涨(要 ffprobe);
+ *      5g 暂停不排在动作后面:动作收尾(等画面稳住)期间暂停当场生效
  *   6 脚本回放引擎:engine 'scripted' → 舞台里发一句话 → 页面上出现 engine.json 里写的回复
  *   7 互斥:舞台开着时别的插件 open → busy
  *   8 负对照:fixture 带 `..` → invalid;点名没装的插件 → plugin-missing
@@ -266,6 +267,25 @@ async function main() {
     const limP = probe(lim, 'stage-rec-limit')
     check('5f format webm 真是 webm;到点自停只数录下的时间,取片晚了 durationMs 不涨(≈1.5 秒,帧数 ≤ 60)', lim.ok && /webm/.test(lim.mime) && lim.ms >= 1300 && lim.ms <= 1900
       && limP.frames !== null && limP.frames <= 60, show(lim, limP))
+    // 5g 暂停能插进动作的收尾:动作要等画面稳住(1 秒多)才回,暂停不该排在它后面
+    const mid = await win.evaluate(async () => {
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+      try {
+        const rec = await window.__stage.record({ fps: 30, cursor: false })
+        const t0 = performance.now()
+        const acting = window.__stage.press('Escape')
+        await wait(300)
+        await rec.pause()
+        const pausedAt = performance.now() - t0
+        await acting
+        const actMs = performance.now() - t0
+        await rec.resume()
+        await wait(300)
+        const v = await rec.stop()
+        return { ok: true, actMs: Math.round(actMs), pausedAt: Math.round(pausedAt), ms: v.durationMs }
+      } catch (e) { return { ok: false, code: e.code, error: e.message } }
+    })
+    check('5g 动作收尾期间暂停当场生效:暂停在动作回来之前就回了,录下的时长 < 动作耗时', mid.ok && mid.pausedAt < mid.actMs - 300 && mid.ms < mid.actMs - 300 && mid.ms <= 1300, JSON.stringify(mid))
 
     // ── 6 脚本回放引擎 ──
     const chat = await win.evaluate(async (reply) => {
