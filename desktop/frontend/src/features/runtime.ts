@@ -22,6 +22,15 @@ const tanguLocalFace = (space: 'inbox' | 'muse'): boolean => nativeFeatureEnable
 export const inboxAvailable = (): boolean => tanguLocalFace('inbox') && (!!window.tangu?.backendStatus || usesClientInbox())
 export const museAvailable = (): boolean => tanguLocalFace('muse') && !!window.tangu?.backendStatus
 
+/** 本机多 Unit(shared/localUnits.ts):同一份安装在这台电脑上另跑的文件夹 Unit。只有桌面主窗、有本机引擎、不是插件沙箱时
+ *  preload 才给这把钥匙;手机 / 网页 / 设备页都没有。有它 = 头像面板的 Unit 段一定出现(不看登录、不看 Extend)。
+ *  ⚠️ 门控字面量逐字写成 `window.tangu?.X`(platform-parity 的 D 段靠正则扫它)。 */
+export const localUnitsAvailable = (): boolean => !!window.tangu?.localUnits
+
+/** 账号能力的桥键:Forsion Extend 装好的 authStatus(登录 / 登出 / 切号 / 状态那几条通道住在 Extend),
+ *  或 Unit 网页投射装了账号提供方时的 tangu.account。账号卡挂不挂另看本机多 Unit(AccountCard 的 accountCardWanted)。 */
+export const accountBridgeAvailable = (): boolean => !!(window.tangu?.authStatus || window.tangu?.account)
+
 // P1-K7a ── 跨设备会话聚合 / 「在哪运行」选择器的两道闸(规格 K7 §3.9;INTEGRATION K7 U1 / U2 缺省)
 // ⚠️ 门控字面量逐字写成 `window.tangu?.X`(platform-parity 的 D 段靠正则扫它)。
 /** 名册可读(设备分组要列哪些电脑):手机 App / 桌面有 unitsList;网页版与设备页没有。设备页**无条件**关(§4.7 b6:不得经 A 的隧道再驱动 B)。 */

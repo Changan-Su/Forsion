@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { lanProbeMatches, pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel, unitWindowRosterState } from './unitPanelModel'
+import { lanProbeMatches, localPanelGroup, pickUnitRoute, readRememberedVia, rememberVia, remoteUnitId, unitPanelModel, unitWindowRosterState } from './unitPanelModel'
 import type { UnitInfo } from '../types'
+import type { LocalUnitRow, LocalUnitsSnapshot } from '../../../shared/localUnits'
 
 const u = (id: string, online: boolean, extra: Partial<UnitInfo> = {}): UnitInfo =>
   ({ id, name: id, platform: 'darwin', icon: null, online, lanUrl: null, ...extra })
@@ -163,6 +164,75 @@ describe('the same computer registered several times (old rows share one direct 
     const m = panel({ instanceId: 'inst', name: 'MacBook-Pro.local', unitId: 'me' })
     expect(m.rows).toEqual([])
     expect(m.offline).toHaveLength(4)
+  })
+})
+
+describe('local Units: the "This computer" group (localPanelGroup / unitPanelModel.local)', () => {
+  const row = (id: string, state: LocalUnitRow['state'], current = false): LocalUnitRow =>
+    ({ id, name: id, icon: '', path: `/home/x/Forsion Units/${id}`, displayPath: `~/Forsion Units/${id}`, state, current })
+  const snap = (over: Partial<LocalUnitsSnapshot> = {}): LocalUnitsSnapshot => ({
+    self: { kind: 'default' },
+    units: [row('lab', 'running'), row('demo', 'stopped'), row('old', 'missing'), row('copy', 'mismatch')],
+    registry: 'ok', defaultParent: '/home/x/Forsion Units', defaultParentDisplay: '~/Forsion Units', ...over,
+  })
+  const base = { units: [], hostUnitId: null, lanOk: {}, p2p: false, remote: { active: false, key: null } }
+
+  it('default Unit: every folder row in registry order, none checked; running / stopped usable, missing / mismatch not', () => {
+    const g = localPanelGroup(snap(), false, false)
+    expect(g.inFolder).toBe(false)
+    expect(g.unreadable).toBe(false)
+    expect(g.rows.map((r) => [r.unit.id, r.usable, r.checked, r.self])).toEqual([
+      ['lab', true, false, false], ['demo', true, false, false], ['old', false, false, false], ['copy', false, false, false],
+    ])
+    expect(unitPanelModel({ ...base, local: { snapshot: snap() } }).localCurrent).toBe(true)
+  })
+
+  it('inside a folder Unit: its own row is checked, "This computer" is not; viewing a remote unchecks both', () => {
+    const s = snap({ self: { kind: 'folder', id: 'lab', name: 'lab', icon: '', path: '/home/x/Forsion Units/lab', displayPath: '~/Forsion Units/lab' }, units: [row('lab', 'running', true), row('demo', 'stopped')] })
+    const m = unitPanelModel({ ...base, local: { snapshot: s } })
+    expect(m.localCurrent).toBe(false)
+    expect(m.local.inFolder).toBe(true)
+    expect(m.local.rows.map((r) => [r.unit.id, r.self, r.checked])).toEqual([['lab', true, true], ['demo', false, false]])
+    const viewing = unitPanelModel({ ...base, local: { snapshot: s }, remote: { active: true, key: 'mba:tunnel' } })
+    expect(viewing.localCurrent).toBe(false)
+    expect(viewing.local.rows[0]).toMatchObject({ self: true, checked: false })
+  })
+
+  it('registry unreadable is not an empty registry: no rows from it, but the folder Unit still shows itself', () => {
+    const g = localPanelGroup(snap({ registry: 'unreadable', units: [] }), false, false)
+    expect(g).toMatchObject({ unreadable: true, rows: [] })
+    const self = { kind: 'folder' as const, id: 'lab', name: 'Lab', icon: '🧪', path: '/p/lab', displayPath: '~/p/lab' }
+    const inFolder = localPanelGroup(snap({ registry: 'unreadable', units: [], self }), false, false)
+    expect(inFolder.unreadable).toBe(true)
+    expect(inFolder.rows.map((r) => [r.unit.id, r.unit.name, r.self, r.checked, r.usable])).toEqual([['lab', 'Lab', true, true, true]])
+  })
+
+  it('a failed list() reads as unreadable (even before any snapshot), keeping the last known self', () => {
+    expect(localPanelGroup(null, true, false)).toEqual({ inFolder: false, rows: [], unreadable: true })
+    const self = { kind: 'folder' as const, id: 'lab', name: 'Lab', icon: '', path: '/p/lab', displayPath: '~/p/lab' }
+    const g = localPanelGroup(snap({ self }), true, false)
+    expect(g.unreadable).toBe(true)
+    expect(g.rows.map((r) => r.unit.id)).toEqual(['lab'])
+  })
+
+  it('its own row reported missing / mismatch stays unusable: self only decides the check mark and that it cannot be removed', () => {
+    const self = { kind: 'folder' as const, id: 'lab', name: 'Lab', icon: '', path: '/p/lab', displayPath: '~/p/lab' }
+    for (const state of ['missing', 'mismatch'] as const) {
+      const g = localPanelGroup(snap({ self, units: [row('lab', state, true), row('demo', 'stopped')] }), false, false)
+      expect(g.rows.map((r) => [r.unit.id, r.self, r.checked, r.usable])).toEqual([['lab', true, true, false], ['demo', false, false, true]])
+    }
+  })
+
+  it('registry ok but without a row for itself: the folder Unit adds its own row first', () => {
+    const self = { kind: 'folder' as const, id: 'me', name: 'Me', icon: '', path: '/p/me', displayPath: '~/p/me' }
+    const g = localPanelGroup(snap({ self, units: [row('demo', 'stopped')] }), false, false)
+    expect(g.rows.map((r) => [r.unit.id, r.self])).toEqual([['me', true], ['demo', false]])
+  })
+
+  it('no local Units on this host (no snapshot, no failure) → empty group, "This computer" behaves as before', () => {
+    const m = unitPanelModel(base)
+    expect(m.local).toEqual({ inFolder: false, rows: [], unreadable: false })
+    expect(m.localCurrent).toBe(true)
   })
 })
 
