@@ -495,8 +495,8 @@ export function listLoadoutTools(): { name: string; description: string }[] {
  * gateToolCall 每次调用都读一次(判 'always':那一档不看档位也不看执行形态),并传本 run 的 profile ——
  * 应用自带工具(profile.toolLoadout.providers)执行侧找得到,声明不一起看的话它的 'always' 等于没写(Codex 10-10 #1)。
  */
-export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): 'command' | 'always' | undefined {
-  let found: 'command' | 'always' | undefined;
+export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): 'edit' | 'command' | 'always' | undefined {
+  let found: 'edit' | 'command' | 'always' | undefined;
   for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
     for (const t of providerTools(p)) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;

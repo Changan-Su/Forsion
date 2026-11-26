@@ -141,7 +141,9 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
   if (!mode || mode === 'full-auto') return false;
   // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit' ||
-    name === 'move_path' || name === 'copy_path' || name === 'delete_path' || opts?.widgetWrite === true;
+    name === 'move_path' || name === 'copy_path' || name === 'delete_path' || opts?.widgetWrite === true ||
+    // 插件工具经 capabilities.approval:'edit' 自声明并入写文件档(只改插件自己那份数据、不带路径的写;如 Showcase 存稿)。
+    declared === 'edit';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
