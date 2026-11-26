@@ -495,15 +495,23 @@ export function listLoadoutTools(): { name: string; description: string }[] {
  * gateToolCall 每次调用都读一次(判 'always':那一档不看档位也不看执行形态),并传本 run 的 profile ——
  * 应用自带工具(profile.toolLoadout.providers)执行侧找得到,声明不一起看的话它的 'always' 等于没写(Codex 10-10 #1)。
  */
-export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): 'edit' | 'command' | 'always' | undefined {
-  let found: 'edit' | 'command' | 'always' | undefined;
+const APPROVAL_RANK = { edit: 1, command: 2, always: 3 } as const;
+type DeclaredApproval = keyof typeof APPROVAL_RANK;
+const stricter = (a: DeclaredApproval | undefined, b: DeclaredApproval | undefined): DeclaredApproval | undefined =>
+  !a ? b : !b ? a : APPROVAL_RANK[b] > APPROVAL_RANK[a] ? b : a;
+
+export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolLoadout'>): DeclaredApproval | undefined {
+  // 同名工具(全局 provider 与会话 profile 的 toolLoadout 各有一个)取最严的那档:执行时解析到的可能是另一个,
+  // 后注册的宽松声明('edit')不能把别处的 'command' / 'always' 压下去(Codex 11-26)。未知值不认(旧插件写错的照旧当不写)。
+  let found: DeclaredApproval | undefined;
   for (const p of [...providers, ...(profile?.toolLoadout?.providers ?? [])]) {
     for (const t of providerTools(p)) {
-      if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
+      const a = t.capabilities?.approval;
+      if (t.name === name && a && Object.hasOwn(APPROVAL_RANK, a)) found = stricter(found, a);
     }
   }
   // 远端 MCP 工具不在 provider 里:连接器目录的 alwaysAsk 经 manager 注册的回调查(mcp/connectors.ts)
-  return mcpDeclaredApproval(name) ?? found;
+  return stricter(found, mcpDeclaredApproval(name));
 }
 
 /**
