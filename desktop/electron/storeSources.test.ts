@@ -534,3 +534,157 @@ describe('archiveCommit', () => {
     await expect(archiveCommit(Buffer.from('tiny'))).rejects.toThrow()
   })
 })
+
+describe('built-in skills.sh source', () => {
+  const BASE = 'https://forsion.test'
+  const SH_CAT = `${BASE}/api/market/collected/skills-sh/forsion-store.json`
+  const SH = '25aae625'
+  const makeSh = (base: string | (() => Promise<string>) = BASE) => createStoreSources({
+    home, mirror: async () => '', defaultLocale: () => 'zh',
+    marketBase: typeof base === 'string' ? async () => base : base,
+    fetchFor: () => async (url) => { hits.push(url); const r = routes[url]; if (!r) return new Response('nope', { status: 404 }); return r() },
+  })
+  const collected = (over: Record<string, unknown> = {}) => ({
+    installs: 841892, rank: 12, trendingRank: null, audit: { gen: 'safe', socket: 'safe', snyk: 'low' }, override: false, license: 'MIT',
+    scripts: 0, files: 2, requirements: { cli: false, apiKeys: [], desktopOnly: false }, upstreamDeleted: false, pageUrl: null, ...over,
+  })
+  const shItem = (id: string, over: Record<string, unknown> = {}, pkgOver: Record<string, unknown> = {}) => ({
+    id, type: 'skill', name: id, version: '2026.11.20-148210', package: { github: 'lanternworks/skills', ref: 'main', commit: C1, path: `skills/${id}`, ...pkgOver }, collected: collected(), ...over,
+  })
+  const shIndex = (items: unknown[]) => ({ schema: 1, title: 'skills.sh', items })
+  const TRAILMAP = shItem('trailmap', { collected: collected({ adapted: true, adaptCount: 4, writtenFor: ['claude-code'], requires: ['quiz-me', 'not-collected'] }) })
+  const QUIZ = shItem('quiz-me', { collected: collected({ scripts: 2, audit: { gen: 'safe', socket: 'safe', snyk: 'medium' } }) })
+  const ADAPT = (commit = C1) => ({ note: 'Written for Claude Code. In Tangu, "/quiz-me" means use_skill quiz-me.', commit, entries: [], unsupported: [], requires: ['quiz-me'], external: [] })
+
+  it('tells the engine whether Tangu may list collected skills: on by default, off when disabled or unreadable', async () => {
+    expect(await makeSh().collectedOn()).toBe(true)
+    await makeSh().setDisabled(SH, true)
+    expect(await makeSh().collectedOn()).toBe(false)
+    await writeFile(statePath(), '{broken')
+    expect(await makeSh().collectedOn()).toBe(false)
+    expect(await make().collectedOn()).toBe(false) // no market server, no built-in source
+  })
+
+  it('is listed first, trusted, and reads its catalog from the market server', async () => {
+    routes[CATALOG] = () => json(index([poster()]))
+    routes[SH_CAT] = () => json(shIndex([TRAILMAP, QUIZ, shItem('npm-one', {}, { github: undefined, npm: '@x/y', commit: undefined }), { ...shItem('agent-one'), type: 'agent' }, shItem('unpinned', {}, { commit: undefined }), shItem('facts-broken', { collected: collected({ audit: { snyk: 'meh' } }) })]))
+    const s = makeSh()
+    await s.add('github:pixel-lab/image-skills')
+    const list = await s.list()
+    expect(list[0]).toMatchObject({ id: SH, title: 'skills.sh', origin: 'builtin', trusted: true, disabled: false })
+    const cat = await s.catalog(SH)
+    expect(hits).toContain(SH_CAT)
+    // Only skills pinned to a GitHub commit, with facts that parse (they decide the confirmation and the note), are offered.
+    expect(cat.items.map((x) => x.id)).toEqual([`src_${SH}_trailmap`, `src_${SH}_quiz-me`])
+    const wf = cat.items[0]
+    expect(wf).toMatchObject({ downloads: 841892, commit: C1, collected: { adapted: true, requires: ['quiz-me', 'not-collected'] } })
+    expect(wf.prereqs).toEqual([
+      { id: `src_${SH}_quiz-me`, itemId: 'quiz-me', name: 'quiz-me', installSlug: `src-${SH}-quiz-me`, scripts: 2, auditWarn: true },
+      expect.objectContaining({ itemId: 'not-collected', missing: true }),
+    ])
+    // Always trusted, can't be removed or added again under its id.
+    await s.trust(SH)
+    expect((await s.list())[0].trusted).toBe(true)
+  })
+
+  it('a failed or 404 catalog read keeps the last copy and never marks installed items removed, deleted upstream or delisted', async () => {
+    routes[SH_CAT] = () => json(shIndex([TRAILMAP]))
+    const s = makeSh()
+    await s.catalog(SH)
+    await s.recordInstall({ cardId: `src_${SH}_trailmap`, type: 'skill', slug: `src-${SH}-trailmap`, name: 'trailmap', version: '2026.11.20-148210', origin: 'github:lanternworks/skills', commit: C1, path: 'skills/trailmap' })
+    // Installed after the copy on disk was written (e.g. that write failed later): the old copy doesn't list it.
+    await s.recordInstall({ cardId: `src_${SH}_quiz-me`, type: 'skill', slug: `src-${SH}-quiz-me`, name: 'quiz-me', version: '1', origin: 'github:lanternworks/skills' })
+    routes[SH_CAT] = () => new Response('down', { status: 500 })
+    const again = await makeSh().catalog(SH, { refresh: true })
+    expect(again.stale).toBe(true)
+    expect(again.items.map((x) => x.id)).toEqual([`src_${SH}_trailmap`])
+    delete routes[SH_CAT] // 404: an old server without the collected catalog
+    const fresh = makeSh()
+    await fresh.catalog(SH, { refresh: true })
+    const recs = await fresh.installs()
+    expect(recs.map((r) => [r.cardId, r.removed, r.upstreamDeleted, r.delisted])).toEqual([[`src_${SH}_trailmap`, false, undefined, undefined], [`src_${SH}_quiz-me`, false, undefined, undefined]])
+    // No copy at all and nothing read: still nothing said about the installed item.
+    await rm(join(home, '.store-sources', 'cache'), { recursive: true, force: true })
+    const none = makeSh()
+    const empty = await none.catalog(SH, { refresh: true })
+    expect(empty.items).toEqual([])
+    expect(empty.error).toBeTruthy()
+    for (const r of await none.installs()) expect([r.removed, r.upstreamDeleted, r.delisted]).toEqual([false, undefined, undefined])
+  })
+
+  it('a successful read says when an installed item is deleted upstream or no longer listed', async () => {
+    routes[SH_CAT] = () => json(shIndex([shItem('trailmap', { collected: collected({ upstreamDeleted: true }) }), QUIZ]))
+    const s = makeSh()
+    for (const id of ['trailmap', 'quiz-me']) await s.recordInstall({ cardId: `src_${SH}_${id}`, type: 'skill', slug: `src-${SH}-${id}`, name: id, version: '1', origin: 'github:lanternworks/skills' })
+    await s.catalog(SH)
+    expect((await s.installs()).map((x) => [x.slug, !!x.upstreamDeleted, !!x.delisted])).toEqual([[`src-${SH}-trailmap`, true, false], [`src-${SH}-quiz-me`, false, false]])
+    routes[SH_CAT] = () => json(shIndex([TRAILMAP]))
+    await s.catalog(SH, { refresh: true })
+    expect((await s.installs()).find((x) => x.slug === `src-${SH}-quiz-me`)).toMatchObject({ delisted: true, removed: false })
+  })
+
+  it('after switching market servers, the previous server\'s catalog says nothing about installed items', async () => {
+    routes[SH_CAT] = () => json(shIndex([shItem('trailmap', { collected: collected({ upstreamDeleted: true }) })]))
+    let base = BASE
+    const s = makeSh(async () => base)
+    await s.recordInstall({ cardId: `src_${SH}_trailmap`, type: 'skill', slug: `src-${SH}-trailmap`, name: 'trailmap', version: '1', origin: 'github:lanternworks/skills' })
+    await s.catalog(SH)
+    expect((await s.installs())[0].upstreamDeleted).toBe(true)
+    base = 'https://other.test' // its catalog 404s
+    await s.catalog(SH, { refresh: true }).catch(() => {})
+    expect((await s.installs())[0]).toMatchObject({ removed: false })
+    expect((await s.installs())[0].upstreamDeleted).toBeUndefined()
+    expect((await s.installs())[0].delisted).toBeUndefined()
+  })
+
+  it('no market server known: shows the last copy, whatever address it was read from', async () => {
+    routes[SH_CAT] = () => json(shIndex([TRAILMAP]))
+    await makeSh().catalog(SH)
+    const offline = makeSh(async () => '')
+    const cat = await offline.catalog(SH, { refresh: true })
+    expect(cat.stale).toBe(true)
+    expect(cat.items).toHaveLength(1)
+  })
+
+  it('reads the adaptation note for exactly the commit it installs', async () => {
+    routes[SH_CAT] = () => json(shIndex([TRAILMAP]))
+    const DETAIL = `${BASE}/api/market/collected/skills-sh/items/trailmap`
+    routes[DETAIL] = () => json({ ...TRAILMAP, readme: '---\nname: trailmap\ndescription: d\n---\nbody', adapt: ADAPT() })
+    const s = makeSh()
+    expect(await s.adaptNote(`src_${SH}_trailmap`, C1)).toMatch(/use_skill quiz-me/)
+    await expect(s.adaptNote(`src_${SH}_trailmap`, C2)).rejects.toThrow('resolve: collected-adapt-mismatch')
+    const d = await s.detail(`src_${SH}_trailmap`)
+    expect(d.readme).toMatch(/^---\nname: trailmap/)
+    expect(d.adapt?.commit).toBe(C1)
+    // An adaptation made for another commit isn't shown as this item's.
+    routes[DETAIL] = () => json({ readme: 'x', adapt: ADAPT(C2) })
+    expect((await s.detail(`src_${SH}_trailmap`)).adapt).toBeNull()
+    delete routes[DETAIL]
+    await expect(s.adaptNote(`src_${SH}_trailmap`, C1)).rejects.toThrow('resolve: collected-adapt-unavailable')
+    // User sources have no adaptation.
+    await expect(s.adaptNote('src_0a1b2c3d_poster', C1)).rejects.toThrow('resolve: collected-adapt-unavailable')
+  })
+
+  it('downloads the pinned commit, and an automatic update stops when the package moved to another folder', async () => {
+    routes[SH_CAT] = () => json(shIndex([QUIZ]))
+    const PINNED = `https://github.com/lanternworks/skills/archive/${C1}.zip`
+    routes[PINNED] = async () => new Response(new Uint8Array(await zipOf({ 'skills-x/skills/quiz-me/SKILL.md': '---\nname: quiz-me\ndescription: d\n---\n', 'skills-x/skills/other/SKILL.md': 'x' }, C1)))
+    const s = makeSh()
+    const cardId = `src_${SH}_quiz-me`
+    const got = await s.download(cardId)
+    expect(got).toMatchObject({ commit: C1, path: 'skills/quiz-me', collected: { scripts: 2 } })
+    expect(Object.keys((await JSZip.loadAsync(got.buf)).files)).toEqual(['SKILL.md'])
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${SH}-quiz-me`, name: 'quiz-me', version: '2026.11.19-1', origin: got.origin, commit: C1, path: got.path, ack: { scripts: 2, audit: true }, tree: 'f'.repeat(64) })
+    expect(await s.installRecord(cardId)).toMatchObject({ ack: { scripts: 2, audit: true }, tree: 'f'.repeat(64), type: 'skill' })
+    // An update keeps what the user confirmed unless a new confirmation replaces it.
+    await s.recordInstall({ cardId, type: 'skill', slug: `src-${SH}-quiz-me`, name: 'quiz-me', version: '2026.11.20-148210', origin: got.origin, commit: C1, path: got.path })
+    expect((await s.installRecord(cardId))?.ack).toEqual({ scripts: 2, audit: true })
+    routes[SH_CAT] = () => json(shIndex([shItem('quiz-me', { version: '2026.11.21-100000', collected: QUIZ.collected }, { path: 'skills/renamed' })]))
+    await s.catalog(SH, { refresh: true })
+    await expect(s.download(cardId, { auto: true })).rejects.toThrow('resolve: source-package-moved')
+    expect(s.updatesPaused(cardId)).toBe(false)
+    await s.setDisabled(SH, true)
+    expect(s.updatesPaused(cardId)).toBe(true)
+    await expect(s.item(cardId)).rejects.toThrow('resolve: source-removed')
+  })
+})

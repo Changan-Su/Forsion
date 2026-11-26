@@ -27,6 +27,46 @@ export type StorePackage =
 export const STORE_ITEM_TYPES = ['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin'] as const
 export type StoreItemType = typeof STORE_ITEM_TYPES[number]
 
+/**
+ * The built-in source: skills Forsion collects from skills.sh. The Forsion server keeps the catalog (same file shape as
+ * any source, plus a `collected` block per item); the desktop installs its items through the source pipeline.
+ * The id is `sha256("builtin:skills.sh").hex.slice(0, 8)`, hard-coded on both sides (server and desktop tests recompute it).
+ */
+export const BUILTIN_SKILLS_SH = { key: 'skills-sh', id: '25aae625', title: 'skills.sh' } as const
+export const COLLECTED_CATALOG_PATH = `/api/market/collected/${BUILTIN_SKILLS_SH.key}/forsion-store.json`
+export const collectedItemPath = (itemId: string): string => `/api/market/collected/${BUILTIN_SKILLS_SH.key}/items/${encodeURIComponent(itemId)}`
+export const isBuiltinSourceId = (id: unknown): boolean => id === BUILTIN_SKILLS_SH.id
+
+export const AUDIT_RISKS = ['safe', 'low', 'medium', 'high', 'critical', 'unknown'] as const
+export type AuditRisk = typeof AUDIT_RISKS[number]
+export const AUDIT_PROVIDERS = ['gen', 'socket', 'snyk'] as const
+/** What Forsion's collector found out about a skills.sh entry (catalog `collected` block, contract §3.1). */
+export interface CollectedInfo {
+  installs: number
+  rank: number | null
+  trendingRank: number | null
+  audit: Record<typeof AUDIT_PROVIDERS[number], AuditRisk>
+  /** An admin released an item the audit would have kept out. */
+  override: boolean
+  license: string | null
+  scripts: number
+  files: number
+  requirements: { cli: boolean; apiKeys: string[]; desktopOnly: boolean }
+  writtenFor: Array<'claude-code' | 'codex'>
+  adapted: boolean
+  adaptCount: number
+  unsupportedCount: number
+  /** Item ids in the same source this skill needs installed alongside. */
+  requires: string[]
+  upstreamDeleted: boolean
+  pageUrl: string | null
+  /** A prerequisite named by the skill couldn't be matched to a collected item (optional; older servers omit it). */
+  missingPrereq: boolean
+}
+/** Any audit at medium or worse (an admin-released high counts too): the item is confirmed one by one before installing. */
+export const auditWarns = (c: Pick<CollectedInfo, 'audit'> | null | undefined): boolean =>
+  !!c && AUDIT_PROVIDERS.some((p) => c.audit[p] === 'medium' || c.audit[p] === 'high' || c.audit[p] === 'critical')
+
 export interface StoreIndexItem {
   id: string
   type: StoreItemType
@@ -42,6 +82,7 @@ export interface StoreIndexItem {
   platforms?: string[]
   updatedAt?: string
   package: StorePackage
+  collected?: CollectedInfo
 }
 
 export interface StoreIndex {
@@ -57,7 +98,8 @@ export interface StoreIndex {
 export interface StoreSourceInfo {
   id: string
   title: string
-  origin: 'user' | 'plugin'
+  /** builtin = skills.sh, run by Forsion: always trusted, can be turned off, can't be removed. */
+  origin: 'user' | 'plugin' | 'builtin'
   pluginId?: string
   uri: string
   kind: StoreSourceRef['kind']
@@ -85,7 +127,31 @@ export interface StoreSourceCard {
   githubRepoUrl?: string
   npmPackage?: string
   origin: { sourceId: string; sourceTitle: string }
+  /** Built-in source: what the collector found (audit, licence, requirements, prerequisites…). */
+  collected?: CollectedInfo
+  /** The commit a GitHub / Forsion Git package is pinned to. */
+  commit?: string
+  /** `collected.requires` resolved against the same catalog (prerequisites installed alongside). */
+  prereqs?: StorePrereq[]
 }
+/** A prerequisite of a collected skill, as the catalog lists it. `missing` = named but not in the catalog. */
+export interface StorePrereq { id: string; itemId: string; name: string; installSlug: string; scripts: number; auditWarn: boolean; missing?: boolean }
+
+export const ADAPT_ACTIONS = ['use-skill', 'delegate', 'ask-user', 'todo', 'skill-dir', 'invoke-only-when-named', 'tools-hint', 'ask-user-run-skill', 'context-only'] as const
+export type AdaptAction = typeof ADAPT_ACTIONS[number]
+/** How a collected skill written for Claude Code / Codex reads in Tangu (contract §3.2). `note` is what Tangu reads. */
+export interface AdaptView {
+  entries: Array<{ line: number; quote: string; action: AdaptAction; target?: string; by: 'table' | 'ai' }>
+  unsupported: Array<{ line: number; quote: string; feature: 'hooks' | 'other' }>
+  requires: string[]
+  setup?: string
+  external: string[]
+  note: string
+  commit: string
+}
+/** The adaptation note written next to SKILL.md; the engine reads it before the skill body. */
+export const ADAPT_FILE = '.forsion-adapt.md'
+export const MAX_ADAPT_NOTE = 1200
 export interface StoreSourceCatalog {
   source: StoreSourceInfo
   items: StoreSourceCard[]
@@ -100,6 +166,10 @@ export interface StoreSourceInstall {
   cardId: string; type: string; slug: string; name: string; version: string | null; sourceId: string; sourceTitle: string | null; removed: boolean
   /** Copied from the catalog at install time. */
   summary?: string; author?: string
+  /** The last catalog read says the upstream repository or folder is gone (the installed copy stays). */
+  upstreamDeleted?: boolean
+  /** The last catalog read no longer lists it (hidden by Forsion, or dropped): not updated any more, the copy stays. */
+  delisted?: boolean
 }
 /** A source declared in a plugin manifest (`storeSources`). */
 export interface DeclaredStoreSource { pluginId: string; id: string; title: LocalText; index: string; icon?: string }
@@ -286,6 +356,104 @@ function parsePackage(v: unknown): StorePackage | null {
   return null
 }
 
+const count = (v: unknown, max = 1e12): number | undefined => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= max ? v : undefined
+const rankOf = (v: unknown): number | null | undefined => v === undefined || v === null ? null : count(v, 1e7)
+const flag = (v: unknown): boolean | undefined => v === undefined ? false : typeof v === 'boolean' ? v : undefined
+const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/
+/** skills.sh pages only (the collector writes `https://skills.sh/<owner>/<repo>/<skill>`). */
+function skillsShPage(v: unknown): string | null | undefined {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'string' || v.length > 300) return undefined
+  try {
+    const u = new URL(v)
+    return u.protocol === 'https:' && (u.hostname === 'skills.sh' || u.hostname === 'www.skills.sh') && !u.username && !u.password ? u.toString() : undefined
+  } catch { return undefined }
+}
+
+/**
+ * The `collected` block of a built-in catalog item. Every field is checked; anything malformed drops the block (the item
+ * itself stays, without the extra facts). Absent optional fields take their defaults; present-but-wrong ones don't.
+ */
+export function parseCollected(raw: unknown): CollectedInfo | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const o = raw as Record<string, unknown>
+  const installs = count(o.installs), scripts = count(o.scripts, 1e6), files = count(o.files, 1e6)
+  const rank = rankOf(o.rank), trendingRank = rankOf(o.trendingRank)
+  const adaptCount = o.adaptCount === undefined ? 0 : count(o.adaptCount, 1000), unsupportedCount = o.unsupportedCount === undefined ? 0 : count(o.unsupportedCount, 1000)
+  const override = flag(o.override), adapted = flag(o.adapted), upstreamDeleted = flag(o.upstreamDeleted), missingPrereq = flag(o.missingPrereq)
+  if (installs === undefined || scripts === undefined || files === undefined || rank === undefined || trendingRank === undefined || adaptCount === undefined || unsupportedCount === undefined) return undefined
+  if (override === undefined || adapted === undefined || upstreamDeleted === undefined || missingPrereq === undefined) return undefined
+  const a = o.audit
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return undefined
+  const audit = {} as CollectedInfo['audit']
+  for (const p of AUDIT_PROVIDERS) {
+    const v = (a as Record<string, unknown>)[p]
+    if (v === undefined || v === null) audit[p] = 'unknown'
+    else if (AUDIT_RISKS.includes(v as AuditRisk)) audit[p] = v as AuditRisk
+    else return undefined
+  }
+  const r = o.requirements
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return undefined
+  const req = r as Record<string, unknown>
+  const cli = flag(req.cli), desktopOnly = flag(req.desktopOnly)
+  const apiKeys = req.apiKeys === undefined ? [] : Array.isArray(req.apiKeys) && req.apiKeys.length <= 12 && req.apiKeys.every((k) => typeof k === 'string' && ENV_NAME.test(k)) ? req.apiKeys as string[] : undefined
+  if (cli === undefined || desktopOnly === undefined || !apiKeys) return undefined
+  const license = o.license === undefined || o.license === null ? null : typeof o.license === 'string' && o.license.trim() && o.license.length <= 64 && !/[\u0000-\u001f]/.test(o.license) ? o.license.trim() : undefined
+  const writtenFor = o.writtenFor === undefined ? [] : Array.isArray(o.writtenFor) && o.writtenFor.every((w) => w === 'claude-code' || w === 'codex') ? [...new Set(o.writtenFor as Array<'claude-code' | 'codex'>)] : undefined
+  const requires = o.requires === undefined ? [] : Array.isArray(o.requires) && o.requires.length <= 16 && o.requires.every((x) => typeof x === 'string' && ITEM_ID.test(x)) ? [...new Set(o.requires as string[])] : undefined
+  const pageUrl = skillsShPage(o.pageUrl)
+  if (license === undefined || !writtenFor || !requires || pageUrl === undefined) return undefined
+  return {
+    installs, rank, trendingRank, audit, override, license, scripts, files,
+    requirements: { cli, apiKeys: [...new Set(apiKeys)], desktopOnly }, writtenFor, adapted, adaptCount, unsupportedCount,
+    requires, upstreamDeleted, pageUrl, missingPrereq,
+  }
+}
+
+/** Printable text without control characters (newlines optional), trimmed and capped; undefined when it doesn't fit. */
+function plain(v: unknown, max: number, lines = false): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const s = v.replace(/\r\n?/g, '\n').trim()
+  if (!s || s.length > max || (lines ? /[\u0000-\u0009\u000b-\u001f\u007f]/ : /[\u0000-\u001f\u007f]/).test(s)) return undefined
+  return s
+}
+
+/**
+ * The adaptation of a collected skill (item detail `adapt`, contract §3.2). Bad entries are dropped one by one; the
+ * view itself needs a note (≤ MAX_ADAPT_NOTE chars, the text Tangu reads) and the commit it was made for. null = unusable.
+ */
+export function parseAdaptView(raw: unknown): AdaptView | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  const note = plain(o.note, MAX_ADAPT_NOTE, true)
+  const commit = typeof o.commit === 'string' ? o.commit.toLowerCase() : ''
+  if (!note || !isCommitId(commit)) return null
+  const line = (v: unknown) => count(v, 100000) !== undefined && (v as number) >= 1 ? v as number : undefined
+  const requires = Array.isArray(o.requires) ? [...new Set(o.requires.filter((x): x is string => typeof x === 'string' && ITEM_ID.test(x)))].slice(0, 16) : []
+  const entries: AdaptView['entries'] = []
+  for (const e of Array.isArray(o.entries) ? o.entries : []) {
+    if (entries.length >= 24 || !e || typeof e !== 'object') continue
+    const x = e as Record<string, unknown>
+    const ln = line(x.line), quote = plain(x.quote, 200), action = ADAPT_ACTIONS.includes(x.action as AdaptAction) ? x.action as AdaptAction : undefined
+    const by = x.by === 'table' || x.by === 'ai' ? x.by : undefined
+    const targeted = action === 'use-skill' || action === 'ask-user-run-skill'
+    const target = typeof x.target === 'string' && ITEM_ID.test(x.target) ? x.target : undefined
+    if (!ln || !quote || !action || !by || (targeted && !target)) continue
+    if (entries.some((y) => y.line === ln && y.action === action)) continue
+    entries.push({ line: ln, quote, action, by, ...(targeted ? { target } : {}) })
+  }
+  const unsupported: AdaptView['unsupported'] = []
+  for (const e of Array.isArray(o.unsupported) ? o.unsupported : []) {
+    if (unsupported.length >= 12 || !e || typeof e !== 'object') continue
+    const x = e as Record<string, unknown>
+    const ln = line(x.line), quote = plain(x.quote, 200), feature = x.feature === 'hooks' || x.feature === 'other' ? x.feature : undefined
+    if (ln && quote && feature) unsupported.push({ line: ln, quote, feature })
+  }
+  const external = Array.isArray(o.external) ? o.external.map((x) => plain(x, 80)).filter((x): x is string => !!x).slice(0, 3) : []
+  const setup = typeof o.setup === 'string' && ITEM_ID.test(o.setup) ? o.setup : undefined
+  return { entries, unsupported, requires, ...(setup ? { setup } : {}), external, note, commit }
+}
+
 /** Validate a catalog file. Bad items are dropped (one typo must not hide the rest); a bad file throws. */
 export function parseStoreIndex(raw: unknown): StoreIndex {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new StoreIndexError('index-invalid')
@@ -307,6 +475,7 @@ export function parseStoreIndex(raw: unknown): StoreIndex {
     seen.add(it.id)
     const tags = Array.isArray(it.tags) ? it.tags.filter((t): t is string => typeof t === 'string' && !!t.trim() && t.length <= 40).map((t) => t.trim()).slice(0, 12) : []
     const platforms = Array.isArray(it.platforms) ? it.platforms.filter((p): p is string => ['macos', 'windows', 'linux', 'android', 'ios', 'web'].includes(p as string)) : undefined
+    const collected = it.collected === undefined ? undefined : parseCollected(it.collected)
     items.push({
       id: it.id, type: it.type as StoreItemType, name, version, tags, package: pkg,
       ...(text(it.summary, 400) ? { summary: text(it.summary, 400) } : {}),
@@ -317,6 +486,7 @@ export function parseStoreIndex(raw: unknown): StoreIndex {
       ...(str(it.maxAppVersion, 40) ? { maxAppVersion: str(it.maxAppVersion, 40) } : {}),
       ...(platforms?.length ? { platforms } : {}),
       ...(str(it.updatedAt, 40) && !Number.isNaN(Date.parse(it.updatedAt as string)) ? { updatedAt: str(it.updatedAt, 40) } : {}),
+      ...(collected ? { collected } : {}),
     })
   }
   const total = o.items.length

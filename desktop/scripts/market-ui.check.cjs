@@ -27,6 +27,9 @@ const SHOTS = {
   sourceAdd: shot('source-add'),
   sourceSignin: shot('source-signin'),
   sourceAddSignin: shot('source-add-signin'),
+  skillSections: shot('skill-sections'),
+  skillDetail: shot('skill-collected-detail'),
+  skillConfirm: shot('skill-collected-confirm'),
 }
 
 function findChromium() {
@@ -71,7 +74,7 @@ async function main() {
     page.on('pageerror', (error) => errors.push(error.message))
     // 技能详情会问引擎「装给谁」(SkillAgentPicker);台架没有引擎,给空名单,免得连接被拒记成页面错误。
     // 目录里放上本轮从来源装的两项,「装给谁」那步才找得到它们(真引擎装完就在目录里)。
-    const SRC_SKILLS = ['src-0a1b2c3d-poster', 'src-0a1b2c3d-ecommerce'].map((slug) => ({ key: slug, id: slug, slug, scope: 'user', name: slug }))
+    const SRC_SKILLS = ['src-0a1b2c3d-poster', 'src-0a1b2c3d-ecommerce', 'src-0a1b2c3d-storyboard', 'src-25aae625-quiz-me', 'src-25aae625-trailmap', 'src-25aae625-framecraft'].map((slug) => ({ key: slug, id: slug, slug, scope: 'user', name: slug }))
     await page.route(/:8787\/agent\/(agents|skills\/catalog)(\?|$)/, (route) => route.fulfill({ json: /agents/.test(route.request().url()) ? { agents: [] } : { skills: SRC_SKILLS } }))
     await page.goto(`${ORIGIN}/market-harness.html`, { waitUntil: 'networkidle' })
     await page.locator('.mk-featured').waitFor({ state: 'visible' })
@@ -237,7 +240,8 @@ async function main() {
     // 商店来源(2026-11-08 方案 A,docs/ToBeImproved/商店来源接口方案_2026-11-08):插件声明 / 用户添加的第三方目录进左栏「来源」,
     // 宿主画卡片与下装;未信任来源的第一次安装、会运行代码的条目,都先在详情侧栏原地确认。剧本见 marketHarnessBridge 的 sourceRows。
     const srcNav = await page.evaluate(() => [...document.querySelectorAll('[data-store-sources] [data-store-source]')].map((el) => el.textContent?.trim()))
-    check('来源分组列出插件声明与用户添加的来源', srcNav.join(' / ') === '图片 Skills 大全 / Acme 设计规范 / 团队工具箱', srcNav.join(' / '))
+    // 内置的 skills.sh 收录排第一,尾巴写「内置」
+    check('来源分组列出内置收录、插件声明与用户添加的来源', srcNav.join(' / ') === 'skills.sh内置 / 图片 Skills 大全 / Acme 设计规范 / 团队工具箱', srcNav.join(' / '))
     await page.locator('[data-store-source="0a1b2c3d"]').click()
     await page.locator('[data-store-source-page] .mk-grid').waitFor()
     const srcPage = await page.evaluate(() => ({
@@ -334,10 +338,10 @@ async function main() {
     const inst = await page.evaluate(() => ({
       count: document.querySelectorAll('.mk-grid .mk-card').length,
       badges: [...document.querySelectorAll('.mk-grid [data-market-source-badge]')].map((el) => el.textContent?.trim()),
-      gone: [...document.querySelectorAll('.mk-grid .mk-src-badge.is-gone')].map((el) => el.textContent?.trim()),
+      gone: [...document.querySelectorAll('.mk-grid .mk-pub.is-removed')].map((el) => el.textContent?.trim()),
     }))
     check('已安装区只列出本机已有的商店内容(含来源装的)', inst.count === 5, JSON.stringify(inst))
-    check('已安装区里来源装的条目标出来源,来源移除的写明', inst.badges.filter((x) => x === '图片 Skills 大全').length === 2 && inst.gone.join() === '来源已移除', JSON.stringify(inst))
+    check('已安装区里来源装的条目标出来源(未审核),来源移除的写明', inst.badges.filter((x) => x === '图片 Skills 大全 · 未审核').length === 2 && inst.gone.join() === '来源已移除', JSON.stringify(inst))
 
     // 卸载(2026-08-25):此前商店只有「重新安装」,装错/不想要的东西没有出口。
     // ⚠️ 卸载走 window.confirm,Playwright 不接管 dialog 会一直挂着 —— 这条断言最初就是这么卡住的。
@@ -348,6 +352,80 @@ async function main() {
     await page.locator('.mk-grid .mk-card button[aria-label="卸载"]').first().click()
     await page.waitForFunction((n) => document.querySelectorAll('.mk-grid .mk-card').length === n - 1, beforeCount - 0, { timeout: 5000 })
     check('卸载后该项从已安装区消失', await page.locator('.mk-grid .mk-card').count() === beforeCount - 1)
+
+    // 内置 skills.sh 收录(2026-11-23 方案 B,docs/ToBeImproved/商店技能来源方案_2026-11-23):技能分类「全部」按来源分区,
+    // 收录技能标 skills.sh、角上是 skills.sh 的安装数;详情第三种信任状态 + 适配说明;带脚本 / 审计警告的逐个确认,前置一起装。
+    // 剧本见 marketHarnessBridge 的 shItems(framecraft 9 个脚本 + Snyk 中风险,trailmap 带前置 quiz-me,漫画分镜包里多 1 个脚本)。
+    const installedSlugs = () => page.evaluate(async () => (await window.tangu.marketInstalled()).skill.map((x) => x.slug))
+    const waitInstalled = async (slug) => { for (let i = 0; i < 40; i++) { if ((await installedSlugs()).includes(slug)) return true; await page.waitForTimeout(150) } return false }
+    await page.getByRole('button', { name: '技能', exact: true }).click()
+    await page.locator('[data-market-section="25aae625"] .mk-grid').waitFor({ timeout: 6000 })
+    const sk = await page.evaluate(() => ({
+      sections: [...document.querySelectorAll('[data-market-section]')].map((el) => el.getAttribute('data-market-section')),
+      chips: [...document.querySelectorAll('[data-market-source-chip]')].map((el) => el.textContent?.trim()),
+      shCards: document.querySelectorAll('[data-market-section="25aae625"] .mk-card').length,
+      more: document.querySelector('[data-market-section-more="25aae625"]')?.textContent?.trim(),
+      pub: [...document.querySelectorAll('[data-market-section="25aae625"] [data-market-source-badge]')].map((el) => el.textContent?.trim()),
+      forsionPub: [...document.querySelectorAll('[data-market-section="forsion"] [data-market-source-badge]')].map((el) => el.textContent?.trim()),
+      count: document.querySelector('[data-market-section="25aae625"] .mk-count')?.getAttribute('title'),
+      tiers: [...document.querySelectorAll('[data-market-section="25aae625"] [data-market-tier]')].map((el) => el.textContent?.trim()),
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }))
+    check('技能「全部」按来源分区:Forsion 在前,再 skills.sh,再用户来源', sk.sections[0] === 'forsion' && sk.sections[1] === '25aae625' && sk.sections.includes('0a1b2c3d') && sk.chips[0].startsWith('全部'), JSON.stringify({ sections: sk.sections, chips: sk.chips }))
+    check('skills.sh 分区只摆前 6 张,其余在「查看全部」里', sk.shCards === 6 && /9/.test(sk.more || ''), `${sk.shCards} · ${sk.more}`)
+    check('作者旁标签:收录的标 skills.sh,Forsion 的标官方 / 开发者', sk.pub.length === 6 && sk.pub.every((x) => x === 'skills.sh') && sk.forsionPub.includes('Forsion 官方') && sk.forsionPub.includes('Forsion 开发者'), JSON.stringify({ pub: sk.pub, forsion: sk.forsionPub }))
+    check('角上的数写明是 skills.sh 统计的安装数', /skills\.sh/.test(sk.count || ''), String(sk.count))
+    check('类型旁写要求(命令行工具 / API Key)', sk.tiers.includes('需要命令行工具'), sk.tiers.join(' / '))
+    check('分区页没有横向溢出', sk.overflow <= 0, `${sk.overflow}px`)
+    await page.mouse.move(1350, 880)
+    await page.screenshot({ path: SHOTS.skillSections, fullPage: true })
+    await page.locator('[data-market-source-chip="25aae625"]').click()
+    const only = await page.locator('.mk-grid .mk-card').count()
+    check('点 skills.sh 筛选只看收录的那 9 项', only === 9 && await page.locator('[data-market-section]').count() === 0, String(only))
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'trailmap' }).click()
+    await page.locator('[data-store-collected-trust]').waitFor()
+    const wf = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('.mk-detail-tabs button')].map((el) => el.textContent?.trim()),
+      trust: document.querySelector('[data-store-collected-trust] strong')?.textContent?.trim(),
+      facts: [...document.querySelectorAll('.mk-facts dt')].map((el) => el.textContent?.trim()),
+      link: document.querySelector('[data-market-skillssh-link]')?.getAttribute('href'),
+      btn: document.querySelector('.mk-detail-actions [data-market-install]')?.textContent?.trim(),
+      byline: document.querySelector('.mk-detail-byline')?.textContent?.trim(),
+    }))
+    check('收录技能的详情:第三种信任状态、审计 / 许可 / 锁定提交 / 文件、去 skills.sh 看', wf.trust === 'Forsion 收录 · 未经人工审核' && ['安全审计', '许可', '锁定提交', '文件'].every((f) => wf.facts.includes(f)) && /^https:\/\/skills\.sh\//.test(wf.link || ''), JSON.stringify(wf))
+    check('详情署名写 skills.sh 统计的安装数', /skills\.sh/.test(wf.byline || '') && /万次安装/.test(wf.byline || ''), String(wf.byline))
+    check('带前置的安装按钮写明连同前置', /连同 1 个前置/.test(wf.btn || ''), String(wf.btn))
+    await page.locator('[data-market-detail-tab="adapt"]').click()
+    const adapt = await page.evaluate(() => ({ rows: document.querySelectorAll('[data-market-adapt] tbody tr').length, note: document.querySelector('[data-market-adapt] pre')?.textContent || '', prereq: document.querySelector('[data-market-adapt] .mk-tags')?.textContent || '' }))
+    check('「适配说明」页签列出逐行对应、前置与 Tangu 读的说明', adapt.rows === 4 && /Tangu/.test(adapt.note) && adapt.prereq.includes('quiz-me'), JSON.stringify(adapt))
+    await page.screenshot({ path: SHOTS.skillDetail, fullPage: true })
+    await page.locator('.mk-detail-actions [data-market-install]').first().click()
+    check('装 trailmap 连同前置 quiz-me 一起装上(没脚本不问)', await waitInstalled('src-25aae625-trailmap') && (await installedSlugs()).includes('src-25aae625-quiz-me') && await page.locator('[data-store-source-confirm-install]').count() === 0)
+    await page.locator('.mk-detail-back').click()
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'framecraft' }).click()
+    await page.locator('[data-store-collected-trust]').waitFor()
+    await page.locator('.mk-detail-actions [data-market-install]').first().click()
+    const hfText = await page.locator('[data-store-source-confirm-install]').waitFor({ timeout: 3000 }).then(() => page.locator('[data-store-source-confirm-install]').textContent(), () => '')
+    check('带脚本、审计有警告的收录技能逐个确认:写明脚本数与审计', /带 9 个脚本/.test(hfText || '') && /Snyk 评为中风险/.test(hfText || '') && /仍然安装/.test(hfText || ''), (hfText || '').slice(0, 120))
+    await page.screenshot({ path: SHOTS.skillConfirm, fullPage: true })
+    await page.locator('[data-store-source-install]').click()
+    check('确认后装上', await waitInstalled('src-25aae625-framecraft'))
+    await page.locator('.mk-detail-back').click()
+    // 目录没写、主进程在包里数出来的脚本(用户来源):先装,被拒后按数出来的在侧栏再问一次
+    await page.locator('[data-market-source-chip="0a1b2c3d"]').click()
+    await page.locator('.mk-grid .mk-card-title', { hasText: '漫画分镜' }).click()
+    await page.locator('[data-store-source-trust]').waitFor()
+    await page.locator('.mk-detail-actions [data-market-install]').first().click()
+    const sbText = await page.locator('[data-store-source-confirm-install]').waitFor({ timeout: 3000 }).then(() => page.locator('[data-store-source-confirm-install]').textContent(), () => '')
+    check('主进程数出目录没写的脚本:拒装并在侧栏按数出来的再问', /带 1 个脚本/.test(sbText || '') && !(await installedSlugs()).includes('src-0a1b2c3d-storyboard'), (sbText || '').slice(0, 120))
+    await page.locator('[data-store-source-install]').click()
+    check('确认后装上(带着确认的数目)', await waitInstalled('src-0a1b2c3d-storyboard'))
+    await page.locator('.mk-detail-back').click()
+    await page.locator('[data-market-source-chip="all"]').click()
+    await page.locator('.mk-search input').fill('pdf')
+    const hits = await page.locator('.mk-grid .mk-card-title').allTextContents()
+    check('搜索把收录的技能一起搜出来', hits.includes('pdf'), hits.join(' / '))
+    await page.locator('.mk-search input').fill('')
 
     // 安装反馈(2026-09-21 用户实报:中国用户点 GitHub 插件「安装」只转圈、失败也不吭声)。市场住在浮窗 /
     // 覆盖层里,全局通知在那儿不渲染 → 进度与失败都必须由市场自己画。剧本见 marketHarnessBridge 的 calendar-tools / mindmap。

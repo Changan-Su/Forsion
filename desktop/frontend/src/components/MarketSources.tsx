@@ -7,9 +7,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  AlertCircle, Bot, Coins, Copy, Crown, Download, ExternalLink, GitBranch, Globe, Image as ImageIcon, Loader2, Lock, MoreHorizontal,
-  LogIn, Package, Palette, Plus, Power, RefreshCw, ShieldAlert, Sparkles, Trash2, Wrench,
+  AlertCircle, Bot, Coins, Copy, Crown, Download, ExternalLink, GitBranch, Globe, Image as ImageIcon, Layers, Loader2, Lock, MoreHorizontal,
+  LogIn, Package, Palette, Plus, Power, RefreshCw, ScanLine, ShieldAlert, Sparkles, Trash2, Wrench,
 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { formatRelative } from '../format/time'
@@ -28,7 +29,6 @@ registerMessages({
   'market.sources.addChecking': { zh: '正在读取目录…', en: 'Reading the catalog…' },
   'market.sources.addFound': { zh: '{kind} · {n} 项', en: '{kind} · {n} items' },
   'market.sources.addConfirm': { zh: '添加', en: 'Add' },
-  'market.sources.cancel': { zh: '取消', en: 'Cancel' },
   'market.sources.added': { zh: '已添加来源「{name}」', en: 'Added the source "{name}"' },
   'market.sources.kind.github': { zh: 'GitHub', en: 'GitHub' },
   'market.sources.kind.npm': { zh: 'npm', en: 'npm' },
@@ -68,84 +68,19 @@ registerMessages({
     zh: '来自第三方来源「{name}」。安装、更新、卸载仍由 Forsion 管，装进去的文件照常检查。',
     en: 'From the third-party source "{name}". Forsion still installs, updates and removes it, and checks its files as usual.',
   },
-  'market.sources.confirmFirst': {
-    zh: '第一次从「{name}」安装。它不经过 Forsion 审核，内容由来源作者维护。',
-    en: 'This is your first install from "{name}". It isn\'t reviewed by Forsion. The source\'s author maintains it.',
-  },
-  'market.sources.confirmText': { zh: '这是{kind}，装上后不会自己运行代码。', en: 'This is a {kind}. It doesn\'t run code on its own.' },
-  'market.sources.confirmCode': {
-    zh: '这是{kind}，可能在 Forsion 里运行代码或命令。只装你信得过的作者做的。',
-    en: 'This is a {kind}. It may run code or commands inside Forsion. Only install it if you trust the author.',
-  },
-  'market.sources.confirmInstall': { zh: '确认安装', en: 'Install' },
   'market.sources.factSource': { zh: '{name} · {kind}', en: '{name} · {kind}' },
+  // 内置来源 skills.sh(2026-11-23):Forsion 运营,不能移除、能停用,不用「信任这个来源」
+  'market.sources.builtinTail': { zh: '内置', en: 'Built-in' },
+  'market.sources.builtinSubtitle': { zh: 'Forsion 每天从 skills.sh 收录 · 共 {n} 项内容', en: 'Collected by Forsion from skills.sh every day · {n} items' },
+  'market.sources.builtinFlag': { zh: 'Forsion 收录 · 未经人工审核', en: 'Collected by Forsion · Not manually reviewed' },
+  'market.sources.builtinUnavailable': { zh: 'skills.sh 的收录暂时读不到，稍后再试。', en: 'Couldn\'t load the skills.sh collection. Try again later.' },
+  'market.sources.builtinOffHint': { zh: '停用后，技能分类和搜索里不再列出它的技能，对话里推荐到的也装不了；已经装的保留。', en: 'While it\'s off, its skills don\'t show in the skills category or search and can\'t be installed from chat. Installed skills stay.' },
   'market.sources.factAddress': { zh: '来源地址', en: 'Source address' },
-  'market.sources.removedBadge': { zh: '来源已移除', en: 'Source removed' },
-  'market.sources.removedHint': { zh: '来源已移除，不再更新', en: 'Source removed. No longer updated.' },
-  // 主进程的原因码(语言中立)→ 文案
-  'market.sources.err.fetch-failed': { zh: '读不到这个来源的目录：网络不通，或者地址不对。', en: 'Couldn\'t read this source\'s catalog. Check the network or the address.' },
-  'market.sources.err.index-invalid': { zh: '这个地址上不是 Forsion 商店目录（forsion-store.json）。', en: 'This address isn\'t a Forsion store catalog (forsion-store.json).' },
-  'market.sources.err.index-schema': { zh: '这份目录的格式版本这里还不认识，请先更新 Forsion。', en: 'This catalog uses a newer format. Update Forsion first.' },
-  'market.sources.err.index-missing': {
-    zh: '找不到 forsion-store.json：npm 包里没有它，或者仓库的这个分支、文件夹里没有。',
-    en: 'No forsion-store.json here. The npm package doesn\'t include one, or this branch or folder of the repository doesn\'t have it.',
-  },
-  'market.sources.err.too-large': { zh: '目录文件太大（超过 1 MB）。', en: 'The catalog file is too large (over 1 MB).' },
-  'market.sources.err.unrecognized': { zh: '认不出这个地址。可以贴 GitHub 或 Forsion Git 仓库、npm 包或 forsion-store.json 的链接。', en: 'This address isn\'t recognized. Paste a GitHub or Forsion Git repository, an npm package or a link to forsion-store.json.' },
-  'market.sources.err.forsion-git-unsupported': { zh: '这台 Forsion 服务器还没开通 Forsion Git 来源。', en: 'Forsion Git sources aren\'t available on this Forsion server yet.' },
-  'market.sources.err.forsion-git-signin': { zh: '登录 Forsion 账号后才能读 Forsion Git 上的私有仓库。', en: 'Sign in to your Forsion account to read private repositories on Forsion Git.' },
-  'market.sources.err.forsion-git-no-access': { zh: '读不到这个仓库：它不存在，或者你的 Forsion 账号没有读权限。', en: 'Can\'t read this repository. It doesn\'t exist, or your Forsion account has no read access.' },
-  'market.sources.err.forsion-git-needs-setup': { zh: '你还没有 Forsion Git 账号。先在浏览器里打开 Forsion Git 登录一次。', en: 'You don\'t have a Forsion Git account yet. Open Forsion Git in your browser and sign in once.' },
-  'market.sources.err.forsion-git-ref-missing': { zh: '仓库里没有目录写的那个分支、标签或提交。', en: 'The repository doesn\'t have the branch, tag or commit named in the catalog.' },
-  'market.sources.err.duplicate': { zh: '这个来源已经在左栏里了。', en: 'This source is already in the list.' },
-  'market.sources.err.state-unreadable': { zh: '来源列表文件读不出来。为了不覆盖它，这次没有保存。', en: 'The source list file can\'t be read. Nothing was saved, so it isn\'t overwritten.' },
-  'market.sources.err.not-found': { zh: '找不到这个来源。', en: 'This source wasn\'t found.' },
-  'market.sources.err.source-removed': { zh: '这个来源已经移除或停用。', en: 'This source was removed or turned off.' },
-  'market.sources.err.source-item-removed': { zh: '来源里已经没有这一项了。', en: 'The source no longer lists this item.' },
-  'market.sources.err.version-unavailable': { zh: '来源只提供最新版本。', en: 'The source only offers the latest version.' },
-  'market.sources.err.source-package-moved': { zh: '新版本换了下载地址，没有自动更新。请在来源页里手动更新。', en: 'The new version downloads from a different place, so it wasn\'t updated on its own. Update it from the source page.' },
-  'market.sources.err.plugin-id-taken': { zh: '已经装了一个同 id 的插件，这一项没有装。', en: 'A plugin with the same ID is already installed, so this one wasn\'t installed.' },
-  'market.sources.err.checksum': { zh: '下载的文件和目录里写的校验值对不上，没有安装。', en: 'The downloaded file doesn\'t match the checksum in the catalog, so it wasn\'t installed.' },
-  'market.sources.err.commit': { zh: '下载到的不是目录写的那个提交，没有安装。', en: 'The download isn\'t the commit named in the catalog, so it wasn\'t installed.' },
-  'market.sources.err.folder-missing': { zh: '仓库里找不到目录写的那个文件夹。', en: 'The folder named in the catalog isn\'t in the repository.' },
-  'market.sources.err.source-item-changed': { zh: '这一项在来源里刚改过，没有安装。请重新打开再看一遍。', en: 'This item just changed in its source, so it wasn\'t installed. Open it again to review it.' },
-  'market.sources.err.address-not-allowed': { zh: '目录里的下载地址指向本机或内网，没有下载。', en: 'The catalog\'s download address points at this computer or a private network, so nothing was downloaded.' },
-  'market.sources.err.duplicate-path': { zh: '安装包里有两个文件落在同一个位置，没有安装。', en: 'Two files in the package land in the same place, so it wasn\'t installed.' },
-  // 官方商店(2026-11-16+,electron/marketInternals.ts):包声明了 internals-raw,但这一版没过第二级审核
-  'market.sources.err.internals-raw-unapproved': {
-    zh: '这一版插件要直接操作 Forsion 的内部对象，还没通过商店的这项审核，所以没有安装。',
-    en: 'This version of the plugin works on Forsion internals directly and hasn\'t passed the store\'s review for that yet, so it wasn\'t installed.',
-  },
-  // 演示舞台(2026-11-20+):包声明了 stage,但这一版没过商店审核(先只给首方插件)
-  'market.sources.err.stage-unapproved': {
-    zh: '这一版插件要另起一份 Forsion 来演示和录屏，还没通过商店的这项审核，所以没有安装。',
-    en: 'This version of the plugin starts a separate copy of Forsion for demos and recordings and hasn\'t passed the store\'s review for that yet, so it wasn\'t installed.',
-  },
-  'market.sources.err.npm-version': { zh: 'npm 上找不到目录写的那个版本。', en: 'The version named in the catalog isn\'t on npm.' },
 })
 
-const ERROR_CODES: Array<[RegExp, string]> = [
-  [/source: (fetch-failed|index-invalid|index-schema|index-missing|too-large|unrecognized|forsion-git-(?:unsupported|signin|no-access|needs-setup)|duplicate|state-unreadable|not-found)\b/, '$1'],
-  [/resolve: (source-removed|source-item-removed|source-item-changed|address-not-allowed|version-unavailable|source-package-moved|forsion-git-(?:unsupported|signin|no-access|needs-setup|ref-missing))\b/, '$1'],
-  [/install: duplicate path in archive/, 'duplicate-path'],
-  [/install: plugin id taken/, 'plugin-id-taken'],
-  [/install: internals-raw-unapproved/, 'internals-raw-unapproved'],
-  [/install: stage-unapproved/, 'stage-unapproved'],
-  [/install: package checksum mismatch/, 'checksum'],
-  [/install: package commit mismatch/, 'commit'],
-  [/install: package folder not found/, 'folder-missing'],
-  [/resolve: npm version not found/, 'npm-version'],
-]
-/** 主进程原因码 → 文案;认不出返回 null(调用方用原文)。 */
-export function sourceErrorText(e: unknown, t: (k: string, v?: Record<string, string | number>) => string): string | null {
-  // marketService 把 `resolve: …` 换成了本地化的句子,原因码原文留在 raw 上
-  const msg = typeof e === 'string' ? e : (e as { raw?: string })?.raw || (e as Error)?.message || String(e)
-  for (const [re, code] of ERROR_CODES) {
-    const m = re.exec(msg)
-    if (m) return t(`market.sources.err.${code.startsWith('$') ? m[1] : code}`)
-  }
-  return null
-}
+import { sourceErrorText } from './marketSourceErrors'
+export { SourceConfirm } from './MarketLabels'
+export { sourceErrorText }
 
 /** 没登录(或登录过期)读不了 Forsion Git:给登录引导,不当报错。 */
 export const needsSignIn = (e: unknown): boolean => /forsion-git-signin\b/.test(typeof e === 'string' ? e : (e as { raw?: string })?.raw || (e as Error)?.message || String(e))
@@ -153,14 +88,13 @@ export const needsSignIn = (e: unknown): boolean => /forsion-git-signin\b/.test(
 const forsionLogin = (): (() => Promise<unknown>) | undefined => { const login = window.tangu?.forsionLogin; return login ? () => login() : undefined }
 
 /** 左栏图标:插件声明的图标词 → 图标;用户加的按种类。认不出回落 Package。 */
-const ICONS: Record<string, typeof Package> = { image: ImageIcon, crown: Crown, coins: Coins, package: Package, sparkles: Sparkles, globe: Globe, palette: Palette, wrench: Wrench, bot: Bot }
+const ICONS: Record<string, typeof Package> = { image: ImageIcon, crown: Crown, coins: Coins, package: Package, sparkles: Sparkles, globe: Globe, palette: Palette, wrench: Wrench, bot: Bot, layers: Layers }
 export function sourceIcon(s: Pick<StoreSourceInfo, 'icon' | 'kind'>): typeof Package {
   if (s.icon && Object.hasOwn(ICONS, s.icon)) return ICONS[s.icon]
   return s.kind === 'npm' ? Package : s.kind === 'url' ? Globe : GitBranch
 }
 const shortUri = (uri: string) => uri.replace(/^https?:\/\//, '')
-/** 会运行代码的类型:插件本身、可带工具 / MCP 命令的 Agent、可捆插件的 Space。每项第一次装前都确认。 */
-export const CODE_TYPES = new Set(['plugin', 'amadeus-plugin', 'agent', 'space'])
+export { CODE_TYPES } from '../services/marketCollected'
 
 /** 来源表 + 来源装过的东西;主进程广播变化(插件开关在主窗、商店在独立浮窗)时重读。 */
 export function useStoreSources() {
@@ -203,7 +137,7 @@ export function SourceNavGroup({ sources, activeId, onOpen, onAdded, onError }: 
         const Icon = sourceIcon(s)
         return (
           <button key={s.id} type="button" data-store-source={s.id} className={`${activeId === s.id ? 'active' : ''}${s.disabled ? ' mk-src-off' : ''}`.trim()} onClick={() => onOpen(s.id)}>
-            <Icon size={15} />{s.title}{s.kind === 'forsion-git' && <span className="mk-src-lock"><Lock size={12} /></span>}
+            <Icon size={15} />{s.title}{s.kind === 'forsion-git' && <span className="mk-src-lock"><Lock size={12} /></span>}{s.origin === 'builtin' && <span className="mk-src-tail">{t('market.sources.builtinTail')}</span>}
           </button>
         )
       })}
@@ -295,7 +229,10 @@ export function SourceInfoRow({ source, catalog, pluginName, onRefresh, onToggle
 }) {
   const { t } = useI18n()
   const [menu, setMenu] = useState<CtxMenu>(null)
-  const Kind = source.kind === 'npm' ? Package : source.kind === 'url' ? Globe : GitBranch
+  const builtin = source.origin === 'builtin'
+  const Kind = builtin ? Layers : source.kind === 'npm' ? Package : source.kind === 'url' ? Globe : GitBranch
+  // 内置来源的地址是 Forsion 服务器上的目录接口;给人看、给人打开的是 skills.sh 本身
+  const shown = builtin ? 'https://skills.sh' : source.uri
   const time = catalog?.fetchedAt ? formatRelative(catalog.fetchedAt) : ''
   const open = (e: React.MouseEvent<HTMLButtonElement>): void => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -303,20 +240,20 @@ export function SourceInfoRow({ source, catalog, pluginName, onRefresh, onToggle
       x: r.right - 220, y: r.bottom + 6, anchorTop: r.top,
       items: [
         { label: t('market.sources.refresh'), icon: <RefreshCw size={14} />, run: onRefresh, disabled: source.disabled },
-        { label: t('market.sources.copy'), icon: <Copy size={14} />, run: () => void navigator.clipboard.writeText(source.uri) },
-        { label: t('market.sources.open'), icon: <ExternalLink size={14} />, run: () => { window.open(source.uri, '_blank', 'noopener') } },
+        ...(builtin ? [] : [{ label: t('market.sources.copy'), icon: <Copy size={14} />, run: () => void navigator.clipboard.writeText(source.uri) }]),
+        { label: t('market.sources.open'), icon: <ExternalLink size={14} />, run: () => { window.open(shown, '_blank', 'noopener') } },
         source.origin === 'user'
           ? { label: t('market.sources.remove'), icon: <Trash2 size={14} />, danger: true, separatorBefore: true, run: onRemove }
           : source.disabled
             ? { label: t('market.sources.enable'), icon: <Power size={14} />, separatorBefore: true, run: () => onToggle(true), detail: pluginName ? t('market.sources.byPlugin', { name: pluginName }) : undefined }
-            : { label: t('market.sources.disable'), icon: <Power size={14} />, separatorBefore: true, run: () => onToggle(false), detail: t('market.sources.keepInstalled') },
+            : { label: t('market.sources.disable'), icon: <Power size={14} />, separatorBefore: true, run: () => onToggle(false), detail: builtin ? t('market.sources.builtinOffHint') : t('market.sources.keepInstalled') },
       ],
     })
   }
   return (
     <div className="mk-src-info" data-store-source-info={source.id}>
-      <span className="mk-src-flag"><ShieldAlert size={13} />{t('market.sources.unreviewed')}</span>
-      <a className="mk-src-url" href={source.uri} target="_blank" rel="noreferrer"><Kind size={12} />{shortUri(source.uri)}</a>
+      <span className="mk-src-flag">{builtin ? <ScanLine size={13} /> : <ShieldAlert size={13} />}{builtin ? t('market.sources.builtinFlag') : t('market.sources.unreviewed')}</span>
+      <a className="mk-src-url" href={shown} target="_blank" rel="noreferrer"><Kind size={12} />{shortUri(shown)}</a>
       {catalog?.stale && time ? <span className="mk-src-stale">{t('market.sources.stale', { time })}</span> : time ? <span>{t('market.sources.synced', { time })}</span> : null}
       <button type="button" className="mk-src-more" aria-label={t('market.sources.menu')} title={t('market.sources.menu')} onClick={open}><MoreHorizontal size={16} /></button>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
@@ -331,24 +268,9 @@ export function SourceTrustRow({ sourceTitle }: { sourceTitle: string }) {
 }
 
 /** 首装确认:每个来源第一次装东西时,和每个会运行代码的条目第一次装时,在侧栏原地确认。 */
-export function SourceConfirm({ sourceTitle, kindLabel, code, first, busy, onCancel, onConfirm }: {
-  sourceTitle: string; kindLabel: string; code: boolean; first: boolean; busy: boolean; onCancel: () => void; onConfirm: () => void
-}) {
-  const { t } = useI18n()
-  return (
-    <div className="mk-src-confirm" data-store-source-confirm-install>
-      {first && <div>{t('market.sources.confirmFirst', { name: sourceTitle })}</div>}
-      <div>{t(code ? 'market.sources.confirmCode' : 'market.sources.confirmText', { kind: kindLabel })}</div>
-      <div className="mk-src-acts">
-        <button type="button" className="btn sm" disabled={busy} onClick={onCancel}>{t('market.sources.cancel')}</button>
-        <button type="button" className="btn sm primary" disabled={busy} data-store-source-install onClick={onConfirm}>{busy ? <Loader2 size={13} className="mk-spin" /> : <Download size={13} />}{t('market.sources.confirmInstall')}</button>
-      </div>
-    </div>
-  )
-}
 
 /** 来源页的空 / 停用 / 读不到 / 要登录状态卡。 */
-export function SourceState({ kind, error, onRetry, onEnable }: { kind: 'disabled' | 'error' | 'empty' | 'signin'; error?: string; onRetry?: () => void; onEnable?: () => void }) {
+export function SourceState({ kind, error, onRetry, onEnable, builtin }: { kind: 'disabled' | 'error' | 'empty' | 'signin'; error?: string; onRetry?: () => void; onEnable?: () => void; builtin?: boolean }) {
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
   if (kind === 'signin') {
@@ -362,6 +284,6 @@ export function SourceState({ kind, error, onRetry, onEnable }: { kind: 'disable
     )
   }
   if (kind === 'disabled') return <div className="mk-state-card"><Power size={28} /><strong>{t('market.sources.disabledTitle')}</strong><span>{t('market.sources.disabledHint')}</span>{onEnable && <button className="btn sm" onClick={onEnable}><Power size={13} />{t('market.sources.enable')}</button>}</div>
-  if (kind === 'error') return <div className="mk-state-card"><AlertCircle size={28} /><strong>{(error && sourceErrorText(error, t)) || error}</strong>{onRetry && <button className="btn sm" onClick={onRetry}><RefreshCw size={13} />{t('market.sources.retry')}</button>}</div>
+  if (kind === 'error') return <div className="mk-state-card"><AlertCircle size={28} /><strong>{builtin ? t('market.sources.builtinUnavailable') : (error && sourceErrorText(error, t)) || error}</strong>{onRetry && <button className="btn sm" onClick={onRetry}><RefreshCw size={13} />{t('market.sources.retry')}</button>}</div>
   return <div className="mk-state-card"><Package size={28} /><strong>{t('market.sources.emptyTitle')}</strong><span>{t('market.sources.emptyHint')}</span></div>
 }
