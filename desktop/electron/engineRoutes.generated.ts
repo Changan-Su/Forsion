@@ -220,6 +220,8 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/remote/activity', access: 'deny-remote', src: 'routes/remote.ts', why: 'in-flight run registry for the host main process (tray / keep-awake)' },
   { method: 'GET', path: '/agent/remote/activity/events', access: 'deny-remote', src: 'routes/remote.ts', why: 'in-flight run registry feed for the host main process' },
   { method: 'POST', path: '/agent/remote/estop', access: 'deny-remote', src: 'routes/remote.ts', why: 'emergency stop is a host-only action (design §6.5)' },
+  { method: 'POST', path: '/agent/remote/restart-hold', access: 'deny-remote', src: 'routes/remote.ts', why: 'host-only: idle check + hold of new runs right before an unattended update stops the engine' },
+  { method: 'POST', path: '/agent/remote/restart-hold/release', access: 'deny-remote', src: 'routes/remote.ts', why: 'host-only: release the restart hold when the unattended update did not go ahead' },
   { method: 'GET', path: '/agent/remote/restart-status', access: 'deny-remote', src: 'routes/remote.ts', why: 'host-only exit checklist (running tasks / background processes) before restarting to update' },
   { method: 'POST', path: '/agent/remote/unlock', access: 'deny-remote', src: 'routes/remote.ts', why: 'unlocking remote access needs local system auth on the host (design §6.1, D13)' },
   { method: 'GET', path: '/agent/runs', access: 'allow', src: 'routes/runs.ts', why: 'list runs' },
