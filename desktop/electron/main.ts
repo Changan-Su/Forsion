@@ -1923,6 +1923,10 @@ app.on('web-contents-created', (_e, contents) => {
     ;(webPreferences as Record<string, unknown>).allowFileAccessFromFiles = false // 本地 .html 不许读同盘其它文件
     webPreferences.partition = surface ?? BROWSER_PARTITION
     params.partition = surface ?? BROWSER_PARTITION
+    // 内置浏览器与本地 HTML 预览要像浏览器标签一样自己画画布底色。guest 缺省 transparent: true:
+    // 页面根元素声明 color-scheme: dark 时文字随之变白,画布却保持透明,露出宿主写死的白底 → 白字压白底
+    // (11-26 白屏,台架 check:previewscheme)。插件网页表面不动:它们可能有意透出宿主的主题底色。
+    if (!surface) webPreferences.transparent = false
     delete params.nodeintegration
     delete params.nodeintegrationinsubframes
     delete params.disablewebsecurity
