@@ -88,6 +88,7 @@ Forsion is a **local-first AI second brain**: your material, ideas and results s
 - [Reusable UI components](customization/ui-components.md) — mounting the Chat Box and Markdown editor in views and plugins
 - [Mini Panel development](customization/mini-panel-development.md) — plugin adapters, handing over entity parameters, the automatic foreground panel
 - [Floating Panel development](customization/floating-panel-development.md) — native floating windows, web overlays and the plugin API
+- [Desktop window development](customization/desktop-window-development.md) — transparent, chrome-less windows above other apps, such as desktop pets
 
 ## Reference
 

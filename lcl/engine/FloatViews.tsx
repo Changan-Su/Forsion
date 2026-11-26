@@ -52,6 +52,18 @@ function FloatViewCard({ rec }: { rec: FloatViewRec }): ReactElement | null {
     leaf.setParams({ ...leaf.params, ...carry })
     rec.close()
   } : undefined
+  // 无卡片(bare):没有标题行,View 自己画全部(桌面小窗回落到窗口里时也是这样)
+  if (rec.form === 'bare') return (
+    <div className="lcl-float-view" data-form="bare">
+      <div className="lcl-float-view-body" data-view={rec.view.type}>
+        <ViewErrorBoundary>
+          <Suspense fallback={null}>
+            {def.factory({ leaf, params, surface: { form: rec.form } })}
+          </Suspense>
+        </ViewErrorBoundary>
+      </div>
+    </div>
+  )
   return (
     <div className="lcl-float-view" data-form={rec.form}>
       <header className="lcl-float-view-head" {...(rec.sheet ? {} : { 'data-float-drag': '' })}>

@@ -721,6 +721,29 @@ const api = {
     ipcRenderer.on('window:miniNudge', listener)
     return () => ipcRenderer.removeListener('window:miniNudge', listener)
   },
+  /** 插件桌面小窗(2026-11-26,shared/desktopWindow.ts):只有主窗用得上,主进程逐条核 sender。 */
+  desktopWindow: {
+    prepare: (req: import('../shared/desktopWindow').DesktopWindowPrepareRequest): Promise<import('../shared/desktopWindow').DesktopWindowPrepareReply> =>
+      ipcRenderer.invoke('desktopWindow:prepare', req),
+    setBounds: (id: string, rect: Partial<import('../shared/desktopWindow').DesktopRect>): void => ipcRenderer.send('desktopWindow:setBounds', id, rect),
+    passThrough: (id: string, ignore: boolean): void => ipcRenderer.send('desktopWindow:passThrough', id, ignore),
+    released: (id: string): void => ipcRenderer.send('desktopWindow:released', id),
+    close: (id: string): void => ipcRenderer.send('desktopWindow:close', id),
+    closePlugin: (pluginId: string): void => ipcRenderer.send('desktopWindow:closePlugin', pluginId),
+    screens: (): Promise<import('../shared/desktopWindow').DesktopScreen[]> => ipcRenderer.invoke('desktopWindow:screens'),
+    grant: (pluginId: string): Promise<import('../shared/desktopWindow').DesktopWindowGrant> => ipcRenderer.invoke('desktopWindow:grant', pluginId),
+    revoke: (pluginId: string): Promise<boolean> => ipcRenderer.invoke('desktopWindow:revoke', pluginId),
+    onClosed: (cb: (id: string) => void): (() => void) => {
+      const listener = (_e: unknown, id: string): void => cb(id)
+      ipcRenderer.on('desktopWindow:closed', listener)
+      return () => ipcRenderer.removeListener('desktopWindow:closed', listener)
+    },
+    onScreensChanged: (cb: (screens: import('../shared/desktopWindow').DesktopScreen[], placed: Record<string, import('../shared/desktopWindow').DesktopRect>) => void): (() => void) => {
+      const listener = (_e: unknown, screens: import('../shared/desktopWindow').DesktopScreen[], placed?: Record<string, import('../shared/desktopWindow').DesktopRect>): void => cb(screens, placed ?? {})
+      ipcRenderer.on('desktopWindow:screensChanged', listener)
+      return () => ipcRenderer.removeListener('desktopWindow:screensChanged', listener)
+    },
+  },
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
   floatingReady: (id: string): Promise<import('../shared/floatingPanel').FloatingPanelOpenOptions | undefined> =>

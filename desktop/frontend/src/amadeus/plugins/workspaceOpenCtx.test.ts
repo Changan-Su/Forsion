@@ -132,6 +132,18 @@ describe('ctx.workspace.open', () => {
     usePluginStore.getState().disable('p')
     expect(close).not.toHaveBeenCalled()
   })
+  it('桌面小窗(bare,2026-11-26):size 只收有限数、照传;插件停用时宿主关掉它;ctx.workspace.forms 列出 bare', async () => {
+    const ctx = ctxOf('p')
+    expect(ctx.workspace!.forms).toContain('bare')
+    const close = vi.fn()
+    open.mockResolvedValueOnce({ ok: true, layer: { float: 'desktop' }, form: 'bare', close })
+    const r = await ctx.workspace!.open('v', { layer: { float: 'desktop' }, form: 'bare', key: 'pet', size: { width: 120, height: 'x' as never } })
+    expect(open).toHaveBeenLastCalledWith({ type: 'plugin:p:v', params: undefined },
+      { layer: { float: 'desktop' }, form: 'bare', key: 'pet', title: undefined, size: { width: 120, height: undefined } })
+    expect(r).toMatchObject({ ok: true, layer: { float: 'desktop' }, form: 'bare' })
+    usePluginStore.getState().disable('p')
+    expect(close).toHaveBeenCalledTimes(1)
+  })
   it('停用之后的 ctx:resolve disabled,不开', async () => {
     const ctx = ctxOf('p')
     usePluginStore.getState().disable('p')
