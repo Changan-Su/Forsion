@@ -524,7 +524,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1164,7 +1164,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1627,7 +1627,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2109,7 +2109,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2891,7 +2891,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3766,7 +3766,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5092,7 +5092,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6437,7 +6437,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7252,7 +7252,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8086,7 +8086,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9412,7 +9412,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10757,7 +10757,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12141,7 +12141,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12554,7 +12554,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13179,7 +13179,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13541,7 +13541,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -14886,7 +14886,7 @@
       "type": "function",
       "function": {
         "name": "search_marketplace",
-        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). This is a lookup and never displays an installation card.",
+        "description": "Search the Forsion store for candidates (plugins, skills, themes, agents, spaces). Results also include skills Forsion collected from skills.sh (origin.kind \"collected\"), which are not manually reviewed. This is a lookup and never displays an installation card.",
         "parameters": {
           "type": "object",
           "properties": {
