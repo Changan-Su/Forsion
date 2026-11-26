@@ -74,8 +74,8 @@ async function main() {
     const w = new BrowserWindow({ width: 540, height: 240, title: 'Mini automatic test — foreground fixture' });
     w.loadURL('data:text/html,<h2>Computer Use foreground fixture</h2><p>Isolated test window for Mini Panel.</p>');
   });`)
-  let app, external, heartbeat, nativeHelper, nativeAsk, nativeStarted = false
-  const signal = () => { const now = Date.now(); fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ v: 1, active: true, updatedAt: now, expiresAt: now + 2500, helperPid: process.pid })) }
+  let app, external, independent, mockSocket, externalPid, heartbeat, nativeHelper, nativeAsk, nativeStarted = false
+  const signal = () => { const now = Date.now(); fs.writeFileSync(path.join(temp, 'foreground.json'), JSON.stringify({ v: 1, active: true, updatedAt: now, expiresAt: now + 2500, helperPid: process.pid, targetPid: externalPid })) }
   const startInput = () => { signal(); heartbeat = setInterval(signal, 500) }
   const stopInput = () => { clearInterval(heartbeat); heartbeat = null; fs.rmSync(path.join(temp, 'foreground.json'), { force: true }) }
   try {
@@ -110,6 +110,11 @@ async function main() {
     const focusExternal = async () => {
       await external.evaluate(({ app, BrowserWindow }) => { app.focus({ steal: true }); BrowserWindow.getAllWindows()[0].focus() })
       await until(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow() === null))
+    }
+    externalPid = await external.evaluate(() => process.pid)
+    if (!nativeExecutable) { // Model the reader's focus query as well as the lease.
+      mockSocket = require('node:net').createServer(client => client.once('data', () => client.end(JSON.stringify({ok: true, result: {pid: externalPid}}) + '\n')))
+      await new Promise(resolve => mockSocket.listen(path.join(temp, 'bridge.sock'), resolve))
     }
     await external.firstWindow(); await focusExternal(); await pause(500)
     check('external focus without physical input does not open Mini', (await autoWindows()).length === 0)
@@ -148,7 +153,7 @@ async function main() {
         // the screen like a click does, so the conversation must appear and Forsion must come back when the run ends.
         await focusMain()
         check('Mini is absent before the raise', (await autoWindows()).length === 0)
-        const raised = await nativeAsk({ cmd: 'restoreUserFocus', pid })
+        const raised = await nativeAsk({ cmd: 'restoreUserFocus', pid, windowId: target.windowId, runId: run.id })
         check('helper brings the fixture app forward with no physical input', raised.appRestored === true && await until(async () => (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid))
         check('a raise without input opens the current conversation', !!await until(autoVisible, 5000).catch(() => null))
         check('the raised app keeps the focus', (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
@@ -157,6 +162,17 @@ async function main() {
         backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0)
         check('run completion after a raise closes the conversation panel', true)
         check('run completion after a raise returns focus to the Forsion main window', await until(mainFocused))
+        const chat = win.locator(`[data-chat-surface="chat"][data-session-id="${run.sessionId}"]`).first()
+        check('the originating conversation is visible in the returned window', await chat.isVisible())
+        run = await send()
+        await nativeAsk({ cmd: 'restoreUserFocus', pid, windowId: target.windowId, runId: run.id })
+        await until(autoVisible)
+        independent = await electron.launch({args: [`--user-data-dir=${path.join(temp, 'independent-data')}`, externalEntry], cwd: ROOT})
+        await independent.firstWindow()
+        const otherPid = await independent.evaluate(({app, BrowserWindow}) => { app.focus({steal: true}); BrowserWindow.getAllWindows()[0].focus(); return process.pid })
+        await until(async () => (await nativeAsk({cmd: 'getFrontmost'})).pid === otherPid)
+        backend.emit(run, 'done', {}); await until(async () => (await autoWindows()).length === 0); await pause(1100)
+        check('ending a task leaves the user in the third application they chose', (await nativeAsk({cmd: 'getFrontmost'})).pid === otherPid)
         check('no renderer errors', errors.length === 0)
         console.log(`SCREENSHOTS ${shots}\n${results.filter(Boolean).length}/${results.length} passed (real native helper, raise only)`)
         return
@@ -164,7 +180,7 @@ async function main() {
       const look = await nativeAsk({ cmd: 'look', pid, windowId: target.windowId, includeImage: true, readText: 'never' })
       await focusMain()
       check('Mini is absent before real foreground activation', (await autoWindows()).length === 0)
-      const move = (x) => nativeAsk({ cmd: 'act', pid, lookId: look.lookId, action: 'moveMouse', target: { x, y: 100 }, policy: 'foreground', cursorOverlay: false, deferRootDelta: true })
+      const move = (x) => nativeAsk({ cmd: 'act', pid, lookId: look.lookId, action: 'moveMouse', runId: run.id, target: { x, y: 100 }, policy: 'foreground', cursorOverlay: false, deferRootDelta: true })
       const action = await move(100)
       check('real physical input activates the external fixture', action.performed?.delivery === 'hid' && (await nativeAsk({ cmd: 'getFrontmost' })).pid === pid)
       await until(autoVisible)
@@ -270,6 +286,7 @@ async function main() {
       if (nativeHelper && nativeHelper.exitCode === null) nativeHelper.kill('SIGTERM')
     }
     if (!nativeExecutable) stopInput()
+    mockSocket?.close(); if (independent) await independent.close().catch(() => {})
     if (external) await external.close().catch(() => {}); if (app) await app.close().catch(() => {}); await backend.close()
   }
   console.log(`${results.filter(Boolean).length}/${results.length} passed`)

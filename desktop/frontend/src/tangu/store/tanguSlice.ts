@@ -3678,6 +3678,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     quotaFallbackNext.delete(sessionId)
     try {
       const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig, ...(quotaFallback ? { quotaFallback } : {}) })
+      if (typeof window !== 'undefined') window.tangu?.reportComputerUseChat?.('start', sessionId, r.runId)
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
@@ -4480,6 +4481,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 计划自动开始的兜底清理:done 路径在调 endRun **之前**已消费;其余一切终结路径(stop/错误/看门狗)
   // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
   planAutoStart.delete(runId)
+  if (typeof window !== 'undefined') window.tangu?.reportComputerUseChat?.('end', sessionId, runId)
   uiActionOwnedRuns.delete(runId) // G2 归属标记随 run 终结释放(同 planAutoStart,统一在此清理)
   host.notifyClientSurfaces('runEnd', runId) // 能力面(手机操控)随 run 终结收尾;尽力而为,原生对未知 runId 应无操作
   const wd = runWatchdogs.get(runId)

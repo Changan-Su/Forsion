@@ -1083,6 +1083,8 @@ declare global {
       miniDockMotionDone?(id: number): void
       /** 关闭当前(卫星)窗口。 */
       miniReady?(): void
+      onComputerUseReturn?(cb: (sessionId: string) => void): () => void
+      reportComputerUseChat?(phase: 'start' | 'end', sessionId: string, runId: string): void
       reportMiniSession?(context: import('../../shared/miniPanel').MiniSessionContext): void
       miniSessionReady?(sessionId: string): void
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void

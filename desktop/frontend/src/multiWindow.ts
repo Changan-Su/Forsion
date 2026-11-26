@@ -10,6 +10,9 @@ import { setDetachApi, useWorkspace, useSpaceStore, setActiveSpace, getView, sub
 export function installMultiWindow(): void {
   const t = window.tangu
   if (!t?.openDetached) return // 非桌面 → 无 OS 窗口,跳过
+  if (windowKind() === 'main' || windowKind() === 'detached') {
+    t.onComputerUseReturn?.(sessionId => { void import('./sessionNav').then(({ openSession }) => openSession(sessionId)) })
+  }
   if (windowKind() === 'main') {
     // Keep the OS process informed even before a Mini window has ever existed.
     let lastSession = ''

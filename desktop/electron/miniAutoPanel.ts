@@ -1,66 +1,69 @@
 import type { MiniSessionContext } from '../shared/miniPanel'
+import type { ForegroundLease } from './miniForeground'
 
 interface AutoMiniDeps {
-  readForeground(): Promise<boolean>
+  readForeground(): Promise<ForegroundLease | null>
   hasForsionFocus(): boolean
   manualMiniVisible(): boolean
   session(): MiniSessionContext
   open(sessionId: string): void
-  /** `restore`: the run that owned the panel ended while the user stayed away — hand Forsion back as it was. */
-  close(restore?: boolean): void
+  close(): void
+  restore(sessionId: string, targetPid: number): Promise<void>
 }
 
-/** App-wide ownership of a temporary conversation panel. A physical-input lease starts
- * an episode; the same running conversation keeps it through tool/model pauses. */
+/** The run owns the handback even when an existing manual Mini already shows the conversation. */
 export function startMiniAutoPanel(deps: AutoMiniDeps) {
-  let stopped = false, checking = false, foreground = false
-  let episode: string | null = null, suppressed: string | null = null
-  let foregroundRun: string | null = null
-  let requested: string | null = null, requestedKey: string | null = null
-  const refresh = (): void => {
-    if (stopped) return
-    const { sessionId, runId } = deps.session()
-    const key = sessionId && runId ? JSON.stringify([sessionId, runId]) : null
-    // The foreground session lasts across short HID leases, for manual and automatic Mini alike.
-    if (!key || deps.hasForsionFocus()) foregroundRun = null
-    else if (foreground) foregroundRun = key
-    else if (foregroundRun !== key) foregroundRun = null
-    if (suppressed !== key) suppressed = null
-    if (!key || deps.hasForsionFocus() || deps.manualMiniVisible()) episode = null
-    else if (foreground && suppressed !== key) episode = key
-    else if (episode !== key) episode = null
-    const next = episode && episode === key && suppressed !== key ? sessionId : null
-    if (next === requested) return
-    const finished = !!requested && !next && requestedKey !== key && !deps.hasForsionFocus()
-    requested = next; requestedKey = next ? key : null
+  let stopped = false, checking = false
+  let context = deps.session()
+  let owner: ForegroundLease | null = null, requested: string | null = null
+  let dismissed = false, generation = 0
+  let relinquished: string | undefined
+
+  function display(next: string | null): void {
+    if (requested === next) return
+    requested = next
     if (next) deps.open(next)
-    else deps.close(finished)
+    else deps.close()
   }
-  const poll = async (): Promise<void> => {
+  async function finish(previous: MiniSessionContext, observed: ForegroundLease | null, token: number): Promise<void> {
+    // A fast tool can finish between polls. Only a signal tagged for that exact run qualifies here.
+    const last = observed ?? await deps.readForeground().catch(() => null)
+    if (stopped || generation !== token || deps.hasForsionFocus() || !last?.targetPid || !previous.sessionId) return
+    if ((!observed && last.runId !== previous.runId) || (last.id && last.id === relinquished)) return
+    await deps.restore(previous.sessionId, last.targetPid)
+  }
+  function refresh(lease?: ForegroundLease | null): void {
+    if (stopped) return
+    const next = deps.session()
+    if (context.sessionId !== next.sessionId || context.runId !== next.runId) {
+      const previous = context, observed = owner, wasDismissed = dismissed
+      context = { ...next }; generation++; owner = null; dismissed = false
+      display(null)
+      if (!wasDismissed && previous.runId && !next.runId && previous.sessionId === next.sessionId && !deps.hasForsionFocus()) {
+        void finish(previous, observed, generation)
+      }
+    }
+    if (deps.hasForsionFocus()) {
+      if (owner?.id) relinquished = owner.id
+      owner = null; display(null); return
+    }
+    if (!context.runId || dismissed) return
+    if (lease && (!lease.id || lease.id !== relinquished) && (!lease.runId || lease.runId === context.runId)) owner = lease
+    display(owner && !deps.manualMiniVisible() ? context.sessionId : null)
+  }
+  context = { ...context }
+  async function poll(): Promise<void> {
     if (stopped || checking) return
     checking = true
-    try { const active = await deps.readForeground(); if (!stopped) foreground = active }
-    catch { foreground = false }
-    finally { checking = false }
-    refresh()
+    try { refresh(await deps.readForeground()) } catch { refresh() } finally { checking = false }
   }
   const timer = setInterval(() => void poll(), 60)
   void poll()
   return {
     refresh,
-    /** Manual entry/dismissal wins for the remainder of this run. */
-    dismiss(): void {
-      const { sessionId, runId } = deps.session()
-      suppressed = sessionId && runId ? JSON.stringify([sessionId, runId]) : null
-      episode = null
-      if (requested) { requested = requestedKey = null; deps.close() }
-    },
+    dismiss(): void { dismissed = true; owner = null; generation++; display(null) },
     wants(sessionId: string): boolean { return !stopped && requested === sessionId },
-    following(): boolean {
-      const { sessionId, runId } = deps.session()
-      const sameRun = !!foregroundRun && foregroundRun === JSON.stringify([sessionId, runId])
-      return !stopped && (foreground || sameRun) && !deps.hasForsionFocus()
-    },
-    stop(): void { stopped = true; clearInterval(timer); requested = requestedKey = episode = foregroundRun = null; deps.close() },
+    following(): boolean { return !stopped && !!owner && !deps.hasForsionFocus() },
+    stop(): void { stopped = true; generation++; clearInterval(timer); owner = null; display(null) },
   }
 }

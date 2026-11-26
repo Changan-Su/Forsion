@@ -2467,6 +2467,17 @@ let pendingMainPanelTarget: MainPanelTarget | null = null
 let mainPanelReady = false
 
 let miniSession: MiniSessionContext = { sessionId: null, runId: null }
+type ComputerChat = { window: BrowserWindow; sessionId: string; runId: string | null }
+const computerChats = new Map<string, ComputerChat>()
+let computerChat: ComputerChat | null = null
+async function readChatForeground() {
+  const lease = await readComputerUseForeground()
+  const source = lease?.runId ? computerChats.get(lease.runId) : undefined
+  if (source && !source.window.isDestroyed()) computerChat = source
+  return lease
+}
+function computerSession(): MiniSessionContext { return computerChat ?? miniSession }
+
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
@@ -2512,7 +2523,7 @@ function kickAutomationForComputer(): void {
 }
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
-/** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
+/** 最后获焦的普通 Forsion 窗口。 */
 let lastFocusedWindow: BrowserWindow | null = null
 /** 「引用刚才在用的窗口」的全局快捷键(electron/appRefHotkey.ts):成对修饰键时订阅的手势(要助手);普通组合键时注册的
  *  Electron 全局快捷键;这次运行问没问过更新助手;主窗关着时按下的那一条。 */
@@ -2522,7 +2533,6 @@ let appRefWantedAccel: string | null = null
 let appRefHelperAsked = false
 let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
-let autoMiniReturnTo: BrowserWindow | null = null
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
 type MiniDockState = { edge: Edge; expanded: boolean; displayId: number; workArea: Rect }
 
@@ -2667,15 +2677,23 @@ function clearIdleMiniResizeMask(m: MiniEntry): void {
   m.win.setShape([])
 }
 
-function closeAutoMini(restore = false): void {
-  const win = autoMiniWindow, back = autoMiniReturnTo
-  autoMiniWindow = null; autoMiniSessionId = null; autoMiniReturnTo = null
+function closeAutoMini(): void {
+  const win = autoMiniWindow
+  autoMiniWindow = null; autoMiniSessionId = null
   if (win && !win.isDestroyed()) win.destroy()
-  // Computer Use 跑完:回到开场时用户所在的 Forsion 窗口。期间被用户自己藏起来的不强拉。
-  if (!restore || !back || back.isDestroyed() || !(back.isVisible() || back.isMinimized())) return
-  if (back.isMinimized()) back.restore()
+}
+
+async function returnToConversation(sessionId: string, targetPid: number): Promise<void> {
+  // Prefer the renderer that submitted this run. Older renderers report the main conversation.
+  const origin = computerChat
+  const owner = origin?.window ?? mainWindow
+  if (!owner || owner.isDestroyed()) return
+  const front = await askHelper(helperSocketPath(), { cmd: 'getFrontmost', pidOnly: true }, 800).catch(() => null) as { pid?: number } | null
+  if (front?.pid !== targetPid || origin !== computerChat || owner.isDestroyed() || !owner.isVisible()
+    || computerSession().sessionId !== sessionId || computerSession().runId || BrowserWindow.getFocusedWindow()) return
+  owner.webContents.send('window:computerUseReturn', sessionId)
   if (!QUIET_WINDOWS) app.focus({ steal: true })
-  present(back)
+  present(owner)
 }
 
 /** A temporary observer: parked top-right, owns no saved Mini layout, and opens without activating the app.
@@ -2684,7 +2702,6 @@ function closeAutoMini(restore = false): void {
 function openAutoMini(sessionId: string): void {
   closeAutoMini()
   autoMiniSessionId = sessionId
-  autoMiniReturnTo = lastFocusedWindow
   const size = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
   const position = topRightPosition(size, screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea)
   const win = new BrowserWindow({
@@ -5582,10 +5599,33 @@ app.whenReady().then(async () => {
       screen.getDisplayMatching(from.bounds).workArea)
     m.resizeUpdates.push(next)
   })
+  ipcMain.on('window:computerUseChat', (e, phase: unknown, raw: unknown) => {
+    if (!isTrustedSender(e)) return
+    const window = BrowserWindow.fromWebContents(e.sender)
+    const { sessionId, runId } = normalizeMiniSessionContext(raw)
+    if (!window || !sessionId || !runId) return
+    if (phase === 'start') {
+      const origin = { window, sessionId, runId }
+      computerChats.set(runId, origin)
+      if (!computerChat?.runId || !miniAutoPanel?.following()) computerChat = origin
+    } else if (phase === 'end') {
+      const origin = computerChats.get(runId)
+      if (!origin || origin.window !== window || origin.sessionId !== sessionId) return
+      computerChats.delete(runId)
+      origin.runId = null
+    } else return
+    miniAutoPanel?.refresh()
+  })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
     const prevSession = miniSession.sessionId
     miniSession = normalizeMiniSessionContext(raw)
+    if (computerChat && (computerChat.window.isDestroyed() || (computerChat.window === mainWindow
+      && prevSession === computerChat.sessionId && miniSession.sessionId !== prevSession)
+      || (!computerChat.runId && miniSession.runId && prevSession !== miniSession.sessionId))) {
+      if (computerChat.runId) computerChats.delete(computerChat.runId)
+      computerChat = null
+    }
     miniAutoPanel?.refresh()
     if (miniSession.sessionId !== prevSession) syncSessionPanels()
   })
@@ -5836,12 +5876,20 @@ app.whenReady().then(async () => {
   registerPtyIpc(isTrustedSender)
   if (PRODUCT.agentBackend && process.platform === 'darwin' && !SANDBOX) {
     miniAutoPanel = startMiniAutoPanel({
-      readForeground: readComputerUseForeground,
+      readForeground: readChatForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
       hasForsionFocus: () => { const w = BrowserWindow.getFocusedWindow(); return !!w && w !== autoMiniWindow },
       manualMiniVisible: () => liveMinis().some((m) => m.win.isVisible()),
-      session: () => miniSession,
-      open: openAutoMini, close: closeAutoMini,
+      session: computerSession,
+      open: openAutoMini, close: closeAutoMini, restore: returnToConversation,
+    })
+    app.on('web-contents-created', (_event, contents) => {
+      contents.once('destroyed', () => {
+        for (const [id, source] of computerChats) if (source.window.isDestroyed() || source.window.webContents === contents) computerChats.delete(id)
+        if (computerChat && (computerChat.window.isDestroyed() || computerChat.window.webContents === contents)) {
+          computerChat = null; miniAutoPanel?.refresh()
+        }
+      })
     })
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
