@@ -66,12 +66,12 @@ import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccoun
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, prepareInstall, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, prepareInstall, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged, pinDownloaded, unpinDownloaded, pinStillValid, installPinned } from './updater'
 import { waitForNetwork } from './updaterUtil'
 import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
-import { createRestartGuard, readRestartActivity } from './restartGuard'
+import { createIdleInstall, createRestartGuard, createShutdownLock, readRestartActivity, requestEngineHold } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
@@ -2099,6 +2099,27 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
 // 用户这时多半会再点一次图标 → second-instance)。主窗由启动流程自己建,唤起请求那时自然满足。
 let startupWindowGate = true
 /** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
+/**
+ * Voice-call presence for the unattended install. Genesis services/realtimeCall.ts keeps the call's session id in localStorage
+ * (`forsion_voice_call_active`, shared by every same-origin app window) while a call is up; read it through the main window.
+ * true / false; null = cannot be read (no live main window, a script error, no answer within 2 s), which the caller treats as busy.
+ */
+async function readVoiceCallActive(): Promise<boolean | null> {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  if (!win || win.webContents.isDestroyed() || win.webContents.isCrashed()) return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const v = await Promise.race([
+      win.webContents.executeJavaScript(
+        "(() => { try { const v = localStorage.getItem('forsion_voice_call_active'); return v === null ? '' : String(v) } catch { return null } })()",
+      ),
+      new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), 2000) }),
+    ])
+    if (typeof v !== 'string') return null
+    return !(v === '' || v === 'false')
+  } catch { return null } finally { if (timer) clearTimeout(timer) }
+}
+
 function showMainWindow(): void {
   // 有人明确要主窗(正常二启 / 托盘 / 通知……):Space 快捷方式冷启动的「先不显示主窗」作废,启动途中来的也算(Codex 评审)。
   mainRequested = true
@@ -3780,7 +3801,10 @@ app.whenReady().then(async () => {
     return { restartPending: bundleRestartPending(id) }
   })
   // 「重启以生效」:走正常退出链(引擎 / 同步收尾),退完再拉起。dev(electron-vite)下拉不起来就手动重跑 npm run dev。
+  // One shutdown at a time: the interactive restart guard and the unattended install (installIfIdle) share this lock.
+  const shutdownLock = createShutdownLock()
   const guardedRestart = createRestartGuard({
+    lock: shutdownLock,
     inspect: async () => {
       const st = backend.getStatus()
       // External/cloud engines survive this desktop restarting; only inspect the engine we stop.
@@ -5025,6 +5049,49 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
     if (!canInstallUpdate() || getUpdaterStatus().phase !== 'downloaded') return { ok: false }
     return guardedRestart(true)
+  })
+  // Unattended, version-bound install (Extend forced update on hosts that have it): installs the downloaded package only if it is
+  // exactly `version` and nobody is using the machine, never shows the restart dialog, and answers a reason code otherwise.
+  // Contract and order of checks: restartGuard.createIdleInstall.
+  const managedEngine = (): { url: string; token: string } | null => {
+    const st = backend.getStatus()
+    return PRODUCT.agentBackend && st.state === 'ready' && st.url ? { url: st.url, token: backend.getToken() } : null
+  }
+  const idleInstall = createIdleInstall({
+    lock: shutdownLock,
+    supported: () => app.isPackaged && !SANDBOX && canInstallUpdate(),
+    quitting: () => isQuitting,
+    pin: (v) => pinDownloaded(v),
+    unpin: (v) => unpinDownloaded(v),
+    pinValid: (v) => pinStillValid(v),
+    osIdleSeconds: () => { try { return powerMonitor.getSystemIdleTime() } catch { return null } },
+    voiceCall: () => readVoiceCallActive(),
+    extendBusy: () => quitGuards.peek(),
+    engine: async () => {
+      const eng = managedEngine()
+      return eng ? { state: 'ready', activity: await readRestartActivity(eng.url, eng.token) } : { state: 'not_ready' }
+    },
+    holdEngine: async (ttlMs) => {
+      const eng = managedEngine()
+      return eng ? requestEngineHold(eng.url, eng.token, ttlMs) : { ok: false, reason: 'engine_not_ready' }
+    },
+    prepare: () => prepareInstall(),
+    flush: async () => { await contentFlush.quit() },
+    resetFlush: () => contentFlush.reset(),
+    beginQuit: () => { isQuitting = true; quitGuards.pass(); deferredEngineRestart.cancel() },
+    stopEngine: () => backend.stop('app_update'),
+    install: (v) => installPinned(v),
+    abortQuit: () => {
+      isQuitting = false
+      quitGuards.reset()
+      contentFlush.reset()
+      void ensureBackend('engine_restart').catch((err) => console.error('[idle-install] engine restart failed:', err))
+    },
+    log: (m) => console.log(m),
+  })
+  ipcMain.handle('updater:installIfIdle', async (e, args: unknown) => {
+    if (!isTrustedSender(e)) throw new Error('forbidden')
+    return idleInstall(args)
   })
 
   // 应用内「卸载 / 清空数据」(mac/linux 无 NSIS 卸载器,靠此;Windows 也可用)。清完 relaunch 为全新状态。

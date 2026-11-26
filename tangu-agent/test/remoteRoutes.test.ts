@@ -314,3 +314,57 @@ describe('退出清单 restart-status(中断任务续跑评审 D5 / D10)', () =>
     expect((await get('/agent/remote/restart-status')).body).toEqual({ tasks: 0, processes: 0, resumable: 0 });
   });
 });
+
+describe('restart hold (desktop installIfIdle: no run may start between the last idle check and the stop signal)', () => {
+  const release = (holdId: string) => post('/agent/remote/restart-hold/release', { holdId });
+
+  it('refuses while a task is running (409 busy), and a remote caller gets 403', async () => {
+    const { runId } = await start('SR', {});
+    await vi.waitFor(async () => expect(await statusOf(runId)).toBe('running'), { timeout: 5000 });
+    const r = await post('/agent/remote/restart-hold', { ttlMs: 5000 });
+    expect([r.status, r.body]).toEqual([409, { ok: false, reason: 'busy', tasks: 1, processes: 0 }]);
+    expect((await post('/agent/remote/restart-hold', {}, REMOTE_HDR)).status).toBe(403);
+    abortRun(runId); await settled(runId);
+  });
+
+  it('while held a new run stays queued and a second hold is refused; release starts the held run', async () => {
+    const h = await post('/agent/remote/restart-hold', { ttlMs: 20_000 });
+    expect(h.status).toBe(200);
+    expect(h.body.ok).toBe(true);
+    expect((await post('/agent/remote/restart-hold', {})).body).toEqual({ ok: false, reason: 'held' });
+    const { runId } = await start('SC', {});
+    await new Promise((r) => setTimeout(r, 150));
+    expect(await statusOf(runId)).toBe('queued');
+    // the held run counts as this process's task, so restart-status / another hold see it
+    expect((await get('/agent/remote/restart-status')).body.tasks).toBe(1);
+    expect((await release('not-the-hold')).body).toEqual({ ok: false });
+    expect(await statusOf(runId)).toBe('queued');
+    expect((await release(h.body.holdId)).body).toEqual({ ok: true });
+    await vi.waitFor(async () => expect(await statusOf(runId)).toBe('running'), { timeout: 5000 });
+    expect((await release(h.body.holdId)).body).toEqual({ ok: false }); // already released
+    abortRun(runId); await settled(runId);
+  });
+
+  it('a hold nobody releases lapses after its ttl and the held run starts', async () => {
+    const h = await post('/agent/remote/restart-hold', { ttlMs: 1000 });
+    expect(h.body.ok).toBe(true);
+    const { runId } = await start('SM', {});
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await statusOf(runId)).toBe('queued');
+    await vi.waitFor(async () => expect(await statusOf(runId)).toBe('running'), { timeout: 5000 });
+    abortRun(runId); await settled(runId);
+  });
+
+  it('a run aborted while held frees its session on release (the next run in it starts)', async () => {
+    const h = await post('/agent/remote/restart-hold', { ttlMs: 20_000 });
+    const first = await start('SN', {});
+    await new Promise((r) => setTimeout(r, 100));
+    abortRun(first.runId);
+    await settled(first.runId);
+    expect(await statusOf(first.runId)).toBe('aborted');
+    await release(h.body.holdId);
+    const next = await start('SN', {});
+    await vi.waitFor(async () => expect(await statusOf(next.runId)).toBe('running'), { timeout: 5000 });
+    abortRun(next.runId); await settled(next.runId);
+  });
+});

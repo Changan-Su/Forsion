@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { accountWorkspaceDir, bindAccount, claimSessionForCurrentAccount, currentAccountId, isMultiAccount, requireAccountId, runWithAccount } from '../core/accountScope.js';
 import { minutesMs, multiAccountLimits } from '../core/multiAccountLimits.js';
 import { admitRun, holdsAdmission, releaseRun, RunAdmissionError, startRunClock, waitingOnUser, type WaitingFor } from './runAdmission.js';
@@ -406,7 +407,7 @@ export async function waitForRunSettlement(runId: string, timeoutMs = 1000): Pro
 
 /** A host tool invocation has no model loop, but must share native Stop and shutdown semantics. */
 export async function runControlledOperation<T>(runId: string, sessionId: string, signal: AbortSignal, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  if (exiting || abortControllers.has(runId) || runSession.has(runId)) throw new Error('Run cannot start');
+  if (exiting || restartHold || abortControllers.has(runId) || runSession.has(runId)) throw new Error('Run cannot start');
   const ac = new AbortController();
   const cancel = () => ac.abort();
   signal.addEventListener('abort', cancel, { once: true });
@@ -477,6 +478,9 @@ export function startRun(runId: string): void {
 
 function startRunInAccount(runId: string): void {
   if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
+  // Restart hold (unattended update about to stop this engine): do not start; the row stays queued. Release starts it,
+  // a real exit leaves it queued for the next start to claim, exactly like `exiting` above.
+  if (restartHold) { const sid = runSession.get(runId); if (sid) restartHold.held.set(runId, sid); return; }
   const settledSessionId = runSession.get(runId); // enqueueRun 已登记;收尾时 runSession 早被清掉
   // Reconcile while the admission barrier still observes idle. Register the controller synchronously
   // afterwards so early aborts work; dispatch waits for this generation to finish connecting.
@@ -1485,6 +1489,45 @@ export async function drainRunsForExit(timeoutMs: number, reason?: InterruptReas
   await Promise.race([Promise.allSettled(tasks), new Promise<void>((r) => { timer = setTimeout(r, timeoutMs); })]);
   if (timer) clearTimeout(timer);
 }
+
+/**
+ * Restart hold: the desktop host takes it right before it stops this engine for an unattended update, so no run starts
+ * between its last idle check and the stop signal. While held, every run that would start stays queued (startRunInAccount)
+ * and host tool operations refuse. Acquiring is atomic with the caller's idle check (no await in between, see
+ * routes/remote.ts). Only one hold at a time. It lapses after ttlMs, so a host that died mid-shutdown cannot leave the engine
+ * unable to run anything; on release (or lapse) the held runs start, unless the process is exiting, in which case they stay
+ * queued for the next start like any queued run at exit.
+ */
+let restartHold: { id: string; held: Map<string, string>; timer: ReturnType<typeof setTimeout> } | null = null;
+export const RESTART_HOLD_MAX_MS = 60_000;
+
+export function acquireRestartHold(ttlMs: number): string | null {
+  if (restartHold || exiting) return null;
+  const ms = Math.min(Math.max(Number.isFinite(ttlMs) ? Math.floor(ttlMs) : 0, 1000), RESTART_HOLD_MAX_MS);
+  const id = randomUUID();
+  const timer = setTimeout(() => { releaseRestartHold(id); }, ms);
+  if (typeof timer.unref === 'function') timer.unref();
+  restartHold = { id, held: new Map(), timer };
+  return id;
+}
+
+/** true = this id was the active hold and it is now released. */
+export function releaseRestartHold(id: string): boolean {
+  if (!restartHold || restartHold.id !== id) return false;
+  const { held, timer } = restartHold;
+  restartHold = null;
+  clearTimeout(timer);
+  if (exiting) return true;
+  for (const [runId, sid] of held) {
+    if (sessionActive.get(sid) !== runId) continue; // already moved on
+    // Still registered and never started: start it now. Aborted while held (terminalizeQueuedAbort dropped it): free the session.
+    if (runSession.has(runId) && !abortControllers.has(runId)) startRun(runId);
+    else advanceQueue(sid);
+  }
+  return true;
+}
+
+export function restartHoldActive(): boolean { return restartHold !== null; }
 
 /** 测试用:drainRunsForExit 置了进程级「正在退出」,同一测试文件里后面的 run 还要能起。 */
 export function __resetExitForTests(): void { exiting = false; }

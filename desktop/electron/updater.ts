@@ -103,6 +103,13 @@ let macSelfBroken = false
 let squirrelReady = false
 /** prepareInstall 进行中:Squirrel 的报错由它处理,别广播 */
 let staging = false
+/** Version of the package electron-updater last reported downloaded (and we accepted). */
+let downloadedVersion: string | null = null
+/**
+ * Unattended install (main.ts installIfIdle) pinned this downloaded version: until it is unpinned nothing may replace or drop
+ * the package (a channel switch, a re-check, a new download, a source switch), so what quitAndInstall installs is what was checked.
+ */
+let pinned: string | null = null
 
 /** 阶段变了才回调(匿名遥测的 update 事件:见 telemetryHost.appUpdateProps);下载进度那种同阶段的刷新不回调。返回退订。 */
 const phaseListeners = new Set<(status: UpdaterStatus) => void>()
@@ -310,6 +317,7 @@ function ensureWired(): void {
   autoUpdater.on('update-downloaded', (info) => {
     // 取消赶不上收尾(校验 / 改名)时 electron-updater 仍会报完成:作废了的(target 已清 / 版本对不上)不认
     if (dl?.dropped || !target || info.version !== target.version) return
+    downloadedVersion = info.version
     broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false })
   })
   autoUpdater.on('error', (err) => {
@@ -341,6 +349,7 @@ function manualMacSource(version: string): { source: UpdateSource; size?: number
 
 /** mac 应用内自装这条路走不通(下不动 / Squirrel 验签失败):退回浏览器开 .dmg,本次运行不再试。 */
 function degradeToManual(): void {
+  pinned = null
   macSelfBroken = true
   squirrelReady = false
   if (!target) return
@@ -364,6 +373,7 @@ export function checkForUpdates(): Promise<UpdaterStatus> {
 }
 
 async function runCheck(): Promise<UpdaterStatus> {
+  if (pinned) return lastStatus
   // A verified installer is waiting for the user's restart, or one is downloading; a timer/manual recheck must not reset it.
   if (lastStatus.phase === 'downloaded' || dl) return lastStatus
   if (unsupported()) {
@@ -419,7 +429,7 @@ async function runCheck(): Promise<UpdaterStatus> {
  * 由主窗照常弹提示、等用户点(用户点的那次照旧能换源)。下载中用户手动换了源,之后就按手动下载处理。
  */
 export async function downloadUpdate(opts: { auto?: boolean; version?: string } = {}): Promise<void> {
-  if (unsupported() || lastStatus.manualInstall || !target || dl || lastStatus.phase !== 'available') return
+  if (pinned || unsupported() || lastStatus.manualInstall || !target || dl || lastStatus.phase !== 'available') return
   let auto = opts.auto === true
   if (auto) {
     // 主窗是按它看到的那一版查的「跳过这个版本」:期间换了版本(比如关测试版后切回正式版)就不下(Codex 评审)
@@ -485,15 +495,16 @@ export async function downloadUpdate(opts: { auto?: boolean; version?: string } 
  */
 export function channelChanged(beta: boolean): void {
   // mac 已经点了安装、Squirrel 在取 / 已取好:它一取好就会在退出时装上,这时作废只会让界面和实际装的对不上(Codex 评审)
-  if (beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
+  if (pinned || beta || !target || !isPrerelease(target.version) || staging || squirrelReady) return
   if (dl) { dl.dropped = true; dl.token.cancel() }
   target = null
+  downloadedVersion = null
   broadcast({ phase: 'idle' })
 }
 
 /** 下载中手动换到另一边(底栏的「换 GitHub / 换官网」)。 */
 export function switchUpdateSource(): boolean {
-  const next = dl ? otherSource() : null
+  const next = dl && !pinned ? otherSource() : null
   if (!dl || !next) return false
   dl.manual = next
   dl.token.cancel()
@@ -502,7 +513,7 @@ export function switchUpdateSource(): boolean {
 
 /** mac:在浏览器里直接开这一版 .dmg 的下载链接(官网 = 官网下载接口;GitHub = 同一 tag 的资产)。 */
 export async function openUpdateInstaller(): Promise<boolean> {
-  if (process.platform !== 'darwin' || !target || lastStatus.phase !== 'available' || !lastStatus.manualInstall) return false
+  if (pinned || process.platform !== 'darwin' || !target || lastStatus.phase !== 'available' || !lastStatus.manualInstall) return false
   const v = target.version
   const url = lastStatus.source === 'website'
     ? `${WEBSITE_API}/website/download/macos`
@@ -587,3 +598,42 @@ export function installUpdate(): void {
   }
   autoUpdater.quitAndInstall(process.platform !== 'win32', true)
 }
+
+/** Why a version cannot be pinned for an unattended install. */
+export type PinRefusal = 'unsupported' | 'not_downloaded' | 'version_mismatch'
+
+/** Downloaded, verified and installable right now, and it is exactly `version`. Synchronous: no await between check and use. */
+function pinnable(version: string): PinRefusal | null {
+  if (!canInstallUpdate()) return 'unsupported'
+  if (lastStatus.phase !== 'downloaded' || dl || !target || !downloadedVersion) return 'not_downloaded'
+  if (target.version !== version || downloadedVersion !== version || lastStatus.version !== version) return 'version_mismatch'
+  return null
+}
+
+/**
+ * Pin the downloaded package for an unattended install. null = pinned. While pinned, channelChanged / checkForUpdates /
+ * downloadUpdate / switchUpdateSource / openUpdateInstaller leave the package alone. Only one pin at a time.
+ */
+export function pinDownloaded(version: string): PinRefusal | null {
+  if (pinned) return pinned === version ? null : 'version_mismatch'
+  const why = pinnable(version)
+  if (!why) pinned = version
+  return why
+}
+
+export function unpinDownloaded(version: string): void {
+  if (pinned === version) pinned = null
+}
+
+/** The pin still holds and the package still matches (re-checked synchronously right before the point of no return). */
+export function pinStillValid(version: string): boolean {
+  return pinned === version && pinnable(version) === null
+}
+
+/** Install the pinned package, and only it. false = the pin no longer holds (nothing was done). */
+export function installPinned(version: string): boolean {
+  if (!pinStillValid(version)) return false
+  installUpdate()
+  return true
+}
+

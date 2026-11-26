@@ -84,4 +84,36 @@ describe('quitGuard', () => {
     expect(await no.g.confirmFirst()).toBe(false)
     expect(no.g.intercept()).toBe(true)
   })
+
+  it('peek (unattended install): never asks; a throwing guard, a malformed answer or an open dialog all count as busy', async () => {
+    const { g, asked } = setup(() => new Promise<boolean>(() => {}))
+    expect(g.peek()).toBe(false)
+    let mode: 'idle' | 'busy' | 'throw' | 'odd' = 'busy'
+    g.add(() => {
+      if (mode === 'throw') throw new Error('plugin broke')
+      return mode === 'busy' ? { message: 'uploading' } : mode === 'odd' ? ({} as QuitBlock) : null
+    })
+    expect(g.peek()).toBe(true)
+    mode = 'throw'; expect(g.peek()).toBe(true)
+    mode = 'odd'; expect(g.peek()).toBe(true)
+    mode = 'idle'; expect(g.peek()).toBe(false)
+    expect(asked).toEqual([])
+    mode = 'busy'
+    expect(g.intercept()).toBe(true) // a quit dialog opens and stays open
+    mode = 'idle'
+    expect(g.peek()).toBe(true)
+  })
+
+  it('pass (unattended install committed): the before-quit that follows does not ask, even if a guard turned busy late', () => {
+    const { g, asked } = setup(true)
+    let busy = false
+    g.add(() => (busy ? { message: 'late upload' } : null))
+    expect(g.peek()).toBe(false)
+    g.pass()
+    busy = true
+    expect(g.intercept()).toBe(false)
+    expect(asked).toEqual([])
+    g.reset() // the install did not go through: the next quit asks again
+    expect(g.intercept()).toBe(true)
+  })
 })
