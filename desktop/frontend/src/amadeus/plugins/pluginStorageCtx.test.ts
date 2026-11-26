@@ -83,6 +83,46 @@ describe('ctx.storage (renderer half)', () => {
     expect(v.vault()).toBeNull()
   })
 
+  it('hostPath: only when the engine runs on this computer; validates the path; null after disable', async () => {
+    const off = setup()
+    expect(await off.storage.hostPath!('tools')).toBeNull() // 缺省没开本机执行这道门
+    await expect(off.storage.hostPath!('../x')).rejects.toThrow(TypeError) // 门关着也照样拒不合法路径
+    await expect(off.storage.hostPath!(null as unknown as string)).rejects.toThrow(TypeError) // null 不当根
+    expect(off.calls).toEqual([])
+    const calls: PluginStorageRequest[] = []
+    let alive = true
+    const on = createPluginStorage({
+      pluginId: 'demo', alive: () => alive, hostExec: () => true,
+      call: async (r) => { calls.push(r); return '/abs/demo/tools' },
+      vaultRoot: () => '/V', importRoots: () => [],
+    })
+    expect(await on.hostPath!('tools')).toBe('/abs/demo/tools')
+    expect(await on.vault()!.hostPath!()).toBe('/abs/demo/tools')
+    expect(calls).toEqual([{ id: 'demo', op: 'hostPath', path: 'tools' }, { id: 'demo', vault: '/V', op: 'hostPath', path: '' }])
+    await expect(on.hostPath!('../x')).rejects.toThrow(TypeError)
+    await expect(on.hostPath!('vaults/x')).rejects.toThrow(TypeError)
+    alive = false
+    expect(await on.hostPath!('tools')).toBeNull()
+    expect(calls).toHaveLength(2)
+  })
+
+  it('hostPath: a reply that lands after disable or an engine switch is dropped', async () => {
+    let alive = true, local = true
+    let release!: (v: string) => void
+    const s = createPluginStorage({
+      pluginId: 'demo', alive: () => alive, hostExec: () => local,
+      call: () => new Promise((r) => { release = r as (v: string) => void }),
+      vaultRoot: () => null, importRoots: () => [],
+    })
+    const a = s.hostPath!('tools')
+    local = false; release('/abs/demo/tools')
+    expect(await a).toBeNull()
+    local = true
+    const b = s.hostPath!('tools')
+    alive = false; release('/abs/demo/tools')
+    expect(await b).toBeNull()
+  })
+
   it('importFromVault sends this plugin\'s folders and the target layer', async () => {
     const { storage, calls, setVault } = setup()
     await storage.importFromVault({ id: 'drafts-v1', from: 'Plugins/demo/drafts', to: 'drafts' })

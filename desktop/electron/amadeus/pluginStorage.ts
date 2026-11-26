@@ -343,6 +343,11 @@ export function createPluginStorageHost(deps: PluginStorageHostDeps) {
           await fs.rename(from.abs, to.abs)
         })
       }
+      case 'hostPath': {
+        // 只算路径:规整 + 钳在文件夹里 + 按真实路径核(软链出逃照样拒),不建文件夹、不查存在
+        const { abs } = await resolve(id, vault, req.path === undefined ? '' : req.path, { allowRoot: true })
+        return path.resolve(abs) // 家目录给的是相对路径时也交出绝对路径
+      }
       case 'usage':
         return usage(id)
       case 'clearCache': {

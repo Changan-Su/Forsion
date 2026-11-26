@@ -2336,6 +2336,12 @@ export interface PluginStorage {
    *  so a later call can still copy it, e.g. after sync delivers it). A completion record that cannot be read or recognised rejects.
    *  Needs an open library. */
   importFromVault(opts: PluginStorageImportOptions): Promise<{ status: 'complete' | 'already-done' | 'missing'; copied: number; skipped: string[] }>
+  /** Absolute path of a file or folder in this layer (`''` or omitted = the layer root) on the computer the engine runs
+   *  on — for handing tools or job folders to the Agent / a script (e.g. a `cwd`, a script path). null unless the engine
+   *  runs on this computer (the same gate as `ctx.app.hostPath`), on mobile, and after your plugin is turned off.
+   *  Rejects on an invalid path. Only computes the path: it does not create the folder or check that it exists, so
+   *  write into it first. 2026-11-26+; older hosts lack it: `await ctx.storage?.hostPath?.('tools')`. */
+  hostPath?(path?: string): Promise<string | null>
 }
 
 export interface PluginContext {

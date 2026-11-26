@@ -16,6 +16,8 @@ export interface PluginStorageDeps {
   vaultRoot(): string | null
   /** 本插件在库里可以当「复制进来」来源的文件夹(工作文件夹、Plugins/<id>、Plugins/<旧显示名>)。 */
   importRoots(): string[]
+  /** 引擎和宿主在同一台机器的同一个文件系统上(同 ctx.app.hostPath 那道门)。缺省 = 不是 → hostPath 回 null。 */
+  hostExec?(): boolean
 }
 
 const gone = (): Error => new Error('plugin-disposed')
@@ -52,6 +54,15 @@ export function createPluginStorage(deps: PluginStorageDeps): PluginStorage {
         const rel = normalizeStoragePath(path, { appLayer: !vault })
         const prefix = storageLayerPrefix(vault)
         return deps.url?.(deps.pluginId, prefix ? `${prefix}/${rel}` : rel) ?? null
+      },
+      hostPath: (path) => {
+        // 路径不合法 → reject(先于门槛判,哪个宿主上都一样拒);停用 / 引擎不在本机 → null;宿主只算路径,不建文件夹。
+        // 回来时再核一次门槛:等 IPC 期间插件停用或切到外部引擎,不交出路径。
+        const raw = path === undefined ? '' : path
+        try { normalizeStoragePath(raw, { allowRoot: true, appLayer: !vault }) } catch (e) { return Promise.reject(e) }
+        const ok = (): boolean => deps.alive() && !!deps.hostExec?.()
+        if (!ok()) return Promise.resolve(null)
+        return call<string | null>({ op: 'hostPath', path: raw }).then((p) => (ok() && typeof p === 'string' && p ? p : null))
       },
       vault: () => {
         if (!deps.alive()) return null
