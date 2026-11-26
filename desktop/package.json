@@ -59,6 +59,7 @@
     "e2e:notemove:metadata": "node scripts/note-move-metadata.e2e.cjs",
     "e2e:filelink": "node scripts/file-wikilink.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
+    "e2e:ribbon-motion": "node scripts/ribbon-motion.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
     "e2e:spaceshortcut": "node scripts/space-shortcut.e2e.cjs",
     "e2e:unitwindow": "node scripts/unit-window.e2e.cjs",

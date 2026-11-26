@@ -192,7 +192,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 }
 .rb-slot.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); } /* 落点线常驻透明,换落点原地淡出淡入(dropIndicator.css) */
 .rb-label { font-size: var(--ui-font-body, 13px); line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rb { transition: width var(--duration-fast, 0.15s) ease; }
+/* .rb 的宽度过渡在文件末尾「Ribbon 开合零位移」一段(2026-11-26 起 --duration-base × --ease-surface) */
 /* ribbon 内可交互元素一律 no-drag(否则落在 -webkit-app-region:drag 的 .rb 上会被当成拖窗)。 */
 .rb-btn, .rb-group .account-card, .rb-group .ribbon-account { -webkit-app-region: no-drag; }
 .rb-group .account-card { flex: 0 0 auto; }
@@ -1132,4 +1132,67 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
   box-shadow: 0 0 0 var(--focus-ring, 2px) var(--sel-line, currentColor),
     0 calc(-2px - var(--menu-shell-padding, 4px)) 0 var(--surface-menu, var(--bg-card, var(--bg))),
     0 -2px 0 3px var(--surface-menu, var(--bg-card, var(--bg)));
+}
+
+/* ===== Ribbon 开合零位移(2026-11-26,方案页 docs/ToBeImproved/胶囊收起与Ribbon过渡方案_2026-11-26/ribbon.html,用户选建议) =====
+ * 收起与展开同一套几何:组靠左铺满、两侧内距 6、行高 32(Ribbon.tsx slotH 同为常量)、按钮左内距 7 —— 32 宽时 18px 图标正好居中于 44,
+ * 展开后还在同一个 x。动的只有条宽(--duration-base × --ease-surface)和名字的透明度。原来展开换行高 34、对齐从居中换靠左、
+ * 账号换成两行卡,整列图标上下挪 17–24px、收起那帧横移 43px(instrument/rb-probe.cjs 逐帧量)。
+ * 只管条上的各组(.rb > .rb-head / .rb-group);收纳夹、「+N」浮层的行也在 .rb 里,不动它们。放文件末尾:.rb 那条与上面同特异性(§7)。 */
+.rb { align-items: stretch; transition: width var(--duration-base, 0.2s) var(--ease-surface, ease); }
+.rb > :is(.rb-head, .rb-group) { align-items: stretch; padding: 0 6px; }
+.rb > .rb-group :is(.rb-slot, .rb-recent-slot, .rb-cell) { width: 100%; justify-content: stretch; }
+.rb > .rb-group .rb-strip-in { align-items: stretch; }
+.rb > :is(.rb-head, .rb-group) .rb-btn { width: 100%; height: 32px; justify-content: flex-start; gap: 8px; padding: 0 7px; }
+/* 图标不参与收缩:原来字一挂上、按钮还只有 44 宽,18px 图标被 flex 压成 1.7px 宽的小点 */
+.rb > :is(.rb-head, .rb-group) .rb-btn > :is(svg, .rb-more-n, .unitsw-ic) { flex: none; }
+.rb > :is(.rb-head, .rb-group) .rb-btn > svg[width='16'] { margin-inline: 1px; } /* ＋ 是 16px:补 1px,中心对齐 18px 的那一列 */
+.rb > .rb-group .rb-more-n { width: 18px; text-align: center; }
+/* 名字常驻:不参与挤压(只裁),右缘渐隐代替省略号 —— 宽度还在长的时候不会一截截冒出「T…」;收起先 80ms 淡掉再藏(台架点不到看不见的字),
+ * 展开晚 60ms 淡入。用 filter 不用 opacity:calm.css 的外围淡出写的是 opacity,两者相乘;transition 一并带上它那条。 */
+.rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: clip; text-align: start; /* 占满剩余宽度后,button 缺省的 text-align:center 会把字摆到正中 */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
+  filter: opacity(0); visibility: hidden;
+  transition: filter var(--menu-exit-duration, 80ms) var(--ease-exit, ease), visibility 0s linear var(--menu-exit-duration, 80ms),
+    opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+}
+.rb.rb-expanded > :is(.rb-head, .rb-group) .rb-btn > .rb-label {
+  filter: opacity(1); visibility: visible;
+  transition: filter var(--duration-fast, 0.15s) var(--ease-calm, ease) calc(var(--duration-fast, 0.15s) * 0.4), visibility 0s, opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+}
+/* 折叠钮:一枚 »,展开转 180° 成 «,跟条宽同一只表。特异性压过 calm.css 的 `.rb .rb-btn > *`(它的 transition 只写 opacity,会把旋转吞成一跳),
+ * 所以它那条 opacity 过渡也一并带上。 */
+.rb > .rb-head .rb-btn > .rb-toggle-ic { transition: rotate var(--duration-base, 0.2s) var(--ease-surface, ease), opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s)); }
+.rb.rb-expanded > .rb-head .rb-btn > .rb-toggle-ic { rotate: 180deg; }
+/* 角标 / 红点 / 进度环:两种状态同一个落点(收起态原来的位置),贴图标右上;右侧照旧留给 ⌘N 提示。
+ * 数字角标以右缘定位(= 原来收起态的 right:-3px),位数多了往左长 —— 往右长会被 .rb-strip 的裁切切掉「99+」(Codex 评审 P2)。 */
+.rb > .rb-group .rb-space .rb-badge { top: -3px; left: 35px; right: auto; translate: -100% 0; transform: none; }
+.rb > .rb-group .rb-btn > .rb-badge.rb-dot { top: 4px; left: 20px; right: auto; translate: none; }
+.rb > .rb-group .rb-space > .rb-badge.rb-ring { top: 1px; left: 18px; right: auto; translate: none; }
+/* 账号:收起是 30px 头像,展开的账号卡压成同高的一行(头像 + 名字 + 会员标);头像左缘 7,和收起时同一处。
+ * 原来第二行的状态字(引擎未运行 / 登录过期 / 未登录)在卡的悬停浮签里(title),卡上改挂收起态那颗红点。 */
+.rb > .rb-pinned .ribbon-account { margin-left: 1px; }
+.rb > .rb-pinned .account-card { height: 30px; padding: 0 4px 0 1px; gap: 8px; border-radius: var(--radius-pill, 999px); overflow: hidden; position: relative; }
+.rb > .rb-pinned .account-card .account-meta { flex-direction: row; align-items: center; gap: 5px; animation: rb-account-meta-in var(--duration-fast, 0.15s) var(--ease-calm, ease) calc(var(--duration-fast, 0.15s) * 0.4) both; }
+/* 名字至少留 28px(两三个字),会员标在剩下的地方里缩 —— ULTRA 或较长的方案名不会把名字挤没(Codex 评审 P2) */
+.rb > .rb-pinned .account-card .account-name-row { min-width: 28px; flex: 1 1 auto; }
+.rb > .rb-pinned .account-card .account-name { text-overflow: clip; }
+.rb > .rb-pinned .account-card .account-meta > .tier-badge { flex: 0 1 auto; min-width: 0; align-self: center; }
+.rb > .rb-pinned .account-card .account-sub { display: none; }
+.rb > .rb-pinned .account-card:is(.expired, .engine-down)::after {
+  content: ''; position: absolute; top: 0; left: 23px; width: 9px; height: 9px;
+  border-radius: var(--radius-pill, 999px); background: var(--danger, #e5484d); border: 1.5px solid var(--sidebar-bg);
+}
+/* 引擎启动中:原来第二行的那句状态字在单行卡里没了地方,改在红点同一处挂一颗呼吸的主题色点(收起态头像同样有) */
+.rb > .rb-pinned :is(.account-card, .ribbon-account).engine-starting { position: relative; }
+.rb > .rb-pinned :is(.account-card, .ribbon-account).engine-starting::after {
+  content: ''; position: absolute; top: 0; left: 23px; width: 9px; height: 9px;
+  border-radius: var(--radius-pill, 999px); background: var(--accent); border: 1.5px solid var(--sidebar-bg);
+  animation: pulse-soft calc(var(--duration-base, 0.2s) * 7) var(--ease-calm, ease) infinite;
+}
+@keyframes rb-account-meta-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .rb, .rb > .rb-head .rb-btn > .rb-toggle-ic, .rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label { transition: none; }
+  .rb > .rb-pinned .account-card .account-meta, .rb > .rb-pinned .engine-starting::after { animation: none; }
 }

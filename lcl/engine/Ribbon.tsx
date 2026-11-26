@@ -8,7 +8,7 @@
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, Pencil, Plus, Shapes, Zap } from 'lucide-react'
+import { ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, Pencil, Plus, Shapes, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
@@ -87,7 +87,8 @@ function RibbonItemView({ item, expanded, dot, compact }: { item: RibbonItem; ex
       {Icon && <Icon size={18} />}
       {dot && <span className="rb-badge rb-dot" aria-hidden="true" />}
       {/* 展开态一行放不下末尾的快捷键括注(「命令面板 (⌘K)」):条上的行剥掉,收起态的浮签照旧带着。 */}
-      {expanded && <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>}
+      {/* 名字常驻(收起时由 CSS 淡掉、裁掉),开合只淡入淡出,不硬挂硬摘 */}
+      <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>
     </button>
   )
 }
@@ -116,7 +117,7 @@ function CmdItemView({ cmd, expanded, overrideIcon, compact }: { cmd: Command; e
       }}
     >
       <Icon size={18} />
-      {expanded && <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>}
+      <span className="rb-label">{compact ? moreRowLabel(name) : name}</span>
     </button>
   )
 }
@@ -456,7 +457,9 @@ export function Ribbon() {
   })
 
   // ---- 溢出测算:两区弹性分配,总量不够时各保一半;超配区尾部收进「…」 ----
-  const slotH = (expanded ? 34 : 32) + GAP
+  // 槽高不随展开变(2026-11-26,方案页 docs/ToBeImproved/胶囊收起与Ribbon过渡方案_2026-11-26/):原来展开 34、收起 32,
+  // 一开一合整列图标上下挪(上区往下推、命令区往上顶、最近使用重新居中)。
+  const slotH = 32 + GAP
   useLayoutEffect(() => {
     const el = rootRef.current
     if (!el) return
@@ -1113,7 +1116,7 @@ export function Ribbon() {
       >
         <Icon size={18} />
         {f.items.some((id) => dotted.has(id)) && <span className="rb-badge rb-dot" aria-hidden="true" />}
-        {expanded && <span className="rb-label">{f.name}</span>}
+        <span className="rb-label">{f.name}</span>
       </button>
     )
   }
@@ -1140,7 +1143,7 @@ export function Ribbon() {
       >
         <span className="rb-more-n" aria-hidden="true">+{tail.length}</span>
         {tail.some((e) => e.kind === 'item' ? dotted.has(e.id) : e.kind === 'folder' && e.folder.items.some((id) => dotted.has(id))) && <span className="rb-badge rb-dot" aria-hidden="true" />}
-        {expanded && <span className="rb-label">{t(zone === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands')}</span>}
+        <span className="rb-label">{t(zone === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands')}</span>
       </button>
     )
   }
@@ -1190,7 +1193,7 @@ export function Ribbon() {
       }}
     >
       <Plus size={16} />
-      {expanded && <span className="rb-label">{plusName(zone)}</span>}
+      <span className="rb-label">{plusName(zone)}</span>
     </button>
   )
   // 命令区靠下贴账号卡,整组 = Spaces 区的镜像:[＋ / 「…」/ 图标…] ↔ [图标… / 「…」/ ＋],
@@ -1349,8 +1352,9 @@ export function Ribbon() {
           data-rb-tip={expanded ? undefined : t('lcl.ribbon.showLabels')}
           onClick={() => st().toggleExpanded()}
         >
-          {expanded ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
-          {expanded && <span className="rb-label">{t('lcl.ribbon.iconsOnly')}</span>}
+          {/* 一枚 »,展开时 CSS 转 180° 成 «(两枚换着画是一帧跳) */}
+          <ChevronsRight size={18} className="rb-toggle-ic" />
+          <span className="rb-label">{t('lcl.ribbon.iconsOnly')}</span>
         </button>
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>

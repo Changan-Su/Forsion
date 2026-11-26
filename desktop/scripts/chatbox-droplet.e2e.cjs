@@ -6,6 +6,7 @@
  *   · 窄 Chat View(480–600):开着时 ＋ 原地淡出、位置留着,其余让位的按钮收完才回来;
  *   · 点了一行 = 直接收(80ms),倒放到一半又点同一颗 = 掉头停在打开;
  *   · 平移主题:胶囊照旧跟菜单进场那一对(180ms)。
+ *   · 收起时胶囊里的字相对胶囊中心的偏移单帧 ≤ 2px(2026-11-26:原来 .is-open 才换三列 grid,倒放第一帧字跳回左边)。
  *  负对照:CBD_ROOT=<main 检出的 desktop>(要有 out/ 构建)跑,「流出 / 倒放」「胶囊左缘不动」「让位的按钮收完才回来」几条必须红。
  *  宽度:900 = 宽排;640 = 窄 Chat View(底排 480–600,排他展开);420 = compact(菜单是带标题的浮层,胶囊不撑宽)。
  *  用法:npm run build && node scripts/chatbox-droplet.e2e.cjs [--only=mode,add,model,ctx] [--widths=900,640,420] [--shots=<目录>] */
@@ -43,6 +44,8 @@ async function film(win, k, ms, act) {
       const layers = [...document.querySelectorAll('.lcl-droplet')].filter((l) => l.style.display !== 'none')
       const add = view.querySelector('.add-pill-wrap')
       return {
+        // 胶囊里的字:中心相对胶囊中心的偏移(2026-11-26 收起时字一帧跳回左边的回归)
+        lbl: (() => { const l = pill?.querySelector('.t2c-pill-label, .pill-ultra-label, .pill-marquee'); const p = rect(pill), r = rect(l); return p && r ? (r.l + r.w / 2) - (p.l + p.w / 2) : null })(),
         t: Math.round(performance.now() - t0), pill: rect(pill), panel: !!panel, pouring: !!panel?.classList.contains('lcl-droplet-pouring'),
         // ctx 的浮层(宽 Chat View)一直挂着,开没开看外层 .is-open
         layers: layers.length, mounted: k === 'ctx' ? !!view.querySelector('.t2c-ctxring.is-open') || live().some((p) => !view.contains(p)) : live().length > 0,
@@ -130,6 +133,10 @@ async function film(win, k, ms, act) {
           check(`${tag} ${k}: 收时胶囊只缩不胀`, ws.every((w, i) => i === 0 || w <= ws[i - 1] + 0.5), ws.map(Math.round))
           const edges = close.filter((f) => f.pill).map((f) => Math.round(f.pill[growEdge]))
           check(`${tag} ${k}: 收时胶囊${growEdge === 'l' ? '左' : '右'}缘一帧不动(连最后一下)`, Math.max(...edges) - Math.min(...edges) <= 1, edges)
+          const offs = close.map((f) => f.lbl).filter((v) => v != null)
+          const jump = Math.max(0, ...offs.map((v, i) => (i ? Math.abs(v - offs[i - 1]) : 0)))
+          // ＋ 胶囊没有居中的字(只有图标),这条只管模式 / 模型
+          if (k === 'mode' || k === 'model') check(`${tag} ${k}: 收时字跟着胶囊收,不一帧跳回(单帧最大 ${jump.toFixed(1)}px)`, offs.length > 3 && jump <= 2, offs.map((v) => +v.toFixed(1)))
           const shrinkDone = close.findIndex((f, i) => i > 0 && f.pill && Math.abs(f.pill.w - close.at(-1).pill.w) < 1)
           check(`${tag} ${k}: 胶囊和液体一起收完(差 ≤ 120ms)`, gone > 0 && shrinkDone > 0 && Math.abs(close[shrinkDone].t - close[gone].t) <= 120, { shrinkDone: close[shrinkDone]?.t, gone: close[gone]?.t })
         }
