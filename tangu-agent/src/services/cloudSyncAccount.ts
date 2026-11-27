@@ -6,6 +6,16 @@ import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 
+/**
+ * Agents(及记忆)同步先封住(2026-11-27 智库同步统一方案第 0 步:同步先从智库做起)。
+ * 封法:入口锁住、不再跑;用户存下的选择一个字不改;云端已有的那份不删;放开时改成 false 即原样恢复。
+ * 在**动作层**封,不伪造读数:agentSyncPermission / agentSyncDefault 照实返回存着的值 ——
+ * human/(「我的资料」与默认日历)的同意来自总闸或某个 Agent 的 shared,它照常同步,读数一假日历就停更。
+ * 封着时:不推不拉任何 Agent 文件夹、不发现云端 Agent、不执行本机删 Agent 记下的云端删除(记录留着)、
+ * 默认 Agent 记忆的旧全局同步不跑、总闸不能改(409)、保存 Agent 不写 cloudSync。
+ */
+export const AGENT_SYNC_SEALED = true;
+
 interface AgentSyncIdentity { account: string; scope: string }
 const identities = new WeakMap<AgentFilesBrain, () => AgentSyncIdentity | null>();
 
@@ -169,6 +179,41 @@ export function setAgentSyncPermission(slug: string, scope: string, enabled: boo
   const key = consentKey(slug, scope);
   consentControllers.get(key)?.abort(new Error('agent sync consent changed'));
   consentControllers.delete(key);
+}
+
+/**
+ * 封着时(AGENT_SYNC_SEALED)保存 Agent、「共享默认记忆」改了:只动存着那条授权的 shared 位,enabled / follow 原样。
+ * 不能用 setAgentSyncPermission:它按读数写 `{enabled, shared: enabled && shared}`,会把 follow(跟着总闸)那条抹成单独关、
+ * 总闸开着时等于替用户关了这个 Agent(human/ 的同意跟着变窄)。shared 位实际不变就一个字节都不写。返回写没写。
+ *  - 跟着总闸(follow):shared 原样存(总闸关时 setAgentSyncDefault 也是这么存的),仍跟着总闸;
+ *  - 单独设过:enabled 不动,shared = enabled && shared(沿用老语义);
+ *  - 没设过、总闸开着(读数 enabled、shared = 是不是默认 Agent):记成跟着总闸 + 这个 shared,总闸关了照样跟着停;
+ *  - 没设过、总闸没开 / 新同步接管(owner content):读数恒不共享,不写。
+ */
+export function setAgentSyncSharedOnly(slug: string, scope: string, shared: boolean): boolean {
+  if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  let changed = false;
+  withMemoryDirectoryLock(agentSyncDir(slug), () => {
+    const data = readPermissions(slug);
+    const cur = data.accounts[scope];
+    const master = readDefaults()[scope];
+    if (master?.owner === 'content') return;
+    let next: Permission | null = null;
+    if (cur?.follow) {
+      if ((cur.shared === true) !== shared) next = { enabled: false, shared, follow: true, revision: (cur.revision ?? 0) + 1 };
+    } else if (cur) {
+      const enabled = cur.enabled === true;
+      if ((cur.shared === true) !== (enabled && shared)) next = { enabled, shared: enabled && shared, revision: (cur.revision ?? 0) + 1 };
+    } else if (master?.enabled === true && (slug === DEFAULT_AGENT_SLUG) !== shared) {
+      next = { enabled: false, shared, follow: true, revision: 1 };
+    }
+    if (!next) return;
+    data.accounts[scope] = next;
+    atomicSyncWrite(agentsDir(), permissionFile(slug), JSON.stringify(data, null, 2));
+    changed = true;
+  });
+  if (changed) { const key = consentKey(slug, scope); consentControllers.get(key)?.abort(new Error('agent sync consent changed')); consentControllers.delete(key); }
+  return changed;
 }
 
 let sourceController = new AbortController();

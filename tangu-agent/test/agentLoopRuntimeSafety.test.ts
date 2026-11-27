@@ -34,6 +34,8 @@ import { agentSyncScope, setAgentSyncPermission } from '../src/services/cloudSyn
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
 import type { AgentFilesBrain } from '../src/seams/cloudBrain.js';
 import { DockerCleanupError } from '../src/sandbox/dockerLifecycle.js';
+// 这里测的是 Agents 同步放开时的行为:封着(AGENT_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的效果在 test/agentSyncSeal.test.ts
+vi.mock('../src/services/cloudSyncAccount.js', async (original) => ({ ...(await original<typeof import('../src/services/cloudSyncAccount.js')>()), AGENT_SYNC_SEALED: false }));
 
 const realNow = Date.now.bind(Date);
 let home: string;

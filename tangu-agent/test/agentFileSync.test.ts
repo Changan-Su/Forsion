@@ -2,7 +2,7 @@
  * 每-agent 云文件镜像引擎(agentFileSync)。用 TANGU_HOME 临时目录 + 内存 fake AgentFilesBrain
  * (seq/hash/CAS 与当前服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,8 @@ import { agentsDir, humanDir } from '../src/core/tanguHome.js';
 import { createWidget, deleteRecord, findWidgetByName, purgeExpiredWidgets, readRecords, restoreWidget, setRecord, softDeleteWidget, type WidgetPlace } from '../src/services/widgetStore.js';
 import { createHash } from 'node:crypto';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
+// 这里测的是 Agents 同步放开时的行为:封着(AGENT_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的效果在 test/agentSyncSeal.test.ts
+vi.mock('../src/services/cloudSyncAccount.js', async (original) => ({ ...(await original<typeof import('../src/services/cloudSyncAccount.js')>()), AGENT_SYNC_SEALED: false }));
 
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'tangu-afs-')); process.env.TANGU_HOME = home; });
