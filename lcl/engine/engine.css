@@ -1194,15 +1194,18 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
 .rb > .rb-group .rb-space .rb-badge { top: -3px; left: 35px; right: auto; translate: -100% 0; transform: none; }
 .rb > .rb-group .rb-btn > .rb-badge.rb-dot { top: 4px; left: 20px; right: auto; translate: none; }
 .rb > .rb-group .rb-space > .rb-badge.rb-ring { top: 1px; left: 18px; right: auto; translate: none; }
-/* 账号:收起是 30px 头像,展开的账号卡压成同高的一行(头像 + 名字 + 会员标);头像左缘 7,和收起时同一处。
+/* 账号:收起是 30px 头像,展开的账号卡压成同高的一行(头像 + 名字,11-27 起不放会员标);头像左缘 7,和收起时同一处。
  * 原来第二行的状态字(引擎未运行 / 登录过期 / 未登录)在卡的悬停浮签里(title),卡上改挂收起态那颗红点。 */
 .rb > .rb-pinned .ribbon-account { margin-left: 1px; }
-.rb > .rb-pinned .account-card { height: 30px; padding: 0 4px 0 1px; gap: 8px; border-radius: var(--radius-pill, 999px); overflow: hidden; position: relative; }
+/* 2026-11-27 用户选方案 D(docs/ToBeImproved/Ribbon账号卡方案_2026-11-27/):132px 里名字 + 会员标至少一样读不全(原来「Parm」+ 半个「P」),
+ * 展开态只放头像 + 名字,和收起态一样不放会员标;会员标在点头像弹出的账号面板头部,退出登录在面板菜单里。
+ * 退出钮平时 opacity 0 却占着 30px,一并不渲染。别加回卡上的会员标 / 退出钮。 */
+.rb > .rb-pinned .account-card { height: 30px; padding: 0 8px 0 1px; gap: 8px; border-radius: var(--radius-pill, 999px); overflow: hidden; position: relative; }
 .rb > .rb-pinned .account-card .account-meta { flex-direction: row; align-items: center; gap: 5px; animation: rb-account-meta-in var(--duration-fast, 0.15s) var(--ease-calm, ease) calc(var(--duration-fast, 0.15s) * 0.4) both; }
-/* 名字至少留 28px(两三个字),会员标在剩下的地方里缩 —— ULTRA 或较长的方案名不会把名字挤没(Codex 评审 P2) */
+/* 名字占满头像右边的整行(至少 28px) */
 .rb > .rb-pinned .account-card .account-name-row { min-width: 28px; flex: 1 1 auto; }
-.rb > .rb-pinned .account-card .account-name { text-overflow: clip; }
-.rb > .rb-pinned .account-card .account-meta > .tier-badge { flex: 0 1 auto; min-width: 0; align-self: center; }
+.rb > .rb-pinned .account-card .account-name { text-overflow: ellipsis; } /* 账号名是要读的:放不下用省略号,不用渐隐 */
+.rb > .rb-pinned .account-card :is(.account-meta > .tier-badge, .account-logout) { display: none; }
 .rb > .rb-pinned .account-card .account-sub { display: none; }
 .rb > .rb-pinned .account-card:is(.expired, .engine-down)::after {
   content: ''; position: absolute; top: 0; left: 23px; width: 9px; height: 9px;
