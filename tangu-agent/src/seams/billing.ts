@@ -24,7 +24,7 @@ export function cacheWriteArg(cw: CacheWriteUsage | undefined): [] | [CacheWrite
 }
 
 /** logApiUsage 第 12 位(client)之后的尾巴:有写入量才补到第 16 位,没有就不加参数(调用形状与旧版一致)。 */
-export function cacheWriteLogTail(cw: CacheWriteUsage | undefined): unknown[] {
+export function cacheWriteLogTail(cw: CacheWriteUsage | undefined): [] | [undefined, undefined, undefined, CacheWriteUsage] {
   return cw ? [undefined, undefined, undefined, cw] : [];
 }
 
@@ -58,9 +58,9 @@ export interface BillingServices {
     /** 客户端面标识(desktop/2.7.9),来自 run 的 input.client;in-process microserver 面用。 */
     client?: string,
     /** 13–15 位是 server 侧的 served / realtimeBilling / origin,引擎不传(给 undefined 占位)。 */
-    served?: unknown,
-    realtimeBilling?: unknown,
-    origin?: unknown,
+    served?: undefined,
+    realtimeBilling?: undefined,
+    origin?: undefined,
     /** 缓存写入量,后台「扣费详情」按它重算;server 签名末位(第 16 个位置参数)。 */
     cacheWrite?: CacheWriteUsage,
   ): Promise<void>;
