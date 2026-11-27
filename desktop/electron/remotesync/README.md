@@ -53,6 +53,12 @@ Google Drive 授权同样是链接登录,客户端来自 `fsGdrive.ts` 的 `FORS
 `push` 仅上传 = 增量备份(不拉取、不传播删除,冲突以本地为准);`pull` 仅下载 = 增量还原
 (不推送、不传播删除,冲突仍出本地副本)。单向模式绝不动被丢弃方向的基线,切回双向自然收敛。
 
+出网:Dropbox / Google Drive 两个后端由宿主注入 `abortableFetch(net.fetch)`(`remotesyncIpc.ts` 的 `remoteFetch`),
+走 Chromium 网络栈,认系统代理 / PAC / SOCKS —— 主进程 Node 全局 fetch 不认系统代理,国内开系统代理(非 TUN)时连不上。
+包装补齐 net.fetch 与 Node fetch 的差别:不带默认会话的 cookie、不进 HTTP 缓存、响应体读完再交出并和 abort 赛跑。
+后端本身不 import electron,单测照旧 stub 全局 fetch。升级 Electron 后跑 `npm run check:remotesync-netfetch`
+(本机假服务 + 本机假代理,不出网)。S3 / WebDAV / 文件夹不在此列(国内服务为主,用的是各自的库)。
+
 ## 同步语义(自研核心,见 NOTICE.md 合规边界)
 
 - **三方对账**:本地内容 hash ↔ 基线(prevSync,上次收敛点)↔ 远端身份(etag 或 mtime+size)。

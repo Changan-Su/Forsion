@@ -10,11 +10,12 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, app, ipcMain, shell } from 'electron'
+import { BrowserWindow, app, ipcMain, net, shell } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
+import { abortableFetch } from './remotesync/abortableFetch'
 import { clampMaxFile, extraBackend, extraBackendKinds } from './remotesync/backends'
 import { moveAsideFromSync, runSync } from './remotesync/engine'
 import {
@@ -97,6 +98,10 @@ async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncC
 
 interface BuiltRemote { remote: RemoteFs; fingerprint: string; maxFileBytes?: number }
 
+/** Dropbox / Google Drive 出网走 Chromium 网络栈(认系统代理 / PAC / SOCKS):Node 全局 fetch 不认系统代理,
+ *  国内开系统代理(非 TUN)时连不上。net.fetch 读响应体途中不理 abort、默认带 cookie,由 abortableFetch 补齐。 */
+const remoteFetch = abortableFetch((input, init) => net.fetch(input, init))
+
 async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error: string }> {
   if (cfg.backend === 'folder') {
     const p = cfg.folder?.path?.trim()
@@ -118,7 +123,7 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     const key = dbxAppKey(d)
     if (!key || !d?.refreshToken) return { error: 'dropbox-not-connected' }
     return {
-      remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir }),
+      remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir, fetch: remoteFetch }),
       // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
       fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
     }
@@ -128,7 +133,7 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     const client = gdriveClient(g)
     if (!client.clientId || !g?.refreshToken) return { error: 'gdrive-not-connected' }
     return {
-      remote: createGdriveRemote({ ...client, refreshToken: g.refreshToken, baseDir: g.baseDir }),
+      remote: createGdriveRemote({ ...client, refreshToken: g.refreshToken, baseDir: g.baseDir, fetch: remoteFetch }),
       // 指纹绑「客户端 × 账号 × 目录」:drive.file 只看得到本客户端建的文件,换客户端 = 远端可见集整个变了,
       // 必须作废基线走首次合流,否则旧基线会把「看不见」当成「被删」
       fingerprint: `gdrive:${client.clientId}|${g.accountId || ''}|${gdriveBaseSegs(g.baseDir).join('/')}`,
@@ -331,7 +336,7 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
   const pending = dbxPending
   if (!pending) return { ok: false, error: 'auth-not-started' }
   try {
-    const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri)
+    const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri, remoteFetch)
     dbxPending = null
     const cur = (await loadConfig()).dropbox
     const config = await saveConfig({
@@ -370,7 +375,7 @@ function stopGdServer(): void {
  *  换码期间用户又点了一次「连接」:这次的结果作废,不盖掉新的。 */
 async function finishGdriveAuth(attempt: GdAttempt, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
   try {
-    const r = await gdriveExchangeCode(attempt, code, attempt.verifier, attempt.redirectUri)
+    const r = await gdriveExchangeCode(attempt, code, attempt.verifier, attempt.redirectUri, remoteFetch)
     if (gdAttempt !== attempt) return { ok: false, error: 'auth-superseded' }
     gdAttempt = null
     const cur = (await loadConfig()).gdrive
