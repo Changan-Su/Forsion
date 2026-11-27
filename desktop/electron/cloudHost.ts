@@ -111,6 +111,9 @@ export interface CloudHost {
   addFlushHook(fn: FlushHook): () => void
   // ── 2.13.8 起(帮助改进 Forsion:契约 docs/ToBeImproved/默认数据采集方案_2026-10-28/contract.md §3;实现在 telemetryHost.ts)──
   /** 匿名遥测的宿主那一半(2.13.8 起)。宿主只采集、转发,自己不存、不发;发不发、开没开由 Extend 定。 */
+  /** 智库同步第 1 步起(可选):每轮同步交一行记录(形状 = shared/vaultSync.ts 的 SyncRoundRecord;同一 id 再交 = 覆盖那一行)。
+   *  account 不给 = 当前账号。老宿主没有 → Extend 不记。 */
+  syncRecords?: import('../shared/vaultSync').SyncRecordSink
   telemetry?: {
     /** 订阅宿主事件。首个订阅者到来之前宿主最多缓存 50 条(启动早期的崩溃 / 启动耗时),订阅时一次性回放;返回退订。 */
     subscribe(cb: (ev: HostTelemetryEvent) => void): () => void

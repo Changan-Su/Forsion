@@ -298,3 +298,13 @@ function mergeScope(list: SyncScope[]): SyncScope {
 export function vaultReviewCount(view: Pick<VaultSyncView, 'review'>): number {
   return reviewCount(view.review)
 }
+
+/** 远程服务一轮报告里的失败(超大跳过 + 「<动作> <路径>: <原因>」形状的错误)→ 失败清单。状态源和同步记录共用。 */
+export function remoteReportFailures(report: { skippedLarge?: string[]; errors?: string[] } | null | undefined): SyncFailure[] {
+  const out: SyncFailure[] = (report?.skippedLarge ?? []).map((p) => ({ path: p, reason: 'too-large' as const }))
+  for (const e of report?.errors ?? []) {
+    const m = /^(?:push|pull|pushDelete|deleteLocal|join|conflict) (.+?): (.*)$/s.exec(e)
+    out.push(m ? { path: m[1], reason: 'failed', code: m[2] } : { path: '', reason: 'failed', code: e })
+  }
+  return out
+}

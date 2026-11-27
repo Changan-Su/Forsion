@@ -1,6 +1,7 @@
 /** 云同步 IPC 通道(桌面专属,不进 @amadeus-shared/ipc 的三端契约)。 */
 export const SYNC_IPC = {
   get: 'amadeus:sync:get',
+  getAll: 'amadeus:sync:get-all', // 全部旧引擎的状态(镜像 + 共享 + 条目,含空闲的;Forsion Extend 智库同步第 1 步起才有)
   setEnabled: 'amadeus:sync:set-enabled',
   syncNow: 'amadeus:sync:now',
   confirmDeletions: 'amadeus:sync:confirm-deletions', // 放行被删除保护拦下的批量删除

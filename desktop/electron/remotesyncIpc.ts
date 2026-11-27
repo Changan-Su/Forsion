@@ -31,6 +31,8 @@ import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
 import { currentCloudAccountId } from './amadeus/settings'
+import { remoteReportFailures, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
+import { appendSyncRecord } from './syncRecordsIpc'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
@@ -243,6 +245,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if (!opts?.dryRun) {
       lastReport = report
       confirmScope = report.pendingDeletions > 0 ? scope : null
+      recordRemoteRound(report, cfg.backend, rooted.root)
     }
     return report
   } finally {
@@ -250,6 +253,22 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     progress = null
     broadcast()
   }
+}
+
+const RECORD_TARGET: Record<string, SyncTarget> = { penzor: 'penzor', dropbox: 'dropbox', webdav: 'webdav', s3: 's3', folder: 'folder', gdrive: 'gdrive' }
+
+/** 一轮跑完记一行同步记录(只观测,记不上也不影响同步)。 */
+function recordRemoteRound(report: SyncReport, backend: string, root: string): void {
+  try {
+    const failed = remoteReportFailures(report)
+    appendSyncRecord({
+      id: `remote#${report.startedAt}`, feed: 'remote', engine: 'remote', vault: root, target: RECORD_TARGET[backend] ?? 'other',
+      startedAt: report.startedAt, finishedAt: report.finishedAt, completed: report.ok,
+      uploaded: report.pushed, downloaded: report.pulled, merged: 0, renamed: 0,
+      deletedCloud: report.deletedRemote, deletedLocal: report.deletedLocal, held: report.pendingDeletions,
+      failed: failed.slice(0, SYNC_RECORD_MAX_FAILED), failedCount: failed.length,
+    })
+  } catch { /* 记录绝不影响同步 */ }
 }
 
 function resetTimer(cfg: RemoteSyncConfig): void {
