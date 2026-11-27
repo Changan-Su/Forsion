@@ -90,6 +90,10 @@ describe('createPageInFolder 素文件出生', () => {
       store.setState({ pages: ['untitled.md'] })
       await store.getState().createPageInFolder('')
       expect(writes[0]?.path).toBe('Untitled-2.md')
+      writes.length = 0
+      store.setState({ pages: [], files: ['UNTITLED.MD'] }) // 扩展名大写的不在 pages、在 files
+      await store.getState().createPageInFolder('')
+      expect(writes[0]?.path).toBe('Untitled-2.md')
     } finally { setLocaleGlobal('zh') }
   })
 

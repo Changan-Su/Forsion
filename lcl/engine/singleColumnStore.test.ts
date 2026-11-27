@@ -4,7 +4,8 @@
  * Space 都是一张新页**,用户实报「移动端进去每次都是 new 的页面」。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useWorkspace, restoreSingleColumnLayout, setAfterLayoutHook } from './singleColumnStore'
+import { useWorkspace, restoreSingleColumnLayout, setAfterLayoutHook, mainOpenCount } from './singleColumnStore'
+import { beginNavSpace, finishNavSpace } from './navStore'
 import { registerView } from './viewRegistry'
 
 const EMPTY = {
@@ -193,5 +194,41 @@ describe('宽屏并排左栏(横屏平板 / 手机):布局整份换新后有左�
     expect(useWorkspace.getState().leftVisible).toBe(true)
     expect(useWorkspace.getState().leftLeaves.map((r) => r.type)).toEqual(['files'])
     expect(seen).toBe(true)
+  })
+})
+
+// SingleColumnHost 据此判「横着的时候在主区点开过东西没有」(手机转回竖屏落在哪一层,走查 2026-11-19 g)。
+describe('mainOpenCount:只数人点开的', () => {
+  it('主区打开 / 就地换 / 激活各算一次;侧栏里开的不算', () => {
+    const n0 = mainOpenCount()
+    useWorkspace.getState().openView('chat', { sessionId: 's1' }, 'main')
+    useWorkspace.getState().openView('note', { path: 'a.md' }, 'main')
+    const id = useWorkspace.getState().activeMainId as string
+    useWorkspace.getState().activateLeaf(id)
+    useWorkspace.getState().openView('files', {}, 'left')
+    expect(mainOpenCount() - n0).toBe(3)
+  })
+  it('重置布局时默认布局开出来的不算(Codex 评审:横着重置后转回去落在空编辑器上)', () => {
+    useWorkspace.setState({ defaultBuilder: () => { useWorkspace.getState().openView('note', { path: 'b.md' }, 'main') } })
+    const n0 = mainOpenCount()
+    useWorkspace.getState().resetLayout()
+    expect(useWorkspace.getState().mainLeaves.map((r) => r.type)).toEqual(['note'])
+    expect(mainOpenCount()).toBe(n0)
+  })
+  it('切 Space 期间(布局换新连同落点)开的不算;切完再开的照算(从主页「继续」点开 = 先切再开)', () => {
+    const n0 = mainOpenCount()
+    beginNavSpace('home', 'amadeus')
+    try { useWorkspace.getState().openView('note', { path: 'c.md' }, 'main') } finally { finishNavSpace() }
+    expect(mainOpenCount()).toBe(n0)
+    useWorkspace.getState().openView('note', { path: 'd.md' }, 'main')
+    expect(mainOpenCount()).toBe(n0 + 1)
+  })
+  it('还原布局不算', () => {
+    seed()
+    useWorkspace.getState().saveCurrent()
+    useWorkspace.setState(EMPTY)
+    const n0 = mainOpenCount()
+    expect(restoreSingleColumnLayout()).toBe(true)
+    expect(mainOpenCount()).toBe(n0)
   })
 })

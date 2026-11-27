@@ -993,12 +993,26 @@ const SCENES = {
       await page.waitForTimeout(700)
     }
     const where = async () => ({ nav: await stage.nav(page), title: (await stage.state(page))?.title ?? null })
-    let from, back1, sideways, back2, back3
+    // the history of the View on screen: entries and cursor. A page walked to within this trip (as a link followed from a
+    // note would be) is put on by hand after a touch; turning back must not cut it (Codex review: the narrow screen was
+    // announced while the docked list was still open — the list level — and the list's trip rule cut every history to one)
+    const trip = (op) => page.evaluate(async ([navUrl, wsUrl, tripsUrl, what]) => {
+      const { useNav } = await import(/* @vite-ignore */ navUrl)
+      const id = (await import(/* @vite-ignore */ wsUrl)).useWorkspace.getState().activeMainId
+      if (what === 'walk') { (await import(/* @vite-ignore */ tripsUrl)).touchedPage(); useNav.getState().record(id, { key: 'stage:walked-to', restore: () => {} }) }
+      if (what === 'unwalk') useNav.getState().back(id)
+      const st = useNav.getState().stacks[id]
+      return st ? { n: st.entries.length, idx: st.idx, top: st.entries[st.idx]?.key } : null
+    }, [moduleUrl('../lcl/engine/navStore.ts'), moduleUrl('../lcl/engine/singleColumnStore.ts'), moduleUrl('../lcl/engine/listTrips.ts'), op])
+    let from, back1, sideways, back2, back3, walked, kept, contKey, back4
     try {
       await openChat(page, '周末去哪儿')
       from = await where()
+      walked = await trip('walk')
       await turn(true); await turn(false)
       back1 = await where()
+      kept = await trip('read')
+      await trip('unwalk')
       // from the list: turn, open another conversation from the docked column, turn back
       if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
       await turn(true)
@@ -1017,13 +1031,24 @@ const SCENES = {
       if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
       await turn(true); await turn(false)
       back3 = await where()
+      // sideways on Home, a Continue row: it switches to its Space and opens there in one go (Codex review: a re-count
+      // after the Space switch swallowed that open, and turning back landed on the list)
+      await stage.space(page, 'home')
+      await turn(true)
+      const cont = page.locator('.mb-view[data-view="homepage"] .hp-continue-row[data-continue^="chat:"]').first()
+      contKey = await cont.getAttribute('data-continue', { timeout: 4000 }).catch(() => null)
+      if (contKey) { await cont.tap(); await page.waitForTimeout(900) }
+      await turn(false)
+      back4 = { ...(await where()), space: await page.evaluate(() => document.querySelector('.mb-shell')?.dataset.space) }
     } finally {
       await page.setViewportSize(SCREEN)
     }
     return [
       ['turned back from a conversation: the conversation again, not the list', from.nav === 'detail' && back1.nav === 'detail' && back1.title === from.title, JSON.stringify({ from, back1 })],
+      ['…with its history as it was: the page walked to in this trip is still there to go back from', !!walked && walked.n >= 2 && JSON.stringify(kept) === JSON.stringify(walked), JSON.stringify({ walked, kept })],
       ['turned back after opening another one from the docked list: that one', back2.nav === 'detail' && back2.title === sideways.title && /登录页/.test(back2.title || ''), JSON.stringify({ sideways, back2 })],
       ['turned back from the list with nothing opened: the list', back3.nav === 'list', JSON.stringify(back3)],
+      ['turned back after a Continue row was tapped on Home sideways: that conversation, in Chats', !!contKey && back4.nav === 'detail' && back4.space === 'tangu', JSON.stringify({ contKey, back4 })],
     ]
   },
   // On a phone "more" holds only what belongs to the page on screen. First-level pages (Home, a Space's list) have no
@@ -1883,22 +1908,26 @@ const SCENES = {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'amadeus')
     const store = moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts')
-    const pagesNow = () => page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).usePageStore.getState().pages, store)
-    const before = await pagesNow()
+    // the note on screen, not a diff of the page list: earlier scenes put fixtures in the vault and a synthetic list in
+    // memory, and a refresh in between would make them look new (and the cleanup would trash them)
+    const open = () => page.evaluate(async (u) => { const s = (await import(/* @vite-ignore */ u)).usePageStore.getState(); return s.activePage ?? s.activeNotePath ?? null }, store)
     await page.locator(`${LIST} .pl-fab`).tap()
     await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
     await page.waitForTimeout(800)
-    const born = (await pagesNow()).filter((p) => !before.includes(p))
+    const born = await open()
     const title = await page.evaluate(() => { const el = document.querySelector('.mb-main .amx-title-input'); return el ? { value: el.value, placeholder: el.placeholder } : null })
     // name it before deleting it: the next scene's new note is born under this same name a moment later
     await page.keyboard.type('起名检查')
     await page.keyboard.press('Enter')
     await page.waitForTimeout(1200)
+    const named = await open()
     await stage.action(page, 'left')
-    for (const p of (await pagesNow()).filter((x) => !before.includes(x))) await page.evaluate(async ([u, x]) => { await (await import(/* @vite-ignore */ u)).usePageStore.getState().deletePage(x) }, [store, p])
+    for (const p of [named, born]) {
+      if (p && (p === '起名检查.md' || /^(未命名|untitled)(-\d+)?\.md$/i.test(p))) await page.evaluate(async ([u, x]) => { const s = (await import(/* @vite-ignore */ u)).usePageStore.getState(); if (s.pages.includes(x)) await s.deletePage(x) }, [store, p])
+    }
     await page.waitForTimeout(400)
     return [
-      ['a new note is born as 未命名.md in a Chinese app (not untitled.md)', born.length === 1 && born[0] === '未命名.md', JSON.stringify(born)],
+      ['a new note is born as 未命名.md in a Chinese app (not untitled.md)', born === '未命名.md', JSON.stringify(born)],
       ['its empty title shows 无标题 (not the English «New Page»)', !!title && title.value === '' && title.placeholder === '无标题', JSON.stringify(title)],
     ]
   },
