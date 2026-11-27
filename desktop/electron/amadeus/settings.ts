@@ -90,11 +90,23 @@ async function storedConfig(): Promise<StoredConfig> {
   return loading
 }
 
-/** 和 readConfig 一样,但这次启动读配置失败过就 reject(读失败 ≠ 空)。给插件 ctx.app.vaults 这类拿清单做决定的读者。 */
+/** 库清单那几项的形状对不对:lastVault / localVault / syncVault 缺省或 null 都行,有值就得是绝对路径;vaults 缺省或 null 都行,
+ *  有值就得是数组、每行带绝对路径的 root。形状不对 = 配置坏了,不是「没有库」(Codex 评审 P1:`"vaults": "x"` 曾被读成空清单)。 */
+const absPath = (v: unknown): boolean => typeof v === 'string' && v.length > 0 && path.isAbsolute(v)
+function vaultFieldsValid(cfg: AmadeusConfig): boolean {
+  for (const v of [cfg.lastVault, cfg.localVault, cfg.syncVault] as unknown[]) if (v != null && !absPath(v)) return false
+  const list = cfg.vaults as unknown
+  return list == null || (Array.isArray(list) && list.every((row) => !!row && typeof row === 'object' && absPath((row as { root?: unknown }).root)))
+}
+
+/** 和 readConfig 一样,但这次启动读配置失败过、或库清单那几项形状不对就 reject(读失败 ≠ 空)。
+ *  给插件 ctx.app.vaults 这类拿清单做决定的读者;老读法不变。 */
 export async function readConfigStrict(accountId = currentCloudAccountId()): Promise<AmadeusConfig> {
-  const cfg = await readConfig(accountId)
   // 不带原报错:JSON 解析报错会引用配置原文片段,IO 报错带本机路径,都不该经 IPC 交给插件
-  if (loadFailure) throw new Error('amadeus-config-unreadable')
+  const unreadable = (): Error => new Error('amadeus-config-unreadable')
+  let cfg: AmadeusConfig
+  try { cfg = await readConfig(accountId) } catch { throw unreadable() } // 例:配置是 JSON null,老读法在这里抛 TypeError
+  if (loadFailure || !vaultFieldsValid(cfg)) throw unreadable()
   return cfg
 }
 

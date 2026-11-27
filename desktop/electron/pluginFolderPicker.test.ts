@@ -1,10 +1,11 @@
 // 插件的 ctx.app.pickFolder 主进程那半(2026-11-27):选项只认 title / defaultPath、取消回 null、绝不登记本机项目根。
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { PLUGIN_FOLDER_TITLE_MAX, pickPluginFolder, pluginFolderDialogOptions } from './pluginFolderPicker'
 
-const HERE = path.dirname(new URL(import.meta.url).pathname)
+const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ABS = process.platform === 'win32' ? 'C:\\Users\\x\\Backups' : '/Users/x/Backups'
 
 describe('pluginFolderDialogOptions', () => {

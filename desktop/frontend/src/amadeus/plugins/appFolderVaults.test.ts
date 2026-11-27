@@ -61,15 +61,15 @@ describe('ctx.app.pickFolder', () => {
     expect(pickFolder).toHaveBeenCalledWith({ title: 'T' })
   })
 
-  it('停用后 reject plugin-disposed;对话框开着时被停用,选了也不交给插件', async () => {
+  it('停用后 reject plugin-disposed;对话框开着时被停用:当场 reject,之后选了也不交给插件', async () => {
     const d = deferred<string | null>()
     const pickFolder = vi.fn(() => d.promise)
     vi.stubGlobal('window', { tangu: { pickFolder } })
     const ctx = ctxOf('pf-off')
     const pending = ctx.app.pickFolder!()
     usePluginStore.getState().disable('pf-off')
+    await expect(pending).rejects.toThrow('plugin-disposed') // 不等对话框关
     d.resolve('/Users/x/Backups')
-    await expect(pending).rejects.toThrow('plugin-disposed')
     await expect(ctx.app.pickFolder!()).rejects.toThrow('plugin-disposed')
     expect(pickFolder).toHaveBeenCalledTimes(1)
   })
@@ -111,15 +111,15 @@ describe('ctx.app.vaults', () => {
     }
   })
 
-  it('停用后 reject plugin-disposed(含请求在途时停用)', async () => {
+  it('停用后 reject plugin-disposed;请求在途时停用当场 reject,晚到的报错也不交给插件', async () => {
     const d = deferred<unknown>()
     const pluginVaults = vi.fn(() => d.promise)
     bridge.current = { pluginVaults }
     const ctx = ctxOf('v-off')
     const pending = ctx.app.vaults!()
     usePluginStore.getState().disable('v-off')
-    d.resolve([{ root: '/a', name: 'a', current: true, cloud: false }])
     await expect(pending).rejects.toThrow('plugin-disposed')
+    d.reject(new Error('amadeus-config-unreadable')) // 晚到的 IPC 报错被丢掉,不会变成未处理的拒绝
     await expect(ctx.app.vaults!()).rejects.toThrow('plugin-disposed')
     expect(pluginVaults).toHaveBeenCalledTimes(1)
   })

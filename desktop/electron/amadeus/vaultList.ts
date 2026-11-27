@@ -34,11 +34,13 @@ export function vaultList(cfg: VaultFields): VaultEntry[] {
 /** 插件 ctx.app.vaults 的一行(2026-11-27+):形状见 shared/amadeus/ipc.ts 的 PluginVaultRow。 */
 export interface PluginVaultRow { root: string; name: string; current: boolean; cloud: boolean }
 
-/** 插件看到的本机智库清单:就是菜单那份清单(vaultList),外加当前挂着的根(云端镜像库不进 vaults,开着时补上)。
+/** 插件看到的本机智库清单:就是菜单那份清单(vaultList,同样滤掉云端镜像目录),外加当前挂着的根(云端镜像库只在开着时补上)。
+ *  滤掉没挂着的镜像:清单里残留的旧账号镜像不该把路径交给插件(Codex 评审 P2)。
  *  current 对的是主进程当前挂载的根(没开库 = 都不是);cloud = 应用管理的云端镜像目录。
  *  文件夹不在了(被挪走、移动硬盘没插)的行照样留着 —— 从清单里拿掉会让备份类插件以为库被删了。 */
 export function pluginVaultRows(cfg: VaultFields, mounted: string | null, isCloud: (root: string) => boolean): PluginVaultRow[] {
-  const rows = vaultList(cfg).map((v) => ({ root: v.root, name: path.basename(v.root), current: samePath(v.root, mounted ?? undefined), cloud: isCloud(v.root) }))
+  const rows = vaultList(cfg).filter((v) => !isCloud(v.root))
+    .map((v) => ({ root: v.root, name: path.basename(v.root), current: samePath(v.root, mounted ?? undefined), cloud: false }))
   if (mounted && !rows.some((r) => r.current)) rows.push({ root: mounted, name: path.basename(mounted), current: true, cloud: isCloud(mounted) })
   return rows
 }

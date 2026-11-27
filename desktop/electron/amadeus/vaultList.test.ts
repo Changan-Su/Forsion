@@ -59,6 +59,11 @@ describe('vaultList', () => {
     const rows = pluginVaultRows({ ...cfg, lastVault: mirror }, mirror, isCloud)
     expect(rows.filter((r) => r.current)).toEqual([{ root: mirror, name: 'Cloud', current: true, cloud: true }])
     expect(rows.map((r) => r.root)).toEqual([A, B, C, mirror])
+    // 清单里残留的旧账号镜像:没挂着就不给插件(同菜单的过滤);挂着时才以 cloud 行出现
+    const stale = '/h/.forsion/Amadeus Accounts/old/Cloud'
+    const withStale = { ...cfg, vaults: [...cfg.vaults, { root: stale }] }
+    expect(pluginVaultRows(withStale, B, isCloud).map((r) => r.root)).toEqual([A, B, C])
+    expect(pluginVaultRows(withStale, stale, isCloud).filter((r) => r.cloud)).toEqual([{ root: stale, name: 'Cloud', current: true, cloud: true }])
     // 没开库:都不是 current,也不凭空补行
     expect(pluginVaultRows(cfg, null, isCloud).some((r) => r.current)).toBe(false)
     expect(pluginVaultRows(cfg, null, isCloud)).toHaveLength(3)

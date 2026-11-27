@@ -81,10 +81,24 @@ it('read failure is not an empty list: a corrupt or zero-byte config rejects', a
   await expect(invoke(IPC.pluginVaults)).rejects.toThrow('amadeus-config-unreadable')
 })
 
-it('a config that is not a JSON object rejects too', async () => {
-  await fs.writeFile(configFile(), '["/somewhere"]')
+it.each([
+  ['a JSON array', '["/somewhere"]'],
+  ['JSON null', 'null'],
+  ['vaults that is not a list', '{"localVault":"/abs/notes","vaults":"corrupt"}'],
+  ['a vault row without an absolute root', '{"vaults":[{"root":"relative/notes"}]}'],
+  ['a vault row that is not an object', '{"vaults":["/abs/notes"]}'],
+  ['localVault that is not a path', '{"localVault":42}'],
+])('a config with %s rejects too (malformed is not empty)', async (_label, text) => {
+  await fs.writeFile(configFile(), text)
   const { IPC } = await boot()
   await expect(invoke(IPC.pluginVaults)).rejects.toThrow('amadeus-config-unreadable')
+})
+
+it('null vault fields are tolerated as "not set"', async () => {
+  const a = path.join(env.root, 'A')
+  await fs.writeFile(configFile(), JSON.stringify({ lastVault: null, localVault: a, syncVault: null, vaults: null }))
+  const { IPC } = await boot()
+  expect(await invoke(IPC.pluginVaults)).toEqual([{ root: a, name: 'A', current: false, cloud: false }])
 })
 
 it('no config file at all (first launch) is a real empty list', async () => {

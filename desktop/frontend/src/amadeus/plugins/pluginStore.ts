@@ -529,6 +529,18 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
   const ribbonActions = new Set<() => void>()
+  // 等主进程的调用(pickFolder 的对话框、vaults 的清单):插件一停用就立刻 reject plugin-disposed,之后到的结果 / 报错一律丢掉
+  // (对话框关不掉,用户再选也不交给已停用的插件)。
+  const disposeWaiters = new Set<() => void>()
+  const untilDisposed = <T,>(work: Promise<T>): Promise<T> => new Promise<T>((resolve, reject) => {
+    const gone = (): void => reject(new Error('plugin-disposed'))
+    if (!alive) { gone(); return }
+    disposeWaiters.add(gone)
+    work.then(
+      (v) => { disposeWaiters.delete(gone); if (alive) resolve(v); else gone() },
+      (e) => { disposeWaiters.delete(gone); if (alive) reject(e); else gone() },
+    )
+  })
   // createFolder / stat / renamePath / movePath(2026-11-16,pluginFileOps.ts):改名挪动走文件树的链,源不归这个插件时先问用户。
   const fileOps = createPluginFileOps({
     pluginId, getName, alive: () => alive, workFolder: () => api.workFolder(), dropListCache,
@@ -844,11 +856,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
           pickFolder: async (opts?: { title?: string; defaultPath?: string }): Promise<string | null> => {
             if (!ok()) throw new Error('plugin-disposed')
             const o = opts && typeof opts === 'object' ? opts : {}
-            const picked = await hostTangu()!.pickFolder!({
+            const picked = await untilDisposed(hostTangu()!.pickFolder!({
               ...(typeof o.title === 'string' ? { title: o.title } : {}),
               ...(typeof o.defaultPath === 'string' ? { defaultPath: o.defaultPath } : {}),
-            })
-            if (!alive) throw new Error('plugin-disposed')
+            }))
             return typeof picked === 'string' && picked ? picked : null
           },
         }
@@ -859,8 +870,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       ? {
           vaults: async (): Promise<PluginVaultInfo[]> => {
             if (!ok()) throw new Error('plugin-disposed')
-            const rows: unknown = await amadeus.pluginVaults!()
-            if (!alive) throw new Error('plugin-disposed')
+            const rows: unknown = await untilDisposed(amadeus.pluginVaults!())
             if (!Array.isArray(rows)) throw new Error('vault-list-unavailable')
             return rows.flatMap((r) => {
               const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
@@ -918,6 +928,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       provideFeedbackChannel(pluginId, null)
       provideInboxChannel(pluginId, null)
       alive = false
+      for (const gone of Array.from(disposeWaiters)) gone()
+      disposeWaiters.clear()
       fileOps.revoke()
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
