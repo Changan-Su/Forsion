@@ -65,6 +65,7 @@ import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './servi
 import { disposeAllProcesses } from './tools/processRegistry.js';
 import { startDeviceRenameWatch } from './services/deviceTagContext.js';
 import { startSleepDetector, stopSleepDetector } from './llm/sleepDetector.js';
+import { backgroundGates } from './core/phoneMode.js';
 
 export interface TanguModule {
   /** session 亲和路由(runs/SSE/workspace/approvals):fleet 模式按 session 哈希转发到 worker。 */
@@ -161,8 +162,12 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     // 系统睡眠检测(llm/sleepDetector.ts):睡着的时间不算进模型调用的重试预算,睡前发出、醒来才报错的请求按断网处理。
     startSleepDetector();
 
+    // 手机模式(core/phoneMode.ts,TANGU_PHONE=1):Muse 巡检(可经 config.json phone.musePatrol 再开)、收件箱轮询、
+    // Chrome 扩展桥、Docker 沙箱 janitor 缺省不起。别处一律照旧。
+    const gates = backgroundGates();
+
     // 本机本地的沙箱 janitor(docker 容器 / 会话工作区):每个 worker 各管自己的,安全。
-    if (opts?.sandbox !== false) {
+    if (opts?.sandbox !== false && gates.sandboxJanitors) {
       loadSandboxConfig().catch(() => {});
       startCacheJanitor();
       // 只影响日志:sandbox=none 时 Docker 不可达是常态,不刷屏;准入照旧按「状态未知即拒绝」。
@@ -182,13 +187,13 @@ export function createTanguModule(d: TanguDeps): TanguModule {
 
     // Muse(本地后台常驻 Special Agent):supervisor 自带 isLocal 闸门——仅 host-exec profile
     //（standalone/desktop/TUI）生效,云端/worker(hostExec=false)为 no-op。不受 opts 控制。
-    startMuseSupervisor();
+    if (gates.muse) startMuseSupervisor();
     // 收件箱广播拉取:自带 isLocal + brain.inbox seam 双闸——仅配置了云端连接的本地形态生效,其余 no-op。
-    startInboxPull();
+    if (gates.inbox) startInboxPull();
     // 多通道(微信/Telegram/QQ):自带 hostExec 闸门,云端/worker no-op。
     void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
     // Tangu for Chrome 扩展的本机桥:只在本地形态(能碰用户浏览器的地方)起;云端 / worker 不起。
-    if (deps().profile.capabilities.hostExec) startBrowserExtensionBridge();
+    if (deps().profile.capabilities.hostExec && gates.browserBridge) startBrowserExtensionBridge();
     // 回收站 30 天到期清理(启动一次 + 每天一次):回收站只在本机。
     if (deps().profile.capabilities.hostExec) startTrashJanitor();
     // 同步页上给这台改了名:把这台写过的 `[旧名]` 标签换成 `[新名]`(启动对一次 + 盯着设备文件;记忆按条标适用范围,11-06)。

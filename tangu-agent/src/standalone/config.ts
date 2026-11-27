@@ -1,6 +1,7 @@
 /**
  * standalone 配置:CLI 参数 > 环境变量 > 默认。手写 parseArgs(无 commander 依赖)。
  */
+import { phoneMode } from '../core/phoneMode.js';
 import type { DirectProvider } from '../llm/providerRegistry.js';
 import { getRawSection } from '../core/config.js';
 import { readTokenFile } from './tokenFile.js';
@@ -161,6 +162,8 @@ export function validate(cfg: StandaloneConfig): string[] {
   const errs: string[] = [];
   // A local engine, its persisted sessions and direct providers do not require Forsion Server.
   if (!cfg.localToken && !cfg.token) errs.push('Missing --token / TANGU_TOKEN or TANGU_LOCAL_TOKEN');
+  // Phone mode: the account token never doubles as the local credential (core/phoneMode.ts).
+  else if (phoneMode() && !cfg.localToken) errs.push('phone mode (TANGU_PHONE=1) requires TANGU_LOCAL_TOKEN');
   return errs;
 }
 

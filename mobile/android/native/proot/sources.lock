@@ -1,0 +1,3 @@
+# 名称 版本 URL sha256
+proot 5.4.0 https://github.com/proot-me/proot/archive/refs/tags/v5.4.0.tar.gz 29248aac2a7ce10c3bd5ee5602742ec33b2532310ff9cf73b79f3c133e5a5f68
+talloc 2.4.3 https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd

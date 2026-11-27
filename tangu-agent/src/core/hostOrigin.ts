@@ -14,6 +14,7 @@ const ENV_OF: Partial<Record<NodeJS.Platform, string>> = { darwin: 'macos', win3
 export function hostOriginHeaders(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
   const host = env.TANGU_HOST_CLIENT;
   if (typeof host !== 'string' || !HOST_CLIENT_RE.test(host)) return {};
-  const os = ENV_OF[platform];
+  // Phone mode runs under PRoot on Ubuntu: process.platform says linux, the device is an Android phone.
+  const os = env.TANGU_PHONE === '1' ? 'android' : ENV_OF[platform];
   return { 'X-Forsion-Client': host, ...(os ? { 'X-Forsion-Env': os } : {}) };
 }
