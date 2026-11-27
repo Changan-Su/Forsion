@@ -1,6 +1,6 @@
 // 左栏底部「智库」按钮 + 菜单(多智库第 1 步):本机用过的库、打开文件夹 / 新建 / 同步设置。
 // 只在桌面本地侧出现;云侧和网页仍是 CloudVaultPanel。切库走 pageStore.switchLocalVault(先在旧根落盘再换根)。
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 import { ChevronsUpDown, Folder, FolderOpen, FolderPlus, FolderSearch, FolderX, ListX, RefreshCw } from 'lucide-react'
 import type { LocalVaultRow } from '@amadeus-shared/ipc'
 import { amadeus } from '@amadeus/api'
@@ -10,9 +10,12 @@ import { emitAmadeusToast } from '@amadeus/unified/writeSafety'
 import { ContextMenu, type CtxItem, type CtxMenu } from './components/RightPanel'
 import { openPenzorSync, penzorSyncReady } from './services/syncSetup'
 import { registerMessages, translate, useI18n } from './i18n'
+import { composeVaultSync } from '../../shared/vaultSync'
+import { VaultSyncChip } from './sync/VaultSyncChip'
+import { feedsOf, useVaultSyncRaw } from './sync/vaultSyncStore'
+import { vaultSyncWords } from './sync/vaultSyncText'
 
 registerMessages({
-  'vaultMenu.synced': { zh: '云同步', en: 'Cloud sync' },
   'vaultMenu.missingDetail': { zh: '找不到文件夹', en: 'Folder not found' },
   'vaultMenu.openFolder': { zh: '打开文件夹作为智库…', en: 'Open folder as vault…' },
   'vaultMenu.new': { zh: '新建智库…', en: 'New vault…' },
@@ -50,6 +53,7 @@ async function newVault(): Promise<void> {
 export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
   const { t } = useI18n()
   const [menu, setMenu] = useState<CtxMenu>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
   const name = vaultRoot?.split(/[\\/]/).filter(Boolean).pop()
 
   const rowMenu = (row: LocalVaultRow, at: { x: number; y: number }): void => setMenu({ ...at, items: [
@@ -60,9 +64,16 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
   const open = async (el: HTMLElement): Promise<void> => {
     const rows = await amadeus?.listVaults?.().catch(() => null)
     if (!rows) return
+    // 每个库那一行的同步说法和左栏、面板同一份(状态源合成);没在同步的只写位置
+    const feeds = feedsOf(useVaultSyncRaw.getState())
+    const now = Date.now()
+    const syncWords = (root: string): string | null => {
+      const view = composeVaultSync(feeds, { root, side: 'local' }, now)
+      return view.state === 'off' ? null : vaultSyncWords(view, now, t).text
+    }
     const items: CtxItem[] = rows.map((row) => ({
       label: row.name,
-      detail: row.exists ? (row.sync ? `${t('vaultMenu.synced')} · ${row.display}` : row.display) : `${t('vaultMenu.missingDetail')} · ${row.display}`,
+      detail: row.exists ? ((w) => (w ? `${w} · ${row.display}` : row.display))(syncWords(row.root)) : `${t('vaultMenu.missingDetail')} · ${row.display}`,
       icon: row.exists ? <Folder size={15} /> : <FolderX size={15} />,
       // 勾 / 跳过按本窗绑的根判,不按全局 current:别的窗口换过库后,本窗点任一行都要能重新绑上(Codex 评审)
       checked: row.root === vaultRoot,
@@ -82,13 +93,17 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
     setMenu({ x: r.left, y: r.bottom, anchorTop: r.top, items })
   }
 
+  // 名字和箭头开智库菜单,中间的状态小字开同步面板(VaultSyncChip;这个库没在同步时它不占地方)
   return (
     <>
-      <button className="t2s-special" onClick={(e) => void open(e.currentTarget)} title={vaultRoot || undefined} aria-haspopup="menu" aria-expanded={!!menu}>
-        <span className="t2s-special-ic"><FolderOpen /></span>
-        <span className="t2s-special-title">{name ? t('amxv.vaultNamed', { name }) : t('amxv.openVault')}</span>
-        <span className="t2s-special-go"><ChevronsUpDown size={13} /></span>
-      </button>
+      <div className="t2s-special amx-vault-row" ref={rowRef}>
+        <button type="button" className="amx-vault-name" onClick={() => rowRef.current && void open(rowRef.current)} title={vaultRoot || undefined} aria-haspopup="menu" aria-expanded={!!menu}>
+          <span className="t2s-special-ic"><FolderOpen /></span>
+          <span className="t2s-special-title">{name ? t('amxv.vaultNamed', { name }) : t('amxv.openVault')}</span>
+        </button>
+        {vaultRoot && name && <VaultSyncChip vault={{ root: vaultRoot, side: 'local' }} name={name} rowRef={rowRef} />}
+        <button type="button" className="t2s-special-go" tabIndex={-1} aria-hidden="true" onClick={() => rowRef.current && void open(rowRef.current)}><ChevronsUpDown size={13} /></button>
+      </div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </>
   )

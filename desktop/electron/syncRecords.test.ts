@@ -34,6 +34,19 @@ describe('sync records store', () => {
     expect((await again.list('acct-1', { limit: 1 })).map((r) => r.id)).toEqual(['a'])
   })
 
+  it('filters by feed and vault before the limit', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sync-records-'))
+    const store = createSyncRecordStore(dir, { now: () => T0, writeDelayMs: 1 })
+    store.append(rec('n1', T0 - 50), 'acct')
+    store.append(rec('m1', T0 - 40, { feed: 'legacy:mirror', engine: 'legacy', vault: null }), 'acct')
+    store.append(rec('o1', T0 - 30, { vault: '/v/Course A' }), 'acct')
+    store.append(rec('o2', T0 - 20, { vault: '/v/Course A' }), 'acct')
+    await new Promise((r) => setTimeout(r, 10))
+    const notes = await store.list('acct', { feeds: ['content'], vault: '/v/Notes/', limit: 1 })
+    expect(notes.map((r) => r.id)).toEqual(['n1'])
+    expect((await store.list('acct', { feeds: ['legacy:mirror'] })).map((r) => r.id)).toEqual(['m1'])
+  })
+
   it('drops records older than 30 days and rejects malformed ones', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'sync-records-'))
     const store = createSyncRecordStore(dir, { now: () => T0, writeDelayMs: 1 })

@@ -31,9 +31,12 @@ export const syncRecordSink: SyncRecordSink = { append: (record, account) => app
 
 export function registerSyncRecordsIpc(): void {
   ipcMain.handle(SYNC_RECORDS_IPC.list, (_e, raw: unknown) => {
-    const o = (raw && typeof raw === 'object' ? raw : {}) as { since?: unknown; limit?: unknown }
+    const o = (raw && typeof raw === 'object' ? raw : {}) as { since?: unknown; limit?: unknown; feeds?: unknown; vault?: unknown }
+    const feeds = Array.isArray(o.feeds) ? o.feeds.filter((f): f is string => typeof f === 'string' && f.length <= 4096).slice(0, 50) : undefined
     return recordStore().list(currentCloudAccountId(), {
       ...(typeof o.since === 'number' && Number.isFinite(o.since) ? { since: o.since } : {}),
+      ...(feeds ? { feeds } : {}),
+      ...(typeof o.vault === 'string' && o.vault.length <= 4096 ? { vault: o.vault } : {}),
       ...(typeof o.limit === 'number' && o.limit > 0 ? { limit: Math.min(5000, Math.floor(o.limit)) } : {}),
     })
   })

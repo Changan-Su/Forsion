@@ -299,12 +299,22 @@ export function vaultReviewCount(view: Pick<VaultSyncView, 'review'>): number {
   return reviewCount(view.review)
 }
 
-/** 远程服务一轮报告里的失败(超大跳过 + 「<动作> <路径>: <原因>」形状的错误)→ 失败清单。状态源和同步记录共用。 */
-export function remoteReportFailures(report: { skippedLarge?: string[]; errors?: string[] } | null | undefined): SyncFailure[] {
-  const out: SyncFailure[] = (report?.skippedLarge ?? []).map((p) => ({ path: p, reason: 'too-large' as const }))
+/** 远程服务一轮报告里的问题:有路径的进失败清单(超大跳过、「<动作> <路径>: <原因>」、不安全的远端名),
+ *  没有路径的(setup / save state 这类整轮的错)单独回,当这一轮的出错说,不冒充文件。状态源和同步记录共用。 */
+export function remoteReportProblems(report: { skippedLarge?: string[]; errors?: string[] } | null | undefined): { failures: SyncFailure[]; roundErrors: string[] } {
+  const failures: SyncFailure[] = (report?.skippedLarge ?? []).map((p) => ({ path: p, reason: 'too-large' as const }))
+  const roundErrors: string[] = []
   for (const e of report?.errors ?? []) {
     const m = /^(?:push|pull|pushDelete|deleteLocal|join|conflict) (.+?): (.*)$/s.exec(e)
-    out.push(m ? { path: m[1], reason: 'failed', code: m[2] } : { path: '', reason: 'failed', code: e })
+    if (m) { failures.push({ path: m[1], reason: 'failed', code: m[2] }); continue }
+    const u = /^unsafe remote key skipped: (.*)$/s.exec(e)
+    if (u) {
+      let key = u[1]
+      try { const v = JSON.parse(u[1]); if (typeof v === 'string') key = v } catch { /* 原样 */ }
+      failures.push({ path: key, reason: 'invalid-name' })
+      continue
+    }
+    roundErrors.push(e)
   }
-  return out
+  return { failures, roundErrors }
 }

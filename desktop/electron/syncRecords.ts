@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
-  SYNC_RECORD_MAX_FAILED, SYNC_RECORD_MAX_ROWS, SYNC_RECORD_RETENTION_MS,
+  SYNC_RECORD_MAX_FAILED, SYNC_RECORD_MAX_ROWS, SYNC_RECORD_RETENTION_MS, sameVaultRoot,
   type SyncFailure, type SyncRoundRecord,
 } from '../shared/vaultSync'
 
@@ -67,7 +67,8 @@ interface FileShape { version: 1; records: SyncRoundRecord[] }
 
 export interface SyncRecordStore {
   append(record: unknown, account: string | null): void
-  list(account: string | null, opts?: { since?: number; vault?: string | null; limit?: number }): Promise<SyncRoundRecord[]>
+  /** feeds = 只要这几个 feed 的;vault = 只要这个库的(记录没带库 = 算它那个 feed 的,不排除)。先筛后截 limit。 */
+  list(account: string | null, opts?: { since?: number; feeds?: string[]; vault?: string | null; limit?: number }): Promise<SyncRoundRecord[]>
   /** 等还没落盘的写完(退出前 / 测试) */
   flush(): Promise<void>
 }
@@ -150,7 +151,8 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
       const records = await load(keyOf(account)).catch(() => [] as SyncRoundRecord[])
       let out = prune(records, now())
       if (o.since !== undefined) out = out.filter((r) => r.finishedAt >= o.since!)
-      if (o.vault !== undefined) out = out.filter((r) => r.vault === o.vault)
+      if (o.feeds) { const want = new Set(o.feeds); out = out.filter((r) => want.has(r.feed)) }
+      if (o.vault) out = out.filter((r) => r.vault === null || sameVaultRoot(r.vault, o.vault!))
       out = out.slice().sort((a, b) => b.finishedAt - a.finishedAt)
       return o.limit ? out.slice(0, o.limit) : out
     },

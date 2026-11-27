@@ -1,14 +1,13 @@
 /**
  * 同步面板上的动作:只接现成的通道,不加新的同步行为(第 1 步只读状态、展示状态)。
  *   立即同步 / 重试:旧引擎 amadeusSync.syncNow;新同步 penzor:sync:run / penzor:sync:retry;远程服务 remoteSync.run。
- *   等你定 · 两边不一样:旧引擎 amadeusSync.resolveHeld(binding / shareKey 原样从 ref 带回)。
- *   等你定 · 拦下的删除:旧引擎 amadeusSync.confirmDeletions(一次放行全部引擎);新同步 penzor:sync:confirmDeletes / abandonDeletes(带名单指纹);
- *     远程服务的在设置 › 同步里确认(这里只开那一页)。
+ *   等你定 · 两边不一样:面板里展开现成的 HeldSyncNotice(它自己调 resolveHeld)。
+ *   等你定 · 拦下的删除:去现成的确认处(蓬洲云同步页 / 设置 › 同步),面板不另造删除按钮
+ *     (旧引擎的 confirmDeletions 一次放行全部引擎,放在一个库的面板里会误导)。
  * 「跳过这个」引擎没有这个动作,这一步不做(第 2 步)。
  */
-import type { AmadeusHeldChoice } from '../types'
-import type { SyncActionRef, SyncFeedReport, SyncReviewItem } from '../../../shared/vaultSync'
-import { isResolveHeldFailure } from '../components/heldResolveResult'
+import type { SyncFeedReport, SyncReviewItem } from '../../../shared/vaultSync'
+import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 import { useApp } from '../stores/appStore'
 import { refreshVaultSync } from './vaultSyncStore'
 
@@ -23,6 +22,7 @@ export async function syncNow(feeds: SyncFeedReport[]): Promise<void> {
   if (feeds.some((f) => f.engine === 'legacy' && f.canSyncNow)) jobs.push(window.amadeusSync?.syncNow?.() ?? Promise.resolve())
   if (feeds.some((f) => f.engine === 'content' && f.canSyncNow)) jobs.push(contentCall('penzor:sync:run'))
   if (feeds.some((f) => f.engine === 'remote' && f.canSyncNow)) jobs.push(window.remoteSync?.run?.() ?? Promise.resolve())
+  setTimeout(refreshVaultSync, 300) // 踢完马上读一次:面板别停在「已同步」上等一整轮
   await Promise.allSettled(jobs)
   refreshVaultSync()
 }
@@ -37,38 +37,14 @@ export async function retryFailed(feeds: SyncFeedReport[]): Promise<void> {
   refreshVaultSync()
 }
 
-export const canResolveHeld = (): boolean => !!window.amadeusSync?.resolveHeld
-
-/** 处理几篇「两边不一样」(同一个 feed 的;不同 feed 的分开调)。返回是否成功。 */
-export async function resolveDiffers(items: Array<Extract<SyncReviewItem, { kind: 'differs' }>>, choice: AmadeusHeldChoice): Promise<boolean> {
-  const resolve = window.amadeusSync?.resolveHeld
-  if (!resolve || !items.length) return false
-  const byFeed = new Map<string, typeof items>()
-  for (const it of items) byFeed.set(it.ref.feed, [...(byFeed.get(it.ref.feed) ?? []), it])
-  let ok = true
-  for (const group of byFeed.values()) {
-    const ref = group[0].ref as SyncActionRef & { binding?: string | null; shareKey?: string | null }
-    try {
-      const r = await resolve({ binding: ref.binding ?? null, ...(ref.shareKey ? { shareKey: ref.shareKey } : {}), paths: group.map((g) => String(g.ref.serverPath)), choice })
-      if (isResolveHeldFailure(r)) ok = false
-    } catch { ok = false }
-  }
-  refreshVaultSync()
-  return ok
+/** 拦下的删除去哪确认:旧引擎 / 新同步在蓬洲云的同步页(已有的确认处),远程服务在设置 › 同步。面板里不另造删除按钮。 */
+export function openDeletesReview(item: Extract<SyncReviewItem, { kind: 'deletes' }>): void {
+  if (item.ref.feed !== 'remote' && penzorSyncReady()) openPenzorSync()
+  else useApp.getState().openSettings('sync')
 }
 
-/** 确认拦下的删除。返回是否成功。 */
-export async function confirmDeletes(item: Extract<SyncReviewItem, { kind: 'deletes' }>): Promise<boolean> {
-  try {
-    if (item.ref.feed === 'content') await contentCall('penzor:sync:confirmDeletes', String(item.ref.token ?? ''))
-    else if (item.ref.feed === 'remote') { useApp.getState().openSettings('sync'); return true }
-    else { if (!window.amadeusSync?.confirmDeletions) return false; await window.amadeusSync.confirmDeletions() }
-    return true
-  } catch { return false } finally { refreshVaultSync() }
-}
-
-/** 不删,恢复(只有新同步有)。 */
-export async function restoreDeletes(item: Extract<SyncReviewItem, { kind: 'deletes' }>): Promise<boolean> {
-  if (item.ref.feed !== 'content') return false
-  try { await contentCall('penzor:sync:abandonDeletes', String(item.ref.token ?? '')); return true } catch { return false } finally { refreshVaultSync() }
+/** 「同步设置…」:第 1 步还指向蓬洲云的同步页(第 2 步搬进设置 › 同步);没装 Extend 的去设置 › 同步。 */
+export function openSyncSettings(): void {
+  if (penzorSyncReady()) openPenzorSync()
+  else useApp.getState().openSettings('sync')
 }

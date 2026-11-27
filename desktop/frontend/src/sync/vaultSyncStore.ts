@@ -74,7 +74,7 @@ export function useVaultSync(vault: { root: string | null; side: 'local' | 'clou
 /** 立刻再读一遍(用户刚点了立即同步 / 处理了等你定)。 */
 export function refreshVaultSync(): void {
   void pullLegacy()
-  void pollContent(true)
+  void pollContent() // 重排:刚点了立即同步,马上进 1 秒一次的节奏
   void pullRemote()
 }
 
@@ -82,8 +82,10 @@ export function refreshVaultSync(): void {
 
 let subscribed = false
 let contentTimer: ReturnType<typeof setTimeout> | null = null
-/** 老 Extend 没有 penzor:sync:status:回落时只在新同步认领了才取快照 */
-let statusChannel: 'status' | 'get' | 'none' | null = null
+/** 老 Extend 没有 penzor:sync:status(只有「通道不存在」才记成 get,别的失败下次再试):回落时只在新同步认领了才取快照 */
+let statusChannel: 'status' | 'get' | null = null
+/** 轮询代号:立即同步后重排轮询,旧的那一轮回来时不再接着排 */
+let pollGen = 0
 let ownedByContent = false
 
 const set = (patch: Partial<VaultSyncRaw>): void => useVaultSyncRaw.setState(patch)
@@ -93,9 +95,11 @@ function upsertLegacy(s: AmadeusSyncStatus): void {
   useVaultSyncRaw.setState((st) => ({ legacy: { ...st.legacy, [id]: s } }))
 }
 
+const hasWindow = (): boolean => typeof window !== 'undefined'
+
 async function pullLegacy(): Promise<void> {
-  const api = window.amadeusSync
-  if (!api) return
+  const api = hasWindow() ? window.amadeusSync : undefined
+  if (!api?.get) return
   try {
     if (api.getAll) {
       const all = await api.getAll()
@@ -110,7 +114,8 @@ async function pullLegacy(): Promise<void> {
 }
 
 async function pullVaults(): Promise<void> {
-  const rows = await amadeus?.listVaults?.().catch(() => null)
+  let rows: Awaited<ReturnType<NonNullable<typeof amadeus.listVaults>>> | null = null
+  try { rows = (await amadeus?.listVaults?.()) ?? null } catch { rows = null }
   if (!rows) return
   ownedByContent = rows.some((r) => r.sync)
   const pinned = rows.find((r) => r.pinned)?.root ?? null
@@ -124,26 +129,27 @@ async function invoke<T>(channel: string): Promise<T> {
 }
 
 async function readContent(): Promise<ContentStatusLite | null> {
-  if (!window.tangu?.cloudInvoke) return null
-  if (statusChannel !== 'get' && statusChannel !== 'none') {
+  if (!hasWindow() || typeof window.tangu?.cloudInvoke !== 'function') return null
+  if (statusChannel !== 'get') {
     try {
       const v = await invoke<ContentStatusLite>('penzor:sync:status')
       statusChannel = 'status'
       return v
     } catch (e) {
-      if (statusChannel === 'status') return useVaultSyncRaw.getState().content // 偶发失败:留着上一份
-      statusChannel = /not a Forsion Extend channel/.test(String((e as Error)?.message)) ? 'get' : 'none'
+      if (!/not a Forsion Extend channel/.test(String((e as Error)?.message))) return useVaultSyncRaw.getState().content // 偶发失败:留着上一份,下次再试
+      statusChannel = 'get'
     }
   }
   if (statusChannel === 'get' && ownedByContent) return invoke<ContentStatusLite>('penzor:sync:get').catch(() => null)
   return null
 }
 
-async function pollContent(once = false): Promise<void> {
-  if (!once && contentTimer) { clearTimeout(contentTimer); contentTimer = null }
-  const c = await readContent()
+async function pollContent(): Promise<void> {
+  const gen = ++pollGen
+  if (contentTimer) { clearTimeout(contentTimer); contentTimer = null }
+  const c = await readContent().catch(() => useVaultSyncRaw.getState().content)
+  if (gen !== pollGen || !hasWindow()) return // 期间又重排过:那一轮负责排下一次
   if (JSON.stringify(c) !== JSON.stringify(useVaultSyncRaw.getState().content)) set({ content: c })
-  if (once) return
   // 在跑时每秒一次(进度跟手),开着每 5 秒,没开 / 窗口不在前台放慢
   const hidden = typeof document !== 'undefined' && document.hidden
   const delay = c?.running ? 1000 : hidden ? 30_000 : (c?.enabled ?? c?.config?.enabled) ? 5000 : 20_000
@@ -151,7 +157,9 @@ async function pollContent(once = false): Promise<void> {
 }
 
 async function pullRemote(): Promise<void> {
-  const st = await window.remoteSync?.get().catch(() => null)
+  if (!hasWindow() || typeof window.remoteSync?.get !== 'function') return
+  let st: Awaited<ReturnType<NonNullable<typeof window.remoteSync>['get']>> | null = null
+  try { st = await window.remoteSync.get() } catch { st = null }
   if (st) set({ remote: { config: st.config, running: st.running, lastReport: st.lastReport, progress: st.progress, root: st.root, rootError: st.rootError } })
 }
 
@@ -168,14 +176,16 @@ export function ensureVaultSyncSubscribed(): void {
     void pullVaults()
   })
   void pullLegacy()
-  window.amadeusSync?.onStatus?.((s) => upsertLegacy(s))
+  try { window.amadeusSync?.onStatus?.((s) => upsertLegacy(s)) } catch { /* 桥不全:等下次拉取 */ }
   void pullVaults().then(() => pollContent())
   void pullRemote()
-  window.remoteSync?.onStatus?.((s) => {
-    const prev = useVaultSyncRaw.getState().remote
-    if (!prev) { void pullRemote(); return }
-    set({ remote: { ...prev, running: s.running, lastReport: s.lastReport, progress: s.progress } })
-  })
+  try {
+    window.remoteSync?.onStatus?.((s) => {
+      const prev = useVaultSyncRaw.getState().remote
+      if (!prev) { void pullRemote(); return }
+      set({ remote: { ...prev, running: s.running, lastReport: s.lastReport, progress: s.progress } })
+    })
+  } catch { /* 桥不全 */ }
   setInterval(() => set({ now: Date.now() }), 30_000)
   setInterval(() => void pullVaults(), 60_000)
   if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent() })

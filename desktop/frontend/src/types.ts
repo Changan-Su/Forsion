@@ -1214,7 +1214,8 @@ declare global {
     }
     /** 同步记录(一轮一行,按账号存本机,留 30 天;桌面专属,web/mobile 下 undefined)。形状见 shared/vaultSync.ts SyncRoundRecord。 */
     syncRecords?: {
-      list(opts?: { since?: number; limit?: number }): Promise<import('../../shared/vaultSync').SyncRoundRecord[]>
+      /** feeds / vault:只要这个库的那几路(先筛后截 limit)。 */
+      list(opts?: { since?: number; feeds?: string[]; vault?: string | null; limit?: number }): Promise<import('../../shared/vaultSync').SyncRoundRecord[]>
       onChanged(cb: () => void): () => void
     }
     /** 本地库远程同步(remotely-save 式,S3/WebDAV/文件夹;桌面专属,web/mobile 下 undefined)。 */

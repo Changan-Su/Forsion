@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { SYNC_RECORDS_IPC } from '../shared/vaultSync'
 
 contextBridge.exposeInMainWorld('syncRecords', {
-  list: (opts?: { since?: number; limit?: number }): Promise<unknown> => ipcRenderer.invoke(SYNC_RECORDS_IPC.list, opts ?? {}),
+  list: (opts?: { since?: number; feeds?: string[]; vault?: string | null; limit?: number }): Promise<unknown> => ipcRenderer.invoke(SYNC_RECORDS_IPC.list, opts ?? {}),
   onChanged: (cb: () => void): (() => void) => {
     const listener = (): void => cb()
     ipcRenderer.on(SYNC_RECORDS_IPC.changed, listener)

@@ -19,7 +19,7 @@
 import type {
   SyncFailure, SyncFeedPhase, SyncFeedReport, SyncProgress, SyncReviewItem, SyncScope, SyncTarget,
 } from '../../../shared/vaultSync'
-import { remoteReportFailures } from '../../../shared/vaultSync'
+import { remoteReportProblems } from '../../../shared/vaultSync'
 import type { AmadeusEntrySyncVault, AmadeusSyncStatus, RemoteSyncState } from '../types'
 
 // ── 旧的在线引擎 ────────────────────────────────────────────────────────────────
@@ -218,8 +218,9 @@ export function remoteFeed(r: Pick<RemoteSyncState, 'config' | 'running' | 'last
   const backend = r.config.backend as string
   const on = backend !== 'off'
   const report = r.lastReport
-  const phase: SyncFeedPhase = !on ? 'off' : r.running ? (r.progress?.total ? 'transferring' : 'checking') : r.rootError ? 'error' : 'idle'
-  const failures = remoteReportFailures(report)
+  const { failures, roundErrors } = remoteReportProblems(report)
+  const roundError = r.rootError ?? (report && !report.ok ? roundErrors[0] ?? null : null)
+  const phase: SyncFeedPhase = !on ? 'off' : r.running ? (r.progress?.total ? 'transferring' : 'checking') : roundError ? 'error' : 'idle'
   return {
     id: 'remote',
     engine: 'remote',
@@ -239,7 +240,7 @@ export function remoteFeed(r: Pick<RemoteSyncState, 'config' | 'running' | 'last
     rateLimitedUntil: null,
     review: report && report.pendingDeletions > 0 ? [{ kind: 'deletes', count: report.pendingDeletions, items: [], canRestore: false, accountWide: false, ref: { feed: 'remote' } }] : [],
     failures: r.running ? [] : failures,
-    error: phase === 'error' ? r.rootError : null,
+    error: phase === 'error' ? roundError : null,
     canSyncNow: on && !r.running,
   }
 }
