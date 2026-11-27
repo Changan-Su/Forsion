@@ -201,7 +201,7 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
    11-19 用户嫌 180px 太占地,选「紧凑行」(docs/ToBeImproved/Ribbon展开收窄方案_2026-11-19 方案 A):宽 132(英文名字长,168:Command palette、钉进来的 Change accent color 都放得下;中文最长的「切换明暗模式」78px 也放得下),
    两侧内距 8→6、图标与字 10→8,⌘N 悬停才露。顶部「只显示图标」那一行照旧带字(用户:只留箭头不好看)。 */
 .rb-expanded { width: var(--rb-w-expanded, 132px); align-items: stretch; }
-html[lang^='en'] .rb-expanded { --rb-w-expanded: 168px; }
+html[lang^='en'] .rb { --rb-w-expanded: 168px; } /* 写在 .rb 上(不只展开态):名字的恒定宽度在收起态也要读它,见文件末尾 */
 .rb-expanded .rb-group { align-items: stretch; }
 .rb-expanded .rb-head,
 .rb-expanded .rb-home,
@@ -1139,27 +1139,51 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
  * 展开后还在同一个 x。动的只有条宽(--duration-base × --ease-surface)和名字的透明度。原来展开换行高 34、对齐从居中换靠左、
  * 账号换成两行卡,整列图标上下挪 17–24px、收起那帧横移 43px(instrument/rb-probe.cjs 逐帧量)。
  * 只管条上的各组(.rb > .rb-head / .rb-group);收纳夹、「+N」浮层的行也在 .rb 里,不动它们。放文件末尾:.rb 那条与上面同特异性(§7)。 */
-.rb { align-items: stretch; transition: width var(--duration-base, 0.2s) var(--ease-surface, ease); }
+/* 名字的淡入淡出由 .rb 上一个登记过的 --rb-ink 驱动(2026-11-27,见下面名字那条):跟条宽写在同一条 transition 里 */
+@property --rb-ink { syntax: '<number>'; inherits: true; initial-value: 0; }
+.rb {
+  align-items: stretch; --rb-ink: 0;
+  transition: width var(--duration-base, 0.2s) var(--ease-surface, ease), --rb-ink var(--menu-exit-duration, 80ms) var(--ease-exit, ease);
+}
+/* 展开:条宽那一项不变,只换 --rb-ink 那一项的时长 / 曲线 / 延迟(晚 60ms 淡入;收起 80ms 先淡掉)。顺序与上面 transition 的两项一致 */
+.rb.rb-expanded {
+  --rb-ink: 1;
+  transition-duration: var(--duration-base, 0.2s), var(--duration-fast, 0.15s);
+  transition-timing-function: var(--ease-surface, ease), var(--ease-calm, ease);
+  transition-delay: 0s, calc(var(--duration-fast, 0.15s) * 0.4);
+}
 .rb > :is(.rb-head, .rb-group) { align-items: stretch; padding: 0 6px; }
 .rb > .rb-group :is(.rb-slot, .rb-recent-slot, .rb-cell) { width: 100%; justify-content: stretch; }
 .rb > .rb-group .rb-strip-in { align-items: stretch; }
 .rb > :is(.rb-head, .rb-group) .rb-btn { width: 100%; height: 32px; justify-content: flex-start; gap: 8px; padding: 0 7px; }
+/* 名字定宽后会伸出还没长开的按钮:按钮裁掉,余量 6px = 组的内距(裁在条的右缘;收起态 top:-3px 的数字角标、右缘 35px 也都在里面) */
+.rb > :is(.rb-head, .rb-group) .rb-btn { overflow: clip; overflow-clip-margin: 6px; }
 /* 图标不参与收缩:原来字一挂上、按钮还只有 44 宽,18px 图标被 flex 压成 1.7px 宽的小点 */
 .rb > :is(.rb-head, .rb-group) .rb-btn > :is(svg, .rb-more-n, .unitsw-ic) { flex: none; }
 .rb > :is(.rb-head, .rb-group) .rb-btn > svg[width='16'] { margin-inline: 1px; } /* ＋ 是 16px:补 1px,中心对齐 18px 的那一列 */
 .rb > .rb-group .rb-more-n { width: 18px; text-align: center; }
 /* 名字常驻:不参与挤压(只裁),右缘渐隐代替省略号 —— 宽度还在长的时候不会一截截冒出「T…」;收起先 80ms 淡掉再藏(台架点不到看不见的字),
- * 展开晚 60ms 淡入。用 filter 不用 opacity:calm.css 的外围淡出写的是 opacity,两者相乘;transition 一并带上它那条。 */
+ * 展开晚 60ms 淡入。用 filter 不用 opacity:calm.css 的外围淡出写的是 opacity,两者相乘;transition 一并带上它那条。
+ * ⚠️ 2026-11-27 改(用户报 2.14.3-beta.3 开合掉帧、偶尔闪):别改回「每个名字自己过渡 filter + 跟着条宽伸缩」——
+ *   ① 名字定宽 = 展开后的可用宽(条宽 − 组内距 12 − 按钮内距 14 − 图标 18 − 间距 8),开合全程盒子不变,由按钮裁;
+ *      原来 flex:1 跟着条宽每帧变,16 个名字每帧重画(连带 mask 重算)。
+ *   ② 淡入淡出不在名字上各跑一段 filter 过渡,改读 .rb 上的 --rb-ink(登记属性,跟条宽同一条 transition):
+ *      各自过渡 filter 会把每个名字升成独立合成层(带 mask 还要离屏画),开合一次层数 51 → 85、重绘 ~350 → ~750 次,
+ *      GPU 每帧超出 120Hz 预算,一半的帧变成 16ms;层在动画结束时又降回去,文字重光栅那一下就是「闪」。
+ *   ③ 收起态的名字不带 calm.css 的 opacity 过渡(见下)。三条做完:层数 / 重绘回到 #903 之前(展开 49 层 / ~360 次)。
+ *   量具:scripts/motion-fps.probe.cjs(层数 / 重绘 / 帧时间,--variants 同进程交错比)、scripts/motion-flicker.probe.cjs(逐帧画面)。 */
 .rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label {
-  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: clip; text-align: start; /* 占满剩余宽度后,button 缺省的 text-align:center 会把字摆到正中 */
+  flex: none; box-sizing: border-box; width: calc(var(--rb-w-expanded, 132px) - 52px);
+  overflow: hidden; text-overflow: clip; text-align: start; /* button 缺省的 text-align:center 会把短名字摆到正中 */
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 12px), transparent);
-  filter: opacity(0); visibility: hidden;
-  transition: filter var(--menu-exit-duration, 80ms) var(--ease-exit, ease), visibility 0s linear var(--menu-exit-duration, 80ms),
-    opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+  filter: opacity(var(--rb-ink)); visibility: hidden;
+  /* 收起态不带 calm.css 那段 opacity 过渡:名字看不见,指针一进条,16 个藏着的名字也各跑一段 opacity、各升一层。
+   * opacity 写成「0 时长、延迟到藏起之后才跳」:点收起后 80ms 内指针移出条,还看得见的名字不会先跳暗到 0.42(Codex 评审 P2) */
+  transition: visibility 0s linear var(--menu-exit-duration, 80ms), opacity 0s linear var(--menu-exit-duration, 80ms);
 }
 .rb.rb-expanded > :is(.rb-head, .rb-group) .rb-btn > .rb-label {
-  filter: opacity(1); visibility: visible;
-  transition: filter var(--duration-fast, 0.15s) var(--ease-calm, ease) calc(var(--duration-fast, 0.15s) * 0.4), visibility 0s, opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
+  visibility: visible;
+  transition: visibility 0s, opacity var(--frame-reveal-duration, var(--duration-fast, 0.15s));
 }
 /* 折叠钮:一枚 »,展开转 180° 成 «,跟条宽同一只表。特异性压过 calm.css 的 `.rb .rb-btn > *`(它的 transition 只写 opacity,会把旋转吞成一跳),
  * 所以它那条 opacity 过渡也一并带上。 */
@@ -1193,6 +1217,6 @@ html[data-space-switch-axis='x'][data-space-switch]::view-transition-new(space-w
 }
 @keyframes rb-account-meta-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .rb, .rb > .rb-head .rb-btn > .rb-toggle-ic, .rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label { transition: none; }
+  .rb, .rb.rb-expanded, .rb > .rb-head .rb-btn > .rb-toggle-ic, .rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label { transition: none; }
   .rb > .rb-pinned .account-card .account-meta, .rb > .rb-pinned .engine-starting::after { animation: none; }
 }
