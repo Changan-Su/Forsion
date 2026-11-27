@@ -6,7 +6,8 @@
  *   · 窄 Chat View(480–600):开着时 ＋ 原地淡出、位置留着,其余让位的按钮收完才回来;
  *   · 点了一行 = 直接收(80ms),倒放到一半又点同一颗 = 掉头停在打开;
  *   · 平移主题:胶囊照旧跟菜单进场那一对(180ms)。
- *   · 收起时胶囊里的字相对胶囊中心的偏移单帧 ≤ 2px(2026-11-26:原来 .is-open 才换三列 grid,倒放第一帧字跳回左边)。
+ *   · 收起时胶囊里的字相对胶囊中心的偏移单帧 ≤ 2px(2026-11-26:原来 .is-open 才换三列 grid,倒放第一帧字跳回左边);
+ *     2026-11-27 起项目 / 设备两颗芯片同样量(公共类 .capsule-pill + 钩子 pillClass)。
  *  负对照:CBD_ROOT=<main 检出的 desktop>(要有 out/ 构建)跑,「流出 / 倒放」「胶囊左缘不动」「让位的按钮收完才回来」几条必须红。
  *  宽度:900 = 宽排;640 = 窄 Chat View(底排 480–600,排他展开);420 = compact(菜单是带标题的浮层,胶囊不撑宽)。
  *  用法:npm run build && node scripts/chatbox-droplet.e2e.cjs [--only=mode,add,model,ctx] [--widths=900,640,420] [--shots=<目录>] */
@@ -25,7 +26,7 @@ const TRIG = { add: '.add-pill-btn', mode: '.mode-pill-btn', model: '.model-pill
   runloc: '.runloc-pill', project: '.project-selector:not(.runloc) > .project-pill', agent: '.compact-chat-picker' }
 const PANEL = { add: '.composer-menu--add', mode: '.composer-menu--mode', model: '.composer-menu--model', ctx: '.t2c-ctxring-pop',
   runloc: '.runloc-menu', project: '.project-menu:not(.runloc-menu)', agent: '.chat-pick-pop' }
-const CHIPS = ['runloc', 'project', 'agent'] // 卡片上方两颗芯片 + Agent 芯片:不撑宽,只流出 / 倒放
+const CHIPS = ['runloc', 'project', 'agent'] // 卡片上方两颗芯片(撑宽到菜单宽)+ Agent 芯片(不撑宽):流出 / 倒放
 const fails = []
 let passed = 0
 function check(name, ok, detail) { if (ok) { passed++; console.log('PASS ' + name) } else { fails.push(name); console.log('FAIL ' + name + ' ' + JSON.stringify(detail).slice(0, 600)) } }
@@ -45,7 +46,7 @@ async function film(win, k, ms, act) {
       const add = view.querySelector('.add-pill-wrap')
       return {
         // 胶囊里的字:中心相对胶囊中心的偏移(2026-11-26 收起时字一帧跳回左边的回归)
-        lbl: (() => { const l = pill?.querySelector('.t2c-pill-label, .pill-ultra-label, .pill-marquee'); const p = rect(pill), r = rect(l); return p && r ? (r.l + r.w / 2) - (p.l + p.w / 2) : null })(),
+        lbl: (() => { const l = pill?.querySelector('.t2c-pill-label, .pill-ultra-label, .pill-marquee, .runloc-label, .project-pill-name'); const p = rect(pill), r = rect(l); return p && r ? (r.l + r.w / 2) - (p.l + p.w / 2) : null })(),
         t: Math.round(performance.now() - t0), pill: rect(pill), panel: !!panel, pouring: !!panel?.classList.contains('lcl-droplet-pouring'),
         // ctx 的浮层(宽 Chat View)一直挂着,开没开看外层 .is-open
         layers: layers.length, mounted: k === 'ctx' ? !!view.querySelector('.t2c-ctxring.is-open') || live().some((p) => !view.contains(p)) : live().length > 0,
@@ -193,6 +194,17 @@ async function film(win, k, ms, act) {
       const t0 = close.find((f) => f.pouring)?.t ?? 0
       const gone = close.findIndex((f) => !f.mounted)
       check(`${tag}: 再点 = 倒放、倒放完才卸`, close.some((f) => f.pouring && f.layers === 1) && gone > 0 && close[gone].t - t0 >= D * 0.55, close.map((f) => [f.t, f.pouring, f.mounted]))
+      // 项目 / 设备两颗芯片也撑宽(2026-11-27 用户:所有胶囊同一套):收起时胶囊跟液体一起缩、字不在最后一帧跳回
+      // (原来它们的 .is-open 跟着菜单挂载走,菜单收完才摘,胶囊这时才缩、字一帧从正中跳回左边)
+      if (k !== 'agent') {
+        const ws = close.filter((f) => f.pill).map((f) => f.pill.w)
+        check(`${tag}: 收时胶囊只缩不胀`, ws.every((w, i) => i === 0 || w <= ws[i - 1] + 0.5), ws.map(Math.round))
+        const offs = close.map((f) => f.lbl).filter((v) => v != null)
+        const jump = Math.max(0, ...offs.map((v, i) => (i ? Math.abs(v - offs[i - 1]) : 0)))
+        check(`${tag}: 收时字跟着胶囊收,不一帧跳回(单帧最大 ${jump.toFixed(1)}px)`, offs.length > 3 && jump <= 2, offs.map((v) => +v.toFixed(1)))
+        const shrinkDone = close.findIndex((f, i) => i > 0 && f.pill && Math.abs(f.pill.w - close.at(-1).pill.w) < 1)
+        check(`${tag}: 胶囊和液体一起收完(差 ≤ 120ms)`, gone > 0 && shrinkDone > 0 && Math.abs(close[shrinkDone].t - close[gone].t) <= 120, { shrinkDone: close[shrinkDone]?.t, gone: close[gone]?.t })
+      }
       await settle()
       await win.locator(TRIG[k]).first().click(); await settle()
       const esc = await film(win, k, D + 300, 'esc')

@@ -141,7 +141,7 @@ export const ProjectSelector: React.FC<{
   return (
     <div className={`project-selector${open ? ' is-open' : ''}`} ref={ref}>
       <button
-        className={`composer-chip project-pill${open ? ' is-open' : ''}`}
+        className={`composer-chip project-pill capsule-pill${flow.pillClass('menu')}`}
         onClick={() => {
           if (open) { flow.toggle('menu'); return }
           // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 下拉,宿主呈现失败也回落 Web。

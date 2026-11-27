@@ -765,7 +765,7 @@ export const ModelPill: React.FC<{
   return (
     <span ref={wrapRef} className={`model-pill-wrap${expanded ? ' is-open' : ''}${open && !nativeOpen && capsule ? ' t2c-capsule-held' : ''}${className ? ` ${className}` : ''}`} data-compact={compact || undefined} data-tier={iconOnly ? 'icon' : compact ? 'short' : undefined} data-cmenu>
       <button type="button"
-        className={`composer-chip model-pill-btn${icon === null ? '' : ' has-icon'}${expanded ? ' is-open' : ''}${capsule?.retracting ? ' is-retracting' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
+        className={`composer-chip model-pill-btn capsule-pill${icon === null ? '' : ' has-icon'}${expanded ? ' is-open' : ''}${capsule?.retracting ? ' is-retracting' : ''}${effortCls}${modelPickerPresenter() ? ' model-pill-btn--native' : ''}`}
         title={`${title || t('input.modelChipTitle')}: ${label}${effort}${currentLocked ? ` · ${lockedNote(current)}` : ''}`}
         aria-label={`${label}${effort}${currentLocked ? ` · ${lockedNote(current)}` : ''}`}
         data-tier-locked={currentLocked || undefined}

@@ -625,6 +625,9 @@ a:hover { color: var(--accent-ink); }
 /* 这一栏自己的盒子(.newchat-projectbar / -inner)写在 views/chat2/chat2.css,和它的两个断点放在一起 —— 留在这里的话断点压不住它(本文件排在 chat2.css 之后)。 */
 .project-selector { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
 .project-selector.is-open { flex-shrink: 0; }
+/* 外层的 .is-open 跟菜单挂载走(含倒放那段),胶囊自己的 .is-open 收起一开始就摘:倒放时胶囊在外层里缩,外层仍占着撑开宽度,
+   窄栏里两颗芯片不会在倒放途中挤回同一行、菜单不跟着横跳(同模式胶囊外层的做法);收完才放。min-width:设备胶囊带状态时可能比菜单宽 */
+.project-selector.is-open { min-width: min(var(--menu-select-width), calc(100vw - 32px)); }
 /* 与模型选择器同一门语：无轮廓线的中性 pill，展开后连续过渡到选择菜单宽度。 */
 .composer-chip.project-pill {
   display: inline-flex;
@@ -644,8 +647,6 @@ a:hover { color: var(--accent-ink); }
 }
 .composer-chip.project-pill:hover { background: var(--overlay-medium); }
 .composer-chip.project-pill.is-open {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: min(var(--menu-select-width), calc(100vw - 32px));
   background: var(--overlay-medium);
 }
@@ -653,7 +654,30 @@ a:hover { color: var(--accent-ink); }
 /* 编码工作室的新对话:项目固定,只显示不可点的那枚(ChatView 的 data-studio-project),图标与字照样隔开。 */
 .project-pill[data-studio-project] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .project-pill-name { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-pill.is-open .project-pill-name { width: 100%; max-width: none; text-align: center; }
+
+/* ── 胶囊开合的公共几何(2026-11-27,用户:「所有胶囊一个动画组件的升级,不是单独的」)───────────────────────────
+   所有从按钮里流出菜单的胶囊(useCapsuleDroplet:模式、模型(带图标)、项目、设备、Agent 芯片)挂 .capsule-pill,状态类一律
+   用钩子给的 pillClass()(is-open 在收起一开始就摘、收起期间 is-retracting)。收起 / 展开都是同一个三列网格
+   (图标 / 字 / 箭头,两侧列至少 13px),开合之间只有宽度在变,字始终在中列里居中 —— 原来各胶囊 .is-open 才换网格,
+   项目 / 设备胶囊的 .is-open 还跟着菜单挂载走:胶囊等菜单收完才缩,字在最后一帧从正中跳回左边。
+   宽度跟液滴同一只表:展开 --cap-open、倒放 --cap-close、点了一行 / 换胶囊走菜单退场那一对。
+   各胶囊自己只写撑开后的宽度、底色和字的上限;字的 max-width 开合不变(撑开时放成 none,收起第一帧长名字会一跳)。
+   放在 .composer-chip.project-pill 之后:同特异性,display / transition 要压过它(§7.2)。仪器 e2e:chatbox-droplet(芯片也量字位移)。 */
+:is(.t2c-pill, .composer-chip).capsule-pill {
+  display: grid;
+  grid-template-columns: minmax(13px, auto) minmax(0, 1fr) minmax(13px, auto);
+  min-width: 0;
+  width: fit-content;
+  interpolate-size: allow-keywords;
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast, 0.15s), width var(--pill-size-motion);
+}
+:is(.t2c-pill, .composer-chip).capsule-pill.is-open { --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease)); }
+:is(.t2c-pill, .composer-chip).capsule-pill.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
+.capsule-pill > * { justify-self: center; }
+@media (prefers-reduced-motion: reduce) {
+  :is(.t2c-pill, .composer-chip).capsule-pill, :is(.t2c-pill, .composer-chip).capsule-pill:is(.is-open, .is-retracting) { transition: background var(--duration-fast, 0.15s); }
+}
 /* 额外文件夹:项目胶囊后面的「添加文件夹」和加进来的那几枚(components/ExtraFolders.tsx)。外形就是项目胶囊;
    已加的那枚本身不可点(只有里面的 × 可点),所以悬停不变色。只有图标的「添加」拉到与同行胶囊等高。 */
 .composer-chip.project-pill.extra-folder { padding-right: 4px; cursor: default; }
@@ -2115,7 +2139,6 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 带图标的模型胶囊收起态也是三列 grid(同 composer2.css .mode-pill-btn 的注释,2026-11-26):开合只动宽度,字不跳。
    不带图标的(笔记插件里的模型选择,icon={null})照旧 inline-flex;窄 Chat View(data-compact)那条更具体,仍是 flex。 */
 /* 两侧列至少 13px:图标 13 / 箭头 10 也等宽,撑开后字精确居中(model-menu.check 钉 0.6px);字的 max-width 开合不变 */
-.composer-chip.model-pill-btn.has-icon { display: grid; grid-template-columns: minmax(13px, auto) minmax(0, 1fr) minmax(13px, auto); }
 .composer-chip.model-pill-btn {
   min-width: 0;
   interpolate-size: allow-keywords;
@@ -2124,7 +2147,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: background var(--duration-fast), width var(--pill-size-motion);
 }
 /* 不带图标的那种照旧只在撑开时换三列(带图标的在基础规则里就是 grid,列宽不随开合变,收起时字不跳) */
-.composer-chip.model-pill-btn.is-open:not(.has-icon) { display: grid; grid-template-columns: 16px minmax(0, 1fr) 16px; }
+/* 不带图标的那种(icon={null}):公共类的两列版 —— 字 / 箭头,开合列宽不变。原来撑开才换 16|1fr|16 三列,
+   两个子项落进前两列(字进 16px 首列),收起第一帧又换回 flex,字和箭头一起重排。撑开后字在箭头左边那段里居中(偏中 ~9px) */
+.composer-chip.model-pill-btn.capsule-pill:not(.has-icon) { grid-template-columns: minmax(0, 1fr) minmax(13px, auto); }
 .composer-chip.model-pill-btn.is-open {
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
@@ -2137,9 +2162,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   background: color-mix(in srgb, #8b5cf6 12%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
 }
 .model-pill-wrap.is-open { flex-shrink: 0; }
-.model-pill-btn.is-open:not(.has-icon) > svg { justify-self: center; }
-.model-pill-btn.has-icon > :is(svg, .pill-marquee, .pill-ultra-label) { justify-self: center; }
-.model-pill-btn.is-open:not(.has-icon) .pill-marquee { width: 100%; max-width: none; text-align: center; }
+/* 带图标的那颗挂 .capsule-pill(公共几何,见项目胶囊那段):绝对定位的流光 / 角锁不参与居中 */
+.model-pill-btn.capsule-pill > :is(.pill-ultra-streaks, .model-pill-corner-lock) { justify-self: auto; }
+/* 不带图标的:字的上限开合不变(撑开时放成 none,收起第一帧长名字的盒子缩回去,字起点一跳) */
 /* ⚠️ 子面板绝对定位到菜单**外面**,故此变体必须 overflow:visible —— 通用 .composer-menu 的
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
@@ -2380,7 +2405,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .pill-ultra-streaks i:nth-child(4) { --pill-streak: rgba(255, 122, 69, 0.75); top: 75%; animation-duration: 1.7s; animation-delay: -1.25s; }
 :root[data-mode='dark'] .pill-ultra-streaks i { --pill-streak: rgba(255, 255, 255, 0.85); }
 .pill-ultra-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-.model-pill-btn.is-open:not(.has-icon) .pill-ultra-label { justify-content: center; width: 100%; }
+.model-pill-btn.capsule-pill:not(.has-icon) .pill-ultra-label { justify-content: center; }
 /* 展开态通用规则会把 .pill-marquee 撑满整行(居中单行文案用);Ultra 这里名字 + 标签要作为一组居中,名字不许撑开 */
 .model-pill-btn.is-open .pill-ultra-label .pill-marquee { width: auto; min-width: 0; }
 /* 柔光上叠渐变字会糊:「Ultra」用加粗的紫色实色;暗色换浅紫(深紫压在深灰上对比度不够) */
