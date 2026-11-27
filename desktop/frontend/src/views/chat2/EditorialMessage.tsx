@@ -53,6 +53,7 @@ import { CITE_HOVER } from './citeHover'
 
 registerMessages({
   'pc.openProfile': { zh: '查看 {name} 的资料', en: 'Open {name}\'s profile' },
+  'pc.openMine': { zh: '查看我的资料', en: 'Open my profile' },
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
   'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
@@ -954,7 +955,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     return (
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle} data-quiet={quiet}>
         <div className="t2-user-col">
-          <div className="t2-username" {...profileHit(onProfile, msg, 'name', profileOpen === 'name', t('pc.openProfile', { name }))}>{name}</div>
+          <div className="t2-username" {...profileHit(onProfile, msg, 'name', profileOpen === 'name', t('pc.openMine'))}>{name}</div>
           {msg.role === 'user' && <BtwRelayTag sessionId={runSid} content={msg.content} timestamp={msg.timestamp} />}
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
@@ -1030,7 +1031,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           </div>
           )}
         </div>
-        <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined} {...profileHit(onProfile, msg, 'avatar', profileOpen === 'avatar', t('pc.openProfile', { name }))}>
+        <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined} {...profileHit(onProfile, msg, 'avatar', profileOpen === 'avatar', t('pc.openMine'))}>
           {userAvatar ? <img src={userAvatar} alt="" /> : firstChar(name)}
         </div>
       </div>

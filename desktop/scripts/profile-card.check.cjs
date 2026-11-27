@@ -160,6 +160,11 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await win.locator('.pc-card [data-act="account"]').click()
     const accountOpened = await win.waitForSelector('.account-pop', { timeout: 4000 }).then(() => true, () => false)
     rep.check('「账号」打开现有账号面板', accountOpened && (await waitGone()))
+    // 走查发现:锚在顶上的头像时账号菜单原来一律往上开、高度按上方空间算 → 被压成几十 px、各行叠在一起
+    await sleep(500)
+    const pop = await win.evaluate(() => { const p = document.querySelector('.account-pop'); if (!p) return null; const r = p.getBoundingClientRect(); const rows = [...p.querySelectorAll('button')].map((b) => b.getBoundingClientRect()); return { top: r.top, bottom: r.bottom, h: r.height, rowsOut: rows.filter((q) => q.height && (q.bottom > r.bottom + 1 || q.top < r.top - 1)).length } })
+    const ub2 = await rectOf(ua)
+    rep.check('账号菜单从头像往下开、没被压扁', !!pop && pop.top >= ub2.y + ub2.height - 1 && pop.rowsOut === 0 && pop.h > 80, JSON.stringify(pop))
     await win.keyboard.press('Escape')
     await sleep(500)
 
@@ -212,6 +217,18 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await win.evaluate(() => { window.matchMedia = window.__pcMM; delete window.__pcMM })
     await app.evaluate(({ BrowserWindow }) => { const wc = BrowserWindow.getAllWindows()[0].webContents; wc.disableDeviceEmulation(); wc.setZoomFactor(1.1) })
     await sleep(800)
+
+    // 6b. 走查发现:名字条在窗口底部时,只夹不翻会把卡推上来盖住刚点的名字条 → 名字条那种放不下就翻到上面
+    await win.evaluate(() => { const s = document.querySelector('.t2-stream'); if (s) s.scrollTop = s.scrollHeight })
+    await sleep(500)
+    const rName = win.locator('.t2-asst .t2-name-hit').nth(1)
+    await rName.click()
+    await win.waitForSelector('.pc-card', { timeout: 3000 })
+    await sleep(500)
+    const rn = await rectOf(rName)
+    const c6 = await cardBox()
+    rep.check('窗口底部的名字条:卡翻到上面、不盖住名字条', shown(c6) && c6.bottom <= rn.y + 1, c6 && `card.bottom=${c6.bottom.toFixed(1)} name.top=${rn.y.toFixed(1)}`)
+    await win.keyboard.press('Escape'); await waitGone()
 
     // 7. 那条消息没了(重绘 / 删除)→ 卡收掉,不透明地挂着
     await ra.click()

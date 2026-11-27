@@ -61,7 +61,6 @@ registerMessages({
   'pc.chip.engine': { zh: '引擎', en: 'Engine' },
   'pc.state.idle': { zh: '空闲', en: 'Idle' },
   'pc.state.busy': { zh: '在忙 · {n} 个会话', en: 'Busy · {n} chats' },
-  'pc.state.off': { zh: '已停用', en: 'Turned off' },
   'pc.deleted': { zh: '这个 Agent 已删除', en: 'This agent was deleted' },
   'pc.unknown': { zh: '认不出是哪个 Agent', en: 'Not a saved agent' },
   'pc.rosterUnread': { zh: '现在读不到 Agent 名册，稍后再看', en: "Can't read the agent list right now. Try again later" },
@@ -200,13 +199,14 @@ export function ProfileCard({ open, onClose, onMention }: {
       document.body,
     )
   }
-  // 贴着点的那个东西开:头像在左(助手)往右开、在右(你自己)往左开;名字条往下开。只夹不翻:下面放不下就往上挪,不跳到另一边。
+  // 贴着点的那个东西开:头像在左(助手)往右开、在右(你自己)往左开 —— 只夹不翻(卡在头像旁边,往上挪也盖不住头像);
+  // 名字条往下开,下面放不下就翻到名字条上面(走查:只夹会把卡推上来盖住刚点的名字条)。
   // x / y 只是第一帧(锚点量不出来时)的兜底,之后都按 follow 现量。
   const r = open.anchor.getBoundingClientRect()
   const right = open.subject.kind === 'user'
   return createPortal(
     <OverlayAt className="pc-card" role="dialog" aria-label={t('pc.label', { name: subjectName(open.subject, t) })} x={right ? r.left - 8 : r.right + 8} y={r.top - 4}
-      anchor={follow} gap={gap} flip={false} alignEnd={right} margin={8}
+      anchor={follow} gap={gap} flip={open.from === 'name'} alignEnd={right} margin={8}
       innerRef={(el) => { popRef.current = el; if (el) el.tabIndex = -1 }}>
       {body}
     </OverlayAt>,
@@ -316,7 +316,8 @@ function SavedAgent({ def, url, siblings, act, onMention }: { def: NormalAgentDe
     modelName: (id) => models?.find((m) => m.id === id)?.name,
     skillName: (id) => skills?.find((s: { id?: string; name?: string }) => s.id === id)?.name,
   }, t)
-  const state = <span className={`pc-state${busy ? ' working' : ''}`}><i />{def.disabled ? t('pc.state.off') : busy ? t('pc.state.busy', { n: busy }) : t('pc.state.idle')}</span>
+  // 停用时卡头已有「已停用」标签,状态行不再重复一遍
+  const state = def.disabled ? null : <span className={`pc-state${busy ? ' working' : ''}`}><i />{busy ? t('pc.state.busy', { n: busy }) : t('pc.state.idle')}</span>
   const toast = (msg: string, err = false): void => useApp.getState().toast(msg, err)
   const toggleOff = async (): Promise<void> => {
     try {
