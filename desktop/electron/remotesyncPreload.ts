@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('remoteSync', {
     ipcRenderer.on('remotesync:dropboxAuth', listener)
     return () => ipcRenderer.removeListener('remotesync:dropboxAuth', listener)
   },
+  gdriveAuthStart: (clientId: string, clientSecret: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('remotesync:gdriveAuthStart', clientId, clientSecret),
+  onGdriveAuth: (cb: (r: unknown) => void): (() => void) => {
+    const listener = (_e: IpcRendererEvent, r: unknown): void => cb(r)
+    ipcRenderer.on('remotesync:gdriveAuth', listener)
+    return () => ipcRenderer.removeListener('remotesync:gdriveAuth', listener)
+  },
   onStatus: (cb: (st: unknown) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, st: unknown): void => cb(st)
     ipcRenderer.on('remotesync:status', listener)

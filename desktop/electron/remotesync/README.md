@@ -14,6 +14,7 @@
 | `webdav` | WebDAV(坚果云/Nextcloud/自建) |
 | `penzor` | Forsion 云端(server microserver/remotesync;条件写 CAS)—— 实现住在 Forsion Extend 包,经 `backends.ts` 注册点接入;没装 Extend 就没有这一项 |
 | `dropbox` | Dropbox(自研直连 REST v2;OAuth PKCE + refresh token,rev 条件写 CAS) |
+| `gdrive` | Google Drive(自研直连 REST v3;桌面应用 OAuth 客户端 + PKCE + refresh token,权限 `drive.file`;无条件写,写前复查身份,见「上限」) |
 
 Dropbox 授权 = 链接登录。App Key 来自 `fsDropbox.ts` 的 `FORSION_DROPBOX_APP_KEY`
 (Forsion 官方应用;PKCE 公共客户端无 secret,随包发是官方做法)——**填了它用户就不用建应用**,
@@ -26,9 +27,38 @@ UI 也留了「改用自建 Dropbox 应用」的出口。用户自建的 key 落
 登记值逐字相等),授权码自动回填;回环口起不来(被占/受限)自动降级为「页面显示授权码 + 手贴」。
 state 校验必须保留——回环口本机任意进程都能打。
 
+Google Drive 授权同样是链接登录,客户端来自 `fsGdrive.ts` 的 `FORSION_GDRIVE_CLIENT_ID` /
+`FORSION_GDRIVE_CLIENT_SECRET`(Forsion 官方「桌面应用」客户端;Google 明说桌面客户端的 secret 不算机密,
+但 token 端点仍要它)——为空则 UI 退回「自建客户端 + 填 ID 和 secret」。和 Dropbox 的差别:
+
+- 回环地址 `http://127.0.0.1:<系统选的端口>/`:Google 对桌面客户端不校验回环端口,不用写死;
+  Google 已关掉 OOB 手贴码,**没有手贴兜底**,回环起不来直接报 `loopback-unavailable`。
+  授权 URL 带 `access_type=offline&prompt=consent`,重连也必拿到 refresh token。
+- 权限 `drive.file`(免安全审计):**只看得到本客户端建的文件**。用户在网页版里手动拖进同步目录的文件同步不到;
+  换客户端(自建 ↔ 官方、换一个自建)远端可见集整个变了 —— 指纹 `gdrive:<clientId>|<permissionId>|<目录>`
+  带 client id,换了就作废基线走首次合流,绝不把「看不见」当「被删」。每台设备要用同一个客户端。
+- 自建客户端的同意屏幕停在「测试」状态时,Google 发的 refresh token 7 天过期,要发布成正式版。
+- 缺省远端目录 `Forsion-Vault`(在「我的云端硬盘」下;Drive 没有 App Folder 沙箱,空着会撒在根上)。
+- 设置页改了自建客户端再保存,旧 refresh token 作废(它只对签发它的客户端有效),要重新连接。
+- Drive 按 ID 寻址、同名可以并存:walk 一次平铺列出全部可见文件,内存里建「路径 → ID」。同名文件夹合并
+  (两台并发首推各建了一个);同名文件按 createdTime→id 排,第一个占原路径,其余以
+  `名 (conflict gdrive <文件 ID>).扩展名` 露出 —— 各自映射到自己的 ID,本地删掉这份副本 = 远端那份进回收站
+  (派生 key 万一撞上真实文件名,整轮报 `gdrive-key-collision`,不静默吞掉一个 ID)。同名的空文件夹不挤占文件的路径。
+  Google 文档类(不可下载)与名字带 `/` 的跳过;列表自报 `incompleteSearch` 一律当失败。下载后对清单的 sha256 / md5 校验,
+  对不上(清单之后被改过)就报错、保留基线。
+- 写入一律 resumable 会话(multipart 只适合 5MB 内);删除 = 移进 Drive 回收站;限流(429 / 403 rate limit)退避重试,
+  内容 PUT 不重试(可能已落盘,重试会出重复文件)。walk 只读,远端目录不存在 = 空远端,第一次写才建。
+
 同步方式(SyncOptions.direction,remotely-save 的 sync direction 对标):`both` 双向(默认);
 `push` 仅上传 = 增量备份(不拉取、不传播删除,冲突以本地为准);`pull` 仅下载 = 增量还原
 (不推送、不传播删除,冲突仍出本地副本)。单向模式绝不动被丢弃方向的基线,切回双向自然收敛。
+
+出网:Dropbox / Google Drive 两个后端由宿主注入 `abortableFetch(net.fetch)`(`remotesyncIpc.ts` 的 `remoteFetch`),
+走 Chromium 网络栈,认系统代理 / PAC / SOCKS —— 主进程 Node 全局 fetch 不认系统代理,国内开系统代理(非 TUN)时连不上。
+包装补齐 net.fetch 与 Node fetch 的差别:不带默认会话的 cookie、不读也不写 HTTP 缓存、已 abort 的不再发;
+abort 本身靠 net.fetch(实测等头 / 读体 / 上传途中都生效,上传被掐断后服务端收不到完整请求体),响应原样返回、不另缓冲。
+后端本身不 import electron,单测照旧 stub 全局 fetch。升级 Electron 后跑 `npm run check:remotesync-netfetch`
+(本机假服务 + 本机假代理,不出网)。S3 / WebDAV / 文件夹不在此列(国内服务为主,用的是各自的库)。
 
 ## 同步语义(自研核心,见 NOTICE.md 合规边界)
 
@@ -53,6 +83,11 @@ state 校验必须保留——回环口本机任意进程都能打。
 - **远端写无条件写(无 CAS)**:walk 与 push 之间另一设备写同 key,其版本会被盖掉且不留副本
   (与 remotely-save 同款窗口;真解 = M2 能力探测后用 WebDAV If-Match / 支持条件写的 S3)。
   非并发场景(单人多设备错峰)不受影响,三方对账 + 冲突副本兜住绝大多数分叉。
+- **Google Drive 没有条件写**:v3 的 File 没有 etag,`files.update` 不认 If-Match。只能写前按 ID 复查身份
+  (`id@headRevisionId` + 名字 + 父目录,放在发内容 / 回收请求的前一刻,限流重试的每一次都重新复查)、新建前按
+  「全部同名父目录 + 名字」复查不存在 —— 窗口从「walk 到 push 整段」缩到「复查到写入一个往返」,
+  不是原子的。窗口里另一台改了同一个文件,其版本会被盖掉(Drive 自己留了历史版本,可在网页版「管理版本」找回);
+  两台同时新建同名文件不会互相覆盖,而是并存成两份,下一轮以冲突 key 露出。
 - 冲突不做 diff3 智能合并(M2:本地存基线 blob 后接 `node-diff3`);M1 = 冲突副本。
 - folder 后端身份 = mtime+size(同毫秒同大小的外部改动检测不到;要更强换内容 hash)。
 - 空目录不同步(文件驱动,拉取时按需建父目录)。

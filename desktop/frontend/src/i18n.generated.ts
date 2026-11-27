@@ -1421,7 +1421,7 @@ registerMessages({
   "settings.notes.cloudSyncPendingDel": { "zh": "删除保护：{n} 项批量删除已被拦下，确认后才会执行", "en": "Deletion guard: {n} bulk deletion(s) held, confirm to proceed" },
   "settings.notes.cloudSyncConfirmDel": { "zh": "确认删除", "en": "Confirm deletions" },
   "settings.remotesync.label": { "zh": "本地智库远程同步", "en": "Vault remote sync" },
-  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / Google Drive / S3 / WebDAV / 文件夹），手动或定时，非实时。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / Google Drive / S3 / WebDAV / folder), manually or on a schedule. Mass-delete guard and conflict copies keep data safe." },
   "settings.remotesync.service": { "zh": "远程服务", "en": "Remote service" },
   "settings.remotesync.schedule": { "zh": "同步计划", "en": "Sync schedule" },
   "settings.remotesync.scheduleHint": { "zh": "按固定间隔在后台自动同步；任何时候都可以手动「立即同步」。", "en": "Runs automatically in the background at the chosen interval; you can always sync manually." },

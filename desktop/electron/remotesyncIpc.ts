@@ -10,11 +10,12 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { BrowserWindow, app, ipcMain, shell } from 'electron'
+import { BrowserWindow, app, ipcMain, net, shell } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
+import { abortableFetch } from './remotesync/abortableFetch'
 import { clampMaxFile, extraBackend, extraBackendKinds } from './remotesync/backends'
 import { moveAsideFromSync, runSync } from './remotesync/engine'
 import {
@@ -25,6 +26,14 @@ import {
   dropboxExchangeCode,
   pkcePair,
 } from './remotesync/fsDropbox'
+import {
+  FORSION_GDRIVE_CLIENT_ID,
+  FORSION_GDRIVE_CLIENT_SECRET,
+  createGdriveRemote,
+  gdriveAuthUrl,
+  gdriveBaseSegs,
+  gdriveExchangeCode,
+} from './remotesync/fsGdrive'
 import { createDirRemote } from './remotesync/fsLocal'
 import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
@@ -34,7 +43,7 @@ import { currentCloudAccountId } from './amadeus/settings'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
-  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox'
+  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox' | 'gdrive'
   /** 定时同步间隔(分钟);0 = 仅手动。 */
   intervalMin: number
   folder?: { path: string }
@@ -42,6 +51,8 @@ export interface RemoteSyncConfig {
   webdav?: WebdavConfig
   penzor?: { vault?: string }
   dropbox?: { appKey: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
+  /** clientId / clientSecret 只存用户自建的;用内置官方客户端时留空(同 dropbox.appKey)。accountId = Drive permissionId。 */
+  gdrive?: { clientId: string; clientSecret?: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
   /** 同步方式:both=双向(默认);push=仅上传(增量备份);pull=仅下载(增量还原)。 */
   direction?: 'both' | 'push' | 'pull'
   /** 启动后自动同步一次(15s 后)。 */
@@ -87,6 +98,10 @@ async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncC
 
 interface BuiltRemote { remote: RemoteFs; fingerprint: string; maxFileBytes?: number }
 
+/** Dropbox / Google Drive 出网走 Chromium 网络栈(认系统代理 / PAC / SOCKS):Node 全局 fetch 不认系统代理,
+ *  国内开系统代理(非 TUN)时连不上。net.fetch 读响应体途中不理 abort、默认带 cookie,由 abortableFetch 补齐。 */
+const remoteFetch = abortableFetch((input, init) => net.fetch(input, init))
+
 async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error: string }> {
   if (cfg.backend === 'folder') {
     const p = cfg.folder?.path?.trim()
@@ -108,9 +123,20 @@ async function buildRemote(cfg: RemoteSyncConfig): Promise<BuiltRemote | { error
     const key = dbxAppKey(d)
     if (!key || !d?.refreshToken) return { error: 'dropbox-not-connected' }
     return {
-      remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir }),
+      remote: createDropboxRemote({ appKey: key, refreshToken: d.refreshToken, baseDir: d.baseDir, fetch: remoteFetch }),
       // 指纹绑账号:换 Dropbox 账号 = 基线作废走首次合流,绝不带旧基线做删除判定
       fingerprint: `dropbox:${d.accountId || key}|${(d.baseDir ?? '').trim() || '/'}`,
+    }
+  }
+  if (cfg.backend === 'gdrive') {
+    const g = cfg.gdrive
+    const client = gdriveClient(g)
+    if (!client.clientId || !g?.refreshToken) return { error: 'gdrive-not-connected' }
+    return {
+      remote: createGdriveRemote({ ...client, refreshToken: g.refreshToken, baseDir: g.baseDir, fetch: remoteFetch }),
+      // 指纹绑「客户端 × 账号 × 目录」:drive.file 只看得到本客户端建的文件,换客户端 = 远端可见集整个变了,
+      // 必须作废基线走首次合流,否则旧基线会把「看不见」当成「被删」
+      fingerprint: `gdrive:${client.clientId}|${g.accountId || ''}|${gdriveBaseSegs(g.baseDir).join('/')}`,
     }
   }
   if (cfg.backend === 'off') return { error: 'backend off' }
@@ -310,7 +336,7 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
   const pending = dbxPending
   if (!pending) return { ok: false, error: 'auth-not-started' }
   try {
-    const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri)
+    const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri, remoteFetch)
     dbxPending = null
     const cur = (await loadConfig()).dropbox
     const config = await saveConfig({
@@ -321,6 +347,91 @@ async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: s
   } catch (e) {
     return { ok: false, error: String((e as Error)?.message || e) }
   }
+}
+
+// ── Google Drive 链接登录:回环回调,端口交系统选(Google 对桌面客户端的回环地址不校验端口)──────────
+// Google 已关掉 OOB「页面显示授权码」流程,没有手贴兜底:回环起不来就报错。
+/** 生效客户端:用户自建优先(ID 与 secret 成对取),否则内置 Forsion 官方客户端(空 = 两者都没有)。 */
+function gdriveClient(g?: { clientId?: string; clientSecret?: string }): { clientId: string; clientSecret?: string } {
+  const own = (g?.clientId ?? '').trim()
+  if (own) return { clientId: own, clientSecret: (g?.clientSecret ?? '').trim() || undefined }
+  return { clientId: FORSION_GDRIVE_CLIENT_ID, clientSecret: FORSION_GDRIVE_CLIENT_SECRET || undefined }
+}
+
+interface GdAttempt { clientId: string; clientSecret?: string; custom: boolean; verifier: string; redirectUri: string }
+/** 当前这次授权(每次「连接」新建一个;回调与换码都只认自己那一次,旧的晚到不覆盖新的)。 */
+let gdAttempt: GdAttempt | null = null
+let gdServer: { close: () => void } | null = null
+let gdTimer: NodeJS.Timeout | null = null
+
+function stopGdServer(): void {
+  if (gdTimer) clearTimeout(gdTimer)
+  gdTimer = null
+  gdServer?.close()
+  gdServer = null
+}
+
+/** 授权码 → refresh token,落配置(自建客户端的 ID / secret 与 token 一起存,官方的不落)。
+ *  换码期间用户又点了一次「连接」:这次的结果作废,不盖掉新的。 */
+async function finishGdriveAuth(attempt: GdAttempt, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
+  try {
+    const r = await gdriveExchangeCode(attempt, code, attempt.verifier, attempt.redirectUri, remoteFetch)
+    if (gdAttempt !== attempt) return { ok: false, error: 'auth-superseded' }
+    gdAttempt = null
+    const cur = (await loadConfig()).gdrive
+    const config = await saveConfig({
+      gdrive: {
+        ...cur,
+        clientId: attempt.custom ? attempt.clientId : '',
+        clientSecret: attempt.custom ? attempt.clientSecret : '',
+        refreshToken: r.refreshToken,
+        accountId: r.accountId,
+        email: r.email ?? r.name,
+      },
+    })
+    return { ok: true, email: r.email ?? r.name, config }
+  } catch (e) {
+    if (gdAttempt === attempt) gdAttempt = null
+    return { ok: false, error: String((e as Error)?.message || e) }
+  }
+}
+
+async function startGdriveAuth(clientId: string, clientSecret: string): Promise<{ ok: boolean; error?: string }> {
+  const custom = (clientId ?? '').trim()
+  const client = custom ? { clientId: custom, clientSecret: (clientSecret ?? '').trim() || undefined } : gdriveClient()
+  if (!client.clientId) return { ok: false, error: 'no-client-id' }
+  stopGdServer()
+  const { verifier, challenge } = pkcePair()
+  const state = randomBytes(16).toString('hex')
+  // 先登记这一次,再起监听:回调闭包认的是自己的 attempt,不读全局
+  const attempt: GdAttempt = { ...client, custom: !!custom, verifier, redirectUri: '' }
+  gdAttempt = attempt
+  const srv = await dropboxCallbackServer(0, state, (r) => {
+    if (gdAttempt !== attempt) return // 已被新的一次顶掉
+    stopGdServer()
+    if ('error' in r) {
+      gdAttempt = null
+      sendAll('remotesync:gdriveAuth', { ok: false, error: r.error })
+    } else void finishGdriveAuth(attempt, r.code).then((out) => sendAll('remotesync:gdriveAuth', out))
+  })
+  if (gdAttempt !== attempt) {
+    srv?.close()
+    return { ok: false, error: 'auth-superseded' }
+  }
+  if (!srv) {
+    gdAttempt = null
+    return { ok: false, error: 'loopback-unavailable' }
+  }
+  gdServer = srv
+  attempt.redirectUri = `http://127.0.0.1:${srv.port}/`
+  gdTimer = setTimeout(() => {
+    if (gdAttempt !== attempt) return
+    stopGdServer()
+    gdAttempt = null
+    sendAll('remotesync:gdriveAuth', { ok: false, error: 'auth-timeout' })
+  }, DBX_AUTH_TIMEOUT_MS)
+  await shell.openExternal(gdriveAuthUrl(client.clientId, challenge, attempt.redirectUri, state))
+  return { ok: true }
 }
 
 /** 本机笔记库多大(蓬洲云「同步」页 / 首登卡片写「412 MB · 用掉 2 GB 里的 20%」)。
@@ -398,11 +509,19 @@ export function registerRemoteSync(): void {
       rootError: 'error' in rooted ? rooted.error : null,
       // 有内置官方 Dropbox 应用 → UI 收起 App Key 那一栏,直接给「连接 Dropbox」
       dropboxBuiltin: FORSION_DROPBOX_APP_KEY !== '',
+      // 有内置官方 Google 客户端 → UI 收起客户端 ID / secret,直接给「连接 Google Drive」
+      gdriveBuiltin: FORSION_GDRIVE_CLIENT_ID !== '',
       // 外置后端(Forsion Extend 注册的 kind,如 penzor):渲染层只列这里有的选项
       backends: extraBackendKinds(),
     }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
+    // refresh token 只对签发它的那个 Google 客户端有效:设置页改了客户端再保存,旧 token 作废(要重新连接),
+    // 别把 B 客户端和 A 的 token 拼在一起存下(续期必失败)
+    const cur = (await loadConfig()).gdrive
+    if (patch?.gdrive && cur?.refreshToken && (patch.gdrive.clientId ?? '').trim() !== (cur.clientId ?? '').trim()) {
+      patch = { ...patch, gdrive: { ...patch.gdrive, refreshToken: undefined, accountId: undefined, email: undefined } }
+    }
     const next = await saveConfig(patch ?? {})
     resetTimer(next)
     return next
@@ -436,6 +555,11 @@ export function registerRemoteSync(): void {
   })
   ipcMain.handle('remotesync:dropboxAuthFinish', async (_e, _appKey: string, code: string) =>
     finishDropboxAuth(code ?? ''),
+  )
+
+  // Google Drive OAuth PKCE:只有回环自动回填一条路(结果经 remotesync:gdriveAuth 广播)
+  ipcMain.handle('remotesync:gdriveAuthStart', async (_e, clientId: string, clientSecret: string) =>
+    startGdriveAuth(typeof clientId === 'string' ? clientId : '', typeof clientSecret === 'string' ? clientSecret : ''),
   )
 
   void loadConfig().then((cfg) => {

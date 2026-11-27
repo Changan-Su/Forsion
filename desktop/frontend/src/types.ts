@@ -1223,6 +1223,9 @@ declare global {
       dropboxAuthStart(appKey: string): Promise<{ ok: boolean; error?: string; mode?: 'auto' | 'manual'; redirectUri?: string }>
       dropboxAuthFinish(appKey: string, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }>
       onDropboxAuth(cb: (r: { ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }) => void): () => void
+      /** Google Drive 链接登录:只有回环自动回填(结果走 onGdriveAuth)。旧主进程没有。 */
+      gdriveAuthStart?(clientId: string, clientSecret: string): Promise<{ ok: boolean; error?: string }>
+      onGdriveAuth?(cb: (r: { ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }) => void): () => void
       onStatus(cb: (s: { running: boolean; lastReport: RemoteSyncReport | null; progress: RemoteSyncProgress | null }) => void): () => void
     }
   }
@@ -1237,7 +1240,7 @@ export interface RemoteSyncProgress {
 
 /** 本地库远程同步配置(镜像 electron/remotesyncIpc.ts 的 RemoteSyncConfig)。 */
 export interface RemoteSyncConfig {
-  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox'
+  backend: 'off' | 'folder' | 's3' | 'webdav' | 'penzor' | 'dropbox' | 'gdrive'
   /** 定时同步间隔(分钟);0 = 仅手动。 */
   intervalMin: number
   folder?: { path: string }
@@ -1245,6 +1248,7 @@ export interface RemoteSyncConfig {
   webdav?: { address: string; username: string; password: string; authType?: 'basic' | 'digest'; baseDir?: string }
   penzor?: { vault?: string }
   dropbox?: { appKey: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
+  gdrive?: { clientId: string; clientSecret?: string; refreshToken?: string; accountId?: string; email?: string; baseDir?: string }
   /** 同步方式:both=双向(默认);push=仅上传(增量备份);pull=仅下载(增量还原)。 */
   direction?: 'both' | 'push' | 'pull'
   /** 启动后自动同步一次(15s 后)。 */
@@ -1281,6 +1285,8 @@ export interface RemoteSyncState {
   rootError: string | null
   /** 装机自带 Forsion 官方 Dropbox 应用 → 无需用户填 App Key,点一下即登。 */
   dropboxBuiltin?: boolean
+  /** 装机自带 Forsion 官方 Google OAuth 客户端 → 无需用户建客户端。 */
+  gdriveBuiltin?: boolean
   /** 外置后端(Forsion Extend 注册的 kind,如 'penzor'):选项只列这里有的;老宿主没有这个字段 = 没有外置后端。 */
   backends?: string[]
 }

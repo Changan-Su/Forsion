@@ -1,6 +1,6 @@
 /**
  * 远程同步的**外置后端注册点**(2026-09-28,Forsion Extend 第三刀):Forsion 云端后端(penzor)搬进 Extend 主进程半身,
- * 宿主只留 folder / S3 / WebDAV / Dropbox。Extend 装载时(cloudHost.ts,早于 registerRemoteSync)按 kind 注册一个工厂,
+ * 宿主只留 folder / S3 / WebDAV / Dropbox / Google Drive。Extend 装载时(cloudHost.ts,早于 registerRemoteSync)按 kind 注册一个工厂,
  * remotesyncIpc 的 buildRemote 遇到不认识的 backend 就来这里查;`remotesync:get` 把已注册的 kind 报给渲染层,
  * RemoteSyncSection 据此显示 / 隐藏对应选项 —— 没装 Extend 就没有「Forsion 云端」这一项。
  *

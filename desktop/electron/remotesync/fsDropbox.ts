@@ -19,6 +19,8 @@ export interface DropboxConfig {
   refreshToken: string
   /** 远端根目录(如 /Forsion-Vault;App Folder 型应用相对其沙箱根;空 = 根)。 */
   baseDir?: string
+  /** 换掉全局 fetch(宿主注入走系统代理的实现,见 abortableFetch.ts;缺省调用时再取全局 fetch,便于测试 stub)。 */
+  fetch?: typeof fetch
 }
 
 const API = 'https://api.dropboxapi.com'
@@ -144,7 +146,9 @@ export async function dropboxExchangeCode(
   code: string,
   verifier: string,
   redirectUri?: string,
+  fetchImpl?: typeof fetch,
 ): Promise<{ refreshToken: string; accountId: string; email?: string; name?: string }> {
+  const fetch = fetchImpl ?? globalThis.fetch
   const body = new URLSearchParams({ grant_type: 'authorization_code', code: code.trim(), code_verifier: verifier, client_id: appKey })
   if (redirectUri) body.set('redirect_uri', redirectUri)
   const rsp = await fetch(`${API}/oauth2/token`, { method: 'POST', body })
@@ -169,6 +173,7 @@ export async function dropboxExchangeCode(
 // ── RemoteFs ─────────────────────────────────────────────────────────────────
 
 export function createDropboxRemote(cfg: DropboxConfig): RemoteFs {
+  const fetch: typeof globalThis.fetch = (input, init) => (cfg.fetch ?? globalThis.fetch)(input, init)
   const base = normBaseDir(cfg.baseDir)
   const absOf = (key: string): string => `${base}/${key}`
   let cached: { token: string; exp: number } | null = null
