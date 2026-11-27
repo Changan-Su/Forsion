@@ -3337,7 +3337,7 @@ const tabCountText = (list) => {
       assert.deepEqual(ids(menu).map((i) => rowLabel(menu, `nativeSheet.item.${i}`)), ['全部已读'], 'the main button\'s long-press menu = the source\'s other actions')
       h.key(4)
       await waitSheet(false)
-      assert.ok(!stubLog.slice(held).some(listAsked), 'the long-press on the main button also pulled')
+      assert.ok(!stubLog.slice(held).some(listAsked), `the long-press on the main button also pulled (inbox requests since the hold: ${stubLog.slice(held).filter((l) => l.includes('/inbox/')).join(' | ')})`)
 
       // pulling the list down = its search line, in the list (not the palette), with the keyboard
       await cdp.eval(`(document.querySelector('${L} .t2sw-plug-list').scrollTop = 0, true)`)

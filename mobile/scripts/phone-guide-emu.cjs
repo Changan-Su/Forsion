@@ -579,7 +579,7 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
       await h.pause(1000)
       note(`F1 native ${JSON.stringify(await nativeStatus())}`)
       // open settings through the dock's Me page (since #768 the account entry is there, not in the top bar)
-      const meCell = await h.waitNodes((l) => h.byId(l, 'nativeChrome.space.@me'), { timeout: 8000 })
+      const meCell = await h.waitNodes((l) => h.byId(l, 'nativeChrome.space.@me'), { timeout: 20000 }) // a cold start after pm clear
       assert.ok(meCell.hit, 'no "Me" cell in the dock to reach settings')
       h.tapNode(meCell.hit)
       const settingsRow = `document.querySelector('.mb-phonepage[data-phone-page="me"] [data-row="rb-settings"]')`
@@ -606,7 +606,13 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
         if (d) {
           note(`F1 ask #${i} buttons=[${d.buttons.join(', ')}]`)
           const deny = d.list.find((n) => /permission_deny_and_dont_ask_again_button$/.test(n['resource-id'] || '')) || d.list.find((n) => /permission_deny_button$/.test(n['resource-id'] || ''))
-          assert.ok(deny, 'no deny button'); h.tapNode(deny); await waitNoDialog(d.kind)
+          assert.ok(deny, 'no deny button'); h.tapNode(deny)
+          // a tap while the dialog is still sliding in can be lost (seen on an x86_64 emulator): once more if it is still up
+          await h.pause(1500)
+          const nowList = h.nodes(OUT), again = readDialog(nowList)
+          const denyAgain = again && again.kind === d.kind && nowList.find((n) => /permission_deny(_and_dont_ask_again)?_button$/.test(n['resource-id'] || ''))
+          if (denyAgain) { note(`F1 ask #${i}: the tap on deny was lost — tapping again`); h.tapNode(denyAgain) }
+          await waitNoDialog(d.kind)
         }
         await h.pause(1500)
         note(`F1 after ask #${i}: rows ${JSON.stringify(await states())} native ${JSON.stringify(await nativeStatus())}`)
