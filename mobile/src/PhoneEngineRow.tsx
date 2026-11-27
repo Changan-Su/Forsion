@@ -4,7 +4,7 @@
  * 只在安卓 App 带了启动器、且构建配了环境包地址时出现(phoneEngineOffered)。一行走完整个生命周期:
  *   没装 → 点开确认(下载 / 占用大小、用流量时提醒、没有命令沙箱的说明)→ 下载(可暂停 / 继续,断点续传)→ 解包 → 自检
  *   → 装好:点一下 = 选它运行(setDraftLocation,与电脑同一个出口);右侧「⌄」展开详情:占用、版本、更新、停止、重置、删除。
- * 对话与工作区文件在环境之外(原生 files/local-engine/home、workspace):更新 / 重置 / 删除环境都不动它们。
+ * 对话与工作区文件在环境之外、按 Forsion 账号分开(原生 files/local-engine/accounts/<账号>/home、workspace):更新 / 重置 / 删除环境都不动它们。
  *
  * ⚠️ 本组件挂在 UnitsSheet 里,而 UnitsSheet 也被网页手机形态复用:不许 import capacitor,原生能力只经
  *    window.tangu.localEngine(phoneEngineHost();网页 / 老包缺席 → 本行不渲染)。

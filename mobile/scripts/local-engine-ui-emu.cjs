@@ -4,7 +4,7 @@
  * 判据:界面上能看到的(弹层里的行与面板、药丸上的名字、聊天里的回复)+ 原生状态 + 假模型被问了两次;每步截图。
  *
  * 云端 API(localhost:8788)由 CDP Fetch 拦截应答(同 phone-guide-emu.cjs),本机引擎的请求走原生中继 → 127.0.0.1,不经网络栈。
- * 引擎的模型:home/config.json 里配一个直连 provider(假模型 10.0.2.2:18901),cloud.defaultModel = emu/echo。
+ * 引擎的模型:账号目录 accounts/<账号>/home/config.json 里配一个直连 provider(假模型 10.0.2.2:18901),cloud.defaultModel = emu/echo。
  *
  * 前置:
  *   cd mobile && VITE_API_ORIGIN=http://localhost:8788 npm run build && npm run sync:android \
@@ -223,6 +223,35 @@ async function main() {
   ok('the tool wrote into this phone\'s workspace', probe === 'marker-42', probe)
   await h.pause(1500)
   shot('11-reply')
+
+  // ⑦ the chat list's "This phone" group (DeviceSessionSections): the session is listed under it; with the engine
+  //    stopped, tapping it starts the engine first and then opens the chat (the native side does not start it for GETs)
+  const phoneRow = visible('[data-device-section="00000000-0000-4000-8000-000000000001"] [data-remote-session]')
+  let listed = false
+  for (let i = 0; i < 6 && !listed; i++) {
+    h.key(4) // back: chat → chat list
+    listed = !!(await h.waitPage(cdp, `!!${phoneRow}`, 5000).catch(() => false))
+  }
+  const groupRowText = listed && await cdp.eval(`${phoneRow}.innerText`)
+  ok('the chat list shows the session under This phone', listed && /TOOLTEST/.test(groupRowText || ''), JSON.stringify(groupRowText))
+  shot('12-phone-group')
+  if (listed) {
+    await cdp.eval(`Capacitor.Plugins.ForsionLocalEngine.stop().then(() => true)`)
+    await waitState((x) => x.engine === 'stopped', 30000, 'engine stopped')
+    // (this emulator crashes ~1 in 3 cold starts with a glibc "double free" in the environment — probe-apk/REPORT.md;
+    // start() retries once itself; a failed start toasts and stays on the list, so the bench taps again, up to 3 times)
+    let back = null
+    let taps = 0
+    while (taps < 3 && (!back || back.engine !== 'running')) {
+      if (taps) await h.waitPage(cdp, `!!${phoneRow}`, 15000)
+      taps++
+      await tapEl(phoneRow)
+      back = await waitState((x) => x.engine === 'running' || x.engine === 'failed', 200000, 'engine running from the row')
+    }
+    const opened = back.engine === 'running' && await h.waitPage(cdp, `(() => { const ta = ${visible('.t2c-ta')}; return !!ta && /marker-42/.test(document.body.innerText) })()`, 60000)
+    ok('tapping it with the engine stopped starts the engine and opens the chat', back.engine === 'running' && !!opened, `${taps} tap(s) ${back.engineError || ''}`)
+    shot('13-reopened')
+  }
 
   cdp.close()
   fx.close()

@@ -292,8 +292,9 @@ final class LocalEngineInstaller {
     void installFresh(Manifest m, Listener l, Swap swap) throws IOException {
         cancelled = false;
         ensureRecovered();
-        // reserve what extraction may actually write (bounded sizes, see Layer: no overflow)
-        long need = m.base.size + m.engine.size + m.base.extractBudget() + m.engine.extractBudget() - partBytes(m.base) - partBytes(m.engine);
+        // free space for what the confirmation promised (download + unpacked size) plus a margin; extractBudget is only
+        // the cap that stops a lying archive, not a reservation (bounded sizes, see Layer: no overflow)
+        long need = m.base.size + m.engine.size + m.base.unpackedSize + m.engine.unpackedSize + (64L << 20) - partBytes(m.base) - partBytes(m.engine);
         checkSpace(need);
         File baseArc = download(m.base, l);
         File engArc = download(m.engine, l);
@@ -334,7 +335,7 @@ final class LocalEngineInstaller {
     void updateEngine(Manifest m, JSONObject installed, Listener l, Swap swap) throws IOException {
         cancelled = false;
         ensureRecovered();
-        checkSpace(m.engine.size + m.engine.extractBudget() - partBytes(m.engine));
+        checkSpace(m.engine.size + m.engine.unpackedSize + (32L << 20) - partBytes(m.engine));
         File engArc = download(m.engine, l);
         File staging = new File(paths.base, "engine.new");
         LocalEnginePaths.deleteTree(staging);
