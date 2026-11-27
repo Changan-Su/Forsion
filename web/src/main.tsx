@@ -9,6 +9,7 @@ import { createCloudAmadeusBridge, setCloudNotify } from './amadeus/cloudBridge'
 import { installCloudCollab } from './amadeus/cloudCollab'
 import { openTargetWhenReady, takeOpenTarget } from './openTarget'
 import { showUnitBootError } from './unitBootError'
+import { installStaleBuildRecovery } from '@/staleBuild'
 import { unitProjectionRoute } from './unitProjectionRoute'
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 
@@ -24,6 +25,9 @@ const APP_ENTRIES = {
   desktop: () => import('@/main'),
 }
 function loadApp(uiMobile: boolean): Promise<unknown> { return APP_ENTRIES[uiMobile ? 'mobile' : 'desktop']() }
+
+// 部署换版后,旧标签页按需加载会 404:确认服务器已是新版就提示刷新(见 staleBuild.ts)
+installStaleBuildRecovery()
 
 async function bootstrap(): Promise<void> {
   const path = location.pathname
