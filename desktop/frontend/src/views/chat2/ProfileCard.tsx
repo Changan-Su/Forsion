@@ -83,7 +83,7 @@ registerMessages({
   'pc.avatarTooLarge': { zh: '头像不能超过 1 MB', en: 'The avatar must be 1 MB or smaller' },
   'pc.me.you': { zh: '你', en: 'You' },
   'pc.me.signedIn': { zh: '你 · 已登录', en: 'You · signed in' },
-  'pc.me.signedOut': { zh: '你 · 未登录', en: 'You · not signed in' },
+  'pc.me.signedOut': { zh: '未登录', en: 'Not signed in' },
   'pc.me.noPortrait': { zh: '还没写', en: 'Not written yet' },
   'pc.quota.today': { zh: '今日 {pct}', en: 'Today {pct}' },
   'pc.quota.week': { zh: '本周 {pct}', en: 'This week {pct}' },
@@ -382,6 +382,8 @@ function MeBody({ anchor, act }: { anchor: HTMLElement; act: Act }) {
   const me = useMeIdentity()
   const auth = useApp((s) => s.authInfo)
   const loggedIn = !!auth?.loggedIn
+  // 名字跟消息里那枚头像同一个来源(ChatView 的 userName):没登录时消息写「你」,卡头也写「你」,不写「关于我」页的「我」
+  const shownName = auth?.nickname || auth?.username || t('pc.me.you')
   // 画像第一句(human/SOUL.md 常驻段)与额度:打开时各取一次;取不到就不出那一行
   const [portrait, setPortrait] = useState<string | null | undefined>(undefined)
   const [quota, setQuota] = useState<AccountQuotaView | null | undefined>(undefined)
@@ -415,7 +417,7 @@ function MeBody({ anchor, act }: { anchor: HTMLElement; act: Act }) {
     }) },
   ]
   return <>
-    <Hero url={me.avatar} name={me.name} chip={loggedIn ? <TierBadge tier={auth?.membershipTier} /> : null} handle={t(loggedIn ? 'pc.me.signedIn' : 'pc.me.signedOut')} />
+    <Hero url={me.avatar} name={shownName} chip={loggedIn ? <TierBadge tier={auth?.membershipTier} /> : null} handle={t(loggedIn ? 'pc.me.signedIn' : 'pc.me.signedOut')} />
     <Rows rows={rows} />
     <Acts items={items} />
   </>

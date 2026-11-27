@@ -185,6 +185,41 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await win.keyboard.press('Escape'); await waitGone()
     await win.evaluate(() => { localStorage.removeItem('forsion_chat_avatars'); delete document.documentElement.dataset.chatAvatars })
 
+    // 6. 手机:触屏窄屏 → 贴底抽屉(phoneSheet() 在卡挂载时判:matchMedia 触屏 + innerWidth < 600)。
+    //    窗口有最小宽度,setContentSize 收不到 600 以下:用设备模拟给 390 宽(同方案出图 shoot.cjs),再只把触屏那条 media query 判真
+    await app.evaluate(({ BrowserWindow }) => { const wc = BrowserWindow.getAllWindows()[0].webContents; wc.setZoomFactor(1); wc.enableDeviceEmulation({ screenPosition: 'mobile', screenSize: { width: 390, height: 780 }, viewPosition: { x: 0, y: 0 }, deviceScaleFactor: 0, viewSize: { width: 390, height: 780 }, scale: 1 }) })
+    await win.evaluate(() => {
+      const orig = window.matchMedia.bind(window)
+      window.__pcMM = orig
+      window.matchMedia = (q) => (q.includes('pointer: coarse') ? { matches: true, media: q, onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false } } : orig(q))
+    })
+    await sleep(800)
+    const phoneHit = (await xa.isVisible()) ? xa : win.locator('.t2-asst .t2-name-hit').first()
+    await phoneHit.click()
+    const sheetUp = await win.waitForSelector('.pc-sheet-scrim .pc-card--sheet', { timeout: 3000 }).then(() => true, () => false)
+    await sleep(600)
+    const sheet = await win.evaluate(() => {
+      const c = document.querySelector('.pc-card--sheet'); if (!c) return null
+      const r = c.getBoundingClientRect(), a = c.querySelector('.pc-acts')?.getBoundingClientRect()
+      return { top: Math.round(r.top), bottom: r.bottom, h: innerHeight, left: r.left, right: r.right, w: innerWidth, innerW: innerWidth, clientH: c.clientHeight, scrollH: c.scrollHeight, actsBottom: a ? Math.round(a.bottom) : null, acts: c.querySelectorAll('.pc-acts button').length }
+    })
+    rep.check('手机宽度:贴底抽屉、左右铺满、底边贴窗口底', sheetUp && !!sheet && sheet.innerW < 600 && Math.abs(sheet.bottom - sheet.h) < 2 && sheet.left < 2 && Math.abs(sheet.right - sheet.w) < 2, JSON.stringify(sheet))
+    rep.check('抽屉内容整张露出(动作行在抽屉里、不用滚)', !!sheet && sheet.scrollH <= sheet.clientH + 1 && sheet.actsBottom !== null && sheet.actsBottom <= sheet.bottom + 1 && sheet.acts === 3, sheet && `clientH=${sheet.clientH} scrollH=${sheet.scrollH} actsBottom=${sheet.actsBottom} acts=${sheet.acts}`)
+    // 设备模拟下 Playwright 的截图按它自己的视口裁,会把抽屉底部裁掉;从窗口直接抓
+    await U.captureWindow(app, path.join(SHOTS, 'phone-sheet.png'))
+    await win.locator('.pc-sheet-scrim').click({ position: { x: 20, y: 20 } })
+    rep.check('点抽屉外的遮罩收起', await waitGone())
+    await win.evaluate(() => { window.matchMedia = window.__pcMM; delete window.__pcMM })
+    await app.evaluate(({ BrowserWindow }) => { const wc = BrowserWindow.getAllWindows()[0].webContents; wc.disableDeviceEmulation(); wc.setZoomFactor(1.1) })
+    await sleep(800)
+
+    // 7. 那条消息没了(重绘 / 删除)→ 卡收掉,不透明地挂着
+    await ra.click()
+    await win.waitForSelector('.pc-card', { timeout: 3000 })
+    await sleep(400)
+    await ra.evaluate((el) => el.closest('.t2-asst')?.remove())
+    rep.check('那条消息没了,卡跟着收', await waitGone())
+
     // 「资料」→ Agents 里 Xyra 的资料页
     await xa.click(); await win.waitForSelector('.pc-card [data-act="profile"]')
     await win.locator('.pc-card [data-act="profile"]').click()
