@@ -28,7 +28,7 @@ import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './Projec
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
 import { AgentUninstallDialog } from '../components/UninstallDialog'
-import { AGENT_SYNC_SEALED } from '../services/syncSeal'
+import { AGENT_SYNC_SEALED } from '../../../../tangu-agent/src/contracts/agentSyncSeal'
 import { useDetailsSubject } from '../stores/detailsSubject'
 import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'

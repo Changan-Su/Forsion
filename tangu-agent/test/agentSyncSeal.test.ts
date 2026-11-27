@@ -151,8 +151,8 @@ describe('sealed agent sync', () => {
     });
   }
 
-  it('syncNow (POST /agent/sync): human/ syncs, agents and the old shared-memory store do not, stored consent unchanged', async () => {
-    const { cloud } = await seed('shared');
+  for (const consent of ['master', 'shared'] as const) it(`syncNow (POST /agent/sync): human/ syncs, agents and the old shared-memory store do not, stored consent unchanged (consent: ${consent})`, async () => {
+    const { cloud } = await seed(consent);
     const memory = new Proxy({}, { get: (_t, name) => { if (name === 'then') return undefined; throw new Error(`historical memory store touched: ${String(name)}`); } });
     setSyncSources({ brain: { agentFiles: cloud, memory } as unknown as CloudBrainServices });
     const before = agentState();

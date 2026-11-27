@@ -8,7 +8,7 @@ import { agentNames } from '../../agentName'
 import { agentDescription } from '../../components/builtinAgentDescriptions'
 import { thinkingLabel } from '../../components/thinkingLabel'
 import { agentEngineLabel } from '../../tangu/agentEngine'
-import { AGENT_SYNC_SEALED } from '../../services/syncSeal'
+import { AGENT_SYNC_SEALED } from '../../../../../tangu-agent/src/contracts/agentSyncSeal'
 import { splitPortrait } from '../../../../../tangu-agent/src/contracts/memoryLayers'
 import { stripMarks } from '../../../../../tangu-agent/src/contracts/entryMark'
 
