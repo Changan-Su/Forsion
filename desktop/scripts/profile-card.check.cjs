@@ -154,6 +154,15 @@ const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
     await win.locator('.t2-stream').click({ position: { x: 12, y: Math.round(sh.height / 2) } })
     rep.check('点别处收起', await waitGone())
 
+    // 「账号」:经 forsion:account-activate 事件交给左下角 AccountCard,开出现有账号面板(Tangu 不直引宿主的 accountChip)
+    await ua.click()
+    await win.waitForSelector('.pc-card [data-act="account"]', { timeout: 3000 })
+    await win.locator('.pc-card [data-act="account"]').click()
+    const accountOpened = await win.waitForSelector('.account-pop', { timeout: 4000 }).then(() => true, () => false)
+    rep.check('「账号」打开现有账号面板', accountOpened && (await waitGone()))
+    await win.keyboard.press('Escape')
+    await sleep(500)
+
     // 深色一张
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await xa.click(); await win.waitForSelector('.pc-card'); await sleep(700)

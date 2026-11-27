@@ -21,7 +21,6 @@ import { focusTarget, homeTarget, useEngineFocus } from '../../services/engine/t
 import { fetchAgentAvatar, getAgentMemorySnapshot, saveAgentDef, uploadAgentAvatar } from '../../services/backendService'
 import { getHumanDocument } from '../../services/humanCollaboration'
 import { formatRemaining, remainingPercent, type AccountQuotaView } from '../../services/accountQuota'
-import { accountChip } from '../../services/accountChip'
 import { currentPlatform } from '../../services/platform'
 import { openSolo } from '../../sessionNav'
 import { openAgentProfile, openHumanProfile } from '../agentProfileNav'
@@ -403,11 +402,17 @@ function MeBody({ anchor, act }: { anchor: HTMLElement; act: Act }) {
   if (quota) rows.push({ key: 'quota', label: t('pc.row.quota'), value: quotaText(quota) })
   else if (quota === undefined && loggedIn) rows.push({ key: 'quota', label: t('pc.row.quota'), value: <span className="pc-faint">{t('pc.loading')}</span> })
   if (portrait !== null) rows.push({ key: 'portrait', label: t('pc.row.portrait'), value: portrait === undefined ? <span className="pc-faint">{t('pc.loading')}</span> : portrait || <span className="pc-faint">{t('pc.me.noPortrait')}</span> })
-  const chip = accountChip()
   const items = [
     { id: 'about-me', icon: <UserRound size={18} />, label: t('pc.act.aboutMe'), run: act(() => openHumanProfile()) },
-    // 账号 = 现有账号面板(额度详情、背包、升级、切号都在那),从这枚头像里开出来
-    ...(chip ? [{ id: 'account', icon: <SquareUser size={18} />, label: t('pc.act.account'), run: act(() => { const el = anchor; requestAnimationFrame(() => accountChip()?.activate(el.isConnected ? el : undefined)) }) }] : []),
+    // 账号 = 现有账号面板(额度详情、背包、升级、切号都在那),从这枚头像里开出来。Tangu 不直引宿主的 accountChip
+    // (tangu-boundary),发 window 事件给 AccountCard(同名事件在 components/AccountCard.tsx 接);没人接 = 开账号中心
+    { id: 'account', icon: <SquareUser size={18} />, label: t('pc.act.account'), run: act(() => {
+      const el = anchor
+      requestAnimationFrame(() => {
+        const ev = new CustomEvent('forsion:account-activate', { cancelable: true, detail: { anchor: el.isConnected ? el : undefined } })
+        if (window.dispatchEvent(ev)) void window.tangu?.openAccountCenter?.()
+      })
+    }) },
   ]
   return <>
     <Hero url={me.avatar} name={me.name} chip={loggedIn ? <TierBadge tier={auth?.membershipTier} /> : null} handle={t(loggedIn ? 'pc.me.signedIn' : 'pc.me.signedOut')} />

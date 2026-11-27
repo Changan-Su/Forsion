@@ -483,6 +483,19 @@ export const AccountCard: React.FC<{
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }
   }, [stateLabel, loggedIn, initial, picture])
+  // Tangu 界面(Chat 头像资料卡的「账号」)不能直引宿主的 accountChip(tangu-boundary:Tangu → 宿主的依赖只许减),
+  // 走 window 事件:detail.anchor = 菜单锚在哪;preventDefault = 有人接了。事件名在 views/chat2/ProfileCard.tsx 同写一份。
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const anchor = (e as CustomEvent<{ anchor?: HTMLElement }>).detail?.anchor
+      const el = anchor?.isConnected ? anchor : anchorRef.current
+      if (!el) return
+      e.preventDefault()
+      activateRef.current(el)
+    }
+    window.addEventListener('forsion:account-activate', on)
+    return () => window.removeEventListener('forsion:account-activate', on)
+  }, [])
 
   const avatarEl = picture ? (
     <img className="account-avatar" src={picture} alt="" onError={() => setImgError(true)} />
