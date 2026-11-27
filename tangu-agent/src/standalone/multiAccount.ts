@@ -48,6 +48,7 @@ import type { StandaloneConfig } from './config.js';
 import { LlmError } from '../core/types.js';
 import { NO_ACCOUNT_FOR_MODEL_CALL, takeModelTicket } from './modelTickets.js';
 import { createAccountBackup, HOST_CONTROL_ENV, type AccountBackup } from './accountBackup.js';
+import { announceReady } from './readyLine.js';
 
 export interface MultiAccountAppOptions {
   localToken: string;            // 宿主口令
@@ -483,6 +484,7 @@ export async function startMultiAccountServer(opts: {
     const address = server.address();
     const port = address && typeof address === 'object' ? address.port : cfg.port;
     if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version: opts.version, mode: 'multi-account' });
+    announceReady({ host: cfg.host, port, version: opts.version, mode: 'multi-account' });
     console.log(`[tangu] standalone (multi-account) 已启动 http://${cfg.host}:${port}`);
   });
   let stopping = false;
