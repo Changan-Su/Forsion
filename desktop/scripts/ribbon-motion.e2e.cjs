@@ -5,6 +5,8 @@
  *   · 图标宽度不低于首帧的 95%(原来字一挂上 18px 图标被 flex 压成 1.7px 的小点);
  *   · 名字:展开后可见、收起后 visibility:hidden(台架不会点到看不见的字);
  *   · 条宽确实在补间(中间帧落在两端之间),会话栏(紧挨 Ribbon 的那一列)左缘与 Ribbon 右缘的差每帧记下来(报数,超过 2px 判红)。
+ *   · 开合中合成层 ≤ 40(2026-11-27:每个名字各自过渡 filter + 跟着条宽伸缩时,开一次多出 ~60 层、重绘翻倍,120Hz 下一半的帧掉成 16ms;
+ *     现在 ~25,与 #903 之前持平。细量用 scripts/motion-fps.probe.cjs);
  *  负对照:RBM_ROOT=<main 检出的 desktop>(要有 out/ 构建)跑,位移与最小宽度两条必须红。
  *  用法:npm run build && node scripts/ribbon-motion.e2e.cjs [--shots=<目录>] */
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -21,6 +23,13 @@ function check(name, ok, detail) { if (ok) { passed++; console.log('PASS ' + nam
 
 /** 点折叠钮,页内按 rAF 采样 ms 毫秒:每颗图标中心与宽、条宽、会话栏左缘。 */
 async function film(win, ms) {
+  // 合成层数:LayerTree 每次变化都推一份整树,记开合期间的最大值(开始前的静止层数在 layers0)
+  const cdp = await win.context().newCDPSession(win)
+  let layers0 = 0, layersMax = 0, filming = false
+  cdp.on('LayerTree.layerTreeDidChange', (e) => { if (!e.layers) return; if (filming) layersMax = Math.max(layersMax, e.layers.length); else layers0 = e.layers.length })
+  await cdp.send('LayerTree.enable')
+  await new Promise((r) => setTimeout(r, 300))
+  filming = true
   await win.evaluate((ms) => {
     const rb = document.querySelector('.rb')
     // 每颗图标每帧重新取(账号在开合时换整棵子树:头像 = 新节点;按「第几个」认,缺了记 null → 判红)
@@ -51,7 +60,10 @@ async function film(win, ms) {
   }, ms)
   await win.locator('.rb .rb-toggle').click({ noWaitAfter: true })
   await win.evaluate(() => window.__rbDone)
-  return win.evaluate(() => window.__rbFilm)
+  filming = false
+  await cdp.send('LayerTree.disable').catch(() => {})
+  await cdp.detach().catch(() => {})
+  return { ...(await win.evaluate(() => window.__rbFilm)), layers0, layersMax }
 }
 
 function judge(tag, f) {
@@ -81,6 +93,8 @@ function judge(tag, f) {
   const gaps = frames.filter((fr) => fr.side != null).map((fr) => +(fr.side - fr.rbr).toFixed(1))
   const spread = gaps.length ? Math.max(...gaps) - Math.min(...gaps) : NaN
   console.log(`  会话栏左缘 − Ribbon 右缘(每帧): ${gaps.join(' ')}`)
+  // 静止时 LayerTree 不一定推送(layers0 可能读成 0),按绝对上限判:本夹具现在 ~25,#903 那版 60–66
+  check(`${tag}: 开合中合成层 ≤ 40(最多 ${f.layersMax})`, f.layersMax > 0 && f.layersMax <= 40, { layers0: f.layers0, layersMax: f.layersMax })
   check(`${tag}: 会话栏与 Ribbon 同帧(差的波动 ${Number.isFinite(spread) ? spread.toFixed(1) : '量不到'}px)`, Number.isFinite(spread) && spread <= 2, gaps)
 }
 
@@ -111,6 +125,9 @@ function judge(tag, f) {
     if (SHOTS) await win.screenshot({ path: path.join(SHOTS, 'ribbon-expanded.png') })
     const vis = await win.evaluate(() => [...document.querySelectorAll('.rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label')].map((l) => getComputedStyle(l).visibility))
     check(`展开后名字可见(${vis.filter((v) => v === 'visible').length}/${vis.length})`, vis.length > 3 && vis.every((v) => v === 'visible'), vis)
+    // 淡入读 .rb 上的 --rb-ink:卡在 0 时 visibility 照样是 visible,整列名字却是透明的
+    const ink = await win.evaluate(() => [...document.querySelectorAll('.rb > :is(.rb-head, .rb-group) .rb-btn > .rb-label')].map((l) => getComputedStyle(l).filter))
+    check(`展开后名字不透明(filter 全为 opacity(1):${ink.filter((f) => f === 'opacity(1)').length}/${ink.length})`, ink.length > 3 && ink.every((f) => f === 'opacity(1)'), ink)
     judge('展开', open)
     const close = await film(win, 520)
     await win.waitForTimeout(300)
