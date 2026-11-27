@@ -80,6 +80,7 @@ import { fetchWebsiteReleases } from './websiteReleases'
 import { createIdleInstall, createRestartGuard, createShutdownLock, readRestartActivity, requestEngineHold } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt, mtFor } from './mainI18n'
+import { pickPluginFolder } from './pluginFolderPicker'
 import { createQuitGuards } from './quitGuard'
 import { closeDialogOptions, closeDialogPick, storedCloseAction, type CloseAction } from './closeAction'
 import { createContentFlush } from './contentSyncFlush'
@@ -4448,6 +4449,13 @@ app.whenReady().then(async () => {
     // (unitLocalRoots.ts)。技能导入 / 同步目录 / 额外可写根等别的用途不登记 —— 选了个目录不等于同意设备页浏览它(Codex r3 #2)。
     await registerPickedDirectory(localProjectRegistry(), r.filePaths[0], opts).catch((e) => console.error('[unit] 登记本机项目根失败:', e))
     return r.filePaths[0]
+  })
+  // 插件的 ctx.app.pickFolder(2026-11-27+,pluginFolderPicker.ts):只弹框回路径,不登记项目根、不授予任何权限。
+  // ⚠️ 别并进 dialog:pickDirectory —— 那条带登记副作用,插件的选项也只认 title / defaultPath。
+  ipcMain.handle('dialog:pickFolder', async (e, opts?: unknown) => {
+    if (!isTrustedSender(e)) throw new Error('untrusted sender') // webview 访客页 / 子 frame 不能弹系统框
+    const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow() ?? mainWindow
+    return pickPluginFolder((o) => (win && !win.isDestroyed() ? dialog.showOpenDialog(win, o) : dialog.showOpenDialog(o)), opts, mt('main.dialog.pickFolder'))
   })
 
   // Chat Box「添加文件或文件夹」：一个系统面板允许多选文件 / 目录，并把类型一并回给 renderer。

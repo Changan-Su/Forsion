@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { forgetPatch, normalizeLocal, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
+import { forgetPatch, normalizeLocal, pluginVaultRows, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
 
 const A = '/u/Forsion/Amadeus', B = '/u/Forsion/Vaults/Work', C = '/u/Notes'
 
@@ -44,6 +44,26 @@ describe('vaultList', () => {
     expect(forgetPatch(cfg, A)).toBeNull()
     expect(forgetPatch(cfg, B)).toBeNull()
     expect(forgetPatch(cfg, C)).toEqual({ vaults: [{ root: A }, { root: B }] })
+  })
+
+  it('plugin rows: the menu list plus the mounted root, cloud mirror flagged, current follows the mounted root', () => {
+    const isCloud = (r: string): boolean => r.startsWith('/h/.forsion/Amadeus Accounts/')
+    const cfg = { localVault: B, lastVault: B, syncVault: A, vaults: [{ root: A }, { root: B }, { root: C }] }
+    expect(pluginVaultRows(cfg, B, isCloud)).toEqual([
+      { root: A, name: 'Amadeus', current: false, cloud: false },
+      { root: B, name: 'Work', current: true, cloud: false },
+      { root: C, name: 'Notes', current: false, cloud: false },
+    ])
+    // 云端模式:挂着的是云端镜像(不在 vaults 里)→ 补一行 cloud,本地的 localVault 不再标 current
+    const mirror = '/h/.forsion/Amadeus Accounts/abc/Cloud'
+    const rows = pluginVaultRows({ ...cfg, lastVault: mirror }, mirror, isCloud)
+    expect(rows.filter((r) => r.current)).toEqual([{ root: mirror, name: 'Cloud', current: true, cloud: true }])
+    expect(rows.map((r) => r.root)).toEqual([A, B, C, mirror])
+    // 没开库:都不是 current,也不凭空补行
+    expect(pluginVaultRows(cfg, null, isCloud).some((r) => r.current)).toBe(false)
+    expect(pluginVaultRows(cfg, null, isCloud)).toHaveLength(3)
+    // 真的一个库都没有 → []
+    expect(pluginVaultRows({}, null, isCloud)).toEqual([])
   })
 
   it('accepts one plain folder name only', () => {

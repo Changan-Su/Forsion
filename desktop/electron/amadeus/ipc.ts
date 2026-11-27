@@ -19,7 +19,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readConfigStrict, updateConfig, writeConfig, type AmadeusConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -32,7 +32,7 @@ import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
-import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
+import { forgetPatch, normalizeLocal, pluginVaultRows, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
@@ -376,6 +376,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       exists: await fs.stat(v.root).then((s) => s.isDirectory(), () => false),
     })))
   })
+  // 插件 ctx.app.vaults(2026-11-27+):同一份清单 + 当前挂着的根,标出云端镜像。读失败 ≠ 空:配置读不出来就 reject(readConfigStrict)。
+  // ⚠️ 直接 ipcMain.handle、不走 handle():那张派发表会经 /vault/rpc 交给设备页,这里全是本机绝对路径。
+  ipcMain.handle(IPC.pluginVaults, async () => pluginVaultRows(normalizeLocal(await readConfigStrict(), isManagedCloudVault), vault.getRoot(), isManagedCloudVault))
   ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
     let ok = false
     if (typeof root === 'string') await updateConfig((cfg) => {

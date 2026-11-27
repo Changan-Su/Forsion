@@ -32,6 +32,7 @@ export const MAIN_MESSAGES = defineMainMessages({
   'main.mini.limit': { zh: '最多同时开 {n} 个 Mini 窗口，先关掉一个再开', en: 'Up to {n} Mini windows can be open at once. Close one first.' },
   'main.dialog.pickWorkdir': { zh: '选择 Agent 工作目录', en: "Choose the Agent's working folder" },
   'main.dialog.pickPaths': { zh: '添加文件或文件夹', en: 'Add files or folders' },
+  'main.dialog.pickFolder': { zh: '选择文件夹', en: 'Choose a folder' },
   'main.dialog.export': { zh: '导出', en: 'Export' },
   'main.dialog.openVault': { zh: '打开智库文件夹', en: 'Open vault folder' },
 })

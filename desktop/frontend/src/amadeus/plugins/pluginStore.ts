@@ -123,6 +123,7 @@ import type {
   PanelContribution,
   PluginAppApi,
   PlatformAccountStatus,
+  PluginVaultInfo,
   PluginContext,
   PluginNetApi,
   PluginSecretsApi,
@@ -835,6 +836,40 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 云端库只弹一句「仅桌面」)同样不挂 —— 与宿主自己的菜单同一把尺子(amadeus/lib/hostCaps.ts)。
     ...(typeof amadeus?.revealInFileManager === 'function' && amadeus.hostCaps?.revealInFileManager !== false
       ? { reveal: (p: string): void => { if (ok()) void amadeus.revealInFileManager(p).catch(() => {}) } }
+      : {}),
+    // 选文件夹(2026-11-27+):走 dialog:pickFolder,不是 pickDirectory —— 后者带「登记本机项目根」的副作用,插件选的目录什么都不授予。
+    // 只透传 title / defaultPath(主进程再清洗一遍)。桥缺席(web / 手机 / 旧宿主)整条不挂。对话框开着时被停用也 reject。
+    ...(typeof hostTangu()?.pickFolder === 'function'
+      ? {
+          pickFolder: async (opts?: { title?: string; defaultPath?: string }): Promise<string | null> => {
+            if (!ok()) throw new Error('plugin-disposed')
+            const o = opts && typeof opts === 'object' ? opts : {}
+            const picked = await hostTangu()!.pickFolder!({
+              ...(typeof o.title === 'string' ? { title: o.title } : {}),
+              ...(typeof o.defaultPath === 'string' ? { defaultPath: o.defaultPath } : {}),
+            })
+            if (!alive) throw new Error('plugin-disposed')
+            return typeof picked === 'string' && picked ? picked : null
+          },
+        }
+      : {}),
+    // 本机智库清单(2026-11-27+):主进程那份清单 + 当前挂着的根(vaultList.ts pluginVaultRows)。读失败 ≠ 空:桥 reject 原样 reject,
+    // 回的不是数组也 reject,绝不兜成 []。只映射四个字段。桥缺席整条不挂。
+    ...(typeof amadeus?.pluginVaults === 'function'
+      ? {
+          vaults: async (): Promise<PluginVaultInfo[]> => {
+            if (!ok()) throw new Error('plugin-disposed')
+            const rows: unknown = await amadeus.pluginVaults!()
+            if (!alive) throw new Error('plugin-disposed')
+            if (!Array.isArray(rows)) throw new Error('vault-list-unavailable')
+            return rows.flatMap((r) => {
+              const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>
+              return typeof o.root === 'string' && o.root
+                ? [{ root: o.root, name: typeof o.name === 'string' ? o.name : '', current: o.current === true, cloud: o.cloud === true }]
+                : []
+            })
+          },
+        }
       : {}),
     // 把库内的文件 / 文件夹移进回收站(2026-10-05+)。走用户在文件树里删它的同一条路(pageStore.deletePage /
     // deleteFolder):冲洗在途写、移进回收站、收掉开着它的编辑器与标签、提示「已移入回收站」。那两条为了给界面

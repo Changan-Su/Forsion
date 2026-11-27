@@ -195,6 +195,15 @@ export interface PlatformAccountsApi {
   cookie(platform: string): Promise<string | null>
 }
 
+/** `ctx.app.vaults()` 的一行(2026-11-27+)。root = 绝对路径;name = 文件夹名;current = 当前打开的库;cloud = 云端镜像库。
+ *  EN: One row of `ctx.app.vaults()`: absolute `root`, folder `name`, `current` = the open vault, `cloud` = the cloud mirror. */
+export interface PluginVaultInfo {
+  root: string
+  name: string
+  current: boolean
+  cloud: boolean
+}
+
 export interface PluginAppApi extends BlockSurfaceApi {
   /** Vault-relative path of the note the active panel is showing (both carriers), or null. */
   getActivePage(): string | null
@@ -392,6 +401,31 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️**切库竞态**:本值来自渲染进程 store,而 list/search 来自主进程 —— 切换本地/云端库的那一瞬间
    *  主进程先换根、渲染进程后更新,两边可能短暂不同源。拿它拼绝对路径前后都要复核,别缓存过夜。 */
   vaultRoot?(): string | null
+  /** 弹系统「选择文件夹」框(可新建文件夹),回用户选的**绝对路径**;取消 → `null`(2026-11-27+,只桌面)。
+   *  `title` 只当显示用(macOS 显示在面板里,过长截断);`defaultPath` 是绝对路径才用,否则忽略。
+   *  选了一个文件夹**不授予任何权限**:不登记成本机项目根、不放行设备页浏览,`ctx.app` 的库内路径方法也不会因此能写那里。
+   *  只在用户点击时调。插件已停用(含对话框开着时被停用)→ reject `Error('plugin-disposed')`。
+   *  web / 手机 / 旧宿主**方法整个不存在**:`ctx.app.pickFolder?.()`,没有就别画按钮。
+   *  EN: Opens the system "choose folder" dialog (new folders allowed) and resolves with the picked **absolute path**, or
+   *  `null` on cancel (2026-11-27+, desktop only). `title` is display-only (shown in the macOS panel, truncated when long);
+   *  `defaultPath` is used only when absolute. Picking a folder grants nothing: it is not registered as a project root
+   *  and does not open it to the device page. Call it from a user action. A disposed plugin (including one disposed
+   *  while the dialog is open) gets `Error('plugin-disposed')`. Absent on web / mobile / older hosts:
+   *  `ctx.app.pickFolder?.()`. */
+  pickFolder?(opts?: { title?: string; defaultPath?: string }): Promise<string | null>
+  /** 本机智库清单(2026-11-27+,只桌面):菜单里那份本地库清单,外加当前开着的库(云端模式下就是云端镜像库)。
+   *  `current` = 当前打开的那个(没开库时都是 false);`cloud` = 应用管理的云端镜像库(Penzor 云端模式),备份类插件据此分辨。
+   *  文件夹被挪走 / 在没插上的移动硬盘上的库**照样列出**,按路径读写前自己处理失败,别把「读不到」当成「库被删了」。
+   *  ⚠️**读失败 ≠ 空**:宿主读不出库配置(损坏 / 无权限)时 **reject**,不回空数组;真的一个库都没有才回 `[]`。
+   *  插件已停用 → reject `Error('plugin-disposed')`。`root` 是绝对路径,同 `vaultRoot()` 一样**敏感**,别默认持久化或上报。
+   *  web / 手机 / 旧宿主**方法整个不存在**:`ctx.app.vaults?.()`。
+   *  EN: Local vault list (2026-11-27+, desktop only): the host's local vault list plus the vault that is open (the cloud
+   *  mirror in cloud mode). `current` marks the open one (all false when none is open); `cloud` marks the app-managed
+   *  cloud mirror. Vaults whose folder is missing stay listed. A read failure is not an empty list: when the host can't
+   *  read its vault config the promise **rejects**; `[]` means there really are no vaults. Disposed plugin →
+   *  `Error('plugin-disposed')`. `root` is as sensitive as `vaultRoot()`. Absent on web / mobile / older hosts:
+   *  `ctx.app.vaults?.()`. */
+  vaults?(): Promise<PluginVaultInfo[]>
   /** 切到某个 Space(2026-10-17+),口径同 Ribbon 上点它:id 是 Space 的 id(内置的 `tangu` / `amadeus` / `calendar` …,
    *  或插件 / 用户 Space 的 `space.json` id)。resolve 在新 Space 的布局建好之后 —— 接着 `ctx.openView(…, { location: 'right' })`
    *  就落在新 Space 里。不认识的 id → false,不切。没有工作台的宿主 / 旧宿主没有:`ctx.app.openSpace?.(…)`。 */

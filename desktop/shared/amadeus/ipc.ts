@@ -15,6 +15,8 @@ export const IPC = {
   createVault: 'vaults:create',
   forgetVault: 'vaults:forget',
   revealVault: 'vaults:reveal',
+  // 插件 ctx.app.vaults(2026-11-27+):含当前开着的云端镜像库;配置读失败 reject。不走 vault 面派发表(设备页拿不到)
+  pluginVaults: 'vaults:plugin-list',
   listPages: 'vault:list',
   listFiles: 'vault:files',
   loadPage: 'page:load',
@@ -791,6 +793,14 @@ export interface TagCount {
 }
 
 /** One row of the bottom vault menu. `current` = open on the local side. */
+/** 插件 ctx.app.vaults 的一行。root = 绝对路径,name = 文件夹名,current = 主进程当前挂着的库,cloud = 应用管理的云端镜像库。 */
+export interface PluginVaultRow {
+  root: string
+  name: string
+  current: boolean
+  cloud: boolean
+}
+
 export interface LocalVaultRow {
   root: string
   name: string
@@ -861,6 +871,8 @@ export interface AmadeusApi {
   /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
   forgetVault?(root: string): Promise<boolean>
   revealVault?(root: string): Promise<void>
+  /** Vault list for plugins (desktop): the local list plus the mounted root (cloud mirror included). Rejects when the config can't be read. */
+  pluginVaults?(): Promise<PluginVaultRow[]>
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>
