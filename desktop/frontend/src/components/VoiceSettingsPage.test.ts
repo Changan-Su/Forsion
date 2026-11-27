@@ -8,7 +8,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setLocaleGlobal } from '../i18n'
 import '../i18n.generated' // 宿主在入口处注册的那批词条(朗读 / 识别的旧文案在这里)
-import { VoiceSettingsPage } from './VoiceSettingsPage'
+import { VoiceSettingsPage, readVoicesFor, ttsFamilyModel } from './VoiceSettingsPage'
 import type { StoredDesktopConfig } from '../types'
 
 let el: HTMLDivElement
@@ -156,5 +156,30 @@ describe('语音页(设置卡片)', () => {
     expect(asr.querySelector('.settings-voice-ready')?.textContent?.trim()).toBe('已下载')
     await click(btn(asr, '使用'))
     expect(setConfig).toHaveBeenCalledWith({ asrBackend: 'local' })
+  })
+
+  it('云端朗读模型(id 是 pr-<hash>)按后台给的上游模型名认音色家族,出系统音色卡片', async () => {
+    installTangu()
+    const cloud = [{ id: 'pr-abc123', name: 'Qwen TTS', apiModelId: 'qwen3-tts-flash' }]
+    await render({ ttsModelId: 'pr-abc123' }, { ttsDefault: { ttsModels: cloud } })
+    await flush()
+    const read = panel('settings-voice-read')
+    expect(read.querySelectorAll('.voice-gallery-grid[role="radiogroup"] .voice-tile[data-voice]').length).toBeGreaterThan(0)
+    expect(read.querySelector('.voice-tile[data-voice="Cherry"]')).not.toBeNull()
+  })
+})
+
+describe('ttsFamilyModel', () => {
+  const cloud = [{ id: 'pr-abc', apiModelId: 'qwen3-tts-flash' }, { id: 'pr-oai', apiModelId: 'gpt-4o-mini-tts' }, { id: 'pr-null', apiModelId: null }]
+  it('云端 id → 上游模型名;直连的 <providerId>/<model> 与没给 apiModelId 的原样返回', () => {
+    expect(ttsFamilyModel('pr-abc', cloud)).toBe('qwen3-tts-flash')
+    expect(ttsFamilyModel('pr-null', cloud)).toBe('pr-null')
+    expect(ttsFamilyModel('bailian/qwen3-tts-flash', cloud)).toBe('bailian/qwen3-tts-flash')
+    expect(ttsFamilyModel('pr-abc', undefined)).toBe('pr-abc')
+  })
+  it('认出家族后给对应的系统音色表', () => {
+    expect(readVoicesFor(ttsFamilyModel('pr-abc', cloud))).toContain('Cherry')
+    expect(readVoicesFor(ttsFamilyModel('pr-oai', cloud))).toContain('alloy')
+    expect(readVoicesFor('pr-abc')).toEqual([])
   })
 })
