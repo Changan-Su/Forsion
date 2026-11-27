@@ -54,6 +54,9 @@ export function voiceSampleUrl(kind: VoiceKind, voice: string, locale: 'zh' | 'e
 
 // 同时只放一个:再点别的音色就换,再点同一个就停。
 let audio: HTMLAudioElement | null = null
+/** 现合成的 blob 地址:停了就释放,随包样音不动。 */
+let audioUrl = ''
+const releaseUrl = (url: string): void => { if (url.startsWith('blob:')) URL.revokeObjectURL(url) }
 let playingKey = ''
 let token = 0
 const listeners = new Set<() => void>()
@@ -62,6 +65,7 @@ const notify = (): void => listeners.forEach((l) => l())
 export function stopVoicePreview(): void {
   token++
   audio?.pause(); audio = null
+  if (audioUrl) { releaseUrl(audioUrl); audioUrl = '' }
   if (playingKey) { playingKey = ''; notify() }
 }
 
@@ -74,7 +78,8 @@ export async function toggleVoicePreview(key: string, load: () => string | Promi
   playingKey = key; notify()
   try {
     const url = await load()
-    if (mine !== token) return
+    if (mine !== token) { releaseUrl(url); return }
+    audioUrl = url
     const a = (audio = new Audio(url))
     a.onended = () => { if (mine === token) stopVoicePreview() }
     await a.play()

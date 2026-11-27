@@ -181,5 +181,8 @@ describe('ttsFamilyModel', () => {
     expect(readVoicesFor(ttsFamilyModel('pr-abc', cloud))).toContain('Cherry')
     expect(readVoicesFor(ttsFamilyModel('pr-oai', cloud))).toContain('alloy')
     expect(readVoicesFor('pr-abc')).toEqual([])
+    // 复刻 / 设计模型只认自建音色
+    expect(readVoicesFor('qwen3-tts-vc-2026-01-22')).toEqual([])
+    expect(readVoicesFor('bailian/qwen3-tts-vd-2026-01-26')).toEqual([])
   })
 })

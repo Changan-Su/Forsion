@@ -45,8 +45,11 @@ const KIND_MODEL: Record<'clone' | 'design', string> = { clone: 'qwen3-tts-vc-20
 const boundModel = (v: TtsVoiceInfo): string => v.targetModel || (v.kind === 'cosy' ? '' : KIND_MODEL[v.kind])
 /** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了。 */
 const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
-/** 这个朗读模型认哪张系统音色表;认不出来就只剩「自定义音色」。传上游模型名(云端模型的 id 是 pr-<hash>,看不出家族)。 */
-export const readVoicesFor = (model: string): string[] => (/tts-1|gpt-.*tts|openai/i.test(model) ? OPENAI_READ_VOICES : !model || /qwen3?-tts/i.test(model) ? BAILIAN_READ_VOICES : [])
+/**
+ * 这个朗读模型认哪张系统音色表;认不出来就只剩「自定义音色」。传上游模型名(云端模型的 id 是 pr-<hash>,看不出家族)。
+ * 百炼的复刻 / 设计模型(qwen3-tts-vc-* / -vd-*)只认自己建的音色,系统音色选了会合成失败 → 不给。
+ */
+export const readVoicesFor = (model: string): string[] => (/tts-1|gpt-.*tts|openai/i.test(model) ? OPENAI_READ_VOICES : !model || (/qwen3?-tts/i.test(model) && !/-v[cd]-/i.test(model)) ? BAILIAN_READ_VOICES : [])
 /** 云端朗读模型 → 上游模型名(后台下发的 apiModelId);直连的 <providerId>/<model> 原样返回。 */
 export const ttsFamilyModel = (model: string, cloud?: ReadonlyArray<{ id: string; apiModelId?: string | null }> | null): string =>
   cloud?.find((m) => m.id === model)?.apiModelId || model
