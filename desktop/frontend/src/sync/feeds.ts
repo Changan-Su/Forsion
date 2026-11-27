@@ -98,11 +98,12 @@ export function legacyFeed(s: AmadeusSyncStatus, ctx: LegacyContext): SyncFeedRe
   }
 }
 
-/** 老 Extend(没有 getAll):注册表里有、还没收到过状态事件的条目同步 —— 按镜像的状态推它在不在跑(条目引擎跟镜像同起同停),
- *  上次同步时间不知道。宁可说「开着」也别说「只在这台」:这正是用户原来那句抱怨。 */
+/** 老 Extend(没有 getAll):注册表里有、还没收到过状态事件的条目同步 —— 按镜像的状态推它开没开(条目引擎跟镜像同起同停),
+ *  具体状态和上次同步时间不知道。说「同步开着」:不说「只在这台」(用户原来那句抱怨),也不冒充「已同步」。 */
 export function assumedEntryFeed(v: AmadeusEntrySyncVault, mirror: AmadeusSyncStatus | null): SyncFeedReport {
   // 云同步总开关关着(镜像 disabled)时条目引擎也不起(Extend refreshEntryBindings 同一条判断)
-  const phase: SyncFeedPhase = !mirror ? 'idle' : mirror.state === 'disabled' ? 'off' : mirror.state === 'auth-required' ? 'signed-out' : mirror.state === 'offline' ? 'offline' : 'idle'
+  // 它自己的状态还没报上来:说「开着」,不说「已同步」(盘没接上之类的毛病它自己报了才知道)
+  const phase: SyncFeedPhase = !mirror ? 'unknown' : mirror.state === 'disabled' ? 'off' : mirror.state === 'auth-required' ? 'signed-out' : mirror.state === 'offline' ? 'offline' : 'unknown'
   return {
     id: `legacy:entry:${v.vaultRoot}`,
     engine: 'legacy',
@@ -161,12 +162,35 @@ function notesScopeOf(c: ContentStatusLite): SyncScope | null {
 
 const CONNECTION = /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ENETUNREACH|network|offline|socket hang up/i
 
+const isNotesPath = (p: string): boolean => p.startsWith('Amadeus/')
+
+/** 新同步 → feed:笔记那一类算钉住的那个库;别的类(我的资料、日历这些)没传上的单列一路 content:other(不算任何库),
+ *  进「别处」—— 不让一个 Plugins/ 里的大文件把同步得好好的库说成「同步出错」。 */
+export function contentFeeds(c: ContentStatusLite, ctx: { pinnedRoot: string | null; signedIn: boolean }): SyncFeedReport[] {
+  const main = contentFeed(c, ctx)
+  const other: SyncFailure[] = [
+    ...(c.failures ?? []).filter((f) => !isNotesPath(f.path)).map<SyncFailure>((f) => ({ path: f.path, reason: 'failed', code: f.code ?? f.reason, retryAt: f.retryAt })),
+    ...(c.skipped ?? []).filter((x) => !isNotesPath(x.path)).map<SyncFailure>((x) => ({ path: x.path, reason: x.reason, ...(x.size !== undefined ? { size: x.size } : {}), ...(x.maxBytes !== undefined ? { maxBytes: x.maxBytes } : {}) })),
+  ]
+  if (main.phase === 'off' || !other.length) return [main]
+  return [main, { ...main, id: 'content:other', vault: { root: null, side: 'local' }, scope: { kind: 'vault' }, phase: 'idle', progress: null, review: [], failures: other, error: null, pendingChanges: 0 }]
+}
+
+/** 老 Extend 没有只读的 penzor:sync:status、而新同步认领了这个库:说「同步开着」,不去轮询会顺手扫一遍的 penzor:sync:get。 */
+export function assumedContentFeed(pinnedRoot: string | null): SyncFeedReport {
+  return {
+    id: 'content', engine: 'content', vault: { root: pinnedRoot, side: 'local' }, target: 'penzor', scope: { kind: 'vault' },
+    phase: 'unknown', progress: null, lastSyncAt: null, pendingChanges: 0, rateLimitedUntil: null, review: [], failures: [], error: null, canSyncNow: true,
+  }
+}
+
 export function contentFeed(c: ContentStatusLite, ctx: { pinnedRoot: string | null; signedIn: boolean }): SyncFeedReport {
   const enabled = c.enabled ?? c.config?.enabled ?? false
   const scope = notesScopeOf(c)
+  // 只算笔记那一类的(别的类在 contentFeeds 里单列)
   const failures: SyncFailure[] = [
-    ...(c.failures ?? []).map<SyncFailure>((f) => ({ path: notesRel(f.path), reason: 'failed', code: f.code ?? f.reason, retryAt: f.retryAt })),
-    ...(c.skipped ?? []).map<SyncFailure>((x) => ({ path: notesRel(x.path), reason: x.reason, ...(x.size !== undefined ? { size: x.size } : {}), ...(x.maxBytes !== undefined ? { maxBytes: x.maxBytes } : {}) })),
+    ...(c.failures ?? []).filter((f) => isNotesPath(f.path)).map<SyncFailure>((f) => ({ path: notesRel(f.path), reason: 'failed', code: f.code ?? f.reason, retryAt: f.retryAt })),
+    ...(c.skipped ?? []).filter((x) => isNotesPath(x.path)).map<SyncFailure>((x) => ({ path: notesRel(x.path), reason: x.reason, ...(x.size !== undefined ? { size: x.size } : {}), ...(x.maxBytes !== undefined ? { maxBytes: x.maxBytes } : {}) })),
   ]
   const fileError = !!c.error && (c.failures ?? []).some((f) => f.reason === c.error)
   let phase: SyncFeedPhase
@@ -220,7 +244,8 @@ export function remoteFeed(r: Pick<RemoteSyncState, 'config' | 'running' | 'last
   const report = r.lastReport
   const { failures, roundErrors } = remoteReportProblems(report)
   const roundError = r.rootError ?? (report && !report.ok ? roundErrors[0] ?? null : null)
-  const phase: SyncFeedPhase = !on ? 'off' : r.running ? (r.progress?.total ? 'transferring' : 'checking') : roundError ? 'error' : 'idle'
+  // 开着却还没跑完过一轮(或这一轮没交报告就退了):说「开着」,不说「两边一样」
+  const phase: SyncFeedPhase = !on ? 'off' : r.running ? (r.progress?.total ? 'transferring' : 'checking') : roundError ? 'error' : report ? 'idle' : 'unknown'
   return {
     id: 'remote',
     engine: 'remote',

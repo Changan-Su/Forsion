@@ -37,6 +37,7 @@ export type SyncFeedPhase =
   | 'paused'
   | 'offline' // 连不上,不算出错
   | 'error' // 整轮跑不起来(库文件夹不见了、扫描失败……);单个文件的失败不在这里,在 failures
+  | 'unknown' // 开着,但状态还没报上来(老 Extend 的条目同步 / 新同步、远程服务还没跑过一轮):不冒充「已同步」
 
 export type SyncOp = 'upload' | 'download' | 'merge' | 'delete' | 'rename' | 'check'
 
@@ -176,6 +177,7 @@ export type VaultSyncState =
   | 'error' // 同步出错
   | 'offline' // 离线 · 3 个改动没同步
   | 'paused' // 已暂停
+  | 'on' // 同步开着(状态还没报上来)
 
 export interface VaultSyncView {
   state: VaultSyncState
@@ -281,6 +283,7 @@ export function composeVaultSync(feeds: SyncFeedReport[], vault: { root: string 
   else if (mine.some((f) => f.phase === 'offline')) state = 'offline'
   else if (mine.every((f) => f.phase === 'paused' || f.phase === 'signed-out') && mine.some((f) => f.phase === 'paused')) state = 'paused'
   else if (mine.every((f) => f.phase === 'signed-out')) state = 'signed-out'
+  else if (!mine.some((f) => f.phase === 'idle') && mine.some((f) => f.phase === 'unknown')) state = 'on' // 没有一路说得出已同步
   else state = 'synced'
   const first = mine[0]
   return {

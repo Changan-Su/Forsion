@@ -37,9 +37,13 @@ export async function retryFailed(feeds: SyncFeedReport[]): Promise<void> {
   refreshVaultSync()
 }
 
-/** 拦下的删除去哪确认:旧引擎 / 新同步在蓬洲云的同步页(已有的确认处),远程服务在设置 › 同步。面板里不另造删除按钮。 */
+type SettingsTab = Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0]
+
+/** 拦下的删除去哪确认(都是已有的确认处,面板里不另造删除按钮):
+ *  新同步 → 蓬洲云的同步页;旧的在线同步 → 设置 › Forsion 云端 › 笔记同步(「放行删除」在那一行);远程服务 → 设置 › 同步。 */
 export function openDeletesReview(item: Extract<SyncReviewItem, { kind: 'deletes' }>): void {
-  if (item.ref.feed !== 'remote' && penzorSyncReady()) openPenzorSync()
+  if (item.ref.feed === 'content' && penzorSyncReady()) openPenzorSync()
+  else if (item.ref.feed.startsWith('legacy:')) useApp.getState().openSettings('forsion/f-sync' as SettingsTab)
   else useApp.getState().openSettings('sync')
 }
 

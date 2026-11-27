@@ -25,6 +25,7 @@ registerMessages({
   'vsync.paused': { zh: '已暂停', en: 'Paused' },
   'vsync.signedOut': { zh: '没登录，没在同步', en: 'Signed out — not syncing' },
   'vsync.off': { zh: '只在这台', en: 'This computer only' },
+  'vsync.on': { zh: '同步开着', en: 'Sync is on' },
   'vsync.scope.vault': { zh: '整个库', en: 'Whole vault' },
   'vsync.scope.items': { zh: '选中的 {n} 项', en: '{n} selected items' },
   'vsync.target.penzor': { zh: '蓬洲云', en: 'Penzor Cloud' },
@@ -67,6 +68,8 @@ registerMessages({
   'vsync.panel.rateLimited': { zh: '服务器限速，{n} 秒后继续 · 不算出错', en: 'Server is slowing requests; resuming in {n} s · not an error' },
   'vsync.panel.idle': { zh: '两边一样，没有要传的', en: 'Both sides match; nothing to send' },
   'vsync.panel.restSyncs': { zh: '其余照常同步', en: 'Everything else syncs as usual' },
+  'vsync.panel.unknown': { zh: '同步开着，还没收到它这一轮的状态', en: 'Sync is on; no status from it yet' },
+  'vsync.panel.recordsUnavailable': { zh: '这台的同步记录读不出来', en: 'Couldn’t read the sync history on this computer' },
   'vsync.panel.failed': { zh: '{n} 个没传上', en: '{n} not synced' },
   'vsync.panel.retry': { zh: '重试', en: 'Retry' },
   'vsync.panel.more': { zh: '还有 {n} 个，见全部记录', en: '{n} more in the full history' },
@@ -185,6 +188,7 @@ export function vaultSyncWords(view: VaultSyncView, now = Date.now(), t: T = tr)
       return { text, short: { kind: 'text', text: t('vsync.offlinePlain') }, tone: 'muted' }
     }
     case 'paused': return { text: t('vsync.paused'), short: { kind: 'text', text: t('vsync.paused') }, tone: 'muted' }
+    case 'on': return { text: t('vsync.on'), short: { kind: 'text', text: t('vsync.on') }, tone: 'muted' }
     default: {
       const text = view.lastSyncAt ? t('vsync.synced', { ago: agoText(view.lastSyncAt, now, t) }) : t('vsync.syncedPlain')
       return { text, short: { kind: 'check' }, tone: 'muted' }

@@ -34,6 +34,14 @@ describe('sync records store', () => {
     expect((await again.list('acct-1', { limit: 1 })).map((r) => r.id)).toEqual(['a'])
   })
 
+  it('flush right after append still writes (quit path: the append may still be reading the file)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'sync-records-'))
+    const store = createSyncRecordStore(dir, { now: () => T0, writeDelayMs: 10_000 })
+    store.append(rec('q', T0 - 10), 'acct')
+    await store.flush()
+    expect(readdirSync(dir).filter((f) => f.endsWith('.json'))).toHaveLength(1)
+  })
+
   it('filters by feed and vault before the limit', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'sync-records-'))
     const store = createSyncRecordStore(dir, { now: () => T0, writeDelayMs: 1 })
@@ -92,5 +100,6 @@ describe('sync records store', () => {
     await other.flush()
     expect(readdirSync(path.join(dir, file))).toEqual([]) // 没被写成文件
     expect(before.length).toBeGreaterThan(0)
+    await expect(other.list('acct')).rejects.toBeTruthy() // 读不了 ≠ 没有记录
   })
 })

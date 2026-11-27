@@ -91,6 +91,7 @@ function SyncItem() {
     : view.state === 'review' ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
     : view.state === 'offline' || view.state === 'signed-out' ? <CloudOff size={11} />
     : view.state === 'off' ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
+    : view.state === 'on' ? <RefreshCw size={11} />
     : <Check size={11} />
   const text = view.state === 'off' ? t('vsync.panel.elsewhere', { n: elsewhere }) : words.text
   const cur = view.progress?.current

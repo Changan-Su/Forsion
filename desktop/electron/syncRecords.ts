@@ -88,6 +88,8 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
   const dirty = new Set<string>()
   let timer: ReturnType<typeof setTimeout> | null = null
   let writing: Promise<void> = Promise.resolve()
+  /** 交上来、还在等第一次读盘的记录(flush 要等它们排进写队列) */
+  const pending = new Set<Promise<void>>()
 
   const keyOf = (account: string | null): string => createHash('sha256').update(`forsion-sync-records\0${account ?? 'signed-out'}`).digest('hex').slice(0, 24)
   const fileOf = (key: string): string => path.join(dir, `${key}.json`)
@@ -107,7 +109,8 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
           if (parsed?.version !== 1 || !Array.isArray(parsed.records)) throw new Error('bad shape')
           return prune(parsed.records.map(cleanRecord).filter((r): r is SyncRoundRecord => !!r), now())
         } catch {
-          await fs.rename(file, `${file}.corrupt-${now()}`).catch(() => {}) // 原件留着,不盖
+          // 原件改名留着再从空开始;改名没成(文件被占着之类)就当读不了 —— 这次不记、不写,绝不拿空列表盖掉它
+          await fs.rename(file, `${file}.corrupt-${now()}`)
           return []
         }
       })()
@@ -144,7 +147,7 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
       const record = cleanRecord(raw)
       if (!record) return
       const key = keyOf(account)
-      void load(key).then((records) => {
+      const p = load(key).then((records) => {
         const i = records.findIndex((r) => r.id === record.id)
         if (i >= 0) records[i] = record
         else records.push(record)
@@ -153,9 +156,12 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
         records.push(...kept)
         schedule(key)
       }, () => { /* 读不了:这一条不记,也不盖文件 */ })
+      pending.add(p)
+      void p.finally(() => pending.delete(p))
     },
+    /** 读不了(权限、IO、坏文件挪不走)会 reject:界面说「读不出来」,不说「没有记录」。 */
     async list(account, o = {}) {
-      const records = await load(keyOf(account)).catch(() => [] as SyncRoundRecord[])
+      const records = await load(keyOf(account))
       let out = prune(records, now())
       if (o.since !== undefined) out = out.filter((r) => r.finishedAt >= o.since!)
       if (o.feeds) { const want = new Set(o.feeds); out = out.filter((r) => want.has(r.feed)) }
@@ -164,6 +170,7 @@ export function createSyncRecordStore(dir: string, opts: { onChanged?: () => voi
       return o.limit ? out.slice(0, o.limit) : out
     },
     async flush() {
+      await Promise.allSettled([...pending])
       if (timer) { clearTimeout(timer); timer = null; writing = writing.then(writeOut, writeOut) }
       await writing
     },

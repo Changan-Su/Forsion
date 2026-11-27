@@ -136,7 +136,7 @@ function RoundSection({ view, feeds }: { view: VaultSyncView & { now: number }; 
       )}
       {!view.progress && !view.error && !shownFailures.length && (
         <div className="vsp-line vsp-faint">
-          {view.state === 'synced' ? t('vsync.panel.idle') : view.state === 'review' ? t('vsync.panel.restSyncs') : words.text}
+          {view.state === 'synced' ? t('vsync.panel.idle') : view.state === 'review' ? t('vsync.panel.restSyncs') : view.state === 'on' ? t('vsync.panel.unknown') : words.text}
         </div>
       )}
     </section>

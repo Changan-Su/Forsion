@@ -21,9 +21,11 @@ const sameDay = (a: number, b: number): boolean => new Date(a).toDateString() ==
 /** 面板里的最近几轮(这个库的那几路)。 */
 export function SyncRecordRows({ feeds, vault, limit }: { feeds: string[]; vault: string | null; limit: number }) {
   const { t, locale } = useI18n()
-  const rows = useSyncRecords({ feeds, vault, limit, enabled: feeds.length > 0 })
+  const { rows, unavailable } = useSyncRecords({ feeds, vault, limit, enabled: feeds.length > 0 })
   if (!window.syncRecords) return null
-  if (!rows?.length) return <div className="vsp-line vsp-faint">{t('vsync.panel.noRecords')}</div>
+  if (unavailable) return <div className="vsp-line vsp-faint">{t('vsync.panel.recordsUnavailable')}</div>
+  if (!rows) return null
+  if (!rows.length) return <div className="vsp-line vsp-faint">{t('vsync.panel.noRecords')}</div>
   const now = Date.now()
   return (
     <div className="vsr-rows">
@@ -83,7 +85,7 @@ export function SyncRecordsDialogHost() {
   const { t, locale } = useI18n()
   const open = useRecordsDialog((s) => s.open)
   const ref = useRef<HTMLDialogElement>(null)
-  const rows = useSyncRecords({ enabled: open })
+  const { rows, unavailable } = useSyncRecords({ enabled: open })
   const close = (): void => useRecordsDialog.setState({ open: false })
   useEffect(() => {
     const d = ref.current
@@ -103,8 +105,9 @@ export function SyncRecordsDialogHost() {
         <button type="button" className="icon-btn" aria-label={t('common.close')} onClick={close}><X size={18} /></button>
       </div>
       <div className="vsr-dialog-body">
-        {open && (rows?.length ? rows.map((r) => <RecordLine key={r.id} r={r} locale={locale} />)
-          : rows ? <div className="vsr-empty vsp-faint">{t('vsync.all.empty')}</div> : null)}
+        {open && (unavailable ? <div className="vsr-empty vsp-faint">{t('vsync.panel.recordsUnavailable')}</div>
+          : rows?.length ? rows.map((r) => <RecordLine key={r.id} r={r} locale={locale} />)
+            : rows ? <div className="vsr-empty vsp-faint">{t('vsync.all.empty')}</div> : null)}
       </div>
     </dialog>
   )

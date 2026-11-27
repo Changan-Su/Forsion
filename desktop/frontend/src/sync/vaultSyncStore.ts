@@ -4,8 +4,8 @@
  * 合并引擎之前三套都读:
  *   - 旧的文件夹 / 条目同步与整库镜像:window.amadeusSync —— 先 getAll()(新 Extend:全部引擎,含空闲的条目引擎),
  *     老 Extend 只有 get()(只回镜像);之后靠 onStatus 事件。注册表里有、还没见过状态的条目同步,按镜像的状态推它在不在跑。
- *   - 蓬洲云的新同步:penzor:sync:status(只读,不建会话、不扫、不踢)轮询;老 Extend 没有这个通道时,只在它确实认领了
- *     (智库菜单那份 listVaults 的 sync)才回落 penzor:sync:get —— 那个快照在新同步关着时会顺手扫一遍来源,别让常驻界面天天去扫。
+ *   - 蓬洲云的新同步:penzor:sync:status(只读,不建会话、不扫、不踢)轮询;老 Extend 没有这个通道时**不回落** penzor:sync:get
+ *     (那个快照会建会话、恢复回收站、扫来源,常驻界面去轮询它就改了同步什么时候干活),新同步认领了(listVaults 的 sync)只说「同步开着」。
  *   - 远程服务:window.remoteSync。
  * 第 2 步换成一套定时同步时,只换这里喂数据的那几段;合成(shared/vaultSync.ts composeVaultSync)和界面都不动。
  * 只在桌面有;网页 / 手机没有这几个桥,状态源是空的(云侧那行的说法另见 VaultSyncChip)。
@@ -16,7 +16,7 @@ import { composeVaultSync, type SyncFeedReport, type VaultSyncView } from '../..
 import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
 import type { AmadeusEntrySyncVault, AmadeusSyncStatus, RemoteSyncState } from '../types'
 import { amadeus } from '@amadeus/api'
-import { assumedEntryFeed, contentFeed, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
+import { assumedContentFeed, assumedEntryFeed, contentFeeds, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
 
 type RemoteLite = Pick<RemoteSyncState, 'config' | 'running' | 'lastReport' | 'progress' | 'root' | 'rootError'>
 
@@ -28,16 +28,18 @@ interface VaultSyncRaw {
   remote: RemoteLite | null
   /** 新同步与远程服务钉住的那个本机库 */
   pinnedRoot: string | null
+  /** 老 Extend(没有只读的 penzor:sync:status)且新同步认领了这个库:状态说不出,只说开着 */
+  contentAssumed: boolean
   /** 「现在」:每 30 秒走一格,「2 分钟前」跟着变 */
   now: number
 }
 
 export const useVaultSyncRaw = create<VaultSyncRaw>(() => ({
-  legacy: {}, entryVaults: [], content: null, remote: null, pinnedRoot: null, now: Date.now(),
+  legacy: {}, entryVaults: [], content: null, remote: null, pinnedRoot: null, contentAssumed: false, now: Date.now(),
 }))
 
 /** 原始状态 → 所有 feed(纯函数,单测直接喂)。 */
-export function feedsOf(raw: Pick<VaultSyncRaw, 'legacy' | 'entryVaults' | 'content' | 'remote' | 'pinnedRoot'>): SyncFeedReport[] {
+export function feedsOf(raw: Pick<VaultSyncRaw, 'legacy' | 'entryVaults' | 'content' | 'remote' | 'pinnedRoot'> & { contentAssumed?: boolean }): SyncFeedReport[] {
   const out: SyncFeedReport[] = []
   const statuses = Object.values(raw.legacy)
   const hasOwn = statuses.some((s) => typeof s.ownPendingDeletions === 'number')
@@ -48,7 +50,8 @@ export function feedsOf(raw: Pick<VaultSyncRaw, 'legacy' | 'entryVaults' | 'cont
   }
   const mirror = raw.legacy['legacy:mirror'] ?? null
   for (const v of raw.entryVaults) if (!raw.legacy[`legacy:entry:${v.vaultRoot}`] && v.entries.length) out.push(assumedEntryFeed(v, mirror))
-  if (raw.content) out.push(contentFeed(raw.content, { pinnedRoot: raw.pinnedRoot, signedIn: raw.content.session !== false }))
+  if (raw.content) out.push(...contentFeeds(raw.content, { pinnedRoot: raw.pinnedRoot, signedIn: raw.content.session !== false }))
+  else if (raw.contentAssumed) out.push(assumedContentFeed(raw.pinnedRoot))
   if (raw.remote) out.push(remoteFeed(raw.remote))
   return out
 }
@@ -61,7 +64,8 @@ export function useSyncFeeds(): SyncFeedReport[] {
   const content = useVaultSyncRaw((s) => s.content)
   const remote = useVaultSyncRaw((s) => s.remote)
   const pinnedRoot = useVaultSyncRaw((s) => s.pinnedRoot)
-  return useMemo(() => feedsOf({ legacy, entryVaults, content, remote, pinnedRoot }), [legacy, entryVaults, content, remote, pinnedRoot])
+  const contentAssumed = useVaultSyncRaw((s) => s.contentAssumed)
+  return useMemo(() => feedsOf({ legacy, entryVaults, content, remote, pinnedRoot, contentAssumed }), [legacy, entryVaults, content, remote, pinnedRoot, contentAssumed])
 }
 
 /** 一个库此刻的状态(合成后)。vault.side = cloud 是账号的云端镜像那一侧。 */
@@ -82,8 +86,8 @@ export function refreshVaultSync(): void {
 
 let subscribed = false
 let contentTimer: ReturnType<typeof setTimeout> | null = null
-/** 老 Extend 没有 penzor:sync:status(只有「通道不存在」才记成 get,别的失败下次再试):回落时只在新同步认领了才取快照 */
-let statusChannel: 'status' | 'get' | null = null
+/** 老 Extend 没有 penzor:sync:status(只有「通道不存在」才记成 missing,别的失败下次再试) */
+let statusChannel: 'status' | 'missing' | null = null
 /** 轮询代号:立即同步后重排轮询,旧的那一轮回来时不再接着排 */
 let pollGen = 0
 let ownedByContent = false
@@ -120,6 +124,8 @@ async function pullVaults(): Promise<void> {
   ownedByContent = rows.some((r) => r.sync)
   const pinned = rows.find((r) => r.pinned)?.root ?? null
   if (pinned !== useVaultSyncRaw.getState().pinnedRoot) set({ pinnedRoot: pinned })
+  const assumed = statusChannel === 'missing' && ownedByContent
+  if (assumed !== useVaultSyncRaw.getState().contentAssumed) set({ contentAssumed: assumed })
 }
 
 async function invoke<T>(channel: string): Promise<T> {
@@ -130,18 +136,17 @@ async function invoke<T>(channel: string): Promise<T> {
 
 async function readContent(): Promise<ContentStatusLite | null> {
   if (!hasWindow() || typeof window.tangu?.cloudInvoke !== 'function') return null
-  if (statusChannel !== 'get') {
-    try {
-      const v = await invoke<ContentStatusLite>('penzor:sync:status')
-      statusChannel = 'status'
-      return v
-    } catch (e) {
-      if (!/not a Forsion Extend channel/.test(String((e as Error)?.message))) return useVaultSyncRaw.getState().content // 偶发失败:留着上一份,下次再试
-      statusChannel = 'get'
-    }
+  if (statusChannel === 'missing') return null
+  try {
+    const v = await invoke<ContentStatusLite>('penzor:sync:status')
+    statusChannel = 'status'
+    return v
+  } catch (e) {
+    if (!/not a Forsion Extend channel/.test(String((e as Error)?.message))) return useVaultSyncRaw.getState().content // 偶发失败:留着上一份,下次再试
+    statusChannel = 'missing'
+    if (ownedByContent && !useVaultSyncRaw.getState().contentAssumed) set({ contentAssumed: true })
+    return null
   }
-  if (statusChannel === 'get' && ownedByContent) return invoke<ContentStatusLite>('penzor:sync:get').catch(() => null)
-  return null
 }
 
 async function pollContent(): Promise<void> {
@@ -184,9 +189,11 @@ export function ensureVaultSyncSubscribed(): void {
       const prev = useVaultSyncRaw.getState().remote
       if (!prev) { void pullRemote(); return }
       set({ remote: { ...prev, running: s.running, lastReport: s.lastReport, progress: s.progress } })
+      // 事件不带配置和库根:一轮跑完再取一次整份,换过去处 / 换过库时面板上说的去处跟着变
+      if (prev.running && !s.running) void pullRemote()
     })
   } catch { /* 桥不全 */ }
   setInterval(() => set({ now: Date.now() }), 30_000)
-  setInterval(() => void pullVaults(), 60_000)
-  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent() })
+  setInterval(() => { void pullVaults(); void pullRemote() }, 60_000)
+  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent(); void pullRemote() })
 }

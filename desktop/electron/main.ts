@@ -4065,6 +4065,7 @@ app.whenReady().then(async () => {
         // 还在静默期里的改动先推上去(最多等 5 秒);工作区 .md 标签里还没存的字先存。两样都是一次退出只做一次:
         // 紧跟着的 before-quit 拿到 null,不会把这次退出改走 app.exit;停引擎期间再打的字由关窗时的 pagehide 存
         await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
+        await flushSyncRecords().catch(() => {}) // 冲刷那一轮刚交上来的同步记录也落盘
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
         await backend.stop(install ? 'app_update' : 'app_quit')
@@ -6690,6 +6691,7 @@ app.on('before-quit', (e) => {
   if (flushing || saving || st === 'ready' || st === 'starting') {
     e.preventDefault()
     exitChain = Promise.all([flushing, saving])
+      .then(() => flushSyncRecords().catch(() => {})) // 冲刷那一轮刚交上来的同步记录也落盘
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain

@@ -57,9 +57,10 @@ describe('only the old folder / entry sync is on (the reported machine)', () => 
     expect(v.state).toBe('synced')
     expect(vaultSyncWords(v, 10_000, t).text).toBe('vsync.synced{"ago":"vsync.ago.min{\\"n\\":2}"}')
   })
-  it('old Extend: an entry sync we have no status for yet still counts as on (follows the mirror)', () => {
+  it('old Extend: an entry sync we have no status for yet counts as on — not "this computer only", not "synced" either', () => {
     const v = view(feedsOf(raw({ legacy: { 'legacy:mirror': status() }, entryVaults: [entryVault], content: contentOff })))
-    expect(v.state).toBe('synced')
+    expect(v.state).toBe('on')
+    expect(vaultSyncWords(v, 10_000, t).text).toBe('vsync.on')
     expect(v.scope).toEqual({ kind: 'items', count: 6 })
     const signedOut = view(feedsOf(raw({ legacy: { 'legacy:mirror': status({ state: 'auth-required', error: 'not-logged-in' }) }, entryVaults: [entryVault] })))
     expect(signedOut.state).toBe('signed-out')
@@ -209,5 +210,30 @@ describe('precedence and elsewhere', () => {
     expect(v.state).toBe('syncing')
     expect(v.target).toBe('dropbox')
     expect(v.progress?.files).toEqual({ done: 3, total: 10 })
+  })
+})
+
+describe('review fixes (Codex, 11-27)', () => {
+  it('old Extend + new sync claimed: "on", without polling the snapshot that scans', () => {
+    const v = view(feedsOf({ ...raw(), contentAssumed: true }))
+    expect(v.state).toBe('on')
+    expect(v.feeds.map((f) => f.id)).toEqual(['content'])
+  })
+
+  it('a failure outside the notes category goes elsewhere, not onto the notes vault', () => {
+    const c = contentOn({ skipped: [{ path: 'human/big.bin', reason: 'too-large', maxBytes: 5 }], failures: [{ path: 'Amadeus/a.md', target: 'Amadeus', reason: 'http_500', count: 1, retryAt: 0 }] })
+    const v = view(feedsOf(raw({ content: c })))
+    expect(v.failures.map((f) => f.path)).toEqual(['a.md'])
+    expect(v.elsewhere.errors).toBe(1)
+    const clean = view(feedsOf(raw({ content: contentOn({ skipped: [{ path: 'human/big.bin', reason: 'too-large' }] }) })))
+    expect(clean.state).toBe('synced')
+    expect(clean.elsewhere.errors).toBe(1)
+  })
+
+  it('remote service on but no round reported yet: "on", not "both sides match"', () => {
+    const remote = { config: { backend: 'webdav' } as never, running: false, lastReport: null, progress: null, root: ROOT, rootError: null }
+    expect(view(feedsOf(raw({ remote }))).state).toBe('on')
+    const done = { ...remote, lastReport: { ok: true, startedAt: 1, finishedAt: 2, pushed: 0, pulled: 0, deletedLocal: 0, deletedRemote: 0, conflicts: 0, skippedLarge: [], pendingDeletions: 0, errors: [] } }
+    expect(view(feedsOf(raw({ remote: done }))).state).toBe('synced')
   })
 })
