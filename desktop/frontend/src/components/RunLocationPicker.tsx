@@ -24,11 +24,10 @@ import { capsSaysReady, isTrustReason, type DeviceStatus, type RefusalDetail, ty
 import { runOn, type PhoneIssue } from '../services/runOnDevice'
 import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { useApp } from '../stores/appStore'
-import { statusOfUnit, unitById, useDeviceSessions } from '../stores/deviceSessionsStore'
+import { isPhoneDeviceRef, phoneDeviceName, statusOfUnit, unitById, useDeviceSessions, usePhoneOffered } from '../stores/deviceSessionsStore'
 import { setDraftLocation, useRunLocation } from '../stores/runLocationStore'
 import { clampText, deviceStatusText, useDeviceSessionsLive } from '../views/chat2/DeviceSessionSections'
 import type { UnitInfo } from '../types'
-import { isPhoneRef, phoneEngineName, phoneEngineOffered, usePhoneEngine } from '../services/engine/phoneEngine'
 import './runLocationPicker.css'
 
 registerMessages({
@@ -90,7 +89,7 @@ export function runRowNotice(t: T, name: string, d: { status: DeviceStatus; refu
 export function useRunPickerVisible(): boolean {
   const units = useDeviceSessions((s) => s.units)
   // 安卓 App 带了本机引擎:就算名下没有电脑,「这台手机」也是一个选项
-  const phone = usePhoneEngine((s) => phoneEngineOffered(s.state))
+  const phone = usePhoneOffered()
   useRemoteCapability((s) => s.epoch)
   return runLocationsAvailable() && (!!units?.length || phone)
 }
@@ -170,10 +169,10 @@ export function RunLocationPicker(): React.ReactElement | null {
   const iconOf = (u: Pick<UnitInfo, 'platform'> | null): typeof Laptop => (u?.platform === 'win32' || u?.platform === 'linux' ? Monitor : Laptop)
   const nameOf = (u: UnitInfo): string => clampText(u.name, 60) || t('engine.target.defaultName')
 
-  const phoneFocus = isPhoneRef(focus)
+  const phoneFocus = isPhoneDeviceRef(focus)
   const unit = focus.kind === 'unit' && !phoneFocus ? unitById(focus.unitId) : null
   const status: DeviceStatus | null = unit ? statusOfUnit(unit).status : null
-  const where = phoneFocus ? phoneEngineName() : focus.kind === 'unit' ? clampText(nameOfRef(focus) || unit?.name, 60) || t('engine.target.defaultName') : homeLabel
+  const where = phoneFocus ? phoneDeviceName() : focus.kind === 'unit' ? clampText(nameOfRef(focus) || unit?.name, 60) || t('engine.target.defaultName') : homeLabel
   const Icon = focus.kind === 'home' ? HomeIcon : phoneFocus ? Smartphone : iconOf(unit)
   const canOpen = desktop || !!chooser
 

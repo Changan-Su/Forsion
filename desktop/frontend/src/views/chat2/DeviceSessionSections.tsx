@@ -20,13 +20,12 @@ import { displaySessionTitle } from '../../sessionTitle'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import type { SessionRecord, UnitInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { useApp } from '../../stores/appStore'
-import { adoptRemoteSession, archiveRemote, renameRemote, setRemoteSessionEmoji, statusOfUnit, useDeviceSessions } from '../../stores/deviceSessionsStore'
+import { PHONE_DEVICE_ID, adoptRemoteSession, archiveRemote, openPhoneSession, renameRemote, setRemoteSessionEmoji, statusOfUnit, useDeviceSessions, usePhoneDevice } from '../../stores/deviceSessionsStore'
 import { useDeviceMarks } from '../../services/deviceMarks'
 import type { DeviceStatus } from '../../services/deviceStatus'
 import { runLocationsAvailable } from '../../features/runtime'
 import { currentPlatform } from '../../services/platform'
 import { useRemoteCapability } from '../../services/engine/targets'
-import { PHONE_ENGINE_ID, PHONE_REF, phoneEngineHost, phoneEngineInstalled, phoneEngineName, usePhoneEngine } from '../../services/engine/phoneEngine'
 import { sessionActivityAt } from './SidebarPane'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import './deviceSessions.css'
@@ -152,7 +151,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   const probes = useDeviceMarks((s) => s.probes)
   const sticky = useDeviceMarks((s) => s.sticky)
   const injected = useApp((s) => s.sessions)
-  const phoneState = usePhoneEngine((s) => s.state)
+  const phone = usePhoneDevice()
   const selfRegistered = useDeviceSessions((s) => s.selfRegistered)
   useRemoteCapability((s) => s.epoch)
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
@@ -186,11 +185,11 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
       const all = [...extra, ...listed].sort((a, b) => sessionActivityAt(b.updated_at) - sessionActivityAt(a.updated_at))
       out[id] = p.filter ? p.filter(all) : all
     }
-    const phoneListed = byUnit[PHONE_ENGINE_ID]?.sessions ?? []
+    const phoneListed = byUnit[PHONE_DEVICE_ID]?.sessions ?? []
     const phoneSeen = new Set(phoneListed.map((x) => x.id))
-    const phoneExtra = injected.filter((x) => x.location?.kind === 'unit' && x.location.unitId === PHONE_ENGINE_ID && !phoneSeen.has(x.id) && !x.archived)
+    const phoneExtra = injected.filter((x) => x.location?.kind === 'unit' && x.location.unitId === PHONE_DEVICE_ID && !phoneSeen.has(x.id) && !x.archived)
     const phoneAll = [...phoneExtra, ...phoneListed].sort((a, b) => sessionActivityAt(b.updated_at) - sessionActivityAt(a.updated_at))
-    out[PHONE_ENGINE_ID] = p.filter ? p.filter(phoneAll) : phoneAll
+    out[PHONE_DEVICE_ID] = p.filter ? p.filter(phoneAll) : phoneAll
     return out
   }, [units, byUnit, injected, p.filter, probes, sticky])
 
@@ -220,7 +219,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
     sections: [{ items: menuItems(menu) }],
   }, () => setMenu(null))
 
-  const phoneShown = phoneEngineInstalled(phoneState)
+  const phoneShown = phone.shown
   if (!runLocationsAvailable() || (!units?.length && !phoneShown)) return null
 
   const toggle = (id: string): void => {
@@ -265,25 +264,18 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   }
   /** 这台手机:引擎没在跑时点一条 = 先启动(等它健康),再按绑定打开 —— 原生不为 GET 拉起没人要的引擎。 */
   const renderPhone = (): React.ReactElement => {
-    const engine = phoneState?.engine || 'stopped'
-    const key = engine === 'running' ? 'running' : engine === 'starting' ? 'starting' : engine === 'failed' ? 'failed' : 'stopped'
+    const engine = phone.engine
+    const key = engine
     return renderSection({
-      id: PHONE_ENGINE_ID,
-      name: phoneEngineName(),
+      id: PHONE_DEVICE_ID,
+      name: phone.name,
       icon: <Smartphone className="t2s-lead-icon" />,
       status: `phone-${key}`,
       statusText: t(`sidebar.phone.${key}`),
       statusLong: t(key === 'running' ? 'sidebar.phone.long.running' : 'sidebar.phone.long.stopped'),
       tone: key === 'running' ? 'ok' : key === 'starting' ? 'wait' : 'warn',
       empty: t(engine === 'running' ? 'sidebar.device.empty' : 'sidebar.phone.startHint'),
-      open: (s) => {
-        const host = phoneEngineHost()
-        if (!host || usePhoneEngine.getState().state?.engine === 'running') { adoptRemoteSession(s, PHONE_REF as { kind: 'unit'; unitId: string }); return }
-        void host.start().then(
-          () => { adoptRemoteSession(s, PHONE_REF as { kind: 'unit'; unitId: string }) },
-          () => useApp.getState().toast(t('phoneEngine.startFailed'), true),
-        )
-      },
+      open: (s) => openPhoneSession(s, () => useApp.getState().toast(t('phoneEngine.startFailed'), true)),
     })
   }
   const renderSection = (f: SectionFace): React.ReactElement => {

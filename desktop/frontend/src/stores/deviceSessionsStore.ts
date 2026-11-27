@@ -25,7 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
-import { PHONE_ENGINE_ID, phoneEngineInstalled, usePhoneEngine } from '../services/engine/phoneEngine'
+import { PHONE_ENGINE_ID, PHONE_REF, isPhoneRef, phoneEngineHost, phoneEngineInstalled, phoneEngineName, phoneEngineOffered, usePhoneEngine } from '../services/engine/phoneEngine'
 import { normalizeSessionEmoji } from '../../../../tangu-agent/src/contracts/sessionEmoji'
 
 /** 逐台会话列表的新鲜度:比这更新就不重拉(手动刷新 / force 除外)。 */
@@ -289,6 +289,39 @@ export function unitById(unitId: string): UnitInfo | null {
  * 打开那台电脑上的一条会话(inject-on-open,R-17):先绑定(先到先得;conflict = 这个 id 已属于本端 / 别的电脑 → 拒绝,不改绑,R-16),
  * 再经 withLocation 打标插进 appStore.sessions(必须在 openSession 之前:setActiveId → loadSessionHistory 按绑定路由),最后打开。
  */
+// ── 「这台手机」给侧栏(Tangu 界面)的口径 ──
+// phoneEngine.ts 留在宿主;Tangu 的侧栏只经这里拿「这台手机」那一组要的几样,不为它多开一个宿主依赖(check:tanguboundary)。
+
+/** 这台手机在会话列表里的键(= 保留 id,和电脑的 unitId 同一张表)。 */
+export const PHONE_DEVICE_ID = PHONE_ENGINE_ID
+
+export type PhoneDeviceEngine = 'running' | 'starting' | 'failed' | 'stopped'
+
+/** 侧栏这一组:装好了才出现;engine = 本机引擎进程的状态(不是经 hub 的设备口径)。 */
+export function usePhoneDevice(): { shown: boolean; name: string; engine: PhoneDeviceEngine } {
+  const shown = usePhoneEngine((s) => phoneEngineInstalled(s.state))
+  const raw = usePhoneEngine((s) => s.state?.engine || 'stopped')
+  const engine: PhoneDeviceEngine = raw === 'running' || raw === 'starting' || raw === 'failed' ? raw : 'stopped'
+  return { shown, name: phoneEngineName(), engine }
+}
+
+/** 「在哪运行」能不能列出这台手机(包里带启动器、配了环境包地址;没装也列,点开走安装)。 */
+export function usePhoneOffered(): boolean {
+  return usePhoneEngine((s) => phoneEngineOffered(s.state))
+}
+
+/** 位置是不是这台手机 / 它的展示名(「在哪运行」药丸用)。 */
+export const isPhoneDeviceRef = isPhoneRef
+export const phoneDeviceName = phoneEngineName
+
+/** 打开这台手机上的一条会话:引擎没在跑就先启动(等它健康)再按绑定打开 —— 原生不为 GET 拉起没人要的引擎。 */
+export function openPhoneSession(rec: SessionRecord, onStartFailed: () => void): void {
+  const host = phoneEngineHost()
+  const loc = PHONE_REF as UnitRef
+  if (!host || usePhoneEngine.getState().state?.engine === 'running') { adoptRemoteSession(rec, loc); return }
+  void host.start().then(() => { adoptRemoteSession(rec, loc) }, onStartFailed)
+}
+
 export function adoptRemoteSession(rec: SessionRecord, loc: UnitRef): boolean {
   if (!rec?.id || !isUnitIdShape(loc.unitId)) return false
   const ref = unitRef(loc.unitId)
