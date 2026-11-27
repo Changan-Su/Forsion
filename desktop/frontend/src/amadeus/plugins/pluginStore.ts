@@ -68,6 +68,7 @@ import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
+import { isStaleBuildError } from '../../staleBuild'
 import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguSessionTarget, type TanguCompleteRequest, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
 import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, type SummaryCardHandle } from './summaryCards'
@@ -2619,7 +2620,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
           const fail = (e: unknown): void => {
             console.error('[amadeus] Markdown editor mount failed', e)
             if (cancelled || !mine()) return
-            failure = mountHostReact(el, String(e))
+            // 换版后旧页面取不到编辑器文件:给一句能照做的话,不把 TypeError 原样画给用户
+            failure = mountHostReact(el, isStaleBuildError(e) ? translate('app.staleBuild.inline') : String(e))
           }
           void import('./markdownEditorSurface').then(m => {
             // 插件常在自己的浮层 / 卡片进页面之前就挂(宿主 popover 的内容也是异步放进去的):Milkdown 在脱离文档的元素上建起来,
