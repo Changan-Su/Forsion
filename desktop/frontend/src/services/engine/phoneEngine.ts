@@ -46,6 +46,10 @@ export interface PhoneEngineState {
   engineVersion?: string
   /** idle | downloading | paused | unpacking | checking | failed */
   phase?: string
+  /** 暂停 / 失败打断的那个操作(install | reset | update):继续 / 重试照它再来(resume) */
+  op?: string
+  /** 有登录的 Forsion 账号(本机引擎的数据按账号分开;没登录不启动) */
+  signedIn?: boolean
   error?: string
   layer?: string
   done?: number
@@ -71,6 +75,8 @@ export interface PhoneEngineHost {
   install(opts?: { reset?: boolean }): Promise<PhoneEngineState>
   update(): Promise<PhoneEngineState>
   pause(): Promise<PhoneEngineState>
+  /** 继续被暂停 / 失败打断的那个操作(暂停的重置还是重置,不会变成只更新引擎) */
+  resume(): Promise<PhoneEngineState>
   remove(): Promise<unknown>
   start(): Promise<PhoneEngineState>
   stop(): Promise<PhoneEngineState>

@@ -46,9 +46,19 @@ final class TarExtractor {
     /** Directories under dest already checked to be real directories (not links). */
     private final Set<String> safeDirs = new HashSet<>();
 
-    TarExtractor(File dest) {
+    /** Most bytes this extraction may write (regular files plus copied hard links); more fails the unpack. */
+    private final long budget;
+    private long written;
+
+    TarExtractor(File dest, long budget) {
         this.dest = dest;
         this.destPath = dest.getAbsolutePath();
+        this.budget = budget;
+    }
+
+    private void spend(long n) throws IOException {
+        if (n < 0 || n > budget - written) throw new LocalEngineInstaller.Failure("unpack", "archive larger than the manifest says");
+        written += n;
     }
 
     @Override public String toString() {
@@ -134,6 +144,7 @@ final class TarExtractor {
                     switch (type) {
                         case '0': case '\0': case '7': {
                             if (unsafe || rel.isEmpty() || !parentSafe(out)) { skip(in, size + pad(size)); skippedUnsafe++; break; }
+                            spend(size);
                             removeIfLink(out);
                             try (OutputStream o = new FileOutputStream(out)) { copy(in, o, size); }
                             skip(in, pad(size));
@@ -173,6 +184,7 @@ final class TarExtractor {
                             if (isLink(src)) {
                                 Os.symlink(Os.readlink(src.getPath()), out.getPath());
                             } else {
+                                spend(src.length());
                                 try (InputStream si = new FileInputStream(src); OutputStream o = new FileOutputStream(out)) {
                                     copy(si, o, Long.MAX_VALUE);
                                 }
@@ -194,7 +206,8 @@ final class TarExtractor {
         }
         for (int i = dirModes.size() - 1; i >= 0; i--) {
             Object[] d = dirModes.get(i);
-            try { Os.chmod((String) d[0], (Integer) d[1]); } catch (Exception ignored) {}
+            // a later entry may have replaced this directory, or one above it, with a link: chmod would follow it out of the tree
+            try { if (realDirChain((String) d[0])) Os.chmod((String) d[0], (Integer) d[1]); } catch (Exception ignored) {}
         }
     }
 
@@ -214,6 +227,23 @@ final class TarExtractor {
         }
         safeDirs.add(p);
         return true;
+    }
+
+    /** dest and every component from dest down to path are real directories (lstat, no link anywhere on the way). */
+    private boolean realDirChain(String path) {
+        if (!path.startsWith(destPath + "/")) return false;
+        String cur = destPath;
+        try {
+            if (!OsConstants.S_ISDIR(Os.lstat(cur).st_mode)) return false;
+            for (String part : path.substring(destPath.length() + 1).split("/")) {
+                if (part.isEmpty()) continue;
+                cur = cur + "/" + part;
+                if (!OsConstants.S_ISDIR(Os.lstat(cur).st_mode)) return false;
+            }
+            return true;
+        } catch (ErrnoException e) {
+            return false;
+        }
     }
 
     private void dropSafeUnder(String prefix) {

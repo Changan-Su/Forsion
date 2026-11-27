@@ -27,7 +27,9 @@ const results = []
 const ok = (name, pass, detail = '') => { results.push({ name, pass, detail }); console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`) }
 if (!ENV_DIR || !fs.existsSync(path.join(ENV_DIR, 'manifest.json'))) { console.error('ENV_DIR must point at a build-env.sh output (manifest.json)'); process.exit(2) }
 
-const { startFixtures } = require('./lib/local-engine-fixtures.cjs')
+const { startFixtures, fakeJwt, accountDirs } = require('./lib/local-engine-fixtures.cjs')
+const A = accountDirs('emu-bench-a')
+const signIn = (cdp, userId) => cdp.eval(userId ? `Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: '${fakeJwt(userId || '')}' }).then(() => true)` : `Capacitor.Plugins.Preferences.remove({ key: 'forsion_token' }).then(() => true)`)
 let served = []
 let modelCalls = []
 
@@ -68,8 +70,9 @@ async function main() {
   adb('shell', 'am', 'force-stop', PKG)
   adb('logcat', '-c')
   adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
-  const cdp = await connect(PKG, 9351, 40000)
+  let cdp = await connect(PKG, 9351, 40000)
   await pause(2500)
+  await signIn(cdp, 'emu-bench-a') // engine data is per account; signed out = no start
 
   let s = await plug(cdp, 'state')
   ok('launcher bundled + manifest configured', s.available === true && s.configured === true, JSON.stringify({ available: s.available, configured: s.configured }))
@@ -89,9 +92,9 @@ async function main() {
     await plug(cdp, 'pause')
     const paused = await waitState(cdp, (x) => x.phase === 'paused', 30000, 'paused')
     const partLs = adb('shell', 'run-as', PKG, 'ls', '-l', 'cache/local-engine/downloads')
-    ok('pause keeps the partial download', /\.part/.test(partLs) && paused.resumeBytes > 0, `resumeBytes=${paused.resumeBytes}`)
+    ok('pause keeps the partial download (and remembers the operation)', /\.part/.test(partLs) && paused.resumeBytes > 0 && paused.op === 'install', `resumeBytes=${paused.resumeBytes} op=${paused.op}`)
     const before = served.length
-    await plug(cdp, 'install')
+    await plug(cdp, 'resume')
     const done = await waitState(cdp, (x) => x.installed && x.phase === 'idle' || x.phase === 'failed', 900000, 'installed')
     const resumed = served.slice(before).find((r) => r.range && /^bytes=[1-9]/.test(r.range))
     ok('resume asks for the rest with Range', !!resumed, resumed ? resumed.range : JSON.stringify(served.slice(before)))
@@ -99,24 +102,37 @@ async function main() {
     const log = adb('logcat', '-d', '-s', 'LocalEngine')
     const unpacked = log.split('\n').filter((l) => /unpacked/.test(l)).map((l) => l.replace(/.*unpacked/, 'unpacked')).join(' | ')
     ok('extractor: no refused or failed entries', /errors=0/.test(unpacked) && !/skippedUnsafe=[1-9]/.test(unpacked), unpacked.slice(0, 400))
+
+    // a swap killed half-way (new engine in place, not yet committed): the next app start puts the previous one back
+    const pending = Buffer.from(JSON.stringify({ kind: 'engine' })).toString('base64')
+    adb('shell', 'run-as', PKG, 'sh', '-c', `'cd files/local-engine && mv rootfs/opt/tangu tangu.old && mkdir -p rootfs/opt/tangu && echo ${pending} | base64 -d > pending.json'`)
+    cdp.close()
+    adb('shell', 'am', 'force-stop', PKG)
+    adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+    cdp = await connect(PKG, 9351, 40000)
+    await pause(2500)
+    const rec = await plug(cdp, 'state')
+    const left = adb('shell', 'run-as', PKG, 'ls', 'files/local-engine')
+    const mainJs = adb('shell', 'run-as', PKG, 'ls', 'files/local-engine/rootfs/opt/tangu/dist/standalone/main.js').trim()
+    ok('recover(): an interrupted swap rolls back to the previous engine', rec.installed === true && /main\.js$/.test(mainJs) && !/pending\.json|tangu\.old/.test(left), left.replace(/\s+/g, ' '))
   }
 
   // KEEP=1 against an environment whose engine layer is older than ENV_DIR's: update() replaces only /opt/tangu, home survives
   s = await plug(cdp, 'check')
   if (s.installed && s.updateAvailable) {
-    adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p files/local-engine/home && echo keep > files/local-engine/home/.update-marker'`)
+    adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p ${A.home} && echo keep > ${A.home}/.update-marker'`)
     const man = JSON.parse(fs.readFileSync(path.join(ENV_DIR, 'manifest.json'), 'utf8'))
     const t0 = Date.now()
     await plug(cdp, 'update')
     const u = await waitState(cdp, (x) => (x.phase === 'idle' && !x.updateAvailable) || x.phase === 'failed', 600000, 'updated')
     const inst = adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/installed.json')
-    const marker = adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/home/.update-marker').trim()
+    const marker = adb('shell', 'run-as', PKG, 'cat', `${A.home}/.update-marker`).trim()
     ok('update() swaps the engine layer and keeps home', u.phase === 'idle' && inst.includes(man.engine.sha256) && marker === 'keep', `${Math.round((Date.now() - t0) / 1000)}s ${JSON.stringify({ phase: u.phase, error: u.error, engine: u.engineVersion })}`)
   }
 
   // engine: point a direct provider at the fake model (config.json in the engine's home, read at boot)
   const cfg = JSON.stringify({ providers: [{ providerId: 'emu', baseUrl: 'http://10.0.2.2:18901/v1', apiKey: 'x', modelIds: ['echo'] }] })
-  adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p files/local-engine/home && echo ${Buffer.from(cfg).toString('base64')} | base64 -d > files/local-engine/home/config.json'`)
+  adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p ${A.home} && echo ${Buffer.from(cfg).toString('base64')} | base64 -d > ${A.home}/config.json'`)
 
   // passive GET before anything wanted the engine: must fail fast, not start it
   await plug(cdp, 'stop')
@@ -151,7 +167,7 @@ async function main() {
   ok('SSE: the reply carries the tool output (run_bash ran under PRoot)', /PHONE-OK/.test(text) && /marker-42/.test(text) && /aarch64/.test(text), `${events.parts ? events.parts.length : 0} chunks; ${(text.match(/PHONE-OK[^"]{0,120}/) || [''])[0]}`)
   ok('SSE arrived in pieces, not one lump', (events.parts || []).length > 3, `chunks at ${(events.parts || []).slice(0, 6).map((p) => p.t).join(',')}ms`)
   ok('the model was asked twice (tool call → final)', modelCalls.length >= 2, `calls=${modelCalls.length}`)
-  const ws = adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/workspace/probe.txt').trim()
+  const ws = adb('shell', 'run-as', PKG, 'cat', `${A.workspace}/probe.txt`).trim()
   ok('the tool wrote into the workspace (outside the environment)', ws === 'marker-42', ws)
 
   if (process.env.L2S) {
@@ -180,6 +196,28 @@ async function main() {
   await pause(1500)
   const ps2 = adb('shell', 'ps', '-A', '-o', 'PID,NAME')
   ok('stop() → engine and launcher gone', stopped.engine === 'stopped' && !/libproot\.so/.test(ps2) && !/\bnode\b/.test(ps2))
+
+  // accounts: another account signing in stops the previous account's engine; signed out = no start.
+  // (This emulator crashes ~1 in 3 cold starts with a glibc "double free" inside the environment — probe-apk/REPORT.md;
+  // start() retries once itself, the bench allows up to three start() calls here and reports how many it took.)
+  let starts = 0
+  for (let r; starts < 3; ) {
+    starts++
+    await cdp.eval(`(Capacitor.Plugins.ForsionLocalEngine.start().catch(() => {}), true)`)
+    r = await waitState(cdp, (x) => x.engine === 'running' || x.engine === 'failed', 200000, 'engine running again')
+    if (r.engine === 'running') break
+  }
+  console.log(`  (engine up again after ${starts} start() call(s))`)
+  await signIn(cdp, 'emu-bench-b')
+  const sw = await waitState(cdp, (x) => x.engine === 'stopped', 30000, 'stopped on account switch')
+  await pause(1500)
+  const ps3 = adb('shell', 'ps', '-A', '-o', 'PID,NAME')
+  const bGet = await relay(cdp, 'GET', '/engine/agent/sessions?limit=1')
+  ok('another account signing in stops the previous account\'s engine (and a GET does not hand it out)', sw.engine === 'stopped' && !/libproot\.so/.test(ps3) && bGet.error === 'network', JSON.stringify(bGet).slice(0, 120))
+  await signIn(cdp, null)
+  const so = await plug(cdp, 'start')
+  ok('signed out: start() refuses', so.rejected === 'signed_out', JSON.stringify(so).slice(0, 120))
+  await signIn(cdp, 'emu-bench-a')
 
   cdp.close()
   fx.close()

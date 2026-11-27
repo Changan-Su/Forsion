@@ -9,7 +9,7 @@
  * ⚠️ 本组件挂在 UnitsSheet 里,而 UnitsSheet 也被网页手机形态复用:不许 import capacitor,原生能力只经
  *    window.tangu.localEngine(phoneEngineHost();网页 / 老包缺席 → 本行不渲染)。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, ChevronDown, Smartphone } from 'lucide-react'
 import { registerMessages, useI18n } from '@/i18n'
 import { mb, phoneEngineHost, phoneEngineName, phoneEngineOffered, usePhoneEngine, type PhoneEngineState, type PhoneEngineUsage } from '@/services/engine/phoneEngine'
@@ -23,6 +23,7 @@ registerMessages({
   'phoneEngine.confirmSandbox': { zh: '这个环境没有命令沙箱：Agent 能读写环境里的所有文件，但碰不到手机上的其他 App 和照片。', en: "This environment has no command sandbox. The agent can read and change any file in it, but can't reach other apps or your photos." },
   'phoneEngine.metered': { zh: '现在用的是移动数据，下载会消耗流量。', en: "You're on mobile data. The download uses your data plan." },
   'phoneEngine.cancel': { zh: '取消', en: 'Cancel' },
+  'phoneEngine.confirmLoading': { zh: '正在查询下载大小…', en: 'Checking the download size…' },
   'phoneEngine.download': { zh: '下载', en: 'Download' },
   'phoneEngine.downloading': { zh: '正在下载 {done} / {total} MB', en: 'Downloading {done} / {total} MB' },
   'phoneEngine.paused': { zh: '已暂停 · {done} / {total} MB', en: 'Paused · {done} / {total} MB' },
@@ -37,6 +38,7 @@ registerMessages({
   'phoneEngine.updateAvailable': { zh: '可更新', en: 'Update' },
   'phoneEngine.details': { zh: '本机环境详情', en: 'Local environment details' },
   'phoneEngine.usage': { zh: '环境占用 {env} MB · 对话与文件 {data} MB', en: 'Environment {env} MB · chats and files {data} MB' },
+  'phoneEngine.usageLoading': { zh: '正在计算占用…', en: 'Calculating storage…' },
   'phoneEngine.version': { zh: '引擎 {engine} · 系统 {base}', en: 'Engine {engine} · system {base}' },
   'phoneEngine.update': { zh: '更新（约 {size} MB）', en: 'Update (about {size} MB)' },
   'phoneEngine.stop': { zh: '停止', en: 'Stop' },
@@ -76,24 +78,49 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
   const { t } = useI18n()
   const st = usePhoneEngine((s) => s.state)
   const [panel, setPanel] = useState<Panel>(null)
-  const [metered, setMetered] = useState(false)
+  // 确认框里的两项披露(要下多少、是不是在用流量)都到齐之前「下载」点不了;清单读失败 → 可重试的错误
+  const [chk, setChk] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [metered, setMetered] = useState<boolean | null>(null)
   const [usage, setUsage] = useState<PhoneEngineUsage | null>(null)
   const host = phoneEngineHost()
+  // 每次打开确认框一代:上一次打开时没回来的结果(大小、流量)不许落到这一次上
+  const confirmGen = useRef(0)
+  const runCheck = useCallback(() => {
+    if (!host) return
+    const gen = confirmGen.current
+    setChk('loading')
+    void host.check().then(() => { if (confirmGen.current === gen) setChk('ok') }, () => { if (confirmGen.current === gen) setChk('error') })
+  }, [host])
+
+  // 弹层一打开、还没装:先查一次清单,行上就能写出要下多少(只查一次,不随每次渲染)
+  const offered = phoneEngineOffered(st)
+  const needSize = offered && !st?.installed && !st?.downloadBytes && !busyPhase(st)
+  useEffect(() => {
+    if (host && needSize) void host.check().catch(() => {})
+  }, [host, needSize])
 
   // 展开确认:现查一次清单(大小)与是否在用流量;展开详情:现算占用
   useEffect(() => {
     if (!host) return
     if (panel === 'confirm') {
-      void host.check().catch(() => {})
-      void host.metered().then((m) => setMetered(!!m?.metered), () => setMetered(false))
+      const gen = ++confirmGen.current
+      runCheck()
+      setMetered(null)
+      // 判不出来就按在用流量提醒(宁可多提醒一句)
+      void host.metered().then((m) => { if (confirmGen.current === gen) setMetered(!!m?.metered) }, () => { if (confirmGen.current === gen) setMetered(true) })
+    } else {
+      confirmGen.current++
+      setChk('loading')
+      setMetered(null)
     }
     if (panel === 'details') {
       void host.check().catch(() => {}) // 有没有新版本
+      setUsage(null)
       void host.usage().then(setUsage, () => setUsage(null))
     }
-  }, [panel, host])
+  }, [panel, host, runCheck])
 
-  if (!host || !phoneEngineOffered(st)) return null
+  if (!host || !offered) return null
   const s = st as PhoneEngineState
   const installed = !!s.installed
   const working = busyPhase(s)
@@ -142,12 +169,12 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
           </span>
         </button>
         {working && s.phase !== 'unpacking' && s.phase !== 'checking' && (
-          <button className="us-btn us-phone-act" onClick={() => call(s.phase !== 'paused' ? host.pause() : installed ? host.update() : host.install())}>
+          <button className="us-btn us-phone-act" onClick={() => call(s.phase !== 'paused' ? host.pause() : host.resume())}>
             {t(s.phase === 'paused' ? 'phoneEngine.resume' : 'phoneEngine.pause')}
           </button>
         )}
         {!working && failedInstall && (
-          <button className="us-btn us-phone-act" onClick={() => call(installed ? host.update() : host.install())}>{t('phoneEngine.retry')}</button>
+          <button className="us-btn us-phone-act" onClick={() => call(host.resume())}>{t('phoneEngine.retry')}</button>
         )}
         {installed && !working && (
           <button className="us-icon-btn us-phone-more" aria-label={t('phoneEngine.details')} aria-expanded={panel === 'details' || panel === 'reset' || panel === 'remove'} onClick={() => setPanel(panel ? null : 'details')}>
@@ -160,20 +187,26 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
       {panel === 'confirm' && !installed && !working && (
         <div className="us-panel" data-phone-confirm>
           <div className="us-panel-title">{t('phoneEngine.confirmTitle')}</div>
-          {!!s.downloadBytes && <div>{t('phoneEngine.confirmSize', { download: mb(s.downloadBytes), disk: mb(s.unpackedBytes) })}</div>}
+          {chk === 'ok' && !!s.downloadBytes && <div>{t('phoneEngine.confirmSize', { download: mb(s.downloadBytes), disk: mb(s.unpackedBytes) })}</div>}
+          {chk === 'loading' && <div className="us-panel-muted" role="status">{t('phoneEngine.confirmLoading')}</div>}
+          {chk === 'error' && (
+            <div className="us-panel-warn" role="status">
+              {t('phoneEngine.err.manifest')} <button className="us-link" onClick={runCheck}>{t('phoneEngine.retry')}</button>
+            </div>
+          )}
           <div>{t('phoneEngine.confirmModel')}</div>
           <div>{t('phoneEngine.confirmSandbox')}</div>
           {metered && <div className="us-panel-warn" role="status">{t('phoneEngine.metered')}</div>}
           <div className="us-confirm-actions">
             <button className="us-btn" onClick={() => setPanel(null)}>{t('phoneEngine.cancel')}</button>
-            <button className="us-btn primary" data-phone-download onClick={() => { setPanel(null); call(host.install()) }}>{t('phoneEngine.download')}</button>
+            <button className="us-btn primary" data-phone-download disabled={chk !== 'ok' || !s.downloadBytes || metered === null} onClick={() => { setPanel(null); call(host.install()) }}>{t('phoneEngine.download')}</button>
           </div>
         </div>
       )}
 
       {panel === 'details' && installed && (
         <div className="us-panel" data-phone-details>
-          {usage && <div>{t('phoneEngine.usage', { env: mb(usage.environment), data: mb((usage.home || 0) + (usage.workspace || 0)) })}</div>}
+          <div>{usage ? t('phoneEngine.usage', { env: mb(usage.environment), data: mb((usage.home || 0) + (usage.workspace || 0)) }) : t('phoneEngine.usageLoading')}</div>
           <div>{t('phoneEngine.version', { engine: s.engineVersion || '?', base: s.baseVersion || '?' })}</div>
           <div className="us-panel-actions">
             {s.updateAvailable && <button className="us-btn" onClick={() => { setPanel(null); call(host.update()) }}>{t('phoneEngine.update', { size: mb(s.engineDownloadBytes) })}</button>}

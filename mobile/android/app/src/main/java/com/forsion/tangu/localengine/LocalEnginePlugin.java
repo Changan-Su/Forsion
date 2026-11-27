@@ -20,9 +20,10 @@ import java.util.concurrent.Executors;
  * | check()                 | state() after reading the manifest (download / unpacked sizes, update)        |
  * | install({reset?})       | starts download + unpack in the background; progress via "state" events       |
  * | update()                | replaces only the engine layer                                                |
- * | pause()                 | stops the download; the next install() resumes from the partial file          |
+ * | pause()                 | stops the download; resume() continues from the partial file                  |
+ * | resume()                | repeats the operation a pause / failure interrupted (install, reset or update) |
  * | remove()                | deletes the environment (conversations and the workspace stay)                |
- * | start() / stop()        | engine up (waits for health) / down                                          |
+ * | start() / stop()        | engine up (waits for health; rejects signed_out / maintenance / …) / down    |
  * | usage()                 | bytes: environment, home, workspace, downloads                                |
  * | configure({strings})    | notification texts in the page's language                                     |
  * | metered()               | {metered} — the confirmation warns before downloading on mobile data          |
@@ -77,6 +78,12 @@ public class LocalEnginePlugin extends Plugin {
     @PluginMethod
     public void update(PluginCall call) {
         engine.update();
+        call.resolve(toJs(engine.state()));
+    }
+
+    @PluginMethod
+    public void resume(PluginCall call) {
+        engine.resume();
         call.resolve(toJs(engine.state()));
     }
 

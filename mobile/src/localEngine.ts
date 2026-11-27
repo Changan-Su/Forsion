@@ -12,7 +12,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core'
 import { registerMessages, subscribeLocale, translate } from '@/i18n'
 import {
-  isPhoneRef, setPhoneEngineState, usePhoneEngine,
+  isPhoneRef, phoneEngineInstalled, setPhoneEngineState, usePhoneEngine,
   type PhoneEngineHost, type PhoneEngineState, type PhoneEngineUsage,
 } from '@/services/engine/phoneEngine'
 import { focusRef, refForSession } from '@/services/engine/targets'
@@ -27,6 +27,7 @@ interface LocalEnginePlugin {
   install(o: { reset?: boolean }): Promise<PhoneEngineState>
   update(): Promise<PhoneEngineState>
   pause(): Promise<PhoneEngineState>
+  resume(): Promise<PhoneEngineState>
   remove(): Promise<unknown>
   start(): Promise<PhoneEngineState>
   stop(): Promise<PhoneEngineState>
@@ -72,6 +73,7 @@ export function installLocalEngine(): void {
     install: (o) => Native.install({ reset: !!o?.reset }).then(apply),
     update: () => Native.update().then(apply),
     pause: () => Native.pause().then(apply),
+    resume: () => Native.resume().then(apply),
     remove: () => Native.remove().then((r) => { void Native.state().then(apply).catch(() => {}); return r }),
     start: () => {
       if (!starting) starting = Native.start().then(apply).finally(() => { starting = null })
@@ -91,7 +93,12 @@ export function installLocalEngine(): void {
     for (const cb of [...listeners]) { try { cb(next) } catch { /* 订阅者自己的错 */ } }
     onTransition(prev, next)
   }).catch((e) => console.warn('[local-engine] state listener rejected:', e))
-  void Native.state().then(apply).catch((e) => {
+  void Native.state().then((s) => {
+    const first = apply(s)
+    // 存着的草稿焦点是这台手机、而这一端用不了它(换到不带启动器的包 / 环境删了):新对话回云端。
+    // 已绑在这台手机上的会话不动(它们照旧显示在这台手机下,装回来就能接着用)。
+    if (isPhoneRef(focusRef()) && !phoneEngineInstalled(first)) void setDraftLocation(HOME_REF, { explicit: true }).catch(() => {})
+  }).catch((e) => {
     // 读不到 ≠ 没有:留 null(「这台手机」暂不出现),不当成「没装」往下判
     console.warn('[local-engine] state() rejected:', e)
   })

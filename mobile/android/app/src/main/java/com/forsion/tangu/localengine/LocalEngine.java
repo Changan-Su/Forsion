@@ -33,13 +33,19 @@ import java.util.concurrent.atomic.AtomicInteger;
  * The "This phone" local engine: environment install state + one engine process. Process-wide singleton; the plugin,
  * the relay and the foreground service all talk to it.
  *
- * Starting: only when this phone is the chosen place to run (the page calls start(), and requests to the local engine
- * start it). Health = /health 200 and an authed call that only this start's token can pass, so a stale engine left on
- * the port cannot pass for ours. A start that exits before it is healthy is a crash whatever the exit code (a glibc
- * double free exited 0 in the probes); one automatic retry, then "failed".
+ * Starting: only an explicit start (the page picked this phone) or a write request starts the engine; GET / HEAD use a
+ * running engine or wait for a start already under way, never start one (not after Stop, not after a crash). Health =
+ * the port the engine reported binding answers /health and an authed call that only this start's token can pass. A
+ * start that exits before it is healthy is a crash whatever the exit code (a glibc double free exited 0 in the
+ * probes); one automatic retry, then "failed".
+ *
+ * Accounts: engine data is per Forsion account (LocalEnginePaths.accountKey). Signed out = no start; another account
+ * signing in stops the engine of the previous one, and the relay only hands out the engine of the signed-in account.
+ *
+ * Maintenance: while an install / update / reset swaps trees or a remove deletes them, nothing can start the engine.
  *
  * Stopping: the notification's Stop, the page, or idle — no active run (engine /health activeRuns), no relayed request
- * in flight, and no non-GET request for 10 minutes. Passive GET polls neither start a stopped engine nor keep it alive.
+ * in flight, and no non-GET request for 10 minutes; rechecked under the lifecycle lock right before stopping.
  */
 public final class LocalEngine {
     private static final String TAG = "LocalEngine";
@@ -65,11 +71,18 @@ public final class LocalEngine {
     private final ExecutorService work = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "local-engine-install"); t.setDaemon(true); return t; });
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "local-engine-idle"); t.setDaemon(true); return t; });
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+    /** Held for a whole start / stop / swap entry. */
     private final Object startLock = new Object();
+    /** Short: guards proc / procAccount together with the in-flight count (acquire registers atomically; idle stop checks atomically). */
+    private final Object regLock = new Object();
     private final AtomicInteger inFlight = new AtomicInteger();
+    /** true while trees are swapped or deleted: starts are refused. */
+    private volatile boolean maintenance;
 
     // install state
     private volatile String phase = "idle";      // idle | downloading | paused | unpacking | checking | failed
+    /** The operation a pause / failure interrupted (install | reset | update): resume / retry repeats it. */
+    private volatile String op;
     private volatile String failCode;
     private volatile String layer;
     private volatile long done, total;
@@ -79,18 +92,42 @@ public final class LocalEngine {
 
     // engine state
     private volatile LocalEngineProcess proc;
+    /** The account whose data proc runs on (set together with proc under regLock). */
+    private volatile String procAccount;
     private volatile String engineState = "stopped"; // stopped | starting | running | failed
     private volatile String engineFail;
     private volatile long lastActive;
-    /** Set by an explicit start / a write request; cleared by idle-stop and Stop: GET polls may only start a wanted engine. */
-    private volatile boolean wanted;
     private ConnectivityManager.NetworkCallback netCb;
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener tokenListener = (prefs, key) -> {
+        if (key == null || com.forsion.tangu.NativeConfigAccess.isTokenKey(key)) timer.execute(this::onAccountChange);
+    };
 
     private LocalEngine(Context c) {
         ctx = c;
         paths = new LocalEnginePaths(c);
         debuggable = (c.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        installerFor().recover(); // renames only; before anything reads installed() or starts the engine
+        new File(paths.base, "home/.forsion-cloud-token").delete(); // early test builds kept the account token in a flat home
+        work.execute(() -> installerFor().emptyTrash());
+        com.forsion.tangu.NativeConfigAccess.onTokenChange(c, tokenListener);
         timer.scheduleWithFixedDelay(this::idleCheck, 60, 60, TimeUnit.SECONDS);
+    }
+
+    /** The signed-in account (directory key), or null when signed out. */
+    String currentAccount() { return LocalEnginePaths.accountKey(com.forsion.tangu.NativeConfigAccess.token(ctx)); }
+
+    /**
+     * Sign-out or another account: the running engine belongs to the previous one. Same account (token refresh): pass
+     * the new token on. Decided under the lifecycle lock against the process that is current then (a start under way
+     * rechecks the account itself before publishing its process).
+     */
+    private void onAccountChange() {
+        synchronized (startLock) {
+            String running = procAccount;
+            if (proc == null || running == null) return;
+            if (running.equals(currentAccount())) writeCloudToken(running);
+            else stopLocked("account");
+        }
     }
 
     public boolean available() { return paths.launcherBundled(); }
@@ -120,6 +157,8 @@ public final class LocalEngine {
                 o.put("engineVersion", inst.getJSONObject("engine").optString("version"));
             }
             o.put("phase", phase);
+            if (op != null) o.put("op", op);
+            o.put("signedIn", currentAccount() != null);
             if (failCode != null) o.put("error", failCode);
             if (layer != null) o.put("layer", layer);
             o.put("done", done);
@@ -145,13 +184,14 @@ public final class LocalEngine {
         return o;
     }
 
-    /** Disk use of the environment, the engine's home and the workspace (walks the trees: call off the main thread). */
+    /** Disk use of the environment, the signed-in account's engine home and workspace (walks the trees: call off the main thread). */
     public JSONObject usage() {
         JSONObject o = new JSONObject();
         try {
+            String acct = currentAccount();
             o.put("environment", LocalEnginePaths.treeBytes(paths.rootfs));
-            o.put("home", LocalEnginePaths.treeBytes(paths.home));
-            o.put("workspace", LocalEnginePaths.treeBytes(paths.workspace));
+            o.put("home", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.home(acct)));
+            o.put("workspace", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.workspace(acct)));
             o.put("downloads", LocalEnginePaths.treeBytes(paths.downloads));
         } catch (Exception ignored) {}
         return o;
@@ -195,8 +235,22 @@ public final class LocalEngine {
         work.execute(() -> runInstall("update"));
     }
 
+    /**
+     * Continues the operation a pause or failure interrupted (a paused reset stays a reset). Claimed at once: a second
+     * tap while it is queued or running is ignored instead of turning into another operation.
+     */
+    public synchronized void resume() {
+        if (!"paused".equals(phase) && !"failed".equals(phase)) return;
+        String o = op != null ? op : (installerFor().installed() == null ? "install" : "update");
+        op = o;
+        phase = "downloading";
+        emit();
+        work.execute(() -> runInstall(o));
+    }
+
     private void runInstall(String kind) {
         LocalEngineInstaller ins = installerFor();
+        op = kind;
         failCode = null;
         try {
             if (!available()) throw new LocalEngineInstaller.Failure("unsupported", null);
@@ -204,17 +258,20 @@ public final class LocalEngine {
             if (manifest == null) check();
             LocalEngineInstaller.Manifest m = manifest;
             JSONObject inst = ins.installed();
-            if (kind.equals("reset") || inst != null) stopEngine("install");
             LocalEngineInstaller.Listener l = (ph, ly, d, t) -> {
                 phase = ph; layer = ly; done = d; total = t;
                 emit();
             };
-            if (kind.equals("update") && inst != null) ins.updateEngine(m, inst, l);
-            else ins.installFresh(m, l);
-            setPhase("checking");
-            String why = selfTest();
-            if (why != null) throw new LocalEngineInstaller.Failure("selftest", why);
+            // the engine keeps running while downloading / unpacking; it stops only for the swap
+            LocalEngineInstaller.Swap swap = new LocalEngineInstaller.Swap() {
+                @Override public void enter() { enterMaintenance(kind); }
+
+                @Override public String validate() { return selfTest(); }
+            };
+            if (kind.equals("update") && inst != null) ins.updateEngine(m, inst, l, swap);
+            else ins.installFresh(m, l, swap);
             layer = null;
+            op = null;
             setPhase("idle");
         } catch (LocalEngineInstaller.Cancelled c) {
             setPhase("paused");
@@ -226,6 +283,18 @@ public final class LocalEngine {
             Log.w(TAG, kind + " failed", e);
             failCode = e instanceof java.io.IOException ? "network" : "unknown";
             setPhase("failed");
+        } finally {
+            maintenance = false;
+            emit();
+        }
+        ins.emptyTrash();
+    }
+
+    /** Stops the engine and refuses starts until the current install / remove is done (cleared in its finally). */
+    private void enterMaintenance(String why) {
+        synchronized (startLock) {
+            maintenance = true;
+            stopLocked(why);
         }
     }
 
@@ -238,11 +307,16 @@ public final class LocalEngine {
     public void remove() {
         pause();
         work.execute(() -> {
-            stopEngine("remove");
-            installerFor().removeEnvironment();
-            failCode = null;
-            layer = null;
-            done = total = 0;
+            try {
+                enterMaintenance("remove");
+                installerFor().removeEnvironment();
+                failCode = null;
+                layer = null;
+                op = null;
+                done = total = 0;
+            } finally {
+                maintenance = false;
+            }
             setPhase("idle");
         });
     }
@@ -252,8 +326,13 @@ public final class LocalEngine {
         emit();
     }
 
-    /** PRoot + loader + glibc Node + the native SQLite module, in a throwaway process. null = fine. */
+    /**
+     * PRoot + loader + glibc Node + the native SQLite module, in a throwaway process. null = fine. Output is drained
+     * on its own thread (capped) so the 60 s deadline holds even if the probe hangs with its pipe open; on timeout
+     * PRoot is killed, which takes its tracees with it (PTRACE_O_EXITKILL patch).
+     */
     private String selfTest() {
+        Process p = null;
         try {
             ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/opt/tangu", null, java.util.Arrays.asList(
                     "/opt/node/bin/node", "-e", "const D=require('/opt/tangu/node_modules/better-sqlite3');new D(':memory:').prepare('select 1').get();console.log('selftest-ok')")));
@@ -261,18 +340,38 @@ public final class LocalEngine {
             pb.environment().putAll(paths.prootEnv());
             pb.redirectErrorStream(true);
             pb.directory(paths.base);
-            Process p = pb.start();
-            byte[] out = new byte[4096];
-            int n = 0;
-            try (java.io.InputStream in = p.getInputStream()) {
-                for (int r; n < out.length && (r = in.read(out, n, out.length - n)) > 0; ) n += r;
+            p = pb.start();
+            final Process sp = p;
+            final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            Thread rd = new Thread(() -> {
+                try (java.io.InputStream in = sp.getInputStream()) {
+                    byte[] b = new byte[4096];
+                    for (int r; (r = in.read(b)) > 0; ) synchronized (out) { if (out.size() < 16 << 10) out.write(b, 0, r); }
+                } catch (Exception ignored) {}
+            }, "local-engine-selftest");
+            rd.setDaemon(true);
+            rd.start();
+            if (!p.waitFor(60, TimeUnit.SECONDS)) {
+                killTree(p);
+                rd.join(2000);
+                return "timeout";
             }
-            if (!p.waitFor(60, TimeUnit.SECONDS)) { p.destroyForcibly(); return "timeout"; }
-            String s = new String(out, 0, n, java.nio.charset.StandardCharsets.UTF_8);
-            return s.contains("selftest-ok") ? null : s.trim();
+            rd.join(5000);
+            String s;
+            synchronized (out) { s = out.toString("UTF-8"); }
+            if (!s.contains("selftest-ok")) return s.trim();
+            return p.exitValue() == 0 ? null : "exit " + p.exitValue() + " " + s.trim(); // printed it, then crashed: not fine
         } catch (Exception e) {
+            if (p != null) killTree(p);
             return e.getClass().getSimpleName();
         }
+    }
+
+    private static void killTree(Process p) {
+        for (int k : LocalEngineProcess.childrenOf(LocalEngineProcess.pidOf(p))) {
+            try { Os.kill(k, OsConstants.SIGKILL); } catch (Exception ignored) {}
+        }
+        p.destroyForcibly();
     }
 
     // ---------- engine ----------
@@ -282,108 +381,168 @@ public final class LocalEngine {
         return p != null && p.alive() && "running".equals(engineState);
     }
 
-    /** For the relay: the running engine, starting it when allowed. null = not available (fail fast). */
+    /**
+     * For the relay: the running engine of the signed-in account with one request registered as in flight (the
+     * caller ends it with requestEnded()), or null. Only writes may start the engine; GET / HEAD use a running one
+     * or wait for a start already under way.
+     */
     LocalEngineProcess acquire(boolean write) {
-        LocalEngineProcess p = proc;
-        if (p != null && p.alive() && "running".equals(engineState)) {
-            if (write) { lastActive = System.currentTimeMillis(); wanted = true; }
-            return p;
+        if (currentAccount() == null) return null;
+        LocalEngineProcess p = register(write);
+        if (p != null) return p;
+        if (write) {
+            try { ensureRunning(); } catch (Exception e) { return null; }
+        } else {
+            if (!"starting".equals(engineState)) return null;
+            synchronized (startLock) { /* wait for the start under way */ }
         }
-        if (!write && !wanted) return null;
-        try {
-            return ensureRunning();
-        } catch (Exception e) {
-            return null;
+        return register(write);
+    }
+
+    /** Hands out the current process only if it runs for the account signed in right now (read at this moment, not earlier). */
+    private LocalEngineProcess register(boolean write) {
+        String acct = currentAccount();
+        if (acct == null) return null;
+        synchronized (regLock) {
+            LocalEngineProcess p = proc;
+            if (p == null || !p.alive() || !"running".equals(engineState) || !acct.equals(procAccount)) return null;
+            inFlight.incrementAndGet();
+            if (write) lastActive = System.currentTimeMillis();
+            return p;
         }
     }
 
-    /** For the relay: token of the running engine (port into port[0]), or null. See acquire. */
+    /** For the relay: token of the engine (port into port[0]) with the request registered, or null. See acquire. */
     public String acquireEndpoint(boolean write, int[] port) {
         LocalEngineProcess p = acquire(write);
         if (p == null) return null;
-        writeCloudToken(); // account changes reach the engine's token file without a restart
+        String acct = procAccount;
+        if (acct != null) writeCloudToken(acct); // a refreshed token reaches the engine's token file without a restart
         port[0] = p.port;
         return p.token;
     }
 
-    public void requestStarted() { inFlight.incrementAndGet(); }
-
-    /** Only write requests and runs count as activity (acquire / idleCheck): ending a GET poll must not keep the engine up. */
+    /** Pairs with a non-null acquireEndpoint. Only write requests and runs count as activity: ending a GET poll must not keep the engine up. */
     public void requestEnded() { inFlight.decrementAndGet(); }
 
-    /** Starts the engine if needed and waits until it is healthy. Blocking (relay / plugin threads). */
+    /** Starts the engine for the signed-in account if needed and waits until it is healthy. Blocking (relay / plugin threads). */
     public LocalEngineProcess ensureRunning() throws Exception {
         synchronized (startLock) {
+            String acct = currentAccount();
             LocalEngineProcess p = proc;
-            if (p != null && p.alive() && "running".equals(engineState)) { lastActive = System.currentTimeMillis(); return p; }
+            if (p != null && p.alive() && "running".equals(engineState) && acct != null && acct.equals(procAccount)) {
+                lastActive = System.currentTimeMillis();
+                return p;
+            }
             if (!available()) throw new IllegalStateException("unsupported");
+            if (maintenance) throw new IllegalStateException("maintenance");
+            if (acct == null) throw new IllegalStateException("signed_out");
             if (installerFor().installed() == null) throw new IllegalStateException("not_installed");
-            wanted = true;
+            if (p != null) stopLocked("account"); // the previous account's engine
             engineFail = null;
             engineState = "starting";
             emit();
-            paths.prepareRootfs();
-            writeCloudToken();
-            sweepOrphans();
-            LocalEngineService.start(ctx);
-            String why = "unknown";
-            for (int attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
-                LocalEngineProcess np = LocalEngineProcess.spawn(paths, engineEnv());
-                why = np.awaitHealthy(LocalEngineProcess.HEALTH_TIMEOUT_MS);
-                if (why == null && !ownsPort(np)) why = "foreign";
-                if (why == null) {
-                    proc = np;
-                    engineState = "running";
-                    lastActive = System.currentTimeMillis();
-                    watch(np);
-                    watchNetwork(true);
-                    emit();
-                    Log.i(TAG, "engine ready on attempt " + attempt + " in " + (System.currentTimeMillis() - np.startedAt) + "ms");
-                    return np;
+            try {
+                paths.prepareRootfs();
+                writeCloudToken(acct);
+                sweepOrphans();
+                LocalEngineService.start(ctx);
+                String why = "unknown";
+                for (int attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
+                    LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.engineBinds(acct), engineEnv());
+                    why = np.awaitHealthy(LocalEngineProcess.HEALTH_TIMEOUT_MS);
+                    if (why == null && !ownsPort(np)) why = "foreign";
+                    if (why == null) {
+                        synchronized (regLock) {
+                            proc = np;
+                            procAccount = acct;
+                            engineState = "running";
+                            lastActive = System.currentTimeMillis();
+                        }
+                        watch(np);
+                        watchNetwork(true);
+                        if (!acct.equals(currentAccount())) { // the account changed while it was starting
+                            stopLocked("account");
+                            throw new IllegalStateException("account_changed");
+                        }
+                        emit();
+                        Log.i(TAG, "engine ready on attempt " + attempt + " in " + (System.currentTimeMillis() - np.startedAt) + "ms");
+                        return np;
+                    }
+                    Log.w(TAG, "engine start attempt " + attempt + " failed: " + why + " tail=" + tailOf(np));
+                    np.stop();
                 }
-                Log.w(TAG, "engine start attempt " + attempt + " failed: " + why + " tail=" + tailOf(np));
-                np.stop();
+                engineFail = why;
+            } catch (IllegalStateException e) {
+                if ("account_changed".equals(e.getMessage())) throw e; // stopped, not failed
+                engineFail = e.getClass().getSimpleName();
+            } catch (Exception e) {
+                engineFail = e.getClass().getSimpleName();
             }
             engineState = "failed";
-            engineFail = why;
             LocalEngineService.stop(ctx);
             emit();
-            throw new IllegalStateException("start_failed:" + why);
+            throw new IllegalStateException("start_failed:" + engineFail);
         }
     }
 
     public void stopEngine(String why) {
         synchronized (startLock) {
-            wanted = false;
-            LocalEngineProcess p = proc;
-            proc = null;
-            if (p != null) {
-                Log.i(TAG, "stopping engine (" + why + ")");
-                p.stop();
-            }
-            if (!"failed".equals(engineState)) engineState = "stopped";
-            watchNetwork(false);
-            LocalEngineService.stop(ctx);
-            emit();
+            stopLocked(why);
         }
+    }
+
+    /** Caller holds startLock. */
+    private void stopLocked(String why) {
+        LocalEngineProcess p;
+        synchronized (regLock) {
+            p = proc;
+            proc = null;
+            procAccount = null;
+        }
+        finishStop(p, why);
+    }
+
+    /** Caller holds startLock and has already detached p (proc / procAccount cleared under regLock). */
+    private void finishStop(LocalEngineProcess p, String why) {
+        if (p != null) {
+            Log.i(TAG, "stopping engine (" + why + ")");
+            p.stop();
+        }
+        if (!"failed".equals(engineState)) engineState = "stopped";
+        watchNetwork(false);
+        LocalEngineService.stop(ctx);
+        emit();
     }
 
     private Map<String, String> engineEnv() {
         Map<String, String> env = new HashMap<>();
         String api = com.forsion.tangu.NativeConfigAccess.apiBase(ctx);
         if (api != null && api.endsWith("/api")) env.put("TANGU_CLOUD_URL", api.substring(0, api.length() - 4));
-        env.put("TANGU_TOKEN_FILE", "/root/.tangu/.forsion-cloud-token");
+        env.put("TANGU_TOKEN_FILE", LocalEnginePaths.GUEST_TOKEN_FILE);
         String ver = BuildConfig.VERSION_NAME == null ? "" : BuildConfig.VERSION_NAME;
         if (ver.matches("[A-Za-z0-9._-]{1,32}")) env.put("TANGU_HOST_CLIENT", "mobile/" + ver);
         return env;
     }
 
-    /** The account token the engine uses for models / cloud features (never as its local credential: TANGU_PHONE). */
-    void writeCloudToken() {
+    /**
+     * The account token the engine uses for models / cloud features (never as its local credential: TANGU_PHONE).
+     * Written only while that account is the signed-in one; otherwise emptied (and the engine is stopped elsewhere).
+     */
+    private final Object tokenLock = new Object();
+
+    void writeCloudToken(String account) {
+        synchronized (tokenLock) { writeCloudTokenLocked(account); }
+    }
+
+    private void writeCloudTokenLocked(String account) {
         String tok = com.forsion.tangu.NativeConfigAccess.token(ctx);
-        File f = new File(paths.home, ".forsion-cloud-token");
+        if (!account.equals(LocalEnginePaths.accountKey(tok))) tok = null;
+        File dir = paths.secretDir(account);
+        File f = new File(dir, "cloud-token");
         try {
-            paths.home.mkdirs();
+            dir.mkdirs();
+            Os.chmod(dir.getPath(), 0700);
             String cur = LocalEnginePaths.readSmall(f.getPath());
             String want = tok == null ? "" : tok;
             if (!want.equals(cur == null ? "" : cur.trim())) {
@@ -416,9 +575,13 @@ public final class LocalEngine {
             try { p.waitFor(); } catch (InterruptedException ignored) {}
             synchronized (startLock) {
                 if (proc == p) {
-                    // exited on its own (crash, killed by the system): the running turn shows as interrupted, like a desktop restart
+                    // exited on its own (crash, killed by the system): the running turn shows as interrupted, like a
+                    // desktop restart. Passive reads do not bring it back; the next write or an explicit start does.
                     Log.w(TAG, "engine exited unexpectedly; tail=" + tailOf(p));
-                    proc = null;
+                    synchronized (regLock) {
+                        proc = null;
+                        procAccount = null;
+                    }
                     engineState = "stopped";
                     engineFail = "exited";
                     watchNetwork(false);
@@ -472,7 +635,16 @@ public final class LocalEngine {
                 if (active > 0) lastActive = System.currentTimeMillis();
                 return;
             }
-            stopEngine("idle");
+            synchronized (startLock) {
+                // recheck and detach in one step: a request may have arrived during the probe, or Stop / Start replaced
+                // the process; once detached here, register() can no longer hand it out
+                synchronized (regLock) {
+                    if (proc != p || inFlight.get() > 0 || System.currentTimeMillis() - lastActive < IDLE_MS) return;
+                    proc = null;
+                    procAccount = null;
+                }
+                finishStop(p, "idle");
+            }
         } catch (RuntimeException e) {
             Log.w(TAG, "idle check " + e);
         }
@@ -529,7 +701,8 @@ public final class LocalEngine {
     public String debugShell(String cmd, int timeoutSec) throws Exception {
         if (!debuggable) throw new IllegalStateException("debug only");
         paths.prepareRootfs();
-        ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/root/workspace", paths.engineBinds(), java.util.Arrays.asList("/bin/bash", "-lc", cmd)));
+        String acct = currentAccount();
+        ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/root/workspace", acct == null ? null : paths.engineBinds(acct), java.util.Arrays.asList("/bin/bash", "-lc", cmd)));
         pb.environment().clear();
         pb.environment().putAll(paths.prootEnv());
         pb.redirectErrorStream(true);

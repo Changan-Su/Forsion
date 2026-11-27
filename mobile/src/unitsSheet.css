@@ -61,3 +61,6 @@
 .us-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
 .us-btn.primary { border-color: transparent; background: var(--accent); color: var(--on-accent-ink); }
 .us-btn.primary:active { background: var(--accent-hover); }
+.us-btn:disabled { opacity: 0.5; }
+.us-panel-muted { color: var(--text-muted); }
+.us-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; }

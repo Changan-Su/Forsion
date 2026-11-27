@@ -69,3 +69,19 @@ function startFixtures({ envDir, throttle = 8 * 1024 * 1024 }) {
 }
 
 module.exports = { startFixtures }
+
+// ── signed-in account for the native side ──
+// The native shell keys engine data by the account in the sign-in token (LocalEnginePaths.accountKey: sha256 of
+// "forsion-account:" + the JWT payload's userId, first 24 hex). Benches sign in with a JWT-shaped fake (nothing
+// verifies it on the phone; the cloud API is stubbed or unused).
+const crypto = require('node:crypto')
+const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url')
+const fakeJwt = (userId) => `${b64u({ alg: 'HS256', typ: 'JWT' })}.${b64u({ userId, username: userId })}.sig`
+const accountKey = (userId) => crypto.createHash('sha256').update(`forsion-account:${userId}`).digest('hex').slice(0, 24)
+const accountDirs = (userId) => {
+  const base = `files/local-engine/accounts/${accountKey(userId)}`
+  return { home: `${base}/home`, workspace: `${base}/workspace` }
+}
+module.exports.fakeJwt = fakeJwt
+module.exports.accountKey = accountKey
+module.exports.accountDirs = accountDirs

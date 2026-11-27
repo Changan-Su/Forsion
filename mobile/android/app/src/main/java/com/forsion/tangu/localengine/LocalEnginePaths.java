@@ -26,14 +26,21 @@ import java.util.Map;
  * Where everything lives, and how PRoot is invoked.
  *
  *   files/local-engine/rootfs        the environment (Ubuntu + Node + engine). Update / reset / delete touch only this.
- *   files/local-engine/home          bound to /root/.tangu — sessions, memory, config. Outside the rootfs on purpose:
- *                                    updating or deleting the environment never touches conversations.
- *   files/local-engine/workspace     bound to /root/workspace — the files the agent works on (also outside the rootfs).
+ *   files/local-engine/accounts/<k>/home       bound to /root/.tangu — sessions, memory, config.
+ *   files/local-engine/accounts/<k>/workspace  bound to /root/workspace — the files the agent works on.
+ *                                    Per Forsion account (k = hash of the account id in the sign-in token): another
+ *                                    account signing in on this phone gets its own engine data, never the last one's.
+ *                                    Outside the rootfs on purpose: updating or deleting the environment never
+ *                                    touches conversations.
+ *   files/local-engine/secrets/<k>/cloud-token  the account token for model calls, bound read-only-ish to
+ *                                    /run/forsion (outside home so that home can move to a new phone without it)
  *   files/local-engine/proc-standins static stand-ins for /proc files apps cannot read
- *   files/local-engine/installed.json what is installed (layer versions + sha256)
+ *   files/local-engine/installed.json what is installed (layer versions + sha256); pending.json while a swap is
+ *                                    in progress (LocalEngineInstaller.recover)
  *   cache/local-engine/              downloads (resumable .part files) and PRoot's temp dir
  *
- * None of this is backed up (backup_rules / data_extraction_rules exclude files/local-engine).
+ * Cloud backup excludes all of files/local-engine; device transfer carries accounts/ (conversations and files)
+ * and leaves out the environment, secrets and install state (data_extraction_rules.xml).
  */
 final class LocalEnginePaths {
     static final String LAUNCHER = "libproot.so";
@@ -54,8 +61,8 @@ final class LocalEnginePaths {
     final Context ctx;
     final File base;
     final File rootfs;
-    final File home;
-    final File workspace;
+    final File accounts;
+    final File secrets;
     final File standins;
     final File installedJson;
     final File cache;
@@ -66,8 +73,8 @@ final class LocalEnginePaths {
         ctx = c.getApplicationContext();
         base = new File(ctx.getFilesDir(), "local-engine");
         rootfs = new File(base, "rootfs");
-        home = new File(base, "home");
-        workspace = new File(base, "workspace");
+        accounts = new File(base, "accounts");
+        secrets = new File(base, "secrets");
         standins = new File(base, "proc-standins");
         installedJson = new File(base, "installed.json");
         cache = new File(ctx.getCacheDir(), "local-engine");
@@ -98,10 +105,48 @@ final class LocalEnginePaths {
         return env;
     }
 
-    List<String> engineBinds() {
-        home.mkdirs();
-        workspace.mkdirs();
-        return Arrays.asList("-b", home.getPath() + ":/root/.tangu", "-b", workspace.getPath() + ":/root/workspace");
+    File home(String account) { return new File(new File(accounts, account), "home"); }
+
+    File workspace(String account) { return new File(new File(accounts, account), "workspace"); }
+
+    File secretDir(String account) { return new File(secrets, account); }
+
+    /** Where the engine reads the account token (TANGU_TOKEN_FILE); secretDir(account) is bound to its directory. */
+    static final String GUEST_TOKEN_FILE = "/run/forsion/cloud-token";
+
+    List<String> engineBinds(String account) {
+        home(account).mkdirs();
+        workspace(account).mkdirs();
+        secretDir(account).mkdirs();
+        return Arrays.asList("-b", home(account).getPath() + ":/root/.tangu", "-b", workspace(account).getPath() + ":/root/workspace",
+                "-b", secretDir(account).getPath() + ":/run/forsion");
+    }
+
+    /**
+     * The account a sign-in token belongs to, as a directory name: sha256 of the token's userId claim (the token is
+     * the server's JWT; only the payload is read, nothing is verified here — the server verifies every call). null
+     * when signed out or the token carries no account id: the engine does not start then.
+     */
+    static String accountKey(String jwt) {
+        if (jwt == null) return null;
+        String[] parts = jwt.split("\\.");
+        if (parts.length != 3) return null;
+        try {
+            byte[] raw = android.util.Base64.decode(parts[1], android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP);
+            org.json.JSONObject o = new org.json.JSONObject(new String(raw, StandardCharsets.UTF_8));
+            Object id = o.opt("userId");
+            if (id == null || id == org.json.JSONObject.NULL) id = o.opt("sub");
+            if (id == null || id == org.json.JSONObject.NULL) return null;
+            String s = String.valueOf(id);
+            if (s.isEmpty()) return null;
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] d = md.digest(("forsion-account:" + s).getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (int i = 0; i < 12; i++) hex.append(String.format("%02x", d[i]));
+            return hex.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     List<String> prootArgv(String cwd, List<String> extraBinds, List<String> cmd) {
@@ -124,11 +169,12 @@ final class LocalEnginePaths {
 
     /** After unpacking and before every start: files the environment needs from the phone. */
     void prepareRootfs() throws IOException {
-        new File(rootfs, "etc").mkdirs();
+        // the archive decides what is in the tree, so every directory this side writes into must be a real directory
+        // (a layer could ship `etc` as a link to somewhere outside the environment)
+        realDir("etc");
         writeText(new File(rootfs, "etc/hosts"), "127.0.0.1 localhost\n::1 localhost\n");
         writeResolvConf();
-        File dev = new File(rootfs, "dev");
-        dev.mkdirs();
+        File dev = realDir("dev");
         String[][] links = {{"fd", "/proc/self/fd"}, {"stdin", "/proc/self/fd/0"}, {"stdout", "/proc/self/fd/1"}, {"stderr", "/proc/self/fd/2"}};
         for (String[] l : links) {
             File f = new File(dev, l[0]);
@@ -136,18 +182,59 @@ final class LocalEnginePaths {
                 try { Os.symlink(l[1], f.getPath()); } catch (Exception ignored) {}
             }
         }
-        File tmp = new File(rootfs, "tmp");
-        tmp.mkdirs();
+        File tmp = realDir("tmp");
         try { Os.chmod(tmp.getPath(), 01777); } catch (Exception ignored) {}
-        new File(rootfs, "root/.tangu").mkdirs();
-        new File(rootfs, "root/workspace").mkdirs();
-        new File(rootfs, "proc").mkdirs();
-        new File(rootfs, "sys").mkdirs();
+        realDir("root/.tangu");
+        realDir("root/workspace");
+        realDir("run/forsion");
+        realDir("proc");
+        realDir("sys");
         // apt drops to the _apt user for downloads; under PRoot's fake root its http method dies (exit 112).
         // Run the methods as root: the whole environment is already confined to the app's sandbox.
-        File aptConf = new File(rootfs, "etc/apt/apt.conf.d");
-        if (aptConf.isDirectory()) writeText(new File(aptConf, "99forsion-proot"), "APT::Sandbox::User \"root\";\n");
+        if (isRealDir("etc/apt/apt.conf.d")) writeText(new File(rootfs, "etc/apt/apt.conf.d/99forsion-proot"), "APT::Sandbox::User \"root\";\n");
         writeStandins();
+    }
+
+    /** rootfs/rel as a real directory: links on the way are replaced by directories, missing ones created; a regular file in the way fails. */
+    File realDir(String rel) throws IOException {
+        try {
+            if (!android.system.OsConstants.S_ISDIR(Os.lstat(rootfs.getPath()).st_mode)) throw new IOException("rootfs is not a directory");
+        } catch (android.system.ErrnoException e) {
+            throw new IOException("no rootfs");
+        }
+        File cur = rootfs;
+        for (String part : rel.split("/")) {
+            cur = new File(cur, part);
+            try {
+                android.system.StructStat st = Os.lstat(cur.getPath());
+                if (android.system.OsConstants.S_ISDIR(st.st_mode)) continue;
+                if (!android.system.OsConstants.S_ISLNK(st.st_mode)) throw new IOException("not a directory: " + rel);
+                Os.remove(cur.getPath()); // the link itself, not what it points to
+            } catch (android.system.ErrnoException missing) {
+                // fall through: create it
+            }
+            try { Os.mkdir(cur.getPath(), 0755); } catch (android.system.ErrnoException e) { throw new IOException("mkdir " + rel + ": " + e.getMessage()); }
+        }
+        return cur;
+    }
+
+    /** rootfs/rel exists and every component is a real directory (no link anywhere on the way). */
+    boolean isRealDir(String rel) {
+        try {
+            if (!android.system.OsConstants.S_ISDIR(Os.lstat(rootfs.getPath()).st_mode)) return false;
+        } catch (Exception e) {
+            return false;
+        }
+        File cur = rootfs;
+        for (String part : rel.split("/")) {
+            cur = new File(cur, part);
+            try {
+                if (!android.system.OsConstants.S_ISDIR(Os.lstat(cur.getPath()).st_mode)) return false;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Nameservers of the phone's current network (not a hard-coded public resolver); rewritten on network changes. */
@@ -155,6 +242,7 @@ final class LocalEnginePaths {
         List<String> servers = dnsServers();
         StringBuilder sb = new StringBuilder();
         for (String s : servers) sb.append("nameserver ").append(s).append('\n');
+        try { realDir("etc"); } catch (IOException e) { return; }
         File f = new File(rootfs, "etc/resolv.conf");
         if (sb.length() == 0) {
             // no network info right now: keep the last file written from a real network; only a fresh environment
@@ -206,11 +294,39 @@ final class LocalEnginePaths {
         }
     }
 
+    /**
+     * Atomic replace that never writes through a link: the temp file is created O_EXCL | O_NOFOLLOW (whatever sat
+     * at that name is removed first, links included, not followed), and rename(2) replaces a link at the target
+     * rather than following it. Callers keep the parent a real directory (realDir).
+     */
     static void writeText(File f, String s) throws IOException {
-        File tmp = new File(f.getPath() + ".tmp");
-        try (OutputStream o = new FileOutputStream(tmp)) { o.write(s.getBytes(StandardCharsets.UTF_8)); }
-        try { if (android.system.OsConstants.S_ISLNK(Os.lstat(f.getPath()).st_mode)) Os.remove(f.getPath()); } catch (Exception ignored) {}
-        if (!tmp.renameTo(f)) throw new IOException("rename " + tmp);
+        // a temp name of its own per writer: two writers of the same file never unlink or publish each other's half file
+        String tmp = f.getPath() + ".tmp-" + android.os.Process.myTid() + "-" + System.nanoTime();
+        java.io.FileDescriptor fd;
+        try {
+            fd = Os.open(tmp, android.system.OsConstants.O_WRONLY | android.system.OsConstants.O_CREAT | android.system.OsConstants.O_EXCL
+                    | android.system.OsConstants.O_NOFOLLOW, 0644);
+        } catch (android.system.ErrnoException e) {
+            throw new IOException("open " + tmp + ": " + e.getMessage());
+        }
+        boolean ok = false;
+        try {
+            byte[] b = s.getBytes(StandardCharsets.UTF_8);
+            for (int off = 0; off < b.length; ) off += Os.write(fd, b, off, b.length - off);
+            Os.fsync(fd); // install records commit by rename: the bytes must be on disk first
+            ok = true;
+        } catch (android.system.ErrnoException | java.io.InterruptedIOException e) {
+            throw new IOException("write " + tmp + ": " + e.getMessage());
+        } finally {
+            try { Os.close(fd); } catch (android.system.ErrnoException ignored) {} // Android's FileOutputStream(fd) would not close it
+            if (!ok) try { Os.remove(tmp); } catch (Exception ignored) {}
+        }
+        try {
+            Os.rename(tmp, f.getPath());
+        } catch (android.system.ErrnoException e) {
+            try { Os.remove(tmp); } catch (Exception ignored) {}
+            throw new IOException("rename " + tmp + ": " + e.getMessage());
+        }
     }
 
     static String readSmall(String path) {

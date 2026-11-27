@@ -461,14 +461,14 @@ public class UnitRelayTest {
         final AtomicInteger ended = new AtomicInteger();
         volatile UnitRelay.Endpoint ep;
 
+        /** 与真实现同契约:返回非 null 即登记一个在途(started 计数),调用方须恰好 ended() 一次。 */
         @Override
         public UnitRelay.Endpoint acquire(boolean write) {
             writes.add(write);
-            return ep;
+            UnitRelay.Endpoint e = ep;
+            if (e != null) started.incrementAndGet();
+            return e;
         }
-
-        @Override
-        public void started() { started.incrementAndGet(); }
 
         @Override
         public void ended() { ended.incrementAndGet(); }

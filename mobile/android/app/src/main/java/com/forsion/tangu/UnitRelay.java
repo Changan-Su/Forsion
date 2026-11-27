@@ -76,10 +76,11 @@ final class UnitRelay {
 
     /** 本机引擎的入口(UnitPlugin 接到 LocalEngine;JVM 单测给假的)。 */
     interface Local {
-        /** 在跑的引擎;write = 非 GET/HEAD(允许拉起、续闲置计时)。null = 不可用 → network。阻塞(可能等引擎起来)。 */
+        /**
+         * 在跑的引擎,并且同一步登记一个在途请求(空闲自停据此判,两步分开会有窗口);write = 非 GET/HEAD(只有它能拉起、续闲置计时)。
+         * null = 不可用 → network,不登记。阻塞(可能等引擎起来)。返回非 null 时调用方必须恰好调一次 ended()。
+         */
         Endpoint acquire(boolean write);
-
-        void started();
 
         void ended();
     }
@@ -378,16 +379,15 @@ final class UnitRelay {
         if (rest.isEmpty() || rest.startsWith("?")) rest = "/" + rest;
         boolean write = !(r.method.equals("GET") || r.method.equals("HEAD"));
         Endpoint ep = local.acquire(write);
-        if (a.cancelled) return -1;
         if (ep == null) {
-            sink.error("network", "local engine not running");
+            if (!a.cancelled) sink.error("network", "local engine not running");
             return -1;
         }
-        String accept = header(r.headers, "accept");
-        boolean stream = accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream");
-        local.started(); // 与 finally 里的 ended() 成对:中间任何一步抛出都不许把在途计数留高(否则空闲自停永远等不到)
         HttpURLConnection c = null;
-        try {
+        try { // acquire 已登记在途;与 finally 里的 ended() 成对:中间任何一步抛出都不许把在途计数留高(否则空闲自停永远等不到)
+            if (a.cancelled) return -1;
+            String accept = header(r.headers, "accept");
+            boolean stream = accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream");
             c = (HttpURLConnection) new URL("http://127.0.0.1:" + ep.port + rest).openConnection();
             a.conn = c;
             if (a.cancelled) return -1;
@@ -442,8 +442,11 @@ final class UnitRelay {
             if (!a.cancelled) sink.end();
             return status;
         } finally {
-            if (c != null) c.disconnect();
-            local.ended();
+            try {
+                if (c != null) c.disconnect();
+            } finally {
+                local.ended();
+            }
         }
     }
 

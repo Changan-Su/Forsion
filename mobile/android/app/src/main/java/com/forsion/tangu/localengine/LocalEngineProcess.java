@@ -11,7 +11,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -23,8 +22,10 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * One run of the Tangu engine inside PRoot: random loopback port, a fresh local token per start (native-only),
- * health check, stop. What the probes taught (probe-apk/REPORT.md):
+ * One run of the Tangu engine inside PRoot: the engine binds an ephemeral loopback port itself (--port 0) and prints
+ * it on its first ready line, read here from its own stdout — no port is picked here and released for the child to
+ * take later, so nothing else can grab it in between and receive the token. A fresh local token per start
+ * (native-only), health check, stop. What the probes taught (probe-apk/REPORT.md):
  *  - PRoot ignores SIGTERM, and Process.destroy() sends SIGTERM: stop by SIGTERM to the guest (node), then SIGKILL PRoot.
  *  - Exit codes lie: after a glibc "double free" the engine exited with 0. Any exit before /health answered counts as a
  *    crash, whatever the code.
@@ -35,7 +36,8 @@ final class LocalEngineProcess {
     static final int HEALTH_TIMEOUT_MS = 90_000;
     private static final int LOG_LINES = 200;
 
-    final int port;
+    /** 0 until the engine has printed the port it bound. */
+    volatile int port;
     final String token;
     final long startedAt;
     private final Process process;
@@ -43,9 +45,11 @@ final class LocalEngineProcess {
     private final Deque<String> tail = new ArrayDeque<>();
     private volatile boolean stopping;
 
-    private LocalEngineProcess(Process p, int port, String token) {
+    /** The engine's ready line (tangu-agent standalone/main.ts): "[tangu] standalone … http://127.0.0.1:<port>". */
+    private static final java.util.regex.Pattern READY = java.util.regex.Pattern.compile("^\\[tangu\\] standalone .*http://127\\.0\\.0\\.1:(\\d{1,5})\\s*$");
+
+    private LocalEngineProcess(Process p, String token) {
         this.process = p;
-        this.port = port;
         this.token = token;
         this.startedAt = System.currentTimeMillis();
         this.prootPid = pidOf(p);
@@ -55,8 +59,7 @@ final class LocalEngineProcess {
     }
 
     /** Starts PRoot + node. Does not wait for health; call {@link #awaitHealthy}. */
-    static LocalEngineProcess spawn(LocalEnginePaths paths, Map<String, String> extraEnv) throws IOException {
-        int port = freePort();
+    static LocalEngineProcess spawn(LocalEnginePaths paths, List<String> binds, Map<String, String> extraEnv) throws IOException {
         String token = newToken();
         Map<String, String> env = paths.prootEnv();
         env.put("TANGU_HOME", "/root/.tangu");
@@ -66,16 +69,16 @@ final class LocalEngineProcess {
         env.put("TANGU_BROWSER_EXTENSION", "0");
         env.put("NODE_ENV", "production");
         if (extraEnv != null) env.putAll(extraEnv);
-        List<String> argv = paths.prootArgv("/opt/tangu", paths.engineBinds(),
-                java.util.Arrays.asList("/opt/node/bin/node", "dist/standalone/main.js", "--port", String.valueOf(port), "--host", "127.0.0.1"));
+        List<String> argv = paths.prootArgv("/opt/tangu", binds,
+                java.util.Arrays.asList("/opt/node/bin/node", "dist/standalone/main.js", "--port", "0", "--host", "127.0.0.1"));
         ProcessBuilder pb = new ProcessBuilder(argv);
         pb.environment().clear();
         pb.environment().putAll(env);
         pb.redirectErrorStream(true);
         pb.directory(paths.base);
         Process p = pb.start();
-        Log.i(TAG, "spawned proot pid=" + pidOf(p) + " port=" + port);
-        return new LocalEngineProcess(p, port, token);
+        Log.i(TAG, "spawned proot pid=" + pidOf(p));
+        return new LocalEngineProcess(p, token);
     }
 
     /**
@@ -86,7 +89,7 @@ final class LocalEngineProcess {
         long t0 = System.nanoTime();
         while ((System.nanoTime() - t0) / 1_000_000 < timeoutMs) {
             if (!process.isAlive()) return "exited";
-            if (health(500) == 200) return null;
+            if (port > 0 && health(500) == 200) return null;
             try { Thread.sleep(250); } catch (InterruptedException e) { return "interrupted"; }
         }
         return "timeout";
@@ -139,6 +142,13 @@ final class LocalEngineProcess {
             String line;
             while ((line = br.readLine()) != null) {
                 if (token != null && !token.isEmpty()) line = line.replace(token, "***");
+                if (port == 0) {
+                    java.util.regex.Matcher m = READY.matcher(line);
+                    if (m.find()) {
+                        int p = Integer.parseInt(m.group(1));
+                        if (p > 0 && p < 65536) port = p; // the first ready line only: nothing later can move the port
+                    }
+                }
                 synchronized (this) {
                     tail.addLast(line);
                     while (tail.size() > LOG_LINES) tail.removeFirst();
@@ -146,12 +156,6 @@ final class LocalEngineProcess {
                 Log.i(TAG, "engine> " + line);
             }
         } catch (IOException ignored) {
-        }
-    }
-
-    static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
-            return s.getLocalPort();
         }
     }
 

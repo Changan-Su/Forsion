@@ -142,11 +142,6 @@ public class UnitPlugin extends Plugin {
             }
 
             @Override
-            public void started() {
-                engine.requestStarted();
-            }
-
-            @Override
             public void ended() {
                 engine.requestEnded();
             }

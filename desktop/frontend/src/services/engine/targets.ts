@@ -38,7 +38,7 @@ import { currentPlatform } from '../platform'
 import { isRealUnitToken } from '../unitToken'
 import { cloudApiBaseOf } from './cloudBase'
 import { translate } from './messages'
-import { isPhoneEngineId, phoneEngineHost } from './phoneEngine'
+import { isPhoneEngineId, phoneEngineHost, phoneEngineInstalled, usePhoneEngine } from './phoneEngine'
 import { assertTargetRef, HOME_REF, isEngineTarget, isTargetKey, mintTarget, sameRef, targetKeyOf, type EngineTarget, type TargetKey, type TargetRef, type TargetVia } from './target'
 
 export type { EngineTarget, TargetKey, TargetRef, TargetVia } from './target'
@@ -593,6 +593,11 @@ const unitTargets = new Map<string, EngineTarget>()
 let phoneTargetCache: EngineTarget | null = null
 function phoneTarget(): EngineTarget | null {
   if (currentPlatform() !== 'mobile' || !phoneEngineHost()) return null
+  // 原生已经说了这台手机现在用不了(包里没启动器 / 没配环境包地址 / 环境没装):不给目标 —— 恢复焦点不会落到它上面,
+  // 绑在它上面的会话照旧绑着(解析不了 = 失败关闭,装回来就能接着用)。状态还没读到(启动头一秒)时照旧给,
+  // 由 localEngine.ts 在首个状态到了之后把草稿焦点改回云端。
+  const st = usePhoneEngine.getState().state
+  if (st && !phoneEngineInstalled(st)) return null
   const api = cloudApiBase()
   if (!api) return null
   if (phoneTargetCache && phoneTargetCache.unitBase === `${api}/units/${PHONE_ID_PATH}/proxy`) return phoneTargetCache

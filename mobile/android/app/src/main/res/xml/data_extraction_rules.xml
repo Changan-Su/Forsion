@@ -3,10 +3,25 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="forsion_unit.xml" />
+        <!-- 本机引擎:环境几百 MB、含账号令牌文件,不进云备份 -->
         <exclude domain="file" path="local-engine/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="forsion_unit.xml" />
-        <exclude domain="file" path="local-engine/" />
+        <!-- 本机引擎:换手机时带上 accounts/(各账号的对话与工作区,只此一份);
+             环境(新手机上重新下载)、令牌、安装记录与换装中的临时树都不带 -->
+        <exclude domain="file" path="local-engine/rootfs/" />
+        <exclude domain="file" path="local-engine/rootfs.new/" />
+        <exclude domain="file" path="local-engine/rootfs.old/" />
+        <exclude domain="file" path="local-engine/engine.new/" />
+        <exclude domain="file" path="local-engine/tangu.old/" />
+        <exclude domain="file" path="local-engine/trash/" />
+        <exclude domain="file" path="local-engine/secrets/" />
+        <exclude domain="file" path="local-engine/proc-standins/" />
+        <exclude domain="file" path="local-engine/installed.json" />
+        <exclude domain="file" path="local-engine/pending.json" />
+        <!-- 早期测试包的平铺目录(按账号分开之前;home 里可能有账号令牌文件):不带 -->
+        <exclude domain="file" path="local-engine/home/" />
+        <exclude domain="file" path="local-engine/workspace/" />
     </device-transfer>
 </data-extraction-rules>

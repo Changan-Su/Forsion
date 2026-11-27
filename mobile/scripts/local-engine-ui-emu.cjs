@@ -19,7 +19,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const h = require('./lib/emu-cdp.cjs')
-const { startFixtures } = require('./lib/local-engine-fixtures.cjs')
+const { startFixtures, fakeJwt, accountDirs } = require('./lib/local-engine-fixtures.cjs')
+const U = accountDirs('emu-ui')
 
 const PKG = 'com.forsion.tangu'
 const CDP_PORT = Number(process.env.CDP_PORT || 9354)
@@ -99,7 +100,14 @@ async function elPoint(expr) {
 }
 async function tapEl(expr) { const p = await elPoint(expr); h.tapAt(p.x, p.y) }
 const q = (sel) => `document.querySelector(${JSON.stringify(sel)})`
-const visible = (sel) => `[...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.disabled })`
+/** First element matching sel that is actually on top at its own centre (sized is not enough: the chat list page covers
+ *  the chat view, whose composer is laid out underneath). Checks the point both as-is and through the CSS zoom. */
+const visible = (sel) => `[...document.querySelectorAll(${JSON.stringify(sel)})].find((e) => {
+  const r = e.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0) || e.disabled) return false
+  let z = 1; for (let x = e; x; x = x.parentElement) z *= parseFloat(getComputedStyle(x).zoom) || 1
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2
+  return [[cx, cy], [cx * z, cy * z]].some(([x, y]) => { const t = document.elementFromPoint(x, y); return !!t && (t === e || e.contains(t)) })
+})`
 
 async function main() {
   const fx = await startFixtures({ envDir: ENV_DIR, throttle: THROTTLE })
@@ -111,7 +119,7 @@ async function main() {
   await installStub()
   // signed in (fake token; the cloud API is stubbed), Chinese UI, first-run guide already done
   await cdp.eval(`(async () => {
-    await Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: 'e2e-local-engine.fake.token' })
+    await Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: '${fakeJwt('emu-ui')}' })
     localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light'); localStorage.setItem('forsion_theme', 'light')
     localStorage.setItem('forsion_tangu_onboarding_done', '1')
     return true })()`)
@@ -119,18 +127,23 @@ async function main() {
   await plug('stop')
   await plug('remove')
   await waitState((x) => !x.installed && x.phase === 'idle', 60000, 'removed')
-  h.adb('shell', 'run-as', PKG, 'rm', '-rf', 'cache/local-engine/downloads')
+  h.adb('shell', 'run-as', PKG, 'rm', '-rf', 'cache/local-engine/downloads', `${U.workspace}/probe.txt`)
   const cfg = JSON.stringify({ providers: [{ providerId: 'emu', baseUrl: 'http://10.0.2.2:18901/v1', apiKey: 'x', modelIds: ['echo'] }], cloud: { defaultModel: 'emu/echo' } })
-  h.adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p files/local-engine/home && echo ${Buffer.from(cfg).toString('base64')} | base64 -d > files/local-engine/home/config.json'`)
+  h.adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p ${U.home} && echo ${Buffer.from(cfg).toString('base64')} | base64 -d > ${U.home}/config.json'`)
   await cdp.send('Page.reload', { ignoreCache: true })
   await h.pause(2000)
   await h.waitPage(cdp, "document.readyState === 'complete'", 20000)
 
   // ① Chat tab (native bottom bar) → new chat: the run-location pill is there even with no computers (this phone is a choice)
-  const tab = (await h.waitNodes((l) => l.find((n) => n.text === '对话' || n['content-desc'] === '对话'), { timeout: 20000, out: OUT })).hit
-  if (tab) h.tapNode(tab)
-  const compose = (await h.waitNodes((l) => l.find((n) => n.text === '新会话' || n['content-desc'] === '新会话'), { timeout: 20000, out: OUT })).hit
-  if (compose) h.tapNode(compose)
+  // (taps during the reload get lost: keep going until the composer with the pill is on screen)
+  for (let i = 0; i < 10 && !(await cdp.eval(`!!${visible('.runloc-pill')}`).catch(() => false)); i++) {
+    const l = h.nodes(OUT)
+    const compose = l.find((n) => n.class === 'android.widget.Button' && (n.text === '新会话' || n['content-desc'] === '新会话'))
+    if (compose) { h.tapNode(compose); await h.pause(2500); continue }
+    const tab = l.find((n) => n.text === '对话' || n['content-desc'] === '对话')
+    if (tab) h.tapNode(tab)
+    await h.pause(2000)
+  }
   const pill = await h.waitPage(cdp, `!!${visible('.runloc-pill')}`, 30000)
   ok('run-location pill shows with zero computers (this phone counts as a choice)', !!pill)
   shot('01-new-chat')
@@ -138,13 +151,14 @@ async function main() {
   const row = await h.waitPage(cdp, `!!${q('[data-run-row="phone"]')}`, 10000)
   const order = await cdp.eval(`[...document.querySelectorAll('[data-run-on] [data-run-row]')].map((e) => e.getAttribute('data-run-row')).join(',')`)
   ok('sheet lists This phone right under Forsion cloud', !!row && /^home,phone/.test(order || ''), order)
-  const rowText = await cdp.eval(`${q('[data-run-row="phone"]')}?.innerText`)
+  // the row fetches the manifest when the sheet opens: give it a moment to write the size
+  const rowText = await h.waitPage(cdp, `(() => { const t = ${q('[data-run-row="phone"]')}?.innerText || ''; return /\\d+ MB/.test(t) && t })()`, 15000) || await cdp.eval(`${q('[data-run-row="phone"]')}?.innerText`)
   ok('row says the environment must be downloaded first (with its size)', /这台手机/.test(rowText || '') && /下载运行环境/.test(rowText || '') && /\d+ MB/.test(rowText || ''), JSON.stringify(rowText))
   shot('02-sheet')
 
   // ② tap → confirm panel with sizes and the no-sandbox note
   await tapEl(q('[data-run-row="phone"]'))
-  const confirm = await h.waitPage(cdp, `${q('[data-phone-confirm]')}?.innerText`, 10000)
+  const confirm = await h.waitPage(cdp, `(() => { const t = ${q('[data-phone-confirm]')}?.innerText || ''; return /下载约/.test(t) && t })()`, 15000) || await cdp.eval(`${q('[data-phone-confirm]')}?.innerText`)
   ok('confirm: download / disk sizes, model still in the cloud, no command sandbox', /下载约 \d+ MB/.test(confirm || '') && /占用约 \d+ MB/.test(confirm || '') && /云端/.test(confirm || '') && /沙箱/.test(confirm || ''), JSON.stringify(confirm))
   shot('03-confirm')
 
@@ -173,7 +187,7 @@ async function main() {
 
   // ④ details panel: usage, versions, actions
   await tapEl(q('.us-phone-more'))
-  const details = await h.waitPage(cdp, `${q('[data-phone-details]')}?.innerText`, 10000)
+  const details = await h.waitPage(cdp, `(() => { const t = ${q('[data-phone-details]')}?.innerText || ''; return /环境占用/.test(t) && t })()`, 60000) || await cdp.eval(`${q('[data-phone-details]')}?.innerText`)
   ok('details: usage, versions, reset and delete', /环境占用 \d+ MB/.test(details || '') && /引擎 /.test(details || '') && /重置环境/.test(details || '') && /删除环境/.test(details || ''), JSON.stringify(details))
   shot('07-details')
   await tapEl(q('.us-phone-more'))
@@ -194,15 +208,21 @@ async function main() {
   await h.pause(500)
   shot('09-typed')
   await tapEl(visible('.t2c-send'))
+  // run_bash needs approval under the default approval mode: the card shows on the phone, tap Approve
+  const approveBtn = `[...document.querySelectorAll('button')].find((b) => b.innerText.trim() === '批准' && b.getBoundingClientRect().width > 0)`
+  const card = await h.waitPage(cdp, `!!${approveBtn}`, 120000)
+  ok('the run asks for approval of run_bash on the phone (approval card)', !!card)
+  shot('10-approval')
+  if (card) await tapEl(approveBtn)
   const reply = await h.waitPage(cdp, `(() => { const t = document.body.innerText; return /PHONE-OK/.test(t) && /marker-42/.test(t) && t.match(/PHONE-OK[^\\n]{0,160}/)[0] })()`, 180000)
   ok('the reply shows up in the chat, carrying the tool output from PRoot', !!reply, JSON.stringify(reply))
   ok('the fake model was asked twice (tool call → final answer)', fx.modelCalls.length >= 2, `calls=${fx.modelCalls.length}`)
   const cloudRuns = stubLog.filter((l) => /^POST .*\/agent\/(runs|sessions)/.test(l))
   ok('nothing was sent to the cloud engine', cloudRuns.length === 0, cloudRuns.join(' | '))
-  const probe = h.adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/workspace/probe.txt').trim()
+  const probe = h.adb('shell', 'run-as', PKG, 'cat', `${U.workspace}/probe.txt`).trim()
   ok('the tool wrote into this phone\'s workspace', probe === 'marker-42', probe)
   await h.pause(1500)
-  shot('10-reply')
+  shot('11-reply')
 
   cdp.close()
   fx.close()
