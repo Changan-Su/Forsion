@@ -30,11 +30,13 @@ const CONTENT = 'https://content.dropboxapi.com'
  * Forsion 官方 Dropbox 应用的 App Key —— 填了它,用户点「连接 Dropbox」直接登,不用自建应用。
  * PKCE 公共客户端没有 secret,App Key 随包分发是官方认可的做法(remotely-save 等同款)。
  * 空 = 尚未登记官方应用,UI 退回「用户自建应用 + 填 App Key」。
- * 登记步骤:dropbox.com/developers → Create app → Scoped access → App folder →
- * Permissions 勾 account_info.read / files.metadata.read+write / files.content.read+write →
- * Settings → OAuth2 Redirect URIs 加 http://localhost:53682/ → 复制 App key 填到这里。
+ * 已登记(2026-11-27):应用名 Forsion,App folder 名 Forsion(用户侧落在「应用/Forsion」),
+ * Scoped access + App folder,Permissions 勾 account_info.read / files.metadata.read+write /
+ * files.content.read+write,OAuth2 Redirect URIs = http://localhost:53682/,Allow public clients 开。
+ * 改权限或回调口要同步改 App Console,否则授权页报 invalid_scope / invalid redirect_uri。
+ * 新应用是 Development 状态,连接用户数涨上来后要在 App Console 申请 Production。
  */
-export const FORSION_DROPBOX_APP_KEY = ''
+export const FORSION_DROPBOX_APP_KEY: string = 'ft4gcwbsrmu3x4x'
 
 /** Dropbox-API-Arg 头要求纯 ASCII:非 ASCII 一律 \uXXXX 转义(中文文件名必踩)。 */
 export function asciiJson(v: unknown): string {

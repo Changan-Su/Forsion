@@ -13,7 +13,7 @@ import { ChangeReceipt } from './ChangeReceipt'
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
-import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { Fragment, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type Ref } from 'react'
 import { useStreamReveal } from './streamReveal'
 import { Copy, RotateCcw, GitBranch, MessageCircleQuestion, CornerUpLeft, Pencil, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp, Clock, Undo2 } from 'lucide-react'
 import { ArrowUpRight, FileInput, Gauge, StepForward } from 'lucide-react'
@@ -52,6 +52,8 @@ import { citeIndexOf } from '../../../../../tangu-agent/src/contracts/citeSource
 import { CITE_HOVER } from './citeHover'
 
 registerMessages({
+  'pc.openProfile': { zh: '查看 {name} 的资料', en: 'Open {name}\'s profile' },
+  'pc.openMine': { zh: '查看我的资料', en: 'Open my profile' },
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
   'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
@@ -723,9 +725,21 @@ function InsertNoteButton({ onInsert }: { onInsert: () => void }) {
 
 /** memo:流式时 ChatView 每来一段字就重渲一次,没变的消息在这里挡住 —— 不然长会话里每段字都把整段对话的消息外壳重跑一遍。
  *  只有 props 稳住才挡得住:ChatView 的 handlers 按消息 id 缓存、fileCtx / voice 走 useMemo。 */
+/** 资料卡入口:ChatView 按这条消息认出发言人(views/chat2/profileCard.ts),卡贴着 anchor 开。 */
+export type ProfileOpener = (msg: UiMessage, anchor: HTMLElement, from: 'avatar' | 'name') => void
+/** 头像 / 名字条变成可按的入口(鼠标点、Enter / 空格);没有 onProfile 时什么都不加。 */
+function profileHit(onProfile: ProfileOpener | undefined, msg: UiMessage, from: 'avatar' | 'name', open: boolean, label: string): HTMLAttributes<HTMLElement> & Record<string, unknown> {
+  if (!onProfile) return {}
+  return {
+    'data-profile': '', role: 'button', tabIndex: 0, 'aria-haspopup': 'dialog', 'aria-expanded': open, 'aria-label': label,
+    onClick: (e: ReactMouseEvent<HTMLElement>) => { e.stopPropagation(); onProfile(msg, e.currentTarget, from) },
+    onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onProfile(msg, e.currentTarget, from) } },
+  }
+}
+
 export const EditorialMessage = memo(EditorialMessageView)
 
-function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false, pending }: { /** 已发出、还没被 Agent 读到(见 PendingSend)。 */ pending?: PendingSend; /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false, pending, onProfile, profileOpen }: { /** 点头像 / 名字条开资料卡(ChatView 给;缺省 = 头像只是画出来)。要稳定引用:这个组件是 memo 的。 */ onProfile?: ProfileOpener; /** 这条的资料卡开着(从头像还是名字条开的):入口保持高亮。 */ profileOpen?: 'avatar' | 'name'; /** 已发出、还没被 Agent 读到(见 PendingSend)。 */ pending?: PendingSend; /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const forkScope = useContext(ForkScope)
   // 消息里的 agentName 是收到时的显示名:现取,切语言 / 改名后旧消息也跟着变。重载时名册可能晚到,老记录那时认不出 slug,这里按名字再认一次
   const speakerName = useApp((s) => agentName(s.agentDefs.find((a) => (msg.agentId ? a.slug === msg.agentId : !!msg.agentName && agentNames(a).includes(msg.agentName)))))
@@ -941,7 +955,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     return (
       <div ref={setUserWrap} className={`t2-userwrap${inlineActions ? ' t2-userwrap--inline' : ''}${pending ? ' t2-userwrap--pending' : footer ? ' t2-userwrap--failed' : ''}`} id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle} data-quiet={quiet}>
         <div className="t2-user-col">
-          <div className="t2-username">{name}</div>
+          <div className="t2-username" {...profileHit(onProfile, msg, 'name', profileOpen === 'name', t('pc.openMine'))}>{name}</div>
           {msg.role === 'user' && <BtwRelayTag sessionId={runSid} content={msg.content} timestamp={msg.timestamp} />}
           {previewQuote && <QuotePreview text={previewQuote.text} note={previewQuote.note} onClose={() => setPreviewQuote(null)} />}
           {(atts.length > 0 || quoted) && (
@@ -1017,7 +1031,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           </div>
           )}
         </div>
-        <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined}>
+        <div className="t2-avatar t2-user-avatar" style={!userAvatar ? { background: 'color-mix(in srgb, var(--text-muted) 22%, transparent)' } : undefined} {...profileHit(onProfile, msg, 'avatar', profileOpen === 'avatar', t('pc.openMine'))}>
           {userAvatar ? <img src={userAvatar} alt="" /> : firstChar(name)}
         </div>
       </div>
@@ -1068,9 +1082,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     <>
     {msg.fallback && <FallbackLine fb={msg.fallback} />}
     <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined} data-quiet={quiet}>
-      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
+      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined} {...profileHit(onProfile, msg, 'avatar', profileOpen === 'avatar', t('pc.openProfile', { name: speakerName || msg.agentName || agentNameFallback || 'Tangu' }))}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{onProfile
+          ? <span className="t2-name-hit" {...profileHit(onProfile, msg, 'name', profileOpen === 'name', t('pc.openProfile', { name: speakerName || msg.agentName || agentNameFallback || 'Tangu' }))}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}</span>
+          : speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {isProactive(msg) && <ProactiveMark at={msg.timestamp} rule={automationDm?.rule} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {

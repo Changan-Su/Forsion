@@ -55,6 +55,7 @@ import { InlineRefMirror } from './InlineRefMirror'
 import { isCaretOnEdgeLine } from './textareaLayout'
 import { findTokens, tokenTouching } from './composerTokens'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
+import { MENTION_AGENT_EVENT, MENTION_TARGET_ATTR } from './mentionAgent'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
@@ -1245,11 +1246,12 @@ export const Composer2: React.FC<{
   const mentionActive = !voiceActive && !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
 
-  const pickMention = (a: NormalAgentDef) => {
-    if (!mention) return
-    const before = draft.slice(0, mention.start)
+  /** 把 [start, end) 换成 `@名字 `,并记下这次 @ 的语义(项目 / 群聊定向 / 派遣)。输入框自己的 @ 选人和资料卡的「@ 它」共用。 */
+  const applyMention = (a: NormalAgentDef, start: number, end: number) => {
+    const head = draft.slice(0, start)
+    const before = head && !/\s$/.test(head) ? `${head} ` : head // 从外面插:前面贴着字就先空一格
     const insert = `@${agentName(a)} `
-    const next = before + insert + draft.slice(cursorPos)
+    const next = before + insert + draft.slice(end)
     setDraft(next)
     if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: agentName(a), path: a.slug }]))
     else if (inGroup) setMentionedSlug(a.slug)
@@ -1260,6 +1262,23 @@ export const Composer2: React.FC<{
       if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
       autoGrow()
     })
+  }
+  const pickMention = (a: NormalAgentDef) => {
+    if (!mention) return
+    applyMention(a, mention.start, cursorPos)
+  }
+  // 资料卡的「@ 它」(mentionAgent.ts):只认这张卡的 @ 候选里有的 Agent;私聊里 @ 的是项目,不接
+  const mentionFromCard = useRef<(slug: string) => boolean>(() => false)
+  mentionFromCard.current = (slug) => {
+    if (projectMode || disabled || voiceActive) return false
+    const a = mentionPool.find((x) => x.slug === slug)
+    if (!a) return false
+    if (histPos) setHistPos(0) // 算一次真编辑:退出历史召回,免得 ↓ 回原草稿后 @ 的路由状态还挂着
+    // 正在打 @xx(补全开着)就替换那一段,别留下「@Al @Bob」;否则插在光标处
+    const at = Math.min(cursorPos, draft.length)
+    if (mention) applyMention(a, mention.start, at)
+    else applyMention(a, at, at)
+    return true
   }
 
   // ── [[ 引用:工作区文件(插入相对路径,与拖放/粘贴同契约)+ Amadeus 笔记(插入 [[绝对路径|名字]],
@@ -1769,6 +1788,15 @@ export const Composer2: React.FC<{
     if (dup.length) setHint(t('input.skip.simple', { items: dup.join(t('composer2.listSep')) }))
     if (nextRefs.length) addRefChips(nextRefs)
   }
+
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    card.setAttribute(MENTION_TARGET_ATTR, '')
+    const onMention = (e: Event): void => { if (mentionFromCard.current((e as CustomEvent<{ slug: string }>).detail?.slug || '')) e.preventDefault() }
+    card.addEventListener(MENTION_AGENT_EVENT, onMention)
+    return () => { card.removeEventListener(MENTION_AGENT_EVENT, onMention); card.removeAttribute(MENTION_TARGET_ATTR) }
+  }, [])
 
   // 「引用刚才在用的窗口」(默认左右 ⌘ / Ctrl 同按,可改,见 appRefCommand.ts):命令找到可见的那张输入卡,把引用送到这里挂进「已选择」,截图随后当图片附件。
   useEffect(() => {
