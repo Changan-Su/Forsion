@@ -7,46 +7,23 @@
  *  1. 默认带上 defaultSession 里该域名的 cookie —— 一律 credentials:'omit'(同步只用 Bearer 令牌);
  *  2. 可缓存的 GET 会进 Chromium 的 HTTP 缓存(Drive 下载的文件内容会落进 Electron 缓存目录,还可能拿到缓存的旧版)
  *     —— 一律 cache:'no-store';
- *  3. 响应体在包装里读完,并和 signal 赛跑(实测 net.fetch 自己的 abort 在等头 / 读体 / 上传途中都生效,
- *     这层只是兜底:哪天底层不理 abort,调用方也不会被拖住)。上传途中 abort,服务端收不到完整请求体,
- *     超时的上传不会在后台补完。
+ *  3. 已经 abort 的 signal 不再发请求(直接 reject,也不留未接住的底层 Promise)。
+ * abort 本身交给 net.fetch:实测等响应头 / 读响应体 / 上传途中 abort 都会 reject,上传被掐断后服务端收不到完整请求体
+ * (超时的上传不会在后台补完);探针钉着这条,升级 Electron 后先跑探针。响应原样返回,不在这里缓冲正文。
  * 隔离约定:不 import electron;底层 fetch 由宿主注入。
  */
 
-/** 不许带响应体的状态码(new Response 传了 body 会抛)。 */
-const NULL_BODY = new Set([204, 205, 304])
-
-function raceAbort<T>(p: Promise<T>, signal: AbortSignal | null | undefined, onAbort: () => void): Promise<T> {
-  if (!signal) return p
-  if (signal.aborted) {
-    onAbort()
-    return Promise.reject(signal.reason ?? new DOMException('aborted', 'AbortError'))
-  }
-  return new Promise<T>((resolve, reject) => {
-    const abort = (): void => {
-      onAbort()
-      reject(signal.reason ?? new DOMException('aborted', 'AbortError'))
-    }
-    signal.addEventListener('abort', abort, { once: true })
-    p.then(
-      (v) => { signal.removeEventListener('abort', abort); resolve(v) },
-      (e) => { signal.removeEventListener('abort', abort); reject(e) },
-    )
-  })
-}
-
 export type BaseFetch = (input: string | Request, init?: RequestInit) => Promise<Response>
+
+const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new DOMException('aborted', 'AbortError')
 
 export function abortableFetch(base: BaseFetch): typeof fetch {
   const wrapped = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input
-    const signal = init?.signal
-    const rsp = await raceAbort(base(target, { ...init, credentials: 'omit', cache: 'no-store' }), signal, () => {})
-    if (NULL_BODY.has(rsp.status) || !rsp.body) return new Response(null, { status: rsp.status, statusText: rsp.statusText, headers: rsp.headers })
-    const body = await raceAbort(rsp.arrayBuffer(), signal, () => {
-      void rsp.body?.cancel().catch(() => {}) // 尽力而为(流正被 arrayBuffer 锁着时会被拒,无妨)
-    })
-    return new Response(body, { status: rsp.status, statusText: rsp.statusText, headers: rsp.headers })
+    // init.signal 覆盖 Request 自带的(同 fetch 语义)
+    const signal = init?.signal ?? (typeof target === 'string' ? undefined : target.signal)
+    if (signal?.aborted) throw abortReason(signal)
+    return base(target, { ...init, credentials: 'omit', cache: 'no-store' })
   }
   return wrapped as typeof fetch
 }
