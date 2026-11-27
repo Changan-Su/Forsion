@@ -2326,7 +2326,7 @@ export const Composer2: React.FC<{
             {showModeChip && !modeMerged && (
               <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${capsule.expanded('mode') ? ' is-open' : ''}${openMenu === 'mode' ? ' t2c-capsule-held' : ''}`} data-cmenu>
                 <button
-                  className={`t2c-pill mode-pill-btn${capsule.expanded('mode') ? ' is-open' : ''}${capsule.closing === 'mode' ? ' is-retracting' : ''}${planMode && !isChat ? ' active' : ''}`}
+                  className={`t2c-pill mode-pill-btn capsule-pill${capsule.pillClass('mode')}${planMode && !isChat ? ' active' : ''}`}
                   data-danger={dangerPill || undefined}
                   title={dangerPill ? t('input.approval.fullAutoDesc') : t('input.modeChipTitle')}
                   aria-expanded={capsule.expanded('mode')}

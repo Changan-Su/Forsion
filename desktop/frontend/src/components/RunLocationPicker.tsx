@@ -288,7 +288,7 @@ export function RunLocationPicker(): React.ReactElement | null {
     >
       <button
         type="button"
-        className={`composer-chip project-pill runloc-pill${open ? ' is-open' : ''}`}
+        className={`composer-chip project-pill runloc-pill${canOpen ? ' capsule-pill' : ''}${flow.pillClass('menu')}`}
         title={t('runloc.pillTitle', { where })}
         aria-label={t('runloc.pillTitle', { where })}
         aria-haspopup={desktop ? 'menu' : 'dialog'}
@@ -302,8 +302,11 @@ export function RunLocationPicker(): React.ReactElement | null {
         }}
       >
         <Icon size={13} />
-        <span className="project-pill-name">{where}</span>
-        {status && status !== 'ready' && <span className="runloc-status" data-tone={status === 'checking' ? 'wait' : 'warn'}>{deviceStatusText(t, status)}</span>}
+        {/* 名字 + 状态说明同在中间一格(.capsule-pill 是三列:图标 / 字 / 箭头),状态不另占第四列 */}
+        <span className="runloc-label">
+          <span className="project-pill-name">{where}</span>
+          {status && status !== 'ready' && <span className="runloc-status" data-tone={status === 'checking' ? 'wait' : 'warn'}>{deviceStatusText(t, status)}</span>}
+        </span>
         {canOpen && <ChevronDown size={12} />}
       </button>
       {open && (

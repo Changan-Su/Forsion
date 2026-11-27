@@ -254,7 +254,7 @@ export function CompactChatPicker({
       <button
         ref={chipRef}
         type="button"
-        className={`t2c-pill compact-chat-picker${open ? ' is-open' : ''}`}
+        className={`t2c-pill compact-chat-picker${open === 'popover' ? flow.pillClass('pop') : open ? ' is-open' : ''}`}
         aria-busy={busy || undefined}
         aria-haspopup="listbox"
         aria-expanded={!!open}

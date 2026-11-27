@@ -121,23 +121,12 @@
    字始终在中列里居中 —— 原来 .is-open 才换 grid,倒放一开始就摘,字一帧从正中跳回左边、⌄ 跳回字旁。
    两侧列至少 13px(图标 13、箭头 10 → 两侧等宽,撑开后字精确居中;收起只比原来的 inline-flex 宽 3px);＋ 胶囊本来就是这么写的。
    字的 max-width 开合不变(原来撑开时放成 none,收起第一帧长名字的盒子缩回 160,字起点一跳)。 */
-.t2c-pill.mode-pill-btn {
-  display: grid;
-  grid-template-columns: minmax(13px, auto) minmax(0, 1fr) minmax(13px, auto);
-  min-width: 0;
-  interpolate-size: allow-keywords;
-  width: fit-content;
-  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
-  transition: background var(--duration-fast, 0.15s), width var(--pill-size-motion);
-}
+/* 2026-11-27 起网格、宽度过渡、开合时长都在公共类 .capsule-pill(base.css 项目胶囊那段),这里只写撑开宽度与底色 */
 .t2c-pill.mode-pill-btn.is-open {
   width: 224px;
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
-  --pill-size-motion: var(--cap-open, var(--menu-enter-duration) var(--menu-enter-ease));
 }
-.t2c-pill.mode-pill-btn.is-retracting { --pill-size-motion: var(--cap-close, var(--menu-exit-duration) var(--ease-exit)); }
 .mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
-.mode-pill-btn > svg, .mode-pill-btn .t2c-pill-label { justify-self: center; }
 
 /* 「＋」升级为第三颗同语系胶囊：闭合 28px，展开 224px；菜单左缘固定，所以只向右长。 */
 /* 不参与底排收缩:底排挤满时被挤窄的「＋」在胶囊撑开、别的钮让位后弹回 28px,把正在撑开的胶囊左缘推走一两像素;

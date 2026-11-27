@@ -63,9 +63,9 @@ button { font: inherit; background: none; border: 0; cursor: pointer; }
 <div class="model-stage t2c-card">
 <div class="row t2c-row">
   <span class="add-pill-wrap"><button class="t2c-pill add-pill-btn">${ic(16).replace('<svg', '<svg class="add-pill-plus"')}<span class="add-pill-label">添加</span>${ic(16).replace('<svg', '<svg class="add-pill-chevron"')}</button></span>
-  <span class="mode-pill-wrap"><button class="t2c-pill mode-pill-btn">${ic(13)}<span class="t2c-pill-label">询问</span>${ic(10)}</button></span>
+  <span class="mode-pill-wrap"><button class="t2c-pill mode-pill-btn capsule-pill">${ic(13)}<span class="t2c-pill-label">询问</span>${ic(10)}</button></span>
   <span class="model-pill-wrap" data-cmenu>
-    <button class="composer-chip model-pill-btn has-icon">
+    <button class="composer-chip model-pill-btn capsule-pill has-icon">
       ${ic(13)}<span class="pill-marquee"><span class="pill-marquee__inner">GLM-4.7 · 深</span></span>${ic(10)}
     </button>
     <div class="composer-menu composer-menu--model">

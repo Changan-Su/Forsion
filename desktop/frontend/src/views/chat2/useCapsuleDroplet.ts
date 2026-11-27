@@ -58,6 +58,10 @@ export function useCapsuleDroplet<K extends string>(
   dismiss: () => void
   /** 点胶囊:关着 = 开;开着 = 倒放;正在倒放 = 掉头。 */
   toggle: (k: K) => void
+  /** 胶囊按钮该挂的状态类:撑宽 ` is-open`(收起一开始就摘)、倒放中 ` is-retracting`。
+   *  所有胶囊一律用它,别拿「菜单挂没挂着」当撑宽条件 —— 那样胶囊要等菜单收完才缩、字在最后一帧跳回去
+   *  (2026-11-27 项目 / 设备胶囊就是这样,用户要求所有胶囊同一套)。配 CSS 公共类 .capsule-pill(base.css)。 */
+  pillClass: (k: K) => string
 } {
   const [closing, setClosing] = useState<K | null>(null)
   const closingRef = useRef<K | null>(null) // 同步读(同一帧连点两下不靠渲染)
@@ -178,7 +182,8 @@ export function useCapsuleDroplet<K extends string>(
     setOpenRef.current(k)
   }, [dismiss, open])
 
-  return { closing, expanded: (k) => open === k && closing !== k, dismiss, toggle }
+  const expanded = (k: K): boolean => open === k && closing !== k
+  return { closing, expanded, dismiss, toggle, pillClass: (k) => `${expanded(k) ? ' is-open' : ''}${closing === k ? ' is-retracting' : ''}` }
 }
 
 /** 液滴收起曲线(--droplet-retract-ease;读不到就用展开曲线,只是不够顺)。 */
