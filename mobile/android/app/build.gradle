@@ -2,6 +2,15 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
+// 「这台手机」本机引擎(mobile/android/native/proot/README.md):启动器(PRoot,GPL-2.0,独立程序)只进测试渠道的包。
+//   -PlocalEngine 或 ANDROID_LOCAL_ENGINE=1 → 带上 src/localEngine/jniLibs(arm64)、解出原生库(PRoot 从 nativeLibraryDir 执行)、
+//   启用前台服务。CI 由 release-channel.mjs --test-channel 按 tag 决定(预发布 tag = 测试渠道)。不带时代码照样在包里,
+//   页面看不到「这台手机」那一行(LocalEngine.available() 认启动器在不在)。
+//   环境包清单地址:-PlocalEngineManifest=<url> 或 ANDROID_LOCAL_ENGINE_MANIFEST(CI 流水线还没有,先留空 = 不显示那一行)。
+def localEngine = project.hasProperty('localEngine') || System.getenv('ANDROID_LOCAL_ENGINE') == '1'
+def localEngineManifest = (project.findProperty('localEngineManifest') ?: System.getenv('ANDROID_LOCAL_ENGINE_MANIFEST') ?: '').toString().trim()
+if (!(localEngineManifest ==~ /^[A-Za-z0-9:\/._~%?=&+-]*$/)) throw new GradleException("localEngineManifest has characters a URL should not: ${localEngineManifest}")
+
 android {
     namespace "com.forsion.tangu"
     compileSdk rootProject.ext.compileSdkVersion
@@ -17,11 +26,18 @@ android {
         versionCode Integer.parseInt(System.getenv("ANDROID_VERSION_CODE") ?: "1")
         versionName (System.getenv("ANDROID_VERSION_NAME") ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        manifestPlaceholders = [localEngineEnabled: localEngine ? 'true' : 'false']
+        buildConfigField 'String', 'LOCAL_ENGINE_MANIFEST', "\"${localEngineManifest}\""
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+    }
+    if (localEngine) {
+        sourceSets { main { jniLibs.srcDirs += ['src/localEngine/jniLibs'] } }
+        // extractNativeLibs=true:PRoot 要从 nativeLibraryDir 当程序执行(从数据目录执行会被 SELinux 拦,探针 0b 负对照)
+        packagingOptions { jniLibs { useLegacyPackaging = true } }
     }
     signingConfigs {
         // 正式签名走环境变量(CI 由 secrets 注入,见 build-desktop.yml);变量缺席时该配置为空、
@@ -85,6 +101,8 @@ dependencies {
     implementation project(':capacitor-android')
     // AppActivity 用 WebViewCompat 给页面注入「这是还原」标记(capacitor-android 自己也依赖它,版本同 variables.gradle)。
     implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+    // 本机引擎的环境包是 tar.xz(LocalEngine TarExtractor)。公有领域许可。
+    implementation 'org.tukaani:xz:1.10'
     testImplementation "junit:junit:$junitVersion"
     // P1-K8 原生身份 / 中继的纯逻辑单测(RelayPathsTest 等):android.jar 里的 org.json 是桩(一调就抛 / 返回缺省值),
     // JVM 上要真实现。只进测试 classpath,不进 APK。⚠️ origin/feat/phone-control-t2 同一行,后合者删重复。

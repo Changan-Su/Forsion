@@ -512,9 +512,13 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
+          # 「这台手机」环境包清单地址(仓库变量;CI 出环境包的流水线另立,没配之前为空 = 那一行不显示)
+          ANDROID_LOCAL_ENGINE_MANIFEST: ${{ vars.LOCAL_ENGINE_MANIFEST_URL }}
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then VN="${GITHUB_REF_NAME#v}"; else VN="$(node -p "require('../../desktop/package.json').version")"; fi
           export ANDROID_VERSION_NAME="$VN"
+          # 本机引擎的启动器(PRoot)只进测试渠道的包(预发布 tag);正式渠道晚一个版本再跟
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$(node ../../desktop/scripts/release-channel.mjs --test-channel "$GITHUB_REF_NAME")" = 1 ]; then export ANDROID_LOCAL_ENGINE=1; fi
           chmod +x gradlew
           if [ -n "$ANDROID_KEYSTORE_B64" ]; then
             printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"

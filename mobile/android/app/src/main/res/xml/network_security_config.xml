@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 正式包:只对 127.0.0.1 放行明文 ——「这台手机」本机引擎只听回环口,原生中继(UnitRelay 的本机目的地)用 HttpURLConnection 连它,
+     而 HttpURLConnection 受这份配置管(探针 0c:不放行就报 Cleartext HTTP traffic to 127.0.0.1 not permitted)。
+     其余一律平台缺省(禁明文)。页面不直连引擎,所以 WebView 那边放不放行无关紧要。
+     debug 包有一份同名文件(src/debug/res/xml)覆盖这一份,额外放行 localhost / 10.0.2.2 给台架用。 -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

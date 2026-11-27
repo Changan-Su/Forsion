@@ -39,6 +39,10 @@ import java.util.concurrent.Semaphore;
  *  6. 连接 15s;accept 含 text/event-stream 时读超时 0(取消由 JS 驱动),否则 120s。不跟随重定向。
  *  7. 并发 ≤ 16(超出 → relay_busy);响应累计 > 256MB → too_large 并断开。每次 read 到的字节立即交出去(SSE 不攒包)。
  *  8. 日志只记 id、方法、状态码、时长;不记 path / query / body / 任何头。
+ * 10. 「这台手机」(本机引擎,localengine/):unitId = {@link #PHONE_ENGINE_ID}(保留 id,hub 不会发)时目的地改成
+ *     `http://127.0.0.1:<本机引擎端口>` + path 去掉 `/engine` 前缀;Authorization = 本机令牌(原生现取,页面拿不到);
+ *     不换票、不带 forsion_token、不碰 apiBase。只放 `/engine…`。引擎没在跑:写请求(非 GET/HEAD)会先把它拉起来,
+ *     GET 只在用户刚选过 / 刚发过消息时拉起(被动轮询不拉起、也不续闲置计时),否则立即 network。
  *  9. 页面重载 / 跳走 → {@link #cancelAll()}(UnitPlugin 挂在 onPageStarted 与新页面的握手上):在途请求全属于已经不在的页面,
  *     不取消的话长连 SSE 会一直读、一直占着 16 个名额,几次重载之后所有中继请求都 relay_busy(评审 P1)。
  */
@@ -65,6 +69,29 @@ final class UnitRelay {
     interface Auth {
         /** forsion_token,每次现读;null = 已登出。 */
         String forsionToken();
+    }
+
+    /** 「这台手机」的保留 id(小写 uuid 形状,过 RelayPaths 的形状闸;hub 发的 id 是随机 v4,撞不上)。与 JS 侧 phoneEngine.ts 同值。 */
+    static final String PHONE_ENGINE_ID = "00000000-0000-4000-8000-000000000001";
+
+    /** 本机引擎的入口(UnitPlugin 接到 LocalEngine;JVM 单测给假的)。 */
+    interface Local {
+        /** 在跑的引擎;write = 非 GET/HEAD(允许拉起、续闲置计时)。null = 不可用 → network。阻塞(可能等引擎起来)。 */
+        Endpoint acquire(boolean write);
+
+        void started();
+
+        void ended();
+    }
+
+    static final class Endpoint {
+        final int port;
+        final String token;
+
+        Endpoint(int port, String token) {
+            this.port = port;
+            this.token = token;
+        }
     }
 
     static final class Req {
@@ -112,13 +139,20 @@ final class UnitRelay {
         return t;
     });
     private final Map<String, Active> active = new ConcurrentHashMap<>();
+    private final Local local;
 
     /** apiBase 为 null(forsion-native.json 缺席 / 不合规)时每个请求都回 caller_unsupported。 */
     UnitRelay(String apiBase, Auth auth, Tokens tokens, UnitRegistrar.Log log) {
+        this(apiBase, auth, tokens, log, null);
+    }
+
+    /** local 为 null(包里没带本机引擎)时,保留 id 的请求一律 bad_path。 */
+    UnitRelay(String apiBase, Auth auth, Tokens tokens, UnitRegistrar.Log log, Local local) {
         this.apiBase = apiBase;
         this.auth = auth;
         this.tokens = tokens;
         this.log = log;
+        this.local = local;
     }
 
     /** 起一个请求(立即返回;结果全走 sink)。 */
@@ -219,6 +253,10 @@ final class UnitRelay {
             }
             if (body != null && body.length > MAX_BODY_BYTES) {
                 sink.error("too_large", "request body over 10MB");
+                return;
+            }
+            if (PHONE_ENGINE_ID.equals(r.unitId)) {
+                status = runLocal(r, body, sink, a);
                 return;
             }
             if (apiBase == null) {
@@ -325,6 +363,86 @@ final class UnitRelay {
         } finally {
             long ms = (System.nanoTime() - t0) / 1_000_000;
             log.w("[relay] " + r.id + " " + r.method + " → " + (a.cancelled ? "cancelled" : String.valueOf(status)) + " in " + ms + "ms");
+        }
+    }
+
+    /** 「这台手机」:见类注释第 10 条。返回状态码(日志用)。 */
+    private int runLocal(Req r, byte[] body, Sink sink, Active a) throws IOException {
+        int q = r.path.indexOf('?');
+        String pathPart = q < 0 ? r.path : r.path.substring(0, q);
+        if (local == null || !(pathPart.equals("/engine") || pathPart.startsWith("/engine/"))) {
+            sink.error("bad_path", "outside the local engine grammar");
+            return -1;
+        }
+        String rest = r.path.substring("/engine".length());
+        if (rest.isEmpty() || rest.startsWith("?")) rest = "/" + rest;
+        boolean write = !(r.method.equals("GET") || r.method.equals("HEAD"));
+        Endpoint ep = local.acquire(write);
+        if (a.cancelled) return -1;
+        if (ep == null) {
+            sink.error("network", "local engine not running");
+            return -1;
+        }
+        String accept = header(r.headers, "accept");
+        boolean stream = accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream");
+        local.started();
+        HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + ep.port + rest).openConnection();
+        a.conn = c;
+        try {
+            if (a.cancelled) return -1;
+            c.setConnectTimeout(CONNECT_MS);
+            c.setReadTimeout(stream ? 0 : READ_MS);
+            c.setInstanceFollowRedirects(false);
+            c.setUseCaches(false);
+            try {
+                c.setRequestMethod(r.method);
+            } catch (ProtocolException e) {
+                sink.error("bad_path", "method not supported by this platform");
+                return -1;
+            }
+            c.setRequestProperty("Authorization", "Bearer " + ep.token);
+            for (String k : PASS_REQUEST) {
+                String v = header(r.headers, k);
+                if (v != null && !v.isEmpty() && v.indexOf('\n') < 0 && v.indexOf('\r') < 0) c.setRequestProperty(k, v);
+            }
+            if (body != null) {
+                c.setDoOutput(true);
+                c.setFixedLengthStreamingMode(body.length);
+                try (OutputStream os = c.getOutputStream()) {
+                    os.write(body);
+                }
+            }
+            int status = c.getResponseCode();
+            if (a.cancelled) return status;
+            sink.head(status, responseHeaders(c));
+            if (r.method.equals("HEAD") || status == 204 || status == 205 || status == 304) {
+                sink.end();
+                return status;
+            }
+            InputStream in = status >= 400 ? c.getErrorStream() : c.getInputStream();
+            if (in == null) {
+                sink.end();
+                return status;
+            }
+            long total = 0;
+            byte[] buf = new byte[BUF];
+            try (InputStream s = in) {
+                for (int n; (n = s.read(buf)) >= 0; ) {
+                    if (a.cancelled) return status;
+                    if (n == 0) continue;
+                    total += n;
+                    if (total > MAX_RESPONSE_BYTES) {
+                        sink.error("too_large", "response over 256MB");
+                        return status;
+                    }
+                    sink.chunk(buf, 0, n);
+                }
+            }
+            if (!a.cancelled) sink.end();
+            return status;
+        } finally {
+            c.disconnect();
+            local.ended();
         }
     }
 

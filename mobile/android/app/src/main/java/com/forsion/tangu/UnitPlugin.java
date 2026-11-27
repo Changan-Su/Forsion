@@ -114,7 +114,7 @@ public class UnitPlugin extends Plugin {
             public void invalidate() {
                 tokens.invalidate();
             }
-        }, log);
+        }, log, localEngineRoute(ctx));
         // onPageStarted 在 UI 线程,cancelAll 只翻标记、断开交给后台线程。
         // ⚠️ 不能在 load() 里直接 addWebViewListener:Capacitor 7.6 的 Bridge.Builder.create() 先 new Bridge(…)(插件 load() 在构造里跑),
         //    之后才 setWebViewListeners(builder 的表)整张替换 —— load() 里加的监听静默失效,①③ 两道防线从没生效过(DownloadsPlugin 模拟器实测)。
@@ -127,6 +127,30 @@ public class UnitPlugin extends Plugin {
                 if (n > 0) Log.i(TAG, "[relay] page (re)load: cancelled " + n + " in-flight relayed request(s)");
             }
         }));
+    }
+
+    /** 「这台手机」:包里带了启动器才接上(没带 → 保留 id 的请求 bad_path)。 */
+    private static UnitRelay.Local localEngineRoute(Context ctx) {
+        final com.forsion.tangu.localengine.LocalEngine engine = com.forsion.tangu.localengine.LocalEngine.get(ctx);
+        if (!engine.available()) return null;
+        return new UnitRelay.Local() {
+            @Override
+            public UnitRelay.Endpoint acquire(boolean write) {
+                int[] port = new int[1];
+                String token = engine.acquireEndpoint(write, port);
+                return token == null ? null : new UnitRelay.Endpoint(port[0], token);
+            }
+
+            @Override
+            public void started() {
+                engine.requestStarted();
+            }
+
+            @Override
+            public void ended() {
+                engine.requestEnded();
+            }
+        };
     }
 
     @PluginMethod

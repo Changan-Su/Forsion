@@ -10,6 +10,14 @@ export function releaseFlags(tag, latestTag) {
   return isNewer(version.version, latest.version) || version.version === latest.version ? '--latest' : '--latest=false'
 }
 
+/** Test channel = a prerelease tag (v2.15.0-beta.1). Packages that ship ahead of the official channel key off this, not a second definition. */
+export function isTestChannel(tag) {
+  const version = parseReleaseVersion(tag)
+  if (!version) throw new Error('Invalid release tag')
+  return version.prerelease.length > 0
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(releaseFlags(process.argv[2], process.argv[3]))
+  if (process.argv[2] === '--test-channel') console.log(isTestChannel(process.argv[3]) ? '1' : '0')
+  else console.log(releaseFlags(process.argv[2], process.argv[3]))
 }

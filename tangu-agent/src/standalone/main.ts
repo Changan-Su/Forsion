@@ -18,6 +18,7 @@ import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, buildMultiAccountBaseBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
 import { startMultiAccountServer } from './multiAccount.js';
 import { isMultiAccount } from '../core/accountScope.js';
+import { phoneMode } from '../core/phoneMode.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { bindPluginMcp } from '../mcp/pluginServers.js';
 import { createEngineManager } from '../engines/index.js';
@@ -173,8 +174,11 @@ async function main(): Promise<void> {
   app.use((req, res, next) => remoteLockGuard(req, res, next));
   const version = engineVersion();
   const startedAt = new Date().toISOString();
+  // Phone mode: the app's native shell stops an idle engine after 10 minutes, but never while a run is going
+  // (it reads activeRuns here; the count is not sensitive, the route stays unauthenticated like the rest of /health).
+  const phone = phoneMode();
   app.get('/health', (_req, res) =>
-    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt, hostShutdown }));
+    res.json({ ok: true, mode: 'standalone', sandbox: sandboxMode, version, startedAt, hostShutdown, ...(phone ? { phone: true, activeRuns: activeRunCount() } : {}) }));
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // /agent/sessions、/agent/models、/agent/memory、/agent/skills、/agent/tools
 

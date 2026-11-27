@@ -97,7 +97,7 @@ final class LocalEngineProcess {
     /** GET /health over a raw socket; -1 when unreachable. */
     int health(int timeoutMs) {
         try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), timeoutMs);
+            s.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), timeoutMs);
             s.setSoTimeout(timeoutMs);
             OutputStream o = s.getOutputStream();
             o.write(("GET /health HTTP/1.0\r\nHost: 127.0.0.1:" + port + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
@@ -150,7 +150,7 @@ final class LocalEngineProcess {
     }
 
     static int freePort() throws IOException {
-        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+        try (ServerSocket s = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
             return s.getLocalPort();
         }
     }
