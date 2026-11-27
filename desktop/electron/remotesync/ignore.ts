@@ -5,7 +5,10 @@
  * 以 `/` 结尾视为目录前缀(等价 `xxx/**`)。
  */
 
-export const DEFAULT_IGNORES = ['.DS_Store', 'desktop.ini', 'Thumbs.db', '.git/', '.trash/']
+/** .forsion-sync-id.json = 新同步(Forsion Extend 内容同步)在每个认领的文件夹里写的隐藏标记,只认这台的这次认领:
+ *  传上去会让别的设备 / 网页把它当成自己的认领(关掉新同步、换回蓬洲云远程服务的那台就会传),一律不同步。
+ *  2026-11-27 智库同步统一方案第 0 步。忽略规则不进基线指纹,加一条不会触发整份重推;基线里留着的旧条目也只是跳过,不产生删除。 */
+export const DEFAULT_IGNORES = ['.DS_Store', 'desktop.ini', 'Thumbs.db', '.git/', '.trash/', '.forsion-sync-id.json']
 
 function globToRegExp(glob: string): RegExp {
   let out = ''

@@ -8,6 +8,7 @@ import { agentNames } from '../../agentName'
 import { agentDescription } from '../../components/builtinAgentDescriptions'
 import { thinkingLabel } from '../../components/thinkingLabel'
 import { agentEngineLabel } from '../../tangu/agentEngine'
+import { AGENT_SYNC_SEALED } from '../../services/syncSeal'
 import { splitPortrait } from '../../../../../tangu-agent/src/contracts/memoryLayers'
 import { stripMarks } from '../../../../../tangu-agent/src/contracts/entryMark'
 
@@ -108,7 +109,7 @@ export function agentRows(def: NormalAgentDef, ctx: RowCtx, t: (key: string, var
   rows.push({ key: 'memory', value: shared ? t('pc.memory.shared') : typeof ctx.memory === 'number' ? t('pc.memory.own', { n: ctx.memory }) : t('pc.memory.ownPlain') })
 
   const source = [t(def.libraryDir ? 'pc.source.local' : 'pc.source.cloud')]
-  if (def.cloudSync) source.push(t('pc.source.sync'))
+  if (def.cloudSync && !AGENT_SYNC_SEALED) source.push(t('pc.source.sync')) // Agents 同步先封住时不说「云同步开」
   if (def.standInOf) source.push(t('pc.source.standIn', { name: ctx.ownerName || def.standInOf }))
   if (def.createdBy === 'agent') source.push(t('pc.source.byAgent'))
   rows.push({ key: 'source', value: source.join(' · ') })

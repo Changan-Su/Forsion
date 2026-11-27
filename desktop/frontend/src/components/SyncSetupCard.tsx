@@ -3,6 +3,8 @@
  * 登录了 Forsion、这个账号在这台电脑上还没对同步点过头(引导「连接」那步的勾就算点过),主窗弹一次:
  * 三行默认勾上,「开始同步」按勾的开,「稍后」什么都不开、以后不再弹(蓬洲云左栏「同步」挂点等着)。
  * 点了开始之后第一次同步时主窗底部一条进度,传完自己收走。只在桌面主窗、引导走完之后;手机 / 网页没有本地库远程同步。
+ * 2026-11-27 智库同步统一方案第 0 步:快照里 sealed 的那几类(Agents 与记忆、插件)画成锁住的一行,写「暂不同步」、没有勾,
+ * 不进新同步的建议配置,开始同步也不碰它们的开关。
  */
 import { Fragment, useEffect, useState, useSyncExternalStore } from 'react'
 import { Bot, NotebookPen, Puzzle, RefreshCw, UserRound } from 'lucide-react'
@@ -55,6 +57,8 @@ registerMessages({
   'syncSetup.c.profileHint': { zh: '你的资料和默认日历', en: 'Your profile and default calendar' },
   'syncSetup.c.plugins': { zh: '插件', en: 'Plugins' },
   'syncSetup.c.pluginsHint': { zh: '插件的文件夹和设置', en: 'Plugin folders and settings' },
+  // 插件先封住时那一行的说明:封的是插件自己存的设置和数据;智库里 Plugins/<插件> 那些文件夹是智库内容,跟着笔记走
+  'syncSetup.c.pluginsSealedHint': { zh: '插件自己存的设置和数据；智库里的插件文件夹跟着笔记同步', en: 'Settings and data your plugins save. Plugin folders inside your vault sync with your notes' },
   'syncSetup.c.counts': { zh: '将上传 {up} 个文件（{size}）、下载 {down} 个；云端已有的不会被覆盖或删除。', en: 'Uploads {up} files ({size}) and downloads {down}. Nothing already in the cloud is overwritten or deleted.' },
   'syncSetup.c.countsPlain': { zh: '将上传 {up} 个文件、下载 {down} 个；云端已有的不会被覆盖或删除。', en: 'Uploads {up} files and downloads {down}. Nothing already in the cloud is overwritten or deleted.' },
   'syncSetup.c.counting': { zh: '正在算要传多少…', en: 'Working out what will move…' },
@@ -124,7 +128,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
 
   useEffect(() => { if (main && window.remoteSync) startSyncSetup() }, [main])
   const contentMode = !!s?.contentRules
-  const picks = JSON.stringify({ ...cpicked, agents: false, agentSlugs: apicked })
+  // 先封住、暂不同步的那几类(快照没有 sealed = 没封):不出勾、不进建议配置
+  const sealed = { agents: !!s?.sealed?.agents, plugins: !!s?.sealed?.plugins }
+  const picks = JSON.stringify({ ...cpicked, ...(sealed.plugins ? { plugins: false } : {}), agents: false, agentSlugs: sealed.agents ? [] : apicked })
   useEffect(() => {
     if (!turn || !contentMode) return
     let live = true
@@ -192,10 +198,20 @@ export function SyncSetupHost(): React.JSX.Element | null {
       if (/preview_(changed|expired)/.test(m)) { setSetup({ ...setup, preview: null, recount: true }); setNonce((n) => n + 1); return }
       notifyApp({ text: t('syncSetup.failed', { error: m }), level: 'warning' }); return
     }
-    await setSync('plugins', cpicked.plugins) // 插件一行管两样:Plugins 文件夹 + 插件自己存的设置(插件数据通道)
+    if (!sealed.plugins) await setSync('plugins', cpicked.plugins) // 插件一行管两样:Plugins 文件夹 + 插件自己存的设置(插件数据通道)
     markSyncDecided(); setBusy(false); setOpen(false)
   }
   const fresh = contentMode && !setup?.legacy
+  /** 锁住的一行:没有勾,右边一枚「暂不同步」(不是用户关的,以后会回来,所以不写「已关闭」)。 */
+  const lockedRow = (k: string, icon: React.JSX.Element, title: string, sub: string): React.JSX.Element => (
+    <div key={k} className="sync-setup-row is-locked" data-sealed={k}>
+      <span aria-hidden="true" />
+      <span className="sync-setup-tile">{icon}</span>
+      <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
+      <span className="sync-setup-lk">{t('sync.sealed')}</span>
+    </div>
+  )
+  const canStart = cpicked.notes || cpicked.profile || (!sealed.plugins && cpicked.plugins) || (!sealed.agents && apicked.length > 0)
 
   const notesSub = (() => {
     const { localBytes: size, maxBytes: max } = s.notes
@@ -229,12 +245,13 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <p className="sync-setup-lead">{t('syncSetup.c.lead')}</p>
               {crows.map(([k, icon, title, sub]) => (
                 <Fragment key={k}>
-                  <label className="sync-setup-row">
+                  {k === 'plugins' && sealed.plugins ? lockedRow(k, icon, title, t('syncSetup.c.pluginsSealedHint')) : <label className="sync-setup-row">
                     <input type="checkbox" checked={cpicked[k]} disabled={busy} onChange={(e) => { setCpicked({ ...cpicked, [k]: e.target.checked }); setSetup((x) => x && { ...x, recount: false }) }} />
                     <span className="sync-setup-tile">{icon}</span>
                     <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
-                  </label>
-                  {k === 'notes' && !!setup?.agents?.length && (
+                  </label>}
+                  {k === 'notes' && sealed.agents && lockedRow('agents', <Bot size={15} />, t('syncSetup.agents'), t('syncSetup.agentsHint'))}
+                  {k === 'notes' && !sealed.agents && !!setup?.agents?.length && (
                     // Agents:勾了几个这一项就算勾上;上面那个勾只是显示,点它不会全选
                     <div className="sync-setup-row sync-setup-group" data-testid="sync-setup-agents">
                       <input type="checkbox" className="sync-setup-mark" checked={apicked.length > 0} readOnly tabIndex={-1} aria-hidden="true" />
@@ -281,7 +298,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
             </div> : <div className="sync-setup-body">
               <p className="sync-setup-lead">{s.contentRules?t('syncSetup.scopeLead'):t('syncSetup.lead', { name })}</p>
               <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
-              {rows.filter(([k])=>!s.contentRules||k==='plugins').map(([k, icon, title, sub]) => (
+              {rows.filter(([k])=>!s.contentRules||k==='plugins').map(([k, icon, title, sub]) => k !== 'notes' && sealed[k] ? lockedRow(k, icon, title, sub) : (
                 <label key={k} className="sync-setup-row">
                   <input type="checkbox" checked={picked[k]} disabled={busy} onChange={(e) => setPicked({ ...picked, [k]: e.target.checked })} />
                   <span className="sync-setup-tile">{icon}</span>
@@ -294,7 +311,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <span className="sync-setup-acts">
                 <button className="btn" disabled={busy} onClick={later}>{t('syncSetup.later')}</button>
                 {fresh
-                  ? <button className="btn primary" disabled={busy || !pv || (!Object.values(cpicked).some(Boolean) && !apicked.length)} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
+                  ? <button className="btn primary" disabled={busy || !pv || !canStart} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
                   : <button className="btn primary" disabled={busy} onClick={() => void start()}>{t(s.contentRules?'syncSetup.chooseScope':'syncSetup.start')}</button>}
               </span>
             </div>

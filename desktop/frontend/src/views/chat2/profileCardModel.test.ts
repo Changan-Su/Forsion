@@ -57,7 +57,7 @@ describe('agentRows', () => {
     expect(r.model).toBe('GPT-6 Luna · pc.model.thinking(level=input.thinkingShort.medium)')
     expect(r.skills).toBe('pc.skills.more(names=Writing' + 'pc.listSep' + 'Web research,n=3)')
     expect(r.memory).toBe('pc.memory.own(n=23)')
-    expect(r.source).toBe('pc.source.local · pc.source.sync')
+    expect(r.source).toBe('pc.source.local') // Agents 同步先封住(2026-11-27):存着开了也不说「云同步开」
   })
   it('没写简介不出那一行;没设模型 = 跟随会话;技能没限定 = 跟随默认', () => {
     const r = rows(def('research'))

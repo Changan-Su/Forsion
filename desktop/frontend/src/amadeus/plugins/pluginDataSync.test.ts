@@ -9,6 +9,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
+// 这里大多测插件数据同步放开时的行为;封着(PLUGIN_DATA_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的在最后一条
+const seal = vi.hoisted(() => ({ plugins: false }))
+vi.mock('../../services/syncSeal', () => ({ AGENT_SYNC_SEALED: true, get PLUGIN_DATA_SYNC_SEALED() { return seal.plugins } }))
+
 interface Row { value: string; version: number; updatedAt: string; editedAt: number }
 let rows: Map<string, Row>
 let online: boolean
@@ -75,7 +79,7 @@ beforeEach(() => {
   rows = new Map(); online = true; account = 'u-a'; holdGet = null
   clock = Date.parse('2026-10-17T12:00:00Z'); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(clock)
 })
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); seal.plugins = false })
 const cloudValue = () => rows.get(`${account}:p`)
 
 describe('pluginDataSync', () => {
@@ -252,5 +256,25 @@ describe('pluginDataSync', () => {
     a.m.setPluginDataSyncUserOff('p', false)
     vi.stubGlobal('window', { tangu: {} })
     expect(a.m.pluginDataSyncOn({ id: 'p', syncData: true })).toBe(false)
+  })
+
+  it('封着(暂不同步):声明了、没关也不同步;用户的开关键一个不动,编辑照记,放开后原样回来', async () => {
+    seal.plugins = true
+    const a = await device()
+    a.m.setPluginDataSyncUserOff('q', true) // 封之前用户自己关掉的那个
+    const keys = () => [...a.ls].filter(([k]) => k.startsWith('forsion.pluginSync.off'))
+    const before = keys()
+    expect(a.m.pluginDataSyncOn({ id: 'p', syncData: true })).toBe(false)
+    expect(a.m.pluginDataSyncOn({ id: 'q', syncData: true })).toBe(false)
+    a.saveOnly('{"n":1}')
+    expect(JSON.parse(a.ls.get('forsion.pluginSync.p')!)).toMatchObject({ gen: 1, dirty: expect.any(Number) }) // 放开后认得出本机改过
+    expect(keys()).toEqual(before)
+    expect(rows.size).toBe(0)
+    seal.plugins = false
+    expect(a.m.pluginDataSyncOn({ id: 'p', syncData: true })).toBe(true)
+    expect(a.m.pluginDataSyncOn({ id: 'q', syncData: true })).toBe(false)
+    await a.load() // 放开后第一次读:封着期间那次编辑推上去
+    await a.settle()
+    expect(cloudValue()?.value).toBe('{"n":1}')
   })
 })

@@ -52,6 +52,8 @@ registerMessages({
   'ob3.sync.beta': { zh: 'Beta 测试', en: 'Beta' },
   'ob3.sync.betaHint': { zh: '测试中的功能，默认不开，想试再勾', en: 'Still in testing. Off unless you tick it' },
   'ob3.sync.agentsWhere': { zh: '哪些 Agent 跨设备，以后在 蓬洲云 › 同步 里逐个选', en: 'Choose which agents sync across devices later, one by one, in Penzor Cloud › Sync' },
+  // 2026-11-27 智库同步统一方案第 0 步:Agents 与插件数据先封住。照实说,不承诺什么时候回来
+  'ob3.sync.sealedWhere': { zh: 'Agents 与插件数据暂不同步，先只留在这台电脑', en: 'Agents and plugin data aren’t syncing for now. They stay on this computer' },
   'ob3.channels.noExt': { zh: '这台 Forsion 没装 Forsion Extend：没有账号登录，也不发任何统计', en: 'Forsion Extend isn’t installed here, so there’s no account sign-in and nothing is sent' },
 
   // ② 外观

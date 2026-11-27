@@ -983,7 +983,7 @@ ctx.app.spotlight?({ anchor, title, body?, step? })
 
 - `ctx.app.setSpaceDot?(spaceId, on)`：在 Ribbon 上你自己 Space 的图标右上角挂一个提示红点，和收件箱未读角标同一种红。`true` 挂、`false` 收。只认本插件随包带的 Space，别人的或内置的一律返回 `false`。同一个 Space 既有红点又有进度环时只画红点；有未读角标时先显示角标。插件停用时宿主替你收掉。挂着红点时，图标的读屏名会带上「有新提醒」。
 - 列表行里的未读提示照旧用 `ListItem.unread`（共用的未读圆点，颜色跟着主题的指示色走，不是红色）。要从别的 Space 也看得到，就配上 `setSpaceDot`。
-- `ctx.app.sync?`（2026-10-20 起，**只对首方内置包生效**，蓬洲云的「同步」页用）：读写这台电脑的三项云同步。`get()` 给一份快照（智库、Agents 与记忆、插件数据各自开没开，第一次同步的进度，第二台电脑上云端已有一份时待定的合并问题），`subscribe(fn)` 在变化时通知，`refresh()` 重读，`set(kind, on)` 开关一项（`notes` / `agents` / `plugins`），`resolveNotes('merge' | 'cloud' | 'skip')` 回答合并问题，`runNow()` 立刻同步一次。开关和同步引擎都在宿主，插件只画界面。普通插件、手机和网页上整个成员缺席。
+- `ctx.app.sync?`（2026-10-20 起，**只对首方内置包生效**，蓬洲云的「同步」页用）：读写这台电脑的三项云同步。`get()` 给一份快照（智库、Agents 与记忆、插件数据各自开没开，第一次同步的进度，第二台电脑上云端已有一份时待定的合并问题），`subscribe(fn)` 在变化时通知，`refresh()` 重读，`set(kind, on)` 开关一项（`notes` / `agents` / `plugins`），`resolveNotes('merge' | 'cloud' | 'skip')` 回答合并问题，`runNow()` 立刻同步一次。2026-11-27 起快照带 `sealed: { agents, plugins }`：为 `true` 的那类先封住、暂不同步（`agents.on` / `plugins.on` 仍是存着的值），对它 `set` 回 `ok` 但什么都不写，界面应锁住并写「暂不同步」；旧宿主没有这个字段即没封。开关和同步引擎都在宿主，插件只画界面。普通插件、手机和网页上整个成员缺席。
 
 ### 弹窗排队
 

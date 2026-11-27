@@ -43,3 +43,9 @@
 .sync-setup-opt b { font-weight: 500; font-size: var(--ui-font-body); }
 .sync-setup-opt em { margin-left: 6px; font-style: normal; color: var(--signal-mark, var(--accent)); font-size: var(--ui-font-meta); }
 .sync-setup-opt small { display: block; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+
+/* 先封住、暂不同步的那几类(2026-11-27 智库同步统一方案第 0 步):没有勾,右边一枚「暂不同步」(和卜算子那行同一个 .sync-setup-lk)。
+   锁住的一行是 div,会被当成第一个 div、吃掉上边线(.sync-setup-row:first-of-type);跟在别的行后面时把线补回来。放在文件末尾 */
+.sync-setup-row.is-locked { grid-template-columns: 16px 26px minmax(0, 1fr) auto; cursor: default; }
+.sync-setup-row + .sync-setup-row.is-locked { border-top: var(--border-width) solid var(--border); }
+.sync-setup-row.is-locked .sync-setup-copy b { color: var(--text-muted); }

@@ -10,6 +10,7 @@
  */
 
 import { isJsonText, isPluginDataUnreadable } from './pluginLocalData'
+import { PLUGIN_DATA_SYNC_SEALED } from '../../services/syncSeal'
 
 const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
@@ -66,7 +67,16 @@ export function pluginSyncSummary(ids: string[]): { pending: number; lastAt: num
   return { pending: ids.filter((id) => readState(id).dirty !== undefined).length, lastAt: at > 0 ? at : null }
 }
 
+/**
+ * 插件数据同步先封住(PLUGIN_DATA_SYNC_SEALED,常量在 services/syncSeal.ts;2026-11-27 智库同步统一方案第 0 步)。
+ * 封着时 pluginDataSyncOn 恒 false:不拉、不推、读失败不从云端恢复、卸载不清云端那份;用户的开关键
+ * (PLUGIN_SYNC_ALL_OFF_KEY / 每个插件的 off 键)一个不动。notePluginDataEdit 照旧记(放开后要能认出封着期间本机改过的那些,推上去)。
+ * 库里 Plugins/<插件> 的工作文件夹是智库内容,跟着智库同步,不归这里管。
+ */
+export { PLUGIN_DATA_SYNC_SEALED }
+
 export function pluginDataSyncOn(p: { id: string; syncData?: boolean } | undefined): boolean {
+  if (PLUGIN_DATA_SYNC_SEALED) return false
   if (!p?.syncData || typeof window === 'undefined' || !window.tangu?.cloudFetch) return false
   try { return localStorage.getItem(PLUGIN_SYNC_ALL_OFF_KEY) !== '1' && localStorage.getItem(offKey(p.id)) !== '1' } catch { return true }
 }

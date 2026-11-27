@@ -615,12 +615,43 @@ it('start: "Custom…" in the key form opens every field', async () => {
   expect(form.querySelectorAll('input')).toHaveLength(4)
 })
 
-it('start: signed in, the sync choices no longer offer an Agents box and point to Penzor Cloud › Sync instead', async () => {
+it('start: signed in, the sync choices no longer offer an Agents box; the note says agents and plugin data are not syncing for now', async () => {
   vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
   await render()
   const account = host.querySelector('[data-ob-account]')!
   expect(account.textContent).not.toContain(translate('onboarding.connect.sync.agents'))
-  expect(account.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.agentsWhere'))
+  // 2026-11-27 起 Agents 与插件数据先封住:读到快照之前按这一版的缺省说
+  expect(account.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.sealedWhere'))
+})
+
+it('start: an unsealed snapshot still points to Penzor Cloud › Sync for picking agents', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  sync.snap = { signedIn: true, decided: false, notes: { on: false, available: true }, agents: { on: false }, plugins: { on: true }, sealed: { agents: false, plugins: false } }
+  try {
+    await render()
+    expect(host.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.agentsWhere'))
+  } finally { delete (window as any).remoteSync }
+})
+
+it('start: sealed plugin data shows a locked box saying not syncing for now, and finishing never hands it over', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  ;(window as any).remoteSync = {}
+  // 插件同步没人定过(算开着):没封时收尾会按新缺省把它关掉;封着一个字都不交出去
+  sync.snap = { signedIn: true, decided: false, notes: { on: false, available: true }, agents: { on: true }, plugins: { on: true }, sealed: { agents: true, plugins: true } }
+  try {
+    await render()
+    const box = host.querySelector('[data-ob-sync]')!
+    const locked = box.querySelector<HTMLElement>('[data-ob-sync-sealed="plugins"]')!
+    expect(locked.textContent).toContain(translate('onboarding.connect.sync.plugins'))
+    expect(locked.textContent).toContain(translate('sync.sealed'))
+    const lockedBox = locked.querySelector<HTMLInputElement>('input')!
+    expect([lockedBox.disabled, lockedBox.checked]).toEqual([true, false])
+    expect(box.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.sealedWhere'))
+    await act(async () => lockedBox.click())
+    await walkToEnd()
+    expect(applyOnboardingSync).toHaveBeenCalledExactlyOnceWith(expect.anything(), [])
+  } finally { delete (window as any).remoteSync }
 })
 
 const snapshot = (over: Record<string, any> = {}) => ({
