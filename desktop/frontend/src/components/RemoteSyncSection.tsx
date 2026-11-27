@@ -1,5 +1,5 @@
 /**
- * 设置 → 同步:「本地库远程同步」节(remotely-save 式;Forsion 云端/Dropbox/S3/WebDAV/文件夹)。
+ * 设置 → 同步:「本地库远程同步」节(remotely-save 式;Forsion 云端/Dropbox/Google Drive/S3/WebDAV/文件夹)。
  * 自包含(自取 useI18n + window.remoteSync),web/mobile 下 API 缺位自动隐藏。
  * 分组照 remotely-save:远程服务(含测试连接/Dropbox PKCE 连接流)/ 同步计划(间隔+方式+启动同步)/
  * 高级(忽略+单文件上限+并发)/ 操作与最近结果(含预演 dry run);
@@ -13,8 +13,16 @@ import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSync
 
 registerMessages({
   'settings.remotesync.penzorView': { zh: '在蓬洲云中查看 {name}', en: 'View {name} in Penzor Cloud' },
-  'settings.remotesync.movedHint': { zh: '同步的开关在蓬洲云 › 同步。这一页是高级设置：换成 Dropbox / S3 / WebDAV、改同步计划和方向。', en: 'Sync is turned on and off in Penzor Cloud › Sync. This page has advanced settings: switch to Dropbox / S3 / WebDAV, or change the schedule and direction.' },
+  'settings.remotesync.movedHint': { zh: '同步的开关在蓬洲云 › 同步。这一页是高级设置：换成 Dropbox / Google Drive / S3 / WebDAV、改同步计划和方向。', en: 'Sync is turned on and off in Penzor Cloud › Sync. This page has advanced settings: switch to Dropbox / Google Drive / S3 / WebDAV, or change the schedule and direction.' },
   'settings.remotesync.openPenzorSync': { zh: '打开蓬洲云 › 同步', en: 'Open Penzor Cloud › Sync' },
+  'settings.remotesync.gdClientId': { zh: 'OAuth 客户端 ID（Google Cloud 里建的「桌面应用」客户端）', en: 'OAuth client ID (a Desktop app client from Google Cloud)' },
+  'settings.remotesync.gdClientSecret': { zh: '客户端密钥', en: 'Client secret' },
+  'settings.remotesync.gdBaseDir': { zh: '远端文件夹（默认 Forsion-Vault，在「我的云端硬盘」下）', en: 'Remote folder (default Forsion-Vault, under My Drive)' },
+  'settings.remotesync.gdConnect': { zh: '连接 Google Drive', en: 'Connect Google Drive' },
+  'settings.remotesync.gdNeedClient': { zh: '先填客户端 ID 和密钥', en: 'Enter the client ID and secret first' },
+  'settings.remotesync.gdUseOwnApp': { zh: '改用自建 Google 客户端', en: 'Use my own Google client' },
+  'settings.remotesync.gdHintBuiltin': { zh: '点「连接 Google Drive」在浏览器登录授权即可，授权完自动返回；文件放在「我的云端硬盘」的同步文件夹里，凭据只存本机。Forsion 只看得到自己建的文件：在网页版 Drive 里手动拖进这个文件夹的文件不会同步。', en: 'Click Connect Google Drive, sign in and approve in your browser — it returns automatically. Files go into the sync folder in My Drive; credentials stay on this device. Forsion only sees files it created, so files you drag into that folder on the Drive website are not synced.' },
+  'settings.remotesync.gdHint': { zh: '在 console.cloud.google.com 建项目并启用 Google Drive API；OAuth 同意屏幕加上 drive.file 权限，并把发布状态改成正式版（测试状态下授权 7 天就失效）；再建一个「桌面应用」类型的 OAuth 客户端，把 ID 和密钥填这里。Forsion 只看得到用这个客户端建的文件：网页版里手动拖进同步文件夹的文件不会同步，每台设备都要填同一个客户端。凭据只存本机。', en: 'Create a project at console.cloud.google.com and enable the Google Drive API. On the OAuth consent screen, add the drive.file scope and publish the app (in Testing, sign-in expires after 7 days). Then create an OAuth client of type Desktop app and enter its ID and secret here. Forsion only sees files created with this client: files you drag into the sync folder on the Drive website are not synced, and every device must use the same client. Credentials stay on this device.' },
   'settings.remotesync.maxFilePenzor': { zh: '蓬洲云单个文件最多 {mb} MB，超过的不上传；实际按 {mb} MB 算', en: 'Penzor Cloud takes files up to {mb} MB; larger ones are skipped, so {mb} MB applies' },
 })
 
@@ -47,12 +55,21 @@ export function RemoteSyncSection(): React.ReactElement | null {
   const [dbxWaiting, setDbxWaiting] = useState(false)
   const [dbxBuiltin, setDbxBuiltin] = useState(false) // 有官方应用 = 不用填 App Key
   const [dbxOwnApp, setDbxOwnApp] = useState(false) // 用户主动要用自建应用
+  const [gdWaiting, setGdWaiting] = useState(false)
+  const [gdBuiltin, setGdBuiltin] = useState(false) // 有官方客户端 = 不用填客户端 ID / 密钥
+  const [gdOwnApp, setGdOwnApp] = useState(false)
   const [backends, setBackends] = useState<string[]>([]) // 外置后端(Forsion Extend 注册的,如 penzor);没装 Extend 就没有
 
   /** 只吃回授权得来的凭据,不覆盖用户此刻未保存的 appKey/baseDir 输入。 */
   const applyDbxCreds = (d?: RemoteSyncConfig['dropbox']): void =>
     setCfg((c) =>
       c ? { ...c, dropbox: { ...(c.dropbox ?? { appKey: '' }), refreshToken: d?.refreshToken, accountId: d?.accountId, email: d?.email } } : c,
+    )
+
+  /** 同上,Google Drive:只吃凭据,不覆盖用户此刻未保存的客户端 / 目录输入。 */
+  const applyGdCreds = (g?: RemoteSyncConfig['gdrive']): void =>
+    setCfg((c) =>
+      c ? { ...c, gdrive: { ...(c.gdrive ?? { clientId: '' }), refreshToken: g?.refreshToken, accountId: g?.accountId, email: g?.email } } : c,
     )
 
   useEffect(() => {
@@ -65,6 +82,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
       setProgress(s.progress ?? null)
       setReport(s.lastReport)
       setDbxBuiltin(!!s.dropboxBuiltin)
+      setGdBuiltin(!!s.gdriveBuiltin)
       setBackends(Array.isArray(s.backends) ? s.backends : [])
     })
     const offStatus = api.onStatus((s) => {
@@ -82,9 +100,19 @@ export function RemoteSyncSection(): React.ReactElement | null {
       applyDbxCreds(r.config?.dropbox)
       setSvcNote(t('settings.remotesync.dbxConnected', { who: r.email || 'Dropbox' }))
     })
+    const offGd = api.onGdriveAuth?.((r) => {
+      setGdWaiting(false)
+      if (!r.ok) {
+        setSvcNote(r.error || 'error')
+        return
+      }
+      applyGdCreds(r.config?.gdrive)
+      setSvcNote(t('settings.remotesync.dbxConnected', { who: r.email || 'Google Drive' }))
+    })
     return () => {
       offStatus()
       offDbx()
+      offGd?.()
     }
   }, [api, t])
 
@@ -174,6 +202,30 @@ export function RemoteSyncSection(): React.ReactElement | null {
       })
       .finally(() => setBusy(false))
   }
+  const gdStart = (): void => {
+    const id = (cfg.gdrive?.clientId ?? '').trim()
+    const secret = (cfg.gdrive?.clientSecret ?? '').trim()
+    if (!gdBuiltin && (!id || !secret)) {
+      setSvcNote(t('settings.remotesync.gdNeedClient'))
+      return
+    }
+    if (!api.gdriveAuthStart) return
+    setBusy(true)
+    void api
+      .gdriveAuthStart(id, secret)
+      .then((r) => {
+        if (!r.ok) {
+          setSvcNote(r.error || 'error')
+          return
+        }
+        setGdWaiting(true)
+        setSvcNote(t('settings.remotesync.dbxOpenedAuto'))
+      })
+      .finally(() => setBusy(false))
+  }
+  const gdOwn = !gdBuiltin || gdOwnApp || (cfg.gdrive?.clientId ?? '') !== ''
+  const patchGd = (p: Partial<NonNullable<RemoteSyncConfig['gdrive']>>): void =>
+    patch({ gdrive: { ...(cfg.gdrive ?? { clientId: '' }), clientId: cfg.gdrive?.clientId ?? '', ...p } })
 
   const on = cfg.backend !== 'off'
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
@@ -198,6 +250,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
             <option value="off">{t('settings.remotesync.backendOff')}</option>
             {penzorListed && <option value="penzor">{t('settings.remotesync.backendPenzor')}</option>}
             <option value="dropbox">Dropbox</option>
+            {(api.gdriveAuthStart || cfg.backend === 'gdrive') && <option value="gdrive">Google Drive</option>}
             <option value="folder">{t('settings.remotesync.backendFolder')}</option>
             <option value="s3">{t('settings.remotesync.backendS3')}</option>
             <option value="webdav">{t('settings.remotesync.backendWebdav')}</option>
@@ -264,6 +317,34 @@ export function RemoteSyncSection(): React.ReactElement | null {
             {dbxBuiltin && !dbxOwnApp && (cfg.dropbox?.appKey ?? '') === '' && (
               <button className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => setDbxOwnApp(true)}>
                 {t('settings.remotesync.dbxUseOwnApp')}
+              </button>
+            )}
+          </div>
+        )}
+
+        {cfg.backend === 'gdrive' && (
+          <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+            {/* 有官方客户端就别拿客户端 ID 拦人:只有自建客户端才露这两栏 */}
+            {gdOwn && (
+              <div className="settings-inline-row">
+                <input type="text" value={cfg.gdrive?.clientId ?? ''} placeholder={t('settings.remotesync.gdClientId')} onChange={(e) => patchGd({ clientId: e.target.value })} />
+                <input type="password" value={cfg.gdrive?.clientSecret ?? ''} placeholder={t('settings.remotesync.gdClientSecret')} onChange={(e) => patchGd({ clientSecret: e.target.value })} />
+              </div>
+            )}
+            <input type="text" value={cfg.gdrive?.baseDir ?? ''} placeholder={t('settings.remotesync.gdBaseDir')} onChange={(e) => patchGd({ baseDir: e.target.value })} />
+            <div className="settings-inline-row">
+              <button className="btn ghost sm" disabled={busy || gdWaiting} onClick={gdStart}>
+                {cfg.gdrive?.refreshToken ? t('settings.remotesync.dbxReconnect') : t('settings.remotesync.gdConnect')}
+              </button>
+              {gdWaiting && <span className="hint">{t('settings.remotesync.dbxWaiting')}</span>}
+              {cfg.gdrive?.refreshToken && !gdWaiting && (
+                <span className="hint">{t('settings.remotesync.dbxConnected', { who: cfg.gdrive.email || 'Google Drive' })}</span>
+              )}
+            </div>
+            <div className="hint">{t(gdOwn ? 'settings.remotesync.gdHint' : 'settings.remotesync.gdHintBuiltin')}</div>
+            {!gdOwn && (
+              <button className="btn ghost sm" style={{ justifySelf: 'start' }} onClick={() => setGdOwnApp(true)}>
+                {t('settings.remotesync.gdUseOwnApp')}
               </button>
             )}
           </div>
