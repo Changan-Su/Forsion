@@ -1924,7 +1924,7 @@ const zh: Dict = {
   // ── 落盘产物的默认名 ────────────────────────────────────────────────────
   // ⚠️ 这些串会变成**真实文件名 / 文档标题**,不是纯界面文案 —— 必须走 translate()
   // 跟随当前语言,禁止在调用点硬编码任一语言(切了英文还生出「未命名.md」正是被投诉的点)。
-  // 参照物:createPageInFolder 早就用的是 `untitled.md`,这批是当年漏掉的。
+  // createPageInFolder 原先写死 `untitled.md`,2026-11 手机走查 a 起也走 amadeus.default.note。
   'amadeus.default.note': '未命名',
   'amadeus.default.dashboard': '未命名仪表盘',
   // 小组件的两块板(services/widgetPlaces.ts):文件名跟语言走,找的时候两个名字都认

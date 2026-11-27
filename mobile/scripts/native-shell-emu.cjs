@@ -4504,6 +4504,7 @@ const tabCountText = (list) => {
         back = await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, view: document.querySelector('.mb-main > .mb-view')?.dataset.view })")
         console.log(`  turned back: ${JSON.stringify(back)}`)
         shot('03u-portrait-again')
+        if (back?.nav === 'detail') { h.key(4); await h.pause(900) } // back on the list, where the checks after this one start
         h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', accel || '0')
       }
     }

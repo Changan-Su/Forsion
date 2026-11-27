@@ -2290,8 +2290,8 @@ function EditorScope({
   )
 }
 
-/** 未命名笔记的文件名 sentinel(createPageInFolder=untitled[-N] / createChildNote=未命名[-N]):
- *  标题栏对这些显示为空 + 「New Page」占位(Notion 式),不显示字面「未命名」。 */
+/** 未命名笔记的文件名 sentinel(createPageInFolder / createChildNote 都按界面语言起名:未命名[-N] / Untitled[-N];旧库里还有 untitled[-N]):
+ *  标题栏对这些显示为空 + 占位(「无标题」/ New page,Notion 式),不显示字面「未命名」。 */
 /** 可编辑笔记标题 = 文件名(manifest.title 恒取 basename),提交即 renamePage。在编辑器内联改标题。
  *  (封面/图标 chrome 组件 2026-08-13 搬去 @amadeus/chrome/pageChrome:UnifiedPage 也要用,留此即模块环。) */
 /** 笔记 tab 上的图标:用户给这篇设过 emoji 就显示 emoji,否则回退成通用文件图标。

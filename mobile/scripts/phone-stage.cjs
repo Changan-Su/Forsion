@@ -1042,6 +1042,9 @@ const SCENES = {
       back4 = { ...(await where()), space: await page.evaluate(() => document.querySelector('.mb-shell')?.dataset.space) }
     } finally {
       await page.setViewportSize(SCREEN)
+      // leave the stage where it was before this scene (Tangu's list), for the scenes after it
+      await page.waitForTimeout(500)
+      if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left').catch(() => {})
     }
     return [
       ['turned back from a conversation: the conversation again, not the list', from.nav === 'detail' && back1.nav === 'detail' && back1.title === from.title, JSON.stringify({ from, back1 })],
