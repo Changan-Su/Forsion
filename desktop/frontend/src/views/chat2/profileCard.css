@@ -1,0 +1,84 @@
+/* Chat 头像资料卡(ProfileCard.tsx)。卡面 = 左下角账号面板 .account-pop 同一张(浮层表面 token、--radius-md、--card-shadow);
+   字号只走六档界面角色;头像首字母底色同 .t2-avatar;状态点同 Agent 资料页 .agent-state。 */
+.pc-card {
+  position: fixed; z-index: var(--z-menu);
+  width: 288px; box-sizing: border-box;
+  padding: var(--menu-shell-padding);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border));
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-body); line-height: 1.45; text-align: left;
+  -webkit-app-region: no-drag;
+}
+.pc-card:focus { outline: none; } /* 打开时焦点进卡(键盘接着走),整张卡不画焦点环;里面的按钮照常有 */
+.pc-card button { font: inherit; color: inherit; background: transparent; border: 0; cursor: pointer; }
+.pc-card button:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 1px; }
+
+.pc-hero { position: relative; display: flex; align-items: center; gap: 12px; padding: 10px 10px 12px; min-width: 0; }
+.pc-portrait {
+  flex: none; position: relative; width: 56px; height: 56px; border-radius: 50%; overflow: hidden;
+  display: inline-grid; place-items: center; font-size: var(--ui-font-display); line-height: 1;
+  color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 14%, transparent); user-select: none;
+}
+.pc-portrait img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-portrait--sm { width: 40px; height: 40px; font-size: var(--ui-font-title); }
+.pc-id { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; padding-right: 22px; }
+.pc-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--ui-font-title); font-weight: 600; line-height: 1.3; }
+.pc-name-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-name .tier-badge { flex: none; }
+.pc-handle { font-size: var(--ui-font-meta); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc-chip { flex: none; font-size: var(--ui-font-caption); font-weight: 500; color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-xs); padding: 1px 6px; }
+.pc-state { display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-size: var(--ui-font-caption); color: var(--text-muted); }
+.pc-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-muted); }
+.pc-state.working { color: var(--accent-ink); }
+.pc-state.working i { background: var(--signal-mark); }
+
+.pc-more-wrap { position: absolute; right: 4px; top: 6px; }
+.pc-more { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--text-muted) !important; }
+.pc-more:hover, .pc-more.on { background: var(--menu-hover); color: var(--text) !important; }
+.pc-menu {
+  position: absolute; right: 0; top: 32px; min-width: 168px; padding: var(--menu-shell-padding);
+  background: var(--surface-menu, var(--bg-card)); backdrop-filter: var(--surface-blur, none);
+  border: var(--border-width) solid var(--surface-edge, var(--border)); border-radius: var(--radius-md); box-shadow: var(--card-shadow);
+}
+.pc-menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border-radius: var(--radius-sm); text-align: left; white-space: nowrap; }
+.pc-menu button svg { flex: none; color: var(--text-muted); }
+.pc-menu button:hover { background: var(--menu-hover); }
+
+.pc-rows { margin: 0 4px; padding: 6px 0; border-top: var(--border-width) solid var(--border); }
+.pc-row { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 4px 6px; }
+:lang(en) .pc-row { grid-template-columns: 56px 1fr; }
+.pc-row dt { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: 19px; }
+.pc-row dd { margin: 0; min-width: 0; color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.pc-faint { color: var(--text-faint); }
+.pc-note { margin: 0 10px 8px; padding-top: 8px; border-top: var(--border-width) solid var(--border); color: var(--text-muted); font-size: var(--ui-font-meta); }
+
+.pc-acts { display: grid; gap: 2px; margin: 0 4px; padding: 6px 0 0; border-top: var(--border-width) solid var(--border); }
+.pc-acts button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px 7px; border-radius: var(--radius-sm); color: var(--text-muted) !important; font-size: var(--ui-font-meta); }
+.pc-acts button svg { color: var(--text); }
+.pc-acts button:first-child { color: var(--text) !important; }
+.pc-acts button:hover:not(:disabled) { background: var(--menu-hover); }
+.pc-acts button:disabled { cursor: default; opacity: .45; }
+
+/* 手机:贴底抽屉(同 changeTrail.css 的 ct-sheet) */
+.pc-sheet-scrim { position: fixed; inset: 0; z-index: var(--z-menu); display: flex; flex-direction: column; justify-content: flex-end; background: rgba(0, 0, 0, .4); -webkit-app-region: no-drag; animation: pc-fade var(--duration-fast) var(--ease-calm); }
+.pc-card.pc-card--sheet {
+  position: relative; width: auto; max-height: 85%; overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 10px calc(14px + env(safe-area-inset-bottom));
+  border-width: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; background: var(--bg-card); backdrop-filter: none;
+  animation: pc-up var(--duration-slow) var(--ease-drawer);
+}
+.pc-grip { width: 40px; height: 4px; margin: 6px auto 4px; border-radius: 2px; background: var(--border); }
+.pc-card--sheet .pc-acts button { padding: 11px 4px 10px; font-size: var(--ui-font-body); }
+@keyframes pc-fade { from { opacity: 0; } }
+@keyframes pc-up { from { transform: translateY(100%); } }
+@media (prefers-reduced-motion: reduce) { .pc-sheet-scrim, .pc-card.pc-card--sheet { animation: none; } }
+
+/* 消息里的入口:头像外一圈淡晕(不画描边)+ 手型;名字条悬停垫底色。打开着的那枚保持淡晕。 */
+.t2-avatar[data-profile] { cursor: pointer; transition: box-shadow var(--duration-fast) var(--ease-calm); }
+.t2-avatar[data-profile]:hover, .t2-avatar[data-profile][aria-expanded="true"] { box-shadow: 0 0 0 3px var(--overlay-medium); }
+.t2-avatar[data-profile]:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
+.t2-name-hit, .t2-username[data-profile] { cursor: pointer; border-radius: var(--radius-xs); transition: background var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm); }
+.t2-name-hit:hover, .t2-name-hit[aria-expanded="true"], .t2-username[data-profile]:hover, .t2-username[data-profile][aria-expanded="true"] { background: var(--overlay-light); box-shadow: 0 0 0 3px var(--overlay-light); }
+.t2-name-hit:focus-visible, .t2-username[data-profile]:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
