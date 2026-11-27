@@ -256,6 +256,11 @@ function applySCBlob(stored: unknown): boolean {
   return true
 }
 
+/** 主区打开 / 换到一样东西的次数(openView、navigateLeaf、activateLeaf 落到主区,即 autoCloseDrawers 的每一次)。
+ *  SingleColumnHost 用它判「横着的时候在主区点开过东西没有」(转回竖屏落在哪一层)。只增不减;不进 store,不触发重画。 */
+let mainOpens = 0
+export function mainOpenCount(): number { return mainOpens }
+
 /** 宽屏(横屏平板 / 手机)的左栏是与主区并排的版面,不是抽屉:布局整份换新(切 Space / 冷启动还原 / 重置)之后
  *  这个 Space 有左栏视图就展开 —— Host 里「进宽屏左栏默认展开」那条 effect 只在宽窄变化时跑,换 Space 不跑。
  *  走 toggleSidebar:桶空时按 sidebarDefaults 填。须在 afterLayout 之前:一页式 Space(主页)的落点随后会把面板关掉、左栏收回。 */
@@ -433,6 +438,7 @@ export const useWorkspace = create<WS>((set, get) => {
   /** 主区导航/激活后自动收抽屉:窄屏抽屉=全屏接管,选中条目即收回(用户拍板);
    *  宽屏 docked 左栏不收(wideMode 由 Host 同步),右栏恒浮层恒收。 */
   const autoCloseDrawers = (): void => {
+    mainOpens++
     const s = get()
     const patch: Partial<WS> = {}
     if (!s.wideMode && s.leftVisible) patch.leftVisible = false

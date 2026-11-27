@@ -983,6 +983,49 @@ const SCENES = {
     await stage.action(page, 'left')
     return [['back on the list', (await stage.nav(page)) === 'list', await stage.nav(page)]]
   },
+  // Turned sideways and back (walk 2026-11-19, g): the phone lands on the level it was on before it turned. Sideways the
+  // list docks beside the item; that column used to stay open after turning back, so it always landed on the list. An
+  // item opened from the docked column while sideways is where it lands; nothing opened from the list = the list.
+  'rotate-back': async (page) => {
+    const turn = async (wide) => {
+      await page.setViewportSize(wide ? { width: SCREEN.height, height: SCREEN.width } : SCREEN)
+      await page.waitForFunction((w) => document.querySelector('.mb-shell')?.hasAttribute('data-wide') === w, wide, { timeout: 6000 })
+      await page.waitForTimeout(700)
+    }
+    const where = async () => ({ nav: await stage.nav(page), title: (await stage.state(page))?.title ?? null })
+    let from, back1, sideways, back2, back3
+    try {
+      await openChat(page, '周末去哪儿')
+      from = await where()
+      await turn(true); await turn(false)
+      back1 = await where()
+      // from the list: turn, open another conversation from the docked column, turn back
+      if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+      await turn(true)
+      await page.screenshot({ path: path.join(OUT, 'rotate-back-sideways.png') }).catch(() => {})
+      const row = page.locator('.mb-shell .t2s-srow', { hasText: '登录页验证码不显示' }).first()
+      if (!(await row.isVisible().catch(() => false))) {
+        const seen = await page.evaluate(() => ({ wide: document.querySelector('.mb-shell')?.hasAttribute('data-wide'), rows: [...document.querySelectorAll('.t2s-srow')].map((r) => r.textContent.trim().slice(0, 12)), left: !!document.querySelector('.mb-drawer--left') }))
+        throw new Error(`sideways, no row 登录页验证码不显示 to tap: ${JSON.stringify(seen)}`)
+      }
+      await row.tap()
+      await page.waitForTimeout(800)
+      sideways = await where()
+      await turn(false)
+      back2 = await where()
+      // from the list, nothing opened
+      if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+      await turn(true); await turn(false)
+      back3 = await where()
+    } finally {
+      await page.setViewportSize(SCREEN)
+    }
+    return [
+      ['turned back from a conversation: the conversation again, not the list', from.nav === 'detail' && back1.nav === 'detail' && back1.title === from.title, JSON.stringify({ from, back1 })],
+      ['turned back after opening another one from the docked list: that one', back2.nav === 'detail' && back2.title === sideways.title && /登录页/.test(back2.title || ''), JSON.stringify({ sideways, back2 })],
+      ['turned back from the list with nothing opened: the list', back3.nav === 'list', JSON.stringify(back3)],
+    ]
+  },
   // On a phone "more" holds only what belongs to the page on screen. First-level pages (Home, a Space's list) have no
   // button; a conversation has its own rows (pin, rename, archive, find) and nothing app-wide. The app-wide entries are in
   // the avatar's menu (settings, theme mode, command palette) and in the all-Spaces sheet (store, achievements…), once
@@ -1833,6 +1876,32 @@ const SCENES = {
       ['unread mail is the unread dot on the Apps cell (the inbox is not in the dock)', apps?.badge?.kind === 'unread', JSON.stringify(apps)],
     ]
   },
+  // A new note is named in the app's language (walk 2026-11-19, a): a Chinese app wrote `untitled.md` and showed the
+  // English «New Page» over the empty title. The stage runs in Chinese: the file is 未命名.md and the empty title shows
+  // 无标题 (the English pair, Untitled.md / New page, is pageStore.create.test.ts's).
+  'notes-new-name': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'amadeus')
+    const store = moduleUrl('../desktop/frontend/src/amadeus/store/pageStore.ts')
+    const pagesNow = () => page.evaluate(async (u) => (await import(/* @vite-ignore */ u)).usePageStore.getState().pages, store)
+    const before = await pagesNow()
+    await page.locator(`${LIST} .pl-fab`).tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(800)
+    const born = (await pagesNow()).filter((p) => !before.includes(p))
+    const title = await page.evaluate(() => { const el = document.querySelector('.mb-main .amx-title-input'); return el ? { value: el.value, placeholder: el.placeholder } : null })
+    // name it before deleting it: the next scene's new note is born under this same name a moment later
+    await page.keyboard.type('起名检查')
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(1200)
+    await stage.action(page, 'left')
+    for (const p of (await pagesNow()).filter((x) => !before.includes(x))) await page.evaluate(async ([u, x]) => { await (await import(/* @vite-ignore */ u)).usePageStore.getState().deletePage(x) }, [store, p])
+    await page.waitForTimeout(400)
+    return [
+      ['a new note is born as 未命名.md in a Chinese app (not untitled.md)', born.length === 1 && born[0] === '未命名.md', JSON.stringify(born)],
+      ['its empty title shows 无标题 (not the English «New Page»)', !!title && title.value === '' && title.placeholder === '无标题', JSON.stringify(title)],
+    ]
+  },
   // A new note named from its title, then system Back (walk 2026-11-19, b): Back goes to the list — never to the note
   // under the name it was born with («当前库里没有这篇笔记「untitled.md」»). The history keeps the note under its new path.
   // Home names it, and stops naming it once it is deleted (h: the old note card read the first "recent" path as is — the
@@ -1853,10 +1922,10 @@ const SCENES = {
     const deleted = await card()
     await stage.space(page, 'amadeus')
     return [
-      ['the title renames the new note (the file follows it)', notes.includes('购物清单.md') && !notes.some((p) => /^untitled/.test(p)), JSON.stringify(notes)],
-      ['the history holds the note once, under its new path — not under the name it was born with', before.includes('amadeus:购物清单.md') && !before.some((k) => k.includes('untitled')), JSON.stringify(before)],
-      ['system Back from the renamed note goes to the list, not to a note that is not there', after.nav === 'list' && !after.missing && !after.history.some((k) => k.includes('untitled')), JSON.stringify({ via, ...after })],
-      ['Home\'s Continue lists the renamed note (never under the name it was born with), and drops it once it is deleted', named.includes('note:购物清单.md') && !named.some((k) => /untitled/.test(k)) && !deleted.includes('note:购物清单.md'), JSON.stringify({ named, deleted })],
+      ['the title renames the new note (the file follows it)', notes.includes('购物清单.md') && !notes.some((p) => /^(untitled|未命名)/i.test(p)), JSON.stringify(notes)],
+      ['the history holds the note once, under its new path — not under the name it was born with', before.includes('amadeus:购物清单.md') && !before.some((k) => /untitled|未命名/i.test(k)), JSON.stringify(before)],
+      ['system Back from the renamed note goes to the list, not to a note that is not there', after.nav === 'list' && !after.missing && !after.history.some((k) => /untitled|未命名/i.test(k)), JSON.stringify({ via, ...after })],
+      ['Home\'s Continue lists the renamed note (never under the name it was born with), and drops it once it is deleted', named.includes('note:购物清单.md') && !named.some((k) => /untitled|未命名/i.test(k)) && !deleted.includes('note:购物清单.md'), JSON.stringify({ named, deleted })],
     ]
   },
   // What is written in a note reaches the tag list and the full-text search without reopening the vault (walk

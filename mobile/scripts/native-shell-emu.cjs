@@ -4463,7 +4463,7 @@ const tabCountText = (list) => {
   // right capsule (sideways the capsule row is a fifth of the height). That is the floating chrome's design (content
   // passes under the glass capsules, as in portrait), so only the room at the top is asserted; the end and the level
   // the phone lands on when turned back (the list, today) are logged — both wait on a decision.
-  await check('landscape conversation: scrolled to its top no message under a capsule; at its end and turned back are logged', async () => {
+  await check('landscape conversation: scrolled to its top no message under a capsule; turned back it is still the conversation', async () => {
     await openChat('E2E Session One')
     const accel = h.adb('shell', 'settings', 'get', 'system', 'accelerometer_rotation').trim()
     const turn = (r) => { h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', '0'); h.adb('shell', 'settings', 'put', 'system', 'user_rotation', String(r)) }
@@ -4479,6 +4479,7 @@ const tabCountText = (list) => {
       return { caps, users: px, under, wv: wv.rect }
     }
     let turned = false
+    let back = null
     try {
       turn(1); turned = true
       const wide = await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.right - wv.rect.left > wv.rect.bottom - wv.rect.top && h.byId(l, 'nativeChrome.capRight') ? l : null }, { timeout: 10000 })
@@ -4500,11 +4501,14 @@ const tabCountText = (list) => {
         turn(0)
         await h.waitNodes((l) => { const wv = webViewNode(l); return wv && wv.rect.bottom - wv.rect.top > wv.rect.right - wv.rect.left ? l : null }, { timeout: 10000 })
         await h.pause(1500)
-        console.log(`  turned back: ${JSON.stringify(await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, view: document.querySelector('.mb-main > .mb-view')?.dataset.view })"))}`)
+        back = await cdp.eval("({ nav: document.querySelector('.mb-shell')?.dataset.nav, view: document.querySelector('.mb-main > .mb-view')?.dataset.view })")
+        console.log(`  turned back: ${JSON.stringify(back)}`)
         shot('03u-portrait-again')
         h.adb('shell', 'settings', 'put', 'system', 'accelerometer_rotation', accel || '0')
       }
     }
+    // walk 2026-11-19, g: it was opened in portrait, so turning back lands on it again — not on the list the wide layout docked
+    assert.deepEqual(back, { nav: 'detail', view: 'chat' }, `turned back, the phone is not on the conversation it was on (${JSON.stringify(back)})`)
   })
 
   await check('page reload dismisses an open native sheet and the bar comes back', async () => {
