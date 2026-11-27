@@ -16,6 +16,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { X, Shapes, ArrowLeft, ChevronRight, Loader2, RefreshCw, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Server, Type, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, Wind, MousePointerClick, FolderInput, SlidersHorizontal, StepForward } from 'lucide-react'
+import { PhoneEngineLicenses } from './PhoneEngineLicenses'
 import { AppearanceSettings } from './AppearanceSettings'
 import { RibbonSettings } from './RibbonSettings'
 import { UI_MODE, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
@@ -3370,6 +3371,7 @@ export const SettingsModal: React.FC<{
                             </div>
                             <ChevronRight size={16} aria-hidden="true" />
                           </button>
+                          <PhoneEngineLicenses />
                         </div>
                       </div>
                     ) : null}

@@ -1538,8 +1538,8 @@ export const uploadWorkspaceFiles = async (t: EngineTarget, sessionId: string, f
     }, onProgress ? { onUploadProgress: (sent, total) => onProgress(Math.min(1, (doneBytes + (total ? (sent / total) * batchBytes : 0)) / totalBytes)) } : undefined)
       .finally(() => { doneBytes += batchBytes })
   }
-  if (t.via !== 'unit') return post(files)
-  // unit 目标(K6 §3.7):按单次 ≤ 9MB 分批;单个文件本身就超 → 前端直接拒(不白传一趟换个 413)
+  if (t.via !== 'unit' && t.via !== 'phone') return post(files)
+  // unit 目标(K6 §3.7)与这台手机(同一条原生中继,同一个 10MB 请求体上限):按单次 ≤ 9MB 分批;单个文件本身就超 → 前端直接拒(不白传一趟换个 413)
   const tooLarge = (): Error => Object.assign(new Error(translate('engine.target.tooLarge')), { status: 413, code: 'UNIT_BODY_TOO_LARGE' })
   const overhead = uploadBytes({ path: '', content: '' }) + JSON.stringify({ sessionId, files: [] }).length
   const batches: UploadFile[][] = []

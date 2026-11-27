@@ -81,6 +81,7 @@ export function hostFs(t: EngineTarget): HostFs | null {
     case 'unit':
       return unitHostFs(t)
     case 'cloud':
+    case 'phone': // 这台手机:第 1 期没有 /unit/* 文件面(环境里的文件只经 Agent 工具读写)
       return null
   }
 }
@@ -88,6 +89,8 @@ export function hostFs(t: EngineTarget): HostFs | null {
 /** unit 目标那台电脑的家目录与默认工作区(unitWeb `/unit/config` 只读白名单里的两项,unitConfigFace.ts 的 UNIT_CONFIG_RO)。
  *  新会话落点要它:手机自己没有 homeDir / defaultWorkspaceDir,不拿对方的就只能建出沙箱会话。拿不到 → null。 */
 export async function unitHostProfile(t: EngineTarget, signal?: AbortSignal): Promise<{ homeDir: string | null; defaultWorkspaceDir: string | null } | null> {
+  // 这台手机:环境里的家目录与工作区是固定的(原生把 files/local-engine/workspace 挂在 /root/workspace,见 LocalEnginePaths)
+  if (t.via === 'phone') return { homeDir: '/root', defaultWorkspaceDir: '/root/workspace' }
   if (t.via !== 'unit') return null
   try {
     const r = await unitFetch(t, '/unit/config', { timeoutMs: 15_000, ...(signal ? { signal } : {}) })

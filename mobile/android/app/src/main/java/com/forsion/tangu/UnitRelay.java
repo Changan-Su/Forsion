@@ -385,10 +385,11 @@ final class UnitRelay {
         }
         String accept = header(r.headers, "accept");
         boolean stream = accept != null && accept.toLowerCase(Locale.ROOT).contains("text/event-stream");
-        local.started();
-        HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + ep.port + rest).openConnection();
-        a.conn = c;
+        local.started(); // 与 finally 里的 ended() 成对:中间任何一步抛出都不许把在途计数留高(否则空闲自停永远等不到)
+        HttpURLConnection c = null;
         try {
+            c = (HttpURLConnection) new URL("http://127.0.0.1:" + ep.port + rest).openConnection();
+            a.conn = c;
             if (a.cancelled) return -1;
             c.setConnectTimeout(CONNECT_MS);
             c.setReadTimeout(stream ? 0 : READ_MS);
@@ -441,7 +442,7 @@ final class UnitRelay {
             if (!a.cancelled) sink.end();
             return status;
         } finally {
-            c.disconnect();
+            if (c != null) c.disconnect();
             local.ended();
         }
     }

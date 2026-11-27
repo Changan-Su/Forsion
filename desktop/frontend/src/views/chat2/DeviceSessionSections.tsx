@@ -9,7 +9,7 @@
  * 闸:runLocationsAvailable()(手机 App;桌面主窗口 / 网页版 / 设备页恒不渲染)。名册里没有电脑 → 什么都不画。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ChevronRight, Laptop, MessageSquare, Monitor, MoreHorizontal, Pencil, Smile } from 'lucide-react'
+import { Archive, ChevronRight, Laptop, MessageSquare, Monitor, MoreHorizontal, Pencil, Smartphone, Smile } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { OverlayAt, nativeSheetPresenter, presentNativePrompt, useNativeSheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../../components/CtxMenuButtons'
@@ -26,6 +26,7 @@ import type { DeviceStatus } from '../../services/deviceStatus'
 import { runLocationsAvailable } from '../../features/runtime'
 import { currentPlatform } from '../../services/platform'
 import { useRemoteCapability } from '../../services/engine/targets'
+import { PHONE_ENGINE_ID, PHONE_REF, phoneEngineHost, phoneEngineInstalled, phoneEngineName, usePhoneEngine } from '../../services/engine/phoneEngine'
 import { sessionActivityAt } from './SidebarPane'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import './deviceSessions.css'
@@ -63,6 +64,14 @@ registerMessages({
   'sidebar.device.empty': { zh: '还没有会话', en: 'No sessions yet' },
   'sidebar.device.pickFirst': { zh: '在「在哪运行」里选过这台电脑后，这里会显示它的会话', en: 'Pick this computer under Run on to see its sessions here' },
   'sidebar.device.menu': { zh: '更多操作', en: 'More actions' },
+  // 这台手机(本机引擎,phoneEngine.ts):状态是本机引擎进程的,不是经 hub 的设备口径
+  'sidebar.phone.running': { zh: '运行中', en: 'Running' },
+  'sidebar.phone.starting': { zh: '正在启动', en: 'Starting' },
+  'sidebar.phone.stopped': { zh: '未运行', en: 'Not running' },
+  'sidebar.phone.failed': { zh: '没能启动', en: "Couldn't start" },
+  'sidebar.phone.long.running': { zh: '本机环境正在运行，会话在这台手机上执行', en: 'The local environment is running. Sessions run on this phone' },
+  'sidebar.phone.long.stopped': { zh: '本机环境没有运行，打开一条会话会自动启动', en: "The local environment isn't running. Opening a session starts it" },
+  'sidebar.phone.startHint': { zh: '在「在哪运行」里选「这台手机」后，这里会显示它的会话', en: 'Pick This phone under Run on to see its sessions here' },
 })
 
 /** 设备状态的文案:short = 行上的几个字,long = 悬停 / 读屏 / 说明用的整句。 */
@@ -143,6 +152,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   const probes = useDeviceMarks((s) => s.probes)
   const sticky = useDeviceMarks((s) => s.sticky)
   const injected = useApp((s) => s.sessions)
+  const phoneState = usePhoneEngine((s) => s.state)
   const selfRegistered = useDeviceSessions((s) => s.selfRegistered)
   useRemoteCapability((s) => s.epoch)
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
@@ -176,6 +186,11 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
       const all = [...extra, ...listed].sort((a, b) => sessionActivityAt(b.updated_at) - sessionActivityAt(a.updated_at))
       out[id] = p.filter ? p.filter(all) : all
     }
+    const phoneListed = byUnit[PHONE_ENGINE_ID]?.sessions ?? []
+    const phoneSeen = new Set(phoneListed.map((x) => x.id))
+    const phoneExtra = injected.filter((x) => x.location?.kind === 'unit' && x.location.unitId === PHONE_ENGINE_ID && !phoneSeen.has(x.id) && !x.archived)
+    const phoneAll = [...phoneExtra, ...phoneListed].sort((a, b) => sessionActivityAt(b.updated_at) - sessionActivityAt(a.updated_at))
+    out[PHONE_ENGINE_ID] = p.filter ? p.filter(phoneAll) : phoneAll
     return out
   }, [units, byUnit, injected, p.filter, probes, sticky])
 
@@ -205,7 +220,8 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
     sections: [{ items: menuItems(menu) }],
   }, () => setMenu(null))
 
-  if (!runLocationsAvailable() || !units?.length) return null
+  const phoneShown = phoneEngineInstalled(phoneState)
+  if (!runLocationsAvailable() || (!units?.length && !phoneShown)) return null
 
   const toggle = (id: string): void => {
     setCollapsed((prev) => {
@@ -220,22 +236,71 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
     setRenaming(null)
   }
 
+  /** 一段的外形(电脑与这台手机共用):组头 + 折叠 + 行。open = 点一行做什么。 */
+  interface SectionFace {
+    id: string
+    name: string
+    icon: React.ReactNode
+    status: string
+    statusText: string
+    statusLong: string
+    tone: 'ok' | 'wait' | 'warn'
+    empty: string | null
+    open(s: SessionRecord): void
+  }
   const renderDevice = (u: UnitInfo): React.ReactElement => {
     const id = u.id.toLowerCase()
     const status: DeviceStatus = statusOfUnit(u).status
+    return renderSection({
+      id,
+      name: clampText(u.name, 60) || t('engine.target.defaultName'),
+      icon: <DeviceIcon u={u} />,
+      status,
+      statusText: deviceStatusText(t, status),
+      statusLong: deviceStatusText(t, status, true),
+      tone: status === 'ready' ? 'ok' : status === 'checking' ? 'wait' : 'warn',
+      empty: status === 'ready' ? t(selfRegistered === false ? 'sidebar.device.pickFirst' : 'sidebar.device.empty') : null,
+      open: (s) => { adoptRemoteSession(s, { kind: 'unit', unitId: id }) },
+    })
+  }
+  /** 这台手机:引擎没在跑时点一条 = 先启动(等它健康),再按绑定打开 —— 原生不为 GET 拉起没人要的引擎。 */
+  const renderPhone = (): React.ReactElement => {
+    const engine = phoneState?.engine || 'stopped'
+    const key = engine === 'running' ? 'running' : engine === 'starting' ? 'starting' : engine === 'failed' ? 'failed' : 'stopped'
+    return renderSection({
+      id: PHONE_ENGINE_ID,
+      name: phoneEngineName(),
+      icon: <Smartphone className="t2s-lead-icon" />,
+      status: `phone-${key}`,
+      statusText: t(`sidebar.phone.${key}`),
+      statusLong: t(key === 'running' ? 'sidebar.phone.long.running' : 'sidebar.phone.long.stopped'),
+      tone: key === 'running' ? 'ok' : key === 'starting' ? 'wait' : 'warn',
+      empty: t(engine === 'running' ? 'sidebar.device.empty' : 'sidebar.phone.startHint'),
+      open: (s) => {
+        const host = phoneEngineHost()
+        if (!host || usePhoneEngine.getState().state?.engine === 'running') { adoptRemoteSession(s, PHONE_REF as { kind: 'unit'; unitId: string }); return }
+        void host.start().then(
+          () => { adoptRemoteSession(s, PHONE_REF as { kind: 'unit'; unitId: string }) },
+          () => useApp.getState().toast(t('phoneEngine.startFailed'), true),
+        )
+      },
+    })
+  }
+  const renderSection = (f: SectionFace): React.ReactElement => {
+    const id = f.id
     const rows = rowsByUnit[id] ?? []
     const isCollapsed = collapsed.has(id)
-    const name = clampText(u.name, 60) || t('engine.target.defaultName')
+    const name = f.name
     return (
-      <div className="t2d-section" key={id} data-device-section={id} data-device-status={status}>
-        <div className="t2s-group t2d-head" style={{ paddingLeft: folderPadLeft(0) }} title={deviceStatusText(t, status, true)}>
+      <div className="t2d-section" key={id} data-device-section={id} data-device-status={f.status}>
+        <div className="t2s-group t2d-head" style={{ paddingLeft: folderPadLeft(0) }} title={f.statusLong}>
           <button type="button" className="t2s-group-toggle t2s-folder-row t2d-toggle" aria-expanded={!isCollapsed} aria-label={t('sidebar.device.label', { name })} onClick={() => toggle(id)}>
             <span className="t2s-lead">
-              <DeviceIcon u={u} />
+              {f.icon}
               <span className={`t2s-chev t2s-lead-chev${isCollapsed ? '' : ' open'}`}><ChevronRight size={12} /></span>
             </span>
             <span className="t2s-group-label t2d-name">{name}</span>
-            <span className="t2d-status" data-tone={status === 'ready' ? 'ok' : status === 'checking' ? 'wait' : 'warn'} role="status">{deviceStatusText(t, status)}</span>
+            <span className="t2d-status" data-tone={f.tone} role="status">{f.statusText}</span>
           </button>
         </div>
         <AnimatedCollapse open={!isCollapsed}>
@@ -255,7 +320,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
                     <MoreHorizontal size={14} />
                   </span>
                 </>)}
-                onClick={() => { if (renaming?.id !== s.id) adoptRemoteSession(s, { kind: 'unit', unitId: id }) }}
+                onClick={() => { if (renaming?.id !== s.id) f.open(s) }}
                 onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ unitId: id, id: s.id, x: e.clientX, y: e.clientY }) }}
               >
                 {renaming?.id === s.id ? (
@@ -273,7 +338,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
                 )}
               </SidebarRow>
             ))}
-            {status === 'ready' && !rows.length && <div className="t2d-empty">{t(selfRegistered === false ? 'sidebar.device.pickFirst' : 'sidebar.device.empty')}</div>}
+            {f.empty && !rows.length && <div className="t2d-empty">{f.empty}</div>}
           </div>
         </AnimatedCollapse>
       </div>
@@ -281,9 +346,10 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
   }
   const activeLocation = injected.find((s) => s.id === p.activeId)?.location
   const activeUnitId = activeLocation?.kind === 'unit' ? activeLocation.unitId.toLowerCase() : null
-  const offlineUnits = units.filter((u) => statusOfUnit(u).status === 'offline' && u.id.toLowerCase() !== activeUnitId)
+  const offlineUnits = (units || []).filter((u) => statusOfUnit(u).status === 'offline' && u.id.toLowerCase() !== activeUnitId)
   const offlineIds = new Set(offlineUnits.map((u) => u.id.toLowerCase()))
-  const sections: React.ReactNode[] = units.filter((u) => !offlineIds.has(u.id.toLowerCase())).map(renderDevice)
+  // 这台手机排在电脑前面(同「在哪运行」的顺序:云端 → 这台手机 → 电脑)
+  const sections: React.ReactNode[] = [...(phoneShown ? [renderPhone()] : []), ...(units || []).filter((u) => !offlineIds.has(u.id.toLowerCase())).map(renderDevice)]
   if (offlineUnits.length) {
     sections.push(
       <div className="t2s-group t2d-head" key="offline-group" style={{ paddingLeft: folderPadLeft(0) }}>

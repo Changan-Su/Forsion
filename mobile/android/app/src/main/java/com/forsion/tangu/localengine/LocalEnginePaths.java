@@ -38,8 +38,18 @@ import java.util.Map;
 final class LocalEnginePaths {
     static final String LAUNCHER = "libproot.so";
     static final String LOADER = "libproot_loader.so";
-    /** --link2symlink: see LocalEngineProcess / PR notes for the l2s on/off comparison that set this default. */
-    static volatile boolean link2symlink = true;
+    /**
+     * --link2symlink, off by default. Measured on the API 35 arm64 emulator (same environment, l2s on vs off):
+     *  - on: coreutils `ln` still fails (ENOENT) and leaves `.l2s.*` debris; git leaves `.l2s.tmp_obj_*` in .git/objects
+     *    (fsck: "bad sha1 file"); and stat of any file that went through a hard link comes back garbled — Node's
+     *    fs.statSync reports a character device of size 0 (statx emulation), which breaks the agent's own file tools.
+     *    dpkg can finalize installs (its status-old backup is a hard link).
+     *  - off: hard links fail cleanly with EACCES (SELinux) and tools fall back (git commits / gc / fsck clean);
+     *    the engine has its own copy fallback for generated files. dpkg cannot write status-old, so apt-get install
+     *    unpacks the package but leaves it "unpacked, not configured" — known limitation until l2s is fixed.
+     * Debug builds can flip it at runtime (LocalEnginePlugin.setLink2symlink) for experiments.
+     */
+    static volatile boolean link2symlink = false;
 
     final Context ctx;
     final File base;
@@ -133,6 +143,10 @@ final class LocalEnginePaths {
         new File(rootfs, "root/workspace").mkdirs();
         new File(rootfs, "proc").mkdirs();
         new File(rootfs, "sys").mkdirs();
+        // apt drops to the _apt user for downloads; under PRoot's fake root its http method dies (exit 112).
+        // Run the methods as root: the whole environment is already confined to the app's sandbox.
+        File aptConf = new File(rootfs, "etc/apt/apt.conf.d");
+        if (aptConf.isDirectory()) writeText(new File(aptConf, "99forsion-proot"), "APT::Sandbox::User \"root\";\n");
         writeStandins();
     }
 

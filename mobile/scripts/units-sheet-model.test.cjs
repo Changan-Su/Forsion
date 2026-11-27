@@ -347,7 +347,7 @@ const rowOf = (out, now) => runRows([U(DESK)], null, HOME, {}, { [DESK]: out.sti
     const tsx = fs.readFileSync(path.resolve(__dirname, '../src/UnitsSheet.tsx'), 'utf8')
     const defs = tsx.match(/function selectRunLocation\(ref: TargetRef\): Promise<void> \{([\s\S]*?)\n\}/g) || []
     assert.equal(defs.length, 1, '必须恰好一个 selectRunLocation 定义')
-    assert.match(defs[0], /\{\s*return setDraftLocation\(ref, \{ explicit: true, name: rosterNameOf\(lastRoster, ref\) \}\)\s*\}/, '生效 = 返回 setDraftLocation(亲手选的)的 Promise(移除本机要等它);展示名取名册(M1B)')
+    assert.match(defs[0], /\{\s*return setDraftLocation\(ref, \{ explicit: true, name: isPhoneRef\(ref\) \? phoneEngineName\(\) : rosterNameOf\(lastRoster, ref\) \}\)\s*\}/, '生效 = 返回 setDraftLocation(亲手选的)的 Promise(移除本机要等它);展示名取名册(M1B),这台手机(本机引擎)不在名册里用自己的名字')
     assert.equal((tsx.match(/select: selectRunLocation,/g) || []).length, 2, 'runOn 与 removeThisPhone 各注入一次')
     assert.match(tsx, /removeThisPhone\(\{/)
     assert.doesNotMatch(tsx.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /unitForgetSelf\?\.\(\)[^\n]*\.then\(/, '移除不许绕过 removeThisPhone 直接调 unitForgetSelf')

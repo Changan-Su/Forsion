@@ -15,7 +15,6 @@
  *   ANDROID_SERIAL=emulator-5584 ENV_DIR=<build-env 产物> [APK=<apk>] [L2S=1] [KEEP=1] node scripts/local-engine-emu.cjs
  *   KEEP=1:不删已装的环境(重跑只测起停与 run);THROTTLE=<字节/秒>:下载限速(缺省 8 MB/s,好让暂停落在下载中途)
  */
-const http = require('node:http')
 const fs = require('node:fs')
 const path = require('node:path')
 const { adb, connect, pause } = require('./lib/emu-cdp.cjs')
@@ -28,58 +27,9 @@ const results = []
 const ok = (name, pass, detail = '') => { results.push({ name, pass, detail }); console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${detail ? '  — ' + detail : ''}`) }
 if (!ENV_DIR || !fs.existsSync(path.join(ENV_DIR, 'manifest.json'))) { console.error('ENV_DIR must point at a build-env.sh output (manifest.json)'); process.exit(2) }
 
-// ── 环境包服务器(支持 Range,可限速;记下每个请求)──
-const served = []
-const files = http.createServer((req, res) => {
-  const name = decodeURIComponent(req.url.split('?')[0]).replace(/^\/+/, '')
-  const p = path.join(ENV_DIR, name)
-  served.push({ t: Date.now(), url: req.url, range: req.headers.range || null })
-  if (!name || name.includes('..') || !fs.existsSync(p)) { res.writeHead(404); return res.end() }
-  const size = fs.statSync(p).size
-  let start = 0, end = size - 1, status = 200
-  const m = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range || '')
-  if (m) { start = Number(m[1]); if (m[2]) end = Number(m[2]); status = 206 }
-  res.writeHead(status, { 'Content-Length': end - start + 1, 'Content-Type': 'application/octet-stream', 'Accept-Ranges': 'bytes', ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) })
-  const s = fs.createReadStream(p, { start, end, highWaterMark: 64 * 1024 })
-  let sent = 0; const t0 = Date.now()
-  s.on('data', (chunk) => {
-    sent += chunk.length
-    const ahead = sent / THROTTLE * 1000 - (Date.now() - t0)
-    if (ahead > 0) { s.pause(); setTimeout(() => s.resume(), ahead) }
-    if (!res.write(chunk)) { s.pause(); res.once('drain', () => s.resume()) }
-  })
-  s.on('end', () => res.end())
-  req.on('close', () => s.destroy())
-})
-
-// ── 假模型(OpenAI 兼容 /v1/chat/completions,流式):第一轮让引擎调 run_bash,拿到结果后回一句带结果的话 ──
-const modelCalls = []
-const model = http.createServer((req, res) => {
-  let body = ''
-  req.on('data', (c) => { body += c })
-  req.on('end', () => {
-    if (!req.url.endsWith('/chat/completions')) { res.writeHead(404); return res.end() }
-    const j = JSON.parse(body || '{}')
-    modelCalls.push(j)
-    const msgs = j.messages || []
-    const toolMsg = [...msgs].reverse().find((x) => x.role === 'tool')
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    const send = (delta, finish = null) => res.write(`data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', model: 'echo', choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`)
-    if (!toolMsg) {
-      send({ role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'run_bash', arguments: '' } }] })
-      send({ tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command: 'echo marker-$((6*7)) > probe.txt && cat probe.txt && uname -m && node -v' }) } }] })
-      send({}, 'tool_calls')
-    } else {
-      const out = typeof toolMsg.content === 'string' ? toolMsg.content : JSON.stringify(toolMsg.content)
-      for (const piece of ['PHONE-OK ', 'tool said: ', out.replace(/\s+/g, ' ').slice(0, 200)]) send({ content: piece })
-      send({}, 'stop')
-    }
-    res.write('data: [DONE]\n\n')
-    res.end()
-  })
-})
-
-const listen = (srv, port) => new Promise((r) => srv.listen(port, '127.0.0.1', r))
+const { startFixtures } = require('./lib/local-engine-fixtures.cjs')
+let served = []
+let modelCalls = []
 
 /** ForsionUnit.request through the native relay; collects the whole response (stream chunks timed). */
 const relayJs = (opts) => `new Promise((resolve) => {
@@ -110,8 +60,9 @@ async function waitState(cdp, pred, timeoutMs, label) {
 }
 
 async function main() {
-  await listen(files, 18900)
-  await listen(model, 18901)
+  const fx = await startFixtures({ envDir: ENV_DIR, throttle: THROTTLE })
+  served = fx.served
+  modelCalls = fx.modelCalls
   if (process.env.APK) { console.log('installing', process.env.APK); adb('install', '-r', '-t', process.env.APK) }
   adb('shell', 'pm', 'grant', PKG, 'android.permission.POST_NOTIFICATIONS')
   adb('shell', 'am', 'force-stop', PKG)
@@ -148,6 +99,19 @@ async function main() {
     const log = adb('logcat', '-d', '-s', 'LocalEngine')
     const unpacked = log.split('\n').filter((l) => /unpacked/.test(l)).map((l) => l.replace(/.*unpacked/, 'unpacked')).join(' | ')
     ok('extractor: no refused or failed entries', /errors=0/.test(unpacked) && !/skippedUnsafe=[1-9]/.test(unpacked), unpacked.slice(0, 400))
+  }
+
+  // KEEP=1 against an environment whose engine layer is older than ENV_DIR's: update() replaces only /opt/tangu, home survives
+  s = await plug(cdp, 'check')
+  if (s.installed && s.updateAvailable) {
+    adb('shell', 'run-as', PKG, 'sh', '-c', `'mkdir -p files/local-engine/home && echo keep > files/local-engine/home/.update-marker'`)
+    const man = JSON.parse(fs.readFileSync(path.join(ENV_DIR, 'manifest.json'), 'utf8'))
+    const t0 = Date.now()
+    await plug(cdp, 'update')
+    const u = await waitState(cdp, (x) => (x.phase === 'idle' && !x.updateAvailable) || x.phase === 'failed', 600000, 'updated')
+    const inst = adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/installed.json')
+    const marker = adb('shell', 'run-as', PKG, 'cat', 'files/local-engine/home/.update-marker').trim()
+    ok('update() swaps the engine layer and keeps home', u.phase === 'idle' && inst.includes(man.engine.sha256) && marker === 'keep', `${Math.round((Date.now() - t0) / 1000)}s ${JSON.stringify({ phase: u.phase, error: u.error, engine: u.engineVersion })}`)
   }
 
   // engine: point a direct provider at the fake model (config.json in the engine's home, read at boot)
@@ -200,6 +164,8 @@ async function main() {
       'echo "== apt/dpkg"; apt-get update -qq 2>&1 | tail -2; apt-get install -y -qq --no-install-recommends jq >/tmp/apt.log 2>&1; echo "install exit=$?"; tail -3 /tmp/apt.log; jq --version 2>&1',
       'apt-get install -y -qq --reinstall jq >/tmp/apt2.log 2>&1; echo "reinstall exit=$?"; tail -3 /tmp/apt2.log; dpkg --verify jq 2>&1 | head -5; echo "verify exit=$?"; jq --version 2>&1',
       'ls -la /var/lib/dpkg/info/ | grep -c l2s || true; find / -xdev -name ".l2s.*" 2>/dev/null | head -5',
+      // the decisive check: what Node (libuv uses statx) sees for a file that went through a hard link
+      'echo "== node stat of a linked file"; echo z > n1; ln n1 n2 2>/dev/null; node -e "const f=require(\'fs\');for(const p of [\'n1\',\'/var/lib/dpkg/status\']){try{const s=f.statSync(p);console.log(p,\'isFile=\'+s.isFile(),\'size=\'+s.size,\'mode=\'+s.mode.toString(8))}catch(e){console.log(p,e.code)}}"',
     ].join('\n')
     for (const on of [true, false]) {
       await plug(cdp, 'setLink2symlink', { on })
@@ -207,7 +173,7 @@ async function main() {
       console.log(`\n────── l2s ${on ? 1 : 0} ──────\n${r.out || JSON.stringify(r)}\n`)
       fs.writeFileSync(path.join(process.env.OUT_DIR || '.', `l2s-${on ? 1 : 0}.txt`), r.out || JSON.stringify(r))
     }
-    await plug(cdp, 'setLink2symlink', { on: true })
+    await plug(cdp, 'setLink2symlink', { on: false }) // back to the shipped default (LocalEnginePaths.link2symlink)
   }
 
   const stopped = await plug(cdp, 'stop')
@@ -216,7 +182,7 @@ async function main() {
   ok('stop() → engine and launcher gone', stopped.engine === 'stopped' && !/libproot\.so/.test(ps2) && !/\bnode\b/.test(ps2))
 
   cdp.close()
-  files.close(); model.close()
+  fx.close()
   const failed = results.filter((r) => !r.pass)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)
   process.exit(failed.length ? 1 : 0)

@@ -10,6 +10,7 @@ import { authFetch } from './http'
 import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 import { fetchOpts, targetLabel, type EngineTarget } from './engine/targets'
+import { phoneEngineHost } from './engine/phoneEngine'
 import { AUTH_PROBE_PATH as PROBE_PATH, authProbePath, classify, classifyError, noteReachable, noteVerdict, refusalOf, waitReady, type Verdict } from './engine/health'
 import { remoteRefusalMessage } from './localOnly'
 import './engine/messages'
@@ -68,6 +69,12 @@ export const AUTH_PROBE_PATH = PROBE_PATH
 export async function testConnection(t: EngineTarget): Promise<{ ok: boolean; message: string; authRejected?: boolean; verdict?: Verdict }> {
   // 目录类(§3.3 target 类):探的是**调用方指定的那台**(设置页外部连接表单现拼的 connectionTarget / appStore 的焦点),不按会话路由。
   try {
+    if (t.via === 'phone') {
+      // 这台手机:先让原生把本机引擎拉起来并等它健康(冷启动几秒到一分钟),再探;原生不为 GET 拉起引擎
+      const host = phoneEngineHost()
+      if (!host) return { ok: false, message: translate('phoneEngine.unavailable') }
+      try { await host.start() } catch { return { ok: false, message: translate('phoneEngine.startFailed') } }
+    }
     const r = await engineRequest(t, '/health', {}, { timeoutMs: 15000 })
     if (!r.ok) {
       // unit 目标(经 hub):离线 / 引擎没起 / 设备被移除 / 调用方身份取不到各给一句人话,并把类别带回去(appStore 据此定健康态)

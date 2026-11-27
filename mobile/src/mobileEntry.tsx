@@ -35,6 +35,7 @@ import { browserChromeInstalled, installBrowserChrome } from './browserChrome'
 import { installNativeFilePicker } from './nativeFiles'
 import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
+import { installLocalEngine } from './localEngine'
 import { installPhoneGuideHost } from './phoneGuide'
 import { installTapRipple } from './tapRipple'
 import { installPhonePageViews } from './phonePages'
@@ -94,6 +95,9 @@ try {
   installShareInbox()
   // 互联设备入口(⋯ 菜单,Forsion Unit):数据桥在才上架 —— App(mobileShim)有 unitsList,
   // 设备页(unitShim)没有(设备页里不套设备页),自然隐藏。
+  // 这台手机(本机引擎,第 1 期):原生 ForsionLocalEngine 在(带启动器的测试渠道包)才装上 window.tangu.localEngine,
+  // 「在哪运行」里的「这台手机」一行与侧栏分组都看它;排在 installUnitsEntry 前,弹层第一次打开就读得到状态。
+  installLocalEngine()
   installUnitsEntry()
   // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
   installLiveIsland()

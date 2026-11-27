@@ -22,6 +22,7 @@ import { formatRunLocation, HOME, parseRunLocation, type RunLocation } from '../
 import { runLocationsAvailable } from '../features/runtime'
 import { useApp } from './appStore'
 import { statusOfUnit, unitById, useDeviceSessions } from './deviceSessionsStore'
+import { isPhoneRef, phoneEngineHost, phoneEngineInstalled, phoneEngineName, usePhoneEngine } from '../services/engine/phoneEngine'
 
 interface RunLocationState {
   /** 草稿代:activeId 从某个会话回到空白(新对话)就 +1。 */
@@ -109,7 +110,12 @@ export function reconcileDraftLocation(): boolean {
   }
   let want: RunLocation = HOME
   let name: string | null = null
-  if (wanted?.kind === 'unit') {
+  if (wanted && isPhoneRef(wanted)) {
+    // 这台手机不在名册里:看本机环境装没装(状态还没读到就等;没有宿主桥 / 装了又删了 → 回云端)
+    const ps = usePhoneEngine.getState().state
+    if (phoneEngineHost() && ps === null) return false
+    if (phoneEngineInstalled(ps)) { want = wanted; name = phoneEngineName() }
+  } else if (wanted?.kind === 'unit') {
     if (useDeviceSessions.getState().units === null) return false // 名册还没到
     const u = unitById(wanted.unitId)
     if (u) {
@@ -160,4 +166,8 @@ useApp.subscribe((s) => {
 // 每一轮设备刷新完成 → 还没对过账的草稿再对一次
 useDeviceSessions.subscribe((s, prev) => {
   if (s.refreshedAt !== prev.refreshedAt) reconcileDraftLocation()
+})
+// 这台手机的环境状态第一次读到(或装好 / 删掉)→ 记着「这台手机」的草稿再对一次
+usePhoneEngine.subscribe((s, prev) => {
+  if (phoneEngineInstalled(s.state) !== phoneEngineInstalled(prev.state) || (prev.state === null && s.state !== null)) reconcileDraftLocation()
 })

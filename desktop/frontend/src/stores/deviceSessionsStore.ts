@@ -25,6 +25,7 @@ import { rosterAvailable, runLocationsAvailable } from '../features/runtime'
 import { classify } from '../services/engine/health'
 import { getSessionDetail, updateSession } from '../services/backendService'
 import { AGENT_APP_ID } from '../services/agentRunService'
+import { PHONE_ENGINE_ID, phoneEngineInstalled, usePhoneEngine } from '../services/engine/phoneEngine'
 import { normalizeSessionEmoji } from '../../../../tangu-agent/src/contracts/sessionEmoji'
 
 /** 逐台会话列表的新鲜度:比这更新就不重拉(手动刷新 / force 除外)。 */
@@ -139,12 +140,15 @@ export const useDeviceSessions = create<DeviceSessionsState>((set, get) => ({
   refresh: async (opts = {}) => {
     if (!runLocationsAvailable()) return
     const gen = get().gen
+    // 这台手机不在名册里:与名册并行、互不牵连(名册拉不到不耽误它)
+    const phone = fetchPhone(gen, !!opts.force)
     const units = await get().refreshRoster()
-    if (!units || gen !== get().gen) return
-    await Promise.all(units.map((u) => fetchDevice(u, gen, !!opts.force, !!opts.periodic)))
+    if (!units || gen !== get().gen) { await phone; return }
+    await Promise.all([...units.map((u) => fetchDevice(u, gen, !!opts.force, !!opts.periodic)), phone])
     if (gen !== get().gen) return
-    // 名册里没了的电脑:整段丢掉
+    // 名册里没了的电脑:整段丢掉(这台手机那段由 fetchPhone 自己管)
     const keep = new Set(units.map((u) => u.id.toLowerCase()))
+    keep.add(PHONE_ENGINE_ID)
     const byUnit = Object.fromEntries(Object.entries(get().byUnit).filter(([k]) => keep.has(k)))
     set({ byUnit, refreshedAt: Date.now() })
     syncInjected()
@@ -199,6 +203,37 @@ async function fetchDevice(u: UnitInfo, gen: number, force: boolean, periodic = 
     const probe = probeOfError(e)
     noteDeviceProbe(id, probe)
     patchEntry(id, { sessions: keepOnTransient(id, probe), fetchedAt: Date.now(), loading: false })
+  }
+}
+
+/**
+ * 这台手机的会话列表(phoneEngine.ts)。只在引擎**正在运行**时拉:原生不为 GET 启动没人要的引擎,拉了也只会白失败;
+ * 没在跑时留着上一份(点一条 = 先启动引擎再打开,DeviceSessionSections)。环境没装 / 删了 → 整段清空。
+ * 不记设备探针:那套口径(离线 / 确认 / 拒绝)说的是经 hub 的电脑。
+ */
+async function fetchPhone(gen: number, force: boolean): Promise<void> {
+  const st = usePhoneEngine.getState().state
+  if (!phoneEngineInstalled(st)) {
+    if (useDeviceSessions.getState().byUnit[PHONE_ENGINE_ID]) patchEntry(PHONE_ENGINE_ID, { sessions: [], loading: false, fetchedAt: null })
+    return
+  }
+  if (st?.engine !== 'running') return
+  const cur = useDeviceSessions.getState().byUnit[PHONE_ENGINE_ID]
+  if (!force && cur?.fetchedAt && Date.now() - cur.fetchedAt < DEVICE_LIST_FRESH_MS) return
+  const t = targetForRef(unitRef(PHONE_ENGINE_ID))
+  if (!t) return
+  patchEntry(PHONE_ENGINE_ID, { loading: true })
+  try {
+    const r = await engineFetch(t, `/agent/sessions?archived=false&limit=${DEVICE_LIST_LIMIT}&app_id=${encodeURIComponent(AGENT_APP_ID)}`, {}, { timeoutMs: DEVICE_LIST_TIMEOUT_MS })
+    const body: unknown = await r.json().catch(() => null)
+    if (gen !== useDeviceSessions.getState().gen) return
+    // 读失败 ≠ 没有会话:留着上一份(CLAUDE.md「读写用户数据」)
+    if (!r.ok) { patchEntry(PHONE_ENGINE_ID, { loading: false }); return }
+    const loc = unitRef(PHONE_ENGINE_ID)
+    const rows = sanitizeRows(body).filter((row) => !bindingConflict(row.id, loc))
+    patchEntry(PHONE_ENGINE_ID, { sessions: rows, fetchedAt: Date.now(), loading: false })
+  } catch {
+    if (gen === useDeviceSessions.getState().gen) patchEntry(PHONE_ENGINE_ID, { loading: false })
   }
 }
 
