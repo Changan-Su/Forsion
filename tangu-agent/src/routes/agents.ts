@@ -29,7 +29,7 @@ import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentUninstallPreview, uninstallAgent } from '../services/agentUninstall.js';
 import { trashDir } from '../services/trash.js';
-import { AGENT_SYNC_SEALED, agentSyncPermission, agentSyncScope, setAgentSyncPermission, setAgentSyncSharedOnly } from '../services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js';
@@ -113,12 +113,6 @@ function sealedLocalBody(b: Record<string, any>, cloud: boolean): Record<string,
   if (cloud || !AGENT_SYNC_SEALED || !('cloudSync' in b)) return b;
   const { cloudSync: _ignored, ...rest } = b;
   return rest;
-}
-/** 封着时「共享默认记忆」的授权位:定义上的值真改了才动,只动 shared 位(setAgentSyncSharedOnly);没改一个字节都不写。
- *  设置页每次保存都会带上 shareDefaultMemory,所以比的是保存前的定义,不是「请求里有没有这个字段」。 */
-function sealedShareChange(slug: string, scope: string | null, b: Record<string, any>, before: boolean, after: boolean): void {
-  if (!scope || b.shareDefaultMemory == null || before === after) return;
-  setAgentSyncSharedOnly(slug, scope, after);
 }
 
 router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
@@ -221,8 +215,9 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       mustNotExist: true,
     };
     const agent = cloud ? await cloudSaveAgent(uid, slug, input) : await saveAgent(input);
-    if (!cloud && AGENT_SYNC_SEALED) sealedShareChange(slug, scope, b, false, agent.shareDefaultMemory === true);
-    else if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+    // 封着:授权文件一个字节不动。shared 位也不动 —— 它决定 human/(我的资料与默认日历)的同意,封着期间不变宽也不变窄;
+    // 「共享默认记忆」本身照常存进定义,放开后下一次保存按定义写回授权
+    if (!cloud && !AGENT_SYNC_SEALED && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
     }
@@ -297,8 +292,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const agent = cloud ? await cloudPatchAgent(req.user!.userId, slug, fields)
       : remote ? await patchAgent(slug, (locked) => ({ ...fields, approvalMode: remoteAgentApprovalMode(wantMode, locked.approvalMode || '', remoteCap!) }))
       : await patchAgent(slug, fields);
-    if (!cloud && AGENT_SYNC_SEALED) sealedShareChange(slug, scope, b, cur.shareDefaultMemory === true, agent.shareDefaultMemory === true);
-    else if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+    if (!cloud && !AGENT_SYNC_SEALED && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) { // 封着不写授权,见上
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
     }

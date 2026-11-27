@@ -209,3 +209,15 @@ it('封着:旧同步那版只有智库能勾,Agents 与插件锁住;开始照常
   await act(async () => { btn('开始同步').click() })
   expect(spy.apply).toHaveBeenCalledTimes(1)
 })
+
+it('封着:笔记已经开着就不弹,但也不记「点过了」(放开后该弹的卡片照弹);三样都开着照旧记', async () => {
+  spy.decided.mockClear()
+  const on = { ...snap(true), notes: { ...snap(true).notes, on: true } }
+  sync.set({ ...on, sealed: SEALED })
+  await act(async () => root.render(React.createElement(SyncSetupHost)))
+  await act(async () => { vi.advanceTimersByTime(2600) })
+  expect(host.querySelector('.sync-setup')).toBeNull()
+  expect(spy.decided).not.toHaveBeenCalled()
+  await act(async () => { sync.set({ ...on, agents: { on: true }, plugins: { on: true }, sealed: SEALED }) })
+  expect(spy.decided).toHaveBeenCalled()
+})

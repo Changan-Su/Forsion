@@ -182,41 +182,6 @@ export function setAgentSyncPermission(slug: string, scope: string, enabled: boo
   consentControllers.delete(key);
 }
 
-/**
- * 封着时(AGENT_SYNC_SEALED)保存 Agent、「共享默认记忆」改了:只动存着那条授权的 shared 位,enabled / follow 原样。
- * 不能用 setAgentSyncPermission:它按读数写 `{enabled, shared: enabled && shared}`,会把 follow(跟着总闸)那条抹成单独关、
- * 总闸开着时等于替用户关了这个 Agent(human/ 的同意跟着变窄)。shared 位实际不变就一个字节都不写。返回写没写。
- *  - 跟着总闸(follow):shared 原样存(总闸关时 setAgentSyncDefault 也是这么存的),仍跟着总闸;
- *  - 单独设过:enabled 不动,shared = enabled && shared(沿用老语义);
- *  - 没设过、总闸开着(读数 enabled、shared = 是不是默认 Agent):记成跟着总闸 + 这个 shared,总闸关了照样跟着停;
- *  - 没设过、总闸没开 / 新同步接管(owner content):读数恒不共享,不写。
- */
-export function setAgentSyncSharedOnly(slug: string, scope: string, shared: boolean): boolean {
-  if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
-  let changed = false;
-  withMemoryDirectoryLock(agentSyncDir(slug), () => {
-    const data = readPermissions(slug);
-    const cur = data.accounts[scope];
-    const master = readDefaults()[scope];
-    if (master?.owner === 'content') return;
-    let next: Permission | null = null;
-    if (cur?.follow) {
-      if ((cur.shared === true) !== shared) next = { enabled: false, shared, follow: true, revision: (cur.revision ?? 0) + 1 };
-    } else if (cur) {
-      const enabled = cur.enabled === true;
-      if ((cur.shared === true) !== (enabled && shared)) next = { enabled, shared: enabled && shared, revision: (cur.revision ?? 0) + 1 };
-    } else if (master?.enabled === true && (slug === DEFAULT_AGENT_SLUG) !== shared) {
-      next = { enabled: false, shared, follow: true, revision: 1 };
-    }
-    if (!next) return;
-    data.accounts[scope] = next;
-    atomicSyncWrite(agentsDir(), permissionFile(slug), JSON.stringify(data, null, 2));
-    changed = true;
-  });
-  if (changed) { const key = consentKey(slug, scope); consentControllers.get(key)?.abort(new Error('agent sync consent changed')); consentControllers.delete(key); }
-  return changed;
-}
-
 let sourceController = new AbortController();
 /** Source replacement revokes every in-flight operation, including fire-and-forget post-run sync. */
 export function invalidateAgentSyncOperations(): void {

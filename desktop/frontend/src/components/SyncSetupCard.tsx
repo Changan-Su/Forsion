@@ -159,7 +159,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
   // 依赖只放这两个布尔:快照每次同步进度 / 插件变动都换新对象,拿它当依赖计时器会一直被重置、永远弹不出来
   const eligible = main && wantsSyncCard(s, obDone)
   const want = eligible && !open
-  const allOn = main && !!s && s.signedIn && !s.decided && !s.applying && obDone && s.notes.available && !want && !open
+  // 三样都真开着才自动记成「点过了」:只因为封着(暂不同步)的那几类不算数而不弹的,不写这个记号 —— 它跨放开永久生效,
+  // 放开后原本该弹的卡片会被压掉(Codex 交付前评审 P2)
+  const allOn = main && !!s && s.signedIn && !s.decided && !s.applying && obDone && s.notes.available && !want && !open && s.notes.on && s.agents.on && s.plugins.on
   useEffect(() => { if (allOn) markSyncDecided() }, [allOn])
   useEffect(() => {
     if (!want) return

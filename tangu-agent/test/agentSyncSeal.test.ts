@@ -13,7 +13,7 @@ import express from 'express';
 import type { Server } from 'node:http';
 import { prepareAgentFilesForRun, runAgentFilesSync } from '../src/services/agentFileSync.js';
 import { setSyncSources, syncNow } from '../src/services/memorySyncService.js';
-import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncDefault, setAgentSyncPermission, setAgentSyncSharedOnly } from '../src/services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
 import { deleteAgent, saveAgent } from '../src/agents/agentRegistry.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../src/core/tanguHome.js';
 import { AgentFileConflictError, type AgentFilesBrain, type CloudBrainServices } from '../src/seams/cloudBrain.js';
@@ -194,56 +194,6 @@ describe('sealed agent sync', () => {
   });
 });
 
-describe('setAgentSyncSharedOnly keeps enabled and follow exactly as stored', () => {
-  const stored = (slug: string, scope: string) => JSON.parse(readFileSync(join(agentsDir(), slug, '.cloudsync-accounts.json'), 'utf8')).accounts[scope];
-  const cases: Array<[string, (scope: string) => void, boolean]> = [
-    ['no record, account switch on', (s) => setAgentSyncDefault(s, true), true],
-    ['no record, account switch off', (s) => setAgentSyncDefault(s, false), false],
-    ['no record, never decided', () => {}, false],
-    ['set on by itself', (s) => setAgentSyncPermission('writer', s, true, false), true],
-    ['set off by itself', (s) => setAgentSyncPermission('writer', s, false, false), false],
-    // 总闸关的时候单独开着的改记成 follow;再把总闸开 / 关回来
-    ['following the switch, switch on', (s) => { setAgentSyncPermission('writer', s, true, false); setAgentSyncDefault(s, false); setAgentSyncDefault(s, true); }, true],
-    ['following the switch, switch off', (s) => { setAgentSyncPermission('writer', s, true, false); setAgentSyncDefault(s, false); }, false],
-  ];
-  for (const [name, arrange, enabled] of cases) {
-    it(name, async () => {
-      const cloud = fakeCloud();
-      const scope = agentSyncScope(cloud, 'u')!;
-      await saveAgent({ slug: 'writer', name: 'Writer', systemPrompt: 'fixture' });
-      arrange(scope);
-      const file = join(agentsDir(), 'writer', '.cloudsync-accounts.json');
-      const recordFollow = (): boolean | null => { const rec = existsSync(file) ? stored('writer', scope) : undefined; return rec ? rec.follow === true : null; };
-      const followBefore = recordFollow();
-      expect(agentSyncPermission('writer', scope).enabled).toBe(enabled);
-      for (const shared of [true, false, true]) {
-        const bytes = existsSync(file) ? readFileSync(file, 'utf8') : null;
-        const was = agentSyncPermission('writer', scope).shared;
-        // 跟着总闸的那条:shared 原样存着(总闸关着时读数恒不共享),用户改了它就记下,总闸再开时按新的来
-        const rawWas = followBefore === true ? stored('writer', scope).shared === true : null;
-        const wrote = setAgentSyncSharedOnly('writer', scope, shared);
-        const now = agentSyncPermission('writer', scope);
-        expect(now.enabled).toBe(enabled);
-        expect(now.shared).toBe(enabled && shared);
-        expect(wrote).toBe(rawWas !== null ? rawWas !== shared : was !== now.shared);
-        if (followBefore === true) expect(stored('writer', scope).shared === true).toBe(shared);
-        if (!wrote) expect(existsSync(file) ? readFileSync(file, 'utf8') : null).toBe(bytes);
-        const followNow = recordFollow();
-        if (followBefore !== null) expect(followNow).toBe(followBefore);
-        else if (followNow !== null) expect(followNow).toBe(true); // 没设过的记成跟着总闸:和原来「隐含地跟着总闸」一样
-      }
-    });
-  }
-  it('the default agent under an account switch that is on keeps its implicit shared bit when nothing changes', async () => {
-    const cloud = fakeCloud();
-    const scope = agentSyncScope(cloud, 'u')!;
-    setAgentSyncDefault(scope, true);
-    await saveAgent({ slug: DEFAULT_AGENT_SLUG, name: 'Default', systemPrompt: 'fixture' });
-    expect(setAgentSyncSharedOnly(DEFAULT_AGENT_SLUG, scope, true)).toBe(false);
-    expect(existsSync(join(agentsDir(), DEFAULT_AGENT_SLUG, '.cloudsync-accounts.json'))).toBe(false);
-  });
-});
-
 describe('sealed routes', () => {
   let srv: Server;
   let base = '';
@@ -306,18 +256,19 @@ describe('sealed routes', () => {
     expect(agentState()['helper/config.toml']).not.toContain('cloud_sync');
   });
 
-  it('changing "share default memory" only moves the shared bit; enabled stays as stored', async () => {
+  it('changing "share default memory" writes no consent at all: the human/ consent neither widens nor narrows', async () => {
     const scope = agentSyncScope(cloud, 'u')!;
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'reader', name: 'Reader', systemPrompt: 'A' }) });
-    setAgentSyncPermission('reader', scope, true, false);
-    const r = await api('/agent/agents/reader', { method: 'PATCH', body: JSON.stringify({ shareDefaultMemory: true, cloudSync: false }) });
-    expect(r.status).toBe(200);
-    expect(agentSyncPermission('reader', scope)).toMatchObject({ enabled: true, shared: true });
-    setAgentSyncPermission('reader', scope, false, false);
-    const bytes = agentState()['reader/.cloudsync-accounts.json'];
-    await api('/agent/agents/reader', { method: 'PATCH', body: JSON.stringify({ shareDefaultMemory: false }) });
-    await api('/agent/agents/reader', { method: 'PATCH', body: JSON.stringify({ shareDefaultMemory: true, cloudSync: true }) });
-    expect(agentSyncPermission('reader', scope)).toMatchObject({ enabled: false, shared: false });
-    expect(agentState()['reader/.cloudsync-accounts.json']).toBe(bytes); // 关着的 Agent:shared 位读数不变,不写
+    for (const [enabled, shared] of [[true, false], [true, true], [false, false]] as const) {
+      setAgentSyncPermission('reader', scope, enabled, shared);
+      const bytes = agentState()['reader/.cloudsync-accounts.json'];
+      for (const share of [!shared, shared, !shared]) {
+        const r = await api('/agent/agents/reader', { method: 'PATCH', body: JSON.stringify({ shareDefaultMemory: share, cloudSync: !enabled }) });
+        expect(r.status).toBe(200);
+        expect(r.body.agent.shareDefaultMemory === true).toBe(share); // 定义照存
+        expect(agentState()['reader/.cloudsync-accounts.json']).toBe(bytes);
+        expect(agentSyncPermission('reader', scope)).toMatchObject({ enabled, shared: enabled && shared });
+      }
+    }
   });
 });
