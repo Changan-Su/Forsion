@@ -15,6 +15,7 @@
 import { deps } from '../seams/runtime.js';
 import { publish } from './eventBus.js';
 import { currentRunId } from '../seams/runContext.js';
+import { cacheWriteArg, cacheWriteOf } from '../seams/billing.js';
 
 /** 后台阶段名(C-5 固定枚举;主循环调用不带 phase)。 */
 export type UsagePhase = 'compaction' | 'historian' | 'brainstorm' | 'muse-judge' | 'delegate';
@@ -24,6 +25,9 @@ export interface BackgroundUsageInput {
   completion_tokens?: number;
   /** provider 未上报缓存命中量时应为 undefined(不是 0)—— cacheReported 据此区分「0 命中」与「没报」。 */
   cached_tokens?: number;
+  /** 缓存写入量与其中长档那部分(server #209);只用于计价,事件形状不变。 */
+  cache_write_tokens?: number;
+  cache_write_long_tokens?: number;
   reasoning_tokens?: number;
 }
 
@@ -48,7 +52,7 @@ export async function publishBackgroundUsage(
     const reported = usage?.cached_tokens;
     const cached = Number(reported) || 0;
     try {
-      cost = (await deps().billing.calculateCost(modelId, prompt, completion, opts?.model, cached)) || 0;
+      cost = (await deps().billing.calculateCost(modelId, prompt, completion, opts?.model, cached, ...cacheWriteArg(cacheWriteOf(usage)))) || 0;
     } catch { /* 计价失败按 0 上报,事件本身不能丢 */ }
     await publish(runId, 'usage', {
       phase,

@@ -20,6 +20,7 @@ import { buildSharedPrefix } from './selfBrainstorm.js';
 import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail } from '../seams/billing.js';
 
 /** 快照留多久。客户端是收到 done 立刻来拉的;留长了只是多攥一会儿 workingMessages(可能带截图)。 */
 const SEED_TTL_MS = 90_000;
@@ -155,11 +156,12 @@ export async function suggestNextPrompt(opts: {
     const u: any = res?.usage || {};
     const usage = { prompt: Number(u.prompt_tokens) || 0, cached: Number(u.cached_tokens) || 0, completion: Number(u.completion_tokens) || 0 };
     try {
-      const cost = await billing.calculateCost(seed.modelId, usage.prompt, usage.completion, model, usage.cached);
+      const cacheWrite = cacheWriteOf(u);
+      const cost = await billing.calculateCost(seed.modelId, usage.prompt, usage.completion, model, usage.cached, ...cacheWriteArg(cacheWrite));
       await billing.consumeTokenPoints(user.id, cost);
       await (billing.logApiUsage as any)(
         (user as any).username || 'local', seed.modelId, (model as any)?.name, (model as any)?.provider,
-        usage.prompt, usage.completion, true, undefined, 'tangu-suggest', cost, usage.cached, opts.client,
+        usage.prompt, usage.completion, true, undefined, 'tangu-suggest', cost, usage.cached, opts.client, ...cacheWriteLogTail(cacheWrite),
       );
     } catch { /* 记账失败不该把已经拿到的建议丢掉 */ }
     // 截断的半句不给:用户按 Tab 拿到的得是一句完整的话。带着工具调用回来的也不给:那是它把对话接着做了下去

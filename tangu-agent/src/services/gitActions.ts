@@ -32,6 +32,7 @@ import { gitSettings } from './gitSettings.js';
 import { defaultWorkspaceDir } from '../channels/config.js';
 import { GitCredentialError, gitCredentialEnv, isGitAuthFailure, isRemoteDenial, refreshGitCredential, scrubGitSecrets, stripGitTraceEnv, type GitCredentialGrant } from './gitCredentials.js';
 import { remoteNameFor } from './gitRemotes.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail } from '../seams/billing.js';
 
 const ACTION_TIMEOUT_MS = 60_000;
 const PUSH_TIMEOUT_MS = 120_000;
@@ -823,11 +824,13 @@ export async function generateCommitMessage(cwd: string, opts: { userId: string;
   const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: opts.signal });
   const usage = res?.usage || ({} as any);
   const cached = usage.cached_tokens || 0;
-  const cost = await billing.calculateCost(modelId, usage.prompt_tokens || 0, usage.completion_tokens || 0, undefined, cached);
+  const cacheWrite = cacheWriteOf(usage);
+  const cost = await billing.calculateCost(modelId, usage.prompt_tokens || 0, usage.completion_tokens || 0, undefined, cached, ...cacheWriteArg(cacheWrite));
   await billing.consumeTokenPoints(user.id, cost).catch(() => {});
   await (billing.logApiUsage as any)(
     user.username, modelId, model.name, model.provider,
     usage.prompt_tokens || 0, usage.completion_tokens || 0, true, undefined, opts.appId, cost, cached,
+    ...(cacheWrite ? [undefined, ...cacheWriteLogTail(cacheWrite)] : []), // 第 12 位 client 不传,由 run 上下文补
   ).catch(() => {});
   const message = cleanCommitMessage(String(res?.content || ''));
   if (!message) throw new GitActionError('empty_message', 'The model returned an empty commit message');
