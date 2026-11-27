@@ -31,7 +31,7 @@ import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
 import { recordError } from './diag'
 import { installAccountTransition } from './services/accountTransition'
-import { installTabTitleBar } from './tabTitleBar'
+import { installTabTitleBar, installMacTrafficLights } from './tabTitleBar'
 import { installSandboxHook } from './sandbox/sandboxWindow'
 import { installPluginSandboxSurface } from './services/pluginSandboxSurface'
 
@@ -41,6 +41,7 @@ installPluginSandboxSurface() // 用户那份:声明 plugin.sandbox,接 plugin_s
 // Register for all desktop windows before workspace/Amadeus initialization.
 installAccountTransition()
 installTabTitleBar()
+installMacTrafficLights()
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。

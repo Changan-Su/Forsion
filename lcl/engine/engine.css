@@ -983,7 +983,10 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
  * 交通灯是原生的、不跟界面缩放走,所以除以 --uiz:放大时不多留白,缩小时不压到灯。让出来的这段仍是拖窗区。
  * 第二条:主窗那份「越过 ribbon 的 26px」在这里不再叠加。放文件末尾:第一条与上面左栏那条 26px 同特异性(DESIGN §7)。
  * 空左栏不画标签条(见「空侧栏占位」),那时交通灯浮在空白侧栏的左上角。 */
-[data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(70px / var(--uiz, 1)); }
+/* 红绿灯跟着界面缩放重摆(desktop tabTitleBar.ts installMacTrafficLights,左距 = 上距)后,放大到 120% 以上第三颗灯的右缘会越过 70px:
+ * 宿主把右缘写进 --mac-lights-end(视口 px),让位 = max(70, 右缘 − 2)(原生位置时右缘 ≈71.75,本来就伸进让位区约 2pt);
+ * 100% / 110% / 120% 时右缘 69 / 71 / 72,仍是 70,150% 起才跟着加宽。 */
+[data-platform='mac'] .shell--noribbon .dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-lights { padding-left: calc(max(70px, var(--mac-lights-end, 0px) - 2px) / var(--uiz, 1)); }
 
 /* Native Windows caption buttons share the top tab row. Padding expands the
  * toolbar's measured box so WorkspaceHost's existing overlap guard reserves
