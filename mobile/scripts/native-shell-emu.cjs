@@ -279,8 +279,48 @@ const FAKE_CALL_SOCKET = `(() => {
 // client asks again 0.8 s later, like after any dropped stream — and answers to its approvals (POST …/approvals/<id>)
 // are collected in `answers`.
 const live = { sessionId: '', runId: 'e2e-run', assistantId: 'e2e-run-reply', events: [], answers: [] }
-/** What `/brain/inbox/broadcasts` answers: the phone keeps its inbox on the device and fills it from there. */
-let inboxFeed = []
+/** The account's cloud inbox, which is what the phone lists since 2026-11-12: the bundled Extend provides the inbox channel
+ *  (`/brain/inbox/messages*`), and with it up the device-local list (`tangu_inbox_msgs`) is not read any more. Answered like
+ *  the server (server/microserver/brain-api/cloudInbox.ts) and like the `stage:phone` fake (phone-stage.cjs): rows are
+ *  broadcasts, ids `cloud:<broadcast id>`, sender forsion; `all` = not archived, newest first; the unread count's revision
+ *  moves with every change. Empty until a check puts mail in. */
+const cloudInbox = { rows: [] }
+const utcStamp = (agoMs = 0) => new Date(Date.now() - agoMs).toISOString().slice(0, 19).replace('T', ' ')
+const cloudMail = (id, title, body, createdAt = utcStamp()) => ({
+  id: `cloud:${id}`, title, body, sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: id, read_at: null, archived_at: null, created_at: createdAt,
+})
+/** [status, body] for a route under /brain/inbox/messages, or undefined for one the server does not have. */
+function cloudInboxAnswer(method, p, query, body) {
+  const rows = cloudInbox.rows
+  const live = rows.filter((m) => !m.archived_at)
+  if (/\/brain\/inbox\/messages$/.test(p) && method === 'GET') {
+    const filter = query.get('filter') || 'all'
+    if (!['all', 'unread', 'archived'].includes(filter)) return [400, { detail: 'Invalid inbox filter' }]
+    const out = filter === 'archived' ? rows.filter((m) => m.archived_at) : filter === 'unread' ? live.filter((m) => !m.read_at) : live
+    return [200, { messages: [...out].sort((a, b) => b.created_at.localeCompare(a.created_at)), nextCursor: null }]
+  }
+  if (/\/brain\/inbox\/messages\/unread-count$/.test(p) && method === 'GET') {
+    const latest = [...live].sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
+    return [200, { count: live.filter((m) => !m.read_at).length, latestId: latest?.id ?? null, latestCreatedAt: latest?.created_at ?? null, revision: rows.map((m) => `${m.id}:${m.read_at}:${m.archived_at}`).join('|') }]
+  }
+  if (/\/brain\/inbox\/messages\/read-all$/.test(p) && method === 'POST') { live.forEach((m) => { m.read_at = m.read_at || utcStamp() }); return [200, { ok: true }] }
+  const one = p.match(/\/brain\/inbox\/messages\/([^/]+)$/)
+  if (one && (method === 'PATCH' || method === 'DELETE')) {
+    const raw = decodeURIComponent(one[1])
+    if (!/^[0-9a-zA-Z-]{1,64}$/.test(raw)) return [400, { detail: 'Invalid message id' }]
+    const keys = Object.keys(body || {})
+    if (method === 'PATCH' && (!keys.length || keys.some((k) => !['read', 'archived'].includes(k) || typeof body[k] !== 'boolean'))) return [400, { detail: 'Expected read or archived booleans' }]
+    const row = rows.find((m) => m.id === `cloud:${raw}`)
+    if (!row) return [404, { detail: 'Message not found' }]
+    if (method === 'DELETE') cloudInbox.rows = rows.filter((m) => m !== row)
+    else {
+      if ('read' in body) row.read_at = body.read ? utcStamp() : null
+      if ('archived' in body) row.archived_at = body.archived ? utcStamp() : null
+    }
+    return [200, { ok: true }]
+  }
+  return undefined
+}
 function installStub(cdp) {
   cdp.on('Fetch.requestPaused', (ev) => {
     const url = new URL(ev.request.url)
@@ -301,7 +341,19 @@ function installStub(cdp) {
     }
     if (p.endsWith('/auth/me')) return json({ username: 'e2e', id: 'e2e', avatar: AVATAR })
     if (p.endsWith('/health')) return json({ ok: true, sandbox: 'e2e' })
-    if (p.endsWith('/inbox/broadcasts')) return json({ broadcasts: inboxFeed })
+    if (p.endsWith('/inbox/broadcasts')) return json({ broadcasts: [] }) // the old device-side pull; not used while the cloud channel is up
+    if (/\/brain\/inbox\/messages(\/|$)/.test(p)) {
+      let parsed = {}
+      try { parsed = JSON.parse(body || '{}') } catch { parsed = null }
+      const answer = parsed === null ? [400, { detail: 'Invalid JSON' }] : cloudInboxAnswer(m, p, url.searchParams, parsed)
+      if (answer) {
+        return cdp.send('Fetch.fulfillRequest', {
+          requestId: ev.requestId, responseCode: answer[0],
+          responseHeaders: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' }],
+          body: Buffer.from(JSON.stringify(answer[1])).toString('base64'),
+        }).catch(() => {})
+      }
+    }
     if (p.endsWith('/agent/special/config')) return json({})
     if (p.endsWith('/agent/agents') && m === 'GET') return json({ agents: [{ slug: 'e2e-agent', name: 'E2E Agent', description: 'Harness fixture' }, { slug: 'e2e-helper', name: 'E2E Helper', description: 'Second fixture' }] })
     if (p.endsWith('/agent/projects') && m === 'GET') return json({ projects: [{ name: 'E2E Alpha' }, { name: 'E2E Beta' }] })
@@ -531,6 +583,8 @@ const tabCountText = (list) => {
   const crypto = require('node:crypto')
   const PICK = {
     small: { name: 'e2e-pick-small.txt', dir: 'Download', data: Buffer.from('Forsion native picker fixture: small\n') },
+    // the multi-select step needs a name not in the composer yet: a second file of an existing name is skipped
+    small2: { name: 'e2e-pick-small-2.txt', dir: 'Download', data: Buffer.from('Forsion native picker fixture: small, the second\n') },
     mid: { name: 'e2e-pick-1m.bin', dir: 'Documents', data: crypto.randomBytes(1024 * 1024) },
     big: { name: 'e2e-pick-big.bin', dir: 'Download', data: crypto.randomBytes(26 * 1024 * 1024) }, // past the 25 MB per-file cap
     photo: { name: 'e2e-pick-photo.png', dir: 'Pictures', data: Buffer.from(AVATAR.split(',')[1], 'base64') }, // the photo picker lists indexed images only
@@ -871,7 +925,6 @@ const tabCountText = (list) => {
   const near = (a, b, tol = 2) => Math.abs(a - b) <= tol
   const sameRect = (a, b, tol = 2) => near(a.left, b.left, tol) && near(a.top, b.top, tol) && near(a.right, b.right, tol) && near(a.bottom, b.bottom, tol)
   const fmt = (r) => `[${r.left},${r.top}][${r.right},${r.bottom}]`
-  const INBOX_KEY = 'tangu_inbox_msgs' // the phone's local inbox (desktop/frontend/src/services/localInbox.ts)
   /** Closes every notification on screen (an error one stays until it is closed): the page's cards, and the phone's native
    *  banner (2026-11-15), which sits over the capsule row — a tap meant for a capsule lands on it while it is up. */
   const closeCards = async () => {
@@ -3185,13 +3238,10 @@ const tabCountText = (list) => {
   // category chips, icon buttons behind a left swipe, one main button. Since 2026-10-14 the mail is grouped by sender:
   // a group head (the workspace's first-level row, 52 dp on a 40 dp lead) and under it rows that carry no icon block,
   // only the unread dot. The mail comes in the way it does on
-  // a device — the main button pulls the broadcasts into the local inbox. The browser stage (`stage:phone`, inbox-*)
+  // a device — it is in the account's cloud inbox and the main button asks for it. The browser stage (`stage:phone`, inbox-*)
   // measures the layout; what it cannot do is done here: a real finger for the swipe, the long-press and the pull, the
   // native sheet behind the long-press, and the keyboard under the search line.
   await check('phone inbox list: the main button pulls the mail; a left swipe shows icon-only actions and "read" runs; a long-press opens the row menu natively; pulling down brings up the search line, above the keyboard; a row opens the message', async () => {
-    await cdp.eval(`(() => { const all = JSON.parse(localStorage.getItem(${JSON.stringify(INBOX_KEY)}) || '[]'), keep = all.filter((m) => !String(m.origin_broadcast_id || '').startsWith('e2e-mail-'))
-      if (keep.length !== all.length) localStorage.setItem(${JSON.stringify(INBOX_KEY)}, JSON.stringify(keep)); return true })()`) // this check's mail left by a run that died
-    const before = await cdp.eval(`localStorage.getItem(${JSON.stringify(INBOX_KEY)})`)
     const L = '.mb-drawer--left .t2sw-plug[data-timeline]'
     const rows = `[...document.querySelectorAll('${L} .t2sw-plug-item .t2s-srow')].filter((e) => e.textContent.includes('E2E mail'))`
     const rowE = (title) => `${rows}.find((e) => e.textContent.includes(${JSON.stringify(title)}))`
@@ -3214,11 +3264,17 @@ const tabCountText = (list) => {
       assert.ok(fab && fab.bottom <= dock.rect.top - 1 && fab.right <= screen.w, `the main button is not clear of the dock (${fab && fmt(fab)} vs ${fmt(dock.rect)})`)
       // the main button = "pull new mail". The mail is on the server only from here on, and the request has to follow the
       // tap: the app also pulls by itself now and then, and mail it fetched would be listed all the same.
-      inboxFeed = [['e2e-mail-1', 'E2E mail one', 2], ['e2e-mail-2', 'E2E mail two', 30], ['e2e-mail-3', 'E2E mail three', 90]]
-        .map(([id, title, ago]) => ({ id, title, body: `${title}: the first sentence. And a second one.`, created_at: stamp(ago) }))
+      // The inbox also polls the count every 15 s and reads the list when it moved: put the mail in right after one poll
+      // went by, so the next one is still seconds away when the tap is checked.
+      const tick = stubLog.length
+      assert.ok(await waitLog(tick, (l) => /^GET \S+\/brain\/inbox\/messages\/unread-count$/.test(l), 20000), 'the inbox never polled the account\'s cloud inbox')
+      cloudInbox.rows.push(...[['e2e-mail-1', 'E2E mail one', 2], ['e2e-mail-2', 'E2E mail two', 30], ['e2e-mail-3', 'E2E mail three', 90]]
+        .map(([id, title, ago]) => cloudMail(id, title, `${title}: the first sentence. And a second one.`, stamp(ago))))
+      // a pull always reads the list again; the poll reads it only when the count's revision moved
+      const listAsked = (l) => /^GET \S+\/brain\/inbox\/messages$/.test(l)
       const asked = stubLog.length
       await tapEl(fabE)
-      assert.ok(await waitLog(asked, (l) => l.startsWith('GET ') && l.includes('/inbox/broadcasts'), 6000), `the main button asked the server for nothing (stub: ${stubLog.slice(-6).join(' | ')})`)
+      assert.ok(await waitLog(asked, listAsked, 6000), `the main button asked the server for nothing (stub: ${stubLog.slice(-6).join(' | ')})`)
       assert.ok(await h.waitPage(cdp, `${titles}.join('|') === 'E2E mail one|E2E mail two|E2E mail three'`, 12000), `the pulled mail is not listed, newest first: ${JSON.stringify(await cdp.eval(titles))} (stub: ${stubLog.slice(-6).join(' | ')})`)
       await h.pause(600)
       await closeCards() // "3 new" and the new-mail card: they are the next check's
@@ -3241,10 +3297,12 @@ const tabCountText = (list) => {
       // a real finger: the tray behind a left swipe
       const two = rowE('E2E mail two')
       const tray = `${two}.closest('.pl-swipe')`
-      const open = `(${tray}?.scrollLeft || 0) > 40`
+      // the row rides a track the finger moves (2026-10-14, as in "phone list" above; it was a horizontal scroller until then)
+      const offset = `(() => { const m = getComputedStyle(${tray}.firstElementChild).transform; return m === 'none' ? 0 : Math.round(new DOMMatrixReadOnly(m).m41) })()`
+      const open = `${tray}?.hasAttribute('data-open') && ${offset} < -40`
       assert.ok(await cdp.eval(`!!${tray}`), 'an inbox row has no swipe tray')
       await swipeEl(two, -150)
-      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (scrollLeft ${await cdp.eval(`${tray}.scrollLeft`)})`)
+      assert.ok(await h.waitPage(cdp, open, 3000), `a left swipe did not show the tray (offset ${await cdp.eval(offset)})`)
       assert.equal(await cdp.eval(nav), 'list', 'the swipe was taken as a tap')
       const looks = JSON.parse(await cdp.eval(`JSON.stringify([...${tray}.querySelectorAll('.pl-swipe-act')].map((b) => ({ id: b.dataset.act, text: b.textContent.trim(), name: b.getAttribute('aria-label') || '', svg: !!b.querySelector('svg'), opacity: getComputedStyle(b).opacity, scale: getComputedStyle(b).scale })))`))
       assert.deepEqual(looks.map((b) => b.id), ['read', 'archive', 'delete'])
@@ -3252,8 +3310,12 @@ const tabCountText = (list) => {
       const last = await elRect(`${tray}.querySelector('[data-act="delete"]')`)
       assert.ok(last && last.right <= screen.w + 1, `the tray is not fully on screen (${last && fmt(last)})`)
       shot('17i-inbox-swipe-tray')
+      const readAt = stubLog.length
       await tapEl(`${tray}.querySelector('[data-act="read"]')`)
       assert.ok(await h.waitPage(cdp, `!${two}.classList.contains('is-unread') || null`, 4000), '"mark read" in the tray did not run')
+      const readPatch = (l) => { const m = l.match(/^PATCH \S+\/brain\/inbox\/messages\/e2e-mail-2 (.+)$/); try { return !!m && JSON.parse(m[1]).read === true } catch { return false } }
+      assert.ok(await waitLog(readAt, readPatch, 4000),`"mark read" did not reach the account's inbox (stub: ${stubLog.slice(-6).join(' | ')})`)
+      assert.ok(cloudInbox.rows.find((m) => m.origin_broadcast_id === 'e2e-mail-2')?.read_at, 'the account\'s inbox did not keep "read"')
       await h.pause(500)
       assert.ok(await cdp.eval(`!(${open})`), 'the tray stayed open after its action')
 
@@ -3266,14 +3328,16 @@ const tabCountText = (list) => {
       shot('17j-inbox-row-menu')
       h.key(4)
       await waitSheet(false)
-      // and on the main button = the source's other actions
+      // and on the main button = the source's other actions. The poll after "read" reads the list (the revision moved):
+      // let it go by first, or it reads as a pull.
+      assert.ok(await waitLog(readAt, listAsked, 20000), 'the inbox never read the list again after "read" changed it')
       const held = stubLog.length
       await holdEl(fabE)
       menu = await waitSheet(true)
       assert.deepEqual(ids(menu).map((i) => rowLabel(menu, `nativeSheet.item.${i}`)), ['全部已读'], 'the main button\'s long-press menu = the source\'s other actions')
       h.key(4)
       await waitSheet(false)
-      assert.ok(!stubLog.slice(held).some((l) => l.includes('/inbox/broadcasts')), 'the long-press on the main button also pulled')
+      assert.ok(!stubLog.slice(held).some(listAsked), 'the long-press on the main button also pulled')
 
       // pulling the list down = its search line, in the list (not the palette), with the keyboard
       await cdp.eval(`(document.querySelector('${L} .t2sw-plug-list').scrollTop = 0, true)`)
@@ -3314,9 +3378,8 @@ const tabCountText = (list) => {
       h.key(4)
       assert.ok(await h.waitPage(cdp, `${nav} === 'list'`, 5000), 'back did not return to the inbox list')
     } finally {
-      inboxFeed = []
+      cloudInbox.rows = cloudInbox.rows.filter((m) => !m.origin_broadcast_id.startsWith('e2e-mail-'))
       if (imeShown()) { h.key(4); await h.pause(600) }
-      await cdp.eval(`(() => { const v = ${JSON.stringify(before)}; v == null ? localStorage.removeItem(${JSON.stringify(INBOX_KEY)}) : localStorage.setItem(${JSON.stringify(INBOX_KEY)}, v); return true })()`).catch(() => {})
       await closeCards().catch(() => {})
     }
   })
@@ -3665,35 +3728,40 @@ const tabCountText = (list) => {
 
   // ── picked content → composer: what the file, photo and camera checks all read ──
   const top = () => h.adb('shell', 'dumpsys', 'activity', 'activities').match(/topResumedActivity=.*/)?.[0] || ''
-  /** Composer state (attachments + workspace files) read from the React fiber of a chip: name, declared size, decoded bytes, sha256. */
-  const composerFiles = `(async () => { const el = document.querySelector('.t2c-chiprow .attach-chip'); if (!el) return []
-    const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
-    for (let f = el[key]; f; f = f.return) {
-      const found = []
-      for (let st = f.memoizedState; st && typeof st === 'object' && 'next' in st; st = st.next) {
-        const v = st.memoizedState
-        if (Array.isArray(v) && v.length && v.every((a) => a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number')) found.push(...v)
-      }
-      if (found.length) return Promise.all(found.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
-        const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
-        return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } }))
-    }
-    return null })()`
+  /** Composer files (attachments + workspace files), one per attachment tile (tiles replaced the chips), read from the
+   *  tile's React props: name, declared size, decoded bytes, sha256. null = a tile whose file could not be read. */
+  const composerFiles = `(async () => { const files = [...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((el) => {
+      const key = Object.keys(el).find((k) => k.startsWith('__reactFiber$'))
+      for (let f = el[key]; f; f = f.return) { const a = f.memoizedProps?.file; if (a && typeof a.name === 'string' && typeof a.data === 'string' && typeof a.size === 'number') return a }
+      return null })
+    if (files.some((a) => !a)) return null
+    return Promise.all(files.map(async (a) => { const bin = Uint8Array.from(atob(a.data), (c) => c.charCodeAt(0))
+      const d = new Uint8Array(await crypto.subtle.digest('SHA-256', bin))
+      return { name: a.name, size: a.size, bytes: bin.length, sha256: [...d].map((b) => b.toString(16).padStart(2, '0')).join('') } })) })()`
   const want = (f) => ({ name: f.name, size: f.data.length, bytes: f.data.length, sha256: f.sha256 })
-  const chipNames = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
-  const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
+  const chipNames = "[...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((e) => e.title)"
+  /** What the notice on screen says: on a phone that is the native banner under the status bar (2026-11-15; the page draws
+   *  no card). '' = none up. */
+  const bannerOf = (l) => { const c = h.byId(l, 'nativeBanner.card'); return c ? [c, ...l.filter((n) => within(c, n))].map((n) => n.text || n['content-desc'] || '').filter(Boolean).join(' | ') : '' }
+  const toastsNow = () => bannerOf(ui())
+  /** The banner's words once they include `text`; null when they did not within `timeout`. */
+  const toastSays = async (text, timeout) => (await h.waitNodes((l) => (bannerOf(l).includes(text) ? bannerOf(l) : null), { timeout })).hit || null
 
-  const backInApp = async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
+  const backInApp =async () => assert.ok((await h.waitNodes(() => resumed(), { timeout: 15000 })).hit, 'did not return to the app (picker hung?)')
   /** The composer's files once there are `count` of them (or whatever is there when the wait runs out). */
   const settled = async (count) => {
     const end = Date.now() + 20000
     let got = null
-    while (Date.now() < end) { got = await cdp.eval(composerFiles); if (got && got.length === count) return got; await h.pause(400) }
+    // a tile shows up before its file is read (2026-10-24, composerUploads.ts): wait for the bytes too
+    while (Date.now() < end) { got = await cdp.eval(composerFiles); if (got && got.length === count && got.every((f) => f.bytes === f.size)) return got; await h.pause(400) }
     return got
   }
   /** No attachments in the composer and no notification left on screen. */
-  const clearComposer = () => cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
-    const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+  const clearComposer = async () => {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-tilerow .att-tile:not(.is-leaving) .att-tile-x', '.ntf-close']) for (let i = 0; i < 8; i++) {
+      const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    return closeCards() // the native banner too
+  }
 
   await check('files: system picker → composer (content URIs streamed through the local server): right name + bytes, > 25 MB named in the toast and not attached, cancel is a no-op', async () => {
     pushPickFixtures()
@@ -3743,7 +3811,7 @@ const tabCountText = (list) => {
     await backInApp()
     await h.pause(800)
     assert.deepEqual(await cdp.eval(chipNames), [])
-    assert.equal(await cdp.eval(toasts), '', 'cancel showed a toast')
+    assert.equal(toastsNow(), '', 'cancel showed a toast')
 
     // 1) small text file from Downloads
     await openPicker()
@@ -3768,23 +3836,23 @@ const tabCountText = (list) => {
     await toRoot('Downloads')
     h.tapNode(await entry(PICK.big.name))
     await backInApp()
-    const toast = await h.waitPage(cdp, `(() => { const t = ${toasts}; return t.includes(${JSON.stringify(PICK.big.name)}) ? t : null })()`, 10000)
-    assert.ok(toast, `no toast named the skipped file (toasts: ${await cdp.eval(toasts)})`)
+    const toast = await toastSays(PICK.big.name, 10000)
+    assert.ok(toast, `no toast named the skipped file (toasts: ${toastsNow()})`)
     console.log('  skipped toast:', toast)
     shot('23c-files-skipped-toast')
     assert.deepEqual((await settled(2)).map((f) => f.name), [PICK.small.name, PICK.mid.name], 'the oversized file was attached')
 
-    // 4) multi-select (clipData path): small + big in one go → small attached again, big skipped
+    // 4) multi-select (clipData path): another small file + big in one go → the small one attached, big skipped
     await openPicker()
     await toRoot('Downloads')
-    h.longPress(await entry(PICK.small.name))
+    h.longPress(await entry(PICK.small2.name))
     await h.pause(800)
     h.tapNode(await entry(PICK.big.name))
     const select = (await h.waitNodes((l) => h.byId(l, 'com.google.android.documentsui:id/action_menu_select'), { timeout: 5000 })).hit
     assert.ok(select, 'picker: multi-select "Select" action missing')
     h.tapNode(select)
     await backInApp()
-    assert.deepEqual(await settled(3), [want(PICK.small), want(PICK.mid), want(PICK.small)])
+    assert.deepEqual(await settled(3), [want(PICK.small), want(PICK.mid), want(PICK.small2)])
 
     const log = h.adb('logcat', '-d').split('\n').filter((l) => /Unable to open content URL/.test(l))
     assert.deepEqual(log, [], 'local server could not open a picked content URL')
@@ -3794,10 +3862,7 @@ const tabCountText = (list) => {
   })
   // Leave a clean stage whatever the check's outcome: no attachments in the composer, and no error toast left on
   // screen (they stay up for a while and cover the top of the drawer, where the next check taps "new chat").
-  try {
-    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
-      const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
-  } catch { /* page reloading */ }
+  try { await clearComposer() } catch { /* page reloading */ }
 
   // "+" → Photos / Take photo. Both leave the app for a system surface (the photo picker, the camera app) and come back
   // with content the page reads like any other picked document. The camera needs the runtime permission first: the merged
@@ -3825,7 +3890,7 @@ const tabCountText = (list) => {
     h.key(4)
     await backInApp()
     await h.pause(800)
-    assert.deepEqual([await cdp.eval(chipNames), await cdp.eval(toasts)], [[], ''], 'cancelling the photo picker changed something')
+    assert.deepEqual([await cdp.eval(chipNames), toastsNow()], [[], ''], 'cancelling the photo picker changed something')
     await openPhotos()
     const thumb = (await h.waitNodes(idEnds(':id/icon_thumbnail'), { timeout: 8000 })).hit
     assert.ok(thumb, 'photo picker: no photo listed')
@@ -3838,7 +3903,7 @@ const tabCountText = (list) => {
     // ("1000000071.png"). Which photo it was is told by its bytes.
     const content = (f) => ({ size: f.size, bytes: f.bytes, sha256: f.sha256 })
     const picked = await settled(1)
-    assert.deepEqual((picked || []).map(content), [content(want(PICK.photo))], `the picked photo is not in the composer: ${JSON.stringify(picked)} (toasts: ${await cdp.eval(toasts)})`)
+    assert.deepEqual((picked || []).map(content), [content(want(PICK.photo))], `the picked photo is not in the composer: ${JSON.stringify(picked)} (toasts: ${toastsNow()})`)
     assert.match(picked[0].name, /\.png$/, 'the photo lost its type')
     const photoName = picked[0].name
 
@@ -3848,10 +3913,10 @@ const tabCountText = (list) => {
     assert.ok(asked, `the system did not ask for the camera (${top()})`)
     shot('43-camera-permission')
     h.tapNode(asked)
-    assert.ok(await h.waitPage(cdp, `(${toasts}).includes('没有相机权限')`, 8000), `a refused camera was not told (toasts: ${await cdp.eval(toasts)})`)
+    assert.ok(await toastSays('没有相机权限', 8000), `a refused camera was not told (toasts: ${toastsNow()})`)
     assert.deepEqual(await cdp.eval(chipNames), [photoName], 'a refusal attached something')
     assert.ok(!/camera/i.test(top()), 'the camera opened without the permission')
-    await cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
+    await closeCards()
 
     // Take photo, allowed: the camera app takes it into our cache file; the page attaches it
     const shoot = async () => {
@@ -3865,13 +3930,17 @@ const tabCountText = (list) => {
     asked = (await h.waitNodes(idEnds('permissioncontroller:id/permission_allow_foreground_only_button'), { timeout: 8000 })).hit
     assert.ok(asked, 'a second request did not ask again')
     h.tapNode(asked)
+    // a tap while the dialog is still sliding in can be lost (seen on an x86_64 emulator): tap again if it is still up
+    await h.pause(1500)
+    const stillAsked = idEnds('permissioncontroller:id/permission_allow_foreground_only_button')(ui())
+    if (stillAsked) { console.log('  (camera permission: the first tap on "allow" was lost — tapping again)'); h.tapNode(stillAsked) }
     h.tapNode(await shoot())
     const done = (await h.waitNodes(idEnds(':id/done_button'), { timeout: 20000 })).hit
     assert.ok(done, 'camera: no "Done" after the shot')
     h.tapNode(done)
     await backInApp()
     const files = await settled(2)
-    assert.ok(files && files.length === 2, `the shot was not attached: ${JSON.stringify(files)} (toasts: ${await cdp.eval(toasts)})`)
+    assert.ok(files && files.length === 2, `the shot was not attached: ${JSON.stringify(files)} (toasts: ${toastsNow()})`)
     assert.deepEqual(files[0], picked[0])
     assert.match(files[1].name, /^IMG_\d{8}_\d{6}\.jpg$/, 'the shot is named by when it was taken')
     assert.ok(files[1].bytes > 1000 && files[1].bytes === files[1].size, `the shot has no content: ${JSON.stringify(files[1])}`)
@@ -3884,7 +3953,7 @@ const tabCountText = (list) => {
     h.key(4)
     await backInApp()
     await h.pause(800)
-    assert.deepEqual([(await settled(2)).map((f) => f.name), await cdp.eval(toasts)], [[photoName, files[1].name], ''], 'backing out of the camera changed something')
+    assert.deepEqual([(await settled(2)).map((f) => f.name), toastsNow()], [[photoName, files[1].name], ''], 'backing out of the camera changed something')
     // the shot read a moment ago is kept for a minute (the next capture or app start removes it); the abandoned target is not
     const left = runAs('ls', 'cache/camera').split(/\s+/).filter(Boolean)
     assert.ok(left.every((f) => f === files[1].name), `files left in cache/camera: ${left}`)
@@ -4051,7 +4120,7 @@ const tabCountText = (list) => {
     const setDraft = async (v) => assert.ok(await cdp.eval(`(() => { const ta = document.querySelector('.t2c-ta'); if (!ta) return false
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ${JSON.stringify(v)}); ta.dispatchEvent(new Event('input', { bubbles: true })); return true })()`), 'no message box on screen')
     const closeToasts = () => cdp.eval(`(async () => { for (let i = 0; i < 8; i++) { const b = document.querySelector('.ntf-close'); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
-    const chips = "[...document.querySelectorAll('.t2c-chiprow .attach-chip > span:first-of-type')].map((e) => e.textContent)"
+    const chips = "[...document.querySelectorAll('.t2c-tilerow .att-tile:not(.is-leaving)')].map((e) => e.title)"
     const toasts = "[...document.querySelectorAll('.ntf-text')].map((e) => e.textContent).join(' | ')"
     const inChat = "!!document.querySelector('.t2-userwrap')" // a message on screen = not a new chat
     const unsent = (from) => assert.ok(!stubLog.slice(from).some((l) => /^POST \S+\/agent\/runs/.test(l)), 'the share was sent on its own')
@@ -4215,7 +4284,7 @@ const tabCountText = (list) => {
   })
   // Leave a clean stage (see the same block before the voice check): no attachments, no toast over the drawer's top.
   try {
-    await cdp.eval(`(async () => { for (const sel of ['.t2c-chiprow .attach-chip button', '.ntf-close']) for (let i = 0; i < 8; i++) {
+    await cdp.eval(`(async () => { for (const sel of ['.t2c-tilerow .att-tile:not(.is-leaving) .att-tile-x', '.ntf-close']) for (let i = 0; i < 8; i++) {
       const b = document.querySelector(sel); if (!b) break; b.click(); await new Promise((r) => setTimeout(r, 150)) } return true })()`)
   } catch { /* page reloading */ }
 
@@ -5005,14 +5074,13 @@ const tabCountText = (list) => {
     assert.ok(await until(() => !resumed(), 6000), 'the app is still in front after HOME')
     await h.pause(800)
   }
-  /** A new message in the local inbox, the way the periodic pull stores one; the inbox's own poll (15 s) finds it. */
-  const inboxArrives = (id, title) => cdp.eval(`(() => {
-    const rows = JSON.parse(localStorage.getItem(${JSON.stringify(INBOX_KEY)}) || '[]')
-    rows.push({ id: 'bc:' + ${JSON.stringify(id)}, title: ${JSON.stringify(title)}, body: 'Harness fixture', sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: ${JSON.stringify(id)},
-      read_at: null, archived_at: null, created_at: new Date().toISOString().slice(0, 19).replace('T', ' '), deleted_at: null })
-    localStorage.setItem(${JSON.stringify(INBOX_KEY)}, JSON.stringify(rows))
+  /** A new message in the account's cloud inbox; the inbox's own poll (15 s) finds it. Since 2026-10-18 new mail only lights
+   *  the badge, and only letters waiting for a decision (an approval fence) and the user's automation reminders still
+   *  notify (inboxStore `inboxLetterPops`). Cloud rows are always Forsion's, so the fixture carries an approval fence. */
+  const inboxArrives = async (id, title) => {
+    cloudInbox.rows.push(cloudMail(id, title, 'Harness fixture\n\n```forsion-approval\n{"id":"e2e-approval"}\n```'))
     return true
-  })()`)
+  }
 
   await check('island: a run that ends while the app is in the background always leaves "finished" (6 rounds), never the last running state', async () => {
     // The finished state used to replace the ongoing notification under the same id, right after the keep-alive
@@ -5137,8 +5205,7 @@ const tabCountText = (list) => {
   })
 
   await check('notifications: what the app notifies in-app is mirrored as a system notification while it is in the background (one per kind, not "run finished": the island reports that), never in front, and gone on return', async () => {
-    const inboxBefore = await cdp.eval(`localStorage.getItem(${JSON.stringify(INBOX_KEY)})`)
-    const bridge = (title, text, event) => cdp.eval(`window.tangu.notify(${JSON.stringify(title)}, ${JSON.stringify(text)}, { event: ${JSON.stringify(event)} }).then(() => true)`)
+    const bridge =(title, text, event) => cdp.eval(`window.tangu.notify(${JSON.stringify(title)}, ${JSON.stringify(text)}, { event: ${JSON.stringify(event)} }).then(() => true)`)
     const problems = []
     try {
       await goHome()
@@ -5169,10 +5236,18 @@ const tabCountText = (list) => {
       h.adb('shell', 'am', 'start', '-n', ACTIVITY)
       assert.ok(await until(() => resumed(), 6000), 'the app did not come to the front')
       if (!(await until(() => !eventNotes().length, 6000))) problems.push(`left in the shade after returning: ${eventNotes().map((e) => e.tag).join(', ')}`)
+      // … and the app's own notice for the mail that came meanwhile comes up: on a phone the native banner (2026-11-15; the
+      // page draws no card), queued while the app was away and shown on return
+      const bannerSays = (l, text) => { const c = h.byId(l, 'nativeBanner.card'); return !!c && [c, ...l.filter((n) => within(c, n))].some((n) => (n.text || n['content-desc'] || '').includes(text)) }
+      if (!(await h.waitNodes((l) => (bannerSays(l, 'E2E inbox') ? l : null), { timeout: 8000 })).hit) problems.push('no in-app notice (native banner) for the mail that came while the app was away')
       // … and in front nothing is mirrored: neither through the app's own notifications, nor when the bridge is called
-      // (the page counts as unfocused under a native sheet too; the plugin goes by the activity)
+      // (the page counts as unfocused under a native sheet too; the plugin goes by the activity). The banner for this one
+      // may stay down: on a phone a source whose card just left cools down for 30 s (notificationStore PHONE) — logged only.
+      const seen = stubLog.length
       await inboxArrives('e2e-inbox-3', 'E2E inbox three')
-      assert.ok(await h.waitPage(cdp, "[...document.querySelectorAll('.ntf-text')].some((e) => e.textContent.includes('E2E inbox three'))", 25000), 'no in-app card for the inbox message')
+      assert.ok(await waitLog(seen, (l) => /^GET \S+\/brain\/inbox\/messages$/.test(l), 25000), 'the inbox did not read the new mail while in front')
+      const inFront = (await h.waitNodes((l) => (bannerSays(l, 'E2E inbox three') ? l : null), { timeout: 4000 })).hit
+      console.log(`  (in front: ${inFront ? 'a banner for the new mail' : 'no banner for the new mail (its source cooling down)'})`)
       await bridge('E2E', 'E2E in front', 'sync.error')
       await h.pause(1500)
       if (eventNotes().length) problems.push(`posted while the app was in front: ${eventNotes().map((e) => `${e.tag} "${e.text}"`).join(', ')}`)
@@ -5181,7 +5256,7 @@ const tabCountText = (list) => {
       try { shade(false) } catch { /* no shade service */ }
       h.adb('shell', 'am', 'start', '-n', ACTIVITY)
       await cdp.eval('Capacitor.Plugins.LiveIsland.reset().then(() => true)').catch(() => {})
-      await cdp.eval(`(() => { const v = ${JSON.stringify(inboxBefore)}; v == null ? localStorage.removeItem(${JSON.stringify(INBOX_KEY)}) : localStorage.setItem(${JSON.stringify(INBOX_KEY)}, v); return true })()`).catch(() => {})
+      cloudInbox.rows = cloudInbox.rows.filter((m) => !m.origin_broadcast_id.startsWith('e2e-inbox-'))
       await reload()
     }
   })
