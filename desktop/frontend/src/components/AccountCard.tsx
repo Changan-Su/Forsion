@@ -89,7 +89,7 @@ export const AccountCard: React.FC<{
   const [auth, setAuth] = useState<AuthStatusInfo | null>(null)
   const [loggingIn, setLoggingIn] = useState(false)
   const [imgError, setImgError] = useState(false)
-  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; anchorTop: number; below?: boolean; room: number } | null>(null)
   const [quota, setQuota] = useState<AccountQuotaView | null>(null)
   const [quotaErr, setQuotaErr] = useState(false)
   const [rewards, setRewards] = useState<AccountRewards>(emptyAccountRewards)
@@ -226,7 +226,10 @@ export const AccountCard: React.FC<{
   const openMenu = (el: HTMLElement): void => {
     menuAnchorRef.current = el
     const r = el.getBoundingClientRect()
-    setMenu({ x: r.left, y: r.top, anchorTop: r.top })
+    // 锚点在窗口上半截(Chat 头像资料卡里点「账号」时锚在消息头像上)→ 往下开、高度按下方空间;侧栏底部的账号卡照旧往上开。
+    // 原来一律往上开、Unit 段高度按锚点上方算:锚在顶上时只剩几十 px,菜单被压扁、各行叠在一起。
+    const below = r.top + r.height / 2 < window.innerHeight / 2
+    setMenu(below ? { x: r.left, y: r.bottom + 4, anchorTop: r.top, below, room: window.innerHeight - r.bottom - 12 } : { x: r.left, y: r.top, anchorTop: r.top, room: r.top - 8 })
     setQuotaOpen(false) // 同 09-28 前:每次打开从收起的一行摘要起步
     setConfirmCard(false)
     setQuotaErr(false)
@@ -483,6 +486,19 @@ export const AccountCard: React.FC<{
     publishAccountChip(mine)
     return () => { if (accountChip() === mine) publishAccountChip(null) }
   }, [stateLabel, loggedIn, initial, picture])
+  // Tangu 界面(Chat 头像资料卡的「账号」)不能直引宿主的 accountChip(tangu-boundary:Tangu → 宿主的依赖只许减),
+  // 走 window 事件:detail.anchor = 菜单锚在哪;preventDefault = 有人接了。事件名在 views/chat2/ProfileCard.tsx 同写一份。
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const anchor = (e as CustomEvent<{ anchor?: HTMLElement }>).detail?.anchor
+      const el = anchor?.isConnected ? anchor : anchorRef.current
+      if (!el) return
+      e.preventDefault()
+      activateRef.current(el)
+    }
+    window.addEventListener('forsion:account-activate', on)
+    return () => window.removeEventListener('forsion:account-activate', on)
+  }, [])
 
   const avatarEl = picture ? (
     <img className="account-avatar" src={picture} alt="" onError={() => setImgError(true)} />
@@ -610,12 +626,12 @@ export const AccountCard: React.FC<{
   const menuEl = menu ? createPortal(
     <OverlayAt
       className={`account-pop${units ? ' account-pop--units' : ''}`}
-      style={units ? { '--ap-max': `${Math.max(0, menu.anchorTop - 8) / zoomOf(document.body)}px` } as React.CSSProperties : undefined}
+      style={units ? { '--ap-max': `${Math.max(0, menu.room) / zoomOf(document.body)}px` } as React.CSSProperties : undefined}
       innerRef={(el) => { popRef.current = el }}
       x={menu.x}
       y={menu.y}
       anchorTop={menu.anchorTop}
-      prefer="above"
+      prefer={menu.below ? 'below' : 'above'}
       margin={8}
       onPointerDown={(e) => e.stopPropagation()}
     >

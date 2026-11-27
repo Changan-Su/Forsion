@@ -93,6 +93,10 @@ import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 import { agentName, agentNames } from '../agentName'
+import { ProfileCard, type ProfileCardOpen } from './chat2/ProfileCard'
+import { speakerOf } from './chat2/profileCardModel'
+import { mentionAgentIn } from './chat2/mentionAgent'
+import type { ProfileOpener } from './chat2/EditorialMessage'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { tanguCount } from '../tangu/telemetry'
 
@@ -452,6 +456,25 @@ export function ChatView({ leaf, params }: ViewProps) {
   const userAvatar = s.authInfo?.avatar || undefined
   // 语音消息:该会话 agent 是否开启(voice-message 插件设置驱动);渲染语音条还需配了朗读 TTS 模型。
   const voiceOn = chatAgentSlug ? !!s.voiceOnByAgent[chatAgentSlug] : false
+
+  // 头像资料卡(方案 B,docs/ToBeImproved/聊天头像资料卡方案_2026-11-27):点消息的头像 / 名字条开。
+  // 回调要稳定(EditorialMessage 是 memo 的):发言人上下文放 ref,开卡时现读;只给开着卡的那条传 profileOpen。
+  const [profile, setProfile] = useState<(ProfileCardOpen & { msgId: string }) | null>(null)
+  const speakerCtx = useRef({ agentDefs: s.agentDefs, groupTempAgents: mvCfg.groupTempAgents, engineId: curEngineId || undefined, engineName: chatAgentName, chatAgentSlug })
+  speakerCtx.current = { agentDefs: s.agentDefs, groupTempAgents: mvCfg.groupTempAgents, engineId: curEngineId || undefined, engineName: chatAgentName, chatAgentSlug }
+  const openProfile = useCallback<ProfileOpener>((m, anchor, from) => {
+    setProfile((p) => (p && p.anchor === anchor ? null : { msgId: m.id, anchor, from, subject: m.role === 'user' ? { kind: 'user' } : speakerOf(m, speakerCtx.current) }))
+  }, [])
+  useEffect(() => { setProfile(null) }, [activeId])
+  // 「@ 它」只给这张输入卡能 @ 到的:私聊里 @ 的是项目;群聊只认成员;普通会话不 @ 自己、不 @ 停用的
+  const groupMembers = mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2 ? [...(mvCfg.groupAgents || []), ...(mvCfg.groupTempAgents || []).map((a) => a.slug)] : null
+  const canMention = (slug: string): boolean => {
+    if (params.readOnly || mvCfg.soloAgentSlug || mvCfg.soloEngineId) return false
+    if (groupMembers) return groupMembers.includes(slug)
+    const def = s.agentDefs.find((a) => a.slug === slug)
+    return !!def && !def.disabled && slug !== chatAgentSlug
+  }
+  const profileSlug = profile && (profile.subject.kind === 'agent' ? profile.subject.slug : profile.subject.kind === 'temp' ? profile.subject.def.slug : null)
 
   useEffect(() => { useApp.getState().ensureEngineCaps(curEngineId || undefined) }, [curEngineId])
   // 跑在外部引擎上的 Agent(定义里的 engine,11-14):身份照旧是这个 Agent(名字、头像、记忆),输入框按引擎那一套(引擎的模型、
@@ -897,6 +920,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           puts it afterwards), the input alone otherwise: an empty chat's mark is centred, not bottom-anchored.
           Markers only; nothing reads them elsewhere. */}
       <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
+        {profile && <ProfileCard key={profile.msgId + profile.from} open={profile} onClose={() => setProfile(null)}
+          onMention={profileSlug && canMention(profileSlug) ? (slug) => mentionAgentIn(chatColRef.current, slug) : undefined} />}
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
       {!params.miniSurface && <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />}
       {/* Human Desk 的东西拿到了主区时,摘要栏卡片栈不在场(右栏、窄过 760、画布)→ 卡在对话顶上;栏在场时 CSS 让掉它 */}
@@ -946,6 +971,8 @@ export function ChatView({ leaf, params }: ViewProps) {
                       return curEngineId ? undefined : chatAgentAvatar
                     })()}
                     agentNameFallback={chatAgentName}
+                    onProfile={openProfile}
+                    profileOpen={profile?.msgId === m.id ? profile.from : undefined}
                     onBringBack={m.id === bringBackMsgId ? bringBack : undefined}
                     userName={userName}
                     userAvatar={userAvatar}
