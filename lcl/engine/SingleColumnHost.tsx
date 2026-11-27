@@ -1286,11 +1286,14 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
   // ⚠️ 先摆左栏、再公布窄屏:公布的那一下左栏要是还开着,就是列表层 —— 列表行程(listTrips)当场把页内历史截成一页,
   //    回到详情后返回就跳过了这一趟里走过的页(Codex 评审)。
   const wideEntry = useRef<{ list: boolean; opens: number } | null>(null)
+  const wideSeen = useRef(false)
   useEffect(() => {
     const ws = useWorkspace.getState()
+    const cold = !wideSeen.current // 挂载时这一趟:一启动就是横着的,没有「转之前那一层」—— 转回竖屏按进 Space 的落点(列表层)
+    wideSeen.current = true
     if (wide) {
       ws.setWideMode(true) // store 据此决定主区导航后是否自动收左抽屉
-      wideEntry.current = { list: ws.leftVisible, opens: mainOpenCount() }
+      wideEntry.current = { list: cold || ws.leftVisible, opens: mainOpenCount() }
       if (!ws.leftVisible && (ws.leftLeaves.length > 0 || ws.sidebarDefaults.left.length > 0)) ws.toggleSidebar('left')
       return
     }
