@@ -19,6 +19,7 @@ import {
 const ENGINES = new Set(['legacy', 'content', 'remote', 'web'])
 const TARGETS = new Set(['penzor', 'dropbox', 'webdav', 's3', 'folder', 'gdrive', 'other'])
 const REASONS = new Set(['too-large', 'invalid-name', 'unreadable', 'rejected', 'failed'])
+const KINDS = new Set(['takeover', 'pair', 'scheduled', 'manual', 'flush'])
 const str = (v: unknown, max = 1024): string | null => (typeof v === 'string' && v.length <= max ? v : null)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0)
 
@@ -54,6 +55,12 @@ export function cleanRecord(raw: unknown): SyncRoundRecord | null {
     deletedCloud: num(r.deletedCloud), deletedLocal: num(r.deletedLocal), held: num(r.held),
     failed, failedCount: Math.max(failed.length, num(r.failedCount)),
     ...(r.first === true ? { first: true } : {}),
+    // 第 2 步的几个可选字段:认得的形状才留
+    ...(typeof r.kind === 'string' && KINDS.has(r.kind) ? { kind: r.kind } : {}),
+    ...(typeof r.replaced === 'number' ? { replaced: num(r.replaced) } : {}),
+    ...(Array.isArray(r.recoveryEvents) ? { recoveryEvents: r.recoveryEvents.map((x) => str(x, 300)).filter((x): x is string => x !== null).slice(0, SYNC_RECORD_MAX_FAILED) } : {}),
+    ...(Array.isArray(r.skipped) ? { skipped: r.skipped.map((x) => ({ path: str((x as { path?: unknown })?.path, 2048), reason: str((x as { reason?: unknown })?.reason, 200) }))
+      .filter((x): x is { path: string; reason: string } => x.path !== null && x.reason !== null).slice(0, SYNC_RECORD_MAX_FAILED) } : {}),
   }
 }
 

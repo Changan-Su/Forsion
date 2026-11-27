@@ -120,6 +120,8 @@ export interface SyncFeedReport {
   error: string | null
   /** 点「立即同步」对它有没有用 */
   canSyncNow: boolean
+  /** 第 2 步留的位置(接手 / 要用户选 / 要汇总卡 / 拒绝,见 step2-contract §3.11);第 1 步没有哪一路会给 */
+  notice?: 'takeover' | 'needs-choice' | 'needs-card' | 'refused'
 }
 
 /** 一轮做了什么(同步记录,一轮一行)。引擎侧合并碎轮:同一 id 再交一次 = 覆盖那一行。 */
@@ -147,6 +149,14 @@ export interface SyncRoundRecord {
   failedCount: number
   /** 这台第一次和云端对齐的那一轮 */
   first?: boolean
+  // ── 第 2 步留的位置(step2-contract §3.7);第 1 步的引擎不填,存取原样留着 ──
+  /** 这一轮是怎么起的 */
+  kind?: 'takeover' | 'pair' | 'scheduled' | 'manual' | 'flush'
+  /** 被换掉、进了找回区的份数(30 天找回另有一份账,不靠这份记录) */
+  replaced?: number
+  recoveryEvents?: string[]
+  /** 没动、也不算失败的(例:other-backing) */
+  skipped?: Array<{ path: string; reason: string }>
 }
 
 export const SYNC_RECORD_MAX_FAILED = 20
