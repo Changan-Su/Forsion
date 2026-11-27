@@ -201,7 +201,7 @@ async function main() {
     if (!loaded) throw new Error('前置失败:探针插件没装载')
 
     // ── phase old:老路(onVaultEvent create → writeFile)。观察项,三轮看稳不稳。 ──
-    for (const p of ['untitled.md', 'untitled-2.md', 'untitled-3.md']) {
+    for (const p of ['未命名.md', '未命名-2.md', '未命名-3.md']) {
       await win.evaluate(`window.__pbMode = 'old'; window.__pbLog = []`)
       const t0 = await win.evaluate(ARM(p))
       await clickNewNote(win)
@@ -227,7 +227,7 @@ async function main() {
     // ── phase new:registerNoteBirth ──
     const hasBirth = await win.evaluate('window.__pbHasBirth === true')
     check('N1 宿主提供 ctx.registerNoteBirth', hasBirth)
-    const pn = 'untitled-4.md'
+    const pn = '未命名-4.md'
     {
       await win.evaluate(`window.__pbMode = 'new'; window.__pbLog = []`)
       const t0 = await win.evaluate(ARM(pn))
@@ -262,13 +262,13 @@ async function main() {
       const done = await waitFor(() => (disk(pn) || '').includes('processed-by-plugin') && disk(pn), 6000)
       const proc = (await win.evaluate('(window.__pbLog || []).slice()')).find((e) => e.ev === 'process')
       check('T2 插件先处理原文(kind = insert,看到的是没替换过的 {{title}})', proc && proc.kind === 'insert' && proc.templatePath === 'MyTemplates/Meeting.md' && proc.targetPath === pn && proc.sawRawTitleVar, JSON.stringify(proc))
-      check('T3 插入结果 = 插件处理 + 宿主替换 {{title}},已落盘', done && done.includes('PROC:processed-by-plugin') && done.includes('Meeting for untitled-4') && done.includes(MARK), JSON.stringify(done || disk(pn)))
+      check('T3 插入结果 = 插件处理 + 宿主替换 {{title}},已落盘', done && done.includes('PROC:processed-by-plugin') && done.includes('Meeting for 未命名-4') && done.includes(MARK), JSON.stringify(done || disk(pn)))
     }
     await clearNotices(win)
 
     // ── 慢插件:等待提示 ──
     {
-      const p = 'untitled-5.md'
+      const p = '未命名-5.md'
       await win.evaluate(`window.__pbMode = 'new-slow'; window.__pbLog = []`)
       await clickNewNote(win)
       const notice = await waitFor(async () => { const txt = await win.evaluate(noticeTexts); return /正在准备这篇笔记/.test(txt) && txt }, 3000)
@@ -282,7 +282,7 @@ async function main() {
 
     // ── 不答的插件:取消 ──
     {
-      const p = 'untitled-6.md'
+      const p = '未命名-6.md'
       await win.evaluate(`window.__pbMode = 'new-hang'; window.__pbLog = []`)
       await clickNewNote(win)
       const btn = win.locator('.ntf', { hasText: '正在准备这篇笔记' }).locator('.ntf-action').first()
@@ -301,7 +301,7 @@ async function main() {
 
     // ── 抛错的插件 ──
     {
-      const p = 'untitled-7.md'
+      const p = '未命名-7.md'
       await win.evaluate(`window.__pbMode = 'new-throw'; window.__pbLog = []`)
       await clickNewNote(win)
       const born = await waitFor(() => disk(p) != null && { text: disk(p) }, 5000, 20)

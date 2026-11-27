@@ -350,7 +350,7 @@ With several rows selected, the right-click menu offers exactly two batch action
 
 | To create | How | What lands on disk |
 |---|---|---|
-| A note | Sidebar "New note", right-click blank space or a folder, `⌘/Ctrl + N`, command palette | `untitled.md` (then `untitled-2.md` on collision) |
+| A note | Sidebar "New note", right-click blank space or a folder, `⌘/Ctrl + N`, command palette | `Untitled.md` (then `Untitled-2.md` on collision) |
 | A sub-note | The ＋ at the end of a note row (tooltip "New sub-note"), or right-click the note | Written into `<Note>.fd/` |
 | A folder | Right-click blank space → "New folder"; right-click a folder → "New subfolder" | Default name "New folder" |
 | A database | Right-click blank space or a folder → "New base" | `Untitled database.db` |
@@ -359,7 +359,7 @@ With several rows selected, the right-click menu offers exactly two batch action
 
 - The sidebar's top strip has exactly two buttons: "New note" and "New whiteboard". Folders, bases and dashboards can only be created from a context menu (or the command palette).
 - `⌘/Ctrl + N` means "New note" only inside the Amadeus space — it takes over the new-chat binding while you are there and hands it back when you leave. With no vault open the command does nothing.
-- A new note really is called `untitled.md` on disk, but the title bar shows an empty field with the placeholder "New Page". Editing the title renames the file.
+- A new note really is called `Untitled.md` on disk (it follows the interface language: `未命名.md` in Chinese; a name clash ignores case), but the title bar shows an empty field with the placeholder "New page". Editing the title renames the file.
 - Sub-notes live in a `.fd` folder named after the note. That folder is hidden in the tree; the sub-notes hang off the parent note's row, which grows a chevron and a child count.
 - Creating a base with a name that already exists is rejected up front: "“{name}” already exists". That is deliberate — a table's file name and its internal title must match, and auto-appending a suffix would split them.
 - If you have plugins installed, their own "New X" entries appear below these built-in ones, with the plugin's own icon and wording.

@@ -228,6 +228,7 @@ registerMessages({
 
   'amxv.title.changeIcon': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
   'amxv.title.addIcon': { zh: '添加图标', en: 'Add icon' },
+  'amxv.title.placeholder': { zh: '无标题', en: 'New page' },
   'amxv.title.addCover': { zh: '添加封面', en: 'Add cover' },
 
   'amxv.pdf.exported': { zh: '已导出 PDF:{path}', en: 'PDF exported: {path}' },
@@ -2371,7 +2372,7 @@ export function NoteTitle() {
           ref={ref}
           className="amx-title-input"
           value={val}
-          placeholder="New Page"
+          placeholder={t('amxv.title.placeholder')}
           onChange={(e) => setVal(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {

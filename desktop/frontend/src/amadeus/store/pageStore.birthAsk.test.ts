@@ -47,6 +47,8 @@ async function fresh(bridge: Record<string, unknown> = {}) {
   })
   const ps = await import('./pageStore')
   const hooks = await import('../plugins/templateHooks')
+  // resetModules 换了一份 i18n:它按本机系统语言起步(testSetup 钉的是旧那份)。新建笔记的文件名跟语言走,这里钉回 zh
+  ;(await import('../../i18n')).setLocaleGlobal('zh')
   ps.usePageStore.setState({ vaultRoot: '/v', pages: [], files: [], folders: [], status: 'ready' })
   return { ...ps, hooks }
 }
@@ -63,10 +65,10 @@ describe('registerNoteBirth × 出生入口', () => {
     const seen: unknown[] = []
     hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: (i) => { seen.push({ path: i.path, folder: i.folder }); return '# From plugin\n' } })
     await usePageStore.getState().createPageInFolder('Inbox')
-    expect(seen).toEqual([{ path: 'Inbox/untitled.md', folder: 'Inbox' }])
-    expect(writeOf('Inbox/untitled.md')).toHaveLength(1) // 一写成型,没有「先空后填」
-    expect(writeOf('Inbox/untitled.md')[0]).toMatchObject({ text: '# From plugin\n', opts: { create: true } })
-    expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Inbox/untitled.md' })
+    expect(seen).toEqual([{ path: 'Inbox/未命名.md', folder: 'Inbox' }])
+    expect(writeOf('Inbox/未命名.md')).toHaveLength(1) // 一写成型,没有「先空后填」
+    expect(writeOf('Inbox/未命名.md')[0]).toMatchObject({ text: '# From plugin\n', opts: { create: true } })
+    expect(dispatched).toContainEqual({ type: 'amadeus:navigate-note', path: 'Inbox/未命名.md' })
   })
 
   it('插件填了内容的出生记进这个插件的新建记录(随后改名 / 挪动不问);插件不给(null)的不记', async () => {
@@ -74,9 +76,9 @@ describe('registerNoteBirth × 出生入口', () => {
     const { isPluginCreated } = await import('../plugins/pluginCreated')
     hooks.registerNoteBirth('tpl', () => 'Tpl', { id: 'b', initial: (i) => (i.path.startsWith('Inbox/') ? '# From plugin\n' : null) })
     await usePageStore.getState().createPageInFolder('Inbox')
-    expect(isPluginCreated('tpl', 'Inbox/untitled.md', '/v')).toBe(true)
-    expect(isPluginCreated('other', 'Inbox/untitled.md', '/v')).toBe(false)
-    expect(isPluginCreated('tpl', 'Inbox/untitled.md', '/elsewhere')).toBe(false)
+    expect(isPluginCreated('tpl', 'Inbox/未命名.md', '/v')).toBe(true)
+    expect(isPluginCreated('other', 'Inbox/未命名.md', '/v')).toBe(false)
+    expect(isPluginCreated('tpl', 'Inbox/未命名.md', '/elsewhere')).toBe(false)
     await usePageStore.getState().createWikiPage('Plain')
     expect(disk.get('Plain.md')).toBe('')
     expect(isPluginCreated('tpl', 'Plain.md', '/v')).toBe(false)

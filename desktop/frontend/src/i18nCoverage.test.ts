@@ -286,9 +286,8 @@ describe('i18n 覆盖', () => {
   it('I2. 同一范围里 aria-label / title / placeholder / alt 不许写死字面量(查找条的 aria 曾写死英文,C-14)', () => {
     // I 只管汉字;写死的英文同样是单语(中文界面下读屏念出 previous match)。命令式 DOM 的
     // `setAttribute('aria-label', '…')` / `el.title = '…'` 一并查。刻意保留的逐条登记理由。
-    const ALLOW: Record<string, string> = {
-      'amadeus/unified/UnifiedPage.tsx  placeholder="New Page"': '标题占位 New Page 是已定口径(手册写明,评审附录 A · C-15)',
-    }
+    // 标题占位 New Page 原先登记在这里(评审附录 A · C-15);2026-11 手机走查 a 改为跟界面语言(unipage.title.placeholder)
+    const ALLOW: Record<string, string> = {}
     const ATTR = /^(aria-label|title|placeholder|alt)$/
     const found: string[] = []
     const bad: string[] = []

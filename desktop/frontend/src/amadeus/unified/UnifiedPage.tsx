@@ -157,6 +157,8 @@ registerMessages({
   'unipage.title.iconAction': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
   'unipage.title.addIcon': { zh: '添加图标', en: 'Add icon' },
   'unipage.title.addCover': { zh: '添加封面', en: 'Add cover' },
+  // 空标题的占位(未命名笔记的标题栏显示为空、露出它):中文界面曾露英文 New Page(手机走查 2026-11-19)
+  'unipage.title.placeholder': { zh: '无标题', en: 'New page' },
   'unipage.toast.canvasElementsFailed': { zh: '画布改动没能保存：这篇笔记的 amadeus_canvas 行无法解析，请在源码模式检查', en: 'Canvas changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
   'unipage.toast.canvasTreeFailed': { zh: '层级改动没能保存：这篇笔记的 amadeus_canvas 行无法解析，请在源码模式检查', en: 'Hierarchy changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
   'unipage.toast.canvasMainFailed': { zh: '主卡改动没能保存：这篇笔记的 amadeus_canvas 行无法解析，请在源码模式检查', en: 'Main card changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
@@ -1301,7 +1303,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onDe
           rows={1}
           spellCheck={spell}
           value={val}
-          placeholder="New Page"
+          placeholder={t('unipage.title.placeholder')}
           // 标题是文件名:没有换行这回事。粘贴进来的换行折成空格(回车本身在下面拦掉,不会走到这里)。
           onChange={(e) => { const v = e.target.value.replace(/[\r\n]+/g, ' '); draft.current = v; setVal(v) }}
           onBlur={commit}
