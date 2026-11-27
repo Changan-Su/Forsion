@@ -66,10 +66,13 @@ export function RemoteSyncSection(): React.ReactElement | null {
       c ? { ...c, dropbox: { ...(c.dropbox ?? { appKey: '' }), refreshToken: d?.refreshToken, accountId: d?.accountId, email: d?.email } } : c,
     )
 
-  /** 同上,Google Drive:只吃凭据,不覆盖用户此刻未保存的客户端 / 目录输入。 */
+  /** Google Drive:token 只对签发它的客户端有效,所以客户端 ID / 密钥随凭据一起从主进程接回(等授权时改过的输入作废);
+   *  远端目录这类无关输入照旧保留。 */
   const applyGdCreds = (g?: RemoteSyncConfig['gdrive']): void =>
     setCfg((c) =>
-      c ? { ...c, gdrive: { ...(c.gdrive ?? { clientId: '' }), refreshToken: g?.refreshToken, accountId: g?.accountId, email: g?.email } } : c,
+      c
+        ? { ...c, gdrive: { ...(c.gdrive ?? { clientId: '' }), clientId: g?.clientId ?? '', clientSecret: g?.clientSecret ?? '', refreshToken: g?.refreshToken, accountId: g?.accountId, email: g?.email } }
+        : c,
     )
 
   useEffect(() => {

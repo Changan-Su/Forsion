@@ -9,7 +9,7 @@ import { isSafeKey } from './engine'
 type Stored = WireFile & { content?: Buffer }
 
 /** 极简 Drive v3:只认 fsGdrive 用到的那几条请求。 */
-function fakeDrive(opts: { pageSize?: number; failListPage?: number; rateLimitOnce?: boolean } = {}) {
+function fakeDrive(opts: { pageSize?: number; failListPage?: number; rateLimitOnce?: boolean; incomplete?: boolean; rateLimitPatchOnce?: () => void } = {}) {
   const files = new Map<string, Stored>()
   const sessions = new Map<string, { create?: Partial<Stored>; update?: string; meta: Partial<Stored> }>()
   const log: Array<{ method: string; url: string; body?: unknown }> = []
@@ -49,6 +49,12 @@ function fakeDrive(opts: { pageSize?: number; failListPage?: number; rateLimitOn
       rateLimited = true
       return json({ error: { errors: [{ reason: 'userRateLimitExceeded' }] } }, 403)
     }
+    if (opts.rateLimitPatchOnce && method === 'PATCH' && /^\/drive\/v3\/files\/./.test(u.pathname)) {
+      const hook = opts.rateLimitPatchOnce
+      opts.rateLimitPatchOnce = undefined
+      hook() // 退避期间另一台改了它
+      return json({ error: 'rate' }, 429)
+    }
     if (u.pathname === '/drive/v3/about') return json({ user: { permissionId: 'P1', emailAddress: 'a@example.com' } })
     if (u.hostname === 'upload.session') {
       const s = sessions.get(u.pathname)!
@@ -79,7 +85,7 @@ function fakeDrive(opts: { pageSize?: number; failListPage?: number; rateLimitOn
       const start = Number(u.searchParams.get('pageToken') || 0)
       if (!m && opts.failListPage !== undefined && start / size === opts.failListPage) return json({ error: 'boom' }, 500)
       const page = list.slice(start, start + size)
-      return json({ files: page.map(pub), nextPageToken: start + size < list.length ? String(start + size) : undefined })
+      return json({ files: page.map(pub), nextPageToken: start + size < list.length ? String(start + size) : undefined, incompleteSearch: !m && !!opts.incomplete })
     }
     const one = u.pathname.match(/^\/drive\/v3\/files\/(.+)$/)
     if (one) {
@@ -132,8 +138,9 @@ describe('fsGdrive', () => {
     expect(gdriveBaseSegs(' /a\\b/ ')).toEqual(['a', 'b'])
     expect(gdriveBaseSegs('../x')).toEqual(['x'])
     expect(qStr("it's a\\b")).toBe("'it\\'s a\\\\b'")
-    expect(dupKey('笔记/一.md', 'abcdefghijkl')).toBe('笔记/一 (conflict gdrive abcdefgh).md')
+    expect(dupKey('笔记/一.md', 'abcdefghijkl')).toBe('笔记/一 (conflict gdrive abcdefghijkl).md')
     expect(dupKey('README', 'x/y')).toBe('README (conflict gdrive xy)')
+    expect(dupKey('a.md', 'SAMEPREFIX1')).not.toBe(dupKey('a.md', 'SAMEPREFIX2')) // 不截短:前缀相同也不撞
     expect(isSafeKey(dupKey('a/.env', 'id1'))).toBe(true)
   })
 
@@ -153,9 +160,21 @@ describe('fsGdrive', () => {
       { id: 'out', name: 'outside.md', parents: ['OTHER'] },
     ]
     const tree = buildTree(all, ['B'])
+    // 空文件夹与文件撞名:文件照旧占原路径(否则推上去的文件下一轮变冲突 key,原 key 被当远端删除)
+    const empty = buildTree([
+      { id: 'F', name: 'n', mimeType: 'application/vnd.google-apps.folder', parents: ['B'] },
+      { id: 'f', name: 'n', parents: ['B'] },
+    ], ['B'])
+    expect([...empty.files.keys()]).toEqual(['n'])
     expect([...tree.files.keys()].sort()).toEqual(['a (conflict gdrive clash)', 'a/dup (conflict gdrive d2).md', 'a/dup.md', 'a/x.md', 'a/y.md'])
     expect(tree.files.get('a/dup.md')!.id).toBe('d1') // 同龄按 id 字典序
     expect(tree.folders.get('a')).toEqual(['A2', 'A1']) // 老的在前 = 新建子项的落点
+    // 派生 key 撞上真实文件名:整轮报错,不静默吞掉一个 ID
+    expect(() => buildTree([
+      { id: 'o', name: 'x.md', parents: ['B'], createdTime: t('1') },
+      { id: 'y', name: 'x.md', parents: ['B'], createdTime: t('2') },
+      { id: 'z', name: 'x (conflict gdrive y).md', parents: ['B'] },
+    ], ['B'])).toThrow(/gdrive-key-collision/)
   })
 
   it('walk:baseDir 不存在 = 空远端,而且不建任何东西(dry run 也走这里)', async () => {
@@ -255,6 +274,87 @@ describe('fsGdrive', () => {
     expect(d.files.has(f.id)).toBe(true) // 还在回收站里
     await r.rm('a.md', undefined, ent.id) // 幂等
     await r.rm('never.md') // 不在清单 = 幂等
+  })
+
+  it('写删前核对名字和父目录:walk 之后在网页版改名 / 移走(内容版本不变)→ cas-conflict', async () => {
+    const d = fakeDrive()
+    const base = d.folder('Forsion-Vault', 'root')
+    const other = d.folder('Elsewhere', 'root')
+    const a = d.put({ name: 'a.md', parents: [base.id] }, Buffer.from('a'))
+    const b = d.put({ name: 'b.md', parents: [base.id] }, Buffer.from('b'))
+    const r = remote()
+    const list = await r.walk()
+    const ida = list.find((e) => e.key === 'a.md')!.id
+    const idb = list.find((e) => e.key === 'b.md')!.id
+    a.name = 'renamed.md'
+    b.parents = [other.id]
+    await expect(r.rm('a.md', undefined, ida)).rejects.toThrow(/cas-conflict/)
+    await expect(r.writeFile('b.md', Buffer.from('x'), 1, undefined, idb)).rejects.toThrow(/cas-conflict/)
+    expect(a.trashed).toBe(false)
+    expect(b.content!.toString()).toBe('b')
+  })
+
+  it('限流重试前重新核对:退避期间另一台改了文件 → 不拿旧判断重发回收', async () => {
+    let f: Stored | undefined
+    const d = fakeDrive({ rateLimitPatchOnce: () => { Object.assign(f!, { headRevisionId: 'newer' }) } })
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const base = d.folder('Forsion-Vault', 'root')
+      f = d.put({ name: 'a.md', parents: [base.id] }, Buffer.from('v1'))
+      const r = remote()
+      const [ent] = await r.walk()
+      const p = r.rm('a.md', undefined, ent.id)
+      const settled = expect(p).rejects.toThrow(/cas-conflict/)
+      await vi.advanceTimersByTimeAsync(1500)
+      await settled
+      expect(f.trashed).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('建前复查查全部同名父目录:另一台在第二个同名文件夹里先建了 → cas-conflict', async () => {
+    const d = fakeDrive()
+    const base = d.folder('Forsion-Vault', 'root')
+    d.folder('notes', base.id)
+    const n2 = d.folder('notes', base.id)
+    d.put({ name: 'seed.md', parents: [n2.id] }, Buffer.from('s')) // 让 notes 非空
+    const r = remote()
+    await r.walk()
+    d.put({ name: 'x.md', parents: [n2.id] }, Buffer.from('theirs'))
+    await expect(r.writeFile('notes/x.md', Buffer.from('mine'), 1, undefined, null)).rejects.toThrow(/cas-conflict/)
+    expect(d.live().filter((x) => x.name === 'x.md')).toHaveLength(1)
+  })
+
+  it('rm 前置条件:null 而远端有 = 冲突;期望的那份已删但同名被重建 = 冲突;真没了 = 幂等', async () => {
+    const d = fakeDrive()
+    const base = d.folder('Forsion-Vault', 'root')
+    const f = d.put({ name: 'a.md', parents: [base.id] }, Buffer.from('v1'))
+    const r = remote()
+    const [ent] = await r.walk()
+    await expect(r.rm('a.md', undefined, null)).rejects.toThrow(/cas-conflict/)
+    f.trashed = true
+    const again = d.put({ name: 'a.md', parents: [base.id] }, Buffer.from('new'))
+    await expect(r.rm('a.md', undefined, ent.id)).rejects.toThrow(/cas-conflict/)
+    expect(again.trashed).toBe(false)
+    again.trashed = true
+    await r.rm('a.md', undefined, ent.id) // 两份都没了 = 已删,幂等
+  })
+
+  it('walk:Drive 自报结果不完整(incompleteSearch)→ 抛,不当成完整清单', async () => {
+    const d = fakeDrive({ incomplete: true })
+    d.folder('Forsion-Vault', 'root')
+    await expect(remote().walk()).rejects.toThrow(/incomplete/)
+  })
+
+  it('readFile:同样大小但内容换了一版(sha256 对不上)→ 抛,不把新内容记到旧身份上', async () => {
+    const d = fakeDrive()
+    const base = d.folder('Forsion-Vault', 'root')
+    const f = d.put({ name: 'a.md', parents: [base.id] }, Buffer.from('abc'))
+    const r = remote()
+    await r.walk()
+    f.content = Buffer.from('xyz')
+    await expect(r.readFile('a.md')).rejects.toThrow(/content mismatch/)
   })
 
   it('readFile:内容长度对清单 size 校验,不符即抛', async () => {

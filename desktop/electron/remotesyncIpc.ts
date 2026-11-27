@@ -353,7 +353,9 @@ function gdriveClient(g?: { clientId?: string; clientSecret?: string }): { clien
   return { clientId: FORSION_GDRIVE_CLIENT_ID, clientSecret: FORSION_GDRIVE_CLIENT_SECRET || undefined }
 }
 
-let gdPending: { clientId: string; clientSecret?: string; custom: boolean; verifier: string; redirectUri: string } | null = null
+interface GdAttempt { clientId: string; clientSecret?: string; custom: boolean; verifier: string; redirectUri: string }
+/** 当前这次授权(每次「连接」新建一个;回调与换码都只认自己那一次,旧的晚到不覆盖新的)。 */
+let gdAttempt: GdAttempt | null = null
 let gdServer: { close: () => void } | null = null
 let gdTimer: NodeJS.Timeout | null = null
 
@@ -364,19 +366,19 @@ function stopGdServer(): void {
   gdServer = null
 }
 
-/** 授权码 → refresh token,落配置(自建客户端的 ID / secret 一起存;官方的不落)。 */
-async function finishGdriveAuth(code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
-  const pending = gdPending
-  if (!pending) return { ok: false, error: 'auth-not-started' }
-  gdPending = null
+/** 授权码 → refresh token,落配置(自建客户端的 ID / secret 与 token 一起存,官方的不落)。
+ *  换码期间用户又点了一次「连接」:这次的结果作废,不盖掉新的。 */
+async function finishGdriveAuth(attempt: GdAttempt, code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
   try {
-    const r = await gdriveExchangeCode(pending, code, pending.verifier, pending.redirectUri)
+    const r = await gdriveExchangeCode(attempt, code, attempt.verifier, attempt.redirectUri)
+    if (gdAttempt !== attempt) return { ok: false, error: 'auth-superseded' }
+    gdAttempt = null
     const cur = (await loadConfig()).gdrive
     const config = await saveConfig({
       gdrive: {
         ...cur,
-        clientId: pending.custom ? pending.clientId : '',
-        clientSecret: pending.custom ? pending.clientSecret : '',
+        clientId: attempt.custom ? attempt.clientId : '',
+        clientSecret: attempt.custom ? attempt.clientSecret : '',
         refreshToken: r.refreshToken,
         accountId: r.accountId,
         email: r.email ?? r.name,
@@ -384,6 +386,7 @@ async function finishGdriveAuth(code: string): Promise<{ ok: boolean; error?: st
     })
     return { ok: true, email: r.email ?? r.name, config }
   } catch (e) {
+    if (gdAttempt === attempt) gdAttempt = null
     return { ok: false, error: String((e as Error)?.message || e) }
   }
 }
@@ -395,23 +398,34 @@ async function startGdriveAuth(clientId: string, clientSecret: string): Promise<
   stopGdServer()
   const { verifier, challenge } = pkcePair()
   const state = randomBytes(16).toString('hex')
+  // 先登记这一次,再起监听:回调闭包认的是自己的 attempt,不读全局
+  const attempt: GdAttempt = { ...client, custom: !!custom, verifier, redirectUri: '' }
+  gdAttempt = attempt
   const srv = await dropboxCallbackServer(0, state, (r) => {
+    if (gdAttempt !== attempt) return // 已被新的一次顶掉
     stopGdServer()
     if ('error' in r) {
-      gdPending = null
+      gdAttempt = null
       sendAll('remotesync:gdriveAuth', { ok: false, error: r.error })
-    } else void finishGdriveAuth(r.code).then((out) => sendAll('remotesync:gdriveAuth', out))
+    } else void finishGdriveAuth(attempt, r.code).then((out) => sendAll('remotesync:gdriveAuth', out))
   })
-  if (!srv) return { ok: false, error: 'loopback-unavailable' }
+  if (gdAttempt !== attempt) {
+    srv?.close()
+    return { ok: false, error: 'auth-superseded' }
+  }
+  if (!srv) {
+    gdAttempt = null
+    return { ok: false, error: 'loopback-unavailable' }
+  }
   gdServer = srv
+  attempt.redirectUri = `http://127.0.0.1:${srv.port}/`
   gdTimer = setTimeout(() => {
+    if (gdAttempt !== attempt) return
     stopGdServer()
-    gdPending = null
+    gdAttempt = null
     sendAll('remotesync:gdriveAuth', { ok: false, error: 'auth-timeout' })
   }, DBX_AUTH_TIMEOUT_MS)
-  const redirectUri = `http://127.0.0.1:${srv.port}/`
-  gdPending = { ...client, custom: !!custom, verifier, redirectUri }
-  await shell.openExternal(gdriveAuthUrl(client.clientId, challenge, redirectUri, state))
+  await shell.openExternal(gdriveAuthUrl(client.clientId, challenge, attempt.redirectUri, state))
   return { ok: true }
 }
 
@@ -497,6 +511,12 @@ export function registerRemoteSync(): void {
     }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {
+    // refresh token 只对签发它的那个 Google 客户端有效:设置页改了客户端再保存,旧 token 作废(要重新连接),
+    // 别把 B 客户端和 A 的 token 拼在一起存下(续期必失败)
+    const cur = (await loadConfig()).gdrive
+    if (patch?.gdrive && cur?.refreshToken && (patch.gdrive.clientId ?? '').trim() !== (cur.clientId ?? '').trim()) {
+      patch = { ...patch, gdrive: { ...patch.gdrive, refreshToken: undefined, accountId: undefined, email: undefined } }
+    }
     const next = await saveConfig(patch ?? {})
     resetTimer(next)
     return next

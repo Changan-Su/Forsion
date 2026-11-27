@@ -2,7 +2,7 @@
 /** 远程同步设置页的 Google Drive 段(DOM 契约):
  *  ① 没有官方客户端时露出客户端 ID / 密钥两栏,空着点「连接」只提示、不调主进程;
  *  ② 填好后「连接」把 ID 与密钥原样交给主进程,进入等待态(按钮禁用);
- *  ③ 主进程回推授权结果后显示已连接、按钮变「重新连接」,用户未保存的远端目录不被回推覆盖;
+ *  ③ 主进程回推授权结果后显示已连接、按钮变「重新连接」;客户端随 token 接回,用户未保存的远端目录不被覆盖;
  *  ④ 有官方客户端时两栏收起,「改用自建 Google 客户端」才放出来;
  *  ⑤ 旧主进程没有 gdriveAuthStart 时不列 Google Drive 选项。 */
 import React, { act } from 'react'
@@ -82,7 +82,8 @@ describe('RemoteSyncSection · Google Drive', () => {
     expect(v.el.textContent).toContain('已连接：me@example.com')
     expect(v.btn('重新连接')).toBeTruthy()
     expect(dir.value).toBe('Notes/Vault')
-    expect(id.value).toBe(' my.apps.googleusercontent.com ')
+    // 客户端随 token 一起从主进程接回:等待授权时改过的客户端输入作废(token 只对签发它的客户端有效)
+    expect(id.value).toBe('x')
   })
 
   it('授权失败:回推的错误原样显示,退出等待态', async () => {
