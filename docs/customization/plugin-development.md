@@ -469,6 +469,25 @@ const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
 - 插件自己的东西直接改：工作文件夹里的文件，以及这个插件本次运行里自己建出来的文件和文件夹（用 `writeFile`、`writeBytes` 写出的新文件，`createFolder` 建的文件夹）。改别的文件之前，Forsion 会先问你一次（「允许」/「取消」，焦点在「取消」上）；你点了取消，插件收到 `user_declined` 错误，什么都不会改。
 - 不做的：移动多维表（`.db`）或含多维表的文件夹、改名改掉文件类型、给图片和 PDF 改名、单独挪笔记的子笔记文件夹（`.fd`）、移到不存在的文件夹。文件已经挪过去、链接却没改完时，报错里写明文件现在的位置。
 
+## 选文件夹与本机智库清单（2026-11-27 起，只桌面）
+
+备份、导出这类插件要让用户挑一个库外的文件夹，还要知道这台电脑上有哪些智库。两个方法都只在桌面版上有；网页版、手机和旧版本上整个不存在，用可选链判断，没有就别画对应的按钮。
+
+```js
+const dest = await ctx.app.pickFolder?.({ title: '把备份放在哪里', defaultPath: lastDest })
+if (dest) { /* 用户选了一个文件夹（绝对路径） */ }
+
+const vaults = (await ctx.app.vaults?.()) ?? []
+for (const v of vaults) console.log(v.name, v.root, v.current ? '当前' : '', v.cloud ? '云端' : '')
+```
+
+- `pickFolder` 弹系统的「选择文件夹」框，可以在里面新建文件夹，回用户选的绝对路径；用户取消回 `null`。`title` 只用来显示（macOS 上显示在框里，太长会截断）；`defaultPath` 是绝对路径才用，否则忽略。只在用户点了按钮时调。
+- 选了一个文件夹**不授予任何权限**：不会变成本机项目，设备页也不能因此浏览它，`ctx.app` 那些用库内路径的方法照样只管当前的库。
+- `vaults` 给出这台电脑上的智库：每项是 `{ root, name, current, cloud }`。`root` 是绝对路径，`name` 是文件夹名，`current` 表示当前打开的那个（没开库时都是 `false`），`cloud` 表示蓬洲云云端模式下的本地镜像库（只在它正开着时出现在清单里）。文件夹被挪走、或在没插上的移动硬盘上的库照样列出来，按路径去读写前自己处理失败，别把「读不到」当成「库被删了」。
+- **读失败不等于没有**：Forsion 读不出智库配置（文件损坏、没有权限）时，`vaults()` 会 reject，不会回空数组；真的一个库都没有才回 `[]`。拿这份清单做清理、删旧备份这类决定之前，先把 reject 当成「不知道」处理。
+- `root` 和 `vaultRoot()` 一样含用户名等信息，别默认存下来或上报。
+- 插件被停用后（包括选择框还开着时被停用）两个方法都 reject `Error('plugin-disposed')`。
+
 ## 模板与新笔记（2026-11-16 起）
 
 Forsion 自己就有模板：库里 `templates/` 文件夹里的笔记，插入时替换 `{{date}}`、`{{date:格式}}`、`{{time}}`、`{{title}}`（格式读 `.obsidian/templates.json`）；日记的文件夹、命名和模板读设置或 `.obsidian/daily-notes.json`。做 Templater 一类插件、或者「某个文件夹里的新笔记套某个模板」的插件，接进这一套，不要另做一个模板选择器。

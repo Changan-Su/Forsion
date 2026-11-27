@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.148.0
+  version: 1.149.0
   author: Forsion
   category: Forsion
 ---
@@ -72,7 +72,7 @@ Read the matching `references/` file before using an API listed below or followi
 - [references/host-data-sources.md](references/host-data-sources.md): where each host surface and mount reads its data (vault files / engine `human/` / plugin data / host memory / cloud), its side effects (real sessions, current vault, wiki-link subscriptions), whether it exists in the plugin sandbox and the demo stage and how to seed demo data, and which APIs need the local managed engine (`ctx.tangu.request`, host paths, channels). Read it while writing the plan.
 - [references/contribution-points.md](references/contribution-points.md): the full table of desktop `ctx` contribution points (`registerCommand` … `registerFont`, `ctx.notify`, `ctx.loadData`, manifest `events` / `onboarding` / `widgets` / `guide`), Extend View (`view.extendView`), command `invoke` for the agent, `checked` toggles.
 - [references/view-runtime-rules.md](references/view-runtime-rules.md): behaviour with no open vault (per method), following the appearance switches, the dispose contract of host mounts, self-drawn floats / HUDs, pointer math under host zoom.
-- [references/vault-and-assets.md](references/vault-and-assets.md): read-only vault queries (`listPages` / `listFiles` / `searchVault` / `vaultRoot` / `reveal` / `platformAccounts` / `trash`), `ctx.app.onVaultEvent`, binary assets and bundling third-party libraries, the working folder and automatic upgrade of old data, templates and new notes.
+- [references/vault-and-assets.md](references/vault-and-assets.md): read-only vault queries (`listPages` / `listFiles` / `searchVault` / `vaultRoot` / `reveal` / `platformAccounts` / `trash`), `ctx.app.onVaultEvent`, choosing a folder and listing local vaults (`pickFolder` / `vaults`, desktop only), binary assets and bundling third-party libraries, the working folder and automatic upgrade of old data, templates and new notes.
 - [references/manifest-declarations.md](references/manifest-declarations.md): `onboarding.requires` and `registerReadiness`, `requiresPlugins` and the setup / dispose lifecycle, bilingual labels and icons, `guide` tips, home widgets (`widgets` + `ctx.widgets`).
 - [references/more-host-apis.md](references/more-host-apis.md): list sources (`registerListSource`), the Tangu / calendar / Spaces / home / databases pointers, Floating Panel, Coding Studio sandbox, `ctx.account`, Unit and browser asset paths, API-backed Markdown editor, whiteboard layer, Chat Box selection and Director hand-off, startup appearance, LCL view layout coordination, the 2026-11-12 host UI additions.
 

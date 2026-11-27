@@ -775,6 +775,8 @@ declare global {
       /** purpose:'project' = 添加 / 导入项目:主进程把选中的目录登记为本机确认过的项目根(设备页 /unit/host* 只认这些会话目录);
        *  其余用途(技能导入、同步目录、额外可写根…)不传,不登记。 */
       pickDirectory?(opts?: { purpose?: 'project' }): Promise<string | null>
+      /** 插件 ctx.app.pickFolder 的桥:系统「选择文件夹」框,回绝对路径,取消 = null。不登记项目根、不授予任何权限。 */
+      pickFolder?(opts?: { title?: string; defaultPath?: string }): Promise<string | null>
       /** Chat Box 添加文件或文件夹；取消返回空数组。 */
       pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
       /** Android:系统文件选择器选文件(内容随回,不是路径);取消返回空数组。原生半屏里没有用户激活,

@@ -480,6 +480,25 @@ const renamed = await ctx.app.renamePath?.(moved, 'Idea (done)')
 - A plugin's own things are changed directly: files in its work folder, and files and folders the plugin itself created during this run (new files written with `writeFile` or `writeBytes`, folders made with `createFolder`). Before changing any other file, Forsion asks you once (Allow / Cancel, with Cancel focused); if you cancel, the plugin gets a `user_declined` error and nothing changes.
 - Not done: moving a table (`.db`) or a folder that contains one, renames that change the file type, renaming images and PDFs, moving a note's subnote folder (`.fd`) on its own, and moving into a folder that doesn't exist. If the file was moved but the links could not all be updated, the error says where the file is now.
 
+## Choosing a folder and listing local vaults (2026-11-27+, desktop only)
+
+Backup and export plugins need the user to pick a folder outside the vault, and need to know which vaults are on this computer. Both methods exist only in the desktop app; on web, mobile and older versions they are absent, so check with optional chaining and don't draw the button when they're missing.
+
+```js
+const dest = await ctx.app.pickFolder?.({ title: 'Where should backups go?', defaultPath: lastDest })
+if (dest) { /* the user picked a folder (absolute path) */ }
+
+const vaults = (await ctx.app.vaults?.()) ?? []
+for (const v of vaults) console.log(v.name, v.root, v.current ? 'open' : '', v.cloud ? 'cloud' : '')
+```
+
+- `pickFolder` opens the system "choose folder" dialog, where new folders can be created, and resolves with the absolute path the user picked, or `null` if they cancel. `title` is for display only (shown in the dialog on macOS, truncated when long); `defaultPath` is used only when it is an absolute path. Call it only when the user clicks a button.
+- Picking a folder **grants nothing**: it does not become a local project, the device page can't browse it because of this, and the vault-path methods on `ctx.app` still only work on the open vault.
+- `vaults` lists the vaults on this computer, each as `{ root, name, current, cloud }`. `root` is the absolute path, `name` the folder name, `current` marks the one that is open (all `false` when none is), and `cloud` marks the local mirror used in Penzor Cloud's cloud mode (it appears only while it is open). Vaults whose folder was moved, or that sit on an external drive that isn't plugged in, are still listed: handle failures yourself before reading or writing by path, and don't treat "can't read it" as "the vault was deleted".
+- **A read failure is not an empty list**: when Forsion can't read its vault settings (a damaged file, no permission), `vaults()` rejects instead of returning an empty array; `[]` means there really are no vaults. Before using the list for cleanup decisions such as deleting old backups, treat a rejection as "unknown".
+- Like `vaultRoot()`, `root` can contain the user name and similar details; don't store or report it by default.
+- After the plugin is turned off (including while the dialog is still open), both methods reject with `Error('plugin-disposed')`.
+
 ## Templates and new notes (2026-11-16+)
 
 Forsion has templates of its own: the notes in the vault's `templates/` folder, with `{{date}}`, `{{date:format}}`, `{{time}}` and `{{title}}` filled in on insert (formats from `.obsidian/templates.json`); the daily note's folder, name and template come from Settings or `.obsidian/daily-notes.json`. A Templater-style plugin, or one that gives new notes in a folder a template, should plug into these rather than ship a second template picker.

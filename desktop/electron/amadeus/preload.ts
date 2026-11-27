@@ -15,6 +15,7 @@ const api: AmadeusApi = {
   createVault: (name) => ipcRenderer.invoke(IPC.createVault, name),
   forgetVault: (root) => ipcRenderer.invoke(IPC.forgetVault, root),
   revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
+  pluginVaults: () => ipcRenderer.invoke(IPC.pluginVaults),
   listPages: () => ipcRenderer.invoke(IPC.listPages),
   listFiles: () => ipcRenderer.invoke(IPC.listFiles),
   loadPage: (pagePath) => ipcRenderer.invoke(IPC.loadPage, pagePath),
