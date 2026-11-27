@@ -54,6 +54,7 @@ async function main() {
     await page.evaluate(() => document.fonts.ready)
     await page.screenshot({ path: path.join(OUT, 'computer-use-page.png') })
     assert.equal(await page.locator('.settings-body').getByText('严格后台（绝不抢前台）', { exact: true }).count(), 0)
+    assert.equal(await page.getByText(/能不能抢前台/).count(), 0)
     await page.locator('.settings-nav-parent > button[aria-current="page"]').evaluate((el) => el.scrollIntoView({ block: 'center' }))
     await page.screenshot({ path: path.join(OUT, 'computer-use-nav.png') })
     // 设置搜索:从别的页搜具体设置项,点结果直达这一页
