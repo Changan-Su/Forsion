@@ -166,7 +166,7 @@ import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProto
 import { registerIuiLibProtocol } from './iuiLibProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, stackPosition, mostlyOnScreen, rectsOverlap, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
-import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
+import { tabTitleBarOptions, floatingTitleBarOptions, parseTabTitleBar, watchTabTitleBar, parseTrafficLightCenter, macTrafficLightPosition } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
 import { macSpaceSocket, startMacSpaceLaunchers } from './macSpaceLauncher'
@@ -2619,7 +2619,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     minWidth: target.minWidth,
     minHeight: target.minHeight,
     title: target.title,
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...floatingTitleBarOptions(),
     autoHideMenuBar: true,
     // 会话级面板(旁聊)不给最小化:收起 = 切走会话,关掉 = 清空;进了 Dock 就能在别的会话里被点出来
     minimizable: !target.sessionId,
@@ -4946,6 +4946,18 @@ app.whenReady().then(async () => {
     win.setTitleBarOverlay(overlay)
     if (win === mainWindow && !SANDBOX?.stage && wholeUnit !== undefined) setWholeUnitMinimumWidth(win, wholeUnit)
     return { ok: true, fullscreen: win.isFullScreen() }
+  })
+
+  // macOS 红绿灯跟着本窗顶条的中线走(界面缩放会改行高,原生按钮不会跟着缩):渲染层量顶条、报中线,这里摆灯。
+  ipcMain.handle('window:setTrafficLights', (e, input: unknown) => {
+    const centerY = parseTrafficLightCenter(input)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (process.platform !== 'darwin' || centerY === null || !win || win.isDestroyed()
+      || e.senderFrame !== e.sender.mainFrame
+      || (win !== mainWindow && ![...detachedWindows.values()].includes(win) && ![...floatingWindows.values()].includes(win))) return { ok: false }
+    const { x, y, end } = macTrafficLightPosition(centerY)
+    win.setWindowButtonPosition({ x, y })
+    return { ok: true, end }
   })
 
   // ── 设置界面「打开文件夹」:在系统文件管理器打开 agent / skills 目录(~/.tangu/{agents,skills})──

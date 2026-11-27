@@ -527,6 +527,9 @@ const api = {
     ipcRenderer.invoke('window:setMaterial', input),
   setTabTitleBar: (input: { height: number; symbolColor: string; wholeUnit?: boolean }): Promise<{ ok: boolean; fullscreen?: boolean }> =>
     ipcRenderer.invoke('window:setTabTitleBar', input),
+  /** macOS:把红绿灯中心摆到本窗顶条的中线(视口 px);end = 第三颗灯右缘(视口 px),给标签行让位用。 */
+  setTrafficLights: (input: { centerY: number }): Promise<{ ok: boolean; end?: number }> =>
+    ipcRenderer.invoke('window:setTrafficLights', input),
   onTabTitleBarFullscreen: (cb: (fullscreen: boolean) => void): (() => void) => {
     const listener = (_e: unknown, fullscreen: boolean): void => cb(fullscreen)
     ipcRenderer.on('window:tabTitleBarFullscreen', listener)
