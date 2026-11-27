@@ -78,3 +78,84 @@ it('a new run retries only receipts already persisted for its account', async ()
   expect(acknowledge).toHaveBeenCalledExactlyOnceWith(result.delivery);
   expect(hasImageDelivery).toHaveBeenCalledWith('owner', 'next-session', result.delivery);
 });
+
+// Android app storage refuses hard links (EACCES); PRoot's link emulation on arm64 returns a meaningless errno.
+const refusals = [
+  Object.assign(new Error('EACCES: permission denied, link'), { code: 'EACCES', errno: -13 }),
+  Object.assign(new Error('Unknown system error -353152064, link'), { code: 'Unknown system error -353152064', errno: -353152064 }),
+];
+it.each(refusals)('saves by exclusive write when hard links are refused ($code)', async (refusal) => {
+  const f = await setup();
+  const link = vi.spyOn(fs, 'link').mockRejectedValue(refusal);
+  try {
+    const names = await deliverImages(result, f.ctx, 'generate_image');
+    expect(link).toHaveBeenCalled();
+    expect(await fs.readdir(path.join(f.dir, 'generated'))).toEqual(names); // no temp file left behind
+    expect((await fs.readFile(path.join(f.dir, 'generated', names[0]))).toString()).toBe('GIF89a');
+    expect(f.acknowledge).toHaveBeenCalledTimes(1);
+    expect(await deliverImages(result, f.ctx, 'generate_image')).toEqual(names); // a retry recognises its own file
+  } finally { link.mockRestore(); }
+});
+it('the exclusive-write fallback still never overwrites an existing file', async () => {
+  const f = await setup();
+  const link = vi.spyOn(fs, 'link').mockRejectedValue(refusals[0]);
+  try {
+    await fs.mkdir(path.join(f.dir, 'generated'));
+    const name = `image-${result.delivery.id}-1.gif`;
+    await fs.writeFile(path.join(f.dir, 'generated', name), 'user content');
+    await expect(deliverImages(result, f.ctx, 'generate_image')).rejects.toThrow();
+    expect(await fs.readFile(path.join(f.dir, 'generated', name), 'utf8')).toBe('user content');
+    expect(await fs.readdir(path.join(f.dir, 'generated'))).toEqual([name]);
+    expect(f.acknowledge).not.toHaveBeenCalled();
+  } finally { link.mockRestore(); }
+});
+it('an empty reservation left by a killed delivery is completed instead of blocking recovery', async () => {
+  const f = await setup();
+  const link = vi.spyOn(fs, 'link').mockRejectedValue(refusals[0]);
+  try {
+    const name = `image-${result.delivery.id}-1.gif`;
+    await fs.mkdir(path.join(f.dir, 'generated'));
+    await fs.writeFile(path.join(f.dir, 'generated', name), ''); // the engine died between reserving and renaming
+    expect(await deliverImages(result, f.ctx, 'generate_image')).toEqual([name]);
+    expect((await fs.readFile(path.join(f.dir, 'generated', name))).toString()).toBe('GIF89a');
+    expect(await fs.readdir(path.join(f.dir, 'generated'))).toEqual([name]);
+  } finally { link.mockRestore(); }
+});
+it('concurrent deliveries of the same task both succeed without hard links and never expose partial bytes', async () => {
+  const f = await setup();
+  const link = vi.spyOn(fs, 'link').mockRejectedValue(refusals[1]);
+  try {
+    const [a, b] = await Promise.all([deliverImages(result, f.ctx, 'generate_image'), deliverImages(result, f.ctx, 'generate_image')]);
+    expect(a).toEqual(b);
+    expect(await fs.readdir(path.join(f.dir, 'generated'))).toEqual(a);
+    expect((await fs.readFile(path.join(f.dir, 'generated', a[0]))).toString()).toBe('GIF89a');
+    for (const [file] of f.ctx.displayFile.mock.calls) expect((await fs.readFile(file.path)).toString()).toBe('GIF89a');
+  } finally { link.mockRestore(); }
+});
+it('a failed rename deletes nothing; the empty reservation it leaves is completed by the next delivery', async () => {
+  const f = await setup();
+  const target = path.join(f.dir, 'generated', `image-${result.delivery.id}-1.gif`);
+  const realRename = fs.rename.bind(fs);
+  const link = vi.spyOn(fs, 'link').mockRejectedValue(refusals[0]);
+  const rename = vi.spyOn(fs, 'rename').mockImplementationOnce(async () => { throw Object.assign(new Error('EIO: rename'), { code: 'EIO' }); });
+  try {
+    await expect(deliverImages(result, f.ctx, 'generate_image')).rejects.toThrow('EIO');
+    expect(await fs.readdir(path.join(f.dir, 'generated'))).toEqual([path.basename(target)]);
+    expect((await fs.stat(target)).size).toBe(0);
+    expect(f.acknowledge).not.toHaveBeenCalled();
+    rename.mockImplementation(realRename as any);
+    expect(await deliverImages(result, f.ctx, 'generate_image')).toEqual([path.basename(target)]);
+    expect((await fs.readFile(target)).toString()).toBe('GIF89a');
+  } finally { rename.mockRestore(); link.mockRestore(); }
+});
+it('a stale reservation is completed when hard links work again, and a non-empty file there still wins', async () => {
+  const f = await setup();
+  const name = `image-${result.delivery.id}-1.gif`, target = path.join(f.dir, 'generated', name);
+  await fs.mkdir(path.join(f.dir, 'generated'));
+  await fs.writeFile(target, ''); // left by a delivery that died on a phone; this run has real hard links
+  expect(await deliverImages(result, f.ctx, 'generate_image')).toEqual([name]);
+  expect((await fs.readFile(target)).toString()).toBe('GIF89a');
+  await fs.writeFile(target, 'user content');
+  await expect(deliverImages(result, f.ctx, 'generate_image')).rejects.toThrow();
+  expect(await fs.readFile(target, 'utf8')).toBe('user content');
+});
