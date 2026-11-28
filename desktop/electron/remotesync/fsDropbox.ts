@@ -112,6 +112,7 @@ export function dropboxCallbackServer(
   port: number,
   state: string,
   onResult: (r: { code: string } | { error: string }) => void,
+  opts: { ignoreStateMismatch?: boolean } = {},
 ): Promise<{ port: number; close: () => void } | null> {
   return new Promise((resolve) => {
     let done = false
@@ -119,6 +120,13 @@ export function dropboxCallbackServer(
       const r = parseDropboxCallback(req.url ?? '', state)
       if ('error' in r && r.error === 'no-code') {
         res.writeHead(404).end() // 浏览器顺带来的噪声(/favicon.ico):不算授权结果,继续等
+        return
+      }
+      // 被顶掉的上一次授权、它那个浏览器页晚到的回调(state 不是这一次的):回个过期页,不消耗这一次,接着等。
+      // 缺省不开 = 旧设置页的行为一字不变
+      if (opts.ignoreStateMismatch && 'error' in r && r.error === 'state-mismatch') {
+        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(page('Forsion:这个授权页已过期,请用最新打开的那个 / This authorization page is out of date. Use the latest one.'))
         return
       }
       res.writeHead('code' in r ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' })

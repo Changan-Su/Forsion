@@ -15,7 +15,7 @@ import { ipcMain } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { vaultList } from './amadeus/vaultList'
 import { cloudVaultDir, isManagedCloudVault } from './amadeus/cloudPaths'
-import { cancelTargetAuth, finishTargetAuth, legacyRemoteSync, remoteSyncNet, startTargetAuth, syncTargetsStore, type LegacyRemoteSyncView, type TargetAuthOutcome } from './remotesyncIpc'
+import { cancelTargetAuth, finishTargetAuth, legacyRemoteSync, remoteSyncNet, startTargetAuth, syncTargetsStore, takeTargetAuthTicket, type LegacyRemoteSyncView, type TargetAuthOutcome } from './remotesyncIpc'
 import { openTargetFs, type TargetFs, type TargetSpec } from './remotesync/targetFs'
 import { normPrefix } from './remotesync/fsS3'
 import { gdriveBaseSegs } from './remotesync/fsGdrive'
@@ -202,23 +202,42 @@ export function createSyncTargets(): SyncTargetsSeam {
 
 export interface SaveTargetInput { id?: string; kind: SyncTargetKind; label?: string; section: Record<string, unknown> }
 
-export async function saveSyncTarget(input: SaveTargetInput): Promise<SyncTargetSummary> {
+/** 网盘去处用的哪个应用 / 客户端(生效值:内置的留空也算内置那个)。换了 = 另一个可见集(Dropbox 的 App Folder、Drive 的 drive.file)。 */
+function appOf(kind: SyncTargetKind, s: Record<string, unknown>): string {
+  if (kind === 'dropbox') return remoteSyncNet.dropboxAppKey(s as { appKey?: string })
+  if (kind === 'gdrive') return remoteSyncNet.gdriveClient(s as { clientId?: string }).clientId
+  return ''
+}
+
+/** `mergeExisting`(宿主内部,网盘重新授权用):`input.section` 是新凭据,在写事务里叠到那条现有的 section 上;
+ *  那条不在了(别的窗口刚删)回 target-not-found,不新建;应用 / 客户端换了回 target-location-changed。 */
+export async function saveSyncTarget(input: SaveTargetInput, opts: { mergeExisting?: boolean } = {}): Promise<SyncTargetSummary> {
   if (!input || !(SYNC_TARGET_KINDS as readonly string[]).includes(input.kind) || !input.section || typeof input.section !== 'object' || Array.isArray(input.section)) throw new Error('invalid-target')
-  const section = structuredClone(input.section)
-  const why = incompleteReason(input.kind, section)
-  if (why) throw new Error(why)
-  if (input.kind === 'folder') await assertFolderTargetClear(str(section.path))
+  const patch = structuredClone(input.section)
+  if (!opts.mergeExisting) {
+    const why = incompleteReason(input.kind, patch)
+    if (why) throw new Error(why)
+    if (input.kind === 'folder') await assertFolderTargetClear(str(patch.path))
+  } else if (input.kind === 'folder') throw new Error('invalid-target')
   const out = await syncTargetsStore.update((cur) => {
     const now = Date.now()
+    if (opts.mergeExisting && !(input.id && cur.targets[input.id])) throw new Error('target-not-found')
     const id = input.id && cur.targets[input.id] ? input.id : randomUUID()
     const prev = cur.targets[id]
     if (prev && prev.kind !== input.kind) throw new Error('target-kind-changed')
+    const section = opts.mergeExisting && prev ? { ...prev.section, ...patch } : patch
+    if (opts.mergeExisting) {
+      const why = incompleteReason(input.kind, section)
+      if (why) throw new Error(why)
+      if (prev && appOf(prev.kind, prev.section) !== appOf(input.kind, section)) throw new Error('target-location-changed')
+    }
     // 同一个 id 只能更新凭据:换了位置(桶 / 前缀 / 地址 / 目录 / 文件夹)或账号 = 另一棵远端树,
     // 绑定会拿旧基线去对它做删除判定。要换就在设置页新建一条(新 id、新基线)
     if (prev && (targetLocation(prev.kind, prev.section) !== targetLocation(input.kind, section) || targetAccount(prev.kind, prev.section) !== targetAccount(input.kind, section) || rawLocation(prev.kind, prev.section) !== rawLocation(input.kind, section))) {
       throw new Error('target-location-changed')
     }
-    cur.targets[id] = { kind: input.kind, label: (input.label ?? '').trim() || labelOf(input.kind, section), section, source: prev?.source ?? 'user', createdAt: prev?.createdAt ?? now, updatedAt: now }
+    const label = (input.label ?? '').trim() || (opts.mergeExisting && prev ? prev.label : labelOf(input.kind, section))
+    cur.targets[id] = { kind: input.kind, label, section, source: prev?.source ?? 'user', createdAt: prev?.createdAt ?? now, updatedAt: now }
     const t = cur.targets[id]
     return { id, kind: t.kind, label: t.label, dirDefault: dirDefaultOf(t.kind, t.section), source: t.source.startsWith('remotesync:') ? 'remotesync' as const : 'user' as const }
   })
@@ -240,13 +259,10 @@ export type TargetAuthEvent = { attempt: string; ok: true; target: SyncTargetSum
 export async function saveAuthorizedTarget(kind: 'dropbox' | 'gdrive', opts: TargetAuthStartOpts, r: TargetAuthOutcome): Promise<{ ok: true; target: SyncTargetSummary; account: string } | { ok: false; error: string }> {
   if (!r.ok) return r
   try {
-    const prev = opts.id ? (await syncTargetsStore.read()).targets[opts.id] : undefined
-    if (opts.id && !prev) return { ok: false, error: 'target-not-found' }
-    if (prev && prev.kind !== kind) return { ok: false, error: 'target-kind-changed' }
-    const section: Record<string, unknown> = prev
-      ? { ...prev.section, ...r.creds.section }
-      : { ...r.creds.section, ...(typeof opts.baseDir === 'string' && opts.baseDir.trim() ? { baseDir: opts.baseDir.trim() } : {}) }
-    const target = await saveSyncTarget({ ...(prev ? { id: opts.id } : {}), kind, label: opts.label ?? prev?.label, section })
+    // 重新授权:在写事务里叠到那条上(位置沿用那条;那条没了 / 换了账号或应用 = 拒,原凭据不动)
+    const target = opts.id
+      ? await saveSyncTarget({ id: opts.id, kind, label: opts.label, section: r.creds.section }, { mergeExisting: true })
+      : await saveSyncTarget({ kind, label: opts.label, section: { ...r.creds.section, ...(typeof opts.baseDir === 'string' && opts.baseDir.trim() ? { baseDir: opts.baseDir.trim() } : {}) } })
     return { ok: true, target, account: r.creds.account }
   } catch (e) {
     return { ok: false, error: fixedCode(e) }
@@ -256,6 +272,7 @@ export async function saveAuthorizedTarget(kind: 'dropbox' | 'gdrive', opts: Tar
 export function registerSyncTargetsIpc(): void {
   // 新建 / 重新授权网盘去处(契约 H-9):开系统浏览器,结果经 remotesync:targets:auth 发回发起的那个窗口
   ipcMain.handle('remotesync:targets:authStart', async (e, kind: unknown, rawOpts: unknown) => {
+    const ticket = takeTargetAuthTicket() // 进门就领票:下面查 sync-targets 慢了,也不会去顶掉比它晚开始的那一次
     if (kind !== 'dropbox' && kind !== 'gdrive') return { ok: false, error: 'bad-target-kind' }
     const o = (rawOpts && typeof rawOpts === 'object' ? rawOpts : {}) as Record<string, unknown>
     const str = (k: string): string | undefined => (typeof o[k] === 'string' ? (o[k] as string) : undefined)
@@ -268,13 +285,14 @@ export function registerSyncTargetsIpc(): void {
       if (prev.kind !== kind) return { ok: false, error: 'target-kind-changed' }
       prevSection = prev.section
     }
-    // 重新授权:那条用的是自建应用就还用它(不然换了客户端 = 另一个可见集,会被当成换了位置)
-    const pick = (k: 'appKey' | 'clientId' | 'clientSecret'): string | undefined => opts[k] ?? (typeof prevSection?.[k] === 'string' ? prevSection[k] as string : undefined)
+    // 重新授权:应用 / 客户端只认那条存着的(这次传的不认):换了 = 另一个可见集,旧基线会把「看不见」当成「被删」
+    const pick = (k: 'appKey' | 'clientId' | 'clientSecret'): string | undefined =>
+      prevSection ? (typeof prevSection[k] === 'string' ? prevSection[k] as string : undefined) : opts[k]
     const sender = e.sender
     const send = (ev: TargetAuthEvent): void => { if (!sender.isDestroyed()) sender.send('remotesync:targets:auth', ev) }
     return startTargetAuth(kind, { appKey: pick('appKey'), clientId: pick('clientId'), clientSecret: pick('clientSecret') }, (attempt, r) => {
       void saveAuthorizedTarget(kind, opts, r).then((out) => send({ attempt, ...out } as TargetAuthEvent))
-    })
+    }, ticket)
   })
   ipcMain.handle('remotesync:targets:authFinish', async (_e, attempt: unknown, code: unknown) =>
     finishTargetAuth(typeof attempt === 'string' ? attempt : '', typeof code === 'string' ? code : ''))

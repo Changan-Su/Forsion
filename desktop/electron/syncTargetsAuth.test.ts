@@ -19,8 +19,9 @@ const env = vi.hoisted(() => ({
   opened: [] as string[],
   openFails: false,
   requests: [] as Req[],
-  respond: null as null | ((r: Req) => Response),
-  dbx: null as null | { state: string; cb: Cb; closed: boolean },
+  respond: null as null | ((r: Req) => Response | Promise<Response>),
+  openHold: null as null | Promise<void>,
+  dbx: null as null | { state: string; cb: Cb; closed: boolean; opts: unknown },
   dbxManual: false,
   broadcast: [] as { ch: string; p: unknown }[],
 }))
@@ -36,17 +37,26 @@ vi.mock('electron', () => ({
       return env.respond(r)
     },
   },
-  shell: { openExternal: async (u: string) => { if (env.openFails) throw new Error('no browser'); env.opened.push(u) }, trashItem: async () => {} },
+  shell: {
+    openExternal: async (u: string) => {
+      if (env.openFails) throw new Error('no browser')
+      env.opened.push(u)
+      const hold = env.openHold
+      env.openHold = null
+      if (hold) await hold
+    },
+    trashItem: async () => {},
+  },
 }))
 // Dropbox 的回调口是固定的 53682:夹具捕获回调,不在测试机上占真端口;别的口(Drive 的 0)照用真的回环
 vi.mock('./remotesync/fsDropbox', async (orig) => {
   const m = await orig<typeof import('./remotesync/fsDropbox')>()
   return {
     ...m,
-    dropboxCallbackServer: (port: number, state: string, cb: Cb) => {
-      if (port !== 53682) return m.dropboxCallbackServer(port, state, cb)
+    dropboxCallbackServer: (port: number, state: string, cb: Cb, opts?: { ignoreStateMismatch?: boolean }) => {
+      if (port !== 53682) return m.dropboxCallbackServer(port, state, cb, opts)
       if (env.dbxManual) return Promise.resolve(null)
-      const s = { state, cb, closed: false }
+      const s = { state, cb, closed: false, opts }
       env.dbx = s
       return Promise.resolve({ port, close: () => { s.closed = true } })
     },
@@ -70,7 +80,12 @@ type Ev = { attempt: string; ok: boolean; error?: string; target?: { id: string;
 let events: { ch: string; ev: Ev }[] = []
 let senderGone = false
 const sender = { isDestroyed: () => senderGone, send: (ch: string, ev: Ev) => { events.push({ ch, ev }) } }
-const call = async <T = any>(ch: string, ...args: unknown[]): Promise<T> => env.handlers.get(ch)!({ sender }, ...args) as Promise<T>
+let starts: string[] = []
+const call = async <T = any>(ch: string, ...args: unknown[]): Promise<T> => {
+  const r = await (env.handlers.get(ch)!({ sender }, ...args) as Promise<T>)
+  if (ch === 'remotesync:targets:authStart' && (r as { attempt?: string })?.attempt) starts.push((r as { attempt: string }).attempt)
+  return r
+}
 const store = (): any => JSON.parse(readFileSync(join(env.root, 'userData', 'sync-targets.json'), 'utf8'))
 const json = (o: unknown, status = 200): Response => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } })
 const q = (u: string): URLSearchParams => new URL(u).searchParams
@@ -102,8 +117,9 @@ beforeEach(async () => {
   env.root = mkdtempSync(join(tmpdir(), 'forsion-target-auth-'))
   mkdirSync(join(env.root, 'Vault'), { recursive: true })
   mkdirSync(join(env.root, 'userData'), { recursive: true })
-  Object.assign(env, { opened: [], openFails: false, requests: [], respond: null, dbx: null, dbxManual: false, broadcast: [] })
+  Object.assign(env, { opened: [], openFails: false, openHold: null, requests: [], respond: null, dbx: null, dbxManual: false, broadcast: [] })
   events = []
+  starts = []
   senderGone = false
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   log = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -120,7 +136,10 @@ afterEach(async () => {
   const out = JSON.stringify([events, env.broadcast, warn.mock.calls, log.mock.calls, error.mock.calls])
   for (const s of SECRETS) expect(out).not.toContain(s)
   await call('remotesync:targets:authCancel', '*') // 不是哪一次 = 什么都不做
-  for (const e of events) { if (e.ev.attempt) await call('remotesync:targets:authCancel', e.ev.attempt) }
+  for (const a of starts) await call('remotesync:targets:authCancel', a) // 关掉还开着的回环与计时
+  // 旧设置页还开着的 Drive 授权:新开一次去处授权会顶掉它(两家都顶),再取消
+  const sweep = await call('remotesync:targets:authStart', 'gdrive', { clientId: 'fixture-sweep' })
+  if (sweep?.attempt) await call('remotesync:targets:authCancel', sweep.attempt)
   warn.mockRestore(); log.mockRestore(); error.mockRestore()
   vi.useRealTimers()
   rmSync(env.root, { recursive: true, force: true })
@@ -136,6 +155,7 @@ describe('authorizing a new Dropbox target', () => {
     expect(u.get('client_id')).toBe('ft4gcwbsrmu3x4x') // 内置官方应用
     expect(u.get('redirect_uri')).toBe('http://localhost:53682/')
     expect(u.get('state')).toBe(env.dbx!.state)
+    expect(env.dbx!.opts).toEqual({ ignoreStateMismatch: true }) // 旧授权页晚到的回调不消耗这一次
     env.dbx!.cb({ code: 'C1' })
     const ev = await nthEvent(1)
     expect(events[0].ch).toBe('remotesync:targets:auth')
@@ -191,6 +211,7 @@ describe('re-authorizing an existing target', () => {
       C1: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-A1' },
       C2: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-A2' },
       C3: { accountId: 'dbid:B', email: 'b@example.test', refresh: 'fixture-refresh-B' },
+      C4: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-A4' },
     })
     await call('remotesync:targets:authStart', 'dropbox', { baseDir: '/Vault' })
     env.dbx!.cb({ code: 'C1' })
@@ -205,6 +226,11 @@ describe('re-authorizing an existing target', () => {
     env.dbx!.cb({ code: 'C3' })
     expect(await nthEvent(3)).toEqual({ attempt: expect.any(String), ok: false, error: 'target-location-changed' })
     expect(store().targets[id].section).toMatchObject({ refreshToken: 'fixture-refresh-A2', accountId: 'dbid:A' })
+    expect(store().targets[id].label).toBe('Renamed')
+    await call('remotesync:targets:authStart', 'dropbox', { id }) // 不带 label 的重新授权:名字照旧
+    env.dbx!.cb({ code: 'C4' })
+    expect(await nthEvent(4)).toMatchObject({ ok: true, target: { id, label: 'Renamed' } })
+    expect(store().targets[id].section.refreshToken).toBe('fixture-refresh-A4')
     expect(Object.keys(store().targets)).toEqual([id])
   })
 
@@ -215,6 +241,68 @@ describe('re-authorizing an existing target', () => {
     expect(await call('remotesync:targets:authStart', 'dropbox', { id: 'no-such-target' })).toEqual({ ok: false, error: 'target-not-found' })
     expect(await call('remotesync:targets:authStart', 'gdrive', { id: s3.id, clientId: 'fixture-client' })).toEqual({ ok: false, error: 'target-kind-changed' })
     expect(env.opened).toEqual([])
+  })
+})
+
+describe('re-authorizing guards (Codex review)', () => {
+  it('the stored app is the only one used: an app key passed on re-auth is ignored', async () => {
+    dropbox({ C1: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-1' }, C2: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-2' } })
+    await call('remotesync:targets:authStart', 'dropbox', {})
+    env.dbx!.cb({ code: 'C1' })
+    const id = (await nthEvent(1)).target!.id
+    await call('remotesync:targets:authStart', 'dropbox', { id, appKey: 'fixture-other-app' })
+    expect(q(env.opened[1]).get('client_id')).toBe('ft4gcwbsrmu3x4x')
+    env.dbx!.cb({ code: 'C2' })
+    expect(await nthEvent(2)).toMatchObject({ ok: true, target: { id } })
+    expect(store().targets[id].section).toMatchObject({ appKey: '', refreshToken: 'fixture-refresh-2' })
+    // 写事务里再核一次:叠上去的凭据换了应用(同一个账号)= 拒,原样不动
+    const { saveSyncTarget } = await import('./syncTargets')
+    await expect(saveSyncTarget({ id, kind: 'dropbox', section: { appKey: 'fixture-other-app', refreshToken: 'fixture-refresh-3', accountId: 'dbid:A' } }, { mergeExisting: true })).rejects.toThrow('target-location-changed')
+    expect(store().targets[id].section.refreshToken).toBe('fixture-refresh-2')
+  })
+
+  it('the target removed while authorizing → target-not-found, not recreated under a new id', async () => {
+    dropbox({ C1: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-1' }, C2: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-2' } })
+    await call('remotesync:targets:authStart', 'dropbox', {})
+    env.dbx!.cb({ code: 'C1' })
+    const id = (await nthEvent(1)).target!.id
+    await call('remotesync:targets:authStart', 'dropbox', { id })
+    await call('remotesync:targets:remove', id)
+    env.dbx!.cb({ code: 'C2' })
+    expect(await nthEvent(2)).toEqual({ attempt: expect.any(String), ok: false, error: 'target-not-found' })
+    expect(store().targets).toEqual({})
+  })
+
+  it('a re-auth still looking up its target does not supersede a newer start that is already running', async () => {
+    dropbox({ C1: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-1' }, C2: { accountId: 'dbid:B', email: 'b@example.test', refresh: 'fixture-refresh-2' } })
+    await call('remotesync:targets:authStart', 'dropbox', {})
+    env.dbx!.cb({ code: 'C1' })
+    const id = (await nthEvent(1)).target!.id
+    const [ra, rb] = await Promise.all([call('remotesync:targets:authStart', 'dropbox', { id }), call('remotesync:targets:authStart', 'dropbox', {})])
+    expect(ra).toEqual({ ok: false, error: 'auth-superseded' })
+    expect(rb).toMatchObject({ ok: true })
+    env.dbx!.cb({ code: 'C2' })
+    expect(await nthEvent(2)).toMatchObject({ attempt: rb.attempt, ok: true, account: 'b@example.test' })
+  })
+
+  it('superseded while the browser is opening → the start reports auth-superseded instead of a dead attempt', async () => {
+    let release!: () => void
+    env.openHold = new Promise<void>((r) => { release = r })
+    const pa = call('remotesync:targets:authStart', 'dropbox', {})
+    await until(() => env.opened.length === 1, 'first browser open')
+    const rb = await call('remotesync:targets:authStart', 'dropbox', {})
+    release()
+    expect(await pa).toEqual({ ok: false, error: 'auth-superseded' })
+    expect(rb).toMatchObject({ ok: true, mode: 'auto' })
+  })
+
+  it('auto mode does not take a pasted code', async () => {
+    dropbox({ C1: { accountId: 'dbid:A', email: 'a@example.test', refresh: 'fixture-refresh-1' } })
+    const a = await call('remotesync:targets:authStart', 'dropbox', {})
+    expect(a.mode).toBe('auto')
+    expect(await call('remotesync:targets:authFinish', a.attempt, 'C1')).toEqual({ ok: false, error: 'auth-not-started' })
+    await settle()
+    expect(env.requests).toEqual([])
   })
 })
 
@@ -249,6 +337,32 @@ describe('only one authorization at a time', () => {
     await call('remotesync:targets:authStart', 'dropbox', {})
     expect(env.broadcast).toEqual([{ ch: 'remotesync:dropboxAuth', p: { ok: false, error: 'auth-superseded' } }])
     expect(legacyDbx.closed).toBe(true)
+  })
+
+  it('an old-page Dropbox exchange already in flight when a target authorization starts is dropped: nothing written to remotesync.json', async () => {
+    let releaseToken!: () => void
+    const tokenHeld = new Promise<void>((r) => { releaseToken = r })
+    env.respond = async (r) => {
+      if (r.url === 'https://api.dropboxapi.com/oauth2/token') { await tokenHeld; return json({ refresh_token: 'fixture-refresh-legacy', access_token: 'fixture-access-legacy', account_id: 'dbid:L' }) }
+      return json({ email: 'l@example.test' })
+    }
+    await call('remotesync:dropboxAuthStart', '')
+    env.dbx!.cb({ code: 'L1' })
+    await until(() => env.requests.length === 1, 'legacy token request')
+    await call('remotesync:targets:authStart', 'dropbox', {})
+    releaseToken()
+    await until(() => env.broadcast.length === 2, 'legacy result')
+    expect(env.broadcast).toEqual([
+      { ch: 'remotesync:dropboxAuth', p: { ok: false, error: 'auth-superseded' } },
+      { ch: 'remotesync:dropboxAuth', p: { ok: false, error: 'auth-superseded' } },
+    ])
+    expect(() => readFileSync(join(env.root, 'userData', 'remotesync.json'))).toThrow()
+  })
+
+  it('a target authorization supersedes the old page on both providers', async () => {
+    await call('remotesync:gdriveAuthStart', 'fixture-client', '')
+    await call('remotesync:targets:authStart', 'dropbox', {})
+    expect(env.broadcast).toEqual([{ ch: 'remotesync:gdriveAuth', p: { ok: false, error: 'auth-superseded' } }])
   })
 
   it('the old settings page starting Google Drive also supersedes a target attempt', async () => {
@@ -288,12 +402,12 @@ describe('ending without credentials', () => {
   it('provider errors surface as fixed codes, never the provider text', async () => {
     dropbox({})
     const codes: string[] = []
-    for (const r of [{ error: 'access_denied: fixture-person@example.test said no' }, { error: 'state-mismatch' }, { error: 'server_error: fixture-provider-text' }, { code: 'BAD' }]) {
+    for (const r of [{ error: 'access_denied: fixture-person@example.test said no' }, { error: 'server_error: fixture-provider-text' }, { code: 'BAD' }]) {
       await call('remotesync:targets:authStart', 'dropbox', {})
       env.dbx!.cb(r as { code: string } | { error: string })
       codes.push((await nthEvent(codes.length + 1)).error!)
     }
-    expect(codes).toEqual(['auth-denied', 'auth-state-mismatch', 'auth-failed', 'auth-exchange-failed'])
+    expect(codes).toEqual(['auth-denied', 'auth-failed', 'auth-exchange-failed'])
     expect(() => store()).toThrow() // 什么都没存
   })
 
@@ -327,21 +441,20 @@ describe('authorizing a Google Drive target', () => {
       if (r.url.startsWith('https://www.googleapis.com/drive/v3/about')) return json({ user: { permissionId: 'perm-A', emailAddress: 'g@example.test', displayName: 'G' } })
       return new Response('', { status: 404 })
     }
-    // 先来一次 state 不对的
-    const bad = await call('remotesync:targets:authStart', 'gdrive', { clientId: 'fixture-client.apps', clientSecret: 'fixture-client-secret-1' })
-    expect(bad).toMatchObject({ ok: true, mode: 'auto' })
-    const ub = q(env.opened[0])
-    await fetch(`${ub.get('redirect_uri')}?code=G1&state=not-the-state`)
-    expect(await nthEvent(1)).toEqual({ attempt: bad.attempt, ok: false, error: 'auth-state-mismatch' })
-
     const start = await call('remotesync:targets:authStart', 'gdrive', { clientId: 'fixture-client.apps', clientSecret: 'fixture-client-secret-1', baseDir: 'Forsion/Vault' })
-    const u = q(env.opened[1])
+    expect(start).toMatchObject({ ok: true, mode: 'auto' })
+    const u = q(env.opened[0])
     expect(u.get('client_id')).toBe('fixture-client.apps')
     const redirect = u.get('redirect_uri')!
     expect(redirect).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/)
+    // 旧授权页晚到的回调(state 不对):回过期页,不换码、不结束这一次
+    expect((await fetch(`${redirect}?code=G1&state=not-the-state`)).status).toBe(400)
+    await settle()
+    expect(events).toEqual([])
+    expect(env.requests).toEqual([])
     const page = await fetch(`${redirect}?code=G1&state=${u.get('state')}`)
     expect(page.status).toBe(200)
-    const ev = await nthEvent(2)
+    const ev = await nthEvent(1)
     expect(ev).toEqual({ attempt: start.attempt, ok: true, account: 'g@example.test', target: { id: expect.any(String), kind: 'gdrive', label: expect.any(String), dirDefault: 'Forsion/Vault', source: 'user' } })
     const tok = new URLSearchParams(env.requests.find((r) => r.url === 'https://oauth2.googleapis.com/token' && new URLSearchParams(r.body).get('code') === 'G1')!.body)
     expect(tok.get('redirect_uri')).toBe(redirect)
@@ -351,11 +464,11 @@ describe('authorizing a Google Drive target', () => {
     const tokens = env.requests.length
     await fetch(`${redirect}?code=G1&state=${u.get('state')}`).catch(() => null)
     await settle()
-    expect(events).toHaveLength(2)
+    expect(events).toHaveLength(1)
     expect(env.requests).toHaveLength(tokens)
     // Drive 只有回环一条路:手贴不收
     const again = await call('remotesync:targets:authStart', 'gdrive', { id: ev.target!.id })
-    expect(q(env.opened[2]).get('client_id')).toBe('fixture-client.apps') // 重新授权沿用那条的自建客户端
+    expect(q(env.opened[1]).get('client_id')).toBe('fixture-client.apps') // 重新授权沿用那条的自建客户端
     expect(await call('remotesync:targets:authFinish', again.attempt, 'G1')).toEqual({ ok: false, error: 'auth-not-started' })
   })
 })

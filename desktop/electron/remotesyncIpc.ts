@@ -411,6 +411,8 @@ const DBX_AUTH_TIMEOUT_MS = 5 * 60_000
 const dbxAppKey = (d?: { appKey?: string }): string => (d?.appKey ?? '').trim() || FORSION_DROPBOX_APP_KEY
 
 let dbxPending: { appKey: string; custom: boolean; verifier: string; redirectUri?: string } | null = null
+/** 新同步的去处授权每顶掉一次旧设置页的 Dropbox 授权就 +1(在途的换码据此作废)。 */
+let dbxSupersededEpoch = 0
 let dbxServer: { close: () => void } | null = null
 let dbxTimer: NodeJS.Timeout | null = null
 
@@ -445,8 +447,11 @@ async function startDbxLoopback(state: string): Promise<boolean> {
 async function finishDropboxAuth(code: string): Promise<{ ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }> {
   const pending = dbxPending
   if (!pending) return { ok: false, error: 'auth-not-started' }
+  const epoch = dbxSupersededEpoch
   try {
     const r = await dropboxExchangeCode(pending.appKey, code, pending.verifier, pending.redirectUri, remoteFetch)
+    // 换码期间新同步的去处授权顶掉了这一次(契约 H-9):结果作废,不落配置。只有新授权会动这个数,旧设置页自己的流程一字不变
+    if (epoch !== dbxSupersededEpoch) return { ok: false, error: 'auth-superseded' }
     dbxPending = null
     const config = await saveConfig((c) => ({
       // 内置官方应用的 key 不落配置:否则日后换 key,旧值会一直盖住内置值
@@ -558,8 +563,20 @@ interface TargetAuthAttempt {
   done: (attempt: string, r: TargetAuthOutcome) => void
   close: () => void
   exchanging?: boolean
+  /** Dropbox 回调口起不来、要用户手贴授权码的那一种;只有它收 finishTargetAuth。 */
+  manual?: boolean
 }
 let targetAttempt: TargetAuthAttempt | null = null
+/** 每个 authStart 进门就领一张票(在任何 await 之前):后领的赢。慢的那个查完 sync-targets 回来,票已经不是最新的 = 作废,
+ *  不去顶掉比它晚开始、先跑起来的那一次。 */
+let targetTicket = 0
+export function takeTargetAuthTicket(): number { return ++targetTicket }
+
+/** 新授权开始时顶掉旧设置页在途的 Dropbox / Drive 授权(两家都顶:同时只认一次)。 */
+function supersedeLegacyAuth(): void {
+  if (dbxPending || dbxServer) { stopDbxServer(); dbxPending = null; dbxSupersededEpoch++; sendAll('remotesync:dropboxAuth', { ok: false, error: 'auth-superseded' }) }
+  if (gdAttempt || gdServer) { stopGdServer(); gdAttempt = null; sendAll('remotesync:gdriveAuth', { ok: false, error: 'auth-superseded' }) }
+}
 
 /** 回调页 / 换码的失败 → 固定码(提供方的 error_description 可能带账号信息,不往外带)。 */
 function callbackErrorCode(err: string): string {
@@ -580,7 +597,7 @@ function endTargetAuth(a: TargetAuthAttempt, r: TargetAuthOutcome): void {
 function supersedeTargetAuth(kind: 'dropbox' | 'gdrive'): void {
   const a = targetAttempt
   if (!a) return
-  // 同时只认一次授权(Dropbox 的回调口还是同一个 53682):不管哪一家,一律顶掉
+  // 同时只认一次授权(Dropbox 的回调口还是同一个 53682):旧设置页不管开哪一家,一律顶掉新授权
   void kind
   endTargetAuth(a, { ok: false, error: 'auth-superseded' })
 }
@@ -621,7 +638,9 @@ export async function startTargetAuth(
   kind: 'dropbox' | 'gdrive',
   opts: { appKey?: string; clientId?: string; clientSecret?: string },
   done: (attempt: string, r: TargetAuthOutcome) => void,
+  ticket: number = takeTargetAuthTicket(),
 ): Promise<{ ok: true; attempt: string; mode: 'auto' | 'manual' } | { ok: false; error: string }> {
+  if (ticket !== targetTicket) return { ok: false, error: 'auth-superseded' }
   if (targetAttempt) endTargetAuth(targetAttempt, { ok: false, error: 'auth-superseded' })
   const { verifier, challenge } = pkcePair()
   const state = randomBytes(16).toString('hex')
@@ -639,38 +658,43 @@ export async function startTargetAuth(
     const custom = (opts.appKey ?? '').trim()
     const key = custom || FORSION_DROPBOX_APP_KEY
     if (!key) return { ok: false, error: 'no-app-key' }
-    // 旧设置页在途的 Dropbox 授权:同一个回调口,顶掉它
-    if (dbxPending || dbxServer) { stopDbxServer(); dbxPending = null; sendAll('remotesync:dropboxAuth', { ok: false, error: 'auth-superseded' }) }
+    supersedeLegacyAuth() // 旧设置页的 Dropbox 授权和这里共用回调口
     a.dropbox = { appKey: key, custom: !!custom }
     targetAttempt = a
-    srv = await dropboxCallbackServer(DBX_PORT, state, onCallback)
+    // 旧网页(被顶掉的那一次)晚到的回调带着别的 state:不算这一次的结果,接着等
+    srv = await dropboxCallbackServer(DBX_PORT, state, onCallback, { ignoreStateMismatch: true })
     if (targetAttempt !== a) { srv?.close(); return { ok: false, error: 'auth-superseded' } }
+    const mode = srv ? 'auto' as const : 'manual' as const
+    a.manual = mode === 'manual'
     a.redirectUri = srv ? DBX_REDIRECT_URI : undefined
     timer = setTimeout(() => endTargetAuth(a, { ok: false, error: 'auth-timeout' }), DBX_AUTH_TIMEOUT_MS)
     ;(timer as { unref?: () => void }).unref?.()
     if (!(await openAuthPage(a, dropboxAuthUrl(key, challenge, srv ? { redirectUri: DBX_REDIRECT_URI, state } : {})))) return { ok: false, error: 'open-browser-failed' }
-    return { ok: true, attempt: id, mode: srv ? 'auto' : 'manual' }
+    // 打开浏览器期间被顶掉了:结果事件已经发过(调用方那时还不知道这个 attempt),这里如实回失败,别让界面空等
+    if (targetAttempt !== a) return { ok: false, error: 'auth-superseded' }
+    return { ok: true, attempt: id, mode }
   }
   const own = (opts.clientId ?? '').trim()
   const client = own ? { clientId: own, clientSecret: (opts.clientSecret ?? '').trim() || undefined } : gdriveClient()
   if (!client.clientId) return { ok: false, error: 'no-client-id' }
-  if (gdAttempt || gdServer) { stopGdServer(); gdAttempt = null; sendAll('remotesync:gdriveAuth', { ok: false, error: 'auth-superseded' }) }
+  supersedeLegacyAuth()
   a.gdrive = { ...client, custom: !!own }
   targetAttempt = a
-  srv = await dropboxCallbackServer(0, state, onCallback)
+  srv = await dropboxCallbackServer(0, state, onCallback, { ignoreStateMismatch: true })
   if (targetAttempt !== a) { srv?.close(); return { ok: false, error: 'auth-superseded' } }
   if (!srv) { targetAttempt = null; return { ok: false, error: 'loopback-unavailable' } }
   a.redirectUri = `http://127.0.0.1:${srv.port}/`
   timer = setTimeout(() => endTargetAuth(a, { ok: false, error: 'auth-timeout' }), DBX_AUTH_TIMEOUT_MS)
   ;(timer as { unref?: () => void }).unref?.()
   if (!(await openAuthPage(a, gdriveAuthUrl(client.clientId, challenge, a.redirectUri, state)))) return { ok: false, error: 'open-browser-failed' }
+  if (targetAttempt !== a) return { ok: false, error: 'auth-superseded' }
   return { ok: true, attempt: id, mode: 'auto' }
 }
 
 /** Dropbox 手贴授权码那条路(mode:'manual')。不是这一次 / 已经结束 = auth-not-started。 */
 export function finishTargetAuth(attempt: string, code: string): { ok: boolean; error?: string } {
   const a = targetAttempt
-  if (!a || a.id !== attempt || a.kind !== 'dropbox' || typeof code !== 'string' || !code.trim()) return { ok: false, error: 'auth-not-started' }
+  if (!a || a.id !== attempt || !a.manual || typeof code !== 'string' || !code.trim()) return { ok: false, error: 'auth-not-started' }
   void exchangeTargetAuth(a, code.trim())
   return { ok: true }
 }

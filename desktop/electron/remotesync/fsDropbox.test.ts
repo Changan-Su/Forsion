@@ -75,6 +75,29 @@ describe('fsDropbox', () => {
     a!.close()
   })
 
+  it('ignoreStateMismatch:旧授权页晚到的回调(state 不对)不消耗这一次,接着等;不开 = 原样当结果;关掉后同一个口能马上再起(新旧授权交接)', async () => {
+    const got: unknown[] = []
+    const srv = await dropboxCallbackServer(0, 'NEW', (r) => got.push(r), { ignoreStateMismatch: true })
+    const base = `http://127.0.0.1:${srv!.port}`
+    const stale = await fetch(`${base}/?code=OLD&state=OLD`, { headers: { connection: 'close' } })
+    expect(stale.status).toBe(400)
+    expect(got).toEqual([])
+    expect((await fetch(`${base}/?code=C1&state=NEW`, { headers: { connection: 'close' } })).status).toBe(200)
+    expect(got).toEqual([{ code: 'C1' }])
+
+    const plain: unknown[] = []
+    const legacy = await dropboxCallbackServer(0, 'S', (r) => plain.push(r))
+    await fetch(`http://127.0.0.1:${legacy!.port}/?code=X&state=OTHER`, { headers: { connection: 'close' } })
+    expect(plain).toEqual([{ error: 'state-mismatch' }])
+
+    const first = await dropboxCallbackServer(0, 'A', () => {})
+    const port = first!.port
+    first!.close()
+    const second = await dropboxCallbackServer(port, 'B', () => {})
+    expect(second).not.toBeNull()
+    second!.close()
+  })
+
   it('walk:分页合并、folder 过滤、base 前缀剥离(中文);token 只刷一次', async () => {
     mockFetch((url) => {
       if (url.endsWith('/2/files/list_folder'))
