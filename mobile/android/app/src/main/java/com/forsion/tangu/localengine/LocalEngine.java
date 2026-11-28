@@ -73,11 +73,15 @@ public final class LocalEngine {
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "local-engine-idle"); t.setDaemon(true); return t; });
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
     /**
-     * Bumped on every change event. state() carries it so the page can drop a snapshot older than one it already has:
-     * a call's reply (pause() answers with the state from before the download thread noticed) can reach the page
-     * after the change event that superseded it, and would otherwise put the row back to "downloading" for good.
+     * Every snapshot (a call's reply or a change event) takes the next number while it is captured under snapLock, so
+     * a higher number always means a later capture. The page drops a snapshot older than one it already has: a reply
+     * (pause() answers with the state from before the download thread noticed) can reach it after the change event
+     * that superseded it, and would otherwise put the row back to "downloading" for good. Listeners are called
+     * outside the lock; delivery order does not matter because of the numbers. Nothing under snapLock takes another
+     * lock (installerFor() is taken before it: resume() emits while holding this).
      */
     private final AtomicLong seq = new AtomicLong();
+    private final Object snapLock = new Object();
     /** Held for a whole start / stop / swap entry. */
     private final Object startLock = new Object();
     /** Short: guards proc / procAccount together with the in-flight count (acquire registers atomically; idle stop checks atomically). */
@@ -144,7 +148,6 @@ public final class LocalEngine {
     public void removeListener(Listener l) { listeners.remove(l); }
 
     private void emit() {
-        seq.incrementAndGet();
         JSONObject s = state();
         for (Listener l : listeners) {
             try { l.onChange(s); } catch (RuntimeException ignored) {}
@@ -154,12 +157,19 @@ public final class LocalEngine {
     // ---------- state for the page ----------
 
     public JSONObject state() {
+        LocalEngineInstaller ins = installerFor();
+        synchronized (snapLock) {
+            return snapshot(ins, seq.incrementAndGet());
+        }
+    }
+
+    private JSONObject snapshot(LocalEngineInstaller ins, long q) {
         JSONObject o = new JSONObject();
         try {
-            o.put("seq", seq.get()); // read first: the fields below are at least this new
+            o.put("seq", q);
             o.put("available", available());
             o.put("configured", !manifestUrl().isEmpty());
-            JSONObject inst = installerFor().installed();
+            JSONObject inst = ins.installed();
             o.put("installed", inst != null);
             if (inst != null) {
                 o.put("baseVersion", inst.getJSONObject("base").optString("version"));
@@ -179,7 +189,7 @@ public final class LocalEngine {
                 o.put("engineDownloadBytes", m.engine.size);
                 o.put("availableEngineVersion", m.engine.version);
                 o.put("availableBaseVersion", m.base.version);
-                o.put("resumeBytes", installerFor().downloadedBytes(m));
+                o.put("resumeBytes", ins.downloadedBytes(m));
                 if (inst != null) {
                     boolean engineOld = !m.engine.sha256.equals(inst.getJSONObject("engine").optString("sha256"));
                     o.put("updateAvailable", engineOld);

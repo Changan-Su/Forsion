@@ -4,7 +4,6 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.LinkProperties;
 import android.net.Network;
-import android.os.Build;
 import android.os.SystemClock;
 import android.system.Os;
 
@@ -86,20 +85,23 @@ final class LocalEnginePaths {
 
     /** The launcher ships only in builds that carry it (test channel) and only runs on 64-bit ARM. */
     boolean launcherBundled() {
-        return arm64Native(Build.SUPPORTED_ABIS, System.getProperty("os.arch"))
+        String machine;
+        try { machine = Os.uname().machine; } catch (Exception e) { machine = null; }
+        return arm64Native(android.os.Process.is64Bit(), machine)
                 && new File(lib(LAUNCHER)).canExecute() && new File(lib(LOADER)).exists();
     }
 
     /**
-     * PRoot is an arm64 program that ptraces arm64 children, so it needs a device that is arm64 itself and an app
-     * process that really runs as arm64. Listing arm64-v8a somewhere is not enough: x86_64 devices with ARM
-     * translation (x86_64 emulator images, some Chromebooks) list it second, and if the APK ever carries only arm64
-     * libraries the package manager installs it translated and extracts the launcher there. Hence: the device's
-     * first ABI is arm64-v8a, and this process's architecture is aarch64.
+     * PRoot is an arm64 program that ptraces arm64 children, so this process must itself run as 64-bit ARM. Asked of
+     * the process and the kernel, not of the ABI list: x86_64 devices with ARM translation (x86_64 emulator images,
+     * some Chromebooks) list arm64-v8a too, and if the APK ever carries only arm64 libraries the package manager
+     * installs it translated and extracts the launcher there; the native bridge may also rewrite os.arch, while
+     * uname(2) still names the real machine. The ABI order is only a preference (a 32-bit-first arm64 build lists
+     * armeabi-v7a first and can still run this app as arm64), so it is not used. 32-bit processes on arm64 kernels
+     * see "armv8l" and is64Bit() == false.
      */
-    static boolean arm64Native(String[] supportedAbis, String osArch) {
-        return supportedAbis != null && supportedAbis.length > 0 && "arm64-v8a".equals(supportedAbis[0])
-                && "aarch64".equals(osArch);
+    static boolean arm64Native(boolean is64BitProcess, String unameMachine) {
+        return is64BitProcess && "aarch64".equals(unameMachine);
     }
 
     Map<String, String> prootEnv() {

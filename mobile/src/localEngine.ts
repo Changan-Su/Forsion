@@ -58,8 +58,9 @@ export function installLocalEngine(): void {
   installed = true
   const Native = registerPlugin<LocalEnginePlugin>('ForsionLocalEngine')
 
-  // 原生给每个快照带 seq(变化事件加 1)。调用的回复可能在取代它的变化事件之后才到(pause() 回的是下载线程
-  // 还没停下时的状态):比已收到的旧就丢掉,不然这一行会停在「正在下载」,之后再没有事件把它改回来。
+  // 原生每取一次快照(调用的回复或变化事件)就领一个更大的 seq,数大 = 取得晚。调用的回复可能在取代它的变化事件
+  // 之后才到(pause() 回的是下载线程还没停下时的状态):比已收到的旧就丢掉,不然这一行会停在「正在下载」,之后再没有
+  // 事件把它改回来。
   let lastSeq = -1
   const stale = (s: PhoneEngineState | null | undefined): boolean => typeof s?.seq === 'number' && s.seq < lastSeq
   const apply = (s: PhoneEngineState | null | undefined): PhoneEngineState => {
