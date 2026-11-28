@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -103,7 +103,7 @@ jobs:
           path: unit-dist
       # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写 `_authToken=${NODE_AUTH_TOKEN}` 并导出占位令牌,
       # npm 见到「已配令牌」就不走 OIDC,trusted publishing 以 ENEEDAUTH / E404 失败(npm/documentation#1960)。
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
       - name: Only the tagged release build is publishable
