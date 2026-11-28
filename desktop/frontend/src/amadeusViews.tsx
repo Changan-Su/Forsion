@@ -114,6 +114,7 @@ import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/tree
 import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
+import { ipcErrorText } from './ipcError'
 import { useVaultRelParam } from './views/vaultRelParam'
 import { AnimatedCollapse } from './components/AnimatedUI'
 
@@ -979,6 +980,7 @@ export function AmadeusPagesView() {
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaultLoading = usePageStore((s) => s.vaultLoading)
+  const vaultRestoreError = usePageStore((s) => s.vaultRestoreError) // 设置文件读不了:空态提示换成那句话(仓库级,哪个面板都一样)
   // 智库同步第 2 步完整模式:右键入口改去设置 › 同步、旧的「云同步」分区不画(契约 §3.10);v2 状态变了菜单文案跟着变
   const fullSync = useSyncMode((s) => s.mode === 'full')
   const legacySync = useLegacySync() // 旧写入口:读不出 / 还没问出来时不给(Codex P1-7)
@@ -1973,7 +1975,7 @@ export function AmadeusPagesView() {
               </div>}
 
               {/* 恢复 Vault 在途(云端首开 GET /vaults+/tree)→ 列表骨架;真没库才提示「打开 Vault」。 */}
-              {!vaultRoot && (vaultLoading ? <Skeleton variant="list" /> : <div className="t2s-hint">{t('amxv.openVaultHint')}</div>)}
+              {!vaultRoot && (vaultLoading ? <Skeleton variant="list" /> : <div className="t2s-hint">{vaultRestoreError ? ipcErrorText(vaultRestoreError) : t('amxv.openVaultHint')}</div>)}
               {(() => {
                 // 分区节点表:顺序由 orderedSecIds(持久化)决定,包装层提供拖拽排序。
                 const secNodes: Record<string, ReactNode> = {
@@ -2545,6 +2547,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
   const vaultRoot = usePageStore((s) => s.vaultRoot) // 无笔记时的空态引导据此二态(未开 Vault / 已开待新建)
   const pendingPage = usePageStore((s) => s.pendingPage)
   const loadError = usePageStore((s) => s.error)
+  const vaultRestoreError = usePageStore((s) => s.vaultRestoreError) // 没装上库的原因是设置文件读不了:欢迎页说明那句话
   // 插件文件类型也占用全局 activePage(单活页模型)→ 认领时须能认出「这不是笔记」,见下面的 useEffect。
   const pluginFileTypes = usePluginStore((s) => s.fileTypes)
   // 模式在 uiOverlayStore(供命令面板「切换 源码/可视」),不再是组件内 state;按本 leaf 记(评审 C-08)。
@@ -3183,10 +3186,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </div>
         </div>
       ) : missingNote && notePath ? (
-        /* 当前库没有这篇(另一侧的路径 / 已改名 / 已删):只占位,绝不装载、绝不造文件。 */
+        /* 当前库没有这篇(另一侧的路径 / 已改名 / 已删):只占位,绝不装载、绝不造文件。
+           没装上库是因为设置文件读不了(重启后恢复出来的标签页):不说「不在当前库里」,说那句话;库装上后本支自己重判。 */
         <div className="amx-welcome">
-          <div className="amx-welcome-title">{t('amxv.missing.title')}</div>
-          <p className="amx-welcome-sub">{t('amxv.missing.sub', { path: notePath })}</p>
+          <div className="amx-welcome-title">{!vaultRoot && vaultRestoreError ? t('amxv.welcome.loadFailed') : t('amxv.missing.title')}</div>
+          <p className="amx-welcome-sub">{!vaultRoot && vaultRestoreError ? ipcErrorText(vaultRestoreError) : t('amxv.missing.sub', { path: notePath })}</p>
           <div className="amx-welcome-actions">
             <button className="amx-welcome-btn" onClick={() => useWorkspace.getState().closeLeaf(leaf.id)}>{t('amxv.missing.close')}</button>
           </div>
@@ -3208,7 +3212,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           <p className="amx-welcome-sub">
             {vaultRoot
               ? t('amxv.welcome.pickNote')
-              : t('amxv.welcome.noVault')}
+              : vaultRestoreError ? ipcErrorText(vaultRestoreError) : t('amxv.welcome.noVault')}
           </p>
           <div className="amx-welcome-actions">
             {vaultRoot ? (
