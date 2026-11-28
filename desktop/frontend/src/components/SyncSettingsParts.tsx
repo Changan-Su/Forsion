@@ -12,7 +12,7 @@ import { recordSummary, failureText } from '../sync/vaultSyncText'
 import { openSyncRecords } from '../sync/SyncRecordList'
 import { vaultSync } from '../sync/v2/client'
 import { syncErrorText } from '../sync/v2/errors'
-import type { Cadence, HeldRef, RecoveryEventView, ScopeItem, VaultSyncPreview } from '../sync/v2/types'
+import type { Cadence, HeldRef, RecoveryEventView, ScopeItem, SyncDirection, VaultSyncPreview } from '../sync/v2/types'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import './syncSettingsMessages'
 
@@ -112,19 +112,22 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
 }
 
 /** 等你定(v2):有清单(契约 U-2)就逐篇给四个出口;没有只写计数。 */
-export function HeldReview({ bindingId, count, items, token, onDone }: {
+export function HeldReview({ bindingId, count, items, token, direction, onDone }: {
   bindingId: string
   count: number
   items: Array<{ path: string; newer: 'local' | 'remote' | null; ref: HeldRef }> | null
   /** E-11 的 differsToken:有它才给「全部…」(整份名单对得上才动,对不上一条不动) */
   token?: string
+  /** 网盘那一行的方向:只往外推(push,备份都是)只给「用本机」,只往里拉(pull)只给「用云端」;别的出口引擎回 direction_forbids(契约 E-13 第 8 条) */
+  direction?: SyncDirection
   onDone: () => void
 }) {
   const { t } = useI18n()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  if (!count) return null
   const [note, setNote] = useState<string | null>(null)
+  if (!count) return null
+  const actions = direction === 'push' ? (['local'] as const) : direction === 'pull' ? (['cloud'] as const) : (['local', 'cloud', 'both', 'newer'] as const)
   const all = async (action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
     if (!token) return
     setBusy('*'); setError(null); setNote(null)
@@ -151,7 +154,7 @@ export function HeldReview({ bindingId, count, items, token, onDone }: {
           <span className="ssync-held-name">{baseName(h.path)}</span>
           <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t('ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
           <span className="ssync-grow" />
-          {(['local', 'cloud', 'both', 'newer'] as const).map((a) => (
+          {actions.map((a) => (
             <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !h.newer)} onClick={() => void act(h.ref, a)}>
               {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
@@ -162,7 +165,7 @@ export function HeldReview({ bindingId, count, items, token, onDone }: {
         <div className="ssync-held-row ssync-held-all" data-ssync-held-all="">
           <span className="ssync-faint">{t('ssync.review.all', { n: count })}</span>
           <span className="ssync-grow" />
-          {(['local', 'cloud', 'both', 'newer'] as const).map((a) => (
+          {actions.map((a) => (
             <button key={a} type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void all(a)}>
               {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
