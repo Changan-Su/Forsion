@@ -204,6 +204,24 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(syncErrorText('remote_dir_in_use', t)).toBe(t('ssync.err.remoteDirInUseAnon'))
     expect(syncErrorText('remote_dir_nested', t)).not.toBe(syncErrorText('remote_dir_in_use', t))
   })
+  it('E-19:原来的网盘同步占着(bindingId null + source remotesync)留下来,外层失败也留;文案按旧同步说,读不出时不带库名', () => {
+    const legacy = { bindingId: null, name: '归档', source: 'remotesync' }
+    expect(normalizeReply(CH.apply, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: legacy } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: legacy })
+    expect(normalizeReply(CH.preview, { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '研究笔记' } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '研究笔记' } })
+    expect(normalizeReply(CH.setEnabled, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 3, name: '', source: 'x' } } })).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: null, name: '' } })
+    expect(syncErrorText('remote_dir_in_use', t, '研究笔记', legacy)).toBe(t('ssync.err.legacyInUse', { name: '归档' }))
+    expect(syncErrorText('remote_dir_in_use', t, '研究笔记', { ...legacy, name: '' })).toBe(t('ssync.err.legacyInUseAnon'))
+    // 占着的是接手建的那条:不叫人去停它
+    const tk = syncErrorText('remote_dir_in_use', t, '研究笔记', { name: '归档', takeover: true })
+    expect(tk).toBe(t('ssync.err.remoteDirInUseTakeover', { name: '归档' }))
+    expect(tk).not.toContain('停止同步')
+    expect(syncErrorText('takeover_round_running', t)).toBe(t('ssync.err.takeoverRoundRunning'))
+    for (const k of ['ssync.reason.remote_dir_in_use_legacy', 'ssync.note.overlapsLegacyAnon']) expect(t(k)).not.toBe(k)
+    for (const k of ['ssync.reason.remote_dir_in_use_takeover', 'ssync.note.overlapsLegacy', 'ssync.dhold.heldInUseTakeover', 'ssync.dhold.heldPrimaryTakeover', 'ssync.dhold.archivedInUseTakeover', 'ssync.dhold.archivedPrimaryTakeover']) {
+      expect(t(k, { name: '归档' })).not.toBe(k)
+      expect(t(k, { name: '归档' })).not.toContain('停止同步')
+    }
+  })
   it('换去处(含蓬洲云 ↔ 网盘 / 文件夹,E-16 附)的拒绝码各有一句人话,不落到「没做成」', () => {
     const generic = (c: string) => t('ssync.err.generic', { error: c })
     for (const [code, key] of [

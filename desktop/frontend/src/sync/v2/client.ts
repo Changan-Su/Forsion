@@ -31,17 +31,27 @@ function invoker(): Invoke | null {
 /** value 里还藏着失败的通道(内层)。 */
 const SOFT_FAIL = new Set<string>([CH.resolveAll, CH.preview, CH.recoveryRestore, CH.deletesConfirm, CH.deletesAbandon, CH.apply, CH.setScope, CH.setTarget, CH.renameAnswer, CH.resolve, CH.setEnabled, CH.choose, CH.takeoverRevert, CH.dismissCard])
 
+/** 占着远端目录的是谁(E-17 / E-19):name 必须是字符串;bindingId 不是字符串就是 null(原来的网盘同步占着时本来就是 null)。 */
+function holderOf(x: unknown): RemoteDirHolder | undefined {
+  const u = (x as { inUseBy?: unknown } | null | undefined)?.inUseBy as { bindingId?: unknown; name?: unknown; source?: unknown } | undefined
+  if (!u || typeof u !== 'object' || typeof u.name !== 'string') return undefined
+  return { bindingId: typeof u.bindingId === 'string' ? u.bindingId : null, name: u.name, ...(u.source === 'remotesync' ? { source: 'remotesync' as const } : {}) }
+}
+
 /** 归一两层回复(纯函数,单测直接喂)。 */
 export function normalizeReply<T>(channel: string, reply: unknown): VsResult<T> {
   const r = reply as { ok?: unknown; value?: unknown; error?: unknown } | null | undefined
   if (!r || typeof r !== 'object') return { ok: false, error: 'invalid_reply' }
-  if (r.ok !== true) return { ok: false, error: typeof r.error === 'string' && r.error ? r.error : 'failed' }
+  if (r.ok !== true) {
+    // 宿主把失败放在外层回时也可能带着 inUseBy(Codex 第四轮 P1-4)
+    const inUseBy = holderOf(r)
+    return { ok: false, error: typeof r.error === 'string' && r.error ? r.error : 'failed', ...(inUseBy ? { inUseBy } : {}) }
+  }
   const v = r.value as { ok?: unknown; error?: unknown } | null | undefined
   if (SOFT_FAIL.has(channel) && v && typeof v === 'object' && !Array.isArray(v)) {
     if (v.ok === false) {
       // remote_dir_in_use 带着占着那个目录的库(E-17):留下来,别只剩一个码
-      const u = (v as { inUseBy?: unknown }).inUseBy as { bindingId?: unknown; name?: unknown } | undefined
-      const inUseBy = u && typeof u === 'object' && typeof u.name === 'string' ? { bindingId: typeof u.bindingId === 'string' ? u.bindingId : '', name: u.name } : undefined
+      const inUseBy = holderOf(v)
       return { ok: false, error: typeof v.error === 'string' && v.error ? v.error : 'failed', ...(inUseBy ? { inUseBy } : {}) }
     }
     // apply 成功回 BindingView(没有 error 字段);失败回 {error:'stale'} 这样只有 error 的对象

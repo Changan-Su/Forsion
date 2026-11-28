@@ -45,14 +45,31 @@ type TFn = (key: string, vars?: Record<string, unknown>) => string
 
 /** 行上的原因(E 的 BindingReason)。网盘那一行有两条意思不同:server_unsupported = 宿主没有网盘后端,remote_same_root = 同一个库在同步到蓬洲云、这条先不跑(E-8);
  *  认不得的码不把键名露出来。 */
-function reasonText(b: BindingView, t: TFn): string {
+function reasonText(b: BindingView, t: TFn, data: VaultSyncGet): string {
   const code = b.status.reason!
   // 远端目录被别的库占着(E-17):写出是哪个库;停着的那条也占着
-  if (code === 'remote_dir_in_use') return b.status.inUseBy?.name ? t('ssync.reason.remote_dir_in_use', { name: b.status.inUseBy.name }) : t('ssync.reason.remote_dir_in_use_anon')
+  if (code === 'remote_dir_in_use') {
+    const u = withHolder(data, b.status.inUseBy)
+    if (u?.source === 'remotesync') return t('ssync.reason.remote_dir_in_use_legacy')
+    if (u?.name && u.takeover) return t('ssync.reason.remote_dir_in_use_takeover', { name: u.name })
+    return u?.name ? t('ssync.reason.remote_dir_in_use', { name: u.name }) : t('ssync.reason.remote_dir_in_use_anon')
+  }
   const remote = b.target.kind === 'remote' && (code === 'server_unsupported' || code === 'remote_same_root')
   const key = remote ? `ssync.reason.remote.${code}` : `ssync.reason.${code}`
   const text = t(key)
   return text === key ? t('ssync.reason.unknown', { code }) : text
+}
+
+/** 占着的那条是不是接手旧同步时建的(state takeover):refused / reverted 留下的那条用户停不掉(点了回 takeover_in_progress,E-19 第 4 件),
+ *  提示里不叫人去停它、也不给跳过去的按钮。 */
+type HolderInfo = RemoteDirHolder & { takeover?: boolean }
+function withHolder(data: VaultSyncGet, u?: RemoteDirHolder): HolderInfo | undefined {
+  if (!u) return undefined
+  return { ...u, takeover: !!u.bindingId && data.bindings.some((x) => x.id === u.bindingId && x.state === 'takeover') }
+}
+/** 「去『X』」只给用户在那一行能停掉的(不是原来的网盘同步、也不是接手建的那条)。 */
+function canGoto(data: VaultSyncGet, u?: RemoteDirHolder): u is RemoteDirHolder & { bindingId: string } {
+  return !!u?.bindingId && data.bindings.some((x) => x.id === u.bindingId && x.state !== 'takeover')
 }
 
 /** 接手旧网盘同步(D)撞上占用、旧同步封着不交还的那几种(H 的 fix/sync-takeover-d-hold)。 */
@@ -62,15 +79,22 @@ const D_ARCHIVED = new Set(['archived', 'sealed', 'round-running'])
 function dHoldOf(data: VaultSyncGet, root: string): TakeoverView | undefined {
   return data.takeover.find((x) => x.root === root && x.source === 'remotesync' && !!x.reason && D_HOLD.has(x.reason))
 }
-function dHoldText(take: TakeoverView, archived: boolean, t: TFn): string {
-  const name = take.inUseBy?.name
+function dHoldText(take: TakeoverView, archived: boolean, t: TFn, data: VaultSyncGet): string {
   const kind = take.reason === 'remote_dir_in_use' ? 'InUse' : take.reason === 'primary_exists' ? 'Primary' : 'Nested'
-  const key = `ssync.dhold.${archived ? 'archived' : 'held'}${kind}${kind !== 'Nested' && !name ? 'Anon' : ''}`
-  return t(key, { name: name ?? '' })
+  const holder = take.inUseBy?.bindingId ? data.bindings.find((x) => x.id === take.inUseBy!.bindingId) : undefined
+  const stage = archived ? 'archived' : 'held'
+  // 占着的是接手旧同步时建的那条:停不掉,不叫人去停它(E-19 第 4 件)
+  if (holder?.state === 'takeover' && kind !== 'Nested') return t(`ssync.dhold.${stage}${kind}Takeover`, { name: take.inUseBy?.name ?? '' })
+  // primary_exists 的 inUseBy.name 是库名、不是去处(Codex 第四轮 P2-2):写那条绑定同步到哪,找不到那条就不带名字
+  const name = kind === 'Primary' ? (holder ? targetNameOf(holder, t) : '') : take.inUseBy?.name
+  return t(`ssync.dhold.${stage}${kind}${kind !== 'Nested' && !name ? 'Anon' : ''}`, { name: name ?? '' })
+}
+function targetNameOf(b: BindingView, t: TFn): string {
+  return b.target.kind === 'remote' ? b.target.label || t('vsync.target.other') : t('ssync.target.penzor')
 }
 
 /** 跳到占着远端目录的那一行(E-17 的出口:要用这个目录,得先让那个库停止同步)。 */
-function gotoBinding(data: VaultSyncGet, id: string): void {
+function gotoBinding(data: VaultSyncGet, id: string | null): void {
   const root = data.bindings.find((x) => x.id === id)?.root
   const el = root ? document.querySelector<HTMLElement>(`[data-ssync-root="${CSS.escape(root)}"]`) : null
   el?.scrollIntoView({ block: 'center' })
@@ -173,7 +197,7 @@ const isCrossKind = (p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target'>): b
 /** 预演 / 换去处出错的人话。从蓬洲云那一行换走时没登录:apply 回 not_signed_in;预演回 binding_not_found(账号那本账看不到)——
  *  后者只在宿主确知没登录时才按「要先登录」说,绑定在别处停掉了 / 读失败不冒充成登录问题(Codex P1)。 */
 const signedOut = (): boolean => useApp.getState().authInfo?.loggedIn === false
-function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn, inUseBy?: RemoteDirHolder): string {
+function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn, inUseBy?: HolderInfo): string {
   const fromPenzor = isCrossKind(p) && p.baseTarget!.startsWith('penzor:')
   if (fromPenzor && (/not_signed_in\s*$/.test(err) || (/binding_not_found\s*$/.test(err) && signedOut()))) return t('ssync.err.moveSignIn')
   return syncErrorText(err, t, p.name, inUseBy)
@@ -288,7 +312,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    say(p.root, crossKindError(p, err, t, r.ok ? undefined : r.inUseBy))
+    say(p.root, crossKindError(p, err, t, r.ok ? undefined : withHolder(data, r.inUseBy)))
     return false
   }, [t])
 
@@ -441,7 +465,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
     if (r.ok) say(p.root, null)
     else {
-      const text = crossKindError(p, r.error, t, r.inUseBy)
+      const text = crossKindError(p, r.error, t, withHolder(data, r.inUseBy))
       say(p.root, k4 ? `${text} ${t('ssync.err.moveHalf')}` : text)
     }
     refreshVaultSync()
@@ -501,10 +525,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               const b = bindingOf(r.root)
               if (!on) {
                 if (pending?.root === r.root) { ++reqRef.current; setPending(null) }
-                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, res.inUseBy)); refreshVaultSync(); await reload() }
+                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); refreshVaultSync(); await reload() }
                 return
               }
-              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, res.inUseBy)); await reload(); return }
+              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); await reload(); return }
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
@@ -520,7 +544,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onNewVault={(b) => void (async () => {
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
               const res = await vaultSync.renameAnswer(b.id, 'newVault')
-              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, res.inUseBy)); return }
+              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, withHolder(data, res.inUseBy))); return }
               await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })
             })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
@@ -716,8 +740,8 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {auth && <AuthPanel auth={auth} onCancel={onAuthCancel} onCode={onAuthCode} />}
       {dHold && (
         <div className="ssync-note ssync-warn" data-ssync-dhold={dHold.reason}>
-          <span>{dHoldText(dHold, dArchived, t)}</span>
-          {dHold.inUseBy && data.bindings.some((x) => x.id === dHold.inUseBy!.bindingId) && (
+          <span>{dHoldText(dHold, dArchived, t, data)}</span>
+          {canGoto(data, dHold.inUseBy) && (
             <button type="button" className="btn ghost sm" data-ssync-goto={dHold.inUseBy.bindingId} onClick={() => gotoBinding(data, dHold.inUseBy!.bindingId)}>
               {t('ssync.reason.gotoHolder', { name: dHold.inUseBy.name })}
             </button>
@@ -727,12 +751,19 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       )}
       {b?.status.reason && !dHold && (
         <div className="ssync-note ssync-warn" data-ssync-reason={b.status.reason}>
-          <span>{reasonText(b, t)}</span>
-          {b.status.reason === 'remote_dir_in_use' && b.status.inUseBy && data.bindings.some((x) => x.id === b.status.inUseBy!.bindingId) && (
+          <span>{reasonText(b, t, data)}</span>
+          {b.status.reason === 'remote_dir_in_use' && canGoto(data, b.status.inUseBy) && (
             <button type="button" className="btn ghost sm" data-ssync-goto={b.status.inUseBy.bindingId} onClick={() => gotoBinding(data, b.status.inUseBy!.bindingId)}>
               {t('ssync.reason.gotoHolder', { name: b.status.inUseBy.name })}
             </button>
           )}
+        </div>
+      )}
+      {b?.status.overlapsLegacy && (
+        <div className="ssync-note" data-ssync-overlaps-legacy="">
+          {/* 和原来的网盘同步用着同一个去处(E-19):这条照跑,只提醒两边都会写 */}
+          <span>{b.status.overlapsLegacy.name ? t('ssync.note.overlapsLegacy', { name: b.status.overlapsLegacy.name }) : t('ssync.note.overlapsLegacyAnon')}</span>
+          {onOpenDrive && <button type="button" className="btn ghost sm" data-ssync-open-old="" onClick={onOpenDrive}>{t('ssync.dhold.openOld')}</button>}
         </div>
       )}
       {b?.state === 'takeover' && (
@@ -742,7 +773,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
             const r = await vaultSync.takeoverRevert(row.root, take.source)
             const code = r.ok ? '' : (/([a-z][a-z0-9_]+)\s*$/.exec(r.error)?.[1] ?? r.error)
             // 封着的 D 点退回会被拒,码就是 reason 本身(H):照「为什么封着、怎么解开」说
-            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason }, dArchived, t) : syncErrorText(r.error, t, row.name, r.inUseBy))
+            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason }, dArchived, t, data) : syncErrorText(r.error, t, row.name, withHolder(data, r.inUseBy)))
             await reload()
           })()}>{t('ssync.act.revert')}</button>}
         </div>

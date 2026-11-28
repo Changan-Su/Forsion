@@ -47,7 +47,8 @@ export type BindingReason =
   | 'remote_dir_in_use' | 'move_in_progress'
 
 /** 占着这个远端目录的那条绑定(契约 E-17):name = 库文件夹名;可能是停着的那条(停着也占着,只有停止同步才释放)。 */
-export interface RemoteDirHolder { bindingId: string; name: string }
+/** 谁占着这个远端目录(E-17)。bindingId = null、source = 'remotesync':被原来的网盘同步占着(E-19),name 是它本机库的文件夹名,读不出时为空串。 */
+export interface RemoteDirHolder { bindingId: string | null; name: string; source?: 'remotesync' }
 
 export type BindingTargetView =
   | { kind: 'penzor'; vaultId: string; vaultName: string | null; placement: BindingPlacement; prefix: string }
@@ -65,6 +66,8 @@ export interface BindingStatusView {
   reason?: BindingReason
   /** reason = remote_dir_in_use 时:谁占着这个远端目录(E-17) */
   inUseBy?: RemoteDirHolder
+  /** 这条网盘绑定和原来的网盘同步用着同一个去处、旧同步没交给 v2(E-19):照跑,reason 不变,只是一句提示 */
+  overlapsLegacy?: { name: string; targetId: string }
 }
 
 export interface BindingView {
