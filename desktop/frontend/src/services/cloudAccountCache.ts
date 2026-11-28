@@ -16,7 +16,8 @@ export function clearCloudAccountCache(): void {
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.includes(':account:')) continue // Keep owned snapshots for returning to that account.
-      if (key === 'amadeus_tree_snap' || key === 'amadeus.cloudVaultId' ||
+      // amadeus.cloudLibrary(智库同步第 3 步切库新键)与老键同样按账号清:否则换号会把上一个账号选的库带过去
+      if (key === 'amadeus_tree_snap' || key === 'amadeus.cloudVaultId' || key === 'amadeus.cloudLibrary' ||
           key.startsWith('amadeus_last_page:') || key === 'forsion.deskBySession' ||
           key === 'forsion_tangu_unread_sessions' || isContentLayoutKey(key)) localStorage.removeItem(key)
     }

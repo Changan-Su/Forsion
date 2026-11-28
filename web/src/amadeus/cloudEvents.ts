@@ -43,6 +43,13 @@ export interface CloudEventsCfg {
   /** P2 presence(可选):增量事件 / 连上时的全量名册。 */
   onPresence?(p: unknown): void
   onPresenceRoster?(list: unknown): void
+  /** 服务端路径 → 视图里的路径(桥以原位置库 `X/` 为根、或整库视图排除某些前缀时给);null = 不在这个视图里,事件整条不管。
+   *  不给 = 原样。改名 / 移动的两端各自换算:挪出视图 = 删除,挪进视图 = 新建(只刷树)。 */
+  mapPath?(path: string): string | null
+  /** 第 3 步 S3b:声明了 vault-moves 的流在分库后收到 `vault-moved {prefix:'X/', vaultId}`(紧跟在一条 reset 后面)。 */
+  onVaultMoved?(e: { prefix: string; vaultId: string }): void
+  /** 第 3 步 S3a:库被删进回收站,主人的流收到 `vault-deleted {purgeAt}` 再断开。收到以后这条循环就停了(重连只会拿 410)。 */
+  onVaultDeleted?(e: { purgeAt: string | null }): void
 }
 
 interface ChangeRecord {
@@ -89,14 +96,21 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     try { c = JSON.parse(raw) as ChangeRecord } catch { return }
     const seq = typeof c.seq === 'number' ? c.seq : null
     if (seq !== null) lastSeq = Math.max(lastSeq ?? 0, seq)
-    const path = typeof c.path === 'string' ? c.path : ''
+    const rawPath = typeof c.path === 'string' ? c.path : ''
+    const rawNew = typeof c.newPath === 'string' && c.newPath ? c.newPath : null
+    // 视图换算(原位置库 X/ 为根 / 整库视图排除的前缀):两端都不在视图里 → 与这个视图无关,整条不管(不刷树、不回灌)。
+    const path = rawPath && cfg.mapPath ? cfg.mapPath(rawPath) ?? '' : rawPath
+    const mappedNew = rawNew && cfg.mapPath ? cfg.mapPath(rawNew) : rawNew
+    if (rawPath && !path && !mappedNew) return
     const opRaw = `${typeof c.op === 'string' ? c.op : ''} ${typeof c.kind === 'string' ? c.kind : ''}`.toLowerCase()
     // 结构事件:永不回声抑制(自己 move/delete 也要让别的面板刷树;防抖+缓存去重兜底)。
     if (!path || STRUCTURAL_RE.test(opRaw)) fireStructure()
-    if (!path) return
+    if (!path) return // 挪进这个视图的(旧位置不在视图里):对这里就是新建,刷树就够
     // 改名/删除的明细(同样不做回声抑制:自己这端别的面板也可能开着旧路径)。
-    const op = typeof c.op === 'string' ? c.op : ''
-    const newPath = typeof c.newPath === 'string' && c.newPath ? c.newPath : null
+    let op = typeof c.op === 'string' ? c.op : ''
+    const newPath = mappedNew
+    // 挪出这个视图 = 对这里就是删了(不能当改名跟过去:新路径在视图外,写不到)
+    if (rawNew && !newPath) op = op === 'move' ? 'delete' : op === 'rename-folder' || op === 'move-folder' ? 'delete-folder' : op
     // 改名/删除/文件夹事件到此为止,**不**再往下走旧路径的内容回灌:回灌 = reconcilePage → loadOrCreate 404 →
     // 重建 = 把别处刚挪走/删掉的页原地造回云端(v3 页「删了/改名了还会出现」的路径;Codex 终审 P0)。
     // 树刷新已由上面的结构事件负责;开着旧路径的编辑器由桥的 movedTo/everKnown 接管。
@@ -157,6 +171,23 @@ export function startCloudEvents(cfg: CloudEventsCfg): () => void {
     src.addEventListener('presence', (e) => {
       if (stopped) return
       try { cfg.onPresence?.(JSON.parse((e as MessageEvent).data as string)) } catch { /* ignore */ }
+    })
+    src.addEventListener('vault-moved', (e) => {
+      if (stopped) return
+      try {
+        const d = JSON.parse((e as MessageEvent).data as string) as { prefix?: unknown; vaultId?: unknown }
+        if (typeof d.prefix === 'string' && typeof d.vaultId === 'string') cfg.onVaultMoved?.({ prefix: d.prefix, vaultId: d.vaultId })
+      } catch { /* 体坏了:通知只负责叫醒,树的 moved[] 才是真源 */ }
+    })
+    src.addEventListener('vault-deleted', (e) => {
+      if (stopped) return
+      let purgeAt: string | null = null
+      try {
+        const d = JSON.parse((e as MessageEvent).data as string) as { purgeAt?: unknown }
+        if (typeof d.purgeAt === 'string') purgeAt = d.purgeAt
+      } catch { /* 无体也算 */ }
+      stop() // 服务端随后断流,重连只会拿 410:别再退避重连
+      cfg.onVaultDeleted?.({ purgeAt })
     })
     src.addEventListener('presence-roster', (e) => {
       if (stopped) return

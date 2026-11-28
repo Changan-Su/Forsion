@@ -1137,9 +1137,16 @@ declare global {
     /** Amadeus 页面级共享+发布(web=cloudCollab / 桌面=collab IPC;移动 undefined,共享 UI 据此解闸)。 */
     amadeusCollab?: {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
+      /** 库清单(智库同步第 3 步,网页 / 手机):/libraries 的自有库,原位置库也是一项;老服务端退回 /vaults。
+       *  id = libraryId(默认库 / 独立库 = vault id;原位置库 = `<默认库 id>:Amadeus/<X>/`)。桌面没有(缺位)。 */
+      listLibraries?(): Promise<Array<{ id: string; name: string; kind: 'default' | 'own' | 'legacy'; vaultId: string; isDefault: boolean }>>
       activeVaultId(): Promise<string>
+      /** 当前打开的库的 libraryId(与 listLibraries 的 id 同一口径)。 */
+      activeLibraryId?(): Promise<string>
       /** 切活动云库(web=localStorage+reload,带 path 时切完直达这一页;桌面共享走镜像,不切库)。 */
       switchVault(id: string, path?: string): void
+      /** 按 libraryId 切库(整页刷新);原位置库以 `X/` 为根打开。 */
+      switchLibrary?(id: string): void
       /** 文件地址:不含凭据,能不能看由服务端判。 */
       fileUrl(vaultId: string, path: string): string
       // 同步共享(owner):共享单位 = 页 + 子页面树

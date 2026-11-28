@@ -7,6 +7,12 @@
  * 编译器纯函数(parsePageSource/compile/newPage)在浏览器本地跑:
  *   loadPage = GET + parsePageSource;savePage = compile + PUT(乐观并发 baseSeq)。
  *
+ * 库视图(智库同步第 3 步,cloudScope.ts):打开的是 /libraries 里的一项。原位置库以 `X/` 为根(桥内路径 rel ↔ 服务端 `X/rel`),
+ * 云端笔记(默认库)的视图排除原位置库的前缀。记账一律按视图路径,换算只在 toWire / fromWire。
+ * 每个请求带 X-Content-Caps: vaults,vault-moves:写到分走的前缀上服务端回 409 VAULT_MOVED {vaultId, prefix} ——
+ * 它**不是冲突**(isConflict409 排除它):不重载、不换名,按新库换路由再写一次;还不行就这一篇停写(调用方保留草稿)。
+ * 410 VAULT_DELETED / SSE vault-deleted:停写、停事件流,本机什么都不删,状态交给上层(onCloudLibraryState)。
+ *
  * 并发模型:
  * - per-path 串行写队列(promise 链;rename/move 占旧新两个 key)—— 防同径写乱序;
  * - path→seq 表只由自己的 GET/PUT 响应更新(不吃 SSE 的 seq,否则 409 冲突检测失明);
@@ -52,8 +58,23 @@ import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
 import { toastRenameRewriteFailed } from '@/amadeus/lib/renameLinksToast'
-import { createCloudHttp, is404, is409, HttpError } from './cloudHttp'
+import { createCloudHttp, is404, isConflict409, isVaultDeleted, isVaultMoved, HttpError, type CloudHttp } from './cloudHttp'
 import { startCloudEvents } from './cloudEvents'
+import {
+  CLOUD_CONTENT_CAPS,
+  cloudLibraryKeys,
+  emitCloudLibraryState,
+  httpPrefix,
+  legacyPrefixOfLibrary,
+  readCloudLibrary,
+  rememberCloudLibrary,
+  pendingOpenNote,
+  underPrefix,
+  vaultIdOfLibrary,
+  type CloudLibraryScope,
+  type LibraryDto,
+} from './cloudScope'
+import { cloudLibraryRoot } from '@/amadeus/lib/cloudLibraryRoot'
 import { unifiedPaths } from '@/amadeus/unified/lifecycle'
 import { pushPresence, setRoster } from './cloudPresence'
 import { buildAssetUrl, installCloudAssetUrls } from './cloudAssets'
@@ -81,11 +102,13 @@ interface TreeDto {
   pages: string[]; files: Array<{ path: string; size: number }>; folders: string[]; seq: number; maxFileBytes?: number
   /** 每个文件一行(含点开头的、含 binary):seq 是该文件自己的版本号,二进制比对交换写的基准取自这里。 */
   entries?: Array<{ path: string; kind: string; seq: number }>
+  /** 声明了 vault-moves 才有(第 3 步 S3b):这个库分出去的前缀(HTTP `X/`)和新库。树里已经没有它们。 */
+  moved?: Array<{ prefix: string; vaultId: string; at?: string }>
 }
 interface FileDto { id?: string; path: string; kind: string; content: string; seq: number; hash: string; updatedAt: string }
 interface PutResultDto { seq: number; hash: string }
 interface MoveResultDto { path: string; seq: number }
-interface ConflictBody { code?: 'EXISTS' | 'CONFLICT'; seq?: number; content?: string }
+interface ConflictBody { code?: 'EXISTS' | 'CONFLICT' | 'VAULT_MOVED' | 'VAULT_DELETED'; seq?: number; content?: string; vaultId?: string; prefix?: string; purgeAt?: string }
 interface PagePropsDto { path: string; title: string; fmExtra: string }
 
 export interface CloudBridgeCfg {
@@ -99,6 +122,12 @@ export interface CloudBridgeCfg {
    *  给了就把它们从页面列表挪进文件列表(树上还在,不进笔记管线)。服务端不知道这台设备装了哪些插件,所以在这里分。
    *  今天只有 Android App 传(mobile/src/main.tsx,名单来自 pluginHost.fileExtensions);不传 = 行为不变。 */
   pluginExts?(): string[]
+  /** 直接指定要开的库(桌面在线打开给 OnlineVaultRef 的 vaultId / libraryId)。不给 = 网页 / 手机按 localStorage 选库(cloudScope)。 */
+  library?: { vaultId: string; libraryId: string }
+  /** 原位置库以 `<X>/` 为根打开(契约 §3.3):'Amadeus/X/'、'X/'、'X' 都认。只在给了 library 时用;不给 library 时从 /libraries 推。 */
+  rootPrefix?: string
+  /** 整库视图里不显示的前缀(云端笔记排除各原位置库)。只在给了 library 时用。 */
+  excludePrefixes?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -117,21 +146,36 @@ const notify = (text: string, isError = false): void => {
 
 const nowIso = (): string => new Date().toISOString()
 
-// ── 活动 vault(P2 共享:可以打开别人的共享库)───────────────────────────────────
-/** localStorage 覆盖键:存 vault id;缺省/失效 → 自己的 default vault。 */
-export const ACTIVE_VAULT_KEY = 'amadeus.cloudVaultId'
+// ── 活动 vault / 库(P2 共享:可以打开别人的共享库;第 3 步:原位置库)────────────────────────
+/** localStorage 键:老键存 vault id、新键存 libraryId(读写都走 cloudScope 的 readCloudLibrary / rememberCloudLibrary)。 */
+export { ACTIVE_VAULT_KEY, ACTIVE_LIBRARY_KEY, rememberCloudLibrary } from './cloudScope'
 
-let activeVaultResolver: (() => Promise<string>) | null = null
+interface ActiveBridge {
+  scope(): Promise<CloudLibraryScope>
+  /** 视图路径 → 服务端路径(同步,桥没解析出库时原样)。 */
+  toWirePath(rel: string): string
+  /** 服务端路径 → 视图路径;不在这个视图里 → null。 */
+  toViewPath(path: string): string | null
+}
+let activeBridge: ActiveBridge | null = null
 
 /** 活动 vault id(与桥内 ensureVault 同源;cloudCollab 复用,勿自行解析防两套真相)。 */
 export function ensureActiveVault(): Promise<string> {
-  return activeVaultResolver ? activeVaultResolver() : Promise.resolve('default')
+  return activeBridge ? activeBridge.scope().then((s) => s.vaultId) : Promise.resolve('default')
 }
+/** 活动库的 libraryId(/libraries 的 id;默认库 / 独立库 = vault id)。 */
+export function ensureActiveLibrary(): Promise<string> {
+  return activeBridge ? activeBridge.scope().then((s) => s.libraryId) : Promise.resolve('default')
+}
+/** 共享 / 发布 / 在场 / 文件地址要的是服务端路径:原位置库视图里补上 `X/`。没有活动桥 = 原样。 */
+export const activeCloudWirePath = (rel: string): string => activeBridge?.toWirePath(rel) ?? rel
+/** 反方向(服务端回的共享路径 → 视图路径);不在当前视图里 → null。 */
+export const activeCloudViewPath = (path: string): string | null => (activeBridge ? activeBridge.toViewPath(path) : path)
 
 /** 同步工厂:内部状态全在闭包;网络在各方法内 ensureVault() 后才发生。 */
 export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // Capture once: callbacks from an older bridge must only update its own account's cache.
-  const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
+  const libraryKeys = cloudLibraryKeys()
   const TREE_SNAP_KEY = contentStorageKey('amadeus_tree_snap')
   const LAST_PAGE_KEY = contentStorageKey('amadeus_last_page')
   // randomUUID 需要 secure context(https/localhost);http 内网部署兜底随机串,别让工厂抛挂白屏。
@@ -139,46 +183,254 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  const http = createCloudHttp({
+  const rawHttp = createCloudHttp({
     apiBase: cfg.apiBase,
     getToken: cfg.getToken,
     clientId,
     onUnauthorized: cfg.onAuthError,
     request: cfg.request,
     signal: cfg.signal,
+    caps: CLOUD_CONTENT_CAPS,
   })
 
-  // ---- vault 身份 -----------------------------------------------------------
-  let vaultId: string | null = null
-  let vaultPromise: Promise<string> | null = null
-  const vid = (): string => vaultId ?? 'default' // 契约:字面量 'default' 可用
+  // ---- 库视图 ----------------------------------------------------------------
+  let scope: CloudLibraryScope | null = null
+  let scopePromise: Promise<CloudLibraryScope> | null = null
+  /** 整库视图(rootPrefix '')里分走的前缀 `X/` → 新库 id:落在里面的单个文件读写改投新库(去掉前缀),树 / 搜索里不显示。 */
+  const moved = new Map<string, string>()
+  /** 库被删进回收站以后:不再发任何请求(停写),等上层处理。 */
+  let deleted: { purgeAt: string | null } | null = null
+  /** 这个桥实例上屏时报给 pageStore 的根(换库以后照旧用它,直到上层按新库重开)。 */
+  let openedRoot: string | null = null
+  const vid = (): string => scope?.vaultId ?? 'default' // 契约:字面量 'default' 可用
+  const rootId = (): string => openedRoot ?? (scope ? cloudLibraryRoot(scope.vaultId, scope.libraryId) : 'cloud://default')
+  const vbase = (v: string): string => `/amadeus/vaults/${encodeURIComponent(v)}`
 
-  async function ensureVault(): Promise<string> {
-    if (vaultId) return vaultId
-    if (vaultPromise) return vaultPromise
-    vaultPromise = (async () => {
-      const r = await http.get<{ vaults: VaultDto[] }>('/amadeus/vaults') // 服务端自动建 default + 种子 Calendar.db
-      // P2:localStorage 可指定活动 vault(含别人共享给我的);不在列表 → 可能是共享库(listVaults 只回自有),
-      // 经 shared-with-me 验证后采用;仍无 → 静默回落自己的(被移出共享/失效)。
-      let want: string | null = null
-      try { want = localStorage.getItem(activeVaultKey) } catch { /* ignore */ }
-      if (want && !r.vaults.some((x) => x.id === want)) {
+  /** 服务端路径。via = 整库视图里经分走的前缀改投到新库时的那个前缀(回包里的路径要拼回去)。 */
+  interface Wire { v: string; p: string; via?: string }
+  /** 视图路径 → 服务端(库 + 路径)。原位置库视图里不许越出 `X/`(契约:新建 / 移动出前缀一律拒绝)。 */
+  const toWire = (rel: string): Wire => {
+    const s = scope
+    if (!s) return { v: vid(), p: rel }
+    if (s.rootPrefix && (/^[\\/]/.test(rel) || rel.replace(/\\/g, '/').split('/').includes('..'))) {
+      throw new Error(translate('amxbridge.pathOutsideVault'))
+    }
+    const full = rel ? `${s.rootPrefix}${rel}` : s.rootPrefix.replace(/\/$/, '')
+    if (!s.rootPrefix) {
+      for (const [prefix, to] of moved) {
+        if (underPrefix(full, prefix)) return { v: to, p: full.length < prefix.length ? '' : full.slice(prefix.length), via: prefix }
+      }
+    }
+    return { v: s.vaultId, p: full }
+  }
+  /** 当前库回的服务端路径 → 视图路径;不在这个视图里(前缀外 / 被排除 / 分走了)→ null。 */
+  const fromWire = (p: string): string | null => {
+    const s = scope
+    if (!s) return p
+    let rel = p
+    if (s.rootPrefix) {
+      if (!p.startsWith(s.rootPrefix)) return null
+      rel = p.slice(s.rootPrefix.length)
+      if (!rel) return null
+    }
+    for (const e of s.exclude) if (underPrefix(rel, e)) return null
+    for (const m of moved.keys()) if (underPrefix(rel, m)) return null
+    return rel
+  }
+  /** 回包里的路径按这一发的去处换回视图路径。 */
+  const backOf = (w: Wire) => (p: string): string | null => (w.via ? `${w.via}${p}` : fromWire(p))
+  const sameWire = (a: Wire[], b: Wire[]): boolean => a.every((w, i) => w.v === b[i].v && w.p === b[i].p)
+  /** 一串路径映射回视图并丢掉视图外的。 */
+  const viewPaths = (ps: string[]): string[] => ps.map(fromWire).filter((x): x is string => x !== null)
+  const viewItems = <T extends { path: string }>(xs: T[]): T[] =>
+    xs.flatMap((x) => { const p = fromWire(x.path); return p === null ? [] : [{ ...x, path: p }] })
+
+  /** 打开哪个库:给了 cfg.library 就是它;否则 /libraries(老服务端 404 → GET /vaults)+ localStorage 选的那个。 */
+  async function resolveScope(): Promise<CloudLibraryScope> {
+    if (cfg.library) {
+      const rootPrefix = httpPrefix(cfg.rootPrefix ?? '') ?? ''
+      return {
+        vaultId: cfg.library.vaultId,
+        libraryId: cfg.library.libraryId,
+        rootPrefix,
+        exclude: rootPrefix ? [] : (cfg.excludePrefixes ?? []).map(httpPrefix).filter((x): x is string => !!x),
+        movesPossible: true, // 不知道是哪种库:多一次 404 时的拉树,不漏认分库
+      }
+    }
+    const want = readCloudLibrary(libraryKeys)
+    let libs: LibraryDto[] | null = null
+    try {
+      libs = (await http.get<{ libraries: LibraryDto[] }>('/amadeus/libraries')).libraries
+    } catch (e) {
+      if (!is404(e)) throw e // 只有 404 才是老服务端;别的失败 ≠ 空清单,抛给调用方重试,不写回选的库
+    }
+    if (libs) {
+      const live = libs.filter((l) => !l.deleted)
+      const legacy = live.filter((l) => l.kind === 'legacy')
+      const pick = (l: LibraryDto): CloudLibraryScope => ({
+        vaultId: l.vaultId,
+        libraryId: l.id,
+        rootPrefix: l.kind === 'legacy' ? httpPrefix(l.prefix) ?? '' : '',
+        exclude: l.kind === 'default' ? legacy.map((x) => httpPrefix(x.prefix)).filter((x): x is string => !!x) : [],
+        movesPossible: l.kind !== 'own',
+      })
+      let hit = want ? live.find((l) => l.id === want) : undefined
+      if (hit?.kind === 'default') {
+        // 深链要开的那篇落在某个原位置库里:云端笔记的视图把它排除了,改开那个库(openTargetWhenReady 再换算路径)
+        const open = pendingOpenNote()
+        const inLegacy = open && open.vault === hit.vaultId ? legacy.find((l) => underPrefix(open.note, httpPrefix(l.prefix) ?? '')) : undefined
+        if (inLegacy) hit = inLegacy
+      }
+      if (!hit && want) {
+        // 选的原位置库已经分成独立的库:跟到那个库(splitFrom 对得上),不回落到云端笔记
+        const legacyPrefix = legacyPrefixOfLibrary(want)
+        if (legacyPrefix) hit = live.find((l) => l.splitFrom?.vaultId === vaultIdOfLibrary(want) && l.splitFrom.prefix === legacyPrefix)
+      }
+      if (!hit && want && !legacyPrefixOfLibrary(want)) {
+        // 不在自己的清单里:可能是别人共享给我的库(/libraries 只列自有),经 shared-with-me 验证后采用
         try {
           const shared = await http.get<{ items: Array<{ vaultId: string }> }>('/amadeus/shared-with-me')
-          if (shared.items.some((it) => it.vaultId === want)) { vaultId = want; return want }
+          if (shared.items.some((it) => it.vaultId === want)) return { vaultId: want, libraryId: want, rootPrefix: '', exclude: [], movesPossible: false }
         } catch { /* 验证失败 → 回落自有 */ }
       }
-      const v =
-        (want ? r.vaults.find((x) => x.id === want) : undefined) ??
-        r.vaults.find((x) => x.id === 'default') ??
-        r.vaults[0]
-      vaultId = v?.id ?? 'default'
-      return vaultId
-    })()
-    vaultPromise.catch(() => { vaultPromise = null }) // 失败可重试
-    return vaultPromise
+      hit ??= live.find((l) => l.kind === 'default') ?? live[0]
+      if (hit) return pick(hit)
+    }
+    // 老服务端(或清单是空的):照旧 GET /vaults(服务端自动建 default + 种子 Calendar.db)
+    const r = await http.get<{ vaults: VaultDto[] }>('/amadeus/vaults')
+    // P2:localStorage 可指定活动 vault(含别人共享给我的);不在列表 → 可能是共享库(listVaults 只回自有),
+    // 经 shared-with-me 验证后采用;仍无 → 静默回落自己的(被移出共享/失效)。
+    const wantVault = want ? vaultIdOfLibrary(want) : null
+    const plain = (id: string): CloudLibraryScope => ({ vaultId: id, libraryId: id, rootPrefix: '', exclude: [], movesPossible: false })
+    if (wantVault && !r.vaults.some((x) => x.id === wantVault)) {
+      try {
+        const shared = await http.get<{ items: Array<{ vaultId: string }> }>('/amadeus/shared-with-me')
+        if (shared.items.some((it) => it.vaultId === wantVault)) return plain(wantVault)
+      } catch { /* 验证失败 → 回落自有 */ }
+    }
+    const v =
+      (wantVault ? r.vaults.find((x) => x.id === wantVault) : undefined) ??
+      r.vaults.find((x) => x.id === 'default') ??
+      r.vaults[0]
+    return plain(v?.id ?? 'default')
   }
-  activeVaultResolver = ensureVault
+
+  async function ensureScope(): Promise<CloudLibraryScope> {
+    if (scope) return scope
+    if (scopePromise) return scopePromise
+    const p = (async () => {
+      const s = await resolveScope()
+      scope ??= s
+      return scope
+    })()
+    scopePromise = p
+    p.catch(() => { if (scopePromise === p) scopePromise = null }) // 失败可重试
+    return p
+  }
+  const ensureVault = async (): Promise<string> => (await ensureScope()).vaultId
+
+  // ---- 请求闸:410 VAULT_DELETED → 停写;409 VAULT_MOVED → 记下分库(路由跟着变) -------------------
+  const vaultOfPath = (path: string): string | null => {
+    const m = /^\/amadeus\/vaults\/([^/?]+)/.exec(path)
+    if (!m) return null
+    try { return decodeURIComponent(m[1]) } catch { return null }
+  }
+  const guard = <A extends unknown[]>(fn: (path: string, ...a: A) => Promise<unknown>) => async (path: string, ...a: A): Promise<unknown> => {
+    const v = vaultOfPath(path)
+    if (deleted && v !== null && v === scope?.vaultId) throw new HttpError(410, { code: 'VAULT_DELETED', purgeAt: deleted.purgeAt }, 'Vault deleted')
+    try {
+      return await fn(path, ...a)
+    } catch (e) {
+      if (v !== null && v === scope?.vaultId) {
+        const body = (e as HttpError).body as ConflictBody | null
+        if (isVaultDeleted(e)) noteDeleted(typeof body?.purgeAt === 'string' ? body.purgeAt : null)
+        else if (isVaultMoved(e) && typeof body?.vaultId === 'string' && typeof body.prefix === 'string') noteMoved(body.prefix, body.vaultId, 'write')
+      }
+      throw e
+    }
+  }
+  const http = {
+    get: guard(rawHttp.get),
+    post: guard(rawHttp.post),
+    postForm: guard(rawHttp.postForm),
+    put: guard(rawHttp.put),
+    del: guard(rawHttp.del),
+  } as CloudHttp
+
+  /** 按视图路径发请求:收到 409 VAULT_MOVED(请求闸已记下分库)且路由真变了 → 按新路由再发一次,不当冲突、不换名。
+   *  probe404:这条路径本会话见过、现在 404 —— 分库刚提交时(SSE 的 reset 在 vault-moved 前面)第一条信号就是它,
+   *  先拉一次树认 moved[],路由变了就照新路由读;还是 404 才轮到调用方的「别处删了」。第二次再失败照抛(这一篇停写)。 */
+  const routed = async <T,>(rels: string[], run: (ws: Wire[]) => Promise<T>, probe404 = false): Promise<T> => {
+    const ws = rels.map(toWire)
+    try {
+      return await run(ws)
+    } catch (e) {
+      if (isVaultMoved(e)) {
+        const next = rels.map(toWire)
+        if (!sameWire(ws, next)) return run(next)
+      } else if (probe404 && is404(e) && scope?.movesPossible && !ws.some((w) => w.via)) {
+        await learnMoves()
+        const next = rels.map(toWire)
+        if (!sameWire(ws, next)) return run(next)
+      }
+      throw e
+    }
+  }
+
+  /** 认一次分库:拉一次树(树的 moved[] 是真源,事件只负责叫醒)。同时只发一个。 */
+  let learning: Promise<void> | null = null
+  const learnMoves = (): Promise<void> => (learning ??= fetchTree(true).then(() => undefined, () => undefined).finally(() => { learning = null }))
+
+  /** 分库了(写回的 409、SSE vault-moved、树的 moved[] 三个来源同一个口子)。prefix 是这个库里的服务端前缀。 */
+  function noteMoved(prefixRaw: string, toVaultId: string, source: 'write' | 'event' | 'tree'): boolean {
+    const prefix = httpPrefix(prefixRaw)
+    const s = scope
+    if (!prefix || !s || !toVaultId || toVaultId === s.vaultId || deleted) return false
+    const from = { vaultId: s.vaultId, libraryId: s.libraryId }
+    if (s.rootPrefix) {
+      // 以 X/ 为根打开的原位置库整个搬走了:就地换到新库(视图路径不变,seq 跟着行走,分库只改了 vault_id 和路径)
+      if (!underPrefix(s.rootPrefix.slice(0, -1), prefix)) return false
+      const rest = s.rootPrefix.slice(prefix.length)
+      scope = { vaultId: toVaultId, libraryId: rest ? `${toVaultId}:Amadeus/${rest}` : toVaultId, rootPrefix: rest, exclude: [], movesPossible: !!rest }
+      if (!cfg.library) rememberCloudLibrary(scope.libraryId, libraryKeys) // 刷新页面就开新库;桌面由宿主定(cfg.library)
+      invalidateTree()
+      pageCache.clear()
+      iconsCache = null
+      restartEvents()
+      void refreshAssetToken()
+      emitState({ kind: 'moved', from, to: { vaultId: scope.vaultId, libraryId: scope.libraryId }, prefix, reopen: true })
+      fireStructure()
+      return true
+    }
+    if (moved.get(prefix) === toVaultId) return false
+    moved.set(prefix, toVaultId)
+    invalidateTree()
+    // 打开时就已经分走的(树里第一次看到)不算一件事;写 / 事件撞上的才告诉上层
+    if (source !== 'tree') emitState({ kind: 'moved', from, to: { vaultId: toVaultId, libraryId: toVaultId }, prefix, reopen: false })
+    fireStructure()
+    return true
+  }
+
+  /** 库被删进回收站(410 / SSE vault-deleted):停写、停事件流;本机什么都不删(树快照、页面缓存、草稿原样留着)。 */
+  function noteDeleted(purgeAt: string | null): void {
+    const s = scope
+    if (!s || deleted) return
+    deleted = { purgeAt }
+    eventsWanted = false
+    stopEvents?.()
+    stopEvents = null
+    if (assetTimer) { clearTimeout(assetTimer); assetTimer = null }
+    emitState({ kind: 'deleted', vaultId: s.vaultId, libraryId: s.libraryId, purgeAt })
+  }
+
+  activeBridge = {
+    scope: ensureScope,
+    toWirePath: (rel) => { try { return toWire(rel).p } catch { return rel } },
+    toViewPath: (p) => fromWire(p),
+  }
+  const isActive = (): boolean => activeBridge?.scope === ensureScope
+  /** 只有活动的桥往外发状态(换号 / 退役的旧桥闭嘴)。 */
+  const emitState = (st: Parameters<typeof emitCloudLibraryState>[0]): void => { if (isActive()) emitCloudLibraryState(st) }
   if (cfg.signal) setRoster([])
 
   // ---- 页面内容缓存(SWR:切页命中立即渲染,后台比对 seq;写路径/SSE 失效) --------
@@ -274,7 +526,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       try {
         await putFile(rp, text, 0)
       } catch (e) {
-        if (is409(e)) continue // 同名已存在(同一分钟第二次)→ 换后缀
+        if (isConflict409(e)) continue // 同名已存在(同一分钟第二次)→ 换后缀;VAULT_MOVED 不是撞名(putFile 已换路由重发过),照抛
         throw e
       }
       movedTo.set(path, rp)
@@ -320,23 +572,41 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- 树缓存(60s;SSE onStructureChange 即时 invalidate,写路径各自 invalidate) ----
   // 200ms 时代每次 refreshStructure 都真发 GET;失效通道齐备后放长,断线兜底最多陈旧 60s。
+  // 缓存的是**视图**里的树(前缀外 / 排除的都去掉了,路径是视图路径)。树的 moved[] 顺手认分库。
   const TREE_TTL_MS = 60_000
   let treeState: { at: number; promise: Promise<TreeDto>; settled: boolean } | null = null
   const invalidateTree = (): void => { treeState = null }
+  const viewTree = (t: TreeDto): TreeDto => ({
+    ...t,
+    pages: viewPaths(t.pages ?? []),
+    files: viewItems(t.files ?? []),
+    folders: viewPaths(t.folders ?? []),
+    ...(t.entries ? { entries: viewItems(t.entries) } : {}),
+  })
+  const loadTree = async (): Promise<TreeDto> => {
+    for (let attempt = 0; ; attempt++) {
+      const s = await ensureScope()
+      const raw = await http.get<TreeDto>(`${vbase(s.vaultId)}/tree`)
+      if (scope === s) for (const m of raw.moved ?? []) if (typeof m?.prefix === 'string' && typeof m.vaultId === 'string') noteMoved(m.prefix, m.vaultId, 'tree')
+      if (scope === s) return viewTree(raw)
+      // 拉的时候换了库(以 X/ 为根打开的原位置库正好分走了):这棵树是旧位置的,X/ 已经不在里面,到新库重拉
+      if (attempt >= 2) throw new Error(translate('amxbridge.connectFailed'))
+    }
+  }
   async function fetchTree(force = false): Promise<TreeDto> {
     const now = Date.now()
     if (!force && treeState && (!treeState.settled || now - treeState.at < TREE_TTL_MS)) return treeState.promise
-    const v = await ensureVault()
+    await ensureScope()
     const entry: { at: number; promise: Promise<TreeDto>; settled: boolean } = {
       at: Date.now(),
-      promise: http.get<TreeDto>(`/amadeus/vaults/${encodeURIComponent(v)}/tree`),
+      promise: loadTree(),
       settled: false,
     }
     treeState = entry
     entry.promise.then(
       (t) => {
         entry.settled = true
-        saveTreeSnap(v, t) // 顺手落快照:冷启动 SWR 的数据源
+        if (scope) saveTreeSnap(scope, t) // 顺手落快照:冷启动 SWR 的数据源
         // 本库二进制单文件上限(属主会员档位):amadeusImport 的上传预检读它,省一趟注定 413 的大上传
         ;(window as unknown as { amadeusCloudMaxFileBytes?: number }).amadeusCloudMaxFileBytes = t.maxFileBytes
       },
@@ -345,20 +615,22 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return entry.promise
   }
   // ---- 树的 localStorage 快照(冷启动 SWR:先渲染上次的树,真启动后台跑) ----------
-  // 单 blob 含 vault id;每次 fetchTree 成功即覆盖。陈旧窗口=到 revalidate 完成的几秒;
+  // 单 blob 含 vault id + libraryId(视图里的树);每次 fetchTree 成功即覆盖。陈旧窗口=到 revalidate 完成的几秒;
   // 期间点开远端已删的笔记只会读到「不存在」(loadExisting 不写盘),不再 create-on-open 把它复活。
-  const saveTreeSnap = (v: string, tree: TreeDto): void => {
-    try { localStorage.setItem(TREE_SNAP_KEY, JSON.stringify({ v, tree })) } catch { /* 配额/私有模式 */ }
+  const saveTreeSnap = (s: CloudLibraryScope, tree: TreeDto): void => {
+    try { localStorage.setItem(TREE_SNAP_KEY, JSON.stringify({ v: s.vaultId, lib: s.libraryId, tree })) } catch { /* 配额/私有模式 */ }
   }
-  const readTreeSnap = (): { v: string; tree: TreeDto } | null => {
+  const readTreeSnap = (): { v: string; lib: string; tree: TreeDto } | null => {
     try {
       const raw = localStorage.getItem(TREE_SNAP_KEY)
       if (!raw) return null
-      const blob = JSON.parse(raw) as { v?: unknown; tree?: { pages?: unknown; files?: unknown; folders?: unknown } }
+      const blob = JSON.parse(raw) as { v?: unknown; lib?: unknown; tree?: { pages?: unknown; files?: unknown; folders?: unknown } }
       if (typeof blob.v !== 'string' || !blob.tree || !Array.isArray(blob.tree.pages) || !Array.isArray(blob.tree.files) || !Array.isArray(blob.tree.folders)) return null
-      const want = localStorage.getItem(activeVaultKey)
-      if (want && want !== blob.v) return null // 刚切过库:旧库快照不认
-      return blob as { v: string; tree: TreeDto }
+      // 第 3 步以前的快照没有 lib:那时只有整库视图,lib = vault id
+      const lib = typeof blob.lib === 'string' && blob.lib ? blob.lib : blob.v
+      const want = cfg.library?.libraryId ?? readCloudLibrary(libraryKeys)
+      if (want && want !== lib) return null // 刚切过库:旧库快照不认
+      return { v: blob.v, lib, tree: blob.tree as TreeDto }
     } catch { return null }
   }
 
@@ -403,7 +675,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- lastPage(localStorage,按 vault 分键)+ 资源 URL 的活动页基准 ------------
   let lastLoadedPage: string | null = null
-  const lastPageKey = (vault = vid()): string => `${LAST_PAGE_KEY}:${vault}`
+  /** 按库分键(默认库 / 独立库的 libraryId 就是 vault id,与第 3 步以前的键一样)。 */
+  const lastPageKey = (library = scope?.libraryId ?? vid()): string => `${LAST_PAGE_KEY}:${library}`
   const rememberPage = (p: string): void => {
     lastLoadedPage = p
     try { localStorage.setItem(lastPageKey(), p) } catch { /* private mode */ }
@@ -426,8 +699,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     if (assetTimer) { clearTimeout(assetTimer); assetTimer = null }
     try {
       const v = await ensureVault()
-      const r = await http.post<{ token: string; ttlSec: number }>(`/amadeus/vaults/${encodeURIComponent(v)}/asset-token`)
-      if (cfg.signal?.aborted) return
+      const r = await http.post<{ token: string; ttlSec: number }>(`${vbase(v)}/asset-token`)
+      if (cfg.signal?.aborted || v !== vid()) return // 拿的时候换了库(分库):那边自己会再拿
       assetToken = r.token
       const ttl = Math.max(60, r.ttlSec || 600)
       assetTimer = setTimeout(() => { void refreshAssetToken() }, (ttl / 2) * 1000)
@@ -441,6 +714,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     vaultId: vid,
     assetToken: () => assetToken,
     activePage: () => lastLoadedPage,
+    toWirePath: (rel) => { try { return toWire(rel).p } catch { return rel } },
+    fromWirePath: (p) => fromWire(p),
   })
 
   // 「同步 Vault 分区」识别:桌面开启按条目云同步时会在云端 vault 根写标记文件(见 CLOUD_VAULT_MARKER),
@@ -452,11 +727,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   }
   // 标记正文记着在同步各库的设备(与桌面镜像读法同一个 parseCloudVaultMarker);逐个 GET,库一般只有几个。
   ;(window as unknown as { amadeusCloudVaultDevices?: (names: string[]) => Promise<Record<string, CloudVaultDevice[]>> }).amadeusCloudVaultDevices = async (names) => {
-    const v = await ensureVault()
+    await ensureVault()
     const out: Record<string, CloudVaultDevice[]> = Object.create(null) // 库名可以叫 __proto__ / constructor
     await Promise.all(names.map(async (name) => {
       try {
-        const f = await http.get<FileDto>(`/amadeus/vaults/${encodeURIComponent(v)}/file`, { path: cloudVaultMarkerPath(name) })
+        const w = toWire(cloudVaultMarkerPath(name))
+        const f = await http.get<FileDto>(`${vbase(w.v)}/file`, { path: w.p })
         const devs = parseCloudVaultMarker(f.content)
         if (devs?.length) out[name] = devs
       } catch { /* 读不到就不画设备标签 */ }
@@ -466,25 +742,31 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- SSE ------------------------------------------------------------------
   let stopEvents: (() => void) | null = null
+  /** restoreVault 起过事件流(换库时据此在新库上重起;删库以后不再起)。 */
+  let eventsWanted = false
   cfg.signal?.addEventListener('abort', () => {
     if (assetTimer) clearTimeout(assetTimer)
     assetTimer = null
     assetToken = ''
+    eventsWanted = false
     stopEvents?.()
     stopEvents = null
-    if (activeVaultResolver === ensureVault) { activeVaultResolver = null; setRoster([]) }
+    if (isActive()) { activeBridge = null; setRoster([]); emitCloudLibraryState(null) }
   }, { once: true })
   function startEvents(v: string): void {
-    if (stopEvents || cfg.signal?.aborted) return
+    eventsWanted = true
+    if (stopEvents || cfg.signal?.aborted || deleted) return
     stopEvents = startCloudEvents({
       signal: cfg.signal,
-      url: () => `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/events?token=${encodeURIComponent(cfg.getToken())}`,
+      // 能力走 ?caps=(EventSource 设不了头):声明了 vault-moves 才收得到 vault-moved
+      url: () => `${cfg.apiBase}${vbase(v)}/events?token=${encodeURIComponent(cfg.getToken())}&caps=${encodeURIComponent(CLOUD_CONTENT_CAPS)}`,
       clientId,
       knownSeq: (p) => seqMap.get(p),
       lastLoadedPage: () => lastLoadedPage,
       // 兜底补课(服务端 reset)连开着的 v4 笔记一起回灌:它们主要经 readTextFile 打开,不保证设 lastLoadedPage
       // (web 原地分支会设,移动端单列导航 / 分屏其余实例不设;评审 G2-01)。
       openPages: unifiedPaths,
+      mapPath: (p) => (v === vid() ? fromWire(p) : null),
       onPageChange: (p) => { pageCache.delete(p); fireExternal(p) },
       onDbChange: (p) => fireDb(p),
       // 别处改名:seq 随路径迁移,旧路径记「已挪走」→ 开着旧路径的编辑器下一次保存跟到新路径,而不是
@@ -494,39 +776,72 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       onPageMoved: (from, to, seq, own) => {
         movedTo.set(from, to)
         migrateSeq(from, to, seq ?? undefined)
-        if (!own) firePathGone({ from, kind: 'file', to, root: `cloud://${v}` })
+        if (!own) firePathGone({ from, kind: 'file', to, root: rootId() })
       },
       onPageDeleted: (p) => { seqMap.delete(p); pageCache.delete(p); dropAliasesTo(p) },
       onFolderMoved: (from, to, own) => {
         migrateSeqPrefix(from, to)
-        if (!own) firePathGone({ from, kind: 'prefix', to, root: `cloud://${v}` })
+        if (!own) firePathGone({ from, kind: 'prefix', to, root: rootId() })
       },
       onFolderDeleted: (dir) => vanishPrefix(dir),
       // 结构事件不带明细 → 页面缓存整体作废(300ms 防抖 + 回声抑制,频率低,代价=切回多一发 GET)
       onStructureChange: () => { invalidateTree(); pageCache.clear(); fireStructure() },
       onPresence: pushPresence,
       onPresenceRoster: setRoster,
+      onVaultMoved: (e) => { if (v === vid()) noteMoved(e.prefix, e.vaultId, 'event') },
+      onVaultDeleted: (e) => { if (v === vid()) noteDeleted(e.purgeAt) },
     })
     window.addEventListener('beforeunload', () => { stopEvents?.() })
   }
+  /** 换了库(分库):旧库的流停掉,在新库上重起。 */
+  function restartEvents(): void {
+    stopEvents?.()
+    stopEvents = null
+    if (eventsWanted && scope) startEvents(scope.vaultId)
+  }
 
   // ---- 文件级 REST 原语 --------------------------------------------------------
-  const fileUrl = (): string => `/amadeus/vaults/${encodeURIComponent(vid())}/file`
+  // 路径一律是视图路径;toWire 换成服务端的库 + 路径,409 VAULT_MOVED 换路由重发一次(routed)。
 
-  const getFile = async (path: string): Promise<FileDto> => {
-    const f = await http.get<FileDto>(fileUrl(), { path })
+  /** probe:读不到时先认一次分库再下结论(本会话见过的路径自动算;旁挂文件「读不到 = 没有」的判断也要)。 */
+  const getFile = async (path: string, probe = false): Promise<FileDto> => {
+    const f = await routed([path], ([w]) => http.get<FileDto>(`${vbase(w.v)}/file`, { path: w.p }), probe || everKnown.has(path))
     noteSeq(path, f.seq)
     seqFp.set(path, { seq: f.seq, fp: textFingerprint(f.content) })
-    return f
+    return { ...f, path }
   }
 
   const putFile = async (path: string, content: string, baseSeq: number, force = false, expectedHash?: string, expectedFileId?: string): Promise<PutResultDto> => {
-    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}), ...(expectedFileId ? { expectedFileId } : {}) })
+    const r = await routed([path], ([w]) => http.put<PutResultDto>(`${vbase(w.v)}/file`, { path: w.p, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}), ...(expectedFileId ? { expectedFileId } : {}) }))
     noteSeq(path, r.seq)
     seqFp.set(path, { seq: r.seq, fp: textFingerprint(content) })
     pageCache.delete(path) // 单点咽喉:任何文本写(fm 外科写/画板/trash meta…)后缓存失效;savePage 随手回填
     return r
   }
+
+  const delFile = (path: string): Promise<unknown> => routed([path], ([w]) => http.del(`${vbase(w.v)}/file`, { path: w.p }))
+
+  /** 文件改名 / 移动(同一个库里)。回新路径(视图)。 */
+  const moveFile = (from: string, to: string): Promise<MoveResultDto> =>
+    routed([from, to], async ([a, b]) => {
+      if (a.v !== b.v) throw new Error(translate('amxbridge.pathOutsideVault'))
+      const r = await http.post<MoveResultDto>(`${vbase(a.v)}/move`, { from: a.p, to: b.p })
+      return { ...r, path: (r?.path ? backOf(b)(r.path) : null) ?? to }
+    })
+
+  /** 文件夹操作(folders / folders/rename / folders/move):body 里的路径字段换成服务端路径,回的 path 换回视图。 */
+  const folderOp = (op: '' | '/rename' | '/move', rels: { path?: string; parent?: string; dest?: string }, extra: Record<string, string> = {}): Promise<{ path: string }> => {
+    const keys = (['path', 'parent', 'dest'] as const).filter((k) => rels[k] !== undefined)
+    return routed(keys.map((k) => rels[k]!), async (ws) => {
+      if (ws.some((w) => w.v !== ws[0].v)) throw new Error(translate('amxbridge.pathOutsideVault'))
+      const body: Record<string, string> = { ...extra }
+      keys.forEach((k, i) => { body[k] = ws[i].p })
+      const r = await http.post<{ path: string }>(`${vbase(ws[0].v)}/folders${op}`, body)
+      const fallback = rels.path ?? rels.parent ?? ''
+      return { ...r, path: (r?.path ? backOf(ws[0])(r.path) : null) ?? fallback }
+    })
+  }
+  const delFolder = (path: string): Promise<unknown> => routed([path], ([w]) => http.del(`${vbase(w.v)}/folders`, { path: w.p }))
 
   /** 已知 seq 用之;未知(本会话没 GET 过)先 GET 学习;404 = 创建(baseSeq 0)——
    *  **除非**本会话见过这个路径(everKnown):那是别处删掉/挪走了,抛 VanishedError,绝不重建。 */
@@ -579,7 +894,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       try {
         await putFile(target, w.data, 0)
       } catch (e) {
-        if (is409(e)) return fetchAndParse(target) // 别处刚创建 → 装载现状
+        if (isConflict409(e)) return fetchAndParse(target) // 别处刚创建 → 装载现状(VAULT_MOVED 不是「别处刚创建」:照抛,不装载)
         throw e
       }
     }
@@ -629,12 +944,16 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- binary 上传 -------------------------------------------------------------
   const postBinary = async (path: string, fileName: string, bytes: Uint8Array, ifAbsent: boolean, onProgress?: (sent: number, total: number) => void, baseSeq?: number): Promise<{ path: string; size: number; seq: number }> => {
-    const form = new FormData()
-    form.append('file', new Blob([bytes as BlobPart]), fileName)
-    form.append('path', path)
-    if (ifAbsent) form.append('ifAbsent', '1')
-    if (baseSeq !== undefined) form.append('baseSeq', String(baseSeq)) // 与文本 PUT 同契约:0 = 仅创建,>0 = 必须等于现 seq,不符 409
-    const r = await http.postForm<{ path: string; size: number; seq: number }>(`/amadeus/vaults/${encodeURIComponent(vid())}/binary`, form, onProgress)
+    const r = await routed([path], ([w]) => {
+      // 表单每发一次重建:路径字段是服务端路径(换了路由要跟着换)
+      const form = new FormData()
+      form.append('file', new Blob([bytes as BlobPart]), fileName)
+      form.append('path', w.p)
+      if (ifAbsent) form.append('ifAbsent', '1')
+      if (baseSeq !== undefined) form.append('baseSeq', String(baseSeq)) // 与文本 PUT 同契约:0 = 仅创建,>0 = 必须等于现 seq,不符 409
+      return http.postForm<{ path: string; size: number; seq: number }>(`${vbase(w.v)}/binary`, form, onProgress)
+        .then((res) => ({ ...res, path: (res?.path ? backOf(w)(res.path) : null) ?? path }))
+    })
     noteSeq(r.path ?? path, r.seq)
     invalidateTree()
     return r
@@ -646,8 +965,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   /** 按 vault 相对路径**精确**取这个文件的字节;没有这个文件 → null,读失败照抛(插件拿「读不到」当「没有」,下一步
    *  就是把现有文件整份盖掉)。服务端这个端点只认 `ref`(带 `path` 是 400 ref required)。 */
   const fetchAssetExact = async (norm: string): Promise<Response | null> => {
-    const v = await ensureVault()
+    await ensureVault()
     for (let attempt = 0; ; attempt++) {
+      const w = toWire(norm)
+      if (deleted && w.v === vid()) throw new HttpError(410, { code: 'VAULT_DELETED', purgeAt: deleted.purgeAt }, 'Vault deleted')
       // ref 末尾带 '/':对不含 '/' 的 ref,服务端在精确路径找不到时会按文件名全库兜底(给 `![[pic.png]]` 用的),会把别的
       // 目录里的同名文件读成库根这一个。带上 '/' 就只做精确匹配(server routes.ts 的 /asset:normalizePath 剥掉尾斜杠,
       // 兜底只在原始 ref 不含 '/' 时才走)。
@@ -657,8 +978,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       let r: Response
       try {
         r = await (cfg.request ?? fetch)(
-          `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?ref=${encodeURIComponent(`${norm}/`)}`,
-          { headers: { Authorization: `Bearer ${cfg.getToken()}` }, signal: ctrl.signal }, // assetAuth 收 Bearer 主 token,无需等 asset-token
+          `${cfg.apiBase}${vbase(w.v)}/asset?ref=${encodeURIComponent(`${w.p}/`)}`,
+          // assetAuth 收 Bearer 主 token,无需等 asset-token;能力头同 cloudHttp(这条不经它)
+          { headers: { Authorization: `Bearer ${cfg.getToken()}`, 'X-Content-Caps': CLOUD_CONTENT_CAPS }, signal: ctrl.signal },
         )
       } catch (e) {
         throw new HttpError(0, null, ctrl.signal.aborted
@@ -668,16 +990,23 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         clearTimeout(timer)
       }
       if (r.ok) return r
+      if (r.status === 410 && w.v === vid()) {
+        let body: ConflictBody | null = null
+        try { body = (await r.json()) as ConflictBody } catch { /* 非 JSON */ }
+        if (body?.code === 'VAULT_DELETED') noteDeleted(typeof body.purgeAt === 'string' ? body.purgeAt : null)
+      }
       if (r.status !== 404) throw new HttpError(r.status, null, translate('amxbridge.readFailed', { status: r.status }))
       // 404 有两种:没有这一行;行在、对象取不到(别处正好在覆盖:查到的是旧对象,旧对象随即被删)。后一种不能当「没有」。
       // 用文本端点按精确路径分辨:404 = 真没有;400 BINARY / 200 = 行在 → 重取一次,还取不到就抛。
+      // 分库刚提交时也是 404(新客户端不读影子):这一问会先认一次分库(probe),路由变了就到新库再取。
       try {
-        await http.get<FileDto>(fileUrl(), { path: norm })
+        await routed([norm], ([pw]) => http.get<FileDto>(`${vbase(pw.v)}/file`, { path: pw.p }), true)
       } catch (e) {
         if (is404(e)) return null
         if (!(e instanceof HttpError && (e.body as { code?: unknown } | null)?.code === 'BINARY')) throw e
       }
-      if (attempt >= 1) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
+      if (attempt >= 1 && sameWire([w], [toWire(norm)])) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
+      if (attempt >= 2) throw new Error(translate('amxbridge.readFailed', { status: 404 }))
     }
   }
   /** UTF-8 解码并**保留 BOM**(`Response.text()` 会吞掉它):与文本端点、桌面读盘同口径,读了再写回不改字节,base 指纹也对得上。 */
@@ -699,7 +1028,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const bytes = new TextEncoder().encode(text)
       const name = basenamePosix(norm)
       const refused = async (e: unknown): Promise<TextWriteResult> => {
-        if (!is409(e)) throw e
+        if (!isConflict409(e)) throw e // VAULT_MOVED 不是「已存在 / 被抢先写了」:不交回现文当冲突,照抛
         return { ok: false, current: await readBinaryText(norm) }
       }
       if (opts?.create) return postBinary(norm, name, bytes, true).then(() => ({ ok: true }), refused)
@@ -746,7 +1075,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         let meta = text ? parseTrashMeta(text) : {}
         if (!meta) {
           // 这个名字上躺着的不是账本(写坏了 / 别的东西落在了这里):不覆盖 —— 改个名留在回收站里,它会作为一条普通条目列出来。
-          await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: TRASH_META, to: `${TRASH_DIR}/${Date.now().toString(36)}-${TRASH_LEDGER}` })
+          await moveFile(TRASH_META, `${TRASH_DIR}/${Date.now().toString(36)}-${TRASH_LEDGER}`)
             .catch((e) => { if (!is404(e)) throw e })
           seqMap.delete(TRASH_META)
           invalidateTree()
@@ -760,7 +1089,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await postBinary(TRASH_META, TRASH_LEDGER, new TextEncoder().encode(`${JSON.stringify(meta, null, 2)}\n`), false, undefined, seq)
           return
         } catch (e) {
-          if (!is409(e) || attempt >= 3) throw e
+          if (!isConflict409(e) || attempt >= 3) throw e // VAULT_MOVED:postBinary 已换路由重发过,还不行就别拿它的回包当 seq 重放
           seq = Number(((e as HttpError).body as { seq?: unknown } | null)?.seq) || 0
         }
       }
@@ -817,7 +1146,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // 都还没回(vaultId 仍空)就不等了,先上快照;/vaults 回了说明网络是通的,照旧等 token 落地 —— 不然首屏图片
       // 记住的是没带 ?at= 的地址、之后不会自愈(Codex 评审 P2)。下面的重连在拉树前也会先补拿 token。
       const token = refreshAssetToken()
-      await Promise.race([token, new Promise<void>((r) => setTimeout(r, 3000)).then(() => (vaultId ? token : undefined))])
+      await Promise.race([token, new Promise<void>((r) => setTimeout(r, 3000)).then(() => (scope ? token : undefined))])
       void (async () => {
         // startEvents 全会话只有这一次机会(restoreVault 被 amadeusBooted 门闩住)→ 失败必须一直重试到连上:
         // 断网冷启动走的就是这条(快照照常上屏),此前三次退避后就放弃,网络回来也不再拉树、实时同步整会话失联。
@@ -825,10 +1154,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         for (let attempt = 0; ; attempt++) {
           if (cfg.signal?.aborted) return
           try {
-            const v = await ensureVault()
+            await ensureVault()
             if (!assetToken) await refreshAssetToken()
             await fetchTree(true)
-            startEvents(v)
+            startEvents(vid()) // 拉树时可能认到了分库、换了库:按现在的库起流
+            if (scope && !deleted) emitState({ kind: 'open', vaultId: scope.vaultId, libraryId: scope.libraryId })
             fireStructure()
             return
           } catch {
@@ -839,26 +1169,29 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         }
       })()
       let lp: string | undefined
-      try { lp = localStorage.getItem(lastPageKey(snap.v)) || undefined } catch { /* ignore */ }
+      try { lp = localStorage.getItem(lastPageKey(snap.lib)) || undefined } catch { /* ignore */ }
       const pages = snap.tree.pages.filter(visiblePage)
+      openedRoot = cloudLibraryRoot(snap.v, snap.lib)
       return {
-        root: `cloud://${snap.v}`,
+        root: openedRoot,
         pages,
         folders: snap.tree.folders.filter(visiblePath),
         lastPage: lp && pages.includes(lp) ? lp : undefined,
       }
     }
-    const v = await ensureVault()
+    await ensureVault()
     // asset token 必须赶在首屏 <img> 渲染前就位:fire-and-forget 会让早期图片 URL 缺 ?at=
     // → 401 且 <img> 不自愈。refreshAssetToken 内部全捕获永不 reject,await 无新错误路径。
     const [tree] = await Promise.all([fetchTree(true), refreshAssetToken()])
-    startEvents(v)
+    startEvents(vid()) // 拉树时可能认到了分库、换了库:按现在的库起流
     const lp = readLastPage()
     // 与 listPages/listFolders 同一把 visiblePath 尺子:首屏这份载荷直接进 pageStore.pages,
     // 不滤的话 .trash/ 里的笔记与库标记会当成真笔记出现在树里(桌面主进程那侧本就滤)。
     const pages = tree.pages.filter(visiblePage)
+    openedRoot = scope ? cloudLibraryRoot(scope.vaultId, scope.libraryId) : rootId()
+    if (scope && !deleted) emitState({ kind: 'open', vaultId: scope.vaultId, libraryId: scope.libraryId })
     return {
-      root: `cloud://${v}`,
+      root: openedRoot,
       pages,
       folders: tree.folders.filter(visiblePath),
       lastPage: lp && pages.includes(lp) ? lp : undefined,
@@ -897,8 +1230,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
    *  只带 seq 不够(评审复现):那篇被换成另一份新文件也从 seq 1 数起,旧原文会把它盖掉 —— 没 hash 就不走这条捷径。 */
   const updateExisting = (p: string, text: string, base: string, known?: Known, strict?: TextWriteOptions): Promise<TextWriteResult | 'gone'> =>
     enqueue([p], async () => {
-      const root = await ensureVault()
-      if (strict) checkStrictTextWrite(strict, `cloud://${root}`)
+      await ensureVault()
+      if (strict) checkStrictTextWrite(strict, rootId())
       let fileId = strict?.expectedFileId
       for (let attempt = 0; attempt < 3; attempt++) {
         let f: Known
@@ -915,7 +1248,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await patient(() => putFile(p, text, f.seq, false, f.hash, fileId))
           return { ok: true as const }
         } catch (e) {
-          if (!is409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone')
+          if (!isConflict409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone');VAULT_MOVED 照抛
         }
       }
       throw new Error('conflict')
@@ -925,12 +1258,13 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   const refCandidates = async (pairs: Record<string, string>): Promise<Map<string, Known> | undefined> => {
     const names = [...new Set(Object.entries(pairs).flatMap(([o, n]) => [pageKey(o), pageKey(n)]))]
     try {
-      const r = await patient(() => http.post<{ files?: unknown }>(`/amadeus/vaults/${encodeURIComponent(vid())}/ref-candidates`, { names }))
+      const r = await patient(() => http.post<{ files?: unknown }>(`${vbase(vid())}/ref-candidates`, { names }))
       if (!Array.isArray(r?.files)) return undefined
       const out = new Map<string, Known>()
       for (const f of r.files as Array<Partial<FileDto>>) {
-        if (typeof f?.path === 'string' && typeof f.content === 'string' && typeof f.seq === 'number') {
-          out.set(f.path, { content: f.content, seq: f.seq, hash: typeof f.hash === 'string' ? f.hash : undefined })
+        const p = typeof f?.path === 'string' ? fromWire(f.path) : null // 视图外的候选不改
+        if (p !== null && typeof f.content === 'string' && typeof f.seq === 'number') {
+          out.set(p, { content: f.content, seq: f.seq, hash: typeof f.hash === 'string' ? f.hash : undefined })
         }
       }
       return out
@@ -1047,7 +1381,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await putFile(target, content, base)
           cachePage(target, parsePageSource(target, content, nowIso())) // 写后回填,切回零请求
         } catch (e) {
-          if (is409(e)) {
+          // VAULT_MOVED(分库了)不是「云端更新了」:不重载、不另存 —— putFile 已按新库重发过一次,还不行就抛,
+          // savePage 拒掉 = pageStore 保留这篇的内存内容(saveFailure),下一次保存再来(契约 P-8 二-3)。
+          if (isConflict409(e)) {
             const body = (e as HttpError).body as ConflictBody | null
             if (body?.code === 'CONFLICT' && body.seq === 0) {
               // 基线还在、文件已不在 = 别处删掉/挪走了(SSE 还没到)。采纳 seq 0 就是下一次保存把它重建。
@@ -1092,9 +1428,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await putFile(oldPath, content, await baseSeqFor(oldPath), true)
           let moved: MoveResultDto
           try {
-            moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })
+            moved = await moveFile(oldPath, newPath)
           } catch (e) {
-            if (is409(e)) throw new Error(translate('amxbridge.pageExists'))
+            if (isConflict409(e)) throw new Error(translate('amxbridge.pageExists'))
             throw e
           }
           migrateSeq(oldPath, newPath, moved.seq)
@@ -1132,7 +1468,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await postBinary(vaultRel, unique, bytes, true, onProgress)
           return `.amadeus/${unique}`
         } catch (e) {
-          if (is409(e)) continue // 时间戳+计数器撞车近乎不可能;真撞了换名重试
+          if (isConflict409(e)) continue // 时间戳+计数器撞车近乎不可能;真撞了换名重试(VAULT_MOVED 不是撞名:postBinary 已换路由重发过,照抛)
           throw e
         }
       }
@@ -1160,7 +1496,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           else await postBinary(clamped, base, bytes, true, onProgress)
           return { pageRel, base }
         } catch (e) {
-          if (is409(e)) {
+          if (isConflict409(e)) { // VAULT_MOVED 不是撞名,不换名(上传已按新库重发过一次)
             existing.add(base.toLowerCase()) // 服务端比树缓存新:占用该名再取下一个
             base = uniqueNameAmong(existing, safeName)
             continue
@@ -1196,8 +1532,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     readNoteReplaceSources: async (paths) => {
       const root = await ensureVault()
       const result = await patient(() => http.post<{ files: Array<{ path: string; source: string; fileId: string }> }>(
-        `/amadeus/vaults/${encodeURIComponent(root)}/replace-sources`, { paths }))
-      return result.files
+        `${vbase(root)}/replace-sources`, { paths: paths.map((p) => toWire(p).p) }))
+      return viewItems(result.files)
     },
     readNoteReplaceSource: async (path) => {
       await ensureVault()
@@ -1213,8 +1549,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const root = await ensureVault()
       try {
         const { paths } = await http.post<{ paths: string[] }>(
-          `/amadeus/vaults/${encodeURIComponent(root)}/replace-candidates`, { query })
-        return paths.filter(visiblePage)
+          `${vbase(root)}/replace-candidates`, { query })
+        return viewPaths(paths).filter(visiblePage)
       } catch (error) {
         if (!is404(error)) throw error
         // The same server version introduced identity-checked PUTs. Older servers silently
@@ -1225,15 +1561,17 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     search: async (query) => {
       await ensureVault()
       // 服务端按 path ILIKE 也算命中 → 点开头路径(.trash/、库标记)会漏进结果;与树同一把 visiblePath 尺子。
+      // 原位置库视图:服务端只搜 X/ 下(?prefix=,S3a);回来的路径换回视图、视图外的(排除的前缀)滤掉
+      const prefix = scope?.rootPrefix ? scope.rootPrefix.replace(/\/$/, '') : ''
       const textSearch = async (q: string): Promise<SearchHit[]> =>
-        (await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q })).filter((h) => visiblePath(h.path))
+        viewItems(await http.get<SearchHit[]>(`${vbase(vid())}/search`, prefix ? { q, prefix } : { q })).filter((h) => visiblePath(h.path))
       const parsed = parseSearchQuery(query)
       if (!hasTagFilter(parsed)) return textSearch(query)
       // 服务端不懂 `tag:`,/tags/pages 也只认确切标签:在这里拼,结果与本地索引同形(含 hits),但只看前 50 篇。
-      const base = `/amadeus/vaults/${encodeURIComponent(vid())}`
+      const base = vbase(vid())
       return tagSearchRemote(parsed, {
         listTags: () => http.get<TagCount[]>(`${base}/tags`),
-        pagesByTag: async (tag) => (await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths.filter(visiblePath),
+        pagesByTag: async (tag) => viewPaths((await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths).filter(visiblePath),
         allPages: async () => (await fetchTree()).pages.filter(visiblePage),
         textSearch,
         readText: async (p) => (await getFile(p)).content,
@@ -1241,20 +1579,21 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     },
     backlinks: async (pagePath) => {
       await ensureVault()
-      return http.get<BacklinkRef[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/backlinks`, { path: pagePath })
+      const w = toWire(pagePath)
+      return viewItems(await http.get<BacklinkRef[]>(`${vbase(w.v)}/backlinks`, { path: w.p }))
     },
     reindex: async () => {
       await ensureVault()
-      await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/reindex`)
+      await http.post(`${vbase(vid())}/reindex`)
     },
     listTags: async () => {
       await ensureVault()
-      return http.get<TagCount[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/tags`)
+      return http.get<TagCount[]>(`${vbase(vid())}/tags`) // ponytail: 计数是整个库的(原位置库视图里偏大);服务端 /tags 不认前缀
     },
     pagesByTag: async (tag) => {
       await ensureVault()
-      const r = await http.get<{ paths: string[] }>(`/amadeus/vaults/${encodeURIComponent(vid())}/tags/pages`, { tag })
-      return r.paths
+      const r = await http.get<{ paths: string[] }>(`${vbase(vid())}/tags/pages`, { tag })
+      return viewPaths(r.paths)
     },
     resolveEmbed: async (target, sourcePath) => {
       await ensureVault()
@@ -1282,19 +1621,21 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
       const wire = subpath ? `${note}#${subpath}` : note
       if (!wire) return null
-      const r = await http.get<EmbedResolved | null>(`/amadeus/vaults/${encodeURIComponent(vid())}/embed`, { target: wire })
-      return r ?? null
+      const r = await http.get<EmbedResolved | null>(`${vbase(vid())}/embed`, { target: wire })
+      if (!r) return null
+      const at = fromWire(r.owner)
+      return at === null ? null : { ...r, owner: at } // 解析到视图外的同名笔记:当解析不到
     },
     blockBacklinks: async (target) => {
       await ensureVault()
-      return http.get<BacklinkRef[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/block-backlinks`, { target })
+      return viewItems(await http.get<BacklinkRef[]>(`${vbase(vid())}/block-backlinks`, { target }))
     },
 
     // ---- 结构操作(名称清洗/文案镜像 electron ipc.ts) ---------------------------
     deletePage: (pagePath) =>
       enqueue([pagePath], async () => {
         await ensureVault()
-        await http.del(fileUrl(), { path: pagePath })
+        await delFile(pagePath)
         forgetSeq(pagePath)
         invalidateTree()
       }),
@@ -1310,9 +1651,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         if (newPath.endsWith('.md')) pagesBefore = (await fetchTree(true)).pages.filter(visiblePage)
         let moved: MoveResultDto
         try {
-          moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: pagePath, to: newPath })
+          moved = await moveFile(pagePath, newPath)
         } catch (e) {
-          if (is409(e)) throw new Error(translate('amxbridge.fileExistsAtTarget'))
+          if (isConflict409(e)) throw new Error(translate('amxbridge.fileExistsAtTarget'))
           throw e
         }
         migrateSeq(pagePath, newPath, moved.seq)
@@ -1331,11 +1672,11 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       if (!clean) throw new Error(translate('amxbridge.folderNameEmpty'))
       const parent = parentFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
       try {
-        const r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { parent, name: clean })
+        const r = await folderOp('', { parent }, { name: clean })
         invalidateTree()
         return r.path
       } catch (e) {
-        if (is409(e)) throw new Error(translate('amxbridge.folderExists'))
+        if (isConflict409(e)) throw new Error(translate('amxbridge.folderExists'))
         throw e
       }
     },
@@ -1352,9 +1693,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const hasFiles = holdsFiles(tree, folderPath)
       let r: { path: string }
       try {
-        r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: folderPath, newName: clean })
+        r = await folderOp('/rename', { path: folderPath }, { newName: clean })
       } catch (e) {
-        if (is409(e)) throw new Error(translate('amxbridge.folderExists'))
+        if (isConflict409(e)) throw new Error(translate('amxbridge.folderExists'))
         throw e
       }
       migrateSeqPrefix(folderPath, r.path)
@@ -1368,7 +1709,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
     deleteFolder: async (folderPath) => {
       await ensureVault()
-      await http.del(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { path: folderPath })
+      await delFolder(folderPath)
       forgetSeqPrefix(folderPath)
       invalidateTree()
     },
@@ -1387,9 +1728,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const hasFiles = holdsFiles(tree, src)
       let r: { path: string }
       try {
-        r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: dst })
+        r = await folderOp('/move', { path: src, dest: dst })
       } catch (e) {
-        if (is409(e)) throw new Error(translate('amxbridge.folderExistsAtTarget'))
+        if (isConflict409(e)) throw new Error(translate('amxbridge.folderExistsAtTarget'))
         throw e
       }
       migrateSeqPrefix(src, r.path)
@@ -1415,18 +1756,18 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           let src = norm
           let base = basenamePosix(norm)
           if (base === TRASH_LEDGER || tree.folders.includes(`${TRASH_DIR}/${base}`)) { // 账本名也算撞名:落在它上面会被账本盖掉
-            const r = await http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/rename`, { path: norm, newName: `${base} (${stamp})` })
+            const r = await folderOp('/rename', { path: norm }, { newName: `${base} (${stamp})` })
             src = r.path
             base = basenamePosix(r.path)
           }
-          await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/move`, { path: src, dest: TRASH_DIR })
+          await folderOp('/move', { path: src, dest: TRASH_DIR })
           forgetSeqPrefix(norm)
           await updateTrashMeta((m) => { m[base] = { original: norm, deletedAt: Date.now(), dir: true } })
         } else {
           // 文件一步 move(.trash 父目录由服务端物化);扁平名防嵌套路径,撞名带时间戳前缀。
           let name = norm.replace(/\//g, '__')
           if (name === TRASH_LEDGER || allTreePaths(tree).includes(`${TRASH_DIR}/${name}`)) name = `${stamp}-${name}` // 账本名也算撞名
-          await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: norm, to: `${TRASH_DIR}/${name}` })
+          await moveFile(norm, `${TRASH_DIR}/${name}`)
           forgetSeq(norm)
           await updateTrashMeta((m) => { m[name] = { original: norm, deletedAt: Date.now(), dir: false } })
         }
@@ -1465,19 +1806,19 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const src = `${TRASH_DIR}/${name}`
         const wantBase = basenamePosix(target)
         const parent = dirnamePosix(target)
-        const post = (op: 'move' | 'rename', body: Record<string, string>): Promise<{ path: string }> =>
-          http.post<{ path: string }>(`/amadeus/vaults/${encodeURIComponent(vid())}/folders/${op}`, body)
-        if (name === wantBase) await post('move', { path: src, dest: parent })
+        const mv = (path: string, dest: string): Promise<{ path: string }> => folderOp('/move', { path, dest })
+        const rn = (path: string, newName: string): Promise<{ path: string }> => folderOp('/rename', { path }, { newName })
+        if (name === wantBase) await mv(src, parent)
         else if (wantBase !== TRASH_LEDGER && !trashNames(tree).has(wantBase)) {
           // 原位被占、要落成 "X (2)":目标父目录里有 X,所以先在 .trash 里改成目标名再移。
-          await post('move', { path: (await post('rename', { path: src, newName: wantBase })).path, dest: parent })
+          await mv((await rn(src, wantBase)).path, parent)
         } else {
           // 回收站里已有叫这个名字的(同名文件夹先后删进来,后一条带着时间戳;或者目标名就是账本名):先移出去再改名。
-          await post('move', { path: src, dest: parent })
-          await post('rename', { path: parent ? `${parent}/${name}` : name, newName: wantBase })
+          await mv(src, parent)
+          await rn(parent ? `${parent}/${name}` : name, wantBase)
         }
       } else {
-        await http.post(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: `${TRASH_DIR}/${name}`, to: target })
+        await moveFile(`${TRASH_DIR}/${name}`, target)
       }
       await updateTrashMeta((m) => { delete m[name] })
       invalidateTree()
@@ -1490,9 +1831,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       // 只认 .trash/ 下第一层确实在的条目(账本自己、带 '/' 的名字都不是);文件夹与否看实存,不看账本(账本里可能没有这条)。
       if (trashNames(tree).has(name)) {
         if (tree.folders.includes(`${TRASH_DIR}/${name}`)) {
-          await http.del(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { path: `${TRASH_DIR}/${name}` }).catch((e) => { if (!is404(e)) throw e })
+          await delFolder(`${TRASH_DIR}/${name}`).catch((e) => { if (!is404(e)) throw e })
         } else {
-          await http.del(fileUrl(), { path: `${TRASH_DIR}/${name}` }).catch((e) => { if (!is404(e)) throw e })
+          await delFile(`${TRASH_DIR}/${name}`).catch((e) => { if (!is404(e)) throw e })
         }
       }
       await updateTrashMeta((m) => { delete m[name] })
@@ -1501,7 +1842,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
     emptyTrash: async () => {
       await ensureVault()
-      await http.del(`/amadeus/vaults/${encodeURIComponent(vid())}/folders`, { path: TRASH_DIR }).catch((e) => { if (!is404(e)) throw e })
+      await delFolder(TRASH_DIR).catch((e) => { if (!is404(e)) throw e })
       forgetSeqPrefix(TRASH_DIR)
       invalidateTree()
     },
@@ -1591,7 +1932,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           const result = await putFile(dbPath, content, Number(baseVersion))
           return { ok: true, version: String(result.seq) }
         } catch (e) {
-          if (!is409(e)) throw e
+          if (!isConflict409(e)) throw e // VAULT_MOVED is not a newer version: reloading would replay into the old place
           // Keep pending operations in dbStore; it reloads and replays them on this version.
           return { ok: false, version: baseVersion }
         }
@@ -1633,7 +1974,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           await putFile(drawingPath, source, base)
           return { ok: true }
         } catch (e) {
-          if (!is409(e)) throw e
+          if (!isConflict409(e)) throw e // VAULT_MOVED: putFile already re-sent to the new vault once; do not merge-loop
           // The shared drawing store owns bounded re-read/merge/retry. Never force stale text.
           try { return { ok: false, current: (await getFile(drawingPath)).content } }
           catch (readError) { if (is404(readError)) return { ok: false, current: null }; throw readError }
@@ -1680,7 +2021,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             invalidateTree()
             return { ok: true }
           } catch (e) {
-            if (!is409(e)) throw e
+            if (!isConflict409(e)) throw e // VAULT_MOVED 不是「已存在」:不交回现文
           }
           try {
             return { ok: false, current: (await getFile(p)).content }
@@ -1728,7 +2069,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
                 return { ok: true }
               } catch (e) {
                 // 409 = 预读之后别处抢先写了:内容变了就拒写(绝不强写);内容恰好还是基线(别处写了同样的字)→ 按新 seq 重试。
-                if (!is409(e)) throw e
+                if (!isConflict409(e)) throw e // VAULT_MOVED:putFile 已换路由重发过,照抛(调用方保留草稿)
                 const r = await recheck()
                 if (r === 'vanished') { await recoverVanished(p, text, meaningful); return done() }
                 if (typeof r !== 'number') return r
@@ -1745,7 +2086,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
           // 409 = 预读 seq 后被别人抢先写了。纯文本没有 drawing 那种元素级可合并结构,
           // 所以按桌面语义(本地原子写,后写胜)拉最新 seq 重写一次 —— 不能就这么抛给插件调用方,
           // 那等于用户这次修改静默消失(插件未必展示错误、更未必重试)。
-          if (!is409(e)) throw e
+          if (!isConflict409(e)) throw e // VAULT_MOVED 不是「被抢先写了」:绝不 force 重写,照抛
           let f: FileDto
           try {
             f = await getFile(target) // 顺带对齐 noteSeq
@@ -1762,7 +2103,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     // ---- 笔记视图(Bases) -------------------------------------------------------
     listPageProps: async (folder): Promise<PageProps[]> => {
       await ensureVault()
-      const rows = await http.get<PagePropsDto[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/page-props`, { folder })
+      const w = toWire(folder)
+      const rows = viewItems(await http.get<PagePropsDto[]>(`${vbase(w.v)}/page-props`, { folder: w.p }))
       return rows.map((r) => ({ path: r.path, title: r.title, fm: parseFmObject(r.fmExtra || '') }))
     },
 
@@ -1773,7 +2115,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       await ensureVault()
       const t = await fetchTree()
       if (iconsCache && iconsCache.seq === t.seq) return iconsCache.icons
-      const rows = await http.get<PagePropsDto[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/page-props`, { folder: '', all: '1' })
+      const rows = viewItems(await http.get<PagePropsDto[]>(`${vbase(vid())}/page-props`, { folder: toWire('').p, all: '1' }))
       const out: Record<string, string> = {}
       for (const r of rows) {
         const icon = parseFmObject(r.fmExtra || '').icon
@@ -1801,7 +2143,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             await putFile(pagePath, next, f.seq)
             return 'ok'
           } catch (e) {
-            if (is409(e)) return 'conflict'
+            if (isConflict409(e)) return 'conflict'
             throw e
           }
         }
@@ -1820,9 +2162,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         pagesBefore = (await fetchTree(true)).pages.filter(visiblePage)
         let moved: MoveResultDto
         try {
-          moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: oldPath, to: newPath })
+          moved = await moveFile(oldPath, newPath)
         } catch (e) {
-          if (is409(e)) throw new Error(translate('amxbridge.noteExists'))
+          if (isConflict409(e)) throw new Error(translate('amxbridge.noteExists'))
           throw e
         }
         migrateSeq(oldPath, newPath, moved.seq)
@@ -1850,9 +2192,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         if (newPath === norm) return { newPath, rewrittenPages: [] }
         let moved: MoveResultDto
         try {
-          moved = await http.post<MoveResultDto>(`/amadeus/vaults/${encodeURIComponent(vid())}/move`, { from: norm, to: newPath })
+          moved = await moveFile(norm, newPath)
         } catch (e) {
-          if (is409(e)) throw new Error(translate('amxbridge.fileExists'))
+          if (isConflict409(e)) throw new Error(translate('amxbridge.fileExists'))
           throw e
         }
         migrateSeq(norm, newPath, moved.seq)

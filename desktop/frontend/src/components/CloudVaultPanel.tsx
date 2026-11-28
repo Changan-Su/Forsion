@@ -27,7 +27,13 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
 
   useEffect(() => {
     if (!collab) return
-    // 默认库(服务端的 My Vault)叫「云端笔记」(智库同步第 2 步叫法表);老服务端不带 isDefault 就按名字认
+    // 数据来源(智库同步第 3 步 E1):有 listLibraries 就读库清单(原位置库也是一项,id = libraryId),
+    // 没有(老的 collab 实现)照旧 listVaults。默认库(服务端的 My Vault)叫「云端笔记」;老服务端不带 isDefault 就按名字认
+    if (collab.listLibraries && collab.activeLibraryId) {
+      void collab.listLibraries().then((v) => setVaults(v.map((x) => ({ id: x.id, name: x.name, isDefault: x.isDefault })))).catch(() => {})
+      void collab.activeLibraryId().then(setActiveId).catch(() => {})
+      return
+    }
     void collab.listVaults().then((v) => setVaults(v.map((x) => ({ id: x.id, name: x.name, isDefault: isDefaultVault(x) })))).catch(() => {})
     void collab.activeVaultId().then(setActiveId).catch(() => {})
   }, [collab])
@@ -45,7 +51,7 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
         <div className="amxc-sec">{t('cloudvault.myVaults')}</div>
         {vaults.map((v) => (
           <button key={v.id} className={`amxc-row${v.id === activeId ? ' on' : ''}`}
-            onClick={() => { if (v.id !== activeId) collab.switchVault(v.id) }}>
+            onClick={() => { if (v.id !== activeId) (collab.switchLibrary ?? collab.switchVault)(v.id) }}>
             <span className="amxc-row-name">{v.isDefault ? t('ssync.cloudNotes') : v.name}</span>
             {v.id === activeId && <Check size={13} />}
           </button>

@@ -22,6 +22,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
+import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
 import { resetAssetUrlBuilder, toDisplayMarkdown } from '@amadeus-shared/assets'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { pageKey } from '@amadeus-shared/links'
@@ -426,8 +427,8 @@ describe('cloud bridge: 单篇改名先问服务端候选,不逐篇读全库(11-
 it('batch CAS stays on the reviewed path and refuses a replacement with a reused cloud sequence', async () => {
   seed({ 'a.md': 'original' })
   const { bridge } = await boot()
-  const options = { strictExisting: true, base: textFingerprint('original'), expectedRoot: 'cloud://v1' }
-  await expect(bridge.writeTextFile('a.md', 'new', { ...options, expectedRoot: 'cloud://v2' })).rejects.toThrow()
+  const options = { strictExisting: true, base: textFingerprint('original'), expectedRoot: cloudLibraryRoot('v1', 'v1') }
+  await expect(bridge.writeTextFile('a.md', 'new', { ...options, expectedRoot: cloudLibraryRoot('v2', 'v2') })).rejects.toThrow()
   beforePut = () => { files.set('a.md', { content: 'different note', seq: 1 }) }
   expect(await bridge.writeTextFile('a.md', 'new', options)).toEqual({ ok: false, current: 'different note' })
   beforePut = () => {}
@@ -456,7 +457,7 @@ it('a new cloud file with identical bytes stays untouched after the previewed fi
   expect(snapshot).toEqual({ source: 'unchanged', fileId: 'first' })
   beforePut = () => { strictFileId = 'second' }
   const result = await bridge.writeTextFile('a.md', 'modified', {
-    base: textFingerprint('unchanged'), strictExisting: true, expectedRoot: 'cloud://v1', expectedFileId: snapshot!.fileId,
+    base: textFingerprint('unchanged'), strictExisting: true, expectedRoot: cloudLibraryRoot('v1', 'v1'), expectedFileId: snapshot!.fileId,
   })
   expect(result).toEqual({ ok: false, current: 'unchanged' })
   expect(puts).toEqual([])

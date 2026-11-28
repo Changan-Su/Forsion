@@ -3,9 +3,9 @@
  * 邀请页同意后、「与我共享」跨库点击、复制页面链接都走这一条。
  * 账号就位后再取参数(活动库键按账号分作用域);主应用起来后才打开,打不开就提示并留在工作区。
  */
-import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { isSafeVaultPath } from '@/deepLinkPlan'
-import { ACTIVE_VAULT_KEY } from './amadeus/cloudBridge'
+import { activeCloudViewPath } from './amadeus/cloudBridge'
+import { rememberCloudLibrary, setPendingOpenNote } from './amadeus/cloudScope'
 
 export function fileAddress(base: string, vaultId: string, path: string): string {
   const url = new URL(base, location.href)
@@ -26,7 +26,9 @@ export function takeOpenTarget(): OpenTarget | null {
   url.searchParams.delete('note')
   history.replaceState(history.state, '', url.href)
   if (!isSafeVaultPath(note)) return null
-  try { localStorage.setItem(contentStorageKey(ACTIVE_VAULT_KEY), vault) } catch { /* private mode */ }
+  // 地址里的 note 是整库里的服务端路径:先选这个库的整库视图;它落在某个原位置库里时,桥选库那一步改开那个库(pendingOpenNote)
+  rememberCloudLibrary(vault)
+  setPendingOpenNote(vault, note)
   ;(window as { __FORSION_OPEN_TARGET__?: boolean }).__FORSION_OPEN_TARGET__ = true
   return { vault, note }
 }
@@ -38,6 +40,10 @@ export async function openTargetWhenReady({ vault, note }: OpenTarget): Promise<
   // 没有权限时活动库会回落到自己的库,那里可能有同路径的文件,不能把它当成目标打开。
   const active = await window.amadeusCollab?.activeVaultId().catch(() => null)
   if (active && active !== vault) { useApp.getState().toast(translate('deeplink.noteDenied'), true); return }
+  // 服务端路径 → 当前库视图里的路径(原位置库以 X/ 为根);不在这个视图里 = 打不开
+  const viewNote = activeCloudViewPath(note)
+  if (viewNote === null) { useApp.getState().toast(translate('deeplink.noteDenied'), true); return }
+  note = viewNote
   // Space 与文件清单都是异步到位的。手机壳没有 Dockview,whenWorkspaceReady 等不到,这里统一短间隔重试。
   const deadline = Date.now() + 12_000
   do {

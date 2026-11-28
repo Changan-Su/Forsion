@@ -20,7 +20,16 @@ export class HttpError extends Error {
 }
 
 export const is404 = (e: unknown): boolean => e instanceof HttpError && e.status === 404
+/** 任何 409(含 VAULT_MOVED / ACCOUNT_CHANGED)。⚠️ 桥里判「云端更新了 / 撞名」别用它,用 isConflict409:
+ *  写到分走的前缀上的 409 VAULT_MOVED 不是冲突,当冲突处理就是重载丢字或换名另存(智库同步第 3 步 B11)。 */
 export const is409 = (e: unknown): boolean => e instanceof HttpError && e.status === 409
+const codeOf = (e: unknown): unknown => (e instanceof HttpError ? (e.body as { code?: unknown } | null)?.code : undefined)
+/** 写回的 409 VAULT_MOVED(声明了 vault-moves 才会收到;没声明的旧客户端拿 423):`{code, vaultId, prefix:'X/'}`。 */
+export const isVaultMoved = (e: unknown): boolean => is409(e) && codeOf(e) === 'VAULT_MOVED'
+/** 真正的「云端那边更新了 / 名字被占了」:409 且不是 VAULT_MOVED。 */
+export const isConflict409 = (e: unknown): boolean => is409(e) && codeOf(e) !== 'VAULT_MOVED'
+/** 库被删进回收站:410 VAULT_DELETED(所有按库的路由)。 */
+export const isVaultDeleted = (e: unknown): boolean => e instanceof HttpError && e.status === 410 && codeOf(e) === 'VAULT_DELETED'
 
 export interface CloudHttpCfg {
   /** API 基址,如 https://host/api(无尾斜杠);路径按 `${apiBase}${path}` 拼接。 */
@@ -33,6 +42,8 @@ export interface CloudHttpCfg {
   /** Optional existing host transport/session lifetime (Unit visitor adapters). */
   request?(path: string, init?: RequestInit): Promise<Response>
   signal?: AbortSignal
+  /** 能力头 X-Content-Caps(每个请求都带,含 GET):给了就带,不给 = 老行为(服务端当旧客户端)。 */
+  caps?: string
 }
 
 export interface CloudHttp {
@@ -68,6 +79,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   ): Promise<T> => {
     const qs = opts?.query ? `?${new URLSearchParams(opts.query).toString()}` : ''
     const headers: Record<string, string> = { Authorization: `Bearer ${assertAccount()}` }
+    if (cfg.caps) headers['X-Content-Caps'] = cfg.caps
     if (method !== 'GET') headers['X-Amadeus-Client'] = cfg.clientId
     let body: BodyInit | undefined
     if (opts?.form) {
@@ -119,6 +131,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       xhr.open('POST', `${cfg.apiBase}${path}`)
       xhr.setRequestHeader('Authorization', `Bearer ${token}`)
       xhr.setRequestHeader('X-Amadeus-Client', cfg.clientId)
+      if (cfg.caps) xhr.setRequestHeader('X-Content-Caps', cfg.caps)
       xhr.upload.onprogress = (ev) => {
         try { assertAccount(); if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
         catch (error) { xhr.abort(); reject(error) }

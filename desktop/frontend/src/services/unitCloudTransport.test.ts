@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
 import { installUnitAccount } from '../../../../web/src/unitAccount'
 import { installUnitCloudTransport, type UnitCloudCapabilities } from '../../../../web/src/unitCloudTransport'
 import { installUnitShim } from '../../../../web/src/unitShim'
@@ -88,7 +90,7 @@ describe('Unit cloud services share the verified visitor transport', () => {
     const { cloud, key } = await install()
     expect(contentStorageKey('amadeus_tree_snap')).toBe(key)
     expect(key).toContain('shared-unit')
-    await expect(cloud.amadeus!.restoreVault()).resolves.toMatchObject({ root: 'cloud://a-vault', pages: ['private.md'] })
+    await expect(cloud.amadeus!.restoreVault()).resolves.toMatchObject({ root: cloudLibraryRoot('a-vault', 'a-vault'), pages: ['private.md'] })
     const note = await cloud.amadeus!.loadPage('private.md')
     expect(JSON.stringify(note)).toContain('a private note')
     const calendar = await cloud.amadeus!.readDatabase('', 'Calendar.db')

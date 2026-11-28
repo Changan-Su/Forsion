@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setContentStorageScope, contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
 import { installCloudCollab } from '../../../../web/src/amadeus/cloudCollab'
+import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
+import { cloudLibraryState } from '../../../../web/src/amadeus/cloudScope'
 
 vi.mock('../../../../web/src/amadeus/cloudEvents', () => ({ startCloudEvents: () => () => {} }))
 
@@ -57,8 +59,10 @@ describe('cloud bridge account caches', () => {
     expect(localStorage.getItem(b.vaultKey)).toBe('b-vault')
     expect(JSON.parse(localStorage.getItem(b.treeKey)!)).toMatchObject({ v: 'b-vault', tree: { pages: ['b-private.md'] } })
     const returningB = open('b')
-    await expect(returningB.bridge.restoreVault()).resolves.toMatchObject({ root: 'cloud://b-vault', pages: ['b-private.md'], lastPage: 'b-private.md' })
+    await expect(returningB.bridge.restoreVault()).resolves.toMatchObject({ root: cloudLibraryRoot('b-vault', 'b-vault'), pages: ['b-private.md'], lastPage: 'b-private.md' })
     const returningA = open('a')
-    await expect(returningA.bridge.restoreVault()).resolves.toMatchObject({ root: 'cloud://a-vault', pages: ['a-private.md'], lastPage: 'a-private.md' })
+    await expect(returningA.bridge.restoreVault()).resolves.toMatchObject({ root: cloudLibraryRoot('a-vault', 'a-vault'), pages: ['a-private.md'], lastPage: 'a-private.md' })
+    // 快照路径的后台(选库 → 拉树 → 落快照)还没收尾:等最后一个桥报「已打开」再拆全局桩,不然收尾时 window / fetch 已换回真的
+    await vi.waitFor(() => expect(cloudLibraryState()).toMatchObject({ kind: 'open', vaultId: 'a-vault', libraryId: 'a-vault' }))
   })
 })
