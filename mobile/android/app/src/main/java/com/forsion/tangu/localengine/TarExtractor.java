@@ -85,9 +85,14 @@ final class TarExtractor {
     }
 
     void extract(File archive, Progress progress, Cancel cancel) throws IOException {
+        extract(new FileInputStream(archive), progress, cancel);
+    }
+
+    /** From a stream (the base layer comes straight from the APK's stored asset); closes it. */
+    void extract(InputStream raw, Progress progress, Cancel cancel) throws IOException {
         dest.mkdirs();
         safeDirs.add(destPath);
-        try (CountingInputStream counting = new CountingInputStream(new FileInputStream(archive), progress);
+        try (CountingInputStream counting = new CountingInputStream(raw, progress);
              InputStream in = decompress(counting)) {
             byte[] hdr = new byte[512];
             String paxPath = null, paxLink = null, gnuName = null, gnuLink = null;
