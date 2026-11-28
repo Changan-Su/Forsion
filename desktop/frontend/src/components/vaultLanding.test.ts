@@ -3,15 +3,16 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { translate } from '../i18n'
-import type { BindingView, DownloadError, LibraryInfo, VaultSyncGet } from '../sync/v2/types'
+import type { AuthStatusInfo } from '../types'
+import type { BindingView, DownloadError, LibraryInfo, VaultSyncGet, BindingTargetView } from '../sync/v2/types'
 import { DOWNLOAD_BLOCK_GROUP } from '../sync/v2/download'
 
 const fake = vi.hoisted(() => ({
   amadeus: {
-    vaultCreate: vi.fn(), vaultDefaultParent: vi.fn(), vaultIsEmptyDir: vi.fn(), vaultRemoveEmptyDir: vi.fn(),
+    vaultCreate: vi.fn(), vaultDefaultParent: vi.fn(), vaultEnsureDefaultParent: vi.fn(), vaultRollback: vi.fn(), listVaultsForMenu: vi.fn(),
     listVaults: vi.fn(), forgetVault: vi.fn(), moveSyncVaultPin: vi.fn(), vaultSyncActions: vi.fn(),
   },
-  get: vi.fn(), resolveName: vi.fn(), downloadCheck: vi.fn(), download: vi.fn(), create: vi.fn(), unbind: vi.fn(), libraries: vi.fn(),
+  get: vi.fn(), resolveName: vi.fn(), downloadCheck: vi.fn(), download: vi.fn(), create: vi.fn(), apply: vi.fn(), unbind: vi.fn(), libraries: vi.fn(),
   openSettings: vi.fn(), refresh: vi.fn(), preview: vi.fn(), scroll: vi.fn(), switchVault: vi.fn(), openRoot: '/workspace/Notes',
   account: 'account', mode: 'full', menu: vi.fn(), toast: vi.fn(), penzorOpen: vi.fn(), penzorSource: true, penzorElsewhere: false, openObject: vi.fn(),
 }))
@@ -44,7 +45,8 @@ vi.mock('./SettingsPage', () => ({ SettingsPage: ({ schema }: { schema: import('
 }))
 vi.mock('../services/syncSetup', () => ({ PENZOR_SPACE_ID: 'forsion-penzor', openPenzorSync: vi.fn(), penzorSyncReady: () => false }))
 vi.mock('./SettingsPrimitives', () => ({ SettingsSwitch: () => null }))
-vi.mock('./SyncSettingsParts', () => ({ RecordsBlock: () => null, RecoveryList: () => null, SummaryCard: () => null }))
+vi.mock('./SyncSettingsParts', () => ({ RecordsBlock: () => null, RecoveryList: () => null, SummaryCard: ({ preview, onApply }: { preview: unknown; onApply: (choice: 'hold') => void }) => preview
+  ? React.createElement('button', { 'data-test-apply': true, onClick: () => onApply('hold') }, 'Apply') : null }))
 vi.mock('../sync/SyncRecordList', () => ({ SyncRecordsDialogHost: () => null }))
 vi.mock('../sync/VaultSyncChip', () => ({ Mark: () => null, VaultSyncChip: () => null }))
 
@@ -119,12 +121,13 @@ beforeEach(() => {
   document.body.append(host)
   root = createRoot(host)
   fake.openRoot = '/workspace/Notes'; fake.account = 'account'; fake.mode = 'full'
-  fake.amadeus.vaultDefaultParent.mockResolvedValue('/workspace/Vaults')
-  fake.amadeus.vaultCreate.mockResolvedValue({ root: workRoot, created: true })
-  fake.amadeus.vaultIsEmptyDir.mockResolvedValue(true)
-  fake.amadeus.vaultRemoveEmptyDir.mockResolvedValue(undefined)
+  fake.amadeus.vaultDefaultParent.mockResolvedValue({ path: '/workspace/Vaults', exists: true, freeBytes: 2000 })
+  fake.amadeus.vaultEnsureDefaultParent.mockResolvedValue('/workspace/Vaults')
+  fake.amadeus.vaultCreate.mockResolvedValue({ root: workRoot, created: true, registered: true, operationId: 'op' })
+  fake.amadeus.vaultRollback.mockResolvedValue('removed')
   fake.amadeus.vaultSyncActions.mockReturnValue({ download: true, create: true, unbind: true })
   fake.amadeus.listVaults.mockResolvedValue([dir(workRoot)])
+  fake.amadeus.listVaultsForMenu.mockImplementation(async () => ({ rows: await fake.amadeus.listVaults(), degraded: false }))
   fake.amadeus.forgetVault.mockResolvedValue(true)
   fake.amadeus.moveSyncVaultPin.mockResolvedValue('moved')
   fake.get.mockResolvedValue(ok(get()))
@@ -209,7 +212,7 @@ it('uses the server name_exists library id all the way through download', async 
   await mount(newDialog())
   await enterName('Work')
   await click('vaultMenu.create')
-  expect(fake.amadeus.vaultRemoveEmptyDir).toHaveBeenCalledWith(workRoot)
+  expect(fake.amadeus.vaultRollback).toHaveBeenCalledWith('op')
   await click('landing.downloadExisting')
   expect(fake.downloadCheck).toHaveBeenCalledWith(cloud.id, '/workspace/Vaults')
   await click('landing.start')
@@ -223,7 +226,7 @@ it.each(['offline', 'server_unsupported'])('opens the local vault when cloud cre
   await click('vaultMenu.create')
   expect(fake.switchVault).toHaveBeenCalledWith(workRoot)
   expect(created).toHaveBeenCalledWith(expect.objectContaining({ root: workRoot, upload: 'failed', reason: error }), 'Work')
-  expect(fake.amadeus.vaultRemoveEmptyDir).not.toHaveBeenCalled()
+  expect(fake.amadeus.vaultRollback).not.toHaveBeenCalled()
 })
 it('shows the reserved name reason and keeps the dialog open', async () => {
   fake.create.mockResolvedValue(fail('reserved'))
@@ -276,23 +279,23 @@ it.each(['local-vault-unavailable', 'legacy-remotesync-not-paused'])('blocks %s 
   expect(text()).toContain(translate('landing.err.' + code))
   expect(fake.unbind).not.toHaveBeenCalled()
 })
-it('moves to another registered local vault, moves the pin, then forgets after unbind', async () => {
+it('only switches, moves the pin and forgets after a successful unbind', async () => {
   fake.openRoot = workRoot
   const other = '/workspace/Notes'
-  fake.amadeus.listVaults.mockResolvedValueOnce([dir(workRoot, { pinned: true, current: true }), dir(other)])
+  const before = [dir(workRoot, { pinned: true, current: true }), dir(other)]
+  fake.amadeus.listVaults.mockResolvedValueOnce(before).mockResolvedValueOnce(before)
   fake.amadeus.listVaults.mockResolvedValueOnce([dir(workRoot, { pinned: true }), dir(other, { current: true })])
   fake.switchVault.mockImplementation(async () => { fake.openRoot = other })
   fake.get.mockResolvedValueOnce(ok(get([binding]))).mockResolvedValueOnce(ok(get()))
   fake.unbind.mockResolvedValue(ok({ root: workRoot }))
   await mount(stop())
   await click('landing.stopNow')
-  expect(fake.switchVault).toHaveBeenCalledWith(other)
-  expect(fake.amadeus.moveSyncVaultPin).toHaveBeenCalledWith(workRoot)
+  expect(fake.amadeus.moveSyncVaultPin.mock.calls).toEqual([[workRoot, { checkOnly: true, nextRoot: other }], [workRoot]])
   expect(fake.unbind).toHaveBeenCalledWith(binding.id, false)
   expect(fake.amadeus.forgetVault).toHaveBeenCalledWith(workRoot)
-  expect(fake.switchVault.mock.invocationCallOrder[0]).toBeLessThan(fake.amadeus.moveSyncVaultPin.mock.invocationCallOrder[0]!)
-  expect(fake.amadeus.moveSyncVaultPin.mock.invocationCallOrder[0]).toBeLessThan(fake.unbind.mock.invocationCallOrder[0]!)
-  expect(fake.unbind.mock.invocationCallOrder[0]).toBeLessThan(fake.amadeus.forgetVault.mock.invocationCallOrder[0]!)
+  expect(fake.unbind.mock.invocationCallOrder[0]).toBeLessThan(fake.switchVault.mock.invocationCallOrder[0]!)
+  expect(fake.switchVault.mock.invocationCallOrder[0]).toBeLessThan(fake.amadeus.moveSyncVaultPin.mock.invocationCallOrder[1]!)
+  expect(fake.amadeus.moveSyncVaultPin.mock.invocationCallOrder[1]).toBeLessThan(fake.amadeus.forgetVault.mock.invocationCallOrder[0]!)
 })
 it('asks again when unsynced changes appear after opening the stop card', async () => {
   const clean = { ...binding, status: { ...binding.status, held: 0, pendingChanges: 0 } }
@@ -460,4 +463,110 @@ it('does not compare a folder the user rejected and checks again when the same p
   await click('landing.change')
   expect(fake.downloadCheck).toHaveBeenCalledTimes(2)
   expect(button('landing.start')?.disabled).toBe(false)
+})
+
+it.each(['target', 'generation'])('rejects an old stop confirmation after its %s changed', async (changed) => {
+  const initial = { ...binding, generation: 7 }
+  const current = changed === 'generation' ? { ...initial, generation: 8 }
+    : { ...initial, target: { ...initial.target, vaultId: 'another-library', prefix: 'Other/' } as BindingTargetView }
+  fake.get.mockResolvedValue(ok(get([current])))
+  await mount(React.createElement(StopDownloadCard, { binding: initial, onClose: close, onReview: review, onStopped: stopped }))
+  await click('landing.syncFirst')
+  expect(text()).toContain(translate('landing.err.stop-binding-changed'))
+  expect(fake.unbind).not.toHaveBeenCalled()
+  expect(button('landing.stopNow')).toBeUndefined()
+})
+
+it.each(['pending', 'move_in_progress'])('leaves a current pinned vault unchanged when unbind returns %s', async (code) => {
+  fake.openRoot = workRoot
+  const other = '/workspace/Notes'
+  fake.amadeus.listVaults.mockResolvedValue([dir(workRoot, { current: true, pinned: true }), dir(other)])
+  fake.get.mockResolvedValue(ok(get([binding])))
+  fake.unbind.mockResolvedValue(fail(code, { pending: 1 }))
+  await mount(stop())
+  await click('landing.syncFirst')
+  expect(fake.unbind).toHaveBeenCalledOnce()
+  expect(fake.amadeus.moveSyncVaultPin.mock.calls).toEqual([[workRoot, { checkOnly: true, nextRoot: other }]])
+  expect(fake.switchVault).not.toHaveBeenCalled()
+  expect(fake.amadeus.forgetVault).not.toHaveBeenCalled()
+})
+
+it('reports the post-unbind pin blocker and keeps the registry entry', async () => {
+  fake.amadeus.listVaults.mockResolvedValue([dir(workRoot, { pinned: true })])
+  fake.amadeus.moveSyncVaultPin.mockResolvedValueOnce('moved').mockResolvedValueOnce('legacy-remotesync-not-paused')
+  fake.get.mockResolvedValueOnce(ok(get([binding]))).mockResolvedValueOnce(ok(get()))
+  fake.unbind.mockResolvedValue(ok({ root: workRoot }))
+  await mount(stop())
+  await click('landing.stopNow')
+  expect(fake.unbind).toHaveBeenCalledOnce()
+  expect(fake.amadeus.forgetVault).not.toHaveBeenCalled()
+  expect(stopped).toHaveBeenCalledWith(false, 'legacy-remotesync-not-paused')
+})
+
+it.each(['before', 'after'])('keeps the new local vault when the account switches %s the cloud create call', async (when) => {
+  const made = { root: workRoot, created: true, registered: true, operationId: 'op' }
+  fake.amadeus.vaultCreate.mockImplementation(async () => { if (when === 'before') fake.account = 'other'; return made })
+  fake.create.mockImplementation(async () => { fake.account = 'other'; return ok({ bindingId: 'cloud-binding' }) })
+  await mount(newDialog())
+  await enterName('Work')
+  await click('vaultMenu.create')
+  expect(fake.create).toHaveBeenCalledTimes(when === 'before' ? 0 : 1)
+  expect(fake.amadeus.vaultRollback).not.toHaveBeenCalled()
+  expect(created).toHaveBeenCalledWith({ kind: 'created', root: workRoot, upload: 'failed', reason: 'account_changed', opened: false }, 'Work')
+})
+
+it('shows local controls while the account and cloud list are still pending', async () => {
+  let finishAccount!: (value: AuthStatusInfo) => void
+  let finishList!: (value: unknown) => void
+  window.tangu!.authStatus = vi.fn(() => new Promise<AuthStatusInfo>((resolve) => { finishAccount = resolve }))
+  fake.libraries.mockImplementation(() => new Promise((resolve) => { finishList = resolve }))
+  await openVaultMenu()
+  expect(latestMenu().map((item) => item.label)).toEqual(expect.arrayContaining(['Work', translate('vaultMenu.new'), translate('vaultMenu.openFolder')]))
+  await act(async () => finishAccount({ loggedIn: true, accountId: 'account', cloudUrl: '', username: null, tokenSource: null }))
+  expect(latestMenu().some((item) => item.kind === 'head')).toBe(false)
+  await act(async () => finishList(libraries()))
+  expect(latestMenu().some((item) => item.label === translate('landing.inCloud'))).toBe(true)
+})
+
+it('shows valid local rows and a read error for a damaged registry', async () => {
+  fake.amadeus.listVaultsForMenu.mockResolvedValue({ rows: [dir(workRoot)], degraded: true })
+  fake.amadeus.listVaults.mockRejectedValue(new Error('amadeus-config-malformed'))
+  await openVaultMenu()
+  const item = latestMenu().find((row) => row.label === 'Work' && row.checked !== undefined)
+  expect(item).toBeDefined()
+  expect(latestMenu().some((row) => row.label === translate('landing.err.vault_list_unreadable'))).toBe(true)
+  expect(latestMenu().some((row) => row.label === translate('vaultMenu.openFolder'))).toBe(true)
+  await act(async () => item?.run())
+  expect(fake.switchVault).not.toHaveBeenCalled()
+})
+
+it('creates the missing default parent only on confirmation and checks it before downloading', async () => {
+  fake.amadeus.vaultDefaultParent.mockResolvedValue({ path: '/workspace/Vaults', exists: false, freeBytes: 2400 })
+  await mount(downloadDialog())
+  expect(text()).toContain(translate('landing.createDefaultParent'))
+  expect(text()).toContain(translate('landing.free', { size: '2400 B' }))
+  expect(fake.amadeus.vaultEnsureDefaultParent).not.toHaveBeenCalled()
+  expect(fake.downloadCheck).not.toHaveBeenCalled()
+  await click('landing.start')
+  expect(fake.download).toHaveBeenCalledWith(cloud.id, workRoot)
+  expect(fake.amadeus.vaultEnsureDefaultParent.mock.invocationCallOrder[0]).toBeLessThan(fake.downloadCheck.mock.invocationCallOrder[0]!)
+  expect(fake.downloadCheck.mock.invocationCallOrder[0]).toBeLessThan(fake.amadeus.vaultCreate.mock.invocationCallOrder[0]!)
+})
+
+it('blocks both compare-card exits while its apply is in flight', async () => {
+  const args = { root: workRoot, target: { kind: 'penzor', candidate: { kind: 'own', name: 'Work', vaultId: cloud.id } }, scope: { mode: 'all' } }
+  fake.downloadCheck.mockResolvedValue(ready('nonempty'))
+  fake.download.mockResolvedValue(ok({ ok: true, next: 'preview', preview: args }))
+  fake.preview.mockResolvedValue(ok({ token: 'preview', generation: '7' }))
+  let finish!: (value: unknown) => void
+  fake.apply.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+  await mount(React.createElement(SyncSettings, { focus: { libraryId: cloud.id, intent: 'download' }, legacy: null }))
+  await click('landing.compare')
+  const different = [...document.querySelectorAll<HTMLButtonElement>('.ssync-sum-dock button')].find((b) => b.textContent === translate('landing.different'))!
+  const apply = document.querySelector<HTMLButtonElement>('[data-test-apply]')!
+  // Both clicks can arrive before React paints the disabled state.
+  await act(async () => { apply.click(); different.click() })
+  expect(different.disabled).toBe(true)
+  expect(document.querySelector('.ssync-sum-dock')).not.toBeNull()
+  await act(async () => finish(ok({ bindingId: 'new-binding' })))
 })

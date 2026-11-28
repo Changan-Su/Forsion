@@ -1,3 +1,4 @@
+import type { VaultCreateArgs, VaultCreated } from '@amadeus-shared/vaultCreate'
 /**
  * 智库同步第 4 步 U4 ⑧「落盘到这台…」对话框背后的逻辑(契约 step34 §4.1、实现期修订 E4-1/2/7/15/17;方案图第 2 页 ⑧)。
  * 没有 JSX、不出文案:状态一律回码,界面按码说。
@@ -13,7 +14,7 @@ import { discardCreatedFolder, type CreatedFolderHost, type DiscardOutcome } fro
 import type { BindingView, DownloadCheckOk, DownloadError, DownloadOk, LastRoundView, PreviewTarget, ResolveCandidate, VaultSyncPreviewArgs, BindingScope } from './types'
 
 /** 云端那个库在对话框里要的样子(取自库清单 LibraryInfo / get().cloudVaults)。 */
-export interface DownloadLibrary { id: string; kind: 'default' | 'own' | 'legacy'; name: string }
+export interface DownloadLibrary { id: string; kind: 'default' | 'own' | 'legacy'; name: string; files?: number | null; bytes?: number }
 
 /** 文件夹名固定 = 库名(库按文件夹名认);默认库的名字跟界面语言,由调用方给(translate('amadeus.default.cloudNotes') 一类)。 */
 export function downloadFolderName(lib: Pick<DownloadLibrary, 'kind' | 'name'>, defaultFolderName: string): string {
@@ -124,7 +125,7 @@ export async function checkDownload(deps: { downloadCheck(libraryId: string, par
 
 /** 宿主 vaultCreate(H 评,electron/amadeus/vaultCreate.ts):在 parent 下建 name 这一层(parent 必须已存在),登记进智库清单,不切过去。
  *  existing:'reuse' = 文件夹已在就只登记(created:false);'refuse' = 已在就抛 EEXIST。名字不合宿主规矩抛 invalid-name。 */
-export type VaultCreateFn = (args: { parent?: string; name: string; existing: 'reuse' | 'refuse' }) => Promise<{ root: string; created: boolean }>
+export type VaultCreateFn = (args: VaultCreateArgs) => Promise<VaultCreated>
 
 /** 宿主建文件夹失败的几种(消息带 IPC 前缀,按包含判)。 */
 export type HostCreateError = 'invalid_name' | 'exists' | 'parent_missing' | 'failed'
@@ -177,13 +178,13 @@ export function downloadPreviewHandoff(preview: VaultSyncPreviewArgs, name: stri
 export async function runDownload(deps: DownloadDeps, lib: DownloadLibrary, check: DownloadCheckState, opts: { parent: string; folderName: string }): Promise<DownloadRun> {
   if (check.kind !== 'ready' && check.kind !== 'compare') return { kind: 'not_ready' }
   if (lib.kind === 'default') return { kind: 'blocked', state: downloadBlock('default_unsupported') as DownloadBlockedState, root: check.root, created: false, cleanup: null }
-  let made: { root: string; created: boolean }
+  let made: VaultCreated
   try {
     made = await deps.vaultCreate({ parent: opts.parent, name: opts.folderName, existing: 'reuse' })
   } catch (e) {
     return { kind: 'host_failed', code: hostCreateError(e) }
   }
-  if (!made || typeof made.root !== 'string' || !made.root || typeof made.created !== 'boolean') return { kind: 'host_invalid' }
+  if (!made || typeof made.root !== 'string' || !made.root || typeof made.created !== 'boolean' || typeof made.registered !== 'boolean' || !made.operationId) return { kind: 'host_invalid' }
   const r = await deps.download(lib.id, made.root)
   if (r.ok) {
     const v = r.value
@@ -195,7 +196,7 @@ export async function runDownload(deps: DownloadDeps, lib: DownloadLibrary, chec
     // 成功却认不出形状:不知道建没建绑定,当失败,不撤文件夹(下一条 cleanup 会先看有没有绑定指着它)
   }
   const state = downloadBlock(r.ok ? 'invalid_reply' : r.error, r.ok ? undefined : r.detail) as DownloadBlockedState
-  const cleanup = made.created ? await discardCreatedFolder(deps.folder, made) : null
+  const cleanup = made.created || made.registered ? await discardCreatedFolder(deps.folder, made) : null
   return { kind: 'blocked', state, root: made.root, created: made.created, cleanup }
 }
 type DownloadBlockedState = Exclude<DownloadCheckState, { kind: 'checking' | 'ready' | 'compare' }>

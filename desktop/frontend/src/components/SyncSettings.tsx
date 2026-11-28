@@ -455,18 +455,35 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
   }
   useEffect(() => onAuth((ev) => handleAuth.current(ev)), [])
 
+  const applyInFlight = useRef(false)
+  const cancelSummary = (different = false) => {
+    if (busy || applyInFlight.current || !pending) return
+    ++reqRef.current
+    setPending(null)
+    if (different) say(pending.root, t('landing.renameFirst'))
+  }
   const apply = async (onDiffer: 'newer' | 'hold'): Promise<void> => {
-    if (!pending?.preview) return
+    if (!pending?.preview || applyInFlight.current) return
+    applyInFlight.current = true
+    try {
+      await applyPending(pending, pending.preview, onDiffer)
+    } finally {
+      applyInFlight.current = false
+      setBusy(false)
+    }
+  }
+
+  const applyPending = async (pending: Pending, preview: VaultSyncPreview, onDiffer: 'newer' | 'hold') => {
     setBusy(true)
     // 换去处:卡上带的是出卡那一刻的整份范围。点「开始同步」前再核一次引擎此刻的范围,变了(别处刚排除了什么)就按新的重比,
     // 不把刚排除的带到新去处(Codex P1)
     if (pending.bindingId && pending.base && pending.kind !== 'scope') {
       const g = await vaultSync.get()
       const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
-      if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { setBusy(false); await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
+      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
+      if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
     }
-    const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
+    const r = await vaultSync.apply({ token: preview.token, generation: preview.generation, onDiffer })
     // 跨种类换去处在新那本账写入那一刻被准入拦下(E-16 附 K4):原来那条留在原来的去处、停着。只对准入码回读,回读完之前这一行还算忙
     // (不让人在旧回包落地前又点了别的,Codex P1-2);出卡时开着、现在同一个去处上停着 = 走到了这一步
     let k4 = false
@@ -475,7 +492,6 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       const now = g.ok ? g.value?.bindings.find((x) => x.id === pending.bindingId) : undefined
       k4 = !!now && !now.enabled && targetIdentity(now.target) === pending.baseTarget
     }
-    setBusy(false)
     if (!r.ok && /stale/.test(r.error)) {
       // 过期:改范围的卡按引擎此刻的绑定重算(别人期间去掉 / 加上的不被这张旧卡盖掉);去处变了 / 绑定没了 → 这张卡作废(Codex P1-1)
       if (pending.bindingId && pending.base) {
@@ -680,11 +696,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
         onStarted={() => void reload()} onPreview={(preview, name) => { void runPreview(downloadPreviewHandoff(preview, name)); void reload() }} />}
       {pending && (
         <div className="ssync-sum-dock" ref={sumRef}>
-          {pending.downloadCompare && pending.preview && <button type="button" className="btn ghost sm" onClick={() => {
-            ++reqRef.current
-            setPending(null)
-            say(pending.root, t('landing.renameFirst'))
-          }}>{t('landing.different')}</button>}
+          {pending.downloadCompare && pending.preview && <button type="button" className="btn ghost sm"
+            disabled={busy} onClick={() => cancelSummary(true)}>{t('landing.different')}</button>}
           {pending.note && <div className="ssync-faint ssync-sum-note" role="status">{pending.note}</div>}
           {pending.candidates ? (
             <section className="ssync-sum" data-ssync-summary="pick">
@@ -701,7 +714,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             </section>
           ) : (
             <SummaryCard name={pending.name} preview={pending.preview} busy={busy} kind={pending.kind} added={pending.added} remote={pending.target.kind === 'remote'}
-              dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => { ++reqRef.current; setPending(null) }} />
+              dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => cancelSummary()} />
           )}
         </div>
       )}

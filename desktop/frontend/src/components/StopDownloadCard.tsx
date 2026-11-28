@@ -4,7 +4,7 @@ import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useI18n } from '../i18n'
 import { vaultSync } from '../sync/v2/client'
-import { prepareStopLanding } from '../sync/v2/finishStopLanding'
+import { finishStopLanding, prepareStopLanding, stopBindingIdentity } from '../sync/v2/finishStopLanding'
 import { runStopLanding, stopPreflight, type StopPhase, type StopRun } from '../sync/v2/stopLanding'
 import type { BindingView } from '../sync/v2/types'
 import { refreshVaultSync } from '../sync/vaultSyncStore'
@@ -16,9 +16,10 @@ export function StopDownloadCard({ binding, blocked, onClose, onReview, onStoppe
   blocked?: boolean
   onClose: () => void
   onReview: () => void
-  onStopped: (forgot: boolean) => void
+  onStopped: (forgot: boolean, problem?: string) => void
 }) {
   const { t } = useI18n()
+  const [confirmed] = useState(() => stopBindingIdentity(binding))
   const [snapshot, setSnapshot] = useState(binding)
   const [result, setResult] = useState<StopRun | null>(null)
   const [phase, setPhase] = useState<StopPhase | null>(null)
@@ -32,22 +33,30 @@ export function StopDownloadCard({ binding, blocked, onClose, onReview, onStoppe
     inFlight.current = true
     setPhase(syncFirst ? 'syncing' : 'stopping')
     try {
+      const problem = await prepareStopLanding(amadeus, binding.root, usePageStore.getState().vaultRoot)
+      if (problem) { setResult({ kind: 'failed', code: problem }); return }
       const fresh = await vaultSync.get()
-      const current = fresh.ok && fresh.value?.mode === 'full' && fresh.value.bindings.find((b) => b.id === binding.id && b.root === binding.root && b.target.kind === 'penzor')
-      if (!current) { setResult(fresh.ok ? { kind: 'gone' } : { kind: 'failed', code: fresh.error }); return }
+      const current = fresh.ok && fresh.value?.mode === 'full' && fresh.value.bindings.find((b) => b.id === binding.id)
+      if (!fresh.ok) { setResult({ kind: 'failed', code: fresh.error }); return }
+      if (!current || !confirmed || stopBindingIdentity(current) !== confirmed) {
+        setResult({ kind: 'failed', code: 'stop-binding-changed' })
+        return
+      }
       const pre = stopPreflight(current)
       if (!pre.eligible) { setResult({ kind: 'busy', code: pre.reason }); return }
       if (!syncFirst && !directConfirmed && pre.recommendSyncFirst) { setSnapshot(current); return }
-      const problem = await prepareStopLanding(amadeus, current, () => usePageStore.getState().vaultRoot, (root) => usePageStore.getState().switchLocalVault(root))
-      if (problem) { setResult({ kind: 'failed', code: problem }); return }
+
       const r = await runStopLanding(vaultSync, { bindingId: current.id, syncFirst })
       setResult(r)
       if (r.kind === 'stopped') {
         const after = await vaultSync.get()
-        const unbound = after.ok && after.value?.mode === 'full' && !after.value.bindings.some((b) => b.root === r.root)
-        const forgot = r.root === binding.root && unbound && await amadeus.forgetVault?.(r.root).catch(() => false) === true
+        const unbound = r.root === binding.root && after.ok && after.value?.mode === 'full' && !after.value.bindings.some((b) => b.root === r.root)
+        const problem = unbound ? await finishStopLanding(amadeus, r.root, () => usePageStore.getState().vaultRoot,
+          (root) => usePageStore.getState().switchLocalVault(root)) : null
+        const forgot = unbound && !problem && await amadeus.forgetVault?.(r.root).catch(() => false) === true
         onClose()
-        onStopped(forgot)
+        if (problem) onStopped(false, problem)
+        else onStopped(forgot)
       }
     } catch { setResult({ kind: 'failed', code: 'failed' }) }
     finally { inFlight.current = false; setPhase(null); refreshVaultSync() }

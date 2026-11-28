@@ -1,3 +1,4 @@
+import type { VaultCreated } from '@amadeus-shared/vaultCreate'
 // 智库同步第 4 步 U4 的接线与对话框逻辑(不带界面):两层回复里第 4 步通道带的字段、落盘 ⑧、新建 ⑪、停止落盘 ⑩、撤本次新建的空文件夹。
 // 撤文件夹的用例用真临时目录,桩的删除是递归删(最坏的宿主):挡住误删的只能是逻辑里的判断。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -21,28 +22,31 @@ let tmp: string
 beforeEach(() => { tmp = mkdtempSync(join(tmpdir(), 'u4-step4-')) })
 afterEach(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-/** 宿主桩:真文件系统;removeEmptyDir 故意是递归删(最坏的宿主),只有逻辑里的判断能挡住误删。 */
+/** The fake uses the root as a stable test operation id. */
 function folderHost(over: Partial<CreatedFolderHost> & { bound?: string[] | null } = {}): CreatedFolderHost & { forgot: string[]; removed: string[] } {
   const forgot: string[] = [], removed: string[] = []
   return {
     forgot, removed,
-    isEmptyDir: async (root) => { try { return readdirSync(root).length === 0 } catch { return null } },
     boundRoots: async () => (over.bound === undefined ? [] : over.bound),
-    inUse: async () => false,
-    forgetVault: async (root) => { forgot.push(root); return true },
-    removeEmptyDir: async (root) => { removed.push(root); rmSync(root, { recursive: true, force: true }) },
+    rollback: async (root) => {
+      if (readdirSync(root).length) return 'kept_not_empty'
+      rmSync(root, { recursive: true, force: true })
+      removed.push(root)
+      forgot.push(root)
+      return 'removed'
+    },
     ...over,
   }
 }
 /** 宿主 vaultCreate 桩:真建文件夹,回 created。 */
 function vaultCreateStub(base: string) {
   const calls: Array<{ parent?: string; name: string; existing: string }> = []
-  const fn = async (a: { parent?: string; name: string; existing: 'reuse' | 'refuse' }): Promise<{ root: string; created: boolean }> => {
+  const fn = async (a: { parent?: string; name: string; existing: 'reuse' | 'refuse' }): Promise<VaultCreated> => {
     calls.push(a)
     const root = join(a.parent ?? base, a.name)
-    if (existsSync(root)) { if (a.existing === 'refuse') throw new Error("Error invoking remote method 'x': Error: EEXIST: file already exists"); return { root, created: false } }
+    if (existsSync(root)) { if (a.existing === 'refuse') throw new Error("Error invoking remote method 'x': Error: EEXIST: file already exists"); return { root, created: false, registered: false, operationId: root } }
     mkdirSync(root)
-    return { root, created: true }
+    return { root, created: true, registered: true, operationId: root }
   }
   return Object.assign(fn, { calls })
 }
@@ -219,7 +223,7 @@ describe('落盘 ⑧:点了主按钮(vaultCreate → download)', () => {
   it('宿主没建成 → host_failed,不调 download;宿主回的形状不对 → host_invalid', async () => {
     const d = { download: vi.fn(), vaultCreate: async () => { throw new Error("Error invoking remote method 'amadeus:vaults:create-at': Error: invalid-name") }, folder: folderHost() }
     expect(await runDownload(d, LAB, classifyDownloadCheck(okCheck()), { parent: tmp, folderName: 'Lab' })).toEqual({ kind: 'host_failed', code: 'invalid_name' })
-    const d2 = { download: vi.fn(), vaultCreate: async () => ({ root: '' }) as unknown as { root: string; created: boolean }, folder: folderHost() }
+    const d2 = { download: vi.fn(), vaultCreate: async () => ({ root: '' }) as unknown as VaultCreated, folder: folderHost() }
     expect(await runDownload(d2, LAB, classifyDownloadCheck(okCheck()), { parent: tmp, folderName: 'Lab' })).toEqual({ kind: 'host_invalid' })
     expect(d.download).not.toHaveBeenCalled()
     expect(d2.download).not.toHaveBeenCalled()
@@ -291,7 +295,7 @@ describe('新建 ⑪:点了「新建」', () => {
   const mk = (create: CreateVaultDeps['create'], folder = folderHost()) => {
     const vc = vaultCreateStub(tmp)
     const open = vi.fn(async () => {})
-    return { vaultCreate: vc, create: vi.fn(create), open, folder }
+    return { vaultCreate: vc, currentAccount: async () => 'account', create: vi.fn(create), open, folder }
   }
   it('预判撞名:本机什么都不建、不调 create', async () => {
     const d = mk(async () => ({ ok: true, value: { ok: true, bindingId: 'b1' } as CreateOk }))
@@ -360,21 +364,19 @@ describe('新建 ⑪:点了「新建」', () => {
 })
 
 describe('撤本次新建的空文件夹:其余挡法', () => {
-  it('读不出是不是空 / 成了当前库 / rmdir 失败(整个留着、照旧在清单里)/ 删了但清单那行没去掉', async () => {
-    const root = join(tmp, 'X'); mkdirSync(root)
-    expect(await discardCreatedFolder(folderHost({ isEmptyDir: async () => null }), { root, created: true })).toBe('kept_unreadable')
-    expect(await discardCreatedFolder(folderHost({ inUse: async () => true }), { root, created: true })).toBe('kept_in_use')
-    expect(await discardCreatedFolder(folderHost({ inUse: async () => null }), { root, created: true })).toBe('kept_in_use')
-    const noRm = folderHost({ removeEmptyDir: async () => { throw new Error('ENOTEMPTY') } })
-    expect(await discardCreatedFolder(noRm, { root, created: true })).toBe('kept_remove_failed')
-    expect(noRm.forgot).toEqual([])
-    expect(existsSync(root)).toBe(true)
-    expect(await discardCreatedFolder(folderHost({ forgetVault: async () => false }), { root, created: true })).toBe('removed_still_listed')
-    expect(existsSync(root)).toBe(false)
+  it('propagates host rollback outcomes without a second registry operation', async () => {
+    const root = join(tmp, 'Notes'); mkdirSync(root)
+    const made = { root, created: true, registered: true, operationId: 'operation' }
+    for (const outcome of ['kept_unreadable', 'kept_in_use', 'removed_still_listed'] as const) {
+      const rollback = vi.fn(async () => outcome)
+      expect(await discardCreatedFolder(folderHost({ rollback }), made)).toBe(outcome)
+      expect(rollback).toHaveBeenCalledWith(made.operationId)
+    }
+    expect(await discardCreatedFolder(folderHost({ rollback: async () => { throw new Error('ENOTEMPTY') } }), made)).toBe('kept_remove_failed')
   })
   it('点开头的文件也算不空', async () => {
     const root = join(tmp, 'Y'); mkdirSync(root); writeFileSync(join(root, '.DS_Store'), '')
-    expect(await discardCreatedFolder(folderHost(), { root, created: true })).toBe('kept_not_empty')
+    expect(await discardCreatedFolder(folderHost(), { root, created: true, registered: true, operationId: root })).toBe('kept_not_empty')
     expect(existsSync(join(root, '.DS_Store'))).toBe(true)
   })
 })

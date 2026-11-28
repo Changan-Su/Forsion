@@ -3,23 +3,18 @@ import { vaultDirName } from '@amadeus-shared/vaultCreate'
 import { vaultSync } from './client'
 import type { BindingView, CloudVaultView, LibraryInfo, VaultSyncGet } from './types'
 import type { CreatedFolderHost } from './createdFolder'
-import type { DownloadLibrary, VaultCreateFn } from './download'
+import type { DownloadLibrary } from './download'
 
-export function folderHost(api: AmadeusApi | undefined): { vaultCreate: VaultCreateFn; parent: () => Promise<string>; folder: CreatedFolderHost } | null {
-  if (!api?.vaultCreate || !api.vaultDefaultParent || !api.vaultIsEmptyDir || !api.vaultRemoveEmptyDir || !api.listVaults || !api.forgetVault) return null
-  return {
-    vaultCreate: api.vaultCreate, parent: api.vaultDefaultParent,
-    folder: {
-      isEmptyDir: api.vaultIsEmptyDir, removeEmptyDir: api.vaultRemoveEmptyDir, forgetVault: api.forgetVault,
-      async boundRoots() {
-        const r = await vaultSync.get()
-        return r.ok && r.value?.mode === 'full' && Array.isArray(r.value.bindings) ? r.value.bindings.map((b) => b.root) : null
-      },
-      async inUse(root) {
-        return (await api.listVaults!()).some((v) => v.root === root && (v.current || v.pinned))
-      },
+export function folderHost(api: AmadeusApi | undefined) {
+  if (!api?.vaultCreate || !api.vaultDefaultParent || !api.vaultEnsureDefaultParent || !api.vaultRollback) return null
+  const folder: CreatedFolderHost = {
+    rollback: api.vaultRollback,
+    async boundRoots() {
+      const r = await vaultSync.get()
+      return r.ok && r.value?.mode === 'full' && Array.isArray(r.value.bindings) ? r.value.bindings.map((b) => b.root) : null
     },
   }
+  return { vaultCreate: api.vaultCreate, parent: api.vaultDefaultParent, ensureParent: api.vaultEnsureDefaultParent, folder }
 }
 
 /** Landing never changes the cloud name, even when the host would trim it. */

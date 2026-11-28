@@ -1,3 +1,4 @@
+import type { VaultCreated } from '@amadeus-shared/vaultCreate'
 /**
  * 智库同步第 4 步 U4 ⑪「新建智库…」对话框背后的逻辑(契约 step34 §4.2、实现期修订 E4-9/17/19;方案图第 2 页 ⑪)。
  * 没有 JSX、不出文案:状态一律回码,界面按码说。
@@ -60,6 +61,7 @@ export async function checkNewVaultName(resolve: (name: string) => Promise<VsRes
 export interface CreateVaultDeps {
   /** 宿主 vaultCreate,existing:'refuse'(同名文件夹已在 → 抛 EEXIST,不并进别人的文件夹)。parent 不给 = 宿主 `<工作区>/Vaults`。 */
   vaultCreate: VaultCreateFn
+  currentAccount(): Promise<string | null>
   resolveName?(name: string): Promise<VsResult<ResolveNameResult>>
   create(root: string): Promise<VsResult<CreateOk>>
   /** 打开这个库(pageStore.switchLocalVault:先在旧根落盘再换根)。 */
@@ -93,23 +95,27 @@ const codeOf = (err: string): string => /([a-z][a-z0-9_-]+)\s*$/.exec(err)?.[1] 
 export async function runCreateVault(deps: CreateVaultDeps, o: { name: string; upload: boolean }): Promise<CreateVaultRun> {
   const name = o.name.trim()
   if (!name) return { kind: 'empty_name' }
-  if (o.upload && deps.resolveName) {
+  const account = o.upload ? await deps.currentAccount().catch(() => null) : null
+  if (account && deps.resolveName) {
     const pre = await checkNewVaultName(deps.resolveName, name)
     if (pre.kind === 'name_exists') return { kind: 'name_exists', source: 'resolver', libraryId: pre.libraryId, cleanup: null }
     if (pre.kind === 'reserved' || pre.kind === 'invalid_name') return { kind: 'name_rejected', code: pre.kind, source: 'resolver', cleanup: null }
   }
-  let made: { root: string; created: boolean }
+  let made: VaultCreated
   try {
     made = await deps.vaultCreate({ name, existing: 'refuse' })
   } catch (e) {
     return { kind: 'host_failed', code: hostCreateError(e) }
   }
-  if (!made || typeof made.root !== 'string' || !made.root || typeof made.created !== 'boolean') return { kind: 'host_invalid' }
+  if (!made || typeof made.root !== 'string' || !made.root || typeof made.created !== 'boolean' || typeof made.registered !== 'boolean' || !made.operationId) return { kind: 'host_invalid' }
   const open = async (): Promise<{ opened: boolean; openError?: string }> => {
     try { await deps.open(made.root); return { opened: true } } catch (e) { return { opened: false, openError: String((e as Error)?.message ?? e) } }
   }
   if (!o.upload) return { kind: 'created', root: made.root, upload: 'off', ...(await open()) }
+  const accountChanged = () => ({ kind: 'created', root: made.root, upload: 'failed', reason: 'account_changed', opened: false }) as const
+  if (!account || await deps.currentAccount().catch(() => null) !== account) return accountChanged()
   const r = await deps.create(made.root)
+  if (await deps.currentAccount().catch(() => null) !== account) return accountChanged()
   if (r.ok && r.value && typeof r.value.bindingId === 'string' && r.value.bindingId) {
     return { kind: 'created', root: made.root, upload: 'on', bindingId: r.value.bindingId, ...(await open()) }
   }

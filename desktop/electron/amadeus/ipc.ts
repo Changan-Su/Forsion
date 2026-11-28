@@ -20,7 +20,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, withVaultRegistry, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, readVaultMenuRegistry, updateConfig, updateLocalVaultConfig, withVaultRegistry, writeConfig, type AmadeusConfig } from './settings'
 import { registerVaultCreateIpc } from './vaultCreate'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
@@ -35,7 +35,7 @@ import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
-import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
+import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList, type VaultFields } from './vaultList'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
@@ -341,7 +341,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
     // 切本机库 = 不再恢复在线库:和 switchPatch 同一次落盘清掉 activeVault(H3 定稿第 2 节)
-    const leftOnline = await updateLocalVaultConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    const physicalRoot = await fs.realpath(root)
+    const leftOnline = await updateLocalVaultConfig((cfg) => {
+      adoptVaultCreation(physicalRoot)
+      Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root))
+    })
     while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
     // 换完根再广播:别的窗口收到就 restoreVault(true),拿到的得是新根
     try { return await activateRoot(root, true) } finally { if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null }) } // 同步跑到 vault.setRoot
@@ -363,17 +367,18 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     const dir = vaultDirName(name)
     if (!dir) throw new Error('invalid-name')
     const parent = path.join(defaultWorkspaceDir(), 'Vaults')
+    await withVaultRegistry(async () => {})
     await fs.mkdir(parent, { recursive: true })
     const root = path.join(parent, dir)
     await fs.mkdir(root)
     return switchLocalVault(root)
   })
 
-  registerVaultCreateIpc(ipcMain, getWindow, getSettingsWindow)
+  const adoptVaultCreation = registerVaultCreateIpc(ipcMain, getWindow, getSettingsWindow)
 
   // 清单 / 移出 / 显示不绑根:别的窗口还停在旧库时也要能看菜单。
-  ipcMain.handle(IPC.listVaults, async () => {
-    const cfg = await withVaultRegistry(async (stored) => normalizeLocal(stored, isManagedCloudVault))
+  const listVaultRows = async (fields: VaultFields) => {
+    const cfg = normalizeLocal(fields, isManagedCloudVault)
     const pinned = syncVaultRoot(cfg)
     const owned = contentSyncOwned(currentCloudAccountId())
     const home = app.getPath('home')
@@ -386,15 +391,22 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       pinned: samePath(v.root, pinned),
       exists: await fs.stat(v.root).then((s) => s.isDirectory(), () => false),
     })))
+  }
+  ipcMain.handle(IPC.listVaults, async () => listVaultRows(await withVaultRegistry(async (stored) => stored)))
+  ipcMain.handle(IPC.listVaultsForMenu, async () => {
+    const { config, degraded } = await readVaultMenuRegistry()
+    return { rows: await listVaultRows(config), degraded }
   })
   ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
     if (typeof root !== 'string') return false
     let ok = false
     try {
-      await updateConfig((cfg) => {
+      const physicalRoot = await fs.realpath(root).catch(() => path.resolve(root))
+      await withVaultRegistry(async (cfg, save) => {
         const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
-        if (!patch) return false
-        Object.assign(cfg, patch)
+        if (!patch) return
+        await save(patch.vaults)
+        adoptVaultCreation(physicalRoot)
         ok = true
       })
     } catch {

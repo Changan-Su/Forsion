@@ -34,7 +34,7 @@ export function NewVaultDialog({ option, onClose, onDownload, onCreated }: {
 
   useEffect(() => {
     let active = true
-    void folderHost(amadeus)?.parent().then((p) => { if (active) setParent(p) }, () => {})
+    void folderHost(amadeus)?.parent().then((p) => { if (active) setParent(p.path) }, () => {})
     return () => { active = false }
   }, [])
 
@@ -63,7 +63,10 @@ export function NewVaultDialog({ option, onClose, onDownload, onCreated }: {
     inFlight.current = true
     setBusy(true)
     const result = await runCreateVault({
-      ...host, resolveName: vaultSync.resolveName, create: vaultSync.create,
+      ...host, currentAccount: async () => {
+        const auth = await window.tangu?.authStatus?.()
+        return auth?.loggedIn === true ? auth.accountId ?? null : null
+      }, resolveName: vaultSync.resolveName, create: vaultSync.create,
       open: (root) => usePageStore.getState().switchLocalVault(root),
     }, { name, upload }).catch(() => ({ kind: 'host_invalid' }) as const)
     inFlight.current = false

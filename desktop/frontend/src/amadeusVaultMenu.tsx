@@ -16,11 +16,11 @@ import { composeVaultSync } from '../../shared/vaultSync'
 import { VaultSyncChip } from './sync/VaultSyncChip'
 import { feedsOf, useVaultSync, useVaultSyncRaw } from './sync/vaultSyncStore'
 import { vaultSyncWords } from './sync/vaultSyncText'
-import { vaultSync } from './sync/v2/client'
+import { vaultSync, type VsResult } from './sync/v2/client'
 import { cloudOnlyRows, folderHost, type CloudRow } from './sync/v2/vaultSurfaces'
 import { uploadOption, type CreateVaultRun } from './sync/v2/createVault'
 import type { DownloadLibrary } from './sync/v2/download'
-import type { BindingView } from './sync/v2/types'
+import type { BindingView, LibrariesValue, VaultSyncGet } from './sync/v2/types'
 import { canViewPenzorLibrary, openPenzorLibrary } from './sync/v2/openPenzorLibrary'
 import { stopLocalPlan } from './sync/v2/finishStopLanding'
 import { VaultSyncPanel, bytesText } from './sync/VaultSyncPanel'
@@ -29,6 +29,8 @@ import { NewVaultDialog } from './components/NewVaultDialog'
 import { StopDownloadCard } from './components/StopDownloadCard'
 import { windowKind } from './windowKind'
 import { landingError } from './components/vaultLandingMessages'
+
+import type { AuthStatusInfo } from './types'
 
 registerMessages({
   'vaultMenu.missingDetail': { zh: '找不到文件夹', en: 'Folder not found' },
@@ -86,28 +88,36 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
       setFailedUploads((roots) => new Set(roots).add(result.root))
       notify('landing.uploadFailed', { name: vaultName, reason: landingError(t, result.reason, vaultName) }, true)
     }
-    if (!result.opened) notify('landing.openFailed', { name: vaultName }, true)
+    if (!result.opened && !(result.upload === 'failed' && result.reason === 'account_changed')) notify('landing.openFailed', { name: vaultName }, true)
   }
 
   const open = async (el: HTMLElement): Promise<void> => {
     const request = ++menuRequest.current
-    const [rows, synced, auth] = await Promise.all([
-      amadeus?.listVaults?.().catch(() => null),
-      vaultSync.get(locale === 'zh' ? 'zh' : 'en'),
-      window.tangu?.authStatus?.().catch(() => null),
-    ])
-    if (!rows || request !== menuRequest.current) return
-    const mode = modeFrom(synced)
-    setSyncMode(mode)
+    const local = await (amadeus?.listVaultsForMenu
+      ? amadeus.listVaultsForMenu()
+      : amadeus?.listVaults?.().then((rows) => ({ rows, degraded: false })))?.catch(() => null)
+    if (request !== menuRequest.current || !el.isConnected) return
+    const { rows, degraded } = local ?? { rows: [], degraded: true }
+    renderMenu(el, rows, degraded, null, null, null)
+    const [synced, auth] = await Promise.all([vaultSync.get(locale === 'zh' ? 'zh' : 'en'), window.tangu?.authStatus?.().catch(() => null)])
+    if (request !== menuRequest.current || !el.isConnected) return
+    setSyncMode(modeFrom(synced))
     const full = synced.ok && synced.value?.mode === 'full' ? synced.value : null
     const listed = full && auth?.loggedIn === true ? await vaultSync.libraries() : null
     if (request !== menuRequest.current || !el.isConnected) return
+    renderMenu(el, rows, degraded, synced, auth ?? null, listed)
+  }
+
+  const renderMenu = (el: HTMLElement, rows: LocalVaultRow[], degraded: boolean,
+    synced: VsResult<VaultSyncGet> | null, auth: AuthStatusInfo | null, listed: VsResult<LibrariesValue> | null) => {
+    const mode = synced ? modeFrom(synced).mode : 'unknown'
+    const full = synced?.ok && synced.value?.mode === 'full' ? synced.value : null
     const freshness = listed?.ok ? (listed.value.stale ? 'offline' : 'fresh') : (listed?.error === 'offline' || (listed?.error === 'not_fetched' && navigator.onLine === false)) ? 'offline'
       : listed?.error === 'libraries_cache_unreadable' ? 'unreadable' : 'hidden'
     const grouped = freshness !== 'hidden'
     const actions = amadeus.vaultSyncActions?.()
     const canManageLocal = windowKind() === 'main' && !!folderHost(amadeus)
-    const canDownload = !!actions?.download && canManageLocal
+    const canDownload = !degraded && !!actions?.download && canManageLocal
     const cloudRows = full && listed?.ok ? cloudOnlyRows(full, listed.value.list.libraries) : []
     const feeds = feedsOf(useVaultSyncRaw.getState())
     const now = Date.now()
@@ -119,11 +129,11 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
     const cloudName = (row: CloudRow) => row.kind === 'default' ? t('amadeus.default.cloudNotes') : row.name
     const rowMenu = (row: LocalVaultRow, binding: BindingView | undefined, at: { x: number; y: number }) => setMenu({ ...at, items: [
       { label: t(isMac() ? 'vaultMenu.reveal' : 'vaultMenu.revealOther'), icon: <FolderSearch size={14} />, disabled: !row.exists, run: () => void amadeus.revealVault?.(row.root) },
-      { label: t('vaultMenu.forget'), icon: <ListX size={14} />, disabled: row.current || row.pinned, run: () => void amadeus.forgetVault?.(row.root) },
-      ...(full && auth?.loggedIn === true && actions?.unbind && canManageLocal && amadeus.moveSyncVaultPin && binding?.target.kind === 'penzor' ? [
+      { label: t('vaultMenu.forget'), icon: <ListX size={14} />, disabled: degraded || row.current || row.pinned, run: () => void amadeus.forgetVault?.(row.root) },
+      ...(!degraded && full && auth?.loggedIn === true && actions?.unbind && canManageLocal && amadeus.moveSyncVaultPin && binding?.target.kind === 'penzor' ? [
         { label: t('landing.stop'), icon: <FolderX size={14} />, run: () => setStopping({ binding, blocked: stopLocalPlan(rows, row.root, vaultRoot).blocked }) },
       ] : []),
-      ...(full && actions?.create && !binding && row.exists && auth?.loggedIn === true ? [
+      ...(!degraded && full && actions?.create && !binding && row.exists && auth?.loggedIn === true ? [
         { label: t('landing.uploadMenu'), icon: <Cloud size={14} />, run: () => openSyncSettings({ root: row.root, intent: 'start' }) },
       ] : []),
     ] })
@@ -132,7 +142,7 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
     for (const row of rows) {
       const binding = full?.bindings.find((b) => b.root === row.root && b.role === 'primary') ?? full?.bindings.find((b) => b.root === row.root)
       const matchedId = full?.localVaults.find((v) => v.root === row.root)?.libraryId
-      const sameName = row.exists && !binding && !!matchedId && !!listed?.ok
+      const sameName = !degraded && row.exists && !binding && !!matchedId && !!listed?.ok
         && listed.value.list.libraries.some((lib) => lib.id === matchedId && !lib.deleted)
       const words = syncWords(row.root)
       items.push({
@@ -141,7 +151,7 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
           : sameName ? t('landing.sameName') : grouped || !words ? row.display : `${words} · ${row.display}`,
         title: row.display,
         status: !sameName && (grouped || failedUploads.has(row.root)) ? words ?? t('landing.localOnly') : undefined,
-        action: sameName || (full && !binding && failedUploads.has(row.root)) ? {
+        action: sameName || (!degraded && full && !binding && failedUploads.has(row.root)) ? {
           label: t(sameName ? 'landing.sync' : 'landing.uploadMenu'),
           run: () => openSyncSettings({ root: row.root, intent: 'start' }),
         } : undefined,
@@ -149,6 +159,7 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
         checked: row.root === vaultRoot,
         run: () => {
           if (row.root === vaultRoot) return
+          if (degraded) { warn(t('landing.err.vault_list_unreadable')); return }
           if (!row.exists) return warn(translate('vaultMenu.missing', { name: row.name }))
           void usePageStore.getState().switchLocalVault(row.root).catch((e) => failed(e, row.name))
         },
@@ -189,6 +200,7 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
       ) })
     }
 
+    if (degraded) items.push({ kind: 'note', label: t('landing.err.vault_list_unreadable'), run: () => {} })
     items.push(
       { label: t('vaultMenu.openFolder'), icon: <FolderOpen size={15} />, separatorBefore: true, run: () => void usePageStore.getState().openVault() },
       { label: t('vaultMenu.new'), icon: <FolderPlus size={15} />, run: () => {
@@ -196,7 +208,7 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
         const option = !actions?.create ? null : freshness === 'offline'
           ? { available: false as const, defaultChecked: false as const, reason: 'offline' as const }
           : auth?.loggedIn === false ? { available: false as const, defaultChecked: false as const, reason: 'not_signed_in' as const }
-          : uploadOption({ mode: mode.mode, signedIn: auth?.loggedIn ?? null, get: full })
+          : uploadOption({ mode, signedIn: auth?.loggedIn ?? null, get: full })
         setCreating({ option })
       } },
     )
@@ -224,7 +236,8 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
         onDownload={(lib) => { setCreating(null); setDownload(lib) }} onCreated={created} />}
       {stopping && <StopDownloadCard binding={stopping.binding} blocked={stopping.blocked} onClose={() => setStopping(null)}
         onReview={() => setReview(stopping.binding)}
-        onStopped={(forgot) => notify(forgot ? 'landing.stopped' : 'landing.forgetFailed', { name: stopping.binding.name }, !forgot)} />}
+        onStopped={(forgot, problem) => notify(problem ? 'landing.stopCleanupFailed' : forgot ? 'landing.stopped' : 'landing.forgetFailed',
+          { name: stopping.binding.name, reason: problem ? landingError(t, problem, stopping.binding.name) : '' }, !forgot)} />}
       {review && <VaultSyncPanel vault={{ root: review.root, side: 'local' }} name={review.name}
         view={reviewView}
         anchorRef={rowRef} onClose={() => setReview(null)} />}

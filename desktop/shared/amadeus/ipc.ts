@@ -11,6 +11,7 @@ export const IPC = {
   restoreVault: 'vault:restore',
   // 本机多智库(第 1 步):清单 / 切换 / 新建 / 移出清单 / 在访达中显示
   listVaults: 'vaults:list',
+  listVaultsForMenu: 'vaults:list-for-menu',
   switchVault: 'vaults:switch',
   createVault: 'vaults:create',
   forgetVault: 'vaults:forget',
@@ -873,13 +874,14 @@ export interface AmadeusApi {
   /** Create `<workspace>/Vaults/<name>` and open it; throws on a bad name or an existing folder. */
   createVault?(name: string): Promise<VaultInfo>
   /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
-  vaultCreate?(args: import('./vaultCreate').VaultCreateArgs): Promise<{ root: string; created: boolean }>
+  listVaultsForMenu?(): Promise<{ rows: LocalVaultRow[]; degraded: boolean }>
+  vaultCreate?(args: import('./vaultCreate').VaultCreateArgs): Promise<import('./vaultCreate').VaultCreated>
   vaultSyncActions?(): { download: boolean; create: boolean; unbind: boolean }
-  vaultDefaultParent?(): Promise<string>
-  vaultIsEmptyDir?(root: string): Promise<boolean | null>
-  vaultRemoveEmptyDir?(root: string): Promise<void>
+  vaultDefaultParent?(): Promise<import('./vaultCreate').VaultDefaultLocation>
+  vaultEnsureDefaultParent?(): Promise<string>
+  vaultRollback?(operationId: string): Promise<import('./vaultCreate').VaultRollbackResult>
   vaultFileHashes?(root: string, paths: string[]): Promise<string[]>
-  moveSyncVaultPin?(root: string): Promise<import('./vaultCreate').MoveVaultPinResult>
+  moveSyncVaultPin?(root: string, check?: import('./vaultCreate').VaultPinCheck): Promise<import('./vaultCreate').MoveVaultPinResult>
   forgetVault?(root: string): Promise<boolean>
   revealVault?(root: string): Promise<void>
   /** Online library (desktop host only). Read throws when the config can't be read; open `lastVault` then. */

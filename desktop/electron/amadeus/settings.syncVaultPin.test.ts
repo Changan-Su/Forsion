@@ -218,3 +218,16 @@ it('checks for legacy config inside its write queue when legacy settings are con
   expect(await move).toBe('legacy-remotesync-not-paused')
   expect(await readBytes()).toBe(before)
 })
+
+it('preflights the implicit pin against a prospective local root without writing either field', async () => {
+  const { legacyRemoteSync } = await import('../remotesyncIpc')
+  const { moveSyncVaultPin } = await import('./settings')
+  await legacyRemoteSync.touch()
+  const initial = JSON.stringify({ ...config(), localVault: pinned(), lastVault: pinned(), syncVault: undefined })
+  await fs.writeFile(configFile(), initial)
+  expect(await moveSyncVaultPin(pinned(), { checkOnly: true, nextRoot: local() })).toBe('moved')
+  expect(await readBytes()).toBe(initial)
+  await fs.writeFile(join(env.root, 'remotesync.json'), JSON.stringify({ backend: 'folder' }))
+  expect(await moveSyncVaultPin(pinned(), { checkOnly: true, nextRoot: local() })).toBe('legacy-remotesync-not-paused')
+  expect(await readBytes()).toBe(initial)
+})

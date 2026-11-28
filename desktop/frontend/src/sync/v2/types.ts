@@ -86,6 +86,7 @@ export interface BindingStatusView {
 }
 
 export interface BindingView {
+  generation?: number
   id: string
   root: string
   name: string

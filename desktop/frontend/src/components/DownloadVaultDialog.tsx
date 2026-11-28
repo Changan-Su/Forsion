@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { VaultDefaultLocation } from '@amadeus-shared/vaultCreate'
 import { Folder } from 'lucide-react'
 import { amadeus } from '@amadeus/api'
 import { useI18n } from '../i18n'
@@ -23,6 +24,7 @@ export function DownloadVaultDialog({ library, onClose, onPreview, onStarted }: 
   const name = downloadFolderName(library, t('amadeus.default.cloudNotes'))
   const invalid = !validLandingName(name)
   const [locationRevision, setLocationRevision] = useState(0)
+  const [missingDefault, setMissingDefault] = useState<VaultDefaultLocation | null>(null)
   const [parent, setParent] = useState<string | null>(null)
   const [check, setCheck] = useState<DownloadCheckState>({ kind: 'checking' })
   const [error, setError] = useState<string | null>(null)
@@ -30,35 +32,47 @@ export function DownloadVaultDialog({ library, onClose, onPreview, onStarted }: 
   const [busy, setBusy] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const inFlight = useRef(false)
+  const checkedAfterCreatingParent = useRef(false)
   useEffect(() => {
     let active = true
     if (invalid) return
     if (library.kind === 'default') { setCheck(downloadBlock('default_unsupported')); return }
     const host = folderHost(amadeus)
     if (!host) { setCheck(downloadBlock('channel_missing')); return }
-    void host.parent().then((p) => { if (active) setParent(p) }, () => { if (active) setCheck(downloadBlock('failed')) })
+    void host.parent().then((location) => {
+      if (!active) return
+      if (!location.exists) {
+        setMissingDefault(location)
+        if (location.freeBytes != null && library.bytes != null && library.bytes > location.freeBytes) {
+          setCheck(downloadBlock('insufficient_space', { bytes: library.bytes, freeBytes: location.freeBytes }))
+        }
+      }
+      setParent(location.path)
+    }, () => { if (active) setCheck(downloadBlock('failed')) })
     return () => { active = false }
-  }, [invalid, library.kind])
+  }, [invalid, library.kind, library.bytes])
 
   useEffect(() => {
-    if (!parent || invalid) return
+    if (!parent || invalid || missingDefault) return
+    if (checkedAfterCreatingParent.current) { checkedAfterCreatingParent.current = false; return }
     let active = true
     void checkDownload(vaultSync, library, parent).then((r) => {
       if (!active) return
       setCheck((r.kind === 'ready' || r.kind === 'compare') && r.name !== name ? downloadBlock('name_mismatch') : r)
     })
     return () => { active = false }
-  }, [parent, locationRevision, invalid, library.id, library.kind, library.name, name]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [parent, locationRevision, missingDefault, invalid, library.id, library.kind, library.name, name]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const close = () => { if (!inFlight.current) onClose() }
   const pick = async () => {
     const selected = await window.tangu?.pickDirectory?.({ purpose: 'project' }).catch(() => null)
     if (!selected) return
+    setMissingDefault(null)
     setLocationRevision((revision) => revision + 1)
     setCheck({ kind: 'checking' }); setError(null); setRunResult(null); setRenaming(false); setParent(selected)
   }
   const submit = async () => {
-    if (inFlight.current || invalid || renaming || check.kind === 'checking') return
+    if (inFlight.current || invalid || renaming || (check.kind === 'checking' && !missingDefault)) return
     if (check.kind === 'already_local') {
       if (check.root) { onClose(); openSyncSettings({ root: check.root, intent: 'start' }) }
       return
@@ -71,10 +85,26 @@ export function DownloadVaultDialog({ library, onClose, onPreview, onStarted }: 
     if (!parent || !host) return
     inFlight.current = true
     setBusy(true)
-    const result = await runDownload({ ...host, download: vaultSync.download }, library, check, { parent, folderName: name })
-      .catch(() => ({ kind: 'host_failed', code: 'failed' }) as const)
-    inFlight.current = false
-    setBusy(false)
+    let result: DownloadRun
+    try {
+      const target = missingDefault ? await host.ensureParent() : parent
+      let admitted: DownloadCheckState = check
+      if (missingDefault) {
+        admitted = await checkDownload(vaultSync, library, target)
+        checkedAfterCreatingParent.current = true
+        setMissingDefault(null)
+        if ((admitted.kind === 'ready' || admitted.kind === 'compare') && admitted.name !== name) admitted = downloadBlock('name_mismatch')
+        setCheck(admitted)
+        if (admitted.kind !== 'ready' && admitted.kind !== 'compare') return
+      }
+      result = await runDownload({ ...host, download: vaultSync.download }, library, admitted, { parent: target, folderName: name })
+    } catch {
+      setCheck(downloadBlock('parent_missing'))
+      return
+    } finally {
+      inFlight.current = false
+      setBusy(false)
+    }
     if (result.kind === 'started') { refreshVaultSync(); onClose(); onStarted?.(); return }
     if (result.kind === 'needs_preview') { onClose(); onPreview(result.preview, name); return }
     setRunResult(result)
@@ -83,11 +113,12 @@ export function DownloadVaultDialog({ library, onClose, onPreview, onStarted }: 
     else setError(t('landing.err.failed'))
   }
   const canChange = !invalid && !!window.tangu?.pickDirectory && (check.kind === 'checking' || check.canChangeLocation)
-  const primary = invalid || renaming || check.kind === 'checking' ? 'none' : check.primary
+  const primary = invalid || renaming ? 'none' : check.kind === 'checking' ? missingDefault ? 'download' : 'none' : check.primary
   const label = { none: 'landing.start', download: 'landing.start', compare: 'landing.compare', sync_existing: 'landing.syncExisting', open_settings: 'landing.settings' }[primary]
   const amount = check.kind === 'ready' || check.kind === 'compare' ? t('landing.amount', { n: check.files, size: bytesText(check.bytes) })
-    : check.kind === 'blocked' && check.bytes !== undefined ? bytesText(check.bytes) : null
-  const freeBytes = check.kind === 'ready' || check.kind === 'compare' || check.kind === 'blocked' ? check.freeBytes : null
+    : missingDefault && library.files != null && library.bytes != null ? t('landing.amount', { n: library.files, size: bytesText(library.bytes) })
+      : check.kind === 'blocked' && check.bytes !== undefined ? bytesText(check.bytes) : null
+  const freeBytes = check.kind === 'ready' || check.kind === 'compare' || check.kind === 'blocked' ? check.freeBytes : missingDefault?.freeBytes
   const cleanup = runResult?.kind === 'blocked' ? runResult.cleanup : null
 
   return <VaultLandingDialog kind="download" title={t('landing.downloadTitle', { name })} onClose={close} onSubmit={() => void submit()}>
@@ -97,9 +128,10 @@ export function DownloadVaultDialog({ library, onClose, onPreview, onStarted }: 
         {canChange && <button className="dialog-btn" type="button" disabled={busy} onClick={() => void pick()}>{t('landing.change')}</button>}
       </div>
       <div className="landing-detail">{t('landing.locationHint')}</div>
+      {missingDefault && <div className="landing-detail">{t('landing.createDefaultParent')}</div>}
     </>}
     {!invalid && (check.kind === 'checking' || amount || freeBytes != null) && <div className="landing-measures landing-detail">
-      {check.kind === 'checking' ? t('landing.checking') : amount}
+      {check.kind === 'checking' && !missingDefault ? t('landing.checking') : amount}
       {freeBytes != null && <span className={check.kind === 'blocked' ? 'landing-warn' : undefined}>{t('landing.free', { size: bytesText(freeBytes) })}</span>}
     </div>}
     {(invalid || error || check.kind === 'blocked') && <div role="alert" className="dialog-msg landing-warn">{invalid ? t('landing.invalidHostName') : error ?? (check.kind === 'blocked' && landingError(t, check.code, name))}</div>}

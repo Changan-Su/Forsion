@@ -77,7 +77,7 @@ async function main() {
     check(cfg.syncVault === A, '同步库钉在第一个库', cfg.syncVault)
     check(cfg.localVault === B && cfg.lastVault === B, 'localVault / lastVault 跟着切(Tangu 读 lastVault)', `${cfg.localVault} | ${cfg.lastVault}`)
     check(JSON.stringify((cfg.vaults ?? []).map((v) => v.root)) === JSON.stringify([A, B]), '两库都进清单', JSON.stringify(cfg.vaults))
-    check(cfg.vaults?.[0]?.lastPage === '日记.md', '离开的库记下末次页', cfg.vaults?.[0]?.lastPage)
+    check(cfg.vaults?.find((entry) => entry.root === A)?.lastPage === '日记.md', '离开的库记下末次页', cfg.vaults?.find((entry) => entry.root === A)?.lastPage)
 
     await openMenu()
     r = await rows()
