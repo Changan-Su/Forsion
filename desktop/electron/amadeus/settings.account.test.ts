@@ -89,9 +89,9 @@ describe('legacy cloud state adoption', () => {
   const legacy = {
     localVault: '/local/notes',
     cloudSync: { vaultId: 'vault-a', deviceId: 'desk-old', enabled: true },
-    entrySync: [{ vaultRoot: '/local/notes', cloudName: 'Notes', entries: [{ path: 'MOC.md', kind: 'page' }] }],
+    entrySync: [{ vaultRoot: '/local/notes', cloudName: 'Notes', entries: [{ path: 'MOC.md', kind: 'page' as const }] }],
   }
-  const oldShadow = () => path.join(env.root, `amadeus-sync-entry-${h8('/local/notes')}.json`)
+  const oldShadow = (root = '/local/notes') => path.join(env.root, `amadeus-sync-entry-${h8(root)}.json`)
   const configFile = () => path.join(env.root, 'amadeus-config.json')
   const stored = async () => JSON.parse(await fs.readFile(configFile(), 'utf8'))
   const notes = { cloudSync: legacy.cloudSync, entrySync: legacy.entrySync }
@@ -136,7 +136,9 @@ describe('legacy cloud state adoption', () => {
   it.each(['A', 'B'])('only adopts the matching snapshot when account %s signs in first', async (first) => {
     await seedDowngrade()
     const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
-    const shadow = vi.fn().mockResolvedValue(undefined)
+    const shadow = vi.fn(renameShadow)
+    await fs.writeFile(oldShadow(), JSON.stringify(legacyShadow))
+    await fs.writeFile(oldShadow('/local/work'), JSON.stringify({ ...legacyShadow, vaultId: 'vault-b', vaultRoot: '/local/work' }))
     const adopt = async (id: string, state: typeof notes | typeof work) => {
       login(id)
       await writeConfig({ cloudSync: { vaultId: state.cloudSync.vaultId } })
@@ -154,7 +156,7 @@ describe('legacy cloud state adoption', () => {
   })
 
   it('leaves multiple different snapshots for the same vault quarantined', async () => {
-    const conflict = { ...work, cloudSync: notes.cloudSync }
+    const conflict = { cloudSync: notes.cloudSync, entrySync: [{ ...notes.entrySync[0], entries: work.entrySync[0].entries }] }
     await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: notes, ...conflict }))
     const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
     await writeConfig({ cloudSync: { vaultId: 'vault-a' } })
@@ -165,16 +167,128 @@ describe('legacy cloud state adoption', () => {
     expect(await stored()).toMatchObject({ legacyCloudState: notes, legacyCloudStateExtra: [conflict] })
   })
 
-  it('does not move a legacy shadow name shared by snapshots for different accounts', async () => {
+  it('does not lose an updated downgrade registration when the account already has the same root', async () => {
+    const downgraded = { ...work, entrySync: [{ ...work.entrySync[0], entries: [{ path: 'New.md', kind: 'page' }] }] }
+    await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: notes, ...downgraded }))
+    const settings = await import('./settings')
+    const previous = { ...work.entrySync[0], entries: [{ path: 'Old.md', kind: 'page' as const }] }
+    login('B')
+    await settings.writeConfig({ cloudSync: work.cloudSync, entrySync: [previous] })
+    const before = await fs.readFile(configFile(), 'utf8')
+    expect(await settings.adoptLegacyCloudState(undefined, renameShadow)).toBe(false)
+    expect((await settings.readConfig()).entrySync).toEqual([previous])
+    expect(await fs.readFile(configFile(), 'utf8')).toBe(before)
+    expect((await stored()).legacyCloudStateExtra).toEqual([downgraded])
+  })
+
+  it('does not give B the old shadow after A removes its identical registration from quarantine', async () => {
     const conflict = { ...work, entrySync: notes.entrySync }
     await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: notes, ...conflict }))
-    const { adoptLegacyCloudState, writeConfig } = await import('./settings')
-    await writeConfig({ cloudSync: { vaultId: 'vault-a' } })
-    const shadow = vi.fn()
+    const shadowBytes = JSON.stringify({ ...legacyShadow, pending: { 'Notes/MOC.md': 'remote' } })
+    await fs.writeFile(oldShadow(), shadowBytes)
+    const { adoptLegacyCloudState, readConfig, writeConfig, cloudAccountNamespace } = await import('./settings')
+    const shadow = vi.fn(renameShadow)
+    await writeConfig({ cloudSync: { vaultId: 'vault-a' }, entrySync: notes.entrySync })
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(true)
+    expect((await stored()).legacyCloudState).toBeUndefined()
+    expect(await fs.readFile(oldShadow(), 'utf8')).toBe(shadowBytes)
+
+    login('B')
+    await writeConfig({ cloudSync: work.cloudSync })
     const before = await fs.readFile(configFile(), 'utf8')
     expect(await adoptLegacyCloudState(undefined, shadow)).toBe(false)
     expect(shadow).not.toHaveBeenCalled()
+    expect((await readConfig()).entrySync).toEqual([])
+    await expect(fs.access(path.join(env.root, `amadeus-sync-${cloudAccountNamespace()}-entry-${h8('/local/notes')}.json`))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await fs.readFile(oldShadow(), 'utf8')).toBe(shadowBytes)
     expect(await fs.readFile(configFile(), 'utf8')).toBe(before)
+  })
+
+  it.each(['vaultId', 'vaultRoot'])('verifies the old shadow %s before deleting an already registered root', async (field) => {
+    await seed()
+    await fs.writeFile(oldShadow(), JSON.stringify({ ...legacyShadow, [field]: 'unexpected' }))
+    const { adoptLegacyCloudState, writeConfig } = await import('./settings')
+    await writeConfig({ cloudSync: notes.cloudSync, entrySync: notes.entrySync })
+    const before = await fs.readFile(configFile(), 'utf8')
+    const shadow = vi.fn(renameShadow)
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(false)
+    expect(shadow).not.toHaveBeenCalled()
+    expect(await fs.readFile(configFile(), 'utf8')).toBe(before)
+  })
+
+  it('adopts once when the snapshots differ only in the switch and keeps the account setting', async () => {
+    const enabled = { ...notes, cloudSync: { ...notes.cloudSync, enabled: true } }
+    const disabled = { ...notes, cloudSync: { ...notes.cloudSync, enabled: false } }
+    await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: enabled, ...disabled }))
+    await fs.writeFile(oldShadow(), JSON.stringify(legacyShadow))
+    const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
+    await writeConfig({ cloudSync: { vaultId: 'vault-a', deviceId: 'desk-current', enabled: false } })
+    const shadow = vi.fn(renameShadow)
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(true)
+    expect(shadow).toHaveBeenCalledOnce()
+    expect((await readConfig()).entrySync).toEqual(notes.entrySync)
+    expect((await readConfig()).cloudSync).toEqual({ vaultId: 'vault-a', deviceId: 'desk-current', enabled: false })
+    expect((await stored()).legacyCloudState).toBeUndefined()
+    expect((await stored()).legacyCloudStateExtra).toBeUndefined()
+  })
+
+  it.each(['missing', 'unreadable'])('adopts Work and leaves just Notes pending when the shared shadow is %s', async (mode) => {
+    const pending = { ...work, entrySync: notes.entrySync }
+    await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: { ...notes, entrySync: [...work.entrySync, ...notes.entrySync] }, ...pending }))
+    const workShadow = oldShadow('/local/work')
+    await fs.writeFile(workShadow, JSON.stringify({ ...legacyShadow, vaultRoot: '/local/work' }))
+    const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
+    await writeConfig({ cloudSync: notes.cloudSync })
+    const read = fs.readFile.bind(fs)
+    let checkedNotes = false
+    vi.spyOn(fs, 'readFile').mockImplementation((async (file, ...args) => {
+      if (file === oldShadow()) {
+        checkedNotes = true
+        if (mode === 'unreadable') throw Object.assign(new Error('read failed'), { code: 'EACCES' })
+      }
+      return Reflect.apply(read, fs, [file, ...args])
+    }) as typeof fs.readFile)
+    const shadow = vi.fn(async (from: string, to: string) => {
+      expect(checkedNotes).toBe(true) // preflight includes the root that will remain quarantined
+      return renameShadow(from, to)
+    })
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(true)
+    expect(shadow).toHaveBeenCalledOnce()
+    expect((await readConfig()).entrySync).toEqual(work.entrySync)
+    expect((await stored()).legacyCloudState).toEqual(notes)
+    expect((await stored()).legacyCloudStateExtra).toEqual([pending])
+  })
+
+  it('recovers a verified shared shadow when its move succeeded but the config commit failed', async () => {
+    const pending = { ...work, entrySync: notes.entrySync }
+    await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: notes, ...pending }))
+    await fs.writeFile(oldShadow(), JSON.stringify(legacyShadow))
+    const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
+    await writeConfig({ cloudSync: notes.cloudSync })
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('save failed'))
+    const shadow = vi.fn(renameShadow)
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(false)
+    await expect(fs.access(oldShadow())).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await readConfig()).entrySync).toEqual([])
+    expect(await adoptLegacyCloudState(undefined, shadow)).toBe(true)
+    expect(shadow).toHaveBeenCalledOnce()
+    expect((await readConfig()).entrySync).toEqual(notes.entrySync)
+    expect((await stored()).legacyCloudStateExtra).toEqual([pending])
+  })
+
+  it('adopts entries omitted by older configs as an empty array and preserves malformed roots for review', async () => {
+    const noEntries = { vaultRoot: '/local/work', cloudName: 'Work', exclude: ['Draft.md'], extra: 'retained' }
+    const malformed = { vaultRoot: '/local/other', cloudName: 'Other', entries: 'broken' }
+    await fs.writeFile(configFile(), JSON.stringify({ legacyCloudState: notes, cloudSync: work.cloudSync, entrySync: [noEntries, malformed] }))
+    const { adoptLegacyCloudState, readConfig, writeConfig } = await import('./settings')
+    login('B')
+    await writeConfig({ cloudSync: work.cloudSync })
+    expect(await adoptLegacyCloudState()).toBe(true)
+    const entries = (await readConfig()).entrySync!
+    expect(entries.map((entry) => entry.entries.length)).toEqual([0])
+    expect(entries).toEqual([{ ...noEntries, entries: [] }])
+    expect((await stored()).legacyCloudState).toEqual(notes)
+    expect((await stored()).legacyCloudStateExtra).toEqual([{ cloudSync: work.cloudSync, entrySync: [malformed] }])
   })
 
   it('keeps the original fields when the extra recovery data cannot be interpreted', async () => {
@@ -254,9 +368,9 @@ describe('legacy cloud state adoption', () => {
     await writeConfig({ cloudSync: { vaultId: 'vault-a' }, entrySync: [fresh] })
     const newShadow = path.join(env.root, `amadeus-sync-${cloudAccountNamespace()}-entry-${h8('/local/notes')}.json`)
     await fs.writeFile(newShadow, JSON.stringify({ vaultRoot: '/local/notes', vaultId: 'vault-a', cursor: 7, files: {} }))
-    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(true)
+    expect(await adoptLegacyCloudState(undefined, renameShadow)).toBe(false)
     expect((await readConfig()).entrySync).toEqual([fresh])
-    expect((await stored()).legacyCloudState).toBeUndefined()
+    expect((await stored()).legacyCloudState).toEqual(notes)
     expect(JSON.parse(await fs.readFile(newShadow, 'utf8')).cursor).toBe(7)
     await expect(fs.access(oldShadow())).resolves.toBeUndefined()
   })

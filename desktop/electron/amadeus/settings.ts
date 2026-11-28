@@ -314,16 +314,37 @@ export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCl
   return work
 }
 
-/** Adopt pre-account-scoping bindings once the signed-in account has resolved its own
- * cloud vault and it is the vault those bindings were made against. Vault ownership is
- * per user, so equality proves the owner. Legacy entry shadows move into the account
- * namespace so sync resumes from its baseline instead of re-pairing every file.
- * ponytail: called from refreshEntryBindings; an account whose vault id is still unknown
- * at that moment adopts on the next refresh or launch, no change listener.
- * renameShadow:shadow 文件住在 Extend(sync/shadow.ts 随引擎搬走),由调用方递进来;缺省 = 不动 shadow(只有测试会这样调)。 */
+function legacyEntryRoot(value: unknown): string | undefined {
+  const root = (value as Partial<EntrySyncVault> | null)?.vaultRoot
+  return typeof root === 'string' && path.isAbsolute(root) ? root : undefined
+}
+
+function normalizeLegacyEntry(value: EntrySyncVault, root: string): EntrySyncVault | null {
+  if (typeof value.cloudName !== 'string' || !value.cloudName.trim()) return null
+  const entries = value.entries === undefined ? [] : value.entries
+  if (!Array.isArray(entries) || !entries.every((entry) => entry && typeof entry.path === 'string' && entry.path.length > 0
+    && (entry.kind === 'page' || entry.kind === 'folder' || entry.kind === 'asset'))) return null
+  if (value.exclude !== undefined && (!Array.isArray(value.exclude) || !value.exclude.every((p) => typeof p === 'string'))) return null
+  return { ...value, vaultRoot: root, entries }
+}
+
+const entryShadowHash = (root: string): string => createHash('sha256').update(root).digest('hex').slice(0, 8)
+
+/** 路径与 Extend shadowFile 一致。只有 ENOENT 认作不存在，损坏、读失败或身份对不上都要保留待认领登记。 */
+async function checkEntryShadow(name: string, root: string, vaultId: string): Promise<'missing' | 'matching' | 'unknown'> {
+  const file = path.join(app.getPath('userData'), isDevMode() ? `${name}.dev.json` : `${name}.json`)
+  try {
+    const shadow = JSON.parse(await fs.readFile(file, 'utf8')) as { vaultId?: unknown; vaultRoot?: unknown } | null
+    return shadow?.vaultId === vaultId && shadow.vaultRoot === root ? 'matching' : 'unknown'
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : 'unknown'
+  }
+}
+
+/** 逐根认领已匹配云 vault 的旧登记和基线。冲突、不明的登记和 shadow 原样留给下次核验。 */
 export function adoptLegacyCloudState(
   accountId = currentCloudAccountId(),
-  renameShadow: (from: string, to: string) => Promise<unknown> = async () => {},
+  renameShadow?: (from: string, to: string) => Promise<unknown>,
 ): Promise<boolean> {
   const work = writes.then(async () => {
     if (!accountId) return false
@@ -335,37 +356,92 @@ export function adoptLegacyCloudState(
     const extras = legacyExtras(stored)
     if (!own || typeof vaultId !== 'string' || !vaultId || !extras) return false
     const states = [stored.legacyCloudState, ...extras]
-    const matches = states.filter((state) => state?.cloudSync?.vaultId === vaultId)
-    const [legacy] = matches
-    if (matches.length !== 1 || !legacy) return false // 多份同 vaultId 还没有取舍规则,暂留隔离区
-    // 校验后仍用原样的名单,保留读给旧 remotesync 时无需使用的字段(如 exclude)。
-    try { entrySyncListStrict(own.entrySync); entrySyncListStrict(legacy.entrySync) } catch { return false }
-    const known = new Set((own.entrySync ?? []).map((v) => v.vaultRoot))
-    const adopted = (legacy.entrySync ?? []).filter((v) => !known.has(v.vaultRoot))
-    const hash8 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 8)
-    try {
-      if (adopted.length > 0) {
-        // 旧 shadow 文件名只认根的哈希。另一个快照也用这个名字时，回调无法确认文件属于哪个账号。
-        const otherShadows = new Set(states.filter((state) => state !== legacy)
-          .flatMap((state) => entrySyncListStrict(state?.entrySync).map((v) => hash8(v.vaultRoot))))
-        if (adopted.some((v) => otherShadows.has(hash8(v.vaultRoot)))) return false
+    const current = own.entrySync ?? []
+    if (!Array.isArray(current)) return false
+    const matching = new Map<CloudAccountConfig, EntrySyncVault[]>()
+    const byRoot = new Map<string, EntrySyncVault[]>()
+    const shadowUsers = new Map<string, Array<{ root: string; vaultId?: string }>>()
+    for (const state of states) {
+      if (!state || (state.entrySync !== undefined && !Array.isArray(state.entrySync))) continue
+      const entries = state.entrySync ?? []
+      const owner = state.cloudSync?.vaultId
+      if (owner === vaultId) matching.set(state, entries)
+      for (const entry of entries) {
+        const root = legacyEntryRoot(entry)
+        if (!root) continue
+        const hash = entryShadowHash(root)
+        const users = shadowUsers.get(hash) ?? []
+        users.push({ root, vaultId: owner })
+        shadowUsers.set(hash, users)
+        if (owner === vaultId) {
+          const candidates = byRoot.get(root) ?? []
+          candidates.push(entry)
+          byRoot.set(root, candidates)
+        }
       }
-      for (const v of adopted) {
-        await renameShadow(`amadeus-sync-entry-${hash8(v.vaultRoot)}`, `amadeus-sync-${key}-entry-${hash8(v.vaultRoot)}`)
+    }
+    if (!matching.size) return false
+
+    // 先核全部相关旧文件，包括当前账号已有登记的根。按根处理核验失败，其他根仍可认领。
+    const shadows = new Map(await Promise.all([...byRoot.keys()].map(async (root) =>
+      [root, await checkEntryShadow(`amadeus-sync-entry-${entryShadowHash(root)}`, root, vaultId)] as const)))
+    const processed = new Set<EntrySyncVault>()
+    const adopted: EntrySyncVault[] = []
+    for (const [root, candidates] of byRoot) {
+      const hash = entryShadowHash(root)
+      const shadow = shadows.get(root)
+      if (shadow === 'unknown') continue
+      const shared = shadowUsers.get(hash)?.some((user) => user.root !== root || user.vaultId !== vaultId)
+      const normalized = candidates.map((entry) => normalizeLegacyEntry(entry, root))
+      const existing = current.filter((entry) => legacyEntryRoot(entry) === root)
+      const to = `amadeus-sync-${key}-entry-${hash}`
+      if (shadow === 'missing' && (shared || !existing.length)) {
+        // 也认得上次已经移到账号名下、但配置未提交的基线。共享名称没有可信基线时继续留待核验。
+        const scoped = await checkEntryShadow(to, root, vaultId)
+        if (scoped === 'unknown' || (shared && scoped !== 'matching')) continue
       }
-    } catch {
-      return false // shadow move failed (EPERM, EBUSY…): keep the legacy state, never adopt onto an empty baseline
+      if (existing.length) {
+        normalized.forEach((entry, index) => {
+          if (entry && existing.every((saved) => isDeepStrictEqual(saved, entry))) processed.add(candidates[index])
+        })
+        continue // 已登记的根不更换 shadow，账号里的登记和基线照旧使用
+      }
+      const [entry] = normalized
+      if (!entry || !normalized.every((candidate) => isDeepStrictEqual(candidate, entry))) continue
+      if (shadow === 'matching') {
+        if (!renameShadow) continue
+        const from = `amadeus-sync-entry-${hash}`
+        try {
+          if (await checkEntryShadow(from, root, vaultId) !== 'matching') continue
+          // Extend 的 COPYFILE_EXCL 保留已经存在的账号基线；确认它也属于这个根和 vault。
+          if (await renameShadow(from, to) !== true && await checkEntryShadow(to, root, vaultId) !== 'matching') continue
+        } catch { continue }
+      }
+      adopted.push(entry)
+      for (const candidate of candidates) processed.add(candidate)
     }
-    const out: StoredConfig = {
-      ...stored,
-      cloudAccounts: { ...stored.cloudAccounts, [key]: { ...own, entrySync: [...(own.entrySync ?? []), ...adopted] } },
+
+    let changed = false
+    const remaining = states.map((state) => {
+      const entries = state && matching.get(state)
+      if (!entries) return state
+      const pending = entries.filter((entry) => !processed.has(entry))
+      if (!pending.length) { changed = true; return undefined }
+      if (pending.length === entries.length) return state
+      changed = true
+      return { ...state, entrySync: pending }
+    })
+    if (!changed) return false
+    const [primary, ...additional] = remaining
+    const out: StoredConfig = { ...stored }
+    if (adopted.length) {
+      out.cloudAccounts = { ...stored.cloudAccounts, [key]: { ...own, entrySync: [...current, ...adopted] } }
     }
-    if (legacy === stored.legacyCloudState) delete out.legacyCloudState
-    else {
-      const remaining = extras.filter((extra) => extra !== legacy)
-      if (remaining.length) out.legacyCloudStateExtra = remaining
-      else delete out.legacyCloudStateExtra
-    }
+    if (primary === undefined) delete out.legacyCloudState
+    else out.legacyCloudState = primary
+    const pendingExtras = additional.filter((state): state is CloudAccountConfig => state !== undefined)
+    if (pendingExtras.length) out.legacyCloudStateExtra = pendingExtras
+    else delete out.legacyCloudStateExtra
     // 写失败时保留缓存里的隔离区,下次重试(shadow 的目标已存在时不会再挪)。
     try { await writeStored(out) } catch { return false }
     return true
@@ -426,8 +502,8 @@ async function writeStored(out: StoredConfig): Promise<void> {
 
 /** 停止落盘前释放指定的旧钉子。先拿旧远程同步的封口锁,再进配置队列:在途同步也会读配置。 */
 export async function moveSyncVaultPin(expectedRoot: string): Promise<'moved' | 'unchanged' | 'local-vault-unavailable' | 'legacy-remotesync-not-paused'> {
-  const { withSealedLegacyRemoteSync } = await import('../remotesyncIpc')
-  return withSealedLegacyRemoteSync(() => {
+  const { withUnusedLegacyRemoteSync } = await import('../remotesyncIpc')
+  return withUnusedLegacyRemoteSync(() => {
     const work = writes.then(async () => {
       const disk = await storedConfigStrict()
       const pinned = disk.syncVault

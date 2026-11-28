@@ -662,17 +662,21 @@ function legacyGate(): LegacyGate {
   return gate
 }
 
-/** 挪钉子会改变下一轮的旧同步根。只在本次启动已握手、已封口且无在途轮次时允许,写入期间交还继续排队。 */
-export async function withSealedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
-  const gate = legacyGate()
-  await gate.ready()
-  const state = gate.state()
-  if (state.hold !== 'v2' || state.handshake !== 'ok' || !state.blocked || state.running) return 'legacy-remotesync-not-paused'
-  return gate.exclusive(work).catch((error: unknown) => {
-    // 已经排队的交还可能先拿到锁;exclusive 会重新核对持有状态。
-    if (error instanceof Error && error.message === 'legacy-not-sealed') return 'legacy-remotesync-not-paused'
-    throw error
-  })
+/** 封口和归档都早于 Extend 接手完成。没有完成信号时，只允许没有旧同步配置或历史痕迹的设备挪钉子。 */
+export async function withUnusedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
+  const result = await legacyGate().exclusiveIfUnused(() => inConfigQueue(async () => {
+    try {
+      const stored = await syncTargetsStore.read()
+      if (stored.legacy || Object.values(stored.targets).some((target) => target.source?.startsWith('remotesync:'))) return undefined
+      const file = path.basename(configFile())
+      const files = await fs.readdir(app.getPath('userData'))
+      if (files.some((name) => name === file || name.startsWith(`${file}.`) || name === 'remotesync-state')) return undefined
+    } catch {
+      return undefined // 无法确认没有旧配置或旧基线
+    }
+    return work()
+  }))
+  return result ?? 'legacy-remotesync-not-paused'
 }
 
 /** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。
