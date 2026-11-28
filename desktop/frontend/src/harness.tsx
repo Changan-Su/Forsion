@@ -48,7 +48,7 @@ import { switchNoteLock } from './amadeus/unified/noteLock'
 import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle, useNotePageStyle } from './amadeus/unified/pageStyle'
 import { PageHistoryHost } from './amadeus/unified/pageHistory'
 import { canPageHistory } from './amadeus/lib/hostCaps'
-import { OverlayAt, setDetachApi } from '@lcl/engine'
+import { OverlayAt, setDetachApi, setEngineI18n } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
@@ -731,6 +731,27 @@ if (new URLSearchParams(location.search).has('dock')) {
     return (p as unknown as { group?: { api?: { width?: number } } } | undefined)?.group?.api?.width ?? 0
   }
   createRoot(document.getElementById('root')!).render(<DockHarness />)
+} else if (new URLSearchParams(location.search).has('commandpalette')) {
+  // Real Shell plus a command registry large enough to exercise scrolling and Ribbon pinning.
+  const params = new URLSearchParams(location.search)
+  const dark = params.has('dark')
+  setLocaleGlobal(navigator.language.startsWith('zh') ? 'zh' : 'en')
+  setEngineI18n(useI18n, translate)
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  void Promise.all([import('@lcl/engine/Shell'), import('@lcl/engine/ribbonRegistry')]).then(([{ Shell }, { setRibbonActions }]) => {
+    if (params.has('readonly')) setRibbonActions({ editable: false })
+    const root = document.getElementById('root')!
+    for (let i = 1; i <= 55; i++) {
+      addCommand({
+        id: `fixture-${i}`,
+        title: i === 55 ? 'Open test console' : `Test command ${i}`,
+        keywords: 'fixture',
+        hotkey: i === 55 ? 'mod+shift+o' : i === 1 ? 'enter' : undefined,
+        run: () => { root.dataset.lastCommand = `fixture-${i}` },
+      })
+    }
+    createRoot(root).render(<HostLocaleProvider><Shell dark={dark} soft={false} noRibbon={params.has('noribbon')} /></HostLocaleProvider>)
+  })
 } else if (new URLSearchParams(location.search).has('qf')) {
   // ⌘P 快切面板裸挂:分类条(全部/笔记/文件/会话)与 ←/→ 切换的真键盘路径 + 一张真截图。
   // 库内容用内存表顶替(pageStore 是同一个 store,setState 即生效);会话表走 appStore。
