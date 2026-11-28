@@ -43,6 +43,33 @@ describe('pageStore.restoreVault × 断网重开', () => {
     expect(usePageStore.getState()).toMatchObject({ vaultRoot: 'cloud://default', vaultRestoreFailed: false })
   })
 
+  it('智库设置文件读不了(amadeus-config-*)→ error 是那句话不是原码;空态用的原因码镜像到各面板,下一次成功清掉', async () => {
+    const { usePageStore, pageStoreFor } = await freshStore()
+    ;(await import('../../i18n')).setLocaleGlobal('zh') // resetModules 后的那份 i18n(testSetup 钉的是旧实例)
+    const other = pageStoreFor('side-leaf')
+    const first = usePageStore.getState().restoreVault()
+    pending!.fail(new Error("Error invoking remote method 'amadeus:restoreVault': Error: amadeus-config-unreadable"))
+    await first
+    expect(usePageStore.getState()).toMatchObject({
+      vaultRoot: null, vaultRestoreFailed: true, vaultRestoreError: 'amadeus-config-unreadable',
+      error: '读不了智库的设置文件，没有改动它。检查这个文件的权限后重试。',
+    })
+    expect(usePageStore.getState().error).not.toContain('amadeus-config')
+    expect(other.getState()).toMatchObject({ vaultRestoreFailed: true, vaultRestoreError: 'amadeus-config-unreadable' })
+    const again = usePageStore.getState().restoreVault({ keepOpenNote: true })
+    pending!.ok(info)
+    await again
+    expect(other.getState()).toMatchObject({ vaultRoot: 'cloud://default', vaultRestoreFailed: false, vaultRestoreError: null })
+  })
+
+  it('别的失败(断网)不记空态原因码,error 只剥前缀', async () => {
+    const { usePageStore } = await freshStore()
+    const first = usePageStore.getState().restoreVault()
+    pending!.fail(new Error('HTTP 0'))
+    await first
+    expect(usePageStore.getState()).toMatchObject({ vaultRestoreFailed: true, vaultRestoreError: null, error: 'HTTP 0' })
+  })
+
   it('返回 null(本地没选过库)不算失败', async () => {
     const { usePageStore } = await freshStore()
     const p = usePageStore.getState().restoreVault()

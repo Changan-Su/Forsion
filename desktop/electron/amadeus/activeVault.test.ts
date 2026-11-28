@@ -559,6 +559,30 @@ describe('legacy mirror migration', () => {
     expect('lastVault' in (await readCfg())).toBe(false)
   })
 
+  it('drops lastVault when the local vault is below a plain file (ENOTDIR)', async () => {
+    const file = path.join(env.root, 'File')
+    await fs.writeFile(file, 'not a folder')
+    await seed({ localVault: path.join(file, 'Notes') })
+    expect(await migrate()).toBe(true)
+    expect('lastVault' in (await readCfg())).toBe(false)
+  })
+
+  it.each(['EACCES', 'EIO'])('aborts migration on %s from stat and leaves the entire config untouched', async (code) => {
+    const { local } = await seed()
+    const before = await bytes()
+    const realStat = fs.stat.bind(fs)
+    const stat = vi.spyOn(fs, 'stat').mockImplementation((async (file: string) => {
+      if (file === local) throw Object.assign(new Error(code), { code })
+      return realStat(file)
+    }) as typeof fs.stat)
+    try {
+      expect(await migrate()).toBeNull()
+      expect(await bytes()).toBe(before)
+    } finally { stat.mockRestore() }
+    expect(await migrate()).toBe(true)
+    expect((await readCfg()).lastVault).toBe(local)
+  })
+
   it('no real local vault → lastVault is dropped (restore then makes the default vault); no config file → nothing is created', async () => {
     await seed({ localVault: undefined })
     expect(await migrate()).toBe(true)

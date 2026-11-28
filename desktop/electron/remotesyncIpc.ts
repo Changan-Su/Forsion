@@ -3,7 +3,7 @@
  * 配置持久化(userData/remotesync[.dev].json)+ 定时调度 + IPC + 同步根解析。
  *
  * 边界约定(见 remotesync/README.md):
- *  - 同步根 = Amadeus 本地库(localVault);云镜像目录一律拒绝(那是云端模式引擎的管辖);
+ *  - 同步根 = Amadeus 钉住的库(syncVault),未钉住时回落到本机库;云镜像目录一律拒绝;
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
@@ -11,7 +11,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
-import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { readConfig as readAmadeusConfig, type AmadeusConfig, type EntrySyncVault } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
@@ -30,7 +30,7 @@ import { createS3Remote, normPrefix, type S3Config } from './remotesync/fsS3'
 import { createWebdavRemote, type WebdavConfig } from './remotesync/fsWebdav'
 import type { RemoteFs, SyncReport } from './remotesync/types'
 import { contentSyncOwned } from './contentSyncHost'
-import { currentCloudAccountId } from './amadeus/settings'
+import { currentCloudAccountId, readEntrySyncSnapshotStrict } from './amadeus/settings'
 import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
 import { appendSyncRecord } from './syncRecordsIpc'
 import { createLegacyGate, type LegacyGate, type LegacyGateState } from './remotesync/legacySeal'
@@ -190,9 +190,10 @@ async function canon(p: string): Promise<string> {
 
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
-/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。 */
-export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error: string }> {
-  const am = await readAmadeusConfig()
+/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。am = 调用方已经严格读好的那份(视图用);
+ *  不给就照旧读缓存那份。 */
+export async function resolveLocalSyncRoot(given?: AmadeusConfig): Promise<{ root: string } | { error: string }> {
+  const am = given ?? await readAmadeusConfig()
   const root = syncVaultRoot(am) ?? am.lastVault // 切库不换同步根
   if (!root) return { error: 'no-local-vault' }
   try {
@@ -207,30 +208,38 @@ export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error
 }
 
 /** entrySync 绑定路径 → 忽略规则(双引擎不抢管辖)。库根按物理路径比(realpath:解开符号链接、mac 上纠正大小写,
- *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算(第 2 步以前的口径)。
- *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转):
- *  - 'legacy'(remotesync 自己 runNow):回到字面比较,别的库解析不了不该让这个库少同步文件(没登记 v2 时行为照旧);
- *  - 'takeover'(给接手的视图):不知道 = 当成同一个、让开它的条目(接手据此暂停),不猜。 */
-async function entrySyncIgnores(root: string, mode: 'legacy' | 'takeover'): Promise<string[]> {
-  const am = await readAmadeusConfig()
+ *  同 contentSyncHost.canonRoot 的口径):经软链登记的库也认得出;字面相同照旧算。
+ *  条目库根解析不了时:不存在(ENOENT / ENOTDIR)= 不可能是这个(在的)根;别的错(没权限、链接打转)= 不知道:
+ *  - 'fail'(旧 remotesync 自己那一轮,H3 Codex P1):整份回 null,这一轮不跑 —— 不能把解析不了当成「另一个库」;
+ *  - 'same'(给接手的视图,契约 H-2):当成同一个、让开它的条目(接手据此暂停)。 */
+async function ignoresOf(root: string, vaults: readonly EntrySyncVault[], onUnknown: 'fail' | 'same'): Promise<string[] | null> {
   const here = await canon(root)
-  const out: string[] = []
-  for (const v of am.entrySync ?? []) {
+  const out = new Set<string>()
+  for (const v of vaults) {
     let same = path.resolve(v.vaultRoot) === path.resolve(root)
     if (!same) {
       try { same = (await fs.realpath(v.vaultRoot)) === here } catch (e) {
         const code = (e as NodeJS.ErrnoException)?.code
-        same = mode === 'takeover' && code !== 'ENOENT' && code !== 'ENOTDIR'
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') { if (onUnknown === 'fail') return null; same = true }
       }
     }
     if (!same) continue
     for (const e of v.entries ?? []) {
-      if (e.kind === 'folder') out.push(`${e.path}/`)
-      else out.push(e.path)
-      if (e.kind === 'page' && e.path.endsWith('.md')) out.push(`${e.path.slice(0, -3)}.fd/`)
+      out.add(e.kind === 'folder' ? `${e.path}/` : e.path)
+      if (e.kind === 'page' && e.path.endsWith('.md')) out.add(`${e.path.slice(0, -3)}.fd/`)
     }
   }
-  return out
+  return [...out]
+}
+
+/** 旧 remotesync 一轮的条目忽略名单(H3 Codex P1,一条规矩):盘上**所有**条目同步登记里落在这个根上的路径 —— 当前账号的、
+ *  别的账号的(登录着 B、条目在 A 名下也让开)、待认领的 legacyCloudState —— 都从同一次严格读来。
+ *  不知道 = null(这一轮不跑):配置严格读不出来,或者哪个条目库根解析出 ENOENT / ENOTDIR 以外的错。
+ *  退出登录不再单独判:名单不按账号取,登出时照样算得出来。 */
+async function legacyRoundIgnores(root: string, accountId: string | null): Promise<string[] | null> {
+  let all: EntrySyncVault[]
+  try { all = (await readEntrySyncSnapshotStrict(accountId)).allEntrySync } catch { return null }
+  return ignoresOf(root, all, 'fail')
 }
 
 function sendAll(channel: string, payload: unknown): void {
@@ -284,6 +293,10 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
     if ('error' in built) return fail(built.error)
     const rooted = await resolveLocalSyncRoot()
     if ('error' in rooted) return fail(rooted.error)
+    // 条目同步要让开的路径:盘上所有登记(不分账号)。算不出来 = 不知道,这一轮不跑、不当空名单(H3 第 5 件 + Codex P1:当空会把
+    // 条目里的文件换成远端那份、把远端的拉进条目文件夹,条目引擎之后当成用户改动推上云)
+    const entryIgnores = await legacyRoundIgnores(rooted.root, recordAccount)
+    if (!entryIgnores) return fail('entry-ignores-unknown')
     if (cfg.backend === 'folder' && cfg.folder?.path) {
       // folder 后端与同步根互相嵌套 = 递归自我复制,拒绝
       const target = await canon(cfg.folder.path)
@@ -298,7 +311,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
       remote: built.remote,
       statePath: path.join(app.getPath('userData'), 'remotesync-state', `${hash8(scope)}.json`),
       fingerprint: built.fingerprint,
-      ignoreGlobs: [...(cfg.ignore ?? []), ...(await entrySyncIgnores(rooted.root, 'legacy'))],
+      ignoreGlobs: [...(cfg.ignore ?? []), ...entryIgnores],
       maxFileSize: effectiveMaxFileSize(cfg, built.maxFileBytes),
       direction: cfg.direction,
       concurrency: cfg.concurrency,
@@ -649,6 +662,23 @@ function legacyGate(): LegacyGate {
   return gate
 }
 
+/** 封口和归档都早于 Extend 接手完成。没有完成信号时，只允许没有旧同步配置或历史痕迹的设备挪钉子。 */
+export async function withUnusedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
+  const result = await legacyGate().exclusiveIfUnused(() => inConfigQueue(async () => {
+    try {
+      const stored = await syncTargetsStore.read()
+      if (stored.legacy || Object.values(stored.targets).some((target) => target.source?.startsWith('remotesync:'))) return undefined
+      const file = path.basename(configFile())
+      const files = await fs.readdir(app.getPath('userData'))
+      if (files.some((name) => name === file || name.startsWith(`${file}.`) || name === 'remotesync-state')) return undefined
+    } catch {
+      return undefined // 无法确认没有旧配置或旧基线
+    }
+    return work()
+  }))
+  return result ?? 'legacy-remotesync-not-paused'
+}
+
 /** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。
  *  - 后端 off:没有当前的去处,一份都不挪;
  *  - 认不出根(库不在 / 云镜像)→ 抛 legacy-root-unavailable(不记 archived:交还后从零基线跑的前提就是基线已挪走);
@@ -666,30 +696,38 @@ function errorCode(e: unknown): string {
 
 /** 归档原件里的自动同步两项写回现在的配置(在封口闸的锁里调,配置写队列里读改写)。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
 async function restoreAutoSync(): Promise<boolean> {
+  const orig = await archivedAutoSync()
+  if (!orig) return false
+  return inConfigQueue(async () => writeAutoSyncBack(await readLegacyConfigStrict(), orig.interval, orig.onStart))
+}
+
+/** 档案原件里自动同步两项(读不出 / 都是关着 = null)。在封口闸的锁里调。 */
+async function archivedAutoSync(): Promise<{ interval: number; onStart: boolean } | null> {
   const st = legacyGate().state()
-  if (!st.archived || !st.archiveDir) return false
+  if (!st.archived || !st.archiveDir) return null
   let orig: { intervalMin?: unknown; syncOnStart?: unknown }
   try { orig = JSON.parse(await fs.readFile(path.join(st.archiveDir, path.basename(configFile())), 'utf8')) } catch { throw new Error('archive-original-unreadable') }
   const interval = typeof orig?.intervalMin === 'number' && Number.isFinite(orig.intervalMin) && orig.intervalMin >= 0 ? orig.intervalMin : 0
   const onStart = orig?.syncOnStart === true
-  if (interval === 0 && !onStart) return false
-  return inConfigQueue(async () => {
-    const strict = await readLegacyConfigStrict()
-    if (!strict) return false
-    if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
-    const obj = JSON.parse(strict.raw) as Record<string, unknown>
-    obj.intervalMin = interval
-    obj.syncOnStart = onStart
-    const file = configFile()
-    const mode = (await fs.stat(file)).mode & 0o777
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
-    await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
-    await fs.rename(tmp, file)
-    cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
-    loadBroken = false
-    resetTimer(cache)
-    return true
-  })
+  return interval === 0 && !onStart ? null : { interval, onStart }
+}
+
+/** 写回那两项。调用方占着配置写队列、给的是这一段里严格读到的那份。现在的值不是归档写下的 0 / false = 用户改过,不动。 */
+async function writeAutoSyncBack(strict: Awaited<ReturnType<typeof readLegacyConfigStrict>>, interval: number, onStart: boolean): Promise<boolean> {
+  if (!strict) return false
+  if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart === true) return false
+  const obj = JSON.parse(strict.raw) as Record<string, unknown>
+  obj.intervalMin = interval
+  obj.syncOnStart = onStart
+  const file = configFile()
+  const mode = (await fs.stat(file)).mode & 0o777
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+  await fs.rename(tmp, file)
+  cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+  loadBroken = false
+  resetTimer(cache)
+  return true
 }
 
 /** remotesync.json 里认得、这一版不支持的后端(同 syncTargetsStore 的 UNSUPPORTED_SYNC_TARGET_KINDS):归档一律拒。 */
@@ -758,10 +796,40 @@ export interface LegacyRemoteSyncView {
   hold: 'none' | 'v2'
   archived: boolean
   handshake: 'pending' | 'ok' | 'released'
-  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):同 runNow 里的 entrySyncIgnores,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。 */
+  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):当前账号登记在这个根上的条目,现算(条目库根解析不了按同一个算)。非空 = 这个根也配着条目同步。
+   *  旧同步自己那一轮另按全部账号算(legacyRoundIgnores),这份口径不变(给 E-19)。 */
   entryIgnores: string[]
   /** 这份配置「根 × 去处」的不透明键(不含凭据):接手前后各取一次比对、交给 archive 核对,换了根 / 桶 / 账号就对不上。根解析不了 = null。 */
   legacyKey: string | null
+}
+
+/** 一份严格读到的配置 → 给 Extend 的视图(不含凭据)。 */
+async function viewOf(cfg: RemoteSyncConfig): Promise<LegacyRemoteSyncView> {
+  // 库根、键、条目排除项都从同一份严格读的设置快照算(Codex P2):读不了整个调用抛固定码,不回 root:null + 空的 entryIgnores
+  const snap = await readEntrySyncSnapshotStrict()
+  const rooted = await resolveLocalSyncRoot(snap.config)
+  const st = legacyGate().state()
+  if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
+  return {
+    config: {
+      backend: cfg.backend,
+      dir: legacyDirOf(cfg),
+      direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
+      ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
+      maxFileMB: cfg.maxFileMB ?? 100,
+      intervalMin: cfg.intervalMin ?? 0,
+      syncOnStart: cfg.syncOnStart === true,
+      concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
+    },
+    root: 'root' in rooted ? rooted.root : null,
+    rootError: 'error' in rooted ? rooted.error : null,
+    legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
+    entryIgnores: 'root' in rooted ? (await ignoresOf(rooted.root, snap.config.entrySync ?? [], 'same')) ?? [] : [],
+    running,
+    hold: st.hold === 'v2' ? 'v2' : 'none',
+    archived: st.archived,
+    handshake: st.handshake,
+  }
 }
 
 /** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
@@ -773,31 +841,16 @@ export const legacyRemoteSync = {
   /** 没配置(文件不在)= null;读不了就抛。 */
   async view(): Promise<LegacyRemoteSyncView | null> {
     const strict = await readLegacyConfigStrict()
+    return strict ? viewOf(strict.cfg) : null
+  },
+  /** 宿主内部用(syncTargets 算 currentTargetId):同一次严格读里的视图 + 当前后端那一段配置(含凭据,只在主进程里比位置,
+   *  不出 syncTargets)。没配置 = null;读不了就抛。 */
+  async viewWithSection(): Promise<{ view: LegacyRemoteSyncView; backend: RemoteSyncConfig['backend']; section: Record<string, unknown> } | null> {
+    const strict = await readLegacyConfigStrict()
     if (!strict) return null
-    const cfg = strict.cfg
-    const rooted = await resolveLocalSyncRoot()
-    const st = legacyGate().state()
-    if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
-    return {
-      config: {
-        backend: cfg.backend,
-        dir: legacyDirOf(cfg),
-        direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
-        ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
-        maxFileMB: cfg.maxFileMB ?? 100,
-        intervalMin: cfg.intervalMin ?? 0,
-        syncOnStart: cfg.syncOnStart === true,
-        concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
-      },
-      root: 'root' in rooted ? rooted.root : null,
-      rootError: 'error' in rooted ? rooted.error : null,
-      legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
-      entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root, 'takeover') : [],
-      running,
-      hold: st.hold === 'v2' ? 'v2' : 'none',
-      archived: st.archived,
-      handshake: st.handshake,
-    }
+    const { backend } = strict.cfg
+    const section = backend === 'off' ? undefined : (strict.cfg as unknown as Record<string, unknown>)[backend]
+    return { view: await viewOf(strict.cfg), backend, section: section && typeof section === 'object' && !Array.isArray(section) ? structuredClone(section as Record<string, unknown>) : {} }
   },
   /** 宿主内部用(导入 sync-targets):原样那一段后端配置,含凭据。没配置 / 读不了 / 没选后端 → 抛。 */
   async section(): Promise<{ backend: RemoteSyncConfig['backend']; section: Record<string, unknown> }> {
@@ -812,8 +865,30 @@ export const legacyRemoteSync = {
   /** 交还。opts.restoreAutoSync(契约 H-8,只给接手失败到头 / 用户退回):已归档的,先在还封着的时候把档案原件里的
    *  intervalMin / syncOnStart 写回去,再交还 —— 否则首轮连败(U 盘没插)后旧自动同步也不回来,同步悄悄停了。
    *  只在现在的值仍是归档写下的那两个(0 / false)时写回,用户之后自己改过的不动;基线已挪走,旧引擎回来按首次合流跑(不删)。
-   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。 */
-  async unseal(opts?: { restoreAutoSync?: boolean }): Promise<void> {
+   *  写回失败只记错误码、照样交还(退回到「只能手动」,不卡在封口里)。
+   *  opts.expectKey(契约 H-13):先核再交还,见下面那段;不带 = 照旧(老 Extend)。 */
+  async unseal(opts?: { restoreAutoSync?: boolean; expectKey?: string }): Promise<void> {
+    const expectKey = typeof opts?.expectKey === 'string' ? opts.expectKey : null
+    if (expectKey !== null) {
+      // 契约 H-13:核对和交还在同一次操作里。锁的顺序同 archive:闸 → 配置写队列;remotesync:set 排在整段之前或之后,
+      // 插不进「核完、还没交还」那一下。对不上 / 文件没了 → legacy-config-changed;根认不出 → legacy-root-unavailable;
+      // 读不了配置照抛(读失败 ≠ 空)。这几种都在写回自动同步之前抛:封口和配置都不动。
+      await legacyGate().unsealChecked((handBack) => inConfigQueue(async () => {
+        const strict = await readLegacyConfigStrict()
+        if (!strict) throw new Error('legacy-config-changed')
+        const rooted = await resolveLocalSyncRoot()
+        if ('error' in rooted) throw new Error('legacy-root-unavailable')
+        if (legacyKeyOf(strict.cfg, rooted.root) !== expectKey) throw new Error('legacy-config-changed')
+        if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
+          try {
+            const orig = await archivedAutoSync()
+            if (orig) await writeAutoSyncBack(strict, orig.interval, orig.onStart)
+          } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }
+        }
+        await handBack()
+      }))
+      return
+    }
     if (opts?.restoreAutoSync === true && legacyGate().state().hold === 'v2') {
       await legacyGate().exclusive(async () => {
         try { await restoreAutoSync() } catch (e) { console.warn(`[remotesync] restore auto-sync skipped: ${errorCode(e)}`) }

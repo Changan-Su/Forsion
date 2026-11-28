@@ -170,7 +170,7 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
 }
 
 /** 老配置迁移(lastVault = 这个账号的云镜像 → activeVault = 默认库)。 */
-export function migrateLegacyMirrorVault(accountId: string | null): Promise<boolean> {
+export function migrateLegacyMirrorVault(accountId: string | null): Promise<boolean | null> {
   return migrateMirrorActiveVault(accountId, (id) => cloudVaultDir(id), isManagedCloudVault)
 }
 
@@ -179,6 +179,6 @@ export function migrateLegacyMirrorVault(accountId: string | null): Promise<bool
 export const MIRROR_MIGRATION_ENABLED = false
 
 /** 启动接线(main.ts 开窗之前 await):开关关着就什么都不做,不读不写配置。 */
-export function migrateOnStartup(accountId: string | null, enabled: boolean = MIRROR_MIGRATION_ENABLED): Promise<boolean> {
+export function migrateOnStartup(accountId: string | null, enabled: boolean = MIRROR_MIGRATION_ENABLED): Promise<boolean | null> {
   return enabled ? migrateLegacyMirrorVault(accountId) : Promise.resolve(false)
 }
