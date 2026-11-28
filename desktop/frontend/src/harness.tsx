@@ -746,7 +746,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         id: `fixture-${i}`,
         title: i === 55 ? 'Open test console' : `Test command ${i}`,
         keywords: 'fixture',
-        hotkey: i === 55 ? 'mod+shift+o' : undefined,
+        hotkey: i === 55 ? 'mod+shift+o' : i === 1 ? 'enter' : undefined,
         run: () => { root.dataset.lastCommand = `fixture-${i}` },
       })
     }

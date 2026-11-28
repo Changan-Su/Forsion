@@ -24,6 +24,8 @@ export function CommandPalette({ hasRibbon = false }: { hasRibbon?: boolean }) {
   const [active, setActive] = useState(0)
   const overlayRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // Scrolling with the arrow keys can fire mouse-enter events under a stationary pointer.
+  const keyboardNavigation = useRef(false)
   useExitGhost(overlayRef, open)
   // 手机(原生底栏、竖屏的两级导航)上没有键盘可按:行尾的快捷键与底部的按键说明都不画,只留条数(手机走查 2026-11-19)。
   // 桌面、横屏 / 平板的宽屏、网页的抽屉形态照旧。
@@ -33,6 +35,7 @@ export function CommandPalette({ hasRibbon = false }: { hasRibbon?: boolean }) {
     if (open) {
       setQuery('')
       setActive(0)
+      keyboardNavigation.current = false
     }
   }, [open])
 
@@ -65,10 +68,15 @@ export function CommandPalette({ hasRibbon = false }: { hasRibbon?: boolean }) {
       close()
       return
     }
-    if (!(e.target instanceof HTMLInputElement)) return
+    if (!(e.target instanceof HTMLInputElement)) {
+      // Leave focused button activation to the browser, even when a global command binds the same key.
+      if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
+      return
+    }
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault()
       const next = Math.max(0, Math.min(selected + (e.key === 'ArrowDown' ? 1 : -1), results.length - 1))
+      keyboardNavigation.current = true
       setActive(next)
       listRef.current?.children[next]?.scrollIntoView({ block: 'nearest' })
     } else if (e.key === 'Enter') {
@@ -88,18 +96,34 @@ export function CommandPalette({ hasRibbon = false }: { hasRibbon?: boolean }) {
           onChange={(e) => {
             setQuery(e.target.value)
             setActive(0)
+            keyboardNavigation.current = true
             listRef.current?.scrollTo(0, 0)
           }}
         />
-        <div ref={listRef} className="cmd-list">
+        <div ref={listRef} className="cmd-list" onWheel={() => { keyboardNavigation.current = false }}>
           {results.map((c, i) => {
             const title = label(c.title)
             const hotkey = keys ? effectiveHotkey(c) : ''
             const pinned = canPin && pinnedCommands.includes(c.id)
             const pinLabel = canPin ? t(pinned ? 'lcl.palette.addedToRibbon' : 'lcl.palette.addToRibbon', { command: title }) : undefined
             return (
-              <div key={c.id} className="cmd-command-row" onMouseMove={() => setActive(i)}>
-                <button type="button" className="cmd-item" data-command-id={c.id} data-active={i === selected || undefined} onClick={() => run(i)}>
+              <div
+                key={c.id}
+                className="cmd-command-row"
+                onMouseEnter={() => { if (!keyboardNavigation.current) setActive(i) }}
+                onMouseMove={() => {
+                  keyboardNavigation.current = false
+                  setActive(i)
+                }}
+              >
+                <button
+                  type="button"
+                  className="cmd-item"
+                  data-command-id={c.id}
+                  data-active={i === selected || undefined}
+                  tabIndex={canPin && i !== selected ? -1 : undefined}
+                  onClick={() => run(i)}
+                >
                   <span className="cmd-title">
                     {/* 没图标的命令留一个空位,文字和有图标的对齐(走查 5.14) */}
                     {c.icon ? <c.icon size={14} className="cmd-icon" /> : <span className="cmd-icon cmd-icon-empty" aria-hidden="true" />}
@@ -114,6 +138,7 @@ export function CommandPalette({ hasRibbon = false }: { hasRibbon?: boolean }) {
                     aria-label={pinLabel}
                     title={pinLabel}
                     aria-disabled={pinned || undefined}
+                    tabIndex={i === selected ? 0 : -1}
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => { if (!pinned) addCommandItem(c.id) }}
                   >
