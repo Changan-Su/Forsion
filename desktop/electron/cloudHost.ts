@@ -46,7 +46,19 @@ export interface CloudHost {
       prepare(): Promise<void>
       baseline(path:string): Promise<{seq:number;hash:string;base?:string;pending:boolean}|null>
     }
+    /** 智库同步第 2 步起(可选):按库根的认领(契约 §3.7、实现期修订 H-1 第 5 条;contentSyncHost.contentSyncOwnershipV2)。
+     *  有它 → 新 Extend 不再调 claim / changed;老宿主没有 → Extend 进兼容模式。claim / changed 原样留给老 Extend。 */
+    ownership?: {
+      /** 没有 syncOwnershipV2 时按老的全局认领推:认领了 = 全部条目根 / 镜像停 / human 归 content;没认领 = 什么都没接手。读不了就抛。 */
+      get(account:string): Promise<SyncOwnership>
+      /** 先撤后给、读回核对、失败回滚再抛;human 没变不碰引擎;最后让旧引擎按新遮罩重建。 */
+      set(o:SyncOwnership,account:string): Promise<void>
+      /** 只通知「新同步动过盘」,不写 owner(替代老 changed())。 */
+      touched(account:string): Promise<void>
+    }
   }
+  /** 智库同步第 2 步起(可选):「同步到哪」(契约 §3.4、§3.8 D、实现期修订 H-1 第 1–4 条;syncTargets.ts)。凭据留在宿主,Extend 只拿句柄。 */
+  syncTargets?: import('./syncTargets').SyncTargetsSeam
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
   /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */
@@ -109,6 +121,9 @@ export interface CloudHost {
   // ── 2.13.8 起(新同步频率 F2):切走窗口 1 秒后 / 合盖前 / 退出前叫一次,让还在静默期里的改动立刻推。见 electron/contentSyncFlush.ts ──
   /** 返回 promise = 有东西在推,宿主退出前最多等 5 秒;不返回 = 没有要推的。返回退订。 */
   addFlushHook(fn: FlushHook): () => void
+  // ── 智库同步第 2 步起(可选):退出门禁(契约 §3.10、实现期修订 H-1 第 6 条;electron/syncQuitGate.ts)──
+  /** 登记一个退出检查:叫引擎扫一遍,回 synced / pending / failed。宿主在不可逆清理之前问;没人登记 = 退出链照旧。返回退订。 */
+  addQuitCheck?(fn: import('./syncQuitGate').QuitCheckFn): () => void
   // ── 2.13.8 起(帮助改进 Forsion:契约 docs/ToBeImproved/默认数据采集方案_2026-10-28/contract.md §3;实现在 telemetryHost.ts)──
   /** 匿名遥测的宿主那一半(2.13.8 起)。宿主只采集、转发,自己不存、不发;发不发、开没开由 Extend 定。 */
   /** 智库同步第 1 步起(可选):每轮同步交一行记录(形状 = shared/vaultSync.ts 的 SyncRoundRecord;同一 id 再交 = 覆盖那一行)。
@@ -137,6 +152,8 @@ export type HostTelemetryEvent = {
        | 'quota_prompt' | 'plugin_inventory' | 'model_feedback' | 'first_run'
   ts: string; props: Record<string, unknown>
 }
+/** 契约 §3.7 的 Ownership(宿主落盘在 amadeus-config 账号下的 syncOwnershipV2)。 */
+export type SyncOwnership = import('./amadeus/settings').SyncOwnershipV2
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 
 export interface LoadDesktopEntriesOpts {

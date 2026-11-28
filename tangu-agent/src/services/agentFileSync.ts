@@ -210,7 +210,16 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     if (agentSlugLocalOnly(memSlug)) { /* 记忆桶落在只在本机的文件夹里:不同步 */ }
     else if (memSlug === agent.slug) add(memSlug, 'MEM', consent);
     else if (agentSyncPermission(agent.slug, scope).shared) add(memSlug, 'MEM', captureAgentSyncPermission(agent.slug, scope, true));
-    if (agentSyncPermission(agent.slug, scope).shared) shared.push(captureAgentSyncPermission(agent.slug, scope, true));
+  }
+  // human/ 的同意:某个 Agent 的 shared 也算,只看 human 那一位(智库同步第 2 步,契约 §3.7)。从 locals 里找,不从上面按 Agents 那一位滤过的 agents 找:
+  // Agents 归新同步、human 仍归引擎的机器,上面那份是空的,凭某个 Agent 的 shared 同步「我的资料」的那一类不能跟着停。
+  // 没有任何新同步所有权时,shared ⇒ enabled,和原来「从 agents 里找」是同一批。
+  const inAgents = new Set(agents.map((a) => a.slug)), inLocals = new Set(locals.map((a) => a.slug));
+  for (const agent of [...locals, ...agents.filter((a) => !inLocals.has(a.slug))]) {
+    if ((onlySlug && agent.slug !== onlySlug) || agentSlugLocalOnly(agent.slug)) continue;
+    if (!agentSyncPermission(agent.slug, scope, 'human').shared) continue;
+    if (!inAgents.has(agent.slug)) watch(agent.slug);
+    shared.push(captureAgentSyncPermission(agent.slug, scope, true, 'human'));
   }
   for (const [slug, bucket] of archived ? [] : buckets) {
     if (removing.has(slug)) continue;

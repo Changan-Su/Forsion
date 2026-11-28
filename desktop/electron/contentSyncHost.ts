@@ -1,6 +1,6 @@
 import { readFileSync,existsSync,mkdirSync,writeFileSync,renameSync,realpathSync,openSync,closeSync,unlinkSync,lstatSync,readdirSync,constants } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { basename,dirname,join,relative,sep } from 'node:path'
+import { basename,dirname,join,parse as parsePath,relative,resolve as resolvePath,sep } from 'node:path'
 import { diff3Merge } from 'node-diff3'
 import { withDbLock } from './amadeus/fs/dbLock'
 import { withTextWriteLock } from './amadeus/fs/vaultHandlers'
@@ -8,6 +8,8 @@ import { forsionHomeDir } from './forsionHome'
 import { mergeDbFile } from '../../tangu-agent/src/contracts/dbRowMerge'
 import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/contracts/contentMerge'
 import { isMemoryDetailPath } from '../../tangu-agent/src/contracts/memoryLayers'
+import { contentOwnsOf,withContentOwns,withLegacyContentOwner,type ContentOwns } from '../../tangu-agent/src/contracts/contentSyncOwner'
+import type { SyncOwnershipV2 } from './amadeus/settings'
 import { agentSlugLocalOnly,dropForgottenFacts,mergeAgentSyncContent,mergeTombstoneLists,parseAgentContentPath,parseTombstones,sameTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES,type WireTombstone } from '../../tangu-agent/src/contracts/agentSyncRules'
 const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 const sha256=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
@@ -17,6 +19,33 @@ export function contentSyncOwned(account:string|null):boolean {
   if(!account)return false
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
+}
+/** 同上,严格版:没有文件 = false;读不了 / 坏了就抛(ownership.get 用:读失败 ≠ 没认领)。 */
+export function contentSyncOwnedStrict(account:string|null):boolean {
+  if(!account)return false
+  const name=createHash('sha256').update(account).digest('hex')+'.json'
+  let raw:string
+  try{raw=readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')}catch(e:any){if(e?.code==='ENOENT')return false;throw e}
+  return JSON.parse(raw)?.owned===true
+}
+
+/** 本机库根的比较口径(契约实现期修订 H-1 第 5 条):realpath.native(mac 上纠正大小写、解开符号链接),不存在就 resolve,去尾斜杠。 */
+export function canonRoot(p:string):string{
+  let r:string
+  try{r=realpathSync.native(p)}catch{r=resolvePath(p)}
+  return r!==parsePath(r).root?r.replace(/[\\/]+$/,''):r
+}
+/** 这个账号的按根认领读成什么:v2 = 有 syncOwnershipV2;none = 没有(走老的 .owned);unknown = 配置读不了。 */
+export type OwnershipRead={kind:'v2';value:SyncOwnershipV2}|{kind:'none'}|{kind:'unknown'}
+/** 宿主递给 Extend 旧在线引擎的 readConfig 遮罩(amadeus/ipc.ts)。磁盘上的配置一条不动,只改这份读数。
+ *  - 读不了(unknown)或老的全局认领(.owned)= 整份遮掉:镜像停、条目同步一个不起(和第 2 步之前新同步开着时一样);
+ *  - 有 syncOwnershipV2:只滤掉接手的那几个根,镜像照 mirror(keep = 照用户的开关);
+ *  - 都没有:原样。 */
+export function maskAmadeusConfig<T extends {cloudSync?:{enabled?:boolean};entrySync?:Array<{vaultRoot:string}>}>(cfg:T,own:OwnershipRead,legacyOwned:boolean):T{
+  if(own.kind==='unknown'||legacyOwned)return {...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}
+  if(own.kind==='none')return cfg
+  const roots=new Set(own.value.entryRoots.map(canonRoot))
+  return {...cfg,...(own.value.mirror==='off'?{cloudSync:{...cfg.cloudSync,enabled:false}}:{}),entrySync:(cfg.entrySync??[]).filter(v=>!roots.has(canonRoot(v.vaultRoot)))}
 }
 /** 宿主对新同步(Forsion Extend contentSync)的能力声明:这些可选族 merge() 会按它们自己的规则合并(契约 agentSyncRules)。
  *  'settings' = 随账号走的设置文件 human/Settings/<name>.db 走 mergeSettingsDb(恒有结果、不出冲突副本、本机独有的行不丢)。
@@ -59,15 +88,27 @@ export async function withContentWriteLock(abs:string|string[],memoryBase:string
 
 /** External-engine mode has no running local engine. Persist the same ownership
  * flag before it can later start; never send a local ownership command remotely. */
-export function setOfflineContentOwner(memoryBase:string,identity:string,owned:boolean):void{
+const ownerScope=(identity:string):string=>{
   const split=identity.lastIndexOf('::');if(split<0)throw Error('Invalid cloud identity')
-  const scope=createHash('sha256').update(JSON.stringify([identity.slice(0,split),identity.slice(split+2)])).digest('hex'),dir=join(memoryBase,'agents'),file=join(dir,'.cloudsync-default.json')
+  return createHash('sha256').update(JSON.stringify([identity.slice(0,split),identity.slice(split+2)])).digest('hex')
+}
+/** owned = true / false:老 claim,两位一起,落盘形状和第 2 步之前一字不差(开 = 只有 owner:'content');{human?, agents?}:只改给的那位(契约 contracts/contentSyncOwner.ts)。 */
+export function setOfflineContentOwner(memoryBase:string,identity:string,owned:boolean|Partial<ContentOwns>):void{
+  const scope=ownerScope(identity),dir=join(memoryBase,'agents'),file=join(dir,'.cloudsync-default.json')
   mkdirSync(dir,{recursive:true});withContentMemoryLock(dir,()=>{
-    let state:{accounts:Record<string,{enabled:boolean;revision:number;owner?:'content'}>}={accounts:{}}
+    let state:{accounts:Record<string,any>}={accounts:{}}
     try{state=JSON.parse(readFileSync(file,'utf8'))}catch(e:any){if(e.code!=='ENOENT')throw e}
-    const old=state.accounts[scope];state.accounts[scope]={enabled:old?.enabled??false,revision:(old?.revision??0)+1,...(owned?{owner:'content' as const}:{})}
+    if(!state||typeof state!=='object'||!state.accounts||typeof state.accounts!=='object')throw Error('content sync owner file is malformed')
+    state.accounts[scope]=typeof owned==='boolean'?withLegacyContentOwner(state.accounts[scope],owned):withContentOwns(state.accounts[scope],owned)
     const temp=file+`.tmp-${process.pid}-${Date.now()}`;writeFileSync(temp,JSON.stringify(state),{mode:0o600});renameSync(temp,file)
   })
+}
+/** external 引擎模式下读回两位:没有文件 = 都归引擎;读不了 / 坏了就抛。 */
+export function readOfflineContentOwns(memoryBase:string,identity:string):ContentOwns{
+  const scope=ownerScope(identity),file=join(memoryBase,'agents','.cloudsync-default.json')
+  let raw:string;try{raw=readFileSync(file,'utf8')}catch(e:any){if(e?.code==='ENOENT')return {human:false,agents:false};throw e}
+  const state=JSON.parse(raw);if(!state||typeof state!=='object'||(state.accounts!==undefined&&(typeof state.accounts!=='object'||state.accounts===null)))throw Error('content sync owner file is malformed')
+  return contentOwnsOf(state.accounts?.[scope])
 }
 
 interface ContentSyncOwnershipHost {
@@ -123,6 +164,143 @@ export function contentSyncOwnership(host: ContentSyncOwnershipHost) {
       const response = await writeManagedOwner(status.url, true, identity)
       assertAccount(identity)
       if (!response.ok) throw Error('Content sync refresh failed')
+    },
+  }
+}
+
+/** 契约 §3.7 的按根认领(新 Extend 用,替代全局的 claim / changed)。宿主侧落盘在 amadeus-config 账号下的 syncOwnershipV2。 */
+export interface SyncOwnershipHost extends ContentSyncOwnershipHost {
+  readV2(account:string):Promise<SyncOwnershipV2|null>
+  writeV2(account:string,next:SyncOwnershipV2|null):Promise<void>
+  /** 这个账号磁盘上的条目同步根(不遮罩)。 */
+  entryRoots(account:string):Promise<string[]>
+  /** 老的全局认领(新同步状态文件的 .owned),严格读。 */
+  legacyOwned(account:string):boolean
+  log?(m:string):void
+}
+
+const validOwnership=(o:unknown):o is SyncOwnershipV2=>{
+  const v=o as SyncOwnershipV2
+  return !!v&&typeof v==='object'&&Array.isArray(v.entryRoots)&&v.entryRoots.every(r=>typeof r==='string'&&r.length>0)
+    &&(v.mirror==='keep'||v.mirror==='off')&&(v.human==='engine'||v.human==='content')
+}
+const normalizeOwnership=(o:SyncOwnershipV2):SyncOwnershipV2=>({entryRoots:[...new Set(o.entryRoots.map(canonRoot))].sort(),mirror:o.mirror,human:o.human})
+
+export function contentSyncOwnershipV2(host:SyncOwnershipHost){
+  function assertAccount(identity:string|null|undefined):asserts identity is string{if(!identity||host.accountId()!==identity)throw Error('account_changed')}
+  const ownerUrl=(url:string)=>url.replace(/\/+$/,'')+'/agent/sync/content-owner'
+  const headers=()=>({Authorization:`Bearer ${host.engineToken()}`,'Content-Type':'application/json'})
+
+  /** 引擎里两位的当前值。托管引擎走 GET(老引擎没有这个口 → 抛,不猜);external 模式直接读文件。 */
+  async function engineOwns(identity:string):Promise<ContentOwns>{
+    const status=host.backendStatus()
+    if(status.state==='ready'&&status.url){
+      const r=await fetch(ownerUrl(status.url)+'?expectedAccount='+encodeURIComponent(identity),{headers:headers(),signal:AbortSignal.timeout(15000)})
+      assertAccount(identity)
+      if(r.status===404)throw Error('engine_owner_unverifiable')
+      if(!r.ok)throw Error(`Content sync ownership read failed (${r.status})`)
+      const j=await r.json() as Partial<ContentOwns>
+      if(typeof j?.human!=='boolean'||typeof j?.agents!=='boolean')throw Error('engine_owner_unverifiable')
+      return {human:j.human,agents:j.agents}
+    }
+    const config=await host.loadConfig();assertAccount(identity)
+    if(config.mode!=='external')throw Error('Local engine unavailable')
+    return readOfflineContentOwns(host.dataDir(),identity)
+  }
+  /** 只改 human 那一位,改完**一律**读回核对,以读回的为准:PUT 报错 / 超时 / 500(引擎落了盘、镜像那步失败)都可能已经改了,
+   *  读回正是想要的就算成了;读回对不上就抛(带上 PUT 那次的错);读不回也抛(不知道)。老引擎(404)不读回,直接抛。 */
+  async function setEngineHuman(identity:string,human:boolean):Promise<void>{
+    await host.ensureBackend();assertAccount(identity)
+    const status=host.backendStatus()
+    let failure:unknown=null
+    if(status.state==='ready'&&status.url){
+      try{
+        const r=await fetch(ownerUrl(status.url),{method:'PUT',headers:headers(),body:JSON.stringify({human,expectedAccount:identity}),signal:AbortSignal.timeout(15000)})
+        assertAccount(identity)
+        if(r.status===404)throw Error('engine_owner_unverifiable')
+        if(!r.ok)failure=Error(`Content sync ownership failed (${r.status})`)
+      }catch(e){
+        if(e instanceof Error&&(e.message==='account_changed'||e.message==='engine_owner_unverifiable'))throw e
+        failure=e
+      }
+    }else{
+      const config=await host.loadConfig();assertAccount(identity)
+      if(config.mode!=='external')throw Error('Local engine unavailable')
+      try{setOfflineContentOwner(host.dataDir(),identity,{human})}catch(e){failure=e}
+    }
+    let now:boolean
+    try{now=(await engineOwns(identity)).human}
+    catch(e){throw failure??e}
+    if(now!==human)throw failure??Error('engine_owner_mismatch')
+    if(failure)host.log?.(`[content-sync] engine owner bit is ${human} as asked; its reply failed afterwards: ${failure instanceof Error?failure.message:failure}`)
+  }
+  /** 同一个账号的 set 一个接一个(两个方向同时来时,后一个看到的是前一个做完的样子,不会拿旧读数各写各的)。 */
+  const queues=new Map<string,Promise<unknown>>()
+  function serialized<T>(key:string,fn:()=>Promise<T>):Promise<T>{
+    const work=(queues.get(key)??Promise.resolve()).then(fn)
+    const tail=work.then(()=>{},()=>{})
+    queues.set(key,tail)
+    void tail.then(()=>{if(queues.get(key)===tail)queues.delete(key)})
+    return work
+  }
+  const logRollback=(err:unknown)=>host.log?.(`[content-sync] ownership rollback failed: ${err instanceof Error?err.message:err}`)
+
+  async function get(identity:string|null|undefined=host.accountId()):Promise<SyncOwnershipV2>{
+    assertAccount(identity)
+    const v2=await host.readV2(identity);assertAccount(identity)
+    if(v2)return normalizeOwnership(v2)
+    if(host.legacyOwned(identity))return normalizeOwnership({entryRoots:await host.entryRoots(identity),mirror:'off',human:'content'})
+    return {entryRoots:[],mirror:'keep',human:'engine'}
+  }
+
+  return {
+    get,
+    /** 先撤掉失去所有权的一方,再给得到的一方;中途失败回滚已做的那半再抛,不留半截(契约 §3.7、实现期修订 H-1 第 5 条)。
+     *  human 没变就不碰引擎(条目同步接手发生在启动那一刻,不能依赖引擎已经起来)。最后让旧引擎按新遮罩重建。
+     *  同一个账号的 set 排队一个接一个;任何时候 human 最多一个写者:拿不准引擎那一位时宁可两边都停。 */
+    set(o:SyncOwnershipV2,identity:string|null|undefined=host.accountId()):Promise<void>{
+      if(!validOwnership(o))return Promise.reject(Error('invalid ownership'))
+      try{assertAccount(identity)}catch(e){return Promise.reject(e)}
+      const account=identity
+      return serialized(account,async()=>{
+        assertAccount(account)
+        const next=normalizeOwnership(o)
+        const prevV2=await host.readV2(account);assertAccount(account)
+        const cur=await get(account)
+        if(next.human!==cur.human){
+          if(next.human==='content'){
+            // 引擎 → 新同步:先停引擎(写位并读回),再给新同步。给不成就把引擎那位还回去;还不回去 = 两边都停着,没有两个写者
+            await setEngineHuman(account,true)
+            try{await host.writeV2(account,next)}
+            catch(e){await setEngineHuman(account,false).catch(logRollback);throw e}
+          }else{
+            // 新同步 → 引擎:先撤新同步(v2 落 engine),再给引擎
+            await host.writeV2(account,next)
+            try{await setEngineHuman(account,false)}
+            catch(e){
+              // 引擎没接上(或接没接上不知道):先把引擎那位确认收回(写 true 并读回),确认了才把写权还给新同步;
+              // 确认不了 = human 留在引擎名下(v2 里 human:'engine'、根和镜像照原样),新同步停着 —— 最多一个写者
+              let engineBack=false
+              try{await setEngineHuman(account,true);engineBack=true}catch(err){logRollback(err)}
+              await host.writeV2(account,engineBack?prevV2:{...cur,human:'engine'}).catch(logRollback)
+              throw e
+            }
+          }
+        }else await host.writeV2(account,next)
+        assertAccount(account)
+        await host.restartSync()
+        assertAccount(account)
+      })
+    },
+    /** 新同步动过盘:只通知,不写 owner(老 changed() 每次都把 owner 写成 true)。老引擎没有这个口 → 不报错。 */
+    async touched(identity:string|null|undefined=host.accountId()):Promise<void>{
+      assertAccount(identity)
+      const status=host.backendStatus()
+      if(status.state!=='ready'||!status.url)return
+      const r=await fetch(status.url.replace(/\/+$/,'')+'/agent/sync/content-touched',{method:'POST',headers:headers(),body:JSON.stringify({expectedAccount:identity}),signal:AbortSignal.timeout(15000)})
+      assertAccount(identity)
+      if(r.status===404)return
+      if(!r.ok)throw Error(`Content sync refresh failed (${r.status})`)
     },
   }
 }
