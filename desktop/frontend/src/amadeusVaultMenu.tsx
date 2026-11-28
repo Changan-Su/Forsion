@@ -1,7 +1,7 @@
 // 左栏底部「智库」按钮 + 菜单(多智库第 1 步):本机用过的库、打开文件夹 / 新建 / 同步设置。
 // 只在桌面本地侧出现;云侧和网页仍是 CloudVaultPanel。切库走 pageStore.switchLocalVault(先在旧根落盘再换根)。
 import React, { useRef, useState } from 'react'
-import { ChevronsUpDown, Folder, FolderOpen, FolderPlus, FolderSearch, FolderX, ListX, RefreshCw } from 'lucide-react'
+import { ChevronsUpDown, Cloud, CloudOff, Download, Folder, FolderOpen, FolderPlus, FolderSearch, FolderX, ListX, RefreshCw } from 'lucide-react'
 import type { LocalVaultRow } from '@amadeus-shared/ipc'
 import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -9,13 +9,26 @@ import { askString } from '@amadeus/components/askString'
 import { emitAmadeusToast } from '@amadeus/unified/writeSafety'
 import { ContextMenu, type CtxItem, type CtxMenu } from './components/RightPanel'
 import { openPenzorSync, penzorSyncReady } from './services/syncSetup'
-import { isDesktopExtendOff, isFullSync, isLegacySync } from './sync/v2/mode'
-import { openSyncSettings } from './sync/v2/openSyncSettings'
+import { isDesktopExtendOff, isFullSync, isLegacySync, modeFrom, setSyncMode } from './sync/v2/mode'
+import { downloadPreviewFocus, openSyncSettings } from './sync/v2/openSyncSettings'
 import { registerMessages, translate, useI18n } from './i18n'
 import { composeVaultSync } from '../../shared/vaultSync'
 import { VaultSyncChip } from './sync/VaultSyncChip'
-import { feedsOf, useVaultSyncRaw } from './sync/vaultSyncStore'
+import { feedsOf, useVaultSync, useVaultSyncRaw } from './sync/vaultSyncStore'
 import { vaultSyncWords } from './sync/vaultSyncText'
+import { vaultSync } from './sync/v2/client'
+import { cloudOnlyRows, folderHost, type CloudRow } from './sync/v2/vaultSurfaces'
+import { uploadOption, type CreateVaultRun } from './sync/v2/createVault'
+import type { DownloadLibrary } from './sync/v2/download'
+import type { BindingView } from './sync/v2/types'
+import { canViewPenzorLibrary, openPenzorLibrary } from './sync/v2/openPenzorLibrary'
+import { stopLocalPlan } from './sync/v2/finishStopLanding'
+import { VaultSyncPanel, bytesText } from './sync/VaultSyncPanel'
+import { DownloadVaultDialog } from './components/DownloadVaultDialog'
+import { NewVaultDialog } from './components/NewVaultDialog'
+import { StopDownloadCard } from './components/StopDownloadCard'
+import { windowKind } from './windowKind'
+import { landingError } from './components/vaultLandingMessages'
 
 registerMessages({
   'vaultMenu.missingDetail': { zh: '找不到文件夹', en: 'Folder not found' },
@@ -53,48 +66,144 @@ async function newVault(): Promise<void> {
 
 /** 底部按钮:点开智库菜单。宿主没有 listVaults(老主进程)时调用方别渲染它。 */
 export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [menu, setMenu] = useState<CtxMenu>(null)
   const rowRef = useRef<HTMLDivElement>(null)
   const name = vaultRoot?.split(/[\\/]/).filter(Boolean).pop()
 
-  const rowMenu = (row: LocalVaultRow, at: { x: number; y: number }): void => setMenu({ ...at, items: [
-    { label: t(isMac() ? 'vaultMenu.reveal' : 'vaultMenu.revealOther'), icon: <FolderSearch size={14} />, disabled: !row.exists, run: () => void amadeus.revealVault?.(row.root) },
-    { label: t('vaultMenu.forget'), icon: <ListX size={14} />, disabled: row.current || row.pinned, run: () => void amadeus.forgetVault?.(row.root) },
-  ] })
+  const [download, setDownload] = useState<DownloadLibrary | null>(null)
+  const [creating, setCreating] = useState<{ option: React.ComponentProps<typeof NewVaultDialog>['option'] } | null>(null)
+  const [stopping, setStopping] = useState<{ binding: BindingView; blocked: boolean } | null>(null)
+  const [review, setReview] = useState<BindingView | null>(null)
+  const reviewView = useVaultSync({ root: review?.root ?? null, side: 'local' })
+  const [failedUploads, setFailedUploads] = useState<Set<string>>(() => new Set())
+  const menuRequest = useRef(0)
+  const closeMenu = () => { ++menuRequest.current; setMenu(null) }
+  const notify = (key: string, vars: Record<string, unknown>, error = false) =>
+    emitAmadeusToast({ level: error ? 'warning' : 'info', text: t(key, vars), dedupeKey: 'vault-menu' })
+  const created = (result: Extract<CreateVaultRun, { kind: 'created' }>, vaultName: string) => {
+    if (result.upload === 'failed') {
+      setFailedUploads((roots) => new Set(roots).add(result.root))
+      notify('landing.uploadFailed', { name: vaultName, reason: landingError(t, result.reason, vaultName) }, true)
+    }
+    if (!result.opened) notify('landing.openFailed', { name: vaultName }, true)
+  }
 
   const open = async (el: HTMLElement): Promise<void> => {
-    const rows = await amadeus?.listVaults?.().catch(() => null)
-    if (!rows) return
-    // 每个库那一行的同步说法和左栏、面板同一份(状态源合成);没在同步的只写位置
+    const request = ++menuRequest.current
+    const [rows, synced, auth] = await Promise.all([
+      amadeus?.listVaults?.().catch(() => null),
+      vaultSync.get(locale === 'zh' ? 'zh' : 'en'),
+      window.tangu?.authStatus?.().catch(() => null),
+    ])
+    if (!rows || request !== menuRequest.current) return
+    const mode = modeFrom(synced)
+    setSyncMode(mode)
+    const full = synced.ok && synced.value?.mode === 'full' ? synced.value : null
+    const listed = full && auth?.loggedIn === true ? await vaultSync.libraries() : null
+    if (request !== menuRequest.current || !el.isConnected) return
+    const freshness = listed?.ok ? (listed.value.stale ? 'offline' : 'fresh') : (listed?.error === 'offline' || (listed?.error === 'not_fetched' && navigator.onLine === false)) ? 'offline'
+      : listed?.error === 'libraries_cache_unreadable' ? 'unreadable' : 'hidden'
+    const grouped = freshness !== 'hidden'
+    const actions = amadeus.vaultSyncActions?.()
+    const canManageLocal = windowKind() === 'main' && !!folderHost(amadeus)
+    const canDownload = !!actions?.download && canManageLocal
+    const cloudRows = full && listed?.ok ? cloudOnlyRows(full, listed.value.list.libraries) : []
     const feeds = feedsOf(useVaultSyncRaw.getState())
     const now = Date.now()
     const syncWords = (root: string): string | null => {
       const view = composeVaultSync(feeds, { root, side: 'local' }, now)
       return view.state === 'off' ? null : vaultSyncWords(view, now, t).text
     }
-    const items: CtxItem[] = rows.map((row) => ({
-      label: row.name,
-      detail: row.exists ? ((w) => (w ? `${w} · ${row.display}` : row.display))(syncWords(row.root)) : `${t('vaultMenu.missingDetail')} · ${row.display}`,
-      icon: row.exists ? <Folder size={15} /> : <FolderX size={15} />,
-      // 勾 / 跳过按本窗绑的根判,不按全局 current:别的窗口换过库后,本窗点任一行都要能重新绑上(Codex 评审)
-      checked: row.root === vaultRoot,
-      run: () => {
-        if (row.root === vaultRoot) return
-        if (!row.exists) return warn(translate('vaultMenu.missing', { name: row.name }))
-        void usePageStore.getState().switchLocalVault(row.root).catch((e) => failed(e, row.name))
-      },
-      onSecondary: (at) => rowMenu(row, at),
-    }))
+    const viewCloud = canViewPenzorLibrary()
+    const cloudName = (row: CloudRow) => row.kind === 'default' ? t('amadeus.default.cloudNotes') : row.name
+    const rowMenu = (row: LocalVaultRow, binding: BindingView | undefined, at: { x: number; y: number }) => setMenu({ ...at, items: [
+      { label: t(isMac() ? 'vaultMenu.reveal' : 'vaultMenu.revealOther'), icon: <FolderSearch size={14} />, disabled: !row.exists, run: () => void amadeus.revealVault?.(row.root) },
+      { label: t('vaultMenu.forget'), icon: <ListX size={14} />, disabled: row.current || row.pinned, run: () => void amadeus.forgetVault?.(row.root) },
+      ...(full && auth?.loggedIn === true && actions?.unbind && canManageLocal && amadeus.moveSyncVaultPin && binding?.target.kind === 'penzor' ? [
+        { label: t('landing.stop'), icon: <FolderX size={14} />, run: () => setStopping({ binding, blocked: stopLocalPlan(rows, row.root, vaultRoot).blocked }) },
+      ] : []),
+      ...(full && actions?.create && !binding && row.exists && auth?.loggedIn === true ? [
+        { label: t('landing.uploadMenu'), icon: <Cloud size={14} />, run: () => openSyncSettings({ root: row.root, intent: 'start' }) },
+      ] : []),
+    ] })
+    const items: CtxItem[] = []
+    if (grouped && rows.length) items.push({ kind: 'head', label: t('landing.onComputer'), run: () => {} })
+    for (const row of rows) {
+      const binding = full?.bindings.find((b) => b.root === row.root && b.role === 'primary') ?? full?.bindings.find((b) => b.root === row.root)
+      const matchedId = full?.localVaults.find((v) => v.root === row.root)?.libraryId
+      const sameName = row.exists && !binding && !!matchedId && !!listed?.ok
+        && listed.value.list.libraries.some((lib) => lib.id === matchedId && !lib.deleted)
+      const words = syncWords(row.root)
+      items.push({
+        label: row.name,
+        detail: !row.exists ? `${t('vaultMenu.missingDetail')} · ${row.display}`
+          : sameName ? t('landing.sameName') : grouped || !words ? row.display : `${words} · ${row.display}`,
+        title: row.display,
+        status: !sameName && (grouped || failedUploads.has(row.root)) ? words ?? t('landing.localOnly') : undefined,
+        action: sameName || (full && !binding && failedUploads.has(row.root)) ? {
+          label: t(sameName ? 'landing.sync' : 'landing.uploadMenu'),
+          run: () => openSyncSettings({ root: row.root, intent: 'start' }),
+        } : undefined,
+        icon: row.exists ? <Folder size={15} /> : <FolderX size={15} />,
+        checked: row.root === vaultRoot,
+        run: () => {
+          if (row.root === vaultRoot) return
+          if (!row.exists) return warn(translate('vaultMenu.missing', { name: row.name }))
+          void usePageStore.getState().switchLocalVault(row.root).catch((e) => failed(e, row.name))
+        },
+        onSecondary: (at) => rowMenu(row, binding, at),
+      })
+    }
+    if (grouped && (cloudRows.length || freshness !== 'fresh')) {
+      items.push({ kind: 'head', label: t('landing.inCloud'), separatorBefore: !!items.length, run: () => {} })
+      for (const row of cloudRows) {
+        const { devices, deviceNames, files, bytes } = row
+        const detail = devices === 1 && deviceNames?.[0] ? t('landing.oneDevice', { device: deviceNames[0] }) :
+          devices > 0 ? t('ssync.cloudDeviceCount', { n: devices }) : typeof files === 'number' ? t('ssync.cloudFiles', { n: files }) : t('ssync.cloudNoDevice')
+        items.push({
+          label: cloudName(row), icon: <Cloud size={15} />, detail: `${t('landing.online')} · ${detail}`,
+          disabled: freshness !== 'fresh', dimmed: freshness === 'fresh',
+          run: () => notify('landing.onlineUnavailable', {}),
+          onSecondary: freshness !== 'fresh' ? undefined : (at) => setMenu({ ...at, items: [
+            ...(canDownload ? [{
+              label: t('landing.download'), icon: <Download size={14} />, disabled: row.kind === 'default',
+              detail: row.kind === 'default' ? t('landing.err.default_unsupported') :
+                typeof files === 'number' && typeof bytes === 'number' ? t('landing.amountSchedule', { amount: t('landing.amount', { n: files, size: bytesText(bytes) }) }) : undefined,
+              run: () => setDownload(row),
+            }] : []),
+            {
+              label: t('landing.viewCloud'), detail: viewCloud ? undefined : t('landing.viewUnavailable'), icon: <Cloud size={14} />,
+              disabled: !viewCloud, run: () => {
+                void openPenzorLibrary(row.id, cloudName(row)).then((opened) => {
+                  if (!opened) warn(t('landing.viewUnavailable'))
+                }, () => warn(t('landing.viewUnavailable')))
+              },
+            },
+          ] }),
+        })
+      }
+      items.push({ kind: 'note', icon: <CloudOff size={15} />, run: () => {}, label: t(
+        freshness === 'offline' ? 'landing.err.offline' : freshness === 'unreadable' ? 'landing.cloudUnreadable' :
+          canDownload ? 'landing.onlineGroupHint' : 'landing.onlineUnavailable',
+      ) })
+    }
+
     items.push(
       { label: t('vaultMenu.openFolder'), icon: <FolderOpen size={15} />, separatorBefore: true, run: () => void usePageStore.getState().openVault() },
-      { label: t('vaultMenu.new'), icon: <FolderPlus size={15} />, run: () => void newVault() },
+      { label: t('vaultMenu.new'), icon: <FolderPlus size={15} />, run: () => {
+        if (!canManageLocal) { void newVault(); return }
+        const option = !actions?.create ? null : freshness === 'offline'
+          ? { available: false as const, defaultChecked: false as const, reason: 'offline' as const }
+          : auth?.loggedIn === false ? { available: false as const, defaultChecked: false as const, reason: 'not_signed_in' as const }
+          : uploadOption({ mode: mode.mode, signedIn: auth?.loggedIn ?? null, get: full })
+        setCreating({ option })
+      } },
     )
-    // 第 2 步完整模式:同步设置在设置 › 同步(定位到当前库那一行);其余照旧去蓬洲云的同步页
     if (isFullSync()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: () => openSyncSettings(vaultRoot ? { root: vaultRoot } : undefined) })
     else if (isLegacySync() && !isDesktopExtendOff() && penzorSyncReady()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: openPenzorSync })
     const r = el.getBoundingClientRect()
-    setMenu({ x: r.left, y: r.bottom, anchorTop: r.top, items })
+    setMenu({ x: r.left, y: r.bottom, anchorTop: r.top, className: grouped ? 'ctx-vault-menu' : undefined, items })
   }
 
   // 名字和箭头开智库菜单,中间的状态小字开同步面板(VaultSyncChip;这个库没在同步时它不占地方)
@@ -108,7 +217,17 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
         {vaultRoot && name && <VaultSyncChip vault={{ root: vaultRoot, side: 'local' }} name={name} rowRef={rowRef} />}
         <button type="button" className="t2s-special-go" tabIndex={-1} aria-hidden="true" onClick={() => rowRef.current && void open(rowRef.current)}><ChevronsUpDown size={13} /></button>
       </div>
-      {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
+      {menu && <ContextMenu menu={menu} onClose={closeMenu} autoFocus />}
+      {download && <DownloadVaultDialog key={download.id} library={download} onClose={() => setDownload(null)}
+        onPreview={(preview) => openSyncSettings(downloadPreviewFocus(preview))} />}
+      {creating && <NewVaultDialog option={creating.option} onClose={() => setCreating(null)}
+        onDownload={(lib) => { setCreating(null); setDownload(lib) }} onCreated={created} />}
+      {stopping && <StopDownloadCard binding={stopping.binding} blocked={stopping.blocked} onClose={() => setStopping(null)}
+        onReview={() => setReview(stopping.binding)}
+        onStopped={(forgot) => notify(forgot ? 'landing.stopped' : 'landing.forgetFailed', { name: stopping.binding.name }, !forgot)} />}
+      {review && <VaultSyncPanel vault={{ root: review.root, side: 'local' }} name={review.name}
+        view={reviewView}
+        anchorRef={rowRef} onClose={() => setReview(null)} />}
     </>
   )
 }

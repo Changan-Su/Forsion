@@ -152,7 +152,10 @@ function useSelection(orderedPaths: string[]) {
 export interface CtxItem {
   label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void
   /** 第二行小字(路径 / 状态);checked = 行尾打勾(当前项);onSecondary = 在这一行上右键(关掉本菜单,坐标交给调用方再弹一个)。原生半屏菜单只认 label。 */
-  detail?: string; checked?: boolean; onSecondary?: (at: { x: number; y: number }) => void
+  kind?: 'head' | 'note'
+  detail?: string; title?: string; checked?: boolean; dimmed?: boolean; status?: string
+  action?: { label: string; run: () => void }
+  onSecondary?: (at: { x: number; y: number }) => void
 }
 /** anchorTop:从一颗按钮弹出时给按钮上沿 —— 下面放不下就翻到它上面(而不是盖住按钮);右键菜单不用给。
  *  prefer / alignEnd 原样交给 OverlayAt(贴在底部按钮上、往上开且右缘对齐按钮的那种);className 加在 .ctx-menu 旁边。
@@ -171,7 +174,7 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
     if (web) return
     const ctl = new AbortController()
     // 菜单项在呈现那一刻定格:原生答复的下标只指向这一份,不会落到后来换掉的列表里。
-    void pickNativeCtxItem(latest.current.menu.items, { signal: ctl.signal }).then((out) => {
+    void pickNativeCtxItem(latest.current.menu.items.filter((item) => !item.kind), { signal: ctl.signal }).then((out) => {
       if (ctl.signal.aborted) return
       if (!out.handled) { setWeb(true); return }
       latest.current.onClose()
@@ -249,17 +252,24 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
       {menu.items.map((it, i) => (
         <React.Fragment key={i}>
           {it.separatorBefore && <div className="ctx-separator" role="separator" />}
+          {it.kind === 'head' ? <div className="ctx-head">{it.label}</div>
+            : it.kind === 'note' ? <div className="ctx-note" role="status">{it.icon}{it.label}</div> : <div className={it.action ? 'ctx-split' : undefined} style={it.action ? undefined : { display: 'contents' }}>
           <button
-            ref={i === menu.items.findIndex(item => !item.disabled) ? firstItem : undefined}
-            role={it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={it.checked} aria-label={it.label} title={it.detail}
-            disabled={it.disabled} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}
+            ref={i === menu.items.findIndex(item => !item.kind && !item.disabled) ? firstItem : undefined}
+            role={it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={it.checked} aria-label={it.label} title={it.title ?? it.detail}
+            disabled={it.disabled} className={`ctx-item${it.dimmed ? ' ctx-dimmed' : ''}${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}
             onContextMenu={it.onSecondary && ((e) => { e.preventDefault(); e.stopPropagation(); onClose(); it.onSecondary!({ x: e.clientX, y: e.clientY }) })}
           >
             {it.icon}
             {it.detail ? <span className="ctx-text"><span>{it.label}</span><span className="ctx-detail">{it.detail}</span></span> : <span>{it.label}</span>}
             {it.shortcut && <kbd className="ctx-shortcut" aria-hidden="true">{it.shortcut}</kbd>}
-            {it.checked && <Check size={14} className="ctx-check" aria-hidden="true" />}
+            {it.status && <span className="ctx-shortcut">{it.status}</span>}
+            {it.checked ? <Check size={14} className="ctx-check" aria-hidden="true" />
+              : it.checked === false && it.status ? <span className="ctx-check-space" aria-hidden="true" /> : null}
           </button>
+          {it.action && <button type="button" role="menuitem" className="ctx-item ctx-row-action"
+            onClick={() => { onClose(); it.action?.run() }}>{it.action.label}</button>}
+          </div>}
         </React.Fragment>
       ))}
     </OverlayAt>,

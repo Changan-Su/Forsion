@@ -52,9 +52,4 @@ export function forgetPatch(cfg: VaultFields, root: string): { vaults: VaultEntr
   return { vaults: vaultList(cfg).filter((v) => !samePath(v.root, root)) }
 }
 
-/** 新建智库的名字:一层目录名,不带路径分隔符、不以点开头。 */
-export function vaultDirName(name: unknown): string | null {
-  const n = typeof name === 'string' ? name.trim() : ''
-  if (!n || n.length > 80 || n.startsWith('.') || /[/\\:*?"<>|\u0000-\u001f]/.test(n)) return null
-  return n
-}
+export { vaultDirName } from '../../shared/amadeus/vaultCreate'

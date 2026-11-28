@@ -1940,6 +1940,7 @@ const zh: Dict = {
   'amadeus.default.drawing': '未命名白板',
   'amadeus.default.database': '未命名多维表',
   'amadeus.default.folder': '新文件夹',
+  'amadeus.default.cloudNotes': '云端笔记',
   'amadeus.default.section': '新分区',
   'amadeus.default.pdfBookmark': '第 {page} 页',
 
@@ -3794,6 +3795,7 @@ const en: Dict = {
   'amadeus.default.drawing': 'Untitled whiteboard',
   'amadeus.default.database': 'Untitled database',
   'amadeus.default.folder': 'New folder',
+  'amadeus.default.cloudNotes': 'Cloud notes',
   'amadeus.default.section': 'New section',
   'amadeus.default.pdfBookmark': 'Page {page}',
 

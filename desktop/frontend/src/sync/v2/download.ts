@@ -150,6 +150,7 @@ export interface DownloadPreviewHandoff {
   target: PreviewTarget
   scope: BindingScope
   added: []
+  downloadCompare: true
   preview: null
 }
 
@@ -169,7 +170,7 @@ export type DownloadRun =
 
 /** 汇总卡的交接:download 回的 preview 原样给(candidate 是库清单里认定的那个,不按名字重找 —— 那条会在 0 个时新建、多个时让人重挑)。 */
 export function downloadPreviewHandoff(preview: VaultSyncPreviewArgs, name: string): DownloadPreviewHandoff {
-  return { root: preview.root, name, kind: 'cloud', target: preview.target, scope: preview.scope, added: [], preview: null }
+  return { root: preview.root, name, kind: 'cloud', target: preview.target, scope: preview.scope, added: [], downloadCompare: true, preview: null }
 }
 
 /** 点了「落盘」/「比对两边…」:vaultCreate → download。check 必须是 ready / compare。 */
@@ -186,8 +187,9 @@ export async function runDownload(deps: DownloadDeps, lib: DownloadLibrary, chec
   const r = await deps.download(lib.id, made.root)
   if (r.ok) {
     const v = r.value
-    if (v && 'next' in v && v.next === 'preview' && v.preview && typeof v.preview.root === 'string') {
-      return { kind: 'needs_preview', root: made.root, created: made.created, preview: v.preview, handoff: downloadPreviewHandoff(v.preview, opts.folderName) }
+    if (v && 'next' in v && v.next === 'preview') {
+      const preview = parseDownloadPreview(v.preview)
+      if (preview?.root === made.root) return { kind: 'needs_preview', root: made.root, created: made.created, preview, handoff: downloadPreviewHandoff(preview, opts.folderName) }
     }
     if (v && 'bindingId' in v && typeof v.bindingId === 'string' && v.bindingId) return { kind: 'started', root: made.root, bindingId: v.bindingId, created: made.created }
     // 成功却认不出形状:不知道建没建绑定,当失败,不撤文件夹(下一条 cleanup 会先看有没有绑定指着它)

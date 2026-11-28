@@ -13,7 +13,7 @@ import {
 import { checkNewVaultName, runCreateVault, uploadOption, type CreateVaultDeps } from './createVault'
 import { classifyUnbind, runStopLanding, stopPreflight } from './stopLanding'
 import { downloadPreviewFocus, parseSyncFocus } from './openSyncSettings'
-import { VAULT_SYNC_CHANNELS as CH, type CreateOk, type DownloadCheckOk, type DownloadOk, type LibrariesValue, type LibraryInfo, type UnbindOk, type VaultSyncPreviewArgs } from './types'
+import { VAULT_SYNC_CHANNELS as CH, type CreateOk, type DownloadCheckOk, type DownloadOk, type ResolveNameResult, type UnbindOk, type VaultSyncPreviewArgs } from './types'
 import type { Pending } from '../../components/SyncSettings'
 
 // ── 夹具 ──
@@ -46,10 +46,6 @@ function vaultCreateStub(base: string) {
   }
   return Object.assign(fn, { calls })
 }
-const lib = (over: Partial<LibraryInfo> = {}): LibraryInfo => ({
-  id: 'v-own-1', kind: 'own', vaultId: 'v-own-1', prefix: 'Amadeus/', name: 'Lab', nameKey: 'lab', files: 3, bytes: 1200, updatedAt: null, devices: [], ...over,
-})
-const libs = (list: LibraryInfo[], stale = false): VsResult<LibrariesValue> => ({ ok: true, value: { list: { generatedAt: '2026-11-28T00:00:00Z', libraries: list }, fetchedAt: 1, stale } })
 const okCheck = (over: Partial<DownloadCheckOk> = {}): VsResult<DownloadCheckOk> => ({ ok: true, value: { ok: true, root: join(tmp, 'Lab'), name: 'Lab', kind: 'own', files: 3, bytes: 1200, freeBytes: 10_000, state: 'new', ...over } })
 const LAB: DownloadLibrary = { id: 'v-own-1', kind: 'own', name: 'Lab' }
 
@@ -176,8 +172,14 @@ describe('落盘 ⑧:点了主按钮(vaultCreate → download)', () => {
     expect(r).toMatchObject({ kind: 'needs_preview', created: false, preview })
     if (r.kind !== 'needs_preview') throw new Error('x')
     const p: Pending = r.handoff // 类型上能直接交给 runPreview
-    expect(p).toEqual({ root: preview.root, name: 'Lab', kind: 'cloud', target: preview.target, scope: { mode: 'all' }, added: [], preview: null })
+    expect(p).toEqual({ root: preview.root, name: 'Lab', kind: 'cloud', target: preview.target, scope: { mode: 'all' }, added: [], downloadCompare: true, preview: null })
     expect(downloadPreviewHandoff(preview, 'Lab')).toEqual(p)
+  })
+  it('does not hand off a preview for a different local root', async () => {
+    const preview: VaultSyncPreviewArgs = { root: join(tmp, 'Other'), target: { kind: 'penzor', candidate: { kind: 'own', vaultId: 'v-own-1', name: 'Lab' } }, scope: { mode: 'all' } }
+    const d = deps(async () => ({ ok: true, value: { ok: true, next: 'preview', preview } as DownloadOk }))
+    const r = await runDownload(d, LAB, classifyDownloadCheck(okCheck()), { parent: tmp, folderName: 'Lab' })
+    expect(r).toMatchObject({ kind: 'blocked', state: { kind: 'blocked', code: 'invalid_reply' } })
   })
   it('download 挡回来:本次新建、仍为空、没有绑定 → 撤掉(移出清单 + 删空目录)', async () => {
     const folder = folderHost()
@@ -271,19 +273,17 @@ describe('新建 ⑪:上传到云端那个勾', () => {
   })
 })
 
-describe('新建 ⑪:边打字边判(清单缓存,只做提示)', () => {
-  const list = libs([lib(), lib({ id: 'v0:Amadeus/Reading/', kind: 'legacy', vaultId: 'v0', prefix: 'Amadeus/Reading/', name: 'Reading', nameKey: 'reading' }), lib({ id: 'v0', kind: 'default', name: 'My Vault', nameKey: null })])
-  it('空 / 不勾 / 没撞 / 撞了 own / 撞了 legacy / 保留名 / 清单读不出', () => {
-    expect(checkNewVaultName('  ', true, list)).toEqual({ kind: 'empty' })
-    expect(checkNewVaultName('Lab', false, list)).toEqual({ kind: 'clear' })
-    expect(checkNewVaultName('Notes', true, list)).toEqual({ kind: 'clear' })
-    expect(checkNewVaultName(' LAB ', true, list)).toMatchObject({ kind: 'name_exists', libraryId: 'v-own-1', libraryKind: 'own' })
-    expect(checkNewVaultName('reading', true, list)).toMatchObject({ kind: 'name_exists', libraryId: 'v0:Amadeus/Reading/', libraryKind: 'legacy', prefix: 'Amadeus/Reading/' })
-    expect(checkNewVaultName('云端笔记', true, list)).toEqual({ kind: 'reserved' })
-    expect(checkNewVaultName('Cloud Notes', true, null)).toEqual({ kind: 'reserved' })
-    expect(checkNewVaultName('Lab', true, { ok: false, error: 'libraries_cache_unreadable' })).toEqual({ kind: 'unknown' })
-    expect(checkNewVaultName('Lab', true, null)).toEqual({ kind: 'unknown' })
-    expect(checkNewVaultName('Lab', true, libs([lib()], true))).toMatchObject({ kind: 'name_exists' }) // stale 的照用
+describe('新建 ⑪:名字由 Extend 预判', () => {
+  it('按候选身份认库，不在 Genesis 比名字或判断保留名', async () => {
+    const resolve = vi.fn<(name: string) => Promise<VsResult<ResolveNameResult>>>()
+    resolve.mockResolvedValueOnce({ ok: true, value: { candidates: [{ kind: 'own', vaultId: 'v1', name: 'Notes' }] } })
+    resolve.mockResolvedValueOnce({ ok: true, value: { candidates: [{ kind: 'legacy', vaultId: 'v0', prefix: 'Amadeus/Reading/' }] } })
+    resolve.mockResolvedValueOnce({ ok: true, value: { candidates: [], error: 'reserved' } })
+    resolve.mockResolvedValueOnce({ ok: false, error: 'channel_missing' })
+    expect(await checkNewVaultName(resolve, 'Notes')).toEqual({ kind: 'name_exists', libraryId: 'v1' })
+    expect(await checkNewVaultName(resolve, 'Reading')).toEqual({ kind: 'name_exists', libraryId: 'v0:Amadeus/Reading/' })
+    expect(await checkNewVaultName(resolve, 'Work')).toEqual({ kind: 'reserved' })
+    expect(await checkNewVaultName(resolve, 'Notes')).toEqual({ kind: 'unknown' })
   })
 })
 
@@ -295,14 +295,14 @@ describe('新建 ⑪:点了「新建」', () => {
   }
   it('预判撞名:本机什么都不建、不调 create', async () => {
     const d = mk(async () => ({ ok: true, value: { ok: true, bindingId: 'b1' } as CreateOk }))
-    expect(await runCreateVault(d, { name: 'lab', upload: true, libraries: libs([lib()]) })).toEqual({ kind: 'name_exists', source: 'cache', libraryId: 'v-own-1', cleanup: null })
+    expect(await runCreateVault({ ...d, resolveName: async () => ({ ok: true, value: { candidates: [{ kind: 'own', vaultId: 'v-own-1', name: 'Lab' }] } }) }, { name: 'lab', upload: true })).toEqual({ kind: 'name_exists', source: 'resolver', libraryId: 'v-own-1', cleanup: null })
     expect(d.vaultCreate.calls).toHaveLength(0)
     expect(d.create).not.toHaveBeenCalled()
     expect(readdirSync(tmp)).toEqual([])
   })
   it('上云成功:建(refuse)→ create → 打开', async () => {
     const d = mk(async () => ({ ok: true, value: { ok: true, bindingId: 'b3' } as CreateOk }))
-    expect(await runCreateVault(d, { name: 'Lab', upload: true, libraries: libs([]) })).toEqual({ kind: 'created', root: join(tmp, 'Lab'), upload: 'on', bindingId: 'b3', opened: true })
+    expect(await runCreateVault(d, { name: 'Lab', upload: true })).toEqual({ kind: 'created', root: join(tmp, 'Lab'), upload: 'on', bindingId: 'b3', opened: true })
     expect(d.vaultCreate.calls).toEqual([{ name: 'Lab', existing: 'refuse' }])
     expect(d.create).toHaveBeenCalledWith(join(tmp, 'Lab'))
     expect(d.open).toHaveBeenCalledWith(join(tmp, 'Lab'))
@@ -315,7 +315,7 @@ describe('新建 ⑪:点了「新建」', () => {
   it('服务器才说 name_exists:刚建的空文件夹撤掉,不打开;libraryId 带上', async () => {
     const folder = folderHost()
     const d = mk(async () => ({ ok: false, error: 'name_exists', detail: { libraryId: 'v9' } }), folder)
-    expect(await runCreateVault(d, { name: 'Lab', upload: true, libraries: null })).toEqual({ kind: 'name_exists', source: 'server', libraryId: 'v9', cleanup: 'removed' })
+    expect(await runCreateVault(d, { name: 'Lab', upload: true })).toEqual({ kind: 'name_exists', source: 'server', libraryId: 'v9', cleanup: 'removed' })
     expect(existsSync(join(tmp, 'Lab'))).toBe(false)
     expect(folder.forgot).toEqual([join(tmp, 'Lab')])
     expect(d.open).not.toHaveBeenCalled()
@@ -333,7 +333,7 @@ describe('新建 ⑪:点了「新建」', () => {
     expect(await runCreateVault(d, { name: 'Notes', upload: true })).toEqual({ kind: 'name_rejected', code: 'reserved', source: 'server', cleanup: 'removed' })
     expect(existsSync(join(tmp, 'Notes'))).toBe(false)
     const d2 = mk(async () => ({ ok: true, value: { ok: true, bindingId: 'b' } as CreateOk }))
-    expect(await runCreateVault(d2, { name: 'Cloud notes', upload: true })).toEqual({ kind: 'name_rejected', code: 'reserved', source: 'cache', cleanup: null })
+    expect(await runCreateVault({ ...d2, resolveName: async () => ({ ok: true, value: { candidates: [], error: 'reserved' } }) }, { name: 'Cloud notes', upload: true })).toEqual({ kind: 'name_rejected', code: 'reserved', source: 'resolver', cleanup: null })
     expect(d2.vaultCreate.calls).toHaveLength(0)
   })
   it('离线 / 老服务器 / 换了账号 / 准入挡住:本机的库留着、打开,upload = failed 带原码', async () => {

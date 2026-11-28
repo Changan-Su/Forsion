@@ -3,6 +3,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
+import { VAULT_CREATE_IPC } from '@amadeus-shared/vaultCreate'
 import { ASSET_SCHEME } from '@amadeus-shared/assets'
 import { SYNC_IPC } from './sync/ipcKeys'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
@@ -14,12 +15,38 @@ const subscribe = <T>(channel: string, cb: (payload: T) => void): (() => void) =
   return () => { ipcRenderer.removeListener(channel, listener) }
 }
 
+const vaultRelayOps = new Set<string>([VAULT_CREATE_IPC.parent, VAULT_CREATE_IPC.create, VAULT_CREATE_IPC.empty, VAULT_CREATE_IPC.remove])
+const floating = new URLSearchParams(globalThis.location.search).get('window') === 'floating'
+const folderInvoke = (channel: string, arg?: unknown) => floating
+  ? ipcRenderer.invoke(VAULT_CREATE_IPC.settingsRequest, channel, arg)
+  : ipcRenderer.invoke(channel, arg)
+
+if (!floating) {
+  ipcRenderer.on(VAULT_CREATE_IPC.settingsRelay, (_event, id: string, channel: string, arg: unknown) => {
+    if (!vaultRelayOps.has(channel)) return
+    void ipcRenderer.invoke(channel, arg).then(
+      (value) => ipcRenderer.invoke(VAULT_CREATE_IPC.settingsResult, id, true, value),
+      (error: Error) => ipcRenderer.invoke(VAULT_CREATE_IPC.settingsResult, id, false, error.message),
+    ).catch(() => {})
+  })
+}
+
 const api: AmadeusApi = {
   openVault: () => ipcRenderer.invoke(IPC.openVault),
   restoreVault: (reuseActive?: boolean) => ipcRenderer.invoke(IPC.restoreVault, reuseActive),
   listVaults: () => ipcRenderer.invoke(IPC.listVaults),
   switchVault: (root) => ipcRenderer.invoke(IPC.switchVault, root),
   createVault: (name) => ipcRenderer.invoke(IPC.createVault, name),
+  vaultCreate: (args) => folderInvoke(VAULT_CREATE_IPC.create, args),
+  vaultSyncActions: () => {
+    const channels = cloudPresent()
+    return { download: channels.has('vaultsync:downloadCheck') && channels.has('vaultsync:download'), create: channels.has('vaultsync:create'), unbind: channels.has('vaultsync:unbind') }
+  },
+  vaultDefaultParent: () => folderInvoke(VAULT_CREATE_IPC.parent),
+  vaultIsEmptyDir: (root) => folderInvoke(VAULT_CREATE_IPC.empty, root),
+  vaultRemoveEmptyDir: (root) => folderInvoke(VAULT_CREATE_IPC.remove, root),
+  vaultFileHashes: (root, paths) => ipcRenderer.invoke(VAULT_CREATE_IPC.hashes, root, paths),
+  moveSyncVaultPin: (root) => ipcRenderer.invoke(VAULT_CREATE_IPC.movePin, root),
   forgetVault: (root) => ipcRenderer.invoke(IPC.forgetVault, root),
   revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
   // 在线库(智库同步第 3 步 H3):读写当前在线库、主窗收「在线打开」并报失败 / 报装好了转发壳

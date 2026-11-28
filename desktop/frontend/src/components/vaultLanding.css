@@ -1,0 +1,31 @@
+.vault-landing-host { display: contents; }
+.am-app .dialog.vault-landing:not(.un-dlg) { width: min(440px, calc(100vw - 32px)); }
+.am-app .dialog.vault-landing { max-height: calc(100dvh - 32px); overflow: auto; }
+.vault-landing .dialog-actions { flex-wrap: wrap; }
+.vault-landing .landing-box { padding: 9px 11px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.vault-landing .landing-detail { display: grid; gap: 4px; font-size: var(--ui-font-meta); color: var(--text-muted); overflow-wrap: anywhere; }
+.vault-landing .landing-location { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vault-landing .landing-warn { color: var(--warning); }
+.vault-landing .landing-button-first { margin-inline-end: auto; }
+.am-app .vault-landing .dialog-check input { accent-color: var(--primary); }
+.am-app .vault-landing input[aria-invalid="true"] { border-color: var(--danger); }
+.vault-landing .un-tx { overflow-wrap: anywhere; }
+
+.ctx-menu.ctx-vault-menu[role="menu"] { width: 324px; max-width: calc(100vw - 16px); }
+.ctx-menu .ctx-split { display: flex; align-items: stretch; gap: 2px; }
+.ctx-menu .ctx-split > :first-child { flex: 1; min-width: 0; }
+.ctx-menu .ctx-split > .ctx-row-action { width: auto; color: var(--text-sec); font-size: var(--ui-font-meta); }
+.ctx-menu .ctx-note { display: flex; align-items: center; gap: 8px; padding: 6px 8px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.ctx-menu .ctx-note > svg { flex-shrink: 0; }
+.ctx-menu .ctx-dimmed > svg, .ctx-menu .ctx-dimmed .ctx-text > :first-child { opacity: .65; }
+.ctx-menu.ctx-vault-menu .ctx-shortcut { padding-inline-start: 4px; color: var(--text-muted); }
+.ctx-menu.ctx-vault-menu .ctx-check, .ctx-menu .ctx-check-space { flex: 0 0 14px; margin-inline-start: 0; }
+.vault-cloud-actions { margin-inline-start: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.vault-landing .landing-path { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 9px 11px; background: var(--menu-hover); border-radius: var(--radius-sm); }
+.vault-landing .landing-path svg, .vault-landing .landing-stop-warning svg { flex-shrink: 0; }
+.vault-landing .landing-path span { overflow-wrap: anywhere; }
+.vault-landing .landing-measures { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.vault-landing .landing-stop-warning { display: flex; align-items: center; gap: 8px; }
+.vault-landing .landing-stop-warning svg { color: var(--warning); }
+.ssync-cloud-row .vault-cloud-actions { flex-shrink: 0; max-width: 65%; }
+.ssync-cloud-row > b { min-width: 0; overflow-wrap: anywhere; }

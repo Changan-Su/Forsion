@@ -523,6 +523,20 @@ export async function moveSyncVaultPin(expectedRoot: string): Promise<'moved' | 
   })
 }
 
+/** Registry operations use the latest disk config and preserve all other fields. */
+export function withVaultRegistry<T>(work: (config: Readonly<StoredConfig>, save: (vaults: NonNullable<StoredConfig['vaults']>) => Promise<void>) => Promise<T>): Promise<T> {
+  const result = writes.then(async () => {
+    await settleLoading()
+    const stored = await storedConfigStrict()
+    if (stored.vaults !== undefined && (!Array.isArray(stored.vaults) || stored.vaults.some((v) => !v || typeof v.root !== 'string' || !path.isAbsolute(v.root)))) {
+      throw new Error('amadeus-config-malformed')
+    }
+    return work(stored, (vaults) => writeStored({ ...stored, vaults }))
+  })
+  writes = result.then(() => {}, () => {})
+  return result
+}
+
 /** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
 export async function readActiveVault(): Promise<OnlineVaultRef | null> {
   await writes // 排在已提交的写后面

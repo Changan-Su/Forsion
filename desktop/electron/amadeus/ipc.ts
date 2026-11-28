@@ -20,7 +20,8 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, quarantineCorruptConfig, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, withVaultRegistry, writeConfig, type AmadeusConfig } from './settings'
+import { registerVaultCreateIpc } from './vaultCreate'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
@@ -175,7 +176,7 @@ return () => { offTangu?.() }
 
 /** quitHeld:这一次 before-quit 正被同步门禁拦着问用户(main.ts 递 syncGateChain 在不在)。旧引擎的退出钩子那次不停同步,
  *  放行时才停;「取消退出」= 旧引擎一直在跑(syncQuitGate.onQuitProceeding)。缺省恒假 = 和原来的 app.once 一样。 */
-export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null, quitHeld: () => boolean = () => false): {
+export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null, quitHeld: () => boolean = () => false, getSettingsWindow: () => BrowserWindow | null = () => null): {
   getVaultRoot: () => string | null
   resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
@@ -368,9 +369,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     return switchLocalVault(root)
   })
 
+  registerVaultCreateIpc(ipcMain, getWindow, getSettingsWindow)
+
   // 清单 / 移出 / 显示不绑根:别的窗口还停在旧库时也要能看菜单。
   ipcMain.handle(IPC.listVaults, async () => {
-    const cfg = await localConfig()
+    const cfg = await withVaultRegistry(async (stored) => normalizeLocal(stored, isManagedCloudVault))
     const pinned = syncVaultRoot(cfg)
     const owned = contentSyncOwned(currentCloudAccountId())
     const home = app.getPath('home')

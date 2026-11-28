@@ -3,7 +3,7 @@
  * 没有 JSX、不出文案:状态一律回码,界面按码说。
  *
  * 顺序(勾着「上传到云端」时):
- *   1. 用库清单缓存先判同名(边打字边判,checkNewVaultName);撞了当场挡,本机什么都不建。缓存没有 / 读不出 = 不知道,不挡,等服务器说;
+ *   1. 用 Extend 的 resolveName 预判；通道不在或失败时由 create 裁决。
  *   2. 宿主 vaultCreate 建 `Vaults/<名>`、登记进清单,**不切过去**(切过去会挂载、建索引,文件夹就不再是空的,也成了 forget 不掉的当前库);
  *   3. vaultsync:create {root};
  *   4. 成功,或「离线 / 老服务器 / 准入挡住」这类只是上不了云的 → 本机那个库照样留着,打开它;
@@ -14,15 +14,8 @@
 import type { VsResult } from './client'
 import { discardCreatedFolder, type CreatedFolderHost, type DiscardOutcome } from './createdFolder'
 import { hostCreateError, type HostCreateError, type VaultCreateFn } from './download'
-import type { CreateOk, LibrariesValue, LibraryInfo, VaultSyncGet } from './types'
+import type { CreateOk, ResolveNameResult, VaultSyncGet } from './types'
 import type { SyncUiMode } from './mode'
-
-/** ⚠️ 口径假设(交回父会话):名字键 = NFC → 去首尾空白 → 小写,照 server / Extend `vaultName.ts`(规则只有那一份)。
- *  这里只拿它做「边打字边提示」,不当权威:服务器的 name_exists / reserved 兜底。Extend 说过 Genesis 不抄第三份 vaultNameKey(那条说的是本机文件夹配云端库,
- *  那件事由 get().localVaults[i].libraryId 给);可注入替换。 */
-export const advisoryNameKey = (name: string): string => name.normalize('NFC').trim().toLowerCase()
-/** 保留名(默认库的库内名与显示名),照 Extend core/vaultName.ts RESERVED_KEYS;同样只做提示。 */
-export const ADVISORY_RESERVED_KEYS: readonly string[] = ['my vault', '云端笔记', 'cloud notes']
 
 // ── 「上传到云端」这个勾 ──
 
@@ -44,30 +37,22 @@ export function uploadOption(o: { mode: SyncUiMode; signedIn: boolean | null; ge
 // ── 边打字边判 ──
 
 export type NameCheck =
-  /** 空的(只有空白):新建灰着,不提示 */
-  | { kind: 'empty' }
-  /** 没撞(或不勾上云,不判云端) */
   | { kind: 'clear' }
-  /** 不知道:清单缓存没有 / 读不出;不挡,等建的时候服务器说 */
   | { kind: 'unknown' }
-  /** 撞了云端已有的库:新建灰着,给「落盘它到这台…」(走 ⑧,带 libraryId)和「换个名字」 */
-  | { kind: 'name_exists'; libraryId: string; libraryKind: LibraryInfo['kind']; libraryName: string; prefix: string }
-  /** 「云端笔记」这类保留名:输入框标红 */
-  | { kind: 'reserved' }
+  | { kind: 'name_exists'; libraryId?: string }
+  | { kind: 'reserved' | 'invalid_name' }
 
-/** libraries:vaultSync.libraries() 的回复(缓存,不现取);stale 的照用(总比没有强),失败 = 不知道。 */
-export function checkNewVaultName(name: string, upload: boolean, libraries: VsResult<LibrariesValue> | null | undefined, key: (s: string) => string = advisoryNameKey): NameCheck {
-  if (!name.trim()) return { kind: 'empty' }
-  if (!upload) return { kind: 'clear' }
-  const k = key(name)
-  if (ADVISORY_RESERVED_KEYS.includes(k)) return { kind: 'reserved' }
-  if (!libraries || !libraries.ok || !libraries.value || !Array.isArray(libraries.value.list?.libraries)) return { kind: 'unknown' }
-  for (const lib of libraries.value.list.libraries) {
-    if (!lib || lib.kind === 'default' || lib.deleted) continue
-    const libKey = typeof lib.nameKey === 'string' && lib.nameKey ? lib.nameKey : typeof lib.name === 'string' ? key(lib.name) : null
-    if (libKey === k) return { kind: 'name_exists', libraryId: lib.id, libraryKind: lib.kind, libraryName: lib.name, prefix: lib.prefix }
-  }
-  return { kind: 'clear' }
+export async function checkNewVaultName(resolve: (name: string) => Promise<VsResult<ResolveNameResult>>, name: string): Promise<NameCheck> {
+  const r = await resolve(name)
+  if (!r.ok || !r.value || !Array.isArray(r.value.candidates)) return { kind: 'unknown' }
+  if (r.value.error === 'reserved' || r.value.error === 'invalid_name') return { kind: r.value.error }
+  if (r.value.error) return { kind: 'unknown' }
+  const [candidate] = r.value.candidates
+  if (!candidate) return { kind: 'clear' }
+  if (r.value.candidates.length !== 1 || !candidate.vaultId) return { kind: 'name_exists' }
+  if (candidate.kind === 'own') return { kind: 'name_exists', libraryId: candidate.vaultId }
+  if (candidate.kind === 'legacy' && candidate.prefix) return { kind: 'name_exists', libraryId: candidate.vaultId + ':' + candidate.prefix }
+  return { kind: 'name_exists' }
 }
 
 // ── 点了「新建」──
@@ -75,6 +60,7 @@ export function checkNewVaultName(name: string, upload: boolean, libraries: VsRe
 export interface CreateVaultDeps {
   /** 宿主 vaultCreate,existing:'refuse'(同名文件夹已在 → 抛 EEXIST,不并进别人的文件夹)。parent 不给 = 宿主 `<工作区>/Vaults`。 */
   vaultCreate: VaultCreateFn
+  resolveName?(name: string): Promise<VsResult<ResolveNameResult>>
   create(root: string): Promise<VsResult<CreateOk>>
   /** 打开这个库(pageStore.switchLocalVault:先在旧根落盘再换根)。 */
   open(root: string): Promise<void>
@@ -89,11 +75,11 @@ export type CreateVaultRun =
   | { kind: 'created'; root: string; upload: 'on'; bindingId: string; opened: boolean; openError?: string }
   | { kind: 'created'; root: string; upload: 'off'; opened: boolean; openError?: string }
   | { kind: 'created'; root: string; upload: 'failed'; reason: CreateLocalReason; opened: boolean; openError?: string }
-  /** 撞了云端的名字。source:cache = 预判挡住(本机什么都没建),server = 建的时候服务器才说(cleanup 是刚建的空文件夹撤没撤)。
+  /** 撞了云端的名字。source:resolver = 预判挡住(本机什么都没建),server = 建的时候服务器才说(cleanup 是刚建的空文件夹撤没撤)。
    *  libraryId 可能没有(服务器没回、Extend 也没查到)→ 「落盘它到这台…」只能灰着 */
-  | { kind: 'name_exists'; source: 'cache' | 'server'; libraryId?: string; cleanup: DiscardOutcome | null }
+  | { kind: 'name_exists'; source: 'resolver' | 'server'; libraryId?: string; cleanup: DiscardOutcome | null }
   /** 名字本身上不了云(保留名 / 云端不认):对话框留着让人换名;cleanup 同上 */
-  | { kind: 'name_rejected'; code: 'reserved' | 'invalid_name'; source: 'cache' | 'server'; cleanup: DiscardOutcome | null }
+  | { kind: 'name_rejected'; code: 'reserved' | 'invalid_name'; source: 'resolver' | 'server'; cleanup: DiscardOutcome | null }
   /** 名字是空的:什么都不做 */
   | { kind: 'empty_name' }
   /** 宿主没建成(名字不合本机规矩 / 同名文件夹已在 / 其他):什么都没写 */
@@ -104,13 +90,13 @@ export type CreateVaultRun =
 const NAME_REJECTED = new Set(['reserved', 'invalid_name'])
 const codeOf = (err: string): string => /([a-z][a-z0-9_-]+)\s*$/.exec(err)?.[1] ?? err
 
-export async function runCreateVault(deps: CreateVaultDeps, o: { name: string; upload: boolean; libraries?: VsResult<LibrariesValue> | null; key?: (s: string) => string }): Promise<CreateVaultRun> {
+export async function runCreateVault(deps: CreateVaultDeps, o: { name: string; upload: boolean }): Promise<CreateVaultRun> {
   const name = o.name.trim()
   if (!name) return { kind: 'empty_name' }
-  if (o.upload) {
-    const pre = checkNewVaultName(name, true, o.libraries, o.key)
-    if (pre.kind === 'name_exists') return { kind: 'name_exists', source: 'cache', libraryId: pre.libraryId, cleanup: null }
-    if (pre.kind === 'reserved') return { kind: 'name_rejected', code: 'reserved', source: 'cache', cleanup: null }
+  if (o.upload && deps.resolveName) {
+    const pre = await checkNewVaultName(deps.resolveName, name)
+    if (pre.kind === 'name_exists') return { kind: 'name_exists', source: 'resolver', libraryId: pre.libraryId, cleanup: null }
+    if (pre.kind === 'reserved' || pre.kind === 'invalid_name') return { kind: 'name_rejected', code: pre.kind, source: 'resolver', cleanup: null }
   }
   let made: { root: string; created: boolean }
   try {
