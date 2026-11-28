@@ -47,6 +47,31 @@ export function maskAmadeusConfig<T extends {cloudSync?:{enabled?:boolean};entry
   const roots=new Set(own.value.entryRoots.map(canonRoot))
   return {...cfg,...(own.value.mirror==='off'?{cloudSync:{...cfg.cloudSync,enabled:false}}:{}),entrySync:(cfg.entrySync??[]).filter(v=>!roots.has(canonRoot(v.vaultRoot)))}
 }
+/** 宿主递给旧引擎的 readConfig 由这些读拼成(amadeus/ipc.ts 只调 readMaskedAmadeusConfig)。 */
+export interface MaskedConfigReads<T> {
+  /** 宽松读(settings.readConfig)。 */
+  readConfig():Promise<T>
+  /** 上面那份宽松读的底稿来自一次读失败(缓存成了 {},看着像「什么都没配」)。 */
+  looseReadFailed():boolean
+  /** syncOwnershipV2 严格读:读不了 / 形状不对就抛。 */
+  readV2(account:string|null):Promise<SyncOwnershipV2|null>
+  /** 老的全局认领(新同步状态文件的 .owned)严格读:没有文件 = false,读不了 / 坏了就抛。 */
+  legacyOwned(account:string|null):boolean
+}
+/** 旧引擎看到的配置(H3 清单第 6 件):遮罩依赖的读任何一样读不出 = unknown = 整份遮掉,旧引擎按「不知道」停着,
+ *  不拿一份看着像「没认领 / 什么都没配」的读数照跑。这份读数只读,不写回。 */
+export async function readMaskedAmadeusConfig<T extends {cloudAccountId?:string|null;cloudSync?:{enabled?:boolean};entrySync?:Array<{vaultRoot:string}>}>(reads:MaskedConfigReads<T>):Promise<T>{
+  const cfg=await reads.readConfig()
+  const account=cfg.cloudAccountId??null
+  let own:OwnershipRead,legacy=false
+  try{
+    if(reads.looseReadFailed())throw Error('amadeus-config-unreadable')
+    const v2=await reads.readV2(account)
+    own=v2?{kind:'v2',value:v2}:{kind:'none'}
+    legacy=reads.legacyOwned(account)
+  }catch{own={kind:'unknown'}}
+  return maskAmadeusConfig(cfg,own,legacy)
+}
 /** 宿主对新同步(Forsion Extend contentSync)的能力声明:这些可选族 merge() 会按它们自己的规则合并(契约 agentSyncRules)。
  *  'settings' = 随账号走的设置文件 human/Settings/<name>.db 走 mergeSettingsDb(恒有结果、不出冲突副本、本机独有的行不丢)。
  *  Extend 走 npm 单独更新、会跑在老桌面上:只有看到这里列了某个族才碰它;老宿主的 contentSync 里没有这个成员 = 没声明 = 那个族整个不动。

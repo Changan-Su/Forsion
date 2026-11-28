@@ -1,4 +1,4 @@
-import { contentSyncOwned, maskAmadeusConfig, type OwnershipRead } from '../contentSyncHost'
+import { contentSyncOwned, contentSyncOwnedStrict, readMaskedAmadeusConfig } from '../contentSyncHost'
 import { onQuitProceeding } from '../syncQuitGate'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
@@ -20,7 +20,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, looseConfigReadFailed, readConfig, readSyncOwnershipV2, updateConfig, updateLocalVaultConfig, writeConfig, type AmadeusConfig } from './settings'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
@@ -1232,14 +1232,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动
-    readConfig: async () => {
-      const cfg = await readConfig()
-      const account = cfg.cloudAccountId ?? null
-      let own: OwnershipRead
-      try { const v2 = await readSyncOwnershipV2(account); own = v2 ? { kind: 'v2', value: v2 } : { kind: 'none' } } catch { own = { kind: 'unknown' } }
-      return maskAmadeusConfig(cfg, own, contentSyncOwned(account))
-    },
+    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动。
+    // 遮罩依赖的读(这次宽松读的底稿、syncOwnershipV2、新同步状态文件的 .owned)任何一样读不出也整份遮掉(H3 清单第 6 件)
+    readConfig: () => readMaskedAmadeusConfig({
+      readConfig: () => readConfig(),
+      looseReadFailed: looseConfigReadFailed,
+      readV2: readSyncOwnershipV2,
+      legacyOwned: contentSyncOwnedStrict,
+    }),
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),

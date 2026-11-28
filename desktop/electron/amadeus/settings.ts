@@ -62,6 +62,10 @@ interface StoredConfig extends Omit<AmadeusConfig, 'cloudAccountId'> {
 let cache: StoredConfig | null = null
 let loading: Promise<StoredConfig> | null = null
 let writes: Promise<void> = Promise.resolve()
+/** 宽松读的缓存来自一次读失败(不是 ENOENT,缓存成了 {})。只有以严格读为底的写换掉缓存时才清;
+ *  给旧引擎的遮罩用(contentSyncHost.readMaskedAmadeusConfig):读失败 ≠ 什么都没配。 */
+let looseLoadFailed = false
+export function looseConfigReadFailed(): boolean { return looseLoadFailed }
 
 export function currentCloudAccountId(): string | null {
   const creds = loadTanguCreds()
@@ -94,7 +98,10 @@ async function storedConfig(): Promise<StoredConfig> {
   if (cache) return cache
   if (!loading) loading = (async () => {
     let stored: StoredConfig
-    try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch { stored = {} }
+    try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch (e) {
+      stored = {}
+      looseLoadFailed = (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
+    }
     cache = normalizeStored(stored)
     return cache
   })()
@@ -149,6 +156,7 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
     await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
     await fs.rename(tmp, file)
     cache = out
+    looseLoadFailed = false // 以严格读为底:缓存换成了盘上的真值
   })
   writes = work.catch(() => {})
   return work
@@ -200,6 +208,7 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = next
+  if (base) looseLoadFailed = false // 只有以严格读为底的这一写才算换上了真值;以宽松缓存为底的照旧不可信
   return drop
 }
 
@@ -309,6 +318,7 @@ async function writeStored(out: StoredConfig): Promise<void> {
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = out
+  looseLoadFailed = false // 调用方都以严格读为底
 }
 
 /** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
