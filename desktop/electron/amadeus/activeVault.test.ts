@@ -217,6 +217,69 @@ describe('switching to a local vault clears activeVault; restore does not', () =
     await invoke(IPC.switchVault, local) // 本来就没有在线库:不再广播
     expect(env.sent.filter((s) => s.ch === ACTIVE_VAULT_IPC.changed)).toHaveLength(1)
   })
+
+  it('picking the same local vault the online session sat on (lastVault unchanged) still clears it', async () => {
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(local)
+    await fs.writeFile(cfgFile(), JSON.stringify({ lastVault: local, localVault: local, vaults: [{ root: local }], activeVault: refOf('A') }))
+    const { registerIpc } = await import('./ipc')
+    const { IPC } = await import('@amadeus-shared/ipc')
+    const { ACTIVE_VAULT_IPC } = await import('./activeVaultKeys')
+    registerIpc(() => null)
+    await env.handlers.get(IPC.switchVault)!({ sender: { id: 1 } }, local)
+    expect('activeVault' in (await readCfg())).toBe(false)
+    expect(env.sent.filter((s) => s.ch === ACTIVE_VAULT_IPC.changed)).toEqual([{ ch: ACTIVE_VAULT_IPC.changed, payload: { ref: null } }])
+  })
+})
+
+describe('any config write that changes lastVault drops activeVault in the same write', () => {
+  it('writeConfig / updateConfig moving lastVault drops it and broadcasts { ref: null }; same lastVault (any spelling) keeps it', async () => {
+    const { writeConfig, updateConfig } = await import('./settings')
+    await fs.writeFile(cfgFile(), JSON.stringify({ lastVault: '/x/Vault', localVault: '/x/Vault', activeVault: refOf('A') }))
+    const t = await setup()
+    await writeConfig({ lastPage: 'a.md' }) // rememberPage
+    await writeConfig({ lastVault: '/x/Vault/', lastPage: 'b.md' }) // 同一个库,写法不同
+    await updateConfig((cfg) => { cfg.lastPage = 'c.md' }) // 读改写带回原样的 lastVault
+    expect((await readCfg()).activeVault).toEqual(refOf('A'))
+    expect(t.broadcasts).toEqual([])
+    await writeConfig({ lastVault: '/x/Notes', localVault: '/x/Notes' }) // Extend 的胶囊切本机就是这样写的
+    const after = await readCfg()
+    expect('activeVault' in after).toBe(false)
+    expect(after.lastVault).toBe('/x/Notes')
+    expect(t.broadcasts).toEqual([{ ch: t.K.changed, payload: { ref: null } }])
+    await t.set(refOf('A')) // set 自己不动 lastVault
+    expect((await readCfg()).lastVault).toBe('/x/Notes')
+    await updateConfig((cfg) => { cfg.lastVault = '/x/Vault' })
+    expect('activeVault' in (await readCfg())).toBe(false)
+    expect(t.broadcasts.filter((b) => b.ch === t.K.changed).map((b) => b.payload)).toEqual([{ ref: null }, { ref: refOf('A') }, { ref: null }])
+  })
+
+  it('the host’s own startup fallbacks rewrite lastVault but keep activeVault (contract: falling back does not clear)', async () => {
+    const { registerIpc } = await import('./ipc')
+    const { IPC } = await import('@amadeus-shared/ipc')
+    registerIpc(() => null)
+    const invoke = (ch: string, ...a: unknown[]) => env.handlers.get(ch)!({ sender: { id: 1 } }, ...a)
+    // 没有 lastVault(迁移删掉了、或首启)→ 建默认库
+    await fs.writeFile(cfgFile(), JSON.stringify({ activeVault: refOf('A') }))
+    const restored = await invoke(IPC.restoreVault)
+    expect(restored.root).toBe(path.join(env.root, 'workspace', 'Amadeus'))
+    expect((await readCfg()).activeVault).toEqual(refOf('A'))
+    expect((await readCfg()).lastVault).toBe(path.join(env.root, 'workspace', 'Amadeus'))
+  })
+
+  it('restoreVault moving off an unmountable mirror keeps activeVault too', async () => {
+    const { unscopedCloudVaultDir } = await import('./cloudPaths')
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(local); await fs.mkdir(unscopedCloudVaultDir(), { recursive: true })
+    await fs.writeFile(cfgFile(), JSON.stringify({ lastVault: unscopedCloudVaultDir(), localVault: local, activeVault: refOf('A') }))
+    const { registerIpc } = await import('./ipc')
+    const { IPC } = await import('@amadeus-shared/ipc')
+    registerIpc(() => null)
+    const restored = await env.handlers.get(IPC.restoreVault)!({ sender: { id: 1 } })
+    expect(restored.root).toBe(local)
+    expect((await readCfg()).lastVault).toBe(local)
+    expect((await readCfg()).activeVault).toEqual(refOf('A'))
+  })
 })
 
 describe('CloudHost.openLibrary / canOpenOnline', () => {
@@ -374,6 +437,20 @@ describe('legacy mirror migration', () => {
     before = await bytes()
     expect(await migrate()).toBe(false) // 用户设过的不覆盖
     expect(await bytes()).toBe(before)
+  })
+
+  it('startup wiring is off until U3a: with the switch off nothing is read or written', async () => {
+    const { MIRROR_MIGRATION_ENABLED, migrateOnStartup } = await import('./activeVault')
+    expect(MIRROR_MIGRATION_ENABLED).toBe(false)
+    await seed()
+    const before = await bytes()
+    expect(await migrateOnStartup(`${CLOUD}::A`)).toBe(false)
+    expect(await bytes()).toBe(before)
+    await fs.writeFile(cfgFile(), '{"lastVault":') // 关着时连读都不读:坏配置也不报错
+    await expect(migrateOnStartup(`${CLOUD}::A`)).resolves.toBe(false)
+    await seed()
+    expect(await migrateOnStartup(`${CLOUD}::A`, true)).toBe(true) // 打开以后就是上面那套迁移
+    expect((await readCfg()).activeVault?.vaultId).toBe('vault-1')
   })
 
   it('no real local vault → lastVault is dropped (restore then makes the default vault); no config file → nothing is created', async () => {

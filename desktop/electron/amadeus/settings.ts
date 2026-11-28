@@ -166,11 +166,23 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
   })
 }
 
-async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, dropActiveVault = false): Promise<void> {
+/** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
+const sameLastVault = (a: unknown, b: unknown): boolean => {
+  const has = (v: unknown): v is string => typeof v === 'string' && v !== ''
+  return has(a) ? has(b) && path.resolve(a) === path.resolve(b) : !has(b)
+}
+/** activeVault 怎么跟着这次写走:auto = 这次改了 lastVault 就一并清掉(本机侧换了库 = 不再恢复在线库;
+ *  在线时 lastVault 不动,所以不会误清);drop = 一定清;keep = 宿主自己的启动回落(restoreVault / 首启建默认库),照契约「回落不清」。 */
+type ActiveVaultMode = 'auto' | 'drop' | 'keep'
+
+/** 回这一次是否清掉了一个在线库。 */
+async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, mode: ActiveVaultMode = 'auto'): Promise<boolean> {
   const stored = await storedConfig()
   const { cloudSync, entrySync, cloudAccountId: _owner, ...local } = snapshot
   const next: StoredConfig = { ...stored, ...local }
-  if (dropActiveVault) delete next.activeVault
+  const had = next.activeVault !== undefined && next.activeVault !== null
+  const drop = had && (mode === 'drop' || (mode === 'auto' && 'lastVault' in local && !sameLastVault(local.lastVault, stored.lastVault)))
+  if (drop) delete next.activeVault
   if (accountId && ('cloudSync' in snapshot || 'entrySync' in snapshot)) {
     const key = cloudAccountNamespace(accountId)
     next.cloudAccounts = { ...stored.cloudAccounts, [key]: {
@@ -185,11 +197,22 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), 'utf8')
   await fs.rename(tmp, file)
   cache = next
+  return drop
 }
 
-export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCloudAccountId()): Promise<void> {
+/** 普通写顺带清掉了 activeVault 时通知(宿主据此广播 amadeus:active-vault:changed { ref:null })。Extend 的胶囊切本机经 writeConfig / updateConfig 写,宿主只能在这里认出来。 */
+const activeVaultCleared = new Set<() => void>()
+export function onActiveVaultCleared(cb: () => void): () => void {
+  activeVaultCleared.add(cb)
+  return () => { activeVaultCleared.delete(cb) }
+}
+const emitActiveVaultCleared = (dropped: boolean): void => {
+  if (dropped) for (const cb of [...activeVaultCleared]) { try { cb() } catch { /* 订阅者自理 */ } }
+}
+
+export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCloudAccountId(), opts: { keepActiveVault?: boolean } = {}): Promise<void> {
   const snapshot = structuredClone(patch)
-  const work = writes.then(() => persistConfig(snapshot, accountId))
+  const work = writes.then(() => persistConfig(snapshot, accountId, opts.keepActiveVault ? 'keep' : 'auto')).then(emitActiveVaultCleared)
   writes = work.catch(() => {})
   return work
 }
@@ -243,7 +266,7 @@ export function updateConfig(
 ): Promise<AmadeusConfig> {
   const work = writes.then(async () => {
     const config = await readConfig(accountId)
-    if (await update(config) !== false) await persistConfig(config, accountId)
+    if (await update(config) !== false) emitActiveVaultCleared(await persistConfig(config, accountId))
     return config
   })
   writes = work.then(() => {}, () => {})
@@ -311,10 +334,7 @@ export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, 
   const work = writes.then(async () => {
     const config = await readConfig(accountId)
     update(config)
-    const stored = await storedConfig()
-    const had = stored.activeVault !== undefined && stored.activeVault !== null
-    await persistConfig(config, accountId, true)
-    return had
+    return persistConfig(config, accountId, 'drop') // 广播由调用方在换完根以后发
   })
   writes = work.then(() => {}, () => {})
   return work

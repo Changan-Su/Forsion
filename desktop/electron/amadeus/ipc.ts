@@ -326,7 +326,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
     const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
+    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
     return activateRoot(root, false)
   }
 
@@ -412,7 +412,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const cfg = await readConfig()
       if (!cfg.localVault || isManagedCloudVault(cfg.localVault)) return ensureDefaultVault()
       lastVault = cfg.localVault
-      await writeConfig({ lastVault, lastPage: undefined })
+      await writeConfig({ lastVault, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
     }
     try {
       const stat = await fs.stat(lastVault)

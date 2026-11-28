@@ -151,7 +151,7 @@ import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { currentCloudAccountId as currentAmadeusAccountId, readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
-import { createActiveVaultHost, migrateLegacyMirrorVault } from './amadeus/activeVault'
+import { createActiveVaultHost, migrateOnStartup } from './amadeus/activeVault'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { legacyRemoteSync, registerRemoteSync } from './remotesyncIpc'
 import { createSyncTargets, registerSyncTargetsIpc } from './syncTargets'
@@ -3958,8 +3958,9 @@ app.whenReady().then(async () => {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
     if (firstBootPrefetch !== 'skipped') corePluginUpdater.reset()
-    // 在线库:老配置迁移(lastVault 停在这个账号的云镜像 → activeVault)必须早于 Extend 装载和第一个窗口;失败只记日志、不改配置
-    await migrateLegacyMirrorVault(currentAmadeusAccountId()).catch((e) => console.warn('[amadeus] active vault migration skipped:', (e as Error)?.message))
+    // 在线库:老配置迁移(lastVault 停在这个账号的云镜像 → activeVault)必须早于 Extend 装载和第一个窗口;失败只记日志、不改配置。
+    // 受 MIRROR_MIGRATION_ENABLED 控制,U3a 之前关着(activeVault.ts)
+    await migrateOnStartup(currentAmadeusAccountId()).catch((e) => console.warn('[amadeus] active vault migration skipped:', (e as Error)?.message))
     activeVaultHost.register(ipcMain)
     const host: CloudHost = {
       getCloud: async () => {

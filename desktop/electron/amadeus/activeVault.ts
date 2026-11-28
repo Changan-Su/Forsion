@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import type { ActiveVaultRead, OnlineVaultRef } from '@amadeus-shared/ipc'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
-import { cloudAccountNamespace, migrateMirrorActiveVault, parseOnlineVaultRef, readActiveVault, writeActiveVault } from './settings'
+import { cloudAccountNamespace, migrateMirrorActiveVault, onActiveVaultCleared, parseOnlineVaultRef, readActiveVault, writeActiveVault } from './settings'
 import { cloudVaultDir, isManagedCloudVault } from './cloudPaths'
 
 export const OPEN_LIBRARY_TIMEOUT_MS = 30_000
@@ -98,6 +98,8 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
 
   return {
     register(ipc) {
+      // 普通配置写改了 lastVault(Extend 的胶囊切本机等)顺带清掉了在线库:照样告诉各窗口
+      onActiveVaultCleared(() => deps.broadcast(ACTIVE_VAULT_IPC.changed, { ref: null }))
       ipc.handle(ACTIVE_VAULT_IPC.get, async (e) => {
         if (!deps.isTrusted(e)) throw new Error('forbidden')
         return get()
@@ -151,7 +153,16 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
   }
 }
 
-/** 老配置迁移(lastVault = 这个账号的云镜像 → activeVault = 默认库)。主进程启动、开窗之前调;失败只记日志。 */
+/** 老配置迁移(lastVault = 这个账号的云镜像 → activeVault = 默认库)。 */
 export function migrateLegacyMirrorVault(accountId: string | null): Promise<boolean> {
   return migrateMirrorActiveVault(accountId, (id) => cloudVaultDir(id), isManagedCloudVault)
+}
+
+/** 启动时跑不跑老配置迁移。U3a 装好转发壳、渲染层能按 activeVault 打开在线库的那个版本里改成 true。
+ *  在那之前迁移会把停在云端那一侧的用户落到本机库(没人读 activeVault),所以先关着。 */
+export const MIRROR_MIGRATION_ENABLED = false
+
+/** 启动接线(main.ts 开窗之前 await):开关关着就什么都不做,不读不写配置。 */
+export function migrateOnStartup(accountId: string | null, enabled: boolean = MIRROR_MIGRATION_ENABLED): Promise<boolean> {
+  return enabled ? migrateLegacyMirrorVault(accountId) : Promise.resolve(false)
 }
