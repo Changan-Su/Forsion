@@ -240,7 +240,8 @@ async function main() {
     await waitState((x) => x.engine === 'stopped', 30000, 'engine stopped')
     // (before PRoot patch 0005 about 1 in 4 cold starts on this emulator died with a glibc "double free" — see
     // scripts/local-engine/proot-brk-probe/; start() retries once itself; a failed start toasts and stays on the list,
-    // so the bench still taps again, up to 3 times, and reports how many: more than one is a regression)
+    // so the bench still taps again, up to 3 times, and reports how many: more than one is a regression; one tap can
+    // still hide a first-spawn crash that the native retry absorbed — proot-brk-probe/app-loop.cjs counts spawns)
     let back = null
     let taps = 0
     while (taps < 3 && (!back || back.engine !== 'running')) {

@@ -34,14 +34,15 @@ mobile/android/native/proot/build-proot.sh --check  # 重建后比对 sha256，�
 3. `proot-0003-arm64-new-path-syscalls.patch` — arm64 上较新的带路径系统调用（`openat2`、`faccessat2`、`fchmodat2`、`execveat`、`open_tree`、`move_mount`、`*xattrat` 等）也做路径翻译（不翻译的话它们会绕过 guest 根目录）。
 4. `proot-0004-link2symlink-fstat-nonfile.patch` — `--link2symlink` 下 `fstat` 管道 / socket 这类不指向文件的描述符时不再出错，并正确去掉 ` (deleted)` 后缀。
 5. `proot-0005-no-heap-emulation.patch` — `brk(2)` 不再经 PRoot 的堆模拟（`syscall/heap.c`），直接交给内核，也不再进 seccomp 的拦截表。
-   - 原因：堆模拟把堆挪到程序 BSS 后面，用 `mremap(2)` 原地扩。Android 15 arm64 模拟器（6.6 内核）上，引擎冷启动约四分之一会让 glibc 报 `double free or corruption (out)` 退出。
+   - 原因：堆模拟按程序 BSS 的末尾给 `mmap(2)` 一个地址提示来放堆，再用 `mremap(2)` 原地扩。Android 15 arm64 模拟器（6.6 内核）上，引擎冷启动约四分之一会让 glibc 报 `double free or corruption (out)` 退出。
    - 证据：同一份环境里对照了几种跑法，各跑 20–30 次。
      - 不经 PRoot：0 崩。
      - 原版 PRoot（shell 用户 / App 身份）：5/20、4/20 崩。
      - 只关掉堆模拟的实验版：0/30。
      - 同一个实验版、堆模拟开着：6/20。
-   - 堆模拟里具体哪一步出错没有查到。真机（另一套内核）上开着堆模拟也没崩过，关掉之后真机没测过。
-   - glibc 在 `brk` 扩不动时会自己改用 `mmap(2)`，所以把 `brk` 交给内核不影响分配，只是堆不再紧挨程序。
+     - 补丁 5 的最终版：经原生插件起停 40 轮，0 崩；紧接着换回原版对照，37 次拉起 8 次崩。
+   - 只能说触发点是堆模拟：同一个二进制里只关掉它就不崩。具体哪一步出错没有查到。11-27 在一台真机上用原版起过 21 次，没崩；那台的内核版本没有记，补丁 5 在真机上没测过。
+   - glibc 的 malloc 在 `brk` 扩不动时会自己改用 `mmap(2)`，所以环境里的 glibc 程序（node、apt / dpkg、git、bash）不受影响，补丁后实测过。只用 `sbrk`、或要求堆紧挨程序的程序（比如老版 Emacs 的 `unexec`）可能受影响，这是有意的取舍。
    - 复现手段：`mobile/scripts/local-engine/proot-brk-probe/`。
 
 ## 只在测试渠道的包里带

@@ -200,7 +200,8 @@ async function main() {
   // accounts: another account signing in stops the previous account's engine; signed out = no start.
   // (Before PRoot patch 0005 about 1 in 4 cold starts on this emulator died with a glibc "double free" — see
   // scripts/local-engine/proot-brk-probe/; start() retries once itself, the bench still allows up to three start()
-  // calls here and reports how many it took: more than one is a regression.)
+  // calls here and reports how many it took: more than one is a regression. One call can still hide a first-spawn
+  // crash that the native retry absorbed; proot-brk-probe/app-loop.cjs counts spawns.)
   let starts = 0
   for (let r; starts < 3; ) {
     starts++

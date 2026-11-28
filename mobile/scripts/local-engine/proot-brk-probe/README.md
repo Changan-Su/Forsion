@@ -1,7 +1,7 @@
 # PRoot brk 复现手段（#928 B1）
 
 现象：Android 15 arm64 模拟器上，PRoot 里的 node 起引擎时约四分之一以 glibc `double free or corruption (out)` 退出。
-根源在 PRoot 的堆模拟（`syscall/heap.c`），修法见 `mobile/android/native/proot/patches/proot-0005-no-heap-emulation.patch`。
+触发点是 PRoot 的堆模拟（`syscall/heap.c`）：同一个二进制里只关掉它就不崩，具体哪一步出错没有查到。修法见 `mobile/android/native/proot/patches/proot-0005-no-heap-emulation.patch`。
 
 ## 文件
 
@@ -52,6 +52,8 @@ adb shell "PB=/data/local/tmp/<另一个 libproot.so> sh /data/local/tmp/b1-dev.
 |---|---|---|
 | `app-loop.cjs`，起停 40 轮，间隔 0 | 补丁 5 | 40/40 第一次拉起就健康，0 次崩溃；就绪中位 4.3 s，最长 18.7 s |
 | `app-loop.cjs`，起停 30 轮，间隔 0（对照，紧接着跑） | 原版（补丁 1–4） | 37 次拉起里 8 次崩在 `double free or corruption (out)`；有 1 轮两次都崩，`start()` 失败 |
+| 按评审改完的 `app-loop.cjs`，12 轮 | 补丁 5 | 12/12，0 崩 |
+| 同上（对照） | 原版 | 16 次拉起 6 次崩，2 轮 `start()` 失败，退出码 1 |
 | `guest-tools-app.cjs` | 补丁 5 | bash、git（`fsck --strict` 干净）、node 200 MB 堆、npm install 都正常；apt 能下载和解包，jq 能跑；dpkg 停在 unpacked（写不了 `status-old` 硬链接，`--link2symlink` 关着时本来就这样，和补丁无关） |
 
-logcat 里每次崩溃各有两行带 `double free`：一行是引擎输出，一行是 `engine start attempt N failed`。
+`app-loop.cjs` 按 `engine start attempt N failed` 数失败的拉起，`doubleFreeSpawns` 数引擎自己输出的 `double free` 那行（失败摘要只带最后几行，不一定重复它）。对照那轮是改脚本前跑的，当时按行数算是 16 行，正好 8 次 × 2 行。

@@ -46,9 +46,12 @@ case "$MODE" in
     export HOME=$EH TMPDIR=/data/local/tmp/b1tmp TANGU_HOME=$EH
     RUN="$F/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 --library-path $F/usr/lib/aarch64-linux-gnu $F/opt/node/bin/node"
     CWD=$F/opt/tangu; T=/data/local/tmp/b1-out ;;
-  *)
+  direct)
     RUN="$D/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1 --library-path $D/usr/lib/aarch64-linux-gnu $D/opt/node/bin/node"; T=/data/local/tmp/b1-out ;;
+  *) echo "unknown mode '$MODE'"; exit 2 ;;
 esac
+case "$N" in ''|*[!0-9]*|0) echo "n must be > 0"; exit 2 ;; esac
+[ "$W" = engine ] || [ -n "$JS" ] || { echo "unknown workload '$W'"; exit 2; }
 cd $CWD
 runone() {
   if [ "$W" = engine ]; then
@@ -60,12 +63,14 @@ runone() {
       if ! kill -0 $p 2>/dev/null; then wait $p; rc=$?; break; fi
       sleep 0.1; k=$((k+1))
     done
-    if grep -q "http://127.0.0.1:" $T 2>/dev/null; then
+    # ready line seen: still alive a second later counts as a start (the crash seen so far comes before the line)
+    if grep -q "http://127.0.0.1:" $T 2>/dev/null; then sleep 1; kill -0 $p 2>/dev/null || { wait $p; rc=$?; [ $rc -eq 0 ] && rc=125; }; fi
+    if [ $rc -eq 0 ] && grep -q "http://127.0.0.1:" $T 2>/dev/null; then
       out=ok; kill $p 2>/dev/null; j=0
       while kill -0 $p 2>/dev/null && [ $j -lt 50 ]; do sleep 0.1; j=$((j+1)); done
       kill -9 $p 2>/dev/null; wait $p 2>/dev/null
     else
-      out=$(tail -c 400 $T); [ $rc -eq 0 ] && rc=124; kill -9 $p 2>/dev/null; wait $p 2>/dev/null
+      out=$(tail -c 400 $T); grep -q "double free" $T 2>/dev/null && out="double free: $out"; [ $rc -eq 0 ] && rc=124; kill -9 $p 2>/dev/null; wait $p 2>/dev/null
     fi
   else
     out=$($RUN -e "$JS" 2>&1); rc=$?
@@ -82,3 +87,4 @@ while [ $i -lt $N ]; do
   i=$((i+1))
 done
 echo "RESULT mode=$MODE workload=$W nosec=${NOSECCOMP:-0} pb=$(basename $PB) n=$N bad=$bad doublefree=$df"
+[ $bad -eq 0 ]
