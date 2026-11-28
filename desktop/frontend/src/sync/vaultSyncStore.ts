@@ -19,7 +19,8 @@ import { amadeus } from '@amadeus/api'
 import { assumedContentFeed, assumedEntryFeed, contentFeeds, legacyFeed, legacyFeedId, remoteFeed, type ContentStatusLite } from './feeds'
 import { v2Feeds, v2Roots } from './v2/feed'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, vaultSync } from './v2/client'
-import { modeFromStatus, setSyncMode } from './v2/mode'
+import { modeFromStatus, setSyncMode, useSyncMode } from './v2/mode'
+import { windowKind } from '../windowKind'
 import type { VaultSyncStatus } from './v2/types'
 
 type RemoteLite = Pick<RemoteSyncState, 'config' | 'running' | 'lastReport' | 'progress' | 'root' | 'rootError'>
@@ -223,6 +224,14 @@ async function pullRemote(): Promise<void> {
   if (st) set({ remote: { config: st.config, running: st.running, lastReport: st.lastReport, progress: st.progress, root: st.root, rootError: st.rootError } })
 }
 
+/** 主窗切回前台:告诉 Extend(vaultsync:run {reason:'focus'}),由它按自己的节流决定跑不跑一轮、重不重取云端库清单(隔 1 分钟;
+ *  契约 step34 E3L-2)。只主窗发(独立窗 / 浮窗 / Mini 不发);只在 v2 完整模式下发 —— 老 Extend(没有 vaultsync:*)、兼容模式、
+ *  Extend 不在、模式还没问出来都不发。结果不看、不记日志。宿主主进程那边不另发(两处只发一处)。 */
+export function kickVaultSyncOnFocus(): void {
+  if (windowKind() !== 'main' || useSyncMode.getState().mode !== 'full') return
+  void vaultSync.run(undefined, 'focus') // call() 不会抛:通道不在 / 调用失败都回 { ok:false }
+}
+
 /** 幂等:第一个用到状态源的组件挂载时调一次。 */
 export function ensureVaultSyncSubscribed(): void {
   if (subscribed || typeof window === 'undefined') return
@@ -250,5 +259,5 @@ export function ensureVaultSyncSubscribed(): void {
   } catch { /* 桥不全 */ }
   setInterval(() => set({ now: Date.now() }), 30_000)
   setInterval(() => { void pullVaults(); void pullRemote() }, 60_000)
-  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent(); void pullRemote() })
+  if (typeof window.addEventListener === 'function') window.addEventListener('focus', () => { void pullVaults(); void pollContent(); void pullRemote(); kickVaultSyncOnFocus() })
 }

@@ -88,7 +88,11 @@ export interface CloudHost {
   /** auth.json **原样**同步读(空串 = 没有),不做 DEFAULT_CLOUD_URL 回落:身份、基线指纹、镜像目录都从这里推,
    *  getCloud() 的回落会把「没登录」凭空造成一个账号。 */
   readCreds(): { cloudUrl: string; token: string }
-  /** 当前账号身份(shared/forsionAccount.ts 的 forsionAccountId(readCreds()));未登录 / 拿不到 = null。 */
+  /** 当前账号身份(shared/forsionAccount.ts 的 forsionAccountId(readCreds()));未登录 / 拿不到 = null。
+   *  ⚠️必须和 Extend 的 forsionAccountId(src/core/account.ts)是同一个算法:`${cloud origin + path,去掉尾斜杠}::${userId}`
+   *  (origin 小写、去缺省端口;userId 取 JWT 的 userId ?? sub)。Extend 的云端库清单用它自己读凭据算出的账号 id 和这里比,
+   *  对不上就一直不发请求(契约 step34 E3L-4);在线库 activeVault.account = sha256(这个串)也靠它。
+   *  改这里之前先改两边的 forsionAccountId,shared/forsionAccount.test.ts 的「pinned vectors」钉着串的样子。 */
   accountId(): string | null
   /** 远程同步(设置 → 同步 → 本地库远程同步)注册一个外置后端(remotesync/backends.ts);remotesync:get 会把 kind 报给渲染层。 */
   registerRemoteSyncBackend(kind: string, factory: RemoteBackendFactory): void
