@@ -20,7 +20,7 @@ import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/appro
 import { UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
-import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
+import './amadeus/preload' // Amadeus Space:暴露 window.amadeusLocal(vault IPC 桥;window.amadeus 由渲染层转发壳装),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
 import './syncRecordsPreload' // 同步记录:暴露 window.syncRecords,副作用导入
 

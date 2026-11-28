@@ -2,6 +2,9 @@
  * 插件数据文件夹的主进程半(ctx.storage,2026-11-26)。落点 `<tanguDataDir>/plugin-data/<生效插件 ID>/`:
  * 与同 ID 引擎插件的 paths.dataDir 是同一个目录;捆绑包的引擎那半经 paths.bundleDataDir 指到这里。
  * 两层:跟应用走(根)、跟库走(`vaults/<库标识>/`,请求带 vault 时宿主核对它仍是当前库)。`cache/` 可清。
+ * 在线库(智库同步第 3 步 U3a):deps.onlineRoot 有值 = 主窗开着在线库,「当前库」就是那个 `cloud://…` 根 —— 库那一层仍落在
+ * 本机插件数据的 `vaults/<storageVaultKey(cloud://…)>/`(不进云端);它没有本机文件夹,所以库那一层的 hostPath 回 null、
+ * import 抛固定错误。在线信号只认渲染层的报告(activeVault.ts 的 currentOnlineRoot),不看盘上的 activeVault。
  *
  * 纪律(用户 10-28「读写用户数据」):不存在 → null / [];其余读错误照实抛,不当空。写一律临时文件(独占新建)+ 换名。
  * 一个插件的所有改动(写 / 追加 / 删 / 挪 / 清缓存 / 复制进来)排**一条**队,在调用当下入队:先后不乱,大小写不同
@@ -13,7 +16,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { constants as fsConstants, createReadStream, promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
-  STORAGE_CACHE_DIR, STORAGE_IMPORTS_DIR, STORAGE_MIGRATION_ID, STORAGE_VAULTS_DIR,
+  STORAGE_CACHE_DIR, STORAGE_IMPORTS_DIR, STORAGE_IMPORT_NEEDS_LOCAL, STORAGE_MIGRATION_ID, STORAGE_VAULTS_DIR,
   normalizeStoragePath, storageVaultKey,
   type PluginStorageEntry, type PluginStorageImportResult, type PluginStorageRequest, type PluginStorageStat, type PluginStorageUsage,
 } from '@amadeus-shared/pluginStorage'
@@ -29,6 +32,8 @@ export interface PluginStorageHostDeps {
   vaultRoot(): string | null
   /** 打开文件夹(桌面:shell.openPath)。 */
   openFolder?(abs: string): Promise<unknown> | unknown
+  /** 主窗实际开着的在线库根(`cloud://<vaultId>/<libraryId>`);本机库 = null。没给 = 恒 null(老接法、测试照旧)。 */
+  onlineRoot?(): string | null
 }
 
 const codeOf = (e: unknown): string | undefined => (e as NodeJS.ErrnoException)?.code
@@ -78,7 +83,7 @@ export function createPluginStorageHost(deps: PluginStorageHostDeps) {
   const layerRoot = (id: string, vault?: string): string => {
     const root = pluginRoot(id)
     if (vault === undefined) return root
-    const current = deps.vaultRoot()
+    const current = deps.onlineRoot?.() ?? deps.vaultRoot() // 在线时只认在线根:主进程挂着的上一个本机根反而不是当前库
     if (typeof vault !== 'string' || !vault || current !== vault) throw new Error('Vault changed before plugin storage access')
     return path.join(root, STORAGE_VAULTS_DIR, storageVaultKey(vault))
   }
@@ -193,6 +198,8 @@ export function createPluginStorageHost(deps: PluginStorageHostDeps) {
     const migration = String(raw.migration ?? '')
     if (!STORAGE_MIGRATION_ID.test(migration)) throw new TypeError('Invalid migration id')
     const into: 'app' | 'vault' = raw.into === 'vault' ? 'vault' : 'app'
+    // 在线时 deps.vaultRoot() 是上一个本机库,不能拿它当来源;排在库核对之前,插件拿到的总是这一个固定错误(不是 missing)
+    if (deps.onlineRoot?.()) throw new Error(STORAGE_IMPORT_NEEDS_LOCAL)
     const vaultRoot = deps.vaultRoot()
     if (!vaultRoot || vaultRoot !== raw.vault) throw new Error('Vault changed before importing into plugin storage')
     // 来源:库内相对路径,必须在宿主给的本插件文件夹(工作文件夹 / Plugins/<id> / Plugins/<旧显示名>)之内
@@ -344,6 +351,8 @@ export function createPluginStorageHost(deps: PluginStorageHostDeps) {
         })
       }
       case 'hostPath': {
+        // 在线库:库那一层没有本机文件夹给 Agent / 脚本用 → null。先照常过闸(坏 id / 坏路径 / 库换了照样抛);跟应用那一层不看库,照旧给路径
+        if (vault !== undefined && deps.onlineRoot?.()) { locate(id, vault, req.path === undefined ? '' : req.path, { allowRoot: true }); return null }
         // 只算路径:规整 + 钳在文件夹里 + 按真实路径核(软链出逃照样拒),不建文件夹、不查存在
         const { abs } = await resolve(id, vault, req.path === undefined ? '' : req.path, { allowRoot: true })
         return path.resolve(abs) // 家目录给的是相对路径时也交出绝对路径

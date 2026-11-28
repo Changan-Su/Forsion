@@ -12,6 +12,10 @@ export const STORAGE_CACHE_DIR = 'cache'
 /** 「复制进来」的完成记录放在库那一层的这个文件夹里(每次迁移一份 JSON)。 */
 export const STORAGE_IMPORTS_DIR = '.forsion-imports'
 
+/** 在线库开着时「从库里复制进来」的固定错误:来源是库里的文件夹,在线库在这台没有本机文件夹可读。
+ *  不回 missing —— 插件可能把 missing 当成「没有旧数据」、记成迁移做完了(读失败 ≠ 空)。 */
+export const STORAGE_IMPORT_NEEDS_LOCAL = 'Plugin storage import needs a local vault'
+
 /** 迁移 id:只许 ASCII 小写短名,直接拼进文件名。 */
 export const STORAGE_MIGRATION_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/
 

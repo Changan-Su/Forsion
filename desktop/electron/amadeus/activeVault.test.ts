@@ -5,7 +5,9 @@
  * - 切本机库(switchVault)同一次落盘清掉 activeVault 并广播,restoreVault 的回落不清;
  * - CloudHost.openLibrary / canOpenOnline:成功、超时、无主窗、没报过 online-capable、渲染层报失败、账号不对;
  *   online-capable 只认主窗、主框架换文档 / wc 销毁后作废;
- * - 老配置迁移:该迁、缺 vaultId、读不了、没登录、已迁过幂等、别的账号 / 无主镜像、本机库也不在、已有 activeVault、没有配置文件。
+ * - 老配置迁移:该迁、缺 vaultId、读不了、没登录、已迁过幂等、别的账号 / 无主镜像、本机库也不在、已有 activeVault、没有配置文件;
+ *   按需迁移 active-vault:migrate(U3a):只认主窗当前文档、回迁好的 ref / null、读不了就抛不写、迁移途中换号抛 account_changed;
+ * - online-opened(U3a):只认主窗当前文档的报告,换文档 / 渲染进程没了 / 换号作废;插件数据按这份报告判在线,不看盘。
  */
 import { EventEmitter } from 'node:events'
 import { promises as fs } from 'node:fs'
@@ -52,7 +54,7 @@ function fakeContents(id: number) {
 }
 type Wc = ReturnType<typeof fakeContents>
 
-async function setup(opts: { timeoutMs?: number } = {}) {
+async function setup(opts: { timeoutMs?: number; accountId?: () => string | null } = {}) {
   const { createActiveVaultHost } = await import('./activeVault')
   const { ACTIVE_VAULT_IPC } = await import('./activeVaultKeys')
   const handles = new Map<string, (...a: any[]) => any>()
@@ -63,7 +65,7 @@ async function setup(opts: { timeoutMs?: number } = {}) {
     isTrusted: (e) => !(e as { untrusted?: boolean }).untrusted,
     mainContents: () => state.main as never,
     focusMain: state.focus,
-    accountId: () => (env.creds.token ? `${CLOUD}::${JSON.parse(Buffer.from(env.creds.token.split('.')[1], 'base64url').toString()).userId}` : null),
+    accountId: opts.accountId ?? (() => (env.creds.token ? `${CLOUD}::${JSON.parse(Buffer.from(env.creds.token.split('.')[1], 'base64url').toString()).userId}` : null)),
     broadcast: (ch, payload) => broadcasts.push({ ch, payload }),
     timeoutMs: opts.timeoutMs,
   })
@@ -77,6 +79,8 @@ async function setup(opts: { timeoutMs?: number } = {}) {
     result: (r: unknown, sender: unknown = state.main, extra: Record<string, unknown> = {}) => listeners.get(ACTIVE_VAULT_IPC.openOnlineResult)!(ev(sender, extra), r),
     reqId: (n = 0): string => state.main!.send.mock.calls[n][1].requestId,
     capable: (sender: unknown = state.main, extra: Record<string, unknown> = {}) => listeners.get(ACTIVE_VAULT_IPC.onlineCapable)!(ev(sender, extra)),
+    opened: (ref: unknown, sender: unknown = state.main, extra: Record<string, unknown> = {}) => handles.get(ACTIVE_VAULT_IPC.onlineOpened)!(ev(sender, extra), ref),
+    migrate: (sender: unknown = state.main, extra: Record<string, unknown> = {}) => handles.get(ACTIVE_VAULT_IPC.migrate)!(ev(sender, extra)),
   }
 }
 
@@ -222,6 +226,7 @@ describe('a failed read never leaves an empty config behind for later writes', (
       await expect(t.set(refOf('A'))).rejects.toThrow('amadeus-config-unreadable')
       await expect(t.set(null)).rejects.toThrow('amadeus-config-unreadable')
       await expect(migrateMirrorActiveVault(`${CLOUD}::A`, (id) => cloudVaultDir(id), isManagedCloudVault)).rejects.toThrow('amadeus-config-unreadable')
+      await expect(t.migrate()).rejects.toThrow('amadeus-config-unreadable') // 按需迁移那条 IPC 同样抛、不写
       await expect(updateLocalVaultConfig((cfg) => { cfg.lastVault = '/x/Notes'; cfg.localVault = '/x/Notes' })).rejects.toThrow('amadeus-config-unreadable')
       failing = false // 磁盘恢复
       await writeConfig({ lastPage: 'z.md' })
@@ -572,5 +577,186 @@ describe('legacy mirror migration', () => {
     await fs.rm(cfgFile())
     expect(await migrate()).toBe(false)
     await expect(fs.stat(cfgFile())).rejects.toThrow()
+  })
+})
+
+describe('active-vault:migrate (on demand, from the main window)', () => {
+  const seed = async (over: Record<string, unknown> = {}) => {
+    const { cloudVaultDir } = await import('./cloudPaths')
+    const mirror = cloudVaultDir(`${CLOUD}::A`)
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(mirror, { recursive: true }); await fs.mkdir(local, { recursive: true })
+    await fs.writeFile(cfgFile(), JSON.stringify({
+      lastVault: mirror, localVault: local, lastPage: 'a.md', vaults: [{ root: local }],
+      cloudAccounts: { [ns('A')]: { cloudSync: { enabled: true, vaultId: 'vault-1' }, entrySync: [] } },
+      ...over,
+    }))
+    return { mirror, local }
+  }
+  const DEFAULT_LIB = { kind: 'online', account: ns('A'), libraryId: 'vault-1', vaultId: 'vault-1', prefix: 'Amadeus/', name: 'My Vault' }
+
+  it('returns the migrated ref, writes exactly what the startup migration writes, and does not broadcast; a second call → null', async () => {
+    await seed()
+    await (await import('./activeVault')).migrateLegacyMirrorVault(`${CLOUD}::A`) // 启动接线开着时跑的那一段
+    const viaStartup = await bytes()
+    vi.resetModules()
+    const { local } = await seed()
+    const t = await setup()
+    expect(await t.migrate()).toEqual(DEFAULT_LIB)
+    expect(await bytes()).toBe(viaStartup) // 同一段迁移逻辑,落盘逐字节一样
+    expect((await readCfg()).lastVault).toBe(local)
+    expect(t.broadcasts).toEqual([]) // 渲染层换完 impl 再 set,广播在 set
+    const once = await bytes()
+    expect(await t.migrate()).toBeNull() // 已有 activeVault:不迁
+    expect(await bytes()).toBe(once)
+  })
+
+  it('only the main window’s current top document may ask; nothing is read or written otherwise', async () => {
+    await seed()
+    const before = await bytes()
+    const t = await setup()
+    await expect(t.migrate(fakeContents(2))).rejects.toThrow('forbidden') // View 窗
+    await expect(t.migrate(t.state.main, { untrusted: true })).rejects.toThrow('forbidden')
+    await expect(t.migrate(t.state.main, { senderFrame: null })).rejects.toThrow('forbidden') // 旧文档的迟到请求
+    await expect(t.migrate(t.state.main, { senderFrame: {} })).rejects.toThrow('forbidden')
+    t.state.main = null
+    await expect(t.migrate(fakeContents(1))).rejects.toThrow('forbidden') // 没有主窗
+    expect(await bytes()).toBe(before)
+  })
+
+  it('nothing to migrate → null (signed out, no vaultId, not on the mirror); an unreadable config throws and stays as is', async () => {
+    await seed()
+    let before = await bytes()
+    env.creds = {}
+    const t = await setup()
+    expect(await t.migrate()).toBeNull()
+    expect(await bytes()).toBe(before)
+    login('A')
+    await seed({ cloudAccounts: { [ns('A')]: { cloudSync: { enabled: true } } } })
+    before = await bytes()
+    expect(await t.migrate()).toBeNull()
+    expect(await bytes()).toBe(before)
+    await seed({ lastVault: path.join(env.root, 'Vault') })
+    before = await bytes()
+    expect(await t.migrate()).toBeNull()
+    expect(await bytes()).toBe(before)
+    await fs.writeFile(cfgFile(), '{"lastVault":')
+    await expect(t.migrate()).rejects.toThrow('amadeus-config-unparseable')
+    expect(await bytes()).toBe('{"lastVault":')
+  })
+
+  it('the account changed while migrating → account_changed; the written ref stays on disk for get to fall back on', async () => {
+    await seed()
+    let calls = 0
+    const t = await setup({ accountId: () => (++calls === 1 ? `${CLOUD}::A` : `${CLOUD}::B`) })
+    await expect(t.migrate()).rejects.toThrow('account_changed')
+    expect((await readCfg()).activeVault).toEqual(DEFAULT_LIB)
+    expect(t.broadcasts).toEqual([])
+  })
+})
+
+describe('online-opened: the main window reports which library the forwarding bridge has open', () => {
+  it('only the main window’s current top document is believed; bad shapes are refused', async () => {
+    const t = await setup()
+    await expect(t.opened(refOf('A'), fakeContents(2))).rejects.toThrow('forbidden') // View 窗报了也不认
+    await expect(t.opened(refOf('A'), t.state.main, { untrusted: true })).rejects.toThrow('forbidden')
+    await expect(t.opened(refOf('A'), t.state.main, { senderFrame: null })).rejects.toThrow('forbidden')
+    await expect(t.opened(refOf('A'), t.state.main, { senderFrame: {} })).rejects.toThrow('forbidden')
+    for (const bad of [{ ...refOf('A'), kind: 'local' }, { ...refOf('A'), prefix: '../' }, 'x', undefined]) await expect(t.opened(bad)).rejects.toThrow('invalid_ref')
+    expect(t.host.onlineOpened()).toBeNull()
+    await t.opened(refOf('A'))
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    await t.opened(null) // 回本机库
+    expect(t.host.onlineOpened()).toBeNull()
+  })
+
+  it('a new document, a gone renderer, a rebuilt main window or another account all read as local', async () => {
+    const t = await setup()
+    await t.opened(refOf('A'))
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true }) // 同文档内跳转不算
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }) // 重载:新文档的壳还没换库
+    expect(t.host.onlineOpened()).toBeNull()
+    t.state.main!.mainFrame = {}
+    await t.opened(refOf('A'))
+    t.state.main!.emit('render-process-gone', {}, { reason: 'crashed' })
+    expect(t.host.onlineOpened()).toBeNull()
+    await t.opened(refOf('A'))
+    login('B')
+    expect(t.host.onlineOpened()).toBeNull() // 换了号:不给上一个账号的在线库开插件数据
+    env.creds = {}
+    expect(t.host.onlineOpened()).toBeNull()
+    login('A')
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    t.state.main = fakeContents(3) // 主窗重建
+    expect(t.host.onlineOpened()).toBeNull()
+  })
+
+  it('the module-level readout follows the registered host; the root is cloud://<vaultId>/<libraryId>', async () => {
+    const { currentOnlineOpened, currentOnlineRoot, setRegisteredActiveVaultHostForTest } = await import('./activeVault')
+    const t = await setup()
+    expect(currentOnlineRoot()).toBeNull()
+    await t.opened(refOf('A', { libraryId: 'vault-1:Amadeus/Lab/', prefix: 'Amadeus/Lab/' }))
+    expect(currentOnlineOpened()?.libraryId).toBe('vault-1:Amadeus/Lab/')
+    expect(currentOnlineRoot()).toBe('cloud://vault-1/vault-1:Amadeus/Lab/')
+    setRegisteredActiveVaultHostForTest(null)
+    expect(currentOnlineRoot()).toBeNull()
+  })
+})
+
+describe('plugin storage judges "online" by the report, never by the saved activeVault', () => {
+  const ID = 'demo'
+  const storage = async (vaultRoot: string) => {
+    const { createPluginStorageHost } = await import('./pluginStorage')
+    const { currentOnlineRoot } = await import('./activeVault')
+    // 12b 之后 amadeus/ipc.ts 照这样接:onlineRoot: currentOnlineRoot
+    return createPluginStorageHost({ base: () => path.join(env.root, 'plugin-data'), vaultRoot: () => vaultRoot, onlineRoot: currentOnlineRoot })
+  }
+
+  it('activeVault on disk but the renderer fell back to the local vault (reported null): the vault layer reads, writes and gives a host path', async () => {
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(local)
+    await fs.writeFile(cfgFile(), JSON.stringify({ lastVault: local, localVault: local, activeVault: refOf('A') }))
+    const t = await setup()
+    expect((await t.get()).ref).toEqual(refOf('A')) // 盘上确实写着在线库
+    await t.opened(null) // 渲染层回落:开的是 lastVault
+    const h = await storage(local)
+    await h.handle({ id: ID, vault: local, op: 'write', path: 'state.json', data: '{"n":1}' })
+    expect(await h.handle({ id: ID, vault: local, op: 'readText', path: 'state.json' })).toBe('{"n":1}')
+    const { storageVaultKey } = await import('@amadeus-shared/pluginStorage')
+    expect(await h.handle({ id: ID, vault: local, op: 'hostPath', path: 'state.json' })).toBe(path.join(env.root, 'plugin-data', ID, 'vaults', storageVaultKey(local), 'state.json'))
+    expect((await readCfg()).activeVault).toEqual(refOf('A')) // 回落不清
+  })
+
+  it('a renderer that has not reported at all is local too', async () => {
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(local)
+    await fs.writeFile(cfgFile(), JSON.stringify({ lastVault: local, activeVault: refOf('A') }))
+    await setup()
+    const h = await storage(local)
+    expect(typeof await h.handle({ id: ID, vault: local, op: 'hostPath' })).toBe('string')
+  })
+
+  it('reported online: the vault layer only takes the cloud root, has no host path, and import refuses with a fixed error', async () => {
+    const local = path.join(env.root, 'Vault')
+    await fs.mkdir(path.join(local, 'Plugins', ID), { recursive: true })
+    await fs.writeFile(path.join(local, 'Plugins', ID, 'old.json'), 'old')
+    const t = await setup()
+    await t.opened(refOf('A'))
+    const h = await storage(local) // 主进程还挂着上一个本机根
+    const cloud = 'cloud://vault-1/lib-1'
+    await expect(h.handle({ id: ID, vault: local, op: 'write', path: 'a.txt', data: 'x' })).rejects.toThrow('Vault changed')
+    await h.handle({ id: ID, vault: cloud, op: 'write', path: 'a.txt', data: 'x' })
+    expect(await h.handle({ id: ID, vault: cloud, op: 'readText', path: 'a.txt' })).toBe('x')
+    const { STORAGE_IMPORT_NEEDS_LOCAL, storageVaultKey } = await import('@amadeus-shared/pluginStorage')
+    expect(await fs.readFile(path.join(env.root, 'plugin-data', ID, 'vaults', storageVaultKey(cloud), 'a.txt'), 'utf8')).toBe('x') // 落在本机插件数据
+    expect(await h.handle({ id: ID, vault: cloud, op: 'hostPath', path: 'a.txt' })).toBeNull()
+    expect(await h.handle({ id: ID, op: 'hostPath', path: 'a.txt' })).toBe(path.join(env.root, 'plugin-data', ID, 'a.txt')) // 跟应用那一层照旧
+    for (const vault of [cloud, local]) {
+      await expect(h.handle({ id: ID, op: 'import', vault, from: `Plugins/${ID}`, to: '', migration: 'm1', allowed: [`Plugins/${ID}`], into: 'app' })).rejects.toThrow(STORAGE_IMPORT_NEEDS_LOCAL)
+    }
+    await t.opened(null) // 回本机库:一切照旧
+    expect(await h.handle({ id: ID, op: 'import', vault: local, from: `Plugins/${ID}`, to: '', migration: 'm1', allowed: [`Plugins/${ID}`], into: 'app' })).toMatchObject({ status: 'complete', copied: 1 })
+    expect(typeof await h.handle({ id: ID, vault: local, op: 'hostPath' })).toBe('string')
   })
 })

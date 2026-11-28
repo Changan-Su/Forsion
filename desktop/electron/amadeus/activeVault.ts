@@ -1,7 +1,10 @@
 /**
  * 在线库的宿主接缝(智库同步第 3 步 H3 12a;契约 step34「H3 接口定稿」第 2 节)。
  * - 渲染层:amadeus:active-vault:get / set、amadeus:active-vault:changed 广播、amadeus:open-online(主窗收)、
- *   amadeus:online-capable(主窗装好转发壳后发)、amadeus:open-online:result(主窗报失败);
+ *   amadeus:online-capable(主窗装好转发壳后发)、amadeus:open-online:result(主窗报失败)、
+ *   amadeus:online-opened(主窗报转发壳实际换好的库,U3a)、amadeus:active-vault:migrate(主窗按需迁老镜像配置,U3a);
+ * - 插件数据(pluginStorage.ts):「在线」只认 online-opened 的报告(currentOnlineRoot),不看盘上的 activeVault ——
+ *   离线 / 账号回落时盘上那条还在,渲染层开的却是 lastVault 那个本机库。
  * - Extend:CloudHost.openLibrary / canOpenOnline。宿主不查服务器,ref 由 E3 用自己的库清单解析好。
  * 落盘在 settings.ts(readActiveVault / writeActiveVault);切本机库清 activeVault 在 amadeus/ipc.ts 的 switchLocalVault。
  * 依赖全由 main.ts 递进来(isTrustedSender、主窗、showMainWindow),这里不 import main。
@@ -10,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import type { ActiveVaultRead, OnlineVaultRef } from '@amadeus-shared/ipc'
 import { ACTIVE_VAULT_IPC } from './activeVaultKeys'
+import { onlineVaultRoot } from '@amadeus-shared/ipc'
 import { cloudAccountNamespace, migrateMirrorActiveVault, onActiveVaultCleared, parseOnlineVaultRef, readActiveVault, writeActiveVault } from './settings'
 import { cloudVaultDir, isManagedCloudVault } from './cloudPaths'
 
@@ -36,21 +40,44 @@ interface Pending { ref: OnlineVaultRef; wc: WebContents; gen: number; resolve: 
 const sameRef = (a: OnlineVaultRef, b: OnlineVaultRef): boolean =>
   a.account === b.account && a.libraryId === b.libraryId && a.vaultId === b.vaultId && a.prefix === b.prefix && a.name === b.name
 
-export function createActiveVaultHost(deps: ActiveVaultDeps): {
+export interface ActiveVaultHost {
   register(ipc: IpcLike): void
   get(): Promise<ActiveVaultRead>
   openLibrary(ref: OnlineVaultRef): Promise<void>
   canOpenOnline(): boolean
-} {
+  /** 主窗当前文档报的「转发壳换好的在线库」;本机库 / 没报过 / 换了文档 / 主窗换了 / 账号对不上 = null。 */
+  onlineOpened(): OnlineVaultRef | null
+}
+
+/** 接上 ipcMain 的那一个宿主(main.ts 只建一个);currentOnlineOpened 读它。 */
+let registered: ActiveVaultHost | null = null
+/** 测试用:换掉 / 清掉模块级读数指向的宿主。 */
+export function setRegisteredActiveVaultHostForTest(host: ActiveVaultHost | null): void { registered = host }
+/** 主窗渲染层实际打开的在线库(见 ActiveVaultHost.onlineOpened);宿主没注册 = null。 */
+export function currentOnlineOpened(): OnlineVaultRef | null { return registered?.onlineOpened() ?? null }
+/** pluginStorage 的 onlineRoot:在线库的根身份 `cloud://<vaultId>/<libraryId>`,本机库 = null。只认渲染层的报告,不读盘。 */
+export function currentOnlineRoot(): string | null {
+  const ref = currentOnlineOpened()
+  return ref ? onlineVaultRoot(ref) : null
+}
+
+export function createActiveVaultHost(deps: ActiveVaultDeps): ActiveVaultHost {
   const timeoutMs = deps.timeoutMs ?? OPEN_LIBRARY_TIMEOUT_MS
   const pending = new Map<string, Pending>()
   let capable: WebContents | null = null
+  /** 主窗某份文档报过的「换好了」:绑那个 wc 和它当时的文档代次,换文档 / 渲染进程没了就作废。 */
+  let opened: { wc: WebContents; gen: number; ref: OnlineVaultRef | null } | null = null
   const watched = new WeakSet<WebContents>()
   const docGen = new WeakMap<WebContents, number>() // 主框架每换一次文档 +1
   const genOf = (wc: WebContents): number => docGen.get(wc) ?? 0
 
   // 这几个新入口只认「可信 + 发送帧还在 + 就是这个 wc 现在的顶层文档」:isTrustedSender 放过 senderFrame 为 null(迟到的旧文档消息),这里不放
   const liveTop = (e: Sender): boolean => deps.isTrusted(e) && !!e.senderFrame && e.senderFrame === e.sender.mainFrame
+  /** 只认主窗的当前顶层文档(online-opened / migrate)。 */
+  const mainTop = (e: Sender): WebContents | null => {
+    const wc = deps.mainContents()
+    return liveTop(e) && !!wc && e.sender === wc ? wc : null
+  }
 
   // 没登录时 cloudAccountNamespace(null) = 'signed-out',直接比会放过 account:'signed-out' 的 ref:先要有账号
   const accountOk = (ref: OnlineVaultRef): boolean => {
@@ -73,6 +100,7 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
     const drop = (): void => {
       docGen.set(wc, genOf(wc) + 1)
       if (capable === wc) capable = null
+      if (opened?.wc === wc) opened = null // 新文档的转发壳还没换库:当本机,等它自己再报
       // 发请求时那份文档没了:等着的那次当场失败(新文档不认得旧 requestId)
       for (const [id, p] of [...pending]) if (p.wc === wc) finish(id, new Error('switch_failed'))
     }
@@ -114,8 +142,22 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
     if (mine) finish(mine, null)
   }
 
-  return {
+  /** 老镜像配置按需迁移(契约「H3 回 U3a / U4 摸底」第 1 条):跑的就是启动接线 migrateOnStartup 开着时那一段
+   *  (migrateLegacyMirrorVault),只是改由主窗渲染层在「当下能在线开」时调。不广播:渲染层换完 impl 再 set,广播在 set。 */
+  const migrate = async (e: IpcMainInvokeEvent): Promise<OnlineVaultRef | null> => {
+    if (!mainTop(e)) throw new Error('forbidden')
+    const id = deps.accountId()
+    if (!id) return null // 没登录:没有「这个账号的镜像」可迁
+    if (!await migrateLegacyMirrorVault(id)) return null // 读不了配置 → 抛(什么都没写);别的不迁的情形 → 没迁
+    const ref = await readActiveVault()
+    // 迁移途中换了账号:盘上那条留着(get 按账号回 fallback),这次不交出去
+    if (!ref || !accountOk(ref)) throw new Error('account_changed')
+    return ref
+  }
+
+  const api: ActiveVaultHost = {
     register(ipc) {
+      registered = api
       // 普通配置写改了 lastVault(Extend 的胶囊切本机等)顺带清掉了在线库:照样告诉各窗口
       onActiveVaultCleared(() => deps.broadcast(ACTIVE_VAULT_IPC.changed, { ref: null }))
       ipc.handle(ACTIVE_VAULT_IPC.get, async (e) => {
@@ -130,6 +172,15 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
         watch(wc)
         capable = wc
       })
+      ipc.handle(ACTIVE_VAULT_IPC.onlineOpened, async (e, raw: unknown) => {
+        const wc = mainTop(e)
+        if (!wc) throw new Error('forbidden') // 别的窗口 / 旧文档导航后才到的迟到报告都不认
+        const ref = raw === null ? null : parseOnlineVaultRef(raw)
+        if (raw !== null && !ref) throw new Error('invalid_ref')
+        watch(wc)
+        opened = { wc, gen: genOf(wc), ref } // 账号在读数时核:报告之后换了号同样当本机
+      })
+      ipc.handle(ACTIVE_VAULT_IPC.migrate, (e) => migrate(e))
       ipc.on(ACTIVE_VAULT_IPC.openOnlineResult, (e, r: unknown) => {
         if (!liveTop(e) || e.sender !== deps.mainContents()) return
         const o = r as { requestId?: unknown; ok?: unknown } | null
@@ -166,7 +217,13 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
       const wc = deps.mainContents()
       return !!wc && capable === wc
     },
+    onlineOpened() {
+      const o = opened
+      if (!o?.ref || o.wc !== deps.mainContents() || o.gen !== genOf(o.wc)) return null
+      return accountOk(o.ref) ? o.ref : null // 换了号:不给上一个账号的在线库开插件数据的库那一层
+    },
   }
+  return api
 }
 
 /** 老配置迁移(lastVault = 这个账号的云镜像 → activeVault = 默认库)。 */
@@ -174,8 +231,8 @@ export function migrateLegacyMirrorVault(accountId: string | null): Promise<bool
   return migrateMirrorActiveVault(accountId, (id) => cloudVaultDir(id), isManagedCloudVault)
 }
 
-/** 启动时跑不跑老配置迁移。U3a 装好转发壳、渲染层能按 activeVault 打开在线库的那个版本里改成 true。
- *  在那之前迁移会把停在云端那一侧的用户落到本机库(没人读 activeVault),所以先关着。 */
+/** 启动时跑不跑老配置迁移。一直关着:改由渲染层按需调 amadeus:active-vault:migrate(契约「H3 回 U3a / U4 摸底」第 1 条),
+ *  启动时迁会在 Extend 装载之前把停在云端那一侧的用户落到本机库。常量和 migrateOnStartup 等渲染层真调 migrate 的那一包再删。 */
 export const MIRROR_MIGRATION_ENABLED = false
 
 /** 启动接线(main.ts 开窗之前 await):开关关着就什么都不做,不读不写配置。 */

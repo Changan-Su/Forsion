@@ -1,5 +1,7 @@
 // The only bridge between the sandboxed renderer and the main process.
-// Exposes a minimal, typed `window.amadeus` surface — no raw ipcRenderer, no Node.
+// Exposes a minimal, typed `window.amadeusLocal` surface — no raw ipcRenderer, no Node.
+// 渲染层的 window.amadeus 是 frontend amadeus/bridgeShell.ts 装的转发壳,转发到这里(智库同步第 3 步 U3a):
+// contextBridge 暴露的键能不能改写不赌,所以本机桥换了名字,壳自己占 window.amadeus。
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC, type AmadeusApi } from '@amadeus-shared/ipc'
@@ -29,6 +31,8 @@ const api: AmadeusApi = {
   onOpenOnline: (cb) => subscribe(ACTIVE_VAULT_IPC.openOnline, cb),
   openOnlineResult: (r) => ipcRenderer.send(ACTIVE_VAULT_IPC.openOnlineResult, r),
   onlineCapable: () => ipcRenderer.send(ACTIVE_VAULT_IPC.onlineCapable),
+  onlineOpened: (ref) => ipcRenderer.invoke(ACTIVE_VAULT_IPC.onlineOpened, ref),
+  activeVaultMigrate: () => ipcRenderer.invoke(ACTIVE_VAULT_IPC.migrate),
   listPages: () => ipcRenderer.invoke(IPC.listPages),
   listFiles: () => ipcRenderer.invoke(IPC.listFiles),
   loadPage: (pagePath) => ipcRenderer.invoke(IPC.loadPage, pagePath),
@@ -152,7 +156,7 @@ const api: AmadeusApi = {
   renameDbFile: (oldPath, newBaseName) => ipcRenderer.invoke(IPC.renameDbFile, oldPath, newBaseName),
 }
 
-contextBridge.exposeInMainWorld('amadeus', api)
+contextBridge.exposeInMainWorld('amadeusLocal', api)
 
 // 云同步(桌面专属,不进三端共享的 AmadeusApi 契约;web/mobile 下为 undefined)。
 // 0.4 起引擎与这 11 个通道住在内置包 Forsion Extend 的主进程半身:没装载(缺包 / 验签失败)通道就没人接 →

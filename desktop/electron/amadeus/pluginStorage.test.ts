@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { storageVaultKey } from '@amadeus-shared/pluginStorage'
+import { STORAGE_IMPORT_NEEDS_LOCAL, storageVaultKey } from '@amadeus-shared/pluginStorage'
 import { createPluginStorageHost, resolvePluginDataAsset } from './pluginStorage'
 
 let tmp = '', base = '', vault = ''
@@ -321,6 +321,55 @@ describe('importFromVault', () => {
     const r = await h.handle(imp({ from: 'Plugins/demo', to: '', migration: 'all' })) as { skipped: string[] }
     expect(r.skipped).toContain('vaults/x.txt')
     await expect(fs.access(path.join(base, 'demo', 'vaults', 'x.txt'))).rejects.toThrow()
+  })
+})
+
+describe('online library (deps.onlineRoot, vault sync step 3)', () => {
+  const CLOUD = 'cloud://vault-1/lib-1'
+  let online: string | null = null
+  const onlineHost = () => createPluginStorageHost({ base: () => base, vaultRoot: () => current, onlineRoot: () => online })
+  beforeEach(() => { online = null })
+
+  it('onlineRoot null (or not given) = the local vault, exactly as before', async () => {
+    const h = onlineHost()
+    await h.handle({ id: 'demo', vault, op: 'write', path: 'a.txt', data: 'x' })
+    expect(await h.handle({ id: 'demo', vault, op: 'hostPath', path: 'a.txt' })).toBe(path.join(base, 'demo', 'vaults', storageVaultKey(vault), 'a.txt'))
+    await expect(h.handle({ id: 'demo', vault: CLOUD, op: 'readText', path: 'a.txt' })).rejects.toThrow('Vault changed')
+  })
+
+  it('online: the vault layer only takes the online root and lives in local plugin data; the local root is refused', async () => {
+    online = CLOUD
+    const h = onlineHost()
+    await expect(h.handle({ id: 'demo', vault, op: 'write', path: 'a.txt', data: 'x' })).rejects.toThrow('Vault changed')
+    await h.handle({ id: 'demo', vault: CLOUD, op: 'write', path: 'a.txt', data: 'online' })
+    expect(await h.handle({ id: 'demo', vault: CLOUD, op: 'readText', path: 'a.txt' })).toBe('online')
+    expect(await fs.readFile(path.join(base, 'demo', 'vaults', storageVaultKey(CLOUD), 'a.txt'), 'utf8')).toBe('online')
+    expect(await h.handle({ id: 'demo', vault: CLOUD, op: 'list' })).toMatchObject([{ name: 'a.txt' }])
+  })
+
+  it('online: hostPath is null for the vault layer (still gated), the app layer keeps its path', async () => {
+    online = CLOUD
+    const h = onlineHost()
+    expect(await h.handle({ id: 'demo', vault: CLOUD, op: 'hostPath' })).toBeNull()
+    expect(await h.handle({ id: 'demo', vault: CLOUD, op: 'hostPath', path: 'x/y.txt' })).toBeNull()
+    await expect(h.handle({ id: 'demo', vault, op: 'hostPath' })).rejects.toThrow('Vault changed') // 闸照过
+    await expect(h.handle({ id: 'demo', vault: CLOUD, op: 'hostPath', path: '../x' })).rejects.toThrow()
+    await expect(h.handle({ id: 'Bad', vault: CLOUD, op: 'hostPath' })).rejects.toThrow('Invalid plugin id')
+    expect(await h.handle({ id: 'demo', op: 'hostPath', path: 'x.txt' })).toBe(path.join(base, 'demo', 'x.txt'))
+    await expect(fs.stat(path.join(base, 'demo'))).rejects.toThrow() // 只算路径,不建文件夹
+  })
+
+  it('online: import rejects with the fixed error (never "missing"), whatever vault it names; nothing is recorded', async () => {
+    await fs.mkdir(path.join(vault, 'Plugins', 'demo'), { recursive: true })
+    await fs.writeFile(path.join(vault, 'Plugins', 'demo', 'a.json'), 'a')
+    online = CLOUD
+    const h = onlineHost()
+    for (const v of [CLOUD, vault]) for (const from of ['Plugins/demo', 'Plugins/nothing-here']) {
+      await expect(h.handle({ id: 'demo', op: 'import', vault: v, from, to: '', migration: 'm1', allowed: ['Plugins'], into: 'vault' })).rejects.toThrow(STORAGE_IMPORT_NEEDS_LOCAL)
+    }
+    await expect(fs.stat(path.join(base, 'demo'))).rejects.toThrow()
+    online = null
+    expect(await h.handle({ id: 'demo', op: 'import', vault, from: 'Plugins/demo', to: '', migration: 'm1', allowed: ['Plugins'], into: 'vault' })).toMatchObject({ status: 'complete', copied: 1 })
   })
 })
 
