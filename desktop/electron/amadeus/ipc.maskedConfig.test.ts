@@ -54,6 +54,18 @@ const accountConfig = (extra: Record<string, unknown> = {}) => ({
   } },
 })
 
+/** 让第一次宽松读失败(不是 ENOENT):那时 amadeus-config.json 是个目录(EISDIR,各平台都报错);读完换回真文件。回读完以后的 settings 模块。 */
+async function looseReadFails(cfg: unknown = accountConfig()) {
+  await fs.rm(cfgFile(), { recursive: true, force: true })
+  await fs.mkdir(cfgFile())
+  const settings = await import('./settings')
+  expect((await settings.readConfig()).cloudSync).toBeUndefined() // 宽松读把读失败缓存成了「什么都没配」
+  expect(settings.looseConfigReadFailed()).toBe(true)
+  await fs.rm(cfgFile(), { recursive: true })
+  await fs.writeFile(cfgFile(), JSON.stringify(cfg)) // 文件又读得到了
+  return settings
+}
+
 /** registerIpc 递给 Extend 工厂的那份 deps(真接线)。 */
 async function hostDeps() {
   const { registerIpc } = await import('./ipc')
@@ -132,49 +144,79 @@ describe('the old engines stop when a read the mask depends on fails (H3 list it
     expect(legacyEngines(await (await hostDeps()).readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
   })
 
-  /** 让第一次宽松读失败(不是 ENOENT):那时 amadeus-config.json 是个目录(EISDIR,各平台都报错);读完换回真文件。回读完以后的 settings 模块。 */
-  async function looseReadFails() {
-    await fs.rm(cfgFile(), { recursive: true, force: true })
+  it('a config the loose read cannot open masks everything; once the file reads again the next read picks it up, and nothing is written meanwhile', async () => {
     await fs.mkdir(cfgFile())
-    const settings = await import('./settings')
-    expect((await settings.readConfig()).cloudSync).toBeUndefined() // 宽松读把读失败缓存成了「什么都没配」
+    const deps = await hostDeps()
+    expect(legacyEngines(await deps.readConfig())).toEqual(STOPPED)
     await fs.rm(cfgFile(), { recursive: true })
-    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig())) // 文件又读得到了:严格读读得出,宽松读的缓存还是空的
-    return settings
-  }
-
-  it('a config the loose read could not open (cached as empty) masks everything, even once the file reads again', async () => {
-    await looseReadFails()
-    const masked = await (await hostDeps()).readConfig()
-    expect(legacyEngines(masked)).toEqual(STOPPED)
-    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig()) // 这份读数只读,不写回
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
   })
+})
 
-  it('an ordinary write based on that empty cache does not make it trusted: the old engines stay stopped', async () => {
-    const { writeConfig } = await looseReadFails()
-    const deps = await hostDeps()
+describe('ordinary writes after a failed loose read take the strict base (Codex 12b round 1, #1)', () => {
+  const invoke = (channel: string, ...args: unknown[]) => env.handlers.get(channel)!({ sender: { id: 1 } }, ...args)
+
+  it('writeConfig(lastPage) after the file reads again keeps the vault list, the account config and the claim', async () => {
+    const cfg = { ...accountConfig({ syncOwnershipV2: { entryRoots: [vaultA], mirror: 'keep', human: 'engine' } }), vaults: [{ root: vaultA }, { root: vaultB }] }
+    const { writeConfig } = await looseReadFails(cfg)
     await writeConfig({ lastPage: 'a.md' })
-    expect(legacyEngines(await deps.readConfig())).toEqual(STOPPED)
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual({ ...cfg, lastPage: 'a.md' })
   })
 
-  it('a write based on the strict read puts the real config back in the cache, and the mask trusts it again (ownership / active vault / local vault switch)', async () => {
-    const { writeSyncOwnershipV2 } = await looseReadFails()
-    const deps = await hostDeps()
-    expect(legacyEngines(await deps.readConfig())).toEqual(STOPPED)
-    await writeSyncOwnershipV2(ACCOUNT, { entryRoots: [vaultA], mirror: 'keep', human: 'engine' })
-    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultB] })
-
+  it('while the file still cannot be read or parsed, writeConfig throws and the bytes on disk stay', async () => {
+    await fs.mkdir(cfgFile())
+    const { writeConfig } = await import('./settings')
+    await expect(writeConfig({ lastPage: 'a.md' })).rejects.toThrow()
+    expect((await fs.stat(cfgFile())).isDirectory()).toBe(true)
     vi.resetModules()
-    const { writeActiveVault } = await looseReadFails()
-    const deps2 = await hostDeps()
-    await writeActiveVault(null)
-    expect(legacyEngines(await deps2.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+    await fs.rm(cfgFile(), { recursive: true })
+    await fs.writeFile(cfgFile(), '{"lastVault":')
+    const again = await import('./settings')
+    await expect(again.writeConfig({ lastPage: 'a.md' })).rejects.toThrow()
+    const update = vi.fn()
+    await expect(again.updateConfig(update)).rejects.toThrow()
+    expect(update).not.toHaveBeenCalled() // 回调不拿空缓存(Extend 的回调会照它改引擎的范围)
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe('{"lastVault":')
+    for (const text of ['null', '[]', '"x"']) { // 解析得出、但不是对象:同样读不出
+      vi.resetModules()
+      await fs.writeFile(cfgFile(), text)
+      const s = await import('./settings')
+      await expect(s.writeConfig({ lastPage: 'a.md' }), text).rejects.toThrow()
+      expect(await fs.readFile(cfgFile(), 'utf8')).toBe(text)
+    }
+  })
 
-    vi.resetModules()
-    const { updateLocalVaultConfig } = await looseReadFails()
-    const deps3 = await hostDeps()
-    await updateLocalVaultConfig((cfg) => { cfg.lastVault = vaultB; cfg.localVault = vaultB })
-    expect(legacyEngines(await deps3.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+  it('updateConfig hands its callback the strict base, not the empty cache', async () => {
+    const { updateConfig } = await looseReadFails()
+    let seen: string[] = []
+    await updateConfig((c) => { seen = (c.entrySync ?? []).map((v) => v.vaultRoot); return false })
+    expect(seen).toEqual([vaultA, vaultB])
+  })
+
+  it('adoptLegacyCloudState resolves false (never rejects) when the config cannot be read, and writes nothing', async () => {
+    await fs.writeFile(cfgFile(), '{"lastVault":')
+    const { adoptLegacyCloudState } = await import('./settings')
+    await expect(adoptLegacyCloudState(ACCOUNT)).resolves.toBe(false)
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe('{"lastVault":')
+  })
+
+  it('restoreVault after a transient read failure opens the vault the user chose, not the default one', async () => {
+    await looseReadFails()
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    const restored = await invoke(IPC.restoreVault)
+    expect(restored.root).toBe(vaultA)
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).lastVault).toBe(vaultA)
+  })
+
+  it('a config that stays unparseable is never overwritten: restoreVault refuses instead of writing the default vault over it', async () => {
+    await fs.writeFile(cfgFile(), '{"lastVault":')
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe('{"lastVault":')
   })
 })
 
