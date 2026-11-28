@@ -80,7 +80,6 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'daily-notes', tab: 'notes', anchor: 'daily-notes', labelKey: 'settings.notes.dailyLabel', keywords: '日记 每日 daily journal', needs: ['stored'] },
   { id: 'agent-browser', tab: 'browser', anchor: 'agent-browser', labelKey: 'settings.browser.agentBrowser', keywords: '浏览器 browser chrome', needs: ['stored'] },
   // 电脑操作(引擎插件 computer-use)的表单由插件 schema 渲染,锚点落在整页;插件没启用时这一页不在,结果也不出。
-  { id: 'strict-background', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.strictBackground', keywords: '严格后台 后台 前台 抢焦点 抢前台 mini 电脑操作 strict background foreground focus computer use' },
   { id: 'jev', tab: 'computer-use', anchor: 'computer-use', labelKey: 'settings.search.jev', keywords: 'jev 加速 置信度 视觉 定位 typesafe 电脑操作 acceleration confidence vision computer use' },
   // 设置 › 设备(原 Ribbon 胶囊菜单)
   { id: 'units-switch', tab: 'units', anchor: 'units-switch', labelKey: 'unit.switchTitle', keywords: '设备 切换 本地 云端 直连 中转 P2P 通过地址连接 devices switch local cloud lan relay address unit' },
