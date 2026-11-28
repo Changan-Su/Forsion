@@ -132,8 +132,11 @@ async function shoot(browser, out, platform, mode) {
     await shot('mobile-M2')
     await footer().tap()
     await sheet.getByText('手机上都是在线打开，改动直接存到云端。', { exact: true }).waitFor()
-    assert.equal(await sheet.locator('.us-row').count(), libraries.length)
-    assert.match(await sheet.locator('.us-row[aria-pressed=true]').innerText(), /Notes/)
+    // The hint renders on open, before the refreshed library list arrives.
+    const rows = sheet.locator('button[aria-pressed]')
+    await rows.nth(libraries.length - 1).waitFor({ state: 'visible' })
+    assert.equal(await rows.count(), libraries.length)
+    assert.match(await sheet.getByRole('button', { pressed: true }).innerText(), /Notes/)
     await shot('mobile-M1')
   } finally {
     await page.close()
