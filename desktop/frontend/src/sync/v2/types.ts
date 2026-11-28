@@ -83,7 +83,10 @@ export interface BindingView {
   renamedFrom?: string
 }
 
-export interface TakeoverView { root: string; source: 'entry' | 'content-active' | 'content-off' | 'remotesync'; phase: string; lastError?: string; reason?: BindingReason }
+/** 接手 D(旧网盘同步)撞上占用、封着不交还时(H 的 fix/sync-takeover-d-hold):reason 是三种之一,inUseBy = 占着的那条(remote_dir_nested 可能没有);
+ *  接手收尾(done / reverted / refused)以后不再带这两项。 */
+export type TakeoverHoldReason = 'remote_dir_in_use' | 'remote_dir_nested' | 'primary_exists'
+export interface TakeoverView { root: string; source: 'entry' | 'content-active' | 'content-off' | 'remotesync'; phase: string; lastError?: string; reason?: BindingReason | TakeoverHoldReason; inUseBy?: RemoteDirHolder }
 
 export interface CloudVaultView {
   id: string

@@ -187,6 +187,13 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
     expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
   })
+  it('接手旧网盘同步(D)封着的那几种,每种(归档前 / 后 × 撞目录 / 撞库 / 同库另一条 × 有没有库名)都有文案', () => {
+    for (const stage of ['held', 'archived']) for (const kind of ['InUse', 'Primary', 'Nested']) for (const anon of kind === 'Nested' ? [''] : ['', 'Anon']) {
+      const key = `ssync.dhold.${stage}${kind}${anon}`
+      expect(t(key, { name: '归档' })).not.toBe(key)
+    }
+    expect(t('ssync.dhold.openOld')).not.toBe('ssync.dhold.openOld')
+  })
   it('远端目录被别的库占着(E-17):value 里的失败带着 inUseBy 留下来;文案写出库名,和同一个库的 remote_dir_nested 分开', () => {
     const r = normalizeReply(CH.preview, { ok: true, value: { ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } } })
     expect(r).toEqual({ ok: false, error: 'remote_dir_in_use', inUseBy: { bindingId: 'b2', name: '归档' } })
