@@ -30,7 +30,8 @@ interface IpcLike {
   handle(channel: string, fn: (e: IpcMainInvokeEvent, ...args: any[]) => unknown): void
   on(channel: string, fn: (e: IpcMainEvent, ...args: any[]) => void): void
 }
-interface Pending { ref: OnlineVaultRef; resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+/** 一次 openLibrary:绑定发请求时的主窗和它的文档代次(主框架换了文档就作废)。 */
+interface Pending { ref: OnlineVaultRef; wc: WebContents; gen: number; resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
 
 const sameRef = (a: OnlineVaultRef, b: OnlineVaultRef): boolean =>
   a.account === b.account && a.libraryId === b.libraryId && a.vaultId === b.vaultId && a.prefix === b.prefix && a.name === b.name
@@ -45,27 +46,36 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
   const pending = new Map<string, Pending>()
   let capable: WebContents | null = null
   const watched = new WeakSet<WebContents>()
+  const docGen = new WeakMap<WebContents, number>() // 主框架每换一次文档 +1
+  const genOf = (wc: WebContents): number => docGen.get(wc) ?? 0
+
+  // 这几个新入口只认「可信 + 发送帧还在 + 就是这个 wc 现在的顶层文档」:isTrustedSender 放过 senderFrame 为 null(迟到的旧文档消息),这里不放
+  const liveTop = (e: Sender): boolean => deps.isTrusted(e) && !!e.senderFrame && e.senderFrame === e.sender.mainFrame
 
   // 没登录时 cloudAccountNamespace(null) = 'signed-out',直接比会放过 account:'signed-out' 的 ref:先要有账号
   const accountOk = (ref: OnlineVaultRef): boolean => {
     const id = deps.accountId()
     return !!id && cloudAccountNamespace(id) === ref.account
   }
-  const settle = (ref: OnlineVaultRef, error: Error | null): void => {
-    for (const [id, p] of [...pending]) {
-      if (!sameRef(p.ref, ref)) continue
-      clearTimeout(p.timer)
-      pending.delete(id)
-      if (error) p.reject(error)
-      else p.resolve()
-    }
+  const finish = (requestId: string, error: Error | null): void => {
+    const p = pending.get(requestId)
+    if (!p) return
+    clearTimeout(p.timer)
+    pending.delete(requestId)
+    if (error) p.reject(error)
+    else p.resolve()
   }
   // 转发壳只活在那一个文档里:主框架换文档(重载)/ 渲染进程没了,都要等新页面重新报。
   // 主窗重建 / 销毁不用另听:canOpenOnline 比的是「报过的那个 wc === 现在的主窗 wc」
   const watch = (wc: WebContents): void => {
     if (watched.has(wc)) return
     watched.add(wc)
-    const drop = (): void => { if (capable === wc) capable = null }
+    const drop = (): void => {
+      docGen.set(wc, genOf(wc) + 1)
+      if (capable === wc) capable = null
+      // 发请求时那份文档没了:等着的那次当场失败(新文档不认得旧 requestId)
+      for (const [id, p] of [...pending]) if (p.wc === wc) finish(id, new Error('switch_failed'))
+    }
     wc.on('render-process-gone', drop)
     wc.on('did-start-navigation', (d: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
       if (d?.isMainFrame && !d.isSameDocument) drop()
@@ -78,22 +88,30 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
     return accountOk(ref) ? { ref, fallback: null } : { ref: null, fallback: { reason: 'account', name: ref.name } }
   }
 
-  const set = async (e: IpcMainInvokeEvent, raw: unknown): Promise<void> => {
-    if (!deps.isTrusted(e)) throw new Error('forbidden')
+  /** requestId = 渲染层收到 amadeus:open-online 时拿到的那个;不带 = 普通的切换,不确认任何 openLibrary。 */
+  const set = async (e: IpcMainInvokeEvent, raw: unknown, requestId?: unknown): Promise<void> => {
+    if (!liveTop(e)) throw new Error('forbidden')
     const ref = raw === null ? null : parseOnlineVaultRef(raw)
     if (raw !== null && !ref) throw new Error('invalid_ref')
-    const fromMain = !!ref && e.sender === deps.mainContents()
+    // 确认 openLibrary 只认:主窗 + 同一个 requestId + 同一个 ref + 发请求时的那份文档
+    const p = ref && typeof requestId === 'string' ? pending.get(requestId) : undefined
+    const mine = p && p.wc === e.sender && e.sender === deps.mainContents() && p.gen === genOf(p.wc) && sameRef(p.ref, ref!) ? requestId as string : null
     const assertAccount = (): void => { if (ref && !accountOk(ref)) throw new Error('account_changed') }
     try {
       assertAccount()
       await writeActiveVault(ref, assertAccount)
     } catch (err) {
       // 主窗正为 openLibrary 换库、这一写失败:等着的那次当场失败,不干等 30 秒
-      if (fromMain) settle(ref!, new Error((err as Error)?.message === 'account_changed' ? 'account_changed' : 'switch_failed'))
+      if (mine) finish(mine, new Error((err as Error)?.message === 'account_changed' ? 'account_changed' : 'switch_failed'))
       throw err
     }
+    // 落盘途中换了账号:不广播上一个账号的 ref、不确认(盘上那条留着,get 按账号回 fallback)
+    if (ref && !accountOk(ref)) {
+      if (mine) finish(mine, new Error('account_changed'))
+      throw new Error('account_changed')
+    }
     deps.broadcast(ACTIVE_VAULT_IPC.changed, { ref })
-    if (fromMain) settle(ref!, null)
+    if (mine) finish(mine, null)
   }
 
   return {
@@ -101,26 +119,24 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
       // 普通配置写改了 lastVault(Extend 的胶囊切本机等)顺带清掉了在线库:照样告诉各窗口
       onActiveVaultCleared(() => deps.broadcast(ACTIVE_VAULT_IPC.changed, { ref: null }))
       ipc.handle(ACTIVE_VAULT_IPC.get, async (e) => {
-        if (!deps.isTrusted(e)) throw new Error('forbidden')
+        if (!liveTop(e)) throw new Error('forbidden')
         return get()
       })
-      ipc.handle(ACTIVE_VAULT_IPC.set, (e, raw: unknown) => set(e, raw))
+      ipc.handle(ACTIVE_VAULT_IPC.set, (e, raw: unknown, requestId?: unknown) => set(e, raw, requestId))
       ipc.on(ACTIVE_VAULT_IPC.onlineCapable, (e) => {
-        if (!deps.isTrusted(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报
+        if (!liveTop(e)) return // senderFrame 为空 = 旧文档导航后才到的迟到上报
         const wc = deps.mainContents()
         if (!wc || e.sender !== wc) return // 只认主窗
         watch(wc)
         capable = wc
       })
       ipc.on(ACTIVE_VAULT_IPC.openOnlineResult, (e, r: unknown) => {
-        if (!deps.isTrusted(e) || e.sender !== deps.mainContents()) return
+        if (!liveTop(e) || e.sender !== deps.mainContents()) return
         const o = r as { requestId?: unknown; ok?: unknown } | null
         if (!o || typeof o.requestId !== 'string' || o.ok !== false) return // 成功只认 set
         const p = pending.get(o.requestId)
-        if (!p) return
-        clearTimeout(p.timer)
-        pending.delete(o.requestId)
-        p.reject(new Error('switch_failed')) // 渲染层的 code 不往外带,固定码
+        if (!p || p.wc !== e.sender || p.gen !== genOf(p.wc)) return // 只认发请求时那份文档
+        finish(o.requestId, new Error('switch_failed')) // 渲染层的 code 不往外带,固定码
       })
     },
     get,
@@ -138,7 +154,7 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
           pending.delete(requestId)
           reject(new Error('switch_timeout'))
         }, timeoutMs)
-        pending.set(requestId, { ref, resolve, reject, timer })
+        pending.set(requestId, { ref, wc, gen: genOf(wc), resolve, reject, timer })
         try { wc.send(ACTIVE_VAULT_IPC.openOnline, { ref, requestId }) } catch {
           clearTimeout(timer)
           pending.delete(requestId)

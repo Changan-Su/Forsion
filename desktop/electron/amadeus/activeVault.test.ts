@@ -68,13 +68,15 @@ async function setup(opts: { timeoutMs?: number } = {}) {
     timeoutMs: opts.timeoutMs,
   })
   host.register({ handle: (ch, fn) => handles.set(ch, fn), on: (ch, fn) => listeners.set(ch, fn) })
-  const ev = (sender: unknown, extra: Record<string, unknown> = {}) => ({ sender, senderFrame: {}, ...extra })
+  // 缺省发送帧 = 那个 wc 现在的顶层文档(真 Electron 里 e.senderFrame === e.sender.mainFrame)
+  const ev = (sender: unknown, extra: Record<string, unknown> = {}) => ({ sender, senderFrame: (sender as { mainFrame?: unknown } | null)?.mainFrame ?? {}, ...extra })
   return {
     host, state, broadcasts, K: ACTIVE_VAULT_IPC,
     get: (sender: unknown = state.main, extra: Record<string, unknown> = {}) => handles.get(ACTIVE_VAULT_IPC.get)!(ev(sender, extra)),
-    set: (ref: unknown, sender: unknown = state.main, extra: Record<string, unknown> = {}) => handles.get(ACTIVE_VAULT_IPC.set)!(ev(sender, extra), ref),
+    set: (ref: unknown, sender: unknown = state.main, extra: Record<string, unknown> = {}, requestId?: string) => handles.get(ACTIVE_VAULT_IPC.set)!(ev(sender, extra), ref, requestId),
+    result: (r: unknown, sender: unknown = state.main, extra: Record<string, unknown> = {}) => listeners.get(ACTIVE_VAULT_IPC.openOnlineResult)!(ev(sender, extra), r),
+    reqId: (n = 0): string => state.main!.send.mock.calls[n][1].requestId,
     capable: (sender: unknown = state.main, extra: Record<string, unknown> = {}) => listeners.get(ACTIVE_VAULT_IPC.onlineCapable)!(ev(sender, extra)),
-    result: (r: unknown, sender: unknown = state.main) => listeners.get(ACTIVE_VAULT_IPC.openOnlineResult)!(ev(sender), r),
   }
 }
 
@@ -196,6 +198,42 @@ describe('active-vault:set', () => {
   })
 })
 
+describe('a failed read never leaves an empty config behind for later writes', () => {
+  it('set / clear / migrate / local switch during a read failure all throw; after recovery a lastPage write keeps lastVault, vaults and cloudAccounts', async () => {
+    const { cloudVaultDir } = await import('./cloudPaths')
+    const mirror = cloudVaultDir(`${CLOUD}::A`)
+    await fs.mkdir(mirror, { recursive: true })
+    const seeded = {
+      lastVault: mirror, localVault: '/x/Vault', vaults: [{ root: '/x/Vault' }, { root: '/x/Notes' }],
+      cloudAccounts: { [ns('A')]: { cloudSync: { enabled: true, vaultId: 'vault-1' }, entrySync: [] } },
+    }
+    await fs.writeFile(cfgFile(), JSON.stringify(seeded))
+    let failing = true
+    const realRead = fs.readFile.bind(fs)
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (p: unknown, ...rest: unknown[]) => {
+      if (failing && String(p) === cfgFile()) throw Object.assign(new Error('EIO'), { code: 'EIO' })
+      return (realRead as (...a: unknown[]) => Promise<unknown>)(p, ...rest)
+    }) as never)
+    try {
+      const t = await setup()
+      const { updateLocalVaultConfig, writeConfig } = await import('./settings')
+      const { migrateMirrorActiveVault } = await import('./settings')
+      const { isManagedCloudVault } = await import('./cloudPaths')
+      await expect(t.set(refOf('A'))).rejects.toThrow('amadeus-config-unreadable')
+      await expect(t.set(null)).rejects.toThrow('amadeus-config-unreadable')
+      await expect(migrateMirrorActiveVault(`${CLOUD}::A`, (id) => cloudVaultDir(id), isManagedCloudVault)).rejects.toThrow('amadeus-config-unreadable')
+      await expect(updateLocalVaultConfig((cfg) => { cfg.lastVault = '/x/Notes'; cfg.localVault = '/x/Notes' })).rejects.toThrow('amadeus-config-unreadable')
+      failing = false // 磁盘恢复
+      await writeConfig({ lastPage: 'z.md' })
+      const after = JSON.parse(await realRead(cfgFile(), 'utf8') as string)
+      expect(after.lastVault).toBe(mirror)
+      expect(after.vaults).toEqual(seeded.vaults)
+      expect(after.cloudAccounts[ns('A')].cloudSync).toEqual({ enabled: true, vaultId: 'vault-1' })
+      expect(after.lastPage).toBe('z.md')
+    } finally { spy.mockRestore() }
+  })
+})
+
 describe('switching to a local vault clears activeVault; restore does not', () => {
   it('switchVault drops activeVault in the same write and broadcasts { ref: null }; restoreVault leaves it', async () => {
     const local = path.join(env.root, 'Vault'), other = path.join(env.root, 'Notes')
@@ -307,7 +345,7 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(t.host.canOpenOnline()).toBe(false)
   })
 
-  it('success: focuses the main window, asks it, resolves once it sets the same ref', async () => {
+  it('success: focuses the main window, asks it, resolves once it sets the same ref with the same requestId', async () => {
     const t = await setup()
     t.capable()
     const opening = t.host.openLibrary(refOf('A'))
@@ -316,15 +354,16 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(ch).toBe(t.K.openOnline)
     expect(payload.ref).toEqual(refOf('A'))
     expect(typeof payload.requestId).toBe('string')
+    const id = payload.requestId as string
     let done = false
     void opening.then(() => { done = true })
-    await t.set(refOf('A', { libraryId: 'lib-2' })) // 别的库不算
+    await t.set(refOf('A', { libraryId: 'lib-2' }), t.state.main, {}, id) // 别的库不算
+    await t.set(refOf('A'), fakeContents(5), {}, id) // 不是主窗发的不算
+    await t.set(refOf('A')) // 不带 requestId 的普通切换不算
+    await t.set(refOf('A'), t.state.main, {}, 'some-other-request') // 别的请求不算
     await new Promise((r) => setTimeout(r, 10))
     expect(done).toBe(false)
-    await t.set(refOf('A'), fakeContents(5)) // 不是主窗发的不算
-    await new Promise((r) => setTimeout(r, 10))
-    expect(done).toBe(false)
-    await t.set(refOf('A'))
+    await t.set(refOf('A'), t.state.main, {}, id)
     await expect(opening).resolves.toBeUndefined()
     expect((await readCfg()).activeVault).toEqual(refOf('A'))
   })
@@ -373,9 +412,65 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     const opening = t.host.openLibrary(refOf('A'))
     const started = Date.now()
     login('B') // 换库途中换了账号
-    await expect(t.set(refOf('A'))).rejects.toThrow('account_changed')
+    await expect(t.set(refOf('A'), t.state.main, {}, t.reqId())).rejects.toThrow('account_changed')
     await expect(opening).rejects.toThrow('account_changed')
     expect(Date.now() - started).toBeLessThan(2_000)
+  })
+
+  it('an account switch while the file is being written: no broadcast of the old account’s ref, and the open fails with account_changed', async () => {
+    const t = await setup({ timeoutMs: 5_000 })
+    t.capable()
+    const opening = t.host.openLibrary(refOf('A'))
+    const realRename = fs.rename.bind(fs)
+    const spy = vi.spyOn(fs, 'rename').mockImplementationOnce(async (a, b) => { login('B'); return realRename(a, b) })
+    try {
+      await expect(t.set(refOf('A'), t.state.main, {}, t.reqId())).rejects.toThrow('account_changed')
+    } finally { spy.mockRestore() }
+    await expect(opening).rejects.toThrow('account_changed')
+    expect(t.broadcasts).toEqual([])
+    expect(await t.get()).toEqual({ ref: null, fallback: { reason: 'account', name: 'Notes' } }) // 盘上那条留着,按账号回 fallback
+  })
+
+  it('a set still in flight from before a reload cannot confirm a new request; the reload itself fails the old one', async () => {
+    const t = await setup({ timeoutMs: 5_000 })
+    t.capable()
+    const first = t.host.openLibrary(refOf('A'))
+    const oldFrame = t.state.main!.mainFrame
+    const firstId = t.reqId()
+    // 主窗重载:新文档(新的顶层帧)
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    t.state.main!.mainFrame = {}
+    await expect(first).rejects.toThrow('switch_failed') // 发请求时那份文档没了
+    t.capable()
+    const second = t.host.openLibrary(refOf('A'))
+    let done = false
+    void second.then(() => { done = true }, () => { done = true })
+    // 旧文档的迟到 set:旧帧 / 旧 requestId,都不算
+    await expect(t.set(refOf('A'), t.state.main, { senderFrame: oldFrame }, firstId)).rejects.toThrow('forbidden')
+    await t.set(refOf('A'), t.state.main, {}, firstId)
+    t.result({ requestId: t.reqId(1), ok: false }, t.state.main, { senderFrame: oldFrame }) // 旧帧的失败回报也不算
+    await new Promise((r) => setTimeout(r, 10))
+    expect(done).toBe(false)
+    await t.set(refOf('A'), t.state.main, {}, t.reqId(1))
+    await expect(second).resolves.toBeUndefined()
+  })
+
+  it('get / set / result refuse a null sender frame or a frame that is not the current top document', async () => {
+    const t = await setup({ timeoutMs: 200 })
+    for (const extra of [{ senderFrame: null }, { senderFrame: {} }]) {
+      await expect(t.get(t.state.main, extra)).rejects.toThrow('forbidden')
+      await expect(t.set(null, t.state.main, extra)).rejects.toThrow('forbidden')
+    }
+    t.capable()
+    const opening = t.host.openLibrary(refOf('A'))
+    let settled = false
+    opening.then(() => { settled = true }, () => { settled = true })
+    t.result({ requestId: t.reqId(), ok: false }, t.state.main, { senderFrame: null })
+    t.result({ requestId: t.reqId(), ok: false }, t.state.main, { senderFrame: {} })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(settled).toBe(false)
+    t.result({ requestId: t.reqId(), ok: false })
+    await expect(opening).rejects.toThrow('switch_failed')
   })
 })
 
@@ -451,6 +546,17 @@ describe('legacy mirror migration', () => {
     await seed()
     expect(await migrateOnStartup(`${CLOUD}::A`, true)).toBe(true) // 打开以后就是上面那套迁移
     expect((await readCfg()).activeVault?.vaultId).toBe('vault-1')
+  })
+
+  it('a deleted local vault, or a plain file at its path, is not written as lastVault', async () => {
+    const { local } = await seed()
+    await fs.rm(local, { recursive: true })
+    expect(await migrate()).toBe(true)
+    expect('lastVault' in (await readCfg())).toBe(false)
+    await seed()
+    await fs.rm(local, { recursive: true }); await fs.writeFile(local, 'not a folder')
+    expect(await migrate()).toBe(true)
+    expect('lastVault' in (await readCfg())).toBe(false)
   })
 
   it('no real local vault → lastVault is dropped (restore then makes the default vault); no config file → nothing is created', async () => {

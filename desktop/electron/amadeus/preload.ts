@@ -24,7 +24,7 @@ const api: AmadeusApi = {
   revealVault: (root) => ipcRenderer.invoke(IPC.revealVault, root),
   // 在线库(智库同步第 3 步 H3):读写当前在线库、主窗收「在线打开」并报失败 / 报装好了转发壳
   activeVaultGet: () => ipcRenderer.invoke(ACTIVE_VAULT_IPC.get),
-  activeVaultSet: (ref) => ipcRenderer.invoke(ACTIVE_VAULT_IPC.set, ref),
+  activeVaultSet: (ref, requestId) => ipcRenderer.invoke(ACTIVE_VAULT_IPC.set, ref, requestId),
   onActiveVaultChanged: (cb) => subscribe(ACTIVE_VAULT_IPC.changed, cb),
   onOpenOnline: (cb) => subscribe(ACTIVE_VAULT_IPC.openOnline, cb),
   openOnlineResult: (r) => ipcRenderer.send(ACTIVE_VAULT_IPC.openOnlineResult, r),

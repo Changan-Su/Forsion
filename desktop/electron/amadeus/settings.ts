@@ -155,7 +155,10 @@ export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | 
 }
 
 export async function readConfig(accountId = currentCloudAccountId()): Promise<AmadeusConfig> {
-  const stored = await storedConfig()
+  return configFrom(await storedConfig(), accountId)
+}
+
+function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConfig {
   const own = accountId ? stored.cloudAccounts?.[cloudAccountNamespace(accountId)] : undefined
   // Callers mutate entries while preparing changes. A snapshot prevents old
   // asynchronous work from modifying the persisted owner map behind our back.
@@ -176,8 +179,8 @@ const sameLastVault = (a: unknown, b: unknown): boolean => {
 type ActiveVaultMode = 'auto' | 'drop' | 'keep'
 
 /** 回这一次是否清掉了一个在线库。 */
-async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, mode: ActiveVaultMode = 'auto'): Promise<boolean> {
-  const stored = await storedConfig()
+async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string | null, mode: ActiveVaultMode = 'auto', base?: StoredConfig): Promise<boolean> {
+  const stored = base ?? await storedConfig()
   const { cloudSync, entrySync, cloudAccountId: _owner, ...local } = snapshot
   const next: StoredConfig = { ...stored, ...local }
   const had = next.activeVault !== undefined && next.activeVault !== null
@@ -293,6 +296,12 @@ export function parseOnlineVaultRef(v: unknown): OnlineVaultRef | null {
   return { kind: 'online', account: r.account, libraryId: r.libraryId, vaultId: r.vaultId, prefix: p, name: r.name }
 }
 
+/** 新写路径(在线库 set / 清除 / 迁移 / 切本机库)只认严格读的底稿:不走宽松读,读失败就抛,共享缓存不会因此变成 {}。
+ *  别人起的宽松读还在途时先等它落定(不自己起一个),免得它晚到、把这一写的缓存盖回去。 */
+async function settleLoading(): Promise<void> {
+  if (loading) await loading
+}
+
 async function writeStored(out: StoredConfig): Promise<void> {
   const file = configFile()
   await fs.mkdir(path.dirname(file), { recursive: true })
@@ -318,7 +327,7 @@ export function writeActiveVault(next: OnlineVaultRef | null, assert?: () => voi
   const ref = next === null ? null : parseOnlineVaultRef(next)
   if (next !== null && !ref) return Promise.reject(new Error('invalid_ref'))
   const work = writes.then(async () => {
-    await storedConfig() // 启动时还在读的那份缓存先落定,免得它晚到、把这一写盖回去
+    await settleLoading()
     const out: StoredConfig = { ...(await storedConfigStrict()) }
     assert?.()
     if (ref) out.activeVault = ref
@@ -332,9 +341,11 @@ export function writeActiveVault(next: OnlineVaultRef | null, assert?: () => voi
 /** 本机侧换库:update(switchPatch)和清 activeVault 同一次落盘(用户切回本机库 = 下次不再恢复在线库)。回是否清掉了一个在线库。 */
 export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, accountId = currentCloudAccountId()): Promise<boolean> {
   const work = writes.then(async () => {
-    const config = await readConfig(accountId)
+    await settleLoading()
+    const disk = await storedConfigStrict() // 读不了就抛、不换库:不拿空底稿盖掉清单和账号配置
+    const config = configFrom(disk, accountId)
     update(config)
-    return persistConfig(config, accountId, 'drop') // 广播由调用方在换完根以后发
+    return persistConfig(config, accountId, 'drop', disk) // 广播由调用方在换完根以后发
   })
   writes = work.then(() => {}, () => {})
   return work
@@ -351,7 +362,7 @@ export function migrateMirrorActiveVault(
 ): Promise<boolean> {
   const work = writes.then(async () => {
     if (!accountId) return false
-    await storedConfig()
+    await settleLoading()
     const disk = await storedConfigStrict()
     if (disk.activeVault !== undefined && disk.activeVault !== null) return false
     const last = disk.lastVault
@@ -362,7 +373,9 @@ export function migrateMirrorActiveVault(
     if (!ref) return false // 缺 vaultId(或不是合法 id)
     const out: StoredConfig = { ...disk, activeVault: ref }
     const local = disk.localVault
-    if (typeof local === 'string' && local && !isManaged(local)) out.lastVault = local
+    // 本机库那一格得是还在的真目录:删掉了、或同路径上是个普通文件,都去掉 lastVault,让启动回落建默认库
+    const isDir = typeof local === 'string' && !!local && !isManaged(local) && await fs.stat(local).then((st) => st.isDirectory(), () => false)
+    if (isDir) out.lastVault = local
     else delete out.lastVault
     await writeStored(out)
     return true

@@ -877,8 +877,9 @@ export interface AmadeusApi {
   revealVault?(root: string): Promise<void>
   /** Online library (desktop host only). Read throws when the config can't be read; open `lastVault` then. */
   activeVaultGet?(): Promise<ActiveVaultRead>
-  /** Call after the bridge switched; throws `account_changed` for another account's ref. null = back to local. */
-  activeVaultSet?(ref: OnlineVaultRef | null): Promise<void>
+  /** Call after the bridge switched; throws `account_changed` for another account's ref. null = back to local.
+   *  Pass the `requestId` from onOpenOnline when this set answers that request (only then does openLibrary resolve). */
+  activeVaultSet?(ref: OnlineVaultRef | null, requestId?: string): Promise<void>
   onActiveVaultChanged?(cb: (e: { ref: OnlineVaultRef | null }) => void): () => void
   /** Main window only: the host asks to open this library (CloudHost.openLibrary). */
   onOpenOnline?(cb: (req: { ref: OnlineVaultRef; requestId: string }) => void): () => void
