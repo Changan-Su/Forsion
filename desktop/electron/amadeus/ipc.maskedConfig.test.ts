@@ -249,6 +249,28 @@ describe('ordinary writes after a failed loose read take the strict base (Codex 
     expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).lastVault).toBe(vaultA)
   })
 
+  it('restoreVault whose own read fails while a later read works does not write the default vault over the user\'s', async () => {
+    const failReads = (n: number) => {
+      const real = fs.readFile.bind(fs) as (...a: unknown[]) => Promise<string>
+      let left = n
+      vi.spyOn(fs, 'readFile').mockImplementation((async (file: unknown, ...rest: unknown[]) => {
+        if (left > 0 && String(file) === cfgFile()) { left--; throw Object.assign(new Error('EACCES'), { code: 'EACCES' }) }
+        return real(file, ...rest)
+      }) as typeof fs.readFile)
+    }
+    const { IPC } = await import('@amadeus-shared/ipc')
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+    await hostDeps()
+    failReads(1) // restoreVault 的那次读失败,再读一次就读到了:打开用户原来的库
+    expect((await invoke(IPC.restoreVault)).root).toBe(vaultA)
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
+    vi.restoreAllMocks(); vi.resetModules(); env.handlers.clear()
+    await hostDeps()
+    failReads(2) // 两次都读不到:拒绝,不写默认库(写那一步会重读,第三次读得到就会以真底稿为底盖掉)
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow()
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toEqual(accountConfig())
+  })
+
   it('a config that stays unparseable is never overwritten: restoreVault refuses instead of writing the default vault over it', async () => {
     await fs.writeFile(cfgFile(), '{"lastVault":')
     await hostDeps()

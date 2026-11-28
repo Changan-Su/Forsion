@@ -405,7 +405,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       return { root, pages, folders, strictExistingWrites: true }
     }
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    if (!lastVault && looseConfigReadFailed()) ({ lastVault } = await readConfig()) // 配置读失败过:再读一次盘
+    if (!lastVault) {
+      // 读不出 ≠ 首启:不拿默认库盖掉用户选过的库(写会重读,读得到就以真底稿为底写默认库)
+      if (looseConfigReadFailed()) throw new Error('amadeus-config-unreadable')
+      return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
+    }
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
