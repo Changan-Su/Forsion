@@ -139,3 +139,70 @@ describe('the old engines stop when a read the mask depends on fails (H3 list it
     expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultB] })
   })
 })
+
+describe('mirrorRetired: only the mirror stops (H3 final interface §1)', () => {
+  const claim = (over: Record<string, unknown>) => accountConfig({ syncOwnershipV2: { entryRoots: [vaultA], mirror: 'keep', human: 'engine', ...over } })
+  const rawCloudSync = async () => JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].cloudSync
+
+  it('three claim states × which old engines run: keep runs all but the taken root; keep + mirrorRetired stops only the mirror; off stops everything', async () => {
+    const cases: Array<[Record<string, unknown>, ReturnType<typeof legacyEngines>]> = [
+      [{}, { mirror: true, shared: true, entryRoots: [vaultB] }],
+      [{ mirrorRetired: true }, { mirror: false, shared: true, entryRoots: [vaultB] }],
+      [{ mirror: 'off' }, STOPPED],
+    ]
+    for (const [over, want] of cases) {
+      vi.resetModules()
+      await fs.writeFile(cfgFile(), JSON.stringify(claim(over)))
+      const masked = await (await hostDeps()).readConfig()
+      expect(legacyEngines(masked), JSON.stringify(over)).toEqual(want)
+      if ('mirrorRetired' in over) expect(masked.cloudSync).toEqual({ enabled: true, vaultId: 'vault-1', deviceId: 'desk-1', mirror: false })
+      else expect(masked.cloudSync).not.toHaveProperty('mirror')
+    }
+  })
+
+  it('a write-back built from the masked read never puts cloudSync.mirror on disk (old engine deviceId / vaultId / setEnabled writes)', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(claim({ mirrorRetired: true })))
+    const deps = await hostDeps()
+    const masked = await deps.readConfig()
+    // core/amadeus/engine.ts:{ ...(cfg.cloudSync ?? {}), deviceId: id } / { ...(cs ?? {}), vaultId } / { ...(cfg.cloudSync ?? {}), enabled: on }
+    await deps.writeConfig({ cloudSync: { ...masked.cloudSync, deviceId: 'desk-2' } }, ACCOUNT)
+    expect(await rawCloudSync()).toEqual({ enabled: true, vaultId: 'vault-1', deviceId: 'desk-2' })
+    await deps.writeConfig({ cloudSync: { ...(await deps.readConfig()).cloudSync, enabled: false } }, ACCOUNT)
+    expect(await rawCloudSync()).toEqual({ enabled: false, vaultId: 'vault-1', deviceId: 'desk-2' })
+    const { readConfig } = await import('./settings')
+    expect((await readConfig()).cloudSync).not.toHaveProperty('mirror')
+  })
+
+  it('a stray cloudSync.mirror already on disk is neither read back unmasked nor kept by the next cloudSync write', async () => {
+    const cfg = accountConfig()
+    ;(cfg.cloudAccounts[NS].cloudSync as Record<string, unknown>).mirror = false
+    await fs.writeFile(cfgFile(), JSON.stringify(cfg))
+    const deps = await hostDeps()
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+    await deps.writeConfig({ cloudSync: { ...(await deps.readConfig()).cloudSync, vaultId: 'vault-2' } }, ACCOUNT)
+    expect(await rawCloudSync()).toEqual({ enabled: true, vaultId: 'vault-2', deviceId: 'desk-1' })
+  })
+
+  it('end to end: ownership.set({mirrorRetired:true}) persists, restarts the old engines, and their next read has only the mirror off', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+    const deps = await hostDeps()
+    const { contentSyncOwnershipV2 } = await import('../contentSyncHost')
+    const { readSyncOwnershipV2, writeSyncOwnershipV2, readConfig } = await import('./settings')
+    const restartSync = vi.fn(async () => {})
+    const seam = contentSyncOwnershipV2({
+      accountId: () => ACCOUNT, ensureBackend: async () => {}, backendStatus: () => ({ state: 'stopped', url: null }), engineToken: () => 't',
+      loadConfig: async () => ({ mode: 'managed' }), dataDir: () => env.root, stopSync: async () => {}, restartSync,
+      readV2: readSyncOwnershipV2, writeV2: writeSyncOwnershipV2,
+      entryRoots: async (a) => (await readConfig(a)).entrySync?.map((v) => v.vaultRoot) ?? [], legacyOwned: () => false,
+    })
+    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: true }, ACCOUNT)
+    expect(restartSync).toHaveBeenCalledOnce()
+    expect((await seam.get(ACCOUNT)).mirrorRetired).toBe(true)
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: false, shared: true, entryRoots: [vaultB] })
+    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine' }, ACCOUNT) // 不给 = 沿用
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: false, shared: true, entryRoots: [vaultB] })
+    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: false }, ACCOUNT)
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].syncOwnershipV2).not.toHaveProperty('mirrorRetired')
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultB] })
+  })
+})

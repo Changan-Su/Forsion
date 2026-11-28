@@ -15,6 +15,9 @@ export interface AmadeusCloudSyncConfig {
   enabled?: boolean
   vaultId?: string
   deviceId?: string
+  /** false = 只停镜像(H3 定稿第 1 节,认领里 mirrorRetired 时由遮罩加上)。只出现在递给旧引擎的遮罩读数里:
+   *  宿主从不把它写进盘上的 cloudSync(persistConfig 剔掉),readConfig 也不从盘上带出来。 */
+  mirror?: boolean
 }
 
 /** 按条目云同步的注册表项(与 Extend 的 entryRegistry.EntrySyncVault 同形;引擎住在 Extend,宿主只负责落盘)。 */
@@ -36,6 +39,9 @@ export interface SyncOwnershipV2 {
   entryRoots: string[]
   mirror: 'keep' | 'off'
   human: 'engine' | 'content'
+  /** 第 3 步(H3 定稿第 1 节,宿主声明 contentSync.mirrorRetire 才认):true = 只停镜像(mirror 仍是 'keep')。盘上只存 true;
+   *  set 不给 = 沿用盘上的值,false = 撤销(删键)。 */
+  mirrorRetired?: boolean
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -126,6 +132,7 @@ const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
   const o = v as SyncOwnershipV2
   return !!o && typeof o === 'object' && Array.isArray(o.entryRoots) && o.entryRoots.every((r) => typeof r === 'string' && path.isAbsolute(r))
     && (o.mirror === 'keep' || o.mirror === 'off') && (o.human === 'engine' || o.human === 'content')
+    && (o.mirrorRetired === undefined || typeof o.mirrorRetired === 'boolean') // 不是 boolean = 读不出,不当成没退役
 }
 
 /** 这个账号的按根认领:null = 没有(走老的 .owned 全局遮罩);配置读不了、或这一项形状不对 → 抛(调用方按「不知道」处理,不当成没认领)。 */
@@ -166,6 +173,13 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
   return configFrom(await storedConfig(), accountId)
 }
 
+/** cloudSync.mirror 只属于遮罩读数(见 AmadeusCloudSyncConfig):读盘不带、写盘剔掉。 */
+function withoutMirror(cs: AmadeusCloudSyncConfig | undefined): AmadeusCloudSyncConfig | undefined {
+  if (!cs || !('mirror' in cs)) return cs
+  const { mirror: _mirror, ...rest } = cs
+  return rest
+}
+
 function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConfig {
   const own = accountId ? stored.cloudAccounts?.[cloudAccountNamespace(accountId)] : undefined
   // Callers mutate entries while preparing changes. A snapshot prevents old
@@ -173,7 +187,7 @@ function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConf
   return structuredClone({
     lastVault: stored.lastVault, localVault: stored.localVault, lastPage: stored.lastPage,
     vaults: stored.vaults, syncVault: stored.syncVault,
-    cloudSync: own?.cloudSync, entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
+    cloudSync: withoutMirror(own?.cloudSync), entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
   })
 }
 
@@ -198,7 +212,8 @@ async function persistConfig(snapshot: Partial<AmadeusConfig>, accountId: string
     const key = cloudAccountNamespace(accountId)
     next.cloudAccounts = { ...stored.cloudAccounts, [key]: {
       ...stored.cloudAccounts?.[key],
-      ...('cloudSync' in snapshot ? { cloudSync: { ...stored.cloudAccounts?.[key]?.cloudSync, ...cloudSync } } : {}),
+      // 旧引擎拿遮罩读数 {...cfg.cloudSync, deviceId / vaultId / enabled} 写回:遮罩加的 mirror 不落盘
+      ...('cloudSync' in snapshot ? { cloudSync: withoutMirror({ ...stored.cloudAccounts?.[key]?.cloudSync, ...cloudSync }) } : {}),
       ...('entrySync' in snapshot ? { entrySync } : {}),
     } }
   }
