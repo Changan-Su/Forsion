@@ -274,8 +274,8 @@ export async function saveAuthorizedTarget(kind: 'dropbox', opts: TargetAuthStar
 export function registerSyncTargetsIpc(): void {
   // 新建 / 重新授权网盘去处(契约 H-9):开系统浏览器,结果经 remotesync:targets:auth 发回发起的那个窗口
   ipcMain.handle('remotesync:targets:authStart', async (e, kind: unknown, rawOpts: unknown) => {
+    if (kind !== 'dropbox') return { ok: false, error: 'bad-target-kind' } // 先判种类再领票:被拒的这次不顶掉别人
     const ticket = takeTargetAuthTicket() // 进门就领票:下面查 sync-targets 慢了,也不会去顶掉比它晚开始的那一次
-    if (kind !== 'dropbox') return { ok: false, error: 'bad-target-kind' }
     const o = (rawOpts && typeof rawOpts === 'object' ? rawOpts : {}) as Record<string, unknown>
     const str = (k: string): string | undefined => (typeof o[k] === 'string' ? (o[k] as string) : undefined)
     const opts: TargetAuthStartOpts = { id: str('id'), label: str('label'), baseDir: str('baseDir'), appKey: str('appKey') }

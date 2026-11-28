@@ -192,6 +192,24 @@ describe('archiving the legacy remotesync', () => {
     expect(JSON.parse(readFileSync(join(env.root, 'archive', 'remotesync.json'), 'utf8'))).toEqual(moved)
   })
 
+  it('a Google Drive config (written by a version with Drive, then downgraded) is refused: nothing copied, the config and every baseline stay put', async () => {
+    const drive = { backend: 'gdrive', intervalMin: 15, syncOnStart: true, gdrive: { clientId: '', refreshToken: 'fixture-secret-value', baseDir: 'Vault' } }
+    const bytes = JSON.stringify(drive, null, 2)
+    writeFileSync(cfgFile(), bytes, { mode: 0o600 })
+    mkdirSync(join(userData(), 'remotesync-state'))
+    // 两份不同账号 / 目录的 Drive 基线:这一版算不出指纹,认不准该挪哪份,一份都不挪
+    const fps = ['gdrive:perm-a/Vault', 'gdrive:perm-b/Other']
+    for (const fp of fps) writeFileSync(join(userData(), 'remotesync-state', baselineName(fp)), JSON.stringify({ version: 1, fingerprint: fp, entries: {} }))
+    await boot()
+    ipc.legacyRemoteSync.extendLoaded(true)
+    await ipc.legacyRemoteSync.seal()
+    await expect(ipc.legacyRemoteSync.archive(join(env.root, 'archive'))).rejects.toThrow('legacy-backend-unsupported')
+    expect(readFileSync(cfgFile(), 'utf8')).toBe(bytes)
+    expect(readdirSync(join(userData(), 'remotesync-state')).sort()).toEqual(fps.map((fp) => baselineName(fp)).sort())
+    expect(existsSync(join(env.root, 'archive', 'remotesync.json'))).toBe(false)
+    expect(JSON.parse(readFileSync(join(userData(), 'sync-targets.json'), 'utf8')).legacy.archived).toBe(false)
+  })
+
   it('hand-back after a failed takeover can restore the two auto-sync fields from the archived original; plain unseal keeps manual-only; a user change is kept', async () => {
     writeFileSync(cfgFile(), JSON.stringify(original(), null, 2), { mode: 0o600 })
     await boot()

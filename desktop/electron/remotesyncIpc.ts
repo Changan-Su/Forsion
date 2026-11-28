@@ -514,9 +514,10 @@ export async function startTargetAuth(
   kind: 'dropbox',
   opts: { appKey?: string },
   done: (attempt: string, r: TargetAuthOutcome) => void,
-  ticket: number = takeTargetAuthTicket(),
+  ticketIn?: number,
 ): Promise<{ ok: true; attempt: string; mode: 'auto' | 'manual' } | { ok: false; error: string }> {
-  if (kind !== 'dropbox') return { ok: false, error: 'bad-target-kind' } // 别的种类不开、也不顶掉在途的那一次
+  if (kind !== 'dropbox') return { ok: false, error: 'bad-target-kind' } // 别的种类不开、不领票,也不顶掉在途的那一次
+  const ticket = ticketIn ?? takeTargetAuthTicket()
   if (ticket !== targetTicket) return { ok: false, error: 'auth-superseded' }
   if (targetAttempt) endTargetAuth(targetAttempt, { ok: false, error: 'auth-superseded' })
   const { verifier, challenge } = pkcePair()
@@ -691,6 +692,9 @@ async function restoreAutoSync(): Promise<boolean> {
   })
 }
 
+/** remotesync.json 里认得、这一版不支持的后端(同 syncTargetsStore 的 UNSUPPORTED_SYNC_TARGET_KINDS):归档一律拒。 */
+const UNSUPPORTED_LEGACY_BACKENDS = ['gdrive'] as const
+
 /** 「根 × 去处」的不透明键:内置后端用基线指纹,算不出的(penzor 等)用后端 + 目录 + 库名。只是 hash,不含凭据。 */
 function legacyKeyOf(cfg: RemoteSyncConfig, root: string): string {
   const penzorVault = cfg.backend === 'penzor' ? (typeof cfg.penzor?.vault === 'string' ? cfg.penzor.vault : 'default').trim() || 'default' : ''
@@ -832,6 +836,8 @@ export const legacyRemoteSync = {
       const pick = await inConfigQueue(async () => {
         const strict = await readLegacyConfigStrict()
         if (!strict) throw new Error('no-legacy-config')
+        // 认得、这一版不支持的后端(带它的版本写过、再降回这一版):不复制、不改写、不挪基线 —— 这一版算不出它的指纹,认不准该挪哪份
+        if ((UNSUPPORTED_LEGACY_BACKENDS as readonly string[]).includes(strict.cfg.backend)) throw new Error('legacy-backend-unsupported')
         // 接手时看到的「根 × 去处」和现在的对不上(封口期间用户改了旧同步的根 / 桶 / 账号):什么都不动,交接手重来
         if (expectKey !== null) {
           const rooted = await resolveLocalSyncRoot()

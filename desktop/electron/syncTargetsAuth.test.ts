@@ -131,15 +131,19 @@ beforeEach(async () => {
   registerSyncTargetsIpc()
 })
 afterEach(async () => {
-  // 凭据只该在 sync-targets 文件里:事件、旧设置页广播、控制台一个字都没有
-  const out = JSON.stringify([events, env.broadcast, warn.mock.calls, log.mock.calls, error.mock.calls])
-  for (const s of SECRETS) expect(out).not.toContain(s)
-  await call('remotesync:targets:authCancel', '*') // 不是哪一次 = 什么都不做
-  for (const a of starts) await call('remotesync:targets:authCancel', a) // 关掉还开着的回环与计时
-  warn.mockRestore(); log.mockRestore(); error.mockRestore()
-  vi.unstubAllGlobals()
-  vi.useRealTimers()
-  rmSync(env.root, { recursive: true, force: true })
+  try {
+    // 凭据只该在 sync-targets 文件里:事件、旧设置页广播、控制台一个字都没有
+    const out = JSON.stringify([events, env.broadcast, warn.mock.calls, log.mock.calls, error.mock.calls])
+    for (const s of SECRETS) expect(out).not.toContain(s)
+    await call('remotesync:targets:authCancel', '*') // 不是哪一次 = 什么都不做
+    for (const a of starts) await call('remotesync:targets:authCancel', a) // 关掉还开着的回环与计时
+  } finally {
+    // 断言红了也照样还原:全局 fetch 桩、控制台、计时器不串到下一条
+    warn.mockRestore(); log.mockRestore(); error.mockRestore()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+    rmSync(env.root, { recursive: true, force: true })
+  }
 })
 
 describe('authorizing a new Dropbox target', () => {
@@ -481,5 +485,24 @@ describe('Google Drive: recognized in sync-targets, not supported in this versio
     expect(env.requests).toEqual([])
     expect(store().targets[GD]).toEqual(gd)
     expect(Object.keys(store().targets).sort()).toEqual([FOLDER, GD].sort())
+    // 存别的去处(整份写回)以后,gdrive 那条照样一字不差地留在盘上,文件仍是 0600
+    const other = join(env.root, 'Remote2')
+    mkdirSync(other, { recursive: true })
+    const saved = await saveSyncTarget({ kind: 'folder', label: 'Remote 2', section: { path: other } })
+    expect(saved).toMatchObject({ kind: 'folder' })
+    expect(store().targets[GD]).toEqual(gd)
+    expect(Object.keys(store().targets)).toHaveLength(3)
+    expect(statSync(join(env.root, 'userData', 'sync-targets.json')).mode & 0o777).toBe(0o600)
+  })
+
+  it('a rejected gdrive authStart takes no ticket: a Dropbox re-authorization still reading sync-targets is not superseded', async () => {
+    const DBX = 'fixture-dbx'
+    const dbx = { kind: 'dropbox', label: 'Dropbox', section: { refreshToken: 'fixture-refresh-old', accountId: 'dbid:A', baseDir: '/Vault' }, source: 'user', createdAt: 1, updatedAt: 1 }
+    writeFileSync(join(env.root, 'userData', 'sync-targets.json'), JSON.stringify({ version: 1, targets: { [DBX]: dbx } }))
+    const reauth = call('remotesync:targets:authStart', 'dropbox', { id: DBX }) // 进门领了票,正在读 sync-targets
+    expect(await call('remotesync:targets:authStart', 'gdrive', {})).toEqual({ ok: false, error: 'bad-target-kind' })
+    expect(await reauth).toMatchObject({ ok: true, mode: 'auto' })
+    expect(env.opened).toHaveLength(1)
+    expect(env.dbx!.closed).toBe(false)
   })
 })
