@@ -26,6 +26,7 @@ import { syncErrorText } from '../sync/v2/errors'
 import { closureItems, mergeScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
+import { CREATE_CANDIDATE } from '../sync/v2/types'
 import type {
   BindingScope, BindingView, Cadence, PreviewTarget, ResolveCandidate, ResolveNameResult, ScopeItem, VaultSyncCompatReason,
   VaultSyncGet, VaultSyncPreview,
@@ -158,8 +159,17 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     setPending({ ...p, preview: null, candidates: undefined })
     const r = await vaultSync.preview({ root: p.root, target: p.target, scope: p.scope, ...(p.bindingId ? { bindingId: p.bindingId } : {}) })
     if (r.ok && r.value) { setPending({ ...p, preview: r.value, candidates: undefined }); return }
-    setPending(null)
     const err = r.ok ? 'empty' : r.error
+    // 新建库时云端刚冒出同名的(别的设备刚建了):重新按名字找候选,让人挑(E 不替人绑,契约 E-4 第 1 条)
+    if (p.kind === 'new' && !p.bindingId && /name_exists/.test(err)) {
+      const res = await vaultSync.resolveName(p.root)
+      if (res.ok && res.value?.candidates.length) {
+        setNames((m) => ({ ...m, [p.root]: res.value! }))
+        setPending({ ...p, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.value.candidates, preview: null })
+        return
+      }
+    }
+    setPending(null)
     say(p.root, syncErrorText(err, t, p.name))
   }, [t])
 
@@ -178,7 +188,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (res.candidates.length > 1) { setPending({ ...base, kind: 'cloud', target: { kind: 'penzor' }, candidates: res.candidates }); return }
     const c = res.candidates[0]
     // 云端没有同名的:按文件夹名新建(apply 时才建,契约 U-1 第 1 条)
-    await runPreview(c ? { ...base, kind: 'cloud', target: { kind: 'penzor', candidate: c } } : { ...base, kind: 'new', target: { kind: 'penzor', candidate: { kind: 'create' } } })
+    await runPreview(c ? { ...base, kind: 'cloud', target: { kind: 'penzor', candidate: c } } : { ...base, kind: 'new', target: { kind: 'penzor', candidate: CREATE_CANDIDATE } })
   }, [names, runPreview, t])
 
   /** 已有绑定扩大范围:预演新范围 → 汇总卡(kind scope)。 */
@@ -271,7 +281,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
               const res = await vaultSync.renameAnswer(b.id, 'newVault')
               if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name)); return }
-              await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: { kind: 'create' } }, scope: b.scope, added: [], preview: null })
+              await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })
             })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
         ),
