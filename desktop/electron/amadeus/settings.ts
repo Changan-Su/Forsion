@@ -217,6 +217,44 @@ function configFrom(stored: StoredConfig, accountId: string | null): AmadeusConf
   })
 }
 
+/** 一份条目同步名单里认得的形状:不是数组 / 项不是对象 / 库根不是字符串 / entries 不是数组 / 条目路径不是字符串 → 抛
+ *  (读不懂 ≠ 没有)。缺省的 entries 当空。 */
+function entrySyncListStrict(v: unknown): EntrySyncVault[] {
+  if (v === undefined || v === null) return []
+  if (!Array.isArray(v)) throw new Error('amadeus-config-malformed')
+  return v.map((x) => {
+    const o = x as Partial<EntrySyncVault> | null
+    if (!o || typeof o !== 'object' || typeof o.vaultRoot !== 'string' || !o.vaultRoot) throw new Error('amadeus-config-malformed')
+    const entries = o.entries === undefined ? [] : o.entries
+    if (!Array.isArray(entries) || !entries.every((e) => !!e && typeof e === 'object' && typeof e.path === 'string' && typeof e.kind === 'string')) throw new Error('amadeus-config-malformed')
+    return { vaultRoot: o.vaultRoot, cloudName: typeof o.cloudName === 'string' ? o.cloudName : '', entries: structuredClone(entries) }
+  })
+}
+
+/** 一次严格读的快照(旧 remotesync 用,H3):当前账号那份配置(同 readConfig 的形状),加上盘上**所有**条目同步登记 ——
+ *  每个账号的、待认领的 legacyCloudState 里的、还没挪进 legacyCloudState 的顶层老字段,都从这同一次读来。
+ *  没有文件 = 空配置;读不了 / 不是 JSON 对象 / 名单形状读不懂 → 抛固定码(读失败 ≠ 没有条目同步)。不走缓存。 */
+export async function readEntrySyncSnapshotStrict(accountId: string | null = currentCloudAccountId()): Promise<{ config: AmadeusConfig; allEntrySync: EntrySyncVault[] }> {
+  await writes.catch(() => {}) // 排着的写先落盘(刚加的条目同步不会被这一轮漏掉);同 syncTargetsStore.read 先等它的队列
+  let raw: string
+  try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { config: configFrom({}, accountId), allEntrySync: [] }
+    throw new Error('amadeus-config-unreadable')
+  }
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { throw new Error('amadeus-config-unparseable') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config-malformed')
+  const st = parsed as StoredConfig & { entrySync?: unknown }
+  const accounts = st.cloudAccounts ?? {}
+  if (typeof accounts !== 'object' || Array.isArray(accounts)) throw new Error('amadeus-config-malformed')
+  const allEntrySync = [
+    ...entrySyncListStrict(st.entrySync),
+    ...entrySyncListStrict((st.legacyCloudState as { entrySync?: unknown } | undefined)?.entrySync),
+    ...Object.values(accounts).flatMap((own) => entrySyncListStrict((own as { entrySync?: unknown } | undefined)?.entrySync)),
+  ]
+  return { config: configFrom(normalizeStored(st), accountId), allEntrySync }
+}
+
 /** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
 const sameLastVault = (a: unknown, b: unknown): boolean => {
   const has = (v: unknown): v is string => typeof v === 'string' && v !== ''

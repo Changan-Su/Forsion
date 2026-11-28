@@ -186,6 +186,27 @@ export async function dropboxExchangeCode(
   return { refreshToken: j.refresh_token, accountId: j.account_id ?? '', email, name }
 }
 
+/** refresh token 属于哪个账号(去处的目录身份用,syncTargets.identity):换 access token → users/get_current_account 的 account_id。
+ *  取不到(网络、401、回包里没有)抛固定码,不带回包原文。 */
+export async function dropboxAccountId(cfg: { appKey: string; refreshToken: string }, signal?: AbortSignal): Promise<string> {
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: cfg.refreshToken, client_id: cfg.appKey })
+  const tok = await fetch(`${API}/oauth2/token`, { method: 'POST', body, signal }).catch(() => null)
+  if (!tok?.ok) throw new Error('dropbox-account-unavailable')
+  const t = (await tok.json().catch(() => null)) as { access_token?: unknown; account_id?: unknown } | null
+  if (typeof t?.account_id === 'string' && t.account_id) return t.account_id
+  if (typeof t?.access_token !== 'string' || !t.access_token) throw new Error('dropbox-account-unavailable')
+  const acc = await fetch(`${API}/2/users/get_current_account`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${t.access_token}`, 'Content-Type': 'application/json' },
+    body: 'null',
+    signal,
+  }).catch(() => null)
+  if (!acc?.ok) throw new Error('dropbox-account-unavailable')
+  const a = (await acc.json().catch(() => null)) as { account_id?: unknown } | null
+  if (typeof a?.account_id !== 'string' || !a.account_id) throw new Error('dropbox-account-unavailable')
+  return a.account_id
+}
+
 // ── RemoteFs ─────────────────────────────────────────────────────────────────
 
 export interface DropboxRemoteOptions {

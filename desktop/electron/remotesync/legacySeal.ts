@@ -87,6 +87,16 @@ export function createLegacyGate(deps: LegacyGateDeps) {
     return hold as LegacyHoldState
   }
   const idle = async (): Promise<void> => { while (inflight) await inflight.catch(() => {}) }
+  /** 锁里用(不再拿锁):持有 → 无。 */
+  const unsealLocked = async (): Promise<void> => {
+    const cur = await current()
+    if (cur.holder !== null) {
+      const next = { ...cur, holder: null }
+      await deps.saveHold(next)
+      hold = next
+    }
+    if (!sealsQueued) sealing = false
+  }
   /** 锁里用(不再拿锁)。 */
   const markArchivedLocked = async (archiveDir: string, now = Date.now()): Promise<void> => {
     const cur = await current()
@@ -148,14 +158,17 @@ export function createLegacyGate(deps: LegacyGateDeps) {
     },
     /** 只在接手中途失败、退回时用:持有 → 无。已归档的不还原(交还后只能手动、从零基线跑)。排在锁里,等前面的 seal / 归档做完。 */
     unseal(): Promise<void> {
+      return serial(unsealLocked)
+    },
+    /** 先核再交还(契约 H-13):排在同一把锁里,闸关着、在途那一轮跑完才调 check。check 拿到 handBack,核对和交还在 check 的
+     *  同一段里做(调用方在里面占着自己的配置写队列,核完到交还之间别人插不进来);check 抛 = 什么都不动。handBack 不再拿锁。 */
+    unsealChecked(check: (handBack: () => Promise<void>) => Promise<void>): Promise<void> {
       return serial(async () => {
-        const cur = await current()
-        if (cur.holder !== null) {
-          const next = { ...cur, holder: null }
-          await deps.saveHold(next)
-          hold = next
-        }
-        if (!sealsQueued) sealing = false
+        exclusiveHeld++
+        try {
+          await idle()
+          await check(unsealLocked)
+        } finally { exclusiveHeld-- }
       })
     },
     markArchived: (archiveDir: string, now?: number): Promise<void> => serial(() => markArchivedLocked(archiveDir, now)),

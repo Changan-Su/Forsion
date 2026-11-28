@@ -9,6 +9,7 @@ import React, { useEffect, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
+import { ipcErrorText } from '../ipcError'
 import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSyncState } from '../types'
 
 registerMessages({
@@ -128,7 +129,7 @@ export function RemoteSyncSection({ embedded = false }: { embedded?: boolean } =
             else c.conf++
           }
           setNote(t('settings.remotesync.dryResult', { push: String(c.push), pull: String(c.pull), del: String(c.del), conf: String(c.conf) }))
-        } else setNote(r.errors?.[0] || 'error')
+        } else setNote(r.errors?.[0] ? ipcErrorText(r.errors[0]) : 'error')
       })
       .finally(() => setBusy(false))
   }
@@ -450,7 +451,7 @@ export function RemoteSyncSection({ embedded = false }: { embedded?: boolean } =
         )}
         {report && report.errors.length > 0 && (
           <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
-            {t('settings.remotesync.errors')}: {report.errors.slice(0, 3).join('; ')}
+            {t('settings.remotesync.errors')}: {report.errors.slice(0, 3).map(ipcErrorText).join('; ')}
             {report.errors.length > 3 ? '…' : ''}
           </div>
         )}
