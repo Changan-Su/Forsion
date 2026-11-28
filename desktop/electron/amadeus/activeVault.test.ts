@@ -160,6 +160,10 @@ describe('active-vault:set', () => {
       await expect(t.set(bad)).rejects.toThrow('invalid_ref')
     }
     expect(await bytes()).toBe(before)
+    // 旧位置库:libraryId = `${vaultId}:${prefix}`,文件夹名长也照收
+    const prefix = `Amadeus/${'N'.repeat(250)}/`
+    await t.set(refOf('A', { prefix, libraryId: `vault-1:${prefix}` }))
+    expect((await readCfg()).activeVault.libraryId).toBe(`vault-1:${prefix}`)
   })
 
   it('the settings writer itself keeps only the six fields', async () => {

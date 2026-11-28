@@ -339,9 +339,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
     // 切本机库 = 不再恢复在线库:和 switchPatch 同一次落盘清掉 activeVault(H3 定稿第 2 节)
     const leftOnline = await updateLocalVaultConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
-    if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null })
     while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
-    return activateRoot(root, true) // 同步跑到 vault.setRoot
+    // 换完根再广播:别的窗口收到就 restoreVault(true),拿到的得是新根
+    try { return await activateRoot(root, true) } finally { if (leftOnline) notifyWindows(ACTIVE_VAULT_IPC.changed, { ref: null }) } // 同步跑到 vault.setRoot
   }
 
   handle(IPC.openVault, async () => {
