@@ -323,5 +323,6 @@ describe('云端删库(Extend #146)与 E-21(Extend #148)', () => {
     }
     expect(t('ssync.act.openPenzor')).not.toBe('ssync.act.openPenzor')
     expect(t('ssync.act.reupload')).not.toBe('ssync.act.reupload')
+    expect(t('ssync.act.backToLegacy', { name: 'Lab' })).toContain('Lab')
   })
 })
