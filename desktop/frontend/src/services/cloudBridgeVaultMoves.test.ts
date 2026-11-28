@@ -240,7 +240,7 @@ describe('B9 / E3: library views', () => {
     srv.put(V, 'Notes/.forsion-vault.md', '')
     const legacy = await boot(LEGACY)
     expect(legacy.info.root).toBe(cloudLibraryRoot(V, LEGACY))
-    expect(legacy.info.root).toBe(`cloud://${V}/${encodeURIComponent(LEGACY)}`)
+    expect(legacy.info.root).toBe(`cloud://${V}/${V}:Amadeus/Notes/`) // 与 shared onlineVaultRoot 同一拼法:不转义
     expect(legacy.info.pages.sort()).toEqual(['a.md', 'sub/b.md'])
     expect(legacy.info.folders).toEqual(['sub'])
     await legacy.bridge.writeTextFile('sub/b.md', 'edited')
