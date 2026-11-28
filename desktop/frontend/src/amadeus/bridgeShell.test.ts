@@ -56,6 +56,17 @@ describe('installBridgeShell: leaves other hosts alone', () => {
 })
 
 describe('installBridgeShell: forwards to the local bridge', () => {
+  it('the key itself is like a contextBridge key: read-only, not deletable, enumerable', () => {
+    const w: Win = { amadeusLocal: fakeLocal().api }
+    installBridgeShell(w)
+    const shell = w.amadeus
+    expect(Object.getOwnPropertyDescriptor(w, 'amadeus')).toMatchObject({ writable: false, configurable: false, enumerable: true })
+    expect(() => { w.amadeus = {} as AmadeusApi }).toThrow(TypeError)
+    expect(() => { delete (w as { amadeus?: unknown }).amadeus }).toThrow(TypeError)
+    expect(w.amadeus).toBe(shell)
+    expect(installBridgeShell(w)).toBe(false) // 装过一次,再调不动它
+  })
+
   it('reads, calls, `in`, enumeration and spread look exactly like the local bridge', async () => {
     const { api } = fakeLocal()
     const w: Win = { amadeusLocal: api }
