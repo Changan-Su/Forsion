@@ -33,7 +33,7 @@ jobs:
           New-Item -ItemType Directory -Force outputs/mini-native-windows | Out-Null
           node scripts/mini-native-windows.e2e.cjs 2>&1 | Tee-Object -FilePath outputs/mini-native-windows/run.log
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-mini-native-evidence

@@ -73,7 +73,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact@v7.0.2
         with:
           name: tangu-agent-dist
           path: tangu-agent/dist
@@ -108,7 +108,7 @@ jobs:
           tail -n 1 "$RUNNER_TEMP/summary.log" > "$RUNNER_TEMP/android-engine/summary.json"
           rm -rf "$RUNNER_TEMP/android-engine/.stage"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact@v7.0.2
         with:
           name: forsion-tangu-engine-android-arm64
           path: ${{ runner.temp }}/android-engine/*
