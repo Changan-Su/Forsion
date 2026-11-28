@@ -226,6 +226,7 @@ describe('a failed read never leaves an empty config behind for later writes', (
       await expect(t.set(refOf('A'))).rejects.toThrow('amadeus-config-unreadable')
       await expect(t.set(null)).rejects.toThrow('amadeus-config-unreadable')
       await expect(migrateMirrorActiveVault(`${CLOUD}::A`, (id) => cloudVaultDir(id), isManagedCloudVault)).rejects.toThrow('amadeus-config-unreadable')
+      t.capable()
       await expect(t.migrate()).rejects.toThrow('amadeus-config-unreadable') // 按需迁移那条 IPC 同样抛、不写
       await expect(updateLocalVaultConfig((cfg) => { cfg.lastVault = '/x/Notes'; cfg.localVault = '/x/Notes' })).rejects.toThrow('amadeus-config-unreadable')
       failing = false // 磁盘恢复
@@ -602,6 +603,7 @@ describe('active-vault:migrate (on demand, from the main window)', () => {
     vi.resetModules()
     const { local } = await seed()
     const t = await setup()
+    t.capable()
     expect(await t.migrate()).toEqual(DEFAULT_LIB)
     expect(await bytes()).toBe(viaStartup) // 同一段迁移逻辑,落盘逐字节一样
     expect((await readCfg()).lastVault).toBe(local)
@@ -624,11 +626,28 @@ describe('active-vault:migrate (on demand, from the main window)', () => {
     expect(await bytes()).toBe(before)
   })
 
+  it('a document that has not reported online-capable (no relay channels) → renderer_unsupported; nothing is read or written', async () => {
+    await seed()
+    const before = await bytes()
+    const t = await setup()
+    await expect(t.migrate()).rejects.toThrow('renderer_unsupported')
+    t.capable()
+    t.state.main!.emit('render-process-gone', {}, { reason: 'crashed' }) // 报过的那份文档没了:新文档还没报
+    await expect(t.migrate()).rejects.toThrow('renderer_unsupported')
+    t.state.main = fakeContents(3) // 主窗重建:新的那扇没报过
+    t.capable(fakeContents(2)) // 别的窗报的不算
+    await expect(t.migrate()).rejects.toThrow('renderer_unsupported')
+    expect(await bytes()).toBe(before)
+    t.capable()
+    expect(await t.migrate()).toEqual(DEFAULT_LIB)
+  })
+
   it('nothing to migrate → null (signed out, no vaultId, not on the mirror); an unreadable config throws and stays as is', async () => {
     await seed()
     let before = await bytes()
     env.creds = {}
     const t = await setup()
+    t.capable()
     expect(await t.migrate()).toBeNull()
     expect(await bytes()).toBe(before)
     login('A')
@@ -649,6 +668,7 @@ describe('active-vault:migrate (on demand, from the main window)', () => {
     await seed()
     let calls = 0
     const t = await setup({ accountId: () => (++calls === 1 ? `${CLOUD}::A` : `${CLOUD}::B`) })
+    t.capable()
     await expect(t.migrate()).rejects.toThrow('account_changed')
     expect((await readCfg()).activeVault).toEqual(DEFAULT_LIB)
     expect(t.broadcasts).toEqual([])

@@ -93,7 +93,7 @@ async function segmentA() {
     check(!!hp && path.isAbsolute(hp) && (hp.startsWith(fs.realpathSync(home)) || hp.startsWith(home)), 'A: 库那一层的 hostPath 给本机绝对路径', JSON.stringify(ps.hostPath))
     check(!!hp && /[\\/]vaults[\\/][0-9a-f]{16}[\\/]probe\.txt$/.test(hp) && fs.existsSync(hp) && fs.readFileSync(hp, 'utf8') === 'ok', 'A: 那个路径上就是刚写的文件', hp)
     check(typeof ps.appHostPath === 'string' && path.isAbsolute(ps.appHostPath), 'A: 跟应用那一层的 hostPath 照旧', JSON.stringify(ps.appHostPath))
-    // 新接缝接上了、且这一包不改任何东西:主窗报 null 收下;按需迁移在不登录时回 null,配置一字不动
+    // 新接缝接上了、且这一包不改任何东西:主窗报 null 收下;按需迁移要主窗报过 online-capable,配置一字不动
     const before = JSON.stringify(readCfg())
     const wired = await win.evaluate(async () => {
       const r = {}
@@ -101,7 +101,8 @@ async function segmentA() {
       try { r.migrate = await window.amadeus.activeVaultMigrate() } catch (e) { r.migrate = { error: String(e?.message ?? e) } }
       return r
     })
-    check(wired.opened === 'ok' && wired.migrate === null && JSON.stringify(readCfg()) === before, 'A: online-opened / migrate 通道在,不登录时什么都不改', JSON.stringify(wired))
+    // 这个实例没有 Extend 的代发通道、主窗没报 online-capable:migrate 由宿主拒(renderer_unsupported),不迁不写
+    check(wired.opened === 'ok' && /renderer_unsupported/.test(String(wired.migrate?.error)) && JSON.stringify(readCfg()) === before, 'A: online-opened / migrate 通道在;没有代发通道时 migrate 被宿主拒、什么都不改', JSON.stringify(wired))
     // 在线库代发通道的推送口(window.tangu.onCloudVaultEvent):Extend 注册了代发通道才有这个键;有的话主进程 send 的那一包原样到订阅者
     const relay = await win.evaluate(() => {
       if (typeof window.tangu?.onCloudVaultEvent !== 'function') return { present: false }

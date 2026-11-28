@@ -146,6 +146,9 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): ActiveVaultHost {
    *  (migrateLegacyMirrorVault),只是改由主窗渲染层在「当下能在线开」时调。不广播:渲染层换完 impl 再 set,广播在 set。 */
   const migrate = async (e: IpcMainInvokeEvent): Promise<OnlineVaultRef | null> => {
     if (!mainTop(e)) throw new Error('forbidden')
+    // 宿主自己核「当下能在线开」:这份文档报过 online-capable(只在 Extend 的代发通道在时才报)。
+    // 渲染层哪天提早调,也不会把停在云端那一侧的人落到本机库(H 评 #958)
+    if (capable !== e.sender) throw new Error('renderer_unsupported')
     const id = deps.accountId()
     if (!id) return null // 没登录:没有「这个账号的镜像」可迁
     if (!await migrateLegacyMirrorVault(id)) return null // 读不了配置 → 抛(什么都没写);别的不迁的情形 → 没迁
