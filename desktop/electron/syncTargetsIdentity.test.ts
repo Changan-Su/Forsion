@@ -249,10 +249,12 @@ describe('userinfo never leaks into the string (Codex P1)', () => {
       backslashes: `https:\\\\${NAME}:${PASS}@s3.example.test`,
       mangled: `https://${NAME}:12?x@s3.example.test`,
       slashInPass: `${NAME}:/${PASS}@s3.example.test`,
+      emptyPort: `https://${NAME}:/${PASS}@s3.example.test`,
+      portLike: `https://${NAME}:12/${PASS}@s3.example.test`,
     }
     writeTargets(Object.fromEntries(Object.entries(cases).map(([k, ep]) => [k, { kind: 's3', section: { endpoint: ep, bucket: 'notes', prefix: '', accessKeyID: 'fixture-access-key', secretAccessKey: 'fixture-secret-value' } }])))
     const s = await seam()
-    for (const k of ['s3scheme', 'ftp', 'mangled', 'slashInPass']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
+    for (const k of ['s3scheme', 'ftp', 'mangled', 'slashInPass', 'emptyPort', 'portLike']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
     for (const k of ['https', 'httpsUpper', 'userOnly', 'bare', 'bareUser', 'backslashes']) {
       const id = await s.identity(k, '')
       expect(id).toBe(clean)
@@ -271,9 +273,11 @@ describe('userinfo never leaks into the string (Codex P1)', () => {
       backslashes: dav(`https:\\\\${NAME}:${PASS}@dav.example.test/x`),
       plain: dav('https://dav.example.test/x'),
       mailInPath: dav('https://dav.example.test/remote.php/dav/files/someone@example.test/'),
+      emptyPort: dav(`https://${NAME}:/${PASS}@dav.example.test/x`),
     })
     const s = await seam()
-    for (const k of ['s3scheme', 'bare', 'mangled']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
+    for (const k of ['s3scheme', 'bare', 'mangled', 'emptyPort']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
+    // 残留:`https://名字:12/密码@主机` 在 WebDAV 上和「主机:端口 + 路径里有 @」分不出来(Nextcloud 路径本来就带邮箱),不拦
     const plain = await s.identity('plain', '')
     for (const k of ['https', 'userOnly', 'backslashes']) { const id = await s.identity(k, ''); expect(id).toBe(plain); noFormOf(id, NAME, PASS) }
     await expect(s.identity('mailInPath', '')).resolves.toMatch(/^webdav:/) // 路径里的 @(Nextcloud 用户目录)照常

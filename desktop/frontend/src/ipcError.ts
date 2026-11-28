@@ -13,7 +13,7 @@ const KEYS: Record<string, string> = {
   'not-logged-in': 'ipcerr.notLoggedIn',
   'login-expired': 'ipcerr.loginExpired',
   'vault-missing': 'ipcerr.vaultMissing',
-  // 旧 remotesync 退出登录时那一轮(electron/remotesyncIpc.ts runNow):条目名单读不到,不跑
+  // 旧 remotesync 那一轮(electron/remotesyncIpc.ts runNow):条目同步的名单算不出来(设置读不了 / 名单读不懂 / 条目库根打不开),不跑
   'entry-ignores-unknown': 'ipcerr.entryIgnoresUnknown',
   'mirror-missing': 'ipcerr.mirrorMissing',
   'scan-failed': 'ipcerr.scanFailed',

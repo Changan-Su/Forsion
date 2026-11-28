@@ -187,6 +187,7 @@ function entrySyncListStrict(v: unknown): EntrySyncVault[] {
  *  每个账号的、待认领的 legacyCloudState 里的、还没挪进 legacyCloudState 的顶层老字段,都从这同一次读来。
  *  没有文件 = 空配置;读不了 / 不是 JSON 对象 / 名单形状读不懂 → 抛固定码(读失败 ≠ 没有条目同步)。不走缓存。 */
 export async function readEntrySyncSnapshotStrict(accountId: string | null = currentCloudAccountId()): Promise<{ config: AmadeusConfig; allEntrySync: EntrySyncVault[] }> {
+  await writes.catch(() => {}) // 排着的写先落盘(刚加的条目同步不会被这一轮漏掉);同 syncTargetsStore.read 先等它的队列
   let raw: string
   try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { config: configFrom({}, accountId), allEntrySync: [] }

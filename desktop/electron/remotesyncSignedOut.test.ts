@@ -7,7 +7,7 @@
  * Shared/s.md 推上了远端、远端独有的文件拉进了条目文件夹。现在:登出也照名单让开着跑;登录着 B、条目在 A 名下也让开。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsp, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -167,6 +167,23 @@ describe('signing out, a legacy round, signing back in', () => {
       expect((await call<any>('remotesync:run')).errors).toEqual(['entry-ignores-unknown'])
     } finally { chmodSync(locked, 0o755) }
     expect(existsSync(join(remote(), 'b.md'))).toBe(false)
+  })
+
+  it('an entry sync still being written when the round starts is waited for (the snapshot reads after the settings write queue)', async () => {
+    await bootWith(null)
+    const settings = await import('./amadeus/settings')
+    const realRename = fsp.rename.bind(fsp) as (...a: unknown[]) => Promise<unknown>
+    const spy = vi.spyOn(fsp, 'rename').mockImplementation((async (from: unknown, to: unknown) => {
+      if (String(to).endsWith('amadeus-config.json')) await new Promise((r) => setTimeout(r, 80)) // 写到一半:临时文件写好了,还没换上
+      return realRename(from, to)
+    }) as never)
+    try {
+      const writing = settings.writeConfig({ entrySync: [{ vaultRoot: vault(), cloudName: 'Vault', entries: ENTRIES as never }] }, ACCOUNT)
+      const out = await call<any>('remotesync:run')
+      await writing
+      expect(out.ok).toBe(true)
+    } finally { spy.mockRestore() }
+    entryPathsUntouched()
   })
 
   it('signed out halfway through a round: still stayed off (the list does not depend on who is signed in)', async () => {

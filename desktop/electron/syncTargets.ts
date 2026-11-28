@@ -334,7 +334,7 @@ const sha32 = (x: string): string => createHash('sha256').update(x).digest('hex'
  *  - 不能把 `s3://名字:密码@主机` 补成 `https://s3://…`,那会把 userinfo 读成路径(Codex P1);
  *  - 主机那一截里有 '@'、解析出来却没有 userinfo(密码里有没转义的 ? # 之类,'@' 被挤进了查询)= 认不准,null:
  *    不然用户名会被当成主机名进串。路径里的 '@'(Nextcloud 的 /files/<邮箱>/)不受影响。 */
-function httpUrlOf(raw: string, bare: boolean): URL | null {
+function httpUrlOf(raw: string, bare: boolean, strictAt = false): URL | null {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):[\/\\]/.exec(raw)
   if (scheme ? !/^https?$/i.test(scheme[1]) : !bare) return null
   const text = scheme ? raw : `https://${raw}`
@@ -343,6 +343,11 @@ function httpUrlOf(raw: string, bare: boolean): URL | null {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
   const authority = text.replace(/^[A-Za-z][A-Za-z0-9+.-]*:[\/\\]*/, '').split(/[\/\\]/)[0]
   if (authority.includes('@') && !u.username && !u.password) return null
+  // `名字:/密码@主机`:冒号后面是空端口,名字被当成主机、密码进了路径。正经地址不会写空端口
+  if (authority.endsWith(':')) return null
+  // 整串里有 '@' 却没解析出 userinfo(`名字:12/密码@主机`:12 被当成端口)。S3 的 endpoint 不会正经带 '@',一律认不准;
+  // WebDAV 路径里本来就可能有邮箱(Nextcloud),这条只给 S3(strictAt)
+  if (strictAt && text.includes('@') && !u.username && !u.password) return null
   return u
 }
 
@@ -350,7 +355,7 @@ function httpUrlOf(raw: string, bare: boolean): URL | null {
  *  不做点段规整、不做 NFC(`team/../vault/` 就是 team 下面那个键前缀,Codex P2);只有点的段写成 %2E / %2E%2E,串里照样没有 . / .. 段。 */
 export function s3IdentityOf(section: Record<string, unknown>, segs: readonly string[]): string {
   const bucket = str(section.bucket)
-  const u = httpUrlOf(str(section.endpoint), true)
+  const u = httpUrlOf(str(section.endpoint), true, true)
   if (!u || !bucket) throw new Error(ID_UNAVAILABLE)
   const endpoint = `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}${u.pathname.replace(/\/+$/, '')}`
   const literal = [...normPrefix(str(section.prefix)).split('/'), ...segs].filter((x) => x !== '')
