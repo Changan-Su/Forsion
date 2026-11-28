@@ -275,10 +275,12 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     return out
   }, [data, vaults])
 
-  // 没绑定的库先问一次云端同名(开关能不能开、汇总卡标题,都要它)
+  // 没绑定的库先问一次云端同名(开关能不能开、汇总卡标题,都要它);
+  // 分库撤销停着的那条也问:原位置库回到清单里了,就给「换回原来的库」(Extend #146,E 口径)
   useEffect(() => {
     for (const r of rows) {
-      if (bindingOf(r.root) || names[r.root]) continue
+      const b = bindingOf(r.root)
+      if ((b && !(b.status.reason === 'cloud_deleted' && b.status.cloudDeleted?.reverted)) || names[r.root]) continue
       void vaultSync.resolveName(r.root).then((res) => setNames((m) => ({ ...m, [r.root]: res.ok && res.value ? res.value : { error: res.ok ? 'empty' : res.error } })))
     }
   }, [rows]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -550,6 +552,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onConnect={(b, kind, id) => void connect(b, kind, id)}
             onAuthCancel={stopAuth}
             onOpenDrive={legacy ? openDrive : undefined}
+            onRepoint={(b, c) => void runPreview({ root: b.root, name: r.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor', candidate: c }, scope: b.scope, added: [], preview: null })}
             onReupload={(b) => void runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })}
             onAuthCode={async (code) => { const a = authRef.current; if (!a) return; const res = await finishAuth(a.attempt, code); if (!res.ok) say(a.root, t(targetErrorKey(res.error ?? 'auth-failed'))) }}
             onPair={(b) => void runPreview({ root: b.root, name: b.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor' }, scope: b.scope, added: [], preview: null })}
@@ -663,7 +666,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 /** 一个库一行:名字 / 位置 · 状态 · 同步到 · 范围 · 开关;下面挂提示、要你选的、等你定、接手卡。 */
 interface AuthState { root: string; bindingId: string; attempt: string; mode: 'auto' | 'manual'; kind: AuthKind; reauth: boolean }
 
-function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery, targets, auth, onTarget, onAddFolder, onConnect, onAuthCancel, onAuthCode, onOpenDrive, onReupload }: {
+function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery, targets, auth, onTarget, onAddFolder, onConnect, onAuthCancel, onAuthCode, onOpenDrive, onReupload, onRepoint }: {
   row: { root: string; name: string; display: string; current: boolean; exists: boolean }
   binding: BindingView | undefined
   data: VaultSyncGet
@@ -680,6 +683,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   onNewVault: (b: BindingView) => void
   /** 云端库被删了:重新上传成新库(走预演 / 汇总卡换去处,Extend #146) */
   onReupload?: (b: BindingView) => void
+  onRepoint?: (b: BindingView, c: ResolveCandidate) => void
   reload: () => Promise<void>
   say: (text: string | null) => void
   onRecovery: () => void
@@ -790,6 +794,11 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
                   await reload()
                 })()}>{t('ssync.retry')}</button>
               )}
+              {/* 分库撤销:文件回了原位置库,按库文件夹名认回那一项(kind 'legacy'),走同一个 preview / apply;认不到就不给 */}
+              {cd?.reverted && onRepoint && (() => {
+                const c = names && 'candidates' in names && !names.error ? names.candidates.find((x) => x.kind === 'legacy') : undefined
+                return c ? <button type="button" className="btn ghost sm" data-ssync-repoint="" onClick={() => onRepoint(b, c)}>{t('ssync.act.backToLegacy', { name: c.name || row.name })}</button> : null
+              })()}
               {b.target.kind === 'penzor' && !cd?.reverted && onReupload && (
                 <button type="button" className="btn ghost sm" data-ssync-reupload="" onClick={() => onReupload(b)}>{t('ssync.act.reupload')}</button>
               )}

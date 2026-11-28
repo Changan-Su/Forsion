@@ -323,8 +323,9 @@ registerMessages({
   'ssync.reason.cloud_deleted.until': { zh: '回收站保留到 {date}。', en: ' It stays in the trash until {date}.' },
   'ssync.reason.cloud_deleted.purging': { zh: '云端这个库正在彻底清掉，恢复不了了。这一条停着，本机文件都在，可以重新上传成新库。', en: 'This vault is being permanently removed from the cloud and can’t be restored. This one stays paused and your local files are all here. You can upload them as a new vault.' },
   'ssync.reason.cloud_deleted.purged': { zh: '云端这个库已经彻底清掉了。这一条停着，本机文件都在，可以重新上传成新库。', en: 'This vault was permanently removed from the cloud. This one stays paused and your local files are all here. You can upload them as a new vault.' },
-  'ssync.reason.cloud_deleted.reverted': { zh: '这个库是分出来的，分库已经撤销，里面的文件回到了原来那个库。这一条停着，本机文件都在；在「同步到」里换回原来那个库就能接着同步。', en: 'This vault was split off, and the split was undone, so its files went back to the original vault. This one stays paused and your local files are all here. Pick the original vault under “Sync to” to keep syncing.' },
+  'ssync.reason.cloud_deleted.reverted': { zh: '这个库是分出来的，分库已经撤销，里面的文件回到了原来那个库。这一条停着，本机文件都在；换回原来那个库就能接着同步。', en: 'This vault was split off, and the split was undone, so its files went back to the original vault. This one stays paused and your local files are all here. Switch back to the original vault to keep syncing.' },
   'ssync.act.openPenzor': { zh: '去蓬洲云恢复', en: 'Restore in Penzor Cloud' },
+  'ssync.act.backToLegacy': { zh: '换回原来的库「{name}」', en: 'Switch back to “{name}”' },
   'ssync.act.reupload': { zh: '重新上传成新库', en: 'Upload as a new vault' },
   'ssync.err.vaultDeleted': { zh: '云端这个库已经删掉了，这次没有处理。在蓬洲云里恢复它，或者重新上传成新库。', en: 'This vault was deleted from the cloud, so nothing was resolved. Restore it in Penzor Cloud, or upload it as a new vault.' },
   // E-21(Extend #148):同一个文件夹还配着原来的网盘同步;另外四个准入码
