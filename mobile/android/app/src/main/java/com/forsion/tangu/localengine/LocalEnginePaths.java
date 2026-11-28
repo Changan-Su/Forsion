@@ -24,7 +24,11 @@ import java.util.Map;
 /**
  * Where everything lives, and how PRoot is invoked.
  *
- *   files/local-engine/rootfs        the environment (Ubuntu + Node + engine). Update / reset / delete touch only this.
+ *   files/local-engine/rootfs        the base (Ubuntu + Node), unpacked from this APK's asset. Reset / delete / an app
+ *                                    update with a new base replace it.
+ *   files/local-engine/engines/<v>   verified engine trees (npm), bound at /opt/tangu; current + previous only
+ *   files/local-engine/accounts/<k>/engine-floor.json  which engine versions were let onto this account's data (the
+ *                                    rollback rule, EngineFloor); outside home so the guest cannot write it
  *   files/local-engine/accounts/<k>/home       bound to /root/.tangu — sessions, memory, config.
  *   files/local-engine/accounts/<k>/workspace  bound to /root/workspace — the files the agent works on.
  *                                    Per Forsion account (k = hash of the account id in the sign-in token): another
@@ -35,8 +39,9 @@ import java.util.Map;
  *                                    /run/forsion (outside home so that home can move to a new phone without it)
  *   files/local-engine/selftest      throwaway engine data for the install self-test (one real start), deleted after it
  *   files/local-engine/proc-standins static stand-ins for /proc files apps cannot read
- *   files/local-engine/installed.json what is installed (layer versions + sha256); pending.json while a swap is
- *                                    in progress (LocalEngineInstaller.recover)
+ *   files/local-engine/installed.json the (base, engine) pair that passed the self-test together, previous engine, bad
+ *                                    versions; pending.json while a swap is in progress (LocalEngineInstaller.recover);
+ *                                    engine-health.json counts starts that never became healthy
  *   cache/local-engine/              downloads (resumable .part files) and PRoot's temp dir
  *
  * Cloud backup excludes all of files/local-engine; device transfer carries accounts/ (conversations and files)
@@ -65,6 +70,8 @@ final class LocalEnginePaths {
     final File secrets;
     final File standins;
     final File installedJson;
+    final File healthJson;
+    final File engines;
     final File selftest;
     final File cache;
     final File downloads;
@@ -78,6 +85,8 @@ final class LocalEnginePaths {
         secrets = new File(base, "secrets");
         standins = new File(base, "proc-standins");
         installedJson = new File(base, "installed.json");
+        healthJson = new File(base, "engine-health.json");
+        engines = new File(base, "engines");
         selftest = new File(base, "selftest");
         cache = new File(ctx.getCacheDir(), "local-engine");
         downloads = new File(cache, "downloads");
@@ -127,27 +136,35 @@ final class LocalEnginePaths {
 
     File secretDir(String account) { return new File(secrets, account); }
 
+    File engineDir(String version) { return new File(engines, version); }
+
+    /** The account's engine history (EngineFloor): next to home, not in it (home is bound into the guest). */
+    File floorFile(String account) { return new File(new File(accounts, account), "engine-floor.json"); }
+
     /** Where the engine reads the account token (TANGU_TOKEN_FILE); secretDir(account) is bound to its directory. */
     static final String GUEST_TOKEN_FILE = "/run/forsion/cloud-token";
 
-    List<String> engineBinds(String account) {
-        return binds(home(account), workspace(account), secretDir(account));
+    List<String> engineBinds(String account, File engineDir) {
+        return binds(home(account), workspace(account), secretDir(account), engineDir);
     }
 
     /**
      * The install self-test's engine data: same mount points as an account's, in a throwaway tree under selftest (no
      * account's home, workspace or token is ever bound into the self-test). The caller deletes selftest afterwards.
      */
-    List<String> selftestBinds() {
-        return binds(new File(selftest, "home"), new File(selftest, "workspace"), new File(selftest, "secrets"));
+    List<String> selftestBinds(File engineDir) {
+        return binds(new File(selftest, "home"), new File(selftest, "workspace"), new File(selftest, "secrets"), engineDir);
     }
 
-    private static List<String> binds(File home, File workspace, File secret) {
+    /** engineDir null = no engine bound (debug shell without an install). */
+    private static List<String> binds(File home, File workspace, File secret, File engineDir) {
         home.mkdirs();
         workspace.mkdirs();
         secret.mkdirs();
-        return Arrays.asList("-b", home.getPath() + ":/root/.tangu", "-b", workspace.getPath() + ":/root/workspace",
-                "-b", secret.getPath() + ":/run/forsion");
+        List<String> b = new ArrayList<>(Arrays.asList("-b", home.getPath() + ":/root/.tangu", "-b", workspace.getPath() + ":/root/workspace",
+                "-b", secret.getPath() + ":/run/forsion"));
+        if (engineDir != null) { b.add("-b"); b.add(engineDir.getPath() + ":/opt/tangu"); }
+        return b;
     }
 
     /**
@@ -215,6 +232,7 @@ final class LocalEnginePaths {
         realDir("root/.tangu");
         realDir("root/workspace");
         realDir("run/forsion");
+        realDir("opt/tangu"); // the engine's mount point (engines/<version> is bound here)
         realDir("proc");
         realDir("sys");
         // apt drops to the _apt user for downloads; under PRoot's fake root its http method dies (exit 112).
@@ -354,6 +372,51 @@ final class LocalEnginePaths {
         } catch (android.system.ErrnoException e) {
             try { Os.remove(tmp); } catch (Exception ignored) {}
             throw new IOException("rename " + tmp + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * writeText, then its directory and the directory above are fsynced too: the rename (and a just-created account
+     * directory) survive a power cut (the engine history).
+     */
+    static void writeDurable(File f, String s) throws IOException {
+        writeText(f, s);
+        fsyncPath(f.getParentFile());
+        fsyncPath(f.getParentFile().getParentFile());
+    }
+
+    /** An existing file and its directories made durable (fsync each); a failure throws. */
+    static void syncExisting(File f) throws IOException {
+        fsyncPath(f);
+        fsyncPath(f.getParentFile());
+        fsyncPath(f.getParentFile().getParentFile());
+    }
+
+    private static void fsyncPath(File p) throws IOException {
+        java.io.FileDescriptor fd = null;
+        try {
+            fd = Os.open(p.getPath(), android.system.OsConstants.O_RDONLY, 0);
+            Os.fsync(fd);
+        } catch (android.system.ErrnoException e) {
+            throw new IOException("fsync " + p + ": " + e.getMessage());
+        } finally {
+            if (fd != null) try { Os.close(fd); } catch (android.system.ErrnoException ignored) {}
+        }
+    }
+
+    /** Like readSmall but whole (up to cap) and distinguishing "no file" (null) from "could not read" (IOException). */
+    static String readOrNull(File f, int cap) throws IOException {
+        if (!f.exists()) {
+            try { Os.lstat(f.getPath()); } catch (android.system.ErrnoException e) { if (e.errno == android.system.OsConstants.ENOENT) return null; throw new IOException(e.getMessage()); }
+        }
+        try (InputStream in = new FileInputStream(f)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            for (int n; (n = in.read(buf)) > 0; ) {
+                out.write(buf, 0, n);
+                if (out.size() > cap) throw new IOException("too large");
+            }
+            return new String(out.toByteArray(), StandardCharsets.UTF_8);
         }
     }
 

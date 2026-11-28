@@ -38,7 +38,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * running engine or wait for a start already under way, never start one (not after Stop, not after a crash). Health =
  * the port the engine reported binding answers /health and an authed call that only this start's token can pass. A
  * start that exits before it is healthy is a crash whatever the exit code (a glibc double free exited 0 in the
- * probes); one automatic retry, then "failed".
+ * probes); one automatic retry, then "failed". Starts that never became healthy are counted per engine version across
+ * start() calls; three in a row mark the version bad (LocalEngineInstaller.recordFailedStart).
+ *
+ * Which engine runs, and whether it may touch the account's data, is decided under the lifecycle lock right before the
+ * spawn (mobile/android/local-engine/README.md, "Rollback rule"): the current engine, or the previous one when the current
+ * is bad; it must be at least this APK's minimum; and the account's engine history (EngineFloor) must allow it — when it is
+ * newer than everything recorded, it is recorded durably before it starts.
  *
  * Accounts: engine data is per Forsion account (LocalEnginePaths.accountKey). Signed out = no start; another account
  * signing in stops the engine of the previous one, and the relay only hands out the engine of the signed-in account.
@@ -98,8 +104,11 @@ public final class LocalEngine {
     private volatile String layer;
     private volatile long done, total;
     private volatile LocalEngineInstaller installer;
-    private volatile LocalEngineInstaller.Manifest manifest;
-    private volatile String manifestOverride;
+    final LocalEngineConfig cfg;
+    /** The last registry answer: what an install / update would take (null = not asked yet, or nothing newer). */
+    private volatile LocalEngineInstaller.Release release;
+    private volatile boolean releaseChecked;
+    private volatile String registryOverride;
 
     // engine state
     private volatile LocalEngineProcess proc;
@@ -116,6 +125,7 @@ public final class LocalEngine {
     private LocalEngine(Context c) {
         ctx = c;
         paths = new LocalEnginePaths(c);
+        cfg = LocalEngineConfig.fromBuild();
         debuggable = (c.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         installerFor().recover(); // renames only; before anything reads installed() or starts the engine
         new File(paths.base, "home/.forsion-cloud-token").delete(); // early test builds kept the account token in a flat home
@@ -171,12 +181,18 @@ public final class LocalEngine {
         try {
             o.put("seq", q);
             o.put("available", available());
-            o.put("configured", !manifestUrl().isEmpty());
-            JSONObject inst = ins.installed();
+            // not configured(): it takes this object's lock, and nothing under snapLock may (see seq above)
+            o.put("configured", cfg.configured() && ins.baseBundled());
+            LocalEngineInstaller.Installed inst = ins.installed();
             o.put("installed", inst != null);
+            o.put("bundledBaseVersion", cfg.baseVersion);
             if (inst != null) {
-                o.put("baseVersion", inst.getJSONObject("base").optString("version"));
-                o.put("engineVersion", inst.getJSONObject("engine").optString("version"));
+                o.put("baseVersion", inst.baseVersion);
+                o.put("engineVersion", inst.engineVersion);
+                boolean baseChanged = !cfg.baseVersion.equals(inst.baseVersion);
+                o.put("baseUpdate", baseChanged);
+                o.put("engineBad", inst.bad.contains(inst.engineVersion));
+                if (inst.prevVersion != null) o.put("previousEngineVersion", inst.prevVersion);
             }
             o.put("phase", phase);
             if (op != null) o.put("op", op);
@@ -185,21 +201,21 @@ public final class LocalEngine {
             if (layer != null) o.put("layer", layer);
             o.put("done", done);
             o.put("total", total);
-            LocalEngineInstaller.Manifest m = manifest;
-            if (m != null) {
-                o.put("downloadBytes", m.base.size + m.engine.size);
-                o.put("unpackedBytes", m.base.unpackedSize + m.engine.unpackedSize);
-                o.put("engineDownloadBytes", m.engine.size);
-                o.put("availableEngineVersion", m.engine.version);
-                o.put("availableBaseVersion", m.base.version);
-                o.put("resumeBytes", ins.downloadedBytes(m));
-                if (inst != null) {
-                    boolean engineOld = !m.engine.sha256.equals(inst.getJSONObject("engine").optString("sha256"));
-                    o.put("updateAvailable", engineOld);
-                }
+            LocalEngineInstaller.Release r = release;
+            // the base comes with the app: only the engine is downloaded
+            long engUnpacked = r != null && r.unpackedSize > 0 ? r.unpackedSize : 0;
+            o.put("unpackedBytes", cfg.baseUnpackedSize + engUnpacked);
+            if (r != null) {
+                o.put("downloadBytes", r.size);
+                o.put("engineDownloadBytes", r.size);
+                o.put("availableEngineVersion", r.version);
+                o.put("resumeBytes", ins.partBytes(r));
             }
+            if (inst != null) o.put("updateAvailable", !cfg.baseVersion.equals(inst.baseVersion) || r != null);
+            if (releaseChecked && r == null && inst == null) o.put("noEngine", true); // the line has nothing published yet
             o.put("engine", engineState);
             if (engineFail != null) o.put("engineError", engineFail);
+            o.put("needsUpdate", "needs_update".equals(engineFail) || "engine_bad".equals(engineFail));
         } catch (Exception e) {
             Log.w(TAG, "state " + e);
         }
@@ -211,7 +227,7 @@ public final class LocalEngine {
         JSONObject o = new JSONObject();
         try {
             String acct = currentAccount();
-            o.put("environment", LocalEnginePaths.treeBytes(paths.rootfs));
+            o.put("environment", LocalEnginePaths.treeBytes(paths.rootfs) + LocalEnginePaths.treeBytes(paths.engines));
             o.put("home", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.home(acct)));
             o.put("workspace", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.workspace(acct)));
             o.put("downloads", LocalEnginePaths.treeBytes(paths.downloads));
@@ -219,42 +235,50 @@ public final class LocalEngine {
         return o;
     }
 
-    String manifestUrl() {
-        String o = manifestOverride;
-        if (o != null && !o.isEmpty()) return o;
-        return BuildConfig.LOCAL_ENGINE_MANIFEST == null ? "" : BuildConfig.LOCAL_ENGINE_MANIFEST;
-    }
+    /** The APK carries a base layer and pins an engine package. */
+    boolean configured() { return cfg.configured() && installerFor().baseBundled(); }
 
-    /** The manifest decides what code runs: the page may only point elsewhere in debuggable builds (test servers). */
-    public boolean setManifestOverride(String url) {
+    /** The registry decides what code is offered (the signature decides what runs): only debuggable builds may point elsewhere. */
+    public boolean setRegistryOverride(String url) {
         if (!debuggable) return false;
-        manifestOverride = url;
-        manifest = null;
+        registryOverride = url;
+        release = null;
+        releaseChecked = false;
         return true;
     }
 
     private synchronized LocalEngineInstaller installerFor() {
-        if (installer == null) installer = new LocalEngineInstaller(paths, debuggable);
+        if (installer == null) installer = new LocalEngineInstaller(paths, cfg, debuggable);
         return installer;
     }
 
     // ---------- install / update / remove ----------
 
-    /** Reads the manifest (sizes for the confirmation). Blocking. */
+    /** Asks the registry what this APK's line offers (sizes for the confirmation, update available). Blocking. */
     public JSONObject check() throws Exception {
-        String url = manifestUrl();
-        if (url.isEmpty()) throw new LocalEngineInstaller.Failure("not_configured", null);
-        manifest = installerFor().fetchManifest(url);
+        if (!configured()) throw new LocalEngineInstaller.Failure("not_configured", null);
+        LocalEngineInstaller ins = installerFor();
+        LocalEngineInstaller.Installed inst = ins.installed();
+        // a committed record whose tree is gone: offer its own version again or newer (the repair), never older
+        LocalEngineInstaller.Installed rec = inst != null ? inst : ins.record();
+        release = ins.resolve(LocalEngineConfig.registries(registryOverride), rec == null ? null : rec.engineVersion,
+                inst == null && rec != null, rec == null ? null : rec.bad, false); // not part of an operation: a pause of one must not cancel this
+        releaseChecked = true;
         return state();
     }
 
     /** Download + unpack (fresh install or resume). Runs in the background; progress via listeners. */
-    public void install(boolean reset) {
-        work.execute(() -> runInstall(reset ? "reset" : "install"));
-    }
+    public void install(boolean reset) { claim(reset ? "reset" : "install"); }
 
-    public void update() {
-        work.execute(() -> runInstall("update"));
+    public void update() { claim("update"); }
+
+    /** The state says "checking" from the call on: an earlier failure is not reported as this operation's outcome. */
+    private synchronized void claim(String kind) {
+        op = kind;
+        failCode = null;
+        phase = "checking";
+        emit();
+        work.execute(() -> runInstall(kind));
     }
 
     /**
@@ -274,12 +298,35 @@ public final class LocalEngine {
         LocalEngineInstaller ins = installerFor();
         op = kind;
         failCode = null;
+        ins.begin(); // before the registry is asked: a pause of the previous operation must not cancel this one
         try {
             if (!available()) throw new LocalEngineInstaller.Failure("unsupported", null);
-            setPhase("downloading");
-            if (manifest == null) check();
-            LocalEngineInstaller.Manifest m = manifest;
-            JSONObject inst = ins.installed();
+            if (!configured()) throw new LocalEngineInstaller.Failure("not_configured", null);
+            setPhase("checking");
+            LocalEngineInstaller.Installed inst = ins.installed();
+            java.util.List<String> regs = LocalEngineConfig.registries(registryOverride);
+            boolean base;
+            LocalEngineInstaller.Release rel;
+            if (inst == null) {
+                // fresh install (also over a record from before the npm engine): base from the app + the line's engine.
+                // A committed record whose tree is gone bounds it like a repair: that engine may have migrated account
+                // data, so nothing older than it is installed (a lagging mirror's older version would be a downgrade).
+                base = true;
+                LocalEngineInstaller.Installed rec = ins.record();
+                rel = rec != null ? ins.resolve(regs, rec.engineVersion, true, rec.bad, true)
+                        : release != null ? release : ins.resolve(regs, null, null, true);
+                if (rel == null) throw new LocalEngineInstaller.Failure("no_engine", "nothing on " + cfg.distTag());
+            } else if (kind.equals("reset")) {
+                // rebuild the system from the app; keep the engine when its tree still verifies, else fetch the line's
+                base = true;
+                boolean keep = ins.verifyInstalled(inst.engineVersion) != null;
+                // a repair never goes backwards: the same version or newer (a stale mirror's older one would be a downgrade)
+                rel = keep ? null : ins.resolve(regs, inst.engineVersion, true, inst.bad, true);
+                if (!keep && rel == null) throw new LocalEngineInstaller.Failure("no_engine", "nothing on " + cfg.distTag());
+            } else {
+                base = !cfg.baseVersion.equals(inst.baseVersion);
+                rel = ins.resolve(regs, inst.engineVersion, inst.bad, true);
+            }
             LocalEngineInstaller.Listener l = (ph, ly, d, t) -> {
                 phase = ph; layer = ly; done = d; total = t;
                 emit();
@@ -288,10 +335,13 @@ public final class LocalEngine {
             LocalEngineInstaller.Swap swap = new LocalEngineInstaller.Swap() {
                 @Override public void enter() { enterMaintenance(kind); }
 
-                @Override public String validate() { return selfTest(); }
+                @Override public String validate(File engineDir) { return selfTest(engineDir); }
             };
-            if (kind.equals("update") && inst != null) ins.updateEngine(m, inst, l, swap);
-            else ins.installFresh(m, l, swap);
+            ins.apply(base, rel, l, swap);
+            release = null;
+            releaseChecked = false;
+            engineFail = null;
+            if ("failed".equals(engineState)) engineState = "stopped";
             layer = null;
             op = null;
             setPhase("idle");
@@ -367,7 +417,7 @@ public final class LocalEngine {
      * foreground service like a real start: without it Doze cuts loopback a couple of minutes after the screen goes
      * off, and a good layer would be refused.
      */
-    private String selfTest() {
+    private String selfTest(File engineDir) {
         long deadline = System.currentTimeMillis() + SELFTEST_MS;
         String why = "timeout";
         String tail = "";
@@ -377,7 +427,7 @@ public final class LocalEngine {
                 long left = deadline - System.currentTimeMillis();
                 if (left <= 0) break;
                 LocalEnginePaths.deleteTree(paths.selftest);
-                LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.selftestBinds(), engineEnv());
+                LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.selftestBinds(engineDir), engineEnv());
                 try {
                     why = np.awaitHealthy((int) Math.min(LocalEngineProcess.HEALTH_TIMEOUT_MS, left));
                     if (why == null && !ownsPort(np, remaining(deadline, OWNS_PORT_MS))) why = "auth";
@@ -470,8 +520,19 @@ public final class LocalEngine {
             if (!available()) throw new IllegalStateException("unsupported");
             if (maintenance) throw new IllegalStateException("maintenance");
             if (acct == null) throw new IllegalStateException("signed_out");
-            if (installerFor().installed() == null) throw new IllegalStateException("not_installed");
+            LocalEngineInstaller.Installed inst = installerFor().installed();
+            if (inst == null) throw new IllegalStateException("not_installed");
             if (p != null) stopLocked("account"); // the previous account's engine
+            // which engine, and may it touch this account's data: decided here, in the same critical section as the spawn
+            String[] pick = pickEngine(inst, acct);
+            if (pick[0] == null) {
+                engineFail = pick[1];
+                engineState = "failed";
+                emit();
+                throw new IllegalStateException("start_failed:" + engineFail);
+            }
+            String ver = pick[0];
+            File engineDir = paths.engineDir(ver);
             engineFail = null;
             engineState = "starting";
             emit();
@@ -482,7 +543,7 @@ public final class LocalEngine {
                 LocalEngineService.start(ctx);
                 String why = "unknown";
                 for (int attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
-                    LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.engineBinds(acct), engineEnv());
+                    LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.engineBinds(acct, engineDir), engineEnv());
                     why = np.awaitHealthy(LocalEngineProcess.HEALTH_TIMEOUT_MS);
                     if (why == null && !ownsPort(np)) why = "foreign";
                     if (why == null) {
@@ -499,11 +560,17 @@ public final class LocalEngine {
                             throw new IllegalStateException("account_changed");
                         }
                         emit();
-                        Log.i(TAG, "engine ready on attempt " + attempt + " in " + (System.currentTimeMillis() - np.startedAt) + "ms");
+                        installerFor().recordHealthyStart(ver);
+                        Log.i(TAG, "engine " + ver + " ready on attempt " + attempt + " in " + (System.currentTimeMillis() - np.startedAt) + "ms");
                         return np;
                     }
                     Log.w(TAG, "engine start attempt " + attempt + " failed: " + why + " tail=" + tailOf(np));
                     np.stop();
+                }
+                // a start that never became healthy counts against this version (exits / timeouts only: a port that
+                // answers for someone else is not the engine's fault); the third in a row marks it bad
+                if ("exited".equals(why) || "timeout".equals(why)) {
+                    if (installerFor().recordFailedStart(ver)) why = "engine_bad";
                 }
                 engineFail = why;
             } catch (IllegalStateException e) {
@@ -517,6 +584,53 @@ public final class LocalEngine {
             emit();
             throw new IllegalStateException("start_failed:" + engineFail);
         }
+    }
+
+    /**
+     * {version, null} = start this engine; {null, code} = refuse (needs_update / engine_bad / history), nothing written.
+     * Caller holds startLock. The current engine, or the previous one when the current is bad (per account: the history
+     * of this account decides, so one account's migrated data does not block another's); at least this APK's minimum;
+     * allowed by the account's history, which is extended durably here when the engine is newer than all of it.
+     */
+    private String[] pickEngine(LocalEngineInstaller.Installed inst, String acct) {
+        java.util.List<String[]> candidates = new java.util.ArrayList<>();
+        if (!inst.bad.contains(inst.engineVersion)) candidates.add(new String[]{inst.engineVersion, inst.engineFingerprint});
+        else if (inst.prevVersion != null && !inst.bad.contains(inst.prevVersion)
+                && new File(paths.engineDir(inst.prevVersion), "dist/standalone/main.js").exists()) candidates.add(new String[]{inst.prevVersion, inst.prevFingerprint});
+        if (candidates.isEmpty()) return new String[]{null, "engine_bad"};
+        String ver = candidates.get(0)[0], fp = candidates.get(0)[1];
+        boolean fallback = !ver.equals(inst.engineVersion);
+        if (cfg.minEngineVersion != null && !cfg.minEngineVersion.isEmpty() && Versions.compare(ver, cfg.minEngineVersion) < 0) {
+            return new String[]{null, fallback ? "engine_bad" : "needs_update"};
+        }
+        File ff = paths.floorFile(acct);
+        EngineFloor floor;
+        try {
+            floor = EngineFloor.parse(LocalEnginePaths.readOrNull(ff, 1 << 20));
+        } catch (Exception e) {
+            Log.w(TAG, "engine history unreadable for this account: " + e.getMessage());
+            return new String[]{null, "history"}; // unknown is not empty: do not start, do not overwrite it
+        }
+        EngineFloor.Verdict v = floor.decide(ver, fp);
+        if (v == EngineFloor.Verdict.REFUSE) {
+            Log.w(TAG, "engine " + ver + " refused for this account: a newer engine with other schema code has run on its data");
+            return new String[]{null, fallback ? "engine_bad" : "needs_update"};
+        }
+        try {
+            if (v == EngineFloor.Verdict.ALLOW_AND_RECORD) {
+                ff.getParentFile().mkdirs();
+                LocalEnginePaths.writeDurable(ff, floor.with(ver, fp).serialize());
+            } else if (!floor.entries.isEmpty()) {
+                // what this decision rests on must be on disk before the spawn: an earlier write whose directory
+                // sync failed is visible but may not survive a power cut
+                LocalEnginePaths.syncExisting(ff);
+            }
+        } catch (java.io.IOException e) {
+            Log.w(TAG, "engine history of this account not durable: " + e.getMessage());
+            return new String[]{null, "history"};
+        }
+        if (fallback) Log.w(TAG, "engine " + inst.engineVersion + " is bad; starting the previous " + ver);
+        return new String[]{ver, null};
     }
 
     public void stopEngine(String why) {
@@ -732,7 +846,9 @@ public final class LocalEngine {
         if (!debuggable) throw new IllegalStateException("debug only");
         paths.prepareRootfs();
         String acct = currentAccount();
-        ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/root/workspace", acct == null ? null : paths.engineBinds(acct), java.util.Arrays.asList("/bin/bash", "-lc", cmd)));
+        LocalEngineInstaller.Installed inst = installerFor().installed();
+        File eng = inst == null ? null : paths.engineDir(inst.engineVersion);
+        ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/root/workspace", acct == null ? null : paths.engineBinds(acct, eng), java.util.Arrays.asList("/bin/bash", "-lc", cmd)));
         pb.environment().clear();
         pb.environment().putAll(paths.prootEnv());
         pb.redirectErrorStream(true);

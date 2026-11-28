@@ -512,13 +512,20 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_VERSION_CODE: ${{ github.run_number }}
-          # 「这台手机」环境包清单地址(仓库变量;CI 出环境包的流水线另立,没配之前为空 = 那一行不显示)
-          ANDROID_LOCAL_ENGINE_MANIFEST: ${{ vars.LOCAL_ENGINE_MANIFEST_URL }}
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then VN="${GITHUB_REF_NAME#v}"; else VN="$(node -p "require('../../desktop/package.json').version")"; fi
           export ANDROID_VERSION_NAME="$VN"
-          # 本机引擎的启动器(PRoot)只进测试渠道的包(预发布 tag);正式渠道晚一个版本再跟
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$(node ../../desktop/scripts/release-channel.mjs --test-channel "$GITHUB_REF_NAME")" = 1 ]; then export ANDROID_LOCAL_ENGINE=1; fi
+          # 本机引擎的启动器(PRoot)和基座(Ubuntu + Node)只进测试渠道的包(预发布 tag);正式渠道晚一个版本再跟。
+          # 基座按 local-engine/lock.json 的 url 取、gradle 按 sha256 核;url 还空着(托管没定)→ 这次不带启动器出包,只告警不变红。
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$(node ../../desktop/scripts/release-channel.mjs --test-channel "$GITHUB_REF_NAME")" = 1 ]; then
+            BASE_URL="$(node -p "require('./local-engine/lock.json').base.url")"
+            if [ -n "$BASE_URL" ]; then
+              curl -fsSL --retry 3 -o "$RUNNER_TEMP/local-engine-base.tar.xz" "$BASE_URL"
+              export ANDROID_LOCAL_ENGINE=1 ANDROID_LOCAL_ENGINE_BASE="$RUNNER_TEMP/local-engine-base.tar.xz"
+            else
+              echo "::warning::mobile/android/local-engine/lock.json has no base url yet: this test-channel APK goes out without the local engine (This phone stays hidden)."
+            fi
+          fi
           chmod +x gradlew
           if [ -n "$ANDROID_KEYSTORE_B64" ]; then
             printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"

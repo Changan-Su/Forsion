@@ -1,0 +1,13 @@
+{
+  "line": 1,
+  "package": "@forsion/tangu-engine-android-arm64",
+  "minEngineVersion": "2.14.10",
+  "base": {
+    "version": "ubuntu24.04-node24.22.1-20261127",
+    "file": "base-ubuntu24.04-node24.22.1-20261127.tar.xz",
+    "sha256": "4cf90533c610f32e707ea4deff546df5a993a5edd6d5d3dc531efa82c4acf0d8",
+    "size": 63524380,
+    "unpackedSize": 342331392,
+    "url": ""
+  }
+}

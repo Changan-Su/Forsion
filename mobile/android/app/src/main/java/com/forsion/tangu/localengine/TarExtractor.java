@@ -50,10 +50,25 @@ final class TarExtractor {
     private final long budget;
     private long written;
 
-    TarExtractor(File dest, long budget) {
+    /**
+     * Strict (the engine tarball, unpacked before its signature is checked): only regular files and directories under
+     * canonical names; a link, hard link or special entry, a non-canonical name ("a//b", "./x", "a/../b"), more than
+     * maxEntries entries or a path deeper than MAX_DEPTH fails the whole unpack. With no links in the tree nothing can be
+     * written through one, whatever names the archive uses.
+     */
+    private final boolean strict;
+    private final int maxEntries;
+    private long entries;
+    static final int MAX_DEPTH = 64;
+
+    TarExtractor(File dest, long budget) { this(dest, budget, false, Integer.MAX_VALUE); }
+
+    TarExtractor(File dest, long budget, boolean strict, int maxEntries) {
         this.dest = dest;
         this.destPath = dest.getAbsolutePath();
         this.budget = budget;
+        this.strict = strict;
+        this.maxEntries = maxEntries;
     }
 
     private void spend(long n) throws IOException {
@@ -68,13 +83,20 @@ final class TarExtractor {
     }
 
     /** Opens the right decompressor by magic bytes: xz (FD 37 7A 58 5A 00) or gzip (1F 8B); anything else is plain tar. */
-    static InputStream decompress(InputStream raw) throws IOException {
+    static InputStream decompress(InputStream raw) throws IOException { return decompress(raw, false); }
+
+    /** gzipOnly (the npm engine): anything but gzip is refused before a decoder allocates anything (xz dictionaries are large). */
+    static InputStream decompress(InputStream raw, boolean gzipOnly) throws IOException {
         BufferedInputStream in = new BufferedInputStream(raw, 1 << 16);
         in.mark(8);
         byte[] m = new byte[6];
         int n = 0;
         while (n < m.length) { int r = in.read(m, n, m.length - n); if (r < 0) break; n += r; }
         in.reset();
+        if (gzipOnly) {
+            if (n >= 2 && (m[0] & 0xff) == 0x1F && (m[1] & 0xff) == 0x8B) return new BufferedInputStream(new GZIPInputStream(in, 1 << 16), 1 << 16);
+            throw new LocalEngineInstaller.Failure("unpack", "the engine archive is not gzip");
+        }
         if (n >= 6 && (m[0] & 0xff) == 0xFD && m[1] == '7' && m[2] == 'z' && m[3] == 'X' && m[4] == 'Z' && m[5] == 0) {
             return new BufferedInputStream(new XZInputStream(in), 1 << 16);
         }
@@ -85,10 +107,24 @@ final class TarExtractor {
     }
 
     void extract(File archive, Progress progress, Cancel cancel) throws IOException {
+        extract(new FileInputStream(archive), progress, cancel);
+    }
+
+    /** From a stream (the base layer comes straight from the APK's stored asset); closes it. */
+    void extract(InputStream raw, Progress progress, Cancel cancel) throws IOException {
+        try {
+            extractChecked(raw, progress, cancel);
+        } catch (NumberFormatException | IndexOutOfBoundsException | MalformedArchive e) {
+            // a header that does not parse (size, PAX length): a broken archive, so an IOException the caller evicts on
+            throw new IOException("malformed tar: " + e.getMessage(), e);
+        }
+    }
+
+    private void extractChecked(InputStream raw, Progress progress, Cancel cancel) throws IOException {
         dest.mkdirs();
         safeDirs.add(destPath);
-        try (CountingInputStream counting = new CountingInputStream(new FileInputStream(archive), progress);
-             InputStream in = decompress(counting)) {
+        try (CountingInputStream counting = new CountingInputStream(raw, progress);
+             InputStream in = decompress(counting, strict)) {
             byte[] hdr = new byte[512];
             String paxPath = null, paxLink = null, gnuName = null, gnuLink = null;
             long paxSize = -1;
@@ -139,6 +175,14 @@ final class TarExtractor {
 
                 String rel = clean(name);
                 boolean unsafe = rel == null;
+                if (strict) {
+                    if (++entries > maxEntries) throw new LocalEngineInstaller.Failure("unpack", "too many entries");
+                    if (type != '0' && type != '\0' && type != '7' && type != '5') throw new LocalEngineInstaller.Failure("unpack", "link or special entry " + type + " in the engine archive");
+                    String bare = type == '5' ? name.replaceAll("/+$", "") : name;
+                    boolean canonical = !unsafe && !rel.isEmpty() && bare.equals(rel) && rel.split("/").length <= MAX_DEPTH && rel.indexOf('\\') < 0;
+                    if (canonical) for (String seg : rel.split("/", -1)) if (seg.isEmpty() || seg.equals(".")) canonical = false;
+                    if (!canonical) throw new LocalEngineInstaller.Failure("unpack", "non-canonical name in the engine archive");
+                }
                 File out = unsafe ? null : (rel.isEmpty() ? dest : new File(dest, rel));
                 try {
                     switch (type) {
@@ -339,7 +383,16 @@ final class TarExtractor {
         }
         String s = str(b, off, len).trim();
         if (s.isEmpty()) return 0;
-        return Long.parseLong(s, 8);
+        try {
+            return Long.parseLong(s, 8);
+        } catch (NumberFormatException e) {
+            throw new MalformedArchive("bad number in a tar header");
+        }
+    }
+
+    /** A header field that does not parse: the archive is broken (the caller evicts it), not the extractor. */
+    static final class MalformedArchive extends RuntimeException {
+        MalformedArchive(String m) { super(m); }
     }
 
     /** Thrown when the caller cancels mid-extract (pause / delete). */

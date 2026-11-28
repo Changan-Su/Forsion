@@ -17,9 +17,9 @@ import java.util.concurrent.Executors;
  * | method                  | result                                                                        |
  * |-------------------------|-------------------------------------------------------------------------------|
  * | state()                 | {available, configured, installed, phase, engine, versions, sizes, …}         |
- * | check()                 | state() after reading the manifest (download / unpacked sizes, update)        |
- * | install({reset?})       | starts download + unpack in the background; progress via "state" events       |
- * | update()                | replaces only the engine layer                                                |
+ * | check()                 | state() after asking the npm registry (engine download size, update)          |
+ * | install({reset?})       | base from the app + engine from npm, in the background; "state" events        |
+ * | update()                | new base from an app update and / or a newer engine on this app's line        |
  * | pause()                 | stops the download; resume() continues from the partial file                  |
  * | resume()                | repeats the operation a pause / failure interrupted (install, reset or update) |
  * | remove()                | deletes the environment (conversations and the workspace stay)                |
@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
  * | metered()               | {metered} — the confirmation warns before downloading on mobile data          |
  *
  * The engine's port and local token never cross into the page: requests go through ForsionUnit.request with the
- * reserved phone id, and the relay adds the token natively. Debuggable builds also take setManifest / setLink2symlink
+ * reserved phone id, and the relay adds the token natively. Debuggable builds also take setRegistry / setLink2symlink
  * / shell (test benches only; release refuses them).
  */
 @CapacitorPlugin(name = "ForsionLocalEngine")
@@ -145,10 +145,10 @@ public class LocalEnginePlugin extends Plugin {
     // ---------- debuggable builds only ----------
 
     @PluginMethod
-    public void setManifest(PluginCall call) {
-        boolean ok = engine.setManifestOverride(call.getString("url", ""));
+    public void setRegistry(PluginCall call) {
+        boolean ok = engine.setRegistryOverride(call.getString("url", ""));
         if (ok) call.resolve(toJs(engine.state()));
-        else call.reject("release builds take the manifest from the build only", "forbidden");
+        else call.reject("release builds use npmmirror and registry.npmjs.org only", "forbidden");
     }
 
     @PluginMethod

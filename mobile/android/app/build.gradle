@@ -2,14 +2,27 @@ apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.android'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
 
-// 「这台手机」本机引擎(mobile/android/native/proot/README.md):启动器(PRoot,GPL-2.0,独立程序)只进测试渠道的包。
+// 「这台手机」本机引擎(mobile/android/local-engine/README.md):启动器(PRoot,GPL-2.0,独立程序)和基座(Ubuntu + Node)只进测试渠道的包。
 //   -PlocalEngine 或 ANDROID_LOCAL_ENGINE=1 → 带上 src/localEngine/jniLibs(arm64)、解出原生库(PRoot 从 nativeLibraryDir 执行)、
-//   启用前台服务。CI 由 release-channel.mjs --test-channel 按 tag 决定(预发布 tag = 测试渠道)。不带时代码照样在包里,
-//   页面看不到「这台手机」那一行(LocalEngine.available() 认启动器在不在)。
-//   环境包清单地址:-PlocalEngineManifest=<url> 或 ANDROID_LOCAL_ENGINE_MANIFEST(CI 流水线还没有,先留空 = 不显示那一行)。
+//   启用前台服务,并把 local-engine/lock.json 钉住的基座作为不压缩的资产放进包里(assets/local-engine/base.tar.xz)。
+//   基座文件:-PlocalEngineBase=<路径> 或 ANDROID_LOCAL_ENGINE_BASE,缺省 ~/.forsion-dev/local-engine/<lock 里的 file>;
+//   找不到或 sha256 对不上 → 构建失败。引擎不进包:手机从 npm 取(lock.json 的 package,dist-tag android-<line>)。
+//   CI 由 release-channel.mjs --test-channel 按 tag 决定(预发布 tag = 测试渠道)。不带时代码照样在包里,
+//   页面看不到「这台手机」那一行(LocalEngine.configured() 要启动器和基座都在)。
+//   -PlocalEngineTestKey=<64 位十六进制公钥>:只给 debug 包多认一把一次性测试钥匙(模拟器台架签篡改 / 过期的夹具),正式包永远只认引擎签名钥匙。
 def localEngine = project.hasProperty('localEngine') || System.getenv('ANDROID_LOCAL_ENGINE') == '1'
-def localEngineManifest = (project.findProperty('localEngineManifest') ?: System.getenv('ANDROID_LOCAL_ENGINE_MANIFEST') ?: '').toString().trim()
-if (!(localEngineManifest ==~ /^[A-Za-z0-9:\/._~%?=&+-]*$/)) throw new GradleException("localEngineManifest has characters a URL should not: ${localEngineManifest}")
+def localEngineLock = new groovy.json.JsonSlurper().parse(file('../local-engine/lock.json'))
+def localEngineTestKey = (project.findProperty('localEngineTestKey') ?: '').toString().trim()
+if (!(localEngineTestKey ==~ /^([0-9a-f]{64})?$/)) throw new GradleException("localEngineTestKey must be 64 lowercase hex characters")
+if (!(localEngineLock.package ==~ /^@[a-z0-9-]+\/[a-z0-9-]+$/) || !(localEngineLock.line instanceof Integer) || !(localEngineLock.minEngineVersion ==~ /^\d+\.\d+\.\d+$/)
+        || !(localEngineLock.base.sha256 ==~ /^[0-9a-f]{64}$/) || !(localEngineLock.base.version ==~ /^[A-Za-z0-9._-]+$/)) {
+    throw new GradleException("mobile/android/local-engine/lock.json is malformed")
+}
+def localEngineBaseDir = layout.buildDirectory.dir('generated/localEngineBase')
+def localEngineBaseSrc = { ->
+    def p = (project.findProperty('localEngineBase') ?: System.getenv('ANDROID_LOCAL_ENGINE_BASE') ?: '').toString().trim()
+    p ? file(p) : new File(System.getProperty('user.home'), ".forsion-dev/local-engine/${localEngineLock.base.file}")
+}
 
 android {
     namespace "com.forsion.tangu"
@@ -27,7 +40,15 @@ android {
         versionName (System.getenv("ANDROID_VERSION_NAME") ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders = [localEngineEnabled: localEngine ? 'true' : 'false']
-        buildConfigField 'String', 'LOCAL_ENGINE_MANIFEST', "\"${localEngineManifest}\""
+        buildConfigField 'String', 'LOCAL_ENGINE_PACKAGE', "\"${localEngineLock.package}\""
+        buildConfigField 'int', 'LOCAL_ENGINE_LINE', "${localEngineLock.line}"
+        buildConfigField 'String', 'LOCAL_ENGINE_MIN_VERSION', "\"${localEngineLock.minEngineVersion}\""
+        // the base fields are empty in normal builds: no base asset → "This phone" stays hidden
+        buildConfigField 'String', 'LOCAL_ENGINE_BASE_VERSION', "\"${localEngine ? localEngineLock.base.version : ''}\""
+        buildConfigField 'String', 'LOCAL_ENGINE_BASE_SHA256', "\"${localEngine ? localEngineLock.base.sha256 : ''}\""
+        buildConfigField 'long', 'LOCAL_ENGINE_BASE_SIZE', "${localEngine ? localEngineLock.base.size : 0}L"
+        buildConfigField 'long', 'LOCAL_ENGINE_BASE_UNPACKED', "${localEngine ? localEngineLock.base.unpackedSize : 0}L"
+        buildConfigField 'String', 'LOCAL_ENGINE_TEST_KEY', '""'
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -35,9 +56,11 @@ android {
         }
     }
     if (localEngine) {
-        sourceSets { main { jniLibs.srcDirs += ['src/localEngine/jniLibs'] } }
+        sourceSets { main { jniLibs.srcDirs += ['src/localEngine/jniLibs']; assets.srcDirs += [localEngineBaseDir.get().asFile] } }
         // extractNativeLibs=true:PRoot 要从 nativeLibraryDir 当程序执行(从数据目录执行会被 SELinux 拦,探针 0b 负对照)
         packagingOptions { jniLibs { useLegacyPackaging = true } }
+        // the base is already xz: stored, not deflated again (and readable as a plain stream)
+        androidResources { noCompress += ['xz'] }
     }
     signingConfigs {
         // 正式签名走环境变量(CI 由 secrets 注入,见 build-desktop.yml);变量缺席时该配置为空、
@@ -70,6 +93,7 @@ android {
             //                            以前的预览包(可调试)也一直能连。这个开关只在 debug 这一档里,进不了正式包。
             if (project.hasProperty('nativePreviewFast')) debuggable false
             buildConfigField 'boolean', 'WEBVIEW_INSPECTABLE', project.hasProperty('nativePreviewFast') ? 'true' : 'false'
+            buildConfigField 'String', 'LOCAL_ENGINE_TEST_KEY', "\"${localEngineTestKey}\""
         }
         release {
             buildConfigField 'boolean', 'NATIVE_PREVIEW_SAMPLE', 'false'
@@ -133,6 +157,58 @@ tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
     doFirst {
         if (file('src/main/assets/public/forsion-extend-test-only.json').exists()) {
             throw new GradleException('Extend source-test bundle cannot ship in a release. Rebuild with the signed package pin.')
+        }
+    }
+}
+
+// 「这台手机」的基座:测试渠道包把 lock.json 钉住的那份放进资产(sha256 对不上就失败);打完包再核一遍 APK 里的样子 ——
+// 测试渠道:assets/local-engine/base.tar.xz 在、STORED、大小等于 lock;普通包:assets/local-engine/ 下什么都没有。
+def sha256Of = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.withInputStream { ins -> byte[] b = new byte[1 << 16]; int n; while ((n = ins.read(b)) > 0) md.update(b, 0, n) }
+    md.digest().encodeHex().toString()
+}
+def stageLocalEngineBase = tasks.register('stageLocalEngineBase') {
+    onlyIf { localEngine }
+    // the lock and the chosen source are inputs: a different pin or file re-runs it; the staged copy is re-checked by hash
+    inputs.file(file('../local-engine/lock.json'))
+    inputs.property('baseSource', localEngine ? localEngineBaseSrc().absolutePath : '')
+    outputs.dir(localEngineBaseDir)
+    outputs.upToDateWhen { false }
+    doLast {
+        def src = localEngineBaseSrc()
+        if (!src.isFile()) throw new GradleException("-PlocalEngine needs the pinned base ${localEngineLock.base.file} (sha256 ${localEngineLock.base.sha256}): pass -PlocalEngineBase=<path> or put it at ${src}. See mobile/android/local-engine/README.md.")
+        def got = sha256Of(src)
+        if (got != localEngineLock.base.sha256) throw new GradleException("${src} has sha256 ${got}; local-engine/lock.json pins ${localEngineLock.base.sha256}")
+        if (src.length() != (localEngineLock.base.size as long)) throw new GradleException("${src} is ${src.length()} bytes; lock.json says ${localEngineLock.base.size}")
+        def dst = new File(localEngineBaseDir.get().asFile, 'local-engine/base.tar.xz')
+        dst.parentFile.mkdirs()
+        if (!dst.isFile() || sha256Of(dst) != localEngineLock.base.sha256) java.nio.file.Files.copy(src.toPath(), dst.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        if (sha256Of(dst) != localEngineLock.base.sha256) throw new GradleException("staged base ${dst} does not match lock.json")
+    }
+}
+tasks.matching { it.name ==~ /merge\w*Assets/ }.configureEach { dependsOn stageLocalEngineBase }
+tasks.matching { it.name ==~ /package(Debug|Release)/ }.configureEach { t ->
+    doLast {
+        def apks = t.outputs.files.asFileTree.matching { include '**/*.apk' }.files
+        apks.each { apk ->
+            def zip = new java.util.zip.ZipFile(apk)
+            try {
+                def entries = zip.entries().toList().findAll { it.name.startsWith('assets/local-engine/') }
+                if (localEngine) {
+                    def e = zip.getEntry('assets/local-engine/base.tar.xz')
+                    if (e == null) throw new GradleException("${apk.name}: the test-channel APK has no base asset")
+                    if (e.method != java.util.zip.ZipEntry.STORED) throw new GradleException("${apk.name}: the base asset is compressed (must be stored)")
+                    if (e.size != (localEngineLock.base.size as long)) throw new GradleException("${apk.name}: base asset is ${e.size} bytes, lock.json says ${localEngineLock.base.size}")
+                    def md = java.security.MessageDigest.getInstance('SHA-256')
+                    zip.getInputStream(e).withStream { ins -> byte[] b = new byte[1 << 16]; int n; while ((n = ins.read(b)) > 0) md.update(b, 0, n) }
+                    if (md.digest().encodeHex().toString() != localEngineLock.base.sha256) throw new GradleException("${apk.name}: the base asset does not match lock.json")
+                } else if (!entries.isEmpty()) {
+                    throw new GradleException("${apk.name}: a normal-channel APK carries local-engine assets: ${entries*.name}")
+                }
+            } finally {
+                zip.close()
+            }
         }
     }
 }
