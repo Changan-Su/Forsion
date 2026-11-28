@@ -337,10 +337,10 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(t.host.canOpenOnline()).toBe(false)
     t.capable()
     expect(t.host.canOpenOnline()).toBe(true)
-    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true }) // 同文档内跳转不算
-    t.state.main!.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false }) // 子框架不算
+    t.state.main!.emit('did-navigate-in-page', {}, 'app://x#a', true) // 同文档内跳转不算
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }) // 导航开始、还没提交(可能被拦下):不算
     expect(t.host.canOpenOnline()).toBe(true)
-    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }) // 重载
+    t.state.main!.emit('did-navigate', {}, 'app://x', 200, 'OK') // 主框架跨文档提交(重载)
     expect(t.host.canOpenOnline()).toBe(false)
     t.capable()
     expect(t.host.canOpenOnline()).toBe(true)
@@ -437,14 +437,70 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(await t.get()).toEqual({ ref: null, fallback: { reason: 'account', name: 'Notes' } }) // 盘上那条留着,按账号回 fallback
   })
 
+  it('a cancelled navigation keeps everything; only a committed new document (or a gone renderer) drops capable, the online report and a pending openLibrary', async () => {
+    const t = await setup({ timeoutMs: 5_000 })
+    t.capable()
+    await t.opened(refOf('A'))
+    const pending = t.host.openLibrary(refOf('A', { libraryId: 'lib-2', vaultId: 'vault-2', name: 'Lab' }))
+    let settled = false
+    void pending.then(() => { settled = true }, () => { settled = true })
+    // 被 hardenNav 拦下的外链 / 取消的导航:只有 did-start-navigation,没有提交
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(t.host.canOpenOnline()).toBe(true)
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    expect(settled).toBe(false) // 等着的 openLibrary 不失败
+    // 提交前旧文档(它还是当前文档)报上来的照常算
+    await t.opened(refOf('A'))
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    // 主框架跨文档提交:三样一起作废,等着的当场 switch_failed
+    const oldFrame = t.state.main!.mainFrame
+    t.state.main!.emit('did-navigate', {}, 'app://x', 200, 'OK')
+    t.state.main!.mainFrame = {}
+    await expect(pending).rejects.toThrow('switch_failed')
+    expect(t.host.canOpenOnline()).toBe(false)
+    expect(t.host.onlineOpened()).toBeNull()
+    // 提交后旧文档迟到的报告:liveTop 拦下(senderFrame 已不是 mainFrame)
+    await expect(t.opened(refOf('A'), t.state.main, { senderFrame: oldFrame })).rejects.toThrow('forbidden')
+    t.capable(t.state.main, { senderFrame: oldFrame })
+    expect(t.host.canOpenOnline()).toBe(false)
+    // 新文档报了再来一次:渲染进程退出同样作废
+    t.capable()
+    await t.opened(refOf('A'))
+    const again = t.host.openLibrary(refOf('A', { libraryId: 'lib-2', vaultId: 'vault-2', name: 'Lab' }))
+    t.state.main!.emit('render-process-gone', {}, { reason: 'crashed' })
+    await expect(again).rejects.toThrow('switch_failed')
+    expect(t.host.canOpenOnline()).toBe(false)
+    expect(t.host.onlineOpened()).toBeNull()
+  })
+
+  it('an error page commit (did-fail-load on the main frame, not ERR_ABORTED) drops like a new document; aborted or subframe failures do not', async () => {
+    const t = await setup({ timeoutMs: 5_000 })
+    t.capable()
+    await t.opened(refOf('A'))
+    const pending = t.host.openLibrary(refOf('A', { libraryId: 'lib-2', vaultId: 'vault-2', name: 'Lab' }))
+    let settled = false
+    void pending.then(() => { settled = true }, () => { settled = true })
+    t.state.main!.emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://example.com/', true) // 拦下 / 取消:原文档还在
+    t.state.main!.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://x.invalid/', false) // 子框架
+    await new Promise((r) => setTimeout(r, 0))
+    expect(t.host.canOpenOnline()).toBe(true)
+    expect(t.host.onlineOpened()).toEqual(refOf('A'))
+    expect(settled).toBe(false)
+    t.state.main!.emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'app://x', true) // 主框架提交成错误页
+    await expect(pending).rejects.toThrow('switch_failed')
+    expect(t.host.canOpenOnline()).toBe(false)
+    expect(t.host.onlineOpened()).toBeNull()
+  })
+
   it('a set still in flight from before a reload cannot confirm a new request; the reload itself fails the old one', async () => {
     const t = await setup({ timeoutMs: 5_000 })
     t.capable()
     const first = t.host.openLibrary(refOf('A'))
     const oldFrame = t.state.main!.mainFrame
     const firstId = t.reqId()
-    // 主窗重载:新文档(新的顶层帧)
-    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false })
+    // 主窗重载:新文档提交(新的顶层帧)
+    t.state.main!.emit('did-navigate', {}, 'app://x', 200, 'OK')
     t.state.main!.mainFrame = {}
     await expect(first).rejects.toThrow('switch_failed') // 发请求时那份文档没了
     t.capable()
@@ -693,9 +749,10 @@ describe('online-opened: the main window reports which library the forwarding br
   it('a new document, a gone renderer, a rebuilt main window or another account all read as local', async () => {
     const t = await setup()
     await t.opened(refOf('A'))
-    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: true }) // 同文档内跳转不算
+    t.state.main!.emit('did-navigate-in-page', {}, 'app://x#a', true) // 同文档内跳转不算
+    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }) // 开始了但没提交:原文档还在用
     expect(t.host.onlineOpened()).toEqual(refOf('A'))
-    t.state.main!.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false }) // 重载:新文档的壳还没换库
+    t.state.main!.emit('did-navigate', {}, 'app://x', 200, 'OK') // 重载提交:新文档的壳还没换库
     expect(t.host.onlineOpened()).toBeNull()
     t.state.main!.mainFrame = {}
     await t.opened(refOf('A'))
