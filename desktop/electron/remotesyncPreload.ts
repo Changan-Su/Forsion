@@ -25,6 +25,13 @@ contextBridge.exposeInMainWorld('remoteSync', {
     ipcRenderer.on('remotesync:gdriveAuth', listener)
     return () => ipcRenderer.removeListener('remotesync:gdriveAuth', listener)
   },
+  // 智库同步第 2 步:「同步到哪」的网盘(syncTargets.ts)。list 永不回凭据;save 的凭据只进主进程、落 sync-targets 文件
+  targets: {
+    list: (): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:list'),
+    save: (input: { id?: string; kind: string; label?: string; section: Record<string, unknown> }): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:save', input),
+    remove: (id: string): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:remove', id),
+    check: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('remotesync:targets:check', id),
+  },
   onStatus: (cb: (st: unknown) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, st: unknown): void => cb(st)
     ipcRenderer.on('remotesync:status', listener)

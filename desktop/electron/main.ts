@@ -1,7 +1,7 @@
 import type { WindowDropPoint, WindowView } from '../shared/windowDrop'
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks,CONTENT_MERGE_FAMILIES } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,contentSyncOwnershipV2,contentSyncOwnedStrict,agentContentHooks,CONTENT_MERGE_FAMILIES } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
@@ -149,9 +149,10 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { gatePluginManifest } from '@amadeus-shared/ipc'
-import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { readConfig as readAmadeusConfig, readSyncOwnershipV2, writeSyncOwnershipV2 } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
-import { registerRemoteSync } from './remotesyncIpc'
+import { legacyRemoteSync, registerRemoteSync } from './remotesyncIpc'
+import { createSyncTargets, registerSyncTargetsIpc } from './syncTargets'
 import { flushSyncRecords, registerSyncRecordsIpc, syncRecordSink } from './syncRecordsIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -4001,12 +4002,25 @@ app.whenReady().then(async () => {
           ensureBackend: () => ensureBackend('engine_restart'), loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
           dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
         }),
+        // 智库同步第 2 步:按库根认领(契约 §3.7)。新 Extend 有它就不调上面的 claim / changed
+        ownership: contentSyncOwnershipV2({
+          accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+          ensureBackend: () => ensureBackend('engine_restart'), loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
+          dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
+          readV2: (account) => readSyncOwnershipV2(account),
+          writeV2: (account, next) => writeSyncOwnershipV2(account, next),
+          entryRoots: async (account) => (await readAmadeusConfig(account)).entrySync?.map((v) => v.vaultRoot) ?? [],
+          legacyOwned: (account) => contentSyncOwnedStrict(account),
+          log: (m) => console.warn(m),
+        }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
         mergeFamilies: CONTENT_MERGE_FAMILIES,
         agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
         trash: (p) => shell.trashItem(p),
       },
+      // ── 智库同步第 2 步:「同步到哪」(凭据留在宿主,Extend 只拿句柄;接手旧 remotesync 的封口 / 归档也在这里)──
+      syncTargets: createSyncTargets(),
     }
     // 插件页停用了的:不装主进程半身 —— 与没装 Extend 同一个形态(cloud:present 空,云端界面整套隐藏)。
     const off = (await loadConfig()).disabledBundles
@@ -4014,6 +4028,8 @@ app.whenReady().then(async () => {
     for (const s of bundleSources) if (s.desktop && bundleOff(s.id)) console.log(`[cloud-host] ${s.id} 已在插件页停用,不装载主进程半身`)
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources.filter((s) => !bundleOff(s.id)), appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     if (!loaded.includes('forsion-extend')) { cloudChannels.clear(); unitsListHandler = null }
+    // 旧 remotesync 的握手(remotesync/legacySeal.ts):Extend 不在 = 这次启动没有新同步,交还给 remotesync;在 = 等它在 60 秒内握手
+    legacyRemoteSync.extendLoaded(loaded.includes('forsion-extend'))
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 插件页拨带主进程半身的内置包(Forsion Extend):只改下次开机装不装,回「是否待重启」。别的 id 一律拒(开关名单不收杂项)。
@@ -6447,6 +6463,7 @@ app.whenReady().then(async () => {
   registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset, () => join(tanguDataDir(), 'plugin-data'))
   registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
+  registerSyncTargetsIpc() // 「同步到哪」的网盘列表(设置 › 同步;凭据只进主进程,见 syncTargets.ts)
   registerSyncRecordsIpc() // 同步记录(同步面板 / 全部记录读;Extend 经 cloudHost.syncRecords 写)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。

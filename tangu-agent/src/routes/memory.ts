@@ -13,19 +13,46 @@ import { syncNow, getSyncStatus } from '../services/memorySyncService.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { getAgent, listAgents, resolveMemorySlug, isValidSlug } from '../agents/agentRegistry.js';
 import { MemoryRepositoryError } from '../services/memoryRepository.js';
-import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncIdentity, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncIdentity, agentSyncScope, contentSyncOwnership, setAgentSyncDefault, setContentSyncOwner, setContentSyncOwnership } from '../services/cloudSyncAccount.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { factWithScope, runTagContext } from '../services/deviceTagContext.js';
 
 const router = Router();
-router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
-  if(!deps().profile.capabilities.hostExec||parseRemoteOrigin(req.headers))return void res.status(403).json({detail:'Local content sync only'});
+/** 谁管落盘同步的两位记号(contracts/contentSyncOwner.ts;智库同步第 2 步,契约 §3.7 / 实现期修订 H-1 第 5 条)。只给本机宿主用。
+ *  PUT 老 body {enabled} = 两位一起(老宿主的 claim);新 body {human?, agents?} 只改给的那位。GET 回两位当前值,宿主改完读回核对。
+ *  POST content-touched:新同步动过盘的通知,只把 human/ 镜像回旧位置(human 归新同步时),不写 owner(老 changed() 每次把 owner 写成 true)。 */
+function contentOwnerIdentity(req: AuthRequest, res: import('express').Response) {
+  if(!deps().profile.capabilities.hostExec||parseRemoteOrigin(req.headers)){res.status(403).json({detail:'Local content sync only'});return null;}
   const identity=agentSyncIdentity(deps().brain.agentFiles,req.user!.userId);
-  if(!identity||typeof req.body?.enabled!=='boolean')return void res.status(400).json({detail:'Account and enabled required'});
-  if(req.body.expectedAccount!==undefined&&req.body.expectedAccount!==identity.account)return void res.status(409).json({detail:'account_changed'});
-  try{setContentSyncOwner(identity.scope,req.body.enabled);await mirrorLegacyHuman();res.json({ok:true});}
+  if(!identity){res.status(400).json({detail:'Account required'});return null;}
+  const expected=req.method==='GET'?req.query.expectedAccount:req.body?.expectedAccount;
+  if(expected!==undefined&&expected!==identity.account){res.status(409).json({detail:'account_changed'});return null;}
+  return identity;
+}
+router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
+  const legacy=typeof req.body?.enabled==='boolean';
+  const human=req.body?.human,agents=req.body?.agents;
+  const patch={...(typeof human==='boolean'?{human}:{}),...(typeof agents==='boolean'?{agents}:{})};
+  if(!legacy&&!Object.keys(patch).length)return void res.status(400).json({detail:'Account and enabled required'});
+  if(legacy&&Object.keys(patch).length)return void res.status(400).json({detail:'Use either enabled or human/agents'});
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  try{
+    if(legacy)setContentSyncOwner(identity.scope,req.body.enabled);
+    else setContentSyncOwnership(identity.scope,patch);
+    await mirrorLegacyHuman();res.json({ok:true,...contentSyncOwnership(identity.scope)});
+  }
   catch(e){res.status(500).json({detail:'Content sync ownership failed'});}
+});
+router.get('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  try{res.json(contentSyncOwnership(identity.scope));}
+  catch(e){res.status(500).json({detail:'Content sync ownership unreadable'});}
+});
+router.post('/agent/sync/content-touched',authMiddleware,async(req:AuthRequest,res)=>{
+  const identity=contentOwnerIdentity(req,res);if(!identity)return;
+  try{if(contentSyncOwnership(identity.scope).human)await mirrorLegacyHuman();res.json({ok:true});}
+  catch(e){res.status(500).json({detail:'Content sync refresh failed'});}
 });
 
 async function inRequestedMemoryScope<T>(req: AuthRequest, fn: () => Promise<T>): Promise<T> {

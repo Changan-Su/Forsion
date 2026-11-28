@@ -24,6 +24,15 @@ export interface EntrySyncVault {
 interface CloudAccountConfig {
   cloudSync?: AmadeusCloudSyncConfig
   entrySync?: EntrySyncVault[]
+  /** 智库同步第 2 步(契约 §3.7):按库根的认领。只经 readSyncOwnershipV2 / writeSyncOwnershipV2 读写,readConfig 不带它。 */
+  syncOwnershipV2?: SyncOwnershipV2
+}
+
+/** 谁管哪几个本机库根的落盘同步(契约 §3.7)。entryRoots 存规整过的根(contentSyncHost.canonRoot)。 */
+export interface SyncOwnershipV2 {
+  entryRoots: string[]
+  mirror: 'keep' | 'off'
+  human: 'engine' | 'content'
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -65,22 +74,77 @@ function configFile(): string {
 
 export function amadeusConfigPath(): string { return configFile() }
 
+/** Quarantine unknown-owner legacy bindings. Their files and old shadow files
+ * are deliberately left intact; no automatic upload/delete is authorized. */
+function normalizeStored(stored: StoredConfig): StoredConfig {
+  if (stored.cloudSync || stored.entrySync) {
+    stored.legacyCloudState ??= { cloudSync: stored.cloudSync, entrySync: stored.entrySync }
+    delete stored.cloudSync
+    delete stored.entrySync
+  }
+  return stored
+}
+
 async function storedConfig(): Promise<StoredConfig> {
   if (cache) return cache
   if (!loading) loading = (async () => {
     let stored: StoredConfig
     try { stored = JSON.parse(await fs.readFile(configFile(), 'utf8')) as StoredConfig } catch { stored = {} }
-    // Quarantine unknown-owner legacy bindings. Their files and old shadow files
-    // are deliberately left intact; no automatic upload/delete is authorized.
-    if (stored.cloudSync || stored.entrySync) {
-      stored.legacyCloudState ??= { cloudSync: stored.cloudSync, entrySync: stored.entrySync }
-      delete stored.cloudSync
-      delete stored.entrySync
-    }
-    cache = stored
-    return stored
+    cache = normalizeStored(stored)
+    return cache
   })()
   return loading
+}
+
+/** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。 */
+async function storedConfigStrict(): Promise<StoredConfig> {
+  let raw: string
+  try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return {}
+    throw e
+  }
+  const parsed = JSON.parse(raw) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config is not an object')
+  return normalizeStored(parsed as StoredConfig)
+}
+
+const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
+  const o = v as SyncOwnershipV2
+  return !!o && typeof o === 'object' && Array.isArray(o.entryRoots) && o.entryRoots.every((r) => typeof r === 'string' && path.isAbsolute(r))
+    && (o.mirror === 'keep' || o.mirror === 'off') && (o.human === 'engine' || o.human === 'content')
+}
+
+/** 这个账号的按根认领:null = 没有(走老的 .owned 全局遮罩);配置读不了、或这一项形状不对 → 抛(调用方按「不知道」处理,不当成没认领)。 */
+export async function readSyncOwnershipV2(accountId: string | null): Promise<SyncOwnershipV2 | null> {
+  if (!accountId) return null
+  await writes // 排在已提交的写后面:刚写完马上读,读到的是新值
+  const own = (await storedConfigStrict()).cloudAccounts?.[cloudAccountNamespace(accountId)]
+  if (!own || own.syncOwnershipV2 === undefined) return null
+  if (!isOwnership(own.syncOwnershipV2)) throw new Error('syncOwnershipV2 is malformed')
+  return structuredClone(own.syncOwnershipV2)
+}
+
+/** 写 / 删这个账号的按根认领。和其他写同一条队列;**以盘上的为底**(严格读,读不了就抛、不写),
+ *  免得启动时读坏了缓存成 {},这一写把整份配置(含别的账号、条目同步注册表)盖掉。 */
+export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | null): Promise<void> {
+  if (next !== null && !isOwnership(next)) return Promise.reject(new Error('invalid syncOwnershipV2'))
+  const snapshot = next === null ? null : structuredClone(next)
+  const work = writes.then(async () => {
+    const disk = await storedConfigStrict()
+    const key = cloudAccountNamespace(accountId)
+    const account: CloudAccountConfig = { ...disk.cloudAccounts?.[key] }
+    if (snapshot) account.syncOwnershipV2 = snapshot
+    else delete account.syncOwnershipV2
+    const out: StoredConfig = { ...disk, cloudAccounts: { ...disk.cloudAccounts, [key]: account } }
+    const file = configFile()
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    const tmp = `${file}.tmp-${process.pid}`
+    await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
+    await fs.rename(tmp, file)
+    cache = out
+  })
+  writes = work.catch(() => {})
+  return work
 }
 
 export async function readConfig(accountId = currentCloudAccountId()): Promise<AmadeusConfig> {

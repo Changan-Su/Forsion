@@ -42,6 +42,8 @@ import { contentSyncOwned } from './contentSyncHost'
 import { currentCloudAccountId } from './amadeus/settings'
 import { remoteReportProblems, SYNC_RECORD_MAX_FAILED, type SyncTarget } from '../shared/vaultSync'
 import { appendSyncRecord } from './syncRecordsIpc'
+import { createLegacyGate, type LegacyGate, type LegacyGateState } from './remotesync/legacySeal'
+import { createSyncTargetsStore } from './syncTargetsStore'
 
 export interface RemoteSyncConfig {
   /** penzor = Forsion 云端:实现住在 Forsion Extend(remotesync/backends.ts 注册点),这里只保留配置形状。 */
@@ -71,6 +73,8 @@ const DEFAULT_CONFIG: RemoteSyncConfig = { backend: 'off', intervalMin: 0 }
 const MIN_INTERVAL_MIN = 5
 
 let cache: RemoteSyncConfig | null = null
+/** 配置文件在、却读不了 / 解析不了:界面照常给缺省值,但下一次保存先把坏文件挪到一边再写(不拿缺省值盖掉里面的凭据)。 */
+let loadBroken = false
 let running = false
 let lastReport: SyncReport | null = null
 let progress: { done: number; total: number; key: string } | null = null
@@ -83,16 +87,34 @@ async function loadConfig(): Promise<RemoteSyncConfig> {
   if (cache) return cache
   try {
     cache = { ...DEFAULT_CONFIG, ...(JSON.parse(await fs.readFile(configFile(), 'utf8')) as RemoteSyncConfig) }
-  } catch {
+  } catch (e) {
+    loadBroken = (e as NodeJS.ErrnoException)?.code !== 'ENOENT'
     cache = { ...DEFAULT_CONFIG }
   }
   return cache
+}
+
+/** 严格读(接手用,契约实现期修订 H-1 第 1 条):没有文件 = null;读不了 / 不是 JSON 对象就抛 —— 读失败 ≠ 没配置。 */
+async function readLegacyConfigStrict(): Promise<{ raw: string; cfg: RemoteSyncConfig } | null> {
+  let raw: string
+  try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+    throw e
+  }
+  const parsed = JSON.parse(raw) as unknown
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('remotesync config is not an object')
+  return { raw, cfg: { ...DEFAULT_CONFIG, ...(parsed as RemoteSyncConfig) } }
 }
 
 async function saveConfig(patch: Partial<RemoteSyncConfig>): Promise<RemoteSyncConfig> {
   const next = { ...(await loadConfig()), ...patch }
   cache = next
   await fs.mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
+  if (loadBroken) {
+    // 读不了的那份原样挪开留着(里面可能有凭据),再写新的
+    await fs.rename(configFile(), `${configFile()}.unreadable-${Date.now()}`).catch(() => {})
+    loadBroken = false
+  }
   // ponytail: 凭据明文落 userData(与 amadeus-config 同一惯例);要更强上 safeStorage
   await fs.writeFile(configFile(), JSON.stringify(next, null, 2), 'utf8')
   return next
@@ -225,7 +247,10 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   })
   // 锁必须在任何 await 之前拿:定时器与手动点击并发穿过 config/root 解析会双跑同一基线
   if (running) return fail('already-running')
+  // 新同步接手了这份配置、这次启动正持有写权(legacySeal.ts):定时、启动那一轮、手动、预演一律不跑。也在任何 await 之前判
+  if (legacyGate().blocked()) return fail('sealed')
   running = true
+  const endRound = legacyGate().begin()
   const recordAccount = currentCloudAccountId() // 这一轮记在开始时的账号名下(跑到一半换了账号,也不记到新账号里)
   progress = null
   broadcast()
@@ -278,6 +303,7 @@ async function runNow(opts?: { dryRun?: boolean; allowMassDelete?: boolean }): P
   } finally {
     running = false
     progress = null
+    endRound()
     broadcast()
   }
 }
@@ -502,6 +528,7 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
     const rooted = await resolveLocalSyncRoot()
     return 'error' in rooted ? rooted : { root: rooted.root, fingerprint: built.fingerprint }
   }
+  if (legacyGate().blocked()) return { ok: false, moved: 0, error: 'sealed' }
   const before = await target()
   if ('error' in before) return { ok: false, moved: 0, error: before.error }
   const dry = await runNow({ dryRun: true })
@@ -510,7 +537,9 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
   const forget = dry.plan.filter((i) => i.kind === 'pushDelete').map((i) => i.key) // 这台删了、云端还在:用云端那份 = 拉回来
   if (!keys.length && !forget.length) return { ok: true, moved: 0 }
   if (running) return { ok: false, moved: 0, error: 'already-running' }
+  if (legacyGate().blocked()) return { ok: false, moved: 0, error: 'sealed' }
   running = true
+  const endRound = legacyGate().begin()
   try {
     const now = await target()
     if ('error' in now) return { ok: false, moved: 0, error: now.error }
@@ -524,11 +553,164 @@ async function adoptRemote(label: string): Promise<{ ok: boolean; moved: number;
     return { ok: !r.error, moved: r.moved, backupDir: r.moved ? dir : undefined, error: r.error }
   } finally {
     running = false
+    endRound()
     broadcast()
   }
 }
 
+// ── 智库同步第 2 步(契约 §3.8 D、实现期修订 H-1 第 1、2 条):新同步接手 remotesync 的宿主那一半 ──────────────
+
+const syncTargetsFile = (): string =>
+  path.join(app.getPath('userData'), isDevMode() ? 'sync-targets.dev.json' : 'sync-targets.json')
+/** 宿主的「同步到哪」存档(凭据只在主进程里)。syncTargets.ts 与这里共用一份。 */
+export const syncTargetsStore = createSyncTargetsStore(syncTargetsFile)
+
+let gate: LegacyGate | null = null
+function legacyGate(): LegacyGate {
+  gate ??= createLegacyGate({
+    loadHold: () => syncTargetsStore.readLegacy(),
+    saveHold: (h) => syncTargetsStore.writeLegacy(h),
+    log: (m) => console.warn(m),
+  })
+  return gate
+}
+
+/** 封口三态给设置页(契约 §3.9):v2-holds = 这次启动新同步持有写权、旧入口拦着;imported = 接手过、现在交还着(只能手动、从零基线跑);
+ *  user-off = 用户自己关着(没选后端);active = 照旧在用。 */
+function legacySealView(cfg: RemoteSyncConfig): LegacyGateState & { state: 'v2-holds' | 'imported' | 'user-off' | 'active' } {
+  const st = legacyGate().state()
+  const state = st.blocked ? 'v2-holds' : st.archived || st.hold === 'v2' ? 'imported' : cfg.backend === 'off' ? 'user-off' : 'active'
+  return { ...st, state }
+}
+
+/** 设置页要显示的目录(各后端原样):文件夹 = 路径;S3 = 前缀;WebDAV = baseDir(缺省 forsion-vault);Dropbox = baseDir(缺省根);
+ *  Google Drive = baseDir(缺省 Forsion-Vault);蓬洲云 = 库名。 */
+export function legacyDirOf(cfg: RemoteSyncConfig): string {
+  switch (cfg.backend) {
+    case 'folder': return cfg.folder?.path ?? ''
+    case 's3': return normPrefix(cfg.s3?.prefix)
+    case 'webdav': return (cfg.webdav?.baseDir ?? 'forsion-vault').replace(/^\/+|\/+$/g, '') || 'forsion-vault'
+    case 'dropbox': return cfg.dropbox?.baseDir ?? ''
+    case 'gdrive': return gdriveBaseSegs(cfg.gdrive?.baseDir).join('/')
+    case 'penzor': return cfg.penzor?.vault ?? 'default'
+    default: return ''
+  }
+}
+
+export interface LegacyRemoteSyncView {
+  config: { backend: RemoteSyncConfig['backend']; dir: string; direction: 'both' | 'push' | 'pull'; ignore: string[]; maxFileMB: number; intervalMin: number; syncOnStart: boolean; concurrency: number | null }
+  root: string | null
+  rootError: string | null
+  running: boolean
+  hold: 'none' | 'v2'
+  archived: boolean
+  handshake: 'pending' | 'ok' | 'released'
+}
+
+/** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
+export const legacyRemoteSync = {
+  /** 握手:Extend 调了 syncTargets 的任一成员。v2 持有时等在途那一轮跑完。 */
+  touch: (): Promise<void> => legacyGate().touch(),
+  /** 宿主装载完内置包时调。 */
+  extendLoaded: (present: boolean): void => legacyGate().extendLoaded(present),
+  /** 没配置(文件不在)= null;读不了就抛。 */
+  async view(): Promise<LegacyRemoteSyncView | null> {
+    const strict = await readLegacyConfigStrict()
+    if (!strict) return null
+    const cfg = strict.cfg
+    const rooted = await resolveLocalSyncRoot()
+    const st = legacyGate().state()
+    if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
+    return {
+      config: {
+        backend: cfg.backend,
+        dir: legacyDirOf(cfg),
+        direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
+        ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
+        maxFileMB: cfg.maxFileMB ?? 100,
+        intervalMin: cfg.intervalMin ?? 0,
+        syncOnStart: cfg.syncOnStart === true,
+        concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
+      },
+      root: 'root' in rooted ? rooted.root : null,
+      rootError: 'error' in rooted ? rooted.error : null,
+      running,
+      hold: st.hold === 'v2' ? 'v2' : 'none',
+      archived: st.archived,
+      handshake: st.handshake,
+    }
+  },
+  /** 宿主内部用(导入 sync-targets):原样那一段后端配置,含凭据。没配置 / 读不了 / 没选后端 → 抛。 */
+  async section(): Promise<{ backend: RemoteSyncConfig['backend']; section: Record<string, unknown> }> {
+    const strict = await readLegacyConfigStrict()
+    if (!strict) throw new Error('no-legacy-config')
+    const { backend } = strict.cfg
+    if (backend === 'off') throw new Error('no-legacy-backend')
+    const section = (strict.cfg as unknown as Record<string, unknown>)[backend]
+    return { backend, section: section && typeof section === 'object' ? structuredClone(section as Record<string, unknown>) : {} }
+  },
+  seal: (): Promise<void> => legacyGate().seal(),
+  unseal: (): Promise<void> => legacyGate().unseal(),
+  /** 只在持有时:remotesync.json 原样复制进档案,原文件只改 intervalMin=0 / syncOnStart=false,remotesync-state/ 的基线挪进档案。幂等。 */
+  async archive(archiveDir: string): Promise<{ copied: string[]; moved: string[] }> {
+    if (typeof archiveDir !== 'string' || !path.isAbsolute(archiveDir)) throw new Error('bad-archive-dir')
+    const st = legacyGate().state()
+    if (st.hold !== 'v2') throw new Error('legacy-not-sealed')
+    await legacyGate().idle()
+    if (running) throw new Error('already-running')
+    await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 })
+    const copied: string[] = []
+    const moved: string[] = []
+    const strict = await readLegacyConfigStrict()
+    if (strict) {
+      const dest = path.join(archiveDir, path.basename(configFile()))
+      // 只复制一次:重跑时档案里那份是改之前的原件,不能被已经关了自动同步的新内容盖掉
+      try { await fs.copyFile(configFile(), dest, fs.constants.COPYFILE_EXCL); copied.push(dest) } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e
+      }
+      await fs.chmod(dest, 0o600).catch(() => {})
+      if ((strict.cfg.intervalMin ?? 0) !== 0 || strict.cfg.syncOnStart) {
+        const obj = JSON.parse(strict.raw) as Record<string, unknown>
+        obj.intervalMin = 0
+        obj.syncOnStart = false
+        const file = configFile()
+        const mode = (await fs.stat(file)).mode & 0o777
+        const tmp = `${file}.tmp-${process.pid}-${Date.now()}`
+        await fs.writeFile(tmp, JSON.stringify(obj, null, 2), { encoding: 'utf8', mode })
+        await fs.rename(tmp, file)
+        cache = { ...DEFAULT_CONFIG, ...(obj as unknown as RemoteSyncConfig) }
+        resetTimer(cache)
+      }
+    }
+    const stateDir = path.join(app.getPath('userData'), 'remotesync-state')
+    let names: string[] = []
+    try { names = await fs.readdir(stateDir) } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e }
+    if (names.some((n) => n.endsWith('.json'))) await fs.mkdir(path.join(archiveDir, 'remotesync-state'), { recursive: true, mode: 0o700 })
+    for (const name of names.filter((n) => n.endsWith('.json'))) {
+      const from = path.join(stateDir, name)
+      let to = path.join(archiveDir, 'remotesync-state', name)
+      if (await fs.access(to).then(() => true, () => false)) to = `${to}.${Date.now()}`
+      try { await fs.rename(from, to) } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code !== 'EXDEV') throw e
+        await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
+        await fs.unlink(from)
+      }
+      moved.push(to)
+    }
+    await legacyGate().markArchived(archiveDir)
+    return { copied, moved }
+  },
+}
+
+/** syncTargets.ts 打开 Dropbox / Google Drive 目标时用:和 remotesync 同一套生效凭据口径、同一个走系统代理的 fetch。 */
+export const remoteSyncNet = {
+  fetch: remoteFetch,
+  dropboxAppKey: (d?: { appKey?: string }): string => dbxAppKey(d),
+  gdriveClient: (g?: { clientId?: string; clientSecret?: string }) => gdriveClient(g),
+}
+
 export function registerRemoteSync(): void {
+  legacyGate() // 尽早读持有状态:启动那一轮之前就要知道拦不拦
   ipcMain.handle('remotesync:get', async () => {
     const cfg = await loadConfig()
     const rooted = await resolveLocalSyncRoot()
@@ -545,6 +727,8 @@ export function registerRemoteSync(): void {
       gdriveBuiltin: FORSION_GDRIVE_CLIENT_ID !== '',
       // 外置后端(Forsion Extend 注册的 kind,如 penzor):渲染层只列这里有的选项
       backends: extraBackendKinds(),
+      // 智库同步第 2 步:新同步接手了没有、这次启动谁持有写权(设置页据此显示「已交给新同步」/ 兼容模式照旧)
+      seal: legacySealView(cfg),
     }
   })
   ipcMain.handle('remotesync:set', async (_e, patch: Partial<RemoteSyncConfig>) => {

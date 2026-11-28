@@ -5,6 +5,7 @@ import { readdirSync, rmdirSync, rmSync } from 'node:fs';
 import { withMemoryDirectoryLock } from './memoryRepository.js';
 import type { AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { contentOwnsOf, withContentOwns, type AccountSyncDefault, type ContentOwns } from '../contracts/contentSyncOwner.js';
 
 /**
  * Agents(及记忆)同步先封住(AGENT_SYNC_SEALED,开关本身在 contracts/agentSyncSeal.ts,桌面界面共用;2026-11-27 智库同步统一方案第 0 步)。
@@ -78,7 +79,7 @@ function readPermissions(slug: string): PermissionFile {
  *      总闸再开时 follow 的跟着回来。
  * ponytail: 读改写不加锁(只有用户点开关会写,一个引擎进程);要多进程同写再上 withMemoryDirectoryLock。
  */
-interface AccountDefault { enabled: boolean; revision: number; owner?: 'content' }
+type AccountDefault = AccountSyncDefault;
 const defaultFile = (): string => assertSyncPath(agentsDir(), join(agentsDir(), '.cloudsync-default.json'));
 function readDefaults(): Record<string, AccountDefault> {
   try {
@@ -86,22 +87,42 @@ function readDefaults(): Record<string, AccountDefault> {
     return data.accounts && typeof data.accounts === 'object' ? data.accounts : {};
   } catch { return {}; }
 }
+/** 总闸读数(human/ 的同意):「我的资料」归新同步(contentOwns.human)时读作 false,旧通道不碰 human/。 */
+/** 严格读:没有文件 = {};读不了 / 坏了就抛(读失败 ≠ 没人管:两位记号拿去核对和改写时不能把「不知道」当成「都归引擎」)。 */
+function readDefaultsStrict(): Record<string, AccountDefault> {
+  const raw = readSyncBytes(agentsDir(), defaultFile());
+  if (raw === null) return {};
+  const data = JSON.parse(raw.toString('utf8'));
+  if (!data || typeof data !== 'object' || (data.accounts !== undefined && (typeof data.accounts !== 'object' || data.accounts === null))) throw new Error('content sync owner file is malformed');
+  return data.accounts ?? {};
+}
 export function agentSyncDefault(scope: string | null): boolean | null {
   if (!scope) return null;
   const d = readDefaults()[scope];
-  if(d?.owner==='content')return false;
+  if (contentOwnsOf(d).human) return false;
   return typeof d?.enabled === 'boolean' ? d.enabled : null;
 }
-/** Exclusive ownership prevents legacy per-agent discovery from bypassing folder rules. */
+/** 这个账号两位的当前值(契约 contracts/contentSyncOwner.ts);没有记录 = 两位都归引擎。 */
+export function contentSyncOwnership(scope: string): ContentOwns {
+  if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  return contentOwnsOf(readDefaultsStrict()[scope]);
+}
+/** 只改给的那一位或两位(智库同步第 2 步:human 单独交接、单独读回)。 */
+export function setContentSyncOwnership(scope: string, patch: Partial<ContentOwns>): void {
+  if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
+  const accounts = readDefaultsStrict();
+  accounts[scope] = withContentOwns(accounts[scope], patch);
+  atomicSyncWrite(agentsDir(), defaultFile(), JSON.stringify({ accounts }, null, 2)); invalidateAgentSyncOperations();
+}
+/** Exclusive ownership prevents legacy per-agent discovery from bypassing folder rules.
+ *  老接口(旧 claim):两位一起改,和第 2 步之前写出的文件一个样。 */
 export function setContentSyncOwner(scope:string,enabled:boolean):void {
-  if(!/^[a-f0-9]{64}$/.test(scope))throw new Error('invalid cloud account scope');
-  const accounts=readDefaults(),cur=accounts[scope];
-  accounts[scope]={enabled:cur?.enabled??false,revision:(cur?.revision??0)+1,...(enabled?{owner:'content' as const}:{})};
-  atomicSyncWrite(agentsDir(),defaultFile(),JSON.stringify({accounts},null,2));invalidateAgentSyncOperations();
+  setContentSyncOwnership(scope,{human:enabled,agents:enabled});
 }
 export function setAgentSyncDefault(scope: string, enabled: boolean): void {
   if (!/^[a-f0-9]{64}$/.test(scope)) throw new Error('invalid cloud account scope');
-  if(readDefaults()[scope]?.owner==='content')throw new Error('Folder rules own content sync; manage it in Penzor Cloud.');
+  const owns = contentOwnsOf(readDefaults()[scope]);
+  if(owns.human||owns.agents)throw new Error('Folder rules own content sync; manage it in Penzor Cloud.');
   if (!enabled) {
     // 先把单独开着的改成跟着总闸,再落总闸:中途崩了,重点一次「关」就补齐
     let dirs: import('node:fs').Dirent[] = [];
@@ -142,12 +163,16 @@ export function captureAgentSyncDefault(scope: string): () => void {
   };
 }
 
-/** Legacy cloud_sync=true has no owner and cannot authorize a newly selected cloud account. */
-export function agentSyncPermission(slug: string, scope: string | null): Permission {
+/** Legacy cloud_sync=true has no owner and cannot authorize a newly selected cloud account.
+ *  area:这份同意拿去做什么。'agents'(缺省)= 同步这个 Agent 的文件夹,新同步管 Agents 时读作关;
+ *  'human' = 凭这个 Agent 的 shared 同步「我的资料」,只看 human 那一位(第 2 步:Agents 归新同步、human 仍归引擎的机器,
+ *  靠某个 Agent 的 shared 授权同步 human/ 的那一类不能因此停掉)。 */
+export function agentSyncPermission(slug: string, scope: string | null, area: 'agents' | 'human' = 'agents'): Permission {
   if (!scope) return { enabled: false, shared: false };
   const permission = readPermissions(slug).accounts[scope];
   const master = readDefaults()[scope];
-  if(master?.owner==='content')return {enabled:false,shared:false,revision:master.revision};
+  const owns = contentOwnsOf(master);
+  if (area === 'human' ? owns.human : owns.agents) return { enabled: false, shared: false, revision: master?.revision };
   const revision = (permission?.revision ?? 0) + (master?.revision ?? 0);
   if (permission?.follow) return master?.enabled === true ? { enabled: true, shared: permission.shared === true, revision } : { enabled: false, shared: false, revision };
   if (permission) return { enabled: permission.enabled === true, shared: permission.shared === true, revision };
@@ -192,11 +217,11 @@ export function agentSyncOperationSignal(signal?: AbortSignal): AbortSignal {
   return signal ? AbortSignal.any([signal, sourceController.signal]) : sourceController.signal;
 }
 /** A captured consent revision cannot become valid again after revoke + re-enable. */
-export function captureAgentSyncPermission(slug: string, scope: string, shared = false): () => void {
-  const initial = agentSyncPermission(slug, scope);
+export function captureAgentSyncPermission(slug: string, scope: string, shared = false, area: 'agents' | 'human' = 'agents'): () => void {
+  const initial = agentSyncPermission(slug, scope, area);
   if (!initial.enabled || (shared && !initial.shared)) throw new Error('agent sync consent required');
   return () => {
-    const current = agentSyncPermission(slug, scope);
+    const current = agentSyncPermission(slug, scope, area);
     if (!current.enabled || (shared && !current.shared) || current.revision !== initial.revision) throw new Error('agent sync consent changed');
     agentSyncDir(slug);
   };

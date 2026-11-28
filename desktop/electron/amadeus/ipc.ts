@@ -1,4 +1,4 @@
-import { contentSyncOwned } from '../contentSyncHost'
+import { contentSyncOwned, maskAmadeusConfig, type OwnershipRead } from '../contentSyncHost'
 import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { constants as fsConstants, promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
@@ -19,7 +19,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, readSyncOwnershipV2, updateConfig, writeConfig, type AmadeusConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -1226,7 +1226,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     workspaceDir: defaultWorkspaceDir,
     userDataDir: () => app.getPath('userData'),
     isDevMode,
-    readConfig: async () => { const cfg=await readConfig();return contentSyncOwned(currentCloudAccountId())?{...cfg,cloudSync:{...cfg.cloudSync,enabled:false},entrySync:[]}:cfg },
+    // 认领遮罩(智库同步第 2 步,契约 §3.7):有 syncOwnershipV2 只滤掉接手的根;老的全局认领(.owned)或配置读不了 = 整份遮掉。磁盘上一条不动
+    readConfig: async () => {
+      const cfg = await readConfig()
+      const account = cfg.cloudAccountId ?? null
+      let own: OwnershipRead
+      try { const v2 = await readSyncOwnershipV2(account); own = v2 ? { kind: 'v2', value: v2 } : { kind: 'none' } } catch { own = { kind: 'unknown' } }
+      return maskAmadeusConfig(cfg, own, contentSyncOwned(account))
+    },
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),

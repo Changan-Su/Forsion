@@ -1236,8 +1236,26 @@ declare global {
       gdriveAuthStart?(clientId: string, clientSecret: string): Promise<{ ok: boolean; error?: string }>
       onGdriveAuth?(cb: (r: { ok: boolean; error?: string; email?: string; config?: RemoteSyncConfig }) => void): () => void
       onStatus(cb: (s: { running: boolean; lastReport: RemoteSyncReport | null; progress: RemoteSyncProgress | null }) => void): () => void
+      /** 智库同步第 2 步起:「同步到哪」的网盘(主进程 syncTargets.ts)。list 永不回凭据。旧主进程没有。 */
+      targets?: {
+        list(): Promise<SyncTargetSummary[]>
+        save(input: { id?: string; kind: SyncTargetSummary['kind']; label?: string; section: Record<string, unknown> }): Promise<SyncTargetSummary>
+        remove(id: string): Promise<{ ok: boolean }>
+        check(id: string): Promise<{ ok: boolean; error?: string }>
+      }
     }
   }
+}
+
+/** 一条「同步到哪」的网盘(镜像 electron/syncTargets.ts 的 SyncTargetSummary;不含凭据)。 */
+export interface SyncTargetSummary {
+  id: string
+  kind: 'folder' | 's3' | 'webdav' | 'dropbox' | 'gdrive'
+  label: string
+  /** 后端原有的基础目录(文件夹路径 / S3 前缀 / WebDAV baseDir / Dropbox baseDir / Drive 文件夹)。 */
+  dirDefault: string
+  /** remotesync = 从旧的远程同步导入的;user = 设置页里新建的。 */
+  source: 'remotesync' | 'user'
 }
 
 /** 执行阶段进度(主进程 150ms 节流广播;key = 当前处理的文件)。 */
@@ -1298,6 +1316,9 @@ export interface RemoteSyncState {
   gdriveBuiltin?: boolean
   /** 外置后端(Forsion Extend 注册的 kind,如 'penzor'):选项只列这里有的;老宿主没有这个字段 = 没有外置后端。 */
   backends?: string[]
+  /** 智库同步第 2 步起:新同步接手了没有(主进程 remotesync/legacySeal.ts)。v2-holds = 这次启动新同步持有写权,旧入口(运行 / 预演 / 用云端那份)会回 sealed;
+   *  imported = 接手过、现在交还着(自动同步已关,只能手动、从零基线跑);user-off = 没选后端;active = 照旧在用。旧主进程没有。 */
+  seal?: { state: 'v2-holds' | 'imported' | 'user-off' | 'active'; hold: 'v2' | 'none' | 'unknown'; archived: boolean; archiveDir?: string; handshake: 'pending' | 'ok' | 'released'; blocked: boolean; running: boolean }
 }
 
 /** 非活动侧日历只读快照(Calendar 汇总另一侧用)。root=另一侧磁盘根;vaultName=显示名(云端/文件夹名)。 */
