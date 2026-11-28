@@ -240,6 +240,15 @@ function tapRes(list, id) {
   assert.ok(n, `no ${id} on screen`)
   h.tapNode(n)
 }
+/** tapRes, and once more if the same button is still up a moment later: a tap while a dialog slides in can be lost
+ *  (seen on a loaded x86_64 emulator). Only for a dialog that is not expected to come straight back. */
+async function tapResSure(list, id) {
+  tapRes(list, id)
+  await h.pause(1500)
+  let again = null
+  try { again = h.nodes(OUT).find((x) => x['resource-id'] === id) } catch { /* between windows */ }
+  if (again) { note(`the tap on ${id.split('/').pop()} was lost — tapping again`); h.tapNode(again) }
+}
 /** Wait until the dialog of this kind is gone (the next one may already be up). */
 async function waitNoDialog(kind = null, timeout = 6000) {
   const r = await h.waitNodes((l) => { const d = readDialog(l); return !d || (kind && d.kind !== kind) }, { timeout })
@@ -401,7 +410,7 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
       const d = await waitDialog(15000)
       assert.ok(d && d.kind === 'notify', `notification dialog expected, got ${d && d.kind}`)
       note(`D1 dialog kind=${d.kind} pkg=${d.pkg} top=${d.top} msg="${d.msg}" buttons=[${d.buttons.join(', ')}]`)
-      tapRes(d.list, 'com.android.permissioncontroller:id/permission_deny_button')
+      await tapResSure(d.list, 'com.android.permissioncontroller:id/permission_deny_button')
       await waitNoDialog()
       await h.pause(1500)
       const w = await wizard()
@@ -561,9 +570,10 @@ const tapPrimary = () => tapEl("document.querySelector('.ob-shell.ob-flow [data-
     })
     await check('E2 only the done key (what other benches seed): no wizard at all', async () => {
       await freshSignedIn({ forsion_tangu_onboarding_done: '1' })
-      await h.pause(5000)
-      const shell = await cdp.eval("!!document.querySelector('.hp-root, .mb-shell')")
+      // a cold start after pm clear can take well over 5 s on a loaded emulator
+      const shell = await h.waitPage(cdp, "!!document.querySelector('.hp-root, .mb-shell')", 20000)
       assert.ok(shell, 'app shell not mounted')
+      await h.pause(1500) // a wizard that would show comes up with the shell
       assert.equal(await cdp.eval("!!document.querySelector('.ob-shell.ob-flow')"), false, 'a wizard showed')
     })
   }
