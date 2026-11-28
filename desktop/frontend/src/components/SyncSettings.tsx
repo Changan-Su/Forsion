@@ -236,7 +236,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    say(p.root, syncErrorText(err, t, p.name))
+    // 跨种类换去处(蓬洲云 ↔ 网盘 / 文件夹):两种绑定记在两本账上,引擎这一版带 bindingId 跨过去回 binding_not_found(联调实测,契约 U-7 第 1 条);
+    // 别说成「设置变了，重新打开再试」,那是死循环
+    const crossKind = !!p.bindingId && !!p.baseTarget && !p.baseTarget.startsWith(p.target.kind === 'remote' ? 'remote:' : 'penzor:')
+    say(p.root, crossKind && /binding_not_found/.test(err) ? t('ssync.err.crossKind') : syncErrorText(err, t, p.name))
     return false
   }, [t])
 
@@ -306,8 +309,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     const r = await addFolderTarget(dir)
     if (!r.ok) { say(b.root, t(targetErrorKey(r.error))); return }
     await loadTargets()
-    // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条
-    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t('ssync.target.saved', { label: r.target.label })].filter(Boolean).join(' ') }))
+    // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条(蓬洲云那一行跨种类换不过去:只说存下了,不叫人「再选它」)
+    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t(b.target.kind === 'remote' ? 'ssync.target.saved' : 'ssync.target.savedOnly', { label: r.target.label })].filter(Boolean).join(' ') }))
   }, [loadTargets, switchTarget, t])
 
   /** 连接 / 重新授权 Dropbox、Google Drive:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。 */

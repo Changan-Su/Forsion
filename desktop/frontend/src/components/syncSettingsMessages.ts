@@ -42,6 +42,7 @@ registerMessages({
   'ssync.err.unreadable': { zh: '这个库里有读不了的文件夹，先检查权限', en: 'Some folders in this vault can’t be read. Check their permissions' },
   'ssync.err.overlap': { zh: '这个库和另一个在同步的库套在一起了，一次只能同步其中一个', en: 'This vault is inside (or contains) another synced vault. Only one of them can sync' },
   'ssync.err.takeoverBusy': { zh: '这个库还在交接，交接完这一轮再改', en: 'This vault is still being handed over. Try again after this round' },
+  'ssync.err.crossKind': { zh: '这一版还不能把正在同步的库在蓬洲云和网盘 / 文件夹之间换，等 Forsion Extend 更新后再换。', en: 'This version can’t switch a syncing vault between Penzor Cloud and a drive or folder. Try again after Forsion Extend updates.' },
   'ssync.err.bindingGone': { zh: '这个库的同步设置变了，重新打开这一页再试', en: 'This vault’s sync settings changed. Reopen this page and try again' },
   'ssync.dest.line': { zh: '本机「{name}」→ {dest}', en: '“{name}” on this computer → {dest}' },
   'ssync.dest.new': { zh: '蓬洲云 · 新建库「{name}」', en: 'Penzor Cloud · new vault “{name}”' },
@@ -255,6 +256,7 @@ registerMessages({
   'ssync.review.allDone': { zh: '处理了 {n} 篇；还有 {left} 篇没动（判不出哪边新，或名单变了）。', en: 'Handled {n}. {left} left as they were (newer side unclear, or the list changed).' },
   'ssync.err.deletesChanged': { zh: '要删的名单变了，重新看一下再决定。', en: 'The list of deletions changed. Review it again before deciding.' },
   'ssync.err.notRunning': { zh: '这个库现在没在同步，先打开同步再处理。', en: 'This vault isn’t syncing right now. Turn sync on first.' },
+  'ssync.target.savedOnly': { zh: '去处「{label}」已经存下了。', en: 'The destination “{label}” was saved.' },
   'ssync.target.saved': { zh: '去处「{label}」已经加上了，可以在「同步到」里再选它。', en: 'The destination “{label}” was added. You can pick it again under “Sync to”.' },
   'ssync.target.listFailed': { zh: '去处清单读不出来，稍后再打开这个菜单。', en: 'Couldn’t read the list of destinations. Open this menu again later.' },
 })
