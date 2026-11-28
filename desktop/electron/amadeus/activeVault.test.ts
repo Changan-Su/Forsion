@@ -143,6 +143,10 @@ describe('active-vault:set', () => {
     env.creds = {}
     await expect(t.set(refOf('A'))).rejects.toThrow('account_changed')
     await expect(t.set({ ...refOf('A'), account: 'signed-out' })).rejects.toThrow() // 'signed-out' 不是哪个账号
+    login('A')
+    const racing = t.set(refOf('A')) // 排队等写的那一拍里换了账号:队列里再核一次
+    login('B')
+    await expect(racing).rejects.toThrow('account_changed')
     expect(await bytes()).toBe(before)
     expect(t.broadcasts).toEqual([])
   })
@@ -156,6 +160,14 @@ describe('active-vault:set', () => {
       await expect(t.set(bad)).rejects.toThrow('invalid_ref')
     }
     expect(await bytes()).toBe(before)
+  })
+
+  it('the settings writer itself keeps only the six fields', async () => {
+    const { writeActiveVault } = await import('./settings')
+    await writeActiveVault({ ...refOf('A'), token: 'not-stored' } as never)
+    expect((await readCfg()).activeVault).toEqual(refOf('A'))
+    expect(JSON.stringify(await readCfg())).not.toContain('not-stored')
+    await expect(writeActiveVault({ ...refOf('A'), kind: 'local' } as never)).rejects.toThrow('invalid_ref')
   })
 
   it('an unreadable config is not overwritten', async () => {
@@ -221,6 +233,9 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     expect(t.host.canOpenOnline()).toBe(false)
     t.capable()
     expect(t.host.canOpenOnline()).toBe(true)
+    t.state.main!.emit('render-process-gone', {}, { reason: 'crashed' }) // 渲染进程没了
+    expect(t.host.canOpenOnline()).toBe(false)
+    t.capable()
     t.state.main = fakeContents(3) // 主窗重建:新的那扇没报过
     expect(t.host.canOpenOnline()).toBe(false)
   })
@@ -274,9 +289,13 @@ describe('CloudHost.openLibrary / canOpenOnline', () => {
     t.capable()
     const opening = t.host.openLibrary(refOf('A'))
     const { requestId } = t.state.main!.send.mock.calls[0][1]
+    let settled = false
+    opening.then(() => { settled = true }, () => { settled = true })
     t.result({ requestId, ok: false, code: 'whatever' }, fakeContents(7)) // 别的窗口
     t.result({ requestId, ok: true }) // 成功只认 set
     t.result({ requestId: 'other', ok: false })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(settled).toBe(false)
     t.result({ requestId, ok: false, code: 'bridge_failed' })
     await expect(opening).rejects.toThrow('switch_failed')
   })
@@ -359,6 +378,10 @@ describe('legacy mirror migration', () => {
     const after = await readCfg()
     expect(after.activeVault?.vaultId).toBe('vault-1')
     expect('lastVault' in after).toBe(false)
+    const { mirror } = await seed()
+    await seed({ localVault: mirror }) // 本机库那一格也是镜像:同样不当真目录
+    expect(await migrate()).toBe(true)
+    expect('lastVault' in (await readCfg())).toBe(false)
     await fs.rm(cfgFile())
     expect(await migrate()).toBe(false)
     await expect(fs.stat(cfgFile())).rejects.toThrow()

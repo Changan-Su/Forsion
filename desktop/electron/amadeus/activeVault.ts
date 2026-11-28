@@ -60,12 +60,12 @@ export function createActiveVaultHost(deps: ActiveVaultDeps): {
       else p.resolve()
     }
   }
-  // 转发壳只活在那一个文档里:主框架换文档(重载)/ 渲染进程没了 / wc 销毁,都要等新页面重新报
+  // 转发壳只活在那一个文档里:主框架换文档(重载)/ 渲染进程没了,都要等新页面重新报。
+  // 主窗重建 / 销毁不用另听:canOpenOnline 比的是「报过的那个 wc === 现在的主窗 wc」
   const watch = (wc: WebContents): void => {
     if (watched.has(wc)) return
     watched.add(wc)
     const drop = (): void => { if (capable === wc) capable = null }
-    wc.once('destroyed', drop)
     wc.on('render-process-gone', drop)
     wc.on('did-start-navigation', (d: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
       if (d?.isMainFrame && !d.isSameDocument) drop()
