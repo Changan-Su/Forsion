@@ -3,7 +3,7 @@
  * 配置持久化(userData/remotesync[.dev].json)+ 定时调度 + IPC + 同步根解析。
  *
  * 边界约定(见 remotesync/README.md):
- *  - 同步根 = Amadeus 本地库(localVault);云镜像目录一律拒绝(那是云端模式引擎的管辖);
+ *  - 同步根 = Amadeus 钉住的库(syncVault),未钉住时回落到本机库;云镜像目录一律拒绝;
  *  - 按条目云同步(entrySync)绑定的路径自动加入忽略 —— 双引擎不许抢管辖同一批文件;
  *  - 本地删除注入系统回收站(shell.trashItem),兜底 fs.rm。
  */
@@ -660,6 +660,19 @@ function legacyGate(): LegacyGate {
     log: (m) => console.warn(m),
   })
   return gate
+}
+
+/** 挪钉子会改变下一轮的旧同步根。只在本次启动已握手、已封口且无在途轮次时允许,写入期间交还继续排队。 */
+export async function withSealedLegacyRemoteSync<T>(work: () => Promise<T>): Promise<T | 'legacy-remotesync-not-paused'> {
+  const gate = legacyGate()
+  await gate.ready()
+  const state = gate.state()
+  if (state.hold !== 'v2' || state.handshake !== 'ok' || !state.blocked || state.running) return 'legacy-remotesync-not-paused'
+  return gate.exclusive(work).catch((error: unknown) => {
+    // 已经排队的交还可能先拿到锁;exclusive 会重新核对持有状态。
+    if (error instanceof Error && error.message === 'legacy-not-sealed') return 'legacy-remotesync-not-paused'
+    throw error
+  })
 }
 
 /** 接手归档要挪的基线:remotesync-state/ 里**这个根 × 这个指纹**那份(runNow 的文件名 = hash8(根|指纹).json)。

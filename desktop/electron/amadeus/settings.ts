@@ -3,11 +3,13 @@
 import { promises as fs, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { app } from 'electron'
 import { isDevMode } from '../forsionHome'
 import { loadTanguCreds } from '../forsionAuth'
 import { forsionAccountId } from '../../shared/forsionAccount'
 import type { OnlineVaultRef } from '@amadeus-shared/ipc'
+import { samePath } from './vaultList'
 
 export type { OnlineVaultRef }
 
@@ -63,6 +65,7 @@ interface StoredConfig extends Omit<AmadeusConfig, 'cloudAccountId'> {
   /** Pre-account-scoping state has no reliable owner. Keep it for recovery,
    * never silently enroll these notes into whichever account signs in next. */
   legacyCloudState?: CloudAccountConfig
+  legacyCloudStateExtra?: CloudAccountConfig[]
 }
 
 let cache: StoredConfig | null = null
@@ -101,12 +104,27 @@ export function amadeusConfigPath(): string { return configFile() }
 /** Quarantine unknown-owner legacy bindings. Their files and old shadow files
  * are deliberately left intact; no automatic upload/delete is authorized. */
 function normalizeStored(stored: StoredConfig): StoredConfig {
-  if (stored.cloudSync || stored.entrySync) {
-    stored.legacyCloudState ??= { cloudSync: stored.cloudSync, entrySync: stored.entrySync }
+  if ('cloudSync' in stored || 'entrySync' in stored) {
+    const extras = legacyExtras(stored)
+    if (!extras) return stored // 读不懂隔离区:顶层原样留着,不能覆盖或删掉任何一份
+    const top: CloudAccountConfig = {
+      ...('cloudSync' in stored ? { cloudSync: stored.cloudSync } : {}),
+      ...('entrySync' in stored ? { entrySync: stored.entrySync } : {}),
+    }
+    if (!isDeepStrictEqual(stored.legacyCloudState, top) && !extras.some((extra) => isDeepStrictEqual(extra, top))) {
+      if (stored.legacyCloudState == null) stored.legacyCloudState = top
+      else stored.legacyCloudStateExtra = [...extras, top]
+    }
     delete stored.cloudSync
     delete stored.entrySync
   }
   return stored
+}
+
+function legacyExtras(stored: StoredConfig): CloudAccountConfig[] | null {
+  const extras = stored.legacyCloudStateExtra
+  if (extras === undefined) return []
+  return Array.isArray(extras) && extras.every((extra) => extra && typeof extra === 'object' && !Array.isArray(extra)) ? extras : null
 }
 
 /** 宽松读:读不了 / 解析不了 / 不是 JSON 对象 = 缓存成 {} 并标上 looseLoadFailed(只有 ENOENT 是真的空)。
@@ -232,27 +250,16 @@ function entrySyncListStrict(v: unknown): EntrySyncVault[] {
 }
 
 /** 一次严格读的快照(旧 remotesync 用,H3):当前账号那份配置(同 readConfig 的形状),加上盘上**所有**条目同步登记 ——
- *  每个账号的、待认领的 legacyCloudState 里的、还没挪进 legacyCloudState 的顶层老字段,都从这同一次读来。
+ *  每个账号的、待认领的每一份老字段,都从这同一次读来。
  *  没有文件 = 空配置;读不了 / 不是 JSON 对象 / 名单形状读不懂 → 抛固定码(读失败 ≠ 没有条目同步)。不走缓存。 */
 export async function readEntrySyncSnapshotStrict(accountId: string | null = currentCloudAccountId()): Promise<{ config: AmadeusConfig; allEntrySync: EntrySyncVault[] }> {
   await writes.catch(() => {}) // 排着的写先落盘(刚加的条目同步不会被这一轮漏掉);同 syncTargetsStore.read 先等它的队列
-  let raw: string
-  try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
-    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { config: configFrom({}, accountId), allEntrySync: [] }
-    throw new Error('amadeus-config-unreadable')
-  }
-  let parsed: unknown
-  try { parsed = JSON.parse(raw) } catch { throw new Error('amadeus-config-unparseable') }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config-malformed')
-  const st = parsed as StoredConfig & { entrySync?: unknown }
+  const st = await storedConfigStrict()
   const accounts = st.cloudAccounts ?? {}
-  if (typeof accounts !== 'object' || Array.isArray(accounts)) throw new Error('amadeus-config-malformed')
-  const allEntrySync = [
-    ...entrySyncListStrict(st.entrySync),
-    ...entrySyncListStrict((st.legacyCloudState as { entrySync?: unknown } | undefined)?.entrySync),
-    ...Object.values(accounts).flatMap((own) => entrySyncListStrict((own as { entrySync?: unknown } | undefined)?.entrySync)),
-  ]
-  return { config: configFrom(normalizeStored(st), accountId), allEntrySync }
+  const extras = legacyExtras(st)
+  if (!extras || typeof accounts !== 'object' || Array.isArray(accounts)) throw new Error('amadeus-config-malformed')
+  const allEntrySync = [st.legacyCloudState, ...extras, ...Object.values(accounts)].flatMap((own) => entrySyncListStrict(own?.entrySync))
+  return { config: configFrom(st, accountId), allEntrySync }
 }
 
 /** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
@@ -323,26 +330,44 @@ export function adoptLegacyCloudState(
     let stored: StoredConfig
     try { stored = await writeBase() } catch { return false } // 读不出:这次不收养(reject 会让 refreshEntryBindings 在读配置前中断),下次再来
     const key = cloudAccountNamespace(accountId)
-    const legacy = stored.legacyCloudState
     const own = stored.cloudAccounts?.[key]
-    const vaultId = legacy?.cloudSync?.vaultId
-    if (!legacy || !own || !vaultId || own.cloudSync?.vaultId !== vaultId) return false
+    const vaultId = own?.cloudSync?.vaultId
+    const extras = legacyExtras(stored)
+    if (!own || typeof vaultId !== 'string' || !vaultId || !extras) return false
+    const states = [stored.legacyCloudState, ...extras]
+    const matches = states.filter((state) => state?.cloudSync?.vaultId === vaultId)
+    const [legacy] = matches
+    if (matches.length !== 1 || !legacy) return false // 多份同 vaultId 还没有取舍规则,暂留隔离区
+    // 校验后仍用原样的名单,保留读给旧 remotesync 时无需使用的字段(如 exclude)。
+    try { entrySyncListStrict(own.entrySync); entrySyncListStrict(legacy.entrySync) } catch { return false }
     const known = new Set((own.entrySync ?? []).map((v) => v.vaultRoot))
     const adopted = (legacy.entrySync ?? []).filter((v) => !known.has(v.vaultRoot))
     const hash8 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 8)
     try {
+      if (adopted.length > 0) {
+        // 旧 shadow 文件名只认根的哈希。另一个快照也用这个名字时，回调无法确认文件属于哪个账号。
+        const otherShadows = new Set(states.filter((state) => state !== legacy)
+          .flatMap((state) => entrySyncListStrict(state?.entrySync).map((v) => hash8(v.vaultRoot))))
+        if (adopted.some((v) => otherShadows.has(hash8(v.vaultRoot)))) return false
+      }
       for (const v of adopted) {
         await renameShadow(`amadeus-sync-entry-${hash8(v.vaultRoot)}`, `amadeus-sync-${key}-entry-${hash8(v.vaultRoot)}`)
       }
     } catch {
       return false // shadow move failed (EPERM, EBUSY…): keep the legacy state, never adopt onto an empty baseline
     }
-    own.entrySync = [...(own.entrySync ?? []), ...adopted]
-    delete stored.legacyCloudState
-    // Adopted in memory either way; a failed write leaves legacyCloudState on disk,
-    // so the next launch retries (shadow rename is skipped once the target exists).
-    // A rejection here would stop refreshEntryBindings before unrelated engines start.
-    try { await persistConfig({}, accountId) } catch { /* retry next launch */ }
+    const out: StoredConfig = {
+      ...stored,
+      cloudAccounts: { ...stored.cloudAccounts, [key]: { ...own, entrySync: [...(own.entrySync ?? []), ...adopted] } },
+    }
+    if (legacy === stored.legacyCloudState) delete out.legacyCloudState
+    else {
+      const remaining = extras.filter((extra) => extra !== legacy)
+      if (remaining.length) out.legacyCloudStateExtra = remaining
+      else delete out.legacyCloudStateExtra
+    }
+    // 写失败时保留缓存里的隔离区,下次重试(shadow 的目标已存在时不会再挪)。
+    try { await writeStored(out) } catch { return false }
     return true
   })
   writes = work.then(() => {}, () => {})
@@ -396,7 +421,30 @@ async function writeStored(out: StoredConfig): Promise<void> {
   const tmp = `${file}.tmp-${process.pid}`
   await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
   await fs.rename(tmp, file)
-  commitCache(out) // 调用方都以严格读为底
+  commitCache(out)
+}
+
+/** 停止落盘前释放指定的旧钉子。先拿旧远程同步的封口锁,再进配置队列:在途同步也会读配置。 */
+export async function moveSyncVaultPin(expectedRoot: string): Promise<'moved' | 'unchanged' | 'local-vault-unavailable' | 'legacy-remotesync-not-paused'> {
+  const { withSealedLegacyRemoteSync } = await import('../remotesyncIpc')
+  return withSealedLegacyRemoteSync(() => {
+    const work = writes.then(async () => {
+      const disk = await storedConfigStrict()
+      const pinned = disk.syncVault
+      if (pinned === undefined) return 'unchanged' as const
+      const local = disk.localVault
+      if (typeof pinned !== 'string' || !path.isAbsolute(pinned)) throw new Error('amadeus-config-malformed')
+      if (!samePath(pinned, expectedRoot)) return 'unchanged' as const
+      if (typeof local !== 'string' || !path.isAbsolute(local)) return 'local-vault-unavailable' as const
+      const out = { ...disk }
+      if (samePath(pinned, local)) delete out.syncVault
+      else out.syncVault = local
+      await writeStored(out)
+      return 'moved' as const
+    })
+    writes = work.then(() => {}, () => {})
+    return work
+  })
 }
 
 /** 当前打开的在线库(只认形状,不核账号:账号由调用方比)。没有 = null;配置读不了、或这一项形状不对 → 抛(读失败 ≠ 本机库)。 */
@@ -466,13 +514,13 @@ export function updateLocalVaultConfig(update: (config: AmadeusConfig) => void, 
 
 /** 老配置迁移(H3 定稿第 2 节):lastVault 停在**这个账号**的云镜像、这个账号配置里有 cloudSync.vaultId →
  *  activeVault = 默认库,lastVault 换回本机库(本机库也不是真目录就去掉 lastVault,restoreVault 走首启那条建默认库)。
- *  主进程启动、开窗之前调一次。没登录 / 配置读不了 / 缺 vaultId / 已经有 activeVault / lastVault 不是这个账号的镜像 → 什么都不改。回是否改了。
+ *  未满足迁移条件回 false;配置读不了就抛;本机库 stat 遇到无法判断的错误时回 null,本次不写。
  *  mirrorDir / isManaged 由调用方递(cloudPaths 依赖本文件)。 */
 export function migrateMirrorActiveVault(
   accountId: string | null,
   mirrorDir: (accountId: string) => string,
   isManaged: (root: string) => boolean,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const work = writes.then(async () => {
     if (!accountId) return false
     await settleLoading()
@@ -487,7 +535,13 @@ export function migrateMirrorActiveVault(
     const out: StoredConfig = { ...disk, activeVault: ref }
     const local = disk.localVault
     // 本机库那一格得是还在的真目录:删掉了、或同路径上是个普通文件,都去掉 lastVault,让启动回落建默认库
-    const isDir = typeof local === 'string' && !!local && !isManaged(local) && await fs.stat(local).then((st) => st.isDirectory(), () => false)
+    let isDir = false
+    if (typeof local === 'string' && local && !isManaged(local)) {
+      try { isDir = (await fs.stat(local)).isDirectory() } catch (e) {
+        const code = (e as NodeJS.ErrnoException)?.code
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') return null
+      }
+    }
     if (isDir) out.lastVault = local
     else delete out.lastVault
     await writeStored(out)
