@@ -67,7 +67,9 @@ const EXTEND_REPO = path.resolve(process.env.EXTEND_REPO || path.join(ROOT, '..'
 const MODE = process.env.MODE || 'compat'
 /** compat runs against this Extend: the last main before the vault-sync v2 runtime (Forsion-Extend #126, step 1 status). */
 const COMPAT_EXTEND_PIN = '4e22e9712013238060fa57211b7c694b5f0811ec'
-const EXTEND = path.resolve(MODE === 'full' ? (process.env.EXTEND_PKG || EXTEND_REPO) : (process.env.EXTEND_COMPAT_PKG || EXTEND_REPO))
+/** compat without EXTEND_COMPAT_PKG: the pinned build (made once, cached), same as --all. */
+const compatExtend = () => process.env.EXTEND_COMPAT_PKG || require('./lib/pinned-extend.cjs').ensurePinnedExtend({ repo: EXTEND_REPO, commit: COMPAT_EXTEND_PIN, cacheRoot: os.tmpdir(), log: (m) => console.log(`[sync-release] ${m}`) }).dir
+const EXTEND = path.resolve(MODE === 'full' ? (process.env.EXTEND_PKG || EXTEND_REPO) : (process.argv.includes('--all') ? (process.env.EXTEND_COMPAT_PKG || EXTEND_REPO) : compatExtend()))
 const NEG = process.env.NEG || ''
 const OUT = path.resolve(process.env.SYNC_EVIDENCE || path.join(os.tmpdir(), 'forsion-sync-release-evidence'))
 const MARKER = '.forsion-sync-id.json'
@@ -121,9 +123,11 @@ if (process.argv.includes('--all')) {
   // compat needs a pre-v2 Extend: an explicit EXTEND_COMPAT_PKG, or the pinned build (made once). Can't get one = those rows FAIL.
   let compatPkg = process.env.EXTEND_COMPAT_PKG || null, compatError = null
   if (!compatPkg) {
-    try { compatPkg = require('./lib/pinned-extend.cjs').ensurePinnedExtend({ repo: EXTEND_REPO, commit: COMPAT_EXTEND_PIN, cacheRoot: os.tmpdir(), log: (m) => console.log(`[sync-release] ${m}`) }).dir } catch (e) { compatError = String(e?.message ?? e) }
+    try { compatPkg = compatExtend() } catch (e) { compatError = String(e?.message ?? e) }
   }
-  const modes = (process.env.MODES || 'compat,full').split(',').filter(Boolean)
+  const modes = (process.env.MODES || 'compat,full').split(',').map((m) => m.trim()).filter(Boolean)
+  const unknown = modes.filter((m) => !(m in EXPECT_RED_BY_MODE))
+  if (!modes.length || unknown.length) { console.error(`MODES=${process.env.MODES}: unknown ${JSON.stringify(unknown)}; use compat and / or full`); process.exit(2) }
   for (const mode of modes) {
     for (const neg of Object.keys(EXPECT_RED_BY_MODE[mode] ?? {})) {
       const name = `${mode}/${neg || 'positive'}`
@@ -254,8 +258,11 @@ function extendForScenario(tmp) {
   if (NEG !== 'marker' && NEG !== 'no-guards') return EXTEND
   const pkg = JSON.parse(fs.readFileSync(path.join(EXTEND, 'package.json'), 'utf8'))
   const dest = path.join(tmp, 'extend-src')
-  for (const f of ['package.json', ...pkg.files, 'scripts']) if (fs.existsSync(path.join(EXTEND, f))) { fs.mkdirSync(path.dirname(path.join(dest, f)), { recursive: true }); fs.cpSync(path.join(EXTEND, f), path.join(dest, f), { recursive: true }) }
-  const file = path.join(dest, 'dist/desktop.mjs'), src = fs.readFileSync(file, 'utf8')
+  for (const f of ['package.json', ...pkg.files, 'scripts']) if (fs.existsSync(path.join(EXTEND, f))) { fs.mkdirSync(path.dirname(path.join(dest, f)), { recursive: true }); fs.cpSync(path.join(EXTEND, f), path.join(dest, f), { recursive: true, dereference: true }) }
+  const file = path.join(dest, 'dist/desktop.mjs')
+  // Never patch through a link into the real build
+  if (fs.lstatSync(file).isSymbolicLink() || !fs.realpathSync(file).startsWith(fs.realpathSync(dest) + path.sep)) throw Error(`refusing to patch ${file}: it resolves outside the throwaway copy`)
+  const src = fs.readFileSync(file, 'utf8')
   if (NEG === 'no-guards') {
     // Extend's own takeover gate (契约 §3.8 A0): before building the account's entry engines it drops the roots v2 holds.
     // Minified: `H.size&&(G=G.filter(Z=>!H.has(Z.vaultRoot)));` (names change per build, so match the shape, exactly once)
@@ -290,7 +297,7 @@ function patchHost(appDir) {
     if (NEG === 'no-restart') patchOnce(main, 'else await host.restartSync();', 'else await Promise.resolve();')
   } else {
     if (NEG === 'no-guards') patchOnce(main, 'entrySync: (cfg.entrySync ?? []).filter((v) => !roots.has(canonRoot(v.vaultRoot)))', 'entrySync: cfg.entrySync ?? []')
-    if (NEG === 'no-restart') patchOnce(main, '} else await host.writeV2(account, next);\n        assertAccount(account);\n        await host.restartSync();', '} else await host.writeV2(account, next);\n        assertAccount(account);\n        if (next.entryRoots.length) await host.restartSync();')
+    if (NEG === 'no-restart') patchOnce(main, '} else await host.writeV2(account, next);\n        assertAccount(account);\n        await host.restartSync();', '} else await host.writeV2(account, next);\n        assertAccount(account);\n        if (next.entryRoots.length) await host.restartSync(); else globalThis.__rigSkippedRestarts = (globalThis.__rigSkippedRestarts ?? 0) + 1;')
   }
 }
 
@@ -404,7 +411,7 @@ async function main() {
       const engineEntry = () => readJson(seed.engineDefaults)?.accounts?.[seed.scope] ?? null
 
       // ── S1f: full mode, A takes the entry sync over at launch (nothing clicked) ──
-      const taken = await until(async () => { const s = await v2Status(); const e = ledgerEntry(); const b = s?.bindings?.find((x) => { try { return fs.realpathSync(x.root) === vaultReal } catch { return false } }); return s?.mode === 'full' && e?.phase === 'done' && b ? { mode: s.mode, phase: e.phase, binding: { id: b.id, state: b.state, enabled: b.enabled, target: b.target?.kind } } : null }, 120_000, 1000)
+      const taken = await until(async () => { const s = await v2Status(); const e = ledgerEntry(); const b = s?.bindings?.find((x) => { try { return fs.realpathSync(x.root) === vaultReal } catch { return false } }); return s?.mode === 'full' && e?.phase === 'done' && b && b.enabled !== false && b.id === e.bindingId ? { mode: s.mode, phase: e.phase, binding: { id: b.id, state: b.state, enabled: b.enabled, target: b.target?.kind } } : null }, 120_000, 1000)
       check('setup', 'S1f-taken-over-at-launch', !!taken, taken ?? { status: (await v2Status())?.mode ?? null, ledger: ledgerEntry()?.phase ?? null })
       if (!taken) throw Error('full mode: the entry sync was not taken over at launch')
       const own1 = ownership(), eng1 = engineEntry(), h1 = await humanDefault()
@@ -420,10 +427,12 @@ async function main() {
       // ── FR: revert the takeover; the host gives the root back to the legacy entry sync ──
       const rv = await extendCall('vaultsync:takeover:revert', { root: seed.vault })
       const reverted = await until(() => (ledgerEntry()?.phase === 'reverted' ? ledgerEntry() : null), 30_000)
-      check('checks', 'FR1-reverted', rv.ok && !!reverted, { call: rv, ledger: ledgerEntry() && { phase: ledgerEntry().phase, bindingId: !!ledgerEntry().bindingId } })
+      // the takeover binding must be off (disabled or removed) once reverted: otherwise v2 keeps writing next to the legacy engine
+      const v2Off = await until(async () => { const s = await v2Status(); const b = s?.bindings?.find((x) => x.id === taken.binding.id); return s && (!b || b.enabled === false) ? { binding: b ? { state: b.state, enabled: b.enabled } : 'removed' } : null }, 30_000)
+      check('checks', 'FR1-reverted', rv.ok && !!reverted && !!v2Off, { call: rv, ledger: ledgerEntry() && { phase: ledgerEntry().phase, bindingId: !!ledgerEntry().bindingId }, v2: v2Off })
       const dropped = await until(() => { const o = ownership(); return o && !ownsRoot(o) ? o : null }, 30_000)
       check('checks', 'FR2-ownership-dropped', !!dropped && dropped.human === 'engine', dropped ?? ownership())
-      if (NEG === 'no-restart') fault = { releaseAccepted: rv.ok && !!reverted && !!dropped }
+      if (NEG === 'no-restart') fault = { releaseAccepted: rv.ok && !!reverted && !!dropped, skippedRestarts: await app.evaluate(() => globalThis.__rigSkippedRestarts ?? 0) }
       const back = await until(async () => { const l = await legacy(); return entryRunning(l) ? l : null }, 45_000, 1000)
       check('checks', 'R4-legacy-restarted', !!back, back ?? (await legacy()))
       const t2 = `T2-${crypto.randomBytes(4).toString('hex')}`
@@ -545,7 +554,7 @@ async function main() {
 
   // A negative control only counts when its fault demonstrably fired.
   if (NEG && !result.error) {
-    const fired = { 'release-fails': (f) => f?.injected?.length > 0 && f.state.owned === false && f.state.releasing === true, 'no-restart': (f) => f?.releaseAccepted === true,
+    const fired = { 'release-fails': (f) => f?.injected?.length > 0 && f.state.owned === false && f.state.releasing === true, 'no-restart': (f) => f?.releaseAccepted === true && (MODE === 'compat' || f.skippedRestarts > 0),
       'no-stop': (f) => entryRunningSnapshot(f?.legacyWhileOwned), 'no-guards': (f) => entryRunningSnapshot(f?.legacyWhileOwned), marker: (f) => f?.markerRequests > 0,
       'human-off': (f) => f?.storedAfter === false && f?.getAfter?.status === 200 && f.getAfter.enabled === false }[NEG]
     check('setup', 'F-fault-exercised', fired(fault), fault)

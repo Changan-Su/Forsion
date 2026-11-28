@@ -26,11 +26,13 @@ function ensurePinnedExtend({ repo, commit, cacheRoot, log = () => {} }) {
   fs.rmSync(tmp, { recursive: true, force: true })
   fs.mkdirSync(tmp, { recursive: true })
   log(`building pinned Extend ${full.slice(0, 12)} into ${dir}`)
-  execFileSync('tar', ['-x', '-C', tmp], { input: git('archive', full), maxBuffer: 512 * 1024 * 1024 })
+  execFileSync('tar', ['-xf', '-', '-C', tmp], { input: git('archive', full), maxBuffer: 512 * 1024 * 1024 })
   fs.symlinkSync(modules, path.join(tmp, 'node_modules'))
   execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: tmp, stdio: ['ignore', 'pipe', 'pipe'] })
   if (!fs.existsSync(path.join(tmp, 'dist/desktop.mjs'))) throw Error(`pinned Extend ${full.slice(0, 12)} built no dist/desktop.mjs`)
   fs.writeFileSync(path.join(tmp, '.pin'), full + '\n')
+  // Someone else finished the same pin meanwhile (rigs normally run one at a time under the GUI lock): keep theirs
+  if (fs.existsSync(path.join(dir, 'dist/desktop.mjs')) && fs.existsSync(pinFile) && fs.readFileSync(pinFile, 'utf8').trim() === full) { fs.rmSync(tmp, { recursive: true, force: true }); return { dir, commit: full, cached: true } }
   fs.rmSync(dir, { recursive: true, force: true })
   fs.renameSync(tmp, dir)
   return { dir, commit: full, cached: false }
