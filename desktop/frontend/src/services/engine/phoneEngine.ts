@@ -37,6 +37,8 @@ export function isPhoneRef(ref: TargetRef | null | undefined): boolean {
 
 /** 原生 LocalEngine.state() 的形状(字段都可能缺:老包 / 读失败)。 */
 export interface PhoneEngineState {
+  /** 原生每发一次变化事件加 1;比已收到的小 = 过时的快照(调用的回复被变化事件超车),丢掉 */
+  seq?: number
   /** 包里带了启动器且是 64 位 ARM。 */
   available?: boolean
   /** 构建里配了环境包清单地址。 */

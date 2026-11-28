@@ -28,6 +28,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The "This phone" local engine: environment install state + one engine process. Process-wide singleton; the plugin,
@@ -71,6 +72,12 @@ public final class LocalEngine {
     private final ExecutorService work = Executors.newSingleThreadExecutor(r -> { Thread t = new Thread(r, "local-engine-install"); t.setDaemon(true); return t; });
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "local-engine-idle"); t.setDaemon(true); return t; });
     private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+    /**
+     * Bumped on every change event. state() carries it so the page can drop a snapshot older than one it already has:
+     * a call's reply (pause() answers with the state from before the download thread noticed) can reach the page
+     * after the change event that superseded it, and would otherwise put the row back to "downloading" for good.
+     */
+    private final AtomicLong seq = new AtomicLong();
     /** Held for a whole start / stop / swap entry. */
     private final Object startLock = new Object();
     /** Short: guards proc / procAccount together with the in-flight count (acquire registers atomically; idle stop checks atomically). */
@@ -137,6 +144,7 @@ public final class LocalEngine {
     public void removeListener(Listener l) { listeners.remove(l); }
 
     private void emit() {
+        seq.incrementAndGet();
         JSONObject s = state();
         for (Listener l : listeners) {
             try { l.onChange(s); } catch (RuntimeException ignored) {}
@@ -148,6 +156,7 @@ public final class LocalEngine {
     public JSONObject state() {
         JSONObject o = new JSONObject();
         try {
+            o.put("seq", seq.get()); // read first: the fields below are at least this new
             o.put("available", available());
             o.put("configured", !manifestUrl().isEmpty());
             JSONObject inst = installerFor().installed();

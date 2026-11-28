@@ -86,9 +86,20 @@ final class LocalEnginePaths {
 
     /** The launcher ships only in builds that carry it (test channel) and only runs on 64-bit ARM. */
     boolean launcherBundled() {
-        boolean arm64 = false;
-        for (String abi : Build.SUPPORTED_ABIS) if ("arm64-v8a".equals(abi)) arm64 = true;
-        return arm64 && new File(lib(LAUNCHER)).canExecute() && new File(lib(LOADER)).exists();
+        return arm64Native(Build.SUPPORTED_ABIS, System.getProperty("os.arch"))
+                && new File(lib(LAUNCHER)).canExecute() && new File(lib(LOADER)).exists();
+    }
+
+    /**
+     * PRoot is an arm64 program that ptraces arm64 children, so it needs a device that is arm64 itself and an app
+     * process that really runs as arm64. Listing arm64-v8a somewhere is not enough: x86_64 devices with ARM
+     * translation (x86_64 emulator images, some Chromebooks) list it second, and if the APK ever carries only arm64
+     * libraries the package manager installs it translated and extracts the launcher there. Hence: the device's
+     * first ABI is arm64-v8a, and this process's architecture is aarch64.
+     */
+    static boolean arm64Native(String[] supportedAbis, String osArch) {
+        return supportedAbis != null && supportedAbis.length > 0 && "arm64-v8a".equals(supportedAbis[0])
+                && "aarch64".equals(osArch);
     }
 
     Map<String, String> prootEnv() {

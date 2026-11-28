@@ -58,8 +58,14 @@ export function installLocalEngine(): void {
   installed = true
   const Native = registerPlugin<LocalEnginePlugin>('ForsionLocalEngine')
 
+  // 原生给每个快照带 seq(变化事件加 1)。调用的回复可能在取代它的变化事件之后才到(pause() 回的是下载线程
+  // 还没停下时的状态):比已收到的旧就丢掉,不然这一行会停在「正在下载」,之后再没有事件把它改回来。
+  let lastSeq = -1
+  const stale = (s: PhoneEngineState | null | undefined): boolean => typeof s?.seq === 'number' && s.seq < lastSeq
   const apply = (s: PhoneEngineState | null | undefined): PhoneEngineState => {
+    if (stale(s)) return usePhoneEngine.getState().state ?? {}
     const next = s && typeof s === 'object' ? s : {}
+    if (typeof next.seq === 'number') lastSeq = next.seq
     setPhoneEngineState(next)
     return next
   }
@@ -88,6 +94,7 @@ export function installLocalEngine(): void {
   tangu.localEngine = host
 
   void Native.addListener('state', (s) => {
+    if (stale(s)) return
     const prev = usePhoneEngine.getState().state
     const next = apply(s)
     for (const cb of [...listeners]) { try { cb(next) } catch { /* 订阅者自己的错 */ } }
