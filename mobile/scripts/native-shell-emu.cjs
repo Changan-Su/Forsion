@@ -4014,11 +4014,16 @@ const tabCountText = (list) => {
       const svc = h.adb('shell', 'dumpsys', 'activity', 'services', PKG).split('* ServiceRecord{').find((b) => /^\S+ \S+ \S*CallKeepService\b/.test(b)) || ''
       const list = h.adb('shell', 'dumpsys', 'notification', '--noredact').split(/\n {2}(?=\S)/).find((s) => s.startsWith('Notification List:')) || ''
       const note = list.split(/\n(?=\s+NotificationRecord\()/).find((r) => r.includes(` pkg=${PKG} `) && / id=7301 /.test(r))
+      const types = svc.match(/types=(?:0x)?([0-9a-f]+)/)?.[1] // 15 prints 0x00000080, 14 prints 00000080
+      const flags = note?.match(/flags=(\S+)/)?.[1] || '' // ONGOING_EVENT|… or a number (0x2 = ongoing)
       return {
-        service: !svc ? 'none' : /isForeground=true/.test(svc) ? `foreground ${svc.match(/types=(0x[0-9a-f]+)/)?.[1] || '?'}` : 'not foreground',
-        note: note ? { text: note.match(/android\.text=String \((.*)\)/)?.[1] ?? '', ongoing: /flags=\S*ONGOING_EVENT/.test(note) } : null,
+        service: !svc ? 'none' : /isForeground=true/.test(svc) ? `foreground types=${types ?? '?'}` : 'not foreground',
+        mic: !!types && (parseInt(types, 16) & 0x80) !== 0, // FOREGROUND_SERVICE_TYPE_MICROPHONE
+        note: note ? { text: note.match(/android\.text=String \((.*)\)/)?.[1] ?? '', ongoing: /ONGOING_EVENT/.test(flags) || (/^0x[0-9a-f]+$/i.test(flags) && (parseInt(flags, 16) & 2) !== 0) } : null,
       }
     }
+    const up = (k) => k.service.startsWith('foreground') && k.mic && !!k.note?.ongoing
+    const down = (k) => k.service === 'none' && !k.note
     const keepUntil = async (ok, ms) => { const end = Date.now() + ms; for (;;) { const k = keepAlive(); if (ok(k) || Date.now() > end) return k; await h.pause(400) } }
     const away = async () => { h.key(3); for (let i = 0; i < 15 && resumed(); i++) await h.pause(400); assert.ok(!resumed(), 'the app is still in front after HOME') }
     const back = async () => {
@@ -4110,15 +4115,19 @@ const tabCountText = (list) => {
 
       // leaving the app keeps the call (#420): once it had the microphone the call put up its keep-alive, so the system
       // does not mute the app's microphone in the background (without one it does, and the call would bill for silence)
-      const kept = await keepUntil((k) => k.service.startsWith('foreground') && k.note, 6000)
+      const kept = await keepUntil(up, 6000)
       console.log(`  keep-alive during the call: service ${kept.service}; notification ${kept.note ? `«${kept.note.text}»${kept.note.ongoing ? ' ongoing' : ''}` : 'none'}`)
-      assert.ok(kept.service === 'foreground 0x00000080' && kept.note?.ongoing, `the call has no keep-alive (service ${kept.service}, notification ${JSON.stringify(kept.note)})`)
-      const held = await call('c.binary')
+      assert.ok(up(kept), `the call has no keep-alive (service ${kept.service}, microphone type ${kept.mic}, notification ${JSON.stringify(kept.note)})`)
       await away()
-      assert.ok(await h.waitPage(cdp, `document.hidden && window.__call.binary > ${held + 5} && window.__call.closed === ${live.closed}`, 8000),
-        `the call did not go on in the background (page hidden ${await cdp.eval('document.hidden')}, closed ${await call('c.closed')} from ${live.closed}, microphone frames ${await call('c.binary')} from ${held})`)
+      assert.ok(await h.waitPage(cdp, `document.hidden && window.__call.closed === ${live.closed}`, 6000),
+        `leaving the app ended the call (page hidden ${await cdp.eval('document.hidden')}, closed ${await call('c.closed')} from ${live.closed}, bar ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
+      const held = await call('c.binary') // counted from here: frames sent before the page was hidden prove nothing
+      assert.ok(await h.waitPage(cdp, `window.__call.binary > ${held + 5} && window.__call.closed === ${live.closed}`, 8000),
+        `the call did not go on in the background (closed ${await call('c.closed')} from ${live.closed}, microphone frames ${await call('c.binary')} from ${held})`)
+      // (the frames are zeros on an emulator without host audio either way, and API 35 shows no "silenced" flag for an
+      // active recording: what is checked is the service the system needs to keep the microphone, still up out here)
       const behind = keepAlive()
-      assert.ok(behind.service === kept.service && behind.note, `the keep-alive did not stay in the background (service ${behind.service}, notification ${JSON.stringify(behind.note)})`)
+      assert.ok(up(behind), `the keep-alive did not stay in the background (service ${behind.service}, notification ${JSON.stringify(behind.note)})`)
       await back()
       assert.ok(await h.waitPage(cdp, `!document.hidden && window.__call.opened === 1 && window.__call.closed === ${live.closed} && !!${bar} && ${phase} !== 'error'`, 6000),
         `the call is not there on the way back (opened ${await call('c.opened')}, closed ${await call('c.closed')}, bar ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
@@ -4126,28 +4135,33 @@ const tabCountText = (list) => {
       // hanging up ends the call and takes the keep-alive down with it (no "on a call" left behind)
       await tapEl(`${bar}.querySelector('.vc-hangup')`)
       assert.ok(await h.waitPage(cdp, `!${bar} && window.__call.closed === ${live.closed + 1}`, 6000), 'hanging up did not close the call and the bar')
-      const gone = await keepUntil((k) => k.service === 'none' && !k.note, 5000)
-      assert.ok(gone.service === 'none' && !gone.note, `the keep-alive outlived the call (service ${gone.service}, notification ${JSON.stringify(gone.note)})`)
+      const gone = await keepUntil(down, 5000)
+      assert.ok(down(gone), `the keep-alive outlived the call (service ${gone.service}, notification ${JSON.stringify(gone.note)})`)
 
       // negative control: a keep-alive that does not come up (CallKeep.start answers ok=false, as the native side does
       // without a microphone grant or when the system refuses the service) → leaving the app hangs up as before
-      await cdp.eval("(() => { const C = window.Capacitor; const np = C.nativePromise.bind(C); C.__keepAliveOff = C.nativePromise; C.nativePromise = (p, m, o) => (p === 'CallKeep' && m === 'start' ? Promise.resolve({ ok: false }) : np(p, m, o)); return true })()")
+      await cdp.eval("(() => { const C = window.Capacitor; const np = C.nativePromise.bind(C); C.__keepAliveOff = C.nativePromise; C.__keepAliveRefused = 0; C.nativePromise = (p, m, o) => { if (p !== 'CallKeep' || m !== 'start') return np(p, m, o); C.__keepAliveRefused++; return Promise.resolve({ ok: false }) }; return true })()")
       await tapEl(key) // the call key dials again after a hang-up
       assert.ok(await h.waitPage(cdp, `window.__call.opened === 2 && ${phase} === 'listening'`, 15000), `the call key did not redial (opened ${await call('c.opened')}, bar ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
       await h.pause(1000)
       const none = keepAlive()
-      assert.ok(none.service === 'none' && !none.note, `the keep-alive came up although its start was refused (service ${none.service})`)
+      const refused = await cdp.eval('window.Capacitor.__keepAliveRefused')
+      assert.equal(refused, 1, 'the redialled call did not ask for its keep-alive (the refusal below would then prove nothing)')
+      assert.ok(down(none), `the keep-alive came up although its start was refused (service ${none.service})`)
       await away()
       assert.ok(await h.waitPage(cdp, `window.__call.closed === ${live.closed + 2}`, 6000), `leaving the app without a keep-alive did not end the call (closed ${await call('c.closed')}, phase ${await cdp.eval(phase)})`)
       await back()
       assert.ok(await h.waitPage(cdp, `/离开 Forsion/.test(${status})`, 4000), `the bar does not say why: ${await cdp.eval(status)}`)
       shot('24c-voice-call-left')
       await cdp.eval('(() => { const C = window.Capacitor; C.nativePromise = C.__keepAliveOff; return true })()')
-      // … and the call key dials again from there (the bar with the reason is replaced by a new call)
+      // … and the call key dials again from there (the bar with the reason is replaced by a new call), with its keep-alive
       await tapEl(key)
       assert.ok(await h.waitPage(cdp, `window.__call.opened === 3 && ${phase} === 'listening'`, 15000), `the call key did not redial from the ended bar (opened ${await call('c.opened')}, bar ${await cdp.eval(`${bar} ? ${phase} + ' / ' + ${status} : 'none'`)})`)
+      const again = await keepUntil(up, 6000)
+      assert.ok(up(again), `the redialled call has no keep-alive (service ${again.service}, notification ${JSON.stringify(again.note)})`)
       await tapEl(`${bar}.querySelector('.vc-hangup')`)
       assert.ok(await h.waitPage(cdp, `!${bar} && window.__call.closed === ${live.closed + 3}`, 6000), 'hanging up did not close the call and the bar')
+      assert.ok(down(await keepUntil(down, 5000)), 'the keep-alive outlived the redialled call')
     } finally {
       callModel.on = false
       sessions.find((x) => x.id === 'e2e-s1').model_id = null
