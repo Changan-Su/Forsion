@@ -141,7 +141,7 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
     setBusy(ref.path); setError(null)
     const r = await vaultSync.resolve(ref, action)
     setBusy(null)
-    if (!r.ok) setError(r.error === 'stale' ? t('ssync.stale') : ipcErrorText(r.error))
+    if (!r.ok) setError(syncErrorText(r.error, t))
     onDone()
   }
   return (

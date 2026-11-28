@@ -22,6 +22,8 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'binding_not_found') return t('ssync.err.bindingGone')
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')
+  if (code === 'remote_dir_nested') return t('ssync.err.remoteDirNested')
+  if (code === 'direction_forbids') return t('ssync.err.directionForbids')
   if (OVERLAP.has(code)) return t('ssync.err.overlap')
   // 网盘 / 本地文件夹去处的宿主码(预演 open() 时抛上来的):同一套人话
   if ((TARGET_ERROR_CODES as readonly string[]).includes(code)) return t(targetErrorKey(code))

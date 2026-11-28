@@ -256,6 +256,8 @@ registerMessages({
   'ssync.review.allDone': { zh: '处理了 {n} 篇；还有 {left} 篇没动（判不出哪边新，或名单变了）。', en: 'Handled {n}. {left} left as they were (newer side unclear, or the list changed).' },
   'ssync.err.deletesChanged': { zh: '要删的名单变了，重新看一下再决定。', en: 'The list of deletions changed. Review it again before deciding.' },
   'ssync.err.notRunning': { zh: '这个库现在没在同步，先打开同步再处理。', en: 'This vault isn’t syncing right now. Turn sync on first.' },
+  'ssync.err.remoteDirNested': { zh: '这个库在同一个网盘里已经有一份，两份的位置套在一起了，换一个文件夹再试。', en: 'This vault already syncs to a location on the same drive that overlaps this one. Pick another folder.' },
+  'ssync.err.directionForbids': { zh: '这一行只往一个方向同步，这样处理会把另一边的改动带回来，换一种处理方式。', en: 'This vault only syncs one way, so this choice would bring changes back from the other side. Choose another option.' },
   'ssync.target.savedOnly': { zh: '去处「{label}」已经存下了。', en: 'The destination “{label}” was saved.' },
   'ssync.target.saved': { zh: '去处「{label}」已经加上了，可以在「同步到」里再选它。', en: 'The destination “{label}” was added. You can pick it again under “Sync to”.' },
   'ssync.target.listFailed': { zh: '去处清单读不出来，稍后再打开这个菜单。', en: 'Couldn’t read the list of destinations. Open this menu again later.' },
