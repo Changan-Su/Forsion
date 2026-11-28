@@ -148,6 +148,9 @@ final class LocalEngineInstaller {
         this.allowCleartextLoopback = debuggable;
     }
 
+    /** A new operation (install / update / reset) starts: a pause or delete of an earlier one no longer applies. */
+    void begin() { cancelled = false; }
+
     void cancel() {
         cancelled = true;
         HttpURLConnection c = conn;
@@ -162,13 +165,18 @@ final class LocalEngineInstaller {
      * mirror offers nothing eligible (it lags), the official registry is asked too and the higher eligible version wins.
      * Throws Failure("registry") only when no registry answered at all.
      */
-    Release resolve(List<String> registries, String installed, Set<String> bad) throws IOException {
+    Release resolve(List<String> registries, String installed, Set<String> bad, boolean cancellable) throws IOException {
+        return resolve(registries, installed, false, bad, cancellable);
+    }
+
+    /** orSame: the installed version itself is eligible too (repairing a tree that no longer verifies). */
+    Release resolve(List<String> registries, String installed, boolean orSame, Set<String> bad, boolean cancellable) throws IOException {
         List<String> failed = new ArrayList<>();
         String best = null, bestFrom = null;
         long size = 0, unpacked = 0;
         boolean answered = false;
         for (String reg : registries) {
-            if (cancelled) throw new Cancelled();
+            if (cancellable && cancelled) throw new Cancelled();
             JSONObject doc;
             try {
                 doc = new JSONObject(new String(getSmall(LocalEngineConfig.packumentUrl(reg, cfg.pkg), 8 << 20, "application/vnd.npm.install-v1+json"), StandardCharsets.UTF_8));
@@ -183,7 +191,7 @@ final class LocalEngineInstaller {
             answered = true;
             JSONObject tags = doc.optJSONObject("dist-tags");
             String v = tags == null ? null : tags.optString(cfg.distTag(), null);
-            if (eligible(v, installed, bad) && (best == null || Versions.compare(v, best) > 0)) {
+            if (eligible(v, installed, orSame, bad) && (best == null || Versions.compare(v, best) > 0)) {
                 best = v;
                 bestFrom = reg;
                 JSONObject dist = doc.optJSONObject("versions") == null ? null : doc.optJSONObject("versions").optJSONObject(v);
@@ -202,11 +210,13 @@ final class LocalEngineInstaller {
         return new Release(best, urls, size, unpacked);
     }
 
-    private boolean eligible(String v, String installed, Set<String> bad) {
+    private boolean eligible(String v, String installed, boolean orSame, Set<String> bad) {
         if (!Versions.isRelease(v)) return false;
         if (bad != null && bad.contains(v)) return false;
         if (cfg.minEngineVersion != null && !cfg.minEngineVersion.isEmpty() && Versions.compare(v, cfg.minEngineVersion) < 0) return false;
-        return installed == null || Versions.compare(v, installed) > 0;
+        if (installed == null) return true;
+        int c = Versions.compare(v, installed);
+        return c > 0 || (orSame && c == 0);
     }
 
     private static long hint(Object o, long cap) {
@@ -307,9 +317,16 @@ final class LocalEngineInstaller {
                 // an interrupted first install: whatever got swapped in never passed its self-test
                 if (!hadOld && !exists(paths.installedJson)) toTrash(paths.rootfs);
             }
+            // an interrupted repair of the same engine version: its previous tree was moved aside, not deleted
+            File replaced = new File(paths.engines, ".replaced");
+            try {
+                String v = new JSONObject(String.valueOf(LocalEnginePaths.readSmall(paths.installedJson.getPath()))).getJSONObject("engine").getString("version");
+                if (exists(replaced) && Versions.isRelease(v)) { toTrash(paths.engineDir(v)); replaced.renameTo(paths.engineDir(v)); }
+            } catch (Exception ignored) {}
             pending.delete();
             Log.w(TAG, "recovered an interrupted swap: previous environment restored");
         }
+        toTrash(new File(paths.engines, ".replaced"));
         toTrash(oldRootfs());
         toTrash(newRootfs());
         toTrash(staging());
@@ -382,7 +399,6 @@ final class LocalEngineInstaller {
      * new one); release = download this engine (null = keep the installed one). With neither, nothing happens.
      */
     void apply(boolean base, Release release, Listener l, Swap swap) throws IOException {
-        cancelled = false;
         ensureRecovered();
         Installed cur = installed();
         if (!base && release == null) return;
@@ -449,10 +465,17 @@ final class LocalEngineInstaller {
             if (release != null) toTrash(staging());
             throw new Failure("selftest", why);
         }
+        File replaced = new File(paths.engines, ".replaced");
         if (release != null) {
             File dst = paths.engineDir(signed.version);
-            toTrash(dst); // a leftover of the same version that no record points at
+            // a tree of the same version (a repair) moves aside, not away: recover() puts it back if we die before the commit
+            toTrash(replaced);
+            if (exists(dst) && !dst.renameTo(replaced)) {
+                if (baseSwap) rollback(hadOld); else pendingJson().delete();
+                throw new Failure("unpack", "engine move");
+            }
             if (!engineDir.renameTo(dst)) {
+                if (exists(replaced)) replaced.renameTo(dst);
                 if (baseSwap) rollback(hadOld); else pendingJson().delete();
                 throw new Failure("unpack", "engine move");
             }
@@ -461,8 +484,10 @@ final class LocalEngineInstaller {
             synchronized (recordLock) { Os.rename(pendingJson().getPath(), paths.installedJson.getPath()); } // the commit
         } catch (android.system.ErrnoException e) {
             if (baseSwap) rollback(hadOld); else pendingJson().delete();
+            if (release != null && exists(replaced)) { toTrash(paths.engineDir(signed.version)); replaced.renameTo(paths.engineDir(signed.version)); }
             throw new Failure("unpack", "commit " + e.getMessage());
         }
+        toTrash(replaced);
         if (base) {
             synchronized (recordLock) { paths.healthJson.delete(); }
         }
@@ -520,8 +545,12 @@ final class LocalEngineInstaller {
     private Object[] fetchEngine(Release r, Listener l) throws IOException {
         IOException last = null;
         boolean sawSignature = false;
+        boolean first = true;
         for (String url : r.tarballs) {
             if (cancelled) throw new Cancelled();
+            // never resume one registry's partial file from another: a corrupted partial would poison the good copy
+            if (!first) { tarball(r.version).delete(); new File(tarball(r.version).getPath() + ".part").delete(); }
+            first = false;
             File tgz;
             try {
                 tgz = download(url, r, l);
@@ -549,9 +578,23 @@ final class LocalEngineInstaller {
                 last = new Failure("signature", e.getMessage());
                 tgz.delete();
                 LocalEnginePaths.deleteTree(staging());
+            } catch (Cancelled c) {
+                throw c;
             } catch (Failure f) {
-                if ("unpack".equals(f.code)) { tgz.delete(); LocalEnginePaths.deleteTree(staging()); last = f; continue; }
+                if ("unpack".equals(f.code)) {
+                    Log.w(TAG, "engine " + r.version + " from " + host(url) + " does not unpack: " + f.getMessage());
+                    tgz.delete();
+                    LocalEnginePaths.deleteTree(staging());
+                    last = f;
+                    continue;
+                }
                 throw f;
+            } catch (IOException e) {
+                // a malformed archive (bad gzip, truncated tar): evict it, try the next registry
+                Log.w(TAG, "engine " + r.version + " from " + host(url) + " does not unpack: " + e);
+                tgz.delete();
+                LocalEnginePaths.deleteTree(staging());
+                last = new Failure("unpack", e.getClass().getSimpleName());
             }
         }
         if (sawSignature) throw new Failure("signature", last == null ? null : last.getMessage());
@@ -691,7 +734,7 @@ final class LocalEngineInstaller {
 
     private void unpack(File archive, File dest, Listener l) throws IOException {
         // the npm tarball's own size bounds what it may write (the signed table bounds the tree again)
-        TarExtractor x = new TarExtractor(dest, EngineSignature.MAX_BYTES + (16L << 20));
+        TarExtractor x = new TarExtractor(dest, EngineSignature.MAX_BYTES + (16L << 20), true, EngineSignature.MAX_FILES + 20_000);
         final long total = archive.length();
         try {
             x.extract(archive, (bytes) -> l.progress("unpacking", "engine", bytes, total), () -> cancelled);

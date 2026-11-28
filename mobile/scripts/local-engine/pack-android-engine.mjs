@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 // Builds the "This phone" engine npm package (mobile/android/local-engine/README.md). Runs INSIDE an arm64 Ubuntu 24.04
-// container with Node 24 (build-android-engine.sh starts it): the dependencies are installed and packed on a Linux file
-// system, so native modules are built for linux-arm64 glibc and case-distinct names survive.
+// container with Node 24 (build-android-engine.sh starts it, once per phase): the dependencies are installed and packed
+// on a Linux file system, so native modules are built for linux-arm64 glibc and case-distinct names survive.
 //
-//   node pack-android-engine.mjs --tangu <tangu-agent dir> --lock <lock.json> --out <dir> [--version x.y.z] [--boot-check]
-//   key: ANDROID_ENGINE_SIGNING_KEY (PEM; CI passes TANGU_ENGINE_SIGNING_KEY through), never written to disk here.
-//
-// Steps: stage the engine (.js only, skills) → npm ci --omit=dev of the engine's own lock in a side directory → move its
-// node_modules in as bundleDependencies → drop native binaries for other platforms → refuse DDL outside the schema files
-// → list exactly what `npm pack` will ship → sign that list → npm pack → unpack the tarball and verify it with the Node
-// mirror of the phone's verifier (the tarball, not the stage, is what the phone gets) → optionally start the engine from
-// the unpacked tarball (ready line + /health). Prints a JSON summary on the last line.
+//   --phase stage --tangu <dir> --lock <lock.json> --out <dir> [--version x.y.z]
+//       no key in this container: stage the engine (.js only, skills) → npm ci --omit=dev of the engine's own lock (runs
+//       dependency install scripts) → bundle node_modules → drop native binaries for other platforms → refuse DDL outside
+//       the schema files → list exactly what `npm pack` will ship → <out>/.stage/{stage.tar,files.json}
+//   --phase sign --lock <lock.json> --out <dir> --expect-key <hex>
+//       ANDROID_ENGINE_SIGNING_KEY (PEM) present, and no package code runs: sign that list → npm pack --ignore-scripts →
+//       unpack the tarball and verify it with the Node mirror of the phone's verifier against the key the APK pins
+//       (--expect-key), so a wrong secret fails here, not on every phone. Prints the JSON summary on its last line.
+//   --phase boot --out <dir>
+//       no key: start the engine from the unpacked tarball (ready line + an authed call).
 import { execFileSync, spawn } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createPrivateKey, createPublicKey } from 'node:crypto'
@@ -23,22 +25,27 @@ const fail = (m) => { console.error(`::error::${m}`); process.exit(1) }
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 28, ...opts })
 
 if (process.platform !== 'linux' || process.arch !== 'arm64') fail('run this inside the linux/arm64 container (build-android-engine.sh)')
+const phase = arg('--phase')
+const out = path.resolve(arg('--out') || fail('--out'))
+const work = '/tmp/android-engine'
+const stage = path.join(work, 'package')
+const stageDir = path.join(out, '.stage')
+if (phase === 'stage') runStage()
+else if (phase === 'sign') runSign()
+else if (phase === 'boot') await runBoot()
+else fail('--phase stage | sign | boot')
+
+function runStage() {
+if (process.env.ANDROID_ENGINE_SIGNING_KEY) fail('the stage phase runs dependency install scripts: it must not see the signing key')
 const tangu = path.resolve(arg('--tangu') || fail('--tangu'))
 const lock = JSON.parse(readFileSync(arg('--lock') || fail('--lock'), 'utf8'))
-const out = path.resolve(arg('--out') || fail('--out'))
 const src = JSON.parse(readFileSync(path.join(tangu, 'package.json'), 'utf8'))
 const version = arg('--version') || src.version
 if (!/^(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})\.(0|[1-9]\d{0,8})$/.test(version)) fail(`version ${version} is not a release version (x.y.z)`)
 if (version !== src.version) fail(`--version ${version} differs from tangu-agent/package.json ${src.version}: the engine package version is the engine's version`)
 if (!existsSync(path.join(tangu, 'dist/standalone/main.js'))) fail('tangu-agent/dist is missing: run npm run build in tangu-agent first')
-const pem = process.env.ANDROID_ENGINE_SIGNING_KEY
-if (!pem || !pem.trim()) fail('no signing key (ANDROID_ENGINE_SIGNING_KEY): an unsigned engine is refused by every phone')
-const key = createPrivateKey(pem)
-const pub = createPublicKey(key)
 
-const work = '/tmp/android-engine'
 rmSync(work, { recursive: true, force: true })
-const stage = path.join(work, 'package')
 mkdirSync(stage, { recursive: true })
 
 // 1. engine code: runtime .js only (same filter as tangu-agent/scripts/pack-engine.mjs), skills, licence
@@ -140,12 +147,40 @@ listed = packList()
 const stillMissing = onDisk.filter((r) => !listed.has(r) && path.posix.basename(r) !== '.package-lock.json' && !outside.has(pkgRoot(r) || r))
 if (stillMissing.length) fail(`files npm would still leave out: ${stillMissing.slice(0, 10).join(', ')}`)
 const rels = [...listed].filter((p) => p !== SIGNED_FILE && p !== SIG_FILE)
+rmSync(stageDir, { recursive: true, force: true })
+mkdirSync(stageDir, { recursive: true })
+writeFileSync(path.join(stageDir, 'files.json'), JSON.stringify({ name: pkg.name, version, line: lock.line, files: rels }))
+sh('tar', ['-cf', path.join(stageDir, 'stage.tar'), '-C', work, 'package'])
+console.error(`staged ${rels.length} files`)
+}
+
+function runSign() {
+const lock = JSON.parse(readFileSync(arg('--lock') || fail('--lock'), 'utf8'))
+const expect = arg('--expect-key') || fail('--expect-key <hex>: the public key the APK pins')
+const pem = process.env.ANDROID_ENGINE_SIGNING_KEY
+if (!pem || !pem.trim()) fail('no signing key (ANDROID_ENGINE_SIGNING_KEY): an unsigned engine is refused by every phone')
+const key = createPrivateKey(pem)
+const pub = createPublicKey(key)
+if (rawPublicHex(pub) !== expect) fail(`the signing key's public half is ${rawPublicHex(pub)}, but the APK pins ${expect}: every phone would refuse this package`)
+const meta = JSON.parse(readFileSync(path.join(stageDir, 'files.json'), 'utf8'))
+if (meta.name !== lock.package || meta.line !== lock.line) fail('stage was made for another package / line')
+const version = meta.version
+const rels = meta.files
+rmSync(work, { recursive: true, force: true })
+mkdirSync(work, { recursive: true })
+sh('tar', ['-xf', path.join(stageDir, 'stage.tar'), '-C', work])
+// the stage was made where dependency scripts ran: its root may hold only what the packer put there (no .npmrc & co.)
+const allowed = new Set(['dist', 'skills', 'agent-skills', 'node_modules', 'package.json', 'LICENSE', SIGNED_FILE, SIG_FILE])
+const strays = readdirSync(stage).filter((f) => !allowed.has(f))
+if (strays.length || readdirSync(work).join() !== 'package') fail(`unexpected entries in the stage: ${strays.join(', ') || readdirSync(work).join()}`)
+const pkg = JSON.parse(readFileSync(path.join(stage, 'package.json'), 'utf8'))
 const { bytes, sig, table } = signTable(stage, rels, { name: pkg.name, version, line: lock.line }, key)
 writeFileSync(path.join(stage, SIGNED_FILE), bytes)
 writeFileSync(path.join(stage, SIG_FILE), sig + '\n')
 
-// 7. pack, then check the tarball itself
+// 7. pack, then check the tarball itself (no package code runs: --ignore-scripts, and the tree has no scripts of its own)
 mkdirSync(out, { recursive: true })
+for (const f of readdirSync(out)) if (f.endsWith('.tgz')) unlinkSync(path.join(out, f))
 const packed = JSON.parse(sh('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', out], { cwd: stage }))[0]
 const tgz = path.join(out, packed.filename)
 const check = path.join(work, 'check')
@@ -155,15 +190,23 @@ if (readdirSync(check).join() !== 'package') fail('tarball root is not package/'
 const bad = verifyDir(path.join(check, 'package'), pub, { name: pkg.name, version, line: lock.line })
 if (bad) fail(`the packed tarball does not verify: ${bad}`)
 
-// 8. the engine starts from the unpacked tarball (what the phone runs), not from the stage
-if (process.argv.includes('--boot-check')) await bootCheck(path.join(check, 'package'))
-
 const summary = {
   tgz, name: pkg.name, version, line: lock.line, distTag: `android-${lock.line}`, files: Object.keys(table.files).length,
   size: statSync(tgz).size, unpackedSize: Object.values(table.files).reduce((a, [, n]) => a + n, 0),
-  schemaFingerprint: table.schemaFingerprint, publicKey: rawPublicHex(pub), pruned: pruned.length, context: JSON.stringify(CONTEXT),
+  schemaFingerprint: table.schemaFingerprint, publicKey: rawPublicHex(pub), context: JSON.stringify(CONTEXT),
 }
 console.log(JSON.stringify(summary))
+}
+
+async function runBoot() {
+const tgz = readdirSync(out).filter((f) => f.endsWith('.tgz'))
+if (tgz.length !== 1) fail(`expected one tarball in ${out}, found ${tgz.length}`)
+const check = path.join(work, 'boot')
+rmSync(check, { recursive: true, force: true })
+mkdirSync(check, { recursive: true })
+sh('tar', ['-xzf', path.join(out, tgz[0]), '-C', check])
+await bootCheck(path.join(check, 'package'))
+}
 
 async function bootCheck(dir) {
   const home = path.join(work, 'boot-home')

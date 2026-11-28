@@ -96,6 +96,20 @@ Known limits (accepted, written down so nobody mistakes the rule for more than i
 - Release process: engine versions are one sequence on `main`. Never publish a higher version built from older schema
   code for an older line; rule 2 would let it onto data a lower-numbered, newer-schema engine migrated.
 - Data written before histories existed (pre-release test builds of #921 only) starts with an empty history.
+- The environment is shared by every account on the phone and is writable from inside it: `/opt/tangu` (the bound
+  engine tree), `/opt/node` and the rest of the rootfs. An agent run can change code that a later start — also another
+  account's — runs. The signature is checked when an engine is installed, updated or reset, not on every start.
+  (Same as #921: one environment per phone.)
+- Extracted trees and the rootfs are not fsynced file by file: a power cut right after an install can leave a torn tree
+  behind a committed record. Account data is not affected (it is outside both); the engine then fails to start, is
+  marked bad after three starts, and reset rebuilds the environment.
+- A line bump does not by itself stop engines of the old line that are already installed: when old engines cannot run
+  with the new APK, raise `minEngineVersion` in the same change.
+
+Download and unpack: the engine tarball is unpacked before its signature is read, by a strict extractor — regular files
+and directories under canonical names only (a link, hard link or special entry, `a//b`, `./x`, more than 40 000 entries
+or 64 levels fails the unpack), so nothing can be written through a link. A partial download is never resumed from
+another registry. Nothing in the staging tree runs before the verification passes.
 
 ## Building the test-channel APK
 

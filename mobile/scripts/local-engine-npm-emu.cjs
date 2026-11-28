@@ -48,12 +48,15 @@ function sendFile(req, res, file) {
   if (start >= size) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end() }
   res.writeHead(status, { 'Content-Length': end - start + 1, 'Content-Type': 'application/octet-stream', 'Accept-Ranges': 'bytes', ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}) })
   const s = fs.createReadStream(file, { start, end, highWaterMark: 64 * 1024 })
-  let sent = 0; const t0 = Date.now()
+  // resume only when neither the rate limit nor the socket holds it back (a 'drain' alone must not skip the limit)
+  let sent = 0, waitRate = false, waitDrain = false
+  const t0 = Date.now()
+  const go = () => { if (!waitRate && !waitDrain) s.resume() }
   s.on('data', (chunk) => {
     sent += chunk.length
+    if (!res.write(chunk)) { waitDrain = true; s.pause(); res.once('drain', () => { waitDrain = false; go() }) }
     const ahead = sent / THROTTLE * 1000 - (Date.now() - t0)
-    if (ahead > 0) { s.pause(); setTimeout(() => s.resume(), ahead) }
-    if (!res.write(chunk)) { s.pause(); res.once('drain', () => s.resume()) }
+    if (ahead > 0) { waitRate = true; s.pause(); setTimeout(() => { waitRate = false; go() }, ahead) }
   })
   s.on('end', () => res.end())
   req.on('close', () => s.destroy())
@@ -214,6 +217,15 @@ async function main() {
   ok('…and the installed engine still starts', st.engine === 'running', st.engineError || '')
   await plug(cdp, 'stop')
 
+  // 6b. a symlink entry in the tarball: refused while unpacking (strict extractor), nothing written through it
+  publish('m', '2.14.12', tgz('2.14.12-linked'))
+  publish('o', '2.14.12', tgz('2.14.12-linked'))
+  await plug(cdp, 'check')
+  await plug(cdp, 'update')
+  u = await waitState(cdp, (x) => x.phase === 'failed' || (x.phase === 'idle' && x.engineVersion !== '2.14.11'), 600000, 'refused link')
+  const l6 = adb('logcat', '-d', '-s', 'LocalEngine')
+  ok('a tarball with a link entry is refused while unpacking; engine unchanged', u.phase === 'failed' && u.error === 'unpack' && u.engineVersion === '2.14.11' && /link or special entry/.test(l6), (l6.match(/does not unpack[^\n]*|link or special entry[^\n]*/) || [''])[0].slice(0, 160))
+
   // 7. 2.14.13: other schema code and it crashes on real starts (not in the self-test) → bad after 3 failed starts
   publish('m', '2.14.13', tgz('2.14.13'))
   publish('o', '2.14.13', tgz('2.14.13'))
@@ -266,6 +278,14 @@ async function main() {
   u = await waitState(cdp, (x) => (x.phase === 'idle' && x.installed) || x.phase === 'failed', 600000, 'reset')
   ok('reset rebuilds the base and keeps the verified engine (no tarball fetched)', u.phase === 'idle' && u.engineVersion === '2.14.13' && !served.slice(mark3).some((x) => /\.tgz$/.test(x.url)), JSON.stringify({ phase: u.phase, error: u.error, engine: u.engineVersion }))
   ok('a base swap clears the bad marks (the crash may have been the base)', (installed().bad || []).length === 0, JSON.stringify(installed().bad))
+
+  // 13. the current engine is good again (base swap cleared the marks); account C's history is from a newer engine → needs_update
+  sh(`echo ${Buffer.from(hist).toString('base64')} | base64 -d > files/local-engine/accounts/${kc}/engine-floor.json`)
+  await signIn(cdp, 'npm-bench-c')
+  await pause(1500)
+  const markD = logMark()
+  r = await startAndWait(cdp)
+  ok('history from a newer engine (device transfer), current engine good → needs_update, nothing spawned', r.engine === 'failed' && r.engineError === 'needs_update' && r.needsUpdate === true && spawnsSince(markD) === 0, `${r.engineError} spawns=${spawnsSince(markD)}`)
 
   cdp.close()
   fx.close()

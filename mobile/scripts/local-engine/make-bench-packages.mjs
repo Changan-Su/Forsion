@@ -8,6 +8,7 @@
 //   2.14.11            same code, newer version: a plain update (same schema fingerprint)
 //   2.14.11-tampered   2.14.11 with one dependency byte changed after signing (served as 2.14.11 by a bad mirror)
 //   2.14.9             older than the APK's minimum (a stale mirror's dist-tag)
+//   2.14.12-linked     a symlink entry in the tarball (refused while unpacking, before the signature is read)
 //   2.14.13            crashes on a real start (when /root/.tangu/.crash-me exists; the self-test home never has it)
 //                      and has other schema code (a comment in dist/db/migrate.js): another fingerprint
 import { execFileSync } from 'node:child_process'
@@ -51,6 +52,8 @@ variant('2.14.11-tampered', null, (root) => {
   writeFileSync(f, b)
 })
 variant('2.14.9')
+// a link in the archive (written before the signature is checked): the strict extractor must refuse the whole unpack
+variant('2.14.12-linked', null, (root) => { execFileSync('ln', ['-s', '/data/data', path.join(root, 'node_modules/evil')]) })
 variant('2.14.13', (root) => {
   const main = path.join(root, 'dist/standalone/main.js')
   const src = readFileSync(main, 'utf8')

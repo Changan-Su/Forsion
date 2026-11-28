@@ -74,8 +74,11 @@ jobs:
             echo "::error::Missing TANGU_ENGINE_SIGNING_KEY. Phones refuse an unsigned engine, so there is nothing worth publishing."
             exit 1
           fi
+          set -euo pipefail
+          # stage (dependency scripts run, no key) → sign + verify against the key the APK pins (no package code runs) → boot from the tarball
           mobile/scripts/local-engine/build-android-engine.sh "$RUNNER_TEMP/android-engine" --boot-check | tee "$RUNNER_TEMP/summary.log"
           tail -n 1 "$RUNNER_TEMP/summary.log" > "$RUNNER_TEMP/android-engine/summary.json"
+          rm -rf "$RUNNER_TEMP/android-engine/.stage"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
         with:
@@ -86,11 +89,13 @@ jobs:
       - name: Publish to npm
         if: steps.gate.outputs.publish == 'true'
         run: |
+          set -euo pipefail
           pkg="${{ steps.gate.outputs.pkg }}"; version="${{ steps.gate.outputs.version }}"
-          if npm view "$pkg" name 2>&1 | grep -q E404; then
+          view="$(npm view "$pkg" name 2>&1 || true)"
+          if grep -q E404 <<<"$view"; then
             echo "::error::$pkg is not on npm yet. Publish this run's artifact once by hand (npm publish <tgz> --access public --tag ${{ steps.gate.outputs.dist_tag }}), then register publish-android-engine.yml as its trusted publisher."
             exit 1
-          elif [ -n "$(npm view "$pkg@$version" version 2>/dev/null)" ]; then
+          elif [ -n "$(npm view "$pkg@$version" version 2>/dev/null || true)" ]; then
             echo "::error::$pkg@$version is already on npm (versions are immutable): bump tangu-agent's version first."
             exit 1
           fi

@@ -163,20 +163,28 @@ tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
 
 // 「这台手机」的基座:测试渠道包把 lock.json 钉住的那份放进资产(sha256 对不上就失败);打完包再核一遍 APK 里的样子 ——
 // 测试渠道:assets/local-engine/base.tar.xz 在、STORED、大小等于 lock;普通包:assets/local-engine/ 下什么都没有。
+def sha256Of = { File f ->
+    def md = java.security.MessageDigest.getInstance('SHA-256')
+    f.withInputStream { ins -> byte[] b = new byte[1 << 16]; int n; while ((n = ins.read(b)) > 0) md.update(b, 0, n) }
+    md.digest().encodeHex().toString()
+}
 def stageLocalEngineBase = tasks.register('stageLocalEngineBase') {
     onlyIf { localEngine }
+    // the lock and the chosen source are inputs: a different pin or file re-runs it; the staged copy is re-checked by hash
+    inputs.file(file('../local-engine/lock.json'))
+    inputs.property('baseSource', localEngine ? localEngineBaseSrc().absolutePath : '')
     outputs.dir(localEngineBaseDir)
+    outputs.upToDateWhen { false }
     doLast {
         def src = localEngineBaseSrc()
         if (!src.isFile()) throw new GradleException("-PlocalEngine needs the pinned base ${localEngineLock.base.file} (sha256 ${localEngineLock.base.sha256}): pass -PlocalEngineBase=<path> or put it at ${src}. See mobile/android/local-engine/README.md.")
-        def md = java.security.MessageDigest.getInstance('SHA-256')
-        src.withInputStream { ins -> byte[] b = new byte[1 << 16]; int n; while ((n = ins.read(b)) > 0) md.update(b, 0, n) }
-        def got = md.digest().encodeHex().toString()
+        def got = sha256Of(src)
         if (got != localEngineLock.base.sha256) throw new GradleException("${src} has sha256 ${got}; local-engine/lock.json pins ${localEngineLock.base.sha256}")
         if (src.length() != (localEngineLock.base.size as long)) throw new GradleException("${src} is ${src.length()} bytes; lock.json says ${localEngineLock.base.size}")
         def dst = new File(localEngineBaseDir.get().asFile, 'local-engine/base.tar.xz')
         dst.parentFile.mkdirs()
-        if (!dst.isFile() || dst.length() != src.length()) java.nio.file.Files.copy(src.toPath(), dst.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        if (!dst.isFile() || sha256Of(dst) != localEngineLock.base.sha256) java.nio.file.Files.copy(src.toPath(), dst.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        if (sha256Of(dst) != localEngineLock.base.sha256) throw new GradleException("staged base ${dst} does not match lock.json")
     }
 }
 tasks.matching { it.name ==~ /merge\w*Assets/ }.configureEach { dependsOn stageLocalEngineBase }
@@ -192,6 +200,9 @@ tasks.matching { it.name ==~ /package(Debug|Release)/ }.configureEach { t ->
                     if (e == null) throw new GradleException("${apk.name}: the test-channel APK has no base asset")
                     if (e.method != java.util.zip.ZipEntry.STORED) throw new GradleException("${apk.name}: the base asset is compressed (must be stored)")
                     if (e.size != (localEngineLock.base.size as long)) throw new GradleException("${apk.name}: base asset is ${e.size} bytes, lock.json says ${localEngineLock.base.size}")
+                    def md = java.security.MessageDigest.getInstance('SHA-256')
+                    zip.getInputStream(e).withStream { ins -> byte[] b = new byte[1 << 16]; int n; while ((n = ins.read(b)) > 0) md.update(b, 0, n) }
+                    if (md.digest().encodeHex().toString() != localEngineLock.base.sha256) throw new GradleException("${apk.name}: the base asset does not match lock.json")
                 } else if (!entries.isEmpty()) {
                     throw new GradleException("${apk.name}: a normal-channel APK carries local-engine assets: ${entries*.name}")
                 }

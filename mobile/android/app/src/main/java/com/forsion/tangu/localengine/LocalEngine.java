@@ -208,7 +208,7 @@ public final class LocalEngine {
         JSONObject o = new JSONObject();
         try {
             String acct = currentAccount();
-            o.put("environment", LocalEnginePaths.treeBytes(paths.rootfs));
+            o.put("environment", LocalEnginePaths.treeBytes(paths.rootfs) + LocalEnginePaths.treeBytes(paths.engines));
             o.put("home", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.home(acct)));
             o.put("workspace", acct == null ? 0 : LocalEnginePaths.treeBytes(paths.workspace(acct)));
             o.put("downloads", LocalEnginePaths.treeBytes(paths.downloads));
@@ -241,7 +241,7 @@ public final class LocalEngine {
         LocalEngineInstaller ins = installerFor();
         LocalEngineInstaller.Installed inst = ins.installed();
         release = ins.resolve(LocalEngineConfig.registries(registryOverride), inst == null ? null : inst.engineVersion,
-                inst == null ? null : inst.bad);
+                inst == null ? null : inst.bad, false); // not part of an operation: a pause of one must not cancel this
         releaseChecked = true;
         return state();
     }
@@ -272,6 +272,7 @@ public final class LocalEngine {
         LocalEngineInstaller ins = installerFor();
         op = kind;
         failCode = null;
+        ins.begin(); // before the registry is asked: a pause of the previous operation must not cancel this one
         try {
             if (!available()) throw new LocalEngineInstaller.Failure("unsupported", null);
             if (!configured()) throw new LocalEngineInstaller.Failure("not_configured", null);
@@ -283,17 +284,18 @@ public final class LocalEngine {
             if (inst == null) {
                 // fresh install (also over a record from before the npm engine): base from the app + the line's engine
                 base = true;
-                rel = release != null ? release : ins.resolve(regs, null, null);
+                rel = release != null ? release : ins.resolve(regs, null, null, true);
                 if (rel == null) throw new LocalEngineInstaller.Failure("no_engine", "nothing on " + cfg.distTag());
             } else if (kind.equals("reset")) {
                 // rebuild the system from the app; keep the engine when its tree still verifies, else fetch the line's
                 base = true;
                 boolean keep = ins.verifyInstalled(inst.engineVersion) != null;
-                rel = keep ? null : ins.resolve(regs, null, inst.bad);
+                // a repair never goes backwards: the same version or newer (a stale mirror's older one would be a downgrade)
+                rel = keep ? null : ins.resolve(regs, inst.engineVersion, true, inst.bad, true);
                 if (!keep && rel == null) throw new LocalEngineInstaller.Failure("no_engine", "nothing on " + cfg.distTag());
             } else {
                 base = !cfg.baseVersion.equals(inst.baseVersion);
-                rel = ins.resolve(regs, inst.engineVersion, inst.bad);
+                rel = ins.resolve(regs, inst.engineVersion, inst.bad, true);
             }
             LocalEngineInstaller.Listener l = (ph, ly, d, t) -> {
                 phase = ph; layer = ly; done = d; total = t;
@@ -584,14 +586,18 @@ public final class LocalEngine {
             Log.w(TAG, "engine " + ver + " refused for this account: a newer engine with other schema code has run on its data");
             return new String[]{null, fallback ? "engine_bad" : "needs_update"};
         }
-        if (v == EngineFloor.Verdict.ALLOW_AND_RECORD) {
-            try {
+        try {
+            if (v == EngineFloor.Verdict.ALLOW_AND_RECORD) {
                 ff.getParentFile().mkdirs();
                 LocalEnginePaths.writeDurable(ff, floor.with(ver, fp).serialize());
-            } catch (java.io.IOException e) {
-                Log.w(TAG, "could not record engine " + ver + " in the account's history: " + e.getMessage());
-                return new String[]{null, "history"};
+            } else if (!floor.entries.isEmpty()) {
+                // what this decision rests on must be on disk before the spawn: an earlier write whose directory
+                // sync failed is visible but may not survive a power cut
+                LocalEnginePaths.syncExisting(ff);
             }
+        } catch (java.io.IOException e) {
+            Log.w(TAG, "engine history of this account not durable: " + e.getMessage());
+            return new String[]{null, "history"};
         }
         if (fallback) Log.w(TAG, "engine " + inst.engineVersion + " is bad; starting the previous " + ver);
         return new String[]{ver, null};

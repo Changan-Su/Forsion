@@ -20,7 +20,7 @@ export const SCHEMA_FILES = [
   'dist/db/migrate.js',
   'dist/db/schemaStandalone.js',
 ]
-export const DDL = /\b(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|(?:UNIQUE\s+)?INDEX|VIRTUAL\s+TABLE|TRIGGER|VIEW)|ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|user_version)\b/
+export const DDL = /\b(?:CREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|(?:UNIQUE\s+)?INDEX|VIRTUAL\s+TABLE|TRIGGER|VIEW)|ALTER\s+TABLE|DROP\s+(?:TABLE|INDEX|TRIGGER|VIEW)|user_version)\b/i
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
 

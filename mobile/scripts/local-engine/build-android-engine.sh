@@ -27,15 +27,26 @@ CACHE="${ANDROID_ENGINE_CACHE:-$HOME/.forsion-dev/local-engine/cache}"; mkdir -p
 SRC="$(mktemp -d)"; trap 'rm -rf "$SRC"' EXIT
 for p in dist skills agent-skills package.json package-lock.json LICENSE; do [ -e "$REPO/tangu-agent/$p" ] && cp -R "$REPO/tangu-agent/$p" "$SRC/"; done
 [ -e "$SRC/LICENSE" ] || cp "$REPO/LICENSE" "$SRC/LICENSE"
-ANDROID_ENGINE_SIGNING_KEY="$KEY" docker run --rm --platform linux/arm64 -e ANDROID_ENGINE_SIGNING_KEY \
-  -v "$SRC":/src/tangu-agent:ro -v "$REPO/mobile/android/local-engine/lock.json":/src/lock.json:ro \
-  -v "$HERE":/src/scripts:ro -v "$OUT":/out -v "$CACHE":/cache ubuntu:24.04 bash -euc "
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils python3 make g++ >/dev/null
+# the key the APK pins (EngineSignature.PRODUCTION_KEY_HEX = tangu-agent/src/boot/signingKey.ts); the bench overrides it
+EXPECT="${ANDROID_ENGINE_EXPECT_KEY:-$(node -e "const s=require('fs').readFileSync('$REPO/tangu-agent/src/boot/signingKey.ts','utf8');const b=s.match(/BEGIN PUBLIC KEY-----\\s*([A-Za-z0-9+\\/=]+)/)[1];console.log(Buffer.from(b,'base64').subarray(12).toString('hex'))")}"
+SETUP="export DEBIAN_FRONTEND=noninteractive
     T=/cache/node-$NODE_VER-linux-arm64.tar.gz
+    if [ ! -f \$T ] || [ \"\${NEED_TOOLS:-}\" = 1 ]; then apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils python3 make g++ >/dev/null; fi
     [ -f \$T ] || curl -fsSL -o \$T https://nodejs.org/dist/$NODE_VER/node-$NODE_VER-linux-arm64.tar.gz
     echo '$NODE_SHA  '\$T | sha256sum -c >/dev/null
     mkdir -p /opt/node && tar -xzf \$T -C /opt/node --strip-components=1
-    export PATH=/opt/node/bin:\$PATH
-    node /src/scripts/pack-android-engine.mjs --tangu /src/tangu-agent --lock /src/lock.json --out /out ${EXTRA[*]:-}
-  "
+    export PATH=/opt/node/bin:\$PATH"
+run() { docker run --rm --platform linux/arm64 "$@"; }
+MOUNTS=(-v "$SRC":/src/tangu-agent:ro -v "$REPO/mobile/android/local-engine/lock.json":/src/lock.json:ro -v "$HERE":/src/scripts:ro -v "$OUT":/out -v "$CACHE":/cache)
+# 1. stage: npm ci runs dependency install scripts — no key in this container
+run -e NEED_TOOLS=1 "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
+    node /src/scripts/pack-android-engine.mjs --phase stage --tangu /src/tangu-agent --lock /src/lock.json --out /out"
+# 2. sign + pack + verify against the pinned key — the key is here, and no package code runs
+ANDROID_ENGINE_SIGNING_KEY="$KEY" run -e ANDROID_ENGINE_SIGNING_KEY "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
+    node /src/scripts/pack-android-engine.mjs --phase sign --lock /src/lock.json --out /out --expect-key $EXPECT" > "$OUT/.stage/summary.json"
+# 3. start the engine from the tarball — no key
+if [ "${#EXTRA[@]}" -gt 0 ]; then
+  run "${MOUNTS[@]}" ubuntu:24.04 bash -euc "$SETUP
+    node /src/scripts/pack-android-engine.mjs --phase boot --out /out"
+fi
+tail -n 1 "$OUT/.stage/summary.json"

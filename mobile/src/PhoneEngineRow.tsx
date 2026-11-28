@@ -202,6 +202,11 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
         <div className="us-panel" data-phone-confirm>
           <div className="us-panel-title">{t('phoneEngine.confirmTitle')}</div>
           {chk === 'ok' && !!s.downloadBytes && <div>{t('phoneEngine.confirmSize', { download: mb(s.downloadBytes), disk: mb(s.unpackedBytes) })}</div>}
+          {chk === 'ok' && !s.availableEngineVersion && (
+            <div className="us-panel-warn" role="status">
+              {t(s.noEngine ? 'phoneEngine.err.noEngine' : 'phoneEngine.err.registry')} <button className="us-link" onClick={runCheck}>{t('phoneEngine.retry')}</button>
+            </div>
+          )}
           {chk === 'loading' && <div className="us-panel-muted" role="status">{t('phoneEngine.confirmLoading')}</div>}
           {chk === 'error' && (
             <div className="us-panel-warn" role="status">
@@ -213,7 +218,7 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
           {metered && <div className="us-panel-warn" role="status">{t('phoneEngine.metered')}</div>}
           <div className="us-confirm-actions">
             <button className="us-btn" onClick={() => setPanel(null)}>{t('phoneEngine.cancel')}</button>
-            <button className="us-btn primary" data-phone-download disabled={chk !== 'ok' || !s.downloadBytes || metered === null} onClick={() => { setPanel(null); call(host.install()) }}>{t('phoneEngine.download')}</button>
+            <button className="us-btn primary" data-phone-download disabled={chk !== 'ok' || !s.availableEngineVersion || !s.downloadBytes || metered === null} onClick={() => { setPanel(null); call(host.install()) }}>{t('phoneEngine.download')}</button>
           </div>
         </div>
       )}

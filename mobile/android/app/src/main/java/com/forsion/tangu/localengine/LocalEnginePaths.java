@@ -362,15 +362,30 @@ final class LocalEnginePaths {
         }
     }
 
-    /** writeText, then the directory is fsynced too: the rename itself survives a power cut (the engine history). */
+    /**
+     * writeText, then its directory and the directory above are fsynced too: the rename (and a just-created account
+     * directory) survive a power cut (the engine history).
+     */
     static void writeDurable(File f, String s) throws IOException {
         writeText(f, s);
+        fsyncPath(f.getParentFile());
+        fsyncPath(f.getParentFile().getParentFile());
+    }
+
+    /** An existing file and its directories made durable (fsync each); a failure throws. */
+    static void syncExisting(File f) throws IOException {
+        fsyncPath(f);
+        fsyncPath(f.getParentFile());
+        fsyncPath(f.getParentFile().getParentFile());
+    }
+
+    private static void fsyncPath(File p) throws IOException {
         java.io.FileDescriptor fd = null;
         try {
-            fd = Os.open(f.getParentFile().getPath(), android.system.OsConstants.O_RDONLY, 0);
+            fd = Os.open(p.getPath(), android.system.OsConstants.O_RDONLY, 0);
             Os.fsync(fd);
         } catch (android.system.ErrnoException e) {
-            throw new IOException("fsync " + f.getParent() + ": " + e.getMessage());
+            throw new IOException("fsync " + p + ": " + e.getMessage());
         } finally {
             if (fd != null) try { Os.close(fd); } catch (android.system.ErrnoException ignored) {}
         }

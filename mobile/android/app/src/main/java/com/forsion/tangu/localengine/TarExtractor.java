@@ -50,10 +50,25 @@ final class TarExtractor {
     private final long budget;
     private long written;
 
-    TarExtractor(File dest, long budget) {
+    /**
+     * Strict (the engine tarball, unpacked before its signature is checked): only regular files and directories under
+     * canonical names; a link, hard link or special entry, a non-canonical name ("a//b", "./x", "a/../b"), more than
+     * maxEntries entries or a path deeper than MAX_DEPTH fails the whole unpack. With no links in the tree nothing can be
+     * written through one, whatever names the archive uses.
+     */
+    private final boolean strict;
+    private final int maxEntries;
+    private long entries;
+    static final int MAX_DEPTH = 64;
+
+    TarExtractor(File dest, long budget) { this(dest, budget, false, Integer.MAX_VALUE); }
+
+    TarExtractor(File dest, long budget, boolean strict, int maxEntries) {
         this.dest = dest;
         this.destPath = dest.getAbsolutePath();
         this.budget = budget;
+        this.strict = strict;
+        this.maxEntries = maxEntries;
     }
 
     private void spend(long n) throws IOException {
@@ -144,6 +159,14 @@ final class TarExtractor {
 
                 String rel = clean(name);
                 boolean unsafe = rel == null;
+                if (strict) {
+                    if (++entries > maxEntries) throw new LocalEngineInstaller.Failure("unpack", "too many entries");
+                    if (type != '0' && type != '\0' && type != '7' && type != '5') throw new LocalEngineInstaller.Failure("unpack", "link or special entry " + type + " in the engine archive");
+                    String bare = type == '5' ? name.replaceAll("/+$", "") : name;
+                    boolean canonical = !unsafe && !rel.isEmpty() && bare.equals(rel) && rel.split("/").length <= MAX_DEPTH && rel.indexOf('\\') < 0;
+                    if (canonical) for (String seg : rel.split("/", -1)) if (seg.isEmpty() || seg.equals(".")) canonical = false;
+                    if (!canonical) throw new LocalEngineInstaller.Failure("unpack", "non-canonical name in the engine archive");
+                }
                 File out = unsafe ? null : (rel.isEmpty() ? dest : new File(dest, rel));
                 try {
                     switch (type) {
