@@ -127,7 +127,9 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   if (!count) return null
-  const actions = direction === 'push' ? (['local'] as const) : direction === 'pull' ? (['cloud'] as const) : (['local', 'cloud', 'both', 'newer'] as const)
+  // 「留较新的」判到允许的那边时引擎照做(push 时本机较新、pull 时云端较新);「全部…」照给,判不了的引擎算进 cannotDecide(Codex)
+  const actions = direction === 'push' ? (['local', 'newer'] as const) : direction === 'pull' ? (['cloud', 'newer'] as const) : (['local', 'cloud', 'both', 'newer'] as const)
+  const newerOk = (n: 'local' | 'remote' | null): boolean => !!n && (direction === 'push' ? n === 'local' : direction === 'pull' ? n === 'remote' : true)
   const all = async (action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
     if (!token) return
     setBusy('*'); setError(null); setNote(null)
@@ -155,7 +157,7 @@ export function HeldReview({ bindingId, count, items, token, direction, onDone }
           <span className="ssync-faint">{h.newer === 'local' ? t('ssync.sum.newerHere') : h.newer === 'remote' ? t('ssync.sum.newerCloud') : t('vsync.panel.newerUnknown')}</span>
           <span className="ssync-grow" />
           {actions.map((a) => (
-            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !h.newer)} onClick={() => void act(h.ref, a)}>
+            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null || (a === 'newer' && !newerOk(h.newer))} onClick={() => void act(h.ref, a)}>
               {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
             </button>
           ))}
