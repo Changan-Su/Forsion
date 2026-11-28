@@ -298,6 +298,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     },
   )
 
+  // registerVaultHandlers 统一捕获并记录 lastPage 写失败;已提交的笔记操作仍然成功。
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
   const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
@@ -326,7 +327,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
     const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
+    // restoreVault / Extend switchSide 的 IPC 接收 reject:配置没存上就不切根。回落不清在线库。
+    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined }, undefined, { keepActiveVault: true })
     return activateRoot(root, false)
   }
 
@@ -383,13 +385,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     })))
   })
   ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
+    if (typeof root !== 'string') return false
     let ok = false
-    if (typeof root === 'string') await updateConfig((cfg) => {
-      const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
-      if (!patch) return false
-      Object.assign(cfg, patch)
-      ok = true
-    })
+    try {
+      await updateConfig((cfg) => {
+        const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
+        if (!patch) return false
+        Object.assign(cfg, patch)
+        ok = true
+      })
+    } catch {
+      console.warn('[amadeus] could not save the vault list')
+      return false
+    }
     return ok
   })
   ipcMain.handle(IPC.revealVault, async (_e, root: unknown) => {
@@ -426,7 +434,8 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       const cfg = await readConfig()
       if (!cfg.localVault || isManagedCloudVault(cfg.localVault)) return ensureDefaultVault()
       lastVault = cfg.localVault
-      await writeConfig({ lastVault, lastPage: undefined }, undefined, { keepActiveVault: true }) // 回落:不清在线库
+      // restoreVault 的 IPC 将失败传给渲染层;先确认写成功再切根。回落不清在线库。
+      await writeConfig({ lastVault, lastPage: undefined }, undefined, { keepActiveVault: true })
     }
     try {
       const stat = await fs.stat(lastVault)
@@ -1254,6 +1263,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       readV2: readSyncOwnershipV2,
       legacyOwned: contentSyncOwnedStrict,
     }),
+    // Extend 取得写入 Promise,由它的 IPC / 引擎调用方处理失败;宿主不吞掉失败。
     writeConfig, updateConfig, adoptLegacyCloudState,
     cloudVaultDir, isManagedCloudVault,
     vaultRoot: () => vault.getRoot(),

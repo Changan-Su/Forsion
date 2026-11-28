@@ -236,6 +236,60 @@ describe('ordinary writes after a failed loose read take the strict base (Codex 
     expect(seen).toEqual([vaultA, vaultB])
   })
 
+  it('forgetVault returns false and warns when the config remains unreadable', async () => {
+    const before = '{"vaults":'
+    await fs.writeFile(cfgFile(), before)
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(invoke(IPC.forgetVault, vaultB)).resolves.toBe(false)
+    expect(warn).toHaveBeenCalledWith('[amadeus] could not save the vault list')
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe(before)
+  })
+
+  it('forgetVault returns false when saving fails after the update callback, and can retry', async () => {
+    const cfg = { ...accountConfig(), vaults: [{ root: vaultA }, { root: vaultB }] }
+    const before = JSON.stringify(cfg)
+    await fs.writeFile(cfgFile(), before)
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('save failed'))
+    await expect(invoke(IPC.forgetVault, vaultB)).resolves.toBe(false)
+    expect(warn).toHaveBeenCalledOnce()
+    expect(await fs.readFile(cfgFile(), 'utf8')).toBe(before)
+    await expect(invoke(IPC.forgetVault, vaultB)).resolves.toBe(true)
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8'))).toMatchObject({ vaults: [{ root: vaultA }] })
+    await expect(fs.stat(vaultB)).resolves.toBeDefined()
+  })
+
+  it('keeps a new page when its lastPage preference fails to save', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    await invoke(IPC.restoreVault)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const rename = fs.rename.bind(fs)
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      if (to === cfgFile()) throw new Error('save failed')
+      await rename(from, to)
+    })
+    await expect(invoke(IPC.newPage, 'New.md')).resolves.toBeDefined()
+    await expect(fs.stat(path.join(vaultA, 'New.md'))).resolves.toBeDefined()
+    expect(warn).toHaveBeenCalledWith('[amadeus] rememberPage failed; file operation is committed', 'New.md', expect.any(Error))
+    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).lastPage).toBeUndefined()
+  })
+
+  it('restoreVault forwards a default vault save failure through IPC before mounting', async () => {
+    await hostDeps()
+    const { IPC } = await import('@amadeus-shared/ipc')
+    const rename = fs.rename.bind(fs)
+    vi.spyOn(fs, 'rename').mockRejectedValueOnce(new Error('save failed')).mockImplementation(rename)
+    await expect(invoke(IPC.restoreVault)).rejects.toThrow('save failed')
+    await expect(fs.stat(cfgFile())).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(invoke(IPC.restoreVault)).resolves.toMatchObject({ root: path.join(env.root, 'workspace', 'Amadeus') })
+  })
+
   it('adoptLegacyCloudState resolves false (never rejects) when the config cannot be read, and writes nothing', async () => {
     await fs.writeFile(cfgFile(), '{"lastVault":')
     const { adoptLegacyCloudState } = await import('./settings')

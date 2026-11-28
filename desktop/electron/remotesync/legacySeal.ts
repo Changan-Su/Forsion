@@ -59,8 +59,10 @@ export function createLegacyGate(deps: LegacyGateDeps) {
   let exclusiveHeld = 0
   let inflight: Promise<void> | null = null
   let lock: Promise<unknown> = Promise.resolve()
+  let queued = 0
   const serial = <T>(fn: () => Promise<T>): Promise<T> => {
-    const work = lock.then(fn)
+    queued++
+    const work = lock.then(fn).finally(() => { queued-- })
     lock = work.catch(() => {})
     return work
   }
@@ -172,6 +174,17 @@ export function createLegacyGate(deps: LegacyGateDeps) {
       })
     },
     markArchived: (archiveDir: string, now?: number): Promise<void> => serial(() => markArchivedLocked(archiveDir, now)),
+    /** Only for operations that require an unused legacy engine. Refuse queued takeovers and hand-backs. */
+    async exclusiveIfUnused<T>(fn: () => Promise<T>): Promise<T | undefined> {
+      await loaded
+      const unused = () => handshake === 'ok' && typeof hold === 'object' && hold.holder === null && !hold.archived && !sealing && !inflight
+      if (queued || !unused()) return undefined
+      return serial(async () => {
+        if (queued !== 1 || !unused()) return undefined
+        exclusiveHeld++
+        try { return await fn() } finally { exclusiveHeld-- }
+      })
+    },
     /** 归档用:持有着(hold.holder = 'v2')才进;进了闸就关着(这次启动交还着也关),等在途那一轮跑完再跑 fn,
      *  fn 跑完才放开、才轮到排着的 unseal。fn 拿到的 markArchived 不再拿锁。没持有 → 抛 legacy-not-sealed,fn 不跑。 */
     exclusive<T>(fn: (g: { markArchived(archiveDir: string, now?: number): Promise<void> }) => Promise<T>): Promise<T> {
