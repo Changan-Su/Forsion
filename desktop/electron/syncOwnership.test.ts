@@ -17,7 +17,7 @@ vi.mock('./forsionAuth', () => ({ loadTanguCreds: () => ({ cloudUrl: 'https://cl
 vi.mock('../shared/forsionAccount', () => ({ forsionAccountId: () => env.account }))
 vi.mock('./amadeus/fs/vaultHandlers', () => ({ withTextWriteLock: async (_p: string, fn: () => Promise<void>) => fn() }))
 
-import { canonRoot, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
+import { canonRoot, contentSyncOwnedStrict, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
 import { readConfig, readSyncOwnershipV2, writeConfig, writeSyncOwnershipV2, type SyncOwnershipV2 } from './amadeus/settings'
 
 let dir = ''
@@ -319,5 +319,27 @@ describe('mirrorRetired: mask and persistence (H3 final interface §1)', () => {
     await expect(writeSyncOwnershipV2(A, { entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: 'yes' as unknown as boolean })).rejects.toThrow('invalid syncOwnershipV2')
     await writeSyncOwnershipV2(A, { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
     expect(await readSyncOwnershipV2(A)).toEqual({ entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
+  })
+})
+
+describe('contentSyncOwnedStrict: the old global claim, read strictly (Codex 12b round 1, #3)', () => {
+  const A = 'https://cloud.test/api::alice'
+  const state = (text: string) => { mkdirSync(join(dir, 'content-sync'), { recursive: true }); writeFileSync(join(dir, 'content-sync', createHash('sha256').update(A).digest('hex') + '.json'), text) }
+  it('no file = false; a boolean owned is taken as is; no owned key = false (the file Extend writes always has a boolean owned)', () => {
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+    expect(contentSyncOwnedStrict(null)).toBe(false)
+    state(JSON.stringify({ config: { revision: 1 }, owned: true, paused: false, files: {}, folders: {}, jobs: [] }))
+    expect(contentSyncOwnedStrict(A)).toBe(true)
+    state(JSON.stringify({ config: { revision: 1 }, owned: false, paused: false, files: {}, folders: {}, jobs: [] }))
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+    state('{}')
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+  })
+  it('throws on an owned that is not a boolean, a top level that is not an object, or text that does not parse; the error carries no file text', () => {
+    for (const text of ['{"owned":"true"}', '{"owned":1}', '{"owned":null}', 'null', '[]', '"owned"', '{"owned":tr', '{"/x/V": oops}']) {
+      state(text)
+      expect(() => contentSyncOwnedStrict(A), text).toThrow()
+      try { contentSyncOwnedStrict(A) } catch (e) { expect(String((e as Error).message), text).not.toMatch(/owned|\/x\/V/) }
+    }
   })
 })

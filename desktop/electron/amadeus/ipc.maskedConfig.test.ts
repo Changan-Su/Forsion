@@ -135,6 +135,17 @@ describe('the old engines stop when a read the mask depends on fails (H3 list it
     expect(legacyEngines(masked)).toEqual(STOPPED)
   })
 
+  it('a state file that parses but has the wrong shape (owned not a boolean, top level not an object) is "unknown": everything is masked', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+    await fs.mkdir(path.dirname(stateFile()), { recursive: true })
+    for (const text of ['{"owned":"true"}', '{"owned":1}', '{"owned":null}', 'null', '[]', '"owned"', 'true']) {
+      await fs.writeFile(stateFile(), text)
+      expect(legacyEngines(await (await hostDeps()).readConfig()), text).toEqual(STOPPED)
+    }
+    await fs.writeFile(stateFile(), '{"config":{"revision":1}}') // 没有 owned 键 = 没认领
+    expect(legacyEngines(await (await hostDeps()).readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+  })
+
   it('the old global claim (owned:true) still masks everything; owned:false does not', async () => {
     await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
     await fs.mkdir(path.dirname(stateFile()), { recursive: true })

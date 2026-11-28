@@ -20,13 +20,21 @@ export function contentSyncOwned(account:string|null):boolean {
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
 }
-/** 同上,严格版:没有文件 = false;读不了 / 坏了就抛(ownership.get 用:读失败 ≠ 没认领)。 */
+/** 同上,严格版:没有文件 = false;读不了 / 坏了就抛(ownership.get 和旧引擎的遮罩用:读失败 ≠ 没认领)。
+ *  「坏了」= 解析不了、顶层不是对象、owned 在却不是 boolean(Codex 12b 一轮第 3 条:`"true"` 读成 false 会放行旧引擎)。
+ *  Extend 自己写的这份恒带 boolean 的 owned;它读的时候判得更严(contentSyncValidation.assertStoredContentState),这里判坏的都在它判坏的里面。
+ *  没有 owned 键照旧 = false。抛固定的话,不带文件原文。 */
 export function contentSyncOwnedStrict(account:string|null):boolean {
   if(!account)return false
   const name=createHash('sha256').update(account).digest('hex')+'.json'
   let raw:string
   try{raw=readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')}catch(e:any){if(e?.code==='ENOENT')return false;throw e}
-  return JSON.parse(raw)?.owned===true
+  let state:unknown
+  try{state=JSON.parse(raw)}catch{throw Error('content sync state is unparseable')}
+  if(!state||typeof state!=='object'||Array.isArray(state))throw Error('content sync state is malformed')
+  const owned=(state as {owned?:unknown}).owned
+  if(owned!==undefined&&typeof owned!=='boolean')throw Error('content sync state is malformed')
+  return owned===true
 }
 
 /** 本机库根的比较口径(契约实现期修订 H-1 第 5 条):realpath.native(mac 上纠正大小写、解开符号链接),不存在就 resolve,去尾斜杠。 */
