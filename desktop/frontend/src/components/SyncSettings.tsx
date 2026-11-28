@@ -40,6 +40,16 @@ const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 const lastSeg = (prefix: string): string => prefix.split('/').filter(Boolean).pop() ?? prefix
 type TFn = (key: string, vars?: Record<string, unknown>) => string
 
+/** 行上的原因(E 的 BindingReason)。网盘那一行有两条意思不同:server_unsupported = 宿主没有网盘后端,remote_same_root = 同一个库在同步到蓬洲云、这条先不跑(E-8);
+ *  认不得的码不把键名露出来。 */
+function reasonText(b: BindingView, t: TFn): string {
+  const code = b.status.reason!
+  const remote = b.target.kind === 'remote' && (code === 'server_unsupported' || code === 'remote_same_root')
+  const key = remote ? `ssync.reason.remote.${code}` : `ssync.reason.${code}`
+  const text = t(key)
+  return text === key ? t('ssync.reason.unknown', { code }) : text
+}
+
 /** 汇总卡上写明「本机这个库 → 云端哪一处」:标题是通用的,库名和去处要看得见(Codex P1-4)。 */
 function destOf(p: Pending, data: VaultSyncGet, t: TFn): string {
   const c = p.target.kind === 'penzor' ? p.target.candidate : undefined
@@ -517,7 +527,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {b?.target.kind === 'remote' && !b.target.conditionalWrites && <div className="ssync-note ssync-faint">{t('ssync.target.noCas')}</div>}
       {blocked && !on && <div className="ssync-note ssync-faint">{blocked}</div>}
       {message && <div className="ssync-note" role="status">{message}</div>}
-      {b?.status.reason && <div className="ssync-note ssync-warn">{t(`ssync.reason.${b.status.reason}`)}</div>}
+      {b?.status.reason && <div className="ssync-note ssync-warn" data-ssync-reason={b.status.reason}>{reasonText(b, t)}</div>}
       {b?.state === 'takeover' && (
         <div className="ssync-note">
           <span>{t('ssync.note.takeover')}</span>

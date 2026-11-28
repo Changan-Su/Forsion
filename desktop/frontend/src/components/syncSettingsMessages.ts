@@ -107,6 +107,9 @@ registerMessages({
   'ssync.reason.server_unsupported': { zh: '云端暂不支持多个库', en: 'The cloud doesn’t support more than one vault yet' },
   'ssync.reason.state_unreadable': { zh: '同步记录读不出来，已经停下（没有动任何文件）', en: 'The sync records can’t be read, so syncing stopped. No files were touched' },
   'ssync.reason.takeover_failed': { zh: '换成定时同步没成功（试了 3 次），原来的同步还在', en: 'Switching to scheduled sync failed three times. The old sync is still there' },
+  'ssync.reason.remote.server_unsupported': { zh: '这一版的 Forsion 还不能同步到这种网盘，先停着', en: 'This version of Forsion can’t sync to this drive yet, so it’s paused' },
+  'ssync.reason.remote.remote_same_root': { zh: '这个库正在同步到蓬洲云，这条网盘同步先不跑', en: 'This vault is syncing to Penzor Cloud, so this drive sync is on hold' },
+  'ssync.reason.unknown': { zh: '同步停下了（{code}）', en: 'Sync stopped ({code})' },
   'ssync.reason.remote_same_root': { zh: '这个库也配着同步到网盘', en: 'This vault is also set to sync to a network drive' },
   // 只在云端
   'ssync.cloudOnly': { zh: '只在云端', en: 'Cloud only' },
