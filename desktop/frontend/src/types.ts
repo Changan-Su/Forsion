@@ -1242,6 +1242,13 @@ declare global {
         save(input: { id?: string; kind: SyncTargetSummary['kind']; label?: string; section: Record<string, unknown> }): Promise<SyncTargetSummary>
         remove(id: string): Promise<{ ok: boolean }>
         check(id: string): Promise<{ ok: boolean; error?: string }>
+        /** 新加 / 重新授权 Dropbox、Google Drive 去处(契约 H-9):宿主做完 OAuth,凭据直接存进 sync-targets,事件只带摘要和账号显示名。
+         *  给 id = 给那条重新授权(位置与自建应用沿用那条,换了账号回 target-location-changed);manual 只有 Dropbox,授权码贴回 authFinish。旧主进程没有。 */
+        authStart?(kind: 'dropbox' | 'gdrive', opts?: { id?: string; label?: string; baseDir?: string; appKey?: string; clientId?: string; clientSecret?: string }): Promise<{ ok: true; attempt: string; mode: 'auto' | 'manual' } | { ok: false; error: string }>
+        authFinish?(attempt: string, code: string): Promise<{ ok: boolean; error?: string }>
+        authCancel?(attempt: string): Promise<{ ok: true }>
+        /** 每个 attempt 恰好一个结果事件,只发给发起的窗口;按 attempt 认。 */
+        onAuth?(cb: (ev: { attempt: string; ok: true; target: SyncTargetSummary; account: string } | { attempt: string; ok: false; error: string }) => void): () => void
       }
       /** 智库同步第 2 步起:退出门禁卡。订阅了才会在退出时还有没同步完的文件时被问(open:true 带结果,open:false = 收起)。旧主进程没有。 */
       quitGate?: {
