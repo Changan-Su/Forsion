@@ -51,14 +51,16 @@ export interface CloudHost {
     ownership?: {
       /** 没有 syncOwnershipV2 时按老的全局认领推:认领了 = 全部条目根 / 镜像停 / human 归 content;没认领 = 什么都没接手。读不了就抛。 */
       get(account:string): Promise<SyncOwnership>
-      /** 先撤后给、读回核对、失败回滚再抛;human 没变不碰引擎;最后让旧引擎按新遮罩重建。 */
+      /** 先撤后给、读回核对、失败回滚再抛;human 没变不碰引擎;沿用盘上的 mirrorRetired,最后按新遮罩重建旧引擎。 */
       set(o:SyncOwnership,account:string): Promise<void>
+      /** 在账号配置写队列里严格复核退役前提，落盘前检查 canCommit，只改退役位，出队后重启旧引擎。
+       *  前提不满足回 false，配置读失败抛错。 */
+      patchMirrorRetired?(account: string, patch: import('./amadeus/settings').MirrorRetirementPatch, canCommit: () => boolean): Promise<boolean>
       /** 只通知「新同步动过盘」,不写 owner(替代老 changed())。 */
       touched(account:string): Promise<void>
     }
     /** 智库同步第 3 步起(可选,H3 定稿第 1 节;contentSyncHost.MIRROR_RETIRE):宿主认 Ownership.mirrorRetired(只停镜像)。
-     *  有它:set 不给 mirrorRetired = 沿用盘上的值、false = 撤销;get 只在退役时带 mirrorRetired:true;遮罩给旧引擎 cloudSync.mirror:false、enabled 不动。
-     *  没有它 = 不退役:老宿主的 set 会静默丢掉这个字段,Extend 退役后以 get().mirrorRetired === true 为准。 */
+     *  退役位只经 patchMirrorRetired 写。get 只在退役时带 mirrorRetired:true;遮罩给旧引擎 cloudSync.mirror:false、enabled 不动。 */
     mirrorRetire?: { readonly version: 1 }
   }
   /** 智库同步第 2 步起(可选):「同步到哪」(契约 §3.4、§3.8 D、实现期修订 H-1 第 1–4 条;syncTargets.ts)。凭据留在宿主,Extend 只拿句柄。 */

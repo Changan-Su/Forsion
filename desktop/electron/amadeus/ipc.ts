@@ -36,7 +36,7 @@ import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
 import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList, type VaultFields } from './vaultList'
-import type { AmadeusSyncFactory } from './cloudSeam'
+import { cloudSyncLifecycle, type AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
 import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
@@ -1298,8 +1298,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     getVaultRoot: () => vault.getRoot(),
     resolveSharedAsset: (vaultRel) => cloud?.resolveSharedAsset?.(vaultRel) ?? null,
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
-    restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
-    stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
+    ...cloudSyncLifecycle(cloud),
     readExternalPlugins,
     /** 开发副本(插件沙箱 / 开发态加载)的根目录:Space 清单据此收它们带的 spaces/,并遮住同 id 的安装版。拒载的不算。 */
     devPluginRoots: async (): Promise<Array<{ id: string; dir: string }>> =>

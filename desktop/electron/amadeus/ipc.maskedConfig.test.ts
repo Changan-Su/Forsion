@@ -445,8 +445,8 @@ describe('mirrorRetired: only the mirror stops (H3 final interface §1)', () => 
     expect(await rawCloudSync()).toEqual({ enabled: true, vaultId: 'vault-2', deviceId: 'desk-1' })
   })
 
-  it('end to end: ownership.set({mirrorRetired:true}) persists, restarts the old engines, and their next read has only the mirror off', async () => {
-    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig()))
+  it('end to end: a false flag from ownership.set leaves the disk retirement and the engine mask in place', async () => {
+    await fs.writeFile(cfgFile(), JSON.stringify(claim({ mirrorRetired: true })))
     const deps = await hostDeps()
     const { contentSyncOwnershipV2 } = await import('../contentSyncHost')
     const { readSyncOwnershipV2, writeSyncOwnershipV2, readConfig } = await import('./settings')
@@ -457,21 +457,353 @@ describe('mirrorRetired: only the mirror stops (H3 final interface §1)', () => 
       readV2: readSyncOwnershipV2, writeV2: writeSyncOwnershipV2,
       entryRoots: async (a) => (await readConfig(a)).entrySync?.map((v) => v.vaultRoot) ?? [], legacyOwned: () => false,
     })
-    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: true }, ACCOUNT)
+    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: false }, ACCOUNT)
     expect(restartSync).toHaveBeenCalledOnce()
     expect((await seam.get(ACCOUNT)).mirrorRetired).toBe(true)
     expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: false, shared: true, entryRoots: [vaultB] })
-    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine' }, ACCOUNT) // 不给 = 沿用
-    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: false, shared: true, entryRoots: [vaultB] })
-    await seam.set({ entryRoots: [vaultA], mirror: 'keep', human: 'engine', mirrorRetired: false }, ACCOUNT)
-    expect(JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].syncOwnershipV2).not.toHaveProperty('mirrorRetired')
-    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultB] })
+  })
+})
+
+describe('ownership.patchMirrorRetired', () => {
+  const seal = { vaultId: 'vault-1', from: false, to: true }
+  const unseal = { vaultId: 'vault-1', from: true, to: false }
+  const claim = (over: Record<string, unknown> = {}) => ({
+    entryRoots: [] as string[], mirror: 'keep' as const, human: 'engine' as const, ...over,
+  })
+  const readDisk = () => fs.readFile(cfgFile(), 'utf8')
+
+  async function fixture() {
+    const settings = await import('./settings')
+    const { contentSyncOwnedStrict, contentSyncOwnershipV2 } = await import('../contentSyncHost')
+    const { cloudVaultDir } = await import('./cloudPaths')
+    const restartSync = vi.fn(async () => { await settings.readSyncOwnershipV2(ACCOUNT) })
+    const host = {
+      accountId: settings.currentCloudAccountId, ensureBackend: async () => {}, backendStatus: () => ({ state: 'stopped', url: null }),
+      engineToken: () => '', loadConfig: async () => ({ mode: 'managed' }), dataDir: () => env.root, stopSync: async () => {},
+      restartSync, readV2: settings.readSyncOwnershipV2, writeV2: vi.fn(settings.writeSyncOwnershipV2),
+      entryRoots: async (account: string) => (await settings.readConfig(account)).entrySync?.map((v) => v.vaultRoot) ?? [],
+      legacyOwned: contentSyncOwnedStrict,
+    }
+    const seam = contentSyncOwnershipV2({
+      ...host,
+      patchMirrorRetired: (account, patch, canCommit) =>
+        settings.patchSyncOwnershipMirrorRetired(account, patch, canCommit, cloudVaultDir, contentSyncOwnedStrict),
+    })
+    return { settings, seam, restartSync, mirror: cloudVaultDir(ACCOUNT), host }
+  }
+
+  it('keeps the bit clear when an entry root return writes a stale claim after the mirror was unsealed', async () => {
+    const { seam, restartSync } = await fixture()
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({
+      syncOwnershipV2: claim({ mirrorRetired: true, entryRoots: [vaultA, vaultB] }),
+    })))
+    const before = await seam.get(ACCOUNT)
+    expect(before.mirrorRetired).toBe(true)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, unseal, () => true)).resolves.toBe(true)
+    await seam.set({ ...before, entryRoots: [vaultB] }, ACCOUNT)
+    const current = await seam.get(ACCOUNT)
+    expect(current).not.toHaveProperty('mirrorRetired')
+    expect(current.entryRoots).toEqual([await fs.realpath(vaultB)])
+    expect(restartSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('drains the old entry engine before overlapping patch and set requests can rebuild', async () => {
+    const { seam, settings, restartSync } = await fixture()
+    const { registerIpc } = await import('./ipc')
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({ syncOwnershipV2: claim() })))
+    let releaseOld!: () => void, stopping!: () => void, secondRestart!: () => void
+    const oldHold = new Promise<void>((resolve) => { releaseOld = resolve })
+    const oldStopping = new Promise<void>((resolve) => { stopping = resolve })
+    const bothRequested = new Promise<void>((resolve) => { secondRestart = resolve })
+    const events: string[] = []
+    let entryRegistered = true
+    const stopAllSync = async () => {
+      if (!entryRegistered) return
+      entryRegistered = false
+      stopping()
+      await oldHold
+      events.push('old stopped')
+    }
+    const restartAllSync = vi.fn(async () => {
+      await stopAllSync()
+      events.push('rebuilt')
+      await settings.updateConfig(() => false, ACCOUNT)
+      expect((await settings.readSyncOwnershipV2(ACCOUNT))?.entryRoots).toEqual([await fs.realpath(vaultA)])
+    })
+    const runtime = registerIpc(() => null, () => ({ start() {}, stopAllSync, restartAllSync }))
+    restartSync.mockImplementation(() => {
+      const restart = runtime.restartSync()
+      if (restartSync.mock.calls.length === 2) secondRestart()
+      return restart
+    })
+    const first = seam.patchMirrorRetired!(ACCOUNT, seal, () => true)
+    await oldStopping
+    const second = seam.set({ ...claim(), entryRoots: [vaultA] }, ACCOUNT)
+    await bothRequested
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    releaseOld()
+    await expect(Promise.all([first, second])).resolves.toEqual([true, undefined])
+    expect(events).toEqual(['old stopped', 'rebuilt'])
+    expect(restartAllSync).toHaveBeenCalledOnce()
+  })
+
+  it('shares a drain with an explicit stop that supersedes a pending rebuild', async () => {
+    const { registerIpc } = await import('./ipc')
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const stopAllSync = vi.fn(() => pending)
+    const restartAllSync = vi.fn(async () => {})
+    const runtime = registerIpc(() => null, () => ({ start() {}, stopAllSync, restartAllSync }))
+    const cancelled = runtime.restartSync()
+    const stop = runtime.stopSync()
+    release()
+    await Promise.all([cancelled, stop])
+    expect(stopAllSync).toHaveBeenCalledOnce()
+    expect(restartAllSync).not.toHaveBeenCalled()
+    await runtime.restartSync()
+    expect(restartAllSync).toHaveBeenCalledOnce()
+  })
+
+  it('keeps an overlapping account write that adds a root and changes human ownership', async () => {
+    const { settings, seam, restartSync } = await fixture()
+    const initial = accountConfig({ syncOwnershipV2: claim() })
+    await fs.writeFile(cfgFile(), JSON.stringify(initial))
+    const rename = fs.rename.bind(fs)
+    let staged!: () => void, release!: () => void
+    const stagedWrite = new Promise<void>((resolve) => { staged = resolve })
+    const paused = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(fs, 'rename').mockImplementationOnce(async (from, to) => {
+      staged()
+      await paused
+      await rename(from, to)
+    })
+    const ownership = { ...claim(), entryRoots: [vaultB, vaultA], human: 'content' as const, futureField: ['keep'] }
+    const takeover = settings.writeSyncOwnershipV2(ACCOUNT, ownership)
+    await stagedWrite
+    const retirement = seam.patchMirrorRetired!(ACCOUNT, seal, () => true)
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    release()
+    await expect(Promise.all([takeover, retirement])).resolves.toEqual([undefined, true])
+    expect(JSON.parse(await readDisk())).toEqual({
+      ...initial, cloudAccounts: { [NS]: { ...initial.cloudAccounts[NS], syncOwnershipV2: { ...ownership, mirrorRetired: true } } },
+    })
+    expect(restartSync).toHaveBeenCalledOnce()
+  })
+
+  it('orders the patch after an ownership.set that has read its claim but has yet to queue a write', async () => {
+    const { settings, seam, restartSync, host } = await fixture()
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({ syncOwnershipV2: claim() })))
+    const canonicalRoot = await fs.realpath(vaultA)
+    let entered!: () => void, release!: () => void
+    const atWrite = new Promise<void>((resolve) => { entered = resolve })
+    const paused = new Promise<void>((resolve) => { release = resolve })
+    host.writeV2.mockImplementationOnce(async (account, next) => {
+      entered()
+      await paused
+      await settings.writeSyncOwnershipV2(account, next)
+    })
+    const takeover = seam.set({ ...claim(), entryRoots: [vaultA] }, ACCOUNT)
+    await atWrite
+    const retirement = seam.patchMirrorRetired!(ACCOUNT, seal, () => true)
+    await new Promise<void>((resolve) => { setImmediate(resolve) })
+    release()
+    await expect(Promise.all([takeover, retirement])).resolves.toEqual([undefined, true])
+    expect(await seam.get(ACCOUNT)).toEqual(claim({ entryRoots: [canonicalRoot], mirrorRetired: true }))
+    expect(restartSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('seals and unseals just the bit, releases the config queue before restart, and preserves legacy and other-account fields', async () => {
+    const { settings, seam, restartSync } = await fixture()
+    const initial = {
+      ...accountConfig({ syncOwnershipV2: claim({ mirrorRetired: false }) }),
+      legacyCloudState: { cloudSync: { vaultId: 'legacy' } },
+      cloudSync: { enabled: false, vaultId: 'unscoped' },
+    }
+    const other = createHash('sha256').update(`${CLOUD}::B`).digest('hex')
+    Object.assign(initial.cloudAccounts, { [other]: { cloudSync: { enabled: true, vaultId: 'other' } } })
+    await fs.writeFile(cfgFile(), JSON.stringify(initial))
+    const deps = await hostDeps()
+    restartSync.mockImplementation(async () => { await settings.updateConfig(() => false, ACCOUNT) })
+
+    const expected = (syncOwnershipV2: ReturnType<typeof claim>) => ({
+      ...initial, cloudAccounts: { ...initial.cloudAccounts, [NS]: { ...initial.cloudAccounts[NS], syncOwnershipV2 } },
+    })
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(true)
+    expect(JSON.parse(await readDisk())).toEqual(expected(claim({ mirrorRetired: true })))
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: false, shared: true, entryRoots: [vaultA, vaultB] })
+
+    await expect(seam.patchMirrorRetired!(ACCOUNT, unseal, () => true)).resolves.toBe(true)
+    expect(JSON.parse(await readDisk())).toEqual(expected(claim()))
+    expect(legacyEngines(await deps.readConfig())).toEqual({ mirror: true, shared: true, entryRoots: [vaultA, vaultB] })
+    expect(restartSync).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['stale from', unseal, claim()],
+    ['wrong vault', { ...seal, vaultId: 'other' }, claim()],
+    ['mirror off', seal, claim({ mirror: 'off' })],
+    ['no transition', { ...seal, to: false }, claim()],
+  ])('does not write or restart for %s', async (_reason, change, ownership) => {
+    const { seam, restartSync } = await fixture()
+    const before = JSON.stringify(accountConfig({ syncOwnershipV2: ownership }))
+    await fs.writeFile(cfgFile(), before)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, change, () => true)).resolves.toBe(false)
+    expect(await readDisk()).toBe(before)
+    expect(restartSync).not.toHaveBeenCalled()
+  })
+
+  it('seals a legacy mirror with no ownership record when the old mask is confirmed off', async () => {
+    const { seam, restartSync } = await fixture()
+    const before = accountConfig()
+    await fs.writeFile(cfgFile(), JSON.stringify(before))
+    await fs.mkdir(path.dirname(stateFile()), { recursive: true })
+    await fs.writeFile(stateFile(), '{"owned":false}')
+    expect(await seam.get(ACCOUNT)).toEqual(claim())
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(true)
+    expect(JSON.parse(await readDisk())).toEqual({
+      ...before, cloudAccounts: { [NS]: { ...before.cloudAccounts[NS], syncOwnershipV2: claim({ mirrorRetired: true }) } },
+    })
+    expect(restartSync).toHaveBeenCalledOnce()
+  })
+
+  it('rechecks the commit guard after staging, leaving the original file and no staged copy when it declines', async () => {
+    const { seam, restartSync } = await fixture()
+    const before = JSON.stringify(accountConfig({ syncOwnershipV2: claim() }))
+    await fs.writeFile(cfgFile(), before)
+    const write = fs.writeFile.bind(fs)
+    let allowed = true
+    const canCommit = vi.fn(() => allowed)
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await write(...args)
+      allowed = false
+    })
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, canCommit)).resolves.toBe(false)
+    expect(canCommit).toHaveBeenCalledOnce()
+    expect(await readDisk()).toBe(before)
+    expect(await fs.readdir(env.root)).not.toContain(`amadeus-config.json.tmp-${process.pid}`)
+    expect(restartSync).not.toHaveBeenCalled()
+  })
+
+  it('throws on a fresh config read failure even with a populated cache, and the queue recovers after a retry', async () => {
+    const { settings, seam, restartSync } = await fixture()
+    const before = JSON.stringify(accountConfig({ syncOwnershipV2: claim() }))
+    await fs.writeFile(cfgFile(), before)
+    expect((await settings.readConfig(ACCOUNT)).cloudSync?.enabled).toBe(true)
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(Object.assign(new Error('EIO'), { code: 'EIO' }))
+    const canCommit = vi.fn(() => true)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, canCommit)).rejects.toThrow('amadeus-config-unreadable')
+    expect(await readDisk()).toBe(before)
+    expect(canCommit).not.toHaveBeenCalled()
+    expect(restartSync).not.toHaveBeenCalled()
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, canCommit)).resolves.toBe(true)
+  })
+
+  it.each([
+    ['null ownership', { syncOwnershipV2: null }, 'syncOwnershipV2 is malformed'],
+    ['malformed ownership', { syncOwnershipV2: claim({ mirrorRetired: 'true' }) }, 'syncOwnershipV2 is malformed'],
+    ['malformed cloud config', { cloudSync: { enabled: 'true', vaultId: seal.vaultId } }, 'amadeus-config-malformed'],
+    ['malformed entry config', { entrySync: [{}] }, 'amadeus-config-malformed'],
+  ])('throws before writing or restarting for %s', async (_reason, extra, error) => {
+    const { seam, restartSync } = await fixture()
+    const before = JSON.stringify(accountConfig({ syncOwnershipV2: claim(), ...extra }))
+    await fs.writeFile(cfgFile(), before)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).rejects.toThrow(error)
+    expect(await readDisk()).toBe(before)
+    expect(restartSync).not.toHaveBeenCalled()
+  })
+
+  it('refuses sealing when disabled, but allows unsealing while preserving the disabled setting', async () => {
+    const { seam, restartSync } = await fixture()
+    const cfg = accountConfig({ syncOwnershipV2: claim() })
+    cfg.cloudAccounts[NS].cloudSync.enabled = false
+    await fs.writeFile(cfgFile(), JSON.stringify(cfg))
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(false)
+    expect(restartSync).not.toHaveBeenCalled()
+    await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({
+      cloudSync: cfg.cloudAccounts[NS].cloudSync, syncOwnershipV2: claim({ mirrorRetired: true }),
+    })))
+    await expect(seam.patchMirrorRetired!(ACCOUNT, unseal, () => true)).resolves.toBe(true)
+    expect(JSON.parse(await readDisk())).toEqual(cfg)
+  })
+
+  it('refuses if a configured vault root points into the mirror through an alias', async () => {
+    const { seam, restartSync, mirror } = await fixture()
+    const child = path.join(mirror, 'Notes')
+    await fs.mkdir(child, { recursive: true })
+    const alias = path.join(env.root, 'alias')
+    await fs.symlink(child, alias, 'junction')
+    const before = JSON.stringify({ ...accountConfig({ syncOwnershipV2: claim() }), lastVault: alias })
+    await fs.writeFile(cfgFile(), before)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(false)
+    expect(await readDisk()).toBe(before)
+    expect(restartSync).not.toHaveBeenCalled()
+  })
+
+  it.each(['{"owned":true}', '{"owned":'])('leaves missing ownership untouched if the legacy mask is set or unreadable (%s)', async (state) => {
+    const { seam, restartSync } = await fixture()
+    const before = JSON.stringify(accountConfig())
+    await fs.writeFile(cfgFile(), before)
+    await fs.mkdir(path.dirname(stateFile()), { recursive: true })
+    await fs.writeFile(stateFile(), state)
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(false)
+    expect(await readDisk()).toBe(before)
+    expect(restartSync).not.toHaveBeenCalled()
+  })
+
+  it.each(['another account', 'another account claim', 'legacy state', 'extra legacy state', 'unscoped registry', 'missing child under an alias'] as const)(
+    'refuses to seal a mirror containing a registered root in %s',
+    async (source) => {
+      const { seam, restartSync, mirror } = await fixture()
+      const cfg = accountConfig({ syncOwnershipV2: claim() })
+      const child = path.join(mirror, 'Notes')
+      const registry = { entrySync: [{ vaultRoot: child, cloudName: 'Notes', entries: [] }] }
+      const other = createHash('sha256').update(`${CLOUD}::B`).digest('hex')
+      const alias = path.join(env.root, 'alias')
+      if (source === 'missing child under an alias') {
+        await fs.mkdir(mirror, { recursive: true })
+        await fs.symlink(mirror, alias, 'junction')
+      }
+      const withEntry = {
+        'another account': { ...cfg, cloudAccounts: { ...cfg.cloudAccounts, [other]: registry } },
+        'another account claim': { ...cfg, cloudAccounts: { ...cfg.cloudAccounts, [other]: { syncOwnershipV2: claim({ entryRoots: [child] }) } } },
+        'legacy state': { ...cfg, legacyCloudState: registry },
+        'extra legacy state': { ...cfg, legacyCloudStateExtra: [{ entrySync: [] }, registry] },
+        'unscoped registry': { ...cfg, ...registry },
+        'missing child under an alias': { ...cfg, cloudAccounts: {
+          ...cfg.cloudAccounts, [other]: { entrySync: [{ ...registry.entrySync[0], vaultRoot: path.join(alias, 'Notes') }] },
+        } },
+      }[source]
+      const before = JSON.stringify(withEntry)
+      await fs.writeFile(cfgFile(), before)
+      await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(false)
+      expect(await readDisk()).toBe(before)
+      expect(restartSync).not.toHaveBeenCalled()
+    },
+  )
+
+  it('refuses an account change during staging and omits the method from a seam without the patch dependency', async () => {
+    const { seam, restartSync, host } = await fixture()
+    const { contentSyncOwnershipV2 } = await import('../contentSyncHost')
+    expect(contentSyncOwnershipV2(host)).not.toHaveProperty('patchMirrorRetired')
+    const before = JSON.stringify(accountConfig({ syncOwnershipV2: claim() }))
+    await fs.writeFile(cfgFile(), before)
+    const write = fs.writeFile.bind(fs)
+    vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (...args) => {
+      await write(...args)
+      env.creds = { cloudUrl: CLOUD, token: token('B') }
+    })
+    await expect(seam.patchMirrorRetired!(ACCOUNT, seal, () => true)).resolves.toBe(false)
+    expect(await readDisk()).toBe(before)
+    expect(restartSync).not.toHaveBeenCalled()
   })
 })
 
 describe('the config cache and a loose read that lands late (Codex 12b round 1, #2)', () => {
   const RETIRED = { entryRoots: [] as string[], mirror: 'keep' as const, human: 'engine' as const, mirrorRetired: true }
   const rawClaim = async () => JSON.parse(await fs.readFile(cfgFile(), 'utf8')).cloudAccounts[NS].syncOwnershipV2
+  const sealMirror = async (settings: typeof import('./settings')) =>
+    settings.patchSyncOwnershipMirrorRetired(ACCOUNT, { vaultId: 'vault-1', from: false, to: true },
+      () => true, () => path.join(env.root, 'mirror'), () => false)
 
   it('a loose read that opened the old file before a claim was committed does not put the old claim back; the next ordinary write keeps the new one', async () => {
     await fs.writeFile(cfgFile(), JSON.stringify(accountConfig({ syncOwnershipV2: { entryRoots: [], mirror: 'keep', human: 'engine' } })))
@@ -479,7 +811,7 @@ describe('the config cache and a loose read that lands late (Codex 12b round 1, 
     const settings = await import('./settings')
     const late = settings.readConfig()
     await new Promise((r) => setTimeout(r, 20))
-    await settings.writeSyncOwnershipV2(ACCOUNT, RETIRED)
+    await expect(sealMirror(settings)).resolves.toBe(true)
     release()
     await late
     await settings.writeConfig({ lastPage: 'a.md' })
@@ -493,7 +825,7 @@ describe('the config cache and a loose read that lands late (Codex 12b round 1, 
     const settings = await import('./settings')
     const late = settings.readConfig()
     await new Promise((r) => setTimeout(r, 20))
-    await settings.writeSyncOwnershipV2(ACCOUNT, RETIRED)
+    await expect(sealMirror(settings)).resolves.toBe(true)
     release(true)
     expect((await late).entrySync?.map((v) => v.vaultRoot)).toEqual([vaultA, vaultB])
     expect(settings.looseConfigReadFailed()).toBe(false)

@@ -207,4 +207,5 @@ it('the host declares mirrorRetire { version: 1 } on CloudHost.contentSync (H3 f
  const main=readFileSync(new URL('./main.ts',import.meta.url),'utf8')
  const block=main.slice(main.indexOf('      contentSync: {'),main.indexOf('      syncTargets: createSyncTargets()'))
  expect(block).toMatch(/\n\s+mirrorRetire: MIRROR_RETIRE,/)
+ expect(block).toMatch(/ownership: contentSyncOwnershipV2\(\{[\s\S]*?\n\s+patchMirrorRetired: .*=> patchSyncOwnershipMirrorRetired\(/)
 })

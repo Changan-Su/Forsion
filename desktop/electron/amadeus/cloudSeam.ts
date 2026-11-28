@@ -4,7 +4,11 @@
  * 装载分两拍:Extend 装载时(开窗前)把通道 handle 上并登记工厂;宿主在 registerAmadeusIpc 里 vault 建好后调工厂,递进这份 deps,
  * 拿回 { start, stopAllSync, restartAllSync }(登录态变化时由 accountCore 调)。Forsion-Extend 仓 src/desktop/host.d.ts 是它的镜像,两边同改。
  */
-import type { AmadeusConfig } from './settings'
+import type { AmadeusConfig, SyncOwnershipV2 } from './settings'
+
+export function defaultSyncOwnership(): SyncOwnershipV2 {
+  return { entryRoots: [], mirror: 'keep', human: 'engine' }
+}
 
 export type { AmadeusConfig }
 export interface AmadeusActivatedRoot { root: string; pages: string[]; folders: string[]; lastPage?: string }
@@ -55,3 +59,31 @@ export interface AmadeusSyncInstance {
   resolveSharedAsset?(vaultRel: string): string | null
 }
 export type AmadeusSyncFactory = (deps: AmadeusSyncHostDeps) => AmadeusSyncInstance
+
+/** Extend's restart also stops, but only sees engines that are still registered. Drain the
+ * previous generation first and let requests during that drain share the same rebuild. */
+export function cloudSyncLifecycle(cloud: AmadeusSyncInstance | null) {
+  let stopping: Promise<void> | undefined
+  let pendingRestart: Promise<void> | undefined
+
+  function drain(): Promise<void> {
+    return stopping ??= Promise.resolve().then(() => cloud?.stopAllSync()).finally(() => { stopping = undefined })
+  }
+
+  return {
+    stopSync(): Promise<void> {
+      pendingRestart = undefined
+      return drain()
+    },
+    restartSync(): Promise<void> {
+      if (pendingRestart) return pendingRestart
+      const restart = drain().then(() => {
+        if (pendingRestart !== restart) return
+        // Rebuild can enter the takeover gate and request another restart.
+        pendingRestart = undefined
+        return cloud?.restartAllSync()
+      }).finally(() => { if (pendingRestart === restart) pendingRestart = undefined })
+      return pendingRestart = restart
+    },
+  }
+}

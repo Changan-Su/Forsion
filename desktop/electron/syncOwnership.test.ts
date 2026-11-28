@@ -258,25 +258,29 @@ describe('ownership seam', () => {
     expect(f.host.restartSync).toHaveBeenCalledTimes(1)
   })
 
-  it('mirrorRetired: true retires, false revokes and deletes the key; each change restarts the old engines like any set', async () => {
+  it('mirrorRetired: an explicit true in set cannot retire the mirror', async () => {
     const f = fixture({ v2: { entryRoots: [], mirror: 'keep', human: 'engine' }, engine: 'old' })
     await f.seam.set({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: true }, A)
-    expect(lastWrite(f)).toEqual({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: true })
-    expect((await f.seam.get(A)).mirrorRetired).toBe(true)
-    await f.seam.set({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: false }, A)
     expect(lastWrite(f)).not.toHaveProperty('mirrorRetired')
     expect(await f.seam.get(A)).not.toHaveProperty('mirrorRetired')
-    expect(f.host.restartSync).toHaveBeenCalledTimes(2)
-    expect(f.fetchFixture).not.toHaveBeenCalled() // 只动退役位不碰引擎
+    expect(f.host.restartSync).toHaveBeenCalledOnce()
+    expect(f.fetchFixture).not.toHaveBeenCalled()
   })
 
-  it('mirrorRetired: get carries it only when true on disk; a non-boolean in a set is refused', async () => {
+  it('mirrorRetired: get carries it only when true on disk; set ignores even a malformed caller flag', async () => {
     expect(await fixture({ v2: { entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: false } }).seam.get(A)).not.toHaveProperty('mirrorRetired')
     expect(await fixture().seam.get(A)).not.toHaveProperty('mirrorRetired')
     expect(await fixture({ legacy: true }).seam.get(A)).not.toHaveProperty('mirrorRetired')
     const f = fixture({ v2: RETIRED })
-    await expect(f.seam.set({ ...RETIRED, mirrorRetired: 'yes' as unknown as boolean }, A)).rejects.toThrow('invalid ownership')
-    expect(f.host.writeV2).not.toHaveBeenCalled()
+    await f.seam.set({ ...RETIRED, mirrorRetired: 'yes' as unknown as boolean }, A)
+    expect(lastWrite(f)).toEqual(RETIRED)
+  })
+
+  it('lets a restart write ownership again after the outer set has committed', async () => {
+    const f = fixture({ v2: RETIRED, engine: 'old' })
+    f.host.restartSync.mockImplementationOnce(() => f.seam.set({ ...RETIRED, entryRoots: ['/x/VaultB'] }, A))
+    await f.seam.set(RETIRED, A)
+    expect(lastWrite(f)).toEqual({ ...RETIRED, entryRoots: ['/x/VaultB'] })
   })
 
   it('mirrorRetired survives the rollback when the engine bit cannot be confirmed back (content -> engine)', async () => {
@@ -306,7 +310,7 @@ describe('mirrorRetired: mask and persistence (H3 final interface §1)', () => {
     expect(cfg.cloudSync).toEqual({ enabled: true, vaultId: 'v1' }) // 原配置不动
   })
 
-  it('the strict read takes a claim with mirrorRetired (not "unknown"), refuses a non-boolean as malformed, and the write refuses it too', async () => {
+  it('rejects malformed stored mirrorRetired on strict reads and writes', async () => {
     const ns = createHash('sha256').update(A).digest('hex')
     const file = join(dir, 'amadeus-config.json')
     const own = (v: unknown) => writeFileSync(file, JSON.stringify({ cloudAccounts: { [ns]: { syncOwnershipV2: { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: v } } } }))
@@ -316,9 +320,19 @@ describe('mirrorRetired: mask and persistence (H3 final interface §1)', () => {
     await expect(readSyncOwnershipV2(A)).rejects.toThrow('syncOwnershipV2 is malformed')
     own(1)
     await expect(readSyncOwnershipV2(A)).rejects.toThrow('syncOwnershipV2 is malformed')
-    await expect(writeSyncOwnershipV2(A, { entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: 'yes' as unknown as boolean })).rejects.toThrow('invalid syncOwnershipV2')
-    await writeSyncOwnershipV2(A, { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
-    expect(await readSyncOwnershipV2(A)).toEqual({ entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
+    await expect(writeSyncOwnershipV2(A, { entryRoots: [], mirror: 'keep', human: 'engine' })).rejects.toThrow('syncOwnershipV2 is malformed')
+    expect(JSON.parse(readFileSync(file, 'utf8')).cloudAccounts[ns].syncOwnershipV2.mirrorRetired).toBe(1)
+  })
+
+  it('preserves the current disk flag in both a stale claim write and a rollback to no claim', async () => {
+    const file = join(dir, 'amadeus-config.json')
+    const ns = createHash('sha256').update(A).digest('hex')
+    const initial = { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true } as const
+    writeFileSync(file, JSON.stringify({ cloudAccounts: { [ns]: { syncOwnershipV2: initial } } }))
+    await writeSyncOwnershipV2(A, { ...initial, entryRoots: ['/x/VaultB'], mirrorRetired: false })
+    expect(await readSyncOwnershipV2(A)).toEqual({ ...initial, entryRoots: ['/x/VaultB'] })
+    await writeSyncOwnershipV2(A, null)
+    expect(await readSyncOwnershipV2(A)).toEqual({ ...initial, entryRoots: [] })
   })
 })
 

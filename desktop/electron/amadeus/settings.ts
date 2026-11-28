@@ -1,6 +1,6 @@
 // Local vault preferences belong to this device. Cloud bindings belong to one
 // stable Forsion account at one cloud origin, independent of token renewal.
-import { promises as fs, realpathSync } from 'node:fs'
+import { promises as fs, lstatSync, realpathSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -9,6 +9,7 @@ import { isDevMode } from '../forsionHome'
 import { loadTanguCreds } from '../forsionAuth'
 import { forsionAccountId } from '../../shared/forsionAccount'
 import type { OnlineVaultRef } from '@amadeus-shared/ipc'
+import { defaultSyncOwnership } from './cloudSeam'
 import { samePath } from './vaultList'
 
 export type { OnlineVaultRef }
@@ -32,7 +33,7 @@ export interface EntrySyncVault {
 interface CloudAccountConfig {
   cloudSync?: AmadeusCloudSyncConfig
   entrySync?: EntrySyncVault[]
-  /** 智库同步第 2 步(契约 §3.7):按库根的认领。只经 readSyncOwnershipV2 / writeSyncOwnershipV2 读写,readConfig 不带它。 */
+  /** 智库同步第 2 步(契约 §3.7):按库根的认领。readConfig 不带它。 */
   syncOwnershipV2?: SyncOwnershipV2
 }
 
@@ -41,9 +42,14 @@ export interface SyncOwnershipV2 {
   entryRoots: string[]
   mirror: 'keep' | 'off'
   human: 'engine' | 'content'
-  /** 第 3 步(H3 定稿第 1 节,宿主声明 contentSync.mirrorRetire 才认):true = 只停镜像(mirror 仍是 'keep')。盘上只存 true;
-   *  set 不给 = 沿用盘上的值,false = 撤销(删键)。 */
+  /** true = 只停镜像(mirror 仍是 'keep')。只经 patchMirrorRetired 更新，撤销时删键。 */
   mirrorRetired?: boolean
+}
+
+export interface MirrorRetirementPatch {
+  vaultId: string
+  from: boolean
+  to: boolean
 }
 
 export interface AmadeusConfig extends CloudAccountConfig {
@@ -161,7 +167,7 @@ async function writeBase(): Promise<StoredConfig> {
 
 /** 严格读盘:没有文件 = {};读不了 / 不是 JSON 对象就抛。认领(syncOwnershipV2)只走这条:读失败 ≠ 没认领。
  *  抛固定错误码(会经 ownership 接缝到 Extend 的日志):JSON.parse 的原始报错带一截文件原文(库路径、库名),不往外带。 */
-async function storedConfigStrict(): Promise<StoredConfig> {
+async function storedConfigStrict(normalize = true): Promise<StoredConfig> {
   let raw: string
   try { raw = await fs.readFile(configFile(), 'utf8') } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return {}
@@ -170,7 +176,8 @@ async function storedConfigStrict(): Promise<StoredConfig> {
   let parsed: unknown
   try { parsed = JSON.parse(raw) } catch { throw new Error('amadeus-config-unparseable') }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('amadeus-config-malformed')
-  return normalizeStored(parsed as StoredConfig)
+  const stored = parsed as StoredConfig
+  return normalize ? normalizeStored(stored) : stored
 }
 
 const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
@@ -180,36 +187,105 @@ const isOwnership = (v: unknown): v is SyncOwnershipV2 => {
     && (o.mirrorRetired === undefined || typeof o.mirrorRetired === 'boolean') // 不是 boolean = 读不出,不当成没退役
 }
 
+function storedOwnership(account: CloudAccountConfig | undefined): SyncOwnershipV2 | undefined {
+  const ownership = account?.syncOwnershipV2
+  if (ownership !== undefined && !isOwnership(ownership)) throw new Error('syncOwnershipV2 is malformed')
+  return ownership
+}
+
 /** 这个账号的按根认领:null = 没有(走老的 .owned 全局遮罩);配置读不了、或这一项形状不对 → 抛(调用方按「不知道」处理,不当成没认领)。 */
 export async function readSyncOwnershipV2(accountId: string | null): Promise<SyncOwnershipV2 | null> {
   if (!accountId) return null
   await writes // 排在已提交的写后面:刚写完马上读,读到的是新值
-  const own = (await storedConfigStrict()).cloudAccounts?.[cloudAccountNamespace(accountId)]
-  if (!own || own.syncOwnershipV2 === undefined) return null
-  if (!isOwnership(own.syncOwnershipV2)) throw new Error('syncOwnershipV2 is malformed')
-  return structuredClone(own.syncOwnershipV2)
+  const own = strictCloudAccounts(await storedConfigStrict())[cloudAccountNamespace(accountId)]
+  return structuredClone(storedOwnership(own) ?? null)
 }
 
-/** 写 / 删这个账号的按根认领。和其他写同一条队列;**以盘上的为底**(严格读,读不了就抛、不写),
- *  免得启动时读坏了缓存成 {},这一写把整份配置(含别的账号、条目同步注册表)盖掉。 */
+/** 写 / 删这个账号的按根认领。严格读盘后保留退役位，包括回滚到无认领的情况。 */
 export function writeSyncOwnershipV2(accountId: string, next: SyncOwnershipV2 | null): Promise<void> {
-  if (next !== null && !isOwnership(next)) return Promise.reject(new Error('invalid syncOwnershipV2'))
-  const snapshot = next === null ? null : structuredClone(next)
+  const claim = next === null ? null : { ...next }
+  if (claim) delete claim.mirrorRetired
+  if (claim !== null && !isOwnership(claim)) return Promise.reject(new Error('invalid syncOwnershipV2'))
+  const snapshot = structuredClone(claim)
   const work = writes.then(async () => {
     const disk = await storedConfigStrict()
     const key = cloudAccountNamespace(accountId)
-    const account: CloudAccountConfig = { ...disk.cloudAccounts?.[key] }
-    if (snapshot) account.syncOwnershipV2 = snapshot
+    const accounts = strictCloudAccounts(disk)
+    const account: CloudAccountConfig = { ...accounts[key] }
+    const retired = storedOwnership(account)?.mirrorRetired
+    if (retired !== undefined) account.syncOwnershipV2 = { ...(snapshot ?? defaultSyncOwnership()), mirrorRetired: retired }
+    else if (snapshot) account.syncOwnershipV2 = snapshot
     else delete account.syncOwnershipV2
-    const out: StoredConfig = { ...disk, cloudAccounts: { ...disk.cloudAccounts, [key]: account } }
-    const file = configFile()
-    await fs.mkdir(path.dirname(file), { recursive: true })
-    const tmp = `${file}.tmp-${process.pid}`
-    await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
-    await fs.rename(tmp, file)
-    commitCache(out) // 以严格读为底
+    const out: StoredConfig = { ...disk, cloudAccounts: { ...accounts, [key]: account } }
+    await writeStored(out)
   })
   writes = work.catch(() => {})
+  return work
+}
+
+/** P-15: CAS 只改当前账号的退役位。严格读盘，保留未归一化的其他字段。 */
+export function patchSyncOwnershipMirrorRetired(
+  accountId: string,
+  { vaultId, from, to }: MirrorRetirementPatch,
+  canCommit: () => boolean,
+  mirrorDir: (account: string) => string,
+  legacyOwned: (account: string) => boolean,
+): Promise<boolean> {
+  const work = writes.then(async () => {
+    if (!accountId || currentCloudAccountId() !== accountId || from === to) return false
+    const disk = await storedConfigStrict(false)
+    const key = cloudAccountNamespace(accountId)
+    const accounts = strictCloudAccounts(disk)
+    const account = accounts[key]
+    if (!account) return false
+    const ownership = storedOwnership(account) ?? defaultSyncOwnership()
+    const cloud = account.cloudSync
+    const entries = account.entrySync
+    if (cloud !== undefined && (!cloud || typeof cloud !== 'object' || Array.isArray(cloud)
+      || (cloud.enabled !== undefined && typeof cloud.enabled !== 'boolean'))) throw new Error('amadeus-config-malformed')
+    if (entries !== undefined && (!Array.isArray(entries) || !entries.every((entry) =>
+      entry && typeof entry.vaultRoot === 'string' && Array.isArray(entry.entries)))) throw new Error('amadeus-config-malformed')
+    if (ownership.mirror !== 'keep' || typeof vaultId !== 'string' || !vaultId || cloud?.vaultId !== vaultId
+      || (ownership.mirrorRetired === true) !== from || (to && cloud.enabled === false)) return false
+
+    const entryRoots = to
+      ? [...allEntrySyncFrom(disk, accounts).map((entry) => entry.vaultRoot),
+        ...Object.values(accounts).flatMap((config) => storedOwnership(config)?.entryRoots ?? [])]
+      : [...ownership.entryRoots, ...(entries ?? []).map((entry) => entry.vaultRoot)]
+    const mirror = mirrorDir(accountId)
+    const pointsToMirror = (root: string, base: string): boolean => {
+      const relative = path.relative(base, root)
+      return relative === '' || (relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative))
+    }
+    const canonical = (root: string): string => {
+      try { return realpathSync.native(root) } catch (error) {
+        const parent = path.dirname(root)
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || root === parent
+          || lstatSync(root, { throwIfNoEntry: false })) throw error
+        // A missing child can still be inside the mirror through an existing alias.
+        return path.join(canonical(parent), path.basename(root))
+      }
+    }
+    try {
+      const physicalMirror = canonical(mirror)
+      for (const root of [disk.lastVault, disk.localVault, disk.syncVault, ...entryRoots]) {
+        if (root === undefined) continue
+        if (typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')) return false
+        if (pointsToMirror(root, mirror) || pointsToMirror(canonical(root), physicalMirror)) return false
+      }
+    } catch { return false }
+
+    const next = { ...ownership }
+    if (to) next.mirrorRetired = true
+    else delete next.mirrorRetired
+    const out: StoredConfig = { ...disk, cloudAccounts: { ...accounts, [key]: { ...account, syncOwnershipV2: next } } }
+    return replaceStored(out, () => {
+      if (currentCloudAccountId() !== accountId) return false
+      try { if (legacyOwned(accountId)) return false } catch { return false }
+      return canCommit()
+    })
+  })
+  writes = work.then(() => {}, () => {})
   return work
 }
 
@@ -249,17 +325,32 @@ function entrySyncListStrict(v: unknown): EntrySyncVault[] {
   })
 }
 
+function strictCloudAccounts(stored: StoredConfig): Record<string, CloudAccountConfig> {
+  const accounts = stored.cloudAccounts
+  if (accounts === undefined) return {}
+  if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)
+    || Object.values(accounts).some((account) => !account || typeof account !== 'object' || Array.isArray(account))) {
+    throw new Error('amadeus-config-malformed')
+  }
+  return accounts
+}
+
+function allEntrySyncFrom(stored: StoredConfig, accounts = strictCloudAccounts(stored)): EntrySyncVault[] {
+  const legacy = stored.legacyCloudState
+  const extras = legacyExtras(stored)
+  if (!extras || (legacy != null && (typeof legacy !== 'object' || Array.isArray(legacy)))) {
+    throw new Error('amadeus-config-malformed')
+  }
+  return [stored, legacy, ...extras, ...Object.values(accounts)].flatMap((owner) => entrySyncListStrict(owner?.entrySync))
+}
+
 /** 一次严格读的快照(旧 remotesync 用,H3):当前账号那份配置(同 readConfig 的形状),加上盘上**所有**条目同步登记 ——
  *  每个账号的、待认领的每一份老字段,都从这同一次读来。
  *  没有文件 = 空配置;读不了 / 不是 JSON 对象 / 名单形状读不懂 → 抛固定码(读失败 ≠ 没有条目同步)。不走缓存。 */
 export async function readEntrySyncSnapshotStrict(accountId: string | null = currentCloudAccountId()): Promise<{ config: AmadeusConfig; allEntrySync: EntrySyncVault[] }> {
   await writes.catch(() => {}) // 排着的写先落盘(刚加的条目同步不会被这一轮漏掉);同 syncTargetsStore.read 先等它的队列
   const st = await storedConfigStrict()
-  const accounts = st.cloudAccounts ?? {}
-  const extras = legacyExtras(st)
-  if (!extras || typeof accounts !== 'object' || Array.isArray(accounts)) throw new Error('amadeus-config-malformed')
-  const allEntrySync = [st.legacyCloudState, ...extras, ...Object.values(accounts)].flatMap((own) => entrySyncListStrict(own?.entrySync))
-  return { config: configFrom(st, accountId), allEntrySync }
+  return { config: configFrom(st, accountId), allEntrySync: allEntrySyncFrom(st) }
 }
 
 /** 同一个 lastVault:都没有算同一个;都有按 path.resolve 比。 */
@@ -492,12 +583,30 @@ async function settleLoading(): Promise<void> {
 }
 
 async function writeStored(out: StoredConfig): Promise<void> {
+  await replaceStored(out)
+}
+
+async function replaceStored(out: StoredConfig, canCommit?: () => boolean): Promise<boolean> {
+  const cached = canCommit ? normalizeStored({ ...out }) : out
   const file = configFile()
   await fs.mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.tmp-${process.pid}`
-  await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
-  await fs.rename(tmp, file)
-  commitCache(out)
+  let committed = false
+  try {
+    await fs.writeFile(tmp, JSON.stringify(out, null, 2), 'utf8')
+    if (canCommit) {
+      // No event-loop gap between the final check and the guarded commit.
+      if (!canCommit()) return false
+      renameSync(tmp, file)
+    } else {
+      await fs.rename(tmp, file)
+    }
+    committed = true
+    commitCache(cached)
+    return true
+  } finally {
+    if (!committed) await fs.rm(tmp, { force: true }).catch(() => {})
+  }
 }
 
 /** 停止落盘前释放指定的旧钉子。先拿旧远程同步的封口锁,再进配置队列:在途同步也会读配置。 */
