@@ -9128,7 +9128,8 @@ Then reply with only the command output.`,
         phone: { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st) }) },
       });
       const looked = ev.clientCmds.some((c) => c.claimed && ['status', 'start', 'screenshot'].includes(c.op));
-      const already = /已(经)?(安装|装)(好|上|进|到|过)|已安装|already installed|装的就是|同一份|不用再装|无需再装|不需要再装/i.test(ev.content);
+      // 「已经安装在你的 Forsion 里」这类说法也算(11-28 第 3 次:判据太窄,把这句判成没说)
+      const already = /已(经)?(安装|装)|already (been )?installed|装的就是|同一份|不用再(安装|装)|无需再|不需要再/i.test(ev.content);
       const nag = /(点|点击|按)[^。\n]{0,12}(「|“|")?安装到我的 Forsion|Install in my Forsion/i.test(ev.content) && !already;
       const copied = ev.toolArgs.some((t) => /\.forsion[\/\\]plugins|plugins[\/\\]reading-log/.test(t.arguments));
       return { ok: !ev.error && looked && already && !nag && !copied,
