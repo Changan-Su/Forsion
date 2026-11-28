@@ -85,7 +85,8 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
   }
   // Extend 停用 = 同步到蓬洲云的停了(11-28 用户定);下面原来方式的网盘同步是宿主自己的引擎(Extend 不握手时 H 会交还给它),
   // 停用时照样在跑,这里得能管它 —— 不做成只读
-  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice />{legacy}</div>
+  // 用不带「开关在蓬洲云 › 同步」那句的那份(drive):Extend 停用时蓬洲云不在,那个按钮是死路(台架 probe-states off 截图看出来的)
+  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice />{drive ?? legacy}</div>
   // 同步记录读不出来:引擎已经停下;这时不给旧界面的写入口(读失败 ≠ 空,Codex P1-7),只说清楚 + 重试
   if (gate.kind === 'compat' && gate.reason === 'state-unreadable') {
     return (
