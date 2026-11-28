@@ -13,19 +13,44 @@
  *      uploads an in-scope edit; the human/ consent (`enabled` for this account) is untouched;
  *   M  over the whole run, no request touches `.forsion-sync-id.json` (upload, download, delete, move).
  *
+ * Two modes (MODE=compat|full; --all runs both). The host decides the mode from what Extend brings:
+ *   compat  Extend from before the vault-sync v2 runtime (pinned, see below). The story above.
+ *   full    Extend with the v2 runtime (EXTEND_PKG, e.g. Extend main). The host has syncTargets, so the account is in full mode and
+ *           Extend takes the legacy entry sync over at launch (契约 §3.8 A) — there is no Penzor › Sync claim to click. The same
+ *           hand-over is checked on that path, driven by IPC and disk (no Settings selectors):
+ *             S1/S2/S3/C1  → S1f-taken-over-at-launch (full mode, A done, v2 binding active) + FC1-taken-over (syncOwnershipV2 holds
+ *                            the root, human/ stays with the engine, the engine's owner bit is never written)
+ *             C2           → FC2-legacy-stopped (no legacy engine on the root, an in-scope edit never reaches the legacy writer)
+ *             R1/R2/R3     → FR1-reverted (vaultsync:takeover:revert → ledger reverted) + FR2-ownership-dropped (root leaves the mask)
+ *             R4/R5        → same IDs (the host restarts the legacy engine, which uploads an in-scope edit)
+ *             H / M        → same IDs (human/ consent untouched across takeover and revert; nobody touches the marker)
+ *           S4/S5 (first new-sync round, markers present) have no analog here: v2 takeover data safety is the u-int walks' job.
+ *
  * Negative controls (NEG=…) patch throwaway copies only, must show their fault actually fired (F-fault-exercised), and must
  * turn exactly the declared checks red:
- *   release-fails  host → engine release PUT answers 500 (main-process fetch wrapper)
- *   no-restart     host claim(false) skips restartSync()       (patched copy of out/main/main.js)
- *   no-stop        host claim(true) skips stopSync()           (patched copy of out/main/main.js)
- *   marker         legacy sync stops ignoring the marker        (patched copy of Extend dist, signed with the one-use key)
- *   human-off      engine release also turns the human/ consent off (patched copy of the engine dist)
+ *   compat:
+ *     release-fails  host → engine release PUT answers 500 (main-process fetch wrapper)
+ *     no-restart     host claim(false) skips restartSync()       (patched copy of out/main/main.js)
+ *     no-stop        host claim(true) skips stopSync()           (patched copy of out/main/main.js)
+ *     marker         legacy sync stops ignoring the marker        (patched copy of Extend dist, signed with the one-use key)
+ *     human-off      engine release also turns the human/ consent off (patched copy of the engine dist, contracts/contentSyncOwner.js)
+ *   full:
+ *     no-guards      both guards that keep the legacy entry engine off a taken-over root are gone: the host's ownership mask
+ *                    (patched copy of out/main/main.js) and Extend's own takeover gate (patched copy of Extend dist). Either one
+ *                    alone still keeps it off (a host-only patch was tried: F-fault-exercised stayed red), so FC2 needs both
+ *     no-restart     ownership.set skips restartSync() when the last root leaves (patched copy of out/main/main.js)
+ *     marker         as above, on the v2 Extend
+ *   release-fails / no-stop / human-off have no full-mode analog (A never moves human/ and never calls the engine's owner route).
+ *
+ * Extend builds: full = EXTEND_PKG. compat = EXTEND_COMPAT_PKG, or else a build of COMPAT_EXTEND_PIN made once from the local Extend
+ * clone (EXTEND_REPO, default ../../Forsion-Extend) by scripts/lib/pinned-extend.cjs and cached in the temp dir. Preflight refuses a
+ * compat build that has the v2 runtime and a full build that lacks it; the run itself checks the mode the host actually chose.
  *
  * Prereqs: cd ../tangu-agent && npm run build; npm run build (here, for out/); Extend: npm run build (dist/).
  * Run (takes the GUI lock; several sessions share this machine):
- *   EXTEND_PKG=<built Extend checkout> node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="sync release" --eta=20 -- \
+ *   EXTEND_PKG=<built Extend checkout> node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="sync release" --eta=30 -- \
  *     node scripts/sync-release.e2e.cjs --all          (or: npm run e2e:syncrelease)
- * Single scenario: NEG=<name> node scripts/sync-release.e2e.cjs. ELECTRON_BIN=<Electron binary> when node_modules has none
+ * Single scenario: MODE=compat|full NEG=<name> node scripts/sync-release.e2e.cjs. ELECTRON_BIN=<Electron binary> when node_modules has none
  * (its dist/version must match desktop's electron). Evidence (local only, may hold temp paths): SYNC_EVIDENCE
  * (default <tmp>/forsion-sync-release-evidence). KEEP_HOME=1 keeps the temp home for inspection.
  */
@@ -38,23 +63,43 @@ const { spawnSync, execFileSync } = require('child_process')
 
 const ROOT = path.resolve(process.env.GENESIS_DESKTOP || path.join(__dirname, '..'))
 const ENGINE = path.resolve(ROOT, '..', 'tangu-agent')
-const EXTEND = path.resolve(process.env.EXTEND_PKG || path.join(ROOT, '..', '..', 'Forsion-Extend'))
+const EXTEND_REPO = path.resolve(process.env.EXTEND_REPO || path.join(ROOT, '..', '..', 'Forsion-Extend'))
+const MODE = process.env.MODE || 'compat'
+/** compat runs against this Extend: the last main before the vault-sync v2 runtime (Forsion-Extend #126, step 1 status). */
+const COMPAT_EXTEND_PIN = '4e22e9712013238060fa57211b7c694b5f0811ec'
+const EXTEND = path.resolve(MODE === 'full' ? (process.env.EXTEND_PKG || EXTEND_REPO) : (process.env.EXTEND_COMPAT_PKG || EXTEND_REPO))
 const NEG = process.env.NEG || ''
 const OUT = path.resolve(process.env.SYNC_EVIDENCE || path.join(os.tmpdir(), 'forsion-sync-release-evidence'))
 const MARKER = '.forsion-sync-id.json'
 const MARKER_RE = /(^|\/)\.forsion-sync-id\.json$/
+/** Only an Extend with the vault-sync v2 runtime registers this channel. */
+const V2_RUNTIME_MARK = 'vaultsync:get'
 const SCENARIO_DEADLINE_MS = 12 * 60_000
 
-/** Which checks each scenario must turn red (setup checks S* / F* must stay green in every scenario). */
-const EXPECT_RED = {
-  '': [],
-  'release-fails': ['R1-state-released', 'R2-host-release-call', 'R3-engine-owner-dropped', 'R4-legacy-restarted', 'R5-legacy-uploads', 'H-human-consent'],
-  'no-restart': ['R4-legacy-restarted', 'R5-legacy-uploads'],
-  'no-stop': ['C2-legacy-stopped'],
-  marker: ['M-marker-untouched'],
-  'human-off': ['H-human-consent'],
+/** Which checks each scenario must turn red (setup checks S* / F* must stay green in every scenario), per mode. */
+const EXPECT_RED_BY_MODE = {
+  compat: {
+    '': [],
+    'release-fails': ['R1-state-released', 'R2-host-release-call', 'R3-engine-owner-dropped', 'R4-legacy-restarted', 'R5-legacy-uploads', 'H-human-consent'],
+    'no-restart': ['R4-legacy-restarted', 'R5-legacy-uploads'],
+    'no-stop': ['C2-legacy-stopped'],
+    marker: ['M-marker-untouched'],
+    'human-off': ['H-human-consent'],
+  },
+  full: {
+    '': [],
+    'no-guards': ['FC2-legacy-stopped'],
+    'no-restart': ['R4-legacy-restarted', 'R5-legacy-uploads'],
+    marker: ['M-marker-untouched'],
+  },
 }
-const ALL_CHECKS = ['C1-claimed', 'C2-legacy-stopped', 'R1-state-released', 'R2-host-release-call', 'R3-engine-owner-dropped', 'R4-legacy-restarted', 'R5-legacy-uploads', 'H-human-consent', 'M-marker-untouched']
+const ALL_CHECKS_BY_MODE = {
+  compat: ['C1-claimed', 'C2-legacy-stopped', 'R1-state-released', 'R2-host-release-call', 'R3-engine-owner-dropped', 'R4-legacy-restarted', 'R5-legacy-uploads', 'H-human-consent', 'M-marker-untouched'],
+  full: ['FC1-taken-over', 'FC2-legacy-stopped', 'FR1-reverted', 'FR2-ownership-dropped', 'R4-legacy-restarted', 'R5-legacy-uploads', 'H-human-consent', 'M-marker-untouched'],
+}
+if (!(MODE in EXPECT_RED_BY_MODE)) { console.error(`unknown MODE=${MODE}; one of compat, full`); process.exit(2) }
+const EXPECT_RED = EXPECT_RED_BY_MODE[MODE]
+const ALL_CHECKS = ALL_CHECKS_BY_MODE[MODE]
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex')
@@ -73,17 +118,28 @@ function patchOnce(file, from, to) {
 // ───────────────────────────── --all: run every scenario as its own process ─────────────────────────────
 if (process.argv.includes('--all')) {
   const rows = []
-  for (const neg of Object.keys(EXPECT_RED)) {
-    console.log(`\n=== scenario ${neg || 'positive'} ===`)
-    const file = path.join(OUT, `${neg || 'positive'}.json`)
-    fs.rmSync(file, { force: true })
-    const r = spawnSync(process.execPath, [__filename], { stdio: 'inherit', env: { ...process.env, NEG: neg }, timeout: SCENARIO_DEADLINE_MS, killSignal: 'SIGTERM' })
-    const res = readJson(file)
-    rows.push({ neg: neg || 'positive', exit: r.status, pass: r.status === 0 && res?.pass === true, red: res?.red ?? null, setupOk: res?.setupOk ?? false, timedOut: r.error?.code === 'ETIMEDOUT' })
+  // compat needs a pre-v2 Extend: an explicit EXTEND_COMPAT_PKG, or the pinned build (made once). Can't get one = those rows FAIL.
+  let compatPkg = process.env.EXTEND_COMPAT_PKG || null, compatError = null
+  if (!compatPkg) {
+    try { compatPkg = require('./lib/pinned-extend.cjs').ensurePinnedExtend({ repo: EXTEND_REPO, commit: COMPAT_EXTEND_PIN, cacheRoot: os.tmpdir(), log: (m) => console.log(`[sync-release] ${m}`) }).dir } catch (e) { compatError = String(e?.message ?? e) }
+  }
+  const modes = (process.env.MODES || 'compat,full').split(',').filter(Boolean)
+  for (const mode of modes) {
+    for (const neg of Object.keys(EXPECT_RED_BY_MODE[mode] ?? {})) {
+      const name = `${mode}/${neg || 'positive'}`
+      console.log(`\n=== scenario ${name} ===`)
+      if (mode === 'compat' && !compatPkg) { rows.push({ name, pass: false, red: null, setupOk: false, note: `no pre-v2 Extend: ${compatError}` }); continue }
+      const file = path.join(OUT, `${mode}-${neg || 'positive'}.json`)
+      fs.rmSync(file, { force: true })
+      const env = { ...process.env, MODE: mode, NEG: neg, ...(mode === 'compat' ? { EXTEND_COMPAT_PKG: compatPkg } : {}) }
+      const r = spawnSync(process.execPath, [__filename], { stdio: 'inherit', env, timeout: SCENARIO_DEADLINE_MS, killSignal: 'SIGTERM' })
+      const res = readJson(file)
+      rows.push({ name, exit: r.status, pass: r.status === 0 && res?.pass === true, red: res?.red ?? null, setupOk: res?.setupOk ?? false, timedOut: r.error?.code === 'ETIMEDOUT' })
+    }
   }
   console.log('\nsummary')
-  for (const x of rows) console.log(`  ${x.pass ? 'PASS' : 'FAIL'}  ${x.neg.padEnd(14)} red=${JSON.stringify(x.red)}${x.setupOk ? '' : '  (setup failed)'}${x.timedOut ? '  (timed out)' : ''}`)
-  process.exit(rows.every((x) => x.pass) ? 0 : 1)
+  for (const x of rows) console.log(`  ${x.pass ? 'PASS' : 'FAIL'}  ${x.name.padEnd(20)} red=${JSON.stringify(x.red)}${x.setupOk ? '' : '  (setup failed)'}${x.timedOut ? '  (timed out)' : ''}${x.note ? `  (${x.note})` : ''}`)
+  process.exit(rows.length && rows.every((x) => x.pass) ? 0 : 1)
 }
 
 // ───────────────────────────── seed ─────────────────────────────
@@ -170,6 +226,9 @@ function preflight() {
   if (!fs.readFileSync(path.join(ENGINE, 'dist/routes/memory.js'), 'utf8').includes('content-owner')) throw Error('engine dist predates /agent/sync/content-owner; rebuild tangu-agent')
   const extSrc = fs.readFileSync(ext, 'utf8')
   if (!extSrc.includes('releasing') || !extSrc.includes(MARKER)) throw Error('Extend dist predates the step-0 release / marker ignore; rebuild Extend')
+  const v2 = extSrc.includes(V2_RUNTIME_MARK)
+  if (MODE === 'compat' && v2) throw Error(`compat mode needs an Extend from before the vault-sync v2 runtime (${EXTEND} has it): set EXTEND_COMPAT_PKG, or run --all to build ${COMPAT_EXTEND_PIN.slice(0, 7)}`)
+  if (MODE === 'full' && !v2) throw Error(`full mode needs an Extend with the vault-sync v2 runtime (${EXTEND} has none): set EXTEND_PKG to a current Extend build`)
   if (process.env.ELECTRON_BIN) {
     const want = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules/electron/package.json'), 'utf8')).version
     const verFile = path.resolve(path.dirname(process.env.ELECTRON_BIN), '../../../version')
@@ -181,7 +240,9 @@ function preflight() {
   const git = (d, ...a) => { try { return execFileSync('git', ['-C', d, ...a]).toString().trim() } catch { return null } }
   const heads = {}
   for (const [key, dir, file, sources] of [['genesis', ROOT, main, ['electron', 'frontend', 'shared', '../lcl']], ['engine', ENGINE, engine, ['src']], ['extend', EXTEND, ext, ['src']]]) {
-    const head = git(dir, 'rev-parse', '--short', 'HEAD'), at = Number(git(dir, 'log', '-1', '--format=%ct', '--', ...sources)) * 1000, built = fs.statSync(file).mtimeMs
+    // A pinned Extend build (scripts/lib/pinned-extend.cjs) is not a git checkout: its .pin names the commit it was built from
+    const pin = fs.existsSync(path.join(dir, '.pin')) ? fs.readFileSync(path.join(dir, '.pin'), 'utf8').trim() : null
+    const head = pin ? `pin:${pin.slice(0, 12)}` : git(dir, 'rev-parse', '--short', 'HEAD'), at = pin ? 0 : Number(git(dir, 'log', '-1', '--format=%ct', '--', ...sources)) * 1000, built = fs.statSync(file).mtimeMs
     if (at && built < at) throw Error(`${path.relative(dir, file)} (built ${new Date(built).toISOString()}) is older than the last ${key} source commit; rebuild`)
     heads[key] = { head, dirty: !!git(dir, 'status', '--porcelain', '--untracked-files=no', '--', ...sources), built: new Date(built).toISOString() }
   }
@@ -190,11 +251,19 @@ function preflight() {
 
 /** Throwaway Extend copy for NEG=marker: the legacy ignore list loses the marker. Signed afterwards by preparePenzorFixture. */
 function extendForScenario(tmp) {
-  if (NEG !== 'marker') return EXTEND
+  if (NEG !== 'marker' && NEG !== 'no-guards') return EXTEND
   const pkg = JSON.parse(fs.readFileSync(path.join(EXTEND, 'package.json'), 'utf8'))
   const dest = path.join(tmp, 'extend-src')
   for (const f of ['package.json', ...pkg.files, 'scripts']) if (fs.existsSync(path.join(EXTEND, f))) { fs.mkdirSync(path.dirname(path.join(dest, f)), { recursive: true }); fs.cpSync(path.join(EXTEND, f), path.join(dest, f), { recursive: true }) }
   const file = path.join(dest, 'dist/desktop.mjs'), src = fs.readFileSync(file, 'utf8')
+  if (NEG === 'no-guards') {
+    // Extend's own takeover gate (契约 §3.8 A0): before building the account's entry engines it drops the roots v2 holds.
+    // Minified: `H.size&&(G=G.filter(Z=>!H.has(Z.vaultRoot)));` (names change per build, so match the shape, exactly once)
+    const hits = [...src.matchAll(/([\w$]+)\.size&&\(([\w$]+)=\2\.filter\(([\w$]+)=>!\1\.has\(\3\.vaultRoot\)\)\);/g)]
+    if (hits.length !== 1) throw Error(`takeover gate filter matched ${hits.length}× in Extend dist`)
+    fs.writeFileSync(file, src.slice(0, hits[0].index) + ';' + src.slice(hits[0].index + hits[0][0].length))
+    return dest
+  }
   const m = /var (\w+)="\.forsion-sync-id\.json";function \w+\((\w+)\)\{return!!\(/.exec(src)
   if (!m) throw Error('marker ignore anchor not found in Extend dist')
   const needle = `||${m[2]}===${m[1]}||`, at = src.indexOf(needle, m.index)
@@ -210,22 +279,28 @@ function linkEngine(fixtureRoot) {
   fs.mkdirSync(dest)
   for (const name of fs.readdirSync(ENGINE)) if (name !== 'dist') fs.symlinkSync(path.join(ENGINE, name), path.join(dest, name))
   fs.cpSync(path.join(ENGINE, 'dist'), path.join(dest, 'dist'), { recursive: true })
-  patchOnce(path.join(dest, 'dist/services/cloudSyncAccount.js'), 'accounts[scope] = { enabled: cur?.enabled ?? false,', 'accounts[scope] = { enabled: enabled && (cur?.enabled ?? false),')
+  // The engine's content-owner route (claim / release) writes the account entry through withLegacyContentOwner
+  patchOnce(path.join(dest, 'dist/contracts/contentSyncOwner.js'), 'return { enabled: entry?.enabled === true, revision: nextRevision(entry), ...(enabled ?', 'return { enabled: enabled && entry?.enabled === true, revision: nextRevision(entry), ...(enabled ?')
 }
 
 function patchHost(appDir) {
   const main = path.join(appDir, 'out/main/main.js')
-  if (NEG === 'no-stop') patchOnce(main, 'if (owned) await host.stopSync();', 'if (owned) await Promise.resolve();')
-  if (NEG === 'no-restart') patchOnce(main, 'else await host.restartSync();', 'else await Promise.resolve();')
+  if (MODE === 'compat') {
+    if (NEG === 'no-stop') patchOnce(main, 'if (owned) await host.stopSync();', 'if (owned) await Promise.resolve();')
+    if (NEG === 'no-restart') patchOnce(main, 'else await host.restartSync();', 'else await Promise.resolve();')
+  } else {
+    if (NEG === 'no-guards') patchOnce(main, 'entrySync: (cfg.entrySync ?? []).filter((v) => !roots.has(canonRoot(v.vaultRoot)))', 'entrySync: cfg.entrySync ?? []')
+    if (NEG === 'no-restart') patchOnce(main, '} else await host.writeV2(account, next);\n        assertAccount(account);\n        await host.restartSync();', '} else await host.writeV2(account, next);\n        assertAccount(account);\n        if (next.entryRoots.length) await host.restartSync();')
+  }
 }
 
 // ───────────────────────────── run ─────────────────────────────
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
   const name = NEG || 'positive'
-  if (!(NEG in EXPECT_RED)) throw Error(`unknown NEG=${NEG}; one of ${Object.keys(EXPECT_RED).filter(Boolean).join(', ')}`)
-  const result = { scenario: name, heads: preflight(), checks: [], setup: [], setupOk: false, red: [], pass: false }
-  const log = (...a) => console.log(`[sync-release:${name}]`, ...a)
+  if (!(NEG in EXPECT_RED)) throw Error(`unknown NEG=${NEG} for MODE=${MODE}; one of ${Object.keys(EXPECT_RED).filter(Boolean).join(', ')}`)
+  const result = { mode: MODE, scenario: name, heads: preflight(), checks: [], setup: [], setupOk: false, red: [], pass: false }
+  const log = (...a) => console.log(`[sync-release:${MODE}/${name}]`, ...a)
   const check = (bucket, id, ok, detail) => { result[bucket].push({ id, ok: !!ok, detail }); log(ok ? 'ok  ' : 'RED ', id, detail === undefined ? '' : JSON.stringify(detail).slice(0, 300)) }
 
   const electron = require(path.join(ROOT, 'scripts/lib/launch-electron.cjs'))
@@ -311,6 +386,57 @@ async function main() {
     /** The legacy entry writer stored `token` at exactly `remote` (not a conflict copy elsewhere). */
     const landed = (token, remote) => cloud.writesWith(token).some((r) => r.names[0] === remote) && (cloud.files.get(remote)?.content ?? '').includes(token)
 
+    /** cloudInvoke from the renderer: { ok, value } or { ok:false, error } (an unknown channel throws there). */
+    const extendCall = (ch, arg) => win.evaluate(async ([c, a]) => { try { const r = await window.tangu?.cloudInvoke?.(c, a); return { ok: true, value: r && typeof r === 'object' && 'value' in r ? r.value : r } } catch (e) { return { ok: false, error: String(e?.message ?? e) } } }, [ch, arg]).catch((e) => ({ ok: false, error: String(e) }))
+    const v2Status = async () => { const r = await extendCall('vaultsync:status'); return r.ok ? r.value : null }
+
+    if (MODE === 'full') {
+      /** syncOwnershipV2 for the seeded account, from whichever amadeus-config the host writes (dev builds use <userData>-dev). */
+      const ownership = () => {
+        for (const d of [seed.userData + '-dev', seed.userData]) for (const f of ['amadeus-config.dev.json', 'amadeus-config.json']) {
+          const own = readJson(path.join(d, f))?.cloudAccounts?.[sha(seed.accountId)]?.syncOwnershipV2
+          if (own !== undefined) return own
+        }
+        return null
+      }
+      const ownsRoot = (own) => !!own && (own.entryRoots ?? []).some((r) => { try { return fs.realpathSync(r) === vaultReal } catch { return r === vaultReal } })
+      const ledgerEntry = () => (readJson(path.join(home, 'vault-sync', 'takeover.json'))?.entries ?? []).find((e) => e.source === 'entry' && e.root === vaultReal) ?? null
+      const engineEntry = () => readJson(seed.engineDefaults)?.accounts?.[seed.scope] ?? null
+
+      // ── S1f: full mode, A takes the entry sync over at launch (nothing clicked) ──
+      const taken = await until(async () => { const s = await v2Status(); const e = ledgerEntry(); const b = s?.bindings?.find((x) => { try { return fs.realpathSync(x.root) === vaultReal } catch { return false } }); return s?.mode === 'full' && e?.phase === 'done' && b ? { mode: s.mode, phase: e.phase, binding: { id: b.id, state: b.state, enabled: b.enabled, target: b.target?.kind } } : null }, 120_000, 1000)
+      check('setup', 'S1f-taken-over-at-launch', !!taken, taken ?? { status: (await v2Status())?.mode ?? null, ledger: ledgerEntry()?.phase ?? null })
+      if (!taken) throw Error('full mode: the entry sync was not taken over at launch')
+      const own1 = ownership(), eng1 = engineEntry(), h1 = await humanDefault()
+      check('checks', 'FC1-taken-over', ownsRoot(own1) && own1.human === 'engine' && !!eng1 && eng1.enabled === true && !('owner' in eng1) && h1.status === 200 && h1.enabled === true,
+        { ownership: own1, engineAccount: eng1, humanDefault: h1 })
+      const t1 = `T1-${crypto.randomBytes(4).toString('hex')}`
+      appendLine('Journal/2026-W48.md', t1)
+      await sleep(15_000)
+      const l1 = await legacy()
+      if (NEG === 'no-guards') fault = { legacyWhileOwned: l1 }
+      check('checks', 'FC2-legacy-stopped', Array.isArray(l1) && !seededEntry(l1) && cloud.attemptsWith(t1).length === 0, { token: t1, legacyAttempts: cloud.attemptsWith(t1).length, engines: l1 })
+
+      // ── FR: revert the takeover; the host gives the root back to the legacy entry sync ──
+      const rv = await extendCall('vaultsync:takeover:revert', { root: seed.vault })
+      const reverted = await until(() => (ledgerEntry()?.phase === 'reverted' ? ledgerEntry() : null), 30_000)
+      check('checks', 'FR1-reverted', rv.ok && !!reverted, { call: rv, ledger: ledgerEntry() && { phase: ledgerEntry().phase, bindingId: !!ledgerEntry().bindingId } })
+      const dropped = await until(() => { const o = ownership(); return o && !ownsRoot(o) ? o : null }, 30_000)
+      check('checks', 'FR2-ownership-dropped', !!dropped && dropped.human === 'engine', dropped ?? ownership())
+      if (NEG === 'no-restart') fault = { releaseAccepted: rv.ok && !!reverted && !!dropped }
+      const back = await until(async () => { const l = await legacy(); return entryRunning(l) ? l : null }, 45_000, 1000)
+      check('checks', 'R4-legacy-restarted', !!back, back ?? (await legacy()))
+      const t2 = `T2-${crypto.randomBytes(4).toString('hex')}`
+      appendLine('Projects/Course A/L01 Basics.md', t2)
+      const r5 = await until(() => landed(t2, `${CLOUD_NAME}/Projects/Course A/L01 Basics.md`), 40_000)
+      check('checks', 'R5-legacy-uploads', r5, { token: t2, writes: cloud.writesWith(t2).map((r) => r.names[0]) })
+      const eng2 = engineEntry(), h2 = await humanDefault()
+      check('checks', 'H-human-consent', eng1?.enabled === true && eng2?.enabled === true && !('owner' in (eng2 ?? {})) && h1.enabled === true && h2.status === 200 && h2.enabled === true,
+        { storedWhileTaken: eng1, storedAfter: eng2, whileTaken: h1.enabled, after: h2.enabled })
+    } else {
+    // compat must really be compat: an Extend without the v2 runtime has no vaultsync:status channel
+    const st0 = await extendCall('vaultsync:status')
+    check('setup', 'S0c-compat-mode', !st0.ok || st0.value == null || st0.value?.mode === 'compat', st0.ok ? { mode: st0.value?.mode ?? null } : { channel: 'absent' })
     // ── B: the legacy entry sync is alive before anything else ──
     const settled = await until(async () => { const l = await legacy(); return seededEntry(l)?.state === 'idle' ? l : null }, 90_000, 1000)
     check('setup', 'S1-legacy-entry-sync-idle', !!settled, settled ?? (await legacy()))
@@ -390,11 +516,12 @@ async function main() {
     if (NEG === 'release-fails') fault = { injected: calls2.filter((c) => c.injected), state: { owned: st?.owned, releasing: st?.releasing ?? null } }
     if (NEG === 'human-off') fault = { storedAfter: acct2?.enabled, getAfter: h2 }
     if (NEG === 'no-restart') fault = { releaseAccepted: calls2.some((c) => c.body?.enabled === false && c.status === 200) }
+    }
     enginePid = (await backendStatus())?.pid ?? enginePid
   } catch (e) {
     result.error = String((e && e.stack) || e)
     log('error', result.error.split('\n')[0])
-    await win?.screenshot({ path: path.join(OUT, `${name}-failure.png`) }).catch(() => {})
+    await win?.screenshot({ path: path.join(OUT, `${MODE}-${name}-failure.png`) }).catch(() => {})
   } finally {
     if (app) {
       const closing = app.close().catch(() => {})
@@ -419,7 +546,8 @@ async function main() {
   // A negative control only counts when its fault demonstrably fired.
   if (NEG && !result.error) {
     const fired = { 'release-fails': (f) => f?.injected?.length > 0 && f.state.owned === false && f.state.releasing === true, 'no-restart': (f) => f?.releaseAccepted === true,
-      'no-stop': (f) => entryRunningSnapshot(f?.legacyWhileOwned), marker: (f) => f?.markerRequests > 0, 'human-off': (f) => f?.storedAfter === false && f?.getAfter?.status === 200 && f.getAfter.enabled === false }[NEG]
+      'no-stop': (f) => entryRunningSnapshot(f?.legacyWhileOwned), 'no-guards': (f) => entryRunningSnapshot(f?.legacyWhileOwned), marker: (f) => f?.markerRequests > 0,
+      'human-off': (f) => f?.storedAfter === false && f?.getAfter?.status === 200 && f.getAfter.enabled === false }[NEG]
     check('setup', 'F-fault-exercised', fired(fault), fault)
   }
   const red = result.checks.filter((c) => !c.ok).map((c) => c.id)
@@ -428,7 +556,7 @@ async function main() {
   result.red = red
   const want = EXPECT_RED[NEG]
   result.pass = result.setupOk && red.length === want.length && want.every((id) => red.includes(id))
-  fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(result, null, 2))
+  fs.writeFileSync(path.join(OUT, `${MODE}-${name}.json`), JSON.stringify(result, null, 2))
   log(result.pass ? 'PASS' : 'FAIL', `red=${JSON.stringify(red)} expected=${JSON.stringify(want)}${result.setupOk ? '' : ' (setup failed or checks missing)'}`)
   process.exit(result.pass ? 0 : 1)
 }
