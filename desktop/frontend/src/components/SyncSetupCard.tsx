@@ -19,6 +19,11 @@ import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
 import { watchAccountName } from '../services/accountName'
 import { formatDateTime } from '../format/time'
 import './syncSetup.css'
+import './syncSettingsMessages'
+import { usePageStore } from '@amadeus/store/pageStore'
+import { useSyncMode } from '../sync/v2/mode'
+import { openSyncSettings } from '../sync/v2/openSyncSettings'
+import { ensureVaultSyncSubscribed, useVaultSyncRaw } from '../sync/vaultSyncStore'
 
 registerMessages({
   'syncSetup.storageEnforced': { zh: '我的云盘 {used} / {max} · 统一额度已启用，超额时暂停增长写入', en: 'My drive {used} / {max} · unified quota active; growing writes pause over quota' },
@@ -105,7 +110,73 @@ function openPenzor(): void {
   if (useSpaceStore.getState().spaces.some((x) => x.id === PENZOR_SPACE)) setActiveSpace(PENZOR_SPACE)
 }
 
+/** 智库同步第 2 步:完整模式画只有「智库」一行的新卡(开始同步 = 去设置 › 同步那一行,在那里比一下、出汇总卡再确认);其余照旧。 */
 export function SyncSetupHost(): React.JSX.Element | null {
+  const full = useSyncMode((m) => m.mode === 'full')
+  return full ? <SyncSetupV2Card /> : <LegacySyncSetupHost />
+}
+
+function SyncSetupV2Card(): React.JSX.Element | null {
+  const { t } = useI18n()
+  const s = useSync()
+  const main = windowKind() === 'main'
+  const vaultRoot = usePageStore((x) => x.vaultRoot)
+  const vaultSide = usePageStore((x) => x.vaultSide)
+  const v2 = useVaultSyncRaw((x) => x.v2)
+  const [open, setOpen] = useState(false)
+  const [notes, setNotes] = useState(true)
+  const turn = usePopupTurn('syncSetup', open, POPUP_PRIORITY.syncSetup)
+  useEffect(() => { if (!main) return; if (window.remoteSync) startSyncSetup(); ensureVaultSyncSubscribed() }, [main])
+  let obDone = false
+  try { obDone = localStorage.getItem(ONBOARDING_DISMISS_KEY) === '1' } catch { /* 读不到当没走完:不弹 */ }
+  // 这个库已经有在跑的绑定(接手来的 / 别处开过)就不问
+  const bound = !!vaultRoot && !!v2?.bindings.some((b) => b.root === vaultRoot && b.enabled !== false)
+  const eligible = main && !!s?.signedIn && !s.decided && obDone && vaultSide === 'local' && !!vaultRoot && !!v2 && !bound
+  useEffect(() => {
+    if (!eligible || open) return
+    const timer = setTimeout(() => setOpen(true), 2500)
+    return () => clearTimeout(timer)
+  }, [eligible, open])
+  useEffect(() => { if (open && !eligible) setOpen(false) }, [open, eligible])
+  if (!main || !turn || !vaultRoot) return null
+  const name = s?.notes.rootName || (vaultRoot.split(/[\\/]/).filter(Boolean).pop() ?? vaultRoot)
+  const later = (): void => { markSyncDecided(); setOpen(false) }
+  const start = (): void => { markSyncDecided(); setOpen(false); openSyncSettings({ root: vaultRoot, intent: 'start' }) }
+  const locked = (k: string, icon: React.JSX.Element, title: string, sub: string): React.JSX.Element => (
+    <div key={k} className="sync-setup-row is-locked" data-sealed={k}>
+      <span aria-hidden="true" />
+      <span className="sync-setup-tile">{icon}</span>
+      <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
+      <span className="sync-setup-lk">{t('sync.sealed')}</span>
+    </div>
+  )
+  return (
+    <div className="u-backdrop sync-setup-backdrop">
+      <div className="modal modal-sm sync-setup" role="dialog" aria-modal="true" aria-label={t('syncSetup.title')} data-sync-setup="v2">
+        <div className="modal-head"><PenzorIcon width={16} height={16} /><span className="sync-setup-title">{t('syncSetup.title')}</span></div>
+        <div className="sync-setup-body">
+          <p className="sync-setup-lead">{t('ssync.setup.lead')}</p>
+          <label className="sync-setup-row">
+            <input type="checkbox" checked={notes} onChange={(e) => setNotes(e.target.checked)} />
+            <span className="sync-setup-tile"><NotebookPen size={15} /></span>
+            <span className="sync-setup-copy"><b>{t('syncSetup.notes', { name })}</b><small>{t('ssync.setup.notesHint')}</small></span>
+          </label>
+          {locked('agents', <Bot size={15} />, t('syncSetup.agents'), t('syncSetup.agentsHint'))}
+          {locked('plugins', <Puzzle size={15} />, t('syncSetup.c.plugins'), t('syncSetup.c.pluginsSealedHint'))}
+        </div>
+        <div className="sync-setup-foot">
+          <span className="sync-setup-hint">{t('ssync.setup.foot')}</span>
+          <span className="sync-setup-acts">
+            <button className="btn" onClick={later}>{t('syncSetup.later')}</button>
+            <button className="btn primary" disabled={!notes} data-sync-setup-start="" onClick={start}>{t('syncSetup.start')}</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LegacySyncSetupHost(): React.JSX.Element | null {
   const { t, locale } = useI18n()
   const [name, setName] = useState('')
   useEffect(() => watchAccountName(setName), [])

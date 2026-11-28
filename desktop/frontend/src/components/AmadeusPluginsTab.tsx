@@ -69,8 +69,8 @@ registerMessages({
   'settings.amadeusPlugins.hostRefused.engine-unavailable': { zh: '{api} 被拒绝：本机引擎没有及时就绪。（{time}）', en: '{api} was refused: the local engine was not ready in time. ({time})' },
   // 带主进程半身的内置包(Forsion Extend):开关改的是下次开机装不装那一半
   'settings.amadeusPlugins.lockedHint': {
-    zh: '关闭后，从下次启动起不再加载 Forsion 云端功能（账号、云同步、Connect 等），本机数据不受影响。',
-    en: 'When turned off, Forsion cloud features (account, cloud sync, Connect, and more) stop loading from the next launch. Local data is not affected.',
+    zh: '关闭后，从下次启动起不再加载 Forsion 云端功能（账号、智库同步、Connect 等），本机数据不受影响。',
+    en: 'When turned off, Forsion cloud features (account, vault sync, Connect, and more) stop loading from the next launch. Local data is not affected.',
   },
   'settings.amadeusPlugins.restartPending': { zh: '重启 Forsion 后生效。', en: 'Takes effect after Forsion restarts.' },
   'settings.amadeusPlugins.restartNow': { zh: '立即重启', en: 'Restart now' },

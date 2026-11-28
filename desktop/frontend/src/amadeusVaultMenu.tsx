@@ -9,6 +9,8 @@ import { askString } from '@amadeus/components/askString'
 import { emitAmadeusToast } from '@amadeus/unified/writeSafety'
 import { ContextMenu, type CtxItem, type CtxMenu } from './components/RightPanel'
 import { openPenzorSync, penzorSyncReady } from './services/syncSetup'
+import { isDesktopExtendOff, isFullSync, isLegacySync } from './sync/v2/mode'
+import { openSyncSettings } from './sync/v2/openSyncSettings'
 import { registerMessages, translate, useI18n } from './i18n'
 import { composeVaultSync } from '../../shared/vaultSync'
 import { VaultSyncChip } from './sync/VaultSyncChip'
@@ -88,7 +90,9 @@ export function LocalVaultButton({ vaultRoot }: { vaultRoot: string | null }) {
       { label: t('vaultMenu.openFolder'), icon: <FolderOpen size={15} />, separatorBefore: true, run: () => void usePageStore.getState().openVault() },
       { label: t('vaultMenu.new'), icon: <FolderPlus size={15} />, run: () => void newVault() },
     )
-    if (penzorSyncReady()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: openPenzorSync })
+    // 第 2 步完整模式:同步设置在设置 › 同步(定位到当前库那一行);其余照旧去蓬洲云的同步页
+    if (isFullSync()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: () => openSyncSettings(vaultRoot ? { root: vaultRoot } : undefined) })
+    else if (isLegacySync() && !isDesktopExtendOff() && penzorSyncReady()) items.push({ label: t('vaultMenu.syncSettings'), icon: <RefreshCw size={15} />, run: openPenzorSync })
     const r = el.getBoundingClientRect()
     setMenu({ x: r.left, y: r.bottom, anchorTop: r.top, items })
   }

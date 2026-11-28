@@ -6,6 +6,11 @@ import React, { useEffect, useState } from 'react'
 import { X, FolderOpen, Check } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useMobileBackClose } from '../amadeus/lib/mobileBack'
+import './syncSettingsMessages'
+
+const DEFAULT_VAULT_NAME = 'My Vault'
+export const isDefaultVault = (v: { name: string; isDefault?: unknown }): boolean =>
+  typeof v.isDefault === 'boolean' ? v.isDefault : v.name === DEFAULT_VAULT_NAME
 
 registerMessages({
   'cloudvault.title': { zh: '云端智库', en: 'Cloud vaults' },
@@ -15,14 +20,15 @@ registerMessages({
 export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.ReactElement | null {
   const { t } = useI18n()
   const collab = window.amadeusCollab
-  const [vaults, setVaults] = useState<Array<{ id: string; name: string }>>([])
+  const [vaults, setVaults] = useState<Array<{ id: string; name: string; isDefault: boolean }>>([])
   const [activeId, setActiveId] = useState('')
   // 手机上系统返回先关这张卡,不越过它去关它底下的笔记列表(桌面上这个事件从不派发)
   useMobileBackClose(true, onClose)
 
   useEffect(() => {
     if (!collab) return
-    void collab.listVaults().then((v) => setVaults(v.map((x) => ({ id: x.id, name: x.name })))).catch(() => {})
+    // 默认库(服务端的 My Vault)叫「云端笔记」(智库同步第 2 步叫法表);老服务端不带 isDefault 就按名字认
+    void collab.listVaults().then((v) => setVaults(v.map((x) => ({ id: x.id, name: x.name, isDefault: isDefaultVault(x) })))).catch(() => {})
     void collab.activeVaultId().then(setActiveId).catch(() => {})
   }, [collab])
 
@@ -40,7 +46,7 @@ export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.Rea
         {vaults.map((v) => (
           <button key={v.id} className={`amxc-row${v.id === activeId ? ' on' : ''}`}
             onClick={() => { if (v.id !== activeId) collab.switchVault(v.id) }}>
-            <span className="amxc-row-name">{v.name}</span>
+            <span className="amxc-row-name">{v.isDefault ? t('ssync.cloudNotes') : v.name}</span>
             {v.id === activeId && <Check size={13} />}
           </button>
         ))}

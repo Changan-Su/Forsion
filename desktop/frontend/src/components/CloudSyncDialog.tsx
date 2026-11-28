@@ -1,6 +1,9 @@
 /** 「开启云同步」弹窗:递归关联勾选(关联笔记/附件分组、默认全选)+ 云名冲突两路处理
  *  (换名重试 / 显式合并进现有云文件夹)。命令式打开(openCloudSyncDialog),
  *  Host 挂 AmadeusOverlays(askString 同款模式);数据面 = window.amadeusSync.entrySync*。 */
+import { usePageStore } from '@amadeus/store/pageStore'
+import { isDesktopExtendOff, isFullSync, isLegacySync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
+import { openSyncSettings } from '../sync/v2/openSyncSettings'
 import { useEffect, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
 import { Cloud, FileText, ListTree, Paperclip } from 'lucide-react'
@@ -153,7 +156,18 @@ const useDialogStore = create<{ req: Req | null; open(r: Req): void; close(): vo
   close: () => set({ req: null }),
 }))
 
-export function openCloudSyncDialog(path: string, kind: 'page' | 'folder' | 'asset'): void {
+export function openCloudSyncDialog(path: string, kind: 'page' | 'folder' | 'asset', asked = false): void {
+  // 启动后状态源第一轮还没回来(模式未知)就点了:先问一次再决定去哪,别把完整模式的人送进旧弹窗
+  if (!asked && syncModeNow() === 'unknown') { void refreshSyncMode().finally(() => openCloudSyncDialog(path, kind, true)); return }
+  // 智库同步第 2 步:完整模式下「同步这个文件夹… / 同步这篇…」都改去设置 › 同步那个库那一行(契约 §3.10),
+  // 关联闭包与缺省勾选由设置页照这里原来的算法算(sync/v2/scope.ts closureItems)
+  if (isFullSync()) {
+    const root = usePageStore.getState().vaultRoot
+    openSyncSettings({ ...(root ? { root } : {}), path, kind: kind === 'asset' ? 'file' : kind })
+    return
+  }
+  // 读不出 / 还是问不出来 / 桌面上 Extend 停用:不开旧弹窗写旧注册,去设置 › 同步看原因
+  if (!isLegacySync() || isDesktopExtendOff()) { const root = usePageStore.getState().vaultRoot; openSyncSettings(root ? { root } : undefined); return }
   useDialogStore.getState().open({ path, kind })
 }
 

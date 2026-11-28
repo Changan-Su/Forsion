@@ -12,6 +12,8 @@ import { ipcErrorText } from '../ipcError'
 import { HeldSyncNotice } from '../components/CloudSyncDialog'
 import type { SyncFeedReport, SyncProgress, SyncReviewItem, VaultSyncView } from '../../../shared/vaultSync'
 import { useVaultSyncRaw } from './vaultSyncStore'
+import { isPlaceholderReview } from './v2/feed'
+import '../components/syncSettingsMessages'
 import { openDeletesReview, openSyncSettings, retryFailed, syncNow } from './vaultSyncActions'
 import { failureText, opText, targetName, vaultSyncWords } from './vaultSyncText'
 import { SyncRecordRows, openSyncRecords } from './SyncRecordList'
@@ -57,11 +59,14 @@ function RoundProgress({ progress }: { progress: SyncProgress }) {
 }
 
 /** 「等你定」:列出是哪几篇、哪边更新(其余照常同步);「全部…」展开现成的 HeldSyncNotice(它带用哪一份的几个按钮)。 */
-function ReviewSection({ view }: { view: VaultSyncView }) {
+function ReviewSection({ view, root }: { view: VaultSyncView; root: string | null }) {
   const { t } = useI18n()
   const legacy = useVaultSyncRaw((s) => s.legacy)
   const [all, setAll] = useState(false)
   const differs = view.review.filter((r): r is Differs => r.kind === 'differs')
+  // 智库同步 v2:清单 E 还没给时(契约 U-2)feed 里是占位条目,只算数不列名;逐篇处理在设置 › 同步那一行
+  const named = differs.filter((d) => !isPlaceholderReview(d))
+  const v2Held = differs.some((d) => d.ref.feed.startsWith('vault:'))
   const deletes = [...view.review.filter((r): r is Deletes => r.kind === 'deletes'), ...view.elsewhere.deletes.filter((d) => d.accountWide)]
   const n = differs.length + deletes.reduce((a, d) => a + d.count, 0)
   if (!n) return null
@@ -71,7 +76,7 @@ function ReviewSection({ view }: { view: VaultSyncView }) {
   return (
     <section className="vsp-sec">
       <div className="vsp-head">{t('vsync.panel.review')} <span className="vsp-count tone-warning">{n}</span></div>
-      {!all && differs.slice(0, 3).map((d) => (
+      {!all && named.slice(0, 3).map((d) => (
         <div key={`${d.ref.feed}:${d.path}`} className="vsp-item" title={d.path}>
           <FileText size={13} aria-hidden="true" />
           <span className="vsp-item-name">{baseName(d.path)}</span>
@@ -81,6 +86,7 @@ function ReviewSection({ view }: { view: VaultSyncView }) {
       {differs.length > 0 && canExpand && (
         <button type="button" className="vsp-link" onClick={() => setAll((v) => !v)}>{all ? t('vsync.panel.collapse') : t('vsync.panel.all')}</button>
       )}
+      {v2Held && <button type="button" className="vsp-link" onClick={() => openSyncSettings(root)}>{t('ssync.review.goSettings')}</button>}
       {all && groups.map((g) => (
         <HeldSyncNotice key={g.feed} binding={g.status!.binding ?? null} shareKey={g.status!.shareKey ?? null} held={g.status!.held!} open compact />
       ))}
@@ -88,7 +94,7 @@ function ReviewSection({ view }: { view: VaultSyncView }) {
         <div key={`del:${d.ref.feed}:${i}`} className="vsp-item">
           <AlertCircle size={13} aria-hidden="true" className="tone-warning" />
           <span className="vsp-item-name">{d.accountWide ? t('vsync.panel.deletesAccount', { n: d.count }) : t('vsync.panel.deletes', { n: d.count })}</span>
-          <button type="button" className="vsp-link" onClick={() => openDeletesReview(d)}>{t('vsync.panel.deletesGo')}</button>
+          <button type="button" className="vsp-link" onClick={() => openDeletesReview(d, root)}>{t('vsync.panel.deletesGo')}</button>
         </div>
       ))}
     </section>
@@ -182,7 +188,7 @@ export function VaultSyncPanel({ vault, name, view, anchorRef, onClose }: {
             {t('vsync.panel.syncNow')}
           </button>
         </header>
-        <ReviewSection view={view} />
+        <ReviewSection view={view} root={vault.side === 'local' ? vault.root : null} />
         <RoundSection view={view} feeds={feeds} />
         <section className="vsp-sec">
           <div className="vsp-head">{t('vsync.panel.records')}</div>
@@ -191,7 +197,7 @@ export function VaultSyncPanel({ vault, name, view, anchorRef, onClose }: {
         <footer className="vsp-foot">
           {elsewhere > 0 ? <span className="vsp-faint tone-warning">{t('vsync.panel.elsewhere', { n: elsewhere })}</span> : <span />}
           <span className="vsp-grow" />
-          <button type="button" className="vsp-link" onClick={() => { onClose(); openSyncSettings() }}>{t('vsync.panel.settings')}</button>
+          <button type="button" className="vsp-link" onClick={() => { onClose(); openSyncSettings(vault.side === 'local' ? vault.root : null) }}>{t('vsync.panel.settings')}</button>
           <button type="button" className="vsp-link" onClick={() => { onClose(); openSyncRecords() }}>{t('vsync.panel.allRecords')}<ChevronRight size={13} aria-hidden="true" /></button>
         </footer>
       </OverlayAt>

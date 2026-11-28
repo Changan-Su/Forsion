@@ -48,7 +48,7 @@ registerMessages({
   'pc.memory.ownPlain': { zh: '专属', en: 'Own' },
   'pc.source.local': { zh: '本机', en: 'This device' },
   'pc.source.cloud': { zh: '云端', en: 'Cloud' },
-  'pc.source.sync': { zh: '云同步开', en: 'Cloud sync on' },
+  'pc.source.sync': { zh: '同步开着', en: 'Sync on' },
   'pc.source.standIn': { zh: '{name} 的分身', en: 'Stand-in for {name}' },
   'pc.source.byAgent': { zh: 'Agent 创建', en: 'Made by an agent' },
   'pc.source.temp': { zh: '本会话临时成员', en: 'Temporary member of this chat' },

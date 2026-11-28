@@ -11,8 +11,8 @@ registerMessages({
   'accountSwitcher.failed': { zh: '账号操作失败：{error}', en: 'Account action failed: {error}' },
   'accountSwitcher.loadFailed': { zh: '无法加载已登录账号', en: 'Could not load signed-in accounts' },
   'accountSwitcher.localHint': {
-    zh: 'Forsion 文件夹与本机设置共用；云同步关联和进度随账号切换。新账号需要单独开启同步。',
-    en: 'Your Forsion folder and device settings are shared. Cloud sync links and progress follow each account. Enable sync separately for a new account.',
+    zh: 'Forsion 文件夹与本机设置共用；同步的绑定和进度随账号切换。新账号需要单独开启同步。',
+    en: 'Your Forsion folder and device settings are shared. Sync bindings and progress follow each account. Enable sync separately for a new account.',
   },
 })
 
