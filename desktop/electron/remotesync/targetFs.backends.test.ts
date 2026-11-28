@@ -414,6 +414,27 @@ describe('folder', () => {
     await expect(openTargetFs({ kind: 'folder', folder: { path: path.join(root, 'unplugged') } }, 'v').walk()).rejects.toThrow(/ENOENT/)
   })
 
+  it('mkdir:只把这一层子目录建出来;配置的根不在就抛、什么都不建;子目录是指向外面的链接 → path-escapes-target', async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-mkdir-'))
+    const t = openTargetFs({ kind: 'folder', folder: { path: root } }, 'new/dir')
+    await expect(t.walk()).rejects.toThrow('target-dir-missing')
+    await t.mkdir!()
+    expect(await t.walk()).toEqual([])
+    await t.mkdir!() // 幂等
+    const unplugged = path.join(root, 'unplugged')
+    await expect(openTargetFs({ kind: 'folder', folder: { path: unplugged } }, 'v').mkdir!()).rejects.toThrow(/ENOENT/)
+    await expect(fsp.stat(unplugged)).rejects.toThrow(/ENOENT/)
+    await openTargetFs({ kind: 'folder', folder: { path: root } }, '').mkdir!() // 根本身:在就行
+    if (process.platform !== 'win32') {
+      const outside = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-outside-'))
+      symlinkSync(outside, path.join(root, 'out'))
+      await expect(openTargetFs({ kind: 'folder', folder: { path: root } }, 'out/x').mkdir!()).rejects.toThrow(/path-escapes-target/)
+      expect(await fsp.readdir(outside)).toEqual([]) // 外面一个目录都没建
+      await fsp.rm(outside, { recursive: true, force: true })
+    }
+    expect(openTargetFs({ kind: 's3', s3: { endpoint: 'http://127.0.0.1:9', region: 'us-east-1', accessKeyID: 'AK', secretAccessKey: 'SK', bucket: 'b' } }, 'v').mkdir).toBeUndefined()
+  })
+
   // Windows 建符号链接要特权,只在 POSIX 上跑
   it.skipIf(process.platform === 'win32')('stat:目录 / 符号链接 → not-a-file(walk 不列它们,也不穿过链接去写)', async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-stat-'))

@@ -52,6 +52,9 @@ export interface TargetCaps {
 export type TargetFs = RemoteFs & {
   caps: TargetCaps
   stat(key: string, signal?: AbortSignal): Promise<RemoteEntity | null>
+  /** 只有文件夹后端有(别的后端列不在的目录本来就当空,写时自己建):把 dir 这一层子目录建出来。
+   *  配置的根本身不在(U 盘没插)照旧抛 ENOENT、什么都不建 —— 不在挂载点上凭空建出目录;建完核对真实路径还在根里。 */
+  mkdir?(signal?: AbortSignal): Promise<void>
 }
 
 export interface TargetSpec {
@@ -93,7 +96,7 @@ const incomplete = (): never => {
   throw new Error('target-config-incomplete')
 }
 
-function build(spec: TargetSpec, segs: string[]): RemoteFs & Required<Pick<RemoteFs, 'stat'>> {
+function build(spec: TargetSpec, segs: string[]): RemoteFs & Required<Pick<RemoteFs, 'stat'>> & { mkdir?: TargetFs['mkdir'] } {
   const sub = segs.join('/')
   switch (spec.kind) {
     case 'folder': {
@@ -101,9 +104,21 @@ function build(spec: TargetSpec, segs: string[]): RemoteFs & Required<Pick<Remot
       if (!p) return incomplete()
       const root = path.join(p, ...segs)
       const r = createDirRemote(root, { cas: true })
-      if (!segs.length) return r
+      // 逐层建:每一层先核真实路径还在根里再往下(mkdir -p 会顺着指向外面的链接先在外面建出目录)
+      const mkdir = async (): Promise<void> => {
+        const baseReal = await fs.realpath(p) // 根不在 = ENOENT 原样抛,什么都不建
+        const inside = (x: string): boolean => x === baseReal || x.startsWith(baseReal + path.sep)
+        let cur = p
+        for (const seg of segs) {
+          cur = path.join(cur, seg)
+          try { await fs.mkdir(cur) } catch (e) { if ((e as NodeJS.ErrnoException)?.code !== 'EEXIST') throw e }
+          if (!inside(await fs.realpath(cur))) throw new Error(`path-escapes-target folder ${segs.join('/')}`)
+        }
+      }
+      if (!segs.length) return { ...r, mkdir }
       return {
         ...r,
+        mkdir,
         // 子目录不在 = 抛 target-dir-missing,绝不当空(契约 H-2 第 6 条):U 盘没插、挂载点空着时当空会读成远端全删;
         // 新建绑定由建绑定的一方在第一轮之前把目录建出来。walk 途中别的文件消失照旧抛原错。
         async walk(signal) {
@@ -163,5 +178,6 @@ export function openTargetFs(spec: TargetSpec, dir: string): TargetFs {
     rm: r.rm,
     stat: r.stat,
     check: r.check,
+    ...(r.mkdir ? { mkdir: r.mkdir } : {}),
   }
 }
