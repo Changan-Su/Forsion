@@ -6,7 +6,7 @@
  * 不发任何真网盘请求:fetch 换成绊线,Dropbox 取账号那一下单独 stub。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, promises as fsp, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -70,6 +70,13 @@ function wellFormed(id: string): void {
   for (const s of segs) expect(['', '.', '..']).not.toContain(s)
 }
 const under = (child: string, parent: string): boolean => child.startsWith(`${parent}/`)
+/** 这个值的任何形式都不在串里:原样、小写、URI 编码一次 / 两次、base64。 */
+function noFormOf(id: string, ...values: string[]): void {
+  for (const v of values) {
+    for (const form of [v, v.toLowerCase(), encodeURIComponent(v), encodeURIComponent(encodeURIComponent(v)), Buffer.from(v).toString('base64')]) expect(id).not.toContain(form)
+    expect(decodeURIComponent(decodeURIComponent(id))).not.toContain(v)
+  }
+}
 
 describe('folder targets', () => {
   it('one physical place, one string: a symlink alias, a trailing slash, a .. in the path and a missing subfolder all agree', async () => {
@@ -126,6 +133,37 @@ describe('folder targets', () => {
     } else {
       await expect(s.identity('low', 'notes')).resolves.not.toBe(await s.identity('up', 'Notes'))
     }
+  })
+
+  it('segments not created yet under an empty folder follow that folder\'s volume (Codex P2)', async () => {
+    mkdirSync(join(env.root, 'Empty'))
+    writeTargets({ up: { kind: 'folder', section: { path: join(env.root, 'Empty') } }, low: { kind: 'folder', section: { path: join(env.root, 'empty') } } })
+    const s = await seam()
+    const up = await s.identity('up', 'Sub/X')
+    wellFormed(up)
+    if (existsSync(join(env.root, 'EMPTY'))) expect(await s.identity('low', 'sub/x')).toBe(up) // 不分大小写的卷
+    else expect(up.endsWith('/Sub/X')).toBe(true) // 分大小写的卷:原样
+  })
+
+  it('when the volume rule for segments not created yet cannot be told, it is unavailable (existing paths still resolve)', async () => {
+    writeTargets({ a: { kind: 'folder', section: { path: join(env.root, 'Base') } } })
+    const s = await seam()
+    const spy = vi.spyOn(fsp, 'lstat').mockRejectedValue(Object.assign(new Error('io'), { code: 'EIO' }))
+    try {
+      await expect(s.identity('a', 'Notes/NotYet')).rejects.toThrow('target-identity-unavailable')
+      await expect(s.identity('a', 'Notes')).resolves.toMatch(/^folder:\//)
+    } finally { spy.mockRestore() }
+  })
+
+  it('remainderCaseRule: the inside probe first, then a lookup on the same volume, otherwise unknown', async () => {
+    await seam()
+    expect(mod.remainderCaseRule('keep', [{ parentDev: 1, probe: 'fold' }], 1)).toBe('keep')
+    expect(mod.remainderCaseRule('unknown', [{ parentDev: 1, probe: 'keep' }, { parentDev: 2, probe: 'fold' }], 1)).toBe('keep')
+    expect(mod.remainderCaseRule('unknown', [{ parentDev: 2, probe: 'fold' }], 1)).toBe('unknown')
+    expect(mod.remainderCaseRule('unknown', [{ parentDev: 1, probe: 'unknown' }], 1)).toBe('unknown')
+    expect(mod.remainderCaseRule('unknown', [], 1)).toBe('unknown')
+    // 分大小写:还没建的段原样
+    expect(mod.folderIdentityOf('', ['data', 'New', 'Sub'], [true, false, false])).toBe('folder:/data/New/Sub')
   })
 
   it('an unreadable folder (no permission) is unavailable, not a guess', async () => {
@@ -193,6 +231,68 @@ describe('S3 targets', () => {
     for (const k of ['a', 'b', 'c', 'd', 'root', 'other', 'port']) { const x = await s.identity(k, k === 'root' ? '' : 'x'); wellFormed(x); noSecrets(x) }
     expect(await s.identity('d', '')).not.toContain('someone')
     expect(fetchTripwire).not.toHaveBeenCalled()
+  })
+})
+
+describe('userinfo never leaks into the string (Codex P1)', () => {
+  const NAME = 'fixture-alice', PASS = 'fixture-pw-secret'
+  const clean = `s3:${encodeURIComponent('https://s3.example.test')}/notes`
+  it('S3 endpoints: s3:// and other schemes are refused; http(s) and bare hosts drop the userinfo; a mangled one is refused', async () => {
+    const cases: Record<string, string> = {
+      s3scheme: `s3://${NAME}:${PASS}@s3.example.test`,
+      ftp: `ftp://${NAME}:${PASS}@s3.example.test`,
+      https: `https://${NAME}:${PASS}@s3.example.test`,
+      httpsUpper: `HTTPS://${NAME}:${PASS}@S3.Example.TEST:443/`,
+      userOnly: `https://${NAME}@s3.example.test`,
+      bare: `${NAME}:${PASS}@s3.example.test`,
+      bareUser: `${NAME}@s3.example.test`,
+      backslashes: `https:\\\\${NAME}:${PASS}@s3.example.test`,
+      mangled: `https://${NAME}:12?x@s3.example.test`,
+      slashInPass: `${NAME}:/${PASS}@s3.example.test`,
+    }
+    writeTargets(Object.fromEntries(Object.entries(cases).map(([k, ep]) => [k, { kind: 's3', section: { endpoint: ep, bucket: 'notes', prefix: '', accessKeyID: 'fixture-access-key', secretAccessKey: 'fixture-secret-value' } }])))
+    const s = await seam()
+    for (const k of ['s3scheme', 'ftp', 'mangled', 'slashInPass']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
+    for (const k of ['https', 'httpsUpper', 'userOnly', 'bare', 'bareUser', 'backslashes']) {
+      const id = await s.identity(k, '')
+      expect(id).toBe(clean)
+      noFormOf(id, NAME, PASS)
+    }
+  })
+
+  it('WebDAV addresses: same rule (a scheme is required there); userinfo is dropped, a mangled one is refused', async () => {
+    const dav = (address: string) => ({ kind: 'webdav', section: { address, username: 'fixture-user', password: 'fixture-secret-value', baseDir: 'v' } })
+    writeTargets({
+      s3scheme: dav(`s3://${NAME}:${PASS}@dav.example.test/x`),
+      bare: dav(`${NAME}:${PASS}@dav.example.test/x`),
+      mangled: dav(`https://${NAME}:12?x@dav.example.test/x`),
+      https: dav(`https://${NAME}:${PASS}@dav.example.test/x`),
+      userOnly: dav(`https://${NAME}@dav.example.test/x`),
+      backslashes: dav(`https:\\\\${NAME}:${PASS}@dav.example.test/x`),
+      plain: dav('https://dav.example.test/x'),
+      mailInPath: dav('https://dav.example.test/remote.php/dav/files/someone@example.test/'),
+    })
+    const s = await seam()
+    for (const k of ['s3scheme', 'bare', 'mangled']) await expect(s.identity(k, '')).rejects.toThrow('target-identity-unavailable')
+    const plain = await s.identity('plain', '')
+    for (const k of ['https', 'userOnly', 'backslashes']) { const id = await s.identity(k, ''); expect(id).toBe(plain); noFormOf(id, NAME, PASS) }
+    await expect(s.identity('mailInPath', '')).resolves.toMatch(/^webdav:/) // 路径里的 @(Nextcloud 用户目录)照常
+  })
+})
+
+describe('S3 prefixes are taken literally, as the backend uses them (Codex P2)', () => {
+  const s3 = (prefix: string) => ({ kind: 's3', section: { endpoint: 'https://s3.example.test', bucket: 'notes', prefix, accessKeyID: 'fixture-access-key', secretAccessKey: 'fixture-secret-value' } })
+  it('team/../vault/ stays under team/ (not rewritten to vault/); dot-only segments are escaped; no NFC folding', async () => {
+    writeTargets({ dotdot: s3('team/../vault/'), team: s3('team/'), vault: s3('vault/'), dot: s3('a/./b'), ab: s3('a/b'), nfc: s3('caf\u00e9/'), nfd: s3('cafe\u0301/') })
+    const s = await seam()
+    const dotdot = await s.identity('dotdot', '')
+    expect(under(dotdot, await s.identity('team', ''))).toBe(true)
+    expect(dotdot).not.toBe(await s.identity('vault', ''))
+    expect(dotdot.endsWith('/team/%2E%2E/vault')).toBe(true)
+    expect(await s.identity('dot', '')).not.toBe(await s.identity('ab', ''))
+    expect((await s.identity('dot', '')).endsWith('/a/%2E/b')).toBe(true)
+    expect(await s.identity('nfc', '')).not.toBe(await s.identity('nfd', ''))
+    for (const k of ['dotdot', 'dot', 'nfc', 'nfd']) wellFormed(await s.identity(k, ''))
   })
 })
 
@@ -290,6 +390,24 @@ describe('Dropbox targets', () => {
   })
 })
 
+describe('the 10 seconds start at the door (Codex P2)', () => {
+  it('a hand-shake that waits (touch) counts toward the same 10 seconds', async () => {
+    writeTargets({ f: { kind: 'folder', section: { path: join(env.root, 'Base') } } })
+    const s = await seam()
+    const ipc = await import('./remotesyncIpc')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const touch = vi.spyOn(ipc.legacyRemoteSync, 'touch').mockImplementation(() => new Promise(() => {}))
+    let settled: string | null = null
+    const p = s.identity('f', 'Notes').then(() => 'resolved', (e: Error) => e.message).then((m) => { settled = m; return m })
+    expect(touch).toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(settled).toBeNull()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await p).toBe('target-identity-unavailable')
+    touch.mockRestore()
+  })
+})
+
 describe('identity errors', () => {
   it('only two codes, never an empty string', async () => {
     writeTargets({
@@ -331,6 +449,25 @@ describe('legacyRemoteSync().currentTargetId', () => {
     writeFileSync(cfgFile(), JSON.stringify({ ...original(), webdav: { ...original().webdav, password: 'fixture-secret-value-2' } }))
     expect((await s.legacyRemoteSync())?.currentTargetId).toBe(targetId)
     expect(readFileSync(storeFile(), 'utf8')).not.toContain('fixture-secret-value-2') // 不复制凭据、不写盘
+  })
+
+  it('same address and folder but another account (WebDAV user, S3 access key) is not it (Codex P1); only a new password keeps it', async () => {
+    writeFileSync(cfgFile(), JSON.stringify(original()))
+    const s = await seam()
+    const { targetId } = await s.importLegacyRemoteSync()
+    writeFileSync(cfgFile(), JSON.stringify({ ...original(), webdav: { ...original().webdav, username: 'fixture-user-2' } }))
+    const view = await s.legacyRemoteSync()
+    expect(view).toMatchObject({ targetId, currentTargetId: null })
+    expect(JSON.stringify(view)).not.toContain('fixture-user')
+
+    const s3cfg = (key: string) => ({ backend: 's3', intervalMin: 0, s3: { endpoint: 'https://s3.example.test', region: 'auto', bucket: 'notes', prefix: 'v/', accessKeyID: key, secretAccessKey: 'fixture-secret-value' } })
+    writeFileSync(cfgFile(), JSON.stringify(s3cfg('fixture-access-key')))
+    const s3id = (await s.importLegacyRemoteSync()).targetId
+    expect((await s.legacyRemoteSync())?.currentTargetId).toBe(s3id)
+    writeFileSync(cfgFile(), JSON.stringify(s3cfg('fixture-access-key-2')))
+    const v2 = await s.legacyRemoteSync()
+    expect(v2?.currentTargetId).toBeNull()
+    expect(JSON.stringify(v2)).not.toContain('fixture-access-key')
   })
 
   it('a user-made target at the same place is not it (import would not reuse it); off / penzor are null; an unreadable store fails the whole call', async () => {

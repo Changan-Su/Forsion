@@ -173,7 +173,20 @@ function currentTargetOf(targets: Record<string, StoredSyncTarget>, backend: str
   const kind = backend as SyncTargetKind
   if (incompleteReason(kind, section)) return null
   const source = legacySourceOf(kind, section)
-  return Object.entries(targets).find(([, t]) => t.source === source && t.kind === kind)?.[0] ?? null
+  const account = accountOf(kind, section)
+  // 来源键不含账号(WebDAV 用户名、S3 access key id):同地址同目录换了账号会撞上同一个键,再核一遍账号,对不上 = 不是它(Codex P1)。
+  // 只在内存里比,值不进返回、日志或错误。导入复用记录那条(importLegacyRemoteSync)是 #945 原有的,也只认来源键,同样的问题留着。
+  return Object.entries(targets).find(([, t]) => t.source === source && t.kind === kind && accountOf(kind, t.section) === account)?.[0] ?? null
+}
+
+/** 去处的账号(只给 currentTargetId 比对用):WebDAV 用户名、S3 access key id、Dropbox 账号 id;文件夹没有。 */
+function accountOf(kind: SyncTargetKind, s: Record<string, unknown>): string {
+  switch (kind) {
+    case 'webdav': return str(s.username)
+    case 's3': return str(s.accessKeyID)
+    case 'dropbox': return str(s.accountId)
+    case 'folder': return ''
+  }
 }
 
 // ── 目录身份(syncTargets.identity)──────────────────────────────────────────────────────────────
@@ -226,32 +239,44 @@ const realpathNative = (p: string): Promise<string> => new Promise((resolve, rej
 
 const flipAscii = (x: string): string => x.replace(/[A-Za-z]/g, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()))
 
-/** dir 这个目录项所在的卷分不分大小写:换一下 ASCII 大小写再 lstat,是同一个 inode = 不分。没有 ASCII 字母 / 别的错 = 当不分
- *  (多折 = 多认重叠 = 偏安全)。返回 true = 折。 */
-async function foldsAt(parent: string, name: string): Promise<boolean> {
+export type CaseProbe = 'fold' | 'keep' | 'unknown'
+
+/** parent 里的 name 这一项所在的卷分不分大小写:换一下 ASCII 大小写再 lstat,是同一个 inode = 不分(fold);换了以后找不到 = 分(keep);
+ *  没有 ASCII 字母、或别的错 = 判断不了(unknown)。 */
+async function probeCase(parent: string, name: string): Promise<CaseProbe> {
   const flipped = flipAscii(name)
-  if (flipped === name) return true
+  if (flipped === name) return 'unknown'
   try {
     const [a, b] = await Promise.all([fs.lstat(path.join(parent, name)), fs.lstat(path.join(parent, flipped))])
-    return a.dev === b.dev && a.ino === b.ino
+    return a.dev === b.dev && a.ino === b.ino ? 'fold' : 'keep'
   } catch (e) {
     const code = (e as NodeJS.ErrnoException)?.code
-    return !(code === 'ENOENT' || code === 'ENOTDIR')
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'keep' : 'unknown'
   }
 }
 
-/** 目录里面(新建的子目录会落在这个卷上)分不分大小写:找一个带 ASCII 字母的子项试;找不到 = 折。 */
-async function foldsInside(dir: string): Promise<boolean> {
+/** 在 dir 里面找一个带 ASCII 字母的子项来探(新建的子目录会落在 dir 所在的卷上);没有能探的 = unknown。 */
+async function probeInside(dir: string): Promise<CaseProbe> {
   let d: import('node:fs').Dir | null = null
   try {
     d = await fs.opendir(dir)
     for (let i = 0; i < 64; i++) {
       const ent = await d.read()
       if (!ent) break
-      if (flipAscii(ent.name) !== ent.name) return foldsAt(dir, ent.name)
+      if (flipAscii(ent.name) === ent.name) continue
+      const r = await probeCase(dir, ent.name)
+      if (r !== 'unknown') return r
     }
   } catch { /* 不是目录 / 读不了 */ } finally { await d?.close().catch(() => {}) }
-  return true
+  return 'unknown'
+}
+
+/** 还没建的那几段按「已存在的最深那层」所在卷的规则(Codex P2):先看那层里面的子项;探不出就看路上哪一段的查找发生在
+ *  同一个卷上(那一段的父目录 dev 相同);都没有 = unknown(调用方回 target-identity-unavailable)。纯函数。 */
+export function remainderCaseRule(inside: CaseProbe, along: ReadonlyArray<{ parentDev: number; probe: CaseProbe }>, realDev: number): CaseProbe {
+  if (inside !== 'unknown') return inside
+  for (let i = along.length - 1; i >= 0; i--) if (along[i].parentDev === realDev && along[i].probe !== 'unknown') return along[i].probe
+  return 'unknown'
 }
 
 async function folderIdentity(base: string, segs: readonly string[]): Promise<string> {
@@ -274,18 +299,27 @@ async function folderIdentity(base: string, segs: readonly string[]): Promise<st
   if (!parsed) throw new Error(ID_UNAVAILABLE)
   const rootOf = win ? (parsed.head === 'UNC' ? `\\\\${parsed.segs[0]}\\${parsed.segs[1]}\\` : `${parsed.head}\\`) : '/'
   const fold: boolean[] = []
+  const along: Array<{ parentDev: number; probe: CaseProbe }> = []
   let dirAt = rootOf
   const unc = win && parsed.head === 'UNC'
   for (let i = 0; i < parsed.segs.length; i++) {
     const name = parsed.segs[i]
     // UNC 的 server / share 和盘符一样一律折;它们已经在 rootOf 里,从第 3 段起才在 dirAt 下面探
     if (unc && i < 2) { fold.push(true); continue }
-    fold.push(await foldsAt(dirAt, name))
+    const probe = await probeCase(dirAt, name)
+    // 已存在的段:realpath.native 已经给了盘上的大小写;判断不了时照折(同一条路径每次折法一样,多折 = 多认重叠)
+    fold.push(probe !== 'keep')
+    let parentDev = -1
+    try { parentDev = (await fs.stat(dirAt)).dev } catch { /* 不算这一段 */ }
+    along.push({ parentDev, probe })
     dirAt = path.join(dirAt, name)
   }
   if (rest.length) {
-    const inside = await foldsInside(real)
-    for (let i = 0; i < rest.length; i++) fold.push(inside)
+    let realDev: number
+    try { realDev = (await fs.stat(real)).dev } catch { throw new Error(ID_UNAVAILABLE) }
+    const rule = remainderCaseRule(await probeInside(real), along, realDev)
+    if (rule === 'unknown') throw new Error(ID_UNAVAILABLE) // 判断不了还没建的段该不该折
+    for (let i = 0; i < rest.length; i++) fold.push(rule === 'fold')
   }
   const all = cleanSegments([...parsed.segs, ...rest])
   if (!all) throw new Error(ID_UNAVAILABLE)
@@ -295,27 +329,41 @@ async function folderIdentity(base: string, segs: readonly string[]): Promise<st
 const encSeg = (x: string): string => x.replace(/%/g, '%25').replace(/\//g, '%2F')
 const sha32 = (x: string): string => createHash('sha256').update(x).digest('hex').slice(0, 32)
 
-/** S3:规整后的 endpoint(同 createS3Remote 补 https://;URL 规整小写主机、去缺省端口;不要 userinfo / 查询)+ bucket + prefix。 */
-export function s3IdentityOf(section: Record<string, unknown>, segs: readonly string[]): string {
-  let ep = str(section.endpoint)
-  const bucket = str(section.bucket)
-  if (!ep || !bucket) throw new Error(ID_UNAVAILABLE)
-  if (!/^https?:\/\//i.test(ep)) ep = `https://${ep}`
+/** 只认 http / https;带了别的协议(s3://、ftp:// …)= null。bare = 允许没写协议的裸主机(S3 同 createS3Remote 补 https://)。
+ *  串只用解析后的协议 + 主机 + 端口(+ 路径),userinfo 一律丢掉:
+ *  - 不能把 `s3://名字:密码@主机` 补成 `https://s3://…`,那会把 userinfo 读成路径(Codex P1);
+ *  - 主机那一截里有 '@'、解析出来却没有 userinfo(密码里有没转义的 ? # 之类,'@' 被挤进了查询)= 认不准,null:
+ *    不然用户名会被当成主机名进串。路径里的 '@'(Nextcloud 的 /files/<邮箱>/)不受影响。 */
+function httpUrlOf(raw: string, bare: boolean): URL | null {
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):[\/\\]/.exec(raw)
+  if (scheme ? !/^https?$/i.test(scheme[1]) : !bare) return null
+  const text = scheme ? raw : `https://${raw}`
   let u: URL
-  try { u = new URL(ep) } catch { throw new Error(ID_UNAVAILABLE) }
-  const endpoint = `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`
-  const all = cleanSegments([...normPrefix(str(section.prefix)).split('/'), ...segs])
-  if (!all) throw new Error(ID_UNAVAILABLE)
-  return joinIdentity(`s3:${encodeURIComponent(endpoint)}/${encodeURIComponent(bucket)}`, all.map((x) => encSeg(x.normalize('NFC'))))
+  try { u = new URL(text.includes('%') ? text : encodeURI(text)) } catch { return null }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null
+  const authority = text.replace(/^[A-Za-z][A-Za-z0-9+.-]*:[\/\\]*/, '').split(/[\/\\]/)[0]
+  if (authority.includes('@') && !u.username && !u.password) return null
+  return u
+}
+
+/** S3:规整后的 endpoint(小写主机、去缺省端口、不要 userinfo / 查询)+ bucket + prefix。prefix 按后端那样字面用(normPrefix):
+ *  不做点段规整、不做 NFC(`team/../vault/` 就是 team 下面那个键前缀,Codex P2);只有点的段写成 %2E / %2E%2E,串里照样没有 . / .. 段。 */
+export function s3IdentityOf(section: Record<string, unknown>, segs: readonly string[]): string {
+  const bucket = str(section.bucket)
+  const u = httpUrlOf(str(section.endpoint), true)
+  if (!u || !bucket) throw new Error(ID_UNAVAILABLE)
+  const endpoint = `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}${u.pathname.replace(/\/+$/, '')}`
+  const literal = [...normPrefix(str(section.prefix)).split('/'), ...segs].filter((x) => x !== '')
+  return joinIdentity(`s3:${encodeURIComponent(endpoint)}/${encodeURIComponent(bucket)}`, literal.map((x) => (x === '.' ? '%2E' : x === '..' ? '%2E%2E' : encSeg(x))))
 }
 
 /** WebDAV:origin(不带 userinfo)+ 地址里的路径(逐段解码)+ baseDir + dir。段里的 '%' 和 '/' 再转义,解码前后同一个串。 */
 export function webdavIdentityOf(section: Record<string, unknown>, segs: readonly string[]): string {
   const addr = str(section.address)
   if (!addr) throw new Error(ID_UNAVAILABLE)
-  let u: URL
-  try { u = new URL(addr.includes('%') ? addr : encodeURI(addr)) } catch { throw new Error(ID_UNAVAILABLE) }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error(ID_UNAVAILABLE)
+  // 同 createWebdavRemote 的写法打开(没有 % 才 encodeURI);必须自带 http / https。只取 origin:userinfo 不进串(同 S3 的口径)
+  const u = httpUrlOf(addr, false)
+  if (!u) throw new Error(ID_UNAVAILABLE)
   let addrSegs: string[]
   try { addrSegs = u.pathname.split('/').map((x) => decodeURIComponent(x)) } catch { throw new Error(ID_UNAVAILABLE) }
   const all = cleanSegments([...addrSegs, ...webdavBaseDir(typeof section.baseDir === 'string' ? section.baseDir : undefined).split('/'), ...segs])
@@ -362,12 +410,13 @@ async function computeIdentity(id: string, dir: string, signal: AbortSignal): Pr
 }
 
 /** 只回两个码:target-not-found 照传,别的(可能带原文)一律 target-identity-unavailable。10 秒没出结果也算。 */
-async function targetIdentity(id: string, dir: string): Promise<string> {
+async function targetIdentity(id: string, dir: string, touch: () => Promise<void>): Promise<string> {
   const ctl = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
+  // 截止时间从公开方法进门算,握手(touch:v2 持有时要等在途那一轮)也算在这 10 秒里(Codex P2)
   const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error(ID_UNAVAILABLE)) }, TARGET_IDENTITY_TIMEOUT_MS) })
   try {
-    const out = await Promise.race([computeIdentity(id, dir, ctl.signal), timeout])
+    const out = await Promise.race([(async () => { await touch(); return computeIdentity(id, dir, ctl.signal) })(), timeout])
     if (typeof out !== 'string' || !out) throw new Error(ID_UNAVAILABLE)
     return out
   } catch (e) {
@@ -421,7 +470,7 @@ export function createSyncTargets(): SyncTargetsSeam {
     async archiveLegacyRemoteSync(archiveDir, opts) { await touch(); return legacyRemoteSync.archive(archiveDir, opts) },
     async unsealLegacyRemoteSync(opts) { await touch(); await legacyRemoteSync.unseal(opts) },
     async vaults() { await touch(); return localVaults() },
-    async identity(targetId, dir) { await touch(); return targetIdentity(targetId, dir) },
+    async identity(targetId, dir) { return targetIdentity(targetId, dir, touch) },
   }
 }
 
