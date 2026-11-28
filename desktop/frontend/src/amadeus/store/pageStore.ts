@@ -34,6 +34,7 @@ import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } f
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
+import { ipcErrorCode, ipcErrorText } from '../../ipcError'
 import { sharedEntryFor, useSharedVault } from '../../stores/sharedVaultStore'
 import { askNoteBirth, hasNoteBirthProviders } from '../plugins/templateHooks'
 import { markPluginCreated } from '../plugins/pluginCreated'
@@ -282,6 +283,9 @@ interface PageState {
   /** 上一次 restoreVault 抛错了(云端冷启动断网:GET /vaults 或 /tree 失败)、没装上库。ensureAmadeusReady 据此在
    *  联网 / 再进笔记时重试;返回 null(本地没选过库)不算失败。 */
   vaultRestoreFailed: boolean
+  /** 上一次 restoreVault 没装上库、且原因是智库设置文件读不了(amadeus-config-*)时的原始原因码,空态提示用
+   *  ipcErrorText 把它换成一句话(跟着语言走);别的失败(断网等)= null,空态照旧。仓库级,随 VAULT_KEYS 镜像到各面板。 */
+  vaultRestoreError: string | null
   /** A pending request to move the caret into a specific block (after create/delete/nav). */
   /** anchor:源码↔可视切换带过来的「光标前文本」,块内按它找回落点(见 lib/modeCursor)。 */
   focusRequest: { id: BlockId; place: FocusPlace; goalX?: number; anchor?: string } | null
@@ -641,6 +645,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
     error: null,
     vaultLoading: false,
     vaultRestoreFailed: false,
+    vaultRestoreError: null,
     focusRequest: null,
     dndActiveId: null,
     dndOverId: null,
@@ -755,7 +760,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       try {
         const info = await amadeus.restoreVault(opts?.attachOnly)
         if (stale()) return
-        set({ vaultRestoreFailed: false })
+        set({ vaultRestoreFailed: false, vaultRestoreError: null })
         if (!info) return
         set({ vaultRoot: info.root, pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
         loadFiles(info.root)
@@ -795,7 +800,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
       } catch (e) {
         if (stale()) return
         // 库没装上才记失败;装上之后 loadPage 出错归编辑器自己的「加载失败 + 重试」。
-        set({ error: String(e), vaultRestoreFailed: get().vaultRoot == null })
+        // 主进程的原因码换成当前语言的一句话(不认识的原样,只剥 invoke 前缀);设置文件读不了另记一份仓库级的,给空态提示
+        const failed = get().vaultRoot == null
+        const code = ipcErrorCode(e)
+        set({
+          error: ipcErrorText(e),
+          vaultRestoreFailed: failed,
+          vaultRestoreError: failed && code?.startsWith('amadeus-config-') ? code : null,
+        })
       } finally {
         set({ vaultLoading: false })
       }
@@ -2020,10 +2032,10 @@ export function setActivePageScope(id: string): void {
 // **仓库级**(vault 根、页面/文件/文件夹清单、页面图标)全局只有一份真相,必须在面板间镜像:
 // 新面板的 store 生下来是空的,不同步的话它里面的 [[ 补全没有候选、双链全判成未解析(红链)。
 // vaultRestoreFailed 也是仓库级:restoreVault 写进当时的活动面板,ensureAmadeusReady 的重试读的是重试那刻的活动面板(11-09 台架实测两者不同)。
-const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'filesPendingFor', 'icons', 'vaultRestoreFailed'] as const
+const VAULT_KEYS = ['vaultRoot', 'vaultSide', 'pages', 'folders', 'files', 'filesPendingFor', 'icons', 'vaultRestoreFailed', 'vaultRestoreError'] as const
 type VaultSlice = Pick<PageState, (typeof VAULT_KEYS)[number]>
 const vaultSlice = (s: PageState): VaultSlice =>
-  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, filesPendingFor: s.filesPendingFor, icons: s.icons, vaultRestoreFailed: s.vaultRestoreFailed })
+  ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, filesPendingFor: s.filesPendingFor, icons: s.icons, vaultRestoreFailed: s.vaultRestoreFailed, vaultRestoreError: s.vaultRestoreError })
 
 /**
  * 换库(切本地/云端、换根)、改名、移动前:**所有面板**的待存内容先在旧根 / 旧路径落盘。
@@ -2241,7 +2253,7 @@ export function clearScopeNotePaths(path: string, kind: 'file' | 'prefix'): void
 let restoreGen = 0
 export function invalidateVaultRestore(): void {
   restoreGen++
-  for (const s of stores.values()) s.setState({ vaultRestoreFailed: false })
+  for (const s of stores.values()) s.setState({ vaultRestoreFailed: false, vaultRestoreError: null })
 }
 
 /** 有没有哪个面板开着(或正在打开)一篇笔记。 */
