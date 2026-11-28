@@ -1137,11 +1137,21 @@ declare global {
     /** Amadeus 页面级共享+发布(web=cloudCollab / 桌面=collab IPC;移动 undefined,共享 UI 据此解闸)。 */
     amadeusCollab?: {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
+      /** 库清单(智库同步第 3 步,网页 / 手机):/libraries 的自有库,原位置库也是一项;老服务端退回 /vaults。
+       *  id = libraryId(默认库 / 独立库 = vault id;原位置库 = `<默认库 id>:Amadeus/<X>/`)。桌面没有(缺位)。 */
+      listLibraries?(): Promise<Array<{ id: string; name: string; kind: 'default' | 'own' | 'legacy'; vaultId: string; isDefault: boolean }>>
       activeVaultId(): Promise<string>
+      /** 当前打开的库的 libraryId(与 listLibraries 的 id 同一口径)。 */
+      activeLibraryId?(): Promise<string>
       /** 切活动云库(web=localStorage+reload,带 path 时切完直达这一页;桌面共享走镜像,不切库)。 */
       switchVault(id: string, path?: string): void
+      /** 按 libraryId 切库(整页刷新);原位置库以 `X/` 为根打开。 */
+      switchLibrary?(id: string): void
       /** 文件地址:不含凭据,能不能看由服务端判。 */
       fileUrl(vaultId: string, path: string): string
+      /** Translate a wire location only when it belongs to the mounted online view. */
+      fileViewPath?(vaultId: string, path: string): string | null
+      noteLocation?(path: string): { vaultId: string; path: string } | null
       // 同步共享(owner):共享单位 = 页 + 子页面树
       pageShare(path: string): Promise<{ share: AmadeusPageShare | null; quota: AmadeusCollabQuota }>
       createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }): Promise<AmadeusPageShare>
@@ -1150,14 +1160,14 @@ declare global {
       setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
       removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
       /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
-      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
-      setShareItem(id: string, path: string, included: boolean): Promise<void>
+      relatedItems?(id: string, vaultId?: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      setShareItem(id: string, path: string, included: boolean, vaultId?: string): Promise<void>
       // 参与者
       sharedWithMe(): Promise<AmadeusSharedItem[]>
       leaveShare(id: string, vaultId?: string): Promise<void>
       inviteUrl(token: string): string
       // 发布(公开只读链接)
-      publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
+      publishes(path?: string): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string; vaultId?: string }>; quota: AmadeusCollabQuota; target?: { vaultId: string; path: string } }>
       createPublish(mode: 'page' | 'subtree', path: string): Promise<{ token: string; mode: string; path: string; url: string }>
       revokePublish(token: string): Promise<void>
       /** Public View 跨库撤销：显式带 vaultId（默认变体只作用于 own vault）。 */
@@ -1358,6 +1368,7 @@ export interface AmadeusEntrySyncState {
 
 /** 页面级同步共享(分享卡片数据源)。 */
 export interface AmadeusPageShare {
+  vaultId?: string
   id: string
   path: string
   title: string
@@ -1374,6 +1385,8 @@ export interface AmadeusPageShare {
 
 export interface AmadeusRelatedItem {
   path: string
+  vaultId?: string
+  displayPath?: string
   title: string
   kind: 'page' | 'file'
   included: boolean

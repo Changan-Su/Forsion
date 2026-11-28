@@ -691,8 +691,11 @@ function SharedWithMeSection() {
   const open = (s: AmadeusSharedItem, newTab?: { newTab?: boolean }): void => {
     // 桌面:localPath=镜像内路径(与我共享/<slug>/…),镜像在云端侧,本地库侧要先切过去(离线可用);web:同库直开,跨库切过去再开。
     if (s.localPath) void usePageStore.getState().switchVaultSide('cloud').then(() => openNote(s.localPath!, newTab))
-    else if (s.vaultId === activeVault) void openNote(s.path, newTab)
-    else collab.switchVault(s.vaultId, s.path)
+    else {
+      const target = collab.fileViewPath ? collab.fileViewPath(s.vaultId, s.path) : s.vaultId === activeVault ? s.path : null
+      if (target) void openNote(target, newTab)
+      else collab.switchVault(s.vaultId, s.path)
+    }
   }
   const leave = (s: AmadeusSharedItem): void => {
     if (!s.shareId || !window.confirm(t('amxv.shared.leaveConfirm', { title: s.title }))) return

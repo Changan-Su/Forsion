@@ -26,3 +26,13 @@ it('body failures reject, but valid empty responses succeed', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })))
   await expect(http().del('/file')).resolves.toBeUndefined()
 })
+it('cancels a successful event stream probe without waiting for the stream to end', async () => {
+  const cancel = vi.fn()
+  const request = vi.fn(async () => new Response(new ReadableStream({ cancel })))
+  vi.stubGlobal('fetch', request)
+  await expect(http().checkEventStream('/events')).resolves.toBeUndefined()
+  expect(request).toHaveBeenCalledWith('https://test/api/events', expect.objectContaining({
+    headers: expect.objectContaining({ Accept: 'text/event-stream' }),
+  }))
+  expect(cancel).toHaveBeenCalledOnce()
+})

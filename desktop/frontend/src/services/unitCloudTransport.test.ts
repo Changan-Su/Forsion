@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+import { cloudLibraryRoot } from '../amadeus/lib/cloudLibraryRoot'
 import { installUnitAccount } from '../../../../web/src/unitAccount'
 import { installUnitCloudTransport, type UnitCloudCapabilities } from '../../../../web/src/unitCloudTransport'
 import { installUnitShim } from '../../../../web/src/unitShim'
@@ -44,6 +46,7 @@ beforeEach(() => {
     if (url.pathname === '/web/unit/account') return ['a', 'b'].includes(user || '')
       ? json({ userId: user, username: user, role: 'user', tenantId: `personal:${user}`, workspaceId: `personal:${user}` }) : json({}, 401)
     if (url.pathname === '/web/unit/config') return json({ config: { modelId: 'visitor-model' } })
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (url.pathname.endsWith('/vaults')) return json({ vaults: [{ id: `${user}-vault` }] })
     if (url.pathname.endsWith('/tree')) return json({ pages: ['private.md'], files: [{ path: 'Calendar.db', size: 100 }], folders: [], seq: 1 })
     if (url.pathname.endsWith('/asset-token')) return json({ token: `${user}-asset`, ttlSec: 600 })
@@ -88,7 +91,7 @@ describe('Unit cloud services share the verified visitor transport', () => {
     const { cloud, key } = await install()
     expect(contentStorageKey('amadeus_tree_snap')).toBe(key)
     expect(key).toContain('shared-unit')
-    await expect(cloud.amadeus!.restoreVault()).resolves.toMatchObject({ root: 'cloud://a-vault', pages: ['private.md'] })
+    await expect(cloud.amadeus!.restoreVault()).resolves.toMatchObject({ root: cloudLibraryRoot('a-vault', 'a-vault'), pages: ['private.md'] })
     const note = await cloud.amadeus!.loadPage('private.md')
     expect(JSON.stringify(note)).toContain('a private note')
     const calendar = await cloud.amadeus!.readDatabase('', 'Calendar.db')

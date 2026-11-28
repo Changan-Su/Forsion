@@ -21,13 +21,14 @@ beforeEach(async () => {
   vi.stubGlobal('EventSource', class { addEventListener() {} close() {} })
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit) => {
     const url = new URL(input)
+    if (url.pathname.endsWith('/libraries')) return Response.json({}, { status: 404 })
     if (url.pathname.endsWith('/vaults')) return Response.json({ vaults: [{ id: 'v' }] })
     if (url.pathname.endsWith('/tree')) return Response.json({ pages: ['board.excalidraw.md'], files: [{ path: 'T.db' }], folders: [], seq })
     if (url.pathname.endsWith('/file')) {
       if (offline) throw Error('offline')
       if (init.method === 'PUT') {
         const data = JSON.parse(String(init.body)); attempts.push(data); beforePut?.()
-        if (data.baseSeq !== seq) return Response.json({ seq, content: source }, { status: 409 })
+        if (data.baseSeq !== seq) return Response.json({ code: 'CONFLICT', seq, content: source }, { status: 409 })
         source = data.content; seq++; return Response.json({ seq })
       }
       return Response.json({ content: source, seq })

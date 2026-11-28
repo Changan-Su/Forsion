@@ -803,6 +803,11 @@ export interface OnlineVaultRef {
 }
 /** `ref` null = open the local vault. `fallback` = an online library was saved for another (or no) account. */
 export interface ActiveVaultRead { ref: OnlineVaultRef | null; fallback: null | { reason: 'account'; name: string } }
+/** Shared host and bridge root. Preserve the existing identity of default and independent vaults. */
+export function onlineVaultRoot({ vaultId, libraryId }: Pick<OnlineVaultRef, 'vaultId' | 'libraryId'>): string {
+  const root = `cloud://${vaultId}`
+  return libraryId === vaultId ? root : `${root}/${libraryId}`
+}
 
 /** One row of the bottom vault menu. `current` = open on the local side. */
 export interface LocalVaultRow {

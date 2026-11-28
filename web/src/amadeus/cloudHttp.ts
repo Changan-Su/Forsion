@@ -20,7 +20,17 @@ export class HttpError extends Error {
 }
 
 export const is404 = (e: unknown): boolean => e instanceof HttpError && e.status === 404
+/** 任何 409(含 VAULT_MOVED / ACCOUNT_CHANGED)。⚠️ 桥里判「云端更新了 / 撞名」别用它,用 isConflict409:
+ *  写到分走的前缀上的 409 VAULT_MOVED 不是冲突,当冲突处理就是重载丢字或换名另存(智库同步第 3 步 B11)。 */
 export const is409 = (e: unknown): boolean => e instanceof HttpError && e.status === 409
+const codeOf = (e: unknown): unknown => (e instanceof HttpError ? (e.body as { code?: unknown } | null)?.code : undefined)
+/** 写回的 409 VAULT_MOVED(声明了 vault-moves 才会收到;没声明的旧客户端拿 423):`{code, vaultId, prefix:'X/'}`。 */
+export const isVaultMoved = (e: unknown): boolean => is409(e) && codeOf(e) === 'VAULT_MOVED'
+/** Only an operation's documented conflict codes are safe to recover from. */
+export const isConflict409 = (e: unknown, ...codes: Array<'CONFLICT' | 'EXISTS'>): boolean =>
+  is409(e) && codes.some((code) => code === codeOf(e))
+/** 库被删进回收站:410 VAULT_DELETED(所有按库的路由)。 */
+export const isVaultDeleted = (e: unknown): boolean => e instanceof HttpError && e.status === 410 && codeOf(e) === 'VAULT_DELETED'
 
 export interface CloudHttpCfg {
   /** API 基址,如 https://host/api(无尾斜杠);路径按 `${apiBase}${path}` 拼接。 */
@@ -33,10 +43,13 @@ export interface CloudHttpCfg {
   /** Optional existing host transport/session lifetime (Unit visitor adapters). */
   request?(path: string, init?: RequestInit): Promise<Response>
   signal?: AbortSignal
+  /** 能力头 X-Content-Caps(每个请求都带,含 GET):给了就带,不给 = 老行为(服务端当旧客户端)。 */
+  caps?: string
 }
 
 export interface CloudHttp {
   get<T>(path: string, query?: Record<string, string>): Promise<T>
+  checkEventStream(path: string): Promise<void>
   post<T>(path: string, json?: unknown): Promise<T>
   /** onProgress 有值时走 XMLHttpRequest(fetch 无上传进度事件),否则照旧 fetch。 */
   postForm<T>(path: string, form: FormData, onProgress?: (sent: number, total: number) => void): Promise<T>
@@ -64,10 +77,12 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   const request = async <T>(
     method: string,
     path: string,
-    opts?: { query?: Record<string, string>; json?: unknown; form?: FormData },
+    opts?: { query?: Record<string, string>; json?: unknown; form?: FormData; headersOnly?: boolean },
   ): Promise<T> => {
     const qs = opts?.query ? `?${new URLSearchParams(opts.query).toString()}` : ''
     const headers: Record<string, string> = { Authorization: `Bearer ${assertAccount()}` }
+    if (cfg.caps) headers['X-Content-Caps'] = cfg.caps
+    if (opts?.headersOnly) headers.Accept = 'text/event-stream'
     if (method !== 'GET') headers['X-Amadeus-Client'] = cfg.clientId
     let body: BodyInit | undefined
     if (opts?.form) {
@@ -85,6 +100,11 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     try {
       const res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+      if (opts?.headersOnly && res.ok) {
+        void res.body?.cancel().catch(() => {})
+        assertAccount()
+        return undefined as T
+      }
       assertAccount()
       if (res.status === 401) {
         cfg.onUnauthorized()
@@ -119,6 +139,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       xhr.open('POST', `${cfg.apiBase}${path}`)
       xhr.setRequestHeader('Authorization', `Bearer ${token}`)
       xhr.setRequestHeader('X-Amadeus-Client', cfg.clientId)
+      if (cfg.caps) xhr.setRequestHeader('X-Content-Caps', cfg.caps)
       xhr.upload.onprogress = (ev) => {
         try { assertAccount(); if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
         catch (error) { xhr.abort(); reject(error) }
@@ -142,6 +163,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
 
   return {
     get: (path, query) => request('GET', path, { query }),
+    checkEventStream: (path) => request('GET', path, { headersOnly: true, query: cfg.caps ? { caps: cfg.caps } : undefined }),
     post: (path, json) => request('POST', path, { json: json ?? {} }),
     postForm: (path, form, onProgress) => (onProgress ? postFormXhr(path, form, onProgress) : request('POST', path, { form })),
     put: (path, json) => request('PUT', path, { json }),

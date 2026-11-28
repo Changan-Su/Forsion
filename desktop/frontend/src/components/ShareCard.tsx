@@ -109,7 +109,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   const [tab, setTab] = useState<'share' | 'publish'>('share')
   const [share, setShare] = useState<AmadeusPageShare | null>(null)
   const [quota, setQuota] = useState<AmadeusCollabQuota | null>(null)
-  const [pub, setPub] = useState<{ token: string; url: string } | null>(null)
+  const [pub, setPub] = useState<{ token: string; url: string; vaultId?: string } | null>(null)
   const [pubState, setPubState] = useState<PublishState>({ kind: 'none' }) // 含「被上级文件夹发布覆盖」
   const [pubCount, setPubCount] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -127,14 +127,14 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
     void collab.pageShare(path)
       .then((r) => { if (current()) { setShare(r.share); setQuota(r.quota); setNotOwner(false) } })
       .catch((e) => { if (current() && (e as { status?: number })?.status === 404) setNotOwner(true) })
-    void collab.publishes()
+    void collab.publishes(path)
       .then((r) => {
         if (!current()) return
         setQuota(r.quota)
         setPubCount(r.shares.length)
-        const hit = r.shares.find((s) => s.path === path && s.mode === 'page')
-        setPub(hit ? { token: hit.token, url: collab.publishUrl(hit.token) } : null)
-        setPubState(publishStateFor(path, r.shares))
+        const direct = publishStateFor(path, r.shares.filter((row) => row.mode === 'page'), r.target)
+        setPub(direct.kind === 'direct' ? { token: direct.token, url: collab.publishUrl(direct.token), vaultId: r.target?.vaultId } : null)
+        setPubState(publishStateFor(path, r.shares, r.target))
       })
       .catch(() => {})
   }
@@ -145,10 +145,11 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   }, [collab, path]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shareId = share?.id
+  const shareVaultId = share?.vaultId
   useEffect(() => {
     if (!collab || !shareId) { setRelated(null); return }
     let live = true
-    void collab.relatedItems?.(shareId).then((next) => {
+    void collab.relatedItems?.(shareId, shareVaultId).then((next) => {
       if (!live) return
       // 后加的引用不自动带上,只标「新」排最前。第一次打开没有比较的基准,都不算新。
       const seenKey = `amx.share.seen.${shareId}`
@@ -159,7 +160,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
       setRelated(next)
     }).catch(() => { if (live) setRelated(null) }) // 旧 Extend / 旧服务端没有这个接口:分区不显示
     return () => { live = false }
-  }, [collab, shareId])
+  }, [collab, shareId, shareVaultId])
 
   if (!collab) return null
 
@@ -192,12 +193,12 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
     const flip = (included: boolean): void => setRelated((r) => r && { ...r, items: r.items.map((i) => (i.path === item.path ? { ...i, included } : i)) })
     flip(!item.included)
     setFresh((list) => list.filter((p) => p !== item.path))
-    void collab.setShareItem(share!.id, item.path, !item.included)
+    void collab.setShareItem(share!.id, item.path, !item.included, item.vaultId)
       .catch(async (e) => {
         if (!alive.current) return
         flip(item.included)
         // 文件刚被移动:清单已过时,按服务端的结果重画。
-        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems!(share!.id).catch(() => null))
+        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems!(share!.id, item.vaultId).catch(() => null))
         else err(e, t('share.opFailed'))
       })
       .finally(() => alongInFlight.current.delete(item.path))
@@ -238,20 +239,20 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 <button className="amxc-ic" title={t('share.copyInvite')} onClick={() => copy(collab.inviteUrl(share.inviteToken), 'inv')}>
                   {copied === 'inv' ? <Check size={13} /> : <Copy size={13} />}
                 </button>
-                <button className="amxc-ic" title={t('share.rotate')} onClick={() => run(collab.updatePageShare(share.id, { rotate: true }), t('share.rotated'))}>
+                <button className="amxc-ic" title={t('share.rotate')} onClick={() => run(collab.updatePageShare(share.id, { rotate: true }, shareVaultId), t('share.rotated'))}>
                   <RotateCw size={13} />
                 </button>
               </div>
               <div className="amxc-frow">
                 <span className="amxc-lbl">{t('share.linkRole')}</span>
-                <select value={share.inviteRole} onChange={(e) => run(collab.updatePageShare(share.id, { role: e.target.value as 'editor' | 'viewer' }))}>
+                <select value={share.inviteRole} onChange={(e) => run(collab.updatePageShare(share.id, { role: e.target.value as 'editor' | 'viewer' }, shareVaultId))}>
                   <option value="editor">{t('share.roleEditor')}</option>
                   <option value="viewer">{t('share.roleViewer')}</option>
                 </select>
                 <span className="amxc-lbl">{t('share.openFor')}</span>
                 <select
                   value={left === null ? 'forever' : 'left'}
-                  onChange={(e) => run(collab.updatePageShare(share.id, { expiresDays: e.target.value === 'forever' ? null : Number(e.target.value) }))}
+                  onChange={(e) => run(collab.updatePageShare(share.id, { expiresDays: e.target.value === 'forever' ? null : Number(e.target.value) }, shareVaultId))}
                 >
                   {left !== null && <option value="left" hidden>{left <= 0 ? t('share.endsToday') : t('share.daysLeft', { n: left })}</option>}
                   <option value="7">{t('share.days7')}</option>
@@ -264,13 +265,13 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 {share.hasPassword ? (
                   <>
                     <span className="amxc-tag">{t('share.passwordSet')}</span>
-                    <button className="amxc-ic" title={t('share.clearPassword')} onClick={() => run(collab.updatePageShare(share.id, { password: null }), t('share.passwordCleared'))}><Trash2 size={12} /></button>
+                    <button className="amxc-ic" title={t('share.clearPassword')} onClick={() => run(collab.updatePageShare(share.id, { password: null }, shareVaultId), t('share.passwordCleared'))}><Trash2 size={12} /></button>
                   </>
                 ) : (
                   <>
                     <input className="amxc-input" placeholder={t('share.passwordOptional')} value={pwDraft} onChange={(e) => setPwDraft(e.target.value)} />
                     <button className="amxc-ic" title={t('share.setPassword')} disabled={!pwDraft.trim()}
-                      onClick={() => { const pw = pwDraft.trim(); setPwDraft(''); run(collab.updatePageShare(share.id, { password: pw }), t('share.passwordSaved')) }}>
+                      onClick={() => { const pw = pwDraft.trim(); setPwDraft(''); run(collab.updatePageShare(share.id, { password: pw }, shareVaultId), t('share.passwordSaved')) }}>
                       <Check size={13} />
                     </button>
                   </>
@@ -280,7 +281,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 <>
                   <div className="amxc-sec">{t('share.along', { n: along.filter((i) => i.included).length, total: along.length })}</div>
                   {along.map((item) => (
-                    <button key={item.path} className={`amxc-row${item.included ? ' on' : ''}`} title={item.path} onClick={() => toggleAlong(item)}>
+                    <button key={item.path} className={`amxc-row${item.included ? ' on' : ''}`} title={item.displayPath ?? item.path} onClick={() => toggleAlong(item)}>
                       <span className="amxc-row-ic">{item.kind === 'page' ? <FileText size={13} /> : <Paperclip size={13} />}</span>
                       <span className="amxc-row-name">{item.title}</span>
                       {fresh.includes(item.path) && <span className="amxc-tag">{t('share.alongNew')}</span>}
@@ -296,14 +297,14 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
               {share.participants.map((m) => (
                 <div key={m.userId} className="amxc-row static">
                   <span className="amxc-row-name">{m.username ?? m.userId.slice(0, 8)}</span>
-                  <select value={m.role} onChange={(e) => run(collab.setParticipantRole(share.id, m.userId, e.target.value as 'editor' | 'viewer'))}>
+                  <select value={m.role} onChange={(e) => run(collab.setParticipantRole(share.id, m.userId, e.target.value as 'editor' | 'viewer', shareVaultId))}>
                     <option value="editor">{t('share.roleEditor')}</option>
                     <option value="viewer">{t('share.roleViewer')}</option>
                   </select>
-                  <button className="amxc-ic" title={t('share.removeParticipant')} onClick={() => run(collab.removeParticipant(share.id, m.userId), t('share.removed'))}><Trash2 size={12} /></button>
+                  <button className="amxc-ic" title={t('share.removeParticipant')} onClick={() => run(collab.removeParticipant(share.id, m.userId, shareVaultId), t('share.removed'))}><Trash2 size={12} /></button>
                 </div>
               ))}
-              <button className="amxc-danger" disabled={busy} onClick={() => run(collab.revokePageShare(share.id), t('share.stopped'))}>
+              <button className="amxc-danger" disabled={busy} onClick={() => run(share.vaultId ? collab.revokePageShareIn(share.vaultId, share.id) : collab.revokePageShare(share.id), t('share.stopped'))}>
                 {t('share.stop')}
               </button>
             </div>
@@ -317,7 +318,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                   <button className="amxc-ic" title={t('share.copyLink')} onClick={() => copy(pub.url, 'pub')}>{copied === 'pub' ? <Check size={13} /> : <Copy size={13} />}</button>
                 </div>
                 <div className="amxc-frow">
-                  <button className="amxc-danger" disabled={busy} onClick={() => run(collab.revokePublish(pub.token), t('share.unpublished'))}>{t('share.unpublish')}</button>
+                  <button className="amxc-danger" disabled={busy} onClick={() => run(pub.vaultId ? collab.revokePublishIn(pub.vaultId, pub.token) : collab.revokePublish(pub.token), t('share.unpublished'))}>{t('share.unpublish')}</button>
                   <a className="amxc-view" href={pub.url} target="_blank" rel="noreferrer">{t('share.viewPage')}</a>
                 </div>
               </>
