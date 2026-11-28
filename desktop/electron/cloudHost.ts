@@ -56,6 +56,10 @@ export interface CloudHost {
       /** 只通知「新同步动过盘」,不写 owner(替代老 changed())。 */
       touched(account:string): Promise<void>
     }
+    /** 智库同步第 3 步起(可选,H3 定稿第 1 节;contentSyncHost.MIRROR_RETIRE):宿主认 Ownership.mirrorRetired(只停镜像)。
+     *  有它:set 不给 mirrorRetired = 沿用盘上的值、false = 撤销;get 只在退役时带 mirrorRetired:true;遮罩给旧引擎 cloudSync.mirror:false、enabled 不动。
+     *  没有它 = 不退役:老宿主的 set 会静默丢掉这个字段,Extend 退役后以 get().mirrorRetired === true 为准。 */
+    mirrorRetire?: { readonly version: 1 }
   }
   /** 智库同步第 2 步起(可选):「同步到哪」(契约 §3.4、§3.8 D、实现期修订 H-1 第 1–4 条;syncTargets.ts)。凭据留在宿主,Extend 只拿句柄。 */
   syncTargets?: import('./syncTargets').SyncTargetsSeam

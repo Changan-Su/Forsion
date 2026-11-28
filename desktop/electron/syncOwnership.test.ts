@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -16,7 +17,7 @@ vi.mock('./forsionAuth', () => ({ loadTanguCreds: () => ({ cloudUrl: 'https://cl
 vi.mock('../shared/forsionAccount', () => ({ forsionAccountId: () => env.account }))
 vi.mock('./amadeus/fs/vaultHandlers', () => ({ withTextWriteLock: async (_p: string, fn: () => Promise<void>) => fn() }))
 
-import { canonRoot, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
+import { canonRoot, contentSyncOwnedStrict, contentSyncOwnership, contentSyncOwnershipV2, maskAmadeusConfig, readMaskedAmadeusConfig, readOfflineContentOwns, setOfflineContentOwner, type OwnershipRead } from './contentSyncHost'
 import { readConfig, readSyncOwnershipV2, writeConfig, writeSyncOwnershipV2, type SyncOwnershipV2 } from './amadeus/settings'
 
 let dir = ''
@@ -243,5 +244,124 @@ describe('ownership seam', () => {
     const off = Object.values(JSON.parse(readFileSync(file, 'utf8')).accounts)[0] as Record<string, unknown>
     expect(off).not.toHaveProperty('owner')
     expect(off).not.toHaveProperty('contentOwns')
+  })
+
+  // ── 第 3 步 H3 定稿第 1 节:mirrorRetired(只停镜像)──
+  const RETIRED: SyncOwnershipV2 = { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true }
+  const lastWrite = (f: ReturnType<typeof fixture>) => f.host.writeV2.mock.calls.at(-1)![1] as SyncOwnershipV2
+
+  it('mirrorRetired: a set without the field keeps the value on disk (a rebuilt object cannot drop the retirement)', async () => {
+    const f = fixture({ v2: RETIRED, engine: 'old' })
+    await f.seam.set({ entryRoots: ['/x/VaultA', '/x/VaultB'], mirror: 'keep', human: 'engine' }, A)
+    expect(lastWrite(f)).toEqual({ ...RETIRED, entryRoots: ['/x/VaultA', '/x/VaultB'] })
+    expect(await f.seam.get(A)).toEqual({ ...RETIRED, entryRoots: ['/x/VaultA', '/x/VaultB'] })
+    expect(f.host.restartSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('mirrorRetired: true retires, false revokes and deletes the key; each change restarts the old engines like any set', async () => {
+    const f = fixture({ v2: { entryRoots: [], mirror: 'keep', human: 'engine' }, engine: 'old' })
+    await f.seam.set({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: true }, A)
+    expect(lastWrite(f)).toEqual({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: true })
+    expect((await f.seam.get(A)).mirrorRetired).toBe(true)
+    await f.seam.set({ entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: false }, A)
+    expect(lastWrite(f)).not.toHaveProperty('mirrorRetired')
+    expect(await f.seam.get(A)).not.toHaveProperty('mirrorRetired')
+    expect(f.host.restartSync).toHaveBeenCalledTimes(2)
+    expect(f.fetchFixture).not.toHaveBeenCalled() // 只动退役位不碰引擎
+  })
+
+  it('mirrorRetired: get carries it only when true on disk; a non-boolean in a set is refused', async () => {
+    expect(await fixture({ v2: { entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: false } }).seam.get(A)).not.toHaveProperty('mirrorRetired')
+    expect(await fixture().seam.get(A)).not.toHaveProperty('mirrorRetired')
+    expect(await fixture({ legacy: true }).seam.get(A)).not.toHaveProperty('mirrorRetired')
+    const f = fixture({ v2: RETIRED })
+    await expect(f.seam.set({ ...RETIRED, mirrorRetired: 'yes' as unknown as boolean }, A)).rejects.toThrow('invalid ownership')
+    expect(f.host.writeV2).not.toHaveBeenCalled()
+  })
+
+  it('mirrorRetired survives the rollback when the engine bit cannot be confirmed back (content -> engine)', async () => {
+    const prev: SyncOwnershipV2 = { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'content', mirrorRetired: true }
+    const f = fixture({ v2: prev, engine: { human: true, agents: true } })
+    f.fetchFixture.mockImplementation(async (_input, init) => {
+      if (init?.method === 'PUT') f.engine!.human = JSON.parse(String(init.body)).human
+      return new Response('', { status: 500 })
+    })
+    await expect(f.seam.set({ entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine' }, A)).rejects.toThrow()
+    expect(f.stored()).toEqual({ ...prev, human: 'engine' })
+  })
+})
+
+describe('mirrorRetired: mask and persistence (H3 final interface §1)', () => {
+  const A = 'https://cloud.test/api::alice'
+  const cfg = { cloudSync: { enabled: true, vaultId: 'v1' }, entrySync: [entry('/x/VaultA'), entry('/x/VaultB')] }
+
+  it('keep + mirrorRetired only adds cloudSync.mirror:false (enabled untouched); off still lands as enabled:false; unknown / legacy still mask everything', () => {
+    const v2 = (over: Partial<SyncOwnershipV2>): OwnershipRead => ({ kind: 'v2', value: { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', ...over } })
+    expect(maskAmadeusConfig(cfg, v2({}), false)).toEqual({ ...cfg, entrySync: [entry('/x/VaultB')] })
+    expect(maskAmadeusConfig(cfg, v2({ mirrorRetired: true }), false)).toEqual({ cloudSync: { enabled: true, vaultId: 'v1', mirror: false }, entrySync: [entry('/x/VaultB')] })
+    expect(maskAmadeusConfig(cfg, v2({ mirrorRetired: false }), false)).toEqual({ ...cfg, entrySync: [entry('/x/VaultB')] })
+    expect(maskAmadeusConfig(cfg, v2({ mirror: 'off' }), false)).toEqual({ cloudSync: { enabled: false, vaultId: 'v1' }, entrySync: [entry('/x/VaultB')] })
+    expect(maskAmadeusConfig(cfg, v2({ mirror: 'off', mirrorRetired: true }), false)).toEqual({ cloudSync: { enabled: false, vaultId: 'v1' }, entrySync: [entry('/x/VaultB')] })
+    expect(maskAmadeusConfig(cfg, v2({ mirrorRetired: true }), true)).toEqual({ cloudSync: { enabled: false, vaultId: 'v1' }, entrySync: [] })
+    expect(cfg.cloudSync).toEqual({ enabled: true, vaultId: 'v1' }) // 原配置不动
+  })
+
+  it('the strict read takes a claim with mirrorRetired (not "unknown"), refuses a non-boolean as malformed, and the write refuses it too', async () => {
+    const ns = createHash('sha256').update(A).digest('hex')
+    const file = join(dir, 'amadeus-config.json')
+    const own = (v: unknown) => writeFileSync(file, JSON.stringify({ cloudAccounts: { [ns]: { syncOwnershipV2: { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: v } } } }))
+    own(true)
+    expect(await readSyncOwnershipV2(A)).toEqual({ entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
+    own('true')
+    await expect(readSyncOwnershipV2(A)).rejects.toThrow('syncOwnershipV2 is malformed')
+    own(1)
+    await expect(readSyncOwnershipV2(A)).rejects.toThrow('syncOwnershipV2 is malformed')
+    await expect(writeSyncOwnershipV2(A, { entryRoots: [], mirror: 'keep', human: 'engine', mirrorRetired: 'yes' as unknown as boolean })).rejects.toThrow('invalid syncOwnershipV2')
+    await writeSyncOwnershipV2(A, { entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
+    expect(await readSyncOwnershipV2(A)).toEqual({ entryRoots: ['/x/VaultA'], mirror: 'keep', human: 'engine', mirrorRetired: true })
+  })
+})
+
+describe('contentSyncOwnedStrict: the old global claim, read strictly (Codex 12b round 1, #3)', () => {
+  const A = 'https://cloud.test/api::alice'
+  const state = (text: string) => { mkdirSync(join(dir, 'content-sync'), { recursive: true }); writeFileSync(join(dir, 'content-sync', createHash('sha256').update(A).digest('hex') + '.json'), text) }
+  it('no file = false; a boolean owned is taken as is; no owned key = false (the file Extend writes always has a boolean owned)', () => {
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+    expect(contentSyncOwnedStrict(null)).toBe(false)
+    state(JSON.stringify({ config: { revision: 1 }, owned: true, paused: false, files: {}, folders: {}, jobs: [] }))
+    expect(contentSyncOwnedStrict(A)).toBe(true)
+    state(JSON.stringify({ config: { revision: 1 }, owned: false, paused: false, files: {}, folders: {}, jobs: [] }))
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+    state('{}')
+    expect(contentSyncOwnedStrict(A)).toBe(false)
+  })
+  it('throws on an owned that is not a boolean, a top level that is not an object, or text that does not parse; the error carries no file text', () => {
+    for (const text of ['{"owned":"true"}', '{"owned":1}', '{"owned":null}', 'null', '[]', '"owned"', '{"owned":tr', '{"/x/V": oops}']) {
+      state(text)
+      expect(() => contentSyncOwnedStrict(A), text).toThrow()
+      try { contentSyncOwnedStrict(A) } catch (e) { expect(String((e as Error).message), text).not.toMatch(/owned|\/x\/V/) }
+    }
+  })
+})
+
+describe('readMaskedAmadeusConfig: every read the mask depends on, with fakes (H3 list item 6, Codex 12b round 1 #4)', () => {
+  const cfg = { lastVault: '/x/VaultA', cloudAccountId: 'https://cloud.test/api::alice', cloudSync: { enabled: true, vaultId: 'v1' }, entrySync: [entry('/x/VaultA')] }
+  const reads = (over: Partial<Parameters<typeof readMaskedAmadeusConfig>[0]> = {}) => ({
+    readConfig: async () => structuredClone(cfg), looseReadFailed: () => false, readV2: async () => null, legacyOwned: () => false, ...over,
+  })
+  const STOPPED_KEEPING_LOCAL = { ...cfg, cloudSync: { enabled: false, vaultId: 'v1' }, entrySync: [] }
+
+  it('nothing failed and nothing claimed: the config goes through', async () => {
+    expect(await readMaskedAmadeusConfig(reads())).toEqual(cfg)
+  })
+  it('a config read that throws gives the stopped config instead of a rejection', async () => {
+    await expect(readMaskedAmadeusConfig(reads({ readConfig: async () => { throw new Error('boom') } }))).resolves.toEqual({ cloudSync: { enabled: false }, entrySync: [] })
+  })
+  it('a loose read marked as failed masks everything even when the strict reads succeed', async () => {
+    expect(await readMaskedAmadeusConfig(reads({ looseReadFailed: () => true }))).toEqual(STOPPED_KEEPING_LOCAL)
+  })
+  it('a v2 read or a legacy-claim read that throws masks everything', async () => {
+    expect(await readMaskedAmadeusConfig(reads({ readV2: async () => { throw new Error('x') } }))).toEqual(STOPPED_KEEPING_LOCAL)
+    expect(await readMaskedAmadeusConfig(reads({ legacyOwned: () => { throw new Error('x') } }))).toEqual(STOPPED_KEEPING_LOCAL)
   })
 })

@@ -6,7 +6,7 @@ import { isDesktopExtendOff, isLegacySync, modeFrom, modeFromStatus, setSyncMode
 import { parseSyncFocus } from './openSyncSettings'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from './scope'
 import { entrySyncState } from './entries'
-import { syncErrorText } from './errors'
+import { K4_CODES, syncErrorText } from './errors'
 import { feedsOf } from '../vaultSyncStore'
 import { CREATE_CANDIDATE, VAULT_SYNC_CHANNELS as CH, type BindingScope, type VaultSyncStatus } from './types'
 import { translate } from '../../i18n'
@@ -270,5 +270,59 @@ describe('status 在兼容模式下不带原因:用 get 补(台架 probe-states 
     expect((await modeFromStatus(st)).mode).toBe('unreadable')
     expect((await modeFromStatus({ ok: true, value: { mode: 'compat', compatReason: 'content-sync-active' } as never })).mode).toBe('legacy')
     expect((await modeFromStatus({ ok: true, value: { mode: 'full' } })).mode).toBe('full')
+  })
+})
+
+describe('云端删库(Extend #146)与 E-21(Extend #148)', () => {
+  it('legacy_remote_same_root:value 里和外层的 uncovered 都留下来,形状不对就不带', () => {
+    const holder = { bindingId: null, name: '研究笔记', source: 'remotesync' }
+    expect(normalizeReply(CH.preview, { ok: true, value: { ok: false, error: 'legacy_remote_same_root', inUseBy: holder, uncovered: ['Work/', 'Plan.md'] } }))
+      .toEqual({ ok: false, error: 'legacy_remote_same_root', inUseBy: holder, uncovered: ['Work/', 'Plan.md'] })
+    expect(normalizeReply(CH.apply, { ok: false, error: 'legacy_remote_same_root', inUseBy: { ...holder, name: '' }, uncovered: 'all' }))
+      .toEqual({ ok: false, error: 'legacy_remote_same_root', inUseBy: { ...holder, name: '' }, uncovered: 'all' })
+    expect(normalizeReply(CH.setEnabled, { ok: true, value: { ok: false, error: 'legacy_remote_same_root', uncovered: ['a', 3] } }))
+      .toEqual({ ok: false, error: 'legacy_remote_same_root' })
+  })
+  it('legacy_remote_same_root 的文案:有名字写名字、列出没盖住的(超过 3 项收起)、读不出不带名字;三个出口都在', () => {
+    const named = syncErrorText('legacy_remote_same_root', t, 'A', { name: '研究笔记', source: 'remotesync', uncovered: ['Work/', 'Plan.md'] })
+    expect(named).toContain('研究笔记')
+    expect(named).toContain('Work/')
+    expect(named).toContain(t('ssync.err.legacySameRoot.exits'))
+    const many = syncErrorText('legacy_remote_same_root', t, 'A', { name: 'A', uncovered: ['a', 'b', 'c', 'd', 'e'] })
+    expect(many).toContain(t('ssync.err.legacySameRoot.more', { items: ['a', 'b', 'c'].join(t('ssync.err.legacySameRoot.sep')), n: 5 }))
+    expect(many).not.toContain('d')
+    const anon = syncErrorText('legacy_remote_same_root', t, 'A', { name: '', uncovered: 'all' })
+    expect(anon).toBe(t('ssync.err.legacySameRoot.whoAnon') + t('ssync.err.legacySameRoot.all') + t('ssync.err.legacySameRoot.exits'))
+    // create / download 只回码:不带 inUseBy 也说得通
+    expect(syncErrorText('legacy_remote_same_root', t)).toBe(anon)
+  })
+  it('另外四个准入码与 vault_deleted 各有一句,不落进通用失败', () => {
+    const generic = syncErrorText('__nope__', t)
+    for (const [code, key] of [
+      ['folder_target_nested', 'ssync.err.folderTargetNested'], ['content_sync_active', 'ssync.err.contentSyncActive'],
+      ['sync_targets_unreadable', 'ssync.err.targetsUnreadable'], ['vault_list_unreadable', 'ssync.err.vaultListUnreadable'],
+      ['vault_deleted', 'ssync.err.vaultDeleted'],
+    ] as const) {
+      expect(syncErrorText(code, t)).toBe(t(key))
+      expect(syncErrorText(code, t)).not.toBe(generic)
+      expect(t(key)).not.toBe(key)
+    }
+    // folder_target_nested 不再说成「两个库套在一起」
+    expect(syncErrorText('folder_target_nested', t)).not.toBe(t('ssync.err.overlap'))
+  })
+  it('K4 码表带上 E-21 的五个码(K4 被拒时才回读「原来那条已停」),别的码不算', () => {
+    for (const code of ['legacy_remote_same_root', 'folder_target_nested', 'content_sync_active', 'sync_targets_unreadable', 'vault_list_unreadable', 'remote_dir_in_use']) {
+      expect(K4_CODES.test(code)).toBe(true)
+      expect(K4_CODES.test(`Error: ${code}`)).toBe(true)
+    }
+    for (const code of ['vault_deleted', 'stale', 'preview_required', 'signed_out']) expect(K4_CODES.test(code)).toBe(false)
+  })
+  it('cloud_deleted 的几种说法中英文都在', () => {
+    for (const k of ['plain', 'auto', 'manual', 'until', 'purging', 'purged', 'reverted']) {
+      expect(t(`ssync.reason.cloud_deleted.${k}`, { date: '2026-12-28' })).not.toBe(`ssync.reason.cloud_deleted.${k}`)
+    }
+    expect(t('ssync.act.openPenzor')).not.toBe('ssync.act.openPenzor')
+    expect(t('ssync.act.reupload')).not.toBe('ssync.act.reupload')
+    expect(t('ssync.act.backToLegacy', { name: 'Lab' })).toContain('Lab')
   })
 })

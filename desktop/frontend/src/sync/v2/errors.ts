@@ -4,11 +4,13 @@ import '../../components/syncSettingsMessages'
 import { TARGET_ERROR_CODES, targetErrorKey } from './targets'
 
 type T = (key: string, vars?: Record<string, unknown>) => string
+/** K4 只会落在新去处的准入码上(E-16 附):别的拒绝码不去回读、不说「旧的停了」。 E-21(Extend #148)的五个码也算。 */
+export const K4_CODES = /(root_nested|remote_dir_nested|remote_dir_in_use|already_local|entry_sync_active|mirror_root|takeover_in_progress|legacy_remote_same_root|folder_target_nested|content_sync_active|sync_targets_unreadable|vault_list_unreadable)\s*$/
 /** E 抛的错误码(`Error('xxx')` 经两层信封后可能带前缀)→ 一句人话。 */
-const OVERLAP = new Set(['root_nested', 'primary_exists', 'folder_target_nested', 'mirror_root'])
+const OVERLAP = new Set(['root_nested', 'primary_exists', 'mirror_root'])
 /** inUseBy:remote_dir_in_use 时占着那个目录的(E-17,VsResult 带出来的)。source = remotesync:原来的网盘同步占着(E-19);
  *  takeover:占着的那条是接手旧同步时建的,用户停不掉(E-19 第 4 件),不叫人去停它。 */
-export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: string; source?: string; takeover?: boolean }): string {
+export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: string; source?: string; takeover?: boolean; uncovered?: string[] | 'all' }): string {
   const code = /([a-z][a-z0-9_-]+)\s*$/.exec(err)?.[1] ?? err
   if (code === 'not_signed_in') return t('ssync.err.signedOut')
   if (code === 'reserved') return t('ssync.err.reserved', { name })
@@ -33,6 +35,20 @@ export function syncErrorText(err: string, t: T, name = '', inUseBy?: { name: st
   if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
   if (code === 'binding_not_running') return t('ssync.err.notRunning')
   if (code === 'remote_dir_nested') return t('ssync.err.remoteDirNested')
+  // E-21:旧网盘同步正跑着这个根,新范围有它没忽略的部分;出口三选一。create / download 只回码,不带 inUseBy / uncovered
+  if (code === 'legacy_remote_same_root') {
+    const who = inUseBy?.name ? t('ssync.err.legacySameRoot.who', { name: inUseBy.name }) : t('ssync.err.legacySameRoot.whoAnon')
+    const u = inUseBy?.uncovered
+    const what = Array.isArray(u) && u.length
+      ? t('ssync.err.legacySameRoot.some', { items: u.length > 3 ? t('ssync.err.legacySameRoot.more', { items: u.slice(0, 3).join(t('ssync.err.legacySameRoot.sep')), n: u.length }) : u.join(t('ssync.err.legacySameRoot.sep')) })
+      : t('ssync.err.legacySameRoot.all')
+    return `${who}${what}${t('ssync.err.legacySameRoot.exits')}`
+  }
+  if (code === 'folder_target_nested') return t('ssync.err.folderTargetNested')
+  if (code === 'content_sync_active') return t('ssync.err.contentSyncActive')
+  if (code === 'sync_targets_unreadable') return t('ssync.err.targetsUnreadable')
+  if (code === 'vault_list_unreadable') return t('ssync.err.vaultListUnreadable')
+  if (code === 'vault_deleted') return t('ssync.err.vaultDeleted')
   if (code === 'remote_dir_in_use') {
     if (inUseBy?.source === 'remotesync') return inUseBy.name ? t('ssync.err.legacyInUse', { name: inUseBy.name }) : t('ssync.err.legacyInUseAnon')
     if (inUseBy?.name && inUseBy.takeover) return t('ssync.err.remoteDirInUseTakeover', { name: inUseBy.name })

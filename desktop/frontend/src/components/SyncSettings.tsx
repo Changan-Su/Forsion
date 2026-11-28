@@ -22,10 +22,12 @@ import { vaultSyncWords } from '../sync/vaultSyncText'
 import { SyncRecordsDialogHost } from '../sync/SyncRecordList'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, deviceName, vaultSync } from '../sync/v2/client'
 import { modeFrom, setSyncMode } from '../sync/v2/mode'
-import { syncErrorText } from '../sync/v2/errors'
+import { K4_CODES, syncErrorText } from '../sync/v2/errors'
+import { formatDate } from '../format/time'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from '../sync/v2/scope'
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
+import { PENZOR_SPACE_ID } from '../services/syncSetup'
 import { CREATE_CANDIDATE, type RemoteDirHolder, type TakeoverHoldReason, type TakeoverView } from '../sync/v2/types'
 import { useApp } from '../stores/appStore'
 import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, isUnsupportedKind, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
@@ -48,6 +50,14 @@ type TFn = (key: string, vars?: Record<string, unknown>) => string
 function reasonText(b: BindingView, t: TFn, data: VaultSyncGet): string {
   const code = b.status.reason!
   // 远端目录被别的库占着(E-17):写出是哪个库;停着的那条也占着
+  // 云端这个库被删了(Extend #146):停着、本机文件都在;按能不能恢复、会不会自己接着跑分开说
+  if (code === 'cloud_deleted') {
+    const cd = b.status.cloudDeleted
+    const k = !cd ? 'plain' : cd.purged ? 'purged' : cd.purging ? 'purging' : cd.reverted ? 'reverted' : cd.autoResume ? 'auto' : 'manual'
+    const until = (k === 'auto' || k === 'manual') && cd?.purgeAt && Number.isFinite(Date.parse(cd.purgeAt))
+      ? t('ssync.reason.cloud_deleted.until', { date: formatDate(cd.purgeAt) }) : ''
+    return t(`ssync.reason.cloud_deleted.${k}`) + until
+  }
   if (code === 'remote_dir_in_use') {
     const u = withHolder(data, b.status.inUseBy)
     if (u?.source === 'remotesync') return t('ssync.reason.remote_dir_in_use_legacy')
@@ -62,10 +72,10 @@ function reasonText(b: BindingView, t: TFn, data: VaultSyncGet): string {
 
 /** 占着的那条是不是接手旧同步时建的(state takeover):refused / reverted 留下的那条用户停不掉(点了回 takeover_in_progress,E-19 第 4 件),
  *  提示里不叫人去停它、也不给跳过去的按钮。 */
-type HolderInfo = RemoteDirHolder & { takeover?: boolean }
-function withHolder(data: VaultSyncGet, u?: RemoteDirHolder): HolderInfo | undefined {
-  if (!u) return undefined
-  return { ...u, takeover: !!u.bindingId && data.bindings.some((x) => x.id === u.bindingId && x.state === 'takeover') }
+type HolderInfo = RemoteDirHolder & { takeover?: boolean; uncovered?: string[] | 'all' }
+function withHolder(data: VaultSyncGet, u?: RemoteDirHolder, uncovered?: string[] | 'all'): HolderInfo | undefined {
+  if (!u) return uncovered ? { bindingId: null, name: '', uncovered } : undefined
+  return { ...u, takeover: !!u.bindingId && data.bindings.some((x) => x.id === u.bindingId && x.state === 'takeover'), ...(uncovered ? { uncovered } : {}) }
 }
 /** 「去『X』」只给用户在那一行能停掉的(不是原来的网盘同步、也不是接手建的那条)。 */
 function canGoto(data: VaultSyncGet, u?: RemoteDirHolder): u is RemoteDirHolder & { bindingId: string } {
@@ -207,8 +217,6 @@ function staleCardText(p: Pending, g: { ok: true; value: VaultSyncGet } | { ok: 
   if (!g.ok) return syncErrorText(g.error, t, p.name)
   return fresh ? t('ssync.err.targetMoved') : crossKindError(p, 'binding_not_found', t)
 }
-/** K4 只会落在新去处的准入码上(E-16 附):别的拒绝码不去回读、不说「旧的停了」。 */
-const K4_CODES = /(root_nested|remote_dir_nested|remote_dir_in_use|already_local|entry_sync_active|mirror_root|takeover_in_progress)\s*$/
 
 /** 落点只认一次:设置层拿着同一个 focus 对象,子页切走再回来(组件重挂)不再重放一遍预演(Codex P2-4)。 */
 const consumedFocus = new WeakSet<object>()
@@ -267,10 +275,12 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     return out
   }, [data, vaults])
 
-  // 没绑定的库先问一次云端同名(开关能不能开、汇总卡标题,都要它)
+  // 没绑定的库先问一次云端同名(开关能不能开、汇总卡标题,都要它);
+  // 分库撤销停着的那条也问:原位置库回到清单里了,就给「换回原来的库」(Extend #146,E 口径)
   useEffect(() => {
     for (const r of rows) {
-      if (bindingOf(r.root) || names[r.root]) continue
+      const b = bindingOf(r.root)
+      if ((b && !(b.status.reason === 'cloud_deleted' && b.status.cloudDeleted?.reverted)) || names[r.root]) continue
       void vaultSync.resolveName(r.root).then((res) => setNames((m) => ({ ...m, [r.root]: res.ok && res.value ? res.value : { error: res.ok ? 'empty' : res.error } })))
     }
   }, [rows]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -315,7 +325,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
       }
     }
     setPending(null)
-    say(p.root, crossKindError(p, err, t, r.ok ? undefined : withHolder(dataRef.current, r.inUseBy)))
+    say(p.root, crossKindError(p, err, t, r.ok ? undefined : withHolder(dataRef.current, r.inUseBy, r.uncovered)))
     return false
   }, [t])
 
@@ -468,7 +478,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
     if (r.ok) say(p.root, null)
     else {
-      const text = crossKindError(p, r.error, t, withHolder(dataRef.current, r.inUseBy))
+      const text = crossKindError(p, r.error, t, withHolder(dataRef.current, r.inUseBy, r.uncovered))
       say(p.root, k4 ? `${text} ${t('ssync.err.moveHalf')}` : text)
     }
     refreshVaultSync()
@@ -528,10 +538,10 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               const b = bindingOf(r.root)
               if (!on) {
                 if (pending?.root === r.root) { ++reqRef.current; setPending(null) }
-                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); refreshVaultSync(); await reload() }
+                if (b) { const res = await vaultSync.setEnabled(b.id, false); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy, res.uncovered))); refreshVaultSync(); await reload() }
                 return
               }
-              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); await reload(); return }
+              if (b) { const res = await vaultSync.setEnabled(b.id, true); say(r.root, res.ok ? null : syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy, res.uncovered))); await reload(); return }
               await startOpen(r.root, r.name, { mode: 'all' }, [])
             }}
             onScope={(b, next, added) => void changeScope(b, next, added)}
@@ -542,12 +552,14 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
             onConnect={(b, kind, id) => void connect(b, kind, id)}
             onAuthCancel={stopAuth}
             onOpenDrive={legacy ? openDrive : undefined}
+            onRepoint={(b, c) => void runPreview({ root: b.root, name: r.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor', candidate: c }, scope: b.scope, added: [], preview: null })}
+            onReupload={(b) => void runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })}
             onAuthCode={async (code) => { const a = authRef.current; if (!a) return; const res = await finishAuth(a.attempt, code); if (!res.ok) say(a.root, t(targetErrorKey(res.error ?? 'auth-failed'))) }}
             onPair={(b) => void runPreview({ root: b.root, name: b.name, kind: 'cloud', bindingId: b.id, target: { kind: 'penzor' }, scope: b.scope, added: [], preview: null })}
             onNewVault={(b) => void (async () => {
               // 改名后「当成新库上云」:引擎回 next: preview → 按新文件夹名预演一个新库,汇总卡确认了才建、换过去(旧库原样留着)
               const res = await vaultSync.renameAnswer(b.id, 'newVault')
-              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy))); return }
+              if (!res.ok) { say(r.root, syncErrorText(res.error, t, r.name, withHolder(dataRef.current, res.inUseBy, res.uncovered))); return }
               await runPreview({ root: b.root, name: r.name, kind: 'new', bindingId: b.id, target: { kind: 'penzor', candidate: CREATE_CANDIDATE }, scope: b.scope, added: [], preview: null })
             })()}
             reload={reload} say={(text) => say(r.root, text)} onRecovery={() => setRecKey((k) => k + 1)} />
@@ -654,7 +666,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
 /** 一个库一行:名字 / 位置 · 状态 · 同步到 · 范围 · 开关;下面挂提示、要你选的、等你定、接手卡。 */
 interface AuthState { root: string; bindingId: string; attempt: string; mode: 'auto' | 'manual'; kind: AuthKind; reauth: boolean }
 
-function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery, targets, auth, onTarget, onAddFolder, onConnect, onAuthCancel, onAuthCode, onOpenDrive }: {
+function VaultRow({ row, binding: b, data, names, message, busy, expanded, entries, v2, onExpand, onToggle, onScope, onPair, onNewVault, reload, say, onRecovery, targets, auth, onTarget, onAddFolder, onConnect, onAuthCancel, onAuthCode, onOpenDrive, onReupload, onRepoint }: {
   row: { root: string; name: string; display: string; current: boolean; exists: boolean }
   binding: BindingView | undefined
   data: VaultSyncGet
@@ -669,6 +681,9 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
   onScope: (b: BindingView, next: BindingScope, added: ScopeItem[]) => void
   onPair: (b: BindingView) => void
   onNewVault: (b: BindingView) => void
+  /** 云端库被删了:重新上传成新库(走预演 / 汇总卡换去处,Extend #146) */
+  onReupload?: (b: BindingView) => void
+  onRepoint?: (b: BindingView, c: ResolveCandidate) => void
   reload: () => Promise<void>
   say: (text: string | null) => void
   onRecovery: () => void
@@ -760,6 +775,35 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
               {t('ssync.reason.gotoHolder', { name: b.status.inUseBy.name })}
             </button>
           )}
+          {b.status.reason === 'cloud_deleted' && (() => {
+            // 已清理 / 在清理 / 分库撤销的 410 一直停着,恢复和「重试」都没用;撤销的文件回了原库,不给「重新上传」免得多一份
+            const cd = b.status.cloudDeleted
+            const restorable = !cd || (!cd.purged && !cd.purging && !cd.reverted)
+            return (<>
+              {restorable && (
+                <button type="button" className="btn ghost sm" data-ssync-open-penzor="" onClick={() => window.tangu?.requestMainAction?.('open-space', PENZOR_SPACE_ID)}>{t('ssync.act.openPenzor')}</button>
+              )}
+              {/* 「重试」= setEnabled(true):引擎只刷新、不跑轮次,接着要 run 这一条(Extend #146) */}
+              {restorable && (
+                <button type="button" className="btn ghost sm" data-ssync-retry-deleted="" onClick={() => void (async () => {
+                  const res = await vaultSync.setEnabled(b.id, true)
+                  if (!res.ok) { say(syncErrorText(res.error, t, row.name, withHolder(data, res.inUseBy, res.uncovered))); return }
+                  say(null)
+                  await vaultSync.run(b.id)
+                  refreshVaultSync()
+                  await reload()
+                })()}>{t('ssync.retry')}</button>
+              )}
+              {/* 分库撤销:文件回了原位置库,按库文件夹名认回那一项(kind 'legacy'),走同一个 preview / apply;认不到就不给 */}
+              {cd?.reverted && onRepoint && (() => {
+                const c = names && 'candidates' in names && !names.error ? names.candidates.find((x) => x.kind === 'legacy') : undefined
+                return c ? <button type="button" className="btn ghost sm" data-ssync-repoint="" onClick={() => onRepoint(b, c)}>{t('ssync.act.backToLegacy', { name: c.name || row.name })}</button> : null
+              })()}
+              {b.target.kind === 'penzor' && !cd?.reverted && onReupload && (
+                <button type="button" className="btn ghost sm" data-ssync-reupload="" onClick={() => onReupload(b)}>{t('ssync.act.reupload')}</button>
+              )}
+            </>)
+          })()}
         </div>
       )}
       {b?.status.overlapsLegacy && (
@@ -776,7 +820,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
             const r = await vaultSync.takeoverRevert(row.root, take.source)
             const code = r.ok ? '' : (/([a-z][a-z0-9_]+)\s*$/.exec(r.error)?.[1] ?? r.error)
             // 封着的 D 点退回会被拒,码就是 reason 本身(H):照「为什么封着、怎么解开」说
-            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason, inUseBy: r.inUseBy ?? (code === take.reason ? take.inUseBy : undefined) }, dArchived, t, data) : syncErrorText(r.error, t, row.name, withHolder(data, r.inUseBy)))
+            say(r.ok ? null : take.source === 'remotesync' && D_HOLD.has(code) ? dHoldText({ ...take, reason: code as TakeoverHoldReason, inUseBy: r.inUseBy ?? (code === take.reason ? take.inUseBy : undefined) }, dArchived, t, data) : syncErrorText(r.error, t, row.name, withHolder(data, r.inUseBy, r.uncovered)))
             await reload()
           })()}>{t('ssync.act.revert')}</button>}
         </div>
