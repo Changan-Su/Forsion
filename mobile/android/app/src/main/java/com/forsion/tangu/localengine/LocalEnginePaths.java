@@ -33,6 +33,7 @@ import java.util.Map;
  *                                    touches conversations.
  *   files/local-engine/secrets/<k>/cloud-token  the account token for model calls, bound read-only-ish to
  *                                    /run/forsion (outside home so that home can move to a new phone without it)
+ *   files/local-engine/selftest      throwaway engine data for the install self-test (one real start), deleted after it
  *   files/local-engine/proc-standins static stand-ins for /proc files apps cannot read
  *   files/local-engine/installed.json what is installed (layer versions + sha256); pending.json while a swap is
  *                                    in progress (LocalEngineInstaller.recover)
@@ -64,6 +65,7 @@ final class LocalEnginePaths {
     final File secrets;
     final File standins;
     final File installedJson;
+    final File selftest;
     final File cache;
     final File downloads;
     final File prootTmp;
@@ -76,6 +78,7 @@ final class LocalEnginePaths {
         secrets = new File(base, "secrets");
         standins = new File(base, "proc-standins");
         installedJson = new File(base, "installed.json");
+        selftest = new File(base, "selftest");
         cache = new File(ctx.getCacheDir(), "local-engine");
         downloads = new File(cache, "downloads");
         prootTmp = new File(cache, "proot-tmp");
@@ -128,11 +131,23 @@ final class LocalEnginePaths {
     static final String GUEST_TOKEN_FILE = "/run/forsion/cloud-token";
 
     List<String> engineBinds(String account) {
-        home(account).mkdirs();
-        workspace(account).mkdirs();
-        secretDir(account).mkdirs();
-        return Arrays.asList("-b", home(account).getPath() + ":/root/.tangu", "-b", workspace(account).getPath() + ":/root/workspace",
-                "-b", secretDir(account).getPath() + ":/run/forsion");
+        return binds(home(account), workspace(account), secretDir(account));
+    }
+
+    /**
+     * The install self-test's engine data: same mount points as an account's, in a throwaway tree under selftest (no
+     * account's home, workspace or token is ever bound into the self-test). The caller deletes selftest afterwards.
+     */
+    List<String> selftestBinds() {
+        return binds(new File(selftest, "home"), new File(selftest, "workspace"), new File(selftest, "secrets"));
+    }
+
+    private static List<String> binds(File home, File workspace, File secret) {
+        home.mkdirs();
+        workspace.mkdirs();
+        secret.mkdirs();
+        return Arrays.asList("-b", home.getPath() + ":/root/.tangu", "-b", workspace.getPath() + ":/root/workspace",
+                "-b", secret.getPath() + ":/run/forsion");
     }
 
     /**

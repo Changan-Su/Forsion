@@ -4,14 +4,14 @@ import android.system.Os;
 import android.system.OsConstants;
 import android.util.Log;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayDeque;
@@ -22,9 +22,11 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * One run of the Tangu engine inside PRoot: the engine binds an ephemeral loopback port itself (--port 0) and prints
- * it on its first ready line, read here from its own stdout — no port is picked here and released for the child to
- * take later, so nothing else can grab it in between and receive the token. A fresh local token per start
+ * One run of the Tangu engine inside PRoot: the engine binds an ephemeral loopback port itself (--port 0) and reports
+ * it on its machine-readable ready line (TANGU_READY_LINE=1 → "TANGU_READY {json}", tangu-agent
+ * standalone/readyLine.ts), read here from its own stdout — no port is picked here and released for the child to
+ * take later, so nothing else can grab it in between and receive the token. The human-readable startup lines are
+ * never parsed: rewording them cannot break starts. A fresh local token per start
  * (native-only), health check, stop. What the probes taught (probe-apk/REPORT.md):
  *  - PRoot ignores SIGTERM, and Process.destroy() sends SIGTERM: stop by SIGTERM to the guest (node), then SIGKILL PRoot.
  *  - Exit codes lie: after a glibc "double free" the engine exited with 0. Any exit before /health answered counts as a
@@ -45,8 +47,33 @@ final class LocalEngineProcess {
     private final Deque<String> tail = new ArrayDeque<>();
     private volatile boolean stopping;
 
-    /** The engine's ready line (tangu-agent standalone/main.ts): "[tangu] standalone … http://127.0.0.1:<port>". */
-    private static final java.util.regex.Pattern READY = java.util.regex.Pattern.compile("^\\[tangu\\] standalone .*http://127\\.0\\.0\\.1:(\\d{1,5})\\s*$");
+    /** Asks the engine for its ready line; READY_PREFIX starts it. Both must match tangu-agent standalone/readyLine.ts (LocalEngineProcessTest checks). */
+    static final String READY_ENV = "TANGU_READY_LINE";
+    static final String READY_PREFIX = "TANGU_READY ";
+
+    /**
+     * The port from the engine's ready line, or 0 when the line is not one: the prefix, then exactly one JSON object
+     * and nothing after it (Android's JSONObject(String) would accept trailing text), with an integer port in 1..65535.
+     */
+    static int parseReadyLine(String line) {
+        if (line == null || !line.startsWith(READY_PREFIX)) return 0;
+        String payload = line.substring(READY_PREFIX.length());
+        if (payload.isEmpty() || payload.charAt(0) != '{') return 0;
+        try {
+            org.json.JSONTokener t = new org.json.JSONTokener(payload);
+            Object o = t.nextValue();
+            if (!(o instanceof org.json.JSONObject) || t.more()) return 0;
+            Object p = ((org.json.JSONObject) o).opt("port");
+            if (!(p instanceof Integer)) return 0; // 1.5, "123", a long: not a port
+            int v = (Integer) p;
+            return v > 0 && v < 65536 ? v : 0;
+        } catch (org.json.JSONException e) {
+            return 0;
+        }
+    }
+
+    /** Bytes kept of one output line; the rest of a longer line is drained and dropped (a layer that never prints a newline cannot exhaust the heap). */
+    static final int MAX_LINE_BYTES = 8192;
 
     private LocalEngineProcess(Process p, String token) {
         this.process = p;
@@ -69,6 +96,7 @@ final class LocalEngineProcess {
         env.put("TANGU_BROWSER_EXTENSION", "0");
         env.put("NODE_ENV", "production");
         if (extraEnv != null) env.putAll(extraEnv);
+        env.put(READY_ENV, "1"); // after extraEnv: the port comes from nowhere else
         List<String> argv = paths.prootArgv("/opt/tangu", binds,
                 java.util.Arrays.asList("/opt/node/bin/node", "dist/standalone/main.js", "--port", "0", "--host", "127.0.0.1"));
         ProcessBuilder pb = new ProcessBuilder(argv);
@@ -98,17 +126,40 @@ final class LocalEngineProcess {
     boolean alive() { return !stopping && process.isAlive(); }
 
     /** GET /health over a raw socket; -1 when unreachable. */
-    int health(int timeoutMs) {
+    int health(int timeoutMs) { return status(port, "/health", null, timeoutMs); }
+
+    /** GET path on this engine with a bearer token; see {@link #status(int, String, String, int)}. */
+    int status(String path, String bearer, int timeoutMs) { return status(port, path, bearer, timeoutMs); }
+
+    /**
+     * GET path on 127.0.0.1:port over a raw socket (optionally with a bearer token): the response's status code, or
+     * -1. Never follows redirects — a 302 to /health must not pass for an authed 200 — and bounded by timeoutMs
+     * overall, however slowly the other side drips its status line. Only the status line is read.
+     */
+    static int status(int port, String path, String bearer, int timeoutMs) {
+        if (port <= 0) return -1;
+        long end = System.nanoTime() + Math.max(1, timeoutMs) * 1_000_000L;
         try (Socket s = new Socket()) {
-            s.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), timeoutMs);
-            s.setSoTimeout(timeoutMs);
+            s.connect(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), (int) Math.max(1, Math.min(3000, timeoutMs)));
             OutputStream o = s.getOutputStream();
-            o.write(("GET /health HTTP/1.0\r\nHost: 127.0.0.1:" + port + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            o.write(("GET " + path + " HTTP/1.0\r\nHost: 127.0.0.1:" + port + "\r\n"
+                    + (bearer == null ? "" : "Authorization: Bearer " + bearer + "\r\n")
+                    + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             o.flush();
-            byte[] buf = new byte[64];
-            int n = s.getInputStream().read(buf);
-            if (n < 12) return -1;
-            String line = new String(buf, 0, n, StandardCharsets.US_ASCII);
+            InputStream in = s.getInputStream();
+            byte[] buf = new byte[12]; // "HTTP/1.1 200"
+            int n = 0;
+            while (n < buf.length) {
+                long left = (end - System.nanoTime()) / 1_000_000L;
+                if (left <= 0) return -1;
+                s.setSoTimeout((int) Math.max(1, Math.min(1000, left)));
+                int r;
+                try { r = in.read(buf, n, buf.length - n); } catch (SocketTimeoutException slow) { continue; }
+                if (r < 0) return -1;
+                n += r;
+            }
+            String line = new String(buf, StandardCharsets.US_ASCII);
+            if (!line.startsWith("HTTP/1.")) return -1;
             return Integer.parseInt(line.substring(9, 12));
         } catch (Exception e) {
             return -1;
@@ -138,25 +189,59 @@ final class LocalEngineProcess {
     synchronized List<String> tail() { return new ArrayList<>(tail); }
 
     private void pump() {
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                if (token != null && !token.isEmpty()) line = line.replace(token, "***");
-                if (port == 0) {
-                    java.util.regex.Matcher m = READY.matcher(line);
-                    if (m.find()) {
-                        int p = Integer.parseInt(m.group(1));
-                        if (p > 0 && p < 65536) port = p; // the first ready line only: nothing later can move the port
-                    }
-                }
-                synchronized (this) {
-                    tail.addLast(line);
-                    while (tail.size() > LOG_LINES) tail.removeFirst();
-                }
-                Log.i(TAG, "engine> " + line);
-            }
+        try (InputStream in = process.getInputStream()) {
+            readLines(in, token, this::onLine);
         } catch (IOException ignored) {
         }
+    }
+
+    interface LineSink { void line(String line, boolean cut); }
+
+    /**
+     * Splits a stream into lines (\n, a trailing \r dropped) keeping at most MAX_LINE_BYTES of each; the rest of a
+     * longer line is read and dropped, and the line is reported as cut (its end shortened by the token's length, so a
+     * token split at the cut cannot survive redaction). Lines are redacted (token → ***) before they are handed on.
+     */
+    static void readLines(InputStream in, String token, LineSink sink) throws IOException {
+        java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
+        boolean cut = false;
+        byte[] buf = new byte[4096];
+        for (int r; (r = in.read(buf)) >= 0; ) {
+            for (int i = 0; i < r; i++) {
+                byte b = buf[i];
+                if (b == '\n') {
+                    emit(line, cut, token, sink);
+                    line.reset();
+                    cut = false;
+                } else if (line.size() < MAX_LINE_BYTES) {
+                    line.write(b);
+                } else {
+                    cut = true;
+                }
+            }
+        }
+        if (line.size() > 0 || cut) emit(line, cut, token, sink);
+    }
+
+    private static void emit(java.io.ByteArrayOutputStream raw, boolean cut, String token, LineSink sink) {
+        String line = new String(raw.toByteArray(), StandardCharsets.UTF_8);
+        if (line.endsWith("\r")) line = line.substring(0, line.length() - 1);
+        boolean hasToken = token != null && !token.isEmpty();
+        if (cut) line = line.substring(0, Math.max(0, line.length() - (hasToken ? token.length() : 0))) + " …";
+        if (hasToken) line = line.replace(token, "***");
+        sink.line(line, cut);
+    }
+
+    private void onLine(String line, boolean cut) {
+        if (port == 0 && !cut) {
+            int p = parseReadyLine(line);
+            if (p > 0) port = p; // the first ready line only: nothing later can move the port
+        }
+        synchronized (this) {
+            tail.addLast(line);
+            while (tail.size() > LOG_LINES) tail.removeFirst();
+        }
+        Log.i(TAG, "engine> " + line);
     }
 
     static String newToken() {

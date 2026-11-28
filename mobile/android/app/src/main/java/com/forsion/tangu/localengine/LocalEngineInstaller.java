@@ -391,6 +391,7 @@ final class LocalEngineInstaller {
         LocalEnginePaths.deleteTree(new File(paths.base, "engine.new"));
         LocalEnginePaths.deleteTree(oldTangu());
         LocalEnginePaths.deleteTree(trash());
+        LocalEnginePaths.deleteTree(paths.selftest);
         LocalEnginePaths.deleteTree(paths.downloads);
     }
 

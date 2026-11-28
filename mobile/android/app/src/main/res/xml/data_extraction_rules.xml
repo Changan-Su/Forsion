@@ -18,6 +18,8 @@
         <exclude domain="file" path="local-engine/trash/" />
         <exclude domain="file" path="local-engine/secrets/" />
         <exclude domain="file" path="local-engine/proc-standins/" />
+        <!-- 安装自检那一次真启动用的一次性数据,自检完就删 -->
+        <exclude domain="file" path="local-engine/selftest/" />
         <exclude domain="file" path="local-engine/installed.json" />
         <exclude domain="file" path="local-engine/pending.json" />
         <!-- 早期测试包的平铺目录(按账号分开之前;home 里可能有账号令牌文件):不带 -->

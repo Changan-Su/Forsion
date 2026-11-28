@@ -37,6 +37,7 @@ import { shutdownReasonForSelf } from '../services/shutdownIntentStore.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
+import { announceReady } from './readyLine.js';
 
 /** 引擎版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
  *  回退 package.json 版本(发版随产品同步 bump,「引擎桌面同版发」)。/health 与 --version 共用。 */
@@ -189,6 +190,8 @@ async function main(): Promise<void> {
     const port = address && typeof address === 'object' ? address.port : cfg.port;
     // Embedded hosts use port 0 and IPC readiness, avoiding a probe/listen race.
     if (process.send) process.send({ type: 'tangu:ready', host: cfg.host, port, version });
+    // Hosts without IPC (the Android app under PRoot) take the port from this line, never from the wording below.
+    announceReady({ host: cfg.host, port, version });
     console.log(`[tangu] standalone 已启动 http://${cfg.host}:${port}`);
     console.log(`[tangu] cloud=${cfg.cloudUrl} 存储=${storage} sandbox=${sandboxMode} model=${cfg.defaultModelId || '(run 指定)'}`);
     if (providers.length) {

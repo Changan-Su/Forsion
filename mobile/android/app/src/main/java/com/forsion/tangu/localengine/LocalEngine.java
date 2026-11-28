@@ -119,7 +119,10 @@ public final class LocalEngine {
         debuggable = (c.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         installerFor().recover(); // renames only; before anything reads installed() or starts the engine
         new File(paths.base, "home/.forsion-cloud-token").delete(); // early test builds kept the account token in a flat home
-        work.execute(() -> installerFor().emptyTrash());
+        work.execute(() -> {
+            installerFor().emptyTrash();
+            LocalEnginePaths.deleteTree(paths.selftest); // a self-test the app died in the middle of
+        });
         com.forsion.tangu.NativeConfigAccess.onTokenChange(c, tokenListener);
         timer.scheduleWithFixedDelay(this::idleCheck, 60, 60, TimeUnit.SECONDS);
     }
@@ -346,51 +349,62 @@ public final class LocalEngine {
     }
 
     /**
-     * PRoot + loader + glibc Node + the native SQLite module, in a throwaway process. null = fine. Output is drained
-     * on its own thread (capped) so the 60 s deadline holds even if the probe hangs with its pipe open; on timeout
-     * PRoot is killed, which takes its tracees with it (PTRACE_O_EXITKILL patch).
+     * Upper bound for the whole self-test: every attempt's start, health wait and auth probes share it (threaded
+     * through as one deadline); only the stop of the last attempt (at most ~6 s) comes on top.
+     */
+    static final int SELFTEST_MS = 150_000;
+
+    /**
+     * The tree now at rootfs, run the way a real start runs it: the engine is started for real (PRoot + loader + glibc
+     * Node + SQLite + the engine's own boot), --port 0, port from its ready line, /health, then an authed call that
+     * only this start's local token passes (200) and the same call with a wrong token (401) — then stopped. null = fine.
+     *
+     * Its data is a throwaway tree (LocalEnginePaths.selftest), never an account's home: no account token, no
+     * conversations, deleted afterwards whatever happened. Bounded by SELFTEST_MS. A crash before healthy gets the
+     * same one retry as a normal start (the emulator's glibc double free would otherwise refuse good layers); a
+     * timeout does not (an engine that never reports its port fails here, before it can be committed).
+     * Runs on the install thread while maintenance blocks starts, so no account engine runs alongside it. Under the
+     * foreground service like a real start: without it Doze cuts loopback a couple of minutes after the screen goes
+     * off, and a good layer would be refused.
      */
     private String selfTest() {
-        Process p = null;
+        long deadline = System.currentTimeMillis() + SELFTEST_MS;
+        String why = "timeout";
+        String tail = "";
+        LocalEngineService.start(ctx);
         try {
-            ProcessBuilder pb = new ProcessBuilder(paths.prootArgv("/opt/tangu", null, java.util.Arrays.asList(
-                    "/opt/node/bin/node", "-e", "const D=require('/opt/tangu/node_modules/better-sqlite3');new D(':memory:').prepare('select 1').get();console.log('selftest-ok')")));
-            pb.environment().clear();
-            pb.environment().putAll(paths.prootEnv());
-            pb.redirectErrorStream(true);
-            pb.directory(paths.base);
-            p = pb.start();
-            final Process sp = p;
-            final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            Thread rd = new Thread(() -> {
-                try (java.io.InputStream in = sp.getInputStream()) {
-                    byte[] b = new byte[4096];
-                    for (int r; (r = in.read(b)) > 0; ) synchronized (out) { if (out.size() < 16 << 10) out.write(b, 0, r); }
-                } catch (Exception ignored) {}
-            }, "local-engine-selftest");
-            rd.setDaemon(true);
-            rd.start();
-            if (!p.waitFor(60, TimeUnit.SECONDS)) {
-                killTree(p);
-                rd.join(2000);
-                return "timeout";
+            for (int attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
+                long left = deadline - System.currentTimeMillis();
+                if (left <= 0) break;
+                LocalEnginePaths.deleteTree(paths.selftest);
+                LocalEngineProcess np = LocalEngineProcess.spawn(paths, paths.selftestBinds(), engineEnv());
+                try {
+                    why = np.awaitHealthy((int) Math.min(LocalEngineProcess.HEALTH_TIMEOUT_MS, left));
+                    if (why == null && !ownsPort(np, remaining(deadline, OWNS_PORT_MS))) why = "auth";
+                    if (why == null && np.status(AUTHED_PATH, "x" + np.token, remaining(deadline, OWNS_PORT_MS)) != 401) why = "auth_open";
+                } finally {
+                    np.stop();
+                }
+                if (why == null) {
+                    Log.i(TAG, "self-test passed on attempt " + attempt + " in " + (System.currentTimeMillis() - np.startedAt) + "ms");
+                    return null;
+                }
+                tail = tailOf(np);
+                Log.w(TAG, "self-test attempt " + attempt + " failed: " + why + " tail=" + tail);
+                if (!"exited".equals(why)) break;
             }
-            rd.join(5000);
-            String s;
-            synchronized (out) { s = out.toString("UTF-8"); }
-            if (!s.contains("selftest-ok")) return s.trim();
-            return p.exitValue() == 0 ? null : "exit " + p.exitValue() + " " + s.trim(); // printed it, then crashed: not fine
+            return tail.isEmpty() ? why : why + " | " + tail;
         } catch (Exception e) {
-            if (p != null) killTree(p);
             return e.getClass().getSimpleName();
+        } finally {
+            LocalEnginePaths.deleteTree(paths.selftest);
+            LocalEngineService.stop(ctx); // maintenance blocks starts: no account engine needs it now
         }
     }
 
-    private static void killTree(Process p) {
-        for (int k : LocalEngineProcess.childrenOf(LocalEngineProcess.pidOf(p))) {
-            try { Os.kill(k, OsConstants.SIGKILL); } catch (Exception ignored) {}
-        }
-        p.destroyForcibly();
+    /** What is left of the deadline, capped at cap; at least 1 ms (a probe then fails at once instead of waiting). */
+    private static int remaining(long deadline, int cap) {
+        return (int) Math.max(1, Math.min(cap, deadline - System.currentTimeMillis()));
     }
 
     // ---------- engine ----------
@@ -574,20 +588,17 @@ public final class LocalEngine {
     }
 
     /** Only this start's token passes /agent/sessions: proves the port is ours, not a leftover engine. */
-    private boolean ownsPort(LocalEngineProcess p) {
-        try {
-            HttpURLConnection c = (HttpURLConnection) new URL("http://127.0.0.1:" + p.port + "/agent/sessions?limit=1").openConnection();
-            c.setConnectTimeout(3000);
-            c.setReadTimeout(10_000);
-            c.setRequestProperty("Authorization", "Bearer " + p.token);
-            int st = c.getResponseCode();
-            c.disconnect();
-            return st == 200;
-        } catch (Exception e) {
-            Log.w(TAG, "ownsPort: " + e.getClass().getSimpleName());
-            return false;
-        }
+    private boolean ownsPort(LocalEngineProcess p) { return ownsPort(p, OWNS_PORT_MS); }
+
+    /** Raw socket, no redirects followed (a 302 to the open /health is not an authed 200), bounded by timeoutMs overall. */
+    private static boolean ownsPort(LocalEngineProcess p, int timeoutMs) {
+        int st = p.status(AUTHED_PATH, p.token, timeoutMs);
+        if (st != 200) Log.w(TAG, "ownsPort: status " + st);
+        return st == 200;
     }
+
+    private static final String AUTHED_PATH = "/agent/sessions?limit=1";
+    private static final int OWNS_PORT_MS = 13_000;
 
     private void watch(LocalEngineProcess p) {
         Thread t = new Thread(() -> {
