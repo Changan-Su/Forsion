@@ -5,7 +5,7 @@ import { runAgentFilesSync } from './agentFileSync.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { join } from 'node:path';
-import { agentSyncPermission, agentSyncScope, captureAgentSyncPermission, invalidateAgentSyncOperations, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncPermission, agentSyncScope, captureAgentSyncPermission, invalidateAgentSyncOperations, agentSyncOperationSignal, agentSyncConsentSignal } from './cloudSyncAccount.js';
 let brain: CloudBrainServices | null = null;
 let generation = 0;
 const running = new Map<string, Promise<SyncRunResult>>();
@@ -46,7 +46,8 @@ export function syncNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
       result = { ok: af.ok, agents: af.agents, pushed: af.pushed, pulled: af.pulled, deleted: af.deleted, skipped: af.skipped, conflicts: af.conflicts, memory: 'skipped', logs: [], error: af.error };
       guard();
       const permission = agentSyncPermission(DEFAULT_AGENT_SLUG, scope);
-      if (permission.enabled && permission.shared) {
+      // 默认 Agent 记忆的旧全局同步也是 Agent 同步:封着(AGENT_SYNC_SEALED)不跑;human/ 在上面 runAgentFilesSync 里照常
+      if (!AGENT_SYNC_SEALED && permission.enabled && permission.shared) {
         const consent = captureAgentSyncPermission(DEFAULT_AGENT_SLUG, scope, true);
         const consentSignal = AbortSignal.any([signal, agentSyncConsentSignal(DEFAULT_AGENT_SLUG, scope)]);
         const r = await runMemorySync(createLocalMemoryStore(join(agentsDir(), DEFAULT_AGENT_SLUG), scope), active.memory, { userId, signal: consentSignal, assertActive: () => { guard(); consent(); } });

@@ -14,13 +14,15 @@ import { registerMessages, useI18n } from '../i18n'
 import '../shellMessages'
 import { useApp } from '../stores/appStore'
 import { useInbox } from '../stores/inboxStore'
-import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useNoteCount } from '@amadeus/lib/activeNote'
 import { amadeus } from '@amadeus/api'
 import { useSbPrefs } from './prefs'
 import { ipcErrorText } from '../ipcError'
-import type { AmadeusSyncStatus, RemoteSyncProgress, RemoteSyncReport } from '../types'
+import { useVaultSync } from '../sync/vaultSyncStore'
+import { syncNow } from '../sync/vaultSyncActions'
+import { failureText, opText, vaultSyncTip, vaultSyncWords } from '../sync/vaultSyncText'
+import { hasSyncBridges } from '../sync/VaultSyncChip'
 
 /** 当前主区激活视图类型(同 WorkspaceView.useActiveMainType:订阅 mainTabs 驱动重算)。 */
 function useActiveMainType(): string | null {
@@ -63,86 +65,47 @@ function AgentRunningItem() {
   )
 }
 
-/** 报告是否算异常(失败 / 有错误行 / 有冲突)。 */
-const badReport = (r: RemoteSyncReport | null): boolean => !!r && (!r.ok || r.errors.length > 0 || r.conflicts > 0)
-
-/** 右:云同步聚合状态(镜像引擎 + 按条目引擎 + remotesync 三源)。无任何同步源时隐藏;
- *  点击手动同步(镜像 syncNow + remotesync run 各自触发,互不阻塞)。 */
-/** 同步状态的三路来源(镜像同步 / 按条目同步 / remotesync):SyncItem 画它,DesktopStatusBar 用它判「出没出错」。 */
-function useSyncSources() {
-  const [mirror, setMirror] = useState<AmadeusSyncStatus | null>(null)
-  const entry = useEntrySync((s) => s.status)
-  const [remote, setRemote] = useState<{ running: boolean; bad: boolean; configured: boolean; progress: RemoteSyncProgress | null } | null>(null)
-  useEffect(() => {
-    ensureEntrySyncSubscribed()
-    void window.amadeusSync?.get().then((s) => setMirror((prev) => prev ?? s)).catch(() => {})
-    const off1 = window.amadeusSync?.onStatus?.((s) => {
-      if (!(s as AmadeusSyncStatus).binding) setMirror(s as AmadeusSyncStatus)
-    })
-    // remotesync:configured 从 get() 读;onStatus 无 config,用「在跑/有过报告」佐证已配置。
-    void window.remoteSync?.get()
-      .then((s) => setRemote({ running: s.running, bad: badReport(s.lastReport), configured: s.config.backend !== 'off', progress: s.progress ?? null }))
-      .catch(() => {})
-    const off2 = window.remoteSync?.onStatus?.((s) =>
-      setRemote((prev) => ({ running: s.running, bad: badReport(s.lastReport), configured: prev?.configured || s.running || !!s.lastReport, progress: s.progress ?? null })),
-    )
-    return () => {
-      off1?.()
-      off2?.()
-    }
-  }, [])
-  return { mirror, entry, remote }
+/** 右:当前库的同步状态(智库同步第 1 步起读状态源 —— 和左栏「智库」那行、同步面板、通知同一份字)。
+ *  这个库没在同步、别处也没事要看时隐藏;点它立即同步(这个库的每一路各踢一次)。 */
+function useActiveVaultSync() {
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const side = usePageStore((s) => s.vaultSide)
+  return useVaultSync(side === 'cloud' ? { root: null, side: 'cloud' } : { root: vaultRoot, side: 'local' })
 }
 
-/** 同步真出错了(状态栏总开关关着时据此单独露出同步项)。⚠️ 刻意不含 auth-required:没登录 / 没开云端的人
- *  会一直是这个态,算进来等于状态栏永远在;未登录在同步项本身、设置与账号卡里照旧有提示。 */
+/** 同步要你看一眼(状态栏总开关关着时据此单独露出同步项):这个库出错 / 等你定,或别的库有出错 / 等你定。
+ *  ⚠️ 刻意不含没登录:没登录 / 没开云端的人会一直是这个态,算进来等于状态栏永远在。 */
 function useSyncAlert(): boolean {
-  const { mirror, entry, remote } = useSyncSources()
-  const all = [...(mirror?.enabled ? [mirror] : []), ...Object.values(entry).filter((s) => s.enabled)]
-  // 先放着、等用户定的文件也露出来:不处理就一直不同步,而它们不算出错、不会自己好
-  return all.some((s) => s.state === 'error' || !!s.held?.length) || !!remote?.bad
+  const view = useActiveVaultSync()
+  return view.state === 'error' || view.state === 'review' || view.elsewhere.errors > 0 || view.elsewhere.review > 0
 }
 
 function SyncItem() {
   const { t } = useI18n()
-  const { mirror, entry, remote } = useSyncSources()
-  const enabledEntries = Object.values(entry).filter((s) => s.enabled)
-  const mirrorOn = !!mirror?.enabled
-  if (!mirrorOn && !enabledEntries.length && !remote?.configured && !remote?.running) return null
-  const all = [...(mirrorOn && mirror ? [mirror] : []), ...enabledEntries]
-  const err = all.some((s) => s.state === 'error' || s.state === 'auth-required') || !!remote?.bad
-  const syncing = !!remote?.running || all.some((s) => s.state === 'syncing' || s.state === 'starting')
-  const offline = all.some((s) => s.state === 'offline')
-  const pending = all.reduce((a, s) => a + (s.pending || 0), 0)
-  // 两边不一样、又没有同步记录、先放着等用户定的文件(侧栏「云同步」分区和设置页里处理)
-  const held = all.reduce((a, s) => a + (s.held?.length ?? 0), 0)
-  const icon = err ? <AlertCircle size={11} style={{ color: 'var(--danger)' }} />
-    : syncing ? <RefreshCw size={11} className="spin" />
-    : held > 0 ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
-    : offline ? <CloudOff size={11} />
+  const view = useActiveVaultSync()
+  const elsewhere = view.elsewhere.errors + view.elsewhere.review
+  if (!hasSyncBridges() || (view.state === 'off' && !elsewhere)) return null
+  const words = vaultSyncWords(view, view.now, t)
+  const icon = view.state === 'error' ? <AlertCircle size={11} style={{ color: 'var(--danger)' }} />
+    : view.state === 'syncing' || view.state === 'checking' ? <RefreshCw size={11} className="spin" />
+    : view.state === 'review' ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
+    : view.state === 'offline' || view.state === 'signed-out' ? <CloudOff size={11} />
+    : view.state === 'off' ? <AlertCircle size={11} style={{ color: 'var(--warning)' }} />
+    : view.state === 'on' ? <RefreshCw size={11} />
     : <Check size={11} />
-  // remotesync 执行阶段有 x/y 进度(remotely-save 式),优先展示
-  const rp = remote?.running ? remote.progress : null
-  const text = err ? t('sb.syncError')
-    : rp?.total ? t('sb.syncProgress', { done: rp.done, total: rp.total })
-    : syncing ? (pending > 0 ? t('sb.syncing', { n: pending }) : t('sb.syncingPlain'))
-    : held > 0 ? t('sb.syncHeld', { n: held })
-    : offline ? t('sb.syncOffline')
-    : t('sb.synced')
-  const status = (err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : held > 0 && !syncing ? `${text} · ${t('sb.syncHeldTip')}` : text)
-  // 点了真会触发一轮同步时才说「点击立即同步」:只开了按条目同步、未登录(auth-required)、远程正在跑时点它什么也不做,
-  // 这时再许诺「立即同步」就是误导。条件与下面 onClick 的两条分支同源。
-  const canSync = (mirrorOn && mirror?.state !== 'auth-required') || (!!remote?.configured && !remote.running)
+  const text = view.state === 'off' ? t('vsync.panel.elsewhere', { n: elsewhere }) : words.text
+  const cur = view.progress?.current
+  const detail = cur ? opText(cur.op, cur.path, t) : view.failures[0] ? `${view.failures[0].path} · ${failureText(view.failures[0], view.target, t)}` : view.error ? ipcErrorText(view.error) : null
+  const tip = [view.state === 'off' ? text : vaultSyncTip(view, words, t), detail, elsewhere && view.state !== 'off' ? t('vsync.panel.elsewhere', { n: elsewhere }) : null].filter(Boolean).join(' · ')
+  // 点了真会触发一轮同步时才说「点击立即同步」(没登录、正在跑时点它什么也不做)
+  const canSync = view.feeds.some((f) => f.canSyncNow)
   return (
     <button
       type="button"
       className="sb-click"
-      // 点它会**立刻触发一轮同步** —— 原来只写状态,用户不知道点了会发生什么。
-      title={canSync ? `${status} · ${t('sb.clickToSync')}` : status}
-      onClick={() => {
-        if (mirrorOn) void window.amadeusSync?.syncNow?.().catch(() => {})
-        if (remote?.configured && !remote.running) void window.remoteSync?.run?.().catch(() => {})
-      }}
+      data-sync-state={view.state}
+      title={canSync ? `${tip} · ${t('sb.clickToSync')}` : tip}
+      onClick={() => { if (canSync) void syncNow(view.feeds) }}
     >
       {icon}
       {text}
@@ -176,11 +139,6 @@ function BacklinksItem() {
 }
 
 registerMessages({
-  'sb.syncHeld': { zh: '{n} 篇等你定', en: '{n} to review' },
-  'sb.syncHeldTip': {
-    zh: '这几篇和云端不一样、又没有同步记录，先放着没动；在侧栏「云同步」或设置里选用哪一份',
-    en: 'These files differ from the cloud and have no sync record, so both copies were left alone. Choose which to keep in the sidebar’s Cloud sync section or in Settings',
-  },
   'sb.count': { zh: '{words} 词 · {chars} 字', en: '{words} words · {chars} chars' },
   'sb.countSel': { zh: '已选 {words} 词 · {chars} 字', en: 'Selected {words} words · {chars} chars' },
 })

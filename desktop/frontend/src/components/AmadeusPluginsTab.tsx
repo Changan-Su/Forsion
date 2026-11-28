@@ -19,6 +19,7 @@ import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
 import { pluginDataSyncOn, pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
+import { PLUGIN_DATA_SYNC_SEALED } from '../services/syncSeal'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
@@ -78,6 +79,11 @@ registerMessages({
   'settings.amadeusPlugins.syncDataHint': {
     zh: '登录 Forsion 账号后，这个插件保存的数据会同步到你的其他设备。关掉后只存在这台设备上。',
     en: 'When you are signed in to Forsion, the data this plugin saves syncs to your other devices. Turn it off to keep it on this device only.',
+  },
+  // 2026-11-27 智库同步统一方案第 0 步:插件数据先封住,开关锁住(不是用户关的,以后会回来)
+  'settings.amadeusPlugins.syncDataSealedHint': {
+    zh: '暂不同步：这个插件的数据先只存在这台设备上，云端已有的那份不会删除。',
+    en: "Not syncing for now. This plugin's data stays on this device, and any copy already in the cloud is kept.",
   },
   'settings.amadeusPlugins.unitIntro': { zh: '查看已安装的功能和编辑器扩展。', en: 'View installed features and editor extensions.' },
   'settings.amadeusPlugins.unitBuiltinTitle': { zh: '编辑器扩展', en: 'Editor extensions' },
@@ -532,9 +538,12 @@ const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
     <div className="plugin-card" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.syncData')}</div>
-        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.amadeusPlugins.syncDataHint')}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t(PLUGIN_DATA_SYNC_SEALED ? 'settings.amadeusPlugins.syncDataSealedHint' : 'settings.amadeusPlugins.syncDataHint')}</div>
       </div>
-      <SettingsSwitch data-plugin-sync="" checked={on} label={t('settings.amadeusPlugins.syncData')} onChange={(next) => { setPluginDataSyncUserOff(p.id, !next); setOn(next) }} />
+      {/* 封着:不出开关、不写 forsion.pluginSync.off.<id>,用户原来的开关值留到放开 */}
+      {PLUGIN_DATA_SYNC_SEALED
+        ? <span data-plugin-sync-sealed="" style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{t('sync.sealed')}</span>
+        : <SettingsSwitch data-plugin-sync="" checked={on} label={t('settings.amadeusPlugins.syncData')} onChange={(next) => { setPluginDataSyncUserOff(p.id, !next); setOn(next) }} />}
     </div>
   )
 }

@@ -28,6 +28,7 @@ import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './Projec
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
 import { AgentUninstallDialog } from '../components/UninstallDialog'
+import { AGENT_SYNC_SEALED } from '../../../../tangu-agent/src/contracts/agentSyncSeal'
 import { useDetailsSubject } from '../stores/detailsSubject'
 import type { RecordJump } from '../services/recordJump'
 import './agentProfileMessages'
@@ -651,7 +652,10 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
       {/* 跑在外部引擎上:轮数由引擎自己管(第二轮 C2-1 方案图:置灰 + 一句说明) */}
       <label className="agent-field" data-engine-managed={draftEngine || undefined}>{t('agentProfile.maxIterations')}<span className="agent-field-inline"><input type="number" min="1" placeholder={t('agentProfile.default')} disabled={!!draftEngine} value={draftEngine ? '' : draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} />{draftEngine && <small className="agent-profile-muted">{t('agentEngine.selfManaged', { name: agentEngineLabel(draftEngine) })}</small>}</span></label>
-      {!!window.tangu?.authStatus && !delegated && <label className="agent-equipment-item" data-field="cloudSync"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>}
+      {/* Agents 同步先封住(2026-11-27):锁住写「暂不同步」,不进脏字段、保存不带 cloudSync */}
+      {!!window.tangu?.authStatus && !delegated && (AGENT_SYNC_SEALED
+        ? <div className="agent-equipment-item is-sealed" data-field="cloudSync" data-sealed="">{t('agentProfile.cloudSync')}<small className="agent-profile-muted">{t('sync.sealed')}</small></div>
+        : <label className="agent-equipment-item" data-field="cloudSync"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>)}
     </div></details>
   </>
   return <div className={`agent-profile${compact ? ' compact' : ''}`} data-agent-profile={agent.slug} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (dirty) void save() } }}>

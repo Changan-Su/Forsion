@@ -5,6 +5,10 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 
+// 这里大多测插件数据同步放开时的接线;封着(PLUGIN_DATA_SYNC_SEALED,2026-11-27)的在最后一条
+const seal = vi.hoisted(() => ({ plugins: false }))
+vi.mock('../../services/syncSeal', () => ({ AGENT_SYNC_SEALED: true, get PLUGIN_DATA_SYNC_SEALED() { return seal.plugins } }))
+
 const seenAtWrite: Array<string | null> = []
 const puts: unknown[] = []
 const files = new Map<string, string>()
@@ -54,5 +58,22 @@ describe('saveData 接线', () => {
     const ctx = ctxOf('plain')
     await ctx.saveData!({ a: 1 })
     expect(state('plain')).toBeNull()
+  })
+
+  it('封着(暂不同步):开关没关也不推、读只读本机;编辑照记,开关键不动', async () => {
+    seal.plugins = true
+    try {
+      setPluginDataSyncUserOff('sealed', false)
+      const offKeys = () => Object.keys(localStorage).filter((k) => k.startsWith('forsion.pluginSync.off')).sort().map((k) => [k, localStorage.getItem(k)])
+      const before = offKeys()
+      const ctx = ctxOf('sealed', true)
+      const sent = puts.length
+      await ctx.saveData!({ a: 3 })
+      expect(state('sealed')).toMatchObject({ gen: 1, dirty: expect.any(Number) })
+      expect(await ctx.loadData!()).toEqual({ a: 3 })
+      await new Promise((r) => setTimeout(r, 0))
+      expect(puts.length).toBe(sent)
+      expect(offKeys()).toEqual(before)
+    } finally { seal.plugins = false }
   })
 })

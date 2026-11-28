@@ -101,7 +101,7 @@ import { createHomeApi } from './pluginHome'
 import { HOST_VIEW_CLAIMS, canClaimHostView } from '../../../../shared/corePlugins'
 import { isFadeOnlyChosen, subscribeMotionTheme, systemReducesMotion } from '../../theme/motionTheme'
 import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../stores/spaceProgress'
-import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
+import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync, syncKindSealed } from '../../services/syncSetup'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
@@ -504,9 +504,10 @@ function syncSeam(pluginId: string, ok: () => boolean): NonNullable<PluginAppApi
     get: () => { if (!firstParty()) return null; startSyncSetup(); return getSync() },
     subscribe: (cb) => { if (!firstParty()) return () => {}; startSyncSetup(); return subscribeSync(cb) },
     refresh: async () => { if (firstParty()) await refreshSync() },
-    // 在同步页里动过开关 / 回答过合并问题 = 点过头了,首登卡片不再弹
+    // 在同步页里动过开关 / 回答过合并问题 = 点过头了,首登卡片不再弹。
+    // 封着的那类(暂不同步,snapshot.sealed)set 是空操作:回 ok、什么都不写,「点过了」也不记
     set: async (kind, on) => (ok() && firstParty() && (kind === 'notes' || kind === 'agents' || kind === 'plugins')
-      ? setSync(kind, !!on).finally(markSyncDecided) : deny),
+      ? (syncKindSealed(kind) ? setSync(kind, !!on) : setSync(kind, !!on).finally(markSyncDecided)) : deny),
     resolveNotes: async (choice) => (ok() && firstParty() && (choice === 'merge' || choice === 'cloud' || choice === 'skip')
       ? resolveNotes(choice, translate('sync.backupFolder')).finally(markSyncDecided) : deny),
     runNow: async () => { if (ok() && firstParty()) await runSyncNow() },

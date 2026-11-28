@@ -94,6 +94,9 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-sync { display: grid; gap: 6px; }
 .ob3-sync label { display: flex; align-items: center; gap: 8px; }
 .ob3-sync input { accent-color: var(--accent-ink); margin: 0; }
+/* 先封住的那一项(2026-11-27):勾灰着,文字压暗,右边「暂不同步」 */
+.ob3-sync .ob3-sync-locked { color: var(--text-muted); cursor: default; }
+.ob3-sync-locked em { margin-left: auto; font-style: normal; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
 /* 同步标 Beta(11-08):小标签 + 下面一行「测试中的功能,默认不开」 */
 .ob3-sync-h { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
 .ob3-sync-h > span { flex-basis: 100%; }

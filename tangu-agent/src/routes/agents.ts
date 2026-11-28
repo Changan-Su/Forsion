@@ -29,7 +29,7 @@ import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentUninstallPreview, uninstallAgent } from '../services/agentUninstall.js';
 import { trashDir } from '../services/trash.js';
-import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js';
@@ -107,6 +107,14 @@ function remoteAgentBody(b: Record<string, any>, create: boolean): Record<string
   return out;
 }
 
+/** Agents 同步封着(AGENT_SYNC_SEALED,11-27 智库同步统一方案第 0 步):本机保存 Agent 时 cloudSync 一律不收 ——
+ *  不写授权、不往 config.toml 写 cloud_sync(它还挡着改名),也不因为没登录回 400。回包里的 cloudSync 照实读存着的授权。 */
+function sealedLocalBody(b: Record<string, any>, cloud: boolean): Record<string, any> {
+  if (cloud || !AGENT_SYNC_SEALED || !('cloudSync' in b)) return b;
+  const { cloudSync: _ignored, ...rest } = b;
+  return rest;
+}
+
 router.get('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   try {
     if (cloudAgentsEnabled()) return void res.json({ agents: await cloudListAgents(req.user!.userId) });
@@ -157,7 +165,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   const cloud = cloudAgentsEnabled();
   if (!cloud && !ensureLocal(res)) return;
   try {
-    const b = parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, true) : (req.body || {});
+    const b = sealedLocalBody(parseRemoteOrigin(req.headers) ? remoteAgentBody(req.body || {}, true) : (req.body || {}), cloud);
     const name = String(b.name || b.nameZh || b.nameEn || '');
     if (!name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
     const uid = req.user!.userId;
@@ -207,7 +215,9 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       mustNotExist: true,
     };
     const agent = cloud ? await cloudSaveAgent(uid, slug, input) : await saveAgent(input);
-    if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+    // 封着:授权文件一个字节不动。shared 位也不动 —— 它决定 human/(我的资料与默认日历)的同意,封着期间不变宽也不变窄;
+    // 「共享默认记忆」本身照常存进定义,放开后下一次保存按定义写回授权
+    if (!cloud && !AGENT_SYNC_SEALED && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
     }
@@ -228,7 +238,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const cur = cloud ? await cloudGetAgent(req.user!.userId, slug) : await getAgent(slug);
     if (!cur) return res.status(404).json({ detail: 'Agent not found' });
     const remote = !!parseRemoteOrigin(req.headers);
-    const b = remote ? remoteAgentBody(req.body || {}, false) : (req.body || {});
+    const b = sealedLocalBody(remote ? remoteAgentBody(req.body || {}, false) : (req.body || {}), cloud);
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
@@ -282,7 +292,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const agent = cloud ? await cloudPatchAgent(req.user!.userId, slug, fields)
       : remote ? await patchAgent(slug, (locked) => ({ ...fields, approvalMode: remoteAgentApprovalMode(wantMode, locked.approvalMode || '', remoteCap!) }))
       : await patchAgent(slug, fields);
-    if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
+    if (!cloud && !AGENT_SYNC_SEALED && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) { // 封着不写授权,见上
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
     }

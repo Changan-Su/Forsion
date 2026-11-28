@@ -1,0 +1,131 @@
+/* 智库同步状态(第 1 步):左栏「智库」那行的状态小字、同步面板、同步记录。
+ * 颜色只用主题 token(浅 / 深 / 主题色自动跟);出错用 danger,等你定用 warning,限速 / 离线不标红。 */
+
+/* ── 左栏那行:名字(开智库菜单)· 状态小字(开面板)· 箭头(开智库菜单)。外层就是 .t2s-special,悬停底色照旧 ── */
+.amx-vault-row { cursor: default; }
+.amx-vault-row > .amx-vault-name {
+  display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.amx-vault-row > .t2s-special-go { border: 0; background: none; padding: 0; color: var(--text-faint); cursor: pointer; }
+
+.vsync-chip {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 5px; flex: none; max-width: 72%;
+  height: 20px; padding: 0 6px;
+  border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-faint);
+  font-family: var(--font-ui); font-size: var(--ui-font-caption); line-height: 1; white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.vsync-chip:hover, .vsync-chip[aria-expanded='true'] { background: var(--overlay-medium); color: var(--text-light); }
+.vsync-chip.tone-accent { color: var(--text-light); }
+.vsync-chip.tone-warning { color: var(--warning); }
+.vsync-chip.tone-danger { color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.vsync-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+/* 量整句宽度的影子:不占位、不可见;往左伸,别把侧栏撑出横向滚动 */
+.vsync-chip-measure {
+  position: absolute; right: 0; top: 0; height: 100%;
+  display: inline-flex; align-items: center; gap: 5px; padding: 0 6px;
+  visibility: hidden; pointer-events: none; white-space: nowrap;
+}
+.vsync-mark-check { flex: none; opacity: 0.75; }
+.vsync-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.vsync-dot.is-warning { background: var(--warning); }
+.vsync-dot.is-danger { background: var(--danger); }
+.vsync-ring { flex: none; }
+.vsync-ring circle { fill: none; stroke-width: 1.6; }
+.vsync-ring-track { stroke: var(--border); }
+.vsync-ring-fill { stroke: currentColor; stroke-linecap: round; }
+
+/* ── 同步面板(.ui-popover 面 + 自己的尺寸)── */
+.vsync-panel {
+  width: min(340px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 4px 0;
+  font-size: var(--ui-font-body);
+  line-height: 1.45;
+  outline: none;
+}
+.vsync-panel .vsp-top { display: flex; align-items: center; gap: 8px; padding: 10px 14px 8px; }
+.vsync-panel .vsp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-light); }
+.vsync-panel .vsp-title b { color: var(--text); font-weight: 600; }
+.vsync-panel .vsp-sync { flex: none; display: inline-flex; align-items: center; gap: 5px; }
+.vsync-panel .vsp-sec { padding: 8px 14px 10px; border-top: var(--border-width) solid var(--border); }
+.vsync-panel .vsp-head { margin-bottom: 6px; font-size: var(--ui-font-meta); color: var(--text-faint); }
+.vsync-panel .vsp-count { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.vsync-panel .tone-warning { color: var(--warning); }
+.vsync-panel .tone-danger { color: var(--danger); }
+.vsync-panel .vsp-line { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 1px 0; font-variant-numeric: tabular-nums; }
+.vsync-panel .vsp-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vsync-panel .vsp-strong { color: var(--text); }
+.vsync-panel .vsp-faint, .vsr-dialog .vsp-faint { color: var(--text-faint); }
+.vsync-panel .vsp-current > svg { flex: none; }
+.vsync-panel .vsp-grow { flex: 1; }
+
+/* 进度条:按比例缩放填充(不补间宽度) */
+.vsync-panel .vsp-bar { position: relative; height: 4px; margin: 2px 0 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--overlay-medium); }
+.vsync-panel .vsp-bar > span {
+  position: absolute; inset: 0; border-radius: inherit; background: var(--accent);
+  transform-origin: left center; transform: scaleX(var(--vsp-p, 0));
+  transition: transform var(--duration-slow, 0.25s) var(--ease-calm);
+}
+.vsync-panel .vsp-bar.is-busy > span { transform: none; opacity: 0.35; }
+
+.vsync-panel .vsp-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 3px 0; }
+.vsync-panel .vsp-item > svg { flex: none; color: var(--text-faint); }
+.vsync-panel .vsp-item > svg.tone-warning { color: var(--warning); }
+.vsync-panel .vsp-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vsync-panel .vsp-link, .vsync-panel .vsp-foot .vsp-link {
+  display: inline-flex; align-items: center; gap: 2px; flex: none;
+  padding: 2px 4px; border: 0; border-radius: var(--radius-sm); background: none;
+  color: var(--text-light); font: inherit; font-size: var(--ui-font-meta); cursor: pointer;
+}
+.vsync-panel .vsp-link:hover { background: var(--overlay-medium); color: var(--text); }
+.vsync-panel .vsp-sec > .vsp-link { margin: 2px 0 0 -4px; }
+.vsync-panel .amx-held { margin: 6px 0 2px; }
+
+/* 出错卡:说清是哪个文件、什么原因 */
+.vsync-panel .vsp-card { margin-top: 4px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--overlay-light); }
+.vsync-panel .vsp-card.tone-danger { background: color-mix(in srgb, var(--danger) 8%, transparent); color: var(--text); }
+.vsync-panel .vsp-card-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-weight: 600; color: var(--danger); }
+.vsync-panel .vsp-card-body { font-size: var(--ui-font-meta); line-height: 1.5; word-break: break-all; }
+.vsync-panel .vsp-path, .vsr-dialog .vsp-path { color: var(--text); }
+.vsync-panel .vsp-card-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+.vsync-panel .vsp-foot { display: flex; align-items: center; gap: 4px; padding: 8px 10px 6px 14px; border-top: var(--border-width) solid var(--border); font-size: var(--ui-font-meta); }
+
+/* ── 同步记录(面板里的最近几轮 + 全部记录)── */
+.vsr-rows { display: flex; flex-direction: column; }
+.vsr-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 3px 0; font-variant-numeric: tabular-nums; }
+.vsr-time { flex: none; min-width: 40px; color: var(--text-faint); font-size: var(--ui-font-meta); }
+.vsr-sum { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vsr-warn { flex: none; display: inline-flex; color: var(--text-faint); cursor: help; }
+.vsr-row[data-failed] .vsr-warn { color: var(--warning); }
+
+.vsr-dialog {
+  margin: auto; width: min(620px, calc(100% - 32px)); max-height: calc(100% - 48px);
+  padding: 0; border: var(--border-width) solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow);
+  font-family: var(--font-ui); font-size: var(--ui-font-body);
+}
+.vsr-dialog::backdrop { background: var(--overlay-medium); }
+.vsr-dialog[open] { display: flex; flex-direction: column; }
+.vsr-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 22px 12px; }
+.vsr-dialog-head h2 { margin: 0 0 2px; font-size: var(--ui-font-title); font-weight: 600; }
+.vsr-dialog-head p { margin: 0; font-size: var(--ui-font-meta); }
+.vsr-dialog-body { min-height: 0; overflow: auto; padding: 0 12px 14px; border-top: var(--border-width) solid var(--border); }
+.vsr-empty { padding: 28px 10px; text-align: center; }
+.vsr-item { border-bottom: var(--border-width) solid var(--border); }
+.vsr-item:last-child { border-bottom: 0; }
+.vsr-row-btn { width: 100%; padding: 7px 10px; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.vsr-row-btn:hover { background: var(--overlay-light); }
+.vsr-chev { flex: none; color: var(--text-faint); transition: transform var(--duration-fast, 0.15s); }
+.vsr-item.is-open .vsr-chev { transform: rotate(90deg); }
+.vsr-dialog .vsr-time { min-width: 84px; }
+.vsr-feed { flex: none; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: var(--ui-font-meta); }
+.vsr-detail { padding: 2px 10px 10px 33px; font-size: var(--ui-font-meta); line-height: 1.55; }
+.vsr-detail-head { margin-bottom: 2px; color: var(--text-faint); }
+.vsr-fail { word-break: break-all; }

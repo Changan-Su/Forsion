@@ -19,6 +19,8 @@ import { withDbLock } from '../src/services/amadeusDb.js';
 import { DEFAULT_AGENT_SLUG, humanDir, USER_MD_TEMPLATE, userMdFile } from '../src/core/tanguHome.js';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
 import { dueHere, entriesOf, loadSchedule, markEntryFired, removeEntry, saveSchedule, upsertEntry, validateEntryInput } from '../src/services/agentSchedule.js';
+// 这里测的是 Agents 同步放开时的行为:封着(AGENT_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的效果在 test/agentSyncSeal.test.ts
+vi.mock('../src/services/cloudSyncAccount.js', async (original) => ({ ...(await original<typeof import('../src/services/cloudSyncAccount.js')>()), AGENT_SYNC_SEALED: false }));
 
 // 同一进程里轮流扮演两台:设备号跟着当前扮演的那台走(生产里一个进程只有一个家目录)
 vi.mock('../src/core/deviceId.js', () => ({ getDeviceId: () => process.env.TANGU_TEST_DEVICE ?? 'x' }));

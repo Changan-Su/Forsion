@@ -22,6 +22,7 @@ import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
+import './syncRecordsPreload' // 同步记录:暴露 window.syncRecords,副作用导入
 
 /** market:installProgress 事件载荷(主进程 market:install 推送;字段见 marketInstall.ts 的 DownloadProgress)。 */
 type MarketInstallProgress = { id: string; phase: 'resolve' | 'download' | 'install'; attempt?: number; attempts?: number; host?: string; received?: number; total?: number | null }

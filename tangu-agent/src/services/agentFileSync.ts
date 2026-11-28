@@ -13,7 +13,7 @@ import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { migrateScheduleFile } from './agentSchedule.js';
 import { agentSlugLocalOnly, isReadableSettingsDb, isSettingsContentPath, logText, mergeAgentSyncContent, mergeSettingsDb, neverConflictCopy, serializeTombstones, SETTINGS_MAX_BYTES, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
-import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
+import { AGENT_SYNC_SEALED, agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isSettingsPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { ledger } from './telemetryLedger.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
@@ -151,7 +151,9 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   // 老账号存档(11-06,方案页 Agent设备隔离方案 round3「老账号:B」):云端的 Agent 数据进了存档、在线那份清空了。
   // 旧同步从此不碰任何 Agent —— 不删云端、不发现、不推不拉(云端没有 ≠ 别处删了,本机一个文件都不动);
   // 只同步 human/。想同步哪个 Agent,到同步页逐个开(新同步)。
-  const archived = manifest.agentArchive != null;
+  // Agents 同步封着(AGENT_SYNC_SEALED,11-27 智库同步统一方案第 0 步)走同一条路:Agent 一个不碰,本机删 Agent 的记录留着不执行;
+  // human/ 的同意(下面 shared + 总闸)不经过这个开关,照存着的值收,不变宽不变窄。
+  const archived = AGENT_SYNC_SEALED || manifest.agentArchive != null;
   const bySlug = new Map<string, AgentFileMeta[]>();
   for (const item of manifest) {
     if (item.slug !== '__user__' && item.slug !== HUMAN_SLOT && !validSyncSlug(item.slug)) { fail(result, new Error('invalid cloud manifest slug')); continue; }
@@ -194,7 +196,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
       agents.push(def); known.add(slug);
     } catch (e) { fail(result, e); guard(); }
   }
-  result.agents = agents.length;
+  result.agents = archived ? 0 : agents.length; // 封着 / 存档:一个 Agent 都没同步,别报「镜像了 N 个」
   const buckets = new Map<string, { cats: Set<Category>; guards: Guard[] }>();
   const add = (slug: string, cat: Category, consent: Guard): void => {
     const b = buckets.get(slug) ?? { cats: new Set<Category>(), guards: [] };

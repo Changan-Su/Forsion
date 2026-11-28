@@ -152,6 +152,7 @@ import { gatePluginManifest } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
+import { flushSyncRecords, registerSyncRecordsIpc, syncRecordSink } from './syncRecordsIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
@@ -3986,6 +3987,8 @@ app.whenReady().then(async () => {
       addFlushHook: (fn) => contentFlush.add(fn),
       // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
       telemetry: telemetry.seam,
+      // ── 智库同步第 1 步起:两套引擎每轮交一行同步记录(存取在 syncRecords.ts,按账号一份)──
+      syncRecords: syncRecordSink,
       contentSync: {
         roots: async () => {
           const cfg=await readAmadeusConfig()
@@ -4062,6 +4065,7 @@ app.whenReady().then(async () => {
         // 还在静默期里的改动先推上去(最多等 5 秒);工作区 .md 标签里还没存的字先存。两样都是一次退出只做一次:
         // 紧跟着的 before-quit 拿到 null,不会把这次退出改走 app.exit;停引擎期间再打的字由关窗时的 pagehide 存
         await Promise.all([contentFlush.quit(), editorQuitSave.quit()])
+        await flushSyncRecords().catch(() => {}) // 冲刷那一轮刚交上来的同步记录也落盘
         deferredEngineRestart.cancel()
         // 装更新 = app_update;只重启不装 = 和退出一样(app_quit)。都在发信号前写进 shutdown-intent.json
         await backend.stop(install ? 'app_update' : 'app_quit')
@@ -6443,6 +6447,7 @@ app.whenReady().then(async () => {
   registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset, () => join(tanguDataDir(), 'plugin-data'))
   registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
+  registerSyncRecordsIpc() // 同步记录(同步面板 / 全部记录读;Extend 经 cloudHost.syncRecords 写)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。
   app.on('child-process-gone', (_e, d) => {
@@ -6645,6 +6650,7 @@ function installHostTelemetry(): void {
 let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
   telemetry.flushCounts() // 本小时还没发的计数先交给 Extend(退出被拦下也无妨:之后的照常再攒)
+  void flushSyncRecords() // 刚交上来、还在 300ms 合并窗里的同步记录
   if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
@@ -6685,6 +6691,7 @@ app.on('before-quit', (e) => {
   if (flushing || saving || st === 'ready' || st === 'starting') {
     e.preventDefault()
     exitChain = Promise.all([flushing, saving])
+      .then(() => flushSyncRecords().catch(() => {})) // 冲刷那一轮刚交上来的同步记录也落盘
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop('app_quit') : undefined })
       .finally(() => app.exit(0))
     void exitChain

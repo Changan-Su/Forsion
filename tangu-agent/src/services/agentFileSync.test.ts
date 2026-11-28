@@ -6,6 +6,8 @@ import path from 'node:path';
 import { conflictCopyName, decide, runAgentFilesSync } from './agentFileSync.js';
 import type { AgentFileContent, AgentFileMeta, AgentFilesBrain } from '../seams/cloudBrain.js';
 import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
+// 这里测的是 Agents 同步放开时的行为:封着(AGENT_SYNC_SEALED,2026-11-27 智库同步统一方案第 0 步)的效果在 test/agentSyncSeal.test.ts
+vi.mock('./cloudSyncAccount.js', async (original) => ({ ...(await original<typeof import('./cloudSyncAccount.js')>()), AGENT_SYNC_SEALED: false }));
 
 const slug = 'cloud-only';
 const config = 'name = "Cloud Only"\ncloud_sync = true\nlibrary_order = ["reference.md"]\n';

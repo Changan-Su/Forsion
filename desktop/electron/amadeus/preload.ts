@@ -147,6 +147,8 @@ const syncPresent = cloudPresent().has(SYNC_IPC.get)
 const collabPresent = cloudPresent().has(SYNC_IPC.collabCall)
 if (syncPresent) contextBridge.exposeInMainWorld('amadeusSync', {
   get: () => ipcRenderer.invoke(SYNC_IPC.get),
+  // 全部旧引擎(含空闲的条目同步);老 Extend 不接 → 不暴露,状态源回落 get() + 事件
+  ...(cloudPresent().has(SYNC_IPC.getAll) ? { getAll: () => ipcRenderer.invoke(SYNC_IPC.getAll) } : {}),
   setEnabled: (on: boolean) => ipcRenderer.invoke(SYNC_IPC.setEnabled, on),
   syncNow: () => ipcRenderer.invoke(SYNC_IPC.syncNow),
   confirmDeletions: () => ipcRenderer.invoke(SYNC_IPC.confirmDeletions),

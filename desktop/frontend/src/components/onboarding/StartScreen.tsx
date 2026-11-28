@@ -18,6 +18,7 @@ import { SettingsSwitch } from '../SettingsPrimitives'
 import { PROVIDER_PRESETS, presetProviderId } from '../providerPresets'
 import { asTelemetryView, improveOnThisHost, readTelemetry, type TelemetryView } from '../OnboardingImprove'
 import { getSync, refreshSync, subscribeSync, type SyncKind } from '../../services/syncSetup'
+import { AGENT_SYNC_SEALED, PLUGIN_DATA_SYNC_SEALED } from '../../services/syncSeal'
 import type { AuthStatusInfo, DirectProviderConfig } from '../../types'
 import { usePopDismiss } from './usePopDismiss'
 
@@ -44,8 +45,9 @@ export interface StartProps {
   onBusyChange: (busy: boolean) => void
 }
 
-/** 读到的同步现状。notesShown = 智库同步的状态真读到了(读不到时快照会把它当成「关」,不能拿来当底)。 */
-export interface SyncBase { notes: boolean; plugins: boolean; notesShown: boolean }
+/** 读到的同步现状。notesShown = 智库同步的状态真读到了(读不到时快照会把它当成「关」,不能拿来当底)。
+ *  sealed = 先封住、暂不同步的那几类(快照没有 = 没封):勾锁住,收尾不动它。 */
+export interface SyncBase { notes: boolean; plugins: boolean; notesShown: boolean; sealed?: { agents: boolean; plugins: boolean } }
 
 export function StartScreen(p: StartProps): React.ReactNode {
   const { t } = useI18n()
@@ -91,7 +93,7 @@ export function StartScreen(p: StartProps): React.ReactNode {
       if (done || !s?.signedIn) return
       done = true
       onSyncSeed({ notes: s.notes.on, agents: s.agents.on, plugins: s.decided && s.plugins.on },
-        { notes: s.notes.on, plugins: s.plugins.on, notesShown: s.notes.available })
+        { notes: s.notes.on, plugins: s.plugins.on, notesShown: s.notes.available, sealed: { agents: !!s.sealed?.agents, plugins: !!s.sealed?.plugins } })
     }
     const off = subscribeSync(seed)
     void refreshSync().then(seed, () => {})
@@ -121,6 +123,8 @@ export function StartScreen(p: StartProps): React.ReactNode {
     } catch (e) { setMsg(errText(e)) } finally { setProviderBusy(null) }
   }
   const name = auth?.nickname || auth?.username || ''
+  // 2026-11-27 智库同步统一方案第 0 步:Agents 与插件数据先封住。读到快照按快照,读到之前按这一版的缺省
+  const sealed = syncBase?.sealed ?? { agents: AGENT_SYNC_SEALED, plugins: PLUGIN_DATA_SYNC_SEALED }
 
   // 接上了不再给整张卡描强调色边(11-08 用户:一进来两张卡都被粗线框住,太丑);状态看右上角的「已登录」和渠道块上的 ✓
   const accountCard = canForsion && <section className="ob3-card ob3-choice" data-ob-account="">
@@ -132,11 +136,13 @@ export function StartScreen(p: StartProps): React.ReactNode {
         <span>{t('ob3.sync.betaHint')}</span></span>
         {syncPick && <SyncSeen onSeen={p.onSyncSeen} />}
         {syncPick && ([['notes', 'onboarding.connect.sync.notes'], ['plugins', 'onboarding.connect.sync.plugins']] as const)
-          .filter(([k]) => k !== 'notes' || (!!window.remoteSync && !!syncBase?.notesShown)).map(([k, label]) => (
-            <label key={k}><input type="checkbox" checked={syncPick[k]} onChange={(e) => onSyncPick({ ...syncPick, [k]: e.target.checked })} />{t(label)}</label>
-          ))}
+          .filter(([k]) => k !== 'notes' || (!!window.remoteSync && !!syncBase?.notesShown)).map(([k, label]) => k === 'plugins' && sealed.plugins
+            // 锁住:勾灰着、不勾,写「暂不同步」(不是用户关的,以后会回来)
+            ? <label key={k} className="ob3-sync-locked" data-ob-sync-sealed={k}><input type="checkbox" checked={false} disabled readOnly />{t(label)}<em>{t('sync.sealed')}</em></label>
+            : <label key={k}><input type="checkbox" checked={syncPick[k]} onChange={(e) => onSyncPick({ ...syncPick, [k]: e.target.checked })} />{t(label)}</label>
+          )}
         {/* 引导盖在最上面,这里只说去哪儿选,不做成点了没反应的链接 */}
-        <span className="ob3-note" data-ob-sync-agents="">{t('ob3.sync.agentsWhere')}</span></div>
+        <span className="ob3-note" data-ob-sync-agents="">{t(sealed.agents || sealed.plugins ? 'ob3.sync.sealedWhere' : 'ob3.sync.agentsWhere')}</span></div>
     </> : <>
       <span className="ob3-sub">{t('ob3.account.lead')}</span>
       <ul className="ob3-perks">
