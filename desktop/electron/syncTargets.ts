@@ -15,7 +15,7 @@ import { ipcMain } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
 import { vaultList } from './amadeus/vaultList'
 import { cloudVaultDir, isManagedCloudVault } from './amadeus/cloudPaths'
-import { legacyRemoteSync, remoteSyncNet, syncTargetsStore, type LegacyRemoteSyncView } from './remotesyncIpc'
+import { cancelTargetAuth, finishTargetAuth, legacyRemoteSync, remoteSyncNet, startTargetAuth, syncTargetsStore, type LegacyRemoteSyncView, type TargetAuthOutcome } from './remotesyncIpc'
 import { openTargetFs, type TargetFs, type TargetSpec } from './remotesync/targetFs'
 import { normPrefix } from './remotesync/fsS3'
 import { gdriveBaseSegs } from './remotesync/fsGdrive'
@@ -226,7 +226,60 @@ export async function saveSyncTarget(input: SaveTargetInput): Promise<SyncTarget
   return out
 }
 
+/** 报给渲染层的固定码:本身就是码的照传,别的(可能带原文)一律 save-failed。 */
+const fixedCode = (e: unknown): string => {
+  const m = (e as Error)?.message
+  return typeof m === 'string' && /^[a-z][a-z0-9-]{2,63}$/.test(m) ? m : 'save-failed'
+}
+
+export interface TargetAuthStartOpts { id?: string; label?: string; baseDir?: string; appKey?: string; clientId?: string; clientSecret?: string }
+export type TargetAuthEvent = { attempt: string; ok: true; target: SyncTargetSummary; account: string } | { attempt: string; ok: false; error: string }
+
+/** 授权完的凭据存进 sync-targets(契约 H-9)。给了 id = 给已有那条重新授权:位置(baseDir / 自建应用)沿用那条,账号得是同一个
+ *  (saveSyncTarget 核,换了回 target-location-changed);没给 = 新建一条。凭据只在主进程里过一手,回去的只有摘要。 */
+export async function saveAuthorizedTarget(kind: 'dropbox' | 'gdrive', opts: TargetAuthStartOpts, r: TargetAuthOutcome): Promise<{ ok: true; target: SyncTargetSummary; account: string } | { ok: false; error: string }> {
+  if (!r.ok) return r
+  try {
+    const prev = opts.id ? (await syncTargetsStore.read()).targets[opts.id] : undefined
+    if (opts.id && !prev) return { ok: false, error: 'target-not-found' }
+    if (prev && prev.kind !== kind) return { ok: false, error: 'target-kind-changed' }
+    const section: Record<string, unknown> = prev
+      ? { ...prev.section, ...r.creds.section }
+      : { ...r.creds.section, ...(typeof opts.baseDir === 'string' && opts.baseDir.trim() ? { baseDir: opts.baseDir.trim() } : {}) }
+    const target = await saveSyncTarget({ ...(prev ? { id: opts.id } : {}), kind, label: opts.label ?? prev?.label, section })
+    return { ok: true, target, account: r.creds.account }
+  } catch (e) {
+    return { ok: false, error: fixedCode(e) }
+  }
+}
+
 export function registerSyncTargetsIpc(): void {
+  // 新建 / 重新授权网盘去处(契约 H-9):开系统浏览器,结果经 remotesync:targets:auth 发回发起的那个窗口
+  ipcMain.handle('remotesync:targets:authStart', async (e, kind: unknown, rawOpts: unknown) => {
+    if (kind !== 'dropbox' && kind !== 'gdrive') return { ok: false, error: 'bad-target-kind' }
+    const o = (rawOpts && typeof rawOpts === 'object' ? rawOpts : {}) as Record<string, unknown>
+    const str = (k: string): string | undefined => (typeof o[k] === 'string' ? (o[k] as string) : undefined)
+    const opts: TargetAuthStartOpts = { id: str('id'), label: str('label'), baseDir: str('baseDir'), appKey: str('appKey'), clientId: str('clientId'), clientSecret: str('clientSecret') }
+    let prevSection: Record<string, unknown> | undefined
+    if (opts.id) {
+      let prev
+      try { prev = (await syncTargetsStore.read()).targets[opts.id] } catch (err) { return { ok: false, error: fixedCode(err) } }
+      if (!prev) return { ok: false, error: 'target-not-found' }
+      if (prev.kind !== kind) return { ok: false, error: 'target-kind-changed' }
+      prevSection = prev.section
+    }
+    // 重新授权:那条用的是自建应用就还用它(不然换了客户端 = 另一个可见集,会被当成换了位置)
+    const pick = (k: 'appKey' | 'clientId' | 'clientSecret'): string | undefined => opts[k] ?? (typeof prevSection?.[k] === 'string' ? prevSection[k] as string : undefined)
+    const sender = e.sender
+    const send = (ev: TargetAuthEvent): void => { if (!sender.isDestroyed()) sender.send('remotesync:targets:auth', ev) }
+    return startTargetAuth(kind, { appKey: pick('appKey'), clientId: pick('clientId'), clientSecret: pick('clientSecret') }, (attempt, r) => {
+      void saveAuthorizedTarget(kind, opts, r).then((out) => send({ attempt, ...out } as TargetAuthEvent))
+    })
+  })
+  ipcMain.handle('remotesync:targets:authFinish', async (_e, attempt: unknown, code: unknown) =>
+    finishTargetAuth(typeof attempt === 'string' ? attempt : '', typeof code === 'string' ? code : ''))
+  ipcMain.handle('remotesync:targets:authCancel', async (_e, attempt: unknown) => { cancelTargetAuth(typeof attempt === 'string' ? attempt : ''); return { ok: true } })
+
   ipcMain.handle('remotesync:targets:list', async () => {
     const f = await syncTargetsStore.read()
     return Object.entries(f.targets).map(([id, t]) => ({ id, kind: t.kind, label: t.label, dirDefault: dirDefaultOf(t.kind, t.section), source: t.source.startsWith('remotesync:') ? 'remotesync' : 'user' }))

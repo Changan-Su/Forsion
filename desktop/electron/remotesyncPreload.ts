@@ -31,6 +31,16 @@ contextBridge.exposeInMainWorld('remoteSync', {
     save: (input: { id?: string; kind: string; label?: string; section: Record<string, unknown> }): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:save', input),
     remove: (id: string): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:remove', id),
     check: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('remotesync:targets:check', id),
+    // 新建 / 重新授权 Dropbox、Google Drive 去处(契约 H-9):凭据不进渲染层,结果事件里只有去处摘要和账号显示名
+    authStart: (kind: 'dropbox' | 'gdrive', opts?: { id?: string; label?: string; baseDir?: string; appKey?: string; clientId?: string; clientSecret?: string }): Promise<unknown> =>
+      ipcRenderer.invoke('remotesync:targets:authStart', kind, opts ?? {}),
+    authFinish: (attempt: string, code: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('remotesync:targets:authFinish', attempt, code),
+    authCancel: (attempt: string): Promise<unknown> => ipcRenderer.invoke('remotesync:targets:authCancel', attempt),
+    onAuth: (cb: (ev: unknown) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, ev: unknown): void => cb(ev)
+      ipcRenderer.on('remotesync:targets:auth', listener)
+      return () => { ipcRenderer.removeListener('remotesync:targets:auth', listener) }
+    },
   },
   // 智库同步第 2 步:退出门禁卡(syncQuitGate.ts)。订阅了才会在有没同步完的时候被问;回 'quit' = 直接退出,'cancel' = 取消退出
   quitGate: {

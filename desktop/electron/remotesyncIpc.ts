@@ -505,6 +505,7 @@ async function finishGdriveAuth(attempt: GdAttempt, code: string): Promise<{ ok:
 }
 
 async function startGdriveAuth(clientId: string, clientSecret: string): Promise<{ ok: boolean; error?: string }> {
+  supersedeTargetAuth('gdrive') // 没开过新授权 = 什么都不做
   const custom = (clientId ?? '').trim()
   const client = custom ? { clientId: custom, clientSecret: (clientSecret ?? '').trim() || undefined } : gdriveClient()
   if (!client.clientId) return { ok: false, error: 'no-client-id' }
@@ -540,6 +541,144 @@ async function startGdriveAuth(clientId: string, clientSecret: string): Promise<
   }, DBX_AUTH_TIMEOUT_MS)
   await shell.openExternal(gdriveAuthUrl(client.clientId, challenge, attempt.redirectUri, state))
   return { ok: true }
+}
+
+// ── 新同步「同步到哪」的网盘去处授权(契约 H-9):Dropbox / Google Drive 授权完的凭据交给调用方(syncTargets.ts)存进
+//    sync-targets,不落 remotesync.json、不进渲染层、不进日志;报错只回固定码。同时只允许一次:和旧设置页的授权共用
+//    Dropbox 的回调口,谁后开谁顶掉前一个(被顶掉的那边收到 auth-superseded)。没开过新授权时,旧设置页的授权一字不变。
+export interface TargetAuthCreds { section: Record<string, unknown>; account: string }
+export type TargetAuthOutcome = { ok: true; creds: TargetAuthCreds } | { ok: false; error: string }
+interface TargetAuthAttempt {
+  id: string
+  kind: 'dropbox' | 'gdrive'
+  verifier: string
+  redirectUri?: string
+  dropbox?: { appKey: string; custom: boolean }
+  gdrive?: { clientId: string; clientSecret?: string; custom: boolean }
+  done: (attempt: string, r: TargetAuthOutcome) => void
+  close: () => void
+  exchanging?: boolean
+}
+let targetAttempt: TargetAuthAttempt | null = null
+
+/** 回调页 / 换码的失败 → 固定码(提供方的 error_description 可能带账号信息,不往外带)。 */
+function callbackErrorCode(err: string): string {
+  if (err === 'state-mismatch') return 'auth-state-mismatch'
+  if (/^access_denied\b/.test(err)) return 'auth-denied'
+  return 'auth-failed'
+}
+
+/** 结束这一次(只结束一次):关回调、清计时,把结果交出去。 */
+function endTargetAuth(a: TargetAuthAttempt, r: TargetAuthOutcome): void {
+  if (targetAttempt !== a) return
+  targetAttempt = null
+  a.close()
+  a.done(a.id, r)
+}
+
+/** 旧设置页开授权之前调:顶掉在途的新授权。 */
+function supersedeTargetAuth(kind: 'dropbox' | 'gdrive'): void {
+  const a = targetAttempt
+  if (!a) return
+  // 同时只认一次授权(Dropbox 的回调口还是同一个 53682):不管哪一家,一律顶掉
+  void kind
+  endTargetAuth(a, { ok: false, error: 'auth-superseded' })
+}
+
+async function exchangeTargetAuth(a: TargetAuthAttempt, code: string): Promise<void> {
+  if (targetAttempt !== a || a.exchanging) return
+  a.exchanging = true
+  let creds: TargetAuthCreds
+  try {
+    if (a.kind === 'dropbox') {
+      const d = a.dropbox!
+      const r = await dropboxExchangeCode(d.appKey, code, a.verifier, a.redirectUri, remoteFetch)
+      // 内置官方应用的 key 不落(日后换 key,旧值会一直盖住内置值),同旧设置页
+      creds = { section: { appKey: d.custom ? d.appKey : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name ?? '' }, account: r.email ?? r.name ?? '' }
+    } else {
+      const g = a.gdrive!
+      const r = await gdriveExchangeCode({ clientId: g.clientId, clientSecret: g.clientSecret }, code, a.verifier, a.redirectUri ?? '', remoteFetch)
+      creds = { section: { clientId: g.custom ? g.clientId : '', clientSecret: g.custom ? (g.clientSecret ?? '') : '', refreshToken: r.refreshToken, accountId: r.accountId, email: r.email ?? r.name ?? '' }, account: r.email ?? r.name ?? '' }
+    }
+  } catch {
+    endTargetAuth(a, { ok: false, error: 'auth-exchange-failed' })
+    return
+  }
+  endTargetAuth(a, { ok: true, creds })
+}
+
+/** 打不开系统浏览器 = 这一次直接作废(不留着等超时;start 已经回了失败,done 不再调)。 */
+async function openAuthPage(a: TargetAuthAttempt, url: string): Promise<boolean> {
+  try { await shell.openExternal(url); return true } catch {
+    if (targetAttempt === a) { targetAttempt = null; a.close() }
+    return false
+  }
+}
+
+/** 开一次去处授权:打开系统浏览器。Dropbox 回调口起不来 = mode:'manual'(页面给授权码,用户贴回 finishTargetAuth);
+ *  Drive 只有回环一条路(起不来 = loopback-unavailable)。done 只会被调一次(成功 / 失败 / 超时 / 被顶掉 / 取消)。 */
+export async function startTargetAuth(
+  kind: 'dropbox' | 'gdrive',
+  opts: { appKey?: string; clientId?: string; clientSecret?: string },
+  done: (attempt: string, r: TargetAuthOutcome) => void,
+): Promise<{ ok: true; attempt: string; mode: 'auto' | 'manual' } | { ok: false; error: string }> {
+  if (targetAttempt) endTargetAuth(targetAttempt, { ok: false, error: 'auth-superseded' })
+  const { verifier, challenge } = pkcePair()
+  const state = randomBytes(16).toString('hex')
+  const id = randomBytes(12).toString('hex')
+  let srv: { port: number; close: () => void } | null = null
+  let timer: NodeJS.Timeout | null = null
+  const a: TargetAuthAttempt = { id, kind, verifier, done, close: () => { if (timer) clearTimeout(timer); timer = null; srv?.close(); srv = null } }
+  const onCallback = (r: { code: string } | { error: string }): void => {
+    if (targetAttempt !== a) return
+    srv?.close(); srv = null
+    if ('error' in r) endTargetAuth(a, { ok: false, error: callbackErrorCode(r.error) })
+    else void exchangeTargetAuth(a, r.code)
+  }
+  if (kind === 'dropbox') {
+    const custom = (opts.appKey ?? '').trim()
+    const key = custom || FORSION_DROPBOX_APP_KEY
+    if (!key) return { ok: false, error: 'no-app-key' }
+    // 旧设置页在途的 Dropbox 授权:同一个回调口,顶掉它
+    if (dbxPending || dbxServer) { stopDbxServer(); dbxPending = null; sendAll('remotesync:dropboxAuth', { ok: false, error: 'auth-superseded' }) }
+    a.dropbox = { appKey: key, custom: !!custom }
+    targetAttempt = a
+    srv = await dropboxCallbackServer(DBX_PORT, state, onCallback)
+    if (targetAttempt !== a) { srv?.close(); return { ok: false, error: 'auth-superseded' } }
+    a.redirectUri = srv ? DBX_REDIRECT_URI : undefined
+    timer = setTimeout(() => endTargetAuth(a, { ok: false, error: 'auth-timeout' }), DBX_AUTH_TIMEOUT_MS)
+    ;(timer as { unref?: () => void }).unref?.()
+    if (!(await openAuthPage(a, dropboxAuthUrl(key, challenge, srv ? { redirectUri: DBX_REDIRECT_URI, state } : {})))) return { ok: false, error: 'open-browser-failed' }
+    return { ok: true, attempt: id, mode: srv ? 'auto' : 'manual' }
+  }
+  const own = (opts.clientId ?? '').trim()
+  const client = own ? { clientId: own, clientSecret: (opts.clientSecret ?? '').trim() || undefined } : gdriveClient()
+  if (!client.clientId) return { ok: false, error: 'no-client-id' }
+  if (gdAttempt || gdServer) { stopGdServer(); gdAttempt = null; sendAll('remotesync:gdriveAuth', { ok: false, error: 'auth-superseded' }) }
+  a.gdrive = { ...client, custom: !!own }
+  targetAttempt = a
+  srv = await dropboxCallbackServer(0, state, onCallback)
+  if (targetAttempt !== a) { srv?.close(); return { ok: false, error: 'auth-superseded' } }
+  if (!srv) { targetAttempt = null; return { ok: false, error: 'loopback-unavailable' } }
+  a.redirectUri = `http://127.0.0.1:${srv.port}/`
+  timer = setTimeout(() => endTargetAuth(a, { ok: false, error: 'auth-timeout' }), DBX_AUTH_TIMEOUT_MS)
+  ;(timer as { unref?: () => void }).unref?.()
+  if (!(await openAuthPage(a, gdriveAuthUrl(client.clientId, challenge, a.redirectUri, state)))) return { ok: false, error: 'open-browser-failed' }
+  return { ok: true, attempt: id, mode: 'auto' }
+}
+
+/** Dropbox 手贴授权码那条路(mode:'manual')。不是这一次 / 已经结束 = auth-not-started。 */
+export function finishTargetAuth(attempt: string, code: string): { ok: boolean; error?: string } {
+  const a = targetAttempt
+  if (!a || a.id !== attempt || a.kind !== 'dropbox' || typeof code !== 'string' || !code.trim()) return { ok: false, error: 'auth-not-started' }
+  void exchangeTargetAuth(a, code.trim())
+  return { ok: true }
+}
+
+/** 用户关了授权卡。 */
+export function cancelTargetAuth(attempt: string): void {
+  const a = targetAttempt
+  if (a && a.id === attempt) endTargetAuth(a, { ok: false, error: 'auth-cancelled' })
 }
 
 /** 本机笔记库多大(蓬洲云「同步」页 / 首登卡片写「412 MB · 用掉 2 GB 里的 20%」)。
@@ -922,6 +1061,7 @@ export function registerRemoteSync(): void {
   // Dropbox OAuth PKCE:start 开浏览器授权页(verifier 主进程暂存)。回环回调服务器起得来
   // 就自动回填授权码(mode:auto,结果经 remotesync:dropboxAuth 广播);起不来退回手贴(mode:manual)。
   ipcMain.handle('remotesync:dropboxAuthStart', async (_e, appKey: string) => {
+    supersedeTargetAuth('dropbox') // 没开过新授权 = 什么都不做
     const custom = (appKey ?? '').trim()
     const key = custom || FORSION_DROPBOX_APP_KEY
     if (!key) return { ok: false, error: 'no-app-key' }
