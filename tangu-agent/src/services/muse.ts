@@ -1016,6 +1016,7 @@ async function tick(): Promise<void> {
         const activityLines = await readActivityLines({ hours: 24, limit: 500, includeRemote: true });
         // db_changed 的快照游标单独存文件(不进 triggers.json——那是全表规模的派生数据)。
         const hasDb = triggers.some((t) => t.cond?.type === 'db_changed');
+        const vaultPath = amadeusVaultPath();
         const r = await drainAutomation({
           loadTriggers,
           loadCursors,
@@ -1027,9 +1028,9 @@ async function tick(): Promise<void> {
           disableTriggers,
           disableTriggersWithReasons,
           activityLines,
-          currentVault: amadeusVaultPath(),
+          currentVault: vaultPath ?? undefined,
           // 缺 → null(表没了,静默);坏 → 抛(评估侧按规则留痕、不推游标)。折成 null 会让坏表长得像空表。
-          readDbFile: async (rel: string): Promise<DbLike | null> => readDbOrNull(rel).then((db) => db as DbLike | null),
+          readDbFile: async (rel: string): Promise<DbLike | null> => vaultPath ? (await readDbOrNull(rel, vaultPath)) as DbLike | null : null,
           log,
         });
         museFired = r.museFired;

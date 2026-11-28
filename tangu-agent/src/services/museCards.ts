@@ -389,7 +389,7 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
   }
   if (action !== 'accept' && action !== 'edit' && action !== 'observe') return bad;
   const observing = action === 'observe';
-  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', observe: observing || undefined }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
+  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', observe: observing || undefined }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() ?? undefined });
   if (!v.ok) return { ok: false, status: 400, error: 'bad_rule', detail: v.error };
   for (const action of v.value.actions ?? []) {
     if (action.type !== 'send_message') continue;

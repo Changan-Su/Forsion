@@ -465,6 +465,10 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext, origins?: Ma
       if (ctx.toolsMode === 'deny' ? listed : !listed) return;
     }
     if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
+    // Make the online note descriptions visible to the deferred catalog and tool bridge as well as the main loop.
+    if (ctx.amadeusVault?.kind === 'online' && t.name.startsWith('amadeus_') && t.definitionFor && !fromPlugin) {
+      t = { ...t, definition: t.definitionFor(enabledForCtx), definitionFor: undefined };
+    }
     out.set(t.name, t);
     origins?.set(t.name, fromPlugin ? 'plugin' : 'core');
     if (owners) { if (fromPlugin) owners.set(t.name, { ownerPlugin, official }); else owners.delete(t.name); }

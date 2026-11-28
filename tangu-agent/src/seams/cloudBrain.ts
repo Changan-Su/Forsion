@@ -437,8 +437,7 @@ export interface RealtimeBrain {
 }
 
 // ── Amadeus 云笔记库(v1)────────────────────────────────────────────────────
-// 对端:server /api/amadeus/vaults/default/*(契约冻结)。让云端 Tangu(thin worker)的
-// amadeus_* 工具读写用户的云 vault(host 模式仍直连本地磁盘,见 tools/builtin/amadeus.ts)。
+// Worker uses the legacy default-vault routes. Desktop online notes bind a verified independent library.
 
 /** Amadeus 文本文件上限(与 workspace WS_MAX_FILE_BYTES 同款 5MB 契约;服务端 413 对应)。 */
 export const AMADEUS_MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -475,13 +474,20 @@ export class HumanCalendarConflictError extends Error {
   }
 }
 
-export interface AmadeusBrain {
+export interface AmadeusNotes {
   /** 全 vault 文件清单(GET tree 的 pages+files 合并;path=vault 相对路径)。 */
   list(): Promise<Array<{ path: string; size: number }>>;
   /** 读文本文件;404 → AmadeusNotFoundError(二进制 → 服务端 400,原样上抛)。 */
-  read(path: string): Promise<{ content: string; seq: number }>;
+  read(path: string): Promise<{ content: string; seq: number; fileId?: string }>;
   /** 写文本文件;baseSeq=乐观锁(409 → AmadeusConflictError 带最新 seq+content),force=无条件覆盖。 */
-  write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
+  write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean; expectedFileId?: string }): Promise<{ seq: number }>;
+}
+
+export interface AmadeusBrain extends AmadeusNotes {
+  /** Account namespace for the credential used by this adapter. */
+  accountNamespace?(): string | null;
+  /** Bind notes to an independent library after checking the authenticated library list. */
+  library?(ref: { vaultId: string; prefix: string }, account: string, signal?: AbortSignal): Promise<AmadeusNotes | null>;
   /** 读默认日历 human/CALENDAR.db(对端 /api/agent/human/CALENDAR.db)。data=null = 还没有这个文件;legacy = 它的旧位置
    *  (`cloud://<vault>/Calendar.db`)。返回 null = 用不了(旧云端 / 文件坏了);其余失败抛错,不当成没有。 */
   readHumanCalendar?(): Promise<{ data: unknown; version: string | null; legacy: string | null } | null>;
@@ -581,7 +587,7 @@ export interface CloudBrainServices {
   agents?: AgentsBrain;
   /** 收件箱广播拉取(桌面 standalone 定期拉服务端公告);可选:旧云端/微服务进程/纯本地未注入 → inboxPull 调度器不启动。 */
   inbox?: InboxBrain;
-  /** Amadeus 云笔记库(v1);可选:仅 httpBrain(thin worker / standalone 云连)实现 → 非 host 环境的 amadeus_* 工具经此读写云 vault;未注入 → 工具在非 host 环境隐藏。 */
+  /** Optional Amadeus API for Worker notes/calendar and desktop online notes. */
   amadeus?: AmadeusBrain;
   /** 以当前身份请求 Forsion 云端的账号面;可选:仅 httpBrain(standalone 云连 / thin worker)实现,server 内嵌的 brain 与纯本地没有 → 账号工具隐藏。 */
   cloud?: CloudAccountBrain;

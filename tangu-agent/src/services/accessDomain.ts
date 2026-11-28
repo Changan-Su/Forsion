@@ -13,12 +13,11 @@
  *   - 画像 / 项目记忆 / human/ 注入 / Dream 进画像:按分身身份判(持久),不按会话此刻连没连通道判。
  */
 import path from 'node:path';
-import os from 'node:os';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { agentsDir, humanDir, skillsDir, tanguHome } from '../core/tanguHome.js';
 import { canonicalFuturePath, pathWithin, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
-import { currentStandIn, type StandInDomain } from '../seams/runContext.js';
+import { currentRunAmadeusVault, currentStandIn, type StandInDomain } from '../seams/runContext.js';
+import { readAmadeusVault } from '../core/amadeusVault.js';
 import { isLibraryMemoryRel, MEMORY_DETAIL_DIR } from '../contracts/memoryLayers.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
 import { accountHome, isMultiAccount, requireAccountId } from '../core/accountScope.js';
@@ -124,15 +123,9 @@ const plainRoot = (root: string): boolean => {
 /** 真身在一个不是软链的根里。 */
 const insidePlain = (abs: string, root: string): boolean => plainRoot(root) && inside(abs, root);
 
-/** 笔记库根(同 tools/builtin/amadeus.ts amadeusVaultPath 的解析顺序;这里不引那个模块,免得文件策略挂上整张工具图)。 */
+/** Stand-ins still cannot access the local vault beneath an explicitly shared directory. */
 function vaultRoot(): string {
-  const env = process.env.FORSION_AMADEUS_VAULT?.trim();
-  if (env) return env;
-  const cfg = process.env.FORSION_AMADEUS_CONFIG?.trim();
-  if (cfg) {
-    try { const v = JSON.parse(readFileSync(cfg, 'utf8'))?.lastVault; if (typeof v === 'string' && v.trim()) return v.trim(); } catch { /* 回落缺省 */ }
-  }
-  return path.join(os.homedir(), 'Forsion', 'Amadeus');
+  return (currentRunAmadeusVault() ?? readAmadeusVault()).protectedRoot;
 }
 /** 包内置技能(dist/services/../../skills = 包根 skills/,同 skills/localSkills.builtinSkillsDir)。 */
 const packageSkills = (): string => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'skills');

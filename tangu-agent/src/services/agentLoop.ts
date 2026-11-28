@@ -35,7 +35,8 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { bindRunCloudAccount, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { bindRunCloudAccount, currentRunAmadeusVault, enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunAmadeusVault, setRunSessionContext, setRunStandIn } from '../seams/runContext.js';
+import { pinAmadeusVault } from '../core/amadeusVault.js';
 import { getAgentForRun } from '../agents/standIn.js';
 import { channelSourceOf, resolveRunStandIn, standInSection } from './standInRun.js';
 import { tightenChannelApprovalForAgent } from '../channels/runApproval.js';
@@ -936,6 +937,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (engineAgent) enterRunContext(userId, runId, resolveMemorySlug(engineAgent.def), engineAgent.slug);
     else enterRunContext(userId, runId);
     bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
+    setRunAmadeusVault(await pinAmadeusVault(runId, deps().brain.amadeus, ac.signal));
     if (input.approvalTray === true) setApprovalTray(runId, true);
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
@@ -961,7 +963,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     if (allowedBridge.length) {
       const { createRunToolServer } = await import('../engines/toolServer.js');
       toolServer = await createRunToolServer({ userId, sessionId, runId, appId:deps().profile.appId, modelId,
-        execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
+        amadeusVault: currentRunAmadeusVault(), execMode:'host',cwd:engineCwd,approvalMode:normalizeApprovalMode(storedAgentConfig?.approvalMode),signal:ac.signal,
         toolsStrict:true,toolsList:allowedBridge },allowedBridge);
     } else if (engineAgent && !storedAgentConfig?.pluginOwner) {
       // 交接:这个 Agent 在 Tangu 上能用的工具(按它的工具设置)经桥交给引擎,人设 / 协作说明 / 记忆 / 技能写进指令目录。
@@ -1797,6 +1799,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // microserver/standalone 的 brain/state 不读此上下文,无副作用。
   enterRunContext(userId, runId);
   bindRunCloudAccount(deps().brain.cloud?.accountBinding?.());
+  const amadeusVault = profile.capabilities.hostExec
+    ? await pinAmadeusVault(runId, deps().brain.amadeus, ac.signal)
+    : undefined;
+  if (amadeusVault) setRunAmadeusVault(amadeusVault);
   const modelId = run.model_id || '';
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig); // 非普通对象(字符串/数组)一律当 {}:下面会直接给它赋字段
@@ -2602,7 +2608,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const channelSession = channelBinding === true;
     const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
-    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
+    const promptSections = profile.promptSections({ execMode, cwd, extraRoots, amadeusVault, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
@@ -2907,6 +2913,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
       subAgentDelegator: agentConfig.delegatedBy,
       agentSlug: activeAgentSlug,
+      amadeusVault,
       standIn, // 分身的权限域(工具面 / 读写根 / 委派 / 画像),子代理随 ctx 继承
       thinkingLevel,
       teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,

@@ -27,6 +27,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { forsionSharedDir } from '../../core/tanguHome.js';
 import { contentToText } from '../../mcp/toolBridge.js';
 import { citeRefFor } from '../documentPages.js';
+import type { ToolContext } from '../toolTypes.js';
 import { amadeusVaultPath } from './amadeus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 
@@ -38,14 +39,12 @@ const bridgeFile = (): string => path.join(forsionSharedDir(), 'desktop-bridge.j
  *     issue #9920 的血:`10:44` 会被读成 10 小时 44 分),让模型写冒号必然踩空。秒数本来就是
  *     segments[].start 的原值,零换算。可读时间放别名位(`|01:35`),那里怎么写都不影响跳转。
  *  ⚠️ 转写对象常常是从视频里抽出来的**临时音轨**,引它等于给用户一条点不开的路 —— 明说要引原件。 */
-function withCiteHint(out: string, audioPath: string, realPath = audioPath): string {
+function withCiteHint(out: string, audioPath: string, ctx: ToolContext, realPath = audioPath): string {
   // 多账号模式下插件脚本的音频在这一轮的临时目录里,这一轮结束就删:引它是一条点不开的路,也会把机器上的路径带给用户
   if (isMultiAccount() && realPath.startsWith(path.join(realpathOr(currentAccountRoot()), '.scratch') + path.sep)) return out;
   let ref = audioPath;
   // 多账号模式不拿进程那份笔记库路径来算相对引用(那是机器主人的库,不是这个账号的)
-  if (!isMultiAccount()) try {
-    ref = citeRefFor(audioPath, amadeusVaultPath() || null, path.sep);
-  } catch { /* vault 配置缺失 → 用绝对路径,锚点照样可点 */ }
+  if (!isMultiAccount()) ref = citeRefFor(audioPath, amadeusVaultPath(ctx), path.sep);
   const hint = `Cite a moment for the user: [[${ref}#t=<start seconds>|<mm:ss>]], e.g. [[${ref}#t=95|01:35]]. ` +
     'Seconds only after `t=` (a clock form like "1:35" is rejected); put the readable timestamp after the `|`. ' +
     'If this file is a temporary audio track extracted from a video, cite the original video path instead. ' +
@@ -148,7 +147,7 @@ export const transcribeAudioProvider: ToolProvider = {
           const denied = accountReadDenied(real);
           if (denied) return `Error: ${denied}`;
           const out = await viaCloud(asr, real, args, ctx.signal);
-          return args.timestamps === true && !out.startsWith('Error:') ? withCiteHint(out, p, real) : out;
+          return args.timestamps === true && !out.startsWith('Error:') ? withCiteHint(out, p, ctx, real) : out;
         }
         const bridge = readBridge();
         if (!bridge) return 'Error: Forsion Desktop bridge not found — is the desktop app installed and running?';
@@ -172,7 +171,7 @@ export const transcribeAudioProvider: ToolProvider = {
           );
           const { text, isError } = contentToText(result);
           // 锚点提示只在**真有时间戳**时给:没有 segments 就没有秒数,教了只会诱发编造。
-          return isError ? `Error: ${text}` : args.timestamps === true ? withCiteHint(text, p) : text;
+          return isError ? `Error: ${text}` : args.timestamps === true ? withCiteHint(text, p, ctx) : text;
         } catch (e: any) {
           // 凭证防漏:错误可能回显 headers,截断(与 mcp/manager 同口径)。连接被拒 = 桌面没在跑。
           const msg = String(e?.message || e).slice(0, 300);

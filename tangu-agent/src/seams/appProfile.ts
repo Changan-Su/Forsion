@@ -11,6 +11,7 @@ import type { Preset } from '../core/presetTable.js';
 
 export interface PromptSectionCtx {
   execMode: 'sandbox' | 'host';
+  amadeusVault?: import('../core/amadeusVault.js').RunAmadeusVault;
   cwd?: string;
   /** host:用户显式添加的额外工作文件夹(绝对路径),已并入可写根,环境段据此告知模型。 */
   extraRoots?: string[];

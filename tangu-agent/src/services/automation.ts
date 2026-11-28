@@ -385,7 +385,7 @@ export interface SelfCursorIo {
   loadTriggers: () => Promise<MuseTrigger[]>;
   loadCursors: () => Promise<Record<string, DbCursor>>;
   setCursors: (patch: Record<string, DbCursor>) => Promise<void>;
-  currentVault?: string;
+  currentVault?: string | null;
 }
 
 /**
@@ -405,6 +405,7 @@ export async function advanceSelfCursors(
   touched: Record<string, TouchedDbs>,
   io: SelfCursorIo = { loadTriggers, loadCursors, setCursors, currentVault: amadeusVaultPath() },
 ): Promise<void> {
+  if (io.currentVault === null) return;
   const ids = Object.keys(touched).filter((id) => Object.keys(touched[id] ?? {}).length);
   if (!ids.length) return;
   const list = await io.loadTriggers();

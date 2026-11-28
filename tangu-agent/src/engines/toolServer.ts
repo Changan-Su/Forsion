@@ -33,7 +33,7 @@ import { executeTool, getToolCapabilities, toolPluginOwnerOf, toolSourceOf } fro
 import { gateToolCall, type ApprovalDecision } from '../services/approvals.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { deps } from '../seams/runtime.js';
-import { enterRunContext, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, setRunAmadeusVault, setRunCwd } from '../seams/runContext.js';
 import { isHtmlCardTool, LEGACY_HTML_CARD_TOOL } from '../tools/builtin/sketch.js';
 import { computerUseUnavailableText } from '../contracts/agentEngine.js';
 import { BRIDGE_USER_REJECT_REASON } from '../contracts/toolRejection.js';
@@ -215,6 +215,7 @@ export async function createRunToolServer(ctx: ToolContext & { runId: string }, 
 
   const enter = () => {
     enterRunContext(ctx.userId, ctx.runId, opts.memorySlug, opts.agentSlug);
+    if (ctx.amadeusVault) setRunAmadeusVault(ctx.amadeusVault);
     if (ctx.cwd) setRunCwd(ctx.cwd);
   };
 

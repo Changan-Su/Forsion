@@ -57,14 +57,6 @@ const READ_DOC_MAX_BYTES = 50 * 1024 * 1024; // ponytail: 文本型 PDF 足够;�
 const READ_DOC_MAX_PAGES = 5000;
 
 /** vault 根(配置缺失/损坏时 null —— 引用锚点退回文件名,绝不让 read_document 因此失败)。 */
-function vaultRootOrNull(): string | null {
-  try {
-    return amadeusVaultPath() || null;
-  } catch {
-    return null;
-  }
-}
-
 /** 上一次 read_document 的解析结果（键=路径+mtime+size+ino+ocr）。定位→读页是两趟调用，别重解析整本书。
  *  plainText = 没走 LibreOffice 的 docx 纯文本兜底（整篇算一页，没有排版页）。 */
 let docMemo: { key: string; pages: DocPage[]; plainText?: boolean } | null = null;
@@ -411,7 +403,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 末行引用锚点(2026-08-28,对齐 read_document 的经验):锚点必须是**可原样复制的具体路径**,
       // 光在 description 里教格式,模型会自己缩写路径/丢括号。vault 内的 .md 教标题锚(笔记打开在
       // Milkdown 编辑器里,行号无处落地;标题走大纲跳转);其余一律行号锚(GitHub #L 约定)。
-      const ref = citeRefFor(abs, vaultRootOrNull(), path.sep);
+      const ref = citeRefFor(abs, amadeusVaultPath(ctx), path.sep);
       noteRead(ctx, abs, buf); // G3-02:write_file 整篇覆盖前据此判断「读后盘上有没有被改过」
       const text = buf.toString('utf-8');
       if (/[\\/]Library[\\/](?:memory[\\/])?[^\\/]+\.md$/.test(abs)) noteDetailFileRead(abs, text); // 记忆分层:整份读了一份详情(Agent 或项目记忆),里面每条记一次用量
@@ -818,7 +810,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       }
       // 引用锚点:同名 PDF 在库里可能有好几份,只给文件名的话点开的可能是另一份 —— vault 内一律
       // 给**vault 相对路径**(渲染层按整路径精确匹配),vault 外给**绝对路径**(桌面端只读打开)。
-      const citeRef = citeRefFor(abs, vaultRootOrNull(), path.sep);
+      const citeRef = citeRefFor(abs, amadeusVaultPath(ctx), path.sep);
       const capped = pages.length >= READ_DOC_MAX_PAGES ? ` — ⚠️ only the first ${READ_DOC_MAX_PAGES} pages were parsed` : '';
       const extent = memo.plainText
         ? 'plain text only: LibreOffice unavailable, so no page layout; equations are flattened'

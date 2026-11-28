@@ -77,8 +77,8 @@ export function dbRowId(): string {
 }
 
 /** vault 相对路径 → 绝对路径,钳制在 vault 内。词法钳制 + realpath 复核(软链越界)。 */
-export async function inVaultDb(rel: string): Promise<string> {
-  const root = amadeusVaultPath();
+export async function inVaultDb(rel: string, root = amadeusVaultPath()): Promise<string> {
+  if (!root) throw new Error('No local Amadeus vault is available');
   const abs = path.resolve(root, rel);
   const lex = path.relative(root, abs);
   if (lex.startsWith('..') || path.isAbsolute(lex)) throw new Error(`path escapes the vault: ${rel}`);
@@ -115,8 +115,8 @@ export interface ParsedDb {
   raw: string;
 }
 
-export async function readDb(rel: string): Promise<ParsedDb> {
-  const abs = await inVaultDb(rel);
+export async function readDb(rel: string, root = amadeusVaultPath()): Promise<ParsedDb> {
+  const abs = await inVaultDb(rel, root);
   const raw = await fs.readFile(abs, 'utf8');
   const data = JSON.parse(raw);
   if (!data || typeof data !== 'object' || !Array.isArray(data.columns) || !Array.isArray(data.rows)) {
@@ -130,9 +130,9 @@ export async function readDb(rel: string): Promise<ParsedDb> {
  * (坏 JSON / 结构不对 / 越界 / 权限)。从前 `.catch(() => null)` 把坏文件也折成 null,评估侧据此
  * 算出空 lookup、0 公式,再把事件当成已消费 —— 失败必须是失败,不能长得像「表是空的」。
  */
-export async function readDbOrNull(rel: string): Promise<DbFile | null> {
+export async function readDbOrNull(rel: string, root = amadeusVaultPath()): Promise<DbFile | null> {
   try {
-    return (await readDb(rel)).db;
+    return (await readDb(rel, root)).db;
   } catch (e: any) {
     if (e?.code === 'ENOENT') return null;
     throw e;
@@ -217,11 +217,12 @@ export async function withDbLock<T>(abs: string, fn: () => Promise<T>): Promise<
  * 返回 false = 什么都没改(不落盘,也就不会白白触发别人的 watcher)。
  */
 export async function mutateDb(rel: string, fn: (db: DbFile) => boolean | void): Promise<void> {
+  const root = amadeusVaultPath();
   const run = async (): Promise<void> => {
-    const abs = await inVaultDb(rel);
+    const abs = await inVaultDb(rel, root);
     // 锁必须裹住**读**:只裹写的话,我们读到的仍可能是对方写之前的版本,rename 照样抹掉它。
     await withDbLock(abs, async () => {
-      const { db } = await readDb(rel);
+      const { db } = await readDb(rel, root);
       assertAutomatable(rel, db);
       if (fn(db) === false) return;
       // 后缀三段(pid-时间戳-序号)是与桌面 vaultManager.atomicWrite 对齐的约定:watcher 的
