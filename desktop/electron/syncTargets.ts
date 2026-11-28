@@ -13,7 +13,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { ipcMain } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
-import { vaultList } from './amadeus/vaultList'
+import { normalizeLocal, vaultList } from './amadeus/vaultList'
 import { cloudVaultDir, isManagedCloudVault } from './amadeus/cloudPaths'
 import { cancelTargetAuth, finishTargetAuth, legacyRemoteSync, remoteSyncNet, startTargetAuth, syncTargetsStore, takeTargetAuthTicket, type LegacyRemoteSyncView, type TargetAuthOutcome } from './remotesyncIpc'
 import { openTargetFs, type TargetFs, type TargetSpec } from './remotesync/targetFs'
@@ -111,9 +111,9 @@ async function canon(p: string): Promise<string> {
 }
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
-/** 本机库清单(realpath,只列在的、不是托管云镜像的)。 */
+/** 本机库清单(realpath,只列在的、不是托管云镜像的)。和菜单的 listVaults 同一口径:只有 lastVault 的老配置经 normalizeLocal 补进来。 */
 async function localVaults(): Promise<Array<{ root: string; name: string }>> {
-  const cfg = await readAmadeusConfig()
+  const cfg = normalizeLocal(await readAmadeusConfig(), isManagedCloudVault)
   const out: Array<{ root: string; name: string }> = []
   for (const v of vaultList(cfg)) {
     if (isManagedCloudVault(v.root)) continue
