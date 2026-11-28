@@ -7,7 +7,7 @@
  */
 import { openPenzorSync, penzorSyncReady } from '../../services/syncSetup'
 import { useApp } from '../../stores/appStore'
-import { isFullSync, isLegacySync } from './mode'
+import { isDesktopExtendOff, isFullSync, isLegacySync } from './mode'
 import type { ScopeItemKind } from './types'
 
 export interface SyncFocus {
@@ -45,7 +45,7 @@ export function parseSyncFocus(v: unknown): SyncFocus | undefined {
 export function openSyncSettings(focus?: SyncFocus): void {
   if (!isFullSync()) {
     // 旧同步明确在管才去蓬洲云的同步页;停用 / 读不出 / 还没问出来 → 设置 › 同步(那里写清楚是怎么回事)
-    if (isLegacySync() && penzorSyncReady()) openPenzorSync()
+    if (isLegacySync() && !isDesktopExtendOff() && penzorSyncReady()) openPenzorSync()
     else useApp.getState().openSettings('sync')
     return
   }

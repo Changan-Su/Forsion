@@ -2,7 +2,7 @@
  *  (换名重试 / 显式合并进现有云文件夹)。命令式打开(openCloudSyncDialog),
  *  Host 挂 AmadeusOverlays(askString 同款模式);数据面 = window.amadeusSync.entrySync*。 */
 import { usePageStore } from '@amadeus/store/pageStore'
-import { isFullSync, isLegacySync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
+import { isDesktopExtendOff, isFullSync, isLegacySync, refreshSyncMode, syncModeNow } from '../sync/v2/mode'
 import { openSyncSettings } from '../sync/v2/openSyncSettings'
 import { useEffect, useState, type ReactNode } from 'react'
 import { create } from 'zustand'
@@ -166,8 +166,8 @@ export function openCloudSyncDialog(path: string, kind: 'page' | 'folder' | 'ass
     openSyncSettings({ ...(root ? { root } : {}), path, kind: kind === 'asset' ? 'file' : kind })
     return
   }
-  // 不是明确的旧同步(读不出 / Extend 停用 / 还是问不出来):不开旧弹窗写旧注册,去设置 › 同步看原因
-  if (!isLegacySync()) { const root = usePageStore.getState().vaultRoot; openSyncSettings(root ? { root } : undefined); return }
+  // 读不出 / 还是问不出来 / 桌面上 Extend 停用:不开旧弹窗写旧注册,去设置 › 同步看原因
+  if (!isLegacySync() || isDesktopExtendOff()) { const root = usePageStore.getState().vaultRoot; openSyncSettings(root ? { root } : undefined); return }
   useDialogStore.getState().open({ path, kind })
 }
 

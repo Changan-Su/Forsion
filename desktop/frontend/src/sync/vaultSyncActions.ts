@@ -11,7 +11,7 @@ import { openPenzorSync, penzorSyncReady } from '../services/syncSetup'
 import { useApp } from '../stores/appStore'
 import { refreshVaultSync } from './vaultSyncStore'
 import { vaultSync } from './v2/client'
-import { isFullSync, isLegacySync } from './v2/mode'
+import { isDesktopExtendOff, isFullSync, isLegacySync } from './v2/mode'
 import { openSyncSettings as openV2Settings } from './v2/openSyncSettings'
 
 /** v2 的 feed(`vault:<bindingId>`):立即同步 / 重试走 vaultsync:run,别撞已退场的 penzor:sync:*。 */
@@ -61,6 +61,6 @@ export function openDeletesReview(item: Extract<SyncReviewItem, { kind: 'deletes
 /** 「同步设置…」:完整模式 → 设置 › 同步(带上库根就定位到那一行);其余照第 1 步:蓬洲云的同步页,没装 Extend 的去设置 › 同步。 */
 export function openSyncSettings(root?: string | null): void {
   if (isFullSync()) { openV2Settings(root ? { root } : undefined); return }
-  if (isLegacySync() && penzorSyncReady()) openPenzorSync()
+  if (isLegacySync() && !isDesktopExtendOff() && penzorSyncReady()) openPenzorSync()
   else useApp.getState().openSettings('sync')
 }

@@ -5,7 +5,7 @@
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
 import { entryLabel, isFullSyncNow, runEntry, useV2EntrySync } from '../sync/v2/entries'
-import { useSyncMode } from '../sync/v2/mode'
+import { useLegacySync, useSyncMode } from '../sync/v2/mode'
 import React, { useEffect, useRef, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff, FileText, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
@@ -362,7 +362,7 @@ function CloudSyncRow({ path, onClose }: { path: string; onClose: () => void }) 
   const { t } = useI18n()
   // 智库同步第 2 步完整模式:同一个入口(同步这篇… / 停止同步这一项 / 同步设置…),改去设置 › 同步
   const v2 = useV2EntrySync(vaultRoot, vaultSide === 'local' ? path : null)
-  const legacy = useSyncMode((s) => s.mode === 'legacy') // 旧写入口只在旧同步明确在管时给
+  const legacy = useLegacySync() // 旧写入口:读不出 / 还没问出来时不给
   if (v2 !== null) {
     if (vaultSide !== 'local') return null
     return (

@@ -163,8 +163,6 @@
 
 /* 汇总卡:本机库 → 去处 */
 .ssync-sum-dest { margin: 2px 0 8px; font-size: var(--ui-font-meta); color: var(--text-light); overflow-wrap: anywhere; }
-/* Extend 停用时今天那份设置:看得见、动不了 */
-.ssync-readonly { opacity: 0.55; }
 /* 拦下的删除:先列出来再给「照删」 */
 .ssync-del-list { display: flex; flex-direction: column; gap: 2px; width: 100%; max-height: 160px; overflow: auto; margin-top: 4px; }
 .ssync-del-row { display: flex; gap: 8px; min-width: 0; font-size: var(--ui-font-caption); }

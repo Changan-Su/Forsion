@@ -54,6 +54,13 @@ export async function refreshSyncMode(): Promise<SyncUiMode> {
 
 export const syncModeNow = (): SyncUiMode => useSyncMode.getState().mode
 export const isFullSync = (): boolean => useSyncMode.getState().mode === 'full'
-/** 明确是旧同步在管(compat,或老 Extend 没有 v2 通道)。旧入口(条目同步的开 / 关、旧弹窗、蓬洲云同步页)只在这时给:
- *  还没问出来(unknown)、读不出(unreadable)、Extend 停用(off)都不给旧写入口(Codex P1-7 / P2-6)。 */
-export const isLegacySync = (): boolean => useSyncMode.getState().mode === 'legacy'
+/** 旧流程照旧的几种:compat / 老 Extend(legacy),和这台根本没有 v2(off:网页、手机、没装或停用 Extend 的桌面 ——
+ *  这些宿主上旧流程一直是唯一的那套)。只有「还没问出来(unknown)」「读不出(unreadable)」不给旧写入口(Codex P1-7):
+ *  这两种是 v2 可能在管、只是这一下不知道。 */
+export const isLegacySync = (): boolean => { const m = useSyncMode.getState().mode; return m === 'legacy' || m === 'off' }
+/** 同上的 hook 版(组件里订阅)。 */
+export const useLegacySync = (): boolean => useSyncMode((s) => s.mode === 'legacy' || s.mode === 'off')
+/** 桌面上 Extend 停用 / 没装(这台本该有设置 › 同步这一页,却问不到 v2):入口去设置页看说明,别按残留的就绪标记送进不存在的蓬洲云(Codex P2-6)。
+ *  网页 / 手机没有这一页,照旧去蓬洲云。 */
+export const isDesktopExtendOff = (): boolean =>
+  useSyncMode.getState().mode === 'off' && typeof window !== 'undefined' && !!window.tangu?.backendStatus && !!window.amadeus && !!window.remoteSync

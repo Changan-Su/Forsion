@@ -156,7 +156,7 @@ registerMessages({
   'ssync.targetChanged': { zh: '这个网盘的位置或账号变了：请新建一个网盘再配对', en: 'This drive’s location or account changed. Add it as a new drive and pair again' },
   // 停用 / 读不出
   'ssync.off.title': { zh: '同步在 Forsion Extend 里，它已停用', en: 'Sync lives in Forsion Extend, which is turned off' },
-  'ssync.off.desc': { zh: '智库同步（包括同步到你自己的网盘）由 Forsion Extend 负责。启用后重启 Forsion 就能用。', en: 'Vault sync, including syncing to your own network drive, runs in Forsion Extend. Turn it on and restart Forsion.' },
+  'ssync.off.desc': { zh: '同步到蓬洲云的库由 Forsion Extend 负责，现在停了；启用后重启 Forsion 就接着同步。下面原来方式的网盘同步不归它管，照旧在这里设置。', en: 'Vaults syncing to Penzor Cloud run in Forsion Extend, so they’ve stopped. Turn it on and restart Forsion to pick up where they left off. Network drive sync set up the old way below doesn’t depend on it and is still managed here.' },
   'ssync.off.notLoaded': { zh: 'Forsion Extend 没有加载起来，同步暂时不能用', en: 'Forsion Extend didn’t load, so sync isn’t available right now' },
   'ssync.off.notLoadedDesc': { zh: '去「插件」里看看它为什么没加载。', en: 'Check Plugins to see why it didn’t load.' },
   'ssync.off.enable': { zh: '启用 Forsion Extend', en: 'Turn on Forsion Extend' },

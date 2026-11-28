@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CHANNEL_MISSING, EXTEND_UNAVAILABLE, normalizeReply } from './client'
 import { isPlaceholderReview, v2Feed, v2Roots } from './feed'
-import { modeFrom, setSyncMode, useSyncMode } from './mode'
+import { isDesktopExtendOff, isLegacySync, modeFrom, setSyncMode, useSyncMode } from './mode'
 import { parseSyncFocus } from './openSyncSettings'
 import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeItem, scopeCovers, topLevelEntries } from './scope'
 import { entrySyncState } from './entries'
@@ -186,5 +186,19 @@ describe('Codex 评审返修(第 2 步 U)', () => {
     expect(CREATE_CANDIDATE).toEqual({ kind: 'new' })
     expect(syncErrorText('takeover_in_progress', t)).toBe(t('ssync.err.takeoverBusy'))
     expect(syncErrorText('Error: binding_not_found', t)).toBe(t('ssync.err.bindingGone'))
+  })
+})
+
+describe('旧流程照旧的模式(网页 / 手机没有 v2 通道 = off,旧流程是唯一那套)', () => {
+  afterEach(() => useSyncMode.setState({ mode: 'unknown', compatReason: undefined, error: undefined }))
+  it('legacy / off 给旧流程;unknown / unreadable / full 不给', () => {
+    for (const [m, ok] of [['legacy', true], ['off', true], ['unknown', false], ['unreadable', false], ['full', false]] as const) {
+      useSyncMode.setState({ mode: m })
+      expect(isLegacySync()).toBe(ok)
+    }
+  })
+  it('isDesktopExtendOff 只在桌面宿主(有设置 › 同步这一页)上成立,网页 / 手机的 off 照旧去蓬洲云', () => {
+    useSyncMode.setState({ mode: 'off' })
+    expect(isDesktopExtendOff()).toBe(false) // 测试环境 = 没有 tangu / amadeus / remoteSync,同网页
   })
 })

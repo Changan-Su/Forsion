@@ -83,8 +83,9 @@ export function SyncSettings({ focus, legacy, drive }: { focus?: SyncFocus; lega
   if (gate.kind === 'error') {
     return <SettingsPage host schema={{ state: { kind: 'error', title: t('ssync.loadFailed'), desc: ipcErrorText(gate.error), action: { label: t('ssync.retry'), onClick: () => load() } } }} />
   }
-  // Extend 停用 = 同步停了(11-28 用户定):今天那份设置照样看得见,但只读 —— 改了也不会生效,别让人以为能用
-  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice /><div className="ssync-readonly" inert>{legacy}</div></div>
+  // Extend 停用 = 同步到蓬洲云的停了(11-28 用户定);下面原来方式的网盘同步是宿主自己的引擎(Extend 不握手时 H 会交还给它),
+  // 停用时照样在跑,这里得能管它 —— 不做成只读
+  if (gate.kind === 'off') return <div className="ssync-page" data-ssync-mode="off"><ExtendOffNotice />{legacy}</div>
   // 同步记录读不出来:引擎已经停下;这时不给旧界面的写入口(读失败 ≠ 空,Codex P1-7),只说清楚 + 重试
   if (gate.kind === 'compat' && gate.reason === 'state-unreadable') {
     return (
