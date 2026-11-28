@@ -69,8 +69,9 @@ export interface StreamResult {
   reasoning: string;
   toolCalls: ToolCall[];
   /** cached_tokens/cache_write_tokens:prompt 缓存命中/写入量(provider 上报,brain 归一化;未上报为 0/缺省)。
+   *  cache_write_long_tokens:写入里长档(Claude 1h / GPT-5.6+ 12h)那部分,server #209 起给出,计费接缝按它分档。
    *  reasoning_tokens:completion 里的隐藏思考量(Responses output_tokens_details;计量拆账用)。 */
-  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; cache_write_long_tokens?: number; reasoning_tokens?: number };
   finishReason?: string;
   /** A direct provider stream reached EOF without a terminal event. */
   streamEndedEarly?: true;

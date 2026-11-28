@@ -13,6 +13,7 @@ import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from 
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { formatPageInstructions, PAGE_INSTRUCTIONS_MAX_CHARS } from './pageInstructions.js';
 import { fimUnsupportedError, isFimUnsupported } from '../seams/cloudBrain.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail, type CacheWriteUsage } from '../seams/billing.js';
 
 /** fim = 行内补全(fill-in-the-middle,2026-10-26+):不走下面那套提示词,光标前后文原样交给补全模型(brain.llm.fimCompletion)。 */
 export const INLINE_ACTIONS = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom', 'fim'] as const;
@@ -192,12 +193,12 @@ async function completeFim(opts: InlineOpts): Promise<InlineAnswer> {
   const estCost = await billing.calculateCost(opts.modelId, promptEst, maxTokens);
   if (!(await billing.canConsumeTokenPoints(user.id, estCost)).ok) throw new Error('token_quota_exceeded');
   opts.signal.throwIfAborted();
-  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string): Promise<void> => {
-    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, undefined, cached);
+  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string, cacheWrite?: CacheWriteUsage): Promise<void> => {
+    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, undefined, cached, ...cacheWriteArg(cacheWrite));
     await billing.consumeTokenPoints(user.id, cost).catch(() => {});
     await (billing.logApiUsage as any)(
       (user as any).username || 'local', opts.modelId, undefined, undefined,
-      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client,
+      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client, ...cacheWriteLogTail(cacheWrite),
     ).catch(() => {});
   };
   let streamed = '';
@@ -220,7 +221,7 @@ async function completeFim(opts: InlineOpts): Promise<InlineAnswer> {
   }
   const content = typeof res?.content === 'string' && res.content ? res.content : streamed;
   const usage: any = res?.usage || {};
-  await settle(Number(usage.prompt_tokens) || promptEst, Number(usage.completion_tokens) || estimateTokensRough(content), Number(usage.cached_tokens) || 0);
+  await settle(Number(usage.prompt_tokens) || promptEst, Number(usage.completion_tokens) || estimateTokensRough(content), Number(usage.cached_tokens) || 0, undefined, cacheWriteOf(usage));
   return { content, toolCallText: false };
 }
 
@@ -247,12 +248,12 @@ export async function completeInline(opts: InlineOpts): Promise<InlineAnswer> {
   /** 按用量结算(扣额度 + 记用量)。正常结束用 provider 的 usage;**中止 / 出错也结算**(Codex 复核 P0):请求发出去之后
    *  上游已经在计费、客户端也可能已经拿到了部分正文 —— 只在正常结束时扣费,断开连接就能白拿。provider 没给 usage →
    *  提示词按 estimateMessagesTokens、输出按已流出的字数 estimateTokensRough 估(与额度预检同一套估算函数)。 */
-  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string): Promise<void> => {
-    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, model, cached);
+  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string, cacheWrite?: CacheWriteUsage): Promise<void> => {
+    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, model, cached, ...cacheWriteArg(cacheWrite));
     await billing.consumeTokenPoints(user.id, cost).catch(() => {});
     await (billing.logApiUsage as any)(
       (user as any).username || 'local', opts.modelId, (model as any)?.name, (model as any)?.provider,
-      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client,
+      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client, ...cacheWriteLogTail(cacheWrite),
     ).catch(() => {});
   };
   let streamed = '';
@@ -270,7 +271,7 @@ export async function completeInline(opts: InlineOpts): Promise<InlineAnswer> {
   const usage: any = res?.usage || {};
   const prompt = Number(usage.prompt_tokens) || estimateMessagesTokens(messages);
   const completion = Number(usage.completion_tokens) || estimateTokensRough(String(res?.content || streamed));
-  await settle(prompt, completion, Number(usage.cached_tokens) || 0);
+  await settle(prompt, completion, Number(usage.cached_tokens) || 0, undefined, cacheWriteOf(usage));
   const content = stripOuterFence(String(res?.content || ''), opts.input.selection);
   return { content, toolCallText: looksLikeToolCallText(content) };
 }

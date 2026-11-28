@@ -17,6 +17,7 @@ import { modelSupportsVision } from '../llm/modelCapabilities.js';
 import { toImageParts } from './imageAttachments.js';
 import type { ChatMessage } from '../core/types.js';
 import { PLUGIN_MODEL_PREFIX, resolvePluginModel } from '../llm/pluginModels.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail } from '../seams/billing.js';
 
 const DESCRIBE_SYSTEM_PROMPT =
   'You are an image-understanding assistant. Describe the given image(s) so that another AI, which cannot see them, can act on your description alone. ' +
@@ -229,11 +230,13 @@ export async function describeImages(
 
   const usage = res?.usage || ({} as any);
   const cached = usage.cached_tokens || 0;
-  const cost = await billing.calculateCost(modelId, usage.prompt_tokens || 0, usage.completion_tokens || 0, undefined, cached);
+  const cacheWrite = cacheWriteOf(usage);
+  const cost = await billing.calculateCost(modelId, usage.prompt_tokens || 0, usage.completion_tokens || 0, undefined, cached, ...cacheWriteArg(cacheWrite));
   await billing.consumeTokenPoints(user.id, cost).catch(() => {});
   await (billing.logApiUsage as any)(
     user.username, modelId, model.name, model.provider,
     usage.prompt_tokens || 0, usage.completion_tokens || 0, true, undefined, opts.appId, cost, cached,
+    ...(cacheWrite ? [undefined, ...cacheWriteLogTail(cacheWrite)] : []), // 第 12 位 client 不传,由 run 上下文补
   ).catch(() => {});
 
   const text = String(res?.content || '').trim();

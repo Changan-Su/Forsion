@@ -36,6 +36,7 @@ import { activateMember as realActivateMember, type ActivateMember, type MemberO
 import { effectiveRemote, type RemoteInfo } from './remoteOrigin.js';
 import { normalizeApprovalMode } from './approvals.js';
 import { TEAM_OUTPUT_MODE, teamOutputCollector, teamOutputRecord } from './teamOutputs.js';
+import { cacheWriteArg, cacheWriteOf } from '../seams/billing.js';
 
 /** 兜底天花板(周期数;每周期 = 还想聊的成员各说一次)。不是缺省上限:没传 groupMaxRounds 时团队只靠成员自己的 DONE 收场,这里只防失控。 */
 const MAX_GROUP_ROUNDS = 30;
@@ -643,7 +644,7 @@ async function account(p: GroupChatParams, res: StreamResult, effModelId: string
   const promptT = res.usage?.prompt_tokens || 0;
   const compT = res.usage?.completion_tokens || 0;
   meter.tokens += promptT + compT;
-  const cost = await deps().billing.calculateCost(effModelId, promptT, compT, model, cached).catch(() => 0);
+  const cost = await deps().billing.calculateCost(effModelId, promptT, compT, model, cached, ...cacheWriteArg(cacheWriteOf(res.usage))).catch(() => 0);
   await deps().billing.consumeTokenPoints(p.userId, cost).catch(() => ({ ok: true } as any));
   meter.cost += cost;
   await publish(p.runId, 'usage', { prompt: promptT, completion: compT, cached, cost, total: meter.tokens, costTotal: meter.cost, costLimit: meter.limit, agentId: agentSlug }).catch(() => {});

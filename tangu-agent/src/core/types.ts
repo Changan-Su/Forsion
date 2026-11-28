@@ -74,7 +74,7 @@ export class LlmError extends Error {
   /** 本地判的传输中断(看门狗超时等),不是服务端回的 HTTP 状态 */
   localTransport?: boolean;
   /** 失败前已知的用量(流里先报了 usage 再断):run 成本闸归集用 */
-  partialUsage?: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number };
+  partialUsage?: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; cache_write_long_tokens?: number };
   constructor(status: number, message: string) {
     super(message);
     this.name = 'LlmError';

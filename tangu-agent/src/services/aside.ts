@@ -31,6 +31,7 @@ import { claudeThinkingHeadroom, thinkingHeadroom } from '../llm/openaiCompat.js
 import { fitUserImages, normalizeImageAttachments, toImageParts, type NormalizedImage } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { docxText, pagesOf, renderPages } from '../tools/documentPages.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail } from '../seams/billing.js';
 
 /** 每次带上的旁聊往返上限(Claude Code 同为 20)。 */
 export const ASIDE_MAX_TURNS = 20;
@@ -374,11 +375,12 @@ export async function answerAside(opts: {
   const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: opts.signal, onToken: opts.onToken });
   const usage: any = res?.usage || {};
   const cached = Number(usage.cached_tokens) || 0;
-  const cost = await billing.calculateCost(opts.modelId, Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, model, cached);
+  const cacheWrite = cacheWriteOf(usage);
+  const cost = await billing.calculateCost(opts.modelId, Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, model, cached, ...cacheWriteArg(cacheWrite));
   await billing.consumeTokenPoints(user.id, cost).catch(() => {});
   await (billing.logApiUsage as any)(
     (user as any).username || 'local', opts.modelId, (model as any)?.name, (model as any)?.provider,
-    Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, true, undefined, opts.appId, cost, cached, opts.client,
+    Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, true, undefined, opts.appId, cost, cached, opts.client, ...cacheWriteLogTail(cacheWrite),
   ).catch(() => {});
   const content = String(res?.content || '').trim();
   const images = atts.filter(isImage).length;

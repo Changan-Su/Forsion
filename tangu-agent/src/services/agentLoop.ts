@@ -20,6 +20,7 @@ import { humanProjectScope } from './humanContext.js';
  */
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
+import { cacheWriteArg, cacheWriteOf, cacheWriteLogTail, type CacheWriteUsage } from '../seams/billing.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { maskSpans, maskSettings, MASKING_SECTION, staysOnMachine } from '../llm/outboundMask.js';
@@ -144,8 +145,8 @@ const buildProviderPayload = (opts: BuildPayloadOpts) => deps().brain.llm.buildP
 const streamProviderCompletion = (opts: StreamOpts) => deps().brain.llm.streamProviderCompletion(opts);
 const canConsumeTokenPoints = (userId: string, amount: number) => deps().billing.canConsumeTokenPoints(userId, amount);
 const consumeTokenPoints = (userId: string, amount: number) => deps().billing.consumeTokenPoints(userId, amount);
-const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number) =>
-  deps().billing.calculateCost(modelId, tin, tout, model, cached);
+const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number, cacheWrite?: CacheWriteUsage) =>
+  deps().billing.calculateCost(modelId, tin, tout, model, cached, ...cacheWriteArg(cacheWrite));
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
 /** 决策闸(beta):Historian 开着、开发者选项里打开了 historian.decisionGate。读配置失败 = 关。 */
 const decisionGateOn = (): boolean => { try { const h = loadSpecialAgentsConfig().historian; return h.enabled && !!h.decisionGate; } catch { return false; } };
@@ -4389,7 +4390,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 失败尝试已知的用量(流里先报了 usage 再断,如 Anthropic message_start 之后断流):记进本 run 成本,重发前的成本闸据此判
           const failedUsage = (err as LlmError)?.partialUsage;
           if (failedUsage && (failedUsage.prompt_tokens || failedUsage.completion_tokens)) {
-            costTotal += await calculateCost(callModelId, failedUsage.prompt_tokens, failedUsage.completion_tokens, undefined, failedUsage.cached_tokens).catch(() => 0);
+            costTotal += await calculateCost(callModelId, failedUsage.prompt_tokens, failedUsage.completion_tokens, undefined, failedUsage.cached_tokens, cacheWriteOf(failedUsage)).catch(() => 0);
           }
           if (sampling.signal.aborted && immediateSteers.has(runId)) {
             inflightText = '';
@@ -4577,7 +4578,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         probe = buildProbe(inputs, probePrevSegments);
         probePrevSegments = probe.segments;
       }
-      const cost = await calculateCost(callModelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
+      // 缓存写入量(含长档拆分):模型行配了写入单价时按它计费,没配时 server 照旧按输入价算。
+      const cacheWrite = cacheWriteOf(res.usage);
+      const cost = await calculateCost(callModelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens, cacheWrite);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
       runStat.llmCalls += 1;
       runStat.prompt += res.usage.prompt_tokens || 0;
@@ -4637,7 +4640,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await logApiUsage(
         user.username, callModelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
-        cachedTokens, clientTag,
+        cachedTokens, clientTag, ...cacheWriteLogTail(cacheWrite),
       ).catch(() => {});
 
       // 每-run 累计成本硬上限(多轮累计失控的护栏;入站闸门只挡单条入站)。越限即终止本 run，
