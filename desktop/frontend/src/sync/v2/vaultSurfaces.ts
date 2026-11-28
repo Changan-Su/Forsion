@@ -1,5 +1,6 @@
 import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { vaultDirName } from '@amadeus-shared/vaultCreate'
+import { libraryDeviceNames } from '@amadeus-shared/libraryDevices'
 import { vaultSync } from './client'
 import type { BindingView, CloudVaultView, LibraryInfo, VaultSyncGet } from './types'
 import type { CreatedFolderHost } from './createdFolder'
@@ -34,9 +35,7 @@ export function occupiedLibraryIds(data: VaultSyncGet): Set<string> {
 
 export type CloudRow = DownloadLibrary & { libraryId?: string; files?: number | null; bytes?: number; devices: number; deviceNames?: string[] }
 export function libraryRow(lib: LibraryInfo): CloudRow {
-  const names = new Map(lib.devices.map((device) => [device.deviceId, device.name]))
-  for (const device of lib.markerDevices ?? []) if (!device.superseded && !names.has(device.id)) names.set(device.id, device.name)
-  const deviceNames = [...names.values()]
+  const deviceNames = libraryDeviceNames(lib)
   return { ...lib, libraryId: lib.id, devices: deviceNames.length, deviceNames }
 }
 export function cloudViewRow(v: CloudVaultView): CloudRow {

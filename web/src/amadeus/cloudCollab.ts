@@ -10,8 +10,9 @@ import { subscribePresence, type PresenceUser } from './cloudPresence'
 import { activeCloudFileLocation, activeCloudNoteLocation, activeCloudViewPath, ensureActiveLibrary, ensureActiveVault } from './cloudBridge'
 import { CLOUD_CONTENT_CAPS, cloudLibraryKeys, rememberCloudLibrary, type LibraryDto } from './cloudScope'
 import { cloudAccountIdentity } from '@/services/cloudAccountCache'
+import { libraryDeviceNames } from '@amadeus-shared/libraryDevices'
 import { fileAddress } from '../openTarget'
-import type { AmadeusPageShare } from '@/types'
+import type { AmadeusPageShare, CloudLibraryRow } from '@/types'
 
 export interface CollabCfg {
   apiBase: string
@@ -34,9 +35,6 @@ const j = async <T>(res: Response): Promise<T> => {
   }
   return res.json() as Promise<T>
 }
-
-/** 面板用的一行库(/libraries 的一项,或老服务端 GET /vaults 换算的)。 */
-export interface CloudLibraryRow { id: string; name: string; kind: 'default' | 'own' | 'legacy'; vaultId: string; isDefault: boolean }
 
 export function installCloudCollab(cfg: CollabCfg): void {
   const libraryKeys = cloudLibraryKeys() // 装的时候取一次:换号以后旧账号的 UI 只写回旧账号的键
@@ -132,7 +130,10 @@ export function installCloudCollab(cfg: CollabCfg): void {
     listLibraries: async (): Promise<CloudLibraryRow[]> => {
       try {
         const r = await call<{ libraries: LibraryDto[] }>('GET', '/libraries')
-        return (r.libraries || []).filter((l) => !l.deleted).map((l) => ({ id: l.id, name: l.name, kind: l.kind, vaultId: l.vaultId, isDefault: l.kind === 'default' }))
+        return r.libraries.filter((l) => !l.deleted).map((l) => ({
+          id: l.id, name: l.name, kind: l.kind, vaultId: l.vaultId, isDefault: l.kind === 'default',
+          files: l.files, deviceNames: libraryDeviceNames(l),
+        }))
       } catch (e) {
         if ((e as { status?: number }).status !== 404) throw e
         const { vaults } = await call<{ vaults: Array<{ id: string; name: string; isDefault?: unknown }> }>('GET', '/vaults')

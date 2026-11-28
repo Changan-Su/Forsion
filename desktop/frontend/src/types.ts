@@ -1141,7 +1141,7 @@ declare global {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
       /** 库清单(智库同步第 3 步,网页 / 手机):/libraries 的自有库,原位置库也是一项;老服务端退回 /vaults。
        *  id = libraryId(默认库 / 独立库 = vault id;原位置库 = `<默认库 id>:Amadeus/<X>/`)。桌面没有(缺位)。 */
-      listLibraries?(): Promise<Array<{ id: string; name: string; kind: 'default' | 'own' | 'legacy'; vaultId: string; isDefault: boolean }>>
+      listLibraries?(): Promise<CloudLibraryRow[]>
       activeVaultId(): Promise<string>
       /** 当前打开的库的 libraryId(与 listLibraries 的 id 同一口径)。 */
       activeLibraryId?(): Promise<string>
@@ -1369,6 +1369,17 @@ export interface AmadeusEntrySyncState {
 }
 
 /** 页面级同步共享(分享卡片数据源)。 */
+/** A cloud switcher row from /libraries or the legacy /vaults response. */
+export interface CloudLibraryRow {
+  id: string
+  name: string
+  kind: 'default' | 'own' | 'legacy'
+  vaultId: string
+  isDefault: boolean
+  files?: number
+  deviceNames?: string[]
+}
+
 export interface AmadeusPageShare {
   vaultId?: string
   id: string
