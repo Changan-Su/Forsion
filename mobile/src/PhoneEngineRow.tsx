@@ -15,10 +15,10 @@ import { registerMessages, useI18n } from '@/i18n'
 import { mb, phoneEngineHost, phoneEngineName, phoneEngineOffered, usePhoneEngine, type PhoneEngineState, type PhoneEngineUsage } from '@/services/engine/phoneEngine'
 
 registerMessages({
-  'phoneEngine.needDownload': { zh: '需要先下载运行环境（约 {size} MB）', en: 'Download the environment first (about {size} MB)' },
-  'phoneEngine.needDownloadNoSize': { zh: '需要先下载运行环境', en: 'Download the environment first' },
+  'phoneEngine.needDownload': { zh: '需要先下载引擎（约 {size} MB）', en: 'Download the engine first (about {size} MB)' },
+  'phoneEngine.needDownloadNoSize': { zh: '需要先下载引擎', en: 'Download the engine first' },
   'phoneEngine.confirmTitle': { zh: '在这台手机上运行 Agent？', en: 'Run the agent on this phone?' },
-  'phoneEngine.confirmSize': { zh: '要下载约 {download} MB，装好后占用约 {disk} MB。', en: 'Downloads about {download} MB and uses about {disk} MB once installed.' },
+  'phoneEngine.confirmSize': { zh: '系统部分已随 App 自带，只需下载约 {download} MB 的引擎；装好后占用约 {disk} MB。', en: 'The system part comes with the app. Only the engine is downloaded (about {download} MB); it uses about {disk} MB once installed.' },
   'phoneEngine.confirmModel': { zh: '模型仍经 Forsion 云端调用；命令和文件操作在这台手机上的独立环境里执行。', en: 'Models are still called through Forsion cloud. Commands and file changes happen in a separate environment on this phone.' },
   'phoneEngine.confirmSandbox': { zh: '这个环境没有命令沙箱：Agent 能读写环境里的所有文件，但碰不到手机上的其他 App 和照片。', en: "This environment has no command sandbox. The agent can read and change any file in it, but can't reach other apps or your photos." },
   'phoneEngine.metered': { zh: '现在用的是移动数据，下载会消耗流量。', en: "You're on mobile data. The download uses your data plan." },
@@ -41,13 +41,22 @@ registerMessages({
   'phoneEngine.usageLoading': { zh: '正在计算占用…', en: 'Calculating storage…' },
   'phoneEngine.version': { zh: '引擎 {engine} · 系统 {base}', en: 'Engine {engine} · system {base}' },
   'phoneEngine.update': { zh: '更新（约 {size} MB）', en: 'Update (about {size} MB)' },
+  'phoneEngine.updateNoDownload': { zh: '更新（无需下载）', en: 'Update (no download)' },
+  'phoneEngine.baseUpdateNote': { zh: 'App 更新带来了新的系统部分。更新时会重建它：之前在环境里装的软件会清掉，对话和工作区文件会保留。', en: 'The app update brought a new system part. Updating rebuilds it: software you installed in the environment is removed; chats and workspace files are kept.' },
+  'phoneEngine.needsUpdate': { zh: '需要更新引擎才能继续', en: 'Needs an engine update to continue' },
+  'phoneEngine.needsUpdateDetail': { zh: '这里的对话被更新的引擎用过，旧引擎不能再打开它们。等新版本发布后点「更新」。对话和文件都在。', en: 'A newer engine has used these chats, so an older one cannot open them. Tap Update when a new version is out. Your chats and files are kept.' },
+  'phoneEngine.engineBad': { zh: '这个版本的引擎反复启动失败，需要更新', en: 'This engine version keeps failing to start and needs an update' },
+  'phoneEngine.historyUnreadable': { zh: '读不到这台手机上的引擎记录，为了不损坏对话先不启动', en: "Couldn't read this phone's engine record. Not starting, so chats can't be damaged" },
+  'phoneEngine.checkUpdate': { zh: '检查更新', en: 'Check for updates' },
   'phoneEngine.stop': { zh: '停止', en: 'Stop' },
   'phoneEngine.reset': { zh: '重置环境', en: 'Reset environment' },
   'phoneEngine.remove': { zh: '删除环境', en: 'Delete environment' },
-  'phoneEngine.resetConfirm': { zh: '重新下载并替换运行环境（约 {size} MB）。对话和工作区文件会保留。', en: 'Downloads the environment again (about {size} MB) and replaces it. Chats and workspace files are kept.' },
-  'phoneEngine.removeConfirm': { zh: '删除运行环境，释放约 {size} MB。对话和工作区文件会保留，下次使用要重新下载。', en: 'Deletes the environment and frees about {size} MB. Chats and workspace files are kept; you will need to download it again to use it.' },
+  'phoneEngine.resetConfirm': { zh: '用 App 自带的系统部分重建运行环境；引擎校验通过就保留，否则重新下载。之前在环境里装的软件会清掉，对话和工作区文件会保留。', en: 'Rebuilds the environment from the system part in the app. The engine is kept if it passes verification, otherwise it is downloaded again. Software you installed in the environment is removed; chats and workspace files are kept.' },
+  'phoneEngine.removeConfirm': { zh: '删除运行环境，释放约 {size} MB。对话和工作区文件会保留，下次使用要重新下载引擎。', en: 'Deletes the environment and frees about {size} MB. Chats and workspace files are kept; the engine will be downloaded again next time.' },
   // 原生 LocalEngineInstaller.Failure 的码
-  'phoneEngine.err.manifest': { zh: '读不到环境清单，请稍后重试', en: "Couldn't read the environment list. Try again later" },
+  'phoneEngine.err.registry': { zh: '暂时连不上下载源，请稍后重试', en: "Couldn't reach the download source. Try again later" },
+  'phoneEngine.err.noEngine': { zh: '这个 App 版本的引擎还没发布，请稍后再试', en: "The engine for this app version isn't published yet. Try again later" },
+  'phoneEngine.err.signature': { zh: '下载的引擎没通过签名校验，已删掉，请重试', en: 'The downloaded engine failed its signature check and was deleted. Try again' },
   'phoneEngine.err.network': { zh: '下载中断，请检查网络后重试', en: 'The download stopped. Check your connection and retry' },
   'phoneEngine.err.checksum': { zh: '下载的文件没通过校验，已删掉，请重试', en: "The download didn't pass verification and was deleted. Try again" },
   'phoneEngine.err.unpack': { zh: '解包失败，请重试', en: "Couldn't unpack the environment. Try again" },
@@ -59,7 +68,9 @@ registerMessages({
 })
 
 const ERR_KEY: Record<string, string> = {
-  manifest: 'phoneEngine.err.manifest',
+  registry: 'phoneEngine.err.registry',
+  no_engine: 'phoneEngine.err.noEngine',
+  signature: 'phoneEngine.err.signature',
   download: 'phoneEngine.err.network',
   network: 'phoneEngine.err.network',
   checksum: 'phoneEngine.err.checksum',
@@ -138,6 +149,9 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
   else if (!installed) sub = s.downloadBytes ? t('phoneEngine.needDownload', { size: mb(s.downloadBytes) }) : t('phoneEngine.needDownloadNoSize')
   else if (s.engine === 'running') { sub = t('phoneEngine.running'); tone = 'ok' }
   else if (s.engine === 'starting') { sub = t('phoneEngine.starting'); tone = 'wait' }
+  else if (s.engine === 'failed' && s.engineError === 'needs_update') { sub = t('phoneEngine.needsUpdate'); tone = 'warn' }
+  else if (s.engine === 'failed' && s.engineError === 'engine_bad') { sub = t('phoneEngine.engineBad'); tone = 'warn' }
+  else if (s.engine === 'failed' && s.engineError === 'history') { sub = t('phoneEngine.historyUnreadable'); tone = 'warn' }
   else if (s.engine === 'failed') { sub = t('phoneEngine.startFailed'); tone = 'warn' }
   else sub = t('phoneEngine.ready')
 
@@ -191,7 +205,7 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
           {chk === 'loading' && <div className="us-panel-muted" role="status">{t('phoneEngine.confirmLoading')}</div>}
           {chk === 'error' && (
             <div className="us-panel-warn" role="status">
-              {t('phoneEngine.err.manifest')} <button className="us-link" onClick={runCheck}>{t('phoneEngine.retry')}</button>
+              {t(s.noEngine ? 'phoneEngine.err.noEngine' : 'phoneEngine.err.registry')} <button className="us-link" onClick={runCheck}>{t('phoneEngine.retry')}</button>
             </div>
           )}
           <div>{t('phoneEngine.confirmModel')}</div>
@@ -208,8 +222,11 @@ export function PhoneEngineRow({ selected, onPick }: { selected: boolean; onPick
         <div className="us-panel" data-phone-details>
           <div>{usage ? t('phoneEngine.usage', { env: mb(usage.environment), data: mb((usage.home || 0) + (usage.workspace || 0)) }) : t('phoneEngine.usageLoading')}</div>
           <div>{t('phoneEngine.version', { engine: s.engineVersion || '?', base: s.baseVersion || '?' })}</div>
+          {s.needsUpdate && s.engineError === 'needs_update' && <div className="us-panel-warn" role="status">{t('phoneEngine.needsUpdateDetail')}</div>}
+          {s.baseUpdate && <div className="us-panel-muted">{t('phoneEngine.baseUpdateNote')}</div>}
           <div className="us-panel-actions">
-            {s.updateAvailable && <button className="us-btn" onClick={() => { setPanel(null); call(host.update()) }}>{t('phoneEngine.update', { size: mb(s.engineDownloadBytes) })}</button>}
+            {s.updateAvailable && <button className="us-btn" onClick={() => { setPanel(null); call(host.update()) }}>{s.engineDownloadBytes ? t('phoneEngine.update', { size: mb(s.engineDownloadBytes) }) : t('phoneEngine.updateNoDownload')}</button>}
+            {!s.updateAvailable && s.needsUpdate && <button className="us-btn" onClick={() => call(host.check())}>{t('phoneEngine.checkUpdate')}</button>}
             {(s.engine === 'running' || s.engine === 'starting') && <button className="us-btn" onClick={() => call(host.stop())}>{t('phoneEngine.stop')}</button>}
             <button className="us-btn" onClick={() => setPanel('reset')}>{t('phoneEngine.reset')}</button>
             <button className="us-btn danger" onClick={() => setPanel('remove')}>{t('phoneEngine.remove')}</button>

@@ -40,8 +40,9 @@ mobile/android/native/proot/build-proot.sh --check  # 重建后比对 sha256，�
   `extractNativeLibs`（`useLegacyPackaging`）、启用前台服务 `LocalEngineService`。不带开关的包里没有 PRoot，「这台手机」也不出现。
 - CI（`build-desktop.yml` 的 Build APK）：tag 是测试渠道（`release-channel.mjs --test-channel <tag>` 输出 1，即预发布 tag）时才带。
   正式渠道比测试渠道晚一个版本再带。
-- 环境包下载地址：`-PlocalEngineManifest=<https URL>` 或 `ANDROID_LOCAL_ENGINE_MANIFEST`（CI 读仓库变量 `LOCAL_ENGINE_MANIFEST_URL`）。
-  没配地址的包里「这台手机」不出现。环境包本身由 `mobile/scripts/local-engine/build-env.sh` 生成（出包流水线是后续工作）。
+- 基座（Ubuntu + Node）随测试渠道的包走：`local-engine/lock.json` 钉住的那份作为不压缩的资产进包；引擎由手机从 npm 取
+  （`@forsion/tangu-engine-android-arm64`，CI `publish-android-engine.yml` 发布）。来龙去脉、签名与回退规则见 `../../local-engine/README.md`。
+  基座本身仍由 `mobile/scripts/local-engine/build-env.sh` 生成（它出的引擎层和 manifest.json 已不再使用）。
 
 ## GPL：发版附源码包
 

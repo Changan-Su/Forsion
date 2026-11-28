@@ -39,7 +39,7 @@ export function isPhoneRef(ref: TargetRef | null | undefined): boolean {
 export interface PhoneEngineState {
   /** 包里带了启动器且是 64 位 ARM。 */
   available?: boolean
-  /** 构建里配了环境包清单地址。 */
+  /** 包里带了基座(Ubuntu + Node,测试渠道)并钉了引擎的 npm 包。 */
   configured?: boolean
   installed?: boolean
   baseVersion?: string
@@ -58,9 +58,19 @@ export interface PhoneEngineState {
   unpackedBytes?: number
   engineDownloadBytes?: number
   availableEngineVersion?: string
-  availableBaseVersion?: string
+  /** 这个 App 自带的基座版本;和 baseVersion 不同 = 更新会重建系统部分(不用下载) */
+  bundledBaseVersion?: string
   resumeBytes?: number
   updateAvailable?: boolean
+  /** App 更新带来了新基座:更新时重建系统部分,环境里用 apt 装的软件会清掉(对话和文件保留) */
+  baseUpdate?: boolean
+  /** 当前引擎版本反复起不来,已标坏 */
+  engineBad?: boolean
+  previousEngineVersion?: string
+  /** 查过 npm:这个 App 的引擎线上还没有发布的版本 */
+  noEngine?: boolean
+  /** 引擎被拒(engineError = needs_update / engine_bad):要等更新,什么都没动 */
+  needsUpdate?: boolean
   /** stopped | starting | running | failed */
   engine?: string
   engineError?: string

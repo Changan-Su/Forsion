@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# ⚠️ Since the npm engine (mobile/android/local-engine/README.md) only the BASE layer of this script is used: it becomes the
+# file pinned in mobile/android/local-engine/lock.json and ships inside the test-channel APK. The engine layer and
+# manifest.json below are no longer read by the app (the engine is build-android-engine.sh → npm).
+#
 # Builds the "This phone" local engine environment as two layers plus a manifest, in an arm64 Ubuntu container:
 #   base-<id>.tar.xz      Ubuntu 24.04 + git/curl/xz + Node 24 (/opt/node). Changes rarely.
 #   engine-<ver>.tar.xz   /opt/tangu: this checkout's tangu-agent (npm pack + npm ci --omit=dev). Follows the app.

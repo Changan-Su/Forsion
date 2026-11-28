@@ -734,13 +734,19 @@ final class LocalEngineInstaller {
         }
     }
 
-    /** true when this APK carries a base layer asset. */
+    private volatile Boolean baseBundled;
+
+    /** true when this APK carries a base layer asset (fixed for the APK: asked once; state() calls it on every event). */
     boolean baseBundled() {
+        Boolean b = baseBundled;
+        if (b != null) return b;
         try (InputStream in = paths.ctx.getAssets().open(LocalEngineConfig.BASE_ASSET)) {
-            return in != null;
+            b = in != null;
         } catch (IOException e) {
-            return false;
+            b = false;
         }
+        baseBundled = b;
+        return b;
     }
 
     // ---------- http ----------

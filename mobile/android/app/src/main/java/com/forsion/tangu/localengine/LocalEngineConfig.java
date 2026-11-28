@@ -47,10 +47,12 @@ final class LocalEngineConfig {
     /** The dist-tag this APK reads: one line per base generation / native contract (never latest). */
     String distTag() { return "android-" + line; }
 
-    /** npmmirror first, then the official registry; a debuggable build's override replaces both (local test registry). */
+    /** npmmirror first, then the official registry; a debuggable build's override (comma-separated, in order) replaces both. */
     static List<String> registries(String override) {
-        if (override != null && !override.isEmpty()) return Arrays.asList(override.replaceAll("/+$", ""));
-        return Arrays.asList(NPM_MIRROR, NPM_OFFICIAL);
+        if (override == null || override.trim().isEmpty()) return Arrays.asList(NPM_MIRROR, NPM_OFFICIAL);
+        List<String> out = new ArrayList<>();
+        for (String r : override.split(",")) if (!r.trim().isEmpty()) out.add(r.trim().replaceAll("/+$", ""));
+        return out;
     }
 
     /** Abbreviated packument (same path on npmjs and npmmirror; the scope slash encoded). */
