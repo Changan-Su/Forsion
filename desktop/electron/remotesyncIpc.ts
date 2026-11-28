@@ -788,6 +788,33 @@ export interface LegacyRemoteSyncView {
   legacyKey: string | null
 }
 
+/** 一份严格读到的配置 → 给 Extend 的视图(不含凭据)。 */
+async function viewOf(cfg: RemoteSyncConfig): Promise<LegacyRemoteSyncView> {
+  const rooted = await resolveLocalSyncRoot()
+  const st = legacyGate().state()
+  if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
+  return {
+    config: {
+      backend: cfg.backend,
+      dir: legacyDirOf(cfg),
+      direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
+      ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
+      maxFileMB: cfg.maxFileMB ?? 100,
+      intervalMin: cfg.intervalMin ?? 0,
+      syncOnStart: cfg.syncOnStart === true,
+      concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
+    },
+    root: 'root' in rooted ? rooted.root : null,
+    rootError: 'error' in rooted ? rooted.error : null,
+    legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
+    entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root, 'takeover') : [],
+    running,
+    hold: st.hold === 'v2' ? 'v2' : 'none',
+    archived: st.archived,
+    handshake: st.handshake,
+  }
+}
+
 /** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
 export const legacyRemoteSync = {
   /** 握手:Extend 调了 syncTargets 的任一成员。v2 持有时等在途那一轮跑完。 */
@@ -797,31 +824,16 @@ export const legacyRemoteSync = {
   /** 没配置(文件不在)= null;读不了就抛。 */
   async view(): Promise<LegacyRemoteSyncView | null> {
     const strict = await readLegacyConfigStrict()
+    return strict ? viewOf(strict.cfg) : null
+  },
+  /** 宿主内部用(syncTargets 算 currentTargetId):同一次严格读里的视图 + 当前后端那一段配置(含凭据,只在主进程里比位置,
+   *  不出 syncTargets)。没配置 = null;读不了就抛。 */
+  async viewWithSection(): Promise<{ view: LegacyRemoteSyncView; backend: RemoteSyncConfig['backend']; section: Record<string, unknown> } | null> {
+    const strict = await readLegacyConfigStrict()
     if (!strict) return null
-    const cfg = strict.cfg
-    const rooted = await resolveLocalSyncRoot()
-    const st = legacyGate().state()
-    if (st.hold === 'unknown') await syncTargetsStore.readLegacy() // 持有状态读不了:这里抛出去,别回一份「没持有」
-    return {
-      config: {
-        backend: cfg.backend,
-        dir: legacyDirOf(cfg),
-        direction: cfg.direction === 'push' || cfg.direction === 'pull' ? cfg.direction : 'both',
-        ignore: Array.isArray(cfg.ignore) ? cfg.ignore.filter((x): x is string => typeof x === 'string') : [],
-        maxFileMB: cfg.maxFileMB ?? 100,
-        intervalMin: cfg.intervalMin ?? 0,
-        syncOnStart: cfg.syncOnStart === true,
-        concurrency: typeof cfg.concurrency === 'number' ? cfg.concurrency : null,
-      },
-      root: 'root' in rooted ? rooted.root : null,
-      rootError: 'error' in rooted ? rooted.error : null,
-      legacyKey: 'root' in rooted ? legacyKeyOf(cfg, rooted.root) : null,
-      entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root, 'takeover') : [],
-      running,
-      hold: st.hold === 'v2' ? 'v2' : 'none',
-      archived: st.archived,
-      handshake: st.handshake,
-    }
+    const { backend } = strict.cfg
+    const section = backend === 'off' ? undefined : (strict.cfg as unknown as Record<string, unknown>)[backend]
+    return { view: await viewOf(strict.cfg), backend, section: section && typeof section === 'object' && !Array.isArray(section) ? structuredClone(section as Record<string, unknown>) : {} }
   },
   /** 宿主内部用(导入 sync-targets):原样那一段后端配置,含凭据。没配置 / 读不了 / 没选后端 → 抛。 */
   async section(): Promise<{ backend: RemoteSyncConfig['backend']; section: Record<string, unknown> }> {
