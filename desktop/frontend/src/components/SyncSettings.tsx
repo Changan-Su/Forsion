@@ -27,6 +27,7 @@ import { addedItems, closureItems, isExcluded, mergeScope, rebaseScope, removeIt
 import type { SyncFocus } from '../sync/v2/openSyncSettings'
 import type { StatusBindingExtras } from '../sync/v2/feed'
 import { CREATE_CANDIDATE, type RemoteDirHolder } from '../sync/v2/types'
+import { useApp } from '../stores/appStore'
 import { addFolderTarget, canAuth, cancelAuth, currentTargetKey, finishAuth, hasTargets, listTargets, onAuth, isUnsupportedKind, previewTargetOf, startAuth, targetErrorKey, targetIdentity, type AuthEvent, type AuthKind } from '../sync/v2/targets'
 import type { SyncTargetSummary } from '../types'
 import type {
@@ -155,11 +156,21 @@ interface Pending {
 /** 跨种类换去处(蓬洲云 ↔ 网盘 / 文件夹,Extend #140、契约 E-16 附):卡上带着原来的去处身份,新去处的种类和它不同。 */
 const isCrossKind = (p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target'>): boolean =>
   !!p.bindingId && !!p.baseTarget && !p.baseTarget.startsWith(p.target.kind === 'remote' ? 'remote:' : 'penzor:')
-/** 预演 / 换去处出错的人话。从蓬洲云那一行换走时没登录:账号那本账看不到,预演回 binding_not_found、apply 回 not_signed_in,都按「要先登录」说。 */
+/** 预演 / 换去处出错的人话。从蓬洲云那一行换走时没登录:apply 回 not_signed_in;预演回 binding_not_found(账号那本账看不到)——
+ *  后者只在宿主确知没登录时才按「要先登录」说,绑定在别处停掉了 / 读失败不冒充成登录问题(Codex P1)。 */
+const signedOut = (): boolean => useApp.getState().authInfo?.loggedIn === false
 function crossKindError(p: Pick<Pending, 'bindingId' | 'baseTarget' | 'target' | 'name'>, err: string, t: TFn, inUseBy?: RemoteDirHolder): string {
-  if (isCrossKind(p) && p.baseTarget!.startsWith('penzor:') && /(binding_not_found|not_signed_in)\s*$/.test(err)) return t('ssync.err.moveSignIn')
+  const fromPenzor = isCrossKind(p) && p.baseTarget!.startsWith('penzor:')
+  if (fromPenzor && (/not_signed_in\s*$/.test(err) || (/binding_not_found\s*$/.test(err) && signedOut()))) return t('ssync.err.moveSignIn')
   return syncErrorText(err, t, p.name, inUseBy)
 }
+/** 卡上记的那条绑定此刻对不上了:读失败照实说;没了 / 去处换了(别处刚换过)各说各的,不叫人新建网盘(Codex P2)。 */
+function staleCardText(p: Pending, g: { ok: true; value: VaultSyncGet } | { ok: false; error: string }, fresh: BindingView | undefined, t: TFn): string {
+  if (!g.ok) return syncErrorText(g.error, t, p.name)
+  return fresh ? t('ssync.err.targetMoved') : crossKindError(p, 'binding_not_found', t)
+}
+/** K4 只会落在新去处的准入码上(E-16 附):别的拒绝码不去回读、不说「旧的停了」。 */
+const K4_CODES = /(root_nested|remote_dir_nested|remote_dir_in_use|already_local|entry_sync_active|mirror_root|takeover_in_progress)\s*$/
 
 /** 落点只认一次:设置层拿着同一个 focus 对象,子页切走再回来(组件重挂)不再重放一遍预演(Codex P2-4)。 */
 const consumedFocus = new WeakSet<object>()
@@ -330,7 +341,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (!r.ok) { say(b.root, t(targetErrorKey(r.error))); return }
     await loadTargets()
     // 去处已经存上了:预演没出卡时说清楚,免得再选一次同一个文件夹建出第二条
-    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t('ssync.target.saved', { label: r.target.label })].filter(Boolean).join(' ') }))
+    if (!(await switchTarget(b, r.target.id, r.target.label))) setMsg((m) => ({ ...m, [b.root]: [m[b.root], t(m[b.root] ? 'ssync.target.savedOnly' : 'ssync.target.saved', { label: r.target.label })].filter(Boolean).join(' ') }))
   }, [loadTargets, switchTarget, t])
 
   /** 连接 / 重新授权 Dropbox:宿主做完 OAuth,凭据直接进 sync-targets(H-9);这里只等结果事件。Google Drive 这一版不支持(H-10)。 */
@@ -380,17 +391,25 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     if (pending.bindingId && pending.base && pending.kind !== 'scope') {
       const g = await vaultSync.get()
       const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, (fresh ? t('ssync.targetChanged') : crossKindError(pending, 'binding_not_found', t))); await reload(); return }
+      if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setBusy(false); setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
       if (JSON.stringify(fresh.scope) !== JSON.stringify(pending.base)) { setBusy(false); await runPreview({ ...pending, scope: fresh.scope, base: fresh.scope, note: t('ssync.stale') }); return }
     }
     const r = await vaultSync.apply({ token: pending.preview.token, generation: pending.preview.generation, onDiffer })
+    // 跨种类换去处在新那本账写入那一刻被准入拦下(E-16 附 K4):原来那条留在原来的去处、停着。只对准入码回读,回读完之前这一行还算忙
+    // (不让人在旧回包落地前又点了别的,Codex P1-2);出卡时开着、现在同一个去处上停着 = 走到了这一步
+    let k4 = false
+    if (!r.ok && isCrossKind(pending) && K4_CODES.test(r.error) && data.bindings.find((x) => x.id === pending.bindingId)?.enabled) {
+      const g = await vaultSync.get()
+      const now = g.ok ? g.value?.bindings.find((x) => x.id === pending.bindingId) : undefined
+      k4 = !!now && !now.enabled && targetIdentity(now.target) === pending.baseTarget
+    }
     setBusy(false)
     if (!r.ok && /stale/.test(r.error)) {
       // 过期:改范围的卡按引擎此刻的绑定重算(别人期间去掉 / 加上的不被这张旧卡盖掉);去处变了 / 绑定没了 → 这张卡作废(Codex P1-1)
       if (pending.bindingId && pending.base) {
         const g = await vaultSync.get()
         const fresh = g.ok ? g.value?.bindings.find((b) => b.id === pending.bindingId) : undefined
-        if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, (fresh ? t('ssync.targetChanged') : crossKindError(pending, 'binding_not_found', t))); await reload(); return }
+        if (!fresh || targetIdentity(fresh.target) !== pending.baseTarget) { setPending(null); say(pending.root, staleCardText(pending, g, fresh, t)); await reload(); return }
         // 换去处的卡不改范围:直接用引擎此刻的范围重比(期间别处排除的不被带回来);改范围的卡把「这次改了什么」套上去
         const scope = pending.kind === 'scope' ? rebaseScope(pending.base, pending.scope, fresh.scope) : fresh.scope
         await runPreview({ ...pending, scope, added: addedItems(fresh.scope, scope), base: fresh.scope, note: t('ssync.stale') })
@@ -404,12 +423,8 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
     // 成功不另起一行提示:行里的状态就会变成「同步中…」,提示留着反倒在同步完以后还挂着
     if (r.ok) say(p.root, null)
     else {
-      // 跨种类换去处在新那本账写入那一刻被准入拦下(E-16 附 K4):原来那条已经停了、新的没开。出卡时开着、现在停着 = 走到了这一步
-      const was = data.bindings.find((x) => x.id === p.bindingId)
-      const g = was?.enabled && isCrossKind(p) ? await vaultSync.get() : null
-      const now = g?.ok ? g.value?.bindings.find((x) => x.id === p.bindingId) : undefined
       const text = crossKindError(p, r.error, t, r.inUseBy)
-      say(p.root, now && !now.enabled ? `${text} ${t('ssync.err.moveHalf')}` : text)
+      say(p.root, k4 ? `${text} ${t('ssync.err.moveHalf')}` : text)
     }
     refreshVaultSync()
     await reload()
@@ -580,7 +595,7 @@ function SyncSettingsFull({ data, reload, focus, legacy }: { data: VaultSyncGet;
               <div className="ssync-sum-acts"><span className="ssync-grow" /><button type="button" className="btn sm" onClick={() => { ++reqRef.current; setPending(null) }}>{t('ssync.sum.cancel')}</button></div>
             </section>
           ) : (
-            <SummaryCard name={pending.name} preview={pending.preview} busy={busy} kind={pending.kind} added={pending.added}
+            <SummaryCard name={pending.name} preview={pending.preview} busy={busy} kind={pending.kind} added={pending.added} remote={pending.target.kind === 'remote'}
               dest={destOf(pending, data, t)} onApply={(d) => void apply(d)} onCancel={() => { ++reqRef.current; setPending(null) }} />
           )}
         </div>

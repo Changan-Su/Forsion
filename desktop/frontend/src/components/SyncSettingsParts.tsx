@@ -21,8 +21,10 @@ const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$
 const folderName = (root: string): string => root.split(/[\\/]/).filter(Boolean).pop() ?? root
 
 /** 页底汇总卡(方案 V9b,3B 的内容 + 2B 的主按钮):四格 + 太大,不一样的前几篇,三颗按钮。 */
-export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, onCancel }: {
+export function SummaryCard({ name, preview, busy, kind, added, dest, remote, onApply, onCancel }: {
   name: string
+  /** 去处是网盘 / 本地文件夹(换过去的卡,或网盘那一行改范围的卡):另一边说「那边」,不说「云端」 */
+  remote?: boolean
   /** 去处一句话(蓬洲云 · 哪个库);库名和去处要看得见 */
   dest?: string
   /** 这一次新加进范围的项(右键带来的那一项 + 关联闭包),标「刚勾上」 */
@@ -37,7 +39,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   const { t } = useI18n()
   const [all, setAll] = useState(false)
   const [notSame, setNotSame] = useState(false)
-  const title = kind === 'scope' ? t('ssync.sum.titleScope') : kind === 'target' ? t('ssync.sum.titleTarget') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
+  const title = kind === 'scope' ? t(remote ? 'ssync.sum.titleScopeThere' : 'ssync.sum.titleScope') : kind === 'target' ? t('ssync.sum.titleTarget') : kind === 'new' ? t('ssync.sum.titleNew') : t('ssync.sum.titleCloud')
   if (!preview) {
     return (
       <section className="ssync-sum" aria-live="polite" data-ssync-summary="comparing">
@@ -51,7 +53,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
   const tiles: Array<[string, number, boolean]> = [
     [t('ssync.sum.same'), preview.same, false],
     [t('ssync.sum.onlyLocal'), preview.onlyLocal, false],
-    ...(preview.onlyRemote > 0 ? [[t(kind === 'target' ? 'ssync.sum.onlyThere' : 'ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
+    ...(preview.onlyRemote > 0 ? [[t(remote ? 'ssync.sum.onlyThere' : 'ssync.sum.onlyRemote'), preview.onlyRemote, false] as [string, number, boolean]] : []),
     [t('ssync.sum.differ'), differ.length, differ.length > 0],
     [t('ssync.sum.tooLarge'), preview.tooLarge.length, false],
   ]
@@ -79,7 +81,7 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
           {shown.map((d) => (
             <div key={d.path} className="ssync-sum-row" title={d.path}>
               <span className="ssync-sum-name">{baseName(d.path)}</span>
-              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t(kind === 'target' ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
+              <span className={d.newer ? 'ssync-warn' : 'ssync-faint'}>{d.newer === 'local' ? t('ssync.sum.newerHere') : d.newer === 'remote' ? t(remote ? 'ssync.sum.newerThere' : 'ssync.sum.newerCloud') : t('ssync.sum.newerUnknown')}</span>
             </div>
           ))}
           {differ.length > 3 && (
@@ -301,11 +303,14 @@ export function HandoverCard({ bindingId, items, cadence, card, remoteLabel, onD
   const { t } = useI18n()
   const [canDismiss, setCanDismiss] = useState(true)
   const every = cadence.kind === 'interval' ? t('ssync.handover.every', { n: cadence.minutes }) : t('ssync.handover.manual')
-  // 网盘 / 本地文件夹那一行的接手卡(旧网盘同步交过来的,来源 D):不说「一项项开着的」「云端的位置」
+  // 网盘 / 本地文件夹那一行的接手卡(旧网盘同步交过来的,来源 D):不说「一项项开着的」「云端的位置」;只手动时不说「定时」(Codex P2)
+  const manual = cadence.kind !== 'interval'
   return (
     <div className="ssync-handover" role="status" data-ssync-handover={bindingId}>
-      <b>{t('ssync.handover.title')}</b>
-      <p>{remoteLabel ? t('ssync.handover.bodyRemote', { label: remoteLabel, cadence: every }) : t('ssync.handover.body', { items, cadence: every })}</p>
+      <b>{t(manual ? 'ssync.handover.titleManual' : 'ssync.handover.title')}</b>
+      <p>{manual
+        ? (remoteLabel ? t('ssync.handover.bodyRemoteManual', { label: remoteLabel }) : t('ssync.handover.bodyManual', { items }))
+        : (remoteLabel ? t('ssync.handover.bodyRemote', { label: remoteLabel, cadence: every }) : t('ssync.handover.body', { items, cadence: every }))}</p>
       <p className="ssync-faint">{t('ssync.handover.counts', { adopted: card.adopted, filled: card.filled, held: card.held })}</p>
       {card.revived > 0 && <p className="ssync-faint">{t('ssync.handover.revived', { n: card.revived })}</p>}
       {canDismiss && (
