@@ -19,6 +19,8 @@ export function syncErrorText(err: string, t: T, name = ''): string {
   if (code === 'target-location-changed') return t('ssync.targetChanged')
   if (code === 'takeover_in_progress') return t('ssync.err.takeoverBusy')
   if (code === 'binding_not_found') return t('ssync.err.bindingGone')
+  if (code === 'deletes_changed') return t('ssync.err.deletesChanged')
+  if (code === 'binding_not_running') return t('ssync.err.notRunning')
   if (OVERLAP.has(code)) return t('ssync.err.overlap')
   return t('ssync.err.generic', { error: ipcErrorText(err) })
 }

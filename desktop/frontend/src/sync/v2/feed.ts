@@ -21,9 +21,12 @@ export interface StatusBindingExtras {
   review?: {
     differs?: Array<{ path: string; newer: 'local' | 'remote' | null; ref: HeldRef }>
     differsTotal?: number
-    deletes?: { count: number; token: string; items: Array<{ path: string; side: 'cloud' | 'local' }> } | null
+    /** E-11:整份待定名单的指纹,「全部…」(resolveAll)要它 */
+    differsToken?: string
+    deletes?: { count: number; latched?: boolean; token: string; items: Array<{ path: string; side: 'cloud' | 'local' }> } | null
   }
   failures?: Array<{ path: string; reason: SyncFailure['reason']; code?: string; retryAt?: number | null; size?: number; maxBytes?: number }>
+  failuresTotal?: number
   rateLimitedUntil?: number | null
 }
 

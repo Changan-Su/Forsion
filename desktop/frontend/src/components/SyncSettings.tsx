@@ -646,7 +646,7 @@ function VaultRow({ row, binding: b, data, names, message, busy, expanded, entri
       {b?.takeoverCard && (
         <HandoverCard bindingId={b.id} items={b.scope.mode === 'some' ? b.scope.items.length : 1} cadence={data.cadence} card={b.takeoverCard} onDismissed={() => void reload()} />
       )}
-      {b && on && heldCount > 0 && <HeldReview bindingId={b.id} count={heldCount} items={held} onDone={() => { onRecovery(); void reload() }} />}
+      {b && on && heldCount > 0 && <HeldReview bindingId={b.id} count={heldCount} items={held} token={v2?.review?.differsToken} onDone={() => { onRecovery(); void reload() }} />}
       {b && on && (b.status.deletesPending > 0 || deletes) && (
         <div className="ssync-note ssync-ask">
           <span>{t('ssync.review.deletes', { n: deletes?.count ?? b.status.deletesPending })}</span>

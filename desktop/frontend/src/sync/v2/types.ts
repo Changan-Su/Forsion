@@ -15,6 +15,8 @@ export const VAULT_SYNC_CHANNELS = {
   setTarget: 'vaultsync:setTarget',
   run: 'vaultsync:run',
   resolve: 'vaultsync:resolve',
+  /** E-11:「全部…」{ bindingId, action, token };token = status 的 review.differsToken,对不上回 stale、一条不动。老 Extend 没有这个通道。 */
+  resolveAll: 'vaultsync:resolveAll',
   deletesConfirm: 'vaultsync:deletes:confirm',
   deletesAbandon: 'vaultsync:deletes:abandon',
   renameAnswer: 'vaultsync:rename:answer',
@@ -130,6 +132,8 @@ export interface VaultSyncApplyArgs { token: string; generation: string; onDiffe
 
 export interface HeldRef { bindingId: string; path: string; generation: string }
 export type HeldAction = 'local' | 'cloud' | 'both' | 'newer'
+/** E-11 第 3 条:newer 判不出的照旧放着,算进 cannotDecide。 */
+export interface VaultSyncResolveAllResult { resolved: number; cannotDecide: number; stale: number; failed: number; recoveryEventIds: string[] }
 
 export interface RecoveryEventView {
   eventId: string

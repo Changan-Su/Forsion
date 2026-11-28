@@ -251,4 +251,8 @@ registerMessages({
   'ssync.targetErr.no-targets': { zh: '这个版本的 Forsion 还不能在这里加去处，先更新一下。', en: 'This version of Forsion can’t add destinations here yet. Update Forsion first.' },
   'ssync.targetErr.no-auth': { zh: '这个版本的 Forsion 还不能在这里授权网盘，先更新一下。', en: 'This version of Forsion can’t authorize drives here yet. Update Forsion first.' },
   'ssync.targetErr.unknown': { zh: '去处没弄好，再试一次。', en: 'Something went wrong with the destination. Try again.' },
+  'ssync.review.all': { zh: '这 {n} 篇一起：', en: 'All {n} at once:' },
+  'ssync.review.allDone': { zh: '处理了 {n} 篇；还有 {left} 篇没动（判不出哪边新，或名单变了）。', en: 'Handled {n}. {left} left as they were (newer side unclear, or the list changed).' },
+  'ssync.err.deletesChanged': { zh: '要删的名单变了，重新看一下再决定。', en: 'The list of deletions changed. Review it again before deciding.' },
+  'ssync.err.notRunning': { zh: '这个库现在没在同步，先打开同步再处理。', en: 'This vault isn’t syncing right now. Turn sync on first.' },
 })

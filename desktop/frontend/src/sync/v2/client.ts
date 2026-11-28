@@ -10,7 +10,7 @@
 import {
   VAULT_SYNC_CHANNELS as CH,
   type BindingScope, type BindingView, type Cadence, type HeldAction, type HeldRef, type RecoveryEventView, type ResolveNameResult,
-  type VaultSyncApplyArgs, type VaultSyncGet, type VaultSyncPreview, type VaultSyncPreviewArgs, type VaultSyncStatus,
+  type VaultSyncApplyArgs, type VaultSyncGet, type VaultSyncPreview, type VaultSyncPreviewArgs, type VaultSyncResolveAllResult, type VaultSyncStatus,
 } from './types'
 
 export type VsResult<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -28,7 +28,7 @@ function invoker(): Invoke | null {
 }
 
 /** value 里还藏着失败的通道(内层)。 */
-const SOFT_FAIL = new Set<string>([CH.preview, CH.recoveryRestore, CH.deletesConfirm, CH.deletesAbandon, CH.apply, CH.setScope, CH.setTarget, CH.renameAnswer, CH.resolve, CH.setEnabled, CH.choose, CH.takeoverRevert, CH.dismissCard])
+const SOFT_FAIL = new Set<string>([CH.resolveAll, CH.preview, CH.recoveryRestore, CH.deletesConfirm, CH.deletesAbandon, CH.apply, CH.setScope, CH.setTarget, CH.renameAnswer, CH.resolve, CH.setEnabled, CH.choose, CH.takeoverRevert, CH.dismissCard])
 
 /** 归一两层回复(纯函数,单测直接喂)。 */
 export function normalizeReply<T>(channel: string, reply: unknown): VsResult<T> {
@@ -68,6 +68,7 @@ export const vaultSync = {
   setScope: (bindingId: string, scope: BindingScope) => call<void>(CH.setScope, { bindingId, scope }),
   run: (bindingId?: string, reason?: 'focus') => call<void>(CH.run, { ...(bindingId ? { bindingId } : {}), ...(reason ? { reason } : {}) }),
   resolve: (ref: HeldRef, action: HeldAction) => call<{ ok: true; recoveryEventId?: string }>(CH.resolve, { ref, action }),
+  resolveAll: (bindingId: string, action: HeldAction, token: string) => call<VaultSyncResolveAllResult>(CH.resolveAll, { bindingId, action, token }),
   deletesConfirm: (bindingId: string, token: string) => call<void>(CH.deletesConfirm, { bindingId, token }),
   deletesAbandon: (bindingId: string, token: string) => call<void>(CH.deletesAbandon, { bindingId, token }),
   /** newVault 回 { next: 'preview' }:界面接着用 { kind: 'create' } 预演、出汇总卡(apply 时才建新库)。 */

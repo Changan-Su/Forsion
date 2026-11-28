@@ -11,6 +11,7 @@ import { useSyncRecords } from '../sync/useSyncRecords'
 import { recordSummary, failureText } from '../sync/vaultSyncText'
 import { openSyncRecords } from '../sync/SyncRecordList'
 import { vaultSync } from '../sync/v2/client'
+import { syncErrorText } from '../sync/v2/errors'
 import type { Cadence, HeldRef, RecoveryEventView, ScopeItem, VaultSyncPreview } from '../sync/v2/types'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
 import './syncSettingsMessages'
@@ -111,16 +112,28 @@ export function SummaryCard({ name, preview, busy, kind, added, dest, onApply, o
 }
 
 /** 等你定(v2):有清单(契约 U-2)就逐篇给四个出口;没有只写计数。 */
-export function HeldReview({ bindingId, count, items, onDone }: {
+export function HeldReview({ bindingId, count, items, token, onDone }: {
   bindingId: string
   count: number
   items: Array<{ path: string; newer: 'local' | 'remote' | null; ref: HeldRef }> | null
+  /** E-11 的 differsToken:有它才给「全部…」(整份名单对得上才动,对不上一条不动) */
+  token?: string
   onDone: () => void
 }) {
   const { t } = useI18n()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   if (!count) return null
+  const [note, setNote] = useState<string | null>(null)
+  const all = async (action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
+    if (!token) return
+    setBusy('*'); setError(null); setNote(null)
+    const r = await vaultSync.resolveAll(bindingId, action, token)
+    setBusy(null)
+    if (!r.ok) setError(syncErrorText(r.error, t))
+    else if (r.value) setNote(t('ssync.review.allDone', { n: r.value.resolved, left: r.value.cannotDecide + r.value.stale + r.value.failed }))
+    onDone()
+  }
   const act = async (ref: HeldRef, action: 'local' | 'cloud' | 'both' | 'newer'): Promise<void> => {
     setBusy(ref.path); setError(null)
     const r = await vaultSync.resolve(ref, action)
@@ -145,6 +158,18 @@ export function HeldReview({ bindingId, count, items, onDone }: {
           ))}
         </div>
       ))}
+      {token && !!items?.length && (
+        <div className="ssync-held-row ssync-held-all" data-ssync-held-all="">
+          <span className="ssync-faint">{t('ssync.review.all', { n: count })}</span>
+          <span className="ssync-grow" />
+          {(['local', 'cloud', 'both', 'newer'] as const).map((a) => (
+            <button key={a} type="button" className="btn ghost sm" disabled={busy !== null} onClick={() => void all(a)}>
+              {t(a === 'local' ? 'ssync.review.useLocal' : a === 'cloud' ? 'ssync.review.useCloud' : a === 'both' ? 'ssync.review.both' : 'ssync.review.newer')}
+            </button>
+          ))}
+        </div>
+      )}
+      {note && <div className="ssync-faint ssync-held-note" role="status">{note}</div>}
       {error && <div className="ssync-error" role="alert">{error}</div>}
     </div>
   )
