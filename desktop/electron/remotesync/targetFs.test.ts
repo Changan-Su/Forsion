@@ -31,6 +31,7 @@ interface Bench {
 
 async function folderBench(): Promise<Bench> {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-folder-'))
+  await fsp.mkdir(path.join(root, ...DIR.split('/')), { recursive: true }) // 子目录由建绑定的一方先建(契约 H-2 第 6 条)
   let tick = Date.parse('2026-12-01T00:00:00Z')
   const abs = (key: string): string => path.join(root, ...DIR.split('/'), key)
   return {

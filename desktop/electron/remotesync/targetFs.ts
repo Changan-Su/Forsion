@@ -99,15 +99,17 @@ function build(spec: TargetSpec, segs: string[]): RemoteFs & Required<Pick<Remot
       if (!segs.length) return r
       return {
         ...r,
-        // 子目录还没建 = 空目标(与其他后端「前缀 / 目录不存在 = 空远端」一致);配置的根本身不在(U 盘没插、网络盘没挂)
-        // 照旧抛 —— 绝不当成空,否则会被当成远端全删。只认「子目录本身不存在」,walk 途中别的文件消失照旧抛。
+        // 子目录不在 = 抛 target-dir-missing,绝不当空(契约 H-2 第 6 条):U 盘没插、挂载点空着时当空会读成远端全删;
+        // 新建绑定由建绑定的一方在第一轮之前把目录建出来。walk 途中别的文件消失照旧抛原错。
         async walk(signal) {
           try {
             return await r.walk(signal)
           } catch (e) {
-            const missing = (x: string): Promise<boolean> => fs.stat(x).then(() => false, (err) => (err as NodeJS.ErrnoException).code === 'ENOENT')
-            const baseOk = await fs.stat(p).then((st) => st.isDirectory(), () => false)
-            if ((e as NodeJS.ErrnoException)?.code === 'ENOENT' && baseOk && (await missing(root))) return []
+            const gone = (x: string): Promise<boolean> => fs.stat(x).then(() => false, (err) => (err as NodeJS.ErrnoException).code === 'ENOENT')
+            // 配置的根本身不在(U 盘没插)照旧抛原错;根在、子目录不在才是 target-dir-missing
+            if ((e as NodeJS.ErrnoException)?.code === 'ENOENT' && !(await gone(p)) && (await gone(root))) {
+              throw Object.assign(new Error('target-dir-missing'), { code: 'TARGET_DIR_MISSING' })
+            }
             throw e
           }
         },

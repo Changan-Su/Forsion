@@ -605,6 +605,8 @@ export interface LegacyRemoteSyncView {
   hold: 'none' | 'v2'
   archived: boolean
   handshake: 'pending' | 'ok' | 'released'
+  /** 「让开条目绑定的路径」(契约 H-2 第 2 条):同 runNow 里的 entrySyncIgnores(root),现算。非空 = 这个根也配着条目同步。 */
+  entryIgnores: string[]
 }
 
 /** 新同步(Extend)用的那几样;syncTargets.ts 包成 CloudHost.syncTargets。凭据只经 legacySection() 给宿主自己,永不进 Extend。 */
@@ -634,6 +636,7 @@ export const legacyRemoteSync = {
       },
       root: 'root' in rooted ? rooted.root : null,
       rootError: 'error' in rooted ? rooted.error : null,
+      entryIgnores: 'root' in rooted ? await entrySyncIgnores(rooted.root) : [],
       running,
       hold: st.hold === 'v2' ? 'v2' : 'none',
       archived: st.archived,

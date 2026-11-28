@@ -292,8 +292,10 @@ describe('folder', () => {
     expect(await leftovers(root)).toEqual([])
   })
 
-  it('子目录还没建 = 空目标;配置的根本身不在 → 照旧抛(U 盘没插不能当成空)', async () => {
+  it('子目录不在 → target-dir-missing(不当空);配置的根本身不在 → 照旧抛(U 盘没插不能当成空)', async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), 'targetfs-walk-'))
+    await expect(openTargetFs({ kind: 'folder', folder: { path: root } }, 'not/yet').walk()).rejects.toThrow('target-dir-missing')
+    mkdirSync(path.join(root, 'not', 'yet'), { recursive: true })
     expect(await openTargetFs({ kind: 'folder', folder: { path: root } }, 'not/yet').walk()).toEqual([])
     await expect(openTargetFs({ kind: 'folder', folder: { path: path.join(root, 'unplugged') } }, 'v').walk()).rejects.toThrow(/ENOENT/)
   })
