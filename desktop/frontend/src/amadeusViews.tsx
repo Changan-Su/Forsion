@@ -3186,10 +3186,11 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
           </div>
         </div>
       ) : missingNote && notePath ? (
-        /* 当前库没有这篇(另一侧的路径 / 已改名 / 已删):只占位,绝不装载、绝不造文件。 */
+        /* 当前库没有这篇(另一侧的路径 / 已改名 / 已删):只占位,绝不装载、绝不造文件。
+           没装上库是因为设置文件读不了(重启后恢复出来的标签页):不说「不在当前库里」,说那句话;库装上后本支自己重判。 */
         <div className="amx-welcome">
-          <div className="amx-welcome-title">{t('amxv.missing.title')}</div>
-          <p className="amx-welcome-sub">{t('amxv.missing.sub', { path: notePath })}</p>
+          <div className="amx-welcome-title">{!vaultRoot && vaultRestoreError ? t('amxv.welcome.loadFailed') : t('amxv.missing.title')}</div>
+          <p className="amx-welcome-sub">{!vaultRoot && vaultRestoreError ? ipcErrorText(vaultRestoreError) : t('amxv.missing.sub', { path: notePath })}</p>
           <div className="amx-welcome-actions">
             <button className="amx-welcome-btn" onClick={() => useWorkspace.getState().closeLeaf(leaf.id)}>{t('amxv.missing.close')}</button>
           </div>
